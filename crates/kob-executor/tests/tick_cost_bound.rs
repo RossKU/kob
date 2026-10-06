@@ -3,6 +3,11 @@
 //! `plan_book` was about O(n^3) per allocation and repeated for every fill of the plan; 1 000 bids and 1 000 asks all crossing
 //! at a loss cost 48 s per tick. Now the planner keeps the best `max_candidates_per_group` candidates per (class, side), keeps its
 //! token-slot accounting incrementally and stops at a wall-clock budget.
+//!
+//! The bounds are stated in work, not time ([`TickReport::work`], [`kob_executor::matcher::batch::PlanWork`]): the allocation
+//! passes and candidate pairs the planner ran, and that no plan ran into its book budget. Those counts are the same on every
+//! machine, so a regression fails on a fast one and a slow CI runner does not fail a fixed planner (the wall-clock bounds
+//! these tests had failed on windows-latest only). The times are printed for information.
 //! An expired order whose `refundTip` cannot cover the refund fee was built, signed and engine-validated on every tick.
 
 #[path = "matcher_common/mod.rs"]
@@ -11,9 +16,27 @@ mod common;
 use common::*;
 use kob_executor::keepers::{tick as keeper_tick, KeeperConfig, KeeperInput};
 use kob_executor::matcher::book::{ListedOrder, MemoryBook};
-use kob_executor::matcher::engine::{tick, EngineConfig};
+use kob_executor::matcher::engine::{tick, EngineConfig, TickReport};
 use kob_executor::matcher::family::Families;
-use std::time::{Duration, Instant};
+use std::time::Instant;
+
+/// Book and tick budgets for the work-bounded tests: generous, so that no plan of a fixed planner reaches them on any machine
+/// (the counts are then deterministic), and finite, so that a regression fails in bounded time (its plan is cut short).
+fn budgeted(cfg: EngineConfig) -> EngineConfig {
+    EngineConfig { book_budget_ms: 30_000, tick_budget_ms: 120_000, ..cfg }
+}
+
+/// The tick's planning stayed within `max` ([allocation passes, candidate pairs tried, netting steps]) and no plan was cut short
+/// by its budget (the planner finished every batch by itself). The bounds are about 4x the counts measured on the fixed
+/// planner (the constants at the end of the file).
+fn assert_work(rep: &TickReport, tag: &str, max: [u64; 3]) {
+    let w = rep.work;
+    println!("{tag}: {w:?}");
+    assert_eq!(w.cut_short, 0, "{tag}: a plan ran into its book budget: {w:?}");
+    assert!(w.allocations <= max[0], "{tag}: {} allocation passes, bound {}", w.allocations, max[0]);
+    assert!(w.pair_tries <= max[1], "{tag}: {} candidate pairs tried, bound {}", w.pair_tries, max[1]);
+    assert!(w.net_steps <= max[2], "{tag}: {} netting steps, bound {}", w.net_steps, max[2]);
+}
 
 fn dust_refund_orders(n: u32) -> Vec<ListedOrder> {
     (0..n)
@@ -42,10 +65,11 @@ fn a_thousand_crossing_pairs_at_a_loss_are_planned_within_the_budget() {
     let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![] };
     let inp = input(&b);
     let t0 = Instant::now();
-    let rep = tick(&inp, &cfg(), &Families::default(), &signer());
+    let rep = tick(&inp, &budgeted(cfg()), &Families::default(), &signer());
     let took = t0.elapsed();
     println!("matcher tick, {n} bids + {n} asks all crossing at a loss: {took:?}, {} tx", rep.prepared.len());
-    assert!(took < Duration::from_secs(8), "was 48.6 s before the fix: {took:?}");
+    // was 48.6 s before the fix
+    assert_work(&rep, "1000 x 1000 at a loss", WORK_LOSS);
     for p in &rep.prepared {
         assert!(p.accounting.profit >= 0, "never a losing batch");
     }
@@ -89,7 +113,8 @@ fn unprofitable_refunds_are_not_built_and_are_remembered() {
     // a zero tip is below the fee floor: rejected before any transaction is built
     assert!(rep.skipped.iter().all(|(_, why)| why.contains("does not cover the fee")), "{:?}", rep.skipped);
     println!("keeper tick over {n} dust-refund orders: {cold:?}");
-    assert!(cold < Duration::from_millis(500), "{cold:?}");
+    // the work bound: nothing was built, signed or validated (the regression built every one of them on every tick)
+    assert!(rep.unprofitable.is_empty() && rep.failed.is_empty(), "built: {:?} {:?}", rep.unprofitable, rep.failed);
 
     // a tip above the floor but below the real fee is built once, then remembered per (order, outpoint)
     let mut close: Vec<ListedOrder> = vec![];
@@ -162,13 +187,13 @@ fn pair_orders_crossing_each_other_are_planned_within_the_budget() {
     let inp = input(&b);
     let cfg = EngineConfig { token_carrier: OP_TOKEN_CARRIER, ..cfg() };
     let t0 = Instant::now();
-    let rep = tick(&inp, &cfg, &Families::default(), &signer());
+    let rep = tick(&inp, &budgeted(cfg), &Families::default(), &signer());
     let took = t0.elapsed();
     println!(
         "matcher tick, {n} pair asks + {n} pair bids crossing each other (+ 200 KAS orders): {took:?}, {} tx",
         rep.prepared.len()
     );
-    assert!(took < Duration::from_secs(8), "{took:?}");
+    assert_work(&rep, "100 + 100 tipped pair orders", WORK_PAIR);
     assert!(!rep.prepared.is_empty(), "the tipped pair orders net");
     assert!(rep.anomalies.is_empty(), "{:?}", rep.anomalies);
     check_pair(&rep, &inp);
@@ -178,7 +203,12 @@ fn pair_orders_crossing_each_other_are_planned_within_the_budget() {
 /// planner spend its whole 5 s book budget on every batch and build nothing, although the 200 plain KAS orders of the same
 /// view cross each other with a profit. Fixed: the route takes no more pair orders per direction than the KAS books can fill,
 /// a netting group is bounded by the token slots and pays for itself or nets nothing, and the profit step judges a netting
-/// group as one unit. A large pair book must not starve the plain crossings: the tick builds within one book budget.
+/// group as one unit. A large pair book must not starve the plain crossings: the plain crossings are built, no plan runs into
+/// its book budget, and the planner's work stays within a bound stated in allocation passes, candidate pairs and netting
+/// steps. Checked against the fixes undone one by one (2026-10-06): the profit step judging netted orders one by one again
+/// gives 1,298 allocation passes (bound 1,000), the netting group unbounded by the token slots 10.1 M netting steps (bound
+/// 2.6 M; 57 s against 6 s, all other counts unchanged), and with all three fixes undone every plan runs into its 30 s book
+/// budget (`cut_short` 4 of 5): each fails this test, by count and not by time.
 #[test]
 fn a_big_untipped_pair_book_does_not_starve_the_plain_crossings() {
     use common::pair::*;
@@ -186,11 +216,12 @@ fn a_big_untipped_pair_book_does_not_starve_the_plain_crossings() {
     let inp = input(&b);
     let cfg = EngineConfig { token_carrier: OP_TOKEN_CARRIER, ..cfg() };
     let t0 = Instant::now();
-    let rep = tick(&inp, &cfg, &Families::default(), &signer());
+    let rep = tick(&inp, &budgeted(cfg), &Families::default(), &signer());
     let took = t0.elapsed();
     println!("untipped 300 + 300 pair orders: {took:?}, {} tx", rep.prepared.len());
     assert!(!rep.prepared.is_empty(), "the plain crossings are built");
-    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert!(rep.anomalies.is_empty(), "{:?}", rep.anomalies);
+    assert_work(&rep, "300 + 300 untipped pair orders", WORK_STARVE);
 }
 
 #[test]
@@ -219,5 +250,12 @@ fn unprofitable_pair_refunds_are_not_built() {
     assert!(rep.jobs.is_empty());
     assert_eq!(rep.skipped.len() as u32, n);
     assert!(rep.skipped.iter().all(|(_, why)| why.contains("does not cover the fee")), "{:?}", rep.skipped);
-    assert!(cold < Duration::from_millis(500), "{cold:?}");
+    println!("keeper tick over {n} dust pair refunds: {cold:?}");
+    assert!(rep.unprofitable.is_empty() && rep.failed.is_empty(), "built: {:?} {:?}", rep.unprofitable, rep.failed);
 }
+
+// Work bounds [allocation passes, candidate pairs tried, netting steps], about 4x the counts measured on the fixed planner
+// (`TickReport::work`, deterministic: the same on every machine while no plan is cut short).
+const WORK_LOSS: [u64; 3] = [240, 2_000, 100]; // measured 57, 456, 0
+const WORK_PAIR: [u64; 3] = [1_000, 2_400_000, 450_000]; // measured 260, 583,668, 110,923
+const WORK_STARVE: [u64; 3] = [1_000, 3_000_000, 2_600_000]; // measured 258, 774,476, 637,806

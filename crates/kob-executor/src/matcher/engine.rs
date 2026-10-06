@@ -23,7 +23,7 @@ use kob_protocol::tx::{
 use kob_protocol::verify::{validate_signed, Validation};
 use serde::{Deserialize, Serialize};
 
-use super::batch::{plan_batch, BatchInput};
+use super::batch::{plan_batch, plan_batch_counted, BatchInput, PlanWork};
 use super::book::{book_key, books, outpoint, BookKey, Clock, CovId, ListedOrder, Outpoint};
 use super::candidate::Class;
 use super::family::{token_limits, Families, Lowered};
@@ -191,6 +191,9 @@ pub struct TickReport {
     /// that shape, [`super::lower::measured_floors`]). Per tick, unlike the process-wide
     /// [`super::lower::budget_slack_retries`] counter.
     pub slack_retries: usize,
+    /// What the tick's batch plans cost ([`PlanWork`]: plans, allocation passes, candidate pairs tried, plans the book budget
+    /// cut short), summed over the tick. Machine-independent: the cost bounds of `tests/tick_cost_bound.rs` are stated in it.
+    pub work: PlanWork,
 }
 
 /// The pre-submission validation of a signed transaction: the script engine ([`validate_signed`]). Tests inject their own.
@@ -352,7 +355,9 @@ impl<'a> Tick<'a> {
                 only: None,
                 deadline: self.plan_deadline(),
             };
-            let Some(plan) = plan_batch(&bi, &cfg.planner) else { break };
+            let (plan, work) = plan_batch_counted(&bi, &cfg.planner);
+            report.work.add(work);
+            let Some(plan) = plan else { break };
             *last_plan = plan.fills.iter().map(|f| f.cand.id).collect();
             let key = plan.book;
             let Some(adapter) = self.families.get(key.family) else {

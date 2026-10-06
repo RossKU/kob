@@ -82,6 +82,7 @@
 //! Every choice is a pure function of the view, `t` and the configuration up to the deadline, so two honest matchers with
 //! the same view build the same batch.
 
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
@@ -221,6 +222,10 @@ struct Universe {
     rcap: Vec<i64>,
     /// Candidates per covenant id (exclusion).
     by_id: BTreeMap<CovId, Vec<usize>>,
+    /// Work counters of the plan ([`PlanWork`]).
+    allocations: Cell<u64>,
+    pair_tries: Cell<u64>,
+    net_steps: Cell<u64>,
 }
 
 /// The signed quote per base unit of an active walker (asks ascending, bids descending: lower is better on both sides).
@@ -616,6 +621,9 @@ impl Universe {
             net_of,
             rcap: vec![],
             by_id,
+            allocations: Cell::new(0),
+            pair_tries: Cell::new(0),
+            net_steps: Cell::new(0),
         }
     }
 
@@ -1435,6 +1443,7 @@ impl<'u> Alloc<'u> {
     }
 
     fn try_pair(&mut self, a: usize, p: usize) {
+        self.u.pair_tries.set(self.u.pair_tries.get() + 1);
         if p == a || !self.usable(p) || !self.pair_ok(a, p) {
             return;
         }
@@ -1619,6 +1628,7 @@ impl<'u> Alloc<'u> {
         let mut guard = 0usize;
         loop {
             guard += 1;
+            u.net_steps.set(u.net_steps.get() + 1);
             if guard > 64 * (nb.g1.len() + nb.g2.len()) + 64 {
                 break;
             }
@@ -1784,6 +1794,7 @@ fn allocate<'u>(
     max_bytes: u64,
     deadline: Option<Instant>,
 ) -> Alloc<'u> {
+    u.allocations.set(u.allocations.get() + 1);
     let mut al = Alloc::new(u, caps, live, max_bytes, deadline);
     let mut rank = vec![0usize; u.comp_key.len()];
     for (r, &c) in order.iter().enumerate() {
@@ -2242,9 +2253,56 @@ fn density_order(u: &Universe, al: &Alloc, fee_rate: u64) -> Vec<usize> {
     order
 }
 
+/// What planning cost, in units that do not depend on the machine: a regression that makes the planner do far more work shows
+/// in these counts on every machine, where a wall-clock bound only shows it on a fast one (`tests/tick_cost_bound.rs`).
+/// Deterministic for a given view and configuration as long as no deadline cut a plan short (`cut_short` 0).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlanWork {
+    /// Plans run.
+    pub plans: u64,
+    /// Allocation passes: one run of the class walks (netting, routes, direct walks, triggers) over the view. Settling,
+    /// ordering the components and the profit step's drops each cost one or more; a plan's work is this count times the
+    /// cost of one pass.
+    pub allocations: u64,
+    /// Candidate pairs the walks tried (the inner step of a pass).
+    pub pair_tries: u64,
+    /// Steps of the netting walks (one opposite pair order tried against a netting group).
+    pub net_steps: u64,
+    /// Plans whose deadline (the book budget, or the tick budget) had passed when they returned: the planner ran out of
+    /// time and handed over what it had.
+    pub cut_short: u64,
+}
+
+impl PlanWork {
+    pub fn add(&mut self, o: PlanWork) {
+        self.plans += o.plans;
+        self.allocations += o.allocations;
+        self.pair_tries += o.pair_tries;
+        self.net_steps += o.net_steps;
+        self.cut_short += o.cut_short;
+    }
+}
+
 /// Plans the most profitable transaction over every book of the view, or None when nothing profitable crosses.
 pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
+    plan_batch_counted(inp, cfg).0
+}
+
+/// [`plan_batch`] and what it cost ([`PlanWork`]).
+pub fn plan_batch_counted(inp: &BatchInput, cfg: &PlannerConfig) -> (Option<Plan>, PlanWork) {
     let mut u = Universe::new(inp, cfg);
+    let plan = plan_universe(&mut u, inp, cfg);
+    let work = PlanWork {
+        plans: 1,
+        allocations: u.allocations.get(),
+        pair_tries: u.pair_tries.get(),
+        net_steps: u.net_steps.get(),
+        cut_short: u64::from(inp.deadline.is_some_and(|d| Instant::now() >= d)),
+    };
+    (plan, work)
+}
+
+fn plan_universe(u: &mut Universe, inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
     if u.cands.is_empty() {
         return None;
     }
@@ -2257,20 +2315,20 @@ pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
         if u.info(p).need.is_some() {
             continue;
         }
-        if may_net(&u, p) {
-            *r = route_cap(&u, p, cfg).unwrap_or(0);
+        if may_net(u, p) {
+            *r = route_cap(u, p, cfg).unwrap_or(0);
             continue;
         }
-        match route_cap(&u, p, cfg) {
+        match route_cap(u, p, cfg) {
             Some(c) => st0.xcap[p] = st0.xcap[p].min(c),
             None => {
                 let id = u.cands[u.porders[p].0].id;
-                st0.exclude(&u, &id);
+                st0.exclude(u, &id);
             }
         }
     }
     u.rcap = rcap;
-    let u = u;
+    let u = &*u;
     let natural: Vec<usize> = (0..u.comp_key.len()).collect();
     // 1. every component on its own (no byte budget): the profit per byte that orders the components (at most half of the
     //    time left)
@@ -2279,9 +2337,9 @@ pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
             let now = Instant::now();
             now + d.saturating_duration_since(now) / 2
         });
-        let s0 = settle(&u, st0.clone(), u64::MAX, &natural, half);
-        let al0 = allocate(&u, &s0.caps, &s0.st.live, &natural, u64::MAX, half);
-        density_order(&u, &al0, cfg.fee_rate)
+        let s0 = settle(u, st0.clone(), u64::MAX, &natural, half);
+        let al0 = allocate(u, &s0.caps, &s0.st.live, &natural, u64::MAX, half);
+        density_order(u, &al0, cfg.fee_rate)
     } else {
         natural
     };
@@ -2289,7 +2347,7 @@ pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
     //    allocation is settled from it afresh, so a pair order the reconciliation left out only because another leg held its
     //    token (a fill the profit step then drops) competes again in the next settlement.
     let mut dropped = st0.clone();
-    let mut cur = settle(&u, st0, inp.max_bytes, &order, inp.deadline);
+    let mut cur = settle(u, st0, inp.max_bytes, &order, inp.deadline);
     fn run_on<'u>(u: &'u Universe, s: &'u Settled, order: &[usize], max_bytes: u64, deadline: Option<Instant>) -> Alloc<'u> {
         allocate(u, &s.caps, &s.st.live, order, max_bytes, deadline)
     }
@@ -2302,17 +2360,17 @@ pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
             if out_of_time() {
                 break;
             }
-            let al = run_on(&u, &cur, &order, mb, dl);
+            let al = run_on(u, &cur, &order, mb, dl);
             let base = al.profit(cfg.fee_rate);
             if protect && base < cfg.min_profit {
                 break;
             }
-            let base_ioc = ioc_fills(&u, &al);
-            let mut neg: Vec<(i64, Vec<usize>)> = netting_units(&u, &al, units_of(&u, &al))
+            let base_ioc = ioc_fills(u, &al);
+            let mut neg: Vec<(i64, Vec<usize>)> = netting_units(u, &al, units_of(u, &al))
                 .into_iter()
                 .filter(|un| !(protect && u.cands[un[0]].class == Class::Immediate))
                 .filter(|un| !kept.contains(un))
-                .filter_map(|un| marginal(&u, &al, &un, cfg.fee_rate).filter(|m| *m < 0).map(|m| (m, un)))
+                .filter_map(|un| marginal(u, &al, &un, cfg.fee_rate).filter(|m| *m < 0).map(|m| (m, un)))
                 .collect();
             drop(al);
             if neg.is_empty() {
@@ -2320,10 +2378,10 @@ pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
             }
             neg.sort_by(|a, b| a.0.cmp(&b.0).then(u.cands[a.1[0]].id.cmp(&u.cands[b.1[0]].id)));
             let accept = |s: &Settled| -> bool {
-                let a2 = run_on(&u, s, &order, mb, dl);
+                let a2 = run_on(u, s, &order, mb, dl);
                 a2.profit(cfg.fee_rate) > base
                     && (!protect || {
-                        let i2 = ioc_fills(&u, &a2);
+                        let i2 = ioc_fills(u, &a2);
                         base_ioc.iter().all(|(k, v)| i2.get(k).copied().unwrap_or(0) >= *v)
                     })
             };
@@ -2332,7 +2390,7 @@ pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
                 for un in sets {
                     let ids: BTreeSet<CovId> = un.iter().map(|&i| u.cands[i].id).collect();
                     for id in ids {
-                        st.exclude(&u, &id);
+                        st.exclude(u, &id);
                     }
                 }
                 st
@@ -2341,7 +2399,7 @@ pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
             if neg.len() > 1 {
                 let all: Vec<&Vec<usize>> = neg.iter().map(|(_, un)| un).collect();
                 let st = without(&all);
-                let s_all = settle(&u, st.clone(), inp.max_bytes, &order, inp.deadline);
+                let s_all = settle(u, st.clone(), inp.max_bytes, &order, inp.deadline);
                 if accept(&s_all) {
                     (dropped, cur) = (st, s_all);
                     continue;
@@ -2358,13 +2416,13 @@ pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
                 // the deadline). A cap of 8 gave up a paying route behind ten losing cross limits on one bid (TN10 soak
                 // 2026-10-02).
                 let mut st = without(&[un]);
-                let mut s1 = settle(&u, st.clone(), inp.max_bytes, &order, inp.deadline);
+                let mut s1 = settle(u, st.clone(), inp.max_bytes, &order, inp.deadline);
                 while !accept(&s1) && un.len() == 2 && !out_of_time() {
-                    let a1 = run_on(&u, &s1, &order, mb, dl);
-                    let subs: Vec<CovId> = units_of(&u, &a1)
+                    let a1 = run_on(u, &s1, &order, mb, dl);
+                    let subs: Vec<CovId> = units_of(u, &a1)
                         .into_iter()
                         .filter(|v| v.len() == 2 && !(protect && u.cands[v[0]].class == Class::Immediate))
-                        .filter(|v| marginal(&u, &a1, v, cfg.fee_rate).is_some_and(|m| m < 0))
+                        .filter(|v| marginal(u, &a1, v, cfg.fee_rate).is_some_and(|m| m < 0))
                         .map(|v| u.cands[v[0]].id)
                         .collect();
                     drop(a1);
@@ -2372,9 +2430,9 @@ pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
                         break;
                     }
                     for id in subs {
-                        st.exclude(&u, &id);
+                        st.exclude(u, &id);
                     }
-                    s1 = settle(&u, st.clone(), inp.max_bytes, &order, inp.deadline);
+                    s1 = settle(u, st.clone(), inp.max_bytes, &order, inp.deadline);
                 }
                 if accept(&s1) {
                     (dropped, cur) = (st, s1);
@@ -2387,14 +2445,14 @@ pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
                 break;
             }
         }
-        if run_on(&u, &cur, &order, mb, dl).profit(cfg.fee_rate) >= cfg.min_profit {
+        if run_on(u, &cur, &order, mb, dl).profit(cfg.fee_rate) >= cfg.min_profit {
             break;
         }
     }
     // 4. a settlement the deadline cut short may leave a quantity rule or a route unreconciled: drop those orders
     for attempt in 0.. {
-        let al = run_on(&u, &cur, &order, mb, dl);
-        let off = offenders(&u, &al);
+        let al = run_on(u, &cur, &order, mb, dl);
+        let off = offenders(u, &al);
         if off.is_empty() {
             break;
         }
@@ -2404,15 +2462,15 @@ pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
         }
         let mut st = cur.st.clone();
         for id in off {
-            st.exclude(&u, &id);
+            st.exclude(u, &id);
         }
-        cur = settle(&u, st, inp.max_bytes, &order, inp.deadline);
+        cur = settle(u, st, inp.max_bytes, &order, inp.deadline);
     }
-    let al = run_on(&u, &cur, &order, mb, dl);
-    if al.seq.is_empty() || al.profit(cfg.fee_rate) < cfg.min_profit || !offenders(&u, &al).is_empty() {
+    let al = run_on(u, &cur, &order, mb, dl);
+    if al.seq.is_empty() || al.profit(cfg.fee_rate) < cfg.min_profit || !offenders(u, &al).is_empty() {
         return None;
     }
-    let plan = to_plan(&u, &al, inp.lock_time, cfg);
+    let plan = to_plan(u, &al, inp.lock_time, cfg);
     if plan.fills.is_empty() {
         return None;
     }
