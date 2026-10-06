@@ -7,6 +7,7 @@
 #
 # The build pins the sha256 of the soak's own registry (tools/soak/run/registry/tokens.json, the file serve-ui.mjs serves) as the app's
 # default registry: no custom-registry dot or notice on the network badge and no "not official" labels on the soak tokens.
+# `UI_OUT=<dir under the repository>` builds elsewhere (a staging copy while the soak keeps serving run/web-dist).
 # `UI_REGISTRY=<file>` pins another file (`UI_REGISTRY=registry/tokens.json`: the repository's default, as a release build does).
 # Rebuild after `soak.mjs setup` rewrites the registry (a new token): a served registry that no longer matches the pin shows the notice again.
 set -euo pipefail
@@ -14,7 +15,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 ROOT=$PWD
 PKG=${1:-crates/kob-wasm/pkg-tn10}
 STAGE=target/soak/webbuild
-OUT=tools/soak/run/web-dist
+OUT=${UI_OUT:-tools/soak/run/web-dist}
 [ -f "$PKG/kob_wasm.js" ] || { echo "no web bindings in $PKG (scripts/build-wasm.sh --features deploy-tn10)" >&2; exit 1; }
 [ -d web/node_modules ] || { echo "run npm ci in web/ first" >&2; exit 1; }
 [ -f web/vendor/kaspa-web/kaspa.js ] || { echo "run npm run fetch-sdk in web/ first" >&2; exit 1; }
