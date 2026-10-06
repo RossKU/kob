@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+node_modules/
+vendor/
+out/
+state/
+miner/target/
+*.log
+.browser-profiles/

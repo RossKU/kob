@@ -1,0 +1,1110 @@
+use super::static_check::MAX_FOR_LOOP_ITERATIONS;
+use super::*;
+use std::collections::HashSet;
+
+const MANUAL_ENTRYPOINT_IN_LEADER_CONTRACT: &str = "manual_entrypoint_in_leader_contract";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CovenantBinding {
+    Auth,
+    Cov,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CovenantMode {
+    Verification,
+    Transition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CovenantGroups {
+    Single,
+    Multiple,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CovenantTermination {
+    Disallowed,
+    Allowed,
+}
+
+#[derive(Debug, Clone)]
+struct CovenantDeclaration<'i> {
+    binding: CovenantBinding,
+    mode: CovenantMode,
+    groups: CovenantGroups,
+    singleton: bool,
+    termination: CovenantTermination,
+    entrypoint_name: Option<String>,
+    delegate_entrypoint_name: Option<String>,
+    from_expr: Expr<'i>,
+    to_expr: Expr<'i>,
+}
+
+pub(super) struct CovenantDeclarationAbiNames {
+    pub entrypoints: BTreeMap<String, String>,
+    pub delegate_entrypoint: Option<String>,
+}
+
+pub(super) fn lower_covenant_declarations<'i>(
+    contract: &ContractAst<'i>,
+    constants: &HashMap<String, Expr<'i>>,
+) -> Result<(ContractAst<'i>, CovenantDeclarationAbiNames), CompilerError> {
+    let mut lowered = Vec::new();
+    let mut covenant_entrypoints = BTreeMap::new();
+    let mut cov_declaration = None;
+    let mut shared_delegate_source = None;
+    let mut shared_delegate_entrypoint = None;
+    let mut delegate_policy: Option<FunctionAst<'i>> = None;
+    let mut delegate_body_name = None;
+    let mut auth_declaration = None;
+    let mut manual_entrypoint = None;
+
+    for function in &contract.functions {
+        if is_covenant_delegate_body(function) {
+            validate_covenant_delegate_body(function)?;
+            if let Some(existing) = &delegate_body_name {
+                return Err(CompilerError::Unsupported(format!(
+                    "contract '{}' declares more than one #[covenant.delegate] body ('{}' and '{}')",
+                    contract.name, existing, function.name
+                )));
+            }
+
+            let mut policy = function.clone();
+            policy.name = generated_covenant_delegate_policy_name(&function.name);
+            policy.attributes.clear();
+            delegate_body_name = Some(function.name.clone());
+            delegate_policy = Some(policy.clone());
+            lowered.push(policy);
+            continue;
+        }
+
+        if allows_manual_entrypoint_in_leader_contract(function)? {
+            let mut lowered_function = function.clone();
+            lowered_function.attributes.clear();
+            lowered.push(lowered_function);
+            continue;
+        }
+
+        if function.attributes.is_empty() {
+            if function.entrypoint && manual_entrypoint.is_none() {
+                manual_entrypoint = Some(function.name.clone());
+            }
+            lowered.push(function.clone());
+            continue;
+        }
+
+        let declaration = parse_covenant_declaration(function, constants)?;
+        validate_covenant_policy_state_shape(function, &declaration, &contract.name, &contract.fields)?;
+
+        let policy_name = generated_covenant_policy_name(&function.name);
+
+        let mut policy = function.clone();
+        policy.name = policy_name.clone();
+        policy.entrypoint = false;
+        policy.attributes.clear();
+        lowered.push(policy.clone());
+
+        match declaration.binding {
+            CovenantBinding::Auth => {
+                auth_declaration.get_or_insert_with(|| function.name.clone());
+                let entrypoint_name =
+                    declaration.entrypoint_name.clone().unwrap_or_else(|| generated_covenant_auth_entrypoint_name(&function.name));
+                covenant_entrypoints.insert(function.name.clone(), entrypoint_name.clone());
+                let mut wrapper = build_auth_wrapper(&policy, &policy_name, declaration.clone(), entrypoint_name, &contract.fields)?;
+                wrapper.params = preserved_entrypoint_params(function, declaration, true, &contract.fields);
+                lowered.push(wrapper);
+            }
+            CovenantBinding::Cov => {
+                cov_declaration.get_or_insert_with(|| function.name.clone());
+                let leader_name =
+                    declaration.entrypoint_name.clone().unwrap_or_else(|| generated_covenant_leader_entrypoint_name(&function.name));
+                covenant_entrypoints.insert(function.name.clone(), leader_name.clone());
+                let mut leader_wrapper = build_cov_leader_wrapper(&policy, &policy_name, declaration.clone(), leader_name)?;
+                leader_wrapper.params = preserved_entrypoint_params(function, declaration.clone(), true, &contract.fields);
+                lowered.push(leader_wrapper);
+
+                shared_delegate_source.get_or_insert(policy);
+                let delegate_entrypoint_name =
+                    declaration.delegate_entrypoint_name.clone().unwrap_or_else(generated_covenant_delegate_entrypoint_name);
+                if let Some((existing_name, existing_declaration)) = &shared_delegate_entrypoint {
+                    if existing_name != &delegate_entrypoint_name {
+                        return Err(CompilerError::Unsupported(format!(
+                            "covenant declarations '{}' and '{}' select conflicting shared delegate entrypoint names '{}' and '{}'",
+                            existing_declaration, function.name, existing_name, delegate_entrypoint_name
+                        )));
+                    }
+                } else {
+                    shared_delegate_entrypoint = Some((delegate_entrypoint_name, function.name.clone()));
+                }
+            }
+        }
+    }
+
+    let delegate_entrypoint = if let Some(policy) = shared_delegate_source {
+        let delegate_name = shared_delegate_entrypoint.expect("a cov-bound declaration always selects a delegate entrypoint").0;
+        lowered.push(build_cov_delegate_wrapper(&policy, delegate_policy.as_ref(), delegate_name.clone()));
+        Some(delegate_name)
+    } else if delegate_policy.is_some() {
+        return Err(CompilerError::Unsupported(format!(
+            "#[covenant.delegate] body '{}' requires at least one binding=cov covenant declaration",
+            delegate_body_name.expect("a delegate policy preserves its source name")
+        )));
+    } else {
+        None
+    };
+
+    if let Some(cov_declaration) = cov_declaration {
+        if let Some(auth_declaration) = auth_declaration {
+            return Err(CompilerError::Unsupported(format!(
+                "contract '{}' uses binding=cov on covenant declaration '{}', which generates delegate entrypoints, so covenant declaration '{}' cannot use binding=auth",
+                contract.name, cov_declaration, auth_declaration
+            )));
+        }
+        if let Some(manual_entrypoint) = manual_entrypoint {
+            return Err(CompilerError::Unsupported(format!(
+                "manual entrypoint '{}' belongs to leader contract '{}' and may participate in a same-covenant input group; use a cov-bound declaration or acknowledge manual covenant-group checks with #[covenant.allow(rule = {})]",
+                manual_entrypoint, contract.name, MANUAL_ENTRYPOINT_IN_LEADER_CONTRACT
+            )));
+        }
+    }
+
+    let mut lowered_contract = contract.clone();
+    lowered_contract.functions = lowered;
+    Ok((lowered_contract, CovenantDeclarationAbiNames { entrypoints: covenant_entrypoints, delegate_entrypoint }))
+}
+
+fn is_covenant_delegate_body(function: &FunctionAst<'_>) -> bool {
+    function
+        .attributes
+        .iter()
+        .any(|attribute| matches!(attribute.path.as_slice(), [head, tail] if head == "covenant" && tail == "delegate"))
+}
+
+fn validate_covenant_delegate_body(function: &FunctionAst<'_>) -> Result<(), CompilerError> {
+    if function.attributes.len() != 1 {
+        return Err(CompilerError::Unsupported("#[covenant.delegate] must be the only attribute on the delegate body".to_string()));
+    }
+    if function.entrypoint {
+        return Err(CompilerError::Unsupported("#[covenant.delegate] must be applied to a function, not an entrypoint".to_string()));
+    }
+    if !function.attributes[0].args.is_empty() {
+        return Err(CompilerError::Unsupported("#[covenant.delegate] does not accept arguments".to_string()));
+    }
+    if !function.return_types.is_empty() {
+        return Err(CompilerError::Unsupported(format!(
+            "#[covenant.delegate] body '{}' must be verification-only and return no values",
+            function.name
+        )));
+    }
+    Ok(())
+}
+
+fn allows_manual_entrypoint_in_leader_contract(function: &FunctionAst<'_>) -> Result<bool, CompilerError> {
+    let Some(attribute) = function
+        .attributes
+        .iter()
+        .find(|attribute| matches!(attribute.path.as_slice(), [head, tail] if head == "covenant" && tail == "allow"))
+    else {
+        return Ok(false);
+    };
+
+    if function.attributes.len() != 1 {
+        return Err(CompilerError::Unsupported(
+            "#[covenant.allow(...)] must be the only attribute on a manual entrypoint".to_string(),
+        ));
+    }
+    if !function.entrypoint {
+        return Err(CompilerError::Unsupported("#[covenant.allow(...)] may be applied only to a manual entrypoint".to_string()));
+    }
+    if attribute.args.len() != 1 || attribute.args[0].name != "rule" {
+        return Err(CompilerError::Unsupported(format!(
+            "#[covenant.allow(...)] expects exactly `rule = {MANUAL_ENTRYPOINT_IN_LEADER_CONTRACT}`"
+        )));
+    }
+
+    let rule = parse_attr_ident_arg("rule", Some(&attribute.args[0].expr))?;
+    if rule != MANUAL_ENTRYPOINT_IN_LEADER_CONTRACT {
+        return Err(CompilerError::Unsupported(format!(
+            "unsupported covenant allow rule '{rule}'; expected '{MANUAL_ENTRYPOINT_IN_LEADER_CONTRACT}'"
+        )));
+    }
+
+    Ok(true)
+}
+
+fn parse_covenant_declaration<'i>(
+    function: &FunctionAst<'i>,
+    constants: &HashMap<String, Expr<'i>>,
+) -> Result<CovenantDeclaration<'i>, CompilerError> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum CovenantSyntax {
+        Canonical,
+        Singleton,
+        Fanout,
+    }
+
+    if function.entrypoint {
+        return Err(CompilerError::Unsupported(
+            "#[covenant(...)] must be applied to a policy function, not an entrypoint".to_string(),
+        ));
+    }
+
+    if function.attributes.len() != 1 {
+        return Err(CompilerError::Unsupported("covenant declarations support exactly one #[covenant(...)] attribute".to_string()));
+    }
+
+    let attribute = &function.attributes[0];
+    let syntax = match attribute.path.as_slice() {
+        [head] if head == "covenant" => CovenantSyntax::Canonical,
+        [head, tail] if head == "covenant" && tail == "singleton" => CovenantSyntax::Singleton,
+        [head, tail] if head == "covenant" && tail == "fanout" => CovenantSyntax::Fanout,
+        _ => {
+            return Err(CompilerError::Unsupported(format!(
+                "unsupported function attribute #[{}]; expected #[covenant(...)], #[covenant.singleton], or #[covenant.fanout(...)]",
+                attribute.path.join(".")
+            )));
+        }
+    };
+
+    let mut args_by_name: HashMap<&str, &Expr<'i>> = HashMap::new();
+    for arg in &attribute.args {
+        if args_by_name.insert(arg.name.as_str(), &arg.expr).is_some() {
+            return Err(CompilerError::Unsupported(format!("duplicate covenant attribute argument '{}'", arg.name)));
+        }
+    }
+
+    let allowed_keys: HashSet<&str> =
+        ["binding", "from", "to", "mode", "groups", "termination", "name", "delegate_name"].into_iter().collect();
+    for arg in &attribute.args {
+        if !allowed_keys.contains(arg.name.as_str()) {
+            return Err(CompilerError::Unsupported(format!("unknown covenant attribute argument '{}'", arg.name)));
+        }
+    }
+
+    let (from_expr, to_expr) = match syntax {
+        CovenantSyntax::Canonical => {
+            let from_expr = args_by_name
+                .get("from")
+                .copied()
+                .ok_or_else(|| CompilerError::Unsupported("missing covenant attribute argument 'from'".to_string()))?
+                .clone();
+            (from_expr, args_by_name.get("to").copied().cloned())
+        }
+        CovenantSyntax::Singleton => {
+            if args_by_name.contains_key("from") || args_by_name.contains_key("to") {
+                return Err(CompilerError::Unsupported(
+                    "covenant.singleton is sugar and does not accept 'from' or 'to' arguments".to_string(),
+                ));
+            }
+            (Expr::int(1), Some(Expr::int(1)))
+        }
+        CovenantSyntax::Fanout => {
+            if args_by_name.contains_key("from") {
+                return Err(CompilerError::Unsupported(
+                    "covenant.fanout is sugar and does not accept a 'from' argument (it is always 1)".to_string(),
+                ));
+            }
+            let to_expr = args_by_name
+                .get("to")
+                .copied()
+                .ok_or_else(|| CompilerError::Unsupported("missing covenant attribute argument 'to'".to_string()))?
+                .clone();
+            (Expr::int(1), Some(to_expr))
+        }
+    };
+
+    let from_value = match eval_const_int(&from_expr, constants) {
+        Ok(value) => value,
+        Err(CompilerError::NonConstantInteger(_)) => {
+            return Err(CompilerError::Unsupported("covenant 'from' must be a compile-time integer".to_string()));
+        }
+        Err(err) => return Err(err),
+    };
+    if from_value < 1 {
+        return Err(CompilerError::Unsupported("covenant 'from' must be >= 1".to_string()));
+    }
+    if from_value > MAX_FOR_LOOP_ITERATIONS {
+        return Err(CompilerError::Unsupported(format!("covenant 'from' must not exceed {MAX_FOR_LOOP_ITERATIONS}"))
+            .with_span(&from_expr.span));
+    }
+
+    let default_binding = if from_value == 1 { CovenantBinding::Auth } else { CovenantBinding::Cov };
+    let binding = match args_by_name.get("binding").copied() {
+        Some(expr) => {
+            let binding_name = parse_attr_ident_arg("binding", Some(expr))?;
+            match binding_name.as_str() {
+                "auth" => CovenantBinding::Auth,
+                "cov" => CovenantBinding::Cov,
+                other => {
+                    return Err(CompilerError::Unsupported(format!("covenant binding must be auth|cov, got '{}'", other)));
+                }
+            }
+        }
+        None => default_binding,
+    };
+
+    let mode = match args_by_name.get("mode").copied() {
+        Some(expr) => {
+            let mode_name = parse_attr_ident_arg("mode", Some(expr))?;
+            match mode_name.as_str() {
+                "verification" => CovenantMode::Verification,
+                "transition" => CovenantMode::Transition,
+                other => {
+                    return Err(CompilerError::Unsupported(format!("covenant mode must be verification|transition, got '{}'", other)));
+                }
+            }
+        }
+        None => {
+            if function.return_types.is_empty() {
+                CovenantMode::Verification
+            } else {
+                CovenantMode::Transition
+            }
+        }
+    };
+
+    let groups = match args_by_name.get("groups").copied() {
+        Some(expr) => {
+            let groups_name = parse_attr_ident_arg("groups", Some(expr))?;
+            match groups_name.as_str() {
+                "single" => CovenantGroups::Single,
+                "multiple" => CovenantGroups::Multiple,
+                other => {
+                    return Err(CompilerError::Unsupported(format!("covenant groups must be single|multiple, got '{}'", other)));
+                }
+            }
+        }
+        None => match binding {
+            CovenantBinding::Auth => CovenantGroups::Multiple,
+            CovenantBinding::Cov => CovenantGroups::Single,
+        },
+    };
+
+    let termination = match args_by_name.get("termination").copied() {
+        Some(expr) => {
+            let termination_name = parse_attr_ident_arg("termination", Some(expr))?;
+            match termination_name.as_str() {
+                "disallowed" => CovenantTermination::Disallowed,
+                "allowed" => CovenantTermination::Allowed,
+                other => {
+                    return Err(CompilerError::Unsupported(format!(
+                        "covenant termination must be disallowed|allowed, got '{}'",
+                        other
+                    )));
+                }
+            }
+        }
+        None => CovenantTermination::Disallowed,
+    };
+
+    if binding == CovenantBinding::Auth && from_value != 1 {
+        return Err(CompilerError::Unsupported("binding=auth requires from = 1".to_string()));
+    }
+    if binding == CovenantBinding::Cov && is_literal_int(&from_expr, 1) && args_by_name.contains_key("binding") {
+        eprintln!(
+            "warning: #[covenant(...)] on function '{}' uses binding=cov with from=1; binding=auth is usually a better default",
+            function.name
+        );
+    }
+    if binding == CovenantBinding::Cov && groups == CovenantGroups::Multiple {
+        return Err(CompilerError::Unsupported("binding=cov with groups=multiple is not supported yet".to_string()));
+    }
+    if binding == CovenantBinding::Auth && args_by_name.contains_key("delegate_name") {
+        return Err(CompilerError::Unsupported(
+            "covenant attribute argument 'delegate_name' is valid only with binding=cov".to_string(),
+        ));
+    }
+
+    let entrypoint_name = args_by_name.get("name").map(|expr| parse_attr_ident_arg("name", Some(expr))).transpose()?;
+    let delegate_entrypoint_name =
+        args_by_name.get("delegate_name").map(|expr| parse_attr_ident_arg("delegate_name", Some(expr))).transpose()?;
+
+    if mode == CovenantMode::Verification && !function.return_types.is_empty() {
+        return Err(CompilerError::Unsupported("verification mode policy functions must not declare return values".to_string()));
+    }
+    if mode == CovenantMode::Transition && function.return_types.is_empty() {
+        return Err(CompilerError::Unsupported("transition mode policy functions must declare return values".to_string()));
+    }
+
+    let infers_single_state_transition_to_one =
+        mode == CovenantMode::Transition && function.return_types.len() == 1 && is_state_type(&function.return_types[0]);
+    let to_expr = match to_expr {
+        Some(to_expr) => to_expr,
+        None if infers_single_state_transition_to_one => Expr::int(1),
+        None => return Err(CompilerError::Unsupported("missing covenant attribute argument 'to'".to_string())),
+    };
+    let to_value = match eval_const_int(&to_expr, constants) {
+        Ok(value) => value,
+        Err(CompilerError::NonConstantInteger(_)) => {
+            return Err(CompilerError::Unsupported("covenant 'to' must be a compile-time integer".to_string()));
+        }
+        Err(err) => return Err(err),
+    };
+    if to_value < 1 {
+        return Err(CompilerError::Unsupported("covenant 'to' must be >= 1".to_string()));
+    }
+    if to_value > MAX_FOR_LOOP_ITERATIONS {
+        return Err(
+            CompilerError::Unsupported(format!("covenant 'to' must not exceed {MAX_FOR_LOOP_ITERATIONS}")).with_span(&to_expr.span)
+        );
+    }
+
+    if args_by_name.contains_key("termination") && !(from_value == 1 && to_value == 1) {
+        return Err(CompilerError::Unsupported("termination is only supported for singleton covenants (from=1, to=1)".to_string()));
+    }
+
+    Ok(CovenantDeclaration {
+        binding,
+        mode,
+        groups,
+        singleton: syntax == CovenantSyntax::Singleton,
+        termination,
+        entrypoint_name,
+        delegate_entrypoint_name,
+        from_expr: from_expr.clone(),
+        to_expr: to_expr.clone(),
+    })
+}
+
+fn parse_attr_ident_arg<'i>(name: &str, value: Option<&Expr<'i>>) -> Result<String, CompilerError> {
+    let value = value.ok_or_else(|| CompilerError::Unsupported(format!("missing covenant attribute argument '{}'", name)))?;
+    match &value.kind {
+        ExprKind::Identifier(identifier) => Ok(identifier.clone()),
+        _ => Err(CompilerError::Unsupported(format!("covenant attribute argument '{}' must be an identifier", name))),
+    }
+}
+
+fn validate_covenant_policy_state_shape<'i>(
+    policy: &FunctionAst<'i>,
+    declaration: &CovenantDeclaration<'i>,
+    contract_name: &str,
+    contract_fields: &[ContractFieldAst<'i>],
+) -> Result<(), CompilerError> {
+    if contract_fields.is_empty() {
+        return Err(CompilerError::Unsupported(format!(
+            "covenant declaration on function '{}' requires contract '{}' to declare at least one state field",
+            policy.name, contract_name
+        )));
+    }
+
+    match (declaration.binding, declaration.mode) {
+        (CovenantBinding::Auth, CovenantMode::Verification) => {
+            if declaration.singleton && declaration.termination != CovenantTermination::Allowed {
+                if policy.params.len() < 2 || !is_state_type(&policy.params[0].type_ref) || !is_state_type(&policy.params[1].type_ref)
+                {
+                    return Err(CompilerError::Unsupported(format!(
+                        "mode=verification with binding=auth on singleton function '{}' expects parameters '(State prev_state, State new_state, ...)'",
+                        policy.name
+                    )));
+                }
+            } else if policy.params.len() < 2
+                || !is_state_type(&policy.params[0].type_ref)
+                || !is_state_array_type(&policy.params[1].type_ref)
+            {
+                return Err(CompilerError::Unsupported(format!(
+                    "mode=verification with binding=auth on function '{}' expects parameters '(State prev_state, State[] new_states, ...)'",
+                    policy.name
+                )));
+            }
+        }
+        (CovenantBinding::Cov, CovenantMode::Verification) => {
+            if policy.params.len() < 2
+                || !is_state_array_type(&policy.params[0].type_ref)
+                || !is_state_array_type(&policy.params[1].type_ref)
+            {
+                return Err(CompilerError::Unsupported(format!(
+                    "mode=verification with binding=cov on function '{}' expects parameters '(State[] prev_states, State[] new_states, ...)'",
+                    policy.name
+                )));
+            }
+        }
+        (CovenantBinding::Auth, CovenantMode::Transition) => {
+            if policy.params.is_empty() || !is_state_type(&policy.params[0].type_ref) {
+                return Err(CompilerError::Unsupported(format!(
+                    "mode=transition with binding=auth on function '{}' expects parameters '(State prev_state, ...)'",
+                    policy.name
+                )));
+            }
+        }
+        (CovenantBinding::Cov, CovenantMode::Transition) => {
+            if policy.params.is_empty() || !is_state_array_type(&policy.params[0].type_ref) {
+                return Err(CompilerError::Unsupported(format!(
+                    "mode=transition with binding=cov on function '{}' expects parameters '(State[] prev_states, ...)'",
+                    policy.name
+                )));
+            }
+        }
+    }
+
+    if declaration.mode == CovenantMode::Transition {
+        if policy.return_types.len() != 1 {
+            return Err(CompilerError::Unsupported(format!(
+                "mode=transition on function '{}' with contract state expects exactly one return type: 'State' or 'State[]'",
+                policy.name
+            )));
+        }
+
+        let return_type = &policy.return_types[0];
+        if !is_state_type(return_type) && !is_state_array_type(return_type) {
+            return Err(CompilerError::Unsupported(format!(
+                "mode=transition on function '{}' with contract state expects return type 'State' or 'State[]'",
+                policy.name
+            )));
+        }
+
+        if declaration.singleton && is_state_array_type(return_type) && declaration.termination != CovenantTermination::Allowed {
+            return Err(CompilerError::Unsupported(format!(
+                "transition mode singleton policy function '{}' must return a single State (arrays are not allowed unless termination=allowed)",
+                policy.name
+            )));
+        }
+
+        if is_state_type(return_type) && !is_literal_int(&declaration.to_expr, 1) {
+            return Err(CompilerError::Unsupported(format!(
+                "mode=transition on function '{}' may return a single State only when 'to' is the literal 1 or omitted",
+                policy.name
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn preserved_entrypoint_params<'i>(
+    function: &FunctionAst<'i>,
+    declaration: CovenantDeclaration<'i>,
+    leader: bool,
+    contract_fields: &[ContractFieldAst<'i>],
+) -> Vec<crate::ast::ParamAst<'i>> {
+    if contract_fields.is_empty() {
+        return match (declaration.binding, leader) {
+            (CovenantBinding::Cov, false) => Vec::new(),
+            _ => function.params.clone(),
+        };
+    }
+
+    match (declaration.binding, declaration.mode, leader) {
+        (CovenantBinding::Auth, _, _) => function.params.iter().skip(1).cloned().collect(),
+        (CovenantBinding::Cov, CovenantMode::Verification, true) => function.params.iter().skip(1).cloned().collect(),
+        (CovenantBinding::Cov, CovenantMode::Transition, true) => function.params.iter().skip(1).cloned().collect(),
+        (CovenantBinding::Cov, _, false) => Vec::new(),
+    }
+}
+
+fn build_auth_wrapper<'i>(
+    policy: &FunctionAst<'i>,
+    policy_name: &str,
+    declaration: CovenantDeclaration<'i>,
+    entrypoint_name: String,
+    contract_fields: &[ContractFieldAst<'i>],
+) -> Result<FunctionAst<'i>, CompilerError> {
+    let mut body = Vec::new();
+    let entrypoint_params = policy.params.iter().skip(1).cloned().collect();
+
+    let active_input = active_input_index_expr();
+    let auth_out_count_name = "__auth_out_count";
+    body.push(var_def_statement(int_type(), auth_out_count_name, Expr::call("OpAuthOutputCount", vec![active_input.clone()])));
+
+    if declaration.groups == CovenantGroups::Single {
+        let cov_id_name = "__cov_id";
+        body.push(var_def_statement(bytes32_type(), cov_id_name, Expr::call("OpInputCovenantId", vec![active_input.clone()])));
+        let cov_shared_out_count_name = "__cov_shared_out_count";
+        body.push(var_def_statement(
+            int_type(),
+            cov_shared_out_count_name,
+            Expr::call("OpCovOutputCount", vec![identifier_expr(cov_id_name)]),
+        ));
+        body.push(require_statement(binary_expr(
+            BinaryOp::Eq,
+            identifier_expr(cov_shared_out_count_name),
+            identifier_expr(auth_out_count_name),
+        )));
+    }
+
+    match declaration.mode {
+        CovenantMode::Verification => {
+            let prev_state_name = &policy.params[0].name;
+            body.push(var_def_statement(state_type(), prev_state_name, state_object_expr_from_contract_fields(contract_fields)));
+            body.push(call_statement(policy_name, policy.params.iter().map(|param| identifier_expr(&param.name)).collect()));
+            if declaration.singleton && declaration.termination != CovenantTermination::Allowed {
+                let new_state_name = &policy.params[1].name;
+                body.push(require_statement(binary_expr(BinaryOp::Eq, identifier_expr(auth_out_count_name), Expr::int(1))));
+                let out_idx_name = "__cov_out_idx";
+                body.push(var_def_statement(
+                    int_type(),
+                    out_idx_name,
+                    Expr::call("OpAuthOutputIdx", vec![active_input.clone(), Expr::int(0)]),
+                ));
+                body.push(call_statement("validateOutputState", vec![identifier_expr(out_idx_name), identifier_expr(new_state_name)]));
+            } else {
+                let new_states_name = &policy.params[1].name;
+                body.push(require_statement(binary_expr(
+                    BinaryOp::Le,
+                    identifier_expr(auth_out_count_name),
+                    declaration.to_expr.clone(),
+                )));
+                body.push(require_statement(binary_expr(
+                    BinaryOp::Eq,
+                    identifier_expr(auth_out_count_name),
+                    length_expr(identifier_expr(new_states_name)),
+                )));
+                append_auth_output_state_array_checks_from_state_array(
+                    &mut body,
+                    &active_input,
+                    auth_out_count_name,
+                    declaration.to_expr.clone(),
+                    new_states_name,
+                );
+            }
+        }
+        CovenantMode::Transition => {
+            let prev_state_name = &policy.params[0].name;
+            body.push(var_def_statement(state_type(), prev_state_name, state_object_expr_from_contract_fields(contract_fields)));
+            let call_args = policy.params.iter().map(|param| identifier_expr(&param.name)).collect();
+            if is_state_type(&policy.return_types[0]) {
+                let next_state_name = "__cov_new_state";
+                body.push(function_call_assign_statement(vec![typed_binding(state_type(), next_state_name)], policy_name, call_args));
+                body.push(require_statement(binary_expr(BinaryOp::Eq, identifier_expr(auth_out_count_name), Expr::int(1))));
+                let out_idx_name = "__cov_out_idx";
+                body.push(var_def_statement(
+                    int_type(),
+                    out_idx_name,
+                    Expr::call("OpAuthOutputIdx", vec![active_input.clone(), Expr::int(0)]),
+                ));
+                body.push(call_statement(
+                    "validateOutputState",
+                    vec![identifier_expr(out_idx_name), identifier_expr(next_state_name)],
+                ));
+            } else {
+                let next_states_name = "__cov_new_states";
+                body.push(function_call_assign_statement(
+                    vec![typed_binding(state_array_type(), next_states_name)],
+                    policy_name,
+                    call_args,
+                ));
+                body.push(require_statement(binary_expr(
+                    BinaryOp::Le,
+                    identifier_expr(auth_out_count_name),
+                    declaration.to_expr.clone(),
+                )));
+                body.push(require_statement(binary_expr(
+                    BinaryOp::Eq,
+                    identifier_expr(auth_out_count_name),
+                    length_expr(identifier_expr(next_states_name)),
+                )));
+                append_auth_output_state_array_checks_from_state_array(
+                    &mut body,
+                    &active_input,
+                    auth_out_count_name,
+                    declaration.to_expr.clone(),
+                    next_states_name,
+                );
+            }
+        }
+    }
+
+    Ok(generated_entrypoint(policy, entrypoint_name, entrypoint_params, body))
+}
+
+fn build_cov_leader_wrapper<'i>(
+    policy: &FunctionAst<'i>,
+    policy_name: &str,
+    declaration: CovenantDeclaration<'i>,
+    entrypoint_name: String,
+) -> Result<FunctionAst<'i>, CompilerError> {
+    let mut body = Vec::new();
+    let leader_params = policy.params.iter().skip(1).cloned().collect();
+
+    let active_input = active_input_index_expr();
+    let cov_id_name = "__cov_id";
+    body.push(var_def_statement(bytes32_type(), cov_id_name, Expr::call("OpInputCovenantId", vec![active_input.clone()])));
+
+    let leader_idx_expr = Expr::call("OpCovInputIdx", vec![identifier_expr(cov_id_name), Expr::int(0)]);
+    body.push(require_statement(binary_expr(BinaryOp::Eq, leader_idx_expr, active_input)));
+
+    let in_count_name = "__cov_in_count";
+    body.push(var_def_statement(int_type(), in_count_name, Expr::call("OpCovInputCount", vec![identifier_expr(cov_id_name)])));
+    body.push(require_statement(binary_expr(BinaryOp::Le, identifier_expr(in_count_name), declaration.from_expr.clone())));
+
+    let out_count_name = "__cov_out_count";
+    body.push(var_def_statement(int_type(), out_count_name, Expr::call("OpCovOutputCount", vec![identifier_expr(cov_id_name)])));
+
+    match declaration.mode {
+        CovenantMode::Verification => {
+            let prev_states_name = &policy.params[0].name;
+            let new_states_name = &policy.params[1].name;
+            append_cov_input_state_reads_into_state_array(
+                &mut body,
+                cov_id_name,
+                in_count_name,
+                declaration.from_expr.clone(),
+                prev_states_name,
+            );
+            body.push(call_statement(policy_name, policy.params.iter().map(|param| identifier_expr(&param.name)).collect()));
+            body.push(require_statement(binary_expr(BinaryOp::Le, identifier_expr(out_count_name), declaration.to_expr.clone())));
+            body.push(require_statement(binary_expr(
+                BinaryOp::Eq,
+                identifier_expr(out_count_name),
+                length_expr(identifier_expr(new_states_name)),
+            )));
+            append_cov_output_state_array_checks_from_state_array(
+                &mut body,
+                cov_id_name,
+                out_count_name,
+                declaration.to_expr.clone(),
+                new_states_name,
+            );
+        }
+        CovenantMode::Transition => {
+            let prev_states_name = &policy.params[0].name;
+            append_cov_input_state_reads_into_state_array(
+                &mut body,
+                cov_id_name,
+                in_count_name,
+                declaration.from_expr.clone(),
+                prev_states_name,
+            );
+            let call_args = policy.params.iter().map(|param| identifier_expr(&param.name)).collect();
+            if is_state_type(&policy.return_types[0]) {
+                let next_state_name = "__cov_new_state";
+                body.push(function_call_assign_statement(vec![typed_binding(state_type(), next_state_name)], policy_name, call_args));
+                body.push(require_statement(binary_expr(BinaryOp::Eq, identifier_expr(out_count_name), Expr::int(1))));
+                let out_idx_name = "__cov_out_idx";
+                body.push(var_def_statement(
+                    int_type(),
+                    out_idx_name,
+                    Expr::call("OpCovOutputIdx", vec![identifier_expr(cov_id_name), Expr::int(0)]),
+                ));
+                body.push(call_statement(
+                    "validateOutputState",
+                    vec![identifier_expr(out_idx_name), identifier_expr(next_state_name)],
+                ));
+            } else {
+                let next_states_name = "__cov_new_states";
+                body.push(function_call_assign_statement(
+                    vec![typed_binding(state_array_type(), next_states_name)],
+                    policy_name,
+                    call_args,
+                ));
+                body.push(require_statement(binary_expr(BinaryOp::Le, identifier_expr(out_count_name), declaration.to_expr.clone())));
+                body.push(require_statement(binary_expr(
+                    BinaryOp::Eq,
+                    identifier_expr(out_count_name),
+                    length_expr(identifier_expr(next_states_name)),
+                )));
+                append_cov_output_state_array_checks_from_state_array(
+                    &mut body,
+                    cov_id_name,
+                    out_count_name,
+                    declaration.to_expr.clone(),
+                    next_states_name,
+                );
+            }
+        }
+    }
+
+    Ok(generated_entrypoint(policy, entrypoint_name, leader_params, body))
+}
+
+fn build_cov_delegate_wrapper<'i>(
+    leader_policy: &FunctionAst<'i>,
+    delegate_policy: Option<&FunctionAst<'i>>,
+    entrypoint_name: String,
+) -> FunctionAst<'i> {
+    let active_input = active_input_index_expr();
+    let cov_id_name = "__cov_id";
+    let mut body = vec![
+        var_def_statement(bytes32_type(), cov_id_name, Expr::call("OpInputCovenantId", vec![active_input.clone()])),
+        require_statement(binary_expr(
+            BinaryOp::Ne,
+            Expr::call("OpCovInputIdx", vec![identifier_expr(cov_id_name), Expr::int(0)]),
+            active_input,
+        )),
+    ];
+    let (source, params) = if let Some(delegate_policy) = delegate_policy {
+        body.push(call_statement(
+            &delegate_policy.name,
+            delegate_policy.params.iter().map(|param| identifier_expr(&param.name)).collect(),
+        ));
+        (delegate_policy, delegate_policy.params.clone())
+    } else {
+        (leader_policy, Vec::new())
+    };
+    generated_entrypoint(source, entrypoint_name, params, body)
+}
+
+fn generated_entrypoint<'i>(
+    policy: &FunctionAst<'i>,
+    entrypoint_name: String,
+    params: Vec<crate::ast::ParamAst<'i>>,
+    body: Vec<Statement<'i>>,
+) -> FunctionAst<'i> {
+    FunctionAst {
+        name: entrypoint_name,
+        attributes: Vec::new(),
+        params,
+        entrypoint: true,
+        return_types: Vec::new(),
+        returns_tuple: false,
+        body,
+        return_type_spans: Vec::new(),
+        span: policy.span,
+        name_span: policy.name_span,
+        body_span: policy.body_span,
+    }
+}
+
+// TODO: Define these constructor functions in a more central location.
+fn int_type() -> TypeRef {
+    TypeRef { base: TypeBase::Int, array_dims: Vec::new() }
+}
+
+fn state_type() -> TypeRef {
+    TypeRef { base: TypeBase::Custom(STATE_TYPE_NAME.to_string()), array_dims: Vec::new() }
+}
+
+fn state_array_type() -> TypeRef {
+    TypeRef { base: TypeBase::Custom(STATE_TYPE_NAME.to_string()), array_dims: vec![ArrayDim::Dynamic] }
+}
+
+fn bytes32_type() -> TypeRef {
+    TypeRef { base: TypeBase::Byte, array_dims: vec![ArrayDim::Fixed(32)] }
+}
+
+fn active_input_index_expr<'i>() -> Expr<'i> {
+    Expr::new(ExprKind::Introspection(IntrospectionKind::ActiveInputIndex), span::Span::default())
+}
+
+fn identifier_expr<'i>(name: &str) -> Expr<'i> {
+    Expr::new(ExprKind::Identifier(name.to_string()), span::Span::default())
+}
+
+fn array_index_expr<'i>(name: &str, index: Expr<'i>) -> Expr<'i> {
+    Expr::new(ExprKind::ArrayIndex { source: Box::new(identifier_expr(name)), index: Box::new(index) }, span::Span::default())
+}
+
+fn binary_expr<'i>(op: BinaryOp, left: Expr<'i>, right: Expr<'i>) -> Expr<'i> {
+    Expr::new(ExprKind::Binary { op, left: Box::new(left), right: Box::new(right) }, span::Span::default())
+}
+
+fn var_def_statement<'i>(type_ref: TypeRef, name: &str, expr: Expr<'i>) -> Statement<'i> {
+    Statement::VariableDefinition {
+        type_ref,
+        modifiers: Vec::new(),
+        name: name.to_string(),
+        expr: Some(expr),
+        span: span::Span::default(),
+        type_span: span::Span::default(),
+        modifier_spans: Vec::new(),
+        name_span: span::Span::default(),
+    }
+}
+
+fn var_decl_statement<'i>(type_ref: TypeRef, name: &str) -> Statement<'i> {
+    Statement::VariableDefinition {
+        type_ref,
+        modifiers: Vec::new(),
+        name: name.to_string(),
+        expr: None,
+        span: span::Span::default(),
+        type_span: span::Span::default(),
+        modifier_spans: Vec::new(),
+        name_span: span::Span::default(),
+    }
+}
+
+fn require_statement<'i>(expr: Expr<'i>) -> Statement<'i> {
+    Statement::Require { expr, message: None, span: span::Span::default(), message_span: None }
+}
+
+fn call_statement<'i>(name: &str, args: Vec<Expr<'i>>) -> Statement<'i> {
+    Statement::FunctionCall { name: name.to_string(), args, span: span::Span::default(), name_span: span::Span::default() }
+}
+
+fn function_call_assign_statement<'i>(bindings: Vec<crate::ast::ParamAst<'i>>, name: &str, args: Vec<Expr<'i>>) -> Statement<'i> {
+    Statement::FunctionCallAssign {
+        bindings,
+        name: name.to_string(),
+        args,
+        span: span::Span::default(),
+        name_span: span::Span::default(),
+    }
+}
+
+fn array_append_statement<'i>(name: &str, expr: Expr<'i>) -> Statement<'i> {
+    Statement::Assign {
+        name: name.to_string(),
+        expr: Expr::new(
+            ExprKind::Append { source: Box::new(Expr::identifier(name)), args: vec![expr], span: span::Span::default() },
+            span::Span::default(),
+        ),
+        span: span::Span::default(),
+        name_span: span::Span::default(),
+    }
+}
+
+fn typed_binding<'i>(type_ref: TypeRef, name: &str) -> crate::ast::ParamAst<'i> {
+    crate::ast::ParamAst {
+        type_ref,
+        name: name.to_string(),
+        span: span::Span::default(),
+        type_span: span::Span::default(),
+        name_span: span::Span::default(),
+    }
+}
+
+fn for_statement<'i>(
+    ident: &str,
+    start: Expr<'i>,
+    end: Expr<'i>,
+    max_iterations: Expr<'i>,
+    body: Vec<Statement<'i>>,
+) -> Statement<'i> {
+    Statement::For {
+        ident: ident.to_string(),
+        start,
+        end,
+        max_iterations,
+        body,
+        span: span::Span::default(),
+        ident_span: span::Span::default(),
+        body_span: span::Span::default(),
+    }
+}
+
+fn state_object_expr_from_contract_fields<'i>(contract_fields: &[ContractFieldAst<'i>]) -> Expr<'i> {
+    let fields = contract_fields
+        .iter()
+        .map(|field| StateFieldExpr {
+            name: field.name.clone(),
+            expr: identifier_expr(&field.name),
+            span: span::Span::default(),
+            name_span: span::Span::default(),
+        })
+        .collect();
+    Expr::new(
+        ExprKind::StructLiteral { name: STATE_TYPE_NAME.to_string(), fields, name_span: span::Span::default() },
+        span::Span::default(),
+    )
+}
+
+fn length_expr<'i>(expr: Expr<'i>) -> Expr<'i> {
+    Expr::new(
+        ExprKind::UnarySuffix { source: Box::new(expr), kind: UnarySuffixKind::Length, span: span::Span::default() },
+        span::Span::default(),
+    )
+}
+
+// TODO: Define `is_state_type` and `is_state_array_type` in one central place.
+fn is_state_type(type_ref: &TypeRef) -> bool {
+    type_ref.is_custom() && matches!(&type_ref.base, TypeBase::Custom(name) if name == STATE_TYPE_NAME)
+}
+
+fn is_state_array_type(type_ref: &TypeRef) -> bool {
+    matches!(&type_ref.base, TypeBase::Custom(name) if name == STATE_TYPE_NAME)
+        && matches!(type_ref.array_dims.as_slice(), [ArrayDim::Dynamic])
+}
+
+fn is_literal_int(expr: &Expr<'_>, expected: i64) -> bool {
+    matches!(expr.kind, ExprKind::Int(value) if value == expected)
+}
+
+fn append_cov_input_state_reads_into_state_array<'i>(
+    body: &mut Vec<Statement<'i>>,
+    cov_id_name: &str,
+    in_count_name: &str,
+    from_expr: Expr<'i>,
+    prev_states_name: &str,
+) {
+    let loop_var = "__cov_in_k";
+    body.push(var_decl_statement(state_array_type(), prev_states_name));
+    let for_body = vec![array_append_statement(
+        prev_states_name,
+        Expr::call("readInputState", vec![Expr::call("OpCovInputIdx", vec![identifier_expr(cov_id_name), identifier_expr(loop_var)])]),
+    )];
+    body.push(for_statement(loop_var, Expr::int(0), identifier_expr(in_count_name), from_expr, for_body));
+}
+
+fn append_auth_output_state_array_checks_from_state_array<'i>(
+    body: &mut Vec<Statement<'i>>,
+    active_input: &Expr<'i>,
+    out_count_name: &str,
+    to_expr: Expr<'i>,
+    state_array_name: &str,
+) {
+    let loop_var = "__cov_k";
+    let out_idx_name = "__cov_out_idx";
+    let for_body = vec![
+        var_def_statement(
+            int_type(),
+            out_idx_name,
+            Expr::call("OpAuthOutputIdx", vec![active_input.clone(), identifier_expr(loop_var)]),
+        ),
+        call_statement(
+            "validateOutputState",
+            vec![identifier_expr(out_idx_name), array_index_expr(state_array_name, identifier_expr(loop_var))],
+        ),
+    ];
+    body.push(for_statement(loop_var, Expr::int(0), identifier_expr(out_count_name), to_expr, for_body));
+}
+
+fn append_cov_output_state_array_checks_from_state_array<'i>(
+    body: &mut Vec<Statement<'i>>,
+    cov_id_name: &str,
+    out_count_name: &str,
+    to_expr: Expr<'i>,
+    state_array_name: &str,
+) {
+    let loop_var = "__cov_k";
+    let out_idx_name = "__cov_out_idx";
+    let for_body = vec![
+        var_def_statement(
+            int_type(),
+            out_idx_name,
+            Expr::call("OpCovOutputIdx", vec![identifier_expr(cov_id_name), identifier_expr(loop_var)]),
+        ),
+        call_statement(
+            "validateOutputState",
+            vec![identifier_expr(out_idx_name), array_index_expr(state_array_name, identifier_expr(loop_var))],
+        ),
+    ];
+    body.push(for_statement(loop_var, Expr::int(0), identifier_expr(out_count_name), to_expr, for_body));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_array_type_requires_one_dynamic_dimension() {
+        assert!(is_state_array_type(&state_array_type()));
+        assert!(!is_state_array_type(&state_type()));
+        assert!(!is_state_array_type(&TypeRef {
+            base: TypeBase::Custom(STATE_TYPE_NAME.to_string()),
+            array_dims: vec![ArrayDim::Fixed(2)],
+        }));
+        assert!(!is_state_array_type(&TypeRef {
+            base: TypeBase::Custom(STATE_TYPE_NAME.to_string()),
+            array_dims: vec![ArrayDim::Dynamic, ArrayDim::Dynamic],
+        }));
+    }
+
+    #[test]
+    fn covenant_bounds_accept_the_iteration_limit() {
+        let source = r#"
+            contract Decls() {
+                byte dummy = 0x00;
+
+                #[covenant(binding = cov, from = 10000, to = 10000, mode = verification)]
+                function transition_ok(State[] prev_states, State[] new_states) {}
+            }
+        "#;
+        let contract = parse_contract_ast(source).expect("contract parses");
+        let function = contract.functions.iter().find(|function| function.name == "transition_ok").expect("policy exists");
+
+        let declaration = parse_covenant_declaration(function, &HashMap::new()).expect("the exact iteration limit remains valid");
+        assert!(matches!(declaration.from_expr.kind, ExprKind::Int(MAX_FOR_LOOP_ITERATIONS)));
+        assert!(matches!(declaration.to_expr.kind, ExprKind::Int(MAX_FOR_LOOP_ITERATIONS)));
+    }
+}

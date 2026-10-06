@@ -1,0 +1,164 @@
+pragma silverscript ^0.1.0;
+
+// KOB code, not upstream. KCC-20 batch leader of KOB's "proposal P2" (P2 = holders on the small
+// 3-in/3-out program KCC20P2.sil, plus this separate leader template; "Batch" = the leader that
+// moves up to 16 holder UTXOs in one transaction). Both are templates of ONE token covenant
+// domain, so only batches pay for batch capacity (the unrolled 16-slot code).
+//
+// A leader holds no tokens: it is the covenant's first input (cov[0]) and only checks the move;
+// each holder input (delegator) still authorises its own owner and accepts as leader only its own
+// template or this one (the two-entry allowlist in KCC20P2.sil).
+//
+// Entries:
+//   batch(outs, cPos, sig)   owner (matcher key): move up to 16 holder inputs to up to 16 holder
+//                            outputs with the same holder template; the leader continues itself
+//   clone(newOwner, w)       anyone for the public seed (owner 0, w empty), else the owner: new
+//                            amount-0 leader owned by newOwner; no holder input may be present
+//   retire(sig)              owner: take the carrier back; no holder input may be present
+//
+// State (template per kind): amount (always 0), owner (matcher key; the public seed has owner 0
+// and may only be cloned), extension_commitment, holder template (hTpl, hPre, hSuf), copied from
+// the seed that the token genesis creates.
+//
+// Key invariants (batch):
+//   - holder inputs are authenticated by P2SH of (prefix || own state || suffix) where the template
+//     bytes come once from the first holder input and hash to hTpl; same extension_commitment
+//   - conservation: sum of holder input amounts == sum of holder output amounts
+//   - every holder output is a canonical 112-byte KCC-20 state obeying the per-output rules
+//     (owner_scheme <= 4, borrow_scheme <= 3, borrow guard >= 0 for the amount-threshold scheme,
+//     same extension_commitment) and is P2SH of the holder template with that state
+//   - the leader continues byte-for-byte (same script, carrier value not reduced), so batches chain
+//   - the matcher's signature moves only the leader; it never authorises a holder
+contract KCC20Batch(
+    int init_amount,
+    pubkey init_owner,
+    byte[32] init_extension_commitment,
+    byte[32] init_hTpl,
+    int init_hPre,
+    int init_hSuf
+) {
+    int amount = init_amount;
+    pubkey owner = init_owner;
+    byte[32] extension_commitment = init_extension_commitment;
+    byte[32] hTpl = init_hTpl;
+    int hPre = init_hPre;
+    int hSuf = init_hSuf;
+
+    int constant MAX_SLOTS = 16;
+    int constant H_STATE_LEN = 112;
+    byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
+
+    // outs: the holder output states, 112 bytes each (the KCC-20 state encoding), in
+    // authorised-output order skipping the leader's own continuation, which is the cPos-th
+    // authorised output. s: the owner's signature.
+    entry batch(byte[] outs, int cPos, sig s) {
+        int self = this.activeInputIndex;
+        byte[32] cov = OpInputCovenantId(self);
+        require(OpCovInputIdx(cov, 0) == self);
+        require(amount == 0);
+        require(byte[32](owner) != ZERO32);
+        require(checkSig(s, owner));
+
+        int k = OpCovInputCount(cov) - 1;
+        require(k >= 1);
+        require(k <= MAX_SLOTS);
+        int m = outs.length / H_STATE_LEN;
+        require(outs.length == m * H_STATE_LEN);
+        require(m >= 1);
+        require(m <= MAX_SLOTS);
+        require(OpAuthOutputCount(self) == m + 1);
+        require(OpCovOutputCount(cov) == m + 1);
+        require(cPos >= 0);
+        require(cPos <= m);
+        int c = OpAuthOutputIdx(self, cPos);
+        require(tx.outputs[c].scriptPubKey == this.activeScriptPubKey);
+        require(tx.outputs[c].value >= tx.inputs[self].value);
+
+        // The holder template, once: taken from the first holder input (the redeem script is the last
+        // sigscript push, of length size = hPre + 112 + hSuf) and checked against hTpl.
+        int tIn = OpCovInputIdx(cov, 1);
+        int size = hPre + H_STATE_LEN + hSuf;
+        int tLen = OpTxInputScriptSigLen(tIn);
+        byte[] trs = OpTxInputScriptSigSubstr(tIn, tLen - size, tLen);
+        byte[] pre = trs.slice(0, hPre);
+        byte[] suf = trs.slice(hPre + H_STATE_LEN, size);
+        require(blake3(byte[](hPre as byte[8]) + pre + byte[](hSuf as byte[8]) + suf) == hTpl);
+
+        // Holder inputs: each is exactly P2SH(pre || its state || suf); same extension_commitment; summed.
+        // Holder state layout (112 B, offsets inside the state): 0x08 amount[8] @0..9 | 0x20 owner @9..42 |
+        // 0x01 owner_scheme @42..44 | 0x01 borrow_scheme @44..46 | 0x20 borrow_guard @46..79 |
+        // 0x20 extension_commitment @79..112 (so amount = st[1..9), extension_commitment = st[80..112)).
+        int inSum = 0;
+        for (i, 0, k, MAX_SLOTS) {
+            int idx = OpCovInputIdx(cov, i + 1);
+            int len = OpTxInputScriptSigLen(idx);
+            byte[] st = OpTxInputScriptSigSubstr(idx, len - size + hPre, len - hSuf);
+            require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(pre + st + suf)));
+            require(byte[32](st.slice(80, 112)) == extension_commitment);
+            inSum = inSum + int(byte[8](st.slice(1, 9)));
+        }
+
+        // Holder outputs: canonical encoding, KCC-20 per-output rules, P2SH(pre || state || suf).
+        int outSum = 0;
+        for (i, 0, m, MAX_SLOTS) {
+            byte[] ns = outs.slice(i * H_STATE_LEN, i * H_STATE_LEN + H_STATE_LEN);
+            require(ns.slice(0, 1) == byte[](0x08));
+            require(ns.slice(9, 10) == byte[](0x20));
+            require(ns.slice(42, 43) == byte[](0x01));
+            require(ns.slice(44, 45) == byte[](0x01));
+            require(ns.slice(46, 47) == byte[](0x20));
+            require(ns.slice(79, 80) == byte[](0x20));
+            int amt = int(byte[8](ns.slice(1, 9)));
+            require(amt >= 0);
+            int scheme = unsigned(byte(ns[43]));
+            require(scheme <= 4);
+            int borrow = unsigned(byte(ns[45]));
+            require(borrow <= 3);
+            if (borrow == 1) {
+                require(int(byte[8](ns.slice(47, 55))) >= 0);
+            }
+            require(byte[32](ns.slice(80, 112)) == extension_commitment);
+            outSum = outSum + amt;
+            int o = OpAuthOutputIdx(self, i < cPos ? i : i + 1);
+            require(tx.outputs[o].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(pre + ns + suf)));
+        }
+        require(inSum == outSum);
+    }
+
+    // w: empty for the public seed, else the owner's 65-byte signature.
+    entry clone(pubkey newOwner, byte[] w) {
+        int self = this.activeInputIndex;
+        byte[32] cov = OpInputCovenantId(self);
+        require(amount == 0);
+        require(OpCovInputCount(cov) == 1);
+        if (byte[32](owner) == ZERO32) {
+            require(w.length == 0);
+        } else {
+            require(checkSig(sig(byte[65](w)), owner));
+        }
+        require(byte[32](newOwner) != ZERO32);
+        require(OpAuthOutputCount(self) == 2);
+        require(OpCovOutputCount(cov) == 2);
+        int a0 = OpAuthOutputIdx(self, 0);
+        require(tx.outputs[a0].scriptPubKey == this.activeScriptPubKey);
+        require(tx.outputs[a0].value >= tx.inputs[self].value);
+        validateOutputState(OpAuthOutputIdx(self, 1), State {
+            amount: 0,
+            owner: newOwner,
+            extension_commitment: extension_commitment,
+            hTpl: hTpl,
+            hPre: hPre,
+            hSuf: hSuf
+        });
+    }
+
+    entry retire(sig s) {
+        int self = this.activeInputIndex;
+        byte[32] cov = OpInputCovenantId(self);
+        require(byte[32](owner) != ZERO32);
+        require(checkSig(s, owner));
+        require(OpCovInputCount(cov) == 1);
+        require(OpAuthOutputCount(self) == 0);
+        require(OpCovOutputCount(cov) == 0);
+    }
+}

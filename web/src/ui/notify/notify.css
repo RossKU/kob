@@ -1,0 +1,8 @@
+/* notification centre: header bell, dialog list */
+.notify-bell { position: relative; display: inline-flex; align-items: center; gap: 4px; }
+.notify-bell .badge { padding: 0 6px; font-size: 0.7rem; }
+.notify-list, .notify-invoices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.notify-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 2px; }
+.notify-item.notify-unread { border-left: 3px solid var(--info); background: var(--info-bg); }
+.notify-item-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.notify-invoice h3 { margin: 0; font-size: 1rem; }

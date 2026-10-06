@@ -1,0 +1,202 @@
+pragma silverscript ^0.1.0;
+
+// KRON twin of contracts/v2/KobBid.sil (limit buy of a token, paid in KAS, protocol v3, no lots); differences:
+//  - Token codec: the KRON state is 46 B, `0x20 owner[32] | 0x01 id_type | 0x08 amount (LE i64) |
+//    0x01 is_minter`, not the 112 B KCC-20 state. The delivery at output i is KronState { owner: maker,
+//    id_type: 3 (address presence, TYPE_DELIVERY), amount: n base units, is_minter: 0 }.
+//  - No extensionCommitment (constructor argument and state field): KRON has none. The state is
+//    252 B instead of 285 B (every later field sits 33 B earlier; BID_STATE_LEN_KRON of the pair conditionals).
+//  - Stray guard: MAX_TOK_IN = 4 (KRON allows at most 4 token inputs; KobBid: 8), so noStrays unrolls
+//    4 slots, and it reads the owner at sigscript_len + 1 - 46 - tplSuffixLen.
+// Everything else is identical: entries (fill, cancel, refund), amounts and prices (base units at sompi per
+// whole token, quoteOf rounding in the maker's favour), all-in price and budget encoding, minimum fill,
+// rising bid / DCA, IOC/FOK, positional and stray rules. See contracts/adapters/kron/README.md.
+contract KobBidKron(
+    pubkey init_maker,
+    byte[32] init_tokenCovId,
+    byte[32] init_tokenTplHash,
+    int init_tplPrefixLen,
+    int init_tplSuffixLen,
+    int init_scale,
+    int init_minFill,
+    int init_price,
+    int init_tip,
+    int init_tif,
+    int init_activeFrom,
+    int init_expiryDaa,
+    int init_refundTip,
+    int init_reserve,
+    int init_deliveryCarrier,
+    int init_interval,
+    int init_maxFill,
+    int init_slope,
+    int init_priceEnd,
+    int init_decayStep
+) {
+    pubkey maker = init_maker;
+    byte[32] tokenCovId = init_tokenCovId;
+    byte[32] tokenTplHash = init_tokenTplHash;
+    int tplPrefixLen = init_tplPrefixLen;
+    int tplSuffixLen = init_tplSuffixLen;
+    int scale = init_scale;                  // base units per whole token (10^decimals, > 0): the price denominator
+    int minFill = init_minFill;              // smallest fill in base units (> 0) unless it ends the bid
+    int price = init_price;                  // quote, sompi per whole token (start price if rising)
+    int tip = init_tip;                      // optional priority tip, sompi per whole token (>= 0)
+    int tif = init_tif;                      // 0 GTC/GTD, 1 IOC, 2 FOK
+    int activeFrom = init_activeFrom;
+    int expiryDaa = init_expiryDaa;
+    int refundTip = init_refundTip;
+    int reserve = init_reserve;              // KAS never spent on fills
+    int deliveryCarrier = init_deliveryCarrier; // KAS the bid puts on each delivered token UTXO
+    int interval = init_interval;            // DCA: min DAA between fills (0 = off)
+    int maxFill = init_maxFill;              // DCA: max base units per fill (0 = off)
+    int slope = init_slope;                  // rising bid: sompi per whole token per decayStep DAA (0 = off)
+    int priceEnd = init_priceEnd;            // rising cap
+    int decayStep = init_decayStep;          // DAA per price step (> 0 when rising)
+
+    // KRON token state (template offset 0, 46 B):
+    //   0x20 owner[32] | 0x01 id_type | 0x08 amount (LE i64) | 0x01 is_minter
+    struct KronState {
+        byte[32] owner;
+        byte id_type;
+        int amount;
+        byte is_minter;
+    }
+
+    // Maker deliveries (refunds, bought tokens): KRON id_type 3 (address presence), the type KRON's
+    // wallets and SDK use for user balances. Type 0 (token-level signature) is the alternative;
+    // change this one constant and rebuild to switch (see contracts/adapters/kron/README.md).
+    byte constant TYPE_DELIVERY = 0x03;
+    byte constant SIGHASH_ALL = 0x01;
+    int constant TIF_GTC = 0;
+    int constant TIF_FOK = 2;
+    int constant MAX_IDLE = 77760000;
+    int constant IOC_LIFE = 600;
+    // Most token inputs a fill may carry (the KRON limit). The scan over these slots is unrolled by
+    // hand (one line per slot): raising the cap needs as many lines.
+    int constant MAX_TOK_IN = 4;
+
+    // Quote value of n base units at rate r, rounded down (c = 0) or up (c = scale - 1): see KobAsk.quoteOf.
+    function quoteOf(int n, int r, int c) : int {
+        int m = n % scale;
+        int q = n / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    // Stray guard (owner offset as in KobAskKron.noStrays): a bid owns no tokens, so no token input
+    // of the transaction may be owned by its covenant id (KRON would authorise it through this
+    // input). Unrolled by hand over MAX_TOK_IN slots (one line per token input k < cnt).
+    function noStrays(byte[32] me) {
+        int cnt = OpCovInputCount(tokenCovId);
+        require(cnt <= MAX_TOK_IN);
+        int off = 1 - 46 - tplSuffixLen;
+        if (cnt > 0) { int x0 = OpCovInputIdx(tokenCovId, 0); int e0 = OpTxInputScriptSigLen(x0) + off; require(byte[32](OpTxInputScriptSigSubstr(x0, e0, e0 + 32)) != me); }
+        if (cnt > 1) { int x1 = OpCovInputIdx(tokenCovId, 1); int e1 = OpTxInputScriptSigLen(x1) + off; require(byte[32](OpTxInputScriptSigSubstr(x1, e1, e1 + 32)) != me); }
+        if (cnt > 2) { int x2 = OpCovInputIdx(tokenCovId, 2); int e2 = OpTxInputScriptSigLen(x2) + off; require(byte[32](OpTxInputScriptSigSubstr(x2, e2, e2 + 32)) != me); }
+        if (cnt > 3) { int x3 = OpCovInputIdx(tokenCovId, 3); int e3 = OpTxInputScriptSigLen(x3) + off; require(byte[32](OpTxInputScriptSigSubstr(x3, e3, e3 + 32)) != me); }
+    }
+
+    entry fill(byte[8] nb, int tokenTplIn, int t) {
+        int n = int(nb);
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        noStrays(selfId);
+        require(tx.daa >= activeFrom);
+
+        require(n > 0);
+        require(scale > 0);
+        require(tip >= 0);
+        require(reserve >= 0);
+        require(deliveryCarrier >= 0);
+        if (interval > 0) {
+            require(this.ageDaa >= interval);
+        }
+        require(maxFill == 0 || n <= maxFill);
+        int p = price;
+        int pMax = price;
+        if (slope != 0) {
+            require(slope > 0);
+            require(decayStep > 0);
+            int origin = activeFrom;
+            if (interval > 0) {
+                int slice = OpTxInputDaaScore(self) + interval;
+                if (slice > origin) { origin = slice; }
+            }
+            require(tx.daa >= t);
+            require(t >= origin);
+            p = price + slope * ((t - origin) / decayStep);
+            if (p > priceEnd) { p = priceEnd; }
+            if (priceEnd > price) { pMax = priceEnd; }
+        }
+        // budget used (rounded up) and the most the maker pays (rounded down), see KobBid's header
+        int used = quoteOf(n, pMax + tip, scale - 1);
+        int allIn = quoteOf(n, p + tip, 0);
+        int inValue = tx.inputs[self].value;
+        int left = inValue - used;
+        require(left >= reserve);
+
+        // Delivery: output i is a genuine KRON token UTXO with exactly n base units owned by the maker. Hand-written
+        // validateOutputStateWithInputTemplate(self, KronState { owner: maker, id_type: TYPE_DELIVERY, amount:
+        // n, is_minter: NOT_MINTER }, tokenTplIn, ...): the template prefix and suffix are
+        // read from the end of tokenTplIn's sigscript and hash-checked against tokenTplHash; the state is the
+        // struct's canonical push encoding (0x20 owner 0x01 id_type 0x08 amount 0x01 is_minter).
+        require(OpInputCovenantId(tokenTplIn) == tokenCovId);
+        int tbase = OpTxInputScriptSigLen(tokenTplIn) - (tplPrefixLen + 46 + tplSuffixLen);
+        byte[] tpre = OpTxInputScriptSigSubstr(tokenTplIn, tbase, tbase + tplPrefixLen);
+        byte[] tsuf = OpTxInputScriptSigSubstr(tokenTplIn, tbase + tplPrefixLen + 46, tbase + tplPrefixLen + 46 + tplSuffixLen);
+        require(blake3(byte[](tplPrefixLen as byte[8]) + tpre + byte[](tplSuffixLen as byte[8]) + tsuf) == tokenTplHash);
+        byte deliveryType = TYPE_DELIVERY; // a byte local: byte[] of a 0x00 constant would compile to an empty array
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            tpre + byte[](0x20) + byte[](maker) + byte[](0x01) + byte[](deliveryType) + byte[](0x08)
+                + byte[](nb) + byte[](0x0100) + tsuf
+        )));
+        require(OpOutputCovenantId(self) == tokenCovId);
+
+        // buying power for one more minimum fill (minFill >= 1)
+        require(minFill > 0);
+        bool canContinue = left - deliveryCarrier - reserve >= quoteOf(minFill, pMax + tip, scale - 1);
+        require(n >= minFill || !canContinue);
+        if (tif == TIF_GTC && canContinue) {
+            // Buying power remains: the bid must continue with exactly the unused budget.
+            require(OpCovOutputCount(selfId) == 1);
+            int selfOut = OpCovOutputIdx(selfId, 0);
+            require(tx.outputs[selfOut].scriptPubKey == this.activeScriptPubKey);
+            require(tx.outputs[selfOut].value == left - deliveryCarrier);
+            require(tx.outputs[self].value >= deliveryCarrier + used - allIn);
+        } else {
+            // Exhausted, IOC or FOK: terminate; everything not spent rides on the delivery.
+            require(tif != TIF_FOK || !canContinue);
+            require(OpCovOutputCount(selfId) == 0);
+            require(tx.outputs[self].value >= inValue - allIn);
+        }
+    }
+
+    entry cancel(sig s) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, maker));
+    }
+
+    entry refund() {
+        int self = this.activeInputIndex;
+        int utxoDaa = OpTxInputDaaScore(self);
+        int idleEnd = utxoDaa + MAX_IDLE;
+        if (tif != TIF_GTC) {
+            int kill = utxoDaa;
+            if (activeFrom > kill) { kill = activeFrom; }
+            kill = kill + IOC_LIFE;
+            if (kill < idleEnd) { idleEnd = kill; }
+        }
+        if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
+        require(tx.daa >= idleEnd);
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovInputCount(tokenCovId) == 0);  // strays owned by this id stay put
+        require(OpCovOutputCount(selfId) == 0);
+        require(refundTip >= 0);
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
+        require(tx.outputs[self].value + refundTip >= tx.inputs[self].value);
+    }
+}

@@ -1,0 +1,6 @@
+[toolchain]
+# silverscript v1.0.0 declares rust-version 1.94 and uses edition-2024 let-chains.
+channel = "1.94.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]

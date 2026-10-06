@@ -1,0 +1,24 @@
+[package]
+name = "silverscript-abi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.0"
+license = "ISC"
+
+[dependencies]
+blake3 = { workspace = true }
+faster-hex = { workspace = true }
+kaspa-txscript = { workspace = true }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+kaspa-consensus-core = { workspace = true }
+# Keep the Sil compiler test-only; production ABI code must not depend on it.
+silverscript-lang = { workspace = true }
+
+[target.wasm32-unknown-unknown.dependencies]
+getrandom03.workspace = true
+getrandom02.workspace = true

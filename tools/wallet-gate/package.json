@@ -1,0 +1,23 @@
+{
+  "name": "kob-wallet-gate",
+  "version": "0.1.0",
+  "private": true,
+  "license": "ISC",
+  "type": "module",
+  "description": "KOB M0 wallet gate kit: can KasWare / Kaspire / Kastle sign covenant (P2SH) inputs in Toccata tx v1 on testnet-10?",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "fetch-sdk": "node scripts/fetch-sdk.mjs",
+    "keygen": "node scripts/keygen.mjs",
+    "setup": "node scripts/setup.mjs",
+    "serve": "node scripts/serve.mjs",
+    "selfcheck": "node test/selfcheck.mjs",
+    "e2e": "node test/e2e-devkey.mjs"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.50.0"
+  }
+}

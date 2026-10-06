@@ -1,0 +1,661 @@
+diff --git a/docs/app-linking-followups.md b/docs/app-linking-followups.md
+index 23f6c0c..d4ec94d 100644
+--- a/docs/app-linking-followups.md
++++ b/docs/app-linking-followups.md
+@@ -40,11 +40,18 @@ type, invalid exported fingerprint, missing dependency, and wrong dependency.
+ compiles each source app and passes its artifact to dependent apps. A project
+ can also depend on a published app without its source code.
+ 
++**Status:** A module import of a `.json` path loads a published app artifact
++without compilation (`import "./asset/artifact.json" id "<artifact id>";`, see
++`docs/icc-semantics.md`, "Published app artifacts"). The import must pin the
++artifact id; the artifact must be self-consistent and have that id. Its
++declarations become a declaration-only module, and the bundle builder passes the
++artifact itself to the importing app.
++
+ **Follow-up:** Let project configuration map an app import to source code or an
+-artifact. Compile a source dependency. Load an artifact dependency without
+-compilation. Pass the resulting artifact to the importing app in both cases.
++artifact, so that one source can build against either.
+ 
+-Apply all linked actor receipt checks to an artifact dependency.
++Apply all linked actor receipt checks to an artifact dependency. An artifact
++dependency is linked as a leaf: its own app dependencies are not loaded.
+ 
+ ## Reject runtime app-name collisions
+ 
+diff --git a/docs/icc-semantics.md b/docs/icc-semantics.md
+index 5ca3bbc..7d87845 100644
+--- a/docs/icc-semantics.md
++++ b/docs/icc-semantics.md
+@@ -152,6 +152,29 @@ members of the controller app.
+ Closed ICC is the right model when the observer is intentionally composed with a
+ specific known app or protocol.
+ 
++### Published app artifacts
++
++A closed ICC dependency does not need its source. An import of a published app
++artifact names the artifact and the artifact id the importer reviewed:
++
++```rust
++import "./kcc20_asset/artifact.json" id "<artifact id>";
++```
++
++The compiler loads the artifact, checks that it is self-consistent, and requires
++its id to be the pinned one. The artifact's states, actor enums, exported actors
++and app become a declaration-only module, so `KCC20Asset::KCC20` and the asset's
++state names resolve as for a source import. The bundle builder links the
++artifact as it is and never compiles the app again.
++
++The pin is required. Self-consistency only shows that the id is the hash of the
++artifact's content; anyone can publish a consistent artifact with the same app
++name, states and entries but other templates. With a source import the importer
++compiles the dependency and derives the actor handles itself; with an artifact
++import the handles come from the artifact, so the pinned id is what ties the
++importer to the reviewed templates. An `id` on a source import, an artifact
++import without `id`, and an artifact with another id are rejected.
++
+ Closed ICC rules:
+ 
+ - observed actor names refer to concrete actors from known artifacts
+diff --git a/src/compiler/loader/artifact.rs b/src/compiler/loader/artifact.rs
+new file mode 100644
+index 0000000..2e4175c
+--- /dev/null
++++ b/src/compiler/loader/artifact.rs
+@@ -0,0 +1,120 @@
++//! Loads published app artifacts as modules (artifact-backed app dependencies).
++//!
++//! `import "./asset/artifact.json" id "<artifact id>";` makes a published app available to the
++//! importing module without its source. The artifact is checked and turned into a declaration-only
++//! module: its states, actor enums, exported actors (no entries) and its app. The bundle builder
++//! links the artifact itself and never compiles the app again.
++
++use std::collections::BTreeMap;
++use std::fs;
++use std::path::{Path, PathBuf};
++
++use crate::artifact::Artifact;
++use crate::compiler::loader::SymbolKind;
++use crate::compiler::model::link::{DeclarationOrigin, linked_field_decl};
++use crate::compiler::syntax::*;
++use crate::error::{ArgentError, Result};
++
++/// An import whose path ends in `.json` names a published app artifact.
++pub(crate) fn is_artifact_path(path: &Path) -> bool {
++    path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
++}
++
++/// Reads a published app artifact and checks that it is self-consistent.
++///
++/// Self-consistency only proves that the artifact id is the hash of its content. Anyone can produce
++/// a consistent artifact with the same app name and interfaces but other templates, so the importer
++/// must pin the id it reviewed; see [check_pin].
++pub(super) fn read_artifact(path: &Path) -> Result<Artifact> {
++    let json = fs::read_to_string(path).map_err(|err| ArgentError::at(path, err.to_string()))?;
++    let artifact: Artifact =
++        serde_json::from_str(&json).map_err(|err| ArgentError::at(path, format!("invalid app artifact: {err}")))?;
++    artifact.check_consistency().map_err(|err| ArgentError::at(path, format!("invalid app artifact: {err}")))?;
++    Ok(artifact)
++}
++
++/// An artifact import must name the artifact id it trusts, and the artifact must have that id.
++pub(super) fn check_pin(path: &Path, artifact: &Artifact, pin: Option<&str>) -> Result<()> {
++    match pin {
++        None => Err(ArgentError::at(
++            path,
++            format!(
++                "artifact import of app `{}` has no pinned id; after reviewing the artifact, write `import \"...\" id \"{}\";`",
++                artifact.app, artifact.id
++            ),
++        )),
++        Some(pin) if pin != artifact.id => {
++            Err(ArgentError::at(path, format!("artifact of app `{}` has id {}, the import pins {pin}", artifact.app, artifact.id)))
++        }
++        Some(_) => Ok(()),
++    }
++}
++
++/// Declarations of an artifact-backed module, in artifact order.
++///
++/// The declaration indexes are the identities [artifact_origins] reports, so the importing app and
++/// the linked artifact agree on which states are shared.
++pub(super) fn artifact_module(path: PathBuf, artifact: &Artifact) -> Result<Module> {
++    let expansions = artifact.argent.state_expansions.iter().map(|item| (item.state.as_str(), item)).collect::<BTreeMap<_, _>>();
++    let states = artifact
++        .argent
++        .states
++        .iter()
++        .map(|state| {
++            let expansion = expansions.get(state.name.as_str()).map(|expansion| StateExpansionDecl {
++                base: expansion.base.clone(),
++                digests: expansion
++                    .digests
++                    .iter()
++                    .map(|digest| StateDigestExpansionDecl { field: digest.field.clone(), state: digest.state.clone() })
++                    .collect(),
++            });
++            let fields = if expansion.is_some() {
++                Vec::new()
++            } else {
++                state.fields.iter().map(linked_field_decl).collect::<Result<Vec<_>>>()?
++            };
++            Ok(StateDecl { name: state.name.clone(), fields, expansion })
++        })
++        .collect::<Result<Vec<_>>>()?;
++    let actor_enums = artifact
++        .argent
++        .actor_enums
++        .iter()
++        .map(|item| ActorEnumDecl { name: item.name.clone(), variants: item.variants.clone() })
++        .collect();
++    let mut actors = Vec::new();
++    for interface in &artifact.argent.interfaces.exports {
++        if interface.app != artifact.app {
++            return Err(ArgentError::at(
++                &path,
++                format!("artifact of app `{}` exports actor `{}` for app `{}`", artifact.app, interface.actor, interface.app),
++            ));
++        }
++        let actor = artifact.argent.actors.iter().find(|actor| actor.name == interface.actor).ok_or_else(|| {
++            ArgentError::at(
++                &path,
++                format!("artifact of app `{}` does not describe exported actor `{}`", artifact.app, interface.actor),
++            )
++        })?;
++        actors.push(ActorDecl { name: actor.name.clone(), state: actor.state.clone(), functions: Vec::new(), entries: Vec::new() });
++    }
++    let app = AppDecl { name: artifact.app.clone(), actors: actors.iter().map(|actor| actor.name.clone()).collect() };
++    Ok(Module { path, imports: Vec::new(), consts: Vec::new(), states, functions: Vec::new(), actors, actor_enums, apps: vec![app] })
++}
++
++/// Declaration identities of an artifact-backed module, keyed by the artifact's own names.
++pub(crate) fn artifact_origins(path: &Path, artifact: &Artifact) -> BTreeMap<String, DeclarationOrigin> {
++    let states = artifact.argent.states.iter().map(|state| (state.name.as_str(), SymbolKind::State));
++    let actor_enums = artifact.argent.actor_enums.iter().map(|item| (item.name.as_str(), SymbolKind::ActorEnum));
++    let mut indexes = BTreeMap::<SymbolKind, usize>::new();
++    states
++        .chain(actor_enums)
++        .map(|(name, kind)| {
++            let index = indexes.entry(kind).or_default();
++            let origin = DeclarationOrigin::Source { path: path.to_path_buf(), kind, index: *index };
++            *index += 1;
++            (name.to_string(), origin)
++        })
++        .collect()
++}
+diff --git a/src/compiler/loader/mod.rs b/src/compiler/loader/mod.rs
+index 9cc85b5..f7f4c58 100644
+--- a/src/compiler/loader/mod.rs
++++ b/src/compiler/loader/mod.rs
+@@ -10,12 +10,15 @@ use crate::compiler::syntax::Import;
+ use crate::compiler::syntax::parser::parse_module;
+ use crate::error::{ArgentError, Result};
+ 
++use self::artifact::{artifact_module, check_pin, read_artifact};
++pub(crate) use self::artifact::{artifact_origins, is_artifact_path};
+ use self::resolve::ResolvedImport;
+ pub(crate) use self::resolve::{
+     ActorSite, DeclId, ModuleId, ResolvedDeclaration, ResolvedModules, ResolvedName, SymbolKind, TextSite,
+ };
+ use self::stdlib::{is_standard_module, load_standard_module};
+ 
++mod artifact;
+ mod resolve;
+ pub(crate) mod stdlib;
+ 
+@@ -24,7 +27,7 @@ mod tests;
+ 
+ pub fn load_program(root: impl AsRef<Path>) -> Result<ResolvedModules> {
+     let mut loader = Loader::default();
+-    let root = loader.load_module(root.as_ref())?;
++    let root = loader.load_root(root.as_ref())?;
+     loader.finish(root)
+ }
+ 
+@@ -65,11 +68,25 @@ struct Loader {
+     modules: Vec<crate::compiler::syntax::Module>,
+     imports: Vec<Vec<ResolvedImport>>,
+     module_ids: BTreeMap<PathBuf, ModuleId>,
++    artifacts: BTreeMap<ModuleId, crate::artifact::Artifact>,
+ }
+ 
+ impl Loader {
+-    fn load_module(&mut self, path: &Path) -> Result<ModuleId> {
++    fn load_root(&mut self, path: &Path) -> Result<ModuleId> {
++        if is_artifact_path(path) {
++            return Err(ArgentError::at(path, "a published app artifact is not Argent source; import it from a source module"));
++        }
++        self.load_module(path, None)
++    }
++
++    fn load_module(&mut self, path: &Path, pin: Option<&str>) -> Result<ModuleId> {
+         let canonical = fs::canonicalize(path).map_err(|err| ArgentError::at(path, err.to_string()))?;
++        if is_artifact_path(&canonical) {
++            return self.load_artifact_module(canonical, pin);
++        }
++        if pin.is_some() {
++            return Err(ArgentError::at(&canonical, "an `id` pin applies only to a published app artifact (a `.json` import)"));
++        }
+         if let Some(module) = self.module_ids.get(&canonical).copied() {
+             return Ok(module);
+         }
+@@ -81,15 +98,34 @@ impl Loader {
+         let module = self.insert_module(module);
+ 
+         for import in imports {
+-            let target = self.load_import(&base, &import.path)?;
++            let target = self.load_import(&base, &import)?;
+             self.imports[module.index()].push(ResolvedImport { target, alias: import.alias });
+         }
+ 
+         Ok(module)
+     }
+ 
++    /// Loads a published app artifact once per path; every import of it must pin its id.
++    fn load_artifact_module(&mut self, canonical: PathBuf, pin: Option<&str>) -> Result<ModuleId> {
++        if let Some(module) = self.module_ids.get(&canonical).copied() {
++            check_pin(&canonical, &self.artifacts[&module], pin)?;
++            return Ok(module);
++        }
++        let artifact = read_artifact(&canonical)?;
++        check_pin(&canonical, &artifact, pin)?;
++        let module = self.insert_module(artifact_module(canonical, &artifact)?);
++        self.artifacts.insert(module, artifact);
++        Ok(module)
++    }
++
+     fn load_inline_imports(&mut self, module: ModuleId, imports: Vec<Import>) -> Result<()> {
+-        for Import { path, alias } in imports {
++        for Import { path, alias, id } in imports {
++            if id.is_some() {
++                return Err(ArgentError::at(
++                    &self.modules[module.index()].path,
++                    format!("an `id` pin applies only to a published app artifact, not to `{path}`"),
++                ));
++            }
+             if is_standard_module(&path) {
+                 let target = self.load_standard_module(&path)?;
+                 self.imports[module.index()].push(ResolvedImport { target, alias });
+@@ -103,8 +139,14 @@ impl Loader {
+         Ok(())
+     }
+ 
+-    fn load_import(&mut self, base: &Path, path: &str) -> Result<ModuleId> {
+-        if is_standard_module(path) { self.load_standard_module(path) } else { self.load_module(&base.join(path)) }
++    fn load_import(&mut self, base: &Path, import: &Import) -> Result<ModuleId> {
++        if !is_standard_module(&import.path) {
++            return self.load_module(&base.join(&import.path), import.id.as_deref());
++        }
++        if import.id.is_some() {
++            return Err(ArgentError::new(format!("an `id` pin applies only to a published app artifact, not to `{}`", import.path)));
++        }
++        self.load_standard_module(&import.path)
+     }
+ 
+     fn load_standard_module(&mut self, path: &str) -> Result<ModuleId> {
+@@ -135,7 +177,7 @@ impl Loader {
+     }
+ 
+     fn finish(self, root: ModuleId) -> Result<ResolvedModules> {
+-        ResolvedModules::from_loaded(self.modules, root, self.imports)
++        ResolvedModules::from_loaded(self.modules, root, self.imports, self.artifacts)
+     }
+ }
+ 
+@@ -190,14 +232,16 @@ impl AppGraphPlanner {
+         let Some(selected_app) = program.root_app(Some(&app.app))? else {
+             return Err(ArgentError::at(&app.source, format!("source does not declare app `{}`", app.app)));
+         };
+-        let dependencies = program
+-            .referenced_app_members(selected_app)?
+-            .into_iter()
+-            .map(|member| {
+-                let (source, app) = program.app_source(member.app);
+-                SourceApp { source: source.to_path_buf(), app: app.name.clone() }
+-            })
+-            .collect::<BTreeSet<_>>();
++        let mut dependencies = BTreeSet::new();
++        for member in program.referenced_app_members(selected_app)? {
++            let (source, app) = program.app_source(member.app);
++            // An artifact-backed app was loaded (and its pin checked) by the importing module; it is
++            // never loaded again from its path.
++            if let Some(artifact_program) = program.artifact_program(member.app)? {
++                self.programs.entry(source.to_path_buf()).or_insert(artifact_program);
++            }
++            dependencies.insert(SourceApp { source: source.to_path_buf(), app: app.name.clone() });
++        }
+         for dependency in &dependencies {
+             self.visit(dependency.clone())?;
+         }
+diff --git a/src/compiler/loader/resolve.rs b/src/compiler/loader/resolve.rs
+index ed3a08e..252e6d2 100644
+--- a/src/compiler/loader/resolve.rs
++++ b/src/compiler/loader/resolve.rs
+@@ -3,6 +3,7 @@
+ 
+ use std::collections::{BTreeMap, BTreeSet};
+ 
++use crate::artifact::Artifact;
+ use crate::compiler::naming::is_identifier;
+ use crate::compiler::syntax::*;
+ use crate::error::{ArgentError, Result};
+@@ -68,6 +69,8 @@ pub(crate) struct ResolvedModules {
+     exports: Vec<BTreeMap<String, ResolvedName>>,
+     /// What references inside each declaration refer to.
+     bindings: BTreeMap<DeclId, DeclarationBindings>,
++    /// Published app artifacts behind artifact-backed modules (`import "./app/artifact.json" id "...";`).
++    artifacts: BTreeMap<ModuleId, Artifact>,
+ }
+ 
+ impl ModuleId {
+@@ -91,13 +94,18 @@ impl DeclId {
+ }
+ 
+ impl ResolvedModules {
+-    pub(super) fn from_loaded(modules: Vec<Module>, root: ModuleId, imports: Vec<Vec<ResolvedImport>>) -> Result<Self> {
++    pub(super) fn from_loaded(
++        modules: Vec<Module>,
++        root: ModuleId,
++        imports: Vec<Vec<ResolvedImport>>,
++        artifacts: BTreeMap<ModuleId, Artifact>,
++    ) -> Result<Self> {
+         if modules.len() != imports.len() || root.index() >= modules.len() {
+             return Err(ArgentError::new("invalid loaded module graph"));
+         }
+ 
+         let exports = Self::build_exports(&modules, &imports)?;
+-        let mut resolved = Self { source_modules: modules, root, exports, bindings: BTreeMap::new() };
++        let mut resolved = Self { source_modules: modules, root, exports, bindings: BTreeMap::new(), artifacts };
+         for module_index in 0..resolved.source_modules.len() {
+             let source = &resolved.source_modules[module_index];
+             for (kind, declaration_count) in [
+@@ -416,6 +424,21 @@ impl ResolvedModules {
+     pub(crate) fn root_module(&self) -> &Module {
+         &self.source_modules[self.root.index()]
+     }
++
++    /// The published artifact behind the root module, when the root is artifact-backed.
++    pub(crate) fn root_artifact(&self) -> Option<&Artifact> {
++        self.artifacts.get(&self.root)
++    }
++
++    /// The artifact-backed module that declares `app` as its own program, or `None` for a source app.
++    pub(super) fn artifact_program(&self, app: DeclId) -> Result<Option<Self>> {
++        let Some(artifact) = self.artifacts.get(&app.module) else {
++            return Ok(None);
++        };
++        let module = self.source_modules[app.module.index()].clone();
++        let root = ModuleId::new(0);
++        Self::from_loaded(vec![module], root, vec![Vec::new()], BTreeMap::from([(root, artifact.clone())])).map(Some)
++    }
+ }
+ 
+ impl SymbolKind {
+diff --git a/src/compiler/model/link.rs b/src/compiler/model/link.rs
+index 3f9a37d..349e0d9 100644
+--- a/src/compiler/model/link.rs
++++ b/src/compiler/model/link.rs
+@@ -270,7 +270,7 @@ impl LinkedContext {
+     }
+ }
+ 
+-fn linked_field_decl(field: &ArgentFieldArtifact) -> Result<FieldDecl> {
++pub(crate) fn linked_field_decl(field: &ArgentFieldArtifact) -> Result<FieldDecl> {
+     Ok(FieldDecl { ty: linked_field_type(field)?, name: field.name.clone(), virtual_slot: field.virtual_slot })
+ }
+ 
+diff --git a/src/compiler/syntax/mod.rs b/src/compiler/syntax/mod.rs
+index 04ea32d..8c0477c 100644
+--- a/src/compiler/syntax/mod.rs
++++ b/src/compiler/syntax/mod.rs
+@@ -29,6 +29,8 @@ pub struct Module {
+ pub struct Import {
+     pub path: String,
+     pub alias: Option<String>,
++    /// Pinned id of a published app artifact: `import "./app/artifact.json" id "<artifact id>";`.
++    pub id: Option<String>,
+ }
+ 
+ #[derive(Debug, Clone)]
+diff --git a/src/compiler/syntax/parser.rs b/src/compiler/syntax/parser.rs
+index d91a83e..6ad89cd 100644
+--- a/src/compiler/syntax/parser.rs
++++ b/src/compiler/syntax/parser.rs
+@@ -67,8 +67,9 @@ impl Parser {
+         self.expect_ident(word::IMPORT)?;
+         let path = self.expect_string()?;
+         let alias = if self.consume_ident(word::AS) { Some(self.expect_any_ident()?) } else { None };
++        let id = if self.consume_ident(word::ID) { Some(self.expect_string()?) } else { None };
+         self.expect_symbol(';')?;
+-        Ok(Import { path, alias })
++        Ok(Import { path, alias, id })
+     }
+ 
+     fn parse_const(&mut self) -> Result<ConstDecl> {
+diff --git a/src/compiler/syntax/parser/tests.rs b/src/compiler/syntax/parser/tests.rs
+index 1db547c..8d45f04 100644
+--- a/src/compiler/syntax/parser/tests.rs
++++ b/src/compiler/syntax/parser/tests.rs
+@@ -386,3 +386,30 @@ fn rejects_semicolons_in_role_binding_lists() {
+         assert!(err.to_string().contains("expected `,` or `}`"), "unexpected error: {err}");
+     }
+ }
++
++#[test]
++fn parses_module_imports_with_aliases_and_pinned_artifact_ids() {
++    let module = parse_module(
++        PathBuf::from("imports.ag"),
++        r#"
++            import "./shared.ag";
++            import "./library.ag" as library;
++            import "./asset/artifact.json" id "ab01";
++            import "./other/artifact.json" as other id "cd02";
++            "#
++        .to_string(),
++    )
++    .expect("imports parse");
++
++    let imports =
++        module.imports.iter().map(|import| (import.path.as_str(), import.alias.as_deref(), import.id.as_deref())).collect::<Vec<_>>();
++    assert_eq!(
++        imports,
++        [
++            ("./shared.ag", None, None),
++            ("./library.ag", Some("library"), None),
++            ("./asset/artifact.json", None, Some("ab01")),
++            ("./other/artifact.json", Some("other"), Some("cd02")),
++        ]
++    );
++}
+diff --git a/src/compiler/syntax/word.rs b/src/compiler/syntax/word.rs
+index dc00e87..8bde002 100644
+--- a/src/compiler/syntax/word.rs
++++ b/src/compiler/syntax/word.rs
+@@ -20,6 +20,7 @@ pub const ENUM: &str = "enum";
+ pub const EXPANDS: &str = "expands";
+ pub const FN: &str = "fn";
+ pub const FOR: &str = "for";
++pub const ID: &str = "id";
+ pub const IF: &str = "if";
+ pub const IMPORT: &str = "import";
+ pub const INPUTS: &str = "inputs";
+diff --git a/src/lib.rs b/src/lib.rs
+index 4a18653..5fa80fc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -135,6 +135,21 @@ fn build_app_graph(
+     let mut artifacts = BTreeMap::<String, artifact::Artifact>::new();
+     let mut origins = BTreeMap::new();
+     for (index, (source_app, dependencies, program)) in apps.iter().enumerate() {
++        if let Some(artifact) = program.root_artifact() {
++            // Artifact-backed dependency: the loader checked it and its pinned id; link it, never compile it.
++            let app_out = dependency_dir.join(&source_app.app);
++            std::fs::create_dir_all(&app_out)?;
++            let json = serde_json::to_string_pretty(artifact).map_err(|err| ArgentError::new(err.to_string()))?;
++            std::fs::write(app_out.join("artifact.json"), json)?;
++            origins.insert(source_app.app.clone(), loader::artifact_origins(&source_app.source, artifact));
++            if artifacts.insert(source_app.app.clone(), artifact.clone()).is_some() {
++                return Err(ArgentError::new(format!(
++                    "app name `{}` occurs more than once in the compiled dependency graph",
++                    source_app.app
++                )));
++            }
++            continue;
++        }
+         let linked = dependencies
+             .iter()
+             .map(|dependency| {
+diff --git a/src/tests.rs b/src/tests.rs
+index 2e752c3..311f432 100644
+--- a/src/tests.rs
++++ b/src/tests.rs
+@@ -1493,3 +1493,148 @@ fn aliased_actor_enum_variant_compiles() {
+     build_file(temp.join("root.ag"), temp.join("out")).expect("the qualified enum variant resolves through its alias");
+     std::fs::remove_dir_all(temp).unwrap();
+ }
++
++const PUBLISHED_ASSET_APP: &str = r#"
++state AssetState {
++    byte tag;
++    int amount;
++}
++
++actor Asset owns AssetState {
++    entry keep() emits next: Asset {
++        unrestricted(next.value);
++        require(self.amount >= 0);
++        become next <- self;
++    }
++}
++
++app AssetApp {
++    actor Asset;
++}
++"#;
++
++fn published_asset_controller(import: &str) -> String {
++    format!(
++        r#"
++{import}
++
++state ControllerState {{
++    cov_id asset_id;
++}}
++
++actor Controller owns ControllerState {{
++    entry update()
++    observes asset by self.asset_id {{
++        inputs {{
++            src: AssetApp::Asset,
++        }}
++        outputs {{
++            asset_next: AssetApp::Asset,
++        }}
++    }}
++    emits next: Controller {{
++        unrestricted(next.value);
++        AssetState current = state(asset.inputs.src);
++        require(current.tag == 0x01);
++        require asset.outputs become {{
++            asset_next <- AssetApp::Asset(current),
++        }};
++        become next <- self;
++    }}
++}}
++
++app ControllerApp {{
++    actor Controller;
++}}
++"#
++    )
++}
++
++fn published_asset_dir(name: &str) -> PathBuf {
++    let temp = std::env::temp_dir().join(format!("argent-artifact-import-{name}-{}", std::process::id()));
++    let _ = std::fs::remove_dir_all(&temp);
++    std::fs::create_dir_all(&temp).expect("temp dir created");
++    temp
++}
++
++#[test]
++fn artifact_backed_import_links_a_published_app_without_its_source() {
++    let temp = published_asset_dir("links");
++    std::fs::write(temp.join("asset.ag"), PUBLISHED_ASSET_APP).expect("asset source written");
++    std::fs::write(temp.join("source_controller.ag"), published_asset_controller(r#"import "./asset.ag";"#))
++        .expect("source controller written");
++    let source_backed = build_file_app_bundle(temp.join("source_controller.ag"), "ControllerApp", temp.join("source_build"))
++        .expect("source-backed import compiles");
++    let published = build_file(temp.join("asset.ag"), temp.join("asset")).expect("asset app compiles");
++
++    // From here on, the asset app exists only as its published artifact.
++    std::fs::remove_file(temp.join("asset.ag")).expect("asset source removed");
++    std::fs::remove_dir_all(temp.join("asset/sil")).expect("asset Sil removed");
++    let import = format!(r#"import "./asset/artifact.json" id "{}";"#, published.id);
++    std::fs::write(temp.join("controller.ag"), published_asset_controller(&import)).expect("controller written");
++    let out_dir = temp.join("build");
++    let compiled =
++        build_file_app_bundle(temp.join("controller.ag"), "ControllerApp", &out_dir).expect("artifact-backed import compiles");
++
++    assert_eq!(compiled.apps().map(|(app, _)| app).collect::<Vec<_>>(), ["AssetApp", "ControllerApp"]);
++    assert_eq!(compiled.app("AssetApp").expect("linked asset artifact").id, published.id);
++    assert_eq!(
++        compiled.primary().dependencies,
++        [artifact::AppDependencyArtifact { app: "AssetApp".to_string(), artifact_id: published.id.clone() }]
++    );
++    assert!(out_dir.join("apps/AssetApp/artifact.json").is_file());
++    assert!(!out_dir.join("apps/AssetApp/sil").exists(), "a published dependency is not compiled again");
++    // Linking the published artifact gives the same contracts and the same app artifact as linking the source.
++    assert_eq!(compiled.primary().sil_abi, source_backed.primary().sil_abi);
++    assert_eq!(compiled.primary().id, source_backed.primary().id);
++    compiled.runtime_bundle().expect("the linked bundle is a runtime bundle");
++
++    let _ = std::fs::remove_dir_all(temp);
++}
++
++#[test]
++fn artifact_backed_import_requires_the_pinned_artifact_id() {
++    let temp = published_asset_dir("pin");
++    std::fs::write(temp.join("asset.ag"), PUBLISHED_ASSET_APP).expect("asset source written");
++    let published = build_file(temp.join("asset.ag"), temp.join("asset")).expect("asset app compiles");
++    // Same app name, state and entries, other template: a self-consistent artifact with another id.
++    std::fs::write(temp.join("other.ag"), PUBLISHED_ASSET_APP.replace("require(self.amount >= 0);", "require(self.amount >= 1);"))
++        .expect("other asset source written");
++    let other = build_file(temp.join("other.ag"), temp.join("other")).expect("other asset app compiles");
++    assert_ne!(other.id, published.id);
++
++    let build = |name: &str, import: &str| {
++        let source = temp.join(format!("{name}.ag"));
++        std::fs::write(&source, published_asset_controller(import)).expect("controller written");
++        build_file_app_bundle(&source, "ControllerApp", temp.join(format!("{name}_build")))
++    };
++
++    let err = build("forged", &format!(r#"import "./other/artifact.json" id "{}";"#, published.id))
++        .expect_err("an artifact with another id is rejected");
++    assert!(err.to_string().contains(&format!("has id {}, the import pins {}", other.id, published.id)), "unexpected error: {err}");
++
++    let err = build("unpinned", r#"import "./asset/artifact.json";"#).expect_err("an unpinned artifact import is rejected");
++    assert!(err.to_string().contains("has no pinned id"), "unexpected error: {err}");
++    assert!(err.to_string().contains(&published.id), "the error names the artifact id to review: {err}");
++
++    let err = build("source_pin", &format!(r#"import "./asset.ag" id "{}";"#, published.id))
++        .expect_err("an id pin on a source import is rejected");
++    assert!(err.to_string().contains("applies only to a published app artifact"), "unexpected error: {err}");
++
++    let err = build("std_pin", r#"import "std::core" id "00";"#).expect_err("an id pin on a standard module is rejected");
++    assert!(err.to_string().contains("applies only to a published app artifact"), "unexpected error: {err}");
++
++    let artifact_json = std::fs::read_to_string(temp.join("asset/artifact.json")).expect("artifact read");
++    let tampered = artifact_json.replacen("\"Asset\"", "\"Assets\"", 1);
++    assert_ne!(tampered, artifact_json);
++    std::fs::create_dir_all(temp.join("tampered")).expect("tampered dir created");
++    std::fs::write(temp.join("tampered/artifact.json"), tampered).expect("tampered artifact written");
++    let err = build("tampered", &format!(r#"import "./tampered/artifact.json" id "{}";"#, published.id))
++        .expect_err("an inconsistent artifact is rejected");
++    assert!(err.to_string().contains("invalid app artifact"), "unexpected error: {err}");
++
++    let err = build_file(temp.join("asset/artifact.json"), temp.join("root_build")).expect_err("an artifact is not a root source");
++    assert!(err.to_string().contains("is not Argent source"), "unexpected error: {err}");
++
++    let _ = std::fs::remove_dir_all(temp);
++}

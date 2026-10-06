@@ -1,0 +1,26 @@
+[package]
+name = "sil2argent"
+description = "Publish hand-written SilverScript contracts as an Argent app artifact"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "sil2argent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sil2argent"
+path = "src/main.rs"
+
+[dependencies]
+argent-artifact.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+silverscript-abi.workspace = true
+
+[dev-dependencies]
+faster-hex.workspace = true

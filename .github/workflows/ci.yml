@@ -1,0 +1,141 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # vendor/silverscript is third-party code and is not linted.
+      - run: >
+          cargo clippy --locked --all-targets
+          -p kob-protocol -p kob-wasm -p kob-executor -p kob-cli -p kob-tests -p sil2argent
+          -- -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: Workspace tests (default order carrier 10 KAS, KRON template 2433)
+        env:
+          # the live TN10 tests (node follow, x402 end-to-end) need a reachable testnet node and mine their own funds: not for CI
+          KOB_SKIP_NETWORK_TESTS: "1"
+        run: cargo test --workspace --locked
+      - name: Engine harness, carrier sensitivity
+        shell: bash
+        run: |
+          KOB_CARRIER_KAS=2 cargo test --locked -p kob-tests
+          KOB_CARRIER_KAS=20 cargo test --locked -p kob-tests
+      - name: Engine harness, alternate KRON template as primary
+        shell: bash
+        run: KOB_KRON_TPL=2732 cargo test --locked -p kob-tests --test kob_kron_adapter_tests
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --release -p kob-wasm --target wasm32-unknown-unknown
+      - name: Vendored silverscript-lang keeps building for wasm32
+        run: cargo check --locked -p silverscript-lang --target wasm32-unknown-unknown
+
+  contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: Artifacts reproduce with silverc built from vendor/silverscript, and the Argent artifacts (argentc from the pinned upstream, contracts/argent) with them
+        run: scripts/build-contracts.sh --check
+      - name: Artifacts reproduce with the official silverc v1.0.0 release binary
+        run: scripts/build-contracts.sh --check --upstream --no-argent
+      - name: Deployment records reproduce (testnet-10, and mainnet with its pinned registry)
+        run: |
+          scripts/build-deploy.sh testnet-10 --check
+          scripts/build-deploy.sh mainnet --check
+
+  web:
+    # The web app (web/): kob-wasm bindings, the official kaspa-wasm v2.1.0 SDK (fetched from the rusty-kaspa release, the npm package is
+    # stale), typecheck, unit tests, production build and the offline mock-stack Playwright e2e. The real-wallet TN10 run (web/e2e-real)
+    # needs browser extensions, funded keys and a reachable TN10 node: it is manual / nightly, never part of this job.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run fetch-sdk
+      - name: kob-wasm bindings (installs wasm-bindgen-cli 0.2.100 under target/tools)
+        working-directory: .
+        run: bash scripts/build-wasm.sh --install-bindgen --web --slim
+      - run: npm run build:wasm -- --copy
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-playwright-report
+          path: |
+            web/test-results
+            web/playwright-report

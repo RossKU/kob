@@ -1,0 +1,25 @@
+[package]
+name = "kob-cli"
+description = "KOB command line: token issuance, registry check, order recovery, the maker's cancel and stray sweep"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+kob-protocol = { path = "../kob-protocol" }
+kaspa-addresses.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-txscript.workspace = true
+secp256k1.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+
+[features]
+# The testnet-10 deployment templates (kob-protocol/deploy-tn10, see contracts/README.md).
+deploy-tn10 = ["kob-protocol/deploy-tn10"]
+# The mainnet deployment (kob-protocol/deploy-mainnet: contracts/deploy/mainnet, pinned registry; docs/ops/release.md).
+deploy-mainnet = ["kob-protocol/deploy-mainnet"]

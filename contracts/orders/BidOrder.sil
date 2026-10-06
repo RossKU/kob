@@ -1,0 +1,129 @@
+pragma silverscript ^0.1.0;
+
+// First-generation KOB BID order: buys a KCC-20 token with plain KAS at a fixed lot price.
+// Superseded by v2/KobBid.sil (per-order values in the state span, so all bids share one template).
+// Kept because the v1 test harnesses (kob_protocol_tests, kob_gap_tests, kob_kaspacom_tests)
+// compile it. Here the order values are constructor arguments baked into the script, so every
+// order is its own template.
+//
+// Entries:
+//   fill(n, tokenTplIn) anyone (token seller or third-party matcher): sell n lots into the bid
+//   cancel(sig)         maker only, SIGHASH_ALL
+//   refund()            anyone: all KAS back to the maker (minus refundTip) once tx.daa >= expiryDaa
+//
+// State: none. Custody is plain KAS in the order's own covenant UTXO (no wrapped KAS); the
+// remaining buying power IS the UTXO value minus `reserve`.
+//
+// Key invariants:
+//   - Positional delivery rule (anti-aliasing): the tokens bought by the order spent at input i
+//     MUST be delivered in output i, as a genuine KCC-20 UTXO owned by the maker (owner_scheme
+//     0x00 p2pk-schnorr, borrow disabled, extension_commitment pinned) with exactly n * lotSize.
+//   - While buying power remains (value - pay - reserve >= lotPrice + deliveryCarrier) the bid MUST
+//     continue with the same script, so a fill cannot force-cancel it; otherwise it terminates and
+//     its leftover KAS rides on the delivered token UTXO.
+//   - `reserve` is never spent on fills; overflow bounds on n are checked before the arithmetic.
+//   - tokenTplIn only supplies the token template bytes; it must carry tokenCovId and the
+//     delivery is checked against tokenTplHash.
+contract BidOrder(
+    pubkey maker,               // token owner for deliveries + KAS refunds + cancel key
+    byte[32] tokenCovId,        // KIP-20 covenant id of the KCC-20 token
+    byte[32] tokenTplHash,      // KCC-1 template hash of the token program
+    int tplPrefixLen,
+    int tplSuffixLen,
+    byte[32] extensionCommitment, // pinned token sub-type (fungibility class)
+    int lotSize,                // token base units per lot (> 0)
+    int lotPrice,               // sompi per lot (> 0)
+    int reserve,                // KAS carrier never spent on fills (>= 0)
+    int deliveryCarrier,        // KAS the bid itself puts on each delivered token UTXO (>= 0)
+    int expiryDaa,              // anyone may refund to maker once DAA score >= this
+    int refundTip               // max sompi a refund keeper may keep
+) {
+    struct KCC20State {
+        int amount;
+        byte[32] owner;
+        byte owner_scheme;
+        byte borrow_scheme;
+        byte[32] borrow_guard;
+        byte[32] extension_commitment;
+    }
+
+    byte constant SCHEME_P2PK = 0x00;
+    byte constant BORROW_DISABLED = 0x00;
+    byte constant SIGHASH_ALL = 0x01;
+    int constant MAX_SOMPI = 2900000000000000000;
+    int constant MAX_INT = 9223372036854775807;
+    byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
+
+    // tokenTplIn: any KCC-20 input of this token; used only as the source of the
+    // token template bytes (their hash is checked against tokenTplHash).
+    entry fill(int n, int tokenTplIn) {
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(OpCovInputCount(selfId) == 1);
+
+        require(lotSize > 0);
+        require(lotPrice > 0);
+        require(reserve >= 0);
+        require(deliveryCarrier >= 0);
+        require(deliveryCarrier <= MAX_SOMPI);
+        require(n > 0);
+        require(n <= MAX_SOMPI / lotPrice);
+        require(n <= MAX_INT / lotSize);
+        int pay = n * lotPrice;
+        int get = n * lotSize;
+
+        int inValue = tx.inputs[this.activeInputIndex].value;
+        int left = inValue - pay;
+        require(left >= reserve);
+
+        // Delivery: output i is a genuine KCC-20 UTXO with exactly `get` tokens
+        // owned by the maker.
+        int out = this.activeInputIndex;
+        require(OpInputCovenantId(tokenTplIn) == tokenCovId);
+        validateOutputStateWithInputTemplate(
+            out,
+            KCC20State {
+                amount: get,
+                owner: byte[32](maker),
+                owner_scheme: SCHEME_P2PK,
+                borrow_scheme: BORROW_DISABLED,
+                borrow_guard: ZERO32,
+                extension_commitment: extensionCommitment
+            },
+            tokenTplIn, tplPrefixLen, tplSuffixLen, tokenTplHash
+        );
+        require(OpOutputCovenantId(out) == tokenCovId);
+
+        if (left - reserve >= lotPrice + deliveryCarrier) {
+            // Buying power remains: the bid MUST continue (no forced-cancel grief).
+            // The bid funds the delivered UTXO carrier itself (the maker keeps it).
+            require(OpCovOutputCount(selfId) == 1);
+            int selfOut = OpCovOutputIdx(selfId, 0);
+            require(tx.outputs[selfOut].scriptPubKey == this.activeScriptPubKey);
+            require(tx.outputs[selfOut].value >= left - deliveryCarrier);
+            require(tx.outputs[out].value >= deliveryCarrier);
+        } else {
+            // Exhausted: terminate; the leftover KAS rides on the delivered tokens.
+            require(OpCovOutputCount(selfId) == 0);
+            require(tx.outputs[out].value >= left);
+        }
+    }
+
+    entry cancel(sig s) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, maker));
+    }
+
+    entry refund() {
+        require(tx.daa >= expiryDaa);
+        byte[32] selfId = OpInputCovenantId(this.activeInputIndex);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovOutputCount(selfId) == 0);
+        require(refundTip >= 0);
+        require(refundTip <= MAX_SOMPI);
+        int out = this.activeInputIndex;
+        require(tx.outputs[out].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
+        require(tx.outputs[out].value + refundTip >= tx.inputs[this.activeInputIndex].value);
+    }
+}

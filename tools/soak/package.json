@@ -1,0 +1,14 @@
+{
+  "name": "kob-soak",
+  "version": "0.1.0",
+  "private": true,
+  "license": "ISC",
+  "type": "module",
+  "description": "KOB TN10 soak: bots (market maker, traders over every order type, x402 payer), funding from self-mining, invariant checker, supervisor",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "node ../../web/node_modules/rolldown/bin/cli.mjs -c rolldown.config.mjs",
+    "typecheck": "node ../../web/node_modules/typescript/bin/tsc -p tsconfig.json",
+    "test": "node --test test/*.test.ts"
+  }
+}

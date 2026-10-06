@@ -1,0 +1,33 @@
+{
+  "app": "KOBToken",
+  "root": "kcc20_8x8.ag",
+  "modules": [
+    "kcc20_8x8.ag"
+  ],
+  "templates": [
+    { "actor": "KCC20", "symbol": "gen__kcc20_template", "hash": null }
+  ],
+  "actors": [
+    {
+      "name": "KCC20",
+      "state": "KCC20State",
+      "sil": "sil/KCC20.sil",
+      "entries": [
+        {
+          "name": "transfer",
+          "kind": "leader",
+          "emits": { "kind": "outputs", "outputs": [{ "name": "next_outputs", "auth_index": null, "actors": ["KCC20"], "cardinality": { "kind": "range", "minimum": 1, "maximum": 8 } }] },
+          "consumes": [{ "name": "delegates", "actor": "KCC20", "cardinality": { "kind": "range", "minimum": 0, "maximum": 7 } }],
+          "routes": [{ "output": "next_outputs", "successor": { "kind": "constructed", "arity": "many", "actor": "KCC20", "state": "next_states" } }]
+        },
+        {
+          "name": "transfer_delegator",
+          "kind": "delegate",
+          "emits": { "kind": "none" },
+          "consumes": [{ "name": "leader", "actor": "KCC20" }],
+          "routes": []
+        }
+      ]
+    }
+  ]
+}

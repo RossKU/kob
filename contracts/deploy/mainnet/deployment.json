@@ -1,0 +1,175 @@
+{
+  "network": "mainnet",
+  "protocol": "v3 (no lots: base units, prices per whole base token; pair orders A/B, one template per pair kind for both families)",
+  "compiler": "silverc v1.0.0 (contracts/silverc.lock)",
+  "note": "every template is the reference artifact under contracts/artifacts; nothing is substituted per network",
+  "templates": [
+    {
+      "name": "KobAsk",
+      "artifact": "contracts/artifacts/KobAsk.json",
+      "hash": "126ff059375b459674df139dc644f6518cc26e831e998e9be7a4008c8c8e0aa1",
+      "prefix_len": 1,
+      "suffix_len": 1394
+    },
+    {
+      "name": "KobBid",
+      "artifact": "contracts/artifacts/KobBid.json",
+      "hash": "b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3",
+      "prefix_len": 1,
+      "suffix_len": 1230
+    },
+    {
+      "name": "KobCondAsk",
+      "artifact": "contracts/artifacts/KobCondAsk.json",
+      "hash": "40a8eb7321e9dc157ca05683fcf01c1967d0c2be91fb8644e02025b0df087b74",
+      "prefix_len": 1,
+      "suffix_len": 3153
+    },
+    {
+      "name": "KobCondBid",
+      "artifact": "contracts/artifacts/KobCondBid.json",
+      "hash": "076e7bd8bfb6e1b59a8f2a19a6cad5961c7978368a0816a2b9df5f39d805bdfb",
+      "prefix_len": 1,
+      "suffix_len": 2854
+    },
+    {
+      "name": "KobIfdBid",
+      "artifact": "contracts/artifacts/KobIfdBid.json",
+      "hash": "50b58e7b26e0bdc1a0eed7f7d7e5bcee88f95ed6ff367be32b8e74979a9de292",
+      "prefix_len": 1,
+      "suffix_len": 3210
+    },
+    {
+      "name": "KobIfdAsk",
+      "artifact": "contracts/artifacts/KobIfdAsk.json",
+      "hash": "189b9c3297cac33c0de6b5defefcbee5deee42306e8aa72b4615d8f2d4515a17",
+      "prefix_len": 1,
+      "suffix_len": 4305
+    },
+    {
+      "name": "KobPair",
+      "artifact": "contracts/artifacts/KobPair.json",
+      "hash": "107388074abe4d223d6fc1e17f6d5aa09bd76a7b739aa2e82774516ddbef7d16",
+      "prefix_len": 1,
+      "suffix_len": 2504
+    },
+    {
+      "name": "KobCondPair",
+      "artifact": "contracts/artifacts/KobCondPair.json",
+      "hash": "37ab667f662779e97e75ea712e855c073b4d2c9a5183285fa7ec11daf8ae0820",
+      "prefix_len": 1,
+      "suffix_len": 5714
+    },
+    {
+      "name": "KobIfdPair",
+      "artifact": "contracts/artifacts/KobIfdPair.json",
+      "hash": "9975b2f3131179217050165f51b844700cf9f99f47c5b7954dabf00cf0441d5c",
+      "prefix_len": 1,
+      "suffix_len": 7798
+    },
+    {
+      "name": "KobAskKron",
+      "artifact": "contracts/artifacts/KobAskKron.json",
+      "hash": "f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d",
+      "prefix_len": 1,
+      "suffix_len": 1243
+    },
+    {
+      "name": "KobBidKron",
+      "artifact": "contracts/artifacts/KobBidKron.json",
+      "hash": "6ec1a3dd4a287b73295a08db5f75fedcac4966539d793e9d1a659711ad888efc",
+      "prefix_len": 1,
+      "suffix_len": 1090
+    },
+    {
+      "name": "KobCondAskKron",
+      "artifact": "contracts/artifacts/KobCondAskKron.json",
+      "hash": "6c4f92cee1613899b5d680e784b11fd567b1bfac63a5006018cc6c54cfd35839",
+      "prefix_len": 1,
+      "suffix_len": 2847
+    },
+    {
+      "name": "KobCondBidKron",
+      "artifact": "contracts/artifacts/KobCondBidKron.json",
+      "hash": "fb392f88a136f14708841895b2efae2a5070749ddeb0168c7405806aea7ed953",
+      "prefix_len": 1,
+      "suffix_len": 2579
+    },
+    {
+      "name": "KobIfdBidKron",
+      "artifact": "contracts/artifacts/KobIfdBidKron.json",
+      "hash": "e5cff7ede2faeb58706cfd28e095dcefad552f1e3e92d8a12bd05a22c053496d",
+      "prefix_len": 1,
+      "suffix_len": 2945
+    },
+    {
+      "name": "KobIfdAskKron",
+      "artifact": "contracts/artifacts/KobIfdAskKron.json",
+      "hash": "85d8783813f861d16d2679d13fd062d81ce572f7fe4efa111943bd5a6a6b4ac8",
+      "prefix_len": 1,
+      "suffix_len": 3835
+    }
+  ],
+  "registry": {
+    "path": "registry/tokens.json",
+    "sha256": "6baf815424fb69c07499ccb7a28d9cc1a9d0d8ece736ac0a84f87f0d93c93a8d",
+    "schema_version": 1,
+    "strict_templates": [
+      {
+        "id": "kron-2433",
+        "template_hash": "2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2"
+      },
+      {
+        "id": "kron-2732",
+        "template_hash": "8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e"
+      }
+    ],
+    "pending_templates": [
+      "kcc20-ref-3x3",
+      "kcc20-ref-8x8",
+      "kcc20-kaspacom-0-2-5"
+    ],
+    "listed": [
+      {
+        "ticker": "KRON",
+        "covenant_id": "7a98370c0d6b037c28089d7b77cd8229120804cb416ef592ddb99e23820544e4",
+        "official": true
+      },
+      {
+        "ticker": "KASCOV",
+        "covenant_id": "c58c826d0aa9cee62f93208718c674883f5c89a8aca4933dc41fb0391539abe2",
+        "official": true
+      },
+      {
+        "ticker": "PEPE",
+        "covenant_id": "a73cdef004099b191759d320de970451be0e10423a7eb15b07d5e51d050b47cd",
+        "official": false
+      },
+      {
+        "ticker": "ANSEM",
+        "covenant_id": "3cb4d9625e8ce0c54c928cce7f380cecb9ae7bb957a559be017b78218696f79d",
+        "official": true
+      },
+      {
+        "ticker": "IFWEN",
+        "covenant_id": "b4301f4177a3c33b85855c0415dcbe3ccfc4f36a4cd5afc105f1177cda97a8af",
+        "official": true
+      },
+      {
+        "ticker": "PEEPS",
+        "covenant_id": "0b7225aafd30575e88a2c213a6d0ef945ed0b0065093e49975ea40e1af9fd0eb",
+        "official": true
+      },
+      {
+        "ticker": "DNBT",
+        "covenant_id": "d101341bc8c9ed351cc5f5dd6e6a813a415e2facb80a907be517ccfa0b7d64d8",
+        "official": false
+      },
+      {
+        "ticker": "KDIST",
+        "covenant_id": "bed3c81787e07988c6d5792fb02324bfd11b980a123f87a28eb177eeec6084a0",
+        "official": true
+      }
+    ]
+  }
+}

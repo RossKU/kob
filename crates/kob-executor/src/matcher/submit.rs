@@ -1,0 +1,378 @@
+//! Submission, mempool conflicts, acceptance tracking and rollback (`docs/spec/matcher.md` §1.3,
+//! §7, §8).
+//!
+//! * Every transaction is engine-validated before it reaches [`Tracker::submit`].
+//! * `RejectDoubleSpendInMempool` is benign (a competing matcher, a cancel, a refund): the orders
+//!   of the transaction back off exponentially; nothing is ever replaced blindly (the matcher never
+//!   calls `submitTransactionReplacement`).
+//! * Acceptance comes from `getVirtualChainFromBlockV2` (`Low`): a transaction is *accepted* when a
+//!   chain block accepts it and *final* (done) after `final_depth` more DAA; a `removed` chain
+//!   block moves its transactions back to pending (reorg), where they are re-checked.
+//! * While a transaction is pending or accepted-but-not-final, the outpoints it spends are
+//!   excluded from planning, so no order is planned twice; a pending transaction that is neither
+//!   accepted nor still possible within `pending_timeout` DAA is dropped and its orders back off.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde_json::Value;
+
+use super::book::{CovId, Outpoint};
+use super::node::{classify_submit_error, ChainUpdate, NodeApi, RpcError, SubmitOutcome};
+
+/// Tracker settings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrackerConfig {
+    /// DAA after acceptance at which a transaction is final (default 100, §1.3).
+    pub final_depth: u64,
+    /// DAA after which an unaccepted transaction is given up (default 600).
+    pub pending_timeout: u64,
+    /// First back-off of an order after a conflict (DAA; doubles per attempt).
+    pub backoff_base: u64,
+    /// Longest back-off (DAA).
+    pub backoff_max: u64,
+}
+
+impl Default for TrackerConfig {
+    fn default() -> Self {
+        TrackerConfig { final_depth: 100, pending_timeout: 600, backoff_base: 20, backoff_max: 600 }
+    }
+}
+
+/// A transaction the tracker follows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tracked {
+    pub txid: [u8; 32],
+    /// Outpoints the transaction spends.
+    pub spends: BTreeSet<Outpoint>,
+    /// Order covenant ids it spends (legs, merged entries).
+    pub orders: BTreeSet<CovId>,
+    /// The transaction's own outpoints its children spend (chained steps).
+    pub parent: Option<[u8; 32]>,
+    pub submitted_daa: u64,
+    /// `RpcTransaction` JSON, for an idempotent resend after a reorg.
+    pub rpc_tx: Value,
+    /// Accepting chain block and its DAA score.
+    pub accepted: Option<(String, u64)>,
+    /// What the transaction is (for logs and metrics): `match`, `refund`, `kill`, `close`, `sweep`.
+    pub kind: String,
+    /// Operator profit promised by the build (sompi).
+    pub profit: i64,
+    /// Network fee paid (sompi) and its rate (sompi per gram, `crate::fee`).
+    pub fee: u64,
+    pub fee_rate: u64,
+    /// The submit call got no verdict (transport error / timeout): the node may hold the transaction. Cleared by the node's answer
+    /// to a resend or by the transaction's acceptance.
+    pub unconfirmed: bool,
+}
+
+/// Events of one tracker step (for logs and metrics).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TrackerEvents {
+    pub accepted: Vec<[u8; 32]>,
+    pub finalized: Vec<Tracked>,
+    pub rolled_back: Vec<[u8; 32]>,
+    pub dropped: Vec<[u8; 32]>,
+}
+
+/// Follows submitted transactions until they are final.
+#[derive(Debug, Default)]
+pub struct Tracker {
+    pub cfg: TrackerConfig,
+    /// Last chain block seen (VSPC cursor).
+    pub cursor: Option<String>,
+    pub txs: BTreeMap<[u8; 32], Tracked>,
+    /// Order id -> (back off until DAA, attempts).
+    pub backoff: BTreeMap<CovId, (u64, u32)>,
+    /// Counters.
+    pub submitted: u64,
+    pub conflicts: u64,
+    pub rejected: u64,
+    /// Submits without a verdict.
+    pub unknown: u64,
+    pub finalized_count: u64,
+    pub finalized_profit: i64,
+}
+
+impl Tracker {
+    pub fn new(cfg: TrackerConfig) -> Self {
+        Tracker { cfg, ..Default::default() }
+    }
+
+    /// Outpoints no plan may spend (pending and accepted-but-not-final transactions).
+    pub fn spent_outpoints(&self) -> BTreeSet<Outpoint> {
+        self.txs.values().flat_map(|t| t.spends.iter().copied()).collect()
+    }
+
+    /// Order ids backed off at `daa`.
+    pub fn backed_off(&self, daa: u64) -> BTreeSet<CovId> {
+        self.backoff.iter().filter(|(_, (until, _))| *until > daa).map(|(k, _)| *k).collect()
+    }
+
+    fn back_off(&mut self, ids: &BTreeSet<CovId>, daa: u64) {
+        for id in ids {
+            let e = self.backoff.entry(*id).or_insert((0, 0));
+            e.1 = e.1.saturating_add(1);
+            let d = self.cfg.backoff_base.saturating_mul(1u64 << (e.1 - 1).min(16)).min(self.cfg.backoff_max);
+            e.0 = daa + d;
+        }
+    }
+
+    /// Submits a transaction and records it. Returns the node's verdict.
+    pub async fn submit<N: NodeApi>(&mut self, node: &N, t: Tracked, daa: u64) -> SubmitOutcome {
+        if let Some(p) = t.parent {
+            if !self.txs.contains_key(&p) {
+                // A chained step whose parent failed: never submit it.
+                return SubmitOutcome::MissingInput;
+            }
+        }
+        let outcome = match node.submit(t.rpc_tx.clone()).await {
+            Ok(_) => SubmitOutcome::Accepted,
+            Err(RpcError::Node(m)) => classify_submit_error(&m),
+            Err(_) => SubmitOutcome::Unknown,
+        };
+        match outcome {
+            SubmitOutcome::Accepted | SubmitOutcome::AlreadyKnown => {
+                self.submitted += 1;
+                for id in &t.orders {
+                    self.backoff.remove(id);
+                }
+                self.txs.insert(t.txid, t);
+            }
+            SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput => {
+                self.conflicts += 1;
+                self.back_off(&t.orders, daa);
+            }
+            SubmitOutcome::Busy => self.back_off(&t.orders, daa),
+            SubmitOutcome::Unknown => {
+                // The node may have taken it: never plan a conflicting transaction over the same inputs; follow it like a pending one.
+                self.unknown += 1;
+                let mut t = t;
+                t.unconfirmed = true;
+                self.txs.insert(t.txid, t);
+            }
+            SubmitOutcome::Rejected => {
+                self.rejected += 1;
+                self.back_off(&t.orders, daa);
+            }
+        }
+        outcome
+    }
+
+    /// Resends every transaction whose submit got no verdict and that no chain block accepted yet (idempotent: the node answers
+    /// "already in the mempool" for one it holds). The node's answer settles the doubt: taken -> tracked normally; refused -> dropped
+    /// and its orders back off; still no answer -> stays unconfirmed. Returns the answers.
+    pub async fn resubmit_unconfirmed<N: NodeApi>(&mut self, node: &N, daa: u64) -> Vec<([u8; 32], SubmitOutcome)> {
+        let todo: Vec<([u8; 32], Value)> =
+            self.txs.values().filter(|t| t.unconfirmed && t.accepted.is_none()).map(|t| (t.txid, t.rpc_tx.clone())).collect();
+        let mut out = vec![];
+        for (id, rpc) in todo {
+            let outcome = match node.submit(rpc).await {
+                Ok(_) => SubmitOutcome::Accepted,
+                Err(RpcError::Node(m)) => classify_submit_error(&m),
+                Err(_) => SubmitOutcome::Unknown,
+            };
+            match outcome {
+                SubmitOutcome::Accepted | SubmitOutcome::AlreadyKnown => {
+                    if let Some(t) = self.txs.get_mut(&id) {
+                        t.unconfirmed = false;
+                    }
+                    self.submitted += 1;
+                }
+                SubmitOutcome::Unknown | SubmitOutcome::Busy => {}
+                SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput | SubmitOutcome::Rejected => {
+                    if let Some(t) = self.txs.remove(&id) {
+                        if outcome == SubmitOutcome::Rejected {
+                            self.rejected += 1;
+                        } else {
+                            self.conflicts += 1;
+                        }
+                        self.back_off(&t.orders, daa);
+                    }
+                }
+            }
+            out.push((id, outcome));
+        }
+        out
+    }
+
+    /// Applies one chain update at virtual DAA `daa`.
+    pub fn apply(&mut self, u: &ChainUpdate, daa: u64) -> TrackerEvents {
+        let mut ev = TrackerEvents::default();
+        let removed: BTreeSet<&String> = u.removed.iter().collect();
+        for t in self.txs.values_mut() {
+            if t.accepted.as_ref().is_some_and(|(h, _)| removed.contains(h)) {
+                t.accepted = None;
+                ev.rolled_back.push(t.txid);
+            }
+        }
+        for b in &u.added {
+            for id in &b.accepted {
+                if let Some(t) = self.txs.get_mut(id) {
+                    t.accepted = Some((b.hash.clone(), b.daa_score));
+                    ev.accepted.push(*id);
+                }
+            }
+        }
+        if let Some(last) = u.added.last() {
+            self.cursor = Some(last.hash.clone());
+        }
+        self.settle(daa, ev)
+    }
+
+    /// Acceptance as seen by a chain follower that is not this tracker (the indexer, in-process):
+    /// `view` maps a transaction id to the chain block that accepts it on the selected chain now
+    /// (absent: not accepted). It replaces the VSPC cursor: a transaction whose block was reorged
+    /// away is simply absent, and moves back to pending.
+    pub fn observe(&mut self, view: &BTreeMap<[u8; 32], (String, u64)>, daa: u64) -> TrackerEvents {
+        let mut ev = TrackerEvents::default();
+        for t in self.txs.values_mut() {
+            match (view.get(&t.txid), &t.accepted) {
+                (Some(now), prev) if prev.as_ref() != Some(now) => {
+                    t.accepted = Some(now.clone());
+                    ev.accepted.push(t.txid);
+                }
+                (None, Some(_)) => {
+                    t.accepted = None;
+                    ev.rolled_back.push(t.txid);
+                }
+                _ => {}
+            }
+        }
+        self.settle(daa, ev)
+    }
+
+    /// Final: accepted + depth. Given up: never accepted within the timeout (a lost race).
+    fn settle(&mut self, daa: u64, mut ev: TrackerEvents) -> TrackerEvents {
+        for t in self.txs.values_mut() {
+            if t.accepted.is_some() {
+                t.unconfirmed = false;
+            }
+        }
+        let mut done = vec![];
+        for (k, t) in &self.txs {
+            match &t.accepted {
+                Some((_, d)) if daa >= d + self.cfg.final_depth => done.push((*k, true)),
+                None if daa >= t.submitted_daa + self.cfg.pending_timeout => done.push((*k, false)),
+                _ => {}
+            }
+        }
+        for (k, fin) in done {
+            let t = self.txs.remove(&k).expect("listed");
+            if fin {
+                self.finalized_count += 1;
+                self.finalized_profit += t.profit;
+                ev.finalized.push(t);
+            } else {
+                let ids = t.orders.clone();
+                self.back_off(&ids, daa);
+                ev.dropped.push(k);
+            }
+        }
+        ev
+    }
+
+    /// Transactions rolled back by a reorg that are still pending: resend them (idempotent; a
+    /// double spend now means their inputs went elsewhere, and they are dropped at the timeout).
+    pub fn resend_candidates(&self) -> Vec<&Tracked> {
+        self.txs.values().filter(|t| t.accepted.is_none()).collect()
+    }
+
+    /// Pending (not yet accepted) transactions.
+    pub fn pending(&self) -> usize {
+        self.txs.values().filter(|t| t.accepted.is_none()).count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::matcher::node::ChainBlock;
+
+    fn tracked(n: u8, daa: u64) -> Tracked {
+        Tracked {
+            txid: [n; 32],
+            spends: [([n; 32], 0)].into_iter().collect(),
+            orders: [[n; 32]].into_iter().collect(),
+            parent: None,
+            submitted_daa: daa,
+            rpc_tx: Value::Null,
+            accepted: None,
+            kind: "match".into(),
+            profit: 7,
+            fee: 0,
+            fee_rate: 100,
+            unconfirmed: false,
+        }
+    }
+
+    #[test]
+    fn accept_finalize_rollback_and_timeout() {
+        let mut t = Tracker::new(TrackerConfig::default());
+        t.txs.insert([1; 32], tracked(1, 1_000));
+        t.txs.insert([2; 32], tracked(2, 1_000));
+        assert_eq!(t.spent_outpoints().len(), 2);
+        let up =
+            ChainUpdate { removed: vec![], added: vec![ChainBlock { hash: "b1".into(), daa_score: 1_010, accepted: vec![[1; 32]] }] };
+        let ev = t.apply(&up, 1_011);
+        assert_eq!(ev.accepted, vec![[1; 32]]);
+        assert_eq!(t.cursor.as_deref(), Some("b1"));
+        // Reorg: b1 removed -> back to pending.
+        let ev = t.apply(&ChainUpdate { removed: vec!["b1".into()], added: vec![] }, 1_020);
+        assert_eq!(ev.rolled_back, vec![[1; 32]]);
+        assert_eq!(t.pending(), 2);
+        // Re-accepted, then final after 100 DAA; the other one times out and backs off.
+        let up =
+            ChainUpdate { removed: vec![], added: vec![ChainBlock { hash: "b2".into(), daa_score: 1_030, accepted: vec![[1; 32]] }] };
+        t.apply(&up, 1_031);
+        let ev = t.apply(&ChainUpdate::default(), 1_600);
+        assert_eq!(ev.dropped, vec![[2; 32]]);
+        assert!(t.backed_off(1_600).contains(&[2; 32]));
+        assert_eq!(ev.finalized.iter().map(|x| x.txid).collect::<Vec<_>>(), vec![[1; 32]], "accepted at 1030, final from 1130");
+        assert_eq!((t.finalized_count, t.finalized_profit), (1, 7));
+        assert!(t.txs.is_empty());
+    }
+
+    #[test]
+    fn observed_acceptance_replaces_the_vspc_cursor() {
+        let mut t = Tracker::new(TrackerConfig::default());
+        t.txs.insert([1; 32], tracked(1, 1_000));
+        t.txs.insert([2; 32], tracked(2, 1_000));
+        let seen = |pairs: &[([u8; 32], &str, u64)]| -> BTreeMap<[u8; 32], (String, u64)> {
+            pairs.iter().map(|(id, h, d)| (*id, (h.to_string(), *d))).collect()
+        };
+        // accepted by the indexer
+        let ev = t.observe(&seen(&[([1; 32], "b1", 1_010)]), 1_011);
+        assert_eq!(ev.accepted, vec![[1; 32]]);
+        assert_eq!(t.pending(), 1);
+        // the same view again is no event
+        assert_eq!(t.observe(&seen(&[([1; 32], "b1", 1_010)]), 1_012), TrackerEvents::default());
+        // re-accepted by another chain block in the same poll: accepted, not rolled back
+        let ev = t.observe(&seen(&[([1; 32], "b2", 1_020)]), 1_021);
+        assert_eq!((ev.accepted.clone(), ev.rolled_back.len()), (vec![[1; 32]], 0));
+        assert_eq!(t.txs[&[1; 32]].accepted, Some(("b2".to_string(), 1_020)));
+        // absent from the view: reorged away, back to pending
+        let ev = t.observe(&seen(&[]), 1_030);
+        assert_eq!(ev.rolled_back, vec![[1; 32]]);
+        assert_eq!(t.pending(), 2);
+        // accepted again, final 100 DAA later; the unaccepted one is dropped at the timeout
+        t.observe(&seen(&[([1; 32], "b3", 1_040)]), 1_041);
+        let ev = t.observe(&seen(&[([1; 32], "b3", 1_040)]), 1_600);
+        assert_eq!(ev.finalized.iter().map(|x| x.txid).collect::<Vec<_>>(), vec![[1; 32]]);
+        assert_eq!(ev.dropped, vec![[2; 32]]);
+        assert!(t.txs.is_empty());
+    }
+
+    #[test]
+    fn backoff_doubles_and_caps() {
+        let mut t = Tracker::new(TrackerConfig::default());
+        let ids: BTreeSet<CovId> = [[9; 32]].into_iter().collect();
+        t.back_off(&ids, 100);
+        assert_eq!(t.backoff[&[9; 32]], (120, 1));
+        t.back_off(&ids, 100);
+        assert_eq!(t.backoff[&[9; 32]], (140, 2));
+        for _ in 0..10 {
+            t.back_off(&ids, 100);
+        }
+        assert_eq!(t.backoff[&[9; 32]].0, 700);
+    }
+}

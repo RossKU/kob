@@ -1,0 +1,526 @@
+// KOBOrders: Argent interface of the nine hand-written KOB contracts (protocol v3) in contracts/v2/*.sil
+// (KobAsk, KobBid, KobCondAsk, KobCondBid, KobIfdAsk, KobIfdBid, and the pair orders KobPair, KobCondPair, KobIfdPair).
+//
+// THIS FILE IS NOT THE IMPLEMENTATION. The order programs are hand-written SilverScript shipped as
+// silverc artifacts (contracts/artifacts/*.json). For each of them this file declares only
+//   1. the state layout: the same field names, order and Sil types as the contract's state span
+//      (what `actor_type<State>` handles and observed inputs read);
+//   2. the entries: the same names and argument types, plus the continuations an entry may
+//      create (`emits`).
+// The entry bodies are placeholders. scripts/build-argent.sh compiles this file with argentc into a
+// skeleton artifact; tools/sil2argent refuses it if a state or entry ABI differs from the .sil, then
+// replaces every generated contract by the silverc output and recomputes template receipts,
+// actor-type handles, interface fingerprints and the artifact id. Result:
+// contracts/argent/KOBOrders/artifact.json (generated; see docs/argent.md, argent/UPSTREAM.md).
+//
+// The KCC-20 token KOB issues is the separate single-actor app KOBToken (kcc20_8x8.ag): an actor in
+// a multi-actor app gets compiler-owned template fields, which would change the token program.
+//
+// `emits` lists only continuations that stay in the entry's own covenant (authorised outputs of the
+// input's covenant id). The exit orders that KobIfd* create are fresh genesis covenants, which
+// consensus hides from authorised-output accounting, so they are not emits (the same for the KobCondPair exits of
+// KobIfdPair); the token outputs an
+// order pins belong to the token program and are not emits either. What each order really enforces
+// is in the .sil and its tests (crates/kob-tests), not in this file.
+//
+// State: orders keep remaining size and lifecycle flags in mutable state fields (amountLeft, armed, ...;
+// the token custody of a sell-side order holds exactly amountLeft base units), so a partial fill or an update
+// continues with a DIFFERENT state. Readers of an observed order must not assume a byte-identical
+// continuation.
+//
+// Build constants (inlined in the .sil, fixed by contracts/v2/*.ctor.json): KobCondAsk / KobCondBid
+// embed the KobAsk and KobBid templates (their trigger evidence is a fill of such an order in the same
+// transaction); KobIfdBid / KobIfdAsk embed the exit template and the evidence template of their stop
+// entry; KobCondPair embeds the KobAsk and KobBid templates of both families and KobPair (its trigger evidence: two
+// KAS-book fills or a resting pair order); KobIfdPair embeds its exit KobCondPair and the same evidence templates. None
+// depends on a network or a genesis, so the published artifact is final on every network.
+
+state KobAskState {
+    pubkey maker;
+    byte[32] tokenCovId;
+    byte[32] tokenTplHash;
+    int tplPrefixLen;
+    int tplSuffixLen;
+    int scale;
+    int minFill;
+    int price;
+    int tip;
+    int tif;
+    int activeFrom;
+    int expiryDaa;
+    int refundTip;
+    int interval;
+    int maxFill;
+    int slope;
+    int priceEnd;
+    int decayStep;
+    int amountLeft;
+}
+
+state KobBidState {
+    pubkey maker;
+    byte[32] tokenCovId;
+    byte[32] tokenTplHash;
+    int tplPrefixLen;
+    int tplSuffixLen;
+    byte[32] extensionCommitment;
+    int scale;
+    int minFill;
+    int price;
+    int tip;
+    int tif;
+    int activeFrom;
+    int expiryDaa;
+    int refundTip;
+    int reserve;
+    int deliveryCarrier;
+    int interval;
+    int maxFill;
+    int slope;
+    int priceEnd;
+    int decayStep;
+}
+
+state KobCondAskState {
+    pubkey maker;
+    byte[32] tokenCovId;
+    byte[32] tokenTplHash;
+    int tplPrefixLen;
+    int tplSuffixLen;
+    int scale;
+    int minFill;
+    int tip;
+    int activeFrom;
+    int expiryDaa;
+    int refundTip;
+    int tpPrice;
+    int stopPrice;
+    int slipBps;
+    int trailStep;
+    int trailGap;
+    int trailWait;
+    int minTouch;
+    int minRestDaa;
+    int armed;
+    int bandDaa;
+    int keeperTip;
+    int amountLeft;
+    byte[32] parent;
+    int rptPrice;
+    int rptUntil;
+}
+
+state KobCondBidState {
+    pubkey maker;
+    byte[32] tokenCovId;
+    byte[32] tokenTplHash;
+    int tplPrefixLen;
+    int tplSuffixLen;
+    byte[32] extensionCommitment;
+    int scale;
+    int minFill;
+    int tip;
+    int activeFrom;
+    int expiryDaa;
+    int refundTip;
+    int deliveryCarrier;
+    int tpPrice;
+    int stopPrice;
+    int slipBps;
+    int trailStep;
+    int trailGap;
+    int trailWait;
+    int minTouch;
+    int minRestDaa;
+    int amountLeft;
+    int armed;
+    int bandDaa;
+    int keeperTip;
+    byte[32] parent;
+    int rptPrice;
+    int rptPre;
+    int rptUntil;
+}
+
+state KobIfdAskState {
+    pubkey maker;
+    byte[32] tokenCovId;
+    byte[32] tokenTplHash;
+    int tplPrefixLen;
+    int tplSuffixLen;
+    int scale;
+    int price;
+    int tip;
+    int activeFrom;
+    int expiryDaa;
+    int refundTip;
+    int prefund;
+    int exitCarrier;
+    int minFill;
+    int entryStop;
+    int bandDaa;
+    int minTouch;
+    int minRestDaa;
+    int keeperTip;
+    int armed;
+    int amountLeft;
+    int rptAmount;
+    byte[321] exitState;
+}
+
+state KobIfdBidState {
+    pubkey maker;
+    byte[32] tokenCovId;
+    byte[32] tokenTplHash;
+    int tplPrefixLen;
+    int tplSuffixLen;
+    byte[32] extensionCommitment;
+    int scale;
+    int amountLeft;
+    int price;
+    int tip;
+    int activeFrom;
+    int expiryDaa;
+    int refundTip;
+    int deliveryCarrier;
+    int exitCarrier;
+    int minFill;
+    int entryStop;
+    int bandDaa;
+    int minTouch;
+    int minRestDaa;
+    int keeperTip;
+    int armed;
+    int rptAmount;
+    byte[279] exitState;
+}
+
+// The pair orders: one template each for both sides (side 1 ASK sells the base token A, 2 BID buys it) and both token
+// families of A and B (sFamily / tFamily, aFamily / bFamily). S is the token an order holds (A for an ask, B for a bid), T
+// the token it buys.
+state KobPairState {
+    pubkey maker;
+    int side;
+    byte[32] sCovId;
+    byte[32] sTplHash;
+    int sPre;
+    int sSuf;
+    int sFamily;
+    int sScale;
+    byte[32] tCovId;
+    byte[32] tTplHash;
+    int tPre;
+    int tSuf;
+    int tFamily;
+    byte[32] tExt;
+    int tScale;
+    int minFill;
+    int price;
+    int tip;
+    int tif;
+    int activeFrom;
+    int expiryDaa;
+    int refundTip;
+    int deliveryCarrier;
+    int interval;
+    int maxFill;
+    int slope;
+    int priceEnd;
+    int decayStep;
+    int amountLeft;
+    int custody;
+}
+
+state KobCondPairState {
+    pubkey maker;
+    int side;
+    byte[32] sCovId;
+    byte[32] sTplHash;
+    int sPre;
+    int sSuf;
+    int sFamily;
+    int sScale;
+    byte[32] tCovId;
+    byte[32] tTplHash;
+    int tPre;
+    int tSuf;
+    int tFamily;
+    byte[32] tExt;
+    int tScale;
+    int minFill;
+    int tip;
+    int activeFrom;
+    int expiryDaa;
+    int refundTip;
+    int deliveryCarrier;
+    int tpPrice;
+    int slipBps;
+    int trailStep;
+    int trailGap;
+    int trailWait;
+    int minTouch;
+    int minRestDaa;
+    int bandDaa;
+    int keeperTip;
+    int stopPrice;
+    int armed;
+    int amountLeft;
+    int custody;
+    byte[32] parent;
+    int rptPrice;
+    int rptPre;
+    int rptUntil;
+}
+
+state KobIfdPairState {
+    pubkey maker;
+    int side;
+    byte[32] aCovId;
+    byte[32] aTplHash;
+    int aPre;
+    int aSuf;
+    int aFamily;
+    int aScale;
+    byte[32] aExt;
+    byte[32] bCovId;
+    byte[32] bTplHash;
+    int bPre;
+    int bSuf;
+    int bFamily;
+    int bScale;
+    byte[32] bExt;
+    int price;
+    int prefund;
+    int tip;
+    int activeFrom;
+    int expiryDaa;
+    int refundTip;
+    int deliveryCarrier;
+    int exitCarrier;
+    int minFill;
+    int entryStop;
+    int bandDaa;
+    int minTouch;
+    int minRestDaa;
+    int keeperTip;
+    int armed;
+    int amountLeft;
+    int custody;
+    int rptAmount;
+    byte[432] exitState;
+}
+
+// ---------------------------------------------------------------- limit orders
+
+actor KobAsk owns KobAskState {
+    // Fill n base units (nb = n, 8-byte LE), or refund (n == 0). A GTC rest continues with amountLeft - n;
+    // a sold-out, IOC or FOK fill ends the order (no continuation).
+    entry settle(byte[8] nb, int tokenIn, int tokOut, int t) emits {
+        next: KobAsk[0..=1],
+    } {
+        KobAskState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobAsk[](cont);
+    }
+
+    entry cancel(sig s) emits none {
+        require(checkSig(s, maker));
+    }
+}
+
+actor KobBid owns KobBidState {
+    entry fill(byte[8] nb, int tokenTplIn, int t) emits {
+        next: KobBid[0..=1],
+    } {
+        KobBidState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobBid[](cont);
+    }
+
+    entry cancel(sig s) emits none {
+        require(checkSig(s, maker));
+    }
+
+    entry refund() emits none {
+        require(true);
+    }
+}
+
+// ---------------------------------------------------------------- pair orders (token A / token B)
+
+actor KobPair owns KobPairState {
+    // Fill n base units of A (nb = n, 8-byte LE): an ask releases n of A and receives at least ceil(n * price(t) /
+    // scale(A)) of B, a bid pays exactly floor(n * price(t) / scale(A)) of B from its escrow and receives n of A (tOut, at
+    // output i); or refund (n == 0). The order enforces only its own terms: any counterparty settles it (the KAS books of
+    // both tokens, opposite pair orders, inventory). A GTC rest continues with amountLeft - n and the custody rest; a
+    // sold-out, IOC or FOK fill ends the order (no continuation).
+    entry settle(byte[8] nb, int custIn, int tTplIn, int t, int sOut, int tOut) emits {
+        next: KobPair[0..=1],
+    } {
+        KobPairState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobPair[](cont);
+    }
+
+    entry cancel(sig s) emits none {
+        require(checkSig(s, maker));
+    }
+}
+
+actor KobCondPair owns KobCondPairState {
+    // Fill (nb > 0, upd 0) on the take-profit / limit leg 0 or the stop leg 1 (an unarmed stop arms in the fill from the
+    // trigger evidence evA, evB, tk, evMode: two filled KAS-book orders of A and B, or a filled resting KobPair); refund
+    // (nb == 0, upd 0); update (nb == 0, upd 1: arm with k == 0, trail by k steps). A booked exit's take-profit re-arms its
+    // KobIfdPair entry, spent in the same transaction.
+    entry settle(byte[8] nb, int custIn, int tTplIn, int t, int sOut, int tOut, int leg, int evA, int evB, int tk, int evMode,
+                 int upd, int k) emits {
+        next: KobCondPair[0..=1],
+    } {
+        KobCondPairState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobCondPair[](cont);
+    }
+
+    entry cancel(sig s) emits none {
+        require(checkSig(s, maker));
+    }
+}
+
+actor KobIfdPair owns KobIfdPairState {
+    // Fill (nb > 0), merge (nb < 0: re-arm the take-profit fill of a booked exit), refund (nb == 0, upd 0) or update (nb ==
+    // 0, upd 1: arm a stop entry). Every fill creates its exit, a fresh KobCondPair genesis covenant (not an emit). A
+    // repeating entry keeps its covenant across fills (armed, amountLeft, custody and rptAmount change).
+    entry fill(byte[8] nb, int aIn, int bIn, int aTplIn, int bTplIn, int exitOut, int amt, byte[] cPre, byte[] cSuf,
+               int evA, int evB, int tk, int evMode, int t, int aOut, int bOut, int xc, int upd) emits {
+        next: KobIfdPair[0..=1],
+    } {
+        KobIfdPairState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobIfdPair[](cont);
+    }
+
+    entry cancel(sig s) emits none {
+        require(checkSig(s, maker));
+    }
+}
+
+// ---------------------------------------------------------------- conditional orders
+
+actor KobCondAsk owns KobCondAskState {
+    entry settle(byte[8] nb, int tokenIn, int tokOut, int leg, int ev, int tk, int t) emits {
+        next: KobCondAsk[0..=1],
+    } {
+        KobCondAskState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobCondAsk[](cont);
+    }
+
+    entry update(int ev, int tk) emits {
+        next: KobCondAsk[1..=1],
+    } {
+        KobCondAskState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobCondAsk[](cont);
+    }
+
+    entry cancel(sig s) emits none {
+        require(checkSig(s, maker));
+    }
+}
+
+actor KobCondBid owns KobCondBidState {
+    entry settle(byte[8] nb, int tokenTplIn, int leg, int ev, int t) emits {
+        next: KobCondBid[0..=1],
+    } {
+        KobCondBidState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobCondBid[](cont);
+    }
+
+    entry update(int ev, int tk) emits {
+        next: KobCondBid[1..=1],
+    } {
+        KobCondBidState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobCondBid[](cont);
+    }
+
+    entry cancel(sig s) emits none {
+        require(checkSig(s, maker));
+    }
+
+    entry refund() emits none {
+        require(true);
+    }
+}
+
+// ---------------------------------------------------------------- if-done orders
+
+actor KobIfdAsk owns KobIfdAskState {
+    // The exit KobCondBid is a fresh genesis covenant (not an emit). A repeating entry keeps its
+    // covenant across fills (armed, amountLeft and rptAmount change) until `close`.
+    entry settle(byte[8] nb, int tokenIn, int tokOut, int exitOut, byte[] cPre, byte[] cSuf, int ev, int tk, int t) emits {
+        next: KobIfdAsk[0..=1],
+    } {
+        KobIfdAskState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobIfdAsk[](cont);
+    }
+
+    entry close() emits none {
+        require(true);
+    }
+
+    // Arms a stop entry; the continuation differs only in `armed`. Requires amountLeft > 0 and entryStop >= price.
+    entry update(int ev, int tk) emits {
+        next: KobIfdAsk[1..=1],
+    } {
+        KobIfdAskState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobIfdAsk[](cont);
+    }
+
+    entry cancel(sig s) emits none {
+        require(checkSig(s, maker));
+    }
+}
+
+actor KobIfdBid owns KobIfdBidState {
+    // The exit KobCondAsk is a fresh genesis covenant (not an emit).
+    entry fill(byte[8] nb, int tokenTplIn, int exitOut, byte[] cPre, byte[] cSuf, int ev, int t) emits {
+        next: KobIfdBid[0..=1],
+    } {
+        KobIfdBidState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobIfdBid[](cont);
+    }
+
+    // Arms a stop entry; the continuation differs only in `armed`. Requires amountLeft > 0 and entryStop <= price.
+    entry update(int ev) emits {
+        next: KobIfdBid[1..=1],
+    } {
+        KobIfdBidState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobIfdBid[](cont);
+    }
+
+    entry cancel(sig s) emits none {
+        require(checkSig(s, maker));
+    }
+
+    entry refund() emits none {
+        require(true);
+    }
+}
+
+app KOBOrders {
+    actor KobAsk;
+    actor KobBid;
+    actor KobCondAsk;
+    actor KobCondBid;
+    actor KobIfdAsk;
+    actor KobIfdBid;
+    actor KobPair;
+    actor KobCondPair;
+    actor KobIfdPair;
+}

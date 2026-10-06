@@ -1,0 +1,88 @@
+use kaspa_txscript::script_builder::ScriptBuilderError;
+use thiserror::Error;
+
+pub use crate::diagnostic::{ErrorSpan, ParseDiagnostic, ParseDiagnosticLabel, ParseDisplayLocation, ParseErrorInterpretation};
+use crate::span;
+
+#[derive(Debug, Error)]
+pub enum CompilerError {
+    #[error("parse error: {0}")]
+    Parse(#[from] ParseDiagnostic),
+    #[error("unsupported feature: {0}")]
+    Unsupported(String),
+    #[error("expression is not a compile-time integer: {0}")]
+    NonConstantInteger(String),
+    #[error("expression requires runtime evaluation")]
+    RuntimeEvaluationRequired,
+    #[error("type mismatch")]
+    TypeMismatch,
+    #[error("size mismatch")]
+    SizeMismatch,
+    #[error("invalid literal: {0}")]
+    InvalidLiteral(String),
+    #[error("arithmetic overflow: {0}")]
+    ArithmeticOverflow(String),
+    #[error("undefined identifier: {0}")]
+    UndefinedIdentifier(String),
+    #[error("cyclic identifier reference: {0}")]
+    CyclicIdentifier(String),
+    #[error("script build error: {0}")]
+    ScriptBuild(#[from] ScriptBuilderError),
+    #[error("entrypoint parameter type is non-canonical in: {function}.{param}")]
+    NonCanonicalEntrypointParameter { function: String, param: String },
+    #[error("entrypoint dispatch tag collision between {f1} and {f2}")]
+    EntrypointDispatchTagCollision { f1: String, f2: String },
+    #[error("compiled script is {actual} bytes, exceeding the txscript limit of {maximum}")]
+    BytecodeTooLarge { actual: usize, maximum: usize },
+    #[error("compiled script contains {actual} counted opcodes, exceeding the txscript limit of {maximum}")]
+    BytecodeTooManyOperations { actual: usize, maximum: usize },
+    #[error("cannot validate compiled bytecode limits: {0}")]
+    BytecodeLimitAnalysis(String),
+    #[error("compiled redeem script is {actual} bytes, exceeding the {maximum}-byte signature-script limit")]
+    RedeemScriptTooLarge { actual: usize, maximum: usize },
+    #[error("entrypoint '{function}' requires {actual} stack items during dispatch, exceeding the consensus limit of {maximum}")]
+    EntrypointStackTooLarge { function: String, actual: usize, maximum: usize },
+    #[error("variable '{variable}' requires {actual} live stack bindings, exceeding the consensus limit of {maximum}")]
+    VariableStackTooLarge { variable: String, actual: usize, maximum: usize },
+    #[error(
+        "entrypoint '{function}' reaches {actual} combined stack items at bytecode fragment offset {offset}, exceeding the consensus limit of {maximum}"
+    )]
+    BytecodeStackTooLarge { function: String, offset: usize, actual: usize, maximum: usize },
+    #[error("cannot verify stack usage for entrypoint '{function}' at bytecode fragment offset {offset}: {message}")]
+    BytecodeStackAnalysis { function: String, offset: usize, message: String },
+    #[error(
+        "entrypoint '{function}' has a conservative signature-script size estimate of {estimated} bytes, exceeding the consensus limit of {maximum}"
+    )]
+    EntrypointSignatureScriptTooLarge { function: String, estimated: usize, maximum: usize },
+    // QUESTION: not entierly sure about this pattern
+    #[error("{source}")]
+    Context {
+        #[source]
+        source: Box<CompilerError>,
+        span: ErrorSpan,
+    },
+}
+
+impl CompilerError {
+    pub fn root(&self) -> &CompilerError {
+        let mut current = self;
+        while let Self::Context { source, .. } = current {
+            current = source;
+        }
+        current
+    }
+
+    pub fn span(&self) -> Option<ErrorSpan> {
+        match self {
+            Self::Context { span, .. } => Some(*span),
+            _ => None,
+        }
+    }
+
+    pub fn with_span(self, span: &span::Span<'_>) -> Self {
+        if self.span().is_some() || matches!(self.root(), Self::Parse(_)) {
+            return self;
+        }
+        Self::Context { source: Box::new(self), span: ErrorSpan { start: span.start(), end: span.end() } }
+    }
+}

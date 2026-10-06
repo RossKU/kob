@@ -1,0 +1,12 @@
+node_modules/
+dist/
+vendor/
+wasm/
+test-results/
+playwright-report/
+e2e-real/out/
+e2e-real/.browser-profiles/
+e2e-real/.env
+*.log
+e2e-real/.ext/
+dist-real/

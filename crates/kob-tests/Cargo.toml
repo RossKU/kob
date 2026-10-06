@@ -1,0 +1,22 @@
+[package]
+name = "kob-tests"
+description = "Engine-level integration tests: KOB contracts executed in the rusty-kaspa script engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+kob-protocol = { path = "../kob-protocol", features = ["adversarial"] }
+kaspa-consensus-core.workspace = true
+kaspa-txscript.workspace = true
+kaspa-txscript-errors.workspace = true
+rand.workspace = true
+secp256k1.workspace = true
+serde_json.workspace = true
+silverscript-abi.workspace = true
+silverscript-lang.workspace = true
+blake3.workspace = true
+sha2 = "0.10"

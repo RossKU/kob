@@ -1,0 +1,73 @@
+// Third-party example, CLOSED ICC (inter-covenant composition): an app that imports the published
+// KOBOrders artifact (docs/argent.md, "Importing KOBOrders").
+//
+// `PriceGate` is a KAS lock that can be spent only in a transaction where a KOB ask is partially
+// filled and quotes at most `max_price` sompi per whole token. A partial fill continues with
+// `amountLeft - n` (n > 0 base units taken, every other field unchanged); a refund or cancel leaves no
+// continuation. The gate therefore pins exactly that next state (a gate that required an unchanged
+// continuation could never be spent).
+//
+// The ask is named by the imported handle KOBOrders::KobAsk: argentc links the published template
+// hash as a constant, records the KOBOrders artifact id and the interface fingerprint in this app's
+// artifact, and reads the ask's state with the published KobAskState layout.
+//
+// The import PINS the artifact id (`id "..."`, argent/patches/0002): argentc refuses an artifact with
+// any other id, and one without a pin, because a forged artifact with the same app name and ABI is
+// self-consistent too. Pin the id you reviewed (`sil2argent verify`).
+//
+// Compiled by scripts/build-argent.sh so it cannot rot (generated SilverScript:
+// contracts/argent/examples-out/closed_icc_gate/); it is not a KOB contract.
+
+import "../KOBOrders/artifact.json" id "e4fc3d3a51722f63a46df0840dc8b7ce173dfb9be9ede978678e7ed1f4acc940";
+
+state PriceGateState {
+    pubkey owner;
+    int max_price;
+}
+
+actor PriceGate owns PriceGateState {
+    entry spend(cov_id ask_covid, int n, sig s)
+    observes book by ask_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+            next: KOBOrders::KobAsk,
+        }
+    }
+    emits none {
+        require(book.inputs.ask.price <= max_price);
+        require(book.inputs.ask.tif == 0);
+        require(n > 0);
+        require(n < book.inputs.ask.amountLeft);
+        KobAskState next_a = KobAskState {
+            maker: book.inputs.ask.maker,
+            tokenCovId: book.inputs.ask.tokenCovId,
+            tokenTplHash: book.inputs.ask.tokenTplHash,
+            tplPrefixLen: book.inputs.ask.tplPrefixLen,
+            tplSuffixLen: book.inputs.ask.tplSuffixLen,
+            scale: book.inputs.ask.scale,
+            minFill: book.inputs.ask.minFill,
+            price: book.inputs.ask.price,
+            tip: book.inputs.ask.tip,
+            tif: book.inputs.ask.tif,
+            activeFrom: book.inputs.ask.activeFrom,
+            expiryDaa: book.inputs.ask.expiryDaa,
+            refundTip: book.inputs.ask.refundTip,
+            interval: book.inputs.ask.interval,
+            maxFill: book.inputs.ask.maxFill,
+            slope: book.inputs.ask.slope,
+            priceEnd: book.inputs.ask.priceEnd,
+            decayStep: book.inputs.ask.decayStep,
+            amountLeft: book.inputs.ask.amountLeft - n,
+        };
+        require book.outputs become {
+            next <- KOBOrders::KobAsk(next_a),
+        };
+        require(checkSig(s, owner));
+    }
+}
+
+app PriceGateApp {
+    actor PriceGate;
+}

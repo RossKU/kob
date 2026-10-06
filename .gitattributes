@@ -1,0 +1,3 @@
+* text=auto eol=lf
+*.hex -text
+*.bin binary

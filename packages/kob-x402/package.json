@@ -1,0 +1,22 @@
+{
+  "name": "@kob/x402",
+  "version": "0.1.0",
+  "private": true,
+  "license": "ISC",
+  "type": "module",
+  "description": "KOB x402 SDK: payer client, resource-server paywall and facilitator client for the Kaspa x402 exact binding (standard-native, KCC-20, swap-and-pay)",
+  "engines": { "node": ">=22" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "example:server": "node examples/paid-api/server.ts",
+    "example:client": "node examples/paid-api/client.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.0"
+  }
+}

@@ -1,0 +1,195 @@
+diff --git a/vendor/silverscript/silverscript-abi/src/lib.rs b/vendor/silverscript/silverscript-abi/src/lib.rs
+index 9ea7a7b..f6695b2 100644
+--- a/vendor/silverscript/silverscript-abi/src/lib.rs
++++ b/vendor/silverscript/silverscript-abi/src/lib.rs
+@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
+ 
+ use blake3::Hasher as Blake3Hasher;
+ use kaspa_txscript::{
+-    EngineFlags, deserialize_i64 as deserialize_script_i64,
++    deserialize_i64 as deserialize_script_i64,
+     opcodes::codes::{
+         Op0 as OP_0, Op1 as OP_1, Op1Negate as OP_1_NEGATE, Op16 as OP_16, OpData1 as OP_DATA_1, OpData75 as OP_DATA_75,
+         OpPushData1 as OP_PUSH_DATA_1, OpPushData2 as OP_PUSH_DATA_2, OpPushData4 as OP_PUSH_DATA_4,
+@@ -898,7 +898,7 @@ impl<'a> TypeContext<'a> {
+ }
+ 
+ fn script_builder() -> ScriptBuilder {
+-    ScriptBuilder::with_flags(EngineFlags { covenants_enabled: true, ..Default::default() })
++    ScriptBuilder::new()
+ }
+ 
+ fn push_sig_arg(
+@@ -1201,7 +1201,7 @@ fn serialize_fixed_i64(value: i64, size: usize) -> CodecResult<Vec<u8>> {
+ }
+ 
+ fn deserialize_fixed_i64(bytes: &[u8]) -> CodecResult<i64> {
+-    deserialize_script_i64(bytes, false).map_err(|err| CodecError::InvalidPush(err.to_string()))
++    deserialize_script_i64(bytes).map_err(|err| CodecError::InvalidPush(err.to_string()))
+ }
+ 
+ fn expect_int(value: &ArtifactValue) -> CodecResult<i64> {
+@@ -1306,7 +1306,7 @@ mod tests {
+ 
+     #[test]
+     fn abi_signature_script_limit_matches_consensus() {
+-        assert_eq!(MAX_SIGNATURE_SCRIPT_LEN, kaspa_consensus_core::config::params::MAINNET_PARAMS.new_max_signature_script_len);
++        assert_eq!(MAX_SIGNATURE_SCRIPT_LEN, kaspa_consensus_core::config::params::MAINNET_PARAMS.max_signature_script_len);
+     }
+ 
+     #[test]
+diff --git a/vendor/silverscript/silverscript-lang/src/compiler/compile.rs b/vendor/silverscript/silverscript-lang/src/compiler/compile.rs
+index 240d16f..b63983c 100644
+--- a/vendor/silverscript/silverscript-lang/src/compiler/compile.rs
++++ b/vendor/silverscript/silverscript-lang/src/compiler/compile.rs
+@@ -12,7 +12,7 @@ use kaspa_consensus_core::tx::PopulatedTransaction;
+ use kaspa_txscript::opcodes::codes::*;
+ use kaspa_txscript::script_builder::ScriptBuilder;
+ use kaspa_txscript::serialize_i64;
+-use kaspa_txscript::{EngineFlags, MAX_STACK_SIZE, NO_COST_OPCODE, max_ops_per_script, max_scripts_size, parse_script};
++use kaspa_txscript::{MAX_OPS_PER_SCRIPT, MAX_SCRIPTS_SIZE, MAX_STACK_SIZE, NO_COST_OPCODE, parse_script};
+ use std::collections::{BTreeMap, HashMap, HashSet};
+ 
+ mod analysis;
+@@ -35,7 +35,7 @@ pub(super) use state::{encoded_state_len_for_layout_field_types, encoded_type_ch
+ use statement::*;
+ 
+ fn script_builder() -> ScriptBuilder {
+-    ScriptBuilder::with_flags(EngineFlags { covenants_enabled: true, ..Default::default() })
++    ScriptBuilder::new()
+ }
+ 
+ pub(super) fn compile_contract_impl<'i>(
+@@ -169,9 +169,9 @@ fn validate_entrypoint_stack_limits(entrypoints: &[&FunctionAst<'_>], state_fiel
+ }
+ 
+ fn validate_txscript_bytecode_limits(bytecode: &[u8]) -> Result<(), CompilerError> {
+-    let maximum_operations = usize::try_from(max_ops_per_script(true))
+-        .map_err(|_| CompilerError::BytecodeLimitAnalysis("negative opcode limit".to_string()))?;
+-    validate_txscript_bytecode_limits_with(bytecode, max_scripts_size(true), maximum_operations)
++    let maximum_operations =
++        usize::try_from(MAX_OPS_PER_SCRIPT).map_err(|_| CompilerError::BytecodeLimitAnalysis("negative opcode limit".to_string()))?;
++    validate_txscript_bytecode_limits_with(bytecode, MAX_SCRIPTS_SIZE, maximum_operations)
+ }
+ 
+ fn validate_txscript_bytecode_limits_with(
+@@ -200,7 +200,7 @@ fn validate_signature_script_limits<'i>(
+     entrypoints: &[&FunctionAst<'i>],
+     constants: &HashMap<String, Expr<'i>>,
+ ) -> Result<(), CompilerError> {
+-    let max_signature_script_len = MAINNET_PARAMS.new_max_signature_script_len;
++    let max_signature_script_len = MAINNET_PARAMS.max_signature_script_len;
+     if bytecode.len() > max_signature_script_len {
+         return Err(CompilerError::RedeemScriptTooLarge { actual: bytecode.len(), maximum: max_signature_script_len });
+     }
+diff --git a/vendor/silverscript/silverscript-lang/src/compiler/compile/expression.rs b/vendor/silverscript/silverscript-lang/src/compiler/compile/expression.rs
+index a4c3f70..2ddab1b 100644
+--- a/vendor/silverscript/silverscript-lang/src/compiler/compile/expression.rs
++++ b/vendor/silverscript/silverscript-lang/src/compiler/compile/expression.rs
+@@ -4,7 +4,7 @@ use super::*;
+ use crate::compiler::builtin_types::constructor_parameters;
+ use kaspa_txscript::opcodes::{OP_DATA_MAX_VAL, OP_DATA_MIN_VAL};
+ use kaspa_txscript::script_builder::ScriptBuilderError;
+-use kaspa_txscript::{max_script_element_size, max_scripts_size};
++use kaspa_txscript::{MAX_SCRIPT_ELEMENT_SIZE, MAX_SCRIPTS_SIZE};
+ 
+ mod builtin;
+ 
+@@ -728,11 +728,11 @@ fn explicit_push_encoded_size(data_len: usize) -> Result<usize, CompilerError> {
+ pub(super) fn data_prefix(data_len: usize) -> Result<Vec<u8>, CompilerError> {
+     let encoded_size = explicit_push_encoded_size(data_len)?;
+     // Match the covenant-enabled script builder's validation order without allocating the payload.
+-    let script_limit = max_scripts_size(true);
++    let script_limit = MAX_SCRIPTS_SIZE;
+     if encoded_size > script_limit {
+         return Err(ScriptBuilderError::DataRejected(encoded_size, script_limit).into());
+     }
+-    let element_limit = max_script_element_size(true);
++    let element_limit = MAX_SCRIPT_ELEMENT_SIZE;
+     if data_len > element_limit {
+         return Err(ScriptBuilderError::ElementExceedsMaxSize(data_len, element_limit).into());
+     }
+@@ -756,7 +756,7 @@ mod tests {
+ 
+     #[test]
+     fn data_prefix_matches_builder_encoding_and_size_errors() {
+-        let limit = max_scripts_size(true);
++        let limit = MAX_SCRIPTS_SIZE;
+         for data_len in [0, 1, 74, 75, 76, 254, 255, 256, 65534, 65535, 65536, limit - 5, limit - 4, limit, limit + 1] {
+             let mut builder = script_builder();
+             let data = vec![0; data_len];
+diff --git a/vendor/silverscript/silverscript-lang/src/compiler/compile/stack_analysis.rs b/vendor/silverscript/silverscript-lang/src/compiler/compile/stack_analysis.rs
+index 4d3c60b..3eee130 100644
+--- a/vendor/silverscript/silverscript-lang/src/compiler/compile/stack_analysis.rs
++++ b/vendor/silverscript/silverscript-lang/src/compiler/compile/stack_analysis.rs
+@@ -372,7 +372,7 @@ mod tests {
+             &script,
+             &reused,
+             &cache,
+-            EngineFlags { covenants_enabled: true, ..Default::default() },
++            EngineFlags::default(),
+         )
+         .execute_and_return_stacks();
+         if fits {
+@@ -576,7 +576,7 @@ mod tests {
+                 &script,
+                 &reused,
+                 &cache,
+-                EngineFlags { covenants_enabled: true, ..Default::default() },
++                EngineFlags::default(),
+             )
+             .execute_and_return_stacks()
+             .unwrap();
+diff --git a/vendor/silverscript/silverscript-lang/src/compiler/compile/stack_analysis/stack.rs b/vendor/silverscript/silverscript-lang/src/compiler/compile/stack_analysis/stack.rs
+index c491252..1a1d23d 100644
+--- a/vendor/silverscript/silverscript-lang/src/compiler/compile/stack_analysis/stack.rs
++++ b/vendor/silverscript/silverscript-lang/src/compiler/compile/stack_analysis/stack.rs
+@@ -59,7 +59,7 @@ impl Stack {
+     /// Pop a known nonnegative integer used as a stack index or argument count.
+     pub(super) fn pop_count(&mut self, at: &Location<'_>) -> Result<usize, CompilerError> {
+         if let Value::Bytes(bytes) = self.pop(at)?
+-            && let Ok(number) = deserialize_i64(&bytes, false)
++            && let Ok(number) = deserialize_i64(&bytes)
+             && let Ok(count) = usize::try_from(number)
+         {
+             return Ok(count);
+diff --git a/vendor/silverscript/silverscript-lang/src/compiler/stack_bindings.rs b/vendor/silverscript/silverscript-lang/src/compiler/stack_bindings.rs
+index da2f9bb..7686f33 100644
+--- a/vendor/silverscript/silverscript-lang/src/compiler/stack_bindings.rs
++++ b/vendor/silverscript/silverscript-lang/src/compiler/stack_bindings.rs
+@@ -448,12 +448,12 @@ mod tests {
+             &script,
+             &reused_values,
+             &sig_cache,
+-            EngineFlags { covenants_enabled: true, ..Default::default() },
++            EngineFlags::default(),
+         )
+         .execute_and_return_stacks()
+         .expect("script executes");
+ 
+-        stacks.dstack.iter().map(|entry| deserialize_i64(entry, true).expect("stack entry decodes to int")).collect()
++        stacks.dstack.iter().map(|entry| deserialize_i64(entry).expect("stack entry decodes to int")).collect()
+     }
+ 
+     /// Executes local stack ops against a logical top-to-bottom test stack.
+diff --git a/vendor/silverscript/silverscript-lang/src/compiler/type_check.rs b/vendor/silverscript/silverscript-lang/src/compiler/type_check.rs
+index 2a0afa1..a9e74e2 100644
+--- a/vendor/silverscript/silverscript-lang/src/compiler/type_check.rs
++++ b/vendor/silverscript/silverscript-lang/src/compiler/type_check.rs
+@@ -1,6 +1,6 @@
+ use std::collections::HashMap;
+ 
+-use kaspa_txscript::{max_script_element_size, script_builder::ScriptBuilderError};
++use kaspa_txscript::{MAX_SCRIPT_ELEMENT_SIZE, script_builder::ScriptBuilderError};
+ 
+ use crate::ast::{
+     ArrayDim, BinaryOp, ContractFieldAst, Expr, ExprKind, FunctionAst, SplitPart, TypeBase, TypeRef, UnaryOp, UnarySuffixKind,
+@@ -157,7 +157,7 @@ pub(super) fn check_expr<'i>(
+     };
+ 
+     if let Some(actual_size) = fixed_type_size(&actual, ctx.constants)? {
+-        let maximum = max_script_element_size(true);
++        let maximum = MAX_SCRIPT_ELEMENT_SIZE;
+         if actual_size > maximum {
+             return Err(ScriptBuilderError::ElementExceedsMaxSize(actual_size, maximum).into());
+         }

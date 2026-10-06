@@ -1,0 +1,58 @@
+KOB (Kaspa Order Book)
+Copyright (c) 2026 RossKU. Licensed under the ISC License (see LICENSE).
+
+This repository contains, or builds on, the third-party material listed below. Each item keeps
+its own licence and copyright notice; where the material is stored in this repository, the
+licence text is next to it.
+
+Vendored source code
+--------------------
+
+* SilverScript v1.0.0 (compiler and ABI crates) -- vendor/silverscript/
+  Copyright 2026 Kaspa Developers. ISC License (vendor/silverscript/LICENSE).
+  KOB patches it for rusty-kaspa v2.1.0 (vendor/silverscript/UPSTREAM.md). Parts of SilverScript
+  (grammar, examples) are derived from the CashScript project, Copyright 2019 Rosco Kalis, used
+  under the MIT License (vendor/silverscript/CREDITS.md).
+
+* argent-artifact (Argent artifact data model) -- vendor/argent-artifact/
+  Copyright 2026 Argent-lang developers. ISC License (vendor/argent-artifact/LICENSE).
+  Also, argent/patches/ contains patches against the Argent compiler (argent-lang/argent, ISC),
+  applied to a separate checkout at build time (argent/UPSTREAM.md); the Argent sources are not
+  stored in this repository.
+
+Vendored data and token programs
+--------------------------------
+
+* KaspaCom KCC20 0.2.5 token program artifact -- contracts/third-party/kaspacom-kcc20/
+  Copyright KaspaCom. Apache License 2.0 (contracts/third-party/kaspacom-kcc20/LICENSE).
+  Vendored unmodified except for line endings (UPSTREAM.md there).
+
+* Reference KCC-20 token program (argent-lang/kcc20-reference, pull request #1) --
+  contracts/kcc20/, contracts/argent/kcc20_8x8.ag, tools/wallet-gate/contracts/ and derived
+  artifacts. Declared ISC in that repository's Cargo.toml (it had no LICENSE file at the
+  pinned commit). The files under contracts/kcc20/ carry a provenance header.
+
+* KCC-20 conformance vectors (kaspanet/kccs, kcc-0020/vectors/conformance.json) --
+  crates/kob-tests/vectors/kcc20/. CC0 1.0 Universal (PROVENANCE.md there).
+
+* Kaspa x402 binding conformance vectors (elldeeone/kaspa-x402, v1.0.0-rc.1) --
+  crates/kob-x402/vectors/kaspa-x402-rc1/. MIT License, Copyright (c) 2026 Kaspa x402
+  contributors (LICENSE and PROVENANCE.md there).
+
+* KRON token program templates -- contracts/adapters/kron/templates/*.bin.
+  Public on-chain programs of the KRON launchpad, pinned as byte strings so that tests can
+  compare against them (templates/README.md). KOB does not own or audit them.
+
+Dependencies that are not stored here
+-------------------------------------
+
+* rusty-kaspa v2.1.0 (ISC), a git dependency of the Rust workspace, and the kaspa-wasm SDK
+  built from the same release (fetched by web/scripts/fetch-sdk.mjs, not committed).
+
+* TradingView Lightweight Charts (Apache-2.0) is bundled into the web app. Its attribution
+  requirement is met in the app footer (web/src/ui/shell/Footer.tsx), see web/README.md:
+  "TradingView Lightweight Charts(TM) Copyright (c) 2025 TradingView, Inc.
+  https://www.tradingview.com/"
+
+* Other npm and crates.io dependencies keep their own licences; see their package metadata and
+  Cargo.lock / package-lock.json.

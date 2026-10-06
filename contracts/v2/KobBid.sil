@@ -1,0 +1,247 @@
+pragma silverscript ^0.1.0;
+
+// KobBid: limit buy of a KCC-20 token, paid in plain KAS (protocol v3, no lots). The base buy order: the
+// conditional, if-done and cross contracts refer to it and to KobAsk for the stray guard,
+// positional rules, IOC/FOK, the price formulas and the rounding rule (KobAsk header).
+// KRON twin: adapters/kron/v2/KobBidKron.sil.
+//
+// Entries:
+//   fill(nb, tokenTplIn, t)  anyone, once tx.daa >= activeFrom: buy n = int(nb) base units; tokenTplIn is
+//                            any input of this token, used only as the source of the token
+//                            template bytes (hash-checked); t: rising-bid time (proven by CLTV).
+//                            n is a fixed 8-byte push and the FIRST argument: a conditional order that
+//                            uses this fill as trigger evidence reads it at sigscript[1..9)
+//                            (sigscript[0] is the push opcode; KobCondBid.touch).
+//   cancel(sig)              maker only, SIGHASH_ALL
+//   refund()                 anyone, once DAA >= min(expiryDaa, UTXO DAA + 90 days, IOC/FOK kill);
+//                            the whole UTXO returns to the maker at output i
+//
+// State: all per-order values are state and never change; a partial fill continues with the
+// byte-identical script (this.activeScriptPubKey). The escrowed KAS value is the only thing that
+// shrinks.
+//
+// Key invariants:
+//  - All-in price: quote `price` (sompi per whole token, scale base units) plus an optional priority tip
+//    `tip` (sompi per whole token, >= 0); n base units never cost the maker more than
+//        spend(n) = floor(n * (price(t) + tip) / scale)
+//    (rounded down: the maker's favour); anything the counterparty accepts below that (crossing spread +
+//    tip) is the matcher's.
+//  - Quantity is encoded in the escrowed value at the budget rate pMax + tip (pMax = price, or for a rising
+//    bid its cap priceEnd): a fill of n base units consumes exactly used(n) = ceil(n * (pMax + tip) / scale) of
+//    budget (rounded up, so split fills never buy more than the escrow funds) and the continuation must hold
+//    exactly the rest, so the bid never buys more than it was funded for. The difference used(n) - spend(n)
+//    (a rising bid's headroom and the rounding) rides on the delivery: the maker's.
+//  - Minimum fill: n >= minFill unless the fill leaves less buying power than one minimum fill (the bid
+//    terminates). Every fill puts deliveryCarrier of the escrow on its delivery, so the minimum bounds the
+//    number of deliveries (and carriers) a filler can force on the maker.
+//  - Rising bid (slope != 0; Dutch buy / auction):
+//        price(t) = min(priceEnd, price + slope * floor((t - origin) / decayStep))
+//    origin = activeFrom or, for a DCA, the opening of the current slice (UTXO DAA + interval) when
+//    later. t is proven by CLTV (tx.daa >= t); understating t only lowers the bid, so it is
+//    self-defeating. A market buy is an IOC auction from the touch up to its slippage bound.
+//  - DCA: interval > 0 needs this UTXO to be >= interval DAA old (CSV); maxFill > 0 caps n per fill.
+//  - IOC / FOK (tif 1 / 2): refundable by anyone IOC_LIFE DAA after the order became fillable
+//    (max(UTXO DAA, activeFrom)), or at expiryDaa if earlier (kill rationale: see KobAsk). A fill
+//    terminates an IOC/FOK order; FOK must leave less buying power than one minimum fill; only GTC/GTD
+//    continues.
+//  - Positional rule: the tokens bought by the order spent at input i are delivered in output i, as
+//    a genuine KCC-20 UTXO owned by the maker (owner_scheme 0x00 p2pk-schnorr/v1, borrow disabled,
+//    pinned extensionCommitment). Without a continuation, everything not spent rides on that
+//    delivery's KAS value.
+//  - Strays: a bid owns no tokens. A token UTXO sent to this covenant id would be authorised by any
+//    spend of this input, so fill refuses every transaction carrying a token input owned by this id
+//    (noStrays, bounded scan, at most MAX_TOK_IN token inputs) and refund refuses any token input at
+//    all. Only the maker's cancel can move such strays.
+contract KobBid(
+    pubkey init_maker,
+    byte[32] init_tokenCovId,
+    byte[32] init_tokenTplHash,
+    int init_tplPrefixLen,
+    int init_tplSuffixLen,
+    byte[32] init_extensionCommitment,
+    int init_scale,
+    int init_minFill,
+    int init_price,
+    int init_tip,
+    int init_tif,
+    int init_activeFrom,
+    int init_expiryDaa,
+    int init_refundTip,
+    int init_reserve,
+    int init_deliveryCarrier,
+    int init_interval,
+    int init_maxFill,
+    int init_slope,
+    int init_priceEnd,
+    int init_decayStep
+) {
+    pubkey maker = init_maker;
+    byte[32] tokenCovId = init_tokenCovId;
+    byte[32] tokenTplHash = init_tokenTplHash;
+    int tplPrefixLen = init_tplPrefixLen;
+    int tplSuffixLen = init_tplSuffixLen;
+    byte[32] extensionCommitment = init_extensionCommitment; // pinned token sub-type
+    int scale = init_scale;                  // base units per whole token (10^decimals, > 0): the price denominator
+    int minFill = init_minFill;              // smallest fill in base units (> 0) unless it ends the bid
+    int price = init_price;                  // quote, sompi per whole token (start price if rising)
+    int tip = init_tip;                      // optional priority tip, sompi per whole token (>= 0)
+    int tif = init_tif;                      // 0 GTC/GTD, 1 IOC, 2 FOK
+    int activeFrom = init_activeFrom;
+    int expiryDaa = init_expiryDaa;
+    int refundTip = init_refundTip;
+    int reserve = init_reserve;              // KAS never spent on fills
+    int deliveryCarrier = init_deliveryCarrier; // KAS the bid puts on each delivered token UTXO
+    int interval = init_interval;            // DCA: min DAA between fills (0 = off)
+    int maxFill = init_maxFill;              // DCA: max base units per fill (0 = off)
+    int slope = init_slope;                  // rising bid: sompi per whole token per decayStep DAA (0 = off)
+    int priceEnd = init_priceEnd;            // rising cap
+    int decayStep = init_decayStep;          // DAA per price step (> 0 when rising)
+
+    struct KCC20State {
+        int amount;
+        byte[32] owner;
+        byte owner_scheme;
+        byte borrow_scheme;
+        byte[32] borrow_guard;
+        byte[32] extension_commitment;
+    }
+
+    byte constant SIGHASH_ALL = 0x01;
+    int constant TIF_GTC = 0;
+    int constant TIF_FOK = 2;
+    int constant MAX_IDLE = 77760000;
+    int constant IOC_LIFE = 600;
+    // Most token inputs a fill may carry (the KCC-20 limit, 8 in / 8 out). The scan over these
+    // slots is unrolled by hand (one line per slot): raising the cap needs as many lines.
+    int constant MAX_TOK_IN = 8;
+
+    // Quote value of n base units at rate r, rounded down (c = 0) or up (c = scale - 1): see KobAsk.quoteOf.
+    function quoteOf(int n, int r, int c) : int {
+        int m = n % scale;
+        int q = n / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    // Stray guard (owner offset as in KobAsk.noStrays): a bid owns no tokens, so no token input of
+    // the transaction may be owned by its covenant id (KCC-20 would authorise it through this
+    // input). Unrolled by hand over MAX_TOK_IN slots (one line per token input k < cnt).
+    function noStrays(byte[32] me) {
+        int cnt = OpCovInputCount(tokenCovId);
+        require(cnt <= MAX_TOK_IN);
+        int off = 10 - 112 - tplSuffixLen;
+        if (cnt > 0) { int x0 = OpCovInputIdx(tokenCovId, 0); int e0 = OpTxInputScriptSigLen(x0) + off; require(byte[32](OpTxInputScriptSigSubstr(x0, e0, e0 + 32)) != me); }
+        if (cnt > 1) { int x1 = OpCovInputIdx(tokenCovId, 1); int e1 = OpTxInputScriptSigLen(x1) + off; require(byte[32](OpTxInputScriptSigSubstr(x1, e1, e1 + 32)) != me); }
+        if (cnt > 2) { int x2 = OpCovInputIdx(tokenCovId, 2); int e2 = OpTxInputScriptSigLen(x2) + off; require(byte[32](OpTxInputScriptSigSubstr(x2, e2, e2 + 32)) != me); }
+        if (cnt > 3) { int x3 = OpCovInputIdx(tokenCovId, 3); int e3 = OpTxInputScriptSigLen(x3) + off; require(byte[32](OpTxInputScriptSigSubstr(x3, e3, e3 + 32)) != me); }
+        if (cnt > 4) { int x4 = OpCovInputIdx(tokenCovId, 4); int e4 = OpTxInputScriptSigLen(x4) + off; require(byte[32](OpTxInputScriptSigSubstr(x4, e4, e4 + 32)) != me); }
+        if (cnt > 5) { int x5 = OpCovInputIdx(tokenCovId, 5); int e5 = OpTxInputScriptSigLen(x5) + off; require(byte[32](OpTxInputScriptSigSubstr(x5, e5, e5 + 32)) != me); }
+        if (cnt > 6) { int x6 = OpCovInputIdx(tokenCovId, 6); int e6 = OpTxInputScriptSigLen(x6) + off; require(byte[32](OpTxInputScriptSigSubstr(x6, e6, e6 + 32)) != me); }
+        if (cnt > 7) { int x7 = OpCovInputIdx(tokenCovId, 7); int e7 = OpTxInputScriptSigLen(x7) + off; require(byte[32](OpTxInputScriptSigSubstr(x7, e7, e7 + 32)) != me); }
+    }
+
+    entry fill(byte[8] nb, int tokenTplIn, int t) {
+        int n = int(nb);
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        noStrays(selfId);
+        require(tx.daa >= activeFrom);
+
+        require(n > 0);
+        require(scale > 0);
+        require(tip >= 0);
+        require(reserve >= 0);
+        require(deliveryCarrier >= 0);
+        if (interval > 0) {
+            require(this.ageDaa >= interval);
+        }
+        require(maxFill == 0 || n <= maxFill);
+        int p = price;
+        int pMax = price;
+        if (slope != 0) {
+            require(slope > 0);
+            require(decayStep > 0);
+            int origin = activeFrom;
+            if (interval > 0) {
+                int slice = OpTxInputDaaScore(self) + interval;
+                if (slice > origin) { origin = slice; }
+            }
+            require(tx.daa >= t);
+            require(t >= origin);
+            p = price + slope * ((t - origin) / decayStep);
+            if (p > priceEnd) { p = priceEnd; }
+            if (priceEnd > price) { pMax = priceEnd; }
+        }
+        // budget used (rounded up) and the most the maker pays (rounded down), see the header
+        int used = quoteOf(n, pMax + tip, scale - 1);
+        int allIn = quoteOf(n, p + tip, 0);
+        int inValue = tx.inputs[self].value;
+        int left = inValue - used;
+        require(left >= reserve);
+
+        // Delivery: output i is a genuine KCC-20 UTXO with exactly n base units owned by the maker. Hand-written
+        // validateOutputStateWithInputTemplate(self, KCC20State { amount: n, owner: maker,
+        // owner_scheme: SCHEME_P2PK, borrow_scheme: BORROW_DISABLED, borrow_guard: ZERO32, extension_commitment:
+        // extensionCommitment }, tokenTplIn, ...): the template prefix and suffix are read from the end of
+        // tokenTplIn's sigscript and hash-checked against tokenTplHash; the state is the struct's canonical
+        // push encoding (0x08 amount 0x20 owner 0x01 scheme 0x01 borrow 0x20 guard 0x20 ext), the zero
+        // guard written as four 8-byte zero conversions (ZERO32 itself is not referenced).
+        require(OpInputCovenantId(tokenTplIn) == tokenCovId);
+        int tbase = OpTxInputScriptSigLen(tokenTplIn) - (tplPrefixLen + 112 + tplSuffixLen);
+        byte[] tpre = OpTxInputScriptSigSubstr(tokenTplIn, tbase, tbase + tplPrefixLen);
+        byte[] tsuf = OpTxInputScriptSigSubstr(tokenTplIn, tbase + tplPrefixLen + 112, tbase + tplPrefixLen + 112 + tplSuffixLen);
+        require(blake3(byte[](tplPrefixLen as byte[8]) + tpre + byte[](tplSuffixLen as byte[8]) + tsuf) == tokenTplHash);
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            tpre + byte[](0x08) + byte[](nb) + byte[](0x20) + byte[](maker)
+                + byte[](0x0100010020) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])
+                + byte[](0x20) + extensionCommitment + tsuf
+        )));
+        require(OpOutputCovenantId(self) == tokenCovId);
+
+        // buying power for one more minimum fill (minFill >= 1)
+        require(minFill > 0);
+        bool canContinue = left - deliveryCarrier - reserve >= quoteOf(minFill, pMax + tip, scale - 1);
+        require(n >= minFill || !canContinue);
+        if (tif == TIF_GTC && canContinue) {
+            // Buying power remains: the bid must continue with exactly the unused budget.
+            require(OpCovOutputCount(selfId) == 1);
+            int selfOut = OpCovOutputIdx(selfId, 0);
+            require(tx.outputs[selfOut].scriptPubKey == this.activeScriptPubKey);
+            require(tx.outputs[selfOut].value == left - deliveryCarrier);
+            require(tx.outputs[self].value >= deliveryCarrier + used - allIn);
+        } else {
+            // Exhausted, IOC or FOK: terminate; everything not spent rides on the delivery.
+            require(tif != TIF_FOK || !canContinue);
+            require(OpCovOutputCount(selfId) == 0);
+            require(tx.outputs[self].value >= inValue - allIn);
+        }
+    }
+
+    entry cancel(sig s) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, maker));
+    }
+
+    entry refund() {
+        int self = this.activeInputIndex;
+        int utxoDaa = OpTxInputDaaScore(self);
+        int idleEnd = utxoDaa + MAX_IDLE;
+        if (tif != TIF_GTC) {
+            int kill = utxoDaa;
+            if (activeFrom > kill) { kill = activeFrom; }
+            kill = kill + IOC_LIFE;
+            if (kill < idleEnd) { idleEnd = kill; }
+        }
+        if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
+        require(tx.daa >= idleEnd);
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+        require(OpCovInputCount(tokenCovId) == 0);  // strays owned by this id stay put
+        require(OpCovOutputCount(selfId) == 0);
+        require(refundTip >= 0);
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
+        require(tx.outputs[self].value + refundTip >= tx.inputs[self].value);
+    }
+}

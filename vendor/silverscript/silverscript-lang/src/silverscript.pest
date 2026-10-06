@@ -1,0 +1,204 @@
+source_file = { SOI ~ pragma_directive? ~ contract_definition ~ EOI }
+function_source = { SOI ~ function_definition ~ EOI }
+statement_source = { SOI ~ statement ~ EOI }
+
+pragma_directive = { "pragma" ~ pragma_name ~ pragma_value ~ ";" }
+pragma_name = { "silverscript" }
+pragma_value = @{ (!";" ~ ANY)+ }
+
+contract_definition = { "contract" ~ Identifier ~ parameter_list ~ "{" ~ contract_item* ~ "}" }
+contract_item = { struct_definition | constant_definition | contract_field_definition | function_definition }
+struct_definition = { "struct" ~ Identifier ~ "{" ~ struct_field_definition* ~ "}" }
+struct_field_definition = { type_name ~ Identifier ~ ";" }
+entry = { "entry" }
+function_definition = { function_attribute* ~ (entry | "function") ~ Identifier ~ parameter_list ~ return_type_list? ~ "{" ~ statement* ~ "}" }
+function_attribute = { "#[" ~ attribute_path ~ attribute_args? ~ "]" }
+attribute_path = { Identifier ~ ("." ~ Identifier)* }
+attribute_args = { "(" ~ (attribute_arg ~ ("," ~ attribute_arg)* ~ ","?)? ~ ")" }
+attribute_arg = { Identifier ~ "=" ~ expression }
+
+constant_definition = { type_name ~ "constant" ~ Identifier ~ "=" ~ expression ~ ";" }
+contract_field_definition = { type_name ~ Identifier ~ "=" ~ expression ~ ";" }
+
+parameter_list = { "(" ~ (parameter ~ ("," ~ parameter)* ~ ","?)? ~ ")" }
+parameter = { type_name ~ Identifier }
+return_type_list = { ":" ~ (type_name | "(" ~ (type_name ~ ("," ~ type_name)* ~ ","?)? ~ ")") }
+
+block = { braced_block | statement }
+braced_block = { "{" ~ statement* ~ "}" }
+
+statement = _{
+    variable_definition
+    | state_function_call_assignment
+    | struct_destructure_assignment
+    | function_call_assignment
+    | tuple_assignment
+    | call_statement
+    | return_statement
+    | assign_statement
+    | lock_requirement_statement
+    | require_statement
+    | if_statement
+    | for_statement
+    | braced_block
+    | console_statement
+}
+
+variable_definition = { type_name ~ modifier* ~ Identifier ~ ("=" ~ expression)? ~ ";" }
+tuple_assignment = { ("(" ~ type_name ~ Identifier ~ "," ~ type_name ~ Identifier ~ ","? ~ ")" | type_name ~ Identifier ~ "," ~ type_name ~ Identifier) ~ "=" ~ expression ~ ";" }
+function_call_assignment = { "(" ~ typed_binding ~ ("," ~ typed_binding)* ~ ","? ~ ")" ~ "=" ~ function_call ~ ";" }
+state_function_call_assignment = { Identifier ~ "{" ~ state_typed_binding ~ ("," ~ state_typed_binding)* ~ ","? ~ "}" ~ "=" ~ function_call ~ ";" }
+struct_destructure_assignment = { Identifier ~ "{" ~ state_typed_binding ~ ("," ~ state_typed_binding)* ~ ","? ~ "}" ~ "=" ~ expression ~ ";" }
+typed_binding = { type_name ~ Identifier }
+state_typed_binding = { Identifier ~ ":" ~ type_name ~ Identifier }
+call_statement = { function_call ~ ";" }
+assign_statement = { Identifier ~ "=" ~ expression ~ ";" }
+return_statement = { "return" ~ (expression_list | expression) ~ ";" }
+
+lock_requirement_statement = { "require" ~ "(" ~ TxVar ~ ">=" ~ expression ~ ("," ~ require_message)? ~ ")" ~ ";" }
+require_statement = { "require" ~ "(" ~ expression ~ ("," ~ require_message)? ~ ")" ~ ";" }
+
+if_statement = { "if" ~ "(" ~ expression ~ ")" ~ block ~ ("else" ~ block)? }
+
+for_statement = { "for" ~ "(" ~ Identifier ~ "," ~ expression ~ "," ~ expression ~ "," ~ expression ~ ")" ~ block }
+
+console_statement = { "console.log" ~ console_parameter_list ~ ";" }
+require_message = { StringLiteral }
+
+console_parameter_list = { "(" ~ (expression ~ ("," ~ expression)* ~ ","?)? ~ ")" }
+
+function_call = { function_name ~ expression_list }
+function_name = { r0_groth16_verify_name | r0_succinct_verify_name | g16_verify_name | Identifier }
+r0_groth16_verify_name = { "r0.g16.verify" }
+r0_succinct_verify_name = {
+    "r0.succinct" ~ ("." ~ ("blake2b" | "poseidon2" | "sha256"))? ~ ".verify"
+}
+g16_verify_name = { "g16.verify" }
+expression_list = { "(" ~ (expression ~ ("," ~ expression)* ~ ","?)? ~ ")" }
+
+expression = _{ conditional }
+
+conditional = { logical_or ~ ("?" ~ expression ~ ":" ~ conditional)? }
+logical_or = { logical_and ~ (logical_or_op ~ logical_and)* }
+logical_and = { bit_or ~ (logical_and_op ~ bit_or)* }
+bit_or = { bit_xor ~ (bit_or_op ~ bit_xor)* }
+bit_xor = { bit_and ~ (bit_xor_op ~ bit_and)* }
+bit_and = { equality ~ (bit_and_op ~ equality)* }
+equality = { comparison ~ (equality_op ~ comparison)* }
+comparison = { term ~ (comparison_op ~ term)* }
+term = { factor ~ (term_op ~ factor)* }
+factor = { unary ~ (factor_op ~ unary)* }
+
+logical_or_op = { "||" }
+logical_and_op = { "&&" }
+bit_or_op = { "|" }
+bit_xor_op = { "^" }
+bit_and_op = { "&" }
+equality_op = { "==" | "!=" }
+comparison_op = { "<=" | "<" | ">=" | ">" }
+term_op = { "+" | "-" }
+factor_op = { "*" | "/" | "%" }
+
+unary = { unary_op* ~ postfix }
+unary_op = { "!" | "-" }
+
+postfix = { primary ~ postfix_op* }
+postfix_op = _{ tuple_index | unary_suffix | split_call | slice_call | append_call | tuple_field_access | field_access | as_cast }
+
+tuple_index = { "[" ~ expression ~ "]" }
+unary_suffix = { "." ~ "length" }
+split_call = { ".split" ~ "(" ~ expression ~ ")" }
+slice_call = { ".slice" ~ "(" ~ expression ~ "," ~ expression ~ ")" }
+append_call = { ".append" ~ expression_list }
+tuple_field_access = { "." ~ ASCII_DIGIT+ }
+field_access = { "." ~ Identifier }
+as_cast = { "as" ~ type_name }
+
+primary = _{
+    parenthesized
+    | cast
+    | function_call
+    | instantiation
+    | struct_literal
+    | indexed_introspection
+    | typed_array
+    | Introspection
+    | Identifier
+    | literal
+}
+
+struct_literal = { Identifier ~ "{" ~ (state_entry ~ ("," ~ state_entry)* ~ ","?)? ~ "}" }
+state_entry = { Identifier ~ ":" ~ expression }
+
+parenthesized = { "(" ~ expression ~ ")" }
+cast = { cast_type_name ~ "(" ~ expression ~ ("," ~ expression)? ~ ","? ~ ")" }
+cast_type_name = { builtin_type ~ array_suffix* }
+instantiation = { "new" ~ Identifier ~ expression_list }
+
+indexed_introspection = {
+    ("tx.outputs" ~ "[" ~ expression ~ "]" ~ output_field)
+    | ("tx.inputs" ~ "[" ~ expression ~ "]" ~ input_field)
+}
+
+output_field = { "." ~ ("value" | "scriptPubKey") }
+input_field = { "." ~ ("value" | "scriptPubKey" | "outpointTxId" | "outpointIndex" | "sigScript") }
+
+typed_array = { type_name ~ "{" ~ (expression ~ ("," ~ expression)* ~ ","?)? ~ "}" }
+
+modifier = { "constant" }
+
+literal = { BooleanLiteral | HexLiteral | number_literal | StringLiteral | DateLiteral }
+number_literal = { NumberLiteral ~ NumberUnit? }
+
+type_name = { base_type ~ array_suffix* }
+base_type = { builtin_type | Identifier }
+builtin_type = @{ ("int" | "temporal" | "bool" | "string" | "pubkey" | "sig" | "datasig" | "byte") ~ !(ASCII_ALPHANUMERIC | "_") }
+array_suffix = { "[" ~ array_size? ~ "]" }
+array_size = { "_" | Identifier | ASCII_DIGIT+ }
+
+VersionLiteral = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+
+BooleanLiteral = { "true" | "false" }
+
+NumberUnit = { "litras" | "grains" | "kas" | "seconds" | "minutes" | "hours" | "days" | "weeks" }
+
+NumberLiteral = @{ "-"? ~ NumberPart ~ ExponentPart? }
+NumberPart = { ASCII_DIGIT+ ~ ("_" ~ ASCII_DIGIT+ )* }
+ExponentPart = { ("e" | "E") ~ NumberPart }
+
+
+
+StringLiteral = @{
+    "\"" ~ (("\\" ~ !("\r" | "\n") ~ ANY) | !("\"" | "\r" | "\n") ~ ANY)* ~ "\""
+}
+
+DateLiteral = { "date(" ~ StringLiteral ~ ")" }
+
+HexLiteral = @{ "0" ~ ("x" | "X") ~ ASCII_HEX_DIGIT* }
+
+TxVar = { "this.ageDaa" | "tx.daa" | "tx.time" }
+
+Introspection = {
+    "this.activeInputIndex"
+    | "this.activeScriptPubKey"
+    | "this.bytecodeSizeDataPrefix"
+    | "this.bytecodeSize"
+    | "tx.inputs.length"
+    | "tx.outputs.length"
+    | "tx.version"
+}
+
+Identifier = @{ !keyword_boundary ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+keyword_boundary = { keyword ~ !(ASCII_ALPHANUMERIC | "_") }
+
+keyword = {
+    "pragma" | "silverscript" | "contract" | "struct" | "entry" | "function" | "if" | "else" | "require" | "for" | "return"
+    | "console.log" | "new" | "as" | "true" | "false" | "constant" | "date"
+    | "int" | "temporal" | "bool" | "string" | "pubkey" | "sig" | "datasig" | "byte"
+    | "this.ageDaa" | "tx.daa" | "tx.time" | "this.activeInputIndex" | "this.activeScriptPubKey" | "this.bytecodeSizeDataPrefix" | "this.bytecodeSize"
+    | "tx.inputs.length" | "tx.outputs.length" | "tx.version"
+}
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" | "\u{000C}" | COMMENT }
+COMMENT = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" | "//" ~ (!"\n" ~ ANY)* }

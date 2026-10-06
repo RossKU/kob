@@ -1,0 +1,34 @@
+[package]
+name = "kob-x402"
+description = "KOB x402: Kaspa x402 exact binding (kaspa-exact-v2) wire types, verifiers for KAS, KCC-20 and swap-and-pay payments, and the payer/merchant SDK"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+kob-protocol = { path = "../kob-protocol" }
+kaspa-addresses.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+kaspa-txscript.workspace = true
+blake2b_simd.workspace = true
+blake3.workspace = true
+faster-hex.workspace = true
+secp256k1.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2 = "0.10"
+base64 = "0.22"
+
+[features]
+# The testnet-10 deployment templates (kob-protocol/deploy-tn10, see contracts/README.md).
+deploy-tn10 = ["kob-protocol/deploy-tn10"]
+# The mainnet deployment (kob-protocol/deploy-mainnet: contracts/deploy/mainnet, pinned registry; docs/ops/release.md).
+deploy-mainnet = ["kob-protocol/deploy-mainnet"]
+
+[dev-dependencies]
+rand.workspace = true

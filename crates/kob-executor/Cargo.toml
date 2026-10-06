@@ -1,0 +1,65 @@
+[package]
+name = "kob-executor"
+description = "KOB executor: indexer, matcher/keeper, refund keeper and x402 facilitator in one binary"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "kob_executor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kob-executor"
+path = "src/main.rs"
+
+[dependencies]
+kob-protocol = { path = "../kob-protocol" }
+kob-x402 = { path = "../kob-x402" }
+kaspa-txscript.workspace = true
+kaspa-addresses.workspace = true
+kaspa-consensus-core.workspace = true
+blake3.workspace = true
+faster-hex.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+secp256k1.workspace = true
+thiserror.workspace = true
+
+anyhow = "1"
+axum = { version = "0.8", features = ["ws"] }
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+rusqlite = { version = "0.37", features = ["bundled"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal", "fs", "io-util"] }
+# `wss:` endpoints (public nodes, `rpc::multi`): rustls with the ring provider and the webpki roots (no system OpenSSL)
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# x402 facilitator: its node client is a blocking wRPC socket (tungstenite, as in kob-cli), its HTTP
+# server a hyper connection loop with a header timeout and a connection cap.
+sha2 = "0.10"
+subtle = "2.6"
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+
+[features]
+# The testnet-10 deployment templates (kob-protocol/deploy-tn10, see contracts/README.md).
+deploy-tn10 = ["kob-protocol/deploy-tn10"]
+# The mainnet deployment (kob-protocol/deploy-mainnet: contracts/deploy/mainnet, pinned registry; docs/ops/release.md).
+deploy-mainnet = ["kob-protocol/deploy-mainnet"]
+
+[dev-dependencies]
+tempfile = "3"
+rand.workspace = true
+# C6 planner property tests: the value oracle names outputs through `kob_protocol::artifacts::spk_trace` (test-only feature)
+kob-protocol = { path = "../kob-protocol", features = ["adversarial"] }

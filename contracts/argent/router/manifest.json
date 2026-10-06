@@ -1,0 +1,884 @@
+{
+  "app": "KobRouter",
+  "root": "kob_router.ag",
+  "modules": [
+    "kob_router.ag",
+    "kcc20_8x8.ag",
+    "KOBOrders/artifact.json",
+    "KOBOrdersKron/artifact.json"
+  ],
+  "templates": [
+    { "actor": "KasToToken_buy", "symbol": "gen__kas_to_token_buy_template", "hash": null },
+    { "actor": "KasToToken_buy_out", "symbol": "gen__kas_to_token_buy_out_template", "hash": null },
+    { "actor": "KasToToken_buy2", "symbol": "gen__kas_to_token_buy2_template", "hash": null },
+    { "actor": "KasToToken_buy2_out", "symbol": "gen__kas_to_token_buy2_out_template", "hash": null },
+    { "actor": "KasToToken_buy3", "symbol": "gen__kas_to_token_buy3_template", "hash": null },
+    { "actor": "KasToToken_buy3_out", "symbol": "gen__kas_to_token_buy3_out_template", "hash": null },
+    { "actor": "TokenToKas_sell", "symbol": "gen__token_to_kas_sell_template", "hash": null },
+    { "actor": "TokenToKas_sell_out", "symbol": "gen__token_to_kas_sell_out_template", "hash": null },
+    { "actor": "TokenToKas_sell2", "symbol": "gen__token_to_kas_sell2_template", "hash": null },
+    { "actor": "TokenToKas_sell2_out", "symbol": "gen__token_to_kas_sell2_out_template", "hash": null },
+    { "actor": "TokenToKas_sell3", "symbol": "gen__token_to_kas_sell3_template", "hash": null },
+    { "actor": "TokenToKas_sell3_out", "symbol": "gen__token_to_kas_sell3_out_template", "hash": null },
+    { "actor": "TokenSwap_swap", "symbol": "gen__token_swap_swap_template", "hash": null },
+    { "actor": "TokenSwap_swap_bid_out", "symbol": "gen__token_swap_swap_bid_out_template", "hash": null },
+    { "actor": "TokenSwap_swap_ask_out", "symbol": "gen__token_swap_swap_ask_out_template", "hash": null },
+    { "actor": "TokenSwap_swap_out", "symbol": "gen__token_swap_swap_out_template", "hash": null },
+    { "actor": "TokenSwap_swap2", "symbol": "gen__token_swap_swap2_template", "hash": null },
+    { "actor": "TokenSwap_swap2_out", "symbol": "gen__token_swap_swap2_out_template", "hash": null },
+    { "actor": "TokenToKasKron_sell", "symbol": "gen__token_to_kas_kron_sell_template", "hash": null },
+    { "actor": "TokenToKasKron_sell_out", "symbol": "gen__token_to_kas_kron_sell_out_template", "hash": null },
+    { "actor": "TokenToKasKron_sell2", "symbol": "gen__token_to_kas_kron_sell2_template", "hash": null },
+    { "actor": "TokenToKasKron_sell2_out", "symbol": "gen__token_to_kas_kron_sell2_out_template", "hash": null },
+    { "actor": "TokenToKasKron_sell3", "symbol": "gen__token_to_kas_kron_sell3_template", "hash": null },
+    { "actor": "TokenToKasKron_sell3_out", "symbol": "gen__token_to_kas_kron_sell3_out_template", "hash": null },
+    { "actor": "TokenSwapKron_swap", "symbol": "gen__token_swap_kron_swap_template", "hash": null },
+    { "actor": "TokenSwapKron_swap_bid_out", "symbol": "gen__token_swap_kron_swap_bid_out_template", "hash": null },
+    { "actor": "TokenSwapKron_swap_ask_out", "symbol": "gen__token_swap_kron_swap_ask_out_template", "hash": null },
+    { "actor": "TokenSwapKron_swap_out", "symbol": "gen__token_swap_kron_swap_out_template", "hash": null },
+    { "actor": "TokenSwapKron_swap2", "symbol": "gen__token_swap_kron_swap2_template", "hash": null },
+    { "actor": "TokenSwapKron_swap2_out", "symbol": "gen__token_swap_kron_swap2_out_template", "hash": null }
+  ],
+  "actors": [
+    {
+      "name": "KasToToken_buy",
+      "state": "KasToTokenState",
+      "sil": "sil/KasToToken_buy.sil",
+      "entries": [
+        {
+          "name": "buy",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "KasToToken_buy_out",
+      "state": "KasToTokenState",
+      "sil": "sil/KasToToken_buy_out.sil",
+      "entries": [
+        {
+          "name": "buy_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "KasToToken_buy2",
+      "state": "KasToTokenState",
+      "sil": "sil/KasToToken_buy2.sil",
+      "entries": [
+        {
+          "name": "buy2",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "KasToToken_buy2_out",
+      "state": "KasToTokenState",
+      "sil": "sil/KasToToken_buy2_out.sil",
+      "entries": [
+        {
+          "name": "buy2_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "KasToToken_buy3",
+      "state": "KasToTokenState",
+      "sil": "sil/KasToToken_buy3.sil",
+      "entries": [
+        {
+          "name": "buy3",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "KasToToken_buy3_out",
+      "state": "KasToTokenState",
+      "sil": "sil/KasToToken_buy3_out.sil",
+      "entries": [
+        {
+          "name": "buy3_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenToKas_sell",
+      "state": "TokenToKasState",
+      "sil": "sil/TokenToKas_sell.sil",
+      "entries": [
+        {
+          "name": "sell",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenToKas_sell_out",
+      "state": "TokenToKasState",
+      "sil": "sil/TokenToKas_sell_out.sil",
+      "entries": [
+        {
+          "name": "sell_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenToKas_sell2",
+      "state": "TokenToKasState",
+      "sil": "sil/TokenToKas_sell2.sil",
+      "entries": [
+        {
+          "name": "sell2",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenToKas_sell2_out",
+      "state": "TokenToKasState",
+      "sil": "sil/TokenToKas_sell2_out.sil",
+      "entries": [
+        {
+          "name": "sell2_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenToKas_sell3",
+      "state": "TokenToKasState",
+      "sil": "sil/TokenToKas_sell3.sil",
+      "entries": [
+        {
+          "name": "sell3",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenToKas_sell3_out",
+      "state": "TokenToKasState",
+      "sil": "sil/TokenToKas_sell3_out.sil",
+      "entries": [
+        {
+          "name": "sell3_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenSwap_swap",
+      "state": "TokenSwapState",
+      "sil": "sil/TokenSwap_swap.sil",
+      "entries": [
+        {
+          "name": "swap",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenSwap_swap_bid_out",
+      "state": "TokenSwapState",
+      "sil": "sil/TokenSwap_swap_bid_out.sil",
+      "entries": [
+        {
+          "name": "swap_bid_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenSwap_swap_ask_out",
+      "state": "TokenSwapState",
+      "sil": "sil/TokenSwap_swap_ask_out.sil",
+      "entries": [
+        {
+          "name": "swap_ask_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenSwap_swap_out",
+      "state": "TokenSwapState",
+      "sil": "sil/TokenSwap_swap_out.sil",
+      "entries": [
+        {
+          "name": "swap_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenSwap_swap2",
+      "state": "TokenSwapState",
+      "sil": "sil/TokenSwap_swap2.sil",
+      "entries": [
+        {
+          "name": "swap2",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenSwap_swap2_out",
+      "state": "TokenSwapState",
+      "sil": "sil/TokenSwap_swap2_out.sil",
+      "entries": [
+        {
+          "name": "swap2_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenToKasKron_sell",
+      "state": "TokenToKasKronState",
+      "sil": "sil/TokenToKasKron_sell.sil",
+      "entries": [
+        {
+          "name": "sell",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenToKasKron_sell_out",
+      "state": "TokenToKasKronState",
+      "sil": "sil/TokenToKasKron_sell_out.sil",
+      "entries": [
+        {
+          "name": "sell_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenToKasKron_sell2",
+      "state": "TokenToKasKronState",
+      "sil": "sil/TokenToKasKron_sell2.sil",
+      "entries": [
+        {
+          "name": "sell2",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenToKasKron_sell2_out",
+      "state": "TokenToKasKronState",
+      "sil": "sil/TokenToKasKron_sell2_out.sil",
+      "entries": [
+        {
+          "name": "sell2_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenToKasKron_sell3",
+      "state": "TokenToKasKronState",
+      "sil": "sil/TokenToKasKron_sell3.sil",
+      "entries": [
+        {
+          "name": "sell3",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenToKasKron_sell3_out",
+      "state": "TokenToKasKronState",
+      "sil": "sil/TokenToKasKron_sell3_out.sil",
+      "entries": [
+        {
+          "name": "sell3_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenSwapKron_swap",
+      "state": "TokenSwapKronState",
+      "sil": "sil/TokenSwapKron_swap.sil",
+      "entries": [
+        {
+          "name": "swap",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenSwapKron_swap_bid_out",
+      "state": "TokenSwapKronState",
+      "sil": "sil/TokenSwapKron_swap_bid_out.sil",
+      "entries": [
+        {
+          "name": "swap_bid_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenSwapKron_swap_ask_out",
+      "state": "TokenSwapKronState",
+      "sil": "sil/TokenSwapKron_swap_ask_out.sil",
+      "entries": [
+        {
+          "name": "swap_ask_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenSwapKron_swap_out",
+      "state": "TokenSwapKronState",
+      "sil": "sil/TokenSwapKron_swap_out.sil",
+      "entries": [
+        {
+          "name": "swap_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenSwapKron_swap2",
+      "state": "TokenSwapKronState",
+      "sil": "sil/TokenSwapKron_swap2.sil",
+      "entries": [
+        {
+          "name": "swap2",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "TokenSwapKron_swap2_out",
+      "state": "TokenSwapKronState",
+      "sil": "sil/TokenSwapKron_swap2_out.sil",
+      "entries": [
+        {
+          "name": "swap2_out",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "expire",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    }
+  ]
+}

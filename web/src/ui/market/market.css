@@ -1,0 +1,197 @@
+/* Token page (exchange layout): stats strip, order book | chart + depth + tape | ticket. Desktop 3 columns (>= 1200 px), tablet 2, phone 1.
+   Every figure uses tabular numerals; panels keep their height while loading (skeletons), so nothing jumps when data arrives. */
+
+body:has(.market-page) .container { max-width: 1520px; }
+
+.market-page { display: flex; flex-direction: column; gap: 12px; }
+.market-page .section { padding: 12px 14px; }
+.market-page .section-head { margin-bottom: 8px; }
+.market-page .section-head h2 { font-size: 0.95rem; letter-spacing: 0.01em; }
+
+.mkt-top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+.mkt-top .field { min-width: 0; width: min(260px, 100%); }
+.mkt-top .field > label { font-size: 0.78rem; color: var(--muted); font-weight: 600; }
+
+.mkt-grid {
+  display: grid; gap: 12px; align-items: start;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: 'chart' 'book' 'ticket' 'depth' 'tape';
+}
+.mkt-lower { display: contents; }
+.mkt-area-book { grid-area: book; }
+.mkt-area-chart { grid-area: chart; }
+.mkt-area-ticket { grid-area: ticket; }
+.mkt-area-depth { grid-area: depth; }
+.mkt-area-tape { grid-area: tape; }
+@media (min-width: 760px) {
+  .mkt-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'chart chart' 'book ticket' 'depth tape'; }
+}
+@media (min-width: 1200px) {
+  /* the tall side columns give their extra height to the lower row, never to the chart row */
+  .mkt-grid { grid-template-columns: 320px minmax(0, 1fr) 360px; grid-template-rows: auto 1fr; grid-template-areas: 'book chart ticket' 'book lower ticket'; }
+  .mkt-lower { display: grid; grid-area: lower; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+  .mkt-lower > * { grid-area: auto; }
+}
+
+/* ------------------------------------------------------------------ token title bar */
+
+.mkt-title { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.mkt-title .token-name { font-size: 1.35rem; font-weight: 800; letter-spacing: 0.01em; }
+.mkt-title .mkt-name { color: var(--muted); }
+
+/* ------------------------------------------------------------------ 24 h stats strip */
+
+.mkt-stats {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; align-items: end;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px;
+}
+.mkt-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mkt-stat-label { font-size: 0.74rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mkt-stat-value { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mkt-stat-last { grid-column: 1 / -1; }
+.mkt-stat-last .mkt-stat-value { font-size: 1.6rem; font-weight: 700; line-height: 1.15; }
+.mkt-stat-last .mkt-stat-unit { font-size: 0.8rem; color: var(--muted); font-weight: 500; margin-left: 6px; }
+.tone-up { color: var(--buy); }
+.tone-down { color: var(--sell); }
+.tone-flat { color: var(--muted); }
+@media (min-width: 560px) { .mkt-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 900px) {
+  .mkt-stats { display: flex; flex-wrap: wrap; gap: 8px 28px; }
+  .mkt-stat-last { grid-column: auto; margin-right: 8px; }
+}
+
+/* ------------------------------------------------------------------ skeletons / empty states */
+
+.skeleton { position: relative; overflow: hidden; background: var(--skeleton); border-radius: var(--radius-sm); }
+.skeleton::after {
+  content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, var(--skeleton), transparent); animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .skeleton::after { animation: none; } }
+.skeleton-line { height: 12px; margin: 7px 0; }
+.mkt-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--muted); text-align: center; font-size: 0.9rem; padding: 16px; }
+.mkt-empty svg { opacity: 0.55; }
+
+/* ------------------------------------------------------------------ price chart */
+
+.chart-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.chart-intervals { display: inline-flex; gap: 2px; background: var(--surface-2); border-radius: var(--radius-sm); padding: 2px; }
+.chart-intervals button {
+  border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 0.82rem; font-weight: 600; padding: 3px 10px; border-radius: 4px; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.chart-intervals button:hover { color: var(--text); }
+.chart-intervals button[aria-pressed='true'] { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--border); }
+.chart-box { position: relative; height: 420px; }
+.chart-canvas { position: absolute; inset: 0; }
+.chart-legend {
+  position: absolute; top: 4px; left: 6px; z-index: 3; pointer-events: none; font-size: 0.78rem; font-variant-numeric: tabular-nums;
+  display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--muted); max-width: calc(100% - 80px);
+}
+.chart-legend b { font-weight: 600; color: var(--text); margin-left: 3px; }
+.chart-legend .tone-up b { color: var(--buy); }
+.chart-legend .tone-down b { color: var(--sell); }
+.chart-overlay { position: absolute; inset: 0; z-index: 4; display: flex; align-items: center; justify-content: center; }
+@media (max-width: 759px) { .chart-box { height: 320px; } }
+
+/* ------------------------------------------------------------------ depth chart */
+
+.depth-box { position: relative; height: 240px; }
+.depth-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.depth-svg .grid { stroke: var(--grid); stroke-width: 1; }
+.depth-svg .axis-label { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.depth-svg .bid-area { fill: url(#depth-bid-fill); }
+.depth-svg .ask-area { fill: url(#depth-ask-fill); }
+.depth-svg .bid-line { fill: none; stroke: var(--buy); stroke-width: 1.6; }
+.depth-svg .ask-line { fill: none; stroke: var(--sell); stroke-width: 1.6; }
+.depth-svg .mid-line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }
+.depth-svg .cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
+.depth-tip {
+  position: absolute; z-index: 5; pointer-events: none; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 4px 8px; font-size: 0.78rem; font-variant-numeric: tabular-nums; white-space: nowrap; box-shadow: var(--shadow);
+}
+.depth-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.78rem; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
+.depth-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+/* ------------------------------------------------------------------ order book */
+
+.ob { display: flex; flex-direction: column; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.ob-tools { display: flex; gap: 6px; align-items: center; }
+.ob-tools .select { min-height: 26px; padding: 1px 6px; font-size: 0.8rem; width: auto; }
+.ob-head, .ob .book-row { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+.ob-head { padding: 2px 8px 4px; color: var(--muted); font-size: 0.74rem; }
+.ob-head > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ob-head > span { text-align: right; } /* every numeric column is right-aligned so the decimal points line up (fixed decimals per column) */
+.ob .book-side { min-height: calc(var(--ob-rows, 12) * 21px); }
+.ob .book-side[data-testid='book-asks'] { justify-content: flex-end; }
+.ob .book-row { height: 21px; padding: 0 8px; align-items: center; font-size: 0.82rem; line-height: 21px; }
+.ob .book-row > span { text-align: right; }
+.ob .book-row > span.book-price { text-align: right; font-weight: 600; }
+.ob .book-bar { opacity: 1; }
+.ob .book-row:hover { background: var(--surface-3); }
+.ob-mid {
+  display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; justify-content: space-between; padding: 6px 8px; margin: 4px 0;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+}
+.ob-last { font-size: 1.1rem; font-weight: 700; }
+.ob-mid .small { font-size: 0.76rem; }
+.ob-foot { margin: 6px 0 0; font-size: 0.74rem; color: var(--muted); }
+.ob .muted.center { padding: 8px 0; }
+
+/* ------------------------------------------------------------------ trade tape */
+
+.tape { font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.tape-head, .tape-row { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.9fr); gap: 6px; padding: 0 8px; }
+.tape-head { color: var(--muted); font-size: 0.74rem; padding-bottom: 4px; }
+.tape-head > span, .tape-row > span { text-align: right; }
+.tape-body { height: 262px; overflow-y: auto; overscroll-behavior: contain; }
+.tape-row { height: 21px; line-height: 21px; }
+.tape-row:hover { background: var(--surface-2); }
+.tape-row > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tape-row .tape-time { color: var(--muted); }
+.tape-row[data-side='buy'] .tape-price { color: var(--buy); }
+.tape-row[data-side='sell'] .tape-price { color: var(--sell); }
+.tape-row.fresh { animation: flash 1s ease-out; }
+@keyframes flash { from { background: var(--surface-3); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .tape-row.fresh { animation: none; } }
+
+/* ---- pair view (token/token pair orders) */
+.pair-title { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
+.pair-title .pair-name { font-size: 1.35rem; font-weight: 800; letter-spacing: 0.01em; }
+.mkt-title .pair-name { font-size: 1.5rem; font-weight: 800; letter-spacing: 0.01em; }
+.mkt-title .pair-name + .token-name { font-size: 0.95rem; font-weight: 600; }
+.pair-book .book-row > span.pair-src { text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pair-book .pair-route .book-price { font-style: italic; }
+.pair-via { font-size: 0.72rem; padding: 0 6px; border-radius: 8px; border: 1px dashed var(--border); color: var(--muted); }
+.pair-direct { font-size: 0.72rem; font-weight: 600; }
+.pair-entry-tag { font-weight: 500; color: var(--muted); }
+.pair-book .pair-entry .book-price { text-decoration: underline dotted; text-underline-offset: 3px; }
+/* the pair fills: amounts of BASE and QUOTE, the counterparty, the time (no price: a pair fill never makes one) */
+.pair-tape .tape-head, .pair-tape .tape-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 0.8fr); }
+.pair-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
+
+/* ---- the pair selector of the title bar: `BASE / QUOTE`, each side a drop-down laid invisibly over its label */
+.pair-select { display: inline-flex; align-items: baseline; gap: 4px; }
+.asset-select { position: relative; display: inline-flex; }
+.asset-select-face { display: inline-flex; align-items: baseline; gap: 4px; padding: 0 4px; border-radius: var(--radius-sm); border-bottom: 2px dotted var(--border); cursor: pointer; }
+.asset-select:hover .asset-select-face, .asset-select:focus-within .asset-select-face { background: var(--surface-2); }
+.asset-select:focus-within .asset-select-face { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+.asset-select-caret { font-style: normal; font-size: 0.7em; color: var(--muted); }
+.asset-select-native { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font: inherit; }
+.pair-sep { color: var(--muted); }
+
+/* ---- the flip control: an icon-only button just left of the pair title */
+.flip-btn { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px; min-height: 32px; color: var(--muted); border-color: var(--border); }
+.flip-btn:hover:not(:disabled) { color: var(--text); }
+.flip-icon { display: block; }
+
+/* ---- a trade row is a link to the transaction on the block explorer */
+a.tape-row { color: inherit; text-decoration: none; cursor: pointer; }
+a.tape-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: -2px; }
+a.tape-row:hover .tape-time { color: var(--text); }
+
+/* ---- token list: the full token hash, monospace, wrapping (never truncated) */
+.token-hash-cell { min-width: 14rem; }
+.token-hash { align-items: flex-start; }
+.token-hash code { font-size: 0.82rem; overflow-wrap: anywhere; word-break: break-all; }

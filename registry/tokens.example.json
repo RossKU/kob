@@ -1,0 +1,180 @@
+{
+  "$schema": "./tokens.schema.json",
+  "schema_version": 1,
+  "network": "testnet-10",
+  "templates": [
+    {
+      "id": "kcc20-ref-3x3",
+      "family": "kcc20",
+      "template_hash": "f4ac029d2c3c74dd3dcaeb64245f7d0a0977e27c2956f3977540a11dc7c45b1f",
+      "prefix_len": 1,
+      "suffix_len": 2977,
+      "state_len": 112,
+      "max_token_inputs": 3,
+      "max_token_outputs": 3,
+      "escrow": {
+        "owner_scheme": 4,
+        "borrow_scheme": 0
+      },
+      "review_status": "reviewed",
+      "risks": [
+        "A UTXO owned (owner_scheme 4) by the token's own covenant id is spendable by anyone (any input of the token unlocks it); KOB never creates such an output (informational).",
+        "Genesis contamination: the covenant id commits only to the P2SH hashes of the genesis outputs, so a genesis may hide a non-template output able to mint look-alike tokens or feed a fake balance into a transfer; a token is verified only after every genesis output was checked (registry genesis record), until then it carries the warning genesis-unchecked."
+      ],
+      "source": {
+        "path": "contracts/artifacts/KCC20Ref.json",
+        "upstream": "https://github.com/argent-lang/kcc20-reference pull/1, commit 600646873ebfa2ec87a8ae57783c9912caf52857 (unmerged, unaudited)",
+        "note": "Pre-audit notes (reference program, engine conformance suites in crates/kob-tests): one leader plus delegators, owner-authorised transfers only, no mint, burn, freeze or seize entry. Reference KCC-20 at its default 3 token inputs / 3 outputs per transfer."
+      }
+    },
+    {
+      "id": "kcc20-ref-8x8",
+      "family": "kcc20",
+      "template_hash": "40fef59a59bd76991f4d4e2101d1e3e34860997b89fe7714532637cec482a9d7",
+      "prefix_len": 1,
+      "suffix_len": 6707,
+      "state_len": 112,
+      "max_token_inputs": 8,
+      "max_token_outputs": 8,
+      "escrow": {
+        "owner_scheme": 4,
+        "borrow_scheme": 0
+      },
+      "review_status": "reviewed",
+      "risks": [
+        "A UTXO owned (owner_scheme 4) by the token's own covenant id is spendable by anyone (any input of the token unlocks it); KOB never creates such an output (informational).",
+        "Genesis contamination: the covenant id commits only to the P2SH hashes of the genesis outputs, so a genesis may hide a non-template output able to mint look-alike tokens or feed a fake balance into a transfer; a token is verified only after every genesis output was checked (registry genesis record), until then it carries the warning genesis-unchecked."
+      ],
+      "source": {
+        "path": "contracts/artifacts/KCC20Ref_8x8.json",
+        "upstream": "https://github.com/argent-lang/kcc20-reference pull/1, commit 600646873ebfa2ec87a8ae57783c9912caf52857 (unmerged, unaudited)",
+        "note": "Pre-audit notes (reference program with 8/8 slots, engine conformance suites in crates/kob-tests): owner-authorised transfers only, no mint, burn, freeze or seize entry. The program KOB issues: the reference with 8/8 slot limits (only MAX_DELEGATES, MAX_TOKEN_OUTPUTS and the loop bounds differ). No mint, burn or public-mint entry."
+      }
+    },
+    {
+      "id": "kron-2433",
+      "family": "kron",
+      "template_hash": "2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2",
+      "prefix_len": 0,
+      "suffix_len": 2387,
+      "state_len": 46,
+      "max_token_inputs": 4,
+      "max_token_outputs": 5,
+      "escrow": {
+        "id_type": 2,
+        "is_minter": 0,
+        "delivery_id_type": 3
+      },
+      "review_status": "reviewed",
+      "capabilities": [
+        "mint-authority"
+      ],
+      "risks": [
+        "The is_minter path lets a live minter mint without limit: capability mint-authority.",
+        "Missing hardening present in kron-2732: does not refuse an all-zero owner on id_type 2 and does not refuse out-of-range output id types; the KOB orders never create such outputs (a plain UTXO carrying an order script fails the order's covenant-count check).",
+        "KRON id_type 3 (address presence) balances, the type KOB delivers to makers, are authorised by any P2PK input of the owner key: a maker signature with a partial sighash (SINGLE, NONE, ANYONECANPAY) would authorise all of that key's type-3 balances. KOB signers use SIGHASH_ALL only.",
+        "Genesis contamination: the covenant id commits only to the P2SH hashes of the genesis outputs, so a genesis may hide a non-template output able to mint look-alike tokens or feed a fake balance into a transfer; a token is verified only after every genesis output was checked (registry genesis record), until then it carries the warning genesis-unchecked.",
+        "Reviewed with conditions (internal review 2026-09-30, not an independent audit): a token is listed or official only after verify_genesis passes on its real genesis group and no live is_minter cell exists (its genesis record; a genesis without a minter output proves none can appear; a token with a live minter lists only with an active-mint-authority warning). Checked at review: order genesis groups are the order output alone, IOC returns are positional, x402 treats the token as issuer-controlled."
+      ],
+      "source": {
+        "path": "contracts/adapters/kron/templates/kron_token_2433.bin",
+        "upstream": "KRON API /api/native/cp-template (api.kron.technology); checked against redeem scripts observed on mainnet",
+        "note": "Pre-audit notes (adapter study and token census of 2026-09-29): one entry, owner-authorised only, no admin, freeze or seize path; the is_minter=1 branch is reachable only from the curve and an escrowed non-minter input rejects any minting transaction; 33 negative tests in crates/kob-tests/tests/kob_kron_adapter_tests.rs. Common KRON token program (85 of 91 registry tokens at 2026-09-28). Internal review (2026-09-30, not an independent audit): reviewed with the conditions in risks."
+      }
+    },
+    {
+      "id": "kron-2732",
+      "family": "kron",
+      "template_hash": "8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e",
+      "prefix_len": 0,
+      "suffix_len": 2686,
+      "state_len": 46,
+      "max_token_inputs": 4,
+      "max_token_outputs": 5,
+      "escrow": {
+        "id_type": 2,
+        "is_minter": 0,
+        "delivery_id_type": 3
+      },
+      "review_status": "reviewed",
+      "capabilities": [
+        "mint-authority"
+      ],
+      "risks": [
+        "The is_minter path lets a live minter mint without limit: capability mint-authority.",
+        "KRON id_type 3 (address presence) balances, the type KOB delivers to makers, are authorised by any P2PK input of the owner key: a maker signature with a partial sighash (SINGLE, NONE, ANYONECANPAY) would authorise all of that key's type-3 balances. KOB signers use SIGHASH_ALL only.",
+        "Genesis contamination: the covenant id commits only to the P2SH hashes of the genesis outputs, so a genesis may hide a non-template output able to mint look-alike tokens or feed a fake balance into a transfer; a token is verified only after every genesis output was checked (registry genesis record), until then it carries the warning genesis-unchecked.",
+        "Reviewed with conditions (internal review 2026-09-30, not an independent audit): a token is listed or official only after verify_genesis passes on its real genesis group and no live is_minter cell exists (its genesis record; a genesis without a minter output proves none can appear; a token with a live minter lists only with an active-mint-authority warning). Checked at review: order genesis groups are the order output alone, IOC returns are positional, x402 treats the token as issuer-controlled."
+      ],
+      "source": {
+        "path": "contracts/adapters/kron/templates/kron_token_2732.bin",
+        "upstream": "KRON API /api/native/cp-template (api.kron.technology); checked against redeem scripts observed on mainnet",
+        "note": "Pre-audit notes (same semantics as kron-2433, adapter tests pass on both templates; newer KRON launches 2026-09-06 to 09-27). Newer KRON token program (6 tokens launched 2026-09-06 to 09-27). Internal review (2026-09-30, not an independent audit): reviewed with the conditions in risks."
+      }
+    },
+    {
+      "id": "kcc20-kaspacom-0-2-5",
+      "family": "kcc20",
+      "template_hash": "911f0638ccb7368bf36d117f1725073ae7ee487ce8b58ca3e8375051c2d40f6c",
+      "prefix_len": 1,
+      "suffix_len": 25439,
+      "state_len": 112,
+      "max_token_inputs": 8,
+      "max_token_outputs": 8,
+      "escrow": {
+        "owner_scheme": 4,
+        "borrow_scheme": 0
+      },
+      "review_status": "reviewed",
+      "capabilities": [
+        "mint-authority",
+        "public-mint",
+        "burn"
+      ],
+      "risks": [
+        "A UTXO owned (owner_scheme 4) by the token's own covenant id is spendable by anyone (any input of the token unlocks it); KOB never creates such an output (informational).",
+        "Genesis contamination: the covenant id commits only to the P2SH hashes of the genesis outputs, so a genesis may hide a non-template output able to mint look-alike tokens or feed a fake balance into a transfer; a token is verified only after every genesis output was checked (registry genesis record), until then it carries the warning genesis-unchecked.",
+        "set_public_mint_active admits other covenant inputs and outputs that it does not account for (finding K-1, engine PoC review_b2_kaspacom r_kc_05..07): the creator of a mint_policy 2 token with a live minter lane spends the minter with one transfer_delegator holder cell (his own or a co-signer's) and writes one unchecked token-covenant output: a holder cell of any amount beyond max_supply, or a non-program UTXO carrying the token's covenant id that mints at will later.",
+        "K-1 limits and listing condition: other holders' balances and KOB scheme-4 escrows cannot be drawn in without their owner or order covenant; mint_policy 0 or 1 tokens and lanes with remaining_supply 0 are not affected. The backdoor appears after genesis, so the genesis check cannot see it. Minter lanes sit behind the extension commitment (G-2): a token lists only after a manual read of its minter extension shows policy 0 or 1, or every policy-2 lane exhausted."
+      ],
+      "source": {
+        "path": "contracts/third-party/kaspacom-kcc20/KCC20.placeholder.json",
+        "upstream": "https://github.com/KASPACOM/kcc20-tx-builder artifacts/KCC20.placeholder.json, commit 80e1f7b1f4fb0ad1de8779a1c203ba7edf111679 (npm @kaspacom/kcc20-tx-builder 0.2.5), Apache-2.0",
+        "note": "Third-party KCC-20-compatible program (112-byte state, draft transfer tags, owner scheme 4 accepted). Pre-audit notes (adapter study): mint authority and the public-mint switch act on minter UTXOs (but see finding K-1 in risks), burn is authorised by the holder (an order authorises it only for its own pinned remainder), no freeze or seize entry. 25.5 KB program (about 5x the fee per fill of the reference), 8 in / 8 out, mass-bounded sweeps. Unmodified KOB orders custody and fill it (crates/kob-tests/tests/kob_kaspacom_tests.rs)."
+      }
+    }
+  ],
+  "tokens": [
+    {
+      "ticker": "EXKCC",
+      "name": "Example KCC-20 (fictional, TN10 example)",
+      "family": "kcc20",
+      "covenant_id": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+      "template_id": "kcc20-ref-8x8",
+      "extension_commitment": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "extension_class": "fixed-supply-standard",
+      "decimals": 8,
+      "status": "pending-review",
+      "verified": false,
+      "display": {
+        "description": "Fictional example entry: the covenant id is a pattern, not a deployed token.",
+        "website": "https://example.invalid/exkcc"
+      }
+    },
+    {
+      "ticker": "EXKRON",
+      "name": "Example KRON token (fictional, TN10 example)",
+      "family": "kron",
+      "covenant_id": "e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6",
+      "template_id": "kron-2433",
+      "extension_commitment": null,
+      "extension_class": "none",
+      "decimals": 8,
+      "status": "pending-review",
+      "verified": false,
+      "display": {
+        "description": "Fictional example entry: the covenant id is a pattern, not a deployed token."
+      }
+    }
+  ]
+}

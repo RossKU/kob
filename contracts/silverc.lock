@@ -1,0 +1,18 @@
+# Compiler used to produce contracts/artifacts/*.json.
+#
+# silverc v1.0.0, upstream release of https://github.com/kaspanet/silverscript
+# (commit 3ed973335b59269293564805cc2c58a14595ec03). Format: <name> <sha256>.
+# Archive digests are the ones published on the GitHub release page. The extracted
+# Windows binary digest was measured locally (silverc.exe, 6,960,128 bytes).
+#
+# scripts/build-contracts.sh --upstream downloads the archive for the host OS, verifies the
+# sha256 below and compiles with it. Without --upstream the compiler is built from
+# vendor/silverscript (rusty-kaspa v2.1.0 port). Both must reproduce the artifacts.
+version v1.0.0
+base_url https://github.com/kaspanet/silverscript/releases/download/v1.0.0
+silverc-linux-x86_64.tar.gz 058ffa17a390526f27280752f864b1bd680217cded14dfc5b7fd168d7e943fb5
+silverc-linux-arm64.tar.gz 6f8cf9a1eaf2904fa75c1b1ff85a1803a4d4939325de00431b6b05e20854083f
+silverc-darwin-x86_64.tar.gz c6e19c016070f65aa9a028d516ec1784695e9e3794c0a40f7d3d10d691aa419b
+silverc-darwin-arm64.tar.gz 49e699f7df23805b3948b487fb9688f3ab4022fdc467fbb12c80850359f7eaa8
+silverc-windows-x86_64.zip 3e0d660c15a9e7ac90f3960da24d348b076b1891481bfe758db18accc8a102e1
+silverc-windows-x86_64.exe ce1e0ef5f1f415f371d3d2426e788597a388635da8cbe93e72e95a4f754b29af

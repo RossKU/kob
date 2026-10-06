@@ -1,0 +1,38 @@
+[package]
+name = "kob-wasm"
+description = "wasm-bindgen bindings over kob-protocol for the web app and x402 client SDK"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+kob-protocol = { path = "../kob-protocol", default-features = false }
+kob-x402 = { path = "../kob-x402", optional = true }
+kaspa-addresses = { workspace = true, optional = true }
+kaspa-consensus-core = { workspace = true, optional = true }
+kaspa-txscript = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen.workspace = true
+
+[features]
+default = ["engine", "x402"]
+# In-wasm script engine: `validate` and `finalize` with `tightenBudgets`. The slim web build
+# (`--no-default-features`) builds, encodes and finalizes with the table budgets only.
+engine = ["kob-protocol/engine"]
+# x402 payer / merchant bindings (kob-x402 needs the script engine for its verifiers and builders).
+x402 = ["engine", "dep:kob-x402", "dep:kaspa-addresses", "dep:kaspa-consensus-core", "dep:kaspa-txscript"]
+# The testnet-10 deployment templates (kob-protocol/deploy-tn10; scripts/build-wasm.sh --tn10).
+deploy-tn10 = ["kob-protocol/deploy-tn10"]
+# The mainnet deployment (kob-protocol/deploy-mainnet; scripts/build-wasm.sh --mainnet).
+deploy-mainnet = ["kob-protocol/deploy-mainnet"]
+
+[[test]]
+name = "x402_golden"
+required-features = ["x402"]

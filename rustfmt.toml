@@ -1,0 +1,6 @@
+# Same style as vendor/silverscript so ported harness code needs no reformatting.
+max_width = 135
+use_field_init_shorthand = true
+use_try_shorthand = true
+use_small_heuristics = "Max"
+newline_style = "Unix"

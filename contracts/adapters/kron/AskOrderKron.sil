@@ -1,0 +1,109 @@
+pragma silverscript ^0.1.0;
+
+// KRON twin of contracts/orders/AskOrder.sil (first-generation order; entries, state and
+// invariants as there). Differences, all in the token codec and owner types:
+//   - token state is the legacy 46-byte KRON layout (template offset 0, prefix length 0):
+//       0x20 owner[32] | 0x01 id_type | 0x08 amount (LE i64) | 0x01 is_minter
+//     with id_type 0 pubkey (token-level signature) | 1 script hash | 2 covenant id | 3 address
+//     presence; there is no borrow scheme, borrow guard or extension commitment;
+//   - custody is a token UTXO with id_type 2 (TYPE_COVID), owner == this order's covenant id and
+//     is_minter == 0 (instead of owner_scheme 0x04 + borrow disabled); the token program
+//     authorises it only when an input with that covenant id, i.e. this script, is in the same
+//     transaction;
+//   - refund delivers to the maker with id_type 3 (TYPE_ADDRESS, the type KRON wallets use for
+//     user balances) instead of owner_scheme 0x00.
+contract AskOrderKron(
+    pubkey maker,
+    byte[32] tokenCovId,
+    byte[32] tokenTplHash,   // template_hash(prefix = "", suffix = redeem[46..])
+    int tplPrefixLen,        // 0 for KRON
+    int tplSuffixLen,        // 2387 (2433-byte token) or 2686 (2732-byte token)
+    int lotSize,
+    int lotPrice,
+    int expiryDaa,
+    int refundTip
+) {
+    struct KronState {
+        byte[32] owner;
+        byte id_type;
+        int amount;
+        byte is_minter;
+    }
+
+    byte constant TYPE_COVID = 0x02;
+    byte constant TYPE_ADDRESS = 0x03;
+    byte constant NOT_MINTER = 0x00;
+    byte constant SIGHASH_ALL = 0x01;
+    int constant MAX_SOMPI = 2900000000000000000;
+
+    entry settle(int n, int tokenIn, int tokOut) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+
+        require(OpInputCovenantId(tokenIn) == tokenCovId);
+        KronState tin = readInputStateWithTemplate(tokenIn, tplPrefixLen, tplSuffixLen, tokenTplHash);
+        require(tin.owner == selfId);
+        require(tin.id_type == TYPE_COVID);
+        require(tin.is_minter == NOT_MINTER);
+
+        int carriers = tx.inputs[self].value + tx.inputs[tokenIn].value;
+        int outAmount = 0;
+        byte[32] outOwner = selfId;
+        byte outType = TYPE_COVID;
+        int outIdx = tokOut;
+
+        if (n == 0) {
+            require(tx.daa >= expiryDaa);
+            require(refundTip >= 0);
+            require(refundTip <= MAX_SOMPI);
+            require(OpCovOutputCount(selfId) == 0);
+            outAmount = tin.amount;
+            outOwner = byte[32](maker);
+            outType = TYPE_ADDRESS;
+            outIdx = self;
+            require(tx.outputs[self].value + refundTip >= carriers);
+        } else {
+            require(lotSize > 0);
+            require(lotPrice > 0);
+            require(n > 0);
+            require(n <= tin.amount / lotSize);
+            require(n <= MAX_SOMPI / lotPrice);
+            int pay = n * lotPrice;
+            outAmount = tin.amount - n * lotSize;
+            require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
+            if (outAmount > 0) {
+                require(OpCovOutputCount(selfId) == 1);
+                int selfOut = OpCovOutputIdx(selfId, 0);
+                require(tx.outputs[selfOut].scriptPubKey == this.activeScriptPubKey);
+                require(tx.outputs[selfOut].value >= tx.inputs[self].value);
+                require(tx.outputs[tokOut].value >= tx.inputs[tokenIn].value);
+                require(tx.outputs[self].value >= pay);
+            } else {
+                require(OpCovOutputCount(selfId) == 0);
+                require(tx.outputs[self].value >= pay + carriers);
+            }
+        }
+
+        if (outAmount > 0) {
+            validateOutputStateWithInputTemplate(
+                outIdx,
+                KronState {
+                    owner: outOwner,
+                    id_type: outType,
+                    amount: outAmount,
+                    is_minter: NOT_MINTER
+                },
+                tokenIn, tplPrefixLen, tplSuffixLen, tokenTplHash
+            );
+            require(OpOutputCovenantId(outIdx) == tokenCovId);
+        }
+    }
+
+    entry cancel(sig s) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, maker));
+    }
+}

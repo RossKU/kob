@@ -1,0 +1,253 @@
+{
+  "network": "testnet-10",
+  "nodeUrl": "ws://127.0.0.1:18210",
+  "runDir": ".",
+  "kobWasmDir": "wasm-node",
+  "kaspaSdkDir": "../../../web/vendor/kaspa-node",
+  "executorBin": "bin/kob-executor.exe",
+  "minerBin": "bin/tn10-miner.exe",
+  "minerThreads": 12,
+  "miner": {
+    "backend": "auto",
+    "lowKas": 20000,
+    "highKas": 30000,
+    "maxDuty": 1,
+    "pollSec": 15,
+    "gpu": { "device": "NVIDIA" }
+  },
+  "executors": [
+    {
+      "name": "exec-a",
+      "key": "execA",
+      "api": "127.0.0.1:8091",
+      "x402": "127.0.0.1:8401",
+      "args": [
+        "--tick-ms",
+        "1000"
+      ]
+    },
+    {
+      "name": "exec-b",
+      "key": "execB",
+      "api": "127.0.0.1:8092",
+      "args": [
+        "--tick-ms",
+        "800"
+      ]
+    }
+  ],
+  "indexerUrl": "http://127.0.0.1:8091",
+  "indexerUrlB": "http://127.0.0.1:8092",
+  "token": {
+    "name": "Test USD (tUSD)",
+    "ticker": "TUSD",
+    "decimals": 8,
+    "supply": "10000000",
+    "tick": "10000",
+    "allocation": {
+      "mm": 0.3,
+      "t1": 0.05,
+      "t2": 0.05,
+      "t3": 0.05,
+      "t4": 0.05,
+      "t5": 0.05,
+      "payer": 0.02
+    }
+  },
+  "token2": {
+    "name": "Test ETH (tETH)",
+    "ticker": "TETH",
+    "decimals": 8,
+    "supply": "1000",
+    "tick": "100000000",
+    "allocation": {
+      "mm": 0.3,
+      "t1": 0.08,
+      "t2": 0.08,
+      "t3": 0.08,
+      "t4": 0.08,
+      "t5": 0.08
+    },
+    "description": "KOB TN10 soak test token (tETH): 1 TETH tracks 1 ETH worth of KAS (Binance ETHUSDT / KASUSDT reference, off chain). Fixed supply, no value.",
+    "priceUrl": "https://fapi.binance.com/fapi/v1/ticker/price?symbol=ETHUSDT",
+    "bookShare": 0.22,
+    "pairShare": 0.15,
+    "mm": {
+      "minTokens": "0.0004",
+      "maxTokens": "0.003",
+      "skewBpsPerToken": 1250
+    },
+    "pairUsd": [
+      3,
+      20
+    ],
+    "fanout": {
+      "mm": [
+        8,
+        "0.3"
+      ],
+      "traders": [
+        4,
+        "0.08"
+      ]
+    }
+  },
+  "token3": {
+    "name": "Test BTC (tBTC)",
+    "ticker": "TBTC",
+    "decimals": 8,
+    "supply": "50",
+    "tick": "5000000000",
+    "allocation": {
+      "mm": 0.3,
+      "t1": 0.08,
+      "t2": 0.08,
+      "t3": 0.08,
+      "t4": 0.08,
+      "t5": 0.08
+    },
+    "description": "KOB TN10 soak test token (tBTC): 1 TBTC tracks 1 BTC worth of KAS (Binance BTCUSDT / KASUSDT reference, off chain). Fixed supply, no value.",
+    "priceUrl": "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT",
+    "bookShare": 0.22,
+    "pairShare": 0.15,
+    "mm": {
+      "minTokens": "0.000012",
+      "maxTokens": "0.000072",
+      "skewBpsPerToken": 50000
+    },
+    "pairUsd": [
+      3,
+      20
+    ],
+    "fanout": {
+      "mm": [
+        8,
+        "0.006"
+      ],
+      "traders": [
+        4,
+        "0.0016"
+      ]
+    }
+  },
+  "price": {
+    "url": "https://fapi.binance.com/fapi/v1/ticker/price?symbol=KASUSDT",
+    "pollMs": 3000,
+    "staleMs": 120000
+  },
+  "bank": {
+    "key": "bank",
+    "wallets": {
+      "execA": {
+        "min": 150,
+        "target": 400
+      },
+      "execB": {
+        "min": 150,
+        "target": 400
+      },
+      "mm": {
+        "min": 1500,
+        "target": 3000
+      },
+      "t1": {
+        "min": 300,
+        "target": 700
+      },
+      "t2": {
+        "min": 300,
+        "target": 700
+      },
+      "t3": {
+        "min": 300,
+        "target": 700
+      },
+      "t4": {
+        "min": 300,
+        "target": 700
+      },
+      "t5": {
+        "min": 300,
+        "target": 700
+      },
+      "payer": {
+        "min": 120,
+        "target": 300
+      }
+    },
+    "chunkKas": 100,
+    "consolidateAbove": 60,
+    "intervalSec": 30
+  },
+  "mm": {
+    "key": "mm",
+    "levels": 6,
+    "innerBps": 2,
+    "stepBps": 4,
+    "minTokens": "1",
+    "maxTokens": "6",
+    "requoteBps": 20,
+    "skewBpsPerToken": 0.5,
+    "intervalSec": 15,
+    "requoteMinBps": 3,
+    "maxSkewBps": 3
+  },
+  "consolidate": {
+    "enabled": true,
+    "slack": 8,
+    "maxTxPerInterval": 3,
+    "intervalSec": 60,
+    "traders": true
+  },
+  "traders": [
+    {
+      "key": "t1",
+      "meanIntervalSec": 20,
+      "maxUsd": 4
+    },
+    {
+      "key": "t2",
+      "meanIntervalSec": 25,
+      "maxUsd": 6
+    },
+    {
+      "key": "t3",
+      "meanIntervalSec": 30,
+      "maxUsd": 3
+    },
+    {
+      "key": "t4",
+      "meanIntervalSec": 40,
+      "maxUsd": 5
+    },
+    {
+      "key": "t5",
+      "meanIntervalSec": 50,
+      "maxUsd": 8
+    }
+  ],
+  "x402": {
+    "enabled": true,
+    "payerKey": "payer",
+    "merchantKey": "merchant",
+    "listen": "127.0.0.1:8480",
+    "facilitatorUrl": "http://127.0.0.1:8401",
+    "meanIntervalSec": 120,
+    "invoiceIntent": {
+      "enabled": true,
+      "amountKas": 20,
+      "maxSellTusd": 2
+    }
+  },
+  "fees": {
+    "dynamic": true,
+    "maxRate": 1000,
+    "maxFeeKas": 1
+  },
+  "checker": {
+    "intervalSec": 60
+  },
+  "ui": {
+    "listen": "127.0.0.1:8490"
+  }
+}

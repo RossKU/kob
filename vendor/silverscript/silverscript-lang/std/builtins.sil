@@ -1,0 +1,253 @@
+// SilverScript standard-library reference.
+//
+// This file is documentation-first: it records builtin signatures and intended
+// semantics for editor discovery and future standard-library organization.
+// It is not compiled as a normal contract.
+
+/**
+ * Role:
+ *      Validate a state transition into the same contract template.
+ *
+ * Definition:
+ *      Rebuild this contract's redeem script with `newState` and require
+ *      `tx.outputs[outputIndex]` to use the matching P2SH `scriptPubKey`.
+ *      `newState` must provide every state field exactly once in this
+ *      contract's own `State` layout.
+ *
+ * Example:
+ * ```js
+ * validateOutputState(0, State { count: count + 1, owner: owner });
+ * ```
+ *
+ * Pseudo logic:
+ *   1. Encode `newState` using this contract's own `State` layout.
+ *   2. Keep the current contract's non-state prefix and suffix.
+ *   3. Rebuild the redeem script as `prefix || encodedState || suffix`.
+ *   4. Require `tx.outputs[outputIndex]` to use the matching P2SH `scriptPubKey`.
+ *
+ * Security notes:
+ *   - Only checks same-template continuation with the given state.
+ *   - It does not on its own constrain amount or transaction shape.
+ */
+function validateOutputState(int outputIndex, object newState);
+
+/**
+ * Role:
+ *      Validate a state transition into a foreign contract template.
+ *
+ * Definition:
+ *      Encode `newState` using its static struct layout, splice it into the
+ *      supplied foreign template, and require `tx.outputs[outputIndex]` to use
+ *      the matching P2SH `scriptPubKey`.
+ *
+ * Example:
+ * ```js
+ * Receipt receipt = Receipt { orderId: orderId, buyer: buyer, amount: amount };
+ * validateOutputStateWithTemplate(1, receipt, receiptPrefix, receiptSuffix, receiptHash);
+ * ```
+ *
+ * Pseudo logic:
+ *   1. Check that `templateHash(templatePrefix, templateSuffix)` matches `expectedTemplateHash`.
+ *   2. Encode `newState` using its static struct layout.
+ *   3. Rebuild the foreign redeem script as `templatePrefix || encodedState || templateSuffix`.
+ *   4. Require `tx.outputs[outputIndex]` to use the matching P2SH `scriptPubKey`.
+ *
+ * Security notes:
+ *   - `expectedTemplateHash` should come from trusted protocol data such as
+ *     contract state or a verified route commitment, not from an untrusted caller.
+ */
+function validateOutputStateWithTemplate(
+    int outputIndex,
+    object newState,
+    byte[] templatePrefix,
+    byte[] templateSuffix,
+    byte[32] expectedTemplateHash
+);
+
+/**
+ * Role:
+ *      Validate a foreign output using template bytes already present in an input.
+ *
+ * Definition:
+ *      Extract the template prefix and suffix from the redeem script at the end
+ *      of `tx.inputs[templateInputIndex].sigScript`, then validate `newState`
+ *      through the same rules as `validateOutputStateWithTemplate`.
+ *
+ * Example:
+ * ```js
+ * Receipt nextReceipt = Receipt { orderId: orderId, buyer: buyer, amount: amount };
+ * validateOutputStateWithInputTemplate(1, nextReceipt, 2, receiptPrefixLen, receiptSuffixLen, receiptHash);
+ * ```
+ *
+ * Pseudo logic:
+ *   1. Use the supplied prefix/suffix lengths and static `newState` layout to
+ *      locate the redeem script at the end of the selected input's sigscript.
+ *   2. Extract its template prefix and suffix.
+ *   3. Check that `templateHash(prefix, suffix)` matches `expectedTemplateHash`.
+ *   4. Encode `newState`, rebuild the redeem script, and require the selected
+ *      output to use the matching P2SH `scriptPubKey`.
+ *
+ * Security notes:
+ *   - The selected input is only the source of the template bytes.
+ *   - `expectedTemplateHash` should come from trusted protocol data.
+ */
+function validateOutputStateWithInputTemplate(
+    int outputIndex,
+    object newState,
+    int templateInputIndex,
+    int templatePrefixLen,
+    int templateSuffixLen,
+    byte[32] expectedTemplateHash
+);
+
+/**
+ * Role:
+ *      Read another input as this same contract's `State`.
+ *
+ * Definition:
+ *      Decode fixed-size state fields out of another input's sigscript using
+ *      this contract's own `State` layout and the current template's known
+ *      script structure.
+ *
+ * Example:
+ * ```js
+ * State {x: int inX, y: byte[2] inY} = readInputState(1);
+ * require(inX > 7);
+ * ```
+ *
+ * Pseudo logic:
+ *   1. Assume the foreign input uses the same contract template as the current one.
+ *   2. Use this contract's script structure and local `State` layout to
+ *      locate each fixed-size field in the foreign sigscript.
+ *   3. Slice out each field's bytes.
+ *   4. Decode numeric fields such as `int` and `bool`.
+ *   5. Return the decoded value as this contract's `State`, or bind the
+ *      requested destructured fields.
+ *
+ * Security notes:
+ *   - This builtin is intentionally lightweight. It does not independently prove
+ *     which redeem script inside the foreign sigscript is being decoded.
+ *   - It is appropriate when the covenant domain guarantees a single allowed
+ *     foreign contract/layout, so there is no ambiguity about what foreign state
+ *     is being read.
+ *   - Without that surrounding guarantee, you need extra checks tying the
+ *     inspected sigscript bytes to the foreign input.
+ */
+function readInputState(int inputIndex) : (State);
+
+/**
+ * Role:
+ *      Read another input using a foreign contract template and an explicitly
+ *      chosen struct layout.
+ *
+ * Definition:
+ *      Slice a claimed foreign redeem script out of the input sigscript, verify
+ *      its template hash and P2SH commitment, and then decode the state bytes
+ *      using the passed struct layout. The returned `object` is interpreted
+ *      using the struct type implied by the assignment or destructuring target.
+ *
+ * Example:
+ * ```js
+ * Receipt receipt = readInputStateWithTemplate(2, receiptPrefixLen, receiptSuffixLen, receiptHash);
+ * require(receipt.amount == expectedAmount);
+ * ```
+ *
+ * Pseudo logic:
+ *   1. Determine the encoded byte size of the struct layout you want to read.
+ *   2. Use `templatePrefixLen`, that state size, and `templateSuffixLen` to
+ *      slice a claimed redeem script out of the foreign input sigscript.
+ *   3. Split the claimed redeem script into `claimedPrefix`, `claimedState`, and `claimedSuffix`.
+ *   4. Check that `templateHash(claimedPrefix, claimedSuffix)` matches `expectedTemplateHash`.
+ *   5. Require the claimed redeem script to match the foreign input's actual
+ *      P2SH `scriptPubKey`.
+ *   6. Decode `claimedState` using the passed struct layout and return the result.
+ *
+ * Security notes:
+ *   - `expectedTemplateHash` should be trusted protocol data.
+ *   - Also proves the claimed redeem script matches the foreign input's P2SH
+ *     `scriptPubKey` before decoding.
+ */
+function readInputStateWithTemplate(
+    int inputIndex,
+    int templatePrefixLen,
+    int templateSuffixLen,
+    byte[32] expectedTemplateHash
+) : (object);
+
+/**
+ * Role:
+ *      Calculate the canonical hash of a contract template.
+ *
+ * Definition:
+ *      Hash a redeem script's non-state prefix and suffix while committing to
+ *      their exact lengths. Each length is encoded as an eight-byte Script
+ *      integer before its corresponding template part.
+ *
+ * Example:
+ * ```js
+ * byte[32] receiptHash = templateHash(receiptPrefix, receiptSuffix);
+ * ```
+ *
+ * Pseudo logic:
+ *   1. Convert `templatePrefix.length` and `templateSuffix.length` with
+ *      `length as byte[8]`.
+ *   2. Build `prefixLen || templatePrefix || suffixLen || templateSuffix`.
+ *   3. Return `blake3` of that preimage.
+ *
+ * Security notes:
+ *   - The encoded lengths bind the location where state is inserted.
+ *   - `blake3(templatePrefix || templateSuffix)` is not a valid template hash
+ *     because it does not commit to the prefix/suffix boundary.
+ */
+function templateHash(byte[] templatePrefix, byte[] templateSuffix) : (byte[32]);
+
+/**
+ * Role:
+ *      Calculate a Blake2b-256 hash.
+ *
+ * Definition:
+ *      Hash `data` with Blake2b and return 32 bytes.
+ *
+ * Example:
+ * ```js
+ * byte[32] digest = blake2b(message);
+ * ```
+ */
+function blake2b(byte[] data) : (byte[32]);
+
+/**
+ * Role:
+ *      Calculate a keyed Blake2b-256 hash.
+ *
+ * Definition:
+ *      Hash `data` with the supplied Blake2b key and return 32 bytes.
+ *      The key may contain at most 64 bytes.
+ *
+ * Example:
+ * ```js
+ * byte[32] id = blake2bWithKey(preimage, byte[]("CovenantID"));
+ * ```
+ *
+ * Security notes:
+ *   - Keyed Blake2b is also used for protocol domain separation. The key must
+ *     exactly match the domain defined by the protocol being reconstructed.
+ */
+function blake2bWithKey(byte[] data, byte[] key) : (byte[32]);
+
+/**
+ * Role:
+ *      Calculate a Blake3 hash.
+ *
+ * Definition:
+ *      Hash `data` with Blake3 and return 32 bytes.
+ */
+function blake3(byte[] data) : (byte[32]);
+
+/**
+ * Role:
+ *      Calculate a keyed Blake3 hash.
+ *
+ * Definition:
+ *      Hash `data` with the supplied 32-byte Blake3 key and return 32 bytes.
+ */
+function blake3WithKey(byte[] data, byte[32] key) : (byte[32]);

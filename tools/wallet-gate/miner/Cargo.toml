@@ -1,0 +1,47 @@
+[package]
+name = "kob-wallet-gate-miner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "ISC"
+description = "Standalone Kaspa testnet-10 miner (CPU threads or an OpenCL GPU) that funds test addresses, optionally in bursts below a balance watermark"
+
+# Keep this project out of any parent (repo-root) cargo workspace.
+[workspace]
+
+[lib]
+name = "tn10_miner"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tn10-miner"
+path = "src/main.rs"
+
+[features]
+# OpenCL backend (`--backend gpu|auto`). opencl3 loads OpenCL.dll / libOpenCL.so at run time (its default "dynamic" feature), so a
+# build with this feature needs no OpenCL SDK, and the binary still runs (CPU fallback under `auto`) where no OpenCL driver exists.
+gpu = ["dep:opencl3"]
+
+[dependencies]
+kaspa-pow = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+kaspa-consensus-core = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+kaspa-rpc-core = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+kaspa-hashes = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+kaspa-math = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+anyhow = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+num_cpus = "1"
+opencl3 = { version = "0.12", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "sync"] }
+tokio-tungstenite = "0.23"
+
+[dev-dependencies]
+kaspa-addresses = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+keccak = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4

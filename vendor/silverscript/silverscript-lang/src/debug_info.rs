@@ -1,0 +1,298 @@
+use crate::ast::Expr;
+use crate::span;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct SourceSpan {
+    pub line: u32,
+    pub col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+}
+
+impl<'a> From<span::Span<'a>> for SourceSpan {
+    fn from(span: span::Span<'a>) -> Self {
+        let (line, col, end_line, end_col) = span.line_col_range();
+        Self { line: line as u32, col: col as u32, end_line: end_line as u32, end_col: end_col as u32 }
+    }
+}
+
+/// `DebugInfo` builder used by compiler-side recorders.
+///
+/// Accumulates debug metadata during compilation.
+/// Collects steps, variable updates, param mappings, function ranges, and constants.
+/// Converted to `DebugInfo` after compilation completes.
+#[derive(Debug, Default)]
+pub struct DebugInfoRecorder<'i> {
+    steps: Vec<DebugStep<'i>>,
+    params: Vec<DebugParamMapping>,
+    entry_points: Vec<DebugFunctionRange>,
+    constructor_args: Vec<DebugNamedValue<'i>>,
+    constants: Vec<DebugNamedValue<'i>>,
+    next_sequence: u32,
+}
+
+impl<'i> DebugInfoRecorder<'i> {
+    /// Appends one recorded step.
+    pub fn record_step(&mut self, step: DebugStep<'i>) -> usize {
+        self.steps.push(step);
+        self.steps.len().saturating_sub(1)
+    }
+
+    pub fn step_mut(&mut self, index: usize) -> Option<&mut DebugStep<'i>> {
+        self.steps.get_mut(index)
+    }
+
+    /// Appends one parameter stack mapping.
+    pub fn record_param(&mut self, param: DebugParamMapping) {
+        self.params.push(param);
+    }
+
+    /// Appends one compiled function bytecode range.
+    pub fn record_function(&mut self, function: DebugFunctionRange) {
+        self.entry_points.push(function);
+    }
+
+    pub fn record_constructor_arg(&mut self, binding: DebugNamedValue<'i>) {
+        self.constructor_args.push(binding);
+    }
+
+    pub fn record_constant(&mut self, binding: DebugNamedValue<'i>) {
+        self.constants.push(binding);
+    }
+
+    /// Returns the next global sequence id for one emitted debug event.
+    pub fn next_sequence(&mut self) -> u32 {
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        sequence
+    }
+
+    /// Reserves a contiguous sequence block and returns its base id.
+    /// Callers use this when merging per-function debug data into contract-level
+    /// metadata so each function keeps local order while remaining globally ordered.
+    pub fn reserve_sequence_block(&mut self, count: u32) -> u32 {
+        let base = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(count);
+        base
+    }
+
+    /// Builds the final serializable debug payload.
+    pub fn into_debug_info(self, source: String) -> DebugInfo<'i> {
+        DebugInfo {
+            source,
+            steps: self.steps,
+            params: self.params,
+            functions: self.entry_points,
+            constructor_args: self.constructor_args,
+            constants: self.constants,
+        }
+    }
+}
+
+/// Complete debug metadata attached to compiled contract.
+/// Contains everything needed to map bytecode execution back to source and evaluate variables.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DebugInfo<'i> {
+    pub source: String,
+    pub steps: Vec<DebugStep<'i>>,
+    #[serde(default)]
+    pub params: Vec<DebugParamMapping>,
+    #[serde(default)]
+    pub functions: Vec<DebugFunctionRange>,
+    #[serde(default)]
+    pub constructor_args: Vec<DebugNamedValue<'i>>,
+    #[serde(default)]
+    pub constants: Vec<DebugNamedValue<'i>>,
+}
+
+impl<'i> DebugInfo<'i> {
+    pub fn empty() -> Self {
+        Self {
+            source: String::new(),
+            steps: Vec::new(),
+            params: Vec::new(),
+            functions: Vec::new(),
+            constructor_args: Vec::new(),
+            constants: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DebugVariableUpdate<'i> {
+    pub name: String,
+    pub type_name: String,
+    #[serde(default)]
+    pub stack_binding: Option<DebugStackBinding>,
+    #[serde(default)]
+    pub structured_leaf_bindings: Option<Vec<DebugLeafBinding>>,
+    /// Pre-resolved expression for debugger shadow evaluation.
+    /// Identifiers may include inline synthetic placeholders (`__arg_*`).
+    pub expr: Expr<'i>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DebugStackBinding {
+    pub from_top: i64,
+    #[serde(default)]
+    pub stack_height: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DebugLeafBinding {
+    #[serde(default)]
+    pub field_path: Vec<String>,
+    pub type_name: String,
+    #[serde(default)]
+    pub stack_binding: Option<DebugStackBinding>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum DebugParamBinding {
+    SingleValue { stack_index: i64 },
+    StructuredValue { leaf_bindings: Vec<DebugLeafBinding> },
+}
+
+/// Maps one source parameter to either a single runtime slot or a lowered set of leaf slots.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DebugParamMapping {
+    pub name: String,
+    pub type_name: String,
+    pub binding: DebugParamBinding,
+    pub function: String,
+}
+
+/// Bytecode range for a compiled function.
+/// Used to determine which function is executing at a given bytecode offset.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DebugFunctionRange {
+    pub name: String,
+    pub bytecode_start: usize,
+    pub bytecode_end: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DebugNamedValue<'i> {
+    pub name: String,
+    pub type_name: String,
+    pub value: Expr<'i>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DebugStep<'i> {
+    pub bytecode_start: usize,
+    pub bytecode_end: usize,
+    pub span: SourceSpan,
+    pub kind: StepKind,
+    /// Global step order used as a stable tiebreak for overlapping steps.
+    #[serde(default)]
+    pub sequence: u32,
+    #[serde(default)]
+    pub call_depth: u32,
+    #[serde(default)]
+    pub frame_id: u32,
+    #[serde(default)]
+    pub variable_updates: Vec<DebugVariableUpdate<'i>>,
+    #[serde(default)]
+    pub console_args: Vec<Expr<'i>>,
+}
+
+impl<'i> DebugStep<'i> {
+    pub fn id(&self) -> StepId {
+        StepId { sequence: self.sequence, frame_id: self.frame_id }
+    }
+
+    pub fn is_zero_width(&self) -> bool {
+        self.bytecode_start == self.bytecode_end
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct StepId {
+    pub sequence: u32,
+    pub frame_id: u32,
+}
+
+impl StepId {
+    pub const ROOT: Self = Self { sequence: 0, frame_id: 0 };
+
+    pub fn new(sequence: u32, frame_id: u32) -> Self {
+        Self { sequence, frame_id }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum StepKind {
+    Source {},
+    InlineCallEnter { callee: String },
+    InlineCallExit { callee: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{DebugInfo, SourceSpan};
+    use crate::span::Span;
+
+    #[test]
+    fn source_span_from_span_uses_line_col_range() {
+        let source = "alpha\nbeta\ngamma";
+        let span = Span::new(source, 6, 10).expect("span");
+        let source_span = SourceSpan::from(span);
+        assert_eq!(source_span.line, 2);
+        assert_eq!(source_span.col, 1);
+        assert_eq!(source_span.end_line, 2);
+        assert_eq!(source_span.end_col, 5);
+    }
+
+    #[test]
+    fn debug_info_schema_requires_step_span() {
+        let value = json!({
+            "source": "",
+            "steps": [{
+                "bytecode_start": 0,
+                "bytecode_end": 1,
+                "kind": { "Source": {} },
+                "sequence": 0,
+                "call_depth": 0,
+                "frame_id": 0,
+                "variable_updates": []
+            }],
+            "variable_updates": [],
+            "params": [],
+            "functions": [],
+            "constants": []
+        });
+
+        let parsed: Result<DebugInfo<'static>, _> = serde_json::from_value(value);
+        assert!(parsed.is_err(), "step span should be required");
+    }
+
+    #[test]
+    fn debug_info_schema_nests_variable_updates_in_steps() {
+        let value = json!({
+            "source": "",
+            "steps": [{
+                "bytecode_start": 0,
+                "bytecode_end": 1,
+                "span": { "line": 1, "col": 1, "end_line": 1, "end_col": 1 },
+                "kind": { "Source": {} },
+                "sequence": 0,
+                "call_depth": 0,
+                "frame_id": 0,
+                "variable_updates": []
+            }],
+            "params": [],
+            "functions": [],
+            "constants": []
+        });
+
+        let parsed: DebugInfo<'static> = serde_json::from_value(value).expect("parse debug info");
+        let serialized = serde_json::to_value(parsed).expect("serialize debug info");
+
+        assert!(serialized["steps"][0].get("variable_updates").is_some(), "step should carry variable_updates");
+    }
+}

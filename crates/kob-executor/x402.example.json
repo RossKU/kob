@@ -1,0 +1,39 @@
+{
+  "network": "kaspa:testnet-10",
+  "node": "ws://127.0.0.1:18210",
+  "listen": "127.0.0.1:8402",
+  "ledger": "x402-ledger.jsonl",
+  "auth": "required",
+  "confirmationsDaa": 100,
+  "maxFeeSompi": 50000000,
+  "minAmountSompi": 1000,
+  "swap": true,
+  "registry": "builtin",
+  "allowIssuerControlled": false,
+  "merchants": [
+    {
+      "id": "shop-1",
+      "apiKeySha256": "6c1b21b00947ccffdadf3285949b665d3df16e6d09df7a1737b18c8891d83d6d",
+      "allowedPayTo": ["kaspatest:qz3gmz7u9442zx3v9kxxfeeyjv2u0yq83yl3a7eccqsky4aemvtxxj55nmfjh"],
+      "allowedAssets": ["KAS"],
+      "rateLimit": { "burst": 20, "perSecond": 5 }
+    }
+  ],
+  "rateLimit": {
+    "perIp": { "burst": 30, "perSecond": 10 },
+    "perMerchant": { "burst": 60, "perSecond": 20 }
+  },
+  "maxBodyBytes": 1048576,
+  "bodyDeadlineMs": 10000,
+  "headerTimeoutMs": 10000,
+  "settleWaitMs": 30000,
+  "pollIntervalMs": 200,
+  "nodeTimeoutMs": 5000,
+  "reorgWatchDaa": 36000,
+  "reconcileIntervalSeconds": 30,
+  "maxConcurrentSettles": 64,
+  "maxConnections": 1024,
+  "killSwitchFile": "x402.kill",
+  "intents": { "enabled": false, "keeperPubkey": "", "fillerSompi": 20000000, "maxAttempts": 20, "maxBuilds": 24, "maxCandidates": 8, "lockMarginDaa": 10 },
+  "invoices": { "enabled": false, "maxLifetimeSeconds": 604800, "maxOpenPerMerchant": 10000 }
+}

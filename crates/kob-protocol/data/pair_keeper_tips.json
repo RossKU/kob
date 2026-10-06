@@ -1,0 +1,386 @@
+{
+  "KCC20KaspaCom_0_2_5+KCC20KaspaCom_0_2_5": {
+    "refundFee": "12148800",
+    "refundTip": "24300000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20KaspaCom_0_2_5+KCC20P2": {
+    "refundFee": "7657400",
+    "refundTip": "15400000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20KaspaCom_0_2_5+KCC20Ref": {
+    "refundFee": "7656400",
+    "refundTip": "15400000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20KaspaCom_0_2_5+KCC20Ref_16x16": {
+    "refundFee": "9596000",
+    "refundTip": "19200000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20KaspaCom_0_2_5+KCC20Ref_4x5": {
+    "refundFee": "7874800",
+    "refundTip": "15800000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20KaspaCom_0_2_5+KCC20Ref_8x8": {
+    "refundFee": "8402400",
+    "refundTip": "16900000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20KaspaCom_0_2_5+KronToken2433": {
+    "refundFee": "7510800",
+    "refundTip": "15100000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20KaspaCom_0_2_5+KronToken2732": {
+    "refundFee": "7570600",
+    "refundTip": "15200000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20P2+KCC20KaspaCom_0_2_5": {
+    "refundFee": "7657400",
+    "refundTip": "15400000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20P2+KCC20P2": {
+    "refundFee": "3166000",
+    "refundTip": "6400000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20P2+KCC20Ref": {
+    "refundFee": "3165000",
+    "refundTip": "6400000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20P2+KCC20Ref_16x16": {
+    "refundFee": "5104600",
+    "refundTip": "10300000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20P2+KCC20Ref_4x5": {
+    "refundFee": "3383400",
+    "refundTip": "6800000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20P2+KCC20Ref_8x8": {
+    "refundFee": "3911000",
+    "refundTip": "7900000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20P2+KronToken2433": {
+    "refundFee": "3019400",
+    "refundTip": "6100000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20P2+KronToken2732": {
+    "refundFee": "3079200",
+    "refundTip": "6200000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref+KCC20KaspaCom_0_2_5": {
+    "refundFee": "7656400",
+    "refundTip": "15400000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref+KCC20P2": {
+    "refundFee": "3165000",
+    "refundTip": "6400000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref+KCC20Ref": {
+    "refundFee": "3164000",
+    "refundTip": "6400000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref+KCC20Ref_16x16": {
+    "refundFee": "5103600",
+    "refundTip": "10300000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref+KCC20Ref_4x5": {
+    "refundFee": "3382400",
+    "refundTip": "6800000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref+KCC20Ref_8x8": {
+    "refundFee": "3910000",
+    "refundTip": "7900000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref+KronToken2433": {
+    "refundFee": "3018400",
+    "refundTip": "6100000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref+KronToken2732": {
+    "refundFee": "3078200",
+    "refundTip": "6200000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_16x16+KCC20KaspaCom_0_2_5": {
+    "refundFee": "9596000",
+    "refundTip": "19200000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_16x16+KCC20P2": {
+    "refundFee": "5104600",
+    "refundTip": "10300000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_16x16+KCC20Ref": {
+    "refundFee": "5103600",
+    "refundTip": "10300000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_16x16+KCC20Ref_16x16": {
+    "refundFee": "7043200",
+    "refundTip": "14100000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_16x16+KCC20Ref_4x5": {
+    "refundFee": "5322000",
+    "refundTip": "10700000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_16x16+KCC20Ref_8x8": {
+    "refundFee": "5849600",
+    "refundTip": "11700000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_16x16+KronToken2433": {
+    "refundFee": "4958000",
+    "refundTip": "10000000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_16x16+KronToken2732": {
+    "refundFee": "5017800",
+    "refundTip": "10100000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_4x5+KCC20KaspaCom_0_2_5": {
+    "refundFee": "7874800",
+    "refundTip": "15800000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_4x5+KCC20P2": {
+    "refundFee": "3383400",
+    "refundTip": "6800000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_4x5+KCC20Ref": {
+    "refundFee": "3382400",
+    "refundTip": "6800000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_4x5+KCC20Ref_16x16": {
+    "refundFee": "5322000",
+    "refundTip": "10700000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_4x5+KCC20Ref_4x5": {
+    "refundFee": "3600800",
+    "refundTip": "7300000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_4x5+KCC20Ref_8x8": {
+    "refundFee": "4128400",
+    "refundTip": "8300000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_4x5+KronToken2433": {
+    "refundFee": "3236800",
+    "refundTip": "6500000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_4x5+KronToken2732": {
+    "refundFee": "3296600",
+    "refundTip": "6600000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_8x8+KCC20KaspaCom_0_2_5": {
+    "refundFee": "8402400",
+    "refundTip": "16900000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_8x8+KCC20P2": {
+    "refundFee": "3911000",
+    "refundTip": "7900000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_8x8+KCC20Ref": {
+    "refundFee": "3910000",
+    "refundTip": "7900000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_8x8+KCC20Ref_16x16": {
+    "refundFee": "5849600",
+    "refundTip": "11700000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_8x8+KCC20Ref_4x5": {
+    "refundFee": "4128400",
+    "refundTip": "8300000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_8x8+KCC20Ref_8x8": {
+    "refundFee": "4656000",
+    "refundTip": "9400000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_8x8+KronToken2433": {
+    "refundFee": "3764400",
+    "refundTip": "7600000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KCC20Ref_8x8+KronToken2732": {
+    "refundFee": "3824200",
+    "refundTip": "7700000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2433+KCC20KaspaCom_0_2_5": {
+    "refundFee": "7510800",
+    "refundTip": "15100000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2433+KCC20P2": {
+    "refundFee": "3019400",
+    "refundTip": "6100000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2433+KCC20Ref": {
+    "refundFee": "3018400",
+    "refundTip": "6100000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2433+KCC20Ref_16x16": {
+    "refundFee": "4958000",
+    "refundTip": "10000000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2433+KCC20Ref_4x5": {
+    "refundFee": "3236800",
+    "refundTip": "6500000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2433+KCC20Ref_8x8": {
+    "refundFee": "3764400",
+    "refundTip": "7600000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2433+KronToken2433": {
+    "refundFee": "2872800",
+    "refundTip": "5800000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2433+KronToken2732": {
+    "refundFee": "2932600",
+    "refundTip": "5900000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2732+KCC20KaspaCom_0_2_5": {
+    "refundFee": "7570600",
+    "refundTip": "15200000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2732+KCC20P2": {
+    "refundFee": "3079200",
+    "refundTip": "6200000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2732+KCC20Ref": {
+    "refundFee": "3078200",
+    "refundTip": "6200000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2732+KCC20Ref_16x16": {
+    "refundFee": "5017800",
+    "refundTip": "10100000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2732+KCC20Ref_4x5": {
+    "refundFee": "3296600",
+    "refundTip": "6600000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2732+KCC20Ref_8x8": {
+    "refundFee": "3824200",
+    "refundTip": "7700000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2732+KronToken2433": {
+    "refundFee": "2932600",
+    "refundTip": "5900000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  },
+  "KronToken2732+KronToken2732": {
+    "refundFee": "2992400",
+    "refundTip": "6000000",
+    "updateFee": "1776600",
+    "keeperTip": "3600000"
+  }
+}

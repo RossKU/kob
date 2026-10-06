@@ -1,0 +1,42 @@
+{
+  "name": "kob-web",
+  "version": "0.1.0",
+  "private": true,
+  "license": "ISC",
+  "type": "module",
+  "description": "KOB web app (M4): static, client-side, non-custodial order book UI over kob-wasm + the official kaspa-wasm SDK",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "fetch-sdk": "node scripts/fetch-sdk.mjs",
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "vite",
+    "build": "vite build",
+    "build:release": "vite build && node scripts/bundle-registry.mjs",
+    "preview": "vite preview",
+    "mock": "node mock/server.mjs",
+    "e2e": "playwright test --config playwright.config.ts",
+    "e2e:real": "node e2e-real/run.mjs"
+  },
+  "dependencies": {
+    "lightweight-charts": "^5.2.1",
+    "preact": "^10.29.0"
+  },
+  "devDependencies": {
+    "@noble/curves": "^2.0.0",
+    "@noble/hashes": "^2.0.0",
+    "@playwright/test": "1.63.0",
+    "@preact/preset-vite": "^2.10.0",
+    "@types/node": "^22.20.4",
+    "@types/ws": "^8.18.2",
+    "fflate": "^0.8.2",
+    "typescript": "^5.9.0",
+    "vite": "^8.0.0",
+    "vitest": "^5.0.0",
+    "ws": "^8.18.0"
+  }
+}

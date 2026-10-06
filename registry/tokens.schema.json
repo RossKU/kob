@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RossKU/KOB/registry/tokens.schema.json",
+  "title": "KOB token registry",
+  "description": "Pinned token programs and the tokens KOB knows about. Structure only: cross-field rules (family/template agreement, extension commitment rules, duplicate identities, confusable tickers, listing prerequisites, slot-limit consistency) are enforced by kob_protocol::registry::Registry::validate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "network", "templates", "tokens"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schema_version": { "const": 1 },
+    "network": { "enum": ["mainnet", "testnet-10", "devnet"] },
+    "templates": { "type": "array", "items": { "$ref": "#/$defs/template" } },
+    "tokens": { "type": "array", "items": { "$ref": "#/$defs/token" } }
+  },
+  "$defs": {
+    "hex32": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "32 bytes, lowercase hex, no 0x prefix" },
+    "family": { "enum": ["kcc20", "kron"] },
+    "status": { "enum": ["pending-review", "listed", "delisted"] },
+    "extension_class": { "enum": ["none", "fixed-supply-standard", "other"] },
+    "review_status": { "enum": ["pending-review", "reviewed"], "description": "only reviewed templates are on the strict list: a token on one of them is tradable" },
+    "capability": { "enum": ["mint-authority", "public-mint", "burn", "freeze", "seize", "blacklist"] },
+    "byte": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "escrow": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "kcc20: owner_scheme 4 and borrow_scheme 0. kron: id_type 2, is_minter 0, delivery_id_type 3 or 0.",
+      "properties": {
+        "owner_scheme": { "$ref": "#/$defs/byte" },
+        "borrow_scheme": { "$ref": "#/$defs/byte" },
+        "id_type": { "$ref": "#/$defs/byte" },
+        "is_minter": { "$ref": "#/$defs/byte" },
+        "delivery_id_type": { "$ref": "#/$defs/byte" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "upstream": { "type": "string" },
+        "note": { "type": "string" }
+      }
+    },
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "family",
+        "template_hash",
+        "prefix_len",
+        "suffix_len",
+        "state_len",
+        "max_token_inputs",
+        "max_token_outputs",
+        "escrow",
+        "review_status",
+        "source"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+        "family": { "$ref": "#/$defs/family" },
+        "template_hash": { "$ref": "#/$defs/hex32" },
+        "prefix_len": { "type": "integer", "minimum": 0 },
+        "suffix_len": { "type": "integer", "minimum": 1 },
+        "state_len": { "type": "integer", "enum": [112, 46], "description": "112 for kcc20, 46 for kron" },
+        "max_token_inputs": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "max_token_outputs": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "escrow": { "$ref": "#/$defs/escrow" },
+        "review_status": { "$ref": "#/$defs/review_status" },
+        "capabilities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/capability" },
+          "uniqueItems": true,
+          "description": "what the program's authorities can do beyond owner-authorised transfers; freeze, seize and blacklist are labelled in every UI. Optional, default none"
+        },
+        "risks": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "description": "declared risks of the program that are not a capability (missing hardening, signing assumptions); shown next to the capabilities. Optional, default none"
+        },
+        "source": { "$ref": "#/$defs/source" }
+      }
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string", "maxLength": 512 },
+        "website": { "type": "string", "pattern": "^https://", "maxLength": 512 },
+        "icon": { "type": "string", "pattern": "^(https|ipfs)://", "maxLength": 512 },
+        "kcc23": { "type": "object" }
+      }
+    },
+    "warning_code": {
+      "enum": ["genesis_unverified"],
+      "description": "token warning codes of the API data model (kob_protocol::registry::TokenWarning, the executor's /v1/tokens `warnings`). Derived, not stored in this file: genesis_unverified = the entry does not say genesis_verified: true (every open-list token without an entry carries it)"
+    },
+    "genesis_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["txid", "daa_score", "outputs", "supply", "minter_outputs", "checked_at_daa", "source"],
+      "description": "what the genesis check (C1) and the live-mint-authority check (C2) found, re-derived from registry/evidence/ by kob registry verify-genesis. Needs genesis_verified. Optional",
+      "properties": {
+        "txid": { "$ref": "#/$defs/hex32", "description": "genesis transaction id (recomputed from the recorded transaction)" },
+        "daa_score": { "type": "integer", "minimum": 0, "description": "DAA score of the block that accepted the genesis" },
+        "outputs": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0 }, "description": "output indices of the genesis group, strictly increasing" },
+        "supply": { "type": "integer", "minimum": 0, "description": "token amount the genesis created" },
+        "minter_outputs": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "genesis outputs carrying a mint authority (KRON is_minter != 0); empty proves a KRON token never has a live minter" },
+        "live_minters": { "type": "array", "items": { "type": "string", "pattern": "^[0-9a-f]{64}:[0-9]+$" }, "description": "live mint-authority cells (txid:index): [] = none (C2 holds), absent = not determined; non-empty needs a warning and forbids official" },
+        "checked_at_daa": { "type": "integer", "minimum": 0, "description": "virtual DAA score of the node the check read liveness from" },
+        "source": { "type": "string", "minLength": 1, "maxLength": 512, "description": "where the bytes came from (node, explorer, issuer) and how they were checked" }
+      }
+    },
+    "token": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ticker",
+        "name",
+        "family",
+        "covenant_id",
+        "template_id",
+        "extension_commitment",
+        "extension_class",
+        "decimals",
+        "status",
+        "verified"
+      ],
+      "properties": {
+        "ticker": { "type": "string", "pattern": "^[A-Z0-9]{2,12}$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "family": { "$ref": "#/$defs/family" },
+        "covenant_id": { "$ref": "#/$defs/hex32" },
+        "template_id": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+        "extension_commitment": { "oneOf": [{ "$ref": "#/$defs/hex32" }, { "type": "null" }], "description": "required for kcc20, null for kron" },
+        "extension_class": { "$ref": "#/$defs/extension_class" },
+        "decimals": { "type": "integer", "minimum": 0, "maximum": 18 },
+        "lot_size": { "type": ["integer", "null"], "description": "legacy (protocol v2 lots): read and ignored; protocol v3 orders have no lot" },
+        "tick": { "type": ["integer", "null"], "description": "legacy (protocol v2 price tick): read and ignored" },
+        "max_token_inputs": { "type": "integer", "minimum": 1, "maximum": 64, "description": "optional; must equal the template's" },
+        "max_token_outputs": { "type": "integer", "minimum": 1, "maximum": 64, "description": "optional; must equal the template's" },
+        "status": { "$ref": "#/$defs/status" },
+        "verified": { "type": "boolean", "description": "KOB checked covenant id and template hash against chain" },
+        "genesis_verified": { "type": "boolean", "description": "Genesis check: true = EVERY output of the token's genesis group was revealed and is an instance of its program (kob_protocol::registry::verify_genesis); false = checked and NOT clean; absent = not checked. Needs verified; official needs true; without true the API attaches the warning genesis_unverified. Optional" },
+        "genesis": { "$ref": "#/$defs/genesis_record" },
+        "warning": { "type": "string", "minLength": 1, "maxLength": 512, "description": "free-text warning UIs show next to the token (e.g. what the genesis check found). Optional" },
+        "official": { "type": "boolean", "description": "confirmed genuine (shown with an official badge); needs verified, genesis_verified, a genesis record with live_minters [] (no live mint authority) and status listed. Optional, default false (shown as unverified)" },
+        "display": { "$ref": "#/$defs/display" }
+      }
+    }
+  }
+}

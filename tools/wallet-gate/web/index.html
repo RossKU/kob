@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KOB wallet gate</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --bg:#fff; --fg:#1b1f24; --muted:#657080; --line:#d6dbe1; --ok:#0a7a3d; --bad:#b3261e; --card:#f6f8fa; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14181d; --fg:#e6e9ee; --muted:#93a0b0; --line:#2b333d; --ok:#4cc38a; --bad:#ff7b72; --card:#1b2129; } }
+  body { font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); margin: 0 auto; max-width: 1100px; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; } h2 { font-size: 15px; margin: 18px 0 6px; }
+  section { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 10px 14px; margin: 10px 0; }
+  button, select, input, textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; }
+  button { cursor: pointer; margin: 2px 6px 2px 0; } button:disabled { opacity: .45; cursor: not-allowed; }
+  .muted { color: var(--muted); } .ok { color: var(--ok); } .bad { color: var(--bad); }
+  code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; word-break: break-all; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; } th, td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; }
+  #log { max-height: 260px; overflow: auto; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 6px 0; } label { display: flex; gap: 5px; align-items: center; }
+  textarea { width: 100%; height: 60px; }
+</style>
+</head>
+<body>
+<h1>KOB wallet gate <span class="muted">- can this wallet sign covenant (P2SH) inputs in Toccata tx v1? (testnet-10)</span></h1>
+<div class="muted">Status: <span id="boot">booting...</span> | node: <span id="node" class="mono">-</span> | <span id="nodeinfo">-</span></div>
+
+<section>
+  <h2>1. Wallet</h2>
+  <div id="wallets" class="row"></div>
+  <div class="mono" id="walletinfo">not connected</div>
+  <div class="muted">The wallet must be on <b>testnet-10</b> and the account must be the one you passed to <code>scripts/setup.mjs</code>.</div>
+</section>
+
+<section>
+  <h2>2. Setup (created by <code>node scripts/setup.mjs --wallet-address ...</code>)</h2>
+  <div class="mono" id="setupinfo">-</div>
+  <details><summary class="muted">paste a setup JSON manually</summary>
+    <textarea id="setupjson" placeholder='contents of state/setup-&lt;pubkey&gt;.json'></textarea><button id="loadsetup">Load</button>
+  </details>
+</section>
+
+<section>
+  <h2>3. Tests</h2>
+  <div class="row">
+    <label>popup appeared? <select id="popup"><option>unknown</option><option>yes</option><option>no</option></select></label>
+    <label>popup displayed <input id="displayed" size="42" placeholder="what the popup showed (amounts, address, ...)"></label>
+    <label>note <input id="note" size="28"></label>
+  </div>
+  <div class="row">
+    <label>sighash <select id="sighash"><option value="1">1 = ALL</option><option value="129">129 = ALL|ACP</option><option value="2">2</option><option value="4">4</option></select></label>
+    <label>Kastle variant <select id="kvariant"><option value="">auto</option><option value="empty-script">empty-script</option><option value="redeem-script">redeem-script</option><option value="plain">plain (no scripts)</option></select></label>
+    <label>Kaspire mode <select id="kmode"><option value="">auto</option><option value="ordered-args">ordered-args</option><option value="wrap-signature">wrap-signature</option><option value="none">none</option></select></label>
+    <label><input type="checkbox" id="usewallettx"> broadcast the wallet-returned tx</label>
+  </div>
+  <div class="row">
+    <button id="run-T1">T1 - P2PK spend (v1 + computeBudget)</button>
+    <button id="run-T2">T2 - BidOrder.cancel(sig) (covenant input)</button>
+    <button id="run-T3">T3 - KCC-20 transfer (owner witness)</button>
+  </div>
+  <div class="muted">Each button builds an unsigned v1 tx, asks the wallet to sign <b>input 0 only</b>, extracts the signature, assembles the sigscript (args + 4-byte dispatch tag + redeem script), broadcasts through the node and waits for the output to appear in the UTXO set. Approve the wallet popup and read what it shows.</div>
+</section>
+
+<section>
+  <h2>Results</h2>
+  <table>
+    <thead><tr><th>time</th><th>wallet</th><th>test</th><th>popup</th><th>sig returned</th><th>wallet sigscript == ours</th><th>accepted</th><th>txid</th><th>error</th></tr></thead>
+    <tbody id="records"></tbody>
+  </table>
+  <div class="row"><button id="dl">Download results JSON</button><button id="clear">Clear</button><span class="muted">Also appended server-side to <code>out/page-results.jsonl</code>.</span></div>
+</section>
+
+<section><h2>Log</h2><div id="log"></div></section>
+<script type="module" src="/web/app.mjs"></script>
+</body>
+</html>

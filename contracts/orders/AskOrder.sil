@@ -1,0 +1,140 @@
+pragma silverscript ^0.1.0;
+
+// First-generation KOB ASK order: sells a KCC-20 token for KAS at a fixed lot price.
+// Superseded by v2/KobAsk.sil (per-order values in the state span, so all asks share one template;
+// adds stray-token guard, IOC/FOK, price decay, TWAP, soft expiry). Kept because the v1 test
+// harnesses (kob_protocol_tests, kob_gap_tests, kob_kaspacom_tests) compile it. Here the order
+// values are constructor arguments baked into the script, so every order is its own template.
+//
+// Entries:
+//   settle(n > 0, ...)  anyone: fill n lots
+//   settle(n == 0, ...) anyone: refund to the maker once tx.daa >= expiryDaa
+//   cancel(sig)         maker only, SIGHASH_ALL
+// Fill and refund share one entry so the token read and the token-output reconstruction are
+// emitted once (saves ~770 B per spend vs. separate entries).
+//
+// State: none. The order holds ONE KCC-20 UTXO owned by this order's KIP-20 covenant id
+// (owner_scheme 0x04, borrow disabled); the remaining quantity IS that UTXO's `amount`, so a
+// partial fill continues with the byte-identical script.
+//
+// Key invariants:
+//   - Positional rule (anti-aliasing): everything owed to the maker for the order spent at input i
+//     is paid in output i, so one output can never satisfy two KOB orders.
+//   - The token input is genuine (covenant id + template hash) and owned by this order; the only
+//     token output allowed is the remainder in custody (fill) or the full balance to the maker (refund).
+//   - A partial fill continues with the same script and keeps the KAS carriers in place; a sold-out
+//     order terminates and its carriers go to the maker with the proceeds.
+//   - Overflow and division by zero are excluded before any arithmetic (MAX_SOMPI, lot bounds).
+//   - cancel enforces SIGHASH_ALL, so the maker's signature covers every output of the transaction.
+//   - No stray-token guard and no exact-custody amount check (v2 adds both).
+contract AskOrder(
+    pubkey maker,          // KAS payouts, token refunds, cancel key
+    byte[32] tokenCovId,   // KIP-20 covenant id of the KCC-20 token
+    byte[32] tokenTplHash, // KCC-1 template hash of the token program
+    int tplPrefixLen,
+    int tplSuffixLen,
+    int lotSize,           // token base units per lot (> 0)
+    int lotPrice,          // sompi per lot (> 0)
+    int expiryDaa,         // earliest DAA score at which anyone may refund
+    int refundTip          // max sompi a refund keeper may keep (>= 0)
+) {
+    struct KCC20State {
+        int amount;
+        byte[32] owner;
+        byte owner_scheme;
+        byte borrow_scheme;
+        byte[32] borrow_guard;
+        byte[32] extension_commitment;
+    }
+
+    byte constant SCHEME_P2PK = 0x00;
+    byte constant SCHEME_COVID = 0x04;
+    byte constant BORROW_DISABLED = 0x00;
+    byte constant SIGHASH_ALL = 0x01;
+    // > total KAS supply in sompi (2.87e18), < 2^63.
+    int constant MAX_SOMPI = 2900000000000000000;
+
+    // n: lots to fill (0 = refund); tokenIn: the order's token input;
+    // tokOut: token change output (fill with remainder) - ignored otherwise.
+    entry settle(int n, int tokenIn, int tokOut) {
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+
+        // The token input is genuine (covenant id + template) and owned by this order.
+        require(OpInputCovenantId(tokenIn) == tokenCovId);
+        KCC20State tin = readInputStateWithTemplate(tokenIn, tplPrefixLen, tplSuffixLen, tokenTplHash);
+        require(tin.owner == selfId);
+        require(tin.owner_scheme == SCHEME_COVID);
+        require(tin.borrow_scheme == BORROW_DISABLED);
+
+        int carriers = tx.inputs[self].value + tx.inputs[tokenIn].value;
+        int outAmount = 0;
+        byte[32] outOwner = selfId;
+        byte outScheme = SCHEME_COVID;
+        int outIdx = tokOut;
+
+        if (n == 0) {
+            // ---- refund: tokens + carriers (minus keeper tip) back to the maker
+            require(tx.daa >= expiryDaa);
+            require(refundTip >= 0);
+            require(refundTip <= MAX_SOMPI);
+            require(OpCovOutputCount(selfId) == 0);
+            outAmount = tin.amount;
+            outOwner = byte[32](maker);
+            outScheme = SCHEME_P2PK;
+            outIdx = self;
+            require(tx.outputs[self].value + refundTip >= carriers);
+        } else {
+            // ---- fill n lots (UB guards first: overflow / division by zero)
+            require(lotSize > 0);
+            require(lotPrice > 0);
+            require(n > 0);
+            require(n <= tin.amount / lotSize);
+            require(n <= MAX_SOMPI / lotPrice);
+            int pay = n * lotPrice;
+            outAmount = tin.amount - n * lotSize;
+            require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
+            if (outAmount > 0) {
+                // continue: same script + covenant id, KAS carriers kept in place
+                require(OpCovOutputCount(selfId) == 1);
+                int selfOut = OpCovOutputIdx(selfId, 0);
+                require(tx.outputs[selfOut].scriptPubKey == this.activeScriptPubKey);
+                require(tx.outputs[selfOut].value >= tx.inputs[self].value);
+                require(tx.outputs[tokOut].value >= tx.inputs[tokenIn].value);
+                require(tx.outputs[self].value >= pay);
+            } else {
+                // sold out: terminate, carriers return to the maker with the proceeds
+                require(OpCovOutputCount(selfId) == 0);
+                require(tx.outputs[self].value >= pay + carriers);
+            }
+        }
+
+        if (outAmount > 0) {
+            // Pin the only token output this order allows: remainder kept in
+            // custody (fill) or the full balance returned to the maker (refund).
+            validateOutputStateWithInputTemplate(
+                outIdx,
+                KCC20State {
+                    amount: outAmount,
+                    owner: outOwner,
+                    owner_scheme: outScheme,
+                    borrow_scheme: BORROW_DISABLED,
+                    borrow_guard: tin.borrow_guard,
+                    extension_commitment: tin.extension_commitment
+                },
+                tokenIn, tplPrefixLen, tplSuffixLen, tokenTplHash
+            );
+            require(OpOutputCovenantId(outIdx) == tokenCovId);
+        }
+    }
+
+    // Maker cancel. SIGHASH_ALL is enforced, so the maker's signature covers
+    // every output of the transaction (including where the tokens go).
+    entry cancel(sig s) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, maker));
+    }
+}

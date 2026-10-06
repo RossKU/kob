@@ -1,0 +1,100 @@
+/* Position cards (My orders). Only the CSS variables of src/styles.css (light + dark themes). A 4-column stat grid that collapses to 2 columns
+   when the card is narrow (container query, with a viewport fallback): no horizontal scroll at 375 px. */
+.position.pc {
+  container-type: inline-size;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--buy);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.position.pc.pc-sell { border-left-color: var(--sell); }
+.position.pc.pc-ended { border-left-color: var(--border); }
+
+/* ---------------------------------------------------------------- header */
+.position.pc .pc-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px;
+  padding: 10px 14px; background: var(--surface-2); border-bottom: 1px solid var(--border); border-radius: var(--radius) var(--radius) 0 0;
+}
+.pc-head-main { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
+.pc-title { font-size: 1rem; font-weight: 700; letter-spacing: 0.01em; }
+.pc-token {
+  display: inline-flex; align-items: center; padding: 1px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  color: var(--text); font-size: 0.82rem; font-weight: 700; line-height: 1.5; text-decoration: none; white-space: nowrap;
+}
+.pc-token:hover { border-color: var(--link); color: var(--link); }
+.pc-chip {
+  display: inline-flex; align-items: center; padding: 1px 8px; border-radius: var(--radius-sm); font-size: 0.74rem; font-weight: 700; line-height: 1.6;
+  letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
+}
+.pc-chip-buy { background: var(--buy-bg); color: var(--buy); }
+.pc-chip-sell { background: var(--sell-bg); color: var(--sell); }
+.pc-cancel { margin-left: auto; }
+
+/* ---------------------------------------------------------------- stat grid */
+.pc-summary { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 4px; }
+.pc-grid {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px;
+  background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
+}
+.pc-contents { display: contents; }
+.pc-stat { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 9px 12px; background: var(--surface); }
+.pc-wide { grid-column: span 2; }
+.pc-full { grid-column: 1 / -1; }
+.pc-label {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  color: var(--muted); font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; line-height: 1.4;
+}
+.pc-aside { color: var(--muted); font-size: 0.78rem; font-weight: 500; letter-spacing: 0; text-transform: none; text-align: right; }
+.pc-aside strong { color: var(--text); font-weight: 700; }
+.pc-value { color: var(--text); font-size: 0.98rem; font-weight: 600; line-height: 1.35; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.pc-value .amount-unit { font-size: 0.74em; font-weight: 500; }
+.pc-sep { color: var(--muted); }
+.pc-sub { color: var(--muted); font-size: 0.78rem; line-height: 1.4; }
+.pc-pos { color: var(--buy); }
+.pc-neg { color: var(--sell); }
+.pc-pnl .pc-value { font-size: 1.05rem; }
+.pc-link { padding: 0; border: 0; background: none; color: var(--link); font: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+
+/* ---------------------------------------------------------------- progress bars */
+.pc-bars { display: grid; grid-template-columns: auto minmax(40px, 1fr) auto; align-items: center; gap: 6px 10px; margin-top: 2px; }
+.pc-bar-row { display: contents; }
+.pc-bar-label { color: var(--muted); font-size: 0.8rem; font-weight: 500; white-space: nowrap; }
+.pc-bar-fig { min-width: 4.2em; font-size: 0.88rem; font-weight: 600; text-align: right; white-space: nowrap; }
+.pc-of { color: var(--muted); font-weight: 500; }
+.pc-bar { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.pc-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--primary); transition: width 0.3s ease; }
+.pc-bar-buy > span { background: var(--buy); }
+.pc-bar-sell > span { background: var(--sell); }
+.pc-bar-empty { opacity: 0.6; }
+.pc-repeat .pc-bar { margin-top: 5px; }
+@media (prefers-reduced-motion: reduce) { .pc-bar > span { transition: none; } }
+
+/* ---------------------------------------------------------------- fills and member orders */
+.pc-fills-box { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.pc-fills-box > .btn { margin-left: -6px; color: var(--muted); }
+.pc-caret { display: inline-block; width: 0.9em; }
+.pc-fills { align-self: stretch; display: flex; flex-direction: column; padding: 4px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+.pc-fill-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+.pc-fill-row:last-child { border-bottom: 0; }
+.pc-fill-avg { font-weight: 600; }
+.position.pc .pc-members { padding: 8px 14px 14px; }
+.pc-note { margin: 0; }
+.pc-section-label { color: var(--muted); font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.position.pc .position-exits { margin-left: 4px; padding-left: 12px; border-left: 2px solid var(--border); }
+
+/* ---------------------------------------------------------------- narrow cards / phones */
+@container (max-width: 560px) {
+  .pc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .position.pc .pc-head { padding: 9px 12px; }
+  .pc-summary { padding: 10px 12px 2px; }
+  .position.pc .pc-members { padding: 8px 12px 12px; }
+  .pc-stat { padding: 8px 10px; }
+}
+@media (max-width: 480px) {
+  .pc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* fill rows of an order open the fill's transaction on the block explorer */
+tr.row-link { cursor: pointer; }
+tr.row-link:hover { background: var(--surface-2); }

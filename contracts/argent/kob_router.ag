@@ -1,0 +1,4075 @@
+// KOB router: the composition layer of KOB, an Argent app ON TOP of the hand-written orders.
+//
+// The orders (KobAsk, KobBid and the KRON bid KobBidKron) stay hand-written SilverScript. This app
+// never compiles them: it imports the published app artifacts KOBOrders and KOBOrdersKron
+// (contracts/argent/KOBOrders*/artifact.json, made by tools/sil2argent) and observes the orders by
+// CLOSED ICC, i.e. by their published template hashes. The token programs are observed by OPEN ICC:
+// every intent's state carries the template handle of each token it moves (`actor_type<KCC20State>`
+// for a KCC-20 program, `actor_type<KronTokenState>` for a KRON program), set by the payer at creation
+// and recomputed by a verifier from its token allowlist (the x402 facilitator does). A handle is the
+// token program's template hash; every observed token input is read, and every pinned token output is
+// checked, under it, so one actor serves every KCC-20 program of the 112-byte state (the reference 3/3
+// program, the 8/8 program KOB issues, ...) and every KRON program of the 46-byte state. The program's
+// own slot limits bound the shapes it can run (the 3/3 program has no room for a three-bid sell).
+// In every transaction the order validates itself (payout, continuation, custody, escrow
+// pinning); the actors below validate what the payer cares about.
+//
+// Payment intents. Each actor is one covenant UTXO that any keeper or facilitator can spend; the
+// payer signs nothing at execution time and can always cancel (cancel, SIGHASH_ALL). The cancel of a
+// token intent must spend the locked tokens in the same transaction, at input j + 1, as the one token
+// input of its token (read under the intent's handle: owned by the intent's covenant id); the cancel
+// ends the intent covenant, and tokens owned by its id could never move afterwards. Where they go (one
+// token output) is the payer's signed choice.
+//
+// DEADLINE. Every intent carries a `deadline` (unix ms, the payer's authorization expiry). From the
+// deadline on ANYONE may `expire` the intent: it returns the intent's KAS to the payer (out j, less
+// at most EXPIRE_MAX_FEE for the fee) and, for a token intent, the locked tokens (out j + 1, owned by
+// the payer's key, with their whole carrier: the expirer keeps at most EXPIRE_MAX_FEE in all),
+// proven by CLTV (`tx.time >= deadline`). A covenant cannot prove an UPPER time bound (a
+// transaction valid at t stays valid later), so an execution is not refused by the clock: what
+// ends an abandoned intent is the expiry transaction, which the facilitator broadcasts itself once
+// the deadline passed without a settlement. After it confirms nothing can execute the intent,
+// and the facilitator knows how it ended (its own expiry, the payer's cancel, or an execution, by
+// the spending transaction). The payer's cancel works at any time.
+//   KasToToken  payer locked KAS; the merchant must receive exactly `amount` of token B, bought
+//               from one to three KobAsks of B.
+//   TokenToKas  payer locked token A, owned by this covenant (KCC-20 owner_scheme 0x04, KRON id_type 2); the
+//               merchant must receive >= `merchant_kas`, raised by selling at most `max_sell`
+//               units of A into one to three KobBids of A.
+//   TokenSwap   payer locked token A (as above); the merchant must receive exactly `amount_b` of
+//               token B: at most `max_sell_a` units of A are sold into one or two KobBids of A and
+//               the KAS is spent on one or two KobAsks of B. Token A -> KAS -> token B.
+//   TokenToKasKron, TokenSwapKron  the same with a KRON token A, sold into KobBidKrons (a KRON token is
+//               paid with, never received: the merchant receives KAS or a KCC-20 token B). The lock is
+//               a KRON UTXO of id_type 2 (owner = this covenant's id, is_minter 0); the deliveries to the
+//               bid makers and the payer's change are id_type 3 (address presence of the owner's key:
+//               what KRON wallets hold and KobBidKron delivers). A KRON output holds 1..=1e9 units, so
+//               the program refuses a sale of the whole lock (a zero change): a KRON intent locks more
+//               than it may sell.
+// What an order releases beyond what the payer authorised (spread, tips) is the keeper's; the
+// payer's worst case is fixed by the intent's parameters.
+//
+// FILL SHAPES. An Argent `observes` group has an exact shape (Argent has no observed ranges yet),
+// so each shape a keeper may use is its own entry, and, because the redeem script of a covenant
+// UTXO carries every entry of its actor, its own ACTOR: one template, one small script (the shape's
+// entry, expire and cancel). The fill shape is known when the payer creates the intent, so the payer
+// locks its funds in the actor of the shape it wants (KasToToken_buy2_out, TokenSwap_swap, ...).
+// The actors of one intent share the state and the rules below. Per order there are two shapes:
+//   rest  the order is filled partially and continues (KobAsk: same covenant with amountLeft - n,
+//         custody UTXO with the rest; KobBid: byte-identical continuation). GTC orders only.
+//   out   the order ends: a KobAsk is SOLD OUT (the whole custody is taken; any time-in-force),
+//         a KobBid terminates (exhausted, IOC or FOK): no covenant output for the order.
+// A sweep over several orders is `out, .., out, rest` or `out, .., out, out`: only the LAST order
+// of a sweep may rest (what a best-price-first matcher produces). Orders are listed in the entry
+// arguments in TRANSACTION ORDER (observed groups are ordered by position; the escrows of the
+// asks are matched to them by owner).
+// Slot limit: at most 3 orders per leg, i.e. at most 3 escrow inputs and 4 token outputs in one
+// token group: inside the 8/8 slots of the program KOB issues and KRON's 4/5; the 3/3 reference
+// program runs every shape but the three-bid sells (4 token outputs).
+//
+// Order invariants the router relies on. KobAsk holds its rest in the state (amountLeft, base units) and
+// its custody UTXO holds EXACTLY amountLeft: the router re-checks that equality, and, because every
+// observed token group has an exact shape, no other token input (a stray owned by an order's
+// covenant id, or anything else) can ride along; the orders' own stray guards reject such a tx too.
+// Amounts are base units and prices are per WHOLE token (protocol v3): an order quotes `price` sompi per
+// `scale` base units of its token (scale = 10^decimals, a state field). A take of any number of base units is
+// valid for the router; the order itself enforces its minimum fill (n >= minFill unless the fill takes all that
+// is left, KobBid: unless it ends the bid), its TWAP cap and its time in force.
+// The router bounds an ask AT ITS QUOTE: the KAS a keeper may take from a KasToToken intent for `take` base
+// units of an ask is quoteUp(take, price) = ceil(take * price / scale), the ask's own all-in rounding (KobAsk
+// header) at its quote price. What the ask really demands, ceil(take * (price(t) - tip) / scale), is never more
+// for a decaying ask (price(t) <= price) with a tip (>= 0) or a keeper's crossing spread; if it is more (an ask
+// whose decay floor priceEnd lies above its start price), the keeper pays the difference, never the payer. A
+// rising bid never pays less than its quote, and the router bounds what the payer gets, not what a bid pays
+// (the KAS a bid releases, floor(n * (p(t) + tip) / scale), is checked against the intent's merchant_kas), so the
+// payer's bounds hold at any t.
+//
+// Source style. Order states are read by field projection (`book.inputs.ask.price`), never
+// copied into locals: a KobAskState has 19 fields, a KobBidState 21, and every copy is that many
+// more live stack bindings (consensus limit 244) in the compiled script. The continuation of a
+// resting order is not pinned with `become` either: the order validates it itself (KobAsk:
+// amountLeft - n, KobBid: byte-identical), and the router's pin on the escrow change output, which the
+// ask pins too, ties n to the token flow. (Pinning both sides would fit every shape but `swap2`, which
+// is one binding over the limit with argentc b312ded / SilverScript v1.0.0: 245 of 244 live bindings;
+// the ask pin alone fits every shape, the bid pin alone is one combined stack item over in `swap2`. It
+// would also add a state copy and a template check to each resting script for a rule the order
+// already enforces, so it stays out. docs/argent.md, "Fill shapes".)
+//
+// Reading guide. The 30 actors are one pattern at different widths: one order leg per observed
+// order (ask_leg / ask_fits / bid_fits: the order's own fields against the intent's terms), the
+// bound summed over the legs, the positional rule, and the token pins. Argent has no macros, so
+// the repetition is written out by tools/router-gen/gen-router.sh (this file is its output; the
+// build fails if it is edited by hand); `KasToToken_buy`, `_buy_out`, `_buy3`, `TokenToKas_sell2`,
+// `TokenSwap_swap` and `_swap2_out` show every ingredient. Sizes of the compiled scripts: 2.5-7.1 kB
+// per buy or sell shape, 5.6-9.8 kB for the swaps (docs/argent.md).
+//
+// POSITIONAL ANTI-ALIASING RULE (hand-written, reviewed; Argent generates none). The intent
+// spent at input j owns exactly two outputs, j and j + 1, and everything it owes goes there:
+//     KasToToken  out j = payer KAS change      out j+1 = merchant token delivery
+//     TokenToKas  out j = merchant KAS          out j+1 = payer token change
+//     TokenSwap   out j = merchant delivery (B) out j+1 = payer token change (A)
+// Output j is checked by index; output j+1 is the LAST output of the token group the intent
+// observes (OpCovOutputIdx(token, count - 1) == j + 1). Output j+1 is also the positional slot of
+// whatever input sits at j + 1 (an order pays, delivers or refunds at its own input index), so the
+// intent MUST be the LAST input of the transaction (tx.inputs.length == j + 1): then no input can
+// claim output j+1 (otherwise an unobserved bid of the merchant or payer at j + 1 could take the
+// router's token output as its delivery, and an observed ask's refund could take it as its return).
+// With that, the intent cannot be satisfied by an output that another input's rule also claims:
+// two intents cannot share one delivery, a self-trading payer cannot make one output serve as both
+// its refund and an order payout, and each intent consumes an output pair of its own. Every
+// observed group has an exact shape (the escrow inputs of the listed orders and nothing else), so
+// two intents of the same token cannot be spent in one transaction. Every observed ask must run its
+// FILL: KobAsk.settle takes the base units n as its first argument, a fixed 8-byte push,
+// so its sigscript starts 0x08 n with n > 0; a refund (n = 0) or a cancel (65-byte signature push)
+// does not (written inline per ask: a helper function costs one stack slot too many in `swap2`).
+
+
+import "./kcc20_8x8.ag";
+import "./KOBOrders/artifact.json" id "e4fc3d3a51722f63a46df0840dc8b7ce173dfb9be9ede978678e7ed1f4acc940";
+import "./KOBOrdersKron/artifact.json" id "867d24a6c06fb8a38a30941a7f5a79d8dda05c4bee4b01f3dab2ba68c394442f";
+
+const int MAX_SOMPI = 2900000000000000000;
+const byte SIGHASH_ALL = 0x01;
+const byte[32] ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
+// Most sompi an expiry may keep of the intent's KAS (its network fee and whatever the expirer keeps).
+const int EXPIRE_MAX_FEE = 10000000;
+// KRON id_type values the router uses (contracts/adapters/kron/README.md): an intent's lock is owned by its
+// covenant id (2); deliveries and the payer's change are held by address presence (3): a P2PK input of the owner
+// key authorises them, the type KRON wallets hold and KobBidKron delivers.
+const byte KRON_ID_COVENANT = 0x02;
+const byte KRON_ID_ADDRESS = 0x03;
+
+// The KRON token state (46 B at template offset 0: 0x20 owner | 0x01 id_type | 0x08 amount | 0x01 is_minter), the
+// shape of an `actor_type<KronTokenState>` handle (the KRON programs are raw bytecode, not Argent apps: they are
+// observed by open ICC only).
+state KronTokenState {
+    byte[32] owner;
+    byte id_type;
+    int amount;
+    byte is_minter;
+}
+
+// Every token is named twice: its covenant id (which token) and its program handle (which template the router reads
+// and pins it under; the verifier recomputes both from its allowlist).
+state KasToTokenState {
+    pubkey payer;                   // KAS change, cancel key
+    byte[32] merchant;              // P2PK owner of the delivered token
+    cov_id token_covid;             // token B
+    actor_type<KCC20State> token_type; // token B's program
+    int amount;                     // exact token base units the merchant receives
+    int max_pay;                    // max sompi the asks may demand at their quotes
+    int max_extra;                  // max sompi for carriers + network fee
+    temporal deadline;              // unix ms: from here on anyone may expire the intent
+}
+
+state TokenToKasState {
+    pubkey payer;                   // token change, cancel key
+    pubkey merchant;                // receives KAS
+    cov_id token_covid;             // token A
+    actor_type<KCC20State> token_type; // token A's program
+    int merchant_kas;               // min sompi the merchant receives
+    int max_sell;                   // max token base units sold
+    temporal deadline;              // unix ms: from here on anyone may expire the intent
+}
+
+state TokenSwapState {
+    pubkey payer;                   // token A change, cancel key
+    byte[32] merchant;              // P2PK owner of the delivered token B
+    cov_id token_a;                 // token sold
+    actor_type<KCC20State> token_a_type; // token A's program
+    cov_id token_b;                 // token delivered
+    actor_type<KCC20State> token_b_type; // token B's program
+    int max_sell_a;                 // max token A base units sold
+    int amount_b;                   // exact token B base units the merchant receives
+    temporal deadline;              // unix ms: from here on anyone may expire the intent
+}
+
+state TokenToKasKronState {
+    pubkey payer;                   // token change (id_type 3), cancel key
+    pubkey merchant;                // receives KAS
+    cov_id token_covid;             // token A (KRON)
+    actor_type<KronTokenState> token_type; // token A's KRON program
+    int merchant_kas;               // min sompi the merchant receives
+    int max_sell;                   // max token base units sold
+    temporal deadline;              // unix ms: from here on anyone may expire the intent
+}
+
+state TokenSwapKronState {
+    pubkey payer;                   // token A change (id_type 3), cancel key
+    byte[32] merchant;              // P2PK owner of the delivered token B
+    cov_id token_a;                 // token sold (KRON)
+    actor_type<KronTokenState> token_a_type; // token A's KRON program
+    cov_id token_b;                 // token delivered (KCC-20)
+    actor_type<KCC20State> token_b_type; // token B's program
+    int max_sell_a;                 // max token A base units sold
+    int amount_b;                   // exact token B base units the merchant receives
+    temporal deadline;              // unix ms: from here on anyone may expire the intent
+}
+
+fn require_cancel_sig(sig s, pubkey key) {
+    byte[] sb = byte[](s);
+    require(sb.length == 65);
+    require(sb[64] == SIGHASH_ALL);
+    require(checkSig(s, key));
+}
+
+// Quote value of n base units at rate r (r quote units per `scale` base units), rounded UP: KobAsk.quoteOf with
+// c = scale - 1, the rounding of what a maker receives. Split so that no partial product exceeds the result or
+// scale^2 (exact without a 128-bit product while scale^2 + scale < 2^63; the engine fails, never wraps, on an
+// overflow). n, r >= 0, scale > 0.
+fn quote_up(int n, int r, int scale) -> int {
+    int m = n % scale;
+    int q = n / scale;
+    return q * r + m * (r / scale) + (m * (r % scale) + scale - 1) / scale;
+}
+
+// One ask leg. The ask (token, scale, amountLeft, price of its state) sells the token we want and
+// `esc` is ITS custody: owned by the ask's covenant id and holding exactly amountLeft base units.
+// `take` base units (> 0, at most the custody; the ask enforces its own minimum fill) are bought.
+// Returns the KAS the ask may demand for them AT ITS QUOTE, ceil(take * price / scale): a decaying ask,
+// a tip or a keeper crossing spread only lower what the maker takes. Each leg is at most MAX_SOMPI, so
+// the sum over three legs cannot overflow.
+fn ask_leg(byte[32] a_token, int a_scale, int a_amount_left, int a_price, byte[32] esc_owner, byte esc_scheme, int esc_amount, byte[32] ask_id, byte[32] token, int take) -> int {
+    require(a_token == token);
+    require(esc_owner == ask_id);
+    require(esc_scheme == OWNER_COVENANT_ID);
+    require(esc_amount == a_amount_left);
+    require(take > 0);
+    require(take <= esc_amount);
+    require(a_scale > 0);
+    require(a_price >= 0);
+    int pay = quote_up(take, a_price, a_scale);
+    require(pay <= MAX_SOMPI);
+    return pay;
+}
+
+
+// The same custody checks without the price (TokenSwap: the KAS in between is the keeper's).
+fn ask_fits(byte[32] a_token, int a_amount_left, byte[32] esc_owner, byte esc_scheme, int esc_amount, byte[32] ask_id, byte[32] token, int take) {
+    require(a_token == token);
+    require(esc_owner == ask_id);
+    require(esc_scheme == OWNER_COVENANT_ID);
+    require(esc_amount == a_amount_left);
+    require(take > 0);
+    require(take <= esc_amount);
+}
+
+// The payer's own token UTXO: owned by the intent's covenant id, no borrow path may move it
+// without this intent.
+fn own_tokens(byte[32] owner, byte owner_scheme, byte borrow_scheme, byte[32] intent_id) {
+    require(owner == intent_id);
+    require(owner_scheme == OWNER_COVENANT_ID);
+    require(borrow_scheme == BORROW_DISABLED);
+}
+
+// The payer's own KRON token UTXO: owned by the intent's covenant id (id_type 2, authorised by this intent's
+// presence), never a minter UTXO.
+fn own_kron(byte[32] owner, byte id_type, byte is_minter, byte[32] intent_id) {
+    require(owner == intent_id);
+    require(id_type == KRON_ID_COVENANT);
+    require(is_minter == 0x00);
+}
+
+// One bid leg: the bid (token of its state) buys the token we sell and `n` base units (> 0) go into it.
+// The bid itself enforces its minimum fill and pins its delivery at n; the router pins the same output.
+fn bid_fits(byte[32] b_token, byte[32] token, int n) {
+    require(b_token == token);
+    require(n > 0);
+}
+// ---------------------------------------------------------------- KasToToken
+
+// Tx shape (all buy shapes): [.., ask_1 .. ask_k, escrow_1 .. escrow_k (token B), .., this j = the LAST input]
+//   out i_m = ask_m maker payout, [ask_k continuation, escrow change (rest only)],
+//   out j = payer change, out j+1 = merchant delivery (the last token B output).
+
+actor KasToToken_buy owns KasToTokenState {
+    // One ask, RESTING: the ask continues with amountLeft - amount.
+    entry buy(cov_id ask1_covid)
+    observes book1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+            next: KOBOrders::KobAsk,
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            escrow1: self.token_type,
+        }
+        outputs {
+            change: self.token_type,
+            merchant: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+        int take1 = amount;
+        require(take1 < token.inputs.escrow1.amount);
+        require(book1.inputs.ask.tif == 0);
+        int pay1 = ask_leg(book1.inputs.ask.tokenCovId, book1.inputs.ask.scale, book1.inputs.ask.amountLeft, book1.inputs.ask.price, token.inputs.escrow1.owner, token.inputs.escrow1.owner_scheme, token.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_covid), take1);
+        int pay = pay1;
+        require(pay <= max_pay);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + pay + max_extra >= self.value);
+        require(OpCovOutputIdx(token_covid, 1) == me + 1);
+
+        KCC20State change_state = {
+            amount: token.inputs.escrow1.amount - take1,
+            owner: token.inputs.escrow1.owner,
+            owner_scheme: OWNER_COVENANT_ID,
+            borrow_scheme: token.inputs.escrow1.borrow_scheme,
+            borrow_guard: token.inputs.escrow1.borrow_guard,
+            extension_commitment: token.inputs.escrow1.extension_commitment,
+        };
+        KCC20State merchant_state = {
+            amount: amount,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.escrow1.extension_commitment,
+        };
+        require token.outputs become {
+            change <- self.token_type(change_state),
+            merchant <- self.token_type(merchant_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE.
+    entry expire() emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+    }
+
+    entry cancel(sig s) emits none {
+        require_cancel_sig(s, payer);
+    }
+}
+
+actor KasToToken_buy_out owns KasToTokenState {
+    // One ask, SOLD OUT: the merchant gets the ask's whole custody, the ask ends.
+    entry buy_out(cov_id ask1_covid)
+    observes book1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            escrow1: self.token_type,
+        }
+        outputs {
+            merchant: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+        require(token.inputs.escrow1.amount == amount);
+        int pay1 = ask_leg(book1.inputs.ask.tokenCovId, book1.inputs.ask.scale, book1.inputs.ask.amountLeft, book1.inputs.ask.price, token.inputs.escrow1.owner, token.inputs.escrow1.owner_scheme, token.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_covid), token.inputs.escrow1.amount);
+        int pay = pay1;
+        require(pay <= max_pay);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + pay + max_extra >= self.value);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+
+        KCC20State merchant_state = {
+            amount: amount,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.escrow1.extension_commitment,
+        };
+        require token.outputs become {
+            merchant <- self.token_type(merchant_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE.
+    entry expire() emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+    }
+
+    entry cancel(sig s) emits none {
+        require_cancel_sig(s, payer);
+    }
+}
+
+actor KasToToken_buy2 owns KasToTokenState {
+    // 2 asks: the first 1 SOLD OUT, the last RESTING.
+    entry buy2(cov_id ask1_covid, cov_id ask2_covid)
+    observes book1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes book2 by ask2_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+            next: KOBOrders::KobAsk,
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            escrow1: self.token_type,
+            escrow2: self.token_type,
+        }
+        outputs {
+            change: self.token_type,
+            merchant: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 1, 9))) > 0);
+        int take2 = amount - token.inputs.escrow1.amount;
+        require(take2 < token.inputs.escrow2.amount);
+        require(book2.inputs.ask.tif == 0);
+        int pay1 = ask_leg(book1.inputs.ask.tokenCovId, book1.inputs.ask.scale, book1.inputs.ask.amountLeft, book1.inputs.ask.price, token.inputs.escrow1.owner, token.inputs.escrow1.owner_scheme, token.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_covid), token.inputs.escrow1.amount);
+        int pay2 = ask_leg(book2.inputs.ask.tokenCovId, book2.inputs.ask.scale, book2.inputs.ask.amountLeft, book2.inputs.ask.price, token.inputs.escrow2.owner, token.inputs.escrow2.owner_scheme, token.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_covid), take2);
+        int pay = pay1 + pay2;
+        require(pay <= max_pay);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + pay + max_extra >= self.value);
+        require(OpCovOutputIdx(token_covid, 1) == me + 1);
+
+        KCC20State change_state = {
+            amount: token.inputs.escrow2.amount - take2,
+            owner: token.inputs.escrow2.owner,
+            owner_scheme: OWNER_COVENANT_ID,
+            borrow_scheme: token.inputs.escrow2.borrow_scheme,
+            borrow_guard: token.inputs.escrow2.borrow_guard,
+            extension_commitment: token.inputs.escrow2.extension_commitment,
+        };
+        KCC20State merchant_state = {
+            amount: amount,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.escrow1.extension_commitment,
+        };
+        require token.outputs become {
+            change <- self.token_type(change_state),
+            merchant <- self.token_type(merchant_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE.
+    entry expire() emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+    }
+
+    entry cancel(sig s) emits none {
+        require_cancel_sig(s, payer);
+    }
+}
+
+actor KasToToken_buy2_out owns KasToTokenState {
+    // 2 asks, all SOLD OUT.
+    entry buy2_out(cov_id ask1_covid, cov_id ask2_covid)
+    observes book1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes book2 by ask2_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            escrow1: self.token_type,
+            escrow2: self.token_type,
+        }
+        outputs {
+            merchant: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 1, 9))) > 0);
+        require(token.inputs.escrow1.amount + token.inputs.escrow2.amount == amount);
+        int pay1 = ask_leg(book1.inputs.ask.tokenCovId, book1.inputs.ask.scale, book1.inputs.ask.amountLeft, book1.inputs.ask.price, token.inputs.escrow1.owner, token.inputs.escrow1.owner_scheme, token.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_covid), token.inputs.escrow1.amount);
+        int pay2 = ask_leg(book2.inputs.ask.tokenCovId, book2.inputs.ask.scale, book2.inputs.ask.amountLeft, book2.inputs.ask.price, token.inputs.escrow2.owner, token.inputs.escrow2.owner_scheme, token.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_covid), token.inputs.escrow2.amount);
+        int pay = pay1 + pay2;
+        require(pay <= max_pay);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + pay + max_extra >= self.value);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+
+        KCC20State merchant_state = {
+            amount: amount,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.escrow1.extension_commitment,
+        };
+        require token.outputs become {
+            merchant <- self.token_type(merchant_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE.
+    entry expire() emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+    }
+
+    entry cancel(sig s) emits none {
+        require_cancel_sig(s, payer);
+    }
+}
+
+actor KasToToken_buy3 owns KasToTokenState {
+    // 3 asks: the first 2 SOLD OUT, the last RESTING.
+    entry buy3(cov_id ask1_covid, cov_id ask2_covid, cov_id ask3_covid)
+    observes book1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes book2 by ask2_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes book3 by ask3_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+            next: KOBOrders::KobAsk,
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            escrow1: self.token_type,
+            escrow2: self.token_type,
+            escrow3: self.token_type,
+        }
+        outputs {
+            change: self.token_type,
+            merchant: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 1, 9))) > 0);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask3_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask3_covid, 0), 1, 9))) > 0);
+        int take3 = amount - token.inputs.escrow1.amount - token.inputs.escrow2.amount;
+        require(take3 < token.inputs.escrow3.amount);
+        require(book3.inputs.ask.tif == 0);
+        int pay1 = ask_leg(book1.inputs.ask.tokenCovId, book1.inputs.ask.scale, book1.inputs.ask.amountLeft, book1.inputs.ask.price, token.inputs.escrow1.owner, token.inputs.escrow1.owner_scheme, token.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_covid), token.inputs.escrow1.amount);
+        int pay2 = ask_leg(book2.inputs.ask.tokenCovId, book2.inputs.ask.scale, book2.inputs.ask.amountLeft, book2.inputs.ask.price, token.inputs.escrow2.owner, token.inputs.escrow2.owner_scheme, token.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_covid), token.inputs.escrow2.amount);
+        int pay3 = ask_leg(book3.inputs.ask.tokenCovId, book3.inputs.ask.scale, book3.inputs.ask.amountLeft, book3.inputs.ask.price, token.inputs.escrow3.owner, token.inputs.escrow3.owner_scheme, token.inputs.escrow3.amount, byte[32](ask3_covid), byte[32](token_covid), take3);
+        int pay = pay1 + pay2 + pay3;
+        require(pay <= max_pay);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + pay + max_extra >= self.value);
+        require(OpCovOutputIdx(token_covid, 1) == me + 1);
+
+        KCC20State change_state = {
+            amount: token.inputs.escrow3.amount - take3,
+            owner: token.inputs.escrow3.owner,
+            owner_scheme: OWNER_COVENANT_ID,
+            borrow_scheme: token.inputs.escrow3.borrow_scheme,
+            borrow_guard: token.inputs.escrow3.borrow_guard,
+            extension_commitment: token.inputs.escrow3.extension_commitment,
+        };
+        KCC20State merchant_state = {
+            amount: amount,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.escrow1.extension_commitment,
+        };
+        require token.outputs become {
+            change <- self.token_type(change_state),
+            merchant <- self.token_type(merchant_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE.
+    entry expire() emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+    }
+
+    entry cancel(sig s) emits none {
+        require_cancel_sig(s, payer);
+    }
+}
+
+actor KasToToken_buy3_out owns KasToTokenState {
+    // 3 asks, all SOLD OUT.
+    entry buy3_out(cov_id ask1_covid, cov_id ask2_covid, cov_id ask3_covid)
+    observes book1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes book2 by ask2_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes book3 by ask3_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            escrow1: self.token_type,
+            escrow2: self.token_type,
+            escrow3: self.token_type,
+        }
+        outputs {
+            merchant: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 1, 9))) > 0);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask3_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask3_covid, 0), 1, 9))) > 0);
+        require(token.inputs.escrow1.amount + token.inputs.escrow2.amount + token.inputs.escrow3.amount == amount);
+        int pay1 = ask_leg(book1.inputs.ask.tokenCovId, book1.inputs.ask.scale, book1.inputs.ask.amountLeft, book1.inputs.ask.price, token.inputs.escrow1.owner, token.inputs.escrow1.owner_scheme, token.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_covid), token.inputs.escrow1.amount);
+        int pay2 = ask_leg(book2.inputs.ask.tokenCovId, book2.inputs.ask.scale, book2.inputs.ask.amountLeft, book2.inputs.ask.price, token.inputs.escrow2.owner, token.inputs.escrow2.owner_scheme, token.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_covid), token.inputs.escrow2.amount);
+        int pay3 = ask_leg(book3.inputs.ask.tokenCovId, book3.inputs.ask.scale, book3.inputs.ask.amountLeft, book3.inputs.ask.price, token.inputs.escrow3.owner, token.inputs.escrow3.owner_scheme, token.inputs.escrow3.amount, byte[32](ask3_covid), byte[32](token_covid), token.inputs.escrow3.amount);
+        int pay = pay1 + pay2 + pay3;
+        require(pay <= max_pay);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + pay + max_extra >= self.value);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+
+        KCC20State merchant_state = {
+            amount: amount,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.escrow1.extension_commitment,
+        };
+        require token.outputs become {
+            merchant <- self.token_type(merchant_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE.
+    entry expire() emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+    }
+
+    entry cancel(sig s) emits none {
+        require_cancel_sig(s, payer);
+    }
+}
+
+// ---------------------------------------------------------------- TokenToKas
+
+// Tx shape (all sell shapes): [bid_1 .. bid_k, our token A (leader), this j = the LAST input] ->
+//   out i_m = bid_m delivery (token to the bid maker), [bid_k continuation (rest only)],
+//   out j = merchant KAS, out j+1 = payer token change (the last token A output).
+
+actor TokenToKas_sell owns TokenToKasState {
+    // One bid, RESTING: n1 base units go into it and it continues.
+    entry sell(cov_id bid1_covid, int n1)
+    observes book1 by bid1_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+            next: KOBOrders::KobBid,
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            delivery1: self.token_type,
+            change: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        own_tokens(token.inputs.mine.owner, token.inputs.mine.owner_scheme, token.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        bid_fits(book1.inputs.bid.tokenCovId, byte[32](token_covid), n1);
+        require(book1.inputs.bid.tif == 0);
+        int sold = n1;
+        require(sold <= max_sell);
+        require(sold <= token.inputs.mine.amount);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(merchant)));
+        require(tx.outputs[me].value >= merchant_kas);
+        require(OpCovOutputIdx(token_covid, 1) == me + 1);
+
+        KCC20State delivery1_state = {
+            amount: n1,
+            owner: byte[32](book1.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: book1.inputs.bid.extensionCommitment,
+        };
+        KCC20State change_state = {
+            amount: token.inputs.mine.amount - sold,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.mine.extension_commitment,
+        };
+        require token.outputs become {
+            delivery1 <- self.token_type(delivery1_state),
+            change <- self.token_type(change_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_covid, 0) == me + 1);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token.inputs.mine.value);
+        own_tokens(token.inputs.mine.owner, token.inputs.mine.owner_scheme, token.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        KCC20State back_state = {
+            amount: token.inputs.mine.amount,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.mine.extension_commitment,
+        };
+        require token.outputs become {
+            back <- self.token_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
+        require(token.inputs.mine.owner == byte[32](self.cov_id));
+        require(token.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+    }
+}
+
+actor TokenToKas_sell_out owns TokenToKasState {
+    // One bid, ENDING (exhausted, IOC or FOK): n1 base units go into it.
+    entry sell_out(cov_id bid1_covid, int n1)
+    observes book1 by bid1_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            delivery1: self.token_type,
+            change: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        own_tokens(token.inputs.mine.owner, token.inputs.mine.owner_scheme, token.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        bid_fits(book1.inputs.bid.tokenCovId, byte[32](token_covid), n1);
+        int sold = n1;
+        require(sold <= max_sell);
+        require(sold <= token.inputs.mine.amount);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(merchant)));
+        require(tx.outputs[me].value >= merchant_kas);
+        require(OpCovOutputIdx(token_covid, 1) == me + 1);
+
+        KCC20State delivery1_state = {
+            amount: n1,
+            owner: byte[32](book1.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: book1.inputs.bid.extensionCommitment,
+        };
+        KCC20State change_state = {
+            amount: token.inputs.mine.amount - sold,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.mine.extension_commitment,
+        };
+        require token.outputs become {
+            delivery1 <- self.token_type(delivery1_state),
+            change <- self.token_type(change_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_covid, 0) == me + 1);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token.inputs.mine.value);
+        own_tokens(token.inputs.mine.owner, token.inputs.mine.owner_scheme, token.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        KCC20State back_state = {
+            amount: token.inputs.mine.amount,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.mine.extension_commitment,
+        };
+        require token.outputs become {
+            back <- self.token_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
+        require(token.inputs.mine.owner == byte[32](self.cov_id));
+        require(token.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+    }
+}
+
+actor TokenToKas_sell2 owns TokenToKasState {
+    // 2 bids: the first 1 END, the last RESTS. n1 .. n2 base units, at most max_sell in all.
+    entry sell2(cov_id bid1_covid, cov_id bid2_covid, int n1, int n2)
+    observes book1 by bid1_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes book2 by bid2_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+            next: KOBOrders::KobBid,
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            delivery1: self.token_type,
+            delivery2: self.token_type,
+            change: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        own_tokens(token.inputs.mine.owner, token.inputs.mine.owner_scheme, token.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        bid_fits(book1.inputs.bid.tokenCovId, byte[32](token_covid), n1);
+        bid_fits(book2.inputs.bid.tokenCovId, byte[32](token_covid), n2);
+        require(book2.inputs.bid.tif == 0);
+        int sold = n1 + n2;
+        require(sold <= max_sell);
+        require(sold <= token.inputs.mine.amount);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(merchant)));
+        require(tx.outputs[me].value >= merchant_kas);
+        require(OpCovOutputIdx(token_covid, 2) == me + 1);
+
+        KCC20State delivery1_state = {
+            amount: n1,
+            owner: byte[32](book1.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: book1.inputs.bid.extensionCommitment,
+        };
+        KCC20State delivery2_state = {
+            amount: n2,
+            owner: byte[32](book2.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: book2.inputs.bid.extensionCommitment,
+        };
+        KCC20State change_state = {
+            amount: token.inputs.mine.amount - sold,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.mine.extension_commitment,
+        };
+        require token.outputs become {
+            delivery1 <- self.token_type(delivery1_state),
+            delivery2 <- self.token_type(delivery2_state),
+            change <- self.token_type(change_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_covid, 0) == me + 1);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token.inputs.mine.value);
+        own_tokens(token.inputs.mine.owner, token.inputs.mine.owner_scheme, token.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        KCC20State back_state = {
+            amount: token.inputs.mine.amount,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.mine.extension_commitment,
+        };
+        require token.outputs become {
+            back <- self.token_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
+        require(token.inputs.mine.owner == byte[32](self.cov_id));
+        require(token.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+    }
+}
+
+actor TokenToKas_sell2_out owns TokenToKasState {
+    // 2 bids, all ENDING. n1 .. n2 base units, at most max_sell in all.
+    entry sell2_out(cov_id bid1_covid, cov_id bid2_covid, int n1, int n2)
+    observes book1 by bid1_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes book2 by bid2_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            delivery1: self.token_type,
+            delivery2: self.token_type,
+            change: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        own_tokens(token.inputs.mine.owner, token.inputs.mine.owner_scheme, token.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        bid_fits(book1.inputs.bid.tokenCovId, byte[32](token_covid), n1);
+        bid_fits(book2.inputs.bid.tokenCovId, byte[32](token_covid), n2);
+        int sold = n1 + n2;
+        require(sold <= max_sell);
+        require(sold <= token.inputs.mine.amount);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(merchant)));
+        require(tx.outputs[me].value >= merchant_kas);
+        require(OpCovOutputIdx(token_covid, 2) == me + 1);
+
+        KCC20State delivery1_state = {
+            amount: n1,
+            owner: byte[32](book1.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: book1.inputs.bid.extensionCommitment,
+        };
+        KCC20State delivery2_state = {
+            amount: n2,
+            owner: byte[32](book2.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: book2.inputs.bid.extensionCommitment,
+        };
+        KCC20State change_state = {
+            amount: token.inputs.mine.amount - sold,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.mine.extension_commitment,
+        };
+        require token.outputs become {
+            delivery1 <- self.token_type(delivery1_state),
+            delivery2 <- self.token_type(delivery2_state),
+            change <- self.token_type(change_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_covid, 0) == me + 1);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token.inputs.mine.value);
+        own_tokens(token.inputs.mine.owner, token.inputs.mine.owner_scheme, token.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        KCC20State back_state = {
+            amount: token.inputs.mine.amount,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.mine.extension_commitment,
+        };
+        require token.outputs become {
+            back <- self.token_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
+        require(token.inputs.mine.owner == byte[32](self.cov_id));
+        require(token.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+    }
+}
+
+actor TokenToKas_sell3 owns TokenToKasState {
+    // 3 bids: the first 2 END, the last RESTS. n1 .. n3 base units, at most max_sell in all.
+    entry sell3(cov_id bid1_covid, cov_id bid2_covid, cov_id bid3_covid, int n1, int n2, int n3)
+    observes book1 by bid1_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes book2 by bid2_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes book3 by bid3_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+            next: KOBOrders::KobBid,
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            delivery1: self.token_type,
+            delivery2: self.token_type,
+            delivery3: self.token_type,
+            change: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        own_tokens(token.inputs.mine.owner, token.inputs.mine.owner_scheme, token.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        bid_fits(book1.inputs.bid.tokenCovId, byte[32](token_covid), n1);
+        bid_fits(book2.inputs.bid.tokenCovId, byte[32](token_covid), n2);
+        bid_fits(book3.inputs.bid.tokenCovId, byte[32](token_covid), n3);
+        require(book3.inputs.bid.tif == 0);
+        int sold = n1 + n2 + n3;
+        require(sold <= max_sell);
+        require(sold <= token.inputs.mine.amount);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(merchant)));
+        require(tx.outputs[me].value >= merchant_kas);
+        require(OpCovOutputIdx(token_covid, 3) == me + 1);
+
+        KCC20State delivery1_state = {
+            amount: n1,
+            owner: byte[32](book1.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: book1.inputs.bid.extensionCommitment,
+        };
+        KCC20State delivery2_state = {
+            amount: n2,
+            owner: byte[32](book2.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: book2.inputs.bid.extensionCommitment,
+        };
+        KCC20State delivery3_state = {
+            amount: n3,
+            owner: byte[32](book3.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: book3.inputs.bid.extensionCommitment,
+        };
+        KCC20State change_state = {
+            amount: token.inputs.mine.amount - sold,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.mine.extension_commitment,
+        };
+        require token.outputs become {
+            delivery1 <- self.token_type(delivery1_state),
+            delivery2 <- self.token_type(delivery2_state),
+            delivery3 <- self.token_type(delivery3_state),
+            change <- self.token_type(change_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_covid, 0) == me + 1);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token.inputs.mine.value);
+        own_tokens(token.inputs.mine.owner, token.inputs.mine.owner_scheme, token.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        KCC20State back_state = {
+            amount: token.inputs.mine.amount,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.mine.extension_commitment,
+        };
+        require token.outputs become {
+            back <- self.token_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
+        require(token.inputs.mine.owner == byte[32](self.cov_id));
+        require(token.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+    }
+}
+
+actor TokenToKas_sell3_out owns TokenToKasState {
+    // 3 bids, all ENDING. n1 .. n3 base units, at most max_sell in all.
+    entry sell3_out(cov_id bid1_covid, cov_id bid2_covid, cov_id bid3_covid, int n1, int n2, int n3)
+    observes book1 by bid1_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes book2 by bid2_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes book3 by bid3_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            delivery1: self.token_type,
+            delivery2: self.token_type,
+            delivery3: self.token_type,
+            change: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        own_tokens(token.inputs.mine.owner, token.inputs.mine.owner_scheme, token.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        bid_fits(book1.inputs.bid.tokenCovId, byte[32](token_covid), n1);
+        bid_fits(book2.inputs.bid.tokenCovId, byte[32](token_covid), n2);
+        bid_fits(book3.inputs.bid.tokenCovId, byte[32](token_covid), n3);
+        int sold = n1 + n2 + n3;
+        require(sold <= max_sell);
+        require(sold <= token.inputs.mine.amount);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(merchant)));
+        require(tx.outputs[me].value >= merchant_kas);
+        require(OpCovOutputIdx(token_covid, 3) == me + 1);
+
+        KCC20State delivery1_state = {
+            amount: n1,
+            owner: byte[32](book1.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: book1.inputs.bid.extensionCommitment,
+        };
+        KCC20State delivery2_state = {
+            amount: n2,
+            owner: byte[32](book2.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: book2.inputs.bid.extensionCommitment,
+        };
+        KCC20State delivery3_state = {
+            amount: n3,
+            owner: byte[32](book3.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: book3.inputs.bid.extensionCommitment,
+        };
+        KCC20State change_state = {
+            amount: token.inputs.mine.amount - sold,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.mine.extension_commitment,
+        };
+        require token.outputs become {
+            delivery1 <- self.token_type(delivery1_state),
+            delivery2 <- self.token_type(delivery2_state),
+            delivery3 <- self.token_type(delivery3_state),
+            change <- self.token_type(change_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_covid, 0) == me + 1);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token.inputs.mine.value);
+        own_tokens(token.inputs.mine.owner, token.inputs.mine.owner_scheme, token.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        KCC20State back_state = {
+            amount: token.inputs.mine.amount,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token.inputs.mine.extension_commitment,
+        };
+        require token.outputs become {
+            back <- self.token_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
+        require(token.inputs.mine.owner == byte[32](self.cov_id));
+        require(token.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+    }
+}
+
+// ---------------------------------------------------------------- TokenSwap
+
+// Token A -> KAS -> token B. Tx shape (all swap shapes):
+//   in  [.., bid_1 .., ask_1 .., token A (leader, owned by this), escrow_1 .. (leaders, owned
+//        by the asks), .., this j = the LAST input]
+//   out bid deliveries (A to the bid makers), ask maker payouts, continuations, escrow B
+//       change (rest only),
+//       out j = merchant delivery (B), out j+1 = payer token change (A).
+// The KAS the bids release pays the asks; the router only bounds what the payer gives (A) and
+// gets (B), not how the keeper routes the KAS in between.
+
+actor TokenSwap_swap owns TokenSwapState {
+    // 1 bid(s) (the last one RESTING, the others END) and 1 ask(s) (the last one RESTING, the others SOLD OUT).
+    entry swap(cov_id bid1_covid, cov_id ask1_covid, int n_a1)
+    observes bids1 by bid1_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+            next: KOBOrders::KobBid,
+        }
+    }
+    observes asks1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+            next: KOBOrders::KobAsk,
+        }
+    }
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            delivery1: self.token_a_type,
+            change: self.token_a_type,
+        }
+    }
+    observes token_b_group by self.token_b {
+        inputs {
+            escrow1: self.token_b_type,
+        }
+        outputs {
+            escrow_change: self.token_b_type,
+            merchant_out: self.token_b_type,
+        }
+    }
+    emits none {
+        require(tx.inputs.length == this.activeInputIndex + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+
+        require(token_a != token_b);
+        own_tokens(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.owner_scheme, token_a_group.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        bid_fits(bids1.inputs.bid.tokenCovId, byte[32](token_a), n_a1);
+        require(bids1.inputs.bid.tif == 0);
+        require(n_a1 <= max_sell_a);
+        require(n_a1 <= token_a_group.inputs.mine.amount);
+        require(amount_b < token_b_group.inputs.escrow1.amount);
+        require(asks1.inputs.ask.tif == 0);
+        ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), amount_b);
+
+        require(OpCovOutputIdx(token_b, 1) == this.activeInputIndex);
+        require(OpCovOutputIdx(token_a, 1) == this.activeInputIndex + 1);
+
+        KCC20State b_change = {
+            amount: token_b_group.inputs.escrow1.amount - amount_b,
+            owner: token_b_group.inputs.escrow1.owner,
+            owner_scheme: OWNER_COVENANT_ID,
+            borrow_scheme: token_b_group.inputs.escrow1.borrow_scheme,
+            borrow_guard: token_b_group.inputs.escrow1.borrow_guard,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        KCC20State a_delivery1 = {
+            amount: n_a1,
+            owner: byte[32](bids1.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: bids1.inputs.bid.extensionCommitment,
+        };
+        KCC20State a_change = {
+            amount: token_a_group.inputs.mine.amount - (n_a1),
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_a_group.inputs.mine.extension_commitment,
+        };
+        KCC20State b_merchant = {
+            amount: amount_b,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            delivery1 <- self.token_a_type(a_delivery1),
+            change <- self.token_a_type(a_change),
+        };
+        require token_b_group.outputs become {
+            escrow_change <- self.token_b_type(b_change),
+            merchant_out <- self.token_b_type(b_merchant),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_a, 0) == me + 1);
+        require(OpCovOutputIdx(token_a, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token_a_group.inputs.mine.value);
+        own_tokens(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.owner_scheme, token_a_group.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        KCC20State back_state = {
+            amount: token_a_group.inputs.mine.amount,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_a_group.inputs.mine.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            back <- self.token_a_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
+        require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
+        require(token_a_group.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+    }
+}
+
+actor TokenSwap_swap_bid_out owns TokenSwapState {
+    // 1 bid(s) (the last one ENDING, the others END) and 1 ask(s) (the last one RESTING, the others SOLD OUT).
+    entry swap_bid_out(cov_id bid1_covid, cov_id ask1_covid, int n_a1)
+    observes bids1 by bid1_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes asks1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+            next: KOBOrders::KobAsk,
+        }
+    }
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            delivery1: self.token_a_type,
+            change: self.token_a_type,
+        }
+    }
+    observes token_b_group by self.token_b {
+        inputs {
+            escrow1: self.token_b_type,
+        }
+        outputs {
+            escrow_change: self.token_b_type,
+            merchant_out: self.token_b_type,
+        }
+    }
+    emits none {
+        require(tx.inputs.length == this.activeInputIndex + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+
+        require(token_a != token_b);
+        own_tokens(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.owner_scheme, token_a_group.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        bid_fits(bids1.inputs.bid.tokenCovId, byte[32](token_a), n_a1);
+        require(n_a1 <= max_sell_a);
+        require(n_a1 <= token_a_group.inputs.mine.amount);
+        require(amount_b < token_b_group.inputs.escrow1.amount);
+        require(asks1.inputs.ask.tif == 0);
+        ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), amount_b);
+
+        require(OpCovOutputIdx(token_b, 1) == this.activeInputIndex);
+        require(OpCovOutputIdx(token_a, 1) == this.activeInputIndex + 1);
+
+        KCC20State b_change = {
+            amount: token_b_group.inputs.escrow1.amount - amount_b,
+            owner: token_b_group.inputs.escrow1.owner,
+            owner_scheme: OWNER_COVENANT_ID,
+            borrow_scheme: token_b_group.inputs.escrow1.borrow_scheme,
+            borrow_guard: token_b_group.inputs.escrow1.borrow_guard,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        KCC20State a_delivery1 = {
+            amount: n_a1,
+            owner: byte[32](bids1.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: bids1.inputs.bid.extensionCommitment,
+        };
+        KCC20State a_change = {
+            amount: token_a_group.inputs.mine.amount - (n_a1),
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_a_group.inputs.mine.extension_commitment,
+        };
+        KCC20State b_merchant = {
+            amount: amount_b,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            delivery1 <- self.token_a_type(a_delivery1),
+            change <- self.token_a_type(a_change),
+        };
+        require token_b_group.outputs become {
+            escrow_change <- self.token_b_type(b_change),
+            merchant_out <- self.token_b_type(b_merchant),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_a, 0) == me + 1);
+        require(OpCovOutputIdx(token_a, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token_a_group.inputs.mine.value);
+        own_tokens(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.owner_scheme, token_a_group.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        KCC20State back_state = {
+            amount: token_a_group.inputs.mine.amount,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_a_group.inputs.mine.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            back <- self.token_a_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
+        require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
+        require(token_a_group.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+    }
+}
+
+actor TokenSwap_swap_ask_out owns TokenSwapState {
+    // 1 bid(s) (the last one RESTING, the others END) and 1 ask(s) (the last one SOLD OUT, the others SOLD OUT).
+    entry swap_ask_out(cov_id bid1_covid, cov_id ask1_covid, int n_a1)
+    observes bids1 by bid1_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+            next: KOBOrders::KobBid,
+        }
+    }
+    observes asks1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            delivery1: self.token_a_type,
+            change: self.token_a_type,
+        }
+    }
+    observes token_b_group by self.token_b {
+        inputs {
+            escrow1: self.token_b_type,
+        }
+        outputs {
+            merchant_out: self.token_b_type,
+        }
+    }
+    emits none {
+        require(tx.inputs.length == this.activeInputIndex + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+
+        require(token_a != token_b);
+        own_tokens(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.owner_scheme, token_a_group.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        bid_fits(bids1.inputs.bid.tokenCovId, byte[32](token_a), n_a1);
+        require(bids1.inputs.bid.tif == 0);
+        require(n_a1 <= max_sell_a);
+        require(n_a1 <= token_a_group.inputs.mine.amount);
+        require(token_b_group.inputs.escrow1.amount == amount_b);
+        ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
+
+        require(OpCovOutputIdx(token_b, 0) == this.activeInputIndex);
+        require(OpCovOutputIdx(token_a, 1) == this.activeInputIndex + 1);
+
+        KCC20State a_delivery1 = {
+            amount: n_a1,
+            owner: byte[32](bids1.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: bids1.inputs.bid.extensionCommitment,
+        };
+        KCC20State a_change = {
+            amount: token_a_group.inputs.mine.amount - (n_a1),
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_a_group.inputs.mine.extension_commitment,
+        };
+        KCC20State b_merchant = {
+            amount: amount_b,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            delivery1 <- self.token_a_type(a_delivery1),
+            change <- self.token_a_type(a_change),
+        };
+        require token_b_group.outputs become {
+            merchant_out <- self.token_b_type(b_merchant),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_a, 0) == me + 1);
+        require(OpCovOutputIdx(token_a, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token_a_group.inputs.mine.value);
+        own_tokens(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.owner_scheme, token_a_group.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        KCC20State back_state = {
+            amount: token_a_group.inputs.mine.amount,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_a_group.inputs.mine.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            back <- self.token_a_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
+        require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
+        require(token_a_group.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+    }
+}
+
+actor TokenSwap_swap_out owns TokenSwapState {
+    // 1 bid(s) (the last one ENDING, the others END) and 1 ask(s) (the last one SOLD OUT, the others SOLD OUT).
+    entry swap_out(cov_id bid1_covid, cov_id ask1_covid, int n_a1)
+    observes bids1 by bid1_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes asks1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            delivery1: self.token_a_type,
+            change: self.token_a_type,
+        }
+    }
+    observes token_b_group by self.token_b {
+        inputs {
+            escrow1: self.token_b_type,
+        }
+        outputs {
+            merchant_out: self.token_b_type,
+        }
+    }
+    emits none {
+        require(tx.inputs.length == this.activeInputIndex + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+
+        require(token_a != token_b);
+        own_tokens(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.owner_scheme, token_a_group.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        bid_fits(bids1.inputs.bid.tokenCovId, byte[32](token_a), n_a1);
+        require(n_a1 <= max_sell_a);
+        require(n_a1 <= token_a_group.inputs.mine.amount);
+        require(token_b_group.inputs.escrow1.amount == amount_b);
+        ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
+
+        require(OpCovOutputIdx(token_b, 0) == this.activeInputIndex);
+        require(OpCovOutputIdx(token_a, 1) == this.activeInputIndex + 1);
+
+        KCC20State a_delivery1 = {
+            amount: n_a1,
+            owner: byte[32](bids1.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: bids1.inputs.bid.extensionCommitment,
+        };
+        KCC20State a_change = {
+            amount: token_a_group.inputs.mine.amount - (n_a1),
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_a_group.inputs.mine.extension_commitment,
+        };
+        KCC20State b_merchant = {
+            amount: amount_b,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            delivery1 <- self.token_a_type(a_delivery1),
+            change <- self.token_a_type(a_change),
+        };
+        require token_b_group.outputs become {
+            merchant_out <- self.token_b_type(b_merchant),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_a, 0) == me + 1);
+        require(OpCovOutputIdx(token_a, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token_a_group.inputs.mine.value);
+        own_tokens(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.owner_scheme, token_a_group.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        KCC20State back_state = {
+            amount: token_a_group.inputs.mine.amount,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_a_group.inputs.mine.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            back <- self.token_a_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
+        require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
+        require(token_a_group.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+    }
+}
+
+actor TokenSwap_swap2 owns TokenSwapState {
+    // 2 bid(s) (the last one RESTING, the others END) and 2 ask(s) (the last one RESTING, the others SOLD OUT).
+    entry swap2(cov_id bid1_covid, cov_id bid2_covid, cov_id ask1_covid, cov_id ask2_covid, int n_a1, int n_a2)
+    observes bids1 by bid1_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes bids2 by bid2_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+            next: KOBOrders::KobBid,
+        }
+    }
+    observes asks1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes asks2 by ask2_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+            next: KOBOrders::KobAsk,
+        }
+    }
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            delivery1: self.token_a_type,
+            delivery2: self.token_a_type,
+            change: self.token_a_type,
+        }
+    }
+    observes token_b_group by self.token_b {
+        inputs {
+            escrow1: self.token_b_type,
+            escrow2: self.token_b_type,
+        }
+        outputs {
+            escrow_change: self.token_b_type,
+            merchant_out: self.token_b_type,
+        }
+    }
+    emits none {
+        require(tx.inputs.length == this.activeInputIndex + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 1, 9))) > 0);
+
+        require(token_a != token_b);
+        own_tokens(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.owner_scheme, token_a_group.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        bid_fits(bids1.inputs.bid.tokenCovId, byte[32](token_a), n_a1);
+        bid_fits(bids2.inputs.bid.tokenCovId, byte[32](token_a), n_a2);
+        require(bids2.inputs.bid.tif == 0);
+        require(n_a1 + n_a2 <= max_sell_a);
+        require(n_a1 + n_a2 <= token_a_group.inputs.mine.amount);
+        require((amount_b - token_b_group.inputs.escrow1.amount) < token_b_group.inputs.escrow2.amount);
+        require(asks2.inputs.ask.tif == 0);
+        ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
+        ask_fits(asks2.inputs.ask.tokenCovId, asks2.inputs.ask.amountLeft, token_b_group.inputs.escrow2.owner, token_b_group.inputs.escrow2.owner_scheme, token_b_group.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_b), (amount_b - token_b_group.inputs.escrow1.amount));
+
+        require(OpCovOutputIdx(token_b, 1) == this.activeInputIndex);
+        require(OpCovOutputIdx(token_a, 2) == this.activeInputIndex + 1);
+
+        KCC20State b_change = {
+            amount: token_b_group.inputs.escrow2.amount - (amount_b - token_b_group.inputs.escrow1.amount),
+            owner: token_b_group.inputs.escrow2.owner,
+            owner_scheme: OWNER_COVENANT_ID,
+            borrow_scheme: token_b_group.inputs.escrow2.borrow_scheme,
+            borrow_guard: token_b_group.inputs.escrow2.borrow_guard,
+            extension_commitment: token_b_group.inputs.escrow2.extension_commitment,
+        };
+        KCC20State a_delivery1 = {
+            amount: n_a1,
+            owner: byte[32](bids1.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: bids1.inputs.bid.extensionCommitment,
+        };
+        KCC20State a_delivery2 = {
+            amount: n_a2,
+            owner: byte[32](bids2.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: bids2.inputs.bid.extensionCommitment,
+        };
+        KCC20State a_change = {
+            amount: token_a_group.inputs.mine.amount - (n_a1 + n_a2),
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_a_group.inputs.mine.extension_commitment,
+        };
+        KCC20State b_merchant = {
+            amount: amount_b,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            delivery1 <- self.token_a_type(a_delivery1),
+            delivery2 <- self.token_a_type(a_delivery2),
+            change <- self.token_a_type(a_change),
+        };
+        require token_b_group.outputs become {
+            escrow_change <- self.token_b_type(b_change),
+            merchant_out <- self.token_b_type(b_merchant),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_a, 0) == me + 1);
+        require(OpCovOutputIdx(token_a, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token_a_group.inputs.mine.value);
+        own_tokens(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.owner_scheme, token_a_group.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        KCC20State back_state = {
+            amount: token_a_group.inputs.mine.amount,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_a_group.inputs.mine.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            back <- self.token_a_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
+        require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
+        require(token_a_group.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+    }
+}
+
+actor TokenSwap_swap2_out owns TokenSwapState {
+    // 2 bid(s) (the last one ENDING, the others END) and 2 ask(s) (the last one SOLD OUT, the others SOLD OUT).
+    entry swap2_out(cov_id bid1_covid, cov_id bid2_covid, cov_id ask1_covid, cov_id ask2_covid, int n_a1, int n_a2)
+    observes bids1 by bid1_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes bids2 by bid2_covid {
+        inputs {
+            bid: KOBOrders::KobBid,
+        }
+        outputs {
+        }
+    }
+    observes asks1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes asks2 by ask2_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            delivery1: self.token_a_type,
+            delivery2: self.token_a_type,
+            change: self.token_a_type,
+        }
+    }
+    observes token_b_group by self.token_b {
+        inputs {
+            escrow1: self.token_b_type,
+            escrow2: self.token_b_type,
+        }
+        outputs {
+            merchant_out: self.token_b_type,
+        }
+    }
+    emits none {
+        require(tx.inputs.length == this.activeInputIndex + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 1, 9))) > 0);
+
+        require(token_a != token_b);
+        own_tokens(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.owner_scheme, token_a_group.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        bid_fits(bids1.inputs.bid.tokenCovId, byte[32](token_a), n_a1);
+        bid_fits(bids2.inputs.bid.tokenCovId, byte[32](token_a), n_a2);
+        require(n_a1 + n_a2 <= max_sell_a);
+        require(n_a1 + n_a2 <= token_a_group.inputs.mine.amount);
+        require(token_b_group.inputs.escrow1.amount + token_b_group.inputs.escrow2.amount == amount_b);
+        ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
+        ask_fits(asks2.inputs.ask.tokenCovId, asks2.inputs.ask.amountLeft, token_b_group.inputs.escrow2.owner, token_b_group.inputs.escrow2.owner_scheme, token_b_group.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_b), token_b_group.inputs.escrow2.amount);
+
+        require(OpCovOutputIdx(token_b, 0) == this.activeInputIndex);
+        require(OpCovOutputIdx(token_a, 2) == this.activeInputIndex + 1);
+
+        KCC20State a_delivery1 = {
+            amount: n_a1,
+            owner: byte[32](bids1.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: bids1.inputs.bid.extensionCommitment,
+        };
+        KCC20State a_delivery2 = {
+            amount: n_a2,
+            owner: byte[32](bids2.inputs.bid.maker),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: bids2.inputs.bid.extensionCommitment,
+        };
+        KCC20State a_change = {
+            amount: token_a_group.inputs.mine.amount - (n_a1 + n_a2),
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_a_group.inputs.mine.extension_commitment,
+        };
+        KCC20State b_merchant = {
+            amount: amount_b,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            delivery1 <- self.token_a_type(a_delivery1),
+            delivery2 <- self.token_a_type(a_delivery2),
+            change <- self.token_a_type(a_change),
+        };
+        require token_b_group.outputs become {
+            merchant_out <- self.token_b_type(b_merchant),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_a, 0) == me + 1);
+        require(OpCovOutputIdx(token_a, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token_a_group.inputs.mine.value);
+        own_tokens(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.owner_scheme, token_a_group.inputs.mine.borrow_scheme, byte[32](self.cov_id));
+        KCC20State back_state = {
+            amount: token_a_group.inputs.mine.amount,
+            owner: byte[32](payer),
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_a_group.inputs.mine.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            back <- self.token_a_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
+        require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
+        require(token_a_group.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+    }
+}
+
+// ---------------------------------------------------------------- TokenToKasKron
+
+// TokenToKas with a KRON token A (KronTokenState under the intent's KRON handle) sold into KobBidKrons.
+// Same tx shape and rules; the lock is id_type 2 (owner = this intent), deliveries and change id_type 3.
+
+actor TokenToKasKron_sell owns TokenToKasKronState {
+    // One bid, RESTING: n1 base units go into it and it continues.
+    entry sell(cov_id bid1_covid, int n1)
+    observes book1 by bid1_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+            next: KOBOrdersKron::KobBidKron,
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            delivery1: self.token_type,
+            change: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        own_kron(token.inputs.mine.owner, token.inputs.mine.id_type, token.inputs.mine.is_minter, byte[32](self.cov_id));
+        bid_fits(book1.inputs.bid.tokenCovId, byte[32](token_covid), n1);
+        require(book1.inputs.bid.tif == 0);
+        int sold = n1;
+        require(sold <= max_sell);
+        require(sold <= token.inputs.mine.amount);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(merchant)));
+        require(tx.outputs[me].value >= merchant_kas);
+        require(OpCovOutputIdx(token_covid, 1) == me + 1);
+
+        KronTokenState delivery1_state = {
+            owner: byte[32](book1.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n1,
+            is_minter: 0x00,
+        };
+        KronTokenState change_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token.inputs.mine.amount - sold,
+            is_minter: 0x00,
+        };
+        require token.outputs become {
+            delivery1 <- self.token_type(delivery1_state),
+            change <- self.token_type(change_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_covid, 0) == me + 1);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token.inputs.mine.value);
+        own_kron(token.inputs.mine.owner, token.inputs.mine.id_type, token.inputs.mine.is_minter, byte[32](self.cov_id));
+        KronTokenState back_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token.inputs.mine.amount,
+            is_minter: 0x00,
+        };
+        require token.outputs become {
+            back <- self.token_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
+        require(token.inputs.mine.owner == byte[32](self.cov_id));
+        require(token.inputs.mine.id_type == KRON_ID_COVENANT);
+    }
+}
+
+actor TokenToKasKron_sell_out owns TokenToKasKronState {
+    // One bid, ENDING (exhausted, IOC or FOK): n1 base units go into it.
+    entry sell_out(cov_id bid1_covid, int n1)
+    observes book1 by bid1_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            delivery1: self.token_type,
+            change: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        own_kron(token.inputs.mine.owner, token.inputs.mine.id_type, token.inputs.mine.is_minter, byte[32](self.cov_id));
+        bid_fits(book1.inputs.bid.tokenCovId, byte[32](token_covid), n1);
+        int sold = n1;
+        require(sold <= max_sell);
+        require(sold <= token.inputs.mine.amount);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(merchant)));
+        require(tx.outputs[me].value >= merchant_kas);
+        require(OpCovOutputIdx(token_covid, 1) == me + 1);
+
+        KronTokenState delivery1_state = {
+            owner: byte[32](book1.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n1,
+            is_minter: 0x00,
+        };
+        KronTokenState change_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token.inputs.mine.amount - sold,
+            is_minter: 0x00,
+        };
+        require token.outputs become {
+            delivery1 <- self.token_type(delivery1_state),
+            change <- self.token_type(change_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_covid, 0) == me + 1);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token.inputs.mine.value);
+        own_kron(token.inputs.mine.owner, token.inputs.mine.id_type, token.inputs.mine.is_minter, byte[32](self.cov_id));
+        KronTokenState back_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token.inputs.mine.amount,
+            is_minter: 0x00,
+        };
+        require token.outputs become {
+            back <- self.token_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
+        require(token.inputs.mine.owner == byte[32](self.cov_id));
+        require(token.inputs.mine.id_type == KRON_ID_COVENANT);
+    }
+}
+
+actor TokenToKasKron_sell2 owns TokenToKasKronState {
+    // 2 bids: the first 1 END, the last RESTS. n1 .. n2 base units, at most max_sell in all.
+    entry sell2(cov_id bid1_covid, cov_id bid2_covid, int n1, int n2)
+    observes book1 by bid1_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes book2 by bid2_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+            next: KOBOrdersKron::KobBidKron,
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            delivery1: self.token_type,
+            delivery2: self.token_type,
+            change: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        own_kron(token.inputs.mine.owner, token.inputs.mine.id_type, token.inputs.mine.is_minter, byte[32](self.cov_id));
+        bid_fits(book1.inputs.bid.tokenCovId, byte[32](token_covid), n1);
+        bid_fits(book2.inputs.bid.tokenCovId, byte[32](token_covid), n2);
+        require(book2.inputs.bid.tif == 0);
+        int sold = n1 + n2;
+        require(sold <= max_sell);
+        require(sold <= token.inputs.mine.amount);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(merchant)));
+        require(tx.outputs[me].value >= merchant_kas);
+        require(OpCovOutputIdx(token_covid, 2) == me + 1);
+
+        KronTokenState delivery1_state = {
+            owner: byte[32](book1.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n1,
+            is_minter: 0x00,
+        };
+        KronTokenState delivery2_state = {
+            owner: byte[32](book2.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n2,
+            is_minter: 0x00,
+        };
+        KronTokenState change_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token.inputs.mine.amount - sold,
+            is_minter: 0x00,
+        };
+        require token.outputs become {
+            delivery1 <- self.token_type(delivery1_state),
+            delivery2 <- self.token_type(delivery2_state),
+            change <- self.token_type(change_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_covid, 0) == me + 1);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token.inputs.mine.value);
+        own_kron(token.inputs.mine.owner, token.inputs.mine.id_type, token.inputs.mine.is_minter, byte[32](self.cov_id));
+        KronTokenState back_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token.inputs.mine.amount,
+            is_minter: 0x00,
+        };
+        require token.outputs become {
+            back <- self.token_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
+        require(token.inputs.mine.owner == byte[32](self.cov_id));
+        require(token.inputs.mine.id_type == KRON_ID_COVENANT);
+    }
+}
+
+actor TokenToKasKron_sell2_out owns TokenToKasKronState {
+    // 2 bids, all ENDING. n1 .. n2 base units, at most max_sell in all.
+    entry sell2_out(cov_id bid1_covid, cov_id bid2_covid, int n1, int n2)
+    observes book1 by bid1_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes book2 by bid2_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            delivery1: self.token_type,
+            delivery2: self.token_type,
+            change: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        own_kron(token.inputs.mine.owner, token.inputs.mine.id_type, token.inputs.mine.is_minter, byte[32](self.cov_id));
+        bid_fits(book1.inputs.bid.tokenCovId, byte[32](token_covid), n1);
+        bid_fits(book2.inputs.bid.tokenCovId, byte[32](token_covid), n2);
+        int sold = n1 + n2;
+        require(sold <= max_sell);
+        require(sold <= token.inputs.mine.amount);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(merchant)));
+        require(tx.outputs[me].value >= merchant_kas);
+        require(OpCovOutputIdx(token_covid, 2) == me + 1);
+
+        KronTokenState delivery1_state = {
+            owner: byte[32](book1.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n1,
+            is_minter: 0x00,
+        };
+        KronTokenState delivery2_state = {
+            owner: byte[32](book2.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n2,
+            is_minter: 0x00,
+        };
+        KronTokenState change_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token.inputs.mine.amount - sold,
+            is_minter: 0x00,
+        };
+        require token.outputs become {
+            delivery1 <- self.token_type(delivery1_state),
+            delivery2 <- self.token_type(delivery2_state),
+            change <- self.token_type(change_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_covid, 0) == me + 1);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token.inputs.mine.value);
+        own_kron(token.inputs.mine.owner, token.inputs.mine.id_type, token.inputs.mine.is_minter, byte[32](self.cov_id));
+        KronTokenState back_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token.inputs.mine.amount,
+            is_minter: 0x00,
+        };
+        require token.outputs become {
+            back <- self.token_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
+        require(token.inputs.mine.owner == byte[32](self.cov_id));
+        require(token.inputs.mine.id_type == KRON_ID_COVENANT);
+    }
+}
+
+actor TokenToKasKron_sell3 owns TokenToKasKronState {
+    // 3 bids: the first 2 END, the last RESTS. n1 .. n3 base units, at most max_sell in all.
+    entry sell3(cov_id bid1_covid, cov_id bid2_covid, cov_id bid3_covid, int n1, int n2, int n3)
+    observes book1 by bid1_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes book2 by bid2_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes book3 by bid3_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+            next: KOBOrdersKron::KobBidKron,
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            delivery1: self.token_type,
+            delivery2: self.token_type,
+            delivery3: self.token_type,
+            change: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        own_kron(token.inputs.mine.owner, token.inputs.mine.id_type, token.inputs.mine.is_minter, byte[32](self.cov_id));
+        bid_fits(book1.inputs.bid.tokenCovId, byte[32](token_covid), n1);
+        bid_fits(book2.inputs.bid.tokenCovId, byte[32](token_covid), n2);
+        bid_fits(book3.inputs.bid.tokenCovId, byte[32](token_covid), n3);
+        require(book3.inputs.bid.tif == 0);
+        int sold = n1 + n2 + n3;
+        require(sold <= max_sell);
+        require(sold <= token.inputs.mine.amount);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(merchant)));
+        require(tx.outputs[me].value >= merchant_kas);
+        require(OpCovOutputIdx(token_covid, 3) == me + 1);
+
+        KronTokenState delivery1_state = {
+            owner: byte[32](book1.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n1,
+            is_minter: 0x00,
+        };
+        KronTokenState delivery2_state = {
+            owner: byte[32](book2.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n2,
+            is_minter: 0x00,
+        };
+        KronTokenState delivery3_state = {
+            owner: byte[32](book3.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n3,
+            is_minter: 0x00,
+        };
+        KronTokenState change_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token.inputs.mine.amount - sold,
+            is_minter: 0x00,
+        };
+        require token.outputs become {
+            delivery1 <- self.token_type(delivery1_state),
+            delivery2 <- self.token_type(delivery2_state),
+            delivery3 <- self.token_type(delivery3_state),
+            change <- self.token_type(change_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_covid, 0) == me + 1);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token.inputs.mine.value);
+        own_kron(token.inputs.mine.owner, token.inputs.mine.id_type, token.inputs.mine.is_minter, byte[32](self.cov_id));
+        KronTokenState back_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token.inputs.mine.amount,
+            is_minter: 0x00,
+        };
+        require token.outputs become {
+            back <- self.token_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
+        require(token.inputs.mine.owner == byte[32](self.cov_id));
+        require(token.inputs.mine.id_type == KRON_ID_COVENANT);
+    }
+}
+
+actor TokenToKasKron_sell3_out owns TokenToKasKronState {
+    // 3 bids, all ENDING. n1 .. n3 base units, at most max_sell in all.
+    entry sell3_out(cov_id bid1_covid, cov_id bid2_covid, cov_id bid3_covid, int n1, int n2, int n3)
+    observes book1 by bid1_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes book2 by bid2_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes book3 by bid3_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            delivery1: self.token_type,
+            delivery2: self.token_type,
+            delivery3: self.token_type,
+            change: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.inputs.length == me + 1);
+        own_kron(token.inputs.mine.owner, token.inputs.mine.id_type, token.inputs.mine.is_minter, byte[32](self.cov_id));
+        bid_fits(book1.inputs.bid.tokenCovId, byte[32](token_covid), n1);
+        bid_fits(book2.inputs.bid.tokenCovId, byte[32](token_covid), n2);
+        bid_fits(book3.inputs.bid.tokenCovId, byte[32](token_covid), n3);
+        int sold = n1 + n2 + n3;
+        require(sold <= max_sell);
+        require(sold <= token.inputs.mine.amount);
+
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(merchant)));
+        require(tx.outputs[me].value >= merchant_kas);
+        require(OpCovOutputIdx(token_covid, 3) == me + 1);
+
+        KronTokenState delivery1_state = {
+            owner: byte[32](book1.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n1,
+            is_minter: 0x00,
+        };
+        KronTokenState delivery2_state = {
+            owner: byte[32](book2.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n2,
+            is_minter: 0x00,
+        };
+        KronTokenState delivery3_state = {
+            owner: byte[32](book3.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n3,
+            is_minter: 0x00,
+        };
+        KronTokenState change_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token.inputs.mine.amount - sold,
+            is_minter: 0x00,
+        };
+        require token.outputs become {
+            delivery1 <- self.token_type(delivery1_state),
+            delivery2 <- self.token_type(delivery2_state),
+            delivery3 <- self.token_type(delivery3_state),
+            change <- self.token_type(change_state),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_covid, 0) == me + 1);
+        require(OpCovOutputIdx(token_covid, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token.inputs.mine.value);
+        own_kron(token.inputs.mine.owner, token.inputs.mine.id_type, token.inputs.mine.is_minter, byte[32](self.cov_id));
+        KronTokenState back_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token.inputs.mine.amount,
+            is_minter: 0x00,
+        };
+        require token.outputs become {
+            back <- self.token_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token by self.token_covid {
+        inputs {
+            mine: self.token_type,
+        }
+        outputs {
+            back: self.token_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
+        require(token.inputs.mine.owner == byte[32](self.cov_id));
+        require(token.inputs.mine.id_type == KRON_ID_COVENANT);
+    }
+}
+
+// ---------------------------------------------------------------- TokenSwapKron
+
+// TokenSwap with a KRON token A sold into KobBidKrons; token B (KCC-20) is bought from KobAsks as in TokenSwap.
+
+actor TokenSwapKron_swap owns TokenSwapKronState {
+    // 1 bid(s) (the last one RESTING, the others END) and 1 ask(s) (the last one RESTING, the others SOLD OUT).
+    entry swap(cov_id bid1_covid, cov_id ask1_covid, int n_a1)
+    observes bids1 by bid1_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+            next: KOBOrdersKron::KobBidKron,
+        }
+    }
+    observes asks1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+            next: KOBOrders::KobAsk,
+        }
+    }
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            delivery1: self.token_a_type,
+            change: self.token_a_type,
+        }
+    }
+    observes token_b_group by self.token_b {
+        inputs {
+            escrow1: self.token_b_type,
+        }
+        outputs {
+            escrow_change: self.token_b_type,
+            merchant_out: self.token_b_type,
+        }
+    }
+    emits none {
+        require(tx.inputs.length == this.activeInputIndex + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+
+        require(token_a != token_b);
+        own_kron(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.id_type, token_a_group.inputs.mine.is_minter, byte[32](self.cov_id));
+        bid_fits(bids1.inputs.bid.tokenCovId, byte[32](token_a), n_a1);
+        require(bids1.inputs.bid.tif == 0);
+        require(n_a1 <= max_sell_a);
+        require(n_a1 <= token_a_group.inputs.mine.amount);
+        require(amount_b < token_b_group.inputs.escrow1.amount);
+        require(asks1.inputs.ask.tif == 0);
+        ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), amount_b);
+
+        require(OpCovOutputIdx(token_b, 1) == this.activeInputIndex);
+        require(OpCovOutputIdx(token_a, 1) == this.activeInputIndex + 1);
+
+        KCC20State b_change = {
+            amount: token_b_group.inputs.escrow1.amount - amount_b,
+            owner: token_b_group.inputs.escrow1.owner,
+            owner_scheme: OWNER_COVENANT_ID,
+            borrow_scheme: token_b_group.inputs.escrow1.borrow_scheme,
+            borrow_guard: token_b_group.inputs.escrow1.borrow_guard,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        KronTokenState a_delivery1 = {
+            owner: byte[32](bids1.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n_a1,
+            is_minter: 0x00,
+        };
+        KronTokenState a_change = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token_a_group.inputs.mine.amount - (n_a1),
+            is_minter: 0x00,
+        };
+        KCC20State b_merchant = {
+            amount: amount_b,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            delivery1 <- self.token_a_type(a_delivery1),
+            change <- self.token_a_type(a_change),
+        };
+        require token_b_group.outputs become {
+            escrow_change <- self.token_b_type(b_change),
+            merchant_out <- self.token_b_type(b_merchant),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_a, 0) == me + 1);
+        require(OpCovOutputIdx(token_a, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token_a_group.inputs.mine.value);
+        own_kron(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.id_type, token_a_group.inputs.mine.is_minter, byte[32](self.cov_id));
+        KronTokenState back_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token_a_group.inputs.mine.amount,
+            is_minter: 0x00,
+        };
+        require token_a_group.outputs become {
+            back <- self.token_a_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
+        require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
+        require(token_a_group.inputs.mine.id_type == KRON_ID_COVENANT);
+    }
+}
+
+actor TokenSwapKron_swap_bid_out owns TokenSwapKronState {
+    // 1 bid(s) (the last one ENDING, the others END) and 1 ask(s) (the last one RESTING, the others SOLD OUT).
+    entry swap_bid_out(cov_id bid1_covid, cov_id ask1_covid, int n_a1)
+    observes bids1 by bid1_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes asks1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+            next: KOBOrders::KobAsk,
+        }
+    }
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            delivery1: self.token_a_type,
+            change: self.token_a_type,
+        }
+    }
+    observes token_b_group by self.token_b {
+        inputs {
+            escrow1: self.token_b_type,
+        }
+        outputs {
+            escrow_change: self.token_b_type,
+            merchant_out: self.token_b_type,
+        }
+    }
+    emits none {
+        require(tx.inputs.length == this.activeInputIndex + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+
+        require(token_a != token_b);
+        own_kron(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.id_type, token_a_group.inputs.mine.is_minter, byte[32](self.cov_id));
+        bid_fits(bids1.inputs.bid.tokenCovId, byte[32](token_a), n_a1);
+        require(n_a1 <= max_sell_a);
+        require(n_a1 <= token_a_group.inputs.mine.amount);
+        require(amount_b < token_b_group.inputs.escrow1.amount);
+        require(asks1.inputs.ask.tif == 0);
+        ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), amount_b);
+
+        require(OpCovOutputIdx(token_b, 1) == this.activeInputIndex);
+        require(OpCovOutputIdx(token_a, 1) == this.activeInputIndex + 1);
+
+        KCC20State b_change = {
+            amount: token_b_group.inputs.escrow1.amount - amount_b,
+            owner: token_b_group.inputs.escrow1.owner,
+            owner_scheme: OWNER_COVENANT_ID,
+            borrow_scheme: token_b_group.inputs.escrow1.borrow_scheme,
+            borrow_guard: token_b_group.inputs.escrow1.borrow_guard,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        KronTokenState a_delivery1 = {
+            owner: byte[32](bids1.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n_a1,
+            is_minter: 0x00,
+        };
+        KronTokenState a_change = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token_a_group.inputs.mine.amount - (n_a1),
+            is_minter: 0x00,
+        };
+        KCC20State b_merchant = {
+            amount: amount_b,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            delivery1 <- self.token_a_type(a_delivery1),
+            change <- self.token_a_type(a_change),
+        };
+        require token_b_group.outputs become {
+            escrow_change <- self.token_b_type(b_change),
+            merchant_out <- self.token_b_type(b_merchant),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_a, 0) == me + 1);
+        require(OpCovOutputIdx(token_a, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token_a_group.inputs.mine.value);
+        own_kron(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.id_type, token_a_group.inputs.mine.is_minter, byte[32](self.cov_id));
+        KronTokenState back_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token_a_group.inputs.mine.amount,
+            is_minter: 0x00,
+        };
+        require token_a_group.outputs become {
+            back <- self.token_a_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
+        require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
+        require(token_a_group.inputs.mine.id_type == KRON_ID_COVENANT);
+    }
+}
+
+actor TokenSwapKron_swap_ask_out owns TokenSwapKronState {
+    // 1 bid(s) (the last one RESTING, the others END) and 1 ask(s) (the last one SOLD OUT, the others SOLD OUT).
+    entry swap_ask_out(cov_id bid1_covid, cov_id ask1_covid, int n_a1)
+    observes bids1 by bid1_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+            next: KOBOrdersKron::KobBidKron,
+        }
+    }
+    observes asks1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            delivery1: self.token_a_type,
+            change: self.token_a_type,
+        }
+    }
+    observes token_b_group by self.token_b {
+        inputs {
+            escrow1: self.token_b_type,
+        }
+        outputs {
+            merchant_out: self.token_b_type,
+        }
+    }
+    emits none {
+        require(tx.inputs.length == this.activeInputIndex + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+
+        require(token_a != token_b);
+        own_kron(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.id_type, token_a_group.inputs.mine.is_minter, byte[32](self.cov_id));
+        bid_fits(bids1.inputs.bid.tokenCovId, byte[32](token_a), n_a1);
+        require(bids1.inputs.bid.tif == 0);
+        require(n_a1 <= max_sell_a);
+        require(n_a1 <= token_a_group.inputs.mine.amount);
+        require(token_b_group.inputs.escrow1.amount == amount_b);
+        ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
+
+        require(OpCovOutputIdx(token_b, 0) == this.activeInputIndex);
+        require(OpCovOutputIdx(token_a, 1) == this.activeInputIndex + 1);
+
+        KronTokenState a_delivery1 = {
+            owner: byte[32](bids1.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n_a1,
+            is_minter: 0x00,
+        };
+        KronTokenState a_change = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token_a_group.inputs.mine.amount - (n_a1),
+            is_minter: 0x00,
+        };
+        KCC20State b_merchant = {
+            amount: amount_b,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            delivery1 <- self.token_a_type(a_delivery1),
+            change <- self.token_a_type(a_change),
+        };
+        require token_b_group.outputs become {
+            merchant_out <- self.token_b_type(b_merchant),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_a, 0) == me + 1);
+        require(OpCovOutputIdx(token_a, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token_a_group.inputs.mine.value);
+        own_kron(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.id_type, token_a_group.inputs.mine.is_minter, byte[32](self.cov_id));
+        KronTokenState back_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token_a_group.inputs.mine.amount,
+            is_minter: 0x00,
+        };
+        require token_a_group.outputs become {
+            back <- self.token_a_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
+        require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
+        require(token_a_group.inputs.mine.id_type == KRON_ID_COVENANT);
+    }
+}
+
+actor TokenSwapKron_swap_out owns TokenSwapKronState {
+    // 1 bid(s) (the last one ENDING, the others END) and 1 ask(s) (the last one SOLD OUT, the others SOLD OUT).
+    entry swap_out(cov_id bid1_covid, cov_id ask1_covid, int n_a1)
+    observes bids1 by bid1_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes asks1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            delivery1: self.token_a_type,
+            change: self.token_a_type,
+        }
+    }
+    observes token_b_group by self.token_b {
+        inputs {
+            escrow1: self.token_b_type,
+        }
+        outputs {
+            merchant_out: self.token_b_type,
+        }
+    }
+    emits none {
+        require(tx.inputs.length == this.activeInputIndex + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+
+        require(token_a != token_b);
+        own_kron(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.id_type, token_a_group.inputs.mine.is_minter, byte[32](self.cov_id));
+        bid_fits(bids1.inputs.bid.tokenCovId, byte[32](token_a), n_a1);
+        require(n_a1 <= max_sell_a);
+        require(n_a1 <= token_a_group.inputs.mine.amount);
+        require(token_b_group.inputs.escrow1.amount == amount_b);
+        ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
+
+        require(OpCovOutputIdx(token_b, 0) == this.activeInputIndex);
+        require(OpCovOutputIdx(token_a, 1) == this.activeInputIndex + 1);
+
+        KronTokenState a_delivery1 = {
+            owner: byte[32](bids1.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n_a1,
+            is_minter: 0x00,
+        };
+        KronTokenState a_change = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token_a_group.inputs.mine.amount - (n_a1),
+            is_minter: 0x00,
+        };
+        KCC20State b_merchant = {
+            amount: amount_b,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            delivery1 <- self.token_a_type(a_delivery1),
+            change <- self.token_a_type(a_change),
+        };
+        require token_b_group.outputs become {
+            merchant_out <- self.token_b_type(b_merchant),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_a, 0) == me + 1);
+        require(OpCovOutputIdx(token_a, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token_a_group.inputs.mine.value);
+        own_kron(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.id_type, token_a_group.inputs.mine.is_minter, byte[32](self.cov_id));
+        KronTokenState back_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token_a_group.inputs.mine.amount,
+            is_minter: 0x00,
+        };
+        require token_a_group.outputs become {
+            back <- self.token_a_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
+        require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
+        require(token_a_group.inputs.mine.id_type == KRON_ID_COVENANT);
+    }
+}
+
+actor TokenSwapKron_swap2 owns TokenSwapKronState {
+    // 2 bid(s) (the last one RESTING, the others END) and 2 ask(s) (the last one RESTING, the others SOLD OUT).
+    entry swap2(cov_id bid1_covid, cov_id bid2_covid, cov_id ask1_covid, cov_id ask2_covid, int n_a1, int n_a2)
+    observes bids1 by bid1_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes bids2 by bid2_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+            next: KOBOrdersKron::KobBidKron,
+        }
+    }
+    observes asks1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes asks2 by ask2_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+            next: KOBOrders::KobAsk,
+        }
+    }
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            delivery1: self.token_a_type,
+            delivery2: self.token_a_type,
+            change: self.token_a_type,
+        }
+    }
+    observes token_b_group by self.token_b {
+        inputs {
+            escrow1: self.token_b_type,
+            escrow2: self.token_b_type,
+        }
+        outputs {
+            escrow_change: self.token_b_type,
+            merchant_out: self.token_b_type,
+        }
+    }
+    emits none {
+        require(tx.inputs.length == this.activeInputIndex + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 1, 9))) > 0);
+
+        require(token_a != token_b);
+        own_kron(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.id_type, token_a_group.inputs.mine.is_minter, byte[32](self.cov_id));
+        bid_fits(bids1.inputs.bid.tokenCovId, byte[32](token_a), n_a1);
+        bid_fits(bids2.inputs.bid.tokenCovId, byte[32](token_a), n_a2);
+        require(bids2.inputs.bid.tif == 0);
+        require(n_a1 + n_a2 <= max_sell_a);
+        require(n_a1 + n_a2 <= token_a_group.inputs.mine.amount);
+        require((amount_b - token_b_group.inputs.escrow1.amount) < token_b_group.inputs.escrow2.amount);
+        require(asks2.inputs.ask.tif == 0);
+        ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
+        ask_fits(asks2.inputs.ask.tokenCovId, asks2.inputs.ask.amountLeft, token_b_group.inputs.escrow2.owner, token_b_group.inputs.escrow2.owner_scheme, token_b_group.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_b), (amount_b - token_b_group.inputs.escrow1.amount));
+
+        require(OpCovOutputIdx(token_b, 1) == this.activeInputIndex);
+        require(OpCovOutputIdx(token_a, 2) == this.activeInputIndex + 1);
+
+        KCC20State b_change = {
+            amount: token_b_group.inputs.escrow2.amount - (amount_b - token_b_group.inputs.escrow1.amount),
+            owner: token_b_group.inputs.escrow2.owner,
+            owner_scheme: OWNER_COVENANT_ID,
+            borrow_scheme: token_b_group.inputs.escrow2.borrow_scheme,
+            borrow_guard: token_b_group.inputs.escrow2.borrow_guard,
+            extension_commitment: token_b_group.inputs.escrow2.extension_commitment,
+        };
+        KronTokenState a_delivery1 = {
+            owner: byte[32](bids1.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n_a1,
+            is_minter: 0x00,
+        };
+        KronTokenState a_delivery2 = {
+            owner: byte[32](bids2.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n_a2,
+            is_minter: 0x00,
+        };
+        KronTokenState a_change = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token_a_group.inputs.mine.amount - (n_a1 + n_a2),
+            is_minter: 0x00,
+        };
+        KCC20State b_merchant = {
+            amount: amount_b,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            delivery1 <- self.token_a_type(a_delivery1),
+            delivery2 <- self.token_a_type(a_delivery2),
+            change <- self.token_a_type(a_change),
+        };
+        require token_b_group.outputs become {
+            escrow_change <- self.token_b_type(b_change),
+            merchant_out <- self.token_b_type(b_merchant),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_a, 0) == me + 1);
+        require(OpCovOutputIdx(token_a, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token_a_group.inputs.mine.value);
+        own_kron(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.id_type, token_a_group.inputs.mine.is_minter, byte[32](self.cov_id));
+        KronTokenState back_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token_a_group.inputs.mine.amount,
+            is_minter: 0x00,
+        };
+        require token_a_group.outputs become {
+            back <- self.token_a_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
+        require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
+        require(token_a_group.inputs.mine.id_type == KRON_ID_COVENANT);
+    }
+}
+
+actor TokenSwapKron_swap2_out owns TokenSwapKronState {
+    // 2 bid(s) (the last one ENDING, the others END) and 2 ask(s) (the last one SOLD OUT, the others SOLD OUT).
+    entry swap2_out(cov_id bid1_covid, cov_id bid2_covid, cov_id ask1_covid, cov_id ask2_covid, int n_a1, int n_a2)
+    observes bids1 by bid1_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes bids2 by bid2_covid {
+        inputs {
+            bid: KOBOrdersKron::KobBidKron,
+        }
+        outputs {
+        }
+    }
+    observes asks1 by ask1_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes asks2 by ask2_covid {
+        inputs {
+            ask: KOBOrders::KobAsk,
+        }
+        outputs {
+        }
+    }
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            delivery1: self.token_a_type,
+            delivery2: self.token_a_type,
+            change: self.token_a_type,
+        }
+    }
+    observes token_b_group by self.token_b {
+        inputs {
+            escrow1: self.token_b_type,
+            escrow2: self.token_b_type,
+        }
+        outputs {
+            merchant_out: self.token_b_type,
+        }
+    }
+    emits none {
+        require(tx.inputs.length == this.activeInputIndex + 1);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
+        require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 0, 1) == byte[](0x08));
+        require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 1, 9))) > 0);
+
+        require(token_a != token_b);
+        own_kron(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.id_type, token_a_group.inputs.mine.is_minter, byte[32](self.cov_id));
+        bid_fits(bids1.inputs.bid.tokenCovId, byte[32](token_a), n_a1);
+        bid_fits(bids2.inputs.bid.tokenCovId, byte[32](token_a), n_a2);
+        require(n_a1 + n_a2 <= max_sell_a);
+        require(n_a1 + n_a2 <= token_a_group.inputs.mine.amount);
+        require(token_b_group.inputs.escrow1.amount + token_b_group.inputs.escrow2.amount == amount_b);
+        ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
+        ask_fits(asks2.inputs.ask.tokenCovId, asks2.inputs.ask.amountLeft, token_b_group.inputs.escrow2.owner, token_b_group.inputs.escrow2.owner_scheme, token_b_group.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_b), token_b_group.inputs.escrow2.amount);
+
+        require(OpCovOutputIdx(token_b, 0) == this.activeInputIndex);
+        require(OpCovOutputIdx(token_a, 2) == this.activeInputIndex + 1);
+
+        KronTokenState a_delivery1 = {
+            owner: byte[32](bids1.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n_a1,
+            is_minter: 0x00,
+        };
+        KronTokenState a_delivery2 = {
+            owner: byte[32](bids2.inputs.bid.maker),
+            id_type: KRON_ID_ADDRESS,
+            amount: n_a2,
+            is_minter: 0x00,
+        };
+        KronTokenState a_change = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token_a_group.inputs.mine.amount - (n_a1 + n_a2),
+            is_minter: 0x00,
+        };
+        KCC20State b_merchant = {
+            amount: amount_b,
+            owner: merchant,
+            owner_scheme: OWNER_P2PK_SCHNORR,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+        };
+        require token_a_group.outputs become {
+            delivery1 <- self.token_a_type(a_delivery1),
+            delivery2 <- self.token_a_type(a_delivery2),
+            change <- self.token_a_type(a_change),
+        };
+        require token_b_group.outputs become {
+            merchant_out <- self.token_b_type(b_merchant),
+        };
+    }
+
+    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,
+    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is
+    // those tokens, so no other input's positional rule can claim out j + 1.
+    entry expire()
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        int me = this.activeInputIndex;
+        require(tx.time >= deadline);
+        require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(payer)));
+        require(tx.outputs[me].value + EXPIRE_MAX_FEE >= self.value);
+        require(OpCovInputIdx(token_a, 0) == me + 1);
+        require(OpCovOutputIdx(token_a, 0) == me + 1);
+        require(tx.outputs[me + 1].value >= token_a_group.inputs.mine.value);
+        own_kron(token_a_group.inputs.mine.owner, token_a_group.inputs.mine.id_type, token_a_group.inputs.mine.is_minter, byte[32](self.cov_id));
+        KronTokenState back_state = {
+            owner: byte[32](payer),
+            id_type: KRON_ID_ADDRESS,
+            amount: token_a_group.inputs.mine.amount,
+            is_minter: 0x00,
+        };
+        require token_a_group.outputs become {
+            back <- self.token_a_type(back_state),
+        };
+    }
+
+    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the
+    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id
+    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL).
+    entry cancel(sig s)
+    observes token_a_group by self.token_a {
+        inputs {
+            mine: self.token_a_type,
+        }
+        outputs {
+            back: self.token_a_type,
+        }
+    }
+    emits none {
+        require_cancel_sig(s, payer);
+        require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
+        require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
+        require(token_a_group.inputs.mine.id_type == KRON_ID_COVENANT);
+    }
+}
+
+app KobRouter {
+    actor KasToToken_buy;
+    actor KasToToken_buy_out;
+    actor KasToToken_buy2;
+    actor KasToToken_buy2_out;
+    actor KasToToken_buy3;
+    actor KasToToken_buy3_out;
+    actor TokenToKas_sell;
+    actor TokenToKas_sell_out;
+    actor TokenToKas_sell2;
+    actor TokenToKas_sell2_out;
+    actor TokenToKas_sell3;
+    actor TokenToKas_sell3_out;
+    actor TokenSwap_swap;
+    actor TokenSwap_swap_bid_out;
+    actor TokenSwap_swap_ask_out;
+    actor TokenSwap_swap_out;
+    actor TokenSwap_swap2;
+    actor TokenSwap_swap2_out;
+    actor TokenToKasKron_sell;
+    actor TokenToKasKron_sell_out;
+    actor TokenToKasKron_sell2;
+    actor TokenToKasKron_sell2_out;
+    actor TokenToKasKron_sell3;
+    actor TokenToKasKron_sell3_out;
+    actor TokenSwapKron_swap;
+    actor TokenSwapKron_swap_bid_out;
+    actor TokenSwapKron_swap_ask_out;
+    actor TokenSwapKron_swap_out;
+    actor TokenSwapKron_swap2;
+    actor TokenSwapKron_swap2_out;
+}

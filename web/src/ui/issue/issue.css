@@ -1,0 +1,35 @@
+/* Token issuance view. Uses the shared CSS variables of styles.css (light + dark) with fallbacks; phone first. */
+
+.issue-page { max-width: 860px; margin: 0 auto; width: 100%; }
+
+.issue-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+@media (min-width: 640px) {
+  .issue-grid { grid-template-columns: 1fr 1fr; }
+}
+
+.issue-mono .input, .issue-mono input { font-family: var(--mono, ui-monospace, Consolas, monospace); }
+.issue-preview { color: var(--text, inherit); font-weight: 600; }
+
+.issue-notes { margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+
+/* holders: one row per holder, owner key + amount + remove; stacked on a phone */
+.issue-holder { display: grid; grid-template-columns: 1fr; gap: 8px; align-items: end; padding: 8px 0; border-bottom: 1px solid var(--border, #d5d9e0); }
+.issue-holder:last-child { border-bottom: 0; }
+.issue-holder-you { background: var(--surface-2, #eef0f4); border-radius: var(--radius-sm, 5px); padding: 8px; border-bottom: 0; }
+@media (min-width: 720px) {
+  .issue-holder { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; }
+}
+.issue-holders-foot { margin-top: 8px; }
+
+.issue-funds { min-height: 24px; }
+.issue-actions { margin-top: 12px; }
+.issue-h3 { margin: 16px 0 8px; }
+
+.issue-holder-list { margin: 0; padding-left: 18px; }
+.issue-status-badges { margin: 8px 0 12px; }
+
+.issue-json {
+  margin: 0 0 12px; padding: 10px 12px; max-height: 360px; overflow: auto; white-space: pre; tab-size: 2;
+  background: var(--surface-2, #eef0f4); border: 1px solid var(--border, #d5d9e0); border-radius: var(--radius-sm, 5px);
+  font-family: var(--mono, ui-monospace, Consolas, monospace); font-size: 0.85rem;
+}

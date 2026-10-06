@@ -1,0 +1,364 @@
+pragma silverscript ^0.1.0;
+
+// KobPair: a plain order of a token/token pair A/B (protocol v3): an amount of the BASE token A at a limit price in the
+// QUOTE token B per whole A, the same rule as every KOB order (KobAsk header). One template for both sides and both
+// token families:
+//   side ASK (1): sells base A, buys quote B: the maker receives at least ceil(n * price(t) / scale(A)) of B for n of A;
+//   side BID (2): buys base A, pays quote B: the maker receives exactly n of A for exactly floor(n * price(t) / scale(A))
+//                 of B out of its escrow custody.
+// The order holds the token it SELLS (S: A for an ask, B for a bid) in an exact custody and receives the token it BUYS
+// (T) at its positional output. It enforces only its own guarantees: what it receives and pays, its exact custody, the
+// stray guards of both tokens and its positional outputs. How the counterparty side is settled is free: a matcher may
+// route through the KAS books of both tokens, net opposite pair orders (any number) or fill from its own tokens; the
+// maker's terms hold in every case. (Prices are recorded only from KAS-book order fills, docs/spec/matcher.md.)
+//
+// Entries:
+//   settle(nb, custIn, tTplIn, t, sOut, tOut)
+//     n = int(nb) > 0   fill n base units of A: anyone, once tx.daa >= activeFrom. sOut: the S the order releases
+//                       (ASK: exactly n; BID: exactly the floor above); tOut: the T delivered to the maker at output i
+//                       (ASK: at least the ceil above; BID: exactly n). t: decay time (CLTV).
+//     n == 0            refund: anyone, once DAA >= min(expiryDaa, UTXO DAA + 90 days, IOC/FOK kill); the whole
+//                       custody returns to the maker at output i
+//     custIn: the custody input (token S); tTplIn: any token-T input, the source of the T template bytes (hash-checked).
+//     n is the fixed 8-byte FIRST argument (sigscript [0] = 0x08, [1..9) = n), as in every KOB fill entry.
+//   cancel(sig)         maker only, SIGHASH_ALL
+//
+// State: per-order values in the state span; mutable amountLeft (base units of A still to trade) and custody (the
+// exact amount of S held), the last two fields: a partial fill continues with both spliced in.
+//
+// Key invariants:
+//  - Takeable quotes: every quote a pair order shows can be taken by anyone at that quote (an ask's custody is its whole
+//    remaining amount, a bid pays exactly its quote from its escrow, the order funds its own delivery carrier and tip),
+//    so a fill of a resting pair order is real trigger evidence for pair conditionals (KobCondPair, KobIfdPair).
+//  - Rounding (the maker's favour, KobAsk header): an ask receives the ceil, a bid pays the floor (the bid's custody is
+//    the B escrow; it is funded by the wallet at the ceil of its budget rate, with one base unit of slack per fill);
+//    the KAS tip (sompi per whole A, prefunded on the order UTXO) is the floor.
+//  - Minimum fill: n >= minFill unless n takes all that is left. TWAP / DCA: interval (CSV), maxFill.
+//  - Decay: ASK price(t) = max(priceEnd, price - slope * floor((t - origin) / decayStep)); BID price(t) = min(priceEnd,
+//    price + slope * ...); origin = activeFrom or the TWAP / DCA slice opening (KobAsk / KobBid).
+//  - Custody: the token-S UTXO owned by this covenant id holding exactly `custody`; settle refuses any other S input
+//    owned by this id and any T input owned by this id (strays of either token are inert: only the maker's cancel
+//    moves them), and a refund carries no T input at all.
+//  - Positional outputs: the maker's T at output i (this input's index); the S rest (owned by this id) or return
+//    (owned by the maker) at the custody's index; the continuation is the only output carrying this id.
+//  - IOC / FOK, soft expiry and the 90-day idle bound as in KobAsk; the order's KAS UTXO prefunds deliveryCarrier per
+//    fill and the tip.
+contract KobPair(
+    pubkey init_maker,
+    int init_side,
+    byte[32] init_sCovId,
+    byte[32] init_sTplHash,
+    int init_sPre,
+    int init_sSuf,
+    int init_sFamily,
+    int init_sScale,
+    byte[32] init_tCovId,
+    byte[32] init_tTplHash,
+    int init_tPre,
+    int init_tSuf,
+    int init_tFamily,
+    byte[32] init_tExt,
+    int init_tScale,
+    int init_minFill,
+    int init_price,
+    int init_tip,
+    int init_tif,
+    int init_activeFrom,
+    int init_expiryDaa,
+    int init_refundTip,
+    int init_deliveryCarrier,
+    int init_interval,
+    int init_maxFill,
+    int init_slope,
+    int init_priceEnd,
+    int init_decayStep,
+    int init_amountLeft,
+    int init_custody
+) {
+    pubkey maker = init_maker;               // T deliveries, S refunds / returns, cancel key
+    int side = init_side;                    // 1 ASK (sells base A = S), 2 BID (buys base A = T)
+    byte[32] sCovId = init_sCovId;           // the token sold and held (A for an ask, B for a bid)
+    byte[32] sTplHash = init_sTplHash;
+    int sPre = init_sPre;
+    int sSuf = init_sSuf;
+    int sFamily = init_sFamily;              // 1 KCC-20, 2 KRON
+    int sScale = init_sScale;                // base units per whole S (10^decimals)
+    byte[32] tCovId = init_tCovId;           // the token bought (B for an ask, A for a bid)
+    byte[32] tTplHash = init_tTplHash;
+    int tPre = init_tPre;
+    int tSuf = init_tSuf;
+    int tFamily = init_tFamily;
+    byte[32] tExt = init_tExt;               // KCC-20 extension commitment of the T delivery (0 for KRON)
+    int tScale = init_tScale;                // base units per whole T
+    int minFill = init_minFill;              // smallest fill (base units of A) unless it takes all that is left
+    int price = init_price;                  // limit: B base units per whole A (start price if decaying)
+    int tip = init_tip;                      // optional priority tip, sompi per whole A (>= 0), prefunded
+    int tif = init_tif;                      // 0 GTC/GTD, 1 IOC, 2 FOK
+    int activeFrom = init_activeFrom;
+    int expiryDaa = init_expiryDaa;
+    int refundTip = init_refundTip;
+    int deliveryCarrier = init_deliveryCarrier; // sompi on each T delivery
+    int interval = init_interval;            // TWAP / DCA: min DAA between fills (0 = off)
+    int maxFill = init_maxFill;              // TWAP / DCA: max base units of A per fill (0 = off)
+    int slope = init_slope;                  // decay (ASK down, BID up): B base units per whole A per decayStep (0 = off)
+    int priceEnd = init_priceEnd;            // decay bound
+    int decayStep = init_decayStep;
+    int amountLeft = init_amountLeft;        // base units of A still to trade (mutable)
+    int custody = init_custody;              // exact custody of S (mutable; an ask: == amountLeft)
+
+    byte constant SCHEME_P2PK = 0x00;
+    byte constant SCHEME_COVID = 0x04;
+    byte constant KRON_COVID = 0x02;
+    byte constant KRON_DELIVERY = 0x03;
+    byte constant SIGHASH_ALL = 0x01;
+    int constant SIDE_ASK = 1;
+    int constant SIDE_BID = 2;
+    int constant TIF_GTC = 0;
+    int constant TIF_FOK = 2;
+    int constant FAM_KCC20 = 1;
+    int constant FAM_KRON = 2;
+    int constant MAX_IDLE = 77760000;
+    int constant IOC_LIFE = 600;
+    // Most token inputs of one token a fill may carry (the KCC-20 limit; a KRON program accepts fewer). The scans are
+    // unrolled by hand (one line per slot).
+    int constant MAX_TOK_IN = 8;
+    // 1-byte prefix + 414 B state: amountLeft [398..406) and custody [407..415) close the state.
+    int constant STATE_END = 415;
+
+    // Quote value of n base units at rate r per d base units, rounded down (c = 0) or up (c = d - 1): KobAsk.quoteOf
+    // with an explicit denominator.
+    function quoteOf(int n, int r, int d, int c) : int {
+        int m = n % d;
+        int q = n / d;
+        return q * r + m * (r / d) + (m * (r % d) + c) / d;
+    }
+
+    function tplRs(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int size = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - size;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + size);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, size)) == tpl);
+        return rs;
+    }
+
+    // Stray guard: no input of token `tok` other than `cust` may be owned by covenant id `me` (`off`: the owner's
+    // distance from the end of a holder's sigscript in that token's family). Every input carrying `tok` is a genuine
+    // holder of its one template, so its owner sits at a fixed distance from the end of its sigscript.
+    function noStrays(byte[32] tok, byte[32] me, int cust, int off) {
+        int cnt = OpCovInputCount(tok);
+        require(cnt <= MAX_TOK_IN);
+        if (cnt > 0) { int x0 = OpCovInputIdx(tok, 0); if (x0 != cust) { int e0 = OpTxInputScriptSigLen(x0) + off; require(byte[32](OpTxInputScriptSigSubstr(x0, e0, e0 + 32)) != me); } }
+        if (cnt > 1) { int x1 = OpCovInputIdx(tok, 1); if (x1 != cust) { int e1 = OpTxInputScriptSigLen(x1) + off; require(byte[32](OpTxInputScriptSigSubstr(x1, e1, e1 + 32)) != me); } }
+        if (cnt > 2) { int x2 = OpCovInputIdx(tok, 2); if (x2 != cust) { int e2 = OpTxInputScriptSigLen(x2) + off; require(byte[32](OpTxInputScriptSigSubstr(x2, e2, e2 + 32)) != me); } }
+        if (cnt > 3) { int x3 = OpCovInputIdx(tok, 3); if (x3 != cust) { int e3 = OpTxInputScriptSigLen(x3) + off; require(byte[32](OpTxInputScriptSigSubstr(x3, e3, e3 + 32)) != me); } }
+        if (cnt > 4) { int x4 = OpCovInputIdx(tok, 4); if (x4 != cust) { int e4 = OpTxInputScriptSigLen(x4) + off; require(byte[32](OpTxInputScriptSigSubstr(x4, e4, e4 + 32)) != me); } }
+        if (cnt > 5) { int x5 = OpCovInputIdx(tok, 5); if (x5 != cust) { int e5 = OpTxInputScriptSigLen(x5) + off; require(byte[32](OpTxInputScriptSigSubstr(x5, e5, e5 + 32)) != me); } }
+        if (cnt > 6) { int x6 = OpCovInputIdx(tok, 6); if (x6 != cust) { int e6 = OpTxInputScriptSigLen(x6) + off; require(byte[32](OpTxInputScriptSigSubstr(x6, e6, e6 + 32)) != me); } }
+        if (cnt > 7) { int x7 = OpCovInputIdx(tok, 7); if (x7 != cust) { int e7 = OpTxInputScriptSigLen(x7) + off; require(byte[32](OpTxInputScriptSigSubstr(x7, e7, e7 + 32)) != me); } }
+    }
+
+    // The token state of `fam` holding `amount` for `owner` in canonical push encoding (KCC-20: scheme 0x04 covenant /
+    // 0x00 key, borrow disabled, the given guard and extension; KRON: id_type 0x02 covenant / 0x03 address, not minter).
+    function tokenState(int fam, int amount, byte[32] owner, bool cov, byte[] guard, byte[] ext) : byte[] {
+        byte[] st = byte[](0x00);
+        if (fam == FAM_KRON) {
+            byte ty = KRON_DELIVERY;
+            if (cov) { ty = KRON_COVID; }
+            st = byte[](0x20) + byte[](owner) + byte[](0x01) + byte[](ty) + byte[](0x08) + byte[](amount as byte[8]) + byte[](0x0100);
+        } else {
+            byte sc = SCHEME_P2PK;
+            if (cov) { sc = SCHEME_COVID; }
+            st = byte[](0x08) + byte[](amount as byte[8]) + byte[](0x20) + byte[](owner) + byte[](0x01) + byte[](sc) + byte[](0x010020)
+                + guard + byte[](0x20) + ext;
+        }
+        return st;
+    }
+
+    entry settle(byte[8] nb, int custIn, int tTplIn, int t, int sOut, int tOut) {
+        int n = int(nb);
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+
+        // the custody of S, by family (KCC-20 112 B: amount[1..9) owner[10..42) scheme[43] guard[47..79) ext[80..112);
+        // KRON 46 B: owner[1..33) id_type[34] amount[36..44) is_minter[45])
+        require(OpInputCovenantId(custIn) == sCovId);
+        int sLen = 112;
+        int sOff = 10 - 112 - sSuf;
+        if (sFamily == FAM_KRON) {
+            sLen = 46;
+            sOff = 1 - 46 - sSuf;
+        }
+        byte[] trs = tplRs(custIn, sPre, sLen, sSuf, sTplHash);
+        byte[] tin = trs.slice(sPre, sPre + sLen);
+        int held = 0;
+        byte[] guard = byte[](0x00);
+        byte[] ext = byte[](0x00);
+        if (sFamily == FAM_KRON) {
+            require(byte[32](tin.slice(1, 33)) == selfId);
+            require(tin.slice(33, 36) == byte[](0x010208));
+            require(tin.slice(44, 46) == byte[](0x0100));
+            held = int(byte[8](tin.slice(36, 44)));
+        } else {
+            require(sFamily == FAM_KCC20);
+            require(byte[32](tin.slice(10, 42)) == selfId);
+            require(tin.slice(43, 46) == byte[](0x040100));
+            held = int(byte[8](tin.slice(1, 9)));
+            guard = tin.slice(47, 79);
+            ext = tin.slice(80, 112);
+        }
+        // a pair order always holds a positive custody (it terminates when it is used up): every path then pins
+        // its output i to the maker
+        require(custody > 0);
+        // both scales positive (quoteOf divides by them; a non-positive scale would round against the maker)
+        require(sScale > 0);
+        require(tScale > 0);
+        require(held == custody);
+        noStrays(sCovId, selfId, custIn, sOff);
+
+        int carriers = tx.inputs[self].value + tx.inputs[custIn].value;
+        int outAmount = custody;
+        byte[32] outOwner = byte[32](maker);
+        bool rest = false;
+        int outIdx = self;
+        int utxoDaa = OpTxInputDaaScore(self);
+
+        if (n == 0) {
+            int idleEnd = utxoDaa + MAX_IDLE;
+            if (tif != TIF_GTC) {
+                int kill = utxoDaa;
+                if (activeFrom > kill) { kill = activeFrom; }
+                kill = kill + IOC_LIFE;
+                if (kill < idleEnd) { idleEnd = kill; }
+            }
+            if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
+            require(tx.daa >= idleEnd);
+            require(refundTip >= 0);
+            require(OpCovOutputCount(selfId) == 0);
+            // T strays owned by this id stay put (A == B is refused at placement)
+            require(OpCovInputCount(tCovId) == 0);
+            require(tx.outputs[self].value + refundTip >= carriers);
+        } else {
+            require(tx.daa >= activeFrom);
+            require(n > 0);
+            require(n <= amountLeft);
+            require(n >= minFill || n == amountLeft);
+            require(tip >= 0);
+            require(deliveryCarrier >= 0);
+            if (interval > 0) {
+                require(this.ageDaa >= interval);
+            }
+            require(maxFill == 0 || n <= maxFill);
+            int p = price;
+            if (slope != 0) {
+                require(slope > 0);
+                require(decayStep > 0);
+                int origin = activeFrom;
+                if (interval > 0) {
+                    int slice = utxoDaa + interval;
+                    if (slice > origin) { origin = slice; }
+                }
+                require(tx.daa >= t);
+                require(t >= origin);
+                int moved = slope * ((t - origin) / decayStep);
+                if (side == SIDE_ASK) {
+                    p = price - moved;
+                    if (p < priceEnd) { p = priceEnd; }
+                } else {
+                    p = price + moved;
+                    if (p > priceEnd) { p = priceEnd; }
+                }
+            }
+            require(p > 0);
+            int baseScale = tScale;
+            if (side == SIDE_ASK) {
+                // sells n of A, receives at least the ceil of B
+                baseScale = sScale;
+                require(sOut == n);
+                // the custody is the whole remaining amount: every displayed amount can be taken
+                require(custody == amountLeft);
+                require(tOut >= quoteOf(n, p, sScale, sScale - 1));
+            } else {
+                // receives exactly n of A, pays at most the floor of B
+                require(side == SIDE_BID);
+                require(tOut == n);
+                // pays exactly its quote out of the custody: a bid shows only quotes its escrow funds, so a fill of it
+                // (trigger evidence of pair conditionals) is a real trade anyone could have taken
+                require(sOut == quoteOf(n, p, tScale, 0));
+            }
+            int tipKas = quoteOf(n, tip, baseScale, 0);
+            outAmount = custody - sOut;
+            require(outAmount >= 0);
+
+            // no T input owned by this id (T strays are inert)
+            int tOff = 10 - 112 - tSuf;
+            int tLen = 112;
+            if (tFamily == FAM_KRON) {
+                tOff = 1 - 46 - tSuf;
+                tLen = 46;
+            } else {
+                require(tFamily == FAM_KCC20);
+            }
+            noStrays(tCovId, selfId, -1, tOff);
+
+            // the maker's T at output i, a genuine T UTXO it owns, on T's template (read from tTplIn, hash-checked)
+            require(OpInputCovenantId(tTplIn) == tCovId);
+            int tbase = OpTxInputScriptSigLen(tTplIn) - (tPre + tLen + tSuf);
+            byte[] tpre = OpTxInputScriptSigSubstr(tTplIn, tbase, tbase + tPre);
+            byte[] tsuf = OpTxInputScriptSigSubstr(tTplIn, tbase + tPre + tLen, tbase + tPre + tLen + tSuf);
+            require(blake3(byte[](tPre as byte[8]) + tpre + byte[](tSuf as byte[8]) + tsuf) == tTplHash);
+            require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                tpre + tokenState(tFamily, tOut, byte[32](maker), false, byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]), byte[](tExt)) + tsuf
+            )));
+            require(OpOutputCovenantId(self) == tCovId);
+
+            if (amountLeft - n > 0 && tif == TIF_GTC) {
+                // rest: this script with amountLeft - n and custody - sOut; the custody rest at custIn
+                require(outAmount > 0);
+                require(OpCovOutputCount(selfId) == 1);
+                int selfOut = OpCovOutputIdx(selfId, 0);
+                int len = OpTxInputScriptSigLen(self);
+                byte[] me = OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+                require(tx.outputs[selfOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                    me.slice(0, STATE_END - 17) + byte[]((amountLeft - n) as byte[8]) + byte[](0x08) + byte[](outAmount as byte[8])
+                        + me.slice(STATE_END, this.bytecodeSize)
+                )));
+                // the order funds its own delivery carrier and tip (no filler-funded carrier wall)
+                require(tx.inputs[self].value >= deliveryCarrier + tipKas);
+                require(tx.outputs[selfOut].value >= tx.inputs[self].value - deliveryCarrier - tipKas);
+                require(tx.outputs[custIn].value >= tx.inputs[custIn].value);
+                require(tx.outputs[self].value >= deliveryCarrier);
+                outOwner = selfId;
+                rest = true;
+                outIdx = custIn;
+            } else {
+                // done, IOC or FOK: terminate; what is left of the custody returns to the maker at its index
+                require(tif != TIF_FOK || amountLeft == n);
+                require(OpCovOutputCount(selfId) == 0);
+                if (outAmount > 0) {
+                    require(tx.outputs[custIn].value >= tx.inputs[custIn].value);
+                    require(tx.outputs[self].value >= tx.inputs[self].value - tipKas);
+                    outIdx = custIn;
+                } else {
+                    require(tx.outputs[self].value >= carriers - tipKas);
+                }
+            }
+        }
+
+        if (outAmount > 0) {
+            // the only token-S output this order allows (refund, rest or return), on the custody's own template
+            require(tx.outputs[outIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                trs.slice(0, sPre) + tokenState(sFamily, outAmount, outOwner, rest, guard, ext) + trs.slice(sPre + sLen, trs.length)
+            )));
+            require(OpOutputCovenantId(outIdx) == sCovId);
+        }
+    }
+
+    entry cancel(sig s) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, maker));
+    }
+}

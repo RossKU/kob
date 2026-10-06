@@ -1,0 +1,77 @@
+[package]
+name = "kob-protocol"
+description = "KOB protocol core: artifacts, state and sigscript encoding, transaction builders, signing split, fees, budgets, verification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+blake3.workspace = true
+faster-hex.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-txscript.workspace = true
+kaspa-txscript-errors.workspace = true
+secp256k1.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+silverscript-abi.workspace = true
+thiserror.workspace = true
+
+[features]
+default = ["engine"]
+# Script-engine validation (verify module, exact budget tightening). Off in the slim web build.
+engine = []
+# Record the testnet-10 deployment (contracts/deploy/testnet-10: network name and the reference template
+# hashes; no template depends on a network since v2.6). Off by default; see contracts/README.md.
+deploy-tn10 = []
+# Record the mainnet deployment (contracts/deploy/mainnet: network name, the reference template hashes and the
+# pinned token registry registry/tokens.json). Exclusive with deploy-tn10; see docs/ops/release.md.
+deploy-mainnet = []
+# Adversarial tests only: `build::build_batch_unchecked` (lays out cross limit transactions the covenants must reject).
+# Enabled by the engine-level attack suites (crates/kob-tests); never by a shipped binary or the wasm build.
+adversarial = []
+
+# The engine-level tests need the script engine; the slim build (`--no-default-features`) skips them.
+[[test]]
+name = "builders"
+required-features = ["engine"]
+
+[[test]]
+name = "budget_table"
+required-features = ["engine"]
+
+[[test]]
+name = "golden"
+required-features = ["engine"]
+
+[[test]]
+name = "keeper_tips"
+required-features = ["engine"]
+
+[[test]]
+name = "kron_family"
+required-features = ["engine"]
+
+[[test]]
+name = "fee_floor"
+required-features = ["engine"]
+
+[[test]]
+name = "pair_orders"
+required-features = ["engine"]
+
+[[test]]
+name = "intent_builders"
+required-features = ["engine"]
+
+[[test]]
+name = "cost_table"
+required-features = ["engine"]
+
+[[test]]
+name = "quote_rule"
+required-features = ["engine"]

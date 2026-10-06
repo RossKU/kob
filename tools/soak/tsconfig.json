@@ -1,0 +1,11 @@
+{
+  "extends": "../../web/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "types": ["node"],
+    "typeRoots": ["../../web/node_modules/@types"],
+    "paths": { "@/*": ["../../web/src/*"], "@noble/curves/*": ["../../web/node_modules/@noble/curves/*"] },
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src"]
+}

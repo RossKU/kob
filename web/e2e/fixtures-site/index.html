@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KOB e2e placeholder</title>
+    <style>
+      body { font: 14px/1.4 system-ui, sans-serif; margin: 2rem; }
+      button { margin-right: .5rem; }
+      [data-testid] { margin: .25rem 0; }
+    </style>
+  </head>
+  <body>
+    <h1>KOB e2e infrastructure placeholder</h1>
+    <p>Not the app: exercises the mock server, the injected config and the mock wallets with the real kob-wasm and the official kaspa SDK.</p>
+    <div>
+      <button data-testid="wallet-connect-kasware" disabled>KasWare</button>
+      <button data-testid="wallet-connect-kaspire" disabled>Kaspire</button>
+      <button data-testid="wallet-connect-kastle" disabled>Kastle</button>
+    </div>
+    <div>address: <span data-testid="wallet-address"></span></div>
+    <div>network: <span data-testid="wallet-network"></span></div>
+    <div>status: <span data-testid="tx-status">booting</span></div>
+    <div>tx: <span data-testid="tx-id"></span></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

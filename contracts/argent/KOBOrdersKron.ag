@@ -1,0 +1,106 @@
+// KOBOrdersKron: Argent interface of the two KRON resting limit orders, the hand-written
+// contracts/adapters/kron/v2/KobAskKron.sil and KobBidKron.sil (the KRON twins of KobAsk and KobBid).
+//
+// THIS FILE IS NOT THE IMPLEMENTATION, exactly like KOBOrders.ag: for each order it declares only the
+// state layout (the same field names, order and Sil types as the contract's state span) and the entries
+// (the same names and argument types, plus the continuations an entry may create). scripts/build-argent.sh
+// compiles it with argentc into a skeleton artifact; tools/sil2argent refuses it if a state or entry ABI
+// differs from the .sil, then replaces every generated contract by the silverc output and recomputes
+// template receipts, actor-type handles, interface fingerprints and the artifact id. Result:
+// contracts/argent/KOBOrdersKron/artifact.json (generated; docs/argent.md).
+//
+// A separate app from KOBOrders so that the published KOBOrders artifact (and every import that pins its
+// id) stays as it is. The router (kob_router.ag) imports it by pinned id and observes KobBidKron by closed
+// ICC in its KRON intents (TokenToKasKron_*, TokenSwapKron_*); KobAskKron is published for other apps (a
+// KRON token is never delivered to an x402 merchant, so the router buys from no KRON ask).
+//
+// The KRON order states have the KCC-20 layouts without `extensionCommitment` (KRON has none): KobAskKron's
+// state equals KobAsk's field for field (KobAsk has no extension field either), KobBidKron's is KobBid's
+// without it. What each order really enforces is in the .sil and its tests (crates/kob-tests), not here
+// (contracts/adapters/kron/README.md).
+
+state KobAskKronState {
+    pubkey maker;
+    byte[32] tokenCovId;
+    byte[32] tokenTplHash;
+    int tplPrefixLen;
+    int tplSuffixLen;
+    int scale;
+    int minFill;
+    int price;
+    int tip;
+    int tif;
+    int activeFrom;
+    int expiryDaa;
+    int refundTip;
+    int interval;
+    int maxFill;
+    int slope;
+    int priceEnd;
+    int decayStep;
+    int amountLeft;
+}
+
+state KobBidKronState {
+    pubkey maker;
+    byte[32] tokenCovId;
+    byte[32] tokenTplHash;
+    int tplPrefixLen;
+    int tplSuffixLen;
+    int scale;
+    int minFill;
+    int price;
+    int tip;
+    int tif;
+    int activeFrom;
+    int expiryDaa;
+    int refundTip;
+    int reserve;
+    int deliveryCarrier;
+    int interval;
+    int maxFill;
+    int slope;
+    int priceEnd;
+    int decayStep;
+}
+
+actor KobAskKron owns KobAskKronState {
+    // Fill n base units (nb = n, 8-byte LE), or refund (n == 0). A GTC rest continues with amountLeft - n;
+    // a sold-out, IOC or FOK fill ends the order (no continuation).
+    entry settle(byte[8] nb, int tokenIn, int tokOut, int t) emits {
+        next: KobAskKron[0..=1],
+    } {
+        KobAskKronState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobAskKron[](cont);
+    }
+
+    entry cancel(sig s) emits none {
+        require(checkSig(s, maker));
+    }
+}
+
+actor KobBidKron owns KobBidKronState {
+    // Buy n base units (nb = n, 8-byte LE): the KRON delivery to the maker (id_type 3) sits at the bid's own
+    // input index. A GTC bid with buying power left continues byte-identically; otherwise it ends.
+    entry fill(byte[8] nb, int tokenTplIn, int t) emits {
+        next: KobBidKron[0..=1],
+    } {
+        KobBidKronState[] cont;
+        unrestricted(next[0].value);
+        become next <- KobBidKron[](cont);
+    }
+
+    entry cancel(sig s) emits none {
+        require(checkSig(s, maker));
+    }
+
+    entry refund() emits none {
+        require(true);
+    }
+}
+
+app KOBOrdersKron {
+    actor KobAskKron;
+    actor KobBidKron;
+}

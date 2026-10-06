@@ -1,0 +1,69 @@
+/* Pre-sign confirmation screen. Uses the CSS variables of src/styles.css (light + dark). Phone first: single column, no horizontal scroll. */
+.cf { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.cf-intro { margin: 0; font-weight: 600; }
+.cf-note { color: var(--muted); font-size: 0.88rem; margin: 0 0 6px; }
+
+.cf-blocking { border: 2px solid var(--bad); background: var(--bad-bg); border-radius: var(--radius); padding: 12px 14px; }
+.cf-blocking h3 { color: var(--bad); margin-bottom: 4px; }
+.cf-blocking p { margin: 0 0 8px; }
+
+.cf-findings { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.cf-list-warn { border-left: 4px solid var(--warn); background: var(--warn-bg); padding: 8px 8px 8px 28px; border-radius: var(--radius-sm); }
+.cf-list-info { color: var(--muted); font-size: 0.92rem; }
+.cf-list-bad { color: var(--text); font-weight: 600; }
+
+.cf-summary { display: flex; flex-direction: column; gap: 12px; }
+.cf-section { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--surface); min-width: 0; }
+.cf-section h3 { font-size: 1rem; margin: 0 0 6px; }
+.cf-section-locked { border-left: 4px solid var(--warn); }
+.cf-section-others { border-left: 4px solid var(--bad); }
+.cf-section-back { border-left: 4px solid var(--ok); }
+.cf-section-issue { border-left: 4px solid var(--primary); }
+
+.cf-rows { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.cf-row { display: grid; grid-template-columns: minmax(120px, 34%) 1fr; gap: 2px 12px; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+.cf-row:last-child { border-bottom: 0; }
+.cf-row dt { color: var(--muted); font-size: 0.9rem; }
+.cf-row dd { margin: 0; min-width: 0; overflow-wrap: anywhere; display: flex; flex-direction: column; }
+.cf-value { font-variant-numeric: tabular-nums; font-weight: 600; }
+.cf-detail { color: var(--muted); font-size: 0.85rem; }
+.cf-good .cf-value { color: var(--ok); }
+.cf-warn .cf-value { color: var(--warn); }
+.cf-bad .cf-value { color: var(--bad); }
+.cf-muted .cf-value { font-weight: 500; }
+@media (max-width: 560px) { .cf-row { grid-template-columns: 1fr; } }
+
+.cf-card { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--surface-2); margin-top: 8px; min-width: 0; }
+.cf-card.cf-nested { margin-left: 12px; background: var(--surface); }
+.cf-card.cf-flagged { border-color: var(--bad); background: var(--bad-bg); }
+.cf-card-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.cf-card-head h4 { margin: 0; font-size: 1rem; }
+.cf-badge { font-size: 0.78rem; padding: 1px 8px; border-radius: 999px; background: var(--ok-bg); color: var(--ok); white-space: nowrap; }
+.cf-badge-bad { background: var(--bad-bg); color: var(--bad); }
+
+.cf-wallet { border: 1px solid var(--info); background: var(--info-bg); border-radius: var(--radius); padding: 10px 14px; }
+.cf-wallet h3 { margin-bottom: 4px; }
+.cf-wallet p { margin: 0 0 6px; }
+.cf-wallet ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+
+.cf-advanced { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; background: var(--surface); }
+.cf-advanced summary { cursor: pointer; font-weight: 600; }
+.cf-advanced h4 { margin: 10px 0 4px; font-size: 0.95rem; }
+.cf-io { margin: 0 0 6px; padding-left: 22px; font-size: 0.88rem; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.cf-io .cf-flag { color: var(--bad); font-weight: 700; }
+.cf-io .cf-badge { margin-left: 8px; }
+
+.cf-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.cf-stage { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.cf-stage-active { color: var(--text); font-weight: 700; }
+.cf-stage-done { color: var(--ok); }
+.cf-tick { display: inline-block; width: 1em; text-align: center; }
+
+.cf-result .cf-txid { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+
+.cf-ack { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 2px solid var(--border); border-radius: var(--radius); background: var(--surface-2); cursor: pointer; }
+.cf-ack input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
+.cf-ack input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.cf-ack:has(input:checked) { border-color: var(--primary); }
+
+.cf-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
