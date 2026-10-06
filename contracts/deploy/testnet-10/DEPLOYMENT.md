@@ -20,7 +20,7 @@ the same on every network.
 | KobCondAsk | `40a8eb7321e9dc157ca05683fcf01c1967d0c2be91fb8644e02025b0df087b74` | 1 / 3153 |
 | KobCondBid | `076e7bd8bfb6e1b59a8f2a19a6cad5961c7978368a0816a2b9df5f39d805bdfb` | 1 / 2854 |
 | KobIfdBid | `50b58e7b26e0bdc1a0eed7f7d7e5bcee88f95ed6ff367be32b8e74979a9de292` | 1 / 3210 |
-| KobIfdAsk | `189b9c3297cac33c0de6b5defefcbee5deee42306e8aa72b4615d8f2d4515a17` | 1 / 4305 |
+| KobIfdAsk | `bbcfc226d41f2dbf9db2f4835a55ed87b568fe43c46ac24ceee6831aa7b3f0b2` | 1 / 4311 |
 | KobPair | `107388074abe4d223d6fc1e17f6d5aa09bd76a7b739aa2e82774516ddbef7d16` | 1 / 2504 |
 | KobCondPair | `37ab667f662779e97e75ea712e855c073b4d2c9a5183285fa7ec11daf8ae0820` | 1 / 5714 |
 | KobIfdPair | `9975b2f3131179217050165f51b844700cf9f99f47c5b7954dabf00cf0441d5c` | 1 / 7798 |
@@ -29,7 +29,7 @@ the same on every network.
 | KobCondAskKron | `6c4f92cee1613899b5d680e784b11fd567b1bfac63a5006018cc6c54cfd35839` | 1 / 2847 |
 | KobCondBidKron | `fb392f88a136f14708841895b2efae2a5070749ddeb0168c7405806aea7ed953` | 1 / 2579 |
 | KobIfdBidKron | `e5cff7ede2faeb58706cfd28e095dcefad552f1e3e92d8a12bd05a22c053496d` | 1 / 2945 |
-| KobIfdAskKron | `85d8783813f861d16d2679d13fd062d81ce572f7fe4efa111943bd5a6a6b4ac8` | 1 / 3835 |
+| KobIfdAskKron | `d523d794bcb15adbfb4b212e92f48ca65a1276de808aecc34e9b82c6f9f014f6` | 1 / 3841 |
 
 The token programs are the reference artifacts too. Binaries embedding this record: see "Deployment
 builds" in contracts/README.md.

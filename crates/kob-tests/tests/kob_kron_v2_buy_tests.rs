@@ -4123,3 +4123,48 @@ fn kron_v2_buy_v3_merge_push() {
         );
     }
 }
+
+/// Security review 2026-10-06 (the KRON twin of `kob_v2_buy_tests::sec_empty_repeating_ifda_refund_drain_is_refused`): the
+/// refund (settle nb = 0) of an EMPTY repeating KobIfdAskKron entry with a zero-amount token UTXO owned by the entry's id
+/// standing in as its custody pinned no output, so its KAS could go anywhere. The refund now requires tokens held: the
+/// entry (input 0) refuses it whatever the token program makes of the stand-in; the empty entry ends by `close()` (RPB8)
+/// and an entry holding tokens is still refunded to the maker (R1).
+#[test]
+fn kron_sec_empty_repeating_ifda_refund_drain_is_refused() {
+    for tpl in TPLS {
+        println!("=== KRON template {tpl}");
+        let f = fx(tpl);
+        let n = &f.net;
+        let k = &n.k;
+        let i = cov(RPTA_ENTRY);
+        let attacker = pk(&f.taker);
+        let e = rpta_p(&f, 0, TOK);
+        let tpl_b = condb_tpl(n);
+        let s = Scn {
+            name: "SR2 empty repeating KobIfdAskKron drained via settle(0) with a zero-amount custody".into(),
+            inputs: vec![
+                call(
+                    &ifda(n, &e),
+                    "settle",
+                    vec![nb(0), iv(1), iv(0), iv(0), Arg::V(bytes(&tpl_b.pre)), Arg::V(bytes(&tpl_b.suf)), iv(0), iv(0), iv(0)],
+                    "ifda.settle",
+                    2 * CARRIER,
+                    i,
+                    (EXPIRY - 1_000) as u64,
+                ),
+                tok_in(k, CARRIER, 0, &i.as_bytes(), T_COVID, TOKEN_COV, Wit::Auto, 1_500),
+                p2pk_in(&f.taker, 10 * KAS),
+            ],
+            outputs: vec![
+                // output self: every carrier minus refundTip (what the old refund required), to the attacker
+                out(3 * CARRIER - REFUND_TIP, p2pk_spk(&attacker), None),
+                out(CARRIER / 4, tspk(k, 0, &attacker, T_ADDR), Some((1, TOKEN_COV))),
+                out(10 * KAS - CARRIER / 4 - NET_FEE, p2pk_spk(&attacker), None),
+            ],
+            lock_time: EXPIRY as u64,
+            payload: vec![],
+            next: vec![tok_state(0, &attacker, T_ADDR)],
+        };
+        run_bad(&s, 0);
+    }
+}

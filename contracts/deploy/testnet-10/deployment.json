@@ -42,9 +42,9 @@
     {
       "name": "KobIfdAsk",
       "artifact": "contracts/artifacts/KobIfdAsk.json",
-      "hash": "189b9c3297cac33c0de6b5defefcbee5deee42306e8aa72b4615d8f2d4515a17",
+      "hash": "bbcfc226d41f2dbf9db2f4835a55ed87b568fe43c46ac24ceee6831aa7b3f0b2",
       "prefix_len": 1,
-      "suffix_len": 4305
+      "suffix_len": 4311
     },
     {
       "name": "KobPair",
@@ -105,9 +105,9 @@
     {
       "name": "KobIfdAskKron",
       "artifact": "contracts/artifacts/KobIfdAskKron.json",
-      "hash": "85d8783813f861d16d2679d13fd062d81ce572f7fe4efa111943bd5a6a6b4ac8",
+      "hash": "d523d794bcb15adbfb4b212e92f48ca65a1276de808aecc34e9b82c6f9f014f6",
       "prefix_len": 1,
-      "suffix_len": 3835
+      "suffix_len": 3841
     }
   ]
 }

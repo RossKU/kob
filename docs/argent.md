@@ -21,10 +21,10 @@ artifact id you reviewed; do not pin a file name or a branch.
 
 | App | Artifact id (`id` field of `artifact.json`) |
 |---|---|
-| `KOBOrders` | `e4fc3d3a51722f63a46df0840dc8b7ce173dfb9be9ede978678e7ed1f4acc940` |
+| `KOBOrders` | `b6faaadb41f7a489d0ad447777cd9e42096ce703bc0e0e3d617dd461c8d7960e` |
 | `KOBOrdersKron` | `867d24a6c06fb8a38a30941a7f5a79d8dda05c4bee4b01f3dab2ba68c394442f` |
 | `KOBToken` | `dae9bf3f9c4761e8d37aeafe53650dd7b05d65c35dcb38bf97f69a64941006a0` |
-| `KobRouter` | `a85ee4b6c560818e056db2008d06050b503a93f5d194095f4585e5b82f451f5d` |
+| `KobRouter` | `e96eed4057305bdba2bfb16a3ae484020cd83ecbbaa3398f09526f8c39936147` |
 
 Actor-type handles (the template hash of the hand-written program: blake3 over prefix and suffix
 around the state span, the same value silverc reports as `template_hash`):
@@ -35,7 +35,7 @@ around the state span, the same value silverc reports as `template_hash`):
 | `KOBOrders::KobBid` | `b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3` | 1+285 | 1,516 B |
 | `KOBOrders::KobCondAsk` | `40a8eb7321e9dc157ca05683fcf01c1967d0c2be91fb8644e02025b0df087b74` | 1+330 | 3,484 B |
 | `KOBOrders::KobCondBid` | `076e7bd8bfb6e1b59a8f2a19a6cad5961c7978368a0816a2b9df5f39d805bdfb` | 1+381 | 3,236 B |
-| `KOBOrders::KobIfdAsk` | `189b9c3297cac33c0de6b5defefcbee5deee42306e8aa72b4615d8f2d4515a17` | 1+594 | 4,900 B |
+| `KOBOrders::KobIfdAsk` | `bbcfc226d41f2dbf9db2f4835a55ed87b568fe43c46ac24ceee6831aa7b3f0b2` | 1+594 | 4,906 B |
 | `KOBOrders::KobIfdBid` | `50b58e7b26e0bdc1a0eed7f7d7e5bcee88f95ed6ff367be32b8e74979a9de292` | 1+585 | 3,796 B |
 | `KOBOrders::KobPair` | `107388074abe4d223d6fc1e17f6d5aa09bd76a7b739aa2e82774516ddbef7d16` | 1+414 | 2,919 B |
 | `KOBOrders::KobCondPair` | `37ab667f662779e97e75ea712e855c073b4d2c9a5183285fa7ec11daf8ae0820` | 1+510 | 6,225 B |
@@ -84,7 +84,7 @@ Two ways to name a KOB order kind in `observes`. Both compile-checked examples l
 ### Closed ICC (recommended)
 
 ```
-import "./KOBOrders/artifact.json" id "e4fc3d3a51722f63a46df0840dc8b7ce173dfb9be9ede978678e7ed1f4acc940";
+import "./KOBOrders/artifact.json" id "b6faaadb41f7a489d0ad447777cd9e42096ce703bc0e0e3d617dd461c8d7960e";
 
 actor PriceGate owns PriceGateState {
     entry spend(cov_id ask_covid, int n, sig s)

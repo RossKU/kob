@@ -339,6 +339,11 @@ fn view(v: &Value, source: &str) -> Result<View, String> {
     let state = match o.get("state") {
         Some(s) if state_known && !s.is_null() => Some(match Tpl::resolve(&template_hash) {
             // an order of a retired template: its state is in the older lot layout
+            Some(Tpl::Retired(r)) if r.is_current_layout() => {
+                // a retired template with today's layout: today's state type (cancel only, not validated)
+                let s = serde_json::from_value::<AnyState>(s.clone()).map_err(|e| format!("state: {e}"))?;
+                OrderState::RetiredCurrent(s)
+            }
             Some(Tpl::Retired(r)) => {
                 match serde_json::from_value::<LotState>(s.clone()) {
                     Ok(l) => OrderState::Lot(l, r.family),

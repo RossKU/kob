@@ -42,9 +42,9 @@ directory (line endings normalised to LF) and mutates only the copies.
 | Suite | Family | Test binary | Contracts (`srcDir`) | Contracts mutated | Mutations |
 |---|---|---|---|---|---|
 | `kcc20-sell` | KCC-20, sell side: repeat IFD lifecycle, touch trigger, v3 checks (minFill, rounding, tip, merge push) | `kob_v2_tests` | `contracts/v2` | KobAsk, KobBid, KobCondAsk, KobIfdBid | 95 |
-| `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger, v3 checks | `kob_v2_buy_tests` | `contracts/v2` | KobCondBid, KobIfdAsk | 94 |
+| `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger, v3 checks | `kob_v2_buy_tests` | `contracts/v2` | KobCondBid, KobIfdAsk | 95 |
 | `kron-sell` | KRON adapter, sell side (v3) | `kob_kron_v2_tests` | `contracts/adapters/kron/v2` | KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron | 142 |
-| `kron-buy` | KRON adapter, buy side (v3) | `kob_kron_v2_buy_tests` | `contracts/adapters/kron/v2` | KobCondBidKron, KobIfdAskKron | 107 |
+| `kron-buy` | KRON adapter, buy side (v3) | `kob_kron_v2_buy_tests` | `contracts/adapters/kron/v2` | KobCondBidKron, KobIfdAskKron | 108 |
 | `pair` | pair orders, plain (`KobPair`, both sides, both families of A and B) | `kob_pair_tests` | `contracts/v2` | KobPair | 84 |
 | `cond-pair` | pair conditionals (`KobCondPair`): legs, trigger evidence in both modes, trailing, updates | `kob_cond_pair_tests` | `contracts/v2` | KobCondPair | 122 |
 | `cond-pair-rpt` | the repeat-IFD checks of `KobCondPair` (TP fills with / without the entry, re-arm profit, budget, prefund) | `kob_ifd_pair_tests` | `contracts/v2` | KobCondPair | 11 |

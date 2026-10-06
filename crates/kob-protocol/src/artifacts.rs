@@ -365,7 +365,7 @@ pub const PINNED: [(TemplateId, &str); 23] = [
     (TemplateId::KobCondAsk, "40a8eb7321e9dc157ca05683fcf01c1967d0c2be91fb8644e02025b0df087b74"),
     (TemplateId::KobCondBid, "076e7bd8bfb6e1b59a8f2a19a6cad5961c7978368a0816a2b9df5f39d805bdfb"),
     (TemplateId::KobIfdBid, "50b58e7b26e0bdc1a0eed7f7d7e5bcee88f95ed6ff367be32b8e74979a9de292"),
-    (TemplateId::KobIfdAsk, "189b9c3297cac33c0de6b5defefcbee5deee42306e8aa72b4615d8f2d4515a17"),
+    (TemplateId::KobIfdAsk, "bbcfc226d41f2dbf9db2f4835a55ed87b568fe43c46ac24ceee6831aa7b3f0b2"),
     (TemplateId::KobPair, "107388074abe4d223d6fc1e17f6d5aa09bd76a7b739aa2e82774516ddbef7d16"),
     (TemplateId::KobCondPair, "37ab667f662779e97e75ea712e855c073b4d2c9a5183285fa7ec11daf8ae0820"),
     (TemplateId::KobIfdPair, "9975b2f3131179217050165f51b844700cf9f99f47c5b7954dabf00cf0441d5c"),
@@ -380,7 +380,7 @@ pub const PINNED: [(TemplateId, &str); 23] = [
     (TemplateId::KobCondAskKron, "6c4f92cee1613899b5d680e784b11fd567b1bfac63a5006018cc6c54cfd35839"),
     (TemplateId::KobCondBidKron, "fb392f88a136f14708841895b2efae2a5070749ddeb0168c7405806aea7ed953"),
     (TemplateId::KobIfdBidKron, "e5cff7ede2faeb58706cfd28e095dcefad552f1e3e92d8a12bd05a22c053496d"),
-    (TemplateId::KobIfdAskKron, "85d8783813f861d16d2679d13fd062d81ce572f7fe4efa111943bd5a6a6b4ac8"),
+    (TemplateId::KobIfdAskKron, "d523d794bcb15adbfb4b212e92f48ca65a1276de808aecc34e9b82c6f9f014f6"),
     (TemplateId::KronToken2433, "2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2"),
     (TemplateId::KronToken2732, "8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e"),
 ];

@@ -1771,7 +1771,14 @@ impl AnyState {
         self.try_encode().unwrap_or_else(|e| panic!("{e}"))
     }
     pub fn decode(id: TemplateId, bytes: &[u8]) -> Result<AnyState, StateError> {
-        let s = match id {
+        let s = Self::decode_unvalidated(id, bytes)?;
+        s.validate()?;
+        Ok(s)
+    }
+    /// [`AnyState::decode`] without [`AnyState::validate`] (canonical encodings only): the state of an order of a RETIRED
+    /// template with today's layout (`crate::retired`), read only for its maker's cancel, whatever its committed exit.
+    pub fn decode_unvalidated(id: TemplateId, bytes: &[u8]) -> Result<AnyState, StateError> {
+        Ok(match id {
             TemplateId::KobAsk => AnyState::KobAsk(AskState::decode_as(id, bytes)?),
             TemplateId::KobBid => AnyState::KobBid(BidState::decode_as(id, bytes)?),
             TemplateId::KobCondAsk => AnyState::KobCondAsk(CondAskState::decode_as(id, bytes)?),
@@ -1788,9 +1795,7 @@ impl AnyState {
             TemplateId::KobCondPair => AnyState::KobCondPair(CondPairState::decode_as(id, bytes)?),
             TemplateId::KobIfdPair => AnyState::KobIfdPair(IfdPairState::decode_as(id, bytes)?),
             other => return Err(StateError::Codec("AnyState", format!("{} is not an order template", other.name()))),
-        };
-        s.validate()?;
-        Ok(s)
+        })
     }
     pub fn redeem(&self) -> Vec<u8> {
         template(self.template_id()).redeem(&self.encode())

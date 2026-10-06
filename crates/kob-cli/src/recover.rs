@@ -658,7 +658,7 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
                 fee: fee.clone(),
             }))
         })?,
-        (Tpl::Retired(r), OrderState::Lot(..) | OrderState::NoLot(_)) => {
+        (Tpl::Retired(r), OrderState::Lot(..) | OrderState::NoLot(_) | OrderState::RetiredCurrent(_)) => {
             let span = tpl.encode(state)?;
             build_funded(true, &a.node, &a.network, &maker, |funding| {
                 build_cancel_retired(

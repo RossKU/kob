@@ -34,6 +34,9 @@
 //! * the protocol v3 cross limit (`KobCross`, 360-byte state without lots, one template for token A of both families by
 //!   `aFamily`: committed by the v3 no-lot revision 8dd4ebf on 2026-10-05, replaced by the pair orders in 82672b9). It was
 //!   never deployed (no live order is known); it is kept for safety, its cancel built like every other.
+//! * the protocol v3 sell-first entries `KobIfdAsk` / `KobIfdAskKron` before their refund required tokens held (retired
+//!   2026-10-06, security review: an empty repeating entry could be drained through a zero-amount stand-in custody). Only their
+//!   code changed: their states are today's ([`Retired::is_current_layout`], read as [`RetiredState::Current`]).
 //!
 //! A booked exit of a retired entry is an order of the conditional template that entry inlines, retired as well (its
 //! cancel only). The merge back into a retired entry is never built.
@@ -47,7 +50,7 @@ use crate::artifacts::{parse_artifact, template_from_artifact, Template, Templat
 use crate::error::{invalid, Result};
 use crate::family::Family;
 use crate::json::to_hex;
-use crate::state::{decode_fields, encode_fields, FieldMap};
+use crate::state::{decode_fields, encode_fields, AnyState, FieldMap};
 
 pub mod lot;
 pub mod nolot;
@@ -81,6 +84,13 @@ impl Retired {
     /// [`nolot::CrossState`] ([`decode_any`]), never a [`LotState`].
     pub fn is_no_lot(&self) -> bool {
         self.template.contract().runtime_state.fields.iter().any(|f| f.name == "aFamily")
+    }
+    /// Whether this template has TODAY's state layout of its kind (the same fields, types and length as the pinned template:
+    /// only its code changed): its state is today's state type ([`RetiredState::Current`], [`decode_any`]), never a [`LotState`].
+    pub fn is_current_layout(&self) -> bool {
+        crate::artifacts::try_template(self.kind).is_some_and(|p| {
+            p.state_len == self.template.state_len && p.contract().runtime_state == self.template.contract().runtime_state
+        })
     }
     /// Whether an order of this template can escrow a token of `family` (its own family; the v3 cross limit: either).
     pub fn serves(&self, family: Family) -> bool {
@@ -351,6 +361,22 @@ const SOURCES: &[(TemplateId, Family, &str, &str, &str)] = &[
         "ef5a575fbf1003bf3779be7efa169c795dc39a03348123091a0ed319fc42eeda",
         "buy-first entry, testnet-10 deployment build of the receipt era (6db1f08 2026-09-29, R_ID of receipt genesis 64ae62c1); state as today's with minRcptUnits where minTouchUnits is; TN10 soak 5e8a249; retired 2026-09-30 (2a94c3c)",
     ),
+    // ---- protocol v3 templates with TODAY's state layout, retired because only their code changed (decoded with today's
+    // state types: `RetiredState::Current`).
+    (
+        TemplateId::KobIfdAsk,
+        Family::Kcc20,
+        include_str!("../../../contracts/retired/KobIfdAsk-189b9c32.json"),
+        "189b9c3297cac33c0de6b5defefcbee5deee42306e8aa72b4615d8f2d4515a17",
+        "sell-first entry (protocol v3) whose refund (settle n = 0) did not require tokens held: an empty repeating entry could be drained through a zero-amount stand-in custody; today's state layout; retired 2026-10-06 (security review)",
+    ),
+    (
+        TemplateId::KobIfdAskKron,
+        Family::Kron,
+        include_str!("../../../contracts/retired/KobIfdAskKron-85d87838.json"),
+        "85d8783813f861d16d2679d13fd062d81ce572f7fe4efa111943bd5a6a6b4ac8",
+        "KRON sell-first entry (protocol v3) whose refund (settle n = 0) did not require tokens held (see KobIfdAsk 189b9c32); today's state layout; retired 2026-10-06 (security review)",
+    ),
     // ---- the protocol v3 cross limit (no lots; token A of either family by aFamily), committed by the v3 no-lot revision
     // (8dd4ebf, 2026-10-05) and replaced by the pair orders (82672b9) before any deployment.
     (
@@ -530,6 +556,9 @@ pub fn decode(r: &Retired, state: &[u8]) -> Result<LotState> {
     if r.is_no_lot() {
         return invalid("the protocol v3 cross limit has no lot layout (read it with retired::decode_any)");
     }
+    if r.is_current_layout() {
+        return invalid("this retired template has today's state layout, no lot layout (read it with retired::decode_any)");
+    }
     let raw = decode_fields("retired order", &r.template, r.family == Family::Kron, state)?;
     let mut m: BTreeMap<String, ArtifactValue> = raw.into_iter().map(|(k, v)| (renamed(&k).to_string(), v)).collect();
     if r.kind == TemplateId::KobCross && !m.contains_key(CROSS_AUCTION_FIELDS[0]) {
@@ -555,8 +584,8 @@ pub fn decode(r: &Retired, state: &[u8]) -> Result<LotState> {
 
 /// The retired template's state span of a decoded state ([`decode`]'s inverse).
 pub fn encode(r: &Retired, s: &LotState) -> Result<Vec<u8>> {
-    if r.is_no_lot() {
-        return invalid("the protocol v3 cross limit has no lot layout (write it with retired::encode_any)");
+    if r.is_no_lot() || r.is_current_layout() {
+        return invalid("this retired template has no lot layout (write it with retired::encode_any)");
     }
     if s.kind_name() != r.kind.base().name() {
         return invalid(format!("a {} state is not a {} state", s.kind_name(), r.kind_name()));
@@ -597,13 +626,15 @@ pub fn encode(r: &Retired, s: &LotState) -> Result<Vec<u8>> {
 /// A cross limit's token B: (`bFamily` code, covenant id, program template hash, prefix and suffix lengths).
 pub type CrossTokenB = (i64, [u8; 32], [u8; 32], i64, i64);
 
-/// The state of an order of any retired template: a lot layout ([`LotState`]) or the protocol v3 cross limit without lots
-/// ([`nolot::CrossState`]).
+/// The state of an order of any retired template: a lot layout ([`LotState`]), the protocol v3 cross limit without lots
+/// ([`nolot::CrossState`]), or today's state type of its kind for a template with today's layout
+/// ([`Retired::is_current_layout`]: only its code changed).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "layout", content = "order", rename_all = "camelCase")]
 pub enum RetiredState {
     Lot(LotState),
     NoLotCross(nolot::CrossState),
+    Current(AnyState),
 }
 
 impl RetiredState {
@@ -612,6 +643,7 @@ impl RetiredState {
         match self {
             RetiredState::Lot(l) => l.kind_name(),
             RetiredState::NoLotCross(_) => "KobCross",
+            RetiredState::Current(a) => a.template_id().base().name(),
         }
     }
     /// Maker key (payouts, refunds, the cancel signature).
@@ -619,6 +651,7 @@ impl RetiredState {
         match self {
             RetiredState::Lot(l) => l.maker(),
             RetiredState::NoLotCross(x) => x.maker,
+            RetiredState::Current(a) => a.maker(),
         }
     }
     /// The order's token (a cross limit: token A): covenant id, program template hash, prefix and suffix lengths.
@@ -626,6 +659,10 @@ impl RetiredState {
         match self {
             RetiredState::Lot(l) => l.token(),
             RetiredState::NoLotCross(x) => (x.token_cov_id, x.token_tpl_hash, x.tpl_prefix_len, x.tpl_suffix_len),
+            RetiredState::Current(a) => {
+                let (pre, suf) = a.token_tpl_lens();
+                (a.token_cov_id(), a.token_tpl_hash().unwrap_or([0; 32]), pre, suf)
+            }
         }
     }
     /// True for the kinds that hold tokens in covenant-id custody.
@@ -633,21 +670,23 @@ impl RetiredState {
         match self {
             RetiredState::Lot(l) => l.holds_tokens(),
             RetiredState::NoLotCross(_) => true,
+            RetiredState::Current(a) => a.holds_tokens(),
         }
     }
-    /// The exact custody amount of a token-holding order (lots: `lotsLeft x lotUnits x unit`; the v3 cross limit:
-    /// `amountLeft`), `None` for the other kinds and for an amount no custody can hold.
+    /// The exact custody amount of a token-holding order (lots: `lotsLeft x lotUnits x unit`; the v3 cross limit and today's
+    /// layouts: `amountLeft`), `None` for the other kinds and for an amount no custody can hold.
     pub fn custody_amount(&self) -> Option<i64> {
         match self {
             RetiredState::Lot(l) => l.custody_amount(),
             RetiredState::NoLotCross(x) => (x.amount_left >= 0).then_some(x.amount_left),
+            RetiredState::Current(a) => a.custody_amount().filter(|n| *n >= 0),
         }
     }
     /// The family of token A of a v3 cross limit (`aFamily`; `None` for a lot template, whose family is its template's,
     /// and for an invalid code).
     pub fn a_family(&self) -> Option<Family> {
         match self {
-            RetiredState::Lot(_) => None,
+            RetiredState::Lot(_) | RetiredState::Current(_) => None,
             RetiredState::NoLotCross(x) => crate::state::family_of_code(x.a_family),
         }
     }
@@ -656,13 +695,22 @@ impl RetiredState {
         match self {
             RetiredState::Lot(l) => l.as_cross().map(|x| (x.b_family, x.b_cov_id, x.b_tpl_hash, x.b_prefix_len, x.b_suffix_len)),
             RetiredState::NoLotCross(x) => Some((x.b_family, x.b_cov_id, x.b_tpl_hash, x.b_prefix_len, x.b_suffix_len)),
+            RetiredState::Current(_) => None,
         }
     }
 }
 
 /// The state of an order of any retired template ([`decode`] for the lot templates; the protocol v3 cross limit in its own
-/// layout). Canonical spans only.
+/// layout; a template with today's layout: today's state type of its kind). Canonical spans only.
 pub fn decode_any(r: &Retired, state: &[u8]) -> Result<RetiredState> {
+    if r.is_current_layout() {
+        let a = AnyState::decode_unvalidated(r.kind, state).map_err(|e| crate::Error::Invalid(e.to_string()))?;
+        let s = RetiredState::Current(a);
+        if encode_any(r, &s)? != state {
+            return invalid("non-canonical state of the retired template");
+        }
+        return Ok(s);
+    }
     if !r.is_no_lot() {
         return decode(r, state).map(RetiredState::Lot);
     }
@@ -676,6 +724,17 @@ pub fn decode_any(r: &Retired, state: &[u8]) -> Result<RetiredState> {
 
 /// The retired template's state span of a decoded state ([`decode_any`]'s inverse).
 pub fn encode_any(r: &Retired, s: &RetiredState) -> Result<Vec<u8>> {
+    if let RetiredState::Current(a) = s {
+        if !r.is_current_layout() || a.template_id() != r.kind {
+            return invalid(format!(
+                "a {} state is not a state of the retired {} template {}",
+                a.template_id().name(),
+                r.kind_name(),
+                &r.hash_hex()[..8]
+            ));
+        }
+        return a.try_encode().map_err(|e| crate::Error::Invalid(e.to_string()));
+    }
     match (r.is_no_lot(), s) {
         (false, RetiredState::Lot(l)) => encode(r, l),
         (true, RetiredState::NoLotCross(x)) => {
@@ -711,18 +770,23 @@ mod tests {
     #[test]
     fn retired_templates_load_decode_and_differ_from_the_pinned_ones() {
         assert_eq!(retired().len(), SOURCES.len());
-        assert_eq!(retired().len(), 51);
+        assert_eq!(retired().len(), 53);
         for (i, r) in retired().iter().enumerate() {
             assert!(by_hash(&r.template.hash).is_some());
             assert!(retired()[..i].iter().all(|o| o.template.hash != r.template.hash), "listed once: {}", r.note);
             if let Some(p) = crate::artifacts::try_template(r.kind) {
-                assert_ne!(r.template.contract().runtime_state, p.contract().runtime_state, "{}", r.note);
+                // a different layout, or today's layout under different code
+                assert_ne!(r.template.hash, p.hash, "{}", r.note);
+                if !r.is_current_layout() {
+                    assert_ne!(r.template.contract().runtime_state, p.contract().runtime_state, "{}", r.note);
+                }
             }
             // the compiled example instance decodes into its lot layout and re-encodes to the same bytes
             let st = span(r);
             let s = decode_any(r, &st).unwrap_or_else(|e| panic!("{}: {e}", r.note));
             assert_eq!(encode_any(r, &s).unwrap(), st, "{}", r.note);
-            assert_eq!(decode(r, &st).is_ok(), !r.is_no_lot(), "{}: the lot reader reads every lot template only", r.note);
+            let lot = !r.is_no_lot() && !r.is_current_layout();
+            assert_eq!(decode(r, &st).is_ok(), lot, "{}: the lot reader reads every lot template only", r.note);
             let found = identify(&r.template.contract().compiled.bytecode).map(|(x, _)| x.template.hash);
             assert_eq!(found, Some(r.template.hash), "{}", r.note);
             // the maker's cancel exists and takes only the maker's signature
@@ -807,5 +871,28 @@ mod tests {
         assert!(encode_any(lot, &s).is_err());
         // the v2.6 payload layouts are still the last fourteen
         assert!(retired()[retired().len() - 14..].iter().all(|o| !o.is_no_lot()));
+    }
+
+    /// The protocol v3 sell-first entries retired 2026-10-06 (refund without tokens held): today's layout, read with today's
+    /// state type, cancel only; the pinned templates of their kinds are different code with the same state.
+    #[test]
+    fn the_v3_sell_first_entries_are_retired_with_todays_layout() {
+        let cur: Vec<_> = retired().iter().filter(|r| r.is_current_layout()).collect();
+        let names: Vec<_> = cur.iter().map(|r| (r.kind, r.hash_hex()[..8].to_string())).collect();
+        assert_eq!(names, vec![(TemplateId::KobIfdAsk, "189b9c32".into()), (TemplateId::KobIfdAskKron, "85d87838".into())]);
+        for r in cur {
+            let p = crate::artifacts::template(r.kind);
+            assert_eq!((r.template.state_len, &r.template.contract().runtime_state), (p.state_len, &p.contract().runtime_state));
+            let s = decode_any(r, &span(r)).unwrap();
+            let RetiredState::Current(a) = &s else { panic!("{}: today's layout", r.note) };
+            assert_eq!(a.template_id(), r.kind);
+            assert!(s.holds_tokens());
+            assert_eq!(s.custody_amount(), a.amount_left());
+            // a state of another kind never encodes under it, nor a lot state
+            let other = retired().iter().find(|o| !o.is_current_layout() && !o.is_no_lot() && o.family == r.family).unwrap();
+            assert!(encode_any(r, &decode_any(other, &span(other)).unwrap()).is_err());
+            assert!(encode_any(other, &s).is_err());
+            assert!(decode(r, &span(r)).is_err());
+        }
     }
 }

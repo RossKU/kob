@@ -4057,3 +4057,117 @@ fn v2_buy_fix_pass_regressions() {
     run_bad(n, &fx_low_stop_b(&f, 9_999, 1), 0);
     run_ok(n, &fx_low_stop_b(&f, 100, 0));
 }
+
+// ================================================================ security review regression (2026-10-06)
+
+/// Security review 2026-10-06: the refund (settle nb = 0) of an EMPTY repeating KobIfdAsk entry (amountLeft 0, no custody,
+/// waiting for its exits) accepted a ZERO-amount token UTXO owned by the entry's covenant id as its "custody" and then
+/// pinned no output (the token output is pinned only when outAmount > 0), so after the soft expiry / 90-day idle bound
+/// anyone could take the entry's whole KAS value instead of `close()` paying the maker minus refundTip. The KCC-20
+/// reference program accepts zero-amount outputs with any owner, so the stand-in is cheap (SR1a).
+///
+/// The refund now requires tokens held (`amountLeft > 0`): the drain is refused, the empty entry still ends by `close()`
+/// paying the maker, and the refund of an entry holding tokens still returns them (and its carriers) to the maker.
+#[test]
+fn sec_empty_repeating_ifda_refund_drain_is_refused() {
+    let f = fx();
+    let n = &f.net;
+    let t = &n.t;
+    let i = cov(RPTA_ENTRY);
+    let attacker = pk(&f.taker);
+    let e = rpta_p(&f, 0, 1); // repeating entry, amountLeft 0 (sold out, waiting for its exits)
+    let m = e.maker;
+    let entry_value = 2 * CARRIER;
+
+    // SR1a: the attacker splits its own P2PK-held tokens into (amount, 0 owned by the entry's covenant id): still possible.
+    let s0 = Scn {
+        name: "SR1a attacker creates a zero-amount KCC-20 UTXO owned by the entry's covenant id".into(),
+        inputs: vec![tok_in(
+            t,
+            CARRIER,
+            5 * WHOLE,
+            &attacker,
+            SCHEME_P2PK,
+            TOKEN_COV,
+            Some(vec![tok_state(5 * WHOLE, &attacker, SCHEME_P2PK), tok_state(0, &i.as_bytes(), SCHEME_COVID)]),
+            Wit::P2pk(f.taker),
+            1_000,
+        )],
+        outputs: vec![
+            out(CARRIER / 2, t.spk(5 * WHOLE, &attacker, SCHEME_P2PK), Some((0, TOKEN_COV))),
+            out(CARRIER / 2 - NET_FEE, t.spk(0, &i.as_bytes(), SCHEME_COVID), Some((0, TOKEN_COV))),
+        ],
+        lock_time: 0,
+        payload: vec![],
+    };
+    run_ok(n, &s0);
+
+    let tpl = condb_tpl(n);
+    let refund_args = || vec![nb(0), iv(1), iv(0), iv(0), Arg::V(bytes(&tpl.pre)), Arg::V(bytes(&tpl.suf)), iv(0), iv(0), iv(0)];
+    let zero_value = CARRIER / 2 - NET_FEE;
+    let drain = |pay_to: [u8; 32], name: &str| Scn {
+        name: name.into(),
+        inputs: vec![
+            call(&ifda(n, &e), "settle", refund_args(), "ifda.settle", entry_value, i, (EXPIRY - 1_000) as u64),
+            tok_in(
+                t,
+                zero_value,
+                0,
+                &i.as_bytes(),
+                SCHEME_COVID,
+                TOKEN_COV,
+                Some(vec![tok_state(0, &attacker, SCHEME_P2PK)]),
+                Wit::CovId,
+                1_500,
+            ),
+            p2pk_in(&f.taker, 10 * KAS),
+        ],
+        outputs: vec![
+            out(entry_value + zero_value - REFUND_TIP, p2pk_spk(&pay_to), None),
+            out(CARRIER / 4, t.spk(0, &attacker, SCHEME_P2PK), Some((1, TOKEN_COV))),
+            out(10 * KAS - CARRIER / 4 - NET_FEE, p2pk_spk(&attacker), None),
+        ],
+        lock_time: EXPIRY as u64,
+        payload: vec![],
+    };
+    // SR1b: the review's drain, output self paying the attacker: refused by the entry (input 0)
+    run_bad(n, &drain(attacker, "SR1b empty repeating KobIfdAsk drained via settle(0) with a zero-amount custody"), 0);
+    // SR1c: even paying the maker, an empty entry has no refund (it ends by close)
+    run_bad(n, &drain(m, "SR1c refund of an empty repeating KobIfdAsk through a zero-amount custody, paying the maker"), 0);
+
+    // SR1d: the legitimate end of the same entry: close() pays the maker minus refundTip, and nobody else
+    let close = |pay_to: [u8; 32], name: &str| Scn {
+        name: name.into(),
+        inputs: vec![call(&ifda(n, &e), "close", vec![], "ifda.close", entry_value, i, (EXPIRY - 1_000) as u64)],
+        outputs: vec![out(entry_value - REFUND_TIP, p2pk_spk(&pay_to), None)],
+        lock_time: EXPIRY as u64,
+        payload: vec![],
+    };
+    run_ok(n, &close(m, "SR1d close of the empty repeating entry pays the maker"));
+    run_bad(n, &close(attacker, "SR1e close of the empty repeating entry paying anyone else"), 0);
+
+    // SR1f: an entry still holding 3 whole is refunded as before: tokens and carriers to the maker at output self
+    let held = rpta_p(&f, 3, 9);
+    let refund = |pay_to: [u8; 32], name: &str| Scn {
+        name: name.into(),
+        inputs: vec![
+            call(&ifda(n, &held), "settle", refund_args(), "ifda.settle", entry_value, i, (EXPIRY - 1_000) as u64),
+            tok_in(
+                t,
+                CARRIER,
+                3 * WHOLE,
+                &i.as_bytes(),
+                SCHEME_COVID,
+                TOKEN_COV,
+                Some(vec![tok_state(3 * WHOLE, &pay_to, SCHEME_P2PK)]),
+                Wit::CovId,
+                1_500,
+            ),
+        ],
+        outputs: vec![out(entry_value + CARRIER - REFUND_TIP, t.spk(3 * WHOLE, &pay_to, SCHEME_P2PK), Some((1, TOKEN_COV)))],
+        lock_time: EXPIRY as u64,
+        payload: vec![],
+    };
+    run_ok(n, &refund(m, "SR1f refund of a repeating entry holding 3 whole returns tokens and carriers to the maker"));
+    run_bad(n, &refund(attacker, "SR1g refund of a repeating entry holding tokens, paid to anyone else"), 0);
+}

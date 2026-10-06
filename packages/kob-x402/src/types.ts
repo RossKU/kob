@@ -11,7 +11,7 @@ export const BINDING_SWAP = 'kob-swap-v1';
 /** Intent-based swap-and-pay: the payer signs a KOB router intent once, the facilitator executes it. */
 export const BINDING_INTENT = 'kob-intent-v1';
 /** The KOB router artifact the intent offers name (`extra.route.router`): `kob_protocol::router::ROUTER_ARTIFACT_ID`. */
-export const ROUTER_ARTIFACT_ID = 'a85ee4b6c560818e056db2008d06050b503a93f5d194095f4585e5b82f451f5d';
+export const ROUTER_ARTIFACT_ID = 'e96eed4057305bdba2bfb16a3ae484020cd83ecbbaa3398f09526f8c39936147';
 /** `invoiceVersion` of an invoice. */
 export const INVOICE_VERSION = 'kob-invoice-v1';
 export const TX_ENCODING = 'kaspa-sdk-safe-json-v2.0.0';

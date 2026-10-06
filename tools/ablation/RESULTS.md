@@ -1,5 +1,13 @@
 # Ablation results
 
+## Security review fix (2026-10-06): the refund of an empty sell-first entry
+
+`IA-refund-held` in `kcc20-buy` (KobIfdAsk) and `kron-buy` (KobIfdAskKron): the refund (`settle` nb = 0) requires
+`amountLeft > 0`. Debug executables, `--jobs 2`, baselines clean. **2/2 confirmed**: without the check the drain of an
+empty repeating entry through a zero-amount stand-in custody (`SR1b`, and `SR1c` paying the maker) is accepted by every
+input of the KCC-20 suite; on both KRON templates the entry accepts `SR2` while the KRON token program rejects the
+zero-amount stand-in on its own (`inputOnly`).
+
 ## Pair phase (2026-10-06): KobPair, KobCondPair, KobIfdPair
 
 The pair suites (`crates/kob-tests/tests/kob_pair_tests.rs`, `kob_cond_pair_tests.rs`, `kob_ifd_pair_tests.rs`, harness

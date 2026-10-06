@@ -182,11 +182,14 @@ pub mod api {
     /// the retired layout (`lotsLeft`, `lotUnits`, ...; spend-only: what its cancel needs). The protocol v3 cross limit (the one
     /// retired template without lots, `retired::nolot`) reads as `{"kind": "KobCross", "state"}` in its own layout (`amountLeft`,
     /// `aFamily`, `scale`, `price`, ...; its custody holds exactly `amountLeft`).
+    /// A retired template with today's state layout reads as today's state of its kind.
     pub fn decode_retired(hash: &str, hex: &str) -> R<String> {
         let r = retired_of(hash)?;
         match kob_protocol::retired::decode_any(r, &from_hex(hex)?).map_err(|e| e.to_string())? {
             kob_protocol::retired::RetiredState::Lot(l) => out(&l),
             kob_protocol::retired::RetiredState::NoLotCross(x) => out(&serde_json::json!({ "kind": "KobCross", "state": x })),
+            // a retired template with today's layout (only its code changed): today's `{"kind", "state"}`
+            kob_protocol::retired::RetiredState::Current(a) => out(&a),
         }
     }
     /// Script public key of an order of a retired template (its state span under that template).

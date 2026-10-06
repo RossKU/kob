@@ -30,7 +30,7 @@
 // The Schnorr digests in `built.sign` are produced by kob-wasm; TypeScript cannot recompute them, `kob.finalize` verifies signatures against them.
 import type { WalletId } from '../wallet/types';
 import {
-  baseKind, custodiesOf, describeLegacy, describeOrder, familyOfKind, formatKas, formatUnits, isOrderKind, isPairKind, kindFor, big, pairFactsOf, type OrderDescription,
+  baseKind, custodiesOf, describeLegacy, describeOrder, familyOfKind, formatKas, formatUnits, isLegacyState, isOrderKind, isPairKind, kindFor, big, pairFactsOf, type OrderDescription,
   type PairTokenFacts,
 } from './order-facts';
 import { declaredRateLimit, type FeePolicy } from './fee-policy';
@@ -491,7 +491,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     if (plan.kind === 'retired') {
       // an order placed under an OLDER template (docs/spec/template-retirement.md): spend-only, the maker's cancel is the one entry it may take;
       // its script is derived from the retired template and the plan's state span, and its state decoded in its LEGACY lot layout (described
-      // by describeLegacy: maker, token, custody; it is never re-encoded)
+      // by describeLegacy: maker, token, custody; it is never re-encoded; a retired template with today's layout decodes to today's state)
       let legacy: LegacyState | null = null;
       let derivedSpk: string | null = null;
       try {
@@ -515,7 +515,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       add('retired-cancel', `input ${i}: the cancel of an order placed with an older contract version (template ${shortId(plan.templateHash)})`, { input: i, params: { template: plan.templateHash } });
       return {
         ...base, type: 'order', ownedBy: 'covenant',
-        order: { kind: state.kind, template: state.kind, covenantId: inp.utxo.covenantId, entry: plan.entry, action: 'cancel', description: describeLegacy(legacy!), makerIsWallet },
+        order: { kind: state.kind, template: state.kind, covenantId: inp.utxo.covenantId, entry: plan.entry, action: 'cancel', description: isLegacyState(legacy!) ? describeLegacy(legacy!) : describeOrder(state, kob), makerIsWallet },
       };
     }
     // token leader / delegator (KCC-20) or KRON token input

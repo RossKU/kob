@@ -162,9 +162,36 @@ pub fn live_nolot_cross(r: &Retired, pa: TemplateId, pb: TemplateId) -> nolot::C
     }
 }
 
-/// A live order of any retired template ([`live_order`], [`live_nolot_cross`]).
+/// A live order of a retired template with today's layout (the protocol v3 sell-first entries retired 2026-10-06): today's
+/// state of its kind on token program `p`, 4 whole tokens in custody, built from the retired artifact's own example instance.
+pub fn live_current(r: &Retired, p: TemplateId) -> AnyState {
+    let t = &r.template;
+    let example = &t.contract().compiled.bytecode[t.prefix.len()..t.prefix.len() + t.state_len];
+    let RetiredState::Current(a) = retired::decode_any(r, example).unwrap_or_else(|e| panic!("{}: example state: {e}", r.note)) else {
+        panic!("{}: today's layout", r.note)
+    };
+    let (h, pre, suf) = tok_fields(p);
+    let live = |s: IfdAskState| IfdAskState {
+        maker: pk(MAKER_A),
+        token_cov_id: TOKEN_COV,
+        token_tpl_hash: h,
+        tpl_prefix_len: pre,
+        tpl_suffix_len: suf,
+        amount_left: 4 * s.scale,
+        ..s
+    };
+    match a {
+        AnyState::KobIfdAsk(s) => AnyState::KobIfdAsk(live(s)),
+        AnyState::KobIfdAskKron(s) => AnyState::KobIfdAskKron(live(s)),
+        other => panic!("{}: no live fixture of a retired {} with today's layout", r.note, other.template_id().name()),
+    }
+}
+
+/// A live order of any retired template ([`live_order`], [`live_nolot_cross`], [`live_current`]).
 pub fn live_any(r: &Retired, p: TemplateId, pb: TemplateId) -> RetiredState {
-    if r.is_no_lot() {
+    if r.is_current_layout() {
+        RetiredState::Current(live_current(r, p))
+    } else if r.is_no_lot() {
         RetiredState::NoLotCross(live_nolot_cross(r, p, pb))
     } else {
         RetiredState::Lot(live_order(r, p, pb))

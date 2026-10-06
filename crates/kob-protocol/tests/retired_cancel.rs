@@ -4,10 +4,11 @@
 //! protocol v3 cross limit without lots (360 bytes, token A of either family) has its own layout. Cases: the
 //! cross limit before the v2.6 pair-market auction (333-byte state, retired 2026-10-01) on every program pair, the if-done
 //! entries retired on 2026-10-02 (the v2.6 lot layout), the v3 cross limit for token A and B of every family, and then
-//! EVERY retired template this build can spend (51: every
+//! EVERY retired template this build can spend (53: every
 //! kind of both families pinned by a testnet-10 build since the real-wallet runs of 2026-09-29, the receipt era and its
 //! deployment build included, the first cross limit of b75b3e5, the fourteen protocol v2.6 lot templates retired by
-//! the v3 no-lot revision, and the v3 cross limit): the maker's cancel of a live order, with its custody (`lotsLeft x lotUnits x unit`), strays of
+//! the v3 no-lot revision, the v3 cross limit, and the two protocol v3 sell-first entries retired 2026-10-06 with today's
+//! layout): the maker's cancel of a live order, with its custody (`lotsLeft x lotUnits x unit`), strays of
 //! its token(s) and a foreign stray, is built from the retired artifact and validated in the rusty-kaspa v2.1.0 engine on
 //! the token programs of its family; another key, another entry, a wrong state length, a state of another kind and an
 //! auction under a pre-auction template are refused.
@@ -212,12 +213,12 @@ fn the_maker_cancels_a_live_order_of_every_retired_template() {
             }
         }
     }
-    // 42 templates of the six other kinds on the 2 programs of their family, 8 lot cross limits on 2 x 4 program pairs,
-    // the v3 cross limit on 4 x 4
-    assert_eq!(retired::retired().len(), 51);
+    // 44 templates of the six other kinds on the 2 programs of their family (42 lot templates and the two v3 sell-first
+    // entries with today's layout), 8 lot cross limits on 2 x 4 program pairs, the v3 cross limit on 4 x 4
+    assert_eq!(retired::retired().len(), 53);
     let crosses = retired::retired().iter().filter(|r| r.kind == TemplateId::KobCross).count();
     assert_eq!(crosses, 9);
-    assert_eq!(validated, (42 * 2 + 8 * 8 + 16) * 2);
+    assert_eq!(validated, (44 * 2 + 8 * 8 + 16) * 2);
 }
 
 #[test]
@@ -242,8 +243,10 @@ fn every_retired_template_refuses_another_key_another_entry_and_a_wrong_state() 
         let mut short = req.clone();
         short.state.pop();
         assert!(build_cancel_retired(&short, &budgets).is_err(), "{label}");
-        let other =
-            retired::retired().iter().find(|o| o.family == r.family && o.kind.base() != r.kind.base() && !o.is_no_lot()).unwrap();
+        let other = retired::retired()
+            .iter()
+            .find(|o| o.family == r.family && o.kind.base() != r.kind.base() && !o.is_no_lot() && !o.is_current_layout())
+            .unwrap();
         assert!(retired::encode(r, &live_order(other, p, p)).is_err(), "{label}: another kind's state");
         // the plan is spend-only: no other entry of the retired template passes `check`
         let SigPlan::Retired { template_hash, state, .. } = built.plans[0].clone() else { unreachable!() };
@@ -296,5 +299,51 @@ fn the_maker_cancels_a_v3_cross_limit_without_lots() {
         let mut bad = req.clone();
         bad.custody = Some(tutxo(pa, TOKEN_COV, 71, 6 * WHOLE - 1, ORDER_ID, true));
         assert!(build_cancel_retired(&bad, &budgets).is_err(), "{label}");
+    }
+}
+
+/// The protocol v3 sell-first entries retired 2026-10-06 (their refund did not require tokens held): today's layout, so the
+/// order reads with today's state type; its maker cancels a live entry and an EMPTY repeating one (no custody, the case the
+/// old refund let anyone drain) on every program of its family, and nothing but the cancel is built.
+#[test]
+fn the_maker_cancels_the_v3_sell_first_entries_retired_for_the_empty_refund() {
+    let cur: Vec<&Retired> = retired::retired().iter().filter(|r| r.is_current_layout()).collect();
+    assert_eq!(cur.len(), 2);
+    for r in cur {
+        for p in PROGRAMS.into_iter().filter(|p| p.family() == r.family) {
+            let label = format!("{} {} @{}", r.kind_name(), &r.hash_hex()[..8], p.name());
+            let live = live_current(r, p);
+            let mut empty = live.clone();
+            match &mut empty {
+                kob_protocol::state::AnyState::KobIfdAsk(s) | kob_protocol::state::AnyState::KobIfdAskKron(s) => {
+                    s.amount_left = 0;
+                    s.rpt_amount = 9;
+                }
+                _ => unreachable!(),
+            }
+            for st in [live, empty] {
+                let span = retired::encode_any(r, &RetiredState::Current(st.clone())).unwrap();
+                assert_eq!(span, st.encode(), "{label}: today's encoding is the retired span");
+                let amount = st.amount_left().unwrap();
+                let req = CancelRetired {
+                    template_hash: r.template.hash,
+                    state: span,
+                    order: utxo(70, 50 * KAS, 1_000, Some(ENTRY_ID)),
+                    custody: (amount > 0).then(|| tutxo(p, TOKEN_COV, 71, amount, ENTRY_ID, true)),
+                    strays: vec![],
+                    foreign: vec![],
+                    funding: vec![key_utxo(3, MAKER_A, 10 * KAS)],
+                    change: None,
+                    fee: fee(),
+                };
+                let built = build_cancel_retired(&req, &budgets).unwrap_or_else(|e| panic!("{label} amount {amount}: build: {e}"));
+                let SigPlan::Retired { template_hash, entry, .. } = &built.plans[0] else { panic!("{label}") };
+                assert_eq!((*template_hash, entry.as_str()), (r.template.hash, "cancel"), "{label}");
+                assert_ne!(*template_hash, template(r.kind).hash, "{label}: the retired script, not today's");
+                let signed = finalize(&built, &sign_locally(&built, &keys()).unwrap(), FinalizeOptions::default()).unwrap();
+                validate_signed(&signed).unwrap_or_else(|e| panic!("{label} amount {amount}: engine: {e}"));
+                assert_eq!(signed.tx.outputs.iter().filter(|o| o.covenant.is_some()).count(), usize::from(amount > 0), "{label}");
+            }
+        }
     }
 }

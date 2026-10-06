@@ -153,7 +153,7 @@ and the record's family is the family of the pair's base token A.
 | `0x03` | `KobCondAsk` | 330 | yes | `40a8eb73…f087b74` |
 | `0x04` | `KobCondBid` | 381 | no | `076e7bd8…805bdfb` |
 | `0x05` | `KobIfdBid` | 585 | no | `50b58e7b…a9de292` |
-| `0x06` | `KobIfdAsk` | 594 | yes | `189b9c32…4515a17` |
+| `0x06` | `KobIfdAsk` | 594 | yes | `bbcfc226…7b3f0b2` |
 | `0x07` | retired | — | — | reserved, never reused: a record of this kind is refused |
 | `0x08` | `KobPair` (pair order, token A KCC-20) | 414 | the custody of S | `10738807…def7d16` |
 | `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 510 | the custody of S | `37ab667f…8ae0820` |
@@ -168,7 +168,7 @@ KRON (family `0x02`), same kind codes:
 | `0x03` | `KobCondAskKron` | 330 | yes (token output only) | `6c4f92ce…fd35839` |
 | `0x04` | `KobCondBidKron` | 348 | no | `fb392f88…a7ed953` |
 | `0x05` | `KobIfdBidKron` | 552 | no | `e5cff7ed…053496d` |
-| `0x06` | `KobIfdAskKron` | 561 | yes (token output only) | `85d87838…a6b4ac8` |
+| `0x06` | `KobIfdAskKron` | 561 | yes (token output only) | `d523d794…9f014f6` |
 | `0x07` | retired | — | — | reserved, refused |
 | `0x08` | `KobPair` (token A KRON; the same template as in family `0x01`) | 414 | the custody of S | `10738807…def7d16` |
 | `0x09` | `KobCondPair` (token A KRON; the same template) | 510 | the custody of S | `37ab667f…8ae0820` |

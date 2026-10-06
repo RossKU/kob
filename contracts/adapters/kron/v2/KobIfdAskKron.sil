@@ -230,6 +230,9 @@ contract KobIfdAskKron(
             if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
             require(tx.daa >= idleEnd);
             require(refundTip >= 0);
+            // only while tokens are held: an entry with nothing left would leave output self unpinned; it ends by
+            // close() (see KobIfdAsk)
+            require(amountLeft > 0);
             require(tx.outputs[self].value + refundTip >= carriers);
         } else {
             if (n < 0) {

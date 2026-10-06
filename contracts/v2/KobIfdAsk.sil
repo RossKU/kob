@@ -10,7 +10,7 @@ pragma silverscript ^0.1.0;
 //   settle(nb > 0, ...)  anyone: sell n = nb base units (n <= amountLeft; n >= minFill unless it sells out); creates
 //                        the exit.
 //   settle(nb == 0, ...) anyone, REFUND after expiryDaa or 90 days idle: tokens and carriers back to the maker
-//                        (minus refundTip).
+//                        (minus refundTip); only while tokens are held (amountLeft > 0, else close).
 //   settle(nb < 0, ...)  anyone, MERGE: re-arm m base units, spent together with the take-profit fill of the booked
 //                        exit at input k; nb = -(k * 2^53 + m). The bought-back tokens go into this entry's custody.
 //   close()              anyone, after expiry or 90 days idle: refund of a repeating entry with nothing left
@@ -304,6 +304,10 @@ contract KobIfdAsk(
             if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
             require(tx.daa >= idleEnd);
             require(refundTip >= 0);
+            // the tokens return to the maker at output self with every carrier: an entry with nothing left (a
+            // repeating entry waiting for its exits) has no custody and would leave output self unpinned, so it
+            // ends by close(), which pins it to the maker
+            require(amountLeft > 0);
             require(tx.outputs[self].value + refundTip >= carriers);
         } else {
             if (n < 0) {
