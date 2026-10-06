@@ -50,9 +50,9 @@ function Level(props: { row: PairLevelRow; p: PairBookProps }) {
 
 export function PairBook(props: PairBookProps) {
   const m = props.model;
-  const line = spreadLine(m, props.quote);
+  const line = spreadLine(m);
   return (
-    <div class="book ob pair-book" data-testid="pair-book" data-crossed={m.crossed ? '1' : '0'}>
+    <div class="book ob pair-book" data-testid="pair-book">
       <div class="ob-head" aria-hidden="true">
         <span>{t('pair.book.price', { quote: props.quote })}</span>
         <span>{t('pair.book.amount', { base: props.base })}</span>

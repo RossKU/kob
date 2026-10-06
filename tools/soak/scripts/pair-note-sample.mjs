@@ -1,6 +1,6 @@
 // Samples the pair page's spread line (data-testid="pair-spread") of the soak's UI every N seconds with Playwright's Chromium from
-// web/node_modules, one JSON line per sample: the text and its class (crossed = "matchers are catching up", overlap = the neutral
-// notes, spread = uncrossed). Read-only.
+// web/node_modules, one JSON line per sample: the text and its class (crossed = a negative spread, spread = a
+// positive or zero one). Read-only.
 //
 //   node scripts/pair-note-sample.mjs --out <file.jsonl> [--every 20] [--minutes 50] [--url http://127.0.0.1:8490] [--asset token2|token3]
 //   node scripts/pair-note-sample.mjs --summary <file.jsonl>      # crossed share, runs, longest runs
@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const argv = process.argv.slice(2);
 const opt = (n, d) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : d);
-const klass = (t) => (/catching up/.test(t) ? 'crossed' : /overlap/i.test(t) ? 'overlap' : /^Spread/.test(t) ? 'spread' : 'other');
+const klass = (t) => (/Spread -/.test(t) ? 'crossed' : /Spread /.test(t) ? 'spread' : 'other');
 
 if (opt('--summary', null)) {
   const rows = readFileSync(opt('--summary'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));

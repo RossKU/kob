@@ -7,12 +7,11 @@ import { OrderTicket } from '../ticket/OrderTicket';
 import { CrossCheckBanner } from './CrossCheckBanner';
 import { useSystemStatus } from '../shell/StatusProvider';
 import { buildBookModel, groupSizes, inferTick, levelsFromView } from './book-model';
-import { HOLD_FOREVER, useHeldUncrossed } from './hold-uncrossed';
 import { useCoalescedReload, useStaleSince } from './book-stale';
 import { useOpenToken } from './use-open-token';
 import { DepthChart } from './DepthChart';
 import { useLiveRefresh } from './live';
-import { basisToTokenSompi, depthCrossed, depthFromBook, depthFromView, priceDecimals, priceText, statsModel, tapeFromFills, tapeFromTrades } from './market-model';
+import { basisToTokenSompi, depthFromBook, depthFromView, priceDecimals, priceText, statsModel, tapeFromFills, tapeFromTrades } from './market-model';
 import {
   INVERTED_GROUP_MULTIPLIERS, defaultInverted, depthFromBookFlipped, depthFromViewFlipped, flipDp, flippedBookView, flippedPriceText, invertedRegrouper, marketKey, nativeBookView, oppositeSide, pairLabel, ratioText,
   statsModelFlipped, tokensPerKas,
@@ -120,7 +119,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // the book without grouping: the reference price of the page when there is neither a 24 h last price nor a trade
   const refMid = useMemo(() => {
     const m = book.data ? buildBookModel(book.data, { scale: bookScale, depth: 1 }) : null;
-    return m && !m.crossed ? m.mid : null;
+    return m ? m.mid : null;
   }, [book.data]);
 
   const tape = useMemo(() => {
@@ -152,11 +151,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     () => (book.data ? buildBookModel(book.data, { scale: bookScale, depth: BOOK_DEPTH, group: inverted || groupIdx === 0 ? 0n : group, ...(regroup ? { regroup } : {}) }) : null),
     [book.data, bookScale, group, groupIdx, inverted, regroup],
   );
-  // a transiently CROSSED book (matchers catching up) is never drawn: the last uncrossed snapshot stays for a few seconds, then a placeholder
-  // (held for as long as it stays crossed: a lagging indexer keeps it crossed for a long time and the book must not vanish; it is marked stale meanwhile)
-  const { value: model, matching, since: heldSince } = useHeldUncrossed(freshModel, freshModel?.crossed ?? false, HOLD_FOREVER, `${inverted}|${groupIdx}`);
-  // a failed or late pull, or a crossed book hidden behind the last uncrossed one: the last good book stays, "stale since" says how old it is
-  const bookStaleSince = useStaleSince(book, heldSince);
+  // the live book as it is (a crossed book, matchers a moment behind, is drawn with a negative spread like any other)
+  const model = freshModel;
+  // a failed or late pull: the last good book stays, "stale since" says how old it is
+  const bookStaleSince = useStaleSince(book);
   const groupOptions = useMemo(
     () =>
       inverted
@@ -183,7 +181,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     }
     return null;
   }, [depth.data, freshModel, book.data, decimals, scale, inverted]);
-  const { value: depthSeries, matching: depthMatching } = useHeldUncrossed(freshDepth, depthCrossed(freshDepth), HOLD_FOREVER, String(inverted));
+  const depthSeries = freshDepth;
 
   const bookCtx: BookViewCtx = useMemo(
     () => ({
@@ -272,9 +270,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
               {Array.from({ length: BOOK_DEPTH * 2 + 2 }, (_, i) => <div key={i} class="skeleton skeleton-line" />)}
             </div>
           ) : null}
-          {matching && !model ? <p class="muted center" data-testid="book-matching" role="status">{t('market.book.matchingBody')}</p> : null}
           {model && model.empty ? <p class="muted center" data-testid="book-empty">{t('market.book.empty')}</p> : null}
-          {bookView ? <OrderBook view={bookView} matching={matching} rows={BOOK_DEPTH} last={last} inverted={inverted} token={name} onPick={(side, price) => setPrefill({ side, price })} /> : null}
+          {bookView ? <OrderBook view={bookView} rows={BOOK_DEPTH} last={last} inverted={inverted} token={name} onPick={(side, price) => setPrefill({ side, price })} /> : null}
         </Section>
       }
       chart={
@@ -284,7 +281,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       }
       depth={
         <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card">
-          <DepthChart series={depthSeries} loading={!!indexer && depth.data === undefined} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? name : 'KAS'} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} matching={depthMatching} />
+          <DepthChart series={depthSeries} loading={!!indexer && depth.data === undefined} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? name : 'KAS'} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
         </Section>
       }
       tape={

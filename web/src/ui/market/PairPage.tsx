@@ -24,7 +24,7 @@ import { FlipButton, MarketShell, PairSelector } from './MarketBar';
 import { openPair } from './market-nav';
 import { displayedPair } from './market-select';
 import { MarketStats } from './MarketStats';
-import { basisOf, depthCrossed, INTERVAL_MS, parseCandles } from './market-model';
+import { basisOf, INTERVAL_MS, parseCandles } from './market-model';
 import { PairBook } from './PairBook';
 import { useCoalescedReload, useStaleSince } from './book-stale';
 import { StaleSince } from './OrderBook';
@@ -136,8 +136,6 @@ export function PairPage(props: { base: string; quote: string }) {
     [base, quote, last, change, dp, cc, cur, fills.data],
   );
   const depthSeries = useMemo(() => (book.data && base && quote ? pairDepthSeries(book.data, base, quote) : null), [book.data, base, quote]);
-  // a crossed pair book (a backlog the matchers are catching up with) is drawn as it is, with a note: the page must not lose its depth chart
-  const depthOverlap = depthCrossed(depthSeries);
   const powers = useMemo(() => [...new Set([...(baseRow?.powers ?? []), ...(quoteRow?.powers ?? [])])], [baseRow, quoteRow]);
 
   if (!baseInfo || !quoteInfo || !base || !quote || !pairStats) {
@@ -225,9 +223,7 @@ export function PairPage(props: { base: string; quote: string }) {
             dp={dp}
             amountDp={Math.min(base.decimals, 4)}
             source="book"
-            matching={false}
           />
-          {depthOverlap ? <p class="small muted" style="margin:6px 0 0" data-testid="depth-overlap">{t('pair.depth.overlap')}</p> : null}
         </Section>
       }
       tape={

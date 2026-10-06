@@ -80,8 +80,8 @@ async function readyChart(page, { book = true } = {}) {
   await page.getByTestId('price-chart').waitFor({ timeout: 30_000 }).catch(() => {});
   await page.waitForFunction(() => document.querySelector('[data-testid="price-chart"]')?.getAttribute('data-state') === 'ready', null, { timeout: 30_000 }).catch(() => {});
   if (!book) return;
-  // near-zero spreads: the book is replaced by "matching in progress" while a trader's order crosses the touch (until a matcher fills it,
-  // a few seconds): wait for both sides to be listed again
+  // near-zero spreads: a trader's order may cross the touch for a few seconds (until a matcher fills it; the spread is then negative): wait for
+  // both sides to be listed
   await page
     .waitForFunction(
       () => document.querySelectorAll('[data-testid="book-bids"] [data-testid^="book-"]').length > 0 && document.querySelectorAll('[data-testid="book-asks"] [data-testid^="book-"]').length > 0,

@@ -38,8 +38,6 @@ export interface BookModel {
   /** spread relative to the mid price in basis points, rounded down */
   spreadBps: number | null;
   mid: bigint | null;
-  /** best bid at or above best ask: the indexer view is in flux (a crossing that is about to fill) */
-  crossed: boolean;
   totalAskAmount: bigint;
   totalBidAmount: bigint;
   anyEstimated: boolean;
@@ -188,7 +186,6 @@ export function buildBookModel(view: { asks: readonly (LevelView | BookOrderView
     spread,
     spreadBps: both && mid !== null && mid > 0n ? Number(((bestAsk - bestBid) * 10_000n) / mid) : null,
     mid,
-    crossed: both && bestBid >= bestAsk,
     totalAskAmount,
     totalBidAmount,
     anyEstimated: askLevels.some((l) => l.estimated) || bidLevels.some((l) => l.estimated),

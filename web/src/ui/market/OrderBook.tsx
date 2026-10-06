@@ -19,8 +19,6 @@ export interface OrderBookProps {
   rows: number;
   /** last trade price text and aggressor side, shown in the spread row */
   last?: { text: string; side: 'buy' | 'sell' | null } | null;
-  /** the fresh book is crossed (matchers are catching up): `view` is the last uncrossed snapshot, shown with a notice instead of the spread */
-  matching?: boolean;
   /**
    * a click on a level prefills the ticket in NATIVE terms (what the order is): `buy` / `sell` the token at this price per whole token. Whichever
    * orientation is shown, the same level prefills the same order.
@@ -78,9 +76,6 @@ export function OrderBook(props: OrderBookProps) {
         <span class={`ob-last num ${props.last?.side === 'buy' ? 'buy' : props.last?.side === 'sell' ? 'sell' : ''}`} title={t('market.stats.last')} data-testid="book-last">
           {props.last ? props.last.text : '—'}
         </span>
-        {props.matching ? (
-          <span class="small sell" data-testid="book-matching" role="status">{t('market.book.matching')}</span>
-        ) : (
         <span class="small muted">
           {t('market.book.mid')}{' '}
           <strong class="num" data-testid="book-mid" data-value={m.mid?.value ?? ''}>
@@ -90,7 +85,6 @@ export function OrderBook(props: OrderBookProps) {
           {t('market.book.spread')} <strong class="num">{m.spread ? m.spread.text : '—'}</strong>
           {m.spread?.pct ? ` (${m.spread.pct}%)` : null}
         </span>
-        )}
       </div>
       <div class="book-side" data-testid="book-bids" role="list" aria-label={t('market.book.bids')}>
         {m.bids.length ? m.bids.map((r) => <Row key={r.key} row={r} kind="bid" onPick={props.onPick} inverted={props.inverted} token={props.token} />) : <div class="muted small center">{t('market.book.noBids')}</div>}

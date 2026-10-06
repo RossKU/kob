@@ -1,5 +1,5 @@
-// The order book never disappears because a pull failed, is late or came back crossed: the last good book stays with a subtle "stale since hh:mm:ss"
-// marker, and only the next good (uncrossed) response replaces it.
+// The order book never disappears because a pull failed or is late: the last good book stays with a subtle "stale since hh:mm:ss" marker, and only the
+// next good response replaces it. A crossed book is no special case: it is the live book, drawn with a negative spread and never marked stale.
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { TESTID } from '../testids';
@@ -54,30 +54,28 @@ test.describe('order book keeps the last good book', () => {
     await expect(asks(page)).toHaveCount(10);
   });
 
-  test('a book that stays crossed (matchers behind) never replaces the last good one: it stays, stale since, until an uncrossed book arrives', async ({ appPage: page, mock }) => {
-    await page.clock.install();
+  test('a crossed book (matchers a moment behind) is drawn as it is with a negative spread, is not stale, and the next uncrossed book replaces it', async ({ appPage: page, mock }) => {
     await open(page, mock);
     let crossed = true;
     await page.route('**/v1/books/**', async (route) => {
       const r = await route.fetch();
       const j = await r.json();
       if (crossed && Array.isArray(j.asks) && j.asks.length && j.bids.length) {
-        // the best bid above the best ask
-        j.bids[0].price = String(BigInt(j.asks[0].price) + 10n);
+        // the best bid 1% above the best ask
+        j.bids[0].price = String((BigInt(j.asks[0].price) * 101n) / 100n);
       }
       await route.fulfill({ response: r, json: j });
     });
     await page.getByTestId('book-refresh').click();
-    await expect(page.getByTestId('book-matching')).toBeVisible();
-    await expect(asks(page)).toHaveCount(10); // the last uncrossed snapshot
-    // well past the old 10 s hold: it is still there
-    await page.clock.runFor(60_000);
+    await expect(page.getByTestId('book-spread')).toContainText(/Spread -[\d.,]+ \(-[\d.]+%\)/);
     await expect(asks(page)).toHaveCount(10);
-    await expect(page.getByTestId('book-stale-since')).toHaveText(/^stale since \d{2}:\d{2}:\d{2}$/);
-    // the next good response replaces it
+    await expect(page.getByTestId('book-matching')).toHaveCount(0);
+    await expect(page.getByTestId('book-stale-since')).toHaveCount(0);
+    await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
+    // the next good response replaces it: a positive spread again
     crossed = false;
     await page.getByTestId('book-refresh').click();
-    await expect(page.getByTestId('book-matching')).toHaveCount(0);
+    await expect(page.getByTestId('book-spread')).not.toContainText('Spread -');
     await expect(page.getByTestId('book-stale-since')).toHaveCount(0);
     await expect(asks(page)).toHaveCount(10);
   });

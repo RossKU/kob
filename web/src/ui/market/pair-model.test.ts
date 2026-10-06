@@ -23,7 +23,8 @@ describe('pair book model', () => {
     expect(m.asks[0]!.price).toEqual({ num: 13n, den: 250n });
     expect(m.asks[0]!.totalText).toBe('0.156000');
     expect(m.spreadText).toBe('0.0040000');
-    expect(m.crossed).toBe(false);
+    expect(m.midText).toBe('0.0500000');
+    expect(m.spreadPct).toBe('8.00');
     expect(m.dp).toBe(7);
   });
 
@@ -42,11 +43,13 @@ describe('pair book model', () => {
     expect(m.asks[0]!.bar).toBe(1);
   });
 
-  it('flags a crossed book, handles one-sided and empty books, refuses a view of another pair', () => {
+  it('a crossed book has a negative spread, handles one-sided and empty books, refuses a view of another pair', () => {
     const crossed = buildPairBook(view([lv('route', '4', '100', '1')], [lv('route', '5', '100', '1')]), BASE, QUOTE)!;
-    expect(crossed.crossed).toBe(true);
+    expect(crossed.spreadText).toBe('-1.00000');
     const one = buildPairBook(view([lv('route', '4', '100', '1')], []), BASE, QUOTE)!;
     expect(one.spreadText).toBeNull();
+    expect(one.spreadPct).toBeNull();
+    expect(one.midText).toBeNull();
     expect(buildPairBook(view([], []), BASE, QUOTE)!.empty).toBe(true);
     expect(buildPairBook({ ...view([], []), base: QUOTE.covenantId, quote: BASE.covenantId }, BASE, QUOTE)).toBeNull();
   });
@@ -70,27 +73,23 @@ describe('pair book model', () => {
   });
 });
 
-describe('pair book crossings: pair orders net each other and fill through the KAS route, so every crossing is a backlog', () => {
+describe('pair book crossings: pair orders net each other and fill through the KAS route; a crossed book is shown as it is, with a negative spread', () => {
   const L = '100000000';
-  it('route levels crossing each other (a crossed KAS book behind them): "matchers are catching up"', () => {
+  it('route levels crossing each other (a crossed KAS book behind them): the same spread line with a negative spread and percent', () => {
     const m = buildPairBook(view([lv('route', '4', '100', '1')], [lv('route', '5', '100', '1')]), BASE, QUOTE)!;
-    expect(m.crossed).toBe(true);
-    expect(t(spreadLine(m, 'USDT').key, spreadLine(m, 'USDT').params)).toBe(
-      'Crossed by 1.00000 USDT: pair orders net each other and fill through the KAS books, so the matchers are catching up',
-    );
+    expect(t(spreadLine(m).key, spreadLine(m).params)).toBe('Mid 4.50000 · Spread -1.00000 (-22.22%)');
   });
 
-  it('resting pair orders crossing each other (direct and entry levels) are fillable by netting: crossed, on either side', () => {
+  it('resting pair orders crossing each other (direct and entry levels) are fillable by netting: a negative spread, on either side', () => {
     // a direct ask at 4 under a direct bid at 6 (USDT per BTC), the route uncrossed
     const d = buildPairBook(view([lv('direct', '4', '100', L, 2), lv('route', '7', '100', L)], [lv('direct', '6', '100', L), lv('route', '3', '100', L)]), BASE, QUOTE)!;
-    expect(d.crossed).toBe(true);
-    expect(spreadLine(d, 'USDT')).toEqual({ key: 'pair.book.crossed', params: { spread: '2.00000', quote: 'USDT' } });
+    expect(spreadLine(d)).toEqual({ key: 'pair.book.spread', params: { mid: '5.00000', spread: '-2.00000', pct: '-40.00' } });
     // an if-done entry bid above a direct ask
     const e = buildPairBook(view([lv('direct', '4', '100', L)], [lv('entry', '5', '100', L)]), BASE, QUOTE)!;
-    expect(e.crossed).toBe(true);
+    expect(e.spreadText).toBe('-1.00000');
     // a pair order through a route level
     const r = buildPairBook(view([lv('direct', '4', '100', L)], [lv('route', '5', '100', L)]), BASE, QUOTE)!;
-    expect(r.crossed).toBe(true);
+    expect(r.spreadText).toBe('-1.00000');
   });
 
   it('ties at one price: direct, then entry, then route; the entry source is kept for the label', () => {
@@ -99,11 +98,10 @@ describe('pair book crossings: pair orders net each other and fill through the K
     expect(m.bids[0]).toMatchObject({ source: 'entry', orders: 3 });
   });
 
-  it('an uncrossed or one-sided book keeps the spread / one-sided line', () => {
+  it('an uncrossed book has a positive spread; a one-sided one the one-sided line', () => {
     const m = buildPairBook(view([lv('direct', '6', '100', '1')], [lv('direct', '4', '100', '1')]), BASE, QUOTE)!;
-    expect(m.crossed).toBe(false);
-    expect(spreadLine(m, 'USDT').key).toBe('pair.book.spread');
-    expect(spreadLine(buildPairBook(view([lv('direct', '6', '100', '1')], []), BASE, QUOTE)!, 'USDT')).toEqual({ key: 'pair.book.oneSided', params: {} });
+    expect(spreadLine(m)).toEqual({ key: 'pair.book.spread', params: { mid: '5.00000', spread: '2.00000', pct: '40.00' } });
+    expect(spreadLine(buildPairBook(view([lv('direct', '6', '100', '1')], []), BASE, QUOTE)!)).toEqual({ key: 'pair.book.oneSided', params: {} });
   });
 });
 

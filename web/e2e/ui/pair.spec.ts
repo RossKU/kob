@@ -58,6 +58,8 @@ test('pair book (direct, entry, route) and a pair limit sell through the unified
   await expect(book.getByTestId('pair-entry')).toHaveText('entry (1)');
   await expect(book.locator('[data-testid="pair-level"][data-source="route"]').first()).toBeVisible();
   await expect(book.getByTestId('pair-via-kas').first()).toHaveText('via KAS');
+  // the spread line is the KAS page's: mid, signed spread, signed percent (negative when the book is crossed)
+  await expect(book.getByTestId('pair-spread')).toHaveText(/^Mid [\d.,]+ · Spread -?[\d.,]+ \(-?[\d.]+%\)$/);
   // fixed decimals per column (decimal points line up)
   const decimals = (texts: string[]) => new Set(texts.map((x) => (x.includes('.') ? x.split('.')[1]!.length : 0)));
   const priceTexts = await book.locator('[data-testid="pair-level"] .book-price').allTextContents();

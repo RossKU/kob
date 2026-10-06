@@ -33,7 +33,7 @@ const fmtAmount = (v: number) =>
  * Depth chart: cumulative bids (left, green) and asks (right, red) around the mid price, step areas with a soft gradient, a subtle grid,
  * price and amount axes, a hover read-out. Drawn in SVG at the panel's pixel width (crisp text at any size).
  */
-export function DepthChart(props: { series: DepthSeries | null; loading: boolean; ticker: string; /** the unit of the price axis: KAS natively, the token when inverted */ priceUnit?: string; /** shown as KAS/TOKEN */ inverted?: boolean; dp: number; /** fixed decimals of the cumulative amount in the hover read-out (token decimals / tick of the market); default 2 */ amountDp?: number; source: 'depth' | 'book'; /** the fresh book is crossed: no chart until it uncrosses */ matching?: boolean }) {
+export function DepthChart(props: { series: DepthSeries | null; loading: boolean; ticker: string; /** the unit of the price axis: KAS natively, the token when inverted */ priceUnit?: string; /** shown as KAS/TOKEN */ inverted?: boolean; dp: number; /** fixed decimals of the cumulative amount in the hover read-out (token decimals / tick of the market); default 2 */ amountDp?: number; source: 'depth' | 'book' }) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<{ x: number; y: number; side: 'bid' | 'ask'; price: number; cum: number } | null>(null);
   const s = props.series;
@@ -101,7 +101,7 @@ export function DepthChart(props: { series: DepthSeries | null; loading: boolean
           <div class="skeleton" style={`height:${HEIGHT}px`} data-testid="depth-loading" />
         ) : (
           <div class="mkt-empty" style={`height:${HEIGHT}px`} data-testid="depth-empty">
-            {t(props.matching ? 'market.book.matching' : 'market.depth.empty')}
+            {t('market.depth.empty')}
           </div>
         )}
         {hover ? (

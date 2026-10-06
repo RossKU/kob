@@ -15,7 +15,6 @@ describe('bids that cannot fund one base unit', () => {
     expect(m.bestBid).toBe(110n);
     expect(m.spread).toBe(10n);
     expect(m.totalBidAmount).toBe(6n);
-    expect(m.crossed).toBe(false);
   });
 
   it('a per-order row with 0 or unknown amount left is not a row either; a book of only such bids has no bids', () => {
@@ -24,12 +23,10 @@ describe('bids that cannot fund one base unit', () => {
     expect(m.bids).toEqual([]);
     expect(m.bestBid).toBeNull();
     expect(m.spread).toBeNull();
-    expect(m.crossed).toBe(false);
   });
 
-  it('a zero-amount bid above the best ask no longer makes the book look crossed', () => {
+  it('a zero-amount bid above the best ask does not make the spread negative', () => {
     const m = buildBookModel({ asks: [lv('120', 3)], bids: [lv('125', 0, 1, true), lv('110', 1)] });
-    expect(m.crossed).toBe(false);
     expect(m.spread).toBe(10n);
   });
 });
@@ -104,22 +101,23 @@ describe('buildBookModel', () => {
     expect(m.spread).toBe(200n);
     expect(m.mid).toBe(25000n);
     expect(m.spreadBps).toBe(80); // 200 / 25000
-    expect(m.crossed).toBe(false);
     expect(m.totalBidAmount).toBe(29n);
     expect(m.bids[2].depthPct).toBe(100); // the deepest cumulative level fills the bar
     expect(m.asks[2].depthPct).toBe(86.2); // 25 / 29
     expect(m.anyEstimated).toBe(true);
   });
 
-  it('flags a crossed view', () => {
-    const m = buildBookModel({ asks: [lv('100', 1)], bids: [lv('100', 1)] });
-    expect(m.crossed).toBe(true);
-    expect(m.spread).toBe(0n);
+  it('a crossed view has a negative spread (best ask - best bid) and a negative percent', () => {
+    const m = buildBookModel({ asks: [lv('100', 1)], bids: [lv('104', 1)] });
+    expect(m.spread).toBe(-4n);
+    expect(m.mid).toBe(102n);
+    expect(m.spreadBps).toBe(-392); // -4 / 102, truncated
+    expect(buildBookModel({ asks: [lv('100', 1)], bids: [lv('100', 1)] }).spread).toBe(0n);
   });
 
   it('handles one-sided and empty books', () => {
     const one = buildBookModel({ asks: [lv('100', 2)], bids: [] });
-    expect(one).toMatchObject({ bestBid: null, spread: null, mid: null, spreadBps: null, crossed: false, empty: false });
+    expect(one).toMatchObject({ bestBid: null, spread: null, mid: null, spreadBps: null, empty: false });
     const none = buildBookModel({ asks: [], bids: [] });
     expect(none.empty).toBe(true);
     expect(none.asksDisplay).toEqual([]);

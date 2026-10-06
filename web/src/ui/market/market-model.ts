@@ -368,9 +368,6 @@ export function depthFromView(v: DepthView, decimals: number): DepthSeries | nul
   };
 }
 
-/** Best bid at or above best ask: the view is in flux (a crossing that is about to fill); the two step areas would overlap. */
-export const depthCrossed = (s: DepthSeries | null): boolean => !!s && s.bids.length > 0 && s.asks.length > 0 && s.bids[0]!.price >= s.asks[0]!.price;
-
 /** Fallback without `/v1/depth`: the aggregated book (state prices per `scale` base units, amounts in base units) as a depth series. */
 export function depthFromBook(m: BookModel, decimals: number, scale: bigint): DepthSeries {
   const pts = (rows: BookModel['bids']) => rows.map((r) => ({ price: basisToNumber(r.price, decimals, scale), cum: unitsToNumber(r.cumAmount, decimals) }));

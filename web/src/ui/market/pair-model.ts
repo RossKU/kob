@@ -3,7 +3,7 @@
 // text (asks rounded up, bids down: never better than the level); floats only for the depth bars. Three sources are kept apart and labelled:
 // `direct` (resting KobPair orders), `entry` (if-done pair entries resting at their limit) and `route` (implied through the two KAS books).
 // A pair order enforces only its own price (founder option 2): a filler may net opposite pair orders, route them through the KAS books or fill them
-// from inventory, so a crossing of ANY sources is fillable: a backlog the matchers are catching up with. Pure and DOM-free.
+// from inventory, so a crossing of ANY sources is fillable. A crossed book is shown as it is (a negative spread). Pure and DOM-free.
 import type { PairBookView, PairLevelSource, PairLevelView } from '../../data/indexer-types';
 import { cmpRational, formatRational, ratToNumber, reduce, significantDp, wholePrice, type PairToken, type Rational } from '../../kob/pair';
 import { columnFraction, fixedUnits } from '../kit/format';
@@ -33,24 +33,23 @@ export interface PairBookModel {
   bids: PairLevelRow[];
   bestAsk: PairLevelRow | null;
   bestBid: PairLevelRow | null;
-  /** best ask - best bid as text (its absolute value when crossed), null when a side is empty */
+  /** best ask - best bid as text, signed (negative when the book is crossed), null when a side is empty */
   spreadText: string | null;
+  /** the spread relative to the mid price in percent, signed, 2 decimals; null when a side is empty */
+  spreadPct: string | null;
+  /** the mid price of the touches as text (same decimals as the price column); null when a side is empty */
+  midText: string | null;
   /** fraction digits of the price column (fixed for every row, trailing zeros kept) */
   dp: number;
   /** fraction digits of the amount column: the finest amount shown, so every row has the same number of decimals */
   amountDp: number;
   empty: boolean;
-  /**
-   * The best bid is above the best ask. Pair orders net each other and fill through the KAS route or from inventory, so a crossing of any sources
-   * (direct, entry, route) is fillable: a backlog the matchers are catching up with (each fill once the crossing pays its network fee).
-   */
-  crossed: boolean;
 }
 
 /** The line between the asks and the bids of the pair book: an i18n key and its parameters. */
-export function spreadLine(m: Pick<PairBookModel, 'spreadText' | 'crossed'>, quote: string): { key: string; params: Record<string, string> } {
-  if (m.spreadText === null) return { key: 'pair.book.oneSided', params: {} };
-  return { key: m.crossed ? 'pair.book.crossed' : 'pair.book.spread', params: { spread: m.spreadText, quote } };
+export function spreadLine(m: Pick<PairBookModel, 'spreadText' | 'spreadPct' | 'midText'>): { key: string; params: Record<string, string> } {
+  if (m.spreadText === null || m.midText === null || m.spreadPct === null) return { key: 'pair.book.oneSided', params: {} };
+  return { key: 'pair.book.spread', params: { mid: m.midText, spread: m.spreadText, pct: m.spreadPct } };
 }
 
 /** Order of the sources at one price: resting pair orders first (direct, then if-done entries), the implied route last. */
@@ -91,13 +90,18 @@ export function buildPairBook(view: PairBookView, base: PairToken, quote: PairTo
   const bestAsk = asks[0] ?? null;
   const bestBid = bids[0] ?? null;
   let spreadText: string | null = null;
-  let crossed = false;
+  let spreadPct: string | null = null;
+  let midText: string | null = null;
   if (bestAsk && bestBid) {
+    // best ask - best bid, signed: a crossed book (a bid above an ask, the matchers a moment behind) has a negative spread
     const d = reduce({ num: bestAsk.price.num * bestBid.price.den - bestBid.price.num * bestAsk.price.den, den: bestAsk.price.den * bestBid.price.den });
-    crossed = d.num < 0n;
-    spreadText = formatRational(d.num < 0n ? { num: -d.num, den: d.den } : d, dp, 'nearest', dp, ',');
+    const signed = (r: Rational, places: number, group: string): string => (r.num < 0n ? '-' : '') + formatRational({ num: r.num < 0n ? -r.num : r.num, den: r.den }, places, 'nearest', places, group);
+    const mid = reduce({ num: bestAsk.price.num * bestBid.price.den + bestBid.price.num * bestAsk.price.den, den: bestAsk.price.den * bestBid.price.den * 2n });
+    spreadText = signed(d, dp, ',');
+    midText = signed(mid, dp, ',');
+    if (mid.num > 0n) spreadPct = signed(reduce({ num: d.num * 100n * mid.den, den: d.den * mid.num }), 2, '');
   }
-  return { asks, bids, bestAsk, bestBid, spreadText, dp, amountDp, empty: asks.length + bids.length === 0, crossed };
+  return { asks, bids, bestAsk, bestBid, spreadText, spreadPct, midText, dp, amountDp, empty: asks.length + bids.length === 0 };
 }
 
 /**
