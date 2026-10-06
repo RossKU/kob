@@ -33,7 +33,7 @@ pub fn branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
                     let n = if full { 10 } else { 4 };
                     let c = cov(0xa1);
                     let mut b = batch(vec![Leg::Ask {
-                        order: order(10, CARRIER, c, 1_000, a),
+                        order: order(10, carrier(), c, 1_000, a),
                         custody: custody(11, 10, c, 1_000),
                         amount: n * WHOLE,
                         t: decay.then_some(lock as i64),
@@ -83,7 +83,7 @@ pub fn branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
             };
             let c = cov(0xc1);
             let mut b = batch(vec![Leg::CondAsk {
-                order: order(30, CARRIER, c, lock - 100, s),
+                order: order(30, carrier(), c, lock - 100, s),
                 custody: custody(31, 10, c, lock - 100),
                 amount: n * WHOLE,
                 leg,
@@ -198,7 +198,7 @@ pub fn branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
                         s.band_daa = 0;
                     }
                 }
-                let value = s.escrow(CARRIER as i64).unwrap() as u64;
+                let value = s.escrow(carrier() as i64).unwrap() as u64;
                 let c = cov(0xf1);
                 let mut b = batch(vec![Leg::IfdAsk {
                     order: order(60, value, c, lock - 150, s),
@@ -228,9 +228,9 @@ pub fn branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
             armed: 1,
             ..ifd_bid(MAKER_A, 10, p)
         };
-        let ev = (e.merge_budget(entry_n * WHOLE).unwrap() + entry_n * (DC + EC) + 2 * EC) as u64;
+        let ev = (e.merge_budget(entry_n * WHOLE).unwrap() + entry_n * (dc() + ec()) + 2 * ec()) as u64;
         let mut b = batch(vec![Leg::CondAsk {
-            order: order(30, CARRIER, cov(0xc1), 2_000, booked_ask_exit(p, 4)),
+            order: order(30, carrier(), cov(0xc1), 2_000, booked_ask_exit(p, 4)),
             custody: custody(31, 4, cov(0xc1), 2_000),
             amount: n * WHOLE,
             leg: 0,
@@ -250,7 +250,7 @@ pub fn branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
         let exit = booked_bid_exit(p, 4);
         let held = exit.amount_left;
         let xv = (e.proceeds(held, e.price).unwrap() + e.prefund_of(held).unwrap() + e.exit_carrier) as u64;
-        let ev = (CARRIER as i64 + e.prefund_of(entry_n * WHOLE).unwrap() + entry_n * EC) as u64;
+        let ev = (carrier() as i64 + e.prefund_of(entry_n * WHOLE).unwrap() + entry_n * ec()) as u64;
         let mut b = batch(vec![Leg::CondBid {
             order: order(40, xv, cov(0xe1), 2_000, exit),
             amount: n * WHOLE,
@@ -271,7 +271,7 @@ pub fn branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
     let wb = IfdBidState { rpt_amount: 1 + 2 * WHOLE, ..ifd_bid(MAKER_A, 4, p) };
     v.push(("branch.ifd.bid.repeat.waitUnbooked".into(), Action::Batch(ifd_fill(wb, 4, None, 1_000))));
     let wa = IfdAskState { amount_left: 4 * WHOLE, rpt_amount: 1 + 2 * WHOLE, ..ifd_ask(MAKER_A, p) };
-    let wav = wa.escrow(CARRIER as i64).unwrap() as u64;
+    let wav = wa.escrow(carrier() as i64).unwrap() as u64;
     v.push(("branch.ifd.ask.repeat.waitUnbooked".into(), Action::Batch(ifda_fill(wa, 4, wav, None, 1_000))));
     if p.family() == Family::Kron {
         v = v.into_iter().map(|(n, a)| (n, kron_action(a))).collect();

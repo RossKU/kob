@@ -51,7 +51,7 @@ export function legEnvOf(env: PairPlanEnv): PlanEnv {
   return { ...env, token: { ...env.token, tick: 1n, keeperTip: t.keeperTip, refundTip: t.refundTip } };
 }
 
-/** The KAS carrier of every covenant output of a pair order (deliveries, custodies, exits): the intent's, else the env's, else 10 KAS. */
+/** The KAS carrier of every covenant output of a pair order (deliveries, custodies, exits): the intent's, else the env's, else `DEFAULT_CARRIER` (2 KAS). */
 export const pairCarrierOf = (env: Pick<PlanEnv, 'carrier'>, want?: bigint): bigint => want ?? env.carrier ?? DEFAULT_CARRIER;
 
 /** The market of a pair token by covenant id (A or B), with the maker's UTXO list of that token. */
@@ -473,7 +473,7 @@ export interface PairPlaceSpec {
   /** pair disclosure tags */
   pairNotes: string[];
   cond: CondSummary | null;
-  /** KAS on each custody / token change output: the intent's carrier (default: the env's, 10 KAS) */
+  /** KAS on each custody / token change output: the intent's carrier (default: the env's, else 2 KAS) */
   carrier?: bigint;
 }
 

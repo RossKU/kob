@@ -6,9 +6,9 @@
 // the UI fails the test.
 //
 // Price fields of the on-chain state are sompi per whole token (per `scale` = 1e8 base units): 0.027 KAS / EXKCC = 2_700_000; amounts are base
-// units. All wallet defaults come from docs/spec/order-types.md and kob-wasm `defaultConstants` (tip 0, carrier 10 KAS per covenant UTXO, market 3%
+// units. All wallet defaults come from docs/spec/order-types.md and kob-wasm `defaultConstants` (tip 0, carrier 2 KAS per covenant UTXO, market 3%
 // over 20 s, stop 3% band over 30 s, rest time R 5 s, trigger threshold = the minimum fill, keeper tip 0.021 KAS on the 8/8 program, refund tip
-// 0.05 KAS). Minimum fill defaults (matcher.md 10): a resting order the amount worth one delivery carrier (10 KAS) at its price, capped at the whole
+// 0.05 KAS). Minimum fill defaults (matcher.md 10): a resting order the amount worth 10 KAS (a notional, not a carrier) at its price, capped at the whole
 // amount (so every 2-token order here is filled whole: ONE delivery carrier of a bid); IOC / FOK / market 1 base unit; an IFD entry a quarter of
 // the amount (four fills: four delivery carriers and four prefunded exit carriers).
 import type { FieldValues, Side } from '../helpers/ticket';
@@ -64,7 +64,7 @@ export interface OrderCase {
   timing: Timing;
 }
 
-const SELL_CARRIERS = { orderCarrier: '10 KAS', tokenCarrier: '10 KAS' };
+const SELL_CARRIERS = { orderCarrier: '2 KAS', tokenCarrier: '2 KAS' };
 const kas = (v: string) => `${v} KAS / EXKCC`;
 
 // ------------------------------------------------------------------------------------------------ limit family
@@ -72,9 +72,9 @@ const limit = (side: Side): Pick<OrderCase, 'type' | 'side' | 'kind' | 'listType
   type: 'limit', side, kind: side === 'sell' ? 'KobAsk' : 'KobBid', listType: 'limit', listLabel: 'Limit (GTC)',
 });
 
-const SELL = { locked: '20 KAS', escrowed: '2 EXKCC', carriers: SELL_CARRIERS } as const;
+const SELL = { locked: '4 KAS', escrowed: '2 EXKCC', carriers: SELL_CARRIERS } as const;
 /** a 2-token resting buy at price p (KAS per token): escrow 2p, one delivery carrier (the default minimum fill is the whole amount) */
-const buyLimit = (escrowKas: string) => ({ locked: `${(10 + Number(escrowKas)).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} KAS`, escrowed: null, carriers: { escrow: `${escrowKas} KAS`, deliveryCarrier: '10 KAS' } });
+const buyLimit = (escrowKas: string) => ({ locked: `${(2 + Number(escrowKas)).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} KAS`, escrowed: null, carriers: { escrow: `${escrowKas} KAS`, deliveryCarrier: '2 KAS' } });
 
 export const CASES: OrderCase[] = [
   // ---- limit GTC
@@ -82,7 +82,7 @@ export const CASES: OrderCase[] = [
     name: 'limit GTC sell', ...limit('sell'), ...SELL, fields: () => ({ amount: '2', price: '0.027' }),
     disc: { limit: kas('0.027'), allInPrice: kas('0.027'), allInTotal: '0.054 KAS', refundTip: '0.05 KAS', 'expiry-extra': '' },
     discAbsent: ['tip', 'activates'], notes: ['gtc', 'carrierReturned'],
-    title: 'Sell limit order', rows: { amount: '2 EXKCC', price: kas('0.027'), allIn: kas('0.027'), refundTip: '0.05 KAS', value: '10 KAS' },
+    title: 'Sell limit order', rows: { amount: '2 EXKCC', price: kas('0.027'), allIn: kas('0.027'), refundTip: '0.05 KAS', value: '2 KAS' },
     state: { price: '2700000', tip: '0', tif: '0', activeFrom: '0', amountLeft: '200000000', refundTip: '5000000', scale: '100000000' },
     timing: { kind: 'gtc' },
   },
@@ -90,8 +90,8 @@ export const CASES: OrderCase[] = [
     name: 'limit GTC buy', ...limit('buy'), ...buyLimit('0.049'), fields: () => ({ amount: '2', price: '0.0245' }),
     disc: { limit: kas('0.0245'), allInPrice: kas('0.0245'), allInTotal: '0.049 KAS', refundTip: '0.05 KAS' },
     discAbsent: ['tip', 'activates'], notes: ['gtc', 'carrierReturned'],
-    title: 'Buy limit order', rows: { price: kas('0.0245'), allIn: kas('0.0245'), refundTip: '0.05 KAS', value: '10.049 KAS' },
-    state: { price: '2450000', tip: '0', tif: '0', activeFrom: '0', reserve: '0', deliveryCarrier: '1000000000', refundTip: '5000000' },
+    title: 'Buy limit order', rows: { price: kas('0.0245'), allIn: kas('0.0245'), refundTip: '0.05 KAS', value: '2.049 KAS' },
+    state: { price: '2450000', tip: '0', tif: '0', activeFrom: '0', reserve: '0', deliveryCarrier: '200000000', refundTip: '5000000' },
     timing: { kind: 'gtc' },
   },
   {
@@ -171,11 +171,11 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'ioc' },
   },
   {
-    name: 'IOC buy', type: 'ioc', side: 'buy', kind: 'KobBid', listType: 'ioc', listLabel: 'IOC', locked: '10.053 KAS', escrowed: null, carriers: { escrow: '0.053 KAS', deliveryCarrier: '10 KAS' },
+    name: 'IOC buy', type: 'ioc', side: 'buy', kind: 'KobBid', listType: 'ioc', listLabel: 'IOC', locked: '2.053 KAS', escrowed: null, carriers: { escrow: '0.053 KAS', deliveryCarrier: '2 KAS' },
     fields: () => ({ amount: '2', price: '0.0265' }),
     disc: { limit: kas('0.0265'), allInTotal: '0.053 KAS' }, notes: ['iocRemainderReturned'],
     title: 'Buy IOC limit order', rows: { price: kas('0.0265'), tif: 'immediate or cancel' },
-    state: { price: '2650000', tif: '1', deliveryCarrier: '1000000000' },
+    state: { price: '2650000', tif: '1', deliveryCarrier: '200000000' },
     timing: { kind: 'ioc' },
   },
   {
@@ -187,7 +187,7 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'ioc' },
   },
   {
-    name: 'FOK buy', type: 'fok', side: 'buy', kind: 'KobBid', listType: 'fok', listLabel: 'FOK', locked: '10.053 KAS', escrowed: null, carriers: { escrow: '0.053 KAS', deliveryCarrier: '10 KAS' },
+    name: 'FOK buy', type: 'fok', side: 'buy', kind: 'KobBid', listType: 'fok', listLabel: 'FOK', locked: '2.053 KAS', escrowed: null, carriers: { escrow: '0.053 KAS', deliveryCarrier: '2 KAS' },
     fields: () => ({ amount: '2', price: '0.0265' }),
     disc: { limit: kas('0.0265'), allInTotal: '0.053 KAS' }, notes: ['fokAllOrNothing'],
     title: 'Buy FOK limit order', rows: { price: kas('0.0265'), tif: 'fill or kill' },
@@ -204,7 +204,7 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'auction' },
   },
   {
-    name: 'market buy: expected best ask, worst 3% above', type: 'market', side: 'buy', kind: 'KobBid', listType: 'market', listLabel: 'Market', locked: '10.051706 KAS', escrowed: null, carriers: { escrow: '0.051706 KAS', deliveryCarrier: '10 KAS' },
+    name: 'market buy: expected best ask, worst 3% above', type: 'market', side: 'buy', kind: 'KobBid', listType: 'market', listLabel: 'Market', locked: '2.051706 KAS', escrowed: null, carriers: { escrow: '0.051706 KAS', deliveryCarrier: '2 KAS' },
     fields: () => ({ amount: '2' }),
     disc: { expected: kas('0.0251'), worst: kas('0.025853'), allInPrice: kas('0.025853'), allInTotal: '0.051706 KAS' }, notes: ['market', 'auction'],
     title: 'Buy market order (auction)', rows: { price: kas('0.0251'), auction: `${kas('0.025853')} | the price moves over 20 s`, tif: 'immediate or cancel' },
@@ -221,7 +221,7 @@ export const CASES: OrderCase[] = [
   },
   // ---- streaming (quote and execute from the displayed price)
   {
-    name: 'streaming buy from the displayed price', type: 'streaming', side: 'buy', kind: 'KobBid', listType: 'market', listLabel: 'Market', locked: '10.051706 KAS', escrowed: null, carriers: { escrow: '0.051706 KAS', deliveryCarrier: '10 KAS' },
+    name: 'streaming buy from the displayed price', type: 'streaming', side: 'buy', kind: 'KobBid', listType: 'market', listLabel: 'Market', locked: '2.051706 KAS', escrowed: null, carriers: { escrow: '0.051706 KAS', deliveryCarrier: '2 KAS' },
     fields: () => ({ amount: '2', displayedPrice: '0.0251' }),
     disc: { expected: kas('0.0251'), worst: kas('0.025853') }, notes: ['streaming', 'auction'],
     title: 'Buy market order (auction)', rows: { price: kas('0.0251'), auction: `${kas('0.025853')} | the price moves over 20 s` },
@@ -246,7 +246,7 @@ export const CASES: OrderCase[] = [
   },
   // ---- TWAP / DCA
   {
-    name: 'TWAP: sell 6 EXKCC, at most 2 per 10 minutes', type: 'twap', side: 'sell', kind: 'KobAsk', listType: 'twap', listLabel: 'TWAP', locked: '20 KAS', escrowed: '6 EXKCC', carriers: SELL_CARRIERS,
+    name: 'TWAP: sell 6 EXKCC, at most 2 per 10 minutes', type: 'twap', side: 'sell', kind: 'KobAsk', listType: 'twap', listLabel: 'TWAP', locked: '4 KAS', escrowed: '6 EXKCC', carriers: SELL_CARRIERS,
     fields: () => ({ amount: '6', sliceAmount: '2', interval: '10', price: '0.0245' }),
     disc: { limit: kas('0.0245'), allInTotal: '0.147 KAS' }, notes: ['twap', 'gtc'],
     title: 'Sell TWAP schedule', rows: { amount: '6 EXKCC', price: kas('0.0245'), schedule: 'at most 2 EXKCC every 600 s' },
@@ -254,11 +254,11 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'DCA: buy 6 EXKCC, at most 2 per 10 minutes', type: 'dca', side: 'buy', kind: 'KobBid', listType: 'dca', listLabel: 'DCA', locked: '30.15600002 KAS', escrowed: null, carriers: { escrow: '0.15600002 KAS', deliveryCarrier: '10 KAS x 3 = 30 KAS' },
+    name: 'DCA: buy 6 EXKCC, at most 2 per 10 minutes', type: 'dca', side: 'buy', kind: 'KobBid', listType: 'dca', listLabel: 'DCA', locked: '6.15600002 KAS', escrowed: null, carriers: { escrow: '0.15600002 KAS', deliveryCarrier: '2 KAS x 3 = 6 KAS' },
     fields: () => ({ amount: '6', sliceAmount: '2', interval: '10', price: '0.026' }),
     disc: { limit: kas('0.026'), allInTotal: '0.156 KAS' }, notes: ['dca', 'gtc'],
     title: 'Buy DCA schedule', rows: { price: kas('0.026'), schedule: 'at most 2 EXKCC every 600 s' },
-    state: { price: '2600000', interval: '6000', maxFill: '200000000', tif: '0', deliveryCarrier: '1000000000' },
+    state: { price: '2600000', interval: '6000', maxFill: '200000000', tif: '0', deliveryCarrier: '200000000' },
     timing: { kind: 'gtc' },
   },
   // ---- Dutch / rising bid
@@ -271,7 +271,7 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'rising bid: buy at 0.024 rising to 0.0255 over 10 minutes', type: 'dutch', side: 'buy', kind: 'KobBid', listType: 'dutch', listLabel: 'Dutch / price decay', locked: '10.051 KAS', escrowed: null, carriers: { escrow: '0.051 KAS', deliveryCarrier: '10 KAS' },
+    name: 'rising bid: buy at 0.024 rising to 0.0255 over 10 minutes', type: 'dutch', side: 'buy', kind: 'KobBid', listType: 'dutch', listLabel: 'Dutch / price decay', locked: '2.051 KAS', escrowed: null, carriers: { escrow: '0.051 KAS', deliveryCarrier: '2 KAS' },
     fields: () => ({ amount: '2', price: '0.024', priceEnd: '0.0255', duration: '10' }),
     disc: { expected: kas('0.024'), worst: kas('0.0255'), allInPrice: kas('0.0255') }, notes: ['rising', 'auction'],
     title: 'Buy rising-bid order', rows: { price: kas('0.024'), auction: `${kas('0.0255')} | the price moves over 600 s` },
@@ -288,12 +288,12 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'stop-market buy', type: 'stopMarket', side: 'buy', kind: 'KobCondBid', listType: 'stop', listLabel: 'Stop', locked: '10.07662 KAS', escrowed: null,
-    carriers: { escrow: '0.05562 KAS', deliveryCarrier: '10 KAS', keeperReserve: '0.021 KAS' },
+    name: 'stop-market buy', type: 'stopMarket', side: 'buy', kind: 'KobCondBid', listType: 'stop', listLabel: 'Stop', locked: '2.07662 KAS', escrowed: null,
+    carriers: { escrow: '0.05562 KAS', deliveryCarrier: '2 KAS', keeperReserve: '0.021 KAS' },
     fields: () => ({ amount: '2', stop: '0.027' }),
     disc: { stop: kas('0.027'), stopWorst: kas('0.02781'), trigger: '5 s', keeper: '0.021 KAS x 1' }, notes: ['stopTrigger', 'stopAuction', 'keeperReserve'],
     title: 'Buy stop order', rows: { stop: kas('0.027'), band: '3% band, 30 s auction', armed: 'not yet armed' },
-    state: { stopPrice: '2700000', tpPrice: '0', slipBps: '300', bandDaa: '300', armed: '0', keeperTip: '2100000', amountLeft: '200000000', deliveryCarrier: '1000000000' },
+    state: { stopPrice: '2700000', tpPrice: '0', slipBps: '300', bandDaa: '300', armed: '0', keeperTip: '2100000', amountLeft: '200000000', deliveryCarrier: '200000000' },
     timing: { kind: 'gtc' },
   },
   {
@@ -305,8 +305,8 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'stop-limit buy: the band is the distance to the limit', type: 'stopLimit', side: 'buy', kind: 'KobCondBid', listType: 'stop', listLabel: 'Stop', locked: '10.075999 KAS', escrowed: null,
-    carriers: { escrow: '0.054999 KAS', deliveryCarrier: '10 KAS', keeperReserve: '0.021 KAS' },
+    name: 'stop-limit buy: the band is the distance to the limit', type: 'stopLimit', side: 'buy', kind: 'KobCondBid', listType: 'stop', listLabel: 'Stop', locked: '2.075999 KAS', escrowed: null,
+    carriers: { escrow: '0.054999 KAS', deliveryCarrier: '2 KAS', keeperReserve: '0.021 KAS' },
     fields: () => ({ amount: '2', stop: '0.027', limit: '0.0275' }),
     disc: { stop: kas('0.027'), stopWorst: kas('0.0274995'), trigger: '1.85% band' }, notes: ['stopLimitMayNotFill'],
     title: 'Buy stop order', rows: { stop: kas('0.027'), band: '1.85% band, 30 s auction' },
@@ -322,12 +322,12 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'trailing stop buy', type: 'trailingStop', side: 'buy', kind: 'KobCondBid', listType: 'trailing', listLabel: 'Trailing stop', locked: '10.49662 KAS', escrowed: null,
-    carriers: { escrow: '0.05562 KAS', deliveryCarrier: '10 KAS', keeperReserve: '0.021 KAS x 21 = 0.441 KAS' },
+    name: 'trailing stop buy', type: 'trailingStop', side: 'buy', kind: 'KobCondBid', listType: 'trailing', listLabel: 'Trailing stop', locked: '2.49662 KAS', escrowed: null,
+    carriers: { escrow: '0.05562 KAS', deliveryCarrier: '2 KAS', keeperReserve: '0.021 KAS x 21 = 0.441 KAS' },
     fields: () => ({ amount: '2', stop: '0.027', 'trail.step': '0.0005', 'trail.gap': '0.001' }),
     disc: { stop: kas('0.027'), trail: 'step 0.0005 KAS, gap 0.001 KAS', keeper: '0.021 KAS x 21' }, notes: ['trailing', 'keeperReserve'],
     title: 'Buy trailing stop', rows: { stop: kas('0.027'), trail: 'step 0.0005 KAS, gap 0.001 KAS, one update per 10 min at most' },
-    state: { stopPrice: '2700000', trailStep: '50000', trailGap: '100000', trailWait: '6000', deliveryCarrier: '1000000000' },
+    state: { stopPrice: '2700000', trailStep: '50000', trailGap: '100000', trailWait: '6000', deliveryCarrier: '200000000' },
     timing: { kind: 'gtc' },
   },
   // ---- take-profit / OCO
@@ -335,17 +335,17 @@ export const CASES: OrderCase[] = [
     name: 'take-profit sell', type: 'takeProfit', side: 'sell', kind: 'KobCondAsk', listType: 'take-profit', listLabel: 'Take-profit', ...SELL,
     fields: () => ({ amount: '2', price: '0.027' }),
     disc: { takeProfit: kas('0.027'), allInPrice: kas('0.027'), allInTotal: '0.054 KAS' }, notes: ['takeProfitLeg', 'carrierReturned'],
-    title: 'Sell take-profit order', rows: { price: kas('0.027'), allIn: kas('0.027'), value: '10 KAS' },
+    title: 'Sell take-profit order', rows: { price: kas('0.027'), allIn: kas('0.027'), value: '2 KAS' },
     state: { tpPrice: '2700000', stopPrice: '0', slipBps: '0', amountLeft: '200000000', keeperTip: '0' },
     timing: { kind: 'gtc' },
   },
   {
-    name: 'take-profit buy', type: 'takeProfit', side: 'buy', kind: 'KobCondBid', listType: 'take-profit', listLabel: 'Take-profit', locked: '10.046 KAS', escrowed: null,
-    carriers: { escrow: '0.046 KAS', deliveryCarrier: '10 KAS' },
+    name: 'take-profit buy', type: 'takeProfit', side: 'buy', kind: 'KobCondBid', listType: 'take-profit', listLabel: 'Take-profit', locked: '2.046 KAS', escrowed: null,
+    carriers: { escrow: '0.046 KAS', deliveryCarrier: '2 KAS' },
     fields: () => ({ amount: '2', price: '0.023' }),
     disc: { takeProfit: kas('0.023'), allInTotal: '0.046 KAS' }, notes: ['takeProfitLeg'],
     title: 'Buy take-profit order', rows: { price: kas('0.023'), allIn: kas('0.023') },
-    state: { tpPrice: '2300000', stopPrice: '0', amountLeft: '200000000', deliveryCarrier: '1000000000' },
+    state: { tpPrice: '2300000', stopPrice: '0', amountLeft: '200000000', deliveryCarrier: '200000000' },
     timing: { kind: 'gtc' },
   },
   {
@@ -357,38 +357,38 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'OCO buy: take-profit below, stop above', type: 'oco', side: 'buy', kind: 'KobCondBid', listType: 'oco', listLabel: 'OCO', locked: '10.07662 KAS', escrowed: null,
-    carriers: { escrow: '0.05562 KAS', deliveryCarrier: '10 KAS', keeperReserve: '0.021 KAS' },
+    name: 'OCO buy: take-profit below, stop above', type: 'oco', side: 'buy', kind: 'KobCondBid', listType: 'oco', listLabel: 'OCO', locked: '2.07662 KAS', escrowed: null,
+    carriers: { escrow: '0.05562 KAS', deliveryCarrier: '2 KAS', keeperReserve: '0.021 KAS' },
     fields: () => ({ amount: '2', takeProfit: '0.023', stop: '0.027' }),
     disc: { takeProfit: kas('0.023'), stop: kas('0.027'), stopWorst: kas('0.02781') }, notes: ['oco', 'partialFillsKeepLegs'],
     title: 'Buy OCO order (take-profit and stop)', rows: { price: kas('0.023'), stop: kas('0.027') },
-    state: { tpPrice: '2300000', stopPrice: '2700000', slipBps: '300', amountLeft: '200000000', deliveryCarrier: '1000000000' },
+    state: { tpPrice: '2300000', stopPrice: '2700000', slipBps: '300', amountLeft: '200000000', deliveryCarrier: '200000000' },
     timing: { kind: 'gtc' },
   },
   // ---- IFD / IFO
   {
-    name: 'IFD buy-first: buy 0.0245, then sell 0.026', type: 'ifd', side: 'buy', kind: 'KobIfdBid', listType: 'ifd', listLabel: 'IFD', locked: '80.049 KAS', escrowed: null,
-    carriers: { escrow: '0.049 KAS', deliveryCarrier: '10 KAS x 4 = 40 KAS', exitCarrier: '10 KAS x 4 = 40 KAS' },
+    name: 'IFD buy-first: buy 0.0245, then sell 0.026', type: 'ifd', side: 'buy', kind: 'KobIfdBid', listType: 'ifd', listLabel: 'IFD', locked: '16.049 KAS', escrowed: null,
+    carriers: { escrow: '0.049 KAS', deliveryCarrier: '2 KAS x 4 = 8 KAS', exitCarrier: '2 KAS x 4 = 8 KAS' },
     fields: () => ({ amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' }),
     disc: { limit: kas('0.0245'), allInTotal: '0.049 KAS', minFill: '0.5 EXKCC', entryFills: 'at most 4', exitMinFill: '0.5 EXKCC', exitTakeProfit: kas('0.026') }, notes: ['ifd', 'position', 'buyFirst', 'minFill', 'exitGtc'],
-    title: 'Buy IFD entry', rows: { amount: '2 EXKCC', price: kas('0.0245'), allIn: kas('0.0245'), minFill: '0.5 EXKCC', exitCarrier: '10 KAS', deliveryCarrier: '10 KAS', value: '80.049 KAS' },
+    title: 'Buy IFD entry', rows: { amount: '2 EXKCC', price: kas('0.0245'), allIn: kas('0.0245'), minFill: '0.5 EXKCC', exitCarrier: '2 KAS', deliveryCarrier: '2 KAS', value: '16.049 KAS' },
     exit: { title: 'Exit created after each entry fill: Sell take-profit order', rows: { amount: '2 EXKCC', price: kas('0.026'), expiry: 'when the exit is created' }, state: { kind: 'KobCondAsk', fields: { tpPrice: '2600000', stopPrice: '0' } } },
-    state: { price: '2450000', amountLeft: '200000000', minFill: '50000000', entryStop: '0', rptAmount: '0', exitCarrier: '1000000000', deliveryCarrier: '1000000000' },
+    state: { price: '2450000', amountLeft: '200000000', minFill: '50000000', entryStop: '0', rptAmount: '0', exitCarrier: '200000000', deliveryCarrier: '200000000' },
     timing: { kind: 'gtc' },
   },
   {
-    name: 'IFD sell-first: sell 0.026, then buy back 0.0245', type: 'ifd', side: 'sell', kind: 'KobIfdAsk', listType: 'ifd', listLabel: 'IFD', locked: '60.00000003 KAS', escrowed: '2 EXKCC',
-    carriers: { orderCarrier: '10 KAS', exitCarrier: '10 KAS x 4 = 40 KAS', tokenCarrier: '10 KAS' },
+    name: 'IFD sell-first: sell 0.026, then buy back 0.0245', type: 'ifd', side: 'sell', kind: 'KobIfdAsk', listType: 'ifd', listLabel: 'IFD', locked: '12.00000003 KAS', escrowed: '2 EXKCC',
+    carriers: { orderCarrier: '2 KAS', exitCarrier: '2 KAS x 4 = 8 KAS', tokenCarrier: '2 KAS' },
     fields: () => ({ amount: '2', price: '0.026', 'exit.takeProfit': '0.0245' }),
     disc: { limit: kas('0.026'), allInTotal: '0.052 KAS', minFill: '0.5 EXKCC', entryFills: 'at most 4', exitMinFill: '0.5 EXKCC', exitTakeProfit: kas('0.0245'), prefund: kas('0') }, notes: ['ifd', 'position', 'sellFirst', 'minFill', 'prefund'],
-    title: 'Sell IFD entry', rows: { amount: '2 EXKCC', price: kas('0.026'), minFill: '0.5 EXKCC', exitCarrier: '10 KAS', value: '50.00000003 KAS' },
+    title: 'Sell IFD entry', rows: { amount: '2 EXKCC', price: kas('0.026'), minFill: '0.5 EXKCC', exitCarrier: '2 KAS', value: '10.00000003 KAS' },
     exit: { title: 'Exit created after each entry fill: Buy take-profit order', rows: { amount: '2 EXKCC', price: kas('0.0245') }, state: { kind: 'KobCondBid', fields: { tpPrice: '2450000', stopPrice: '0' } } },
-    state: { price: '2600000', amountLeft: '200000000', minFill: '50000000', prefund: '0', exitCarrier: '1000000000', rptAmount: '0' },
+    state: { price: '2600000', amountLeft: '200000000', minFill: '50000000', prefund: '0', exitCarrier: '200000000', rptAmount: '0' },
     timing: { kind: 'gtc' },
   },
   {
-    name: 'IFD buy-first with a stop exit', type: 'ifd', side: 'buy', kind: 'KobIfdBid', listType: 'ifd', listLabel: 'IFD', locked: '80.049 KAS', escrowed: null,
-    carriers: { escrow: '0.049 KAS', deliveryCarrier: '10 KAS x 4 = 40 KAS', exitCarrier: '10 KAS x 4 = 40 KAS' },
+    name: 'IFD buy-first with a stop exit', type: 'ifd', side: 'buy', kind: 'KobIfdBid', listType: 'ifd', listLabel: 'IFD', locked: '16.049 KAS', escrowed: null,
+    carriers: { escrow: '0.049 KAS', deliveryCarrier: '2 KAS x 4 = 8 KAS', exitCarrier: '2 KAS x 4 = 8 KAS' },
     fields: () => ({ amount: '2', price: '0.0245', 'exit.kind': 'stop', 'exit.stop': '0.023' }),
     disc: { exitStop: kas('0.023'), exitStopWorst: kas('0.02231') }, notes: ['ifd', 'exitStop', 'triggerExposure'],
     title: 'Buy IFD entry', rows: { price: kas('0.0245') },
@@ -397,8 +397,8 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'IFO buy-first (bracket): entry, then take-profit 0.026 or stop 0.023', type: 'ifo', side: 'buy', kind: 'KobIfdBid', listType: 'ifo', listLabel: 'IFO', locked: '80.049 KAS', escrowed: null,
-    carriers: { escrow: '0.049 KAS', deliveryCarrier: '10 KAS x 4 = 40 KAS', exitCarrier: '10 KAS x 4 = 40 KAS' },
+    name: 'IFO buy-first (bracket): entry, then take-profit 0.026 or stop 0.023', type: 'ifo', side: 'buy', kind: 'KobIfdBid', listType: 'ifo', listLabel: 'IFO', locked: '16.049 KAS', escrowed: null,
+    carriers: { escrow: '0.049 KAS', deliveryCarrier: '2 KAS x 4 = 8 KAS', exitCarrier: '2 KAS x 4 = 8 KAS' },
     fields: () => ({ amount: '2', price: '0.0245', 'exit.takeProfit': '0.026', 'exit.stop': '0.023' }),
     disc: { exitTakeProfit: kas('0.026'), exitStop: kas('0.023'), exitStopWorst: kas('0.02231') }, notes: ['ifo', 'position', 'buyFirst', 'exitStop'],
     title: 'Buy IFO entry', rows: { price: kas('0.0245'), minFill: '0.5 EXKCC' },
@@ -407,8 +407,8 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'IFO sell-first (bracket): the prefund covers a stop buy-back above the entry', type: 'ifo', side: 'sell', kind: 'KobIfdAsk', listType: 'ifo', listLabel: 'IFO', locked: '60.00362003 KAS', escrowed: '2 EXKCC',
-    carriers: { orderCarrier: '10 KAS', prefund: '0.00362003 KAS', exitCarrier: '10 KAS x 4 = 40 KAS', tokenCarrier: '10 KAS' },
+    name: 'IFO sell-first (bracket): the prefund covers a stop buy-back above the entry', type: 'ifo', side: 'sell', kind: 'KobIfdAsk', listType: 'ifo', listLabel: 'IFO', locked: '12.00362003 KAS', escrowed: '2 EXKCC',
+    carriers: { orderCarrier: '2 KAS', prefund: '0.00362003 KAS', exitCarrier: '2 KAS x 4 = 8 KAS', tokenCarrier: '2 KAS' },
     fields: () => ({ amount: '2', price: '0.026', 'exit.takeProfit': '0.0245', 'exit.stop': '0.027' }),
     disc: { exitTakeProfit: kas('0.0245'), exitStop: kas('0.027'), exitStopWorst: kas('0.02781'), prefund: kas('0.00181') }, notes: ['ifo', 'sellFirst', 'prefund'],
     title: 'Sell IFO entry', rows: { price: kas('0.026'), prefund: kas('0.00181') },
@@ -418,8 +418,8 @@ export const CASES: OrderCase[] = [
   },
   // ---- IFD with a stop entry
   {
-    name: 'IFD with a stop entry, buy-first', type: 'ifd', side: 'buy', kind: 'KobIfdBid', listType: 'ifd', listLabel: 'IFD', locked: '80.076 KAS', escrowed: null,
-    carriers: { escrow: '0.055 KAS', deliveryCarrier: '10 KAS x 4 = 40 KAS', exitCarrier: '10 KAS x 4 = 40 KAS', keeperReserve: '0.021 KAS' },
+    name: 'IFD with a stop entry, buy-first', type: 'ifd', side: 'buy', kind: 'KobIfdBid', listType: 'ifd', listLabel: 'IFD', locked: '16.076 KAS', escrowed: null,
+    carriers: { escrow: '0.055 KAS', deliveryCarrier: '2 KAS x 4 = 8 KAS', exitCarrier: '2 KAS x 4 = 8 KAS', keeperReserve: '0.021 KAS' },
     fields: () => ({ amount: '2', price: '0.0275', 'entry.stop': '0.027', 'exit.takeProfit': '0.029' }),
     disc: { entryStop: kas('0.027'), exitTakeProfit: kas('0.029'), expected: kas('0.027'), worst: kas('0.0275') }, notes: ['ifd', 'stopEntry', 'stopEntryAuction'],
     title: 'Buy IFD stop entry', rows: { price: kas('0.0275'), entryStop: `${kas('0.027')} | then a 30 s auction to the limit` },
@@ -428,8 +428,8 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'IFD with a stop entry, sell-first', type: 'ifd', side: 'sell', kind: 'KobIfdAsk', listType: 'ifd', listLabel: 'IFD', locked: '60.00000003 KAS', escrowed: '2 EXKCC',
-    carriers: { orderCarrier: '10 KAS', exitCarrier: '10 KAS x 4 = 40 KAS', tokenCarrier: '10 KAS' },
+    name: 'IFD with a stop entry, sell-first', type: 'ifd', side: 'sell', kind: 'KobIfdAsk', listType: 'ifd', listLabel: 'IFD', locked: '12.00000003 KAS', escrowed: '2 EXKCC',
+    carriers: { orderCarrier: '2 KAS', exitCarrier: '2 KAS x 4 = 8 KAS', tokenCarrier: '2 KAS' },
     fields: () => ({ amount: '2', price: '0.0225', 'entry.stop': '0.023', 'exit.takeProfit': '0.021' }),
     disc: { entryStop: kas('0.023'), exitTakeProfit: kas('0.021'), expected: kas('0.023'), worst: kas('0.0225') }, notes: ['ifd', 'stopEntry', 'sellFirst'],
     title: 'Sell IFD stop entry', rows: { price: kas('0.0225'), entryStop: `${kas('0.023')} | then a 30 s auction to the limit` },
@@ -442,18 +442,18 @@ export const CASES: OrderCase[] = [
   // loss, so the cases set a 1 EXKCC minimum fill (merge tip 0.01 KAS per token buy-first, 0.015 sell-first; a 0.0155 KAS spread is the smallest
   // profitable one here).
   {
-    name: 'repeat IFD buy-first, default unlimited (within 90 days)', type: 'repeatIfd', side: 'buy', kind: 'KobIfdBid', listType: 'repeat', listLabel: 'Repeat IFD', locked: '50.049 KAS', escrowed: null,
-    carriers: { escrow: '0.049 KAS', deliveryCarrier: '10 KAS x 2 = 20 KAS', exitCarrier: '10 KAS x 3 = 30 KAS' },
+    name: 'repeat IFD buy-first, default unlimited (within 90 days)', type: 'repeatIfd', side: 'buy', kind: 'KobIfdBid', listType: 'repeat', listLabel: 'Repeat IFD', locked: '10.049 KAS', escrowed: null,
+    carriers: { escrow: '0.049 KAS', deliveryCarrier: '2 KAS x 2 = 4 KAS', exitCarrier: '2 KAS x 3 = 6 KAS' },
     fields: () => ({ amount: '2', minFill: '1', price: '0.0245', 'exit.takeProfit': '0.04' }),
     disc: { repeat: 'unlimited (within 90 days)', profitPerToken: kas('0.0055'), exitTakeProfit: kas('0.04'), exitTakeProfitAllIn: kas('0.03') }, notes: ['repeat', 'repeatUnlimited', 'repeatReBuys', 'mergeTip', 'cancelPosition'],
     title: 'Buy repeat IFD entry', rows: { repeat: 'unlimited (within 90 days)', price: kas('0.0245') },
     exit: { title: 'Exit created after each entry fill: Sell take-profit order', rows: { price: kas('0.04'), allIn: kas('0.03'), tip: kas('0.01') }, state: { kind: 'KobCondAsk', fields: { tpPrice: '4000000', tip: '1000000' } } },
-    state: { price: '2450000', amountLeft: '200000000', rptAmount: '2000000000000001', exitCarrier: '1000000000' },
+    state: { price: '2450000', amountLeft: '200000000', rptAmount: '2000000000000001', exitCarrier: '200000000' },
     timing: { kind: 'gtc' },
   },
   {
-    name: 'repeat IFD buy-first with an explicit count of 3', type: 'repeatIfd', side: 'buy', kind: 'KobIfdBid', listType: 'repeat', listLabel: 'Repeat IFD', locked: '50.049 KAS', escrowed: null,
-    carriers: { escrow: '0.049 KAS', deliveryCarrier: '10 KAS x 2 = 20 KAS', exitCarrier: '10 KAS x 3 = 30 KAS' },
+    name: 'repeat IFD buy-first with an explicit count of 3', type: 'repeatIfd', side: 'buy', kind: 'KobIfdBid', listType: 'repeat', listLabel: 'Repeat IFD', locked: '10.049 KAS', escrowed: null,
+    carriers: { escrow: '0.049 KAS', deliveryCarrier: '2 KAS x 2 = 4 KAS', exitCarrier: '2 KAS x 3 = 6 KAS' },
     fields: () => ({ amount: '2', minFill: '1', price: '0.0245', 'exit.takeProfit': '0.04', 'repeat.count': '3' }),
     disc: { repeat: '3 times | 2 EXKCC per cycle', profitPerToken: kas('0.0055') }, notes: ['repeat', 'repeatCounted', 'repeatReBuys'],
     title: 'Buy repeat IFD entry', rows: { repeat: 're-arms up to 3 times (2 EXKCC per cycle)' },
@@ -462,8 +462,8 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'repeat IFD sell-first, default unlimited', type: 'repeatIfd', side: 'sell', kind: 'KobIfdAsk', listType: 'repeat', listLabel: 'Repeat IFD', locked: '40.00000001 KAS', escrowed: '2 EXKCC',
-    carriers: { orderCarrier: '10 KAS', exitCarrier: '10 KAS x 2 = 20 KAS', tokenCarrier: '10 KAS' },
+    name: 'repeat IFD sell-first, default unlimited', type: 'repeatIfd', side: 'sell', kind: 'KobIfdAsk', listType: 'repeat', listLabel: 'Repeat IFD', locked: '8.00000001 KAS', escrowed: '2 EXKCC',
+    carriers: { orderCarrier: '2 KAS', exitCarrier: '2 KAS x 2 = 4 KAS', tokenCarrier: '2 KAS' },
     fields: () => ({ amount: '2', minFill: '1', price: '0.04', 'exit.takeProfit': '0.0245' }),
     disc: { repeat: 'unlimited (within 90 days)', profitPerToken: kas('0.0005'), exitTakeProfitAllIn: kas('0.0395') }, notes: ['repeat', 'repeatUnlimited', 'repeatReSells', 'prefund'],
     title: 'Sell repeat IFD entry', rows: { repeat: 'unlimited (within 90 days)', price: kas('0.04') },
@@ -472,8 +472,8 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'repeat IFO buy-first, default unlimited', type: 'repeatIfo', side: 'buy', kind: 'KobIfdBid', listType: 'repeat', listLabel: 'Repeat IFD', locked: '50.049 KAS', escrowed: null,
-    carriers: { escrow: '0.049 KAS', deliveryCarrier: '10 KAS x 2 = 20 KAS', exitCarrier: '10 KAS x 3 = 30 KAS' },
+    name: 'repeat IFO buy-first, default unlimited', type: 'repeatIfo', side: 'buy', kind: 'KobIfdBid', listType: 'repeat', listLabel: 'Repeat IFD', locked: '10.049 KAS', escrowed: null,
+    carriers: { escrow: '0.049 KAS', deliveryCarrier: '2 KAS x 2 = 4 KAS', exitCarrier: '2 KAS x 3 = 6 KAS' },
     fields: () => ({ amount: '2', minFill: '1', price: '0.0245', 'exit.takeProfit': '0.04', 'exit.stop': '0.023' }),
     disc: { repeat: 'unlimited (within 90 days)', exitStop: kas('0.023'), exitStopWorst: kas('0.02231') }, notes: ['ifo', 'repeat', 'repeatUnlimited', 'repeatStopLossEnds'],
     title: 'Buy repeat IFO entry', rows: { repeat: 'unlimited (within 90 days)' },
@@ -482,8 +482,8 @@ export const CASES: OrderCase[] = [
     timing: { kind: 'gtc' },
   },
   {
-    name: 'repeat IFO sell-first with an explicit count of 3', type: 'repeatIfo', side: 'sell', kind: 'KobIfdAsk', listType: 'repeat', listLabel: 'Repeat IFD', locked: '40.05300001 KAS', escrowed: '2 EXKCC',
-    carriers: { orderCarrier: '10 KAS', prefund: '0.05300001 KAS', exitCarrier: '10 KAS x 2 = 20 KAS', tokenCarrier: '10 KAS' },
+    name: 'repeat IFO sell-first with an explicit count of 3', type: 'repeatIfo', side: 'sell', kind: 'KobIfdAsk', listType: 'repeat', listLabel: 'Repeat IFD', locked: '8.05300001 KAS', escrowed: '2 EXKCC',
+    carriers: { orderCarrier: '2 KAS', prefund: '0.05300001 KAS', exitCarrier: '2 KAS x 2 = 4 KAS', tokenCarrier: '2 KAS' },
     fields: () => ({ amount: '2', minFill: '1', price: '0.04', 'exit.takeProfit': '0.0245', 'exit.stop': '0.05', 'repeat.count': '3' }),
     disc: { repeat: '3 times | 2 EXKCC per cycle', exitStop: kas('0.05'), exitStopWorst: kas('0.0515'), prefund: kas('0.0265') }, notes: ['ifo', 'repeat', 'repeatCounted', 'repeatReSells'],
     title: 'Sell repeat IFO entry', rows: { repeat: 're-arms up to 3 times (2 EXKCC per cycle)', prefund: kas('0.0265') },

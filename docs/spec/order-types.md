@@ -108,7 +108,7 @@ refuse more): a pair order whose KRON amount or custody exceeds that is refused.
   requires `minFill > 0`.
 
 Why: every fill of a bid-side order (`KobBid`, `KobCondBid`, `KobIfdBid`, the exits of `KobIfdAsk`, every pair order's
-delivery) moves a `deliveryCarrier` (10 KAS by default) from the maker's funds onto a new token UTXO, every fill of an
+delivery) moves a `deliveryCarrier` (2 KAS by default) from the maker's funds onto a new token UTXO, every fill of an
 if-done entry also creates an exit with its own carrier, and every fill restarts a TWAP / DCA interval. Without a minimum
 a griefer could split an order into 1-base-unit fills, turning the maker's funds into carriers on dust token UTXOs,
 fragmenting the maker's tokens and stretching a TWAP. For a non-repeating order `minFill` bounds the number of fills
@@ -119,9 +119,12 @@ re-armed, down to the exit's own `minFill`; the bound holds per cycle, not per e
 its FOK completeness and the end of a GTC bid are exact in value terms (it ends when less than one minimum fill of buying
 power is left: the unfilled remainder, worth less than one minimum fill plus one sompi, returns to the maker).
 
-Wallet default: the amount worth 10 KAS (`DEFAULT_MIN_FILL_SOMPI`, one default carrier) at the order's limit price, at
-least 1 base unit and at most the order's amount (a pair order: the amount of A worth 10 KAS on A's KAS book); IOC, FOK
-and market orders 1 base unit; if-done entries `⌈amount / 4⌉` (*Defaults*).
+Wallet default: the amount worth 10 KAS (`DEFAULT_MIN_FILL_SOMPI`, a notional independent of the carrier) at the order's
+limit price, at least 1 base unit and at most the order's amount (a pair order: the amount of A worth 10 KAS on A's KAS
+book); IOC, FOK and market orders 1 base unit; if-done entries `⌈amount / 4⌉` (*Defaults*). At the default carrier the
+carriers a filler can make the maker lock are at most 20% of the order's notional, and one fill's fee (paid by the filler)
+is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fill (KaspaCom on both sides the highest;
+`DEFAULT_MIN_FILL_SOMPI`).
 
 ## Common semantics
 
@@ -444,7 +447,7 @@ KAS price series; a netted or inventory pair fill shows as volume only.
 | Parameter | Default |
 |---|---|
 | tip | 0 |
-| minimum fill (`minFill`) | the amount worth 10 KAS (`DEFAULT_MIN_FILL_SOMPI`) at the limit price, at least 1 base unit, at most the amount (a pair order: the amount of A worth 10 KAS on A's KAS book, `default_min_fill_pair`; `⌈amount / 4⌉` without a KAS quote of A); IOC / FOK / market orders 1 base unit; if-done entries `⌈amount / 4⌉` |
+| minimum fill (`minFill`) | the amount worth 10 KAS (`DEFAULT_MIN_FILL_SOMPI`, a notional, not a carrier) at the limit price, at least 1 base unit, at most the amount (a pair order: the amount of A worth 10 KAS on A's KAS book, `default_min_fill_pair`; `⌈amount / 4⌉` without a KAS quote of A); IOC / FOK / market orders 1 base unit; if-done entries `⌈amount / 4⌉` |
 | market auction (token and pair) | 3% bound over 200 DAA (20 s), activation +30 DAA, IOC life 300 DAA |
 | stop band / auction | 3% (`slipBps` 300) over 300 DAA (30 s) |
 | trigger rest / threshold (per order, the wallet exposes both) | 5 s (`minRestDaa` 50) / `minTouch` = the order's own `minFill` (presets: min fill / 25% / 50% / 100% of the order's own amount, or custom); a pair stop in mode 0 also needs `⌈minTouch·stop / scale(A)⌉` of B traded |
@@ -452,5 +455,5 @@ KAS price series; a netted or inventory pair fill shows as volume only.
 | refund tip | per token program (a pair order: the larger of its two programs): to be measured (pair phase) (`data/keeper_tips.json`, `matcher.md` §5) |
 | day order | until 00:00 UTC |
 | GTC | 90 days idle (renew before day 85) |
-| carriers | 10 KAS per covenant UTXO; never below the floor of a token output (KaspaCom KCC20 0.2.5: 0.5 KAS; every other supported program: none) nor the KIP-9 dust bound of 0.02 KAS (`TemplateId::min_token_output`, `tx::DUST_OUTPUT_MIN`): orders and builders refuse less |
+| carriers | 2 KAS per covenant UTXO (`DEFAULT_ORDER_CARRIER`; a pair entry's `exitCarrier` also funds its exit's deliveries, `IfdPairState::exit_carrier_needed`): the relay fee of no transaction shape rises below 10 KAS (storage mass is not part of it), and at 2 KAS the largest shape commits 35% of the block storage limit (1 KAS: 71%; 0.5 KAS refuses pair fills with evidence or netting); the opt-in storage-inclusive priority fee rises by at most 0.13 KAS (`tests/carrier_fees.rs`). Never below the floor of a token output (KaspaCom KCC20 0.2.5: 0.5 KAS; every other supported program: none) nor the KIP-9 dust bound of 0.02 KAS (`TemplateId::min_token_output`, `tx::DUST_OUTPUT_MIN`): orders and builders refuse less |
 | pair orders | the typed amount of A exactly (no rounding of the size); `price` = the displayed price (B per A) in base units of B per whole A, rounded in the maker's favour (an ask UP, a bid DOWN); `tip` 0 (KAS, sompi per whole A, prefunded); `deliveryCarrier` (at least the floor of a token output of the token delivered) prefunded for `⌈amount / minFill⌉` fills (unused carriers return with the last fill, the refund or the cancel); a bid's escrow and a sell-first entry's prefund as above; pair market order: a `KobPair` IOC auction from the touch (the best of the opposite pair orders and the route level of the two KAS books) to the touch ∓ 3% over 200 DAA (`matcher.md` §10.14) |

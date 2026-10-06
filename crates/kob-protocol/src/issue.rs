@@ -60,8 +60,11 @@ pub const OWNER_SCHEMES_ENABLED: [u8; 5] = crate::kcc2::ASSIGNED;
 /// Largest supply the tool issues. Order arithmetic multiplies token amounts by prices
 /// terms in 64-bit script integers, so KOB keeps token amounts far below `i64::MAX`.
 pub const MAX_SUPPLY: u64 = 2_900_000_000_000_000_000;
-/// Default KAS carried by every token UTXO of the genesis group: 10 KAS, the KOB order carrier. Storage mass
-/// grows as 1 / value per output, so 1 KAS outputs would cap a genesis group at about 2 outputs.
+/// Default KAS carried by every token UTXO of the genesis group: 10 KAS. Not the order carrier
+/// (`defaults::DEFAULT_ORDER_CARRIER`, 2 KAS): a genesis group puts many token outputs in one transaction, and a token
+/// output's KIP-9 storage mass is `4 × 10^12 / carrier` (plurality 2) against the [`MAX_STANDARD_MASS`] this tool keeps
+/// a genesis within, so 10 KAS outputs fit 24 holders and 2 KAS outputs only 5 (fewer than the program's 8 token
+/// outputs per transaction; `genesis_holders_at_the_default_carrier`). The relay fee does not depend on it.
 pub const DEFAULT_CARRIER: u64 = 1_000_000_000;
 /// Default fee rate, sompi per gram: the node's relay floor `rate * max(compute, 2 * size)`
 /// ([`crate::tx::min_fee`]; storage mass needs no relay fee).
@@ -1121,6 +1124,25 @@ mod tests {
         assert!(plan.warnings.iter().any(|w| w.contains("9 genesis outputs exceed the 8-output")), "{:?}", plan.warnings);
         let too_many: Vec<Holder> = (0..65).map(|i| Holder::new([i as u8 + 1; 32], 0, 1)).collect();
         assert!(matches!(spec(too_many, 65).validate().unwrap_err(), IssueError::Invalid(_)));
+    }
+
+    /// Why the genesis carrier stays at 10 KAS while the order carrier is 2 KAS: the most holders a genesis can have within
+    /// MAX_STANDARD_MASS (storage mass `4 × 10^12 / carrier` per token output).
+    #[test]
+    fn genesis_holders_at_the_default_carrier() {
+        let most = |carrier: u64| {
+            (1..=MAX_GENESIS_OUTPUTS)
+                .take_while(|&n| {
+                    let holders: Vec<Holder> = (0..n).map(|i| Holder::new([i as u8 + 1; 32], 0, 1)).collect();
+                    let mut s = spec(holders, n as u64);
+                    s.carrier = carrier;
+                    build_genesis(&s).is_ok()
+                })
+                .last()
+                .unwrap_or(0)
+        };
+        assert_eq!(most(DEFAULT_CARRIER), 24);
+        assert_eq!(most(crate::defaults::DEFAULT_ORDER_CARRIER), 5);
     }
 
     #[test]

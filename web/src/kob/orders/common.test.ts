@@ -4,7 +4,7 @@ import {
   makeDisclosure, refundTipFor, tokenCarrierFloor, usableTokenUtxos, verifyBuilt,
 } from './common';
 import { ISSUE_CATALOG, customIssue, hasError, issue } from './common-issues';
-import { KAS, MAKER_PK, TOK, makeEnv, tokenUtxo } from '../../testing/fixtures';
+import { FIXTURE_CARRIER, KAS, MAKER_PK, TOK, makeEnv, tokenUtxo } from '../../testing/fixtures';
 import type { OrderState } from '../types';
 import { ceilDiv } from '../units';
 
@@ -26,7 +26,7 @@ describe('bid sizing (kob-protocol BidState::escrow)', () => {
     expect(bidEscrowOf(env.kob, bid, 5n * TOK, 5n)).toBe(6_225_500_004n); // golden create.bid.dca
     // an amount that is not a multiple of the scale: the budget is rounded up
     expect(env.kob.bidUsed(bid, 1_234n)).toBe(ceilDiv(1_234n * 245_100_000n, 1_000n));
-    expect(bidEscrowOf(env.kob, bid, 1_234n, 2n)).toBe(ceilDiv(1_234n * 245_100_000n, 1_000n) + 1n + 2n * DEFAULT_CARRIER);
+    expect(bidEscrowOf(env.kob, bid, 1_234n, 2n)).toBe(ceilDiv(1_234n * 245_100_000n, 1_000n) + 1n + 2n * FIXTURE_CARRIER);
     const reserved = makeBid(env, { minFill: 1n, price: 1n, expiryDaa: 99n, deliveryCarrier: 2n, reserve: 3n });
     expect(bidEscrowOf(env.kob, reserved, 1_000n, 1n)).toBe(1n + 2n + 3n);
   });
@@ -43,7 +43,8 @@ describe('bid sizing (kob-protocol BidState::escrow)', () => {
 
 describe('state builders', () => {
   it('makeAsk / makeBid carry the token identity and its scale, prices per whole token as given, and default sensibly', () => {
-    const env = makeEnv();
+    // the wallet default carrier (no carrier in the env)
+    const env = makeEnv({ carrier: null });
     const a = makeAsk(env, { amount: 3n * TOK, minFill: 500n, price: P, expiryDaa: 99n });
     expect(a).toEqual({
       kind: 'KobAsk',
@@ -87,7 +88,7 @@ describe('token selection helpers', () => {
 describe('buildCreate / verifyBuilt', () => {
   const askSpec = (env = makeEnv(), amount = 4n * TOK) => {
     const order: OrderState = makeAsk(env, { amount, minFill: TOK, price: P, expiryDaa: env.clock.daa + 5_000n });
-    return { env, order, spec: { order, value: DEFAULT_CARRIER, tokenAmount: amount } };
+    return { env, order, spec: { order, value: carrierOf(env), tokenAmount: amount } };
   };
 
   it('builds a request with the selected tokens and funding and a self-verified transaction', () => {
@@ -95,9 +96,20 @@ describe('buildCreate / verifyBuilt', () => {
     const r = buildCreate(env, spec);
     expect(r.issues).toEqual([]);
     expect(r.request!.tokens).toHaveLength(1);
-    expect(r.request!.tokenCarrier).toBe(String(DEFAULT_CARRIER));
+    expect(r.request!.tokenCarrier).toBe(String(FIXTURE_CARRIER));
     expect(r.tokenChange).toBe(96_000n);
     expect(r.tokenInputsKas).toBe(10n * KAS);
+    expect(verifyBuilt(env, r.built!, spec)).toBeNull();
+  });
+
+  it('the wallet default carrier is kob-wasm defaultOrderCarrier (2 KAS): a default ask builds and verifies at it', () => {
+    const { env, spec } = askSpec(makeEnv({ carrier: null }));
+    expect(DEFAULT_CARRIER).toBe(2n * KAS);
+    expect(env.kob.defaultConstants().defaultOrderCarrier).toBe(DEFAULT_CARRIER);
+    expect(spec.value).toBe(DEFAULT_CARRIER);
+    const r = buildCreate(env, spec);
+    expect(r.issues).toEqual([]);
+    expect(r.request!.tokenCarrier).toBe(String(DEFAULT_CARRIER));
     expect(verifyBuilt(env, r.built!, spec)).toBeNull();
   });
 
@@ -107,7 +119,7 @@ describe('buildCreate / verifyBuilt', () => {
     const built = r.built!;
     const other = makeAsk(env, { amount: 4n * TOK, minFill: TOK, price: P + 100n, expiryDaa: env.clock.daa + 5_000n });
     expect(verifyBuilt(env, built, { ...spec, order: other })).toMatch(/state differs/);
-    expect(verifyBuilt(env, built, { ...spec, value: DEFAULT_CARRIER + 1n })).toMatch(/value differs/);
+    expect(verifyBuilt(env, built, { ...spec, value: spec.value + 1n })).toMatch(/value differs/);
     expect(verifyBuilt(env, built, { ...spec, deadline: 5n })).toMatch(/deadline differs/);
     expect(verifyBuilt(env, built, { ...spec, tokenAmount: 5n * TOK })).toMatch(/custody amount differs/);
     // a transaction without a placement record is not a valid order creation

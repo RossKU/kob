@@ -945,7 +945,9 @@ scale (`non_standard_scale` otherwise). Rules evaluated per order: token allowli
 match, standard scale (skipped when the entry has no `decimals`), minimum order value (`min_order_value_sompi`: the order's
 amount at its quote, `quoteOf(amountLeft, price, scale)` rounded down, a conditional order at its take-profit leg; a bid, whose
 quantity is its escrow, the KAS of its output: `order_value_below_minimum` otherwise), expiry at most 90 days (plus slack)
-after the accepting chain block, minimum carrier. The reason an order is unlisted is stored in `orders.unlisted_reason` and
+after the accepting chain block, minimum carrier (`min_carrier_sompi`, default 0: the wallet default carrier is 2 KAS,
+`DEFAULT_ORDER_CARRIER`, and nothing the matcher or a keeper pays depends on it: their relay fees do not price storage mass,
+a refund keeper is paid by the order's `refundTip`). The reason an order is unlisted is stored in `orders.unlisted_reason` and
 returned by the API.
 
 ### 5. Read API

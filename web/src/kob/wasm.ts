@@ -342,7 +342,7 @@ export type Num = bigint | string | number;
 export type Round = 'up' | 'down';
 /** kob-wasm `defaultConstants` (sompi / DAA / bps) */
 export interface DefaultConstants {
-  defaultMinFillSompi: bigint; defaultMinFillImmediate: bigint; maxScale: bigint; quoteLimit: bigint; marketAuctionDaa: bigint; slippageBps: bigint;
+  defaultOrderCarrier: bigint; defaultMinFillSompi: bigint; defaultMinFillImmediate: bigint; maxScale: bigint; quoteLimit: bigint; marketAuctionDaa: bigint; slippageBps: bigint;
   marketActivationDaa: bigint; iocLifeDaa: bigint; stopBandDaa: bigint; minRestDaa: bigint; daaRateMilli: bigint;
 }
 

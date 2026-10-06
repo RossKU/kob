@@ -61,7 +61,7 @@ test.describe('order ticket', () => {
     await expect(page.getByTestId('disc-allInPrice')).toContainText('2.59 KAS / EXKCC');
     await expect(page.getByTestId('disc-allInTotal')).toContainText('7.77 KAS');
     await expect(page.getByTestId('disc-tokensEscrowed')).toContainText('3 EXKCC');
-    await expect(page.getByTestId('disc-kasLocked')).toContainText('20 KAS');
+    await expect(page.getByTestId('disc-kasLocked')).toContainText('4 KAS');
     await expect(page.getByTestId('disc-expiry')).toBeVisible();
     await expect(page.getByTestId('disc-expiry-extra')).toBeVisible(); // day-85 renewal date of a GTC order
     await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
@@ -77,7 +77,7 @@ test.describe('order ticket', () => {
     await expect(summary).toContainText('3 EXKCC');
     await expect(summary).toContainText('2.6 KAS / EXKCC');
     await expect(summary).toContainText('2.59 KAS / EXKCC'); // all-in: limit minus tip
-    await expect(page.getByTestId('confirm-locked-locked-total')).toContainText('20 KAS');
+    await expect(page.getByTestId('confirm-locked-locked-total')).toContainText('4 KAS');
     await expect(page.getByTestId('confirm-wallet-notice')).toBeVisible();
     // signing needs the explicit acknowledgement
     await expect(page.getByTestId('confirm-sign')).toBeDisabled();

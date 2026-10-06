@@ -467,7 +467,7 @@ fn cov(b: u8) -> Hash {
     Hash::from_bytes([b; 32])
 }
 const LOT: i64 = 1_000; // token units per lot
-/// KAS carried by every covenant UTXO in these fixtures (env KOB_CARRIER_KAS, default 2).
+/// KAS carried by every covenant UTXO in these fixtures (env KOB_CARRIER_KAS, default 10; 2 is the wallet default).
 fn carrier() -> i64 {
     std::env::var("KOB_CARRIER_KAS").ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(10) * KAS
 }

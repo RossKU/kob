@@ -18,8 +18,11 @@ import { issue, hasError } from './common-issues';
 export { issue, customIssue, hasError, ISSUE_CATALOG } from './common-issues';
 export type { IssueCode } from './common-issues';
 
-/** Default KAS carrier of every covenant UTXO (order, custody, delivery, exit): 10 KAS (order-types.md, defaults). */
-export const DEFAULT_CARRIER = 1_000_000_000n;
+/**
+ * Default KAS carrier of every covenant UTXO (order, custody, delivery, exit): 2 KAS (kob-wasm `defaultConstants().defaultOrderCarrier`,
+ * kob-protocol `DEFAULT_ORDER_CARRIER`, order-types.md, defaults: the relay fee does not depend on it; KaspaCom's 0.5 KAS floor is below it).
+ */
+export const DEFAULT_CARRIER = 200_000_000n;
 /** Fills a plain GTC bid budgets delivery carriers for by default (each fill of a continuing bid pays one carrier out of the escrow). */
 export const DEFAULT_BID_FILLS = 3n;
 
@@ -167,7 +170,7 @@ export function bidBudgetRate(price: bigint, tip: bigint, slope: bigint, priceEn
 export const bidEscrowOf = (kob: PlanEnv['kob'], bid: OrderState, amount: bigint, fills: bigint): bigint | null => kob.bidEscrow(bid, amount, fills);
 
 /**
- * The wallet's default minimum fill of a resting order (kob-wasm `defaultMinFill`): the amount worth 10 KAS (one delivery carrier) at the
+ * The wallet's default minimum fill of a resting order (kob-wasm `defaultMinFill`): the amount worth 10 KAS (a notional, not a carrier) at the
  * limit `price`, at least 1 base unit and at most the amount. IOC / FOK / market orders use 1 (they live one auction).
  */
 export const defaultMinFillFor = (env: Pick<PlanEnv, 'kob' | 'token'>, amount: bigint, price: bigint): bigint =>

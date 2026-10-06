@@ -23,6 +23,17 @@ pub const RATE: i64 = WHOLE;
 /// Entry and exit carriers of the pair entries.
 pub const PEC: i64 = 6 * KAS as i64;
 
+/// [`PDC`], [`PEC`] and [`PV`] at the carriers the scenarios run under (`super::with_carriers`).
+pub fn pdc() -> i64 {
+    carriers().pair_delivery
+}
+pub fn pec() -> i64 {
+    carriers().pair_exit
+}
+pub fn pv() -> u64 {
+    carrier() + 4 * pdc() as u64
+}
+
 /// Token state of a fixture token of program `p`: key-held (`owner` a key) or covenant-owned custody.
 pub fn tstate(p: TemplateId, amount: i64, owner: [u8; 32], covenant_owned: bool) -> TokenState {
     if covenant_owned {
@@ -34,7 +45,7 @@ pub fn tstate(p: TemplateId, amount: i64, owner: [u8; 32], covenant_owned: bool)
 
 /// A token UTXO of token `token` (program `p`).
 pub fn tutxo(p: TemplateId, token: [u8; 32], tag: u8, amount: i64, owner: [u8; 32], covenant_owned: bool) -> TokenUtxo {
-    TokenUtxo { utxo: utxo(tag, CARRIER, 1_000, Some(token)), state: tstate(p, amount, owner, covenant_owned) }
+    TokenUtxo { utxo: utxo(tag, carrier(), 1_000, Some(token)), state: tstate(p, amount, owner, covenant_owned) }
 }
 
 fn tok_parts(p: TemplateId) -> ([u8; 32], i64, i64, i64) {
@@ -75,7 +86,7 @@ pub fn pair(maker: u8, ask: bool, pa: TemplateId, pb: TemplateId, price: i64) ->
         active_from: 0,
         expiry_daa: EXPIRY,
         refund_tip: prtip(pa, pb),
-        delivery_carrier: PDC,
+        delivery_carrier: pdc(),
         interval: 0,
         max_fill: 0,
         slope: 0,
@@ -115,7 +126,7 @@ pub fn pair_leg(s: PairState, pa: TemplateId, pb: TemplateId, c: [u8; 32], tag: 
 pub fn pair_leg_amount(s: PairState, pa: TemplateId, pb: TemplateId, c: [u8; 32], tag: u8, amount: i64) -> Leg {
     let (tok, p) = s_of(s.is_ask(), pa, pb);
     let custody = tutxo(p, tok, tag + 1, s.custody, c, true);
-    Leg::Pair { order: order(tag, PV, c, 1_000, s), custody, amount, t: None }
+    Leg::Pair { order: order(tag, pv(), c, 1_000, s), custody, amount, t: None }
 }
 
 /// A plain bid of `token` (program `p`) at `price`, funded for `funded` whole tokens, filled for `n`.
@@ -129,7 +140,7 @@ pub fn kbid_leg(token: [u8; 32], p: TemplateId, maker: u8, price: i64, c: [u8; 3
 pub fn kask_leg(token: [u8; 32], p: TemplateId, maker: u8, price: i64, c: [u8; 32], tag: u8, held: i64, n: i64) -> Leg {
     let s = AskState { token_cov_id: token, amount_left: held * WHOLE, ..ask(maker, price, p) };
     Leg::Ask {
-        order: order(tag, CARRIER, c, 1_000, s),
+        order: order(tag, carrier(), c, 1_000, s),
         custody: tutxo(p, token, tag + 1, held * WHOLE, c, true),
         amount: n * WHOLE,
         t: None,
@@ -144,7 +155,7 @@ pub fn route(legs: Vec<Leg>) -> Batch {
         updates: vec![],
         taker_tokens: vec![],
         taker: Some(pk(MATCHER)),
-        taker_token_carrier: CARRIER,
+        taker_token_carrier: taker_carrier(),
         keep_surplus: vec![],
         keep_carrier: None,
         receivers: vec![],
@@ -223,7 +234,7 @@ pub fn cond_pair_ask(maker: u8, pa: TemplateId, pb: TemplateId) -> CondPairState
         active_from: 0,
         expiry_daa: EXPIRY,
         refund_tip: prtip(pa, pb),
-        delivery_carrier: PDC,
+        delivery_carrier: pdc(),
         tp_price: RATE + 200,
         slip_bps: 300,
         trail_step: 0,
@@ -276,7 +287,7 @@ pub fn cond_pair_leg(s: CondPairState, pa: TemplateId, pb: TemplateId, c: [u8; 3
     let (tok, p) = s_of(s.is_ask(), pa, pb);
     let custody = tutxo(p, tok, tag + 1, s.custody, c, true);
     Leg::CondPair {
-        order: order(tag, PV, c, 1_000, s),
+        order: order(tag, pv(), c, 1_000, s),
         custody,
         amount: n * WHOLE,
         leg,
@@ -340,8 +351,8 @@ pub fn ifd_pair(maker: u8, buy: bool, pa: TemplateId, pb: TemplateId) -> IfdPair
         active_from: 0,
         expiry_daa: EXPIRY,
         refund_tip: prtip(pa, pb),
-        delivery_carrier: PDC,
-        exit_carrier: PEC,
+        delivery_carrier: pdc(),
+        exit_carrier: pec(),
         min_fill: WHOLE,
         entry_stop: 0,
         band_daa: 300,
@@ -360,7 +371,7 @@ pub fn ifd_pair(maker: u8, buy: bool, pa: TemplateId, pb: TemplateId) -> IfdPair
 
 /// The KAS value of an entry UTXO.
 pub fn ifd_value(s: &IfdPairState) -> u64 {
-    s.kas_value().unwrap() as u64 + CARRIER
+    s.kas_value().unwrap() as u64 + carrier()
 }
 
 /// A resting pair entry UTXO (covenant `c`) with its custodies, filled for `n` whole A.
@@ -474,7 +485,7 @@ pub fn rearm_with(buy: bool, pa: TemplateId, pb: TemplateId, r: Rearm) -> Batch 
     let b_custody = (e.custody > 0).then(|| tutxo(pb, TOKEN_B, 84, e.custody, E_ID, true));
     let merge = PairEntryMerge { entry: order(82, ifd_value(&e), E_ID, 1_000, e), a_custody, b_custody };
     let exit_leg = Leg::CondPair {
-        order: order(80, PEC as u64, XE_ID, 1_000, x.clone()),
+        order: order(80, pec() as u64, XE_ID, 1_000, x.clone()),
         custody: xcust,
         amount: n * WHOLE,
         leg: 0,
@@ -516,7 +527,7 @@ fn create(order_state: AnyState, value: u64, tokens: Vec<TokenUtxo>) -> Action {
         order: order_state,
         value,
         tokens,
-        token_carrier: CARRIER,
+        token_carrier: carrier(),
         funding: vec![key_utxo(2, MAKER_A, 1_000 * KAS)],
         change: None,
         lock_time: 0,
@@ -567,12 +578,12 @@ pub fn pair_scenarios(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
     let maker_b = |n: i64| tutxo(pb, TOKEN_B, 5, n, pk(MAKER_A), false);
 
     // creation
-    add("pair.create.ask", create(AnyState::KobPair(ask()), PV, vec![maker_a(12)]));
-    add("pair.create.bid", create(AnyState::KobPair(bid()), PV, vec![maker_b(bid().custody + 7)]));
+    add("pair.create.ask", create(AnyState::KobPair(ask()), pv(), vec![maker_a(12)]));
+    add("pair.create.bid", create(AnyState::KobPair(bid()), pv(), vec![maker_b(bid().custody + 7)]));
     let ca = cond_pair_ask(MAKER_A, pa, pb);
     let cb = cond_pair_bid(MAKER_A, pa, pb);
-    add("pair.create.condAsk", create(AnyState::KobCondPair(ca.clone()), PV, vec![maker_a(10)]));
-    add("pair.create.condBid", create(AnyState::KobCondPair(cb.clone()), PV, vec![maker_b(cb.custody)]));
+    add("pair.create.condAsk", create(AnyState::KobCondPair(ca.clone()), pv(), vec![maker_a(10)]));
+    add("pair.create.condBid", create(AnyState::KobCondPair(cb.clone()), pv(), vec![maker_b(cb.custody)]));
     let ib = ifd_pair(MAKER_A, true, pa, pb);
     let ia = ifd_pair(MAKER_A, false, pa, pb);
     add("pair.create.ifdBid", create(AnyState::KobIfdPair(ib.clone()), ifd_value(&ib), vec![maker_b(ib.custody)]));
@@ -581,12 +592,12 @@ pub fn pair_scenarios(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
     // cancels (strays of both tokens swept), refunds, kills
     let (at, ap) = s_of(true, pa, pb);
     let (bt, bp) = s_of(false, pa, pb);
-    add("pair.cancel.ask", cancel(AnyState::KobPair(ask()), PV, Some(tutxo(ap, at, 71, 10 * WHOLE, X_ID, true)), None, vec![]));
+    add("pair.cancel.ask", cancel(AnyState::KobPair(ask()), pv(), Some(tutxo(ap, at, 71, 10 * WHOLE, X_ID, true)), None, vec![]));
     add(
         "pair.cancel.bid.sweepStrays",
         cancel(
             AnyState::KobPair(bid()),
-            PV,
+            pv(),
             Some(tutxo(bp, bt, 71, bid().custody, X_ID, true)),
             None,
             vec![tutxo(pa, TOKEN_COV, 76, 3, X_ID, true), tutxo(pb, TOKEN_B, 77, 5, X_ID, true)],
@@ -602,16 +613,19 @@ pub fn pair_scenarios(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
             vec![],
         ),
     );
-    add("pair.refund.ask", refund(AnyState::KobPair(ask()), PV, Some(tutxo(ap, at, 71, 10 * WHOLE, X_ID, true)), None, EXPIRY as u64));
+    add(
+        "pair.refund.ask",
+        refund(AnyState::KobPair(ask()), pv(), Some(tutxo(ap, at, 71, 10 * WHOLE, X_ID, true)), None, EXPIRY as u64),
+    );
     add(
         "pair.refund.bid",
-        refund(AnyState::KobPair(bid()), PV, Some(tutxo(bp, bt, 71, bid().custody, X_ID, true)), None, EXPIRY as u64),
+        refund(AnyState::KobPair(bid()), pv(), Some(tutxo(bp, bt, 71, bid().custody, X_ID, true)), None, EXPIRY as u64),
     );
     add(
         "pair.refund.kill.ask",
         refund(
             AnyState::KobPair(PairState { tif: TIF_FOK, ..ask() }),
-            PV,
+            pv(),
             Some(tutxo(ap, at, 71, 10 * WHOLE, X_ID, true)),
             None,
             1_000 + 600,
@@ -630,13 +644,13 @@ pub fn pair_scenarios(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
     );
     add(
         "pair.cancel.condBid",
-        cancel(AnyState::KobCondPair(cb.clone()), PV, Some(tutxo(bp, bt, 71, cb.custody, X_ID, true)), None, vec![]),
+        cancel(AnyState::KobCondPair(cb.clone()), pv(), Some(tutxo(bp, bt, 71, cb.custody, X_ID, true)), None, vec![]),
     );
     add(
         "pair.refund.kill.bid",
         refund(
             AnyState::KobPair(PairState { tif: TIF_IOC, ..bid() }),
-            PV,
+            pv(),
             Some(tutxo(bp, bt, 71, bid().custody, X_ID, true)),
             None,
             1_000 + 600,
@@ -644,11 +658,11 @@ pub fn pair_scenarios(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
     );
     add(
         "pair.refund.condAsk",
-        refund(AnyState::KobCondPair(ca.clone()), PV, Some(tutxo(ap, at, 71, ca.custody, X_ID, true)), None, EXPIRY as u64),
+        refund(AnyState::KobCondPair(ca.clone()), pv(), Some(tutxo(ap, at, 71, ca.custody, X_ID, true)), None, EXPIRY as u64),
     );
     add(
         "pair.refund.condBid",
-        refund(AnyState::KobCondPair(cb.clone()), PV, Some(tutxo(bp, bt, 71, cb.custody, X_ID, true)), None, EXPIRY as u64),
+        refund(AnyState::KobCondPair(cb.clone()), pv(), Some(tutxo(bp, bt, 71, cb.custody, X_ID, true)), None, EXPIRY as u64),
     );
     add(
         "pair.refund.ifdBid",
@@ -794,7 +808,7 @@ pub fn pair_scenarios(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
     let upd = |s: CondPairState, legs: Vec<Leg>, ev: usize, ev_b: Option<usize>| {
         let mut b = route(legs);
         b.updates.push(BatchUpdate {
-            order: order(60, PV, X_ID, 1_000, AnyState::KobCondPair(s)),
+            order: order(60, pv(), X_ID, 1_000, AnyState::KobCondPair(s)),
             evidence: ev,
             evidence_b: ev_b,
             take: None,
@@ -979,7 +993,7 @@ pub fn kbid_units(token: [u8; 32], p: TemplateId, maker: u8, price: i64, c: [u8;
 /// A plain ask of `token` (program `p`) holding and selling exactly `amount` base units.
 pub fn kask_units(token: [u8; 32], p: TemplateId, maker: u8, price: i64, c: [u8; 32], tag: u8, amount: i64) -> Leg {
     let s = AskState { token_cov_id: token, amount_left: amount, min_fill: amount, ..ask(maker, price, p) };
-    Leg::Ask { order: order(tag, CARRIER, c, 1_000, s), custody: tutxo(p, token, tag + 1, amount, c, true), amount, t: None }
+    Leg::Ask { order: order(tag, carrier(), c, 1_000, s), custody: tutxo(p, token, tag + 1, amount, c, true), amount, t: None }
 }
 
 /// The evidence legs of a pair trigger and what they release / take: `mode` "arm0" (a KAS-book order of A and one of B,
@@ -1064,7 +1078,7 @@ pub fn cond_update(pa: TemplateId, pb: TemplateId, ask: bool, trail: bool, mode1
     let (legs, ra, ta, rb, tb) = evidence_legs_b(pa, pb, mode, rate_fell, s.min_touch_b().unwrap());
     let mut b = route(settle(legs, pa, pb, ra - ta, rb - tb));
     b.updates.push(BatchUpdate {
-        order: order(60, PV, X_ID, 1_000, AnyState::KobCondPair(s)),
+        order: order(60, pv(), X_ID, 1_000, AnyState::KobCondPair(s)),
         evidence: 0,
         evidence_b: (!mode1).then_some(1),
         take: None,
@@ -1320,7 +1334,7 @@ pub fn pair_refund_grid(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)>
             let s = PairState { tif, ..with_left(pair(MAKER_A, ask, pa, pb, RATE), 3) };
             let c = tutxo(p, tok, 71, s.custody, X_ID, true);
             let st = AnyState::KobPair(s);
-            v.push((format!("pairgrid.refund.pair.{side}.{name}"), refund(st.clone(), PV, Some(c), None, due(&st))));
+            v.push((format!("pairgrid.refund.pair.{side}.{name}"), refund(st.clone(), pv(), Some(c), None, due(&st))));
         }
         for booked in [false, true] {
             for armed in [0, 1] {
@@ -1333,7 +1347,7 @@ pub fn pair_refund_grid(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)>
                 let c = tutxo(p, tok, 71, s.custody, X_ID, true);
                 let st = AnyState::KobCondPair(s);
                 let name = format!("pairgrid.refund.cond.{side}{}.armed{armed}", if booked { ".booked" } else { "" });
-                v.push((name, refund(st.clone(), PV, Some(c), None, due(&st))));
+                v.push((name, refund(st.clone(), pv(), Some(c), None, due(&st))));
             }
         }
     }
@@ -1371,5 +1385,14 @@ pub fn pair_refund_grid(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)>
 pub fn cond_pair_leg_amount(s: CondPairState, pa: TemplateId, pb: TemplateId, c: [u8; 32], tag: u8, amount: i64, leg: u8) -> Leg {
     let (tok, p) = s_of(s.is_ask(), pa, pb);
     let custody = tutxo(p, tok, tag + 1, s.custody, c, true);
-    Leg::CondPair { order: order(tag, PV, c, 1_000, s), custody, amount, leg, evidence: None, evidence_b: None, t: None, merge: None }
+    Leg::CondPair {
+        order: order(tag, pv(), c, 1_000, s),
+        custody,
+        amount,
+        leg,
+        evidence: None,
+        evidence_b: None,
+        t: None,
+        merge: None,
+    }
 }

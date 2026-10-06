@@ -928,6 +928,10 @@ custodies (genuine holder of the token's program, owned by the exit id, exactly 
 
 ## 9. Measured costs (protocol v3; 10-KAS carriers, reference 3/3 token unless noted)
 
+The fixtures carry 10 KAS on every covenant UTXO; the wallet default is 2 KAS (`DEFAULT_ORDER_CARRIER`). The relay fees
+below do not depend on it (storage mass is not part of the relay fee): at 2 KAS no shape pays more, a few placements and
+amends up to 200 sompi less (`crates/kob-protocol/tests/carrier_fees.rs`).
+
 Rows are the golden vectors named in the row (`crates/kob-protocol/vectors/golden.json`: bytes = `built.fee.mass.size`,
 fee floor = `built.fee.minFee`), the 8/8 cancel-replace is `crates/kob-protocol/tests/cost_table.rs` (KCC20Ref_8x8), and
 the global batch rows are `crates/kob-executor/tests/matcher_batch.rs`. A fraction such as 4/10 is the part of an order's
@@ -1113,7 +1117,7 @@ tick. With pair books: to be measured (pair phase).
 16. **Amounts, prices and the minimum fill** (`order-types.md`, *Amounts, prices and rounding*): enter and show amounts
    as token amounts, store them in base units; `scale` = `10^decimals` of the base token, capped at `10^9`; prices per
    whole token (sompi, or base units of B per whole A for a pair order); refuse an order outside the numeric gate (`scale ≤ 10^9`, a power of ten, `amount·rate/scale < 2^62`
-   for every rate it carries). `minFill` default: the amount worth 10 KAS (`DEFAULT_MIN_FILL_SOMPI`) at the limit price,
+   for every rate it carries). `minFill` default: the amount worth 10 KAS (`DEFAULT_MIN_FILL_SOMPI`, a notional independent of the carrier) at the limit price,
    at least 1 base unit and at most the order's amount; IOC, FOK and market orders 1 base unit; if-done entries item 8.
    Show the minimum fill on the ticket and the confirmation screen.
 

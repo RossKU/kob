@@ -32,6 +32,66 @@ pub const KAS: u64 = 100_000_000;
 pub const CARRIER: u64 = 10 * KAS;
 pub const DC: i64 = 10 * KAS as i64;
 pub const EC: i64 = 10 * KAS as i64;
+
+/// The carriers the scenarios are built with. [`Carriers::FIXTURE`] (the constants above and `pair::PDC` / `pair::PEC`)
+/// unless a test runs them under [`with_carriers`]: the order side (order UTXOs, custodies, the maker's token inputs and
+/// sends, deliveries, exits) and the matcher's taker token carrier separately.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Carriers {
+    /// Order UTXOs, custodies, key-held token UTXOs and token sends.
+    pub order: u64,
+    /// `deliveryCarrier` / `exitCarrier` of the KAS-quoted kinds.
+    pub delivery: i64,
+    pub exit: i64,
+    /// `deliveryCarrier` / `exitCarrier` of the pair kinds.
+    pub pair_delivery: i64,
+    pub pair_exit: i64,
+    /// The matcher's (or an x402 payer's) token output carrier, `Batch::taker_token_carrier`.
+    pub taker: u64,
+}
+
+impl Carriers {
+    pub const FIXTURE: Carriers =
+        Carriers { order: CARRIER, delivery: DC, exit: EC, pair_delivery: pair::PDC, pair_exit: pair::PEC, taker: CARRIER };
+
+    /// Every order-side carrier at `c`, the taker's at the fixture value. A pair entry's `exitCarrier` funds its exit's own
+    /// deliveries (`IfdPairState::exit_carrier_needed`): three carriers, as the fixture's 2 / 6 KAS.
+    pub const fn order_side(c: u64) -> Carriers {
+        Carriers { order: c, delivery: c as i64, exit: c as i64, pair_delivery: c as i64, pair_exit: 3 * c as i64, taker: CARRIER }
+    }
+}
+
+thread_local! {
+    static CARRIERS: std::cell::Cell<Carriers> = const { std::cell::Cell::new(Carriers::FIXTURE) };
+}
+
+/// Runs `f` with the scenarios built at `c` (restored afterwards, also on a panic).
+pub fn with_carriers<R>(c: Carriers, f: impl FnOnce() -> R) -> R {
+    struct Restore(Carriers);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CARRIERS.with(|x| x.set(self.0));
+        }
+    }
+    let _restore = Restore(CARRIERS.with(|x| x.replace(c)));
+    f()
+}
+
+pub fn carriers() -> Carriers {
+    CARRIERS.with(|x| x.get())
+}
+pub fn carrier() -> u64 {
+    carriers().order
+}
+pub fn dc() -> i64 {
+    carriers().delivery
+}
+pub fn ec() -> i64 {
+    carriers().exit
+}
+pub fn taker_carrier() -> u64 {
+    carriers().taker
+}
 /// Base units per whole token of the fixture tokens (the price denominator): prices and tips are per 1000 base units.
 pub const SCALE: i64 = 1_000;
 /// One whole fixture token in base units: the fixtures count amounts in whole tokens (`n * WHOLE`).
@@ -160,7 +220,7 @@ pub fn bid(maker: u8, price: i64, tpl: TemplateId) -> BidState {
         expiry_daa: EXPIRY,
         refund_tip: rtip(tpl),
         reserve: 0,
-        delivery_carrier: DC,
+        delivery_carrier: dc(),
         interval: 0,
         max_fill: 0,
         slope: 0,
@@ -244,7 +304,7 @@ pub fn cond_bid(maker: u8, tpl: TemplateId) -> CondBidState {
         active_from: 0,
         expiry_daa: EXPIRY,
         refund_tip: rtip(tpl),
-        delivery_carrier: DC,
+        delivery_carrier: dc(),
         tp_price: 200_000_000,
         stop_price: 300_000_000,
         slip_bps: 300,
@@ -284,8 +344,8 @@ pub fn ifd_bid(maker: u8, n: i64, tpl: TemplateId) -> IfdBidState {
         active_from: 0,
         expiry_daa: EXPIRY,
         refund_tip: rtip(tpl),
-        delivery_carrier: DC,
-        exit_carrier: EC,
+        delivery_carrier: dc(),
+        exit_carrier: ec(),
         min_fill: WHOLE,
         entry_stop: 0,
         band_daa: 300,
@@ -317,7 +377,7 @@ pub fn ifd_ask(maker: u8, tpl: TemplateId) -> IfdAskState {
         expiry_daa: EXPIRY,
         refund_tip: rtip(tpl),
         prefund: KAS as i64 / 2,
-        exit_carrier: EC,
+        exit_carrier: ec(),
         min_fill: WHOLE,
         entry_stop: 0,
         band_daa: 300,
@@ -333,11 +393,11 @@ pub fn ifd_ask(maker: u8, tpl: TemplateId) -> IfdAskState {
 
 pub fn tok_of(tag: u8, amount: i64, owner: [u8; 32], scheme: u8, daa: u64, token: [u8; 32]) -> TokenUtxo {
     let state = Kcc20State { amount, owner, owner_scheme: scheme, borrow_scheme: 0, borrow_guard: [0; 32], extension_commitment: EXT };
-    TokenUtxo { utxo: utxo(tag, CARRIER, daa, Some(token)), state: state.into() }
+    TokenUtxo { utxo: utxo(tag, carrier(), daa, Some(token)), state: state.into() }
 }
 /// A key-owned token UTXO of the family of `prog` (KCC-20 P2PK / KRON address presence).
 pub fn tok_on(prog: TemplateId, tag: u8, amount: i64, owner: [u8; 32], daa: u64) -> TokenUtxo {
-    TokenUtxo { utxo: utxo(tag, CARRIER, daa, Some(TOKEN_COV)), state: TokenState::user(prog.family(), amount, owner, EXT) }
+    TokenUtxo { utxo: utxo(tag, carrier(), daa, Some(TOKEN_COV)), state: TokenState::user(prog.family(), amount, owner, EXT) }
 }
 /// Changes the owner of a token state (keeping its owner type).
 pub fn set_owner(s: &mut TokenState, owner: [u8; 32]) {
@@ -371,7 +431,7 @@ pub fn fee() -> FeeOptions {
 pub fn ev_ask(price: i64, n: i64, tpl: TemplateId) -> Leg {
     let c = cov(0x9a);
     Leg::Ask {
-        order: order(90, CARRIER, c, 1_000, ask_n(MAKER_C, price, tpl, 5)),
+        order: order(90, carrier(), c, 1_000, ask_n(MAKER_C, price, tpl, 5)),
         custody: custody(91, 5, c, 1_000),
         amount: n * WHOLE,
         t: None,
@@ -418,7 +478,7 @@ fn batch(legs: Vec<Leg>) -> Batch {
         updates: vec![],
         taker_tokens: vec![],
         taker: None,
-        taker_token_carrier: CARRIER,
+        taker_token_carrier: taker_carrier(),
         keep_surplus: vec![],
         keep_carrier: None,
         receivers: vec![],
@@ -441,7 +501,7 @@ fn take_ask_at(a: AskState, n: i64, daa: u64) -> Batch {
     let c = cov(0xa1);
     let held = a.amount_left;
     let mut b = batch(vec![Leg::Ask {
-        order: order(10, CARRIER, c, daa, a),
+        order: order(10, carrier(), c, daa, a),
         custody: tok(11, held, c, SCHEME_COVID, daa),
         amount: n * WHOLE,
         t: None,
@@ -468,7 +528,7 @@ fn cond_fill_at(c: CondAskState, n: i64, leg: u8, ev: Option<Leg>, daa: u64) -> 
     let id = cov(0xc1);
     let held = c.amount_left;
     let mut b = batch(vec![Leg::CondAsk {
-        order: order(30, CARRIER, id, daa, c),
+        order: order(30, carrier(), id, daa, c),
         custody: tok(31, held, id, SCHEME_COVID, daa),
         amount: n * WHOLE,
         leg,
@@ -572,9 +632,9 @@ pub fn booked_bid_exit(tpl: TemplateId, n: i64) -> CondBidState {
 fn rpt_bid_tp(tpl: TemplateId, exit: CondAskState, n: i64, entry_n: i64, merge: bool) -> Batch {
     let held = exit.amount_left;
     let e = IfdBidState { rpt_amount: 1 + 16 * WHOLE, amount_left: entry_n * WHOLE, ..ifd_bid(MAKER_A, 10, tpl) };
-    let ev = (e.merge_budget(entry_n * WHOLE).unwrap() + entry_n * (DC + EC) + 2 * EC) as u64;
+    let ev = (e.merge_budget(entry_n * WHOLE).unwrap() + entry_n * (dc() + ec()) + 2 * ec()) as u64;
     let mut b = batch(vec![Leg::CondAsk {
-        order: order(30, CARRIER, cov(0xc1), 2_000, exit),
+        order: order(30, carrier(), cov(0xc1), 2_000, exit),
         custody: tok(31, held, cov(0xc1), SCHEME_COVID, 2_000),
         amount: n * WHOLE,
         leg: 0,
@@ -592,7 +652,7 @@ fn rpt_ask_tp(tpl: TemplateId, exit: CondBidState, n: i64, entry_n: i64, merge: 
     let e = IfdAskState { rpt_amount: 1 + 16 * WHOLE, amount_left: entry_n * WHOLE, ..ifd_ask(MAKER_A, tpl) };
     let held = exit.amount_left;
     let xv = (e.proceeds(held, e.price).unwrap() + e.prefund_of(held).unwrap() + e.exit_carrier) as u64;
-    let ev = (CARRIER as i64 + e.prefund_of(entry_n * WHOLE).unwrap() + entry_n * EC) as u64;
+    let ev = (carrier() as i64 + e.prefund_of(entry_n * WHOLE).unwrap() + entry_n * ec()) as u64;
     let custody_utxo = (entry_n > 0).then(|| custody(61, entry_n, cov(0xf1), 1_000));
     let mut b = batch(vec![Leg::CondBid {
         order: order(40, xv, cov(0xe1), 2_000, exit),
@@ -643,7 +703,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
         order,
         value,
         tokens,
-        token_carrier: CARRIER,
+        token_carrier: carrier(),
         funding: vec![key_utxo(2, MAKER_A, 1_000 * KAS)],
         change: None,
         lock_time: 0,
@@ -652,18 +712,18 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
         fee: fee(),
     };
     let maker_tokens = || vec![tok(1, 12 * WHOLE, pk(MAKER_A), SCHEME_P2PK, 500)];
-    add("create.ask", Action::CreateOrder(create(AnyState::KobAsk(ask(MAKER_A, P250, t3)), CARRIER, maker_tokens())));
+    add("create.ask", Action::CreateOrder(create(AnyState::KobAsk(ask(MAKER_A, P250, t3)), carrier(), maker_tokens())));
     let mut tw = ask(MAKER_A, P250, t3);
     tw.interval = 600;
     tw.max_fill = 2 * WHOLE;
-    add("create.ask.twap", Action::CreateOrder(create(AnyState::KobAsk(tw), CARRIER, maker_tokens())));
+    add("create.ask.twap", Action::CreateOrder(create(AnyState::KobAsk(tw), carrier(), maker_tokens())));
     let mut du = ask(MAKER_A, 300_000_000, t3);
     du.slope = 1_000_000;
     du.price_end = 200_000_000;
     du.active_from = 1_000;
-    add("create.ask.dutch", Action::CreateOrder(create(AnyState::KobAsk(du), CARRIER, maker_tokens())));
-    add("create.ask.market", Action::CreateOrder(create(AnyState::KobAsk(market_ask(MAKER_A, t3)), CARRIER, maker_tokens())));
-    let mut day = create(AnyState::KobAsk(ask(MAKER_A, P250, t3)), CARRIER, maker_tokens());
+    add("create.ask.dutch", Action::CreateOrder(create(AnyState::KobAsk(du), carrier(), maker_tokens())));
+    add("create.ask.market", Action::CreateOrder(create(AnyState::KobAsk(market_ask(MAKER_A, t3)), carrier(), maker_tokens())));
+    let mut day = create(AnyState::KobAsk(ask(MAKER_A, P250, t3)), carrier(), maker_tokens());
     let d = kob_protocol::defaults::day_order(NOW, 1_790_694_000, Some(10_020));
     if let AnyState::KobAsk(a) = &mut day.order {
         a.expiry_daa = d.expiry_daa as i64;
@@ -686,7 +746,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
         "create.bid.market",
         Action::CreateOrder(create(AnyState::KobBid(mb.clone()), mb.escrow(4 * WHOLE, 1).unwrap() as u64, vec![])),
     );
-    add("create.condAsk", Action::CreateOrder(create(AnyState::KobCondAsk(cond_ask(MAKER_A, t3)), CARRIER, maker_tokens())));
+    add("create.condAsk", Action::CreateOrder(create(AnyState::KobCondAsk(cond_ask(MAKER_A, t3)), carrier(), maker_tokens())));
     let cb = cond_bid(MAKER_A, t3);
     add("create.condBid", Action::CreateOrder(create(AnyState::KobCondBid(cb.clone()), cb.escrow(2).unwrap() as u64, vec![])));
     let ib = IfdBidState { min_fill: 3 * WHOLE, ..ifd_bid(MAKER_A, 10, t3) };
@@ -701,14 +761,14 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
     let ia = IfdAskState { min_fill: 3 * WHOLE, ..ifd_ask(MAKER_A, t3) };
     add(
         "create.ifdAsk",
-        Action::CreateOrder(create(AnyState::KobIfdAsk(ia.clone()), ia.escrow(CARRIER as i64).unwrap() as u64, maker_tokens())),
+        Action::CreateOrder(create(AnyState::KobIfdAsk(ia.clone()), ia.escrow(carrier() as i64).unwrap() as u64, maker_tokens())),
     );
     let iar = IfdAskState { rpt_amount: 1 + 20 * WHOLE, min_fill: 3 * WHOLE, ..ifd_ask(MAKER_A, t3) };
     add(
         "create.ifdAsk.repeat",
-        Action::CreateOrder(create(AnyState::KobIfdAsk(iar.clone()), iar.escrow(CARRIER as i64).unwrap() as u64, maker_tokens())),
+        Action::CreateOrder(create(AnyState::KobIfdAsk(iar.clone()), iar.escrow(carrier() as i64).unwrap() as u64, maker_tokens())),
     );
-    let mut c = create(AnyState::KobAsk(ask(MAKER_A, P250, t8)), CARRIER, vec![]);
+    let mut c = create(AnyState::KobAsk(ask(MAKER_A, P250, t8)), carrier(), vec![]);
     c.tokens = vec![tok(1, 10 * WHOLE, pk(MAKER_A), SCHEME_P2PK, 500)];
     c.records = vec![Record::X402 { reference: vec![0x42; 32] }];
     add("create.ask.8x8.x402", Action::CreateOrder(c));
@@ -729,7 +789,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
         records: vec![],
         fee: fee(),
     };
-    let ao = || order(10, CARRIER, a_id, 1_000, AnyState::KobAsk(ask(MAKER_A, P250, t3)));
+    let ao = || order(10, carrier(), a_id, 1_000, AnyState::KobAsk(ask(MAKER_A, P250, t3)));
     add("cancel.ask", Action::CancelOrder(cancel(ao(), Some(custody(11, 10, a_id, 1_000)))));
     let mut cs = cancel(ao(), Some(custody(11, 10, a_id, 1_000)));
     cs.strays = vec![tok(13, 1, a_id, SCHEME_COVID, 1_200)];
@@ -742,7 +802,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
     add(
         "cancel.condAsk",
         Action::CancelOrder(cancel(
-            order(30, CARRIER, cov(0xc1), 2_000, AnyState::KobCondAsk(cond_ask(MAKER_A, t3))),
+            order(30, carrier(), cov(0xc1), 2_000, AnyState::KobCondAsk(cond_ask(MAKER_A, t3))),
             Some(custody(31, 10, cov(0xc1), 2_000)),
         )),
     );
@@ -756,7 +816,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
         "cancel.ifdBid",
         Action::CancelOrder(cancel(order(50, ibo.escrow().unwrap() as u64, cov(0xd1), 1_000, AnyState::KobIfdBid(ibo)), None)),
     );
-    let iav = ifd_ask(MAKER_A, t3).escrow(CARRIER as i64).unwrap() as u64;
+    let iav = ifd_ask(MAKER_A, t3).escrow(carrier() as i64).unwrap() as u64;
     add(
         "cancel.ifdAsk",
         Action::CancelOrder(cancel(
@@ -767,13 +827,13 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
     let empty = IfdAskState { amount_left: 0, rpt_amount: 1, ..ifd_ask(MAKER_A, t3) };
     add(
         "cancel.ifdAsk.emptyRepeat",
-        Action::CancelOrder(cancel(order(60, CARRIER, cov(0xf1), 1_000, AnyState::KobIfdAsk(empty.clone())), None)),
+        Action::CancelOrder(cancel(order(60, carrier(), cov(0xf1), 1_000, AnyState::KobIfdAsk(empty.clone())), None)),
     );
     // "Cancel all" of a repeat position: the entry and its booked exits in one transaction.
     let entry_b = IfdBidState { rpt_amount: 1 + 16 * WHOLE, amount_left: 3 * WHOLE, ..ifd_bid(MAKER_A, 10, t3) };
     let exit_items = [(0xc1u8, 4i64, 30u8), (0xc2, 3, 34)].map(|(c, n, tag)| CancelItem {
         prefund: None,
-        order: order(tag, CARRIER, cov(c), 2_000, AnyState::KobCondAsk(booked_ask_exit(t3, n))),
+        order: order(tag, carrier(), cov(c), 2_000, AnyState::KobCondAsk(booked_ask_exit(t3, n))),
         custody: Some(custody(tag + 1, n, cov(c), 2_000)),
         strays: vec![],
     });
@@ -801,7 +861,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
         Action::CancelPosition(position(vec![
             CancelItem {
                 prefund: None,
-                order: order(60, entry_a.escrow(CARRIER as i64).unwrap() as u64, cov(0xf1), 1_000, AnyState::KobIfdAsk(entry_a)),
+                order: order(60, entry_a.escrow(carrier() as i64).unwrap() as u64, cov(0xf1), 1_000, AnyState::KobIfdAsk(entry_a)),
                 custody: Some(custody(61, 6, cov(0xf1), 1_000)),
                 strays: vec![],
             },
@@ -816,7 +876,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
     let mut cr = cancel(ao(), Some(custody(11, 10, a_id, 1_000)));
     cr.replace = Some(Replacement {
         order: AnyState::KobAsk(ask(MAKER_A, 240_000_000, t3)),
-        value: CARRIER - 20_000_000,
+        value: carrier() - (carrier() / 2).min(20_000_000),
         token_carrier: None,
         deadline: None,
     });
@@ -884,8 +944,8 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
     let mut cr = cancel(ao(), Some(custody(11, 10, a_id, 1_000)));
     cr.replace = Some(Replacement {
         order: AnyState::KobCondAsk(CondAskState { amount_left: 6 * WHOLE, ..cond_ask(MAKER_A, t3) }),
-        value: CARRIER,
-        token_carrier: Some(CARRIER),
+        value: carrier(),
+        token_carrier: Some(carrier()),
         deadline: None,
     });
     cr.funding = vec![key_utxo(12, MAKER_A, 20 * KAS)];
@@ -895,7 +955,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
     cr.funding = vec![key_utxo(12, MAKER_A, 20 * KAS)];
     cr.replace = Some(Replacement {
         order: AnyState::KobAsk(ask_n(MAKER_A, P250, t3, 12)),
-        value: CARRIER,
+        value: carrier(),
         token_carrier: None,
         deadline: None,
     });
@@ -924,15 +984,18 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
     add(
         "refund.ask.expiry",
         Action::RefundOrder(refund(
-            order(10, CARRIER, a_id, fresh, AnyState::KobAsk(ask(MAKER_A, P250, t3))),
+            order(10, carrier(), a_id, fresh, AnyState::KobAsk(ask(MAKER_A, P250, t3))),
             Some(custody(11, 10, a_id, fresh)),
             EXPIRY as u64,
         )),
     );
     let mut gtc = ask(MAKER_A, P250, t3);
     gtc.expiry_daa = NO_EXPIRY;
-    let mut r =
-        refund(order(10, CARRIER, a_id, 1_000, AnyState::KobAsk(gtc)), Some(custody(11, 10, a_id, 1_000)), (1_000 + MAX_IDLE) as u64);
+    let mut r = refund(
+        order(10, carrier(), a_id, 1_000, AnyState::KobAsk(gtc)),
+        Some(custody(11, 10, a_id, 1_000)),
+        (1_000 + MAX_IDLE) as u64,
+    );
     r.funding = vec![key_utxo(12, KEEPER, 5 * KAS)];
     r.change = Some(pk(KEEPER));
     add("refund.ask.idle90d.keeperChange", Action::RefundOrder(r));
@@ -940,7 +1003,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
     add(
         "refund.ask.iocKill",
         Action::RefundOrder(refund(
-            order(10, CARRIER, a_id, 1_000, AnyState::KobAsk(ioc)),
+            order(10, carrier(), a_id, 1_000, AnyState::KobAsk(ioc)),
             Some(custody(11, 10, a_id, 1_000)),
             (1_000 + IOC_LIFE) as u64,
         )),
@@ -961,7 +1024,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
     add(
         "refund.condAsk",
         Action::RefundOrder(refund(
-            order(30, CARRIER, cov(0xc1), fresh, AnyState::KobCondAsk(cond_ask(MAKER_A, t3))),
+            order(30, carrier(), cov(0xc1), fresh, AnyState::KobCondAsk(cond_ask(MAKER_A, t3))),
             Some(custody(31, 10, cov(0xc1), fresh)),
             EXPIRY as u64,
         )),
@@ -994,7 +1057,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
     );
     add(
         "close.ifdAsk.emptyRepeat",
-        Action::RefundOrder(refund(order(60, CARRIER, cov(0xf1), fresh, AnyState::KobIfdAsk(empty)), None, EXPIRY as u64)),
+        Action::RefundOrder(refund(order(60, carrier(), cov(0xf1), fresh, AnyState::KobIfdAsk(empty)), None, EXPIRY as u64)),
     );
 
     add(
@@ -1002,9 +1065,9 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
         Action::SendTokens(SendTokens {
             token: TokenRef { covenant_id: TOKEN_COV, program: t3 },
             tokens: vec![tok(1, 7 * WHOLE, pk(TAKER), SCHEME_P2PK, 500), tok(2, 5 * WHOLE, pk(TAKER), SCHEME_P2PK, 500)],
-            recipients: vec![TokenRecipient { pubkey: pk(MAKER_C), amount: 9 * WHOLE, carrier: CARRIER }],
+            recipients: vec![TokenRecipient { pubkey: pk(MAKER_C), amount: 9 * WHOLE, carrier: carrier() }],
             token_change: None,
-            token_change_carrier: CARRIER,
+            token_change_carrier: carrier(),
             funding: vec![key_utxo(3, TAKER, 10 * KAS)],
             change: None,
             records: vec![],
@@ -1092,13 +1155,13 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
         let mut b = batch(vec![
             Leg::Bid { order: order(20, bv, cov(0xb1), 1_000, bp), amount: 8 * WHOLE, t: None },
             Leg::Ask {
-                order: order(10, CARRIER, cov(0xa1), 1_000, ap),
+                order: order(10, carrier(), cov(0xa1), 1_000, ap),
                 custody: custody(11, 5, cov(0xa1), 1_000),
                 amount: 5 * WHOLE,
                 t: None,
             },
             Leg::Ask {
-                order: order(13, CARRIER, cov(0xa3), 1_000, cp),
+                order: order(13, carrier(), cov(0xa3), 1_000, cp),
                 custody: custody(14, 10, cov(0xa3), 1_000),
                 amount: 3 * WHOLE,
                 t: None,
@@ -1130,7 +1193,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
         for (i, (p, held, sold)) in ask_ps.iter().enumerate() {
             let c = cov(0xa1 + i as u8);
             legs.push(Leg::Ask {
-                order: order(30 + i as u8, CARRIER, c, 1_000 + i as u64, ask_n(8 + i as u8, *p, t8, *held)),
+                order: order(30 + i as u8, carrier(), c, 1_000 + i as u64, ask_n(8 + i as u8, *p, t8, *held)),
                 custody: custody(40 + i as u8, *held, c, 1_000 + i as u64),
                 amount: sold * WHOLE,
                 t: None,
@@ -1141,7 +1204,7 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
         let stop = CondAskState { stop_price: 252_000_000, ..cond_ask(MAKER_A, t8) };
         b.updates = vec![BatchUpdate {
             evidence_b: None,
-            order: order(70, CARRIER, cov(0x70 + 0x10), 2_000, AnyState::KobCondAsk(stop)),
+            order: order(70, carrier(), cov(0x70 + 0x10), 2_000, AnyState::KobCondAsk(stop)),
             evidence: 3,
             take: None,
         }];
@@ -1168,18 +1231,18 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
     add("cond.ask.takeProfit.close", Action::Batch(cond_fill(oco.clone(), 10, 0, None)));
     // Updates inside a matcher's batch next to the evidence fill (paid by the order's keeperTip).
     let upd = |o: AnyState, value: u64, ev: Leg, tag: u8, seq_daa: u64| update_batch(order(tag, value, cov(tag), seq_daa, o), ev);
-    add("cond.ask.update.arm", Action::Batch(upd(AnyState::KobCondAsk(oco.clone()), CARRIER, down(), 70, 2_000)));
+    add("cond.ask.update.arm", Action::Batch(upd(AnyState::KobCondAsk(oco.clone()), carrier(), down(), 70, 2_000)));
     let mut tr = oco.clone();
     tr.trail_step = 5_000_000;
     tr.trail_gap = 10_000_000;
     tr.trail_wait = 600;
-    add("cond.ask.update.trail", Action::Batch(upd(AnyState::KobCondAsk(tr.clone()), CARRIER, up(), 70, 2_000)));
+    add("cond.ask.update.trail", Action::Batch(upd(AnyState::KobCondAsk(tr.clone()), carrier(), up(), 70, 2_000)));
     // a fill of the order's own take-profit leg is no evidence: the stop leg arms next to a plain fill only
-    let mut both = upd(AnyState::KobCondAsk(oco.clone()), CARRIER, down(), 70, 2_000);
+    let mut both = upd(AnyState::KobCondAsk(oco.clone()), carrier(), down(), 70, 2_000);
     both.legs.push(ev_bid(237_000_000, 1, t3));
     both.updates.push(BatchUpdate {
         evidence_b: None,
-        order: order(74, CARRIER, cov(74), 2_000, AnyState::KobCondAsk(tr)),
+        order: order(74, carrier(), cov(74), 2_000, AnyState::KobCondAsk(tr)),
         evidence: 1,
         take: None,
     });
@@ -1225,19 +1288,19 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
 
     add("ifd.ask.partial", Action::Batch(ifda_fill(ifd_ask(MAKER_A, t3), 4, iav, None, 1_000)));
     let ia6 = IfdAskState { amount_left: 6 * WHOLE, min_fill: 7 * WHOLE, ..ifd_ask(MAKER_A, t3) };
-    add("ifd.ask.final", Action::Batch(ifda_fill(ia6.clone(), 6, ia6.escrow(CARRIER as i64).unwrap() as u64, None, 1_000)));
+    add("ifd.ask.final", Action::Batch(ifda_fill(ia6.clone(), 6, ia6.escrow(carrier() as i64).unwrap() as u64, None, 1_000)));
     let sa = IfdAskState { entry_stop: P255, ..ifd_ask(MAKER_A, t3) };
     let sa_down = || ev_ask(254_000_000, 1, t3);
-    let sav = sa.escrow(CARRIER as i64).unwrap() as u64;
+    let sav = sa.escrow(carrier() as i64).unwrap() as u64;
     add("ifd.ask.stopEntry.trigger", Action::Batch(ifda_fill(sa.clone(), 4, sav, Some(sa_down()), 1_000)));
     add("ifd.ask.stopEntry.auction", Action::Batch(ifda_fill(IfdAskState { armed: 1, ..sa.clone() }, 4, sav, None, NOW - 150)));
     add("ifd.ask.update.arm", Action::Batch(upd(AnyState::KobIfdAsk(sa), sav, sa_down(), 100, 1_000)));
     let rpa = IfdAskState { rpt_amount: 1 + 20 * WHOLE, ..ifd_ask(MAKER_A, t3) };
-    add("ifd.ask.repeat.book", Action::Batch(ifda_fill(rpa.clone(), 4, rpa.escrow(CARRIER as i64).unwrap() as u64, None, 1_000)));
+    add("ifd.ask.repeat.book", Action::Batch(ifda_fill(rpa.clone(), 4, rpa.escrow(carrier() as i64).unwrap() as u64, None, 1_000)));
     let rwa = IfdAskState { amount_left: 4 * WHOLE, rpt_amount: 1 + 4 * WHOLE, ..ifd_ask(MAKER_A, t3) };
     add(
         "ifd.ask.repeat.soldOutWaits",
-        Action::Batch(ifda_fill(rwa.clone(), 4, rwa.escrow(CARRIER as i64).unwrap() as u64, None, 1_000)),
+        Action::Batch(ifda_fill(rwa.clone(), 4, rwa.escrow(carrier() as i64).unwrap() as u64, None, 1_000)),
     );
 
     // Repeat IFD, buy-first: take-profit + merge (partial, sell-out, into an empty entry), the
@@ -1263,14 +1326,14 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
             lock_time: NOW,
             sell: vec![Leg::Bid { order: order(20, bv, cov(0xb1), 1_000, bs), amount: 3 * WHOLE, t: None }],
             buy: vec![Leg::Ask {
-                order: order(10, CARRIER, cov(0x5a), 1_000, a_b),
+                order: order(10, carrier(), cov(0x5a), 1_000, a_b),
                 custody: tok_of(11, 5 * WHOLE, cov(0x5a), SCHEME_COVID, 1_000, TOKEN_B),
                 amount: 2 * WHOLE,
                 t: None,
             }],
             tokens: vec![tok(21, 3 * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000)],
             receiver: Some(pk(MERCHANT)),
-            token_carrier: CARRIER,
+            token_carrier: taker_carrier(),
             payments: if pay {
                 vec![Payment { script_public_key: spk_to_string(&kob_protocol::script::p2pk_spk(&pk(MERCHANT))), amount: KAS }]
             } else {
@@ -1375,7 +1438,7 @@ pub fn grid() -> Vec<(String, Action)> {
                     .map(|k| TokenRecipient {
                         pubkey: pk(10 + k as u8),
                         amount: if k + 1 == o { total - (o as i64 - 1) } else { 1 },
-                        carrier: CARRIER,
+                        carrier: carrier(),
                     })
                     .collect();
                 v.push((
@@ -1385,7 +1448,7 @@ pub fn grid() -> Vec<(String, Action)> {
                         tokens,
                         recipients,
                         token_change: None,
-                        token_change_carrier: CARRIER,
+                        token_change_carrier: carrier(),
                         funding: vec![key_utxo(99, TAKER, 1_000 * KAS)],
                         change: None,
                         records: vec![],
@@ -1411,7 +1474,7 @@ pub fn grid() -> Vec<(String, Action)> {
                     let n = if k + 1 == i { n_total - (i as i64 - 1) } else { 1 };
                     let c = cov(0x60 + k as u8);
                     legs.push(Leg::Ask {
-                        order: order(180 + k as u8, CARRIER, c, 1_000, ask_n(30 + k as u8, P250, tpl, n)),
+                        order: order(180 + k as u8, carrier(), c, 1_000, ask_n(30 + k as u8, P250, tpl, n)),
                         custody: custody(210 + k as u8, n, c, 1_000),
                         amount: n * WHOLE,
                         t: None,
@@ -1480,9 +1543,11 @@ pub fn pad_batch_shaped(t: TemplateId, a: &Action, asks: usize, bids: usize, amo
     for j in 0..asks {
         let c = pad_cov(0xa7, j);
         let s = AskState { amount_left: amount, min_fill: amount, ..ask(30 + (j % 10) as u8, price, t) };
-        let custody =
-            TokenUtxo { utxo: pad_utxo(0xa8, j, CARRIER, Some(TOKEN_COV)), state: TokenState::custody(Family::Kcc20, amount, c, EXT) };
-        legs.push(Leg::Ask { order: OrderUtxo { utxo: pad_utxo(0xa7, j, CARRIER, Some(c)), state: s }, custody, amount, t: None });
+        let custody = TokenUtxo {
+            utxo: pad_utxo(0xa8, j, carrier(), Some(TOKEN_COV)),
+            state: TokenState::custody(Family::Kcc20, amount, c, EXT),
+        };
+        legs.push(Leg::Ask { order: OrderUtxo { utxo: pad_utxo(0xa7, j, carrier(), Some(c)), state: s }, custody, amount, t: None });
     }
     for j in 0..bids {
         let s = BidState { min_fill: amount, ..bid(20 + (j % 10) as u8, price + 10_000_000, t) };
@@ -1492,7 +1557,7 @@ pub fn pad_batch_shaped(t: TemplateId, a: &Action, asks: usize, bids: usize, amo
     let mut pad = batch(legs);
     if bids > 0 {
         pad.taker_tokens = vec![TokenUtxo {
-            utxo: pad_utxo(0xb8, 0, CARRIER, Some(TOKEN_COV)),
+            utxo: pad_utxo(0xb8, 0, carrier(), Some(TOKEN_COV)),
             state: TokenState::user(Family::Kcc20, bids as i64 * amount, pk(TAKER), EXT),
         }];
     }
@@ -1522,10 +1587,12 @@ pub fn pad_asks_of(t: TemplateId, token: [u8; 32], kind: u8, a: &Action, asks: u
     for j in 0..asks {
         let c = pad_cov(kind, j);
         let s = AskState { token_cov_id: token, amount_left: WHOLE, min_fill: WHOLE, ..ask(30 + (j % 10) as u8, P250, t) };
-        let custody =
-            TokenUtxo { utxo: pad_utxo(kind + 1, j, CARRIER, Some(token)), state: TokenState::custody(Family::Kcc20, WHOLE, c, EXT) };
+        let custody = TokenUtxo {
+            utxo: pad_utxo(kind + 1, j, carrier(), Some(token)),
+            state: TokenState::custody(Family::Kcc20, WHOLE, c, EXT),
+        };
         legs.push(Leg::Ask {
-            order: OrderUtxo { utxo: pad_utxo(kind, j, CARRIER, Some(c)), state: s },
+            order: OrderUtxo { utxo: pad_utxo(kind, j, carrier(), Some(c)), state: s },
             custody,
             amount: WHOLE,
             t: None,

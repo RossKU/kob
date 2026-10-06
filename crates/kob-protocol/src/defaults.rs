@@ -41,10 +41,29 @@ pub const STOP_BAND_DAA: i64 = 300;
 /// Trigger rest time R (5 s, founder 2026-09-30): the evidence order must have been exposed at its quote
 /// for at least this long before the transaction that fills it arms a stop (`minRestDaa`).
 pub const MIN_REST_DAA: i64 = 50;
-/// Default minimum fill, in sompi of quote value (10 KAS, one default delivery carrier): the wallet's `minFill` is the
-/// amount worth this much at the order's limit price ([`default_min_fill`]). Every fill of a bid-side order moves a
+/// Default order carrier (sompi): 2 KAS, the KAS a wallet puts on every covenant UTXO of a new order (the order UTXO, its
+/// custody, each `deliveryCarrier`, each `exitCarrier`; a pair entry's `exitCarrier` also funds its exit's deliveries,
+/// `IfdPairState::exit_carrier_needed`). Never below a token output's floor (`TemplateId::min_token_output`, KaspaCom
+/// KCC20 0.2.5: 0.5 KAS) nor the KIP-9 dust bound (`tx::DUST_OUTPUT_MIN`).
+///
+/// Measured (`tests/carrier_fees.rs`: every builder shape of the golden set on the 8 token programs and 7 program pairs,
+/// 1,270 transactions): a token or order output carries a covenant id, so its KIP-9 storage plurality is 2 and its storage
+/// mass is `4 × 10^12 / carrier`. The relay fee (`rate × max(compute, normalized transient)`, what builders, the executor
+/// and the wallet pay by default) does not price storage mass: no shape pays more at any carrier from 10 KAS down to
+/// 0.1 KAS. What limits the carrier is the block storage limit (500,000): at 2 KAS the largest shape (an 8/8 pair 2 × 2
+/// netting) commits 177,256 (35%), at 1 KAS 357,188, at 0.5 KAS 61 pair shapes with evidence or netting exceed it and are
+/// refused. The storage-inclusive priority fee ([`crate::tx::FeeMode::Priority`], opt-in) has no clean value below
+/// 10 KAS: a placement's storage mass already exceeds its fee mass at 10 KAS (`create.ask` 11,923 against 8,278), and at
+/// 2 KAS 683 shapes pay more in that mode, at most 0.1305 KAS (a KRON / KRON pair stop armed with evidence).
+pub const DEFAULT_ORDER_CARRIER: u64 = 200_000_000;
+/// Default minimum fill, in sompi of quote value: 10 KAS of notional, independent of the carrier. The wallet's `minFill`
+/// is the amount worth this much at the order's limit price ([`default_min_fill`]). Every fill of a bid-side order moves a
 /// delivery carrier onto a new token UTXO and every fill restarts TWAP / DCA intervals, so the minimum bounds the fills
-/// (carriers, UTXOs) a filler can force on the maker to `ceil(amount / minFill)` (founder to confirm the value).
+/// (carriers, UTXOs) a filler can force on the maker to `ceil(amount / minFill)`: at the default carrier the carriers a
+/// filler can make the maker lock are at most 20% of the order's notional. The fee of one fill (relay floor, paid by the
+/// filler) is at most 0.6% of 10 KAS on every token program (KCC-20 reference 0.011 KAS, KRON 0.009 KAS, 16/16 0.031
+/// KAS, KaspaCom 0.056 KAS) and of a pair fill 0.28% (KCC-20 / KRON) to 1.4% (KaspaCom on both sides, its if-done entry):
+/// a smaller minimum would make small fills unprofitable to match before it saved the maker anything.
 pub const DEFAULT_MIN_FILL_SOMPI: i64 = 1_000_000_000;
 
 /// Wallet default of an order's `minFill` (base units): `clamp(ceil(DEFAULT_MIN_FILL_SOMPI * scale / price), 1, amount)`,
@@ -60,7 +79,8 @@ pub fn default_min_fill(amount: i64, price: i64, scale: i64) -> i64 {
 }
 
 /// Wallet default of an if-done entry's `minFill`: `ceil(amount / 4)` (at most four fills: an entry prefunds a
-/// delivery and an exit carrier per possible fill, so a 10-KAS minimum would prefund up to 2 x 10 KAS per fill).
+/// delivery and an exit carrier per possible fill, so a minimum of [`DEFAULT_MIN_FILL_SOMPI`] would prefund two carriers per
+/// 10 KAS of the entry).
 pub fn default_min_fill_ifd(amount: i64) -> i64 {
     if amount <= 0 {
         return 1;
@@ -233,6 +253,21 @@ mod tests {
         assert_eq!(default_min_fill_pair(1_000_000, None, 1_000), 250_000);
         assert_eq!(default_min_fill_pair(1_000_000, Some(0), 1_000), 250_000);
         assert_eq!(DEFAULT_MIN_FILL_IMMEDIATE, 1);
+    }
+
+    /// The default order carrier clears every token program's floor and the dust bound, and still holds what a wallet
+    /// draws from it by default: a trailing sell's 20 keeper tips plus its refund tip (`KobCondAsk`, the largest program
+    /// tips), and an if-done exit's trailing reserve at most half its carrier (the web planners' rules).
+    #[test]
+    fn the_default_order_carrier_clears_the_floors_and_the_keeper_reserve() {
+        const { assert!(DEFAULT_ORDER_CARRIER >= crate::tx::DUST_OUTPUT_MIN) };
+        for id in TemplateId::ALL.into_iter().filter(|t| t.is_token()) {
+            assert!(DEFAULT_ORDER_CARRIER >= id.min_token_output().unwrap_or(0), "{}", id.name());
+        }
+        let max_keeper = tips_table().values().map(|t| t.keeper_tip).max().unwrap();
+        let max_refund = tips_table().values().map(|t| t.refund_tip).max().unwrap();
+        assert!(20 * max_keeper + max_refund <= DEFAULT_ORDER_CARRIER, "{max_keeper} {max_refund}");
+        assert!(2 * 20 * max_keeper <= DEFAULT_ORDER_CARRIER);
     }
 
     #[test]

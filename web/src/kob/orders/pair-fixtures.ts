@@ -3,7 +3,7 @@
 // the tests check every disclosed amount against.
 import type { PairBookView } from '../../data/indexer-types';
 import type { BookView as PlanBook, Clock, OwnOrderRef, PairPlanEnv, TokenMarket } from '../plan-types';
-import { CLOCK, KAS, MAKER_PK, keyUtxo, kob, level, market3x3, market8x8, marketKron, tokenUtxo } from '../../testing/fixtures';
+import { CLOCK, FIXTURE_CARRIER, KAS, MAKER_PK, keyUtxo, kob, level, market3x3, market8x8, marketKron, tokenUtxo } from '../../testing/fixtures';
 
 export { CLOCK, KAS, MAKER_PK, level };
 
@@ -45,7 +45,8 @@ export interface PairEnvOptions {
   kasPerWholeA?: bigint | null;
   kasPerWholeB?: bigint | null;
   clock?: Clock;
-  carrier?: bigint;
+  /** KAS per covenant UTXO; default `FIXTURE_CARRIER` (10 KAS), `null` = the wallet default */
+  carrier?: bigint | null;
   lastFillPrice?: bigint | null;
 }
 
@@ -70,7 +71,8 @@ export function makePairEnv(o: PairEnvOptions = {}): PairPlanEnv {
       kasPerWholeB: o.kasPerWholeB === undefined ? KAS / 5n : o.kasPerWholeB,
     },
   };
-  if (o.carrier !== undefined) env.carrier = o.carrier;
+  const carrier = o.carrier === undefined ? FIXTURE_CARRIER : o.carrier;
+  if (carrier !== null) env.carrier = carrier;
   if (o.lastFillPrice !== undefined) env.lastFillPrice = o.lastFillPrice;
   return env;
 }

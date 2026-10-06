@@ -42,7 +42,7 @@ export interface CondCommon {
    * Default: active at once. For `ifd` / `ifo` / `repeat*` it times the ENTRY only; the exits it creates stay immediately active.
    */
   activeFrom?: Activation;
-  /** KAS per covenant UTXO (order, custody, delivery, exit). Default: `env.carrier`, else 10 KAS. */
+  /** KAS per covenant UTXO (order, custody, delivery, exit). Default: `env.carrier`, else 2 KAS (`DEFAULT_CARRIER`). */
   carrier?: bigint;
   /** buy-side conditionals (stop / take-profit / OCO / trailing buy): separate fills to pre-fund a delivery carrier for (default 2, at most the fills the minimum fill allows) */
   maxFills?: bigint;

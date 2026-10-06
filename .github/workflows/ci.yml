@@ -50,12 +50,12 @@ jobs:
         with:
           toolchain: "1.94.0"
       - uses: Swatinem/rust-cache@v2
-      - name: Workspace tests (default order carrier 10 KAS, KRON template 2433)
+      - name: Workspace tests (harness order carrier 10 KAS, KRON template 2433)
         env:
           # the live TN10 tests (node follow, x402 end-to-end) need a reachable testnet node and mine their own funds: not for CI
           KOB_SKIP_NETWORK_TESTS: "1"
         run: cargo test --workspace --locked
-      - name: Engine harness, carrier sensitivity
+      - name: Engine harness, carrier sensitivity (2 KAS = the wallet default order carrier)
         shell: bash
         run: |
           KOB_CARRIER_KAS=2 cargo test --locked -p kob-tests

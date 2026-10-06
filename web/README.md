@@ -89,7 +89,7 @@ and the pair ticket (`src/ui/market/PairPage.tsx`, `CrossTicket.tsx`, `pair-mode
 * **The pair ticket is the KAS ticket.** Same order types by name (Limit, Market, IOC, FOK: `PAIR_TYPES` in `cross-form.ts`), same fields, labels and wording (`ticket.*` keys), no
   cross-only control: the amount is rounded to whole lots of the received token and the number of prefunded deliveries is chosen by the form, both silently. The KAS ticket's
   streaming, close, stop, trailing, take-profit, OCO, if-done, repeat, TWAP, DCA and Dutch types are hidden on a pair (`PAIR_HIDDEN_TYPES`): a cross order cannot be them.
-* **Carriers.** `deliveryCarrier` = the covenant carrier (10 KAS, like a bid's). A resting order prefunds one delivery per partial fill it can take,
+* **Carriers.** `deliveryCarrier` = the covenant carrier (2 KAS by default, like a bid's). A resting order prefunds one delivery per partial fill it can take,
   `min(lots - 1, 3)` (the bid default of 3 fills): order value = carrier + deliveries x deliveryCarrier; an IOC / FOK order takes one fill that moves
   the whole order value onto the delivery, so its value is the carrier. The value is at least deliveryCarrier + 1 sompi (protocol minimum; a 1-lot or IOC
   order gets that). Unused carriers come back with the last fill, a refund or a cancel (disclosed).

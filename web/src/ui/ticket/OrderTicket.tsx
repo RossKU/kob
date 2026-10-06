@@ -15,6 +15,7 @@ import type { TokenInfo } from '../../kob/registry';
 import type { ExpectedSigning } from '../../kob/decode';
 import type { BuiltTx } from '../../kob/types';
 import { formatKas, formatUnits } from '../../kob/units';
+import { DEFAULT_CARRIER } from '../../kob/orders/common';
 import { Banner, Button, CopyText, Loading, RawDetails, Segmented } from '../kit';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
 import { oppositeSide, pairLabel } from '../market/orientation';
@@ -61,7 +62,6 @@ interface ConfirmState {
   label: string;
 }
 
-const DEFAULT_CARRIER = 10n * 100_000_000n;
 const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
 
 export function OrderTicket(props: OrderTicketProps) {

@@ -405,10 +405,12 @@ pub mod api {
     pub fn default_min_touch(min_fill: &str) -> R<String> {
         Ok(defaults::default_min_touch(num("minFill", min_fill)?).to_string())
     }
-    /// The wallet default constants: `{defaultMinFillSompi, defaultMinFillImmediate, maxScale, quoteLimit, marketAuctionDaa,
-    /// slippageBps, marketActivationDaa, iocLifeDaa, stopBandDaa, minRestDaa, daaRateMilli}` (integers as decimal strings).
+    /// The wallet default constants: `{defaultOrderCarrier, defaultMinFillSompi, defaultMinFillImmediate, maxScale, quoteLimit,
+    /// marketAuctionDaa, slippageBps, marketActivationDaa, iocLifeDaa, stopBandDaa, minRestDaa, daaRateMilli}` (integers as
+    /// decimal strings).
     pub fn default_constants() -> R<String> {
         out(&serde_json::json!({
+            "defaultOrderCarrier": defaults::DEFAULT_ORDER_CARRIER.to_string(),
             "defaultMinFillSompi": defaults::DEFAULT_MIN_FILL_SOMPI.to_string(),
             "defaultMinFillImmediate": defaults::DEFAULT_MIN_FILL_IMMEDIATE.to_string(),
             "maxScale": state::MAX_SCALE.to_string(),
@@ -1251,8 +1253,8 @@ pub fn default_min_fill_sompi() -> String {
     kob_protocol::defaults::DEFAULT_MIN_FILL_SOMPI.to_string()
 }
 
-/// Wallet default constants as JSON (`defaultMinFillSompi`, `defaultMinFillImmediate`, `maxScale`, `quoteLimit`, the market /
-/// stop DAA parameters).
+/// Wallet default constants as JSON (`defaultOrderCarrier`, `defaultMinFillSompi`, `defaultMinFillImmediate`, `maxScale`,
+/// `quoteLimit`, the market / stop DAA parameters).
 #[wasm_bindgen(js_name = defaultConstants)]
 pub fn default_constants() -> Result<String, JsError> {
     js(api::default_constants())
@@ -1893,6 +1895,7 @@ mod tests {
         assert_eq!(api::default_min_touch("4000").unwrap(), "4000");
         let c: serde_json::Value = serde_json::from_str(&api::default_constants().unwrap()).unwrap();
         assert_eq!(c["defaultMinFillSompi"], "1000000000");
+        assert_eq!(c["defaultOrderCarrier"], "200000000");
         assert_eq!(c["maxScale"], "1000000000");
     }
 

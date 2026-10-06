@@ -75,7 +75,7 @@ scripts/build-contracts.sh                        # rewrite the artifacts after 
 
 ```
 KOB_SKIP_NETWORK_TESTS=1 cargo test --workspace --locked
-KOB_CARRIER_KAS=20 cargo test --locked -p kob-tests          # order carrier of 2, 10 (default) or 20 KAS
+KOB_CARRIER_KAS=20 cargo test --locked -p kob-tests          # harness order carrier of 2 (the wallet default), 10 (default) or 20 KAS
 scripts/build-wasm.sh --install-bindgen --test               # wasm bindings + node golden-vector tests
 node tools/ablation/ablate.mjs --list --suite all            # contract mutation catalogue (see tools/ablation/README.md)
 ```

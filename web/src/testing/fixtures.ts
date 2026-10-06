@@ -99,8 +99,15 @@ export interface EnvOptions {
   ownOrders?: OwnOrderRef[];
   clock?: Clock;
   feeRate?: bigint;
-  carrier?: bigint;
+  /** KAS per covenant UTXO; default [`FIXTURE_CARRIER`], `null` = none in the env (the planners use the wallet default, `DEFAULT_CARRIER`) */
+  carrier?: bigint | null;
 }
+
+/**
+ * The carrier the fixture envs plan with unless told otherwise: 10 KAS, the carrier of the Rust fixtures and the golden vectors, so the
+ * planner tests keep their numbers. The wallet default (`DEFAULT_CARRIER`, 2 KAS) is tested with `carrier: null`.
+ */
+export const FIXTURE_CARRIER = 1_000_000_000n;
 
 /** A PlanEnv for `MAKER_PK`. The wasm module is the real one (node bindings). */
 export function makeEnv(o: EnvOptions = {}): PlanEnv {
@@ -116,7 +123,8 @@ export function makeEnv(o: EnvOptions = {}): PlanEnv {
     tokenUtxos: (o.tokenAmounts ?? [100n * TOK]).map((a) => tokenUtxo(market, a)),
   };
   if (o.feeRate !== undefined) env.feeRate = o.feeRate;
-  if (o.carrier !== undefined) env.carrier = o.carrier;
+  const carrier = o.carrier === undefined ? FIXTURE_CARRIER : o.carrier;
+  if (carrier !== null) env.carrier = carrier;
   return env;
 }
 
