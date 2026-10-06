@@ -1080,3 +1080,36 @@ The soak was left running.
   into the label and badges, My orders and balances did not, and the executor says `unverified` of every token that is not `official`.
   `indexerDowngrade` (web/src/ui/market/token-model.ts) is now the one rule: `delisted` always wins, `unverified` only against a registry
   token that claims `official`, `official` never upgrades. The soak tokens (verified, not official) read `[verified]` everywhere.
+
+## Redeploy on main 8c7459d (2026-10-07, TN10): KobIfdAsk refund fix, token-intent lock pin, executor transport bounds
+
+`m10/soak` fast-forwarded from 217d452 to main 8c7459d (10 commits). **Templates:** of the 15 order templates the soak pinned, only
+`KobIfdAsk` 189b9c32 -> bbcfc226 and `KobIfdAskKron` 85d87838 -> d523d794 changed; both old hashes are in `kob_protocol::retired` with
+today's state layout (test `every_order_template_of_the_tn10_soak_build_is_pinned_or_retired`). The 24 token-intent router templates
+changed too (router a85ee4b6 -> f50258c3). **Databases kept** (schema 5 unchanged): every candle (1m / 5m / 1h / 1d, KAS books and
+pairs) that closed before the switch and the 200 newest trades per book read back byte for byte from both indexers afterwards.
+
+Procedure: `invoiceIntent` off and a bots restart, until the facilitator ledger held no open intent and the last invoice expired
+(~6 min); bots held down (`dist/soak.mjs` renamed away, so the supervisor's restarts fail) while the 3 live `KobIfdAsk` 189b9c32
+entries were cancelled through the retired path of the new `kob order cancel --view` (both old indexers recorded `cancelled`; 0 live
+orders on a changed template); executors swapped one at a time (`executorBin`, `restart-child.ps1`); `run/wasm-node`, `dist/`,
+`run/web-dist` (built with `UI_OUT` into a staging directory) swapped; bots, checker, UI and the public 8491 instance restarted.
+Bots were down 22:06:45 to 22:18:52 UTC. Previous binaries, bindings, bundle, web build, config and database snapshots
+(`VACUUM INTO`) in `run/backup-pre-8c7459d/`.
+
+Found on the way (fixed, regression tests):
+
+* **The facilitator ledger refused to open** (`ledger corrupt at line 49: missing field lockAmount`): every intent payment recorded
+  before the lock pin failed to decode, so the new exec-a exited at start (exec-a was rolled back to the old binary for 8 min). Such a
+  record now replays as `legacyIntent` (kept verbatim, never acted on); 123 of the 488 entries.
+* **Orders of a retired template with today's layout were listed**: a carried database keeps them under the contract name, their state
+  decodes as today's kind, and a fill / kill / refund planned from today's template cannot spend their script. The book now offers only
+  orders whose recorded template hash is pinned.
+
+Watch 22:20 to 22:52 UTC (32 minute samples): 0 rejected (exec-a 85, exec-b 90 batches finalized), 0 new incidents (the two `health`
+errors at 22:10 / 22:12 are the swap), 0 rejects in the indexer; fills per minute (22:22 to 22:32) TUSD 5.5, TETH 9.1, TBTC 4.6, pair
+fills TETH/TUSD 2.7, TBTC/TUSD 1.4; IOC / FOK / market orders, stops, trailing stops, pair market and pair stops, and the new
+`KobIfdAsk` bbcfc226 entries (armed and filled) on TETH and TBTC all filled; the invoice + intent path paid on the new router. Indexer
+lag median 48 to 55 DAA (p95 120 to 230): TN10 carried ~240 transactions per block in this window (8 MB batches, 20 s fetches), so both
+indexers touched `catching_up` 3 to 4 times, as before the switch. Bank 295,656 KAS, falling ~3,000 to 3,800 KAS/h (market-maker
+top-ups); it reaches the miner's 20,000 KAS watermark around 10-10 / 10-11, after which the GPU miner (~1 block/s while bursting) holds it.
