@@ -778,8 +778,11 @@ describe('WebSocket /v1/ws', () => {
     await a.call({ op: 'subscribe', channels: ['health', 'reorg', `fills:${EXKCC}`, `fills:${'00'.repeat(32)}`, `book:${EXKCC}`, `order:${cov}`, `order:${'11'.repeat(32)}`] });
     await b.call({ op: 'subscribe', channels: [`book:${'22'.repeat(32)}`] });
     await post('/mock/fill', { covenant_id: cov, amount: 100_000_000 });
-    await a.waitFor((f) => f.length >= 5);
-    const byChannel = Object.fromEntries(a.frames.slice(1).map((f) => [f.channel, f]));
+    // the periodic health frames (type 'health', every 200 ms here) share the `health` channel with the cursor frame under test and
+    // can land at any point: count and index only the subscription reply and the frames the fill pushed
+    const pushed = () => a.frames.filter((f) => f.type !== 'health');
+    await a.waitFor(() => pushed().length >= 5);
+    const byChannel = Object.fromEntries(pushed().slice(1).map((f) => [f.channel, f]));
     expect(byChannel[`fills:${EXKCC}`]).toMatchObject({ type: 'fill', data: { order: cov, token: EXKCC, side: 1, amount: 100_000_000, price: Number(ask.price) } });
     expect(byChannel[`book:${EXKCC}`]).toMatchObject({ type: 'book', data: { token: EXKCC } });
     expect(byChannel[`order:${cov}`]).toMatchObject({ type: 'order', data: { covenant_id: cov } });
