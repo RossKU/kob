@@ -187,7 +187,8 @@ pub fn unlisted_orders(conn: &Connection) -> DbResult<Vec<ListedOrder>> {
 fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
     let mut tokens = owned_tokens(conn)?;
     let mut st = conn.prepare_cached(
-        "SELECT o.covenant_id, o.contract, o.family, o.deadline, o.ext_commit, u.txid, u.idx, u.value, u.state, u.created_daa \
+        "SELECT o.covenant_id, o.contract, o.family, o.deadline, o.ext_commit, u.txid, u.idx, u.value, u.state, u.created_daa, \
+         o.template_hash \
          FROM orders o \
          JOIN order_state s ON s.covenant_id = o.covenant_id \
          JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
@@ -206,14 +207,22 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
             r.get::<_, i64>(7)?,
             r.get::<_, Option<Vec<u8>>>(8)?,
             r.get::<_, i64>(9)?,
+            r.get::<_, Vec<u8>>(10)?,
         ))
     })?;
     let mut out = Vec::new();
     for r in rows {
-        let (cov, contract, family, deadline, ext, txid, idx, value, state, daa) = r?;
+        let (cov, contract, family, deadline, ext, txid, idx, value, state, daa, tpl_hash) = r?;
         let Some(fam) = u8::try_from(family).ok().and_then(Family::from_code) else { continue };
         let (Some(cov), Some(txid)) = (h32(cov), h32(txid)) else { continue };
         let Some(state) = tip_state(&contract, state) else { continue };
+        // An order placed under a template this build no longer pins (a database carried over a template change; a retired
+        // template with today's state layout decodes as today's kind) lives at the OLD script: nothing this build plans from
+        // today's template (a fill, kill, refund or close) hashes to it. Spend-only through its maker's retired cancel
+        // (`kob_protocol::retired`), never offered to the matcher or the keepers.
+        if kob_protocol::artifacts::try_template(state.template_id()).is_none_or(|t| t.hash[..] != tpl_hash[..]) {
+            continue;
+        }
         // a state the numeric gate refuses is never offered to the matcher (belt and braces: the listing flag already says so)
         if let Err(why) = crate::sanity::check(&state) {
             if !listed {
