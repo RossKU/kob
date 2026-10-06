@@ -249,7 +249,8 @@ default and switched on in the x402 configuration file:
 "intents":  { "enabled": true, "keeperPubkey": "<64 hex x-only key>", "fillerSompi": 20000000,
               "maxAttempts": 20, "maxBuilds": 24, "maxCandidates": 8, "lockMarginDaa": 10 },
 "invoices": { "enabled": true, "store": "x402-invoices.jsonl", "maxLifetimeSeconds": 604800,
-              "publicUrl": "https://pay.example.com", "maxOpenPerMerchant": 10000 }
+              "publicUrl": "https://pay.example.com", "maxOpenPerMerchant": 10000,
+              "maxExtraPaymentsPerInvoice": 16 }
 ```
 
 **Intent payments** (`extra.route.binding = kob-intent-v1`). The payer signs one transaction, the creation of
@@ -306,7 +307,10 @@ merchant's `allowedPayTo` / `allowedAssets`, its lifetime is at most `maxLifetim
 fewer than `maxOpenPerMerchant` unexpired invoices. A payment's request hash is the invoice id. One invoice is
 paid once: a duplicate or late payment is refused before broadcast, kept as evidence, and reported in the
 status (`extraPayments[].observed = accepted`) if its payer broadcasts it anyway, so it can be refunded by hand
-(refunds are not automated). A direct payment whose outcome stayed unknown (`ambiguous`: the node was unreachable at
+(refunds are not automated). The pay route is public, so this evidence is bounded: a refused payment that spends exactly the outputs
+a kept one spends (a fee variant of the same funding: at most one of them can reach the chain) is not kept, and an
+invoice keeps at most `maxExtraPaymentsPerInvoice` (16) refused payments; further ones are refused without being written
+(`kob_x402_invoice_evidence_dropped`). A direct payment whose outcome stayed unknown (`ambiguous`: the node was unreachable at
 its broadcast, or its accepted output vanished in a reorg) and that the node still does not know an hour later (not in
 the mempool, its merchant output not on chain) is failed, its outpoints are released and the invoice can be paid again
 until it expires; the invoice keeps watching it as `extraPayments[].kind = released`, so a late acceptance is still
@@ -1227,13 +1231,25 @@ stall or drain any executor:
   is interrupted after 20 s. Candles and stats read at most 20 000 fill rows through a `(kind, token, ts)` index (`window_truncated`
   says when the 24 h window was cut). Scanning routes (candles, stats, depth, trades, books, strays, holdings, pairs) cost
   `api.rate_limit.heavy_route_cost` (5) bucket tokens; a client that is already limited does not drain the global bucket;
-  `api.rate_limit.ipv6_prefix_bits` (64) can be set to 48 against an attacker rotating addresses through a large prefix; a WebSocket
-  frame that cannot be sent in 10 s ends the session.
+  `api.rate_limit.ipv6_prefix_bits` (64) can be set to 48 against an attacker rotating addresses through a large prefix, and the
+  /64s of one IPv6 site (`api.rate_limit.ipv6_site_prefix_bits`, 48; 0 = off) also share a site bucket
+  (`per_site_rps` 100, `per_site_burst` 300), so rotating through the /64s of one allocation cannot drain the global bucket; a
+  WebSocket frame that cannot be sent in 10 s ends the session, and a session that sends no application message (a subscription
+  change or `{"op":"ping"}`; protocol Ping / Pong frames do not count) for `api.ws_idle_timeout_ms` (60 000) is closed.
+  Below the request guard, the transport is bounded too: a request head must arrive within `api.header_timeout_ms` (10 000; also
+  the keep-alive idle limit), a response write that makes no progress for `api.write_timeout_ms` (30 000; 0 = off) closes the
+  connection, and at most `api.max_connections` (4 096) HTTP connections are open, `api.max_connections_per_ip` (64; per /64,
+  trusted proxies exempt; 0 = no cap) of them from one socket peer; a connection over a cap is answered `503` and closed (an
+  upgraded WebSocket counts against `max_ws_connections` / `max_ws_per_ip` instead).
 * **The x402 facilitator** attributes requests to the forwarded client behind `trustedProxies` /
   `clientIpHeader`; `/metrics` is never served to a loopback peer when proxies are configured, when the request carries a forwarding
   header, or when `metricsLoopback` is false (use the admin key); a request with a valid merchant key is limited by its merchant's
   bucket, so anonymous junk from a shared address cannot starve merchants; settlements are capped per merchant
-  (`maxSettlesPerMerchant`, 8) as well as globally, and `/verify` has its own cap (`maxConcurrentVerifies`, 64). `/verify` refuses a
+  (`maxSettlesPerMerchant`, 8) as well as globally, and `/verify` has its own cap (`maxConcurrentVerifies`, 64). The listener
+  closes a connection whose request head does not arrive within `headerTimeoutMs` (10 000; also the keep-alive idle limit) or whose
+  response write makes no progress for `writeTimeoutMs` (30 000; 0 = off), and holds at most `maxConnections` (1 024) connections,
+  `maxConnectionsPerIp` (64; per /64, `trustedProxies` exempt; 0 = no cap) of them from one socket peer; a connection over a cap
+  is answered `503` and closed. `/verify` refuses a
   payment funded by an immature coinbase output (100 DAA; it is a check, never a delivery guarantee: only `/settle`'s observed
   finality is). `":memory:"` ledgers are refused on mainnet, and a `pending` entry the node never saw is failed and its outpoints
   released after 15 minutes.

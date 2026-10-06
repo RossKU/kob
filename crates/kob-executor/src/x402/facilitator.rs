@@ -165,6 +165,8 @@ metrics! {
     invoices_registered,
     /// Invoice payments refused because the invoice was paid, being paid or expired (kept as evidence).
     invoice_refused,
+    /// Refused invoice payments NOT kept as evidence: the invoice already holds `maxExtraPaymentsPerInvoice` of them.
+    invoice_evidence_dropped,
 }
 
 impl Metrics {

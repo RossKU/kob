@@ -304,6 +304,7 @@ impl Fixture {
                     max_lifetime_ms: 86_400_000,
                     public_url: None,
                     max_open_per_merchant: 100,
+                    max_extra_payments: 16,
                 });
         fx.fac = Arc::new(fac);
         fx

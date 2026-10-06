@@ -211,6 +211,7 @@ fn world() -> World {
         max_lifetime_ms: 86_400_000,
         public_url: Some("https://pay.example".into()),
         max_open_per_merchant: 100,
+        max_extra_payments: 16,
     });
     World {
         chain,

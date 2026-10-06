@@ -25,8 +25,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::RecvError;
 
 pub const MAX_MESSAGE_BYTES: usize = 4096;
+/// Server Ping (and health frame) cadence, at most: a session idle limit below four times this ticks faster.
 const PING_EVERY: Duration = Duration::from_secs(15);
-const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Channel {
@@ -250,7 +250,10 @@ async fn session(mut socket: WebSocket, app: Arc<App>, _guard: WsGuard) {
     let max_subs = app.state.cfg.max_ws_subscriptions;
     let max_msgs = app.state.cfg.ws_client_msgs_per_sec.max(1);
     let mut subs: BTreeSet<Channel> = BTreeSet::new();
-    let mut tick = tokio::time::interval(PING_EVERY);
+    // idle = no APPLICATION message (a subscription change or `{"op":"ping"}`) for this long; protocol Ping / Pong frames
+    // do not count, or a client that only auto-answers our Pings would hold its slot forever
+    let idle_timeout = Duration::from_millis(app.state.cfg.ws_idle_timeout_ms.max(1));
+    let mut tick = tokio::time::interval(PING_EVERY.min(idle_timeout / 4).max(Duration::from_millis(10)));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     tick.tick().await;
     let mut last_rx = Instant::now();
@@ -266,7 +269,9 @@ async fn session(mut socket: WebSocket, app: Arc<App>, _guard: WsGuard) {
             }
             msg = socket.recv() => {
                 let Some(Ok(msg)) = msg else { break };
-                last_rx = Instant::now();
+                if matches!(msg, Message::Text(_)) {
+                    last_rx = Instant::now();
+                }
                 if window.0.elapsed() >= Duration::from_secs(1) {
                     window = (Instant::now(), 0);
                 }
@@ -307,7 +312,9 @@ async fn session(mut socket: WebSocket, app: Arc<App>, _guard: WsGuard) {
                 }
             }
             _ = tick.tick() => {
-                if last_rx.elapsed() > IDLE_TIMEOUT {
+                if last_rx.elapsed() > idle_timeout {
+                    let close = Message::Close(Some(CloseFrame { code: 1000, reason: "idle".into() }));
+                    let _ = tokio::time::timeout(SEND_TIMEOUT, socket.send(close)).await;
                     break;
                 }
                 if !matches!(tokio::time::timeout(SEND_TIMEOUT, socket.send(Message::Ping(Vec::new().into()))).await, Ok(Ok(()))) {

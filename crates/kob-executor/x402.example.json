@@ -26,6 +26,7 @@
   "maxBodyBytes": 1048576,
   "bodyDeadlineMs": 10000,
   "headerTimeoutMs": 10000,
+  "writeTimeoutMs": 30000,
   "settleWaitMs": 30000,
   "pollIntervalMs": 200,
   "nodeTimeoutMs": 5000,
@@ -33,7 +34,8 @@
   "reconcileIntervalSeconds": 30,
   "maxConcurrentSettles": 64,
   "maxConnections": 1024,
+  "maxConnectionsPerIp": 64,
   "killSwitchFile": "x402.kill",
   "intents": { "enabled": false, "keeperPubkey": "", "fillerSompi": 20000000, "maxAttempts": 20, "maxBuilds": 24, "maxCandidates": 8, "lockMarginDaa": 10 },
-  "invoices": { "enabled": false, "maxLifetimeSeconds": 604800, "maxOpenPerMerchant": 10000 }
+  "invoices": { "enabled": false, "maxLifetimeSeconds": 604800, "maxOpenPerMerchant": 10000, "maxExtraPaymentsPerInvoice": 16 }
 }

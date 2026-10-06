@@ -189,6 +189,8 @@ pub struct InvoiceCfg {
     pub public_url: Option<String>,
     /// Most unexpired invoices per merchant.
     pub max_open_per_merchant: usize,
+    /// Most refused payments (duplicate or late; one per spent output) kept as evidence per invoice.
+    pub max_extra_payments_per_invoice: usize,
 }
 
 impl Default for InvoiceCfg {
@@ -199,6 +201,7 @@ impl Default for InvoiceCfg {
             max_lifetime_seconds: 7 * 24 * 3600,
             public_url: None,
             max_open_per_merchant: 10_000,
+            max_extra_payments_per_invoice: 16,
         }
     }
 }
@@ -240,6 +243,11 @@ pub struct X402Config {
     /// Most `/verify` calls running at once (each runs the script engine on a blocking thread).
     pub max_concurrent_verifies: usize,
     pub max_connections: usize,
+    /// Open connections per socket peer (IPv6: per /64; `trustedProxies` exempt), so one host cannot hold every one of
+    /// `maxConnections`; 0 = no per-address cap.
+    pub max_connections_per_ip: usize,
+    /// A response write that makes no progress for this long (the client stopped reading) closes the connection; 0 = off.
+    pub write_timeout_ms: u64,
     pub kill_switch_file: Option<String>,
     /// Reverse proxies (CIDR or bare IP) whose forwarded-client header is believed. Behind a proxy on the same host
     /// EVERY request comes from 127.0.0.1: without this the per-IP limits are one shared bucket, and with it `/metrics` no longer
@@ -287,6 +295,8 @@ impl Default for X402Config {
             max_settles_per_merchant: 8,
             max_concurrent_verifies: 64,
             max_connections: 1024,
+            max_connections_per_ip: 64,
+            write_timeout_ms: 30_000,
             kill_switch_file: None,
             trusted_proxies: vec![],
             client_ip_header: "x-forwarded-for".into(),
@@ -326,6 +336,18 @@ pub struct Built {
 }
 
 impl X402Config {
+    /// Transport bounds of the HTTP server (`crate::api::conn`).
+    pub fn conn_limits(&self) -> crate::api::conn::ConnLimits {
+        crate::api::conn::ConnLimits {
+            header_timeout: std::time::Duration::from_millis(self.header_timeout_ms.max(1)),
+            write_timeout: std::time::Duration::from_millis(self.write_timeout_ms),
+            max_connections: self.max_connections.max(1),
+            max_per_ip: self.max_connections_per_ip,
+            ipv6_prefix_bits: 64,
+            exempt: crate::api::client_ip::TrustedProxies::parse(&self.trusted_proxies).unwrap_or_default(),
+        }
+    }
+
     /// Parses a config document (unknown fields are rejected).
     pub fn from_json(text: &str) -> Result<X402Config, ConfigError> {
         serde_json::from_str(text).map_err(|e| ConfigError(e.to_string()))

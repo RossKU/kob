@@ -91,6 +91,8 @@ pub struct RateLimiter {
     cfg: RateLimitConfig,
     clock: Arc<dyn Clock>,
     clients: Mutex<Clients>,
+    /// IPv6 site buckets (`ipv6_site_prefix_bits`), bounded like the client table.
+    sites: Mutex<Clients>,
     global: Mutex<Bucket>,
 }
 
@@ -106,6 +108,7 @@ impl RateLimiter {
             cfg,
             clock,
             clients: Mutex::new(Clients { map: HashMap::new(), last_sweep_ns: now }),
+            sites: Mutex::new(Clients { map: HashMap::new(), last_sweep_ns: now }),
             global: Mutex::new(global),
         }
     }
@@ -128,6 +131,19 @@ impl RateLimiter {
             self.maintain(&mut c, now, &key);
             let b = c.map.entry(key).or_insert_with(|| Bucket::full(burst, now));
             b.take(now, self.cfg.per_ip_rps, burst, cost).map_err(secs)?;
+        }
+        // an IPv6 site shares one more bucket: rotating through the /64s of one allocation does not multiply the budget
+        if self.cfg.per_ip_rps > 0.0
+            && self.cfg.per_site_rps > 0.0
+            && self.cfg.ipv6_site_prefix_bits > 0
+            && crate::api::client_ip::unmap(ip).is_ipv6()
+        {
+            let key = rate_key(ip, self.cfg.ipv6_site_prefix_bits);
+            let burst = self.cfg.per_site_burst.max(1) as f64;
+            let mut s = self.sites.lock().unwrap_or_else(|e| e.into_inner());
+            self.maintain(&mut s, now, &key);
+            let b = s.map.entry(key).or_insert_with(|| Bucket::full(burst, now));
+            b.take(now, self.cfg.per_site_rps, burst, cost).map_err(secs)?;
         }
         if self.cfg.global_rps > 0.0 {
             let burst = self.cfg.global_burst.max(1) as f64;
@@ -264,6 +280,37 @@ mod tests {
         // four global tokens are left for everybody else
         for i in 2..6 {
             assert!(l.check(ip(&format!("2.2.2.{i}"))).is_ok(), "{i}");
+        }
+    }
+
+    #[test]
+    fn ipv6_64s_of_one_site_share_the_site_bucket() {
+        let mut c = cfg(10.0, 10, 0.0, 1);
+        c.per_site_rps = 1.0;
+        c.per_site_burst = 25;
+        let (l, clock) = limiter(c);
+        // three /64s of 2001:db8:7::/48: each has a fresh 10-token client bucket, together only 25 site tokens
+        let mut admitted = 0;
+        for n in 1..=3 {
+            for _ in 0..10 {
+                admitted += u32::from(l.check(ip(&format!("2001:db8:7:{n}::1"))).is_ok());
+            }
+        }
+        assert_eq!(admitted, 25);
+        // another site and IPv4 are untouched
+        assert!(l.check(ip("2001:db8:8:1::1")).is_ok());
+        assert!(l.check(ip("1.1.1.1")).is_ok());
+        clock.advance(Duration::from_secs(1));
+        assert!(l.check(ip("2001:db8:7:4::1")).is_ok());
+        assert!(l.check(ip("2001:db8:7:5::1")).is_err());
+        // 0 bits: no site bucket
+        let mut c = cfg(10.0, 10, 0.0, 1);
+        c.per_site_rps = 1.0;
+        c.per_site_burst = 1;
+        c.ipv6_site_prefix_bits = 0;
+        let (l, _) = limiter(c);
+        for n in 1..=3 {
+            assert!(l.check(ip(&format!("2001:db8:7:{n}::1"))).is_ok());
         }
     }
 

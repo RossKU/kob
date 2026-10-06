@@ -66,6 +66,13 @@ pub struct RateLimitConfig {
     /// IPv6 clients are limited per this many leading address bits (64: one subscriber; 48 groups a site, against an attacker
     /// that rotates addresses through a larger prefix).
     pub ipv6_prefix_bits: u8,
+    /// IPv6 clients are ALSO limited together per this wider prefix (48: a site), so an attacker rotating through the
+    /// /64s of one allocation gets one shared budget instead of a fresh one per /64; 0 disables the site bucket.
+    pub ipv6_site_prefix_bits: u8,
+    /// Sustained requests per second of one IPv6 site (`ipv6_site_prefix_bits`).
+    pub per_site_rps: f64,
+    /// Burst size of one IPv6 site.
+    pub per_site_burst: u32,
     /// Bucket tokens one heavy read (candles, stats, depth, trades, books, strays, holdings) costs; a light request costs 1.
     pub heavy_route_cost: u32,
 }
@@ -80,6 +87,9 @@ impl Default for RateLimitConfig {
             bucket_ttl_secs: 600,
             max_tracked_clients: 100_000,
             ipv6_prefix_bits: 64,
+            ipv6_site_prefix_bits: 48,
+            per_site_rps: 100.0,
+            per_site_burst: 300,
             heavy_route_cost: 5,
         }
     }
@@ -100,8 +110,20 @@ pub struct ApiConfig {
     /// Concurrent in-flight REST requests.
     pub max_concurrent_requests: usize,
     pub request_timeout_ms: u64,
+    /// A request head must arrive within this (also the keep-alive idle limit between requests): slow-header connections
+    /// are closed before the guard ever sees them.
+    pub header_timeout_ms: u64,
+    /// A response write that makes no progress for this long (the client stopped reading) closes the connection; 0 = off.
+    pub write_timeout_ms: u64,
+    /// Open HTTP connections at once (an upgraded WebSocket counts against `max_ws_connections` instead).
+    pub max_connections: usize,
+    /// Open HTTP connections per socket peer (IPv6 per `rate_limit.ipv6_prefix_bits` prefix; trusted proxies exempt); 0 = no cap.
+    pub max_connections_per_ip: usize,
     pub max_ws_connections: usize,
     pub max_ws_per_ip: usize,
+    /// A WebSocket session that sends no application message (a subscription change or `{"op":"ping"}`) for this long is
+    /// closed; protocol Ping / Pong frames do not count.
+    pub ws_idle_timeout_ms: u64,
     /// Messages a WebSocket client may send per second before it is disconnected.
     pub ws_client_msgs_per_sec: u32,
     pub max_ws_subscriptions: usize,
@@ -123,8 +145,13 @@ impl Default for ApiConfig {
             client_ip_header: "x-forwarded-for".to_string(),
             max_concurrent_requests: 256,
             request_timeout_ms: 10_000,
+            header_timeout_ms: 10_000,
+            write_timeout_ms: 30_000,
+            max_connections: 4_096,
+            max_connections_per_ip: 64,
             max_ws_connections: 2_000,
             max_ws_per_ip: 20,
+            ws_idle_timeout_ms: 60_000,
             ws_client_msgs_per_sec: 20,
             max_ws_subscriptions: 64,
             read_pool_size: 4,

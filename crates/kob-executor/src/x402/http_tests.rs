@@ -564,7 +564,12 @@ async fn spawn_server(a: &App, header_timeout: Duration) -> (SocketAddr, tokio::
     let addr = listener.local_addr().unwrap();
     let app = router(a.state.clone());
     let h = tokio::spawn(async move {
-        let _ = serve(listener, app, header_timeout, 64, std::future::pending()).await;
+        let limits = crate::api::conn::ConnLimits {
+            header_timeout,
+            max_connections: 64,
+            ..crate::x402::config::X402Config::default().conn_limits()
+        };
+        let _ = serve(listener, app, limits, std::future::pending()).await;
     });
     (addr, h)
 }

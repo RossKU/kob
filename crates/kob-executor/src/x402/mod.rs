@@ -182,6 +182,7 @@ pub fn prepare_with(built: Built, chain: Arc<dyn ChainView>, book: Option<BookFn
             max_lifetime_ms: cfg.invoices.max_lifetime_seconds.saturating_mul(1_000),
             public_url: cfg.invoices.public_url.clone(),
             max_open_per_merchant: cfg.invoices.max_open_per_merchant,
+            max_extra_payments: cfg.invoices.max_extra_payments_per_invoice,
         });
     }
     let fac = Arc::new(fac);
@@ -225,9 +226,7 @@ pub async fn serve_service(svc: Service, listener: tokio::net::TcpListener, shut
             }
         }
     });
-    let res = http::serve(listener, app, Duration::from_millis(cfg.header_timeout_ms), cfg.max_connections, shutdown)
-        .await
-        .map_err(|e| e.to_string());
+    let res = http::serve(listener, app, cfg.conn_limits(), shutdown).await.map_err(|e| e.to_string());
     reconciler.abort();
     tracing::info!("x402: facilitator stopped");
     res

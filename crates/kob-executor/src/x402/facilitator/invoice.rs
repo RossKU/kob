@@ -67,6 +67,10 @@ pub struct ExtraRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted_daa: Option<u64>,
     pub at_ms: u64,
+    /// The outpoints a refused payment spends (`txid:index`, sorted): a refused payment spending exactly the same ones (a
+    /// fee variant of the same funding; at most one of them can ever reach the chain) is not kept again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spends: Vec<String>,
 }
 
 /// One registered invoice.
@@ -230,6 +234,9 @@ pub struct InvoiceRuntime {
     pub public_url: Option<String>,
     /// Most unexpired invoices per merchant.
     pub max_open_per_merchant: usize,
+    /// Most refused payments (duplicate or late) kept as evidence per invoice; further ones are rejected without being
+    /// recorded. Anyone may submit them, so this bounds the record, its rewrites and the reconcile watch list.
+    pub max_extra_payments: usize,
 }
 
 /// How long refused payments are watched for (they are evidence for refunds).
@@ -440,11 +447,27 @@ impl Facilitator {
         let verified = kob_x402::verify::verify_payment(&ctx, &req.payment_requirements, &req.payment_payload, &rh);
         Metrics::inc(&self.metrics.invoice_refused);
         if let Ok(v) = verified {
+            // Kept once per funding (spent outputs) and at most `max_extra_payments` per invoice: anyone can submit refused payments
+            // (one funded output gives endless fee variants, each a new txid), and every kept one rewrites the record and
+            // joins the reconcile watch list. The caller holds the invoice lock: re-read the record under it.
+            let cur = rt.store.get(&rec.id).unwrap_or_else(|| rec.clone());
+            let txid = hex(&v.txid);
+            let mut spends: Vec<String> = v.consumed.iter().map(|o| o.to_string()).collect();
+            spends.sort();
+            let refused = cur.extra.iter().filter(|e| e.kind != "released").count();
+            // a fee variant of a kept payment spends the same outputs (only one of them can reach the chain)
+            let known = cur.extra.iter().any(|e| e.txid == txid || (!spends.is_empty() && e.spends == spends));
+            if known || refused >= rt.max_extra_payments {
+                if !known {
+                    Metrics::inc(&self.metrics.invoice_evidence_dropped);
+                }
+                return Err(err);
+            }
             let is_intent =
                 matches!(v.kind, kob_x402::verify::PaymentKind::IntentToKas | kob_x402::verify::PaymentKind::IntentToToken);
             let x = ExtraRecord {
                 kind: kind.into(),
-                txid: hex(&v.txid),
+                txid,
                 payer: v.payer_address.clone(),
                 watch_txid: hex(&v.merchant_output.outpoint.txid),
                 watch_index: v.merchant_output.outpoint.index,
@@ -453,6 +476,7 @@ impl Facilitator {
                 observed: "refused".into(),
                 accepted_daa: None,
                 at_ms: self.clock.now_ms(),
+                spends,
             };
             rt.store.update(&rec.id, |r| {
                 if !r.extra.iter().any(|e| e.txid == x.txid) {
@@ -538,6 +562,7 @@ impl Facilitator {
                 observed: "refused".into(),
                 accepted_daa: None,
                 at_ms: now,
+                spends: vec![],
             };
             if let Err(err) = rt.store.update(inv, |r| {
                 if !r.extra.iter().any(|y| y.txid == x.txid) {

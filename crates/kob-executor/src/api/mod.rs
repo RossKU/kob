@@ -3,7 +3,9 @@
 //! Everything is served from the database through the read pool; the node is never contacted, so
 //! public load cannot reach it. Every route passes one guard middleware that resolves the client
 //! address (proxy aware), applies the per-client and global rate limits, the concurrency cap and the
-//! request timeout, and adds CORS headers when configured.
+//! request timeout, and adds CORS headers when configured. Below the guard, the transport bounds of
+//! [`conn`] (header-read and write-stall deadlines, total and per-address connection caps) keep
+//! connections that never complete a request from holding sockets.
 //!
 //! Routes (all GET):
 //! - `/v1/health`, `/v1/health/ready`
@@ -17,6 +19,7 @@
 //! - `/v1/ws` (WebSocket, see [`ws`])
 
 pub mod client_ip;
+pub mod conn;
 pub mod ratelimit;
 pub mod rest;
 pub mod ws;
@@ -251,15 +254,27 @@ pub async fn serve_listener(
     state: ApiState,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
+    let limits = conn_limits(&state.cfg);
     let (router, app) = build(state, None);
     let signal = app.shutdown.clone();
-    axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(async move {
-            shutdown.await;
-            // Upgraded WebSocket connections are not tracked by graceful shutdown; tell them to close.
-            let _ = signal.send(true);
-        })
-        .await
+    conn::serve(listener, router, limits, "read API", async move {
+        shutdown.await;
+        // Upgraded WebSocket connections are not tracked by graceful shutdown; tell them to close.
+        let _ = signal.send(true);
+    })
+    .await
+}
+
+/// Transport bounds of the read API (`conn`): header and write deadlines, connection caps.
+fn conn_limits(cfg: &ApiConfig) -> conn::ConnLimits {
+    conn::ConnLimits {
+        header_timeout: Duration::from_millis(cfg.header_timeout_ms.max(1)),
+        write_timeout: Duration::from_millis(cfg.write_timeout_ms),
+        max_connections: cfg.max_connections.max(1),
+        max_per_ip: cfg.max_connections_per_ip,
+        ipv6_prefix_bits: cfg.rate_limit.ipv6_prefix_bits,
+        exempt: TrustedProxies::parse(&cfg.trusted_proxies).unwrap_or_default(),
+    }
 }
 
 #[cfg(test)]

@@ -698,46 +698,14 @@ async fn invoice_pay_h(
 
 // ----------------------------------------------------------------------------------------- server
 
-/// Serves `app` on `listener` until `shutdown` resolves: HTTP/1 with a header-read deadline, a
-/// connection cap and the peer address attached to every request.
+/// Serves `app` on `listener` until `shutdown` resolves: HTTP/1 with a header-read and a write-stall deadline, a total
+/// and a per-address connection cap (over a cap: a `503` and close) and the peer address attached to every request
+/// (`crate::api::conn`, shared with the read API).
 pub async fn serve(
     listener: TcpListener,
     app: Router,
-    header_timeout: Duration,
-    max_connections: usize,
+    limits: crate::api::conn::ConnLimits,
     shutdown: impl Future<Output = ()>,
 ) -> std::io::Result<()> {
-    use hyper_util::rt::{TokioIo, TokioTimer};
-    use hyper_util::service::TowerToHyperService;
-    let slots = Arc::new(Semaphore::new(max_connections));
-    tokio::pin!(shutdown);
-    loop {
-        let (stream, peer) = tokio::select! {
-            r = listener.accept() => match r {
-                Ok(x) => x,
-                Err(e) => {
-                    eprintln!("x402: accept failed: {e}");
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    continue;
-                }
-            },
-            _ = &mut shutdown => return Ok(()),
-        };
-        let Ok(permit) = slots.clone().try_acquire_owned() else {
-            drop(stream); // over the connection cap
-            continue;
-        };
-        let svc = TowerToHyperService::new(app.clone().layer(axum::Extension(ConnectInfo(peer))));
-        tokio::spawn(async move {
-            let _permit = permit;
-            let io = TokioIo::new(stream);
-            let mut b = hyper::server::conn::http1::Builder::new();
-            b.timer(TokioTimer::new()).header_read_timeout(header_timeout);
-            if let Err(e) = b.serve_connection(io, svc).await {
-                if !e.is_incomplete_message() {
-                    eprintln!("x402: connection from {peer}: {e}");
-                }
-            }
-        });
-    }
+    crate::api::conn::serve(listener, app, limits, "x402", shutdown).await
 }

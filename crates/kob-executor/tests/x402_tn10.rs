@@ -849,6 +849,7 @@ fn start_service_with(
                 max_lifetime_ms: 3_600_000,
                 public_url: None,
                 max_open_per_merchant: 100,
+                max_extra_payments: 16,
             });
     }
     let fac = Arc::new(fac);
@@ -857,14 +858,13 @@ fn start_service_with(
     let addr = listener.local_addr().unwrap();
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let state = Arc::new(AppState::new(fac.clone(), &built));
-    let header_timeout = Duration::from_millis(built.cfg.header_timeout_ms);
-    let max_conn = built.cfg.max_connections;
+    let limits = built.cfg.conn_limits();
     let thread = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("runtime");
         rt.block_on(async move {
             let listener = tokio::net::TcpListener::from_std(listener).expect("listener");
             let app = router(state);
-            let _ = serve(listener, app, header_timeout, max_conn, async {
+            let _ = serve(listener, app, limits, async {
                 let _ = rx.await;
             })
             .await;
