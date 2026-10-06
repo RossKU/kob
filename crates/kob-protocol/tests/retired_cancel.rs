@@ -347,3 +347,48 @@ fn the_maker_cancels_the_v3_sell_first_entries_retired_for_the_empty_refund() {
         }
     }
 }
+
+/// The order templates the running testnet-10 soak pinned (`contracts/deploy/testnet-10/deployment.json` at 217d452, the
+/// `--features deploy-tn10` build of 2026-10-06) are each either pinned by today's testnet-10 deployment record under the same
+/// kind, or a retired template of that kind this build can spend: no live order of the soak becomes uncancellable when its
+/// executors and wallets move to today's build (the soak keeps its indexer databases and live orders across the switch).
+#[test]
+fn every_order_template_of_the_tn10_soak_build_is_pinned_or_retired() {
+    const SOAK_217D452: [(&str, &str); 15] = [
+        ("KobAsk", "126ff059375b459674df139dc644f6518cc26e831e998e9be7a4008c8c8e0aa1"),
+        ("KobBid", "b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3"),
+        ("KobCondAsk", "40a8eb7321e9dc157ca05683fcf01c1967d0c2be91fb8644e02025b0df087b74"),
+        ("KobCondBid", "076e7bd8bfb6e1b59a8f2a19a6cad5961c7978368a0816a2b9df5f39d805bdfb"),
+        ("KobIfdBid", "50b58e7b26e0bdc1a0eed7f7d7e5bcee88f95ed6ff367be32b8e74979a9de292"),
+        ("KobIfdAsk", "189b9c3297cac33c0de6b5defefcbee5deee42306e8aa72b4615d8f2d4515a17"),
+        ("KobPair", "107388074abe4d223d6fc1e17f6d5aa09bd76a7b739aa2e82774516ddbef7d16"),
+        ("KobCondPair", "37ab667f662779e97e75ea712e855c073b4d2c9a5183285fa7ec11daf8ae0820"),
+        ("KobIfdPair", "9975b2f3131179217050165f51b844700cf9f99f47c5b7954dabf00cf0441d5c"),
+        ("KobAskKron", "f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d"),
+        ("KobBidKron", "6ec1a3dd4a287b73295a08db5f75fedcac4966539d793e9d1a659711ad888efc"),
+        ("KobCondAskKron", "6c4f92cee1613899b5d680e784b11fd567b1bfac63a5006018cc6c54cfd35839"),
+        ("KobCondBidKron", "fb392f88a136f14708841895b2efae2a5070749ddeb0168c7405806aea7ed953"),
+        ("KobIfdBidKron", "e5cff7ede2faeb58706cfd28e095dcefad552f1e3e92d8a12bd05a22c053496d"),
+        ("KobIfdAskKron", "85d8783813f861d16d2679d13fd062d81ce572f7fe4efa111943bd5a6a6b4ac8"),
+    ];
+    let record: serde_json::Value =
+        serde_json::from_str(include_str!("../../../contracts/deploy/testnet-10/deployment.json")).expect("deployment record");
+    let pinned_now = |name: &str| -> String {
+        let t = record["templates"].as_array().unwrap().iter().find(|t| t["name"] == name);
+        t.unwrap_or_else(|| panic!("{name} is in today's testnet-10 record"))["hash"].as_str().unwrap().to_string()
+    };
+    let mut changed = vec![];
+    for (name, hash) in SOAK_217D452 {
+        if pinned_now(name) == hash {
+            continue;
+        }
+        let mut h = [0u8; 32];
+        faster_hex::hex_decode(hash.as_bytes(), &mut h).unwrap();
+        let r = retired::by_hash(&h)
+            .unwrap_or_else(|| panic!("{name} {hash}: changed but not retired (its live orders would be stranded)"));
+        assert_eq!(r.kind_name(), name, "{hash}: retired under its own kind");
+        assert!(r.is_current_layout(), "{name}: the soak's v3 state reads with today's state type");
+        changed.push(name);
+    }
+    assert_eq!(changed, ["KobIfdAsk", "KobIfdAskKron"], "the templates that changed between 217d452 and today");
+}
