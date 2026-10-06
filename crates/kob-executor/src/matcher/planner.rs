@@ -121,11 +121,32 @@ pub struct InventoryPolicy {
     pub haircut_bps: u32,
     /// The tokens it may keep (an allowlist; every other token's surplus goes to the pair ask as before).
     pub tokens: Vec<InventoryToken>,
+    /// KAS carrier (sompi) on the operator's token output that holds a kept surplus, and on the UTXO a maintenance merge of
+    /// inventory leaves. Default [`KEEP_CARRIER`] (2 KAS), the smallest round value at which the output adds no fee in
+    /// either fee mode; at least [`KEEP_CARRIER_MIN`]. The carriers of order outputs (deliveries, custodies) are the orders'
+    /// own terms and never change.
+    #[serde(with = "kob_protocol::json::field")]
+    pub keep_carrier: u64,
 }
+
+/// Default carrier of a kept surplus's token output (sompi; [`InventoryPolicy::keep_carrier`]): 2 KAS.
+///
+/// Measured (`tests/matcher_crossmatch.rs`, `the_kept_output_carrier_adds_no_fee`): a token output carries a covenant id, so
+/// its KIP-9 storage plurality is 2 (rusty-kaspa `utxo_plurality`: 100-byte units of the stored UTXO) and its storage mass is
+/// `4 × 10^12 / carrier` grams. The relay fee (`rate × max(compute, 2 × bytes)`) never prices storage mass, so the fee of a
+/// batch is the same at every carrier the block storage limit allows (above 0.08 KAS). The storage-inclusive priority fee
+/// is unchanged while the storage mass stays below the batch's fee mass: the smallest batch that keeps a surplus (one KRON /
+/// KRON netting, 11,773 bytes, fee mass 23,546) stays unchanged at 1.72 KAS and above and pays more at 1.5 KAS, so 2 KAS
+/// (storage 20,217) is the smallest round carrier that adds nothing in either mode, for every program pair.
+pub const KEEP_CARRIER: u64 = 200_000_000;
+
+/// Least [`InventoryPolicy::keep_carrier`] (sompi): 0.5 KAS, the largest token-program floor (KaspaCom KCC20 0.2.5), well
+/// above the KIP-9 bound of a token output (0.08 KAS: a storage mass of `4 × 10^12 / carrier` within the block limit).
+pub const KEEP_CARRIER_MIN: u64 = 50_000_000;
 
 impl Default for InventoryPolicy {
     fn default() -> Self {
-        InventoryPolicy { accept_surplus_tokens: false, haircut_bps: 8_000, tokens: vec![] }
+        InventoryPolicy { accept_surplus_tokens: false, haircut_bps: 8_000, tokens: vec![], keep_carrier: KEEP_CARRIER }
     }
 }
 
@@ -142,6 +163,12 @@ impl InventoryPolicy {
     pub fn check(&self) -> Result<(), String> {
         if self.haircut_bps > 10_000 {
             return Err(format!("haircutBps {} above 10000", self.haircut_bps));
+        }
+        if self.keep_carrier < KEEP_CARRIER_MIN {
+            return Err(format!(
+                "keepCarrier {} below {KEEP_CARRIER_MIN} sompi: the largest token program floor (KaspaCom KCC20 0.2.5 refuses a token output below 0.5 KAS)",
+                self.keep_carrier
+            ));
         }
         let mut seen = BTreeSet::new();
         for t in &self.tokens {
@@ -367,6 +394,7 @@ mod inventory_tests {
         let doc = r#"{
           "acceptSurplusTokens": true,
           "haircutBps": 8000,
+          "keepCarrier": "200000000",
           "tokens": [
             { "token": "7272727272727272727272727272727272727272727272727272727272727272", "minAmount": 0 },
             { "token": "7171717171717171717171717171717171717171717171717171717171717171",
@@ -380,12 +408,14 @@ mod inventory_tests {
         assert_eq!(p.rule(&[0x71; 32]).and_then(|r| r.ref_price).map(|r| r.value(50_000_000)), Some(1_150_000_000));
         assert!(p.rule(&[0x70; 32]).is_none() && !p.holds(&[0x70; 32]), "an unlisted token");
         assert_eq!(p.haircut(1_000), 800);
+        assert_eq!(p.keep_carrier, KEEP_CARRIER);
         // off: no rule, but a listed token is still held (never sold by maintenance)
         let off = InventoryPolicy { accept_surplus_tokens: false, ..p.clone() };
         assert!(off.rule(&t).is_none() && off.holds(&t));
         assert_eq!(InventoryPolicy::default(), serde_json::from_str::<InventoryPolicy>("{}").unwrap(), "off by default");
         assert!(serde_json::from_str::<InventoryPolicy>(r#"{"acceptSurplus": true}"#).is_err(), "unknown key");
         assert!(InventoryPolicy { haircut_bps: 10_001, ..p.clone() }.check().is_err());
+        assert!(InventoryPolicy { keep_carrier: KEEP_CARRIER_MIN - 1, ..p.clone() }.check().is_err(), "below the floor");
         let mut zero = p.clone();
         zero.tokens[1].ref_price = Some(UnitPrice { sompi: 0, per: 100_000_000 });
         assert!(zero.check().is_err(), "a zero reference price");

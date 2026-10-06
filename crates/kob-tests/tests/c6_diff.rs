@@ -220,6 +220,7 @@ fn batch(lock: u64, legs: Vec<Leg>) -> Batch {
         taker: None,
         taker_token_carrier: CARRIER,
         keep_surplus: vec![],
+        keep_carrier: None,
         receivers: vec![],
         payments: vec![],
         funding: vec![],

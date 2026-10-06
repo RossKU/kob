@@ -390,6 +390,7 @@ pub async fn run(a: RunArgs) -> Result<()> {
             accept = p.accept_surplus_tokens,
             tokens = p.tokens.len(),
             haircut_bps = p.haircut_bps,
+            keep_carrier = p.keep_carrier,
             "surplus inventory policy"
         );
         run_cfg.engine.planner.inventory = p.clone();

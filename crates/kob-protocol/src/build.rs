@@ -1818,6 +1818,11 @@ pub struct Batch {
     /// is then exactly what its covenant amount needs. Empty (the default): the surplus goes to the pair ask.
     #[serde(with = "crate::json::field_vec", default, skip_serializing_if = "Vec::is_empty")]
     pub keep_surplus: Vec<[u8; 32]>,
+    /// KAS carrier on the taker's token output of a kept token (one named in `keep_surplus`); default (`None`):
+    /// `taker_token_carrier`. An inventory output only has to clear its program's floor and the dust bound, so an operator
+    /// may lock less KAS on it than on its other token outputs (`docs/spec/matcher.md` §3.5).
+    #[serde(with = "crate::json::field", default, skip_serializing_if = "Option::is_none")]
+    pub keep_carrier: Option<u64>,
     /// Per-token receivers overriding `taker` (e.g. a route's bought token paid to a merchant).
     #[serde(default)]
     pub receivers: Vec<TokenPayee>,
@@ -3006,11 +3011,12 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
             let to = b.receivers.iter().find(|r| r.covenant_id == t.0).map(|r| r.pubkey).or(b.taker).or(change);
             let to = to.ok_or_else(|| Error::Invalid("no receiver for the taker's tokens".into()))?;
             let e = exts.get(&t.0).copied().ok_or_else(|| Error::Invalid("no token state in the batch".into()))?;
-            d.add_token_output(
-                *t,
-                TokenState::user(t.1.family(), net, to, e),
-                pos(b.taker_token_carrier as i64, "takerTokenCarrier")?,
-            )?;
+            // a kept surplus (inventory) carries `keep_carrier` when the request names one
+            let carrier = match b.keep_carrier {
+                Some(c) if b.keep_surplus.contains(&t.0) => pos(c as i64, "keepCarrier")?,
+                _ => pos(b.taker_token_carrier as i64, "takerTokenCarrier")?,
+            };
+            d.add_token_output(*t, TokenState::user(t.1.family(), net, to, e), carrier)?;
         }
     }
     // Pinned outputs at their custody input's index.
@@ -3368,6 +3374,7 @@ pub fn route_batch(r: &SwapRoute) -> Result<Batch> {
         taker: change,
         taker_token_carrier: r.token_carrier,
         keep_surplus: vec![],
+        keep_carrier: None,
         receivers,
         payments: r.payments.clone(),
         funding: r.funding.clone(),

@@ -348,3 +348,119 @@ fn a_surplus_a_kas_bid_takes_is_sold_not_kept() {
     assert!(amount_in(&r, cid(200)) > 0, "sold into the TUSD bid");
     assert!(r.prepared[0].plan.kept.is_empty(), "nothing kept: {:?}", r.prepared[0].plan.kept);
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// The carrier of the kept output (owner 2026-10-06: "small enough that there is no penalty"). `InventoryPolicy::keep_carrier`
+// (default `KEEP_CARRIER`, 2 KAS) is the KAS locked on the operator's inventory output until the owner sells it; the order
+// outputs keep their own carriers.
+
+use kob_executor::matcher::planner::{KEEP_CARRIER, KEEP_CARRIER_MIN};
+use kob_executor::testkit::TOKEN_COV_KRON;
+use kob_protocol::artifacts::TemplateId;
+
+/// The one built transaction of `orders` under `cfg` with the kept output's carrier set to `carrier`.
+fn keep_at(orders: &[ListedOrder], cfg: &EngineConfig, carrier: u64) -> Prepared {
+    let mut c = cfg.clone();
+    c.planner.inventory.keep_carrier = carrier;
+    let r = run_keep(orders.to_vec(), &c);
+    assert_eq!(r.prepared.len(), 1, "carrier {carrier}: skipped {:?}", r.skipped);
+    r.prepared[0].clone()
+}
+
+/// The two builds differ, output by output, only in the operator's change and in the kept token output of `token` (10 KAS
+/// against `KEEP_CARRIER`): every order output is the same.
+fn only_the_kept_carrier_differs(def: &Prepared, ten: &Prepared, token: [u8; 32], tag: &str) {
+    let (a, b) = (&def.lowered.built.tx.outputs, &ten.lowered.built.tx.outputs);
+    assert_eq!(a.len(), b.len(), "{tag}");
+    let change = def.lowered.built.fee.change_output.map(|i| i as usize);
+    assert_eq!(change, ten.lowered.built.fee.change_output.map(|i| i as usize), "{tag}");
+    let mut kept = 0;
+    for (k, (x, y)) in a.iter().zip(b).enumerate() {
+        if Some(k) == change {
+            continue;
+        }
+        assert_eq!((&x.script_public_key, &x.covenant), (&y.script_public_key, &y.covenant), "{tag}: output {k}");
+        if x.value != y.value {
+            assert_eq!((x.value, y.value), (KEEP_CARRIER, 10 * KAS), "{tag}: output {k} is an order output");
+            assert_eq!(x.covenant.as_ref().map(|c| c.covenant_id), Some(token), "{tag}: output {k}");
+            kept += 1;
+        }
+    }
+    assert_eq!(kept, 1, "{tag}: exactly the kept output's carrier changes");
+}
+
+/// The default keep carrier adds no fee: the zero-tip TBTC/TUSD keep-surplus batch, and the smallest keep batch of every
+/// family pair (a 1 x 1 netting kept by `refPrice`), have the same size, fee mass, fee and storage-inclusive priority mass at
+/// `KEEP_CARRIER` as at 10 KAS; the order outputs are identical, the operator's KAS profit is the same (the carrier is its
+/// own KAS: what the smaller carrier does not lock returns in the change), and every token is conserved. Below it the
+/// storage mass (`4 × 10^12 / carrier`, plurality 2) overtakes the fee mass of the smallest batch (KRON / KRON) at 1.5 KAS.
+#[test]
+fn the_kept_output_carrier_adds_no_fee() {
+    const TEN: u64 = 10 * KAS;
+    let (pairs, ..) = crossed();
+    let mut tbtc = pairs.clone();
+    tbtc.push(kas_bid(200, TOKEN_B, bps(KUSD, -2), 6 * S8));
+    let mut cases = vec![("TBTC/TUSD 8/8, zero tip, bid-valued".to_string(), tbtc, policy(vec![tusd(Some(0), None)]), TOKEN_B)];
+    for (pa, pb) in [(T3, T3), (T8, T8), (TemplateId::KronToken2433, TemplateId::KronToken2433), (T3, TemplateId::KronToken2433)] {
+        let n = 3 * WHOLE;
+        let v = vec![
+            l_pair(1, pa, pb, pask(1, pa, pb, n, RATE, 0), 1_000),
+            l_pair(2, pa, pb, pbid(4, pa, pb, n, RATE * 11 / 10, 0), 1_000),
+        ];
+        let tb = token_b(pa, pb);
+        let pol = policy(vec![InventoryToken { token: tb, ref_price: Some(UnitPrice { sompi: 10 * KAS, per: 1 }), min_amount: None }]);
+        cases.push((format!("{} / {} netting 1 x 1", pa.name(), pb.name()), v, pol, tb));
+    }
+    let mut smallest_fee_mass = u64::MAX;
+    for (tag, orders, cfg, token) in &cases {
+        let ten = keep_at(orders, cfg, TEN);
+        let def = keep_at(orders, cfg, KEEP_CARRIER);
+        let (m10, m) = (&ten.lowered.built.fee.mass, &def.lowered.built.fee.mass);
+        println!(
+            "{tag}: 10 KAS: bytes {} fee mass {} storage {} fee {} | {} sompi: storage {} fee {} priority mass {}",
+            m10.size, m10.fee_mass, m10.storage, ten.accounting.fee, KEEP_CARRIER, m.storage, def.accounting.fee, m.priority_mass
+        );
+        assert_eq!((m.size, m.fee_mass, def.accounting.fee), (m10.size, m10.fee_mass, ten.accounting.fee), "{tag}: the fee");
+        assert_eq!(m.priority_mass, m10.priority_mass, "{tag}: the storage mass stays below the fee mass");
+        assert!(m.storage < m.fee_mass, "{tag}");
+        only_the_kept_carrier_differs(&def, &ten, *token, tag);
+        assert_eq!(def.accounting.profit, ten.accounting.profit, "{tag}: the carrier is the operator's own KAS");
+        assert_eq!(def.lowered.operator_token_kas_out, KEEP_CARRIER, "{tag}: the accounting counts the kept output's carrier");
+        assert_eq!(def.accounting.change, ten.accounting.change + (TEN - KEEP_CARRIER), "{tag}: the rest returns in the change");
+        for t in [TOKEN, TOKEN_B, TOKEN_COV_KRON, TOKEN_B_KRON] {
+            let (i, o) = token_flows(&def, t);
+            assert_eq!(i, o.iter().map(|x| x.1).sum::<i64>(), "{tag}: conserved");
+        }
+        smallest_fee_mass = smallest_fee_mass.min(m.fee_mass);
+    }
+    // the bound is tight where it matters: the smallest batch (KRON / KRON) pays a higher priority fee at 1.5 KAS
+    let (_, kron, cfg, _) = &cases[3];
+    let p = keep_at(kron, cfg, 150_000_000);
+    let m = &p.lowered.built.fee.mass;
+    assert_eq!(m.fee_mass, smallest_fee_mass, "the KRON / KRON netting is the smallest keep batch");
+    assert!(m.storage > m.fee_mass, "1.5 KAS: storage {} above the fee mass {}", m.storage, m.fee_mass);
+    // and the relay fee does not price storage at all: the same fee down to the policy's least carrier
+    let low = keep_at(kron, cfg, KEEP_CARRIER_MIN);
+    assert_eq!(low.accounting.fee, keep_at(kron, cfg, TEN).accounting.fee);
+}
+
+/// The policy refuses a keep carrier below the largest token-program floor, and KaspaCom's 0.5 KAS floor is met at it.
+#[test]
+fn the_keep_carrier_has_a_floor() {
+    let mut p = policy(vec![]).planner.inventory;
+    p.keep_carrier = KEEP_CARRIER_MIN - 1;
+    assert!(p.check().is_err());
+    p.keep_carrier = KEEP_CARRIER_MIN;
+    p.check().expect("the floor itself");
+    let k = TemplateId::Kcc20KaspaCom025;
+    assert_eq!(k.min_token_output(), Some(KEEP_CARRIER_MIN));
+    let n = 3 * WHOLE;
+    let v = vec![l_pair(1, k, k, pask(1, k, k, n, RATE, 0), 1_000), l_pair(2, k, k, pbid(4, k, k, n, RATE * 11 / 10, 0), 1_000)];
+    let pol = policy(vec![InventoryToken {
+        token: token_b(k, k),
+        ref_price: Some(UnitPrice { sompi: 10 * KAS, per: 1 }),
+        min_amount: None,
+    }]);
+    let at = keep_at(&v, &pol, KEEP_CARRIER_MIN);
+    assert!(at.validation.is_some());
+}

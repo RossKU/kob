@@ -3,14 +3,15 @@
 //! The operator can come to hold token UTXOs of its own key (protocol v2.6 routes kept the remainder of their purchases of B
 //! there; today a route delivers every base unit of B it buys, but tokens may still reach the operator's key, and the
 //! matcher's opt-in surplus-inventory policy, `PlannerConfig::inventory`, accumulates pair surpluses there on purpose),
-//! each with a KAS carrier on it (`EngineConfig::token_carrier`, 10 KAS by default). Left alone they pile up: in the TN10 soak
+//! each with a KAS carrier on it (`EngineConfig::token_carrier`, 10 KAS by default; a kept surplus `InventoryPolicy::keep_carrier`,
+//! 2 KAS by default). Left alone they pile up: in the TN10 soak
 //! (2026-10-01) each executor held 22 to 28 of them after 51 minutes, 220 to 280 KAS of carriers locked for a few cents of
 //! tokens, while the bank's top-ups ran into them.
 //!
 //! | Job | When | What |
 //! |---|---|---|
 //! | sell | the token is not held as surplus inventory (`inventory` lists it: the owner sells those off-matcher), the operator holds at least one minimum fill of a bid that is left after the matcher's tick, and selling into it pays more than the fee | its token UTXOs (as many as the program takes) are sold into the best such bid as a taker; the rest comes back as one token UTXO |
-//! | merge | otherwise, the operator holds at least `min_utxos` token UTXOs of one token | as many as the program takes become one: the other carriers return to the funding pool |
+//! | merge | otherwise, the operator holds at least `min_utxos` token UTXOs of one token | as many as the program takes become one (a listed inventory token's on `keep_carrier`): the other carriers return to the funding pool |
 //!
 //! Both are bounded per tick (`max_jobs`), built with the `kob_protocol` builders (a taker `Batch`, `SendTokens`), signed with
 //! the hot key and validated in the v2.1.0 engine before submission, like every matcher and keeper transaction. KRON tokens
@@ -262,6 +263,7 @@ fn sell_action(
         taker: Some(operator),
         taker_token_carrier: cfg.token_carrier,
         keep_surplus: vec![],
+        keep_carrier: None,
         receivers: vec![],
         payments: vec![],
         funding: funding.to_vec(),
@@ -271,12 +273,19 @@ fn sell_action(
     }))
 }
 
-fn merge_action(g: &Group, tokens: &[TokenUtxo], funding: &[KeyUtxo], operator: [u8; 32], cfg: &MaintenanceConfig) -> Action {
+fn merge_action(
+    g: &Group,
+    tokens: &[TokenUtxo],
+    funding: &[KeyUtxo],
+    operator: [u8; 32],
+    carrier: u64,
+    cfg: &MaintenanceConfig,
+) -> Action {
     let amount: i64 = tokens.iter().map(|t| t.state.amount()).sum();
     Action::SendTokens(SendTokens {
         token: TokenRef { covenant_id: g.0, program: g.1 },
         tokens: tokens.to_vec(),
-        recipients: vec![TokenRecipient { pubkey: operator, amount, carrier: cfg.token_carrier }],
+        recipients: vec![TokenRecipient { pubkey: operator, amount, carrier }],
         token_change: None,
         token_change_carrier: 0,
         funding: funding.to_vec(),
@@ -371,10 +380,12 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
             }
         }
         if job.is_none() && cfg.merge && utxos.len() >= cfg.min_utxos.max(2) {
-            let action = priced(merge_action(&g, &utxos, &funding, operator, cfg), cfg, |_| None);
+            // a merge of inventory leaves it on the inventory carrier (`InventoryPolicy::keep_carrier`)
+            let carrier = if held_inventory { cfg.inventory.keep_carrier } else { cfg.token_carrier };
+            let action = priced(merge_action(&g, &utxos, &funding, operator, carrier, cfg), cfg, |_| None);
             match build_sign(&action, signer, cfg.validate) {
                 Ok((built, signed, validation)) => {
-                    let profit = operator_kas(&built, &funding, &utxos, cfg.token_carrier);
+                    let profit = operator_kas(&built, &funding, &utxos, carrier);
                     let spends = built.tx.inputs.iter().map(|i| (i.transaction_id, i.index)).collect();
                     job = Some(MaintJob {
                         kind: MaintKind::Merge,
@@ -385,7 +396,7 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
                         signed,
                         validation,
                         profit,
-                        released: carriers_in - cfg.token_carrier as i64,
+                        released: carriers_in - carrier as i64,
                         spends,
                     });
                 }

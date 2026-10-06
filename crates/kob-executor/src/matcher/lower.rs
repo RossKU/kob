@@ -25,6 +25,8 @@ pub struct LowerCtx<'a> {
     pub fee_rate: u64,
     /// KAS carrier on the operator's token outputs (the reference planner leaves the operator none; kept for builders that do).
     pub token_carrier: u64,
+    /// KAS carrier on the operator's token output of a kept surplus (`InventoryPolicy::keep_carrier`, `Batch::keep_carrier`).
+    pub keep_carrier: u64,
     /// Measured compute budgets (role -> at least this budget) that replace a short table budget. The table is the maximum
     /// measured over every shape the planner builds (`kob-protocol/tests/budget_table.rs`); when the engine validation still
     /// reports `ExceededCommittedScriptUnits` (a shape the generator misses), the engine measures the transaction's inputs
@@ -175,6 +177,7 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
         taker_token_carrier: cx.token_carrier,
         // the surpluses the plan keeps as the operator's inventory (`PlannerConfig::inventory`) stay with the taker
         keep_surplus: plan.kept.iter().map(|k| k.token).collect(),
+        keep_carrier: (!plan.kept.is_empty()).then_some(cx.keep_carrier),
         receivers: vec![],
         payments: vec![],
         funding: cx.funding.clone(),
@@ -320,7 +323,15 @@ pub fn operator_token_kas(plan: &Plan, batch: &Batch) -> (u64, u64) {
         }
     }
     let kin = batch.taker_tokens.iter().map(|t| t.utxo.amount).sum();
-    let kout = net.values().filter(|v| **v > 0).count() as u64 * batch.taker_token_carrier;
+    // one output per token it receives: a kept token's carries `keep_carrier` (when set), every other `taker_token_carrier`
+    let kout = net
+        .iter()
+        .filter(|(_, v)| **v > 0)
+        .map(|(t, _)| match batch.keep_carrier {
+            Some(c) if batch.keep_surplus.contains(t) => c,
+            _ => batch.taker_token_carrier,
+        })
+        .sum();
     (kin, kout)
 }
 

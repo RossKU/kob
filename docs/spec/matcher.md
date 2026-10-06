@@ -453,6 +453,20 @@ id.
   token output, and the batch as a whole still needs `min_profit`. Without `refPrice` the amount must be at least
   `minAmount`, by default one of the valued bids' minimum fills (no unsellable dust). The matcher only accumulates: the
   reference executor's maintenance jobs never sell a listed token (they may merge its UTXOs).
+  *Carrier of the kept output* (`keepCarrier`, `Batch::keepCarrier`; owner decision 2026-10-06: small enough to cost
+  nothing): the operator's inventory output carries 2 KAS by default, not the 10 KAS of its other token outputs; the
+  carriers of every order output (deliveries, custodies, exits) are the orders' own terms and do not change. A token
+  output carries a covenant id, so its KIP-9 storage plurality is 2 (rusty-kaspa `utxo_plurality`, 100-byte units) and
+  its storage mass is `4 × 10^12 / carrier` grams. The relay fee (`rate × max(compute, 2 × bytes)`) does not price
+  storage mass, so the fee is the same at every carrier the block storage limit allows (above 0.08 KAS); the
+  storage-inclusive priority mass is unchanged while the storage mass stays below the batch's fee mass. Measured
+  (`crates/kob-executor/tests/matcher_crossmatch.rs`, `the_kept_output_carrier_adds_no_fee`), 10 KAS against 2 KAS: the
+  zero-tip TBTC/TUSD (8/8) keep batch 20,823 bytes, fee 0.041646 KAS both, storage mass 4,259 → 20,217 below its fee
+  mass 41,646; the smallest keep batch, a KRON / KRON 1 × 1 netting, 11,773 bytes, fee mass 23,546, storage 20,217 at
+  2 KAS but 26,881 at 1.5 KAS (above the fee mass: a higher priority fee). 2 KAS is therefore the smallest round carrier
+  that adds no fee in either mode for every program pair. The policy refuses less than 0.5 KAS (KaspaCom KCC20 0.2.5
+  refuses a token output below it); the operator's later sale of the output only spends it (a small input never adds
+  storage mass).
 - **standalone bound.** Before the walks, each routed pair order is capped at the largest fill its route could pay on its
   own and is left out of the batch when none can: the token it buys taken along the plain asks of that token (best first;
   an ask's minimum fill counted in full, its surplus going to the maker), the token it sells along the plain bids of that

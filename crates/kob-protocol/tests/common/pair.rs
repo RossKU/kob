@@ -146,6 +146,7 @@ pub fn route(legs: Vec<Leg>) -> Batch {
         taker: Some(pk(MATCHER)),
         taker_token_carrier: CARRIER,
         keep_surplus: vec![],
+        keep_carrier: None,
         receivers: vec![],
         payments: vec![],
         funding: vec![key_utxo(90, MATCHER, 1_000 * KAS)],

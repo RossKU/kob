@@ -1712,6 +1712,7 @@ It is off by default. `--inventory-policy <file>` (on `run` and `match`) reads i
 {
   "acceptSurplusTokens": true,
   "haircutBps": 8000,
+  "keepCarrier": "200000000",
   "tokens": [
     { "token": "<covenant id, hex>", "minAmount": 0 },
     { "token": "<covenant id, hex>", "refPrice": { "sompi": "2300000000", "per": "100000000" } }
@@ -1723,6 +1724,7 @@ It is off by default. `--inventory-policy <file>` (on `run` and `match`) reads i
 |---|---|---|
 | `acceptSurplusTokens` | `false` | master switch of the planner side; a listed token is never sold by maintenance either way |
 | `haircutBps` | `8000` | the share of the valuation counted as income (at most 10000) |
+| `keepCarrier` | `200000000` (2 KAS) | sompi locked on the operator's inventory output until the owner sells it (and on the UTXO a maintenance merge of inventory leaves); at least `50000000` (0.5 KAS, the KaspaCom KCC20 0.2.5 floor). The order outputs keep their own carriers. 2 KAS is the smallest round value that adds no fee in either fee mode (below) |
 | `tokens[].token` | (required) | an allowlisted token (covenant id); every other token's surplus goes to the pair ask as before |
 | `tokens[].refPrice` | none | `sompi` per `per` base units: the owner's own valuation (it sells the inventory off-matcher), used instead of the KAS bids |
 | `tokens[].minAmount` | none | the least surplus worth keeping (base units). Unset: with `refPrice` no bound; otherwise one valued bid's minimum fill, so a sale of the kept amount alone could fill it. `0` accumulates small surpluses too |
@@ -1737,11 +1739,34 @@ What the planner does (`matcher::batch`, pure, deterministic):
   `haircutBps` and must exceed the fee of the operator's token output (about 205 bytes). It enters the batch's profit
   next to the spread and the tips, so a zero-tip netting whose kept surplus pays its fee is built.
 * The batch request names the kept tokens (`keepSurplus`): the builder hands their surplus to the taker (the operator's
-  key, one token output with the `token_carrier`, 10 KAS) instead of the first pair ask buying them. The engine accepts
+  key, one token output carrying `keepCarrier`, 2 KAS by default; `Batch::keepCarrier`) instead of the first pair ask
+  buying them. The engine accepts
   the built batch when `change − funding` plus the kept value reaches `--min-profit`, and logs
   `the batch keeps a token surplus as inventory`.
 * The matcher only accumulates. The owner sells the inventory off-matcher (its own bot or by hand); the maintenance
   jobs (below) never sell a listed token, whether or not `acceptSurplusTokens` is on, and only merge its UTXOs.
+
+**The kept output's carrier** (owner 2026-10-06: "small enough that there is no penalty"). The carrier is the operator's
+own KAS (the accounting counts it; what a smaller carrier does not lock stays in the change), so the only question is the
+fee. A token output carries a covenant id, so its KIP-9 storage plurality is 2 and its storage mass is
+`4 × 10^12 / carrier` grams. The relay fee does not price storage mass; the storage-inclusive priority fee does once the
+storage mass exceeds the batch's fee mass `max(compute, 2 × bytes)`. Measured on the zero-tip TBTC/TUSD keep batch
+(`tests/matcher_crossmatch.rs`; KCC20 8/8 tokens, 20,823 bytes, fee mass 41,646, relay fee 0.041646 KAS at every carrier):
+
+| Carrier | Storage mass | Relay fee | Priority fee |
+|---|---|---|---|
+| 10 KAS | 4,259 | 0.041646 KAS | 0.041646 KAS |
+| 5 KAS | 8,231 | 0.041646 KAS | 0.041646 KAS |
+| 2 KAS | 20,217 | 0.041646 KAS | 0.041646 KAS |
+| 1 KAS | 40,213 | 0.041646 KAS | 0.041646 KAS |
+| 0.5 KAS | 80,211 | 0.041646 KAS | 0.080211 KAS |
+| 0.1 KAS | 400,209 | 0.041646 KAS | 0.400209 KAS |
+| 0.05 KAS | 800,009 | refused: above the block storage limit (500,000) | — |
+
+The smallest batch that can keep a surplus (a KRON / KRON 1 × 1 netting, 11,773 bytes, fee mass 23,546) has no penalty at
+2 KAS (storage 20,217) and a higher priority fee at 1.5 KAS (26,881), so the default is 2 KAS. A lower `keepCarrier` (down
+to 0.5 KAS) still pays the same relay fee; it only gives the batch a storage-dominated priority mass. Spending the output
+later (the owner's sale, a maintenance merge) costs nothing extra: a small input never adds storage mass.
 
 ### Economics
 

@@ -377,6 +377,7 @@ impl<'a> Tick<'a> {
                     operator: self.operator,
                     fee_rate: rate,
                     token_carrier: cfg.token_carrier,
+                    keep_carrier: cfg.planner.inventory.keep_carrier,
                 };
                 match adapter.lower(&plan, &cx) {
                     Ok(l) => {
