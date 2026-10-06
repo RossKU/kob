@@ -437,7 +437,22 @@ id.
   rule holds, within the token rules below. The remainders stay candidates.
 - **then route.** Every remainder, and every pair order without an opposite, is routed through the KAS books like any
   other order, in the same transaction where the token rules allow, otherwise in the next one.
-- **no inventory.** The reference planner holds no tokens: it fills pair orders only by netting and routing.
+- **no inventory by default; surplus inventory opt-in.** The reference planner sells no tokens of its own: it fills pair
+  orders only by netting and routing. With its surplus-inventory policy off (the default) it also keeps none: a token
+  surplus goes to a pair ask's delivery unless KAS bids take it in the same transaction. *Owner decision 2026-10-06:* an
+  operator may switch the policy on (`PlannerConfig::inventory`, `docs/ops/executor.md`, "Surplus inventory"). A
+  surplus that no KAS bid takes in the same transaction (preferred: no inventory risk) then goes to the batch's taker,
+  the operator's key (`Batch::keepSurplus`), instead of the pair ask's delivery, and its value counts as income of the
+  batch, so a crossed pair match that pays no KAS (no tips, the surplus below every bid's minimum fill) still pays its
+  fee. The pair ask receives exactly its floor `⌈n·p/scale(A)⌉`, which is all its covenant guarantees (`KobPair.sil`
+  `tOut >= ceil`, and `KobCondPair.sil` likewise; a `KobIfdPair` exit custody is exact and never takes a surplus).
+  Only tokens on the operator's allowlist are kept. The value is the owner's `refPrice` if set (the owner sells the
+  inventory off-matcher); otherwise it is what the plain resting KAS bids of the token pay for the amount (best first,
+  each only up to what it holds, only bids a sale could fill: their minimum fill or all they have left; never the best
+  bid's quote alone). The value is then cut by `haircutBps` (default 80 %); it must exceed the fee of the operator's
+  token output, and the batch as a whole still needs `min_profit`. Without `refPrice` the amount must be at least
+  `minAmount`, by default one of the valued bids' minimum fills (no unsellable dust). The matcher only accumulates: the
+  reference executor's maintenance jobs never sell a listed token (they may merge its UTXOs).
 - **standalone bound.** Before the walks, each routed pair order is capped at the largest fill its route could pay on its
   own and is left out of the batch when none can: the token it buys taken along the plain asks of that token (best first;
   an ask's minimum fill counted in full, its surplus going to the maker), the token it sells along the plain bids of that
@@ -1119,7 +1134,8 @@ tick. With pair books: to be measured (pair phase).
   `⌊n·tip/scale(A)⌋`, custodies exact, positional outputs and strays of both tokens respected, FOK all-or-none, IOC
   maximal; opposite pair orders of a pair netted before routing (any number per side), remainders routed through the
   KAS books and ranked with the direct orders by price → tip → age at their implied quotes; no inventory in the
-  reference planner; within 8 inputs of each token (KRON programs fewer) and both programs' slots, KRON authorising
+  reference planner unless its opt-in surplus-inventory policy keeps an allowlisted surplus (the pair ask then gets
+  exactly its floor); within 8 inputs of each token (KRON programs fewer) and both programs' slots, KRON authorising
   inputs below 128; the pair book lists the pair orders and the route levels.
 - Pair triggers (§4.7): pair stops, trailing stops and stop entries armed or ratcheted only next to their evidence in the
   same transaction, in mode 0 (a plain ask of A and bid of B, or a bid of A and ask of B, each rested `minRestDaa`, not

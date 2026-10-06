@@ -128,6 +128,7 @@ matcher and keeper options (C, "Running"):
 | `--min-profit`, `--max-tx-bytes`, `--no-chain`, `--no-arm` | as C | matcher (`--no-arm`: no updates; stops the batch fills next to their evidence still trigger) |
 | `--max-funding-inputs`, `--funding-target-utxos`, `--consolidate-funding` | 8, 4, 2 | how a batch picks the operator's funding (C, "Keys and funds") |
 | `--no-maintenance`, `--no-dust-sell`, `--maintenance-max-jobs` | off, off, 2 | the operator's own token UTXOs: merge and sell (C, "Maintenance") |
+| `--inventory-policy <file>` | none (off) | the surplus-inventory policy (C, "Surplus inventory"): the pair surpluses the operator may accumulate as inventory; maintenance never sells a listed token (also on `match`) |
 | `--no-refund`, `--sweep-own-strays`, `--return-foreign-strays`, `--keeper-min-profit` | as C | keepers (`--keeper-min-profit` is `keep --min-profit`) |
 
 `index` (with `replay`, `export-orders`, `import-orders`, `rebase`), `match` and `keep` stay as
@@ -1654,8 +1655,8 @@ A pair order of tokens A / B (`KobPair`, `KobCondPair`, `KobIfdPair`; one templa
 `order-types.md`) quotes token B per whole A and enforces only its own guarantees (founder option 2): an ask receives at
 least `ceil(n × p / scale(A))` of B for n base units of A, a bid pays exactly `floor(n × p / scale(A))` of B and receives
 exactly n of A, both release `floor(n × tip / scale(A))` sompi of their prefunded KAS tip to the matcher. The reference
-matcher fills them in the global batch (`matcher::pair`, `matcher.md` §3.5) in two ways, and never from inventory (it holds
-no tokens):
+matcher fills them in the global batch (`matcher::pair`, `matcher.md` §3.5) in two ways, and never from inventory (it sells
+no tokens of its own; with the opt-in surplus-inventory policy, below, it may keep a netting surplus):
 
 | Way | |
 |---|---|
@@ -1668,7 +1669,7 @@ no tokens):
 | Class | GTC: resting (class 3); IOC / FOK: immediate (class 1); armed pair stops and stop entries: class 2 |
 | Priority | netting: the lowest ratio of what an order receives to what it releases first, then class, tip, age; route: each leg at its implied quote (the Sell leg at what the T one whole A of the order needs costs at the best plain ask of T, less its KAS tip; the Buy leg at what the S of one whole A fetches at the best plain bid of S), ranked with the direct orders of those books by price per base unit → tip → age |
 | Quantity | FOK all or nothing; IOC the largest fill; every fill at least `minFill` unless it takes everything left (a netted part on its own too); a GTC rest keeps something in the custody and funds its carrier and tip; a route bound caps what each order routes at the largest fill its route pays on its own (on top of its netted part) |
-| Transaction | per token: its program's slots (a 2 x 2 netting needs 4 outputs of one token: an 8 x 8 or 16 x 16 program), one extension commitment; no token output to the operator |
+| Transaction | per token: its program's slots (a 2 x 2 netting needs 4 outputs of one token: an 8 x 8 or 16 x 16 program), one extension commitment; no token output to the operator, except a surplus the surplus-inventory policy keeps (below) |
 | Profit | the batch as a whole (`Σ bid all-in − Σ ask all-in + Σ pair tips + Σ update tips − fee`, every amount the exact rounded covenant value): a netting moves no KAS (it pays its fee from the pair orders' tips and the surplus it sells), a route its KAS spread; a unit whose margin does not pay its bytes is dropped with both its legs |
 | Pair stops | an unarmed `KobCondPair` stop leg or `KobIfdPair` stop entry is armed (an `update`, or filled and routed when it crosses) by evidence of the same transaction in one of two modes: two KAS-book fills (a plain resting order of A and one of B, the implied rate `a × scale(B) / b`, a sell stop reading an ask of A and a bid of B) or a resting `KobPair` of the pair filled in it (a pair ASK for a sell stop); trailing pair stops are ratcheted by the opposite side's evidence (the most steps) |
 | Repeat | a booked pair exit's take-profit before `rptUntil` re-arms its `KobIfdPair` entry in the same transaction (the merge); an exit is never updated next to its entry |
@@ -1680,6 +1681,51 @@ own trades).
 
 The compute budgets of every pair shape (routes of both sides, netting 1 x 1 and 2 x 2, conditional fills and updates in both
 evidence modes, if-done fills, re-arms) are in the kob-protocol table.
+
+### Surplus inventory (opt-in)
+
+A crossed pair match (a pair bid above a pair ask) pays its crossing in token B, not KAS. Without tips the matcher earns KAS
+only when plain KAS bids of B can buy that surplus in the same transaction, and a wallet bid's minimum fill (10 KAS) is often
+larger than the surplus of a small crossing (a 20 USD order crossed by 1 % leaves 0.2 TUSD, about 4.8 KAS). The surplus then
+goes to the pair ask's delivery, the batch earns nothing, and the crossed book is not matched. The owner's decision
+(2026-10-06): an operator may take such a surplus into its own key and count it as income (`matcher.md` §3.5). The pair ask
+then receives exactly its floor `ceil(n × p / scale(A))`, all its covenant guarantees (`KobPair.sil`: `tOut >= ceil`).
+It is off by default. `--inventory-policy <file>` (on `run` and `match`) reads it, strict JSON:
+
+```json
+{
+  "acceptSurplusTokens": true,
+  "haircutBps": 8000,
+  "tokens": [
+    { "token": "<covenant id, hex>", "minAmount": 0 },
+    { "token": "<covenant id, hex>", "refPrice": { "sompi": "2300000000", "per": "100000000" } }
+  ]
+}
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `acceptSurplusTokens` | `false` | master switch of the planner side; a listed token is never sold by maintenance either way |
+| `haircutBps` | `8000` | the share of the valuation counted as income (at most 10000) |
+| `tokens[].token` | (required) | an allowlisted token (covenant id); every other token's surplus goes to the pair ask as before |
+| `tokens[].refPrice` | none | `sompi` per `per` base units: the owner's own valuation (it sells the inventory off-matcher), used instead of the KAS bids |
+| `tokens[].minAmount` | none | the least surplus worth keeping (base units). Unset: with `refPrice` no bound; otherwise one valued bid's minimum fill, so a sale of the kept amount alone could fill it. `0` accumulates small surpluses too |
+
+What the planner does (`matcher::batch`, pure, deterministic):
+
+* A surplus that plain KAS bids take in the same transaction is still sold there first (no inventory risk). Only the rest
+  goes to the operator, and only for a token the policy lists.
+* Its value is `refPrice × amount`, or else what the plain resting KAS bids of the token pay for it: best first, each up
+  to what it has left in this batch, and only bids a later sale could fill (they accept their minimum fill or all they
+  have left). The best bid's quote alone never values a surplus. The value is then cut by
+  `haircutBps` and must exceed the fee of the operator's token output (about 205 bytes). It enters the batch's profit
+  next to the spread and the tips, so a zero-tip netting whose kept surplus pays its fee is built.
+* The batch request names the kept tokens (`keepSurplus`): the builder hands their surplus to the taker (the operator's
+  key, one token output with the `token_carrier`, 10 KAS) instead of the first pair ask buying them. The engine accepts
+  the built batch when `change − funding` plus the kept value reaches `--min-profit`, and logs
+  `the batch keeps a token surplus as inventory`.
+* The matcher only accumulates. The owner sells the inventory off-matcher (its own bot or by hand); the maintenance
+  jobs (below) never sell a listed token, whether or not `acceptSurplusTokens` is on, and only merge its UTXOs.
 
 ### Economics
 
@@ -1787,8 +1833,8 @@ small ones.
 
 Protocol v2.6 cross limit routes bought token B in whole ask units and left the remainder on a token output of the operator's
 key with a `10 KAS` carrier (`EngineConfig.token_carrier`), one per route; today the planner never leaves a token to the
-operator (a pair order's surplus goes to a pair ask's delivery or is sold to KAS bids), but tokens can still reach the
-operator's key. Nothing spent them: in the TN10 soak
+operator (a pair order's surplus goes to a pair ask's delivery or is sold to KAS bids) unless the opt-in surplus-inventory
+policy keeps it (above), but tokens can still reach the operator's key. Nothing spent them: in the TN10 soak
 (2026-10-01) each executor held 22 to 28 such UTXOs after 51 minutes (220 to 280 KAS of carriers for a few cents of tokens)
 while its spendable funding was about 200 KAS. With the matcher role, the runner now runs the maintenance jobs
 (`kob_executor::maintenance`) after the tick's matcher and keeper transactions, over the operator's own key-owned token UTXOs
@@ -1796,7 +1842,7 @@ while its spendable funding was about 200 KAS. With the matcher role, the runner
 
 | Job | When | Transaction |
 |---|---|---|
-| sell | a plain `KobBid` of the token's market (program, extension commitment), live, not spent by a pending transaction or backed off, accepts a fill of what the operator holds (at least its minimum fill, or a fill that ends it), and the sale pays more than its fee (`proceeds − fee ≥ 0`) | the operator, as taker, sells as many base units as the best such bid takes (highest all-in per base unit, then age) from up to the program's token inputs; the bid delivery is the bid's; the unsold rest comes back as one token UTXO; the bid's KAS and the freed carriers go to the change |
+| sell | a plain `KobBid` of the token's market (program, extension commitment), live, not spent by a pending transaction or backed off, accepts a fill of what the operator holds (at least its minimum fill, or a fill that ends it), the `--inventory-policy` file does not list the token (surplus inventory is the owner's to sell), and the sale pays more than its fee (`proceeds − fee ≥ 0`) | the operator, as taker, sells as many base units as the best such bid takes (highest all-in per base unit, then age) from up to the program's token inputs; the bid delivery is the bid's; the unsold rest comes back as one token UTXO; the bid's KAS and the freed carriers go to the change |
 | merge | otherwise, the operator holds at least 2 token UTXOs of the token | up to the program's token inputs (`Kcc20Ref` 3, 8/8 8, KRON 4; the oldest first) become one token UTXO; the other carriers go to the change (fee only, about 0.01 KAS) |
 
 At most `--maintenance-max-jobs` (2) per tick; their inputs are reserved like every pending transaction's, so the next tick
@@ -1806,6 +1852,12 @@ builders (`SendTokens`, a taker `Batch`), signed and validated in the engine, su
 (`maintenance: the operator's token UTXOs`, with `released`: the carriers it moves back to the funding). A sale runs only on
 bids the matcher's tick left: a bid that crosses an ask is the matcher's. `--no-dust-sell` merges only; `--no-maintenance`
 turns both off.
+
+**Surplus inventory is not sold here.** A token listed in the `--inventory-policy` file is inventory the matcher
+accumulates on purpose; the owner sells it off-matcher. The sale job skips it (`sell: surplus inventory (the owner sells
+it off-matcher)`), whether or not `acceptSurplusTokens` is on, and only merges its UTXOs. This also keeps the inventory
+away from the sale's rule that any bid paying the fee is good enough: without a floor, anyone could post a `KobBid` far
+below the market and receive the holding for little more than the fee. Unlisted tokens (stray dust) are sold as before.
 
 ### Node
 

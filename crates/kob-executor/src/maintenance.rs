@@ -1,14 +1,15 @@
 //! Operator maintenance (`docs/ops/executor.md`, maintenance): the operator's own token UTXOs.
 //!
 //! The operator can come to hold token UTXOs of its own key (protocol v2.6 routes kept the remainder of their purchases of B
-//! there; today a route delivers every base unit of B it buys, but tokens may still reach the operator's key),
+//! there; today a route delivers every base unit of B it buys, but tokens may still reach the operator's key, and the
+//! matcher's opt-in surplus-inventory policy, `PlannerConfig::inventory`, accumulates pair surpluses there on purpose),
 //! each with a KAS carrier on it (`EngineConfig::token_carrier`, 10 KAS by default). Left alone they pile up: in the TN10 soak
 //! (2026-10-01) each executor held 22 to 28 of them after 51 minutes, 220 to 280 KAS of carriers locked for a few cents of
 //! tokens, while the bank's top-ups ran into them.
 //!
 //! | Job | When | What |
 //! |---|---|---|
-//! | sell | the operator holds at least one minimum fill of a bid that is left after the matcher's tick, and selling into it pays more than the fee | its token UTXOs (as many as the program takes) are sold into the best such bid as a taker; the rest comes back as one token UTXO |
+//! | sell | the token is not held as surplus inventory (`inventory` lists it: the owner sells those off-matcher), the operator holds at least one minimum fill of a bid that is left after the matcher's tick, and selling into it pays more than the fee | its token UTXOs (as many as the program takes) are sold into the best such bid as a taker; the rest comes back as one token UTXO |
 //! | merge | otherwise, the operator holds at least `min_utxos` token UTXOs of one token | as many as the program takes become one: the other carriers return to the funding pool |
 //!
 //! Both are bounded per tick (`max_jobs`), built with the `kob_protocol` builders (a taker `Batch`, `SendTokens`), signed with
@@ -58,6 +59,9 @@ pub struct MaintenanceConfig {
     /// `t = DAA − margin` of a sale's lock time (the matcher's margin).
     pub safety_margin: u64,
     pub validate: bool,
+    /// The matcher's surplus-inventory policy (`PlannerConfig::inventory`): a token it lists is accumulated inventory that
+    /// the owner sells off-matcher, so it is never sold here (merged only), whether or not the switch is on.
+    pub inventory: crate::matcher::planner::InventoryPolicy,
 }
 
 impl Default for MaintenanceConfig {
@@ -74,6 +78,7 @@ impl Default for MaintenanceConfig {
             token_carrier: 1_000_000_000,
             safety_margin: 5,
             validate: true,
+            inventory: crate::matcher::planner::InventoryPolicy::default(),
         }
     }
 }
@@ -256,6 +261,7 @@ fn sell_action(
         taker_tokens: tokens.to_vec(),
         taker: Some(operator),
         taker_token_carrier: cfg.token_carrier,
+        keep_surplus: vec![],
         receivers: vec![],
         payments: vec![],
         funding: funding.to_vec(),
@@ -325,7 +331,12 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
         }
         let carriers_in: i64 = utxos.iter().map(|u| u.utxo.amount as i64).sum();
         let mut job: Option<MaintJob> = None;
-        if cfg.sell {
+        // surplus inventory the matcher accumulates is the owner's to sell, off-matcher: never sold here (a merge only)
+        let held_inventory = cfg.inventory.holds(&g.0);
+        if held_inventory && cfg.sell {
+            report.skipped.push((g.0, "sell: surplus inventory (the owner sells it off-matcher)".into()));
+        }
+        if cfg.sell && !held_inventory {
             if let Some((bid, amount, _)) = best_bid(inp, &g, held, t as i64) {
                 let rest = held > 0 && held - amount > 0;
                 let carrier_out = if rest { cfg.token_carrier } else { 0 };

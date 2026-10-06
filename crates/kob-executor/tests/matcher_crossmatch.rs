@@ -198,3 +198,153 @@ fn untipped_pair_orders_without_kas_books_earn_the_matcher_nothing() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Surplus inventory (owner decision 2026-10-06, `PlannerConfig::inventory`): an untipped crossed pair match with no KAS bid
+// able to take its surplus earns no KAS. Under the opt-in policy the operator takes the surplus into its own key (the pair
+// ask keeps exactly its floor: `KobPair.sil`, `tOut >= ceil`) and counts its policy value as income.
+
+use kob_executor::matcher::engine::{tick, EngineConfig, Prepared};
+use kob_executor::matcher::family::Families;
+use kob_executor::matcher::planner::{InventoryPolicy, InventoryToken, Kept, UnitPrice};
+use kob_protocol::tx::SigPlan;
+
+fn policy(tokens: Vec<InventoryToken>) -> EngineConfig {
+    let mut c = cfg();
+    c.planner.inventory = InventoryPolicy { accept_surplus_tokens: true, tokens, ..InventoryPolicy::default() };
+    c
+}
+
+fn tusd(min_amount: Option<i64>, ref_price: Option<UnitPrice>) -> InventoryToken {
+    InventoryToken { token: TOKEN_B, ref_price, min_amount }
+}
+
+/// A tick without `check_pair`'s no-inventory rule: every transaction engine-validated, no anomaly, and profitable once the
+/// kept inventory's policy value is counted.
+fn run_keep(orders: Vec<ListedOrder>, cfg: &EngineConfig) -> TickReport {
+    let b = book(orders);
+    let inp = input(&b);
+    let r = tick(&inp, cfg, &Families::default(), &signer());
+    assert!(r.anomalies.is_empty(), "anomalies: {:?}", r.anomalies);
+    assert_eq!(r.slack_retries, 0);
+    for p in &r.prepared {
+        assert!(p.validation.is_some(), "unvalidated transaction");
+        assert!(p.accounting.profit.saturating_add(p.plan.kept_value()) >= 1, "unprofitable: {:?}", p.accounting);
+    }
+    r
+}
+
+/// Per token of a built transaction: Σ base units of its token inputs, and its token outputs as (owner, amount).
+fn token_flows(p: &Prepared, token: [u8; 32]) -> (i64, Vec<([u8; 32], i64)>) {
+    let built = &p.lowered.built;
+    let mut ins = 0;
+    let mut outs = vec![];
+    for (k, plan) in built.plans.iter().enumerate() {
+        if built.tx.inputs[k].utxo.covenant_id != Some(token) {
+            continue;
+        }
+        match plan {
+            SigPlan::TokenLeader { state, next_states, .. } => {
+                ins += state.amount;
+                outs = next_states.iter().map(|s| (s.owner, s.amount)).collect();
+            }
+            SigPlan::TokenDelegator { state, .. } => ins += state.amount,
+            _ => {}
+        }
+    }
+    (ins, outs)
+}
+
+/// The crossed TBTC/TUSD pair (20 USD, the bid 100 bps above the ask, untipped), its fill n, the B the ask needs (its ceil)
+/// and the surplus: the B the bid releases (its floor) less that.
+fn crossed() -> (Vec<ListedOrder>, i64, i64, i64) {
+    let n = TBTC.of(20);
+    let (p, q) = (TBTC.rate(), bps(TBTC.rate(), 100));
+    let need = ((n as i128 * p as i128 + S8 as i128 - 1) / S8 as i128) as i64;
+    let pays = (n as i128 * q as i128 / S8 as i128) as i64;
+    (vec![pair8(TBTC, 1, 1, true, n, p, 0), pair8(TBTC, 2, 4, false, n, q, 0)], n, need, pays - need)
+}
+
+/// (a) The zero-tip crossed direct match with no TBTC book: off, nothing (the surplus would go to the ask and the matcher
+/// earns no KAS); on, with a fillable TUSD bid whose minimum fill (10 KAS, ~0.42 TUSD) is above the 0.2 TUSD surplus, the
+/// batch nets both orders, the ask gets exactly its floor, the operator's key the surplus, every token amount conserved.
+#[test]
+fn a_kept_surplus_pays_a_zero_tip_crossed_match() {
+    let (pairs, n, need, surplus) = crossed();
+    assert!(surplus > 0 && surplus < 42_000_000, "0.2 TUSD: below a wallet bid's minimum fill");
+    let mut v = pairs.clone();
+    v.push(kas_bid(200, TOKEN_B, bps(KUSD, -2), 6 * S8));
+    // policy off (the default), with and without the TUSD bid: no batch
+    assert!(run_keep(pairs.clone(), &cfg()).prepared.is_empty(), "off, no KAS book");
+    assert!(run_keep(v.clone(), &cfg()).prepared.is_empty(), "off, with the TUSD bid");
+    // policy on, small surpluses accepted (minAmount 0: a later sale of the whole holding clears them)
+    let r = run_keep(v, &policy(vec![tusd(Some(0), None)]));
+    assert_eq!(r.prepared.len(), 1, "skipped: {:?}", r.skipped);
+    let p = &r.prepared[0];
+    assert_eq!((amount_in(&r, cid(1)), amount_in(&r, cid(2))), (n, n), "both pair orders netted whole");
+    assert_eq!(amount_in(&r, cid(200)), 0, "the TUSD bid only values the surplus");
+    // the value: what the bid pays for 0.2 TUSD, at the 80 % haircut
+    let at_bid = surplus as i128 * bps(KUSD, -2) as i128 / S8 as i128;
+    assert_eq!(p.plan.kept, vec![Kept { token: TOKEN_B, amount: surplus, value: (at_bid * 8_000 / 10_000) as i64 }]);
+    assert_eq!(batch_request(p).keep_surplus, vec![TOKEN_B]);
+    // TUSD: the ask's delivery is exactly its ceil, the operator's output the surplus, nothing created or lost
+    let (b_in, b_out) = token_flows(p, TOKEN_B);
+    assert_eq!(b_out.iter().filter(|(o, _)| *o == pk(1)).map(|x| x.1).collect::<Vec<_>>(), vec![need], "the ask's floor");
+    assert_eq!(b_out.iter().filter(|(o, _)| *o == pk(MATCHER)).map(|x| x.1).collect::<Vec<_>>(), vec![surplus], "the taker");
+    assert_eq!(b_in, b_out.iter().map(|x| x.1).sum::<i64>(), "TUSD conserved");
+    // TBTC: the bid receives exactly n, conserved, none to the operator
+    let (a_in, a_out) = token_flows(p, TOKEN);
+    assert_eq!(a_out.iter().filter(|(o, _)| *o == pk(4)).map(|x| x.1).collect::<Vec<_>>(), vec![n]);
+    assert!(a_out.iter().all(|(o, _)| *o != pk(MATCHER)));
+    assert_eq!(a_in, a_out.iter().map(|x| x.1).sum::<i64>(), "TBTC conserved");
+    // the KAS accounting pays the fee (the operator output's carrier is its own KAS); the inventory pays for it
+    assert!(p.accounting.profit < 0 && p.accounting.profit + p.plan.kept_value() > 0, "{:?}", p.accounting);
+    // the owner's reference price values it with no KAS book at all
+    let r = run_keep(pairs, &policy(vec![tusd(None, Some(UnitPrice { sompi: 2_300_000_000, per: S8 as u64 }))]));
+    assert_eq!(r.prepared.len(), 1, "skipped: {:?}", r.skipped);
+    assert_eq!(r.prepared[0].plan.kept[0].amount, surplus);
+}
+
+/// (b) A token the allowlist does not name (or the switch off) is never kept: its surplus goes to the ask as before.
+#[test]
+fn an_unlisted_token_is_never_kept() {
+    let (mut v, ..) = crossed();
+    v.push(kas_bid(200, TOKEN_B, bps(KUSD, -2), 6 * S8));
+    let only_tbtc = InventoryToken { token: TOKEN, ref_price: None, min_amount: Some(0) };
+    assert!(run_keep(v.clone(), &policy(vec![only_tbtc])).prepared.is_empty(), "TUSD not listed");
+    let mut off = policy(vec![tusd(Some(0), None)]);
+    off.planner.inventory.accept_surplus_tokens = false;
+    assert!(run_keep(v, &off).prepared.is_empty(), "listed but switched off");
+}
+
+/// (c) The valuation counts only what fillable bids take: by default never a surplus below the bids' minimum fill
+/// (unsellable dust), never more depth than the bids hold.
+#[test]
+fn the_valuation_never_uses_a_bid_that_cannot_take_it() {
+    let (pairs, ..) = crossed();
+    let with = |b: ListedOrder| {
+        let mut v = pairs.clone();
+        v.push(b);
+        v
+    };
+    // default minAmount: 0.2 TUSD is below the bid's 10 KAS minimum fill, so no sale of it alone fills the bid
+    assert!(run_keep(with(kas_bid(200, TOKEN_B, bps(KUSD, -2), 6 * S8)), &policy(vec![tusd(None, None)])).prepared.is_empty());
+    // a bid holding 1/1000 of the surplus values only that part: below the fee
+    assert!(run_keep(with(kas_bid(200, TOKEN_B, bps(KUSD, -2), 20_000)), &policy(vec![tusd(Some(0), None)])).prepared.is_empty());
+}
+
+/// The same-transaction sale stays preferred: a surplus a KAS bid can take (1 TUSD clears its minimum fill) is sold there and
+/// nothing is kept.
+#[test]
+fn a_surplus_a_kas_bid_takes_is_sold_not_kept() {
+    let n = TBTC.of(20);
+    let v = vec![
+        pair8(TBTC, 1, 1, true, n, TBTC.rate(), 0),
+        pair8(TBTC, 2, 4, false, n, bps(TBTC.rate(), 500), 0),
+        kas_bid(200, TOKEN_B, bps(KUSD, -2), 6 * S8),
+    ];
+    let r = run_keep(v, &policy(vec![tusd(Some(0), None)]));
+    assert_eq!(r.prepared.len(), 1, "skipped: {:?}", r.skipped);
+    assert!(amount_in(&r, cid(200)) > 0, "sold into the TUSD bid");
+    assert!(r.prepared[0].plan.kept.is_empty(), "nothing kept: {:?}", r.prepared[0].plan.kept);
+}

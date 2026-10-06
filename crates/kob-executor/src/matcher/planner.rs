@@ -48,6 +48,9 @@ pub struct PlannerConfig {
     /// candidate. The planner's walks are sorted and bounded by the tick's wall-clock budget, so no cap is needed for time
     /// (a cap only hides the tail of a book.
     pub max_candidates_per_group: usize,
+    /// Token surplus the operator may keep as inventory (`docs/spec/matcher.md` §3.5, *inventory*). Off by default: the
+    /// reference planner then holds no tokens.
+    pub inventory: InventoryPolicy,
 }
 
 impl Default for PlannerConfig {
@@ -60,8 +63,130 @@ impl Default for PlannerConfig {
             arm: true,
             max_chain: 4,
             max_candidates_per_group: 0,
+            inventory: InventoryPolicy::default(),
         }
     }
+}
+
+/// A price as a fraction: `sompi` per `per` base units of a token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UnitPrice {
+    #[serde(with = "kob_protocol::json::field")]
+    pub sompi: u64,
+    #[serde(with = "kob_protocol::json::field")]
+    pub per: u64,
+}
+
+impl UnitPrice {
+    /// The KAS `q` base units are worth at this price, rounded down (0 for a malformed price).
+    pub fn value(&self, q: i64) -> i128 {
+        if self.per == 0 || q <= 0 {
+            return 0;
+        }
+        q as i128 * self.sompi as i128 / self.per as i128
+    }
+}
+
+/// One token the operator accepts as inventory.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InventoryToken {
+    /// The token's covenant id (hex).
+    #[serde(with = "kob_protocol::json::field")]
+    pub token: [u8; 32],
+    /// The owner's own valuation of the token (it sells its inventory off-matcher), used instead of the plain KAS bids.
+    /// Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ref_price: Option<UnitPrice>,
+    /// Least surplus (base units) worth keeping. Default: with `ref_price`, none; otherwise the smallest fill one of the
+    /// valued bids accepts (its minimum fill), so the kept amount alone could fill it (no unsellable dust). Set it lower to
+    /// accumulate small surpluses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_amount: Option<i64>,
+}
+
+/// The surplus-inventory policy (owner decision 2026-10-06, `docs/spec/matcher.md` §3.5): when a batch leaves a token
+/// surplus that would go to a pair ask's delivery (the ask's guarantee is a floor), the operator may take it into its own
+/// key instead and count its value as income, so a crossed pair match that pays no KAS (no tips, no KAS bid able to take
+/// the surplus) still pays its fee. A surplus a KAS bid takes in the same transaction is still sold there first (no
+/// inventory risk); only the rest is kept. The matcher only accumulates: the owner sells the inventory off-matcher, and the
+/// maintenance jobs never sell a listed token ([`InventoryPolicy::holds`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub struct InventoryPolicy {
+    /// Master switch (off by default).
+    pub accept_surplus_tokens: bool,
+    /// The share of a kept surplus's valuation counted as income, basis points (default 8,000: 80 %).
+    pub haircut_bps: u32,
+    /// The tokens it may keep (an allowlist; every other token's surplus goes to the pair ask as before).
+    pub tokens: Vec<InventoryToken>,
+}
+
+impl Default for InventoryPolicy {
+    fn default() -> Self {
+        InventoryPolicy { accept_surplus_tokens: false, haircut_bps: 8_000, tokens: vec![] }
+    }
+}
+
+impl InventoryPolicy {
+    /// Reads a policy file (strict JSON, the camelCase fields of [`InventoryPolicy`]; `--inventory-policy`) and checks it.
+    pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let p: InventoryPolicy = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        p.check().map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(p)
+    }
+    /// The policy's own consistency: a haircut of at most 100 %, each token once, a `refPrice` positive, a `minAmount` not
+    /// negative.
+    pub fn check(&self) -> Result<(), String> {
+        if self.haircut_bps > 10_000 {
+            return Err(format!("haircutBps {} above 10000", self.haircut_bps));
+        }
+        let mut seen = BTreeSet::new();
+        for t in &self.tokens {
+            let id = kob_protocol::json::to_hex(&t.token);
+            if !seen.insert(t.token) {
+                return Err(format!("token {id} listed twice"));
+            }
+            if t.ref_price.is_some_and(|r| r.per == 0 || r.sompi == 0) {
+                return Err(format!("token {id}: refPrice must be positive"));
+            }
+            if t.min_amount.is_some_and(|a| a < 0) {
+                return Err(format!("token {id}: minAmount must not be negative"));
+            }
+        }
+        Ok(())
+    }
+    /// The rule of `token` when the policy is on and lists it.
+    pub fn rule(&self, token: &[u8; 32]) -> Option<&InventoryToken> {
+        if !self.accept_surplus_tokens {
+            return None;
+        }
+        self.tokens.iter().find(|t| &t.token == token)
+    }
+    /// `v` after the haircut (at most 100 %).
+    pub fn haircut(&self, v: i128) -> i128 {
+        v.max(0) * self.haircut_bps.min(10_000) as i128 / 10_000
+    }
+    /// Whether `token` is held as surplus inventory: listed, whether or not the switch is on (tokens already accumulated stay
+    /// put). The maintenance jobs never sell such a token (`crate::maintenance`).
+    pub fn holds(&self, token: &[u8; 32]) -> bool {
+        self.tokens.iter().any(|t| &t.token == token)
+    }
+}
+
+/// Byte estimate of the operator's token output a kept surplus adds (the output and its leader `next_states` entry).
+pub const KEPT_OUTPUT_BYTES: u64 = OUTPUT_BYTES + NEXT_STATE_BYTES;
+
+/// A token surplus the batch keeps as the operator's inventory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Kept {
+    pub token: [u8; 32],
+    /// Base units the operator's token output receives.
+    pub amount: i64,
+    /// Their valuation under the policy (after the haircut), sompi: counted as income of the batch.
+    pub value: i64,
 }
 
 impl PlannerConfig {
@@ -145,12 +270,18 @@ pub struct Plan {
     pub tips: i64,
     pub est_bytes: u64,
     pub est_fee: i64,
+    /// Token surpluses the operator keeps as inventory ([`InventoryPolicy`]; empty with the policy off).
+    pub kept: Vec<Kept>,
 }
 
 impl Plan {
-    /// Estimated operator profit: the margin and the update tips less the fee.
+    /// Estimated operator profit: the margin, the update tips and the value of the kept inventory less the fee.
     pub fn profit(&self) -> i64 {
-        self.margin.saturating_add(self.tips).saturating_sub(self.est_fee)
+        self.margin.saturating_add(self.tips).saturating_add(self.kept_value()).saturating_sub(self.est_fee)
+    }
+    /// The policy value of the inventory the plan keeps (sompi): income the built transaction's KAS accounting does not see.
+    pub fn kept_value(&self) -> i64 {
+        self.kept.iter().fold(0i64, |a, k| a.saturating_add(k.value))
     }
     /// Every covenant id the plan spends (legs, merged entries and updated orders).
     pub fn spent_ids(&self) -> BTreeSet<CovId> {
@@ -223,4 +354,43 @@ pub fn est_fee(bytes: u64, fee_rate: u64) -> i64 {
 pub fn update_cost(u: &UpCand, fee_rate: u64) -> i64 {
     let floor = (u.fee_floor as i128 * fee_rate as i128 / kob_protocol::tx::MIN_FEE_RATE as i128).min(i64::MAX as i128) as i64;
     est_fee(u.bytes, fee_rate).max(floor)
+}
+
+#[cfg(test)]
+mod inventory_tests {
+    use super::*;
+
+    /// The documented policy file (`docs/ops/executor.md`, "Surplus inventory") parses, and the checks refuse what makes no
+    /// sense: an unknown key, a haircut above 100 %, a zero reference price, a token listed twice.
+    #[test]
+    fn the_policy_file_parses_and_is_checked() {
+        let doc = r#"{
+          "acceptSurplusTokens": true,
+          "haircutBps": 8000,
+          "tokens": [
+            { "token": "7272727272727272727272727272727272727272727272727272727272727272", "minAmount": 0 },
+            { "token": "7171717171717171717171717171717171717171717171717171717171717171",
+              "refPrice": { "sompi": "2300000000", "per": "100000000" } }
+          ]
+        }"#;
+        let p: InventoryPolicy = serde_json::from_str(doc).expect("parses");
+        p.check().expect("consistent");
+        let t = [0x72u8; 32];
+        assert_eq!(p.rule(&t).and_then(|r| r.min_amount), Some(0));
+        assert_eq!(p.rule(&[0x71; 32]).and_then(|r| r.ref_price).map(|r| r.value(50_000_000)), Some(1_150_000_000));
+        assert!(p.rule(&[0x70; 32]).is_none() && !p.holds(&[0x70; 32]), "an unlisted token");
+        assert_eq!(p.haircut(1_000), 800);
+        // off: no rule, but a listed token is still held (never sold by maintenance)
+        let off = InventoryPolicy { accept_surplus_tokens: false, ..p.clone() };
+        assert!(off.rule(&t).is_none() && off.holds(&t));
+        assert_eq!(InventoryPolicy::default(), serde_json::from_str::<InventoryPolicy>("{}").unwrap(), "off by default");
+        assert!(serde_json::from_str::<InventoryPolicy>(r#"{"acceptSurplus": true}"#).is_err(), "unknown key");
+        assert!(InventoryPolicy { haircut_bps: 10_001, ..p.clone() }.check().is_err());
+        let mut zero = p.clone();
+        zero.tokens[1].ref_price = Some(UnitPrice { sompi: 0, per: 100_000_000 });
+        assert!(zero.check().is_err(), "a zero reference price");
+        let mut twice = p.clone();
+        twice.tokens[1].token = t;
+        assert!(twice.check().is_err(), "listed twice");
+    }
 }

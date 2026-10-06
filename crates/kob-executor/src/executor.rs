@@ -200,6 +200,10 @@ pub struct RunArgs {
     /// Maintenance: most transactions per tick.
     #[arg(long, default_value_t = 2)]
     pub maintenance_max_jobs: usize,
+    /// Matcher and maintenance: the surplus-inventory policy (strict JSON, `docs/ops/executor.md`, "Surplus inventory"):
+    /// the pair surpluses the operator may accumulate as inventory (never sold by maintenance). Default: none (off).
+    #[arg(long)]
+    pub inventory_policy: Option<PathBuf>,
     /// Keepers: do not refund / kill / close.
     #[arg(long)]
     pub no_refund: bool,
@@ -380,6 +384,17 @@ pub async fn run(a: RunArgs) -> Result<()> {
     let cfg = build_config(&a.index)?;
     let signer = HotKey::load(a.key_file.as_deref())?;
     let mut run_cfg = a.run_config(&cfg.network);
+    if let Some(path) = &a.inventory_policy {
+        let p = crate::matcher::planner::InventoryPolicy::from_file(path).map_err(anyhow::Error::msg)?;
+        tracing::info!(
+            accept = p.accept_surplus_tokens,
+            tokens = p.tokens.len(),
+            haircut_bps = p.haircut_bps,
+            "surplus inventory policy"
+        );
+        run_cfg.engine.planner.inventory = p.clone();
+        run_cfg.maintenance.inventory = p;
+    }
     if a.max_book_lag_daa.is_none() && cfg.lag_tolerance_daa() > 0 {
         // one bound for both gates: a store within the tolerance is a book the runner may plan against
         run_cfg.max_book_lag = Some(cfg.lag_tolerance_daa());

@@ -206,3 +206,28 @@ fn maintenance_pays_the_low_rate_and_a_sale_only_what_it_earns() {
     assert_eq!((r.jobs[0].kind, r.jobs[0].built.fee.fee_rate), (MaintKind::Sell, 150), "{:?}", r.skipped);
     assert!(r.jobs[0].profit >= 0);
 }
+
+/// Surplus inventory (`PlannerConfig::inventory`): the tokens the matcher accumulates are the owner's to sell, off-matcher.
+/// Maintenance never sells a listed token, even into a bid that pays well (or a lowball one an attacker posts), whether or
+/// not the policy's switch is on; it may still merge its UTXOs. Unlisted tokens are sold as before.
+#[test]
+fn accumulated_surplus_inventory_is_never_sold() {
+    use kob_executor::matcher::planner::{InventoryPolicy, InventoryToken};
+    let tokens = vec![own(T8, 1_200), own(T8, 800)];
+    let bids = vec![l_bid_a(100, T8, 2, 50_000_000, 4 * WHOLE), l_bid_a(101, T8, 3, P260, 4 * WHOLE)];
+    // unlisted: sold into the best bid
+    let r = run(&input(tokens.clone(), bids.clone(), vec![]), &MaintenanceConfig::default());
+    assert_eq!(r.jobs[0].kind, MaintKind::Sell);
+    let listed = InventoryToken { token: token_a(T8), ref_price: None, min_amount: None };
+    for on in [true, false] {
+        let inventory = InventoryPolicy { accept_surplus_tokens: on, tokens: vec![listed.clone()], ..Default::default() };
+        let cfg = MaintenanceConfig { inventory, ..Default::default() };
+        let r = run(&input(tokens.clone(), bids.clone(), vec![]), &cfg);
+        assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
+        assert_eq!(r.jobs[0].kind, MaintKind::Merge, "switch {on}: merged, never sold");
+        assert!(r.skipped.iter().any(|(_, why)| why.contains("surplus inventory")), "{:?}", r.skipped);
+        // a single UTXO: nothing at all
+        let r = run(&input(vec![own(T8, 2_000)], bids.clone(), vec![]), &cfg);
+        assert!(r.jobs.is_empty(), "switch {on}");
+    }
+}

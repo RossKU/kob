@@ -84,6 +84,10 @@ pub struct MatchArgs {
     /// (the walks are sorted and the tick budget bounds a hostile book).
     #[arg(long, default_value_t = 0)]
     pub max_candidates_per_group: usize,
+    /// The surplus-inventory policy (strict JSON, `docs/ops/executor.md`, "Surplus inventory"): the pair surpluses the
+    /// operator may accumulate as inventory (never sold by maintenance). Default: none (off).
+    #[arg(long)]
+    pub inventory_policy: Option<PathBuf>,
     /// Also run the keepers in this process.
     #[arg(long)]
     pub keep: bool,
@@ -207,7 +211,12 @@ async fn shutdown_signal() {
 pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     a.common.fees.policy(a.common.fee_rate).map_err(anyhow::Error::msg)?;
     let signer = load_key(&a.common)?;
-    let engine = engine_cfg(&a);
+    let mut engine = engine_cfg(&a);
+    let inventory = match &a.inventory_policy {
+        Some(p) => super::planner::InventoryPolicy::from_file(p).map_err(anyhow::Error::msg)?,
+        None => super::planner::InventoryPolicy::default(),
+    };
+    engine.planner.inventory = inventory.clone();
     if a.common.offline {
         return offline(&read_snapshot(&a.common.book_file)?, &engine, signer.as_ref());
     }
@@ -215,6 +224,7 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     cfg.engine = engine;
     cfg.keeper.fee_rate = a.common.fee_rate;
     cfg.maintenance.fee_rate = a.common.fee_rate;
+    cfg.maintenance.inventory = inventory;
     let node = WrpcNode::new(WrpcConfig::new(a.common.rpc_url.clone()));
     tracing::info!(network = %cfg.network, rpc = %a.common.rpc_url, operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "matcher starting");
     let mut r = Runner::new(node, FileSource::new(a.common.book_file.clone()), signer, cfg);

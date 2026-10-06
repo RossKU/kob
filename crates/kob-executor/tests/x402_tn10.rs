@@ -1446,6 +1446,7 @@ fn x402_on_testnet_10() {
         taker_tokens: vec![filler_tok],
         taker: Some(filler.pk),
         taker_token_carrier: PAY_CARRIER,
+        keep_surplus: vec![],
         receivers: vec![],
         payments: vec![],
         funding: pick(&net.kas_utxos(&filler), KAS, 4),

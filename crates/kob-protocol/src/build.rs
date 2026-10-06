@@ -1812,6 +1812,12 @@ pub struct Batch {
     /// KAS carrier on each of the taker's token outputs.
     #[serde(with = "crate::json::field", default)]
     pub taker_token_carrier: u64,
+    /// Tokens (covenant ids) whose surplus the taker keeps: the base units the batch releases beyond what its legs take go to
+    /// the taker's token output (`taker`, or the token's `receivers` entry) instead of the delivery of the first pair ask
+    /// buying the token. A pair ask's guarantee is a floor (`contracts/v2/KobPair.sil`: `tOut >= ceil`), so its delivery
+    /// is then exactly what its covenant amount needs. Empty (the default): the surplus goes to the pair ask.
+    #[serde(with = "crate::json::field_vec", default, skip_serializing_if = "Vec::is_empty")]
+    pub keep_surplus: Vec<[u8; 32]>,
     /// Per-token receivers overriding `taker` (e.g. a route's bought token paid to a merchant).
     #[serde(default)]
     pub receivers: Vec<TokenPayee>,
@@ -3091,8 +3097,8 @@ fn pair_exts(l: &Leg, a: Token, bt: Token, merge_ext: &mut impl FnMut([u8; 32], 
 /// The tokens a batch releases beyond what its legs take go to the pair asks that buy them: the surplus of each token goes
 /// to the delivery of the first pair ask (`KobPair`, `KobCondPair`) of the batch buying it, whose guarantee is a minimum
 /// (the covenant pins the delivered amount the filler names). Taker tokens of a token mean the matcher fills from its
-/// inventory: its surplus then stays with the taker. A KRON delivery above the program's output limit keeps the excess with
-/// the taker.
+/// inventory, and [`Batch::keep_surplus`] names the tokens the taker takes into inventory: their surplus then stays with the
+/// taker. A KRON delivery above the program's output limit keeps the excess with the taker.
 fn deliver_pair_surplus(b: &Batch, plans: &mut [LegPlan]) -> Result<()> {
     let mut bought: Vec<Token> = vec![];
     for t in plans.iter().filter_map(|p| p.adjust.map(|(t, _)| t)) {
@@ -3101,7 +3107,7 @@ fn deliver_pair_surplus(b: &Batch, plans: &mut [LegPlan]) -> Result<()> {
         }
     }
     for t in bought {
-        if b.taker_tokens.iter().any(|x| x.utxo.covenant_id == Some(t.0)) {
+        if b.taker_tokens.iter().any(|x| x.utxo.covenant_id == Some(t.0)) || b.keep_surplus.contains(&t.0) {
             continue;
         }
         let (sold, taken) = token_flow(plans, t)?;
@@ -3361,6 +3367,7 @@ pub fn route_batch(r: &SwapRoute) -> Result<Batch> {
         taker_tokens: r.tokens.clone(),
         taker: change,
         taker_token_carrier: r.token_carrier,
+        keep_surplus: vec![],
         receivers,
         payments: r.payments.clone(),
         funding: r.funding.clone(),

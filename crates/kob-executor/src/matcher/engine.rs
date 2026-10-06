@@ -386,8 +386,10 @@ impl<'a> Tick<'a> {
                         }
                         if rate > plan_rate {
                             let a = accounting(&l, &funding);
-                            if a.profit < cfg.planner.min_profit {
-                                rate = crate::fee::FeeRates::affordable(rate, a.fee, a.profit, cfg.planner.min_profit, plan_rate)
+                            // the inventory a plan keeps is income the KAS accounting does not see (its policy value)
+                            let p = a.profit.saturating_add(plan.kept_value());
+                            if p < cfg.planner.min_profit {
+                                rate = crate::fee::FeeRates::affordable(rate, a.fee, p, cfg.planner.min_profit, plan_rate)
                                     .unwrap_or(plan_rate);
                                 continue;
                             }
@@ -460,7 +462,8 @@ impl<'a> Tick<'a> {
                     _ => break,
                 }
             }
-            if acct.profit < cfg.planner.min_profit {
+            // the batch's profit: its exact KAS (`change − funding`) and the policy value of the inventory it keeps
+            if acct.profit.saturating_add(plan.kept_value()) < cfg.planner.min_profit {
                 // the consolidated inputs' fee must not cost the batch: plan it again without them
                 let plain = select_funding(&self.pool, need, false, &cfg.funding);
                 if consolidate && plain.len() < funding.len() {

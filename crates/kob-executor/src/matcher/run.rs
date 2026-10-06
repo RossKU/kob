@@ -556,6 +556,15 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                         "the batch triggers or arms stops"
                     );
                 }
+                for k in &p.plan.kept {
+                    tracing::info!(
+                        txid = %kob_protocol::json::to_hex(&p.txid()),
+                        token = %kob_protocol::json::to_hex(&k.token),
+                        amount = k.amount,
+                        value = k.value,
+                        "the batch keeps a token surplus as inventory"
+                    );
+                }
                 rep.built.push((kind.into(), p.txid(), p.accounting.profit));
                 if let Some(c) = self.capture.as_mut() {
                     c.push(p.signed.clone());

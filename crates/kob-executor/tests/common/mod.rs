@@ -54,6 +54,7 @@ pub fn batch(w: &World, lock: u64, legs: Vec<Leg>) -> Batch {
         taker_tokens: vec![],
         taker: Some(pk(TAKER)),
         taker_token_carrier: CARRIER,
+        keep_surplus: vec![],
         receivers: vec![],
         payments: vec![],
         funding: vec![w.coin(TAKER, 1000)],

@@ -173,6 +173,8 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
         taker_tokens: vec![],
         taker: Some(cx.operator),
         taker_token_carrier: cx.token_carrier,
+        // the surpluses the plan keeps as the operator's inventory (`PlannerConfig::inventory`) stay with the taker
+        keep_surplus: plan.kept.iter().map(|k| k.token).collect(),
         receivers: vec![],
         payments: vec![],
         funding: cx.funding.clone(),
@@ -308,10 +310,11 @@ pub fn operator_token_kas(plan: &Plan, batch: &Batch) -> (u64, u64) {
             *net.entry(c).or_default() += t.state.amount() as i128;
         }
     }
-    // a token a pair ask buys: its surplus goes to that ask's delivery (a minimum), no operator output
+    // a token a pair ask buys: its surplus goes to that ask's delivery (a minimum), no operator output, unless the plan keeps
+    // it as inventory (`Batch::keep_surplus`)
     for f in &plan.fills {
         if let Some(x) = &f.cand.pair {
-            if x.role != PairRole::Surplus && !x.info.buy_exact() {
+            if x.role != PairRole::Surplus && !x.info.buy_exact() && !batch.keep_surplus.contains(&x.info.t_market().token) {
                 net.remove(&x.info.t_market().token);
             }
         }
