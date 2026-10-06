@@ -39,6 +39,13 @@ The reverse direction (a user on a cached OLD web bundle placing orders under a 
 covered by the web bundle's pinned template hashes: a wallet refuses to place what its build does not pin, and the
 indexer reports unknown templates as `unknown_reveals`.
 
+Router intent templates (`contracts/argent/router`) are not order templates and have no retirement path: an intent
+lives until its deadline, after which anyone (the x402 facilitator first) expires it. On 2026-10-06 the lock pin
+(`docs/argent.md`, "Lock pin") changed the 24 token-intent templates (`TokenToKas*`, `TokenSwap*` and their KRON
+twins; the `KasToToken*` templates are unchanged). An intent created from a previous template keeps its script: its
+payer's `cancel` and anyone's `expire` still validate on chain, but today's builders do not build for it, and the lock
+stand-in it was vulnerable to still works on it until it ends.
+
 ## Retired templates this build can spend
 
 Every order template a testnet-10 build pinned (the real-wallet runs of 2026-09-29 from the reference build, the TN10 soak

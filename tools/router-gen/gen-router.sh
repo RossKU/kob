@@ -40,6 +40,12 @@ bid_type() { if [ "$1" = kron ]; then echo "KOBOrdersKron::KobBidKron"; else ech
 own_lock() {
   if [ "$1" = kron ]; then echo "        own_kron($2.owner, $2.id_type, $2.is_minter, byte[32](self.cov_id));";
   else echo "        own_tokens($2.owner, $2.owner_scheme, $2.borrow_scheme, byte[32](self.cov_id));"; fi
+  lock_pin "$1" "$2"
+}
+# The lock pin (router_head.ag, "LOCK PIN"): the observed lock is the one the payer created. $1 = family, $2 = projection.
+lock_pin() {
+  echo "        require($2.amount == lock_amount);"
+  [ "$1" = kron ] || echo "        require($2.extension_commitment == lock_extension);"
 }
 # A token-A output state held by a key. $1 = family, $2 = local name, $3 = owner, $4 = amount, $5 = extension (KCC-20).
 a_lit() { if [ "$1" = kron ]; then kron_lit "$2" "$3" "$4"; else tok_lit "$2" "$3" "$4" "$5"; fi; }
@@ -314,9 +320,10 @@ swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (ask
   echo "        }"
   echo "    }"
   # Stack-lean body: the swaps observe four orders and two token groups under two handles, and `swap2` is the tightest
-  # script (227 live bindings and 234 combined stack items of the 244 allowed). So no local is kept that an expression
-  # can stand for: the input index (this.activeInputIndex), the sum of the base units sold into the bids and the
-  # take of a resting last ask are written out where they are used.
+  # script (227 live bindings and 234 combined stack items of the 244 allowed on the v2.6 router; the lock pin added
+  # two state fields and two checks, and argentc, which refuses an entry over the limit, still compiles it). So no local
+  # is kept that an expression can stand for: the input index (this.activeInputIndex), the sum of the base units sold
+  # into the bids and the take of a resting last ask are written out where they are used.
   local ME=this.activeInputIndex
   echo "    emits none {"
   echo "        require(tx.inputs.length == $ME + 1);"
@@ -466,6 +473,7 @@ cancel_entry() {
     else
       echo "        require($M.owner_scheme == OWNER_COVENANT_ID);"
     fi
+    lock_pin "$2" "$M"
   fi
   echo "    }"
   echo "}"

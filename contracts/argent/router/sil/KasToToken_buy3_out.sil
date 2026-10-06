@@ -45,6 +45,8 @@ contract KasToToken_buy3_out(
         byte[32] token_type;
         int merchant_kas;
         int max_sell;
+        int lock_amount;
+        byte[32] lock_extension;
         temporal deadline;
     }
     struct TokenSwapState {
@@ -57,6 +59,8 @@ contract KasToToken_buy3_out(
         byte[32] token_b_type;
         int max_sell_a;
         int amount_b;
+        int lock_amount;
+        byte[32] lock_extension;
         temporal deadline;
     }
     struct TokenToKasKronState {
@@ -67,6 +71,7 @@ contract KasToToken_buy3_out(
         byte[32] token_type;
         int merchant_kas;
         int max_sell;
+        int lock_amount;
         temporal deadline;
     }
     struct TokenSwapKronState {
@@ -79,6 +84,7 @@ contract KasToToken_buy3_out(
         byte[32] token_b_type;
         int max_sell_a;
         int amount_b;
+        int lock_amount;
         temporal deadline;
     }
     struct KCC20State {

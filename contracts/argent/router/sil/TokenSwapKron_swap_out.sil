@@ -11,6 +11,7 @@ contract TokenSwapKron_swap_out(
     byte[32] init_token_b_type,
     int init_max_sell_a,
     int init_amount_b,
+    int init_lock_amount,
     temporal init_deadline
 ) {
     // :: shared constants
@@ -58,6 +59,8 @@ contract TokenSwapKron_swap_out(
         byte[32] token_type;
         int merchant_kas;
         int max_sell;
+        int lock_amount;
+        byte[32] lock_extension;
         temporal deadline;
     }
     struct TokenSwapState {
@@ -70,6 +73,8 @@ contract TokenSwapKron_swap_out(
         byte[32] token_b_type;
         int max_sell_a;
         int amount_b;
+        int lock_amount;
+        byte[32] lock_extension;
         temporal deadline;
     }
     struct TokenToKasKronState {
@@ -80,6 +85,7 @@ contract TokenSwapKron_swap_out(
         byte[32] token_type;
         int merchant_kas;
         int max_sell;
+        int lock_amount;
         temporal deadline;
     }
     struct KCC20State {
@@ -530,6 +536,7 @@ contract TokenSwapKron_swap_out(
     byte[32] token_b_type = init_token_b_type;
     int max_sell_a = init_max_sell_a;
     int amount_b = init_amount_b;
+    int lock_amount = init_lock_amount;
     temporal deadline = init_deadline;
 
     // :: entrypoints
@@ -611,6 +618,7 @@ contract TokenSwapKron_swap_out(
         require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
         require(token_a != token_b);
         own_kron(gen__token_a_group_mine_state.owner, gen__token_a_group_mine_state.id_type, gen__token_a_group_mine_state.is_minter, byte[32](OpInputCovenantId(this.activeInputIndex)));
+        require(gen__token_a_group_mine_state.amount == lock_amount);
         bid_fits(gen__bids1_bid_state.tokenCovId, byte[32](token_a), n_a1);
         require(n_a1 <= max_sell_a);
         require(n_a1 <= gen__token_a_group_mine_state.amount);
@@ -701,6 +709,7 @@ contract TokenSwapKron_swap_out(
         require(OpCovOutputIdx(token_a, 0) == me + 1);
         require(tx.outputs[me + 1].value >= tx.inputs[gen__token_a_group_mine_input_idx].value);
         own_kron(gen__token_a_group_mine_state.owner, gen__token_a_group_mine_state.id_type, gen__token_a_group_mine_state.is_minter, byte[32](OpInputCovenantId(this.activeInputIndex)));
+        require(gen__token_a_group_mine_state.amount == lock_amount);
         KronTokenState back_state = KronTokenState {
             // :: user declared fields
             owner: byte[32](payer),
@@ -747,6 +756,7 @@ contract TokenSwapKron_swap_out(
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(gen__token_a_group_mine_state.owner == byte[32](OpInputCovenantId(this.activeInputIndex)));
         require(gen__token_a_group_mine_state.id_type == KRON_ID_COVENANT);
+        require(gen__token_a_group_mine_state.amount == lock_amount);
     }
 
 }

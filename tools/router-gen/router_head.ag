@@ -46,6 +46,15 @@
 //               what KRON wallets hold and KobBidKron delivers). A KRON output holds 1..=1e9 units, so
 //               the program refuses a sale of the whole lock (a zero change): a KRON intent locks more
 //               than it may sell.
+// LOCK PIN. The lock is the one token input of token A owned by the intent's covenant id, but anyone can make
+// another such UTXO (a KCC-20 transfer to owner_scheme 0x04 / a KRON id_type 2 output, owner = the intent's id). An
+// observed group has an exact shape (one token input), so an entry given such a stand-in as `mine` would end the
+// intent while the real lock, owned by a covenant id that no transaction can carry again, stayed frozen forever (a
+// 1-unit dust and an `expire` after the deadline sufficed). The state therefore pins the lock: `lock_amount`, its exact
+// base units, and for a KCC-20 token A `lock_extension`, its extension_commitment, both set by the payer's creation
+// (the builder refuses mixed extension commitments); every entry that spends the lock (fill, expire, cancel) requires
+// both. What is left is a substitute of exactly lock_amount units with the same commitment: it gives the payer the
+// whole lock's worth at the substituter's expense (the custody rule of KobAsk, which pins amountLeft, is the same).
 // What an order releases beyond what the payer authorised (spread, tips) is the keeper's; the
 // payer's worst case is fixed by the intent's parameters.
 //
@@ -90,7 +99,7 @@
 // resting order is not pinned with `become` either: the order validates it itself (KobAsk:
 // amountLeft - n, KobBid: byte-identical), and the router's pin on the escrow change output, which the
 // ask pins too, ties n to the token flow. (Pinning both sides would fit every shape but `swap2`, which
-// is one binding over the limit with argentc b312ded / SilverScript v1.0.0: 245 of 244 live bindings;
+// is one binding over the limit with argentc b312ded / SilverScript v1.0.0, measured before the lock pin: 245 of 244 live bindings;
 // the ask pin alone fits every shape, the bid pin alone is one combined stack item over in `swap2`. It
 // would also add a state copy and a template check to each resting script for a rule the order
 // already enforces, so it stays out. docs/argent.md, "Fill shapes".)
@@ -100,8 +109,8 @@
 // bound summed over the legs, the positional rule, and the token pins. Argent has no macros, so
 // the repetition is written out by tools/router-gen/gen-router.sh (this file is its output; the
 // build fails if it is edited by hand); `KasToToken_buy`, `_buy_out`, `_buy3`, `TokenToKas_sell2`,
-// `TokenSwap_swap` and `_swap2_out` show every ingredient. Sizes of the compiled scripts: 2.5-7.1 kB
-// per buy or sell shape, 5.6-9.8 kB for the swaps (docs/argent.md).
+// `TokenSwap_swap` and `_swap2_out` show every ingredient. Sizes of the compiled scripts: 2.5-7.3 kB
+// per buy or sell shape, 5.7-9.95 kB for the swaps (docs/argent.md).
 //
 // POSITIONAL ANTI-ALIASING RULE (hand-written, reviewed; Argent generates none). The intent
 // spent at input j owns exactly two outputs, j and j + 1, and everything it owes goes there:
@@ -169,6 +178,8 @@ state TokenToKasState {
     actor_type<KCC20State> token_type; // token A's program
     int merchant_kas;               // min sompi the merchant receives
     int max_sell;                   // max token base units sold
+    int lock_amount;                // LOCK PIN: exact base units of the lock (the payer's creation sets it)
+    byte[32] lock_extension;        // LOCK PIN: extension_commitment of the lock (KCC-20)
     temporal deadline;              // unix ms: from here on anyone may expire the intent
 }
 
@@ -181,6 +192,8 @@ state TokenSwapState {
     actor_type<KCC20State> token_b_type; // token B's program
     int max_sell_a;                 // max token A base units sold
     int amount_b;                   // exact token B base units the merchant receives
+    int lock_amount;                // LOCK PIN: exact base units of the lock (the payer's creation sets it)
+    byte[32] lock_extension;        // LOCK PIN: extension_commitment of the lock (KCC-20)
     temporal deadline;              // unix ms: from here on anyone may expire the intent
 }
 
@@ -191,6 +204,7 @@ state TokenToKasKronState {
     actor_type<KronTokenState> token_type; // token A's KRON program
     int merchant_kas;               // min sompi the merchant receives
     int max_sell;                   // max token base units sold
+    int lock_amount;                // LOCK PIN: exact base units of the lock (the payer's creation sets it)
     temporal deadline;              // unix ms: from here on anyone may expire the intent
 }
 
@@ -203,6 +217,7 @@ state TokenSwapKronState {
     actor_type<KCC20State> token_b_type; // token B's program
     int max_sell_a;                 // max token A base units sold
     int amount_b;                   // exact token B base units the merchant receives
+    int lock_amount;                // LOCK PIN: exact base units of the lock (the payer's creation sets it)
     temporal deadline;              // unix ms: from here on anyone may expire the intent
 }
 

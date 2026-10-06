@@ -319,17 +319,15 @@ fn an_intent_for_another_merchant_does_not_match_the_offer() {
         "TokenToKas_sell",
     )
     .unwrap();
-    let IntentState::TokenToKas { payer, token, program, merchant_kas, max_sell, deadline, .. } = p.state.clone() else {
-        unreachable!()
-    };
-    let thief_state =
-        IntentState::TokenToKas { payer, merchant: pk(OTHER_MERCHANT), token, program, merchant_kas, max_sell, deadline };
+    let mut thief_state = p.state.clone();
+    let IntentState::TokenToKas { merchant, .. } = &mut thief_state else { unreachable!() };
+    *merchant = pk(OTHER_MERCHANT);
     let req = CreateIntent {
         actor: "TokenToKas_sell".into(),
         state: thief_state,
         value: KAS,
         tokens: f.funds.tokens.clone(),
-        lock_amount: max_sell,
+        lock_amount: p.state.lock_pin().expect("token intent").0,
         lock_carrier: KAS,
         token_change_carrier: KAS,
         funding: f.funds.funding.clone(),

@@ -202,6 +202,14 @@ fn amount_field(v: &Option<String>, what: &str) -> Result<i64> {
     })
 }
 
+/// The lock's units the payer's terms name (`lockAmount`, default `maxSell`): the state's lock pin.
+fn lock_amount(terms: &IntentTerms, max_sell: i64) -> Result<i64> {
+    match &terms.lock_amount {
+        Some(_) => amount_field(&terms.lock_amount, "lockAmount"),
+        None => Ok(max_sell),
+    }
+}
+
 /// The intent state the offer and the payer's terms call for.
 fn expected_state(
     kind: IntentKind,
@@ -241,19 +249,23 @@ fn expected_state(
         IntentKind::TokenToKas => {
             none(&terms.max_pay, "maxPay")?;
             none(&terms.max_extra, "maxExtra")?;
+            let max_sell = amount_field(&terms.max_sell, "maxSell")?;
             IntentState::TokenToKas {
                 payer,
                 merchant: merchant_key,
                 token: pay_token.expect("token pay asset").covenant_id,
                 program: pay_token.expect("token pay asset").program,
                 merchant_kas: amount,
-                max_sell: amount_field(&terms.max_sell, "maxSell")?,
+                max_sell,
+                lock_amount: lock_amount(terms, max_sell)?,
+                lock_extension: pay_token.expect("token pay asset").extension_commitment,
                 deadline,
             }
         }
         IntentKind::TokenSwap => {
             none(&terms.max_pay, "maxPay")?;
             none(&terms.max_extra, "maxExtra")?;
+            let max_sell_a = amount_field(&terms.max_sell, "maxSell")?;
             IntentState::TokenSwap {
                 payer,
                 merchant: merchant_key,
@@ -261,8 +273,10 @@ fn expected_state(
                 program_a: pay_token.expect("token pay asset").program,
                 token_b: merchant.expect("token gain").id,
                 program_b: merchant.expect("token gain").allowed.program,
-                max_sell_a: amount_field(&terms.max_sell, "maxSell")?,
+                max_sell_a,
                 amount_b: amount,
+                lock_amount: lock_amount(terms, max_sell_a)?,
+                lock_extension: pay_token.expect("token pay asset").extension_commitment,
                 deadline,
             }
         }
@@ -573,10 +587,7 @@ pub fn verify_intent(
                 ));
             }
             let max_sell = state.max_sell().expect("token intent");
-            let amount = match &terms.lock_amount {
-                Some(_) => amount_field(&terms.lock_amount, "lockAmount")?,
-                None => max_sell,
-            };
+            let amount = lock_amount(terms, max_sell)?;
             let lock_state = check_lock(lo, pt, intent_id, amount, max_sell)?;
             Some(TokenUtxo {
                 utxo: Utxo {

@@ -61,6 +61,19 @@ fn locked_token(st: &IntentState) -> Option<Token> {
     st.locked_token().zip(st.locked_program())
 }
 
+/// The lock pin (router_head.ag, "LOCK PIN"): a token UTXO owned by the intent is its lock only with the state's exact
+/// `lock_amount` and `lock_extension`; the router refuses any other (a stand-in sent to the intent's id).
+fn check_lock_pin(st: &IntentState, l: &TokenUtxo) -> Result<()> {
+    match st.lock_pin() {
+        Some((amount, ext)) if l.state.amount() == amount && l.state.extension() == ext => Ok(()),
+        Some((amount, _)) => invalid(format!(
+            "the token UTXO is not the intent's lock: it holds {} units (lock_amount {amount}) or another extension commitment",
+            l.state.amount()
+        )),
+        None => invalid("a KasToToken intent locks no tokens"),
+    }
+}
+
 /// The token the merchant receives (token B) with its program, as the intent's state names it.
 fn merchant_token(st: &IntentState) -> Option<Token> {
     st.merchant_token().zip(st.merchant_program())
@@ -172,6 +185,14 @@ pub fn build_create_intent(r: &CreateIntent, budgets: BudgetFn) -> Result<BuiltT
                 "a KRON intent locks more than it may sell (its token change after a sale of max_sell {max_sell} must hold a unit)"
             ));
         }
+        // the state pins the lock this transaction creates (its amount and extension commitment)
+        if r.state.lock_pin() != Some((r.lock_amount, ext)) {
+            return invalid(format!(
+                "the intent's lock pin (lock_amount, lock_extension) must be the lock it creates: {} units, extension {}",
+                r.lock_amount,
+                crate::json::to_hex(&ext)
+            ));
+        }
         let have: i64 = r.tokens.iter().map(|t| t.state.amount()).sum();
         if have < r.lock_amount {
             return invalid(format!("token inputs hold {have} < the {} units to lock", r.lock_amount));
@@ -235,6 +256,7 @@ pub fn build_cancel_intent(r: &CancelIntent, budgets: BudgetFn) -> Result<BuiltT
             if l.state.owner() != id || !l.state.is_covenant_owned() {
                 return invalid("the locked token UTXO is not owned by this intent");
             }
+            check_lock_pin(&r.state, l)?;
             d.add_token_input(l, token, Witness::CovenantId)?;
             let back = TokenState::user(token.1.family(), l.state.amount(), to, l.state.extension());
             d.add_token_output(token, back, l.utxo.amount)?;
@@ -290,6 +312,7 @@ pub fn build_expire_intent(r: &ExpireIntent, budgets: BudgetFn) -> Result<BuiltT
             if l.state.owner() != id || !l.state.is_covenant_owned() {
                 return invalid("the locked token UTXO is not owned by this intent");
             }
+            check_lock_pin(&r.state, l)?;
             d.add_token_input(l, token, Witness::CovenantId)?;
             let back = TokenState::user(token.1.family(), l.state.amount(), payer, l.state.extension());
             d.add_token_output(token, back, l.utxo.amount)?;
@@ -605,6 +628,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
             if l.state.owner() != id || !l.state.is_covenant_owned() {
                 return invalid("the locked token UTXO is not owned by this intent");
             }
+            check_lock_pin(&r.state, l)?;
             if l.state.amount() < facts.sold {
                 return invalid(format!("the intent locks {} units, the execution sells {}", l.state.amount(), facts.sold));
             }

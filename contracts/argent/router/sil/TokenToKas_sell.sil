@@ -9,6 +9,8 @@ contract TokenToKas_sell(
     byte[32] init_token_type,
     int init_merchant_kas,
     int init_max_sell,
+    int init_lock_amount,
+    byte[32] init_lock_extension,
     temporal init_deadline
 ) {
     // :: shared constants
@@ -57,6 +59,8 @@ contract TokenToKas_sell(
         byte[32] token_b_type;
         int max_sell_a;
         int amount_b;
+        int lock_amount;
+        byte[32] lock_extension;
         temporal deadline;
     }
     struct TokenToKasKronState {
@@ -67,6 +71,7 @@ contract TokenToKas_sell(
         byte[32] token_type;
         int merchant_kas;
         int max_sell;
+        int lock_amount;
         temporal deadline;
     }
     struct TokenSwapKronState {
@@ -79,6 +84,7 @@ contract TokenToKas_sell(
         byte[32] token_b_type;
         int max_sell_a;
         int amount_b;
+        int lock_amount;
         temporal deadline;
     }
     struct KCC20State {
@@ -527,6 +533,8 @@ contract TokenToKas_sell(
     byte[32] token_type = init_token_type;
     int merchant_kas = init_merchant_kas;
     int max_sell = init_max_sell;
+    int lock_amount = init_lock_amount;
+    byte[32] lock_extension = init_lock_extension;
     temporal deadline = init_deadline;
 
     // :: entrypoints
@@ -578,6 +586,8 @@ contract TokenToKas_sell(
         int me = this.activeInputIndex;
         require(tx.inputs.length == me + 1);
         own_tokens(gen__token_mine_state.owner, gen__token_mine_state.owner_scheme, gen__token_mine_state.borrow_scheme, byte[32](OpInputCovenantId(this.activeInputIndex)));
+        require(gen__token_mine_state.amount == lock_amount);
+        require(gen__token_mine_state.extension_commitment == lock_extension);
         bid_fits(gen__book1_bid_state.tokenCovId, byte[32](token_covid), n1);
         require(gen__book1_bid_state.tif == 0);
         int sold = n1;
@@ -655,6 +665,8 @@ contract TokenToKas_sell(
         require(OpCovOutputIdx(token_covid, 0) == me + 1);
         require(tx.outputs[me + 1].value >= tx.inputs[gen__token_mine_input_idx].value);
         own_tokens(gen__token_mine_state.owner, gen__token_mine_state.owner_scheme, gen__token_mine_state.borrow_scheme, byte[32](OpInputCovenantId(this.activeInputIndex)));
+        require(gen__token_mine_state.amount == lock_amount);
+        require(gen__token_mine_state.extension_commitment == lock_extension);
         KCC20State back_state = KCC20State {
             // :: user declared fields
             amount: gen__token_mine_state.amount,
@@ -703,6 +715,8 @@ contract TokenToKas_sell(
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(gen__token_mine_state.owner == byte[32](OpInputCovenantId(this.activeInputIndex)));
         require(gen__token_mine_state.owner_scheme == OWNER_COVENANT_ID);
+        require(gen__token_mine_state.amount == lock_amount);
+        require(gen__token_mine_state.extension_commitment == lock_extension);
     }
 
 }

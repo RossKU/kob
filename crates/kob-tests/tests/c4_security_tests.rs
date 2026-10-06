@@ -398,6 +398,8 @@ fn c4_p5_router_expiry_cannot_be_moved_earlier() {
                 program: TemplateId::Kcc20Ref8x8,
                 merchant_kas: 4 * fx::KAS as i64,
                 max_sell: 2 * fx::WHOLE,
+                lock_amount: 2 * fx::WHOLE,
+                lock_extension: fx::EXT,
                 deadline: DEADLINE,
             },
             2 * fx::WHOLE,
@@ -413,6 +415,8 @@ fn c4_p5_router_expiry_cannot_be_moved_earlier() {
                 program_b: TemplateId::Kcc20Ref8x8,
                 max_sell_a: 2 * fx::WHOLE,
                 amount_b: fx::WHOLE,
+                lock_amount: 2 * fx::WHOLE,
+                lock_extension: fx::EXT,
                 deadline: DEADLINE,
             },
             2 * fx::WHOLE,
@@ -485,6 +489,8 @@ fn c4_router_token_cancel_checks_the_lock_owner() {
         let fam = prog.family();
         let a = Actor::by_name(actor).unwrap();
         let (merchant, max_sell) = (fx::pk(fx::MERCHANT), 2 * fx::WHOLE);
+        let ext = if fam == Family::Kron { [0; 32] } else { fx::EXT };
+        let units = 3 * fx::WHOLE;
         let state = if a.shape.kind == kob_protocol::router::IntentKind::TokenSwap {
             IntentState::TokenSwap {
                 payer,
@@ -495,6 +501,8 @@ fn c4_router_token_cancel_checks_the_lock_owner() {
                 program_b: TemplateId::Kcc20Ref8x8,
                 max_sell_a: max_sell,
                 amount_b: fx::WHOLE,
+                lock_amount: units,
+                lock_extension: ext,
                 deadline: D,
             }
         } else {
@@ -505,11 +513,11 @@ fn c4_router_token_cancel_checks_the_lock_owner() {
                 program: prog,
                 merchant_kas: 4 * fx::KAS as i64,
                 max_sell,
+                lock_amount: units,
+                lock_extension: ext,
                 deadline: D,
             }
         };
-        let ext = if fam == Family::Kron { [0; 32] } else { fx::EXT };
-        let units = 3 * fx::WHOLE;
         let intent = Utxo { transaction_id: [0xc1; 32], index: 0, amount: 2 * fx::KAS, block_daa_score: 2_000, covenant_id: Some(id) };
         let tok_utxo = |tag: u8| Utxo {
             transaction_id: [tag; 32],
@@ -600,16 +608,29 @@ fn c4_router_token_cancel_checks_the_lock_owner() {
         let handle = |p: TemplateId| ArtifactValue::Bytes(kob_protocol::artifacts::token_template(p).hash.to_vec());
         let bytes = |v: &[u8; 32]| ArtifactValue::Bytes(v.to_vec());
         let args = match &state {
-            IntentState::TokenToKas { payer, merchant, token, program, merchant_kas, max_sell, deadline } => vec![
+            IntentState::TokenToKas { payer, merchant, token, program, merchant_kas, max_sell, lock_amount, deadline, .. } => vec![
                 bytes(payer),
                 bytes(merchant),
                 bytes(token),
                 handle(*program),
                 ArtifactValue::Int(*merchant_kas),
                 ArtifactValue::Int(*max_sell),
+                ArtifactValue::Int(*lock_amount),
                 ArtifactValue::Int(*deadline),
             ],
-            IntentState::TokenSwap { payer, merchant, token_a, program_a, token_b, program_b, max_sell_a, amount_b, deadline } => {
+            IntentState::TokenSwap {
+                payer,
+                merchant,
+                token_a,
+                program_a,
+                token_b,
+                program_b,
+                max_sell_a,
+                amount_b,
+                lock_amount,
+                deadline,
+                ..
+            } => {
                 vec![
                     bytes(payer),
                     bytes(merchant),
@@ -619,11 +640,17 @@ fn c4_router_token_cancel_checks_the_lock_owner() {
                     handle(*program_b),
                     ArtifactValue::Int(*max_sell_a),
                     ArtifactValue::Int(*amount_b),
+                    ArtifactValue::Int(*lock_amount),
                     ArtifactValue::Int(*deadline),
                 ]
             }
             _ => unreachable!(),
         };
+        // a KCC-20 token A's state pins the lock's extension commitment too (before the deadline)
+        let mut args = args;
+        if fam == Family::Kcc20 {
+            args.insert(args.len() - 1, bytes(&ext));
+        }
         let compile =
             |s: &str| common::compile_contract(s, &args, Default::default()).unwrap_or_else(|e| panic!("compile {actor}: {e:?}"));
         let shipped = compile(&src);

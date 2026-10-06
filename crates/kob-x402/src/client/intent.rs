@@ -325,6 +325,8 @@ pub fn prepare_intent(
                     program: t.program,
                     merchant_kas: amount_i,
                     max_sell,
+                    lock_amount: lock,
+                    lock_extension: t.extension_commitment,
                     deadline,
                 }
             } else {
@@ -337,6 +339,8 @@ pub fn prepare_intent(
                     program_b: merchant.as_ref().expect("token gain").allowed.program,
                     max_sell_a: max_sell,
                     amount_b: amount_i,
+                    lock_amount: lock,
+                    lock_extension: t.extension_commitment,
                     deadline,
                 }
             };

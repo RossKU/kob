@@ -238,6 +238,8 @@ fn state_for(actor: &Actor, p: Progs, asks: &[IntentAsk], bids: &[IntentBid]) ->
                     program: p.a,
                     merchant_kas: merchant_kas as i64,
                     max_sell: sold,
+                    lock_amount: lock,
+                    lock_extension: ext_for(p.a),
                     deadline: DEADLINE,
                 },
                 KAS,
@@ -255,6 +257,8 @@ fn state_for(actor: &Actor, p: Progs, asks: &[IntentAsk], bids: &[IntentBid]) ->
                 program_b: p.b,
                 max_sell_a: sold,
                 amount_b: bought,
+                lock_amount: lock,
+                lock_extension: ext_for(p.a),
                 deadline: DEADLINE,
             },
             2 * KAS,
@@ -423,9 +427,10 @@ fn the_intent_programs_bind_actor_and_orders() {
     let e = build_execute_intent(&exec_req(&c, kcc, vec![], bids3, mk), &intent_budgets).unwrap_err();
     assert!(e.to_string().contains("program"), "{e}");
     // KaspaCom's program, pending review
-    let IntentState::TokenToKas { payer, merchant, token, merchant_kas, max_sell, deadline, .. } = st_kcc else { unreachable!() };
-    let kc =
-        IntentState::TokenToKas { payer, merchant, token, program: TemplateId::Kcc20KaspaCom025, merchant_kas, max_sell, deadline };
+    let mut kc = st_kcc;
+    if let IntentState::TokenToKas { program, .. } = &mut kc {
+        *program = TemplateId::Kcc20KaspaCom025;
+    }
     assert!(kc.check().unwrap_err().to_string().contains("pending review"));
 }
 
@@ -440,13 +445,17 @@ fn a_kron_intent_locks_more_than_it_may_sell() {
     let (state, value, lock, merchant_kas) = state_for(actor, p, &asks, &bids);
     let e = build_create_intent(&create_req(actor, &state, p, value, lock - 1), &intent_budgets).unwrap_err();
     assert!(e.to_string().contains("locks more than it may sell"), "{e}");
-    // a lock of exactly the units sold (a third-party creation): the builder refuses the execution that empties it
+    // a lock of exactly the units sold (a third-party creation): its state pins lock_amount = max_sell, which the
+    // builder refuses (an execution would empty the lock)
     let c = create(actor, state, p, value, lock);
     let mut r = exec_req(&c, actor, asks, bids, merchant_kas);
     let l = r.lock.as_mut().unwrap();
     l.state = l.state.with_amount(lock - 1);
+    if let IntentState::TokenToKas { lock_amount, .. } = &mut r.state {
+        *lock_amount = lock - 1;
+    }
     let e = build_execute_intent(&r, &intent_budgets).unwrap_err();
-    assert!(e.to_string().contains("at least one unit"), "{e}");
+    assert!(e.to_string().contains("locks more than it may sell"), "{e}");
 }
 
 #[test]
@@ -607,4 +616,28 @@ fn an_intent_too_small_to_exit_is_not_created() {
     assert!(e.contains("MIN_INTENT_VALUE"), "{e}");
     let ok = CreateIntent { value: kob_protocol::router::MIN_INTENT_VALUE, ..r };
     build_create_intent(&ok, &intent_budgets).expect("an intent of exactly MIN_INTENT_VALUE is created");
+}
+
+/// The lock pin: the state names the lock's exact units and extension commitment. The builders refuse a creation whose
+/// state pins another lock than the one it creates, and an expiry, cancel or execution that spends a token UTXO owned by
+/// the intent other than its lock (a stand-in anyone can send to the intent's id; the router refuses it too:
+/// `argent_router_tests.rs`, `router_lock_pin`).
+#[test]
+fn the_lock_pin_is_the_created_lock() {
+    for (name, p) in [("TokenToKas_sell", RUNS[0]), ("TokenSwap_swap", RUNS[2]), ("TokenToKasKron_sell", RUNS[3])] {
+        let actor = Actor::by_name(name).unwrap();
+        let (asks, bids) = legs_for(actor, p);
+        let (state, value, lock, _) = state_for(actor, p, &asks, &bids);
+        let e = build_create_intent(&create_req(actor, &state, p, value, lock + 1), &intent_budgets).unwrap_err();
+        assert!(e.to_string().contains("lock pin"), "{name}: {e}");
+        let c = create(actor, state.clone(), p, value, lock);
+        let l = c.lock.clone().unwrap();
+        let mut dust = l.clone();
+        dust.state = dust.state.with_amount(1);
+        let r = ExpireIntent { actor: name.into(), state: state.clone(), intent: c.intent.clone(), lock: Some(dust), fee: fee() };
+        let e = build_expire_intent(&r, &intent_budgets).unwrap_err();
+        assert!(e.to_string().contains("not the intent's lock"), "{name}: {e}");
+        let r = ExpireIntent { actor: name.into(), state, intent: c.intent.clone(), lock: Some(l), fee: fee() };
+        build_expire_intent(&r, &intent_budgets).unwrap_or_else(|e| panic!("{name}: the lock itself expires: {e}"));
+    }
 }

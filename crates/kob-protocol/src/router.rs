@@ -39,7 +39,7 @@ use crate::json::to_hex;
 use crate::script::push_data;
 
 /// Id of the committed router artifact (`contracts/argent/router/artifact.json`, field `id`).
-pub const ROUTER_ARTIFACT_ID: &str = "e96eed4057305bdba2bfb16a3ae484020cd83ecbbaa3398f09526f8c39936147";
+pub const ROUTER_ARTIFACT_ID: &str = "f50258c3722e68c25f0069671d9c8a25c353080db087c70915c13ea675b7a9b3";
 
 /// Most sompi an `expire` may keep of the intent's KAS (`EXPIRE_MAX_FEE` of `tools/router-gen/router_head.ag`).
 pub const EXPIRE_MAX_FEE: u64 = 10_000_000;
@@ -78,30 +78,30 @@ pub const ROUTER_PINNED: [(&str, &str); 30] = [
     ("KasToToken_buy2_out", "20527396e25c3e25382e21a3544ae2a29afb3f3b8ae7d0ebcb4b6494132d6156"),
     ("KasToToken_buy3", "f3c70ee44aeee7882f4a0da1a66591d39cc4bcb0c8021fd62fa4ab683ab961c4"),
     ("KasToToken_buy3_out", "9873c0b1901eadbb20c4e51478ca6791803e17614cd8dfb7858b45c124c384ca"),
-    ("TokenToKas_sell", "679a809cdabed073278262490214dab8971ae1a65ad1ae798ec4f4047655323f"),
-    ("TokenToKas_sell_out", "d7f98ef34d8ce02ae2d716fcc2c4e3bf5c48633a45e7aee7538b47068468866a"),
-    ("TokenToKas_sell2", "df80ad0eb522e2c7e6aa8ef843bf517ff8879a6e5856cee620e278d351998a09"),
-    ("TokenToKas_sell2_out", "a3e339544a5b9ac05b6e0f8fae5f00f1e2477535f3538d9d7ddf964c414e98f6"),
-    ("TokenToKas_sell3", "fd4c735d414c4721b3ea8585c18f6aab7b18da4ccbcb72036494effbfb0ad8b0"),
-    ("TokenToKas_sell3_out", "905215a8975dff5dd8cc74454750fa4f0fc3106d92a35267b614f3b0b41e645a"),
-    ("TokenSwap_swap", "21c66d3fec270ecd2af2dad23dcb48ff429f37fd4f43670368911d6b5db5f024"),
-    ("TokenSwap_swap_bid_out", "901331e198dfef6d22518827aad96e8fbc854b6c445e2a661a00893426f38d52"),
-    ("TokenSwap_swap_ask_out", "64d6c5d67f9255233ec4105fd9590927e8fdad53454d9a828a7644a56eb2ce75"),
-    ("TokenSwap_swap_out", "ffdf3af018c987476e0a884d4915bbad9ae7293116199b36662a2f5b9f3e872a"),
-    ("TokenSwap_swap2", "4729d6ae5c15b5557525ad44b40fcbccb1727f7d2b8a4681e7516a05715cd9fa"),
-    ("TokenSwap_swap2_out", "88b71e2c21f3f95eb3f324d9e5c10c1bd49a709e21063e6e291495b1eb3125fc"),
-    ("TokenToKasKron_sell", "b4b50e3f12670616c4d025a4306901406c8cdbf9997d9db142ab8bf2d45bdd41"),
-    ("TokenToKasKron_sell_out", "50c518bfb409f2138bcc118a3da299021460930c028466938399965246ffa41c"),
-    ("TokenToKasKron_sell2", "903ed88b81c4deecb6bee8dcf80fe9dd2630ecc187af3aa0ffe182287d45d8d9"),
-    ("TokenToKasKron_sell2_out", "17a65a8d867b9f45c7592d42a9f6ee24b157dd2839564d667b5d640ffa7a70e4"),
-    ("TokenToKasKron_sell3", "f135a653a8203e40bcfb35fe6aa8b50a086238d6811211637722f31eaa4947c4"),
-    ("TokenToKasKron_sell3_out", "9465c0117c5f2a5325240184a33292d524a080e220678ad3fa1adeeafa8fbfc4"),
-    ("TokenSwapKron_swap", "9490de6fe0512c44a7165c2ef1db22904c0403b78c94f4c9f2267f327665beee"),
-    ("TokenSwapKron_swap_bid_out", "be593f30992a26df06dd959c7e78ed72e8c10769b508e770861031028d2cef9d"),
-    ("TokenSwapKron_swap_ask_out", "bd037f70d0a01596353c3a7326f625247b731800cd64ed6ca1a29a5f7deec109"),
-    ("TokenSwapKron_swap_out", "78c7781ca4b2c95da67010a2a0a0f9b98c2144f0f8e03752c25f601903fff9c2"),
-    ("TokenSwapKron_swap2", "10482ffe6c83540a887447e2df802643f2f50aa97ba58de5fe014acff4b1df6d"),
-    ("TokenSwapKron_swap2_out", "532794dbd066b0d952f09bf31d067d057fbc0ddba81bb8ee0997c2431094a013"),
+    ("TokenToKas_sell", "3cacab8c512625f4f3962e6e423a7b8827e787d5fb10ef6d90454b7d0ac7b454"),
+    ("TokenToKas_sell_out", "b2e5d06e1dc0ab9f612d9683fe9031920fb6a56afccdc9a82e3fcc2d027e4b7e"),
+    ("TokenToKas_sell2", "06651edb6f2c2ef701553490fc9982ea91680c10fdc632bf8240106c0cc408cb"),
+    ("TokenToKas_sell2_out", "85ea24188c25708cbbc95bef78ea64f169db1bb063d523acdbae9d9814b6c6c0"),
+    ("TokenToKas_sell3", "bc6fa37660fd30e03db95f6e29b891947fa41d8f725764fc19a0ed03e5bd5b0c"),
+    ("TokenToKas_sell3_out", "8ba6a08ce9a6e52ba271327078891668688c879c214d335f5964f673c304ea7d"),
+    ("TokenSwap_swap", "d642ab49c8426c8893693710826e0d2493b13579289384e5c1060955374f7930"),
+    ("TokenSwap_swap_bid_out", "5c7b2618160863094afda5dd01c578740b2026de8987028bfd2e0e887d716ee4"),
+    ("TokenSwap_swap_ask_out", "b86da766cfd70a4756a2601f5efe82660886d016544a36e0831d82ab55757a54"),
+    ("TokenSwap_swap_out", "015f5274eb0b1adea959c2630fe7b3fc104c65470ca95de77ce13bc8a718799d"),
+    ("TokenSwap_swap2", "f1f2e71e3113ccf82215b2ae9dbda02d448044d69f417b159069c141b53d3300"),
+    ("TokenSwap_swap2_out", "f31771ee532a5de072243d42cf00ae8946f0cf79ca9c5d591461b0976f5ef37e"),
+    ("TokenToKasKron_sell", "b2293ed132da43777a9cb0b000cb933f9a77618ac74a61a1980685bf927e7480"),
+    ("TokenToKasKron_sell_out", "4800f848d0b2e5d292acb6b75020fc92dd113a0e8025c3fecd9f2603d4df517d"),
+    ("TokenToKasKron_sell2", "9428e377176d58142dfc993189e6535276676742e6267308807d83a6ef91f4f3"),
+    ("TokenToKasKron_sell2_out", "16067f03ca714841738b09ad373a2600aeb100518a5d7684ca4599781b6d29fa"),
+    ("TokenToKasKron_sell3", "a645dbf1f77f3d8a77929044fc6f7ef08f429b9d7ef32df5551af8669f5dfb7a"),
+    ("TokenToKasKron_sell3_out", "33302702ca16260bcc5e812ebb5196b18274bd396f0ca7104fccf20c95b6e3b3"),
+    ("TokenSwapKron_swap", "084e4d701a992aa2ff32b8e7544e874e8cd00aee6c044f2b17c1549a156453a0"),
+    ("TokenSwapKron_swap_bid_out", "8e92d56034d51558e4507490cb69a525f8bcca74ba37ca3e0802bcb8aacedda8"),
+    ("TokenSwapKron_swap_ask_out", "91830f09a942e1cb68e5c6773ff2109fb628cca58fab7eb7cb645121fcc9f9d0"),
+    ("TokenSwapKron_swap_out", "5b4752175566b56557fbd080f62d3511976c46317e1ffc45968a7d46439748db"),
+    ("TokenSwapKron_swap2", "d321d5c1ddd3c26b1b2be0753b92cb67791cf3efea7fd18504a20bda4dec83c6"),
+    ("TokenSwapKron_swap2_out", "31dd32212042e3cd428922ead2fce688f7b73bf1178fe7b6ba9b200955d66718"),
 ];
 
 const SIL_ABI_JSON: &str = include_str!("../data/router_sil_abi.json");
@@ -393,6 +393,13 @@ pub enum IntentState {
         /// Most token A base units sold (summed over the sweep).
         #[serde(with = "crate::json::field")]
         max_sell: i64,
+        /// LOCK PIN: exact token A base units of the lock (the creation's `lock_amount`); every entry that spends the lock
+        /// requires it, so no other token UTXO owned by the intent's id can stand in for the lock.
+        #[serde(with = "crate::json::field")]
+        lock_amount: i64,
+        /// LOCK PIN: extension_commitment of the lock (KCC-20 token A; all zero for a KRON token A, which has none).
+        #[serde(with = "crate::json::field")]
+        lock_extension: [u8; 32],
         /// Unix ms from which anyone may expire the intent (`expire`, CLTV `tx.time`): the payer's authorization expiry.
         #[serde(with = "crate::json::field")]
         deadline: i64,
@@ -419,6 +426,13 @@ pub enum IntentState {
         /// Exact token B base units the merchant receives.
         #[serde(with = "crate::json::field")]
         amount_b: i64,
+        /// LOCK PIN: exact token A base units of the lock (the creation's `lock_amount`); every entry that spends the lock
+        /// requires it, so no other token UTXO owned by the intent's id can stand in for the lock.
+        #[serde(with = "crate::json::field")]
+        lock_amount: i64,
+        /// LOCK PIN: extension_commitment of the lock (KCC-20 token A; all zero for a KRON token A, which has none).
+        #[serde(with = "crate::json::field")]
+        lock_extension: [u8; 32],
         /// Unix ms from which anyone may expire the intent (`expire`, CLTV `tx.time`): the payer's authorization expiry.
         #[serde(with = "crate::json::field")]
         deadline: i64,
@@ -500,6 +514,14 @@ impl IntentState {
     pub fn a_family(&self) -> Family {
         self.locked_program().map(|p| p.family()).unwrap_or(Family::Kcc20)
     }
+    /// The lock pin (TokenToKas, TokenSwap): exact base units and extension commitment of the lock.
+    pub fn lock_pin(&self) -> Option<(i64, [u8; 32])> {
+        match self {
+            IntentState::KasToToken { .. } => None,
+            IntentState::TokenToKas { lock_amount, lock_extension, .. }
+            | IntentState::TokenSwap { lock_amount, lock_extension, .. } => Some((*lock_amount, *lock_extension)),
+        }
+    }
     /// Most token units the intent may sell (TokenToKas, TokenSwap).
     pub fn max_sell(&self) -> Option<i64> {
         match self {
@@ -525,16 +547,42 @@ impl IntentState {
                 put("max_extra", ArtifactValue::Int(*max_extra));
                 put("deadline", ArtifactValue::Int(*deadline));
             }
-            IntentState::TokenToKas { payer, merchant, token, program, merchant_kas, max_sell, deadline } => {
+            IntentState::TokenToKas {
+                payer,
+                merchant,
+                token,
+                program,
+                merchant_kas,
+                max_sell,
+                lock_amount,
+                lock_extension,
+                deadline,
+            } => {
                 put("payer", b32(payer));
                 put("merchant", b32(merchant));
                 put("token_covid", b32(token));
                 put("token_type", handle(*program));
                 put("merchant_kas", ArtifactValue::Int(*merchant_kas));
                 put("max_sell", ArtifactValue::Int(*max_sell));
+                put("lock_amount", ArtifactValue::Int(*lock_amount));
+                if program.family() == Family::Kcc20 {
+                    put("lock_extension", b32(lock_extension));
+                }
                 put("deadline", ArtifactValue::Int(*deadline));
             }
-            IntentState::TokenSwap { payer, merchant, token_a, program_a, token_b, program_b, max_sell_a, amount_b, deadline } => {
+            IntentState::TokenSwap {
+                payer,
+                merchant,
+                token_a,
+                program_a,
+                token_b,
+                program_b,
+                max_sell_a,
+                amount_b,
+                lock_amount,
+                lock_extension,
+                deadline,
+            } => {
                 put("payer", b32(payer));
                 put("merchant", b32(merchant));
                 put("token_a", b32(token_a));
@@ -543,6 +591,10 @@ impl IntentState {
                 put("token_b_type", handle(*program_b));
                 put("max_sell_a", ArtifactValue::Int(*max_sell_a));
                 put("amount_b", ArtifactValue::Int(*amount_b));
+                put("lock_amount", ArtifactValue::Int(*lock_amount));
+                if program_a.family() == Family::Kcc20 {
+                    put("lock_extension", b32(lock_extension));
+                }
                 put("deadline", ArtifactValue::Int(*deadline));
             }
         }
@@ -589,6 +641,22 @@ impl IntentState {
                 pos(*amount_b, "amount_b")?;
                 if token_a == token_b {
                     return Err(Error::Invalid("a swap intent sells and buys two different tokens".into()));
+                }
+            }
+        }
+        if let (Some((lock, ext)), Some(max_sell)) = (self.lock_pin(), self.max_sell()) {
+            if lock < max_sell {
+                return Err(Error::Invalid(format!("the intent may sell {max_sell} units but its lock_amount is {lock}")));
+            }
+            // a KRON output holds 1..=1e9 units: the payer's change of a sale of max_sell must hold a unit
+            if self.a_family() == Family::Kron {
+                if lock <= max_sell {
+                    return Err(Error::Invalid(format!(
+                        "a KRON intent locks more than it may sell (its token change after a sale of max_sell {max_sell} must hold a unit)"
+                    )));
+                }
+                if ext != [0u8; 32] {
+                    return Err(Error::Invalid("a KRON lock has no extension commitment (lock_extension must be zero)".into()));
                 }
             }
         }
@@ -665,6 +733,14 @@ impl IntentState {
                 .map(|t| t.id)
                 .ok_or_else(|| Error::Invalid(format!("{}: state field {k} names no known token program", actor.name)))
         };
+        // the lock's extension commitment: a KCC-20 token A pins it, a KRON one has none
+        let ext = || -> Result<[u8; 32]> {
+            if actor.shape.a_family == Family::Kcc20 {
+                key("lock_extension")
+            } else {
+                Ok([0u8; 32])
+            }
+        };
         let st = match actor.shape.kind {
             IntentKind::KasToToken => IntentState::KasToToken {
                 payer: key("payer")?,
@@ -683,6 +759,8 @@ impl IntentState {
                 program: prog("token_type")?,
                 merchant_kas: int("merchant_kas")?,
                 max_sell: int("max_sell")?,
+                lock_amount: int("lock_amount")?,
+                lock_extension: ext()?,
                 deadline: int("deadline")?,
             },
             IntentKind::TokenSwap => IntentState::TokenSwap {
@@ -694,6 +772,8 @@ impl IntentState {
                 program_b: prog("token_b_type")?,
                 max_sell_a: int("max_sell_a")?,
                 amount_b: int("amount_b")?,
+                lock_amount: int("lock_amount")?,
+                lock_extension: ext()?,
                 deadline: int("deadline")?,
             },
         };
@@ -914,6 +994,8 @@ mod tests {
                 program: p8,
                 merchant_kas: 9,
                 max_sell: 3,
+                lock_amount: 5,
+                lock_extension: [0xee; 32],
                 deadline: D + 1,
             },
             IntentState::TokenSwap {
@@ -925,6 +1007,8 @@ mod tests {
                 program_b: p8,
                 max_sell_a: 4,
                 amount_b: 2,
+                lock_amount: 6,
+                lock_extension: [0xee; 32],
                 deadline: D + 2,
             },
             IntentState::TokenToKas {
@@ -934,6 +1018,8 @@ mod tests {
                 program: TemplateId::KronToken2433,
                 merchant_kas: 9,
                 max_sell: 3,
+                lock_amount: 5,
+                lock_extension: [0; 32],
                 deadline: D + 3,
             },
             IntentState::TokenSwap {
@@ -945,6 +1031,8 @@ mod tests {
                 program_b: p8,
                 max_sell_a: 4,
                 amount_b: 2,
+                lock_amount: 6,
+                lock_extension: [0; 32],
                 deadline: D + 4,
             },
         ];
@@ -1001,6 +1089,8 @@ mod tests {
             program_b: TemplateId::Kcc20Ref8x8,
             max_sell_a: 4,
             amount_b: 2,
+            lock_amount: 6,
+            lock_extension: [0xee; 32],
             deadline: 1_800_000_000_000,
         };
         let f = FillArgs { asks: vec![[1; 32], [2; 32]], bids: vec![[3; 32], [4; 32]], bid_amounts: vec![5, 6] };
@@ -1024,6 +1114,8 @@ mod tests {
             program: TemplateId::KronToken2433,
             merchant_kas: 9,
             max_sell: 3,
+            lock_amount: 5,
+            lock_extension: [0; 32],
             deadline: 1_800_000_000_000,
         };
         let kv = fill_args(k, &kst, &FillArgs { asks: vec![], bids: vec![[3; 32]], bid_amounts: vec![2] }).unwrap();
