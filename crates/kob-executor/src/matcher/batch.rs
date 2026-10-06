@@ -203,8 +203,9 @@ struct Universe {
     porder_of: Vec<Option<usize>>,
     /// Netting groups.
     nets: Vec<NetBook>,
-    /// The best plain KAS bid of every market (all-in per base unit): what a netting surplus may fetch.
-    best_bid: BTreeMap<Market, (i128, i128)>,
+    /// The plain resting KAS bids of every market, best first (candidate indices): what a netting surplus may fetch, each
+    /// bid only in an amount its own quantity rules accept.
+    surplus_bids: BTreeMap<Market, Vec<usize>>,
     /// The netting group of each pair order and whether it sells the group's first token (X).
     net_of: Vec<Option<(usize, bool)>>,
     /// The route bound of every pair order that may net (`i64::MAX`: none): what it may route on top of its netted part
@@ -313,11 +314,18 @@ impl Universe {
         }
         let pair_orders: Vec<&ListedOrder> =
             orders.iter().copied().filter(|o| o.order.state.is_pair() && !inp.unaccepted.contains(&o.id())).collect();
-        let best_bid: BTreeMap<Market, (i128, i128)> = super::pair::best_quotes(&direct)
-            .into_iter()
-            .filter(|((_, side), _)| *side == Side::Bid)
-            .map(|((m, _), q)| (m, q))
-            .collect();
+        let mut surplus_bids: BTreeMap<Market, Vec<usize>> = BTreeMap::new();
+        for (i, c) in direct.iter().enumerate() {
+            if c.is_plain() && c.trigger.is_none() && c.side == Side::Bid {
+                surplus_bids.entry(c.book.market()).or_default().push(i);
+            }
+        }
+        for v in surplus_bids.values_mut() {
+            v.sort_by(|&i, &j| {
+                let ((pi, di), (pj, dj)) = (direct[i].per_base(), direct[j].per_base());
+                (pj * di).cmp(&(pi * dj)).then(direct[i].id.cmp(&direct[j].id))
+            });
+        }
         let mut cands = direct;
         let mut twin: Vec<Option<usize>> = vec![None; cands.len()];
         let mut porders = vec![];
@@ -595,7 +603,7 @@ impl Universe {
             porders,
             porder_of,
             nets,
-            best_bid,
+            surplus_bids,
             net_of,
             rcap: vec![],
             by_id,
@@ -1427,11 +1435,36 @@ impl<'u> Alloc<'u> {
             bytes += u.cands[u.porders[p].0].bytes;
         }
         for (m, q) in [(&nb.mx, sx), (&nb.my, sy)] {
-            if let Some(&(bn, bd)) = u.best_bid.get(m) {
-                v += (q as i128).saturating_mul(bn) / bd.max(1);
-            }
+            v += self.surplus_value(m, q);
         }
         v - est_fee(bytes, u.fee_rate) as i128
+    }
+
+    /// The KAS `q` base units of a netting surplus of market `m` fetch at the plain KAS bids of `m`, best first, each bid
+    /// taking only an amount its own quantity rules accept (at least its minimum fill, or everything it has left). A surplus
+    /// below every bid's minimum fill fetches nothing: it goes to the delivery of a pair ask and pays no fee.
+    fn surplus_value(&self, m: &Market, q: i64) -> i128 {
+        let u = self.u;
+        let mut rest = q;
+        let mut v: i128 = 0;
+        for &i in u.surplus_bids.get(m).map(Vec::as_slice).unwrap_or(&[]) {
+            if rest <= 0 {
+                break;
+            }
+            if !self.live[i] {
+                continue;
+            }
+            let c = &u.cands[i];
+            let take = rest.min(c.cap);
+            if !c.quantity_ok(take) {
+                continue;
+            }
+            if let Some(k) = c.value(take) {
+                v += k as i128;
+                rest -= take;
+            }
+        }
+        v
     }
 
     /// The target fill of pair order `p` in this allocation (its reconciled cap).
