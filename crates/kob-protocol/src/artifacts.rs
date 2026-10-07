@@ -354,15 +354,15 @@ pub const RETIRED_KIND_CODES: [u8; 1] = [0x07];
 /// Template hashes pinned by this protocol version (hex). A different artifact is a different
 /// protocol and fails to load.
 pub const PINNED: [(TemplateId, &str); 23] = [
-    (TemplateId::KobAsk, "126ff059375b459674df139dc644f6518cc26e831e998e9be7a4008c8c8e0aa1"),
+    (TemplateId::KobAsk, "070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c"),
     (TemplateId::KobBid, "b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3"),
-    (TemplateId::KobCondAsk, "40a8eb7321e9dc157ca05683fcf01c1967d0c2be91fb8644e02025b0df087b74"),
-    (TemplateId::KobCondBid, "076e7bd8bfb6e1b59a8f2a19a6cad5961c7978368a0816a2b9df5f39d805bdfb"),
-    (TemplateId::KobIfdBid, "50b58e7b26e0bdc1a0eed7f7d7e5bcee88f95ed6ff367be32b8e74979a9de292"),
-    (TemplateId::KobIfdAsk, "bbcfc226d41f2dbf9db2f4835a55ed87b568fe43c46ac24ceee6831aa7b3f0b2"),
+    (TemplateId::KobCondAsk, "d9ed37c5aa03d5c62619659f86c6a1e08ab4ba9a1092d144b2160935331e6adb"),
+    (TemplateId::KobCondBid, "4300602a57db412a07799ead7b812454a31b44f7565829d71c49606d11334d36"),
+    (TemplateId::KobIfdBid, "1ba2519b5107ae20303fee6fc1d3b6600103eb2889caf729a1a04c139a51240d"),
+    (TemplateId::KobIfdAsk, "edfb30d9e8115924ecea0924625ce76a7f807f671076e010f96fef6e0747cffd"),
     (TemplateId::KobPair, "c95c92344f08c42992699b0e467cf32fe573dda9b879250438d60a13cab4a9c6"),
-    (TemplateId::KobCondPair, "ba725a717423bbd7833e032d16a3f67a97e538b42ac28e61eb21b1a90defda2b"),
-    (TemplateId::KobIfdPair, "2d4266cfe5fbec37165b26d5e78fef00ca2380d1ccdd43e9553ed09a9084c30c"),
+    (TemplateId::KobCondPair, "7b8f1a9e957a9def15fd835fb2e47331ccfcc856978f6408f8a3c7a519a6f06e"),
+    (TemplateId::KobIfdPair, "466ed2effad16c558d362d072f813dc727c10cdf899c2d90833fb5520827d9b6"),
     (TemplateId::Kcc20Ref, "f4ac029d2c3c74dd3dcaeb64245f7d0a0977e27c2956f3977540a11dc7c45b1f"),
     (TemplateId::Kcc20Ref4x5, "6bef67391fd2eb94c9d155591229b6d3676a8b7e8e609063bce1b308559ff12f"),
     (TemplateId::Kcc20Ref8x8, "40fef59a59bd76991f4d4e2101d1e3e34860997b89fe7714532637cec482a9d7"),

@@ -262,6 +262,10 @@ fn is_exact_custody(
     if !(held.is_covenant_owned() && held.is_plain() && held.owner() == cov.0 && held.family() == state.family()) {
         return Ok(false);
     }
+    // the commitment the order's covenant requires of its custody (its state names it, `AnyState::custody_ext`)
+    if state.family() == Family::Kcc20 && state.custody_ext(token.0).is_some_and(|e| e != held.extension()) {
+        return Ok(false);
+    }
     // the extension commitment the order stores (an exit's is its entry's, see `apply_tx` step 3)
     if let Some(w) = ext {
         if state.family() == Family::Kcc20 && held.extension()[..] != w[..] {

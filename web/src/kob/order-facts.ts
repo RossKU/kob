@@ -199,6 +199,8 @@ export function extensionOf(o: OrderState): Hex | null {
     return String(s.side) === '1' && bigOr0(s.amountLeft) > 0n ? s.aExt : s.bExt;
   }
   if (isPairKind(o.kind)) return null;
+  // a KCC-20 sell-first entry names its custody's commitment in its committed exit (KobCondBid state [118..150)); a KRON one has none
+  if (o.kind === 'KobIfdAsk') return o.state.exitState.length === 642 ? o.state.exitState.slice(236, 300) : null;
   return 'extensionCommitment' in o.state ? (o.state as { extensionCommitment: Hex }).extensionCommitment : null;
 }
 
@@ -310,13 +312,15 @@ const ZERO32 = '00'.repeat(32);
 
 /**
  * The exit a KAS if-done entry commits is stored as a truncated state span (`exitState`: the exit state without its repeat fields, which the entry
- * writes itself: matcher.md 1.1). To DISPLAY it we pad the missing zero repeat fields (fixed-width pushes) and let kob-wasm decode it;
- * the padded bytes are used for display only, never signed or hashed. A pair entry's exit comes from kob-wasm `ifdPairExit`.
+ * writes itself: matcher.md 1.1). To DISPLAY it we pad the missing zero repeat fields (fixed-width pushes) and, for a KCC-20 `KobCondAsk` exit, the
+ * entry's own `extensionCommitment` (which the buy-first entry writes behind them), and let kob-wasm decode it; the padded bytes are used for
+ * display only, never signed or hashed. A pair entry's exit comes from kob-wasm `ifdPairExit`.
  */
 function decodeCommittedExit(kob: KobWasm, o: IfdBidState | IfdAskState, exitKind: 'KobCondAsk' | 'KobCondBid', family: Family): OrderState | null {
   const push32 = '20' + ZERO32;
   const push8 = '08' + '00'.repeat(8);
-  const pad = exitKind === 'KobCondAsk' ? push32 + push8 + push8 : push32 + push8 + push8 + push8;
+  const ext = family === 'kron' || !('extensionCommitment' in o) ? '' : '20' + o.extensionCommitment;
+  const pad = exitKind === 'KobCondAsk' ? push32 + push8 + push8 + ext : push32 + push8 + push8 + push8;
   try {
     return kob.decodeState(kindFor(exitKind, family), o.exitState + pad) as OrderState;
   } catch {

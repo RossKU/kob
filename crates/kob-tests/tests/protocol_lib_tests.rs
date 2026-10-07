@@ -56,6 +56,7 @@ fn library_instances_equal_compiler_output() {
         price_end: 1,
         decay_step: 3,
         amount_left: 9_001,
+        extension_commitment: [0xee; 32],
     };
     assert_eq!(ask.redeem(), compiled(TemplateId::KobAsk, 0, ask.to_values()), "KobAsk");
 
@@ -111,6 +112,7 @@ fn library_instances_equal_compiler_output() {
         parent: [0xd1; 32],
         rpt_price: 260_100_000,
         rpt_until: 78_760_000,
+        extension_commitment: [0xee; 32],
     };
     assert_eq!(ca.redeem(), compiled(TemplateId::KobCondAsk, 6, ca.to_values()), "KobCondAsk");
 

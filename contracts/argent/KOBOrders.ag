@@ -24,8 +24,9 @@
 // is in the .sil and its tests (crates/kob-tests), not in this file.
 //
 // State: orders keep remaining size and lifecycle flags in mutable state fields (amountLeft, armed, ...;
-// the token custody of a sell-side order holds exactly amountLeft base units), so a partial fill or an update
-// continues with a DIFFERENT state. Readers of an observed order must not assume a byte-identical
+// the token custody of a sell-side order holds exactly amountLeft base units, of the extension commitment its state
+// names: extensionCommitment of KobAsk / KobCondAsk, the committed exit's of KobIfdAsk, sExt / aExt / bExt of the pair
+// orders), so a partial fill or an update continues with a DIFFERENT state. Readers of an observed order must not assume a byte-identical
 // continuation.
 //
 // Build constants (inlined in the .sil, fixed by contracts/v2/*.ctor.json): KobCondAsk / KobCondBid
@@ -55,6 +56,7 @@ state KobAskState {
     int priceEnd;
     int decayStep;
     int amountLeft;
+    byte[32] extensionCommitment;
 }
 
 state KobBidState {
@@ -108,6 +110,7 @@ state KobCondAskState {
     byte[32] parent;
     int rptPrice;
     int rptUntil;
+    byte[32] extensionCommitment;
 }
 
 state KobCondBidState {

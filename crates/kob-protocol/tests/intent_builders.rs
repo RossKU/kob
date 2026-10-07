@@ -664,6 +664,8 @@ fn with_b_extension(state: &IntentState, ext: [u8; 32]) -> IntentState {
 fn asks_of_class(asks: &[IntentAsk], ext: [u8; 32]) -> Vec<IntentAsk> {
     let mut v = asks.to_vec();
     for a in &mut v {
+        // an ask pins the commitment of its custody (KobAsk extensionCommitment)
+        a.order.state.extension_commitment = ext;
         match &mut a.custody.state {
             TokenState::Kcc20(k) => k.extension_commitment = ext,
             other => panic!("token B is KCC-20, not {other:?}"),
@@ -688,10 +690,35 @@ fn failing(tx: &Transaction, entries: &[UtxoEntry]) -> std::collections::BTreeSe
     execute(tx, entries, false).unwrap().iter().enumerate().filter(|(_, r)| r.is_err()).map(|(i, _)| i).collect()
 }
 
+/// The asks of `b` (inputs of the KobAsk template) with their state's `extensionCommitment` set to `ext`: the order input,
+/// its plan and the continuation of a resting ask (`amountLeft - n`). The execution a filler could build from its own
+/// KobAsk of units of B of another class (an ask pins the commitment of its custody, which can be any commitment of the
+/// covenant id). Returns the ask inputs.
+fn reclass_asks(b: &mut BuiltTx, ext: [u8; 32]) -> std::collections::BTreeSet<usize> {
+    let mut asks = std::collections::BTreeSet::new();
+    for i in 0..b.plans.len() {
+        let SigPlan::Entry { template: TemplateId::KobAsk, state, args, .. } = &mut b.plans[i] else { continue };
+        let old = AskState::decode(state).unwrap();
+        let new = AskState { extension_commitment: ext, ..old.clone() };
+        *state = new.encode();
+        b.tx.inputs[i].utxo.script_public_key = spk_to_string(&AnyState::KobAsk(new.clone()).spk());
+        let n = match args.first() {
+            Some(Arg::Bytes(x)) => i64::from_le_bytes(x.as_slice().try_into().unwrap()),
+            other => panic!("ask fill argument {other:?}"),
+        };
+        let rest = |a: &AskState| spk_to_string(&AnyState::KobAsk(AskState { amount_left: a.amount_left - n, ..a.clone() }).spk());
+        let (old_rest, new_rest) = (rest(&old), rest(&new));
+        for o in b.tx.outputs.iter_mut().filter(|o| o.script_public_key == old_rest) {
+            o.script_public_key = new_rest.clone();
+        }
+        asks.insert(i);
+    }
+    asks
+}
+
 /// Gives every token-B input and output of `b` the extension commitment `ext`: the asks' escrows, an escrow rest and
-/// the merchant's delivery, with the token program's next states rewritten so that its inputs stay valid. This is the
-/// execution a filler could build from its own KobAsk holding units of B of another class (KobAsk has no extension
-/// field: its custody is any token UTXO of the covenant id it owns).
+/// the merchant's delivery, with the token program's next states rewritten so that its inputs stay valid (the asks keep
+/// their state: [`reclass_asks`]).
 fn reclass_b(b: &mut BuiltTx, prog_b: TemplateId, ext: [u8; 32]) {
     let tpl = kob_protocol::artifacts::token_template(prog_b);
     let mut next: Option<Vec<Kcc20State>> = None;
@@ -729,7 +756,8 @@ fn reclass_b(b: &mut BuiltTx, prog_b: TemplateId, ext: [u8; 32]) {
 /// merchant's delivery carries that commitment. Every such actor on every program pair it runs on:
 ///  - the execution of escrows of the named commitment validates on every input;
 ///  - the same execution with every token-B UTXO of another commitment of the same covenant id (escrows, escrow rest,
-///    delivery) is refused at the intent input, and only there (the asks and the token program accept it);
+///    delivery) is refused at the intent input and at every ask (each pins its own custody's commitment); from asks that
+///    name that commitment it is refused at the intent input, and only there (the asks and the token program accept it);
 ///  - the builder refuses escrows of another commitment;
 ///  - an intent that names that other commitment takes it (the pin follows the state, not a constant).
 #[test]
@@ -755,10 +783,21 @@ fn an_intent_takes_token_b_only_of_its_extension_commitment() {
             let mut other = built.clone();
             reclass_b(&mut other, p.b, OTHER_EXT);
             let (tx2, entries2) = sealed(&other);
+            let mut asks_in = reclass_asks(&mut built.clone(), EXT);
+            assert!(!asks_in.is_empty());
+            asks_in.insert(me);
+            assert_eq!(
+                failing(&tx2, &entries2),
+                asks_in,
+                "{} {p:?}: token B of another commitment is refused at the intent input and at every ask",
+                actor.name
+            );
+            reclass_asks(&mut other, OTHER_EXT);
+            let (tx2, entries2) = sealed(&other);
             assert_eq!(
                 failing(&tx2, &entries2),
                 std::collections::BTreeSet::from([me]),
-                "{} {p:?}: token B of another commitment is refused at the intent input, and only there",
+                "{} {p:?}: token B of another commitment from asks that name it is refused at the intent input, and only there",
                 actor.name
             );
 

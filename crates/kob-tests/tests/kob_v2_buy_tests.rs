@@ -387,6 +387,7 @@ impl Net {
             int(p.price_end),
             int(p.decay_step),
             int(p.qty * p.unit), // amountLeft in base units (= custody)
+            bytes(&EXT),         // extensionCommitment of the custody
         ]);
         compile_contract(&src("KobAsk"), &a, CompileOptions::default()).expect("compile KobAsk")
     }
@@ -439,6 +440,7 @@ impl Net {
             bytes(&[0; 32]),
             int(0),
             int(0),
+            bytes(&EXT), // extensionCommitment of the custody
         ]);
         compile_contract(&src("KobCondAsk"), &a, CompileOptions::default()).expect("compile KobCondAsk")
     }

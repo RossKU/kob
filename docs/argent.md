@@ -21,25 +21,25 @@ artifact id you reviewed; do not pin a file name or a branch.
 
 | App | Artifact id (`id` field of `artifact.json`) |
 |---|---|
-| `KOBOrders` | `606ae6f9126b100ff366e834d0da33de001d311d1428f516ecdb0cd944e98782` |
+| `KOBOrders` | `c98dda437bb5de4e8fea02c3fe9823a7728b589ca3296c439454ea7db8ff3e4d` |
 | `KOBOrdersKron` | `867d24a6c06fb8a38a30941a7f5a79d8dda05c4bee4b01f3dab2ba68c394442f` |
 | `KOBToken` | `dae9bf3f9c4761e8d37aeafe53650dd7b05d65c35dcb38bf97f69a64941006a0` |
-| `KobRouter` | `702e0ee5bf049196bcfd297bc3671b9808d7f4d8ac3528bb2ae4e391c23d9327` |
+| `KobRouter` | `01631e15265f5b3007352fb36e80a1df33f9d36911a9427caaec7a8b345dc91c` |
 
 Actor-type handles (the template hash of the hand-written program: blake3 over prefix and suffix
 around the state span, the same value silverc reports as `template_hash`):
 
 | Actor | Handle | State span | Program |
 |---|---|---|---|
-| `KOBOrders::KobAsk` | `126ff059375b459674df139dc644f6518cc26e831e998e9be7a4008c8c8e0aa1` | 1+243 | 1,638 B |
+| `KOBOrders::KobAsk` | `070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c` | 1+276 | 1,684 B |
 | `KOBOrders::KobBid` | `b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3` | 1+285 | 1,516 B |
-| `KOBOrders::KobCondAsk` | `40a8eb7321e9dc157ca05683fcf01c1967d0c2be91fb8644e02025b0df087b74` | 1+330 | 3,484 B |
-| `KOBOrders::KobCondBid` | `076e7bd8bfb6e1b59a8f2a19a6cad5961c7978368a0816a2b9df5f39d805bdfb` | 1+381 | 3,236 B |
-| `KOBOrders::KobIfdAsk` | `bbcfc226d41f2dbf9db2f4835a55ed87b568fe43c46ac24ceee6831aa7b3f0b2` | 1+594 | 4,906 B |
-| `KOBOrders::KobIfdBid` | `50b58e7b26e0bdc1a0eed7f7d7e5bcee88f95ed6ff367be32b8e74979a9de292` | 1+585 | 3,796 B |
+| `KOBOrders::KobCondAsk` | `d9ed37c5aa03d5c62619659f86c6a1e08ab4ba9a1092d144b2160935331e6adb` | 1+363 | 3,530 B |
+| `KOBOrders::KobCondBid` | `4300602a57db412a07799ead7b812454a31b44f7565829d71c49606d11334d36` | 1+381 | 3,236 B |
+| `KOBOrders::KobIfdAsk` | `edfb30d9e8115924ecea0924625ce76a7f807f671076e010f96fef6e0747cffd` | 1+594 | 4,919 B |
+| `KOBOrders::KobIfdBid` | `1ba2519b5107ae20303fee6fc1d3b6600103eb2889caf729a1a04c139a51240d` | 1+585 | 3,820 B |
 | `KOBOrders::KobPair` | `c95c92344f08c42992699b0e467cf32fe573dda9b879250438d60a13cab4a9c6` | 1+447 | 2,960 B |
-| `KOBOrders::KobCondPair` | `ba725a717423bbd7833e032d16a3f67a97e538b42ac28e61eb21b1a90defda2b` | 1+543 | 6,272 B |
-| `KOBOrders::KobIfdPair` | `2d4266cfe5fbec37165b26d5e78fef00ca2380d1ccdd43e9553ed09a9084c30c` | 1+909 | 8,822 B |
+| `KOBOrders::KobCondPair` | `7b8f1a9e957a9def15fd835fb2e47331ccfcc856978f6408f8a3c7a519a6f06e` | 1+543 | 6,284 B |
+| `KOBOrders::KobIfdPair` | `466ed2effad16c558d362d072f813dc727c10cdf899c2d90833fb5520827d9b6` | 1+909 | 8,834 B |
 | `KOBOrdersKron::KobAskKron` | `f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d` | 1+243 | 1,487 B |
 | `KOBOrdersKron::KobBidKron` | `6ec1a3dd4a287b73295a08db5f75fedcac4966539d793e9d1a659711ad888efc` | 1+252 | 1,343 B |
 | `KOBToken::KCC20` (8 in / 8 out) | `40fef59a59bd76991f4d4e2101d1e3e34860997b89fe7714532637cec482a9d7` | 1+112 | 6,820 B |
@@ -84,7 +84,7 @@ Two ways to name a KOB order kind in `observes`. Both compile-checked examples l
 ### Closed ICC (recommended)
 
 ```
-import "./KOBOrders/artifact.json" id "606ae6f9126b100ff366e834d0da33de001d311d1428f516ecdb0cd944e98782";
+import "./KOBOrders/artifact.json" id "c98dda437bb5de4e8fea02c3fe9823a7728b589ca3296c439454ea7db8ff3e4d";
 
 actor PriceGate owns PriceGateState {
     entry spend(cov_id ask_covid, int n, sig s)
@@ -127,7 +127,7 @@ genuine and a forged artifact).
    constant (`gen__kob_orders__kob_ask_template_const`), and records the dependency (`app`,
    `artifact_id`) and the imported interface fingerprints in your artifact. Entries that
    observe an order take hidden witnesses: the handle's prefix and suffix lengths (`KobAsk`:
-   1 and 1,394). A keeper reads them from the artifact and supplies them (the harness does this by
+   1 and 1,407). A keeper reads them from the artifact and supplies them (the harness does this by
    hand: `encode_entry_sig_script`; feedback A2).
 4. **Trust.** With a source import argentc compiles the exporter and derives the handle itself; with an
    artifact import the handle comes from the artifact, and Argent does not check a linked handle against
@@ -216,16 +216,18 @@ attack still works on them, and today's builders do not build for their template
 is unsupported: `docs/spec/template-retirement.md`).
 
 **B pin.** A KCC-20 token is (covenant id, program, extension commitment): units of the same covenant id with another
-commitment are another token, which only the token's issuer can create (in its genesis). A KobAsk has no extension
-field (its custody is any token UTXO of its covenant id that it owns), so until 2026-10-07 an intent that buys token B
-took it from whatever class the asks' escrows held and delivered that class to the merchant. The intents that buy token
-B (`KasToToken`, `TokenSwap`, `TokenSwapKron`) now carry `b_extension`, the extension commitment of the offer's token B
+commitment are another token, which only the token's issuer can create (in its genesis). A KobAsk had no extension
+field (its custody was any token UTXO of its covenant id that it owned), so until 2026-10-07 an intent that buys token B
+took it from whatever class the asks' escrows held and delivered that class to the merchant. A KobAsk now names the
+commitment of its custody (`extensionCommitment`, which can be any commitment of the covenant id), and the intents that
+buy token B (`KasToToken`, `TokenSwap`, `TokenSwapKron`) carry `b_extension`, the extension commitment of the offer's token B
 (set by the payer's client, recomputed by the verifier from the merchant asset's allowlist entry); every escrow of an
 observed ask must carry it and the merchant's delivery is pinned to it (`IntentState::b_extension`; the execution
 builder refuses escrows of another commitment). `crates/kob-protocol/tests/intent_builders.rs`,
 `an_intent_takes_token_b_only_of_its_extension_commitment`: every such actor on every program pair, token B of another
-commitment of the same covenant id is refused at the intent input. Intents created from the previous templates keep
-their old script and their `cancel` / `expire`; today's builders do not build for them.
+commitment of the same covenant id is refused at the intent input (an ask takes such an escrow only when its own state
+names that commitment). Intents created from the previous templates keep their old script and their `cancel` /
+`expire`; today's builders do not build for them.
 
 The spread between what an order releases and what the payer authorised (crossing spread, tips,
 auction decay) belongs to the keeper. For `TokenToKas` and `TokenSwap` the intent's own KAS carrier
@@ -280,12 +282,12 @@ arguments in transaction order; the asks' escrows are matched to them by owner.
 
 | Actor (`KasToToken_<shape>`) | Entry (visible arguments) | Redeem |
 |---|---|---|
-| `_buy` | `buy(ask)`: one ask rests | 2,791 B |
-| `_buy_out` | `buy_out(ask)`: one ask sold out | 2,556 B |
-| `_buy2` | `buy2(ask1, ask2)`: ask 1 sold out, ask 2 rests | 4,633 B |
-| `_buy2_out` | `buy2_out(ask1, ask2)` | 4,376 B |
-| `_buy3` | `buy3(ask1, ask2, ask3)` | 6,466 B |
-| `_buy3_out` | `buy3_out(ask1, ask2, ask3)` | 6,216 B |
+| `_buy` | `buy(ask)`: one ask rests | 2,847 B |
+| `_buy_out` | `buy_out(ask)`: one ask sold out | 2,612 B |
+| `_buy2` | `buy2(ask1, ask2)`: ask 1 sold out, ask 2 rests | 4,747 B |
+| `_buy2_out` | `buy2_out(ask1, ask2)` | 4,488 B |
+| `_buy3` | `buy3(ask1, ask2, ask3)` | 6,634 B |
+| `_buy3_out` | `buy3_out(ask1, ask2, ask3)` | 6,384 B |
 
 | Actor (`TokenToKas_<shape>`) | Entry | Redeem |
 |---|---|---|
@@ -295,12 +297,12 @@ arguments in transaction order; the asks' escrows are matched to them by owner.
 
 | Actor (`TokenSwap_<shape>`) | Entry | Redeem |
 |---|---|---|
-| `_swap` | `swap(bid, ask, n_a)`: bid and ask rest | 6,564 B |
-| `_swap_bid_out` | `swap_bid_out(bid, ask, n_a)`: the bid ends, the ask rests | 6,538 B |
-| `_swap_ask_out` | `swap_ask_out(bid, ask, n_a)`: the bid rests, the ask is sold out | 6,293 B |
-| `_swap_out` | `swap_out(bid, ask, n_a)` | 6,281 B |
-| `_swap2` | `swap2(bid1, bid2, ask1, ask2, n_a1, n_a2)` | 10,022 B |
-| `_swap2_out` | `swap2_out(bid1, bid2, ask1, ask2, n_a1, n_a2)` | 9,723 B |
+| `_swap` | `swap(bid, ask, n_a)`: bid and ask rest | 6,627 B |
+| `_swap_bid_out` | `swap_bid_out(bid, ask, n_a)`: the bid ends, the ask rests | 6,608 B |
+| `_swap_ask_out` | `swap_ask_out(bid, ask, n_a)`: the bid rests, the ask is sold out | 6,349 B |
+| `_swap_out` | `swap_out(bid, ask, n_a)` | 6,337 B |
+| `_swap2` | `swap2(bid1, bid2, ask1, ask2, n_a1, n_a2)` | 10,143 B |
+| `_swap2_out` | `swap2_out(bid1, bid2, ask1, ask2, n_a1, n_a2)` | 9,856 B |
 
 | Actor (`TokenToKasKron_<shape>`) | Entry | Redeem |
 |---|---|---|
@@ -310,15 +312,15 @@ arguments in transaction order; the asks' escrows are matched to them by owner.
 
 | Actor (`TokenSwapKron_<shape>`) | Entry | Redeem |
 |---|---|---|
-| `_swap` / `_swap_bid_out` | `swap(bid, ask, n_a)` / `swap_bid_out(..)`: KobBidKron(s) of the KRON token A, KobAsk(s) of B | 5,962 B / 5,950 B |
-| `_swap_ask_out` / `_swap_out` | `swap_ask_out(bid, ask, n_a)` / `swap_out(..)` | 5,722 B / 5,710 B |
-| `_swap2` / `_swap2_out` | `swap2(bid1, bid2, ask1, ask2, n_a1, n_a2)` / `swap2_out(..)` | 9,285 B / 9,004 B |
+| `_swap` / `_swap_bid_out` | `swap(bid, ask, n_a)` / `swap_bid_out(..)`: KobBidKron(s) of the KRON token A, KobAsk(s) of B | 6,018 B / 6,006 B |
+| `_swap_ask_out` / `_swap_out` | `swap_ask_out(bid, ask, n_a)` / `swap_out(..)` | 5,778 B / 5,766 B |
+| `_swap2` / `_swap2_out` | `swap2(bid1, bid2, ask1, ask2, n_a1, n_a2)` / `swap2_out(..)` | 9,412 B / 9,121 B |
 
 Every actor also has `expire()` (anyone, from the deadline on) and `cancel(sig)` (payer,
 SIGHASH_ALL). The redeem sizes include both. For scale: the 8/8 token program is 6.8 kB, a KobAsk
-1.6 kB. **The largest scripts are
-`TokenSwap_swap2` and `_swap2_out` (9,723-10,022 B):** they observe four orders and two token groups,
-and every observed order state is 19 or 21 fields read by the script. A payer who wants a sweep of
+1.7 kB. **The largest scripts are
+`TokenSwap_swap2` and `_swap2_out` (9,856-10,143 B):** they observe four orders and two token groups,
+and every observed order state is 20 or 21 fields read by the script. A payer who wants a sweep of
 one order per leg pays the 6.3-6.6 kB of the single-order swap. `swap2` is the tightest script (227
 live bindings and 234 combined stack items of the 244 allowed, measured on the v2.6 router of
 2026-10-03; protocol v3 only removed arithmetic from it): its body keeps no local an expression can
@@ -327,13 +329,14 @@ ask are written out where they are used), which makes room for the two token han
 two state fields and two checks to every KCC-20 token intent (one field and one check to a KRON one); argentc, which
 refuses an entry over the limit, still compiles every shape, `swap2` included (its peak was not re-measured). The B pin
 (2026-10-07) adds one state field to the intents that buy token B and one check per ask escrow; every shape still
-compiles.
+compiles. The ask's own `extensionCommitment` (2026-10-07, the last field of `KobAskState`: an ask takes only a custody
+of the commitment it names) makes every observed ask state 33 B longer; every shape still compiles, `swap2` included.
 
 `n` is the number of token base units sold into a bid (any amount; the bid enforces its own minimum
 fill). How much an ask gives follows from `amount` (the last ask
 of a sweep gives `amount` minus what the sold-out asks gave). Hidden witnesses are the handle
 prefix/suffix lengths of the imported templates, ask first, then bid, then the token: 4 for the
-`KasToToken` and `TokenToKas` actors, 8 for `TokenSwap` (KobAsk 1 and 1,394, KobBid 1 and 1,230,
+`KasToToken` and `TokenToKas` actors, 8 for `TokenSwap` (KobAsk 1 and 1,407, KobBid 1 and 1,230,
 KobBidKron 1 and 1,090, then the token handles' own: KCC20 8/8 1 and 6,707, 3/3 1 and 2,977, KRON 0 and 2,387 or 2,686);
 the `expire` and the `cancel` of a token intent take the locked token's two. Slot limit: at most 3 escrow inputs and 4 token outputs in one token group (the
 token has 8/8 slots); the largest transaction (`swap2`: 8 inputs, 2 bids, 2 asks) is 38.8 kB and 53.0k

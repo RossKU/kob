@@ -56,11 +56,11 @@
 // both. What is left is a substitute of exactly lock_amount units with the same commitment: it gives the payer the
 // whole lock's worth at the substituter's expense (the custody rule of KobAsk, which pins amountLeft, is the same).
 // B PIN. A KCC-20 token is (covenant id, program, extension_commitment): units of one covenant id with another
-// commitment are another token (only its issuer can make them, in its genesis). KobAsk has no extension field (its
-// custody is whatever token UTXO of the covenant id it holds), so the intents that buy token B (KasToToken, TokenSwap,
-// TokenSwapKron) carry `b_extension`, the commitment of the token the offer names, set at creation and recomputed by a
-// verifier like every other term: every escrow of an observed ask must carry it, and the merchant's delivery is pinned
-// to it.
+// commitment are another token (only its issuer can make them, in its genesis). A KobAsk takes only a custody of the
+// commitment its state names (extensionCommitment), which can be any commitment of the covenant id, so the intents that
+// buy token B (KasToToken, TokenSwap, TokenSwapKron) carry `b_extension`, the commitment of the token the offer names, set
+// at creation and recomputed by a verifier like every other term: every escrow of an observed ask must carry it, and the
+// merchant's delivery is pinned to it.
 // What an order releases beyond what the payer authorised (spread, tips) is the keeper's; the
 // payer's worst case is fixed by the intent's parameters.
 //
@@ -100,7 +100,7 @@
 // payer's bounds hold at any t.
 //
 // Source style. Order states are read by field projection (`book.inputs.ask.price`), never
-// copied into locals: a KobAskState has 19 fields, a KobBidState 21, and every copy is that many
+// copied into locals: a KobAskState has 20 fields, a KobBidState 21, and every copy is that many
 // more live stack bindings (consensus limit 244) in the compiled script. The continuation of a
 // resting order is not pinned with `become` either: the order validates it itself (KobAsk:
 // amountLeft - n, KobBid: byte-identical), and the router's pin on the escrow change output, which the
@@ -140,7 +140,7 @@
 
 
 import "./kcc20_8x8.ag";
-import "./KOBOrders/artifact.json" id "606ae6f9126b100ff366e834d0da33de001d311d1428f516ecdb0cd944e98782";
+import "./KOBOrders/artifact.json" id "c98dda437bb5de4e8fea02c3fe9823a7728b589ca3296c439454ea7db8ff3e4d";
 import "./KOBOrdersKron/artifact.json" id "867d24a6c06fb8a38a30941a7f5a79d8dda05c4bee4b01f3dab2ba68c394442f";
 
 const int MAX_SOMPI = 2900000000000000000;

@@ -11,7 +11,9 @@
 //! ```
 //!
 //! Templates under test ([`Subs`]): `KobPair`, then `KobCondPair` (its build constants PAIR_TPL / PRE / SUF re-pointed
-//! at the compiled KobPair), then `KobIfdPair` (COND_TPL / PRE / SUF and PAIR_TPL / PRE / SUF re-pointed). An ablation
+//! at the compiled KobPair), then `KobIfdPair` (COND_TPL / PRE / SUF and PAIR_TPL / PRE / SUF re-pointed);
+//! [`Subs::compile_asks`]: the KCC-20 ask family and its readers instead (`KobAsk`, then `KobCondAsk` and `KobCondBid`
+//! against it, `KobIfdAsk` against KobCondBid and KobAsk, `KobIfdBid` against KobCondAsk). An ablation
 //! run (`KOB_ABLATION_SRC` = a directory with mutated sources, `KOB_ABLATION=1`) therefore executes the weakened covenant
 //! everywhere it appears: as the order filled, as trigger evidence of a conditional, as the exit an entry creates.
 //! Without an ablation the compiled templates must equal the pinned ones. A mutation must not move the state span.
@@ -78,10 +80,22 @@ impl Sub {
     }
 }
 
-/// The three pair templates under test.
+/// The templates under test (the three pair templates, or the KCC-20 ask family: [`Subs::compile_asks`]).
 pub struct Subs {
     pub subs: BTreeMap<TemplateId, Sub>,
 }
+
+/// The KCC-20 order templates that hold a custody of their one token (`KobAsk`, `KobCondAsk`, `KobIfdAsk`) and the ones
+/// that read or write such a custody's state (`KobCondBid` reads the ask evidence, `KobIfdBid` writes its exit).
+pub const ASK_KINDS: [TemplateId; 5] =
+    [TemplateId::KobAsk, TemplateId::KobCondAsk, TemplateId::KobCondBid, TemplateId::KobIfdAsk, TemplateId::KobIfdBid];
+
+/// (if-done entry, its exit template): the entry's fill takes the exit's prefix and suffix as arguments.
+const EXIT_OF: [(TemplateId, TemplateId); 3] = [
+    (TemplateId::KobIfdPair, TemplateId::KobCondPair),
+    (TemplateId::KobIfdBid, TemplateId::KobCondAsk),
+    (TemplateId::KobIfdAsk, TemplateId::KobCondBid),
+];
 
 /// Re-points the build constants (hash, prefix length, suffix length) of `dep` in a constructor argument list: the one
 /// place where the pinned triple appears.
@@ -104,14 +118,28 @@ fn repoint(args: &mut [ArtifactValue], dep: TemplateId, sub: &Sub) {
 }
 
 impl Subs {
+    /// The three pair templates.
     pub fn compile() -> Subs {
-        let mut subs = BTreeMap::new();
-        let deps: [(TemplateId, &[TemplateId]); 3] = [
+        Subs::compile_deps(&[
             (TemplateId::KobPair, &[]),
             (TemplateId::KobCondPair, &[TemplateId::KobPair]),
             (TemplateId::KobIfdPair, &[TemplateId::KobCondPair, TemplateId::KobPair]),
-        ];
-        for (id, ds) in deps {
+        ])
+    }
+    /// The KCC-20 ask family ([`ASK_KINDS`]), each against the compiled templates it embeds.
+    pub fn compile_asks() -> Subs {
+        Subs::compile_deps(&[
+            (TemplateId::KobAsk, &[]),
+            (TemplateId::KobCondAsk, &[TemplateId::KobAsk]),
+            (TemplateId::KobCondBid, &[TemplateId::KobAsk]),
+            (TemplateId::KobIfdAsk, &[TemplateId::KobCondBid, TemplateId::KobAsk]),
+            (TemplateId::KobIfdBid, &[TemplateId::KobCondAsk]),
+        ])
+    }
+    /// `deps`: (template, the templates under test whose build constants it embeds), in dependency order.
+    pub fn compile_deps(deps: &[(TemplateId, &[TemplateId])]) -> Subs {
+        let mut subs = BTreeMap::new();
+        for &(id, ds) in deps {
             let ctor = format!("contracts/v2/{}.ctor.json", id.name());
             let mut args: Vec<ArtifactValue> =
                 serde_json::from_str(&std::fs::read_to_string(common::repo_root().join(&ctor)).unwrap()).expect("ctor json");
@@ -143,10 +171,14 @@ impl Subs {
     pub fn get(&self, id: TemplateId) -> &Sub {
         &self.subs[&id]
     }
-    /// The script public key under test of a script public key the library derived from a pair template, if it is one.
+    /// Whether `id` is one of the templates under test.
+    pub fn has(&self, id: TemplateId) -> bool {
+        self.subs.contains_key(&id)
+    }
+    /// The script public key under test of a script public key the library derived from a template under test, if it is one.
     pub fn rewrite(&self, spk: &ScriptPublicKey) -> Option<ScriptPublicKey> {
         match spk_trace::lookup(spk) {
-            Some((Origin::Template(id), state)) if is_pair(id) => Some(self.get(id).spk(&state)),
+            Some((Origin::Template(id), state)) if self.has(id) => Some(self.get(id).spk(&state)),
             _ => None,
         }
     }
@@ -472,7 +504,7 @@ impl Ed {
         i.unwrap_or(127) as u8
     }
 
-    /// Rewrites the pair-template scripts of the outputs to the build under test, and re-derives the covenant id of
+    /// Rewrites the scripts of the outputs of the templates under test to the build under test, and re-derives the covenant id of
     /// every genesis whose outputs changed (only where the binding holds the honest id of the pinned outputs).
     fn rewrite_outputs(&self, subs: &Subs, tx: &mut Transaction, tok_out: &mut BTreeMap<usize, ([u8; 32], TokenState)>) {
         let pinned: Vec<TransactionOutput> = tx.outputs.clone();
@@ -523,7 +555,7 @@ impl Ed {
         }
     }
 
-    /// The signed transaction and its UTXO entries, with the pair templates under test.
+    /// The signed transaction and its UTXO entries, with the templates under test.
     pub fn finish(&self, subs: &Subs) -> (Transaction, Vec<UtxoEntry>) {
         let mut tx = self.tx.clone();
         let mut entries = self.entries.clone();
@@ -578,27 +610,33 @@ impl Ed {
                 }
             }
         }
-        // the KobCondPair prefix / suffix arguments of a KobIfdPair entry (the exit template)
-        let (cp, cs) = (&template(TemplateId::KobCondPair).prefix, &template(TemplateId::KobCondPair).suffix);
-        let csub = subs.get(TemplateId::KobCondPair);
-        for p in plans.iter_mut() {
-            if let SigPlan::Entry { template: TemplateId::KobIfdPair, args, .. } = p {
-                for a in args.iter_mut() {
-                    if let Arg::Bytes(b) = a {
-                        if b == cp {
-                            *b = csub.prefix.clone();
-                        } else if b == cs {
-                            *b = csub.suffix.clone();
+        // the exit prefix / suffix arguments of an if-done entry (KobIfdPair: KobCondPair, KobIfdBid: KobCondAsk,
+        // KobIfdAsk: KobCondBid)
+        for (entry_t, exit_t) in EXIT_OF.into_iter().filter(|(_, x)| subs.has(*x)) {
+            let (cp, cs) = (&template(exit_t).prefix, &template(exit_t).suffix);
+            let csub = subs.get(exit_t);
+            for p in plans.iter_mut() {
+                if let SigPlan::Entry { template, args, .. } = p {
+                    if *template != entry_t {
+                        continue;
+                    }
+                    for a in args.iter_mut() {
+                        if let Arg::Bytes(b) = a {
+                            if b == cp {
+                                *b = csub.prefix.clone();
+                            } else if b == cs {
+                                *b = csub.suffix.clone();
+                            }
                         }
                     }
                 }
             }
         }
-        // script public keys of the spent UTXOs; pair orders under the templates being tested
+        // script public keys of the spent UTXOs; orders under the templates being tested
         for (i, p) in plans.iter().enumerate() {
             let spk = match p {
                 SigPlan::P2pk { pubkey } => p2pk_spk(pubkey),
-                SigPlan::Entry { template: t, state, .. } if is_pair(*t) => subs.get(*t).spk(state),
+                SigPlan::Entry { template: t, state, .. } if subs.has(*t) => subs.get(*t).spk(state),
                 other => other.spk(),
             };
             let e = &entries[i];
@@ -625,7 +663,7 @@ impl Ed {
         for (i, p) in plans.iter().enumerate() {
             let sig = sigs.get(&i).map(|s| s.as_slice());
             tx.inputs[i].signature_script = match p {
-                SigPlan::Entry { template: t, state, entry, args } if is_pair(*t) => {
+                SigPlan::Entry { template: t, state, entry, args } if subs.has(*t) => {
                     let vals: Vec<ArtifactValue> = args
                         .iter()
                         .map(|a| match a {

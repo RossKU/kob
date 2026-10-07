@@ -207,22 +207,22 @@ compiles both with the same constructor arguments and removes each check on its 
 
 | | Bytes |
 |---|---|
-| hand-written `KobAsk` (protocol v3) | 1,638 |
-| 1:1 port | 2,714 (+1,076) |
-| generated: `become` (`cont.length == count`, `validateOutputState` of the continuation) | 492 |
-| port: the continuation state literal `become` needs (19 fields, `amountLeft - n`) | 567 |
+| hand-written `KobAsk` (protocol v3, with the custody's `extensionCommitment`) | 1,684 |
+| 1:1 port | 2,807 (+1,123) |
+| generated: `become` (`cont.length == count`, `validateOutputState` of the continuation) | 514 |
+| port: the continuation state literal `become` needs (20 fields, `amountLeft - n`) | 593 |
 | generated: output count bounds of `settle` (`0 <= count <= 1`) | 8 |
 | generated: `OpAuthOutputCount == 0` in `cancel` | 5 |
-| port without all four | 1,642 (hand-written + 4) |
+| port without all four | 1,687 (hand-written + 3) |
 | body checks the generated ones repeat: `OpCovOutputCount(selfId) == 1` / `== 0` (x2) | 21 |
 | body checks the generated ones repeat: continuation SPK `== contSpk(amountLeft - n)` | 81 |
-| port without the repeated body checks (an idiomatic port) | 2,612 (+974) |
+| port without the repeated body checks (an idiomatic port) | 2,705 (+1,021) |
 
 So the duplication is small: **102 B**, the order's own output-count checks (21 B, duplicated by the
 generated count bound and `cont.length == count`) and its continuation SPK check (81 B, duplicated
-by the generated `validateOutputState`). An idiomatic port drops them and is still +974 B. That
-difference is not duplication but the mechanism: `become` rebuilds the whole 19-field state
-(567 B) and re-encodes and compares it (492 B), where the hand-written order splices one 8-byte
+by the generated `validateOutputState`). An idiomatic port drops them and is still +1,021 B. That
+difference is not duplication but the mechanism: `become` rebuilds the whole 20-field state
+(593 B) and re-encodes and compares it (514 B), where the hand-written order splices one 8-byte
 field into its own script (`contSpk`: the redeem script with bytes [236..244) replaced, 81 B). The
 cost of `become` grows with the number of state fields.
 

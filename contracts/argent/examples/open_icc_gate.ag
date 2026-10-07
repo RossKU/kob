@@ -9,7 +9,7 @@
 // The importer must declare the state layout itself, with the published state name (argent-runtime
 // matches an open handle by state name; the layout is published in the KOBOrders artifact,
 // argent.states). NOTE: the KobAskState below stops at priceEnd, whereas the published layout
-// (contracts/argent/KOBOrders.ag) has 19 fields and ends with decayStep and amountLeft; this example
+// (contracts/argent/KOBOrders.ag) has 20 fields and ends with decayStep, amountLeft and extensionCommitment; this example
 // only reads price and tif and is compile-checked only.
 //
 // Compiled by scripts/build-argent.sh so it cannot rot (generated SilverScript:

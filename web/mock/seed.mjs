@@ -116,7 +116,9 @@ export function buildOrderState(chain, spec) {
     priceEnd: String(spec.price_end ?? 0),
     decayStep: String(spec.decay_step ?? 1000),
   };
-  if (kind === 'KobAsk' || kind === 'KobAskKron') return { kind, state: { ...base, amountLeft: String(amount), ...(spec.state ?? {}) } };
+  // an ask pins the extension commitment of its custody (zero for KRON, whose ask layout has none)
+  const ext = { extensionCommitment: kron ? '0'.repeat(64) : (tok.extension_commitment ?? '0'.repeat(64)) };
+  if (kind === 'KobAsk' || kind === 'KobAskKron') return { kind, state: { ...base, amountLeft: String(amount), ...ext, ...(spec.state ?? {}) } };
   const bid = { ...base, reserve: '0', deliveryCarrier: String(DEFAULT_CARRIER), ...(spec.state ?? {}) };
   // the KRON bid layout has no extension commitment
   return { kind, state: kron ? bid : { ...bid, extensionCommitment: tok.extension_commitment ?? '0'.repeat(64) } };

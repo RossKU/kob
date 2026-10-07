@@ -139,7 +139,7 @@ contract KobCondBid(
     int constant MAX_IDLE = 77760000;
     // Largest stopPrice whose band product stopPrice * slipBps (slipBps <= 10000) fits in an int.
     int constant MAX_STOP = 922337203685477;
-    int constant ASK_STATE_LEN = 243;
+    int constant ASK_STATE_LEN = 276;
     int constant BID_STATE_LEN = 285;
     // The scans over these slots are unrolled by hand (one line per slot): raising a cap needs as many scan lines.
     int constant MAX_TOK_IN = 8;

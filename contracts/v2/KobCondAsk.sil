@@ -28,17 +28,21 @@ pragma silverscript ^0.1.0;
 // State: mutable stopPrice (trailing), armed, amountLeft; the continuation is this script with those
 // three windows spliced (contSpk). Immutable: maker, token binding, scale, minFill, tip,
 // activeFrom, expiryDaa, refundTip, tpPrice, slipBps, trailStep / trailGap / trailWait,
-// minTouch, minRestDaa, bandDaa, keeperTip, and the repeat-IFD fields parent, rptPrice, rptUntil
-// (zero for an ordinary order). The evidence templates (KobAsk, KobBid of this family: hash, prefix,
-// suffix length) are inlined build constants, the same on every network.
+// minTouch, minRestDaa, bandDaa, keeperTip, the repeat-IFD fields parent, rptPrice, rptUntil
+// (zero for an ordinary order), and last extensionCommitment, the KCC-20 extension commitment of the
+// custody (an IFD exit: its entry's extensionCommitment, written by the entry). The evidence templates
+// (KobAsk, KobBid of this family: hash, prefix, suffix length) are inlined build constants, the same on
+// every network.
 //   armed: 0 = not armed; 1 = armed, auction origin = this UTXO's DAA (the arming transaction's);
 //   >= 2 = armed, that value is the origin (a fill carries it into the continuation, so partial
 //   fills do not restart the auction).
 //
 // Key invariants:
 //  - Custody: the token UTXO owned by this covenant id holds EXACTLY amountLeft base units (an IFD exit
-//    starts with amountLeft = the amount its entry filled). settle refuses any other token input owned
-//    by this id and update spends none, so strays sent to this id are inert (see KobAsk).
+//    starts with amountLeft = the amount its entry filled), of the extension commitment extensionCommitment
+//    (units of the token's covenant id with another commitment are another token). settle refuses any
+//    other token input owned by this id and update spends none, so strays sent to this id are inert (see
+//    KobAsk).
 //  - Minimum fill: n >= minFill unless n takes everything left (see KobAsk).
 //  - Touch trigger: the stop leg arms only in a transaction that FILLS a resting KobAsk of this
 //    token (evidence, input ev, same scale) quoting <= stopPrice, trading >= minTouch base units, exposed at
@@ -89,7 +93,8 @@ contract KobCondAsk(
     int init_amountLeft,
     byte[32] init_parent,
     int init_rptPrice,
-    int init_rptUntil
+    int init_rptUntil,
+    byte[32] init_extensionCommitment
 ) {
     pubkey maker = init_maker;
     byte[32] tokenCovId = init_tokenCovId;
@@ -117,6 +122,7 @@ contract KobCondAsk(
     byte[32] parent = init_parent;       // repeat IFD: covenant id of the entry to re-arm (0 = none)
     int rptPrice = init_rptPrice;        // repeat IFD: budget rate (sompi per whole token) returned to the entry
     int rptUntil = init_rptUntil;        // repeat IFD: from this DAA a TP fill may skip the entry
+    byte[32] extensionCommitment = init_extensionCommitment; // KCC-20 extension commitment of the custody
 
     struct KCC20State {
         int amount;
@@ -135,7 +141,7 @@ contract KobCondAsk(
     int constant MAX_IDLE = 77760000;
     // Largest stopPrice whose band product stopPrice * slipBps (slipBps <= 10000) fits in an int.
     int constant MAX_STOP = 922337203685477;
-    int constant ASK_STATE_LEN = 243;
+    int constant ASK_STATE_LEN = 276;
     int constant BID_STATE_LEN = 285;
     // The scans over these slots are unrolled by hand (one line per slot): raising a cap needs as many scan lines.
     int constant MAX_TOK_IN = 8;
@@ -172,7 +178,8 @@ contract KobCondAsk(
 
     // P2SH of this script with stopPrice, armed and amountLeft replaced (the only mutable fields).
     // State span starts at bytecode offset 1; payload windows: stopPrice [182..190), armed
-    // [245..253), amountLeft [272..280) (followed by the immutable repeat fields). Same effect as
+    // [245..253), amountLeft [272..280) (followed by the immutable repeat fields and extensionCommitment
+    // [332..364)). Same effect as
     // validateOutputState with every other field copied, at a fraction of the size.
     function contSpk(int newStop, int newArmed, int newLeft) : byte[] {
         int self = this.activeInputIndex;
@@ -299,6 +306,8 @@ contract KobCondAsk(
         byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 112);
         require(byte[32](tin.slice(10, 42)) == selfId);
         require(tin.slice(43, 46) == byte[](0x040100));
+        // the custody carries the commitment the order names (another commitment is another token)
+        require(byte[32](tin.slice(80, 112)) == extensionCommitment);
         int tinAmount = int(byte[8](tin.slice(1, 9)));
         require(tinAmount == amountLeft);
         noStrays(selfId, tokenIn);

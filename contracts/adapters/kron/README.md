@@ -86,8 +86,8 @@ The lifecycle rules of `contracts/v2/` apply with the KRON codec and limits:
   There is no receipt covenant and no genesis.
 
 Sizes (bytecode B / state B): KobAskKron 1,487 / 243, KobBidKron 1,343 / 252, KobCondAskKron 3,178 / 330,
-KobCondBidKron 2,928 / 348, KobIfdBidKron 3,498 / 552, KobIfdAskKron 4,397 / 561 (the pair orders for KRON tokens: `KobPair` 2,919 / 414,
-`KobCondPair` 6,225 / 510, `KobIfdPair` 8,708 / 909, one template each for both families).
+KobCondBidKron 2,928 / 348, KobIfdBidKron 3,498 / 552, KobIfdAskKron 4,397 / 561 (the pair orders for KRON tokens: `KobPair` 2,960 / 447,
+`KobCondPair` 6,284 / 543, `KobIfdPair` 8,834 / 909, one template each for both families).
 
 ## Layout notes (hand-coded byte windows)
 
@@ -100,7 +100,8 @@ starts at 1): `KobCondAskKron` stopPrice `[182..190)`, armed `[245..253)`, amoun
 token-codec field, so these offsets equal `KobIfdAsk`'s). It commits a 288-byte `KobCondBidKron` exit state (348 B with
 the repeat fields) with amountLeft at state payload `[253..261)` and the parent at `[289..321)` of a booked exit. The
 evidence reads of the conditional kinds take the bid fields 33 bytes earlier than the KCC-20 ones (bid state 252 B,
-ask state 243 B); the KCC-20 layouts of `KobAsk` (243 B) and `KobCondAsk` (330 B) are unchanged. The harness asserts
+ask state 243 B); the KCC-20 `KobAsk` (276 B) and `KobCondAsk` (363 B) have the same fields plus `extensionCommitment`
+as their last one, so the offsets above are theirs too. The harness asserts
 every window against the compiled state.
 
 ## Constructor placeholders

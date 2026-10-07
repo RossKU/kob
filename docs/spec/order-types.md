@@ -153,8 +153,12 @@ is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fil
 - **Auctions.** Market orders (on a token and on a pair), triggered stops and stop entries fill as short
   auctions from the market toward their worst price, so the matcher keeps only a competitive margin.
 - **Custody.** Tokens a sell order sells sit in exactly one token UTXO owned by the order, holding exactly `amountLeft`
-  (a pair bid's B escrow, a sell-first pair entry's B prefund: exactly the state's `custody`); tokens of the order's own
-  token(s) sent to it from outside (a pair order: of A or of B) are inert and only the maker's cancel moves them. Tokens
+  (a pair bid's B escrow, a sell-first pair entry's B prefund: exactly the state's `custody`), of the KCC-20 extension
+  commitment the state names (`extensionCommitment` of `KobAsk` / `KobCondAsk`, the committed exit's of `KobIfdAsk`;
+  `sExt` / `aExt` / `bExt` of the pair orders; an if-done entry writes its own into its exit): units of the token's
+  covenant id with another commitment are another token, and every entry that reads the custody (fill, refund, IOC / FOK
+  end, merge) refuses them. Tokens of the order's own token(s) sent to it from outside (a pair order: of A or of B) are
+  inert and only the maker's cancel moves them. Tokens
   of any OTHER token (another covenant id) sent to an order are NOT protected: every spend of the order (fill, refund,
   update, cancel) authorises them, so whoever builds that transaction may move them. Never send tokens to an order
   (`matcher.md` §1.2).

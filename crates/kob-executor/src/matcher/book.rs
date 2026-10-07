@@ -75,8 +75,9 @@ impl ListedOrder {
     }
 
     /// §1.2: a token-holding order is listable only with exactly its custodies (`AnyState::custodies`, in that order:
-    /// `custody`, then `custody_b`), each holding its exact amount of its token, owned by the order id (a repeating
-    /// `KobIfdAsk` with nothing left has no custody; a pair entry holds one or two).
+    /// `custody`, then `custody_b`), each holding its exact amount of its token, owned by the order id, of the KCC-20
+    /// extension commitment the order pins for it (`AnyState::custody_ext`; a repeating `KobIfdAsk` with nothing left has
+    /// no custody; a pair entry holds one or two).
     pub fn custody_ok(&self) -> bool {
         if crate::sanity::check(&self.order.state).is_err() {
             return false;
@@ -92,6 +93,7 @@ impl ListedOrder {
                 && c.state.is_covenant_owned()
                 && c.state.is_plain()
                 && Some(c.state.family()) == custody_family(&self.order.state, &token)
+                && (c.state.family() != Family::Kcc20 || self.order.state.custody_ext(token) == Some(c.state.extension()))
                 && c.utxo.covenant_id == Some(token)
                 && !self.strays.iter().any(|s| outpoint(&s.utxo) == outpoint(&c.utxo))
         })
@@ -102,14 +104,16 @@ impl ListedOrder {
         self.custody.iter().chain(self.custody_b.iter()).find(|c| c.utxo.covenant_id.as_ref() == Some(token))
     }
 
-    /// Extension commitment of the order's token (custody for ask-side kinds, state for bids).
+    /// Extension commitment of the order's token: the one its state names (an ask's custody carries it, a sell-first
+    /// entry names it in its committed exit, a bid delivers it).
     pub fn extension(&self) -> Option<[u8; 32]> {
         match &self.order.state {
+            AnyState::KobAsk(s) | AnyState::KobAskKron(s) => Some(s.extension_commitment),
+            AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => Some(s.extension_commitment),
             AnyState::KobBid(s) | AnyState::KobBidKron(s) => Some(s.extension_commitment),
             AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => Some(s.extension_commitment),
             AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => Some(s.extension_commitment),
-            // An empty repeating sell-first entry takes its custody's commitment from its exit.
-            AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) if s.amount_left == 0 => s.exit().ok().map(|e| e.extension_commitment),
+            AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => s.exit().ok().map(|e| e.extension_commitment),
             _ => self.custody.as_ref().map(|c| c.state.extension()),
         }
     }

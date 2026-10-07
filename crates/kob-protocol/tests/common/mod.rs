@@ -195,6 +195,7 @@ pub fn ask(maker: u8, price: i64, tpl: TemplateId) -> AskState {
         price_end: 0,
         decay_step: 1_000,
         amount_left: 10 * WHOLE,
+        extension_commitment: ext_for(tpl),
     }
 }
 /// A limit ask of `n` whole tokens.
@@ -285,6 +286,7 @@ pub fn cond_ask(maker: u8, tpl: TemplateId) -> CondAskState {
         parent: [0; 32],
         rpt_price: 0,
         rpt_until: 0,
+        extension_commitment: ext_for(tpl),
     }
 }
 /// Buy OCO: limit leg 2.00, buy-stop 3.00 with the default 3% band over 300 DAA, 10 whole tokens.

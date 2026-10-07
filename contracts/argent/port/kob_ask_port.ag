@@ -56,6 +56,7 @@ state KobAskState {
     int priceEnd;
     int decayStep;
     int amountLeft;
+    byte[32] extensionCommitment;
 }
 
 actor KobAsk owns KobAskState {
@@ -94,7 +95,7 @@ actor KobAsk owns KobAskState {
         if (cnt > 7) { int x7 = OpCovInputIdx(tokenCovId, 7); if (x7 != custody) { int e7 = OpTxInputScriptSigLen(x7) + off; require(byte[32](OpTxInputScriptSigSubstr(x7, e7, e7 + 32)) != me); } }
     }
 
-    // P2SH of this script with amountLeft (the last state field, payload [236..244)) replaced.
+    // P2SH of this script with amountLeft (payload [236..244), followed only by extensionCommitment) replaced.
     fn contSpk(int newLeft) -> byte[] {
         int me = this.activeInputIndex;
         int len = OpTxInputScriptSigLen(me);
@@ -115,6 +116,8 @@ actor KobAsk owns KobAskState {
         byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 112);
         require(byte[32](tin.slice(10, 42)) == selfId);
         require(tin.slice(43, 46) == byte[](0x040100));
+        // the custody carries the commitment the order names (another commitment is another token)
+        require(byte[32](tin.slice(80, 112)) == extensionCommitment);
         int tinAmount = int(byte[8](tin.slice(1, 9)));
         require(tinAmount == amountLeft);
         noStrays(selfId, tokenIn);
@@ -199,6 +202,7 @@ actor KobAsk owns KobAskState {
                     priceEnd: priceEnd,
                     decayStep: decayStep,
                     amountLeft: amountLeft - n,
+                    extensionCommitment: extensionCommitment,
                 });
             } else {
                 require(tif != TIF_FOK || outAmount == 0);

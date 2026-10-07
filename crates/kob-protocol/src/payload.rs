@@ -779,8 +779,8 @@ type Wanted = ([u8; 32], [u8; 32], Family, i64, Option<[u8; 32]>);
 /// the P2SH of `template(state)`, the output must be a genesis whose covenant id is recomputed from
 /// the authorising input's outpoint, no other output may be bound to that covenant id (the genesis
 /// group is the order output alone), and the custody token output (if any) must be the P2SH of the
-/// custody state (exactly `amountLeft`) under the order's token program. A pair order's KCC-20 custody carries the extension
-/// commitment its state pins for it. Records failing any check are errors.
+/// custody state (exactly `amountLeft`) under the order's token program. An order's KCC-20 custody carries the extension
+/// commitment its state pins for it ([`AnyState::custody_ext`]). Records failing any check are errors.
 pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
     let Some(p) = decode(&tx.payload)? else { return Ok(vec![]) };
     let mut out = vec![];
@@ -808,7 +808,7 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
                 order.token_tpl_hash().expect("order"),
                 order.family(),
                 order.custody_amount().expect("token-holding kind"),
-                None,
+                order.custody_ext(order.token_cov_id()),
             )],
             None => vec![],
         };
@@ -822,7 +822,8 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
         }
         let mut got = vec![];
         for (c, (tok, tpl_hash, fam, amount, ext)) in parts.into_iter().zip(wanted) {
-            // a pair order takes only a custody of the commitment it pins (KobPair / KobCondPair sExt, KobIfdPair aExt / bExt)
+            // an order takes only a custody of the commitment it pins (KobAsk / KobCondAsk extensionCommitment, KobIfdAsk its
+            // exit's, KobPair / KobCondPair sExt, KobIfdPair aExt / bExt)
             if fam == Family::Kcc20 && ext.is_some_and(|e| e != c.extension_commitment) {
                 return bad("the custody's extension commitment is not the one the order pins");
             }

@@ -74,8 +74,10 @@ export const errorCodes = (p: CondPlan): string[] => p.issues.filter((i) => i.se
 export function committedExit(env: PlanEnv, entry: OrderState): AnyState {
   const family = familyOfKind(entry.kind);
   if (baseKind(entry.kind) === 'KobIfdBid') {
-    const tail = '20' + '00'.repeat(32) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8);
-    return env.kob.decodeState(kindFor('KobCondAsk', family), (entry.state as IfdBidState).exitState + tail);
+    // the zero repeat fields, then (KCC-20) the entry's extensionCommitment, which it writes behind them
+    const e = entry.state as IfdBidState;
+    const tail = '20' + '00'.repeat(32) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8) + (family === 'kron' ? '' : '20' + e.extensionCommitment);
+    return env.kob.decodeState(kindFor('KobCondAsk', family), e.exitState + tail);
   }
   if (baseKind(entry.kind) === 'KobIfdAsk') {
     const tail = '20' + '00'.repeat(32) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8);

@@ -991,7 +991,9 @@ export class MockChain {
     const es = entry.state.state;
     const exitBase = baseKind(entry.kind) === 'KobIfdBid' ? 'KobCondAsk' : 'KobCondBid';
     const exitKind = entry.kind.endsWith('Kron') ? exitBase + 'Kron' : exitBase;
-    const exit = this.kob.decodeState(exitKind, es.exitState + EXIT_TAIL[exitBase]);
+    // a KCC-20 buy-first entry writes its own extensionCommitment behind the repeat fields of its KobCondAsk exit
+    const extTail = exitKind === 'KobCondAsk' ? '20' + es.extensionCommitment : '';
+    const exit = this.kob.decodeState(exitKind, es.exitState + EXIT_TAIL[exitBase] + extTail);
     exit.state.amountLeft = String(n);
     const cov = syntheticId('exit-cov', ++this.synth);
     const u = this.addUtxo({ txid, index, amount: value, spk: this.kob.scriptPublicKey(exit), covenantId: cov, daa, kind: 'order' });

@@ -21,7 +21,8 @@ contract KobAsk(
     int init_slope,
     int init_priceEnd,
     int init_decayStep,
-    int init_amountLeft
+    int init_amountLeft,
+    byte[32] init_extensionCommitment
 ) {
     // :: shared constants
     byte constant SCHEME_P2PK = 0x00;
@@ -110,6 +111,7 @@ contract KobAsk(
     int priceEnd = init_priceEnd;
     int decayStep = init_decayStep;
     int amountLeft = init_amountLeft;
+    byte[32] extensionCommitment = init_extensionCommitment;
 
     // :: entrypoints
     // :: leader entry (1:N)
@@ -128,6 +130,7 @@ contract KobAsk(
         byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 112);
         require(byte[32](tin.slice(10, 42)) == selfId);
         require(tin.slice(43, 46) == byte[](0x040100));
+        require(byte[32](tin.slice(80, 112)) == extensionCommitment);
         int tinAmount = int(byte[8](tin.slice(1, 9)));
         require(tinAmount == amountLeft);
         noStrays(selfId, tokenIn);
@@ -221,6 +224,7 @@ contract KobAsk(
                     priceEnd: priceEnd,
                     decayStep: decayStep,
                     amountLeft: amountLeft - n,
+                    extensionCommitment: extensionCommitment,
                 });
             } else {
                 require(tif != TIF_FOK || outAmount == 0);

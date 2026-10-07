@@ -46,6 +46,8 @@ export interface AskState {
   interval: I64; maxFill: I64; slope: I64; priceEnd: I64; decayStep: I64;
   /** base units in custody (the custody holds exactly this) */
   amountLeft: I64;
+  /** KCC-20 extension commitment of the custody (zero for KRON): the order takes no custody of another commitment */
+  extensionCommitment: Hex;
 }
 export interface BidState {
   maker: Hex; tokenCovId: Hex; tokenTplHash: Hex; tplPrefixLen: I64; tplSuffixLen: I64; extensionCommitment: Hex;
@@ -64,6 +66,8 @@ export interface CondAskState {
   minTouch: I64; minRestDaa: I64; armed: I64; bandDaa: I64; keeperTip: I64; amountLeft: I64;
   /** repeat IFD: the entry's budget rate (sompi per whole token) returned to it */
   parent: Hex; rptPrice: I64; rptUntil: I64;
+  /** KCC-20 extension commitment of the custody (zero for KRON); an if-done exit: its entry's `extensionCommitment` */
+  extensionCommitment: Hex;
 }
 export interface CondBidState {
   maker: Hex; tokenCovId: Hex; tokenTplHash: Hex; tplPrefixLen: I64; tplSuffixLen: I64; extensionCommitment: Hex;

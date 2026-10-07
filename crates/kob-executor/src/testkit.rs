@@ -120,6 +120,7 @@ pub fn ask(maker: u8, price: i64) -> AskState {
         price_end: 0,
         decay_step: 1_000,
         amount_left: 10 * WHOLE,
+        extension_commitment: EXT,
     }
 }
 
@@ -182,6 +183,7 @@ pub fn cond_ask(maker: u8) -> CondAskState {
         parent: [0; 32],
         rpt_price: 0,
         rpt_until: 0,
+        extension_commitment: EXT,
     }
 }
 
@@ -314,9 +316,11 @@ pub fn kron(s: AnyState) -> AnyState {
         }};
     }
     match s.into_family(Family::Kcc20) {
-        AnyState::KobAsk(a) => AnyState::KobAskKron(retoken!(a)),
+        AnyState::KobAsk(a) => AnyState::KobAskKron(AskState { extension_commitment: [0; 32], ..retoken!(a) }),
         AnyState::KobBid(b) => AnyState::KobBidKron(BidState { extension_commitment: [0; 32], ..retoken!(b) }),
-        AnyState::KobCondAsk(c) => AnyState::KobCondAskKron(CondAskState { keeper_tip: kt(c.keeper_tip), ..retoken!(c) }),
+        AnyState::KobCondAsk(c) => {
+            AnyState::KobCondAskKron(CondAskState { extension_commitment: [0; 32], keeper_tip: kt(c.keeper_tip), ..retoken!(c) })
+        }
         AnyState::KobCondBid(c) => {
             AnyState::KobCondBidKron(CondBidState { extension_commitment: [0; 32], keeper_tip: kt(c.keeper_tip), ..retoken!(c) })
         }

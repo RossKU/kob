@@ -337,6 +337,7 @@ pub fn l_bid_of(id: u32, token: [u8; 32], p: TemplateId, maker: u8, price: i64, 
 pub fn l_ask_of(id: u32, token: [u8; 32], p: TemplateId, maker: u8, price: i64, amount: i64) -> ListedOrder {
     let mut a = ask(maker, price, amount, p);
     a.token_cov_id = token;
+    a.extension_commitment = ext_of(p);
     a.refund_tip = rtip(p);
     let custody = tcustody(p, token, a.custody_amount(), cid(id), 1_000);
     ListedOrder {

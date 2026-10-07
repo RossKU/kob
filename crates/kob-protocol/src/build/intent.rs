@@ -30,7 +30,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{check_custody, check_token_input, nb, pos, token_witness, BudgetFn, Token};
+use super::{check_custody, check_custody_ext, check_token_input, nb, pos, token_witness, BudgetFn, Token};
 use crate::artifacts::TemplateId;
 use crate::error::{invalid, Error, Result};
 use crate::family::Family;
@@ -438,6 +438,7 @@ fn plan_ask(a: &IntentAsk, token: Token, lock: i64) -> Result<AskPlan> {
         return invalid(format!("an ask of the {} program; the intent buys {} tokens", p.name(), token.1.name()));
     }
     check_custody(&a.custody, Some(cov), token, s.custody_amount())?;
+    check_custody_ext(&a.custody, s.extension_commitment)?;
     if s.slope != 0 || s.interval != 0 {
         return invalid("intent executions take plain asks only (no auction, no TWAP)");
     }

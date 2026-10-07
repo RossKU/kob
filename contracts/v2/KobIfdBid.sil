@@ -36,7 +36,8 @@ pragma silverscript ^0.1.0;
 //
 // Fill of n base units:
 //   - creates ONE exit: a fresh covenant whose script is exactly P2SH(KobCondAsk prefix || exitState || suffix)
-//     with amountLeft := n and the repeat fields (template bytes supplied by the filler, checked against COND_TPL);
+//     with amountLeft := n, the repeat fields and the exit's extensionCommitment := this entry's (the commitment of
+//     the tokens it delivers into the exit's custody) (template bytes supplied by the filler, checked against COND_TPL);
 //   - delivers the n bought base units into the exit's custody (owner = the exit's covenant id, owner_scheme 0x04)
 //     at output i (i = this input's index); the exit's quantity IS its token amount, so IFO legs scale with the fill;
 //   - if an amount remains (or the entry repeats) continues as this script with amountLeft - n and the unused budget;
@@ -150,10 +151,11 @@ contract KobIfdBid(
     }
 
     byte constant SIGHASH_ALL = 0x01;
-    // MAX_IDLE: 90 days of DAA. BID_STATE_LEN: KobBid state. EXIT_STATE_LEN: KobCondAsk state with repeat fields.
+    // MAX_IDLE: 90 days of DAA. BID_STATE_LEN: KobBid state. EXIT_STATE_LEN: KobCondAsk state with repeat fields and
+    // extensionCommitment.
     int constant MAX_IDLE = 77760000;
     int constant BID_STATE_LEN = 285;
-    int constant EXIT_STATE_LEN = 330;
+    int constant EXIT_STATE_LEN = 363;
     // The scans over these slots are unrolled by hand (one line per slot): raising a cap needs as many scan lines.
     int constant MAX_TOK_IN = 8;
     // Merge argument -(k * MERGE_K + m): input index k < 1024, amount m < MERGE_K (2^53).
@@ -266,7 +268,8 @@ contract KobIfdBid(
             // so the entry cannot prove that it created the exit; it requires instead that every immutable
             // byte is what fill writes: the committed exitState outside the mutable stopPrice [181..189),
             // armed [244..252) and amountLeft [271..279) windows (state offsets), then parent = this entry
-            // and rptPrice = this entry's budget rate (rptUntil [322..330) is not compared). A look-alike exit
+            // and rptPrice = this entry's budget rate (rptUntil [322..330) is not compared), and extensionCommitment
+            // [331..363) = this entry's (the commitment of its custody, as fill writes it). A look-alike exit
             // someone else funds therefore pays THIS maker on THIS maker's terms, and the budget it
             // must return (floor below) funds everything it re-arms: it can only give, never take.
             byte[] x = tplState(k, COND_PRE, EXIT_STATE_LEN, COND_SUF, COND_TPL);
@@ -276,6 +279,7 @@ contract KobIfdBid(
             require(x.slice(252, 271) == st.slice(252, 271));
             int rate = price + tip;
             require(x.slice(279, 322) == byte[](0x20) + byte[](selfId) + byte[](0x08) + byte[](rate as byte[8]) + byte[](0x08));
+            require(x.slice(330, 363) == byte[](0x20) + extensionCommitment);
             // the exit's sigscript starts with the 8-byte push of its settle's n (0 = its refund, excluded by
             // m > 0): cancel starts with the maker's 65-byte signature and update refuses to run next to this entry
             require(OpTxInputScriptSigSubstr(k, 0, 1) == byte[](0x08));
@@ -351,10 +355,12 @@ contract KobIfdBid(
             // that id, and the group holds exactly this one output.
             require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == COND_TPL);
             // the committed exit state with amountLeft (state [271..279)) := n, then the repeat fields parent
-            // (0x20 + 32 B), rptPrice (0x08 + 8 B), rptUntil (0x08 + 8 B) written by this entry
+            // (0x20 + 32 B), rptPrice (0x08 + 8 B), rptUntil (0x08 + 8 B) and extensionCommitment (0x20 + 32 B: this
+            // entry's, the commitment of the custody it delivers) written by this entry
             byte[] exitSpk = byte[](new ScriptPubKeyP2SHFromRedeemScript(
                 cPre + byte[](exitState).slice(0, 271) + byte[](nb) + byte[](0x20) + byte[](xParent) + byte[](0x08)
-                    + byte[](xPrice as byte[8]) + byte[](0x08) + byte[](xUntil as byte[8]) + cSuf
+                    + byte[](xPrice as byte[8]) + byte[](0x08) + byte[](xUntil as byte[8]) + byte[](0x20) + extensionCommitment
+                    + cSuf
             ));
             require(tx.outputs[exitOut].scriptPubKey == exitSpk);
             byte[32] exitId = OpOutputCovenantId(exitOut);

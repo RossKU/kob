@@ -265,6 +265,7 @@ export function condAskState(env: PlanEnv, b: CondBase, l: Legs): CondAskState {
     parent: ZERO32,
     rptPrice: '0',
     rptUntil: '0',
+    extensionCommitment: tk.extensionCommitment,
   };
 }
 

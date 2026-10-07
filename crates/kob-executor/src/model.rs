@@ -417,10 +417,13 @@ pub fn terms_of(s: &AnyState) -> Terms {
     }
 }
 
-/// Extension commitment recorded in the state (bid-side kinds carry it; ask-side kinds get it from
-/// the placement record's custody part).
+/// Extension commitment recorded in the state (every KAS-book kind names it: an ask and a conditional ask the one of
+/// its custody, a sell-first entry in its committed exit, a bid-side kind the one it delivers).
 pub fn extension_of(s: &AnyState) -> Option<[u8; 32]> {
     match s {
+        AnyState::KobAsk(a) | AnyState::KobAskKron(a) => Some(a.extension_commitment),
+        AnyState::KobCondAsk(a) | AnyState::KobCondAskKron(a) => Some(a.extension_commitment),
+        AnyState::KobIfdAsk(a) | AnyState::KobIfdAskKron(a) => a.exit().ok().map(|x| x.extension_commitment),
         AnyState::KobBid(a) | AnyState::KobBidKron(a) => Some(a.extension_commitment),
         AnyState::KobCondBid(a) | AnyState::KobCondBidKron(a) => Some(a.extension_commitment),
         AnyState::KobIfdBid(a) | AnyState::KobIfdBidKron(a) => Some(a.extension_commitment),

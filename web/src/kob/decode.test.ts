@@ -280,7 +280,10 @@ describe('expected: the planner\'s claims are compared with the derived facts', 
     const built = buildGolden('create.ifdBid');
     const s = decode(built);
     const entry = orderStateOf('create.ifdBid');
-    const exitPlain = kob.decodeState('KobCondAsk', (entry.state as any).exitState + '20' + '00'.repeat(32) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8)) as OrderState;
+    const exitPlain = kob.decodeState(
+      'KobCondAsk',
+      (entry.state as any).exitState + '20' + '00'.repeat(32) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8) + '20' + (entry.state as any).extensionCommitment,
+    ) as OrderState;
     const withExit = decode(built, { expected: { orders: [entry, { ...exitPlain, state: { ...exitPlain.state, amountLeft: '5000' } } as OrderState] } });
     expect(withExit.blocking).toEqual([]);
     expect(s.blocking).toEqual([]);

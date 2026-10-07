@@ -379,17 +379,27 @@ fn ctor_files_match_typed_states() {
     assert_eq!(ArtifactValue::Int(s.expiry_daa), ctor[11]);
     assert_eq!(ArtifactValue::Int(s.decay_step), ctor[17]);
     assert_eq!(ArtifactValue::Int(s.amount_left), ctor[18]);
+    assert_eq!(ArtifactValue::Bytes(s.extension_commitment.to_vec()), ctor[19]);
     // The hand-coded offsets the covenants read (the touch evidence of KobCondAsk & co.) match the encoding.
     let st = s.encode();
+    assert_eq!(st.len(), 276);
     assert_eq!(&st[34..66], &s.token_cov_id);
+    // extensionCommitment closes the state (KobAsk.sil: redeem [245..277) after its 0x20 push)
+    assert_eq!(&st[244..276], &s.extension_commitment);
     assert_eq!(i64::from_le_bytes(st[118..126].try_into().unwrap()), s.scale);
     assert_eq!(i64::from_le_bytes(st[136..144].try_into().unwrap()), s.price);
     // The committed exit prefixes end right before the repeat fields.
     let ib = IfdBidState::decode(&template(TemplateId::KobIfdBid).contract().compiled.bytecode[1..1 + 585]).unwrap();
     assert_eq!(ib.exit_state.len(), IFD_BID_EXIT_COMMIT);
-    let ca = CondAskState::decode(&template(TemplateId::KobCondAsk).contract().compiled.bytecode[1..1 + 330]).unwrap();
-    let ib = IfdBidState { exit_state: IfdBidState::commit_exit(&ca), ..ib };
+    let ca = CondAskState::decode(&template(TemplateId::KobCondAsk).contract().compiled.bytecode[1..1 + 363]).unwrap();
+    // the exit's extensionCommitment (state [331..363)) closes the state: the entry writes its own
+    assert_eq!(&ca.encode()[331..363], &ca.extension_commitment);
+    let ib = IfdBidState { exit_state: IfdBidState::commit_exit(&ca), extension_commitment: ca.extension_commitment, ..ib };
     assert_eq!(ib.exit().unwrap(), ca);
+    assert_ne!(
+        IfdBidState { extension_commitment: [0x5a; 32], ..ib.clone() }.exit().unwrap().extension_commitment,
+        ca.extension_commitment
+    );
     let b = Booking { parent: [9; 32], until: 77 };
     let x = ib.exit_for(3, Some(b)).unwrap();
     assert_eq!((x.amount_left, x.parent, x.rpt_price, x.rpt_until), (3, [9; 32], ib.price + ib.tip, 77));
@@ -442,18 +452,21 @@ fn mutable_windows_match_the_encoding() {
             j["state"]["parent"] = serde_json::Value::String("ab".repeat(32));
             let rs = serde_json::from_value::<AnyState>(j).unwrap().redeem();
             assert_eq!(&rs[a + 1..a + 33], &[0xab; 32], "{}", id.name());
-            // the repeat fields end the state; a KobCondPair's sExt (0x20 + 32 B) follows them
-            let tail = if id == TemplateId::KobCondPair { 33 } else { 0 };
+            // the repeat fields end the state; a KobCondPair's sExt and a KobCondAsk's extensionCommitment (0x20 + 32 B)
+            // follow them
+            let tail = if matches!(id, TemplateId::KobCondPair | TemplateId::KobCondAsk) { 33 } else { 0 };
             assert_eq!(b + tail, 1 + t.state_len, "{}: the repeat fields end the state", id.name());
         }
     }
 }
 
-/// KRON: same fields as KCC-20 except the bid-side kinds have no extension commitment; the state
+/// KRON: same fields as KCC-20 except the KRON kinds have no extension commitment; the state
 /// codec drops it (and refuses a non-zero one), the committed exit of a KRON sell-first entry is 288 B.
 #[test]
 fn kron_states_have_no_extension_commitment() {
     for (kcc, kron) in [
+        (TemplateId::KobAsk, TemplateId::KobAskKron),
+        (TemplateId::KobCondAsk, TemplateId::KobCondAskKron),
         (TemplateId::KobBid, TemplateId::KobBidKron),
         (TemplateId::KobCondBid, TemplateId::KobCondBidKron),
         (TemplateId::KobIfdBid, TemplateId::KobIfdBidKron),

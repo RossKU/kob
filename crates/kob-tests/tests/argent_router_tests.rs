@@ -309,6 +309,7 @@ fn ask_art(t: &Token, tok: Hash, p: &AskP, prog: Prog) -> SilAbiArtifact {
         int(p.price_end),
         int(p.decay_step),
         int(p.amount),
+        bytes(&EXT),
     ];
     compile_contract(&order_src("KobAsk", prog), &args, CompileOptions::default()).expect("compile KobAsk")
 }

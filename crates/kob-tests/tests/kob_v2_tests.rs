@@ -460,6 +460,7 @@ impl Net {
             int(p.price_end),
             int(p.decay_step),
             int(p.amount),
+            bytes(&EXT),
         ]);
         compile_contract(&src("KobAsk"), &a, CompileOptions::default()).expect("compile KobAsk")
     }
@@ -512,6 +513,7 @@ impl Net {
             bytes(&p.parent),
             int(p.rpt_price),
             int(p.rpt_until),
+            bytes(&EXT),
         ]);
         compile_contract(&src("KobCondAsk"), &a, CompileOptions::default()).expect("compile KobCondAsk")
     }
@@ -2081,9 +2083,9 @@ fn v2_sizes_layouts_sigops() {
     let n = &f.net;
     let m = pk(&f.maker_a);
     let arts = [
-        ("KobAsk", n.ask(&AskP::new(m, P250)), 243),
+        ("KobAsk", n.ask(&AskP::new(m, P250)), 276),
         ("KobBid", n.bid(&BidP::new(m, P250)), 285),
-        ("KobCondAsk", n.cond(&CondP::oco(m)), 330),
+        ("KobCondAsk", n.cond(&CondP::oco(m)), 363),
         ("KobIfdBid", n.ifd(&IfdP::limit(m, 10 * TOK, P260, ifd_exit(m))), 585),
     ];
     for (name, a, st) in arts.iter() {
@@ -3787,7 +3789,7 @@ fn rpt_merge(f: &Fx, k: &MergeKnobs) -> Scn {
 /// script of the KobCondAsk length whose would-be state holds `parent` at the parent offset,
 /// executing as "drop, drop, true"; its first sigscript push is 0x08 || m.
 fn fake_exit(f: &Fx, parent: Hash, m: i64, value: i64) -> Inp {
-    let size = f.net.cond_tpl.pre.len() + 330 + f.net.cond_tpl.suf.len();
+    let size = f.net.cond_tpl.pre.len() + 363 + f.net.cond_tpl.suf.len();
     let data_len = size - 6;
     let mut data = vec![0u8; data_len];
     // state span = redeem[1..331); parent at state [280..312) = redeem [281..313) = data [278..310)

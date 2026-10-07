@@ -62,7 +62,8 @@ against the templates by `kob_protocol::state::mutable_windows`, wasm `mutableWi
 | `KobIfdPair` (both families) | `armed` [440..448), `amountLeft` [449..457), `custody` [458..466), `rptAmount` [467..475) |
 
 The KRON kinds (`…Kron`) have no token extension commitment: `KobAskKron`, `KobCondAskKron` and `KobIfdAskKron` have
-the windows above unchanged, and the bid-side kinds sit 33 bytes earlier:
+the windows above unchanged (the `extensionCommitment` of `KobAsk` and `KobCondAsk` is their last field), and the
+bid-side kinds sit 33 bytes earlier:
 
 | Kind | Mutable fields (bytecode payload windows) |
 |---|---|
@@ -86,17 +87,18 @@ the id) is unproven: listed nowhere, in no book, depth or count.
 If-done exits are derived from the entry: the exit's state is the committed `exitState` with
 `amountLeft := n` (a pair exit also `custody :=` its custody: n of A for a buy-first entry, the proceeds plus the
 prefund of the fill for a sell-first one, read from the fill's arguments), followed by the repeat fields the entry writes
-itself (`parent`, `rptPrice`, [`rptPre`,] `rptUntil`: zero for a plain exit, §6.1; a pair exit then `sExt`, the entry's
-`aExt` / `bExt` of the exit's custody token); its covenant id is the genesis id of
-the entry's fill output (§6). The repeat fields of an exit are immutable (bytecode `KobCondAsk`
-[280..331), `KobCondBid` [322..382); KRON `KobCondAskKron` [280..331), `KobCondBidKron` [289..349); `KobCondPair`
-[451..511), then its `sExt` [512..544)).
+itself (`parent`, `rptPrice`, [`rptPre`,] `rptUntil`: zero for a plain exit, §6.1; a `KobCondAsk` exit then its
+`extensionCommitment`, the entry's own; a pair exit then `sExt`, the entry's `aExt` / `bExt` of the exit's custody token);
+its covenant id is the genesis id of the entry's fill output (§6). The repeat fields of an exit are immutable (bytecode
+`KobCondAsk` [280..331), then its `extensionCommitment` [332..364), `KobCondBid` [322..382); KRON `KobCondAskKron`
+[280..331), `KobCondBidKron` [289..349); `KobCondPair` [451..511), then its `sExt` [512..544)).
 
 ### 1.2 Custody validation
 
 An ask-side order (`KobAsk`, `KobCondAsk`, `KobIfdAsk`) is listable only while exactly one live
 token UTXO owned by its covenant id (KCC-20 owner scheme 0x04; KRON `id_type` 2, `is_minter` 0) holds exactly `amountLeft`
-base units. Any other token UTXO owned by an order id (sent outside the protocol) is a **stray**:
+base units, KCC-20: of the extension commitment the state names (`extensionCommitment` of `KobAsk` / `KobCondAsk`, the
+committed exit's of `KobIfdAsk`; the covenants refuse a custody of another commitment, which is another token). Any other token UTXO owned by an order id (sent outside the protocol) is a **stray**:
 
 - the indexer MUST flag strays and MUST NOT count them as liquidity;
 - a matcher or keeper MUST NOT put a stray in any transaction (the covenants refuse it: the fill,
@@ -1000,7 +1002,7 @@ for both tokens `KobPair` 6 to 11, `KobCondPair` 7 to 21 (a stop armed in its fi
 (a sell-first fill that arms its stop entry and books its exit 34); over every program pair at most 72, 91 and 136 (the
 largest token programs, whose custody inputs the scans read).
 
-**Template sizes.** `KobPair` 2,960 B (state 447 B), `KobCondPair` 6,272 B (state 543 B), `KobIfdPair` 8,822 B (state
+**Template sizes.** `KobPair` 2,960 B (state 447 B), `KobCondPair` 6,284 B (state 543 B), `KobIfdPair` 8,834 B (state
 909 B; the committed exit 432 B). The scans of both tokens are unrolled to `MAX_TOK_IN` = 8 slots each (a KRON program
 accepts fewer), so every spend of a pair order pays for them; a larger route or net is split into several fills (§7).
 

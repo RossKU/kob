@@ -113,6 +113,7 @@ export function makeAsk(env: PlanEnv, p: AskParams): OrderState {
     priceEnd: str(p.priceEnd ?? 0n),
     decayStep: str(p.decayStep ?? 1n),
     amountLeft: str(p.amount),
+    extensionCommitment: m.extensionCommitment,
   };
   return { kind: kindFor('KobAsk', m.family), state: st } as OrderState;
 }

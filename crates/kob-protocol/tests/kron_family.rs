@@ -165,6 +165,10 @@ fn family_mismatches_are_refused() {
     c.order = c.order.clone().into_family(Family::Kcc20);
     refused(&Action::CreateOrder(c), "KCC-20 kind, KRON token", "family");
     let Action::CreateOrder(mut c) = kcc20("create.ask") else { panic!() };
+    // (with a zero commitment: a KRON kind carries none)
+    if let AnyState::KobAsk(a) = &mut c.order {
+        a.extension_commitment = [0; 32];
+    }
     c.order = c.order.clone().into_family(Family::Kron);
     refused(&Action::CreateOrder(c), "KRON kind, KCC-20 token", "family");
     // A token UTXO of the other family under a token.
@@ -177,6 +181,11 @@ fn family_mismatches_are_refused() {
         b.extension_commitment = common::EXT;
     }
     refused(&Action::CreateOrder(c), "extension commitment on KRON", "extension commitment");
+    let Action::CreateOrder(mut c) = kron("create.ask") else { panic!() };
+    if let AnyState::KobAskKron(a) = &mut c.order {
+        a.extension_commitment = common::EXT;
+    }
+    refused(&Action::CreateOrder(c), "extension commitment on a KRON ask", "extension commitment");
     // A token program that is neither family's.
     let Action::CreateOrder(mut c) = kron("create.ask") else { panic!() };
     if let AnyState::KobAskKron(a) = &mut c.order {

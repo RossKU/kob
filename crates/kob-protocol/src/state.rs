@@ -108,8 +108,8 @@ impl FieldValue for Vec<u8> {
     }
 }
 
-/// Contract field of the token extension commitment. KRON tokens have none: the KRON adapters of
-/// the bid-side kinds have no such state field, and the typed states carry it as all zeros.
+/// Contract field of the token extension commitment. KRON tokens have none: the KRON adapters have no
+/// such state field, and the typed states carry it as all zeros.
 pub(crate) const EXT_KEY: &str = "extensionCommitment";
 
 /// A typed state as the ABI's field map (contract field name -> value).
@@ -159,8 +159,8 @@ pub(crate) fn decode_fields(
 /// Common interface of every typed state.
 ///
 /// A typed state is the KCC-20 layout of its kind; the KRON adapters have the same fields, except
-/// that the bid-side kinds (`KobBid`, `KobCondBid`, `KobIfdBid`) lack the token extension
-/// commitment: the typed state keeps the field (`[0; 32]` for KRON) and the KRON codec drops it.
+/// that `KobAsk`, `KobCondAsk` and the bid-side kinds (`KobBid`, `KobCondBid`, `KobIfdBid`) lack the token
+/// extension commitment: the typed state keeps the field (`[0; 32]` for KRON) and the KRON codec drops it.
 /// The `*_as` codecs take the template of the family; the plain ones are the KCC-20 templates.
 /// The pair kinds are one template for both families (state fields name the family of each token).
 pub trait StateCodec: FieldMap {
@@ -333,6 +333,9 @@ kob_state!(
         decay_step: i64 => "decayStep",
         /// Base units in custody (mutable): the custody holds exactly `amountLeft`.
         amount_left: i64 => "amountLeft",
+        /// KCC-20 extension commitment of the custody (zero for KRON, whose template has no such field): the order takes
+        /// no custody of another commitment.
+        extension_commitment: [u8; 32] => "extensionCommitment",
     }
 );
 
@@ -407,6 +410,9 @@ kob_state!(
         rpt_price: i64 => "rptPrice",
         /// Repeat IFD: from this DAA a take-profit may skip the entry.
         rpt_until: i64 => "rptUntil",
+        /// KCC-20 extension commitment of the custody (zero for KRON); an if-done exit: its entry's
+        /// `extensionCommitment`, written by the entry.
+        extension_commitment: [u8; 32] => "extensionCommitment",
     }
 );
 
@@ -1383,6 +1389,14 @@ fn repeat_tail(parent: [u8; 32], rpt_price: i64, rpt_pre: Option<i64>, until: i6
     v
 }
 
+/// The extension commitment a buy-first entry writes behind the repeat fields of its `KobCondAsk` exit (`0x20 ext`: its
+/// own `extensionCommitment`, the commitment of the custody it delivers; zero for KRON, whose exit has no such field).
+fn ext_tail(ext: [u8; 32]) -> Vec<u8> {
+    let mut v = vec![0x20];
+    v.extend_from_slice(&ext);
+    v
+}
+
 impl IfdBidState {
     /// The exit prefix a buy-first entry commits to (the exit must not be booked).
     pub fn commit_exit(exit: &CondAskState) -> Vec<u8> {
@@ -1393,7 +1407,9 @@ impl IfdBidState {
         if self.exit_state.len() != IFD_BID_EXIT_COMMIT {
             return Err(StateError::Codec("KobIfdBid", format!("exitState must be {IFD_BID_EXIT_COMMIT} bytes")));
         }
-        CondAskState::decode(&[self.exit_state.clone(), repeat_tail([0; 32], 0, None, 0)].concat())
+        CondAskState::decode(
+            &[self.exit_state.clone(), repeat_tail([0; 32], 0, None, 0), ext_tail(self.extension_commitment)].concat(),
+        )
     }
     /// The exit a fill of n creates (booked when the entry repeats and `rptAmount > n`).
     pub fn exit_for(&self, n: i64, booking: Option<Booking>) -> Result<CondAskState, StateError> {
@@ -1683,13 +1699,40 @@ impl AnyState {
             s @ (AnyState::KobPair(_) | AnyState::KobCondPair(_) | AnyState::KobIfdPair(_)) => s,
         }
     }
-    /// Token extension commitment the state carries (`None` for the kinds that do not: asks,
-    /// sell-side conditionals and sell-first entries have none).
+    /// Token extension commitment the state carries (`None` for the kinds that do not: a sell-first entry names it in its
+    /// committed exit, [`AnyState::custody_ext`], a pair order per token).
     pub fn extension_commitment(&self) -> Option<[u8; 32]> {
         match self {
+            AnyState::KobAsk(s) | AnyState::KobAskKron(s) => Some(s.extension_commitment),
+            AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => Some(s.extension_commitment),
             AnyState::KobBid(s) | AnyState::KobBidKron(s) => Some(s.extension_commitment),
             AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => Some(s.extension_commitment),
             AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => Some(s.extension_commitment),
+            _ => None,
+        }
+    }
+    /// The KCC-20 extension commitment the order's covenant requires of its custody of `token` (`None`: the order holds no
+    /// custody of that token, or the state cannot name one): `extensionCommitment` of a `KobAsk` / `KobCondAsk`, the
+    /// committed exit's of a `KobIfdAsk` (the token its exits buy back, and a merge's new custody), `sExt` / `aExt` /
+    /// `bExt` of the pair orders. Units of the token's covenant id with another commitment are another token: the
+    /// covenant refuses them as its custody. Zero for a KRON token (which has none).
+    pub fn custody_ext(&self, token: [u8; 32]) -> Option<[u8; 32]> {
+        if let Some(t) = self.pair_tokens() {
+            return if token == t.a.cov_id {
+                t.a.ext
+            } else if token == t.b.cov_id {
+                t.b.ext
+            } else {
+                None
+            };
+        }
+        if token != self.token_cov_id() {
+            return None;
+        }
+        match self {
+            AnyState::KobAsk(s) | AnyState::KobAskKron(s) => Some(s.extension_commitment),
+            AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => Some(s.extension_commitment),
+            AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => s.exit().ok().map(|x| x.extension_commitment),
             _ => None,
         }
     }

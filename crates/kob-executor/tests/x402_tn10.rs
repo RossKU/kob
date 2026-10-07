@@ -590,6 +590,7 @@ fn ask_state(maker: &Key, t: &Issued, n: i64, vdaa: u64) -> AskState {
         price_end: 0,
         decay_step: 1_000,
         amount_left: n * WHOLE,
+        extension_commitment: t.ext,
     }
 }
 

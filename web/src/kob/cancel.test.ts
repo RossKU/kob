@@ -502,7 +502,11 @@ describe('snapshots', () => {
     expect(code((v) => { v.state = undefined; })).toBe('state-unknown');
     expect(code((v) => { v.state = { kind: 'KobUnknown', state: {} } as never; })).toBe('state-unknown');
     expect(code((v) => { v.current = null; })).toBe('no-current-utxo');
-    expect(code((v) => { v.custody!.utxo = { ...tokenUtxoView(snap.custody!, 'custody'), state: undefined }; v.extension_commitment = null; })).toBe('no-extension-commitment');
+    // without the proven custody state and the view's commitment, the custody is rebuilt from the commitment the ask's state pins
+    const bare = orderViewOf(kob, snap);
+    bare.custody!.utxo = { ...tokenUtxoView(snap.custody!, 'custody'), state: undefined };
+    bare.extension_commitment = null;
+    expect(snapshotFromOrderView(bare).custody?.state).toEqual(snap.custody!.state);
   });
 
   // If-done exits (booked by an entry's fill, no placement record): the indexer serves the entry's extension commitment and the proven
@@ -555,19 +559,16 @@ describe('snapshots', () => {
       verify(planCancel(env(), snapshotFromOrderView(noExt)), `${name}: proven states only`);
     });
 
-    it('the view an earlier indexer served (no commitment, no states) cannot rebuild a KCC-20 exit custody', () => {
+    it('the view an earlier indexer served (no commitment, no states) rebuilds the exit custody from the commitment its state pins', () => {
       const old = served();
       old.extension_commitment = null;
       old.custody!.utxo = old.custody!.utxo ? { ...old.custody!.utxo, state: undefined } : null;
       old.strays = [];
-      const kcc20Custody = family === 'kcc20' && !!exit.custody;
-      if (kcc20Custody) {
-        expect(() => snapshotFromOrderView(old)).toThrow(SnapshotError);
-        try { snapshotFromOrderView(old); } catch (e) { expect((e as SnapshotError).code).toBe('no-extension-commitment'); }
-      } else {
-        // KRON has no commitment; a sell-first exit holds KAS and carries its commitment in its state
-        verify(planCancel(env(), snapshotFromOrderView(old)), `${name}: old view`);
-      }
+      // a buy-first exit (KobCondAsk) names its custody's commitment (its entry's, written by the entry); KRON has none; a sell-first exit
+      // holds KAS and carries its commitment in its state
+      const rebuilt = snapshotFromOrderView(old);
+      expect(rebuilt.custody?.state ?? null).toEqual(exit.custody?.state ?? null);
+      verify(planCancel(env(), rebuilt), `${name}: old view`);
     });
   });
 

@@ -80,6 +80,7 @@ ask_next_literal() { # $1 = group of the resting ask, $2 = take expression
             priceEnd: $a.priceEnd,
             decayStep: $a.decayStep,
             amountLeft: $a.amountLeft - $t,
+            extensionCommitment: $a.extensionCommitment,
         };
 EOT
 }

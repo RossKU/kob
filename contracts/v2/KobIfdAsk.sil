@@ -28,9 +28,11 @@ pragma silverscript ^0.1.0;
 // Build constants: COND_BID_TPL/PRE/SUF = KobCondBid template hash and prefix/suffix lengths (the exit);
 // ASK_TPL/PRE/SUF = KobAsk (trigger evidence).
 //
-// Custody: the token UTXO owned by this covenant id (owner_scheme 0x04) holding EXACTLY amountLeft base units. The entry
-// sells at all-in price - tip per whole token or better (tip >= 0, optional priority tip): a fill of n pays the exit at
-// least proceeds(n) = ceil(n * (p - tip) / scale), p >= tip. Stop entry
+// Custody: the token UTXO owned by this covenant id (owner_scheme 0x04) holding EXACTLY amountLeft base units, of the
+// extension commitment of the committed exit (exitState [118..150), the token the exit buys back; a merge's new custody
+// carries it too): units of the token's covenant id with another commitment are another token. The entry sells at
+// all-in price - tip per whole token or better (tip >= 0, optional priority tip): a fill of n pays the exit at least
+// proceeds(n) = ceil(n * (p - tip) / scale), p >= tip. Stop entry
 // (entryStop > 0, requires entryStop >= price): ARMED by touch evidence, the fill in the same transaction of a
 // resting KobAsk of this token (same scale) quoting <= entryStop (see touchAsk); once armed, the price is a descending auction
 // from entryStop down to `price` over bandDaa DAA from the arming time (bandDaa 0: `price` at once); the auction
@@ -154,7 +156,7 @@ contract KobIfdAsk(
     byte constant SIGHASH_ALL = 0x01;
     // MAX_IDLE: 90 days of DAA. ASK_STATE_LEN: KobAsk state. EXIT_STATE_LEN: KobCondBid state with repeat fields.
     int constant MAX_IDLE = 77760000;
-    int constant ASK_STATE_LEN = 243;
+    int constant ASK_STATE_LEN = 276;
     int constant EXIT_STATE_LEN = 381;
     // The scans over these slots are unrolled by hand (one line per slot): raising a cap needs as many scan lines.
     int constant MAX_TOK_IN = 8;
@@ -284,6 +286,8 @@ contract KobIfdAsk(
             require(byte[32](tin.slice(10, 42)) == selfId);
             require(tin.slice(43, 46) == byte[](0x040100));
             require(int(byte[8](tin.slice(1, 9))) == tinAmount);
+            // the custody carries the commitment of the committed exit (another commitment is another token)
+            require(ext == byte[32](byte[](exitState).slice(118, 150)));
         }
         noStrays(selfId, custody);
         int carriers = tx.inputs[self].value + tx.inputs[tokenIn].value;

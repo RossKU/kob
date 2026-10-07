@@ -15,8 +15,7 @@
 // KRON token is never delivered to an x402 merchant, so the router buys from no KRON ask).
 //
 // The KRON order states have the KCC-20 layouts without `extensionCommitment` (KRON has none): KobAskKron's
-// state equals KobAsk's field for field (KobAsk has no extension field either), KobBidKron's is KobBid's
-// without it. What each order really enforces is in the .sil and its tests (crates/kob-tests), not here
+// state is KobAsk's without its last field, KobBidKron's is KobBid's without it. What each order really enforces is in the .sil and its tests (crates/kob-tests), not here
 // (contracts/adapters/kron/README.md).
 
 state KobAskKronState {

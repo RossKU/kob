@@ -107,6 +107,7 @@ pub fn ask(maker: u8, price: i64, amount: i64, tpl: TemplateId) -> AskState {
         price_end: 0,
         decay_step: 1_000,
         amount_left: amount,
+        extension_commitment: EXT,
     }
 }
 
@@ -194,6 +195,7 @@ pub fn cond_ask(maker: u8, tp: i64, stop: i64, amount: i64, tpl: TemplateId) -> 
         parent: [0; 32],
         rpt_price: 0,
         rpt_until: 0,
+        extension_commitment: EXT,
     }
 }
 

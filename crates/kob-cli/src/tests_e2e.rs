@@ -84,6 +84,7 @@ fn ask(maker: u8, amount: i64) -> AskState {
         price_end: 0,
         decay_step: 1_000,
         amount_left: amount,
+        extension_commitment: EXT,
     }
 }
 

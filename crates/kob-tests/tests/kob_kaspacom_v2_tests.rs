@@ -109,6 +109,7 @@ fn ask(maker: u8, price: i64, amount: i64, refund_tip: i64) -> AskState {
         price_end: 0,
         decay_step: 1_000,
         amount_left: amount,
+        extension_commitment: EXT,
     }
 }
 fn bid(maker: u8, price: i64, refund_tip: i64) -> BidState {

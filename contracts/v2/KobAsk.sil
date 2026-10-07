@@ -17,7 +17,8 @@ pragma silverscript ^0.1.0;
 //
 // State: every per-order value is in the state span, so all asks share one template (prefix +
 // suffix). The only mutable field is amountLeft: a partial fill continues with this script with
-// amountLeft - n spliced in (continuation check = SPK equality). Everything else is immutable.
+// amountLeft - n spliced in (continuation check = SPK equality). Everything else is immutable; the
+// last field, extensionCommitment, is the KCC-20 extension commitment of the custody.
 //
 // Amounts and prices (one rule for every KOB order): an order is an amount of its base token (base units,
 // any amount, no lots) at a limit price in its quote token per WHOLE base token: price quote units per
@@ -30,7 +31,9 @@ pragma silverscript ^0.1.0;
 //
 // Key invariants:
 //  - Custody: one KCC-20 UTXO owned by this order's KIP-20 covenant id (owner_scheme 0x04, borrow
-//    disabled) holding EXACTLY amountLeft base units.
+//    disabled) holding EXACTLY amountLeft base units, of the extension commitment extensionCommitment: a
+//    KCC-20 token is (covenant id, program, extension commitment), so units of the token's covenant id
+//    with another commitment are another token, and every settle (fill, refund, IOC end) refuses them.
 //  - Strays: KCC-20 authorises every token UTXO owned by this covenant id whenever this input is
 //    spent. Hence the custody is identified by its exact amount (a stray or dust UTXO sent to this id
 //    can never stand in for it as tokenIn), and settle refuses any other token input owned by this id
@@ -87,7 +90,8 @@ contract KobAsk(
     int init_slope,
     int init_priceEnd,
     int init_decayStep,
-    int init_amountLeft
+    int init_amountLeft,
+    byte[32] init_extensionCommitment
 ) {
     pubkey maker = init_maker;               // payouts, token refunds, cancel key
     byte[32] tokenCovId = init_tokenCovId;   // KIP-20 covenant id of the KCC-20 token
@@ -108,6 +112,7 @@ contract KobAsk(
     int priceEnd = init_priceEnd;            // decay floor
     int decayStep = init_decayStep;          // decay: DAA per price step (> 0 when decaying)
     int amountLeft = init_amountLeft;        // custody holds exactly this many base units (mutable)
+    byte[32] extensionCommitment = init_extensionCommitment; // KCC-20 extension commitment of the custody
 
     struct KCC20State {
         int amount;
@@ -176,7 +181,8 @@ contract KobAsk(
     }
 
     // P2SH of this script with amountLeft replaced: the 8 payload bytes [236..244) of the redeem
-    // script (1-byte prefix + 243 B state; amountLeft is the last state field).
+    // script (1-byte prefix + 276 B state; amountLeft is followed only by the immutable
+    // extensionCommitment [245..277)).
     function contSpk(int newLeft) : byte[] {
         int self = this.activeInputIndex;
         int len = OpTxInputScriptSigLen(self);
@@ -199,6 +205,8 @@ contract KobAsk(
         byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 112);
         require(byte[32](tin.slice(10, 42)) == selfId);
         require(tin.slice(43, 46) == byte[](0x040100));
+        // the custody carries the commitment the order names (another commitment is another token)
+        require(byte[32](tin.slice(80, 112)) == extensionCommitment);
         int tinAmount = int(byte[8](tin.slice(1, 9)));
         // the custody is the token UTXO holding exactly amountLeft, and the only one owned here
         require(tinAmount == amountLeft);

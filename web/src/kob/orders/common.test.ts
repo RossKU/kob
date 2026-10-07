@@ -51,7 +51,7 @@ describe('state builders', () => {
       state: {
         maker: MAKER_PK, tokenCovId: env.token.covenantId, tokenTplHash: env.token.templateHash, tplPrefixLen: '1', tplSuffixLen: '2977', scale: '1000', minFill: '500',
         price: String(P), tip: '0', tif: '0', activeFrom: '0', expiryDaa: '99', refundTip: '3500000', interval: '0', maxFill: '0', slope: '0', priceEnd: '0',
-        decayStep: '1', amountLeft: '3000',
+        decayStep: '1', amountLeft: '3000', extensionCommitment: env.token.extensionCommitment,
       },
     });
     const b = makeBid(env, { minFill: 1n, price: P, expiryDaa: 99n, tif: 2, reserve: 7n });

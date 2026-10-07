@@ -129,9 +129,10 @@ its own token:
 | `KobIfdPair` buy-first (side 2) | one: the B escrow (exactly `custody`) |
 | `KobIfdPair` sell-first (side 1) | the A custody (exactly `amountLeft`), then the B **prefund** custody (exactly `custody`) when `custody > 0` |
 
-A record with a missing or an extra custody part, or a flag bit for a part it does not have, is rejected. A pair order's
-KCC-20 custody part must spell the extension commitment its state pins for that custody (`sExt` of `KobPair` /
-`KobCondPair`, `aExt` / `bExt` of `KobIfdPair`); any other is rejected.
+A record with a missing or an extra custody part, or a flag bit for a part it does not have, is rejected. An order's
+KCC-20 custody part must spell the extension commitment its state pins for that custody (`extensionCommitment` of
+`KobAsk` / `KobCondAsk`, the committed exit's `extensionCommitment` of `KobIfdAsk`, `sExt` of `KobPair` / `KobCondPair`,
+`aExt` / `bExt` of `KobIfdPair`); any other is rejected.
 
 The record carries no template hash: the family and the kind name the pinned template, so a payload cannot introduce a
 new template (new templates need a new protocol version). The custody amount is not recorded: it is `amountLeft` of the
@@ -144,16 +145,16 @@ and the record's family is the family of the pair's base token A.
 
 | Code | Template | State bytes | Custody part | Pinned template hash |
 |---|---|---|---|---|
-| `0x01` | `KobAsk` | 243 | yes | `126ff059…c8e0aa1` |
+| `0x01` | `KobAsk` | 276 | yes (`extensionCommitment`) | `070bb3b2…63b887c` |
 | `0x02` | `KobBid` | 285 | no | `b995661f…5e54fa3` |
-| `0x03` | `KobCondAsk` | 330 | yes | `40a8eb73…f087b74` |
-| `0x04` | `KobCondBid` | 381 | no | `076e7bd8…805bdfb` |
-| `0x05` | `KobIfdBid` | 585 | no | `50b58e7b…a9de292` |
-| `0x06` | `KobIfdAsk` | 594 | yes | `bbcfc226…7b3f0b2` |
+| `0x03` | `KobCondAsk` | 363 | yes (`extensionCommitment`) | `d9ed37c5…31e6adb` |
+| `0x04` | `KobCondBid` | 381 | no | `4300602a…1334d36` |
+| `0x05` | `KobIfdBid` | 585 | no | `1ba2519b…a51240d` |
+| `0x06` | `KobIfdAsk` | 594 | yes (its exit's `extensionCommitment`) | `edfb30d9…747cffd` |
 | `0x07` | reserved | — | — | never reused: a record of this kind is refused |
 | `0x08` | `KobPair` (pair order, token A KCC-20) | 447 | the custody of S (`sExt`) | `c95c9234…ab4a9c6` |
-| `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 543 | the custody of S (`sExt`) | `ba725a71…defda2b` |
-| `0x0a` | `KobIfdPair` (pair if-done entry, token A KCC-20) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `2d4266cf…084c30c` |
+| `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 543 | the custody of S (`sExt`) | `7b8f1a9e…9a6f06e` |
+| `0x0a` | `KobIfdPair` (pair if-done entry, token A KCC-20) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `466ed2ef…827d9b6` |
 
 KRON (family `0x02`), same kind codes:
 
@@ -167,8 +168,8 @@ KRON (family `0x02`), same kind codes:
 | `0x06` | `KobIfdAskKron` | 561 | yes (token output only) | `d523d794…9f014f6` |
 | `0x07` | reserved | — | — | refused |
 | `0x08` | `KobPair` (token A KRON; the same template as in family `0x01`) | 447 | the custody of S (`sExt`) | `c95c9234…ab4a9c6` |
-| `0x09` | `KobCondPair` (token A KRON; the same template) | 543 | the custody of S (`sExt`) | `ba725a71…defda2b` |
-| `0x0a` | `KobIfdPair` (token A KRON; the same template) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `2d4266cf…084c30c` |
+| `0x09` | `KobCondPair` (token A KRON; the same template) | 543 | the custody of S (`sExt`) | `7b8f1a9e…9a6f06e` |
+| `0x0a` | `KobIfdPair` (token A KRON; the same template) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `466ed2ef…827d9b6` |
 
 Full hashes: see `kob_protocol::artifacts::PINNED` (the artifacts in `contracts/artifacts`, also the `templates` list of
 the golden vectors).

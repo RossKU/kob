@@ -142,6 +142,7 @@ contract TokenToKasKron_sell2(
         int priceEnd;
         int decayStep;
         int amountLeft;
+        byte[32] extensionCommitment;
     }
     struct KobBidKronState {
         // :: user declared fields
@@ -218,6 +219,7 @@ contract TokenToKasKron_sell2(
         byte[32] parent;
         int rptPrice;
         int rptUntil;
+        byte[32] extensionCommitment;
     }
     struct KobCondBidState {
         // :: user declared fields

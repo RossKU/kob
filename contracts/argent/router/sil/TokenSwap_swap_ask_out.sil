@@ -38,7 +38,7 @@ contract TokenSwap_swap_ask_out(
     int constant MAX_TOKEN_OUTPUTS = 8;
 
     // :: linked templates
-    byte[32] constant gen__kob_orders__kob_ask_template_const = byte[32](0x126ff059375b459674df139dc644f6518cc26e831e998e9be7a4008c8c8e0aa1);
+    byte[32] constant gen__kob_orders__kob_ask_template_const = byte[32](0x070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c);
     byte[32] constant gen__kob_orders__kob_bid_template_const = byte[32](0xb995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3);
 
     // :: state layouts
@@ -143,6 +143,7 @@ contract TokenSwap_swap_ask_out(
         int priceEnd;
         int decayStep;
         int amountLeft;
+        byte[32] extensionCommitment;
     }
     struct KobBidKronState {
         // :: user declared fields
@@ -219,6 +220,7 @@ contract TokenSwap_swap_ask_out(
         byte[32] parent;
         int rptPrice;
         int rptUntil;
+        byte[32] extensionCommitment;
     }
     struct KobCondBidState {
         // :: user declared fields

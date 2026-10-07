@@ -733,7 +733,7 @@ fn check_custody(c: &TokenUtxo, order_cov: Option<[u8; 32]>, token: Token, amoun
     Ok(())
 }
 
-/// A pair order's custody carries the extension commitment the order pins (KCC-20; a KRON token has none): units of the
+/// An order's custody carries the extension commitment the order pins (KCC-20; a KRON token has none): units of the
 /// token's covenant id with another commitment are another token, and the order's covenant refuses them.
 pub(crate) fn check_custody_ext(c: &TokenUtxo, ext: [u8; 32]) -> Result<()> {
     if matches!(c.state, TokenState::Kcc20(_)) && c.state.extension() != ext {
@@ -742,14 +742,9 @@ pub(crate) fn check_custody_ext(c: &TokenUtxo, ext: [u8; 32]) -> Result<()> {
     Ok(())
 }
 
-/// The extension commitment a pair order pins for its custody of `token` (`None` for the KAS kinds).
+/// The extension commitment an order pins for its custody of `token` ([`AnyState::custody_ext`]).
 pub(crate) fn pinned_ext(s: &AnyState, token: [u8; 32]) -> Option<[u8; 32]> {
-    let t = s.pair_tokens()?;
-    if token == t.a.cov_id {
-        t.a.ext
-    } else {
-        t.b.ext
-    }
+    s.custody_ext(token)
 }
 
 pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
@@ -782,6 +777,10 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
                 return invalid("token inputs mix extension commitments");
             }
             d.add_token_input(t, token, token_witness(&t.state)?)?;
+        }
+        // the custody carries the commitment the order pins (its covenant refuses any other)
+        if fam == Family::Kcc20 && pinned_ext(&r.order, token.0).is_some_and(|e| Some(e) != ext) {
+            return invalid("the token inputs carry another extension commitment than the order pins for its custody");
         }
     } else if !r.tokens.is_empty() {
         return invalid("KAS-holding orders take no token inputs");
@@ -1431,6 +1430,9 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
         Some(amount) if amount > 0 => {
             let c = r.custody.as_ref().ok_or_else(|| Error::Invalid("token-holding order: custody token UTXO required".into()))?;
             check_custody(c, Some(order_cov), token, amount)?;
+            if let Some(e) = pinned_ext(&o.state, token.0) {
+                check_custody_ext(c, e)?;
+            }
             d.add_token_input(c, token, Witness::CovenantId)?;
             for f in &r.funding {
                 d.add_p2pk(f);
@@ -2240,6 +2242,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
             Leg::Ask { order, custody, t, .. } => {
                 let s = &order.state;
                 check_custody(custody, Some(cov_id), tok, s.custody_amount())?;
+                check_custody_ext(custody, s.extension_commitment)?;
                 merge_ext(tok.0, custody.state.extension())?;
                 if lock < s.active_from {
                     return invalid(format!("ask at leg {i} is not active before DAA {}", s.active_from));
@@ -2371,6 +2374,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
             Leg::CondAsk { order, custody, leg, evidence: ev, t, merge, .. } => {
                 let s = &order.state;
                 check_custody(custody, Some(cov_id), tok, s.custody_amount())?;
+                check_custody_ext(custody, s.extension_commitment)?;
                 merge_ext(tok.0, custody.state.extension())?;
                 if lock < s.active_from {
                     return invalid("conditional ask not active yet");
@@ -2585,6 +2589,8 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                             let c =
                                 m.custody.as_ref().ok_or_else(|| Error::Invalid("the merged entry's custody is required".into()))?;
                             check_custody(c, e.utxo.covenant_id, tok, es.custody_amount())?;
+                            // the entry's custody carries its committed exit's commitment (this exit's)
+                            check_custody_ext(c, s.extension_commitment)?;
                             merge_ext(tok.0, c.state.extension())?;
                             (c.state.with_amount(new_amount), c.utxo.amount, lay.at[&(i, Slot::Entry)])
                         } else {
@@ -2766,6 +2772,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
             Leg::IfdAsk { order, custody, evidence: ev, t, .. } => {
                 let s = &order.state;
                 check_custody(custody, Some(cov_id), tok, s.custody_amount())?;
+                check_custody_ext(custody, s.exit()?.extension_commitment)?;
                 merge_ext(tok.0, custody.state.extension())?;
                 if lock < s.active_from {
                     return invalid("if-done ask not active yet");

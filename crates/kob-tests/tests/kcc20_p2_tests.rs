@@ -208,6 +208,7 @@ impl Net {
             int(0),
             int(0),
             int(amount),
+            bytes(&EXT),
         ]);
         compile_contract(&order_src("KobAsk"), &a, CompileOptions::default()).expect("compile KobAsk")
     }

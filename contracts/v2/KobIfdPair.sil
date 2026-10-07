@@ -197,7 +197,8 @@ contract KobIfdPair(
     int constant FAM_KCC20 = 1;
     int constant FAM_KRON = 2;
     int constant MAX_IDLE = 77760000;
-    int constant ASK_STATE_LEN = 243;
+    int constant ASK_STATE_LEN = 276;
+    int constant ASK_STATE_LEN_KRON = 243;
     int constant BID_STATE_LEN = 285;
     int constant BID_STATE_LEN_KRON = 252;
     int constant PAIR_STATE_LEN = 447;
@@ -344,12 +345,13 @@ contract KobIfdPair(
             tpl = ASK_TPL;
             pre = ASK_PRE;
             suf = ASK_SUF;
+            len = ASK_STATE_LEN;
             if (fam == FAM_KRON) {
                 tpl = ASK_TPL_KRON;
                 pre = ASK_PRE_KRON;
                 suf = ASK_SUF_KRON;
+                len = ASK_STATE_LEN_KRON;
             }
-            len = ASK_STATE_LEN;
             d = 0;
             w = 0;
         }
@@ -410,12 +412,13 @@ contract KobIfdPair(
             tpl = ASK_TPL;
             pre = ASK_PRE;
             suf = ASK_SUF;
+            len = ASK_STATE_LEN;
             if (fam == FAM_KRON) {
                 tpl = ASK_TPL_KRON;
                 pre = ASK_PRE_KRON;
                 suf = ASK_SUF_KRON;
+                len = ASK_STATE_LEN_KRON;
             }
-            len = ASK_STATE_LEN;
             d = 0;
             w = 0;
         }
