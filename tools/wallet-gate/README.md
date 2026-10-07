@@ -111,7 +111,9 @@ lib/setup-core.mjs  one genesis tx: token covenant group + bids (own covenant id
 scripts/            fetch-sdk, keygen, setup, serve, build-templates (dev-only; needs silverc)
 web/                the static page (index.html, app.mjs, wallets.mjs adapters)
 artifacts/          KCC20Ref.json (silverc v1.0.0), BidOrder.template.json (sentinel-compiled; maker/tokenCovId patched at runtime)
-contracts/          the .sil sources
+contracts/          the .sil sources (KCC20Ref.ctor.json: the constructor arguments of KCC20Ref.json). Older copies, not the programs
+                    under the repository's contracts/; scripts/build-contracts.sh --check reproduces both artifacts from them
+                    (scripts/check-wallet-gate.mjs)
 test/               selfcheck, e2e-devkey, page-mock, wallets/*
 miner/              TN10 CPU miner
 ```

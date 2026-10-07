@@ -6,8 +6,9 @@
 #
 #   scripts/build-contracts.sh            write artifacts, contracts/argent and contracts/SHA256SUMS
 #   scripts/build-contracts.sh --check    fail (exit 1) if any of them differs, or if contracts/artifacts holds
-#                                         a file no source produces; writes nothing (two sources with
-#                                         the same basename are refused in both modes)
+#                                         a file no source produces, or if the wallet-gate kit's artifacts do not
+#                                         reproduce from its sources (scripts/check-wallet-gate.mjs); writes nothing
+#                                         (two sources with the same basename are refused in both modes)
 #   ... --upstream                        use the official silverc v1.0.0 release binary
 #                                         (downloaded, sha256-verified against contracts/silverc.lock)
 #                                         instead of building vendor/silverscript
@@ -28,7 +29,7 @@ for arg in "$@"; do
     --check) MODE=check ;;
     --upstream) UPSTREAM=1 ;;
     --no-argent) ARGENT=0 ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -84,6 +85,14 @@ fi
 # Argent side: KOBOrders (hand-written orders wrapped by sil2argent), KOBToken, router.
 if [ "$ARGENT" = 1 ]; then
   if [ "$MODE" = check ]; then scripts/build-argent.sh --check || fail=1; else scripts/build-argent.sh; fi
+fi
+
+# The wallet-gate kit's own program copies (tools/wallet-gate/contracts) and their artifacts: checked, never written
+# (scripts/check-wallet-gate.mjs; the kit's scripts/build-templates.mjs writes them).
+if [ "$MODE" = check ]; then
+  GATE_SILVERC=$COMPILER
+  if command -v cygpath >/dev/null 2>&1; then GATE_SILVERC=$(cygpath -m "$COMPILER"); fi
+  node scripts/check-wallet-gate.mjs "$GATE_SILVERC" || fail=1
 fi
 
 # Manifest of every input and output, so a change to any of them is visible in review. The deployment
