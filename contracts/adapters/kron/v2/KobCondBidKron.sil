@@ -360,7 +360,21 @@ contract KobCondBidKron(
         require(OpCovOutputCount(selfId) == 1);
         int selfOut = OpCovOutputIdx(selfId, 0);
         require(tx.outputs[selfOut].scriptPubKey == contSpk(newStop, amountLeft, newArmed));
-        require(tx.outputs[selfOut].value >= tx.inputs[self].value - keeperTip);
+        // The keeper's tip never comes out of the buying budget: the continuation keeps at least what buying amountLeft in
+        // one fill at its dearest leg (the take-profit / limit, or the stop with its whole band) costs, with the delivery
+        // carrier. A tip beyond what the order holds above that (ratchets beyond the funded ones) is not paid: the keeper
+        // takes less, at the least nothing.
+        int worst = tpPrice;
+        if (slipBps >= 0 && slipBps <= 10000 && newStop <= MAX_STOP) {
+            int stopTop = newStop + newStop * slipBps / 10000;
+            if (stopTop > worst) { worst = stopTop; }
+        }
+        require(scale > 0);
+        int floorOut = tx.inputs[self].value - keeperTip;
+        int need = quoteOf(amountLeft, worst + tip, 0) + deliveryCarrier;
+        if (floorOut < need) { floorOut = need; }
+        if (floorOut > tx.inputs[self].value) { floorOut = tx.inputs[self].value; }
+        require(tx.outputs[selfOut].value >= floorOut);
     }
 
     entry cancel(sig s) {

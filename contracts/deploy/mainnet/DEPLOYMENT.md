@@ -18,18 +18,18 @@ the same on every network.
 | KobAsk | `070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c` | 1 / 1407 |
 | KobBid | `b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3` | 1 / 1230 |
 | KobCondAsk | `d9ed37c5aa03d5c62619659f86c6a1e08ab4ba9a1092d144b2160935331e6adb` | 1 / 3166 |
-| KobCondBid | `4300602a57db412a07799ead7b812454a31b44f7565829d71c49606d11334d36` | 1 / 2854 |
-| KobIfdBid | `1ba2519b5107ae20303fee6fc1d3b6600103eb2889caf729a1a04c139a51240d` | 1 / 3234 |
-| KobIfdAsk | `edfb30d9e8115924ecea0924625ce76a7f807f671076e010f96fef6e0747cffd` | 1 / 4324 |
+| KobCondBid | `00c5f808562dc4ead4121f992de13959896042dbe717ad84c130f463acd36a1f` | 1 / 3051 |
+| KobIfdBid | `6aaaa5447c3d9d27294e4e49c8eb988f4347ec0af7543c2d7b94cabb19be031e` | 1 / 3203 |
+| KobIfdAsk | `a2f5cb8da7cc60da43c625f2cffd747294df952800b2545fa9f5eee5d3c53d79` | 1 / 4275 |
 | KobPair | `c95c92344f08c42992699b0e467cf32fe573dda9b879250438d60a13cab4a9c6` | 1 / 2512 |
 | KobCondPair | `7b8f1a9e957a9def15fd835fb2e47331ccfcc856978f6408f8a3c7a519a6f06e` | 1 / 5740 |
-| KobIfdPair | `466ed2effad16c558d362d072f813dc727c10cdf899c2d90833fb5520827d9b6` | 1 / 7924 |
+| KobIfdPair | `4a432afb1bd314e43a5497df414f9e8121866dfa59a59bad6f1a9d141e06669a` | 1 / 7879 |
 | KobAskKron | `f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d` | 1 / 1243 |
 | KobBidKron | `6ec1a3dd4a287b73295a08db5f75fedcac4966539d793e9d1a659711ad888efc` | 1 / 1090 |
 | KobCondAskKron | `6c4f92cee1613899b5d680e784b11fd567b1bfac63a5006018cc6c54cfd35839` | 1 / 2847 |
-| KobCondBidKron | `fb392f88a136f14708841895b2efae2a5070749ddeb0168c7405806aea7ed953` | 1 / 2579 |
-| KobIfdBidKron | `e5cff7ede2faeb58706cfd28e095dcefad552f1e3e92d8a12bd05a22c053496d` | 1 / 2945 |
-| KobIfdAskKron | `d523d794bcb15adbfb4b212e92f48ca65a1276de808aecc34e9b82c6f9f014f6` | 1 / 3841 |
+| KobCondBidKron | `31123deb07195bbe3142a4ca029f5461d9e04006f39471df9dbb379efb61a68c` | 1 / 2776 |
+| KobIfdBidKron | `a48f956099c2418d2a671c7b2ee9d56071030810b777e22dc31e090708a75ad6` | 1 / 2914 |
+| KobIfdAskKron | `393748e6f28b0f188b4573c6bd7cb6718b095b4c7c5e4438aacedf198b27b50f` | 1 / 3792 |
 
 The token programs are the reference artifacts too. Binaries embedding this record: see "Deployment
 builds" in contracts/README.md.

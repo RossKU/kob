@@ -847,7 +847,7 @@ fn exit_from_tx(
     let built = &p.lowered.built;
     let g =
         built.covenants.iter().find(|c| c.template == Some(kob_protocol::artifacts::TemplateId::KobCondAsk)).expect("exit genesis");
-    let until = rpt_until(entry.expiry_daa, p.plan.lock_time as i64, entry_daa as i64).expect("rptUntil");
+    let until = rpt_until(entry.expiry_daa, entry_daa as i64).expect("rptUntil");
     let state = entry.exit_for(n, Some(Booking { parent: entry_id, until })).unwrap();
     let idx = g.outputs[0] as usize;
     assert_eq!(built.tx.outputs[idx].script_public_key, kob_protocol::tx::spk_to_string(&AnyState::KobCondAsk(state.clone()).spk()));

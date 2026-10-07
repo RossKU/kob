@@ -28,7 +28,7 @@ pragma silverscript ^0.1.0;
 //     nb > 0,  upd 0  anyone: FILL n = nb base units of A (n <= amountLeft; n >= minFill unless it takes all that is
 //                     left). amt: BID the B released (sOut), ASK the proceeds tOut put into the exit's custody; exitOut:
 //                     the exit output; cPre / cSuf: the KobCondPair template prefix and suffix; evA / evB / tk / evMode:
-//                     the trigger evidence (an unarmed stop entry arms in the fill); t: auction / cycle time (CLTV).
+//                     the trigger evidence (an unarmed stop entry arms in the fill); t: auction time (CLTV).
 //     nb < 0,  upd 0  anyone, MERGE: re-arm m base units, spent together with the take-profit fill of the booked exit at
 //                     input k; nb = -(k * 2^53 + m). aOut / bOut: the output of a NEW A / B custody (when none is held);
 //                     xc: the exit's custody input (read when the exit sells out).
@@ -66,8 +66,10 @@ pragma silverscript ^0.1.0;
 // Repeat (trap-repeat): rptAmount > 0; rptAmount - 1 = base units of re-arms left (0 = not repeating).
 //   - A fill of n with rptAmount > n BOOKS its exit (n < 2^53): rptAmount -= n; the exit gets parent = this covenant
 //     id, rptPrice = price (BID: the budget rate; ASK: the proceeds rate; the tip is KAS and not part of either),
-//     rptPre = prefund (ASK; 0 for BID) and rptUntil = min(expiryDaa, max(entry UTXO DAA, t) + 90 days). Any other exit
-//     gets parent = rptPrice = rptPre = rptUntil = 0.
+//     rptPre = prefund (ASK; 0 for BID) and rptUntil = min(expiryDaa, entry UTXO DAA + 90 days). Any
+//     other exit gets parent = rptPrice = rptPre = rptUntil = 0. While at least one minimum fill of re-arms is left
+//     (rptAmount - 1 >= minFill), a fill takes at most rptAmount - 1 (it is booked): a larger one would leave the rest of
+//     the re-arms unused for good.
 //   - The booked exit's take-profit fill of m must run this entry's fill as MERGE (amountLeft += m at the ORIGINAL
 //     parameters, same script):
 //       BID: the B custody grows by exactly budget(m) = ceil(m * price / scale(A)) (at its index, or a NEW custody at
@@ -782,11 +784,13 @@ contract KobIfdPair(
                     xParent = selfId;
                     xPrice = price;
                     if (!buy) { xPre = prefund; }
-                    // t (CLTV-proven, a lower bound of now) dates the cycle; understating it only shortens it
-                    require(tx.daa >= t);
-                    int utxoDaa = OpTxInputDaaScore(self);
-                    int idleEnd = (t > utxoDaa ? t : utxoDaa) + MAX_IDLE;
+                    // the cycle counts from this entry's UTXO DAA (its last activity), never from an argument the filler chooses
+                    int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
                     xUntil = expiryDaa < idleEnd ? expiryDaa : idleEnd;
+                } else {
+                    // a fill of more than the re-arms left would leave them unused for good: while at least one minimum fill
+                    // of re-arms is left, a fill takes at most that many (and is booked)
+                    require(rptAmount <= 1 || rptAmount - 1 < minFill);
                 }
                 cont = newLeft > 0 || rptAmount > 0;
 

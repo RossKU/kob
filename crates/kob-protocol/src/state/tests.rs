@@ -604,6 +604,19 @@ fn covenant_arithmetic_is_checked_at_the_limits() {
     assert_eq!(refund_due(10, TIF_IOC, i64::MAX, 0), i64::MAX, "the kill time overflows: never refundable");
     assert_eq!(refund_due(10, TIF_GTC, 0, i64::MAX), i64::MAX);
     assert_eq!(refund_due(10, TIF_GTC, 0, 5), 10);
-    assert_eq!(rpt_until(i64::MAX, i64::MAX, 0), None);
-    assert_eq!(rpt_until(10, 0, 0), Some(10));
+    assert_eq!(rpt_until(i64::MAX, i64::MAX), None);
+    assert_eq!(rpt_until(10, 0), Some(10));
+    assert_eq!(rpt_until(i64::MAX, 5), Some(5 + 77_760_000), "from the entry UTXO's DAA alone");
+}
+
+#[test]
+fn a_repeating_entry_fills_at_most_its_re_arms_while_a_minimum_fill_of_them_is_left() {
+    // N = 100, K = 1, 30 booked: 70 re-arms left, minimum fill 25: a fill takes at most 70 (booked)
+    assert_eq!(rpt_fill_max(71, 25), Some(70));
+    // fewer re-arms left than a minimum fill, none left, not repeating: no bound
+    assert_eq!(rpt_fill_max(20, 25), None);
+    assert_eq!(rpt_fill_max(1, 25), None);
+    assert_eq!(rpt_fill_max(0, 25), None);
+    // exactly one minimum fill left
+    assert_eq!(rpt_fill_max(26, 25), Some(25));
 }

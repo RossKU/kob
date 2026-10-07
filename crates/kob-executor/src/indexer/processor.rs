@@ -1338,12 +1338,6 @@ impl Processor {
         conn: &Connection,
     ) -> DbResult<Option<(AnyState, Hash32, usize)>> {
         let (Some(before), Act::Fill(n), Some(reveal)) = (&s.before, s.act, &s.reveal) else { return Ok(None) };
-        // the call's time argument: the last one (KobIfdPair.fill: argument 13, before aOut, bOut, xc and upd)
-        let t = match before {
-            AnyState::KobIfdPair(_) => reveal.int(13),
-            _ => reveal.args.last().and_then(|a| crate::script::script_int(a)),
-        }
-        .unwrap_or(0);
         let exit_arg = match before {
             AnyState::KobIfdBid(_) | AnyState::KobIfdBidKron(_) => reveal.int(2),
             AnyState::KobIfdAsk(_) | AnyState::KobIfdAskKron(_) => reveal.int(3),
@@ -1352,13 +1346,9 @@ impl Processor {
         };
         let entry_cov = s.cov.0;
         let candidates: Vec<AnyState> = match before {
-            AnyState::KobIfdBid(b) | AnyState::KobIfdBidKron(b) => {
-                exit_candidates_bid(b, n, entry_cov, t, s.utxo_daa, before.family())
-            }
-            AnyState::KobIfdAsk(a) | AnyState::KobIfdAskKron(a) => {
-                exit_candidates_ask(a, n, entry_cov, t, s.utxo_daa, before.family())
-            }
-            AnyState::KobIfdPair(e) => exit_candidates_pair(e, n, entry_cov, t, s.utxo_daa, reveal.int(6)),
+            AnyState::KobIfdBid(b) | AnyState::KobIfdBidKron(b) => exit_candidates_bid(b, n, entry_cov, s.utxo_daa, before.family()),
+            AnyState::KobIfdAsk(a) | AnyState::KobIfdAskKron(a) => exit_candidates_ask(a, n, entry_cov, s.utxo_daa, before.family()),
+            AnyState::KobIfdPair(e) => exit_candidates_pair(e, n, entry_cov, s.utxo_daa, reveal.int(6)),
             _ => vec![],
         };
         let mut order: Vec<usize> = exit_arg.and_then(|j| usize::try_from(j).ok()).into_iter().collect();
@@ -1667,13 +1657,13 @@ fn trail_candidates(before: &AnyState, evidence_prices: &[i64]) -> (i64, Vec<i64
     (step, ks)
 }
 
-fn exit_candidates_bid(b: &IfdBidState, n: i64, entry: [u8; 32], t: i64, utxo_daa: i64, fam: Family) -> Vec<AnyState> {
+fn exit_candidates_bid(b: &IfdBidState, n: i64, entry: [u8; 32], utxo_daa: i64, fam: Family) -> Vec<AnyState> {
     let mut v = vec![];
     if let Some(Ok(x)) = guarded(|| b.exit_for(n, None)) {
         v.push(AnyState::KobCondAsk(x).into_family(fam));
     }
     if b.rpt_amount > n {
-        let Some(until) = rpt_until(b.expiry_daa, t, utxo_daa) else { return v };
+        let Some(until) = rpt_until(b.expiry_daa, utxo_daa) else { return v };
         let booking = Booking { parent: entry, until };
         if let Some(Ok(x)) = guarded(|| b.exit_for(n, Some(booking))) {
             v.push(AnyState::KobCondAsk(x).into_family(fam));
@@ -1682,13 +1672,13 @@ fn exit_candidates_bid(b: &IfdBidState, n: i64, entry: [u8; 32], t: i64, utxo_da
     v
 }
 
-fn exit_candidates_ask(a: &IfdAskState, n: i64, entry: [u8; 32], t: i64, utxo_daa: i64, fam: Family) -> Vec<AnyState> {
+fn exit_candidates_ask(a: &IfdAskState, n: i64, entry: [u8; 32], utxo_daa: i64, fam: Family) -> Vec<AnyState> {
     let mut v = vec![];
     if let Some(Ok(x)) = guarded(|| a.exit_for(n, None)) {
         v.push(AnyState::KobCondBid(x).into_family(fam));
     }
     if a.rpt_amount > n {
-        let Some(until) = rpt_until(a.expiry_daa, t, utxo_daa) else { return v };
+        let Some(until) = rpt_until(a.expiry_daa, utxo_daa) else { return v };
         let booking = Booking { parent: entry, until };
         if let Some(Ok(x)) = guarded(|| a.exit_for(n, Some(booking))) {
             v.push(AnyState::KobCondBid(x).into_family(fam));
@@ -1699,8 +1689,8 @@ fn exit_candidates_ask(a: &IfdAskState, n: i64, entry: [u8; 32], t: i64, utxo_da
 
 /// The exits a `KobIfdPair` fill of n can create (`IfdPairState::exit_for`): its custody is n of A (buy-first) or, sell-first,
 /// the proceeds `amt` (argument 6) plus the prefund of the fill (`pre(n)`, or the whole prefund left when the entry ends);
-/// booked with `rptUntil = rpt_until(expiryDaa, t, UTXO DAA)` when the entry repeats and `rptAmount > n`.
-fn exit_candidates_pair(e: &IfdPairState, n: i64, entry: [u8; 32], t: i64, utxo_daa: i64, amt: Option<i64>) -> Vec<AnyState> {
+/// booked with `rptUntil = rpt_until(expiryDaa, UTXO DAA)` when the entry repeats and `rptAmount > n`.
+fn exit_candidates_pair(e: &IfdPairState, n: i64, entry: [u8; 32], utxo_daa: i64, amt: Option<i64>) -> Vec<AnyState> {
     let custodies: Vec<i64> = if e.is_buy_first() {
         vec![n]
     } else {
@@ -1709,7 +1699,7 @@ fn exit_candidates_pair(e: &IfdPairState, n: i64, entry: [u8; 32], t: i64, utxo_
     };
     let mut bookings = vec![None];
     if e.rpt_amount > n {
-        if let Some(until) = rpt_until(e.expiry_daa, t, utxo_daa) {
+        if let Some(until) = rpt_until(e.expiry_daa, utxo_daa) {
             bookings.push(Some(Booking { parent: entry, until }));
         }
     }

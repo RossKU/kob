@@ -529,6 +529,9 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
             if booked && n >= MERGE_SHIFT {
                 return invalid("a booked exit's amount must be below 2^53 (the merge argument)");
             }
+            if strict {
+                rpt_fill_rule(s.rpt_amount, s.min_fill, n)?;
+            }
             if booked && t_arg == 0 {
                 t_arg = t.unwrap_or(lock);
             }
@@ -563,7 +566,7 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
                 }
                 (amt, new_left, s.custody - used, add(amt, used, "the exit's custody")?)
             };
-            let booking = booked.then_some(Booking { parent: cov_id, until: need(rpt_until(s.expiry_daa, t_arg, udaa), "rptUntil")? });
+            let booking = booked.then_some(Booking { parent: cov_id, until: need(rpt_until(s.expiry_daa, udaa), "rptUntil")? });
             let exit = s.exit_for(n, x_cust, booking)?;
             PairCalc::Ifd(IfdCalc { trigger, t_arg, amt, a_new, b_new, x_cust, booked, cont, tip_kas, exit })
         }

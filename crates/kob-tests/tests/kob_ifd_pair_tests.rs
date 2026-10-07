@@ -1103,13 +1103,12 @@ fn ifd_fill_rules() {
             both(&mut e, i, |s| s.price = 0);
             r.bad(&e, i);
         }
-        // NIF13 a booking dated after the lock time (rptUntil pushed out)
+        // NIF13 a booking whose rptUntil is dated by the filler's time argument instead of the entry UTXO's DAA
         {
-            let mut e = ed_shape(pa, pb, "pair.ifd.bid.book", "NIF13 booking t after the lock time");
+            let mut e = ed_shape(pa, pb, "pair.ifd.bid.book", "NIF13 booking dated by the filler's t");
             let i = ein(&e);
-            let t = NOW as i64 + 1;
-            set_int(&mut e, i, TT, t);
-            let until = EXPIRY.min(t.max(1_000) + 77_760_000);
+            set_int(&mut e, i, TT, 5_000);
+            let until = EXPIRY.min(1_000 + 77_760_000) + 4_000;
             edit_exit(&mut e, i, |x| x.rpt_until = until);
             r.bad(&e, i);
         }

@@ -276,7 +276,7 @@ async fn kron_if_done_entries_create_exits_and_repeat_cycles_merge() {
     let entry6 = IfdBidState { amount_left: 6 * WHOLE, rpt_amount: 1 + 16 * WHOLE, ..ib.clone() };
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobIfdBidKron(entry6.clone())));
     let (xi, exit) = find_fresh(&fill, &[cov]).unwrap();
-    let booking = Booking { parent: cov.0, until: rpt_until(ib.expiry_daa, lock as i64, entry_daa).unwrap() };
+    let booking = Booking { parent: cov.0, until: rpt_until(ib.expiry_daa, entry_daa).unwrap() };
     let exit4 = ib.exit_for(4 * WHOLE, Some(booking)).unwrap();
     assert_eq!(
         c.hs.tip_state(&exit),
@@ -347,9 +347,7 @@ async fn kron_sell_first_entry_holds_custody_and_its_bid_exit_merges_back() {
     let entry6 = IfdAskState { amount_left: 6 * WHOLE, rpt_amount: 1 + 16 * WHOLE, ..ia.clone() };
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobIfdAskKron(entry6.clone())));
     let (xi, exit) = find_fresh(&fill, &[cov]).unwrap();
-    let exit4 = ia
-        .exit_for(4 * WHOLE, Some(Booking { parent: cov.0, until: rpt_until(ia.expiry_daa, lock as i64, entry_daa).unwrap() }))
-        .unwrap();
+    let exit4 = ia.exit_for(4 * WHOLE, Some(Booking { parent: cov.0, until: rpt_until(ia.expiry_daa, entry_daa).unwrap() })).unwrap();
     assert_eq!(c.hs.tip_state(&exit), Some(AnyState::KobCondBidKron(exit4.clone())));
     assert_eq!(view(&c, &cov).custody.unwrap().expected_amount.as_deref(), Some("6000"));
 

@@ -1241,8 +1241,9 @@ pub fn pair_fill_grid(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
                             s.rpt_amount = 1 + 20 * WHOLE;
                         }
                         "wait" => {
+                            // re-arms used up (rptAmount 1): the fill is not booked and the entry waits for its exits
                             s.amount_left = n;
-                            s.rpt_amount = 1 + 2 * WHOLE;
+                            s.rpt_amount = 1;
                         }
                         _ => {}
                     }

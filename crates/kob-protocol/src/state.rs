@@ -961,10 +961,19 @@ pub fn refund_due(expiry_daa: i64, tif: i64, active_from: i64, utxo_daa: i64) ->
     expiry_daa.min(idle)
 }
 
-/// `rptUntil` a repeating entry writes into a booked exit: `min(expiryDaa, max(UTXO DAA, t) + 90 days)` (`None` where
-/// the covenant's sum overflows: such a booking fails).
-pub fn rpt_until(expiry_daa: i64, t: i64, utxo_daa: i64) -> Option<i64> {
-    Some(expiry_daa.min(t.max(utxo_daa).checked_add(MAX_IDLE)?))
+/// `rptUntil` a repeating entry writes into a booked exit: `min(expiryDaa, UTXO DAA + 90 days)`, counted from the entry
+/// UTXO's DAA (its last activity), never from an argument of the filler (`None` where the covenant's sum overflows: such
+/// a booking fails).
+pub fn rpt_until(expiry_daa: i64, utxo_daa: i64) -> Option<i64> {
+    Some(expiry_daa.min(utxo_daa.checked_add(MAX_IDLE)?))
+}
+
+/// The largest fill of a repeating entry while its re-arms last (`KobIfdBid`, `KobIfdAsk`, `KobIfdPair`): `rptAmount - 1`
+/// (every fill up to it is booked) as long as at least one minimum fill of re-arms is left (`rptAmount - 1 >= minFill`);
+/// a larger fill would leave the rest of the re-arms unused for good, and the covenants refuse it. `None`: no bound (not
+/// repeating, the re-arms used up, or fewer left than one minimum fill).
+pub fn rpt_fill_max(rpt_amount: i64, min_fill: i64) -> Option<i64> {
+    (rpt_amount > 1 && rpt_amount > min_fill).then(|| rpt_amount - 1)
 }
 
 /// Auction origin of an armed order: `armed = 1` means the arming UTXO's own DAA score.
@@ -1277,6 +1286,21 @@ impl CondBidState {
     /// Worst quote either leg can pay.
     pub fn worst(&self) -> i64 {
         self.tp_price.max(if self.stop_price > 0 { self.stop_ceiling() } else { 0 })
+    }
+    /// What a keeper's `update` (arm, or trail to `new_stop`) may take of the order UTXO's `value` sompi, the covenant's
+    /// rule: at most `keeperTip`, and never what buying `amountLeft` in one fill at the dearest leg needs (the take-profit
+    /// / limit, or `new_stop` with its whole band: `floor(amountLeft × (worst + tip) / scale)` plus the delivery carrier);
+    /// 0 when the order holds no more than that. `None` where the covenant's arithmetic fails.
+    pub fn keeper_take(&self, value: i64, new_stop: i64) -> Option<i64> {
+        let mut worst = self.tp_price;
+        if (0..=10_000).contains(&self.slip_bps) && new_stop <= MAX_STOP_PRICE {
+            let top = new_stop.checked_add(new_stop.checked_mul(self.slip_bps)? / 10_000)?;
+            worst = worst.max(top);
+        }
+        let need =
+            quote_of(self.amount_left, worst.checked_add(self.tip)?, self.scale, Round::Down)?.checked_add(self.delivery_carrier)?;
+        let floor = value.checked_sub(self.keeper_tip)?.max(need).min(value);
+        Some(value - floor)
     }
     /// Most the maker pays for n base units at a leg price: `floor(n * (legPrice + tip) / scale)`.
     pub fn spend(&self, n: i64, leg_price: i64) -> Option<i64> {

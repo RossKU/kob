@@ -527,10 +527,9 @@ fn an_if_done_pair_cycle_buys_books_its_exit_and_re_arms() {
     let p = &r.prepared[0];
     let n = 2 * WHOLE;
     assert_eq!(amount_in(&r, cid(1)), n);
-    let lock = p.plan.lock_time as i64;
     // the exit: genesis of a fresh KobCondPair, booked by the entry
     let nc = p.lowered.built.covenants.iter().find(|c| c.template == Some(TemplateId::KobCondPair)).expect("the exit");
-    let booking = Booking { parent: cid(1), until: rpt_until(e.expiry_daa, lock, 1_000).unwrap() };
+    let booking = Booking { parent: cid(1), until: rpt_until(e.expiry_daa, 1_000).unwrap() };
     let x = e.exit_for(n, n, Some(booking)).unwrap();
     let xo = find_out(p, &spk_to_string(&AnyState::KobCondPair(x.clone()).spk()), nc.covenant_id);
     let tpl = token_template(TemplateId::Kcc20Ref8x8);

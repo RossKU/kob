@@ -110,9 +110,7 @@ async fn compact_records_are_a_small_fraction_of_the_raw_transactions() {
     c.push(&[&fill_i]).await;
     let (xi, exit) = find_fresh(&fill_i, &[icov]).unwrap();
     let entry6 = IfdBidState { amount_left: 6 * WHOLE, rpt_amount: 1 + 16 * WHOLE, ..ib.clone() };
-    let exit4 = ib
-        .exit_for(4 * WHOLE, Some(Booking { parent: icov.0, until: rpt_until(ib.expiry_daa, lock as i64, entry_daa).unwrap() }))
-        .unwrap();
+    let exit4 = ib.exit_for(4 * WHOLE, Some(Booking { parent: icov.0, until: rpt_until(ib.expiry_daa, entry_daa).unwrap() })).unwrap();
     let leg = Leg::CondAsk {
         order: c.w.order(&fill_i, xi, exit4),
         custody: c.w.token_at(&fill_i, find_custody(&fill_i, &exit, 4 * WHOLE).unwrap(), Kcc20State::custody(4 * WHOLE, exit.0, EXT)),

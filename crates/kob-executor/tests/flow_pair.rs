@@ -552,7 +552,7 @@ async fn a_repeating_buy_first_pair_entry_books_its_exit_and_the_take_profit_mer
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobIfdPair(e6.clone())));
     assert_eq!(live_custodies(&c, &cov), vec![(tb, 6 * WHOLE)]);
     let (xi, exit) = find_fresh(&fill, &[cov]).expect("the exit");
-    let booking = Booking { parent: cov.0, until: rpt_until(e.expiry_daa, lock as i64, entry_daa).unwrap() };
+    let booking = Booking { parent: cov.0, until: rpt_until(e.expiry_daa, entry_daa).unwrap() };
     let x = e.exit_for(4 * WHOLE, 4 * WHOLE, Some(booking)).unwrap();
     assert_eq!(c.hs.tip_state(&exit), Some(AnyState::KobCondPair(x.clone())), "the booked exit");
     assert_eq!(live_custodies(&c, &exit), vec![(ta, 4 * WHOLE)]);
@@ -758,7 +758,7 @@ async fn a_repeating_sell_first_entry_is_re_armed_by_its_exits_take_profit_into_
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobIfdPair(e6.clone())));
     let entry_daa = c.w.utxo(&pe.create, 0).block_daa_score as i64;
     let (xi, exit) = find_fresh(&fill, &[cov]).expect("the exit");
-    let booking = Booking { parent: cov.0, until: rpt_until(e.expiry_daa, lock as i64, entry_daa).unwrap() };
+    let booking = Booking { parent: cov.0, until: rpt_until(e.expiry_daa, entry_daa).unwrap() };
     let x = e.exit_for(4 * WHOLE, 4 * WHOLE + pre, Some(booking)).unwrap();
     assert_eq!(c.hs.tip_state(&exit), Some(AnyState::KobCondPair(x.clone())), "the booked BID exit");
 
@@ -830,7 +830,7 @@ async fn a_waiting_buy_first_entry_without_escrow_gets_a_new_b_custody_from_its_
     assert!(live_custodies(&c, &cov).is_empty());
     let entry_daa = c.w.utxo(&pe.create, 0).block_daa_score as i64;
     let (xi, exit) = find_fresh(&fill, &[cov]).expect("the exit");
-    let booking = Booking { parent: cov.0, until: rpt_until(e.expiry_daa, lock as i64, entry_daa).unwrap() };
+    let booking = Booking { parent: cov.0, until: rpt_until(e.expiry_daa, entry_daa).unwrap() };
     let x = e.exit_for(10 * WHOLE, 10 * WHOLE, Some(booking)).unwrap();
     assert_eq!(c.hs.tip_state(&exit), Some(AnyState::KobCondPair(x.clone())));
 

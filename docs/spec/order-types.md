@@ -235,7 +235,9 @@ matcher. Per cycle and whole token (each amount rounded in the maker's favour, *
 | entry gets back | the budget `price + tip` (`rptPrice`); carriers when the exit sells out | the tokens and `prefund` (`rptPre`); everything else the exit held when it sells out |
 
 The position never holds more than its N base units (entry amount + exit amounts), every cycle's proceeds and
-amounts are accounted exactly, and each cycle must complete within 90 days (`rptUntil`); after that,
+amounts are accounted exactly, and each cycle must complete within 90 days of the entry's last activity (`rptUntil`,
+never set by a filler's argument); while at least one minimum fill of re-arms is left an entry fill takes at most the
+re-arms left, so none is lost to a larger fill (`matcher.md` §6.1); after that,
 or once the entry has expired, a booked exit may take profit without re-arming. A stop-loss exit never
 re-arms. A booked exit's amount is below 2^53 (the merge argument `−(k·2^53 + m)`).
 

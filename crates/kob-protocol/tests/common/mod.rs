@@ -613,7 +613,7 @@ fn update_batch(o: OrderUtxo<AnyState>, ev: Leg) -> Batch {
 
 /// rptUntil of an exit booked at NOW by an entry of UTXO DAA 1000.
 pub fn booked_until() -> i64 {
-    rpt_until(EXPIRY, NOW as i64, 1_000).unwrap()
+    rpt_until(EXPIRY, 1_000).unwrap()
 }
 
 /// A booked buy-first exit (cov 0xc1) of the repeating entry 0xd1 with `n` whole tokens.

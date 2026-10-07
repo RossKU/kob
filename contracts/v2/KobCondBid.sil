@@ -18,7 +18,7 @@ pragma silverscript ^0.1.0;
 //       (expiryDaa is soft). tokenTplIn: any input of the token (template source for the delivery).
 //       ev: the evidence bid, read only when the stop executes unarmed; t as in KobCondAsk.
 //   update(ev, tk)  anyone, next to the evidence fill: arm the stop or trail it; the keeper may take
-//       up to keeperTip from the escrow.
+//       up to keeperTip from the escrow, never from what buying amountLeft at the dearest leg needs.
 //   cancel(sig)     maker, SIGHASH_ALL.
 //   refund()        anyone, from min(expiryDaa, UTXO DAA + 90 days), only with no token input in the
 //                   transaction: the escrow goes back to the maker, refundTip to the caller.
@@ -388,8 +388,8 @@ contract KobCondBid(
     //   tk < 0:  a resting bid quoting >= stopPrice is filled: arm the stop leg;
     //   tk >= 0: a resting ask (custody at tk) quoting rp <= stopPrice - trailStep - trailGap is
     //            filled: trail down by every step the evidence justifies (above tpPrice and 0).
-    // The keeper may take up to keeperTip from the escrow. No token input owned by this covenant id
-    // may be present (the evidence fill brings token inputs of its own).
+    // The keeper may take up to keeperTip from what the escrow holds beyond the buy of amountLeft (below). No token input
+    // owned by this covenant id may be present (the evidence fill brings token inputs of its own).
     // Never next to the repeat entry (as KobCondAsk.update).
     entry update(int ev, int tk) {
         int self = this.activeInputIndex;
@@ -425,7 +425,21 @@ contract KobCondBid(
         require(OpCovOutputCount(selfId) == 1);
         int selfOut = OpCovOutputIdx(selfId, 0);
         require(tx.outputs[selfOut].scriptPubKey == contSpk(newStop, amountLeft, newArmed));
-        require(tx.outputs[selfOut].value >= tx.inputs[self].value - keeperTip);
+        // The keeper's tip never comes out of the buying budget: the continuation keeps at least what buying amountLeft in
+        // one fill at its dearest leg (the take-profit / limit, or the stop with its whole band) costs, with the delivery
+        // carrier. A tip beyond what the order holds above that (ratchets beyond the funded ones) is not paid: the keeper
+        // takes less, at the least nothing.
+        int worst = tpPrice;
+        if (slipBps >= 0 && slipBps <= 10000 && newStop <= MAX_STOP) {
+            int stopTop = newStop + newStop * slipBps / 10000;
+            if (stopTop > worst) { worst = stopTop; }
+        }
+        require(scale > 0);
+        int floorOut = tx.inputs[self].value - keeperTip;
+        int need = quoteOf(amountLeft, worst + tip, 0) + deliveryCarrier;
+        if (floorOut < need) { floorOut = need; }
+        if (floorOut > tx.inputs[self].value) { floorOut = tx.inputs[self].value; }
+        require(tx.outputs[selfOut].value >= floorOut);
     }
 
     entry cancel(sig s) {

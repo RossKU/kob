@@ -138,7 +138,7 @@ async fn repeat_buy_first_cycle_merges_take_profits_into_the_entry() {
     let entry6 = IfdBidState { amount_left: 6 * WHOLE, rpt_amount: 1 + 16 * WHOLE, ..ib.clone() };
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobIfdBid(entry6.clone())));
     let (xi, exit) = find_fresh(&fill, &[cov]).unwrap();
-    let booking = Booking { parent: cov.0, until: rpt_until(ib.expiry_daa, lock as i64, entry_daa).unwrap() };
+    let booking = Booking { parent: cov.0, until: rpt_until(ib.expiry_daa, entry_daa).unwrap() };
     let exit4 = ib.exit_for(4 * WHOLE, Some(booking)).unwrap();
     assert_eq!(c.hs.tip_state(&exit), Some(AnyState::KobCondAsk(exit4.clone())));
     let rv = view(&c, &exit).repeat.expect("a booked exit");
@@ -225,9 +225,7 @@ async fn cancel_all_of_a_repeat_position_cancels_entry_and_exits_in_one_transact
     c.push(&[&fill]).await;
     let (xi, exit) = find_fresh(&fill, &[cov]).unwrap();
     let entry6 = IfdBidState { amount_left: 6 * WHOLE, rpt_amount: 1 + 16 * WHOLE, ..ib.clone() };
-    let exit4 = ib
-        .exit_for(4 * WHOLE, Some(Booking { parent: cov.0, until: rpt_until(ib.expiry_daa, lock as i64, entry_daa).unwrap() }))
-        .unwrap();
+    let exit4 = ib.exit_for(4 * WHOLE, Some(Booking { parent: cov.0, until: rpt_until(ib.expiry_daa, entry_daa).unwrap() })).unwrap();
     let ci = find_custody(&fill, &exit, 4 * WHOLE).unwrap();
     let cancel = cancel_all(
         &c,
@@ -272,9 +270,7 @@ async fn repeat_sell_first_cycle_merges_the_bought_back_amount_into_the_entry_cu
     let entry6 = IfdAskState { amount_left: 6 * WHOLE, rpt_amount: 1 + 16 * WHOLE, ..ia.clone() };
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobIfdAsk(entry6.clone())));
     let (xi, exit) = find_fresh(&fill, &[cov]).unwrap();
-    let exit4 = ia
-        .exit_for(4 * WHOLE, Some(Booking { parent: cov.0, until: rpt_until(ia.expiry_daa, lock as i64, entry_daa).unwrap() }))
-        .unwrap();
+    let exit4 = ia.exit_for(4 * WHOLE, Some(Booking { parent: cov.0, until: rpt_until(ia.expiry_daa, entry_daa).unwrap() })).unwrap();
     assert_eq!(c.hs.tip_state(&exit), Some(AnyState::KobCondBid(exit4.clone())));
 
     // the exit buys back 3 whole tokens at its limit: they go into the entry's custody (6 -> 9 whole tokens)
@@ -340,9 +336,8 @@ async fn empty_repeating_entry_waits_without_custody_gets_a_new_one_on_merge_and
 
     // the exit buys back everything: a NEW custody is created for the entry
     let (xi, exit) = find_fresh(&fill, &[cov]).unwrap();
-    let exit10 = ia
-        .exit_for(10 * WHOLE, Some(Booking { parent: cov.0, until: rpt_until(ia.expiry_daa, lock as i64, entry_daa).unwrap() }))
-        .unwrap();
+    let exit10 =
+        ia.exit_for(10 * WHOLE, Some(Booking { parent: cov.0, until: rpt_until(ia.expiry_daa, entry_daa).unwrap() })).unwrap();
     let merge = SellFirstEntry { entry: c.w.order(&fill, find_cov(&fill, &cov).unwrap(), waiting.clone()), custody: None };
     let leg =
         Leg::CondBid { order: c.w.order(&fill, xi, exit10), amount: 10 * WHOLE, leg: 0, evidence: None, t: None, merge: Some(merge) };

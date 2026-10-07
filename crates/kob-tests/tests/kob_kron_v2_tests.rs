@@ -1730,7 +1730,7 @@ fn ifd_fill(f: &Fx, k: &IfdKnobs) -> Scn {
     if booked {
         exit_cp.parent = i.as_bytes();
         exit_cp.rpt_price = ip.rate();
-        exit_cp.rpt_until = EXPIRY.min(k.t.max(1_000) + MAX_IDLE);
+        exit_cp.rpt_until = EXPIRY.min(1_000 + MAX_IDLE);
     }
     if let Some((p, l, u)) = k.exit_rpt {
         exit_cp.parent = p;
@@ -3309,7 +3309,7 @@ fn v2_update_sigscript_is_never_a_merge_value() {
             checked += 1;
         }
     }
-    assert_eq!(num(&head(&ifd, &[int(17)])), -3_048_096_669_922_821_137, "the bytes the 0x08 check keeps from being a merge value");
+    assert_eq!(num(&head(&ifd, &[int(17)])), -814_311_254_747_055_121, "the bytes the 0x08 check keeps from being a merge value");
     println!(
         "MERGE-VALUE {checked} update sigscripts checked: none starts with 0x08 or reads as a merge claim; {negative} entry updates \
          would read as a merge value without the 0x08 check"
@@ -4288,15 +4288,15 @@ fn v2_repeat_ifd_positive_body(f: &Fx) {
     run_ok(
         n,
         &with_name(
-            ifd_fill(&f, &IfdKnobs { rpt: 4_000, ..IfdKnobs::new(10_000, 4_000) }),
-            "RP3 last cycle: rptAmount 4,000 does not cover 4,000 more re-arms, the exit is a plain exit (parent 0)",
+            ifd_fill(&f, &IfdKnobs { rpt: 1, ..IfdKnobs::new(10_000, 4_000) }),
+            "RP3 last cycle: the re-arms are used up (rptAmount 1), the exit is a plain exit (parent 0)",
         ),
     );
     run_ok(
         n,
         &with_name(
             ifd_fill(&f, &IfdKnobs { rpt: 21_000, t: 5_000, ..IfdKnobs::new(10_000, 4_000) }),
-            "RP3b the cycle is dated by t (CLTV): rptUntil = t + 90 days",
+            "RP3b the fill's time argument t does not date the cycle: rptUntil = entry UTXO DAA + 90 days",
         ),
     );
     run_ok(
@@ -4510,7 +4510,14 @@ fn v2_repeat_ifd_attacks_body(f: &Fx) {
         IfdKnobs { exit_rpt: Some((e.as_bytes(), rpt_rate(), EXPIRY.min(1_000 + MAX_IDLE) - 1)), ..base() },
         "NRP5 exit's rptUntil shortened (re-arm skippable early)",
     );
-    bad(IfdKnobs { t: NOW as i64 + 1, ..base() }, "NRP6 cycle dated after the lockTime (t > tx DAA) to stretch rptUntil");
+    bad(
+        IfdKnobs { t: 5_000, exit_rpt: Some((e.as_bytes(), rpt_rate(), EXPIRY.min(1_000 + MAX_IDLE) + 4_000)), ..base() },
+        "NRP6 exit's rptUntil dated by the filler's t instead of the entry UTXO's DAA",
+    );
+    bad(
+        IfdKnobs { rpt: 4_000, ..IfdKnobs::new(10_000, 4_000) },
+        "NRP6b a fill of 4,000 with 3,999 re-arms left (at least a minimum fill): a plain exit would leave them unused",
+    );
     bad(
         IfdKnobs { rpt: 17_000, terminate: true, ..IfdKnobs::new(6_000, 6_000) },
         "NRP7 repeating entry terminated at its final fill (everything to the exit)",

@@ -91,6 +91,17 @@ fn kas_out(v: i64, what: &str) -> Result<u64> {
     Ok(v as u64)
 }
 
+/// The repeat entries' fill bound ([`rpt_fill_max`]): a fill of more than the re-arms left, while at least one minimum
+/// fill of them is left, would leave the rest unused for good; the covenants refuse it.
+fn rpt_fill_rule(rpt_amount: i64, min_fill: i64, n: i64) -> Result<()> {
+    match rpt_fill_max(rpt_amount, min_fill) {
+        Some(m) if n > m => invalid(format!(
+            "a repeating entry fills at most the {m} base units of re-arms it has left while they are at least one minimum fill"
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// A covenant amount the builder computed with a `state` helper: `None` is where the covenant fails (an overflow, a
 /// price below its tip), so the builder refuses the fill.
 fn need(v: Option<i64>, what: &str) -> Result<i64> {
@@ -2133,9 +2144,9 @@ pub fn build_batch(b: &Batch, budgets: BudgetFn) -> Result<BuiltTx> {
 }
 
 /// Adversarial tests only (feature `adversarial`, never in a release build): [`build_batch`] WITHOUT some of the
-/// builder's own refusals of pair shapes (activation, covenant-owned taker tokens). It lays out transactions the covenants
-/// must reject, so the engine-level attack suites can show that the covenant, not the builder, refuses them; the attack
-/// suites mutate the built transactions for everything else.
+/// builder's own refusals (pair activation, covenant-owned taker tokens, a repeat entry's fill beyond its re-arms). It lays
+/// out transactions the covenants must reject, so the engine-level suites can show that the covenant, not the builder,
+/// refuses them; those suites mutate the built transactions for everything else.
 #[cfg(feature = "adversarial")]
 pub fn build_batch_unchecked(b: &Batch, budgets: BudgetFn) -> Result<BuiltTx> {
     build_batch_mode(b, budgets, false)
@@ -2720,6 +2731,9 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                 if booked && n >= MERGE_SHIFT {
                     return invalid("a booked exit's amount must be below 2^53 (the merge argument)");
                 }
+                if strict {
+                    rpt_fill_rule(s.rpt_amount, s.min_fill, n)?;
+                }
                 let t_arg = if booked && t_arg == 0 { t.unwrap_or(lock) } else { t_arg };
                 if booked && t_arg > lock {
                     return invalid("cycle time t must be <= lockTime");
@@ -2728,8 +2742,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                 let spend = need(s.spend(n, p), "if-done bid spend")?;
                 let left = sub(sub(v, spend, "if-done bid escrow")?, s.delivery_carrier, "if-done bid escrow")?;
                 let rest = s.amount_left - n;
-                let booking =
-                    booked.then_some(Booking { parent: cov_id, until: need(rpt_until(s.expiry_daa, t_arg, udaa), "rptUntil")? });
+                let booking = booked.then_some(Booking { parent: cov_id, until: need(rpt_until(s.expiry_daa, udaa), "rptUntil")? });
                 let exit = s.exit_for(n, booking)?;
                 let cont = rest > 0 || s.rpt_amount > 0;
                 let mut extras = vec![];
@@ -2823,6 +2836,9 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                 if booked && n >= MERGE_SHIFT {
                     return invalid("a booked exit's amount must be below 2^53 (the merge argument)");
                 }
+                if strict {
+                    rpt_fill_rule(s.rpt_amount, s.min_fill, n)?;
+                }
                 let t_arg = if booked && t_arg == 0 { t.unwrap_or(lock) } else { t_arg };
                 if booked && t_arg > lock {
                     return invalid("cycle time t must be <= lockTime");
@@ -2831,8 +2847,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                 let proceeds = need(s.proceeds(n, p), "if-done ask proceeds")?;
                 let pre = need(s.prefund_of(n), "if-done ask prefund")?;
                 let rest = s.amount_left - n;
-                let booking =
-                    booked.then_some(Booking { parent: cov_id, until: need(rpt_until(s.expiry_daa, t_arg, udaa), "rptUntil")? });
+                let booking = booked.then_some(Booking { parent: cov_id, until: need(rpt_until(s.expiry_daa, udaa), "rptUntil")? });
                 let exit = s.exit_for(n, booking)?;
                 let cont = rest > 0 || s.rpt_amount > 0;
                 let mut extras = vec![];
@@ -3320,10 +3335,16 @@ fn update_plan(b: &Batch, lay: &Layout, u: &BatchUpdate, spent: &BTreeSet<[u8; 3
         }
         _ => return invalid("only conditional orders and stop entries are updated"),
     };
-    let max_take = o.state.keeper_tip().expect("updatable kind");
+    let max_take = match (&o.state, &next) {
+        // a buy stop's tip never comes out of what buying its amount needs (KobCondBid.update)
+        (AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s), AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x)) => {
+            need(s.keeper_take(o.utxo.amount.min(i64::MAX as u64) as i64, x.stop_price), "the keeper's take of a conditional bid")?
+        }
+        _ => o.state.keeper_tip().expect("updatable kind"),
+    };
     let take = u.take.unwrap_or(max_take);
     if !(0..=max_take).contains(&take) {
-        return invalid(format!("a keeper takes at most keeperTip = {max_take}"));
+        return invalid(format!("a keeper takes at most {max_take} (keeperTip, and of a conditional bid what its buy does not need)"));
     }
     let id = o.state.template_id();
     // KobIfdBid.update(ev) reads a bid only; the others take (ev, tk).

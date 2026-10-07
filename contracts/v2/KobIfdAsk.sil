@@ -50,8 +50,9 @@ pragma silverscript ^0.1.0;
 // Repeat (trap-repeat): rptAmount > 0; rptAmount - 1 = base units of re-arms left (0 = not repeating).
 //   - A fill of n with rptAmount > n BOOKS its exit (n < 2^53, the merge argument): rptAmount -= n; the exit gets
 //     parent = this covenant id, rptPrice = price - tip (the proceeds rate owed to the maker), rptPre = prefund and
-//     rptUntil = min(expiryDaa, max(entry UTXO DAA, t) + 90 days). Any other exit gets parent = rptPrice = rptPre =
-//     rptUntil = 0.
+//     rptUntil = min(expiryDaa, entry UTXO DAA + 90 days). Any other exit gets parent = rptPrice =
+//     rptPre = rptUntil = 0. While at least one minimum fill of re-arms is left (rptAmount - 1 >= minFill), a fill
+//     takes at most rptAmount - 1 (it is booked): a larger one would leave the rest of the re-arms unused for good.
 //   - The booked exit's take-profit fill of m must run this entry's settle as MERGE: the m bought-back base units join
 //     the custody (exactly amountLeft + m afterwards; a new custody when none was left), the continuation is this
 //     script with amountLeft + m at the ORIGINAL parameters and takes prefund(m) back, or, when the exit sells out,
@@ -421,11 +422,13 @@ contract KobIfdAsk(
                     xParent = selfId;
                     xPrice = price - tip;
                     xPre = prefund;
-                    // t (CLTV-proven, a lower bound of now) dates the cycle; understating it only shortens it
-                    require(tx.daa >= t);
-                    int utxoDaa = OpTxInputDaaScore(self);
-                    int idleEnd = (t > utxoDaa ? t : utxoDaa) + MAX_IDLE;
+                    // the cycle counts from this entry's UTXO DAA (its last activity), never from an argument the filler chooses
+                    int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
                     xUntil = expiryDaa < idleEnd ? expiryDaa : idleEnd;
+                } else {
+                    // a fill of more than the re-arms left would leave them unused for good: while at least one minimum fill
+                    // of re-arms is left, a fill takes at most that many (and is booked)
+                    require(rptAmount <= 1 || rptAmount - 1 < minFill);
                 }
 
                 // The exit: committed KobCondBid state with amountLeft (state [286..294)) := n, then the repeat

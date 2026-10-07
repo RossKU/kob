@@ -2008,9 +2008,18 @@ fn v2_buy_lifecycle() {
     // Keeper tip on arm / trail.
     let mut kt = CondBP::oco(m);
     kt.keeper_tip = 1_000_000;
-    run_ok(
+    // the tip is funded on top of the budget (what buying amountLeft at the dearest leg needs, condb_value)
+    let mut funded = condb_update_tip(&f, &kt, &kt.armed(), &r, 0, 1_000_000);
+    funded.inputs[0].entry.amount += 1_000_000;
+    funded.outputs[0].value += 1_000_000;
+    run_ok(n, &with_name(funded, "B13 arming keeper paid the keeperTip funded beyond the budget"));
+    run_bad(
         n,
-        &with_name(condb_update_tip(&f, &kt, &kt.armed(), &r, 0, 1_000_000), "B13 arming keeper paid keeperTip from the escrow"),
+        &with_name(
+            condb_update_tip(&f, &kt, &kt.armed(), &r, 0, 1_000_000),
+            "NB30b arming keeper takes keeperTip out of the buying budget",
+        ),
+        0,
     );
     run_bad(n, &with_name(condb_update_tip(&f, &kt, &kt.armed(), &r, 0, 1_000_001), "NB30 arming keeper takes keeperTip + 1"), 0);
 
@@ -2672,14 +2681,14 @@ fn sell_proceeds(ip: &IfdAP) -> i64 {
 fn rpta_p(f: &Fx, qty: i64, rpt: i64) -> IfdAP {
     IfdAP { qty, rpt, ..ifda_p(f) }
 }
-/// The exit a fill of n qty books from the entry at UTXO DAA 1000, cycle time t.
-fn booked_exit_b(ip: &IfdAP, n: i64, t: i64) -> CondBP {
+/// The exit a fill of n qty books from the entry at UTXO DAA 1000 (the fill's time argument `_t` does not enter it).
+fn booked_exit_b(ip: &IfdAP, n: i64, _t: i64) -> CondBP {
     CondBP {
         qty: n,
         parent: cov(RPTA_ENTRY).as_bytes(),
         rpt_price: sell_proceeds(ip),
         rpt_pre: ip.prefund,
-        rpt_until: EXPIRY.min(t.max(1_000) + MAX_IDLE),
+        rpt_until: EXPIRY.min(1_000 + MAX_IDLE),
         ..ip.exit.clone()
     }
 }
@@ -3006,8 +3015,14 @@ fn v2_buy_repeat_ifd_positive() {
             "RPB2 repeating entry sold out 6/6: it stays with amountLeft 0 and no custody (keeps the custody carrier)",
         ),
     );
-    run_ok(n, &with_name(rpta_fill(&f, &RaKnobs::new(10, 4, 4)), "RPB3 last cycle: rptAmount 4 cannot re-arm 4 qty, plain exit"));
-    run_ok(n, &with_name(rpta_fill(&f, &RaKnobs { t: 7_000, ..RaKnobs::new(10, 4, 21) }), "RPB3b the cycle is dated by t (CLTV)"));
+    run_ok(n, &with_name(rpta_fill(&f, &RaKnobs::new(10, 4, 1)), "RPB3 last cycle: the re-arms are used up, plain exit"));
+    run_ok(
+        n,
+        &with_name(
+            rpta_fill(&f, &RaKnobs { t: 7_000, ..RaKnobs::new(10, 4, 21) }),
+            "RPB3b the fill's time argument t does not date the cycle",
+        ),
+    );
     run_ok(
         n,
         &with_name(
@@ -3155,7 +3170,14 @@ fn v2_buy_repeat_ifd_attacks() {
         RaKnobs { exit_rpt: Some((i.as_bytes(), sell_proceeds(&ip21), ip21.prefund, until - 1)), ..base() },
         "NRPB5 exit's rptUntil shortened",
     );
-    bad(RaKnobs { t: NOW as i64 + 1, ..base() }, "NRPB6 cycle dated after the lockTime (t > tx DAA)");
+    bad(
+        RaKnobs { t: 5_000, exit_rpt: Some((i.as_bytes(), sell_proceeds(&ip21), ip21.prefund, until + 4_000)), ..base() },
+        "NRPB6 exit's rptUntil dated by the filler's t instead of the entry UTXO's DAA",
+    );
+    bad(
+        RaKnobs::new(10, 4, 4),
+        "NRPB6b a fill of 4 qty with re-arms left (at least a minimum fill): a plain exit would leave them unused",
+    );
     bad(
         RaKnobs { terminate: true, ..RaKnobs::new(6, 6, 17) },
         "NRPB7 repeating entry terminated when sold out (everything to the exit)",

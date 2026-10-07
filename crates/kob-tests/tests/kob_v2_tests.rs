@@ -1714,7 +1714,7 @@ fn ifd_fill(f: &Fx, k: &IfdKnobs) -> Scn {
     if booked {
         exit_cp.parent = i.as_bytes();
         exit_cp.rpt_price = ip.rate();
-        exit_cp.rpt_until = EXPIRY.min(k.t.max(1_000) + MAX_IDLE);
+        exit_cp.rpt_until = EXPIRY.min(1_000 + MAX_IDLE);
     }
     if let Some((p, l, u)) = k.exit_rpt {
         exit_cp.parent = p;
@@ -3834,15 +3834,15 @@ fn v2_repeat_ifd_positive() {
     run_ok(
         n,
         &with_name(
-            ifd_fill(&f, &IfdKnobs { rpt: 4 * TOK, ..IfdKnobs::new(10 * TOK, 4 * TOK) }),
-            "RP3 last cycle: rptAmount 4000 does not cover 4000 more re-armed base units, the exit is a plain exit (parent 0)",
+            ifd_fill(&f, &IfdKnobs { rpt: 1, ..IfdKnobs::new(10 * TOK, 4 * TOK) }),
+            "RP3 last cycle: the re-arms are used up (rptAmount 1), the exit is a plain exit (parent 0)",
         ),
     );
     run_ok(
         n,
         &with_name(
             ifd_fill(&f, &IfdKnobs { rpt: 21 * TOK, t: 5_000, ..IfdKnobs::new(10 * TOK, 4 * TOK) }),
-            "RP3b the cycle is dated by t (CLTV): rptUntil = t + 90 days",
+            "RP3b the fill's time argument t does not date the cycle: rptUntil = entry UTXO DAA + 90 days",
         ),
     );
     run_ok(
@@ -3998,7 +3998,14 @@ fn v2_repeat_ifd_attacks() {
         IfdKnobs { exit_rpt: Some((e.as_bytes(), rpt_rate(), until - 1)), ..base() },
         "NRP5 exit's rptUntil shortened (re-arm skippable early)",
     );
-    bad(IfdKnobs { t: NOW as i64 + 1, ..base() }, "NRP6 cycle dated after the lockTime (t > tx DAA) to stretch rptUntil");
+    bad(
+        IfdKnobs { t: 5_000, exit_rpt: Some((e.as_bytes(), rpt_rate(), until + 4_000)), ..base() },
+        "NRP6 exit's rptUntil dated by the filler's t instead of the entry UTXO's DAA",
+    );
+    bad(
+        IfdKnobs { rpt: 4 * TOK, ..IfdKnobs::new(10 * TOK, 4 * TOK) },
+        "NRP6b a fill of 4000 with 3999 re-arms left (at least a minimum fill): a plain exit would leave them unused",
+    );
     bad(
         IfdKnobs { rpt: 17 * TOK, terminate: true, ..IfdKnobs::new(6 * TOK, 6 * TOK) },
         "NRP7 repeating entry terminated at its final fill (everything to the exit)",

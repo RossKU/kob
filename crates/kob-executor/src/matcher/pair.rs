@@ -850,6 +850,10 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
             if s.rpt_amount > 0 {
                 cap = cap.min(MERGE_SHIFT - 1);
             }
+            if let Some(m) = rpt_fill_max(s.rpt_amount, s.min_fill) {
+                // while a minimum fill of re-arms is left, a fill takes at most the re-arms left (it is booked)
+                cap = cap.min(m);
+            }
             (x.cap, x.part_cap) = cap_of(cap, s.min_fill, ok);
             if trigger {
                 x.need = Some(PairNeed {

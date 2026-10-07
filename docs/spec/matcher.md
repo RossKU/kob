@@ -637,7 +637,11 @@ their batches:
 - **Update.** Otherwise the batch spends the stop in its `update` entry next to the evidence fill
   (`Batch.updates`: the order and the index of its evidence leg). The continuation is armed
   (`armed = 1`, auction origin = its UTXO DAA) or ratcheted, and the batch's change key (the
-  matcher) takes up to `keeperTip` from the order's carrier. An updated order is not filled in the
+  matcher) takes up to `keeperTip` from the order's carrier. A conditional bid (`KobCondBid`) holds its buying budget in
+  the same UTXO: its keeper takes at most what the order holds beyond buying `amountLeft` in one fill at its dearest leg
+  after the update (the take-profit / limit, or the new stop with its whole band) plus the delivery carrier, so a
+  ratchet beyond the funded ones pays its keeper only what the lower stop frees, possibly nothing, and never shrinks the
+  budget (`CondBidState::keeper_take`). An updated order is not filled in the
   same transaction; its auction runs from the next one (§3.3). `update` spends no token input owned
   by the order's id. A stop entry's `update` additionally requires `amountLeft > 0` and the stop on the right
   side of the limit (`entryStop ≤ price` for `KobIfdBid` and a buy-first `KobIfdPair`, `entryStop ≥ price` for
@@ -673,7 +677,12 @@ evidence fill of the opposite side (§4.1) when the order UTXO is ≥ `trailWait
 new stop is fixed by the covenant: every step the evidence justifies, `k = ⌊(rp − gap −
 stop)/step⌋` (sell; mirrored for buy), capped below `tpPrice` (sell) or above the limit leg and 0
 (buy). The matcher takes at most `keeperTip`, SHOULD ratchet every qualifying trailing order (§4.4) with the most
-extreme qualifying fill of its batch, and no more often than `trailWait`. A ratchet is only an update, never part of a
+extreme qualifying fill of its batch, and no more often than `trailWait`. The covenant checks the evidence it is given,
+not that it is the most extreme fill of the transaction (that would read every other input: beyond the update's
+budget). A matcher that names a smaller qualifying fill ratchets by fewer steps: the stop never moves the wrong way nor
+past what a fill of the transaction justifies, it stays below the justified level until the next ratchet, at most
+`trailWait` later (default 6,000 DAA, 10 min) when a qualifying fill comes, and that matcher still earns one
+`keeperTip`. A ratchet is only an update, never part of a
 fill of the stop. A pair trailing stop takes k from the filler and the covenant accepts only the valid and maximal k
 (§4.7).
 
@@ -792,16 +801,20 @@ position's permanent identity, and every cycle returns to it.
 
 **Booking (entry fill).** A fill of n base units with `rptAmount > n` books its exit (the covenant requires
 `n < 2^53`, the merge argument below) and continues with `rptAmount − n`; any other fill creates a plain exit (the last
-cycle). The entry writes the exit's repeat fields itself (rates in sompi per whole token):
+cycle). While at least one minimum fill of re-arms is left (`rptAmount − 1 ≥ minFill`) a fill takes at most
+`rptAmount − 1` base units, so it is booked: a larger fill would leave the rest of the re-arms unused for good, and the
+covenant refuses it (`KobIfdBid`, `KobIfdAsk`, `KobIfdPair`; `state::rpt_fill_max`). With fewer left than a minimum fill
+(or none) a fill of any size is a plain exit, which uses up those few base units of re-arms. The entry writes the exit's repeat fields itself (rates in sompi per whole token):
 
 | Field | Buy-first exit (`KobCondAsk`) | Sell-first exit (`KobCondBid`) |
 |---|---|---|
 | `parent` | the entry's covenant id | the entry's covenant id |
 | `rptPrice` | the entry's budget rate `price + tip` | the entry's proceeds rate `price − tip` |
 | `rptPre` | — | the entry's `prefund` |
-| `rptUntil` | `min(expiryDaa, max(entry UTXO DAA, t) + 77,760,000)` | same |
+| `rptUntil` | `min(expiryDaa, entry UTXO DAA + 77,760,000)` | same |
 
-`t` is the fill's CLTV-proven time argument (the builder SHOULD pass the lockTime). A repeating
+The entry UTXO's DAA is the entry's last activity; no argument of the filler enters `rptUntil`. A wallet's repeating
+entry ends within 90 days of its placement (§10.13), so its exits carry `rptUntil = expiryDaa`. A repeating
 entry never terminates on a fill: sold out, it continues with `amountLeft = 0` (a sell-first entry
 then has no custody and keeps the custody carrier in its own UTXO) and waits for its exits.
 
@@ -1011,7 +1024,7 @@ for both tokens `KobPair` 6 to 11, `KobCondPair` 7 to 21 (a stop armed in its fi
 (a sell-first fill that arms its stop entry and books its exit 34); over every program pair at most 72, 91 and 136 (the
 largest token programs, whose custody inputs the scans read).
 
-**Template sizes.** `KobPair` 2,960 B (state 447 B), `KobCondPair` 6,284 B (state 543 B), `KobIfdPair` 8,834 B (state
+**Template sizes.** `KobPair` 2,960 B (state 447 B), `KobCondPair` 6,284 B (state 543 B), `KobIfdPair` 8,789 B (state
 909 B; the committed exit 432 B). The scans of both tokens are unrolled to `MAX_TOK_IN` = 8 slots each (a KRON program
 accepts fewer), so every spend of a pair order pays for them; a larger route or net is split into several fills (§7).
 
@@ -1070,7 +1083,8 @@ tick. With pair books: to be measured (pair phase).
    and a resting sell of B; each rested ≥ 5 s and filled together, at least your threshold of A and its value in B), or
    when a resting pair order at or beyond your stop is filled (at least your threshold)".
 7. **Trailing**: disclose the step, the gap and the rate (≤ one update per `trailWait`);
-   fund `keeperTip` per expected update from the carrier.
+   fund `keeperTip` per expected update from the carrier (a buy stop: on top of its budget; an update beyond the funded
+   ones pays its keeper only what it frees, §4.4).
 8. **IFD / IFO / bracket**: `minFill` default `⌈amount / 4⌉`; fund `⌈amount / minFill⌉ × (deliveryCarrier
    + exitCarrier)` plus the budget (buy-first: `⌈amount·(price + tip)/scale⌉`; sell-first: the tokens and
    `⌈amount·prefund/scale⌉`); exits default to GTC (90-day idle from each exit's creation);

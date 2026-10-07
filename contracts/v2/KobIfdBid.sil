@@ -50,7 +50,9 @@ pragma silverscript ^0.1.0;
 // Repeat (trap-repeat): rptAmount > 0; rptAmount - 1 = base units of re-arms left (maker sets 1 + repeats x amount;
 // 1 = none).
 //   - A fill of n with rptAmount > n BOOKS its exit: rptAmount -= n; the exit gets parent = this covenant id,
-//     rptPrice = price + tip (the budget rate) and rptUntil = min(expiryDaa, max(entry UTXO DAA, t) + 90 days).
+//     rptPrice = price + tip (the budget rate) and rptUntil = min(expiryDaa, entry UTXO DAA + 90 days).
+//     While at least one minimum fill of re-arms is left (rptAmount - 1 >= minFill), a fill takes at most rptAmount - 1
+//     (it is booked): a larger one would leave the rest of the re-arms unused for good.
 //     A booked exit's amount must be below 2^53 (the merge argument). Any other exit gets parent = rptPrice =
 //     rptUntil = 0 (plain exit, never re-arms).
 //   - The booked exit's take-profit fill of m must spend this entry by MERGE: amountLeft += m at the ORIGINAL
@@ -240,7 +242,7 @@ contract KobIfdBid(
     // nb: base units (8-byte LE, 0 < n <= amountLeft; or -(k * 2^53 + m) = MERGE of the booked exit at
     // input k selling m); tokenTplIn: any input of the token (template source);
     // exitOut: the exit output; cPre/cSuf: KobCondAsk template prefix and suffix (fill only);
-    // ev: the evidence bid (touch; unarmed stop entry only); t: auction / cycle time (CLTV).
+    // ev: the evidence bid (touch; unarmed stop entry only); t: auction time (CLTV).
     entry fill(byte[8] nb, int tokenTplIn, int exitOut, byte[] cPre, byte[] cSuf, int ev, int t) {
         int n = int(nb);
         int self = this.activeInputIndex;
@@ -340,12 +342,13 @@ contract KobIfdBid(
                 newRpt = rptAmount - n;
                 xParent = selfId;
                 xPrice = price + tip;
-                // t (CLTV-proven, a lower bound of now) dates the cycle; understating it only
-                // shortens it
-                require(tx.daa >= t);
-                int utxoDaa = OpTxInputDaaScore(self);
-                int idleEnd = (t > utxoDaa ? t : utxoDaa) + MAX_IDLE;
+                // the cycle counts from this entry's UTXO DAA (its last activity), never from an argument the filler chooses
+                int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
                 xUntil = expiryDaa < idleEnd ? expiryDaa : idleEnd;
+            } else {
+                // a fill of more than the re-arms left would leave them unused for good: while at least one minimum fill
+                // of re-arms is left, a fill takes at most that many (and is booked)
+                require(rptAmount <= 1 || rptAmount - 1 < minFill);
             }
 
             // The exit: exactly the committed KobCondAsk, as a FRESH single-output covenant created by this input.

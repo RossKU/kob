@@ -266,11 +266,12 @@ pub fn branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
         b.change = Some(pk(TAKER));
         v.push((format!("branch.rpt.ask.merge.armedEntry.n{n}"), Action::Batch(b)));
     }
-    // a repeating entry filled for all it has left WITHOUT booking (its re-arms left, rptAmount - 1, are below the fill): it
-    // continues with nothing left and waits for the merges of its earlier exits (the `.fill.wait` / `.settle.wait` roles)
-    let wb = IfdBidState { rpt_amount: 1 + 2 * WHOLE, ..ifd_bid(MAKER_A, 4, p) };
+    // a repeating entry filled for all it has left WITHOUT booking (its re-arms are used up, rptAmount = 1; while at least a
+    // minimum fill of them is left a fill takes at most that many and is booked): it continues with nothing left and waits
+    // for the merges of its earlier exits (the `.fill.wait` / `.settle.wait` roles)
+    let wb = IfdBidState { rpt_amount: 1, ..ifd_bid(MAKER_A, 4, p) };
     v.push(("branch.ifd.bid.repeat.waitUnbooked".into(), Action::Batch(ifd_fill(wb, 4, None, 1_000))));
-    let wa = IfdAskState { amount_left: 4 * WHOLE, rpt_amount: 1 + 2 * WHOLE, ..ifd_ask(MAKER_A, p) };
+    let wa = IfdAskState { amount_left: 4 * WHOLE, rpt_amount: 1, ..ifd_ask(MAKER_A, p) };
     let wav = wa.escrow(carrier() as i64).unwrap() as u64;
     v.push(("branch.ifd.ask.repeat.waitUnbooked".into(), Action::Batch(ifda_fill(wa, 4, wav, None, 1_000))));
     if p.family() == Family::Kron {

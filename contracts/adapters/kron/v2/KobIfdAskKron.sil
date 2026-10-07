@@ -338,11 +338,13 @@ contract KobIfdAskKron(
                     xParent = selfId;
                     xPrice = price - tip;
                     xPre = prefund;
-                    // t (CLTV-proven, a lower bound of now) dates the cycle; understating it only shortens it
-                    require(tx.daa >= t);
-                    int utxoDaa = OpTxInputDaaScore(self);
-                    int idleEnd = (t > utxoDaa ? t : utxoDaa) + MAX_IDLE;
+                    // the cycle counts from this entry's UTXO DAA (its last activity), never from an argument the filler chooses
+                    int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
                     xUntil = expiryDaa < idleEnd ? expiryDaa : idleEnd;
+                } else {
+                    // a fill of more than the re-arms left would leave them unused for good: while at least one minimum fill
+                    // of re-arms is left, a fill takes at most that many (and is booked)
+                    require(rptAmount <= 1 || rptAmount - 1 < minFill);
                 }
 
                 // The exit: committed KobCondBidKron state with amountLeft (state [253..261)) := n, then the repeat

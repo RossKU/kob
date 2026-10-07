@@ -384,7 +384,13 @@ pub fn updatable(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<UpCand> {
         if t < active_from {
             continue;
         }
-        let Some(tip) = o.order.state.keeper_tip() else { continue };
+        let Some(mut tip) = o.order.state.keeper_tip() else { continue };
+        if let AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) = &o.order.state {
+            // a buy stop pays its keeper only from what its buy does not need (at the current stop: a lower bound of what a
+            // ratchet frees)
+            let Some(t) = s.keeper_take(o.order.utxo.amount.min(i64::MAX as u64) as i64, s.stop_price) else { continue };
+            tip = t;
+        }
         let fee_floor = token_program(&o.order.state)
             .and_then(|p| kob_protocol::defaults::tips(p).ok())
             .map(|x| x.update_fee.min(i64::MAX as u64) as i64)
@@ -815,6 +821,10 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                     // a booking (rptAmount > n) carries n < 2^53 in its exit's merge argument
                     limit = limit.min(MERGE_SHIFT - 1);
                 }
+                if let Some(m) = rpt_fill_max(s.rpt_amount, s.min_fill) {
+                    // while a minimum fill of re-arms is left, a fill takes at most the re-arms left (it is booked)
+                    limit = limit.min(m);
+                }
                 let n = largest_fit(limit, fits);
                 c.cap = n;
                 if n <= 0 {
@@ -885,6 +895,9 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 let mut limit = s.amount_left;
                 if s.rpt_amount > 0 {
                     limit = limit.min(MERGE_SHIFT - 1);
+                }
+                if let Some(m) = rpt_fill_max(s.rpt_amount, s.min_fill) {
+                    limit = limit.min(m);
                 }
                 let n = largest_fit(limit, fits);
                 c.cap = n;

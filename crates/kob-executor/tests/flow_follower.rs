@@ -349,7 +349,7 @@ impl Gen {
                         let tx = c.w.try_sign(&Action::Batch(bt))?;
                         let entry_daa = lv.tx_daa(c);
                         let booking = (e.rpt_amount > n)
-                            .then(|| Booking { parent: lv.cov.0, until: rpt_until(e.expiry_daa, lock as i64, entry_daa).unwrap() });
+                            .then(|| Booking { parent: lv.cov.0, until: rpt_until(e.expiry_daa, entry_daa).unwrap() });
                         let exit = e.exit_for(n, booking).unwrap();
                         let next = IfdBidState {
                             amount_left: e.amount_left - n,
