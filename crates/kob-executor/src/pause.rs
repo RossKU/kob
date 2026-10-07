@@ -12,7 +12,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub fn is_set(path: &Path) -> bool {
     match std::fs::symlink_metadata(path) {
         Ok(_) => true,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        // Windows reports a path through a regular file as NotFound (ERROR_PATH_NOT_FOUND), where Unix says
+        // NotADirectory: absent only when the nearest existing ancestor is a directory.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => below_a_non_directory(path),
         Err(e) => {
             static WARNED: AtomicBool = AtomicBool::new(false);
             if !WARNED.swap(true, Ordering::Relaxed) {
@@ -21,6 +23,18 @@ pub fn is_set(path: &Path) -> bool {
             true
         }
     }
+}
+
+/// True when the nearest ancestor of `path` that exists is not a directory (or cannot be read).
+fn below_a_non_directory(path: &Path) -> bool {
+    for a in path.ancestors().skip(1).filter(|a| !a.as_os_str().is_empty()) {
+        match std::fs::metadata(a) {
+            Ok(m) => return !m.is_dir(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return true,
+        }
+    }
+    false
 }
 
 /// [`is_set`] of an optional pause file (`None`: never paused).

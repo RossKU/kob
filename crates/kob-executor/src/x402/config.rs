@@ -721,8 +721,11 @@ mod tests {
         std::fs::write(&path, format!(r#"{base},"killSwitchFile":"x402.kill"}}"#)).unwrap();
         let c = X402Config::load(&path).unwrap();
         assert_eq!(c.kill_switch_file.as_deref().map(std::path::PathBuf::from), Some(cfg_dir.join("x402.kill")));
-        std::fs::write(&path, format!(r#"{base},"killSwitchFile":"/var/lib/kob/x402.kill"}}"#)).unwrap();
-        assert_eq!(X402Config::load(&path).unwrap().kill_switch_file.as_deref(), Some("/var/lib/kob/x402.kill"));
+        // absolute on every platform (`/var/...` has no drive on Windows, so it would be relative there)
+        let abs = d.path().join("lib").join("x402.kill");
+        let abs = abs.to_str().unwrap();
+        std::fs::write(&path, format!(r#"{base},"killSwitchFile":{}}}"#, serde_json::to_string(abs).unwrap())).unwrap();
+        assert_eq!(X402Config::load(&path).unwrap().kill_switch_file.as_deref(), Some(abs));
         std::fs::write(&path, format!("{base}}}")).unwrap();
         assert_eq!(X402Config::load(&path).unwrap().kill_switch_file, None);
     }
