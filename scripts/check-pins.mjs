@@ -5,7 +5,8 @@
 //
 // Known hashes: every 64-hex string and every 32-byte array in contracts/artifacts, contracts/argent,
 // contracts/deploy and contracts/third-party (the outputs scripts/build-contracts.sh and scripts/build-deploy.sh
-// reproduce, plus the vendored third-party artifacts they list). Pin files: the Rust pin tables, the TS SDK
+// reproduce, plus the vendored third-party artifacts they list), except the Argent sources (`.ag`, written by hand) and
+// the pin files among them (contracts/argent/examples): a pin never vouches for itself. Pin files: the Rust pin tables, the TS SDK
 // constants, the router generator head, the Argent examples, the registry's template hashes and the docs. In
 // registry/tokens.json only the values of `*hash*` keys are build outputs; transaction ids and the other
 // chain data there are not, and are skipped. Run it after scripts/build-contracts.sh --check (CI does).
@@ -38,7 +39,14 @@ const collect = (v, src) => {
     for (const m of v.matchAll(HEX64)) add(m[0], src);
   }
 };
-const outputs = ['contracts/artifacts', 'contracts/argent', 'contracts/deploy', 'contracts/third-party'].flatMap((d) => walk(path.join(root, d)));
+// A pin file is never also a source of known hashes: its constants would then match themselves. The Argent examples are pin
+// files (below); their generated outputs (contracts/argent/examples-out) are the source.
+const PIN_DIRS = ['contracts/argent/examples/'];
+const outputs = ['contracts/artifacts', 'contracts/argent', 'contracts/deploy', 'contracts/third-party']
+  .flatMap((d) => walk(path.join(root, d)))
+  .filter((f) => !PIN_DIRS.some((p) => rel(f).startsWith(p)))
+  // Argent sources are inputs written by hand, not generated outputs: a hash they quote is known only through the artifact built from them
+  .filter((f) => !f.endsWith('.ag'));
 for (const f of outputs) {
   if (f.endsWith('.bin')) continue;
   const text = fs.readFileSync(f, 'utf8');
