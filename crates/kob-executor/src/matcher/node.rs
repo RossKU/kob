@@ -369,7 +369,9 @@ impl NodeApi for WrpcNode {
 
     async fn utxos_by_addresses(&self, addresses: &[String]) -> Result<Vec<AddressUtxo>, RpcError> {
         let p = self.call("getUtxosByAddresses", json!({"addresses": addresses})).await?;
-        let entries = p.get("entries").and_then(Value::as_array).cloned().unwrap_or_default();
+        // an answer without its entries is not "no UTXOs": the caller would take every queried output as spent
+        let entries =
+            p.get("entries").and_then(Value::as_array).cloned().ok_or_else(|| RpcError::Decode(format!("no entries in {p}")))?;
         let mut out = vec![];
         for e in entries {
             let op = e.get("outpoint").cloned().unwrap_or(Value::Null);

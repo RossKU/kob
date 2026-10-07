@@ -174,8 +174,9 @@ export async function kasReferenceOf(indexer: Pick<NonNullable<Services['indexer
     indexer.book(market.covenantId, { depth: 20, aggregate: true }).catch(() => null),
     indexer.trades(market.covenantId, { limit: 1 }).catch(() => null),
   ]);
-  // a quote nobody has to take (an ask far above the bids, or the only side of the book) does not set the reference
-  const book = bv && Array.isArray(bv.asks) && Array.isArray(bv.bids) ? firmReferencePrice(bookFromIndexer(market, bv)) : null;
+  // a quote nobody has to take (an ask far above the bids, or the only side of the book) does not set the reference, nor does a bid
+  // worth less than one default minimum fill above the others
+  const book = bv && Array.isArray(bv.asks) && Array.isArray(bv.bids) ? firmReferencePrice(bookFromIndexer(market, bv), market.scale) : null;
   const t = trades?.items?.[0];
   let last: bigint | null = null;
   try {

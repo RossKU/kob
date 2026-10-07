@@ -35,6 +35,14 @@ describe('crossing', () => {
     expect(firmReferencePrice({ asks: [level(10_000_000n, 1n)], bids: [level(240n, 1n)] })).toBe(240n);
     expect(firmReferencePrice({ asks: [level(10_000_000n, 1n)], bids: [] })).toBeNull();
     expect(firmReferencePrice({ asks: [], bids: [level(240n, 1n)] })).toBe(240n);
+    // with the token's scale the bids must be worth one default minimum fill (10 KAS) together: a 1-base-unit bid at an absurd
+    // price above the book does not set the reference, the depth below it does
+    const S = 100_000_000n;
+    const deep: BookView = { asks: [], bids: [level(1_000_000_000_000n, 1n), level(240_000_000n, 10n * S)] };
+    expect(firmReferencePrice(deep)).toBe(1_000_000_000_000n);
+    expect(firmReferencePrice(deep, S)).toBe(240_000_000n);
+    expect(firmReferencePrice({ asks: [level(250_000_000n, S)], bids: deep.bids }, S)).toBe(245_000_000n);
+    expect(firmReferencePrice({ asks: [], bids: [level(240_000_000n, S)] }, S)).toBeNull();
     expect(crossingTouch(b, 'sell', 240n, 0n)).toEqual({ crossing: true, touch: 240n });
     expect(crossingTouch(b, 'sell', 241n, 0n)).toEqual({ crossing: false, touch: 240n });
     expect(crossingTouch(b, 'buy', 250n, 0n).crossing).toBe(true);

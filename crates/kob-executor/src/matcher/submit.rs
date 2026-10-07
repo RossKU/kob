@@ -129,11 +129,15 @@ fn conflict_orders(t: &Tracked, outcome: SubmitOutcome, msg: Option<&str>) -> BT
 }
 
 /// The orders of `t` whose inputs the node no longer holds, asked by address after a missing-input refusal: None when the
-/// node cannot tell (no address known, the query failed, or every order input is still there: the missing input is another
-/// one).
+/// node cannot tell (no address known, a node without its UTXO index (`--utxoindex`: an address query proves nothing
+/// there, so nothing is taken as spent), the query failed, or every order input is still there: the missing input is
+/// another one).
 async fn missing_owners<N: NodeApi>(node: &N, t: &Tracked) -> Option<BTreeSet<CovId>> {
     let addrs: BTreeSet<&String> = t.owners.keys().filter_map(|op| t.addresses.get(op)).collect();
     if addrs.is_empty() {
+        return None;
+    }
+    if !node.server_info().await.is_ok_and(|i| i.has_utxo_index) {
         return None;
     }
     let addrs: Vec<String> = addrs.into_iter().cloned().collect();

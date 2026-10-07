@@ -36,13 +36,30 @@ export function referencePrice(book: BookView): bigint | null {
   return b ?? a ?? null;
 }
 
+/** KAS (sompi) the bids at or above the firm reference must be worth together: one default minimum fill (10 KAS). */
+export const FIRM_DEPTH_SOMPI = 1_000_000_000n;
+
 /**
  * A KAS value of a token that one far-off quote cannot move (the default minimum fill of a pair order is the amount worth 10 KAS at it):
- * the best bid is a firm offer (anyone can sell into it), an ask nobody has to take is not. The midpoint of the touch when the ask is at most
- * twice the bid, the bid alone when the spread is wider or there is no ask, null when only asks exist.
+ * a bid is a firm offer (anyone can sell into it), an ask nobody has to take is not. With the token's `scale` the bid is the price at which
+ * the bids, best first, are worth `depth` (10 KAS) together, so a tiny bid at an absurd price above the others does not set it; without it
+ * the best bid. The midpoint with the best ask when that ask is at most twice the bid, the bid alone when the spread is wider or there is
+ * no ask, null when only asks exist (or the bids are not worth `depth` together).
  */
-export function firmReferencePrice(book: BookView): bigint | null {
-  const b = book.bids[0]?.price;
+export function firmReferencePrice(book: BookView, scale?: bigint, depth: bigint = FIRM_DEPTH_SOMPI): bigint | null {
+  let b: bigint | undefined;
+  if (scale === undefined || scale <= 0n) {
+    b = book.bids[0]?.price;
+  } else {
+    let value = 0n;
+    for (const l of book.bids) {
+      value += (l.amount * l.price) / scale;
+      if (value >= depth) {
+        b = l.price;
+        break;
+      }
+    }
+  }
   const a = book.asks[0]?.price;
   if (b === undefined || b <= 0n) return null;
   if (a !== undefined && a >= b && a <= 2n * b) return (a + b) / 2n;

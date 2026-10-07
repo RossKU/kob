@@ -29,6 +29,8 @@ struct State {
     live: Vec<(Outpoint, [u8; 32])>,
     /// The node cannot answer a UTXO query of order addresses.
     blind: bool,
+    /// The node runs without its UTXO index (an address query proves nothing).
+    no_index: bool,
 }
 
 #[derive(Clone, Default)]
@@ -41,7 +43,7 @@ impl NodeApi for Node {
             server_version: "2.1.0".into(),
             network_id: "testnet-10".into(),
             is_synced: true,
-            has_utxo_index: true,
+            has_utxo_index: !s.no_index,
             virtual_daa_score: s.daa,
         })
     }
@@ -192,4 +194,43 @@ async fn a_batch_whose_input_another_transaction_spent_is_dropped_before_the_tim
     assert_eq!(planned_at, Some(daa0 + 20), "the lost batch is dropped on the second sighting and its orders planned again");
     assert!(!r.tracker.backed_off(daa0 + 20).contains(&cid(VICTIM)));
     assert!(r.tracker.txs.values().all(|t| !t.orders.contains(&cid(SPENT))), "the lost batch is no longer tracked");
+}
+
+#[tokio::test]
+async fn without_the_utxo_index_a_missing_input_is_not_taken_as_proof() {
+    let daa = NOW + 5;
+    let (mut r, node) = runner(daa);
+    {
+        let mut s = node.0.lock().unwrap();
+        s.replies.push_back(orphan());
+        s.no_index = true;
+        // an index-less node answers the address query with nothing at all: that is no evidence of a spend
+        s.live = vec![];
+    }
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.conflicts.len(), 1);
+    let off = r.tracker.backed_off(daa);
+    assert!(off.contains(&cid(VICTIM)) && off.contains(&cid(OTHER)) && off.contains(&cid(SPENT)), "as without an answer: {off:?}");
+}
+
+#[tokio::test]
+async fn without_the_utxo_index_a_pending_batch_is_left_to_its_timeout() {
+    let daa0 = NOW + 5;
+    let (mut r, node) = runner(daa0);
+    node.0.lock().unwrap().live = r.source.0.orders.iter().flat_map(outpoints).collect();
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.submitted.len(), 1, "the batch is in the mempool: {:?}", rep.skipped);
+    let rest: Vec<ListedOrder> = r.source.0.orders.iter().filter(|o| o.id() != cid(SPENT)).cloned().collect();
+    {
+        let mut s = node.0.lock().unwrap();
+        s.live = vec![];
+        s.no_index = true;
+    }
+    r.source.0.orders = rest;
+    for d in [daa0 + 10, daa0 + 20, daa0 + 30] {
+        at(&mut r, &node, d);
+        r.step().await.unwrap();
+    }
+    assert_eq!(r.tracker.txs.len(), 1, "not dropped as lost: the node cannot tell");
+    assert!(r.tracker.backed_off(daa0 + 30).is_empty(), "nothing backs off on a guess");
 }
