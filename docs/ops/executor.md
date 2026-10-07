@@ -262,6 +262,18 @@ payments live in the ledger), settle what they still hold by hand, and start on 
 direct payment is ever finalized from its own transaction's output; an intent payment is finalized only by an execution
 of its intent.
 
+**Ledger recovery.** The ledger and the invoice store acknowledge a record only once its whole line, newline included, is
+written and fsynced. A write or fsync that fails (a full disk, an I/O error) is cut back off the file and the request
+fails (`unexpected_settle_error`, retryable); if even the cut fails, the store takes no more writes until the facilitator
+is restarted. At startup a last line without its newline is an unfinished write that was never acknowledged and is
+dropped. Any other line that does not parse, the last one included, stops the facilitator: `ledger corrupt at line <n>:
+...` (or `<store path> corrupt at line <n>: ...`), and the file is left as it is. To recover: stop the facilitator, copy
+the file aside and look at the line (`sed -n '<n>p' <file>`). If it is the remains of a failed write with a complete
+record glued after it (some text, then a whole `{"entry":...}` or `{"invoice":...}` record), that complete record was
+acknowledged: keep only it, `sed -i '<n>s/^.*{"entry":/{"entry":/' <ledger>` (`{"invoice":` for the invoice store; the
+greedy match keeps the last record start on the line), and start again. Anything else is damage to investigate before
+the file is used again (the ledger is the record of which payments were settled): do not delete lines to get past it.
+
 ### A.7 Intent payments and invoices
 
 Two optional parts of the facilitator (`docs/spec/x402-swap-and-pay.md` sections 17 and 18), both off by

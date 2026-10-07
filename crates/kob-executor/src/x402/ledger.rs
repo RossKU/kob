@@ -11,8 +11,11 @@
 //! ```
 //!
 //! Every state change appends the complete entry as one line (`{"entry":{...}}`); on replay the last
-//! line of a transaction id wins. A torn last line (crash mid-append) is discarded and the file is
-//! truncated back to the last good record; a corrupt line anywhere else refuses to start (fail closed).
+//! line of a transaction id wins. A record is acknowledged only once its whole line, newline included, is
+//! written and fsynced; a write or fsync that fails is cut back off the file ([`append_record`]) and the
+//! operation fails, so the next record never continues a partial one. On open, a last line without its newline
+//! that does not parse is such an unacknowledged write (a crash mid-append) and is discarded; any other line that
+//! does not parse, the last one included, refuses to start (fail closed, docs/ops/executor.md "Ledger recovery").
 //!
 //! [`Ledger::claim`] is the atomic consume step of the settlement lifecycle:
 //!
@@ -239,7 +242,10 @@ fn to_outpoint(o: &OutpointJson) -> Option<Outpoint> {
 pub enum LedgerError {
     #[error("ledger io: {0}")]
     Io(String),
-    #[error("ledger corrupt at line {line}: {msg}")]
+    #[error(
+        "ledger corrupt at line {line}: {msg}; it is not an unfinished last write, so the facilitator does not start over it \
+         (docs/ops/executor.md, \"Ledger recovery\")"
+    )]
     Corrupt { line: usize, msg: String },
     /// A complete record in a format this build does not read (an intent payment recorded for an earlier router template).
     #[error(
@@ -284,6 +290,9 @@ struct IdBinding {
 
 struct Inner {
     file: Option<File>,
+    /// Set when a failed append could not be cut back off the file: nothing more is appended until a restart
+    /// (which discards the unfinished last line).
+    broken: Option<String>,
     entries: HashMap<String, Entry>,
     by_outpoint: HashMap<Outpoint, String>,
     ids: HashMap<String, IdBinding>,
@@ -328,11 +337,18 @@ impl Inner {
     }
 
     fn append(&mut self, e: &Entry) -> Result<(), LedgerError> {
+        if let Some(why) = &self.broken {
+            return Err(LedgerError::Io(format!("the ledger is not writable until a restart: {why}")));
+        }
         if let Some(f) = self.file.as_mut() {
             let mut line = serde_json::to_string(&serde_json::json!({ "entry": e })).map_err(|x| LedgerError::Io(x.to_string()))?;
             line.push('\n');
-            f.write_all(line.as_bytes())?;
-            f.sync_all()?;
+            if let Err(fail) = append_record(f, line.as_bytes()) {
+                if !fail.undone {
+                    self.broken = Some(fail.error.to_string());
+                }
+                return Err(LedgerError::Io(fail.error.to_string()));
+            }
         }
         Ok(())
     }
@@ -342,6 +358,24 @@ impl Inner {
         self.index(&e);
         Ok(e)
     }
+}
+
+/// A failed [`append_record`]: the error, and whether the partial write was cut back off the file.
+pub(crate) struct AppendFailure {
+    pub error: std::io::Error,
+    pub undone: bool,
+}
+
+/// Appends one complete record (a line with its newline) to an append-only log and fsyncs it. On any write or fsync
+/// error the file is cut back to its length before the write (`set_len`), so a later record never continues a partial
+/// one, and the error is returned: the record is not acknowledged. `undone` is false when even the cut failed (the
+/// caller then stops appending; a restart discards the unfinished last line).
+pub(crate) fn append_record(f: &mut File, line: &[u8]) -> Result<(), AppendFailure> {
+    use std::io::{Seek, SeekFrom};
+    let start = f.seek(SeekFrom::End(0)).map_err(|error| AppendFailure { error, undone: true })?;
+    let Err(error) = f.write_all(line).and_then(|()| f.sync_all()) else { return Ok(()) };
+    let undone = f.set_len(start).and_then(|()| f.seek(SeekFrom::Start(start))).and_then(|_| f.sync_all()).is_ok();
+    Err(AppendFailure { error, undone })
 }
 
 /// The fields a claim supplies (everything is derived from a verified payment).
@@ -371,7 +405,13 @@ impl Ledger {
     /// A volatile ledger (tests, `--ledger :memory:`).
     pub fn in_memory() -> Ledger {
         Ledger {
-            inner: Mutex::new(Inner { file: None, entries: HashMap::new(), by_outpoint: HashMap::new(), ids: HashMap::new() }),
+            inner: Mutex::new(Inner {
+                file: None,
+                broken: None,
+                entries: HashMap::new(),
+                by_outpoint: HashMap::new(),
+                ids: HashMap::new(),
+            }),
             path: None,
             _lock: None,
         }
@@ -390,7 +430,7 @@ impl Ledger {
         if path.exists() {
             File::open(&path)?.read_to_end(&mut raw)?;
         }
-        let mut inner = Inner { file: None, entries: HashMap::new(), by_outpoint: HashMap::new(), ids: HashMap::new() };
+        let mut inner = Inner { file: None, broken: None, entries: HashMap::new(), by_outpoint: HashMap::new(), ids: HashMap::new() };
         let mut good_len = 0usize; // bytes of complete, valid records
         let mut records = 0usize;
         let mut pos = 0usize;
@@ -416,9 +456,10 @@ impl Ledger {
                 Ok(None) => good_len = end + usize::from(terminated), // blank line
                 // a complete record of another format is never a torn tail: refuse wherever it is
                 Err(LineError::Unsupported(msg)) => return Err(LedgerError::Unsupported { line: line_no, msg }),
-                Err(LineError::Bad(msg)) if is_last => {
-                    // torn (or zero-filled) tail: drop it
-                    eprintln!("ledger: discarding a torn last record at line {line_no}: {msg}");
+                Err(LineError::Bad(msg)) if is_last && !terminated => {
+                    // an unfinished last write (crash mid-append; torn or zero-filled): never acknowledged, so drop it.
+                    // A newline-terminated line was written whole: one that does not parse is refused like any other.
+                    eprintln!("ledger: discarding an unfinished last record at line {line_no}: {msg}");
                     break;
                 }
                 Err(LineError::Bad(msg)) => return Err(LedgerError::Corrupt { line: line_no, msg }),

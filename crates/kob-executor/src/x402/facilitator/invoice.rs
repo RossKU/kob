@@ -16,8 +16,9 @@
 //! with the invoice id as its request hash and the invoice's merchant; an intent executes no later than
 //! `expiresAt`.
 //!
-//! The store is an append-only JSONL log (one record per change, the last line of an id wins; a torn last
-//! line is dropped, a corrupt line elsewhere refuses to start), like the replay ledger.
+//! The store is an append-only JSONL log (one record per change, the last line of an id wins), written and read like
+//! the replay ledger: a failed write is cut back off the file and fails the operation; on open an unfinished last line
+//! (no newline) is dropped and any other line that does not parse refuses to start.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -88,6 +89,8 @@ pub struct InvoiceRecord {
 
 struct StoreInner {
     file: Option<File>,
+    /// Set when a failed append could not be cut back off the file: nothing more is appended until a restart.
+    broken: Option<String>,
     records: HashMap<String, InvoiceRecord>,
 }
 
@@ -106,7 +109,7 @@ fn io(e: impl std::fmt::Display) -> X402Error {
 impl InvoiceStore {
     /// A volatile store (tests, `:memory:`).
     pub fn in_memory() -> InvoiceStore {
-        InvoiceStore { inner: Mutex::new(StoreInner { file: None, records: HashMap::new() }), _lock: None, path: None }
+        InvoiceStore { inner: Mutex::new(StoreInner { file: None, broken: None, records: HashMap::new() }), _lock: None, path: None }
     }
 
     /// Opens (creating if needed) the log at `path` and replays it.
@@ -134,7 +137,8 @@ impl InvoiceStore {
             line_no += 1;
             let end = raw[pos..].iter().position(|b| *b == b'\n').map(|i| pos + i).unwrap_or(raw.len());
             let line = &raw[pos..end];
-            let last = end + 1 >= raw.len();
+            // the last line, still without its newline: an unfinished write that was never acknowledged
+            let unfinished = end >= raw.len();
             if line.iter().all(u8::is_ascii_whitespace) {
                 good = (end + 1).min(raw.len());
             } else {
@@ -147,11 +151,17 @@ impl InvoiceStore {
                         records.insert(r.invoice.id.clone(), r.invoice);
                         good = (end + 1).min(raw.len());
                     }
-                    Err(e) if last => {
-                        eprintln!("invoices: discarding a torn last record at line {line_no}: {e}");
+                    Err(e) if unfinished => {
+                        eprintln!("invoices: discarding an unfinished last record at line {line_no}: {e}");
                         break;
                     }
-                    Err(e) => return Err(format!("{} corrupt at line {line_no}: {e}", path.display())),
+                    Err(e) => {
+                        return Err(format!(
+                            "{} corrupt at line {line_no}: {e}; it is not an unfinished last write, so the facilitator does not \
+                             start over it (docs/ops/executor.md, \"Ledger recovery\")",
+                            path.display()
+                        ))
+                    }
                 }
             }
             pos = end + 1;
@@ -166,7 +176,11 @@ impl InvoiceStore {
             file.write_all(b"\n").map_err(|e| e.to_string())?;
         }
         file.sync_all().map_err(|e| e.to_string())?;
-        Ok(InvoiceStore { inner: Mutex::new(StoreInner { file: Some(file), records }), _lock: Some(lock), path: Some(path) })
+        Ok(InvoiceStore {
+            inner: Mutex::new(StoreInner { file: Some(file), broken: None, records }),
+            _lock: Some(lock),
+            path: Some(path),
+        })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, StoreInner> {
@@ -174,11 +188,19 @@ impl InvoiceStore {
     }
 
     fn persist(g: &mut StoreInner, r: InvoiceRecord) -> Result<InvoiceRecord> {
+        if let Some(why) = &g.broken {
+            return Err(io(format!("not writable until a restart: {why}")));
+        }
         if let Some(f) = g.file.as_mut() {
             let mut line = serde_json::to_string(&json!({ "invoice": r })).map_err(io)?;
             line.push('\n');
-            f.write_all(line.as_bytes()).map_err(io)?;
-            f.sync_all().map_err(io)?;
+            // a failed write is cut back off the file (the record is not acknowledged and nothing is glued to it)
+            if let Err(fail) = crate::x402::ledger::append_record(f, line.as_bytes()) {
+                if !fail.undone {
+                    g.broken = Some(fail.error.to_string());
+                }
+                return Err(io(fail.error));
+            }
         }
         g.records.insert(r.id.clone(), r.clone());
         Ok(r)
