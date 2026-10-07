@@ -206,3 +206,48 @@ jobs:
           path: |
             web/test-results
             web/playwright-report
+
+  reproducible:
+    # The release outputs are built twice, from two checkouts at different paths (a/ and b/) with their own target and node_modules
+    # directories and no cache, and every file must come out identical: the web bundle (web/dist, with the kob-wasm bindings it embeds,
+    # scripts/build-wasm.sh --web --slim) and the kob-executor release binary. A difference means the output depends on the build
+    # directory, the time or another input outside the commit (docs/ops/release.md 6).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          path: a
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          path: b
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
+        with:
+          toolchain: "1.94.0"
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: wasm-bindgen-cli (the Cargo.lock version, under a/target/tools; used by both builds)
+        working-directory: a
+        run: |
+          want=$(awk '/^name = "wasm-bindgen"$/ {getline; gsub(/"/, "", $3); print $3; exit}' Cargo.lock)
+          cargo install wasm-bindgen-cli --version "$want" --locked --root "$RUNNER_TEMP/bindgen"
+      - name: Build a/ and b/ (kob-wasm web bindings, web/dist, kob-executor release)
+        env:
+          WASM_BINDGEN: ${{ runner.temp }}/bindgen/bin/wasm-bindgen
+        run: |
+          for side in a b; do
+            echo "== $side"
+            (cd "$side" && bash scripts/build-wasm.sh --web --slim)
+            (cd "$side/web" && npm ci && npm run fetch-sdk && npm run build:wasm -- --copy && npm run build)
+            (cd "$side" && cargo build --locked --release -p kob-executor)
+          done
+      - name: Every file of web/dist and the kob-executor binary are identical
+        run: |
+          for side in a b; do (cd "$side/web/dist" && find . -type f -print0 | sort -z | xargs -0 sha256sum) > "dist-$side.sha256"; done
+          wc -l < dist-a.sha256
+          diff dist-a.sha256 dist-b.sha256
+          sha256sum a/target/release/kob-executor b/target/release/kob-executor
+          cmp a/target/release/kob-executor b/target/release/kob-executor

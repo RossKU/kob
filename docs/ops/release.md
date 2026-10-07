@@ -124,7 +124,8 @@ anchor when one is made). Users and operators check:
 * the web files against what the host serves (`index.html` carries the Content-Security-Policy).
 
 Rust release binaries are reproducible only on an identical toolchain and host; the hashes say what was
-built from the commit. The source-level artifacts (templates, record, registry) reproduce byte for byte
+built from the commit. CI (job `reproducible`) builds `web/dist` (with the kob-wasm bindings) and the
+kob-executor release binary twice, from two checkouts at different paths, and fails when any file differs. The source-level artifacts (templates, record, registry) reproduce byte for byte
 everywhere.
 
 ## 7. Upgrade order: indexers before wallets
