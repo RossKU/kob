@@ -139,7 +139,9 @@ is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fil
 - **Amounts.** Quantities are any number of base units of the token; prices are per whole token (`scale` base units).
 - **Expiry is soft.** An order is refundable by anyone (keeper, for `refundTip`) from its expiry;
   until the refund lands a fill at the order's own limit is still possible. GTC = refundable after
-  90 days without activity. Day orders end at **00:00 UTC** (`matcher.md` §10.10).
+  90 days without activity. Day orders end at **00:00 UTC** for conforming matchers, which stop filling at the
+  placement record's `deadline` by their own clock; on chain the order ends at its `expiryDaa`, the DAA estimate of that
+  midnight plus a 1 % margin, so it becomes refundable at or shortly after 00:00 UTC (`matcher.md` §10.10).
 - **Cancel** is maker-signed (SIGHASH_ALL) and may lose a race against a fill.
 - **Triggers** (stops, trailing, stop entries) are touches. A KAS-quoted stop arms, or trails, only in a transaction that
   fills a plain resting order of the same token and `scale` at or beyond the stop (for a trail, far enough beyond it for
@@ -162,9 +164,11 @@ is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fil
   of any OTHER token (another covenant id) sent to an order are NOT protected: every spend of the order (fill, refund,
   update, cancel) authorises them, so whoever builds that transaction may move them. Never send tokens to an order
   (`matcher.md` §1.2).
-- **Positional outputs.** Everything an order owes is paid, delivered or returned at a position no
-  other order can claim: its own input index, or (the unsold rest of an IOC sell, a custody's rest) the
-  index of its own custody input. One output never serves two orders.
+- **Positional outputs.** Everything an order owes the maker is paid, delivered or returned at a position no
+  other order can claim: its own input index, or (the unsold rest of an IOC sell, a pair order's custody rest or return)
+  the index of its own custody input. One output never serves two orders. The custody of a `KobAsk` / `KobCondAsk` that
+  rests after a partial fill is not positional: it may sit at any output, which the order's own covenant id owns (only
+  that order can spend it), so no other order can claim it either.
 - **Stop bands** are exact: `stop ∓ ⌊stop × bps / 10000⌋` quote units per whole token, rounded in the maker's
   favour, at any stop price (a stop leg needs a stop of at most 922,337,203,685,477 quote units per whole token).
 - **No on-chain price-time priority**; the tip is the priority lever. Self-trade prevention is the

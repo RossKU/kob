@@ -1914,8 +1914,8 @@ What the planner does (`matcher::batch`, pure, deterministic):
   to what it has left in this batch, and each only for an amount its own quantity rules accept (at least its minimum
   fill, or all it has left): a bid that could never take the surplus does not value it, whatever it quotes, so a surplus
   below every bid's minimum fill is worth nothing at the bids (value such surpluses with `refPrice`). The best bid's quote
-  alone never values a surplus. The value is then cut by
-  `haircutBps` and must exceed the fee of the operator's token output (about 205 bytes). It enters the batch's profit
+  alone never values a surplus. Only `haircutBps` of the value counts (8000: 80 % of it, a 20 % cut), and that must
+  exceed the fee of the operator's token output (about 205 bytes). It enters the batch's profit
   next to the spread and the tips, so a zero-tip netting whose kept surplus pays its fee is built.
 * The batch request names the kept tokens (`keepSurplus`): the builder hands their surplus to the taker (the operator's
   key, one token output carrying `keepCarrier`, 2 KAS by default; `Batch::keepCarrier`) instead of the first pair ask

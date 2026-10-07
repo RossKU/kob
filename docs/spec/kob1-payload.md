@@ -46,7 +46,7 @@ funds; it only makes the order invisible to conforming matchers.
 ```
 payload  = magic version record*
 magic    = "KOB1"                      4 bytes: 4b 4f 42 31
-version  = 0x04 | 0x03 | 0x02          1 byte
+version  = 0x04 | 0x02                 1 byte (0x03 and every other value: rejected)
 record   = type:u8 length:u16le value[length]
 ```
 
@@ -213,10 +213,12 @@ strays.
 
 ## Validation (indexers, `recoverOrders`)
 
-For every ORDER record, reject the record unless all hold. In the reference code a failure of rule 1 (unknown family
-or kind, a wrong state length) is a decode error that rejects the whole payload (`kob_protocol::payload::decode`, as the
-builders do); `recoverOrders` is all-or-nothing per payload; the executor's indexer applies rules 2 to 8 record by record
-(it re-encodes and recovers each record on its own). An order output that is not the P2SH of a pinned template (rule 3)
+For every ORDER record, reject the record unless all hold. In the reference code what the decoder checks rejects the
+whole payload, not the record (`kob_protocol::payload::decode`, as the builders do): rule 1 (unknown family or kind, a
+wrong state length), rule 2 (a state that does not decode canonically) and the numeric gate of rule 8. A payload is one
+author's (the transaction's), so a bad record hides only that author's other records. `recoverOrders` is all-or-nothing
+per payload; the executor's indexer applies rules 3 to 7 record by record (it re-encodes and recovers each record on its
+own). An order output that is not the P2SH of a pinned template (rule 3)
 is an order of a template this build does not pin: it is never recovered, listed or offered to a matcher or keeper.
 
 1. `kind` is a kind of the record's `family`. An unknown family or kind rejects the record.

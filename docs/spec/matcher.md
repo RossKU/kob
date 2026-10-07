@@ -472,8 +472,8 @@ id.
   (the owner sells the inventory off-matcher); otherwise it is what the plain resting KAS bids of the token pay for the
   amount (best first, each only up to what it holds and only for an amount its own quantity rules accept: at least its
   minimum fill, or all it has left; a bid that could never take the amount does not value it, whatever it quotes; never
-  the best bid's quote alone). The value is then cut by `haircutBps` (default 80 %); it must exceed the fee of the
-  operator's token output, and the batch as a whole still needs `min_profit`. Without `refPrice` the amount must be at
+  the best bid's quote alone). Only `haircutBps` of the value counts (default 8,000: 80 % of it, a 20 % cut); it must
+  exceed the fee of the operator's token output, and the batch as a whole still needs `min_profit`. Without `refPrice` the amount must be at
   least the smallest minimum fill of the valued bids (no unsellable dust); `minAmount` may raise that bound, never lower
   it. The matcher only accumulates: the reference executor's maintenance jobs never sell a listed token (they may merge
   its UTXOs).
