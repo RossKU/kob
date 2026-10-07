@@ -14,7 +14,7 @@
 //! | rejection_vectors | `kcc1::{decode_arguments, decode_state, validate_argument_type, check_entrypoints}`, the encoders, the compiler |
 //! | hash_committed_virtual_element | `silverscript_abi::encode_struct_payload` (Packed) and `kcc1::hash` |
 //!
-//! Plus a sweep over every committed KOB program artifact (live, retired, router): every dispatch tag recomputed from
+//! Plus a sweep over every committed KOB program artifact (orders, router): every dispatch tag recomputed from
 //! its ABI types under KCC-1 section 3.5.1, every type a KCC-1 type, every template hash recomputed under section 3.7.3.
 //!
 //! Run: cargo test -p kob-tests --test kcc1_conformance_tests -- --nocapture
@@ -705,16 +705,12 @@ fn kcc1_rejection_vectors() {
 #[test]
 fn kcc1_every_kob_artifact_conforms() {
     let root = common::repo_root();
-    let mut files: Vec<std::path::PathBuf> = vec![];
-    for dir in ["contracts/artifacts", "contracts/retired"] {
-        let mut d: Vec<_> = std::fs::read_dir(root.join(dir))
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|p| p.extension().is_some_and(|x| x == "json"))
-            .collect();
-        d.sort();
-        files.extend(d);
-    }
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(root.join("contracts/artifacts"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    files.sort();
     files.push(root.join("crates/kob-protocol/data/router_sil_abi.json"));
     let (mut entries, mut programs) = (0, 0);
     for f in &files {

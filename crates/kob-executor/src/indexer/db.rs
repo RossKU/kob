@@ -29,8 +29,8 @@ pub enum DbError {
     #[error("database belongs to network `{found}`, configured `{expected}`")]
     NetworkMismatch { found: String, expected: String },
     #[error(
-        "database {0} was written by a build before protocol v3 (schema 4 or older: its orders are of retired templates and its \
-         quantities are not base units) and cannot be migrated: move it aside (or delete it) and run `kob-executor index replay`, \
+        "database {0} was written by a build before protocol v3 (schema 4 or older: its orders are of templates this build does not \
+         pin and its quantities are not base units) and cannot be migrated: move it aside (or delete it) and run `kob-executor index replay`, \
          which rebuilds it from the record log"
     )]
     PreV3(String),
@@ -74,10 +74,10 @@ pub fn open_writer(path: &Path, network: &str) -> DbResult<Connection> {
     Ok(conn)
 }
 
-/// A database written by a build before protocol v3 (schema 4 or older) has the column `orders.lot_units` of the retired
-/// templates' layouts. It cannot be migrated: every order in it is of a retired template (cancel only, never listed by this
-/// build) and every stored quantity counts in the old layouts. The record log rebuilds the database (`index replay`: its
-/// frames of retired templates are read and their reveals dropped, `indexer::layouts`). Checked BEFORE the schema is applied,
+/// A database written by a build before protocol v3 (schema 4 or older) has the column `orders.lot_units` of the older
+/// templates' layouts. It cannot be migrated: every order in it is of a template this build does not pin (never listed)
+/// and every stored quantity counts in the old layouts. The record log rebuilds the database (`index replay`: reveals of
+/// templates this build does not pin are dropped, frames it cannot decode skipped). Checked BEFORE the schema is applied,
 /// so the refused file is left exactly as it was.
 pub fn refuse_pre_v3(conn: &Connection, path: &Path) -> DbResult<()> {
     let old: bool = conn.prepare("SELECT 1 FROM pragma_table_info('orders') WHERE name = 'lot_units'")?.exists([])?;
@@ -306,7 +306,7 @@ mod tests {
         assert_eq!(meta_get(&c, "a").unwrap().as_deref(), Some("b"));
     }
 
-    /// A database of a build before protocol v3 (its `orders` table has the `lot_units` column of the retired layouts) is
+    /// A database of a build before protocol v3 (its `orders` table has the `lot_units` column of the older layouts) is
     /// refused by the writer and the reader before anything touches it, with the way out (`index replay`).
     #[test]
     fn a_pre_v3_database_is_refused_untouched() {

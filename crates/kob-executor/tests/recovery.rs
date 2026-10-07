@@ -169,37 +169,10 @@ async fn record_log_replay_rebuilds_an_identical_database_and_holds_no_raw_data(
     let (n, orders) = (rep.frames, rep.orders);
     assert_eq!(n as usize, records.len());
     assert_eq!(orders, 2);
-    assert_eq!((rep.formats, rep.skipped.len(), rep.dropped.dropped()), ([0, 0, n], 0, 0));
+    assert_eq!((rep.skipped.len(), rep.dropped.dropped()), (0, 0));
     let conn = open_writer(&cfg2.db_path(), "testnet-10").unwrap();
     assert_eq!(snapshot(&conn), live);
 
-    // the same log in record-log format 1 (what builds before 2026-10-01 wrote: unmarked frames, states at their
-    // template's length): every format-1 frame predates protocol v3, so the reader parses each frame but reads its order
-    // reveals as retired layouts and drops them, counted (a v3 state is never misread from a format-1 frame); the database
-    // it rebuilds is no longer the live one (the fill and the cancel are not interpreted), while the format-2 log above
-    // replays to it exactly
-    let reveals = records
-        .iter()
-        .flat_map(|(_, b)| &b.blocks)
-        .flat_map(|bl| &bl.txs)
-        .flat_map(|t| &t.inputs)
-        .filter(|i| i.reveal.is_some())
-        .count() as u64;
-    assert!(reveals > 0, "the log reveals the spent orders");
-    let v1_dir = dir.path().join("records-v1");
-    {
-        let (mut v1, _) = RecordLog::open(&v1_dir, 1 << 20, 0).unwrap();
-        for (_, b) in &records {
-            v1.append_body(&b.encode_v1(1_790_000_000_000)).unwrap();
-        }
-    }
-    let mut cfg3 = cfg.clone();
-    cfg3.data_dir = dir.path().join("rebuilt-v1");
-    cfg3.records.dir = Some(v1_dir);
-    let rep = replay_from_log(&cfg3).unwrap();
-    assert_eq!((rep.frames, rep.formats, rep.skipped.len()), (n, [0, n, 0], 0));
-    assert_eq!((rep.dropped.retired_reveals, rep.dropped.unknown_reveals, rep.dropped.dropped()), (reveals, 0, reveals));
-    assert_ne!(snapshot(&open_writer(&cfg3.db_path(), "testnet-10").unwrap()), live);
     // replay refuses to overwrite an existing database
     assert!(replay_from_log(&cfg2).is_err());
     drop(conn);
@@ -210,28 +183,6 @@ async fn record_log_replay_rebuilds_an_identical_database_and_holds_no_raw_data(
     node.push_block(vec![]);
     sync(&f2).await;
     assert_eq!(idx2.health.snapshot().cursor_hash, Some(node.tip()));
-}
-
-/// A real record log written before 2026-10-01 replays end to end: the TN10 soak's exec-a log from before the pair-market
-/// auction swap (main 958d013), whose old `KobCross` reveals (333-byte state) failed the replay at frame 1356. Run with
-/// `KOB_OLD_RECORD_LOG=<dir holding seg-*.kobrec> cargo test -p kob-executor --test recovery -- --ignored old_record_log`;
-/// the directory is copied, never modified.
-#[test]
-#[ignore = "needs KOB_OLD_RECORD_LOG (a copy of an old record log)"]
-fn an_old_record_log_replays_end_to_end() {
-    let Some(src) = std::env::var_os("KOB_OLD_RECORD_LOG") else { return };
-    let dir = tempfile::tempdir().unwrap();
-    let records = dir.path().join("records");
-    std::fs::create_dir_all(&records).unwrap();
-    for p in recordlog::segment_paths(std::path::Path::new(&src)).unwrap() {
-        std::fs::copy(&p, records.join(p.file_name().unwrap())).unwrap();
-    }
-    let mut cfg = IndexerConfig { data_dir: dir.path().join("data"), ..Default::default() };
-    cfg.records.dir = Some(records);
-    let rep = replay_from_log(&cfg).unwrap();
-    println!("{rep:?}");
-    assert!(rep.frames > 0 && rep.skipped.is_empty(), "{:?}", rep.skipped);
-    assert_eq!(rep.formats[1] + rep.formats[2], rep.frames);
 }
 
 #[tokio::test]

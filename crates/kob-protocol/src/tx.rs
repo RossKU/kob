@@ -208,17 +208,6 @@ pub enum SigPlan {
         entry: String,
         args: Vec<Arg>,
     },
-    /// Entry call of a RETIRED order template (`crate::retired`, spend-only: the maker's cancel of an order placed under an
-    /// older template): the retired template by hash and its state span.
-    #[serde(rename_all = "camelCase")]
-    Retired {
-        #[serde(with = "crate::json::field")]
-        template_hash: [u8; 32],
-        #[serde(with = "crate::json::field")]
-        state: Vec<u8>,
-        entry: String,
-        args: Vec<Arg>,
-    },
 }
 
 fn router_actor(name: &str) -> Result<&'static crate::router::Actor> {
@@ -230,7 +219,7 @@ impl SigPlan {
     pub fn signer(&self) -> Option<[u8; 32]> {
         match self {
             SigPlan::P2pk { pubkey } => Some(*pubkey),
-            SigPlan::Entry { args, .. } | SigPlan::Router { args, .. } | SigPlan::Retired { args, .. } => {
+            SigPlan::Entry { args, .. } | SigPlan::Router { args, .. } => {
                 args.iter().find_map(|a| if let Arg::Sig(k) = a { Some(*k) } else { None })
             }
             SigPlan::TokenLeader { witness, .. } | SigPlan::TokenDelegator { witness, .. } => match witness {
@@ -251,10 +240,6 @@ impl SigPlan {
             }
             SigPlan::KronToken { template: t, state, .. } => Some(state.redeem_with(token_template(*t))),
             SigPlan::Router { actor, state, .. } => router_actor(actor).ok()?.template().redeem(state).ok(),
-            SigPlan::Retired { template_hash, state, .. } => {
-                let r = crate::retired::by_hash(template_hash)?;
-                (state.len() == r.template.state_len).then(|| r.template.redeem(state))
-            }
         }
     }
 
@@ -279,18 +264,6 @@ impl SigPlan {
                 }
                 a.template().redeem(state).map(|_| ())
             }
-            SigPlan::Retired { template_hash, state, entry, .. } => {
-                let r = crate::retired::by_hash(template_hash).ok_or_else(|| {
-                    Error::Invalid(format!("{} is not a retired template this build can spend", to_hex(template_hash)))
-                })?;
-                if entry != "cancel" {
-                    return invalid("a retired template is spend-only: the maker's cancel");
-                }
-                if state.len() != r.template.state_len {
-                    return invalid("the state span does not fit the retired template");
-                }
-                Ok(())
-            }
         }
     }
 
@@ -304,7 +277,7 @@ impl SigPlan {
             }
             SigPlan::KronToken { template: t, state, .. } => state.spk_with(token_template(*t)),
             // an unknown actor or a malformed state gives an unspendable empty script (`check` refuses such a plan)
-            SigPlan::Router { .. } | SigPlan::Retired { .. } => self
+            SigPlan::Router { .. } => self
                 .redeem()
                 .map(|r| kaspa_txscript::pay_to_script_hash_script(&r))
                 .unwrap_or_else(|| ScriptPublicKey::new(0, Default::default())),
@@ -360,22 +333,6 @@ impl SigPlan {
                     });
                 }
                 crate::router::entry_sigscript(a, state, entry, &vals)
-            }
-            SigPlan::Retired { template_hash, state, entry, args } => {
-                let r = crate::retired::by_hash(template_hash)
-                    .ok_or_else(|| Error::Invalid(format!("{} is not a retired template", to_hex(template_hash))))?;
-                if state.len() != r.template.state_len {
-                    return invalid("the state span does not fit the retired template");
-                }
-                let mut vals = Vec::with_capacity(args.len());
-                for a in args {
-                    vals.push(match a {
-                        Arg::Int(i) => ArtifactValue::Int(*i),
-                        Arg::Bytes(b) => ArtifactValue::Bytes(b.clone()),
-                        Arg::Sig(_) => ArtifactValue::Bytes(need(entry)?.to_vec()),
-                    });
-                }
-                entry_sigscript(&r.template, &r.template.redeem(state), entry, &vals).map_err(Error::Invalid)
             }
         }
     }

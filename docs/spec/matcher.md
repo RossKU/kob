@@ -26,8 +26,8 @@ Order UTXOs are P2SH: the redeem script, and so the order's parameters, is not o
 order is spent. A KOB wallet MUST therefore publish, in the payload of every transaction that
 creates an order (genesis, including the replacement of a cancel-replace), a placement record per
 order output. The placement record is the `ORDER` record of the KOB1 payload; its byte encoding
-and validation rules are defined in `kob1-payload.md` (payload version 4; versions 2 and 3 still decode, into the
-retired lot layouts of `template-retirement.md`: cancel only), and it holds:
+and validation rules are defined in `kob1-payload.md` (payload version 4; an order under a template this build does not
+pin is unknown: `template-retirement.md`), and it holds:
 
 | Field | Content |
 |---|---|

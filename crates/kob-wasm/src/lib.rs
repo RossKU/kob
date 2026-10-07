@@ -155,75 +155,6 @@ pub mod api {
         let id = TemplateId::from_name(kind).ok_or_else(|| format!("unknown template {kind}"))?;
         out(&AnyState::decode(id, &from_hex(hex)?).map_err(|e| e.to_string())?)
     }
-    /// The retired order templates this build can still SPEND (the maker's cancel only, `kob_protocol::retired`):
-    /// `[{ kind, kindName, family, hash, stateLen, note }]` (`kind` is the base kind, `kindName` its name in the family as it was
-    /// pinned, `family` the family code of the escrowed token: 1 KCC-20, 2 KRON).
-    pub fn retired_templates() -> R<String> {
-        let v: Vec<serde_json::Value> = kob_protocol::retired::retired()
-            .iter()
-            .map(|r| {
-                serde_json::json!({
-                    "kind": r.kind.name(),
-                    "kindName": r.kind_name(),
-                    "family": r.family.code(),
-                    "hash": r.hash_hex(),
-                    "stateLen": r.template.state_len,
-                    "note": r.note,
-                })
-            })
-            .collect();
-        out(&v)
-    }
-    fn retired_of(hash: &str) -> R<&'static kob_protocol::retired::Retired> {
-        let h = kob_protocol::json::hex32(hash).map_err(|e| format!("template hash: {e}"))?;
-        kob_protocol::retired::by_hash(&h).ok_or_else(|| format!("{hash} is not a retired template this build can spend"))
-    }
-    /// The state span of an order of a retired template as its LEGACY (lot) state `{"kind", "state"}` with the field names of
-    /// the retired layout (`lotsLeft`, `lotUnits`, ...; spend-only: what its cancel needs). The protocol v3 cross limit (the one
-    /// retired template without lots, `retired::nolot`) reads as `{"kind": "KobCross", "state"}` in its own layout (`amountLeft`,
-    /// `aFamily`, `scale`, `price`, ...; its custody holds exactly `amountLeft`).
-    /// A retired template with today's state layout reads as today's state of its kind.
-    pub fn decode_retired(hash: &str, hex: &str) -> R<String> {
-        let r = retired_of(hash)?;
-        match kob_protocol::retired::decode_any(r, &from_hex(hex)?).map_err(|e| e.to_string())? {
-            kob_protocol::retired::RetiredState::Lot(l) => out(&l),
-            kob_protocol::retired::RetiredState::NoLotCross(x) => out(&serde_json::json!({ "kind": "KobCross", "state": x })),
-            // a retired template with today's layout (only its code changed): today's `{"kind", "state"}`
-            kob_protocol::retired::RetiredState::Current(a) => out(&a),
-        }
-    }
-    /// Script public key of an order of a retired template (its state span under that template).
-    pub fn retired_script_public_key(hash: &str, hex: &str) -> R<String> {
-        let r = retired_of(hash)?;
-        let span = from_hex(hex)?;
-        if span.len() != r.template.state_len {
-            return Err(format!("the state span is {} bytes, the retired template's {}", span.len(), r.template.state_len));
-        }
-        Ok(tx::spk_to_string(&r.template.spk(&span)))
-    }
-    /// The maker's cancel of an order of a retired template (`build::CancelRetired`). With `ownKeys` (as in [`build`]) the
-    /// maker and the change key must be the wallet's.
-    pub fn build_cancel_retired(request: &str) -> R<String> {
-        let mut v: serde_json::Value = parse("request", request)?;
-        let own: Option<Vec<[u8; 32]>> = match v.as_object_mut().and_then(|o| o.remove("ownKeys")) {
-            None | Some(serde_json::Value::Null) => None,
-            Some(k) => {
-                let list: Vec<String> = serde_json::from_value(k).map_err(|e| format!("ownKeys: {e}"))?;
-                Some(list.iter().map(|s| kob_protocol::json::hex32(s).map_err(|e| format!("ownKeys: {e}"))).collect::<R<_>>()?)
-            }
-        };
-        let r: build::CancelRetired = serde_json::from_value(v).map_err(|e| format!("request: {e}"))?;
-        if let Some(own) = &own {
-            let rt = retired_of(&to_hex(&r.template_hash))?;
-            let maker = kob_protocol::retired::decode_any(rt, &r.state).map_err(|e| e.to_string())?.maker();
-            for k in [Some(maker), r.change].into_iter().flatten() {
-                if !own.contains(&k) {
-                    return Err(format!("{} is not one of the wallet's keys", to_hex(&k)));
-                }
-            }
-        }
-        out(&build::build_cancel_retired(&r, &budget::lookup).map_err(|e| e.to_string())?)
-    }
     pub fn redeem_script(state: &str) -> R<String> {
         let s: AnyState = parse("state", state)?;
         s.validate().map_err(|e| e.to_string())?;
@@ -266,11 +197,6 @@ pub mod api {
     pub fn recover_orders(tx_json: &str) -> R<String> {
         let t: TxJson = parse("tx", tx_json)?;
         out(&payload::recover_orders(&t).map_err(|e| e.to_string())?)
-    }
-    /// Re-derives the orders of a transaction whose payload is of version 2 or 3 (the RETIRED lot templates; spend-only).
-    pub fn recover_retired_orders(tx_json: &str) -> R<String> {
-        let t: TxJson = parse("tx", tx_json)?;
-        out(&payload::recover_retired_orders(&t).map_err(|e| e.to_string())?)
     }
 
     // ---------------------------------------------------------------------------- numbers and defaults
@@ -1020,31 +946,6 @@ pub fn decode_state(kind: &str, hex: &str) -> Result<String, JsError> {
     js(api::decode_state(kind, hex))
 }
 
-/// The retired order templates this build can still spend (the maker's cancel only): `[{kind, hash, stateLen, note}]`.
-#[wasm_bindgen(js_name = retiredTemplates)]
-pub fn retired_templates() -> Result<String, JsError> {
-    js(api::retired_templates())
-}
-
-/// The state span of an order of a retired template (by hash) as the current state of its kind (spend-only).
-#[wasm_bindgen(js_name = decodeRetired)]
-pub fn decode_retired(hash: &str, hex: &str) -> Result<String, JsError> {
-    js(api::decode_retired(hash, hex))
-}
-
-/// Script public key of an order of a retired template (template hash, state span hex).
-#[wasm_bindgen(js_name = retiredScriptPublicKey)]
-pub fn retired_script_public_key(hash: &str, hex: &str) -> Result<String, JsError> {
-    js(api::retired_script_public_key(hash, hex))
-}
-
-/// The maker's cancel of an order of a retired template: `{templateHash, state, order, custody?, strays?, funding?, change?,
-/// fee?, ownKeys?}` into an unsigned transaction (its order input is a `retired` plan).
-#[wasm_bindgen(js_name = buildCancelRetired)]
-pub fn build_cancel_retired(request: &str) -> Result<String, JsError> {
-    js(api::build_cancel_retired(request))
-}
-
 /// Redeem script of an order state.
 #[wasm_bindgen(js_name = redeemScript)]
 pub fn redeem_script(state: &str) -> Result<String, JsError> {
@@ -1165,14 +1066,6 @@ pub fn issue(spec: &str) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = issueLimits)]
 pub fn issue_limits() -> Result<String, JsError> {
     js(api::issue_limits())
-}
-
-/// Re-derives the orders of a transaction whose payload is of version 2 or 3 (the retired lot templates; the maker's cancel
-/// is all that can be built for them): `[{transactionId, output, value, covenantId, templateHash, family, order, custody,
-/// deadline}]` with the order in its legacy (lot) layout.
-#[wasm_bindgen(js_name = recoverRetiredOrders)]
-pub fn recover_retired_orders(tx: &str) -> Result<String, JsError> {
-    js(api::recover_retired_orders(tx))
 }
 
 // ------------------------------------------------------------------------------------ numbers and defaults
@@ -2074,16 +1967,6 @@ mod tests {
         assert!(api::pair_fill(&ca, "1", "1", "1").unwrap_err().contains("not a KobPair"));
         assert!(api::ifd_pair_exit(&pa).is_err());
         assert!(api::pair_tokens(&golden_state("create.ask")).is_err());
-    }
-
-    #[test]
-    fn retired_templates_list_their_family_and_kind_name() {
-        let v: Vec<serde_json::Value> = serde_json::from_str(&api::retired_templates().unwrap()).unwrap();
-        assert!(v.len() >= 40, "{} retired templates", v.len());
-        assert!(v.iter().any(|r| r["kindName"] == "KobCrossKron" && r["family"] == 2));
-        assert!(v.iter().any(|r| r["kindName"] == "KobAsk" && r["family"] == 1));
-        // not a retired template of this build
-        assert!(api::decode_retired(&"00".repeat(32), "").is_err());
     }
 
     mod erased {

@@ -363,9 +363,9 @@ node (wRPC JSON)  ->  follower  ->  extract  ->  ingest (one atomic SQLite commi
   genesis id, and (ask side) a custody output holding exactly `amountLeft` base units owned by that id.
   Each record is validated alone, so one bad record in a payload hides only itself. The payload is
   never trusted; a missing or wrong record leaves the order invisible (a `rejects` row for wrong
-  ones). A payload of version 2 or 3 describes orders of RETIRED templates (the protocol v2.6 layouts,
-  `docs/spec/template-retirement.md`): its records never become orders (cancel only, never in a book) and each
-  is counted as a reject `retired_template:<kind>` (e.g. `retired_template:KobAsk`, `retired_template:KobCrossKron`).
+  ones). An order under a template this build does not pin never becomes an order (`docs/spec/template-retirement.md`):
+  a payload of version 3 or a version-2 `ORDER` record does not decode (a `payload:` reject), and an output that is not
+  the P2SH of a pinned template is never recovered.
 * **Lineage.** Every later spend is classified from the input's own signature script (the revealed
   redeem script must hash to the spent output and match a pinned template; the dispatch tag selects
   the entry, the arguments give the amount in base units). The continuation's state is *proven*, not assumed: the
@@ -1055,7 +1055,6 @@ strings unless noted):
 | WebSocket `fills` notice | `lots` (number) | `amount` (number, base units) |
 | trades, candles, stats, depth | `price_basis` = the allowlist lot | `price_basis` = the token's standard scale (sompi per whole token); `decimals` added |
 | `unlisted_reason` | `non_standard_lot`, `lot_value_below_minimum` | `non_standard_scale`, `order_value_below_minimum` |
-| reject reason | (none) | `retired_template:<kind>` for each record of payload versions 2 and 3 |
 
 #### 5.2 Aggregated book levels
 
@@ -1479,24 +1478,22 @@ kob recover --from backup.json --node ws://127.0.0.1:18210 --cancel --key file:m
 
 Inputs: the web wallet's backup (`kob-backup`), this export format (version 1 or 2), or indexer order views
 (`GET /v1/orders/{id}`, or a page of them). Orders are deduplicated by covenant id; every state a file names is a search
-candidate and nothing else in a file is trusted. Each order's template is the pinned one, else a retired template
-(an older contract version: spend-only, `docs/spec/template-retirement.md`; its states are read in their older lot
-layout and the report marks them `older_contract_version: true`). The candidates are, in this order: the last proven
+candidate and nothing else in a file is trusted. Each order's template must be one this build pins (any other is
+`unsupported`: `docs/spec/template-retirement.md`). The candidates are, in this order: the last proven
 state and the given state; each with `amountLeft` = the `--amount-left` hints; each with `amountLeft` = original −
 k × `minFill` for k = 1, 2, … (at most 200 candidates in all). A partial fill splices the new `amountLeft` into the
 script and any amount of at least `minFill` may have been filled, so **this search is not exhaustive**: a partly
 filled order the grid does not reach is reported `not_found` until the maker passes its amount with
 `--amount-left` (the `amount_left` an indexer view shows; base units, or a decimal amount of whole tokens with at
 most the token's decimals: `6.5` with 3 decimals is 6500; `<covenant id>=<amount>` names one order, a bare amount
-applies to every order of the run). An order of a retired lot template is searched over every smaller `lotsLeft`,
-which is exhaustive for its asks, bids and pair orders. An order is `live` when the node holds an unspent output at a
+applies to every order of the run). An order is `live` when the node holds an unspent output at a
 candidate's exact P2SH script carrying the order's covenant id; ask-side custody (`amountLeft` base units; a pair order: each
 custody of its state under its token's program, a sell-first entry's B prefund reported as `prefund` with the entry's `bExt`) is rebuilt
 from the live state and verified the same way (`verified`, `missing`, or `unknown` without the extension commitment
 of a KCC-20 token). `not_found` is final only for a bid (its script never changes); for the others it can be a state
 the search did not reach (an amount off the grid, a moved trailing stop, an armed band, repeat fields): pass
-`--amount-left`, or use an indexer view or the web wallet's resolver. `unsupported`: the template is neither pinned
-nor retired. The report is JSON (one entry per order: status, outpoint, value, UTXO DAA, current state, `amount_left`
+`--amount-left`, or use an indexer view or the web wallet's resolver. `unsupported`: the template is not pinned by
+this build, or the state does not decode. The report is JSON (one entry per order: status, outpoint, value, UTXO DAA, current state, `amount_left`
 (base units; a bid: its remaining buying power), `scale`, `min_fill`, `found_by`, custody).
 
 `--cancel` builds the maker's cancel of every live order of the key's maker (custody verified when it has one), one
@@ -1529,17 +1526,11 @@ broken chain aborts the replay with the frame's number.
 
 The log outlives the templates it recorded. Frames are versioned: since 2026-10-01 (record-log format 2) a frame carries a
 template table (record-log code -> template hash of every order template and token program it refers to) and the length of
-every revealed state, so it decodes whatever the templates are when it is read. Frames written before (format 1, no
-marker) stored a state at its template's length of the time; they are read with today's layouts plus every retired
-layout this repository ever committed (`indexer/layouts.rs`, chosen by the entry's dispatch tag, the whole frame
-deciding when two fit). A reveal of a template this build does not have (an older artifact of a kind, or a kind it does
-not know) is dropped, and a frame it cannot decode at all (a newer format) is kept in the log and skipped; both are
-counted in the replay's summary and logged as warnings, never fatal. An order whose template this build does not have
-cannot be interpreted either: its placement becomes a reject (`placement:...`) in the rebuilt database. Example, the
-TN10 soak's pre-958d013 log (8,388 format-1 frames): all replay, 864 reveals of the old `KobCross` (333-byte state) are
-dropped, the 777 old cross limits are rejects, every other order, event and holding matches the database the old build
-kept. Format 2 frames are appended after format 1 in the same segment; an older build opens such a log (it checks the
-chain only) but cannot replay it.
+every revealed state, so it decodes whatever the templates are when it is read. A reveal of a template this build does
+not pin is dropped, and a frame it cannot decode at all (format 1, written before 2026-10-01 without a marker, or a newer
+format) is kept in the log and skipped; both are counted in the replay's summary and logged as warnings, never fatal. An
+order whose template this build does not pin cannot be interpreted either: its placement becomes a reject in the rebuilt
+database.
 
 **Schema 3 (protocol v2.6).** Opening a schema-2 database drops its `receipts` table and indexes in place and records
 schema 3; nothing else referred to them, so no replay is needed. An old configuration's `[receipts]` table is ignored.

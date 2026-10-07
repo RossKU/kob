@@ -248,7 +248,6 @@ fn input_item(i: &MIn) -> Item {
                 None => (Holder::Unknown, What::Other(format!("router {actor}"))),
             }
         }
-        SigPlan::Retired { .. } => (cov.map(Holder::Cov).unwrap_or(Holder::Unknown), What::Other("retired".into())),
     };
     Item { value, cov, holder, what }
 }

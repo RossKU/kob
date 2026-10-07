@@ -4,7 +4,7 @@ import { buildCancelEnv, readClock } from '../../app/env';
 import type { Services } from '../../app/services';
 import type { StrayView, TokenUtxoView } from '../../data/indexer-types';
 import {
-  SnapshotError, crossB, planCancel, planCancelAll, planCancelReplace, planRefund, planSweep, snapshotFromOrderView, snapshotFromRecord, splitStrayViews,
+  SnapshotError, planCancel, planCancelAll, planCancelReplace, planRefund, planSweep, secondTokenOf, snapshotFromOrderView, snapshotFromRecord, splitStrayViews,
   type CancelPlan, type OrderSnapshot, type ReplacementSpec,
 } from '../../kob/cancel';
 import { confirmSnapshotOnNode } from '../../kob/node-verify';
@@ -56,7 +56,7 @@ export async function snapshotFor(s: Services, entry: OrderEntry, strays: readon
       const ext = (resolved.custody ? extensionOfState(resolved.custody.state) : null) ?? (entry.record.custody?.tokenState ? extensionOfState(entry.record.custody.tokenState) : null);
       const family = familyOfKind(entry.record.kind);
       // a pair order's covenant id may also own strays of its quote token B (its own family and extension commitment)
-      const b = crossB(resolved.order.state);
+      const b = secondTokenOf(resolved.order.state);
       const { views, unknown } = await straysOfOrder(s, entry.id, strays);
       // strays of any other token are foreign: kept apart with the program their state was proven under (or reported as unproven)
       const split = splitStrayViews(views, resolved.order.state);

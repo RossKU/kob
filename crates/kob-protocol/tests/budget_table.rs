@@ -1,5 +1,5 @@
 //! Generates the compute-budget table by running every builder shape (the golden scenarios plus
-//! the token slot grid, and the maker's cancel of every retired template) through the rusty-kaspa v2.1.0 engine, and checks it against the
+//! the token slot grid) through the rusty-kaspa v2.1.0 engine, and checks it against the
 //! committed `data/compute_budgets.json`. `KOB_REGEN=1` rewrites the file.
 //!
 //! An input's script-unit cost depends on the transaction around it: every other token input (an
@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::budget::{budget_for_units, lookup, table};
-use kob_protocol::build::{build_cancel_retired, build_with, Action, CancelRetired};
+use kob_protocol::build::{build_with, Action};
 use kob_protocol::tx::{assemble, sign_locally, BuiltTx};
 use kob_protocol::verify::{execute, measure_units};
 
@@ -47,16 +47,6 @@ fn builds(a: &Action) -> bool {
 fn units(name: &str, a: &Action) -> Vec<(String, u64)> {
     let keys = common::keys();
     let built = build_with(a, &provisional).unwrap_or_else(|e| panic!("{name}: build: {e}"));
-    let sigs = sign_locally(&built, &keys).unwrap_or_else(|e| panic!("{name}: sign: {e}"));
-    let (tx, entries) = assemble(&built, &sigs).unwrap_or_else(|e| panic!("{name}: assemble: {e}"));
-    let u = measure_units(&tx, &entries).unwrap_or_else(|e| panic!("{name}: engine: {e}"));
-    built.roles.into_iter().zip(u).collect()
-}
-
-/// Units per input role of a retired template's cancel (`<Kind>.cancel.retired.<hash8>@<program>`, `common::retired_orders`).
-fn retired_units(name: &str, r: &CancelRetired) -> Vec<(String, u64)> {
-    let keys = common::keys();
-    let built = build_cancel_retired(r, &provisional).unwrap_or_else(|e| panic!("{name}: build: {e}"));
     let sigs = sign_locally(&built, &keys).unwrap_or_else(|e| panic!("{name}: sign: {e}"));
     let (tx, entries) = assemble(&built, &sigs).unwrap_or_else(|e| panic!("{name}: assemble: {e}"));
     let u = measure_units(&tx, &entries).unwrap_or_else(|e| panic!("{name}: engine: {e}"));
@@ -209,10 +199,6 @@ fn measure_all(all: &[(String, Action)]) -> BTreeMap<String, (u16, String, u64)>
     for (name, measured) in all.iter().map(|(n, _)| n).zip(par_map(all, |(name, action)| units(name, action))) {
         add(name, measured);
     }
-    // the maker's cancel of every retired template (spend-only), on every program of its family
-    for (name, r) in common::retired_orders::retired_cancel_shapes() {
-        add(&name, retired_units(&name, &r));
-    }
     out
 }
 
@@ -237,7 +223,6 @@ fn compute_budget_table_is_generated_exact_and_current() {
 
     // exactness: at each role's worst shape, one unit less is rejected by the engine
     let by_name: BTreeMap<&str, &Action> = all.iter().map(|(n, a)| (n.as_str(), a)).collect();
-    let retired_by_name: BTreeMap<String, CancelRetired> = common::retired_orders::retired_cancel_shapes().into_iter().collect();
     let keys = common::keys();
     let worst: Vec<(&String, &(u16, String, u64))> = measured.iter().collect();
     let checked = par_map(&worst, |&(role, (budget, shape, used))| {
@@ -246,11 +231,7 @@ fn compute_budget_table_is_generated_exact_and_current() {
         }
         for (b, must_pass) in [(*budget, true), (*budget - 1, false)] {
             let with = |r: &str| if r == role { Ok(b) } else { lookup(r) };
-            let built = match by_name.get(shape.as_str()) {
-                Some(action) => build_with(action, &with),
-                None => build_cancel_retired(&retired_by_name[shape], &with),
-            }
-            .unwrap_or_else(|e| panic!("{shape}: build: {e}"));
+            let built = build_with(by_name[shape.as_str()], &with).unwrap_or_else(|e| panic!("{shape}: build: {e}"));
             let sigs = sign_locally(&built, &keys).unwrap();
             let (tx, entries) = assemble(&built, &sigs).unwrap();
             let res = execute(&tx, &entries, true).unwrap();

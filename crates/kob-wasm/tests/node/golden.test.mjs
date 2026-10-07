@@ -130,7 +130,7 @@ test('pair orders: three kinds for both families and sides, windows, placement r
       assert.ok(pair.some((t) => t.name === `pair.${fam}${shape}`), `pair.${fam}${shape}`);
     }
   }
-  // ONE template per kind for both sides and both families; KobCross is retired
+  // ONE template per kind for both sides and both families; the pair orders replaced KobCross
   const tpls = JSON.parse(kob.templates());
   for (const [name, code, len] of [['KobPair', 8, 414], ['KobCondPair', 9, 510], ['KobIfdPair', 10, 909]]) {
     const t = tpls.find((x) => x.name === name);

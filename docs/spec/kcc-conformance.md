@@ -74,7 +74,7 @@ KCC-2 #30 replaced the keyed `Hash(pubkey, "PublicKeyHash")` with the unkeyed `H
 program (argent-lang/kcc20-reference PR #1, `600646873e`) computes `p2pkh_hash` as `blake3(public_key)`, which compiles
 to `OP_BLAKE3`, the unkeyed hash, and KOB's copies are byte-for-byte that program (`KCC20Ref.sil`; the slot variants,
 `KCC20P2`, `KOBToken` and the wallet-gate copy derive from it). So there is no program change, no new template hash and
-nothing to retire under [template-retirement.md](template-retirement.md); TN10 soak tokens are unaffected.
+no template change; TN10 soak tokens are unaffected.
 `crates/kob-tests/tests/kcc2_conformance_tests.rs` (`kcc20_programs_use_the_unkeyed_p2pkh_hash`) tracks this: it fails
 if a keyed form returns or the provenance commit moves.
 
@@ -85,7 +85,7 @@ if a keyed form returns or the provenance commit moves.
 | KCC-20 PR #31 not rebased onto KCC-1 #27 / KCC-2 #30 | Cites KCC-1 "Section 9.1" (now 3.8.1, leader and delegator roles) and "Section 10" (now 3.9, virtual elements); writes `P2PKHHash(pubkey)` where KCC-2 now says `Hash(pubkey)` | Section references and notation | None on bytes: its vector values for `P2PKHHash` are already the unkeyed BLAKE3 (`7caa514a...` = `Hash(22^32)`), which the KCC-20 test asserts |
 | KCC-20 record name | Default configuration names the record `KCC20State`; KOB's artifacts name it `State` | Possibly a name alignment | None: dispatch tags omit record names (`transfer` `79c71c23`, `transfer_delegator` `fd3ef14a`) |
 | KCC-20 merge / vector re-issue | PR #31 at `cfb74cf`, KCC-20 Draft on `main` | Merge, possibly new vector bytes | Re-vendor `vectors/kcc20/` (the sha256 pin fails on any change) and rerun |
-| Reference program | kcc20-reference PR #1 at `600646873e` | A new commit | Rerun section 4; if bytes change, regenerate the pinned artifacts and retire the old template per [template-retirement.md](template-retirement.md) |
+| Reference program | kcc20-reference PR #1 at `600646873e` | A new commit | Rerun section 4; if bytes change, regenerate the pinned artifacts (orders under the old template become unsupported: [template-retirement.md](template-retirement.md)) |
 
 Observation for upstream: the `covenant-id/v1` minimum check also passes when `owner` is the token's own covenant id
 (`covenant-self` is approved, and KOB's programs approve it as the vector requires), so such a state can be moved by any

@@ -30,13 +30,13 @@
 // The Schnorr digests in `built.sign` are produced by kob-wasm; TypeScript cannot recompute them, `kob.finalize` verifies signatures against them.
 import type { WalletId } from '../wallet/types';
 import {
-  baseKind, custodiesOf, describeLegacy, describeOrder, familyOfKind, formatKas, formatUnits, isLegacyState, isOrderKind, isPairKind, kindFor, big, pairFactsOf, type OrderDescription,
+  baseKind, custodiesOf, describeOrder, familyOfKind, formatKas, formatUnits, isOrderKind, isPairKind, kindFor, big, pairFactsOf, type OrderDescription,
   type PairTokenFacts,
 } from './order-facts';
 import { declaredRateLimit, type FeePolicy } from './fee-policy';
 import { displayName, type TokenRegistry } from './registry';
 import type {
-  BuiltTx, FeeMode, Hex, LegacyState, OrderKind, OrderState, PairEvidence, PairTriggerRule, Payload, PayloadRecord, RecoveredAmend, RecoveredOrder, RetiredKind, SigArg, SigPlan, TemplateName,
+  BuiltTx, FeeMode, Hex, OrderKind, OrderState, PairEvidence, PairTriggerRule, Payload, PayloadRecord, RecoveredAmend, RecoveredOrder, SigArg, SigPlan, TemplateName,
   TokenProgram, TokenState, TxInputJson, TxOutputJson,
 } from './types';
 import type { NodeInputFacts } from './node-verify';
@@ -70,9 +70,9 @@ export const SIGNING_ISSUE_CODES = [
   'token-output-count', 'token-unbalanced', 'kas-unbalanced', 'fee-mismatch', 'fee-excessive', 'fee-rate-excessive', 'payment-out', 'transfer-out', 'token-to-unknown-owner',
   'output-unknown', 'sign-foreign-key', 'sign-mismatch', 'sign-unexpected', 'sighash-type', 'expected-orders', 'expected-kas-locked',
   'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'pair-token-mismatch', 'pair-family-mismatch',
-  'pair-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'retired-not-cancel', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
+  'pair-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
   // warnings
-  'retired-cancel', 'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
+  'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
   // info
   'payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place',
 ] as const;
@@ -82,7 +82,7 @@ export type IssueLevel = 'blocking' | 'warning' | 'info';
 const LEVEL: Record<SigningIssueCode, IssueLevel> = Object.fromEntries(
   SIGNING_ISSUE_CODES.map((c) => [
     c,
-    (['retired-cancel', 'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records'] as string[]).includes(c)
+    (['inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records'] as string[]).includes(c)
       ? 'warning'
       : (['payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place'] as string[]).includes(c)
         ? 'info'
@@ -127,7 +127,7 @@ export interface DecodedInput {
   redeemScriptHash: Hex | null;
   token: null | { ref: TokenRef; amount: bigint; owner: Hex; ownerScheme: number; leader: boolean; escrowOf: Hex | null; program: TokenProgram; witness: 'covenantId' | 'p2pk' };
   order: null | {
-    kind: OrderKind | RetiredKind; template: TemplateName | RetiredKind; covenantId: Hex | null; entry: string;
+    kind: OrderKind; template: TemplateName; covenantId: Hex | null; entry: string;
     /** cancel = maker cancel, refund = expiry / kill / close refund, fill = any matching entry, update = arm / trail */
     action: 'cancel' | 'refund' | 'fill' | 'update' | 'other';
     description: OrderDescription | null; makerIsWallet: boolean;
@@ -183,7 +183,7 @@ export interface DecodedSpend {
   tokensReleased: bigint;
   /** strays of the order's own token (base units) */
   strays: bigint;
-  /** strays of OTHER tokens owned by the order's covenant id and swept by this tx (a pair order's B, a retired cross limit's B; foreign strays) */
+  /** strays of OTHER tokens owned by the order's covenant id and swept by this tx (a pair order's B; foreign strays) */
   otherStrays: { ref: TokenRef; amount: bigint; utxos?: number; foreign?: boolean }[];
   /**
    * a pair order: per token (A then B) what this spend moves of the order's own tokens: `released` (every input of that token owned by the order's
@@ -403,8 +403,7 @@ function splitOrderValue(d: OrderDescription, value: bigint): LockedKas {
 function planSigner(p: SigPlan): Hex | null {
   switch (p.kind) {
     case 'p2pk': return p.pubkey;
-    case 'entry':
-    case 'retired': return p.args.find((a) => a.kind === 'sig')?.value ?? null;
+    case 'entry': return p.args.find((a) => a.kind === 'sig')?.value ?? null;
     case 'tokenLeader':
     case 'tokenDelegator': return p.witness.kind === 'p2pk' ? p.witness.value : null;
     case 'kronToken': return null; // KRON token inputs carry no signature: address presence is a P2PK input of the owner elsewhere
@@ -487,36 +486,6 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         };
       }
       return { ...base, type: 'unknown', ownedBy: 'covenant', order: null };
-    }
-    if (plan.kind === 'retired') {
-      // an order placed under an OLDER template (docs/spec/template-retirement.md): spend-only, the maker's cancel is the one entry it may take;
-      // its script is derived from the retired template and the plan's state span, and its state decoded in its LEGACY lot layout (described
-      // by describeLegacy: maker, token, custody; it is never re-encoded; a retired template with today's layout decodes to today's state)
-      let legacy: LegacyState | null = null;
-      let derivedSpk: string | null = null;
-      try {
-        const any = kob.decodeRetired(plan.templateHash, plan.state);
-        legacy = isOrderKind(any.kind) ? any : null;
-        derivedSpk = kob.retiredScriptPublicKey(plan.templateHash, plan.state);
-      } catch {
-        legacy = null;
-      }
-      const state = legacy as unknown as OrderState | null;
-      mustMatch(derivedSpk, `retired ${shortId(plan.templateHash)} contract of the given state`);
-      if (plan.entry !== 'cancel') {
-        add('retired-not-cancel', `input ${i}: an order of a retired template may only be cancelled by its maker, not '${plan.entry}'`, { input: i, params: { entry: plan.entry } });
-      }
-      if (!state) return { ...base, type: 'unknown', ownedBy: 'covenant', order: null };
-      orderStates.set(i, state);
-      const makerIsWallet = state.state.maker === maker;
-      if (!makerIsWallet) {
-        add('order-not-maker', `input ${i}: a cancel of an order that belongs to another key (${shortId(state.state.maker)}) cannot be signed by this wallet`, { input: i, params: { maker: state.state.maker } });
-      }
-      add('retired-cancel', `input ${i}: the cancel of an order placed with an older contract version (template ${shortId(plan.templateHash)})`, { input: i, params: { template: plan.templateHash } });
-      return {
-        ...base, type: 'order', ownedBy: 'covenant',
-        order: { kind: state.kind, template: state.kind, covenantId: inp.utxo.covenantId, entry: plan.entry, action: 'cancel', description: isLegacyState(legacy!) ? describeLegacy(legacy!) : describeOrder(state, kob), makerIsWallet },
-      };
     }
     // token leader / delegator (KCC-20) or KRON token input
     const st: TokenState = plan.state;
@@ -1205,7 +1174,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       for (const t of owned) {
         if (mine.includes(t)) continue;
         const k = t.token!.ref.covenantId;
-        // B of a pair order (or of a retired cross limit) is one of its own tokens: only its EXCESS over the custody the state holds is a stray
+        // B of a pair order is one of its own tokens: only its EXCESS over the custody the state holds is a stray
         if (k === quoteToken) continue;
         const cur = others.get(k) ?? { ref: t.token!.ref, amount: 0n, utxos: 0, foreign: true };
         cur.amount += t.token!.amount;

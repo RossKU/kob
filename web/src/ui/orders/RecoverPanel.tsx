@@ -96,7 +96,7 @@ export function RecoverPanel(props: RecoverPanelProps) {
     !r
       ? { tone: 'warn', key: 'failed' }
       : r.status === 'live'
-        ? { tone: r.retired ? 'warn' : 'ok', key: r.retired ? 'liveRetired' : 'live' }
+        ? { tone: 'ok', key: 'live' }
         : r.status === 'spent'
           ? { tone: 'neutral', key: 'spent' }
           : r.status === 'old-template'

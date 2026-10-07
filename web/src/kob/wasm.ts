@@ -6,8 +6,8 @@
 //   * browser: `loadKob()` from `./wasm.browser` (bundled ES-module bindings in web/wasm/web, built by `npm run build:wasm`)
 //   * node (vitest, mock server, e2e harness): `loadKobNode()` from `./wasm.node` (web/wasm/node)
 import type {
-  ActionRequest, AnyState, BuiltTx, CancelRetiredRequest, DayOrder, FinalizeOptions, Hex, InputSignature, LegacyState, MassReport, Payload, PayloadRecord,
-  RecoveredAmend, RecoveredOrder, RecoveredRetiredOrder, RetiredTemplateInfo, SignedTx, SigPlan, TemplateInfo, TemplateName, Tips, TokenProgram, TokenState,
+  ActionRequest, AnyState, BuiltTx, DayOrder, FinalizeOptions, Hex, InputSignature, MassReport, Payload, PayloadRecord,
+  RecoveredAmend, RecoveredOrder, SignedTx, SigPlan, TemplateInfo, TemplateName, Tips, TokenProgram, TokenState,
   Touch, TxJson, PairEvidence, PairTokensInfo, PairTriggerRule, OrderState,
 } from './types';
 
@@ -32,16 +32,11 @@ export interface RawKobWasm {
   decodePayload(hex: string): string;
   recoverOrders(tx: string): string;
   recoverAmends(tx: string, plans: string): string;
-  retiredTemplates(): string;
-  decodeRetired(hash: string, hex: string): string;
-  retiredScriptPublicKey(hash: string, hex: string): string;
-  buildCancelRetired(request: string): string;
   budgetTable(): string;
   budgetFor(role: string): number;
   keeperTips(): string;
   dayOrder(d0: string, t0: string, rateMilli: string): string;
   mutableWindows(kind: string): string;
-  recoverRetiredOrders(tx: string): string;
   // numbers and defaults (protocol v3): 64-bit integers as decimal strings, `undefined` where the covenant arithmetic fails
   quote(n: string, rate: string, scale: string, round: string): string | undefined;
   quoteExact(n: string, rate: string, scale: string, round: string): string | undefined;
@@ -171,17 +166,6 @@ export interface KobWasm {
    * inputs' signature scripts (`plans` omitted), of a built one from its signing plans (`built.plans`). Throws if a record does not verify.
    */
   recoverAmends(tx: TxJson, plans?: SigPlan[]): RecoveredAmend[];
-  /** older order templates this build can still SPEND (the maker's cancel only; docs/spec/template-retirement.md) */
-  retiredTemplates(): RetiredTemplateInfo[];
-  /**
-   * the state span of an order of a retired template in its LEGACY lot layout (`LegacyState`: `lotsLeft`, `lotUnits`, `unit`, ...; the field
-   * names of the retired layout, NOT the current state of its kind). Spend-only: what the maker's cancel and the "older contract version" row need.
-   */
-  decodeRetired(hash: Hex, hex: Hex): LegacyState;
-  /** script public key of an order of a retired template (to find it on the node) */
-  retiredScriptPublicKey(hash: Hex, hex: Hex): string;
-  /** the maker's cancel of an order of a retired template (its order input is a `retired` plan) */
-  buildCancelRetired(request: CancelRetiredRequest): BuiltTx;
   budgetTable(): Record<string, number>;
   budgetFor(role: string): number;
   /** default refund / keeper tips of the KAS kinds per token program */
@@ -195,8 +179,6 @@ export interface KobWasm {
   /** Day order until the next 00:00 UTC. d0 = node virtual DAA, t0 = UTC unix seconds read together, rateMilli = measured milli-DAA/s (null = 10 000). */
   dayOrder(d0: bigint | string, t0: bigint | string, rateMilli?: bigint | string | null): DayOrder;
   mutableWindows(kind: TemplateName): [string, number, number][];
-  /** Re-derives the orders of a transaction whose payload is of version 2 or 3 (RETIRED lot templates; spend-only). */
-  recoverRetiredOrders(tx: TxJson): RecoveredRetiredOrder[];
 
   // ------------------------------------------------------------------ amounts and prices (protocol v3, docs/spec/order-types.md)
   // Every quantity is token base units, every price / tip quote units per WHOLE token (`scale` base units). Helpers return null exactly where
@@ -383,10 +365,6 @@ export function createKob(raw: RawKobWasm): KobWasm {
     decodePayload: (h) => wrap('decodePayload', () => j(raw.decodePayload(h))),
     recoverOrders: (t) => wrap('recoverOrders', () => j(raw.recoverOrders(JSON.stringify(t)))),
     recoverAmends: (t, p) => wrap('recoverAmends', () => j(raw.recoverAmends(JSON.stringify(t), p ? JSON.stringify(p) : ''))),
-    retiredTemplates: () => wrap('retiredTemplates', () => j(raw.retiredTemplates())),
-    decodeRetired: (h, x) => wrap('decodeRetired', () => j(raw.decodeRetired(h, x))),
-    retiredScriptPublicKey: (h, x) => wrap('retiredScriptPublicKey', () => raw.retiredScriptPublicKey(h, x)),
-    buildCancelRetired: (r) => wrap('buildCancelRetired', () => j(raw.buildCancelRetired(JSON.stringify(r)))),
     budgetTable: () => wrap('budgetTable', () => j(raw.budgetTable())),
     budgetFor: (r) => wrap('budgetFor', () => raw.budgetFor(r)),
     keeperTips: () => wrap('keeperTips', () => j(raw.keeperTips())),
@@ -395,7 +373,6 @@ export function createKob(raw: RawKobWasm): KobWasm {
     tipsFor: (st) => wrap('tipsFor', () => j(raw.tipsFor(J(st)))),
     dayOrder: (d0, t0, rate) => wrap('dayOrder', () => j(raw.dayOrder(s(d0), s(t0), rate == null ? '' : s(rate)))),
     mutableWindows: (k) => wrap('mutableWindows', () => j(raw.mutableWindows(k))),
-    recoverRetiredOrders: (t) => wrap('recoverRetiredOrders', () => j(raw.recoverRetiredOrders(JSON.stringify(t)))),
     quote: (n, r, sc, rd) => wrap('quote', () => ob(raw.quote(s(n), s(r), s(sc), rd))),
     quoteExact: (n, r, sc, rd) => wrap('quoteExact', () => ob(raw.quoteExact(s(n), s(r), s(sc), rd))),
     checkScale: (sc) => wrap('checkScale', () => raw.checkScale(s(sc))),

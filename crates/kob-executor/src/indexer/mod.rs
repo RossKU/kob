@@ -11,7 +11,6 @@ pub mod db;
 pub mod flags;
 pub mod follower;
 pub mod ingest;
-pub mod layouts;
 pub mod lock;
 pub mod market;
 pub mod pairs;
@@ -228,8 +227,6 @@ pub struct ReplayReport {
     pub orders: u64,
     /// Frames this build could not decode (kept in the log, skipped), with the reason.
     pub skipped: Vec<(u64, String)>,
-    /// Frames per record-log format (index 1 and 2).
-    pub formats: [u64; 3],
     /// Reveals / holdings / imports of layouts this build does not have, dropped from decoded frames.
     pub dropped: record::DecodeStats,
 }
@@ -268,5 +265,5 @@ pub fn replay_from_log(cfg: &IndexerConfig) -> Result<ReplayReport, IndexerError
     let mut ing = Ingest::new(conn, processor(cfg, tokens), None).with_config(ingest_config(cfg));
     ing.init_cursor(&ingest::Cursor { hash: start, daa: 0 })?;
     let (frames, relevant, orders) = ing.replay_frames(log.records, log.frames)?;
-    Ok(ReplayReport { frames, relevant, orders, skipped: log.skipped, formats: log.formats, dropped: log.dropped })
+    Ok(ReplayReport { frames, relevant, orders, skipped: log.skipped, dropped: log.dropped })
 }

@@ -65,7 +65,7 @@ test('wallet defaults', () => {
   assert.equal(kob.defaultMinFillIfd('10001'), '2501');
   assert.equal(kob.defaultMinFillPair('10000', '', '1000'), '2500');
   assert.equal(kob.defaultMinFillPair('10000', '250000000', '1000'), '4000');
-  assert.equal(kob.defaultMinFillCross, undefined, 'the cross limit is retired');
+  assert.equal(kob.defaultMinFillCross, undefined, 'the pair orders replaced the cross limit');
   assert.equal(kob.defaultMinTouch('4000'), '4000');
   assert.equal(kob.defaultMinTouch('0'), '1');
   const c = JSON.parse(kob.defaultConstants());

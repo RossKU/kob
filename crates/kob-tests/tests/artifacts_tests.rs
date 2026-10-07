@@ -34,7 +34,7 @@ fn sources_with_ctor() -> Vec<PathBuf> {
 #[test]
 fn committed_artifacts_match_sources() {
     let sources = sources_with_ctor();
-    // 25 since the pair phase (KobCross retired; KobPair, KobCondPair, KobIfdPair: one template each for both sides and
+    // 25 since the pair phase (KobCross replaced by KobPair, KobCondPair, KobIfdPair: one template each for both sides and
     // both families of a token pair)
     assert_eq!(sources.len(), 25, "expected 25 contract sources, found {sources:?}");
     for src in sources {

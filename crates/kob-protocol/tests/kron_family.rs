@@ -247,8 +247,8 @@ fn placement_record_of_a_kron_order() {
     assert!(decode(&unknown).is_err());
 }
 
-/// v2.6 retired the receipt: its genesis record (type 0x02) and its order kind (0x07) never decode again, in
-/// either family and either payload version (the numbers stay reserved).
+/// v2.6 retired the receipt: its genesis record (type 0x02, either payload version) and its order kind (0x07) never
+/// decode again, in either family (the numbers stay reserved).
 #[test]
 fn retired_receipt_records_do_not_decode() {
     for version in [payload::PAYLOAD_VERSION_2, payload::PAYLOAD_VERSION] {
@@ -261,9 +261,12 @@ fn retired_receipt_records_do_not_decode() {
             v.extend_from_slice(&(body.len() as u16).to_le_bytes());
             v.extend_from_slice(&body);
             assert!(decode(&v).unwrap_err().to_string().contains("retired"), "record 0x02, family {fam}, version {version}");
-            // An order record of kind 0x07 (version 2: output u16, family, kind, template hash...; version 3: output
-            // LEB128, family, kind, flags, state...).
-            let mut rec = if version == payload::PAYLOAD_VERSION_2 { vec![0u8, 0, fam, 0x07] } else { vec![0u8, fam, 0x07, 0] };
+            // An order record of kind 0x07 (version 4: output LEB128, family, kind, flags, state...; version 2 has no
+            // order records).
+            if version == payload::PAYLOAD_VERSION_2 {
+                continue;
+            }
+            let mut rec = vec![0u8, fam, 0x07, 0];
             rec.extend_from_slice(&[0x55; 32]);
             rec.extend_from_slice(&120u16.to_le_bytes());
             rec.extend_from_slice(&[0; 120]);

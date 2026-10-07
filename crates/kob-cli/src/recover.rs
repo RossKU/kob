@@ -1,20 +1,19 @@
 //! `kob recover`: find the maker's orders on the node from a backup / export / indexer view, without an indexer, and
 //! optionally cancel them (`--cancel`).
 //!
-//! Only availability is trusted: every state is decoded canonically under its template (pinned, else retired), its P2SH
+//! Only availability is trusted: every state is decoded canonically under its pinned template, its P2SH
 //! script is derived here, and an order is live only when the node holds an unspent output at exactly that script carrying
 //! the order's covenant id. A partial fill splices a new `amountLeft` into the script (a new address), and with amounts in
 //! base units any amount at least `minFill` may have been filled, so the search over amounts is NOT exhaustive: it tries
 //! the known states, then the amounts the maker names with `--amount-left` (from an indexer view), then a bounded
-//! fallback of `amountLeft - k x minFill`. Orders of retired (lot) templates are searched over every `lotsLeft`, which
-//! is exhaustive for them. Ask-side custody is rebuilt from the live state (`amountLeft` base units owned by the
-//! covenant id) and verified the same way.
+//! fallback of `amountLeft - k x minFill`. Ask-side custody is rebuilt from the live state (`amountLeft` base units owned
+//! by the covenant id) and verified the same way. An order of a template this build does not pin is `unsupported`.
 
 use std::path::PathBuf;
 
 use kaspa_consensus_core::tx::ScriptPublicKey;
-use kob_protocol::artifacts::token_template_by_hash;
-use kob_protocol::build::{build, build_cancel_retired, Action, CancelOrder, CancelRetired};
+use kob_protocol::artifacts::{token_template_by_hash, TemplateId};
+use kob_protocol::build::{build, Action, CancelOrder};
 use kob_protocol::json::{hex32, to_hex};
 use kob_protocol::state::{AnyState, TokenState};
 use kob_protocol::tx::{FeeOptions, OrderUtxo, TokenUtxo, MIN_FEE_RATE};
@@ -22,9 +21,9 @@ use kob_protocol::Family;
 use serde_json::{json, Value};
 
 use crate::common::{
-    amount_is_the_only_mutable_field, build_funded, kas, lookup, lot_size, lots_is_the_only_mutable_field, lots_left, outpoint_str,
-    parse_amount, script_is_fixed, sign_validate_send, spk_bytes, utxo_of, with_amount_left, with_lots_left, write_json, Funding,
-    OrderState, Signer, Tpl,
+    amount_is_the_only_mutable_field, amount_left_in, build_funded, decode_state, encode_state, kas, lookup, order_spk,
+    order_template, outpoint_str, parse_amount, script_is_fixed, sign_validate_send, spk_bytes, utxo_of, with_amount_left, write_json,
+    Funding, Signer,
 };
 use crate::inputs::{self, Entry, Rejected};
 use crate::wrpc::NodeUtxo;
@@ -42,8 +41,7 @@ INPUT
   --from        repeatable. The web wallet's backup ({\"format\":\"kob-backup\",..}), the indexer recovery / export file
                 ({\"version\":1|2,\"orders\":[..]}, `kob-executor index export-orders`, the web's indexer export), or an
                 indexer order view (GET /v1/orders/{id}) or page of views ({\"items\":[..]}). Orders are deduplicated by
-                covenant id; every state a file names is a search candidate, nothing in a file is trusted. A state of
-                a retired template (placement records of payload versions 2 and 3) is read in its older lot layout.
+                covenant id; every state a file names is a search candidate, nothing in a file is trusted.
   --node        node wRPC JSON endpoint (18110 mainnet, 18210 testnet-10); `getUtxosByAddresses` needs --utxoindex
   --network     network of the files and the addresses (default testnet-10)
   --maker       only this maker's orders (64-hex x-only pubkey or kaspa address); others are reported `other_maker`
@@ -54,29 +52,26 @@ INPUT
                 name. Needed after a partial fill the fallback below does not reach.
 
 SEARCH
-  For each order: its template (pinned by this build, else retired: an older contract version, cancel only), the
-  candidate states and the P2SH address of each; the order is `live` when the node holds an unspent output at that
+  For each order: its template (pinned by this build), the candidate states and the P2SH address of each; the order is `live` when the node holds an unspent output at that
   exact script carrying the order's covenant id. Candidates, in this order: the last proven state and the given state;
   each with `amountLeft` = the --amount-left hints; each with `amountLeft` = original - k x minFill for k = 1, 2, ...
   (at most 200 candidates in all). A partial fill splices the new `amountLeft` into the script, and any amount of at
   least `minFill` may have been filled, so this search is NOT exhaustive: an order partly filled by another amount is
-  reported `not_found` unless you pass its amount with --amount-left. An order of a retired (lot) template is
-  searched over every smaller `lotsLeft`, which is exhaustive for its asks, bids and cross limits. Ask-side kinds: the
+  reported `not_found` unless you pass its amount with --amount-left. Ask-side kinds: the
   custody (`amountLeft` base units owned by the covenant id) is rebuilt and looked up the same way: `verified`,
   `missing`, or `unknown` (KCC-20 without an extension commitment in the file). `not_found`: spent, or a state the
   search did not reach (see above; kinds with a stop, an armed band or repeat fields also change other fields).
-  `unsupported`: the template is neither pinned nor retired, or the state does not decode.
+  `unsupported`: the template is not pinned by this build, or the state does not decode. An order of a template this
+  build does not pin is ended by its maker with a raw transaction spending the order's own cancel entry.
 
 OUTPUT
   --out         write the JSON report here (default: stdout); a summary goes to stderr. Each live order carries
-                `amount_left` (base units; a bid: its remaining buying power), `scale` and `min_fill` (current
-                templates), `found_by` (`known state`, `--amount-left` or `fallback search`) and, for an older contract
-                version, `older_contract_version: true`.
+                `amount_left` (base units; a bid: its remaining buying power), `scale`, `min_fill` and `found_by`
+                (`known state`, `--amount-left` or `fallback search`).
 
 CANCEL
   --cancel      build the maker's cancel of every live order of the key's maker (custody verified when it has one): the
-                custody and the order's KAS back to the maker, one transaction per order (an older contract version
-                too: cancel is all that can be done with it). Strays are not swept (the node cannot tell them apart;
+                custody and the order's KAS back to the maker, one transaction per order. Strays are not swept (the node cannot tell them apart;
                 sweep them with `kob order sweep|cancel` from an indexer view first).
                 The fee comes from the order's released KAS; if that is not enough, the smallest sufficient plain KAS UTXO
                 of the maker on the node is added.
@@ -195,14 +190,12 @@ pub const VIA_KNOWN: &str = "known state";
 pub const VIA_HINT: &str = "--amount-left";
 /// A candidate from the bounded fallback `amountLeft - k x minFill` (not exhaustive).
 pub const VIA_FALLBACK: &str = "fallback search";
-/// A candidate of a retired (lot) order with another `lotsLeft` (exhaustive for its kinds).
-pub const VIA_LOTS: &str = "every lotsLeft";
 
 /// One candidate state and its script.
 #[derive(Debug, Clone)]
 pub struct Candidate {
     /// The state.
-    pub state: OrderState,
+    pub state: AnyState,
     /// Its P2SH script public key.
     pub spk: ScriptPublicKey,
     /// How the state came to be a candidate (`VIA_*`).
@@ -212,20 +205,17 @@ pub struct Candidate {
 /// The candidate states of an order, distinct scripts only, at most [`MAX_CANDIDATES`], in this order:
 ///
 /// 1. the known states (latest first);
-/// 2. each known state with `amountLeft` = each of the maker's `hints` (base units; for a retired state a hint that is a
-///    whole number of lots);
-/// 3. a current state with `amountLeft = original - k x minFill`, k = 1, 2, ... while positive. A partial fill splices
+/// 2. each known state with `amountLeft` = each of the maker's `hints` (base units);
+/// 3. each known state with `amountLeft = original - k x minFill`, k = 1, 2, ... while positive. A partial fill splices
 ///    the new `amountLeft` into the script and any amount of at least `minFill` may have been filled, so this is a
-///    bounded guess and NOT exhaustive;
-/// 4. a retired (lot) state with every smaller `lotsLeft` down to 1: exhaustive for the kinds whose only mutable field
-///    is `lotsLeft`.
-pub fn candidates(tpl: &Tpl, known: &[OrderState], hints: &[i64]) -> Vec<Candidate> {
+///    bounded guess and NOT exhaustive.
+pub fn candidates(tpl: TemplateId, known: &[AnyState], hints: &[i64]) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = vec![];
-    let push = |s: OrderState, via: &'static str, out: &mut Vec<Candidate>| {
+    let push = |s: AnyState, via: &'static str, out: &mut Vec<Candidate>| {
         if out.len() >= MAX_CANDIDATES {
             return;
         }
-        if let Ok(spk) = tpl.spk(&s) {
+        if let Ok(spk) = order_spk(tpl, &s) {
             if !out.iter().any(|c| c.spk == spk) {
                 out.push(Candidate { state: s, spk, via });
             }
@@ -236,27 +226,14 @@ pub fn candidates(tpl: &Tpl, known: &[OrderState], hints: &[i64]) -> Vec<Candida
     }
     for s in known {
         for h in hints {
-            let hinted = match lot_size(s) {
-                Some(size) if h % size == 0 => with_lots_left(s, h / size),
-                Some(_) => None,
-                None => with_amount_left(s, *h),
-            };
-            if let Some(c) = hinted {
+            if let Some(c) = with_amount_left(s, *h) {
                 push(c, VIA_HINT, &mut out);
             }
         }
     }
     for s in known {
-        if let Some(n) = lots_left(s) {
-            for k in (1..n).rev() {
-                if out.len() >= MAX_CANDIDATES {
-                    break;
-                }
-                if let Some(c) = with_lots_left(s, k) {
-                    push(c, VIA_LOTS, &mut out);
-                }
-            }
-        } else if let (Some(n), Some(m)) = (s.amount_left(), s.min_fill()) {
+        if let Some(n) = s.amount_left() {
+            let m = s.min_fill();
             if m > 0 {
                 for k in 1..=MAX_CANDIDATES as i64 {
                     let Some(left) = k.checked_mul(m).and_then(|d| n.checked_sub(d)).filter(|a| *a >= 1) else { break };
@@ -292,7 +269,7 @@ type CustodyPart = ([u8; 32], i64, [u8; 32], Option<[u8; 32]>);
 /// The custody state and script a live state implies (`Ok(None)`: none needed; a pair order: its first custody).
 #[cfg(test)]
 pub fn custody_target(
-    state: &OrderState,
+    state: &AnyState,
     covenant_id: [u8; 32],
     ext: Option<[u8; 32]>,
 ) -> Result<Option<(TokenState, ScriptPublicKey)>, String> {
@@ -303,9 +280,9 @@ pub fn custody_target(
 /// custody, a pair order each of `AnyState::custodies` under the program of that token (a sell-first `KobIfdPair`: its A
 /// custody, then its B prefund). `ext` is the first custody's extension commitment; the second one (the B prefund) carries
 /// the entry's `bExt`.
-pub fn custody_targets(state: &OrderState, covenant_id: [u8; 32], ext: Option<[u8; 32]>) -> Result<Vec<CustodyTarget>, String> {
+pub fn custody_targets(state: &AnyState, covenant_id: [u8; 32], ext: Option<[u8; 32]>) -> Result<Vec<CustodyTarget>, String> {
     let parts: Vec<CustodyPart> = match state {
-        OrderState::Current(s) if s.is_pair() => {
+        s if s.is_pair() => {
             let t = s.pair_tokens().ok_or("no pair tokens")?;
             let b_ext = match s {
                 AnyState::KobIfdPair(i) => Some(i.b_ext),
@@ -372,18 +349,18 @@ impl Status {
 pub struct Found {
     /// The merged entry.
     pub entry: Entry,
-    /// The template.
-    pub tpl: Option<Tpl>,
+    /// The template (when this build pins it).
+    pub tpl: Option<TemplateId>,
     /// Status.
     pub status: Status,
     /// Explanation.
     pub note: String,
     /// The decoded known state (first that decodes).
-    pub known: Option<OrderState>,
+    pub known: Option<AnyState>,
     /// Candidates searched.
     pub searched: usize,
     /// Live UTXO and its state.
-    pub live: Option<(NodeUtxo, OrderState)>,
+    pub live: Option<(NodeUtxo, AnyState)>,
     /// How the live state was found (`VIA_*`).
     pub via: Option<&'static str>,
     /// Custody of a live order (a pair order: its first custody).
@@ -411,7 +388,7 @@ fn hints_for(hints: &[(Option<[u8; 32]>, String)], covenant_id: [u8; 32], scale:
 fn prepare(e: Entry, maker: Option<[u8; 32]>, hints: &[(Option<[u8; 32]>, String)]) -> (Found, Vec<Candidate>) {
     let mut f = Found {
         entry: e.clone(),
-        tpl: Tpl::resolve(&e.template_hash),
+        tpl: order_template(&e.template_hash),
         status: Status::Unsupported,
         note: String::new(),
         known: None,
@@ -423,13 +400,13 @@ fn prepare(e: Entry, maker: Option<[u8; 32]>, hints: &[(Option<[u8; 32]>, String
         cancel: None,
     };
     let Some(tpl) = f.tpl else {
-        f.note = "template is neither pinned by this build nor a retired template it can spend".into();
+        f.note = "template is not pinned by this build".into();
         return (f, vec![]);
     };
-    let mut known: Vec<OrderState> = vec![];
+    let mut known: Vec<AnyState> = vec![];
     let mut errors = vec![];
     for s in &e.spans {
-        match tpl.decode(s) {
+        match decode_state(tpl, s) {
             Ok(st) => known.push(st),
             Err(err) => errors.push(err),
         }
@@ -443,11 +420,11 @@ fn prepare(e: Entry, maker: Option<[u8; 32]>, hints: &[(Option<[u8; 32]>, String
         return (f, vec![]);
     };
     // every known state must be the same order: kind, maker and token
-    known.retain(|s| s.kind_name() == first.kind_name() && s.maker() == first.maker() && s.token_cov_id() == first.token_cov_id());
+    known.retain(|s| s.template_id() == first.template_id() && s.maker() == first.maker() && s.token_cov_id() == first.token_cov_id());
     f.known = Some(first.clone());
     if let Some(k) = &e.claimed_kind {
-        if *k != first.kind_name() {
-            f.note = format!("the file says {k}, the template says {}; ", first.kind_name());
+        if k != first.template_id().name() {
+            f.note = format!("the file says {k}, the template says {}; ", first.template_id().name());
         }
     }
     if let Some(m) = e.claimed_maker.filter(|m| *m != first.maker()) {
@@ -458,22 +435,19 @@ fn prepare(e: Entry, maker: Option<[u8; 32]>, hints: &[(Option<[u8; 32]>, String
         f.note += "another maker's order (--maker)";
         return (f, vec![]);
     }
-    let (amounts, notes) = hints_for(hints, e.covenant_id, first.scale());
+    let (amounts, notes) = hints_for(hints, e.covenant_id, Some(first.scale()));
     f.note += &notes;
-    let c = candidates(&tpl, &known, &amounts);
+    let c = candidates(tpl, &known, &amounts);
     f.searched = c.len();
     f.status = Status::NotFound;
     (f, c)
 }
 
 /// Why nothing was found, and how far the search could see (the wording follows what the kind's script can change).
-fn not_found_note(known: Option<&OrderState>, searched: usize) -> String {
+fn not_found_note(known: Option<&AnyState>, searched: usize) -> String {
     match known {
         Some(k) if script_is_fixed(k) => format!("spent: no unspent output at the order's script ({searched} candidate)"),
-        Some(k) if k.is_retired() && lots_is_the_only_mutable_field(k) => {
-            format!("spent: no unspent output at any of the {searched} candidate scripts (every lotsLeft)")
-        }
-        Some(OrderState::Current(a)) if amount_is_the_only_mutable_field(a.template_id()) => format!(
+        Some(a) if amount_is_the_only_mutable_field(a.template_id()) => format!(
             "spent, or partly filled to an amount the search did not reach ({searched} candidates: the known states, the --amount-left hints, then amountLeft - k x minFill; that search is not exhaustive: pass the order's amount left from an indexer view with --amount-left)"
         ),
         _ => format!(
@@ -566,8 +540,8 @@ pub fn order_json(f: &Found) -> Value {
     let state = f.live.as_ref().map(|(_, s)| s).or(f.known.as_ref());
     let mut v = json!({
         "covenant_id": to_hex(&f.entry.covenant_id),
-        "kind": state.map(|s| s.kind_name()),
-        "template": f.tpl.map(|t| t.label()),
+        "kind": state.map(|s| s.template_id().name()),
+        "template": f.tpl.map(|_| "pinned"),
         "template_hash": to_hex(&f.entry.template_hash),
         "maker": state.map(|s| to_hex(&s.maker())),
         "status": f.status.label(),
@@ -579,20 +553,16 @@ pub fn order_json(f: &Found) -> Value {
         v["outpoint"] = json!(outpoint_str(&u.txid, u.index));
         v["value"] = json!(u.amount.to_string());
         v["utxo_daa"] = json!(u.daa.to_string());
-        v["state"] = json!(f.tpl.and_then(|t| t.encode(s).ok()).map(|b| to_hex(&b)));
+        v["state"] = json!(f.tpl.and_then(|t| encode_state(t, s).ok()).map(|b| to_hex(&b)));
         // base-unit quantities as strings, like every other 64-bit value of the report
-        v["amount_left"] = json!(s.amount_left_in(u.amount).map(|a| a.to_string()));
-        v["scale"] = json!(s.scale().map(|a| a.to_string()));
-        v["min_fill"] = json!(s.min_fill().map(|a| a.to_string()));
+        v["amount_left"] = json!(amount_left_in(s, u.amount).map(|a| a.to_string()));
+        v["scale"] = json!(s.scale().to_string());
+        v["min_fill"] = json!(s.min_fill().to_string());
         v["found_by"] = json!(f.via);
         v["custody"] = custody_json(&f.custody);
         if !matches!(f.prefund, Custody::None) {
             v["prefund"] = custody_json(&f.prefund);
         }
-    }
-    if state.is_some_and(|s| s.is_retired()) {
-        // an older contract version (a retired lot template): its maker can cancel it, nothing else
-        v["older_contract_version"] = json!(true);
     }
     if let Some(c) = &f.cancel {
         v["cancel"] = c.clone();
@@ -621,7 +591,6 @@ pub fn report_json(a: &Args, found: &[Found], rejected: &[Rejected]) -> Value {
 /// Build, sign, validate, write and (unless dry run) submit the maker's cancel of one live order.
 fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
     let (u, state) = f.live.as_ref().ok_or("not live")?;
-    let tpl = f.tpl.ok_or("no template")?;
     let maker = state.maker();
     if maker != signer.pubkey {
         return Err(format!("the key is not this order's maker ({})", to_hex(&maker)));
@@ -641,46 +610,24 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
     };
     let utxo = utxo_of(u);
     let fee = FeeOptions::rate(a.fee_rate);
-    let (built, funding) = match (tpl, state) {
-        (Tpl::Pinned(_), OrderState::Current(current)) => build_funded(true, &a.node, &a.network, &maker, |funding| {
-            build(&Action::CancelOrder(CancelOrder {
-                order: OrderUtxo { utxo: utxo.clone(), state: current.clone() },
-                custody: custody.clone(),
-                prefund: prefund.clone(),
-                strays: vec![],
-                foreign: vec![],
-                tokens: vec![],
-                funding,
-                change: None,
-                replace: None,
-                lock_time: 0,
-                records: vec![],
-                fee: fee.clone(),
-            }))
-        })?,
-        (Tpl::Retired(r), OrderState::Lot(..) | OrderState::NoLot(_) | OrderState::RetiredCurrent(_)) => {
-            let span = tpl.encode(state)?;
-            build_funded(true, &a.node, &a.network, &maker, |funding| {
-                build_cancel_retired(
-                    &CancelRetired {
-                        template_hash: r.template.hash,
-                        state: span.clone(),
-                        order: utxo.clone(),
-                        custody: custody.clone(),
-                        strays: vec![],
-                        foreign: vec![],
-                        funding,
-                        change: None,
-                        fee: fee.clone(),
-                    },
-                    &kob_protocol::budget::lookup,
-                )
-            })?
-        }
-        _ => return Err("internal: the order's state does not belong to its template".into()),
-    };
+    let (built, funding) = build_funded(true, &a.node, &a.network, &maker, |funding| {
+        build(&Action::CancelOrder(CancelOrder {
+            order: OrderUtxo { utxo: utxo.clone(), state: state.clone() },
+            custody: custody.clone(),
+            prefund: prefund.clone(),
+            strays: vec![],
+            foreign: vec![],
+            tokens: vec![],
+            funding,
+            change: None,
+            replace: None,
+            lock_time: 0,
+            records: vec![],
+            fee: fee.clone(),
+        }))
+    })?;
     let cov = to_hex(&f.entry.covenant_id);
-    let info = json!({"action": "cancel", "covenant_id": cov, "kind": state.kind_name(), "template": tpl.label()});
+    let info = json!({"action": "cancel", "covenant_id": cov, "kind": state.template_id().name()});
     let sent = sign_validate_send(&built, signer, a.out_dir.as_deref(), &format!("{cov}.cancel.json"), info, a.dry_run, &a.node)?;
     Ok(json!({
         "status": if sent.submitted.is_some() { "submitted" } else { "signed" },
@@ -738,11 +685,7 @@ fn summary(report: &Value, a: &Args) {
             o["status"].as_str().unwrap_or(""),
             o["covenant_id"].as_str().unwrap_or(""),
             o["kind"].as_str().unwrap_or("?"),
-            if o["older_contract_version"] == true {
-                "older contract version, cancel only"
-            } else {
-                o["template"].as_str().unwrap_or("unknown template")
-            }
+            o["template"].as_str().unwrap_or("template not pinned by this build")
         );
         if let Some(op) = o["outpoint"].as_str() {
             let v = o["value"].as_str().and_then(|v| v.parse().ok()).unwrap_or(0);

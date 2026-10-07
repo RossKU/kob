@@ -298,7 +298,7 @@ async fn order_by_id() {
     assert_eq!(v["filled_amount"], "6000");
     assert_eq!(v["amount_left"], "4000");
     assert_eq!((v["initial_amount"].as_str(), v["scale"].as_i64(), v["min_fill"].as_str()), (Some("10000"), Some(1000), Some("1000")));
-    // base units and whole-token prices only: no field of the retired lot geometry is left in the view
+    // base units and whole-token prices only: no field of the older lot geometry is left in the view
     assert!(!v.to_string().contains("lot"), "{v}");
     assert_eq!(v["maker"], h(MAKER));
     assert_eq!(v["listed"], true);

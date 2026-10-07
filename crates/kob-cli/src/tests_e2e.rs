@@ -3,15 +3,13 @@
 //! Every signed transaction is re-validated in the rusty-kaspa engine from the file the command wrote.
 //!
 //! Amounts are base units and prices sompi per whole token. The fixtures use `SCALE = 1000` base units per whole token (a
-//! token of three decimals): what an older lot of 1000 base units was is one whole token at the same price per whole token.
+//! token of three decimals).
 
 use std::path::{Path, PathBuf};
 
 use kaspa_consensus_core::tx::ScriptPublicKey;
 use kob_protocol::artifacts::{template, token_template, TemplateId};
 use kob_protocol::json::to_hex;
-use kob_protocol::retired::lot::{self, LotState};
-use kob_protocol::retired::{self, Retired};
 use kob_protocol::script::p2pk_spk;
 use kob_protocol::state::{AnyState, AskState, BidState, CondPairState, IfdPairState, PairState, TokenState, SIDE_ASK, SIDE_BID};
 use kob_protocol::tx::{pubkey_of, spk_to_string, SignedTx};
@@ -19,8 +17,8 @@ use kob_protocol::verify::validate_signed;
 use kob_protocol::Family;
 use serde_json::{json, Value};
 
-use crate::common::{address_of, spk_bytes, OrderState, Tpl};
-use crate::recover::{VIA_FALLBACK, VIA_HINT, VIA_KNOWN, VIA_LOTS};
+use crate::common::{address_of, decode_state, encode_state, order_template, spk_bytes};
+use crate::recover::{VIA_FALLBACK, VIA_HINT, VIA_KNOWN};
 use crate::wrpc::{mock, NodeUtxo};
 use crate::{inputs, order, recover};
 
@@ -39,11 +37,9 @@ const PF: TemplateId = TemplateId::KronToken2433;
 const A1: [u8; 32] = [0xa1; 32];
 const A2: [u8; 32] = [0xa2; 32];
 const A3: [u8; 32] = [0xa3; 32];
-const A4: [u8; 32] = [0xa4; 32];
 const A5: [u8; 32] = [0xa5; 32];
 const A6: [u8; 32] = [0xa6; 32];
 const A7: [u8; 32] = [0xa7; 32];
-const A8: [u8; 32] = [0xa8; 32];
 const A9: [u8; 32] = [0xa9; 32];
 
 fn sk(n: u8) -> [u8; 32] {
@@ -247,73 +243,6 @@ fn ifd_sell_first(maker: u8) -> IfdPairState {
     e
 }
 
-/// A cross limit of the retired lot layout without an auction (the 333-byte template's layout): 10 lots of 1000 base units
-/// of TOKEN for TOKEN_B at 1000 base units of B per lot.
-fn lot_cross(maker: u8) -> LotState {
-    let (h, p, s) = tok_fields(P);
-    LotState::KobCross(lot::CrossState {
-        maker: pk(maker),
-        token_cov_id: TOKEN,
-        token_tpl_hash: h,
-        tpl_prefix_len: p,
-        tpl_suffix_len: s,
-        unit: SCALE,
-        lot_units: 1,
-        b_family: Family::Kcc20.code() as i64,
-        b_cov_id: TOKEN_B,
-        b_tpl_hash: h,
-        b_prefix_len: p,
-        b_suffix_len: s,
-        b_ext: EXT,
-        b_lot: SCALE,
-        tip_lot: 0,
-        tif: 0,
-        active_from: 0,
-        expiry_daa: 400_000_000,
-        refund_tip: rtip(),
-        delivery_carrier: 2 * KAS as i64,
-        b_lot_end: SCALE,
-        auction_daa: 0,
-        lots_left: 10,
-    })
-}
-
-/// A plain ask of the retired lot layout (protocol v2.6): `lots_left` lots of 1000 base units.
-fn lot_ask(maker: u8, lots_left: i64) -> LotState {
-    let (h, p, s) = tok_fields(P);
-    LotState::KobAsk(lot::AskState {
-        maker: pk(maker),
-        token_cov_id: TOKEN,
-        token_tpl_hash: h,
-        tpl_prefix_len: p,
-        tpl_suffix_len: s,
-        unit: SCALE,
-        lot_units: 1,
-        price: 250_000_000,
-        tip_lot: 100_000,
-        tif: 0,
-        active_from: 0,
-        expiry_daa: 400_000_000,
-        refund_tip: rtip(),
-        interval: 0,
-        max_lots: 0,
-        slope: 0,
-        price_end: 0,
-        decay_step: 1_000,
-        lots_left,
-    })
-}
-
-/// The first retired cross limit template (333 bytes, before the pair-market auction).
-fn retired_cross() -> &'static Retired {
-    retired::retired().iter().find(|r| r.kind == TemplateId::KobCross).unwrap()
-}
-
-/// The protocol v2.6 lot template of the plain ask: the layout a version 3 payload record of a plain ask describes.
-fn retired_ask() -> &'static Retired {
-    retired::payload_layout(Family::Kcc20, TemplateId::KobAsk.kind_code().unwrap()).unwrap()
-}
-
 fn node_utxo(spk: &ScriptPublicKey, tag: u8, index: u32, amount: u64, cov: Option<[u8; 32]>) -> NodeUtxo {
     NodeUtxo {
         address: Some(address_of(spk, NET).unwrap()),
@@ -343,17 +272,10 @@ struct Fixture {
     a2: AnyState,
     a3_placed: AnyState,
     a3_now: AnyState,
-    /// The retired cross limit (lot layout) and its span under the retired template.
-    a4: LotState,
-    a4_span: Vec<u8>,
     a5: AnyState,
     a6: AnyState,
     a7_placed: AnyState,
     a7_now: AnyState,
-    /// The retired plain ask as placed (10 lots) and now (7 lots), with their spans under the v2.6 lot template.
-    a8_placed_span: Vec<u8>,
-    a8_now: LotState,
-    a8_now_span: Vec<u8>,
     /// A plain ask partly filled to 6500 base units: not on the `amountLeft - k x minFill` grid of its placed state.
     a9_placed: AnyState,
     a9_now: AnyState,
@@ -368,16 +290,10 @@ fn fixture() -> Fixture {
     let a2 = AnyState::KobBid(b);
     let a3_placed = AnyState::KobAsk(ask(1, 10 * SCALE));
     let a3_now = AnyState::KobAsk(ask(1, 7 * SCALE));
-    let a4 = lot_cross(1);
-    let r = retired_cross();
-    let a4_span = retired::encode(r, &a4).unwrap();
     let a5 = AnyState::KobAsk(AskState { price: 260_000_000, ..ask(1, 10 * SCALE) });
     let a6 = AnyState::KobAsk(ask(2, 10 * SCALE));
     let a7_placed = AnyState::KobAsk(AskState { price: 270_000_000, ..ask(1, 10 * SCALE) });
     let a7_now = AnyState::KobAsk(AskState { price: 270_000_000, ..ask(1, 6 * SCALE) });
-    let (a8_placed, a8_now) = (lot_ask(1, 10), lot_ask(1, 7));
-    let r8 = retired_ask();
-    let (a8_placed_span, a8_now_span) = (retired::encode(r8, &a8_placed).unwrap(), retired::encode(r8, &a8_now).unwrap());
     let a9_placed = AnyState::KobAsk(AskState { price: 280_000_000, ..ask(1, 10 * SCALE) });
     let a9_now = AnyState::KobAsk(AskState { price: 280_000_000, ..ask(1, 6_500) });
     let mut utxos = vec![
@@ -387,15 +303,10 @@ fn fixture() -> Fixture {
         // a partially filled ask whose carrier is too small to pay its cancel: funding comes from the node
         node_utxo(&a3_now.spk(), 0x31, 0, 5_000, Some(A3)),
         token_node_utxo(P, TOKEN, 0x32, 7 * SCALE, A3),
-        node_utxo(&r.template.spk(&a4_span), 0x41, 0, CARRIER + 8 * KAS, Some(A4)),
-        token_node_utxo(P, TOKEN, 0x42, 10 * SCALE, A4),
         node_utxo(&a6.spk(), 0x61, 0, CARRIER, Some(A6)),
         token_node_utxo(P, TOKEN, 0x62, 10 * SCALE, A6),
         node_utxo(&a7_now.spk(), 0x71, 0, CARRIER, Some(A7)),
         token_node_utxo(P, TOKEN, 0x72, 6 * SCALE, A7),
-        // the retired v2.6 lot ask, partly filled to 7 lots: its script is the retired template's
-        node_utxo(&r8.template.spk(&a8_now_span), 0x81, 0, CARRIER, Some(A8)),
-        token_node_utxo(P, TOKEN, 0x82, 7 * SCALE, A8),
         // the ask partly filled to 6500 base units
         node_utxo(&a9_now.spk(), 0xc1, 0, CARRIER, Some(A9)),
         token_node_utxo(P, TOKEN, 0xc2, 6_500, A9),
@@ -406,32 +317,12 @@ fn fixture() -> Fixture {
         token_node_utxo(P, TOKEN, 0x13, 3, A1),
         token_node_utxo(P, TOKEN, 0x14, 4, A1),
         token_node_utxo(PF, TOKEN_F, 0x15, 9, A1),
-        // a stray of A2 (bid) and a token-B stray of the retired cross limit A4
+        // a stray of A2 (bid)
         token_node_utxo(P, TOKEN, 0x23, 5, A2),
-        token_node_utxo(P, TOKEN_B, 0x43, 6, A4),
-        token_node_utxo(PF, TOKEN_F, 0x44, 2, A4),
     ];
     // an unrelated output at the same address as A5 but without A5's covenant id: never counts
     utxos.push(node_utxo(&a5.spk(), 0x51, 0, CARRIER, Some([0x55; 32])));
-    Fixture {
-        a1,
-        a2,
-        a3_placed,
-        a3_now,
-        a4,
-        a4_span,
-        a5,
-        a6,
-        a7_placed,
-        a7_now,
-        a8_placed_span,
-        a8_now,
-        a8_now_span,
-        a9_placed,
-        a9_now,
-        bid_value,
-        utxos,
-    }
+    Fixture { a1, a2, a3_placed, a3_now, a5, a6, a7_placed, a7_now, a9_placed, a9_now, bid_value, utxos }
 }
 
 fn hex_state(s: &AnyState) -> String {
@@ -459,25 +350,20 @@ fn tmp(name: &str) -> PathBuf {
     d
 }
 
-/// The backup (A1 with its custody state, A3 as placed, A4 and A8 retired, A5, A7 with a later `last`) and the export (A2,
-/// A6, A1 again, A9 as placed, an unsupported template, two malformed entries).
+/// The backup (A1 with its custody state, A3 as placed, A5, A7 with a later `last`) and the export (A2, A6, A1 again, A9 as
+/// placed, a template this build does not pin, two malformed entries).
 fn files(f: &Fixture, dir: &Path) -> (PathBuf, PathBuf) {
     let ask_hash = template(TemplateId::KobAsk).hash;
     let mut r1 = record(A1, "KobAsk", ask_hash, &hex_state(&f.a1), pk(1));
     r1["custody"] = json!({"output": 1, "value": CARRIER.to_string(), "tokenState": owned(P, 10 * SCALE, A1)});
     let mut r3 = record(A3, "KobAsk", ask_hash, &hex_state(&f.a3_placed), pk(1));
     r3["ext"] = json!(to_hex(&EXT));
-    let mut r4 = record(A4, "KobCross", retired_cross().template.hash, &to_hex(&f.a4_span), pk(1));
-    r4["ext"] = json!(to_hex(&EXT));
-    // a placement record of payload version 3: the state is in the lot layout of the v2.6 template
-    let mut r8 = record(A8, "KobAsk", retired_ask().template.hash, &to_hex(&f.a8_placed_span), pk(1));
-    r8["ext"] = json!(to_hex(&EXT));
     let r5 = record(A5, "KobAsk", ask_hash, &hex_state(&f.a5), pk(1));
     let mut r7 = record(A7, "KobAsk", ask_hash, &hex_state(&f.a7_placed), pk(1));
     r7["ext"] = json!(to_hex(&EXT));
     r7["last"] = json!({"state": hex_state(&f.a7_now), "txid": to_hex(&[0x71; 32]), "index": 0, "daa": "1000"});
     let backup = json!({"format": "kob-backup", "version": 1, "network": NET, "exportedAt": "2026-10-02T00:00:00Z",
-                        "records": [r1, r3, r4, r5, r7, r8, {"version": 1, "network": NET, "covenantId": "zz"}], "txs": {}});
+                        "records": [r1, r3, r5, r7, {"version": 1, "network": NET, "covenantId": "zz"}], "txs": {}});
     let entry = |cov: [u8; 32], tpl: [u8; 32], s: &str| json!({"template_hash": to_hex(&tpl), "state": s, "covenant_id": to_hex(&cov), "extension_commitment": to_hex(&EXT)});
     let export = json!({"version": 2, "network": NET, "orders": [
         entry(A2, template(TemplateId::KobBid).hash, &hex_state(&f.a2)),
@@ -534,37 +420,24 @@ fn recover_finds_cancels_and_submits() {
     assert_eq!(by_cov(&report, A3)["found_by"], VIA_FALLBACK);
     assert_eq!(by_cov(&report, A3)["state"], hex_state(&f.a3_now));
     assert_eq!(by_cov(&report, A3)["custody"]["amount"], (7 * SCALE).to_string());
-    assert_eq!(st(A4), "live");
-    assert_eq!(by_cov(&report, A4)["template"], "retired");
-    assert_eq!(by_cov(&report, A4)["older_contract_version"], true);
-    assert_eq!(by_cov(&report, A4)["amount_left"], "10000", "a retired order's amount is its custody: lots x lotUnits x unit");
-    assert!(by_cov(&report, A4)["scale"].is_null(), "a retired lot state has no scale");
-    assert_eq!(by_cov(&report, A4)["custody"]["status"], "verified");
     assert_eq!(st(A5), "not_found", "an output at the script without the covenant id does not count");
     assert!(by_cov(&report, A5)["note"].as_str().unwrap().starts_with("spent"));
     assert_eq!(st(A6), "other_maker");
     assert_eq!(st(A7), "live");
     assert_eq!(by_cov(&report, A7)["amount_left"], "6000", "the last proven state is a candidate");
     assert_eq!(by_cov(&report, A7)["found_by"], VIA_KNOWN);
-    // a placement record of the retired v2.6 lot template: read in its lot layout, found over every lotsLeft
-    assert_eq!(st(A8), "live");
-    assert_eq!(by_cov(&report, A8)["template"], "retired");
-    assert_eq!(by_cov(&report, A8)["older_contract_version"], true);
-    assert_eq!(by_cov(&report, A8)["kind"], "KobAsk");
-    assert_eq!(by_cov(&report, A8)["found_by"], VIA_LOTS);
-    assert_eq!(by_cov(&report, A8)["amount_left"], "7000");
-    assert_eq!(by_cov(&report, A8)["state"], to_hex(&f.a8_now_span));
-    assert_eq!(by_cov(&report, A8)["custody"]["status"], "verified");
-    assert_eq!(by_cov(&report, A8)["custody"]["amount"], (7 * SCALE).to_string());
     // 6500 is not on the amountLeft - k x minFill grid of the placed state: not found without a hint, and honest about it
     assert_eq!(st(A9), "not_found");
     let note = by_cov(&report, A9)["note"].as_str().unwrap().to_string();
     assert!(note.contains("--amount-left") && note.contains("not exhaustive"), "{note}");
+    // a template this build does not pin is unknown: unsupported, never searched
     assert_eq!(st([0xb0; 32]), "unsupported");
-    assert_eq!(report["summary"]["live"], 6);
+    assert_eq!(by_cov(&report, [0xb0; 32])["note"], "template is not pinned by this build");
+    assert_eq!(by_cov(&report, [0xb0; 32])["candidates"], 0);
+    assert_eq!(report["summary"]["live"], 4);
     assert_eq!(report["summary"]["not_found"], 2);
     assert_eq!(report["rejected"].as_array().unwrap().len(), 3, "{}", report["rejected"]);
-    assert_eq!(report["orders"].as_array().unwrap().len(), 10, "A1 is in both files: one order");
+    assert_eq!(report["orders"].as_array().unwrap().len(), 8, "A1 is in both files: one order");
     assert!(by_cov(&report, A1)["source"].as_str().unwrap().contains("export.json"));
     assert!(node.lock().unwrap().submitted.is_empty());
 
@@ -579,7 +452,7 @@ fn recover_finds_cancels_and_submits() {
     .unwrap();
     let (report, ok) = recover::execute(&a).unwrap();
     assert!(ok, "{report}");
-    for cov in [A1, A2, A3, A4, A7, A8] {
+    for cov in [A1, A2, A3, A7] {
         let c = &by_cov(&report, cov)["cancel"];
         assert_eq!(c["status"], "signed", "{}: {c}", to_hex(&cov));
         let s = signed_from(c["file"].as_str().unwrap());
@@ -589,18 +462,15 @@ fn recover_finds_cancels_and_submits() {
     assert!(by_cov(&report, A6).get("cancel").is_none());
     assert_eq!(by_cov(&report, A1)["cancel"]["funding"], "order");
     assert_eq!(by_cov(&report, A3)["cancel"]["funding"], format!("{}:0", to_hex(&[0x91; 32])), "the smallest SUFFICIENT UTXO");
-    // the older contract version's cancel: custody and the order's KAS back to the maker, the order pays the fee
-    assert_eq!(by_cov(&report, A8)["cancel"]["funding"], "order");
-    assert_eq!(signed_from(by_cov(&report, A8)["cancel"]["file"].as_str().unwrap()).tx.inputs.len(), 2, "order + custody");
     assert!(node.lock().unwrap().submitted.is_empty(), "a dry run submits nothing");
 
     // submit: one transaction per live order of the key
     let a = recover::parse_args(&v(&format!("{base} --cancel --key {}", to_hex(&sk(1))))).unwrap();
     let (report, ok) = recover::execute(&a).unwrap();
     assert!(ok, "{report}");
-    assert_eq!(by_cov(&report, A4)["cancel"]["status"], "submitted");
-    assert_eq!(by_cov(&report, A8)["cancel"]["status"], "submitted");
-    assert_eq!(node.lock().unwrap().submitted.len(), 6);
+    assert_eq!(by_cov(&report, A7)["cancel"]["status"], "submitted");
+    assert!(by_cov(&report, [0xb0; 32]).get("cancel").is_none());
+    assert_eq!(node.lock().unwrap().submitted.len(), 4);
 
     // without --maker: another maker's order is found live, and its cancel is skipped, never attempted with this key
     let a = recover::parse_args(&v(&format!("--from {} --node {url} --cancel --dry-run --key {}", export.display(), to_hex(&sk(1)))))
@@ -613,7 +483,7 @@ fn recover_finds_cancels_and_submits() {
     let code = recover::run(&v(&format!("{base} --out {}", dir.join("r2.json").display())));
     assert_eq!(code, 0);
     let r2: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("r2.json")).unwrap()).unwrap();
-    assert_eq!(r2["summary"]["live"], 6);
+    assert_eq!(r2["summary"]["live"], 4);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -697,12 +567,7 @@ fn any_json(s: &AnyState) -> Value {
     serde_json::to_value(s).unwrap()
 }
 
-fn lot_json(s: &LotState) -> Value {
-    serde_json::to_value(s).unwrap()
-}
-
-/// An indexer order view; `state` is the state JSON (`{"kind": .., "state": {..}}`: a current state, or a retired
-/// template's lot layout).
+/// An indexer order view; `state` is the state JSON (`{"kind": .., "state": {..}}`).
 fn view(
     cov: [u8; 32],
     tpl_hash: [u8; 32],
@@ -830,70 +695,19 @@ fn order_sweep_and_cancel_from_views() {
     assert_eq!(s.tx.inputs.len(), 5, "order + custody + 2 own strays + 1 foreign");
     assert!(o["disclosure"].as_str().unwrap().contains("the custody (10000 units)"));
 
-    // a retired cross limit's cancel (the view's state is in the lot layout): custody, the token-B stray and the foreign stray
-    // all go back to the maker
-    let mut custody = tview(P, TOKEN, 0x42, 10 * SCALE, A4, false, true);
-    custody["role"] = json!("custody");
-    let rv = view(
-        A4,
-        retired_cross().template.hash,
-        lot_json(&f.a4),
-        (0x41, 0),
-        CARRIER + 8 * KAS,
-        Some(custody),
-        vec![tview(P, TOKEN_B, 0x43, 6, A4, false, true), tview(PF, TOKEN_F, 0x44, 2, A4, true, true)],
-    );
-    let rp = write(&dir, "a4.json", &rv);
+    // an order of a template this build does not pin is unknown: neither cancelled nor swept
+    let mut unpinned = a1_view(&f, (0x11, 0));
+    unpinned["template_hash"] = json!(to_hex(&[0x98; 32]));
+    let up = write(&dir, "unpinned.json", &unpinned);
     let a = order::parse_args(
         order::Op::Cancel,
-        &v(&format!("--view {} --key {key} --node {url} --dry-run --out-dir {}", rp.display(), dir.join("out").display())),
+        &v(&format!("--view {} --key {key} --node {url} --dry-run --out-dir {}", up.display(), dir.join("out").display())),
     )
     .unwrap();
-    let (report, ok) = order::execute(&a).unwrap();
-    assert!(ok, "{report}");
-    let o = &report["orders"][0];
-    assert_eq!(o["status"], "signed", "{o}");
-    assert_eq!(o["kind"], "KobCross");
-    let s = signed_from(o["file"].as_str().unwrap());
-    assert_eq!(s.tx.inputs.len(), 4, "order + custody + token-B stray + foreign stray (the order pays the fee): {o}");
-    assert!(o["left_behind"].as_array().is_none_or(|l| l.is_empty()), "{o}");
-    // its sweep is refused: a retired template is spend-only
-    let (report, _) = sweep(&rp, "--dry-run");
+    let (report, _) = order::execute(&a).unwrap();
     assert_eq!(report["orders"][0]["status"], "skipped");
-
-    // a retired v2.6 lot ask (an older contract version): cancel with its custody of 7 lots = 7000 base units
-    let mut custody = tview(P, TOKEN, 0x82, 7 * SCALE, A8, false, true);
-    custody["role"] = json!("custody");
-    let lv = view(A8, retired_ask().template.hash, lot_json(&f.a8_now), (0x81, 0), CARRIER, Some(custody), vec![]);
-    let lp = write(&dir, "a8.json", &lv);
-    let a = order::parse_args(
-        order::Op::Cancel,
-        &v(&format!("--view {} --key {key} --node {url} --dry-run --out-dir {}", lp.display(), dir.join("out").display())),
-    )
-    .unwrap();
-    let (report, ok) = order::execute(&a).unwrap();
-    assert!(ok, "{report}");
-    let o = &report["orders"][0];
-    assert_eq!(o["status"], "signed", "{o}");
-    assert_eq!(o["kind"], "KobAsk");
-    assert!(o["disclosure"].as_str().unwrap().contains("the custody (7000 units)"), "{o}");
-    let s = signed_from(o["file"].as_str().unwrap());
-    assert_eq!(s.tx.inputs.len(), 2, "order + custody");
-    // a custody that does not hold the order's amount left is refused
-    let mut wrong = tview(P, TOKEN, 0x82, 6 * SCALE, A8, false, true);
-    wrong["role"] = json!("custody");
-    let lv = view(A8, retired_ask().template.hash, lot_json(&f.a8_now), (0x81, 0), CARRIER, Some(wrong), vec![]);
-    let a = order::parse_args(
-        order::Op::Cancel,
-        &v(&format!("--view {} --key {key} --node {url} --dry-run", write(&dir, "a8w.json", &lv).display())),
-    )
-    .unwrap();
-    let (report, ok) = order::execute(&a).unwrap();
-    assert!(!ok);
-    assert_eq!(report["orders"][0]["status"], "refused");
-    assert!(report["orders"][0]["reason"].as_str().unwrap().contains("amount left"));
-    // its sweep is refused too
-    let (report, _) = sweep(&lp, "--dry-run");
+    assert_eq!(report["orders"][0]["reason"], "template is not pinned by this build");
+    let (report, _) = sweep(&up, "--dry-run");
     assert_eq!(report["orders"][0]["status"], "skipped");
 
     // a key that is not the maker builds nothing
@@ -915,7 +729,7 @@ fn input_formats_and_bad_input() {
     let dir = tmp("inputs");
     let (backup, export) = files(&f, &dir);
     let p = inputs::read_file(&backup, NET).unwrap();
-    assert_eq!(p.entries.len(), 6);
+    assert_eq!(p.entries.len(), 4);
     assert_eq!(p.rejected.len(), 1);
     let a7 = p.entries.iter().find(|e| e.covenant_id == A7).unwrap();
     assert_eq!(a7.spans, vec![f.a7_now.encode(), f.a7_placed.encode()], "the last proven state first");
@@ -923,8 +737,6 @@ fn input_formats_and_bad_input() {
     let a1 = p.entries.iter().find(|e| e.covenant_id == A1).unwrap();
     assert_eq!(a1.ext, Some(EXT), "from the custody token state");
     assert_eq!(p.entries.iter().find(|e| e.covenant_id == A5).unwrap().ext, None);
-    let a8 = p.entries.iter().find(|e| e.covenant_id == A8).unwrap();
-    assert_eq!(a8.spans, vec![f.a8_placed_span.clone()], "the retired placement record keeps its lot-layout span");
     assert!(inputs::read_file(&backup, "mainnet").unwrap_err().contains("network"));
     let e = inputs::read_file(&export, NET).unwrap();
     assert_eq!((e.entries.len(), e.rejected.len()), (5, 2));
@@ -933,7 +745,7 @@ fn input_formats_and_bad_input() {
     let p = inputs::parse(&a1_view(&f, (0x11, 0)), "v", NET).unwrap();
     assert_eq!(p.views.len(), 1);
     let vw = &p.views[0];
-    assert_eq!(vw.state.as_ref(), Some(&OrderState::Current(f.a1.clone())));
+    assert_eq!(vw.state.as_ref(), Some(&f.a1));
     assert_eq!(vw.strays.len(), 5);
     assert_eq!(vw.strays[2].program, Some(PF));
     assert!(vw.strays[2].foreign && vw.strays[3].state.is_none());
@@ -946,16 +758,6 @@ fn input_formats_and_bad_input() {
     let mut bad = a1_view(&f, (0x11, 0));
     bad["strays"][0]["program"] = json!("KobAsk");
     assert_eq!(inputs::parse(&bad, "v", NET).unwrap().rejected.len(), 1, "a stray's program must be a token program");
-    // the state of a view is read in the layout of its template: a retired template's in the lot layout, a pinned one's in the
-    // current layout (the other layout is refused)
-    let lot_view = view(A8, retired_ask().template.hash, lot_json(&f.a8_now), (0x81, 0), CARRIER, None, vec![]);
-    let p = inputs::parse(&lot_view, "lot", NET).unwrap();
-    assert_eq!(p.views[0].state.as_ref(), Some(&OrderState::Lot(f.a8_now.clone(), Family::Kcc20)));
-    assert_eq!(p.views[0].entry().spans, vec![f.a8_now_span.clone()]);
-    let current_in_retired = view(A8, retired_ask().template.hash, any_json(&f.a1), (0x81, 0), CARRIER, None, vec![]);
-    assert_eq!(inputs::parse(&current_in_retired, "x", NET).unwrap().rejected.len(), 1);
-    let lot_in_pinned = view(A1, template(TemplateId::KobAsk).hash, lot_json(&f.a8_now), (0x11, 0), CARRIER, None, vec![]);
-    assert_eq!(inputs::parse(&lot_in_pinned, "x", NET).unwrap().rejected.len(), 1);
     // an unproven view has no state
     let mut unproven = a1_view(&f, (0x11, 0));
     unproven["state_known"] = json!(false);
@@ -978,7 +780,7 @@ fn input_formats_and_bad_input() {
     let mut all = inputs::read_file(&backup, NET).unwrap().entries;
     all.extend(inputs::read_file(&export, NET).unwrap().entries);
     let (merged, notes) = inputs::merge(all);
-    assert_eq!(merged.len(), 10);
+    assert_eq!(merged.len(), 8);
     assert!(notes.is_empty());
     assert_eq!(merged.iter().find(|e| e.covenant_id == A1).unwrap().spans.len(), 1);
     // arguments
@@ -997,11 +799,11 @@ fn input_formats_and_bad_input() {
 
 #[test]
 fn candidate_search() {
-    let tpl = Tpl::Pinned(TemplateId::KobAsk);
-    let placed = OrderState::Current(AnyState::KobAsk(ask(1, 10 * SCALE)));
+    let tpl = TemplateId::KobAsk;
+    let placed = AnyState::KobAsk(ask(1, 10 * SCALE));
     let amounts = |c: &[recover::Candidate]| c.iter().map(|c| c.state.amount_left().unwrap()).collect::<Vec<_>>();
     // the known state, then amountLeft - k x minFill (minFill = 1000): 9000 .. 1000
-    let c = recover::candidates(&tpl, std::slice::from_ref(&placed), &[]);
+    let c = recover::candidates(tpl, std::slice::from_ref(&placed), &[]);
     assert_eq!(c.len(), 10, "known + 9000 .. 1000");
     assert_eq!(c[0].state, placed);
     assert_eq!(c[0].via, VIA_KNOWN);
@@ -1009,63 +811,39 @@ fn candidate_search() {
     assert!(c[1..].iter().all(|c| c.via == VIA_FALLBACK));
     assert_eq!(c[9].state.amount_left(), Some(SCALE));
     // the maker's hints come right after the known states, before the fallback; a hint on the grid is not repeated
-    let c = recover::candidates(&tpl, std::slice::from_ref(&placed), &[6_500, 7_000]);
+    let c = recover::candidates(tpl, std::slice::from_ref(&placed), &[6_500, 7_000]);
     assert_eq!(c.len(), 11, "known + two hints + the fallback grid without the 7000 the hint already gave");
     assert_eq!(amounts(&c)[..3], [10_000, 6_500, 7_000]);
     assert_eq!((c[1].via, c[2].via), (VIA_HINT, VIA_HINT));
     assert!(c[3..].iter().all(|c| c.via == VIA_FALLBACK));
     // a later state first, no duplicate scripts
-    let later = OrderState::Current(AnyState::KobAsk(ask(1, 6 * SCALE)));
-    let c = recover::candidates(&tpl, &[later.clone(), placed.clone()], &[]);
+    let later = AnyState::KobAsk(ask(1, 6 * SCALE));
+    let c = recover::candidates(tpl, &[later.clone(), placed.clone()], &[]);
     assert_eq!(c.len(), 10);
     assert_eq!((c[0].state.amount_left(), c[1].state.amount_left()), (Some(6000), Some(10000)));
     // capped
-    let big = OrderState::Current(AnyState::KobAsk(ask(1, 1_000 * SCALE)));
-    assert_eq!(recover::candidates(&tpl, &[big], &[]).len(), recover::MAX_CANDIDATES);
+    let big = AnyState::KobAsk(ask(1, 1_000 * SCALE));
+    assert_eq!(recover::candidates(tpl, &[big], &[]).len(), recover::MAX_CANDIDATES);
     // a bid has no amount left (its quantity is its escrow) and a fixed script: one candidate, hints or not
-    let bid_state = OrderState::Current(AnyState::KobBid(bid(1)));
-    assert_eq!(recover::candidates(&Tpl::Pinned(TemplateId::KobBid), std::slice::from_ref(&bid_state), &[5_000]).len(), 1);
+    let bid_state = AnyState::KobBid(bid(1));
+    assert_eq!(recover::candidates(TemplateId::KobBid, std::slice::from_ref(&bid_state), &[5_000]).len(), 1);
     assert!(crate::common::script_is_fixed(&bid_state));
     assert!(!crate::common::script_is_fixed(&placed));
     assert!(crate::common::amount_is_the_only_mutable_field(TemplateId::KobAsk));
     assert!(!crate::common::amount_is_the_only_mutable_field(TemplateId::KobCondAsk));
-    // retired: the scripts are the retired template's, and every smaller lotsLeft is a candidate (exhaustive for the kind)
-    let x = OrderState::Lot(lot_cross(1), Family::Kcc20);
-    let rt = Tpl::Retired(retired_cross());
-    let c = recover::candidates(&rt, std::slice::from_ref(&x), &[]);
-    assert_eq!(c.len(), 10);
-    assert_eq!(c[0].spk, retired_cross().template.spk(&retired::encode(retired_cross(), &lot_cross(1)).unwrap()));
-    assert_ne!(c[0].spk, AnyState::KobPair(pair_order(1, true)).spk());
-    assert!(c[1..].iter().all(|c| c.via == VIA_LOTS));
-    assert_eq!(crate::common::lots_left(&c[9].state), Some(1));
-    assert!(crate::common::lots_is_the_only_mutable_field(&x));
-    // a hint in base units is a retired order's whole number of lots (1000 base units a lot); other amounts do not apply
-    let c = recover::candidates(&rt, std::slice::from_ref(&x), &[4_000]);
-    assert_eq!((c.len(), c[1].via, crate::common::lots_left(&c[1].state)), (10, VIA_HINT, Some(4)));
-    assert_eq!(recover::candidates(&rt, std::slice::from_ref(&x), &[4_500]).len(), 10);
-    // template resolution
-    assert!(matches!(Tpl::resolve(&template(TemplateId::KobAsk).hash), Some(Tpl::Pinned(TemplateId::KobAsk))));
-    assert!(matches!(Tpl::resolve(&retired_cross().template.hash), Some(Tpl::Retired(_))));
-    assert!(matches!(Tpl::resolve(&retired_ask().template.hash), Some(Tpl::Retired(_))));
-    assert!(Tpl::resolve(&token_template(P).hash).is_none(), "a token program is not an order template");
-    assert!(Tpl::resolve(&[0x99; 32]).is_none());
-    // a non-canonical or foreign span does not decode
-    assert!(tpl.decode(&[0u8; 3]).is_err());
-    // a retired span decodes into its lot layout (the layouts are as wide as the current ones: a span is read under the
-    // template its order names), and a state is encoded only under the template of its own kind
-    let lot_span = retired::encode(retired_ask(), &lot_ask(1, 4)).unwrap();
-    let decoded = Tpl::Retired(retired_ask()).decode(&lot_span).unwrap();
-    assert_eq!(decoded, OrderState::Lot(lot_ask(1, 4), Family::Kcc20));
-    assert_eq!((decoded.kind_name().as_str(), decoded.custody_amount(), decoded.is_retired()), ("KobAsk", Some(4 * SCALE), true));
-    assert!(tpl.encode(&decoded).is_err() && Tpl::Retired(retired_ask()).encode(&placed).is_err());
+    // template resolution: only the order templates this build pins
+    assert_eq!(order_template(&template(TemplateId::KobAsk).hash), Some(TemplateId::KobAsk));
+    assert_eq!(order_template(&token_template(P).hash), None, "a token program is not an order template");
+    assert_eq!(order_template(&[0x99; 32]), None);
+    // a non-canonical or foreign span does not decode, and a state is encoded only under the template of its own kind
+    assert!(decode_state(tpl, &[0u8; 3]).is_err());
+    assert_eq!(decode_state(tpl, &placed.encode()).unwrap(), placed);
+    assert!(encode_state(TemplateId::KobBid, &placed).is_err());
     // the custody a state implies: KCC-20 needs the extension commitment, a bid none
     assert!(recover::custody_target(&placed, A1, None).is_err());
     let (st, _) = recover::custody_target(&placed, A1, Some(EXT)).unwrap().unwrap();
     assert_eq!((st.amount(), st.owner()), (10 * SCALE, A1));
     assert!(recover::custody_target(&bid_state, A2, None).unwrap().is_none());
-    // a retired order's custody is lots x lotUnits x unit
-    let (st, _) = recover::custody_target(&decoded, A8, Some(EXT)).unwrap().unwrap();
-    assert_eq!((st.amount(), st.owner()), (4 * SCALE, A8));
 }
 
 /// Pair orders (protocol v3): a sell-first `KobIfdPair` holds TWO custodies (its A and its B prefund) and a `KobPair` BID a

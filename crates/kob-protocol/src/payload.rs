@@ -20,11 +20,9 @@
 //! a buy-first `KobIfdPair`'s B escrow, a sell-first one's A custody), then a sell-first `KobIfdPair`'s B PREFUND custody
 //! (the record's `prefund` part, present exactly when the state's `custody` is non-zero).
 //!
-//! Versions 2 and 3 still decode, into the RETIRED lot layouts they were written for ([`Record::RetiredOrder`],
-//! [`Record::RetiredAmend`]; [`crate::retired`]): version 2 names the template by hash, version 3 by kind (the protocol
-//! v2.6 lot template of that kind, [`crate::retired::payload_layout`]). Such records are only read (an order of a retired
-//! template is spend-only: [`recover_retired_orders`] and the maker's cancel); the encoder refuses them. Payloads without
-//! order records (an x402 commitment, a note) keep version 2, byte for byte what they were.
+//! Payloads without order records (an x402 commitment, a note) are written as version 2, byte for byte what they were.
+//! An `ORDER` record of version 2 and any payload of version 3 describe templates this build does not pin: they do not
+//! decode, like a record of any other unknown template.
 
 use kaspa_consensus_core::hashing::covenant_id::covenant_id;
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint, TransactionOutput};
@@ -33,21 +31,16 @@ use serde::{Deserialize, Serialize};
 use crate::artifacts::{pinned_hash, template, token_template_by_hash, Template, TemplateId};
 use crate::error::{Error, Result};
 use crate::family::Family;
-use crate::retired::lot::LotState;
-use crate::retired::Retired;
 use crate::state::{AnyState, TokenState};
 use crate::tx::{spk_from_string, spk_to_string, SigPlan, TxJson};
 
 /// Payload magic.
 pub const MAGIC: &[u8; 4] = b"KOB1";
 /// Payload format version written for order records (4: the compact placement and in-place amend records of protocol v3,
-/// amounts in base units). Versions 3 and 2 (the lot layouts of protocol v2.4 .. v2.6) still decode, into retired
-/// records; a payload without order records is written as version 2; version 1 was never deployed.
+/// amounts in base units). A payload without order records is written as version 2; version 1 was never deployed, and
+/// version 3 (like an `ORDER` record of version 2) named templates this build does not pin.
 pub const PAYLOAD_VERSION: u8 = 4;
-/// Version 3: the compact records over the protocol v2.6 lot layouts (decoded into retired records).
-pub const PAYLOAD_VERSION_3: u8 = 3;
-/// Version 2: decoded (its order records into retired records), and written for payloads that carry no `ORDER` /
-/// `AMEND` record.
+/// Version 2: written for payloads that carry no `ORDER` / `AMEND` record.
 pub const PAYLOAD_VERSION_2: u8 = 2;
 
 /// Record type codes.
@@ -80,7 +73,7 @@ pub const FAMILY_KRON46: u8 = 0x02;
 pub const LEGACY_X402_PREFIX: &[u8] = b"X402:";
 
 /// Token custody part of an order record (token-holding kinds only). The amount is not recorded:
-/// it is the order's `amountLeft` (exact custody; a retired lot order: `lotsLeft × lotUnits × unit`).
+/// it is the order's `amountLeft` (exact custody).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Custody {
@@ -90,14 +83,6 @@ pub struct Custody {
     /// such field (2-byte custody part) and this must be all zero.
     #[serde(with = "crate::json::field")]
     pub extension_commitment: [u8; 32],
-}
-
-/// Length of the custody part of a version-2 record: KCC-20 `tokenOutput u16 ‖ extCommit[32]`, KRON `tokenOutput u16`.
-pub fn custody_len(family: Family) -> usize {
-    match family {
-        Family::Kcc20 => 34,
-        Family::Kron => 2,
-    }
 }
 
 /// One payload record.
@@ -133,37 +118,6 @@ pub enum Record {
         input: u16,
         family: u8,
         template: TemplateId,
-        #[serde(with = "crate::json::field")]
-        state: Vec<u8>,
-        #[serde(with = "crate::json::field", default)]
-        deadline: Option<u64>,
-    },
-    /// The placement record of an order of a RETIRED lot template (payload versions 2 and 3): `template` names its kind,
-    /// `templateHash` the retired template whose layout `state` is in (version 3: the protocol v2.6 template of the
-    /// kind). Decoded, never written ([`recover_retired_orders`]).
-    #[serde(rename_all = "camelCase")]
-    RetiredOrder {
-        output: u16,
-        family: u8,
-        template: TemplateId,
-        #[serde(with = "crate::json::field")]
-        template_hash: [u8; 32],
-        #[serde(with = "crate::json::field")]
-        state: Vec<u8>,
-        custody: Option<Custody>,
-        #[serde(with = "crate::json::field", default)]
-        deadline: Option<u64>,
-    },
-    /// An in-place amend of a RETIRED lot template (payload version 3): as [`Record::RetiredOrder`]. Decoded, never
-    /// written.
-    #[serde(rename_all = "camelCase")]
-    RetiredAmend {
-        output: u16,
-        input: u16,
-        family: u8,
-        template: TemplateId,
-        #[serde(with = "crate::json::field")]
-        template_hash: [u8; 32],
         #[serde(with = "crate::json::field")]
         state: Vec<u8>,
         #[serde(with = "crate::json::field", default)]
@@ -228,7 +182,7 @@ impl Record {
 
     /// True for the records that need the order payload version (any `ORDER` or `AMEND` record).
     fn is_order_record(&self) -> bool {
-        matches!(self, Record::Order { .. } | Record::Amend { .. } | Record::RetiredOrder { .. } | Record::RetiredAmend { .. })
+        matches!(self, Record::Order { .. } | Record::Amend { .. })
     }
 }
 
@@ -309,7 +263,7 @@ pub fn state_layout(t: TemplateId) -> Vec<(Vec<u8>, usize)> {
     state_layout_of(template(t))
 }
 
-/// The pushes that make up a template's state span (a pinned or a retired one), in order: each field's push header (opcode
+/// The pushes that make up a template's state span, in order: each field's push header (opcode
 /// and, for a push of more than 75 bytes, its length bytes) and data length. Every state field is a fixed-width canonical
 /// push (`0x20` + 32 bytes, `0x08` + 8 bytes, a committed exit state behind `OP_PUSHDATA1/2`), so the layout is the
 /// template's: it is read from the artifact's compiled instance.
@@ -427,8 +381,7 @@ fn check_order_state(family: u8, t: TemplateId, state: &[u8]) -> Result<AnyState
 }
 
 /// Encodes records into a `KOB1` payload: version 4 when it carries an `ORDER` or `AMEND` record, otherwise version 2
-/// (an x402 commitment or a note is the same bytes in every version, and stays what the x402 profile specifies). Records
-/// of retired templates are refused (they are decoded, never written).
+/// (an x402 commitment or a note is the same bytes in every version, and stays what the x402 profile specifies).
 pub fn encode(records: &[Record]) -> Result<Vec<u8>> {
     let mut out = MAGIC.to_vec();
     out.push(if records.iter().any(Record::is_order_record) { PAYLOAD_VERSION } else { PAYLOAD_VERSION_2 });
@@ -498,12 +451,6 @@ pub fn encode(records: &[Record]) -> Result<Vec<u8>> {
                 }
                 put_record(&mut out, REC_AMEND, &v)?;
             }
-            Record::RetiredOrder { template: t, .. } | Record::RetiredAmend { template: t, .. } => {
-                return Err(Error::Payload(format!(
-                    "a {} record of a retired template is decoded, never written (payload versions 2 and 3)",
-                    t.name()
-                )));
-            }
             Record::Sweep { output, input } => {
                 let mut v = vec![];
                 put_varint(&mut v, u64::from(*output));
@@ -569,7 +516,7 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Payload>> {
         return bad("truncated header");
     }
     let version = bytes[4];
-    if !matches!(version, PAYLOAD_VERSION | PAYLOAD_VERSION_3 | PAYLOAD_VERSION_2) {
+    if !matches!(version, PAYLOAD_VERSION | PAYLOAD_VERSION_2) {
         return Err(Error::Payload(format!("unsupported KOB1 version {version}")));
     }
     let mut records = vec![];
@@ -587,11 +534,9 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Payload>> {
         let v = &bytes[p..p + len];
         p += len;
         records.push(match (ty, version) {
-            (REC_ORDER, PAYLOAD_VERSION) => decode_order_compact(v, false)?,
-            (REC_ORDER, PAYLOAD_VERSION_3) => decode_order_compact(v, true)?,
-            (REC_ORDER, _) => decode_order_v2(v)?,
-            (REC_AMEND, PAYLOAD_VERSION) => decode_amend(v, false)?,
-            (REC_AMEND, PAYLOAD_VERSION_3) => decode_amend(v, true)?,
+            (REC_ORDER, PAYLOAD_VERSION) => decode_order_compact(v)?,
+            (REC_ORDER, _) => return bad("a version-2 ORDER record names a template this build does not pin"),
+            (REC_AMEND, PAYLOAD_VERSION) => decode_amend(v)?,
             (REC_RETIRED_RECEIPT_GENESIS, _) => return bad("record type 0x02 (the v2.4 receipt genesis) is retired"),
             (REC_X402, _) if v.is_empty() || v.len() > 64 => return bad("x402 reference must be 1..=64 bytes"),
             (REC_X402, _) => Record::X402 { reference: v.to_vec() },
@@ -610,65 +555,6 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Payload>> {
     Ok(Some(Payload { version, records, legacy: false }))
 }
 
-/// A retired template's state must decode in its lot layout (canonically).
-fn check_retired_state(r: &Retired, state: &[u8]) -> Result<LotState> {
-    if state.len() != r.template.state_len {
-        return Err(Error::Payload(format!("{} state must be {} bytes", r.kind_name(), r.template.state_len)));
-    }
-    crate::retired::decode(r, state)
-}
-
-/// Version-2 ORDER record (the protocol v2.4 .. v2.6 layout, a retired lot template named by hash):
-/// `output:u16 family:u8 kind:u8 templateHash[32] stateLen:u16 state [custody] [deadline:u64]`.
-fn decode_order_v2(v: &[u8]) -> Result<Record> {
-    let bad = |m: String| Err(Error::Payload(m));
-    if v.len() < 38 {
-        return bad("order record too short".into());
-    }
-    let output = u16::from_le_bytes([v[0], v[1]]);
-    let family = v[2];
-    let fam = Family::from_code(family).ok_or_else(|| Error::Payload(format!("unsupported token family {family:#04x}")))?;
-    let t = decode_kind(family, v[3])?;
-    let template_hash: [u8; 32] = v[4..36].try_into().expect("32");
-    let Some(r) = crate::retired::by_hash(&template_hash) else {
-        return bad(format!(
-            "template hash {} of a version-2 {} record is not a retired template this build knows (version 2 describes retired lot templates only)",
-            crate::json::to_hex(&template_hash),
-            t.name()
-        ));
-    };
-    if r.family != fam || r.kind.kind_code() != Some(v[3]) {
-        return bad(format!("the version-2 record's family and kind do not match its template ({})", r.kind_name()));
-    }
-    let sl = u16::from_le_bytes([v[36], v[37]]) as usize;
-    if sl != r.template.state_len || v.len() < 38 + sl {
-        return bad(format!("{} state must be {} bytes", r.kind_name(), r.template.state_len));
-    }
-    let state = v[38..38 + sl].to_vec();
-    check_retired_state(r, &state)?;
-    let mut rest = &v[38 + sl..];
-    let custody = if holds_tokens(r.kind) || r.kind == TemplateId::KobCross {
-        let n = custody_len(fam);
-        if rest.len() < n {
-            return bad(format!("{} record needs its {n}-byte custody part", r.kind_name()));
-        }
-        let c = Custody {
-            token_output: u16::from_le_bytes([rest[0], rest[1]]),
-            extension_commitment: if fam == Family::Kcc20 { rest[2..34].try_into().expect("32") } else { [0; 32] },
-        };
-        rest = &rest[n..];
-        Some(c)
-    } else {
-        None
-    };
-    let deadline = match rest.len() {
-        0 => None,
-        8 => Some(u64::from_le_bytes(rest.try_into().expect("8"))),
-        n => return bad(format!("order record has {n} trailing bytes")),
-    };
-    Ok(Record::RetiredOrder { output, family, template: r.kind, template_hash, state, custody, deadline })
-}
-
 /// Family and kind bytes of a record: a known family, a kind that is not retired.
 fn decode_kind(family: u8, kind: u8) -> Result<TemplateId> {
     let Some(fam) = Family::from_code(family) else {
@@ -680,43 +566,18 @@ fn decode_kind(family: u8, kind: u8) -> Result<TemplateId> {
     TemplateId::from_kind_code(fam, kind).ok_or_else(|| Error::Payload(format!("unknown order kind {kind:#04x}")))
 }
 
-/// The template a compact record's state is in: the pinned one (version 4) or the protocol v2.6 lot template of the kind
-/// (version 3).
-fn compact_template(family: u8, kind: u8, retired: bool) -> Result<(TemplateId, &'static Template, Option<&'static Retired>)> {
-    let t = decode_kind(family, kind)?;
-    if !retired {
-        return Ok((t, template(t), None));
-    }
-    let fam = Family::from_code(family).expect("decode_kind checked the family");
-    let r = crate::retired::payload_layout(fam, kind)
-        .ok_or_else(|| Error::Payload(format!("no protocol v2.6 template of kind {kind:#04x} in {fam:?}")))?;
-    Ok((r.kind, &r.template, Some(r)))
-}
-
-/// Compact ORDER record (versions 4 and 3): `output:LEB128 family:u8 kind:u8 flags:u8 state [custody] [deadline:LEB128]`.
-fn decode_order_compact(v: &[u8], retired: bool) -> Result<Record> {
+/// Compact ORDER record (version 4): `output:LEB128 family:u8 kind:u8 flags:u8 state [custody] [deadline:LEB128]`.
+fn decode_order_compact(v: &[u8]) -> Result<Record> {
     let mut p = 0;
     let output = get_u16_varint(v, &mut p, "order output")?;
     let family = get_u8(v, &mut p, "family")?;
-    let (t, tpl, r) = compact_template(family, get_u8(v, &mut p, "kind")?, retired)?;
-    let fam = Family::from_code(family).expect("checked");
+    let t = decode_kind(family, get_u8(v, &mut p, "kind")?)?;
     let flags = get_u8(v, &mut p, "flags")?;
-    let known = if retired { FLAG_DEADLINE | FLAG_EXT_ZERO } else { FLAG_DEADLINE | FLAG_EXT_ZERO | FLAG_PREFUND_EXT_ZERO };
-    if flags & !known != 0 {
+    if flags & !(FLAG_DEADLINE | FLAG_EXT_ZERO | FLAG_PREFUND_EXT_ZERO) != 0 {
         return Err(Error::Payload(format!("order record flags {flags:#04x}: unknown bits")));
     }
-    let state = get_compact_state(v, &mut p, tpl)?;
-    let fams = match r {
-        Some(r) => {
-            let s = check_retired_state(r, &state)?;
-            if s.holds_tokens() {
-                vec![fam]
-            } else {
-                vec![]
-            }
-        }
-        None => custody_families(&check_order_state(family, t, &state)?),
-    };
+    let state = get_compact_state(v, &mut p, template(t))?;
+    let fams = custody_families(&check_order_state(family, t, &state)?);
     let mut parts = vec![];
     for (k, cfam) in fams.iter().enumerate() {
         let token_output = get_u16_varint(v, &mut p, "custody output")?;
@@ -747,10 +608,7 @@ fn decode_order_compact(v: &[u8], retired: bool) -> Result<Record> {
     if p != v.len() {
         return Err(Error::Payload(format!("order record has {} trailing bytes", v.len() - p)));
     }
-    Ok(match r {
-        None => Record::Order { output, family, template: t, template_hash: pinned_hash(t), state, custody, prefund, deadline },
-        Some(r) => Record::RetiredOrder { output, family, template: t, template_hash: r.template.hash, state, custody, deadline },
-    })
+    Ok(Record::Order { output, family, template: t, template_hash: pinned_hash(t), state, custody, prefund, deadline })
 }
 
 /// SWEEP record (optional, any version): `output:LEB128 input:LEB128`.
@@ -764,13 +622,13 @@ fn decode_sweep(v: &[u8]) -> Result<Record> {
     Ok(Record::Sweep { output, input })
 }
 
-/// AMEND record (versions 4 and 3): `output:LEB128 input:LEB128 family:u8 kind:u8 flags:u8 state [deadline:LEB128]`.
-fn decode_amend(v: &[u8], retired: bool) -> Result<Record> {
+/// AMEND record (version 4): `output:LEB128 input:LEB128 family:u8 kind:u8 flags:u8 state [deadline:LEB128]`.
+fn decode_amend(v: &[u8]) -> Result<Record> {
     let mut p = 0;
     let output = get_u16_varint(v, &mut p, "amend output")?;
     let input = get_u16_varint(v, &mut p, "amend input")?;
     let family = get_u8(v, &mut p, "family")?;
-    let (t, tpl, r) = compact_template(family, get_u8(v, &mut p, "kind")?, retired)?;
+    let t = decode_kind(family, get_u8(v, &mut p, "kind")?)?;
     if !amendable(t) {
         return Err(Error::Payload(format!("{} orders are not amended in place", t.name())));
     }
@@ -778,23 +636,13 @@ fn decode_amend(v: &[u8], retired: bool) -> Result<Record> {
     if flags & !FLAG_DEADLINE != 0 {
         return Err(Error::Payload(format!("amend record flags {flags:#04x}: unknown bits")));
     }
-    let state = get_compact_state(v, &mut p, tpl)?;
-    match r {
-        Some(r) => {
-            check_retired_state(r, &state)?;
-        }
-        None => {
-            check_order_state(family, t, &state)?;
-        }
-    }
+    let state = get_compact_state(v, &mut p, template(t))?;
+    check_order_state(family, t, &state)?;
     let deadline = if flags & FLAG_DEADLINE != 0 { Some(get_varint(v, &mut p, "deadline")?) } else { None };
     if p != v.len() {
         return Err(Error::Payload(format!("amend record has {} trailing bytes", v.len() - p)));
     }
-    Ok(match r {
-        None => Record::Amend { output, input, family, template: t, state, deadline },
-        Some(r) => Record::RetiredAmend { output, input, family, template: t, template_hash: r.template.hash, state, deadline },
-    })
+    Ok(Record::Amend { output, input, family, template: t, state, deadline })
 }
 
 /// An order re-derived from a genesis transaction.
@@ -903,23 +751,6 @@ fn verify_custody(
     Ok(RecoveredCustody { output: c.token_output as u32, value: tout.value, state: st })
 }
 
-/// The token B side of a retired lot cross limit: a supported program of the recorded family, with the lengths the
-/// covenant uses, and another token than A.
-fn check_cross_b(o: usize, b_family: i64, b_tpl_hash: &[u8; 32], lens: (i64, i64), b_cov: [u8; 32], a_cov: [u8; 32]) -> Result<()> {
-    let bad = |m: &str| Err(Error::Payload(format!("order record for output {o}: {m}")));
-    let Some(bt) = token_template_by_hash(b_tpl_hash) else { return bad("unknown token B program") };
-    if Some(bt.family) != crate::state::family_of_code(b_family) {
-        return bad("token B program is not of the recorded bFamily");
-    }
-    if (bt.prefix.len() as i64, bt.suffix.len() as i64) != lens {
-        return bad("token B template lengths do not match its program");
-    }
-    if b_cov == a_cov {
-        return bad("a cross limit needs two different tokens");
-    }
-    Ok(())
-}
-
 /// The two tokens of a pair order: supported programs of the recorded families, with the lengths the covenant uses, and
 /// two different tokens.
 fn check_pair_programs(o: usize, t: &crate::state::PairTokens) -> Result<()> {
@@ -944,8 +775,7 @@ fn check_pair_programs(o: usize, t: &crate::state::PairTokens) -> Result<()> {
 /// the P2SH of `template(state)`, the output must be a genesis whose covenant id is recomputed from
 /// the authorising input's outpoint, no other output may be bound to that covenant id (the genesis
 /// group is the order output alone), and the custody token output (if any) must be the P2SH of the
-/// custody state (exactly `amountLeft`) under the order's token program. Records failing any check are errors. Records
-/// of retired templates (payload versions 2 and 3) are [`recover_retired_orders`]'s.
+/// custody state (exactly `amountLeft`) under the order's token program. Records failing any check are errors.
 pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
     let Some(p) = decode(&tx.payload)? else { return Ok(vec![]) };
     let mut out = vec![];
@@ -998,84 +828,6 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
             order,
             custody,
             prefund,
-            deadline: *deadline,
-        });
-    }
-    Ok(out)
-}
-
-/// An order of a retired lot template re-derived from its genesis transaction (a payload of version 2 or 3).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecoveredRetiredOrder {
-    #[serde(with = "crate::json::field")]
-    pub transaction_id: [u8; 32],
-    pub output: u32,
-    #[serde(with = "crate::json::field")]
-    pub value: u64,
-    #[serde(with = "crate::json::field")]
-    pub covenant_id: [u8; 32],
-    /// The retired template the order output is an instance of ([`crate::retired::by_hash`]).
-    #[serde(with = "crate::json::field")]
-    pub template_hash: [u8; 32],
-    /// Token family of the order (a cross limit: of its token A).
-    pub family: Family,
-    pub order: LotState,
-    pub custody: Option<RecoveredCustody>,
-    #[serde(with = "crate::json::field", default)]
-    pub deadline: Option<u64>,
-}
-
-/// Re-derives every order of a RETIRED template a transaction created (its payload is of version 2 or 3), with the checks
-/// of [`recover_orders`]: the output is the P2SH of the recorded state under the retired template the record names
-/// (version 3: the protocol v2.6 lot template of its kind, or another retired template of the same layout, such as the
-/// if-done entries retired on 2026-10-02), a genesis that is its group alone, and the custody holds exactly
-/// `lotsLeft × lotUnits × unit`. What it recovers can only be cancelled ([`crate::build::build_cancel_retired`]).
-pub fn recover_retired_orders(tx: &TxJson) -> Result<Vec<RecoveredRetiredOrder>> {
-    let Some(p) = decode(&tx.payload)? else { return Ok(vec![]) };
-    let mut out = vec![];
-    for r in &p.records {
-        let Record::RetiredOrder { output, family, template_hash, state, custody, deadline, .. } = r else { continue };
-        let o = *output as usize;
-        let bad = |m: &str| Err(Error::Payload(format!("order record for output {o}: {m}")));
-        let layout = crate::retired::by_hash(template_hash).ok_or_else(|| Error::Payload("unknown retired template".into()))?;
-        let order = check_retired_state(layout, state)?;
-        let Some(txo) = tx.outputs.get(o) else { return bad("no such output") };
-        // the retired template the output is an instance of: the named one, or one of the same kind and layout
-        let candidates = crate::retired::retired().iter().filter(|c| {
-            c.template.hash == layout.template.hash
-                || (p.version == PAYLOAD_VERSION_3
-                    && c.family == layout.family
-                    && c.kind == layout.kind
-                    && crate::retired::same_layout(c, layout))
-        });
-        let Some(rt) = candidates.into_iter().find(|c| spk_to_string(&c.template.spk(state)) == txo.script_public_key) else {
-            return bad("output script is not the P2SH of the recorded state under a retired template of its kind");
-        };
-        let (id, value) = verify_genesis(tx, o, &spk_to_string(&rt.template.spk(state)))?;
-        let (token, tpl_hash, _, _) = order.token();
-        if let Some(x) = order.as_cross() {
-            check_cross_b(o, x.b_family, &x.b_tpl_hash, (x.b_prefix_len, x.b_suffix_len), x.b_cov_id, x.token_cov_id)?;
-        }
-        let fam = Family::from_code(*family).ok_or_else(|| Error::Payload("unsupported token family".into()))?;
-        let custody = match (custody, order.holds_tokens()) {
-            (Some(c), true) => {
-                let amount = order.custody_amount().ok_or_else(|| Error::Payload("the lot custody amount overflows".into()))?;
-                Some(verify_custody(tx, o, c, fam, &tpl_hash, token, amount, id)?)
-            }
-            (None, false) => None,
-            (Some(_), false) => return bad("custody part on a KAS-holding order"),
-            (None, true) => return bad("token-holding order without custody part"),
-        };
-        out.push(RecoveredRetiredOrder {
-            transaction_id: tx.id,
-            output: o as u32,
-            value,
-            covenant_id: id,
-            template_hash: rt.template.hash,
-            family: fam,
-            order,
-            custody,
             deadline: *deadline,
         });
     }
@@ -1473,13 +1225,10 @@ mod tests {
         }
     }
 
-    /// The compact state of every pinned order template and of every protocol v2.6 lot template (payload version 3)
-    /// round-trips losslessly and is shorter than the span.
+    /// The compact state of every pinned order template round-trips losslessly and is shorter than the span.
     #[test]
     fn every_template_state_is_a_push_layout_and_compacts_losslessly() {
-        let pinned = TemplateId::ALL.into_iter().filter(|t| t.kind_code().is_some()).map(template);
-        let retired_tpls = crate::retired::retired().iter().map(|r| &r.template);
-        for tpl in pinned.chain(retired_tpls) {
+        for tpl in TemplateId::ALL.into_iter().filter(|t| t.kind_code().is_some()).map(template) {
             let span = tpl.contract().compiled.bytecode[tpl.prefix.len()..tpl.prefix.len() + tpl.state_len].to_vec();
             assert_eq!(state_layout_of(tpl).iter().map(|(h, n)| h.len() + n).sum::<usize>(), tpl.state_len);
             let mut v = vec![];
@@ -1523,8 +1272,7 @@ mod tests {
         t[6..8].copy_from_slice(&len.to_le_bytes());
         assert!(decode(&t).is_err());
         assert!(decode(&bytes[..bytes.len() - 1]).is_err());
-        // An AMEND record of version 2 is an unknown critical record; a version-4 record read as version 3 is in the
-        // wrong (retired) layout and is refused.
+        // An AMEND record of version 2 is an unknown critical record.
         let am = encode(&[Record::amend(0, 0, &st, None)]).unwrap();
         assert_eq!(decode(&am).unwrap().unwrap().records, vec![Record::amend(0, 0, &st, None)]);
         let mut v2 = am.clone();
@@ -1640,82 +1388,22 @@ mod tests {
         assert!(encode(&[Record::order(0, &huge, c, None)]).is_err());
     }
 
-    #[derive(serde::Deserialize)]
-    struct V {
-        name: String,
-        #[serde(with = "crate::json::field")]
-        payload: Vec<u8>,
-        decoded: serde_json::Value,
-    }
-    #[derive(serde::Deserialize)]
-    struct F {
-        format: u32,
-        note: String,
-        payloads: Vec<V>,
-    }
-    #[derive(serde::Serialize)]
-    struct VOut {
-        name: String,
-        #[serde(with = "crate::json::field")]
-        payload: Vec<u8>,
-        decoded: Payload,
-    }
-    #[derive(serde::Serialize)]
-    struct FOut {
-        format: u32,
-        note: String,
-        payloads: Vec<VOut>,
-    }
-
-    /// The payloads of a vectors file decode to their recorded records (`KOB_REGEN=1` rewrites the decodings). Order
-    /// records decode into records of retired templates: they are refused by the encoder, every other payload re-encodes
-    /// byte for byte.
-    fn check_old_vectors(path: &str, json: &str, version: u8, min: usize) {
-        let f: F = serde_json::from_str(json).unwrap();
-        assert!(f.payloads.len() >= min, "{path}");
-        let regen = std::env::var("KOB_REGEN").is_ok();
-        let mut retired = 0;
-        let mut out = vec![];
-        for v in &f.payloads {
-            let p = decode(&v.payload).unwrap_or_else(|e| panic!("{}: {e}", v.name)).unwrap();
-            if !regen {
-                assert_eq!(serde_json::to_value(&p).unwrap(), v.decoded, "{} (KOB_REGEN=1 rewrites {path})", v.name);
-            }
-            if p.records.iter().any(Record::is_order_record) {
-                assert_eq!(p.version, version, "{}", v.name);
-                assert!(p.records.iter().all(|r| !matches!(r, Record::Order { .. } | Record::Amend { .. })), "{}", v.name);
-                assert!(encode(&p.records).is_err(), "{}: records of retired templates are never written", v.name);
-                retired += 1;
-            } else {
-                assert_eq!(encode(&p.records).unwrap(), v.payload, "{}: a payload without order records keeps version 2", v.name);
-            }
-            for r in &p.records {
-                if let Record::RetiredOrder { template_hash, state, .. } | Record::RetiredAmend { template_hash, state, .. } = r {
-                    let rt = crate::retired::by_hash(template_hash).unwrap();
-                    crate::retired::decode(rt, state).unwrap();
-                }
-            }
-            out.push(VOut { name: v.name.clone(), payload: v.payload.clone(), decoded: p });
-        }
-        assert!(retired > 0, "{path}");
-        if regen {
-            let file = FOut { format: f.format, note: f.note.clone(), payloads: out };
-            let text = serde_json::to_string_pretty(&file).unwrap() + "\n";
-            std::fs::write(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path), text).unwrap();
-        }
-    }
-
-    /// Every version-2 payload the golden vectors carried before payload version 3 still decodes, its order records into
-    /// the retired lot templates they name by hash.
+    /// An `ORDER` record of version 2 and every payload of version 3 name templates this build does not pin: they do not
+    /// decode. A version-2 payload without order records (an x402 commitment, a note) still does, byte for byte.
     #[test]
-    fn version_2_payloads_still_decode() {
-        check_old_vectors("vectors/payload_v2.json", include_str!("../vectors/payload_v2.json"), PAYLOAD_VERSION_2, 40);
-    }
-
-    /// Every version-3 payload the golden vectors of protocol v2.6 carried still decodes, its order and amend records
-    /// into the protocol v2.6 lot templates of their kinds.
-    #[test]
-    fn version_3_payloads_still_decode() {
-        check_old_vectors("vectors/payload_v3.json", include_str!("../vectors/payload_v3.json"), PAYLOAD_VERSION_3, 50);
+    fn order_records_of_older_payload_versions_do_not_decode() {
+        let st = compiled(TemplateId::KobAsk);
+        let custody = Some(Custody { token_output: 1, extension_commitment: [0xee; 32] });
+        let bytes = encode(&[Record::order(0, &st, custody, None)]).unwrap();
+        let mut v3 = bytes.clone();
+        v3[4] = 3;
+        assert!(decode(&v3).unwrap_err().to_string().contains("unsupported KOB1 version 3"));
+        let mut v2 = bytes.clone();
+        v2[4] = PAYLOAD_VERSION_2;
+        assert!(decode(&v2).unwrap_err().to_string().contains("does not pin"));
+        let x402 = [Record::X402 { reference: vec![7; 32] }, Record::Note { text: "kob".into() }];
+        let b = encode(&x402).unwrap();
+        assert_eq!(b[4], PAYLOAD_VERSION_2);
+        assert_eq!(decode(&b).unwrap().unwrap().records, x402);
     }
 }

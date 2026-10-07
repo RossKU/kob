@@ -12,7 +12,6 @@
 //! | [`kcc1`] / [`kcc2`] | KCC-1 hash notation, push forms, type names, dispatch tags, strict argument and state decoding; KCC-2 authority-scheme registry, authority values, minimum approval checks |
 //! | [`script`] | signature-script encoding (entry args, dispatch tag, redeem push) |
 //! | [`build`] | builders: create / cancel(-replace, stray sweep) / refund / kill / close / send; matcher batches (auctions, triggers, stop entries, repeat merges); keeper updates; two-token routes; pair orders (routed through the KAS books, netted against opposite pair orders, from inventory) |
-//! | [`retired`] | retired (lot) templates: their state layouts (`retired::lot`) and the maker's cancel of their live orders |
 //! | [`router`] | the KOB router (Argent): payment intents (KasToToken, TokenToKas, TokenSwap), their pinned actors and states |
 //! | [`defaults`] | wallet defaults, day orders, per-program keeper tips derived from measured fees |
 //! | [`tx`] | unsigned transaction + signing plan, fee/mass pass, wallet-signature finalisation |
@@ -38,7 +37,6 @@ pub mod kcc2;
 pub mod kcc20;
 pub mod payload;
 pub mod registry;
-pub mod retired;
 pub mod router;
 pub mod script;
 pub mod state;

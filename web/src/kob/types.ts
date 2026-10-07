@@ -24,8 +24,6 @@ export type KasKind = 'KobAsk' | 'KobBid' | 'KobCondAsk' | 'KobCondBid' | 'KobIf
 export type BaseKind = KasKind | PairKind;
 /** Order kinds as kob-wasm tags them: the KRON family has its own templates of the KAS kinds (`KobAskKron`, ...); the pair kinds have one each (their states name both families). */
 export type OrderKind = BaseKind | `${KasKind}Kron`;
-/** A base kind of a RETIRED template (`retiredTemplates` / `decodeRetired`): also the retired cross limit `KobCross` (replaced by the pair kinds). */
-export type RetiredKind = KasKind | 'KobCross';
 export type TemplateName = OrderKind | TokenProgram;
 export type Kcc20Program = 'KCC20Ref' | 'KCC20Ref_4x5' | 'KCC20Ref_8x8' | 'KCC20Ref_16x16' | 'KCC20P2' | 'KCC20KaspaCom_0_2_5';
 export type KronProgram = 'KronToken2433' | 'KronToken2732';
@@ -243,7 +241,7 @@ export type AnyState =
   | TaggedOne<'KobCondPair', CondPairState>
   | TaggedOne<'KobIfdPair', IfdPairState>;
 
-/** Every state kob-wasm decodes is an order state (protocol v2.6 retired the v2.4 trade receipt). */
+/** Every state kob-wasm decodes is an order state (protocol v2.6 removed the v2.4 trade receipt). */
 export type OrderState = AnyState;
 
 /** KCC-20 token state (112-byte layout). `owner_scheme` 0 = P2PK owner, 4 = covenant-id custody. Note the snake_case keys. */
@@ -293,10 +291,6 @@ export type PayloadRecord =
   /** in-place amend (payload version 4): the maker's cancel of the order spent at `input` continues its covenant id at `output` with `state` */
   | { type: 'amend'; output: number; input: number; family: number; template: TemplateName; state: Hex; deadline?: U64 | null }
   /** a maker's sweep in place (optional record 0x83): the maker's cancel of the order spent at `input` continues it at `output` under the SAME script */
-  /** placement record of an order of a RETIRED lot template (payload versions 2 and 3; decoded, never written): `state` is in that template's layout */
-  | { type: 'retiredOrder'; output: number; family: number; template: string; templateHash: Hex; state: Hex; custody: Custody | null; deadline?: U64 | null }
-  /** in-place amend of a RETIRED lot template (payload version 3; decoded, never written) */
-  | { type: 'retiredAmend'; output: number; input: number; family: number; template: string; templateHash: Hex; state: Hex; deadline?: U64 | null }
   | { type: 'sweep'; output: number; input: number }
   | { type: 'x402'; reference: Hex }
   | { type: 'note'; text: string }
@@ -417,44 +411,6 @@ export interface SendTokensRequest {
 
 export type ActionRequest = CreateOrderRequest | CancelOrderRequest | AmendOrderRequest | CancelPositionRequest | SendTokensRequest | SweepOrderRequest;
 
-/**
- * kob-wasm `buildCancelRetired`: the maker's cancel of an order placed under a RETIRED template (`docs/spec/template-retirement.md`; spend-only).
- * `state` is the order's state span under the retired template; `order` the plain order UTXO (no decoded state).
- */
-export interface CancelRetiredRequest {
-  templateHash: Hex;
-  state: Hex;
-  order: Utxo;
-  custody?: TokenUtxo | null;
-  strays?: TokenUtxo[];
-  foreign?: ForeignStrays[];
-  funding?: KeyUtxo[];
-  change?: Hex | null;
-  fee?: FeeOptions;
-  ownKeys?: Hex[];
-}
-
-/** kob-wasm `retiredTemplates()`: an older order template this build can still spend (the maker's cancel only). */
-export interface RetiredTemplateInfo {
-  /** the base kind (`KobAsk`, ..., `KobCross`) */
-  kind: RetiredKind;
-  /** its name in the family as it was pinned (`KobAskKron`, `KobCrossKron`, ...) */
-  kindName: string;
-  /** family code of the escrowed token: 1 KCC-20, 2 KRON */
-  family: number;
-  hash: Hex; stateLen: number; note: string;
-}
-
-/**
- * kob-wasm `decodeRetired`: the state of an order of a RETIRED template in its LEGACY lot layout (protocol v2.3 to v2.6: `lotsLeft` lots of
- * `lotUnits x unit` base units, prices per `unit`), tagged by its base kind. Spend-only: the app shows it as an older contract version and
- * builds the maker's cancel from it; the custody of a token-holding order is `lotsLeft x lotUnits x unit` base units.
- */
-export interface LegacyState {
-  kind: RetiredKind;
-  state: { maker: Hex; tokenCovId: Hex; tokenTplHash: Hex; tplPrefixLen: I64; tplSuffixLen: I64; [field: string]: unknown };
-}
-
 // ------------------------------------------------------------------------------------------------ built / signed transactions
 
 export interface TxUtxoJson {
@@ -480,9 +436,7 @@ export type SigPlan =
   | { kind: 'tokenLeader'; template: TokenProgram; state: Kcc20State; nextStates: Kcc20State[]; witness: SigWitness }
   | { kind: 'tokenDelegator'; template: TokenProgram; state: Kcc20State; witness: SigWitness }
   /** KRON token input: no leader and no signature of its own (address presence = a P2PK input of the owner elsewhere); `witnesses` = hex, one input index per token input */
-  | { kind: 'kronToken'; template: TokenProgram; state: KronState; nextStates: KronState[]; witnesses: Hex }
-  /** entry call of a RETIRED order template (spend-only: only `cancel`), by template hash and its state span under that template */
-  | { kind: 'retired'; templateHash: Hex; state: Hex; entry: string; args: SigArg[] };
+  | { kind: 'kronToken'; template: TokenProgram; state: KronState; nextStates: KronState[]; witnesses: Hex };
 
 export interface SignRequest {
   inputIndex: number;
@@ -543,9 +497,3 @@ export interface RecoveredOrder {
   deadline?: U64 | null;
 }
 
-/** An order of a RETIRED lot template re-derived by kob-wasm `recoverRetiredOrders` from a placement record of payload version 2 or 3. */
-export interface RecoveredRetiredOrder {
-  transactionId: Hex; output: number; value: U64; covenantId: Hex; templateHash: Hex; family: Family; order: LegacyState;
-  custody: { output: number; value: U64; state: TokenState } | null;
-  deadline?: U64 | null;
-}

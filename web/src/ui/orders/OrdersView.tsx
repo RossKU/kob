@@ -86,7 +86,7 @@ export function OrdersView() {
   // the tokens of each order (its own and a pair order's B): a stray of any other token is foreign
   const sweepable = useMemo(() => new Map(rows.filter((r) => r.token).map((r) => [r.id, [r.token!, ...(r.pair ? [r.pair.quote] : [])]])), [rows]);
   // live orders of the wallet whose strays a sweep can return (the order lives on)
-  const sweepableOrders = useMemo(() => new Set(rows.filter((r) => r.live && r.canCancel && !r.retiredTemplate).map((r) => r.id)), [rows]);
+  const sweepableOrders = useMemo(() => new Set(rows.filter((r) => r.live && r.canCancel).map((r) => r.id)), [rows]);
 
   const tokenOf = (id: string | null) => (id ? services.registry.byCovenantId.get(id) : undefined);
   // an amount of a token (base units) as its token amount with the ticker; base units when the token is unknown
@@ -146,7 +146,7 @@ export function OrdersView() {
       if (!plan.ok) return setPlanFail({ plans: [plan], failed: [] });
       const go = () => startFlow(t('orders.flow.cancelHeading'), [stepOf(t('orders.flow.cancelTitle'), plan)]);
       // C5-01: more strays than one transaction can move. A sweep first moves them while the order lives; abandoning stays a choice
-      if (abandonsStrays(plan) && row.live && !row.retiredTemplate) {
+      if (abandonsStrays(plan) && row.live) {
         const count = plan.issues.filter((i) => i.code === 'cancel.strays-abandoned').reduce((a, i) => a + Number(i.params?.count ?? 0), 0);
         return setSweepFirst({ ids: [row.id], count, proceed: go, retry: () => cancelOne(row) });
       }
@@ -194,7 +194,7 @@ export function OrdersView() {
           good.map((p, i) => stepOf(good.length > 1 ? t('orders.flow.cancelStep', { n: i + 1, total: good.length, count: p.cancelIds.length }) : t('orders.flow.cancelTitle'), p)),
         );
       // C5-01: some orders hold more strays than their cancel can move: offer to sweep those first (they live on), then cancel
-      const abandoning = abandoningOrders(good).filter((id) => rowById.get(id)?.live && !rowById.get(id)?.retiredTemplate);
+      const abandoning = abandoningOrders(good).filter((id) => rowById.get(id)?.live);
       if (abandoning.length) {
         const count = good.flatMap((p) => p.issues.filter((i) => i.code === 'cancel.strays-abandoned')).reduce((a, i) => a + Number(i.params?.count ?? 0), 0);
         return setSweepFirst({ ids: abandoning, count, proceed: go, retry: () => cancelMany(heading, ids, busyId) });
@@ -268,8 +268,6 @@ export function OrdersView() {
     });
   // orders placed with an older contract version (C5-02): this build cannot derive their scripts, so it can neither find nor cancel them
   const oldTemplate = rows.filter((r) => r.oldTemplate).length;
-  // live orders of a RETIRED template this build can still cancel (docs/spec/template-retirement.md): offer to cancel them all at once
-  const retiredLive = rows.filter((r) => r.retiredTemplate && r.live && r.canCancel).map((r) => r.id);
   const amendState = amend ? entryState(amend.entry, services.kob) : null;
   const amendK0 = amend && amendState ? amendKind(amendState.state, amend.typeKey) : null;
   // the quick form's "more options" switches a conditional order to the full replace form
@@ -320,20 +318,6 @@ export function OrdersView() {
         </Banner>
       ) : null}
       {planFail ? <PlanErrors plans={planFail.plans} failed={planFail.failed} /> : null}
-      {retiredLive.length > 0 ? (
-        <Banner
-          tone="warn"
-          title={t('orders.retired.title')}
-          data-testid="orders-retired-template"
-          actions={
-            <Button small variant="danger" disabled={!canSign || busy === 'retired'} onClick={() => cancelMany(t('orders.retired.heading'), retiredLive, 'retired')} data-testid="orders-retired-cancel-all">
-              {t('orders.retired.cancelAll', { count: retiredLive.length })}
-            </Button>
-          }
-        >
-          {t('orders.retired.body', { count: retiredLive.length })}
-        </Banner>
-      ) : null}
       {oldTemplate > 0 ? (
         <Banner tone="warn" title={t('orders.oldTemplate.title')} data-testid="orders-old-template">
           {t('orders.oldTemplate.body', { count: oldTemplate })}

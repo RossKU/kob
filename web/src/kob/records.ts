@@ -32,14 +32,13 @@ import type { NodeApi, NodeUtxo } from '../data/node';
 import { asOrderState, big, custodiesOf, extensionOf, familyOfKind, familyOfOrder, isIfdKind, isOrderKind, pairExtFor, pairFactsOf, sideOf, tokenTplHashOf } from './order-facts';
 import { custodyState, extensionOfState } from './token-state';
 import { recoverSweeps } from './sweep';
-import type { Hex, LegacyState, OrderKind, RetiredTemplateInfo, OrderState, OrderUtxo, SigPlan, TokenProgram, TokenState, TokenUtxo, TxJson, U64 } from './types';
+import type { Hex, OrderKind, OrderState, OrderUtxo, SigPlan, TokenProgram, TokenState, TokenUtxo, TxJson, U64 } from './types';
 import type { KobWasm } from './wasm';
 
 
 /**
- * The kind a record names: today's order kinds (the pair kinds KobPair / KobCondPair / KobIfdPair included), or the RETIRED cross limit
- * (`KobCross`, and `KobCrossKron` of KRON tokens before protocol v3 merged them): a record of such an order is kept, and its order can still be
- * cancelled (docs/spec/template-retirement.md).
+ * The kind a record names: today's order kinds (the pair kinds KobPair / KobCondPair / KobIfdPair included), or the cross limit earlier builds
+ * placed (`KobCross`, `KobCrossKron`): such a record is kept and shown as an order of a template this build does not pin.
  */
 export type RecordKind = OrderKind | 'KobCross' | 'KobCrossKron';
 export const isRecordKind = (k: string): k is RecordKind => isOrderKind(k) || k === 'KobCross' || k === 'KobCrossKron';
@@ -52,7 +51,7 @@ export interface PlacementRecord {
   txid: Hex | null;
   output: number | null;
   covenantId: Hex;
-  /** the kind as the placing build tagged it (a record of a retired cross limit of a KRON token keeps `KobCrossKron`) */
+  /** the kind as the placing build tagged it */
   kind: RecordKind;
   templateHash: Hex;
   /** the ORIGINAL state span as placed (hex) */
@@ -322,26 +321,7 @@ function checkOrderEntry(kob: KobWasm, templateHash: unknown, state: unknown, co
   if (!isHex(state) || state.length === 0) return 'state must be hex';
   if (!isHex(covenantId, 32)) return 'covenant_id must be 64 lowercase hex characters';
   const tpl = kob.templates().find((t) => t.hash === templateHash);
-  if (!tpl || !isOrderKind(tpl.name)) {
-    // an order of a retired template this build can still cancel (docs/spec/template-retirement.md): its span decodes canonically or not at all
-    const rt = (() => {
-      try {
-        return kob.retiredTemplates().find((t) => t.hash === templateHash) ?? null;
-      } catch {
-        return null;
-      }
-    })();
-    if (!rt) return 'template_hash is not a pinned KOB order template';
-    let order: OrderState;
-    try {
-      order = kob.decodeRetired(rt.hash, state) as unknown as OrderState;
-    } catch (e) {
-      return `state does not decode: ${e instanceof Error ? e.message : String(e)}`;
-    }
-    if (order.kind !== rt.kind) return 'state is not canonical for its template';
-    if (maker !== undefined && order.state.maker !== maker) return 'the order belongs to another maker';
-    return { order, kind: rt.kindName as RecordKind };
-  }
+  if (!tpl || !isOrderKind(tpl.name)) return 'template_hash is not a pinned KOB order template';
   let order: OrderState;
   try {
     order = kob.decodeState(tpl.name, state) as OrderState;
@@ -420,8 +400,7 @@ export function importBackup(json: unknown, kob: KobWasm, opts: { network: strin
     const c = checkOrderEntry(kob, rec.templateHash, rec.state, rec.covenantId, rec.maker);
     if (typeof c === 'string') return reject(c);
     if (c.kind !== rec.kind) return reject('kind does not match the template hash');
-    // no placing-tx re-derivation for a retired template (this build no longer decodes its placement); the span was checked above
-    if (rec.txid === null || retiredTemplateOf(kob, rec.kind, rec.templateHash)) return void res.records.push(rec);
+    if (rec.txid === null) return void res.records.push(rec);
     const tx = txs[rec.txid];
     if (!tx) return reject('the placing tx is missing from the backup');
     if (tx.id !== rec.txid) return reject('tx id mismatch');
@@ -464,8 +443,6 @@ export interface ResolvedRecord {
   checked: number;
   /** live ask kinds without a custody: why ('no-extension': the token's extension commitment is unknown, so its custody cannot be rebuilt) */
   custodyIssue?: 'no-extension' | 'not-found' | null;
-  /** live orders of a RETIRED template: the template and the order's current state span under it (its cancel is built from these) */
-  retired?: { templateHash: Hex; state: Hex } | null;
 }
 
 export interface ResolveOpts {
@@ -484,29 +461,15 @@ export function pinnedTemplateHash(kob: KobWasm, kind: RecordKind): Hex | null {
   return kob.templates().find((x) => x.name === kind)?.hash ?? null;
 }
 
-/** The retired template (spend-only, kob-wasm `retiredTemplates`) of that kind and hash, or null. */
-export function retiredTemplateOf(kob: KobWasm, kind: RecordKind, hash: Hex): RetiredTemplateInfo | null {
-  try {
-    return kob.retiredTemplates().find((t) => t.hash === hash && (t.kindName === kind || t.kind === kind)) ?? null;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * True when the record names an order template this build can neither build for nor spend (C5-02: not pinned, not a retired template this build
- * knows): the order can only be cancelled with the KOB release it was placed with.
+ * True when the record names an order template this build does not pin (C5-02): this build can neither build for nor spend it; its maker ends the
+ * order with a raw transaction spending the order's own cancel entry.
  */
 export const isOldTemplate = (kob: KobWasm, r: PlacementRecord): boolean => recordCodec(kob, r) === null;
 
-/** How a record's state span maps to a state and a script: today's template, or a retired one (docs/spec/template-retirement.md). */
+/** How a record's state span maps to a state and a script under the template this build pins. */
 export interface RecordCodec {
-  /** the retired template, null for a pinned one */
-  retired: RetiredTemplateInfo | null;
-  /**
-   * state span (of the record's template) -> its state: today's kind, or for a RETIRED template its legacy lot state (`LegacyState`, the field
-   * names of the retired layout; cast to OrderState so the record code can carry it, never to build anything but its cancel)
-   */
+  /** state span (of the record's template) -> its state */
   decode(hex: Hex): OrderState;
   /** state -> state span of the record's template (throws when it has no such span) */
   encode(state: OrderState): Hex;
@@ -514,77 +477,14 @@ export interface RecordCodec {
   spanSpk(hex: Hex): string;
 }
 
-/** Where a retired span differs from today's encoding of its state: the removed bytes (offset, count, in hex characters), per template hash. */
-const retiredGap = new Map<Hex, { at: number; n: number } | null>();
-
-/**
- * Finds the contiguous byte run today's encoding `wide` has that the retired span `narrow` lacks (a retirement that only removed fields);
- * an empty run when the retired template has today's layout (only its code changed).
- */
-export function gapOf(wide: Hex, narrow: Hex): { at: number; n: number } | null {
-  const n = wide.length - narrow.length;
-  if (n === 0) return wide === narrow ? { at: 0, n: 0 } : null;
-  if (n < 0 || n % 2) return null;
-  for (let at = 0; at <= narrow.length; at += 2) {
-    if (wide.slice(0, at) === narrow.slice(0, at) && wide.slice(at + n) === narrow.slice(at)) return { at, n };
-    if (wide.slice(0, at + 2) !== narrow.slice(0, at + 2)) {
-      // the prefix diverged: the gap starts here or never
-      return wide.slice(at + n) === narrow.slice(at) ? { at, n } : null;
-    }
-  }
-  return null;
-}
-
-/**
- * The spans retired (lot) states were decoded from, by template hash and state: a retired layout has no encoder in this build, so the codec maps a
- * decoded state back to its span (bounded: the oldest entries are dropped).
- */
-const legacySpans = new (class extends Map<string, Hex> {
-  override set(k: string, v: Hex): this {
-    if (!this.has(k) && this.size >= 4_096) this.delete(this.keys().next().value as string);
-    return super.set(k, v);
-  }
-})();
-
-/** The codec of a record's template, or null when this build knows neither it nor a retired template of that hash. */
+/** The codec of a record's template, or null when this build does not pin it. */
 export function recordCodec(kob: KobWasm, r: Pick<PlacementRecord, 'kind' | 'templateHash' | 'state'>): RecordCodec | null {
-  if (pinnedTemplateHash(kob, r.kind) === r.templateHash) {
-    return {
-      retired: null,
-      decode: (hex) => kob.decodeState(r.kind as OrderKind, hex) as OrderState,
-      encode: (st) => kob.encodeState(st),
-      spanSpk: (hex) => kob.scriptPublicKey(kob.decodeState(r.kind as OrderKind, hex)),
-    };
-  }
-  const rt = retiredTemplateOf(kob, r.kind, r.templateHash);
-  if (!rt) return null;
-  // a retired template's state is in its own (lot) layout, which no current encoder writes: only the placed span (and a proven one, the record's
-  // `last`) are known, so the record is looked up by those spans; a state maps back to the span it was decoded from
-  const decode = (hex: Hex): OrderState => kob.decodeRetired(rt.hash, hex) as unknown as OrderState;
-  const keyOf = (st: OrderState): string => `${rt.hash}:${JSON.stringify(st)}`;
+  if (pinnedTemplateHash(kob, r.kind) !== r.templateHash) return null;
   return {
-    retired: rt,
-    decode: (hex) => {
-      const st = decode(hex);
-      legacySpans.set(keyOf(st), hex);
-      return st;
-    },
-    encode: (st) => {
-      const hex = legacySpans.get(keyOf(st));
-      if (hex === undefined) throw new Error('the state has no known span under the retired template');
-      return hex;
-    },
-    spanSpk: (hex) => kob.retiredScriptPublicKey(rt.hash, hex),
+    decode: (hex) => kob.decodeState(r.kind as OrderKind, hex) as OrderState,
+    encode: (st) => kob.encodeState(st),
+    spanSpk: (hex) => kob.scriptPublicKey(kob.decodeState(r.kind as OrderKind, hex)),
   };
-}
-
-/** The legacy (lot) state of an order of a retired template (kob-wasm `decodeRetired`), or null when the hash is not a retired template. */
-export function legacyStateOf(kob: KobWasm, templateHash: Hex, span: Hex): LegacyState | null {
-  try {
-    return kob.decodeRetired(templateHash, span);
-  } catch {
-    return null;
-  }
 }
 
 /** The record's last proven state, decoded (null when absent or not a canonical state of the record's kind and maker). */
@@ -713,7 +613,7 @@ function candidates(
       try {
         spk = spkOf(cand);
       } catch {
-        return true; // a state the order's template cannot express (a retired one)
+        return true; // a state the order's template cannot express
       }
       if (!seen.has(spk)) {
         seen.add(spk);
@@ -764,7 +664,7 @@ export async function resolveRecord(
     changed: boolean,
     custodyIssue: ResolvedRecord['custodyIssue'] = null,
   ): ResolvedRecord => ({ status, covenantId: record.covenantId, order, custody, strays: [], stateChanged: changed, checked, custodyIssue });
-  // 0. another contract version this build cannot spend: its script cannot be derived (it would never be found and look "spent")
+  // 0. a template this build does not pin: its script cannot be derived (it would never be found and look "spent")
   const codec = recordCodec(kob, record);
   if (!codec) return result('old-template', null, null, false);
   const spkOf = (st: OrderState): string => codec.spanSpk(codec.encode(st));
@@ -777,9 +677,7 @@ export async function resolveRecord(
   });
   const live = async (u: NodeUtxo, state: OrderState, changed: boolean): Promise<ResolvedRecord> => {
     const c = await findCustody(kob, ask, record, state);
-    const r = { ...result('live', asOrder(u, state), c.utxo, changed, c.issue), ...(c.prefund ? { prefund: c.prefund } : {}) };
-    // an order of a retired template is spent through that template: its cancel needs the state span it has under it
-    return codec.retired ? { ...r, retired: { templateHash: codec.retired.hash, state: u.scriptPublicKey === baseSpk ? record.state : codec.encode(state) } } : r;
+    return { ...result('live', asOrder(u, state), c.utxo, changed, c.issue), ...(c.prefund ? { prefund: c.prefund } : {}) };
   };
 
   // 1. the placed state and the last proven one
@@ -790,11 +688,7 @@ export async function resolveRecord(
 
   // 2. candidate continuations of the last proven state (else the placed one); the DAA of the last seen UTXO may be an `armed` value
   const extraArmed = [record.last?.daa, record.placedAtDaa].filter((v): v is string => typeof v === 'string' && v !== '0');
-  // a retired (lot) layout has no current encoder: only its placed and last proven spans can be looked up (never exhaustive, so `unknown`,
-  // never `spent`: a partly filled retired order is found through a proven state)
-  const { list, truncated, fields, jointCustody } = codec.retired
-    ? { list: [] as Candidate[], truncated: true, fields: [] as string[], jointCustody: false }
-    : candidates(kob, last ?? base, max, extraArmed, spkOf);
+  const { list, truncated, fields, jointCustody } = candidates(kob, last ?? base, max, extraArmed, spkOf);
   const bySpk = new Map(list.map((c) => [c.spk, c.state]));
   for (const [spk, st] of known) bySpk.set(spk, st);
 

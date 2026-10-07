@@ -13,7 +13,7 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 | [x402-kcc20-profile.md](spec/x402-kcc20-profile.md) | Proposal: a KCC-20 payment profile for the Kaspa x402 `exact` binding |
 | [x402-swap-and-pay.md](spec/x402-swap-and-pay.md) | Proposal: swap-and-pay, paying a merchant in one token from another token or KAS |
 | [kcc-conformance.md](spec/kcc-conformance.md) | Conformance with the KCC base specs (KCC-1, KCC-2, KCC-20): pinned upstream vectors, results, mismatches fixed, what still depends on upstream |
-| [template-retirement.md](spec/template-retirement.md) | Policy for retiring an order template: what must ship with the change so live orders of the old template can still be cancelled |
+| [template-retirement.md](spec/template-retirement.md) | Templates this build does not pin: unsupported, ended by their maker with a raw cancel transaction |
 
 ## Operations (`docs/ops/`)
 

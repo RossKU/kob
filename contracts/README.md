@@ -22,9 +22,8 @@ pinned third-party token programs the tests run against.
 | `third-party/kaspacom-kcc20/` | KaspaCom's KCC20 0.2.5 token program artifact, vendored unmodified (Apache-2.0, provenance in `UPSTREAM.md`): a third-party KCC-20-compatible template accepted through the registry's strict template list (`registry/tokens.json`), tested in `crates/kob-tests/tests/kob_kaspacom_tests.rs` |
 | `*.ctor.json` | Constructor arguments used to compile the artifact next to each source |
 | `artifacts/*.json` | `silverc` output, committed and checked for reproducibility |
-| `retired/*.json` | Byte-for-byte copies of artifacts of retired order templates (every protocol v2.6 lot template, the lot cross limits `KobCross` / `KobCrossKron` included, and earlier ones; the v3 `KobCross` was never deployed and is not kept), kept so their live orders can still be cancelled (`docs/spec/template-retirement.md`) |
 | `silverc.lock` | Pinned compiler version and sha256 digests |
-| `SHA256SUMS` | Digest of every source, constructor file, template, artifact, retired artifact, third-party file and `argent/` file |
+| `SHA256SUMS` | Digest of every source, constructor file, template, artifact, third-party file and `argent/` file |
 | `deploy/<network>/` | Deployment record of a network (`deployment.json`, `DEPLOYMENT.md`, own `SHA256SUMS`), see below |
 | `argent/KOBOrders.ag`, `argent/kcc20_8x8.ag` | Argent interface of the nine hand-written v2 contracts (states, entries, emits; placeholder bodies), and the Argent source of the 8/8 token (KCC-20 reference, only the two limits changed) |
 | `argent/KOBOrders/artifact.json` | Published Argent app artifact `KOBOrders`: the nine v2 contracts (`KobAsk`, `KobBid`, `KobCondAsk`, `KobCondBid`, `KobIfdBid`, `KobIfdAsk`, `KobPair`, `KobCondPair`, `KobIfdPair`) as actors with their actor-type handles (`tools/sil2argent`) |

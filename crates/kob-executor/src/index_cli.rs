@@ -225,20 +225,17 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
         IndexSub::Replay => {
             let r = indexer::replay_from_log(&cfg)?;
             println!(
-                "replayed {} record-log frames (format 1: {}, format 2: {}; {} relevant transactions) into {}: {} orders",
+                "replayed {} record-log frames ({} relevant transactions) into {}: {} orders",
                 r.frames,
-                r.formats[1],
-                r.formats[2],
                 r.relevant,
                 cfg.db_path().display(),
                 r.orders
             );
             if !r.skipped.is_empty() || r.dropped.dropped() > 0 {
                 println!(
-                    "skipped {} frame(s) this build cannot decode {:?}; dropped {} retired and {} unknown reveal(s), {} holding(s), {} import(s) of template layouts this build does not have",
+                    "skipped {} frame(s) this build cannot decode {:?}; dropped {} reveal(s), {} holding(s), {} import(s) of template layouts this build does not have",
                     r.skipped.len(),
                     r.skipped.iter().map(|(n, _)| n).collect::<Vec<_>>(),
-                    r.dropped.retired_reveals,
                     r.dropped.unknown_reveals,
                     r.dropped.unknown_holds,
                     r.dropped.unknown_imports

@@ -284,10 +284,6 @@ export default {
   'confirm.issue.finding.unaudited': 'The token program is the KCC-20 reference program, which has not been audited. Only issue tokens you can afford to lose.',
   'confirm.issue.finding.holdersOther': '{count} output(s) send tokens to other keys, as you asked.',
   'confirm.issue.finding.walletBlind': 'Your wallet cannot show tokens: it will only show KAS amounts. Check the token details on this screen.',
-  'confirm.order.cross': 'cross limit (retired, token for token)',
-  'confirm.order.crossDay': 'day cross limit (retired, token for token)',
-  'confirm.order.crossIoc': 'IOC cross limit (retired, token for token)',
-  'confirm.order.crossFok': 'FOK cross limit (retired, token for token)',
   'confirm.f.pairPair': 'Pair',
   'confirm.f.pairSells': 'sells {base} for {quote} (prices in {quote} per {base})',
   'confirm.f.pairBuys': 'buys {base} with {quote} (prices in {quote} per {base})',
@@ -317,6 +313,4 @@ export default {
   'confirm.sweep.idleHint': 'the order\'s UTXO is new, so the 90 days after which anyone may refund an idle order count from now',
   'confirm.sweep.unknownAmount': '{amount} base units of {token}',
   'confirm.f.minFillHint': 'each fill is at least this amount, unless it takes everything left',
-  'confirm.adv.recordRetiredOrder': 'older contract version: order at output {output} (template {template})',
-  'confirm.adv.recordRetiredAmend': 'older contract version: amend at output {output} of input {input} (template {template})',
 } as Record<string, string>;

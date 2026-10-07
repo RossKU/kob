@@ -8,11 +8,10 @@ use std::path::Path;
 
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::json::{from_hex, hex32, to_hex};
-use kob_protocol::retired::lot::LotState;
 use kob_protocol::state::{AnyState, TokenState};
 use serde_json::Value;
 
-use crate::common::{read_json, OrderState, Tpl};
+use crate::common::{encode_state, order_template, read_json};
 
 /// One order of a backup or export file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,7 +20,7 @@ pub struct Entry {
     pub source: String,
     /// Covenant id.
     pub covenant_id: [u8; 32],
-    /// Template hash (pinned or retired).
+    /// Template hash.
     pub template_hash: [u8; 32],
     /// Known state spans, the latest first (a proven later state, then the given one).
     pub spans: Vec<Vec<u8>>,
@@ -73,8 +72,8 @@ pub struct View {
     pub template_hash: [u8; 32],
     /// Status the indexer reports.
     pub status: String,
-    /// The proven current state (`state_known`): in the order's own layout, a retired template's in its lot layout.
-    pub state: Option<OrderState>,
+    /// The proven current state (`state_known`) of an order of a template this build pins.
+    pub state: Option<AnyState>,
     /// The current UTXO: txid, index, value.
     pub current: Option<([u8; 32], u32, Option<u64>)>,
     /// DAA score of the current UTXO.
@@ -92,8 +91,8 @@ pub struct View {
 impl View {
     /// The view as a recovery entry (its proven state, if any).
     pub fn entry(&self) -> Entry {
-        let spans = match (&self.state, Tpl::resolve(&self.template_hash)) {
-            (Some(s), Some(t)) => t.encode(s).map(|b| vec![b]).unwrap_or_default(),
+        let spans = match (&self.state, order_template(&self.template_hash)) {
+            (Some(s), Some(t)) => encode_state(t, s).map(|b| vec![b]).unwrap_or_default(),
             _ => vec![],
         };
         Entry {
@@ -337,29 +336,11 @@ fn view(v: &Value, source: &str) -> Result<View, String> {
     let state_known = o.get("state_known").and_then(Value::as_bool).unwrap_or(false);
     let template_hash = h32(o.get("template_hash"), "template_hash")?;
     let state = match o.get("state") {
-        Some(s) if state_known && !s.is_null() => Some(match Tpl::resolve(&template_hash) {
-            // an order of a retired template: its state is in the older lot layout
-            Some(Tpl::Retired(r)) if r.is_current_layout() => {
-                // a retired template with today's layout: today's state type (cancel only, not validated)
-                let s = serde_json::from_value::<AnyState>(s.clone()).map_err(|e| format!("state: {e}"))?;
-                OrderState::RetiredCurrent(s)
-            }
-            Some(Tpl::Retired(r)) => {
-                match serde_json::from_value::<LotState>(s.clone()) {
-                    Ok(l) => OrderState::Lot(l, r.family),
-                    // the protocol v3 cross limit (no lots)
-                    Err(e) => OrderState::NoLot(
-                        serde_json::from_value::<kob_protocol::retired::nolot::CrossState>(s.clone())
-                            .map_err(|_| format!("state: {e}"))?,
-                    ),
-                }
-            }
-            _ => {
-                let s = serde_json::from_value::<AnyState>(s.clone()).map_err(|e| format!("state: {e}"))?;
-                s.validate().map_err(|e| format!("state: {e}"))?;
-                OrderState::Current(s)
-            }
-        }),
+        Some(s) if state_known && !s.is_null() => {
+            let s = serde_json::from_value::<AnyState>(s.clone()).map_err(|e| format!("state: {e}"))?;
+            s.validate().map_err(|e| format!("state: {e}"))?;
+            Some(s)
+        }
         _ => None,
     };
     let current = match o.get("current") {

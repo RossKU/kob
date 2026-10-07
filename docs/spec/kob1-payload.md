@@ -2,17 +2,14 @@
 
 Status: normative. Payload version `0x04` carries the compact placement record and the in-place amend record of the
 protocol v3 templates (amounts in base units, prices per whole token: `order-types.md`, *Amounts, prices and rounding*).
-Versions `0x03` (the same compact records) and `0x02` (the fixed-width placement record) still decode, into the RETIRED
-lot layouts: they describe orders of retired templates, which can only be cancelled (`template-retirement.md`). Version
-`0x02` is also what a payload without order records is written as. Any other version is rejected. Record type `0x02` and
-kind `0x07` are retired (reserved, never reused).
+Version `0x02` is what a payload without order records is written as; an `ORDER` record of version `0x02` and every
+payload of version `0x03` described templates this build does not pin and are rejected, like any other version.
+Record type `0x02` and kind `0x07` are reserved, never reused.
 Implemented by `kob_protocol::payload` (`crates/kob-protocol/src/payload.rs`), exposed in wasm as `encodePayload` /
 `decodePayload` / `recoverOrders` / `recoverAmends`. Test vectors: `payloads` and every `create.*`, `cancelReplace.*`,
 `amend.*`, `route.*` and `pair.*` entry in `crates/kob-protocol/vectors/golden.json`, the same shapes for KRON tokens
 under the `kron.` prefix (`kron2732.` for the second KRON program; pair orders by the families of A and B:
-`pair.kcc20-kron.`, `pair.kron-kcc20.`, `pair.kron-kron.`), the version-2 payloads in
-`crates/kob-protocol/vectors/payload_v2.json` and the version-3 payloads of the retired lot layouts (each must still
-decode to the same records).
+`pair.kcc20-kron.`, `pair.kron-kcc20.`, `pair.kron-kron.`).
 
 This document is the byte-level definition of the **placement record** required by
 `matcher.md` §1.1: the placement record *is* the `ORDER` record below. `matcher.md` states what a
@@ -59,18 +56,15 @@ record   = type:u8 length:u16le value[length]
   than 10 bytes and bits beyond 64, so every value has exactly one encoding.
 * **Version.** An encoder writes version `0x04` when the payload carries an `ORDER` or `AMEND` record and version
   `0x02` otherwise (an x402 commitment or a note is the same bytes in every version, and stays what
-  `x402-kcc20-profile.md` specifies); it never writes a version-3 payload or a version-2 `ORDER` record. A decoder
-  accepts all three; the version selects the template set and the layout of the `ORDER` record: version 4, the current
-  templates (*ORDER record* below); version 3, the same record structure over the retired lot layouts; version 2, the
-  fixed-width record over the retired lot layouts (*Version 2 and 3 records* below). `AMEND` exists in versions 3 and 4
-  only.
+  `x402-kcc20-profile.md` specifies). A decoder accepts both; `ORDER` and `AMEND` records exist in version 4 only
+  (*ORDER record* below).
 * **Critical and optional types.** Types `0x00..=0x7f` are critical: a decoder that does not know a
   critical type rejects the whole payload. Types `0x80..=0xff` are optional: unknown ones are
   skipped (and preserved by re-encoders).
 * A payload with another magic is not KOB1; decoders return "not KOB1", not an error.
 * A decoder rejects: another version, a truncated header or record, a length that runs past the
-  end, an unknown or retired critical type (`0x02`; `0x03` under version 2), an ORDER record of a retired kind
-  (`0x07`), an AMEND record of a kind that is not amended in place, a record with bytes left over or a non-canonical
+  end, an unknown or reserved critical type (`0x02`; `0x01` and `0x03` under version 2), an ORDER record of a reserved
+  kind (`0x07`), an AMEND record of a kind that is not amended in place, a record with bytes left over or a non-canonical
   spelling (below), or a record whose value does not have the size given below (X402 1 to 64 bytes, NOTE at most 64).
   Encoders refuse the same, and an ORDER or AMEND record whose state length is not the template's or whose state does
   not decode canonically (validation rules 1 and 2). The content of an optional record never fails the payload: a NOTE
@@ -81,8 +75,8 @@ record   = type:u8 length:u16le value[length]
 | Type | Name | Critical | Value |
 |---|---|---|---|
 | `0x01` | ORDER | yes | the placement record, below |
-| `0x02` | retired | yes | reserved, never reused: a decoder refuses a payload that carries it |
-| `0x03` | AMEND | yes | an in-place amend (versions 3 and 4), below |
+| `0x02` | reserved | yes | never reused: a decoder refuses a payload that carries it |
+| `0x03` | AMEND | yes | an in-place amend (version 4), below |
 | `0x81` | X402 | no | x402 payment reference, 1 to 64 opaque bytes (the facilitator's payment id / nonce) |
 | `0x82` | NOTE | no | UTF-8 client tag, at most 64 bytes (for example `kob-web/0.1`) |
 | `0x83` | SWEEP | no | a maker's sweep in place (any version): `output:LEB128 input:LEB128`, below |
@@ -154,7 +148,7 @@ and the record's family is the family of the pair's base token A.
 | `0x04` | `KobCondBid` | 381 | no | `076e7bd8…805bdfb` |
 | `0x05` | `KobIfdBid` | 585 | no | `50b58e7b…a9de292` |
 | `0x06` | `KobIfdAsk` | 594 | yes | `bbcfc226…7b3f0b2` |
-| `0x07` | retired | — | — | reserved, never reused: a record of this kind is refused |
+| `0x07` | reserved | — | — | never reused: a record of this kind is refused |
 | `0x08` | `KobPair` (pair order, token A KCC-20) | 414 | the custody of S | `10738807…def7d16` |
 | `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 510 | the custody of S | `37ab667f…8ae0820` |
 | `0x0a` | `KobIfdPair` (pair if-done entry, token A KCC-20) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `9975b2f3…f441d5c` |
@@ -169,7 +163,7 @@ KRON (family `0x02`), same kind codes:
 | `0x04` | `KobCondBidKron` | 348 | no | `fb392f88…a7ed953` |
 | `0x05` | `KobIfdBidKron` | 552 | no | `e5cff7ed…053496d` |
 | `0x06` | `KobIfdAskKron` | 561 | yes (token output only) | `d523d794…9f014f6` |
-| `0x07` | retired | — | — | reserved, refused |
+| `0x07` | reserved | — | — | refused |
 | `0x08` | `KobPair` (token A KRON; the same template as in family `0x01`) | 414 | the custody of S | `10738807…def7d16` |
 | `0x09` | `KobCondPair` (token A KRON; the same template) | 510 | the custody of S | `37ab667f…8ae0820` |
 | `0x0a` | `KobIfdPair` (token A KRON; the same template) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `9975b2f3…f441d5c` |
@@ -183,8 +177,7 @@ The family byte of a pair order record is the family of its base token A and mus
 for A (`KobPair` / `KobCondPair`: `sFamily` of an ask, `tFamily` of a bid; `KobIfdPair`: `aFamily`); its other token is
 named by the state (covenant id, program hash, prefix and suffix lengths, family 1 = KCC-20 or 2 = KRON, scale, and the
 extension commitment of the outputs the order creates of it) and may be of either family. Kind `0x08` of version 4
-never names a cross limit: the v3 `KobCross` was replaced by the pair kinds before any deployment
-(`template-retirement.md`).
+never names a cross limit: the v3 `KobCross` was replaced by the pair kinds before any deployment.
 
 One transaction may announce several orders (one record each, any output order). The builders
 place a created order at output 0 and its custody tokens right after it; a cancel-replace places
@@ -214,39 +207,15 @@ escrow: the builder refuses a continuation below what funds one minimum fill at 
 Strays owned by the id stay strays (only a cancel or a sweep, below, moves them): wallets amend in place only an order without
 strays.
 
-### Version 2 and 3 records
-
-Versions 2 and 3 describe orders of the retired lot templates (protocol v2.6 and earlier, `template-retirement.md`):
-their states have the lot layouts (`unit`, `lotUnits`, `lotsLeft`, `tipLot`, …), which differ from today's, and they
-decode with the legacy lot state types of `kob_protocol::retired::lot`. Such an order is listed by no book and can only be
-cancelled by its maker (`build_cancel_retired`); its custody amount is `lotsLeft × lotUnits × unit` of the recorded
-lot state. A version-3 ORDER or AMEND record has the structure of the version-4 record above, with the kind codes naming
-the retired template of that kind in that family (kind `0x08` of family `0x02`: the retired `KobCrossKron`); the
-template is the retired one whose `P2SH(prefix ‖ state ‖ suffix)` is the output's script (validation rule 3). Payload
-version 2 spells the placement record with fixed-width fields; no encoder writes it:
-
-```
-output        u16le     index of the order's genesis output
-family        u8        token family
-kind          u8        template kind code
-templateHash  32        blake3 template hash of the kind in that family; must equal a retired template's hash
-stateLen      u16le     length of the state span; must equal that template's state length
-state         stateLen  the order's full state span (the exact bytes between prefix and suffix)
-custody       34 | 2    token-holding kinds only: tokenOutput u16le ‖ extCommit 32 (KCC-20) / tokenOutput u16le (KRON)
-deadline      u64le     optional (present iff 8 bytes remain)
-```
-
 ## Validation (indexers, `recoverOrders`)
 
 For every ORDER record, reject the record unless all hold. In the reference code a failure of rule 1 (unknown family
-or kind, a template hash that is not a known one in version 2, a wrong state length) is a decode error that rejects
-the whole payload (`kob_protocol::payload::decode`, as the builders do); `recoverOrders` is all-or-nothing per payload;
-the executor's indexer applies rules 2 to 8 record by record (it re-encodes and recovers each record on its own). The
-rules are stated for version 4; for versions 2 and 3 read the retired template and its lot state (custody amount
-`lotsLeft × lotUnits × unit`).
+or kind, a wrong state length) is a decode error that rejects the whole payload (`kob_protocol::payload::decode`, as the
+builders do); `recoverOrders` is all-or-nothing per payload; the executor's indexer applies rules 2 to 8 record by record
+(it re-encodes and recovers each record on its own). An order output that is not the P2SH of a pinned template (rule 3)
+is an order of a template this build does not pin: it is never recovered, listed or offered to a matcher or keeper.
 
-1. `kind` is a kind of the record's `family` (version 2: `templateHash` is the hash of a template of that kind and
-   `stateLen` its state length). An unknown family or kind rejects the record.
+1. `kind` is a kind of the record's `family`. An unknown family or kind rejects the record.
 2. `state` decodes as the template's runtime state and re-encodes to the same bytes (canonical
    fixed-width pushes only).
 3. `outputs[output].scriptPublicKey == P2SH(prefix ‖ state ‖ suffix)` of that template.
@@ -296,7 +265,7 @@ transaction: the same from its signature script; on a built one: the wallet's si
 all hold (`kob_protocol::payload::verify_amend`):
 
 1. The record decodes (rules 1 and 2 above) and its kind is the plain ask (`KobAsk` / `KobAskKron`) or the plain bid
-   (`KobBid` / `KobBidKron`) of a version-4 payload (retired templates are never amended).
+   (`KobBid` / `KobBidKron`) of a version-4 payload.
 2. `inputs[input]` spends that previous state: its UTXO's script is `P2SH(previous)`, it carries a covenant id, its
    entry is `cancel` (the maker's signature, SIGHASH_ALL: only the maker can amend), and no other input carries the id.
 3. The amended state keeps the terms above (an ask: maker, token, `scale`, `amountLeft`; a bid: maker, token,

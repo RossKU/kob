@@ -1467,7 +1467,7 @@ fn rust_slip_for_limit(sell: bool, stop: i64, limit: i64) -> i64 {
 /// as random vectors (boundaries and near-overflow included) with the Rust results, for the vitest suite
 /// `web/src/kob/orders/c6-economics.test.ts`. Amounts in base units, prices and tips in sompi per whole token (`scale`
 /// base units); `null` where the covenant arithmetic fails (the result does not fit an i64). Protocol v3 keys: `quoteOf`,
-/// `bidUsed`, `bidEscrow`, `bidBuyingPower` (they replace the retired v2.6 budget keys).
+/// `bidUsed`, `bidEscrow`, `bidBuyingPower` (they replace the v2.6 budget keys).
 fn wallet_vectors() -> serde_json::Value {
     use serde_json::json;
     let mut r = StdRng::seed_from_u64(0xc6_7e57);

@@ -355,7 +355,7 @@ The minimal payload is 40 bytes:
 ```
 
 The legacy `X402:<hex>` text payload MUST NOT be accepted as a commitment. A payment transaction
-MUST NOT carry `ORDER` records (nor the retired record type `0x02`, which no KOB1 decoder accepts). A verifier bounds the payload (KOB reference: 512 bytes)
+MUST NOT carry `ORDER` records (nor the reserved record type `0x02`, which no KOB1 decoder accepts). A verifier bounds the payload (KOB reference: 512 bytes)
 before decoding it.
 
 ### 6.4 Why every authorizer covers it

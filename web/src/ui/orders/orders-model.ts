@@ -3,11 +3,11 @@
 // no DOM, no network; the caller injects the clock, the node-resolved records and kob-wasm.
 import type { OrderView } from '../../data/indexer-types';
 import { GTC_DAYS, MAX_IDLE_DAA, daaToUnix, gtcRenewalUnix, renewalUnixForExpiry } from '../../kob/daa';
-import { asOrderState, baseKind, custodiesOf, custodyAmountOf, describeLegacy, describeOrder, holdsTokens, isLegacyState, isPairKind, type OrderDescription } from '../../kob/order-facts';
+import { asOrderState, baseKind, custodiesOf, custodyAmountOf, describeOrder, holdsTokens, isPairKind, type OrderDescription } from '../../kob/order-facts';
 import { pairOfView } from '../../kob/pair-view';
 import type { Clock } from '../../kob/plan-types';
 import { recordCodec, type PlacementRecord, type ResolvedRecord } from '../../kob/records';
-import type { Hex, LegacyState, OrderState, PairKind, PairTriggerRule } from '../../kob/types';
+import type { Hex, OrderState, PairKind, PairTriggerRule } from '../../kob/types';
 import type { KobWasm } from '../../kob/wasm';
 
 export const ORDER_STATUSES = ['open', 'partial', 'filled', 'cancelled', 'refunded', 'killed', 'closed', 'unknown'] as const;
@@ -16,10 +16,10 @@ export type OrderStatusUi = (typeof ORDER_STATUSES)[number];
 /** Plain-words order types (i18n `orders.type.<key>`). */
 export const ORDER_TYPE_KEYS = [
   'limit', 'limit-gtd', 'limit-day', 'timed', 'market', 'ioc', 'fok', 'twap', 'dca', 'dutch',
-  'stop', 'trailing', 'take-profit', 'oco', 'exit', 'ifd', 'ifo', 'repeat', 'cross', 'unknown',
+  'stop', 'trailing', 'take-profit', 'oco', 'exit', 'ifd', 'ifo', 'repeat', 'unknown',
 ] as const;
-// 'cross': an order of the RETIRED cross limit (KobCross, an older contract version: cancel only). Pair orders (KobPair, KobCondPair, KobIfdPair)
-// get the type of the KAS kind they mirror (limit, stop, IFD, ...); the row's `pair` says they trade a token pair.
+// Pair orders (KobPair, KobCondPair, KobIfdPair) get the type of the KAS kind they mirror (limit, stop, IFD, ...); the row's `pair` says they trade
+// a token pair.
 export type OrderTypeKey = (typeof ORDER_TYPE_KEYS)[number];
 
 export interface OrderEntry {
@@ -65,7 +65,6 @@ export function entryState(e: OrderEntry, kob: KobWasm | null): { state: OrderSt
   if (e.resolved?.status === 'live' && e.resolved.order) return { state: e.resolved.order.state, source: 'node' };
   if (e.record && kob) {
     try {
-      // a record of a retired template decodes through that template: its LEGACY lot state (describeLegacy reads it)
       const codec = recordCodec(kob, e.record);
       return codec ? { state: codec.decode(e.record.state), source: 'record' } : null;
     } catch {
@@ -90,7 +89,7 @@ const NO_DATE_DAA = 1n << 60n;
 const GTC_TOLERANCE_DAA = 100_000n;
 
 export interface ClassifyInput {
-  /** an order kind, or a retired kind (`KobCross`) of an order of a retired template */
+  /** an order kind */
   kind: string;
   desc: OrderDescription;
   /** placement deadline of a day order (UTC unix seconds) */
@@ -102,7 +101,6 @@ export interface ClassifyInput {
 /** Maps an order's state to the type the user chose (order-types.md). Heuristics use only state fields the builders set. */
 export function orderTypeKey(i: ClassifyInput): OrderTypeKey {
   const d = i.desc;
-  if (i.kind === 'KobCross') return 'cross';
   const kind = baseKind(i.kind as OrderState['kind']);
   if (kind === 'KobAsk' || kind === 'KobBid' || kind === 'KobPair') {
     const a = d.auction;
@@ -209,8 +207,6 @@ export interface OrderRowModel {
   cancelBlocked: 'no-extension' | 'custody-missing' | 'old-template' | null;
   /** the wallet's record of this order names an order template this build does not pin (an older contract version, C5-02) */
   oldTemplate: boolean;
-  /** placed with a RETIRED template this build can still spend: only the maker's cancel is offered (no amend, no refund) */
-  retiredTemplate: boolean;
   strayCount: number;
   /** a live bid whose escrow no longer funds one base unit (the indexer counts amount 0): hidden from the book, refund (cancel) or top it up */
   unfundable: boolean;
@@ -252,8 +248,7 @@ export interface DescribeContext {
  * form of non-trailing stop / take-profit / OCO orders, 'replace' the full ticket form re-planned as a cancel-replace (trailing stops, IFD / IFO
  * entries that do not repeat; also reachable from the quick 'cond' form for band / trigger / expiry). Pair orders have no in-place amend in the
  * protocol: their resting limits, stops, take-profits, OCO and IFD / IFO entries are replaced from the full pair ticket form (cancel-replace).
- * Repeat entries and booked exits have none: the position is cancelled as a whole (their exits re-arm the entry). The retired cross limit has
- * none either (cancel only).
+ * Repeat entries and booked exits have none: the position is cancelled as a whole (their exits re-arm the entry).
  */
 export function amendKind(state: OrderState, typeKey: OrderTypeKey): 'limit' | 'cond' | 'replace' | null {
   const k = baseKind(state.kind);
@@ -273,9 +268,7 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
   const live = status === 'open' || status === 'partial';
   const v = e.view;
   const nowDaa = ctx.clock ? ctx.clock.daa : v?.current_daa != null ? BigInt(v.current_daa) : null;
-  // an order of a RETIRED template carries its legacy lot state (an older contract version: cancel only)
-  const legacy = !!es && isLegacyState(es.state);
-  const desc = es ? (legacy ? describeLegacy(es.state as unknown as LegacyState) : describeOrder(es.state, ctx.kob ?? undefined)) : null;
+  const desc = es ? describeOrder(es.state, ctx.kob ?? undefined) : null;
   const scale = desc ? desc.scale : v?.scale ? BigInt(v.scale) : 1n;
   const genesisDaa = v ? BigInt(v.genesis.daa) : e.record ? bi(e.record.placedAtDaa) : null;
   const deadline = bi(v?.deadline ?? null) ?? bi(e.record?.deadline ?? null);
@@ -335,7 +328,6 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
   const viaView = !!v && v.state_known && v.current !== null;
   const r = e.resolved;
   const oldTemplate = r?.status === 'old-template';
-  const retiredTemplate = legacy || !!r?.retired || (!!e.record && !!ctx.kob && !oldTemplate && !viaView && recordCodec(ctx.kob, e.record)?.retired != null);
   const needsCustody = !!es && holdsTokens(es.state.kind) && (custodyAmountOf(es.state) ?? 0n) > 0n;
   const cancelBlocked: OrderRowModel['cancelBlocked'] = viaView
     ? null
@@ -355,11 +347,10 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
     label: e.record?.label ?? null,
     // a cancel needs a live order whose current UTXO can be found: proven indexer state, or a node-resolved record
     canCancel: live && (viaView || viaRecord),
-    canRefund: refundable && !retiredTemplate,
-    canAmend: live && !!es && amendKind(es.state, typeKey) !== null && es.source !== 'record' && !retiredTemplate,
+    canRefund: refundable,
+    canAmend: live && !!es && amendKind(es.state, typeKey) !== null && es.source !== 'record',
     cancelBlocked: live || oldTemplate ? cancelBlocked : null,
     oldTemplate,
-    retiredTemplate,
     strayCount: v?.strays ? v.strays.filter((s) => !s.spent).length : 0,
     // a sold-out repeat ENTRY waiting for its exits to re-arm it also has amount 0 left: that is a healthy position, not an unfundable bid
     unfundable: live && side === 'buy' && v !== null && bi(v.amount_left) === 0n && v.repeat?.role !== 'entry',
@@ -384,7 +375,7 @@ function pairRowOf(
   // a running auction: its price now (a resting limit's quote_now equals its price: not shown twice)
   const quoteNow = pairAuction ?? (viewNow !== null && viewNow !== priceOfView ? viewNow : null);
   const p = desc?.pair ?? null;
-  if (p && p.kind !== 'KobCross') {
+  if (p) {
     const held = state ? custodiesOf(state, kob ?? undefined) : p.custodies;
     const sum = (role: 'base' | 'quote') => held.filter((c) => c.role === role).reduce((a, c) => a + c.amount, 0n);
     return { kind: p.kind, base: p.base.covId, quote: p.quote.covId, escrowA: sum('base'), escrowB: sum('quote'), prefund: p.prefund, quoteNow, trigger: p.triggerRule, tipKas: desc!.tip };

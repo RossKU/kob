@@ -120,7 +120,7 @@ pub trait FieldMap: Sized + Clone {
     fn from_values(m: &BTreeMap<String, ArtifactValue>) -> Result<Self, StateError>;
 }
 
-/// Encodes a field map as the state span of the template `t` (an embedded or a retired artifact); `kron` drops the
+/// Encodes a field map as the state span of the template `t`; `kron` drops the
 /// extension commitment (it must be zero), which the KRON bid-side kinds do not have.
 pub(crate) fn encode_fields(
     name: &'static str,
@@ -241,8 +241,7 @@ pub trait OrderState: StateCodec {
     }
 }
 
-/// A typed state struct and its [`FieldMap`] (JSON keys = contract field names). Shared by the current
-/// states (below) and the retired lot layouts ([`crate::retired::lot`]).
+/// A typed state struct and its [`FieldMap`] (JSON keys = contract field names).
 macro_rules! fields_struct {
     (
         $(#[$m:meta])*
@@ -284,7 +283,6 @@ macro_rules! fields_struct {
         }
     };
 }
-pub(crate) use fields_struct;
 
 macro_rules! kob_state {
     (
@@ -1771,14 +1769,7 @@ impl AnyState {
         self.try_encode().unwrap_or_else(|e| panic!("{e}"))
     }
     pub fn decode(id: TemplateId, bytes: &[u8]) -> Result<AnyState, StateError> {
-        let s = Self::decode_unvalidated(id, bytes)?;
-        s.validate()?;
-        Ok(s)
-    }
-    /// [`AnyState::decode`] without [`AnyState::validate`] (canonical encodings only): the state of an order of a RETIRED
-    /// template with today's layout (`crate::retired`), read only for its maker's cancel, whatever its committed exit.
-    pub fn decode_unvalidated(id: TemplateId, bytes: &[u8]) -> Result<AnyState, StateError> {
-        Ok(match id {
+        let s = match id {
             TemplateId::KobAsk => AnyState::KobAsk(AskState::decode_as(id, bytes)?),
             TemplateId::KobBid => AnyState::KobBid(BidState::decode_as(id, bytes)?),
             TemplateId::KobCondAsk => AnyState::KobCondAsk(CondAskState::decode_as(id, bytes)?),
@@ -1795,7 +1786,9 @@ impl AnyState {
             TemplateId::KobCondPair => AnyState::KobCondPair(CondPairState::decode_as(id, bytes)?),
             TemplateId::KobIfdPair => AnyState::KobIfdPair(IfdPairState::decode_as(id, bytes)?),
             other => return Err(StateError::Codec("AnyState", format!("{} is not an order template", other.name()))),
-        })
+        };
+        s.validate()?;
+        Ok(s)
     }
     pub fn redeem(&self) -> Vec<u8> {
         template(self.template_id()).redeem(&self.encode())

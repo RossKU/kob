@@ -9,14 +9,15 @@ use std::path::PathBuf;
 
 use kaspa_consensus_core::tx::ScriptPublicKey;
 use kob_protocol::artifacts::{token_template, token_template_by_hash, TemplateId};
-use kob_protocol::build::{build, build_cancel_retired, Action, CancelOrder, CancelRetired, ForeignStrays, SweepOrder, TokenRef};
+use kob_protocol::build::{build, Action, CancelOrder, ForeignStrays, SweepOrder, TokenRef};
 use kob_protocol::json::to_hex;
 use kob_protocol::state::{AnyState, TokenState};
 use kob_protocol::tx::{spk_to_string, FeeOptions, OrderUtxo, TokenUtxo, Utxo, MIN_FEE_RATE};
 use serde_json::{json, Value};
 
 use crate::common::{
-    build_funded, kas, lookup, outpoint_str, sign_validate_send, spk_bytes, utxo_of, write_json, Funding, OrderState, Signer, Tpl,
+    b_token, build_funded, kas, lookup, order_spk, order_template, outpoint_str, sign_validate_send, spk_bytes, utxo_of, write_json,
+    Funding, Signer,
 };
 use crate::inputs::{self, TokenView, View};
 use crate::recover::custody_targets;
@@ -45,17 +46,18 @@ SWEEP (every live order of the key's maker that has strays)
   the order's own token (a cross limit: also token B) and foreign strays (tokens of other covenant ids, moved with the
   `program` the view names) go back to the maker, one output per token. Per token at most the program's token inputs
   and one extension commitment (the first stray's) per transaction: the rest is reported, run again after this one
-  confirms. A stray without a proven state (or a foreign one without a program) is skipped. Strays of an order of
-  an older contract version (a retired template) are swept by its cancel only. The order's 90-day idle window restarts with the sweep.
+  confirms. A stray without a proven state (or a foreign one without a program) is skipped. The order's 90-day idle
+  window restarts with the sweep.
   Fee: a plain ask (KobAsk / KobAskKron) pays from its carrier; every other kind adds the smallest sufficient plain KAS
   UTXO of the maker from the node.
 
 CANCEL (every order given)
   The maker's cancel: the custody (the view's custody UTXO), the strays of the order's tokens (within the program's
-  token inputs) and foreign strays back to the maker with the order's KAS; strays left behind are reported. An
-  older contract version (a retired template; its view state is in the older lot layout): the cancel of `kob recover`
-  with the view's strays of its own tokens (foreign strays stay). Fee from the
-  order's released KAS, else the smallest sufficient plain KAS UTXO of the maker.
+  token inputs) and foreign strays back to the maker with the order's KAS; strays left behind are reported. Fee from
+  the order's released KAS, else the smallest sufficient plain KAS UTXO of the maker.
+
+  An order of a template this build does not pin is skipped (its maker ends it with a raw transaction spending the
+  order's own cancel entry).
 
 OUTPUT
   --dry-run     build, sign and engine-validate, write, never submit
@@ -227,19 +229,16 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
         return Ok(skip(format!("another maker's order ({})", to_hex(&state.maker()))));
     }
     let Some((cur_txid, cur_index, _)) = v.current else { return Ok(skip("the view names no current UTXO (closed?)")) };
-    let Some(tpl) = Tpl::resolve(&v.template_hash) else {
-        return Ok(skip("template is neither pinned by this build nor a retired template it can spend"));
+    let Some(tpl) = order_template(&v.template_hash) else {
+        return Ok(skip("template is not pinned by this build"));
     };
-    if a.op == Op::Sweep && matches!(tpl, Tpl::Retired(_)) {
-        return Ok(skip("an order of a retired template is spend-only: its strays go with its cancel (`kob order cancel`)"));
-    }
-    let order_spk = tpl.spk(state)?;
+    let order_spk = order_spk(tpl, state)?;
     let own_program = state
         .token_tpl_hash()
         .and_then(|h| token_template_by_hash(&h))
         .map(|t| t.id)
         .ok_or("the order's token program is not supported")?;
-    let b_token = state.b_token()?;
+    let b_token = b_token(state)?;
     let own = state.token_cov_id();
     // the scripts to look up: the order, its custody (cancel), every usable stray
     let mut left: Vec<Value> = vec![];
@@ -371,14 +370,11 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
     }
     let fee = FeeOptions::rate(a.fee_rate);
     let maker = state.maker();
-    let plain_ask = matches!(state, OrderState::Current(AnyState::KobAsk(_) | AnyState::KobAskKron(_)));
-    let (built, funding) = match (a.op, tpl) {
-        (Op::Sweep, _) => build_funded(plain_ask, &a.node, &a.network, &maker, |funding| {
-            let OrderState::Current(current) = state else {
-                return Err(kob_protocol::Error::Invalid("an order of an older contract version cannot be swept".into()));
-            };
+    let plain_ask = matches!(state, AnyState::KobAsk(_) | AnyState::KobAskKron(_));
+    let (built, funding) = match a.op {
+        Op::Sweep => build_funded(plain_ask, &a.node, &a.network, &maker, |funding| {
             build(&Action::SweepOrder(SweepOrder {
-                order: OrderUtxo { utxo: order_utxo.clone(), state: current.clone() },
+                order: OrderUtxo { utxo: order_utxo.clone(), state: state.clone() },
                 strays: strays.clone(),
                 foreign: foreign.clone(),
                 funding,
@@ -389,12 +385,9 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
                 fee: fee.clone(),
             }))
         })?,
-        (Op::Cancel, Tpl::Pinned(_)) => build_funded(true, &a.node, &a.network, &maker, |funding| {
-            let OrderState::Current(current) = state else {
-                return Err(kob_protocol::Error::Invalid("the order's state does not belong to its template".into()));
-            };
+        Op::Cancel => build_funded(true, &a.node, &a.network, &maker, |funding| {
             build(&Action::CancelOrder(CancelOrder {
-                order: OrderUtxo { utxo: order_utxo.clone(), state: current.clone() },
+                order: OrderUtxo { utxo: order_utxo.clone(), state: state.clone() },
                 custody: custody.clone(),
                 prefund: prefund.clone(),
                 strays: strays.clone(),
@@ -408,25 +401,6 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
                 fee: fee.clone(),
             }))
         })?,
-        (Op::Cancel, Tpl::Retired(r)) => {
-            let span = tpl.encode(state)?;
-            build_funded(true, &a.node, &a.network, &maker, |funding| {
-                build_cancel_retired(
-                    &CancelRetired {
-                        template_hash: r.template.hash,
-                        state: span.clone(),
-                        order: order_utxo.clone(),
-                        custody: custody.clone(),
-                        strays: strays.clone(),
-                        foreign: foreign.clone(),
-                        funding,
-                        change: None,
-                        fee: fee.clone(),
-                    },
-                    &kob_protocol::budget::lookup,
-                )
-            })?
-        }
     };
     if a.op == Op::Sweep {
         // the sweep continues the order: output 0 is the same script under the same covenant id
@@ -468,7 +442,7 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
             ),
         ),
     };
-    let info = json!({"action": if a.op == Op::Sweep { "sweep" } else { "cancel" }, "covenant_id": covh, "kind": state.kind_name(), "template": tpl.label(), "returned": returned});
+    let info = json!({"action": if a.op == Op::Sweep { "sweep" } else { "cancel" }, "covenant_id": covh, "kind": state.template_id().name(), "returned": returned});
     let sent = sign_validate_send(&built, signer, a.out_dir.as_deref(), &name, info, a.dry_run, &a.node)?;
     Ok(Outcome {
         status: if sent.submitted.is_some() { "submitted" } else { "signed" },
@@ -508,7 +482,7 @@ pub fn execute(a: &Args) -> Result<(Value, bool), String> {
         }
         let mut j = o.json;
         j["covenant_id"] = json!(to_hex(&v.covenant_id));
-        j["kind"] = json!(v.state.as_ref().map(|s| s.kind_name()));
+        j["kind"] = json!(v.state.as_ref().map(|s| s.template_id().name()));
         j["source"] = json!(v.source);
         orders.push(j);
     }

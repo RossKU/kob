@@ -17,11 +17,9 @@
 //! The body is versioned ([`FORMAT`]). Format 2 (since 2026-10-01) is self-describing: `0x00 0x02`, the write time, a
 //! template table per frame (record-log code -> template hash of every order template and token program the frame refers
 //! to) and length-prefixed states, so a frame decodes whatever the templates are when it is read; a reveal of a template
-//! this build does not have (an older artifact of a kind, or an unknown kind) is dropped and counted, never misread.
-//! Format 1 (the frames written before, no marker) stored a revealed state at its template's length of the time; it is read
-//! with today's layouts plus the retired ones of [`super::layouts`]. A frame neither format can decode is kept and skipped
-//! by [`read_all`] with a counted warning. Both formats can follow each other in one segment (an older build appends
-//! format 1 to a log this build wrote: `open` checks the chain only and never decodes a body).
+//! this build does not pin is dropped and counted, never misread. A frame this build cannot decode (format 1, written
+//! before 2026-10-01 without a marker, or a newer format) is kept and skipped by [`read_all`] with a counted warning
+//! (`open` checks the chain only and never decodes a body).
 //!
 //! The chain detects truncation in the middle and edits. Ordering guarantee with the database: a frame
 //! is appended and fsynced BEFORE the database transaction commits, and the database stores
@@ -29,7 +27,7 @@
 //! [`RecordLog::open`] cuts it off. The reverse (database ahead of the log) means the log was lost and is
 //! reported as an error.
 
-use super::record::{decode_v1, DecodeCtx, DecodeStats, TemplateTable, TxRecord};
+use super::record::{DecodeCtx, DecodeStats, TemplateTable, TxRecord};
 use crate::hex::Hash32;
 use crate::wire::{Reader, WireError, Writer};
 use kob_protocol::artifacts::TemplateId;
@@ -124,10 +122,10 @@ fn code_of(t: TemplateId) -> u8 {
     crate::model::wire_code(t)
 }
 
-/// Record-log frame format this build writes. Format 1 (no marker; frames written before 2026-10-01) stores a revealed
-/// order state at its template's length of the time; format 2 starts the body with the marker `0x00 0x02`, carries a
-/// template table (wire code -> template hash) and length-prefixes every state, so a frame decodes without assuming
-/// today's templates. A format-1 body never starts with `0x00` (it starts with the write time in ms, a varint > 0).
+/// Record-log frame format this build writes and reads: the body starts with the marker `0x00 0x02`, carries a template
+/// table (wire code -> template hash) and length-prefixes every state, so a frame decodes without assuming today's
+/// templates. Format 1 (frames written before 2026-10-01, no marker: the body starts with the write time in ms, a varint >
+/// 0) is not read.
 pub const FORMAT: u8 = 2;
 
 impl LogOp {
@@ -283,8 +281,6 @@ pub struct DecodedBatch {
     pub batch: LogBatch,
     /// Wall-clock time (ms) the frame was written at.
     pub written_ms: u64,
-    /// Record-log format of the frame (1 or 2).
-    pub format: u8,
     /// What this build could not interpret and dropped (the frame stays in the log).
     pub stats: DecodeStats,
 }
@@ -327,29 +323,13 @@ impl LogBatch {
 
     /// Encodes the batch as a format-2 frame body.
     pub fn encode(&self, now_ms: u64) -> Vec<u8> {
-        self.encode_as(now_ms, FORMAT)
-    }
-
-    /// Encodes the batch as a format-1 frame body (what builds before 2026-10-01 wrote; `now_ms` must be positive). Tests
-    /// and tools reproduce old logs with it; this build never writes it.
-    #[doc(hidden)]
-    pub fn encode_v1(&self, now_ms: u64) -> Vec<u8> {
-        assert!(now_ms > 0, "a format-1 body starts with a positive write time");
-        self.encode_as(now_ms, 1)
-    }
-
-    fn encode_as(&self, now_ms: u64, format: u8) -> Vec<u8> {
         let mut w = Writer::new();
-        if format >= 2 {
-            w.u8(0);
-            w.u8(format);
-        }
+        w.u8(0);
+        w.u8(FORMAT);
         w.var(now_ms);
-        if format >= 2 {
-            let (orders, programs) = self.tables();
-            write_table(&mut w, &orders);
-            write_table(&mut w, &programs);
-        }
+        let (orders, programs) = self.tables();
+        write_table(&mut w, &orders);
+        write_table(&mut w, &programs);
         w.hash(&self.start);
         w.hash(&self.cursor.hash);
         w.var(self.cursor.daa);
@@ -365,11 +345,7 @@ impl LogBatch {
             w.var(b.ts);
             w.var(b.txs.len() as u64);
             for t in &b.txs {
-                if format >= 2 {
-                    t.encode(&mut w);
-                } else {
-                    t.encode_v1(&mut w);
-                }
+                t.encode(&mut w);
             }
         }
         w.var(self.ops.len() as u64);
@@ -379,7 +355,7 @@ impl LogBatch {
         w.buf
     }
 
-    /// Decodes a frame body of either format.
+    /// Decodes a frame body (format 2).
     pub fn decode(body: &[u8]) -> Result<DecodedBatch, WireError> {
         match body {
             [0, FORMAT, rest @ ..] => {
@@ -392,13 +368,10 @@ impl LogBatch {
                 if !r.done() {
                     return Err(WireError("trailing bytes"));
                 }
-                Ok(DecodedBatch { batch, written_ms, format: FORMAT, stats: ctx.stats })
+                Ok(DecodedBatch { batch, written_ms, stats: ctx.stats })
             }
             [0, ..] => Err(WireError("record-log frame format newer than this build")),
-            _ => {
-                let ((written_ms, batch), stats) = decode_v1(body, |r, ctx| Ok((r.var()?, LogBatch::decode_rest(r, ctx)?)))?;
-                Ok(DecodedBatch { batch, written_ms, format: 1, stats })
-            }
+            _ => Err(WireError("record-log frame format 1 (written before 2026-10-01) is not read by this build")),
         }
     }
 
@@ -720,9 +693,7 @@ pub struct Replay {
     /// Frames this build could not decode at all (a newer format, or a layout no table here describes), with the
     /// reason. They stay in the log; a replay skips them.
     pub skipped: Vec<(u64, String)>,
-    /// Frames per format (index 1 and 2).
-    pub formats: [u64; 3],
-    /// What the decoded frames had to drop (reveals / holdings / imports of retired or unknown layouts).
+    /// What the decoded frames had to drop (reveals / holdings / imports of unknown layouts).
     pub dropped: DecodeStats,
 }
 
@@ -733,12 +704,10 @@ pub fn read_all(dir: &Path) -> Result<Replay, RecordLogError> {
     let segs = list_segments(dir)?;
     let mut records = Vec::new();
     let mut skipped = Vec::new();
-    let mut formats = [0u64; 3];
     let mut dropped = DecodeStats::default();
     let end = scan(&segs, |n, body| {
         match LogBatch::decode(body) {
             Ok(d) => {
-                formats[d.format.min(2) as usize] += 1;
                 dropped.add(&d.stats);
                 records.push((n, d.batch));
             }
@@ -746,7 +715,7 @@ pub fn read_all(dir: &Path) -> Result<Replay, RecordLogError> {
         }
         Ok(false)
     })?;
-    Ok(Replay { records, torn: end.torn, frames: end.frames, skipped, formats, dropped })
+    Ok(Replay { records, torn: end.torn, frames: end.frames, skipped, dropped })
 }
 
 /// Paths of the log segments, oldest first (tests and operators inspect or copy them).
@@ -884,7 +853,7 @@ mod tests {
         let b = batch(3);
         let body = b.encode(1234);
         let d = LogBatch::decode(&body).unwrap();
-        assert_eq!((d.batch, d.written_ms, d.format), (b, 1234, FORMAT));
+        assert_eq!((d.batch, d.written_ms), (b, 1234));
         assert_eq!(d.stats, DecodeStats::default());
         assert!(LogBatch::decode(&body[..body.len() - 1]).is_err());
     }
@@ -983,15 +952,10 @@ mod tests {
         assert_eq!(log.next_n(), 5);
     }
 
-    // ---- template evolution (record-log formats 1 and 2) ----
+    // ---- template evolution ----
 
     use crate::indexer::record::{RecIn, RecOut, Reveal};
     use kob_protocol::artifacts::template;
-
-    /// `settle` of the KobCross of protocol v2.6 before the pair-market auction (333-byte state) and of the v2.6 one with the
-    /// auction (351, retired by v3). Today's code 0x08 is `KobPair` (payload v4): its `settle` is [`new_settle`].
-    const OLD_SETTLE: [u8; 4] = [0x1e, 0x6c, 0xf5, 0x28];
-    const V26_SETTLE: [u8; 4] = [0xbd, 0x44, 0x24, 0x3d];
 
     /// The dispatch tag of today's `KobPair.settle` (the kind under the record-log code the cross limits had).
     fn new_settle() -> [u8; 4] {
@@ -1003,21 +967,6 @@ mod tests {
     fn new_len() -> usize {
         template(TemplateId::KobPair).state_len
     }
-    const CANCEL: [u8; 4] = [0xa0, 0x89, 0x31, 0x09];
-    const OLD_CROSS_HASH: &str = "70b1dcd3e5f2c3821f031d5346680d0772fb37851760aea8fa841e80424a92c7";
-    const V26_CROSS_HASH: &str = "692cfdd07dae71749db2d0ad8249eb70c7476e9ef67a4f8f4c09c409e991b752";
-
-    /// A format-2 body whose single order template (at the head of its table) is replaced by a retired layout's hash: what a
-    /// build that pinned that template wrote.
-    fn with_table_hash(mut body: Vec<u8>, hash: &str) -> Vec<u8> {
-        // body: 0x00 0x02 | time (6-byte varint) | order table count | code | hash
-        let at = 2 + 6 + 1;
-        assert_eq!(body[at], 0x08, "the code of the retired cross limits, today KobPair's");
-        let l = crate::indexer::layouts::RETIRED_LAYOUTS.iter().find(|l| l.hash == hash).unwrap();
-        body[at + 1..at + 33].copy_from_slice(&l.hash_bytes());
-        body
-    }
-
     fn cross_tx(i: u8, state_len: usize, tag: [u8; 4], args: Vec<Vec<u8>>) -> TxRecord {
         TxRecord {
             txid: Hash32([i; 32]),
@@ -1054,126 +1003,23 @@ mod tests {
     }
 
     #[test]
-    fn the_cross_layouts_this_test_uses_are_the_real_ones() {
-        assert_eq!(new_len(), 414);
-        assert_eq!(crate::model::wire_code(TemplateId::KobPair), 0x08);
-        assert_eq!(crate::model::entry_name(TemplateId::KobPair, new_settle()), Some("settle"));
-        assert_eq!(crate::model::entry_name(TemplateId::KobPair, CANCEL), Some("cancel"));
-        assert_eq!(crate::model::entry_name(TemplateId::KobPair, OLD_SETTLE), None);
-        assert_eq!(crate::model::entry_name(TemplateId::KobPair, V26_SETTLE), None);
-        let old = crate::indexer::layouts::retired(0x08).find(|l| l.hash == OLD_CROSS_HASH).unwrap();
-        assert!(old.state_len == 333 && old.has_tag(&OLD_SETTLE) && old.has_tag(&CANCEL));
-        let v26 = crate::indexer::layouts::retired(0x08).find(|l| l.hash == V26_CROSS_HASH).unwrap();
-        assert!(v26.state_len == 351 && v26.has_tag(&V26_SETTLE) && v26.has_tag(&CANCEL));
-    }
-
-    #[test]
-    fn a_log_mixing_old_and_new_cross_layouts_reads_end_to_end() {
-        // what the soak's exec-a log holds since the 958d013 swap: format-1 frames of the old KobCross, then (old build
-        // replaced) format-1 frames of the v2.6 one, then format-2 frames of the v2.6 one (a build of 2026-10-01 .. 10-05);
-        // this build (protocol v3, pair orders) appends format 2 of today's KobPair (the same code 0x08) after them: every reveal
-        // of a retired layout is dropped and counted, either format, today's decodes exactly
-        let nb = vec![2, 0, 0, 0, 0, 0, 0, 0];
-        let frames = [
-            (batch_of(1, vec![cross_tx(1, 333, OLD_SETTLE, vec![nb.clone(), vec![5], vec![]])]), 1),
-            (batch_of(2, vec![cross_tx(2, 333, CANCEL, vec![vec![]])]), 1),
-            (batch_of(3, vec![cross_tx(3, 351, V26_SETTLE, vec![nb.clone(), vec![5], vec![], vec![1], vec![7]])]), 1),
-            (batch_of(4, vec![cross_tx(4, 351, V26_SETTLE, vec![nb.clone(), vec![6], vec![], vec![1], vec![7]])]), 26),
-            (
-                batch_of(
-                    5,
-                    vec![cross_tx(5, new_len(), new_settle(), vec![nb.clone(), vec![6], vec![], vec![1], vec![7], vec![0x81]])],
-                ),
-                2,
-            ),
-            (batch(6), 2),
-        ];
-        let d = tempfile::tempdir().unwrap();
-        let (mut log, _) = RecordLog::open(d.path(), 1 << 20, 0).unwrap();
-        for (b, fmt) in &frames {
-            let body = match *fmt {
-                1 => b.encode_v1(1_790_000_000_000),
-                26 => with_table_hash(b.encode(1_790_000_000_000), V26_CROSS_HASH),
-                _ => b.encode(1_790_000_000_000),
-            };
-            log.append_body(&body).unwrap();
-        }
-        drop(log);
-        let first = read_all(d.path()).unwrap();
-        assert_eq!(first.frames, 6);
-        assert!(first.skipped.is_empty(), "{:?}", first.skipped);
-        assert_eq!(first.records.len(), 6);
-        assert_eq!(first.formats, [0, 3, 3]);
-        assert_eq!(first.dropped.retired_reveals, 4, "the four retired-layout reveals are dropped and counted");
-        assert_eq!(first.dropped.unknown_reveals, 0);
-        let recs: Vec<&LogBatch> = first.records.iter().map(|(_, b)| b).collect();
-        // retired layouts: the reveal is dropped, everything else of the record (inputs, outputs, cursor) is kept
-        for b in &recs[..4] {
-            assert!(reveal_of(b).is_none());
-            assert_eq!(b.blocks[0].txs[0].inputs.len(), 2);
-            assert_eq!(b.blocks[0].txs[0].inputs[0].cov, Some(Hash32([7; 32])));
-            assert_eq!(b.blocks[0].txs[0].outputs[0].value, 1_000);
-        }
-        assert_eq!(recs[0].cursor.daa, 101);
-        // today's layout: decoded exactly
-        assert_eq!(recs[4], &frames[4].0);
-        assert_eq!(reveal_of(recs[4]).unwrap().state.len(), new_len());
-        assert_eq!(*recs[5], batch(6));
-        // the log stays appendable and a reopen (chain check only) accepts the mixed formats
-        let (log, rep) = RecordLog::open(d.path(), 1 << 20, 6).unwrap();
-        assert_eq!((log.next_n(), rep), (6, OpenReport::default()));
-    }
-
-    #[test]
-    fn an_ambiguous_old_reveal_resolves_by_decoding_the_whole_frame() {
-        // an old cancel whose argument happens to hold the v2.6 cross limit's settle tag exactly where that layout would read
-        // its tag (offset 351): both retired layouts fit locally; the frame decodes with the old one (tried first)
-        let mut arg = vec![0xff; 30];
-        // state(333) + tag(4) + arg count(1) + arg length(1) = 339: the arg starts there, offset 351 is arg[12]
-        arg[12..16].copy_from_slice(&V26_SETTLE);
-        let b = batch_of(1, vec![cross_tx(1, 333, CANCEL, vec![arg])]);
-        let body = b.encode_v1(1_790_000_000_000);
-        let d = LogBatch::decode(&body).unwrap();
-        assert_eq!(d.format, 1);
-        assert_eq!(d.stats.ambiguous_frames, 1);
-        assert_eq!(d.stats.retired_reveals, 1);
-        assert!(reveal_of(&d.batch).is_none());
-        assert_eq!(d.batch.blocks[0].txs[0].inputs[1].index, 3);
-        assert_eq!(d.batch.cursor, b.cursor);
-
-        // the reverse: a v2.6 settle (351) whose state happens to hold the old cancel tag at offset 333, followed by a byte
-        // no argument count can start with: the old layout (tried first) fits locally but cannot decode the frame; the search
-        // backtracks to the v2.6 layout
-        let mut tx = cross_tx(2, 351, V26_SETTLE, vec![vec![2, 0, 0, 0, 0, 0, 0, 0], vec![5], vec![], vec![1], vec![7]]);
-        let st = &mut tx.inputs[0].reveal.as_mut().unwrap().state;
-        st[333..337].copy_from_slice(&CANCEL);
-        st[337] = 0xff;
-        let b = batch_of(2, vec![tx]);
-        let d = LogBatch::decode(&b.encode_v1(1_790_000_000_000)).unwrap();
-        assert_eq!((d.format, d.stats.ambiguous_frames, d.stats.retired_reveals), (1, 1, 1));
-        assert!(reveal_of(&d.batch).is_none());
-        assert_eq!(d.batch.blocks[0].txs[0].inputs[1].index, 3);
-        assert_eq!(d.batch.cursor, b.cursor);
-    }
-
-    #[test]
     fn frames_this_build_cannot_decode_are_kept_and_skipped() {
         let d = tempfile::tempdir().unwrap();
         let (mut log, _) = RecordLog::open(d.path(), 1 << 20, 0).unwrap();
         let t = 1_790_000_000_000u64;
         log.append_body(&batch(0).encode(t)).unwrap();
-        // a format-2 frame under code 0x08 whose template hash this build does not know (a future artifact)
+        // format-2 frames under code 0x08 whose template hash this build does not pin (an older or a future artifact, today's
+        // state length or another)
         let mut unknown = batch_of(1, vec![cross_tx(1, 400, [1, 2, 3, 4], vec![])]).encode(t);
-        let mut retired = batch_of(2, vec![cross_tx(2, 333, OLD_SETTLE, vec![])]).encode(t);
+        let mut older = batch_of(2, vec![cross_tx(2, new_len(), new_settle(), vec![])]).encode(t);
         // body: 0x00 0x02 | time (6-byte varint) | order table count | code | hash
         let at = 2 + 6 + 1;
         assert_eq!(unknown[at], 0x08, "the code 0x08");
         unknown[at + 1..at + 33].copy_from_slice(&[0xee; 32]);
-        let old = crate::indexer::layouts::retired(0x08).find(|l| l.hash == OLD_CROSS_HASH).unwrap();
-        retired[at + 1..at + 33].copy_from_slice(&old.hash_bytes());
+        older[at + 1..at + 33].copy_from_slice(&[0xdd; 32]);
         log.append_body(&unknown).unwrap();
-        log.append_body(&retired).unwrap();
-        // a newer frame format, and a format-1 frame of a kind code no build ever had
+        log.append_body(&older).unwrap();
+        // a newer frame format, and a format-1 frame (no marker)
         let mut future = batch(3).encode(t);
         future[1] = 9;
         log.append_body(&future).unwrap();
@@ -1207,8 +1053,9 @@ mod tests {
         assert_eq!(r.frames, 6);
         assert_eq!(r.skipped.iter().map(|(n, _)| *n).collect::<Vec<_>>(), vec![3, 4]);
         assert!(r.skipped[0].1.contains("newer"), "{}", r.skipped[0].1);
+        assert!(r.skipped[1].1.contains("format 1"), "{}", r.skipped[1].1);
         assert_eq!(r.records.iter().map(|(n, _)| *n).collect::<Vec<_>>(), vec![0, 1, 2, 5]);
-        assert_eq!((r.dropped.unknown_reveals, r.dropped.retired_reveals), (1, 1));
+        assert_eq!(r.dropped.unknown_reveals, 2);
         assert!(reveal_of(&r.records[1].1).is_none() && reveal_of(&r.records[2].1).is_none());
         assert_eq!(r.records[1].1.blocks[0].txs[0].inputs.len(), 2);
         assert_eq!(r.records[3].1, batch(6));
@@ -1220,8 +1067,7 @@ mod tests {
         let (orders, programs) = b.tables();
         assert_eq!(orders.into_iter().collect::<Vec<_>>(), vec![(0x08, template(TemplateId::KobPair).hash)]);
         assert!(programs.is_empty());
-        // a batch without reveals pays two bytes for the empty tables
-        let plain = batch(1);
-        assert_eq!(plain.encode(5).len(), plain.encode_v1(5).len() + 4);
+        // a batch without reveals pays two bytes for the empty tables after the marker and the write time
+        assert_eq!(batch(1).encode(5)[..5], [0, FORMAT, 5, 0, 0]);
     }
 }

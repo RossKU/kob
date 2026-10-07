@@ -1,4 +1,4 @@
-//! Shared pieces of the order commands: templates (pinned or retired), addresses, node lookups, the maker's funding and the
+//! Shared pieces of the order commands: templates, addresses, node lookups, the maker's funding and the
 //! sign / engine-validate / write / submit pipeline.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,17 +8,13 @@ use std::time::Duration;
 use kaspa_addresses::Prefix;
 use kaspa_consensus_core::tx::ScriptPublicKey;
 use kob_protocol::artifacts::{template, template_by_hash, TemplateId};
-use kob_protocol::build::{pair_programs, token_program};
+use kob_protocol::build::pair_programs;
 use kob_protocol::issue::rpc_transaction_json;
 use kob_protocol::json::to_hex;
-use kob_protocol::retired::lot::LotState;
-use kob_protocol::retired::nolot::CrossState as NoLotCross;
-use kob_protocol::retired::{self, Retired, RetiredState};
 use kob_protocol::script::p2pk_spk;
 use kob_protocol::state::AnyState;
 use kob_protocol::tx::{finalize, pubkey_of, sign_locally, BuiltTx, FinalizeOptions, KeyUtxo, SignedTx, Utxo};
 use kob_protocol::verify::validate_signed;
-use kob_protocol::Family;
 use serde_json::{json, Value};
 
 use crate::wrpc::{self, NodeUtxo};
@@ -58,240 +54,52 @@ pub fn spk_bytes(spk: &ScriptPublicKey) -> Vec<u8> {
     b
 }
 
-/// The state of an order: of a template pinned by this build, or in the lot layout of a retired template (an older
-/// contract version: the maker's cancel only).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OrderState {
-    /// A pinned template's state (amounts in base units, prices per whole token).
-    Current(AnyState),
-    /// A retired template's state in its lot layout (the v2.6 and earlier layouts), with the family of its token (a cross
-    /// limit: of token A).
-    Lot(LotState, Family),
-    /// The retired protocol v3 cross limit (no lots: base units, token A of either family by `aFamily`).
-    NoLot(NoLotCross),
-    /// A retired template with today's state layout (only its code changed): today's state type, the maker's cancel only.
-    RetiredCurrent(AnyState),
+/// The order template with this hash, when this build pins it (`None`: not an order template this build pins; an order
+/// of any other template is unknown here).
+pub fn order_template(hash: &[u8; 32]) -> Option<TemplateId> {
+    template_by_hash(hash).filter(|t| t.id.kind_code().is_some()).map(|t| t.id)
 }
 
-impl OrderState {
-    /// Whether this is the state of a retired (older contract version) template.
-    pub fn is_retired(&self) -> bool {
-        matches!(self, OrderState::Lot(..) | OrderState::NoLot(_) | OrderState::RetiredCurrent(_))
+/// Decode a state span of the template `id` (canonical encodings only).
+pub fn decode_state(id: TemplateId, span: &[u8]) -> Result<AnyState, String> {
+    let s = AnyState::decode(id, span).map_err(|e| e.to_string())?;
+    if s.try_encode().map_err(|e| e.to_string())? != span {
+        return Err("state is not canonical for its template".into());
     }
+    Ok(s)
+}
 
-    /// Name of the kind in its family as it was pinned (`KobAsk`, `KobAskKron`, ...).
-    pub fn kind_name(&self) -> String {
-        match self {
-            OrderState::Current(s) | OrderState::RetiredCurrent(s) => s.template_id().name().to_string(),
-            OrderState::Lot(l, fam) => fam.kind_name(l.kind_name()),
-            OrderState::NoLot(_) => "KobCross".to_string(),
-        }
+/// The state span of a decoded state under the template `id`.
+pub fn encode_state(id: TemplateId, s: &AnyState) -> Result<Vec<u8>, String> {
+    if s.template_id() != id {
+        return Err(format!("a {} state is not a {} state", s.template_id().name(), id.name()));
     }
+    s.try_encode().map_err(|e| e.to_string())
+}
 
-    /// Maker key.
-    pub fn maker(&self) -> [u8; 32] {
-        match self {
-            OrderState::Current(s) | OrderState::RetiredCurrent(s) => s.maker(),
-            OrderState::Lot(l, _) => l.maker(),
-            OrderState::NoLot(x) => x.maker,
-        }
-    }
+/// The order's P2SH script public key for a state under the template `id`.
+pub fn order_spk(id: TemplateId, s: &AnyState) -> Result<ScriptPublicKey, String> {
+    Ok(template(id).spk(&encode_state(id, s)?))
+}
 
-    /// The order's token (a pair order and a retired cross limit: token A) covenant id.
-    pub fn token_cov_id(&self) -> [u8; 32] {
-        match self {
-            OrderState::Current(s) | OrderState::RetiredCurrent(s) => s.token_cov_id(),
-            OrderState::Lot(l, _) => l.token().0,
-            OrderState::NoLot(x) => x.token_cov_id,
-        }
-    }
-
-    /// The order's token program template hash.
-    pub fn token_tpl_hash(&self) -> Option<[u8; 32]> {
-        match self {
-            OrderState::Current(s) | OrderState::RetiredCurrent(s) => s.token_tpl_hash(),
-            OrderState::Lot(l, _) => Some(l.token().1),
-            OrderState::NoLot(x) => Some(x.token_tpl_hash),
-        }
-    }
-
-    /// The exact custody amount (base units) of a token-holding order (`None`: the order holds no tokens). A retired
-    /// order's custody is what its lot layout says (`lotsLeft x lotUnits x unit`).
-    pub fn custody_amount(&self) -> Option<i64> {
-        match self {
-            OrderState::Current(s) | OrderState::RetiredCurrent(s) => s.custody_amount(),
-            OrderState::Lot(l, _) => l.custody_amount(),
-            OrderState::NoLot(x) => RetiredState::NoLotCross(x.clone()).custody_amount(),
-        }
-    }
-
-    /// Base units still open: `amountLeft` of a current order, the custody amount of a retired token-holding order;
-    /// `None` for a bid (its quantity is its escrow, see [`OrderState::amount_left_in`]).
-    pub fn amount_left(&self) -> Option<i64> {
-        match self {
-            OrderState::Current(s) | OrderState::RetiredCurrent(s) => s.amount_left(),
-            OrderState::Lot(l, _) => l.custody_amount(),
-            OrderState::NoLot(x) => RetiredState::NoLotCross(x.clone()).custody_amount(),
-        }
-    }
-
-    /// Like [`OrderState::amount_left`], and for a current bid its remaining buying power in an escrow of `value` sompi.
-    pub fn amount_left_in(&self, value: u64) -> Option<i64> {
-        match self {
-            OrderState::Current(AnyState::KobBid(b) | AnyState::KobBidKron(b)) => {
-                Some(b.buying_power(i64::try_from(value).unwrap_or(i64::MAX)))
-            }
-            other => other.amount_left(),
-        }
-    }
-
-    /// Base units per whole token (`scale`) of a current order.
-    pub fn scale(&self) -> Option<i64> {
-        match self {
-            OrderState::Current(s) | OrderState::RetiredCurrent(s) => Some(s.scale()),
-            OrderState::Lot(..) => None,
-            OrderState::NoLot(x) => Some(x.scale),
-        }
-    }
-
-    /// Smallest fill (`minFill`, base units) of a current order.
-    pub fn min_fill(&self) -> Option<i64> {
-        match self {
-            OrderState::Current(s) | OrderState::RetiredCurrent(s) => Some(s.min_fill()),
-            OrderState::Lot(..) => None,
-            OrderState::NoLot(x) => Some(x.min_fill),
-        }
-    }
-
-    /// The second token of an order and its program: a pair order's quote token B, a retired cross limit's token B
-    /// (`None` for the KAS kinds).
-    pub fn b_token(&self) -> Result<Option<([u8; 32], TemplateId)>, String> {
-        match self {
-            OrderState::Current(s) if s.is_pair() => pair_programs(s).map(|(_, b)| Some(b)).map_err(|e| e.to_string()),
-            OrderState::Current(_) | OrderState::RetiredCurrent(_) => Ok(None),
-            OrderState::Lot(l, _) => match l.as_cross() {
-                Some(x) => {
-                    let fam = l.b_family().ok_or_else(|| "cross limit: bFamily must be 1 (KCC-20) or 2 (KRON)".to_string())?;
-                    let program = token_program(&x.b_tpl_hash, x.b_prefix_len, x.b_suffix_len).map_err(|e| e.to_string())?;
-                    if program.family() != fam {
-                        return Err(format!("cross limit: token B program {} is not of the bFamily {fam:?}", program.name()));
-                    }
-                    Ok(Some((x.b_cov_id, program)))
-                }
-                None => Ok(None),
-            },
-            OrderState::NoLot(x) => {
-                let fam = kob_protocol::state::family_of_code(x.b_family)
-                    .ok_or_else(|| "cross limit: bFamily must be 1 (KCC-20) or 2 (KRON)".to_string())?;
-                let program = token_program(&x.b_tpl_hash, x.b_prefix_len, x.b_suffix_len).map_err(|e| e.to_string())?;
-                if program.family() != fam {
-                    return Err(format!("cross limit: token B program {} is not of the bFamily {fam:?}", program.name()));
-                }
-                Ok(Some((x.b_cov_id, program)))
-            }
-        }
+/// Base units still open (`amountLeft`), and for a bid its remaining buying power in an escrow of `value` sompi.
+pub fn amount_left_in(s: &AnyState, value: u64) -> Option<i64> {
+    match s {
+        AnyState::KobBid(b) | AnyState::KobBidKron(b) => Some(b.buying_power(i64::try_from(value).unwrap_or(i64::MAX))),
+        other => other.amount_left(),
     }
 }
 
-/// The template of an order: pinned by this build, or retired (spend-only: the maker's cancel).
-#[derive(Clone, Copy)]
-pub enum Tpl {
-    /// A pinned order template.
-    Pinned(TemplateId),
-    /// A retired order template.
-    Retired(&'static Retired),
+/// The second token of an order and its program: a pair order's quote token B (`None` for the KAS kinds).
+pub fn b_token(s: &AnyState) -> Result<Option<([u8; 32], TemplateId)>, String> {
+    if !s.is_pair() {
+        return Ok(None);
+    }
+    pair_programs(s).map(|(_, b)| Some(b)).map_err(|e| e.to_string())
 }
 
-impl std::fmt::Debug for Tpl {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.label(), to_hex(&self.hash()))
-    }
-}
-
-impl Tpl {
-    /// The order template with this hash (`None`: neither pinned nor retired, or not an order template).
-    pub fn resolve(hash: &[u8; 32]) -> Option<Tpl> {
-        if let Some(t) = template_by_hash(hash).filter(|t| t.id.kind_code().is_some()) {
-            return Some(Tpl::Pinned(t.id));
-        }
-        retired::by_hash(hash).map(Tpl::Retired)
-    }
-
-    /// `pinned` or `retired`.
-    pub fn label(&self) -> &'static str {
-        match self {
-            Tpl::Pinned(_) => "pinned",
-            Tpl::Retired(_) => "retired",
-        }
-    }
-
-    /// Template hash.
-    pub fn hash(&self) -> [u8; 32] {
-        match self {
-            Tpl::Pinned(id) => template(*id).hash,
-            Tpl::Retired(r) => r.template.hash,
-        }
-    }
-
-    /// Decode a state span (canonical encodings only): a pinned template's span into a current state, a retired
-    /// template's into its lot layout.
-    pub fn decode(&self, span: &[u8]) -> Result<OrderState, String> {
-        match self {
-            Tpl::Pinned(id) => {
-                let s = AnyState::decode(*id, span).map_err(|e| e.to_string())?;
-                if s.try_encode().map_err(|e| e.to_string())? != span {
-                    return Err("state is not canonical for its template".into());
-                }
-                Ok(OrderState::Current(s))
-            }
-            Tpl::Retired(r) => match retired::decode_any(r, span).map_err(|e| e.to_string())? {
-                RetiredState::Lot(l) => Ok(OrderState::Lot(l, r.family)),
-                RetiredState::NoLotCross(x) => Ok(OrderState::NoLot(x)),
-                RetiredState::Current(a) => Ok(OrderState::RetiredCurrent(a)),
-            },
-        }
-    }
-
-    /// The state span of a decoded state under this template.
-    pub fn encode(&self, s: &OrderState) -> Result<Vec<u8>, String> {
-        match (self, s) {
-            (Tpl::Pinned(id), OrderState::Current(s)) => {
-                if s.template_id() != *id {
-                    return Err(format!("a {} state is not a {} state", s.template_id().name(), id.name()));
-                }
-                s.try_encode().map_err(|e| e.to_string())
-            }
-            (Tpl::Retired(r), OrderState::Lot(l, _)) => retired::encode(r, l).map_err(|e| e.to_string()),
-            (Tpl::Retired(r), OrderState::NoLot(x)) => {
-                retired::encode_any(r, &RetiredState::NoLotCross(x.clone())).map_err(|e| e.to_string())
-            }
-            (Tpl::Retired(r), OrderState::RetiredCurrent(a)) => {
-                retired::encode_any(r, &RetiredState::Current(a.clone())).map_err(|e| e.to_string())
-            }
-            (Tpl::Pinned(id), OrderState::Lot(..) | OrderState::NoLot(_) | OrderState::RetiredCurrent(_)) => {
-                Err(format!("a retired (lot layout) state is not a state of the pinned {} template", id.name()))
-            }
-            (Tpl::Retired(_), OrderState::Current(_)) => Err("a current state is not a state of a retired template".into()),
-        }
-    }
-
-    /// The order's P2SH script public key for a state.
-    pub fn spk(&self, s: &OrderState) -> Result<ScriptPublicKey, String> {
-        let span = self.encode(s)?;
-        Ok(match self {
-            Tpl::Pinned(id) => template(*id).spk(&span),
-            Tpl::Retired(r) => r.template.spk(&span),
-        })
-    }
-}
-
-/// The same state with another `amountLeft` (base units; `None` for a bid, whose quantity is its escrow, and for a
-/// retired state, which counts lots: see [`with_lots_left`]).
-pub fn with_amount_left(s: &OrderState, n: i64) -> Option<OrderState> {
-    if let OrderState::NoLot(x) = s {
-        return Some(OrderState::NoLot(NoLotCross { amount_left: n, ..x.clone() }));
-    }
-    let OrderState::Current(s) = s else { return None };
+/// The same state with another `amountLeft` (base units; `None` for a bid, whose quantity is its escrow).
+pub fn with_amount_left(s: &AnyState, n: i64) -> Option<AnyState> {
     let mut s = s.clone();
     match &mut s {
         AnyState::KobAsk(x) | AnyState::KobAskKron(x) => x.amount_left = n,
@@ -315,56 +123,10 @@ pub fn with_amount_left(s: &OrderState, n: i64) -> Option<OrderState> {
         AnyState::KobIfdPair(x) => x.amount_left = n,
         AnyState::KobBid(_) | AnyState::KobBidKron(_) => return None,
     }
-    Some(OrderState::Current(s))
+    Some(s)
 }
 
-/// A retired order's `lotsLeft` (the retired v2.6 lot layouts count lots; `None` for a bid, which has none, and for a
-/// current state).
-pub fn lots_left(s: &OrderState) -> Option<i64> {
-    let OrderState::Lot(l, _) = s else { return None };
-    Some(match l {
-        LotState::KobAsk(x) => x.lots_left,
-        LotState::KobCondAsk(x) => x.lots_left,
-        LotState::KobCondBid(x) => x.lots_left,
-        LotState::KobIfdBid(x) => x.lots_left,
-        LotState::KobIfdAsk(x) => x.lots_left,
-        LotState::KobCross(x) => x.lots_left,
-        LotState::KobBid(_) => return None,
-    })
-}
-
-/// The same retired state with another `lotsLeft` (`None` for a bid or a current state).
-pub fn with_lots_left(s: &OrderState, n: i64) -> Option<OrderState> {
-    let OrderState::Lot(l, fam) = s else { return None };
-    let mut l = l.clone();
-    match &mut l {
-        LotState::KobAsk(x) => x.lots_left = n,
-        LotState::KobCondAsk(x) => x.lots_left = n,
-        LotState::KobCondBid(x) => x.lots_left = n,
-        LotState::KobIfdBid(x) => x.lots_left = n,
-        LotState::KobIfdAsk(x) => x.lots_left = n,
-        LotState::KobCross(x) => x.lots_left = n,
-        LotState::KobBid(_) => return None,
-    }
-    Some(OrderState::Lot(l, *fam))
-}
-
-/// The base units one retired lot holds (`lotUnits x unit`; `None` for a bid, a current state or an overflow).
-pub fn lot_size(s: &OrderState) -> Option<i64> {
-    let OrderState::Lot(l, _) = s else { return None };
-    let (units, unit) = match l {
-        LotState::KobAsk(x) => (x.lot_units, x.unit),
-        LotState::KobCondAsk(x) => (x.lot_units, x.unit),
-        LotState::KobCondBid(x) => (x.lot_units, x.unit),
-        LotState::KobIfdBid(x) => (x.lot_units, x.unit),
-        LotState::KobIfdAsk(x) => (x.lot_units, x.unit),
-        LotState::KobCross(x) => (x.lot_units, x.unit),
-        LotState::KobBid(_) => return None,
-    };
-    units.checked_mul(unit).filter(|s| *s > 0)
-}
-
-/// Whether a current kind's script changes only in `amountLeft` (or never): its states differ in that one 8-byte window
+/// Whether a kind's script changes only in `amountLeft` (or never): its states differ in that one 8-byte window
 /// and no other field needs guessing. The search over amounts is still NOT exhaustive for such a kind: any amount at
 /// least `minFill` may have been filled.
 pub fn amount_is_the_only_mutable_field(id: TemplateId) -> bool {
@@ -372,20 +134,9 @@ pub fn amount_is_the_only_mutable_field(id: TemplateId) -> bool {
 }
 
 /// Whether a state's script never changes after placement, so one candidate is the whole search (a bid: its quantity is
-/// its escrow; a retired bid likewise).
-pub fn script_is_fixed(s: &OrderState) -> bool {
-    match s {
-        OrderState::Current(a) | OrderState::RetiredCurrent(a) => kob_protocol::state::mutable_windows(a.template_id()).is_empty(),
-        OrderState::Lot(l, _) => matches!(l, LotState::KobBid(_)),
-        // the v3 cross limit moves its amountLeft
-        OrderState::NoLot(_) => false,
-    }
-}
-
-/// Whether a retired kind's script changes only in `lotsLeft` (asks, bids and cross limits): the search over every
-/// `lotsLeft` is then exhaustive. The other retired kinds also move a stop, an armed band or repeat fields.
-pub fn lots_is_the_only_mutable_field(s: &OrderState) -> bool {
-    matches!(s, OrderState::Lot(LotState::KobAsk(_) | LotState::KobBid(_) | LotState::KobCross(_), _))
+/// its escrow).
+pub fn script_is_fixed(s: &AnyState) -> bool {
+    kob_protocol::state::mutable_windows(s.template_id()).is_empty()
 }
 
 /// A token amount in base units: a plain integer is base units; a decimal such as `1.5` is whole tokens and needs the

@@ -18,14 +18,14 @@
 import type { OrderView, TokenUtxoView } from '../data/indexer-types';
 import type { ExpectedSigning } from './decode';
 import {
-  asOrderState, baseKind, big, custodiesOf, extensionOf, familyOfKind, isCrossKind, isKind, isLegacyState, pairExtFor, pairFactsOf, quoteCovIdOf, tokenCovIdOf,
+  asOrderState, baseKind, big, custodiesOf, extensionOf, familyOfKind, isKind, pairExtFor, pairFactsOf, quoteCovIdOf, tokenCovIdOf,
   type CustodyFact,
 } from './order-facts';
 import { pairOfView } from './pair-view';
 import type { PlanIssue } from './plan-types';
 import type { ResolvedRecord } from './records';
 import type {
-  ActionRequest, AmendOrderRequest, BuiltTx, CancelRetiredRequest, FeeMode, CancelItem, CancelOrderRequest, CancelPositionRequest, Family, ForeignStrays, Hex, KeyUtxo, OrderState, OrderUtxo,
+  ActionRequest, AmendOrderRequest, BuiltTx, FeeMode, CancelItem, CancelOrderRequest, CancelPositionRequest, Family, ForeignStrays, Hex, KeyUtxo, OrderState, OrderUtxo,
   Replacement, SweepOrderRequest, TokenProgram, TokenState, TokenUtxo, U64, Utxo,
 } from './types';
 import { custodyState, extensionMatches, extensionOfState, familyOfProgram, familyOfState, isCovenantOwned, isKeyOwned } from './token-state';
@@ -71,12 +71,6 @@ export interface OrderSnapshot {
   foreign?: ForeignStrays[];
   /** foreign strays without a proven state or program: nothing can build their spend, they stay with the order id (reported) */
   foreignUnproven?: UnprovenStray[];
-  /**
-   * the order was placed under a RETIRED template (docs/spec/template-retirement.md): `order.state` is its LEGACY lot state (kob-wasm
-   * `decodeRetired`, cast: only its maker, token and custody are read), `state` its span under the retired template. Spend-only: the maker's
-   * cancel (kob-wasm `buildCancelRetired`) is the one thing built for it.
-   */
-  retired?: { templateHash: Hex; state: Hex } | null;
 }
 
 export class SnapshotError extends Error {
@@ -99,7 +93,7 @@ export interface OwnToken { covenantId: Hex; tplHash: Hex; family: Family; ext: 
 
 /**
  * The tokens an order's own transfers move: a KAS-quoted order's token; a pair order's A and B (each with the program, family and the extension
- * commitment its state names); a retired cross limit's A and B.
+ * commitment its state names).
  */
 export function ownTokenFacts(st: OrderState): OwnToken[] {
   const pf = pairFactsOf(st);
@@ -108,23 +102,17 @@ export function ownTokenFacts(st: OrderState): OwnToken[] {
     return pf.a.covId === pf.b.covId ? [one(pf.a, 'base')] : [one(pf.a, 'base'), one(pf.b, 'quote')];
   }
   const s = st.state as unknown as Record<string, string | undefined>;
-  const famA: Family = isLegacyState(st) && s.aFamily !== undefined ? (s.aFamily === '2' ? 'kron' : 'kcc20') : familyOfKind(st.kind);
-  const out: OwnToken[] = [{ covenantId: s.tokenCovId ?? '', tplHash: s.tokenTplHash ?? '', family: famA, ext: extensionOf(st), role: 'base' }];
-  // a retired cross limit (legacy layout) also owns token B
-  if (isCrossKind(st.kind) && s.bCovId) out.push({ covenantId: s.bCovId, tplHash: s.bTplHash ?? '', family: s.bFamily === '2' ? 'kron' : 'kcc20', ext: s.bFamily === '2' ? null : (s.bExt ?? null), role: 'quote' });
-  return out;
+  return [{ covenantId: s.tokenCovId ?? '', tplHash: s.tokenTplHash ?? '', family: familyOfKind(st.kind), ext: extensionOf(st), role: 'base' }];
 }
 
 /** The covenant ids of the tokens an order's own transfers move (a pair order: A and B). */
 export const ownTokensOf = (st: OrderState): Hex[] => ownTokenFacts(st).map((t) => t.covenantId);
 
-/** The second own token of an order (a pair order's B, a retired cross limit's B), null for a KAS-quoted order. */
+/** The second own token of an order (a pair order's B), null for a KAS-quoted order. */
 export function secondTokenOf(st: OrderState): { covenantId: Hex; tplHash: Hex; family: Family; ext: Hex | null } | null {
   const t = ownTokenFacts(st).find((x) => x.role === 'quote');
   return t ? { covenantId: t.covenantId, tplHash: t.tplHash, family: t.family, ext: t.ext } : null;
 }
-/** @deprecated the cross limit is retired: {@link secondTokenOf} (kept for callers that still read a retired cross limit's B). */
-export const crossB = secondTokenOf;
 
 /**
  * OrderView (indexer) -> snapshot. Needs the decoded `state` of the CURRENT utxo, `current`, and the custody UTXO(s) the state holds; the token
@@ -226,7 +214,6 @@ export function snapshotFromRecord(resolved: ResolvedRecord, strays: TokenUtxo[]
   if (resolved.status !== 'live' || !resolved.order) throw new SnapshotError('not-live', `order ${resolved.covenantId} is ${resolved.status}, nothing to spend`);
   return {
     covenantId: resolved.covenantId, order: resolved.order, custody: resolved.custody, ...(resolved.prefund ? { prefund: resolved.prefund } : {}), strays, refundDueDaa: null, deadline, source: 'record',
-    ...(resolved.retired ? { retired: resolved.retired } : {}),
   };
 }
 
@@ -287,10 +274,7 @@ export interface RefundOrderRequest {
   ownKeys?: Hex[];
 }
 
-/** kob-wasm `buildCancelRetired` request, tagged for the planners (the tag is stripped before the call). */
-export type CancelRetiredAction = CancelRetiredRequest & { action: 'cancelRetired' };
-
-export type CancelRequest = CancelOrderRequest | AmendOrderRequest | CancelPositionRequest | RefundOrderRequest | CancelRetiredAction | SweepOrderRequest;
+export type CancelRequest = CancelOrderRequest | AmendOrderRequest | CancelPositionRequest | RefundOrderRequest | SweepOrderRequest;
 
 export interface CancelPlan {
   ok: boolean;
@@ -349,10 +333,6 @@ function withChange(env: CancelEnv, built: BuiltTx, expected: ExpectedSigning): 
 
 const kobBuild = (env: CancelEnv, r: CancelRequest): BuiltTx => {
   const g = guardRequest(r, { maker: env.maker, changeTo: env.changeTo });
-  if (r.action === 'cancelRetired') {
-    const { action: _tag, ...req } = g as CancelRetiredAction & { ownKeys: Hex[] };
-    return env.kob.buildCancelRetired(req);
-  }
   return env.kob.build(g as unknown as ActionRequest);
 };
 
@@ -499,8 +479,8 @@ function prepareForeign(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions
   const out: ForeignStrays[] = [];
   for (const g of snap.foreign ?? []) {
     const room = programSlots(env.kob, g.token.program);
-    if (room === null || snap.retired || own.includes(g.token.covenantId)) {
-      // not a pinned token program (or a retired order's cancel, which moves no foreign token): nothing here can build its spend
+    if (room === null || own.includes(g.token.covenantId)) {
+      // not a pinned token program: nothing here can build its spend
       for (const u of g.utxos) left({ outpoint: outpointOf(u), amount: big(u.state.amount) });
       continue;
     }
@@ -591,11 +571,6 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
 
 const isErr = (p: Prepared | { error: PlanIssue[] }): p is { error: PlanIssue[] } => 'error' in p;
 
-/** The order UTXO without its decoded state (the retired cancel takes a plain UTXO; the state goes as the retired span). */
-const plainUtxo = (o: OrderUtxo<OrderState>): Utxo => ({
-  transactionId: o.transactionId, index: o.index, amount: o.amount, ...(o.blockDaaScore !== undefined ? { blockDaaScore: o.blockDaaScore } : {}), covenantId: o.covenantId,
-});
-
 /** `quoteReturned` of a plan when the order owns a quote token (a pair order), else nothing. */
 const quoteField = (snap: OrderSnapshot, quote: bigint): { quoteReturned?: bigint } => (ownTokenFacts(snap.order.state).some((t) => t.role === 'quote') ? { quoteReturned: quote } : {});
 
@@ -606,21 +581,12 @@ export function planCancel(env0: CancelEnv, order: OrderSnapshot, opts: CancelOp
   const env = withUrgency(env0, 'normal');
   const p = prepare(env, order, opts);
   if (isErr(p)) return failed(p.error);
-  const ret = order.retired ?? null;
-  const make = (funding: KeyUtxo[]): CancelRequest =>
-    ret
-      ? {
-          // an order of a retired template: its maker's cancel through that template (the order UTXO goes without its decoded state)
-          action: 'cancelRetired', templateHash: ret.templateHash, state: ret.state, order: plainUtxo(p.item.order), custody: p.item.custody ?? null,
-          strays: p.item.strays ?? [], funding, change: env.changeTo ?? null, fee: feeOpts(env),
-        }
-      : {
-          action: 'cancelOrder', order: p.item.order, custody: p.item.custody ?? null, ...(p.item.prefund ? { prefund: p.item.prefund } : {}), strays: p.item.strays ?? [],
-          tokens: [], funding, change: env.changeTo ?? null, replace: null, ...(p.foreign.length ? { foreign: p.foreign } : {}), lockTime: '0', records: [], fee: feeOpts(env),
-        };
+  const make = (funding: KeyUtxo[]): CancelRequest => ({
+    action: 'cancelOrder', order: p.item.order, custody: p.item.custody ?? null, ...(p.item.prefund ? { prefund: p.item.prefund } : {}), strays: p.item.strays ?? [],
+    tokens: [], funding, change: env.changeTo ?? null, replace: null, ...(p.foreign.length ? { foreign: p.foreign } : {}), lockTime: '0', records: [], fee: feeOpts(env),
+  });
   const r = buildWithFunding(env, make);
   if ('error' in r) return failed([...p.issues, r.error], [order.covenantId]);
-  if (ret) p.issues.push(issue('cancel.retired-template', 'info', 'this order was placed with an older contract version: this app can only cancel it'));
   const foreignReturned = foreignReturnedOf(p.foreign);
   const back = returnedOf(p.item, p.snap);
   return {
@@ -672,7 +638,7 @@ const AMEND_KEEPS_BID = ['maker', 'tokenCovId', 'tokenTplHash', 'tplPrefixLen', 
  */
 export function amendsInPlace(order: OrderSnapshot, rep: OrderState, extraTokens?: TokenUtxo[]): boolean {
   const old = order.order.state;
-  if (old.kind !== rep.kind || order.retired) return false;
+  if (old.kind !== rep.kind) return false;
   const a = old.state as unknown as Record<string, string>;
   const b = rep.state as unknown as Record<string, string>;
   // a bid: same safety rules as an ask without the custody (nothing to keep exact), strays stay where they are so only a cancel-replace sweeps them
@@ -722,7 +688,6 @@ function planAmendInPlace(env: CancelEnv, order: OrderSnapshot, replacement: Rep
  */
 export function planCancelReplace(env0: CancelEnv, order: OrderSnapshot, replacement: ReplacementSpec, extraTokens?: TokenUtxo[], opts: CancelOptions = {}): CancelPlan {
   const env = withUrgency(env0, 'normal');
-  if (order.retired) return failed([issue('cancel.retired-cancel-only', 'error', 'an order of an older contract version can only be cancelled')], [order.covenantId]);
   const rep = replacement.order;
   const old = order.order.state;
   const issues: PlanIssue[] = [];
@@ -822,9 +787,8 @@ export function planCancelAll(env0: CancelEnv, orders: OrderSnapshot[], opts: Ca
       plans.push(failed(p.error, [o.covenantId]));
       continue;
     }
-    // an order of a retired template, and an order with foreign strays (a plain cancelOrder returns them; cancelPosition moves no other token),
-    // are cancelled in a transaction of their own
-    if (o.retired || p.foreign.length) {
+    // an order with foreign strays (a plain cancelOrder returns them; cancelPosition moves no other token) is cancelled in a transaction of its own
+    if (p.foreign.length) {
       groups.push({ key: `own:${o.covenantId}`, exts: new Map(), members: [p] });
       continue;
     }
@@ -903,7 +867,6 @@ export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
   if (st.state.maker !== env.maker) {
     return failed([issue('cancel.not-maker', 'error', 'this order belongs to another key: only its maker can sweep its strays', { covenantId: cov })]);
   }
-  if (snap.retired) return failed([issue('sweep.retired', 'error', 'an order of an older contract version can only be cancelled (its cancel returns the strays)')], [cov]);
   const issues: PlanIssue[] = [];
   let later = 0;
   const leaveLater = (xs: TokenUtxo[], why: 'extension' | 'slots') => {
@@ -1008,7 +971,6 @@ export function planRefund(env0: CancelEnv, order: OrderSnapshot, opts: { reclai
   if (order.order.state.state.maker !== env.maker) {
     return failed([issue('cancel.not-maker', 'error', 'this order belongs to another key', { covenantId: order.covenantId })]);
   }
-  if (order.retired) return failed([issue('cancel.retired-cancel-only', 'error', 'an order of an older contract version can only be cancelled')], [order.covenantId]);
   if (!env.clock) return failed([issue('refund.no-clock', 'error', 'the current DAA score is needed to refund')], [order.covenantId]);
   const issues: PlanIssue[] = [];
   const strayCount = order.strays.length + (order.foreign ?? []).reduce((a, g) => a + g.utxos.length, 0) + (order.foreignUnproven?.length ?? 0);

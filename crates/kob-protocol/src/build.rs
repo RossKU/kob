@@ -902,7 +902,7 @@ pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx>
     cancel_with(subject, &o.utxo, parts, budgets)
 }
 
-/// The inputs and options of a cancel (of [`CancelOrder`] or [`CancelRetired`]).
+/// The inputs and options of a cancel (of [`CancelOrder`]).
 struct CancelParts<'a> {
     custody: Option<&'a TokenUtxo>,
     prefund: Option<&'a TokenUtxo>,
@@ -917,9 +917,8 @@ struct CancelParts<'a> {
     fee: &'a FeeOptions,
 }
 
-/// What the maker's cancel of one order needs: its maker, its own tokens (a pair order or a retired cross limit: A and
-/// B), the custodies it holds (token, exact amount), the order input's signing plan and budget role (a pinned template's
-/// state, or a retired template's lot state: [`build_cancel_retired`]).
+/// What the maker's cancel of one order needs: its maker, its own tokens (a pair order: A and B), the custodies it holds
+/// (token, exact amount), the order input's signing plan and budget role.
 struct CancelSubject {
     maker: [u8; 32],
     tokens: Vec<Token>,
@@ -929,7 +928,7 @@ struct CancelSubject {
 }
 
 /// The maker's cancel of an order (custody, strays of either of its tokens, foreign strays and the carrier back to the
-/// maker), optionally replacing it (`r.replace`; never for a retired template).
+/// maker), optionally replacing it (`r.replace`).
 fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets: BudgetFn) -> Result<BuiltTx> {
     let CancelSubject { maker, tokens, custodies, plan, role } = subject;
     let mut d = Draft::new(r.lock_time, r.fee, Some(r.change.unwrap_or(maker)))?;
@@ -1036,104 +1035,6 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
         d.payload = payload::encode(&records)?;
     }
     d.seal(budgets)
-}
-
-/// The maker's cancel of an order placed under a RETIRED template (`crate::retired`: spend-only support, so a live order
-/// of an older template can always be ended by its maker). Same transaction as [`build_cancel_order`] (custody, strays of
-/// either token and the carrier back to the maker), with the order input spending the retired script. The order's lot
-/// state ([`crate::retired::lot::LotState`]) gives the maker, the token, the custody amount (`lotsLeft × lotUnits ×
-/// unit`) and a cross limit's token B (strays).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CancelRetired {
-    /// The retired template's hash (`crate::retired::retired`).
-    #[serde(with = "crate::json::field")]
-    pub template_hash: [u8; 32],
-    /// The order's state span under the retired template (its current script).
-    #[serde(with = "crate::json::field")]
-    pub state: Vec<u8>,
-    /// The order UTXO.
-    pub order: Utxo,
-    #[serde(default)]
-    pub custody: Option<TokenUtxo>,
-    #[serde(default)]
-    pub strays: Vec<TokenUtxo>,
-    /// Foreign strays returned to the maker (as [`CancelOrder::foreign`]).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub foreign: Vec<ForeignStrays>,
-    #[serde(default)]
-    pub funding: Vec<KeyUtxo>,
-    /// Change key (default: the maker).
-    #[serde(with = "crate::json::field", default)]
-    pub change: Option<[u8; 32]>,
-    #[serde(default)]
-    pub fee: FeeOptions,
-}
-
-/// Builds the maker's cancel of an order of a retired template.
-pub fn build_cancel_retired(r: &CancelRetired, budgets: BudgetFn) -> Result<BuiltTx> {
-    let rt = crate::retired::by_hash(&r.template_hash).ok_or_else(|| {
-        Error::Invalid(format!("{} is not a retired template this build can spend", crate::json::to_hex(&r.template_hash)))
-    })?;
-    let state = crate::retired::decode_any(rt, &r.state)?;
-    let maker = state.maker();
-    check_key(&maker, "order maker")?;
-    let (cov, tpl_hash, pre, suf) = state.token();
-    let program = token_program(&tpl_hash, pre, suf)?;
-    // the token's family: the template's (a lot template), or the v3 cross limit's aFamily
-    let family = if rt.is_no_lot() {
-        state.a_family().ok_or_else(|| Error::Invalid("cross limit: aFamily must be 1 (KCC-20) or 2 (KRON)".into()))?
-    } else {
-        rt.family
-    };
-    if program.family() != family {
-        return invalid(format!("the retired {} order's token program {} is of the other family", rt.kind_name(), program.name()));
-    }
-    let token: Token = (cov, program);
-    let mut custodies = vec![];
-    if state.holds_tokens() {
-        let amount = state.custody_amount().ok_or_else(|| Error::Invalid("the retired order's custody amount overflows".into()))?;
-        if amount > 0 {
-            custodies.push((token, amount));
-        }
-    }
-    let mut tokens = vec![token];
-    if let Some((b_family, b_cov, b_tpl, b_pre, b_suf)) = state.cross_b() {
-        let fam = crate::state::family_of_code(b_family)
-            .ok_or_else(|| Error::Invalid("cross limit: bFamily must be 1 (KCC-20) or 2 (KRON)".into()))?;
-        let bp = token_program(&b_tpl, b_pre, b_suf)?;
-        if bp.family() != fam {
-            return invalid(format!("cross limit: token B program {} is not of the bFamily {fam:?}", bp.name()));
-        }
-        tokens.push((b_cov, bp));
-    }
-    let subject = CancelSubject {
-        maker,
-        tokens,
-        custodies,
-        plan: SigPlan::Retired {
-            template_hash: r.template_hash,
-            state: r.state.clone(),
-            entry: "cancel".into(),
-            args: vec![Arg::Sig(maker)],
-        },
-        // a retired template's cancel has its own budget role: its script is not today's (an older template is often larger)
-        role: format!("{}.cancel.retired.{}@{}", rt.kind.name(), &crate::json::to_hex(&r.template_hash)[..8], program.name()),
-    };
-    let parts = CancelParts {
-        custody: r.custody.as_ref(),
-        prefund: None,
-        strays: &r.strays,
-        foreign: &r.foreign,
-        tokens: &[],
-        funding: &r.funding,
-        change: r.change,
-        replace: None,
-        lock_time: 0,
-        records: &[],
-        fee: &r.fee,
-    };
-    cancel_with(subject, &r.order, parts, budgets)
 }
 
 /// The change rule of the amend builders (cancel-replace and in-place amend; `docs/spec/kob1-payload.md`, *Change*):

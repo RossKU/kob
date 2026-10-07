@@ -104,7 +104,7 @@ export async function confirmSnapshotOnNode(
   const own = ownTokenFacts(st);
   const tplOf = (token: Hex | null | undefined): Hex => own.find((t) => t.covenantId === token)?.tplHash ?? own[0]!.tplHash;
   const cs = custodiesOf(st);
-  const orderSpk = snap.retired ? kob.retiredScriptPublicKey(snap.retired.templateHash, snap.retired.state) : kob.scriptPublicKey(st);
+  const orderSpk = kob.scriptPublicKey(st);
   // each custody on its own token's program (the first: custodies[0], the prefund: custodies[1])
   const custodyToken = cs[0]?.token ?? own[0]!.covenantId;
   const prefundToken = cs[1]?.token ?? null;

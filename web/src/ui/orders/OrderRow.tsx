@@ -130,8 +130,8 @@ export function OrderRow(props: OrderRowProps) {
 
   const disabledReason = !canSign ? t('orders.actions.needWallet') : undefined;
   const cancelHint = row.canCancel ? undefined : row.cancelBlocked ? t(`orders.cancelBlocked.${row.cancelBlocked}`) : t('orders.actions.cannotCancel');
-  // strays of a live order the wallet can spend: the maker's sweep returns them while the order lives on (a retired template's order: cancel only)
-  const canSweep = row.live && row.canCancel && row.strayCount > 0 && !row.retiredTemplate;
+  // strays of a live order the wallet can spend: the maker's sweep returns them while the order lives on
+  const canSweep = row.live && row.canCancel && row.strayCount > 0;
 
   return (
     <div class={`order-card${props.nested ? ' nested' : ''}`} data-testid={`order-row-${row.id}`} data-status={row.status} data-type={row.typeKey} data-side={row.side} data-live={row.live ? '1' : '0'}>
@@ -153,7 +153,6 @@ export function OrderRow(props: OrderRowProps) {
           {row.possiblyFrozen ? <Badge tone="bad" title={t('orders.frozen.hint')} data-testid="order-frozen-badge">{t('orders.frozen.badge')}</Badge> : null}
           {row.custodyOk === false ? <Badge tone="bad" data-testid="order-custody-bad">{t('orders.custodyBad')}</Badge> : null}
           {row.oldTemplate ? <Badge tone="warn" title={t('orders.oldTemplate.hint')} data-testid="order-old-template">{t('orders.oldTemplate.badge')}</Badge> : null}
-          {row.retiredTemplate ? <Badge tone="warn" title={t('orders.retired.hint')} data-testid="order-retired-template">{t('orders.retired.badge')}</Badge> : null}
           {row.source !== 'indexer' ? <Badge tone="warn" title={t(`orders.source.${row.source}Hint`)} data-testid="order-source">{t(`orders.source.${row.source}`)}</Badge> : null}
         </div>
         <div class="small muted">

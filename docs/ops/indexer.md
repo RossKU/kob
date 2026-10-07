@@ -16,10 +16,9 @@ Protocol v3 (no lots) changes that matter to an indexer operator (details in Par
   `amount_exact`; `order_events.amount`; `order_utxos.spent_amount`). A database written before v3 (its `orders` table has the
   old `lot_units` column) is refused untouched by every writer and reader: move it aside and run `kob-executor index replay`,
   which rebuilds it from the record log.
-* **Old record logs still read.** Every frame decodes; reveals of the retired templates (format-1 frames, which all predate v3,
-  and format-2 frames naming a retired template hash, `indexer::layouts`, the fourteen v2.6 templates included) are dropped and
-  counted. Placement records of payload versions 2 and 3 (orders of retired templates) never become orders: each is a reject
-  `retired_template:<kind>`.
+* **Templates this build does not pin are unknown.** In a record log, reveals of a template hash this build does not pin are
+  dropped and counted, and format-1 frames (written before 2026-10-01) are skipped and counted. Placement records of payload
+  version 3 and version-2 `ORDER` records do not decode (a `payload:` reject), so their orders never appear.
 * **Listing.** `non_standard_scale` (an order of a token with `decimals` must use `10^decimals`, at most `10^9`) replaces the
   standard-lot rule; `min_order_value_sompi` (default 1 KAS: the order's amount at its quote, a bid's escrow) replaces the minimum
   lot value (`order_value_below_minimum`). An allowlist entry's `lot_size` key is ignored.

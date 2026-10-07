@@ -68,7 +68,7 @@ fi
 # Manifest of every input and output, so a change to any of them is visible in review. The deployment
 # builds under contracts/deploy/ have their own SHA256SUMS (scripts/build-deploy.sh).
 manifest() {
-  { find contracts -path contracts/deploy -prune -o \( -name '*.sil' -o -name '*.ctor.json' -o -name '*.bin' -o -name '*.json' -path 'contracts/artifacts/*' -o -type f -path 'contracts/argent/*' -o -type f -path 'contracts/third-party/*' -o -type f -path 'contracts/retired/*' \) -print ; } \
+  { find contracts -path contracts/deploy -prune -o \( -name '*.sil' -o -name '*.ctor.json' -o -name '*.bin' -o -name '*.json' -path 'contracts/artifacts/*' -o -type f -path 'contracts/argent/*' -o -type f -path 'contracts/third-party/*' \) -print ; } \
     | LC_ALL=C sort | while IFS= read -r f; do
         printf '%s  %s\n' "$(tr -d '\r' < "$f" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)" "$f"
       done

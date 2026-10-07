@@ -26,7 +26,6 @@ use crate::rpc::types::{Tx, TxInput};
 use crate::script::{p2sh_spk, parse_pushes, parse_spk};
 use crate::wire::{Reader, WireError, WireResult, Writer};
 use kob_protocol::artifacts::{template, token_template, TemplateId};
-use kob_protocol::family::Family;
 use kob_protocol::payload::{self, Record};
 use kob_protocol::state::{AnyState, Kcc20State, KronState, TokenState};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -147,19 +146,6 @@ pub struct TxRecord {
 /// fact of the reject, not the junk. The processor reports it as `payload:undecodable`.
 pub const UNDECODABLE_PAYLOAD: &[u8] = b"KOB1\xff";
 
-/// Stand-in stored for a KOB1 payload of RETIRED templates (payload versions 2 and 3: `Record::RetiredOrder` /
-/// `RetiredAmend`, which are decoded but never written): this marker, then the kind names of its retired records,
-/// comma-separated. Such records never become orders; the processor counts each as a reject (`retired_template:<kind>`). The
-/// stand-in never decodes as a payload (version 0xfe).
-pub const RETIRED_PAYLOAD: &[u8] = b"KOB1\xfe";
-
-/// The kind names a [`RETIRED_PAYLOAD`] stand-in lists (`None` for any other payload).
-pub fn retired_payload_kinds(payload: &[u8]) -> Option<Vec<String>> {
-    let rest = payload.strip_prefix(RETIRED_PAYLOAD)?;
-    let names = std::str::from_utf8(rest).ok()?;
-    Some(names.split(',').filter(|k| !k.is_empty()).map(str::to_string).collect())
-}
-
 /// Set in the encoded `pos` when the record has a `holds` section.
 const HOLDS_FLAG: u64 = 1 << 31;
 
@@ -174,106 +160,58 @@ pub type TemplateTable = std::collections::BTreeMap<u8, [u8; 32]>;
 /// itself is kept in the log (it is hash-chained and never rewritten); a later build that knows the layout reads it.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DecodeStats {
-    /// Order reveals of a retired template (an older artifact of a kind this build has: `layouts`), dropped.
-    pub retired_reveals: u64,
-    /// Order reveals of a template this build does not know at all (format 2 only), dropped.
+    /// Order reveals of a template this build does not pin, dropped.
     pub unknown_reveals: u64,
     /// Token holdings of a token program layout this build does not know, dropped.
     pub unknown_holds: u64,
     /// Recovery imports of an order layout this build does not know, dropped.
     pub unknown_imports: u64,
-    /// Format-1 frames whose reveals fit more than one layout and were resolved by decoding the whole frame.
-    pub ambiguous_frames: u64,
 }
 
 impl DecodeStats {
     pub fn add(&mut self, o: &DecodeStats) {
-        self.retired_reveals += o.retired_reveals;
         self.unknown_reveals += o.unknown_reveals;
         self.unknown_holds += o.unknown_holds;
         self.unknown_imports += o.unknown_imports;
-        self.ambiguous_frames += o.ambiguous_frames;
     }
 
     /// Items dropped (reveals, holdings, imports).
     pub fn dropped(&self) -> u64 {
-        self.retired_reveals + self.unknown_reveals + self.unknown_holds + self.unknown_imports
+        self.unknown_reveals + self.unknown_holds + self.unknown_imports
     }
 }
 
-enum Fmt<'a> {
-    /// Format 1: states at the length the template had when written; candidate layouts chosen by `forced` (the frame
-    /// search), every choice point traced.
-    V1 { forced: &'a [usize], trace: Vec<(usize, usize)> },
-    /// Format 2: length-prefixed states; the frame's tables (`None`: this build's templates).
-    V2 { orders: Option<&'a TemplateTable>, programs: Option<&'a TemplateTable> },
-}
-
-/// How a record being decoded is laid out (record-log format and the frame's template tables) and what was dropped.
+/// How a record being decoded is laid out (the frame's template tables) and what was dropped.
 pub struct DecodeCtx<'a> {
-    fmt: Fmt<'a>,
+    /// The frame's tables (`None`: this build's templates).
+    orders: Option<&'a TemplateTable>,
+    programs: Option<&'a TemplateTable>,
     pub stats: DecodeStats,
 }
 
-/// What a reveal's code and hash resolve to.
-enum OrderLayout {
-    Current(TemplateId),
-    Retired,
-    Unknown,
-}
-
 impl<'a> DecodeCtx<'a> {
-    /// Format 2 with this build's templates (a record encoded by this build on its own).
+    /// This build's templates (a record encoded by this build on its own).
     pub fn current() -> DecodeCtx<'static> {
-        DecodeCtx { fmt: Fmt::V2 { orders: None, programs: None }, stats: DecodeStats::default() }
+        DecodeCtx { orders: None, programs: None, stats: DecodeStats::default() }
     }
 
-    /// Format 2 with a frame's tables.
+    /// A frame's tables.
     pub fn v2(orders: &'a TemplateTable, programs: &'a TemplateTable) -> DecodeCtx<'a> {
-        DecodeCtx { fmt: Fmt::V2 { orders: Some(orders), programs: Some(programs) }, stats: DecodeStats::default() }
+        DecodeCtx { orders: Some(orders), programs: Some(programs), stats: DecodeStats::default() }
     }
 
-    /// Format 1, taking the candidate `forced[k]` at the k-th ambiguous reveal (0 past the end).
-    pub fn v1(forced: &'a [usize]) -> DecodeCtx<'a> {
-        DecodeCtx { fmt: Fmt::V1 { forced, trace: vec![] }, stats: DecodeStats::default() }
-    }
-
-    fn is_v1(&self) -> bool {
-        matches!(self.fmt, Fmt::V1 { .. })
-    }
-
-    /// The choice points of a format-1 decode: `(candidate taken, candidates)`.
-    fn trace(&self) -> &[(usize, usize)] {
-        match &self.fmt {
-            Fmt::V1 { trace, .. } => trace,
-            Fmt::V2 { .. } => &[],
-        }
-    }
-
-    /// Format 2: the layout an order code of the frame refers to.
-    fn order_layout(&self, code: u8) -> WireResult<OrderLayout> {
-        let Fmt::V2 { orders, .. } = &self.fmt else { unreachable!("format 2 only") };
+    /// The pinned template an order code of the frame refers to (`None`: a template this build does not pin).
+    fn order_layout(&self, code: u8) -> WireResult<Option<TemplateId>> {
         let current = model::from_wire_code(code);
-        let Some(table) = orders else {
-            return Ok(match current {
-                Some(id) => OrderLayout::Current(id),
-                None if model::is_retired_wire_code(code) => OrderLayout::Retired,
-                None => OrderLayout::Unknown,
-            });
-        };
+        let Some(table) = self.orders else { return Ok(current) };
         let hash = table.get(&code).ok_or(WireError("template code missing from the frame's table"))?;
-        Ok(match current {
-            Some(id) if &template(id).hash == hash => OrderLayout::Current(id),
-            _ if super::layouts::retired_by_hash(hash).is_some() => OrderLayout::Retired,
-            _ => OrderLayout::Unknown,
-        })
+        Ok(current.filter(|id| &template(*id).hash == hash))
     }
 
-    /// Format 2: the token program a holding's code refers to, when this build has that exact program.
+    /// The token program a holding's code refers to, when this build has that exact program.
     fn program(&self, code: u8) -> WireResult<Option<TemplateId>> {
-        let Fmt::V2 { programs, .. } = &self.fmt else { unreachable!("format 2 only") };
         let current = program_from_code(code);
-        let Some(table) = programs else { return Ok(current) };
+        let Some(table) = self.programs else { return Ok(current) };
         let hash = table.get(&code).ok_or(WireError("token program code missing from the frame's table"))?;
         Ok(current.filter(|p| &token_template(*p).hash == hash))
     }
@@ -281,77 +219,22 @@ impl<'a> DecodeCtx<'a> {
     /// Reads a reveal (after its flag): `Some` when this build can interpret it, `None` when it was dropped.
     fn reveal(&mut self, r: &mut Reader<'_>) -> WireResult<Option<Reveal>> {
         let code = r.u8()?;
-        if self.is_v1() {
-            return self.reveal_v1(code, r);
-        }
         let state = r.bytes()?.to_vec();
         let tag: [u8; 4] = r.raw(4)?.try_into().expect("4");
         let args = read_args(r)?;
         Ok(match self.order_layout(code)? {
-            OrderLayout::Current(id) if state.len() == template(id).state_len => Some(Reveal { template: id, state, tag, args }),
-            OrderLayout::Current(_) | OrderLayout::Unknown => {
+            Some(id) if state.len() == template(id).state_len => Some(Reveal { template: id, state, tag, args }),
+            _ => {
                 self.stats.unknown_reveals += 1;
                 None
             }
-            OrderLayout::Retired => {
-                self.stats.retired_reveals += 1;
-                None
-            }
         })
-    }
-
-    /// Format 1: the state length is not recorded. Every format-1 frame was written before protocol v3 (format 2 replaced it
-    /// on 2026-10-01), so its reveals are of templates that are retired now (`super::layouts`: most v3 templates have the
-    /// state length and the dispatch tags of their v2.6 predecessor, so a format-1 reveal must never be read as one of
-    /// today's). Candidates: the retired layouts of the code, one per state length; a candidate fits when the four bytes
-    /// after its state are one of its dispatch tags. Several fitting candidates make a choice point (the frame search tries
-    /// them in order). The reveal is parsed past and dropped, counted.
-    fn reveal_v1(&mut self, code: u8, r: &mut Reader<'_>) -> WireResult<Option<Reveal>> {
-        let mut cands: Vec<usize> = vec![];
-        for l in super::layouts::retired(code) {
-            if !cands.contains(&l.state_len) && r.peek(l.state_len, 4).is_some_and(|t| l.has_tag(t)) {
-                cands.push(l.state_len);
-            }
-        }
-        if cands.is_empty() {
-            // nothing fits by its tag: the layout the last format-1 writers had, the protocol v2.6 template of the kind (an
-            // error surfaces at the frame level); a retired code (the v2.4 receipt): the length all its layouts share
-            let fam = if code & 0x80 != 0 { Family::Kron } else { Family::Kcc20 };
-            let v26 = model::from_wire_code(code)
-                .and_then(|_| kob_protocol::retired::payload_layout(fam, code & 0x7f))
-                .map(|r| r.template.state_len);
-            let mut lens = super::layouts::retired(code).map(|l| l.state_len);
-            match (v26, lens.next()) {
-                (Some(len), _) => cands.push(len),
-                (None, Some(len)) if lens.all(|l| l == len) => cands.push(len),
-                _ => return Err(WireError("unknown template code")),
-            }
-        }
-        let pick = if cands.len() > 1 {
-            let Fmt::V1 { forced, trace } = &mut self.fmt else { unreachable!("format 1") };
-            let k = forced.get(trace.len()).copied().unwrap_or(0).min(cands.len() - 1);
-            trace.push((k, cands.len()));
-            cands[k]
-        } else {
-            cands[0]
-        };
-        r.raw(pick)?;
-        r.raw(4)?;
-        read_args(r)?;
-        self.stats.retired_reveals += 1;
-        Ok(None)
     }
 
     /// Reads a holding: `None` when its program layout is not this build's (dropped).
     fn hold(&mut self, r: &mut Reader<'_>) -> WireResult<Option<HeldOut>> {
         let out = r.var()? as u32;
         let code = r.u8()?;
-        if self.is_v1() {
-            let program = program_from_code(code).ok_or(WireError("unknown token program code"))?;
-            let tpl = token_template(program);
-            let state = TokenState::decode_with(tpl, r.raw(tpl.state_len)?).map_err(|_| WireError("token state"))?;
-            return Ok(Some(HeldOut { out, program, state }));
-        }
         let raw = r.bytes()?;
         let held = self.program(code)?.and_then(|program| {
             let tpl = token_template(program);
@@ -366,18 +249,9 @@ impl<'a> DecodeCtx<'a> {
         Ok(held)
     }
 
-    /// An imported order's template: `None` (counted) when this build cannot interpret its state. A format-1 import (written
-    /// before protocol v3) is always of a retired template ([`DecodeCtx::reveal_v1`]).
+    /// An imported order's template: `None` (counted) when this build cannot interpret its state.
     pub(crate) fn import_template(&mut self, code: u8, state_len: usize) -> WireResult<Option<TemplateId>> {
-        let id = if self.is_v1() {
-            None
-        } else {
-            match self.order_layout(code)? {
-                OrderLayout::Current(id) => Some(id),
-                _ => None,
-            }
-        };
-        let id = id.filter(|id| template(*id).state_len == state_len);
+        let id = self.order_layout(code)?.filter(|id| template(*id).state_len == state_len);
         if id.is_none() {
             self.stats.unknown_imports += 1;
         }
@@ -394,57 +268,10 @@ fn read_args(r: &mut Reader<'_>) -> WireResult<Vec<Vec<u8>>> {
     Ok(args)
 }
 
-/// Most frame decodes a format-1 frame may take to resolve ambiguous reveals.
-const MAX_V1_ATTEMPTS: usize = 256;
-
-/// Decodes a whole format-1 body with `f`, backtracking over the choice points of ambiguous reveals (depth first, today's
-/// layout first) until one decodes the whole body.
-pub fn decode_v1<T>(
-    body: &[u8],
-    mut f: impl FnMut(&mut Reader<'_>, &mut DecodeCtx<'_>) -> WireResult<T>,
-) -> WireResult<(T, DecodeStats)> {
-    let mut forced: Vec<usize> = vec![];
-    for attempt in 0..MAX_V1_ATTEMPTS {
-        let mut ctx = DecodeCtx::v1(&forced);
-        let mut r = Reader::new(body);
-        let res = f(&mut r, &mut ctx).and_then(|v| if r.done() { Ok(v) } else { Err(WireError("trailing bytes")) });
-        match res {
-            Ok(v) => {
-                let ambiguous = attempt > 0 || !ctx.trace().is_empty();
-                let mut stats = ctx.stats;
-                stats.ambiguous_frames += ambiguous as u64;
-                return Ok((v, stats));
-            }
-            Err(e) => {
-                let mut trace = ctx.trace().to_vec();
-                while trace.last().is_some_and(|&(k, n)| k + 1 >= n) {
-                    trace.pop();
-                }
-                let Some(last) = trace.last_mut() else { return Err(e) };
-                last.0 += 1;
-                forced = trace.iter().map(|d| d.0).collect();
-            }
-        }
-    }
-    Err(WireError("too many ambiguous reveals"))
-}
-
 impl TxRecord {
     /// Encodes the record in record-log format 2 (length-prefixed states; the frame carries the template tables, see
     /// [`TxRecord::templates`]).
     pub fn encode(&self, w: &mut Writer) {
-        self.encode_as(w, 2)
-    }
-
-    /// Encodes the record in record-log format 1 (states at their length, unmarked): what builds before 2026-10-01
-    /// wrote. Tests and tools reproduce old logs with it; this build never writes it.
-    #[doc(hidden)]
-    pub fn encode_v1(&self, w: &mut Writer) {
-        self.encode_as(w, 1)
-    }
-
-    fn encode_as(&self, w: &mut Writer, format: u8) {
-        let state = |w: &mut Writer, s: &[u8]| if format == 1 { w.raw(s) } else { w.bytes(s) };
         w.hash(&self.txid);
         w.var(self.pos as u64 | if self.holds.is_empty() { 0 } else { HOLDS_FLAG });
         w.bytes(&self.payload);
@@ -460,7 +287,7 @@ impl TxRecord {
             }
             if let Some(r) = &i.reveal {
                 w.u8(code_of(r.template));
-                state(w, &r.state);
+                w.bytes(&r.state);
                 w.raw(&r.tag);
                 w.var(r.args.len() as u64);
                 for a in &r.args {
@@ -489,7 +316,7 @@ impl TxRecord {
             for h in &self.holds {
                 w.var(h.out as u64);
                 w.u8(program_code(h.program).expect("token program"));
-                state(w, &h.state.encode());
+                w.bytes(&h.state.encode());
             }
         }
     }
@@ -507,11 +334,6 @@ impl TxRecord {
     /// Decodes a record this build encoded on its own (format 2, this build's templates).
     pub fn decode(r: &mut Reader<'_>) -> WireResult<TxRecord> {
         TxRecord::decode_in(r, &mut DecodeCtx::current())
-    }
-
-    /// Decodes a format-1 record (record logs written before 2026-10-01) on its own: the whole input is the record.
-    pub fn decode_v1(body: &[u8]) -> WireResult<(TxRecord, DecodeStats)> {
-        decode_v1(body, TxRecord::decode_in)
     }
 
     pub fn decode_in(r: &mut Reader<'_>, ctx: &mut DecodeCtx<'_>) -> WireResult<TxRecord> {
@@ -873,19 +695,11 @@ impl Extractor<'_> {
         // re-encoded canonically; an undecodable payload is replaced by a five-byte stand-in that the processor rejects.
         let mut kept: Vec<Record> = vec![];
         let mut undecodable = false;
-        // kind names of the payload's records of retired templates (payload versions 2 and 3): counted, never orders
-        let mut retired: Vec<String> = vec![];
         if has_kob1 {
             match payload::decode(&tx.payload.0) {
                 Ok(Some(p)) => {
                     for r in p.records {
-                        if let Record::RetiredOrder { template, family, .. } | Record::RetiredAmend { template, family, .. } = &r {
-                            relevant = true;
-                            if retired.len() < tx.outputs.len().max(1) {
-                                let fam = Family::from_code(*family).unwrap_or(Family::Kcc20);
-                                retired.push(fam.kind_name(template.base().name()));
-                            }
-                        } else if let Record::Order { template: t, state, .. } = &r {
+                        if let Record::Order { template: t, state, .. } = &r {
                             relevant = true;
                             if let Ok(s) = AnyState::decode(*t, state) {
                                 payload_tokens.insert(Hash32(s.token_cov_id()));
@@ -1017,10 +831,6 @@ impl Extractor<'_> {
         }
         let payload = if undecodable {
             UNDECODABLE_PAYLOAD.to_vec()
-        } else if !retired.is_empty() {
-            // a payload of retired templates holds nothing else this build applies (its sweeps name orders of those
-            // templates, which are not tracked)
-            [RETIRED_PAYLOAD, retired.join(",").as_bytes()].concat()
         } else if kept.is_empty() {
             vec![]
         } else {
@@ -1080,9 +890,9 @@ mod tests {
         }
         // a log written before the KRON family existed only has codes below 0x80
         assert_eq!(crate::model::wire_code(TemplateId::KobAsk), 1);
-        // the retired v2.4 receipt codes decode to no template
+        // the v2.4 receipt codes decode to no template
         assert_eq!(crate::model::from_wire_code(7), None);
-        assert!(crate::model::is_retired_wire_code(7) && crate::model::is_retired_wire_code(0x87));
+        assert_eq!(crate::model::from_wire_code(0x87), None);
         assert_eq!(crate::model::wire_code(TemplateId::KobCondBidKron), 0x84);
         let id = TemplateId::KobIfdAskKron;
         let st = template(id).contract().compiled.bytecode[1..1 + template(id).state_len].to_vec();
@@ -1104,71 +914,6 @@ mod tests {
         let mut w = Writer::new();
         rec.encode(&mut w);
         assert_eq!(TxRecord::decode(&mut Reader::new(&w.buf)).unwrap(), rec);
-    }
-
-    #[test]
-    fn an_old_log_with_a_retired_receipt_reveal_still_reads() {
-        // a v2.4 record: one covenant input revealing a KobReceipt (code 7, 120-byte state span), no outputs
-        for code in [7u8, 0x87] {
-            let mut w = Writer::new();
-            w.hash(&Hash32([1; 32]));
-            w.var(4);
-            w.bytes(&[]);
-            w.var(1);
-            w.u8(3);
-            w.hash(&Hash32([2; 32]));
-            w.var(0);
-            w.hash(&Hash32([3; 32]));
-            w.var(77);
-            w.u8(code);
-            w.raw(&[0x5a; 120]);
-            w.raw(&[1, 2, 3, 4]);
-            w.var(1);
-            w.bytes(&[9]);
-            w.var(0);
-            w.var(0);
-            let (rec, stats) = TxRecord::decode_v1(&w.buf).unwrap();
-            assert_eq!(stats.retired_reveals, 1);
-            assert_eq!(rec.inputs.len(), 1);
-            assert_eq!(rec.inputs[0].cov, Some(Hash32([3; 32])));
-            assert!(rec.inputs[0].reveal.is_none(), "the receipt reveal is dropped");
-        }
-        // any other unknown code is still an error
-        let mut w = Writer::new();
-        w.hash(&Hash32([1; 32]));
-        w.var(4);
-        w.bytes(&[]);
-        w.var(1);
-        w.u8(3);
-        w.hash(&Hash32([2; 32]));
-        w.var(0);
-        w.hash(&Hash32([3; 32]));
-        w.var(77);
-        w.u8(0x7e);
-        assert!(TxRecord::decode_v1(&w.buf).is_err());
-    }
-
-    /// A KOB1 payload of version 3 (the protocol v2.6 lot templates, retired by v3) decodes into retired records: the
-    /// transaction is kept with a stand-in that names their kinds (the processor counts each as a reject), never as orders.
-    #[test]
-    fn a_placement_of_a_retired_template_is_kept_as_a_counted_stand_in() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../kob-protocol/vectors/payload_v3.json");
-        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let bytes = crate::hex::decode(v["payloads"][0]["payload"].as_str().unwrap()).unwrap();
-        assert!(matches!(payload::decode(&bytes).unwrap().unwrap().records[0], Record::RetiredOrder { .. }));
-        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
-        let tokens = crate::tokens::TokenAllowlist::default();
-        let ex = Extractor { conn: &conn, tokens: &tokens, track_traded: true };
-        let mut tx = crate::testkit::noise_tx(1, false);
-        tx.payload = crate::hex::HexBytes(bytes);
-        let rec = ex.extract(&tx, 0).unwrap().expect("relevant: the retired placement is counted");
-        assert_eq!(retired_payload_kinds(&rec.payload), Some(vec!["KobAsk".to_string()]));
-        assert!(payload::decode(&rec.payload).is_err(), "the stand-in never decodes as a payload");
-        // it survives the record log
-        let mut w = Writer::new();
-        rec.encode(&mut w);
-        assert_eq!(TxRecord::decode(&mut Reader::new(&w.buf)).unwrap(), rec);
-        assert_eq!(retired_payload_kinds(b"KOB1\xff"), None);
     }
 
     #[test]

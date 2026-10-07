@@ -1,5 +1,5 @@
 //! Pair orders routed through the KAS books in the matcher's global batch (`matcher::batch`, `matcher::pair`) on in-memory
-//! books: the port of the retired cross limit suite to `KobPair` orders, both sides. A pair ASK of A for B is filled through
+//! books: the port of the former cross limit suite to `KobPair` orders, both sides. A pair ASK of A for B is filled through
 //! plain KAS bids of A and plain KAS asks of B in one transaction, a pair BID through plain KAS bids of B (its B sold) and
 //! plain KAS asks of A (its A bought), at the token slot limits of both programs, with FOK / IOC rules, buying exactly the T
 //! its delivery needs (an ask's `ceil(n × p / scale)` of B, a bid's exactly n of A; more only when an ask's minimum fill forces

@@ -118,8 +118,7 @@ pub fn identify_kron_token(redeem: &[u8]) -> Option<(TemplateId, &[u8])> {
 
 /// One-byte code of an order template in the record log: the KOB1 kind code, with the high bit set for the
 /// KRON kinds (which share the codes of their KCC-20 twins). Logs written before the KRON family existed only
-/// hold codes below `0x80` and read back unchanged. The code of the retired v2.4 trade receipt is
-/// [`is_retired_wire_code`]: an old log still reads, its receipt reveals are dropped.
+/// hold codes below `0x80` and read back unchanged.
 pub fn wire_code(t: TemplateId) -> u8 {
     t.kind_code().expect("order template") | if t.family() == Family::Kron { 0x80 } else { 0 }
 }
@@ -128,12 +127,6 @@ pub fn wire_code(t: TemplateId) -> u8 {
 pub fn from_wire_code(code: u8) -> Option<TemplateId> {
     let family = if code & 0x80 != 0 { Family::Kron } else { Family::Kcc20 };
     TemplateId::from_kind_code(family, code & 0x7f)
-}
-
-/// The record-log code of the retired v2.4 trade receipt (`KobReceipt` 0x07, `KobReceiptKron` 0x87). A log written
-/// before protocol v2.6 may hold receipt reveals under it: they are read (their state span skipped, `indexer::layouts`) and dropped.
-pub fn is_retired_wire_code(code: u8) -> bool {
-    kob_protocol::artifacts::RETIRED_KIND_CODES.contains(&(code & 0x7f))
 }
 
 /// The family of a token program template hash (`None`: not a supported program).

@@ -216,10 +216,10 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
         let Some(fam) = u8::try_from(family).ok().and_then(Family::from_code) else { continue };
         let (Some(cov), Some(txid)) = (h32(cov), h32(txid)) else { continue };
         let Some(state) = tip_state(&contract, state) else { continue };
-        // An order placed under a template this build no longer pins (a database carried over a template change; a retired
-        // template with today's state layout decodes as today's kind) lives at the OLD script: nothing this build plans from
-        // today's template (a fill, kill, refund or close) hashes to it. Spend-only through its maker's retired cancel
-        // (`kob_protocol::retired`), never offered to the matcher or the keepers.
+        // An order placed under a template this build does not pin (a database carried over a template change: an older
+        // template with today's state layout decodes as today's kind) lives at a script nothing this build plans from today's
+        // template (a fill, kill, refund or close) hashes to. It is unknown here, like any other template: never offered to
+        // the matcher or the keepers.
         if kob_protocol::artifacts::try_template(state.template_id()).is_none_or(|t| t.hash[..] != tpl_hash[..]) {
             continue;
         }

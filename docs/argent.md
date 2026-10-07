@@ -212,8 +212,8 @@ state that pins another lock, and mixed extension commitments). Every entry that
 stand-in of exactly `lock_amount` units with the same commitment: it returns the lock's full value to the payer at the
 stand-in maker's expense. Intents created from the previous router templates (testnet-10 only, short-lived by their
 deadline) keep the old script: their payer's `cancel` and anyone's `expire` still validate on chain, but the stand-in
-attack still works on them, and today's builders do not build for their templates (router templates have no retirement
-path; `docs/spec/template-retirement.md` covers order templates).
+attack still works on them, and today's builders do not build for their templates (a template this build does not pin
+is unsupported: `docs/spec/template-retirement.md`).
 
 The spread between what an order releases and what the payer authorised (crossing spread, tips,
 auction decay) belongs to the keeper. For `TokenToKas` and `TokenSwap` the intent's own KAS carrier

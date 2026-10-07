@@ -127,9 +127,6 @@ pub enum TemplateId {
     /// If-done entry of a pair (IFD / IFO / bracket / repeat; buy-first and sell-first): one template for both sides and
     /// families. Kind code 0x0a.
     KobIfdPair,
-    /// RETIRED kind only: the lot-era cross limits (`crate::retired`, spend-only). No pinned template (the v3 cross limit
-    /// was never deployed and is replaced by the pair orders); not in [`TemplateId::ALL`].
-    KobCross,
     #[serde(rename = "KCC20Ref")]
     Kcc20Ref,
     #[serde(rename = "KCC20Ref_4x5")]
@@ -198,7 +195,6 @@ impl TemplateId {
             TemplateId::KobPair => "KobPair",
             TemplateId::KobCondPair => "KobCondPair",
             TemplateId::KobIfdPair => "KobIfdPair",
-            TemplateId::KobCross => "KobCross",
             TemplateId::Kcc20Ref => "KCC20Ref",
             TemplateId::Kcc20Ref4x5 => "KCC20Ref_4x5",
             TemplateId::Kcc20Ref8x8 => "KCC20Ref_8x8",
@@ -335,8 +331,6 @@ impl TemplateId {
             TemplateId::KobPair => 0x08,
             TemplateId::KobCondPair => 0x09,
             TemplateId::KobIfdPair => 0x0a,
-            // the retired lot cross limits had 0x08 (payload versions 2 and 3: `crate::retired::payload_layout`)
-            TemplateId::KobCross => 0x08,
             _ => return None,
         })
     }
@@ -346,7 +340,7 @@ impl TemplateId {
         matches!(self, TemplateId::KobPair | TemplateId::KobCondPair | TemplateId::KobIfdPair)
     }
 
-    /// Inverse of [`TemplateId::kind_code`] within a family over the pinned templates (`None` for a retired code; `0x08`,
+    /// Inverse of [`TemplateId::kind_code`] within a family over the pinned templates (`None` for a reserved code; `0x08`,
     /// `0x09`, `0x0a` are the pair kinds in both families).
     pub fn from_kind_code(family: Family, code: u8) -> Option<TemplateId> {
         TemplateId::ALL.into_iter().find(|t| t.kind_code() == Some(code) && t.serves(family))
@@ -409,7 +403,6 @@ fn embedded_json(id: TemplateId) -> &'static str {
         TemplateId::KobIfdBidKron => include_str!("../../../contracts/artifacts/KobIfdBidKron.json"),
         TemplateId::KobIfdAskKron => include_str!("../../../contracts/artifacts/KobIfdAskKron.json"),
         TemplateId::KronToken2433 | TemplateId::KronToken2732 => unreachable!("raw KRON programs have no artifact"),
-        TemplateId::KobCross => unreachable!("the cross limit kind is retired (no pinned template)"),
     }
 }
 

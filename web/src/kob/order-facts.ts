@@ -4,8 +4,8 @@
 // Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`; protocol v3, docs/spec/order-types.md): an amount of the BASE token A at a price in the
 // QUOTE token B per WHOLE A. Their states name both tokens (S / T for KobPair and KobCondPair, A / B for KobIfdPair); the helpers below read
 // them oriented A / B, so for the rest of the app "the order's token" is A, its scale scale(A), its price B base units per whole A, and its tip
-// KAS (sompi per whole A). The retired cross limit (`KobCross`) exists only as an order of a RETIRED template (`describeLegacy`).
-import type { AnyState, BaseKind, Family, Hex, IfdAskState, IfdBidState, KasKind, LegacyState, OrderKind, OrderState, PairKind, PairTriggerRule, RetiredKind, TemplateName } from './types';
+// KAS (sompi per whole A).
+import type { AnyState, BaseKind, Family, Hex, IfdAskState, IfdBidState, KasKind, OrderKind, OrderState, PairKind, PairTriggerRule, TemplateName } from './types';
 import type { KobWasm } from './wasm';
 import { quoteOf } from './units';
 
@@ -37,8 +37,6 @@ export const isOrderKind = (k: string): k is OrderKind => (ORDER_KINDS as readon
  * of B or both: {@link custodiesOf} says which, from the state).
  */
 export const holdsTokens = (k: OrderKind): boolean => (ASK_KINDS as readonly string[]).includes(baseKind(k)) || isPairKind(k);
-/** The retired cross limit (`KobCross`): only an order of a RETIRED template (decodeRetired) carries this kind. */
-export const isCrossKind = (k: OrderKind | RetiredKind | string): boolean => k === 'KobCross';
 /** Side of a KAS kind. A pair kind's side is in its state ({@link sideOf}); 'sell' is returned for it as a placeholder. */
 export const sideOfKind = (k: OrderKind): 'sell' | 'buy' => ((ASK_KINDS as readonly string[]).includes(baseKind(k)) || isPairKind(k) ? 'sell' : 'buy');
 /** Side of an order: KAS kinds by kind, pair kinds by their state (`side` 1 sells A, 2 buys A; a buy-first entry buys). */
@@ -116,9 +114,8 @@ export function pairFactsOf(o: { kind: string; state: object }): PairFacts | nul
 export function ownTokenIdsOf(o: { kind: string; state: object }): Hex[] {
   const pf = pairFactsOf(o);
   if (pf) return pf.a.covId === pf.b.covId ? [pf.a.covId] : [pf.a.covId, pf.b.covId];
-  const s = o.state as { tokenCovId?: Hex; bCovId?: Hex };
-  // a retired cross limit (legacy layout) also owns token B
-  return [s.tokenCovId ?? '', ...(isCrossKind(o.kind) && s.bCovId ? [s.bCovId] : [])].filter(Boolean);
+  const s = o.state as { tokenCovId?: Hex };
+  return [s.tokenCovId ?? ''].filter(Boolean);
 }
 
 /** One exact custody an order holds: the token, its amount and its role (`base` = the order's token A, `quote` = a pair order's B). */
@@ -131,7 +128,7 @@ export interface CustodyFact { token: Hex; amount: bigint; role: 'base' | 'quote
  */
 export function custodiesOf(o: OrderState, kob?: KobWasm): CustodyFact[] {
   const pf = pairFactsOf(o);
-  if (kob && !isLegacyState(o)) {
+  if (kob) {
     try {
       return kob.custodies(o).map((c) => ({ token: c.token, amount: c.amount, role: pf && c.token === pf.b.covId && pf.a.covId !== pf.b.covId ? 'quote' : 'base' }));
     } catch {
@@ -148,7 +145,7 @@ export function custodiesOf(o: OrderState, kob?: KobWasm): CustodyFact[] {
     if (custody > 0n) out.push({ token: pf.b.covId, amount: custody, role: 'quote' });
     return out;
   }
-  if (!holdsTokens(o.kind) && !isCrossKind(o.kind)) return [];
+  if (!holdsTokens(o.kind)) return [];
   const amount = custodyAmountOf(o);
   return amount === null ? [] : [{ token: tokenCovIdOf(o), amount, role: 'base' }];
 }
@@ -156,10 +153,9 @@ export function custodiesOf(o: OrderState, kob?: KobWasm): CustodyFact[] {
 /**
  * Custody token amount the order holds in its (first) custody: a KAS ask exactly `amountLeft` base units (matcher.md 1.2); a pair order its FIRST
  * custody of kob-protocol `custodies` (a sell-first entry's B prefund is the second: {@link custodiesOf}); null for KAS bid kinds and a pair order
- * without custody. An order of a RETIRED template carries its legacy lot state (`LegacyState`): its custody is `lotsLeft x lotUnits x unit`.
+ * without custody.
  */
 export function custodyAmountOf(o: OrderState): bigint | null {
-  if (isLegacyState(o)) return holdsTokens(o.kind) || isCrossKind(o.kind) ? retiredAmountLeft(o.state) : null;
   if (isPairKind(o.kind)) return custodiesOf(o)[0]?.amount ?? null;
   if (!holdsTokens(o.kind)) return null;
   return big((o.state as { amountLeft: string }).amountLeft);
@@ -168,66 +164,7 @@ export function custodyAmountOf(o: OrderState): bigint | null {
 /** Base units (of A for a pair order) still open (asks / entries / conditionals / pair orders); null for plain KAS bids, whose quantity is their KAS budget. */
 export function amountLeftOf(o: OrderState): bigint | null {
   if (baseKind(o.kind) === 'KobBid') return null;
-  if (isLegacyState(o)) return retiredAmountLeft(o.state);
   return big((o.state as { amountLeft: string }).amountLeft);
-}
-
-// ------------------------------------------------------------------------------------------------ retired (lot) layouts
-
-/**
- * True for the legacy LOT state of an order of a RETIRED template (kob-wasm `decodeRetired`, protocol v2.3 to v2.6: `lotsLeft` lots of
- * `lotUnits x unit` base units, prices in sompi per `unit`; docs/spec/template-retirement.md). Such an order can only be cancelled by its maker.
- */
-export const isLegacyState = (o: { kind?: string; state: object }): boolean =>
-  ('lotUnits' in o.state && 'unit' in o.state) || (o.kind === 'KobCross' && 'amountLeft' in o.state && 'aFamily' in o.state);
-/** The retired protocol v3 cross limit (no lots: `amountLeft` base units of A, `price` B base units per whole A of `scale` base units). */
-const isNoLotCross = (s: object): boolean => !('lotUnits' in s) && 'amountLeft' in s && 'aFamily' in s;
-
-/** RETIRED (lot) layouts only: base units left, `lotsLeft x lotUnits x unit` (null when the state does not carry them). */
-export function retiredAmountLeft(s: object): bigint | null {
-  if (isNoLotCross(s)) return big((s as { amountLeft: string }).amountLeft);
-  const r = s as { lotsLeft?: string; lotUnits?: string; unit?: string };
-  if (r.lotsLeft === undefined || r.lotUnits === undefined || r.unit === undefined) return null;
-  return big(r.lotsLeft) * big(r.lotUnits) * big(r.unit);
-}
-
-/**
- * Describes the legacy LOT state of an order of a RETIRED template for display (an "older contract version": cancel only). Its price is sompi
- * per `unit` base units, so `unit` plays the part of the scale; its lot (`lotUnits x unit`) was its minimum fill; per-lot tips and rates are
- * shown per `unit` (rounded down). Conditional legs, if-done terms and repeats are not described. A retired cross limit (`KobCross`, token A for
- * token B) describes as a pair sell order: `pair` names A and B and its rate (B base units per `unit` base units of A).
- */
-export function describeLegacy(o: LegacyState): OrderDescription {
-  const s = o.state as unknown as Record<string, string | undefined>;
-  const n = (k: string): bigint => (s[k] !== undefined && /^-?\d+$/.test(s[k]!) ? BigInt(s[k]!) : 0n);
-  // the retired v3 cross limit has no lots: its scale is the price denominator, its minFill the minimum fill, its prices per whole A
-  const noLot = isNoLotCross(o.state);
-  const unit = noLot ? (n('scale') > 0n ? n('scale') : 1n) : n('unit') > 0n ? n('unit') : 1n;
-  const lotUnits = noLot ? 1n : n('lotUnits') > 0n ? n('lotUnits') : 1n;
-  const cross = isCrossKind(o.kind);
-  const kind = o.kind;
-  const left = o.kind === 'KobBid' ? null : retiredAmountLeft(o.state);
-  const perUnit = (perLot: bigint): bigint => perLot / lotUnits;
-  const sells = cross || (ASK_KINDS as readonly string[]).includes(o.kind);
-  const aCode = n('aFamily') !== 0n ? n('aFamily') : 1n;
-  const bCode = n('bFamily');
-  const pair: PairTerms | null = cross
-    ? {
-        kind: 'KobCross', side: 'sell',
-        base: { covId: o.state.tokenCovId, tplHash: o.state.tokenTplHash, prefixLen: n('tplPrefixLen'), suffixLen: n('tplSuffixLen'), family: famOf(aCode), familyCode: aCode, scale: unit, ext: null },
-        quote: { covId: s.bCovId ?? '', tplHash: s.bTplHash ?? '', prefixLen: n('bPrefixLen'), suffixLen: n('bSuffixLen'), family: famOf(bCode), familyCode: bCode, scale: 0n, ext: s.bExt ?? null },
-        price: noLot ? n('price') : perUnit(n('bLot')), priceEnd: n('auctionDaa') > 0n ? (noLot ? n('priceEnd') : perUnit(n('bLotEnd'))) : null, stop: 0n, custody: left ?? 0n,
-        custodies: left !== null && left > 0n ? [{ token: o.state.tokenCovId, amount: left, role: 'base' }] : [], escrowA: left ?? 0n, escrowB: 0n, prefund: 0n,
-        deliveryCarrier: n('deliveryCarrier'), exitCarrier: 0n, triggerRule: null,
-      }
-    : null;
-  return {
-    kind, side: sells ? 'sell' : 'buy', maker: o.state.maker, tokenCovId: o.state.tokenCovId, scale: unit, minFill: noLot ? n('minFill') : lotUnits * unit,
-    amountLeft: left, tokenAmount: sells ? left : null,
-    price: cross ? (noLot ? n('price') : perUnit(n('bLot'))) : n(o.kind === 'KobCondAsk' || o.kind === 'KobCondBid' ? 'tpPrice' : 'price'), tip: noLot ? n('tip') : perUnit(n('tipLot')),
-    tif: s.tif !== undefined ? (TIF[s.tif] ?? null) : null, activeFrom: n('activeFrom'), expiryDaa: n('expiryDaa'), refundTip: n('refundTip'),
-    auction: null, trigger: null, entry: null, pair, booked: null, reservedKas: 0n,
-  };
 }
 
 /** The order's scale: base units per whole token (a pair order: per whole A), the denominator of its prices. */
@@ -285,18 +222,18 @@ export interface TriggerTerms {
 }
 
 /**
- * The pair side of a pair order (`KobPair`, `KobCondPair`, `KobIfdPair`; or a retired cross limit, `KobCross`): both tokens, its prices in B base
+ * The pair side of a pair order (`KobPair`, `KobCondPair`, `KobIfdPair`): both tokens, its prices in B base
  * units per WHOLE A, its custodies and its trigger rule. Amounts: A in base units of A, B in base units of B.
  */
 export interface PairTerms {
-  kind: PairKind | 'KobCross';
+  kind: PairKind;
   /** sell = sells A for B (an ASK, a sell-first entry); buy = buys A with B (a BID, a buy-first entry) */
   side: 'sell' | 'buy';
   base: PairTokenFacts;
   quote: PairTokenFacts;
   /** B base units per whole A: a `KobPair`'s limit (a decay's start), a `KobIfdPair`'s limit, a `KobCondPair`'s take-profit / limit leg (0 = none) */
   price: bigint;
-  /** a decaying ask's / rising bid's end price (`KobPair` with a slope; a retired auction's worst rate), else null */
+  /** a decaying ask's / rising bid's end price (`KobPair` with a slope), else null */
   priceEnd: bigint | null;
   /** a `KobCondPair`'s stop (`stopPrice`) or a stop entry's `entryStop`; 0 = none */
   stop: bigint;
@@ -332,8 +269,7 @@ export interface EntryTerms {
  * order's B base units per whole A (its tip stays KAS, sompi per whole A).
  */
 export interface OrderDescription {
-  /** an order kind, or a retired kind (`KobCross`) of an order of a retired template */
-  kind: OrderKind | RetiredKind;
+  kind: OrderKind;
   side: 'sell' | 'buy';
   maker: Hex;
   /** the order's token (a pair order: its base token A) */

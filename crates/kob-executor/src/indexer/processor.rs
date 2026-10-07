@@ -1,7 +1,7 @@
 //! The order-book state machine: turns extracted transaction records into order, UTXO, token and event
 //! rows, for every protocol v3 order kind (both token families; quantities in token base units, prices per whole token).
-//! Placement records of retired templates (payload versions 2 and 3, `Record::RetiredOrder` / `RetiredAmend`) never become
-//! orders: they are counted as rejects (`retired_template:<kind>`). Arms, trailing ratchets and triggered fills read
+//! A placement under a template this build does not pin never becomes an order (its payload does not decode, or its output
+//! is not the P2SH of a pinned template: a reject). Arms, trailing ratchets and triggered fills read
 //! their trigger evidence from a plain resting `KobAsk` / `KobBid` filled in the same transaction (a pair conditional: two
 //! such fills, one of each token, or a resting `KobPair` of its pair); the event records which (`detail.evidence`).
 //!
@@ -725,27 +725,11 @@ impl Processor {
             Err(_) if rec.payload == super::record::UNDECODABLE_PAYLOAD => {
                 return self.record_reject(conn, seq, &rec.txid, "payload:undecodable", delta);
             }
-            Err(e) => {
-                // the extractor's stand-in for a payload of retired templates (versions 2 and 3): one reject per record
-                if let Some(kinds) = super::record::retired_payload_kinds(&rec.payload) {
-                    for k in kinds {
-                        self.record_reject(conn, seq, &rec.txid, &format!("retired_template:{k}"), delta)?;
-                    }
-                    return Ok(());
-                }
-                return self.record_reject(conn, seq, &rec.txid, &format!("payload:{e}"), delta);
-            }
+            Err(e) => return self.record_reject(conn, seq, &rec.txid, &format!("payload:{e}"), delta),
         };
         for r in &p.records {
             match r {
                 Record::Order { .. } => {}
-                // A placement or in-place amend of a RETIRED template (payload versions 2 and 3: the protocol v2.6 layouts,
-                // amounts in lots): cancel only, never an order of a book here, never a row. Counted with a clear reason.
-                Record::RetiredOrder { template, family, .. } | Record::RetiredAmend { template, family, .. } => {
-                    let kind = Family::from_code(*family).unwrap_or(Family::Kcc20).kind_name(template.base().name());
-                    self.record_reject(conn, seq, &rec.txid, &format!("retired_template:{kind}"), delta)?;
-                    continue;
-                }
                 _ => continue,
             }
             // Each record is validated on its own (`recover_orders` is all-or-nothing per payload).
@@ -2513,40 +2497,6 @@ fn pair_fill_of(rec: &TxRecord, input: usize, before: &AnyState, r: &Reveal, n: 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Placement records of retired templates (payload versions 2 and 3) never become orders: the extractor's stand-in (a live
-    /// transaction) and a payload of retired records (an old record log replayed) are each counted per record, with the kind.
-    #[test]
-    fn placements_of_retired_templates_are_counted_never_orders() {
-        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
-        let p = Processor { tokens: Arc::new(TokenAllowlist::default()), rules: ListingRules::default() };
-        let header = ChainBlockHeader { hash: Hash32([2; 32]), daa_score: 10, ..ChainBlockHeader::default() };
-        let rec = |n: u8, payload: Vec<u8>| TxRecord {
-            txid: Hash32([n; 32]),
-            pos: 0,
-            payload,
-            inputs: vec![],
-            outputs: vec![],
-            tok_outs: vec![],
-            holds: vec![],
-        };
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../kob-protocol/vectors/payload_v3.json");
-        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let v3 = crate::hex::decode(v["payloads"][0]["payload"].as_str().unwrap()).unwrap();
-        let recs = [rec(1, [super::super::record::RETIRED_PAYLOAD, &b"KobAsk,KobCrossKron"[..]].concat()), rec(3, v3)];
-        let mut delta = Delta::default();
-        p.apply_records(&conn, &header, &recs, &mut delta).unwrap();
-        assert_eq!(delta.rejects, 3);
-        let reasons: Vec<String> = conn
-            .prepare("SELECT reason FROM rejects ORDER BY id")
-            .unwrap()
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .map(|r| r.unwrap())
-            .collect();
-        assert_eq!(reasons, ["retired_template:KobAsk", "retired_template:KobCrossKron", "retired_template:KobAsk"]);
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM orders", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-    }
 
     /// The per-order lookups of the write path go through the order's own rows: a plan that starts from a column every
     /// order shares (`kind`, `spent_block`) reads the whole table on every fill and placement.

@@ -134,10 +134,8 @@ function refOf(registry: TokenRegistry | null | undefined, covenantId: Hex): Tok
 /** The order type as the user knows it, re-derived from the state fields (a tx cannot claim one type and carry another). */
 export function orderTypeCode(d: OrderDescription, dayDeadline: bigint | null = null): string {
   const a = d.auction;
-  // the retired cross limit (an order of a retired template, an older contract version)
-  if (d.kind === 'KobCross') return d.tif === 'ioc' ? 'crossIoc' : d.tif === 'fok' ? 'crossFok' : dayDeadline !== null ? 'crossDay' : 'cross';
   // a pair order has the type of the KAS kind it mirrors (its card names the pair)
-  switch (baseKind(d.kind as Exclude<OrderDescription['kind'], 'KobCross'>)) {
+  switch (baseKind(d.kind)) {
     case 'KobAsk':
     case 'KobBid':
     case 'KobPair': {
@@ -254,7 +252,7 @@ function pairRows(d: OrderDescription, f: Fmt): Row[] {
 export function orderRows(d: OrderDescription, extra: { value: bigint | null; locked: LockedKas | null; deadline: bigint | null }, f: Fmt): Row[] {
   const { tr } = f;
   // a pair order: its prices are B per whole A, its tip KAS per whole A (never part of its B price)
-  const pair = !!d.pair && d.pair.kind !== 'KobCross';
+  const pair = !!d.pair;
   const rows: Row[] = pair ? pairRows(d, f) : [];
   const sell = d.side === 'sell';
   const p = (price: bigint) => (pair ? pairPriceText(price, d, f) : priceText(price, d, f));
@@ -551,9 +549,6 @@ function payloadText(r: PayloadRecord, tr: Translate): string {
     case 'sweep': return tr('confirm.adv.recordSweep', { output: r.output, input: r.input });
     case 'x402': return tr('confirm.adv.recordX402', { ref: short(r.reference) });
     case 'note': return tr('confirm.adv.recordNote', { text: r.text });
-    // records of the RETIRED lot templates (payload versions 2 and 3): decoded, never written by this build
-    case 'retiredOrder': return tr('confirm.adv.recordRetiredOrder', { output: r.output, template: r.template });
-    case 'retiredAmend': return tr('confirm.adv.recordRetiredAmend', { output: r.output, input: r.input, template: r.template });
     default: return tr('confirm.adv.recordUnknown', { type: r.recordType });
   }
 }

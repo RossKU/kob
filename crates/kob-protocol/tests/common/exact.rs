@@ -5,18 +5,12 @@
 
 use std::collections::BTreeMap;
 
-use kob_protocol::budget::{budget_for_units, lookup, table};
+use kob_protocol::budget::{budget_for_units, lookup};
 use kob_protocol::build::{build, build_with, Action};
 use kob_protocol::tx::{assemble, finalize, sighash, sign_locally, spk_to_string, BuiltTx, FinalizeOptions, SigPlan, SignedTx};
 use kob_protocol::verify::{execute, measure_units, validate_signed, InputOutcome};
 
 use super::keys;
-
-/// True once the committed budget table is regenerated for protocol v3 (it then prices the cancel of the templates
-/// retired by v3, e.g. `KobAsk.cancel.retired.66853f16@...`).
-pub fn table_is_v3() -> bool {
-    table().keys().any(|r| r.contains(".cancel.retired.66853f16@"))
-}
 
 /// Builds `a` with each role's budget measured in the engine (the largest need over the inputs of that role): the shape
 /// runs with exactly what it needs, whatever the committed table holds.
@@ -34,13 +28,9 @@ pub fn build_measured(a: &Action) -> kob_protocol::Result<BuiltTx> {
     build_with(a, &|r: &str| Ok(need.get(r).copied().unwrap_or(0)))
 }
 
-/// Builds `a` with the committed table once it is regenerated for protocol v3, with measured budgets before.
+/// Builds `a` with the committed table.
 pub fn build_any(a: &Action) -> kob_protocol::Result<BuiltTx> {
-    if table_is_v3() {
-        build(a)
-    } else {
-        build_measured(a)
-    }
+    build(a)
 }
 
 /// Builds, signs, finalizes and validates `a` the way consensus does; panics with `label` on any failure.

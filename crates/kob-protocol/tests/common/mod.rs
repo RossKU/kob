@@ -16,7 +16,6 @@
 pub mod branches;
 pub mod exact;
 pub mod pair;
-pub mod retired_orders;
 
 use std::collections::BTreeMap;
 

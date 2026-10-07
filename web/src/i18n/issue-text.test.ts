@@ -251,7 +251,6 @@ describe('issueText: pre-sign findings of the decoder', () => {
       'pair-token-mismatch': { output: 0, params: { covenantId: COV, token: 'B' } }, 'pair-family-mismatch': { output: 0, params: { token: 'A' } }, 'pair-terms-invalid': { output: 0 },
       'expected-quote-escrowed': { params: { expected: 1000n, actual: 900n } },
       'trigger-evidence-invalid': { input: 0, params: { evidence: 2 } }, 'trigger-rule-unmet': { input: 0, params: { evidence: 1 } }, 'trigger-evidence': { input: 0, params: { evidence: 1 } },
-      'retired-not-cancel': { input: 0, params: { entry: 'settle' } }, 'retired-cancel': { input: 0, params: { template: '70'.repeat(32) } },
       'other-strays-swept': { input: 1, params: { amount: '2.5 TSTB', token: 'TSTB (7171…7171)' } },
       'sweep-invalid': { output: 0, input: 0 }, 'expected-sweep-ids': { params: { expected: 1, actual: 0 } }, 'sweep-custody-spent': { input: 1 },
       'swept-in-place': { input: 0, output: 0, params: { utxos: 3 } },
@@ -276,7 +275,7 @@ describe('cancel, refund, snapshot, issuance, registry and wallet findings', () 
       ['cancel.strays-abandoned', { count: 2, amount: 300n }], ['cancel.strays-exceed-slots', { strays: 5, room: 2 }], ['cancel.top-up', { amount: 4_000n }],
       ['refund.no-clock', undefined], ['refund.not-yet', { dueDaa: 2_000_000n, nowDaa: 1_000_000n }], ['refund.strays-stay', { count: 2 }],
       ['sweep.in-place', undefined], ['sweep.later-extension', { count: 1, amount: 5n }], ['sweep.later-slots', { count: 2, amount: 7n }], ['sweep.needs-funding', undefined],
-      ['sweep.nothing', undefined], ['sweep.retired', undefined], ['sweep.stray-unproven', { outpoint: `${COV}:2`, amount: 9n }], ['sweep.strays-unknown', undefined],
+      ['sweep.nothing', undefined], ['sweep.stray-unproven', { outpoint: `${COV}:2`, amount: 9n }], ['sweep.strays-unknown', undefined],
       ['snapshot.state-unknown', undefined], ['snapshot.no-current-utxo', undefined], ['snapshot.no-extension-commitment', undefined],
       ['snapshot.bad-state', undefined], ['snapshot.not-live', undefined],
     ];
