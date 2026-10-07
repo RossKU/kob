@@ -3,6 +3,8 @@ export default {
   'confirm.ack': 'I checked this screen. My wallet popup will not show these details.',
   'confirm.planAck.title': 'This transaction cannot do everything',
   'confirm.planAck.accept': 'I understand and accept what is described above.',
+  'confirm.freshWarnings.title': 'New since you reviewed the order',
+  'confirm.freshWarnings.accept': 'I have read these warnings, which the latest data raised.',
   'confirm.blockingTitle': 'Do not sign this transaction',
   'confirm.blockingText': 'This screen found problems. Signing stays disabled until they are gone.',
   'confirm.noWallet': 'No wallet is connected. Connect your wallet to sign.',

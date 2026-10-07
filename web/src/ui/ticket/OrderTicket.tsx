@@ -32,7 +32,7 @@ import {
   setSide, setValue, sidesOf, switchType, visibleErrors,
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
-import { expectedFromPlan } from './plan-expected';
+import { expectedFromPlan, newWarnings } from './plan-expected';
 import { expandLadder, ladderOfForm, ladderTotals } from './ladder';
 import { RegistryNote } from '../shell/RegistryNote';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan } from './use-ticket';
@@ -68,6 +68,8 @@ interface ConfirmState {
   label: string;
   /** an inverted market: the order in the shown pair's words, above the decoded transaction */
   shownAs?: string | undefined;
+  /** warnings of the plan made at Review from fresh data that the plan the user looked at did not have */
+  freshWarnings?: string[];
 }
 
 const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
@@ -282,7 +284,9 @@ export function OrderTicket(props: OrderTicketProps) {
       if (!p.ok || !p.built || errors(p).length > 0) return stop(t('ticket.reviewChanged'));
       const title = laddered ? t('ticket.ladder.confirmTitle', { level: index + 1, levels, side: confirmSide, type: typeName }) : t('ticket.confirmTitle', { side: confirmSide, type: typeName });
       const label = laddered ? `${form.type} ${form.side} ${index + 1}/${levels}` : `${form.type} ${form.side}`;
-      setConfirm({ built: p.built, expected: expectedFromPlan(p), title, label, shownAs: shownAsText(r.intents[index]!) });
+      // a warning that only the fresh data raised (the price moved, the depth shrank, a reference now disagrees) is shown on the confirmation
+      const freshWarnings = newWarnings(shownPlan, p).map((i) => issueText(i, issueCtx));
+      setConfirm({ built: p.built, expected: expectedFromPlan(p), title, label, shownAs: shownAsText(r.intents[index]!), freshWarnings });
     } catch (e) {
       run.current = null;
       const raw = e instanceof Error ? e.message : String(e);
@@ -562,6 +566,7 @@ export function OrderTicket(props: OrderTicketProps) {
           title={confirm.title}
           label={confirm.label}
           shownAs={confirm.shownAs}
+          freshWarnings={confirm.freshWarnings}
           tokenPowers={props.powers}
           openToken={token.openList ? token : undefined}
           cautionToken={!token.openList && needsOpenCaution(token) ? token : undefined}

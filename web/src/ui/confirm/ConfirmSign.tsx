@@ -51,6 +51,11 @@ export interface ConfirmSignProps {
    * as a warning above the summary, and signing needs a separate, explicit acknowledgement of them
    */
   acknowledge?: readonly string[];
+  /**
+   * warnings the planner raised only when it planned the order again from fresh data right before this screen (the ticket showed the plan before
+   * that): shown above the summary, and signing needs an explicit acknowledgement of them
+   */
+  freshWarnings?: readonly string[];
   /** fired as soon as the node accepted the transaction (the dialog stays open showing the status until the user closes it) */
   onSubmitted?(r: { txid: string; records: PlacementRecord[] }): void;
   /** called once when the flow ends (cancelled, submitted or failed) */
@@ -141,6 +146,8 @@ export function ConfirmSign(props: ConfirmSignProps) {
   const [ack, setAck] = useState(false);
   const [ackPlan, setAckPlan] = useState(false);
   const mustAck = props.acknowledge ?? [];
+  const fresh = props.freshWarnings ?? [];
+  const [ackFresh, setAckFresh] = useState(false);
   const [phase, setPhase] = useState<Phase>('review');
   const [stage, setStage] = useState<SignStage | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
@@ -205,7 +212,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
   if (!props.issue && nodeInputs === 'error') extraBlocking.push({ code: 'inputs-unavailable', severity: 'blocking', message: 'inputs unavailable', text: t('confirm.inputsUnavailable') });
   const blocking = [...extraBlocking, ...model.blocking];
   const busy = phase === 'busy';
-  const canSign = blocking.length === 0 && model.canSign && ack && (mustAck.length === 0 || ackPlan) && phase === 'review';
+  const canSign = blocking.length === 0 && model.canSign && ack && (mustAck.length === 0 || ackPlan) && (fresh.length === 0 || ackFresh) && phase === 'review';
 
   const finish = useCallback(
     (r: ConfirmResult) => {
@@ -266,6 +273,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
       // an acknowledgement belongs to one attempt: the user looks again before signing again
       setAck(false);
       setAckPlan(false);
+      setAckFresh(false);
     }
   };
 
@@ -325,6 +333,28 @@ export function ConfirmSign(props: ConfirmSignProps) {
                   data-testid="confirm-plan-ack"
                 />
                 <span>{t('confirm.planAck.accept')}</span>
+              </label>
+            ) : null}
+          </Banner>
+        ) : null}
+
+        {fresh.length > 0 ? (
+          <Banner tone="warn" title={t('confirm.freshWarnings.title')} data-testid="confirm-fresh-warnings">
+            <ul>
+              {fresh.map((x, i) => (
+                <li key={i}>{x}</li>
+              ))}
+            </ul>
+            {phase !== 'submitted' ? (
+              <label class="cf-ack" data-testid="confirm-fresh-ack-label">
+                <input
+                  type="checkbox"
+                  checked={ackFresh}
+                  disabled={busy}
+                  onChange={(e) => setAckFresh((e.currentTarget as HTMLInputElement).checked)}
+                  data-testid="confirm-fresh-ack"
+                />
+                <span>{t('confirm.freshWarnings.accept')}</span>
               </label>
             ) : null}
           </Banner>
