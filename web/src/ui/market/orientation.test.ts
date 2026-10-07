@@ -26,7 +26,8 @@ const view = () => ({
 describe('conventions', () => {
   it('a token is TOKEN/KAS, a USD reference token is KAS/<its ticker>, and a flip inverts either', () => {
     expect(defaultInverted(false)).toBe(false);
-    expect(defaultInverted(true)).toBe(true);
+    // a USD reference token opens as TUSD/KAS too (the token on the left, amounts in the token)
+    expect(defaultInverted(true)).toBe(false);
     expect(pairLabel('BTC', false)).toBe('BTC/KAS');
     expect(pairLabel('BTC', true)).toBe('KAS/BTC');
     expect(pairLabel('TUSD', true)).toBe('KAS/TUSD');

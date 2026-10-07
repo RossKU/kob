@@ -101,7 +101,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const scale = row?.scale ?? null;
   const bookScale = scale ?? 1n;
 
-  // orientation (orientation.ts): TOKEN/KAS natively, KAS/TOKEN inverted; a USD reference token is KAS/<its ticker> by default. Display only. Needs the scale.
+  // orientation (orientation.ts): TOKEN/KAS natively (the default of every market, a USD reference token included), KAS/TOKEN inverted. Display only. Needs the scale.
   const usdRef = services.config.quoteTokens[id.toLowerCase()] === 'USD';
   const [invertedChoice, toggleInverted, setInverted] = useInverted(marketKey('token', id), defaultInverted(usdRef));
   const canFlip = scale !== null;

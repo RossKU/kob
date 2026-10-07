@@ -105,6 +105,54 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
   const QUOTE = 'e7'.repeat(32);
   test.use({ appConfig: { quoteTokens: { [QUOTE]: 'USD' } } });
 
+  /** the example registry with EXKCC listed and EXUSD (6 decimals) as a second listed token, matching the mock pair seed */
+  async function listBoth(page: Page): Promise<void> {
+    const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
+    for (const t of reg.templates) t.review_status = 'reviewed';
+    const exkcc = reg.tokens.find((t: { ticker: string }) => t.ticker === 'EXKCC');
+    exkcc.status = 'listed';
+    exkcc.verified = true;
+    reg.tokens.push({ ...exkcc, ticker: 'EXUSD', name: 'Example USD (fictional)', covenant_id: QUOTE, decimals: 6, display: { description: 'Fictional USD reference of the e2e mock.' } });
+    await page.route('**/registry/tokens.json', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(reg) }),
+    );
+  }
+
+  test('the USD reference token opens as EXUSD/KAS (amount in EXUSD); the flip gives KAS/EXUSD (amount in KAS), same order', async ({ appPage: page, mock }) => {
+    await mock.seed({ pair: true });
+    await fund(mock, 'alice');
+    await listBoth(page);
+    await page.goto(`/#/market/${QUOTE}`);
+    await connectWallet(page);
+    const ticket = page.getByTestId('order-ticket');
+    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXUSD/KAS');
+    await expect(ticket).toHaveAttribute('data-inverted', '0');
+    // Buy 3 EXUSD at 0.3 KAS per EXUSD
+    await page.getByTestId(TESTID.orderSideBuy).click();
+    await page.getByTestId(TESTID.orderAmount).fill('3');
+    await page.getByTestId(TESTID.orderPrice).fill('0.3');
+    await expect(amountUnit(page)).toHaveText('EXUSD');
+    await expect(page.getByTestId('disc-summary')).toHaveText('Buy 3 EXUSD');
+    const native = await openReview(page);
+    await page.getByTestId(TESTID.confirmCancel).click();
+    await expect(page.getByTestId(TESTID.confirmScreen)).toHaveCount(0);
+
+    // flip: KAS/EXUSD. Buying EXUSD is selling KAS: 0.9 KAS at 3.333333 EXUSD per KAS
+    await page.getByTestId('market-flip').click();
+    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');
+    await expect(ticket).toHaveAttribute('data-shown-side', 'sell');
+    await expect(page.getByTestId(TESTID.orderSideSell)).toHaveAttribute('aria-checked', 'true');
+    await expect(amountUnit(page)).toHaveText('KAS');
+    await expect(page.getByTestId(TESTID.orderAmount)).toHaveValue('0.9');
+    await expect(page.getByTestId('order-amount-tokens')).toContainText('0.9 KAS = 3 EXUSD at your price');
+    await expect(page.getByTestId('disc-summary')).toHaveText('Sell 0.9 KAS for 3 EXUSD');
+    const flipped = await openReview(page);
+    await expect(page.getByTestId('confirm-shown-as')).toContainText('KAS/EXUSD Sell: you give 0.9 KAS and receive 3 EXUSD');
+    expect(flipped.created.map((c) => c.rows)).toEqual(native.created.map((c) => c.rows));
+    await page.getByTestId(TESTID.confirmCancel).click();
+    await expect(page.getByTestId(TESTID.confirmScreen)).toHaveCount(0);
+  });
+
   test('a flip opens EXUSD/EXKCC with the same order: Buy EXKCC turns into Sell EXUSD, amount and price converted', async ({ appPage: page, mock }) => {
     await mock.seed({ pair: true });
     await fund(mock, 'alice');

@@ -31,7 +31,7 @@ function HomeView() {
 
 /**
  * Old `#/usd/kas` and `#/usd/<token>` links: there is no USD page, every USD view is a tradable page. They are redirected (the history entry is replaced) to
- * the USD token's market (KAS/<ticker>) or the pair page `<token>/<USD token>`; without a USD token or for an unknown token, to the market list.
+ * the USD token's market (<ticker>/KAS) or the pair page `<token>/<USD token>`; without a USD token or for an unknown token, to the market list.
  */
 function LegacyUsdLink(props: { asset: string }) {
   const { config, registry } = useServices();

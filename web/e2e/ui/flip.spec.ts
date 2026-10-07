@@ -1,4 +1,4 @@
-// Market orientation: every token book is TOKEN/KAS (BTC/KAS), a USD reference token (config `quoteTokens`) is KAS/<its ticker> (tickers are never renamed), and every market has a control that
+// Market orientation: every token book opens as TOKEN/KAS (BTC/KAS), a USD reference token (config `quoteTokens`) too (TUSD/KAS; tickers are never renamed), and every market has a control that
 // inverts the pair. The flip is a pure display transform: price, chart, book, trades, stats and the ticket follow it, the choice is remembered per market,
 // and the order the user signs is identical whichever way it is displayed.
 import { readFileSync } from 'node:fs';
@@ -270,7 +270,7 @@ test.describe('the ticket in an inverted market', () => {
   });
 });
 
-test.describe('USD reference token: KAS/<its ticker>', () => {
+test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker> flipped', () => {
   const QUOTE = 'e7'.repeat(32);
   test.use({ appConfig: { quoteTokens: { [QUOTE]: 'USD' } } });
 
@@ -287,31 +287,32 @@ test.describe('USD reference token: KAS/<its ticker>', () => {
     );
   }
 
-  test('the landing market and the list show KAS/EXUSD (real tickers), a flip gives EXUSD/KAS, and there are no USD-only views', async ({ appPage: page, mock }) => {
+  test('the landing market is EXUSD/KAS (real tickers), a flip gives KAS/EXUSD, and there are no USD-only views', async ({ appPage: page, mock }) => {
     await mock.seed({ pair: true });
     await listBoth(page);
     const exkcc = await seeded(mock);
 
-    // landing: the USD token's own book, KAS/EXUSD (the ticker is never renamed): a full market with its book and ticket
+    // landing: the USD token's own book, EXUSD/KAS (the token on the left, the ticker never renamed): a full market with its book and ticket
     await page.goto('/');
-    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');
+    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXUSD/KAS');
     await expect(page.getByTestId('token-title')).toContainText('EXUSD');
     await expect(page.getByTestId('token-page')).toHaveAttribute('data-token', QUOTE);
     await expect(page.getByTestId('order-book')).toBeVisible();
-    await expect(page.getByTestId('order-book')).toContainText('Price (EXUSD)');
-    await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD per KAS');
+    await expect(page.getByTestId('order-book')).toContainText('Price (KAS)');
+    await expect(page.getByTestId('chart-unit')).toHaveText('KAS per EXUSD');
     await expect(page.getByTestId('main')).toHaveAttribute('data-route', '#/');
-    await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '1');
+    await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '0');
     await expect(page.getByTestId('token-usd-chart')).toHaveCount(0);
 
-    // a flip: EXUSD/KAS, remembered
-    await page.getByTestId('market-flip').click();
-    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXUSD/KAS');
-    await expect(page.getByTestId('chart-unit')).toHaveText('KAS per EXUSD');
-    await page.reload();
-    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXUSD/KAS');
+    // a flip: KAS/EXUSD, remembered
     await page.getByTestId('market-flip').click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');
+    await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD per KAS');
+    await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '1');
+    await page.reload();
+    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');
+    await page.getByTestId('market-flip').click();
+    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXUSD/KAS');
 
     // the list: both tokens, no market / pair column, no derived USD table
     await page.goto('/#/market');
@@ -333,12 +334,15 @@ test.describe('USD reference token: KAS/<its ticker>', () => {
     await page.goto('/#/usd/kas');
     await expect(page).toHaveURL(new RegExp(`#/market/${QUOTE}$`));
     await expect(page.getByTestId('token-page')).toHaveAttribute('data-token', QUOTE);
-    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');
+    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXUSD/KAS');
     await expect(page.getByTestId('usd-page')).toHaveCount(0);
     await expect(page.getByTestId('order-book')).toBeVisible();
     await expect(page.getByTestId('trades-list')).toBeVisible();
     await expect(page.getByTestId('order-ticket')).toBeVisible();
     await connectWallet(page);
+    // the flipped view, KAS/EXUSD: amounts in KAS
+    await page.getByTestId('market-flip').click();
+    await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');
 
     // shown Sell of 1 KAS (for EXUSD) at 3 EXUSD per KAS = native buy of 3 EXUSD at about 0.33 KAS: far below the book, it rests
     await page.getByTestId(TESTID.orderSideSell).click();

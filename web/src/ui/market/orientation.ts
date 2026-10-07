@@ -1,6 +1,6 @@
 // Market orientation: every token book is a TOKEN/KAS market natively (price = KAS per token); the same book can be shown inverted, KAS/TOKEN
-// (price = tokens per KAS). A token the config marks as a USD reference (`quoteTokens`) is shown inverted by default: stablecoins are the quote
-// (KAS/TUSD, never TUSD/KAS; the ticker is never renamed). The choice is remembered per market in localStorage.
+// (price = tokens per KAS). Every market, a USD reference token (`quoteTokens`) included, opens as TOKEN/KAS (TUSD/KAS: the token on the left,
+// amounts in the token); the flip shows KAS/TOKEN (amounts in KAS). The ticker is never renamed. The choice is remembered per market in localStorage.
 //
 // THIS FILE IS A PURE DISPLAY TRANSFORM. Nothing here touches an order: the ticket keeps its form in native terms (KAS per token, token amounts) and
 // only converts what the user TYPES (an inverted price) into the native text with a rounding that never makes the limit worse (see
@@ -47,8 +47,8 @@ export function writeInverted(market: string, inverted: boolean): void {
 /** The storage key of a market: `token:<covenantId>` (the token's own KAS book; the pair page has no stored flip, its swap is a route). */
 export const marketKey = (kind: 'token', id: string): string => `${kind}:${id.toLowerCase()}`;
 
-/** The convention: a USD reference token is shown inverted (KAS/<its ticker>); every other token as TOKEN/KAS. */
-export const defaultInverted = (usdRef: boolean): boolean => usdRef;
+/** The convention: every token's KAS market opens as TOKEN/KAS, a USD reference token too (owner decision: TUSD/KAS, the token on the left). */
+export const defaultInverted = (_usdRef: boolean): boolean => false;
 
 /** `TOKEN/KAS`, or `KAS/TOKEN` when inverted. */
 export const pairLabel = (name: string, inverted: boolean): string => (inverted ? `KAS/${name}` : `${name}/KAS`);

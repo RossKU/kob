@@ -39,13 +39,13 @@ export interface AppConfig {
   allowQueryOverrides: boolean;
   /**
    * Tokens that stand for a fiat currency (`{ "<covenant id>": "USD" }`): the first registry token marked `USD` is the app's USD reference (e.g. the TN10
-   * soak's TUSD, which tracks 1 USD worth of KAS). It only sets the default orientation of that token's market (stablecoin as quote: KAS/TUSD) and the
-   * landing screen; no ticker is ever renamed and there are no USD-only views (old `#/usd/...` links redirect to the token market / the pair page).
+   * soak's TUSD, which tracks 1 USD worth of KAS). It only sets the landing screen (that token's market opens as TUSD/KAS like every other
+   * market); no ticker is ever renamed and there are no USD-only views (old `#/usd/...` links redirect to the token market / the pair page).
    * config.json / `__KOB_CONFIG__` only: a link or a stored setting must not mark a token as a dollar. Empty = every market TOKEN/KAS.
    */
   quoteTokens: Record<string, QuoteCurrency>;
   /**
-   * The landing screen (empty hash): `auto` (default: the USD token's market, KAS/<ticker>, when a USD reference token is configured, else the first
+   * The landing screen (empty hash): `auto` (default: the USD token's market, <ticker>/KAS, when a USD reference token is configured, else the first
    * tradable registry token's market, else the market list), `list`, `kas-usd` (the USD token's market), `usd:<covenant id>` (the pair page `<id>/<USD token>`) or `market:<covenant id>`
    * (that token's market page). The market list stays at `#/market` (header navigation).
    */
