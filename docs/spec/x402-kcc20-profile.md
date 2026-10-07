@@ -528,7 +528,9 @@ evidence stays consumed and the payment is reconciled, never released, as in the
 ### 9.2 Replay and idempotency
 
 - The `payment-identifier` extension is required, bound to the request fingerprint and the profile
-  `kcc20`, exactly as in the binding.
+  `kcc20`, exactly as in the binding, and to the transaction it first arrived with: another
+  transaction under a bound id is answered `kaspa_payment_identifier_conflict` (never with the
+  outcome of the bound transaction) until the bound one has failed. Payers draw ids at random.
 - A transaction id and every outpoint the transaction spends (all token and funding inputs) are
   consumable at most once per trust domain, so two different transactions cannot spend one payer
   UTXO for two requests.

@@ -696,8 +696,8 @@ fn negative_vectors_accepted_not_offered_and_payment_identifier() {
 
     // payment-identifier-conflict: same id, different request fingerprint. The verifier only validates and extracts the
     // id; binding it to one requestHash is the facilitator ledger's job (Diag::KaspaPaymentIdentifierConflict, tested in
-    // kob-executor). What the SDK guarantees is that one logical payment keeps its id and that ids are bound to the
-    // request hash, so a payer never collides on its own.
+    // kob-executor). What the SDK guarantees is that every new payment takes a fresh random id (one payment keeps its id
+    // only by re-sending the same payload), so a payer never collides on its own and nobody else can name its id.
     let n = negative("payment-identifier-conflict");
     assert_eq!(n["expectedError"], "kaspa_payment_identifier_conflict");
     let (first, second) = (&n["first"], &n["second"]);
@@ -707,9 +707,8 @@ fn negative_vectors_accepted_not_offered_and_payment_identifier() {
     let mut p = fx.payload.clone();
     p.extensions = Some(json!({ "payment-identifier": { "info": { "required": true, "id": id } } }));
     assert_eq!(payment_identifier(&fx.env.ctx(), &p).unwrap().as_deref(), Some(id));
-    let req = requirements_hash(&fx.offer).unwrap();
-    let a = kob_x402::client::native::derive_payment_id(&hash(first["requestHash"].as_str().unwrap()), &req);
-    let b = kob_x402::client::native::derive_payment_id(&hash(second["requestHash"].as_str().unwrap()), &req);
+    let a = kob_x402::client::native::random_payment_id();
+    let b = kob_x402::client::native::random_payment_id();
     assert_ne!(a, b);
 }
 

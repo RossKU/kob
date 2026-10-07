@@ -2,15 +2,22 @@
 //
 //   unpaid request        -> 402 + PAYMENT-REQUIRED (offers built from configuration through KobWasm)
 //   PAYMENT-SIGNATURE     -> decode; `accepted` must equal one of OUR offers (canonical JSON equality);
-//                            `payment-identifier` id required; requestHash recomputed independently from the
+//                            `payment-identifier` id required; the transaction must declare its id (safe JSON `id`);
+//                            requestHash recomputed independently from the
 //                            request we actually received and compared with the payload's; POST /settle to the
 //                            facilitator with that requestHash; on success serve the resource with PAYMENT-RESPONSE
 //                            (only after the settlement shows OUR offer's amount and network); on failure return a
 //                            corrective 402 carrying the diagnostic in `extensions.kaspa`.
 //
+// Idempotency: a payment id is remembered together with the transaction it was settled with. A request repeating
+// that id is answered from memory only when it carries the same transaction; any other transaction under a
+// remembered id is refused (`kaspa_payment_identifier_conflict`) and never reaches the facilitator. A settlement
+// is served only when its transaction id is the one the request's transaction declares.
+//
 // Framework-agnostic core: `paywall.handle(request: Request): Promise<Response>`; `toNodeListener` adapts it to
 // node:http. The merchant's own resource is a `handler(request, paid)` that only runs after settlement.
 
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { canonicalJson, httpRequestHash, normalizeBody, normalizeMethod, normalizeUrl, requirementsHash } from './canonical.ts';
@@ -66,7 +73,10 @@ export interface PaidContext {
   method: string;
   /** The request body bytes (the `Request` passed to the handler has its body consumed). */
   body: Uint8Array;
-  /** True when this payment id was already settled: the handler runs again (idempotent replay), nothing is charged. */
+  /**
+   * True when this transaction was already settled: the handler runs again (idempotent replay of the same signed
+   * transaction), nothing is charged.
+   */
   replayed: boolean;
 }
 
@@ -109,6 +119,10 @@ interface Local {
 interface LedgerEntry {
   requestHash: string;
   requirementsHash: string;
+  /** The transaction id the payment declares (and the facilitator settled). */
+  transactionId: string;
+  /** SHA-256 of the transaction text of the request this id was first seen with. */
+  transactionDigest: string;
   state: 'settling' | 'settled';
   settlement?: SettlementResponse;
   /** Set on an alias entry (a replay under another payment id): the id the payment was first served under. */
@@ -252,6 +266,17 @@ export function createPaywall(config: PaywallConfig): Paywall {
       return challenge(url, accepts, { reason: 'invalid_payload', diagnostic: 'invalid_kaspa_payment_identifier', message: 'payment-identifier id must match ^[A-Za-z0-9_-]{16,128}$' });
     }
 
+    // ---- the transaction the request carries: its declared id and its exact bytes identify the payment
+    const declaredId = declaredTransactionId(payload.payload.transaction);
+    if (declaredId === undefined) {
+      return challenge(url, accepts, {
+        reason: 'invalid_payload',
+        diagnostic: 'invalid_kaspa_x402_payload',
+        message: 'the transaction must declare its id (safe JSON `id`, 32-byte hex)',
+      });
+    }
+    const txDigest = transactionDigest(payload.payload.transaction);
+
     // ---- request fingerprint, computed independently from what we received
     const reqsHash = requirementsHash(offer);
     const requestHash = httpRequestHash(method, url, normalizeBody(body), reqsHash);
@@ -263,11 +288,14 @@ export function createPaywall(config: PaywallConfig): Paywall {
       });
     }
 
-    // ---- idempotency: same id + same fingerprint + same offer -> cached outcome; anything else conflicts
+    // ---- idempotency: same id + same fingerprint + same offer + same transaction -> cached outcome; anything else conflicts
     const prior = ledger.get(id);
     if (prior) {
       if (prior.requestHash !== requestHash || prior.requirementsHash !== reqsHash) {
         return json(409, { error: 'invalid_payload', extensions: { kaspa: { diagnostic: 'kaspa_payment_identifier_conflict', retryable: false, message: 'payment id is bound to a different request' } } });
+      }
+      if (prior.transactionId !== declaredId || prior.transactionDigest !== txDigest) {
+        return json(409, { error: 'invalid_payload', extensions: { kaspa: { diagnostic: 'kaspa_payment_identifier_conflict', retryable: false, message: 'payment id is bound to a different transaction' } } });
       }
       if (prior.state === 'settling') {
         return json(409, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'settlement_pending', retryable: true, message: 'this payment id is being settled' } } });
@@ -275,7 +303,7 @@ export function createPaywall(config: PaywallConfig): Paywall {
       const settlement = prior.settlement as SettlementResponse;
       return serve(request, paidContext(prior.paymentId ?? id, requestHash, settlement, offer, url, method, body, true));
     }
-    remember(id, { requestHash, requirementsHash: reqsHash, state: 'settling', at: now() });
+    remember(id, { requestHash, requirementsHash: reqsHash, transactionId: declaredId, transactionDigest: txDigest, state: 'settling', at: now() });
 
     // ---- settle through the facilitator
     let settlement: SettlementResponse;
@@ -316,19 +344,18 @@ export function createPaywall(config: PaywallConfig): Paywall {
     // The same signed transaction under a NEW payment id is the same payment, not a new one: serve it as a replay of the
     // first id (the handler sees the original paymentId and replayed=true), never as a fresh paid request.
     const txid = lc(settlement.transaction);
-    // The transaction the payer sent declares its id (safe JSON `id`); a facilitator settling another transaction than the one in
-    // this request is not settling this payment. A payload that declares no id is judged by the facilitator alone.
-    const declaredId = declaredTransactionId(payload.payload.transaction);
-    if (declaredId !== undefined && declaredId !== txid) {
+    // The transaction the payer sent declares its id (safe JSON `id`, which the facilitator checks against the recomputed id); a
+    // facilitator answer for another transaction than the one in this request does not settle this payment.
+    if (declaredId !== txid) {
       ledger.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settled another transaction than the one in this request' } } });
     }
     const first = served.get(txid);
     if (first && first.entry.requestHash === requestHash && first.entry.requirementsHash === reqsHash && first.entry.settlement) {
-      remember(id, { ...first.entry, paymentId: first.id });
+      remember(id, { ...first.entry, transactionDigest: txDigest, paymentId: first.id });
       return serve(request, paidContext(first.id, requestHash, first.entry.settlement, offer, url, method, body, true));
     }
-    const entry: LedgerEntry = { requestHash, requirementsHash: reqsHash, state: 'settled', settlement, at: now() };
+    const entry: LedgerEntry = { requestHash, requirementsHash: reqsHash, transactionId: txid, transactionDigest: txDigest, state: 'settled', settlement, at: now() };
     remember(id, entry);
     served.set(txid, { id, entry });
     while (served.size > maxLedger) {
@@ -371,6 +398,11 @@ function paidContext(
   };
   if (settlement.payer) c.payer = settlement.payer;
   return c;
+}
+
+/** SHA-256 (hex) of the transaction text a payment carries. */
+function transactionDigest(transaction: string): string {
+  return createHash('sha256').update(transaction, 'utf8').digest('hex');
 }
 
 /** The `id` a safe-JSON transaction declares (lower-case 64 hex), or undefined when it declares none / is not JSON. */

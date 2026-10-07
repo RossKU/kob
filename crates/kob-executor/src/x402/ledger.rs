@@ -19,9 +19,10 @@
 //! * an outpoint reserved by a *different* non-failed transaction id -> replay conflict;
 //! * the same transaction id and request hash -> the existing entry (idempotent; cached response);
 //! * the same transaction id and another request hash -> conflict;
-//! * a `payment-identifier` is bound to (request hash, profile): same id + other request hash ->
-//!   `kaspa_payment_identifier_conflict`; same id + same request returns the bound entry (its cached
-//!   outcome) even if the second attempt carries a different transaction;
+//! * a `payment-identifier` is bound to (request hash, profile, transaction id): same id + other request hash ->
+//!   `kaspa_payment_identifier_conflict`; same id + same request + another transaction ->
+//!   `kaspa_payment_identifier_conflict` while the bound transaction is not failed (the cached outcome of one
+//!   transaction is never the answer for another); after it failed the new transaction is settled on its own;
 //! * `failed` releases the outpoints; `broadcast`, `accepted` and `ambiguous` never do.
 
 use std::collections::HashMap;
@@ -498,10 +499,13 @@ impl Ledger {
                         "the payment identifier is bound to a different request, profile or merchant",
                     ));
                 }
-                if b.txid != txid {
-                    if let Some(other) = g.entries.get(&b.txid).filter(|o| o.state != State::Failed) {
-                        return Ok(Claim::Existing(other.clone()));
-                    }
+                // the identifier names one payment: another transaction under it is never answered with that
+                // payment's outcome (it is refused while the bound one stands, and settles on its own once it failed)
+                if b.txid != txid && g.entries.get(&b.txid).is_some_and(|o| o.state != State::Failed) {
+                    return Err(X402Error::state(
+                        Diag::KaspaPaymentIdentifierConflict,
+                        "the payment identifier is bound to another transaction",
+                    ));
                 }
             }
         }
@@ -561,6 +565,13 @@ impl Ledger {
     /// The (request hash, profile) a payment identifier is bound to.
     pub fn payment_id_binding(&self, id: &str) -> Option<(String, String)> {
         self.lock().ids.get(id).map(|b| (b.request_hash.clone(), b.profile.clone()))
+    }
+
+    /// The transaction id a payment identifier is bound to while that transaction is not failed.
+    pub fn payment_id_live_txid(&self, id: &str) -> Option<String> {
+        let g = self.lock();
+        let b = g.ids.get(id)?;
+        g.entries.get(&b.txid).filter(|e| e.state != State::Failed).map(|e| e.txid.clone())
     }
 
     /// Entries currently in one of `states`.
@@ -800,13 +811,20 @@ mod tests {
         let mut other = new_entry(3, 7, Some(ID1), vec![op(0xb1, 0)]);
         other.profile = "kcc20".into();
         assert_eq!(l.claim(other).unwrap_err().diag, Diag::KaspaPaymentIdentifierConflict);
-        // same id, same request, different transaction -> the cached outcome of the first
-        let c = l.claim(new_entry(4, 7, Some(ID1), vec![op(0xb2, 0)])).unwrap();
-        match c {
-            Claim::Existing(e) => assert_eq!(e.txid, hex(&[1; 32])),
-            _ => panic!("expected the bound entry"),
-        }
+        // same id, same request, different transaction -> identifier conflict (never the first one's outcome)
+        let e = l.claim(new_entry(4, 7, Some(ID1), vec![op(0xb2, 0)])).unwrap_err();
+        assert_eq!(e.diag, Diag::KaspaPaymentIdentifierConflict);
         assert!(!l.is_consumed(&op(0xb2, 0)));
+        assert!(l.get(&hex(&[4; 32])).is_none());
+        // ... also once the first one is accepted
+        l.transition(&hex(&[1; 32]), State::Broadcast, None, 2).unwrap();
+        l.set_accepted(&hex(&[1; 32]), 5, serde_json::json!({"success": true}), 3).unwrap();
+        let e = l.claim(new_entry(4, 7, Some(ID1), vec![op(0xb2, 0)])).unwrap_err();
+        assert_eq!(e.diag, Diag::KaspaPaymentIdentifierConflict);
+        // the same transaction under the same id is the cached outcome
+        assert!(
+            matches!(l.claim(new_entry(1, 7, Some(ID1), vec![op(0xa0, 0)])).unwrap(), Claim::Existing(ref e) if e.txid == hex(&[1; 32]))
+        );
     }
 
     #[test]

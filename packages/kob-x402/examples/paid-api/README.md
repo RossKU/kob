@@ -69,7 +69,9 @@ Coinbase maturity is 1000 DAA (about 100 s): mined funds are spendable after tha
   reference SDK's formula); the paywall recomputes it from the request it received and refuses a payload that carries another one.
 * The payer rejects redirects on both requests and requires the effective URL to equal the requested URL.
 * The signed artifact is written to `KOB_X402_ARTIFACT_DIR` **before** it is sent. If the process dies mid-payment,
-  `client.resume(paymentId, init)` re-sends the stored artifact (the merchant is idempotent on payment id + request hash) and
+  `client.resume(paymentId, init)` re-sends the stored artifact (the merchant is idempotent on payment id + request hash + transaction: only the very
+  transaction a payment id was settled with is answered from memory, any other one under that id gets `409`
+  `kaspa_payment_identifier_conflict`) and
   `client.revoke(paymentId)` invalidates it by spending one of its inputs back to the payer.
 * A payment is never re-sent automatically. A failure that the facilitator marks `retryable` (for example `order_conflict`, a
   swap order that was consumed meanwhile) reaches the caller as `KobX402Error{ retryable: true }`. Calling `fetch` again does

@@ -94,13 +94,21 @@ fn identical_retry_after_success_returns_the_cached_response() {
     assert_eq!(again, first);
     assert_eq!(f.chain.submit_count(), 1, "never broadcast twice");
     assert_eq!(f.verifier.calls.load(Ordering::SeqCst), calls, "not re-verified");
-    // the same payment identifier and request through another (equivalent) transaction: cached too
+    // the same payment identifier and request through another transaction: not this payment, refused (the first
+    // settlement is never the answer for it), nothing broadcast, nothing recorded
     let other_input = f.fund(500_000_000);
     let (req2, tx2) = f.payment(&[other_input], 100_000_000, ID1, 7);
-    let same_outcome = f.fac.settle("shop", &req2);
-    assert_eq!(same_outcome, first);
+    let other = f.fac.settle("shop", &req2);
+    assert!(!other.success, "{other:?}");
+    assert_eq!(diag(&other), "kaspa_payment_identifier_conflict");
+    assert!(other.transaction.is_empty());
     assert_eq!(f.chain.submit_count(), 1);
     assert!(f.ledger.get(&txid_hex(&tx2)).is_none());
+    // /verify says the same
+    let v = f.fac.verify(&req2);
+    assert!(!v.is_valid);
+    // the first transaction is still answered with its own outcome
+    assert_eq!(f.fac.settle("shop", &req), first);
 }
 
 #[test]

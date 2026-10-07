@@ -19,7 +19,7 @@ use kob_x402::error::{Diag, Reason};
 use kob_x402::safe_tx::SafeTx;
 use kob_x402::testkit::{pubkey, secret};
 use kob_x402::verify::PaymentKind;
-use kob_x402::wire::{header_decode, header_encode, hex, Finality, Network, Resource, SettlementResponse};
+use kob_x402::wire::{header_decode, header_encode, hex, Finality, Network, PaymentPayload, Resource, SettlementResponse};
 use serde_json::{json, Map};
 
 // ------------------------------------------------------------------------------------------ end to end
@@ -107,12 +107,14 @@ fn full_flow_offer_pay_verify_submit_accept() {
 }
 
 #[test]
-fn payload_is_deterministic_and_retry_stable() {
+fn payload_is_deterministic_and_payment_ids_are_fresh() {
     let a = fixture();
     let b = fixture();
     assert_eq!(a.payload.payload.transaction, b.payload.payload.transaction);
-    assert_eq!(a.payload.extensions, b.payload.extensions);
     assert_eq!(a.payload.payload.authorization, b.payload.payload.authorization);
+    // the payment identifier is drawn at random for every build (a retry re-sends the stored payload)
+    let id = |p: &PaymentPayload| p.extensions.as_ref().unwrap()["payment-identifier"]["info"]["id"].as_str().unwrap().to_string();
+    assert_ne!(id(&a.payload), id(&b.payload));
 }
 
 #[test]

@@ -36,7 +36,7 @@ use kob_protocol::tx::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::canonical::{requirements_hash, sha256};
+use crate::canonical::requirements_hash;
 use crate::chain::{Outpoint, Txid};
 use crate::common::{address_of, is_p2pk, iso_from_ms, p2pk_key, payload_commit_digest, PayloadCommit};
 use crate::error::{Diag, Result, X402Error};
@@ -276,7 +276,7 @@ pub struct SwapOptions {
     pub min_change_sompi: u64,
     /// Fee bound (default: the policy's `max_fee_sompi`).
     pub max_fee_sompi: Option<u64>,
-    /// Explicit `payment-identifier` id (default: derived from the request hash and the transaction id).
+    /// Explicit `payment-identifier` id (default: a fresh random one, [`crate::client::native::random_payment_id`]).
     pub payment_identifier: Option<String>,
     /// Refuse an `expires_in_ms` beyond the offer's `maxTimeoutSeconds` (default true; the diagnostics
     /// suite turns it off to produce over-long authorizations).
@@ -792,13 +792,7 @@ impl PreparedSwap {
     /// Wraps a signed transaction into the `PAYMENT-SIGNATURE` object (offer, authorization, route,
     /// payment identifier). No engine run; [`PreparedSwap::complete`] is the normal entry point.
     pub fn assemble_payload(&self, tx: &Transaction, entries: &[UtxoEntry]) -> Result<PaymentPayload> {
-        let txid = tx.id().as_bytes();
-        let id = self.payment_identifier.clone().unwrap_or_else(|| {
-            let mut pre = b"kob-x402-swap-payment-id-v1".to_vec();
-            pre.extend_from_slice(self.request_hash.as_bytes());
-            pre.extend_from_slice(&txid);
-            hex(&sha256(&pre))
-        });
+        let id = self.payment_identifier.clone().unwrap_or_else(crate::client::native::random_payment_id);
         let payload = PaymentPayload {
             x402_version: X402_VERSION,
             accepted: self.offer.clone(),

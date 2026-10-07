@@ -25,7 +25,7 @@ use kob_protocol::tx::{masses, pubkey_of, sighash, sign_digest, target_fee, FeeM
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 
-use crate::canonical::{requirements_hash, sha256};
+use crate::canonical::requirements_hash;
 use crate::chain::Outpoint;
 use crate::common::{address_of, iso_from_ms, signed_auth_digest, SignedAuth};
 use crate::error::{Result as X402Result, X402Error};
@@ -186,8 +186,8 @@ pub struct PayOptions {
     pub min_change_sompi: u64,
     /// Most inputs the transaction may spend.
     pub max_inputs: usize,
-    /// Explicit `payment-identifier`; by default one is derived from the request hash and profile so a
-    /// retry of the same logical payment reuses it.
+    /// Explicit `payment-identifier`; by default a fresh random one ([`random_payment_id`]). A retry of the same
+    /// payment re-sends the stored payload (same id, same transaction); a new transaction takes a new id.
     pub payment_id: Option<String>,
     /// Echoed in `paymentPayload.resource`.
     pub resource: Option<Resource>,
@@ -263,16 +263,11 @@ fn check_offer(offer: &PaymentRequirements, max_amount: u64) -> Result<Offer, Na
     Ok(Offer { network, amount, pay_to_spk })
 }
 
-/// The `payment-identifier` a payer derives for one logical payment: bound to the request hash, the
-/// profile and the requirements, stable across retries.
-pub fn derive_payment_id(request_hash: &[u8; 32], requirements_hash: &[u8; 32]) -> String {
-    let mut pre = Vec::new();
-    pre.extend_from_slice(b"kaspa-x402-payment-id-v1\0");
-    pre.extend_from_slice(Profile::StandardNative.as_str().as_bytes());
-    pre.push(0);
-    pre.extend_from_slice(request_hash);
-    pre.extend_from_slice(requirements_hash);
-    format!("pay_{}", &hex(&sha256(&pre))[..32])
+/// A fresh `payment-identifier` id: 24 random bytes (`pay_` + 48 hex). Nobody else can name it before the payer
+/// discloses the payment, and every new transaction gets its own.
+pub fn random_payment_id() -> String {
+    let bytes: [u8; 24] = secp256k1::rand::random();
+    format!("pay_{}", hex(&bytes))
 }
 
 /// The `paymentPayload.extensions` carrying the payment identifier.
@@ -453,7 +448,7 @@ pub fn pay_native(
     })?;
     let mut sig = sign_digest(payer_secret, &digest).map_err(|e| NativeError::Build(e.to_string()))?;
     sig.truncate(64);
-    let id = opts.payment_id.clone().unwrap_or_else(|| derive_payment_id(&request_hash_bytes, &req_hash));
+    let id = opts.payment_id.clone().unwrap_or_else(random_payment_id);
     if !(16..=128).contains(&id.len()) || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
         return Err(NativeError::Build("payment id must match ^[A-Za-z0-9_-]{16,128}$".into()));
     }
@@ -620,12 +615,11 @@ mod tests {
     }
 
     #[test]
-    fn payment_id_is_stable_and_bound() {
-        let a = derive_payment_id(&[1; 32], &[2; 32]);
-        assert_eq!(a, derive_payment_id(&[1; 32], &[2; 32]));
-        assert_ne!(a, derive_payment_id(&[3; 32], &[2; 32]));
-        assert_ne!(a, derive_payment_id(&[1; 32], &[3; 32]));
+    fn default_payment_ids_are_random_and_well_formed() {
+        let a = random_payment_id();
+        assert_ne!(a, random_payment_id());
         assert!((16..=128).contains(&a.len()));
+        assert!(a.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'));
     }
 
     #[test]

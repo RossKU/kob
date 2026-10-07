@@ -504,6 +504,12 @@ impl Facilitator {
                     ));
                 }
             }
+            if self.ledger.payment_id_live_txid(id).is_some_and(|t| t != hex(&v.txid)) {
+                return Err(X402Error::state(
+                    Diag::KaspaPaymentIdentifierConflict,
+                    "the payment identifier is bound to another transaction",
+                ));
+            }
         }
         let txid = hex(&v.txid);
         for o in &v.consumed {
@@ -770,12 +776,10 @@ impl Facilitator {
         .with_details(json!({ "orders": list.iter().map(Outpoint::to_json).collect::<Vec<_>>() }))
     }
 
-    /// Answer for a payment identifier whose bound entry belongs to another transaction.
-    fn respond_other(&self, e: &Entry) -> Result<SettlementResponse> {
-        match e.state {
-            State::Accepted => self.cached(e),
-            _ => Err(pending_error("an earlier attempt of this payment is still being settled; retry the identical request")),
-        }
+    /// Answer for a payment identifier whose bound entry belongs to another transaction: the outcome of one
+    /// transaction is never the answer for another (the ledger's claim refuses this case already).
+    fn respond_other(&self, _e: &Entry) -> Result<SettlementResponse> {
+        Err(X402Error::state(Diag::KaspaPaymentIdentifierConflict, "the payment identifier is bound to another transaction"))
     }
 
     fn cached(&self, e: &Entry) -> Result<SettlementResponse> {

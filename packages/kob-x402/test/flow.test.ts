@@ -229,7 +229,7 @@ function otherClientOptions(rig: Awaited<ReturnType<typeof startRig>>): KobX402C
   };
 }
 
-test('idempotency: re-SIGNING under a settled payment id is caught by the client (the replayed settlement is for the first transaction)', async () => {
+test('idempotency: re-SIGNING under a settled payment id is refused by the merchant (409), nothing is settled twice', async () => {
   const rig = await startRig();
   try {
     const id = 'idempotent-payment-id-0003';
@@ -238,9 +238,10 @@ test('idempotency: re-SIGNING under a settled payment id is caught by the client
     // the same client refuses first: its store holds the artifact of the first transaction and never overwrites it
     await assert.rejects(rig.client.fetch(url, { paymentId: id }), (e: unknown) => e instanceof KobX402Error && e.code === 'artifact_store');
     assert.equal(rig.facilitator.settleCalls().length, 1);
-    // a client with another store re-signs: the merchant replays the first settlement and the payer's check catches it
+    // a client with another store re-signs: another transaction under a settled id is not the settled payment
     const other = new KobX402Client({ ...otherClientOptions(rig) });
-    await assert.rejects(other.fetch(url, { paymentId: id }), (e: unknown) => e instanceof KobX402Error && e.code === 'invalid_settlement');
+    await assert.rejects(other.fetch(url, { paymentId: id }), (e: unknown) => e instanceof KobX402Error && e.code === 'payment_pending' && e.status === 409);
+    assert.equal(rig.handled.length, 1, 'served once');
     assert.equal(rig.facilitator.settleCalls().length, 1);
   } finally {
     await rig.close();

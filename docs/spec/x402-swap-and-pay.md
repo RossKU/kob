@@ -532,7 +532,8 @@ evidence; the revocation also supplies the permanent-absence proof of section 10
 ## 14. Replay and idempotency
 
 As in the binding and the companion proposal: the `payment-identifier` extension is required and
-bound to the request fingerprint and the merchant-gain profile; a transaction id is consumable at
+bound to the request fingerprint, the merchant-gain profile and the transaction it first arrived with
+(another transaction under a bound id is `kaspa_payment_identifier_conflict`); a transaction id is consumable at
 most once per trust domain; the replay ledger consumes every outpoint the transaction spends,
 including every named order outpoint, before broadcast, so two payments cannot spend one payer UTXO
 or one order for two requests. The commitment digest includes `route.payAsset`, so an authorization

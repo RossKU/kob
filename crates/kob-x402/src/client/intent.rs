@@ -24,7 +24,6 @@ use kob_protocol::state::TokenState;
 use kob_protocol::tx::{BuiltTx, FeeMode, FeeOptions, InputSignature, KeyUtxo, SignRequest, TokenUtxo, Utxo};
 use serde_json::{json, Value};
 
-use crate::canonical::sha256;
 use crate::chain::Txid;
 use crate::client::swap::{swap_requirements, PayerFunds, SwapOfferParams};
 use crate::common::{address_of, iso_from_ms, PayloadCommit};
@@ -106,7 +105,7 @@ pub struct IntentOptions {
     /// relay floor).
     pub fee_rate: Option<u64>,
     pub fee_mode: FeeMode,
-    /// Explicit `payment-identifier` id (default: derived from the request hash and the creation id).
+    /// Explicit `payment-identifier` id (default: a fresh random one, [`crate::client::native::random_payment_id`]).
     pub payment_identifier: Option<String>,
 }
 
@@ -491,12 +490,7 @@ impl PreparedIntent {
         let signed = kob_protocol::tx::finalize(&self.built, signatures, kob_protocol::tx::FinalizeOptions { tighten_budgets: true })?;
         let (tx, entries) = signed.tx.to_tx()?;
         let txid = tx.id().as_bytes();
-        let id = self.payment_identifier.clone().unwrap_or_else(|| {
-            let mut pre = b"kob-x402-intent-payment-id-v1".to_vec();
-            pre.extend_from_slice(self.request_hash.as_bytes());
-            pre.extend_from_slice(&txid);
-            hex(&sha256(&pre))
-        });
+        let id = self.payment_identifier.clone().unwrap_or_else(crate::client::native::random_payment_id);
         let intent_id = self
             .built
             .covenants
