@@ -311,7 +311,7 @@ fn genesis_flags(entries: &[serde_json::Value]) -> Vec<(Hash32, bool)> {
 
 /// Policy knobs. Defaults: 90-day maximum expiry, 1 KAS minimum order value.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ListingRules {
     /// When true (default) an empty allowlist lists nothing.
     pub require_allowlist: bool,

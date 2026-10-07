@@ -32,7 +32,7 @@ impl std::str::FromStr for StartMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct RecordsConfig {
     /// Keep the permanent record log (default). Without it a lost or outdated database cannot be
     /// rebuilt except by re-reading everything the node still retains.
@@ -50,7 +50,7 @@ impl Default for RecordsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct RateLimitConfig {
     /// Sustained requests per second per client (0 disables rate limiting).
     pub per_ip_rps: f64,
@@ -96,7 +96,7 @@ impl Default for RateLimitConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ApiConfig {
     pub enabled: bool,
     pub listen: SocketAddr,
@@ -140,6 +140,23 @@ pub struct ApiConfig {
     pub cors_allow_origin: Option<String>,
 }
 
+impl ApiConfig {
+    /// A warning for a listener on a loopback address with no trusted proxy: behind a reverse proxy on the same host every
+    /// client then arrives from the loopback address and shares one set of per-client limits (rate, connections,
+    /// WebSockets). `None` otherwise.
+    pub fn loopback_without_trusted_proxy(&self) -> Option<String> {
+        (self.enabled && self.listen.ip().is_loopback() && self.trusted_proxies.is_empty()).then(|| {
+            format!(
+                "the read API listens on {} with no trusted_proxies: behind a reverse proxy on this host every client shares the \
+                 per-client limits of {}; set api.trusted_proxies = [\"{}\"] (docs/ops/executor.md, Part B, 4)",
+                self.listen,
+                self.listen.ip(),
+                self.listen.ip()
+            )
+        })
+    }
+}
+
 impl Default for ApiConfig {
     fn default() -> Self {
         ApiConfig {
@@ -181,7 +198,7 @@ pub enum NodeRole {
 
 /// One more node (docs/ops/executor.md, Part B 3, *Several nodes*).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct NodeConfig {
     /// JSON wRPC endpoint (`ws://` or `wss://`).
     pub url: String,
@@ -203,7 +220,7 @@ impl Default for NodeConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct IndexerConfig {
     /// Expected network id reported by the node (`testnet-10`, `mainnet`).
     pub network: String,
@@ -267,10 +284,13 @@ pub struct IndexerConfig {
     pub lag_alarm_hours: Vec<u64>,
     pub tokens_path: Option<PathBuf>,
     pub rules: ListingRules,
-    // (a `receipts` table of a v2.4 configuration is ignored: unknown keys are, and the trade receipt is retired)
     #[serde(alias = "rawlog")]
     pub records: RecordsConfig,
     pub api: ApiConfig,
+    /// The `[receipts]` table of a v2.4 configuration (the trade receipt is retired): accepted and ignored. Every other
+    /// unknown key is refused, so a misspelt key is never dropped silently.
+    #[serde(skip_serializing)]
+    pub receipts: Option<toml::Value>,
 }
 
 impl Default for IndexerConfig {
@@ -302,6 +322,7 @@ impl Default for IndexerConfig {
             rules: ListingRules::default(),
             records: RecordsConfig::default(),
             api: ApiConfig::default(),
+            receipts: None,
         }
     }
 }
@@ -318,7 +339,11 @@ impl IndexerConfig {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let p = path.display().to_string();
         let s = std::fs::read_to_string(path).map_err(|e| ConfigError::Io(p.clone(), e))?;
-        toml::from_str(&s).map_err(|e| ConfigError::Parse(p, e.to_string()))
+        let cfg: IndexerConfig = toml::from_str(&s).map_err(|e| ConfigError::Parse(p, e.to_string()))?;
+        if cfg.receipts.is_some() {
+            tracing::warn!("config: the [receipts] table is retired and ignored");
+        }
+        Ok(cfg)
     }
 
     /// [`Self::max_lag_secs`] in DAA score.
@@ -446,5 +471,64 @@ url = \"wss://b\"
         let h = Hash32([3; 32]);
         assert_eq!(h.to_hex().parse::<StartMode>().unwrap(), StartMode::Hash(h));
         assert!("nonsense".parse::<StartMode>().is_err());
+    }
+
+    #[test]
+    fn unknown_keys_are_refused_at_every_level() {
+        for (doc, key) in [
+            ("[api]\nlisten = \"127.0.0.1:8090\"\ntrusted_proxy = [\"127.0.0.1\"]\n", "trusted_proxy"),
+            ("rpc_urls = \"ws://a:1\"\n", "rpc_urls"),
+            ("[api.rate_limit]\nper_ip_rp = 5.0\n", "per_ip_rp"),
+            ("[rules]\nmin_order_value = 1\n", "min_order_value"),
+            ("[records]\nsegment_size = 1\n", "segment_size"),
+            ("[[nodes]]\nurl = \"ws://b:1\"\nrole = \"secondary\"\nfetches = true\n", "fetches"),
+        ] {
+            let e = toml::from_str::<IndexerConfig>(doc).err().unwrap_or_else(|| panic!("accepted: {doc}"));
+            assert!(e.to_string().contains(key), "{e}");
+        }
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("index.toml");
+        std::fs::write(&p, "[api]\ntrusted_proxy = [\"127.0.0.1\"]\n").unwrap();
+        assert!(matches!(IndexerConfig::load(&p), Err(ConfigError::Parse(..))));
+    }
+
+    #[test]
+    fn retired_tables_are_still_accepted() {
+        let c: IndexerConfig =
+            toml::from_str("[receipts]\nenabled = true\nanything = 1\n[rawlog]\nenabled = false\n").expect("retired keys");
+        assert!(c.receipts.is_some());
+        assert!(!c.records.enabled, "[rawlog] is [records]");
+        assert!(!toml::to_string(&c).unwrap().contains("receipts"));
+    }
+
+    #[test]
+    fn a_loopback_listener_without_a_trusted_proxy_is_warned_about() {
+        let mut a = ApiConfig::default();
+        let w = a.loopback_without_trusted_proxy().expect("default: loopback, no proxy");
+        assert!(w.contains("trusted_proxies = [\"127.0.0.1\"]"), "{w}");
+        a.trusted_proxies = vec!["127.0.0.1".into()];
+        assert_eq!(a.loopback_without_trusted_proxy(), None);
+        a.trusted_proxies.clear();
+        a.listen = "[::1]:8090".parse().unwrap();
+        assert!(a.loopback_without_trusted_proxy().unwrap().contains("[\"::1\"]"));
+        a.listen = "0.0.0.0:8090".parse().unwrap();
+        assert_eq!(a.loopback_without_trusted_proxy(), None);
+        a.listen = "127.0.0.1:8090".parse().unwrap();
+        a.enabled = false;
+        assert_eq!(a.loopback_without_trusted_proxy(), None);
+    }
+
+    /// The example configuration of docs/ops/executor.md (Part B, 4) parses, and its API sits behind a proxy it trusts.
+    #[test]
+    fn the_documented_example_configuration_parses() {
+        let doc = include_str!("../../../docs/ops/executor.md");
+        let start = doc.find("### 4. Running it").expect("section");
+        let body = &doc[start..];
+        let open = body.find("```toml\n").expect("toml block") + "```toml\n".len();
+        let close = open + body[open..].find("```").expect("end");
+        let c: IndexerConfig = toml::from_str(&body[open..close]).expect("the example parses");
+        assert!(c.api.listen.ip().is_loopback());
+        assert_eq!(c.api.trusted_proxies, vec!["127.0.0.1".to_string()]);
+        assert_eq!(c.api.loopback_without_trusted_proxy(), None);
     }
 }

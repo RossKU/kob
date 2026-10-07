@@ -138,7 +138,8 @@ writers on one data directory.
 ### A.3 Deployment
 
 * **Single host, one operator:** `run`, one systemd unit, the node on loopback. The read API and the
-  hot key share a process: keep `--listen` on loopback behind your reverse proxy, fund the key with
+  hot key share a process: keep `--listen` on loopback behind your reverse proxy (with `trusted_proxies = ["127.0.0.1"]`
+  in the config's `[api]`, B 4), fund the key with
   a few days of fees only, and keep `--pause-file` at hand.
 * **Public API and key apart:** `index` on the public host (no key); on a private host a second
   `run --no-api` with its own data directory (its own follower and store). `match --keep
@@ -927,7 +928,9 @@ kob-executor index \
   --listen 127.0.0.1:8090
 ```
 
-`--config file.toml` holds the same settings (flags override the file). Every key is optional:
+`--config file.toml` holds the same settings (flags override the file). Every key is optional; an unknown key (a
+misspelt one included) is refused at start (`unknown field`), except the retired `[receipts]` table, which is ignored
+with a warning:
 
 ```toml
 network = "testnet-10"
@@ -957,8 +960,8 @@ enabled = true
 segment_bytes = 268435456
 
 [api]
-listen = "127.0.0.1:8090"
-trusted_proxies = ["10.0.0.0/8"]        # your reverse proxy / CDN egress ranges
+listen = "127.0.0.1:8090"               # behind a reverse proxy on this host (A.3)
+trusted_proxies = ["127.0.0.1"]         # that proxy: the address it connects from
 client_ip_header = "x-forwarded-for"    # or "cf-connecting-ip", "x-real-ip"
 [api.rate_limit]
 per_ip_rps = 20.0
@@ -966,6 +969,13 @@ per_ip_burst = 60
 global_rps = 500.0
 global_burst = 1000
 ```
+
+**Behind a reverse proxy.** The per-client limits (`rate_limit`, `max_connections_per_ip`, `max_ws_per_ip`) key a client
+by the address it connects from; a proxy's forwarded-client header is believed only from `trusted_proxies`. With a proxy
+on the same host and `listen` on loopback, list the loopback address (`["127.0.0.1"]`, `["::1"]`), or every client arrives
+as 127.0.0.1 and all of them share one client's limits; the indexer warns at start when it listens on loopback with no
+trusted proxy. A proxy or CDN elsewhere: `listen` on the address it reaches and its egress ranges in `trusted_proxies`
+(only those ranges, never a whole private network the proxy is not in).
 
 Flags of note: `--reorg-window-hours` (default 12, consensus finality), `--no-record-log` (disables
 the permanent record log: then a lost or outdated database can only be rebuilt from what the node

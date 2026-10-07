@@ -161,6 +161,9 @@ impl Indexer {
             lag_alarm_hours: self.cfg.lag_alarm_hours.clone(),
         };
         st.validate().map_err(IndexerError::Config)?;
+        if let Some(w) = self.cfg.api.loopback_without_trusted_proxy() {
+            tracing::warn!("{w}");
+        }
         Ok(st)
     }
     /// Follow the node and serve the API until `shutdown` resolves.
