@@ -238,6 +238,7 @@ fn library_instances_equal_compiler_output() {
         decay_step: 60,
         amount_left: 987_654_321,
         custody: 12_195_000,
+        s_ext: [0xe7; 32],
     };
     assert_eq!(x.redeem(), compiled(TemplateId::KobPair, 0, x.to_values()), "KobPair");
     let c = CondPairState {
@@ -279,6 +280,7 @@ fn library_instances_equal_compiler_output() {
         rpt_price: 1_111_111,
         rpt_pre: 0,
         rpt_until: 77_760_123,
+        s_ext: [0; 32],
     };
     assert_eq!(c.redeem(), compiled(TemplateId::KobCondPair, 15, c.to_values()), "KobCondPair");
     let e = IfdPairState {

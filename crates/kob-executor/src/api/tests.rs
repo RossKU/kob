@@ -1016,6 +1016,7 @@ fn pair_of(base: u8, quote: u8, ask: bool, price: i64, amount: i64) -> kob_proto
         decay_step: 0,
         amount_left: amount,
         custody: amount,
+        s_ext: [0xee; 32],
     };
     if !ask {
         x.custody = x.bid_escrow(amount, 4).unwrap();

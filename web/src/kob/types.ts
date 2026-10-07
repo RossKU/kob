@@ -133,6 +133,8 @@ export interface PairState {
   amountLeft: I64;
   /** mutable: the exact custody of S (an ask: == amountLeft) */
   custody: I64;
+  /** KCC-20 extension commitment of the custody of S (zero for a KRON S): the order takes no custody of another commitment */
+  sExt: Hex;
 }
 
 /**
@@ -163,6 +165,8 @@ export interface CondPairState {
   custody: I64;
   /** repeat IFD: the entry this exit re-arms (zero = none), the rates written by the entry, rptUntil */
   parent: Hex; rptPrice: I64; rptPre: I64; rptUntil: I64;
+  /** KCC-20 extension commitment of the custody of S (zero for a KRON S); an exit: its entry's aExt / bExt */
+  sExt: Hex;
 }
 
 /**

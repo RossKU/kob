@@ -770,12 +770,17 @@ fn check_pair_programs(o: usize, t: &crate::state::PairTokens) -> Result<()> {
     Ok(())
 }
 
+/// One custody an order record must carry: (token, its program hash, family, amount, the extension commitment the order
+/// pins for it).
+type Wanted = ([u8; 32], [u8; 32], Family, i64, Option<[u8; 32]>);
+
 /// Re-derives every order a transaction created from its `KOB1` payload (version 4 records of the pinned templates),
 /// trusting nothing: the template must be pinned, the state must decode canonically, the output's script must be
 /// the P2SH of `template(state)`, the output must be a genesis whose covenant id is recomputed from
 /// the authorising input's outpoint, no other output may be bound to that covenant id (the genesis
 /// group is the order output alone), and the custody token output (if any) must be the P2SH of the
-/// custody state (exactly `amountLeft`) under the order's token program. Records failing any check are errors.
+/// custody state (exactly `amountLeft`) under the order's token program. A pair order's KCC-20 custody carries the extension
+/// commitment its state pins for it. Records failing any check are errors.
 pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
     let Some(p) = decode(&tx.payload)? else { return Ok(vec![]) };
     let mut out = vec![];
@@ -785,8 +790,8 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
         let bad = |m: &str| Err(Error::Payload(format!("order record for output {o}: {m}")));
         let order = check_order_state(*family, *t, state)?;
         let (id, value) = verify_genesis(tx, o, &spk_to_string(&order.spk()))?;
-        // the custodies the order holds: (token, its program hash, family, amount)
-        let wanted: Vec<([u8; 32], [u8; 32], Family, i64)> = match order.pair_tokens() {
+        // the custodies the order holds: (token, its program hash, family, amount, the extension commitment the order pins)
+        let wanted: Vec<Wanted> = match order.pair_tokens() {
             Some(pt) => {
                 check_pair_programs(o, &pt)?;
                 order
@@ -794,7 +799,7 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
                     .into_iter()
                     .map(|(tok, amount)| {
                         let k = if tok == pt.a.cov_id { pt.a } else { pt.b };
-                        (tok, k.tpl_hash, k.family_of().unwrap_or(Family::Kcc20), amount)
+                        (tok, k.tpl_hash, k.family_of().unwrap_or(Family::Kcc20), amount, k.ext)
                     })
                     .collect()
             }
@@ -803,6 +808,7 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
                 order.token_tpl_hash().expect("order"),
                 order.family(),
                 order.custody_amount().expect("token-holding kind"),
+                None,
             )],
             None => vec![],
         };
@@ -815,7 +821,11 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
             };
         }
         let mut got = vec![];
-        for (c, (tok, tpl_hash, fam, amount)) in parts.into_iter().zip(wanted) {
+        for (c, (tok, tpl_hash, fam, amount, ext)) in parts.into_iter().zip(wanted) {
+            // a pair order takes only a custody of the commitment it pins (KobPair / KobCondPair sExt, KobIfdPair aExt / bExt)
+            if fam == Family::Kcc20 && ext.is_some_and(|e| e != c.extension_commitment) {
+                return bad("the custody's extension commitment is not the one the order pins");
+            }
             got.push(verify_custody(tx, o, c, fam, &tpl_hash, tok, amount, id)?);
         }
         let mut got = got.into_iter();
@@ -1302,6 +1312,7 @@ mod tests {
                 s_family: s_code,
                 t_family: t_code,
                 t_ext: if t_code == 2 { [0; 32] } else { x.t_ext },
+                s_ext: if s_code == 2 { [0; 32] } else { x.s_ext },
                 ..x.clone()
             });
             let a_fam = Family::from_code(if side == 1 { s_code } else { t_code } as u8).unwrap();

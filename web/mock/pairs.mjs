@@ -74,7 +74,7 @@ export function pairOrderState(chain, spec) {
   const tips = (state) => JSON.parse(raw(chain).tipsFor(J(state)));
   const S = ask ? A : B;
   const T = ask ? B : A;
-  const common = { maker, side: ask ? '1' : '2', ...st('s', S), sScale: S.scale, ...st('t', T), tExt: T.ext, tScale: T.scale };
+  const common = { maker, side: ask ? '1' : '2', ...st('s', S), sScale: S.scale, ...st('t', T), tExt: T.ext, tScale: T.scale, sExt: S.ext };
   let any;
   if (kind === 'KobPair') {
     any = {
@@ -122,7 +122,7 @@ export function pairOrderState(chain, spec) {
         tip: String(x.tip ?? 0), activeFrom: '0', expiryDaa: String(x.expiryDaa ?? 499_999_999_999), refundTip: '0', deliveryCarrier: String(spec.deliveryCarrier ?? 200_000_000),
         tpPrice: String(x.tp ?? 0), slipBps: String(x.slipBps ?? 300), trailStep: String(x.trailStep ?? 0), trailGap: String(x.trailGap ?? 0), trailWait: String(x.trailWait ?? 0),
         minTouch: String(x.minTouch ?? minFill), minRestDaa: String(x.minRestDaa ?? 50), bandDaa: String(x.bandDaa ?? 300), keeperTip: '0', stopPrice: String(x.stop ?? 0),
-        armed: '0', amountLeft: '0', custody: '0', parent: ZERO32, rptPrice: '0', rptPre: '0', rptUntil: '0',
+        armed: '0', amountLeft: '0', custody: '0', parent: ZERO32, rptPrice: '0', rptPre: '0', rptUntil: '0', sExt: XS.ext,
       },
     };
     const xt = tips(exit);

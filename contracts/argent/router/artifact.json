@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "id": "4156f81d935b8dd8a6a515fef20b520999a6e955e2f331f860ec2bf800fb5398",
+  "id": "702e0ee5bf049196bcfd297bc3671b9808d7f4d8ac3528bb2ae4e391c23d9327",
   "generator": {
     "name": "argentc",
     "version": "0.1.0"
@@ -9,7 +9,7 @@
   "dependencies": [
     {
       "app": "KOBOrders",
-      "artifact_id": "b6faaadb41f7a489d0ad447777cd9e42096ce703bc0e0e3d617dd461c8d7960e"
+      "artifact_id": "606ae6f9126b100ff366e834d0da33de001d311d1428f516ecdb0cd944e98782"
     },
     {
       "app": "KOBOrdersKron",
@@ -7403,6 +7403,13 @@
             "type": {
               "kind": "int"
             }
+          },
+          {
+            "name": "sExt",
+            "type": {
+              "kind": "fixed_bytes",
+              "len": 32
+            }
           }
         ]
       },
@@ -8113,6 +8120,13 @@
             "name": "custody",
             "type": {
               "kind": "int"
+            }
+          },
+          {
+            "name": "sExt",
+            "type": {
+              "kind": "fixed_bytes",
+              "len": 32
             }
           }
         ]
@@ -25288,6 +25302,13 @@
             "type": {
               "kind": "int"
             }
+          },
+          {
+            "name": "sExt",
+            "type": {
+              "kind": "fixed_bytes",
+              "len": 32
+            }
           }
         ]
       },
@@ -25994,6 +26015,13 @@
             "name": "custody",
             "type": {
               "kind": "int"
+            }
+          },
+          {
+            "name": "sExt",
+            "type": {
+              "kind": "fixed_bytes",
+              "len": 32
             }
           }
         ]

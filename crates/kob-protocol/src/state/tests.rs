@@ -442,7 +442,9 @@ fn mutable_windows_match_the_encoding() {
             j["state"]["parent"] = serde_json::Value::String("ab".repeat(32));
             let rs = serde_json::from_value::<AnyState>(j).unwrap().redeem();
             assert_eq!(&rs[a + 1..a + 33], &[0xab; 32], "{}", id.name());
-            assert_eq!(b, 1 + t.state_len, "{}: the repeat fields end the state", id.name());
+            // the repeat fields end the state; a KobCondPair's sExt (0x20 + 32 B) follows them
+            let tail = if id == TemplateId::KobCondPair { 33 } else { 0 };
+            assert_eq!(b + tail, 1 + t.state_len, "{}: the repeat fields end the state", id.name());
         }
     }
 }
@@ -500,7 +502,7 @@ fn one_pair_template_for_both_families() {
     for (side, s_code, t_code, fam) in
         [(1, 1, 2, Family::Kcc20), (1, 2, 1, Family::Kron), (2, 1, 2, Family::Kron), (2, 2, 1, Family::Kcc20)]
     {
-        let s = AnyState::KobPair(PairState { side, s_family: s_code, t_family: t_code, t_ext: [0; 32], ..x.clone() });
+        let s = AnyState::KobPair(PairState { side, s_family: s_code, t_family: t_code, t_ext: [0; 32], s_ext: [0; 32], ..x.clone() });
         assert_eq!(s.family(), fam);
         assert_eq!(s.clone().into_family(Family::Kcc20), s);
         s.validate().unwrap();

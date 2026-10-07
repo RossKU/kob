@@ -722,6 +722,25 @@ fn check_custody(c: &TokenUtxo, order_cov: Option<[u8; 32]>, token: Token, amoun
     Ok(())
 }
 
+/// A pair order's custody carries the extension commitment the order pins (KCC-20; a KRON token has none): units of the
+/// token's covenant id with another commitment are another token, and the order's covenant refuses them.
+pub(crate) fn check_custody_ext(c: &TokenUtxo, ext: [u8; 32]) -> Result<()> {
+    if matches!(c.state, TokenState::Kcc20(_)) && c.state.extension() != ext {
+        return invalid("the custody carries another extension commitment than the order pins");
+    }
+    Ok(())
+}
+
+/// The extension commitment a pair order pins for its custody of `token` (`None` for the KAS kinds).
+pub(crate) fn pinned_ext(s: &AnyState, token: [u8; 32]) -> Option<[u8; 32]> {
+    let t = s.pair_tokens()?;
+    if token == t.a.cov_id {
+        t.a.ext
+    } else {
+        t.b.ext
+    }
+}
+
 pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     check_new_order(&r.order)?;
     if r.order.is_pair() {
@@ -842,6 +861,10 @@ fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
             .ok_or_else(|| Error::Invalid(format!("the order needs {amount} base units of {} (no token input)", tok.1.name())))?;
         if g.1 < *amount {
             return invalid(format!("token inputs hold {} < the {amount} base units of the custody", g.1));
+        }
+        // the custody carries the commitment the order pins (its covenant refuses any other)
+        if tok.1.family() == Family::Kcc20 && pinned_ext(&r.order, *cov).is_some_and(|e| e != g.2) {
+            return invalid("the token inputs carry another extension commitment than the order pins for its custody");
         }
         g.1 -= amount;
         let idx = d.add_token_output(tok, TokenState::custody(tok.1.family(), *amount, order_id, g.2), carrier)?;
@@ -1450,6 +1473,9 @@ fn build_refund_pair(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     }
     for (c, (tok, amount)) in given.iter().zip(&custodies) {
         check_custody(c, Some(order_cov), *tok, *amount)?;
+        if let Some(e) = pinned_ext(&o.state, tok.0) {
+            check_custody_ext(c, e)?;
+        }
         d.add_token_input(c, *tok, Witness::CovenantId)?;
     }
     for f in &r.funding {

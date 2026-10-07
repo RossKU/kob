@@ -122,6 +122,7 @@ pub fn pair_order(p: Pair, maker: u8, ask: bool, price: i64, n: i64) -> PairStat
         decay_step: 0,
         amount_left: n * WHOLE,
         custody: n * WHOLE,
+        s_ext: if ask { ext_of(p.fa) } else { ext_of(p.fb) },
     };
     if !ask {
         s.custody = s.bid_escrow(s.amount_left, 4).unwrap();
@@ -172,6 +173,7 @@ pub fn cond_pair_ask(p: Pair, maker: u8) -> CondPairState {
         rpt_price: 0,
         rpt_pre: 0,
         rpt_until: 0,
+        s_ext: x.s_ext,
     }
 }
 
@@ -193,6 +195,7 @@ pub fn cond_pair_bid(p: Pair, maker: u8) -> CondPairState {
         t_family: a.s_family,
         t_ext: ext_of(p.fa),
         t_scale: a.s_scale,
+        s_ext: ext_of(p.fb),
         tp_price: RATE - 200,
         stop_price: RATE,
         ..a

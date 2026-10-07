@@ -150,6 +150,7 @@ fn pair_order(maker: u8, ask: bool) -> PairState {
         decay_step: 0,
         amount_left: 10 * SCALE,
         custody: 10 * SCALE,
+        s_ext: EXT,
     };
     if !ask {
         x.custody = x.bid_escrow(x.amount_left, 4).unwrap();
@@ -201,6 +202,7 @@ fn ifd_sell_first(maker: u8) -> IfdPairState {
         rpt_price: 0,
         rpt_pre: 0,
         rpt_until: 0,
+        s_ext: EXT,
     };
     let mut e = IfdPairState {
         maker: pk(maker),

@@ -86,10 +86,11 @@ the id) is unproven: listed nowhere, in no book, depth or count.
 If-done exits are derived from the entry: the exit's state is the committed `exitState` with
 `amountLeft := n` (a pair exit also `custody :=` its custody: n of A for a buy-first entry, the proceeds plus the
 prefund of the fill for a sell-first one, read from the fill's arguments), followed by the repeat fields the entry writes
-itself (`parent`, `rptPrice`, [`rptPre`,] `rptUntil`: zero for a plain exit, §6.1); its covenant id is the genesis id of
+itself (`parent`, `rptPrice`, [`rptPre`,] `rptUntil`: zero for a plain exit, §6.1; a pair exit then `sExt`, the entry's
+`aExt` / `bExt` of the exit's custody token); its covenant id is the genesis id of
 the entry's fill output (§6). The repeat fields of an exit are immutable (bytecode `KobCondAsk`
 [280..331), `KobCondBid` [322..382); KRON `KobCondAskKron` [280..331), `KobCondBidKron` [289..349); `KobCondPair`
-[451..511)).
+[451..511), then its `sExt` [512..544)).
 
 ### 1.2 Custody validation
 
@@ -982,7 +983,7 @@ for both tokens `KobPair` 6 to 11, `KobCondPair` 7 to 21 (a stop armed in its fi
 (a sell-first fill that arms its stop entry and books its exit 34); over every program pair at most 72, 91 and 136 (the
 largest token programs, whose custody inputs the scans read).
 
-**Template sizes.** `KobPair` 2,919 B (state 414 B), `KobCondPair` 6,225 B (state 510 B), `KobIfdPair` 8,708 B (state
+**Template sizes.** `KobPair` 2,960 B (state 447 B), `KobCondPair` 6,272 B (state 543 B), `KobIfdPair` 8,822 B (state
 909 B; the committed exit 432 B). The scans of both tokens are unrolled to `MAX_TOK_IN` = 8 slots each (a KRON program
 accepts fewer), so every spend of a pair order pays for them; a larger route or net is split into several fills (§7).
 

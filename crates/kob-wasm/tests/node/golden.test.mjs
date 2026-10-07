@@ -132,7 +132,7 @@ test('pair orders: three kinds for both families and sides, windows, placement r
   }
   // ONE template per kind for both sides and both families; the pair orders replaced KobCross
   const tpls = JSON.parse(kob.templates());
-  for (const [name, code, len] of [['KobPair', 8, 414], ['KobCondPair', 9, 510], ['KobIfdPair', 10, 909]]) {
+  for (const [name, code, len] of [['KobPair', 8, 447], ['KobCondPair', 9, 543], ['KobIfdPair', 10, 909]]) {
     const t = tpls.find((x) => x.name === name);
     assert.ok(t && t.kindCode === code && t.stateLen === len, name);
   }
@@ -160,6 +160,9 @@ test('pair orders: three kinds for both families and sides, windows, placement r
   // A KRON token has no extension commitment; family codes are 1 or 2; A != B.
   const x = golden.transactions.find((t) => t.name === 'pair.kcc20-kron.create.ask').request.order;
   assert.throws(() => kob.encodeState(s({ kind: x.kind, state: { ...x.state, tExt: 'ee'.repeat(32) } })), /extension commitment/);
+  // the custody of a KRON S has no commitment either (sExt)
+  const xk = golden.transactions.find((t) => t.name === 'pair.kron-kcc20.create.ask').request.order;
+  assert.throws(() => kob.encodeState(s({ kind: xk.kind, state: { ...xk.state, sExt: 'ee'.repeat(32) } })), /extension commitment/);
   assert.throws(() => kob.encodeState(s({ kind: x.kind, state: { ...x.state, tFamily: '3' } })), /family/);
   assert.throws(() => kob.encodeState(s({ kind: x.kind, state: { ...x.state, tCovId: x.state.sCovId } })), /A != B/);
   // Pair keeper tips per program pair; tipsFor picks the table by kind.

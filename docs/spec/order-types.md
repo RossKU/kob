@@ -301,6 +301,11 @@ A fill of n base units of A (`n ≥ minFill` unless `n = amountLeft`, `n ≤ max
 - **ASK** (sells A for B): releases exactly n of A from its custody and receives `tOut ≥ ⌈n·p(t) / scale(A)⌉` of B at
   output i (its input index), owned by the maker (KCC-20 scheme 0 with the order's `tExt`, KRON `id_type` 3). The custody
   holds exactly `amountLeft` (`custody = amountLeft`, checked on every fill): every displayed amount can be taken.
+- **Custody identity.** The custody of S is a token UTXO owned by the order's covenant id holding exactly `custody`, of
+  the KCC-20 extension commitment the state names (`sExt`; zero for a KRON S): units of S's covenant id with another
+  commitment are another token, and every entry that reads the custody (fill, refund, IOC / FOK end) refuses them.
+  `KobCondPair` pins its custody the same way (`sExt`; an if-done exit carries its entry's `aExt` / `bExt`), and
+  `KobIfdPair` pins its A custody, its B escrow or prefund and the custody of a merging exit to `aExt` / `bExt`.
 - **BID** (buys A with B): receives exactly n of A at output i and releases EXACTLY `⌊n·p(t) / scale(A)⌋` of B from its
   escrow custody (`custody`, exact). A bid shows only quotes its escrow funds. The builders refuse an escrow below
   `⌊amountLeft·pMax / scale(A)⌋` (`pMax` = `price`, or `priceEnd` of a rising bid); the wallet funds

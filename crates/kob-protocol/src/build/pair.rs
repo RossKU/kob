@@ -376,6 +376,7 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
                     s.custody
                 ));
             }
+            check_custody_ext(custody, s.s_ext)?;
             let t_arg =
                 if s.slope != 0 { auction_t(*t, lock, need(s.origin(udaa), "decay origin")?, "decaying pair order")? } else { 0 };
             let p = need(s.price_at(t_arg, udaa), "pair order quote")?;
@@ -398,6 +399,7 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
             if custody.state.amount() != s.custody {
                 return invalid("the conditional pair order's custody does not hold exactly its custody field");
             }
+            check_custody_ext(custody, s.s_ext)?;
             let leg = *leg as i64;
             let mut trigger = false;
             let mut t_arg = 0;
@@ -877,6 +879,7 @@ pub(crate) fn plan_leg(
                         match &m.a_custody {
                             Some(x) => {
                                 check_custody(x, e.utxo.covenant_id, a, es.amount_left)?;
+                                check_custody_ext(x, es.a_ext)?;
                                 extras.push(Extra::AtInput {
                                     slot: Slot::EntryA,
                                     value: x.utxo.amount,
@@ -913,6 +916,7 @@ pub(crate) fn plan_leg(
                         match &m.b_custody {
                             Some(x) => {
                                 check_custody(x, e.utxo.covenant_id, bt, es.custody)?;
+                                check_custody_ext(x, es.b_ext)?;
                                 extras.push(Extra::AtInput {
                                     slot: Slot::EntryB,
                                     value: x.utxo.amount,
@@ -1067,13 +1071,19 @@ pub(crate) fn plan_leg(
             // the custodies: exactly what the entry holds
             let a_held = if buy { 0 } else { s.amount_left };
             match (a_custody, a_held > 0) {
-                (Some(x), true) => check_custody(x, order.utxo.covenant_id, a, a_held)?,
+                (Some(x), true) => {
+                    check_custody(x, order.utxo.covenant_id, a, a_held)?;
+                    check_custody_ext(x, s.a_ext)?;
+                }
                 (None, false) => {}
                 (Some(_), false) => return invalid("this entry holds no A custody"),
                 (None, true) => return invalid("a sell-first entry's A custody is required"),
             }
             match (b_custody, s.custody > 0) {
-                (Some(x), true) => check_custody(x, order.utxo.covenant_id, bt, s.custody)?,
+                (Some(x), true) => {
+                    check_custody(x, order.utxo.covenant_id, bt, s.custody)?;
+                    check_custody_ext(x, s.b_ext)?;
+                }
                 (None, false) => {}
                 (Some(_), false) => return invalid("this entry holds no B custody"),
                 (None, true) => return invalid("the entry's B custody is required"),

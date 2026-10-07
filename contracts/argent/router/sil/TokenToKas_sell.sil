@@ -291,6 +291,7 @@ contract TokenToKas_sell(
         int rptPrice;
         int rptPre;
         int rptUntil;
+        byte[32] sExt;
     }
     struct KobIfdAskState {
         // :: user declared fields
@@ -415,6 +416,7 @@ contract TokenToKas_sell(
         int decayStep;
         int amountLeft;
         int custody;
+        byte[32] sExt;
     }
     struct KronTokenState {
         // :: user declared fields

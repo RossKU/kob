@@ -61,7 +61,7 @@ pragma silverscript ^0.1.0;
 // ASK_TPL_KRON (KobAskKron), BID_TPL (KobBid), BID_TPL_KRON (KobBidKron), PAIR_TPL (KobPair), each with PRE / SUF.
 // KobCondPair state offsets used here (state-relative): side [34..42) sScale [136..144) tScale [271..279) tip
 // [289..297) deliveryCarrier [325..333) stopPrice [415..423) armed [424..432) amountLeft [433..441) custody [442..450)
-// parent [451..483) rptPrice [484..492) rptPre [493..501) rptUntil [502..510).
+// parent [451..483) rptPrice [484..492) rptPre [493..501) rptUntil [502..510) sExt [511..543).
 //
 // Repeat (trap-repeat): rptAmount > 0; rptAmount - 1 = base units of re-arms left (0 = not repeating).
 //   - A fill of n with rptAmount > n BOOKS its exit (n < 2^53): rptAmount -= n; the exit gets parent = this covenant
@@ -92,9 +92,10 @@ pragma silverscript ^0.1.0;
 //   - Strays: no input of A or B owned by this covenant id other than its custodies, in every entry (update: none at
 //     all). Strays are inert (only the maker's cancel moves them).
 //   - Merge accepts only an input k that is exactly an exit as fill books it: the committed exitState outside the
-//     mutable stopPrice / armed / amountLeft / custody payloads, parent = this entry, rptPrice = price, rptPre (rptUntil
-//     not compared), the opposite side at this entry's scale(A); and that exit's own settle names this entry and its
-//     n. A look-alike exit someone else funds pays THIS maker on THIS maker's terms and can only give, never take.
+//     mutable stopPrice / armed / amountLeft / custody payloads, parent = this entry, rptPrice = price, rptPre, sExt = the
+//     extension commitment of its custody token (rptUntil not compared), the opposite side at this entry's scale(A);
+//     and that exit's own settle names this entry and its n. A look-alike exit someone else funds pays THIS maker on THIS
+//     maker's terms and can only give, never take.
 contract KobIfdPair(
     byte[32] COND_TPL,
     int COND_PRE,
@@ -199,9 +200,9 @@ contract KobIfdPair(
     int constant ASK_STATE_LEN = 243;
     int constant BID_STATE_LEN = 285;
     int constant BID_STATE_LEN_KRON = 252;
-    int constant PAIR_STATE_LEN = 414;
-    // KobCondPair state (the exit): 510 B.
-    int constant EXIT_STATE_LEN = 510;
+    int constant PAIR_STATE_LEN = 447;
+    // KobCondPair state (the exit): 543 B.
+    int constant EXIT_STATE_LEN = 543;
     // Most token inputs of one token a transaction may carry (the scans are unrolled by hand, one line per slot).
     int constant MAX_TOK_IN = 8;
     // Merge argument -(k * MERGE_K + m): input index k < 1024, amount m < MERGE_K (2^53).
@@ -274,9 +275,10 @@ contract KobIfdPair(
     }
 
     // The custody of token `tok` at input idx: owned by `me` with the covenant marker (KCC-20 scheme 0x04, borrow
-    // disabled; KRON id_type 2, not minter), holding exactly `amount`. Returns its guard || 0x20 || extension (KCC-20;
+    // disabled; KRON id_type 2, not minter), holding exactly `amount`, KCC-20 of the extension commitment `ext` (units of
+    // the token's covenant id with another commitment are another token). Returns its guard || 0x20 || extension (KCC-20;
     // `dflt` for KRON), copied to its rest / return.
-    function heldGx(int idx, byte[32] tok, byte[32] tpl, int pre, int len, int suf, int fam, byte[32] me, int amount, byte[] dflt) : byte[] {
+    function heldGx(int idx, byte[32] tok, byte[32] tpl, int pre, int len, int suf, int fam, byte[32] me, int amount, byte[] dflt, byte[32] ext) : byte[] {
         require(OpInputCovenantId(idx) == tok);
         byte[] st = tplState(idx, pre, len, suf, tpl);
         int got = 0;
@@ -291,6 +293,7 @@ contract KobIfdPair(
             require(st.slice(43, 46) == byte[](0x040100));
             got = int(byte[8](st.slice(1, 9)));
             gx = st.slice(47, 112);
+            require(byte[32](st.slice(80, 112)) == ext);
         }
         require(got == amount);
         return gx;
@@ -550,12 +553,12 @@ contract KobIfdPair(
         byte[] bGx = zg + byte[](bExt);
         if (aHeld > 0) {
             ac = aIn;
-            aGx = heldGx(aIn, aCovId, aTplHash, aPre, aLen, aSuf, aFamily, selfId, aHeld, aGx);
+            aGx = heldGx(aIn, aCovId, aTplHash, aPre, aLen, aSuf, aFamily, selfId, aHeld, aGx, aExt);
             aCar = tx.inputs[aIn].value;
         }
         if (custody > 0 && !update) {
             bc = bIn;
-            bGx = heldGx(bIn, bCovId, bTplHash, bPre, bLen, bSuf, bFamily, selfId, custody, bGx);
+            bGx = heldGx(bIn, bCovId, bTplHash, bPre, bLen, bSuf, bFamily, selfId, custody, bGx, bExt);
             bCar = tx.inputs[bIn].value;
         }
         noStrays(aCovId, selfId, ac, aOff);
@@ -632,11 +635,15 @@ contract KobIfdPair(
                 int xPre = 0;
                 int xSide = SIDE_ASK;
                 int xsOff = 136;
+                byte[32] xsExt = aExt;
                 if (!buy) {
                     xPre = prefund;
                     xSide = SIDE_BID;
                     xsOff = 271;
+                    xsExt = bExt;
                 }
+                // the exit's sExt [510..543) is the commitment of its custody token, as fill writes it
+                require(x.slice(510, 543) == byte[](0x20) + byte[](xsExt));
                 require(x.slice(423, 424) + x.slice(432, 433) + x.slice(441, 442) + x.slice(450, 502)
                     == byte[](0x080808) + byte[](0x20) + byte[](selfId) + byte[](0x08) + byte[](price as byte[8]) + byte[](0x08)
                         + byte[](xPre as byte[8]) + byte[](0x08));
@@ -682,7 +689,7 @@ contract KobIfdPair(
                         xSf = bSuf;
                         xFm = bFamily;
                     }
-                    heldGx(xc, xTok, xTh, xPr, xLn, xSf, xFm, OpInputCovenantId(k), int(byte[8](x.slice(442, 450))), zg);
+                    heldGx(xc, xTok, xTh, xPr, xLn, xSf, xFm, OpInputCovenantId(k), int(byte[8](x.slice(442, 450))), zg, xsExt);
                     int all = tx.inputs[self].value + tx.inputs[k].value + tx.inputs[xc].value
                         - quoteOf(m, int(byte[8](st.slice(289, 297))), aScale, 0) - int(byte[8](st.slice(325, 333)));
                     if (all > floor) { floor = all; }
@@ -805,15 +812,18 @@ contract KobIfdPair(
 
                 // The exit: exactly the committed KobCondPair state with amountLeft := n and custody := xCust (state
                 // [432..450): 0x08 n 0x08 xCust), then the repeat fields parent (0x20 + 32 B), rptPrice, rptPre,
-                // rptUntil (0x08 + 8 B each), as a FRESH single-output covenant created by this input. Genesis outputs
-                // are invisible to OpAuthOutput*, so the covenant id is recomputed as consensus derives it (keyed blake2b
-                // "CovenantID" over this input's outpoint, group size u64 1, then the output: index u32, value u64, spk
-                // version u16, script length u64 = 35, script).
+                // rptUntil (0x08 + 8 B each) and sExt (0x20 + 32 B), as a FRESH single-output covenant created by this
+                // input. Genesis outputs are invisible to OpAuthOutput*, so the covenant id is recomputed as consensus
+                // derives it (keyed blake2b "CovenantID" over this input's outpoint, group size u64 1, then the output:
+                // index u32, value u64, spk version u16, script length u64 = 35, script).
                 require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == COND_TPL);
+                // the exit's sExt: the commitment of its custody token (A for a buy-first entry, B for a sell-first one)
+                byte[32] xs = aExt;
+                if (!buy) { xs = bExt; }
                 byte[] exitSpk = byte[](new ScriptPubKeyP2SHFromRedeemScript(
                     cPre + byte[](exitState) + byte[](0x08) + byte[](nb) + byte[](0x08) + byte[](xCust as byte[8]) + byte[](0x20)
                         + byte[](xParent) + byte[](0x08) + byte[](xPrice as byte[8]) + byte[](0x08) + byte[](xPre as byte[8])
-                        + byte[](0x08) + byte[](xUntil as byte[8]) + cSuf
+                        + byte[](0x08) + byte[](xUntil as byte[8]) + byte[](0x20) + byte[](xs) + cSuf
                 ));
                 require(tx.outputs[exitOut].scriptPubKey == exitSpk);
                 byte[32] exitId = OpOutputCovenantId(exitOut);

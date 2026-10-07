@@ -936,7 +936,7 @@ impl Processor {
         ])?;
         // token registry event: first sighting of this (token, program, extension) identity (a pair order names two tokens:
         // each with the extension commitment its listing input carries)
-        let identities: Vec<(Hash32, Option<Hash32>, Option<[u8; 32]>)> = match pair_listing(&n.state, ext, n.daa, n.out_value) {
+        let identities: Vec<(Hash32, Option<Hash32>, Option<[u8; 32]>)> = match pair_listing(&n.state, n.daa, n.out_value) {
             Some((ia, ib)) => [ia, ib]
                 .into_iter()
                 .filter_map(|i| {
@@ -970,7 +970,7 @@ impl Processor {
     fn listing(&self, state: &AnyState, ext: Option<[u8; 32]>, daa: u64, carrier: u64) -> (bool, Option<String>) {
         // a pair order needs both tokens acceptable: A as the order's token, B as any traded token (reasons `quote_...`);
         // neither is measured in KAS (a pair order has no KAS quote)
-        if let Some((ia, ib)) = pair_listing(state, ext, daa, carrier) {
+        if let Some((ia, ib)) = pair_listing(state, daa, carrier) {
             let r = self
                 .rules
                 .evaluate(&self.tokens, &ia)
@@ -1608,21 +1608,16 @@ impl Processor {
 
 /// The listing inputs of a pair order's two tokens (`None` for the KAS kinds): A with the order's scale, minimum fill, amount
 /// and expiry; B with its own scale. Neither carries a KAS price (a pair order is not measured in KAS). The extension
-/// commitment of each KCC-20 token: the order's custody of S carries the placement record's (`custody_ext`), the deliveries
-/// of T carry the state's `tExt`; an entry names `aExt` and `bExt`.
-fn pair_listing(
-    state: &AnyState,
-    custody_ext: Option<[u8; 32]>,
-    genesis_daa: u64,
-    carrier: u64,
-) -> Option<(ListingInput, ListingInput)> {
+/// commitment of each KCC-20 token: the state names it (`sExt` of the custody of S, `tExt` of the deliveries of T; an entry
+/// `aExt` and `bExt`).
+fn pair_listing(state: &AnyState, genesis_daa: u64, carrier: u64) -> Option<(ListingInput, ListingInput)> {
     let t = state.pair_tokens()?;
     let terms = model::terms_of(state);
     let (ea, eb) = match state {
-        AnyState::KobPair(p) if p.is_ask() => (custody_ext, Some(p.t_ext)),
-        AnyState::KobPair(p) => (Some(p.t_ext), custody_ext),
-        AnyState::KobCondPair(p) if p.is_ask() => (custody_ext, Some(p.t_ext)),
-        AnyState::KobCondPair(p) => (Some(p.t_ext), custody_ext),
+        AnyState::KobPair(p) if p.is_ask() => (Some(p.s_ext), Some(p.t_ext)),
+        AnyState::KobPair(p) => (Some(p.t_ext), Some(p.s_ext)),
+        AnyState::KobCondPair(p) if p.is_ask() => (Some(p.s_ext), Some(p.t_ext)),
+        AnyState::KobCondPair(p) => (Some(p.t_ext), Some(p.s_ext)),
         AnyState::KobIfdPair(p) => (Some(p.a_ext), Some(p.b_ext)),
         _ => return None,
     };

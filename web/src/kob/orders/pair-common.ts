@@ -106,6 +106,7 @@ function stFields(env: PairPlanEnv, side: 'sell' | 'buy') {
   return {
     sCovId: s.covenantId, sTplHash: s.templateHash, sPre: String(s.prefixLen), sSuf: String(s.suffixLen), sFamily: familyCode(s), sScale: str(s.scale),
     tCovId: t.covenantId, tTplHash: t.templateHash, tPre: String(t.prefixLen), tSuf: String(t.suffixLen), tFamily: familyCode(t), tExt: extOf(t), tScale: str(t.scale),
+    sExt: extOf(s),
   };
 }
 

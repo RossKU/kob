@@ -24,7 +24,8 @@ pragma silverscript ^0.1.0;
 //   cancel(sig)         maker only, SIGHASH_ALL
 //
 // State: per-order values in the state span; mutable amountLeft (base units of A still to trade) and custody (the
-// exact amount of S held), the last two fields: a partial fill continues with both spliced in.
+// exact amount of S held): a partial fill continues with both spliced in; then sExt, the KCC-20 extension commitment of
+// the custody of S (zero for KRON).
 //
 // Key invariants:
 //  - Takeable quotes: every quote a pair order shows can be taken by anyone at that quote (an ask's custody is its whole
@@ -36,7 +37,7 @@ pragma silverscript ^0.1.0;
 //  - Minimum fill: n >= minFill unless n takes all that is left. TWAP / DCA: interval (CSV), maxFill.
 //  - Decay: ASK price(t) = max(priceEnd, price - slope * floor((t - origin) / decayStep)); BID price(t) = min(priceEnd,
 //    price + slope * ...); origin = activeFrom or the TWAP / DCA slice opening (KobAsk / KobBid).
-//  - Custody: the token-S UTXO owned by this covenant id holding exactly `custody`; settle refuses any other S input
+//  - Custody: the token-S UTXO owned by this covenant id holding exactly `custody` (KCC-20: of the commitment sExt); settle refuses any other S input
 //    owned by this id and any T input owned by this id (strays of either token are inert: only the maker's cancel
 //    moves them), and a refund carries no T input at all.
 //  - Positional outputs: the maker's T at output i (this input's index); the S rest (owned by this id) or return
@@ -73,7 +74,8 @@ contract KobPair(
     int init_priceEnd,
     int init_decayStep,
     int init_amountLeft,
-    int init_custody
+    int init_custody,
+    byte[32] init_sExt
 ) {
     pubkey maker = init_maker;               // T deliveries, S refunds / returns, cancel key
     int side = init_side;                    // 1 ASK (sells base A = S), 2 BID (buys base A = T)
@@ -105,6 +107,7 @@ contract KobPair(
     int decayStep = init_decayStep;
     int amountLeft = init_amountLeft;        // base units of A still to trade (mutable)
     int custody = init_custody;              // exact custody of S (mutable; an ask: == amountLeft)
+    byte[32] sExt = init_sExt;               // KCC-20 extension commitment of the custody of S (0 for KRON)
 
     byte constant SCHEME_P2PK = 0x00;
     byte constant SCHEME_COVID = 0x04;
@@ -122,7 +125,8 @@ contract KobPair(
     // Most token inputs of one token a fill may carry (the KCC-20 limit; a KRON program accepts fewer). The scans are
     // unrolled by hand (one line per slot).
     int constant MAX_TOK_IN = 8;
-    // 1-byte prefix + 414 B state: amountLeft [398..406) and custody [407..415) close the state.
+    // 1-byte prefix + 447 B state: amountLeft [398..406) and custody [407..415), then sExt [416..448) (immutable). A
+    // continuation splices [398..415).
     int constant STATE_END = 415;
 
     // Quote value of n base units at rate r per d base units, rounded down (c = 0) or up (c = d - 1): KobAsk.quoteOf
@@ -207,6 +211,9 @@ contract KobPair(
             held = int(byte[8](tin.slice(1, 9)));
             guard = tin.slice(47, 79);
             ext = tin.slice(80, 112);
+            // the custody carries the commitment the order names: units of S's covenant id with another commitment
+            // are another token
+            require(byte[32](ext) == sExt);
         }
         // a pair order always holds a positive custody (it terminates when it is used up): every path then pins
         // its output i to the maker

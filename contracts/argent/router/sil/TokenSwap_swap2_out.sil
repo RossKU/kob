@@ -292,6 +292,7 @@ contract TokenSwap_swap2_out(
         int rptPrice;
         int rptPre;
         int rptUntil;
+        byte[32] sExt;
     }
     struct KobIfdAskState {
         // :: user declared fields
@@ -416,6 +417,7 @@ contract TokenSwap_swap2_out(
         int decayStep;
         int amountLeft;
         int custody;
+        byte[32] sExt;
     }
     struct KronTokenState {
         // :: user declared fields

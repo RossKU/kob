@@ -126,6 +126,7 @@ pub fn pair_state(maker: u8, ask: bool, pa: TemplateId, pb: TemplateId, amount: 
         decay_step: 0,
         amount_left: amount,
         custody: amount,
+        s_ext: if ask { ext_of(pa) } else { ext_of(pb) },
     };
     if !ask {
         s.custody = s.bid_escrow(s.amount_left, 4).expect("escrow");
@@ -211,6 +212,7 @@ pub fn cond_pair(maker: u8, ask: bool, pa: TemplateId, pb: TemplateId, amount: i
         rpt_price: 0,
         rpt_pre: 0,
         rpt_until: 0,
+        s_ext: p.s_ext,
     };
     if !ask {
         c.custody = c.bid_escrow(c.max_fills()).expect("escrow");

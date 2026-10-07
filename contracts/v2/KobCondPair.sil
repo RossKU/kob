@@ -52,8 +52,9 @@ pragma silverscript ^0.1.0;
 //   trailWait [371..379)  minTouch [380..388)  minRestDaa [389..397)  bandDaa [398..406)  keeperTip [407..415)
 //   MUTABLE window [416..451): stopPrice [416..424)  armed [425..433)  amountLeft [434..442)  custody [443..451)
 //   repeat fields (immutable): parent [452..484)  rptPrice [485..493)  rptPre [494..502)  rptUntil [503..511)
-//   State 510 B (STATE_END 511). An IFD entry commits the state [0..432) (maker .. armed, the exitState) and writes
-//   amountLeft, custody and the repeat fields.
+//   sExt [512..544) (immutable): the KCC-20 extension commitment of the custody of S (zero for KRON)
+//   State 543 B (STATE_END 544). An IFD entry commits the state [0..432) (maker .. armed, the exitState) and writes
+//   amountLeft, custody, the repeat fields and sExt (its own aExt / bExt).
 // Build constants (trigger evidence): the plain KAS-book templates of both families, ASK_TPL / PRE / SUF (KobAsk),
 // ASK_TPL_KRON (KobAskKron), BID_TPL (KobBid), BID_TPL_KRON (KobBidKron), and PAIR_TPL / PRE / SUF (KobPair).
 //
@@ -61,7 +62,8 @@ pragma silverscript ^0.1.0;
 //  - Rounding (KobAsk header): an ask receives the ceil, a bid pays the floor; the KAS tip is the floor. Every rate
 //    is per whole A (scale(A) = sScale for ASK, tScale for BID).
 //  - Minimum fill: n >= minFill unless n takes everything left.
-//  - Custody: the token-S UTXO owned by this covenant id holding EXACTLY `custody` (ASK: == amountLeft for an exit).
+//  - Custody: the token-S UTXO owned by this covenant id holding EXACTLY `custody` (ASK: == amountLeft for an exit),
+//    KCC-20: of the commitment sExt.
 //    Stray guards on BOTH tokens in every entry: no S input owned by this id other than the custody, no T input owned
 //    by this id; update spends neither. Strays are inert (only the maker's cancel moves them).
 //  - Positional outputs: the maker's token at output i (this input's index: the T delivery, or a re-arming exit's
@@ -158,7 +160,8 @@ contract KobCondPair(
     byte[32] init_parent,
     int init_rptPrice,
     int init_rptPre,
-    int init_rptUntil
+    int init_rptUntil,
+    byte[32] init_sExt
 ) {
     pubkey maker = init_maker;               // T deliveries, S returns / refunds, profits, cancel key
     int side = init_side;                    // 1 ASK (sells base A = S), 2 BID (buys base A = T)
@@ -198,6 +201,7 @@ contract KobCondPair(
     int rptPrice = init_rptPrice;            // repeat IFD: ASK exit the entry's budget rate, BID exit its proceeds rate
     int rptPre = init_rptPre;                // repeat IFD: BID exit the entry's prefund rate (0 for an ASK exit)
     int rptUntil = init_rptUntil;            // repeat IFD: from this DAA a TP fill may skip the entry
+    byte[32] sExt = init_sExt;               // KCC-20 extension commitment of the custody of S (0 for KRON)
 
     byte constant SCHEME_P2PK = 0x00;
     byte constant SCHEME_COVID = 0x04;
@@ -216,7 +220,7 @@ contract KobCondPair(
     int constant BID_STATE_LEN = 285;
     int constant BID_STATE_LEN_KRON = 252;
     // State length of the KobPair template (pair-order evidence).
-    int constant PAIR_STATE_LEN = 414;
+    int constant PAIR_STATE_LEN = 447;
     // Most token inputs of one token a transaction may carry (the KCC-20 limit; a KRON program accepts fewer). The scans
     // are unrolled by hand (one line per slot).
     int constant MAX_TOK_IN = 8;
@@ -660,6 +664,8 @@ contract KobCondPair(
                 require(tin.slice(43, 46) == byte[](0x040100));
                 held = int(byte[8](tin.slice(1, 9)));
                 gx = tin.slice(47, 112);
+                // the custody carries the commitment the order names (another commitment is another token)
+                require(byte[32](tin.slice(80, 112)) == sExt);
             }
             require(held == custody);
 

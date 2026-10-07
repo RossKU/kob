@@ -85,6 +85,9 @@ kob_state!(
         amount_left: i64 => "amountLeft",
         /// Mutable: the exact custody of S (an ask: `== amountLeft`).
         custody: i64 => "custody",
+        /// KCC-20 extension commitment of the custody of S (zero for a KRON S): the order takes no custody of another
+        /// commitment.
+        s_ext: [u8; 32] => "sExt",
     }
 );
 
@@ -141,6 +144,8 @@ kob_state!(
         /// Repeat IFD: BID exit the entry's prefund rate (0 for an ASK exit).
         rpt_pre: i64 => "rptPre",
         rpt_until: i64 => "rptUntil",
+        /// KCC-20 extension commitment of the custody of S (zero for a KRON S); an exit: its entry's `aExt` / `bExt`.
+        s_ext: [u8; 32] => "sExt",
     }
 );
 
@@ -355,7 +360,7 @@ impl PairState {
     }
     /// The S token (held) and the T token (bought).
     pub fn s_token(&self) -> PairToken {
-        token(self.s_cov_id, self.s_tpl_hash, self.s_pre, self.s_suf, self.s_family, self.s_scale, None)
+        token(self.s_cov_id, self.s_tpl_hash, self.s_pre, self.s_suf, self.s_family, self.s_scale, Some(self.s_ext))
     }
     pub fn t_token(&self) -> PairToken {
         token(self.t_cov_id, self.t_tpl_hash, self.t_pre, self.t_suf, self.t_family, self.t_scale, Some(self.t_ext))
@@ -560,7 +565,7 @@ impl CondPairState {
         self.side == SIDE_ASK
     }
     pub fn s_token(&self) -> PairToken {
-        token(self.s_cov_id, self.s_tpl_hash, self.s_pre, self.s_suf, self.s_family, self.s_scale, None)
+        token(self.s_cov_id, self.s_tpl_hash, self.s_pre, self.s_suf, self.s_family, self.s_scale, Some(self.s_ext))
     }
     pub fn t_token(&self) -> PairToken {
         token(self.t_cov_id, self.t_tpl_hash, self.t_pre, self.t_suf, self.t_family, self.t_scale, Some(self.t_ext))
@@ -814,9 +819,9 @@ impl CondPairState {
 
 // ---------------------------------------------------------------- KobIfdPair
 
-/// The repeat fields an entry writes behind the committed exit (`0x08 amountLeft 0x08 custody 0x20 parent 0x08 rptPrice
-/// 0x08 rptPre 0x08 rptUntil`), exactly as `KobIfdPair.fill` splices them.
-fn exit_tail(amount: i64, custody: i64, parent: [u8; 32], rpt_price: i64, rpt_pre: i64, until: i64) -> Vec<u8> {
+/// The fields an entry writes behind the committed exit (`0x08 amountLeft 0x08 custody 0x20 parent 0x08 rptPrice
+/// 0x08 rptPre 0x08 rptUntil 0x20 sExt`), exactly as `KobIfdPair.fill` splices them.
+fn exit_tail(amount: i64, custody: i64, parent: [u8; 32], rpt_price: i64, rpt_pre: i64, until: i64, s_ext: [u8; 32]) -> Vec<u8> {
     let mut v = vec![0x08];
     v.extend_from_slice(&amount.to_le_bytes());
     v.push(0x08);
@@ -827,6 +832,8 @@ fn exit_tail(amount: i64, custody: i64, parent: [u8; 32], rpt_price: i64, rpt_pr
         v.push(0x08);
         v.extend_from_slice(&x.to_le_bytes());
     }
+    v.push(0x20);
+    v.extend_from_slice(&s_ext);
     v
 }
 
@@ -845,12 +852,21 @@ impl IfdPairState {
     pub fn commit_exit(exit: &CondPairState) -> Vec<u8> {
         exit.encode()[..IFD_PAIR_EXIT_COMMIT].to_vec()
     }
+    /// The extension commitment of an exit's custody: A (a buy-first entry's exit sells A), B (a sell-first entry's exit holds
+    /// B).
+    pub fn exit_s_ext(&self) -> [u8; 32] {
+        if self.is_buy_first() {
+            self.a_ext
+        } else {
+            self.b_ext
+        }
+    }
     /// The committed exit order (amountLeft, custody and the repeat fields zero).
     pub fn exit(&self) -> Result<CondPairState, StateError> {
         if self.exit_state.len() != IFD_PAIR_EXIT_COMMIT {
             return Err(StateError::Codec("KobIfdPair", format!("exitState must be {IFD_PAIR_EXIT_COMMIT} bytes")));
         }
-        CondPairState::decode(&[self.exit_state.clone(), exit_tail(0, 0, [0; 32], 0, 0, 0)].concat())
+        CondPairState::decode(&[self.exit_state.clone(), exit_tail(0, 0, [0; 32], 0, 0, 0, self.exit_s_ext())].concat())
     }
     /// The KAS an exit needs (its UTXO value is `exitCarrier`), from the exit's own rules: a keeper arming its stop leg
     /// takes up to its `keeperTip` (an update keeps `value - keeperTip`); then it funds its deliveries itself (a partial
@@ -1004,7 +1020,7 @@ mod tests {
     fn covenant_offsets_match_the_encoding() {
         let p: PairState = compiled(TemplateId::KobPair);
         let st = p.encode();
-        assert_eq!(st.len(), 414);
+        assert_eq!(st.len(), 447);
         assert_eq!(i64::from_le_bytes(st[34..42].try_into().unwrap()), p.side);
         assert_eq!(&st[43..75], &p.s_cov_id);
         assert_eq!(i64::from_le_bytes(st[136..144].try_into().unwrap()), p.s_scale);
@@ -1014,15 +1030,18 @@ mod tests {
         assert_eq!(i64::from_le_bytes(st[316..324].try_into().unwrap()), p.active_from);
         assert_eq!(i64::from_le_bytes(st[352..360].try_into().unwrap()), p.interval);
         assert_eq!(i64::from_le_bytes(st[370..378].try_into().unwrap()), p.slope);
+        // sExt closes the state (KobPair.sil [416..448): state offset 415 after its 0x20 push)
+        assert_eq!(&st[415..447], &p.s_ext);
         let c: CondPairState = compiled(TemplateId::KobCondPair);
         let cs = c.encode();
-        assert_eq!(cs.len(), 510);
+        assert_eq!(cs.len(), 543);
         assert_eq!(i64::from_le_bytes(cs[289..297].try_into().unwrap()), c.tip);
         assert_eq!(i64::from_le_bytes(cs[325..333].try_into().unwrap()), c.delivery_carrier);
         assert_eq!(i64::from_le_bytes(cs[415..423].try_into().unwrap()), c.stop_price);
         assert_eq!(i64::from_le_bytes(cs[433..441].try_into().unwrap()), c.amount_left);
         assert_eq!(i64::from_le_bytes(cs[442..450].try_into().unwrap()), c.custody);
         assert_eq!(&cs[451..483], &c.parent);
+        assert_eq!(&cs[511..543], &c.s_ext);
         let i: IfdPairState = compiled(TemplateId::KobIfdPair);
         assert_eq!(i.exit_state.len(), IFD_PAIR_EXIT_COMMIT);
         let i = IfdPairState { exit_state: IfdPairState::commit_exit(&c), ..i };
@@ -1030,6 +1049,9 @@ mod tests {
         assert_eq!((x.amount_left, x.custody, x.parent, x.rpt_price, x.rpt_until), (7, 9, [5; 32], i.price, 11));
         assert!(i.books_exit([5; 32], &CondPairState { stop_price: 3, armed: 1, ..x.clone() }));
         assert!(!i.books_exit([6; 32], &x));
+        // the exit's sExt is the entry's commitment of the exit's custody token (KobIfdPair merge compares it)
+        assert_eq!(x.s_ext, i.exit_s_ext());
+        assert!(!i.books_exit([5; 32], &CondPairState { s_ext: [0x5a; 32], ..x.clone() }));
     }
 
     #[test]

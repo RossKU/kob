@@ -94,6 +94,7 @@ pub fn pair(maker: u8, ask: bool, pa: TemplateId, pb: TemplateId, price: i64) ->
         decay_step: 0,
         amount_left: 10 * WHOLE,
         custody: 10 * WHOLE,
+        s_ext: if ask { ext_for(pa) } else { ext_for(pb) },
     };
     if !ask {
         s.custody = s.bid_escrow(s.amount_left, 4).unwrap();
@@ -252,6 +253,7 @@ pub fn cond_pair_ask(maker: u8, pa: TemplateId, pb: TemplateId) -> CondPairState
         rpt_price: 0,
         rpt_pre: 0,
         rpt_until: 0,
+        s_ext: p.s_ext,
     }
 }
 
@@ -274,6 +276,7 @@ pub fn cond_pair_bid(maker: u8, pa: TemplateId, pb: TemplateId) -> CondPairState
         t_family: a.s_family,
         t_ext: ext_for(pa),
         t_scale: a.s_scale,
+        s_ext: ext_for(pb),
         tp_price: RATE - 200,
         stop_price: RATE,
         ..a
