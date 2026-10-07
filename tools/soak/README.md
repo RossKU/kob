@@ -1122,7 +1122,7 @@ transaction, which is 5-7 MB/s per indexer just to keep pace. No amount of conne
 
 * `--borsh` (main 854b079) fetches the windows and the primary's ids over Borsh wRPC: about 575 bytes per transaction (`High`),
   2.5-2.9x fewer bytes. Both executors run it (`executorBin` `bin/kob-executor-minlag1.exe`, `--features deploy-tn10`). After the
-  switch each indexer ingests 4,400-6,300 tx/s, about 2x the chain; exec-a went from 27,240 to 250 DAA behind in about 45 min and
+  switch each indexer ingests 4,400-6,300 tx/s, about 2x the chain; exec-a went from 27,240 to 250 DAA behind in about 50 min and
   exec-b from 19,000 in about 35 min (exec-b was throttled to `fetchParallel` 2 while exec-a caught up).
 * `--prefetch-min-lag-blue 30` (d4a2cc5): with the default 1,200, the last two minutes were single steps on one connection
   (~1.2 MB/s against ~1.7 MB/s of chain), so the lag settled at 550-950 DAA.
