@@ -3,7 +3,7 @@ import type { EventView } from '../../data/indexer-types';
 import type { Clock } from '../../kob/plan-types';
 import type { Hex } from '../../kob/types';
 import type { Position } from '../../kob/positions';
-import type { TokenInfo } from '../../kob/registry';
+import { longId, type TokenInfo } from '../../kob/registry';
 import { Badge, Button } from '../kit';
 import { OrderRow, type OrderRowActions } from './OrderRow';
 import type { OrderRowModel } from './orders-model';
@@ -57,7 +57,7 @@ export function PositionCard(props: PositionCardProps) {
           </strong>
           {token && pair ? (
             <a class="pc-token" href={`#/market/${token.covenantId}/${pair.quoteId}`} data-testid="position-token">
-              {`${token.ticker}/${pair.quote?.ticker ?? `${pair.quoteId.slice(0, 4)}…`}`}
+              {`${token.ticker}/${pair.quote?.ticker ?? longId(pair.quoteId)}`}
             </a>
           ) : token ? (
             <a class="pc-token" href={`#/market/${token.covenantId}`} data-testid="position-token">

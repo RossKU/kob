@@ -8,6 +8,7 @@ import { StatusBadges, tokenTitle } from './TokenBadges';
 import { LookalikeWarning } from './TokenHeader';
 import './market.css';
 import { buildTokenRows, filterTokens, parseCovenantId, type TokenRow } from './token-model';
+import { useHeldTokenIds } from './use-held-tokens';
 
 function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
   const { indexer, registry } = useServices();
@@ -98,7 +99,8 @@ export function TokenList(props: { invalidToken?: string }) {
   const [query, setQuery] = useState('');
   const [pasted, setPasted] = useState<IndexerTokenView[]>([]);
 
-  const rows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, pasted), [registry, tokens.data, pasted]);
+  const held = useHeldTokenIds();
+  const rows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, pasted, held), [registry, tokens.data, pasted, held]);
   const shown = filterTokens(rows, query);
 
   return (

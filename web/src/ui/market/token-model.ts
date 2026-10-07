@@ -2,7 +2,7 @@
 // status badges, lookalike protection, the localized `TICKER (abcd...1234) [state]` label, template-verification detail. Pure.
 import type { IndexerTokenView, TokenStanding } from '../../data/indexer-types';
 import {
-  lookalikeReport, normalizeTicker, sanitizeUntrusted, verifyIndexerToken, type LookalikeReport, type TokenInfo, type TokenRegistry, type UntradableReason,
+  longId, lookalikeReport, normalizeTicker, sanitizeUntrusted, verifyIndexerToken, type LookalikeReport, type TokenInfo, type TokenRegistry, type UntradableReason,
 } from '../../kob/registry';
 import type { TemplateInfo } from '../../kob/types';
 
@@ -85,20 +85,28 @@ export function labelState(t: Pick<TokenInfo, 'status' | 'verified'> & { officia
               : 'unverified';
 }
 
-/** `abcd…1234`: the short form of a covenant id (identity is the covenant id and the template hash, never the ticker). */
+/**
+ * `abcd…1234`: the short form of a covenant id NEXT TO A REGISTRY TICKER (registry tickers are unique and look-alike checked; identity is the
+ * covenant id and the template hash, never the ticker). A token outside the registry is shown with `unregisteredId` (8 + 8 hex).
+ */
 export const shortCovenantId = (c: string): string => (c.length >= 8 ? `${c.slice(0, 4)}…${c.slice(-4)}` : c);
+
+/** `abcdef01…12345678`: 8 + 8 hex (64 bits) of a token the registry does not list, whose id is all that identifies it (a 4 + 4 fragment can be copied). */
+export const unregisteredId = longId;
 
 /**
  * `EXKCC (e5e5…e5e5) [state]`: the ticker is NEVER shown without the covenant id fragment. `stateWord` is the (translated) state text.
- * A token outside the registry has an EMPTY ticker: its short covenant id stands in (`e5e5…e5e5 [state]`).
+ * A token outside the registry has an EMPTY ticker (or an indexer ticker): 8 + 8 hex of its covenant id (`e5e5e5e5…e5e5e5e5 [state]`).
  */
-export function tokenLabel(t: { ticker: string; covenantId: string }, stateWord: string): string {
-  const short = shortCovenantId(t.covenantId);
+export function tokenLabel(t: { ticker: string; covenantId: string; info?: TokenInfo | null; openList?: boolean }, stateWord: string): string {
+  // a row of a token outside the registry (`info: null`), an open-list token or one without a ticker: 8 + 8 hex; a registry ticker: 4 + 4
+  const unregistered = t.ticker === '' || t.info === null || t.openList === true || t.info?.openList === true;
+  const short = unregistered ? unregisteredId(t.covenantId) : shortCovenantId(t.covenantId);
   return t.ticker === '' ? `${short} [${stateWord}]` : `${t.ticker} (${short}) [${stateWord}]`;
 }
 
 /** Ticker for display: the registry ticker, else the short covenant id. */
-export const tickerOrId = (ticker: string, covenantId: string): string => (ticker === '' ? shortCovenantId(covenantId) : ticker);
+export const tickerOrId = (ticker: string, covenantId: string): string => (ticker === '' ? unregisteredId(covenantId) : ticker);
 
 // ------------------------------------------------------------------------------------------------ program powers
 
@@ -172,7 +180,9 @@ function registryRow(info: TokenInfo, index: IndexerTokenView | null): TokenRow 
 }
 
 /** A token the registry does not know (found through the indexer or pasted): unverified, not tradable, with lookalike protection. */
-export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: TokenSource = 'indexer', others: readonly IndexerTokenView[] = []): TokenRow {
+export function unknownRow(
+  reg: TokenRegistry, view: IndexerTokenView, source: TokenSource = 'indexer', others: readonly IndexerTokenView[] = [], held: readonly string[] = [],
+): TokenRow {
   const ticker = sanitizeUntrusted(view.ticker ?? '', 16);
   // a token this build's registry does not list is never official or verified, whatever the indexer claims
   const standing: TokenStanding = view.standing === 'delisted' ? 'delisted' : 'unverified';
@@ -187,15 +197,26 @@ export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: T
     tradable: false, reason: standing === 'delisted' ? 'delisted' : 'unverified',
     // an indexer that calls an unregistered token official is contradicting the registry: recorded as a problem
     // other unregistered tokens with the same short id or ticker are named too (`collision`): only the full covenant id tells them apart
-    lookalike: lookalikeReport(reg, view.ticker, view.covenant_id, undefined, others.map((o) => ({ covenantId: o.covenant_id, ticker: o.ticker ?? '' }))), indexerProblems: view.standing === 'official' ? ['standing-official-unregistered'] : [], openAsks: view.open_asks, openBids: view.open_bids,
+    lookalike: lookalikeReport(reg, view.ticker, view.covenant_id, undefined, [
+      ...others.map((o) => ({ covenantId: o.covenant_id, ticker: o.ticker ?? '' })),
+      // the tokens this wallet holds (its own record, not the indexer's): a token copying the short id of one of them is named even when
+      // the indexer leaves the held token out of its list
+      ...held.filter((id) => !others.some((o) => o.covenant_id === id)).map((id) => ({ covenantId: id, ticker: '' })),
+    ]), indexerProblems: view.standing === 'official' ? ['standing-official-unregistered'] : [], openAsks: view.open_asks, openBids: view.open_bids,
     decimals: view.decimals,
     scale: view.scale != null ? BigInt(view.scale) : view.decimals != null ? 10n ** BigInt(Math.min(view.decimals, 9)) : null,
     tick: null,
   };
 }
 
-/** Registry tokens first (registry order), then indexer-only tokens (those with open orders first, then by ticker). Duplicates by covenant id are merged. */
-export function buildTokenRows(reg: TokenRegistry, indexerTokens: readonly IndexerTokenView[] | null, pasted: readonly IndexerTokenView[] = []): TokenRow[] {
+/**
+ * Registry tokens first (registry order), then indexer-only tokens (those with open orders first, then by ticker). Duplicates by covenant id are
+ * merged. `held`: covenant ids of the tokens the connected wallet holds (its local token tracker), compared with every unregistered token for a
+ * shared short id besides the registry and the indexer's list.
+ */
+export function buildTokenRows(
+  reg: TokenRegistry, indexerTokens: readonly IndexerTokenView[] | null, pasted: readonly IndexerTokenView[] = [], held: readonly string[] = [],
+): TokenRow[] {
   const byId = new Map((indexerTokens ?? []).map((t) => [t.covenant_id, t]));
   const rows: TokenRow[] = reg.tokens.map((t) => registryRow(t, byId.get(t.covenantId) ?? null));
   const seen = new Set(rows.map((r) => r.covenantId));
@@ -204,12 +225,12 @@ export function buildTokenRows(reg: TokenRegistry, indexerTokens: readonly Index
   for (const v of indexerTokens ?? []) {
     if (seen.has(v.covenant_id)) continue;
     seen.add(v.covenant_id);
-    extra.push(unknownRow(reg, v, 'indexer', unregistered));
+    extra.push(unknownRow(reg, v, 'indexer', unregistered, held));
   }
   for (const v of pasted) {
     if (seen.has(v.covenant_id)) continue;
     seen.add(v.covenant_id);
-    extra.push(unknownRow(reg, v, 'pasted', unregistered));
+    extra.push(unknownRow(reg, v, 'pasted', unregistered, held));
   }
   extra.sort((a, b) => (b.openAsks ?? 0) + (b.openBids ?? 0) - ((a.openAsks ?? 0) + (a.openBids ?? 0)) || (a.ticker < b.ticker ? -1 : a.ticker > b.ticker ? 1 : 0));
   return [...rows, ...extra];

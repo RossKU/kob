@@ -5,7 +5,7 @@ import { formatDateTime, formatNumber, t } from '../../i18n';
 import { unitsText } from '../../kob/pair';
 import { statePriceToTokenPrice } from '../../kob/units';
 import { formatJst, formatUtc } from '../../kob/daa';
-import type { TokenInfo } from '../../kob/registry';
+import { longId, type TokenInfo } from '../../kob/registry';
 import { Amount, Badge, Banner, Button, CopyText, KeyValueList, tickKasFraction, tickPriceFraction, type Tone } from '../kit';
 import { labelState, tokenLabel } from '../market/token-model';
 import type { EventView } from '../../data/indexer-types';
@@ -42,7 +42,8 @@ const localDate = (unix: bigint): string => formatDateTime(Number(unix));
 /** The fixed decimals of a price shown in every order of a market (from the token's tick): `{ fraction }`, or nothing when the market has no tick. */
 const fixed = (fraction: number | null): { fraction?: number } => (fraction === null ? {} : { fraction });
 
-const shortId = (id: string): string => `${id.slice(0, 4)}…${id.slice(-4)}`;
+/** A token the registry does not list is named by 8 + 8 hex of its covenant id (a 4 + 4 fragment can be copied by another token). */
+const shortId = longId;
 
 /**
  * A price of a pair order: B base units per `row.scale` base units of A, shown per whole A (`value x 10^decimals(A) / scale`) when A is known, in B
@@ -167,7 +168,7 @@ export function OrderRow(props: OrderRowProps) {
           ) : tk ? (
             <a href={`#/market/${tk.covenantId}`} data-testid="order-token">{tokenLabel(tk, t(`market.state.${labelState(tk)}`, { hash: tk.customRegistry ?? '' }))}</a>
           ) : row.token ? (
-            <span>{t('orders.unknownToken', { id: `${row.token.slice(0, 4)}…${row.token.slice(-4)}` })}</span>
+            <span>{t('orders.unknownToken', { id: longId(row.token) })}</span>
           ) : null}
         </div>
       </div>

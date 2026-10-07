@@ -26,6 +26,7 @@ import { displayedPair, marketFor, type DisplayedPair } from './market-select';
 import { PriceChart } from './PriceChart';
 import { TokenDetails, TokenHeader } from './TokenHeader';
 import { buildTokenRows } from './token-model';
+import { useHeldTokenIds } from './use-held-tokens';
 import { TradeTape } from './TradesPanel';
 import { tradeRows } from './trades-model';
 import { WalletTokenBalances } from './WalletTokenBalances';
@@ -56,7 +57,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const [groupIdxInv, setGroupIdxInv] = useState(0);
 
   const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
-  const allRows = useMemo(() => buildTokenRows(registry, tokens.data ?? null), [registry, tokens.data]);
+  const held = useHeldTokenIds();
+  const allRows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, [], held), [registry, tokens.data, held]);
   const baseRow = useMemo(() => allRows.find((r) => r.covenantId === id) ?? null, [allRows, id]);
   // an open-list token (program on the strict list, no registry entry) is tradable with a TokenInfo synthesised from its orders: unverified, its
   // decimals taken from the scale its orders share

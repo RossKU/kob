@@ -5,7 +5,7 @@ import { displayName, longId, lookalikeReport, parseRegistry, shortId } from './
 import { TOKEN, tradableRegistryJson } from '../testing/chain-fixtures';
 import { loadKobNode } from './wasm.node';
 import { tokenLabel } from '../ui/confirm/confirm-model';
-import { buildTokenRows } from '../ui/market/token-model';
+import { buildTokenRows, tickerOrId, tokenLabel as rowLabel } from '../ui/market/token-model';
 import { t } from '../i18n';
 import type { IndexerTokenView } from '../data/indexer-types';
 
@@ -62,5 +62,26 @@ describe('short id and ticker collisions', () => {
     expect(rows.find((x) => x.covenantId === a)!.lookalike!.level).toBe('collision');
     expect(rows.find((x) => x.covenantId === b)!.lookalike!.level).toBe('collision');
     expect(rows.find((x) => x.covenantId === 'cd'.repeat(32))!.lookalike!.level).toBe('unknown');
+  });
+
+  it('a token the wallet holds counts even when the indexer leaves it out of its list', () => {
+    const r = reg();
+    const view = (id: string): IndexerTokenView => ({ covenant_id: id, ticker: '', standing: 'unverified', open_asks: 1, open_bids: 0 }) as unknown as IndexerTokenView;
+    const held = `abcd${'11'.repeat(28)}ef01`;
+    const copy = `abcd${'22'.repeat(28)}ef01`;
+    // the indexer lists only the copy: without the wallet's own record nothing is said
+    expect(buildTokenRows(r, [view(copy)]).find((x) => x.covenantId === copy)!.lookalike!.level).toBe('unknown');
+    const row = buildTokenRows(r, [view(copy)], [], [held]).find((x) => x.covenantId === copy)!;
+    expect(row.lookalike).toMatchObject({ level: 'collision', collisions: [{ covenantId: held, kind: 'same-short-id' }] });
+  });
+});
+
+describe('every shortened id of a token outside the registry is 8 + 8 hex', () => {
+  it('the market list label, the ticker stand-in and an indexer ticker', () => {
+    expect(rowLabel({ ticker: '', covenantId: ID, info: null }, 'unverified')).toBe('01234567…89abcdef [unverified]');
+    expect(tickerOrId('', ID)).toBe('01234567…89abcdef');
+    expect(rowLabel({ ticker: 'KASPER', covenantId: ID, info: null }, 'unverified')).toBe('KASPER (01234567…89abcdef) [unverified]');
+    // a registry ticker keeps the 4 + 4 fragment next to it (registry tickers are unique and look-alike checked)
+    expect(rowLabel({ ticker: 'TST', covenantId: ID }, 'verified')).toBe('TST (0123…cdef) [verified]');
   });
 });

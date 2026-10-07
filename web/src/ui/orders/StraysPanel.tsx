@@ -1,6 +1,7 @@
 import { useServices } from '../../app/context';
 import type { StrayView } from '../../data/indexer-types';
 import { t } from '../../i18n';
+import { longId } from '../../kob/registry';
 import { Amount, Badge, Button, CopyText, Section, Table, unitsFraction } from '../kit';
 
 /**
@@ -53,7 +54,7 @@ export function StraysPanel(props: {
             return (
               <tr key={`${s.txid}:${s.index}`} data-testid="stray-row" data-lost={s.lost || unproven ? '1' : '0'} data-foreign={foreign ? '1' : '0'} data-owner={s.owner}>
                 <td>
-                  {info ? info.ticker : `${s.token.slice(0, 4)}…${s.token.slice(-4)}`}
+                  {info ? info.ticker : longId(s.token)}
                   {!info ? (
                     <>
                       {' '}

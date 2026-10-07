@@ -137,7 +137,7 @@ describe('create transactions: what the wallet will sign, derived from the built
     expect(s.blocking).toEqual([]);
     expect(s.warnings.map((w) => w.code)).toEqual(['token-unlisted']);
     expect(s.net.tokens[0].ref).toMatchObject({ ticker: null, decimals: null, inRegistry: false, tradable: false });
-    expect(s.net.tokens[0].ref.display).toBe('unknown token (7070…7070)');
+    expect(s.net.tokens[0].ref.display).toBe('unknown token (70707070…70707070)');
     expect(s.net.tokens[0].human.escrowed).toBe('10000 base units');
   });
 });

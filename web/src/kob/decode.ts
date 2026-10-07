@@ -34,7 +34,7 @@ import {
   type PairTokenFacts,
 } from './order-facts';
 import { declaredRateLimit, type FeePolicy } from './fee-policy';
-import { displayName, type TokenRegistry } from './registry';
+import { displayName, longId, type TokenRegistry } from './registry';
 import type {
   BuiltTx, FeeMode, Hex, OrderKind, OrderState, PairEvidence, PairTriggerRule, Payload, PayloadRecord, RecoveredAmend, RecoveredOrder, SigArg, SigPlan, TemplateName,
   TokenProgram, TokenState, TxInputJson, TxOutputJson,
@@ -372,7 +372,7 @@ export const p2pkOwner = (spk: string): Hex | null => P2PK_RE.exec(spk)?.[1] ?? 
 
 function tokenRef(reg: TokenRegistry | null | undefined, covenantId: Hex): TokenRef {
   const t = reg?.byCovenantId.get(covenantId);
-  if (!t) return { covenantId, ticker: null, decimals: null, display: `unknown token (${shortId(covenantId)})`, inRegistry: false, tradable: false };
+  if (!t) return { covenantId, ticker: null, decimals: null, display: `unknown token (${longId(covenantId)})`, inRegistry: false, tradable: false };
   return { covenantId, ticker: t.ticker, decimals: t.decimals, display: displayName(t), inRegistry: true, tradable: t.tradable };
 }
 
@@ -600,7 +600,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
     const outs = tx.outputs.map((o, j) => [o, j] as const).filter(([o]) => o.covenant?.covenantId === covId);
     if (outs.length !== p.nextStates.length) {
-      add('token-output-count', `token ${shortId(covId)}: ${outs.length} outputs are bound to the token but the plan lists ${p.nextStates.length}`);
+      add('token-output-count', `token ${longId(covId)}: ${outs.length} outputs are bound to the token but the plan lists ${p.nextStates.length}`);
     }
     outs.forEach(([, j], k) => {
       if (p.nextStates[k]) tokenOutputs.set(j, { state: p.nextStates[k], program: p.template, covenantId: covId });

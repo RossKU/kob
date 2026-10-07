@@ -19,7 +19,7 @@ export function LookalikeWarning(props: { row: TokenRow }) {
     return (
       <div class="lookalike-warning" role="alert" data-testid="lookalike-strong">
         <strong>{t('market.lookalike.strongTitle')}</strong>
-        <div>{t('market.lookalike.strong', { ticker: props.row.ticker, id: `${props.row.covenantId.slice(0, 8)}…`, real })}</div>
+        <div>{t('market.lookalike.strong', { ticker: props.row.ticker, id: longId(props.row.covenantId), real })}</div>
       </div>
     );
   }
@@ -29,7 +29,7 @@ export function LookalikeWarning(props: { row: TokenRow }) {
       <div class="banner banner-warn" role="status" data-testid="lookalike-shared">
         <div class="banner-body">
           <div class="banner-title">{t('market.lookalike.sharedTitle')}</div>
-          <div>{t('market.lookalike.shared', { ticker: props.row.ticker, id: `${props.row.covenantId.slice(0, 8)}…`, real })}</div>
+          <div>{t('market.lookalike.shared', { ticker: props.row.ticker, id: longId(props.row.covenantId), real })}</div>
         </div>
       </div>
     );
@@ -143,7 +143,7 @@ export function TokenHeader(props: {
             {tokenTitle(r)}
           </h1>
           <StatusBadges row={r} />
-          <span class="small muted" title={r.covenantId} data-testid="token-short-id">{shortCovenantId(r.covenantId)}</span>
+          <span class="small muted" title={r.covenantId} data-testid="token-short-id">{r.info && !r.info.openList ? shortCovenantId(r.covenantId) : longId(r.covenantId)}</span>
           {r.name ? <span class="mkt-name">{r.name}</span> : null}
           {props.badges}
         </div>

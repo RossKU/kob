@@ -254,15 +254,15 @@ describe('registry standing, powers and empty tickers (GET /v1/tokens)', () => {
     const rows = buildTokenRows(reg, [view('', ID('e'))]);
     const r = rows[1];
     expect(r.ticker).toBe('');
-    expect(tokenLabel(r, 'unverified')).toBe('eeee…eeee [unverified]');
-    expect(tickerOrId(r.ticker, r.covenantId)).toBe('eeee…eeee');
+    expect(tokenLabel(r, 'unverified')).toBe('eeeeeeee…eeeeeeee [unverified]');
+    expect(tickerOrId(r.ticker, r.covenantId)).toBe('eeeeeeee…eeeeeeee');
     expect(tickerOrId('GOOD', ID('a'))).toBe('GOOD');
     expect(filterTokens(rows, 'eeee').map((x) => x.covenantId)).toEqual([ID('e')]);
   });
 
   it('two tokens with the same ticker stay two rows, told apart by covenant id and template hash', () => {
     const rows = buildTokenRows(reg, [view('SAME', ID('5')), view('SAME', ID('6'), 0, 0, { template_hash: 'ff'.repeat(32) })]).slice(1);
-    expect(rows.map((r) => tokenLabel(r, 'x'))).toEqual(['SAME (5555…5555) [x]', 'SAME (6666…6666) [x]']);
+    expect(rows.map((r) => tokenLabel(r, 'x'))).toEqual(['SAME (55555555…55555555) [x]', 'SAME (66666666…66666666) [x]']);
     expect(rows.map((r) => r.index?.template_hash)).toEqual([tpl.hash, 'ff'.repeat(32)]);
   });
 
@@ -321,7 +321,7 @@ describe('the registry always wins over the indexer for trust and issuer powers'
     expect(row.info).toBeNull();
     expect(row.badges.map((b) => b.kind)).toEqual(['unverified']);
     expect(row.labelState).toBe('unverified');
-    expect(tokenLabel(row, row.labelState)).toBe('KASPER (eeee…eeee) [unverified]');
+    expect(tokenLabel(row, row.labelState)).toBe('KASPER (eeeeeeee…eeeeeeee) [unverified]');
     expect(row.tradable).toBe(false);
   });
 

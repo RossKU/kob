@@ -35,6 +35,7 @@ import { PairTrades } from './PairTrades';
 import { tokenTitle } from './TokenBadges';
 import { PairDetails } from './TokenHeader';
 import { buildTokenRows } from './token-model';
+import { useHeldTokenIds } from './use-held-tokens';
 import { ratioCandles, usdDp, usdStats } from './usd-model';
 import './market.css';
 import '../ticket/ticket.css';
@@ -53,7 +54,8 @@ export function PairPage(props: { base: string; quote: string }) {
   const [liveKey, setLiveKey] = useState(0);
   const [prefill, setPrefill] = useState<{ side: 'buy' | 'sell'; price: bigint } | undefined>(undefined);
   const tokenList = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
-  const rows = useMemo(() => buildTokenRows(registry, tokenList.data ?? null), [registry, tokenList.data]);
+  const held = useHeldTokenIds();
+  const rows = useMemo(() => buildTokenRows(registry, tokenList.data ?? null, [], held), [registry, tokenList.data, held]);
   const baseRow = rows.find((r) => r.covenantId === props.base);
   const quoteRow = rows.find((r) => r.covenantId === props.quote);
 
