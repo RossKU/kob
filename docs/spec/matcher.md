@@ -600,9 +600,14 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
 
 - `R = minRestDaa`, per order; wallet default 50 DAA (5 s, `kob_protocol::defaults::MIN_REST_DAA`).
 - `minTouch`, per order, in base units, chosen by the user: the smallest evidence fill that arms or trails.
-  The wallet default is the order's own minimum fill (`minTouch = minFill`), and the order ticket offers the presets
+  The wallet default scales with the stop's size: `minTouch = min(amount, max(minFill, ⌈amount × 2500 / 10⁴⌉))`, the
+  larger of the order's own minimum fill and 25% of its amount (`kob_protocol::defaults::default_min_touch`,
+  `DEFAULT_MIN_TOUCH_BPS`). A small stop (at most four minimum fills) keeps its minimum fill; a large one is armed only by
+  a print of at least a quarter of its size, so the quote that arms it must rest exposed with that much, not with one
+  minimum fill (10 KAS worth) whatever the stop's size. An if-done exit (it holds one entry fill of a size not known at
+  placement) defaults to its own minimum fill. The default is only the wallet's: the order ticket offers the presets
   min fill / 25% / 50% / 100% of the order's own amount (rounded up to a base unit, at least 1) plus a custom amount
-  (§10.6). The trade-off: a
+  (§10.6), and the state's `minTouch` is whatever the user chose. The trade-off: a
   smaller threshold triggers sooner but is easier to hunt; 100% is the strongest protection against stop
   hunting, because a hunter must expose at least the size of the order beyond its stop, but a large stop
   may trigger later in a thin market.
@@ -1038,7 +1043,8 @@ tick. With pair books: to be measured (pair phase).
    `data/keeper_tips.json`). Trigger rules (§4) are
    per order; the wallet MUST expose both on every stop, stop-limit, trailing stop, OCO stop leg and stop entry:
    - rest time `minRestDaa`: default 50 DAA (5 s);
-   - threshold `minTouch` (base units): chosen by the user; default the order's own `minFill`; the ticket offers min
+   - threshold `minTouch` (base units): chosen by the user; default the larger of the order's own `minFill` and 25% of
+     its amount (§4.3); the ticket offers min
      fill / 25% / 50% / 100% of the order's own amount and a custom amount (§4.3), and the confirmation screen shows
      the chosen threshold as a token amount.
 

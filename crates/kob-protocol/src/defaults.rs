@@ -102,11 +102,24 @@ pub fn default_min_fill_pair(amount: i64, kas_per_whole_a: Option<i64>, scale: i
     }
 }
 
+/// Share of a stop's own amount its default trigger threshold covers ([`default_min_touch`]), basis points: 25 %.
+pub const DEFAULT_MIN_TOUCH_BPS: i64 = 2_500;
+
 /// Wallet default of a stop's `minTouch` (the smallest trigger evidence, base units of a plain order of the same scale):
-/// the order's own minimum fill (founder 2026-10-03, was "1 lot"). The user may choose another per order: the minimum
-/// fill, 25% / 50% / 100% of the order's amount (100% = strongest protection against stop hunting) or a custom amount.
-pub fn default_min_touch(min_fill: i64) -> i64 {
-    min_fill.max(1)
+/// the larger of the order's own minimum fill and [`DEFAULT_MIN_TOUCH_BPS`] of its amount (`ceil(amount × 2500 / 10^4)`),
+/// at most the amount, at least 1. The threshold grows with the stop: a print of one minimum fill (10 KAS worth) no longer
+/// arms a stop of any size, the fill that arms it is at least a quarter of what it will sell or buy. A small stop (at
+/// most four minimum fills) keeps its minimum fill. `amount` 0 (unknown): the minimum fill. The user may choose another
+/// per order: the minimum fill, 25% / 50% / 100% of the order's amount (100% = strongest protection against stop hunting)
+/// or a custom amount.
+pub fn default_min_touch(min_fill: i64, amount: i64) -> i64 {
+    let share = if amount > 0 { ((amount as i128 * DEFAULT_MIN_TOUCH_BPS as i128 + 9_999) / 10_000) as i64 } else { 0 };
+    let t = min_fill.max(share).max(1);
+    if amount > 0 {
+        t.min(amount)
+    } else {
+        t
+    }
 }
 
 /// Wallet default of an order's `scale` (base units per whole token, the price denominator): `10^min(decimals, 9)`.
@@ -243,7 +256,14 @@ mod tests {
             (default_scale(0), default_scale(8), default_scale(9), default_scale(18)),
             (1, 100_000_000, 1_000_000_000, 1_000_000_000)
         );
-        assert_eq!((default_min_touch(400), default_min_touch(0)), (400, 1));
+        assert_eq!((default_min_touch(400, 0), default_min_touch(0, 0)), (400, 1));
+        // a quarter of the stop's amount, never below its minimum fill, never above its amount
+        assert_eq!(default_min_touch(400, 1_000), 400);
+        assert_eq!(default_min_touch(100, 1_000), 250);
+        assert_eq!(default_min_touch(1, 1_001), 251);
+        assert_eq!(default_min_touch(1, 3), 1);
+        assert_eq!(default_min_touch(5, 3), 3);
+        assert_eq!(default_min_touch(1, i64::MAX), i64::MAX / 4 + 1);
         // if-done entries: at most four fills; pair orders: 10 KAS of A at the quoted KAS price, else as an entry
         assert_eq!(
             (default_min_fill_ifd(10), default_min_fill_ifd(8), default_min_fill_ifd(1), default_min_fill_ifd(0)),

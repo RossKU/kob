@@ -151,7 +151,7 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
   const stopEntry = entry.stop > 0n;
   const entryBand = stopEntry && entry.stop !== entry.price ? intent.entry.bandDaa ?? STOP_BAND_DAA : 0n;
   const entryKeeperTip = stopEntry ? intent.entry.keeperTip ?? tips.keeperTip : 0n;
-  const entryTouch = stopEntry ? (intent.entry.minTouch ?? env.kob.defaultMinTouch(minFill)) : 0n;
+  const entryTouch = stopEntry ? (intent.entry.minTouch ?? env.kob.defaultMinTouch(minFill, amount)) : 0n;
   const entryRestDaa = intent.entry.minRestDaa ?? MIN_REST_DAA;
   if (entryBand < 0n) log.cond('COND_BAND_INVALID', undefined, 'entry.bandDaa');
   if (entryKeeperTip < 0n) log.cond('COND_KEEPER_TIP_INVALID', undefined, 'entry.keeperTip');

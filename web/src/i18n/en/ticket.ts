@@ -266,7 +266,7 @@ export default {
   'ticket.opt.exit.kind.takeProfit': 'Take-profit',
   'ticket.opt.exit.kind.stop': 'Stop',
 
-  'ticket.touch.preset.min': 'min fill',
+  'ticket.touch.preset.min': 'default (min fill or 25%)',
   'ticket.touch.custom': 'custom',
   'ticket.touch.resolved': '= {amount} (of your {order})',
   'ticket.touch.tradeoff': 'Smaller: triggers sooner but is easier to hunt. 100% of your order: hard to hunt, since a hunter must expose at least your size beyond your stop, but a large stop may trigger later in thin markets.',

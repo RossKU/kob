@@ -63,9 +63,10 @@ export const stopWorstPrice = (side: 'sell' | 'buy', stop: bigint, slipBps: bigi
 /**
  * Validates and converts the legs of an order of `side` (the side of the covenant that will trade: 'sell' = KobCondAsk).
  * Returns null when there are errors (already logged). `field` prefixes the issue fields (e.g. "exit."). `minFill` is the order's own
- * minimum fill: the default trigger threshold (kob-wasm `defaultMinTouch`, founder 2026-10-03).
+ * minimum fill and `amount` the amount the stop sells or buys (0n: unknown): the default trigger threshold is the larger of the minimum
+ * fill and a quarter of the amount (kob-wasm `defaultMinTouch`).
  */
-export function resolveLegs(env: PlanEnv, log: IssueLog, side: 'sell' | 'buy', input: LegInput, f = '', minFill = 1n): Legs | null {
+export function resolveLegs(env: PlanEnv, log: IssueLog, side: 'sell' | 'buy', input: LegInput, f = '', minFill = 1n, amount = 0n): Legs | null {
   const hasTp = input.tp !== undefined;
   const hasStop = input.stop !== undefined;
   if (!hasTp && !hasStop) {
@@ -127,7 +128,7 @@ export function resolveLegs(env: PlanEnv, log: IssueLog, side: 'sell' | 'buy', i
     log.cond('COND_MIN_REST_INVALID', undefined, `${f}minRestDaa`);
     return null;
   }
-  const minTouch = input.minTouch ?? env.kob.defaultMinTouch(minFill);
+  const minTouch = input.minTouch ?? env.kob.defaultMinTouch(minFill, amount);
   if (minTouch <= 0n) {
     log.cond('COND_MIN_TOUCH_INVALID', undefined, `${f}minTouch`);
     return null;

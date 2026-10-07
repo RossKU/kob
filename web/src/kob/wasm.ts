@@ -48,7 +48,7 @@ export interface RawKobWasm {
   defaultMinFill(amount: string, price: string, scale: string): string;
   defaultMinFillIfd(amount: string): string;
   defaultMinFillPair(amount: string, kasPerWholeA: string, scale: string): string;
-  defaultMinTouch(minFill: string): string;
+  defaultMinTouch(minFill: string, amount?: string): string;
   defaultMinFillSompi(): string;
   defaultConstants(): string;
   // per-kind helpers: the state JSON of the kind (either family) and base-unit amounts
@@ -205,7 +205,8 @@ export interface KobWasm {
   /** pair orders: the amount of A worth 10 KAS on A's KAS book (`kasPerWholeA` sompi per whole A; null: ceil(amount / 4)) */
   defaultMinFillPair(amount: Num, kasPerWholeA: Num | null, scale: Num): bigint;
   /** the default stop touch: the order's own minFill (at least 1) */
-  defaultMinTouch(minFill: Num): bigint;
+  /** a stop's default trigger threshold: the larger of its minimum fill and a quarter of its amount (omitted: the minimum fill) */
+  defaultMinTouch(minFill: Num, amount?: Num): bigint;
   defaultMinFillSompi(): bigint;
   defaultConstants(): DefaultConstants;
   /** price of an ask / bid at auction time `t` (decay / rise); a `KobPair`'s quote (B per whole A) */
@@ -383,7 +384,7 @@ export function createKob(raw: RawKobWasm): KobWasm {
     defaultMinFill: (a, p, sc) => wrap('defaultMinFill', () => BigInt(raw.defaultMinFill(s(a), s(p), s(sc)))),
     defaultMinFillIfd: (a) => wrap('defaultMinFillIfd', () => BigInt(raw.defaultMinFillIfd(s(a)))),
     defaultMinFillPair: (a, p, sc) => wrap('defaultMinFillPair', () => BigInt(raw.defaultMinFillPair(s(a), p == null ? '' : s(p), s(sc)))),
-    defaultMinTouch: (m) => wrap('defaultMinTouch', () => BigInt(raw.defaultMinTouch(s(m)))),
+    defaultMinTouch: (m, a) => wrap('defaultMinTouch', () => BigInt(raw.defaultMinTouch(s(m), a === undefined ? '' : s(a)))),
     defaultMinFillSompi: () => wrap('defaultMinFillSompi', () => BigInt(raw.defaultMinFillSompi())),
     defaultConstants: () =>
       wrap('defaultConstants', () => {

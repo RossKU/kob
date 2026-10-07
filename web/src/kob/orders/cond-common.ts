@@ -27,8 +27,8 @@ export const GTC_EXIT_EXPIRY_DAA = 1n << 62n;
 /** trailing: default update interval (10 minutes) and the shortest accepted (60 s) */
 export const DEFAULT_TRAIL_WAIT_DAA = 6_000n;
 export const MIN_TRAIL_WAIT_DAA = 600n;
-// The default trigger threshold `minTouch` is the order's own minimum fill (kob-wasm `defaultMinTouch`, matcher.md §10 item 6, founder
-// 2026-10-03); the ticket also offers 25% / 50% / 100% of the order's amount and a custom amount, resolved to base units before the intent.
+// The default trigger threshold `minTouch` is the larger of the order's own minimum fill and a quarter of its amount (kob-wasm
+// `defaultMinTouch`, matcher.md §4.3 and §10 item 6); the ticket also offers 25% / 50% / 100% of the order's amount and a custom amount, resolved to base units before the intent.
 export const DEFAULT_EXPECTED_UPDATES = 20;
 export const MAX_EXPECTED_UPDATES = 1_000;
 /** repeat: "unlimited" is K large enough that only the 90-day bound ends it (each cycle takes at least two transactions) */

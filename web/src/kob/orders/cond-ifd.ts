@@ -207,8 +207,9 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
   const stopEntry = entry.stop > 0n;
   const entryBand = stopEntry && entry.stop !== entry.price ? intent.entry.bandDaa ?? STOP_BAND_DAA : 0n;
   const entryKeeperTip = stopEntry ? intent.entry.keeperTip ?? tk.keeperTip : 0n;
-  // the stop entry's trigger threshold defaults to the entry's own minimum fill (kob-wasm defaultMinTouch); a limit entry has none
-  const entryTouch = stopEntry ? (intent.entry.minTouch ?? env.kob.defaultMinTouch(minFill)) : 0n;
+  // the stop entry's trigger threshold defaults to the larger of its minimum fill and a quarter of its amount (kob-wasm defaultMinTouch); a
+  // limit entry has none. An exit (it holds one entry fill of a size not known yet) defaults to its own minimum fill.
+  const entryTouch = stopEntry ? (intent.entry.minTouch ?? env.kob.defaultMinTouch(minFill, amount)) : 0n;
   const entryRestDaa = intent.entry.minRestDaa ?? MIN_REST_DAA;
   if (entryBand < 0n) log.cond('COND_BAND_INVALID', undefined, 'entry.bandDaa');
   if (entryKeeperTip < 0n) log.cond('COND_KEEPER_TIP_INVALID', undefined, 'entry.keeperTip');

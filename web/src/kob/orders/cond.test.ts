@@ -114,8 +114,9 @@ describe('stop-market', () => {
     const exp = planOk(env, { type: 'stopMarket', side: 'sell', amount: 10n * TOK, stop: 230_000_000n, minFill: 500n, minTouch: 2_500n });
     expect(askState(exp.plan.states[0]!)).toMatchObject({ minFill: '500', minTouch: '2500' });
     expect(exp.plan.disclosure).toMatchObject({ minFill: 500n, minTouch: 2_500n });
-    // the threshold follows an explicit minimum fill when it is not given
-    expect(askState(planOk(env, { type: 'stopMarket', side: 'sell', amount: 10n * TOK, stop: 230_000_000n, minFill: 700n }).plan.states[0]!).minTouch).toBe('700');
+    // when it is not given the threshold is the larger of the minimum fill and a quarter of the amount
+    expect(askState(planOk(env, { type: 'stopMarket', side: 'sell', amount: 10n * TOK, stop: 230_000_000n, minFill: 700n }).plan.states[0]!).minTouch).toBe('2500');
+    expect(askState(planOk(env, { type: 'stopMarket', side: 'sell', amount: 10n * TOK, stop: 230_000_000n, minFill: 3_000n }).plan.states[0]!).minTouch).toBe('3000');
     // 100% of the amount (the strongest protection against stop hunting)
     expect(askState(planOk(env, { type: 'stopMarket', side: 'sell', amount: 10n * TOK, stop: 230_000_000n, minTouch: 10n * TOK }).plan.states[0]!).minTouch).toBe('10000');
     expect(errorCodes(planCond(env, { type: 'stopMarket', side: 'sell', amount: 10n * TOK, stop: 230_000_000n, minFill: 0n }))).toEqual(['MIN_FILL_INVALID']);

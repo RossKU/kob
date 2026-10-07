@@ -328,8 +328,10 @@ pub mod api {
         let p = if kas_per_whole_a.trim().is_empty() { None } else { Some(num("kasPerWholeA", kas_per_whole_a)?) };
         Ok(defaults::default_min_fill_pair(num("amount", amount)?, p, num("scale", scale)?).to_string())
     }
-    pub fn default_min_touch(min_fill: &str) -> R<String> {
-        Ok(defaults::default_min_touch(num("minFill", min_fill)?).to_string())
+    /// A stop's default `minTouch`: `amount` is the order's amount (`""`: unknown, then its minimum fill).
+    pub fn default_min_touch(min_fill: &str, amount: &str) -> R<String> {
+        let a = if amount.trim().is_empty() { 0 } else { num("amount", amount)? };
+        Ok(defaults::default_min_touch(num("minFill", min_fill)?, a).to_string())
     }
     /// The wallet default constants: `{defaultOrderCarrier, defaultMinFillSompi, defaultMinFillImmediate, maxScale, quoteLimit,
     /// marketAuctionDaa, slippageBps, marketActivationDaa, iocLifeDaa, stopBandDaa, minRestDaa, daaRateMilli}` (integers as
@@ -1134,10 +1136,11 @@ pub fn default_min_fill_pair(amount: &str, kas_per_whole_a: &str, scale: &str) -
     js(api::default_min_fill_pair(amount, kas_per_whole_a, scale))
 }
 
-/// Default `minTouch` of a stop: the order's own `minFill` (at least 1).
+/// Default `minTouch` of a stop: the larger of the order's own `minFill` and a quarter of its `amount` (at most the amount,
+/// at least 1; `amount` omitted or `""`: the minimum fill).
 #[wasm_bindgen(js_name = defaultMinTouch)]
-pub fn default_min_touch(min_fill: &str) -> Result<String, JsError> {
-    js(api::default_min_touch(min_fill))
+pub fn default_min_touch(min_fill: &str, amount: Option<String>) -> Result<String, JsError> {
+    js(api::default_min_touch(min_fill, amount.as_deref().unwrap_or("")))
 }
 
 /// `DEFAULT_MIN_FILL_SOMPI`: the quote value (sompi) a default minimum fill is worth.
@@ -1784,8 +1787,9 @@ mod tests {
         assert_eq!(api::default_min_fill_ifd("10001").unwrap(), "2501");
         assert_eq!(api::default_min_fill_pair("10000", "", "1000").unwrap(), "2500");
         assert_eq!(api::default_min_fill_pair("10000", "250000000", "1000").unwrap(), "4000");
-        assert_eq!(api::default_min_touch("0").unwrap(), "1");
-        assert_eq!(api::default_min_touch("4000").unwrap(), "4000");
+        assert_eq!(api::default_min_touch("0", "").unwrap(), "1");
+        assert_eq!(api::default_min_touch("4000", "").unwrap(), "4000");
+        assert_eq!(api::default_min_touch("4000", "100000").unwrap(), "25000");
         let c: serde_json::Value = serde_json::from_str(&api::default_constants().unwrap()).unwrap();
         assert_eq!(c["defaultMinFillSompi"], "1000000000");
         assert_eq!(c["defaultOrderCarrier"], "200000000");

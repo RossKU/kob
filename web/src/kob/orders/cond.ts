@@ -78,7 +78,7 @@ function planLegs(env: PlanEnv, log: IssueLog, intent: LegsIntent, tip: bigint, 
   log.add(...checkMinFill(minFill, amount));
   if (log.failed) return failedPlan(log);
 
-  const legs = resolveLegs(env, log, intent.side, input, '', minFill);
+  const legs = resolveLegs(env, log, intent.side, input, '', minFill, amount);
   const act = resolveActivation(env, log, intent.activeFrom);
   const expiry = act === null ? null : resolveExpiry(env, log, intent.expiry, { field: 'expiry', activeFrom: act.activeFrom });
   if (legs === null || act === null || expiry === null) return failedPlan(log);

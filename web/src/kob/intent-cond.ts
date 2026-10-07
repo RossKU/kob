@@ -74,7 +74,7 @@ export interface StopSpec {
   keeperTip?: bigint;
   /**
    * trigger threshold (touch): the smallest fill, in base units of a plain order of the same scale, of a resting order at or beyond the stop
-   * that arms it (the state's `minTouch`). Default: the order's own minimum fill (kob-wasm `defaultMinTouch`, founder 2026-10-03); the
+   * that arms it (the state's `minTouch`). Default: the larger of the order's minimum fill and a quarter of its amount (kob-wasm `defaultMinTouch`); the
    * ticket offers min fill / 25% / 50% / 100% of the amount
    */
   minTouch?: bigint;

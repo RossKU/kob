@@ -41,7 +41,7 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
   log.add(...checkPairTip(env, amount, tip));
   if (log.failed) return failed(log);
 
-  const legs = resolveLegs(lenv, log, intent.side, input, '', minFill);
+  const legs = resolveLegs(lenv, log, intent.side, input, '', minFill, amount);
   const act = resolveActivation(lenv, log, intent.activeFrom);
   const expiry = act === null ? null : resolveExpiry(lenv, log, intent.expiry, { field: 'expiry', activeFrom: act.activeFrom });
   if (legs === null || act === null || expiry === null) return failed(log);
