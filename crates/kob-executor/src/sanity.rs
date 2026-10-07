@@ -10,7 +10,9 @@
 //! `2^62` quote units), the covenant's own acceptance rules (`minFill >= 0`, a bid's `minFill > 0`, `tip >= 0`,
 //! `slope >= 0`, `decayStep > 0` when decaying, ...) and bounds on every field so that no sum or product the matcher forms
 //! can overflow. The bounds are far beyond any real order (the whole KAS supply is 2^61.3 sompi), so an honest order never
-//! trips one; a state that does is left unlisted (`bad_state:<field>`), still indexed and cancellable by its maker.
+//! trips one; a state that does is left unlisted (`bad_state:<field>`), still indexed and cancellable by its maker. Last, the
+//! token program(s) the state pins must resolve as the builders resolve them (`kob_protocol::build::order_programs`: template
+//! hash, prefix / suffix lengths, family), so that no order the planner accepts is one the builder refuses.
 
 use kob_protocol::state::*;
 
@@ -142,8 +144,8 @@ fn fills(amount: i64, min_fill: i64) -> i128 {
 }
 
 /// Checks a decoded order state (any family). `Ok` means the protocol's numeric gate holds, every sum and product the
-/// matcher, keepers and indexer form from it fits, no divisor is zero, and the numbers satisfy the covenant's own
-/// acceptance rules.
+/// matcher, keepers and indexer form from it fits, no divisor is zero, the numbers satisfy the covenant's own
+/// acceptance rules, and the token program(s) the state pins are ones the builders can spend it with.
 pub fn check(state: &AnyState) -> Result<(), String> {
     // A state built in memory (not decoded from the chain) may be unencodable: a malformed committed exit or a KRON
     // extension commitment (`validate`), or a number the 8-byte state pushes cannot carry (i64::MIN, which the range
@@ -280,7 +282,7 @@ pub fn check(state: &AnyState) -> Result<(), String> {
             c.le("carriers", fills(s.amount_left, s.min_fill) * per_fill, NOTIONAL_MAX);
             match s.exit() {
                 Ok(x) => {
-                    if let Err(e) = check(&AnyState::KobCondAsk(CondAskState { amount_left: 1, ..x })) {
+                    if let Err(e) = check(&AnyState::KobCondAsk(CondAskState { amount_left: 1, ..x }).into_family(state.family())) {
                         c.fail("exitState", &e);
                     }
                 }
@@ -314,7 +316,7 @@ pub fn check(state: &AnyState) -> Result<(), String> {
             c.le("carriers", fills(s.amount_left, s.min_fill) * s.exit_carrier as i128, NOTIONAL_MAX);
             match s.exit() {
                 Ok(x) => {
-                    if let Err(e) = check(&AnyState::KobCondBid(CondBidState { amount_left: 1, ..x })) {
+                    if let Err(e) = check(&AnyState::KobCondBid(CondBidState { amount_left: 1, ..x }).into_family(state.family())) {
                         c.fail("exitState", &e);
                     }
                 }
@@ -407,6 +409,11 @@ pub fn check(state: &AnyState) -> Result<(), String> {
         if state.check_numbers().is_err() {
             c.fail("numbers", "outside_the_numeric_gate");
         }
+    }
+    if c.0.is_ok() && kob_protocol::build::order_programs(state).is_err() {
+        // the token program(s) the order pins, resolved as the builders resolve them (template hash, prefix / suffix lengths,
+        // family; a pair order: both tokens): an order the builders cannot spend is never listed or planned
+        c.fail("tokenProgram", "not_the_pinned_program");
     }
     c.0
 }

@@ -75,7 +75,8 @@ pub trait BookSource: Send {
     }
 }
 
-/// DAA scores (10 per second) an order whose planning panicked stays out of the book: one hour.
+/// DAA scores (10 per second) an order whose planning panicked, or that the builder refused on its own, stays out of the
+/// book: one hour.
 pub const QUARANTINE_DAA: u64 = 36_000;
 
 /// DAA scores (10 per second) before an order flagged possibly frozen is probed again: 5 minutes.
@@ -204,7 +205,8 @@ pub struct StepReport {
     /// Transactions whose submit got no verdict (tracked as pending, resent).
     pub unknown: Vec<[u8; 32]>,
     pub skipped: Vec<String>,
-    /// Orders left out of the matcher's book this step (numbers refused by the sanity gate, or planning panicked).
+    /// Orders left out of the matcher's book this step (numbers refused by the sanity gate, planning panicked, or the builder
+    /// refused the order).
     pub quarantined: usize,
     pub accepted: usize,
     pub finalized: usize,
@@ -225,8 +227,9 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     pub steps: u64,
     /// Orders flagged possibly frozen and the DAA score before which the matcher does not probe them again.
     pub frozen_until: BTreeMap<CovId, u64>,
-    /// Orders whose planning panicked (the matcher's last line of defence) and the DAA score before which they stay out of
-    /// the book: one hostile order costs a skipped order, never the process.
+    /// Orders whose planning panicked (the matcher's last line of defence) or that the builder refused on their own, and the
+    /// DAA score before which they stay out of the book: one malformed order costs a skipped order, never the process or the
+    /// other books.
     pub quarantined_until: BTreeMap<CovId, u64>,
     /// Refunds found unprofitable at their fixed tip, by (order, order outpoint): not built again.
     pub keeper_unprofitable: BTreeSet<(CovId, super::book::Outpoint)>,
@@ -522,7 +525,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             let report = matcher_tick(&inp, &self.cfg.engine, &self.families, self.signer.as_ref());
             for (id, why) in &report.quarantined {
                 tracing::error!(order = %kob_protocol::json::to_hex(id), %why, "order quarantined: left out of the matcher's book");
-                if why == "planning panicked" {
+                if why == super::engine::PLANNING_PANICKED || why.starts_with(super::engine::REFUSED_BY_THE_BUILDER) {
                     self.quarantined_until.insert(*id, daa + QUARANTINE_DAA);
                 }
                 rep.quarantined += 1;

@@ -1261,6 +1261,9 @@ stall or drain any executor:
   rules (`minFill >= 0`, a bid's `minFill > 0`, `tip >= 0`, `slope >= 0`, `decayStep > 0` when decaying, `tif` 0..2, a stop at most
   `MAX_STOP_PRICE`, ...) and bounds on every field (prices to 2^60 sompi per whole token, notional to 2^61 sompi, carriers over
   every possible fill to 2^61, amounts and deliveries to an `i64`) that keep every sum the matcher forms inside its integers.
+  Last, the token program(s) the state pins must resolve exactly as the builders resolve them (`kob_protocol::build::order_programs`:
+  a supported template hash, its prefix and suffix lengths, the family the order kind trades; a pair order both tokens), so no
+  order the planner accepts is one the builder refuses (`bad_state:tokenProgram:not_the_pinned_program`).
   A state that fails is indexed (status, cancel) but unlisted with `unlisted_reason = bad_state:<field>:<why>`, including exits
   (they used to inherit the parent's listing). The gate runs again when the book is read and in the candidate generator, so a
   snapshot file cannot bypass it.
@@ -1270,6 +1273,9 @@ stall or drain any executor:
   one batch's planning gets 5 s) and each batch is planned under `catch_unwind`: on a panic the offending order is found by removing one order
   at a time (those of the plan that panicked, else those of the books whose planning panics alone), quarantined for an hour (logged,
   `StepReport.quarantined`) and the rest of the view is still matched.
+  A builder refusal that names the order at fault (`order of leg <i>: ...`: its token programs, its family) quarantines that
+  order the same way (`refused by the builder: ...`) and the batch is planned again without it, so one order the builder cannot
+  spend never drops the other fills of the batch or stops the other books.
   The keeper tick is guarded the same way and never builds from an order that fails the gate.
 * **Planner cost.** The global batch planner sorts the candidates once per plan, stops each walk where nothing further can
   cross it and, once a transaction is full, only extends the legs already in it; the tick budget bounds a hostile book. No candidate

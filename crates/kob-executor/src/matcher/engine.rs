@@ -181,8 +181,9 @@ pub struct TickReport {
     pub prepared: Vec<Prepared>,
     /// Books skipped, and why.
     pub skipped: Vec<(BookKey, String)>,
-    /// Orders left out of this and later ticks: their numbers fail the sanity gate ([`crate::sanity`]), or planning them
-    /// panicked (the last line of defence). The runner keeps the ids out of the book until the order changes.
+    /// Orders left out of this and later ticks: their numbers fail the sanity gate ([`crate::sanity`]), planning them
+    /// panicked (the last line of defence, [`PLANNING_PANICKED`]), or the builder refused the order on its own
+    /// ([`REFUSED_BY_THE_BUILDER`]). The runner keeps the ids of the last two out of the book for [`super::run::QUARANTINE_DAA`].
     pub quarantined: Vec<(CovId, String)>,
     /// Plans the builders or the engine refused (a planner defect, or a chained step that must
     /// wait for its parent). Logged; the batch is retried without the offending fill.
@@ -266,6 +267,24 @@ fn victim(plan: &Plan) -> Option<CovId> {
     plan.fills.iter().rev().find(|f| f.cand.class != Class::Immediate).or(plan.fills.last()).map(|f| f.cand.id)
 }
 
+/// Reason of an order quarantined because its planning panicked ([`TickReport::quarantined`]).
+pub const PLANNING_PANICKED: &str = "planning panicked";
+/// Reason prefix of an order quarantined because the builder refused it on its own (`order of leg <i>: ...`, see
+/// [`lowering_leg`]): such an order fails the same way every time it is planned.
+pub const REFUSED_BY_THE_BUILDER: &str = "refused by the builder";
+
+/// The leg a lowering error names as the order at fault: the batch builder (`kob_protocol::build`) names the leg of a refusal
+/// that depends on that order alone (its token programs, its family) as `order of leg <i>: ...`; leg `i` is `plan.fills[i]`
+/// ([`super::lower::lower_batch`]).
+pub fn lowering_leg(err: &str) -> Option<usize> {
+    let at = err.find("order of leg ")? + "order of leg ".len();
+    let digits: String = err[at..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() || !err[at + digits.len()..].starts_with(':') {
+        return None;
+    }
+    digits.parse().ok()
+}
+
 /// Most attempts (plan, build, validate) per batch before the tick gives up on it.
 const MAX_ATTEMPTS: usize = 24;
 /// Most single-order removals tried to isolate a panicking batch (each is a full attempt).
@@ -325,6 +344,8 @@ impl<'a> Tick<'a> {
     fn batch(&self, step: usize, extra: &BTreeSet<CovId>, report: &mut TickReport, last_plan: &mut Vec<CovId>) -> Batch {
         let cfg = self.cfg;
         let mut ex: BTreeSet<CovId> = self.excluded.union(extra).copied().collect();
+        // orders quarantined earlier in the tick (the builder refused them) are never planned again
+        ex.extend(report.quarantined.iter().map(|q| q.0));
         // Funding (`select_funding`): the first attempt takes the largest UTXO, a builder's "insufficient funds" names the
         // need; a fragmented pool is consolidated while the batch stays profitable with it.
         let mut need = 0u64;
@@ -431,6 +452,19 @@ impl<'a> Tick<'a> {
                     let why = format!("lowering: {e}");
                     report.anomalies.push((key, step, why.clone()));
                     last = Some((key, why));
+                    // A refusal that names the order at fault (its token programs, its family: nothing the plan chose) fails
+                    // the same way every time that order is planned: it is quarantined, for this tick and (by the runner)
+                    // the next ones, like an order whose planning panics, and the batch is planned again without it. A
+                    // continuation of this tick's own transactions is only left out of this batch.
+                    if let Some(id) = lowering_leg(&e).and_then(|i| plan.fills.get(i)).map(|f| f.cand.id) {
+                        if !self.unaccepted.contains(&id) && !report.quarantined.iter().any(|q| q.0 == id) {
+                            report.quarantined.push((id, format!("{REFUSED_BY_THE_BUILDER}: {e}")));
+                        }
+                        ex.insert(id);
+                        // the order at fault is out: what is left is planned as if it had never been listed
+                        last = None;
+                        continue;
+                    }
                     match victim(&plan) {
                         Some(v) => {
                             ex.insert(v);
@@ -655,7 +689,7 @@ impl<'a> Tick<'a> {
             }
             tried += 1;
             if let Some(b) = try_without(self, id, report) {
-                report.quarantined.push((id, "planning panicked".into()));
+                report.quarantined.push((id, PLANNING_PANICKED.into()));
                 self.excluded.insert(id);
                 return Some(b);
             }

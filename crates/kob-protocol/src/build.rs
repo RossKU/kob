@@ -143,6 +143,30 @@ fn order_token(s: &AnyState) -> Result<Token> {
     Ok((s.token_cov_id(), program))
 }
 
+/// The token programs an existing order pins, resolved exactly as every builder that spends the order resolves them: a
+/// supported program whose template hash and prefix / suffix lengths the state names, of the family the order kind trades
+/// (a pair order: both tokens, each of the family its state names, two different tokens). Returns the program of the
+/// order's token (a pair order: of A) and, for a pair order, the program of B. An order that fails this can never be filled,
+/// refunded or closed by these builders, whatever else its numbers say: the executor's sanity gate applies it before an order
+/// is listed or planned.
+pub fn order_programs(s: &AnyState) -> Result<(TemplateId, Option<TemplateId>)> {
+    if s.is_pair() {
+        let (a, b) = pair::pair_programs(s)?;
+        return Ok((a.1, Some(b.1)));
+    }
+    Ok((order_token(s)?.1, None))
+}
+
+/// A refusal of the batch builder that depends on the order of leg `i` alone (its token programs, its family): the message
+/// names the leg (`order of leg <i>: ...`), so a caller that planned the batch can tell which order to leave out.
+fn leg_order_error(i: usize, e: Error) -> Error {
+    match e {
+        Error::Invalid(m) => Error::Invalid(format!("order of leg {i}: {m}")),
+        Error::State(m) => Error::Invalid(format!("order of leg {i}: {m}")),
+        other => other,
+    }
+}
+
 /// Order state of a leg, as the kind of the family of its token program.
 fn family_of_token_hash(h: &[u8; 32]) -> Result<Family> {
     token_template_by_hash(h)
@@ -2163,15 +2187,15 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
     let mut leg_tokens: Vec<Token> = vec![];
     let mut pair_toks: Vec<Option<(Token, Token)>> = vec![];
     let mut calcs: Vec<Option<pair::PairCalc>> = vec![];
-    for l in &b.legs {
-        match pair::leg_pair_tokens(l)? {
+    for (i, l) in b.legs.iter().enumerate() {
+        match pair::leg_pair_tokens(l).map_err(|e| leg_order_error(i, e))? {
             Some((a, bt)) => {
                 leg_tokens.push(pair::leg_main_token(l, a, bt));
                 pair_toks.push(Some((a, bt)));
                 calcs.push(pair::calc_leg(l, lock, strict)?);
             }
             None => {
-                leg_tokens.push(order_token(&leg_state(l)?)?);
+                leg_tokens.push(leg_state(l).and_then(|s| order_token(&s)).map_err(|e| leg_order_error(i, e))?);
                 pair_toks.push(None);
                 calcs.push(None);
             }
