@@ -228,6 +228,10 @@ holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignor
   `/verify` and `/settle` are refused (503, `/supported` empty) and no intent execution or expiry is broadcast (they wait
   and continue once both are gone). A relative `killSwitchFile` is resolved against the configuration file's directory
   (the example's `x402.kill` sits next to the file), not the working directory.
+* **Paths.** A relative `ledger`, `invoices.store` or `registry` in the configuration file is resolved against the file's
+  directory too (under systemd the working directory is `/`). A relative ledger or invoice store that exists next to the
+  working directory but not next to the configuration file (written by an earlier build) is refused at startup: set the
+  absolute path of the file in use. Paths given as flags (`--ledger`) stay relative to the working directory.
 
 * **Fees.** The intent executions (high) and expiries (normal) the facilitator builds are priced with the runner's rates (C,
   "Fee policy"), within what the intent itself can pay; the payers' own transactions are submitted as signed.

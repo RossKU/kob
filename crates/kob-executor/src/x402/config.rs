@@ -199,7 +199,8 @@ impl Default for IntentCfg {
 #[serde(deny_unknown_fields, rename_all = "camelCase", default)]
 pub struct InvoiceCfg {
     pub enabled: bool,
-    /// Store path (`:memory:` = volatile); default: the ledger path with `.invoices.jsonl` appended.
+    /// Store path (`:memory:` = volatile; relative to the configuration file's directory); default: the ledger path with
+    /// `.invoices.jsonl` appended.
     pub store: Option<String>,
     /// Longest invoice lifetime accepted at registration.
     pub max_lifetime_seconds: u64,
@@ -231,6 +232,8 @@ pub struct X402Config {
     pub network: String,
     pub node: String,
     pub listen: String,
+    /// The replay ledger (`:memory:` = volatile). A relative path is relative to the configuration file's directory
+    /// ([`X402Config::load`]), as are `invoices.store`, `registry` and `killSwitchFile`.
     pub ledger: String,
     pub auth: AuthMode,
     /// Required with `auth: "open"`: the operator asserts that nothing on this host relays connections to `listen` (no
@@ -403,9 +406,37 @@ impl X402Config {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path).map_err(|e| ConfigError(format!("{}: {e}", path.display())))?;
         let mut cfg = Self::from_json(&text)?;
+        let abs = std::path::absolute(path).map_err(|e| ConfigError(format!("{}: {e}", path.display())))?;
+        let dir = abs.parent().unwrap_or(Path::new("/")).to_path_buf();
+        // every file the configuration names is relative to the configuration file's directory, never to the working directory
+        // (under systemd that is `/`): otherwise a start from another directory opens a fresh, empty ledger
+        let rebase = |field: &str, v: &mut Option<String>| -> Result<(), ConfigError> {
+            let Some(p) = v.as_deref().filter(|p| !p.trim().is_empty() && *p != ":memory:" && Path::new(p).is_relative()) else {
+                return Ok(());
+            };
+            let next = dir.join(p);
+            // a store a build before this one created next to the working directory is not left behind silently
+            let old = std::path::absolute(p).map_err(|e| ConfigError(format!("{field} {p:?}: {e}")))?;
+            if old != next && old.exists() && !next.exists() {
+                return Err(ConfigError(format!(
+                    "{field} {p:?} is relative to the configuration file's directory ({}), where it does not exist, while {} \
+                     does: set {field} to the absolute path of the file in use",
+                    next.display(),
+                    old.display()
+                )));
+            }
+            *v = Some(next.to_string_lossy().into_owned());
+            Ok(())
+        };
+        let mut ledger = Some(cfg.ledger.clone());
+        rebase("ledger", &mut ledger)?;
+        cfg.ledger = ledger.unwrap_or_default();
+        rebase("invoices.store", &mut cfg.invoices.store)?;
+        // an input the facilitator only reads: a wrong place fails loudly at startup
+        if let Some(r) = cfg.registry.as_deref().filter(|r| *r != "builtin" && Path::new(r).is_relative()) {
+            cfg.registry = Some(dir.join(r).to_string_lossy().into_owned());
+        }
         if let Some(k) = cfg.kill_switch_file.as_deref().filter(|k| Path::new(k).is_relative()) {
-            let abs = std::path::absolute(path).map_err(|e| ConfigError(format!("{}: {e}", path.display())))?;
-            let dir = abs.parent().unwrap_or(Path::new("/"));
             cfg.kill_switch_file = Some(dir.join(k).to_string_lossy().into_owned());
         }
         Ok(cfg)
@@ -748,6 +779,33 @@ mod tests {
         assert_eq!(X402Config::load(&path).unwrap().kill_switch_file.as_deref(), Some(abs));
         std::fs::write(&path, format!("{base}}}")).unwrap();
         assert_eq!(X402Config::load(&path).unwrap().kill_switch_file, None);
+    }
+
+    /// The ledger and the invoice store are next to the configuration file too, whatever the working directory (under systemd:
+    /// `/`); a store a build before found next to the working directory is not left behind silently.
+    #[test]
+    fn relative_ledger_and_store_are_next_to_the_configuration_file() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("x402.json");
+        let base = r#"{"auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:8402""#;
+        std::fs::write(&path, format!(r#"{base},"ledger":"state/ledger.jsonl","invoices":{{"store":"inv.jsonl"}}}}"#)).unwrap();
+        let c = X402Config::load(&path).unwrap();
+        assert_eq!(std::path::PathBuf::from(&c.ledger), d.path().join("state/ledger.jsonl"));
+        assert_eq!(c.invoices.store.as_deref().map(std::path::PathBuf::from), Some(d.path().join("inv.jsonl")));
+        // absolute and volatile paths are kept; the default ledger name is next to the file as well
+        std::fs::write(&path, format!(r#"{base},"ledger":":memory:","invoices":{{"store":":memory:"}}}}"#)).unwrap();
+        let c = X402Config::load(&path).unwrap();
+        assert_eq!((c.ledger.as_str(), c.invoices.store.as_deref()), (":memory:", Some(":memory:")));
+        std::fs::write(&path, format!("{base}}}")).unwrap();
+        assert_eq!(std::path::PathBuf::from(X402Config::load(&path).unwrap().ledger), d.path().join("x402-ledger.jsonl"));
+        // an existing ledger relative to the working directory, none next to the configuration file: refused
+        let cwd = std::env::current_dir().unwrap();
+        let here = tempfile::tempdir_in(&cwd).unwrap();
+        let name = here.path().file_name().unwrap().to_string_lossy().into_owned();
+        std::fs::write(here.path().join("old.jsonl"), b"").unwrap();
+        std::fs::write(&path, format!(r#"{base},"ledger":"{name}/old.jsonl"}}"#)).unwrap();
+        let e = X402Config::load(&path).unwrap_err();
+        assert!(e.0.contains("absolute path"), "{}", e.0);
     }
 
     #[test]
