@@ -48,6 +48,8 @@ export interface PairEnvOptions {
   /** KAS per covenant UTXO; default `FIXTURE_CARRIER` (10 KAS), `null` = the wallet default */
   carrier?: bigint | null;
   lastFillPrice?: bigint | null;
+  /** false: no further indexer answers (default: one that reports the book's best prices) */
+  independentReference?: boolean;
 }
 
 /** A PairPlanEnv of `MAKER_PK` on the pair a/b (default AAA/BBB). */
@@ -74,6 +76,10 @@ export function makePairEnv(o: PairEnvOptions = {}): PairPlanEnv {
   const carrier = o.carrier === undefined ? FIXTURE_CARRIER : o.carrier;
   if (carrier !== null) env.carrier = carrier;
   if (o.lastFillPrice !== undefined) env.lastFillPrice = o.lastFillPrice;
+  // a further indexer that reports the same best prices: an independent reference for the start of market / close orders
+  if (o.independentReference !== false) {
+    env.referenceTouches = [{ label: 'https://idx2.example', bestAsk: env.book.asks[0]?.price ?? null, bestBid: env.book.bids[0]?.price ?? null }];
+  }
   return env;
 }
 

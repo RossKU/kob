@@ -1,7 +1,7 @@
 // The start of a market / close auction is the best price of the indexer book; planning compares it with the references that do not come from
 // that book (the last fill, other indexers' best prices) and holds a start far on the costly side until the user acknowledges it.
 import { describe, expect, it } from 'vitest';
-import { MARKET_START_TOLERANCE_BPS, planOrder } from './plan';
+import { MARKET_START_TOLERANCE_BPS, marketStartAckOf, planOrder } from './plan';
 import { errors } from './plan-types';
 import { TOK, level, makeEnv } from '../testing/fixtures';
 import type { BidState } from './types';
@@ -26,7 +26,7 @@ describe('market order start against independent references', () => {
     const i = p.issues.find((x) => x.code === 'MARKET_START_VS_LAST_FILL')!;
     expect(i.params).toMatchObject({ start: fake, reference: REAL, percent: '90', direction: 'above' });
 
-    const acked = planOrder({ ...env, marketStartAcknowledged: true }, { type: 'market', side: 'buy', amount: 2n * TOK } as never);
+    const acked = planOrder({ ...env, marketStartAck: marketStartAckOf(i) }, { type: 'market', side: 'buy', amount: 2n * TOK } as never);
     expect(acked.ok).toBe(true);
     expect(errors(acked)).toEqual([]);
     expect(codes(acked)).toContain('MARKET_START_ACKNOWLEDGED');
@@ -39,11 +39,17 @@ describe('market order start against independent references', () => {
     env.lastFillPrice = REAL;
     const p = planOrder(env, { type: 'market', side: 'buy', amount: 2n * TOK } as never);
     expect(p.ok).toBe(true);
-    expect(codes(p).filter((c) => c.startsWith('MARKET_START'))).toEqual([]);
+    // the last fill is from the same indexer: a small order is told so (a warning), nothing more
+    expect(codes(p).filter((c) => c.startsWith('MARKET_START'))).toEqual(['MARKET_START_NO_INDEPENDENT_REFERENCE']);
     // a buy that starts BELOW the last fill costs the user nothing more
     const cheap = envWithAsk(REAL / 2n, REAL / 3n);
     cheap.lastFillPrice = REAL;
-    expect(codes(planOrder(cheap, { type: 'market', side: 'buy', amount: 2n * TOK } as never)).filter((c) => c.startsWith('MARKET_START'))).toEqual([]);
+    expect(codes(planOrder(cheap, { type: 'market', side: 'buy', amount: 2n * TOK } as never)).filter((c) => c.startsWith('MARKET_START'))).toEqual([
+      'MARKET_START_NO_INDEPENDENT_REFERENCE',
+    ]);
+    // with another indexer agreeing nothing is said
+    const checked = planOrder({ ...env, referenceTouches: [{ label: 'https://idx2.example', bestAsk: REAL, bestBid: REAL - 1n }] }, { type: 'market', side: 'buy', amount: 2n * TOK } as never);
+    expect(codes(checked).filter((c) => c.startsWith('MARKET_START'))).toEqual([]);
   });
 
   it('the tolerance is configurable', () => {

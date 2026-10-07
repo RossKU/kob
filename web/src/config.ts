@@ -19,8 +19,8 @@ export interface AppConfig {
   /** REST + WebSocket base of the indexer, e.g. `https://kob.example/`; '' = no indexer (orders/book unavailable) */
   indexerUrl: string;
   /**
-   * further indexers the key facts of a token (standing, powers, best prices) are cross-checked against (config.json / `__KOB_CONFIG__` only:
-   * a link must not add verifiers). Empty = a single indexer, unverified.
+   * further indexers the key facts of a token (standing, powers, best prices) are cross-checked against (config.json / `__KOB_CONFIG__`, or a
+   * stored setting, which every page then names in a banner; a link must not add verifiers). Empty = a single indexer, unverified.
    */
   extraIndexerUrls: string[];
   /** wRPC (`ws://` / `wss://`) node, '' = the SDK's public Resolver; a mock-server base (`http://` / `https://`) only in test / dev builds */
@@ -316,7 +316,15 @@ export interface ConfigLayers {
  * A node or indexer URL that this browser's stored settings (localStorage `kob.settings`) put in force instead of the deployment's: it applies to every
  * later visit, so the app says so on every page (`deployment`: what config.json / `__KOB_CONFIG__` / the defaults would have used).
  */
-export interface StoredOverride { field: 'indexerUrl' | 'nodeUrl'; value: string; deployment: string }
+export interface StoredOverride {
+  /**
+   * `extraIndexerUrls`: the stored list of further indexers (`value` / `deployment`: the URLs joined by ', ') that the market start is checked
+   * against; `allowQueryOverrides`: a stored `true` that lets links repoint the node and the indexer (`value` 'true', `deployment` 'false').
+   */
+  field: 'indexerUrl' | 'nodeUrl' | 'extraIndexerUrls' | 'allowQueryOverrides';
+  value: string;
+  deployment: string;
+}
 
 export interface ResolvedConfig { config: AppConfig; warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }
 
@@ -357,7 +365,15 @@ export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
   // only a stored value that is still in force (a link did not replace it) and differs from the deployment's
   const storedOverrides: StoredOverride[] = (['indexerUrl', 'nodeUrl'] as const)
     .filter((f) => stored[f] !== undefined && stored[f] === cfg[f] && cfg[f] !== deployment[f])
-    .map((f) => ({ field: f, value: cfg[f], deployment: deployment[f] }));
+    .map((f): StoredOverride => ({ field: f, value: cfg[f], deployment: deployment[f] }));
+  // the further indexers a stored setting names are the references of the market-start check: said like a stored indexer
+  const list = (xs: readonly string[]): string => xs.join(', ');
+  if (stored.extraIndexerUrls !== undefined && list(cfg.extraIndexerUrls) !== list(deployment.extraIndexerUrls)) {
+    storedOverrides.push({ field: 'extraIndexerUrls', value: list(cfg.extraIndexerUrls), deployment: list(deployment.extraIndexerUrls) });
+  }
+  if (stored.allowQueryOverrides === true && !deployment.allowQueryOverrides) {
+    storedOverrides.push({ field: 'allowQueryOverrides', value: 'true', deployment: 'false' });
+  }
   return { config: cfg, warnings, storedOverrides };
 }
 

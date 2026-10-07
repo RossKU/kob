@@ -38,6 +38,18 @@ export function GlobalBanners(props: { warnings: ConfigWarning[]; storedOverride
   // a node / indexer saved in this browser's settings applies to every visit: said on every page, like a non-default registry
   const shown = (o: StoredOverride, url: string): string => url || t(o.field === 'nodeUrl' ? 'settings.nodeUrl.resolver' : 'shell.banner.storedNone');
   for (const o of props.storedOverrides ?? []) {
+    if (o.field === 'extraIndexerUrls' || o.field === 'allowQueryOverrides') {
+      const extra = o.field === 'extraIndexerUrls';
+      banners.push(
+        <Banner key={`stored-${o.field}`} tone="warn" class="banner-compact" data-testid={extra ? 'banner-stored-extra-indexers' : 'banner-stored-query-overrides'}>
+          {extra
+            ? t('shell.banner.storedExtraIndexers', { urls: o.value || t('shell.banner.storedNone'), deployment: o.deployment || t('shell.banner.storedNone') })
+            : t('shell.banner.storedQueryOverrides')}{' '}
+          <a href="#/settings">{t('shell.banner.storedSettings')}</a>
+        </Banner>,
+      );
+      continue;
+    }
     banners.push(
       <Banner key={`stored-${o.field}`} tone="warn" class="banner-compact" data-testid={`banner-stored-${o.field === 'nodeUrl' ? 'node' : 'indexer'}`}>
         {t(o.field === 'nodeUrl' ? 'shell.banner.storedNode' : 'shell.banner.storedIndexer', { url: shown(o, o.value), deployment: shown(o, o.deployment) })}{' '}

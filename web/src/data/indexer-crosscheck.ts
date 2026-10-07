@@ -119,3 +119,61 @@ export async function readReferenceTouches<B extends { asks: { price: bigint }[]
   );
   return out.filter((x): x is { label: string; bestAsk: bigint | null; bestBid: bigint | null } => x !== null);
 }
+
+/** The references further indexers give for a market start: the touches of those that answered, and the labels of those that did not. */
+export interface References {
+  touches: { label: string; bestAsk: bigint | null; bestBid: bigint | null }[];
+  unavailable: string[];
+}
+
+type Touch = { bestAsk: bigint | null; bestBid: bigint | null };
+
+/**
+ * Reads `read` from every verifier: a verifier that fails (or answers no book for a market another one has) is reported in `unavailable`, never
+ * left out silently.
+ */
+async function collect(
+  verifiers: readonly { label: string; api: Pick<IndexerApi, 'book'> }[],
+  read: (api: Pick<IndexerApi, 'book'>) => Promise<Touch>,
+): Promise<References> {
+  const out = await Promise.all(verifiers.map(async (v) => ({ label: v.label, touch: await read(v.api).catch(() => null) })));
+  return {
+    touches: out.filter((x) => x.touch !== null).map((x) => ({ label: x.label, ...(x.touch as Touch) })),
+    unavailable: out.filter((x) => x.touch === null).map((x) => x.label),
+  };
+}
+
+/** The best ask / bid of a KAS market as each verifier reports it, and the verifiers that did not answer. */
+export function readReferences<B extends { asks: { price: bigint }[]; bids: { price: bigint }[] }>(
+  verifiers: readonly { label: string; api: Pick<IndexerApi, 'book'> }[],
+  covenantId: Hex,
+  toBook: (view: Awaited<ReturnType<IndexerApi['book']>>) => B,
+  signal?: AbortSignal,
+): Promise<References> {
+  const o = signal ? { signal } : undefined;
+  return collect(verifiers, async (api) => {
+    const b = toBook(await api.book(covenantId, { depth: 20, aggregate: true }, o));
+    return { bestAsk: b.asks[0]?.price ?? null, bestBid: b.bids[0]?.price ?? null };
+  });
+}
+
+/**
+ * The touches of a pair A/B (B base units per whole A) each verifier's two KAS books imply: buying A with B starts at A's ask over B's bid, selling
+ * A for B at A's bid over B's ask (`impliedPairRate`). A verifier that does not answer for both books is reported unavailable.
+ */
+export function readPairReferences<B extends { asks: { price: bigint }[]; bids: { price: bigint }[] }>(
+  verifiers: readonly { label: string; api: Pick<IndexerApi, 'book'> }[],
+  a: { covenantId: Hex; toBook: (view: Awaited<ReturnType<IndexerApi['book']>>) => B },
+  b: { covenantId: Hex; toBook: (view: Awaited<ReturnType<IndexerApi['book']>>) => B; scale: bigint },
+  signal?: AbortSignal,
+): Promise<References> {
+  const o = signal ? { signal } : undefined;
+  const rate = (kasA: bigint | undefined, kasB: bigint | undefined): bigint | null =>
+    kasA === undefined || kasB === undefined || kasA <= 0n || kasB <= 0n || b.scale <= 0n ? null : (kasA * b.scale) / kasB;
+  return collect(verifiers, async (api) => {
+    const [ba, bb] = await Promise.all([api.book(a.covenantId, { depth: 20, aggregate: true }, o), api.book(b.covenantId, { depth: 20, aggregate: true }, o)]);
+    const A = a.toBook(ba);
+    const Bk = b.toBook(bb);
+    return { bestAsk: rate(A.asks[0]?.price, Bk.bids[0]?.price), bestBid: rate(A.bids[0]?.price, Bk.asks[0]?.price) };
+  });
+}

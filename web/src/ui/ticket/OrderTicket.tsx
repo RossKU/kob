@@ -9,7 +9,7 @@ import { explorerTxUrl } from '../../config';
 import { has, t } from '../../i18n';
 import { issueText, keyedText } from '../../i18n/issue-text';
 import { buildErrorText, rawOf } from '../../i18n/build-error';
-import { planOrder, type Intent } from '../../kob/plan';
+import { MARKET_START_UNVERIFIED_MIN_SOMPI, marketStartAckOf, planOrder, type Intent } from '../../kob/plan';
 import { errors, isPairEnv, type OrderPlan } from '../../kob/plan-types';
 import type { TokenInfo } from '../../kob/registry';
 import type { ExpectedSigning } from '../../kob/decode';
@@ -18,8 +18,8 @@ import { formatKas, formatUnits } from '../../kob/units';
 import { DEFAULT_CARRIER } from '../../kob/orders/common';
 import { Banner, Button, CopyText, Loading, RawDetails, Segmented, useAsync } from '../kit';
 import { bookFromIndexer } from '../../app/env';
-import { readReferenceTouches } from '../../data/indexer-crosscheck';
-import type { PlanEnv, ReferenceTouch } from '../../kob/plan-types';
+import { readPairReferences, readReferences, type References } from '../../data/indexer-crosscheck';
+import type { MarketStartAck, PlanEnv } from '../../kob/plan-types';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
 import { nativeToInvertedPriceText, oppositeSide, pairLabel } from '../market/orientation';
 import { needsOpenCaution, OpenTokenCaution, PowersWarning } from '../market/TokenBadges';
@@ -110,18 +110,29 @@ export function OrderTicket(props: OrderTicketProps) {
   // guards whose indexer data could not be read block the plan until the user acknowledges
   const [ackGuards, setAckGuards] = useState(false);
   // a market / close order whose start (the indexer's best price) is far beyond an independent reference waits for this acknowledgement
-  const [ackStart, setAckStart] = useState(false);
+  // bound to the gap (or start) it was given for; never stored, so a reload asks again
+  const [ackStart, setAckStart] = useState<MarketStartAck | null>(null);
   const startTolerance = BigInt(services.config.marketStartToleranceBps);
-  // the best prices further indexers report for this KAS market (none configured: empty); a pair's references come with its environment
+  // the best prices further indexers report for this market (none configured: empty): a KAS market's own books, a pair's from the two KAS books
   const verifiers = services.verifiers;
-  const marketOf = rawEnv && !quote ? rawEnv.token : null;
-  const touchesOf = (signal?: AbortSignal): Promise<ReferenceTouch[]> =>
-    marketOf && verifiers?.length ? readReferenceTouches(verifiers, token.covenantId, (v) => bookFromIndexer(marketOf, v), signal) : Promise.resolve([]);
-  const touches = useAsync((signal) => touchesOf(signal), [marketOf, verifiers, token.covenantId]);
-  const withRefs = <E extends PlanEnv>(e: E, refs: readonly ReferenceTouch[]): E => ({
-    ...e, guardsAcknowledged: ackGuards, referenceTouches: refs, marketStartToleranceBps: startTolerance, marketStartAcknowledged: ackStart,
+  const marketOf = rawEnv ? rawEnv.token : null;
+  const quoteMarketOf = rawEnv && isPairEnv(rawEnv) ? rawEnv.pair.quote : null;
+  const touchesOf = (signal?: AbortSignal): Promise<References> => {
+    if (!marketOf || !verifiers?.length) return Promise.resolve({ touches: [], unavailable: [] });
+    if (!quote) return readReferences(verifiers, token.covenantId, (v) => bookFromIndexer(marketOf, v), signal);
+    if (!quoteMarketOf) return Promise.resolve({ touches: [], unavailable: [] });
+    return readPairReferences(
+      verifiers,
+      { covenantId: marketOf.covenantId, toBook: (v) => bookFromIndexer(marketOf, v) },
+      { covenantId: quoteMarketOf.covenantId, toBook: (v) => bookFromIndexer(quoteMarketOf, v), scale: quoteMarketOf.scale },
+      signal,
+    );
+  };
+  const touches = useAsync((signal) => touchesOf(signal), [marketOf, quoteMarketOf, verifiers, token.covenantId]);
+  const withRefs = <E extends PlanEnv>(e: E, refs: References): E => ({
+    ...e, guardsAcknowledged: ackGuards, referenceTouches: refs.touches, referencesUnavailable: refs.unavailable, marketStartToleranceBps: startTolerance, marketStartAck: ackStart,
   });
-  const env = useMemo(() => (rawEnv ? withRefs(rawEnv, touches.data ?? []) : null), [rawEnv, ackGuards, ackStart, touches.data, startTolerance]);
+  const env = useMemo(() => (rawEnv ? withRefs(rawEnv, touches.data ?? { touches: [], unavailable: [] }) : null), [rawEnv, ackGuards, ackStart, touches.data, startTolerance]);
   const rateMilli = env?.clock.rateMilli;
   // the book's best prices: what a KAS amount of a market / close order converts at (an inverted market)
   const bestAsk = env?.book.asks[0]?.price ?? null;
@@ -199,14 +210,15 @@ export function OrderTicket(props: OrderTicketProps) {
   };
   const onType = (type: OrderTypeId) => {
     setReviewNote(null);
-    setAckStart(false);
     setForm((f) => switchType(f, type));
   };
   const onSide = (side: Side) => {
     setReviewNote(null);
-    setAckStart(false);
     setForm((f) => setSide(f, side));
   };
+  // the start acknowledgement is for this order only: a change of token, pair, type, side or size asks again
+  const ackScope = `${token.covenantId}|${quote?.covenantId ?? ''}|${form.type}|${form.side}|${JSON.stringify(form.values)}`;
+  useEffect(() => setAckStart(null), [ackScope]);
 
   const shownPlan: OrderPlan | null = enabled && current ? plan : null;
   const planErrors = shownPlan ? errors(shownPlan) : [];
@@ -280,7 +292,7 @@ export function OrderTicket(props: OrderTicketProps) {
       const fresh = await refresh();
       if (!fresh) return stop(t('ticket.reviewNoEnv'));
       // the references are read again too: the start of a market order is compared with what the other indexers report now
-      const p = planOrder(withRefs(fresh, quote ? [] : await touchesOf().catch(() => [])), r.intents[index]!);
+      const p = planOrder(withRefs(fresh, await touchesOf().catch(() => ({ touches: [], unavailable: verifiers.map((v) => v.label) }))), r.intents[index]!);
       if (!p.ok || !p.built || errors(p).length > 0) return stop(t('ticket.reviewChanged'));
       const title = laddered ? t('ticket.ladder.confirmTitle', { level: index + 1, levels, side: confirmSide, type: typeName }) : t('ticket.confirmTitle', { side: confirmSide, type: typeName });
       const label = laddered ? `${form.type} ${form.side} ${index + 1}/${levels}` : `${form.type} ${form.side}`;
@@ -336,7 +348,9 @@ export function OrderTicket(props: OrderTicketProps) {
   if (enabled && !envError && built.intent === null && built.errors.some((e) => e.code === 'required')) needs.push({ code: 'incomplete', text: t('ticket.need.incomplete'), tone: 'info' });
 
   const issues = shownPlan?.issues ?? [];
-  const startIssue = issues.find((i) => i.code === 'MARKET_START_VS_LAST_FILL' || i.code === 'MARKET_START_VS_INDEXER' || i.code === 'MARKET_START_ACKNOWLEDGED');
+  const START_CODES = ['MARKET_START_VS_LAST_FILL', 'MARKET_START_VS_INDEXER', 'MARKET_START_ACKNOWLEDGED', 'MARKET_START_UNVERIFIED', 'MARKET_START_UNVERIFIED_ACKNOWLEDGED'];
+  const startIssue = issues.find((i) => START_CODES.includes(i.code));
+  const startUnverified = startIssue?.code === 'MARKET_START_UNVERIFIED' || startIssue?.code === 'MARKET_START_UNVERIFIED_ACKNOWLEDGED';
   const issueCtx = { tokenDecimals: token.decimals, tokenTicker: ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
 
   if (!tradable) {
@@ -469,9 +483,19 @@ export function OrderTicket(props: OrderTicketProps) {
 
       {enabled && startIssue ? (
         <Banner tone="warn" title={t('ticket.marketStart.title')} data-testid="order-market-start">
-          <p>{t('ticket.marketStart.text', { percent: formatUnits(startTolerance, 2, { maxFraction: 1 }) })}</p>
+          <p>
+            {startUnverified
+              ? t('ticket.marketStart.unverified', { kas: formatKas(MARKET_START_UNVERIFIED_MIN_SOMPI) })
+              : t('ticket.marketStart.text', { percent: formatUnits(startTolerance, 2, { maxFraction: 1 }) })}
+          </p>
+          <p class="muted">{t('ticket.marketStart.ackScope')}</p>
           <label class="row" style="gap:6px">
-            <input type="checkbox" checked={ackStart} onChange={(e) => setAckStart((e.currentTarget as HTMLInputElement).checked)} data-testid="order-market-start-ack" />
+            <input
+              type="checkbox"
+              checked={ackStart !== null && (startIssue.code === 'MARKET_START_ACKNOWLEDGED' || startIssue.code === 'MARKET_START_UNVERIFIED_ACKNOWLEDGED')}
+              onChange={(e) => setAckStart((e.currentTarget as HTMLInputElement).checked ? marketStartAckOf(startIssue) : null)}
+              data-testid="order-market-start-ack"
+            />
             <span>{t('ticket.marketStart.ack')}</span>
           </label>
         </Banner>

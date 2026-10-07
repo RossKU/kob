@@ -109,6 +109,8 @@ export default {
   'shell.banner.customRegistryShort': 'Custom token registry',
   'shell.banner.storedNode': 'Node from the settings saved in this browser: {url} (default of this site: {deployment}). It applies to every visit and is where balances, inputs and confirmations are read from. If you did not set it, reset it.',
   'shell.banner.storedIndexer': 'Indexer from the settings saved in this browser: {url} (default of this site: {deployment}). It applies to every visit and is where the book, prices and orders are read from. If you did not set it, reset it.',
+  'shell.banner.storedExtraIndexers': 'Further indexers from the settings saved in this browser: {urls} (default of this site: {deployment}). They apply to every visit and are what prices and the start of market orders are checked against. If you did not set them, reset them.',
+  'shell.banner.storedQueryOverrides': 'The settings saved in this browser let links choose the node and the indexer (allowQueryOverrides). A link can then point the app at a node or indexer you did not choose. If you did not set it, reset it.',
   'shell.banner.storedNone': 'none',
   'shell.banner.storedSettings': 'Settings',
   'shell.banner.customRegistryDetails': 'details',

@@ -18,8 +18,14 @@ export function ticketBook(): BookView {
   };
 }
 
-/** A PlanEnv for MARKET: 1,000 KAS, 100 tokens in one UTXO and the default book (each overridable). */
-export const ticketEnv = (o: EnvOptions = {}): PlanEnv => makeEnv({ market: MARKET, tokenAmounts: [100n * TOKEN], book: ticketBook(), ...o });
+/**
+ * A PlanEnv for MARKET: 1,000 KAS, 100 tokens in one UTXO and the default book (each overridable), with a further indexer that reports the same
+ * best prices (an independent reference for the start of market / close orders).
+ */
+export const ticketEnv = (o: EnvOptions = {}): PlanEnv => {
+  const env = makeEnv({ market: MARKET, tokenAmounts: [100n * TOKEN], book: ticketBook(), ...o });
+  return { ...env, referenceTouches: [{ label: 'https://idx2.example', bestAsk: env.book.asks[0]?.price ?? null, bestBid: env.book.bids[0]?.price ?? null }] };
+};
 
 export const WIDE: TicketCtx = { decimals: 12, scale: 1_000_000_000n, tick: 1n };
 
