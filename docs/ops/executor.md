@@ -625,9 +625,43 @@ the lowest level that carries what the indexer needs (previous outpoints to see 
 KOB1 records); `Low` saves 13 % and lacks both. Acceptance data without blocks is what VSPC v2 already is (the merged
 blocks themselves are never fetched). Fetching only KOB transactions would need either a node-side filter (a node
 change: outputs by covenant id or KOB script template, inputs by tracked outpoint, payloads by `KOB1`) or a two-pass
-scheme (ids at `Low`, then the KOB transactions by id), which the node cannot serve without a transaction index. A
-binary encoding (Borsh wRPC) would drop the hex doubling and the field names [U: not measured]; it needs the node's RPC
-crates, which this client deliberately avoids. Co-location is the answer for now.
+scheme (ids at `Low`, then the KOB transactions by id), which the node cannot serve without a transaction index. The
+binary encoding (Borsh wRPC) drops the hex doubling and the field names: see *Borsh windows* below (`borsh = true`, about
+2.5x fewer bytes). Co-location stays the answer for production.
+
+#### Borsh windows: the same answers in a third of the bytes
+
+With `borsh = true` (`--borsh`) the windows of transaction bodies (`getVirtualChainFromBlockV2`) and the primary's
+accepted transaction ids (`getVirtualChainFromBlock` with ids) travel over the node's **Borsh wRPC** endpoint instead of
+JSON (`rpc::borsh`). Every other call (status, blue scores, chain hashes, submissions) stays JSON on the configured URL.
+The bodies are decoded with the node's own RPC types (`kaspa-rpc-core`, the release the node runs) and converted to the
+same wire types as the JSON path, so the follower, the checks of other nodes (`rpc::verify`) and the extractor see
+identical data (a unit test decodes one answer both ways; `tests/tn10_borsh.rs` compares live JSON and Borsh windows and
+verifies a Borsh `Full` window from a public node against the primary's ids over Borsh). Message size limits, timeouts,
+the size accounting of the prefetch and the multi-node checks are unchanged; `wire_bytes` and `bytes_per_tx` are Borsh
+bytes then.
+
+Measured on TN10 on 10-07 during a flood of plain transfers (2,200 accepted tx/s, a v2.1.0 node over the WAN, one window
+each) [F]:
+
+| encoding, verbosity | bytes per accepted transaction |
+|---|---|
+| JSON `High` | 1,423 |
+| Borsh `High` | 577 |
+| Borsh `Low` | 464 |
+| Borsh `Full` | 594 |
+
+Transactions with many inputs gain more (an input is ~660 bytes in JSON, ~230 in Borsh [U: estimated from the encoding]). `Low` is not worth a second pass
+in Borsh (20 % less, and it still lacks outpoints and payloads). On 10-07 the soak PC's link carried about 6.5 MB/s in all;
+the flood produced about 7 MB/s of JSON per indexer, so neither of two JSON indexers could keep up, whatever the
+connections and the prefetch budget; in Borsh the same chain is under 3 MB/s per indexer.
+
+Endpoints: a node's Borsh URL is derived from its JSON URL (a path ending in `/json` becomes `/borsh`:
+`wss://<node>/kaspa/testnet-10/wrpc/borsh` on the public nodes; else the default JSON port `18xxx` becomes the Borsh
+port `17xxx`: `ws://<host>:17210` on TN10, `17110` on mainnet, which the node opens with `--rpclisten-borsh`); a
+`[[nodes]]` entry's `borsh_url` overrides it (also for the primary: an entry with `role = "primary"`). A node with no
+Borsh endpoint known stays JSON (logged at start). Borsh needs VSPC connections of their own (`fetch_parallel` above 1);
+with `fetch_parallel = 1` everything stays JSON.
 
 #### Batch size under load (the 10-01 livelock)
 
@@ -697,7 +731,8 @@ at about **4 MB/s** together [F]. So while it is far behind, the follower fetche
   budget is fetched alone, with nothing else held. The window size is capped so that `fetch_parallel` windows fit;
 * near the sink (lag at most 1,200 blue score, about two minutes) the follower is back to single steps.
 
-Config: `fetch_parallel` (default **4**, 1 turns it off), `prefetch_max_mb` (default 128; 256 until the hard bound). Health: `prefetch_windows`,
+Config: `fetch_parallel` (default **4**, 1 turns it off), `prefetch_max_mb` (default 128; 256 until the hard bound),
+`borsh` (the windows over Borsh wRPC, *Borsh windows* above). Health: `prefetch_windows`,
 `prefetch_in_flight`, `prefetch_bytes`, `prefetch_bytes_peak`, `prefetch_window_blocks`, `prefetch_discards_total`,
 `prefetch_oversize_total`.
 

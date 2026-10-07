@@ -31,6 +31,8 @@ kaspa-muhash = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0"
 kaspa-txscript = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
 kaspa-txscript-errors = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
 kaspa-txscript-zk-sdk = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+# the node's RPC types: Borsh wRPC bodies of the indexer (kob-executor rpc::borsh)
+kaspa-rpc-core = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
 
 # vendored SilverScript v1.0.0 (see vendor/silverscript/UPSTREAM.md)
 silverscript-lang = { path = "vendor/silverscript/silverscript-lang" }

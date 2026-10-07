@@ -22,6 +22,11 @@ kob-x402 = { path = "../kob-x402" }
 kaspa-txscript.workspace = true
 kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+# Borsh wRPC windows (rpc::borsh): the node's own RPC types and workflow-rpc framing (same release as the node)
+kaspa-rpc-core.workspace = true
+workflow-serializer = "0.18.0"
+borsh = "1"
 blake3.workspace = true
 faster-hex.workspace = true
 serde.workspace = true

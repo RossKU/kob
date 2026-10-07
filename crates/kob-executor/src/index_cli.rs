@@ -42,6 +42,9 @@ pub struct IndexOpts {
     /// authority).
     #[arg(long, global = true)]
     pub no_primary_fetch: bool,
+    /// Fetch the windows of transaction bodies over each node's Borsh wRPC endpoint (`borsh` in the config).
+    #[arg(long, global = true)]
+    pub borsh: bool,
     /// Directory holding the SQLite database and the record log.
     #[arg(long, global = true, env = "KOB_INDEX_DATA_DIR")]
     pub data_dir: Option<PathBuf>,
@@ -107,6 +110,9 @@ pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
     if a.no_primary_fetch {
         cfg.primary_fetch = false;
     }
+    if a.borsh {
+        cfg.borsh = true;
+    }
     for url in &a.nodes {
         if !cfg.nodes.iter().any(|n| &n.url == url) {
             cfg.nodes.push(NodeConfig { url: url.clone(), ..NodeConfig::default() });
@@ -147,6 +153,14 @@ fn wrpc(cfg: &IndexerConfig, url: &str, vspc_connections: usize) -> Arc<WrpcClie
     let mut w = WrpcConfig::new(url.to_string());
     w.request_timeout = std::time::Duration::from_secs(cfg.rpc_timeout_secs);
     w.vspc_connections = vspc_connections;
+    // Borsh only on VSPC connections of its own (with none, VSPC shares the JSON connection)
+    w.borsh_url = cfg.borsh_url_of(url).filter(|_| vspc_connections > 0);
+    if let Some(b) = &w.borsh_url {
+        tracing::info!(node = url, borsh = %b, connections = vspc_connections, "windows of transaction bodies over Borsh wRPC");
+    }
+    if cfg.borsh && w.borsh_url.is_none() && vspc_connections > 0 {
+        tracing::warn!(node = url, "no Borsh endpoint known for this node: its windows stay JSON (set borsh_url)");
+    }
     Arc::new(WrpcClient::new(w))
 }
 

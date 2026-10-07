@@ -1113,6 +1113,12 @@ checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "convert_case"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
+
+[[package]]
+name = "convert_case"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
@@ -1288,6 +1294,19 @@ dependencies = [
 
 [[package]]
 name = "derive_more"
+version = "0.99.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6edb4b64a43d977b8e99788fe3a04d483834fba1215a7e02caa415b626497f7f"
+dependencies = [
+ "convert_case 0.4.0",
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "derive_more"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
@@ -1452,7 +1471,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1841,6 +1860,9 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "hex-literal"
@@ -2125,6 +2147,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaspa-consensus-client"
+version = "2.1.0"
+source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.1.0#01b532e8b553523216471682649693af92f0fd16"
+dependencies = [
+ "ahash",
+ "borsh",
+ "cfg-if",
+ "faster-hex 0.9.0",
+ "hex",
+ "itertools 0.13.0",
+ "js-sys",
+ "kaspa-addresses",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-math",
+ "kaspa-txscript",
+ "kaspa-utils",
+ "kaspa-wasm-core",
+ "rand 0.8.8",
+ "secp256k1",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wasm-bindgen",
+ "workflow-log",
+ "workflow-wasm",
+]
+
+[[package]]
 name = "kaspa-consensus-core"
 version = "2.1.0"
 source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.1.0#01b532e8b553523216471682649693af92f0fd16"
@@ -2160,6 +2212,51 @@ dependencies = [
  "workflow-core",
  "workflow-log",
  "workflow-serializer",
+ "workflow-wasm",
+]
+
+[[package]]
+name = "kaspa-consensus-notify"
+version = "2.1.0"
+source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.1.0#01b532e8b553523216471682649693af92f0fd16"
+dependencies = [
+ "async-channel 2.5.0",
+ "cfg-if",
+ "derive_more 0.99.20",
+ "futures",
+ "kaspa-consensus-core",
+ "kaspa-core",
+ "kaspa-hashes",
+ "kaspa-notify",
+ "kaspa-utils",
+ "log",
+ "paste",
+ "thiserror 2.0.21",
+ "triggered",
+]
+
+[[package]]
+name = "kaspa-consensus-wasm"
+version = "2.1.0"
+source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.1.0#01b532e8b553523216471682649693af92f0fd16"
+dependencies = [
+ "cfg-if",
+ "faster-hex 0.9.0",
+ "js-sys",
+ "kaspa-addresses",
+ "kaspa-consensus-client",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-txscript",
+ "kaspa-utils",
+ "rand 0.8.8",
+ "secp256k1",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wasm-bindgen",
+ "workflow-log",
  "workflow-wasm",
 ]
 
@@ -2205,6 +2302,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaspa-index-core"
+version = "2.1.0"
+source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.1.0#01b532e8b553523216471682649693af92f0fd16"
+dependencies = [
+ "async-channel 2.5.0",
+ "async-trait",
+ "derive_more 0.99.20",
+ "futures",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-notify",
+ "kaspa-utils",
+ "log",
+ "paste",
+ "serde",
+ "thiserror 2.0.21",
+ "triggered",
+]
+
+[[package]]
 name = "kaspa-math"
 version = "2.1.0"
 source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.1.0#01b532e8b553523216471682649693af92f0fd16"
@@ -2233,6 +2350,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaspa-mining-errors"
+version = "2.1.0"
+source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.1.0#01b532e8b553523216471682649693af92f0fd16"
+dependencies = [
+ "kaspa-consensus-core",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "kaspa-muhash"
 version = "2.1.0"
 source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.1.0#01b532e8b553523216471682649693af92f0fd16"
@@ -2241,6 +2367,93 @@ dependencies = [
  "kaspa-math",
  "rand_chacha 0.3.1",
  "serde",
+]
+
+[[package]]
+name = "kaspa-notify"
+version = "2.1.0"
+source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.1.0#01b532e8b553523216471682649693af92f0fd16"
+dependencies = [
+ "async-channel 2.5.0",
+ "async-trait",
+ "borsh",
+ "derive_more 0.99.20",
+ "futures",
+ "futures-util",
+ "indexmap 2.14.2",
+ "itertools 0.13.0",
+ "kaspa-addresses",
+ "kaspa-consensus-core",
+ "kaspa-core",
+ "kaspa-hashes",
+ "kaspa-txscript",
+ "kaspa-txscript-errors",
+ "kaspa-utils",
+ "log",
+ "parking_lot",
+ "paste",
+ "rand 0.8.8",
+ "serde",
+ "thiserror 2.0.21",
+ "triggered",
+ "workflow-core",
+ "workflow-log",
+ "workflow-serializer",
+]
+
+[[package]]
+name = "kaspa-rpc-core"
+version = "2.1.0"
+source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.1.0#01b532e8b553523216471682649693af92f0fd16"
+dependencies = [
+ "async-channel 2.5.0",
+ "async-trait",
+ "borsh",
+ "cfg-if",
+ "derive_more 0.99.20",
+ "downcast",
+ "faster-hex 0.9.0",
+ "hex",
+ "js-sys",
+ "kaspa-addresses",
+ "kaspa-consensus-client",
+ "kaspa-consensus-core",
+ "kaspa-consensus-notify",
+ "kaspa-consensus-wasm",
+ "kaspa-core",
+ "kaspa-hashes",
+ "kaspa-index-core",
+ "kaspa-math",
+ "kaspa-mining-errors",
+ "kaspa-notify",
+ "kaspa-rpc-macros",
+ "kaspa-txscript",
+ "kaspa-utils",
+ "log",
+ "paste",
+ "rand 0.8.8",
+ "serde",
+ "serde-wasm-bindgen",
+ "smallvec",
+ "thiserror 2.0.21",
+ "uuid",
+ "wasm-bindgen",
+ "workflow-core",
+ "workflow-serializer",
+ "workflow-wasm",
+]
+
+[[package]]
+name = "kaspa-rpc-macros"
+version = "2.1.0"
+source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.1.0#01b532e8b553523216471682649693af92f0fd16"
+dependencies = [
+ "convert_case 0.6.0",
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2343,8 +2556,21 @@ dependencies = [
  "sha2",
  "smallvec",
  "thiserror 2.0.21",
+ "triggered",
  "uuid",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kaspa-wasm-core"
+version = "2.1.0"
+source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.1.0#01b532e8b553523216471682649693af92f0fd16"
+dependencies = [
+ "faster-hex 0.9.0",
+ "hexplay",
+ "js-sys",
+ "wasm-bindgen",
+ "workflow-wasm",
 ]
 
 [[package]]
@@ -2377,6 +2603,7 @@ dependencies = [
  "anyhow",
  "axum",
  "blake3",
+ "borsh",
  "clap",
  "faster-hex 0.10.1",
  "futures-util",
@@ -2385,6 +2612,8 @@ dependencies = [
  "hyper-util",
  "kaspa-addresses",
  "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-rpc-core",
  "kaspa-txscript",
  "kob-protocol",
  "kob-x402",
@@ -2405,6 +2634,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.23",
  "tungstenite 0.24.0",
+ "workflow-serializer",
 ]
 
 [[package]]
@@ -2566,7 +2796,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "chrono",
- "derive_more",
+ "derive_more 2.1.1",
  "flate2",
  "fnv",
  "humantime",
@@ -3315,7 +3545,7 @@ dependencies = [
  "anyhow",
  "borsh",
  "bytemuck",
- "derive_more",
+ "derive_more 2.1.1",
  "elf",
  "lazy_static",
  "postcard",
@@ -3368,7 +3598,7 @@ dependencies = [
  "anyhow",
  "bit-vec",
  "bytemuck",
- "derive_more",
+ "derive_more 2.1.1",
  "paste",
  "risc0-binfmt",
  "risc0-core",
@@ -3453,7 +3683,7 @@ dependencies = [
  "anyhow",
  "borsh",
  "bytemuck",
- "derive_more",
+ "derive_more 2.1.1",
  "hex",
  "risc0-binfmt",
  "risc0-circuit-keccak",
@@ -3562,7 +3792,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4041,7 +4271,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4715,7 +4945,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5000,7 +5230,7 @@ version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65659ed208b0066a9344142218abda353eb6c6cc1fc3ae4808b750c560de004b"
 dependencies = [
- "convert_case",
+ "convert_case 0.6.0",
  "parse-variants",
  "proc-macro-error",
  "proc-macro2",
@@ -5033,7 +5263,7 @@ version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "085d3045d5ca780fb589d230030e34fec962b3638d6c69806a72a7d7d1affea4"
 dependencies = [
- "convert_case",
+ "convert_case 0.6.0",
  "parse-variants",
  "proc-macro2",
  "quote",

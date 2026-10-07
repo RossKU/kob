@@ -185,11 +185,13 @@ pub struct NodeConfig {
     pub submit: bool,
     /// Windows fetched from it at once (default: `fetch_parallel`).
     pub connections: Option<usize>,
+    /// Its Borsh wRPC endpoint when `borsh` is on (default: derived from `url`, `rpc::borsh::borsh_url_for`).
+    pub borsh_url: Option<String>,
 }
 
 impl Default for NodeConfig {
     fn default() -> Self {
-        NodeConfig { url: String::new(), role: NodeRole::Secondary, fetch: true, submit: true, connections: None }
+        NodeConfig { url: String::new(), role: NodeRole::Secondary, fetch: true, submit: true, connections: None, borsh_url: None }
     }
 }
 
@@ -219,6 +221,10 @@ pub struct IndexerConfig {
     /// While far behind the node, the follower fetches this many VSPC windows at once, one connection each, and
     /// applies them in chain order (1: one batch at a time). See docs/ops/executor.md, Part B 3, *Parallel fetch*.
     pub fetch_parallel: usize,
+    /// Fetch the windows of transaction bodies and the primary's accepted transaction ids over each node's Borsh wRPC endpoint
+    /// (the JSON URL's `/json` path as `/borsh`, or its default port `18xxx` as `17xxx`; a node's `borsh_url` overrides):
+    /// about a third of the JSON bytes. Every other call stays JSON. See docs/ops/executor.md, *Borsh windows*.
+    pub borsh: bool,
     /// Threads for the pure per-batch work before the single database pass (signature-script parsing, script hashing, placement
     /// verification; `indexer::record::precompute`). 0: the available parallelism, at most 4. See docs/ops/executor.md, *Processing
     /// capacity*.
@@ -269,6 +275,7 @@ impl Default for IndexerConfig {
             max_backoff_ms: 30_000,
             rpc_timeout_secs: 180,
             fetch_parallel: 4,
+            borsh: false,
             verify_threads: 0,
             prefetch_max_mb: 128,
             max_lag_secs: 30,
@@ -309,6 +316,16 @@ impl IndexerConfig {
     /// The primary's endpoint: the `nodes` entry with `role = "primary"`, else `rpc_url`.
     pub fn primary_url(&self) -> &str {
         self.nodes.iter().find(|n| n.role == NodeRole::Primary).map(|n| n.url.as_str()).unwrap_or(&self.rpc_url)
+    }
+
+    /// The Borsh endpoint used for the node at `url`, if `borsh` is on: its configured `borsh_url`, else the one derived from
+    /// `url` (`None`: that node stays JSON).
+    pub fn borsh_url_of(&self, url: &str) -> Option<String> {
+        if !self.borsh {
+            return None;
+        }
+        let configured = self.nodes.iter().find(|n| n.url == url).and_then(|n| n.borsh_url.clone());
+        configured.or_else(|| crate::rpc::borsh::borsh_url_for(url))
     }
 
     /// The other nodes, in order (an entry repeating the primary's URL is skipped).

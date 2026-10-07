@@ -4,6 +4,7 @@
 //! drift from the wire schema without a compile error) it speaks the node's JSON wRPC directly.
 //! The schema is checked against a live node by the integration test in `tests/tn10_follow.rs`.
 
+pub mod borsh;
 pub mod multi;
 pub mod types;
 pub mod verify;
@@ -225,6 +226,9 @@ pub struct WrpcConfig {
     /// The follower fetches that many windows at once while it catches up; the other calls keep their own connection,
     /// so a small call never waits behind a large batch.
     pub vspc_connections: usize,
+    /// The node's Borsh wRPC endpoint: with VSPC connections of its own, the windows of transaction bodies and the accepted
+    /// transaction ids travel in Borsh over it, a fraction of their JSON size ([`borsh`]); every other call stays JSON on `url`.
+    pub borsh_url: Option<String>,
 }
 
 impl WrpcConfig {
@@ -235,6 +239,7 @@ impl WrpcConfig {
             connect_timeout: Duration::from_secs(15),
             max_message_bytes: 1 << 30,
             vspc_connections: 0,
+            borsh_url: None,
         }
     }
 }
@@ -265,6 +270,26 @@ struct Response<'a> {
     error: Option<ErrBody>,
 }
 
+/// A request as it goes out.
+enum Wire<'a> {
+    Json {
+        method: &'a str,
+        params: serde_json::Value,
+    },
+    /// Builds the request frame for a request id.
+    Borsh {
+        frame: Box<dyn FnOnce(u64) -> Vec<u8> + Send + 'a>,
+    },
+}
+
+/// The body of the matching answer.
+enum Reply<'a> {
+    /// The JSON `params`.
+    Json(&'a str),
+    /// The Borsh body, and the size of the whole frame.
+    Borsh { body: &'a [u8], wire_bytes: usize },
+}
+
 impl WrpcClient {
     pub fn new(cfg: WrpcConfig) -> Self {
         let vspc = (0..cfg.vspc_connections).map(|_| Slot::new(None)).collect();
@@ -292,9 +317,9 @@ impl WrpcClient {
     }
 
     /// A connection whose answers may be at most `cap` bytes (a frame or message above it fails as [`RpcError::TooLarge`]).
-    async fn connect(&self, cap: usize) -> Result<Ws, RpcError> {
+    async fn connect(&self, url: &str, cap: usize) -> Result<Ws, RpcError> {
         let ws_cfg = WebSocketConfig::default().max_message_size(Some(cap)).max_frame_size(Some(cap));
-        let fut = tokio_tungstenite::connect_async_with_config(self.cfg.url.as_str(), Some(ws_cfg), false);
+        let fut = tokio_tungstenite::connect_async_with_config(url, Some(ws_cfg), false);
         match tokio::time::timeout(self.cfg.connect_timeout, fut).await {
             Err(_) => Err(RpcError::Timeout(self.cfg.connect_timeout)),
             Ok(Err(e)) => Err(RpcError::Transport(e.to_string())),
@@ -310,7 +335,16 @@ impl WrpcClient {
     /// [`WrpcClient::call_raw`] with another timeout. A timeout drops the connection (a late answer must
     /// never be read as the answer to the next request).
     pub async fn call_raw_within(&self, method: &str, params: serde_json::Value, timeout: Duration) -> Result<String, RpcError> {
-        self.call_on(self.conn.lock().await, method, params, timeout, self.cfg.max_message_bytes, |p| Ok(p.to_string())).await
+        let parse = |p: Reply<'_>| match p {
+            Reply::Json(p) => Ok(p.to_string()),
+            Reply::Borsh { .. } => Err(RpcError::Decode("a Borsh answer to a JSON request".into())),
+        };
+        self.call_on(self.conn.lock().await, Wire::Json { method, params }, timeout, self.cfg.max_message_bytes, parse).await
+    }
+
+    /// The Borsh endpoint the VSPC connections use, if any (`None`: JSON; also when VSPC shares the JSON connection).
+    pub fn borsh_url(&self) -> Option<&str> {
+        self.cfg.borsh_url.as_deref().filter(|_| !self.vspc.is_empty())
     }
 
     /// One request on the connection behind `guard`; `parse` reads the response's `params` in place (a VSPC batch is
@@ -321,11 +355,10 @@ impl WrpcClient {
     async fn call_on<T>(
         &self,
         guard: tokio::sync::MutexGuard<'_, Option<Ws>>,
-        method: &str,
-        params: serde_json::Value,
+        wire: Wire<'_>,
         timeout: Duration,
         cap: usize,
-        parse: impl FnOnce(&str) -> Result<T, RpcError>,
+        parse: impl FnOnce(Reply<'_>) -> Result<T, RpcError>,
     ) -> Result<T, RpcError> {
         struct Pending<'a> {
             guard: tokio::sync::MutexGuard<'a, Option<Ws>>,
@@ -342,39 +375,58 @@ impl WrpcClient {
         if p.guard.as_ref().is_some_and(|ws| ws.get_config().max_message_size != Some(cap)) {
             *p.guard = None;
         }
+        // a connection is used for one encoding only (the JSON one, or a VSPC connection to the Borsh endpoint)
+        let url = match &wire {
+            Wire::Json { .. } => self.cfg.url.as_str(),
+            Wire::Borsh { .. } => self.cfg.borsh_url.as_deref().unwrap_or(self.cfg.url.as_str()),
+        };
         if p.guard.is_none() {
-            *p.guard = Some(self.connect(cap).await?);
+            *p.guard = Some(self.connect(url, cap).await?);
         }
         let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let req = serde_json::json!({"id": id, "method": method, "params": params}).to_string();
+        let req = match wire {
+            Wire::Json { method, params } => {
+                Message::text(serde_json::json!({"id": id, "method": method, "params": params}).to_string())
+            }
+            Wire::Borsh { frame } => Message::binary(frame(id)),
+        };
         let ws = p.guard.as_mut().expect("connected above");
         let res = tokio::time::timeout(timeout, async {
-            ws.send(Message::text(req)).await.map_err(|e| RpcError::Transport(e.to_string()))?;
+            ws.send(req).await.map_err(|e| RpcError::Transport(e.to_string()))?;
             loop {
                 let msg = match ws.next().await {
                     None => return Err(RpcError::Transport("connection closed".into())),
                     Some(Err(e)) => return Err(transport_error(e)),
                     Some(Ok(m)) => m,
                 };
-                let text = match msg {
-                    Message::Text(t) => t,
+                match msg {
+                    Message::Text(text) => {
+                        let resp: Response = match serde_json::from_str(text.as_str()) {
+                            Ok(r) => r,
+                            Err(_) => continue, // notification or foreign frame
+                        };
+                        if resp.id != Some(id) {
+                            continue;
+                        }
+                        if let Some(e) = resp.error {
+                            return Err(RpcError::Node(e.message));
+                        }
+                        return match resp.params {
+                            Some(p) => Ok(parse(Reply::Json(p.get()))),
+                            None => Err(RpcError::Decode("response without params".into())),
+                        };
+                    }
+                    Message::Binary(bytes) => match borsh::parse_reply(&bytes[..]) {
+                        Ok(borsh::Reply::Ok { id: Some(i), body }) if i == id => {
+                            return Ok(parse(Reply::Borsh { body, wire_bytes: bytes.len() }));
+                        }
+                        Ok(borsh::Reply::Err { id: Some(i), message }) if i == id => return Err(RpcError::Node(message)),
+                        Ok(_) => continue, // a notification or another request's answer
+                        Err(e) => return Err(RpcError::Decode(e)),
+                    },
                     Message::Close(_) => return Err(RpcError::Transport("closed by node".into())),
                     _ => continue,
-                };
-                let resp: Response = match serde_json::from_str(text.as_str()) {
-                    Ok(r) => r,
-                    Err(_) => continue, // notification or foreign frame
-                };
-                if resp.id != Some(id) {
-                    continue;
                 }
-                if let Some(e) = resp.error {
-                    return Err(RpcError::Node(e.message));
-                }
-                return match resp.params {
-                    Some(p) => Ok(parse(p.get())),
-                    None => Err(RpcError::Decode("response without params".into())),
-                };
             }
         })
         .await;
@@ -391,6 +443,21 @@ impl WrpcClient {
             Err(_) => Err(RpcError::Timeout(timeout)),
         }
     }
+    /// A Borsh request on a VSPC connection (`frame` builds the request frame for a request id).
+    async fn call_borsh<T>(
+        &self,
+        frame: impl FnOnce(u64) -> Vec<u8> + Send + 'static,
+        timeout: Duration,
+        cap: usize,
+        parse: impl FnOnce(&[u8], usize) -> Result<T, String>,
+    ) -> Result<T, RpcError> {
+        let parse = |r: Reply<'_>| match r {
+            Reply::Borsh { body, wire_bytes } => parse(body, wire_bytes).map_err(RpcError::Decode),
+            Reply::Json(_) => Err(RpcError::Decode("a JSON answer to a Borsh request".into())),
+        };
+        self.call_on(self.vspc_slot().await, Wire::Borsh { frame: Box::new(frame) }, timeout, cap, parse).await
+    }
+
     async fn call<T: DeserializeOwned>(&self, method: &str, params: serde_json::Value) -> Result<T, RpcError> {
         let raw = self.call_raw(method, params).await?;
         serde_json::from_str(&raw).map_err(|e| RpcError::Decode(format!("{method}: {e}")))
@@ -399,16 +466,23 @@ impl WrpcClient {
 
 impl ChainSource for WrpcClient {
     async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
-        let params = serde_json::to_value(&req).map_err(|e| RpcError::Decode(e.to_string()))?;
         let timeout = self.cfg.request_timeout.saturating_mul(req.timeout_scale.max(1));
-        let parse = |raw: &str| {
+        let cap = req.max_bytes.unwrap_or(self.cfg.max_message_bytes).min(self.cfg.max_message_bytes);
+        if self.borsh_url().is_some() {
+            let (start, level, min_conf) = (req.start_hash, req.data_verbosity_level, req.min_confirmation_count);
+            let frame = move |id| borsh::vspc_v2_request(id, start, level, min_conf);
+            return self.call_borsh(frame, timeout, cap, borsh::decode_vspc_v2).await;
+        }
+        let params = serde_json::to_value(&req).map_err(|e| RpcError::Decode(e.to_string()))?;
+        let parse = |raw: Reply<'_>| {
+            let Reply::Json(raw) = raw else { return Err(RpcError::Decode("a Borsh answer to a JSON request".into())) };
             let mut r: RawVspcResponse =
                 serde_json::from_str(raw).map_err(|e| RpcError::Decode(format!("getVirtualChainFromBlockV2: {e}")))?;
             r.wire_bytes = raw.len();
             Ok(r)
         };
-        let cap = req.max_bytes.unwrap_or(self.cfg.max_message_bytes).min(self.cfg.max_message_bytes);
-        self.call_on(self.vspc_slot().await, "getVirtualChainFromBlockV2", params, timeout, cap, parse).await
+        let wire = Wire::Json { method: "getVirtualChainFromBlockV2", params };
+        self.call_on(self.vspc_slot().await, wire, timeout, cap, parse).await
     }
 
     async fn sink_blue_score(&self) -> Result<u64, RpcError> {
@@ -450,14 +524,23 @@ impl ChainSource for WrpcClient {
     }
 
     async fn chain_with_ids(&self, start: Hash32, min_confirmations: Option<u64>) -> Result<ChainIds, RpcError> {
+        if self.borsh_url().is_some() {
+            let frame = move |id| borsh::chain_ids_request(id, start, min_confirmations);
+            let (timeout, cap) = (self.cfg.request_timeout, self.cfg.max_message_bytes);
+            return self.call_borsh(frame, timeout, cap, |body, _| borsh::decode_chain_ids(body)).await;
+        }
         let mut params = serde_json::json!({ "startHash": start.to_hex(), "includeAcceptedTransactionIds": true });
         if let Some(m) = min_confirmations {
             params["minConfirmationCount"] = m.into();
         }
-        let parse = |raw: &str| serde_json::from_str(raw).map_err(|e| RpcError::Decode(format!("getVirtualChainFromBlock: {e}")));
+        let parse = |raw: Reply<'_>| match raw {
+            Reply::Json(raw) => serde_json::from_str(raw).map_err(|e| RpcError::Decode(format!("getVirtualChainFromBlock: {e}"))),
+            Reply::Borsh { .. } => Err(RpcError::Decode("a Borsh answer to a JSON request".into())),
+        };
         // tens to hundreds of KB: on a VSPC connection, so the small calls never wait behind it
         let (timeout, cap) = (self.cfg.request_timeout, self.cfg.max_message_bytes);
-        self.call_on(self.vspc_slot().await, "getVirtualChainFromBlock", params, timeout, cap, parse).await
+        let wire = Wire::Json { method: "getVirtualChainFromBlock", params };
+        self.call_on(self.vspc_slot().await, wire, timeout, cap, parse).await
     }
 
     async fn dag_info(&self) -> Result<DagInfo, RpcError> {
