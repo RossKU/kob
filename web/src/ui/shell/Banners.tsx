@@ -1,5 +1,5 @@
 import { useServices, useWallet } from '../../app/context';
-import type { ConfigWarning } from '../../config';
+import type { ConfigWarning, StoredOverride } from '../../config';
 import { t } from '../../i18n';
 import { Banner } from '../kit';
 import { shortAddress } from '../kit/format';
@@ -13,7 +13,7 @@ import { CustomRegistryBanner } from './RegistryNote';
  * a notification, and a deep one is a header indicator (ReorgIndicator).
  * Each has a `data-testid` starting with `banner-`.
  */
-export function GlobalBanners(props: { warnings: ConfigWarning[] }) {
+export function GlobalBanners(props: { warnings: ConfigWarning[]; storedOverrides?: StoredOverride[] }) {
   const { config, registryError } = useServices();
   const wallet = useWallet();
   const { node, indexer } = useSystemStatus();
@@ -35,6 +35,16 @@ export function GlobalBanners(props: { warnings: ConfigWarning[] }) {
   }
   if (config.features.test) banners.push(<Banner key="test" tone="warn" data-testid="banner-test-mode">{t('shell.banner.testMode')}</Banner>);
   banners.push(<CustomRegistryBanner key="custom-registry" />);
+  // a node / indexer saved in this browser's settings applies to every visit: said on every page, like a non-default registry
+  const shown = (o: StoredOverride, url: string): string => url || t(o.field === 'nodeUrl' ? 'settings.nodeUrl.resolver' : 'shell.banner.storedNone');
+  for (const o of props.storedOverrides ?? []) {
+    banners.push(
+      <Banner key={`stored-${o.field}`} tone="warn" class="banner-compact" data-testid={`banner-stored-${o.field === 'nodeUrl' ? 'node' : 'indexer'}`}>
+        {t(o.field === 'nodeUrl' ? 'shell.banner.storedNode' : 'shell.banner.storedIndexer', { url: shown(o, o.value), deployment: shown(o, o.deployment) })}{' '}
+        <a href="#/settings">{t('shell.banner.storedSettings')}</a>
+      </Banner>,
+    );
+  }
   if (registryError) {
     banners.push(
       <Banner key="registry" tone="warn" data-testid="banner-registry">

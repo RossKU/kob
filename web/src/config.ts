@@ -312,7 +312,13 @@ export interface ConfigLayers {
   query?: string | URLSearchParams;
 }
 
-export interface ResolvedConfig { config: AppConfig; warnings: ConfigWarning[] }
+/**
+ * A node or indexer URL that this browser's stored settings (localStorage `kob.settings`) put in force instead of the deployment's: it applies to every
+ * later visit, so the app says so on every page (`deployment`: what config.json / `__KOB_CONFIG__` / the defaults would have used).
+ */
+export interface StoredOverride { field: 'indexerUrl' | 'nodeUrl'; value: string; deployment: string }
+
+export interface ResolvedConfig { config: AppConfig; warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }
 
 function apply(base: AppConfig, p: ConfigPatch): AppConfig {
   return {
@@ -337,7 +343,9 @@ export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
   let cfg = apply({ ...DEFAULT_CONFIG, features: { ...DEFAULT_CONFIG.features }, fees: { ...DEFAULT_CONFIG.fees }, quoteTokens: { ...DEFAULT_CONFIG.quoteTokens } }, {});
   cfg = apply(cfg, sanitizeLayer('config.json', layers.file, false, warnings));
   cfg = apply(cfg, sanitizeLayer('__KOB_CONFIG__', layers.injected, true, warnings));
-  cfg = apply(cfg, sanitizeLayer('settings', layers.settings, false, warnings));
+  const deployment = cfg;
+  const stored = sanitizeLayer('settings', layers.settings, false, warnings);
+  cfg = apply(cfg, stored);
   if (layers.query !== undefined && layers.query !== '') {
     if (cfg.allowQueryOverrides) cfg = apply(cfg, queryLayer(layers.query, warnings));
     else {
@@ -346,7 +354,11 @@ export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
       if (used.length) warnings.push({ layer: 'query', field: used.join(','), message: 'query overrides are disabled (allowQueryOverrides is false), ignored' });
     }
   }
-  return { config: cfg, warnings };
+  // only a stored value that is still in force (a link did not replace it) and differs from the deployment's
+  const storedOverrides: StoredOverride[] = (['indexerUrl', 'nodeUrl'] as const)
+    .filter((f) => stored[f] !== undefined && stored[f] === cfg[f] && cfg[f] !== deployment[f])
+    .map((f) => ({ field: f, value: cfg[f], deployment: deployment[f] }));
+  return { config: cfg, warnings, storedOverrides };
 }
 
 export const mergeConfig = (layers: ConfigLayers = {}): AppConfig => resolveConfig(layers).config;

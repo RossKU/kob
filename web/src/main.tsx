@@ -5,7 +5,7 @@ import './styles.css';
 import { App } from './app/App';
 import { ServicesContext, WalletProvider } from './app/context';
 import { createServices, type Services } from './app/services';
-import { loadConfigWithWarnings, type ConfigWarning } from './config';
+import { loadConfigWithWarnings, type ConfigWarning, type StoredOverride } from './config';
 import { BootError, BootScreen } from './ui/shell/Boot';
 import { initTheme } from './ui/shell/theme';
 
@@ -18,11 +18,11 @@ declare global {
 
 const root = document.getElementById('app') as HTMLElement;
 
-function Root(props: { services: Services; warnings: ConfigWarning[] }) {
+function Root(props: { services: Services; warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }) {
   return (
     <ServicesContext.Provider value={props.services}>
       <WalletProvider services={props.services}>
-        <App warnings={props.warnings} />
+        <App warnings={props.warnings} storedOverrides={props.storedOverrides} />
       </WalletProvider>
     </ServicesContext.Provider>
   );
@@ -32,10 +32,10 @@ async function boot(): Promise<void> {
   initTheme();
   render(<BootScreen />, root);
   try {
-    const { config, warnings } = await loadConfigWithWarnings();
+    const { config, warnings, storedOverrides } = await loadConfigWithWarnings();
     const services = await createServices(config);
     if (config.features.test) window.__kob = { services };
-    render(<Root services={services} warnings={warnings} />, root);
+    render(<Root services={services} warnings={warnings} storedOverrides={storedOverrides} />, root);
   } catch (e) {
     console.error('boot failed', e);
     render(<BootError error={e} onRetry={() => void boot()} />, root);

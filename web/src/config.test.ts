@@ -296,3 +296,21 @@ describe('block explorer links (kaspa.stream)', () => {
     expect(explorerTxUrl(c, null)).toBeNull();
   });
 });
+
+describe('stored node / indexer overrides', () => {
+  it('a node or indexer saved in this browser that differs from the deployment is reported', () => {
+    const r = resolveConfig({ file: { indexerUrl: 'https://idx.example' }, settings: { indexerUrl: 'https://other.example', nodeUrl: 'wss://node.example' } });
+    expect(r.storedOverrides).toEqual([
+      { field: 'indexerUrl', value: 'https://other.example', deployment: 'https://idx.example' },
+      { field: 'nodeUrl', value: 'wss://node.example', deployment: '' },
+    ]);
+  });
+
+  it('nothing is reported for the same value, no stored value, or a value a link replaced', () => {
+    expect(resolveConfig({ file: { indexerUrl: 'https://idx.example' }, settings: { indexerUrl: 'https://idx.example' } }).storedOverrides).toEqual([]);
+    expect(resolveConfig({ file: { indexerUrl: 'https://idx.example' } }).storedOverrides).toEqual([]);
+    const linked = resolveConfig({ file: { allowQueryOverrides: true }, settings: { indexerUrl: 'https://other.example' }, query: '?indexer=https://q.example' });
+    expect(linked.config.indexerUrl).toBe('https://q.example');
+    expect(linked.storedOverrides).toEqual([]);
+  });
+});

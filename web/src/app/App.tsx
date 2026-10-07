@@ -1,6 +1,6 @@
 // Application shell: header, status bar, global banners, the routed view, footer, toasts.
 import { useEffect } from 'preact/hooks';
-import type { ConfigWarning } from '../config';
+import type { ConfigWarning, StoredOverride } from '../config';
 import { t } from '../i18n';
 import { IssueView } from '../ui/issue/IssueView';
 import { ToastHost } from '../ui/kit';
@@ -66,7 +66,7 @@ function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
   }
 }
 
-export function App(props: { warnings: ConfigWarning[] }) {
+export function App(props: { warnings: ConfigWarning[]; storedOverrides?: StoredOverride[] }) {
   const services = useServices();
   const route = useRoute();
 
@@ -95,7 +95,7 @@ export function App(props: { warnings: ConfigWarning[] }) {
           <Header route={route} />
           <StatusBar />
           <main class="container main" id="main" data-testid="main" data-route={routeToHash(route)}>
-            <GlobalBanners warnings={props.warnings} />
+            <GlobalBanners warnings={props.warnings} storedOverrides={props.storedOverrides ?? []} />
             <ViewBoundary resetKey={routeToHash(route)}>
               <RoutedView route={route} warnings={props.warnings} />
             </ViewBoundary>
