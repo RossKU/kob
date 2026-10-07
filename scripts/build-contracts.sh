@@ -5,7 +5,9 @@
 # from the sibling <Name>.ctor.json) with silverc and either writes or verifies contracts/artifacts/<Name>.json.
 #
 #   scripts/build-contracts.sh            write artifacts, contracts/argent and contracts/SHA256SUMS
-#   scripts/build-contracts.sh --check    fail (exit 1) if any of them differs; writes nothing
+#   scripts/build-contracts.sh --check    fail (exit 1) if any of them differs, or if contracts/artifacts holds
+#                                         a file no source produces; writes nothing (two sources with
+#                                         the same basename are refused in both modes)
 #   ... --upstream                        use the official silverc v1.0.0 release binary
 #                                         (downloaded, sha256-verified against contracts/silverc.lock)
 #                                         instead of building vendor/silverscript
@@ -26,7 +28,7 @@ for arg in "$@"; do
     --check) MODE=check ;;
     --upstream) UPSTREAM=1 ;;
     --no-argent) ARGENT=0 ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -40,13 +42,19 @@ OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 fail=0
 names=()
+srcs=()
+# index of a source name in names (bash 3 has no associative arrays), empty if none
+name_index() { local i; for i in "${!names[@]}"; do [ "${names[$i]}" = "$1" ] && { echo "$i"; return 0; }; done; return 0; }
 while IFS= read -r src; do
   name=$(basename "$src" .sil)
+  # contracts/artifacts is flat: two sources with one basename would write the same artifact.
+  i=$(name_index "$name")
+  [ -z "$i" ] || { echo "duplicate source name $name: ${srcs[$i]} and $src" >&2; exit 2; }
   ctor="${src%.sil}.ctor.json"
   [ -f "$ctor" ] || { echo "missing constructor arguments: $ctor" >&2; exit 2; }
   "$COMPILER" "$src" --constructor-args "$ctor" -o "$OUT/$name.json"
   tr -d '\r' < "$OUT/$name.json" > "$OUT/$name.json.lf" && mv "$OUT/$name.json.lf" "$OUT/$name.json"
-  names+=("$name")
+  names+=("$name"); srcs+=("$src")
   if [ "$MODE" = check ]; then
     if cmp -s <(tr -d '\r' < "contracts/artifacts/$name.json" 2>/dev/null) "$OUT/$name.json"; then
       echo "ok      $name"
@@ -59,6 +67,19 @@ while IFS= read -r src; do
     echo "wrote   contracts/artifacts/$name.json"
   fi
 done < <(find contracts -name '*.sil' -not -path 'contracts/argent/*' -not -path 'contracts/deploy/*' | LC_ALL=C sort)
+
+# contracts/artifacts holds exactly the artifacts of the sources above: any other file there (one no
+# source produces, left over from a removed or renamed source, or added by hand) is refused.
+orphans=0
+while IFS= read -r f; do
+  base=$(basename "$f")
+  if [ "${base%.json}.json" != "$base" ] || [ -z "$(name_index "${base%.json}")" ]; then
+    echo "ORPHAN  $f (no contracts/**/*.sil produces it: remove it)" >&2; orphans=1
+  fi
+done < <(find contracts/artifacts -mindepth 1 \( -type f -o -type l -o -type d \) 2>/dev/null | LC_ALL=C sort)
+if [ "$orphans" = 1 ]; then
+  [ "$MODE" = check ] && fail=1 || { echo "contracts/artifacts has files no source produces" >&2; exit 1; }
+fi
 
 # Argent side: KOBOrders (hand-written orders wrapped by sil2argent), KOBToken, router.
 if [ "$ARGENT" = 1 ]; then
