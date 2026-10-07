@@ -13,7 +13,7 @@ export const collapse: (s: string) => string;
 export const log: (...a: unknown[]) => void;
 
 export type RealWallet = 'kasware' | 'kaspire' | 'kastle';
-export const EXTENSIONS: Record<RealWallet, { label: string; vendorDir: string; id?: string; crxUrl?: string; zipUrl?: string; zipSha256?: string }>;
+export const EXTENSIONS: Record<RealWallet, { label: string; vendorDir: string; version: string; id?: string; crxUrl?: string; crxSha256?: string; zipUrl?: string; zipSha256?: string }>;
 export function crxToZip(buf: Uint8Array): Buffer;
 export function unpackZip(buf: Uint8Array, dir: string): string[];
 export function unpackCrx(buf: Uint8Array, dir: string): string[];
