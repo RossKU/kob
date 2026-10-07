@@ -172,7 +172,7 @@ function registryRow(info: TokenInfo, index: IndexerTokenView | null): TokenRow 
 }
 
 /** A token the registry does not know (found through the indexer or pasted): unverified, not tradable, with lookalike protection. */
-export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: TokenSource = 'indexer'): TokenRow {
+export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: TokenSource = 'indexer', others: readonly IndexerTokenView[] = []): TokenRow {
   const ticker = sanitizeUntrusted(view.ticker ?? '', 16);
   // a token this build's registry does not list is never official or verified, whatever the indexer claims
   const standing: TokenStanding = view.standing === 'delisted' ? 'delisted' : 'unverified';
@@ -186,7 +186,8 @@ export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: T
     // this build's own registry does not list the token: it cannot trade it whatever its standing
     tradable: false, reason: standing === 'delisted' ? 'delisted' : 'unverified',
     // an indexer that calls an unregistered token official is contradicting the registry: recorded as a problem
-    lookalike: lookalikeReport(reg, view.ticker, view.covenant_id), indexerProblems: view.standing === 'official' ? ['standing-official-unregistered'] : [], openAsks: view.open_asks, openBids: view.open_bids,
+    // other unregistered tokens with the same short id or ticker are named too (`collision`): only the full covenant id tells them apart
+    lookalike: lookalikeReport(reg, view.ticker, view.covenant_id, undefined, others.map((o) => ({ covenantId: o.covenant_id, ticker: o.ticker ?? '' }))), indexerProblems: view.standing === 'official' ? ['standing-official-unregistered'] : [], openAsks: view.open_asks, openBids: view.open_bids,
     decimals: view.decimals,
     scale: view.scale != null ? BigInt(view.scale) : view.decimals != null ? 10n ** BigInt(Math.min(view.decimals, 9)) : null,
     tick: null,
@@ -199,15 +200,16 @@ export function buildTokenRows(reg: TokenRegistry, indexerTokens: readonly Index
   const rows: TokenRow[] = reg.tokens.map((t) => registryRow(t, byId.get(t.covenantId) ?? null));
   const seen = new Set(rows.map((r) => r.covenantId));
   const extra: TokenRow[] = [];
+  const unregistered = [...(indexerTokens ?? []), ...pasted].filter((v) => !reg.byCovenantId.has(v.covenant_id));
   for (const v of indexerTokens ?? []) {
     if (seen.has(v.covenant_id)) continue;
     seen.add(v.covenant_id);
-    extra.push(unknownRow(reg, v, 'indexer'));
+    extra.push(unknownRow(reg, v, 'indexer', unregistered));
   }
   for (const v of pasted) {
     if (seen.has(v.covenant_id)) continue;
     seen.add(v.covenant_id);
-    extra.push(unknownRow(reg, v, 'pasted'));
+    extra.push(unknownRow(reg, v, 'pasted', unregistered));
   }
   extra.sort((a, b) => (b.openAsks ?? 0) + (b.openBids ?? 0) - ((a.openAsks ?? 0) + (a.openBids ?? 0)) || (a.ticker < b.ticker ? -1 : a.ticker > b.ticker ? 1 : 0));
   return [...rows, ...extra];

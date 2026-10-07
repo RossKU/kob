@@ -187,7 +187,7 @@ describe('confirmation model', () => {
   it('never shows a bare ticker: registry tokens carry their id and state, others are "unknown token"', () => {
     const ref = { covenantId: '70'.repeat(32), ticker: 'TST', decimals: 3, display: '', inRegistry: true, tradable: true };
     expect(tokenLabel(ref, (k, p) => t(k, p), registry)).toMatch(/^TST \(7070\.\.\.7070\) \[(verified|unverified)\]$/);
-    expect(tokenLabel({ ...ref, covenantId: 'ab'.repeat(32) }, (k, p) => t(k, p), registry)).toBe('unknown token (abab...abab)');
+    expect(tokenLabel({ ...ref, covenantId: 'ab'.repeat(32) }, (k, p) => t(k, p), registry)).toBe('unknown token (abababab…abababab)');
     // an unknown token has no decimals: raw base units, never a guessed unit
     const m = model('create.ask', null);
     const card = section(m, 'create').cards[0]!;

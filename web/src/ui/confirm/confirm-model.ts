@@ -11,7 +11,7 @@ import { UNLIMITED_REPEAT_COUNT } from '../../kob/orders/cond-common';
 import { stopWorstPrice } from '../../kob/orders/cond-legs';
 import { baseKind, type OrderDescription } from '../../kob/order-facts';
 import type { Clock } from '../../kob/plan-types';
-import type { TokenRegistry } from '../../kob/registry';
+import { longId, type TokenRegistry } from '../../kob/registry';
 import type { Hex, PayloadRecord } from '../../kob/types';
 import { formatKas, formatPricePerToken, formatTokenAmount, quoteOf, statePriceToTokenPrice } from '../../kob/units';
 import { formatDateTime, t, type Params } from '../../i18n';
@@ -109,9 +109,10 @@ const FAR_FUTURE_DAA = 2n * 365n * 86_400n * BigInt(DAA_PER_SECOND);
 /** The identity line of a token: `TICKER (abcd...1234) [verified]` for registry tokens, `unknown token (abcd...1234)` otherwise. Never the ticker alone. */
 export function tokenLabel(ref: TokenRef, tr: Translate = t, registry?: TokenRegistry | null): string {
   const info = registry?.byCovenantId.get(ref.covenantId);
-  if (!info) return tr('confirm.token.unknown', { id: short(ref.covenantId) });
+  // a token outside the registry is identified by its id alone: 8 + 8 hex, not the 4 + 4 fragment
+  if (!info) return tr('confirm.token.unknown', { id: longId(ref.covenantId) });
   const state = info.status === 'delisted' ? 'delisted' : info.official ? 'official' : info.verified ? 'verified' : 'unverified';
-  if (info.openList) return tr('confirm.token.labelOpen', { id: short(info.covenantId), state: tr(`confirm.token.${state}`) });
+  if (info.openList) return tr('confirm.token.labelOpen', { id: longId(info.covenantId), state: tr(`confirm.token.${state}`) });
   return tr('confirm.token.label', { ticker: info.ticker, id: short(info.covenantId), state: tr(`confirm.token.${state}`) });
 }
 
@@ -210,7 +211,7 @@ const approxTime = (daa: bigint, f: Fmt): string | null => (f.clock ? f.time(daa
  */
 function pairPriceText(price: bigint, d: OrderDescription, f: Fmt): { value: string; detail?: string } {
   const bRef = refOf(f.registry, d.pair!.quote.covId);
-  const aName = f.ref.ticker ?? short(f.ref.covenantId);
+  const aName = f.ref.ticker ?? longId(f.ref.covenantId);
   if (f.ref.decimals === null || d.scale <= 0n) return { value: `${tokenAmountText(bRef, price, f.tr)} / ${aName}`, detail: f.tr('confirm.f.perScale', { scale: d.scale.toString() }) };
   const perWholeA = statePriceToTokenPrice(price, f.ref.decimals, d.scale, 'nearest');
   return { value: `${tokenAmountText(bRef, perWholeA, f.tr)} / ${aName}` };
@@ -227,10 +228,10 @@ function pairRows(d: OrderDescription, f: Fmt): Row[] {
   const { tr } = f;
   const x = d.pair!;
   const bRef = refOf(f.registry, x.quote.covId);
-  const aName = f.ref.ticker ?? short(f.ref.covenantId);
-  const bName = bRef.ticker ?? short(x.quote.covId);
+  const aName = f.ref.ticker ?? longId(f.ref.covenantId);
+  const bName = bRef.ticker ?? longId(x.quote.covId);
   const rows: Row[] = [];
-  rows.push(row('pairPair', tr('confirm.f.pairPair'), tr(d.side === 'sell' ? 'confirm.f.pairSells' : 'confirm.f.pairBuys', { base: aName, quote: bName }), bRef.inRegistry ? 'normal' : 'warn', bRef.inRegistry ? undefined : tr('confirm.f.pairUnknownQuote', { id: short(x.quote.covId) })));
+  rows.push(row('pairPair', tr('confirm.f.pairPair'), tr(d.side === 'sell' ? 'confirm.f.pairSells' : 'confirm.f.pairBuys', { base: aName, quote: bName }), bRef.inRegistry ? 'normal' : 'warn', bRef.inRegistry ? undefined : tr('confirm.f.pairUnknownQuote', { id: longId(x.quote.covId) })));
   if (x.escrowA > 0n) rows.push(row('pairEscrowA', tr('confirm.f.pairEscrowA'), tokenAmountText(f.ref, x.escrowA, tr)));
   if (x.escrowB > 0n) rows.push(row('pairEscrowB', tr(x.kind === 'KobIfdPair' && d.side === 'sell' ? 'confirm.f.pairPrefundB' : 'confirm.f.pairEscrowB'), tokenAmountText(bRef, x.escrowB, tr)));
   // the whole amount at the order's own bound: a resting / auction pair order (KobPair); a conditional or an entry is described by its legs

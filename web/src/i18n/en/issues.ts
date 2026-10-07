@@ -273,6 +273,7 @@ export default {
   'issues.untradable.template-mismatch': 'The registry lists a token program that differs from the one built into this app, so the token cannot be traded.',
   'issues.lookalike.none': '{name} is a registered token.',
   'issues.lookalike.unknown': 'This token is not in the KOB registry. Check its covenant id yourself before you trade or send anything.',
+  'issues.lookalike.collision': 'This token has the same short covenant id or ticker as another token outside the KOB registry ({others}). Compare the full covenant id {id} before you trade or send anything.',
   'issues.lookalike.shared': '"{ticker}" shares its ticker with {real}, which the KOB registry marks as NOT official (see its warning). Neither token is confirmed genuine: check the covenant id {id}.',
   'issues.lookalike.strong': 'WARNING: "{ticker}" looks like {real}, but it is a DIFFERENT token (covenant id {id}). It is NOT {real}.',
   'issues.verify.covenant-id-mismatch': 'The covenant id is not the registered one.',

@@ -14,15 +14,13 @@ import type { Hex, TokenProgram } from './types';
 import type { KobWasm } from './wasm';
 import { familyOfProgram } from './token-state';
 import { TEMPLATE_ID_PROGRAM, toTokenMarket } from './token-market';
-import { CAPABILITIES, type Capability, type TokenInfo, type TokenRegistry } from './registry';
+import { CAPABILITIES, longId, type Capability, type TokenInfo, type TokenRegistry } from './registry';
 
 export type OpenTokenIssue = 'program-unknown' | 'no-scale' | 'no-extension' | 'scale-invalid';
 export type OpenTokenResult = { ok: true; info: TokenInfo } | { ok: false; reason: OpenTokenIssue };
 
 /** What an order tells about its scale: base units per whole token (its price denominator). */
 export interface ScaleSample { scale?: number | null }
-
-const short = (c: string): string => (c.length >= 8 ? `${c.slice(0, 4)}…${c.slice(-4)}` : c);
 
 /** Exponent of a power of ten in 1..=10^9, or null. */
 const exponentOf = (scale: number): number | null => {
@@ -64,7 +62,8 @@ export function synthesizeOpenToken(kob: KobWasm, view: IndexerTokenView, orderS
   if (decimals === null) return { ok: false, reason: 'scale-invalid' };
 
   const id = view.covenant_id;
-  const label = short(id);
+  // its only name: 8 + 8 hex of the covenant id (a 4 + 4 fragment is 32 bits, which a token made to match it can copy)
+  const label = longId(id);
   const json = {
     ticker: label, name: label, family, covenant_id: id, template_id: templateId, extension_commitment: ext, extension_class: 'other' as const,
     decimals, tick: 1, status: 'listed' as const, verified: false,

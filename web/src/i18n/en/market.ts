@@ -38,6 +38,8 @@ export default {
   'market.lookalike.strong': '"{ticker}" ({id}) uses the same or a confusable ticker as {real}, but it is a DIFFERENT token (another covenant id). It is NOT that token.',
   'market.lookalike.sharedTitle': 'Ticker collision: not confirmed genuine',
   'market.lookalike.shared': '"{ticker}" ({id}) uses the same or a confusable ticker as {real}, which the KOB registry marks as NOT official. Tickers are not unique: neither token is confirmed genuine by KOB. Identify the token by its covenant id.',
+  'market.lookalike.collisionTitle': 'Same short id or ticker as another unverified token',
+  'market.lookalike.collision': 'This token ({id}) is shown like another token outside the KOB registry ({others}): the same short covenant id or ticker. They are different tokens: compare the full covenant id below before you trade.',
   'market.lookalike.unknown': 'This token is not in the KOB registry. Anyone can issue a token with any name: check its covenant id yourself. It is shown as unverified.',
   'market.indexerProblems.title': 'The indexer disagrees with the registry about this token',
   'market.indexerProblems.standing-official-unregistered': 'The indexer calls this token official, but the registry of this app does not list it. It is shown as unverified.',
@@ -205,6 +207,7 @@ export default {
 
   'market.open.title': 'Unverified token {id}',
   'market.open.caution': 'KOB has not confirmed that this token is genuine. Tickers collide: check the covenant id yourself before you trade.',
+  'market.open.fullId': 'Full covenant id:',
   'market.open.pending': 'Its registry entry is still pending review.',
   'market.open.baseUnits': 'Amounts are in base units (the chain carries no decimals). The decimals are inferred from the price scale most open orders use, and the price step is 1 sompi.',
   'market.open.loading': 'Reading the token from its open orders...',

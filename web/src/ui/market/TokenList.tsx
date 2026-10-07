@@ -79,7 +79,7 @@ function TokenTableRow({ row }: { row: TokenRow }) {
           {tokenTitle(row)}
         </a>
         {row.name ? <div class="small muted">{row.name}</div> : null}
-        {row.lookalike && (row.lookalike.level === 'strong' || row.lookalike.level === 'shared') ? <LookalikeWarning row={row} /> : null}
+        {row.lookalike && (row.lookalike.level === 'strong' || row.lookalike.level === 'shared' || row.lookalike.level === 'collision') ? <LookalikeWarning row={row} /> : null}
       </td>
       <td class="token-hash-cell">
         <CopyText value={row.covenantId} short={false} class="token-hash" data-testid={`token-hash-${row.covenantId}`} />

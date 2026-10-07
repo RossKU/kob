@@ -1,7 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import type { Services } from '../../app/services';
 import { t } from '../../i18n';
-import { displayName } from '../../kob/registry';
+import { displayName, longId } from '../../kob/registry';
 import { Amount, Badge, Banner, CopyText, KeyValueList, Section } from '../kit';
 import { RegistryNote } from '../shell/RegistryNote';
 import { PowersWarning, StatusBadges, powerName, tokenTitle } from './TokenBadges';
@@ -30,6 +30,18 @@ export function LookalikeWarning(props: { row: TokenRow }) {
         <div class="banner-body">
           <div class="banner-title">{t('market.lookalike.sharedTitle')}</div>
           <div>{t('market.lookalike.shared', { ticker: props.row.ticker, id: `${props.row.covenantId.slice(0, 8)}…`, real })}</div>
+        </div>
+      </div>
+    );
+  }
+  if (l.level === 'collision') {
+    const others = l.collisions.map((c) => longId(c.covenantId)).join(', ');
+    return (
+      <div class="banner banner-warn" role="status" data-testid="lookalike-collision">
+        <div class="banner-body">
+          <div class="banner-title">{t('market.lookalike.collisionTitle')}</div>
+          <div>{t('market.lookalike.collision', { id: longId(props.row.covenantId), others })}</div>
+          <div class="small wrap-anywhere"><code>{props.row.covenantId}</code></div>
         </div>
       </div>
     );

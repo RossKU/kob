@@ -482,12 +482,21 @@ export const templateById = (reg: TokenRegistry, id: string): RegistryTemplateJs
  */
 export function displayName(token: Pick<TokenInfo, 'ticker' | 'covenantId' | 'status' | 'verified'> & { official?: boolean; customRegistry?: string | null }): string {
   const c = token.covenantId;
-  const short = c.length >= 8 ? `${c.slice(0, 4)}…${c.slice(-4)}` : c;
+  const short = shortId(c);
   const base = token.customRegistry && token.verified ? `listed in custom registry ${token.customRegistry}` : token.official && token.status !== 'pending-review' ? 'official' : token.verified ? 'verified' : 'unverified';
   const state = token.status === 'delisted' ? '[delisted]' : token.status === 'pending-review' ? `[${base}, pending review]` : `[${base}]`;
-  // a token synthesised from the indexer has its short covenant id as ticker: not twice
-  return token.ticker === short ? `${short} ${state}` : `${token.ticker} (${short}) ${state}`;
+  // a token synthesised from the indexer has its covenant id fragment as ticker: shown once, in the long form
+  return token.ticker === short || token.ticker === longId(c) ? `${longId(c)} ${state}` : `${token.ticker} (${short}) ${state}`;
 }
+
+/** `abcd…1234`: 4 + 4 hex of a covenant id, enough next to a registry ticker (registry tickers are unique and look-alike checked). */
+export const shortId = (c: string): string => (c.length >= 8 ? `${c.slice(0, 4)}…${c.slice(-4)}` : c);
+
+/**
+ * `abcdef01…12345678`: 8 + 8 hex (64 bits) of a covenant id, for a token the registry does not list, whose id is all that identifies it: a 4 + 4
+ * fragment (32 bits) can be matched by a token made for that purpose.
+ */
+export const longId = (c: string): string => (c.length > 16 ? `${c.slice(0, 8)}…${c.slice(-8)}` : c);
 
 /** The registry plus one more token (an open-list token synthesised from the indexer): what the pre-sign screen decodes against. */
 export function withExtraToken(reg: TokenRegistry, token: TokenInfo): TokenRegistry {
@@ -556,8 +565,10 @@ export function verifyIndexerToken(token: TokenInfo, view: IndexerTokenView): Ve
 
 // ------------------------------------------------------------------------------------------------ lookalike protection
 
-export type LookalikeLevel = 'none' | 'unknown' | 'shared' | 'strong';
-export interface Lookalike { token: TokenInfo; kind: 'same-ticker' | 'confusable-ticker' | 'confusable-name' }
+export type LookalikeLevel = 'none' | 'unknown' | 'collision' | 'shared' | 'strong';
+export interface Lookalike { token: TokenInfo; kind: 'same-ticker' | 'confusable-ticker' | 'confusable-name' | 'same-short-id' }
+/** Another token outside the registry (listed by the indexer) whose short id or ticker is the same as this one's. */
+export interface IdCollision { covenantId: Hex; ticker: string; kind: 'same-short-id' | 'same-ticker' }
 export interface LookalikeReport {
   /**
    * `none`: this exact covenant id is registered; `unknown`: not registered, no lookalike; `strong`: not registered AND its ticker equals / resembles a
@@ -569,6 +580,8 @@ export interface LookalikeReport {
   /** the registry entry of this covenant id, if any */
   known: TokenInfo | null;
   lookalikes: Lookalike[];
+  /** `collision`: other unregistered tokens (`others`) with the same short id or ticker; only those two tokens' full ids tell them apart */
+  collisions: IdCollision[];
   /** English fallback; the UI translates from `level` + `lookalikes` */
   message: string;
 }
@@ -577,11 +590,14 @@ export interface LookalikeReport {
  * For a token the user pasted or the indexer lists (UNTRUSTED ticker + covenant id): a token with the same ticker, or one that is confusable
  * after homoglyph normalisation (KR0N vs KRON), but a DIFFERENT covenant id than a registered token is a strong scam signal naming the real one.
  */
-export function lookalikeReport(reg: TokenRegistry, ticker: string, covenantId: Hex, name?: string): LookalikeReport {
+export function lookalikeReport(
+  reg: TokenRegistry, ticker: string, covenantId: Hex, name?: string, others: readonly { covenantId: Hex; ticker: string }[] = [],
+): LookalikeReport {
   const known = reg.byCovenantId.get(covenantId) ?? null;
   if (known) {
-    return { level: 'none', known, lookalikes: [], message: `${displayName(known)} is registered` };
+    return { level: 'none', known, lookalikes: [], collisions: [], message: `${displayName(known)} is registered` };
   }
+  const short = shortId(covenantId);
   // The untrusted ticker (and name, when the source has one) are compared as homoglyph skeletons with each registered TICKER and each
   // registered NAME: a token called "Kaspa Coin" or ticker "КRON" (Cyrillic К) copies a registered token as well as "KR0N" does.
   const n = normalizeTicker(ticker);
@@ -590,21 +606,37 @@ export function lookalikeReport(reg: TokenRegistry, ticker: string, covenantId: 
   const lookalikes: Lookalike[] = [];
   for (const t of reg.tokens) {
     if (t.covenantId === covenantId) continue;
-    if (t.ticker === ticker.toUpperCase()) lookalikes.push({ token: t, kind: 'same-ticker' });
+    // the short id a registered token is shown with (and an open-list token's ticker) is only 32 bits: the same fragment is a copy too
+    if (shortId(t.covenantId) === short) lookalikes.push({ token: t, kind: 'same-short-id' });
+    else if (t.ticker === ticker.toUpperCase()) lookalikes.push({ token: t, kind: 'same-ticker' });
     else if (normalizeTicker(t.ticker) === n) lookalikes.push({ token: t, kind: 'confusable-ticker' });
     else if (claims.includes(normalizeTicker(t.ticker)) || claims.includes(normalizeName(t.name))) lookalikes.push({ token: t, kind: 'confusable-name' });
   }
-  if (!lookalikes.length) return { level: 'unknown', known: null, lookalikes, message: 'this token is not in the KOB registry: check its covenant id yourself' };
+  if (!lookalikes.length) {
+    const collisions: IdCollision[] = [];
+    for (const o of others) {
+      if (o.covenantId === covenantId || reg.byCovenantId.has(o.covenantId)) continue;
+      if (shortId(o.covenantId) === short) collisions.push({ covenantId: o.covenantId, ticker: o.ticker, kind: 'same-short-id' });
+      else if (n.length > 0 && normalizeTicker(o.ticker) === n) collisions.push({ covenantId: o.covenantId, ticker: o.ticker, kind: 'same-ticker' });
+    }
+    if (collisions.length) {
+      return {
+        level: 'collision', known: null, lookalikes, collisions,
+        message: `${longId(covenantId)} has the same short id or ticker as ${collisions.map((c) => longId(c.covenantId)).join(', ')}: tell them apart by the full covenant id`,
+      };
+    }
+    return { level: 'unknown', known: null, lookalikes, collisions, message: 'this token is not in the KOB registry: check its covenant id yourself' };
+  }
   const real = lookalikes.map((l) => displayName(l.token)).join(', ');
   // impersonation needs a target the registry vouches for, or at least does not disown: a non-official entry with a maintainer warning is not one
   if (lookalikes.every((l) => !l.token.official && !!l.token.warning)) {
     return {
-      level: 'shared', known: null, lookalikes,
+      level: 'shared', known: null, lookalikes, collisions: [],
       message: `"${sanitizeUntrusted(ticker)}" (${covenantId.slice(0, 8)}…) shares its ticker with ${real}, which the KOB registry marks as not official: neither is confirmed genuine, check the covenant id`,
     };
   }
   return {
-    level: 'strong', known: null, lookalikes,
+    level: 'strong', known: null, lookalikes, collisions: [],
     message: `WARNING: "${sanitizeUntrusted(ticker)}" (${covenantId.slice(0, 8)}…) copies the ticker of ${real}: it is NOT that token`,
   };
 }

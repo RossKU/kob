@@ -1,6 +1,6 @@
 import { t } from '../../i18n';
 import { Badge, Banner } from '../kit';
-import type { TokenInfo } from '../../kob/registry';
+import { longId, type TokenInfo } from '../../kob/registry';
 import { hasIssuerControl, KNOWN_POWERS, shortCovenantId, tokenLabel, type TokenBadge, type TokenRow } from './token-model';
 
 /** One status badge; `untradable` carries the reason in its text and tooltip. */
@@ -50,9 +50,12 @@ export function OpenTokenCaution(props: { token: Pick<TokenInfo, 'covenantId' | 
   const tk = props.token;
   if (!tk || !needsOpenCaution(tk)) return null;
   return (
-    <Banner tone="warn" title={t('market.open.title', { id: shortCovenantId(tk.covenantId) })} data-testid={props['data-testid'] ?? 'open-token-caution'}>
+    <Banner tone="warn" title={t('market.open.title', { id: longId(tk.covenantId) })} data-testid={props['data-testid'] ?? 'open-token-caution'}>
       {t('market.open.caution')} {tk.openList ? t('market.open.baseUnits') : null}
       {tk.status === 'pending-review' ? ` ${t('market.open.pending')}` : null}
+      <div class="small wrap-anywhere" data-testid="open-token-full-id">
+        {t('market.open.fullId')} <code>{tk.covenantId}</code>
+      </div>
     </Banner>
   );
 }

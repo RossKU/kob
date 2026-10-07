@@ -39,8 +39,8 @@ describe('synthesizeOpenToken', () => {
       covenantId: ID, program: 'KCC20Ref_8x8', family: 'kcc20', templateHash: kcc.hash, extensionCommitment: EXT, decimals: 3, tick: 1n,
       tradable: true, verified: false, official: false, openList: true, capabilities: ['burn', 'freeze'], slots: { inputs: 8, outputs: 8 },
     });
-    expect(t.ticker).toBe('abab…abab');
-    expect(displayName(t)).toBe('abab…abab [unverified]');
+    expect(t.ticker).toBe('abababab…abababab');
+    expect(displayName(t)).toBe('abababab…abababab [unverified]');
     // the planners accept it like a registry token, and quote at the book's scale
     const m = toTokenMarket(kob, t.json);
     expect(m).toMatchObject({ covenantId: ID, program: 'KCC20Ref_8x8', scale: 1000n, tick: 1n, decimals: 3, extensionCommitment: EXT });

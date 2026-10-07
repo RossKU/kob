@@ -37,7 +37,7 @@ test.describe('sweep strays in place', () => {
     expect(confirm.kind).toBe('sweep');
     expect(confirm.heading).toBe('Sweep strays');
     expect(confirm.text).toContain(
-      '3 stray token UTXO(s) (3 EXKCC, 777 base units of unknown token (8181...8181)) and their 30 KAS return to you. The order continues unchanged (same price, amount and custody); as a new UTXO, its 90-day idle window restarts.',
+      '3 stray token UTXO(s) (3 EXKCC, 777 base units of unknown token (81818181…81818181)) and their 30 KAS return to you. The order continues unchanged (same price, amount and custody); as a new UTXO, its 90-day idle window restarts.',
     );
     expect(confirm.closed).toEqual([]);
     expect(confirm.created).toEqual([]);
