@@ -20,8 +20,9 @@
 //! [`Ledger::claim`] is the atomic consume step of the settlement lifecycle:
 //!
 //! * an outpoint reserved by a *different* non-failed transaction id -> replay conflict;
-//! * the same transaction id and request hash -> the existing entry (idempotent; cached response);
-//! * the same transaction id and another request hash -> conflict;
+//! * the same transaction id, request hash and payment identifier -> the existing entry (idempotent; cached response);
+//! * the same transaction id and another request hash -> conflict; another payment identifier (or none where it had one)
+//!   -> `kaspa_payment_identifier_conflict` (a broadcast transaction is public, the identifier is not);
 //! * a `payment-identifier` is bound to (request hash, profile, transaction id): same id + other request hash ->
 //!   `kaspa_payment_identifier_conflict`; same id + same request + another transaction ->
 //!   `kaspa_payment_identifier_conflict` while the bound transaction is not failed (the cached outcome of one
@@ -210,6 +211,11 @@ pub struct Entry {
     /// Invoice payments: the invoice id (hex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invoice: Option<String>,
+    /// When `/settle` first answered this payment with its success (unix ms). Every later success answer for it carries
+    /// `extensions.kob.replayed = true`, so a resource server that lost its own memory (a restart) still tells the payer's
+    /// retry from a first delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_ms: Option<u64>,
 }
 
 impl Entry {
@@ -528,6 +534,14 @@ impl Ledger {
                 return Err(X402Error::state(Diag::Replay, "this transaction was already consumed by a different request"));
             }
             if e.state != State::Failed {
+                // the transaction is public once broadcast: only the payment identifier it was settled under (never on chain)
+                // names this payment
+                if e.payment_id != n.payment_id {
+                    return Err(X402Error::state(
+                        Diag::KaspaPaymentIdentifierConflict,
+                        "this transaction is bound to another payment identifier",
+                    ));
+                }
                 return Ok(Claim::Existing(e.clone()));
             }
         }
@@ -586,6 +600,7 @@ impl Ledger {
             response: None,
             intent: n.intent,
             invoice: n.invoice,
+            answered_ms: None,
         };
         let e = g.persist_and_index(e).map_err(X402Error::from)?;
         Ok(Claim::New(e))
@@ -710,6 +725,19 @@ impl Ledger {
         v
     }
 
+    /// Records that `/settle` answers the entry's success now. Returns `true` when it was answered before (the answer is a
+    /// repeat), `false` for the first answer (recorded durably before it is returned).
+    pub fn mark_answered(&self, txid: &str, now_ms: u64) -> Result<bool, LedgerError> {
+        let mut g = self.lock();
+        let mut e = g.entries.get(txid).ok_or_else(|| LedgerError::Unknown(txid.to_string()))?.clone();
+        if e.answered_ms.is_some() {
+            return Ok(true);
+        }
+        e.answered_ms = Some(now_ms);
+        g.persist_and_index(e)?;
+        Ok(false)
+    }
+
     /// Records the observed acceptance and the cached response (`-> accepted`).
     pub fn set_accepted(&self, txid: &str, accepted_daa: u64, response: Value, now_ms: u64) -> Result<Entry, LedgerError> {
         self.transition_with(txid, State::Accepted, None, now_ms, |e| {
@@ -800,6 +828,22 @@ mod tests {
         let c = l.claim(new_entry(1, 7, Some(ID1), vec![op(0xa0, 0), op(0xa1, 1)])).unwrap();
         assert!(matches!(c, Claim::Existing(_)));
         assert_eq!(l.len(), 1);
+        // the same transaction under another payment identifier, or none: refused, nothing bound
+        for id in [Some(ID2), None] {
+            let e = l.claim(new_entry(1, 7, id, vec![op(0xa0, 0), op(0xa1, 1)])).unwrap_err();
+            assert_eq!(e.diag, Diag::KaspaPaymentIdentifierConflict);
+        }
+        assert!(l.get_by_payment_id(ID2).is_none());
+    }
+
+    #[test]
+    fn the_first_answer_is_recorded_once() {
+        let l = Ledger::in_memory();
+        l.claim(new_entry(1, 7, Some(ID1), vec![op(0xa0, 0)])).unwrap();
+        let t = hex(&[1; 32]);
+        assert!(!l.mark_answered(&t, 2_000).unwrap());
+        assert!(l.mark_answered(&t, 3_000).unwrap());
+        assert_eq!(l.get(&t).unwrap().answered_ms, Some(2_000));
     }
 
     #[test]

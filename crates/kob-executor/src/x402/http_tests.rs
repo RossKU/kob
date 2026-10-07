@@ -235,7 +235,10 @@ async fn authenticated_verify_and_settle_roundtrip() {
     // retry: idempotent, cached
     let (status, _, b2) = send(&a.app, post("/settle", Some(KEY1), body), "10.0.0.1").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json_of(&b2), s);
+    let mut again = json_of(&b2);
+    assert_eq!(again["extensions"]["kob"]["replayed"], true, "a repeat answer is marked");
+    again["extensions"]["kob"].as_object_mut().unwrap().remove("replayed");
+    assert_eq!(again, s);
     assert_eq!(a.fx.chain.submit_count(), 1);
 }
 

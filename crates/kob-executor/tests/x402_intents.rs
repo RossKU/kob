@@ -21,6 +21,7 @@ use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction};
 use kob_executor::x402::facilitator::{Facilitator, FacilitatorConfig, IntentRuntime, InvoiceRuntime, InvoiceStore};
 use kob_executor::x402::ledger::{Ledger, State};
+use kob_executor::x402::testutil::is_repeat_of;
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::script::p2pk_spk;
 use kob_protocol::state::{AskState, BidState, OrderState, SCHEME_COVID, SCHEME_P2PK};
@@ -328,7 +329,17 @@ fn an_intent_settles_after_a_conflicting_fill_without_a_new_signature() {
     assert_eq!(rec.lost.len(), 1, "the lost order is remembered");
     // an identical retry returns the cached response
     let again = w.fac.settle(SHOP, &request(&offer, &p.payload));
-    assert_eq!(again, r);
+    assert!(is_repeat_of(&again, &r), "{again:?}");
+    // the creation is public once broadcast: under another payment identifier, or none, it is not this payment
+    let mut other = p.payload.clone();
+    other.extensions =
+        Some(serde_json::json!({ "payment-identifier": { "info": { "required": true, "id": "another-payer-id-000000001" } } }));
+    let o = w.fac.settle(SHOP, &request(&offer, &other));
+    assert!(!o.success, "{o:?}");
+    assert_eq!(diag(&o), "kaspa_payment_identifier_conflict");
+    other.extensions = None;
+    assert!(!w.fac.settle(SHOP, &request(&offer, &other)).success);
+    assert!(w.ledger.get_by_payment_id("another-payer-id-000000001").is_none());
 }
 
 #[test]
@@ -373,7 +384,7 @@ fn a_second_payment_of_a_paid_invoice_is_a_duplicate() {
     assert_eq!(s.payment.as_ref().unwrap().accepted_index, 0);
     // the identical retry is not a duplicate
     let again = w.fac.pay_invoice(&id, first);
-    assert_eq!(again, r);
+    assert!(is_repeat_of(&again, &r), "{again:?}");
     // another payment (another UTXO) of the same invoice: refused before broadcast, kept as evidence
     let submits = w.chain.submit_count();
     let second = w.pay_kas(&offer, &id, 1);

@@ -91,7 +91,7 @@ fn identical_retry_after_success_returns_the_cached_response() {
     let calls = f.verifier.calls.load(Ordering::SeqCst);
     // the input is spent by now: a re-verification would fail, the cached outcome does not
     let again = f.fac.settle("shop", &req);
-    assert_eq!(again, first);
+    assert!(is_repeat_of(&again, &first), "{again:?}");
     assert_eq!(f.chain.submit_count(), 1, "never broadcast twice");
     assert_eq!(f.verifier.calls.load(Ordering::SeqCst), calls, "not re-verified");
     // the same payment identifier and request through another transaction: not this payment, refused (the first
@@ -108,7 +108,7 @@ fn identical_retry_after_success_returns_the_cached_response() {
     let v = f.fac.verify(&req2);
     assert!(!v.is_valid);
     // the first transaction is still answered with its own outcome
-    assert_eq!(f.fac.settle("shop", &req), first);
+    assert!(is_repeat_of(&f.fac.settle("shop", &req), &first));
 }
 
 #[test]
@@ -128,6 +128,93 @@ fn concurrent_identical_settles_broadcast_once() {
     assert!(a.success && b.success, "{a:?} {b:?}");
     assert_eq!(a.transaction, b.transaction);
     assert_eq!(f.chain.submit_count(), 1);
+}
+
+/// `req` with another payment identifier (`None`: without the extension) and an authorization that signs nothing.
+fn under_another_id(req: &kob_x402::wire::FacilitatorRequest, id: Option<&str>) -> kob_x402::wire::FacilitatorRequest {
+    let mut r = req.clone();
+    r.payment_payload.extensions =
+        id.map(|id| serde_json::json!({ "payment-identifier": { "info": { "required": true, "id": id } } }));
+    r.payment_payload.payload.authorization.signature = Some("11".repeat(64));
+    r.payment_payload.payload.authorization.digest = "22".repeat(32);
+    r
+}
+
+#[test]
+fn a_settled_transaction_is_answered_only_under_its_payment_identifier() {
+    let f = Fixture::new();
+    let input = f.fund(500_000_000);
+    let (req, _) = f.payment(&[input], 100_000_000, ID1, 7);
+    let miner = mine_later(&f.chain, 20, 0);
+    let first = f.fac.settle("shop", &req);
+    miner.join().unwrap();
+    assert!(first.success, "{first:?}");
+    // the transaction as anyone reads it from the chain, under another identifier: not this payment
+    let other = f.fac.settle("shop", &under_another_id(&req, Some("another-id-000000000001")));
+    assert!(!other.success, "{other:?}");
+    assert_eq!(diag(&other), "kaspa_payment_identifier_conflict");
+    assert!(other.transaction.is_empty());
+    assert!(f.ledger.get_by_payment_id("another-id-000000000001").is_none(), "the other identifier is not bound");
+    // without any identifier
+    let none = f.fac.settle("shop", &under_another_id(&req, None));
+    assert!(!none.success, "{none:?}");
+    assert_eq!(f.chain.submit_count(), 1);
+    // the payer's own retry is answered, marked as a repeat
+    assert!(is_repeat_of(&f.fac.settle("shop", &req), &first));
+}
+
+#[test]
+fn a_settlement_in_flight_is_resumed_only_under_its_payment_identifier() {
+    let f = Fixture::new();
+    f.fac.set_settle_wait(Duration::from_millis(40));
+    let input = f.fund(500_000_000);
+    let (req, tx) = f.payment(&[input], 100_000_000, ID1, 7);
+    assert_eq!(diag(&f.fac.settle("shop", &req)), "settlement_pending");
+    // in the mempool: visible to anyone, still not answered under another identifier
+    f.chain.mine(0);
+    let other = f.fac.settle("shop", &under_another_id(&req, Some(ID2)));
+    assert_eq!(diag(&other), "kaspa_payment_identifier_conflict");
+    assert!(f.ledger.get_by_payment_id(ID2).is_none());
+    // the payer's retry gets the first success answer (not marked)
+    let own = f.fac.settle("shop", &req);
+    assert!(own.success, "{own:?}");
+    assert_eq!(own.transaction, txid_hex(&tx));
+    assert!(own.extensions.as_ref().unwrap().pointer("/kob/replayed").is_none());
+}
+
+#[test]
+fn the_repeat_mark_of_a_settlement_survives_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.jsonl");
+    let chain = Arc::new(MockChain::new());
+    let clock = Arc::new(FixedClock::new(START_MS));
+    let (req, first) = {
+        let f = Fixture::with_ledger(Arc::new(Ledger::open(&path).unwrap()), chain.clone(), clock.clone());
+        let input = f.fund(500_000_000);
+        let (req, _) = f.payment(&[input], 100_000_000, ID1, 7);
+        let miner = mine_later(&f.chain, 20, 0);
+        let first = f.fac.settle("shop", &req);
+        miner.join().unwrap();
+        assert!(first.success, "{first:?}");
+        (req, first)
+    };
+    let f = Fixture::with_ledger(Arc::new(Ledger::open(&path).unwrap()), chain, clock);
+    assert!(is_repeat_of(&f.fac.settle("shop", &req), &first), "after a restart the retry is still a repeat");
+}
+
+#[test]
+fn a_settlement_finalized_by_reconcile_is_answered_once_as_new() {
+    let f = Fixture::new();
+    f.fac.set_settle_wait(Duration::from_millis(30));
+    let input = f.fund(500_000_000);
+    let (req, _) = f.payment(&[input], 100_000_000, ID1, 7);
+    assert_eq!(diag(&f.fac.settle("shop", &req)), "settlement_pending");
+    f.chain.mine(0);
+    assert_eq!(f.fac.reconcile().finalized, 1);
+    // the reconcile answered nobody: the payer's retry is the first answer
+    let r = f.fac.settle("shop", &req);
+    assert!(r.success && r.extensions.as_ref().unwrap().pointer("/kob/replayed").is_none(), "{r:?}");
+    assert!(is_repeat_of(&f.fac.settle("shop", &req), &r));
 }
 
 // --------------------------------------------------------------------------------------------- finality
@@ -380,7 +467,7 @@ fn an_expired_retry_still_resumes_an_accepted_attempt() {
     miner.join().unwrap();
     assert!(first.success);
     f.clock.set(START_MS + 3_600_000);
-    assert_eq!(f.fac.settle("shop", &req), first, "expiry does not invalidate recovery of an accepted attempt");
+    assert!(is_repeat_of(&f.fac.settle("shop", &req), &first), "expiry does not invalidate recovery of an accepted attempt");
 }
 
 // -------------------------------------------------------------------------------------- node outcomes

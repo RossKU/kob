@@ -120,7 +120,15 @@ fn a_real_native_payment_verifies_settles_and_replays_idempotently() {
     assert_eq!(e.ledger.get(&s.transaction).unwrap().state, State::Accepted);
 
     // identical retry: the cached outcome, no second broadcast; the spent input no longer verifies but the ledger answers first
-    assert_eq!(e.fac.settle("shop", &req), s);
+    assert!(kob_executor::x402::testutil::is_repeat_of(&e.fac.settle("shop", &req), &s));
+    assert_eq!(e.chain.submit_count(), 1);
+    // the same signed payment under another payment id (the transaction is public once broadcast): not answered
+    let mut other = req.clone();
+    other.payment_payload.extensions =
+        Some(serde_json::json!({ "payment-identifier": { "info": { "required": true, "id": "another-payment-id-000001" } } }));
+    let o = e.fac.settle("shop", &other);
+    assert!(!o.success, "{o:?}");
+    assert_eq!(o.extensions.as_ref().unwrap()["kaspa"]["diagnostic"], "kaspa_payment_identifier_conflict");
     assert_eq!(e.chain.submit_count(), 1);
     // a fresh /verify of the settled payment reports the consumed input honestly
     assert!(!e.fac.verify(&req).is_valid);

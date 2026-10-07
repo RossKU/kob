@@ -4,6 +4,20 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### A settled payment is served only to the request that carries its payment id
+
+- **Breaking:** a settled transaction presented under another payment id is no longer served as a repeat of the first
+  payment: the paywall answers `409` `kaspa_payment_identifier_conflict` while it remembers the transaction, and the
+  facilitator (kob-executor) refuses it with the same diagnostic from its durable ledger (also after either one
+  restarts). A broadcast transaction is public; its payment id never reaches the chain, so it is what names the payment.
+  The payer's own retry (same id, same transaction) is still served, with `replayed: true`.
+- The facilitator records the first success answer of a payment in its ledger and marks every later one with
+  `extensions.kob.replayed = true`; the paywall passes it on as `PaidContext.replayed`, so a restarted paywall hands
+  the handler the payer's retry as a repeat, never as a new payment. A facilitator that does not give this mark leaves
+  `replayed` to the paywall's own memory.
+- Facilitator: a transaction settled without a payment id (only an embedded facilitator whose `Policy::require_payment_identifier` is off) is answered
+  only by the settle that settled it.
+
 ### Paywall: a paid response is replayed only to the payment that settled it
 
 - The paywall remembers, per payment id, the transaction the payment was settled with (its declared id and the

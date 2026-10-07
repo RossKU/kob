@@ -252,10 +252,12 @@ impl Facilitator {
                 }
                 match e.state {
                     State::Accepted => {
+                        self.check_known_id(&e, req)?;
                         Metrics::inc(&self.metrics.settle_resumed);
                         return self.cached(&e);
                     }
                     State::Broadcast => {
+                        self.check_known_id(&e, req)?;
                         Metrics::inc(&self.metrics.settle_resumed);
                         return self.drive_and_observe(&e.txid, wait);
                     }
@@ -263,6 +265,7 @@ impl Facilitator {
                     // outcome): resume only when the chain knows it, else the full path below resubmits it
                     State::Pending | State::Ambiguous => match self.creation_seen(&e) {
                         Ok(true) => {
+                            self.check_known_id(&e, req)?;
                             Metrics::inc(&self.metrics.settle_resumed);
                             self.ledger.transition(&e.txid, State::Broadcast, None, self.clock.now_ms())?;
                             return self.drive_and_observe(&e.txid, wait);

@@ -43,9 +43,38 @@ export function failure(diagnostic: string, retryable: boolean, message: string,
   };
 }
 
+/**
+ * The default answer, as the KOB facilitator gives it: a transaction is bound to the payment id it was first settled
+ * under (another id, or none, is `kaspa_payment_identifier_conflict`), and every later success answer for it carries
+ * `extensions.kob.replayed = true`.
+ */
+export function bindingSettler(): (req: FacilitatorRequest) => SettlementResponse {
+  const bound = new Map<string, string | undefined>();
+  return (req) => {
+    let txid: string | undefined;
+    try {
+      txid = (JSON.parse(req.paymentPayload.payload.transaction) as { id?: string }).id;
+    } catch {
+      txid = undefined;
+    }
+    const s = defaultSettlement(req);
+    if (txid === undefined) return s;
+    const id = (req.paymentPayload.extensions?.['payment-identifier'] as { info?: { id?: string } } | undefined)?.info?.id;
+    if (!bound.has(txid)) {
+      bound.set(txid, id);
+      return s;
+    }
+    if (bound.get(txid) !== id || id === undefined) {
+      return failure('kaspa_payment_identifier_conflict', false, 'this transaction is bound to another payment identifier');
+    }
+    return { ...s, extensions: { ...s.extensions, kob: { replayed: true } } };
+  };
+}
+
 export async function startStubFacilitator(opts: { apiKey?: string; settle?: SettleScript } = {}): Promise<StubFacilitator> {
   const calls: RecordedCall[] = [];
   let settleN = 0;
+  const answer = bindingSettler();
   const server: Server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
@@ -67,7 +96,7 @@ export async function startStubFacilitator(opts: { apiKey?: string; settle?: Set
           const scripted = opts.settle?.(++settleN, fr);
           if (scripted?.delayMs) await new Promise((r) => setTimeout(r, scripted.delayMs));
           if (scripted?.drop) return void req.socket.destroy();
-          return send(scripted?.status ?? 200, scripted?.body ?? defaultSettlement(fr));
+          return send(scripted?.status ?? 200, scripted?.body ?? answer(fr));
         }
         send(404, { error: 'not_found' });
       })();

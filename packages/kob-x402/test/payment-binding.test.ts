@@ -86,7 +86,7 @@ test('after a paywall restart, a facilitator answer for another transaction unde
     const declared = await restarted.handle(new Request(url, { headers: { 'payment-signature': header(offer, url, id, otherTx('ee'.repeat(32))) } }));
     assert.equal(declared.status, 502, 'the settlement shows another transaction than the one sent');
     assert.deepEqual(handled, []);
-    // the payment's own transaction is served (as a fresh request of this paywall instance)
+    // the payment's own transaction is served (this facilitator gives no repeat mark, so this paywall instance sees it new)
     const stored = (await rig.store.load(id))!.paymentPayload;
     const own = await restarted.handle(new Request(url, { headers: { 'payment-signature': encodePaymentSignature(stored) } }));
     assert.equal(own.status, 200);

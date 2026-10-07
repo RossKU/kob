@@ -14,6 +14,13 @@
 // remembered id is refused (`kaspa_payment_identifier_conflict`) and never reaches the facilitator. A settlement
 // is served only when its transaction id is the one the request's transaction declares.
 //
+// One settled payment is served to the request that carries its payment id, never to another id: a broadcast
+// transaction is public, its payment id is not. The same transaction under another id is refused
+// (`kaspa_payment_identifier_conflict`), by this paywall while it remembers the transaction and by the KOB facilitator
+// (which binds the transaction to its id in its durable ledger) after a restart. The payer's own retry (same id, same
+// transaction) is served again with `replayed: true`: from memory, or from the facilitator's `extensions.kob.replayed`
+// mark, which it records durably, so a restarted paywall never hands the handler the same payment as a new one.
+//
 // Framework-agnostic core: `paywall.handle(request: Request): Promise<Response>`; `toNodeListener` adapts it to
 // node:http. The merchant's own resource is a `handler(request, paid)` that only runs after settlement.
 
@@ -74,8 +81,9 @@ export interface PaidContext {
   /** The request body bytes (the `Request` passed to the handler has its body consumed). */
   body: Uint8Array;
   /**
-   * True when this transaction was already settled: the handler runs again (idempotent replay of the same signed
-   * transaction), nothing is charged.
+   * True when this payment was already answered (the payer's retry of the same payment id and transaction, from this
+   * paywall's memory or from the facilitator's durable `extensions.kob.replayed` mark): the handler runs again,
+   * nothing is charged, and the handler must not count it as a new payment.
    */
   replayed: boolean;
 }
@@ -125,9 +133,14 @@ interface LedgerEntry {
   transactionDigest: string;
   state: 'settling' | 'settled';
   settlement?: SettlementResponse;
-  /** Set on an alias entry (a replay under another payment id): the id the payment was first served under. */
-  paymentId?: string;
   at: number;
+}
+
+function otherIdConflict(): Response {
+  return json(409, {
+    error: 'invalid_payload',
+    extensions: { kaspa: { diagnostic: 'kaspa_payment_identifier_conflict', retryable: false, message: 'this transaction was settled under another payment id' } },
+  });
 }
 
 function lc(s: unknown): string {
@@ -140,8 +153,8 @@ export function createPaywall(config: PaywallConfig): Paywall {
   const maxLedger = config.maxLedgerEntries ?? 10_000;
   const now = config.now ?? Date.now;
   const ledger = new Map<string, LedgerEntry>();
-  /** Settled transaction id -> the payment id it was first served under (the id is not covered by any digest). */
-  const served = new Map<string, { id: string; entry: LedgerEntry }>();
+  /** Settled transaction id -> the payment id it was settled under (the transaction is public, the id is not). */
+  const served = new Map<string, string>();
   let staticOffers: PaymentRequirements[] | undefined;
 
   const build = (specs: OfferSpec[]): PaymentRequirements[] =>
@@ -301,8 +314,11 @@ export function createPaywall(config: PaywallConfig): Paywall {
         return json(409, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'settlement_pending', retryable: true, message: 'this payment id is being settled' } } });
       }
       const settlement = prior.settlement as SettlementResponse;
-      return serve(request, paidContext(prior.paymentId ?? id, requestHash, settlement, offer, url, method, body, true));
+      return serve(request, paidContext(id, requestHash, settlement, offer, url, method, body, true));
     }
+    // a transaction settled under another payment id is that payment, not this request's
+    const owner = served.get(declaredId);
+    if (owner !== undefined && owner !== id) return otherIdConflict();
     remember(id, { requestHash, requirementsHash: reqsHash, transactionId: declaredId, transactionDigest: txDigest, state: 'settling', at: now() });
 
     // ---- settle through the facilitator
@@ -341,8 +357,6 @@ export function createPaywall(config: PaywallConfig): Paywall {
       ledger.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settlement does not match the offer' } } });
     }
-    // The same signed transaction under a NEW payment id is the same payment, not a new one: serve it as a replay of the
-    // first id (the handler sees the original paymentId and replayed=true), never as a fresh paid request.
     const txid = lc(settlement.transaction);
     // The transaction the payer sent declares its id (safe JSON `id`, which the facilitator checks against the recomputed id); a
     // facilitator answer for another transaction than the one in this request does not settle this payment.
@@ -350,20 +364,23 @@ export function createPaywall(config: PaywallConfig): Paywall {
       ledger.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settled another transaction than the one in this request' } } });
     }
-    const first = served.get(txid);
-    if (first && first.entry.requestHash === requestHash && first.entry.requirementsHash === reqsHash && first.entry.settlement) {
-      remember(id, { ...first.entry, transactionDigest: txDigest, paymentId: first.id });
-      return serve(request, paidContext(first.id, requestHash, first.entry.settlement, offer, url, method, body, true));
+    // settled meanwhile under another id (two requests racing with one transaction): served to that id only
+    const owner2 = served.get(txid);
+    if (owner2 !== undefined && owner2 !== id) {
+      ledger.delete(id);
+      return otherIdConflict();
     }
     const entry: LedgerEntry = { requestHash, requirementsHash: reqsHash, transactionId: txid, transactionDigest: txDigest, state: 'settled', settlement, at: now() };
     remember(id, entry);
-    served.set(txid, { id, entry });
+    served.set(txid, id);
     while (served.size > maxLedger) {
       const oldest = served.keys().next().value;
       if (oldest === undefined) break;
       served.delete(oldest);
     }
-    return serve(request, paidContext(id, requestHash, settlement, offer, url, method, body, false));
+    // the facilitator answered this payment before (to this paywall before a restart, or to a retry it forgot)
+    const replayed = isRecord(settlement.extensions?.kob) && (settlement.extensions?.kob as { replayed?: unknown }).replayed === true;
+    return serve(request, paidContext(id, requestHash, settlement, offer, url, method, body, replayed));
   }
 
   return {

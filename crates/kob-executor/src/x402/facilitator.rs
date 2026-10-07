@@ -7,7 +7,11 @@
 //! 1. `requestHash` (mandatory, from the request body) and the transaction id are read; under a
 //!    per-transaction lock the ledger is consulted first: an identical retry of a `broadcast` /
 //!    `ambiguous` (seen on chain) / `accepted` settlement resumes **without** re-verifying inputs that
-//!    are spent by now and without rebuilding anything;
+//!    are spent by now and without rebuilding anything. Identical includes the payment identifier the
+//!    transaction was settled under: the transaction is public once broadcast, the identifier is not, so
+//!    the same transaction under another identifier (or none) is `kaspa_payment_identifier_conflict`.
+//!    Every success answer after the first carries `extensions.kob.replayed = true` (recorded in the
+//!    ledger, so it survives restarts of the facilitator and of the resource server);
 //! 2. otherwise the payment is verified against trusted chain facts (`verify_payment`);
 //! 3. expiry is re-evaluated after that awaited work and before anything is created;
 //! 4. the replay evidence is consumed durably (`Ledger::claim`, state `pending`);
@@ -561,7 +565,7 @@ impl Facilitator {
     /// [`Facilitator::settle`], for an invoice payment when `inv` is set.
     fn settle_for(&self, merchant: &str, req: &FacilitatorRequest, inv: Option<&invoice::InvoiceCtx>) -> SettlementResponse {
         Metrics::inc(&self.metrics.settle_requests);
-        match self.settle_inner(merchant, req, inv) {
+        match self.settle_inner(merchant, req, inv).and_then(|r| self.answered(r)) {
             Ok(r) => {
                 Metrics::inc(&self.metrics.settle_success);
                 r
@@ -577,6 +581,55 @@ impl Facilitator {
                 }
                 Metrics::inc(&self.metrics.settle_failed);
                 SettlementResponse::failure(self.policy.network, None, &e)
+            }
+        }
+    }
+
+    /// Records the first success answer of a payment durably; a later one (the payer's retry of the same request, payment
+    /// identifier and transaction) carries `extensions.kob.replayed = true`, so the resource server serves it as a repeat of
+    /// the paid request, never as a new one, even when it has forgotten the payment itself.
+    fn answered(&self, mut r: SettlementResponse) -> Result<SettlementResponse> {
+        if !r.success {
+            return Ok(r);
+        }
+        // an intent payment is keyed by its creation (the response names the execution)
+        let key = r
+            .extensions
+            .as_ref()
+            .and_then(|x| x.pointer("/kob/intent/creation"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| r.transaction.clone());
+        if self.ledger.mark_answered(&key, self.clock.now_ms())? {
+            let ext = r.extensions.get_or_insert_with(|| json!({}));
+            if let Some(o) = ext.as_object_mut() {
+                let kob = o.entry("kob").or_insert_with(|| json!({}));
+                if let Some(k) = kob.as_object_mut() {
+                    k.insert("replayed".into(), json!(true));
+                }
+            }
+        }
+        Ok(r)
+    }
+
+    /// A transaction the ledger already holds is answered (resumed, or its cached outcome) only for the payment identifier
+    /// it was settled under. A broadcast transaction is public and so is the request hash of a fixed-price resource; the
+    /// identifier is not (it never reaches the chain). The payer's authorization cannot be checked again once the inputs
+    /// are spent, so the identifier is what names the payment. A payment settled without an identifier is answered only by
+    /// the settle that settled it.
+    fn check_known_id(&self, e: &Entry, req: &FacilitatorRequest) -> Result<()> {
+        let id = common::payment_identifier(
+            &VerifyCtx { chain: &*self.chain, clock: &*self.clock, policy: &self.policy },
+            &req.payment_payload,
+        )?;
+        match (&e.payment_id, &id) {
+            (Some(bound), Some(id)) if bound == id => Ok(()),
+            (None, _) => Err(X402Error::state(
+                Diag::Replay,
+                "this transaction was settled without a payment identifier; its outcome is not answered again",
+            )),
+            _ => {
+                Err(X402Error::state(Diag::KaspaPaymentIdentifierConflict, "this transaction is bound to another payment identifier"))
             }
         }
     }
@@ -629,6 +682,7 @@ impl Facilitator {
                 }
                 match e.state {
                     State::Accepted => {
+                        self.check_known_id(&e, req)?;
                         Metrics::inc(&self.metrics.settle_resumed);
                         return self.cached(&e);
                     }
@@ -636,6 +690,7 @@ impl Facilitator {
                     // outcome) or may have left it (mempool eviction): reconcile with the chain first.
                     State::Pending | State::Broadcast | State::Ambiguous => match self.chain_seen(&e) {
                         Ok(true) => {
+                            self.check_known_id(&e, req)?;
                             Metrics::inc(&self.metrics.settle_resumed);
                             let e = self.ledger.transition(&e.txid, State::Broadcast, None, self.clock.now_ms())?;
                             return self.observe_and_finish(&e, wait);

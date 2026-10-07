@@ -35,6 +35,20 @@ pub const MERCHANT_KEY: u8 = 2;
 /// The fixture clock's start (unix ms).
 pub const START_MS: u64 = 1_700_000_000_000;
 
+/// True when `again` is the repeat answer of `first`: the same settlement, marked `extensions.kob.replayed = true`.
+pub fn is_repeat_of(again: &kob_x402::wire::SettlementResponse, first: &kob_x402::wire::SettlementResponse) -> bool {
+    let mut stripped = again.clone();
+    let marked = stripped
+        .extensions
+        .as_mut()
+        .and_then(|x| x.get_mut("kob"))
+        .and_then(|k| k.as_object_mut())
+        .and_then(|k| k.remove("replayed"))
+        .is_some_and(|v| v == json!(true));
+    let unmarked_first = first.extensions.as_ref().and_then(|x| x.pointer("/kob/replayed")).is_none();
+    marked && unmarked_first && &stripped == first
+}
+
 /// Address of a fixture key on TN10.
 pub fn address_of_key(n: u8) -> String {
     Address::new(Prefix::Testnet, Version::PubKey, &pubkey(n)).to_string()
