@@ -345,6 +345,9 @@ struct Tick<'a> {
     pool: Vec<KeyUtxo>,
     /// Never planned this tick: the input's exclusions, quarantined orders, skipped books.
     excluded: BTreeSet<CovId>,
+    /// What the surplus-inventory policy has used in its period, the batches prepared this tick included: each batch is
+    /// planned against what the earlier ones left of `maxFee` and `tokens[].maxAmount`, not against the tick's start.
+    inventory_used: super::planner::InventoryUse,
 }
 
 /// What one batch attempt loop produced.
@@ -414,7 +417,13 @@ impl<'a> Tick<'a> {
                 only: None,
                 deadline: self.plan_deadline(),
             };
-            let (plan, work) = plan_batch_counted(&bi, &cfg.planner);
+            let (plan, work) = if self.inventory_used == cfg.planner.inventory.used {
+                plan_batch_counted(&bi, &cfg.planner)
+            } else {
+                let mut planner = cfg.planner.clone();
+                planner.inventory.used = self.inventory_used.clone();
+                plan_batch_counted(&bi, &planner)
+            };
             report.work.add(work);
             let Some(plan) = plan else { break };
             *last_plan = plan.fills.iter().map(|f| f.cand.id).collect();
@@ -656,6 +665,8 @@ impl<'a> Tick<'a> {
     /// The book after a prepared transaction: continuations replace their orders (unaccepted, one transaction deeper),
     /// everything else it spent leaves; the funding pool gives up every UTXO the transaction spends and takes the change.
     fn apply(&mut self, p: &Prepared) {
+        // the inventory budgets the next batches of the tick are planned against
+        self.inventory_used.record(&p.plan.kept, p.lowered.built.fee.fee);
         let (continued, next_funding) = super::chain::apply(&mut self.by_id, &p.plan, &p.lowered.built, self.operator);
         for f in &p.plan.fills {
             *self.depth.entry(f.cand.id).or_insert(0) += 1;
@@ -821,6 +832,7 @@ pub fn tick_with(inp: &TickInput, cfg: &EngineConfig, families: &Families, signe
         depth: BTreeMap::new(),
         pool,
         excluded,
+        inventory_used: cfg.planner.inventory.used.clone(),
     };
     let mut step = 0usize;
     let mut out_of_time = false;

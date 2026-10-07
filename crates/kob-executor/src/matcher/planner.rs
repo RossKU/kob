@@ -118,6 +118,11 @@ pub const REF_PRICE_BAND: i128 = 4;
 /// One day at the nominal 10 DAA per second: the default budget period of the inventory policy.
 pub const INVENTORY_PERIOD_DAA: u64 = 864_000;
 
+/// Default `maxFee` of the inventory policy (sompi per period): 10 KAS a day. A policy file that names none keeps surpluses
+/// until the batches that kept one paid this much network fee in the period (a finite budget unless the operator sets a
+/// larger one).
+pub const DEFAULT_INVENTORY_MAX_FEE: u64 = 1_000_000_000;
+
 /// What the inventory policy has used in the current period (kept per token, network fee of the batches that kept a
 /// surplus), recorded by the runner after each tick and read by the planner ([`InventoryPolicy::rule`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -129,6 +134,37 @@ pub struct InventoryUse {
 }
 
 impl InventoryUse {
+    /// Reads the use a previous run saved ([`InventoryUse::save`]); none when the file does not exist.
+    pub fn load(path: &std::path::Path) -> Result<Option<Self>, String> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        let bad = || format!("{}: not an inventory use record", path.display());
+        let since = match v.get("since") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(x) => Some(x.as_u64().ok_or_else(bad)?),
+        };
+        let fee = v.get("fee").and_then(|x| x.as_u64()).ok_or_else(bad)?;
+        let mut kept = BTreeMap::new();
+        for (k, a) in v.get("kept").and_then(|x| x.as_object()).ok_or_else(bad)? {
+            let token: [u8; 32] = kob_protocol::json::from_hex(k).ok().and_then(|b| b.try_into().ok()).ok_or_else(bad)?;
+            kept.insert(token, a.as_i64().filter(|a| *a >= 0).ok_or_else(bad)?);
+        }
+        Ok(Some(InventoryUse { since, kept, fee }))
+    }
+    /// Writes the use (a small JSON file next to the indexer's database), so a restart continues the period's budgets
+    /// instead of starting them again. Written to a temporary file and renamed.
+    pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
+        let kept: serde_json::Map<String, serde_json::Value> =
+            self.kept.iter().map(|(t, a)| (kob_protocol::json::to_hex(t), serde_json::Value::from(*a))).collect();
+        let v = serde_json::json!({ "since": self.since, "fee": self.fee, "kept": kept });
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, v.to_string()).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+    }
     /// Starts a new period when `period` DAA have passed since the current one began (or none has).
     pub fn roll(&mut self, daa: u64, period: u64) {
         if self.since.is_none_or(|s| daa >= s.saturating_add(period.max(1))) {
@@ -169,8 +205,9 @@ pub struct InventoryPolicy {
     /// own terms and never change.
     #[serde(with = "kob_protocol::json::field")]
     pub keep_carrier: u64,
-    /// Most network fee (sompi) the batches that keep a surplus may pay per period; none: no bound. Checked before each
-    /// tick: once it is reached no surplus is kept until the period ends.
+    /// Most network fee (sompi) the batches that keep a surplus may pay per period (default
+    /// [`DEFAULT_INVENTORY_MAX_FEE`], 10 KAS). Checked before each batch (the batches of the same tick count): once it is
+    /// reached no surplus is kept until the period ends.
     #[serde(with = "kob_protocol::json::field", skip_serializing_if = "Option::is_none")]
     pub max_fee: Option<u64>,
     /// The budget period of `maxFee` and `tokens[].maxAmount`, DAA (default [`INVENTORY_PERIOD_DAA`], one day).
@@ -203,7 +240,7 @@ impl Default for InventoryPolicy {
             haircut_bps: 8_000,
             tokens: vec![],
             keep_carrier: KEEP_CARRIER,
-            max_fee: None,
+            max_fee: Some(DEFAULT_INVENTORY_MAX_FEE),
             period_daa: INVENTORY_PERIOD_DAA,
             used: InventoryUse::default(),
         }
@@ -510,6 +547,26 @@ mod inventory_tests {
         let mut below = p.clone();
         below.tokens[0].max_amount = Some(99_999_999);
         assert!(below.check().is_err(), "maxAmount below minAmount");
+    }
+
+    /// A policy file that names no `maxFee` has a finite fee budget; the period's use survives a restart (saved and read back).
+    #[test]
+    fn the_default_fee_budget_is_finite_and_the_use_is_saved() {
+        let p: InventoryPolicy = serde_json::from_str(r#"{"acceptSurplusTokens": true}"#).unwrap();
+        assert_eq!(p.max_fee, Some(DEFAULT_INVENTORY_MAX_FEE));
+        let dir = std::env::temp_dir().join(format!("kob-inventory-use-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("inventory-use.json");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(InventoryUse::load(&path).unwrap(), None, "no file: no saved use");
+        let mut u = InventoryUse::default();
+        u.roll(5_000, 1_000);
+        u.record(&[Kept { token: [0x72; 32], amount: 250, value: 1 }], 3_000_000);
+        u.save(&path).unwrap();
+        assert_eq!(InventoryUse::load(&path).unwrap(), Some(u.clone()));
+        std::fs::write(&path, "{\"fee\": -1}").unwrap();
+        assert!(InventoryUse::load(&path).is_err(), "a damaged file is reported");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The period budgets: a token's `maxAmount` and the policy's `maxFee`, reset when the period ends.

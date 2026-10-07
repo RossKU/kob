@@ -417,6 +417,8 @@ pub async fn run(a: RunArgs) -> Result<()> {
         );
         run_cfg.engine.planner.inventory = p.clone();
         run_cfg.maintenance.inventory = p;
+        // the period's use survives a restart (a small file next to the database)
+        run_cfg.inventory_state = Some(cfg.data_dir.join("inventory-use.json"));
     }
     if a.max_book_lag_daa.is_none() && cfg.lag_tolerance_daa() > 0 {
         // one bound for both gates: a store within the tolerance is a book the runner may plan against

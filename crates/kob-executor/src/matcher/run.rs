@@ -154,6 +154,9 @@ pub struct RunConfig {
     pub pause_file: Option<PathBuf>,
     /// Prometheus textfile-collector output (`*.prom`).
     pub metrics_file: Option<PathBuf>,
+    /// Where the surplus-inventory policy's use of its period is kept (`maxFee`, `tokens[].maxAmount`), so a restart does
+    /// not start the budgets again. `None`: in memory only.
+    pub inventory_state: Option<PathBuf>,
     /// Alert threshold: funding below this many sompi is reported (`kob_operator_low_funds`).
     pub low_funds: u64,
     /// Plan nothing while the book is more than this many DAA behind the node (a lagging indexer would
@@ -178,6 +181,7 @@ impl Default for RunConfig {
             tick: Duration::from_secs(1),
             pause_file: None,
             metrics_file: None,
+            inventory_state: None,
             low_funds: 100 * 100_000_000,
             max_book_lag: None,
             fee_policy: crate::fee::FeePolicy::default(),
@@ -336,6 +340,14 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
     pub fn new(node: N, source: S, signer: Box<dyn Signer>, cfg: RunConfig) -> Self {
         let tracker = Tracker::new(cfg.tracker.clone());
         let fee_rates = cfg.fee_policy.rates(None);
+        let inventory_use = match cfg.inventory_state.as_deref().map(super::planner::InventoryUse::load) {
+            Some(Ok(Some(u))) => u,
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "the inventory policy's saved use could not be read: its budgets start again");
+                super::planner::InventoryUse::default()
+            }
+            _ => super::planner::InventoryUse::default(),
+        };
         let plan_base_rate = cfg.engine.planner.fee_rate;
         Runner {
             fee_state: crate::fee::FeeState::default(),
@@ -359,7 +371,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             reservations: None,
             waiting: None,
             last_funding: None,
-            inventory_use: super::planner::InventoryUse::default(),
+            inventory_use,
         }
     }
 
@@ -657,8 +669,13 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     unconfirmed: false,
                 };
                 self.send(t, daa, &mut rep).await;
-                if rep.submitted.last() == Some(&p.txid()) {
+                if rep.submitted.last() == Some(&p.txid()) && !p.plan.kept.is_empty() {
                     self.inventory_use.record(&p.plan.kept, p.lowered.built.fee.fee);
+                    if let Some(path) = &self.cfg.inventory_state {
+                        if let Err(e) = self.inventory_use.save(path) {
+                            tracing::warn!(error = %e, "could not save the inventory policy's use");
+                        }
+                    }
                 }
             }
             spent = self.reserved_or_spent();
