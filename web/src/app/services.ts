@@ -1,6 +1,6 @@
 // Composition root: builds every service the UI needs from an `AppConfig`. The UI never constructs data-layer objects itself; it receives
 // `Services` (through the Preact context in app/context.tsx) so tests can substitute any part.
-import type { AppConfig } from '../config';
+import { indexerKey, type AppConfig } from '../config';
 import { createFeeService, type FeeService } from '../kob/fee-policy';
 import { HttpIndexer, IndexerFeed, type IndexerApi } from '../data/indexer';
 import { loadKaspaSdk, type KaspaSdk } from '../data/kaspa-sdk';
@@ -79,6 +79,12 @@ export function feeServiceFor(config: Pick<AppConfig, 'fees'>, node: Pick<NodeAp
   return createFeeService(config.fees, node);
 }
 
+/** The further indexers that are not the primary one under another spelling (`indexerKey`). */
+export function independentIndexers(config: Pick<AppConfig, 'indexerUrl' | 'extraIndexerUrls'>): string[] {
+  const primary = config.indexerUrl ? indexerKey(config.indexerUrl) : null;
+  return config.extraIndexerUrls.filter((u) => indexerKey(u) !== primary);
+}
+
 /** Loads kob-wasm and the kaspa SDK, connects the node (lazily: a failing node does not block the UI), reads the registry. */
 export async function createServices(config: AppConfig, o: CreateServicesOverrides = {}): Promise<Services> {
   const fetchFn = o.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -90,7 +96,8 @@ export async function createServices(config: AppConfig, o: CreateServicesOverrid
   const node = o.node ?? createNode({ network: config.network, nodeUrl: config.nodeUrl, allowMock: config.features.test || import.meta.env.DEV === true }, sdk);
   const indexer = o.indexer !== undefined ? o.indexer : config.indexerUrl ? new HttpIndexer({ baseUrl: config.indexerUrl }) : null;
   const feed = o.feed !== undefined ? o.feed : config.indexerUrl ? new IndexerFeed({ url: config.indexerUrl }) : null;
-  const verifiers = o.verifiers ?? config.extraIndexerUrls.filter((u) => u !== config.indexerUrl).map((u) => ({ label: u, api: new HttpIndexer({ baseUrl: u }) as IndexerApi }));
+  // the primary indexer in another spelling (case, default port, trailing slash) is not an independent verifier
+  const verifiers = o.verifiers ?? independentIndexers(config).map((u) => ({ label: u, api: new HttpIndexer({ baseUrl: u }) as IndexerApi }));
   const { registry, error, identity } = await loadRegistry(config, kob, fetchFn);
   const utxos = createUtxoService({ node, sdk, network: config.network });
   const tracker = new TokenTracker({ kob, node, sdk, network: config.network, indexer });

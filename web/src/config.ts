@@ -129,6 +129,19 @@ export function validateUrl(value: unknown, schemes: readonly string[] = RPC_SCH
   return v.replace(/\/+$/, '');
 }
 
+/**
+ * The form two spellings of one indexer share: scheme and host lower-cased, the scheme's default port dropped, trailing slashes of the path
+ * removed (`https://IDX.example:443/` = `https://idx.example`). An unparsable value is its own key.
+ */
+export function indexerKey(url: string): string {
+  try {
+    const u = new URL(url.trim());
+    return `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+  } catch {
+    return url.trim();
+  }
+}
+
 /** Registry location: a relative path (`./registry/tokens.json`, `/x.json`) or an http(s) URL. */
 export function validateRegistryUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -203,7 +216,8 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
   if ('extraIndexerUrls' in raw) {
     if (Array.isArray(raw.extraIndexerUrls)) {
       const urls = raw.extraIndexerUrls.map((u) => validateUrl(u)).filter((u): u is string => !!u);
-      if (urls.length === raw.extraIndexerUrls.length && urls.length <= MAX_EXTRA_INDEXERS) out.extraIndexerUrls = [...new Set(urls)];
+      // one indexer spelled twice is one verifier
+      if (urls.length === raw.extraIndexerUrls.length && urls.length <= MAX_EXTRA_INDEXERS) out.extraIndexerUrls = [...new Map(urls.map((u) => [indexerKey(u), u])).values()];
       else bad('extraIndexerUrls', `list of at most ${MAX_EXTRA_INDEXERS} URLs (use http or https)`);
     } else bad('extraIndexerUrls', 'list of URLs');
   }
