@@ -1113,3 +1113,25 @@ fills TETH/TUSD 2.7, TBTC/TUSD 1.4; IOC / FOK / market orders, stops, trailing s
 lag median 48 to 55 DAA (p95 120 to 230): TN10 carried ~240 transactions per block in this window (8 MB batches, 20 s fetches), so both
 indexers touched `catching_up` 3 to 4 times, as before the switch. Bank 295,656 KAS, falling ~3,000 to 3,800 KAS/h (market-maker
 top-ups); it reaches the miner's 20,000 KAS watermark around 10-10 / 10-11, after which the GPU miner (~1 block/s while bursting) holds it.
+
+## TN10 flood 10-07: Borsh windows (main 854b079, d4a2cc5, 414059c)
+
+From about 23:00 UTC on 10-06 TN10 carried 2,200 to 2,700 plain 1-in/1-out transfers per second. Both indexers fell to 19-27k DAA
+behind (`catching_up`) because the soak PC's link tops out at about 7.6-8 MB/s, and the JSON VSPC windows cost about 1,420 bytes per
+transaction, which is 5-7 MB/s per indexer just to keep pace. No amount of connections or prefetch budget could help.
+
+* `--borsh` (main 854b079) fetches the windows and the primary's ids over Borsh wRPC: about 575 bytes per transaction (`High`),
+  2.5-2.9x fewer bytes. Both executors run it (`executorBin` `bin/kob-executor-minlag1.exe`, `--features deploy-tn10`). After the
+  switch each indexer ingests 4,400-6,300 tx/s, about 2x the chain; exec-a went from 27,240 to 250 DAA behind in about 45 min and
+  exec-b from 19,000 in about 35 min (exec-b was throttled to `fetchParallel` 2 while exec-a caught up).
+* `--prefetch-min-lag-blue 30` (d4a2cc5): with the default 1,200, the last two minutes were single steps on one connection
+  (~1.2 MB/s against ~1.7 MB/s of chain), so the lag settled at 550-950 DAA.
+* exec-b no longer has `--no-primary-fetch`: at times the two public nodes gave exec-b only 50-90 KB/s per window.
+* `maxLagSecs` 120 while the flood lasts. The bots' gate opens on `lag_daa <= maxLagDaa` in `catching_up` too.
+* Bot reservations last 10 min, and a mempool double-spend refusal reserves the inputs for 1 min (414059c).
+
+Watch 01:52 to 02:07 UTC, with the flood still running: lag median 397 / 314 DAA (exec-a / exec-b), p90 730 / 848, max 1,038 /
+1,204; 0 rejects, 0 lies. Fills per minute: TUSD 0.8, TETH 0.5, TBTC 1.7. Amend and market-maker conflicts are still high (72 / 155),
+because the bots plan on a book 30-80 s old. The remaining limit is the link: both indexers together need about 3.5 MB/s at the tip,
+and the transport waste (refused oversize windows, TLS) brings that to about 7.6 MB/s on the NIC. Following within 5 s through such
+a flood needs the node on the same host or LAN (docs/ops/executor.md, *Bandwidth*).
