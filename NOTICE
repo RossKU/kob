@@ -49,6 +49,30 @@ Dependencies that are not stored here
 * rusty-kaspa v2.1.0 (ISC), a git dependency of the Rust workspace, and the kaspa-wasm SDK
   built from the same release (fetched by web/scripts/fetch-sdk.mjs, not committed).
 
+* Malachite (malachite-base and malachite-nz 0.9.2, arbitrary-precision arithmetic by Mikhail
+  Hogrefe, https://github.com/mhogrefe/malachite) -- GNU Lesser General Public License v3.0 only
+  (LGPL-3.0-only). It is not a dependency of KOB's own code: kaspa-math (rusty-kaspa v2.1.0)
+  uses it, and Cargo links it statically into every binary built from this workspace that
+  depends on kaspa-math (the native programs such as kob-executor and kob-cli, and
+  kob_wasm_bg.wasm, which the web app serves to browsers). The rest of KOB stays under the ISC
+  License; the LGPL applies to Malachite itself.
+
+  Distributing such a binary (a release archive, a container image, the built web app) is a
+  distribution of a "Combined Work" under LGPL-3.0 section 4. With every distributed binary:
+    - state that it contains Malachite and that Malachite is licensed under LGPL-3.0-only;
+    - include the texts of the GNU LGPL v3 and of the GNU GPL v3, which it supplements;
+    - keep Malachite's copyright notices with any copyright notices the program displays;
+    - make it possible for the recipient to rebuild the program with a modified Malachite. A
+      Rust program is statically linked, so this means offering the Corresponding Source:
+      the KOB source of the same commit with Cargo.lock (this public repository at that
+      commit is enough when the release points to it) and the Malachite source of the locked
+      version (crates.io, or its repository above); a rebuild with a modified Malachite is a
+      `[patch.crates-io]` entry in Cargo.toml;
+    - do not add terms that forbid modifying the program for one's own use or reverse
+      engineering it to debug such modifications.
+  `cargo deny check licenses` (deny.toml) accepts LGPL-3.0-only for these two crates only, so
+  another copyleft dependency is not taken in unnoticed.
+
 * TradingView Lightweight Charts (Apache-2.0) is bundled into the web app. Its attribution
   requirement is met in the app footer (web/src/ui/shell/Footer.tsx), see web/README.md:
   "TradingView Lightweight Charts(TM) Copyright (c) 2025 TradingView, Inc.
