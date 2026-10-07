@@ -12,6 +12,46 @@ import type {
 import { adaptPairCandles, adaptPairFills, adaptPairSummaries, sanitizePairBook } from './pair-api';
 import type { Hex } from '../kob/types';
 import { dropZeroDepthLevels, dropEmptyRows } from './book-view';
+import { plainUntrusted } from '../kob/registry';
+
+/** Largest indexer response body read (bytes); a longer one is refused, not parsed (default of `HttpIndexerOptions.maxBodyBytes`). */
+export const MAX_INDEXER_BODY_BYTES = 8 * 1024 * 1024;
+
+class BodyTooLarge extends Error {}
+
+/** The body as text, refusing (BodyTooLarge) one longer than `max` bytes: by Content-Length up front, else while it streams. */
+async function readCapped(res: Response, max: number): Promise<string> {
+  const declared = Number(res.headers.get('content-length') ?? NaN);
+  if (Number.isFinite(declared) && declared > max) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new BodyTooLarge();
+  }
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const text = await res.text();
+    if (new TextEncoder().encode(text).length > max) throw new BodyTooLarge();
+    return text;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => undefined);
+      throw new BodyTooLarge();
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    all.set(c, at);
+    at += c.byteLength;
+  }
+  return new TextDecoder().decode(all);
+}
 
 // ------------------------------------------------------------------------------------------------ errors and helpers
 
@@ -166,6 +206,8 @@ export interface HttpIndexerOptions {
   /** how long a "token-utxos is unsupported" answer is remembered, ms (default 5 min) */
   unsupportedTtlMs?: number;
   now?: () => number;
+  /** largest response body read, bytes (default `MAX_INDEXER_BODY_BYTES`) */
+  maxBodyBytes?: number;
 }
 
 const abortableSleep = (ms: number, signal?: AbortSignal) =>
@@ -191,6 +233,7 @@ export class HttpIndexer implements IndexerApi {
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly unsupportedTtlMs: number;
   private readonly now: () => number;
+  private readonly maxBodyBytes: number;
   private tokenUtxosUnsupportedUntil = 0;
 
   constructor(o: HttpIndexerOptions) {
@@ -202,6 +245,7 @@ export class HttpIndexer implements IndexerApi {
     this.sleep = o.sleep ?? abortableSleep;
     this.unsupportedTtlMs = o.unsupportedTtlMs ?? 5 * 60_000;
     this.now = o.now ?? Date.now;
+    this.maxBodyBytes = o.maxBodyBytes ?? MAX_INDEXER_BODY_BYTES;
   }
 
   /** Base URL of the WebSocket feed derived from this client's base. */
@@ -236,8 +280,9 @@ export class HttpIndexer implements IndexerApi {
       let text: string;
       try {
         res = await this.f(url, { headers: { accept: 'application/json' }, signal: ctl.signal });
-        text = await res.text();
+        text = await readCapped(res, this.maxBodyBytes);
       } catch (e) {
+        if (e instanceof BodyTooLarge) throw new IndexerError('parse', 0, 'too_large', `The indexer answered more than ${Math.round(this.maxBodyBytes / 1024)} KiB: not read.`);
         if (o.signal?.aborted) throw new IndexerError('aborted', 0, 'aborted', 'The request was cancelled.');
         if (timedOut) throw new IndexerError('timeout', 0, 'timeout', `The indexer did not answer within ${Math.round(timeoutMs / 1000)}s.`);
         throw new IndexerError('network', 0, 'network', `The indexer is unreachable: ${e instanceof Error ? e.message : String(e)}`);
@@ -455,8 +500,10 @@ function parseRetryAfter(v: string | null): number | undefined {
 
 function httpError(status: number, body: unknown, retryAfterSec?: number): IndexerError {
   const err = (body as { error?: { code?: unknown; message?: unknown } } | null)?.error;
-  const code = typeof err?.code === 'string' ? err.code : `http_${status}`;
-  const message = typeof err?.message === 'string' ? err.message : `The indexer answered HTTP ${status}.`;
+  // the indexer's own words are shown to the user: a short plain code, and a message without control / bidi / zero-width characters
+  const code = typeof err?.code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(err.code) ? err.code : `http_${status}`;
+  const said = typeof err?.message === 'string' ? plainUntrusted(err.message) : '';
+  const message = said || `The indexer answered HTTP ${status}.`;
   return new IndexerError('http', status, code, message, retryAfterSec);
 }
 

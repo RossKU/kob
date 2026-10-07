@@ -121,6 +121,16 @@ const BAD_CHAR = /[\u0000-\u001F\u007F-\u009F​-‏‪-‮⁠-⁤⁦-⁩﻿]/u;
 export const hasBadChar = (s: string): boolean => BAD_CHAR.test(s);
 
 /**
+ * Untrusted free text (an indexer's error message) made plain for display: control, bidi and zero-width characters are removed (they can reorder
+ * or hide what is shown), runs of white space become one space, and the text is cut at `max` characters.
+ */
+export function plainUntrusted(s: string, max = 300): string {
+  const kept = [...s].map((c) => (BAD_CHAR.test(c) ? (/\s/.test(c) ? ' ' : '') : c)).join('').replace(/\s+/g, ' ').trim();
+  const chars = [...kept];
+  return chars.length > max ? chars.slice(0, max).join('') + '…' : kept;
+}
+
+/**
  * Non-Latin capitals that are drawn like a Latin letter (Cyrillic, Greek, Armenian; a small UTS #39 confusables subset), keyed by the UPPERCASE
  * form: `toUpperCase` runs first, so the lowercase twins (а, е, о, р, с, х ...) are covered too. Letters with no lookalike are not listed.
  */
