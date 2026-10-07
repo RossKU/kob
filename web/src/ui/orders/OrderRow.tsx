@@ -3,6 +3,7 @@ import { useServices } from '../../app/context';
 import { useTxUrl } from '../../app/explorer';
 import { formatDateTime, formatNumber, t } from '../../i18n';
 import { unitsText } from '../../kob/pair';
+import { statePriceToTokenPrice } from '../../kob/units';
 import { formatJst, formatUtc } from '../../kob/daa';
 import type { TokenInfo } from '../../kob/registry';
 import { Amount, Badge, Banner, Button, CopyText, KeyValueList, tickKasFraction, tickPriceFraction, type Tone } from '../kit';
@@ -43,11 +44,16 @@ const fixed = (fraction: number | null): { fraction?: number } => (fraction === 
 
 const shortId = (id: string): string => `${id.slice(0, 4)}…${id.slice(-4)}`;
 
-/** A price of a pair order: B base units per whole A, shown in B (its decimals) per A; raw base units when B is not in the registry. */
+/**
+ * A price of a pair order: B base units per `row.scale` base units of A, shown per whole A (`value x 10^decimals(A) / scale`) when A is known, in B
+ * (its decimals) when B is known; raw base units of B when B is not in the registry, per `scale` base units of A when A is not.
+ */
 function pairPriceText(value: bigint, row: OrderRowModel, a: TokenInfo | undefined, b: TokenInfo | undefined): string {
   const aName = a?.ticker ?? (row.token ? shortId(row.token) : '?');
-  if (!b) return `${value.toString()} ${t('common.baseUnits')} ${shortId(row.pair!.quote)}/${aName}`;
-  return `${unitsText(value, b.decimals, ',')} ${b.ticker}/${aName}`;
+  const perA = a && row.scale > 0n ? statePriceToTokenPrice(value, a.decimals, row.scale, 'nearest') : value;
+  const unitA = a && row.scale > 0n ? aName : `${aName} ${t('orders.perScale', { scale: row.scale.toString() })}`;
+  if (!b) return `${perA.toString()} ${t('common.baseUnits')} ${shortId(row.pair!.quote)}/${unitA}`;
+  return `${unitsText(perA, b.decimals, ',')} ${b.ticker}/${unitA}`;
 }
 
 /**

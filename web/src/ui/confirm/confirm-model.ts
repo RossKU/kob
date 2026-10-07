@@ -13,7 +13,7 @@ import { baseKind, type OrderDescription } from '../../kob/order-facts';
 import type { Clock } from '../../kob/plan-types';
 import type { TokenRegistry } from '../../kob/registry';
 import type { Hex, PayloadRecord } from '../../kob/types';
-import { formatKas, formatPricePerToken, formatTokenAmount, quoteOf } from '../../kob/units';
+import { formatKas, formatPricePerToken, formatTokenAmount, quoteOf, statePriceToTokenPrice } from '../../kob/units';
 import { formatDateTime, t, type Params } from '../../i18n';
 import type { FeeDisclosure } from './fee-disclosure';
 
@@ -203,11 +203,17 @@ function priceText(price: bigint, d: OrderDescription, f: Fmt): { value: string;
 
 const approxTime = (daa: bigint, f: Fmt): string | null => (f.clock ? f.time(daaToUnix(f.clock, daa)) : null);
 
-/** A price of a pair order (B base units per WHOLE A) in B per whole A when B's decimals are known; else raw base units of B per whole A. */
+/**
+ * A price of a pair order. The state price is B base units per `d.scale` base units of A (scale = 10^min(decimals(A), 9)); with A's decimals known
+ * it is shown per WHOLE A (`price x 10^decimals(A) / scale`, the ticket's own conversion), in B when B's decimals are known, else raw base units of B.
+ * Without A's decimals it stays per `scale` base units of A and the detail says so.
+ */
 function pairPriceText(price: bigint, d: OrderDescription, f: Fmt): { value: string; detail?: string } {
   const bRef = refOf(f.registry, d.pair!.quote.covId);
   const aName = f.ref.ticker ?? short(f.ref.covenantId);
-  return { value: `${tokenAmountText(bRef, price, f.tr)} / ${aName}` };
+  if (f.ref.decimals === null || d.scale <= 0n) return { value: `${tokenAmountText(bRef, price, f.tr)} / ${aName}`, detail: f.tr('confirm.f.perScale', { scale: d.scale.toString() }) };
+  const perWholeA = statePriceToTokenPrice(price, f.ref.decimals, d.scale, 'nearest');
+  return { value: `${tokenAmountText(bRef, perWholeA, f.tr)} / ${aName}` };
 }
 
 /**
