@@ -3,13 +3,15 @@
 // mnemonic (from .env, never printed), switches the wallet to testnet-10, opens the gate page, runs setup for the
 // wallet address, then calls window.__gate.runTest('T1'|'T2'|'T3', opts) while approving the wallet popups.
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
+import { unzipSync } from 'fflate';
 import { chromium } from 'playwright-core';
+import { EXTENSIONS, checkPinnedPackage, crxToZip, packageVersion, sha256Hex } from '../../lib/extension-pins.mjs';
 import { ROOT } from '../../lib/node-kaspa.mjs';
 import { loadEnv, upsertEnv } from '../../lib/env.mjs';
 
-export { chromium, ROOT, loadEnv, upsertEnv };
+export { chromium, ROOT, loadEnv, upsertEnv, EXTENSIONS };
 export const OUT = join(ROOT, 'out');
 export const shot = async (page, dir, name) => {
   mkdirSync(join(OUT, 'screens', dir), { recursive: true });
@@ -68,4 +70,44 @@ export function saveResults(name, obj) {
   const f = join(OUT, `wallet-${name}.json`);
   writeFileSync(f, JSON.stringify(obj, null, 2));
   return f;
+}
+
+/**
+ * Makes `unpackedDir` hold the pinned CRX build of `wallet` (EXTENSIONS in lib/extension-pins.mjs) and `crxPath` the CRX file itself.
+ * The cache is reused only when the CRX file has the pinned sha256 and the unpacked manifest has the pinned version. Otherwise the CRX is
+ * downloaded and refused (nothing written or unpacked) unless its sha256 and manifest version equal the pin; a new release needs the
+ * pin moved first. Returns { version, sha256, bytes, source, redirectedTo }.
+ */
+export async function ensurePinnedCrx(wallet, { unpackedDir, crxPath, log = console.log }) {
+  const spec = EXTENSIONS[wallet];
+  if (!spec?.crxUrl) throw new Error(`no pinned CRX for ${wallet}`);
+  const manifest = join(unpackedDir, 'manifest.json');
+  const cached = existsSync(crxPath) && existsSync(manifest)
+    && sha256Hex(readFileSync(crxPath)) === spec.crxSha256
+    && JSON.parse(readFileSync(manifest, 'utf8').replace(/^﻿/, '')).version === spec.version;
+  let redirectedTo = null;
+  if (!cached) {
+    log(`downloading ${spec.label} ${spec.version} CRX from the Chrome Web Store update endpoint ...`);
+    const res = await fetch(spec.crxUrl, { redirect: 'follow' });
+    if (!res.ok) throw new Error(`${spec.label} CRX download failed: HTTP ${res.status}`);
+    redirectedTo = res.url;
+    const crx = Buffer.from(await res.arrayBuffer());
+    checkPinnedPackage(spec, crx);
+    const files = unzipSync(new Uint8Array(crxToZip(crx)));
+    const version = packageVersion(files);
+    if (version !== spec.version) throw new Error(`${spec.label} download has manifest version ${version}, the pin is ${spec.version}`);
+    rmSync(unpackedDir, { recursive: true, force: true });
+    const root = resolve(unpackedDir);
+    for (const [name, data] of Object.entries(files)) {
+      if (name.endsWith('/')) continue;
+      const f = resolve(root, name);
+      if (!f.startsWith(root + sep)) throw new Error(`zip entry escapes the target directory: ${name}`);
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(f, data);
+    }
+    mkdirSync(dirname(crxPath), { recursive: true });
+    writeFileSync(crxPath, crx);
+  }
+  const crx = readFileSync(crxPath);
+  return { version: spec.version, sha256: sha256Hex(crx), bytes: crx.length, source: cached ? 'cache' : 'download', redirectedTo };
 }

@@ -1,8 +1,8 @@
 // Real-wallet driver: Kastle (Forbole Chrome extension, window.kastle) on Kaspa testnet-10.
 //   node test/wallets/kastle.mjs [--fresh] [--setup] [--headless] [--only T2,T3] [--port 8803]
 // What it does (everything real, nothing mocked):
-//   1. downloads the latest RELEASED build from the Chrome Web Store (id oambclflhjfppdmkghokjmpppmaebego), unpacks the CRX,
-//      records version + sha256 (cache: .browser-profiles/kastle-ext/, gitignored)
+//   1. downloads the pinned RELEASED build from the Chrome Web Store (id oambclflhjfppdmkghokjmpppmaebego; version + sha256 in
+//      lib/extension-pins.mjs, another build is refused), unpacks the CRX, records version + sha256 (cache: vendor/kastle/, gitignored)
 //   2. launches Playwright's bundled Chromium (branded Chrome >= 137 ignores --load-extension) with a persistent profile,
 //      onboards Kastle through its UI by importing WALLET_MNEMONIC_KASTLE (generated into .env if missing, never printed)
 //   3. connects the gate page (http://localhost:<port>/), switches Kastle to testnet-10, runs scripts/setup.mjs for its address
@@ -11,11 +11,9 @@
 //   5. writes out/wallet-kastle.json (+ screenshots in out/screens/kastle/)
 //   --fresh    delete the browser profile first (forces a new UI onboarding; the mnemonic stays the same)
 //   --setup    force a new scripts/setup.mjs run even if the setup file still has unspent items
-import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { mkdirSync, existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { inflateRawSync } from 'node:zlib';
-import { chromium, ROOT, OUT, loadEnv, upsertEnv, shot, startServer, launchWithExtension, extensionId, runSetup, runGateTest, saveResults } from './common.mjs';
+import { chromium, ROOT, OUT, EXTENSIONS, ensurePinnedCrx, loadEnv, upsertEnv, shot, startServer, launchWithExtension, extensionId, runSetup, runGateTest, saveResults } from './common.mjs';
 import kaspa from '../../lib/node-kaspa.mjs';
 
 const args = process.argv.slice(2);
@@ -23,49 +21,18 @@ const flag = (n) => args.includes('--' + n);
 const opt = (n, d) => { const i = args.indexOf('--' + n); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
 const PORT = Number(opt('port', 8803));
 const ONLY = opt('only', 'T1,T2,T3').split(',');
-const EXT_ID_CWS = 'oambclflhjfppdmkghokjmpppmaebego';
-const CWS_URL = `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=140.0.0.0&acceptformat=crx2,crx3&x=id%3D${EXT_ID_CWS}%26uc`;
-const EXT_ROOT = join(ROOT, '.browser-profiles', 'kastle-ext');
+const EXT_ID_CWS = EXTENSIONS.kastle.id;
+const CWS_URL = EXTENSIONS.kastle.crxUrl; // pinned version + sha256 in lib/extension-pins.mjs
+const EXT_ROOT = join(ROOT, 'vendor', 'kastle');
 const EXT_DIR = join(EXT_ROOT, 'ext');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const say = (...a) => console.log('[kastle]', ...a);
 
 // ------------------------------------------------------------------ 1. extension
-/** Minimal unzip (stored/deflate) for the CRX payload - no dependency. */
-function unzipTo(buf, dir) {
-  let eocd = buf.length - 22;
-  while (eocd >= 0 && buf.readUInt32LE(eocd) !== 0x06054b50) eocd--;
-  const n = buf.readUInt16LE(eocd + 10);
-  let p = buf.readUInt32LE(eocd + 16);
-  for (let i = 0; i < n; i++) {
-    const method = buf.readUInt16LE(p + 10), csize = buf.readUInt32LE(p + 20);
-    const nlen = buf.readUInt16LE(p + 28), elen = buf.readUInt16LE(p + 30), clen = buf.readUInt16LE(p + 32), lho = buf.readUInt32LE(p + 42);
-    const name = buf.toString('utf8', p + 46, p + 46 + nlen);
-    p += 46 + nlen + elen + clen;
-    if (name.endsWith('/')) continue;
-    const ln = buf.readUInt16LE(lho + 26), le = buf.readUInt16LE(lho + 28);
-    const data = buf.subarray(lho + 30 + ln + le, lho + 30 + ln + le + csize);
-    const out = join(dir, name);
-    mkdirSync(join(out, '..'), { recursive: true });
-    writeFileSync(out, method === 0 ? data : inflateRawSync(data));
-  }
-}
 async function obtainExtension() {
   const crxPath = join(EXT_ROOT, 'kastle.crx');
-  if (!existsSync(crxPath) || !existsSync(join(EXT_DIR, 'manifest.json'))) {
-    mkdirSync(EXT_ROOT, { recursive: true });
-    say('downloading Kastle CRX from the Chrome Web Store ...');
-    const r = await fetch(CWS_URL, { redirect: 'follow' });
-    if (!r.ok) throw new Error('CRX download failed: HTTP ' + r.status);
-    const crx = Buffer.from(await r.arrayBuffer());
-    if (crx.toString('latin1', 0, 4) !== 'Cr24') throw new Error('not a CRX file');
-    writeFileSync(crxPath, crx);
-    rmSync(EXT_DIR, { recursive: true, force: true });
-    unzipTo(crx.subarray(12 + crx.readUInt32LE(8)), EXT_DIR); // CRX3: magic(4) version(4) headerLen(4) header zip
-  }
-  const crx = readFileSync(crxPath);
-  const manifest = JSON.parse(readFileSync(join(EXT_DIR, 'manifest.json'), 'utf8'));
-  return { version: manifest.version, sha256: createHash('sha256').update(crx).digest('hex'), bytes: crx.length, source: `Chrome Web Store CRX, extension id ${EXT_ID_CWS} (${CWS_URL}); no GitHub release assets exist for forbole/kastle`, downloadedAt: statSync(crxPath).mtime.toISOString() };
+  const x = await ensurePinnedCrx('kastle', { unpackedDir: EXT_DIR, crxPath, log: say });
+  return { version: x.version, sha256: x.sha256, bytes: x.bytes, source: `Chrome Web Store CRX, extension id ${EXT_ID_CWS} (${CWS_URL}); no GitHub release assets exist for forbole/kastle`, downloadedAt: statSync(crxPath).mtime.toISOString() };
 }
 
 // ------------------------------------------------------------------ 2. mnemonic

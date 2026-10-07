@@ -7,13 +7,13 @@
 //
 // Test money only: mnemonics are generated into the gitignored `e2e-real/.env` and never printed; profiles live in the gitignored
 // `e2e-real/.browser-profiles/`; unpacked extensions in `e2e-real/.ext/` (add `e2e-real/.ext/` to web/.gitignore).
-import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'fflate';
 import { chromium } from 'playwright-core';
+import { EXTENSIONS, checkPinnedPackage, crxToZip, packageVersion } from '../../tools/wallet-gate/lib/extension-pins.mjs';
 
 export { chromium };
 
@@ -40,51 +40,10 @@ export const log = (...a) => console.log(new Date().toISOString().slice(11, 19),
 
 // ------------------------------------------------------------------------------------------------ extension sources
 
-/**
- * Where each wallet comes from. `vendorDir` is relative to the wallet-gate vendor cache; the download URLs are the ones the gate drivers used
- * (Chrome Web Store update endpoint for CRX builds, the release zip for Kaspire).
- *
- * Every wallet is pinned: `version` is the manifest version the runs use, and a download must have the sha256 below
- * (`crxSha256` for the CRX file, `zipSha256` for the zip). The Chrome Web Store endpoint always serves the newest release,
- * so when a wallet publishes a new version the download is refused until the pin is moved here (new version and sha256,
- * after looking at the release). An unpacked copy (e2e-real/.ext, the wallet-gate cache) is used only when its manifest
- * version equals the pin.
- */
-export const EXTENSIONS = {
-  kasware: {
-    label: 'KasWare',
-    vendorDir: 'ext-kasware/unpacked',
-    id: 'hklhheigdmpoolooomdihmhlpjjdbklf',
-    crxUrl: 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=153.0.0.0&acceptformat=crx3&x=id%3Dhklhheigdmpoolooomdihmhlpjjdbklf%26uc',
-    version: '0.10.0',
-    crxSha256: 'c2a9cf257f249653ff856eab02e5ab681a7590d8c58f58feecc4306b5354dcf0',
-  },
-  kaspire: {
-    label: 'Kaspire',
-    vendorDir: 'kaspire/ext',
-    zipUrl: 'https://github.com/KaspaHUB21/Kaspire-Kaspa-Wallet/releases/download/v0.11.37/kaspire-extension-0.5.1.zip',
-    version: '0.5.1',
-    zipSha256: '8c44f8f9624e552bf7d75b07d981d4c8c7921e0679ea25b735195d4452cc5527',
-  },
-  kastle: {
-    label: 'Kastle',
-    vendorDir: 'kastle/ext',
-    id: 'oambclflhjfppdmkghokjmpppmaebego',
-    crxUrl: 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=140.0.0.0&acceptformat=crx2,crx3&x=id%3Doambclflhjfppdmkghokjmpppmaebego%26uc',
-    version: '2.61.0',
-    crxSha256: '6b1220ceefb73636fc0b47e9a8e7e6c93463067e34457af4f5d473b5fda0ba37',
-  },
-};
-
-/** The zip payload of a CRX2 / CRX3 file. */
-export function crxToZip(buf) {
-  const b = Buffer.from(buf);
-  if (b.toString('latin1', 0, 4) !== 'Cr24') throw new Error('not a CRX file (missing Cr24 magic)');
-  const version = b.readUInt32LE(4);
-  if (version === 3) return b.subarray(12 + b.readUInt32LE(8));
-  if (version === 2) return b.subarray(16 + b.readUInt32LE(8) + b.readUInt32LE(12));
-  throw new Error(`unsupported CRX version ${version}`);
-}
+// The pins (versions, sha256, URLs) live in tools/wallet-gate/lib/extension-pins.mjs, shared with the wallet-gate drivers: an
+// unpacked copy (e2e-real/.ext, the wallet-gate cache) is used only when its manifest version equals the pin, and a download whose
+// sha256 differs from the pin is refused before anything is unpacked.
+export { EXTENSIONS, crxToZip };
 
 /** Unpacks a zip into `dir` (refusing entries that would escape it). Returns the list of written files. */
 export function unpackZip(buf, dir) {
@@ -104,7 +63,6 @@ export function unpackZip(buf, dir) {
 export const unpackCrx = (buf, dir) => unpackZip(crxToZip(buf), dir);
 
 export const extensionVersion = (dir) => JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')).version;
-const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
 async function download(url) {
   const res = await fetch(url, { redirect: 'follow' });
@@ -136,13 +94,9 @@ export async function ensureExtension(wallet, { download: allowDownload = true, 
   }
   if (!allowDownload) throw new Error(`${spec.label} ${spec.version} (the pinned version) not found in ${extRoot} or the wallet-gate cache`);
   const pkg = await download(spec.zipUrl ?? spec.crxUrl);
-  const sha = sha256(pkg);
-  const want = spec.zipUrl ? spec.zipSha256 : spec.crxSha256;
-  if (sha !== want) {
-    throw new Error(`${spec.label} download sha256 ${sha} is not the pinned ${want} (${spec.version}): a different release is served; move the pin in EXTENSIONS after review`);
-  }
+  const sha = checkPinnedPackage(spec, pkg);
   const files = spec.zipUrl ? unzipSync(new Uint8Array(pkg)) : unzipSync(new Uint8Array(crxToZip(pkg)));
-  const version = JSON.parse(Buffer.from(files['manifest.json'] ?? []).toString('utf8').replace(/^﻿/, '') || '{}').version;
+  const version = packageVersion(files);
   if (version !== spec.version) throw new Error(`${spec.label} download has manifest version ${version}, the pin is ${spec.version}`);
   rmSync(dir, { recursive: true, force: true });
   if (spec.zipUrl) unpackZip(pkg, dir);

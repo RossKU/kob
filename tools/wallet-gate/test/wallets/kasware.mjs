@@ -1,19 +1,17 @@
 // REAL-wallet driver: KasWare (Chrome extension, official Chrome Web Store build) vs the KOB wallet gate, TN10.
 //   node test/wallets/kasware.mjs [--headless] [--keep-open] [--only T1,T2] [--no-variants] [--repeat N]
-// Flow: fetch+unpack the official CRX (cached in vendor/ext-kasware) -> Playwright bundled Chromium + persistent profile
+// Flow: fetch+unpack the official CRX at the pinned version / sha256 (lib/extension-pins.mjs; cached in vendor/ext-kasware) -> Playwright bundled Chromium + persistent profile
 //   -> import WALLET_MNEMONIC_KASWARE (.env, generated if absent, never printed) -> switch KasWare to Testnet 10
 //   -> scripts/setup.mjs for the wallet address (only if state file missing / UTXOs used up) -> serve gate page
 //   -> connect (approve popup) -> T1/T2/T3 via window.__gate.runTest, capturing + approving each KasWare popup.
 // Writes out/wallet-kasware.json and screenshots under out/screens/kasware/. Needs Chromium: npx playwright-core install chromium
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { unzipSync } from 'fflate';
+import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import kaspa from '../../lib/node-kaspa.mjs';
 import * as C from '../../lib/contracts.mjs';
 import * as T from '../../lib/txbuild.mjs';
 import * as F from '../../lib/flows.mjs';
-import { ROOT, loadEnv, upsertEnv, launchWithExtension, runSetup, runGateTest, saveResults, shot, startServer } from './common.mjs';
+import { ROOT, EXTENSIONS, ensurePinnedCrx, loadEnv, upsertEnv, launchWithExtension, runSetup, runGateTest, saveResults, shot, startServer } from './common.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (n) => argv.includes('--' + n);
@@ -25,39 +23,18 @@ const VARIANTS = !flag('no-variants');
 const NEG_ONLY = flag('negative-only'); // node-only control (no browser): merge a wrong-key control into the existing results file
 const PORT = Number(optv('port', 8801));
 const PASSWORD = 'Kob-Test-12345'; // throwaway UI password of a throwaway profile (KasWare requires "5 digits")
-const EXT_ID = 'hklhheigdmpoolooomdihmhlpjjdbklf';
-const CRX_URL = `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=153.0.0.0&acceptformat=crx3&x=id%3D${EXT_ID}%26uc`;
+const EXT_ID = EXTENSIONS.kasware.id;
+const CRX_URL = EXTENSIONS.kasware.crxUrl; // pinned version + sha256 in lib/extension-pins.mjs
 const EXT_DIR = join(ROOT, 'vendor', 'ext-kasware');
 const UNPACKED = join(EXT_DIR, 'unpacked');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 const collapse = (s) => s.replace(/\s+/g, ' ').trim();
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
 // ------------------------------------------------------------------ 1. extension
 async function ensureExtension() {
-  mkdirSync(EXT_DIR, { recursive: true });
-  const crx = join(EXT_DIR, 'kasware.crx');
-  let finalUrl = null;
-  if (!existsSync(crx) || !existsSync(join(UNPACKED, 'manifest.json'))) {
-    log('downloading KasWare CRX from the Chrome Web Store update endpoint ...');
-    const res = await fetch(CRX_URL, { redirect: 'follow' });
-    if (!res.ok) throw new Error('CRX download failed: HTTP ' + res.status);
-    finalUrl = res.url;
-    writeFileSync(crx, Buffer.from(await res.arrayBuffer()));
-    const b = readFileSync(crx);
-    if (b.subarray(0, 4).toString() !== 'Cr24') throw new Error('not a CRX file');
-    const zip = b.subarray(12 + b.readUInt32LE(8)); // magic(4) version(4) headerLen(4) header
-    rmSync(UNPACKED, { recursive: true, force: true });
-    for (const [p, d] of Object.entries(unzipSync(new Uint8Array(zip)))) {
-      if (p.endsWith('/')) continue;
-      const f = join(UNPACKED, p);
-      mkdirSync(dirname(f), { recursive: true });
-      writeFileSync(f, d);
-    }
-  }
-  const manifest = JSON.parse(readFileSync(join(UNPACKED, 'manifest.json'), 'utf8'));
-  return { name: 'KasWare Wallet', id: EXT_ID, version: manifest.version, source: 'Chrome Web Store CRX: ' + CRX_URL, redirectedTo: finalUrl, sha256: sha256(readFileSync(crx)), crxBytes: readFileSync(crx).length };
+  const x = await ensurePinnedCrx('kasware', { unpackedDir: UNPACKED, crxPath: join(EXT_DIR, 'kasware.crx'), log });
+  return { name: 'KasWare Wallet', id: EXT_ID, version: x.version, source: 'Chrome Web Store CRX: ' + CRX_URL, redirectedTo: x.redirectedTo, sha256: x.sha256, crxBytes: x.bytes };
 }
 
 // ------------------------------------------------------------------ 2. mnemonic + expected address

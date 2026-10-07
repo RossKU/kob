@@ -23,7 +23,7 @@ cache, node unreachable, no SDK vendor, failed app build): CI and other machines
 
 Prerequisites (all gitignored, never printed): `e2e-real/.env` (`NODE_WS`, `DEV_PRIVATE_KEY`, `DEV_ADDRESS`, `WALLET_MNEMONIC_KASWARE`,
 `WALLET_MNEMONIC_KASPIRE`), the extensions in `e2e-real/.ext/<wallet>` (copied from the wallet-gate cache, or downloaded by `common.mjs`; each wallet is pinned by manifest version and
-the sha256 of its CRX / zip in `EXTENSIONS`, and another version is refused until the pin is moved there),
+the sha256 of its CRX / zip in `EXTENSIONS` of `tools/wallet-gate/lib/extension-pins.mjs`, shared with the wallet-gate drivers, and another version is refused until the pin is moved there),
 Playwright's bundled Chromium (branded Chrome >= 137 ignores `--load-extension`). Each wallet gets a fresh profile in `.browser-profiles/<wallet>`
 (kept after the run, so a stuck order can be recovered by re-opening it on the same port). Wallets below 80 KAS are topped up with 60 KAS from the
 DEV key (an IFD locks 41 KAS, every issuance leaves a 10 KAS carrier in the token UTXO).
