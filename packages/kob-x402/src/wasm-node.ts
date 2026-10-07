@@ -133,7 +133,10 @@ export function createKobWasm(opts: { pkgDir?: string } = {}): KobWasmNode {
     const b = payBody(req, { ...owner(req), quote: req.quote, tokenUtxos: req.tokenUtxos ?? [], funding: req.utxos });
     const o = b.options as Record<string, unknown>;
     o.paymentIdentifier = req.paymentId;
-    if (req.maxPayAmount) o.maxPay = req.maxPayAmount;
+    if (req.maxPayAmount) {
+      o.maxPay = req.maxPayAmount;
+      o.maxPayAsset = req.payAsset ?? 'KAS';
+    }
     if (req.maxCarrierSompi) o.maxCarrierSompi = req.maxCarrierSompi;
     if (req.tokens) b.tokens = req.tokens;
     if (req.allowIssuerControlled) b.allowIssuerControlled = true;
@@ -199,7 +202,10 @@ export function createKobWasm(opts: { pkgDir?: string } = {}): KobWasmNode {
       if (req.virtualDaaScore) b.virtualDaaScore = req.virtualDaaScore;
       if (req.tokens) b.tokens = req.tokens;
       if (req.allowIssuerControlled) b.allowIssuerControlled = true;
-      if (req.maxPay) b.maxPay = req.maxPay;
+      if (req.maxPay) {
+        b.maxPay = req.maxPay;
+        b.maxPayAsset = req.maxPayAsset ?? 'KAS';
+      }
       if (req.maxCarrierSompi) b.maxCarrierSompi = req.maxCarrierSompi;
       return run<PreflightResult>(() => kob.x402Preflight(j(b)));
     },

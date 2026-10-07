@@ -160,7 +160,7 @@ export class X402Bots {
         capabilities: caps,
         // 0.2 KAS at the floor; a dynamic fee at a busy moment is several times that, so the ceiling follows the policy's per-transaction cap
         maxFeeSompi: this.env.fees.policy.dynamic && this.env.fees.policy.maxFeeSompi > 20_000_000n ? this.env.fees.policy.maxFeeSompi.toString() : '20000000',
-        maxPayAmount: payerMaxPayAmount(m),
+        maxPay: { [m.covenantId]: payerMaxPayAmount(m) },
         // every payment at the policy's HIGH rate (pickPayFee sets it before each one); one that cannot be built at it is rebuilt at the floor
         feeRate: () => this.payFee.rate,
         feeRateFloor: this.payFee.floor,

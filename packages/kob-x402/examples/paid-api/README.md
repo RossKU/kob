@@ -79,7 +79,8 @@ Coinbase maturity is 1000 DAA (about 100 s): mined funds are spendable after tha
   unless the caller opts in with `allowResign`, and then it revokes the first artifact (needs `submit`) before it re-quotes and
   re-signs (`client.ts` opts in and does this up to 3 times).
 * Nothing is paid without a spend authorisation: `capabilities.maxAmount` must name a ceiling for the merchant asset (and
-  `maxPayAmount` / `KOB_X402_MAX_PAY` bounds a swap), or the `approve` hook must say yes (`spend_not_authorized` otherwise). The
+  `maxPay` / `KOB_X402_MAX_PAY` bounds a swap per pay asset, e.g. `KAS=500000000,<token id>=900`; a bare number bounds KAS
+  only), or the `approve` hook must say yes (`spend_not_authorized` otherwise). The
   KAS a payer funds into a merchant token output (the carrier) is capped at 2 KAS by default (`maxCarrierSompi`).
 * Custody (`unconditional` / `issuer-controlled`) is derived from the token program's registry capabilities, never from the offer.
 * `PAYMENT-RESPONSE` must show success, the transaction id the payer itself signed and the accepted amount, or the payment is

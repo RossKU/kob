@@ -85,8 +85,9 @@ const client = new KobX402Client({
   submit: rpcSubmitter(sdk, rpc),
   capabilities,
   maxFeeSompi: process.env.KOB_X402_MAX_FEE ?? '5000000',
-  // swap-and-pay needs an explicit bound on what it may cost, in the pay asset's base units
-  ...(process.env.KOB_X402_MAX_PAY ? { maxPayAmount: process.env.KOB_X402_MAX_PAY } : {}),
+  // swap-and-pay needs an explicit bound on what it may cost, per pay asset and in that asset's units:
+  // KOB_X402_MAX_PAY="KAS=500000000,<token covenant id>=900" (a bare number counts sompi of KAS only)
+  ...(process.env.KOB_X402_MAX_PAY ? { maxPay: parseMaxPay(process.env.KOB_X402_MAX_PAY) } : {}),
   // The demo retries a retryable failure below. That signs a SECOND payment, so it is an explicit policy: the client first
   // revokes the earlier artifact (needs `submit`) and refuses to sign again when the revoke was not submitted.
   allowResign: () => true,
@@ -119,4 +120,14 @@ try {
   }
 } finally {
   await rpc.disconnect();
+}
+
+/** `KAS=500000000,<covenant id>=900` -> `{ KAS: '500000000', '<covenant id>': '900' }`; a bare number is a KAS bound. */
+function parseMaxPay(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of text.split(',').map((s) => s.trim()).filter(Boolean)) {
+    const [asset, amount] = part.includes('=') ? (part.split('=', 2) as [string, string]) : ['KAS', part];
+    out[asset.trim()] = amount.trim();
+  }
+  return out;
 }

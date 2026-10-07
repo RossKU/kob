@@ -2154,6 +2154,7 @@
       "name": "preflight.swap.sw1",
       "request": {
         "maxPay": "3000",
+        "maxPayAsset": "7070707070707070707070707070707070707070707070707070707070707070",
         "nowMs": "1800000000000",
         "offer": {
           "amount": "100000000",
@@ -2257,6 +2258,7 @@
       "name": "preflight.swap.sw1.over-bound",
       "request": {
         "maxPay": "1",
+        "maxPayAsset": "7070707070707070707070707070707070707070707070707070707070707070",
         "nowMs": "1800000000000",
         "offer": {
           "amount": "100000000",
@@ -3904,6 +3906,7 @@
       "request": {
         "allowIssuerControlled": true,
         "maxPay": "3000",
+        "maxPayAsset": "7272727272727272727272727272727272727272727272727272727272727272",
         "nowMs": "1800000000000",
         "offer": {
           "amount": "100000000",

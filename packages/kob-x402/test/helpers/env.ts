@@ -61,6 +61,8 @@ export function staticContext(extra: Partial<ChainContext> = {}): ChainContextPr
 /** Explicit spend authorisation (nothing autopays without ceilings): generous, per merchant asset. */
 export const SPEND_CAPS = { KAS: '1000000000000', [TOKEN_A]: '1000000000', [TOKEN_B]: '1000000000' };
 export const SWAP_MAX_PAY = '1000000000000';
+/** Per pay asset swap bounds (every asset the fixtures pay with). */
+export const SWAP_BOUNDS = { KAS: SWAP_MAX_PAY, [TOKEN_A]: SWAP_MAX_PAY, [TOKEN_B]: SWAP_MAX_PAY };
 
 export const NATIVE_OFFER: OfferSpec = { kind: 'native', amount: '50000000' };
 
@@ -117,7 +119,7 @@ export async function startRig(o: RigOptions = {}): Promise<Rig> {
     context,
     store,
     capabilities: { maxAmount: SPEND_CAPS, ...(o.capabilities ?? {}) },
-    maxPayAmount: SWAP_MAX_PAY,
+    maxPay: SWAP_BOUNDS,
     ...o.client,
   });
   return {

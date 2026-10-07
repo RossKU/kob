@@ -18,3 +18,14 @@ The package is pre-release (testnet); breaking changes are listed here.
   `kaspa_payment_identifier_conflict` instead of the bound transaction's settlement; the Rust payers
   (`kob_x402::client::{native, swap, intent}`) draw a random payment id by default (`random_payment_id`;
   `derive_payment_id` is removed).
+
+### Payer: swap bounds are counted per pay asset
+
+- **Breaking:** `KobX402ClientOptions.maxPay` (new) is a per pay asset bound: `{ KAS: '<sompi>', '<covenant id>': '<base
+  units>' }`. A swap pays only with an asset that has a bound: the first of the offer's pay assets the payer can pay and
+  has bounded, whatever order the merchant lists them in.
+- `maxPayAmount` stays as a KAS-only shorthand (`maxPay: { KAS }`); it is never read in the units of a token.
+- `PreflightRequest.maxPayAsset` (new) names the asset `maxPay` counts; the wasm bindings (`maxPayAsset` next to `maxPay` in
+  the swap options and in preflight) refuse a payment whose pay asset is another one (`pay_asset_not_accepted`). A bare
+  `maxPay` counts KAS.
+- Rust: `SwapOptions::max_pay` and `preflight_swap` take a `PayBound { asset, amount }` (`PayBound::kas`, `PayBound::token`).

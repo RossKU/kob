@@ -188,6 +188,12 @@ function held(caps: PayerCapabilities, asset: string): bigint {
   }
 }
 
+/** The pay assets of a swap entry this payer can pay with, in the entry's order: `KAS`, and the tokens it holds (unless KAS-only). */
+export function payableAssets(o: ClassifiedOffer, caps: PayerCapabilities): string[] {
+  if (o.kind !== 'swap') return [];
+  return o.payAssets.filter((a) => a === ASSET_KAS || (!caps.kasOnly && held(caps, a) > 0n));
+}
+
 /** Preference class: standard-native, then kcc20, then swap routes that pay KAS, then swap routes that pay a token. */
 function rank(o: ClassifiedOffer): number {
   if (o.kind === 'native') return 0;
@@ -212,7 +218,7 @@ export function rankOffers(pr: PaymentRequired, caps: PayerCapabilities): Select
     } else {
       if (caps.allowSwap === false) return;
       // KAS is always payable; a token only when the payer holds it (and is not KAS-only)
-      const payAsset = o.payAssets.find((a) => a === ASSET_KAS || (!caps.kasOnly && held(caps, a) > 0n));
+      const payAsset = payableAssets(o, caps)[0];
       if (payAsset === undefined) return;
       out.push({ ...o, payAsset });
     }

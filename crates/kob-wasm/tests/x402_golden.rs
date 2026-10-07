@@ -324,18 +324,26 @@ fn generate() -> Value {
     let (rq, ok) = call(
         x402::preflight,
         "preflight sw1",
-        json!({ "offer": swap_kas_offer, "payload": sw1_pay["paymentPayload"], "requestHash": RH, "nowMs": NOW_MS.to_string(), "maxPay": (3 * WHOLE).to_string() }),
+        json!({ "offer": swap_kas_offer, "payload": sw1_pay["paymentPayload"], "requestHash": RH, "nowMs": NOW_MS.to_string(), "maxPay": (3 * WHOLE).to_string(), "maxPayAsset": to_hex(&TOKEN_COV) }),
     );
     assert_eq!(ok["ok"], true, "{ok}");
     push("preflight.swap.sw1", "x402Preflight", rq, ok, json!({}));
     let (rq, over) = call(
         x402::preflight,
         "preflight sw1 over bound",
-        json!({ "offer": swap_kas_offer, "payload": sw1_pay["paymentPayload"], "requestHash": RH, "nowMs": NOW_MS.to_string(), "maxPay": "1" }),
+        json!({ "offer": swap_kas_offer, "payload": sw1_pay["paymentPayload"], "requestHash": RH, "nowMs": NOW_MS.to_string(), "maxPay": "1", "maxPayAsset": to_hex(&TOKEN_COV) }),
     );
     assert_eq!(over["ok"], false);
     assert_eq!(over["diagnostic"], "overpayment");
     push("preflight.swap.sw1.over-bound", "x402Preflight", rq, over, json!({}));
+    // a bare maxPay counts KAS: it is no bound on a token-paid swap, which is refused instead of being read in token units
+    let (_, bare) = call(
+        x402::preflight,
+        "preflight sw1 with a KAS bound",
+        json!({ "offer": swap_kas_offer, "payload": sw1_pay["paymentPayload"], "requestHash": RH, "nowMs": NOW_MS.to_string(), "maxPay": (3 * WHOLE).to_string() }),
+    );
+    assert_eq!(bare["ok"], false);
+    assert_eq!(bare["diagnostic"], "pay_asset_not_accepted");
     let (rq, revoked) =
         call(x402::revoke, "revoke sw1", json!({ "payload": sw1_pay["paymentPayload"], "secretKeys": [to_hex(&sk(PAYER))] }));
     push("revoke.swap.sw1", "x402Revoke", rq, revoked, json!({}));
@@ -424,7 +432,7 @@ fn generate() -> Value {
         x402::preflight,
         "preflight KRON -> KAS",
         // KRON carries a mint authority: issuer-controlled tokens need an explicit opt-in
-        json!({ "offer": swap_kron_offer, "payload": swk1_pay["paymentPayload"], "requestHash": RH, "nowMs": NOW_MS.to_string(), "maxPay": (3 * WHOLE).to_string(), "allowIssuerControlled": true }),
+        json!({ "offer": swap_kron_offer, "payload": swk1_pay["paymentPayload"], "requestHash": RH, "nowMs": NOW_MS.to_string(), "maxPay": (3 * WHOLE).to_string(), "maxPayAsset": to_hex(&KRON_COV), "allowIssuerControlled": true }),
     );
     assert_eq!(ok["ok"], true, "{ok}");
     assert_eq!(ok["payerSpent"], (3 * WHOLE).to_string());

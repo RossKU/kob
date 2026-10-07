@@ -62,7 +62,7 @@ use kob_x402::client::intent::{intent_requirements, pay_intent, IntentOptions};
 use kob_x402::client::native::{native_requirements, pay_native, PayOptions};
 use kob_x402::client::swap::{
     conflicting_orders, is_retryable_conflict, pay_swap, preflight_swap, swap_requirements, MerchantGain, OrderRef, PayAssetSpec,
-    PayerFunds, Quote, SwapOfferParams, SwapOptions, SwapPayment,
+    PayBound, PayerFunds, Quote, SwapOfferParams, SwapOptions, SwapPayment,
 };
 use kob_x402::client::token::{kcc20_requirements, pay_kcc20_with, Kcc20Options};
 use kob_x402::common::requirements_hash_hex;
@@ -1297,14 +1297,17 @@ fn x402_on_testnet_10() {
     let swap_opts = SwapOptions::default();
     let lock_time = |n: &Net| n.vdaa().saturating_sub(50);
     let sign_swap = |offer: &PaymentRequirements, rh: &str, quote: &Quote, funds: &PayerFunds, max_pay: u64| -> SwapPayment {
-        let opts = SwapOptions { max_pay: Some(max_pay), ..swap_opts.clone() };
+        let asset = funds.tokens.first().and_then(|t| t.utxo.covenant_id).map(|c| hex(&c)).unwrap_or_else(|| "KAS".into());
+        let opts = SwapOptions { max_pay: Some(PayBound { asset, amount: max_pay }), ..swap_opts.clone() };
         pay_swap(&svc.fac.policy, offer, quote, rh, &payer_secrets, funds, now_ms(), &opts).expect("pay_swap")
     };
     let settle_swap =
         |what: &str, offer: &PaymentRequirements, rh: &str, p: &SwapPayment, max_pay: u64| -> (SettlementResponse, Txid) {
             let vctx = VerifyCtx { chain: &*net.chain, clock: &clock, policy: &svc.fac.policy };
+            let asset = p.payload.payload.route.as_ref().map(|r| r.pay_asset.clone()).unwrap_or_else(|| "KAS".into());
+            let bound = PayBound { asset, amount: max_pay };
             let (_, facts) =
-                preflight_swap(&vctx, offer, &p.payload, rh, Some(max_pay)).unwrap_or_else(|e| panic!("{what}: payer preflight: {e}"));
+                preflight_swap(&vctx, offer, &p.payload, rh, Some(&bound)).unwrap_or_else(|e| panic!("{what}: payer preflight: {e}"));
             log!("{what}: payer spends {} units of the pay asset, fee {} sompi", facts.payer_spent, p.fee);
             let req = facilitator_request(p.payload.clone(), offer, rh);
             let v = svc.verify(&req);

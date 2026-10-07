@@ -85,7 +85,7 @@ export interface PayRequest {
   quote?: SwapQuote;
   /** Swap-and-pay: covenant id of the token the payer pays with (informational; the quote decides). */
   payAsset?: string;
-  /** Swap-and-pay: the most the payer will spend of the pay asset (base units, decimal string). */
+  /** Swap-and-pay: the most the payer will spend of `payAsset`, in that asset's units (decimal string); a route that pays with another asset is refused. */
   maxPayAmount?: string;
   /** Payer-pinned token allowlist (default: the tokens the offer names). */
   tokens?: TokenSpec[];
@@ -147,8 +147,10 @@ export interface PreflightRequest {
   nowMs: number;
   tokens?: TokenSpec[];
   allowIssuerControlled?: boolean;
-  /** Swap-and-pay: the payer's bound on what the payment costs. */
+  /** Swap-and-pay: the payer's bound on what the payment costs, counted in `maxPayAsset`. */
   maxPay?: string;
+  /** The asset `maxPay` counts: `KAS` (the default) or a token covenant id; a payment in another asset is refused. */
+  maxPayAsset?: string;
   /** The payer's ceiling on the merchant carrier (default 2 KAS). */
   maxCarrierSompi?: string;
 }

@@ -12,7 +12,7 @@
 //    the same resource while an earlier artifact is still live (the merchant may already hold it): the caller opts in
 //    with `allowResign`, and the client then revokes the earlier artifact first;
 //  * nothing is paid without a spend authorisation: a per-asset `capabilities.maxAmount` ceiling (and, for swaps,
-//    `maxPayAmount`), or an `approve` policy hook that says yes;
+//    a `maxPay` bound for the pay asset the swap spends), or an `approve` policy hook that says yes;
 //  * the KAS a payer funds into a merchant token output (the "carrier") is capped (`maxCarrierSompi`, default 2 KAS);
 //  * the signed artifact is durably recorded BEFORE it is disclosed, so a crash cannot lose a payment the
 //    merchant may already hold; `revoke(paymentId)` invalidates it by spending one of its inputs back to the payer;
@@ -22,7 +22,7 @@ import { randomBytes } from 'node:crypto';
 import { canonicalJson, httpRequestHash, normalizeBody, normalizeMethod, normalizeUrl, requirementsHash } from './canonical.ts';
 import { KobX402Error } from './errors.ts';
 import { decodePaymentResponse, encodePaymentSignature } from './headers.ts';
-import { rankOffers, parsePaymentRequired } from './offers.ts';
+import { payableAssets, rankOffers, parsePaymentRequired } from './offers.ts';
 import type { PayerCapabilities, SelectedOffer } from './offers.ts';
 import { MemoryArtifactStore } from './artifact-store.ts';
 import { assertSecureUrl } from './url-policy.ts';
@@ -128,7 +128,17 @@ export interface KobX402ClientOptions {
   feeRate?: FeeRateSource;
   /** The rate a payment is retried at when it cannot be built at `feeRate` (default the relay floor, 100 sompi per gram). */
   feeRateFloor?: number;
-  /** Swap-and-pay: most the payer will spend of the pay asset (base units). Required for a swap unless `approve` says yes. */
+  /**
+   * Swap-and-pay: the most one payment may spend of each pay asset, by asset: `KAS` in sompi (fee included), a token
+   * covenant id in its base units. A swap pays only with an asset named here (the first of the offer's pay assets the
+   * payer can pay that has a bound); the bound is enforced by the builder and the preflight. Required for a swap unless
+   * `approve` says yes.
+   */
+  maxPay?: Record<string, string>;
+  /**
+   * KAS-only shorthand for `maxPay: { KAS: ... }` (sompi). It bounds a swap that pays with KAS and is never read in the
+   * units of a token.
+   */
   maxPayAmount?: string;
   /**
    * Most KAS (sompi) the payer will fund into a merchant token output or its own token change (default 200000000 = 2
@@ -200,6 +210,9 @@ export class KobX402Client {
 
   constructor(options: KobX402ClientOptions) {
     if (!options.privateKeys?.length && !options.wallet) throw new KobX402Error('bad_request', 'privateKeys or a wallet signer is required');
+    for (const [asset, v] of Object.entries({ ...(options.maxPay ?? {}), ...(options.maxPayAmount !== undefined ? { 'maxPayAmount (KAS)': options.maxPayAmount } : {}) })) {
+      if (typeof v !== 'string' || !/^(0|[1-9][0-9]{0,19})$/.test(v)) throw new KobX402Error('bad_request', `maxPay bound for ${asset} must be a decimal integer string`);
+    }
     this.#o = options;
     this.#store = options.store ?? new MemoryArtifactStore();
     this.#now = options.now ?? Date.now;
@@ -392,24 +405,35 @@ export class KobX402Client {
 
   // ------------------------------------------------------------------------------------------------ internals
 
+  /** The payer's bound on one payment's spend of `asset` (a swap's pay asset), counted in that asset's own units. */
+  #payBound(asset: string): string | undefined {
+    return this.#o.maxPay?.[asset] ?? (asset === 'KAS' ? this.#o.maxPayAmount : undefined);
+  }
+
   /**
    * the first ranked offer that is authorised to be paid. Authorised = an explicit ceiling for its merchant asset
-   * (already enforced by `rankOffers`) and, for a swap, `maxPayAmount`; otherwise the `approve` hook must say yes.
+   * (already enforced by `rankOffers`) and, for a swap, a `maxPay` bound for the pay asset it spends; otherwise the
+   * `approve` hook must say yes. A swap pays with the first of its payable assets that has a bound.
    */
   async #authorize(ranked: SelectedOffer[], caps: PayerCapabilities, url: string, method: string): Promise<SelectedOffer> {
     const o = this.#o;
     let refused = 0;
-    for (const offer of ranked) {
+    for (const candidate of ranked) {
+      let offer = candidate;
       const reasons: PaymentApproval['reasons'] = [];
       if (caps.maxAmount?.[offer.asset] === undefined) reasons.push('no_spend_cap');
-      if (offer.kind === 'swap' && !o.maxPayAmount) reasons.push('no_max_pay');
+      if (offer.kind === 'swap') {
+        const bounded = payableAssets(offer, caps).find((a) => this.#payBound(a) !== undefined);
+        if (bounded !== undefined) offer = { ...offer, payAsset: bounded };
+        else reasons.push('no_max_pay');
+      }
       if (reasons.length === 0) return offer;
       if (o.approve && (await o.approve({ offer, url, method, reasons })) === true) return offer;
       refused++;
     }
     throw new KobX402Error(
       'spend_not_authorized',
-      `${refused} offer(s) could be paid but none is authorised: set capabilities.maxAmount for the merchant asset (and maxPayAmount for swaps) or provide an approve policy`,
+      `${refused} offer(s) could be paid but none is authorised: set capabilities.maxAmount for the merchant asset (and maxPay for the pay asset of a swap) or provide an approve policy`,
     );
   }
 
@@ -532,7 +556,8 @@ export class KobX402Client {
       if (!Number.isInteger(ttl) || ttl <= 0) throw new KobX402Error('bad_request', 'authorizationTtlSeconds must be a positive integer');
       req.ttlSeconds = Math.min(ttl, offer.requirements.maxTimeoutSeconds);
     }
-    if (o.maxPayAmount) req.maxPayAmount = o.maxPayAmount;
+    const bound = offer.kind === 'swap' && offer.payAsset ? this.#payBound(offer.payAsset) : undefined;
+    if (bound !== undefined) req.maxPayAmount = bound;
     if (o.maxCarrierSompi) req.maxCarrierSompi = o.maxCarrierSompi;
 
     let result: PayResult;
@@ -570,7 +595,10 @@ export class KobX402Client {
     if (ctx.virtualDaaScore) pf.virtualDaaScore = ctx.virtualDaaScore;
     if (o.tokens) pf.tokens = o.tokens;
     if (o.capabilities?.allowIssuerControlled) pf.allowIssuerControlled = true;
-    if (offer.kind === 'swap' && o.maxPayAmount) pf.maxPay = o.maxPayAmount;
+    if (bound !== undefined && offer.payAsset) {
+      pf.maxPay = bound;
+      pf.maxPayAsset = offer.payAsset;
+    }
     if (o.maxCarrierSompi) pf.maxCarrierSompi = o.maxCarrierSompi;
     const report = o.wasm.preflight(pf);
     if (!report.ok) {

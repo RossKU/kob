@@ -258,12 +258,41 @@ pub struct PayerFunds {
     pub change: [u8; 32],
 }
 
+/// The payer's bound on what a swap costs, qualified by the asset it is counted in: a bound never changes unit
+/// with the pay asset the route happens to use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PayBound {
+    /// `"KAS"` or the pay token's covenant id (64 hex).
+    pub asset: String,
+    /// Most units of `asset` the payment may take (sompi incl. the fee for KAS, base units for a token).
+    pub amount: u64,
+}
+
+impl PayBound {
+    /// A bound in sompi on a swap paid with KAS.
+    pub fn kas(sompi: u64) -> Self {
+        PayBound { asset: PAY_ASSET_KAS.to_string(), amount: sompi }
+    }
+    /// A bound in base units on a swap paid with the token `covenant_id`.
+    pub fn token(covenant_id: &[u8; 32], units: u64) -> Self {
+        PayBound { asset: hex(covenant_id), amount: units }
+    }
+    /// Refuses a route whose pay asset is not the one this bound counts.
+    fn check_asset(&self, pay_asset: &str) -> Result<()> {
+        if self.asset.eq_ignore_ascii_case(pay_asset) {
+            Ok(())
+        } else {
+            Err(err(Diag::PayAssetNotAccepted, format!("the payer's bound counts {}, the swap pays with {pay_asset}", self.asset)))
+        }
+    }
+}
+
 /// Knobs of [`prepare_swap`].
 #[derive(Clone, Debug)]
 pub struct SwapOptions {
-    /// Payer bound on what the swap costs, in units of the pay asset (token A units; sompi incl. the fee
-    /// when paying KAS). `None` = unbounded (not recommended).
-    pub max_pay: Option<u64>,
+    /// Payer bound on what the swap costs, in units of the asset it names (token units; sompi incl. the fee
+    /// when paying KAS). A route that pays with another asset is refused. `None` = unbounded (not recommended).
+    pub max_pay: Option<PayBound>,
     /// Authorization lifetime; clamped to `maxTimeoutSeconds` (an explicit larger value is an error).
     pub expires_in_ms: u64,
     /// Fee rate (sompi per gram), at least the relay minimum.
@@ -506,6 +535,10 @@ pub fn prepare_swap(
     if !pay_offers.iter().any(|e| e.asset == pay_asset) {
         return Err(err(Diag::PayAssetNotAccepted, "the offer does not accept this pay asset"));
     }
+    if let Some(b) = &opts.max_pay {
+        b.check_asset(&pay_asset)?;
+    }
+    let max_pay = opts.max_pay.as_ref().map(|b| b.amount);
     match (&merchant, pay_token) {
         (None, None) => return Err(err(Diag::PayAssetNotAccepted, "a KAS offer cannot be paid in KAS")),
         (Some(m), Some(t)) if m.id == t.covenant_id => {
@@ -546,7 +579,7 @@ pub fn prepare_swap(
                     format!("the payer holds {have} units of the pay token, the swap needs {needed}"),
                 ));
             }
-            if let Some(max) = opts.max_pay {
+            if let Some(max) = max_pay {
                 if needed > max as i128 {
                     return Err(err(
                         Diag::Overpayment,
@@ -731,7 +764,7 @@ pub fn prepare_swap(
             let put: u64 = funding.iter().map(|f| f.utxo.amount).sum();
             let back: u64 = built.fee.change_output.map(|ci| built.tx.outputs[ci as usize].value).unwrap_or(0);
             let spent = put.saturating_sub(back);
-            if let Some(max) = opts.max_pay {
+            if let Some(max) = max_pay {
                 if spent > max {
                     return Err(err(Diag::Overpayment, format!("the swap costs {spent} sompi, above the payer's bound {max}")));
                 }
@@ -850,10 +883,13 @@ pub fn preflight_swap(
     offer: &PaymentRequirements,
     payload: &PaymentPayload,
     request_hash: &str,
-    max_pay: Option<u64>,
+    max_pay: Option<&PayBound>,
 ) -> Result<(Verified, SwapFacts)> {
     let (v, facts) = crate::swap::verify_swap_facts(ctx, offer, payload, request_hash)?;
-    if max_pay.is_some_and(|m| facts.payer_spent > m) {
+    if let Some(b) = max_pay {
+        b.check_asset(&facts.pay_asset)?;
+    }
+    if max_pay.is_some_and(|b| facts.payer_spent > b.amount) {
         return Err(err(
             Diag::Overpayment,
             format!("the payment costs {} units of the pay asset, above the payer's bound", facts.payer_spent),

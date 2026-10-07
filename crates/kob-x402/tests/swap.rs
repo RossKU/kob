@@ -26,7 +26,7 @@ use kob_x402::canonical::requirements_hash;
 use kob_x402::chain::{ChainUtxo, ChainView, FixedClock, Outpoint, OutputStatus, SubmitError};
 use kob_x402::client::swap::{
     conflicting_orders, is_retryable_conflict, pay_swap, preflight_swap, prepare_revoke_swap, prepare_swap, revoke_swap,
-    swap_requirements, MerchantGain, OrderRef, PayAssetSpec, PayerFunds, PreparedSwap, Quote, SwapOfferParams, SwapOptions,
+    swap_requirements, MerchantGain, OrderRef, PayAssetSpec, PayBound, PayerFunds, PreparedSwap, Quote, SwapOfferParams, SwapOptions,
     SwapPayment,
 };
 use kob_x402::common::{iso_from_ms, payload_commit_digest, PayloadCommit};
@@ -487,13 +487,16 @@ fn preflight_checks_the_payers_bound() {
     let f = fx();
     let offer = f.kas_offer(KAS);
     let p = f.pay(&offer, &f.sw1_quote(&f.bid1), &f.funds(false)).unwrap();
-    let (v, facts) = preflight_swap(&f.ctx(), &offer, &p.payload, RH, Some(3 * WHOLE as u64)).unwrap();
+    let (v, facts) = preflight_swap(&f.ctx(), &offer, &p.payload, RH, Some(&PayBound::token(&TOKEN_COV, 3 * WHOLE as u64))).unwrap();
     assert_eq!(facts.payer_spent, 3 * WHOLE as u64);
     assert_eq!(facts.pay_asset, hex(&TOKEN_COV));
     assert_eq!(facts.orders, v.order_inputs);
     assert_eq!(facts.legs.len(), 1);
-    let e = err_of(preflight_swap(&f.ctx(), &offer, &p.payload, RH, Some(3 * WHOLE as u64 - 1)));
+    let e = err_of(preflight_swap(&f.ctx(), &offer, &p.payload, RH, Some(&PayBound::token(&TOKEN_COV, 3 * WHOLE as u64 - 1))));
     assert_eq!(e.diag, Diag::Overpayment);
+    // a bound counted in another asset is not a bound on this payment
+    let e = err_of(preflight_swap(&f.ctx(), &offer, &p.payload, RH, Some(&PayBound::kas(u64::MAX))));
+    assert_eq!(e.diag, Diag::PayAssetNotAccepted);
     // a payment that does not verify does not preflight
     f.chain.spend_externally(&op(&f.payer_tok.utxo));
     assert!(preflight_swap(&f.ctx(), &offer, &p.payload, RH, None).is_err());
@@ -503,10 +506,14 @@ fn preflight_checks_the_payers_bound() {
 fn client_enforces_max_pay_and_refuses_borrow_enabled_tokens() {
     let f = fx();
     let offer = f.kas_offer(KAS);
-    let mut o = SwapOptions { max_pay: Some(3 * WHOLE as u64 - 1), ..SwapOptions::default() };
+    let mut o = SwapOptions { max_pay: Some(PayBound::token(&TOKEN_COV, 3 * WHOLE as u64 - 1)), ..SwapOptions::default() };
     let e = err_of(prepare_swap(&f.policy, &offer, &f.sw1_quote(&f.bid1), RH, &f.funds(false), NOW_MS, &o));
     assert_eq!(e.diag, Diag::Overpayment);
-    o.max_pay = Some(3 * WHOLE as u64);
+    // the same number counted in KAS does not bound a token-paid swap: refused, not reinterpreted
+    o.max_pay = Some(PayBound::kas(3 * WHOLE as u64));
+    let e = err_of(prepare_swap(&f.policy, &offer, &f.sw1_quote(&f.bid1), RH, &f.funds(false), NOW_MS, &o));
+    assert_eq!(e.diag, Diag::PayAssetNotAccepted);
+    o.max_pay = Some(PayBound::token(&TOKEN_COV, 3 * WHOLE as u64));
     prepare_swap(&f.policy, &offer, &f.sw1_quote(&f.bid1), RH, &f.funds(false), NOW_MS, &o).unwrap();
     // G9: a borrow-enabled payer token is refused by the SDK
     let mut funds = f.funds(false);

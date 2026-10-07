@@ -25,7 +25,7 @@ use kob_protocol::tx::{pubkey_of, BuiltTx, InputSignature, KeyUtxo, TokenUtxo, T
 use kob_x402::canonical::{canonical_hash, canonical_json, http_request_hash, sha256};
 use kob_x402::chain::{ChainError, ChainUtxo, ChainView, FixedClock, Outpoint, OutputStatus, SubmitError, Txid};
 use kob_x402::client::native::{self, PayOptions};
-use kob_x402::client::swap::{self, MerchantGain, PayAssetSpec, PayerFunds, PreparedSwap, Quote, SwapOptions, SwapPayment};
+use kob_x402::client::swap::{self, MerchantGain, PayAssetSpec, PayBound, PayerFunds, PreparedSwap, Quote, SwapOptions, SwapPayment};
 use kob_x402::client::token::{self, Kcc20Options, PayloadTemplate};
 use kob_x402::common::{self, parse_iso_ms, PayloadCommit, SignedAuth};
 use kob_x402::error::X402Error;
@@ -898,8 +898,13 @@ pub fn finish_kcc20(built: &str, template: &str, sigs: &str) -> R<String> {
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct SwapOptionsIn {
+    /// The payer's bound on the swap's cost, counted in `maxPayAsset`.
     #[serde(default)]
     max_pay: Option<String>,
+    /// `"KAS"` (default: an unqualified bound counts sompi only) or the pay token's covenant id. A route that pays with
+    /// another asset is refused.
+    #[serde(default)]
+    max_pay_asset: Option<String>,
     #[serde(default)]
     expires_in_ms: Option<u64>,
     #[serde(default)]
@@ -921,7 +926,7 @@ impl SwapOptionsIn {
     fn build(&self) -> R<SwapOptions> {
         let mut o = SwapOptions::default();
         if let Some(m) = &self.max_pay {
-            o.max_pay = Some(u64s("maxPay", m)?);
+            o.max_pay = Some(pay_bound(self.max_pay_asset.as_deref(), u64s("maxPay", m)?));
         }
         if let Some(e) = self.expires_in_ms {
             o.expires_in_ms = e;
@@ -1050,6 +1055,14 @@ impl PreparedJson {
     }
 }
 
+/// A payer bound counted in `asset` (`None`: KAS, so a bare number never changes unit with the route's pay asset).
+fn pay_bound(asset: Option<&str>, amount: u64) -> PayBound {
+    match asset {
+        Some(a) if !a.eq_ignore_ascii_case("KAS") => PayBound { asset: a.to_ascii_lowercase(), amount },
+        _ => PayBound::kas(amount),
+    }
+}
+
 fn swap_out(pay: SwapPayment) -> R<String> {
     let spent = pay.payer_spent;
     pay_out(pay.payload, Some(spent), pay.warnings)
@@ -1167,9 +1180,12 @@ struct PreflightIn {
     tokens: Option<Vec<TokenSpec>>,
     #[serde(default)]
     allow_issuer_controlled: bool,
-    /// Swap-and-pay: the payer's bound on what the payment costs (pay-asset units).
+    /// Swap-and-pay: the payer's bound on what the payment costs, in units of `maxPayAsset`.
     #[serde(default)]
     max_pay: Option<String>,
+    /// The asset `maxPay` counts (`"KAS"` by default, or a token covenant id).
+    #[serde(default)]
+    max_pay_asset: Option<String>,
     /// The payer's ceiling on the merchant carrier (default 2 KAS).
     #[serde(default)]
     max_carrier_sompi: Option<String>,
@@ -1201,6 +1217,13 @@ pub fn preflight(json: &str) -> R<String> {
                 Some(units) => units as u64,
                 None => f.intent.amount,
             };
+            let pays_kas = f.state.max_sell().is_none();
+            if max_pay.is_some() && pay_bound(p.max_pay_asset.as_deref(), 0).asset.eq_ignore_ascii_case("KAS") != pays_kas {
+                return Err(X402Error::payload(
+                    kob_x402::error::Diag::PayAssetNotAccepted,
+                    "the payer's bound counts another asset than the intent pays with",
+                ));
+            }
             if max_pay.is_some_and(|m| worst > m) {
                 return Err(X402Error::payload(kob_x402::error::Diag::Overpayment, "the intent may cost more than the payer's bound"));
             }
@@ -1208,10 +1231,10 @@ pub fn preflight(json: &str) -> R<String> {
         })
     } else if p.payload.payload.route.is_some() || offer.has_route() {
         let max_pay = match &p.max_pay {
-            Some(m) => Some(u64s("maxPay", m)?),
+            Some(m) => Some(pay_bound(p.max_pay_asset.as_deref(), u64s("maxPay", m)?)),
             None => None,
         };
-        swap::preflight_swap(&ctx, &offer, &p.payload, &p.request_hash, max_pay).map(|(v, f)| (v, Some(f.payer_spent)))
+        swap::preflight_swap(&ctx, &offer, &p.payload, &p.request_hash, max_pay.as_ref()).map(|(v, f)| (v, Some(f.payer_spent)))
     } else {
         verify_payment(&ctx, &offer, &p.payload, &p.request_hash).map(|v| (v, None))
     };

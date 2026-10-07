@@ -1,5 +1,5 @@
 // The soak's x402 price list and the payer's spend authorisation, kept together (pure, unit-tested): the SDK pays an offer only when
-// the payer's capabilities carry an explicit ceiling (`maxAmount`) for the offer's merchant asset (and `maxPayAmount` for a swap).
+// the payer's capabilities carry an explicit ceiling (`maxAmount`) for the offer's merchant asset (and a `maxPay` bound, by pay asset, for a swap).
 const KAS = 100_000_000n;
 
 export interface SoakTokenFacts {
