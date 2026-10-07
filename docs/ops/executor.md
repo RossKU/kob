@@ -1956,7 +1956,7 @@ while its spendable funding was about 200 KAS. With the matcher role, the runner
 
 | Job | When | Transaction |
 |---|---|---|
-| sell | a plain `KobBid` of the token's market (program, extension commitment), live, not spent by a pending transaction or backed off, accepts a fill of what the operator holds (at least its minimum fill, or a fill that ends it), the `--inventory-policy` file does not list the token (surplus inventory is the owner's to sell), and the sale pays more than its fee (`proceeds − fee ≥ 0`) | the operator, as taker, sells as many base units as the best such bid takes (highest all-in per base unit, then age) from up to the program's token inputs; the bid delivery is the bid's; the unsold rest comes back as one token UTXO; the bid's KAS and the freed carriers go to the change |
+| sell | a plain `KobBid` of the token's market (program, extension commitment), live, not spent by a pending transaction or backed off, accepts a fill of what the operator holds (at least its minimum fill, or a fill that ends it), the `--inventory-policy` file does not list the token (surplus inventory is the owner's to sell), the bid pays at least 90 % of what the book's resting plain asks of the market charge for the same amount (the price floor, below), and the sale pays more than its fee (`proceeds − fee ≥ 0`) | the operator, as taker, sells as many base units as the best such bid takes (highest all-in per base unit, then age) from up to the program's token inputs; the bid delivery is the bid's; the unsold rest comes back as one token UTXO; the bid's KAS and the freed carriers go to the change |
 | merge | otherwise, the operator holds at least 2 token UTXOs of the token | up to the program's token inputs (`Kcc20Ref` 3, 8/8 8, KRON 4; the oldest first) become one token UTXO; the other carriers go to the change (fee only, about 0.01 KAS) |
 
 At most `--maintenance-max-jobs` (2) per tick; their inputs are reserved like every pending transaction's, so the next tick
@@ -1967,11 +1967,19 @@ builders (`SendTokens`, a taker `Batch`), signed and validated in the engine, su
 bids the matcher's tick left: a bid that crosses an ask is the matcher's. `--no-dust-sell` merges only; `--no-maintenance`
 turns both off.
 
+**The sale's price floor** (`MaintenanceConfig::sell_floor_bps`, default 9,000). A sale is housekeeping, not trading, so it
+never goes far below the market: the bid must pay at least 90 % of what the book's resting plain asks of the token's market
+charge for the same amount, the cheapest first, as many as it takes to cover it (the price of the ask that completes the
+amount). With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
+as well); the skipped sale is logged with its reason (`sell: no resting asks ...`, `sell: the best bid pays ... below 9000 bps
+of the asks' price`). A low bid alone therefore never takes a holding, and an ask posted to lower the reference must itself offer
+the whole amount at that price to everyone. `0` turns the floor off (any bid that pays the fee, the earlier rule).
+
 **Surplus inventory is not sold here.** A token listed in the `--inventory-policy` file is inventory the matcher
 accumulates on purpose; the owner sells it off-matcher. The sale job skips it (`sell: surplus inventory (the owner sells
 it off-matcher)`), whether or not `acceptSurplusTokens` is on, and only merges its UTXOs. This also keeps the inventory
-away from the sale's rule that any bid paying the fee is good enough: without a floor, anyone could post a `KobBid` far
-below the market and receive the holding for little more than the fee. Unlisted tokens (stray dust) are sold as before.
+away from the sale entirely; the price floor above covers what the policy file does not list (a token removed from it, or a
+run without the file). Unlisted tokens (stray dust) are sold under the floor.
 
 ### Node
 

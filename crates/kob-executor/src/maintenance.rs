@@ -10,7 +10,7 @@
 //!
 //! | Job | When | What |
 //! |---|---|---|
-//! | sell | the token is not held as surplus inventory (`inventory` lists it: the owner sells those off-matcher), the operator holds at least one minimum fill of a bid that is left after the matcher's tick, and selling into it pays more than the fee | its token UTXOs (as many as the program takes) are sold into the best such bid as a taker; the rest comes back as one token UTXO |
+//! | sell | the token is not held as surplus inventory (`inventory` lists it: the owner sells those off-matcher), the operator holds at least one minimum fill of a bid that is left after the matcher's tick, the bid pays at least `sell_floor_bps` (90 %) of what the book's resting asks charge for the same amount (no such asks: no sale), and selling into it pays more than the fee | its token UTXOs (as many as the program takes) are sold into the best such bid as a taker; the rest comes back as one token UTXO |
 //! | merge | otherwise, the operator holds at least `min_utxos` token UTXOs of one token | as many as the program takes become one (a listed inventory token's on `keep_carrier`): the other carriers return to the funding pool |
 //!
 //! Both are bounded per tick (`max_jobs`), built with the `kob_protocol` builders (a taker `Batch`, `SendTokens`), signed with
@@ -49,6 +49,10 @@ pub struct MaintenanceConfig {
     pub max_jobs: usize,
     /// Smallest profit (proceeds − fee, sompi) of a sale.
     pub min_sell_profit: i64,
+    /// The price floor of a sale, basis points of what the book's resting asks of the token charge for the same amount (the
+    /// cheapest first, as many as it takes): the bid must pay at least this share of it, and with too few asks to price the
+    /// amount nothing is sold (the UTXOs are merged instead). Default 9,000 (90 %). 0: no floor (any bid that pays the fee).
+    pub sell_floor_bps: u32,
     /// The lowest fee rate, sompi per gram.
     pub fee_rate: u64,
     /// The tick's fee rates (`crate::fee`, set by the runner): every job is housekeeping and goes at the low rate, held to the
@@ -74,6 +78,7 @@ impl Default for MaintenanceConfig {
             min_utxos: 2,
             max_jobs: 2,
             min_sell_profit: 0,
+            sell_floor_bps: 9_000,
             fee_rate: 100,
             fees: crate::fee::FeeRates::default(),
             token_carrier: 1_000_000_000,
@@ -242,6 +247,42 @@ fn best_bid(inp: &MaintenanceInput, g: &Group, held: i64, t: i64) -> Option<(Lis
     best.map(|(_, _, _, _, k, n, pays)| (mine[k].clone(), n, pays))
 }
 
+/// What the book's resting plain asks of `g`'s market charge for `n` base units: the quote per base unit (sompi over base
+/// units) of the ask that completes `n` when the cheapest are taken first, each up to what it can deliver now; `None` when
+/// the asks hold less than `n`. The reference of a sale's price floor ([`MaintenanceConfig::sell_floor_bps`]): a holding is
+/// never sold below what buying the same amount back from the book would cost (less the floor's margin), so a low bid
+/// alone cannot take it, and an ask posted to lower the reference must itself offer the whole amount at that price.
+fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i128, i128)> {
+    let (token, program, ext) = *g;
+    let tpl = kob_protocol::artifacts::token_template(program).hash;
+    let mine: Vec<&ListedOrder> = inp
+        .orders
+        .iter()
+        .filter(|o| book_key(o).is_some_and(|k| k.token == token && k.template == tpl && k.extension == ext))
+        .collect();
+    let by_id: BTreeMap<CovId, ListedOrder> = mine.iter().map(|o| (o.id(), (*o).clone())).collect();
+    let none = BTreeSet::new();
+    let cx = CandCtx { t, utc: inp.clock.utc, excluded: &inp.excluded, by_id: &by_id, unaccepted: &none };
+    let mut asks: Vec<(i128, i128, i64)> = candidates_of(&mine, &cx)
+        .into_iter()
+        .filter(|c| c.side == Side::Ask && c.is_plain() && c.trigger.is_none() && c.cap > 0)
+        .filter(|c| !inp.excluded_outpoints.contains(&outpoint(&mine[c.order].order.utxo)))
+        .map(|c| {
+            let (q, s) = c.quote_frac();
+            (q, s, c.cap)
+        })
+        .collect();
+    asks.sort_by(|a, b| (a.0 * b.1).cmp(&(b.0 * a.1)));
+    let mut got: i64 = 0;
+    for (q, s, cap) in asks {
+        got = got.saturating_add(cap);
+        if got >= n {
+            return Some((q, s));
+        }
+    }
+    None
+}
+
 /// The sale of `tokens` (one group) into `bid` for `amount` base units, the operator as taker: the bid pays the operator's
 /// change, the unsold rest comes back as one token UTXO.
 fn sell_action(
@@ -346,7 +387,35 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
             report.skipped.push((g.0, "sell: surplus inventory (the owner sells it off-matcher)".into()));
         }
         if cfg.sell && !held_inventory {
-            if let Some((bid, amount, _)) = best_bid(inp, &g, held, t as i64) {
+            let best = best_bid(inp, &g, held, t as i64);
+            // the price floor: never below `sell_floor_bps` of what the book's asks charge for the same amount
+            let floor_ok = |amount: i64, pays: i64| -> Result<(), String> {
+                if cfg.sell_floor_bps == 0 {
+                    return Ok(());
+                }
+                let Some((q, s)) = ask_reference(inp, &g, amount, t as i64) else {
+                    return Err(format!("sell: no resting asks for {amount} base units to price the sale against"));
+                };
+                // pays / amount >= floor × q / s
+                if pays as i128 * s * 10_000 < cfg.sell_floor_bps as i128 * q * amount as i128 {
+                    return Err(format!(
+                        "sell: the best bid pays {pays} sompi for {amount} base units, below {} bps of the asks' price",
+                        cfg.sell_floor_bps
+                    ));
+                }
+                Ok(())
+            };
+            let best = match best {
+                Some((bid, amount, pays)) => match floor_ok(amount, pays) {
+                    Ok(()) => Some((bid, amount, pays)),
+                    Err(why) => {
+                        report.skipped.push((g.0, why));
+                        None
+                    }
+                },
+                None => None,
+            };
+            if let Some((bid, amount, _)) = best {
                 let rest = held > 0 && held - amount > 0;
                 let carrier_out = if rest { cfg.token_carrier } else { 0 };
                 match sell_action(&bid, amount, &utxos, &funding, operator, t, cfg).and_then(|a| {

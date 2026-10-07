@@ -45,6 +45,12 @@ fn run(inp: &MaintenanceInput, cfg: &MaintenanceConfig) -> MaintReport {
     r
 }
 
+/// A resting ask of the operator's token at 2.70 per whole token with 10 whole tokens: the book's price the sale floor
+/// (`MaintenanceConfig::sell_floor_bps`, 90 %) compares a bid with. It does not cross the 2.60 bids.
+fn market_ask() -> ListedOrder {
+    l_ask_a(300, T8, 9, 270_000_000, 10 * WHOLE)
+}
+
 /// The token outputs of a job (count), and the carrier of the operator's own one holding `amount` (None: there is none).
 fn token_outs(j: &kob_executor::maintenance::MaintJob, p: TemplateId, amount: i64) -> (usize, Option<u64>) {
     let mine = spk_to_string(&tstate(p, amount, pk(MATCHER), false).spk_with(token_template(p)));
@@ -101,7 +107,7 @@ fn the_operators_tokens_are_sold_into_a_bid_left_after_the_tick() {
     // as one UTXO, the bid pays floor(2,000 x (2.60 + tip) / 1,000) = 5.2 KAS (+ its tips) to the operator
     let tokens = vec![own(T8, 1_200), own(T8, 800), own(T8, 500)];
     let bid = l_bid_a(100, T8, 2, P260, 2 * WHOLE);
-    let r = run(&input(tokens.clone(), vec![bid], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(tokens.clone(), vec![bid, market_ask()], vec![]), &MaintenanceConfig::default());
     assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
     let j = &r.jobs[0];
     assert_eq!(j.kind, MaintKind::Sell, "{:?}", r.skipped);
@@ -111,7 +117,7 @@ fn the_operators_tokens_are_sold_into_a_bid_left_after_the_tick() {
     assert!(j.profit > 2 * P260 - KAS as i64 / 10 && j.profit <= 2 * P260 + 2 * TIP, "proceeds less the fee: {}", j.profit);
     // a bid with room for 4 whole tokens takes all 2,500 base units (no whole-lot remainder any more): one token output, the
     // bid's delivery, and every carrier comes back
-    let r = run(&input(tokens, vec![l_bid_a(100, T8, 2, P260, 4 * WHOLE)], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(tokens, vec![l_bid_a(100, T8, 2, P260, 4 * WHOLE), market_ask()], vec![]), &MaintenanceConfig::default());
     assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
     let j = &r.jobs[0];
     assert_eq!(j.kind, MaintKind::Sell, "{:?}", r.skipped);
@@ -144,7 +150,9 @@ fn a_sale_that_does_not_pay_its_fee_is_a_merge() {
         foreign: vec![],
         strays: vec![],
     };
-    let r = run(&input(tokens, vec![low], vec![]), &MaintenanceConfig::default());
+    // (no price floor here: this is the fee rule alone)
+    let cfg = MaintenanceConfig { sell_floor_bps: 0, ..Default::default() };
+    let r = run(&input(tokens, vec![low], vec![]), &cfg);
     assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
     assert_eq!(r.jobs[0].kind, MaintKind::Merge);
     assert!(r.skipped.iter().any(|(_, why)| why.starts_with("sell:")), "{:?}", r.skipped);
@@ -202,7 +210,8 @@ fn maintenance_pays_the_low_rate_and_a_sale_only_what_it_earns() {
     assert_eq!(r.jobs[0].built.fee.fee_rate, 100);
     // a sale at a low rate it pays easily
     let cfg = MaintenanceConfig { fees: fees(150), ..Default::default() };
-    let r = run(&input(vec![own(T8, 1_200), own(T8, 800)], vec![l_bid_a(100, T8, 2, P260, 4 * WHOLE)], vec![]), &cfg);
+    let bids = vec![l_bid_a(100, T8, 2, P260, 4 * WHOLE), market_ask()];
+    let r = run(&input(vec![own(T8, 1_200), own(T8, 800)], bids, vec![]), &cfg);
     assert_eq!((r.jobs[0].kind, r.jobs[0].built.fee.fee_rate), (MaintKind::Sell, 150), "{:?}", r.skipped);
     assert!(r.jobs[0].profit >= 0);
 }
@@ -214,7 +223,7 @@ fn maintenance_pays_the_low_rate_and_a_sale_only_what_it_earns() {
 fn accumulated_surplus_inventory_is_never_sold() {
     use kob_executor::matcher::planner::{InventoryPolicy, InventoryToken};
     let tokens = vec![own(T8, 1_200), own(T8, 800)];
-    let bids = vec![l_bid_a(100, T8, 2, 50_000_000, 4 * WHOLE), l_bid_a(101, T8, 3, P260, 4 * WHOLE)];
+    let bids = vec![l_bid_a(100, T8, 2, 50_000_000, 4 * WHOLE), l_bid_a(101, T8, 3, P260, 4 * WHOLE), market_ask()];
     // unlisted: sold into the best bid
     let r = run(&input(tokens.clone(), bids.clone(), vec![]), &MaintenanceConfig::default());
     assert_eq!(r.jobs[0].kind, MaintKind::Sell);
@@ -230,4 +239,58 @@ fn accumulated_surplus_inventory_is_never_sold() {
         let r = run(&input(vec![own(T8, 2_000)], bids.clone(), vec![]), &cfg);
         assert!(r.jobs.is_empty(), "switch {on}");
     }
+}
+
+/// A plain resting bid of token A (program 8/8) at `price` sompi per whole token, no tip, buying power `amount` base units.
+fn untipped_bid(id: u32, maker: u8, price: i64, amount: i64) -> ListedOrder {
+    let mut b = bid(maker, price, T8);
+    b.token_cov_id = token_a(T8);
+    b.extension_commitment = EXT;
+    b.tip = 0;
+    let v = (b.used(amount).expect("budget") + b.delivery_carrier + b.reserve) as u64;
+    ListedOrder {
+        family: kob_protocol::family::Family::Kcc20,
+        order: OrderUtxo { utxo: utxo(v, 1_000, Some(cid(id))), state: AnyState::KobBid(b) },
+        custody: None,
+        custody_b: None,
+        deadline: None,
+        seen_daa: 1_000,
+        foreign: vec![],
+        strays: vec![],
+    }
+}
+
+/// The sale's price floor (`MaintenanceConfig::sell_floor_bps`, default 90 % of what the book's resting asks charge for the
+/// same amount): a holding is never sold into a bid far below the market, even when the inventory policy that protects
+/// listed tokens is not loaded, and with no asks to price the amount nothing is sold (the UTXOs are merged).
+#[test]
+fn a_sale_never_goes_below_the_price_floor() {
+    // 1,000 whole tokens (2,600 KAS at 2.60) in two UTXOs; a bid at 0.001 KAS per whole token with room for all of it
+    let held = vec![own(T8, 500 * WHOLE), own(T8, 500 * WHOLE)];
+    let low = untipped_bid(900, 7, 100_000, 1_000 * WHOLE);
+    // no asks at all: nothing to price the sale against, merged
+    let r = run(&input(held.clone(), vec![low.clone()], vec![]), &MaintenanceConfig::default());
+    assert!(r.jobs.iter().all(|j| j.kind == MaintKind::Merge), "{:?}", r.skipped);
+    assert!(r.skipped.iter().any(|(_, why)| why.starts_with("sell: no resting asks")), "{:?}", r.skipped);
+    // asks at the market (2.70, 10 whole): too few to price 1,000 whole tokens, merged
+    let r = run(&input(held.clone(), vec![low.clone(), market_ask()], vec![]), &MaintenanceConfig::default());
+    assert!(r.jobs.iter().all(|j| j.kind == MaintKind::Merge), "{:?}", r.skipped);
+    // asks deep enough at the market: the low bid is far below 90 % of their price, merged
+    let deep = l_ask_a(301, T8, 9, 270_000_000, 2_000 * WHOLE);
+    let r = run(&input(held.clone(), vec![low.clone(), deep.clone()], vec![]), &MaintenanceConfig::default());
+    assert!(r.jobs.iter().all(|j| j.kind == MaintKind::Merge), "{:?}", r.skipped);
+    assert!(r.skipped.iter().any(|(_, why)| why.contains("below 9000 bps")), "{:?}", r.skipped);
+    // a bid at 2.50 (93 % of the asks' 2.70) with room for all of it: sold
+    let fair = untipped_bid(901, 8, 250_000_000, 1_000 * WHOLE);
+    let r = run(&input(held.clone(), vec![low.clone(), fair, deep.clone()], vec![]), &MaintenanceConfig::default());
+    assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
+    assert_eq!((r.jobs[0].kind, r.jobs[0].order), (MaintKind::Sell, Some(cid(901))));
+    // a bid at 2.40 (89 %): merged
+    let under = untipped_bid(902, 8, 240_000_000, 1_000 * WHOLE);
+    let r = run(&input(held.clone(), vec![under, deep], vec![]), &MaintenanceConfig::default());
+    assert!(r.jobs.iter().all(|j| j.kind == MaintKind::Merge), "{:?}", r.skipped);
+    // the floor switched off (0): any bid that pays the fee, as before
+    let off = MaintenanceConfig { sell_floor_bps: 0, ..Default::default() };
+    let r = run(&input(held, vec![low], vec![]), &off);
+    assert_eq!((r.jobs[0].kind, r.jobs[0].order), (MaintKind::Sell, Some(cid(900))), "{:?}", r.skipped);
 }
