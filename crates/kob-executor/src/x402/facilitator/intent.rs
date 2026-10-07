@@ -531,6 +531,10 @@ impl Facilitator {
         if x.outcome.is_some() {
             return Ok(false);
         }
+        if self.killed() {
+            // paused: nothing is broadcast; the expiry stays pending
+            return Ok(true);
+        }
         let node = |x: ChainError| unavailable(x.to_string());
         let settle = |outcome: &str| -> Result<bool> {
             self.edit_intent(txid, |en| {
@@ -638,6 +642,10 @@ impl Facilitator {
             }
             State::Failed => return Ok(Drive::Dead(e.reason.clone().unwrap_or_else(|| "failed".into()))),
             _ => {}
+        }
+        if self.killed() {
+            // paused: nothing is broadcast (no execution, no expiry); the intent waits
+            return Ok(Drive::Waiting("paused"));
         }
         let required = Finality::parse(&e.finality).unwrap_or(Finality::Accepted).max(Finality::Accepted);
         let facts: &IntentFacts = &rec.facts;

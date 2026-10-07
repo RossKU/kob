@@ -141,6 +141,7 @@ pub fn prepare_with(built: Built, chain: Arc<dyn ChainView>, book: Option<BookFn
             poll_interval: Duration::from_millis(cfg.poll_interval_ms),
             reorg_watch_daa: cfg.reorg_watch_daa,
             kill_switch_file: cfg.kill_switch_file.clone().map(Into::into),
+            pause_file: cfg.pause_file.clone(),
             ..Default::default()
         },
     );

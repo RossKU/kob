@@ -51,7 +51,7 @@ node (wRPC JSON)
 KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kob-executor run \
   --network testnet-10 --rpc-url ws://127.0.0.1:18210 \
   --data-dir /var/lib/kob-index --tokens /etc/kob/tokens.json --listen 127.0.0.1:8090 \
-  --pause-file /run/kob/pause --metrics-file /var/lib/node_exporter/kob.prom
+  --pause-file /var/lib/kob-index/pause --metrics-file /var/lib/node_exporter/kob.prom
 ```
 
 ### A.1 One store, one follower, one truth
@@ -152,7 +152,7 @@ writers on one data directory.
 [Service]
 ExecStart=/usr/local/bin/kob-executor run --network testnet-10 --rpc-url ws://127.0.0.1:18210 \
   --data-dir /var/lib/kob-index --tokens /etc/kob/tokens.json --listen 127.0.0.1:8090 \
-  --pause-file /run/kob/pause --metrics-file /var/lib/node_exporter/kob.prom
+  --pause-file /var/lib/kob-index/pause --metrics-file /var/lib/node_exporter/kob.prom
 LoadCredential=kob-operator-key:/etc/kob/operator.key
 DynamicUser=yes
 StateDirectory=kob-index
@@ -164,6 +164,12 @@ Restart=always
 
 Keep the data directory on a path the unit may write (`StateDirectory=kob-index` is
 `/var/lib/kob-index`).
+
+**Pause file.** `touch /var/lib/kob-index/pause` pauses the matcher, the keepers and the x402 facilitator of the process
+(nothing is built, verified, settled or broadcast; the indexer keeps following); `rm` resumes. Keep it on persistent
+storage, never under `/run` (tmpfs): a pause must survive a reboot, or `Restart=always` brings the unit back trading. The
+file fails closed: when its state cannot be read (the unit may not look into its directory, an I/O error) the process
+counts as paused and warns once, so check `kob_matcher_paused` after a deployment.
 
 **Deployment build.** Every build embeds the reference templates (protocol v2.6: no receipt covenant, no `R_ID`, no
 genesis step; conditional orders arm in every build). The deployment variant only records its network: it embeds
@@ -216,6 +222,11 @@ serves the facilitator (`GET /supported`, `POST /verify`, `POST /settle`, `GET /
 in the same process, on the configuration's `listen` address (bound before anything else starts). It
 holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignored) and its `network`
 (`kaspa:testnet-10`, `kaspa:mainnet`) must be the one the indexer follows, or `run` refuses to start.
+
+* **Pausing.** `run`'s `--pause-file` disables the facilitator as its own `killSwitchFile` does: while either exists,
+  `/verify` and `/settle` are refused (503, `/supported` empty) and no intent execution or expiry is broadcast (they wait
+  and continue once both are gone). A relative `killSwitchFile` is resolved against the configuration file's directory
+  (the example's `x402.kill` sits next to the file), not the working directory.
 
 * **Fees.** The intent executions (high) and expiries (normal) the facilitator builds are priced with the runner's rates (C,
   "Fee policy"), within what the intent itself can pay; the payers' own transactions are submitted as signed.
@@ -1682,8 +1693,8 @@ transaction ids (v0 and v1) verify, a tampered copy does not.
   resting limits and if-done entries; an if-done stop entry only once armed: unarmed, nothing fills it at its limit before its
   trigger evidence, and its limit, below the market for a sell stop, read as a crossed book); use `/v1/orders`. A database
   written by an earlier build is corrected at start-up (`backfill_stop_entry_books`).
-* No mempool tier. The kill switch is the executor's `--pause-file` (Part C); it stops the matcher
-  and the keepers, not the indexer.
+* No mempool tier. The kill switch is the executor's `--pause-file` (Part C); it stops the matcher,
+  the keepers and (in `run`) the x402 facilitator, not the indexer.
 * A bid's remaining amount is an upper bound derived from its escrow (its buying power; its quantity is a budget).
 * After a gap adoption the order's custody is unknown until its next spend, so the order is not
   listed until then.
@@ -2075,7 +2086,7 @@ kob-executor keep --book-file book.json --metrics-file /var/lib/node_exporter/ko
 | `--no-refund` (keep) | off | disable refunds, kills and closes |
 | `--sweep-own-strays` (keep) | off | sweep the strays of the operator's own orders IN PLACE (`SweepOrder`, a `SWEEP` record: the order continues unchanged; own-token, token-B and foreign strays, per token within its program's inputs) |
 | `--return-foreign-strays` (keep) | off | carry proven FOREIGN strays (tokens other than the order's own) back to the maker inside the refund, kill or close that ends an order (permissionless: no refund path reads another token; after the order ends nothing could move them). A job that would not pay with them is built without them |
-| `--pause-file` | none | kill switch: nothing is built or submitted while the file exists |
+| `--pause-file` | none | kill switch: nothing is built or submitted while the file exists (or cannot be checked); keep it on persistent storage |
 | `--dry-run`, `--offline` | off | no submission / no node |
 
 A systemd unit for the keyed role:
@@ -2083,7 +2094,7 @@ A systemd unit for the keyed role:
 ```
 [Service]
 ExecStart=/usr/local/bin/kob-executor match --book-file /var/lib/kob/book.json --keep \
-  --rpc-url ws://127.0.0.1:18210 --pause-file /run/kob/pause --metrics-file /var/lib/node_exporter/kob.prom
+  --rpc-url ws://127.0.0.1:18210 --pause-file /var/lib/kob/pause --metrics-file /var/lib/node_exporter/kob.prom
 LoadCredential=kob-operator-key:/etc/kob/operator.key
 DynamicUser=yes
 NoNewPrivileges=yes
@@ -2092,7 +2103,9 @@ ReadWritePaths=/var/lib/node_exporter
 Restart=always
 ```
 
-Pausing: `touch /run/kob/pause` (acceptance tracking continues; delete the file to resume).
+Pausing: `touch /var/lib/kob/pause` (acceptance tracking continues; delete the file to resume). The file must be on
+persistent storage (not `/run`, which a reboot empties) in a directory the unit can look into: a pause file whose state
+cannot be read counts as present (paused, with a warning).
 
 ### Monitoring
 

@@ -523,6 +523,42 @@ fn an_unexecuted_intent_is_expired_on_chain_by_the_facilitator_after_its_deadlin
     assert_eq!(e.intent.unwrap().expiry.unwrap().outcome.as_deref(), Some("expired"));
 }
 
+/// While the facilitator is paused (kill switch, `killSwitchFile`, or `run --pause-file`) the reconcile loop broadcasts
+/// nothing: no intent execution and no expiry. The intent waits and is expired once the pause is lifted.
+#[test]
+fn a_paused_facilitator_broadcasts_no_intent_execution_or_expiry() {
+    let w = world();
+    let offer = w.kas_intent_offer(5 * KAS, MERCHANT);
+    {
+        let mut b = w.book.lock().unwrap();
+        b.bids.truncate(1);
+        let o = b.bids[0].utxo.clone();
+        *w.view.rival.lock().unwrap() = Some(Outpoint::new(o.transaction_id, o.index));
+    }
+    let p = w.pay_t2k(&offer, RH, 3 * WHOLE);
+    w.fac.set_settle_wait(Duration::from_millis(300));
+    let r = with_miner(&w, || w.fac.settle(SHOP, &request(&offer, &p.payload)));
+    assert_eq!(diag(&r), "settlement_pending", "{r:?}");
+    w.fac.set_kill(true);
+    let submits = w.chain.submit_count();
+    w.clock.set(NOW_MS + 300_000);
+    for _ in 0..3 {
+        w.fac.reconcile();
+    }
+    assert_eq!(w.chain.submit_count(), submits, "nothing is broadcast while paused");
+    let e = w.ledger.get(&hex(&p.txid)).unwrap();
+    assert_ne!(e.state, State::Failed, "the intent waits");
+    assert!(e.intent.unwrap().expiry.is_none_or(|x| x.txid.is_none()));
+    // lifted: the deadline has passed, the facilitator ends the intent and submits the expiry
+    w.fac.set_kill(false);
+    w.fac.reconcile();
+    w.fac.reconcile();
+    let e = w.ledger.get(&hex(&p.txid)).unwrap();
+    assert_eq!(e.state, State::Failed);
+    assert!(e.intent.unwrap().expiry.expect("expiry").txid.is_some(), "the expiry was submitted");
+    assert!(w.chain.submit_count() > submits);
+}
+
 /// C5 X-8: an expiry that waits in the mempool is replaced (replace-by-fee) at the high rate a minute later: the new one
 /// pays more within EXPIRE_MAX_FEE, takes the old one's place, and ends the intent.
 #[test]

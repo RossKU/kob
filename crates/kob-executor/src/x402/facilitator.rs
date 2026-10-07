@@ -90,6 +90,8 @@ pub struct FacilitatorConfig {
     pub reorg_watch_daa: u64,
     /// While this file exists the facilitator is disabled.
     pub kill_switch_file: Option<PathBuf>,
+    /// The process's pause file (`kob-executor run --pause-file`): disables the facilitator like `kill_switch_file`.
+    pub pause_file: Option<PathBuf>,
     /// A `pending` entry the node has never seen (the process died before the broadcast) is failed and its outpoints released
     /// once it is this old. Until then only the identical retry resolves it. Safe: a success is only ever reported
     /// for the transaction whose own finality was observed.
@@ -109,6 +111,7 @@ impl Default for FacilitatorConfig {
             poll_interval: Duration::from_millis(200),
             reorg_watch_daa: 36_000,
             kill_switch_file: None,
+            pause_file: None,
             pending_grace: Duration::from_secs(15 * 60),
             ambiguous_grace: Duration::from_secs(60 * 60),
         }
@@ -368,7 +371,8 @@ impl Facilitator {
         self
     }
 
-    /// Kill switch: while set (or while the kill-switch file exists) verify and settle are refused.
+    /// Kill switch: while set (or while the kill-switch or pause file exists) verify and settle are refused and nothing is
+    /// broadcast (intent executions and expiries wait).
     pub fn set_kill(&self, on: bool) {
         self.kill.store(on, Ordering::SeqCst);
     }
@@ -379,7 +383,9 @@ impl Facilitator {
     }
 
     pub fn killed(&self) -> bool {
-        self.kill.load(Ordering::SeqCst) || self.config.kill_switch_file.as_ref().is_some_and(|p| p.exists())
+        self.kill.load(Ordering::SeqCst)
+            || crate::pause::is_set_opt(self.config.kill_switch_file.as_deref())
+            || crate::pause::is_set_opt(self.config.pause_file.as_deref())
     }
 
     // ------------------------------------------------------------------------------- supported

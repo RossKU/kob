@@ -337,7 +337,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
     }
 
     fn paused(&self) -> bool {
-        self.cfg.pause_file.as_ref().is_some_and(|p| p.exists())
+        crate::pause::is_set_opt(self.cfg.pause_file.as_deref())
     }
 
     /// Reports a tracker step and resends what a reorg moved back to pending.

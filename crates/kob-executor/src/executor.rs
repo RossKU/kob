@@ -149,7 +149,8 @@ pub struct RunArgs {
     pub fee_rate: u64,
     #[command(flatten)]
     pub fees: crate::fee::FeeArgs,
-    /// Kill switch: nothing is built or submitted while this file exists.
+    /// Kill switch: nothing is built or submitted while this file exists (the matcher, the keepers and the x402
+    /// facilitator). A file whose state cannot be read (permission denied) counts as present. Keep it on persistent storage.
     #[arg(long)]
     pub pause_file: Option<PathBuf>,
     /// Prometheus textfile-collector output (`.prom`).
@@ -351,15 +352,18 @@ where
 
 /// The x402 facilitator of `kob-executor run`: the configuration at `path` with the indexer's node
 /// and network, over [`IndexedChain`](crate::x402::indexed::IndexedChain) (node RPC + the indexer's
-/// acceptance tracking).
+/// acceptance tracking). `pause_file` (`--pause-file`) disables it like its own `killSwitchFile`: nothing is verified,
+/// settled or broadcast while it exists.
 pub fn x402_service(
     path: &std::path::Path,
     index: &crate::config::IndexerConfig,
     ingest: Arc<Mutex<Ingest>>,
+    pause_file: Option<PathBuf>,
 ) -> Result<crate::x402::Service> {
     use crate::x402::config::X402Config;
     let mut xcfg = X402Config::load(path)?;
     xcfg.node = index.rpc_url.clone();
+    xcfg.pause_file = pause_file;
     let built = xcfg.build()?;
     if built.network.registry_name() != index.network {
         bail!("x402: the facilitator is configured for {}, the indexer follows {}", built.network, index.network);
@@ -420,7 +424,8 @@ pub async fn run(a: RunArgs) -> Result<()> {
             let ingest = indexer.ingest.clone();
             let c = cfg.clone();
             let p = p.clone();
-            Some(tokio::task::block_in_place(move || x402_service(&p, &c, ingest))?)
+            let pause = a.pause_file.clone();
+            Some(tokio::task::block_in_place(move || x402_service(&p, &c, ingest, pause))?)
         }
         None => None,
     };

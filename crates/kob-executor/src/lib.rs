@@ -12,6 +12,7 @@ pub mod keepers;
 pub mod maintenance;
 pub mod matcher;
 pub mod model;
+pub mod pause;
 pub mod recover;
 pub mod rpc;
 pub mod sanity;

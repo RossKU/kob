@@ -273,7 +273,11 @@ pub struct X402Config {
     pub ipv6_site_prefix_bits: u8,
     /// A response write that makes no progress for this long (the client stopped reading) closes the connection; 0 = off.
     pub write_timeout_ms: u64,
+    /// Relative to the configuration file's directory ([`X402Config::load`]).
     pub kill_switch_file: Option<String>,
+    /// The process's pause file (`kob-executor run --pause-file`); not a configuration key.
+    #[serde(skip)]
+    pub pause_file: Option<std::path::PathBuf>,
     /// Reverse proxies (CIDR or bare IP) whose forwarded-client header is believed. Behind a proxy on the same host
     /// EVERY request comes from 127.0.0.1: without this the per-IP limits are one shared bucket, and with it `/metrics` no longer
     /// trusts the loopback peer (the operator uses the admin key).
@@ -327,6 +331,7 @@ impl Default for X402Config {
             ipv6_site_prefix_bits: 48,
             write_timeout_ms: 30_000,
             kill_switch_file: None,
+            pause_file: None,
             trusted_proxies: vec![],
             client_ip_header: "x-forwarded-for".into(),
             metrics_loopback: true,
@@ -385,9 +390,18 @@ impl X402Config {
     }
 
     /// Reads and parses a config file.
+    /// Reads the configuration file. A relative `killSwitchFile` is resolved against the file's directory (not the process's
+    /// working directory, which is `/` under systemd).
     pub fn load(path: impl AsRef<Path>) -> Result<X402Config, ConfigError> {
-        let text = std::fs::read_to_string(path.as_ref()).map_err(|e| ConfigError(format!("{}: {e}", path.as_ref().display())))?;
-        Self::from_json(&text)
+        let path = path.as_ref();
+        let text = std::fs::read_to_string(path).map_err(|e| ConfigError(format!("{}: {e}", path.display())))?;
+        let mut cfg = Self::from_json(&text)?;
+        if let Some(k) = cfg.kill_switch_file.as_deref().filter(|k| Path::new(k).is_relative()) {
+            let abs = std::path::absolute(path).map_err(|e| ConfigError(format!("{}: {e}", path.display())))?;
+            let dir = abs.parent().unwrap_or(Path::new("/"));
+            cfg.kill_switch_file = Some(dir.join(k).to_string_lossy().into_owned());
+        }
+        Ok(cfg)
     }
 
     pub fn body_deadline(&self) -> Duration {
@@ -685,6 +699,22 @@ mod tests {
         } else {
             assert!(b.is_err());
         }
+    }
+
+    #[test]
+    fn a_relative_kill_switch_file_is_next_to_the_configuration_file() {
+        let d = tempfile::tempdir().unwrap();
+        let cfg_dir = d.path().join("etc");
+        std::fs::create_dir(&cfg_dir).unwrap();
+        let path = cfg_dir.join("x402.json");
+        let base = r#"{"network":"kaspa:testnet-10","auth":"open","listen":"127.0.0.1:8402","ledger":":memory:""#;
+        std::fs::write(&path, format!(r#"{base},"killSwitchFile":"x402.kill"}}"#)).unwrap();
+        let c = X402Config::load(&path).unwrap();
+        assert_eq!(c.kill_switch_file.as_deref().map(std::path::PathBuf::from), Some(cfg_dir.join("x402.kill")));
+        std::fs::write(&path, format!(r#"{base},"killSwitchFile":"/var/lib/kob/x402.kill"}}"#)).unwrap();
+        assert_eq!(X402Config::load(&path).unwrap().kill_switch_file.as_deref(), Some("/var/lib/kob/x402.kill"));
+        std::fs::write(&path, format!("{base}}}")).unwrap();
+        assert_eq!(X402Config::load(&path).unwrap().kill_switch_file, None);
     }
 
     #[test]

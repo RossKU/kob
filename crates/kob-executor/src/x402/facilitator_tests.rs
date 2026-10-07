@@ -870,6 +870,38 @@ fn kill_switch_file_disables_the_facilitator() {
     assert!(!fac.killed());
 }
 
+/// `kob-executor run --pause-file` disables the facilitator like its own kill-switch file; a pause file whose state
+/// cannot be read counts as present.
+#[test]
+fn the_process_pause_file_disables_the_facilitator() {
+    let dir = tempfile::tempdir().unwrap();
+    let flag = dir.path().join("pause");
+    let f = Fixture::new();
+    let fac = Facilitator::new(
+        f.fac.policy.clone(),
+        f.chain.clone(),
+        f.clock.clone(),
+        f.ledger.clone(),
+        super::facilitator::FacilitatorConfig { pause_file: Some(flag.clone()), ..Default::default() },
+    );
+    assert!(!fac.killed());
+    std::fs::write(&flag, b"").unwrap();
+    assert!(fac.killed());
+    assert!(fac.supported()["kinds"].as_array().unwrap().is_empty());
+    std::fs::remove_file(&flag).unwrap();
+    assert!(!fac.killed());
+    // a path below a regular file cannot be checked: paused
+    std::fs::write(dir.path().join("file"), b"").unwrap();
+    let fac = Facilitator::new(
+        f.fac.policy.clone(),
+        f.chain.clone(),
+        f.clock.clone(),
+        f.ledger.clone(),
+        super::facilitator::FacilitatorConfig { kill_switch_file: Some(dir.path().join("file").join("kill")), ..Default::default() },
+    );
+    assert!(fac.killed());
+}
+
 fn facilitator_with(policy: Policy) -> Facilitator {
     let f = Fixture::new();
     Facilitator::new(policy, f.chain.clone(), f.clock.clone(), f.ledger.clone(), Default::default())
