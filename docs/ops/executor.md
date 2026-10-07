@@ -1866,7 +1866,9 @@ earns `refundTip − fee` (defaults 0.030 to 0.125 KAS per program, about twice 
 
 Competing matchers race: the loser's transaction is a mempool double spend (`RejectDoubleSpendInMempool`)
 or finds its inputs gone. Both are benign here: the orders involved back off (20 DAA, doubling to
-600) and the book is re-read. The executor never calls `submitTransactionReplacement`: no blind
+600) and the book is re-read. When the node names the outpoint spent elsewhere and it is an input of one order of the batch
+(its order UTXO or its custody: a cancel, a refund, another matcher's fill), only that order backs off; the other orders of
+the batch did nothing wrong and are planned again at once. A refusal that names no order's input backs off all of them. The executor never calls `submitTransactionReplacement`: no blind
 replacement of anyone's transaction, its own included.
 
 ### Fee policy

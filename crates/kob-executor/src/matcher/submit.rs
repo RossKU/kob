@@ -2,8 +2,9 @@
 //! §7, §8).
 //!
 //! * Every transaction is engine-validated before it reaches [`Tracker::submit`].
-//! * `RejectDoubleSpendInMempool` is benign (a competing matcher, a cancel, a refund): the orders
-//!   of the transaction back off exponentially; nothing is ever replaced blindly (the matcher never
+//! * `RejectDoubleSpendInMempool` is benign (a competing matcher, a cancel, a refund): the order
+//!   whose input the node names backs off exponentially (every order of the transaction when the
+//!   input is no order's, [`Tracked::owners`]); nothing is ever replaced blindly (the matcher never
 //!   calls `submitTransactionReplacement`).
 //! * Acceptance comes from `getVirtualChainFromBlockV2` (`Low`): a transaction is *accepted* when a
 //!   chain block accepts it and *final* (done) after `final_depth` more DAA; a `removed` chain
@@ -46,6 +47,10 @@ pub struct Tracked {
     pub spends: BTreeSet<Outpoint>,
     /// Order covenant ids it spends (legs, merged entries).
     pub orders: BTreeSet<CovId>,
+    /// The order each of its inputs belongs to, where known (an order's own UTXO, its custody): a mempool double spend of one
+    /// of these outpoints backs off that order only. Empty, or a conflict on any other input: every order of the transaction
+    /// backs off.
+    pub owners: BTreeMap<Outpoint, CovId>,
     /// The transaction's own outpoints its children spend (chained steps).
     pub parent: Option<[u8; 32]>,
     pub submitted_daa: u64,
@@ -72,6 +77,33 @@ pub struct TrackerEvents {
     pub finalized: Vec<Tracked>,
     pub rolled_back: Vec<[u8; 32]>,
     pub dropped: Vec<[u8; 32]>,
+}
+
+/// The outpoint a node's double-spend rejection names: rusty-kaspa's `output (<txid>, <index>) already spent by transaction
+/// <txid> in the mempool` (`TransactionOutpoint` displays as `(<txid>, <index>)`), or `output <txid>:<index> ...`.
+pub fn double_spent_outpoint(msg: &str) -> Option<Outpoint> {
+    let at = msg.find("output ")? + "output ".len();
+    let rest = &msg[at..];
+    let end = rest.find(" already spent by transaction")?;
+    let s = rest[..end].trim();
+    let (txid, index) = match s.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        Some(inner) => inner.split_once(',')?,
+        None => s.rsplit_once(':')?,
+    };
+    let txid = crate::hex::Hash32::parse(txid.trim()).ok()?.0;
+    Some((txid, index.trim().parse().ok()?))
+}
+
+/// The orders a refused submission backs off: on a mempool double spend of an input whose order is known
+/// ([`Tracked::owners`]), that order alone (the others in the transaction did nothing wrong and are planned again at once);
+/// otherwise every order of the transaction.
+fn conflict_orders(t: &Tracked, outcome: SubmitOutcome, msg: Option<&str>) -> BTreeSet<CovId> {
+    if outcome == SubmitOutcome::DoubleSpend {
+        if let Some(id) = msg.and_then(double_spent_outpoint).and_then(|op| t.owners.get(&op)) {
+            return [*id].into_iter().collect();
+        }
+    }
+    t.orders.clone()
 }
 
 /// Follows submitted transactions until they are final.
@@ -125,9 +157,14 @@ impl Tracker {
                 return SubmitOutcome::MissingInput;
             }
         }
+        let mut msg: Option<String> = None;
         let outcome = match node.submit(t.rpc_tx.clone()).await {
             Ok(_) => SubmitOutcome::Accepted,
-            Err(RpcError::Node(m)) => classify_submit_error(&m),
+            Err(RpcError::Node(m)) => {
+                let o = classify_submit_error(&m);
+                msg = Some(m);
+                o
+            }
             Err(_) => SubmitOutcome::Unknown,
         };
         match outcome {
@@ -140,7 +177,8 @@ impl Tracker {
             }
             SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput => {
                 self.conflicts += 1;
-                self.back_off(&t.orders, daa);
+                let ids = conflict_orders(&t, outcome, msg.as_deref());
+                self.back_off(&ids, daa);
             }
             SubmitOutcome::Busy => self.back_off(&t.orders, daa),
             SubmitOutcome::Unknown => {
@@ -166,9 +204,14 @@ impl Tracker {
             self.txs.values().filter(|t| t.unconfirmed && t.accepted.is_none()).map(|t| (t.txid, t.rpc_tx.clone())).collect();
         let mut out = vec![];
         for (id, rpc) in todo {
+            let mut msg: Option<String> = None;
             let outcome = match node.submit(rpc).await {
                 Ok(_) => SubmitOutcome::Accepted,
-                Err(RpcError::Node(m)) => classify_submit_error(&m),
+                Err(RpcError::Node(m)) => {
+                    let o = classify_submit_error(&m);
+                    msg = Some(m);
+                    o
+                }
                 Err(_) => SubmitOutcome::Unknown,
             };
             match outcome {
@@ -186,7 +229,8 @@ impl Tracker {
                         } else {
                             self.conflicts += 1;
                         }
-                        self.back_off(&t.orders, daa);
+                        let ids = conflict_orders(&t, outcome, msg.as_deref());
+                        self.back_off(&ids, daa);
                     }
                 }
             }
@@ -293,6 +337,7 @@ mod tests {
             txid: [n; 32],
             spends: [([n; 32], 0)].into_iter().collect(),
             orders: [[n; 32]].into_iter().collect(),
+            owners: BTreeMap::new(),
             parent: None,
             submitted_daa: daa,
             rpc_tx: Value::Null,
@@ -360,6 +405,36 @@ mod tests {
         assert_eq!(ev.finalized.iter().map(|x| x.txid).collect::<Vec<_>>(), vec![[1; 32]]);
         assert_eq!(ev.dropped, vec![[2; 32]]);
         assert!(t.txs.is_empty());
+    }
+
+    #[test]
+    fn a_double_spend_names_its_outpoint() {
+        let id = "ab".repeat(32);
+        let want = Some(([0xab; 32], 3));
+        // rusty-kaspa's mempool rule error (`TransactionOutpoint` displays as `(<txid>, <index>)`), as the RPC wraps it
+        let m = format!("Rejected transaction {id}: output ({id}, 3) already spent by transaction {} in the mempool", "cd".repeat(32));
+        assert_eq!(double_spent_outpoint(&m), want);
+        assert_eq!(double_spent_outpoint(&format!("output {id}:3 already spent by transaction ee in the mempool")), want);
+        assert_eq!(double_spent_outpoint("output ab:0 already spent by transaction cd in the mempool"), None, "not a txid");
+        assert_eq!(double_spent_outpoint("transaction is an orphan"), None);
+    }
+
+    #[test]
+    fn a_double_spend_backs_off_only_the_order_whose_input_it_names() {
+        let mut t = tracked(1, 100);
+        t.orders = [[1; 32], [2; 32], [3; 32]].into_iter().collect();
+        t.owners = [(([0x11; 32], 0), [1; 32]), (([0x22; 32], 1), [2; 32])].into_iter().collect();
+        let ds = |op: &str| format!("output {op} already spent by transaction {} in the mempool", "ee".repeat(32));
+        let named = ds(&format!("({}, 1)", "22".repeat(32)));
+        let only = |ids: BTreeSet<CovId>| ids.into_iter().collect::<Vec<_>>();
+        assert_eq!(only(conflict_orders(&t, SubmitOutcome::DoubleSpend, Some(&named))), vec![[2; 32]]);
+        // an input no order owns (the operator's funding), an unparsable message, or no message: every order
+        let funding = ds(&format!("({}, 0)", "99".repeat(32)));
+        assert_eq!(conflict_orders(&t, SubmitOutcome::DoubleSpend, Some(&funding)), t.orders);
+        assert_eq!(conflict_orders(&t, SubmitOutcome::DoubleSpend, Some("double spend")), t.orders);
+        assert_eq!(conflict_orders(&t, SubmitOutcome::DoubleSpend, None), t.orders);
+        // a missing input names nothing: every order
+        assert_eq!(conflict_orders(&t, SubmitOutcome::MissingInput, Some(&named)), t.orders);
     }
 
     #[test]

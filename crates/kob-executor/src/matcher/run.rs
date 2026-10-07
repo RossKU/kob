@@ -279,6 +279,24 @@ fn busy_orders(orders: &[ListedOrder], spent: &BTreeSet<super::book::Outpoint>) 
         .collect()
 }
 
+/// The order each input of a matcher transaction belongs to: an order UTXO (its covenant id is the order's), and the custody
+/// of a listed order the transaction spends ([`Tracked::owners`]: a mempool double spend backs off that order alone).
+fn input_owners(p: &super::engine::Prepared, orders: &[ListedOrder]) -> BTreeMap<super::book::Outpoint, CovId> {
+    let ids = p.plan.spent_ids();
+    let mut owners = BTreeMap::new();
+    for i in &p.signed.tx.inputs {
+        if let Some(id) = i.utxo.covenant_id.filter(|c| ids.contains(c)) {
+            owners.insert((i.transaction_id, i.index), id);
+        }
+    }
+    for o in orders.iter().filter(|o| ids.contains(&o.id())) {
+        for c in o.custody.iter().chain(o.custody_b.iter()) {
+            owners.insert(outpoint(&c.utxo), o.id());
+        }
+    }
+    owners
+}
+
 impl<N: NodeApi, S: BookSource> Runner<N, S> {
     pub fn new(node: N, source: S, signer: Box<dyn Signer>, cfg: RunConfig) -> Self {
         let tracker = Tracker::new(cfg.tracker.clone());
@@ -579,6 +597,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     txid: p.txid(),
                     spends: p.signed.tx.inputs.iter().map(|i| (i.transaction_id, i.index)).collect(),
                     orders: p.plan.spent_ids(),
+                    owners: input_owners(&p, &book.orders),
                     parent: p.parent,
                     submitted_daa: daa,
                     rpc_tx: rpc_json(&p.signed)?,
@@ -660,6 +679,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     txid: j.signed.tx.id,
                     spends: j.spends.clone(),
                     orders: [j.order].into_iter().collect(),
+                    owners: BTreeMap::new(),
                     parent: None,
                     submitted_daa: daa,
                     rpc_tx: rpc_json(&j.signed)?,
@@ -743,6 +763,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 txid: j.signed.tx.id,
                 spends: j.spends.clone(),
                 orders: j.order.into_iter().collect(),
+                owners: BTreeMap::new(),
                 parent: None,
                 submitted_daa: daa,
                 rpc_tx: rpc_json(&j.signed)?,
