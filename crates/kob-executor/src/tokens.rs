@@ -2,8 +2,8 @@
 //!
 //! The allowlist is a config input (`--tokens registry/tokens.json`, produced by another branch).
 //! Its exact schema is owned by that branch, so the loader is deliberately tolerant: it accepts a
-//! bare array or an object with a `tokens` array, snake_case or camelCase keys, and ignores
-//! unknown fields. Only the covenant id is mandatory.
+//! bare array or an object with a `tokens` array and snake_case or camelCase keys (and their aliases); an unknown key
+//! is refused, so a misspelt pin is never dropped silently. Only the covenant id is mandatory.
 //!
 //! **Strict templates, open tokens.** A registry document (`registry/tokens.json`) carries the STRICT template list (the reviewed token
 //! programs) and the token entries. Every order whose token program (template hash and family) is on the strict list is listed,
@@ -82,6 +82,32 @@ pub struct StrictTemplate {
 fn yes() -> bool {
     true
 }
+
+/// Every key a [`TokenEntry`] of the list format may carry (its fields and their aliases, and the `genesis_verified` flag read
+/// from the raw document). Anything else is refused.
+const TOKEN_ENTRY_KEYS: &[&str] = &[
+    "ticker",
+    "symbol",
+    "name",
+    "covenant_id",
+    "covenantId",
+    "id",
+    "template_hash",
+    "templateHash",
+    "tokenTemplateHash",
+    "token_template_hash",
+    "extension_commitment",
+    "extensionCommitment",
+    "decimals",
+    "family",
+    "enabled",
+    "official",
+    "template_id",
+    "templateId",
+    "powers",
+    "genesis_verified",
+    "genesisVerified",
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum TokenLoadError {
@@ -204,6 +230,17 @@ impl TokenAllowlist {
             serde_json::Value::Array(a) => a.as_slice(),
             v => v.get("tokens").and_then(|t| t.as_array()).map(Vec::as_slice).unwrap_or(&[]),
         };
+        // a misspelt key (`templatHash`, `decimalz`) would silently drop the check it names: every key must be a known one
+        for (i, e) in entries.iter().enumerate() {
+            if let Some(obj) = e.as_object() {
+                if let Some(k) = obj.keys().find(|k| !TOKEN_ENTRY_KEYS.contains(&k.as_str())) {
+                    return Err(serde_json::Error::custom(format!(
+                        "token entry {i}: unknown key {k:?} (known: {})",
+                        TOKEN_ENTRY_KEYS.join(", ")
+                    )));
+                }
+            }
+        }
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum Doc {
@@ -450,7 +487,7 @@ mod tests {
     #[test]
     fn parses_both_shapes_and_key_styles() {
         let a = format!(r#"[{{"ticker":"KRON","covenantId":"{}","decimals":3}}]"#, h(1));
-        let b = format!(r#"{{"tokens":[{{"symbol":"KRON","covenant_id":"{}","decimals":3,"extra":1}}]}}"#, h(1));
+        let b = format!(r#"{{"tokens":[{{"symbol":"KRON","covenant_id":"{}","decimals":3,"genesisVerified":true}}]}}"#, h(1));
         for s in [a, b] {
             let t = TokenAllowlist::parse(&s).unwrap();
             assert_eq!(t.len(), 1);
@@ -459,6 +496,19 @@ mod tests {
         }
         let off = format!(r#"[{{"covenantId":"{}","enabled":false}}]"#, h(2));
         assert!(TokenAllowlist::parse(&off).unwrap().is_empty());
+    }
+
+    /// A misspelt key would drop the pin it names without a word: every key of an entry must be a known one.
+    #[test]
+    fn an_unknown_key_of_a_token_entry_is_refused() {
+        for doc in [
+            format!(r#"[{{"ticker":"TST","covenantId":"{}","templatHash":"{}","decimals":8}}]"#, h(1), h(2)),
+            format!(r#"[{{"ticker":"TST","covenantId":"{}","decimalz":8}}]"#, h(1)),
+            format!(r#"{{"tokens":[{{"covenantId":"{}","extra":1}}]}}"#, h(1)),
+        ] {
+            let e = TokenAllowlist::parse(&doc).unwrap_err().to_string();
+            assert!(e.contains("unknown key"), "{e}");
+        }
     }
 
     /// The standard scale of a token is `10^decimals`, capped at `10^9` (the largest scale the builders accept).

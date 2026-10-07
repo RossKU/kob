@@ -1018,7 +1018,7 @@ with `Restart=on-failure`; state is durable across restarts. The template versio
 `templates`; it is validated by `kob_protocol::registry` and only its `listed` tokens enter the list, with
 their template hash, family, extension commitment and `decimals`) or a bare array / `{"tokens": [...]}` with
 snake_case or camelCase keys, where only the covenant id is mandatory. Optional `templateHash`,
-`extensionCommitment`, `family` and `decimals` tighten the rule for that token (unknown keys are ignored).
+`extensionCommitment`, `family` and `decimals` tighten the rule for that token (an unknown or misspelt key is refused at startup, so a pin is never dropped silently).
 
 **Strict templates, open tokens.** A registry document also carries the STRICT template list (its `reviewed` templates; `registry/README.md`;
 no template is `reviewed` yet in the shipped `registry/tokens.json`, so it lists nothing until one is). With one loaded, the list is OPEN: every order whose token program (template hash and
