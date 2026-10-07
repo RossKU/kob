@@ -1238,8 +1238,16 @@ pub fn preflight(json: &str) -> R<String> {
                 Some(units) => units as u64,
                 None => f.intent.amount,
             };
+            // the bound counts one asset: KAS, or the covenant id of the very token the intent sells (another token's units are
+            // not this one's)
+            let bound_asset = pay_bound(p.max_pay_asset.as_deref(), 0).asset;
             let pays_kas = f.state.max_sell().is_none();
-            if max_pay.is_some() && pay_bound(p.max_pay_asset.as_deref(), 0).asset.eq_ignore_ascii_case("KAS") != pays_kas {
+            let same_asset = if pays_kas {
+                bound_asset.eq_ignore_ascii_case("KAS")
+            } else {
+                bound_asset.eq_ignore_ascii_case(&f.pay_asset) && !f.pay_asset.eq_ignore_ascii_case("KAS")
+            };
+            if max_pay.is_some() && !same_asset {
                 return Err(X402Error::payload(
                     kob_x402::error::Diag::PayAssetNotAccepted,
                     "the payer's bound counts another asset than the intent pays with",

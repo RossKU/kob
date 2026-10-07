@@ -85,6 +85,13 @@ test('one signature creates an intent the Rust verifier accepts; the payer can c
   const kasBound = wasm.preflight({ requirements: offer, paymentPayload: p.paymentPayload, requestHash: rh, nowMs: NOW_MS + 500, tokens, maxPay: '1000000' });
   assert.equal(kasBound.ok, false);
   assert.equal(kasBound.diagnostic, 'pay_asset_not_accepted');
+  // a bound counted in another token's units does not bound it either (the asset is compared by covenant id)
+  const otherToken = wasm.preflight({ requirements: offer, paymentPayload: p.paymentPayload, requestHash: rh, nowMs: NOW_MS + 500, tokens, maxPay: '1000000', maxPayAsset: '71'.repeat(32) });
+  assert.equal(otherToken.ok, false);
+  assert.equal(otherToken.diagnostic, 'pay_asset_not_accepted');
+  // the same bound in the pay token's own units holds
+  const own = wasm.preflight({ requirements: offer, paymentPayload: p.paymentPayload, requestHash: rh, nowMs: NOW_MS + 500, tokens, maxPay: '3000', maxPayAsset: TOKEN });
+  assert.equal(own.ok, true, JSON.stringify(own));
   // presented for another request: refused
   const other = wasm.preflight({ requirements: offer, paymentPayload: p.paymentPayload, requestHash: 'd2'.repeat(32), nowMs: NOW_MS + 500, tokens });
   assert.equal(other.ok, false);
