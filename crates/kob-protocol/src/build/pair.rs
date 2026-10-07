@@ -628,8 +628,9 @@ pub(crate) fn pair_evidence(
         Some(kb) => {
             // mode 0: a KAS-book leg of A and one of B, filled in this transaction
             let lb = b.legs.get(kb).ok_or_else(|| Error::Invalid(format!("trigger evidence {kb} is not a leg of the batch")))?;
-            let ta = touch_of(leg)?;
-            let tb = touch_of(lb)?;
+            // a leg that cannot be evidence at all is that leg's refusal, not the reader's
+            let ta = touch_of(leg).map_err(|e| blame("evidence", k, e))?;
+            let tb = touch_of(lb).map_err(|e| blame("evidence", kb, e))?;
             let want_a = if ask_a { SIDE_ASK } else { SIDE_BID };
             if ta.side != want_a || tb.side == want_a {
                 return invalid(if ask_a {
@@ -650,7 +651,11 @@ pub(crate) fn pair_evidence(
         None => {
             // mode 1: a resting KobPair of this pair, filled in this transaction
             let Leg::Pair { order, custody, amount, .. } = leg else {
-                return invalid("pair-order evidence is a KobPair leg of the batch (or name a KAS-book leg of each token)");
+                return Err(blame(
+                    "evidence",
+                    k,
+                    Error::Invalid("pair-order evidence is a KobPair leg of the batch (or name a KAS-book leg of each token)".into()),
+                ));
             };
             let s = &order.state;
             if s.is_ask() != ask_a {
@@ -661,7 +666,7 @@ pub(crate) fn pair_evidence(
                 return invalid("pair-order evidence must be an order of the same pair at the same scales");
             }
             if s.slope != 0 {
-                return invalid("a decaying pair order is never trigger evidence");
+                return Err(blame("evidence", k, Error::Invalid("a decaying pair order is never trigger evidence".into())));
             }
             if *amount < min_touch {
                 return invalid("trigger evidence below the order's minTouch");
@@ -719,7 +724,7 @@ pub(crate) fn plan_leg(
             let mut extras = vec![];
             let (delivery, branch) = if f.rest {
                 extras.push(Extra::Cont(
-                    pos(v - s.delivery_carrier - f.tip_kas, "pair continuation")?,
+                    kas_out(v - s.delivery_carrier - f.tip_kas, "pair continuation")?,
                     PairState { amount_left: s.amount_left - n, custody: f.out_amount, ..s.clone() }.spk(),
                 ));
                 let st = custody.state.with_amount(f.out_amount);
@@ -743,7 +748,7 @@ pub(crate) fn plan_leg(
             Ok(LegPlan {
                 suffix,
                 pos: PosOut::Deliver(
-                    pos(delivery, "pair delivery carrier")?,
+                    kas_out(delivery, "pair delivery carrier")?,
                     TokenState::user(ttok.1.family(), f.t_out, s.maker, maker_ext),
                     ttok,
                 ),
@@ -810,7 +815,7 @@ pub(crate) fn plan_leg(
                     armed: s.next_armed(c.leg, c.trigger, udaa),
                     ..s.clone()
                 };
-                extras.push(Extra::Cont(pos(v - s.delivery_carrier - c.tip_kas, "conditional pair continuation")?, next.spk()));
+                extras.push(Extra::Cont(kas_out(v - s.delivery_carrier - c.tip_kas, "conditional pair continuation")?, next.spk()));
                 extras.push(Extra::AtInput {
                     slot: Slot::Custody,
                     value: custody.utxo.amount,
@@ -831,10 +836,14 @@ pub(crate) fn plan_leg(
             };
             // the maker's token at output i: the T delivery, or a re-arming BID exit's B profit (custody's template)
             let pos_out = if c.d_s {
-                PosOut::Deliver(pos(pos_value, "profit carrier")?, custody.state.with_amount(c.d_out).with_user_owner(s.maker), stok)
+                PosOut::Deliver(
+                    kas_out(pos_value, "profit carrier")?,
+                    custody.state.with_amount(c.d_out).with_user_owner(s.maker),
+                    stok,
+                )
             } else {
                 let e = if ttok.1.family() == Family::Kcc20 { s.t_ext } else { [0; 32] };
-                PosOut::Deliver(pos(pos_value, "delivery carrier")?, TokenState::user(ttok.1.family(), c.d_out, s.maker, e), ttok)
+                PosOut::Deliver(kas_out(pos_value, "delivery carrier")?, TokenState::user(ttok.1.family(), c.d_out, s.maker, e), ttok)
             };
             let mut flows = vec![(stok, c.s_out, 0), (ttok, 0, c.t_out)];
             let merge_plan = match (merge, c.rearm) {
@@ -878,8 +887,8 @@ pub(crate) fn plan_leg(
                         kron_output(a.1.family(), a_new, "the merged entry's A custody")?;
                         match &m.a_custody {
                             Some(x) => {
-                                check_custody(x, e.utxo.covenant_id, a, es.amount_left)?;
-                                check_custody_ext(x, es.a_ext)?;
+                                check_custody(x, e.utxo.covenant_id, a, es.amount_left).map_err(|e| blame("entry", i, e))?;
+                                check_custody_ext(x, es.a_ext).map_err(|e| blame("entry", i, e))?;
                                 extras.push(Extra::AtInput {
                                     slot: Slot::EntryA,
                                     value: x.utxo.amount,
@@ -915,8 +924,8 @@ pub(crate) fn plan_leg(
                         kron_output(bt.1.family(), b_new, "the merged entry's B custody")?;
                         match &m.b_custody {
                             Some(x) => {
-                                check_custody(x, e.utxo.covenant_id, bt, es.custody)?;
-                                check_custody_ext(x, es.b_ext)?;
+                                check_custody(x, e.utxo.covenant_id, bt, es.custody).map_err(|e| blame("entry", i, e))?;
+                                check_custody_ext(x, es.b_ext).map_err(|e| blame("entry", i, e))?;
                                 extras.push(Extra::AtInput {
                                     slot: Slot::EntryB,
                                     value: x.utxo.amount,
@@ -1156,7 +1165,7 @@ pub(crate) fn plan_leg(
                     rpt_amount: if c.booked { s.rpt_amount - n } else { s.rpt_amount },
                     ..s.clone()
                 };
-                extras.push(Extra::Cont(pos(keep, "entry continuation")?, next.spk()));
+                extras.push(Extra::Cont(kas_out(keep, "entry continuation")?, next.spk()));
                 extras.push(Extra::Exit {
                     value: u(s.exit_carrier, "exit carrier")?,
                     spk: c.exit.spk(),
@@ -1173,7 +1182,7 @@ pub(crate) fn plan_leg(
                     left += b_car;
                 }
                 extras.push(Extra::Exit {
-                    value: pos(left, "exit value")? as u64,
+                    value: kas_out(left, "exit value")? as u64,
                     spk: c.exit.spk(),
                     tpl: TemplateId::KobCondPair,
                     arg: 5,

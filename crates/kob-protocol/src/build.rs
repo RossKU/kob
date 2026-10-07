@@ -78,6 +78,19 @@ fn pos(v: i64, what: &str) -> Result<u64> {
     Ok(v as u64)
 }
 
+/// A plain KAS output a fill creates (a pair order's continuation, its exit order UTXO, the carrier of its delivery): KIP-9
+/// dust is refused here, naming the output, because `seal` refuses the whole transaction for it (the output's storage mass
+/// alone exceeds the block limit) without knowing which leg made it.
+fn kas_out(v: i64, what: &str) -> Result<u64> {
+    if v < crate::tx::DUST_OUTPUT_MIN as i64 {
+        return invalid(format!(
+            "{what} of {v} sompi is below {} sompi: its KIP-9 storage mass alone exceeds the block limit",
+            crate::tx::DUST_OUTPUT_MIN
+        ));
+    }
+    Ok(v as u64)
+}
+
 /// A covenant amount the builder computed with a `state` helper: `None` is where the covenant fails (an overflow, a
 /// price below its tip), so the builder refuses the fill.
 fn need(v: Option<i64>, what: &str) -> Result<i64> {
@@ -161,6 +174,7 @@ pub fn order_programs(s: &AnyState) -> Result<(TemplateId, Option<TemplateId>)> 
 /// names the leg (`order of leg <i>: ...`), so a caller that planned the batch can tell which order to leave out.
 fn leg_order_error(i: usize, e: Error) -> Error {
     match e {
+        Error::Invalid(m) if attributed(&m) => Error::Invalid(m),
         Error::Invalid(m) => Error::Invalid(format!("order of leg {i}: {m}")),
         Error::State(m) => Error::Invalid(format!("order of leg {i}: {m}")),
         other => other,
@@ -172,10 +186,27 @@ fn leg_order_error(i: usize, e: Error) -> Error {
 /// other legs. Unlike [`leg_order_error`] it depends on what the plan chose, not on the order alone.
 fn leg_fill_error(i: usize, e: Error) -> Error {
     match e {
+        Error::Invalid(m) if attributed(&m) => Error::Invalid(m),
         Error::Invalid(m) => Error::Invalid(format!("fill of leg {i}: {m}")),
         Error::State(m) => Error::Invalid(format!("fill of leg {i}: {m}")),
         other => other,
     }
+}
+
+/// A refusal of leg `i` that another leg or order of the batch causes (`evidence of leg <k>`: the evidence leg's own state;
+/// `entry of leg <k>`: the custodies of the entry leg `k`'s fill merges): the message names that one instead, so a caller
+/// leaves out the order at fault and not the leg that reads it.
+fn blame(prefix: &str, k: usize, e: Error) -> Error {
+    match e {
+        Error::Invalid(m) if !attributed(&m) => Error::Invalid(format!("{prefix} of leg {k}: {m}")),
+        Error::State(m) => Error::Invalid(format!("{prefix} of leg {k}: {m}")),
+        other => other,
+    }
+}
+
+/// Whether a refusal already names the leg at fault.
+fn attributed(m: &str) -> bool {
+    ["order of leg ", "fill of leg ", "evidence of leg ", "entry of leg "].iter().any(|p| m.starts_with(p))
 }
 
 /// Order state of a leg, as the kind of the family of its token program.
@@ -1952,7 +1983,7 @@ pub fn touch_of(leg: &Leg) -> Result<Touch> {
 /// evidence order (a leg's input index is its leg index) and of its custody (asks; `-1` for a bid).
 fn evidence(b: &Batch, lay: &Layout, k: usize) -> Result<(Touch, i64, i64)> {
     let l = b.legs.get(k).ok_or_else(|| Error::Invalid(format!("trigger evidence {k} is not a leg of the batch")))?;
-    let t = touch_of(l)?;
+    let t = touch_of(l).map_err(|e| blame("evidence", k, e))?;
     let tk = if t.side == SIDE_ASK { lay.at[&(k, Slot::Custody)] as i64 } else { -1 };
     Ok((t, k as i64, tk))
 }
@@ -2935,23 +2966,31 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
     type Pinned = (usize, u64, TokenState, Token, Option<(usize, usize)>);
     let mut returns: Vec<Pinned> = vec![];
     let mut patches: Vec<(usize, usize, usize)> = vec![];
+    // the leg each output belongs to (its positional output, its extras), to name the leg of a refusal of `seal` that names
+    // an output
+    let mut owner: BTreeMap<usize, usize> = (0..n_legs).map(|i| (i, i)).collect();
     for (i, l) in b.legs.iter().enumerate() {
         let cov = l_utxo(l).covenant_id.expect("checked");
         let extras = std::mem::take(&mut plans[i].extras);
         for x in extras {
             match x {
                 Extra::Cont(v, spk) => {
-                    d.add_output(v, spk, Some((i as u16, cov)));
+                    owner.insert(d.add_output(v, spk, Some((i as u16, cov))), i);
                 }
                 Extra::Tok { value, state, token, patch } => {
                     let o = d.add_token_output(token, state, value)?;
+                    owner.insert(o, i);
                     if let Some((input, arg)) = patch {
                         patches.push((input, arg, o));
                     }
                 }
-                Extra::AtInput { slot, value, state, token, patch } => returns.push((lay.at[&(i, slot)], value, state, token, patch)),
+                Extra::AtInput { slot, value, state, token, patch } => {
+                    owner.insert(lay.at[&(i, slot)], i);
+                    returns.push((lay.at[&(i, slot)], value, state, token, patch))
+                }
                 Extra::Exit { value, spk, tpl, arg } => {
                     let x = d.reserve_output();
+                    owner.insert(x, i);
                     let id = d.fill_genesis(x, i, value, spk, Some(tpl))?;
                     patches.push((i, arg, x));
                     if let PosOut::DeliverToExit { value: dv, amount, ext, token } = plans[i].pos {
@@ -2959,7 +2998,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                     }
                 }
                 Extra::EntryCont(v, spk, entry_cov) => {
-                    d.add_output(v, spk, Some((lay.merge_in[&i] as u16, entry_cov)));
+                    owner.insert(d.add_output(v, spk, Some((lay.merge_in[&i] as u16, entry_cov))), i);
                 }
             }
         }
@@ -3020,7 +3059,28 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
     if !b.records.is_empty() {
         d.payload = payload::encode(&b.records)?;
     }
-    d.seal(budgets)
+    d.seal(budgets).map_err(|e| dust_leg(e, &owner))
+}
+
+/// A refusal of `seal` for KIP-9 dust (`dust payout: output k (...)`) names outputs, not legs: the first named output a leg
+/// made names that leg (`fill of leg <i>: ...`), so the caller leaves out the fill that made it and not another one.
+fn dust_leg(e: Error, owner: &BTreeMap<usize, usize>) -> Error {
+    let Error::Invalid(m) = &e else { return e };
+    if !m.starts_with("dust payout:") {
+        return e;
+    }
+    let leg = m.match_indices("output ").find_map(|(at, w)| {
+        let rest = &m[at + w.len()..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() || !rest[digits.len()..].starts_with(" (") {
+            return None;
+        }
+        digits.parse::<usize>().ok().and_then(|k| owner.get(&k).copied())
+    });
+    match leg {
+        Some(i) => leg_fill_error(i, e),
+        None => e,
+    }
 }
 
 /// Base units of token `t` the legs release into the transaction (`sold`: asks, pair custodies, ...) and take out of it
@@ -3396,5 +3456,37 @@ pub fn build_with(a: &Action, budgets: BudgetFn) -> Result<BuiltTx> {
         Action::Batch(r) => build_batch(r, budgets),
         Action::SwapRoute(r) => build_swap_route(r, budgets),
         Action::SweepOrder(r) => build_sweep_order(r, budgets),
+    }
+}
+
+#[cfg(test)]
+mod leg_naming_tests {
+    use super::*;
+
+    #[test]
+    fn a_dust_refusal_of_seal_names_the_leg_of_the_output() {
+        let owner: BTreeMap<usize, usize> = [(0, 0), (1, 1), (4, 1), (5, 0)].into_iter().collect();
+        let e = Error::Invalid(format!(
+            "dust payout: output 4 (1000000 sompi) below {} sompi; the transaction's storage mass 1 exceeds the block limit 2 (KIP-9), so it could never be mined",
+            crate::tx::DUST_OUTPUT_MIN
+        ));
+        let named = dust_leg(e, &owner).to_string();
+        assert!(named.contains("fill of leg 1: dust payout: output 4"), "{named}");
+        // an output no leg made (the change) leaves the refusal as it is
+        let e = Error::Invalid("dust payout: output 9 (5 sompi) below 2000000 sompi".into());
+        assert!(!dust_leg(e, &owner).to_string().contains("of leg"));
+        // other refusals are left alone
+        let e = Error::Invalid("output 4 (1 sompi)".into());
+        assert!(!dust_leg(e, &owner).to_string().contains("of leg"));
+    }
+
+    #[test]
+    fn a_refusal_that_names_its_leg_is_not_named_again() {
+        let e = blame("evidence", 3, Error::Invalid("a decaying ask is never trigger evidence".into()));
+        let e = leg_fill_error(0, e);
+        assert!(e.to_string().contains("evidence of leg 3: a decaying ask"), "{e}");
+        assert!(!e.to_string().contains("fill of leg 0"), "{e}");
+        let e = leg_fill_error(2, Error::Invalid("pair continuation of 5 sompi is below".into()));
+        assert!(e.to_string().contains("fill of leg 2: pair continuation"), "{e}");
     }
 }

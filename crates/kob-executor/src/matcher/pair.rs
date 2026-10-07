@@ -40,6 +40,12 @@ use super::book::{BookKey, CovId, ListedOrder, Market};
 use super::candidate::*;
 use super::family::token_limits;
 
+/// The least KAS a plain output of a fill can hold (a continuation, an exit order UTXO, a delivery's carrier): below it the
+/// output's KIP-9 storage mass alone exceeds the block limit and the transaction could never be mined
+/// ([`kob_protocol::tx::DUST_OUTPUT_MIN`], the bound the builders and `seal` apply). A fill that would leave less is not
+/// planned: an order whose partial fills all would is matched only in full.
+const DUST: i64 = kob_protocol::tx::DUST_OUTPUT_MIN as i64;
+
 /// How a pair order's fill of n base units of its base token A maps to the token amounts it releases and receives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PairShape {
@@ -588,11 +594,20 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
             x.custody = s.custody;
             x.fok = s.tif == TIF_FOK;
             x.ioc = s.tif == TIF_IOC;
-            // the covenant's affordability: a rest keeps something in the custody and funds its carrier and tip (the
-            // builder's continuation must keep a positive value)
+            // the covenant's affordability: a rest keeps something in the custody and funds its carrier and tip; the KAS
+            // outputs the fill leaves (the continuation of a rest, else the maker's delivery) are not dust
+            let cv = o.custody.as_ref().map(|c| c.utxo.amount.min(i64::MAX as u64) as i64).unwrap_or(0);
             let fits = |n: i64| {
-                s.fill(n, p, v).is_ok_and(|f| !f.rest || v - s.delivery_carrier - f.tip_kas > 0)
-                    && (s.max_fill == 0 || n <= s.max_fill)
+                s.fill(n, p, v).is_ok_and(|f| {
+                    let kas = if f.rest {
+                        v - s.delivery_carrier - f.tip_kas
+                    } else if f.out_amount > 0 {
+                        v - f.tip_kas
+                    } else {
+                        v.saturating_add(cv) - f.tip_kas
+                    };
+                    kas >= DUST
+                }) && (s.max_fill == 0 || n <= s.max_fill)
             };
             (x.cap, x.part_cap) = cap_of(s.amount_left, s.min_fill, fits);
             if x.fok && x.cap < s.amount_left {
@@ -624,6 +639,7 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
             }
             let shape = if s.is_ask() { PairShape::AskMin } else { PairShape::Bid };
             let tk = s.tokens();
+            let cv = o.custody.as_ref().map(|c| c.utxo.amount.min(i64::MAX as u64) as i64).unwrap_or(0);
             let mk = |leg: u8, lp: i64, merge: Option<MergeOf>| -> Option<PairInfo> {
                 if lp <= 0 {
                     return None;
@@ -657,7 +673,7 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                         if s.is_ask() {
                             // the custody releases n; a partial keeps its rest
                             let out = s.custody - n;
-                            return out >= 0 && (left == 0 || out > 0) && tq > 0 && (left == 0 || v - s.delivery_carrier - tp > 0);
+                            return out >= 0 && (left == 0 || out > 0) && tq > 0 && (left == 0 || v - s.delivery_carrier - tp >= DUST);
                         }
                         let (Some(pr), Some(back)) = (s.rpt_proceeds(n), s.rpt_back(n)) else { return false };
                         let out = if left > 0 { s.custody - pr - back } else { 0 };
@@ -666,10 +682,19 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                             && out >= 0
                             && (left == 0 || out > 0)
                             && d_out > 0
-                            && (left == 0 || v - s.delivery_carrier - tp > 0);
+                            && (left == 0 || v - s.delivery_carrier - tp >= DUST);
                     }
                     let out = s.custody - if s.is_ask() { n } else { so };
-                    out >= 0 && (left == 0 || (out > 0 && v - s.delivery_carrier - tp > 0))
+                    // the continuation of a partial fill, else the maker's delivery (with the custody's KAS when it closes),
+                    // is not dust
+                    let kas = if left > 0 {
+                        v - s.delivery_carrier - tp
+                    } else if out > 0 {
+                        v - tp
+                    } else {
+                        v.saturating_add(cv) - tp
+                    };
+                    out >= 0 && (left == 0 || out > 0) && kas >= DUST
                 };
                 (x.cap, x.part_cap) = cap_of(x.cap, s.min_fill, ok);
                 (x.cap > 0).then_some(x)
@@ -812,13 +837,13 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                     if s.custody > 0 && b_new == 0 {
                         keep += b_car;
                     }
-                    keep > 0
+                    keep >= DUST
                 } else {
                     let mut left = v + a_car - s.delivery_carrier - tip;
                     if b_new == 0 {
                         left += b_car;
                     }
-                    left > 0
+                    left >= DUST
                 }
             };
             let mut cap = s.amount_left;

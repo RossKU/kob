@@ -243,10 +243,10 @@ pub(super) fn custody_owner(plan: &Plan, lowered: &Lowered, by_id: &BTreeMap<Cov
     })
 }
 
-/// The fill a failed attempt gives up: the one whose order input the engine names (order inputs lead the transaction in
-/// fill order), or the updated order whose `update` input it names; else the lowest-priority fill that is not class 1. A
-/// batch of many books loses only the leg (or the update) at fault.
-fn victim_of(plan: &Plan, lowered: &Lowered, err: &str) -> Option<CovId> {
+/// The order a validation error names: the fill whose order input the engine names (order inputs lead the transaction in
+/// fill order), or the updated order whose `update` input it names. A batch of many books loses only the leg (or the
+/// update) at fault; an error that names neither is searched for by [`bisect`].
+fn named_victim(plan: &Plan, lowered: &Lowered, err: &str) -> Option<CovId> {
     let named = err.find("input ").and_then(|at| {
         let at = at + "input ".len();
         let digits: String = err[at..].chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -259,7 +259,26 @@ fn victim_of(plan: &Plan, lowered: &Lowered, err: &str) -> Option<CovId> {
     if let Some(u) = spent.and_then(|op| plan.updates.iter().find(|u| u.outpoint == op)) {
         return Some(u.id);
     }
-    victim(plan)
+    None
+}
+
+/// What an attempt does after a refusal that names no order: the fills it leaves out (`probe`) only to find the one the
+/// refusal comes from. A plan of one fill names it (`Some`: that order sits out the batch, and the fills left out only to
+/// find it are planned again); a larger plan leaves out the lower-priority half of its fills for the next attempt, and a
+/// plan that then passes is the batch (the fills left out are planned in the next batches of the tick). So no order a
+/// refusal does not come from sits out more than the attempts that look for it, never the tick (`None`: nothing left).
+fn bisect(plan: &Plan, probe: &mut BTreeSet<CovId>) -> Option<Option<CovId>> {
+    match plan.fills.len() {
+        0 => None,
+        1 => {
+            probe.clear();
+            Some(Some(plan.fills[0].cand.id))
+        }
+        k => {
+            probe.extend(plan.fills[k - k / 2..].iter().map(|f| f.cand.id));
+            Some(None)
+        }
+    }
 }
 
 /// The fill a failed attempt gives up: the lowest-priority one that is not class 1.
@@ -284,7 +303,13 @@ pub fn lowering_leg(err: &str) -> Option<usize> {
 /// chose for a pair order (its quantity, its continuation, its evidence) as `fill of leg <i>: ...`. That order is left out of
 /// the batch (not quarantined: another fill of it may be built), and the other legs are planned again without it.
 pub fn lowering_fill_leg(err: &str) -> Option<usize> {
-    leg_named(err, "fill of leg ")
+    leg_named(err, "fill of leg ").or_else(|| leg_named(err, "evidence of leg "))
+}
+
+/// The leg whose merged entry a lowering error names as at fault (`entry of leg <i>: ...`: the custodies of the entry
+/// that the booked exit of leg `i` re-arms). That entry is left out of the batch, so the exit is not merged into it.
+pub fn lowering_entry_leg(err: &str) -> Option<usize> {
+    leg_named(err, "entry of leg ")
 }
 
 fn leg_named(err: &str, prefix: &str) -> Option<usize> {
@@ -367,20 +392,22 @@ impl<'a> Tick<'a> {
         let mut floor: BTreeMap<String, u16> = BTreeMap::new();
         let mut measured = false;
         let mut last: Option<(BookKey, String)> = None;
-        // a token-program rejection that names no order: the fill dropped next is a suspect if the rest then passes
-        let mut pending_suspect: Option<(CovId, BookKey, String)> = None;
         // the high rate of an urgent batch; off once the operator's whole pool cannot pay it (the batch then goes at the rate
         // it was planned at)
         let mut high_ok = true;
+        // fills left out of this batch only to find the one a refusal that names no order comes from (`bisect`); they are
+        // never given up
+        let mut probe: BTreeSet<CovId> = BTreeSet::new();
         for _attempt in 0..MAX_ATTEMPTS {
             if self.out_of_time() {
                 break;
             }
+            let planned_ex: BTreeSet<CovId> = if probe.is_empty() { ex.clone() } else { ex.union(&probe).copied().collect() };
             let bi = BatchInput {
                 by_id: &self.by_id,
                 lock_time: self.lock,
                 utc: self.inp.clock.utc,
-                excluded: &ex,
+                excluded: &planned_ex,
                 unaccepted: &self.unaccepted,
                 families: &self.fams,
                 max_bytes,
@@ -476,18 +503,27 @@ impl<'a> Tick<'a> {
                         last = None;
                         continue;
                     }
-                    // A refusal of the fill the plan chose for one pair order: that order sits out this batch, the other
-                    // legs (of any book) are planned again without it.
+                    // A refusal of the fill the plan chose for one order (its quantity, its continuation, its evidence): that
+                    // order sits out this batch, the other legs (of any book) are planned again without it.
                     if let Some(id) = lowering_fill_leg(&e).and_then(|i| plan.fills.get(i)).map(|f| f.cand.id) {
                         ex.insert(id);
+                        probe.clear();
                         last = None;
                         continue;
                     }
-                    match victim(&plan) {
-                        Some(v) => {
+                    // A refusal of the entry a booked exit re-arms: the entry sits out this batch (the exit is not merged).
+                    if let Some(id) = lowering_entry_leg(&e).and_then(|i| plan.fills.get(i)).and_then(|f| f.cand.merge) {
+                        ex.insert(id);
+                        probe.clear();
+                        last = None;
+                        continue;
+                    }
+                    match bisect(&plan, &mut probe) {
+                        Some(Some(v)) => {
                             ex.insert(v);
                             continue;
                         }
+                        Some(None) => continue,
                         None => break,
                     }
                 }
@@ -540,9 +576,6 @@ impl<'a> Tick<'a> {
             }
             match sign_and_validate(&lowered, self.signer, cfg.validate, self.validator) {
                 Ok((signed, validation)) => {
-                    if let Some((id, book, reason)) = pending_suspect.take() {
-                        report.suspects.push(Suspect { id, book, reason });
-                    }
                     report.cleared.extend(plan.fills.iter().map(|f| f.cand.id));
                     let parent = Self::parent_of(&signed, report);
                     return Batch::Prepared(Box::new(Prepared {
@@ -579,23 +612,32 @@ impl<'a> Tick<'a> {
                     last = Some((key, e.clone()));
                     // The token program rejected the plan (not an order covenant, not a budget): a frozen or blacklisted
                     // balance looks like this. Attribute it to the (accepted) order whose custody the failing input spends;
-                    // when it names none, the fill dropped next is the suspect if the rest passes.
+                    // when it names none, the fill the search below isolates is the suspect.
+                    let mut token_why = None;
                     if let Some(i) = token_input_failure(&e, &lowered) {
                         let why = format!("the token program rejected the pre-simulated spend ({})", lowered.built.roles[i]);
                         if let Some(id) = custody_owner(&plan, &lowered, &self.by_id, i).filter(|id| !self.unaccepted.contains(id)) {
                             report.suspects.push(Suspect { id, book: key, reason: why });
                             ex.insert(id);
+                            probe.clear();
                             continue;
                         }
-                        if let Some(v) = victim(&plan).filter(|v| !self.unaccepted.contains(v)) {
-                            pending_suspect = Some((v, key, why));
-                        }
+                        token_why = Some(why);
                     }
-                    match victim_of(&plan, &lowered, &e) {
-                        Some(v) => {
+                    if let Some(v) = named_victim(&plan, &lowered, &e) {
+                        ex.insert(v);
+                        probe.clear();
+                        continue;
+                    }
+                    match bisect(&plan, &mut probe) {
+                        Some(Some(v)) => {
+                            if let Some(reason) = token_why.filter(|_| !self.unaccepted.contains(&v)) {
+                                report.suspects.push(Suspect { id: v, book: key, reason });
+                            }
                             ex.insert(v);
                             continue;
                         }
+                        Some(None) => continue,
                         None => break,
                     }
                 }

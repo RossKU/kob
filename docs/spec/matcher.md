@@ -406,11 +406,20 @@ a pair fill may be any mix of:
 
 **Fill sizes.** A partial fill of a pair order leaves a continuation that must fund the next delivery carrier and the tip
 of what is left (`in − deliveryCarrier − tip > 0`); the fill of everything left needs no continuation. Once the delivery
-carriers prefunded on the order UTXO are used up, only the fill of everything left is possible. The reference planner
-keeps both bounds per order (`PairInfo::cap`, the largest fill, and `PairInfo::part_cap`, the largest partial fill) and
-plans only fills in `[minFill, part_cap]` or exactly `cap`: such an order is matched only in full, like a FOK. A builder
-refusal of the fill chosen for one pair leg names that leg (`fill of leg <i>: ...`); the engine leaves that order out of
-the batch (it is not quarantined) and plans the other legs again, so one order never costs the other books their fills.
+carriers prefunded on the order UTXO are used up, only the fill of everything left is possible. Every plain KAS output a
+fill leaves (the continuation, an entry's exit order UTXO, the carrier of the maker's delivery) must also clear the KIP-9
+dust bound (0.02 KAS, `tx::DUST_OUTPUT_MIN`): a smaller output's storage mass alone exceeds the block limit, so a
+continuation of 1 sompi .. 0.02 KAS is as impossible as none. The reference planner keeps both bounds per order
+(`PairInfo::cap`, the largest fill, and `PairInfo::part_cap`, the largest partial fill) and plans only fills in
+`[minFill, part_cap]` or exactly `cap`: such an order is matched only in full, like a FOK. A builder refusal of the fill
+chosen for one pair leg names that leg (`fill of leg <i>: ...`), and so does a dust refusal of the sealed transaction
+(the leg that made the output); a refusal that another leg causes names that one (`evidence of leg <k>: ...` for a trigger
+evidence leg that cannot be evidence, `entry of leg <i>: ...` for the custodies of the entry a booked exit re-arms). The
+engine leaves that order out of the batch (it is not quarantined) and plans the other legs again, so one order never costs
+the other books their fills. A refusal that names no order is searched for: the engine leaves out the lower-priority half
+of the plan's fills and plans again, until a smaller plan passes (it is the batch; the fills left out are planned in the
+next batches) or a plan of one fill names the order. A fill the refusal does not come from sits out only those attempts,
+never the tick.
 The wallet funds one delivery carrier per possible fill (`ceil(amount / minFill)`, at most 64 by default) and discloses
 when fewer carriers make the rest fill only in full.
 
