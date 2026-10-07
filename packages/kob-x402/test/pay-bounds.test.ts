@@ -82,3 +82,46 @@ test('approve is asked after the quote with what the swap costs; without a bound
     await bounded.close();
   }
 });
+
+test('the KAS ceiling covers the network fee: an offer at the ceiling whose fee goes past it is not paid', async () => {
+  const at = await startRig({ capabilities: { maxAmount: { KAS: '50001999' } }, client: { maxPay: undefined } });
+  try {
+    await assert.rejects(at.client.paidFetch(`${at.base}/report`), (e: unknown) => e instanceof KobX402Error && e.code === 'spend_not_authorized');
+    assert.deepEqual(await at.store.list(), [], 'built, refused, never stored');
+    assert.equal(at.facilitator.settleCalls().length, 0, 'never sent');
+  } finally {
+    await at.close();
+  }
+  const covered = await startRig({ capabilities: { maxAmount: { KAS: '50002000' } }, client: { maxPay: undefined } });
+  try {
+    assert.equal((await covered.client.paidFetch(`${covered.base}/report`)).response.status, 200);
+  } finally {
+    await covered.close();
+  }
+});
+
+test('a token payment shows its carrier and fee to approve and holds them to the KAS ceiling', async () => {
+  const offers: OfferSpec[] = [{ kind: 'kcc20', asset: TOKEN_A, amount: '1', token: { custody: 'unconditional', carrier: '150000000' } }];
+  const seen: { reasons: string[]; cost: Record<string, string> }[] = [];
+  const caps = { maxAmount: { [TOKEN_A]: '10' }, tokens: { [TOKEN_A]: '100' } };
+  // no KAS ceiling: the token ceiling alone does not cover the KAS the payment takes; approve sees it
+  const ask = await startRig({ offers, capabilities: caps, client: { maxPay: undefined, approve: (a) => (seen.push(a as never), true) } });
+  try {
+    assert.equal((await ask.client.paidFetch(`${ask.base}/report`)).response.status, 200);
+    assert.equal(seen.length, 1);
+    assert.deepEqual(seen[0]!.reasons, ['no_kas_cap']);
+    assert.equal(seen[0]!.cost.carrierSompi, '150000000');
+    assert.equal(seen[0]!.cost.feeSompi, '2000');
+    assert.equal(seen[0]!.cost.kasSpent, '150002000');
+  } finally {
+    await ask.close();
+  }
+  // a KAS ceiling below carrier + fee refuses it
+  const low = await startRig({ offers, capabilities: { ...caps, maxAmount: { ...caps.maxAmount, KAS: '150001999' } }, client: { maxPay: undefined } });
+  try {
+    await assert.rejects(low.client.paidFetch(`${low.base}/report`), (e: unknown) => e instanceof KobX402Error && e.code === 'spend_not_authorized');
+    assert.equal(low.facilitator.settleCalls().length, 0);
+  } finally {
+    await low.close();
+  }
+});

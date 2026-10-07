@@ -1976,6 +1976,7 @@
         ],
         "expiresAtMs": 1800000060000,
         "feeSompi": "1066400",
+        "kasSpent": "0",
         "payerSpent": "3000",
         "paymentPayload": {
           "accepted": {
@@ -2583,6 +2584,7 @@
         },
         "digest": "72ec46d4db75a59d8b11d053cf25fddb45f275fdd7b4b16045d39becb0358bf3",
         "expiresAt": "2027-01-15T08:01:00.000Z",
+        "kasSpent": "0",
         "offer": {
           "amount": "100000000",
           "asset": "KAS",
@@ -2734,6 +2736,7 @@
         ],
         "expiresAtMs": 1800000060000,
         "feeSompi": "1066400",
+        "kasSpent": "0",
         "payerSpent": "3000",
         "paymentPayload": {
           "accepted": {
@@ -2956,6 +2959,7 @@
           },
           "digest": "72ec46d4db75a59d8b11d053cf25fddb45f275fdd7b4b16045d39becb0358bf3",
           "expiresAt": "2027-01-15T08:01:00.000Z",
+          "kasSpent": "0",
           "offer": {
             "amount": "100000000",
             "asset": "KAS",
@@ -3030,6 +3034,7 @@
         ],
         "expiresAtMs": 1800000060000,
         "feeSompi": "2159400",
+        "kasSpent": "0",
         "payerSpent": "3000",
         "paymentPayload": {
           "accepted": {
@@ -3720,6 +3725,7 @@
         ],
         "expiresAtMs": 1800000060000,
         "feeSompi": "897000",
+        "kasSpent": "0",
         "payerSpent": "3000",
         "paymentPayload": {
           "accepted": {
@@ -4245,6 +4251,7 @@
         },
         "digest": "67a5ff8e7c5034fb329c55d2a2d3bd5dab3ea1f066927f67999f5c8cf2e0c4bd",
         "expiresAt": "2027-01-15T08:01:00.000Z",
+        "kasSpent": "0",
         "offer": {
           "amount": "100000000",
           "asset": "KAS",
@@ -4407,6 +4414,7 @@
         ],
         "expiresAtMs": 1800000060000,
         "feeSompi": "897000",
+        "kasSpent": "0",
         "payerSpent": "3000",
         "paymentPayload": {
           "accepted": {
@@ -4643,6 +4651,7 @@
           },
           "digest": "67a5ff8e7c5034fb329c55d2a2d3bd5dab3ea1f066927f67999f5c8cf2e0c4bd",
           "expiresAt": "2027-01-15T08:01:00.000Z",
+          "kasSpent": "0",
           "offer": {
             "amount": "100000000",
             "asset": "KAS",
@@ -4717,6 +4726,7 @@
         ],
         "expiresAtMs": 1800000060000,
         "feeSompi": "1966000",
+        "kasSpent": "0",
         "payerSpent": "3000",
         "paymentPayload": {
           "accepted": {

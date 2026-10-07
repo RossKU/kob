@@ -68,6 +68,8 @@ pub enum NativeError {
     InsufficientFunds { need: u64, have: u64 },
     #[error("fee {fee} sompi is above the payer limit {max}")]
     FeeAboveLimit { fee: u64, max: u64 },
+    #[error("the payment takes {spend} sompi (amount and fee), above the payer limit {max}")]
+    SpendAboveLimit { spend: u64, max: u64 },
     #[error("cannot build the payment: {0}")]
     Build(String),
     #[error(transparent)]
@@ -182,6 +184,9 @@ pub struct PayOptions {
     pub fee_mode: FeeMode,
     /// The most the payer is willing to pay in fee.
     pub max_fee_sompi: u64,
+    /// The most the payment may take from the payer's coins, the merchant amount and the fee together (`None`: bounded
+    /// by `max_amount_sompi` and `max_fee_sompi` apart).
+    pub max_total_sompi: Option<u64>,
     /// Change below this is folded into the fee (a tiny change output inflates the storage mass).
     pub min_change_sompi: u64,
     /// Most inputs the transaction may spend.
@@ -204,6 +209,7 @@ impl PayOptions {
             fee_rate: MIN_FEE_RATE,
             fee_mode: FeeMode::Relay,
             max_fee_sompi: 50_000_000,
+            max_total_sompi: None,
             min_change_sompi: 1_000_000,
             max_inputs: 32,
             payment_id: None,
@@ -420,6 +426,10 @@ pub fn pay_native(
     let Built { tx, entries, fee } = built.ok_or(last_err)?;
     if fee > opts.max_fee_sompi {
         return Err(NativeError::FeeAboveLimit { fee, max: opts.max_fee_sompi });
+    }
+    let spend = o.amount.saturating_add(fee);
+    if let Some(max) = opts.max_total_sompi.filter(|m| spend > *m) {
+        return Err(NativeError::SpendAboveLimit { spend, max });
     }
     let tx = sign_inputs(tx, &entries, payer_secret)?;
     kob_protocol::verify::validate(&tx, &entries).map_err(|e| NativeError::Build(format!("self-check failed: {e}")))?;

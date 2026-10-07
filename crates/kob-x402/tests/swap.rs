@@ -327,6 +327,7 @@ fn manual(offer: &PaymentRequirements, pay_asset: &str, mut batch: Batch, k: usi
         digest,
         expires_at,
         payer_spent: 0,
+        kas_spent: 0,
         payer_address: None,
         warnings: vec![],
         payment_identifier: None,
@@ -500,6 +501,21 @@ fn preflight_checks_the_payers_bound() {
     // a payment that does not verify does not preflight
     f.chain.spend_externally(&op(&f.payer_tok.utxo));
     assert!(preflight_swap(&f.ctx(), &offer, &p.payload, RH, None).is_err());
+}
+
+#[test]
+fn the_kas_a_token_paid_swap_takes_from_the_payers_coins_is_reported_and_bounded() {
+    // token A -> token B: the payer's coins fund the fee and the merchant's carrier
+    let f = fx();
+    let offer = f.token_offer_ab(2 * WHOLE as u64);
+    let o = SwapOptions::default();
+    let p = prepare_swap(&f.policy, &offer, &f.sw3_quote(), RH, &f.funds(true), NOW_MS, &o).unwrap();
+    assert!(p.kas_spent > 0, "{} {}", p.kas_spent, p.built.fee.fee);
+    let tight = SwapOptions { max_kas_sompi: Some(p.kas_spent - 1), ..o.clone() };
+    let e = err_of(prepare_swap(&f.policy, &offer, &f.sw3_quote(), RH, &f.funds(true), NOW_MS, &tight));
+    assert_eq!(e.diag, Diag::Overpayment);
+    let exact = SwapOptions { max_kas_sompi: Some(p.kas_spent), ..o };
+    prepare_swap(&f.policy, &offer, &f.sw3_quote(), RH, &f.funds(true), NOW_MS, &exact).unwrap();
 }
 
 #[test]

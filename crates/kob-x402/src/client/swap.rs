@@ -305,6 +305,9 @@ pub struct SwapOptions {
     pub min_change_sompi: u64,
     /// Fee bound (default: the policy's `max_fee_sompi`).
     pub max_fee_sompi: Option<u64>,
+    /// The most KAS (sompi) the payment may take from the payer's coins: fee and carriers, and for a KAS-paid swap the
+    /// whole cost (`None`: no bound beyond `max_pay` and the fee and carrier bounds).
+    pub max_kas_sompi: Option<u64>,
     /// Explicit `payment-identifier` id (default: a fresh random one, [`crate::client::native::random_payment_id`]).
     pub payment_identifier: Option<String>,
     /// Refuse an `expires_in_ms` beyond the offer's `maxTimeoutSeconds` (default true; the diagnostics
@@ -322,6 +325,7 @@ impl Default for SwapOptions {
             change_carrier: None,
             min_change_sompi: 10_000_000,
             max_fee_sompi: None,
+            max_kas_sompi: None,
             payment_identifier: None,
             enforce_ttl: true,
         }
@@ -343,6 +347,10 @@ pub struct PreparedSwap {
     pub expires_at: String,
     /// Pay-asset units the payer gives up.
     pub payer_spent: u64,
+    /// Sompi the payment takes from the payer: its KAS coins and the KAS of its token inputs, less its KAS change (the fee,
+    /// the carriers, and for a KAS-paid swap the whole cost; the carrier of the payer's own token change is counted, so
+    /// this is an upper bound).
+    pub kas_spent: u64,
     pub payer_address: Option<String>,
     pub warnings: Vec<String>,
     pub payment_identifier: Option<String>,
@@ -357,6 +365,8 @@ pub struct SwapPayment {
     pub txid: Txid,
     pub fee: u64,
     pub payer_spent: u64,
+    /// See [`PreparedSwap::kas_spent`].
+    pub kas_spent: u64,
     pub warnings: Vec<String>,
 }
 
@@ -757,13 +767,22 @@ pub fn prepare_swap(
     if built.tx.outputs.len() > policy.limits.max_outputs || built.tx.inputs.len() > policy.limits.max_inputs {
         return Err(err(Diag::InvalidKaspaExactTransaction, "the transaction exceeds the verifier's input / output bounds"));
     }
-    // what the payer gives up
+    // what the payer gives up: KAS out of its coins (fee, carriers, and the cost when paying KAS), and the pay asset
+    let put: u64 = funding.iter().map(|f| f.utxo.amount).sum();
+    let back: u64 = built.fee.change_output.map(|ci| built.tx.outputs[ci as usize].value).unwrap_or(0);
+    // the KAS of the payer's token inputs counts too; the carrier of its own token change is not subtracted (an upper bound)
+    let token_kas: u64 = tokens.iter().map(|t| t.utxo.amount).sum();
+    let kas_spent = put.saturating_add(token_kas).saturating_sub(back);
+    if let Some(max) = opts.max_kas_sompi.filter(|m| kas_spent > *m) {
+        return Err(err(
+            Diag::Overpayment,
+            format!("the swap takes {kas_spent} sompi from the payer's coins, above the payer's bound {max}"),
+        ));
+    }
     let payer_spent: u64 = match pay_token {
         Some(_) => u64::try_from(needed).map_err(|_| err(Diag::Overpayment, "the swap exceeds the uint64 range"))?,
         None => {
-            let put: u64 = funding.iter().map(|f| f.utxo.amount).sum();
-            let back: u64 = built.fee.change_output.map(|ci| built.tx.outputs[ci as usize].value).unwrap_or(0);
-            let spent = put.saturating_sub(back);
+            let spent = kas_spent;
             if let Some(max) = max_pay {
                 if spent > max {
                     return Err(err(Diag::Overpayment, format!("the swap costs {spent} sompi, above the payer's bound {max}")));
@@ -783,6 +802,7 @@ pub fn prepare_swap(
         digest,
         expires_at,
         payer_spent,
+        kas_spent,
         payer_address: address_of(&kob_protocol::script::p2pk_spk(&funds.change), env.network),
         warnings,
         payment_identifier: opts.payment_identifier.clone(),
@@ -818,6 +838,7 @@ impl PreparedSwap {
             txid,
             fee: signed.fee.fee,
             payer_spent: self.payer_spent,
+            kas_spent: self.kas_spent,
             warnings: self.warnings.clone(),
         })
     }

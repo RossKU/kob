@@ -141,6 +141,9 @@ pub struct Kcc20Options {
     /// Refuse an offer whose merchant carrier (KAS the payer funds into the merchant token output), or a payer token
     /// change carrier, exceeds this many sompi (default [`Limits::default`]'s `max_carrier_sompi`).
     pub max_carrier_sompi: u64,
+    /// The most KAS (sompi) the payment may take from the payer's coins: the merchant carrier plus the network fee
+    /// (`None`: bounded only by `max_carrier_sompi` and `max_fee_sompi` apart).
+    pub max_kas_sompi: Option<u64>,
 }
 
 impl Default for Kcc20Options {
@@ -153,6 +156,7 @@ impl Default for Kcc20Options {
             payment_id: None,
             max_fee_sompi: 25_000_000,
             max_carrier_sompi: Limits::default().max_carrier_sompi,
+            max_kas_sompi: None,
         }
     }
 }
@@ -347,6 +351,14 @@ fn build_unsigned_with(
         return Err(X402Error::payload(
             Diag::InvalidKaspaExactFee,
             format!("the fee {} exceeds the payer bound {}", built.fee.fee, opts.max_fee_sompi),
+        ));
+    }
+    // the KAS the payment takes beyond the tokens: the carrier it funds into the merchant output and the fee
+    let kas = facts.carrier.saturating_add(built.fee.fee);
+    if let Some(max) = opts.max_kas_sompi.filter(|m| kas > *m) {
+        return Err(X402Error::payload(
+            Diag::Overpayment,
+            format!("the payment takes {kas} sompi (carrier {} + fee {}), above the payer bound {max}", facts.carrier, built.fee.fee),
         ));
     }
     // the merchant output must be exactly what the offer asks for, at the committed index

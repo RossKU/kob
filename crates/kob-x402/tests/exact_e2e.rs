@@ -656,3 +656,20 @@ fn mutate_tx(
 ) -> kob_x402::wire::PaymentPayload {
     kob_x402::testkit::hashtype::with_tx(&fx.payload, tx, entries)
 }
+
+#[test]
+fn the_payers_total_bound_counts_the_fee() {
+    let fx = fixture();
+    let v = fx.verify().unwrap();
+    let total = AMOUNT + v.fee;
+    let mut opts = PayOptions::new(u64::MAX);
+    opts.max_total_sompi = Some(total - 1);
+    let pay = |o: &PayOptions| kob_x402::client::native::pay_native(&fx.offer, &fx.request_hash, &secret(PAYER), &fx.coins, NOW_MS, o);
+    let e = pay(&opts).unwrap_err();
+    assert!(
+        matches!(e, kob_x402::client::native::NativeError::SpendAboveLimit { spend, max } if spend == total && max == total - 1),
+        "{e}"
+    );
+    opts.max_total_sompi = Some(total);
+    pay(&opts).unwrap();
+}

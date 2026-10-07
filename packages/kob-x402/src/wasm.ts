@@ -121,6 +121,8 @@ export interface PayResult {
   expiresAtMs: number;
   /** Swap-and-pay: units of the pay asset the payer gives up (sompi incl. fee when paying KAS). */
   payerSpent?: string;
+  /** Swap-and-pay: sompi the payment takes from the payer's KAS coins (fee, carriers, and the cost when paying KAS). */
+  kasSpent?: string;
   warnings?: string[];
 }
 

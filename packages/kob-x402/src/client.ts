@@ -177,7 +177,7 @@ export interface PaymentApproval {
   url: string;
   method: string;
   /** Why no explicit authorisation covers the offer. */
-  reasons: 'no_spend_cap'[];
+  reasons: ('no_spend_cap' | 'no_kas_cap')[];
   /** What the built (not yet stored or sent) payment costs. */
   cost: PaymentCost;
 }
@@ -192,6 +192,13 @@ export interface PaymentCost {
   payerSpent?: string;
   /** The network fee of the payment transaction, in sompi. */
   feeSompi: string;
+  /** KAS (sompi) the payer funds into the merchant's token output (kcc20 and token-receiving swaps; `0` otherwise). */
+  carrierSompi: string;
+  /**
+   * Everything the payment takes from the payer's KAS, in sompi: the amount of a native payment, the carrier and the fee
+   * (and the whole cost of a swap paid with KAS). This is what the KAS ceiling is checked against.
+   */
+  kasSpent: string;
 }
 
 export interface PaymentReceipt {
@@ -279,9 +286,16 @@ export class KobX402Client {
       if (!HEX64.test(reqHash)) throw new KobX402Error('bad_request', 'requestHash must be 32-byte hex');
       const extensions = paymentIdentifierExtensions(pr, paymentId);
       const built = await this.#buildPayment(offer, reqHash, paymentId, extensions, pr);
+      // the KAS the payment takes (amount, carrier, fee; a KAS-paid swap's whole cost) is held to the payer's KAS ceiling
+      const cost = paymentCost(offer, built);
+      const kasCap = this.#kasCeiling(caps);
+      if (kasCap !== undefined && BigInt(cost.kasSpent) > BigInt(kasCap)) {
+        refused++;
+        continue;
+      }
+      if (kasCap === undefined && BigInt(cost.kasSpent) > 0n && !reasons.includes('no_spend_cap')) reasons.push('no_kas_cap');
       if (reasons.length > 0) {
-        const cost = paymentCost(offer, built);
-        if ((await this.#o.approve!({ offer, url: expectedHref, method, reasons, cost })) !== true) {
+        if (!this.#o.approve || (await this.#o.approve({ offer, url: expectedHref, method, reasons, cost })) !== true) {
           refused++;
           continue;
         }
@@ -445,6 +459,15 @@ export class KobX402Client {
   }
 
   // ------------------------------------------------------------------------------------------------ internals
+
+  /**
+   * The most KAS one payment may take from the payer (amount, carrier, fee together): `maxPay.KAS` (or `maxPayAmount`)
+   * when set, else `capabilities.maxAmount.KAS`.
+   */
+  #kasCeiling(caps: PayerCapabilities): string | undefined {
+    const m = caps.maxAmount?.KAS;
+    return this.#payBound('KAS') ?? (m === undefined ? undefined : m.toString());
+  }
 
   /** The payer's bound on one payment's spend of `asset` (a swap's pay asset), counted in that asset's own units. */
   #payBound(asset: string): string | undefined {
@@ -689,7 +712,21 @@ export class KobX402Client {
 
 /** What a built payment costs the payer (what `approve` is shown). */
 export function paymentCost(offer: SelectedOffer, built: PayResult): PaymentCost {
-  const cost: PaymentCost = { asset: offer.requirements.asset, amount: offer.requirements.amount, feeSompi: built.feeSompi };
+  const fee = BigInt(built.feeSompi);
+  const carrier = BigInt(offer.requirements.extra.token?.carrier ?? '0');
+  let kas: bigint;
+  if (offer.kind === 'native') kas = BigInt(offer.requirements.amount) + fee;
+  else if (offer.kind === 'kcc20') kas = carrier + fee;
+  else if (built.kasSpent !== undefined) kas = BigInt(built.kasSpent);
+  else if (offer.payAsset === 'KAS' && built.payerSpent !== undefined) kas = BigInt(built.payerSpent);
+  else kas = carrier + fee;
+  const cost: PaymentCost = {
+    asset: offer.requirements.asset,
+    amount: offer.requirements.amount,
+    feeSompi: built.feeSompi,
+    carrierSompi: carrier.toString(),
+    kasSpent: kas.toString(),
+  };
   if (offer.kind === 'swap') {
     if (offer.payAsset) cost.payAsset = offer.payAsset;
     if (built.payerSpent !== undefined) cost.payerSpent = built.payerSpent;

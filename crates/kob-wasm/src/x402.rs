@@ -80,6 +80,7 @@ fn nerr(e: native::NativeError) -> String {
                 native::NativeError::AmountAboveLimit { .. } => "overpayment",
                 native::NativeError::InsufficientFunds { .. } => "invalid_kaspa_exact_utxo",
                 native::NativeError::FeeAboveLimit { .. } => "invalid_kaspa_exact_fee",
+                native::NativeError::SpendAboveLimit { .. } => "overpayment",
                 _ => "invalid_kaspa_exact_transaction",
             },
             "message": other.to_string(),
@@ -376,10 +377,17 @@ struct PayOut {
     expires_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     payer_spent: Option<String>,
+    /// Swap-and-pay: sompi taken from the payer's KAS coins (fee, carriers, and the cost when paying KAS).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kas_spent: Option<String>,
     warnings: Vec<String>,
 }
 
 fn pay_out(payload: PaymentPayload, payer_spent: Option<u64>, warnings: Vec<String>) -> R<String> {
+    pay_out_with(payload, payer_spent, None, warnings)
+}
+
+fn pay_out_with(payload: PaymentPayload, payer_spent: Option<u64>, kas_spent: Option<u64>, warnings: Vec<String>) -> R<String> {
     let safe = SafeTx::parse(&payload.payload.transaction, MAX_TX_JSON).map_err(xerr)?;
     let parsed = safe.to_consensus().map_err(xerr)?;
     let consumed: Vec<OutpointJson> = parsed.tx.inputs.iter().map(|i| common::outpoint_of(i).to_json()).collect();
@@ -393,6 +401,7 @@ fn pay_out(payload: PaymentPayload, payer_spent: Option<u64>, warnings: Vec<Stri
         fee_sompi: total_in.saturating_sub(total_out).to_string(),
         expires_at_ms: expires,
         payer_spent: payer_spent.map(|n| n.to_string()),
+        kas_spent: kas_spent.map(|n| n.to_string()),
         warnings,
         payment_payload: payload,
     })
@@ -920,6 +929,9 @@ struct SwapOptionsIn {
     /// Payer bound on the merchant carrier and on the change carrier (default 2 KAS).
     #[serde(default)]
     max_carrier_sompi: Option<String>,
+    /// The most sompi the payment may take from the payer's KAS coins (fee, carriers, the cost when paying KAS).
+    #[serde(default)]
+    max_kas_sompi: Option<String>,
 }
 
 impl SwapOptionsIn {
@@ -942,6 +954,9 @@ impl SwapOptionsIn {
             o.max_fee_sompi = Some(u64s("maxFeeSompi", m)?);
         }
         o.payment_identifier = self.payment_identifier.clone();
+        if let Some(m) = &self.max_kas_sompi {
+            o.max_kas_sompi = Some(u64s("maxKasSompi", m)?);
+        }
         Ok(o)
     }
 }
@@ -1011,6 +1026,8 @@ struct PreparedJson {
     digest: String,
     expires_at: String,
     payer_spent: String,
+    #[serde(default)]
+    kas_spent: Option<String>,
     payer_address: Option<String>,
     warnings: Vec<String>,
     payment_identifier: Option<String>,
@@ -1032,6 +1049,7 @@ impl PreparedJson {
             digest: hex(&p.digest),
             expires_at: p.expires_at.clone(),
             payer_spent: p.payer_spent.to_string(),
+            kas_spent: Some(p.kas_spent.to_string()),
             payer_address: p.payer_address.clone(),
             warnings: p.warnings.clone(),
             payment_identifier: p.payment_identifier.clone(),
@@ -1048,6 +1066,10 @@ impl PreparedJson {
             digest: h32("digest", &self.digest)?,
             expires_at: self.expires_at,
             payer_spent: u64s("payerSpent", &self.payer_spent)?,
+            kas_spent: match &self.kas_spent {
+                Some(s) => u64s("kasSpent", s)?,
+                None => 0,
+            },
             payer_address: self.payer_address,
             warnings: self.warnings,
             payment_identifier: self.payment_identifier,
@@ -1064,8 +1086,7 @@ fn pay_bound(asset: Option<&str>, amount: u64) -> PayBound {
 }
 
 fn swap_out(pay: SwapPayment) -> R<String> {
-    let spent = pay.payer_spent;
-    pay_out(pay.payload, Some(spent), pay.warnings)
+    pay_out_with(pay.payload, Some(pay.payer_spent), Some(pay.kas_spent), pay.warnings)
 }
 
 /// Step 1 of the wallet flow: builds the unsigned swap payment (`built.sign` = what the wallet signs).
@@ -1332,6 +1353,7 @@ pub fn revoke(json: &str) -> R<String> {
         entries,
         fee: 0,
         payer_spent: 0,
+        kas_spent: 0,
         warnings: vec![],
     };
     if let Some(key) = wallet {

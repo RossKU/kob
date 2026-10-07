@@ -97,6 +97,7 @@ fn manual(offer: &PaymentRequirements, pay_asset: &str, mut batch: Batch, k: usi
         digest,
         expires_at,
         payer_spent: 0,
+        kas_spent: 0,
         payer_address: None,
         warnings: vec![],
         payment_identifier: None,

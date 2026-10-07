@@ -104,3 +104,19 @@ fn a_carrier_within_the_ceiling_still_pays_and_the_change_carrier_is_capped() {
         .expect_err("change carrier capped");
     assert_eq!(e.diag, Diag::CarrierMismatch, "{e}");
 }
+
+#[test]
+fn the_payers_kas_bound_counts_the_carrier_and_the_fee() {
+    let r = rig();
+    let offer = kcc20_requirements(NET, &r.tok, 1, &r.merchant, 2 * KAS, 120, Finality::Accepted).unwrap();
+    let p = pay_kcc20_with(&offer, &r.rh, &r.keys, vec![r.token.clone()], vec![r.funding.clone()], NOW_MS, &opts()).unwrap();
+    let clock = FixedClock::new(NOW_MS);
+    let fee = verify_payment(&VerifyCtx { chain: &r.chain, clock: &clock, policy: &r.policy }, &offer, &p, &r.rh).unwrap().fee;
+    // the carrier alone fits; the carrier and the fee together do not
+    let tight = Kcc20Options { max_kas_sompi: Some(2 * KAS + fee - 1), ..opts() };
+    let e = pay_kcc20_with(&offer, &r.rh, &r.keys, vec![r.token.clone()], vec![r.funding.clone()], NOW_MS, &tight)
+        .expect_err("carrier + fee above the bound");
+    assert_eq!(e.diag, Diag::Overpayment, "{e}");
+    let exact = Kcc20Options { max_kas_sompi: Some(2 * KAS + fee), ..opts() };
+    pay_kcc20_with(&offer, &r.rh, &r.keys, vec![r.token.clone()], vec![r.funding.clone()], NOW_MS, &exact).unwrap();
+}

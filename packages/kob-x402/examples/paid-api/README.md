@@ -82,7 +82,9 @@ Coinbase maturity is 1000 DAA (about 100 s): mined funds are spendable after tha
   `maxPay` / `KOB_X402_MAX_PAY` bounds a swap per pay asset, e.g. `KAS=500000000,<token id>=900`; a bare number bounds KAS
   only; a swap is never built without one), or the `approve` hook must say yes to the built payment's cost
   (`spend_not_authorized` otherwise). The
-  KAS a payer funds into a merchant token output (the carrier) is capped at 2 KAS by default (`maxCarrierSompi`).
+  KAS a payer funds into a merchant token output (the carrier) is capped at 2 KAS by default (`maxCarrierSompi`). The carrier
+  and the network fee count against the payer's KAS ceiling (`maxPay.KAS`, else `capabilities.maxAmount.KAS`) together with
+  any KAS amount, and `approve` sees them (`cost.carrierSompi`, `cost.feeSompi`, `cost.kasSpent`).
 * Custody (`unconditional` / `issuer-controlled`) is derived from the token program's registry capabilities, never from the offer.
 * `PAYMENT-RESPONSE` must show success, the transaction id the payer itself signed and the accepted amount, or the payment is
   treated as pending and the response is not returned.

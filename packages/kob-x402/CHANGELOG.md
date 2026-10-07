@@ -37,3 +37,16 @@ The package is pre-release (testnet); breaking changes are listed here.
   payment is discarded; the next ranked offer is tried.
 - **Breaking:** a swap-and-pay offer is never built without a `maxPay` bound for its pay asset; `approve` no longer
   stands in for it (the `no_max_pay` reason is gone).
+
+### Payer: carrier and network fee count against the limit
+
+- `PaymentCost` (what `approve` sees) carries `carrierSompi` and `kasSpent`: everything the payment takes from the
+  payer's KAS (a native amount, the carrier funded into a merchant token output, the network fee; a KAS-paid swap's
+  whole cost).
+- **Breaking:** `kasSpent` is checked against the payer's KAS ceiling (`maxPay.KAS` / `maxPayAmount`, else
+  `capabilities.maxAmount.KAS`) after the payment is built and before it is stored or sent: a native offer at exactly
+  the ceiling is no longer paid when the fee would take it past it. Without a KAS ceiling, a token payment's KAS needs
+  `approve` (reason `no_kas_cap`).
+- `PayResult.kasSpent` (new, swap-and-pay builders): sompi taken from the payer's KAS coins.
+- Rust: `PayOptions::max_total_sompi` (native: amount + fee), `Kcc20Options::max_kas_sompi` (carrier + fee),
+  `SwapOptions::max_kas_sompi` and `PreparedSwap::kas_spent` / `SwapPayment::kas_spent` (KAS out of the payer's coins).
