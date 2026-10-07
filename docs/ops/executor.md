@@ -729,9 +729,13 @@ at about **4 MB/s** together [F]. So while it is far behind, the follower fetche
   cursor always goes: with the room the budget leaves, and when that is too little the windows behind it are dropped
   (fetched again later) so it gets the whole budget. The one excess left: a single chain block larger than the whole
   budget is fetched alone, with nothing else held. The window size is capped so that `fetch_parallel` windows fit;
-* near the sink (lag at most 1,200 blue score, about two minutes) the follower is back to single steps.
+* near the sink (lag at most `prefetch_min_lag_blue`, default 1,200 blue score, about two minutes) the follower is back to
+  single steps. One step is one connection: under a flood that one connection cannot carry (on 10-07 in the soak, about
+  1.2 MB/s per connection against 1.5 to 1.8 MB/s of Borsh bodies per second of chain), the lag settles near the threshold
+  instead of reaching the tip; `prefetch_min_lag_blue = 30` keeps the windows parallel to within a few seconds of it.
 
 Config: `fetch_parallel` (default **4**, 1 turns it off), `prefetch_max_mb` (default 128; 256 until the hard bound),
+`prefetch_min_lag_blue` (default 1,200),
 `borsh` (the windows over Borsh wRPC, *Borsh windows* above). Health: `prefetch_windows`,
 `prefetch_in_flight`, `prefetch_bytes`, `prefetch_bytes_peak`, `prefetch_window_blocks`, `prefetch_discards_total`,
 `prefetch_oversize_total`.

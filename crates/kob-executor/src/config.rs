@@ -233,6 +233,11 @@ pub struct IndexerConfig {
     /// see `indexer::prefetch`). The process holds about three times this at the peak (the parsed windows); 128 by default
     /// (a small host running more than one indexer), 256 or more on a dedicated one.
     pub prefetch_max_mb: u64,
+    /// The parallel fetch runs while the cursor is more than this many blue score (about one block each at 10 BPS) behind the
+    /// node's sink; closer, the follower takes single steps on one connection. 1,200 by default (two minutes). Under a flood
+    /// that one connection cannot carry (one step slower than the chain it covers), the lag settles near this value: lower it
+    /// (e.g. 30) to keep the windows parallel up to the tip. See docs/ops/executor.md, *Parallel fetch*.
+    pub prefetch_min_lag_blue: u64,
     /// Lag tolerance of the "wait until caught up" gates: the matcher, the keepers and the maintenance jobs of `kob-executor
     /// run` plan while the store is at most this many seconds (`daa_per_second` DAA each) behind the node, whatever the
     /// follower's state (`catching_up` included); beyond it they plan nothing. 0: only while `following` (the strict gate).
@@ -278,6 +283,7 @@ impl Default for IndexerConfig {
             borsh: false,
             verify_threads: 0,
             prefetch_max_mb: 128,
+            prefetch_min_lag_blue: 1_200,
             max_lag_secs: 30,
             settle_depth_daa: 100,
             max_walkback_blocks: 100_000,

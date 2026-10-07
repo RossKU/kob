@@ -163,6 +163,8 @@ function specs() {
     // parallel window fetch while catching up (docs/ops/executor.md, "Parallel fetch"): connections and the memory budget of the windows held ahead
     const fetchParallel = ex.fetchParallel ?? cfg.fetchParallel;
     const prefetchMaxMb = ex.prefetchMaxMb ?? cfg.prefetchMaxMb;
+    // parallel windows up to this lag (blue score) behind the sink; the executor's default is 1,200
+    const prefetchMinLagBlue = ex.prefetchMinLagBlue ?? cfg.prefetchMinLagBlue;
     // lag tolerance of the executor's planning gates, in seconds (the bots' gate reads the same `maxLagSecs`; 0 = strict)
     const maxLagSecs = ex.maxLagSecs ?? cfg.maxLagSecs;
     writeFileSync(
@@ -171,6 +173,7 @@ function specs() {
         ...(rpcTimeout ? [`rpc_timeout_secs = ${Number(rpcTimeout)}`] : []),
         ...(fetchParallel ? [`fetch_parallel = ${Number(fetchParallel)}`] : []),
         ...(prefetchMaxMb ? [`prefetch_max_mb = ${Number(prefetchMaxMb)}`] : []),
+        ...(prefetchMinLagBlue !== undefined ? [`prefetch_min_lag_blue = ${Number(prefetchMinLagBlue)}`] : []),
         ...(maxLagSecs !== undefined ? [`max_lag_secs = ${Number(maxLagSecs)}`] : []),
         '[api]',
         'cors_allow_origin = "*"',

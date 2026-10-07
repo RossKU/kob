@@ -75,7 +75,7 @@ impl FollowerConfig {
             batch_target: (Duration::from_secs(c.rpc_timeout_secs) / 6).max(Duration::from_secs(1)),
             fetch_parallel: c.fetch_windows(),
             prefetch_max_bytes: c.prefetch_max_mb.saturating_mul(1 << 20),
-            prefetch_min_lag_blue: 1_200,
+            prefetch_min_lag_blue: c.prefetch_min_lag_blue,
             prefetch_initial_blocks: 64,
         }
     }

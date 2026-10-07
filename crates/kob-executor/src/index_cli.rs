@@ -45,6 +45,9 @@ pub struct IndexOpts {
     /// Fetch the windows of transaction bodies over each node's Borsh wRPC endpoint (`borsh` in the config).
     #[arg(long, global = true)]
     pub borsh: bool,
+    /// Parallel windows while the cursor is more than this many blue score behind the sink (`prefetch_min_lag_blue`).
+    #[arg(long, global = true)]
+    pub prefetch_min_lag_blue: Option<u64>,
     /// Directory holding the SQLite database and the record log.
     #[arg(long, global = true, env = "KOB_INDEX_DATA_DIR")]
     pub data_dir: Option<PathBuf>,
@@ -109,6 +112,9 @@ pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
     }
     if a.no_primary_fetch {
         cfg.primary_fetch = false;
+    }
+    if let Some(v) = a.prefetch_min_lag_blue {
+        cfg.prefetch_min_lag_blue = v;
     }
     if a.borsh {
         cfg.borsh = true;
