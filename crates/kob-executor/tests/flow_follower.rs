@@ -870,7 +870,8 @@ async fn parallel_fetch_applies_windows_in_chain_order_and_equals_a_clean_replay
     ing.replay(log.records).unwrap();
     assert_eq!(snapshot(ing.conn()), snap);
 
-    // the same backlog one window at a time: the same rows, and slower by about the overlap
+    // the same backlog one window at a time: the same rows. The overlap itself is asserted by the in-flight count above;
+    // wall-clock times are only printed, since a loaded runner can make the parallel pass the slower one
     let c1 = Ctx::with(parallel_harness(1, 8, 256 << 20, None));
     let _ = backlog(&c1, 200, 20);
     c1.hs.node.set_vspc_link(link.0, link.1);
@@ -880,7 +881,6 @@ async fn parallel_fetch_applies_windows_in_chain_order_and_equals_a_clean_replay
     assert_eq!(c1.hs.node.vspc_max_in_flight(), 1);
     assert_eq!(c1.hs.snapshot(), snap);
     println!("4,000 transactions behind a link of 40 us per transaction: 4 parallel windows {took:?}, one at a time {took1:?}");
-    assert!(took < took1, "parallel {took:?} vs one at a time {took1:?}");
 }
 
 #[tokio::test]
