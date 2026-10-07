@@ -321,7 +321,7 @@ impl Ingest {
                 return Err(IngestError::EmptyAfterReorg);
             }
         }
-        self.commit_batch(Some(start), &batch.removed, Blocks::Live(&batch.added), None, true, &[], false)
+        self.commit_batch(Some(start), &batch.removed, Blocks::Live(&batch.added), None, true, &[], false, None)
     }
 
     /// Shared by live batches, replays and rewinds.
@@ -335,6 +335,7 @@ impl Ingest {
         strict: bool,
         ops: &[LogOp],
         always_log: bool,
+        replayed: Option<u64>,
     ) -> Result<Applied, IngestError> {
         let old_cursor = get_cursor(&self.conn)?;
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -418,6 +419,11 @@ impl Ingest {
             meta_set(&tx, "log_cursor_daa", &cursor.daa.to_string())?;
             log_n = Some(n);
             log_len = len;
+        } else if let Some(n) = replayed {
+            // a replayed frame moves the position in the same transaction that applies it: a replay that stops part way
+            // (interrupted, a full disk, a frame that fails) resumes after the last frame it committed
+            meta_set(&tx, "records_next_n", &(n + 1).to_string())?;
+            meta_set(&tx, "log_cursor_daa", &cursor.daa.to_string())?;
         }
         if let Err(e) = tx.commit() {
             if let (Some(n), Some(log)) = (log_n, self.log.as_mut()) {
@@ -463,7 +469,7 @@ impl Ingest {
                 hashes.push(hash);
             }
         }
-        self.commit_batch(None, &hashes, Blocks::Live(&[]), Some(target), true, &[], false)
+        self.commit_batch(None, &hashes, Blocks::Live(&[]), Some(target), true, &[], false, None)
     }
 
     /// Apply operator operations (recovery import, gap reconciliation) in one logged commit. With
@@ -471,7 +477,7 @@ impl Ingest {
     pub fn apply_ops(&mut self, ops: Vec<LogOp>, new_cursor: Option<Cursor>) -> Result<Applied, IngestError> {
         let cur = get_cursor(&self.conn)?;
         let forced = new_cursor.or(cur).ok_or(IngestError::NoCursor)?;
-        self.commit_batch(None, &[], Blocks::Live(&[]), Some(forced), true, &ops, true)
+        self.commit_batch(None, &[], Blocks::Live(&[]), Some(forced), true, &ops, true, None)
     }
 
     /// Rebuild this (empty) database from record-log frames. Returns (frames, relevant txs, orders).
@@ -482,19 +488,33 @@ impl Ingest {
 
     /// [`Ingest::replay`] of a log of `frames` frames, some of which this build skipped (`recordlog::Replay::skipped`): the
     /// database ends at the log's end either way, so the follower appends after the last frame.
+    ///
+    /// Each frame is applied in one transaction together with the position after it (`records_next_n`), so a replay that
+    /// stops part way can be run again: it continues from the first frame not committed.
     pub fn replay_frames(&mut self, records: Vec<(u64, LogBatch)>, frames: u64) -> Result<(u64, u64, u64), IngestError> {
         let mut relevant = 0u64;
         let count = frames;
-        let mut last_daa = 0;
-        for (_, rec) in records {
+        let mut last_daa = None;
+        for (n, rec) in records {
             let cursor = Cursor { hash: rec.cursor.hash, daa: rec.cursor.daa };
-            last_daa = cursor.daa;
-            let applied =
-                self.commit_batch(Some(rec.start), &rec.removed, Blocks::Logged(&rec.blocks), Some(cursor), false, &rec.ops, false)?;
+            last_daa = Some(cursor.daa);
+            let applied = self.commit_batch(
+                Some(rec.start),
+                &rec.removed,
+                Blocks::Logged(&rec.blocks),
+                Some(cursor),
+                false,
+                &rec.ops,
+                false,
+                Some(n),
+            )?;
             relevant += applied.relevant_txs;
         }
+        // frames this build skipped after the last applied one: the database still ends at the log's end
         meta_set(&self.conn, "records_next_n", &count.to_string())?;
-        meta_set(&self.conn, "log_cursor_daa", &last_daa.to_string())?;
+        if let Some(daa) = last_daa {
+            meta_set(&self.conn, "log_cursor_daa", &daa.to_string())?;
+        }
         Ok((count, relevant, self.order_count()?))
     }
 }

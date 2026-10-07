@@ -109,7 +109,7 @@ impl Indexer {
         let writer = lock::WriterLock::acquire(&cfg)?;
         let tokens = load_tokens(&cfg)?;
         let conn = db::open_writer(&cfg.db_path(), &cfg.network)?;
-        let db_next = ingest::records_next_n(&conn)?;
+        let mut db_next = ingest::records_next_n(&conn)?;
         let log = if cfg.records.enabled {
             let dir = cfg.records_dir();
             if db_next == 0 && recordlog::record_count(&dir)? > 0 {
@@ -118,8 +118,19 @@ impl Indexer {
                     dir.display()
                 )));
             }
-            let (log, report) = RecordLog::open(&dir, cfg.records.segment_bytes, db_next)?;
-            if report.dropped_uncommitted > 0 || report.torn_tail_removed {
+            let (log, report) = match RecordLog::open(&dir, cfg.records.segment_bytes, db_next) {
+                // one complete frame past the database: the append an unclean shutdown left uncommitted, or a committed frame
+                // a database restored from a backup one frame older lacks. Either way it records the commit this database
+                // misses: applied when it continues the database's cursor, refused otherwise (never cut)
+                Err(recordlog::RecordLogError::AheadOfDatabase { log_next, db_next: d }) if log_next == d + 1 && d > 0 => {
+                    apply_frames_from(&cfg, tokens.clone(), d)?;
+                    db_next = ingest::records_next_n(&conn)?;
+                    tracing::warn!(frame = d, "applied the one record-log frame the database had not committed");
+                    RecordLog::open(&dir, cfg.records.segment_bytes, db_next)?
+                }
+                r => r?,
+            };
+            if report.torn_tail_removed {
                 tracing::warn!(?report, "repaired the record log after an unclean shutdown");
             }
             Some(log)
@@ -299,7 +310,7 @@ pub fn replay_onto_database(cfg: &IndexerConfig) -> Result<ForwardReport, Indexe
             "the database holds no record-log frame: move it aside and rebuild it with `kob-executor index replay`".into(),
         ));
     }
-    let log = recordlog::read_all(&cfg.records_dir())?;
+    let log = recordlog::read_from(&cfg.records_dir(), from)?;
     if log.frames < from {
         return Err(recordlog::RecordLogError::BehindDatabase { log_next: log.frames, db_next: from }.into());
     }
@@ -311,14 +322,45 @@ pub fn replay_onto_database(cfg: &IndexerConfig) -> Result<ForwardReport, Indexe
     if log.torn {
         tracing::warn!("the last record-log frame is torn (crash during append); it is ignored");
     }
-    let records: Vec<_> = log.records.into_iter().filter(|(n, _)| *n >= from).collect();
-    let skipped: Vec<_> = log.skipped.into_iter().filter(|(n, _)| *n >= from).collect();
-    for (n, reason) in &skipped {
+    for (n, reason) in &log.skipped {
         tracing::warn!(frame = n, %reason, "record-log frame skipped: this build cannot decode it (it stays in the log)");
     }
     let tokens = load_tokens(cfg)?;
     let mut ing = Ingest::new(conn, processor(cfg, tokens), None).with_config(ingest_config(cfg));
-    let (frames, relevant, orders) = ing.replay_frames(records, log.frames)?;
-    // `dropped` counts the whole log (its decode statistics are not kept per frame)
-    Ok(ForwardReport { from, replay: ReplayReport { frames, relevant, orders, skipped, dropped: log.dropped } })
+    check_lineage(&ing, &log, from)?;
+    // each frame commits together with the position after it: an interrupted run continues where it stopped
+    let (frames, relevant, orders) = ing.replay_frames(log.records, log.frames)?;
+    // `dropped` counts the decoded frames from `from` on
+    Ok(ForwardReport { from, replay: ReplayReport { frames, relevant, orders, skipped: log.skipped, dropped: log.dropped } })
+}
+
+/// The frame at the database position must continue the database: its `start` is the cursor the database ends at.
+fn check_lineage(ing: &Ingest, log: &recordlog::Replay, from: u64) -> Result<(), IndexerError> {
+    let cursor = ing.cursor()?;
+    let Some((n, first)) = log.records.first().filter(|(n, _)| *n == from) else {
+        return Err(IndexerError::Config(format!(
+            "record-log frame {from} cannot be decoded by this build, so it cannot be checked against the database's cursor; \
+             nothing was changed (rebuild the database from the log with `kob-executor index replay` into a fresh data directory)"
+        )));
+    };
+    if cursor.as_ref().map(|c| c.hash) != Some(first.start) {
+        return Err(recordlog::RecordLogError::Lineage {
+            n: *n,
+            frame_start: first.start,
+            db_cursor: cursor.map_or_else(|| "unset".to_string(), |c| c.hash.to_string()),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// Applies the record-log frames from `from` on to the database (one transaction per frame, the position with it) after the
+/// lineage check, through a connection of its own and without a log attached (nothing is appended).
+fn apply_frames_from(cfg: &IndexerConfig, tokens: Arc<TokenAllowlist>, from: u64) -> Result<(), IndexerError> {
+    let log = recordlog::read_from(&cfg.records_dir(), from)?;
+    let conn = db::open_writer(&cfg.db_path(), &cfg.network)?;
+    let mut ing = Ingest::new(conn, processor(cfg, tokens), None).with_config(ingest_config(cfg));
+    check_lineage(&ing, &log, from)?;
+    ing.replay_frames(log.records, log.frames)?;
+    Ok(())
 }

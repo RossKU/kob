@@ -1435,10 +1435,13 @@ loses nothing. Reorgs during the downtime are handled by the node's `removed` li
 #### 7.2 Crash safety
 
 The record-log frame is appended and fsynced before the database transaction commits. After a crash
-the log can hold one frame the database never committed; `open` cuts it off and reports it
-(`repaired the record log`). It never cuts more: two or more frames past the database's position mean the database is
-older than the log (restored from a backup, see 8), and the indexer refuses to start (`record log holds frames N..M that
-the database has not committed`) and leaves the log untouched. A torn last frame is removed the same way. If the database is *ahead*
+the log can hold one frame the database never committed. A database restored from a backup exactly one frame older looks
+the same, so `open` never cuts a complete frame: when the frame continues the database's cursor (its start is the block the
+database ends at) it applies it to the database, as the commit would have (`applied the one record-log frame the database had
+not committed`); a frame of another history is refused (`the log and the database do not belong together`) and kept. Two or
+more frames past the database's position mean the database is older than the log (restored from a backup, see 8), and the
+indexer refuses to start (`record log holds frames N..M that the database has not committed`) and leaves the log untouched.
+A torn (incomplete) last frame was never acknowledged and is removed. If the database is *ahead*
 of the log the log was lost; the indexer refuses to start rather than silently continue without its
 rebuild source. An empty database next to a populated log is refused as well (use `replay`).
 
@@ -1635,6 +1638,10 @@ cp /backup/index-2026-10-01.sqlite3 /var/lib/kob-index/index.sqlite3      # remo
 kob-executor index replay --onto-database --data-dir /var/lib/kob-index   # applies frames 10..500 to the backup
 systemctl start kob-index                                                 # re-syncs the tail from the node
 ```
+
+Each frame is applied in one transaction together with the database position after it, so a run that stops part way
+(Ctrl-C, a full disk, a frame that fails) is simply run again and continues from the first frame it did not commit. The
+first frame applied must continue the database's cursor; a log of another history is refused and nothing is applied.
 
 Or move the database aside and rebuild it from the whole log with a plain `replay` (7.6). `replay --onto-database`
 evaluates only the frames it applies under the current allowlist and rules; after a change of either, prefer the full

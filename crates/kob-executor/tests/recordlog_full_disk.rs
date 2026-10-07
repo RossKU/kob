@@ -68,7 +68,7 @@ fn failed_append_then_more(sub: &str, leave: u64, failing: usize, later: u8, lat
     let frames = 1 + later as u64;
     let (log, report) = RecordLog::open(&dir, 1 << 30, frames).unwrap();
     assert_eq!(log.next_n(), frames);
-    assert!(!report.torn_tail_removed && report.dropped_uncommitted == 0, "{report:?}");
+    assert!(!report.torn_tail_removed, "{report:?}");
     let r = read_all(&dir).unwrap();
     assert_eq!((r.frames, r.torn), (frames, false));
 }

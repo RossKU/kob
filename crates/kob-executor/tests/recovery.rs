@@ -197,16 +197,39 @@ async fn open_refuses_empty_database_next_to_a_populated_log_and_repairs_a_crash
         let idx = Indexer::open(cfg.clone()).unwrap();
         sync(&idx.follower(node.clone())).await;
     }
-    // simulate a crash after the log append but before the database commit: one extra frame
-    {
+    // simulate a crash after the log append but before the database commit: one extra frame, of another history first
+    let db_cursor = {
         let conn = open_writer(&cfg.db_path(), "testnet-10").unwrap();
         let next = kob_executor::indexer::ingest::records_next_n(&conn).unwrap();
         assert_eq!(next, 1);
+        let c: String = conn.query_row("SELECT v FROM meta WHERE k = 'cursor_hash'", [], |r| r.get(0)).unwrap();
         drop(conn);
         let (mut log, _) = RecordLog::open(&cfg.records_dir(), 1 << 20, next).unwrap();
         log.append(
             &LogBatch {
-                start: node.anchor(),
+                start: Hash32([0xee; 32]),
+                removed: vec![],
+                cursor: LogCursor { hash: Hash32([0xef; 32]), daa: 5 },
+                blocks: vec![],
+                ops: vec![],
+            },
+            0,
+        )
+        .unwrap();
+        assert_eq!(log.next_n(), 2);
+        c
+    };
+    // a frame that does not continue the database's cursor is refused, and kept
+    let err = Indexer::open(cfg.clone()).err().expect("another history is refused");
+    assert!(err.to_string().contains("do not belong together"), "{err}");
+    assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), 2, "nothing was cut");
+    // the frame the crash really leaves continues the cursor: applied, never cut
+    {
+        let (mut log, _) = RecordLog::open(&cfg.records_dir(), 1 << 20, 2).unwrap();
+        log.truncate_to(1).unwrap();
+        log.append(
+            &LogBatch {
+                start: Hash32::parse(&db_cursor).unwrap(),
                 removed: vec![],
                 cursor: LogCursor { hash: node.tip(), daa: 5 },
                 blocks: vec![],
@@ -215,10 +238,10 @@ async fn open_refuses_empty_database_next_to_a_populated_log_and_repairs_a_crash
             0,
         )
         .unwrap();
-        assert_eq!(log.next_n(), 2);
     }
     let idx = Indexer::open(cfg.clone()).unwrap();
-    assert_eq!(idx.ingest.lock().unwrap().records_next(), Some(1), "the uncommitted frame was cut off");
+    assert_eq!(idx.ingest.lock().unwrap().records_next(), Some(2), "the uncommitted frame was applied");
+    assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), 2);
     drop(idx);
     // database deleted, log kept: `open` must not start over next to the log
     std::fs::remove_file(cfg.db_path()).unwrap();
@@ -281,6 +304,128 @@ async fn a_database_older_than_the_record_log_is_refused_and_brought_forward_fro
     // a second run has nothing left to apply
     let rep = kob_executor::indexer::replay_onto_database(&cfg).unwrap();
     assert_eq!((rep.from, rep.replay.frames, rep.replay.relevant), (frames, frames, 0));
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(to);
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap() {
+        let e = e.unwrap();
+        std::fs::copy(e.path(), to.join(e.file_name())).unwrap();
+    }
+}
+
+fn restore_db(cfg: &IndexerConfig, backup: &std::path::Path) {
+    for ext in ["-wal", "-shm"] {
+        let mut p = cfg.db_path().into_os_string();
+        p.push(ext);
+        let _ = std::fs::remove_file(p);
+    }
+    std::fs::copy(backup, cfg.db_path()).unwrap();
+}
+
+/// A live run with a backup after the first batch, the record log as it was after the second batch, and the live state after
+/// the third. Returns (live snapshot, backup path, log copy after the second batch).
+async fn three_batches(
+    dir: &std::path::Path,
+    cfg: &IndexerConfig,
+    node: &std::sync::Arc<MockNode>,
+) -> (String, std::path::PathBuf, std::path::PathBuf) {
+    let w = World::new();
+    let backup = dir.join("backup.sqlite3");
+    let mid = dir.join("records-mid");
+    let idx = Indexer::open(cfg.clone()).unwrap();
+    let f = idx.follower(node.clone());
+    let create = w.create_tx(AnyState::KobAsk(ask(MAKER_A, P250)), CARRIER, MAKER_A, 10 * WHOLE);
+    w.include(node, &[&create]);
+    sync(&f).await;
+    idx.ingest.lock().unwrap().conn().execute("VACUUM INTO ?1", [backup.to_str().unwrap()]).unwrap();
+    ask_and_fill(&w, node, P245);
+    sync(&f).await;
+    copy_dir(&cfg.records_dir(), &mid);
+    let b = bid(MAKER_B, P245);
+    let create_b = w.create_tx(AnyState::KobBid(b.clone()), b.escrow(6 * WHOLE, 2).unwrap() as u64, MAKER_B, 0);
+    w.include(node, &[&create_b]);
+    sync(&f).await;
+    (snap(&idx), backup, mid)
+}
+
+/// `replay --onto-database` commits the position with every frame: a run that stopped part way (here: it saw only the frames
+/// up to the second batch) is run again and continues from the first frame it did not commit, ending equal to the live
+/// database.
+#[tokio::test]
+async fn an_interrupted_onto_database_run_continues_where_it_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    let cfg = test_config(dir.path(), &node);
+    let (live, backup, mid) = three_batches(dir.path(), &cfg, &node).await;
+    let full = dir.path().join("records-full");
+    copy_dir(&cfg.records_dir(), &full);
+    let frames = recordlog::record_count(&full).unwrap();
+    restore_db(&cfg, &backup);
+    // the part of the run that committed before it stopped
+    copy_dir(&mid, &cfg.records_dir());
+    let first = kob_executor::indexer::replay_onto_database(&cfg).unwrap();
+    let mid_frames = recordlog::record_count(&mid).unwrap();
+    assert!(first.from < mid_frames && mid_frames < frames, "{} {mid_frames} {frames}", first.from);
+    assert_eq!(
+        kob_executor::indexer::ingest::records_next_n(&open_writer(&cfg.db_path(), "testnet-10").unwrap()).unwrap(),
+        mid_frames
+    );
+    // the rerun over the whole log applies only what is left
+    copy_dir(&full, &cfg.records_dir());
+    let rest = kob_executor::indexer::replay_onto_database(&cfg).unwrap();
+    assert_eq!((rest.from, rest.replay.frames), (mid_frames, frames));
+    let idx = Indexer::open(cfg.clone()).unwrap();
+    assert_eq!(snap(&idx), live);
+}
+
+/// A database restored from a backup exactly one frame older than the log: that frame is a committed one, and it is applied
+/// (it continues the database's cursor), never cut from the log.
+#[tokio::test]
+async fn a_database_one_frame_older_than_the_log_gets_that_frame_applied() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    let cfg = test_config(dir.path(), &node);
+    let w = World::new();
+    let backup = dir.path().join("backup.sqlite3");
+    let live = {
+        let idx = Indexer::open(cfg.clone()).unwrap();
+        let f = idx.follower(node.clone());
+        let create = w.create_tx(AnyState::KobAsk(ask(MAKER_A, P250)), CARRIER, MAKER_A, 10 * WHOLE);
+        w.include(&node, &[&create]);
+        sync(&f).await;
+        let before = recordlog::record_count(&cfg.records_dir()).unwrap();
+        idx.ingest.lock().unwrap().conn().execute("VACUUM INTO ?1", [backup.to_str().unwrap()]).unwrap();
+        ask_and_fill(&w, &node, P245);
+        sync(&f).await;
+        assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), before + 1, "one frame for the fill");
+        snap(&idx)
+    };
+    let frames = recordlog::record_count(&cfg.records_dir()).unwrap();
+    restore_db(&cfg, &backup);
+    let idx = Indexer::open(cfg.clone()).unwrap();
+    assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), frames, "no frame was cut");
+    assert_eq!(idx.ingest.lock().unwrap().records_next(), Some(frames));
+    assert_eq!(snap(&idx), live);
+}
+
+/// `replay --onto-database` applies a log only to the database whose cursor its first missing frame continues.
+#[tokio::test]
+async fn onto_database_refuses_a_log_of_another_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    let cfg = test_config(dir.path(), &node);
+    let (_live, backup, _mid) = three_batches(dir.path(), &cfg, &node).await;
+    restore_db(&cfg, &backup);
+    let before = {
+        let c = open_writer(&cfg.db_path(), "testnet-10").unwrap();
+        c.execute("UPDATE meta SET v = ?1 WHERE k = 'cursor_hash'", ["ff".repeat(32)]).unwrap();
+        snapshot(&c)
+    };
+    let err = kob_executor::indexer::replay_onto_database(&cfg).expect_err("refused");
+    assert!(err.to_string().contains("do not belong together"), "{err}");
+    assert_eq!(snapshot(&open_writer(&cfg.db_path(), "testnet-10").unwrap()), before, "nothing was applied");
 }
 
 /// An unspent output as the node's `getUtxosByAddresses` reports it.
