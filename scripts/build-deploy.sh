@@ -35,14 +35,21 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 trap 'rm -rf "$OUT" "$OUT.sums"' EXIT
 node scripts/lib/deploy.mjs "$NETWORK" "$OUT"
 
-# SHA256SUMS: the generated files and the artifacts they list.
+# SHA256SUMS: the generated files and the artifacts they list. Text files are hashed with CR removed (a CRLF
+# checkout lists the same digest); binary files (.bin) are hashed as their bytes.
+file_sha() {
+  case "$1" in
+    *.bin) cat -- "$1" ;;
+    *) tr -d '\r' < "$1" ;;
+  esac | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1
+}
 {
   (cd "$OUT" && find . -type f | sed 's#^\./##') | while IFS= read -r f; do
-    printf '%s  %s\n' "$(tr -d '\r' < "$OUT/$f" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)" "$DIR/$f"
+    printf '%s  %s\n' "$(file_sha "$OUT/$f")" "$DIR/$f"
   done
   node -e 'const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); for (const t of m.templates) console.log(t.artifact); if (m.registry) console.log(m.registry.path)' "$OUT/deployment.json" \
     | tr -d '\r' | while IFS= read -r f; do
-        printf '%s  %s\n' "$(tr -d '\r' < "$f" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)" "$f"
+        printf '%s  %s\n' "$(file_sha "$f")" "$f"
       done
 } | LC_ALL=C sort -k2 > "$OUT.sums"
 mv "$OUT.sums" "$OUT/SHA256SUMS"

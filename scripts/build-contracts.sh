@@ -88,10 +88,18 @@ fi
 
 # Manifest of every input and output, so a change to any of them is visible in review. The deployment
 # builds under contracts/deploy/ have their own SHA256SUMS (scripts/build-deploy.sh).
+# Text files are hashed with CR removed (a CRLF checkout lists the same digest); binary files (.bin) are hashed as
+# their bytes, so the listed digest is the file's sha256.
+file_sha() {
+  case "$1" in
+    *.bin) cat -- "$1" ;;
+    *) tr -d '\r' < "$1" ;;
+  esac | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1
+}
 manifest() {
   { find contracts -path contracts/deploy -prune -o \( -name '*.sil' -o -name '*.ctor.json' -o -name '*.bin' -o -name '*.json' -path 'contracts/artifacts/*' -o -type f -path 'contracts/argent/*' -o -type f -path 'contracts/third-party/*' \) -print ; } \
     | LC_ALL=C sort | while IFS= read -r f; do
-        printf '%s  %s\n' "$(tr -d '\r' < "$f" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)" "$f"
+        printf '%s  %s\n' "$(file_sha "$f")" "$f"
       done
 }
 if [ "$MODE" = check ]; then
