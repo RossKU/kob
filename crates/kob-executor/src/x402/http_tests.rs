@@ -557,6 +557,25 @@ async fn open_mode_on_loopback_needs_no_key() {
     assert_eq!(fx.ledger.get(&hex(&tx.id().as_bytes())).unwrap().merchant, "open");
 }
 
+#[tokio::test]
+async fn open_mode_refuses_requests_through_a_proxy_or_from_another_host() {
+    let fx = Fixture::new();
+    let built = X402Config::from_json(r#"{"auth":"open","listen":"127.0.0.1:0"}"#).unwrap().build().unwrap();
+    let app = router(Arc::new(AppState::new(fx.fac.clone(), &built)));
+    let input = fx.fund(500_000_000);
+    let (req, _) = fx.payment(&[input], 100_000_000, ID1, 7);
+    // a reverse proxy on the same host: the peer is loopback, the request carries a forwarding header
+    for h in ["x-forwarded-for", "forwarded", "x-real-ip", "via"] {
+        let mut r = post("/settle", None, body_of(&req));
+        r.headers_mut().insert(h, "203.0.113.9".parse().unwrap());
+        let (status, _, _) = send(&app, r, "127.0.0.1").await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{h}");
+    }
+    let (status, _, _) = send(&app, post("/settle", None, body_of(&req)), "192.0.2.7").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(fx.chain.submit_count(), 0, "nothing was settled");
+}
+
 // ----------------------------------------------------------------------------------- real TCP server
 
 async fn spawn_server(a: &App, header_timeout: Duration) -> (SocketAddr, tokio::task::JoinHandle<()>) {

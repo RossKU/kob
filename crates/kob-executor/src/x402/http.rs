@@ -379,7 +379,22 @@ async fn admit_raw(st: &Arc<AppState>, req: Request, keyed_route: bool) -> Resul
     }
     let merchant = match st.auth {
         _ if !keyed_route => Merchant::open(),
-        AuthMode::Open => Merchant::open(),
+        AuthMode::Open => {
+            // open auth is for a local operator: a request relayed by a proxy (on this host or not) or from another host
+            // would use the facilitator without a key
+            let local = peer_ip(&req).is_some_and(|ip| crate::api::client_ip::unmap(ip).is_loopback());
+            if forwarded(req.headers()) || !local {
+                Metrics::inc(&st.metrics().http_unauthorized);
+                return Err(error_response(
+                    StatusCode::FORBIDDEN,
+                    "unauthorized",
+                    "auth \"open\" serves local callers only: this request came through a proxy or from another host",
+                    Diag::Unauthorized,
+                    None,
+                ));
+            }
+            Merchant::open()
+        }
         AuthMode::Required => match authenticate(st, req.headers()) {
             Some(m) => m.clone(),
             None => {

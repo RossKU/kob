@@ -252,6 +252,12 @@ The standalone `kob-executor x402 --config <file>` (flags `--network`, `--node`,
 `--ledger`, `--auth` override the file) runs the facilitator alone, with finality from the node's UTXO
 set.
 
+**Authentication.** `"auth": "required"` (the default) needs a merchant API key on `/verify`, `/settle` and the invoice
+routes. `"auth": "open"` (no key, any `payTo`, any asset) is for a local operator only: it is refused unless `listen` is a
+loopback address and `trustedProxies` is empty, and each request is refused (`403`) unless it comes from a loopback peer
+and carries no forwarding header (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `Via`, ...). Never publish an open
+facilitator through a reverse proxy; behind a proxy use `required` with merchant keys.
+
 **Ledger format.** The ledger (`ledger`, a JSONL log) is read only in the format of the running build. An intent
 payment recorded for an earlier router template (for example before the token-intent lock pin of 2026-10-06 or the B pin of 2026-10-07), an intent
 record of any format this build does not decode, or an entry of an intent kind without its intent record stops the

@@ -78,7 +78,8 @@ fn err<T>(m: impl Into<String>) -> Result<T, ConfigError> {
 pub enum AuthMode {
     /// Every `/verify` and `/settle` needs a merchant API key (default).
     Required,
-    /// No authentication; only accepted when listening on a loopback address.
+    /// No authentication, for a local operator only: accepted only when listening on a loopback address and without
+    /// `trustedProxies`, and a request that came through a proxy (a forwarding header) or from another host is refused.
     Open,
 }
 
@@ -422,6 +423,9 @@ impl X402Config {
         if self.auth == AuthMode::Open && !listen.ip().is_loopback() {
             return err("auth \"open\" is only accepted when listening on a loopback address");
         }
+        if self.auth == AuthMode::Open && !self.trusted_proxies.is_empty() {
+            return err("auth \"open\" cannot be combined with trustedProxies: behind a reverse proxy every caller would use the facilitator without a key");
+        }
         if self.ledger.trim().is_empty() {
             return err("ledger path must not be empty (use \":memory:\" for a volatile ledger)");
         }
@@ -684,6 +688,12 @@ mod tests {
         assert!(X402Config::from_json(r#"{"auth":"open","listen":"[::1]:8402"}"#).unwrap().build().is_ok());
         let e = X402Config::from_json(&doc(r#","auth":"open""#)).unwrap().build().unwrap_err();
         assert!(e.0.contains("contradict"));
+        // behind a reverse proxy (declared as trusted) open auth would serve every caller
+        let e = X402Config::from_json(r#"{"auth":"open","listen":"127.0.0.1:8402","trustedProxies":["127.0.0.1"]}"#)
+            .unwrap()
+            .build()
+            .unwrap_err();
+        assert!(e.0.contains("trustedProxies"), "{}", e.0);
     }
 
     #[test]
