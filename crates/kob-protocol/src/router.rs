@@ -991,6 +991,20 @@ mod tests {
         assert_eq!(mine, art["sil_abi"], "data/router_sil_abi.json is stale: rerun with KOB_WRITE_ROUTER_ABI=1");
     }
 
+    /// The TypeScript x402 SDK carries its own copy of the router artifact id
+    /// (`packages/kob-x402/src/types.ts`); it must be this one.
+    #[test]
+    fn ts_sdk_names_the_same_router_artifact() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/kob-x402/src/types.ts");
+        let src = std::fs::read_to_string(&path).unwrap();
+        let ids: Vec<&str> = src
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("export const ROUTER_ARTIFACT_ID = '"))
+            .filter_map(|rest| rest.strip_suffix("';"))
+            .collect();
+        assert_eq!(ids, [ROUTER_ARTIFACT_ID], "ROUTER_ARTIFACT_ID in {}", path.display());
+    }
+
     #[test]
     fn state_roundtrip_and_lengths() {
         let k = [0x11; 32];

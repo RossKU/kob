@@ -110,6 +110,61 @@ jobs:
         run: |
           scripts/build-deploy.sh testnet-10 --check
           scripts/build-deploy.sh mainnet --check
+      - name: Every pinned hash (Rust and TS pin tables, router head, examples, registry templates, docs) is in the reproduced artifacts
+        run: node scripts/check-pins.mjs
+
+  x402-sdk:
+    # The TypeScript x402 SDK (packages/kob-x402): typecheck, then scripts/build-wasm.sh --test, which builds the kob-wasm node bindings,
+    # replays the protocol golden vectors against them (crates/kob-wasm/tests/node) and runs the SDK tests with the wasm required
+    # (KOB_REQUIRE_WASM=1: the wasm-golden test replays crates/kob-x402/vectors/golden). The SDK's copy of the router artifact id is
+    # tied to kob-protocol by a kob-protocol unit test (job test).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
+        with:
+          toolchain: "1.94.0"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/kob-x402/package-lock.json
+      - name: SDK typecheck
+        working-directory: packages/kob-x402
+        run: |
+          npm ci
+          npm run typecheck
+      - name: kob-wasm golden vectors and SDK tests (installs wasm-bindgen-cli under target/tools)
+        run: bash scripts/build-wasm.sh --install-bindgen --test
+
+  deps:
+    # Dependency policy: RustSec advisories, licences and sources (deny.toml lists every accepted advisory with its reason), and the
+    # npm advisories of the three lockfiles. New advisories make this job fail until they are fixed or accepted in deny.toml.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
+        with:
+          toolchain: "1.94.0"
+      - name: cargo-deny 0.20.2 (crates.io, --locked)
+        run: cargo install cargo-deny --version 0.20.2 --locked
+      - name: cargo deny check (advisories, bans, licenses, sources)
+        run: cargo deny --locked check
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: npm audit (web, packages/kob-x402, tools/wallet-gate)
+        run: |
+          for d in web packages/kob-x402 tools/wallet-gate; do
+            echo "== $d"
+            (cd "$d" && npm audit --package-lock-only --audit-level=high)
+          done
 
   web:
     # The web app (web/): kob-wasm bindings, the official kaspa-wasm v2.1.0 SDK (fetched from the rusty-kaspa release, the npm package is
