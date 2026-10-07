@@ -182,6 +182,9 @@ pub struct TestVerifier {
     pub advance_clock: Mutex<Option<(Arc<FixedClock>, u64)>>,
     /// Number of `verify` calls.
     pub calls: AtomicU64,
+    /// Runs inside `verify` (something that happens while a settle is past its first checks).
+    #[allow(clippy::type_complexity)]
+    pub during_verify: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl TestVerifier {
@@ -191,6 +194,7 @@ impl TestVerifier {
             orders: Mutex::new(vec![]),
             advance_clock: Mutex::new(None),
             calls: AtomicU64::new(0),
+            during_verify: Mutex::new(None),
         }
     }
 }
@@ -225,6 +229,9 @@ impl PaymentVerifier for TestVerifier {
             .collect();
         if outs.len() != 1 {
             return Err(X402Error::payload(Diag::InvalidKaspaExactPaymentOutput, "exactly one merchant output is required"));
+        }
+        if let Some(f) = self.during_verify.lock().unwrap().as_ref() {
+            f();
         }
         if let Some((clock, d)) = self.advance_clock.lock().unwrap().as_ref() {
             clock.set(kob_x402::chain::Clock::now_ms(&**clock) + d);

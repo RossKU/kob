@@ -771,6 +771,13 @@ impl Facilitator {
             }
             return Err(e);
         }
+        // the pause / kill switch is read again right before the broadcast: one set while this settle verified is honoured, and
+        // the transaction was never sent, so its evidence is released
+        if self.killed() {
+            self.fail(&entry.txid, "the facilitator was disabled before the broadcast");
+            return Err(X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, "the facilitator is disabled by its operator")
+                .retryable());
+        }
         // the acceptance tracker (the indexer, in `kob-executor run`) follows it from before the broadcast
         self.chain.track(&v.txid);
         let entry = match self.chain.submit(&v.tx) {

@@ -997,6 +997,44 @@ fn the_process_pause_file_disables_the_facilitator() {
     assert!(fac.killed());
 }
 
+/// A pause file that appears while a settle verifies (after its first check) still stops the broadcast: nothing is sent, the
+/// evidence is released, and the same payment settles once the pause is lifted.
+#[test]
+fn a_pause_set_during_a_settle_stops_its_broadcast() {
+    let dir = tempfile::tempdir().unwrap();
+    let flag = dir.path().join("pause");
+    let f = Fixture::new();
+    let fac = Facilitator::new(
+        f.fac.policy.clone(),
+        f.chain.clone(),
+        f.clock.clone(),
+        f.ledger.clone(),
+        super::facilitator::FacilitatorConfig {
+            pause_file: Some(flag.clone()),
+            settle_wait: Duration::from_secs(5),
+            poll_interval: Duration::from_millis(5),
+            ..Default::default()
+        },
+    )
+    .with_verifier(f.verifier.clone());
+    let input = f.fund(500_000_000);
+    let (req, tx) = f.payment(&[input], 100_000_000, ID1, 7);
+    let set = flag.clone();
+    *f.verifier.during_verify.lock().unwrap() = Some(Box::new(move || std::fs::write(&set, b"").unwrap()));
+    let r = fac.settle("shop", &req);
+    assert!(!r.success, "{r:?}");
+    assert!(retryable(&r));
+    assert_eq!(f.chain.submit_count(), 0, "nothing was broadcast");
+    assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Failed, "the evidence is released");
+    // lifted: the same payment settles
+    *f.verifier.during_verify.lock().unwrap() = None;
+    std::fs::remove_file(&flag).unwrap();
+    let miner = mine_later(&f.chain, 20, 0);
+    let ok = fac.settle("shop", &req);
+    miner.join().unwrap();
+    assert!(ok.success, "{ok:?}");
+}
+
 fn facilitator_with(policy: Policy) -> Facilitator {
     let f = Fixture::new();
     Facilitator::new(policy, f.chain.clone(), f.clock.clone(), f.ledger.clone(), Default::default())

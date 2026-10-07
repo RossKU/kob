@@ -343,6 +343,16 @@ impl Facilitator {
                 self.fail(&entry.txid, "authorization expired before broadcast");
                 return Err(e);
             }
+            // the pause / kill switch, read again right before the creation is broadcast
+            if self.killed() {
+                self.fail(&entry.txid, "the facilitator was disabled before the broadcast");
+                return Err(X402Error::new(
+                    Reason::UnexpectedSettleError,
+                    Diag::Internal,
+                    "the facilitator is disabled by its operator",
+                )
+                .retryable());
+            }
             self.chain.track(&v.txid);
             match self.chain.submit(&v.tx) {
                 Ok(_) | Err(SubmitError::AlreadyKnown) => {
