@@ -5,8 +5,10 @@
 // The SDK is NEVER imported at module top level: callers pass a `KaspaSdk` (any object with the members below), or
 // load the vendored build with `loadKaspaNodeSdk(dir)` at run time.
 
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { KobX402Error } from './errors.ts';
 import type { ChainContextProvider } from './client.ts';
 import type { SwapQuote, TokenUtxoJson } from './wasm.ts';
@@ -35,8 +37,47 @@ export interface KaspaSdk {
   Transaction?: { deserializeFromSafeJSON(json: string): unknown };
 }
 
-/** Loads the vendored nodejs build of the official SDK (CommonJS) at call time. */
-export function loadKaspaNodeSdk(vendorDir: string): KaspaSdk {
+/**
+ * The nodejs build of the pinned SDK (the official v2.1.0 release zip, `kaspa-wasm32-sdk/nodejs/kaspa/`, which `fetch-sdk` unpacks to
+ * `vendor/kaspa-node`): sha256 over the lines "<sha256 of the file>  <path>\n" of its files, sorted by path.
+ */
+export const KASPA_NODE_SDK_TREE_SHA256 = '47d2c6d448693f2b0d52fea4e46328940996bcccddfb849d48da05825d5bcf89';
+
+/** The tree hash of a directory, as `KASPA_NODE_SDK_TREE_SHA256` is computed. */
+export function sdkTreeSha256(dir: string): string {
+  const rows: [string, string][] = [];
+  for (const rel of readdirSync(dir, { recursive: true })) {
+    const p = join(dir, String(rel));
+    if (!statSync(p).isFile()) continue;
+    rows.push([String(rel).split(sep).join('/'), createHash('sha256').update(readFileSync(p)).digest('hex')]);
+  }
+  rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return createHash('sha256').update(rows.map(([p, h]) => `${h}  ${p}\n`).join('')).digest('hex');
+}
+
+export interface LoadSdkOptions {
+  /** The tree hash the directory must have (default `KASPA_NODE_SDK_TREE_SHA256`); `null` loads an unpinned build (a custom SDK). */
+  expectedTreeSha256?: string | null;
+}
+
+/**
+ * Loads the vendored nodejs build of the official SDK (CommonJS) at call time. The directory is hashed first and refused unless it
+ * is the pinned build: `fetch-sdk` checks the pin only when it runs, and a file changed in the vendor copy afterwards would
+ * otherwise be loaded (and it sees the payer's keys).
+ */
+export function loadKaspaNodeSdk(vendorDir: string, options: LoadSdkOptions = {}): KaspaSdk {
+  const expected = options.expectedTreeSha256 === undefined ? KASPA_NODE_SDK_TREE_SHA256 : options.expectedTreeSha256;
+  if (expected !== null) {
+    let got: string;
+    try {
+      got = sdkTreeSha256(vendorDir);
+    } catch (e) {
+      throw new KobX402Error('unsupported', `cannot read kaspa-wasm in ${vendorDir} (run "npm run fetch-sdk" in tools/wallet-gate)`, { cause: e });
+    }
+    if (got !== expected) {
+      throw new KobX402Error('unsupported', `kaspa-wasm in ${vendorDir} is not the pinned SDK (tree sha256 ${got}, pinned ${expected}): run "npm run fetch-sdk -- --force" in tools/wallet-gate`);
+    }
+  }
   const require = createRequire(import.meta.url);
   try {
     return require(join(vendorDir, 'kaspa.js')) as KaspaSdk;

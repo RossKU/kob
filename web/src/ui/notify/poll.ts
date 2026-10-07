@@ -10,6 +10,7 @@ import type { OrderView } from '../../data/indexer-types';
 import { diffInvoice, diffOrders, diffPayments, diffVanished, isLiveStatus, isTerminalInvoice, snapshotMap, type IncomingPayment, type NotificationEvent, type NotificationStore } from '../../kob/notifications';
 import type { Clock } from '../../kob/plan-types';
 import type { Hex } from '../../kob/types';
+import { sanitizeUntrusted } from '../../kob/registry';
 
 export const ORDERS_POLL_MS = 15_000;
 export const INVOICE_POLL_MS = 30_000;
@@ -97,7 +98,8 @@ export async function pollInvoices(store: NotificationStore, nowMs: number, fetc
       if (!res.ok) continue;
       const j = (await res.json()) as { status?: unknown; reference?: unknown } | null;
       if (!j || typeof j.status !== 'string' || j.status.length > 20) continue;
-      const reference = typeof j.reference === 'string' ? j.reference.slice(0, 80) : null;
+      // text from the invoice server: control and bidirectional characters replaced, at most 80 characters
+      const reference = typeof j.reference === 'string' ? sanitizeUntrusted(j.reference, 80) : null;
       const ev = diffInvoice(w, j.status, reference, nowMs);
       if (ev) out.push(ev);
       store.updateInvoice(w.id, { status: j.status, ...(reference !== null ? { reference } : {}) });

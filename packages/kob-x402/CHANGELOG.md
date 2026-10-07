@@ -4,6 +4,14 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### The vendored SDK is verified when it is loaded
+
+- `loadKaspaNodeSdk(dir, { expectedTreeSha256? })` hashes the directory before it loads anything and refuses a build that is not
+  the pinned v2.1.0 SDK (`KASPA_NODE_SDK_TREE_SHA256`, `sdkTreeSha256`); `expectedTreeSha256: null` loads an unpinned build on
+  purpose. `fetch-sdk` checks its pin only when it runs.
+- `PaywallConfig.maxSettling` (default 1000): payments being settled are held apart from settled ones; beyond it a request is
+  answered 503 (retryable).
+
 ### Paywall: intent payments are bound to their creation
 
 - An intent payment (`kob-intent-v1`) carries the intent's creation and is settled by the facilitator's execution. The
