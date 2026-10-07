@@ -19,9 +19,20 @@ export function soakPrices(m: SoakTokenFacts): Record<'/native' | '/token' | '/s
   };
 }
 
-/** per merchant asset spend ceilings of the payer: 1 KAS, 1 whole token (twice the dearest price) */
-export function payerMaxAmount(m: SoakTokenFacts): Record<string, string> {
-  return { KAS: KAS.toString(), [m.covenantId]: whole(m).toString() };
+/** the KAS carrier a token payment delivers with the tokens (the paywall's default for a kcc20 offer) */
+export const TOKEN_CARRIER_SOMPI = KAS;
+
+/**
+ * per merchant asset spend ceilings of the payer: 1 whole token (four times the token price), and a KAS ceiling that covers the
+ * dearest KAS cost of one payment. The SDK holds everything a payment takes in KAS to the KAS ceiling: the price of a native
+ * payment, and the carrier plus the network fee of a token payment (a token payment with a 1 KAS carrier is refused under a
+ * 1 KAS ceiling: `spend_not_authorized`, seen on the 2026-10-08 redeploy). `maxFeeSompi` is the payer's fee cap.
+ */
+export function payerMaxAmount(m: SoakTokenFacts, maxFeeSompi: bigint): Record<string, string> {
+  const native = soakPrices(m)['/native'].amount + maxFeeSompi;
+  const token = TOKEN_CARRIER_SOMPI + maxFeeSompi;
+  const kas = [KAS, native, token].reduce((a, b) => (b > a ? b : a));
+  return { KAS: kas.toString(), [m.covenantId]: whole(m).toString() };
 }
 
 /** the swap's pay-side ceiling (token base units the payer may sell into bids for one payment): 5 whole tokens */

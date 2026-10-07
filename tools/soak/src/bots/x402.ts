@@ -146,6 +146,8 @@ export class X402Bots {
     const tokens = async (): Promise<TokenUtxoJson[]> => (await this.payer.tokenUtxos(tokenRef(this.env))) as unknown as TokenUtxoJson[];
     const context = rpcContextProvider(rpc, { tokens, quote: (q) => this.quote(q) });
     const pk = key(this.env, cfg.payerKey);
+    // 0.2 KAS at the floor; a dynamic fee at a busy moment is several times that, so the ceiling follows the policy's per-transaction cap
+    const maxFee = this.env.fees.policy.dynamic && this.env.fees.policy.maxFeeSompi > 20_000_000n ? this.env.fees.policy.maxFeeSompi : 20_000_000n;
     const client = (caps: ConstructorParameters<typeof KobX402Client>[0]['capabilities']) =>
       new KobX402Client({
         wasm,
@@ -158,8 +160,7 @@ export class X402Bots {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         submit: rpcSubmitter(this.env.sdk as any, rpc),
         capabilities: caps,
-        // 0.2 KAS at the floor; a dynamic fee at a busy moment is several times that, so the ceiling follows the policy's per-transaction cap
-        maxFeeSompi: this.env.fees.policy.dynamic && this.env.fees.policy.maxFeeSompi > 20_000_000n ? this.env.fees.policy.maxFeeSompi.toString() : '20000000',
+        maxFeeSompi: maxFee.toString(),
         maxPay: { [m.covenantId]: payerMaxPayAmount(m) },
         // every payment at the policy's HIGH rate (pickPayFee sets it before each one); one that cannot be built at it is rebuilt at the floor
         feeRate: () => this.payFee.rate,
@@ -184,7 +185,7 @@ export class X402Bots {
       try {
         const pick = await this.pickPayFee();
         // explicit spend ceilings per merchant asset: the SDK pays nothing without one
-        const maxAmount = payerMaxAmount(m);
+        const maxAmount = payerMaxAmount(m, maxFee);
         const caps = path === '/native' ? { kasOnly: true, maxAmount } : { tokens: await bal(), allowSwap: path === '/swap', maxAmount };
         const { response, payment } = await client(caps).paidFetch(base + path);
         const body = await response.text();
