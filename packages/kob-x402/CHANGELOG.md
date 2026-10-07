@@ -4,6 +4,13 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Paywall: intent payments are bound to their creation
+
+- An intent payment (`kob-intent-v1`) carries the intent's creation and is settled by the facilitator's execution. The
+  paywall now compares the request's declared transaction id with `extensions.kob.intent.creation` of the settlement
+  (`settledRequestTransaction`), not with `transaction` (the execution), so a paid intent is served instead of `502`.
+  A settlement naming another creation, or none, is still refused. `PaidContext.transactionId` is the execution.
+
 ### A settled payment is served only to the request that carries its payment id
 
 - **Breaking:** a settled transaction presented under another payment id is no longer served as a repeat of the first

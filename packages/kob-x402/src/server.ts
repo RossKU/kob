@@ -32,6 +32,7 @@ import { KobX402Error } from './errors.ts';
 import { FacilitatorClient } from './facilitator-client.ts';
 import type { Facilitator, FacilitatorOptions } from './facilitator-client.ts';
 import { decodePaymentSignature, encodePaymentRequired, encodePaymentResponse } from './headers.ts';
+import { isIntentOffer } from './intent.ts';
 import { buildOffers, isRecord } from './offers.ts';
 import type { KobWasm } from './wasm.ts';
 import {
@@ -68,7 +69,10 @@ const PAYMENT_ID_SCHEMA = {
 export interface PaidContext {
   paymentId: string;
   requestHash: string;
-  /** Recomputed transaction id from the facilitator's settlement. */
+  /**
+   * Recomputed transaction id from the facilitator's settlement: the transaction that paid the merchant (for an intent
+   * payment the execution, not the creation the request carried).
+   */
   transactionId: string;
   amount: string;
   asset: string;
@@ -357,9 +361,11 @@ export function createPaywall(config: PaywallConfig): Paywall {
       ledger.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settlement does not match the offer' } } });
     }
-    const txid = lc(settlement.transaction);
     // The transaction the payer sent declares its id (safe JSON `id`, which the facilitator checks against the recomputed id); a
-    // facilitator answer for another transaction than the one in this request does not settle this payment.
+    // facilitator answer for another transaction than the one in this request does not settle this payment. An intent payment
+    // sends the intent's creation and is settled by the facilitator's execution: the settlement names the execution in
+    // `transaction` and the creation in `extensions.kob.intent.creation`, which is what the request's transaction must be.
+    const txid = settledRequestTransaction(settlement, isIntentOffer(offer));
     if (declaredId !== txid) {
       ledger.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settled another transaction than the one in this request' } } });
@@ -415,6 +421,18 @@ function paidContext(
   };
   if (settlement.payer) c.payer = settlement.payer;
   return c;
+}
+
+/**
+ * The id of the transaction the request carried, as the settlement reports it: `transaction` for a direct payment, the
+ * intent's creation (`extensions.kob.intent.creation`) for an intent payment, whose `transaction` is the execution.
+ * Undefined when the settlement does not name it as a 32-byte hex id.
+ */
+export function settledRequestTransaction(s: SettlementResponse, intent: boolean): string | undefined {
+  const kob = s.extensions?.kob;
+  const creation = isRecord(kob) && isRecord(kob.intent) ? kob.intent.creation : undefined;
+  const id = intent ? creation : s.transaction;
+  return typeof id === 'string' && HEX64.test(lc(id)) ? lc(id) : undefined;
 }
 
 /** SHA-256 (hex) of the transaction text a payment carries. */
