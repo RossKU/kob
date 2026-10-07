@@ -1527,9 +1527,16 @@ fn preflight_runs_the_verifier_against_the_payers_own_policy() {
     only_other.insert(pubkey(ATTACKER), secret(ATTACKER));
     let e = pay_kcc20(&offer, &request_hash(), &only_other, vec![fx.tok(PAYER, 1_000)], vec![], NOW_MS).unwrap_err();
     assert_eq!(e.diag, Diag::TokenConservation, "{e}");
-    // pay_kcc20 (default options) has no payment id: the default policy asks for one
+    // pay_kcc20 (default options) declares a fresh random payment id, which the default policy accepts
     let p = pay_kcc20(&offer, &request_hash(), &keys(), vec![fx.tok(PAYER, 1_000)], vec![], NOW_MS).unwrap();
-    assert_diag(fx.verify(&offer, &p), Diag::MissingKaspaPaymentIdentifier);
+    let id = fx.verify(&offer, &p).unwrap().payment_identifier.expect("a default payment id");
+    assert!(id.starts_with("pay_") && id.len() == 52, "{id}");
+    let q = pay_kcc20(&offer, &request_hash(), &keys(), vec![fx.tok(PAYER, 1_000)], vec![], NOW_MS).unwrap();
+    assert_ne!(fx.verify(&offer, &q).unwrap().payment_identifier.as_deref(), Some(id.as_str()));
+    // an explicit id outside ^[A-Za-z0-9_-]{16,128}$ is refused before signing
+    let bad = Kcc20Options { payment_id: Some("short".into()), ..opts() };
+    let e = pay_kcc20_with(&offer, &request_hash(), &keys(), vec![fx.tok(PAYER, 1_000)], vec![], NOW_MS, &bad).unwrap_err();
+    assert_eq!(e.diag, Diag::InvalidKaspaPaymentIdentifier);
 }
 
 #[test]

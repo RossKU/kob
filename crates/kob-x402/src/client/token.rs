@@ -134,7 +134,8 @@ pub struct Kcc20Options {
     pub token_change_carrier: Option<u64>,
     /// Authorization lifetime in seconds (default and maximum useful value: `maxTimeoutSeconds`).
     pub ttl_seconds: Option<u64>,
-    /// `payment-identifier` extension id (`^[A-Za-z0-9_-]{16,128}$`); required by the default policy.
+    /// `payment-identifier` extension id (`^[A-Za-z0-9_-]{16,128}$`, required by the default policy); by default a fresh
+    /// random one ([`crate::client::native::random_payment_id`]).
     pub payment_id: Option<String>,
     /// Refuse a payment whose fee exceeds this many sompi (payer-side bound).
     pub max_fee_sompi: u64,
@@ -375,7 +376,11 @@ fn build_unsigned_with(
         ));
     }
     let payer_address = facts_owner_address(&tokens, network);
-    let extensions = opts.payment_id.as_ref().map(|id| json!({ "payment-identifier": { "info": { "required": true, "id": id } } }));
+    let id = opts.payment_id.clone().unwrap_or_else(crate::client::native::random_payment_id);
+    if !(16..=128).contains(&id.len()) || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
+        return Err(X402Error::payload(Diag::InvalidKaspaPaymentIdentifier, "payment id must match ^[A-Za-z0-9_-]{16,128}$"));
+    }
+    let extensions = Some(json!({ "payment-identifier": { "info": { "required": true, "id": id } } }));
     let template = PayloadTemplate {
         accepted: offer.clone(),
         request_hash: request_hash.to_string(),
