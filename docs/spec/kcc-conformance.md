@@ -36,7 +36,7 @@ Every vector file is vendored unmodified (CC0) with a `PROVENANCE.md` and pinned
 | 3.7.4-3.7.5 Views, continuation | 3 + 1 | view cuts, view hashes, `EncodeState`, `R_next`, P2SH | pass |
 | 3.9.1 Virtual element | 1 | `encode_struct_payload` (Packed), `kcc1::hash` | pass |
 | Rejections | 30 | `kcc1::decode_arguments`, `kcc1::decode_state`, `kcc1::validate_argument_type`, `kcc1::check_entrypoints`, the encoders, the compiler | all rejected |
-| Every KOB program | 90 programs, 274 entrypoints (`contracts/artifacts`, `contracts/retired`, the router) | dispatch tags recomputed from the ABI types, every type a KCC-1 type, template hashes recomputed, state spans canonical | pass (one recorded exception, 3c) |
+| Every KOB program | 55 programs, 159 entrypoints (`contracts/artifacts`, the router) | dispatch tags recomputed from the ABI types, every type a KCC-1 type, template hashes recomputed, state spans canonical | pass (one recorded exception, 3c) |
 
 ### KCC-2
 
