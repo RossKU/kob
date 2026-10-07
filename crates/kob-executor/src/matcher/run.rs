@@ -297,6 +297,39 @@ fn input_owners(p: &super::engine::Prepared, orders: &[ListedOrder]) -> BTreeMap
     owners
 }
 
+/// The address of every input `owners` names (from the script the input spends), for the node's view of which of them are
+/// still unspent after a missing-input refusal.
+fn input_addresses(
+    p: &super::engine::Prepared,
+    owners: &BTreeMap<super::book::Outpoint, CovId>,
+    network: &str,
+) -> BTreeMap<super::book::Outpoint, String> {
+    let mut out = BTreeMap::new();
+    for i in &p.signed.tx.inputs {
+        let op = (i.transaction_id, i.index);
+        if !owners.contains_key(&op) {
+            continue;
+        }
+        let addr = crate::hex::decode(&i.utxo.script_public_key).ok().and_then(|spk| crate::script::spk_address(&spk, network));
+        if let Some(a) = addr {
+            out.insert(op, a);
+        }
+    }
+    out
+}
+
+/// Every outpoint the book lists: the order UTXOs and their custodies.
+fn listed_outpoints(orders: &[ListedOrder]) -> BTreeSet<super::book::Outpoint> {
+    let mut s = BTreeSet::new();
+    for o in orders {
+        s.insert(outpoint(&o.order.utxo));
+        for c in o.custody.iter().chain(o.custody_b.iter()) {
+            s.insert(outpoint(&c.utxo));
+        }
+    }
+    s
+}
+
 impl<N: NodeApi, S: BookSource> Runner<N, S> {
     pub fn new(node: N, source: S, signer: Box<dyn Signer>, cfg: RunConfig) -> Self {
         let tracker = Tracker::new(cfg.tracker.clone());
@@ -525,6 +558,11 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             self.finish(&rep);
             return Ok(rep);
         }
+        // A pending transaction whose order input the book no longer lists lost its race: its other orders are free again.
+        for txid in self.tracker.drop_lost(&self.node, &listed_outpoints(&book.orders), daa).await {
+            tracing::info!(txid = %kob_protocol::json::to_hex(&txid), "lost a race (an input was spent by another transaction); dropped");
+            rep.conflicts.push(txid);
+        }
         self.refresh_fees().await;
         let mut spent = self.reserved_or_spent();
         let funding = self.funding(&spent).await?;
@@ -593,11 +631,14 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 if self.cfg.dry_run {
                     continue;
                 }
+                let owners = input_owners(&p, &book.orders);
+                let addresses = input_addresses(&p, &owners, &self.cfg.network);
                 let t = Tracked {
                     txid: p.txid(),
                     spends: p.signed.tx.inputs.iter().map(|i| (i.transaction_id, i.index)).collect(),
                     orders: p.plan.spent_ids(),
-                    owners: input_owners(&p, &book.orders),
+                    owners,
+                    addresses,
                     parent: p.parent,
                     submitted_daa: daa,
                     rpc_tx: rpc_json(&p.signed)?,
@@ -680,6 +721,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     spends: j.spends.clone(),
                     orders: [j.order].into_iter().collect(),
                     owners: BTreeMap::new(),
+                    addresses: BTreeMap::new(),
                     parent: None,
                     submitted_daa: daa,
                     rpc_tx: rpc_json(&j.signed)?,
@@ -764,6 +806,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 spends: j.spends.clone(),
                 orders: j.order.into_iter().collect(),
                 owners: BTreeMap::new(),
+                addresses: BTreeMap::new(),
                 parent: None,
                 submitted_daa: daa,
                 rpc_tx: rpc_json(&j.signed)?,

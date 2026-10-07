@@ -6,12 +6,20 @@
 //!   whose input the node names backs off exponentially (every order of the transaction when the
 //!   input is no order's, [`Tracked::owners`]); nothing is ever replaced blindly (the matcher never
 //!   calls `submitTransactionReplacement`).
+//! * A missing input (an orphan: the input's spend is already in a block the book has not shown
+//!   yet) names no outpoint: the tracker asks the node which of the order inputs are still unspent
+//!   ([`Tracked::addresses`]) and backs off the orders whose inputs are gone; the other orders of
+//!   the transaction are planned again at once (every order backs off only when the node cannot
+//!   tell).
 //! * Acceptance comes from `getVirtualChainFromBlockV2` (`Low`): a transaction is *accepted* when a
 //!   chain block accepts it and *final* (done) after `final_depth` more DAA; a `removed` chain
 //!   block moves its transactions back to pending (reorg), where they are re-checked.
 //! * While a transaction is pending or accepted-but-not-final, the outpoints it spends are
 //!   excluded from planning, so no order is planned twice; a pending transaction that is neither
 //!   accepted nor still possible within `pending_timeout` DAA is dropped and its orders back off.
+//!   A pending transaction one of whose order inputs the book no longer lists on two steps in a row
+//!   and the node confirms spent (another transaction spent it: the race is lost) is dropped at once
+//!   ([`Tracker::drop_lost`]): the order whose input is gone backs off, the others are planned again.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,6 +59,9 @@ pub struct Tracked {
     /// of these outpoints backs off that order only. Empty, or a conflict on any other input: every order of the transaction
     /// backs off.
     pub owners: BTreeMap<Outpoint, CovId>,
+    /// The address of each input `owners` names (where known): on a missing input the node is asked which of them are still
+    /// unspent.
+    pub addresses: BTreeMap<Outpoint, String>,
     /// The transaction's own outpoints its children spend (chained steps).
     pub parent: Option<[u8; 32]>,
     pub submitted_daa: u64,
@@ -94,6 +105,17 @@ pub fn double_spent_outpoint(msg: &str) -> Option<Outpoint> {
     Some((txid, index.trim().parse().ok()?))
 }
 
+/// The orders a lost race backs off: the one whose input a double spend names, else (a missing input) those whose inputs the
+/// node no longer holds, else every order of the transaction.
+async fn lost_orders<N: NodeApi>(node: &N, t: &Tracked, outcome: SubmitOutcome, msg: Option<&str>) -> BTreeSet<CovId> {
+    if outcome == SubmitOutcome::MissingInput {
+        if let Some(ids) = missing_owners(node, t).await {
+            return ids;
+        }
+    }
+    conflict_orders(t, outcome, msg)
+}
+
 /// The orders a refused submission backs off: on a mempool double spend of an input whose order is known
 /// ([`Tracked::owners`]), that order alone (the others in the transaction did nothing wrong and are planned again at once);
 /// otherwise every order of the transaction.
@@ -104,6 +126,22 @@ fn conflict_orders(t: &Tracked, outcome: SubmitOutcome, msg: Option<&str>) -> BT
         }
     }
     t.orders.clone()
+}
+
+/// The orders of `t` whose inputs the node no longer holds, asked by address after a missing-input refusal: None when the
+/// node cannot tell (no address known, the query failed, or every order input is still there: the missing input is another
+/// one).
+async fn missing_owners<N: NodeApi>(node: &N, t: &Tracked) -> Option<BTreeSet<CovId>> {
+    let addrs: BTreeSet<&String> = t.owners.keys().filter_map(|op| t.addresses.get(op)).collect();
+    if addrs.is_empty() {
+        return None;
+    }
+    let addrs: Vec<String> = addrs.into_iter().cloned().collect();
+    let utxos = node.utxos_by_addresses(&addrs).await.ok()?;
+    let live: BTreeSet<Outpoint> = utxos.iter().map(|u| (u.transaction_id, u.index)).collect();
+    let gone: BTreeSet<CovId> =
+        t.owners.iter().filter(|(op, _)| t.addresses.contains_key(*op) && !live.contains(*op)).map(|(_, id)| *id).collect();
+    (!gone.is_empty()).then_some(gone)
 }
 
 /// Follows submitted transactions until they are final.
@@ -123,6 +161,8 @@ pub struct Tracker {
     pub unknown: u64,
     pub finalized_count: u64,
     pub finalized_profit: i64,
+    /// Pending transactions one of whose order inputs the last book did not list ([`Tracker::drop_lost`]).
+    pub lost: BTreeSet<[u8; 32]>,
 }
 
 impl Tracker {
@@ -177,7 +217,7 @@ impl Tracker {
             }
             SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput => {
                 self.conflicts += 1;
-                let ids = conflict_orders(&t, outcome, msg.as_deref());
+                let ids = lost_orders(node, &t, outcome, msg.as_deref()).await;
                 self.back_off(&ids, daa);
             }
             SubmitOutcome::Busy => self.back_off(&t.orders, daa),
@@ -229,7 +269,11 @@ impl Tracker {
                         } else {
                             self.conflicts += 1;
                         }
-                        let ids = conflict_orders(&t, outcome, msg.as_deref());
+                        let ids = if outcome == SubmitOutcome::Rejected {
+                            t.orders.clone()
+                        } else {
+                            lost_orders(node, &t, outcome, msg.as_deref()).await
+                        };
                         self.back_off(&ids, daa);
                     }
                 }
@@ -237,6 +281,35 @@ impl Tracker {
             out.push((id, outcome));
         }
         out
+    }
+
+    /// Drops the pending transactions that lost their race: one of their order inputs ([`Tracked::owners`], listed when the
+    /// transaction was planned) is missing from the book `listed` (the outpoints of every listed order and custody) on two
+    /// calls in a row, no chain block accepted the transaction meanwhile, and the node confirms that input is spent. Another
+    /// transaction spent it, so this one can never be accepted: it is dropped, the owner of the spent input backs off, and the
+    /// other orders are free to be planned again (instead of waiting `pending_timeout` and backing off). A chained step (its
+    /// inputs are its parent's outputs) and a transaction the node cannot tell about are left to the timeout. Returns the
+    /// dropped transactions.
+    pub async fn drop_lost<N: NodeApi>(&mut self, node: &N, listed: &BTreeSet<Outpoint>, daa: u64) -> Vec<[u8; 32]> {
+        let now: BTreeSet<[u8; 32]> = self
+            .txs
+            .values()
+            .filter(|t| t.accepted.is_none() && t.parent.is_none() && t.owners.keys().any(|op| !listed.contains(op)))
+            .map(|t| t.txid)
+            .collect();
+        let mut dropped = vec![];
+        let seen_twice: Vec<[u8; 32]> = now.intersection(&self.lost).copied().collect();
+        for txid in seen_twice {
+            let Some(t) = self.txs.get(&txid) else { continue };
+            if let Some(gone) = missing_owners(node, t).await {
+                self.txs.remove(&txid);
+                self.conflicts += 1;
+                self.back_off(&gone, daa);
+                dropped.push(txid);
+            }
+        }
+        self.lost = now.into_iter().filter(|k| !dropped.contains(k)).collect();
+        dropped
     }
 
     /// Applies one chain update at virtual DAA `daa`.
@@ -338,6 +411,7 @@ mod tests {
             spends: [([n; 32], 0)].into_iter().collect(),
             orders: [[n; 32]].into_iter().collect(),
             owners: BTreeMap::new(),
+            addresses: BTreeMap::new(),
             parent: None,
             submitted_daa: daa,
             rpc_tx: Value::Null,

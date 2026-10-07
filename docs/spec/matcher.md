@@ -935,7 +935,9 @@ custodies (genuine holder of the token's program, owned by the exit id, exactly 
 - Recompute every covenant's inequality before submitting (the covenants are the reference), with the covenants'
   rounding (`quoteOf`).
 - Mark an order done only after acceptance plus N DAA; roll back on `removed`.
-- Rate-limit per order; back off on `RejectDoubleSpendInMempool` (the order whose input the node names, when it names one).
+- Rate-limit per order; back off on `RejectDoubleSpendInMempool` (the order whose input the node names, when it names one)
+  and on a missing input (the orders whose inputs the node no longer holds, when it can tell); a pending batch whose input
+  another transaction spent is dropped early, its other orders planned again.
 
 ---
 

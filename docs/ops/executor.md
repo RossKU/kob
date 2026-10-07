@@ -1935,7 +1935,12 @@ Competing matchers race: the loser's transaction is a mempool double spend (`Rej
 or finds its inputs gone. Both are benign here: the orders involved back off (20 DAA, doubling to
 600) and the book is re-read. When the node names the outpoint spent elsewhere and it is an input of one order of the batch
 (its order UTXO or its custody: a cancel, a refund, another matcher's fill), only that order backs off; the other orders of
-the batch did nothing wrong and are planned again at once. A refusal that names no order's input backs off all of them. The executor never calls `submitTransactionReplacement`: no blind
+the batch did nothing wrong and are planned again at once. A missing input (an orphan: the spend is already in a block the
+book has not shown yet) names no outpoint: the executor asks the node (`getUtxosByAddresses` of the order inputs'
+addresses) which of them are gone and backs off only their orders. A batch that reached the mempool but lost to another
+transaction spending one of its inputs is dropped as soon as the book no longer lists that input on two ticks in a row
+and the node confirms it spent, instead of holding its other orders until the pending timeout (600 DAA). Only a refusal
+the node cannot place backs off every order of the batch. The executor never calls `submitTransactionReplacement`: no blind
 replacement of anyone's transaction, its own included.
 
 ### Fee policy
