@@ -1137,3 +1137,42 @@ Watch 01:52 to 02:07 UTC, with the flood still running: lag median 397 / 314 DAA
 because the bots plan on a book 30-80 s old. The remaining limit is the link: both indexers together need about 3.5 MB/s at the tip,
 and the transport waste (refused oversize windows, TLS) brings that to about 7.6 MB/s on the NIC. Following within 5 s through such
 a flood needs the node on the same host or LAN (docs/ops/executor.md, *Bandwidth*).
+
+## Redeploy on main 1c51b27 (2026-10-08, TN10): the public history of 10-07 / 10-08, unpinned templates dropped
+
+`m10/soak` fast-forwarded from 4534e0f to main 1c51b27 (the 81 public commits after 7e216a7, the public twin of 4534e0f, cherry-picked;
+the tree equals public master 2f3fd75) plus two soak fixes. **Templates:** 11 of the 15 order templates changed (`KobAsk`, `KobPair`,
+`KobCondAsk`, `KobCondBid`, `KobCondPair`, `KobIfdAsk`, `KobIfdBid`, `KobIfdPair`, `KobCondBidKron`, `KobIfdBidKron`,
+`KobIfdAskKron`; `KobBid`, `KobAskKron`, `KobBidKron`, `KobCondAskKron` kept) and the token-intent router. This build has no
+`kob_protocol::retired` any more (a9e2636: an order of a template the build does not pin is never decoded or listed), so every live
+order was ended with the OLD build first. **Databases kept** (schema 5 unchanged): a dry run of the new indexer on a `VACUUM INTO` copy
+of exec-b's database served the same history, and after the switch every candle (1m / 5m / 1h / 1d of the three KAS books and the two
+pairs) that closed before the cutoff and the 1,000 newest trades and pair fills per series read back identical from both indexers
+(24,134 items in 50 series, `confirmations` / `settled` aside).
+
+Procedure: `invoiceIntent` off and a bots restart (no open intent in the facilitator ledger, the last invoice expired 19:48 UTC); bots
+held down (`dist/soak.mjs` renamed to `soak-old.mjs`) and both matchers paused; the 109 live orders of both indexers (KAS-book asks /
+bids, stops, if-done, pair, conditional pair and if-done pair orders) cancelled with `soak-old.mjs cancel` (the old bundle and
+bindings), until both indexers listed 0 open / partial / active orders and both books and pair books were empty (19:55:48 UTC).
+Balances before and after the cancels, database snapshots, the old bundle, bindings, web build, config and the history snapshot are in
+`run/backup-pre-1c51b27/`. Executors swapped one at a time (`executorBin` `bin/kob-executor-1c51b27.exe`, same `--borsh`, two
+`--node`s, `--prefetch-min-lag-blue 30`, `maxLagSecs` 120); `run/wasm-node`, `dist/`, `run/web-dist` (built with `UI_OUT` into
+`run/stage-1c51b27/`) swapped; bots, checker, UI and the public 8491 instance restarted (the tunnel kept running). Bots were down
+19:52:12 to 19:57:27 UTC.
+
+* **The facilitator ledger is archived, not carried:** this build refuses a ledger with intent records of the format before the lock
+  pin (`legacyIntent`, 123 entries), so `x402-ledger.jsonl` and `x402-invoices.jsonl` moved to the backup and the facilitator started
+  an empty ledger; the payer's `state/x402-payments.jsonl` went with them. The checker had read the payer's record against the new
+  ledger once (19:57:31, 726 `x402` incidents "paid but not in the facilitator ledger", all payments before the switch).
+* **Every `/token` payment was refused** (`spend_not_authorized`): the SDK now holds a payment's carrier and network fee to the
+  payer's KAS ceiling, and a token payment's 1 KAS carrier plus fee exceeded the soak's 1 KAS. The ceiling now covers the carrier
+  (or the native price) plus a fee at the payer's cap (`payerMaxAmount`, test in `x402-caps.test.ts`); `/token` paid again at 20:23.
+* The soak's typecheck follows `web/src/app/services.ts` into `import.meta.env`: a vite env shim in `src/shims.d.ts`.
+
+Watch 19:58:48 to 20:18:48 UTC (20 min): 0 rejected (exec-a 45 submitted / 44 finalized, exec-b 99 / 97), 0 rejects and 0 lies in
+the indexers, both `following` (lag 8 to 9 DAA at the end); two `health` incidents (each indexer touched `catching_up` once,
+19:59 / 20:00). Fills per minute: TUSD 7.1, TETH 8.1, TBTC 8.15; pair fills TETH/TUSD 2.05, TBTC/TUSD 2.3 (routed). Orders on the
+new templates (`KobAsk` 070bb3b2, `KobPair` c95c9234, `KobCondPair` 7b8f1a9e, `KobIfdPair` 4a432afb) placed and filled; the invoice
++ intent path paid on the new router. `/swap` fails with `order_conflict` as before the switch (about half of the attempts on 10-07:
+the market maker amends the bids it takes faster than one quote-to-settle round). The public page (tunnel) shows the carried chart
+history (TUSD/KAS 5m from 10-06, 24h stats) and the recent trades from before the cutoff.
