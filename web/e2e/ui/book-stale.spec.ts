@@ -39,18 +39,32 @@ test.describe('order book keeps the last good book', () => {
   });
 
   test('a slow pull keeps the book and marks it stale while the answer is late', async ({ appPage: page, mock }) => {
+    // The page's clock is moved past LATE_MS (8 s, src/ui/market/book-stale.ts) instead of waiting for it in real time: waiting raced the
+    // indexer client's own 10 s timeout (src/data/indexer.ts), which turns the late pull into a failed one before the answer is released.
+    // setSystemTime moves Date.now only and fires no timer, so the 10 s timeout of the pull in flight stays about 10 s of real time away.
+    await page.clock.install();
     await open(page, mock);
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => (release = r));
+    let held!: () => void;
+    const requested = new Promise<void>((r) => (held = r));
     await page.route('**/v1/books/**', async (route) => {
+      held();
       await gate;
       await route.continue();
     });
     await page.getByTestId('book-refresh').click();
+    await requested;
+    // the pull is in flight (the refresh button shows it), so its start time is taken: now make it late
+    await expect(page.getByTestId('book-refresh')).toHaveAttribute('aria-busy', 'true');
+    await expect(page.getByTestId('book-stale-since')).toHaveCount(0);
+    await page.clock.setSystemTime((await page.evaluate(() => Date.now())) + 9_000);
+    await expect(page.getByTestId('book-stale-since')).toHaveText(/^stale since /);
     await expect(asks(page)).toHaveCount(10);
-    await expect(page.getByTestId('book-stale-since')).toHaveText(/^stale since /, { timeout: 15_000 });
+    // the late answer itself replaces the book and clears the marker
     release();
     await expect(page.getByTestId('book-stale-since')).toHaveCount(0);
+    await expect(page.getByTestId('book-refresh')).not.toHaveAttribute('aria-busy', 'true');
     await expect(asks(page)).toHaveCount(10);
   });
 
