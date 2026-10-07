@@ -110,8 +110,10 @@ export interface PaywallConfig {
   finality?: Finality;
   maxBodyBytes?: number;
   now?: () => number;
-  /** Max remembered payment ids (oldest evicted). */
+  /** Max remembered settled payment ids (oldest evicted). Only settled payments enter it. */
   maxLedgerEntries?: number;
+  /** Max payments being settled at once (default 1000); a request beyond it is answered 503 (retryable) and not remembered. */
+  maxSettling?: number;
 }
 
 export interface Paywall {
@@ -155,6 +157,9 @@ export function createPaywall(config: PaywallConfig): Paywall {
   const facilitator: Facilitator = 'settle' in config.facilitator ? config.facilitator : new FacilitatorClient(config.facilitator);
   const maxBody = config.maxBodyBytes ?? 1024 * 1024;
   const maxLedger = config.maxLedgerEntries ?? 10_000;
+  const maxSettling = config.maxSettling ?? 1_000;
+  /** Payment ids being settled now (removed when the settlement ends): kept apart from the ledger of settled payments. */
+  const settling = new Map<string, LedgerEntry>();
   const now = config.now ?? Date.now;
   const ledger = new Map<string, LedgerEntry>();
   /** Settled transaction id -> the payment id it was settled under (the transaction is public, the id is not). */
@@ -306,7 +311,7 @@ export function createPaywall(config: PaywallConfig): Paywall {
     }
 
     // ---- idempotency: same id + same fingerprint + same offer + same transaction -> cached outcome; anything else conflicts
-    const prior = ledger.get(id);
+    const prior = ledger.get(id) ?? settling.get(id);
     if (prior) {
       if (prior.requestHash !== requestHash || prior.requirementsHash !== reqsHash) {
         return json(409, { error: 'invalid_payload', extensions: { kaspa: { diagnostic: 'kaspa_payment_identifier_conflict', retryable: false, message: 'payment id is bound to a different request' } } });
@@ -323,7 +328,12 @@ export function createPaywall(config: PaywallConfig): Paywall {
     // a transaction settled under another payment id is that payment, not this request's
     const owner = served.get(declaredId);
     if (owner !== undefined && owner !== id) return otherIdConflict();
-    remember(id, { requestHash, requirementsHash: reqsHash, transactionId: declaredId, transactionDigest: txDigest, state: 'settling', at: now() });
+    // requests being settled are held apart from settled payments, in a bounded set: any number of well-formed requests that never
+    // settle cannot push a settled payment out of the ledger (a full set answers 503, nothing is remembered)
+    if (settling.size >= maxSettling) {
+      return json(503, { error: 'unexpected_settle_error', extensions: { kaspa: { diagnostic: 'rate_limited', retryable: true, message: 'too many payments are being settled; retry' } } }, { 'retry-after': '1' });
+    }
+    settling.set(id, { requestHash, requirementsHash: reqsHash, transactionId: declaredId, transactionDigest: txDigest, state: 'settling', at: now() });
 
     // ---- settle through the facilitator
     let settlement: SettlementResponse;
@@ -336,12 +346,12 @@ export function createPaywall(config: PaywallConfig): Paywall {
         resource: resourceOf(url),
       });
     } catch {
-      ledger.delete(id);
+      settling.delete(id);
       return json(503, { error: 'unexpected_settle_error', extensions: { kaspa: { diagnostic: 'node_unavailable', retryable: true, message: 'the facilitator did not answer' } } }, { 'retry-after': '2' });
     }
 
     if (!settlement.success) {
-      ledger.delete(id);
+      settling.delete(id);
       const k = isRecord(settlement.extensions?.kaspa) ? (settlement.extensions?.kaspa as Partial<KaspaFailure>) : {};
       const diagnostic = typeof k.diagnostic === 'string' ? k.diagnostic : 'internal';
       const failure: Local & Partial<KaspaFailure> = {
@@ -358,7 +368,7 @@ export function createPaywall(config: PaywallConfig): Paywall {
 
     // Fail closed on a success that does not show OUR offer.
     if (!HEX64.test(lc(settlement.transaction)) || settlement.amount !== offer.amount || settlement.network !== offer.network) {
-      ledger.delete(id);
+      settling.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settlement does not match the offer' } } });
     }
     // The transaction the payer sent declares its id (safe JSON `id`, which the facilitator checks against the recomputed id); a
@@ -367,16 +377,17 @@ export function createPaywall(config: PaywallConfig): Paywall {
     // `transaction` and the creation in `extensions.kob.intent.creation`, which is what the request's transaction must be.
     const txid = settledRequestTransaction(settlement, isIntentOffer(offer));
     if (declaredId !== txid) {
-      ledger.delete(id);
+      settling.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settled another transaction than the one in this request' } } });
     }
     // settled meanwhile under another id (two requests racing with one transaction): served to that id only
     const owner2 = served.get(txid);
     if (owner2 !== undefined && owner2 !== id) {
-      ledger.delete(id);
+      settling.delete(id);
       return otherIdConflict();
     }
     const entry: LedgerEntry = { requestHash, requirementsHash: reqsHash, transactionId: txid, transactionDigest: txDigest, state: 'settled', settlement, at: now() };
+    settling.delete(id);
     remember(id, entry);
     served.set(txid, id);
     while (served.size > maxLedger) {
