@@ -160,8 +160,49 @@ pub fn outpoint_of(i: &kaspa_consensus_core::tx::TransactionInput) -> Outpoint {
     Outpoint::new(i.previous_outpoint.transaction_id.as_bytes(), i.previous_outpoint.index)
 }
 
+fn is_p2sh(spk: &ScriptPublicKey) -> bool {
+    let s = spk.script();
+    spk.version() == 0 && s.len() == 35 && s[0] == 0xaa && s[1] == 0x20 && s[34] == 0x87
+}
+
+/// Bounds what the embedded hints may make the chain resolve, before any lookup: a P2SH hint must be the hash of the
+/// redeem script its input carries (consensus requires it of every P2SH spend), and the other hinted scripts (each a
+/// lookup of a whole address on a node) are at most `max_input_scripts` distinct ones.
+pub fn check_hint_scripts(ctx: &VerifyCtx, parsed: &ParsedTx) -> Result<()> {
+    let mut others: BTreeSet<&[u8]> = BTreeSet::new();
+    for (i, (inp, hint)) in parsed.tx.inputs.iter().zip(&parsed.hints).enumerate() {
+        let Some(hint) = hint else { continue };
+        let spk = &hint.script_public_key;
+        if is_p2sh(spk) {
+            let Some(redeem) = crate::token::redeem_of(&inp.signature_script) else {
+                return Err(X402Error::payload(
+                    Diag::InvalidKaspaExactTransaction,
+                    format!("input {i}: a P2SH spend whose signature script carries no redeem script"),
+                ));
+            };
+            if &kob_protocol::script::p2sh_spk(redeem) != spk {
+                return Err(X402Error::payload(
+                    Diag::InvalidKaspaExactUtxo,
+                    format!("input {i}: the embedded utxo script is not the hash of the redeem script the input carries"),
+                ));
+            }
+        } else {
+            others.insert(spk.script());
+        }
+    }
+    let max = ctx.policy.limits.max_input_scripts;
+    if others.len() > max {
+        return Err(X402Error::payload(
+            Diag::InvalidKaspaExactTransaction,
+            format!("the inputs spend {} distinct scripts; at most {max} are accepted", others.len()),
+        ));
+    }
+    Ok(())
+}
+
 /// Resolves every input from the trusted chain view and compares the embedded hints (binding steps 5
 /// and 6). An input that is not in the UTXO set is spent or unknown: `invalid_transaction_state`.
+/// [`check_hint_scripts`] bounds the lookup first.
 pub fn resolve_entries(ctx: &VerifyCtx, parsed: &ParsedTx) -> Result<Vec<UtxoEntry>> {
     let mut wanted = Vec::with_capacity(parsed.tx.inputs.len());
     for (i, (inp, hint)) in parsed.tx.inputs.iter().zip(&parsed.hints).enumerate() {
@@ -173,6 +214,7 @@ pub fn resolve_entries(ctx: &VerifyCtx, parsed: &ParsedTx) -> Result<Vec<UtxoEnt
         })?;
         wanted.push((outpoint_of(inp), hint.script_public_key.clone()));
     }
+    check_hint_scripts(ctx, parsed)?;
     let found = ctx
         .chain
         .utxos(&wanted)
@@ -491,5 +533,62 @@ pub fn payment_identifier(ctx: &VerifyCtx, payload: &PaymentPayload) -> Result<O
         Some(_) => {
             Err(X402Error::payload(Diag::InvalidKaspaPaymentIdentifier, "payment-identifier id must match ^[A-Za-z0-9_-]{16,128}$"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chain::FixedClock;
+    use crate::policy::Policy;
+    use crate::safe_tx::HintUtxo;
+    use crate::testkit::{p2pk_spk, pubkey, MockChain};
+    use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
+    use kaspa_consensus_core::tx::{TransactionInput, TransactionOutpoint, TransactionOutput};
+    use kaspa_consensus_core::Hash;
+
+    fn parsed(inputs: Vec<(Vec<u8>, ScriptPublicKey)>) -> ParsedTx {
+        let ins = inputs
+            .iter()
+            .enumerate()
+            .map(|(i, (sig, _))| {
+                TransactionInput::new(TransactionOutpoint::new(Hash::from_bytes([i as u8 + 1; 32]), 0), sig.clone(), 0, 1)
+            })
+            .collect();
+        let tx = Transaction::new(0, ins, vec![TransactionOutput::new(1, p2pk_spk(&pubkey(9)))], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+        let hints =
+            inputs.into_iter().map(|(_, spk)| Some(HintUtxo { amount: 10, script_public_key: spk, covenant_id: None })).collect();
+        ParsedTx { tx, hints }
+    }
+
+    #[test]
+    fn embedded_utxo_scripts_are_bounded_before_any_lookup() {
+        let chain = MockChain::new();
+        let clock = FixedClock::new(0);
+        let policy = Policy::new(Network::Testnet10);
+        let ctx = VerifyCtx { chain: &chain, clock: &clock, policy: &policy };
+        let max = policy.limits.max_input_scripts;
+        let sig = vec![0x41; 66];
+        // up to the bound of distinct non-P2SH scripts; repeats of one script count once
+        let ok: Vec<_> = (0..2 * max).map(|k| (sig.clone(), p2pk_spk(&pubkey((k % max) as u8 + 10)))).collect();
+        assert!(check_hint_scripts(&ctx, &parsed(ok.clone())).is_ok());
+        let mut over = ok;
+        over.push((sig.clone(), p2pk_spk(&pubkey(99))));
+        let e = check_hint_scripts(&ctx, &parsed(over)).unwrap_err();
+        assert!(e.message.contains("distinct scripts"), "{e:?}");
+        // a P2SH script is named by the redeem script its input carries, and does not count against the bound
+        let redeem = vec![0x51u8, 0x52];
+        let mut push = vec![redeem.len() as u8];
+        push.extend_from_slice(&redeem);
+        let p2sh = kob_protocol::script::p2sh_spk(&redeem);
+        let many: Vec<_> = std::iter::repeat_n((push.clone(), p2sh.clone()), 20).collect();
+        assert!(check_hint_scripts(&ctx, &parsed(many)).is_ok());
+        let other = kob_protocol::script::p2sh_spk(&[0x53]);
+        let e = check_hint_scripts(&ctx, &parsed(vec![(push, other)])).unwrap_err();
+        assert!(e.message.contains("redeem script"), "{e:?}");
+        // and the lookup itself is refused before the chain is asked
+        let mut over: Vec<_> = (0..=max).map(|k| (sig.clone(), p2pk_spk(&pubkey(k as u8 + 10)))).collect();
+        over.truncate(max + 1);
+        assert!(resolve_entries(&ctx, &parsed(over)).unwrap_err().message.contains("distinct scripts"));
     }
 }

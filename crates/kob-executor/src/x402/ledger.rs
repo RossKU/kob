@@ -203,12 +203,6 @@ pub struct Entry {
     /// follows the latest execution's merchant output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<IntentRecord>,
-    /// An intent record this build cannot read: written by an earlier build for a router template that changed since
-    /// (e.g. the token-intent lock pin of 2026-10-06, whose state has fields the older records lack). Kept verbatim and
-    /// re-written unchanged with every later line of the entry, never acted on: today's builders cannot build for the old
-    /// intent script anyway (`docs/spec/template-retirement.md`), and the entry keeps its outpoints and cached outcome.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub legacy_intent: Option<Value>,
     /// Invoice payments: the invoice id (hex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invoice: Option<String>,
@@ -226,6 +220,13 @@ impl Entry {
             .filter_map(|o| Some((Outpoint::new(parse_hash32(&o.txid)?, o.index), kob_x402::safe_tx::spk_from_hex(&o.spk).ok()?)))
             .collect()
     }
+
+    /// True for an intent payment (`kob-intent-v1`): it carries an intent record or its kind names an intent. Such an entry
+    /// is paid only by an execution of its intent, never by the creation itself, so it is never finalized as a direct
+    /// payment.
+    pub fn is_intent(&self) -> bool {
+        self.intent.is_some() || self.kind.starts_with("intent")
+    }
 }
 
 fn to_outpoint(o: &OutpointJson) -> Option<Outpoint> {
@@ -239,6 +240,12 @@ pub enum LedgerError {
     Io(String),
     #[error("ledger corrupt at line {line}: {msg}")]
     Corrupt { line: usize, msg: String },
+    /// A complete record in a format this build does not read (an intent payment recorded for an earlier router template).
+    #[error(
+        "ledger line {line} holds an intent payment in a format this build does not read ({msg}); stop, archive this ledger \
+         (and its invoice store) and start with a new ledger path (docs/ops/executor.md, \"Ledger format\")"
+    )]
+    Unsupported { line: usize, msg: String },
     #[error("unknown transaction {0}")]
     Unknown(String),
     #[error("illegal ledger transition {from} -> {to}")]
@@ -406,12 +413,14 @@ impl Ledger {
                     }
                 }
                 Ok(None) => good_len = end + usize::from(terminated), // blank line
-                Err(msg) if is_last => {
+                // a complete record of another format is never a torn tail: refuse wherever it is
+                Err(LineError::Unsupported(msg)) => return Err(LedgerError::Unsupported { line: line_no, msg }),
+                Err(LineError::Bad(msg)) if is_last => {
                     // torn (or zero-filled) tail: drop it
                     eprintln!("ledger: discarding a torn last record at line {line_no}: {msg}");
                     break;
                 }
-                Err(msg) => return Err(LedgerError::Corrupt { line: line_no, msg }),
+                Err(LineError::Bad(msg)) => return Err(LedgerError::Corrupt { line: line_no, msg }),
             }
             pos = end + 1;
         }
@@ -531,7 +540,6 @@ impl Ledger {
             accepted_daa: None,
             response: None,
             intent: n.intent,
-            legacy_intent: None,
             invoice: n.invoice,
         };
         let e = g.persist_and_index(e).map_err(X402Error::from)?;
@@ -659,7 +667,15 @@ impl Ledger {
     }
 }
 
-fn parse_line(line: &[u8]) -> Result<Option<Entry>, String> {
+/// Why a ledger line does not replay.
+enum LineError {
+    /// Not a record (torn, zero-filled or corrupt).
+    Bad(String),
+    /// A complete record of an intent payment in a format this build does not read.
+    Unsupported(String),
+}
+
+fn parse_line(line: &[u8]) -> Result<Option<Entry>, LineError> {
     if line.iter().all(|b| b.is_ascii_whitespace()) {
         return Ok(None);
     }
@@ -668,17 +684,23 @@ fn parse_line(line: &[u8]) -> Result<Option<Entry>, String> {
         entry: Entry,
     }
     match serde_json::from_slice::<Rec>(line) {
+        // an intent payment is only ever acted on through its intent record: one without it is not replayed as anything else
+        Ok(r) if r.entry.kind.starts_with("intent") && r.entry.intent.is_none() => {
+            Err(LineError::Unsupported(format!("entry {} of kind {} has no intent record", r.entry.txid, r.entry.kind)))
+        }
         Ok(r) => Ok(Some(r.entry)),
         Err(e) => {
-            // an intent record of an earlier router template: the entry replays with the record kept as `legacyIntent`
-            let mut v: Value = serde_json::from_slice(line).map_err(|_| e.to_string())?;
-            let Some(rec) = v.get_mut("entry").and_then(Value::as_object_mut) else { return Err(e.to_string()) };
-            let Some(old) = rec.remove("intent") else { return Err(e.to_string()) };
-            if serde_json::from_value::<IntentRecord>(old.clone()).is_ok() {
-                return Err(e.to_string()); // the intent record is not what fails
+            // a complete record whose intent record does not decode: written for an earlier router template
+            let intent_fails = serde_json::from_slice::<Value>(line).ok().is_some_and(|v| {
+                v.get("entry")
+                    .and_then(|x| x.get("intent"))
+                    .is_some_and(|i| !i.is_null() && serde_json::from_value::<IntentRecord>(i.clone()).is_err())
+            });
+            if intent_fails {
+                Err(LineError::Unsupported(format!("its intent record does not decode: {e}")))
+            } else {
+                Err(LineError::Bad(e.to_string()))
             }
-            rec.insert("legacyIntent".into(), old);
-            serde_json::from_value::<Rec>(v).map(|r| Some(r.entry)).map_err(|_| e.to_string())
         }
     }
 }
@@ -920,71 +942,58 @@ mod tests {
         assert!(matches!(Ledger::open(&p), Err(LedgerError::Corrupt { line: 2, .. })));
     }
 
-    /// An intent payment recorded by a build before a router template change (the token-intent lock pin of 2026-10-06 added
-    /// `lockAmount` / `lockExtension` to the intent state): the ledger used to refuse to start ("ledger corrupt ... missing
-    /// field `lockAmount`"), so the facilitator and the whole executor stayed down. The entry replays with its outpoints,
-    /// state and cached outcome; the unreadable record is kept verbatim as `legacyIntent` through later updates and compaction.
+    /// An intent payment recorded for an earlier router template (the token-intent lock pin of 2026-10-06 added
+    /// `lockAmount` / `lockExtension` to the intent state), a record of an unknown intent format, or an intent entry without
+    /// its record: the ledger refuses to start and names the line and what to do, wherever the line is (the last line too: a
+    /// complete record is never discarded as a torn tail). Such an entry is never replayed as a direct payment.
     #[test]
-    fn an_intent_record_of_an_earlier_router_template_replays_as_a_legacy_record() {
+    fn an_intent_record_of_another_format_refuses_to_start() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("ledger.jsonl");
         {
             let l = Ledger::open(&p).unwrap();
             l.claim(new_entry(1, 7, None, vec![op(0xa0, 0)])).unwrap();
+            l.claim(new_entry(2, 7, None, vec![op(0xa1, 0)])).unwrap();
         }
-        // the same entry as an older build wrote it, with an intent record today's types do not read
         let raw = std::fs::read_to_string(&p).unwrap();
-        let mut v: Value = serde_json::from_str(raw.trim()).unwrap();
-        let old =
+        let lines: Vec<Value> = raw.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let earlier =
             serde_json::json!({"facts": {"intent": {"kind": "TokenToKas", "maxSell": "200000000"}}, "executions": [], "lost": []});
-        assert!(serde_json::from_value::<IntentRecord>(old.clone()).is_err());
-        v["entry"]["intent"] = old.clone();
-        v["entry"]["state"] = "accepted".into();
-        let mut bad = v.clone();
-        bad["entry"]["state"] = "no-such-state".into();
-        std::fs::write(
-            &p,
-            format!(
-                "{}
-{v}
-",
-                serde_json::json!({"entry": {"txid": 5}})
-            ),
-        )
-        .unwrap();
-        assert!(matches!(Ledger::open(&p), Err(LedgerError::Corrupt { line: 1, .. })), "a really corrupt line still refuses");
-        std::fs::write(
-            &p,
-            format!(
-                "{bad}
-{v}
-"
-            ),
-        )
-        .unwrap();
-        assert!(matches!(Ledger::open(&p), Err(LedgerError::Corrupt { line: 1, .. })), "only the intent record is tolerated");
-        std::fs::write(
-            &p,
-            format!(
-                "{v}
-"
-            ),
-        )
-        .unwrap();
-        let l = Ledger::open(&p).expect("an old intent record does not stop the ledger");
-        let txid = hex(&[1; 32]);
-        let e = l.get(&txid).unwrap();
-        assert_eq!((e.state, e.intent.is_none(), e.legacy_intent.as_ref()), (State::Accepted, true, Some(&old)));
-        assert!(l.is_consumed(&op(0xa0, 0)), "its outpoints stay consumed");
-        l.update(&txid, 9, |e| e.reason = Some("touched".into())).unwrap();
-        l.compact().unwrap();
-        drop(l);
-        let e = Ledger::open(&p).unwrap().get(&txid).unwrap();
-        assert_eq!(
-            (e.reason.as_deref(), e.legacy_intent),
-            (Some("touched"), Some(old)),
-            "kept verbatim through updates and compaction"
-        );
+        let unknown = serde_json::json!({"version": 99, "anything": [1, 2, 3]});
+        for (what, intent, kind) in [
+            ("an earlier router template", Some(earlier), "intent-to-kas"),
+            ("an unknown intent format", Some(unknown), "intent-to-token"),
+            ("an unknown intent format, other kind", Some(serde_json::json!(7)), "native"),
+            ("an intent kind without its record", None, "intent-to-kas"),
+        ] {
+            for at in [0usize, 1] {
+                let mut text = String::new();
+                for (k, l) in lines.iter().enumerate() {
+                    let mut l = l.clone();
+                    if k == at {
+                        l["entry"]["kind"] = kind.into();
+                        l["entry"]["state"] = "broadcast".into();
+                        match &intent {
+                            Some(i) => l["entry"]["intent"] = i.clone(),
+                            None => {
+                                l["entry"].as_object_mut().unwrap().remove("intent");
+                            }
+                        }
+                    }
+                    text.push_str(&format!("{l}\n"));
+                }
+                std::fs::write(&p, &text).unwrap();
+                let e = Ledger::open(&p).err().unwrap_or_else(|| panic!("{what} at line {} opened", at + 1));
+                assert!(matches!(e, LedgerError::Unsupported { line, .. } if line == at + 1), "{what}: {e}");
+                assert!(e.to_string().contains("archive"), "{e}");
+                assert_eq!(std::fs::read_to_string(&p).unwrap(), text, "{what}: the ledger is left as it is");
+            }
+        }
+        // a really corrupt line is still reported as corruption, and a torn tail is still dropped
+        std::fs::write(&p, format!("{}\n{}\n", serde_json::json!({"entry": {"txid": 5}}), lines[1])).unwrap();
+        assert!(matches!(Ledger::open(&p), Err(LedgerError::Corrupt { line: 1, .. })));
+        std::fs::write(&p, format!("{}\n{{\"entry\":{{\"intent\":{{\"fa", lines[0])).unwrap();
+        assert_eq!(Ledger::open(&p).unwrap().len(), 1);
     }
 
     #[test]

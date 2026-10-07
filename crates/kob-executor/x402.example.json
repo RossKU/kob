@@ -21,6 +21,8 @@
   ],
   "rateLimit": {
     "perIp": { "burst": 30, "perSecond": 10 },
+    "perSite": { "burst": 150, "perSecond": 50 },
+    "anonymous": { "burst": 1000, "perSecond": 300 },
     "perMerchant": { "burst": 60, "perSecond": 20 }
   },
   "maxBodyBytes": 1048576,
@@ -33,8 +35,12 @@
   "reorgWatchDaa": 36000,
   "reconcileIntervalSeconds": 30,
   "maxConcurrentSettles": 64,
+  "maxConcurrentInvoicePays": 16,
   "maxConnections": 1024,
   "maxConnectionsPerIp": 64,
+  "maxConnectionsPerSite": 128,
+  "ipv6PrefixBits": 64,
+  "ipv6SitePrefixBits": 48,
   "killSwitchFile": "x402.kill",
   "intents": { "enabled": false, "keeperPubkey": "", "fillerSompi": 20000000, "maxAttempts": 20, "maxBuilds": 24, "maxCandidates": 8, "lockMarginDaa": 10 },
   "invoices": { "enabled": false, "maxLifetimeSeconds": 604800, "maxOpenPerMerchant": 10000, "maxExtraPaymentsPerInvoice": 16 }

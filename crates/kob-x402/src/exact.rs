@@ -100,8 +100,65 @@ pub fn verify_native(
     check_context(tx)?;
     let pay_idx = check_merchant_output(tx, &env.pay_to_spk, env.amount, payload.payload.payment_output_index)?;
 
+    // Binding step 11: request authorization by an authoritative funding input. Checked against the key of the input's
+    // embedded utxo BEFORE any chain lookup: the lookup is by that script, so the resolved input has the same key, and a
+    // payload that the payer did not authorize makes the chain resolve nothing.
+    for (i, h) in parsed.hints.iter().enumerate() {
+        if h.as_ref().is_some_and(|h| !is_p2pk(&h.script_public_key)) {
+            return Err(X402Error::payload(Diag::InvalidKaspaExactTransaction, format!("input {i} is not a standard Schnorr P2PK")));
+        }
+    }
+    let input_index =
+        auth.input_index.ok_or_else(|| X402Error::payload(Diag::InvalidAuthorization, "authorization.inputIndex is required"))?;
+    if input_index as usize >= tx.inputs.len() {
+        return Err(X402Error::payload(Diag::InvalidAuthorization, "authorization.inputIndex is out of range"));
+    }
+    let signer_spk = parsed.hints[input_index as usize]
+        .as_ref()
+        .map(|h| h.script_public_key.clone())
+        .ok_or_else(|| X402Error::payload(Diag::InvalidKaspaExactUtxo, format!("input {input_index} carries no embedded utxo")))?;
+    let signer = p2pk_key(&signer_spk).expect("every hinted input is P2PK (checked above)");
+    let txid = tx.id().as_bytes();
+    let digest = signed_auth_digest(&SignedAuth {
+        network: env.network,
+        profile: Profile::StandardNative,
+        transaction_id: &txid,
+        payment_output_index: payload.payload.payment_output_index,
+        amount: &offered.amount,
+        pay_to: &offered.pay_to,
+        pay_to_spk_hex: &spk_to_hex(&env.pay_to_spk),
+        requirements_hash: &env.requirements_hash,
+        request_hash: &env.request_hash,
+        challenge_id: None,
+        input_index,
+        expires_at: &auth.expires_at,
+    })?;
+    let claimed = parse_hash32(&auth.digest)
+        .ok_or_else(|| X402Error::payload(Diag::InvalidAuthorization, "authorization.digest is not 32-byte hex"))?;
+    if claimed != digest {
+        return Err(X402Error::payload(
+            Diag::InvalidAuthorization,
+            "authorization.digest differs from the digest the verifier recomputed",
+        ));
+    }
+    let sig_hex = auth.signature.as_deref().unwrap_or("");
+    let sig = kob_protocol::json::from_hex(sig_hex)
+        .ok()
+        .filter(|s| s.len() == 64)
+        .ok_or_else(|| X402Error::payload(Diag::InvalidAuthorization, "authorization.signature is not 64-byte hex"))?;
+    if !verify_schnorr_digest(&sig, &digest, &signer) {
+        return Err(X402Error::payload(
+            Diag::InvalidKaspaExactSignature,
+            "authorization signature does not verify under the key of the funding input",
+        ));
+    }
+
     // Binding steps 5 and 6: trusted input resolution.
     let entries = resolve_entries(ctx, &parsed)?;
+    let signer_input = &entries[input_index as usize];
+    if signer_input.script_public_key != signer_spk {
+        return Err(X402Error::payload(Diag::InvalidKaspaExactUtxo, "the authorizing input resolved to another script"));
+    }
 
     // Every input is a standard Schnorr P2PK of the payer with a canonical SIGHASH_ALL signature script.
     for (i, (inp, e)) in tx.inputs.iter().zip(&entries).enumerate() {
@@ -139,48 +196,6 @@ pub fn verify_native(
                 "the other output does not return to the script of a payer input",
             ));
         }
-    }
-
-    // Binding step 11: request authorization by an authoritative funding input.
-    let input_index =
-        auth.input_index.ok_or_else(|| X402Error::payload(Diag::InvalidAuthorization, "authorization.inputIndex is required"))?;
-    let signer_input = entries
-        .get(input_index as usize)
-        .ok_or_else(|| X402Error::payload(Diag::InvalidAuthorization, "authorization.inputIndex is out of range"))?;
-    let signer = p2pk_key(&signer_input.script_public_key).expect("every input is P2PK (checked above)");
-    let txid = tx.id().as_bytes();
-    let digest = signed_auth_digest(&SignedAuth {
-        network: env.network,
-        profile: Profile::StandardNative,
-        transaction_id: &txid,
-        payment_output_index: payload.payload.payment_output_index,
-        amount: &offered.amount,
-        pay_to: &offered.pay_to,
-        pay_to_spk_hex: &spk_to_hex(&env.pay_to_spk),
-        requirements_hash: &env.requirements_hash,
-        request_hash: &env.request_hash,
-        challenge_id: None,
-        input_index,
-        expires_at: &auth.expires_at,
-    })?;
-    let claimed = parse_hash32(&auth.digest)
-        .ok_or_else(|| X402Error::payload(Diag::InvalidAuthorization, "authorization.digest is not 32-byte hex"))?;
-    if claimed != digest {
-        return Err(X402Error::payload(
-            Diag::InvalidAuthorization,
-            "authorization.digest differs from the digest the verifier recomputed",
-        ));
-    }
-    let sig_hex = auth.signature.as_deref().unwrap_or("");
-    let sig = kob_protocol::json::from_hex(sig_hex)
-        .ok()
-        .filter(|s| s.len() == 64)
-        .ok_or_else(|| X402Error::payload(Diag::InvalidAuthorization, "authorization.signature is not 64-byte hex"))?;
-    if !verify_schnorr_digest(&sig, &digest, &signer) {
-        return Err(X402Error::payload(
-            Diag::InvalidKaspaExactSignature,
-            "authorization signature does not verify under the key of the funding input",
-        ));
     }
 
     // Binding steps 7, 9 and 10: script engine, fee, mass.

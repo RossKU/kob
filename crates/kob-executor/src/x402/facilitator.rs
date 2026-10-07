@@ -217,7 +217,6 @@ impl Drop for TxGuard<'_> {
 #[derive(Default)]
 struct KeyLocks {
     held: Mutex<HashSet<String>>,
-    cv: Condvar,
 }
 
 struct KeyGuard<'a> {
@@ -226,20 +225,21 @@ struct KeyGuard<'a> {
 }
 
 impl KeyLocks {
-    fn lock(&self, key: &str) -> KeyGuard<'_> {
+    /// The lock of `key`, or `None` while another caller holds it (nobody waits on it: a payment of an invoice is decided
+    /// while the others are told it is pending).
+    fn try_lock(&self, key: &str) -> Option<KeyGuard<'_>> {
         let mut g = self.held.lock().unwrap_or_else(|p| p.into_inner());
-        while g.contains(key) {
-            g = self.cv.wait(g).unwrap_or_else(|p| p.into_inner());
+        if g.contains(key) {
+            return None;
         }
         g.insert(key.to_string());
-        KeyGuard { locks: self, key: key.to_string() }
+        Some(KeyGuard { locks: self, key: key.to_string() })
     }
 }
 
 impl Drop for KeyGuard<'_> {
     fn drop(&mut self) {
         self.locks.held.lock().unwrap_or_else(|p| p.into_inner()).remove(&self.key);
-        self.locks.cv.notify_all();
     }
 }
 
@@ -611,6 +611,10 @@ impl Facilitator {
                 if e.request_hash != rh || e.requirements_hash != reqs_hash || e.merchant != merchant || accepted_hash != reqs_hash {
                     return Err(X402Error::state(Diag::Replay, "this transaction was already consumed by a different request"));
                 }
+                if e.is_intent() {
+                    // recorded as an intent payment: only its intent's execution pays the merchant, never this transaction
+                    return Err(X402Error::state(Diag::Replay, "this transaction is recorded as an intent payment, not a direct one"));
+                }
                 match e.state {
                     State::Accepted => {
                         Metrics::inc(&self.metrics.settle_resumed);
@@ -873,6 +877,13 @@ impl Facilitator {
     }
 
     fn observe_and_finish(&self, e: &Entry, wait: Duration) -> Result<SettlementResponse> {
+        if e.is_intent() {
+            return Err(X402Error::new(
+                Reason::UnexpectedSettleError,
+                Diag::Internal,
+                "an intent payment is not finalized as a direct payment",
+            ));
+        }
         match self.observe(e, wait) {
             Observed::Final { accepted_daa } => {
                 let resp = self.success_response(e, accepted_daa);
@@ -915,8 +926,9 @@ impl Facilitator {
         for e in entries {
             let Ok(txid) = parse_hash32(&e.txid).ok_or(()) else { continue };
             let Some(_g) = self.locks.try_lock(txid) else { continue }; // a settle is working on it
-            if e.intent.is_some() && e.state != State::Accepted {
-                // an intent payment: plan, execute or observe one step (its watched output is not final by itself)
+            if e.is_intent() && e.state != State::Accepted {
+                // an intent payment: plan, execute or observe one step (its watched output is not final by itself). It never
+                // takes the direct path below, whose finality would be the creation's own output.
                 rep.checked += 1;
                 rep.intents_driven += 1;
                 match self.drive_intent(&e.txid) {

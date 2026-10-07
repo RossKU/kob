@@ -12,7 +12,7 @@
 //! | `POST /invoices` | merchant API key (invoices enabled) |
 //! | `GET /invoices/{id}` | public: the invoice (its canonical JSON hashes to `id`) |
 //! | `GET /invoices/{id}/status` | public: invoice-level status (a read, never an await) |
-//! | `POST /invoices/{id}/pay` | public: settles one payment of the invoice (per-IP rate limit, settle slots) |
+//! | `POST /invoices/{id}/pay` | public: settles one payment of the invoice (per-IP, per-site and anonymous rate limits; invoice-pay slots) |
 //!
 //! Admission of a POST, in this order and before any verification or chain access:
 //! kill switch (503) -> per-IP rate limit (429 + Retry-After) -> content type (415) -> Bearer API key
@@ -59,9 +59,18 @@ pub struct AppState {
     pub max_body: usize,
     pub body_deadline: Duration,
     ip_limiter: Limiter<IpAddr>,
+    /// IPv6 sites (`ipv6_site_bits` prefix): the /64s of one allocation share one budget.
+    site_limiter: Limiter<IpAddr>,
+    /// One bucket shared by every request without a merchant key.
+    anonymous_limiter: Limiter<()>,
+    ipv6_bits: u8,
+    ipv6_site_bits: u8,
     merchant_limiter: Limiter<String>,
     merchant_default: Rate,
     settle_slots: Arc<Semaphore>,
+    /// Slots of the anonymous `POST /invoices/{id}/pay`: a pool of their own, so anonymous requests never hold the merchants'
+    /// `/settle` slots.
+    invoice_pay_slots: Arc<Semaphore>,
     /// Per-merchant settle slots, created on first use.
     merchant_slots: std::sync::Mutex<std::collections::HashMap<String, Arc<Semaphore>>>,
     per_merchant_settles: usize,
@@ -82,9 +91,14 @@ impl AppState {
             max_body: c.max_body_bytes,
             body_deadline: c.body_deadline(),
             ip_limiter: Limiter::new(c.rate_limit.per_ip.rate(), 100_000),
+            site_limiter: Limiter::new(c.rate_limit.per_site.rate(), 100_000),
+            anonymous_limiter: Limiter::new(c.rate_limit.anonymous.rate(), 1),
+            ipv6_bits: c.ipv6_prefix_bits,
+            ipv6_site_bits: c.ipv6_site_prefix_bits,
             merchant_limiter: Limiter::new(c.rate_limit.per_merchant.rate(), 10_000),
             merchant_default: c.rate_limit.per_merchant.rate(),
             settle_slots: Arc::new(Semaphore::new(c.max_concurrent_settles)),
+            invoice_pay_slots: Arc::new(Semaphore::new(c.max_concurrent_invoice_pays.max(1))),
             merchant_slots: std::sync::Mutex::new(std::collections::HashMap::new()),
             per_merchant_settles: c.max_settles_per_merchant.min(c.max_concurrent_settles).max(1),
             verify_slots: Arc::new(Semaphore::new(c.max_concurrent_verifies)),
@@ -167,9 +181,9 @@ fn peer_ip(req: &Request) -> Option<IpAddr> {
 }
 
 /// The client a request is attributed to: the forwarded-client header when the peer is a trusted proxy, else the peer.
-fn client_ip(st: &AppState, req: &Request) -> IpAddr {
+fn client_addr(st: &AppState, req: &Request) -> IpAddr {
     let peer = peer_ip(req).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-    rate_key(st.resolver.resolve(peer, req.headers()), 64)
+    crate::api::client_ip::unmap(st.resolver.resolve(peer, req.headers()))
 }
 
 /// Headers a reverse proxy typically adds: a request that carries one did not come from a local operator.
@@ -282,9 +296,17 @@ fn rate_limited(st: &AppState, retry: u64) -> Response {
     error_response(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "too many requests", Diag::RateLimited, Some(retry))
 }
 
+/// The limits of a request without a merchant key: its client, its IPv6 site, then the bucket all of them share (each only
+/// charged once the narrower ones passed, so a client that is already limited cannot drain the shared ones).
 fn ip_check(st: &AppState, req: &Request) -> Result<(), Response> {
-    let ip = client_ip(st, req);
-    st.ip_limiter.check(&ip, st.fac.clock.now_ms()).map_err(|retry| rate_limited(st, retry))
+    let addr = client_addr(st, req);
+    let now = st.fac.clock.now_ms();
+    let limited = |retry| rate_limited(st, retry);
+    st.ip_limiter.check(&rate_key(addr, st.ipv6_bits), now).map_err(limited)?;
+    if st.ipv6_site_bits > 0 && addr.is_ipv6() {
+        st.site_limiter.check(&rate_key(addr, st.ipv6_site_bits), now).map_err(limited)?;
+    }
+    st.anonymous_limiter.check(&(), now).map_err(limited)
 }
 
 fn killed_response(st: &AppState) -> Response {
@@ -672,9 +694,15 @@ async fn invoice_pay_h(
             );
         }
     };
-    let Ok(permit) = st.settle_slots.clone().try_acquire_owned() else {
+    let Ok(permit) = st.invoice_pay_slots.clone().try_acquire_owned() else {
         Metrics::inc(&st.metrics().http_busy);
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "busy", "too many settlements in flight", Diag::RateLimited, Some(1));
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "busy",
+            "too many invoice payments in flight",
+            Diag::RateLimited,
+            Some(1),
+        );
     };
     let fac = st.fac.clone();
     // like /settle: the settlement outlives a disconnecting client

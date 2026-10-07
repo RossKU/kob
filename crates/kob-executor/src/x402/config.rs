@@ -19,7 +19,8 @@
 //!                    "allowedPayTo": ["kaspatest:..."], "allowedAssets": ["KAS"],
 //!                    "rateLimit": { "burst": 20, "perSecond": 5 } } ],
 //!   "adminKeySha256": "<64 hex>",
-//!   "rateLimit": { "perIp": { "burst": 30, "perSecond": 10 }, "perMerchant": { "burst": 60, "perSecond": 20 } },
+//!   "rateLimit": { "perIp": { "burst": 30, "perSecond": 10 }, "perSite": { "burst": 150, "perSecond": 50 },
+//!                  "anonymous": { "burst": 1000, "perSecond": 300 }, "perMerchant": { "burst": 60, "perSecond": 20 } },
 //!   "maxBodyBytes": 1048576,
 //!   "bodyDeadlineMs": 10000,
 //!   "headerTimeoutMs": 10000,
@@ -29,7 +30,12 @@
 //!   "reorgWatchDaa": 36000,
 //!   "reconcileIntervalSeconds": 30,
 //!   "maxConcurrentSettles": 64,
+//!   "maxConcurrentInvoicePays": 16,
 //!   "maxConnections": 1024,
+//!   "maxConnectionsPerIp": 64,
+//!   "maxConnectionsPerSite": 128,
+//!   "ipv6PrefixBits": 64,
+//!   "ipv6SitePrefixBits": 48,
 //!   "killSwitchFile": "x402.kill",
 //!   "intents": { "enabled": true, "keeperPubkey": "<64 hex x-only key>", "fillerSompi": 20000000,
 //!                "maxAttempts": 20, "maxBuilds": 24, "maxCandidates": 8, "lockMarginDaa": 10 },
@@ -90,17 +96,27 @@ impl RateCfg {
     }
 }
 
-/// Per-IP and per-merchant default limits.
+/// Request limits. A request without a merchant key takes a token of its client (`perIp`; IPv6 per `ipv6PrefixBits`), of its
+/// IPv6 site (`perSite`; all /64s of one `ipv6SitePrefixBits` prefix together) and of the one bucket all such requests share
+/// (`anonymous`), in this order (a client that is already limited takes nothing from the shared buckets); a request with a
+/// merchant key takes a token of its merchant (`perMerchant` or the merchant's own `rateLimit`).
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase", default)]
 pub struct RateLimits {
     pub per_ip: RateCfg,
+    pub per_site: RateCfg,
+    pub anonymous: RateCfg,
     pub per_merchant: RateCfg,
 }
 
 impl Default for RateLimits {
     fn default() -> Self {
-        RateLimits { per_ip: RateCfg { burst: 30, per_second: 10.0 }, per_merchant: RateCfg { burst: 60, per_second: 20.0 } }
+        RateLimits {
+            per_ip: RateCfg { burst: 30, per_second: 10.0 },
+            per_site: RateCfg { burst: 150, per_second: 50.0 },
+            anonymous: RateCfg { burst: 1_000, per_second: 300.0 },
+            per_merchant: RateCfg { burst: 60, per_second: 20.0 },
+        }
     }
 }
 
@@ -240,12 +256,21 @@ pub struct X402Config {
     /// Most settlements one merchant may have in flight: the global cap alone lets one merchant hold every slot for
     /// `settleWaitMs` each with transactions that conflict with each other. Clamped to `maxConcurrentSettles`.
     pub max_settles_per_merchant: usize,
+    /// Most anonymous `POST /invoices/{id}/pay` calls running at once. A pool of their own: they never take `/settle` slots.
+    pub max_concurrent_invoice_pays: usize,
     /// Most `/verify` calls running at once (each runs the script engine on a blocking thread).
     pub max_concurrent_verifies: usize,
     pub max_connections: usize,
-    /// Open connections per socket peer (IPv6: per /64; `trustedProxies` exempt), so one host cannot hold every one of
-    /// `maxConnections`; 0 = no per-address cap.
+    /// Open connections per socket peer (IPv6: per `ipv6PrefixBits` prefix; `trustedProxies` exempt), so one host cannot hold
+    /// every one of `maxConnections`; 0 = no per-address cap.
     pub max_connections_per_ip: usize,
+    /// Open connections per IPv6 site (all /64s of one `ipv6SitePrefixBits` prefix together; `trustedProxies` exempt); 0 = no
+    /// site cap.
+    pub max_connections_per_site: usize,
+    /// IPv6 clients are counted per this many leading address bits (64: one subscriber) by the connection cap and `perIp`.
+    pub ipv6_prefix_bits: u8,
+    /// Leading bits of an IPv6 site (48) for `maxConnectionsPerSite` and `rateLimit.perSite`; 0 disables both site limits.
+    pub ipv6_site_prefix_bits: u8,
     /// A response write that makes no progress for this long (the client stopped reading) closes the connection; 0 = off.
     pub write_timeout_ms: u64,
     pub kill_switch_file: Option<String>,
@@ -293,9 +318,13 @@ impl Default for X402Config {
             reconcile_interval_seconds: 30,
             max_concurrent_settles: 64,
             max_settles_per_merchant: 8,
+            max_concurrent_invoice_pays: 16,
             max_concurrent_verifies: 64,
             max_connections: 1024,
             max_connections_per_ip: 64,
+            max_connections_per_site: 128,
+            ipv6_prefix_bits: 64,
+            ipv6_site_prefix_bits: 48,
             write_timeout_ms: 30_000,
             kill_switch_file: None,
             trusted_proxies: vec![],
@@ -343,7 +372,9 @@ impl X402Config {
             write_timeout: std::time::Duration::from_millis(self.write_timeout_ms),
             max_connections: self.max_connections.max(1),
             max_per_ip: self.max_connections_per_ip,
-            ipv6_prefix_bits: 64,
+            ipv6_prefix_bits: self.ipv6_prefix_bits,
+            max_per_site: self.max_connections_per_site,
+            ipv6_site_prefix_bits: self.ipv6_site_prefix_bits,
             exempt: crate::api::client_ip::TrustedProxies::parse(&self.trusted_proxies).unwrap_or_default(),
         }
     }
@@ -401,8 +432,8 @@ impl X402Config {
         if self.max_concurrent_settles == 0 || self.max_connections == 0 {
             return err("maxConcurrentSettles and maxConnections must be positive");
         }
-        if self.max_settles_per_merchant == 0 || self.max_concurrent_verifies == 0 {
-            return err("maxSettlesPerMerchant and maxConcurrentVerifies must be positive");
+        if self.max_settles_per_merchant == 0 || self.max_concurrent_verifies == 0 || self.max_concurrent_invoice_pays == 0 {
+            return err("maxSettlesPerMerchant, maxConcurrentVerifies and maxConcurrentInvoicePays must be positive");
         }
         crate::api::client_ip::TrustedProxies::parse(&self.trusted_proxies)
             .map_err(|e| ConfigError(format!("trustedProxies: {e}")))?;
@@ -441,6 +472,14 @@ impl X402Config {
             }
         }
         check_rate("rateLimit.perIp", self.rate_limit.per_ip)?;
+        check_rate("rateLimit.perSite", self.rate_limit.per_site)?;
+        check_rate("rateLimit.anonymous", self.rate_limit.anonymous)?;
+        if !(32..=128).contains(&self.ipv6_prefix_bits) {
+            return err("ipv6PrefixBits must be within 32..=128");
+        }
+        if self.ipv6_site_prefix_bits != 0 && !(16..=self.ipv6_prefix_bits).contains(&self.ipv6_site_prefix_bits) {
+            return err("ipv6SitePrefixBits must be 0 (off) or within 16..=ipv6PrefixBits");
+        }
         check_rate("rateLimit.perMerchant", self.rate_limit.per_merchant)?;
 
         let mut policy = Policy::new(network);

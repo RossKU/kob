@@ -119,8 +119,13 @@ pub struct ApiConfig {
     pub max_connections: usize,
     /// Open HTTP connections per socket peer (IPv6 per `rate_limit.ipv6_prefix_bits` prefix; trusted proxies exempt); 0 = no cap.
     pub max_connections_per_ip: usize,
+    /// Open HTTP connections per IPv6 site (`rate_limit.ipv6_site_prefix_bits`, all its /64s together; trusted proxies
+    /// exempt); 0 = no site cap.
+    pub max_connections_per_site: usize,
     pub max_ws_connections: usize,
     pub max_ws_per_ip: usize,
+    /// Open WebSocket connections per IPv6 site (`rate_limit.ipv6_site_prefix_bits`, all its /64s together); 0 = no site cap.
+    pub max_ws_per_site: usize,
     /// A WebSocket session that sends no application message (a subscription change or `{"op":"ping"}`) for this long is
     /// closed; protocol Ping / Pong frames do not count.
     pub ws_idle_timeout_ms: u64,
@@ -149,8 +154,10 @@ impl Default for ApiConfig {
             write_timeout_ms: 30_000,
             max_connections: 4_096,
             max_connections_per_ip: 64,
+            max_connections_per_site: 512,
             max_ws_connections: 2_000,
             max_ws_per_ip: 20,
+            max_ws_per_site: 200,
             ws_idle_timeout_ms: 60_000,
             ws_client_msgs_per_sec: 20,
             max_ws_subscriptions: 64,

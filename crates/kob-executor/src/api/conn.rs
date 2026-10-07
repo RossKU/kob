@@ -7,8 +7,9 @@
 //!   `header_timeout`, so slow-header (slowloris) and idle keep-alive connections are closed;
 //! - a write-stall deadline: a write that makes no progress for `write_timeout` (a client that pipelines requests and never
 //!   reads the responses, or stops reading a response) closes the connection;
-//! - a cap on open connections, and a cap per client address (IPv6 per `ipv6_prefix_bits` prefix) so one host cannot hold
-//!   every slot. Trusted reverse proxies are exempt from the per-address cap (every client behind them shares their address).
+//! - a cap on open connections, a cap per client address (IPv6 per `ipv6_prefix_bits` prefix) so one host cannot hold
+//!   every slot, and a cap per IPv6 site (`ipv6_site_prefix_bits`, a /48) so the many /64s of one allocation cannot either.
+//!   Trusted reverse proxies are exempt from the per-address and per-site caps (every client behind them shares their address).
 //!   A connection over a cap gets a best-effort `503` and is closed, never served.
 //!
 //! On shutdown the listener stops accepting, every connection is asked to finish its in-flight request and close
@@ -42,6 +43,10 @@ pub struct ConnLimits {
     /// Open connections per client address (IPv6: per `ipv6_prefix_bits` prefix); zero disables the per-address cap.
     pub max_per_ip: usize,
     pub ipv6_prefix_bits: u8,
+    /// Open connections per IPv6 site (`ipv6_site_prefix_bits` prefix, all its /64s together); zero disables the site cap.
+    pub max_per_site: usize,
+    /// Leading bits of an IPv6 site (48); zero disables the site cap.
+    pub ipv6_site_prefix_bits: u8,
     /// Peers exempt from the per-address cap (the operator's reverse proxies).
     pub exempt: TrustedProxies,
 }
@@ -104,6 +109,8 @@ pub async fn serve(
     let max = limits.max_connections.max(1);
     let slots = Arc::new(Semaphore::new(max));
     let per_ip = Arc::new(PerIp::default());
+    // site keys live in their own table: a /48 key and the key of its first /64 are the same address
+    let per_site = Arc::new(PerIp::default());
     let (stop_tx, stop_rx) = watch::channel(false);
     tokio::pin!(shutdown);
     loop {
@@ -119,6 +126,19 @@ pub async fn serve(
             _ = &mut shutdown => break,
         };
         let ip = super::client_ip::unmap(peer.ip());
+        let site_slot = if limits.max_per_site > 0 && limits.ipv6_site_prefix_bits > 0 && ip.is_ipv6() && !limits.exempt.is_trusted(ip)
+        {
+            match per_site.try_acquire(rate_key(ip, limits.ipv6_site_prefix_bits), limits.max_per_site) {
+                Some(s) => Some(s),
+                None => {
+                    tracing::debug!("{name}: {peer} over the per-site connection cap");
+                    let _ = stream.try_write(OVER_CAP);
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
         let ip_slot = if limits.max_per_ip > 0 && !limits.exempt.is_trusted(ip) {
             match per_ip.try_acquire(rate_key(ip, limits.ipv6_prefix_bits), limits.max_per_ip) {
                 Some(s) => Some(s),
@@ -142,6 +162,7 @@ pub async fn serve(
         tokio::spawn(async move {
             let _permit = permit;
             let _ip_slot = ip_slot;
+            let _site_slot = site_slot;
             let io = TokioIo::new(WriteStall::new(stream, write_timeout));
             let mut b = hyper::server::conn::http1::Builder::new();
             b.timer(TokioTimer::new()).header_read_timeout(header_timeout);

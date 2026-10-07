@@ -240,6 +240,16 @@ The standalone `kob-executor x402 --config <file>` (flags `--network`, `--node`,
 `--ledger`, `--auth` override the file) runs the facilitator alone, with finality from the node's UTXO
 set.
 
+**Ledger format.** The ledger (`ledger`, a JSONL log) is read only in the format of the running build. An intent
+payment recorded for an earlier router template (for example before the token-intent lock pin of 2026-10-06), an intent
+record of any format this build does not decode, or an entry of an intent kind without its intent record stops the
+facilitator at startup: `ledger line <n> holds an intent payment in a format this build does not read (...); stop, archive
+this ledger (and its invoice store) and start with a new ledger path`. Such a line is never discarded as a torn tail and
+never replayed as anything else; the file is left untouched. Archive the ledger and its invoice store together (an invoice's
+payments live in the ledger), settle what they still hold by hand, and start on new paths. Only an entry recorded as a
+direct payment is ever finalized from its own transaction's output; an intent payment is finalized only by an execution
+of its intent.
+
 ### A.7 Intent payments and invoices
 
 Two optional parts of the facilitator (`docs/spec/x402-swap-and-pay.md` sections 17 and 18), both off by
@@ -300,12 +310,15 @@ at any time, and the SDK builds the same expiry for anyone to submit (`expireInt
 | `POST /invoices` | merchant API key | registers an invoice (idempotent); answers `{ id, url, invoice, created }` |
 | `GET /invoices/{id}` | public | the invoice; its canonical JSON hashes to `id` (what a QR code links to) |
 | `GET /invoices/{id}/status` | public | `unpaid`, `pending`, `paid` (with the transaction and its DAA), `expired`, `failed`; attempts; refused duplicate and late payments |
-| `POST /invoices/{id}/pay` | public, per-IP rate limit, settle slots | settles one payment of the invoice (body: the x402 `PaymentPayload`); answers a `SettlementResponse` |
+| `POST /invoices/{id}/pay` | public, per-IP / per-site / anonymous rate limits, invoice-pay slots | settles one payment of the invoice (body: the x402 `PaymentPayload`); answers a `SettlementResponse` |
 
 An invoice is registered only when every `accepts` entry is one the facilitator settles and within the
 merchant's `allowedPayTo` / `allowedAssets`, its lifetime is at most `maxLifetimeSeconds`, and the merchant has
 fewer than `maxOpenPerMerchant` unexpired invoices. A payment's request hash is the invoice id. One invoice is
-paid once: a duplicate or late payment is refused before broadcast, kept as evidence, and reported in the
+paid once: while one payment of an invoice is being settled, any other request to pay it is answered
+`invoice_pending` (retryable) at once instead of waiting for it; pays run in a pool of their own
+(`maxConcurrentInvoicePays`, 16; `busy` / 503 beyond it), so anonymous pays never take the merchants' `/settle` slots. A
+duplicate or late payment is refused before broadcast, kept as evidence, and reported in the
 status (`extraPayments[].observed = accepted`) if its payer broadcasts it anyway, so it can be refunded by hand
 (refunds are not automated). The pay route is public, so this evidence is bounded: a refused payment that spends exactly the outputs
 a kept one spends (a fee variant of the same funding: at most one of them can reach the chain) is not kept, and an
@@ -1280,8 +1293,10 @@ stall or drain any executor:
   Below the request guard, the transport is bounded too: a request head must arrive within `api.header_timeout_ms` (10 000; also
   the keep-alive idle limit), a response write that makes no progress for `api.write_timeout_ms` (30 000; 0 = off) closes the
   connection, and at most `api.max_connections` (4 096) HTTP connections are open, `api.max_connections_per_ip` (64; per /64,
-  trusted proxies exempt; 0 = no cap) of them from one socket peer; a connection over a cap is answered `503` and closed (an
-  upgraded WebSocket counts against `max_ws_connections` / `max_ws_per_ip` instead).
+  trusted proxies exempt; 0 = no cap) of them from one socket peer and `api.max_connections_per_site` (512; 0 = no cap) from
+  one IPv6 site (`api.rate_limit.ipv6_site_prefix_bits`, all its /64s together); a connection over a cap is answered `503` and
+  closed (an upgraded WebSocket counts against `max_ws_connections` / `max_ws_per_ip` / `max_ws_per_site` (200 per site;
+  0 = no cap; over it: 429 `ws_per_site_limit`) instead).
 * **The x402 facilitator** attributes requests to the forwarded client behind `trustedProxies` /
   `clientIpHeader`; `/metrics` is never served to a loopback peer when proxies are configured, when the request carries a forwarding
   header, or when `metricsLoopback` is false (use the admin key); a request with a valid merchant key is limited by its merchant's
@@ -1289,8 +1304,15 @@ stall or drain any executor:
   (`maxSettlesPerMerchant`, 8) as well as globally, and `/verify` has its own cap (`maxConcurrentVerifies`, 64). The listener
   closes a connection whose request head does not arrive within `headerTimeoutMs` (10 000; also the keep-alive idle limit) or whose
   response write makes no progress for `writeTimeoutMs` (30 000; 0 = off), and holds at most `maxConnections` (1 024) connections,
-  `maxConnectionsPerIp` (64; per /64, `trustedProxies` exempt; 0 = no cap) of them from one socket peer; a connection over a cap
-  is answered `503` and closed. `/verify` refuses a
+  `maxConnectionsPerIp` (64; per `ipv6PrefixBits`, 64; `trustedProxies` exempt; 0 = no cap) of them from one socket peer and
+  `maxConnectionsPerSite` (128; 0 = no cap) from one IPv6 site (all /64s of one `ipv6SitePrefixBits` prefix, 48; 0 = no site
+  limits); a connection over a cap is answered `503` and closed. A request without a merchant key takes a token of its client
+  (`rateLimit.perIp`, burst 30, 10/s), of its IPv6 site (`rateLimit.perSite`, burst 150, 50/s) and of one bucket all such
+  requests share (`rateLimit.anonymous`, burst 1 000, 300/s), each only once the narrower ones passed (429 + `Retry-After`).
+  Before any chain lookup, a payment's embedded utxos are bounded: a P2SH input must carry the redeem script its script
+  hashes, at most 8 distinct other scripts are resolved (each is an address-wide lookup on the node), and a
+  `standard-native` payment's authorization is verified against the key of the input it names first, so a payload its
+  payer did not authorize resolves nothing. `/verify` refuses a
   payment funded by an immature coinbase output (100 DAA; it is a check, never a delivery guarantee: only `/settle`'s observed
   finality is). `":memory:"` ledgers are refused on mainnet, and a `pending` entry the node never saw is failed and its outpoints
   released after 15 minutes.

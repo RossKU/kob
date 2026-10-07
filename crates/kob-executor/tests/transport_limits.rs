@@ -141,6 +141,8 @@ fn limits(max_connections: usize, max_per_ip: usize, header_ms: u64, write_ms: u
         max_connections,
         max_per_ip,
         ipv6_prefix_bits: 64,
+        max_per_site: 0,
+        ipv6_site_prefix_bits: 48,
         exempt: Default::default(),
     }
 }

@@ -303,12 +303,13 @@ fn forged_utxo_hint_is_rejected() {
     let mut p = fx.payload.clone();
     p.payload.transaction = safe.to_text();
     expect_err(fx.verify_payload(&p), Reason::InvalidPayload, Diag::InvalidKaspaExactUtxo);
-    // hint script lies: the chain has no such unspent output of that script
+    // hint script lies on the authorizing input: the authorization is checked against the hinted key before any chain
+    // lookup, and that key did not sign it
     let mut safe = SafeTx::parse(&fx.payload.payload.transaction, 1 << 20).unwrap();
     safe.inputs[0].utxo.as_mut().unwrap().script_public_key = kob_x402::safe_tx::spk_to_hex(&spk_of(ATTACKER));
     let mut p = fx.payload.clone();
     p.payload.transaction = safe.to_text();
-    expect_err(fx.verify_payload(&p), Reason::InvalidTransactionState, Diag::InvalidKaspaExactUtxo);
+    expect_err(fx.verify_payload(&p), Reason::InvalidPayload, Diag::InvalidKaspaExactSignature);
     // covenant id hint on a plain coin
     let mut safe = SafeTx::parse(&fx.payload.payload.transaction, 1 << 20).unwrap();
     safe.inputs[0].utxo.as_mut().unwrap().covenant_id = Some(hex(&[1; 32]));

@@ -273,6 +273,8 @@ fn conn_limits(cfg: &ApiConfig) -> conn::ConnLimits {
         max_connections: cfg.max_connections.max(1),
         max_per_ip: cfg.max_connections_per_ip,
         ipv6_prefix_bits: cfg.rate_limit.ipv6_prefix_bits,
+        max_per_site: cfg.max_connections_per_site,
+        ipv6_site_prefix_bits: cfg.rate_limit.ipv6_site_prefix_bits,
         exempt: TrustedProxies::parse(&cfg.trusted_proxies).unwrap_or_default(),
     }
 }

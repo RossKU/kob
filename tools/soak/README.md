@@ -1102,6 +1102,8 @@ Found on the way (fixed, regression tests):
 * **The facilitator ledger refused to open** (`ledger corrupt at line 49: missing field lockAmount`): every intent payment recorded
   before the lock pin failed to decode, so the new exec-a exited at start (exec-a was rolled back to the old binary for 8 min). Such a
   record now replays as `legacyIntent` (kept verbatim, never acted on); 123 of the 488 entries.
+  (Superseded: earlier intent formats are no longer read; such a ledger stops the facilitator at start with a message to
+  archive it, see `docs/ops/executor.md` A.6 "Ledger format".)
 * **Orders of a retired template with today's layout were listed**: a carried database keeps them under the contract name, their state
   decodes as today's kind, and a fill / kill / refund planned from today's template cannot spend their script. The book now offers only
   orders whose recorded template hash is pinned.

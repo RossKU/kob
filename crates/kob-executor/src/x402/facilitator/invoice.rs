@@ -513,7 +513,13 @@ impl Facilitator {
             request_hash: Some(id.clone()),
             resource: None,
         };
-        let _g = self.invoice_locks.lock(&id);
+        // Never wait for the lock: a payment of this invoice being decided (or observed, for up to the settle wait) answers
+        // every other request at once, so requests for one invoice cannot pile up behind it.
+        let Some(_g) = self.invoice_locks.try_lock(&id) else {
+            return Err(
+                X402Error::state(Diag::InvoicePending, "a payment of this invoice is being settled; check its status").retryable()
+            );
+        };
         let this_tx = kob_x402::common::parse_tx(
             &kob_x402::verify::VerifyCtx { chain: &*self.chain, clock: &*self.clock, policy: &self.policy },
             &req.payment_payload,

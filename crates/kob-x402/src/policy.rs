@@ -12,6 +12,9 @@ pub struct Limits {
     /// Bytes of the `payload.transaction` JSON text.
     pub max_tx_json_bytes: usize,
     pub max_inputs: usize,
+    /// Distinct scripts of inputs other than P2SH spends one payment may ask the chain to resolve (a node resolves each
+    /// through a lookup of its whole address). A P2SH input names its script by the redeem script it carries.
+    pub max_input_scripts: usize,
     pub max_outputs: usize,
     /// Bytes of one signature script (a KCC-20 leader sigscript is about 3.1 KB, the 16/16 program more).
     pub max_signature_script_bytes: usize,
@@ -38,6 +41,7 @@ impl Default for Limits {
         Limits {
             max_tx_json_bytes: 256 * 1024,
             max_inputs: 32,
+            max_input_scripts: 8,
             max_outputs: 16,
             max_signature_script_bytes: 32 * 1024,
             max_payload_bytes: 512,

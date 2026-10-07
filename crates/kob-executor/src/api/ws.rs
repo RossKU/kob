@@ -165,12 +165,41 @@ pub fn handle_op(text: &str, subs: &mut BTreeSet<Channel>, max_subs: usize) -> V
 pub enum WsReject {
     Total,
     PerIp,
+    /// The IPv6 site (all /64s of one /48) holds its share already.
+    PerSite,
+}
+
+/// The caps of [`WsRegistry::try_acquire`].
+#[derive(Clone, Copy, Debug)]
+pub struct WsLimits {
+    pub max_total: usize,
+    pub max_per_ip: usize,
+    /// IPv6 clients are counted per this prefix (64).
+    pub prefix_bits: u8,
+    /// Connections of one IPv6 site together; 0 = no site cap.
+    pub max_per_site: usize,
+    /// Leading bits of an IPv6 site (48); 0 = no site cap.
+    pub site_prefix_bits: u8,
+}
+
+impl WsLimits {
+    pub fn of(cfg: &crate::config::ApiConfig) -> WsLimits {
+        WsLimits {
+            max_total: cfg.max_ws_connections,
+            max_per_ip: cfg.max_ws_per_ip,
+            prefix_bits: cfg.rate_limit.ipv6_prefix_bits,
+            max_per_site: cfg.max_ws_per_site,
+            site_prefix_bits: cfg.rate_limit.ipv6_site_prefix_bits,
+        }
+    }
 }
 
 #[derive(Default)]
 struct RegistryInner {
     total: AtomicUsize,
     per_ip: Mutex<HashMap<IpAddr, usize>>,
+    /// Site keys in their own table (a /48 key equals the key of its first /64).
+    per_site: Mutex<HashMap<IpAddr, usize>>,
 }
 
 /// Counts open WebSocket connections, in total and per client address.
@@ -181,22 +210,40 @@ pub struct WsRegistry(Arc<RegistryInner>);
 pub struct WsGuard {
     reg: Arc<RegistryInner>,
     ip: IpAddr,
+    site: Option<IpAddr>,
+}
+
+fn release(map: &mut HashMap<IpAddr, usize>, key: &IpAddr) {
+    if let Some(n) = map.get_mut(key) {
+        *n = n.saturating_sub(1);
+        if *n == 0 {
+            map.remove(key);
+        }
+    }
 }
 
 impl WsRegistry {
-    pub fn try_acquire(&self, ip: IpAddr, max_total: usize, max_per_ip: usize, prefix_bits: u8) -> Result<WsGuard, WsReject> {
-        let key = super::client_ip::rate_key(ip, prefix_bits);
+    pub fn try_acquire(&self, ip: IpAddr, l: &WsLimits) -> Result<WsGuard, WsReject> {
+        let key = super::client_ip::rate_key(ip, l.prefix_bits);
+        let site = (l.max_per_site > 0 && l.site_prefix_bits > 0 && super::client_ip::unmap(ip).is_ipv6())
+            .then(|| super::client_ip::rate_key(ip, l.site_prefix_bits));
         let mut per = self.0.per_ip.lock().unwrap_or_else(|e| e.into_inner());
-        if self.0.total.load(Ordering::SeqCst) >= max_total {
+        let mut sites = self.0.per_site.lock().unwrap_or_else(|e| e.into_inner());
+        if self.0.total.load(Ordering::SeqCst) >= l.max_total {
             return Err(WsReject::Total);
         }
-        let n = per.entry(key).or_insert(0);
-        if *n >= max_per_ip {
+        if per.get(&key).copied().unwrap_or(0) >= l.max_per_ip {
             return Err(WsReject::PerIp);
         }
-        *n += 1;
+        if let Some(s) = site {
+            if sites.get(&s).copied().unwrap_or(0) >= l.max_per_site {
+                return Err(WsReject::PerSite);
+            }
+            *sites.entry(s).or_insert(0) += 1;
+        }
+        *per.entry(key).or_insert(0) += 1;
         self.0.total.fetch_add(1, Ordering::SeqCst);
-        Ok(WsGuard { reg: self.0.clone(), ip: key })
+        Ok(WsGuard { reg: self.0.clone(), ip: key, site })
     }
 
     pub fn total(&self) -> usize {
@@ -207,19 +254,17 @@ impl WsRegistry {
 impl Drop for WsGuard {
     fn drop(&mut self) {
         let mut per = self.reg.per_ip.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(n) = per.get_mut(&self.ip) {
-            *n = n.saturating_sub(1);
-            if *n == 0 {
-                per.remove(&self.ip);
-            }
+        let mut sites = self.reg.per_site.lock().unwrap_or_else(|e| e.into_inner());
+        release(&mut per, &self.ip);
+        if let Some(s) = &self.site {
+            release(&mut sites, s);
         }
         self.reg.total.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
 pub async fn handler(State(app): State<Arc<App>>, Extension(ClientIp(ip)): Extension<ClientIp>, ws: WebSocketUpgrade) -> Response {
-    let cfg = &app.state.cfg;
-    let guard = match app.ws.try_acquire(ip, cfg.max_ws_connections, cfg.max_ws_per_ip, cfg.rate_limit.ipv6_prefix_bits) {
+    let guard = match app.ws.try_acquire(ip, &WsLimits::of(&app.state.cfg)) {
         Ok(g) => g,
         Err(WsReject::Total) => {
             let mut e = ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "ws_capacity", "too many WebSocket connections");
@@ -229,6 +274,12 @@ pub async fn handler(State(app): State<Arc<App>>, Extension(ClientIp(ip)): Exten
         Err(WsReject::PerIp) => {
             let mut e =
                 ApiError::new(StatusCode::TOO_MANY_REQUESTS, "ws_per_ip_limit", "too many WebSocket connections from this address");
+            e.retry_after = Some(5);
+            return e.into_response();
+        }
+        Err(WsReject::PerSite) => {
+            let mut e =
+                ApiError::new(StatusCode::TOO_MANY_REQUESTS, "ws_per_site_limit", "too many WebSocket connections from this network");
             e.retry_after = Some(5);
             return e.into_response();
         }
@@ -452,16 +503,39 @@ mod tests {
         let reg = WsRegistry::default();
         let a: IpAddr = "1.1.1.1".parse().unwrap();
         let b: IpAddr = "2.2.2.2".parse().unwrap();
-        let g1 = reg.try_acquire(a, 3, 2, 64).unwrap();
-        let g2 = reg.try_acquire(a, 3, 2, 64).unwrap();
-        assert_eq!(reg.try_acquire(a, 3, 2, 64).err(), Some(WsReject::PerIp));
-        let g3 = reg.try_acquire(b, 3, 2, 64).unwrap();
-        assert_eq!(reg.try_acquire(b, 3, 2, 64).err(), Some(WsReject::Total));
+        let l = WsLimits { max_total: 3, max_per_ip: 2, prefix_bits: 64, max_per_site: 2, site_prefix_bits: 48 };
+        let g1 = reg.try_acquire(a, &l).unwrap();
+        let g2 = reg.try_acquire(a, &l).unwrap();
+        assert_eq!(reg.try_acquire(a, &l).err(), Some(WsReject::PerIp));
+        let g3 = reg.try_acquire(b, &l).unwrap();
+        assert_eq!(reg.try_acquire(b, &l).err(), Some(WsReject::Total));
         assert_eq!(reg.total(), 3);
         drop(g1);
-        assert!(reg.try_acquire(a, 3, 2, 64).is_ok());
+        assert!(reg.try_acquire(a, &l).is_ok());
         drop((g2, g3));
         assert_eq!(reg.total(), 0);
         assert!(reg.0.per_ip.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_64s_of_one_ipv6_site_share_the_site_cap() {
+        let reg = WsRegistry::default();
+        let ip = |s: &str| -> IpAddr { s.parse().unwrap() };
+        let l = WsLimits { max_total: 100, max_per_ip: 2, prefix_bits: 64, max_per_site: 3, site_prefix_bits: 48 };
+        let g1 = reg.try_acquire(ip("2001:db8:7:1::1"), &l).unwrap();
+        let g2 = reg.try_acquire(ip("2001:db8:7:2::1"), &l).unwrap();
+        let g3 = reg.try_acquire(ip("2001:db8:7::1"), &l).unwrap();
+        assert_eq!(reg.try_acquire(ip("2001:db8:7:3::1"), &l).err(), Some(WsReject::PerSite));
+        // another site and IPv4 are untouched
+        let g4 = reg.try_acquire(ip("2001:db8:8:1::1"), &l).unwrap();
+        let g5 = reg.try_acquire(ip("1.1.1.1"), &l).unwrap();
+        drop(g1);
+        let g6 = reg.try_acquire(ip("2001:db8:7:3::1"), &l).unwrap();
+        // 0 = no site cap
+        let open = WsLimits { max_per_site: 0, ..l };
+        let g7 = reg.try_acquire(ip("2001:db8:7:4::1"), &open).unwrap();
+        drop((g2, g3, g4, g5, g6, g7));
+        assert_eq!(reg.total(), 0);
+        assert!(reg.0.per_site.lock().unwrap().is_empty() && reg.0.per_ip.lock().unwrap().is_empty());
     }
 }
