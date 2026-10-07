@@ -160,6 +160,9 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   compared and any disagreement is shown. With one indexer the footer and Settings say "single indexer, unverified".
 * **Guards.** If the indexer cannot list the wallet's own orders (self-trade prevention) or the book, the ticket says so and blocks until the user
   acknowledges. Market orders show their reference price source and are cross-checked with the last fill.
+* **Market start.** A market or close order starts at the best price of the indexer book, which is not checked against the node. Its start is compared
+  with the last fill and with the best price of every `extraIndexerUrls` indexer; more than `marketStartToleranceBps` (config.json / `__KOB_CONFIG__`,
+  10 to 5000, default 1000 = 10 %) on the costly side holds the order until the user acknowledges it, and with no reference the ticket says the start is unchecked.
 
 ## Deployment headers
 

@@ -16,7 +16,10 @@ import type { ExpectedSigning } from '../../kob/decode';
 import type { BuiltTx } from '../../kob/types';
 import { formatKas, formatUnits } from '../../kob/units';
 import { DEFAULT_CARRIER } from '../../kob/orders/common';
-import { Banner, Button, CopyText, Loading, RawDetails, Segmented } from '../kit';
+import { Banner, Button, CopyText, Loading, RawDetails, Segmented, useAsync } from '../kit';
+import { bookFromIndexer } from '../../app/env';
+import { readReferenceTouches } from '../../data/indexer-crosscheck';
+import type { PlanEnv, ReferenceTouch } from '../../kob/plan-types';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
 import { nativeToInvertedPriceText, oppositeSide, pairLabel } from '../market/orientation';
 import { needsOpenCaution, OpenTokenCaution, PowersWarning } from '../market/TokenBadges';
@@ -104,7 +107,19 @@ export function OrderTicket(props: OrderTicketProps) {
   const { env: rawEnv, error: envError, loading: envLoading, refresh } = quote ? pairEnv : kasEnv;
   // guards whose indexer data could not be read block the plan until the user acknowledges
   const [ackGuards, setAckGuards] = useState(false);
-  const env = useMemo(() => (rawEnv ? { ...rawEnv, guardsAcknowledged: ackGuards } : null), [rawEnv, ackGuards]);
+  // a market / close order whose start (the indexer's best price) is far beyond an independent reference waits for this acknowledgement
+  const [ackStart, setAckStart] = useState(false);
+  const startTolerance = BigInt(services.config.marketStartToleranceBps);
+  // the best prices further indexers report for this KAS market (none configured: empty); a pair's references come with its environment
+  const verifiers = services.verifiers;
+  const marketOf = rawEnv && !quote ? rawEnv.token : null;
+  const touchesOf = (signal?: AbortSignal): Promise<ReferenceTouch[]> =>
+    marketOf && verifiers?.length ? readReferenceTouches(verifiers, token.covenantId, (v) => bookFromIndexer(marketOf, v), signal) : Promise.resolve([]);
+  const touches = useAsync((signal) => touchesOf(signal), [marketOf, verifiers, token.covenantId]);
+  const withRefs = <E extends PlanEnv>(e: E, refs: readonly ReferenceTouch[]): E => ({
+    ...e, guardsAcknowledged: ackGuards, referenceTouches: refs, marketStartToleranceBps: startTolerance, marketStartAcknowledged: ackStart,
+  });
+  const env = useMemo(() => (rawEnv ? withRefs(rawEnv, touches.data ?? []) : null), [rawEnv, ackGuards, ackStart, touches.data, startTolerance]);
   const rateMilli = env?.clock.rateMilli;
   // the book's best prices: what a KAS amount of a market / close order converts at (an inverted market)
   const bestAsk = env?.book.asks[0]?.price ?? null;
@@ -182,10 +197,12 @@ export function OrderTicket(props: OrderTicketProps) {
   };
   const onType = (type: OrderTypeId) => {
     setReviewNote(null);
+    setAckStart(false);
     setForm((f) => switchType(f, type));
   };
   const onSide = (side: Side) => {
     setReviewNote(null);
+    setAckStart(false);
     setForm((f) => setSide(f, side));
   };
 
@@ -260,7 +277,8 @@ export function OrderTicket(props: OrderTicketProps) {
       // re-read the chain first: the coins may have moved since the last refresh (a ladder level has just spent some), and the transaction to sign must be built from fresh data
       const fresh = await refresh();
       if (!fresh) return stop(t('ticket.reviewNoEnv'));
-      const p = planOrder({ ...fresh, guardsAcknowledged: ackGuards }, r.intents[index]!);
+      // the references are read again too: the start of a market order is compared with what the other indexers report now
+      const p = planOrder(withRefs(fresh, quote ? [] : await touchesOf().catch(() => [])), r.intents[index]!);
       if (!p.ok || !p.built || errors(p).length > 0) return stop(t('ticket.reviewChanged'));
       const title = laddered ? t('ticket.ladder.confirmTitle', { level: index + 1, levels, side: confirmSide, type: typeName }) : t('ticket.confirmTitle', { side: confirmSide, type: typeName });
       const label = laddered ? `${form.type} ${form.side} ${index + 1}/${levels}` : `${form.type} ${form.side}`;
@@ -314,6 +332,7 @@ export function OrderTicket(props: OrderTicketProps) {
   if (enabled && !envError && built.intent === null && built.errors.some((e) => e.code === 'required')) needs.push({ code: 'incomplete', text: t('ticket.need.incomplete'), tone: 'info' });
 
   const issues = shownPlan?.issues ?? [];
+  const startIssue = issues.find((i) => i.code === 'MARKET_START_VS_LAST_FILL' || i.code === 'MARKET_START_VS_INDEXER' || i.code === 'MARKET_START_ACKNOWLEDGED');
   const issueCtx = { tokenDecimals: token.decimals, tokenTicker: ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
 
   if (!tradable) {
@@ -440,6 +459,16 @@ export function OrderTicket(props: OrderTicketProps) {
           <label class="row" style="gap:6px">
             <input type="checkbox" checked={ackGuards} onChange={(e) => setAckGuards((e.currentTarget as HTMLInputElement).checked)} data-testid="order-guards-ack" />
             <span>{t('ticket.guards.ack')}</span>
+          </label>
+        </Banner>
+      ) : null}
+
+      {enabled && startIssue ? (
+        <Banner tone="warn" title={t('ticket.marketStart.title')} data-testid="order-market-start">
+          <p>{t('ticket.marketStart.text', { percent: formatUnits(startTolerance, 2, { maxFraction: 1 }) })}</p>
+          <label class="row" style="gap:6px">
+            <input type="checkbox" checked={ackStart} onChange={(e) => setAckStart((e.currentTarget as HTMLInputElement).checked)} data-testid="order-market-start-ack" />
+            <span>{t('ticket.marketStart.ack')}</span>
           </label>
         </Banner>
       ) : null}

@@ -64,6 +64,13 @@ export interface BookView {
   bidOrders?: BookOrder[];
 }
 
+/** The best prices of the market as another indexer reports them (`label`: its URL). */
+export interface ReferenceTouch {
+  label: string;
+  bestAsk: bigint | null;
+  bestBid: bigint | null;
+}
+
 /** An own resting order, for client-side self-trade prevention (matcher.md 10.12). */
 export interface OwnOrderRef {
   covenantId: Hex;
@@ -96,6 +103,17 @@ export interface PlanEnv {
   guardsAcknowledged?: boolean;
   /** price (sompi per whole token) of the newest fill (indexer trades: a data path independent of the book), to cross-check the book reference price */
   lastFillPrice?: bigint | null;
+  /**
+   * Best prices (same units as `book`) other indexers report for this market (config `extraIndexerUrls`): references for the start of a market /
+   * close auction that do not come from the primary indexer. Absent / empty = none configured or none answered.
+   */
+  referenceTouches?: readonly ReferenceTouch[];
+  /**
+   * How far (bps) the start of a market / close auction may be on the costly side of a reference (the last fill, another indexer's best price)
+   * before planning reports MARKET_START_VS_* (an error until `marketStartAcknowledged`). Default `MARKET_START_TOLERANCE_BPS`.
+   */
+  marketStartToleranceBps?: bigint;
+  marketStartAcknowledged?: boolean;
   /** spendable P2PK KAS UTXOs of the maker (coinbase maturity already applied by the caller) */
   funding: KeyUtxo[];
   /** spendable P2PK-owned token UTXOs of the maker for `token` */

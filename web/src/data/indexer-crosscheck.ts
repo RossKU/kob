@@ -95,3 +95,27 @@ export type IndexerTrust = 'none' | 'single' | 'multi';
 
 /** How many independent indexers back the data shown: none, one (unverified) or several (cross-checked). */
 export const indexerTrust = (hasPrimary: boolean, verifiers: number): IndexerTrust => (!hasPrimary ? 'none' : verifiers > 0 ? 'multi' : 'single');
+
+/**
+ * The best ask / bid of a market as each verifier reports it (`toBook` turns an indexer book into the planner's units, e.g. `bookFromIndexer`):
+ * references for the start of a market order that do not come from the primary indexer. A verifier that fails is left out.
+ */
+export async function readReferenceTouches<B extends { asks: { price: bigint }[]; bids: { price: bigint }[] }>(
+  verifiers: readonly { label: string; api: Pick<IndexerApi, 'book'> }[],
+  covenantId: Hex,
+  toBook: (view: Awaited<ReturnType<IndexerApi['book']>>) => B,
+  signal?: AbortSignal,
+): Promise<{ label: string; bestAsk: bigint | null; bestBid: bigint | null }[]> {
+  const o = signal ? { signal } : undefined;
+  const out = await Promise.all(
+    verifiers.map(async (v): Promise<{ label: string; bestAsk: bigint | null; bestBid: bigint | null } | null> => {
+      try {
+        const b = toBook(await v.api.book(covenantId, { depth: 20, aggregate: true }, o));
+        return { label: v.label, bestAsk: b.asks[0]?.price ?? null, bestBid: b.bids[0]?.price ?? null };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return out.filter((x): x is { label: string; bestAsk: bigint | null; bestBid: bigint | null } => x !== null);
+}

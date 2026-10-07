@@ -55,7 +55,16 @@ export interface AppConfig {
    * (see `explorerTxUrl`). '' = that default for `network`. config.json / `__KOB_CONFIG__` only: a link or a stored setting must not repoint the links.
    */
   explorerUrl: string;
+  /**
+   * How far (basis points) the start of a market / close order (the best price of the indexer book) may be on the costly side of an independent
+   * reference (the last fill, another indexer's best price) before the ticket holds the order until the user acknowledges it. config.json /
+   * `__KOB_CONFIG__` only (a link or a stored setting must not loosen it); 10 to 5000, default 1000 (10 %).
+   */
+  marketStartToleranceBps: number;
 }
+
+export const MARKET_START_TOLERANCE_MIN = 10;
+export const MARKET_START_TOLERANCE_MAX = 5_000;
 
 export type QuoteCurrency = 'USD';
 export type HomeSetting = 'auto' | 'list' | 'kas-usd' | `usd:${string}` | `market:${string}`;
@@ -77,6 +86,7 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   quoteTokens: Object.freeze({}) as Record<string, QuoteCurrency>,
   home: 'auto' as HomeSetting,
   explorerUrl: '',
+  marketStartToleranceBps: 1_000,
 });
 
 /** Default block explorer of each network (kaspa.stream: `<base>/transactions/<txid>`). */
@@ -162,6 +172,7 @@ export interface ConfigPatch {
   quoteTokens?: Record<string, QuoteCurrency>;
   home?: HomeSetting;
   explorerUrl?: string;
+  marketStartToleranceBps?: number;
 }
 
 export interface ConfigWarning { layer: string; field: string; message: string }
@@ -244,6 +255,12 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
       else bad('explorerUrl', 'URL (use http or https)');
     }
   }
+  if ('marketStartToleranceBps' in raw) {
+    const v = raw.marketStartToleranceBps;
+    if (!deployment) warnings.push({ layer, field: 'marketStartToleranceBps', message: 'only honoured in config.json / window.__KOB_CONFIG__, ignored' });
+    else if (typeof v === 'number' && Number.isInteger(v) && v >= MARKET_START_TOLERANCE_MIN && v <= MARKET_START_TOLERANCE_MAX) out.marketStartToleranceBps = v;
+    else bad('marketStartToleranceBps', `basis points (a whole number, ${MARKET_START_TOLERANCE_MIN} to ${MARKET_START_TOLERANCE_MAX})`);
+  }
   if ('home' in raw) {
     const h = parseHome(raw.home);
     if (h) out.home = h;
@@ -310,6 +327,7 @@ function apply(base: AppConfig, p: ConfigPatch): AppConfig {
     quoteTokens: p.quoteTokens ?? base.quoteTokens,
     home: p.home ?? base.home,
     explorerUrl: p.explorerUrl ?? base.explorerUrl,
+    marketStartToleranceBps: p.marketStartToleranceBps ?? base.marketStartToleranceBps,
   };
 }
 

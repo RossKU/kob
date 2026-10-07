@@ -48,7 +48,7 @@ export function orderUrgency(env: Pick<PlanEnv, 'book'> & { pair?: unknown }, in
 export function planOrder(env0: PlanEnv, intent: Intent): OrderPlan {
   const env = withUrgency(env0, orderUrgency(env0, intent));
   const plan = isPairEnv(env) ? planPair(env, intent) : isCondIntent(intent) ? planCond(env, intent) : planSimple(env, intent);
-  const extra = envIssues(env);
+  const extra = [...envIssues(env), ...marketStartIssues(env, intent, plan)];
   if (!extra.length) return plan;
   return { ...plan, issues: [...plan.issues, ...extra], ok: plan.ok && !extra.some((i) => i.severity === 'error') };
 }
@@ -79,4 +79,44 @@ export function envIssues(env: PlanEnv): PlanIssue[] {
     }
   }
   return out;
+}
+
+/**
+ * Default of `PlanEnv.marketStartToleranceBps` (config `marketStartToleranceBps`): a market / close auction that starts more than this on the costly
+ * side of a reference is held until the user acknowledges it.
+ */
+export const MARKET_START_TOLERANCE_BPS = 1_000n;
+
+/**
+ * A market or close order is an auction that starts at the best price of the indexer order book. That book is not checked against the node, so the
+ * start is compared with every reference the app has that is not the book itself: the last fill (the indexer trades) and the best price of each
+ * further indexer (`referenceTouches`). A start more than the tolerance on the costly side (above a reference for a buy, below for a sell) is an
+ * error until acknowledged; with no reference at all the plan says so.
+ */
+export function marketStartIssues(env: PlanEnv, intent: Intent, plan: OrderPlan): PlanIssue[] {
+  if (intent.type !== 'market' && intent.type !== 'close') return [];
+  const d = plan.disclosure;
+  const start = d?.expectedPrice ?? null;
+  if (!d || start === null || start <= 0n) return [];
+  const buy = d.side === 'buy';
+  const tol = env.marketStartToleranceBps ?? MARKET_START_TOLERANCE_BPS;
+  const refs: { reference: bigint; other: string | null }[] = [];
+  if (env.lastFillPrice && env.lastFillPrice > 0n) refs.push({ reference: env.lastFillPrice, other: null });
+  for (const r of env.referenceTouches ?? []) {
+    const p = buy ? r.bestAsk : r.bestBid;
+    if (p !== null && p > 0n) refs.push({ reference: p, other: r.label });
+  }
+  if (!refs.length) return [issue('MARKET_START_UNCHECKED', { start })];
+  // the costliest gap: how far the start is beyond each reference on the side that costs the user (bps of the reference)
+  let worst: { reference: bigint; other: string | null; bps: bigint } | null = null;
+  for (const r of refs) {
+    const gap = buy ? start - r.reference : r.reference - start;
+    if (gap <= 0n) continue;
+    const bps = (gap * BPS) / r.reference;
+    if (!worst || bps > worst.bps) worst = { ...r, bps };
+  }
+  if (!worst || worst.bps <= tol) return [];
+  const params = { start, reference: worst.reference, percent: formatUnits(worst.bps, 2, { maxFraction: 1 }), direction: buy ? 'above' : 'below' };
+  if (env.marketStartAcknowledged) return [issue('MARKET_START_ACKNOWLEDGED', params)];
+  return [worst.other === null ? issue('MARKET_START_VS_LAST_FILL', params) : issue('MARKET_START_VS_INDEXER', { ...params, other: worst.other })];
 }

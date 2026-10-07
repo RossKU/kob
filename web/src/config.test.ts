@@ -40,7 +40,7 @@ describe('mergeConfig', () => {
     expect(mergeConfig()).toEqual({
       network: 'mainnet', indexerUrl: '', extraIndexerUrls: [], nodeUrl: '', registryUrl: './registry/tokens.json',
       features: { kastle: false, test: false, priorityFee: false }, fees: { dynamic: true, maxRate: 1000, maxFeeKas: 1 }, allowQueryOverrides: false,
-      quoteTokens: {}, home: 'auto', explorerUrl: '',
+      quoteTokens: {}, home: 'auto', explorerUrl: '', marketStartToleranceBps: 1000,
     });
     expect(DEFAULT_CONFIG.features.kastle).toBe(false);
   });

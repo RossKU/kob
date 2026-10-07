@@ -23,7 +23,9 @@ describe('the reference price of market orders', () => {
   it('a book 10x above the last fill (an independent data path) raises MARKET_REFERENCE_DIVERGES', () => {
     const env: PlanEnv = { ...makeEnv({ book: lyingBook, funding: [100_000n * KAS] }), lastFillPrice: 248_000_000n };
     const p = planOrder(env, buy);
-    expect(p.ok).toBe(true);
+    // the auction would start 10x above the last fill: held until the user acknowledges it (market-start.test.ts)
+    expect(p.ok).toBe(false);
+    expect(codes(p)).toContain('MARKET_START_VS_LAST_FILL');
     expect(codes(p)).toContain('MARKET_REFERENCE_DIVERGES');
     const d = p.issues.find((i) => i.code === 'MARKET_REFERENCE_DIVERGES')!;
     expect(d.severity).toBe('warning');
