@@ -30,7 +30,11 @@ export interface SubmitOutcome {
   paused?: boolean;
 }
 
-const RESERVE_MS = 180_000;
+// Under a TN10 flood a submitted transaction can wait minutes in the mempool while the UTXO index still lists its inputs (10-07: 3 min
+// was too short, the market maker re-spent its own pending inputs).
+const RESERVE_MS = 600_000;
+/** inputs of a transaction the mempool refused because another transaction spends one of them: skipped this long (the other spend lands) */
+const CONFLICT_RESERVE_MS = 60_000;
 
 export class BotWallet {
   readonly name: string;
@@ -159,7 +163,11 @@ export class BotWallet {
       const conflict = /double spend|already spent|orphan|not found in the utxo|missing|RejectDoubleSpend|already in the mempool|is not in the utxo set|already being spent/i.test(text);
       this.stats.inc(conflict ? 'tx_conflict' : 'tx_failed');
       this.stats.inc(`${conflict ? 'tx_conflict' : 'tx_failed'}:${what}`);
-      // a rejected transaction's inputs may still be ours to use; release nothing, reserve nothing
+      // a rejected transaction's inputs may still be ours to use; release nothing. When the mempool already holds a spend of one of them
+      // (ours not yet indexed, or the matcher's fill of an order), the next plans skip them for a minute instead of losing the same race again.
+      if (/already being spent|double spend|RejectDoubleSpend|already spent by transaction/i.test(text)) {
+        for (const i of built.tx.inputs) this.reserve(i.transactionId, i.index, CONFLICT_RESERVE_MS);
+      }
       (conflict ? this.log.info : this.log.warn)('submit failed', { what, conflict, error: text, ...fields });
       return { ok: false, error: text, conflict };
     }
