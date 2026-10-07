@@ -48,6 +48,10 @@ pub struct Applied {
     pub event: IndexEvent,
     pub removed_hashes: usize,
     pub reverted_rows_blocks: usize,
+    /// Removed chain blocks this store does not hold (older than its reorg window, or before its start): nothing of theirs
+    /// can be reverted. Consensus finality bounds a reorg to the window (`IngestConfig::reorg_window_daa`, 12 h by default),
+    /// so this is reported (a warning) rather than guessed at.
+    pub unknown_removed: usize,
     pub added: usize,
     pub relevant_txs: u64,
     pub new_orders: u64,
@@ -303,6 +307,7 @@ impl Ingest {
                 event: IndexEvent::default(),
                 removed_hashes: 0,
                 reverted_rows_blocks: 0,
+                unknown_removed: 0,
                 added: 0,
                 relevant_txs: 0,
                 new_orders: 0,
@@ -341,9 +346,14 @@ impl Ingest {
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut delta = Delta::default();
         let mut reverted = 0usize;
+        let mut unknown_removed = 0usize;
         let mut reverted_relevant = false;
         for h in removed {
-            if let Some(seq) = Self::seq_of(&tx, h)? {
+            let Some(seq) = Self::seq_of(&tx, h)? else {
+                unknown_removed += 1;
+                continue;
+            };
+            {
                 if seq != Self::max_seq(&tx)? {
                     if strict {
                         return Err(IngestError::InconsistentRemoved(format!("block {h} is stored but not the newest stored block")));
@@ -436,6 +446,14 @@ impl Ingest {
             return Err(IngestError::Db(e.into()));
         }
         self.track_acceptance(removed, &blocks);
+        if unknown_removed > 0 {
+            // a reorg deeper than the stored chain: the rows of those blocks (and operator imports stamped block 0) stay
+            tracing::warn!(
+                unknown_removed,
+                window_daa = self.cfg.reorg_window_daa,
+                "the node removed chain blocks this store no longer holds: their rows are not reverted"
+            );
+        }
         let event = IndexEvent {
             cursor_hash: Some(cursor.hash),
             cursor_daa: cursor.daa,
@@ -449,6 +467,7 @@ impl Ingest {
             event,
             removed_hashes: removed.len(),
             reverted_rows_blocks: reverted,
+            unknown_removed,
             added: blocks.len(),
             relevant_txs: delta.relevant_txs,
             new_orders: delta.new_orders,

@@ -1034,3 +1034,30 @@ async fn property_incremental_equals_fresh_and_log_replay_with_parallel_fetch() 
     }
     assert!(total[0] > 0 && total[5] > 0, "fills and reorgs with parallel fetch: {total:?}");
 }
+
+/// A reorg that removes a chain block this store no longer holds (older than its reorg window, which consensus finality
+/// bounds a reorg to) cannot revert that block's rows: the batch is applied for what it can do, and the removed block it
+/// could not revert is reported (`Applied::unknown_removed`), never skipped without a word.
+#[tokio::test]
+async fn a_removed_block_the_store_no_longer_holds_is_reported() {
+    use kob_executor::rpc::types::{AddedBlock, ChainBlockHeader, VspcBatch};
+    let c = Ctx::new();
+    c.hs.node.push_block(vec![]);
+    c.hs.sync().await;
+    let mut ing = c.hs.ingest.lock().unwrap();
+    let cursor = ing.cursor().unwrap().unwrap();
+    let next = AddedBlock {
+        header: ChainBlockHeader {
+            hash: h("reorged", 1),
+            daa_score: cursor.daa + 1,
+            blue_score: cursor.daa + 1,
+            ..ChainBlockHeader::default()
+        },
+        txs: vec![],
+    };
+    let a = ing
+        .apply_batch(cursor.hash, &VspcBatch { removed: vec![cursor.hash, h("pruned", 1)], added: vec![next], wire_bytes: 0 })
+        .unwrap();
+    assert_eq!((a.removed_hashes, a.reverted_rows_blocks, a.unknown_removed), (2, 1, 1));
+    assert_eq!(ing.cursor().unwrap().unwrap().hash, h("reorged", 1));
+}

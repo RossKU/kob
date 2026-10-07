@@ -568,6 +568,13 @@ transaction as every batch, so every commit is a checkpoint. Undo data is not a 
 row carries the chain block that created or spent it (`seq`, never reused), and reverting a block
 deletes its rows, un-spends what it spent and re-derives the affected orders. A block row is deleted
 once it is older than the reorg window; the rows it stamped are final (12 h is consensus finality).
+Two cases are not reverted by a later reorg, both bounded by that window: a reorg that removes a chain block the store
+no longer holds (deeper than the window; finality excludes it) is applied for the blocks it can revert and logged as a
+warning (`Applied::unknown_removed`), and the rows an operator import writes (gap adopt, `import_revive`, 7.5) carry
+block 0: they are the node-verified outputs at the cursor, not the effect of a block, so no block revert removes them. A
+listed output that a reorg made unspendable is refused by the node when a matcher spends it (the matcher backs off that
+order); imports are made only of outputs the node holds, so this needs a reorg of the block that created the output
+after the import, within the window.
 
 ### 2. Node
 
