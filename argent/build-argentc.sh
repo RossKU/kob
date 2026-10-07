@@ -54,11 +54,29 @@ for p in "${PATCHES[@]}"; do
   GIT_INDEX_FILE=$IDX/want ug apply --cached --whitespace=nowarn "$ROOT/$p"
 done
 WANT=$(GIT_INDEX_FILE=$IDX/want ug write-tree)
-# Actual tree: every file under argent/upstream except .git, ignored ones included (-f).
+# Actual tree: every file under argent/upstream except .git, ignored ones included, hashed as its bytes are on disk.
+# Not `git add`: it runs the clean filters and text conversions the checkout's own .git/config, .git/info/attributes
+# and .gitattributes name, which can make an edited file hash as the pinned one. `hash-object --no-filters` runs none.
 tree_of_checkout() {
-  rm -f "$IDX/have"
-  GIT_INDEX_FILE=$IDX/have ug read-tree "$REV"
-  GIT_INDEX_FILE=$IDX/have ug add -A -f -- .
+  rm -f "$IDX/have" "$IDX/info"
+  (cd "$UP" && find . -path ./.git -prune -o \( -type f -o -type l \) -print) | sed 's|^\./||' | LC_ALL=C sort > "$IDX/paths"
+  local files links
+  files=$(mktemp "$IDX/files.XXXX")
+  links=$(mktemp "$IDX/links.XXXX")
+  while IFS= read -r p; do
+    if [ -L "$UP/$p" ]; then echo "$p" >> "$links"; else echo "$p" >> "$files"; fi
+  done < "$IDX/paths"
+  if [ -s "$files" ]; then
+    paste -d '\t' <(ug hash-object --no-filters -w --stdin-paths < "$files") "$files" | while IFS=$'\t' read -r h p; do
+      if [ -x "$UP/$p" ]; then m=100755; else m=100644; fi
+      printf '%s %s\t%s\n' "$m" "$h" "$p"
+    done >> "$IDX/info"
+  fi
+  while IFS= read -r p; do
+    printf '120000 %s\t%s\n' "$(printf %s "$(readlink "$UP/$p")" | ug hash-object --no-filters -w --stdin)" "$p"
+  done < "$links" >> "$IDX/info"
+  touch "$IDX/info"
+  GIT_INDEX_FILE=$IDX/have ug update-index --add --index-info < "$IDX/info"
   GIT_INDEX_FILE=$IDX/have ug write-tree
 }
 
