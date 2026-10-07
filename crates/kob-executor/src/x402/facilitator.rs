@@ -635,6 +635,18 @@ impl Facilitator {
         }
     }
 
+    /// An invoice payment is broadcast only before the invoice's `expiresAt` (checked at admission and again here, right before
+    /// the broadcast). A payment already broadcast is reported as it ends: its funds have moved.
+    fn check_invoice_open(&self, inv: Option<&invoice::InvoiceCtx>) -> Result<()> {
+        match inv {
+            Some(i) if self.clock.now_ms() >= i.expires_ms => Err(X402Error::state(
+                Diag::InvoiceExpired,
+                "the invoice expired before this payment was broadcast; it was not broadcast",
+            )),
+            _ => Ok(()),
+        }
+    }
+
     fn check_not_expired(&self, v: &Verified) -> Result<()> {
         if self.clock.now_ms() >= v.authorization_expires_at_ms {
             return Err(X402Error::state(
@@ -770,6 +782,11 @@ impl Facilitator {
             if is_new {
                 self.fail(&entry.txid, "authorization expired before broadcast");
             }
+            return Err(e);
+        }
+        // an invoice is paid only by a payment broadcast before it expires: read again here, after the awaited verification
+        if let Err(e) = self.check_invoice_open(inv) {
+            self.fail(&entry.txid, "the invoice expired before the broadcast");
             return Err(e);
         }
         // the pause / kill switch is read again right before the broadcast: one set while this settle verified is honoured, and

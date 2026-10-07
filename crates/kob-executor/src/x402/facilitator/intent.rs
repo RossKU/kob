@@ -343,6 +343,10 @@ impl Facilitator {
                 self.fail(&entry.txid, "authorization expired before broadcast");
                 return Err(e);
             }
+            if let Err(e) = self.check_invoice_open(inv) {
+                self.fail(&entry.txid, "the invoice expired before the broadcast");
+                return Err(e);
+            }
             // the pause / kill switch, read again right before the creation is broadcast
             if self.killed() {
                 self.fail(&entry.txid, "the facilitator was disabled before the broadcast");

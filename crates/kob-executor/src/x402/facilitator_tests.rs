@@ -805,6 +805,29 @@ fn a_merchant_spending_its_paid_output_is_not_a_reorg() {
     assert!(f.ledger.is_consumed(&a));
 }
 
+/// An invoice is paid only by a payment broadcast before it expires: one admitted before the expiry whose verification ends after it
+/// is not broadcast.
+#[test]
+fn an_invoice_that_expires_during_the_settle_is_not_paid() {
+    let fx = Fixture::with_invoices();
+    let reqs = kas_requirements(100_000_000, Finality::Accepted, 60);
+    let inv = kob_x402::invoice::Invoice::new(Network::Testnet10, "order-2", START_MS + 60_000, None, vec![reqs.clone()]);
+    let id = fx.fac.register_invoice("shop", inv, &|_| true).unwrap()["id"].as_str().unwrap().to_string();
+    let rh = kob_x402::wire::parse_hash32(&id).unwrap();
+    let a = fx.fund(500_000_000);
+    let (tx, entries) = build_kas_payment(&fx.chain, PAYER_KEY, &[a], &p2pk_spk(&pubkey(MERCHANT_KEY)), 100_000_000);
+    let req = request_for(&tx, &entries, &reqs, rh, "payment-id-invoice-0003");
+    // the payer's authorization outlives the invoice; the clock passes the invoice's expiry while the payment is verified
+    fx.verifier.expires_at_ms.store(START_MS + 600_000, Ordering::SeqCst);
+    *fx.verifier.advance_clock.lock().unwrap() = Some((fx.clock.clone(), 61_000));
+    let r = fx.fac.pay_invoice(&id, req.payment_payload);
+    assert!(!r.success, "{r:?}");
+    assert_eq!(diag(&r), "invoice_expired");
+    assert_eq!(fx.chain.submit_count(), 0, "not broadcast");
+    assert_eq!(fx.ledger.get(&txid_hex(&tx)).unwrap().state, State::Failed);
+    assert_ne!(fx.fac.invoice_status(&id).unwrap().status, kob_x402::invoice::InvoiceState::Paid);
+}
+
 /// The same for an invoice: it stays paid, and a second payment of it is refused as a duplicate.
 #[test]
 fn a_paid_invoice_stays_paid_when_the_merchant_spends_the_payment() {
