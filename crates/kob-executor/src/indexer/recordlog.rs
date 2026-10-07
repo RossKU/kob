@@ -24,7 +24,8 @@
 //! The chain detects truncation in the middle and edits. Ordering guarantee with the database: a frame
 //! is appended and fsynced BEFORE the database transaction commits, and the database stores
 //! `records_next_n`. After a crash the log can hold one frame the database never committed;
-//! [`RecordLog::open`] cuts it off. The reverse (database ahead of the log) means the log was lost and is
+//! [`RecordLog::open`] cuts it off. More frames past the database position mean the database is older than the log (a
+//! restored backup): `open` refuses and keeps them (`index replay --onto-database` applies them). The reverse (database ahead of the log) means the log was lost and is
 //! reported as an error. A failed append (full disk, I/O error) is rolled back to the last complete frame before the
 //! error is returned, so nothing is ever appended after a partial frame; an incomplete frame with complete frames after
 //! it is corruption (refused), only an incomplete last frame is a torn tail (removed).
@@ -419,6 +420,13 @@ pub enum RecordLogError {
     Corrupt { n: u64, reason: String },
     #[error("record log ends at frame {log_next} but the database expects {db_next}: the log was lost or replaced")]
     BehindDatabase { log_next: u64, db_next: u64 },
+    #[error(
+        "record log holds frames {db_next}..{log_next} that the database has not committed; an unclean shutdown leaves at \
+         most one, so the database is older than the log (restored from a backup?). The log is left as it is: apply the \
+         missing frames with `kob-executor index replay --onto-database`, or move the database aside and rebuild it with \
+         `kob-executor index replay` (docs/ops/executor.md, Part B, 8)"
+    )]
+    AheadOfDatabase { log_next: u64, db_next: u64 },
     /// An append or a truncation failed and the segment could not be put back to its last complete frame: nothing more is
     /// written until a restart, whose `open` repairs the log (a torn last frame) or refuses it.
     #[error("record log is not written to any more until a restart: {0}")]
@@ -426,6 +434,9 @@ pub enum RecordLogError {
 }
 
 const ZERO: [u8; 32] = [0u8; 32];
+/// Frames past the database position `open` cuts off: the one append whose database commit an unclean shutdown
+/// interrupted.
+const MAX_UNCOMMITTED: u64 = 1;
 /// A frame larger than this is treated as garbage (the biggest batch is a few MB).
 const MAX_FRAME: u32 = 1 << 30;
 
@@ -627,9 +638,14 @@ impl RecordLog {
             if end.torn {
                 report.torn_tail_removed = true;
             } else {
-                // frames at or after db_next_n: count them, then cut
+                // frames at or after db_next_n: count them; a crash leaves at most one, more means the database is older
+                // than the log (a restored backup) and the frames are kept for `replay --onto-database`
                 let all = scan(&segs, |_, _| Ok(false))?;
-                report.dropped_uncommitted = all.frames.saturating_sub(end.frames);
+                let extra = all.frames.saturating_sub(end.frames);
+                if extra > MAX_UNCOMMITTED {
+                    return Err(RecordLogError::AheadOfDatabase { log_next: all.frames, db_next: db_next_n });
+                }
+                report.dropped_uncommitted = extra;
             }
             let f = OpenOptions::new().write(true).open(&segs[si].1)?;
             f.set_len(offset)?;
@@ -996,6 +1012,27 @@ mod tests {
         assert_eq!(read_all(d.path()).unwrap().records.len(), 4);
         // database claims more than the log has
         assert!(matches!(RecordLog::open(d.path(), 1 << 20, 7), Err(RecordLogError::BehindDatabase { log_next: 4, db_next: 7 })));
+    }
+
+    /// A database older than the log (a restored backup) is not a crash: `open` refuses and keeps every frame.
+    #[test]
+    fn frames_of_more_than_one_uncommitted_write_are_kept_and_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let (mut log, _) = RecordLog::open(d.path(), 1 << 20, 0).unwrap();
+        for i in 0..50u8 {
+            log.append(&batch(i), 0).unwrap();
+        }
+        drop(log);
+        for db in [0, 10, 48] {
+            let r = RecordLog::open(d.path(), 1 << 20, db);
+            assert!(matches!(r, Err(RecordLogError::AheadOfDatabase { log_next: 50, db_next }) if db_next == db), "{db}");
+            assert_eq!(record_count(d.path()).unwrap(), 50);
+        }
+        let msg = RecordLogError::AheadOfDatabase { log_next: 50, db_next: 10 }.to_string();
+        assert!(msg.contains("replay --onto-database"), "{msg}");
+        // one frame past the database is the unclean shutdown's: cut
+        let (log, rep) = RecordLog::open(d.path(), 1 << 20, 49).unwrap();
+        assert_eq!((log.next_n(), rep.dropped_uncommitted), (49, 1));
     }
 
     #[test]

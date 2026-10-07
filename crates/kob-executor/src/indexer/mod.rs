@@ -267,3 +267,55 @@ pub fn replay_from_log(cfg: &IndexerConfig) -> Result<ReplayReport, IndexerError
     let (frames, relevant, orders) = ing.replay_frames(log.records, log.frames)?;
     Ok(ReplayReport { frames, relevant, orders, skipped: log.skipped, dropped: log.dropped })
 }
+
+/// What [`replay_onto_database`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForwardReport {
+    /// The database position before (`records_next_n`): the first frame applied.
+    pub from: u64,
+    /// The replay of the frames from `from` on (`frames` is the log's end, the database position after).
+    pub replay: ReplayReport,
+}
+
+/// Bring an EXISTING database that is older than the record log (restored from a backup) forward: apply the frames
+/// from its `records_next_n` to the end of the log (`kob-executor index replay --onto-database`). Neither the log nor the
+/// frames the database already holds are touched; the follower then resumes from the last logged cursor. A database at
+/// position 0 is refused (rebuild it with a plain `replay`), as is one ahead of the log.
+pub fn replay_onto_database(cfg: &IndexerConfig) -> Result<ForwardReport, IndexerError> {
+    let _writer = lock::WriterLock::acquire(cfg)?;
+    if !cfg.db_path().exists() {
+        return Err(IndexerError::Config(format!(
+            "{} does not exist; `replay --onto-database` brings an existing database forward (use `replay` to build one)",
+            cfg.db_path().display()
+        )));
+    }
+    let conn = db::open_writer(&cfg.db_path(), &cfg.network)?;
+    let from = ingest::records_next_n(&conn)?;
+    if from == 0 {
+        return Err(IndexerError::Config(
+            "the database holds no record-log frame: move it aside and rebuild it with `kob-executor index replay`".into(),
+        ));
+    }
+    let log = recordlog::read_all(&cfg.records_dir())?;
+    if log.frames < from {
+        return Err(recordlog::RecordLogError::BehindDatabase { log_next: log.frames, db_next: from }.into());
+    }
+    if log.frames == from {
+        let orders = Ingest::new(conn, processor(cfg, load_tokens(cfg)?), None).order_count()?;
+        let replay = ReplayReport { frames: from, relevant: 0, orders, skipped: vec![], dropped: Default::default() };
+        return Ok(ForwardReport { from, replay });
+    }
+    if log.torn {
+        tracing::warn!("the last record-log frame is torn (crash during append); it is ignored");
+    }
+    let records: Vec<_> = log.records.into_iter().filter(|(n, _)| *n >= from).collect();
+    let skipped: Vec<_> = log.skipped.into_iter().filter(|(n, _)| *n >= from).collect();
+    for (n, reason) in &skipped {
+        tracing::warn!(frame = n, %reason, "record-log frame skipped: this build cannot decode it (it stays in the log)");
+    }
+    let tokens = load_tokens(cfg)?;
+    let mut ing = Ingest::new(conn, processor(cfg, tokens), None).with_config(ingest_config(cfg));
+    let (frames, relevant, orders) = ing.replay_frames(records, log.frames)?;
+    // `dropped` counts the whole log (its decode statistics are not kept per frame)
+    Ok(ForwardReport { from, replay: ReplayReport { frames, relevant, orders, skipped, dropped: log.dropped } })
+}

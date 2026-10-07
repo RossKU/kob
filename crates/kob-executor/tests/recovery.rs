@@ -231,6 +231,58 @@ async fn open_refuses_empty_database_next_to_a_populated_log_and_repairs_a_crash
     assert!(err.to_string().contains("replay"), "{err}");
 }
 
+/// A database restored from an older backup next to the live record log: `open` refuses (the frames the backup lacks are
+/// more than one unclean shutdown leaves) and keeps every frame; `replay --onto-database` applies them to the backup,
+/// which then matches the live database and opens.
+#[tokio::test]
+async fn a_database_older_than_the_record_log_is_refused_and_brought_forward_from_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    let cfg = test_config(dir.path(), &node);
+    let w = World::new();
+    let backup = dir.path().join("backup.sqlite3");
+    let live = {
+        let idx = Indexer::open(cfg.clone()).unwrap();
+        let f = idx.follower(node.clone());
+        let create = w.create_tx(AnyState::KobAsk(ask(MAKER_A, P250)), CARRIER, MAKER_A, 10 * WHOLE);
+        w.include(&node, &[&create]);
+        sync(&f).await;
+        idx.ingest.lock().unwrap().conn().execute("VACUUM INTO ?1", [backup.to_str().unwrap()]).unwrap();
+        // later frames the backup does not hold, one batch each
+        ask_and_fill(&w, &node, P245);
+        sync(&f).await;
+        let b = bid(MAKER_B, P245);
+        let create_b = w.create_tx(AnyState::KobBid(b.clone()), b.escrow(6 * WHOLE, 2).unwrap() as u64, MAKER_B, 0);
+        w.include(&node, &[&create_b]);
+        sync(&f).await;
+        snap(&idx)
+    };
+    let frames = recordlog::record_count(&cfg.records_dir()).unwrap();
+    let backup_next = kob_executor::indexer::ingest::records_next_n(&open_writer(&backup, "testnet-10").unwrap()).unwrap();
+    assert!(frames >= backup_next + 2, "{frames} frames, backup at {backup_next}");
+    // restore the backup over the live database
+    for ext in ["-wal", "-shm"] {
+        let mut p = cfg.db_path().into_os_string();
+        p.push(ext);
+        let _ = std::fs::remove_file(p);
+    }
+    std::fs::copy(&backup, cfg.db_path()).unwrap();
+    let err = Indexer::open(cfg.clone()).err().expect("must refuse");
+    assert!(err.to_string().contains("replay --onto-database"), "{err}");
+    assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), frames, "no frame was removed");
+    // the explicit recovery
+    let rep = kob_executor::indexer::replay_onto_database(&cfg).unwrap();
+    assert_eq!((rep.from, rep.replay.frames), (backup_next, frames));
+    assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), frames);
+    let idx = Indexer::open(cfg.clone()).unwrap();
+    assert_eq!(idx.ingest.lock().unwrap().records_next(), Some(frames));
+    assert_eq!(snap(&idx), live);
+    drop(idx);
+    // a second run has nothing left to apply
+    let rep = kob_executor::indexer::replay_onto_database(&cfg).unwrap();
+    assert_eq!((rep.from, rep.replay.frames, rep.replay.relevant), (frames, frames, 0));
+}
+
 /// An unspent output as the node's `getUtxosByAddresses` reports it.
 fn node_utxo(spk: &[u8], cov: Hash32, txid: Hash32, idx: u32, amount: u64) -> (String, AddressUtxo) {
     (

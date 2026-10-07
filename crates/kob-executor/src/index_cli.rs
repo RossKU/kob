@@ -76,7 +76,12 @@ pub enum IndexSub {
     /// Follow the node and serve the API (the default when no subcommand is given).
     Run,
     /// Rebuild a NEW database from the record log (the log is not modified), then follow the node from its cursor.
-    Replay,
+    Replay {
+        /// Bring the EXISTING database forward instead: apply the record-log frames it has not committed (a database
+        /// restored from a backup next to a newer log). The log is not modified.
+        #[arg(long)]
+        onto_database: bool,
+    },
     /// Print a maker order export (JSON) from the database.
     ExportOrders {
         /// Maker public key (hex); default: all makers.
@@ -222,7 +227,26 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
             let idx = Indexer::open(cfg)?;
             idx.run(shutdown_signal()).await?;
         }
-        IndexSub::Replay => {
+        IndexSub::Replay { onto_database: true } => {
+            let f = indexer::replay_onto_database(&cfg)?;
+            let r = &f.replay;
+            println!(
+                "applied record-log frames {}..{} ({} relevant transactions) to {}: {} orders",
+                f.from,
+                r.frames,
+                r.relevant,
+                cfg.db_path().display(),
+                r.orders
+            );
+            if !r.skipped.is_empty() {
+                println!(
+                    "skipped {} frame(s) this build cannot decode {:?}",
+                    r.skipped.len(),
+                    r.skipped.iter().map(|(n, _)| n).collect::<Vec<_>>()
+                );
+            }
+        }
+        IndexSub::Replay { onto_database: false } => {
             let r = indexer::replay_from_log(&cfg)?;
             println!(
                 "replayed {} record-log frames ({} relevant transactions) into {}: {} orders",

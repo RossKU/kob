@@ -1393,7 +1393,9 @@ loses nothing. Reorgs during the downtime are handled by the node's `removed` li
 
 The record-log frame is appended and fsynced before the database transaction commits. After a crash
 the log can hold one frame the database never committed; `open` cuts it off and reports it
-(`repaired the record log`). A torn last frame is removed the same way. If the database is *ahead*
+(`repaired the record log`). It never cuts more: two or more frames past the database's position mean the database is
+older than the log (restored from a backup, see 8), and the indexer refuses to start (`record log holds frames N..M that
+the database has not committed`) and leaves the log untouched. A torn last frame is removed the same way. If the database is *ahead*
 of the log the log was lost; the indexer refuses to start rather than silently continue without its
 rebuild source. An empty database next to a populated log is refused as well (use `replay`).
 
@@ -1573,6 +1575,29 @@ instance.
   is consistent while the indexer runs (WAL). It is a convenience (it saves a replay); it is
   rebuildable from the log.
 * The node database is rebuildable and needs no backup.
+
+**Restoring.** Never restore the record log from a backup over a newer live log (the newer frames are the history the
+node may no longer have); restore it only when the live log is lost. A database backup is older than the live log, and
+the indexer refuses to start on it rather than cut the log back to the backup:
+
+```
+record log holds frames 10..500 that the database has not committed; ... the database is older than the log
+```
+
+Bring the restored database forward from the log (the log is read, never modified), then start as usual:
+
+```
+systemctl stop kob-index
+cp /backup/index-2026-10-01.sqlite3 /var/lib/kob-index/index.sqlite3      # remove index.sqlite3-wal / -shm first
+kob-executor index replay --onto-database --data-dir /var/lib/kob-index   # applies frames 10..500 to the backup
+systemctl start kob-index                                                 # re-syncs the tail from the node
+```
+
+Or move the database aside and rebuild it from the whole log with a plain `replay` (7.6). `replay --onto-database`
+evaluates only the frames it applies under the current allowlist and rules; after a change of either, prefer the full
+`replay`. When the live log was lost and both come from backups, take the log copy no older than the database copy (a
+log behind the database is refused, `the log was lost or replaced`); the node fills the tail since the backup, within
+its retention.
 
 ### 9. Record log format
 
