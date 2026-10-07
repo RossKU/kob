@@ -179,7 +179,7 @@ test.describe('the ticket in an inverted market', () => {
     await page.getByTestId(TESTID.confirmCancel).click();
     await expect(page.getByTestId(TESTID.confirmScreen)).toHaveCount(0);
 
-    // ---- flip: the form keeps its order; only its labels and the price box change
+    // ---- flip: the form keeps its order; it is now worded in KAS/EXKCC, whose base is KAS
     await page.getByTestId('market-flip').click();
     const ticket = page.getByTestId('order-ticket');
     await expect(ticket).toHaveAttribute('data-inverted', '1');
@@ -191,6 +191,11 @@ test.describe('the ticket in an inverted market', () => {
     await expect(page.getByTestId(TESTID.orderPrice)).toHaveValue('25');
     await expect(page.getByTestId('order-price-native')).toContainText('0.04 KAS per EXKCC');
     await expect(page.getByTestId(TESTID.orderReview)).toContainText('Buy');
+    // the amount is KAS: 1 EXKCC at 0.04 = 0.04 KAS, the exact token amount below it
+    await expect(page.getByTestId(TESTID.orderAmount)).toHaveValue('0.04');
+    await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderAmount) }).locator('.tk-unit')).toHaveText('KAS');
+    await expect(page.getByTestId('order-amount-tokens')).toContainText('0.04 KAS = 1 EXKCC at your price');
+    await expect(page.getByTestId('disc-summary')).toHaveText('Buy 0.04 KAS for 1 EXKCC');
 
     // the same order typed in the shown units: 25 EXKCC per KAS
     await page.getByTestId(TESTID.orderPrice).fill('');
@@ -198,6 +203,8 @@ test.describe('the ticket in an inverted market', () => {
     await expect(page.getByTestId('order-price-native')).toContainText('0.04 KAS per EXKCC');
     const flipped = await openReview(page);
     expect(flipped.heading).toContain('KAS/EXKCC');
+    await expect(page.getByTestId('confirm-shown-as')).toContainText('KAS/EXKCC Buy: you give 1 EXKCC and receive 0.04 KAS (at 25 EXKCC per KAS');
+    await expect(page.getByTestId('confirm-shown-as')).toContainText('SELL order of EXKCC');
     // the decoded confirmation of the built transaction is the same: same order, same price, same locked funds
     expect(flipped.created.length).toBe(native.created.length);
     expect(flipped.created.map((c) => c.rows)).toEqual(native.created.map((c) => c.rows));
@@ -333,10 +340,11 @@ test.describe('USD reference token: KAS/<its ticker>', () => {
     await expect(page.getByTestId('order-ticket')).toBeVisible();
     await connectWallet(page);
 
-    // shown Sell (KAS for EXUSD) at 3 EXUSD per KAS = native buy of 1 EXUSD at about 0.33 KAS: far below the book, it rests
+    // shown Sell of 1 KAS (for EXUSD) at 3 EXUSD per KAS = native buy of 3 EXUSD at about 0.33 KAS: far below the book, it rests
     await page.getByTestId(TESTID.orderSideSell).click();
     await page.getByTestId(TESTID.orderAmount).fill('1');
     await page.getByTestId(TESTID.orderPrice).fill('3');
+    await expect(page.getByTestId('order-amount-tokens')).toContainText('= 3 EXUSD');
     const built = await openReview(page);
     expect(built.blocking).toEqual([]);
     expect(built.created.length).toBe(1);

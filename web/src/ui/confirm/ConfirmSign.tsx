@@ -55,6 +55,11 @@ export interface ConfirmSignProps {
   onSubmitted?(r: { txid: string; records: PlacementRecord[] }): void;
   /** called once when the flow ends (cancelled, submitted or failed) */
   onClose(result: ConfirmResult): void;
+  /**
+   * the order in the words of the market as it is shown (an inverted KAS market, KAS/TOKEN: what is given and received in KAS and the token),
+   * stated above the decoded transaction, which stays the authority
+   */
+  shownAs?: string | undefined;
 }
 
 type Phase = 'review' | 'busy' | 'submitted';
@@ -325,6 +330,11 @@ export function ConfirmSign(props: ConfirmSignProps) {
           </Banner>
         ) : null}
 
+        {props.shownAs ? (
+          <p class="cf-shown-as" data-testid="confirm-shown-as">
+            {props.shownAs}
+          </p>
+        ) : null}
         <div class="cf-summary" data-testid="confirm-summary">
           {model.sections.map((s) => (
             <SectionView section={s} key={s.id} />

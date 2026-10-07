@@ -2,11 +2,12 @@
 import type { ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { has, t } from '../../i18n';
-import { formatKas, formatUnits, quoteOf, safeRounding } from '../../kob/units';
+import { formatUnits, safeRounding } from '../../kob/units';
 import { invertedToNativePriceText, nativeToInvertedPriceText } from '../market/orientation';
 import { Checkbox, Field, FieldShell, Segmented } from '../kit';
 import {
-  FIELDS, FIELD_DEFAULTS, TOUCH_MIN, TOUCH_PRESETS, parseAmount, parseTouch, priceInfo, type FieldError, type FieldSpec, type Side, type TicketCtx, type TicketForm,
+  BASE_SUFFIX, FIELDS, FIELD_DEFAULTS, TOUCH_MIN, TOUCH_PRESETS, amountBaseOf, amountPriceOf, kasTextOf, parseTouch, priceInfo,
+  type FieldError, type FieldSpec, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 
 export interface TicketFieldsProps {
@@ -52,8 +53,39 @@ function errorText(e: FieldError): string {
   return t(`ticket.err.${e.code}`, (e.params ?? {}) as Record<string, string | number>);
 }
 
+/** The basis of a KAS amount's conversion as words (`ticket.kasAmt.basis.*`). */
+const BASIS_KEY = { own: 'ticket.kasAmt.basis.own', stop: 'ticket.kasAmt.basis.stop', exit: 'ticket.kasAmt.basis.exit', book: 'ticket.kasAmt.basis.book' } as const;
+
+/**
+ * The line under a KAS amount box (a `kas` form): the exact token amount the order is built with and the exact KAS it is worth at the price the
+ * amount converts at, or what is still missing to know it.
+ */
+function KasAmountHint(props: { form: TicketForm; ctx: TicketCtx; id: string; ticker: string; testid: string }) {
+  const { form, ctx, id } = props;
+  const base = amountBaseOf(form, ctx, id);
+  if (!base.ok || base.value <= 0n) {
+    const p = amountPriceOf(form, ctx, id);
+    return !p && (form.values[id] ?? '') !== '' ? <span class="tk-sub" data-testid={`${props.testid}-tokens`}>{t('ticket.kasAmt.needPrice', { ticker: props.ticker })}</span> : null;
+  }
+  const p = amountPriceOf(form, ctx, id);
+  return (
+    <span class="tk-sub" data-testid={`${props.testid}-tokens`} data-base={base.value.toString()}>
+      {p
+        ? t('ticket.kasAmt.is', { kas: kasTextOf(form, ctx, id, base.value), tokens: formatUnits(base.value, ctx.decimals, { group: ',' }), ticker: props.ticker, basis: t(BASIS_KEY[p.basis]) })
+        : t('ticket.kasAmt.kept', { tokens: formatUnits(base.value, ctx.decimals, { group: ',' }), ticker: props.ticker })}
+    </span>
+  );
+}
+
 export function TicketFields(props: TicketFieldsProps) {
   const { form, ctx, ticker } = props;
+  /** the text an amount box shows: the KAS value of an exact amount kept for it (a `kas` form), else what was typed */
+  const amountText = (id: string): string => {
+    const kept = form.values[id + BASE_SUFFIX];
+    return form.kas && kept !== undefined ? kasTextOf(form, ctx, id, BigInt(kept)) : form.values[id] ?? '';
+  };
+  /** the unit of an amount box: KAS in a `kas` form, else the token */
+  const amountUnit = form.kas ? 'KAS' : ticker;
   const errOf = (id: string) => props.errors.find((e) => e.field === id);
   // what the user typed in an inverted price box (the form's own text is the converted native price): kept while it still produces the form's text
   const [typed, setTyped] = useState<Record<string, string>>({});
@@ -104,9 +136,9 @@ export function TicketFields(props: TicketFieldsProps) {
         }
         if (spec.kind === 'touch') {
           // trigger threshold: presets (the order's minimum fill / 25% / 50% / 100% of its own amount) plus a custom token amount, all in the one text value
-          const shown = value === '' ? (FIELD_DEFAULTS[id] ?? TOUCH_MIN) : value;
+          const shown = value === '' && form.values[id + BASE_SUFFIX] === undefined ? (FIELD_DEFAULTS[id] ?? TOUCH_MIN) : value;
           const preset = (TOUCH_PRESETS as readonly string[]).includes(shown) ? shown : '';
-          const order = parseAmount(form.values.amount ?? '', ctx.decimals);
+          const order = amountBaseOf(form, ctx, 'amount');
           const resolved = shown.endsWith('%') ? parseTouch(shown, order.ok ? order.value : undefined, ctx.decimals) : null;
           const tok = (v: bigint): string => `${formatUnits(v, ctx.decimals, { group: ',' })} ${ticker}`;
           const touchHint = (
@@ -115,6 +147,7 @@ export function TicketFields(props: TicketFieldsProps) {
                 <span class="tk-sub" data-testid={`${spec.testid}-resolved`}>{t('ticket.touch.resolved', { amount: tok(resolved.value), order: tok(order.value) })}</span>
               ) : null}
               {shown === TOUCH_MIN ? <span class="tk-sub" data-testid={`${spec.testid}-min`}>{t('ticket.touch.minHint')}</span> : null}
+              {form.kas && preset === '' ? <KasAmountHint form={form} ctx={ctx} id={id} ticker={ticker} testid={spec.testid} /> : null}
               {help ? <span class="tk-help">{help}</span> : null}
               <span class="tk-help">{t('ticket.touch.tradeoff')}</span>
             </>
@@ -135,7 +168,7 @@ export function TicketFields(props: TicketFieldsProps) {
                       id={cid}
                       class="input"
                       inputMode="decimal"
-                      value={preset !== '' ? '' : value}
+                      value={preset !== '' ? '' : amountText(id)}
                       placeholder={t('ticket.touch.custom')}
                       aria-describedby={describedBy}
                       aria-invalid={invalid ? 'true' : undefined}
@@ -143,7 +176,7 @@ export function TicketFields(props: TicketFieldsProps) {
                       disabled={props.disabled}
                       onInput={(ev) => props.onChange(id, (ev.currentTarget as HTMLInputElement).value)}
                     />
-                    <span class="tk-unit">{ticker}</span>
+                    <span class="tk-unit">{amountUnit}</span>
                   </span>
                 </div>
               )}
@@ -212,24 +245,14 @@ export function TicketFields(props: TicketFieldsProps) {
           inputMode = spec.kind === 'percent' || spec.kind === 'minutes' ? 'decimal' : 'numeric';
         }
         if (spec.kind === 'amount') {
-          // a token amount in whole-token units (the token's decimals): the unit is the token itself
-          suffix = <span class="tk-unit">{props.flip && id === 'amount' ? t('ticket.flip.amountUnit', { name: props.flip.name }) : ticker}</span>;
+          // an amount counts the base of the shown pair: the token natively (whole-token units, its decimals), KAS in a `kas` form
+          suffix = <span class="tk-unit">{amountUnit}</span>;
           inputMode = 'decimal';
-        }
-        if (props.flip && id === 'amount') {
-          const f = props.flip;
-          const n = f.decimals !== undefined ? parseAmount(value, f.decimals) : null;
-          if (n && n.ok && n.value > 0n && f.price && f.price > 0n && f.scale && f.decimals !== undefined) {
+          if (form.kas) {
+            shownValue = amountText(id);
             hint = (
               <>
-                <span class="tk-sub" data-testid="order-amount-kas">
-                  {t('ticket.flip.qty', {
-                    tokens: formatUnits(n.value, f.decimals, { group: ',' }),
-                    name: f.name,
-                    kas: formatKas(quoteOf(n.value, f.price, f.scale, 'down'), { group: ',' }),
-                    basis: t(f.ownPrice ? 'ticket.flip.qtyOwn' : 'ticket.flip.qtyBook'),
-                  })}
-                </span>
+                <KasAmountHint form={form} ctx={ctx} id={id} ticker={ticker} testid={spec.testid} />
                 {helpShown ? <span class="tk-help">{helpShown}</span> : null}
               </>
             );
@@ -238,7 +261,7 @@ export function TicketFields(props: TicketFieldsProps) {
         if (id === 'amount' && props.onMax) {
           suffix = (
             <>
-              <span class="tk-unit">{props.flip ? t('ticket.flip.amountUnit', { name: props.flip.name }) : ticker}</span>
+              <span class="tk-unit">{amountUnit}</span>
               <button type="button" class="btn btn-sm" onClick={props.onMax} disabled={props.disabled} data-testid="order-amount-max" aria-label={t('ticket.max.aria')}>
                 {props.maxLabel ?? t('ticket.max')}
               </button>

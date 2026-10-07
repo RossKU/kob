@@ -17,6 +17,7 @@ import type { PairToken } from '../../kob/pair';
 import type { TokenInfo } from '../../kob/registry';
 import { Badge, Banner, Button, ErrorBanner, scaleOfDecimals, Section, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
+import { requestPairFlip } from '../ticket/pair-flip';
 import { DepthChart } from './DepthChart';
 import { PriceChart, type UsdChartSpec } from './PriceChart';
 import { useLiveRefresh } from './live';
@@ -161,7 +162,14 @@ export function PairPage(props: { base: string; quote: string }) {
       header={
         <div class="mkt-top">
           <div class="mkt-title">
-            <FlipButton pair={`${quoteInfo.ticker}/${baseInfo.ticker}`} onClick={() => navigate(pairRoute(props.quote, props.base))} />
+            <FlipButton
+              pair={`${quoteInfo.ticker}/${baseInfo.ticker}`}
+              onClick={() => {
+                // the ticket of the other pair takes the order across: the side turns over, amounts and prices are converted (pair-flip.ts)
+                requestPairFlip(props.base, props.quote);
+                navigate(pairRoute(props.quote, props.base));
+              }}
+            />
             <PairSelector pair={displayedPair(props.base, props.quote, false)} rows={rows} onChange={openPair} />
             <span class="muted small" data-testid="pair-subtitle" title={t('pair.explainer', { base: baseInfo.ticker, quote: quoteInfo.ticker })}>{t('pair.subtitle', { base: baseRow ? tokenTitle(baseRow) : baseInfo.ticker, quote: quoteRow ? tokenTitle(quoteRow) : quoteInfo.ticker })}</span>
             <Badge tone={mode === 'live' ? 'ok' : mode === 'polling' ? 'info' : 'neutral'} data-testid="pair-live" title={t(`market.live.${mode}Hint`)}>

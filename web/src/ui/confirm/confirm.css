@@ -13,6 +13,7 @@
 .cf-list-bad { color: var(--text); font-weight: 600; }
 
 .cf-summary { display: flex; flex-direction: column; gap: 12px; }
+.cf-shown-as { border: 1px solid var(--info); background: var(--info-bg); border-radius: var(--radius); padding: 8px 12px; margin: 0 0 12px; font-weight: 600; overflow-wrap: anywhere; }
 .cf-section { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--surface); min-width: 0; }
 .cf-section h3 { font-size: 1rem; margin: 0 0 6px; }
 .cf-section-locked { border-left: 4px solid var(--warn); }

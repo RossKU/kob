@@ -50,7 +50,8 @@ function TimeView(props: { row: TimeRow }) {
   );
 }
 
-export function DisclosurePanel(props: { model: DisclosureModel; built?: BuiltTx | null }) {
+/** `summary`: the headline in the words of the shown pair (an inverted KAS market: KAS is the base), else the native one. */
+export function DisclosurePanel(props: { model: DisclosureModel; built?: BuiltTx | null; summary?: string | undefined }) {
   const m = props.model;
   // the fee rate, its bucket and the notes (fallback to the minimum, caps) of the planned transaction
   const feeInfo = props.built ? feeDisclosureOf(props.built) : null;
@@ -58,7 +59,7 @@ export function DisclosurePanel(props: { model: DisclosureModel; built?: BuiltTx
     <section class="tk-disclosure" data-testid="order-disclosure" aria-label={t('ticket.disc.title')}>
       <h3>{t('ticket.disc.title')}</h3>
       <p class="tk-summary" data-testid="disc-summary">
-        {t('ticket.disc.summary', { side: t(m.side === 'buy' ? 'common.side.buy' : 'common.side.sell'), amount: m.tokenAmount, ticker: m.ticker })}
+        {props.summary ?? t('ticket.disc.summary', { side: t(m.side === 'buy' ? 'common.side.buy' : 'common.side.sell'), amount: m.tokenAmount, ticker: m.ticker })}
       </p>
       <dl class="tk-rows">
         <DiscRow testid="disc-minFill" label={t('ticket.disc.minFill')} value={m.minFill} detail={t('ticket.disc.minFillHint')} tone="muted" />

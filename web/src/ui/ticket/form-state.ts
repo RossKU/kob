@@ -159,6 +159,12 @@ export interface TicketForm {
   side: Side;
   /** text of every field, by intent path; absent = empty */
   values: Record<string, string>;
+  /**
+   * The amount boxes count KAS (a token's KAS market shown inverted, KAS/TOKEN: the shown pair's base is KAS). Every amount field (`amount`,
+   * `minFill`, `sliceAmount`, `exit.minFill`, a custom trigger threshold) is then typed in KAS and converted to the token's base units at the
+   * price of its own leg (`amountPriceOf`); prices and side stay native in the form. Absent / false = token units (the native convention).
+   */
+  kas?: boolean;
 }
 
 export interface TicketCtx {
@@ -172,33 +178,47 @@ export interface TicketCtx {
   tzOffsetMin?: number;
   /** measured DAA rate in milli-DAA per second (default 10 000 = 10 DAA/s) */
   rateMilli?: number;
+  /**
+   * the book's best prices (state prices, sompi per `scale` base units): the price a KAS amount of an order WITHOUT its own price (market,
+   * close) is converted at (`kas` forms only). `buy` = the best ask (what a buy meets), `sell` = the best bid.
+   */
+  ref?: { buy?: bigint | null; sell?: bigint | null };
 }
 
-export function initialForm(type: OrderTypeId = 'limit', side: Side = 'sell'): TicketForm {
+export function initialForm(type: OrderTypeId = 'limit', side: Side = 'sell', kas = false): TicketForm {
   const sides = sidesOf(type);
   const values: Record<string, string> = {};
   for (const id of new Set([...layoutOf({ type, side, values: {} }).main, ...layoutOf({ type, side, values: {} }).advanced])) {
     const d = FIELD_DEFAULTS[id];
     if (d !== undefined) values[id] = d;
   }
-  return { type, side: sides.includes(side) ? side : sides[0]!, values };
+  return { type, side: sides.includes(side) ? side : sides[0]!, values, ...(kas ? { kas: true } : {}) };
 }
 
 /** Switching the type keeps what still applies (amount, prices, tip, lifetime ...), adds the defaults of the new type, fixes an impossible side. */
 export function switchType(form: TicketForm, type: OrderTypeId): TicketForm {
   const side = sidesOf(type).includes(form.side) ? form.side : sidesOf(type)[0]!;
-  const next = initialForm(type, side);
+  const next = initialForm(type, side, !!form.kas);
   const values = { ...next.values };
   const applicable = new Set([...layoutOf({ type, side, values: {} }).main, ...layoutOf({ type, side, values: {} }).advanced]);
-  for (const [k, v] of Object.entries(form.values)) if (applicable.has(k) && v !== '') values[k] = v;
-  return { type, side, values };
+  for (const [k, v] of Object.entries(form.values)) {
+    // an exact base amount kept for a KAS amount box travels with its box
+    const field = k.endsWith(BASE_SUFFIX) ? k.slice(0, -BASE_SUFFIX.length) : k;
+    if (applicable.has(field) && v !== '') values[k] = v;
+  }
+  return { ...next, type, side, values };
 }
 
 export function setSide(form: TicketForm, side: Side): TicketForm {
   return sidesOf(form.type).includes(side) ? { ...form, side } : form;
 }
 
-export const setValue = (form: TicketForm, id: string, value: string): TicketForm => ({ ...form, values: { ...form.values, [id]: value } });
+/** What the user typed into a box. An exact base amount kept for that box (`setAmountBase`) is dropped: the typed text is the amount now. */
+export function setValue(form: TicketForm, id: string, value: string): TicketForm {
+  const values = { ...form.values, [id]: value };
+  delete values[id + BASE_SUFFIX];
+  return { ...form, values };
+}
 
 // ------------------------------------------------------------------------------------------------ layout
 
@@ -273,7 +293,7 @@ export const specsOf = (ids: readonly string[]): FieldSpec[] => ids.map((i) => F
 
 // ------------------------------------------------------------------------------------------------ parsing
 
-export type FieldErrorCode = 'required' | 'format' | 'precision' | 'positive' | 'range' | 'negative';
+export type FieldErrorCode = 'required' | 'format' | 'precision' | 'positive' | 'range' | 'negative' | 'noRef';
 export interface FieldError { field: string; code: FieldErrorCode; params?: Record<string, string | number> }
 export interface BuildResult {
   /** the intent for `planOrder`, null while any field is missing or malformed */
@@ -425,10 +445,10 @@ class Reader {
     }
     return n;
   }
-  /** a token amount (whole-token units with the token's decimals) in base units, at least one base unit */
+  /** a token amount (whole-token units with the token's decimals; KAS converted at its leg's price in a `kas` form) in base units, at least one base unit */
   amount(id: string, required = true): bigint | undefined {
-    if (!this.has(id) && !required) return undefined;
-    const n = this.take(id, parseAmount(this.raw(id), this.ctx.decimals), required);
+    if (!this.has(id) && this.form.values[id + BASE_SUFFIX] === undefined && !required) return undefined;
+    const n = this.take(id, amountBaseOf(this.form, this.ctx, id), required);
     if (n === 0n) {
       this.errors.push({ field: id, code: 'positive' });
       return undefined;
@@ -484,7 +504,17 @@ class Reader {
   /** trigger threshold in base units (`min`, a preset percent of `orderAmount`, or a token amount); empty or `min` = the wallet default */
   touch(id: string, orderAmount: bigint | undefined): bigint | undefined {
     if (!this.has(id)) return undefined;
-    return this.take(id, parseTouch(this.raw(id), orderAmount, this.ctx.decimals), false) ?? undefined;
+    const s = this.raw(id);
+    // a custom threshold of a `kas` form is a KAS amount (presets are the order's own minimum fill or a share of it)
+    if (this.form.kas && s !== TOUCH_MIN && !/%$/.test(s)) {
+      const n = this.take(id, amountBaseOf(this.form, this.ctx, id), false);
+      if (n === 0n) {
+        this.errors.push({ field: id, code: 'positive' });
+        return undefined;
+      }
+      return n;
+    }
+    return this.take(id, parseTouch(s, orderAmount, this.ctx.decimals), false) ?? undefined;
   }
   pick<T extends string>(id: string, allowed: readonly T[]): T | undefined {
     const s = this.raw(id);
@@ -820,3 +850,127 @@ export function maxAmount(i: MaxAmountInput): bigint {
 /** Errors worth showing under a field right away (the user typed something wrong) versus fields that are merely still empty. */
 export const visibleErrors = (errors: readonly FieldError[]): FieldError[] => errors.filter((e) => e.code !== 'required');
 export const isIncomplete = (errors: readonly FieldError[]): boolean => errors.some((e) => e.code === 'required');
+
+// ------------------------------------------------------------------------------------------------ KAS amounts (a KAS market shown inverted)
+//
+// KAS/TOKEN is the token's own TOKEN/KAS book seen the other way round: its base, the left asset, is KAS. A `kas` form counts every amount in
+// KAS like any BASE/QUOTE market counts the base, and the order is still the native one: buying KAS is selling the token, and X KAS is
+// floor(X x scale / P) base units of the token at the price P of the amount's own leg (the limit price; the stop of a stop leg; the exit price of
+// an exit; the book's best price for an order without a price of its own, market and close). Rounding down means the KAS value of the order
+// never exceeds what was typed: a shown Sell spends at most the KAS typed (plus the tip), a shown Buy receives at most that (minus the tip).
+
+/** Key suffix of an exact base amount kept for an amount box of a `kas` form (the box then shows that amount's KAS value). */
+export const BASE_SUFFIX = '@base';
+
+/** The amount-like fields: typed in KAS in a `kas` form (a `touch` field only for a custom threshold). */
+export const AMOUNT_FIELD_IDS: readonly string[] = ['amount', 'minFill', 'sliceAmount', 'exit.minFill', 'minTouch', 'entry.minTouch', 'exit.minTouch'];
+
+/** Where the conversion price of an amount comes from: the order's own price, a stop trigger, an exit price, or the book. */
+export type AmountBasis = 'own' | 'stop' | 'exit' | 'book';
+
+/** The price field of an order type that sizes it (its limit, else its trigger); null = no price of its own (market, close: the book's price). */
+export function primaryPriceField(type: OrderTypeId): string | null {
+  switch (type) {
+    case 'market':
+    case 'close': return null;
+    case 'streaming': return 'displayedPrice';
+    case 'stopLimit': return 'limit';
+    case 'stopMarket':
+    case 'trailingStop': return 'stop';
+    case 'oco': return 'takeProfit';
+    default: return 'price';
+  }
+}
+
+/**
+ * The state price (sompi per `scale` base units) a KAS amount of field `id` converts at, with where it comes from; null while that price is
+ * missing or malformed (the price box reports its own problem) or, for an order without a price, while the book has none.
+ */
+export function amountPriceOf(form: TicketForm, ctx: TicketCtx, id: string): { price: bigint; basis: AmountBasis } | null {
+  const opp: Side = form.side === 'buy' ? 'sell' : 'buy';
+  const v = form.values;
+  const read = (field: string, side: Side, basis: AmountBasis) => {
+    const p = parsePrice(v[field] ?? '', side, ctx);
+    return p.ok ? { price: p.value.price, basis } : null;
+  };
+  if (id === 'exit.minFill' || id === 'exit.minTouch') {
+    // the exit trades the other way, at its own price: the take-profit, else the stop (an exit stop's threshold: the stop)
+    if (id === 'exit.minFill' && (v['exit.takeProfit'] ?? '').trim() !== '') return read('exit.takeProfit', opp, 'exit');
+    return read('exit.stop', opp, 'exit');
+  }
+  if (id === 'minTouch') return read('stop', form.side, 'stop');
+  if (id === 'entry.minTouch') return read('entry.stop', form.side, 'stop');
+  const field = primaryPriceField(form.type);
+  if (field === null) {
+    const p = form.side === 'buy' ? ctx.ref?.buy : ctx.ref?.sell;
+    return p && p > 0n ? { price: p, basis: 'book' } : null;
+  }
+  return read(field, form.side, field === 'stop' ? 'stop' : 'own');
+}
+
+/** KAS (sompi) -> base units of the token at a state price, rounded down. */
+export const kasToBase = (sompi: bigint, price: bigint, scale: bigint): bigint => (price > 0n ? (sompi * scale) / price : 0n);
+/** Base units -> their KAS value (sompi) at a state price, rounded down. */
+export const baseToKas = (base: bigint, price: bigint, scale: bigint): bigint => (scale > 0n ? (base * price) / scale : 0n);
+
+/**
+ * The base units of amount field `id`: the token amount typed (native form); in a `kas` form the exact amount kept for the box, else the KAS
+ * typed converted at the field's price. `noRef` when an order without a price has no book price to convert at.
+ */
+export function amountBaseOf(form: TicketForm, ctx: TicketCtx, id: string): Parsed<bigint> {
+  if (!form.kas) return parseAmount(form.values[id] ?? '', ctx.decimals);
+  const kept = form.values[id + BASE_SUFFIX];
+  if (kept !== undefined && /^\d+$/.test(kept)) return good(BigInt(kept));
+  const sompi = parseScaled(form.values[id] ?? '', 8);
+  if (!sompi.ok) return sompi;
+  const p = amountPriceOf(form, ctx, id);
+  if (!p) return primaryPriceField(form.type) === null && !id.includes('.') && id !== 'minTouch' ? bad('noRef') : bad('required');
+  return good(kasToBase(sompi.value, p.price, ctx.scale));
+}
+
+/** The KAS text of `base` units of the token at the field's price (rounded down to the sompi); '' when there is no price to value it at. */
+export function kasTextOf(form: TicketForm, ctx: TicketCtx, id: string, base: bigint): string {
+  const p = amountPriceOf(form, ctx, id);
+  return p ? formatUnits(baseToKas(base, p.price, ctx.scale), 8) : '';
+}
+
+/**
+ * Sets amount field `id` to exactly `base` units of the token (Max, a prefilled amount, a flip of a filled form): a token form shows them, a
+ * `kas` form keeps them exactly and shows their KAS value, so the order does not move by a KAS rounding.
+ */
+export function setAmountBase(form: TicketForm, id: string, base: bigint, ctx: TicketCtx): TicketForm {
+  if (!form.kas) return setValue(form, id, formatAmount(base, ctx.decimals));
+  return { ...form, values: { ...form.values, [id]: kasTextOf(form, ctx, id, base), [id + BASE_SUFFIX]: base.toString() } };
+}
+
+/**
+ * The same order with its amount boxes in the other unit (`kas` true: KAS; false: token units). Every amount that parses keeps its exact base
+ * units (a box that does not parse is emptied, a preset threshold kept), so a flip never changes the order that is built.
+ */
+export function reorientAmounts(form: TicketForm, kas: boolean, ctx: TicketCtx): TicketForm {
+  if (!!form.kas === kas) return form;
+  let next: TicketForm = { ...form, values: { ...form.values } };
+  if (kas) next.kas = true;
+  else delete next.kas;
+  for (const id of AMOUNT_FIELD_IDS) {
+    const text = (form.values[id] ?? '').trim();
+    const kept = form.values[id + BASE_SUFFIX];
+    if (text === '' && kept === undefined) continue;
+    if (FIELDS[id]?.kind === 'touch' && (text === TOUCH_MIN || text.endsWith('%'))) continue;
+    const base = amountBaseOf(form, ctx, id);
+    delete next.values[id + BASE_SUFFIX];
+    if (!base.ok) {
+      next.values[id] = '';
+      continue;
+    }
+    next = setAmountBase(next, id, base.value, ctx);
+  }
+  return next;
+}
+
+/** The state price an intent is sized at (the counterpart of `primaryPriceField`); null for an order without a price (market, close). */
+export function intentSizingPrice(intent: Intent): bigint | null {
+  const i = intent as unknown as Record<string, any>;
+  const p = i.entry?.price ?? (intent.type === 'streaming' ? i.displayedPrice : intent.type === 'stopLimit' ? i.limit : intent.type === 'stopMarket' || intent.type === 'trailingStop' ? i.stop : intent.type === 'oco' ? i.takeProfit : i.price);
+  return typeof p === 'bigint' ? p : null;
+}

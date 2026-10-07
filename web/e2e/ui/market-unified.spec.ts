@@ -221,14 +221,13 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     // inverted
     await page.getByTestId('market-flip').click();
     await expect(ticket).toHaveAttribute('data-inverted', '1');
-    // the amount is still typed in EXKCC (the order's own token)
-    await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderAmount) }).locator('.tk-unit')).toContainText('EXKCC');
-    await page.getByTestId(TESTID.orderAmount).fill('3');
+    // the amount counts the shown base, KAS; the line below it says the token amount the order is built with
+    await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderAmount) }).locator('.tk-unit')).toHaveText('KAS');
+    await page.getByTestId(TESTID.orderAmount).fill('0.12');
     await page.getByTestId(TESTID.orderPrice).fill('25'); // 25 EXKCC per KAS = 0.04 KAS per EXKCC
-    // 3 EXKCC at 0.04 KAS = 0.12 KAS
-    await expect(page.getByTestId('order-amount-kas')).toContainText('3 EXKCC');
-    await expect(page.getByTestId('order-amount-kas')).toContainText('0.12 KAS');
-    await expect(page.getByTestId('order-amount-kas')).toContainText('your price');
+    // 0.12 KAS at 0.04 KAS per EXKCC = 3 EXKCC
+    await expect(page.getByTestId('order-amount-tokens')).toContainText('0.12 KAS = 3 EXKCC');
+    await expect(page.getByTestId('order-amount-tokens')).toContainText('your price');
     // the tip is an amount of KAS per token traded; its share of the KAS traded is shown
     await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).toContainText('KAS per EXKCC traded');
     await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).not.toContainText('KAS / EXKCC');

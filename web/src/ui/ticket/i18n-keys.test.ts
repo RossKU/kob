@@ -49,7 +49,7 @@ describe('ticket keys', () => {
       both(`ticket.label.${id}`);
       for (const o of FIELDS[id]!.options ?? []) both(`ticket.opt.${id}.${o}`);
     }
-    for (const code of ['required', 'format', 'precision', 'positive', 'range', 'negative'] satisfies FieldErrorCode[]) both(`ticket.err.${code}`);
+    for (const code of ['required', 'format', 'precision', 'positive', 'range', 'negative', 'noRef'] satisfies FieldErrorCode[]) both(`ticket.err.${code}`);
     for (const sev of ['error', 'warning', 'info']) both(`ticket.severity.${sev}`);
     for (const k of ['activates', 'gtc', 'renew', 'gtd', 'day', 'ioc', 'fok']) both(`ticket.time.${k}`);
     for (const tag of NOTE_TAGS) both(`ticket.note.${tag}`);

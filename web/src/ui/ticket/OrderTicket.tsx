@@ -18,20 +18,22 @@ import { formatKas, formatUnits } from '../../kob/units';
 import { DEFAULT_CARRIER } from '../../kob/orders/common';
 import { Banner, Button, CopyText, Loading, RawDetails, Segmented } from '../kit';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
-import { oppositeSide, pairLabel } from '../market/orientation';
+import { nativeToInvertedPriceText, oppositeSide, pairLabel } from '../market/orientation';
 import { needsOpenCaution, OpenTokenCaution, PowersWarning } from '../market/TokenBadges';
 import { DisclosurePanel } from './DisclosurePanel';
 import { useCovenantSignGate } from './CovenantSignGate';
 import { TicketFields } from './TicketFields';
 import { buildDisclosureModel } from './disclosure-model';
 import {
-  TYPE_GROUPS, buildIntent, formatAmount, formatPrice, initialForm, layoutOf, maxAmount, parsePrice, setSide, setValue, sidesOf, switchType, visibleErrors,
+  TYPE_GROUPS, amountPriceOf, baseToKas, buildIntent, formatPrice, initialForm, intentSizingPrice, layoutOf, maxAmount, parsePrice, reorientAmounts, setAmountBase,
+  setSide, setValue, sidesOf, switchType, visibleErrors,
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 import { expectedFromPlan } from './plan-expected';
 import { expandLadder, ladderOfForm, ladderTotals } from './ladder';
 import { RegistryNote } from '../shell/RegistryNote';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan } from './use-ticket';
+import { rememberPairForm, takePairFlip } from './pair-flip';
 import './ticket.css';
 
 export interface OrderTicketProps {
@@ -49,8 +51,9 @@ export interface OrderTicketProps {
   /** template capabilities of the token program (indexer `powers`): freeze / seize put escrowed orders at the issuer's discretion */
   powers?: readonly string[];
   /**
-   * the market is shown inverted (KAS/TOKEN): the side buttons and the price inputs follow the shown pair (Buy = buy KAS = sell the token). Display only:
-   * the form keeps native terms and builds the very same intent either way (orientation.ts).
+   * the market is shown inverted (KAS/TOKEN): the ticket speaks the shown pair, whose base is KAS. The side buttons name the side of KAS (Buy = buy
+   * KAS = sell the token), prices are tokens per KAS and amounts are KAS, converted at the order's price (form-state.ts, KAS amounts). The order
+   * built is the native one; a flip of a filled form keeps it exactly (orientation.ts).
    */
   inverted?: boolean;
 }
@@ -60,6 +63,8 @@ interface ConfirmState {
   expected: ExpectedSigning;
   title: string;
   label: string;
+  /** an inverted market: the order in the shown pair's words, above the decoded transaction */
+  shownAs?: string | undefined;
 }
 
 const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
@@ -79,7 +84,12 @@ export function OrderTicket(props: OrderTicketProps) {
   const walletReady = !!wallet.info && !!wallet.adapter && !wallet.networkMismatch;
   const enabled = tradable && walletReady;
 
-  const [form, setForm] = useState<TicketForm>(() => initialForm('limit', props.prefill?.side ?? 'sell'));
+  // a pair page just flipped (A/B -> B/A): the order typed there, as the same order on this pair (pair-flip.ts)
+  const [carried] = useState<TicketForm | null>(() => (quote ? takePairFlip(token.covenantId, quote.covenantId, { base: quote.decimals, quote: token.decimals }) : null));
+  const [form, setForm] = useState<TicketForm>(() => carried ?? initialForm('limit', props.prefill?.side ?? 'sell', inverted));
+  useEffect(() => {
+    if (quote) rememberPairForm(token.covenantId, quote.covenantId, form);
+  }, [form]);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [reviewing, setReviewing] = useState(false);
   // a plain note, or a refusal: its sentence with the raw builder text behind "Details"
@@ -96,13 +106,20 @@ export function OrderTicket(props: OrderTicketProps) {
   const [ackGuards, setAckGuards] = useState(false);
   const env = useMemo(() => (rawEnv ? { ...rawEnv, guardsAcknowledged: ackGuards } : null), [rawEnv, ackGuards]);
   const rateMilli = env?.clock.rateMilli;
+  // the book's best prices: what a KAS amount of a market / close order converts at (an inverted market)
+  const bestAsk = env?.book.asks[0]?.price ?? null;
+  const bestBid = env?.book.bids[0]?.price ?? null;
   const ctx: TicketCtx = useMemo(
     () => ({
       decimals: token.decimals, scale, tick: token.tick ?? 1n, tzOffsetMin: new Date().getTimezoneOffset(), ...(rateMilli ? { rateMilli } : {}),
-      ...(quote ? { quoteDecimals: quote.decimals } : {}),
+      ...(quote ? { quoteDecimals: quote.decimals } : { ref: { buy: bestAsk, sell: bestBid } }),
     }),
-    [token.decimals, scale, token.tick, rateMilli, quote?.decimals],
+    [token.decimals, scale, token.tick, rateMilli, quote?.decimals, bestAsk, bestBid],
   );
+  // a flip of the market recounts the amount boxes in the shown base (KAS or the token) and keeps the order they build exactly
+  useEffect(() => {
+    setForm((f) => reorientAmounts(f, inverted, ctx));
+  }, [inverted]);
   const built = useMemo(() => buildIntent(form, ctx), [form, ctx]);
   const { plan, current, pending, crash } = useTicketPlan(enabled ? env : null, built.intent);
 
@@ -119,7 +136,7 @@ export function OrderTicket(props: OrderTicketProps) {
         if (!layoutOf(f).main.includes('price')) f = switchType(f, 'limit');
         f = setValue(f, 'price', formatPrice(p.price, ctx));
       }
-      if (p.amount !== undefined) f = setValue(f, 'amount', formatAmount(p.amount, token.decimals));
+      if (p.amount !== undefined) f = setAmountBase(f, 'amount', p.amount, ctx);
       return f;
     });
   }, [prefillKey]);
@@ -156,7 +173,7 @@ export function OrderTicket(props: OrderTicketProps) {
           ? ((quoteBalance - 4n) * scale) / refPrice
           : 0n
       : maxAmount({ side: form.side, tokenBalance, kasBalance, scale, allInPrice: refPrice + tip, carrier: env?.carrier ?? DEFAULT_CARRIER });
-    setForm((f) => setValue(f, 'amount', n > 0n ? formatAmount(n, token.decimals) : ''));
+    setForm((f) => (n > 0n ? setAmountBase(f, 'amount', n, ctx) : setValue(f, 'amount', '')));
   };
 
   const onChange = (id: string, value: string) => {
@@ -197,6 +214,36 @@ export function OrderTicket(props: OrderTicketProps) {
   // the confirmation names the pair too: an inverted Buy is a sale of the token (the decoded card below says exactly what the transaction does)
   const confirmSide = inverted ? `${sideName} ${pairLabel(name, true)}` : sideName;
 
+  /**
+   * An inverted market: what an intent gives and receives in the shown pair's words (KAS is the base), for the disclosure summary and the
+   * confirmation. The KAS is the amount's value at the price the order is sized at (exact at a limit; "about" at the book's price).
+   */
+  const shownTerms = (intent: Intent | null): { tokens: string; kas: string; about: boolean; priceText: string | null } | null => {
+    if (!inverted || !intent || !('amount' in intent) || typeof intent.amount !== 'bigint') return null;
+    const own = intentSizingPrice(intent);
+    const ref = own === null ? amountPriceOf(form, ctx, 'amount') : null;
+    const price = own ?? ref?.price ?? null;
+    if (price === null || price <= 0n) return null;
+    return {
+      tokens: formatUnits(intent.amount, token.decimals, { group: ',' }),
+      kas: formatKas(baseToKas(intent.amount, price, scale), { group: ',' }),
+      about: own === null,
+      priceText: own === null ? null : nativeToInvertedPriceText(formatPrice(own, ctx)),
+    };
+  };
+  const shownAsText = (intent: Intent | null): string | undefined => {
+    const s = shownTerms(intent);
+    if (!s) return undefined;
+    return t(form.side === 'sell' ? 'ticket.shownAs.buyKas' : 'ticket.shownAs.sellKas', {
+      pair: pairLabel(name, true), side: sideName, tokens: s.tokens, ticker, kas: s.kas, about: s.about ? t('ticket.shownAs.about') : '',
+      basis: s.priceText ? t('ticket.shownAs.price', { price: s.priceText, ticker }) : t('ticket.shownAs.book'),
+    });
+  };
+  const discSummary = (() => {
+    const s = shownTerms(built.intent);
+    return s ? t(s.about ? 'ticket.disc.summaryKasAbout' : 'ticket.disc.summaryKas', { side: sideName, kas: s.kas, amount: s.tokens, ticker }) : undefined;
+  })();
+
   /** Plans level `index` of the run against freshly read coins and opens its confirmation. A level that cannot be planned ends the run. */
   const prepareLevel = async (index: number): Promise<void> => {
     const r = run.current;
@@ -217,7 +264,7 @@ export function OrderTicket(props: OrderTicketProps) {
       if (!p.ok || !p.built || errors(p).length > 0) return stop(t('ticket.reviewChanged'));
       const title = laddered ? t('ticket.ladder.confirmTitle', { level: index + 1, levels, side: confirmSide, type: typeName }) : t('ticket.confirmTitle', { side: confirmSide, type: typeName });
       const label = laddered ? `${form.type} ${form.side} ${index + 1}/${levels}` : `${form.type} ${form.side}`;
-      setConfirm({ built: p.built, expected: expectedFromPlan(p), title, label });
+      setConfirm({ built: p.built, expected: expectedFromPlan(p), title, label, shownAs: shownAsText(r.intents[index]!) });
     } catch (e) {
       run.current = null;
       const raw = e instanceof Error ? e.message : String(e);
@@ -304,6 +351,11 @@ export function OrderTicket(props: OrderTicketProps) {
       ) : null}
 
       <div class="tk-form">
+        {carried && quote ? (
+          <p class="small muted" data-testid="ticket-pair-carried">
+            {t('ticket.pairFlip.carried', { from: `${quote.ticker}/${token.ticker}`, side: sideName, pair: `${token.ticker}/${quote.ticker}` })}
+          </p>
+        ) : null}
         {inverted ? (
           <p class="small muted" data-testid="ticket-flip-note">
             {t('ticket.flip.note', { pair: pairLabel(name, true), ticker, name })}
@@ -455,7 +507,7 @@ export function OrderTicket(props: OrderTicketProps) {
         </div>
       ) : null}
 
-      {model ? <DisclosurePanel model={model} built={shownPlan?.built ?? null} /> : null}
+      {model ? <DisclosurePanel model={model} built={shownPlan?.built ?? null} summary={discSummary} /> : null}
 
       {reviewNote ? (
         <Banner tone="warn" data-testid="order-review-note">
@@ -480,6 +532,7 @@ export function OrderTicket(props: OrderTicketProps) {
           expected={confirm.expected}
           title={confirm.title}
           label={confirm.label}
+          shownAs={confirm.shownAs}
           tokenPowers={props.powers}
           openToken={token.openList ? token : undefined}
           cautionToken={!token.openList && needsOpenCaution(token) ? token : undefined}
