@@ -9,7 +9,7 @@ import type { Activation } from '../intent-simple';
 import type { CarrierLine, Disclosure, OrderPlan, PlanEnv, PlanIssue } from '../plan-types';
 import { baseKind } from '../order-facts';
 import type { OrderState } from '../types';
-import { daaToUnix, expiryFor, unixToDaa } from '../daa';
+import { daaToUnix, expiryFor, unixToDaaBound } from '../daa';
 import { checkPrice, checkSelfTrade as guardSelfTrade, checkTimes } from '../guards';
 import { ceilDiv } from '../units';
 import { issue, type IssueCode, type IssueParams } from './common-issues';
@@ -178,7 +178,7 @@ export interface ResolvedActivation {
  */
 export function resolveActivation(env: PlanEnv, log: IssueLog, a: Activation | undefined): ResolvedActivation | null {
   if (!a) return { activeFrom: 0n, activatesAt: null };
-  const requested = 'daa' in a ? a.daa : unixToDaa(env.clock, a.unixSeconds);
+  const requested = 'daa' in a ? a.daa : unixToDaaBound(env.clock, a.unixSeconds, 'start');
   const future = requested > env.clock.daa;
   const activeFrom = future ? requested : 0n;
   const bad = checkTimes(env.clock, { activeFrom, expiryDaa: env.clock.daa + 1n, requestedActiveFrom: requested }).filter((i) => i.field === 'activeFrom');
@@ -220,7 +220,7 @@ export function resolveExpiry(env: PlanEnv, log: IssueLog, e: CondExpiry | undef
       break;
     case 'gtdUnix':
       kind = 'gtd';
-      expiryDaa = unixToDaa(clock, spec.atUnixSeconds);
+      expiryDaa = unixToDaaBound(clock, spec.atUnixSeconds, 'end');
       break;
     case 'day': {
       if (o.exit) {

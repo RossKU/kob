@@ -72,6 +72,19 @@ export function unixToDaa(clock: Clock, unix: bigint): bigint {
   return delta >= 0n ? clock.daa + secondsToDaa(clock, delta) : clock.daa - secondsToDaa(clock, -delta);
 }
 
+/**
+ * The DAA score for a user's date, on the side of the user's intent: the score at the measured rate and at the nominal 10 DAA/s, the
+ * earlier of the two for an end (`'end'`: a GTD expiry never lets honest matchers fill past the date unless the chain is slower than
+ * both rates) and the later for a start (`'start'`: a timed activation never opens before the date unless the chain is faster than
+ * both). With a rate measured over hours the two differ little; a stale or wrong rate cannot move the date the wrong way.
+ */
+export function unixToDaaBound(clock: Clock, unix: bigint, side: 'start' | 'end'): bigint {
+  const measured = unixToDaa(clock, unix);
+  const nominal = unixToDaa({ ...clock, rateMilli: DAA_RATE_NOMINAL }, unix);
+  if (unix <= clock.unixSeconds) return measured;
+  return side === 'end' ? (measured < nominal ? measured : nominal) : measured > nominal ? measured : nominal;
+}
+
 // ------------------------------------------------------------------------------------------------ lifetimes
 
 export type ExpiryKind = 'gtc' | 'gtd' | 'day' | 'ioc' | 'fok';
@@ -100,7 +113,8 @@ export interface ExpiryOptions {
 /**
  * Maps a lifetime kind to the on-chain `expiryDaa` (and the day-order deadline).
  *  - gtc: placement + MAX_IDLE (the covenant also refunds after 90 days without activity);
- *  - gtd: the user's date; NOT clamped here (guards.checkExpiry refuses dates beyond 90 days);
+ *  - gtd: the user's date, the earlier of the measured and the nominal rate (`unixToDaaBound`); NOT clamped here (guards.checkExpiry
+ *    refuses dates beyond 90 days);
  *  - day: `kob.dayOrder` (until the next 00:00 UTC, 1% margin, deadline in the placement record);
  *  - ioc / fok: `activeFrom + life` (default 300 DAA, the covenant kills at 600 after it became fillable).
  */
@@ -113,7 +127,7 @@ export function expiryFor(kind: ExpiryKind, clock: Clock, opt: ExpiryOptions = {
       break;
     case 'gtd':
       if (opt.at === undefined) throw new Error('expiryFor(gtd) needs `at`');
-      expiryDaa = unixToDaa(clock, opt.at);
+      expiryDaa = unixToDaaBound(clock, opt.at, 'end');
       break;
     case 'day': {
       if (!opt.kob) throw new Error('expiryFor(day) needs `kob`');

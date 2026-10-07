@@ -66,6 +66,14 @@ export interface SdkConnectOptions {
 export interface SdkBlockDagInfo {
   network: string;
   virtualDaaScore: bigint;
+  /** the selected tip (2.1.0: `sink`) and the pruning point, hex block hashes: the ends of the node's long DAA-rate window */
+  sink?: string;
+  pruningPointHash?: string;
+}
+
+/** `getBlock({ hash, includeTransactions: false })`: the header fields the DAA rate needs (timestamp in ms). */
+export interface SdkBlockHeaderInfo {
+  block?: { header?: { timestamp?: bigint | number; daaScore?: bigint | number } };
 }
 
 export interface SdkRpcClient {
@@ -75,6 +83,8 @@ export interface SdkRpcClient {
   addEventListener(event: 'connect' | 'disconnect', callback: () => void): void;
   removeEventListener?(event: 'connect' | 'disconnect', callback?: () => void): void;
   getBlockDagInfo(): Promise<SdkBlockDagInfo>;
+  /** a block by hash (headers only with `includeTransactions: false`); used for the long-window DAA rate. Absent on test fakes. */
+  getBlock?(request: { hash: string; includeTransactions: boolean }): Promise<SdkBlockHeaderInfo>;
   getServerInfo(): Promise<{ serverVersion: string; networkId?: string; isSynced?: boolean }>;
   getUtxosByAddresses(request: { addresses: string[] }): Promise<{ entries: SdkUtxoEntryReference[] }>;
   submitTransaction(request: { transaction: SdkTransaction; allowOrphan?: boolean }): Promise<{ transactionId: string }>;

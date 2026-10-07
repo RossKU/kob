@@ -1091,7 +1091,13 @@ tick. With pair books: to be measured (pair phase).
 10. **Expiry**: DAA ↔ wall clock from the node's virtual DAA score `D0` and the wall clock `T0`
    (UTC, NTP-synced) read together at signing, at the rate `r` = DAA advance per second measured
    by the node over the last hour (default and fallback 10 DAA/s; clamp to [9.5, 10.5]); show
-   "expires around". GTC = 90 days idle; remind the user to renew (cancel-replace) before day 85.
+   "expires around". A rate measured over less than an hour is never used: block arrivals are Poisson, so 20 s of
+   them are off by up to 7 % (1 sigma) and the error is extrapolated over the order's life. The reference wallet reads the
+   rate from the DAA scores and timestamps of the headers of the node's pruning point and selected tip (hours apart),
+   else from its own samples once they span an hour, else uses 10 DAA/s. A user's date converts on the side of the
+   user's intent: a GTD date at the earlier of the measured and the nominal rate (honest matchers do not fill past it),
+   a timed activation at the later (no fill before it). GTC = 90 days idle; remind the user to renew (cancel-replace)
+   before day 85.
    **Day order = until the next 00:00 UTC.** With `Δ` = seconds from `T0` to that midnight:
    - `expiryDaa = D0 + ⌈Δ·r⌉ + ⌈0.01·Δ·r⌉` (the estimate plus a 1% margin), so the on-chain
      refund opens at or after midnight unless the DAA rate over the order's life beats `r` by

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { DaaRateEstimator, KaspaRpcNode, mapUtxoEntry } from './node-rpc';
+import { DaaRateEstimator, KaspaRpcNode, mapUtxoEntry, nodeDaaRate } from './node-rpc';
 import { NodeError, describeNodeError } from './node-error';
 import { loadKaspaSdkNode } from './kaspa-sdk.node';
 import type { KaspaSdk, SdkConnectOptions, SdkRpcClient, SdkRpcConfig, SdkTransaction, SdkUtxoEntryReference } from './kaspa-sdk';
@@ -31,6 +31,10 @@ interface FakeState {
   /** answer of getFeeEstimate: a value, or an Error to throw; undefined = the SDK has no such method */
   feeEstimate?: unknown;
   feeCalls?: number;
+  /** headers by hash (timestamp ms, DAA score) and the dag info's sink and pruning point: the node's long DAA-rate window */
+  headers?: Record<string, { timestamp: bigint; daaScore: bigint }>;
+  sink?: string;
+  pruningPoint?: string;
 }
 
 function makeFake(state: FakeState): KaspaSdk {
@@ -67,8 +71,13 @@ function makeFake(state: FakeState): KaspaSdk {
       this.emit('disconnect');
     }
     async getBlockDagInfo() {
-      return { network: state.network, virtualDaaScore: state.daa };
+      return { network: state.network, virtualDaaScore: state.daa, sink: state.sink, pruningPointHash: state.pruningPoint };
     }
+    getBlock = state.headers === undefined ? undefined : async (req: { hash: string; includeTransactions: boolean }) => {
+      const h = state.headers![req.hash];
+      if (!h) throw new Error('block not found');
+      return { block: { header: h } };
+    };
     async getServerInfo() {
       return { serverVersion: '2.1.0' };
     }
@@ -113,21 +122,23 @@ const entry = (over: Partial<SdkUtxoEntryReference> = {}): SdkUtxoEntryReference
 // ------------------------------------------------------------------------------------------------ estimator
 
 describe('DaaRateEstimator', () => {
-  it('is null until the history spans enough time', () => {
+  it('is null until the history spans an hour (matcher.md 10.10)', () => {
     const e = new DaaRateEstimator();
     expect(e.rateMilli()).toBeNull();
     e.add(1000n, 0);
     expect(e.rateMilli()).toBeNull();
-    e.add(1100n, 10_000); // only 10 s
+    e.add(1200n, 20_000); // 20 s: noise
     expect(e.rateMilli()).toBeNull();
-    e.add(1200n, 20_000);
+    for (let s = 60; s < 3_600; s += 60) e.add(1000n + BigInt(s * 10), s * 1000);
+    expect(e.rateMilli()).toBeNull();
+    e.add(37_000n, 3_600_000);
     expect(e.rateMilli()).toBe(10_000);
   });
 
-  it('measures milli-DAA per second (9.7 DAA/s)', () => {
+  it('measures milli-DAA per second (9.7 DAA/s over an hour)', () => {
     const e = new DaaRateEstimator();
     e.add(0n, 0);
-    e.add(291n, 30_000);
+    e.add(34_920n, 3_600_000);
     expect(e.rateMilli()).toBe(9_700);
   });
 
@@ -159,6 +170,27 @@ describe('DaaRateEstimator', () => {
     e.add(100n, 0);
     e.add(100n, 5_000);
     expect(e.rateMilli()).toBeNull();
+  });
+});
+
+describe('nodeDaaRate', () => {
+  const header = (timestamp: bigint, daaScore: bigint) => ({ block: { header: { timestamp, daaScore } } });
+  const blocks: Record<string, ReturnType<typeof header>> = {
+    pp: header(1_790_000_000_000n, 1_000_000n),
+    tip: header(1_790_000_000_000n + 30n * 3_600_000n, 1_000_000n + 30n * 36_000n - 540n),
+    near: header(1_790_000_000_000n + 600_000n, 1_006_000n),
+  };
+  const getBlock = async (r: { hash: string }) => blocks[r.hash]!;
+
+  it('is the DAA advance per second between the pruning point and the selected tip (hours apart)', async () => {
+    expect(await nodeDaaRate({ sink: 'tip', pruningPointHash: 'pp' }, getBlock)).toBe(9_995);
+  });
+
+  it('is null when the node gives no window, or one shorter than an hour', async () => {
+    expect(await nodeDaaRate({ sink: 'tip', pruningPointHash: 'pp' }, undefined)).toBeNull();
+    expect(await nodeDaaRate({ sink: 'tip' }, getBlock)).toBeNull();
+    expect(await nodeDaaRate({ sink: 'near', pruningPointHash: 'pp' }, getBlock)).toBeNull();
+    expect(await nodeDaaRate({ sink: 'pp', pruningPointHash: 'pp' }, getBlock)).toBeNull();
   });
 });
 
@@ -247,10 +279,33 @@ describe('KaspaRpcNode', () => {
     c = await node.getClock();
     expect(c.daa).toBe(1297n);
     expect(c.unixSeconds).toBe(1_790_000_030n);
-    expect(c.rateMilli).toBe(9_900);
+    expect(c.rateMilli).toBeNull(); // 30 s of samples: not a rate
+    for (let k = 0; k < 59; k++) {
+      t += 60_000;
+      st.daa += 600n;
+      c = await node.getClock();
+    }
+    expect(c.rateMilli).toBeNull(); // 59.5 min
     t += 30_000;
-    st.daa += 300n;
-    expect((await node.getClock()).rateMilli).toBe(9_950); // 597 DAA over 60 s
+    st.daa += 303n;
+    expect((await node.getClock()).rateMilli).toBe(10_000); // 36,000 DAA over an hour
+  });
+
+  it("getClock: the node's own long window (pruning point to selected tip) is the rate when the node gives it", async () => {
+    const st = newState({
+      sink: 'tip',
+      pruningPoint: 'pp',
+      headers: { pp: { timestamp: 1_789_900_000_000n, daaScore: 0n }, tip: { timestamp: 1_789_900_000_000n + 30n * 3_600_000n, daaScore: 30n * 36_000n - 540n } },
+    });
+    const t = 1_790_000_000_000;
+    const node = mk(st, { now: () => t });
+    await node.connect();
+    expect((await node.getClock()).rateMilli).toBe(9_995);
+    // a node whose window is shorter than an hour gives no rate: the wallet's own samples (none yet)
+    const short = newState({ sink: 'tip', pruningPoint: 'pp', headers: { pp: { timestamp: 0n, daaScore: 0n }, tip: { timestamp: 600_000n, daaScore: 6_000n } } });
+    const n2 = mk(short, { now: () => t });
+    await n2.connect();
+    expect((await n2.getClock()).rateMilli).toBeNull();
   });
 
   it('getUtxosByAddresses maps entries, dedupes addresses and skips the call for an empty list', async () => {

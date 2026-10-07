@@ -12,7 +12,7 @@ import type {
 import { SIMPLE_TYPES } from '../intent-simple';
 import type { Duration, Expiry, ExpiryKind } from '../daa';
 import {
-  IOC_KILL_DAA, IOC_LIFE_DAA, MARKET_ACTIVATION_DAA, MARKET_AUCTION_DAA, SLIPPAGE_BPS, durationToDaa, expiryFor, secondsToNextMidnight, unixToDaa,
+  IOC_KILL_DAA, IOC_LIFE_DAA, MARKET_ACTIVATION_DAA, MARKET_AUCTION_DAA, SLIPPAGE_BPS, durationToDaa, expiryFor, secondsToNextMidnight, unixToDaaBound,
 } from '../daa';
 import {
   checkAmount, checkCarrierRatio, checkFok, checkMinFill, checkNotional, checkPrice, checkPriceBand, checkSelfTrade, checkTimes, checkTip, crossingTouch, depthWithin,
@@ -63,7 +63,7 @@ const LEAD = MARKET_ACTIVATION_DAA;
 
 export function activationDaa(env: PlanEnv, a: Activation | undefined): bigint | null {
   if (!a) return null;
-  return 'daa' in a ? a.daa : unixToDaa(env.clock, a.unixSeconds);
+  return 'daa' in a ? a.daa : unixToDaaBound(env.clock, a.unixSeconds, 'start');
 }
 
 export function resolveLifetime(env: PlanEnv, lt: Lifetime | undefined, pre: PlanIssue[]): Expiry {

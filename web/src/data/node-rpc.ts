@@ -9,17 +9,23 @@ import { NodeError, describeNodeError, isConnectionError, rawErrorText } from '.
 
 // ------------------------------------------------------------------------------------------------ DAA rate
 
+/** The least span a DAA rate is measured over (matcher.md 10.10: "over the last hour"). Blocks arrive as a Poisson process: over 20 s
+ * the rate is off by up to 7 % (1 sigma), and that error is extrapolated over a day (day order) or 90 days (GTD, timed activation);
+ * over an hour it is 0.5 %, and the node's own window (`nodeDaaRate`, many hours) is tighter still. */
+export const DAA_RATE_MIN_SPAN_MS = 3_600_000;
+
 /**
- * Sliding history of (virtual DAA, wall-clock) samples -> measured DAA advance in milli-DAA per second.
- * `kob.dayOrder` needs the measured rate to turn "00:00 UTC" into a DAA score (matcher.md 10.10); the nominal 10 DAA/s is only a fallback.
- * `rateMilli()` is null until the history spans `minSpanMs` (a rate from a few hundred ms of samples is noise).
+ * Sliding history of (virtual DAA, wall-clock) samples -> measured DAA advance in milli-DAA per second: the fallback when the node does
+ * not give its own long window (`nodeDaaRate`). `kob.dayOrder` needs the measured rate to turn "00:00 UTC" into a DAA score
+ * (matcher.md 10.10); the nominal 10 DAA/s is used until a rate is known. `rateMilli()` is null until the history spans `minSpanMs`
+ * (an hour by default: a rate from seconds or minutes of samples is noise).
  */
 export class DaaRateEstimator {
   private samples: { daa: bigint; tMs: number }[] = [];
   constructor(
-    private readonly windowMs = 10 * 60_000,
-    private readonly minSpanMs = 20_000,
-    private readonly maxSamples = 64,
+    private readonly windowMs = 2 * DAA_RATE_MIN_SPAN_MS,
+    private readonly minSpanMs = DAA_RATE_MIN_SPAN_MS,
+    private readonly maxSamples = 512,
     private readonly minIntervalMs = 1_000,
   ) {}
 
@@ -54,6 +60,33 @@ export class DaaRateEstimator {
     if (spanMs < this.minSpanMs || b.daa <= a.daa) return null;
     return Number(((b.daa - a.daa) * 1_000_000n) / BigInt(Math.round(spanMs)));
   }
+}
+
+/** How long a rate the node measured is reused before it is read again. */
+const NODE_RATE_TTL_MS = 10 * 60_000;
+
+const asBig = (v: bigint | number | undefined): bigint | null => (typeof v === 'bigint' ? v : typeof v === 'number' && Number.isFinite(v) ? BigInt(Math.trunc(v)) : null);
+
+/**
+ * The DAA rate the node itself measured, in milli-DAA per second: the DAA scores and timestamps of the headers of its pruning point and
+ * of its selected tip (`sink`), hours apart. Null when the node does not give them (an older SDK, a fake) or they span less than
+ * `minSpanMs`; then the wallet's own samples (`DaaRateEstimator`, an hour at least) or the nominal 10 DAA/s are used.
+ */
+export async function nodeDaaRate(
+  dag: { sink?: string; pruningPointHash?: string },
+  getBlock: ((r: { hash: string; includeTransactions: boolean }) => Promise<{ block?: { header?: { timestamp?: bigint | number; daaScore?: bigint | number } } }>) | undefined,
+  minSpanMs = DAA_RATE_MIN_SPAN_MS,
+): Promise<number | null> {
+  if (!getBlock || !dag.sink || !dag.pruningPointHash || dag.sink === dag.pruningPointHash) return null;
+  const [tip, old] = await Promise.all([getBlock({ hash: dag.sink, includeTransactions: false }), getBlock({ hash: dag.pruningPointHash, includeTransactions: false })]);
+  const t1 = asBig(tip.block?.header?.timestamp);
+  const d1 = asBig(tip.block?.header?.daaScore);
+  const t0 = asBig(old.block?.header?.timestamp);
+  const d0 = asBig(old.block?.header?.daaScore);
+  if (t1 === null || d1 === null || t0 === null || d0 === null) return null;
+  const spanMs = t1 - t0;
+  if (spanMs < BigInt(minSpanMs) || d1 <= d0) return null;
+  return Number(((d1 - d0) * 1_000_000n) / spanMs);
 }
 
 // ------------------------------------------------------------------------------------------------ utxo mapping
@@ -126,6 +159,8 @@ export class KaspaRpcNode implements NodeApi {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly estimator: DaaRateEstimator;
+  /** the node's own long-window rate (`nodeDaaRate`) and when it was read */
+  private nodeRate: { milli: number | null; atMs: number } | null = null;
   private rpc: SdkRpcClient | null = null;
   private connecting: Promise<NodeInfo> | null = null;
   private state: RpcNodeStatus = 'idle';
@@ -225,7 +260,22 @@ export class KaspaRpcNode implements NodeApi {
     } catch {
       /* optional */
     }
-    return { network: net, virtualDaaScore: dag.virtualDaaScore.toString(), serverVersion, daaRateMilli: this.estimator.rateMilli() };
+    return { network: net, virtualDaaScore: dag.virtualDaaScore.toString(), serverVersion, daaRateMilli: await this.rateMilli(rpc, dag) };
+  }
+
+  /** The DAA rate over a long window: the node's own (re-read every 10 minutes), else the wallet's samples over an hour, else null. */
+  private async rateMilli(rpc: SdkRpcClient, dag: { sink?: string; pruningPointHash?: string }): Promise<number | null> {
+    const now = this.now();
+    if (this.nodeRate === null || now - this.nodeRate.atMs >= NODE_RATE_TTL_MS) {
+      let milli: number | null = null;
+      try {
+        milli = await timed(nodeDaaRate(dag, rpc.getBlock?.bind(rpc)), this.callTimeoutMs, 'getBlock');
+      } catch {
+        milli = null; // optional: the samples below
+      }
+      this.nodeRate = { milli, atMs: now };
+    }
+    return this.nodeRate.milli ?? this.estimator.rateMilli();
   }
 
   private async dispose(): Promise<void> {
@@ -249,6 +299,7 @@ export class KaspaRpcNode implements NodeApi {
     this.setState('closed');
     await this.dispose();
     this.estimator.reset();
+    this.nodeRate = null;
   }
 
   /** A connected client: connects on first use, then waits for the SDK's automatic reconnect after a drop. */
@@ -291,7 +342,9 @@ export class KaspaRpcNode implements NodeApi {
     const dag = await this.read((rpc) => rpc.getBlockDagInfo());
     const tMs = (t0 + this.now()) / 2;
     this.estimator.add(dag.virtualDaaScore, tMs);
-    return { daa: dag.virtualDaaScore, unixSeconds: BigInt(Math.floor(tMs / 1000)), rateMilli: this.estimator.rateMilli() };
+    const rpc = this.rpc;
+    const rateMilli = rpc ? await this.rateMilli(rpc, dag) : this.estimator.rateMilli();
+    return { daa: dag.virtualDaaScore, unixSeconds: BigInt(Math.floor(tMs / 1000)), rateMilli };
   }
 
   async getUtxosByAddresses(addresses: string[]): Promise<NodeUtxo[]> {
