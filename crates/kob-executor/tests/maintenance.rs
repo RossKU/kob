@@ -294,3 +294,19 @@ fn a_sale_never_goes_below_the_price_floor() {
     let r = run(&input(held, vec![low], vec![]), &off);
     assert_eq!((r.jobs[0].kind, r.jobs[0].order), (MaintKind::Sell, Some(cid(900))), "{:?}", r.skipped);
 }
+
+/// Holdings whose amounts overflow an i64 together (possible for a tracked token whose genesis is not verified) are left
+/// alone; the other tokens' jobs are built as usual, and the tick does not panic.
+#[test]
+fn overflowing_holdings_are_left_alone() {
+    let mut held = vec![own(T8, i64::MAX), own(T8, i64::MAX)];
+    for k in 0..2 {
+        let mut o = own(T3, 10 + k);
+        o.token.utxo.covenant_id = Some([0x01; 32]);
+        held.push(o);
+    }
+    let r = run(&input(held, vec![], vec![]), &MaintenanceConfig::default());
+    assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
+    assert_eq!((r.jobs[0].kind, r.jobs[0].token), (MaintKind::Merge, [0x01; 32]));
+    assert!(r.skipped.iter().any(|(t, why)| *t == token_a(T8) && why.contains("overflow")), "{:?}", r.skipped);
+}

@@ -1598,11 +1598,15 @@ pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
     for f in &r.funding {
         d.add_p2pk(f);
     }
-    let have: i64 = r.tokens.iter().map(|t| t.state.amount()).sum();
-    let mut sent = 0;
+    let have = r
+        .tokens
+        .iter()
+        .try_fold(0i64, |a, t| a.checked_add(t.state.amount()))
+        .ok_or_else(|| Error::Invalid("the token inputs' amounts overflow an i64".into()))?;
+    let mut sent: i64 = 0;
     for rc in &r.recipients {
         pos(rc.amount, "recipient amount")?;
-        sent += rc.amount;
+        sent = sent.checked_add(rc.amount).ok_or_else(|| Error::Invalid("the recipients' amounts overflow an i64".into()))?;
         d.add_token_output(token, TokenState::user(fam, rc.amount, rc.pubkey, ext), pos(rc.carrier as i64, "recipient carrier")?)?;
     }
     if sent > have {

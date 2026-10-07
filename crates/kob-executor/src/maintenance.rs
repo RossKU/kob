@@ -314,15 +314,16 @@ fn sell_action(
     }))
 }
 
+/// The merge of `tokens` (one group, `amount` base units in all) into one token UTXO of the operator.
 fn merge_action(
     g: &Group,
     tokens: &[TokenUtxo],
+    amount: i64,
     funding: &[KeyUtxo],
     operator: [u8; 32],
     carrier: u64,
     cfg: &MaintenanceConfig,
 ) -> Action {
-    let amount: i64 = tokens.iter().map(|t| t.state.amount()).sum();
     Action::SendTokens(SendTokens {
         token: TokenRef { covenant_id: g.0, program: g.1 },
         tokens: tokens.to_vec(),
@@ -372,7 +373,11 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
         // as many as one transaction of the program takes, the oldest first
         utxos.sort_by(|a, b| (a.utxo.block_daa_score, outpoint(&a.utxo)).cmp(&(b.utxo.block_daa_score, outpoint(&b.utxo))));
         utxos.truncate(lim.max_in.max(1));
-        let held: i64 = utxos.iter().map(|u| u.state.amount()).sum();
+        // checked: a holding of a token whose genesis is not verified may carry any amounts; their sum leaves the group out
+        let Some(held) = utxos.iter().try_fold(0i64, |a, u| a.checked_add(u.state.amount())) else {
+            report.skipped.push((g.0, "the holdings of this token overflow an i64: left alone".into()));
+            continue;
+        };
         let kron = g.1.family() == kob_protocol::family::Family::Kron;
         let funding: Vec<KeyUtxo> = if kron { pool.first().cloned().into_iter().collect() } else { vec![] };
         if kron && funding.is_empty() {
@@ -451,7 +456,7 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
         if job.is_none() && cfg.merge && utxos.len() >= cfg.min_utxos.max(2) {
             // a merge of inventory leaves it on the inventory carrier (`InventoryPolicy::keep_carrier`)
             let carrier = if held_inventory { cfg.inventory.keep_carrier } else { cfg.token_carrier };
-            let action = priced(merge_action(&g, &utxos, &funding, operator, carrier, cfg), cfg, |_| None);
+            let action = priced(merge_action(&g, &utxos, held, &funding, operator, carrier, cfg), cfg, |_| None);
             match build_sign(&action, signer, cfg.validate) {
                 Ok((built, signed, validation)) => {
                     let profit = operator_kas(&built, &funding, &utxos, carrier);
