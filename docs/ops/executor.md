@@ -254,9 +254,14 @@ set.
 
 **Authentication.** `"auth": "required"` (the default) needs a merchant API key on `/verify`, `/settle` and the invoice
 routes. `"auth": "open"` (no key, any `payTo`, any asset) is for a local operator only: it is refused unless `listen` is a
-loopback address and `trustedProxies` is empty, and each request is refused (`403`) unless it comes from a loopback peer
-and carries no forwarding header (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `Via`, ...). Never publish an open
-facilitator through a reverse proxy; behind a proxy use `required` with merchant keys.
+loopback address, `trustedProxies` is empty and `"openAuthNoProxy": true` is set, and each request is refused (`403`)
+unless it comes from a loopback peer and carries no forwarding header (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `Via`,
+...). `openAuthNoProxy` is the operator's statement that nothing on the host relays connections to `listen`: a relay on the
+same host (nginx `proxy_pass` without `proxy_set_header`, stunnel, socat, `ssh -R`, HAProxy in TCP mode) connects from the
+loopback address and need not add any header, so the facilitator cannot tell it from a local caller, and an open
+facilitator behind one serves everybody. Never put any relay in front of an open facilitator; behind a proxy use `required`
+with merchant keys. `kob-executor run` also refuses an open facilitator when its read API listens on a non-loopback address
+or has `trusted_proxies` (that host serves the outside).
 
 **Ledger format.** The ledger (`ledger`, a JSONL log) is read only in the format of the running build. An intent
 payment recorded for an earlier router template (for example before the token-intent lock pin of 2026-10-06 or the B pin of 2026-10-07), an intent

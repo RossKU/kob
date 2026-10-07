@@ -123,17 +123,38 @@ async fn behind_a_trusted_proxy_each_client_has_its_own_bucket() {
     assert!(statuses.contains(&StatusCode::TOO_MANY_REQUESTS), "rotating the header does not rotate the bucket");
 }
 
+/// `run` refuses an open facilitator next to a read API that serves the outside (a public address, or a reverse proxy declared in
+/// `trusted_proxies`): a relay on that host could reach the facilitator from the loopback address without any header.
+#[test]
+fn open_auth_is_refused_next_to_a_public_or_proxied_read_api() {
+    use kob_executor::config::ApiConfig;
+    use kob_executor::executor::open_auth_beside_api;
+    use kob_executor::x402::config::AuthMode;
+    let local = ApiConfig { enabled: true, listen: "127.0.0.1:8090".parse().unwrap(), ..ApiConfig::default() };
+    assert!(open_auth_beside_api(AuthMode::Open, &local).is_ok());
+    let public = ApiConfig { listen: "0.0.0.0:8090".parse().unwrap(), ..local.clone() };
+    assert!(open_auth_beside_api(AuthMode::Open, &public).is_err());
+    let proxied = ApiConfig { trusted_proxies: vec!["127.0.0.1".into()], ..local.clone() };
+    assert!(open_auth_beside_api(AuthMode::Open, &proxied).unwrap_err().to_string().contains("required"));
+    // keyed merchants are fine anywhere; a disabled API says nothing about the host
+    assert!(open_auth_beside_api(AuthMode::Required, &public).is_ok());
+    assert!(open_auth_beside_api(AuthMode::Open, &ApiConfig { enabled: false, ..public }).is_ok());
+}
+
 #[test]
 fn the_concurrency_settings_are_validated_and_defaulted() {
     let d = X402Config::default();
     assert_eq!((d.max_settles_per_merchant, d.max_concurrent_verifies), (8, 64));
     assert!(d.max_settles_per_merchant < d.max_concurrent_settles, "one merchant cannot hold the whole pool");
-    let mut c = X402Config::from_json(r#"{"auth":"open","maxSettlesPerMerchant":0}"#).unwrap();
+    let mut c = X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"maxSettlesPerMerchant":0}"#).unwrap();
     assert!(c.build().is_err());
     c.max_settles_per_merchant = 1;
     c.trusted_proxies = vec!["not-an-ip".into()];
     assert!(c.build().is_err());
     // a volatile ledger is refused on mainnet
-    let m = X402Config::from_json(r#"{"network":"kaspa:mainnet","allowMainnet":true,"ledger":":memory:","auth":"open"}"#).unwrap();
+    let m = X402Config::from_json(
+        r#"{"network":"kaspa:mainnet","allowMainnet":true,"ledger":":memory:","auth":"open","openAuthNoProxy":true}"#,
+    )
+    .unwrap();
     assert!(m.build().unwrap_err().to_string().contains("volatile"));
 }

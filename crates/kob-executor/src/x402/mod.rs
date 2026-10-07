@@ -62,6 +62,10 @@ pub struct X402Args {
     /// Merchant authentication: `required` (Bearer keys from the configuration) or `open` (loopback only).
     #[arg(long, value_parser = ["required", "open"])]
     pub auth: Option<String>,
+    /// With `--auth open`: state that nothing on this host relays connections to the listen address (configuration
+    /// `openAuthNoProxy`).
+    #[arg(long)]
+    pub open_auth_no_proxy: bool,
 }
 
 impl X402Args {
@@ -88,6 +92,9 @@ impl X402Args {
             Some("open") => cfg.auth = AuthMode::Open,
             Some(_) => return Err("--auth must be required or open".into()),
             None => {}
+        }
+        if self.open_auth_no_proxy {
+            cfg.open_auth_no_proxy = true;
         }
         Ok(cfg)
     }

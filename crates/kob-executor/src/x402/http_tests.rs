@@ -548,7 +548,7 @@ async fn metrics_are_for_loopback_or_the_admin_key() {
 #[tokio::test]
 async fn open_mode_on_loopback_needs_no_key() {
     let fx = Fixture::new();
-    let built = X402Config::from_json(r#"{"auth":"open","listen":"127.0.0.1:0"}"#).unwrap().build().unwrap();
+    let built = X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:0"}"#).unwrap().build().unwrap();
     let app = router(Arc::new(AppState::new(fx.fac.clone(), &built)));
     let input = fx.fund(500_000_000);
     let (req, tx) = fx.payment(&[input], 100_000_000, ID1, 7);
@@ -563,7 +563,7 @@ async fn open_mode_on_loopback_needs_no_key() {
 #[tokio::test]
 async fn open_mode_refuses_requests_through_a_proxy_or_from_another_host() {
     let fx = Fixture::new();
-    let built = X402Config::from_json(r#"{"auth":"open","listen":"127.0.0.1:0"}"#).unwrap().build().unwrap();
+    let built = X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:0"}"#).unwrap().build().unwrap();
     let app = router(Arc::new(AppState::new(fx.fac.clone(), &built)));
     let input = fx.fund(500_000_000);
     let (req, _) = fx.payment(&[input], 100_000_000, ID1, 7);

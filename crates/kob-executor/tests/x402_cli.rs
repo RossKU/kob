@@ -36,6 +36,10 @@ fn strict_config_is_enforced_at_startup() {
     let out = Command::new(BIN).args(["x402", "--auth", "open", "--listen", "0.0.0.0:0", "--ledger", ":memory:"]).output().unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("loopback"));
+    // open auth on loopback without the operator's statement that nothing relays to it
+    let out = Command::new(BIN).args(["x402", "--auth", "open", "--listen", "127.0.0.1:0", "--ledger", ":memory:"]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("openAuthNoProxy"), "{}", String::from_utf8_lossy(&out.stderr));
     // required auth without merchants
     let out = Command::new(BIN).args(["x402", "--ledger", ":memory:"]).output().unwrap();
     assert!(!out.status.success());
@@ -113,6 +117,7 @@ fn the_service_starts_against_a_node_and_serves_the_public_routes() {
                 "x402",
                 "--auth",
                 "open",
+                "--open-auth-no-proxy",
                 "--node",
                 &node,
                 "--listen",
@@ -144,7 +149,18 @@ fn the_service_starts_against_a_node_and_serves_the_public_routes() {
 fn a_node_on_another_network_is_refused_at_startup() {
     let node = mock_node("mainnet");
     let out = Command::new(BIN)
-        .args(["x402", "--auth", "open", "--node", &node, "--listen", &format!("127.0.0.1:{}", free_port()), "--ledger", ":memory:"])
+        .args([
+            "x402",
+            "--auth",
+            "open",
+            "--open-auth-no-proxy",
+            "--node",
+            &node,
+            "--listen",
+            &format!("127.0.0.1:{}", free_port()),
+            "--ledger",
+            ":memory:",
+        ])
         .output()
         .unwrap();
     assert!(!out.status.success());

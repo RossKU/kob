@@ -365,6 +365,7 @@ pub fn x402_service(
     xcfg.node = index.rpc_url.clone();
     xcfg.pause_file = pause_file;
     let built = xcfg.build()?;
+    open_auth_beside_api(xcfg.auth, &index.api)?;
     if built.network.registry_name() != index.network {
         bail!("x402: the facilitator is configured for {}, the indexer follows {}", built.network, index.network);
     }
@@ -377,6 +378,23 @@ pub fn x402_service(
     });
     let chain = crate::x402::indexed::IndexedChain::new(node, ingest);
     crate::x402::prepare_with(built, Arc::new(chain), Some(book)).map_err(anyhow::Error::msg)
+}
+
+/// An open facilitator (`auth: "open"`) is for a host where nothing relays connections to it. A read API that listens on a
+/// public address, or that is configured behind a reverse proxy (`trusted_proxies`), says that this host serves the outside:
+/// the facilitator of the same process is then refused unless it uses merchant keys.
+pub fn open_auth_beside_api(auth: crate::x402::config::AuthMode, api: &crate::config::ApiConfig) -> Result<()> {
+    if auth == crate::x402::config::AuthMode::Open
+        && api.enabled
+        && (!api.listen.ip().is_loopback() || !api.trusted_proxies.is_empty())
+    {
+        bail!(
+            "x402: auth \"open\" is refused next to a read API that listens on {} or has trusted_proxies: this host serves the \
+             outside, so use auth \"required\" with merchant keys",
+            api.listen
+        );
+    }
+    Ok(())
 }
 
 /// `kob-executor run`.

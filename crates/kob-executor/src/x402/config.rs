@@ -78,8 +78,9 @@ fn err<T>(m: impl Into<String>) -> Result<T, ConfigError> {
 pub enum AuthMode {
     /// Every `/verify` and `/settle` needs a merchant API key (default).
     Required,
-    /// No authentication, for a local operator only: accepted only when listening on a loopback address and without
-    /// `trustedProxies`, and a request that came through a proxy (a forwarding header) or from another host is refused.
+    /// No authentication, for a local operator only: accepted only when listening on a loopback address, without
+    /// `trustedProxies` and with `openAuthNoProxy: true` (nothing on the host relays to `listen`); a request from another host or
+    /// with a forwarding header is refused. A same-host relay that adds no header cannot be detected: never use one with it.
     Open,
 }
 
@@ -232,6 +233,10 @@ pub struct X402Config {
     pub listen: String,
     pub ledger: String,
     pub auth: AuthMode,
+    /// Required with `auth: "open"`: the operator asserts that nothing on this host relays connections to `listen` (no
+    /// reverse proxy, TLS terminator, port forwarder or tunnel). Such a relay connects from the loopback address and need not
+    /// add any header, so the facilitator cannot tell it from a local caller; with one, use `auth: "required"`.
+    pub open_auth_no_proxy: bool,
     pub allow_mainnet: bool,
     pub confirmations_daa: u64,
     pub max_fee_sompi: u64,
@@ -302,6 +307,7 @@ impl Default for X402Config {
             listen: "127.0.0.1:8402".into(),
             ledger: "x402-ledger.jsonl".into(),
             auth: AuthMode::Required,
+            open_auth_no_proxy: false,
             allow_mainnet: false,
             confirmations_daa: 100,
             max_fee_sompi: 50_000_000,
@@ -425,6 +431,13 @@ impl X402Config {
         }
         if self.auth == AuthMode::Open && !self.trusted_proxies.is_empty() {
             return err("auth \"open\" cannot be combined with trustedProxies: behind a reverse proxy every caller would use the facilitator without a key");
+        }
+        if self.auth == AuthMode::Open && !self.open_auth_no_proxy {
+            return err(
+                "auth \"open\" needs \"openAuthNoProxy\": true, the operator's statement that nothing on this host relays connections \
+                 to the listen address (a reverse proxy, TLS terminator, port forwarder or tunnel connects from the loopback address \
+                 and need not add a header, so it cannot be told from a local caller); with one, use auth \"required\"",
+            );
         }
         if self.ledger.trim().is_empty() {
             return err("ledger path must not be empty (use \":memory:\" for a volatile ledger)");
@@ -679,20 +692,26 @@ mod tests {
 
     #[test]
     fn auth_open_requires_loopback_and_no_merchants() {
-        let ok = X402Config::from_json(r#"{"auth":"open","listen":"127.0.0.1:8402"}"#).unwrap().build();
+        let ok = X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:8402"}"#).unwrap().build();
         assert!(ok.is_ok());
-        let e = X402Config::from_json(r#"{"auth":"open","listen":"0.0.0.0:8402"}"#).unwrap().build().unwrap_err();
+        // a same-host relay without forwarding headers cannot be told from a local caller: the operator must state there is none
+        let e = X402Config::from_json(r#"{"auth":"open","listen":"127.0.0.1:8402"}"#).unwrap().build().unwrap_err();
+        assert!(e.0.contains("openAuthNoProxy"), "{}", e.0);
+        let e =
+            X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"listen":"0.0.0.0:8402"}"#).unwrap().build().unwrap_err();
         assert!(e.0.contains("loopback"));
-        let e = X402Config::from_json(r#"{"auth":"open","listen":"[::]:8402"}"#).unwrap().build().unwrap_err();
+        let e = X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"listen":"[::]:8402"}"#).unwrap().build().unwrap_err();
         assert!(e.0.contains("loopback"));
-        assert!(X402Config::from_json(r#"{"auth":"open","listen":"[::1]:8402"}"#).unwrap().build().is_ok());
-        let e = X402Config::from_json(&doc(r#","auth":"open""#)).unwrap().build().unwrap_err();
+        assert!(X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"listen":"[::1]:8402"}"#).unwrap().build().is_ok());
+        let e = X402Config::from_json(&doc(r#","auth":"open","openAuthNoProxy":true"#)).unwrap().build().unwrap_err();
         assert!(e.0.contains("contradict"));
         // behind a reverse proxy (declared as trusted) open auth would serve every caller
-        let e = X402Config::from_json(r#"{"auth":"open","listen":"127.0.0.1:8402","trustedProxies":["127.0.0.1"]}"#)
-            .unwrap()
-            .build()
-            .unwrap_err();
+        let e = X402Config::from_json(
+            r#"{"auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:8402","trustedProxies":["127.0.0.1"]}"#,
+        )
+        .unwrap()
+        .build()
+        .unwrap_err();
         assert!(e.0.contains("trustedProxies"), "{}", e.0);
     }
 
@@ -717,7 +736,8 @@ mod tests {
         let cfg_dir = d.path().join("etc");
         std::fs::create_dir(&cfg_dir).unwrap();
         let path = cfg_dir.join("x402.json");
-        let base = r#"{"network":"kaspa:testnet-10","auth":"open","listen":"127.0.0.1:8402","ledger":":memory:""#;
+        let base =
+            r#"{"network":"kaspa:testnet-10","auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:8402","ledger":":memory:""#;
         std::fs::write(&path, format!(r#"{base},"killSwitchFile":"x402.kill"}}"#)).unwrap();
         let c = X402Config::load(&path).unwrap();
         assert_eq!(c.kill_switch_file.as_deref().map(std::path::PathBuf::from), Some(cfg_dir.join("x402.kill")));
@@ -759,7 +779,10 @@ mod tests {
     fn mainnet_needs_an_explicit_flag() {
         let e = X402Config::from_json(r#"{"auth":"open","network":"kaspa:mainnet"}"#).unwrap().build().unwrap_err();
         assert!(e.0.contains("allowMainnet"));
-        assert!(X402Config::from_json(r#"{"auth":"open","network":"kaspa:mainnet","allowMainnet":true}"#).unwrap().build().is_ok());
+        assert!(X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"network":"kaspa:mainnet","allowMainnet":true}"#)
+            .unwrap()
+            .build()
+            .is_ok());
     }
 
     #[test]
