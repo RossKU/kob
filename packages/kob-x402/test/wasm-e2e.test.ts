@@ -48,6 +48,8 @@ async function rig(spec: OfferSpec, capabilities: Record<string, unknown>, verif
           network: body.paymentRequirements.network,
           amount: body.paymentRequirements.amount,
           payer: body.paymentPayload.payload.payerAddress,
+          // the finality the settlement reached, as the facilitator reports it
+          extensions: { kaspa: { finality: (body.paymentRequirements.extra as { finality?: string } | undefined)?.finality ?? 'accepted' } },
         },
       };
     },

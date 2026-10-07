@@ -502,6 +502,7 @@ impl Facilitator {
                 "kaspa": Value::Object(kaspa),
                 "kob": {
                     "acceptedDaaScore": accepted_daa.to_string(),
+                    "confirmationsDaa": self.depth_of(&e.finality).to_string(),
                     "intent": {
                         "creation": e.txid,
                         "outpoint": outpoint_json(&rec.facts.outpoint()),

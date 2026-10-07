@@ -5,6 +5,7 @@
   "ledger": "x402-ledger.jsonl",
   "auth": "required",
   "confirmationsDaa": 100,
+  "minFinality": "confirmed",
   "maxFeeSompi": 50000000,
   "minAmountSompi": 1000,
   "swap": true,

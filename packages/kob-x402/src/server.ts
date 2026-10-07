@@ -107,6 +107,12 @@ export interface PaywallConfig {
   /** Public base URL (behind a proxy): the origin the payer requested. Default: the request's own URL. */
   publicUrl?: string;
   maxTimeoutSeconds?: number;
+  /**
+   * The finality the offers ask for and a settlement must show (`extensions.kaspa.finality`) before the resource is served. Default
+   * `confirmed`: the transaction is in the virtual chain and `confirmationsDaa` deeper (the facilitator's setting, about 10 s at its
+   * default 100). `accepted` serves at depth 0, a few seconds sooner, while a payer can still race a conflicting spend through
+   * another node; choose it only for resources whose loss that risk covers.
+   */
   finality?: Finality;
   maxBodyBytes?: number;
   now?: () => number;
@@ -172,7 +178,7 @@ export function createPaywall(config: PaywallConfig): Paywall {
       network: config.network,
       payTo: config.payTo,
       maxTimeoutSeconds: config.maxTimeoutSeconds ?? 60,
-      finality: config.finality ?? 'accepted',
+      finality: config.finality ?? 'confirmed',
     });
 
   const offersFor = (request?: Request): PaymentRequirements[] => {
@@ -371,6 +377,11 @@ export function createPaywall(config: PaywallConfig): Paywall {
       settling.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settlement does not match the offer' } } });
     }
+    // ... and on one that stands on less than the finality the offer asked for (`extensions.kaspa.finality`)
+    if (finalityRank(settledFinality(settlement)) < finalityRank(offerFinality(offer))) {
+      settling.delete(id);
+      return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settlement is weaker than the finality of the offer' } } });
+    }
     // The transaction the payer sent declares its id (safe JSON `id`, which the facilitator checks against the recomputed id); a
     // facilitator answer for another transaction than the one in this request does not settle this payment. An intent payment
     // sends the intent's creation and is settled by the facilitator's execution: the settlement names the execution in
@@ -445,6 +456,13 @@ export function settledRequestTransaction(s: SettlementResponse, intent: boolean
   const id = intent ? creation : s.transaction;
   return typeof id === 'string' && HEX64.test(lc(id)) ? lc(id) : undefined;
 }
+
+/** `mempool` < `accepted` < `confirmed`; anything else (missing) ranks lowest. */
+function finalityRank(f: unknown): number {
+  return f === 'confirmed' ? 3 : f === 'accepted' ? 2 : f === 'mempool' ? 1 : 0;
+}
+const offerFinality = (offer: PaymentRequirements): unknown => (offer.extra as { finality?: unknown } | undefined)?.finality ?? 'accepted';
+const settledFinality = (s: SettlementResponse): unknown => (isRecord(s.extensions?.kaspa) ? (s.extensions?.kaspa as { finality?: unknown }).finality : undefined);
 
 /** SHA-256 (hex) of the transaction text a payment carries. */
 function transactionDigest(transaction: string): string {

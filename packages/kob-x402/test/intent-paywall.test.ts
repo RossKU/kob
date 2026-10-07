@@ -16,7 +16,8 @@ const EXECUTION = 'e0'.repeat(32);
 const INTENT_OFFER = { kind: 'swap', mode: 'intent', receive: 'kas', amount: '200000000', payAssets: [{ asset: TOKEN_A }] } as never;
 
 function intentSettlement(fr: FacilitatorRequest, creation: string, extra: Record<string, unknown> = {}): SettlementResponse {
-  return { ...defaultSettlement(fr), transaction: EXECUTION, extensions: { kob: { intent: { creation, executions: 1 }, ...extra } } };
+  const s = defaultSettlement(fr);
+  return { ...s, transaction: EXECUTION, extensions: { kaspa: s.extensions!.kaspa, kob: { intent: { creation, executions: 1 }, ...extra } } };
 }
 
 async function pay(creation: string, settle: (fr: FacilitatorRequest) => SettlementResponse, id = 'intent-payer-id-0000001') {

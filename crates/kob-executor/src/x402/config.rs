@@ -57,7 +57,7 @@ use kaspa_addresses::Address;
 use kob_protocol::artifacts::token_template_by_hash;
 use kob_protocol::registry::{parse_hex32, Family, Registry};
 use kob_x402::policy::{AllowedToken, Custody, Policy, TokenAllowlist};
-use kob_x402::wire::Network;
+use kob_x402::wire::{Finality, Network};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -242,6 +242,10 @@ pub struct X402Config {
     pub open_auth_no_proxy: bool,
     pub allow_mainnet: bool,
     pub confirmations_daa: u64,
+    /// The weakest finality a settlement is answered at (`accepted` or `confirmed`, default `confirmed`): the stronger of it and
+    /// the offer's. `accepted` answers once the transaction is in the virtual chain (depth 0: a payer can still race a
+    /// conflicting spend through another node); `confirmed` waits `confirmationsDaa` more (about 10 s at the default 100).
+    pub min_finality: String,
     pub max_fee_sompi: u64,
     pub min_amount_sompi: u64,
     pub swap: bool,
@@ -313,6 +317,7 @@ impl Default for X402Config {
             open_auth_no_proxy: false,
             allow_mainnet: false,
             confirmations_daa: 100,
+            min_finality: "confirmed".into(),
             max_fee_sompi: 50_000_000,
             min_amount_sompi: 0,
             swap: true,
@@ -546,6 +551,11 @@ impl X402Config {
 
         let mut policy = Policy::new(network);
         policy.confirmations_daa = self.confirmations_daa;
+        policy.min_finality = match self.min_finality.as_str() {
+            "accepted" => Finality::Accepted,
+            "confirmed" => Finality::Confirmed,
+            other => return err(format!("minFinality {other:?} is not accepted or confirmed")),
+        };
         policy.limits.max_fee_sompi = self.max_fee_sompi;
         policy.limits.min_amount_sompi = self.min_amount_sompi;
         policy.limits.max_body_bytes = self.max_body_bytes;
@@ -707,6 +717,11 @@ mod tests {
         assert_eq!(b.cfg.body_deadline(), Duration::from_secs(10));
         assert!(b.policy.tokens.iter().next().is_none());
         assert!(b.policy.swap_enabled);
+        // a settlement is answered at `confirmed` unless the operator lowers it
+        assert_eq!(b.policy.min_finality, Finality::Confirmed);
+        let a = X402Config::from_json(&doc(r#","minFinality":"accepted""#)).unwrap().build().unwrap();
+        assert_eq!(a.policy.min_finality, Finality::Accepted);
+        assert!(X402Config::from_json(&doc(r#","minFinality":"mempool""#)).unwrap().build().is_err());
     }
 
     #[test]

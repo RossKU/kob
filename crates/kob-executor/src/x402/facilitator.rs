@@ -945,6 +945,15 @@ impl Facilitator {
         }
     }
 
+    /// The DAA depth a settlement at `finality` waited for after its accepting block: `confirmationsDaa` for `confirmed`, 0 else.
+    pub(super) fn depth_of(&self, finality: &str) -> u64 {
+        if Finality::parse(finality) == Some(Finality::Confirmed) {
+            self.policy.confirmations_daa
+        } else {
+            0
+        }
+    }
+
     fn success_response(&self, e: &Entry, accepted_daa: u64) -> SettlementResponse {
         let mut kaspa = e.extension.clone();
         kaspa.insert("finality".into(), json!(e.finality));
@@ -955,7 +964,12 @@ impl Facilitator {
             network: Some(e.network.clone()),
             payer: e.payer.clone(),
             amount: Some(e.amount.clone()),
-            extensions: Some(json!({ "kaspa": Value::Object(kaspa), "kob": { "acceptedDaaScore": accepted_daa.to_string() } })),
+            extensions: Some(json!({
+                "kaspa": Value::Object(kaspa),
+                // the depth the answer stands on: the accepting block, and the DAA a `confirmed` settlement waited for (0 at
+                // `accepted`), so a resource server can hold back what needs more
+                "kob": { "acceptedDaaScore": accepted_daa.to_string(), "confirmationsDaa": self.depth_of(&e.finality).to_string() },
+            })),
         }
     }
 

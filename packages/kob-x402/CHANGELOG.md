@@ -4,6 +4,14 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Paywall: confirmed finality by default
+
+- **Breaking:** `PaywallConfig.finality` defaults to `confirmed` (was `accepted`): the offers ask for it and the settlement must
+  show at least the offer's finality in `extensions.kaspa.finality`, or the paywall answers `502` and does not serve. `accepted`
+  serves at depth 0, a few seconds sooner, while a payer can still race a conflicting spend through another node.
+- The facilitator (kob-executor) answers at the stronger of the offer's finality and its `minFinality` (default `confirmed`) and
+  reports `extensions.kob.confirmationsDaa`.
+
 ### The vendored SDK is verified when it is loaded
 
 - `loadKaspaNodeSdk(dir, { expectedTreeSha256? })` hashes the directory before it loads anything and refuses a build that is not

@@ -237,6 +237,12 @@ holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignor
   "Fee policy"), within what the intent itself can pay; the payers' own transactions are submitted as signed.
 * **UTXO facts and submission** go to the node (`getUtxosByAddresses`, `submitTransaction`), as in the
   standalone `kob-executor x402`.
+* **Minimum finality.** A settlement is answered at the stronger of the offer's finality and `minFinality` (default
+  `confirmed`: `confirmationsDaa` DAA, 100 by default, about 10 s, past the accepting block). `"minFinality": "accepted"`
+  answers at depth 0, a few seconds sooner, while a payer can still race a conflicting spend through another node; raise
+  `confirmationsDaa` for more depth. The success response names it: `extensions.kaspa.finality` and
+  `extensions.kob.confirmationsDaa` (0 at `accepted`). The TS paywall offers `confirmed` by default and serves a settlement
+  only when it shows the finality its offer asked for.
 * **Finality comes from the indexer's follower.** The facilitator registers every settlement's
   transaction with the indexer (`Ingest::watch_tx_for(Watcher::Facilitator, ..)`) before it
   broadcasts it; `accepted` is "a chain block of the current selected chain accepted it" and

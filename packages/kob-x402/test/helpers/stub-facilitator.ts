@@ -30,7 +30,7 @@ export function defaultSettlement(req: FacilitatorRequest): SettlementResponse {
     network: req.paymentRequirements.network,
     payer: req.paymentPayload.payload.payerAddress ?? '',
     amount: req.paymentRequirements.amount,
-    extensions: { kaspa: { exactProfile: req.paymentPayload.payload.profile, paymentOutputIndex: 0, finality: 'accepted', requestHash: req.requestHash } },
+    extensions: { kaspa: { exactProfile: req.paymentPayload.payload.profile, paymentOutputIndex: 0, finality: (req.paymentRequirements.extra as { finality?: string } | undefined)?.finality ?? 'accepted', requestHash: req.requestHash } },
   };
 }
 
