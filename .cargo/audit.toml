@@ -1,0 +1,14 @@
+# cargo-audit configuration (`cargo audit`). The accepted advisories, with the reason for each, are listed in
+# deny.toml ([advisories] ignore); keep the two lists equal.
+[advisories]
+ignore = [
+  "RUSTSEC-2025-0055",
+  "RUSTSEC-2026-0306",
+  "RUSTSEC-2021-0145",
+  "RUSTSEC-2024-0375",
+  "RUSTSEC-2025-0052",
+  "RUSTSEC-2024-0384",
+  "RUSTSEC-2024-0370",
+  "RUSTSEC-2024-0388",
+  "RUSTSEC-2024-0436",
+]

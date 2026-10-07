@@ -1,0 +1,74 @@
+# cargo-deny policy for the workspace (`cargo deny check`; CI job `deps`).
+#
+# Every advisory accepted below is listed by id with the reason it is accepted and what removes it. They all
+# come in through rusty-kaspa v2.1.0 (pinned by tag, see Cargo.toml) or through its ZK SDK, and none has a
+# semver-compatible release that `cargo update` could pick: the fix is an upstream dependency bump. Review the
+# list when rusty-kaspa or vendor/silverscript moves. `.cargo/audit.toml` repeats the ids for `cargo audit`.
+
+[graph]
+all-features = false
+
+[advisories]
+yanked = "deny"
+ignore = [
+  # tracing-subscriber 0.2.25 (ANSI escape sequences in logged input). Only via ark-relations 0.5.1 <- ark-snark /
+  # ark-crypto-primitives / ark-groth16 0.5 <- risc0-groth16 3.0.4 <- kaspa-txscript-zk-sdk (rusty-kaspa v2.1.0) <-
+  # vendor/silverscript. 0.2.25 is the last 0.2 release and ark-relations 0.5 requires 0.2; KOB's own logging uses
+  # tracing-subscriber 0.3. Removed when the ZK SDK moves to ark 0.6 / a newer risc0-groth16.
+  { id = "RUSTSEC-2025-0055", reason = "transitive via kaspa-txscript-zk-sdk (rusty-kaspa v2.1.0); no 0.2.x with the fix; KOB logs through tracing-subscriber 0.3" },
+  # faster-hex 0.9.0: `hex_decode_unchecked` (AVX2 path) can read past its input. Pulled by the rusty-kaspa v2.1.0
+  # crates; 0.9.0 is the last 0.9 release. Neither rusty-kaspa v2.1.0 nor KOB calls `hex_decode_unchecked` (KOB itself
+  # depends on faster-hex 0.10.1, the first release with the fix). Removed when rusty-kaspa moves to faster-hex >= 0.10.1.
+  { id = "RUSTSEC-2026-0306", reason = "transitive via rusty-kaspa v2.1.0; the affected function is not called" },
+  # cargo-deny matches this advisory and RUSTSEC-2021-0145 by affected function / OS and reports them as not encountered
+  # (a warning); cargo audit reports both. They stay listed so the two tools accept the same set.
+  # atty 0.2.14: unaligned read on Windows with a custom global allocator; and unmaintained. Via hexplay <-
+  # kaspa-txscript (rusty-kaspa v2.1.0). KOB sets no custom global allocator.
+  { id = "RUSTSEC-2021-0145", reason = "transitive via hexplay <- kaspa-txscript (rusty-kaspa v2.1.0); no custom global allocator" },
+  { id = "RUSTSEC-2024-0375", reason = "atty unmaintained; transitive via hexplay <- kaspa-txscript (rusty-kaspa v2.1.0)" },
+  # Unmaintained crates without a known defect, all transitive.
+  { id = "RUSTSEC-2025-0052", reason = "async-std unmaintained; transitive via workflow-core <- rusty-kaspa v2.1.0" },
+  { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; transitive via workflow-core <- rusty-kaspa v2.1.0" },
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained (build-time proc macro); via kaspa-rpc-macros and workflow-core-macros <- rusty-kaspa v2.1.0" },
+  { id = "RUSTSEC-2024-0388", reason = "derivative unmaintained (build-time proc macro); via ark 0.5 <- risc0-groth16 <- kaspa-txscript-zk-sdk" },
+  { id = "RUSTSEC-2024-0436", reason = "paste unmaintained (build-time proc macro); via ark-ff 0.5 <- risc0-groth16 <- kaspa-txscript-zk-sdk" },
+]
+
+[licenses]
+confidence-threshold = 0.93
+# The licences of the current dependency graph; a dependency under any other licence fails the check.
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+exceptions = [
+  # Arbitrary-precision arithmetic of kaspa-math (rusty-kaspa v2.1.0), statically linked into the native binaries
+  # and into kob-wasm. LGPL-3.0-only: see NOTICE for what that requires of a distribution.
+  { crate = "malachite-base", allow = ["LGPL-3.0-only"] },
+  { crate = "malachite-nz", allow = ["LGPL-3.0-only"] },
+  # File-level copyleft; via dirs-sys (unmodified).
+  { crate = "option-ext", allow = ["MPL-2.0"] },
+]
+
+[bans]
+multiple-versions = "allow"
+# The workspace crates refer to each other by path and to rusty-kaspa through `workspace = true`.
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/kaspanet/rusty-kaspa"]
