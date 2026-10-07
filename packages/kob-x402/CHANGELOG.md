@@ -29,3 +29,11 @@ The package is pre-release (testnet); breaking changes are listed here.
   the swap options and in preflight) refuse a payment whose pay asset is another one (`pay_asset_not_accepted`). A bare
   `maxPay` counts KAS.
 - Rust: `SwapOptions::max_pay` and `preflight_swap` take a `PayBound { asset, amount }` (`PayBound::kas`, `PayBound::token`).
+
+### Payer: approval sees the cost; a swap needs a bound
+
+- **Breaking:** `approve` is asked after the payment is built and preflighted (and before it is stored or sent), with
+  `cost: PaymentCost` (merchant asset and amount, the swap's pay asset and `payerSpent`, the network fee). A refused
+  payment is discarded; the next ranked offer is tried.
+- **Breaking:** a swap-and-pay offer is never built without a `maxPay` bound for its pay asset; `approve` no longer
+  stands in for it (the `no_max_pay` reason is gone).

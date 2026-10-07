@@ -11,8 +11,9 @@
 //    surfaced with `retryable: true`, but a fresh `fetch()` does NOT silently sign a second, independent payment for
 //    the same resource while an earlier artifact is still live (the merchant may already hold it): the caller opts in
 //    with `allowResign`, and the client then revokes the earlier artifact first;
-//  * nothing is paid without a spend authorisation: a per-asset `capabilities.maxAmount` ceiling (and, for swaps,
-//    a `maxPay` bound for the pay asset the swap spends), or an `approve` policy hook that says yes;
+//  * nothing is paid without a spend authorisation: a per-asset `capabilities.maxAmount` ceiling, or an `approve`
+//    policy hook that says yes to the built payment's cost; a swap is never built without a `maxPay` bound for the
+//    pay asset it spends;
 //  * the KAS a payer funds into a merchant token output (the "carrier") is capped (`maxCarrierSompi`, default 2 KAS);
 //  * the signed artifact is durably recorded BEFORE it is disclosed, so a crash cannot lose a payment the
 //    merchant may already hold; `revoke(paymentId)` invalidates it by spending one of its inputs back to the payer;
@@ -147,8 +148,9 @@ export interface KobX402ClientOptions {
   maxCarrierSompi?: string;
   /**
    * Spend policy hook (user / agent policy). A payment is authorised without asking only when its merchant asset has
-   * an explicit `capabilities.maxAmount` ceiling and, for a swap, `maxPayAmount` is set. Anything else is refused
-   * unless this hook returns true for the offer (no unlimited autopay by default).
+   * an explicit `capabilities.maxAmount` ceiling. Anything else is refused unless this hook returns true; it is asked
+   * after the payment is built and preflighted, with what it costs (`cost`), and before anything is stored or sent. A
+   * swap always needs a `maxPay` bound for its pay asset: without one it is not built, whatever this hook says.
    */
   approve?: (request: PaymentApproval) => boolean | Promise<boolean>;
   /**
@@ -175,7 +177,21 @@ export interface PaymentApproval {
   url: string;
   method: string;
   /** Why no explicit authorisation covers the offer. */
-  reasons: ('no_spend_cap' | 'no_max_pay')[];
+  reasons: 'no_spend_cap'[];
+  /** What the built (not yet stored or sent) payment costs. */
+  cost: PaymentCost;
+}
+
+/** What a built payment costs the payer. */
+export interface PaymentCost {
+  /** What the merchant receives (`KAS` in sompi, a token in base units). */
+  asset: string;
+  amount: string;
+  /** Swap-and-pay: the asset the payer pays with and the units of it the payer gives up (sompi including the fee for KAS). */
+  payAsset?: string;
+  payerSpent?: string;
+  /** The network fee of the payment transaction, in sompi. */
+  feeSompi: string;
 }
 
 export interface PaymentReceipt {
@@ -245,16 +261,41 @@ export class KobX402Client {
     const caps: PayerCapabilities = { ...(this.#o.capabilities ?? {}), network: this.#o.network };
     const ranked = rankOffers(pr, caps);
     if (ranked.length === 0) throw new KobX402Error('no_acceptable_offer', 'the 402 has no Kaspa exact offer this payer can pay');
-    const offer = await this.#authorize(ranked, caps, expectedHref, method);
+    const candidates = this.#candidates(ranked, caps);
     await this.#guardResign(expectedHref, method);
 
-    const paymentId = idOverride ?? (this.#o.newPaymentId ?? newId)();
-    if (!/^[A-Za-z0-9_-]{16,128}$/.test(paymentId)) throw new KobX402Error('bad_request', 'payment id must match ^[A-Za-z0-9_-]{16,128}$');
-    const reqHash = hashOverride ? lc(hashOverride) : httpRequestHash(method, expectedHref, normalizeBody(bodyBytes), requirementsHash(offer.requirements));
-    if (!HEX64.test(reqHash)) throw new KobX402Error('bad_request', 'requestHash must be 32-byte hex');
-
-    const extensions = paymentIdentifierExtensions(pr, paymentId);
-    const built = await this.#buildPayment(offer, reqHash, paymentId, extensions, pr);
+    // Each candidate is built (and preflighted) first: what it costs is known only then. One that no explicit ceiling
+    // covers is paid only when `approve` says yes to that cost; a refused build is discarded (never stored, never sent).
+    let chosen: { offer: SelectedOffer; paymentId: string; reqHash: string; built: PayResult } | undefined;
+    let refused = ranked.length - candidates.length;
+    for (const { offer, reasons } of candidates) {
+      if (reasons.length > 0 && !this.#o.approve) {
+        refused++;
+        continue;
+      }
+      const paymentId = idOverride ?? (this.#o.newPaymentId ?? newId)();
+      if (!/^[A-Za-z0-9_-]{16,128}$/.test(paymentId)) throw new KobX402Error('bad_request', 'payment id must match ^[A-Za-z0-9_-]{16,128}$');
+      const reqHash = hashOverride ? lc(hashOverride) : httpRequestHash(method, expectedHref, normalizeBody(bodyBytes), requirementsHash(offer.requirements));
+      if (!HEX64.test(reqHash)) throw new KobX402Error('bad_request', 'requestHash must be 32-byte hex');
+      const extensions = paymentIdentifierExtensions(pr, paymentId);
+      const built = await this.#buildPayment(offer, reqHash, paymentId, extensions, pr);
+      if (reasons.length > 0) {
+        const cost = paymentCost(offer, built);
+        if ((await this.#o.approve!({ offer, url: expectedHref, method, reasons, cost })) !== true) {
+          refused++;
+          continue;
+        }
+      }
+      chosen = { offer, paymentId, reqHash, built };
+      break;
+    }
+    if (!chosen) {
+      throw new KobX402Error(
+        'spend_not_authorized',
+        `${refused} offer(s) could be paid but none is authorised: set capabilities.maxAmount for the merchant asset and maxPay for the pay asset of a swap, or provide an approve policy`,
+      );
+    }
+    const { offer, paymentId, reqHash, built } = chosen;
 
     // Durable BEFORE disclosure. A failure here aborts the payment: nothing has been sent.
     const now = this.#now();
@@ -411,30 +452,25 @@ export class KobX402Client {
   }
 
   /**
-   * the first ranked offer that is authorised to be paid. Authorised = an explicit ceiling for its merchant asset
-   * (already enforced by `rankOffers`) and, for a swap, a `maxPay` bound for the pay asset it spends; otherwise the
-   * `approve` hook must say yes. A swap pays with the first of its payable assets that has a bound.
+   * The ranked offers that may be paid, best first, with what keeps each from being paid without asking. A swap needs a
+   * `maxPay` bound for the pay asset it spends (the first of its payable assets that has one) and is left out without
+   * one: `approve` cannot stand in for the bound the builder enforces. An offer whose merchant asset has no
+   * `capabilities.maxAmount` ceiling needs `approve` (`no_spend_cap`).
    */
-  async #authorize(ranked: SelectedOffer[], caps: PayerCapabilities, url: string, method: string): Promise<SelectedOffer> {
-    const o = this.#o;
-    let refused = 0;
+  #candidates(ranked: SelectedOffer[], caps: PayerCapabilities): { offer: SelectedOffer; reasons: PaymentApproval['reasons'] }[] {
+    const out: { offer: SelectedOffer; reasons: PaymentApproval['reasons'] }[] = [];
     for (const candidate of ranked) {
       let offer = candidate;
-      const reasons: PaymentApproval['reasons'] = [];
-      if (caps.maxAmount?.[offer.asset] === undefined) reasons.push('no_spend_cap');
       if (offer.kind === 'swap') {
         const bounded = payableAssets(offer, caps).find((a) => this.#payBound(a) !== undefined);
-        if (bounded !== undefined) offer = { ...offer, payAsset: bounded };
-        else reasons.push('no_max_pay');
+        if (bounded === undefined) continue;
+        offer = { ...offer, payAsset: bounded };
       }
-      if (reasons.length === 0) return offer;
-      if (o.approve && (await o.approve({ offer, url, method, reasons })) === true) return offer;
-      refused++;
+      const reasons: PaymentApproval['reasons'] = [];
+      if (caps.maxAmount?.[offer.asset] === undefined) reasons.push('no_spend_cap');
+      out.push({ offer, reasons });
     }
-    throw new KobX402Error(
-      'spend_not_authorized',
-      `${refused} offer(s) could be paid but none is authorised: set capabilities.maxAmount for the merchant asset (and maxPay for the pay asset of a swap) or provide an approve policy`,
-    );
+    return out;
   }
 
   /** no second independent payment for the same resource while an earlier artifact is live. */
@@ -650,6 +686,16 @@ export class KobX402Client {
 }
 
 // ------------------------------------------------------------------------------------------------- helpers
+
+/** What a built payment costs the payer (what `approve` is shown). */
+export function paymentCost(offer: SelectedOffer, built: PayResult): PaymentCost {
+  const cost: PaymentCost = { asset: offer.requirements.asset, amount: offer.requirements.amount, feeSompi: built.feeSompi };
+  if (offer.kind === 'swap') {
+    if (offer.payAsset) cost.payAsset = offer.payAsset;
+    if (built.payerSpent !== undefined) cost.payerSpent = built.payerSpent;
+  }
+  return cost;
+}
 
 /** Every `{ transactionId, index }` outpoint found anywhere in a JSON value (kob-protocol UTXO JSON, quotes, order legs). */
 function collectOutpoints(v: unknown, out: { txid: string; index: number }[] = []): { txid: string; index: number }[] {

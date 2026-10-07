@@ -72,7 +72,9 @@ async function rig(spec: OfferSpec, capabilities: Record<string, unknown>, verif
     store: new MemoryArtifactStore(),
     now: () => NOW_MS,
     capabilities,
-    // the e2e payer authorises every payment through the policy hook (spend ceilings are covered by regress-payer.test.ts)
+    // the e2e payer authorises every payment through the policy hook (spend ceilings are covered by regress-payer.test.ts);
+    // a swap always needs a bound for the asset it pays with
+    maxPay: Object.fromEntries(['KAS', ...Object.keys((capabilities.tokens ?? {}) as Record<string, string>)].map((a) => [a, '18446744073709551615'])),
     approve: () => true,
   });
   return {

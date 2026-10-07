@@ -37,32 +37,39 @@ test('an absurd amount is NOT handed to the signer when no ceiling is configured
   }
 });
 
-test('the approve hook is the user / agent policy: it sees the offer and the reasons, and its "no" pays nothing', async () => {
+test('the approve hook is the user / agent policy: it sees what the built payment costs, and its "no" stores and sends nothing', async () => {
   const w = stubWasm();
-  const srv = await startRaw(challengeFor(NATIVE_OFFER));
+  let paid = 0;
+  const srv = await startRaw(async (req, res) => {
+    if (req.headers['payment-signature']) paid++;
+    await challengeFor(NATIVE_OFFER)(req, res);
+  });
   try {
-    const seen: string[] = [];
+    const seen: unknown[] = [];
+    const store = new MemoryArtifactStore();
     const deny = new KobX402Client({
       ...base,
       wasm: w,
       context: kasOnly,
+      store,
       approve: (a) => {
-        seen.push(...a.reasons, a.offer.requirements.amount);
+        seen.push(...a.reasons, a.offer.requirements.amount, a.cost.amount, a.cost.feeSompi);
         return false;
       },
     });
     await assert.rejects(deny.fetch(srv.base + '/x'), (e: unknown) => e instanceof KobX402Error && e.code === 'spend_not_authorized');
-    assert.deepEqual(seen, ['no_spend_cap', '50000000']);
-    assert.equal(w.calls.filter((x) => x.method === 'payNative').length, 0);
+    assert.deepEqual(seen, ['no_spend_cap', '50000000', '50000000', '2000'], 'asked with the cost of the built payment');
+    assert.deepEqual(await store.list(), [], 'the refused payment is not stored');
+    assert.equal(paid, 0, 'nor sent');
     const allow = new KobX402Client({ ...base, wasm: w, context: kasOnly, approve: () => true });
     await allow.fetch(srv.base + '/x').catch(() => undefined); // the raw merchant answers 402 again; only the signing matters
-    assert.equal(w.calls.filter((x) => x.method === 'payNative').length, 1);
+    assert.equal(paid, 1);
   } finally {
     await srv.close();
   }
 });
 
-test('a swap-and-pay route needs maxPayAmount (or approval): a KAS-only payer cannot be sold tokens at any price', async () => {
+test('a swap-and-pay route needs a bound for its pay asset: a KAS-only payer cannot be sold tokens at any price', async () => {
   const w = stubWasm();
   const spec: OfferSpec = { kind: 'swap', receive: 'kcc20', amount: '700', asset: TOKEN_B, token: { custody: 'unconditional' }, payAssets: [{ asset: 'KAS' }] };
   const srv = await startRaw(challengeFor(spec));

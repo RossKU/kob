@@ -50,3 +50,35 @@ test('a token bound is passed in that token\'s units with the asset it counts', 
     await rig.close();
   }
 });
+
+test('approve is asked after the quote with what the swap costs; without a bound a swap is not built, whatever approve says', async () => {
+  const offers: OfferSpec[] = [{ kind: 'swap', receive: 'kas', amount: '50000000', payAssets: [{ asset: TOKEN_A }] }];
+  const seen: unknown[] = [];
+  const approve = (a: { reasons: string[]; cost: unknown }) => (seen.push({ reasons: a.reasons, cost: a.cost }), true);
+  // no bound: refused before anything is built, approve is never asked
+  const unbounded = await startRig({ offers, capabilities: { maxAmount: {}, tokens: { [TOKEN_A]: '99' } }, client: { maxPay: undefined, approve } });
+  try {
+    await assert.rejects(unbounded.client.paidFetch(`${unbounded.base}/report`), (e: unknown) => e instanceof KobX402Error && e.code === 'spend_not_authorized');
+    assert.equal(unbounded.wasm.calls.filter((c) => c.method === 'paySwap').length, 0);
+    assert.deepEqual(seen, []);
+  } finally {
+    await unbounded.close();
+  }
+  // bounded but no ceiling for the merchant asset: approve decides on the built payment's cost
+  const bounded = await startRig({ offers, capabilities: { maxAmount: {}, tokens: { [TOKEN_A]: '99' } }, client: { maxPay: { [TOKEN_A]: '5000' }, approve } });
+  try {
+    const r = await bounded.client.paidFetch(`${bounded.base}/report`);
+    assert.equal(r.response.status, 200);
+    const order = bounded.wasm.calls.map((c) => c.method);
+    assert.ok(order.indexOf('paySwap') >= 0 && order.indexOf('preflight') > order.indexOf('paySwap'), 'built and preflighted');
+    assert.equal(seen.length, 1);
+    const { reasons, cost } = seen[0] as unknown as { reasons: string[]; cost: Record<string, string> };
+    assert.deepEqual(reasons, ['no_spend_cap']);
+    assert.equal(cost.asset, 'KAS');
+    assert.equal(cost.amount, '50000000');
+    assert.equal(cost.payAsset, TOKEN_A);
+    assert.equal(typeof cost.feeSompi, 'string');
+  } finally {
+    await bounded.close();
+  }
+});
