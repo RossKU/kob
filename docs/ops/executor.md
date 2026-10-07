@@ -241,7 +241,7 @@ The standalone `kob-executor x402 --config <file>` (flags `--network`, `--node`,
 set.
 
 **Ledger format.** The ledger (`ledger`, a JSONL log) is read only in the format of the running build. An intent
-payment recorded for an earlier router template (for example before the token-intent lock pin of 2026-10-06), an intent
+payment recorded for an earlier router template (for example before the token-intent lock pin of 2026-10-06 or the B pin of 2026-10-07), an intent
 record of any format this build does not decode, or an entry of an intent kind without its intent record stops the
 facilitator at startup: `ledger line <n> holds an intent payment in a format this build does not read (...); stop, archive
 this ledger (and its invoice store) and start with a new ledger path`. Such a line is never discarded as a torn tail and

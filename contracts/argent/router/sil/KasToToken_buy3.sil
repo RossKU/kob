@@ -10,6 +10,7 @@ contract KasToToken_buy3(
     int init_amount,
     int init_max_pay,
     int init_max_extra,
+    byte[32] init_b_extension,
     temporal init_deadline
 ) {
     // :: shared constants
@@ -61,6 +62,7 @@ contract KasToToken_buy3(
         int amount_b;
         int lock_amount;
         byte[32] lock_extension;
+        byte[32] b_extension;
         temporal deadline;
     }
     struct TokenToKasKronState {
@@ -85,6 +87,7 @@ contract KasToToken_buy3(
         int max_sell_a;
         int amount_b;
         int lock_amount;
+        byte[32] b_extension;
         temporal deadline;
     }
     struct KCC20State {
@@ -534,6 +537,7 @@ contract KasToToken_buy3(
     int amount = init_amount;
     int max_pay = init_max_pay;
     int max_extra = init_max_extra;
+    byte[32] b_extension = init_b_extension;
     temporal deadline = init_deadline;
 
     // :: entrypoints
@@ -632,6 +636,9 @@ contract KasToToken_buy3(
         int take3 = amount - gen__token_escrow1_state.amount - gen__token_escrow2_state.amount;
         require(take3 < gen__token_escrow3_state.amount);
         require(gen__book3_ask_state.tif == 0);
+        require(gen__token_escrow1_state.extension_commitment == b_extension);
+        require(gen__token_escrow2_state.extension_commitment == b_extension);
+        require(gen__token_escrow3_state.extension_commitment == b_extension);
         int pay1 = ask_leg(gen__book1_ask_state.tokenCovId, gen__book1_ask_state.scale, gen__book1_ask_state.amountLeft, gen__book1_ask_state.price, gen__token_escrow1_state.owner, gen__token_escrow1_state.owner_scheme, gen__token_escrow1_state.amount, byte[32](ask1_covid), byte[32](token_covid), gen__token_escrow1_state.amount);
         int pay2 = ask_leg(gen__book2_ask_state.tokenCovId, gen__book2_ask_state.scale, gen__book2_ask_state.amountLeft, gen__book2_ask_state.price, gen__token_escrow2_state.owner, gen__token_escrow2_state.owner_scheme, gen__token_escrow2_state.amount, byte[32](ask2_covid), byte[32](token_covid), gen__token_escrow2_state.amount);
         int pay3 = ask_leg(gen__book3_ask_state.tokenCovId, gen__book3_ask_state.scale, gen__book3_ask_state.amountLeft, gen__book3_ask_state.price, gen__token_escrow3_state.owner, gen__token_escrow3_state.owner_scheme, gen__token_escrow3_state.amount, byte[32](ask3_covid), byte[32](token_covid), take3);
@@ -656,7 +663,7 @@ contract KasToToken_buy3(
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: gen__token_escrow1_state.extension_commitment,
+            extension_commitment: b_extension,
         };
         // :: observed become token.change -> self.token_type
         validateOutputStateWithInputTemplate(

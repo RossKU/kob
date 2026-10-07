@@ -581,6 +581,15 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     if r.asks.iter().any(|a| a.custody.state.extension() != r.asks[0].custody.state.extension()) {
         return invalid("the asks' custodies mix extension commitments");
     }
+    // the B pin (router_head.ag, "B PIN"): every ask escrow carries the extension commitment the intent names
+    if let Some(ext) = r.state.b_extension() {
+        if r.asks.iter().any(|a| a.custody.state.extension() != ext) {
+            return invalid(format!(
+                "an ask's custody carries another extension commitment than the intent's b_extension {}",
+                crate::json::to_hex(&ext)
+            ));
+        }
+    }
     let mut ids = std::collections::BTreeSet::new();
     for u in r.asks.iter().map(|a| &a.order.utxo).chain(r.bids.iter().map(|b| &b.order.utxo)) {
         if !ids.insert(u.covenant_id) {

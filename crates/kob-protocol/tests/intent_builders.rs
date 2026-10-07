@@ -12,7 +12,7 @@
 //! cancelled by its payer (token intents take their locked tokens back in the same transaction), and expired by anyone
 //! from its deadline on. Negative: an execution whose merchant output or payer change is redirected after building, a
 //! cancel signed by another key, a cancel that leaves the lock behind (one that spends other tokens of the same token
-//! in its place: kob-tests' router harness, with its ablation), and a shape the orders do not fit are rejected (the router at the intent input, the builder for the last);
+//! in its place: kob-tests' router harness, with its ablation), token B of another extension commitment than the intent names (the B pin), and a shape the orders do not fit are rejected (the router at the intent input, the builder for the last);
 //! a KRON intent that locks no more than it may sell is refused at creation (its change output would be empty). The
 //! covenant semantics of the router itself are covered exhaustively by `kob-tests/tests/argent_router_tests.rs`.
 
@@ -221,6 +221,7 @@ fn state_for(actor: &Actor, p: Progs, asks: &[IntentAsk], bids: &[IntentBid]) ->
                     amount: bought,
                     max_pay: quote,
                     max_extra,
+                    b_extension: EXT,
                     deadline: DEADLINE,
                 },
                 (quote + max_extra) as u64 + 5 * KAS,
@@ -259,6 +260,7 @@ fn state_for(actor: &Actor, p: Progs, asks: &[IntentAsk], bids: &[IntentBid]) ->
                 amount_b: bought,
                 lock_amount: lock,
                 lock_extension: ext_for(p.a),
+                b_extension: EXT,
                 deadline: DEADLINE,
             },
             2 * KAS,
@@ -640,4 +642,143 @@ fn the_lock_pin_is_the_created_lock() {
         let r = ExpireIntent { actor: name.into(), state, intent: c.intent.clone(), lock: Some(l), fee: fee() };
         build_expire_intent(&r, &intent_budgets).unwrap_or_else(|e| panic!("{name}: the lock itself expires: {e}"));
     }
+}
+
+// ---------------------------------------------------------------------------------------------- the B pin
+
+/// Another extension commitment than the fixture token's (`EXT`): units of token B of another class (the same covenant
+/// id; only the token's issuer can create them, in its genesis).
+const OTHER_EXT: [u8; 32] = [0xdd; 32];
+
+/// `state` naming `ext` as the extension commitment of token B.
+fn with_b_extension(state: &IntentState, ext: [u8; 32]) -> IntentState {
+    let mut s = state.clone();
+    match &mut s {
+        IntentState::KasToToken { b_extension, .. } | IntentState::TokenSwap { b_extension, .. } => *b_extension = ext,
+        IntentState::TokenToKas { .. } => panic!("a TokenToKas intent buys no token B"),
+    }
+    s
+}
+
+/// The asks with custodies of extension commitment `ext`.
+fn asks_of_class(asks: &[IntentAsk], ext: [u8; 32]) -> Vec<IntentAsk> {
+    let mut v = asks.to_vec();
+    for a in &mut v {
+        match &mut a.custody.state {
+            TokenState::Kcc20(k) => k.extension_commitment = ext,
+            other => panic!("token B is KCC-20, not {other:?}"),
+        }
+    }
+    v
+}
+
+/// Signs every input of a built transaction as built (no budget tightening) and returns the engine's view of it.
+fn sealed(b: &BuiltTx) -> (Transaction, Vec<UtxoEntry>) {
+    let keys = keys();
+    let (mut tx, entries) = b.tx.to_tx().unwrap();
+    for (i, plan) in b.plans.iter().enumerate() {
+        let sig = plan.signer().map(|k| sign_digest(&keys[&k], &sighash(&tx, &entries, i)).unwrap());
+        tx.inputs[i].signature_script = plan.sigscript(sig.as_deref()).unwrap();
+    }
+    (tx, entries)
+}
+
+/// The inputs of `tx` the script engine refuses.
+fn failing(tx: &Transaction, entries: &[UtxoEntry]) -> std::collections::BTreeSet<usize> {
+    execute(tx, entries, false).unwrap().iter().enumerate().filter(|(_, r)| r.is_err()).map(|(i, _)| i).collect()
+}
+
+/// Gives every token-B input and output of `b` the extension commitment `ext`: the asks' escrows, an escrow rest and
+/// the merchant's delivery, with the token program's next states rewritten so that its inputs stay valid. This is the
+/// execution a filler could build from its own KobAsk holding units of B of another class (KobAsk has no extension
+/// field: its custody is any token UTXO of the covenant id it owns).
+fn reclass_b(b: &mut BuiltTx, prog_b: TemplateId, ext: [u8; 32]) {
+    let tpl = kob_protocol::artifacts::token_template(prog_b);
+    let mut next: Option<Vec<Kcc20State>> = None;
+    for i in 0..b.plans.len() {
+        if b.tx.inputs[i].utxo.covenant_id != Some(TOK_B) {
+            continue;
+        }
+        match &mut b.plans[i] {
+            SigPlan::TokenLeader { state, next_states, .. } => {
+                state.extension_commitment = ext;
+                for n in next_states.iter_mut() {
+                    n.extension_commitment = ext;
+                }
+                next = Some(next_states.clone());
+                b.tx.inputs[i].utxo.script_public_key = spk_to_string(&TokenState::Kcc20(state.clone()).spk_with(tpl));
+            }
+            SigPlan::TokenDelegator { state, .. } => {
+                state.extension_commitment = ext;
+                b.tx.inputs[i].utxo.script_public_key = spk_to_string(&TokenState::Kcc20(state.clone()).spk_with(tpl));
+            }
+            other => panic!("input {i} of token B is not a token input: {other:?}"),
+        }
+    }
+    let next = next.expect("a token-B leader");
+    let outs: Vec<usize> =
+        (0..b.tx.outputs.len()).filter(|&o| b.tx.outputs[o].covenant.as_ref().is_some_and(|c| c.covenant_id == TOK_B)).collect();
+    assert_eq!(outs.len(), next.len());
+    for (o, st) in outs.into_iter().zip(next) {
+        b.tx.outputs[o].script_public_key = spk_to_string(&TokenState::Kcc20(st).spk_with(tpl));
+    }
+}
+
+/// The B pin (`router_head.ag`, "B PIN"): an intent that buys token B (KasToToken, TokenSwap, TokenSwapKron) takes it
+/// only from ask escrows of the extension commitment its state names (`b_extension`, the offer's token), and the
+/// merchant's delivery carries that commitment. Every such actor on every program pair it runs on:
+///  - the execution of escrows of the named commitment validates on every input;
+///  - the same execution with every token-B UTXO of another commitment of the same covenant id (escrows, escrow rest,
+///    delivery) is refused at the intent input, and only there (the asks and the token program accept it);
+///  - the builder refuses escrows of another commitment;
+///  - an intent that names that other commitment takes it (the pin follows the state, not a constant).
+#[test]
+fn an_intent_takes_token_b_only_of_its_extension_commitment() {
+    let mut runs = 0;
+    for actor in ACTORS.iter().filter(|a| a.shape.kind.merchant_gets_token()) {
+        for (p, fits) in runs_for(actor) {
+            if !fits {
+                continue;
+            }
+            let (asks, bids) = legs_for(actor, p);
+            let (state, value, lock, merchant_kas) = state_for(actor, p, &asks, &bids);
+            assert_eq!(state.b_extension(), Some(EXT));
+            let c = create(actor, state.clone(), p, value, lock);
+            let r = exec_req(&c, actor, asks.clone(), bids.clone(), merchant_kas);
+            let (built, facts) = build_execute_intent(&r, &intent_budgets).unwrap_or_else(|e| panic!("{} {p:?}: {e}", actor.name));
+            let (tx, entries) = sealed(&built);
+            assert!(failing(&tx, &entries).is_empty(), "{} {p:?}: escrows of the named commitment", actor.name);
+            let me = tx.inputs.len() - 1;
+            let delivered = TokenState::user(Family::Kcc20, facts.bought, pk(MERCHANT), EXT);
+            assert_eq!(tx.outputs[facts.merchant_output as usize].script_public_key, spk_on(p.b, &delivered));
+
+            let mut other = built.clone();
+            reclass_b(&mut other, p.b, OTHER_EXT);
+            let (tx2, entries2) = sealed(&other);
+            assert_eq!(
+                failing(&tx2, &entries2),
+                std::collections::BTreeSet::from([me]),
+                "{} {p:?}: token B of another commitment is refused at the intent input, and only there",
+                actor.name
+            );
+
+            let e = build_execute_intent(
+                &exec_req(&c, actor, asks_of_class(&asks, OTHER_EXT), bids.clone(), merchant_kas),
+                &intent_budgets,
+            )
+            .unwrap_err();
+            assert!(e.to_string().contains("b_extension"), "{} {p:?}: {e}", actor.name);
+
+            let named = with_b_extension(&state, OTHER_EXT);
+            let c2 = create(actor, named, p, value, lock);
+            let r2 = exec_req(&c2, actor, asks_of_class(&asks, OTHER_EXT), bids, merchant_kas);
+            let (built2, facts2) = build_execute_intent(&r2, &intent_budgets).unwrap_or_else(|e| panic!("{} {p:?}: {e}", actor.name));
+            let (tx3, entries3) = sealed(&built2);
+            assert!(failing(&tx3, &entries3).is_empty(), "{} {p:?}: an intent naming the other commitment takes it", actor.name);
+            let delivered = TokenState::user(Family::Kcc20, facts2.bought, pk(MERCHANT), OTHER_EXT);
+            assert_eq!(tx3.outputs[facts2.merchant_output as usize].script_public_key, spk_on(p.b, &delivered));
+            runs += 1;
+        }
+    }
+    assert!(runs >= 18, "every actor that buys token B ran ({runs} runs)");
 }

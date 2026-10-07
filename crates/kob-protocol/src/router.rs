@@ -39,7 +39,7 @@ use crate::json::to_hex;
 use crate::script::push_data;
 
 /// Id of the committed router artifact (`contracts/argent/router/artifact.json`, field `id`).
-pub const ROUTER_ARTIFACT_ID: &str = "f50258c3722e68c25f0069671d9c8a25c353080db087c70915c13ea675b7a9b3";
+pub const ROUTER_ARTIFACT_ID: &str = "4156f81d935b8dd8a6a515fef20b520999a6e955e2f331f860ec2bf800fb5398";
 
 /// Most sompi an `expire` may keep of the intent's KAS (`EXPIRE_MAX_FEE` of `tools/router-gen/router_head.ag`).
 pub const EXPIRE_MAX_FEE: u64 = 10_000_000;
@@ -72,36 +72,36 @@ fn slots_fit(p: TemplateId, ins: usize, outs: usize) -> bool {
 
 /// Template hash of every router actor (hex). A changed router is a changed protocol.
 pub const ROUTER_PINNED: [(&str, &str); 30] = [
-    ("KasToToken_buy", "73d68be7c72c651acd472770cf286b5de60b38405438d54f51c720ec9e570215"),
-    ("KasToToken_buy_out", "e7752fa426ae34bdd44b09f573da3a9e21cee8ed2db0e1cc9a9c05e6774e03ed"),
-    ("KasToToken_buy2", "9db4ee36cb47048d24c101b6450e33449e7f04a3634240436db204da6725a6af"),
-    ("KasToToken_buy2_out", "20527396e25c3e25382e21a3544ae2a29afb3f3b8ae7d0ebcb4b6494132d6156"),
-    ("KasToToken_buy3", "f3c70ee44aeee7882f4a0da1a66591d39cc4bcb0c8021fd62fa4ab683ab961c4"),
-    ("KasToToken_buy3_out", "9873c0b1901eadbb20c4e51478ca6791803e17614cd8dfb7858b45c124c384ca"),
+    ("KasToToken_buy", "955dd30456e33ecc3cd1e6e998ef6db2a397d7c9c21eb5f675b2b16d76cfc6f7"),
+    ("KasToToken_buy_out", "301eeb16a55c3fe3f42f0c8a9905315bb2124b51490ada3496e101d9c2e4cd1f"),
+    ("KasToToken_buy2", "72f0a99051b794dd01f11871f9f403f80f6ec709444cbbbe600c9f2ff3c10f31"),
+    ("KasToToken_buy2_out", "edefcbde8bf52f8759e3b16de702777e804b7ad60727fbb50816560d824bdcc7"),
+    ("KasToToken_buy3", "955ab5fc4f328509cca5e8d12f3340b1e86488381a45242966746f5c34be7e89"),
+    ("KasToToken_buy3_out", "206ebf57d83607d30a56f6203674cd378e208ae9f8eb7014662e4c86e5522c7d"),
     ("TokenToKas_sell", "3cacab8c512625f4f3962e6e423a7b8827e787d5fb10ef6d90454b7d0ac7b454"),
     ("TokenToKas_sell_out", "b2e5d06e1dc0ab9f612d9683fe9031920fb6a56afccdc9a82e3fcc2d027e4b7e"),
     ("TokenToKas_sell2", "06651edb6f2c2ef701553490fc9982ea91680c10fdc632bf8240106c0cc408cb"),
     ("TokenToKas_sell2_out", "85ea24188c25708cbbc95bef78ea64f169db1bb063d523acdbae9d9814b6c6c0"),
     ("TokenToKas_sell3", "bc6fa37660fd30e03db95f6e29b891947fa41d8f725764fc19a0ed03e5bd5b0c"),
     ("TokenToKas_sell3_out", "8ba6a08ce9a6e52ba271327078891668688c879c214d335f5964f673c304ea7d"),
-    ("TokenSwap_swap", "d642ab49c8426c8893693710826e0d2493b13579289384e5c1060955374f7930"),
-    ("TokenSwap_swap_bid_out", "5c7b2618160863094afda5dd01c578740b2026de8987028bfd2e0e887d716ee4"),
-    ("TokenSwap_swap_ask_out", "b86da766cfd70a4756a2601f5efe82660886d016544a36e0831d82ab55757a54"),
-    ("TokenSwap_swap_out", "015f5274eb0b1adea959c2630fe7b3fc104c65470ca95de77ce13bc8a718799d"),
-    ("TokenSwap_swap2", "f1f2e71e3113ccf82215b2ae9dbda02d448044d69f417b159069c141b53d3300"),
-    ("TokenSwap_swap2_out", "f31771ee532a5de072243d42cf00ae8946f0cf79ca9c5d591461b0976f5ef37e"),
+    ("TokenSwap_swap", "0a44ac2cb328cd8726746fce450200b343bc96f5397e935d4d68994574f0a0c8"),
+    ("TokenSwap_swap_bid_out", "be76a30da422c55587ce2ac4097a41e9e37fcb994f46e5230ecfff38b68ba793"),
+    ("TokenSwap_swap_ask_out", "f365ce9619ab5e2135b2639903f5e10bb92c6f4ca5ace6a8bcd58390e868b2bb"),
+    ("TokenSwap_swap_out", "6c70c9a4c25d06a8266732524ad31dd65508d32414c5ea576072eca4053f976b"),
+    ("TokenSwap_swap2", "b7ffba43a68f7e3250eacc9f2e3dacc4a6dcd5130e0e9ede1fb446d28cf9e8e4"),
+    ("TokenSwap_swap2_out", "4ec043b4b5660c2ed8aa901914f0fe93b7afa9aac9cc97e616f6cbdcd65f7fe5"),
     ("TokenToKasKron_sell", "b2293ed132da43777a9cb0b000cb933f9a77618ac74a61a1980685bf927e7480"),
     ("TokenToKasKron_sell_out", "4800f848d0b2e5d292acb6b75020fc92dd113a0e8025c3fecd9f2603d4df517d"),
     ("TokenToKasKron_sell2", "9428e377176d58142dfc993189e6535276676742e6267308807d83a6ef91f4f3"),
     ("TokenToKasKron_sell2_out", "16067f03ca714841738b09ad373a2600aeb100518a5d7684ca4599781b6d29fa"),
     ("TokenToKasKron_sell3", "a645dbf1f77f3d8a77929044fc6f7ef08f429b9d7ef32df5551af8669f5dfb7a"),
     ("TokenToKasKron_sell3_out", "33302702ca16260bcc5e812ebb5196b18274bd396f0ca7104fccf20c95b6e3b3"),
-    ("TokenSwapKron_swap", "084e4d701a992aa2ff32b8e7544e874e8cd00aee6c044f2b17c1549a156453a0"),
-    ("TokenSwapKron_swap_bid_out", "8e92d56034d51558e4507490cb69a525f8bcca74ba37ca3e0802bcb8aacedda8"),
-    ("TokenSwapKron_swap_ask_out", "91830f09a942e1cb68e5c6773ff2109fb628cca58fab7eb7cb645121fcc9f9d0"),
-    ("TokenSwapKron_swap_out", "5b4752175566b56557fbd080f62d3511976c46317e1ffc45968a7d46439748db"),
-    ("TokenSwapKron_swap2", "d321d5c1ddd3c26b1b2be0753b92cb67791cf3efea7fd18504a20bda4dec83c6"),
-    ("TokenSwapKron_swap2_out", "31dd32212042e3cd428922ead2fce688f7b73bf1178fe7b6ba9b200955d66718"),
+    ("TokenSwapKron_swap", "d9ed933a564d917fd1d909d8ee8f0a4b62f0ca49912bf0a2c64ae25725c3de7b"),
+    ("TokenSwapKron_swap_bid_out", "22b0cad6a4fffc0d4a4b1ee59aa3a7388a3b9c71326c82b9ac5fd5716047560d"),
+    ("TokenSwapKron_swap_ask_out", "d8a3487b82ef62cbe6298df3138290da4cb31e216e991665f448c08baefca184"),
+    ("TokenSwapKron_swap_out", "e0ce6b3b72308827772ce54eff6331ea5181a1a4234ca27900ab261f5efef37e"),
+    ("TokenSwapKron_swap2", "c2c7386d5270dcd4d0b61c53f939094ba62e30a9f418b948472e74748b473c4a"),
+    ("TokenSwapKron_swap2_out", "f267603aa3e4987fe5a91fe2330168dc2799c0de5b8a56e7ae6b50b23296a8d3"),
 ];
 
 const SIL_ABI_JSON: &str = include_str!("../data/router_sil_abi.json");
@@ -370,6 +370,10 @@ pub enum IntentState {
         /// Most sompi carriers, fillers and the network fee may take besides.
         #[serde(with = "crate::json::field")]
         max_extra: i64,
+        /// B PIN: extension_commitment of token B (the offer's token): every ask escrow the intent buys from must carry it,
+        /// and the merchant's delivery is pinned to it.
+        #[serde(with = "crate::json::field")]
+        b_extension: [u8; 32],
         /// Unix ms from which anyone may expire the intent (`expire`, CLTV `tx.time`): the payer's authorization expiry.
         #[serde(with = "crate::json::field")]
         deadline: i64,
@@ -433,6 +437,10 @@ pub enum IntentState {
         /// LOCK PIN: extension_commitment of the lock (KCC-20 token A; all zero for a KRON token A, which has none).
         #[serde(with = "crate::json::field")]
         lock_extension: [u8; 32],
+        /// B PIN: extension_commitment of token B (the offer's token): every ask escrow the intent buys from must carry it,
+        /// and the merchant's delivery is pinned to it.
+        #[serde(with = "crate::json::field")]
+        b_extension: [u8; 32],
         /// Unix ms from which anyone may expire the intent (`expire`, CLTV `tx.time`): the payer's authorization expiry.
         #[serde(with = "crate::json::field")]
         deadline: i64,
@@ -522,6 +530,13 @@ impl IntentState {
             | IntentState::TokenSwap { lock_amount, lock_extension, .. } => Some((*lock_amount, *lock_extension)),
         }
     }
+    /// The B pin (KasToToken, TokenSwap): the extension commitment of the token the merchant receives.
+    pub fn b_extension(&self) -> Option<[u8; 32]> {
+        match self {
+            IntentState::KasToToken { b_extension, .. } | IntentState::TokenSwap { b_extension, .. } => Some(*b_extension),
+            IntentState::TokenToKas { .. } => None,
+        }
+    }
     /// Most token units the intent may sell (TokenToKas, TokenSwap).
     pub fn max_sell(&self) -> Option<i64> {
         match self {
@@ -537,7 +552,7 @@ impl IntentState {
             m.insert(k.to_string(), v);
         };
         match self {
-            IntentState::KasToToken { payer, merchant, token, program, amount, max_pay, max_extra, deadline } => {
+            IntentState::KasToToken { payer, merchant, token, program, amount, max_pay, max_extra, b_extension, deadline } => {
                 put("payer", b32(payer));
                 put("merchant", b32(merchant));
                 put("token_covid", b32(token));
@@ -545,6 +560,7 @@ impl IntentState {
                 put("amount", ArtifactValue::Int(*amount));
                 put("max_pay", ArtifactValue::Int(*max_pay));
                 put("max_extra", ArtifactValue::Int(*max_extra));
+                put("b_extension", b32(b_extension));
                 put("deadline", ArtifactValue::Int(*deadline));
             }
             IntentState::TokenToKas {
@@ -581,6 +597,7 @@ impl IntentState {
                 amount_b,
                 lock_amount,
                 lock_extension,
+                b_extension,
                 deadline,
             } => {
                 put("payer", b32(payer));
@@ -595,6 +612,7 @@ impl IntentState {
                 if program_a.family() == Family::Kcc20 {
                     put("lock_extension", b32(lock_extension));
                 }
+                put("b_extension", b32(b_extension));
                 put("deadline", ArtifactValue::Int(*deadline));
             }
         }
@@ -750,6 +768,7 @@ impl IntentState {
                 amount: int("amount")?,
                 max_pay: int("max_pay")?,
                 max_extra: int("max_extra")?,
+                b_extension: key("b_extension")?,
                 deadline: int("deadline")?,
             },
             IntentKind::TokenToKas => IntentState::TokenToKas {
@@ -774,6 +793,7 @@ impl IntentState {
                 amount_b: int("amount_b")?,
                 lock_amount: int("lock_amount")?,
                 lock_extension: ext()?,
+                b_extension: key("b_extension")?,
                 deadline: int("deadline")?,
             },
         };
@@ -985,6 +1005,7 @@ mod tests {
                 amount: 5,
                 max_pay: 6,
                 max_extra: 7,
+                b_extension: [0xbe; 32],
                 deadline: D,
             },
             IntentState::TokenToKas {
@@ -1009,6 +1030,7 @@ mod tests {
                 amount_b: 2,
                 lock_amount: 6,
                 lock_extension: [0xee; 32],
+                b_extension: [0xbe; 32],
                 deadline: D + 2,
             },
             IntentState::TokenToKas {
@@ -1033,6 +1055,7 @@ mod tests {
                 amount_b: 2,
                 lock_amount: 6,
                 lock_extension: [0; 32],
+                b_extension: [0xbe; 32],
                 deadline: D + 4,
             },
         ];
@@ -1065,6 +1088,7 @@ mod tests {
             amount: 5,
             max_pay: 6,
             max_extra: 0,
+            b_extension: [0xbe; 32],
             deadline: 9,
         };
         let a = ACTORS.iter().find(|a| a.shape.kind == st.kind()).unwrap();
@@ -1091,6 +1115,7 @@ mod tests {
             amount_b: 2,
             lock_amount: 6,
             lock_extension: [0xee; 32],
+            b_extension: [0xbe; 32],
             deadline: 1_800_000_000_000,
         };
         let f = FillArgs { asks: vec![[1; 32], [2; 32]], bids: vec![[3; 32], [4; 32]], bid_amounts: vec![5, 6] };

@@ -55,6 +55,12 @@
 // (the builder refuses mixed extension commitments); every entry that spends the lock (fill, expire, cancel) requires
 // both. What is left is a substitute of exactly lock_amount units with the same commitment: it gives the payer the
 // whole lock's worth at the substituter's expense (the custody rule of KobAsk, which pins amountLeft, is the same).
+// B PIN. A KCC-20 token is (covenant id, program, extension_commitment): units of one covenant id with another
+// commitment are another token (only its issuer can make them, in its genesis). KobAsk has no extension field (its
+// custody is whatever token UTXO of the covenant id it holds), so the intents that buy token B (KasToToken, TokenSwap,
+// TokenSwapKron) carry `b_extension`, the commitment of the token the offer names, set at creation and recomputed by a
+// verifier like every other term: every escrow of an observed ask must carry it, and the merchant's delivery is pinned
+// to it.
 // What an order releases beyond what the payer authorised (spread, tips) is the keeper's; the
 // payer's worst case is fixed by the intent's parameters.
 //
@@ -109,8 +115,8 @@
 // bound summed over the legs, the positional rule, and the token pins. Argent has no macros, so
 // the repetition is written out by tools/router-gen/gen-router.sh (this file is its output; the
 // build fails if it is edited by hand); `KasToToken_buy`, `_buy_out`, `_buy3`, `TokenToKas_sell2`,
-// `TokenSwap_swap` and `_swap2_out` show every ingredient. Sizes of the compiled scripts: 2.5-7.3 kB
-// per buy or sell shape, 5.7-9.95 kB for the swaps (docs/argent.md).
+// `TokenSwap_swap` and `_swap2_out` show every ingredient. Sizes of the compiled scripts: 2.6-7.3 kB
+// per buy or sell shape, 5.7-10.0 kB for the swaps (docs/argent.md).
 //
 // POSITIONAL ANTI-ALIASING RULE (hand-written, reviewed; Argent generates none). The intent
 // spent at input j owns exactly two outputs, j and j + 1, and everything it owes goes there:
@@ -168,6 +174,7 @@ state KasToTokenState {
     int amount;                     // exact token base units the merchant receives
     int max_pay;                    // max sompi the asks may demand at their quotes
     int max_extra;                  // max sompi for carriers + network fee
+    byte[32] b_extension;           // B PIN: extension_commitment of token B (the offer's; every escrow and the delivery)
     temporal deadline;              // unix ms: from here on anyone may expire the intent
 }
 
@@ -194,6 +201,7 @@ state TokenSwapState {
     int amount_b;                   // exact token B base units the merchant receives
     int lock_amount;                // LOCK PIN: exact base units of the lock (the payer's creation sets it)
     byte[32] lock_extension;        // LOCK PIN: extension_commitment of the lock (KCC-20)
+    byte[32] b_extension;           // B PIN: extension_commitment of token B (the offer's; every escrow and the delivery)
     temporal deadline;              // unix ms: from here on anyone may expire the intent
 }
 
@@ -218,6 +226,7 @@ state TokenSwapKronState {
     int max_sell_a;                 // max token A base units sold
     int amount_b;                   // exact token B base units the merchant receives
     int lock_amount;                // LOCK PIN: exact base units of the lock (the payer's creation sets it)
+    byte[32] b_extension;           // B PIN: extension_commitment of token B (the offer's; every escrow and the delivery)
     temporal deadline;              // unix ms: from here on anyone may expire the intent
 }
 
@@ -325,6 +334,7 @@ actor KasToToken_buy owns KasToTokenState {
         int take1 = amount;
         require(take1 < token.inputs.escrow1.amount);
         require(book1.inputs.ask.tif == 0);
+        require(token.inputs.escrow1.extension_commitment == b_extension);
         int pay1 = ask_leg(book1.inputs.ask.tokenCovId, book1.inputs.ask.scale, book1.inputs.ask.amountLeft, book1.inputs.ask.price, token.inputs.escrow1.owner, token.inputs.escrow1.owner_scheme, token.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_covid), take1);
         int pay = pay1;
         require(pay <= max_pay);
@@ -347,7 +357,7 @@ actor KasToToken_buy owns KasToTokenState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token.outputs become {
             change <- self.token_type(change_state),
@@ -392,6 +402,7 @@ actor KasToToken_buy_out owns KasToTokenState {
         require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 0, 1) == byte[](0x08));
         require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask1_covid, 0), 1, 9))) > 0);
         require(token.inputs.escrow1.amount == amount);
+        require(token.inputs.escrow1.extension_commitment == b_extension);
         int pay1 = ask_leg(book1.inputs.ask.tokenCovId, book1.inputs.ask.scale, book1.inputs.ask.amountLeft, book1.inputs.ask.price, token.inputs.escrow1.owner, token.inputs.escrow1.owner_scheme, token.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_covid), token.inputs.escrow1.amount);
         int pay = pay1;
         require(pay <= max_pay);
@@ -406,7 +417,7 @@ actor KasToToken_buy_out owns KasToTokenState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token.outputs become {
             merchant <- self.token_type(merchant_state),
@@ -464,6 +475,8 @@ actor KasToToken_buy2 owns KasToTokenState {
         int take2 = amount - token.inputs.escrow1.amount;
         require(take2 < token.inputs.escrow2.amount);
         require(book2.inputs.ask.tif == 0);
+        require(token.inputs.escrow1.extension_commitment == b_extension);
+        require(token.inputs.escrow2.extension_commitment == b_extension);
         int pay1 = ask_leg(book1.inputs.ask.tokenCovId, book1.inputs.ask.scale, book1.inputs.ask.amountLeft, book1.inputs.ask.price, token.inputs.escrow1.owner, token.inputs.escrow1.owner_scheme, token.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_covid), token.inputs.escrow1.amount);
         int pay2 = ask_leg(book2.inputs.ask.tokenCovId, book2.inputs.ask.scale, book2.inputs.ask.amountLeft, book2.inputs.ask.price, token.inputs.escrow2.owner, token.inputs.escrow2.owner_scheme, token.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_covid), take2);
         int pay = pay1 + pay2;
@@ -487,7 +500,7 @@ actor KasToToken_buy2 owns KasToTokenState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token.outputs become {
             change <- self.token_type(change_state),
@@ -542,6 +555,8 @@ actor KasToToken_buy2_out owns KasToTokenState {
         require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 0, 1) == byte[](0x08));
         require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask2_covid, 0), 1, 9))) > 0);
         require(token.inputs.escrow1.amount + token.inputs.escrow2.amount == amount);
+        require(token.inputs.escrow1.extension_commitment == b_extension);
+        require(token.inputs.escrow2.extension_commitment == b_extension);
         int pay1 = ask_leg(book1.inputs.ask.tokenCovId, book1.inputs.ask.scale, book1.inputs.ask.amountLeft, book1.inputs.ask.price, token.inputs.escrow1.owner, token.inputs.escrow1.owner_scheme, token.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_covid), token.inputs.escrow1.amount);
         int pay2 = ask_leg(book2.inputs.ask.tokenCovId, book2.inputs.ask.scale, book2.inputs.ask.amountLeft, book2.inputs.ask.price, token.inputs.escrow2.owner, token.inputs.escrow2.owner_scheme, token.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_covid), token.inputs.escrow2.amount);
         int pay = pay1 + pay2;
@@ -557,7 +572,7 @@ actor KasToToken_buy2_out owns KasToTokenState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token.outputs become {
             merchant <- self.token_type(merchant_state),
@@ -625,6 +640,9 @@ actor KasToToken_buy3 owns KasToTokenState {
         int take3 = amount - token.inputs.escrow1.amount - token.inputs.escrow2.amount;
         require(take3 < token.inputs.escrow3.amount);
         require(book3.inputs.ask.tif == 0);
+        require(token.inputs.escrow1.extension_commitment == b_extension);
+        require(token.inputs.escrow2.extension_commitment == b_extension);
+        require(token.inputs.escrow3.extension_commitment == b_extension);
         int pay1 = ask_leg(book1.inputs.ask.tokenCovId, book1.inputs.ask.scale, book1.inputs.ask.amountLeft, book1.inputs.ask.price, token.inputs.escrow1.owner, token.inputs.escrow1.owner_scheme, token.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_covid), token.inputs.escrow1.amount);
         int pay2 = ask_leg(book2.inputs.ask.tokenCovId, book2.inputs.ask.scale, book2.inputs.ask.amountLeft, book2.inputs.ask.price, token.inputs.escrow2.owner, token.inputs.escrow2.owner_scheme, token.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_covid), token.inputs.escrow2.amount);
         int pay3 = ask_leg(book3.inputs.ask.tokenCovId, book3.inputs.ask.scale, book3.inputs.ask.amountLeft, book3.inputs.ask.price, token.inputs.escrow3.owner, token.inputs.escrow3.owner_scheme, token.inputs.escrow3.amount, byte[32](ask3_covid), byte[32](token_covid), take3);
@@ -649,7 +667,7 @@ actor KasToToken_buy3 owns KasToTokenState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token.outputs become {
             change <- self.token_type(change_state),
@@ -714,6 +732,9 @@ actor KasToToken_buy3_out owns KasToTokenState {
         require(OpTxInputScriptSigSubstr(OpCovInputIdx(ask3_covid, 0), 0, 1) == byte[](0x08));
         require(int(byte[8](OpTxInputScriptSigSubstr(OpCovInputIdx(ask3_covid, 0), 1, 9))) > 0);
         require(token.inputs.escrow1.amount + token.inputs.escrow2.amount + token.inputs.escrow3.amount == amount);
+        require(token.inputs.escrow1.extension_commitment == b_extension);
+        require(token.inputs.escrow2.extension_commitment == b_extension);
+        require(token.inputs.escrow3.extension_commitment == b_extension);
         int pay1 = ask_leg(book1.inputs.ask.tokenCovId, book1.inputs.ask.scale, book1.inputs.ask.amountLeft, book1.inputs.ask.price, token.inputs.escrow1.owner, token.inputs.escrow1.owner_scheme, token.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_covid), token.inputs.escrow1.amount);
         int pay2 = ask_leg(book2.inputs.ask.tokenCovId, book2.inputs.ask.scale, book2.inputs.ask.amountLeft, book2.inputs.ask.price, token.inputs.escrow2.owner, token.inputs.escrow2.owner_scheme, token.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_covid), token.inputs.escrow2.amount);
         int pay3 = ask_leg(book3.inputs.ask.tokenCovId, book3.inputs.ask.scale, book3.inputs.ask.amountLeft, book3.inputs.ask.price, token.inputs.escrow3.owner, token.inputs.escrow3.owner_scheme, token.inputs.escrow3.amount, byte[32](ask3_covid), byte[32](token_covid), token.inputs.escrow3.amount);
@@ -730,7 +751,7 @@ actor KasToToken_buy3_out owns KasToTokenState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token.outputs become {
             merchant <- self.token_type(merchant_state),
@@ -1617,6 +1638,7 @@ actor TokenSwap_swap owns TokenSwapState {
         require(n_a1 <= token_a_group.inputs.mine.amount);
         require(amount_b < token_b_group.inputs.escrow1.amount);
         require(asks1.inputs.ask.tif == 0);
+        require(token_b_group.inputs.escrow1.extension_commitment == b_extension);
         ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), amount_b);
 
         require(OpCovOutputIdx(token_b, 1) == this.activeInputIndex);
@@ -1652,7 +1674,7 @@ actor TokenSwap_swap owns TokenSwapState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token_a_group.outputs become {
             delivery1 <- self.token_a_type(a_delivery1),
@@ -1772,6 +1794,7 @@ actor TokenSwap_swap_bid_out owns TokenSwapState {
         require(n_a1 <= token_a_group.inputs.mine.amount);
         require(amount_b < token_b_group.inputs.escrow1.amount);
         require(asks1.inputs.ask.tif == 0);
+        require(token_b_group.inputs.escrow1.extension_commitment == b_extension);
         ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), amount_b);
 
         require(OpCovOutputIdx(token_b, 1) == this.activeInputIndex);
@@ -1807,7 +1830,7 @@ actor TokenSwap_swap_bid_out owns TokenSwapState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token_a_group.outputs become {
             delivery1 <- self.token_a_type(a_delivery1),
@@ -1926,6 +1949,7 @@ actor TokenSwap_swap_ask_out owns TokenSwapState {
         require(n_a1 <= max_sell_a);
         require(n_a1 <= token_a_group.inputs.mine.amount);
         require(token_b_group.inputs.escrow1.amount == amount_b);
+        require(token_b_group.inputs.escrow1.extension_commitment == b_extension);
         ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
 
         require(OpCovOutputIdx(token_b, 0) == this.activeInputIndex);
@@ -1953,7 +1977,7 @@ actor TokenSwap_swap_ask_out owns TokenSwapState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token_a_group.outputs become {
             delivery1 <- self.token_a_type(a_delivery1),
@@ -2069,6 +2093,7 @@ actor TokenSwap_swap_out owns TokenSwapState {
         require(n_a1 <= max_sell_a);
         require(n_a1 <= token_a_group.inputs.mine.amount);
         require(token_b_group.inputs.escrow1.amount == amount_b);
+        require(token_b_group.inputs.escrow1.extension_commitment == b_extension);
         ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
 
         require(OpCovOutputIdx(token_b, 0) == this.activeInputIndex);
@@ -2096,7 +2121,7 @@ actor TokenSwap_swap_out owns TokenSwapState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token_a_group.outputs become {
             delivery1 <- self.token_a_type(a_delivery1),
@@ -2236,6 +2261,8 @@ actor TokenSwap_swap2 owns TokenSwapState {
         require(n_a1 + n_a2 <= token_a_group.inputs.mine.amount);
         require((amount_b - token_b_group.inputs.escrow1.amount) < token_b_group.inputs.escrow2.amount);
         require(asks2.inputs.ask.tif == 0);
+        require(token_b_group.inputs.escrow1.extension_commitment == b_extension);
+        require(token_b_group.inputs.escrow2.extension_commitment == b_extension);
         ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
         ask_fits(asks2.inputs.ask.tokenCovId, asks2.inputs.ask.amountLeft, token_b_group.inputs.escrow2.owner, token_b_group.inputs.escrow2.owner_scheme, token_b_group.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_b), (amount_b - token_b_group.inputs.escrow1.amount));
 
@@ -2280,7 +2307,7 @@ actor TokenSwap_swap2 owns TokenSwapState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token_a_group.outputs become {
             delivery1 <- self.token_a_type(a_delivery1),
@@ -2417,6 +2444,8 @@ actor TokenSwap_swap2_out owns TokenSwapState {
         require(n_a1 + n_a2 <= max_sell_a);
         require(n_a1 + n_a2 <= token_a_group.inputs.mine.amount);
         require(token_b_group.inputs.escrow1.amount + token_b_group.inputs.escrow2.amount == amount_b);
+        require(token_b_group.inputs.escrow1.extension_commitment == b_extension);
+        require(token_b_group.inputs.escrow2.extension_commitment == b_extension);
         ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
         ask_fits(asks2.inputs.ask.tokenCovId, asks2.inputs.ask.amountLeft, token_b_group.inputs.escrow2.owner, token_b_group.inputs.escrow2.owner_scheme, token_b_group.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_b), token_b_group.inputs.escrow2.amount);
 
@@ -2453,7 +2482,7 @@ actor TokenSwap_swap2_out owns TokenSwapState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token_a_group.outputs become {
             delivery1 <- self.token_a_type(a_delivery1),
@@ -3315,6 +3344,7 @@ actor TokenSwapKron_swap owns TokenSwapKronState {
         require(n_a1 <= token_a_group.inputs.mine.amount);
         require(amount_b < token_b_group.inputs.escrow1.amount);
         require(asks1.inputs.ask.tif == 0);
+        require(token_b_group.inputs.escrow1.extension_commitment == b_extension);
         ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), amount_b);
 
         require(OpCovOutputIdx(token_b, 1) == this.activeInputIndex);
@@ -3346,7 +3376,7 @@ actor TokenSwapKron_swap owns TokenSwapKronState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token_a_group.outputs become {
             delivery1 <- self.token_a_type(a_delivery1),
@@ -3461,6 +3491,7 @@ actor TokenSwapKron_swap_bid_out owns TokenSwapKronState {
         require(n_a1 <= token_a_group.inputs.mine.amount);
         require(amount_b < token_b_group.inputs.escrow1.amount);
         require(asks1.inputs.ask.tif == 0);
+        require(token_b_group.inputs.escrow1.extension_commitment == b_extension);
         ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), amount_b);
 
         require(OpCovOutputIdx(token_b, 1) == this.activeInputIndex);
@@ -3492,7 +3523,7 @@ actor TokenSwapKron_swap_bid_out owns TokenSwapKronState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token_a_group.outputs become {
             delivery1 <- self.token_a_type(a_delivery1),
@@ -3606,6 +3637,7 @@ actor TokenSwapKron_swap_ask_out owns TokenSwapKronState {
         require(n_a1 <= max_sell_a);
         require(n_a1 <= token_a_group.inputs.mine.amount);
         require(token_b_group.inputs.escrow1.amount == amount_b);
+        require(token_b_group.inputs.escrow1.extension_commitment == b_extension);
         ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
 
         require(OpCovOutputIdx(token_b, 0) == this.activeInputIndex);
@@ -3629,7 +3661,7 @@ actor TokenSwapKron_swap_ask_out owns TokenSwapKronState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token_a_group.outputs become {
             delivery1 <- self.token_a_type(a_delivery1),
@@ -3740,6 +3772,7 @@ actor TokenSwapKron_swap_out owns TokenSwapKronState {
         require(n_a1 <= max_sell_a);
         require(n_a1 <= token_a_group.inputs.mine.amount);
         require(token_b_group.inputs.escrow1.amount == amount_b);
+        require(token_b_group.inputs.escrow1.extension_commitment == b_extension);
         ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
 
         require(OpCovOutputIdx(token_b, 0) == this.activeInputIndex);
@@ -3763,7 +3796,7 @@ actor TokenSwapKron_swap_out owns TokenSwapKronState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token_a_group.outputs become {
             delivery1 <- self.token_a_type(a_delivery1),
@@ -3898,6 +3931,8 @@ actor TokenSwapKron_swap2 owns TokenSwapKronState {
         require(n_a1 + n_a2 <= token_a_group.inputs.mine.amount);
         require((amount_b - token_b_group.inputs.escrow1.amount) < token_b_group.inputs.escrow2.amount);
         require(asks2.inputs.ask.tif == 0);
+        require(token_b_group.inputs.escrow1.extension_commitment == b_extension);
+        require(token_b_group.inputs.escrow2.extension_commitment == b_extension);
         ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
         ask_fits(asks2.inputs.ask.tokenCovId, asks2.inputs.ask.amountLeft, token_b_group.inputs.escrow2.owner, token_b_group.inputs.escrow2.owner_scheme, token_b_group.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_b), (amount_b - token_b_group.inputs.escrow1.amount));
 
@@ -3936,7 +3971,7 @@ actor TokenSwapKron_swap2 owns TokenSwapKronState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token_a_group.outputs become {
             delivery1 <- self.token_a_type(a_delivery1),
@@ -4068,6 +4103,8 @@ actor TokenSwapKron_swap2_out owns TokenSwapKronState {
         require(n_a1 + n_a2 <= max_sell_a);
         require(n_a1 + n_a2 <= token_a_group.inputs.mine.amount);
         require(token_b_group.inputs.escrow1.amount + token_b_group.inputs.escrow2.amount == amount_b);
+        require(token_b_group.inputs.escrow1.extension_commitment == b_extension);
+        require(token_b_group.inputs.escrow2.extension_commitment == b_extension);
         ask_fits(asks1.inputs.ask.tokenCovId, asks1.inputs.ask.amountLeft, token_b_group.inputs.escrow1.owner, token_b_group.inputs.escrow1.owner_scheme, token_b_group.inputs.escrow1.amount, byte[32](ask1_covid), byte[32](token_b), token_b_group.inputs.escrow1.amount);
         ask_fits(asks2.inputs.ask.tokenCovId, asks2.inputs.ask.amountLeft, token_b_group.inputs.escrow2.owner, token_b_group.inputs.escrow2.owner_scheme, token_b_group.inputs.escrow2.amount, byte[32](ask2_covid), byte[32](token_b), token_b_group.inputs.escrow2.amount);
 
@@ -4098,7 +4135,7 @@ actor TokenSwapKron_swap2_out owns TokenSwapKronState {
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: token_b_group.inputs.escrow1.extension_commitment,
+            extension_commitment: b_extension,
         };
         require token_a_group.outputs become {
             delivery1 <- self.token_a_type(a_delivery1),

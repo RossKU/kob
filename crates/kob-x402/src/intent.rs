@@ -243,6 +243,7 @@ fn expected_state(
                 amount,
                 max_pay: amount_field(&terms.max_pay, "maxPay")?,
                 max_extra: amount_field(&terms.max_extra, "maxExtra")?,
+                b_extension: merchant.expect("token gain").allowed.extension_commitment,
                 deadline,
             }
         }
@@ -277,6 +278,7 @@ fn expected_state(
                 amount_b: amount,
                 lock_amount: lock_amount(terms, max_sell_a)?,
                 lock_extension: pay_token.expect("token pay asset").extension_commitment,
+                b_extension: merchant.expect("token gain").allowed.extension_commitment,
                 deadline,
             }
         }

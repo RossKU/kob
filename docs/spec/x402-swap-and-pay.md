@@ -655,14 +655,19 @@ the intent:
 
 | Pay asset | Merchant receives | Intent | Terms (the actor's state) |
 |---|---|---|---|
-| KAS | token B (`kcc20`) | `KasToToken_<shape>` (1 to 3 `KobAsk`s of B) | payer, merchant, B, exact `amount`, `max_pay` (sompi at the asks' quotes: `ceil(take × price / scale)` per ask), `max_extra` (carriers and fee), `deadline` |
+| KAS | token B (`kcc20`) | `KasToToken_<shape>` (1 to 3 `KobAsk`s of B) | payer, merchant, B, exact `amount`, `max_pay` (sompi at the asks' quotes: `ceil(take × price / scale)` per ask), `max_extra` (carriers and fee), `b_extension` (the B pin), `deadline` |
 | token A | KAS (`standard-native`) | `TokenToKas_<shape>` (1 to 3 `KobBid`s of A) | payer, merchant, A, `merchant_kas` (at least), `max_sell` (base units of A), `lock_amount` and `lock_extension` (the lock pin), `deadline` |
-| token A | token B (`kcc20`) | `TokenSwap_<shape>` (1 or 2 bids of A and asks of B) | payer, merchant, A, B, `max_sell_a`, exact `amount_b`, `lock_amount` and `lock_extension` (the lock pin), `deadline` |
+| token A | token B (`kcc20`) | `TokenSwap_<shape>` (1 or 2 bids of A and asks of B) | payer, merchant, A, B, `max_sell_a`, exact `amount_b`, `lock_amount` and `lock_extension` (the lock pin), `b_extension` (the B pin), `deadline` |
 | KRON token A | KAS / token B | `TokenToKasKron_<shape>` / `TokenSwapKron_<shape>` (`KobBidKron`s of A) | as `TokenToKas` / `TokenSwap` (the lock pin is `lock_amount` only: a KRON token has no extension commitment) |
 
 The lock pin is the lock the creation makes: `lock_amount` is the payer's `lockAmount` (default `maxSell`) and
 `lock_extension` the extension commitment of the pay asset's allowlist entry; the verifier recomputes both. Every entry
 that spends the lock requires them, so no other token UTXO sent to the intent's covenant id can stand in for the lock.
+
+The B pin is the token the merchant receives: `b_extension` is the extension commitment of the merchant asset's
+allowlist entry (`extra.token`), recomputed by the verifier. The router requires it of every escrow of an observed ask
+and pins the merchant's delivery to it, so units of B's covenant id with another commitment (another token, which only
+B's issuer can create) never reach the merchant.
 
 `deadline` (unix ms) is the payer's `authorization.expiresAt`: the payload carries no separate field,
 the verifier takes it from the authorization (section 17.5).
@@ -879,6 +884,7 @@ are covered by `crates/kob-tests/tests/argent_router_tests.rs` (positive, negati
 | `intent-neg-program` (KRON) | a KRON token as the merchant asset; KaspaCom's program as a pay asset | `route_unsupported` |
 | `intent-neg-lock-stand-in` | a token UTXO sent to the intent's covenant id by anyone (1-unit dust, a keeper's own units, the lock's units with another extension commitment) spent as the lock by an expiry or a fill | rejected by the router (the lock pin: `lock_amount`, `lock_extension`) |
 | `intent-neg-cancel-lock` | a payer-signed cancel that spends other tokens of the locked token at `j + 1` instead of the lock | rejected by the router (the observed lock is not owned by the intent) |
+| `intent-neg-b-class` | an execution whose ask escrows (and so the merchant's delivery) are units of B's covenant id with another extension commitment | rejected by the router (the B pin: `b_extension`) |
 
 ## 18. Invoices (`kob-invoice-v1`)
 

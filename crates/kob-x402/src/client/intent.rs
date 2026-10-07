@@ -288,6 +288,7 @@ pub fn prepare_intent(
                 amount: amount_i,
                 max_pay: max_pay as i64,
                 max_extra: max_extra as i64,
+                b_extension: m.allowed.extension_commitment,
                 deadline,
             };
             let terms = IntentTerms {
@@ -341,6 +342,7 @@ pub fn prepare_intent(
                     amount_b: amount_i,
                     lock_amount: lock,
                     lock_extension: t.extension_commitment,
+                    b_extension: merchant.as_ref().expect("token gain").allowed.extension_commitment,
                     deadline,
                 }
             };

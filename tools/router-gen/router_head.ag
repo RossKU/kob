@@ -55,6 +55,12 @@
 // (the builder refuses mixed extension commitments); every entry that spends the lock (fill, expire, cancel) requires
 // both. What is left is a substitute of exactly lock_amount units with the same commitment: it gives the payer the
 // whole lock's worth at the substituter's expense (the custody rule of KobAsk, which pins amountLeft, is the same).
+// B PIN. A KCC-20 token is (covenant id, program, extension_commitment): units of one covenant id with another
+// commitment are another token (only its issuer can make them, in its genesis). KobAsk has no extension field (its
+// custody is whatever token UTXO of the covenant id it holds), so the intents that buy token B (KasToToken, TokenSwap,
+// TokenSwapKron) carry `b_extension`, the commitment of the token the offer names, set at creation and recomputed by a
+// verifier like every other term: every escrow of an observed ask must carry it, and the merchant's delivery is pinned
+// to it.
 // What an order releases beyond what the payer authorised (spread, tips) is the keeper's; the
 // payer's worst case is fixed by the intent's parameters.
 //
@@ -109,8 +115,8 @@
 // bound summed over the legs, the positional rule, and the token pins. Argent has no macros, so
 // the repetition is written out by tools/router-gen/gen-router.sh (this file is its output; the
 // build fails if it is edited by hand); `KasToToken_buy`, `_buy_out`, `_buy3`, `TokenToKas_sell2`,
-// `TokenSwap_swap` and `_swap2_out` show every ingredient. Sizes of the compiled scripts: 2.5-7.3 kB
-// per buy or sell shape, 5.7-9.95 kB for the swaps (docs/argent.md).
+// `TokenSwap_swap` and `_swap2_out` show every ingredient. Sizes of the compiled scripts: 2.6-7.3 kB
+// per buy or sell shape, 5.7-10.0 kB for the swaps (docs/argent.md).
 //
 // POSITIONAL ANTI-ALIASING RULE (hand-written, reviewed; Argent generates none). The intent
 // spent at input j owns exactly two outputs, j and j + 1, and everything it owes goes there:
@@ -168,6 +174,7 @@ state KasToTokenState {
     int amount;                     // exact token base units the merchant receives
     int max_pay;                    // max sompi the asks may demand at their quotes
     int max_extra;                  // max sompi for carriers + network fee
+    byte[32] b_extension;           // B PIN: extension_commitment of token B (the offer's; every escrow and the delivery)
     temporal deadline;              // unix ms: from here on anyone may expire the intent
 }
 
@@ -194,6 +201,7 @@ state TokenSwapState {
     int amount_b;                   // exact token B base units the merchant receives
     int lock_amount;                // LOCK PIN: exact base units of the lock (the payer's creation sets it)
     byte[32] lock_extension;        // LOCK PIN: extension_commitment of the lock (KCC-20)
+    byte[32] b_extension;           // B PIN: extension_commitment of token B (the offer's; every escrow and the delivery)
     temporal deadline;              // unix ms: from here on anyone may expire the intent
 }
 
@@ -218,6 +226,7 @@ state TokenSwapKronState {
     int max_sell_a;                 // max token A base units sold
     int amount_b;                   // exact token B base units the merchant receives
     int lock_amount;                // LOCK PIN: exact base units of the lock (the payer's creation sets it)
+    byte[32] b_extension;           // B PIN: extension_commitment of token B (the offer's; every escrow and the delivery)
     temporal deadline;              // unix ms: from here on anyone may expire the intent
 }
 

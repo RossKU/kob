@@ -46,6 +46,7 @@ contract TokenToKasKron_sell3_out(
         int amount;
         int max_pay;
         int max_extra;
+        byte[32] b_extension;
         temporal deadline;
     }
     struct TokenToKasState {
@@ -72,6 +73,7 @@ contract TokenToKasKron_sell3_out(
         int amount_b;
         int lock_amount;
         byte[32] lock_extension;
+        byte[32] b_extension;
         temporal deadline;
     }
     struct TokenSwapKronState {
@@ -85,6 +87,7 @@ contract TokenToKasKron_sell3_out(
         int max_sell_a;
         int amount_b;
         int lock_amount;
+        byte[32] b_extension;
         temporal deadline;
     }
     struct KCC20State {

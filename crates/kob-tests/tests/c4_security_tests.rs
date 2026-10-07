@@ -385,6 +385,7 @@ fn c4_p5_router_expiry_cannot_be_moved_earlier() {
                 amount: 5 * fx::WHOLE,
                 max_pay: 13 * fx::KAS as i64,
                 max_extra: 2 * fx::KAS as i64,
+                b_extension: fx::EXT,
                 deadline: DEADLINE,
             },
             0,
@@ -417,6 +418,7 @@ fn c4_p5_router_expiry_cannot_be_moved_earlier() {
                 amount_b: fx::WHOLE,
                 lock_amount: 2 * fx::WHOLE,
                 lock_extension: fx::EXT,
+                b_extension: fx::EXT,
                 deadline: DEADLINE,
             },
             2 * fx::WHOLE,
@@ -503,6 +505,7 @@ fn c4_router_token_cancel_checks_the_lock_owner() {
                 amount_b: fx::WHOLE,
                 lock_amount: units,
                 lock_extension: ext,
+                b_extension: fx::EXT,
                 deadline: D,
             }
         } else {
@@ -650,6 +653,10 @@ fn c4_router_token_cancel_checks_the_lock_owner() {
         let mut args = args;
         if fam == Family::Kcc20 {
             args.insert(args.len() - 1, bytes(&ext));
+        }
+        // a swap pins the extension commitment of token B (the B pin), the last field before the deadline
+        if let IntentState::TokenSwap { b_extension, .. } = &state {
+            args.insert(args.len() - 1, bytes(b_extension));
         }
         let compile =
             |s: &str| common::compile_contract(s, &args, Default::default()).unwrap_or_else(|e| panic!("compile {actor}: {e:?}"));

@@ -13,6 +13,7 @@ contract TokenSwap_swap_bid_out(
     int init_amount_b,
     int init_lock_amount,
     byte[32] init_lock_extension,
+    byte[32] init_b_extension,
     temporal init_deadline
 ) {
     // :: shared constants
@@ -50,6 +51,7 @@ contract TokenSwap_swap_bid_out(
         int amount;
         int max_pay;
         int max_extra;
+        byte[32] b_extension;
         temporal deadline;
     }
     struct TokenToKasState {
@@ -86,6 +88,7 @@ contract TokenSwap_swap_bid_out(
         int max_sell_a;
         int amount_b;
         int lock_amount;
+        byte[32] b_extension;
         temporal deadline;
     }
     struct KCC20State {
@@ -538,6 +541,7 @@ contract TokenSwap_swap_bid_out(
     int amount_b = init_amount_b;
     int lock_amount = init_lock_amount;
     byte[32] lock_extension = init_lock_extension;
+    byte[32] b_extension = init_b_extension;
     temporal deadline = init_deadline;
 
     // :: entrypoints
@@ -630,6 +634,7 @@ contract TokenSwap_swap_bid_out(
         require(n_a1 <= gen__token_a_group_mine_state.amount);
         require(amount_b < gen__token_b_group_escrow1_state.amount);
         require(gen__asks1_ask_state.tif == 0);
+        require(gen__token_b_group_escrow1_state.extension_commitment == b_extension);
         ask_fits(gen__asks1_ask_state.tokenCovId, gen__asks1_ask_state.amountLeft, gen__token_b_group_escrow1_state.owner, gen__token_b_group_escrow1_state.owner_scheme, gen__token_b_group_escrow1_state.amount, byte[32](ask1_covid), byte[32](token_b), amount_b);
         require(OpCovOutputIdx(token_b, 1) == this.activeInputIndex);
         require(OpCovOutputIdx(token_a, 1) == this.activeInputIndex + 1);
@@ -667,7 +672,7 @@ contract TokenSwap_swap_bid_out(
             owner_scheme: OWNER_P2PK_SCHNORR,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
-            extension_commitment: gen__token_b_group_escrow1_state.extension_commitment,
+            extension_commitment: b_extension,
         };
         // :: observed become token_a_group.delivery1 -> self.token_a_type
         validateOutputStateWithInputTemplate(

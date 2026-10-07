@@ -47,6 +47,9 @@ lock_pin() {
   echo "        require($2.amount == lock_amount);"
   [ "$1" = kron ] || echo "        require($2.extension_commitment == lock_extension);"
 }
+# The B pin (router_head.ag, "B PIN"): an observed escrow of token B carries the offer's extension commitment.
+# $1 = projection of the escrow input.
+b_pin() { echo "        require($1.extension_commitment == b_extension);"; }
 # A token-A output state held by a key. $1 = family, $2 = local name, $3 = owner, $4 = amount, $5 = extension (KCC-20).
 a_lit() { if [ "$1" = kron ]; then kron_lit "$2" "$3" "$4"; else tok_lit "$2" "$3" "$4" "$5"; fi; }
 
@@ -198,6 +201,7 @@ k2t_entry() { # $1 = k, $2 = rest|out
     echo "        require(take$k < $E$k.amount);"
     echo "        require(book$k.inputs.ask.tif == 0);"
   fi
+  for m in $(seq 1 "$k"); do b_pin "$E$m"; done
   for m in $(seq 1 "$k"); do
     echo "        int pay$m = ask_leg($(ask_args book$m), $E$m.owner, $E$m.owner_scheme, $E$m.amount, byte[32](ask${m}_covid), $TOK, ${TK[$m]});"
   done
@@ -213,7 +217,7 @@ k2t_entry() { # $1 = k, $2 = rest|out
     if pin_ask; then ask_next_literal "book$k" "take$k"; fi
     esc_change change_state "$E$k" "take$k"
   fi
-  tok_lit merchant_state merchant amount "${E}1.extension_commitment"
+  tok_lit merchant_state merchant amount b_extension
   if [ "$last" = rest ] && pin_ask; then
     echo "        require book$k.outputs become {"
     echo "            next <- KOBOrders::KobAsk(next_a),"
@@ -357,6 +361,7 @@ swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (ask
     echo "        require(${TK[$ka]} < $E$ka.amount);"
     echo "        require(asks$ka.inputs.ask.tif == 0);"
   fi
+  for m in $(seq 1 "$ka"); do b_pin "$E$m"; done
   for m in $(seq 1 "$ka"); do
     echo "        ask_fits($(ask_args_np asks$m), $E$m.owner, $E$m.owner_scheme, $E$m.amount, byte[32](ask${m}_covid), byte[32](token_b), ${TK[$m]});"
   done
@@ -372,7 +377,7 @@ swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (ask
     a_lit "$fam" "a_delivery$m" "byte[32](bids$m.inputs.bid.maker)" "${SD[$m]}" "bids$m.inputs.bid.extensionCommitment"
   done
   a_lit "$fam" a_change "byte[32](payer)" "$M.amount - ($sum)" "$M.extension_commitment"
-  tok_lit b_merchant merchant amount_b "${E}1.extension_commitment"
+  tok_lit b_merchant merchant amount_b b_extension
   if [ "$bl" = rest ] && pin_bid && [ "$fam" = kcc20 ]; then
     echo "        KobBidState next_b = state(bids$kb.inputs.bid);"
     echo "        require bids$kb.outputs become {"
