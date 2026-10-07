@@ -114,7 +114,8 @@ impl NodeBoard {
             .map(|(i, s)| {
                 Mutex::new(PeerState {
                     status: NodeStatus {
-                        url: s.url.clone(),
+                        // shown on the public health and metrics routes and in logs: never credentials or keys
+                        url: super::redact_url(&s.url),
                         role: if i == 0 { "primary" } else { "secondary" }.into(),
                         state: "ok".into(),
                         fetch: s.fetch,
@@ -517,6 +518,47 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             self.board.snapshot()
         } else {
             vec![]
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rpc::redact_url;
+
+    #[test]
+    fn redacted_urls_keep_scheme_host_and_port_only() {
+        for (url, shown) in [
+            ("ws://127.0.0.1:18210", "ws://127.0.0.1:18210"),
+            ("ws://127.0.0.1:18210/", "ws://127.0.0.1:18210"),
+            ("wss://user:pw@node.example/wrpc/json?apikey=K", "wss://node.example/..."),
+            ("wss://node.example:443?apikey=K", "wss://node.example:443/..."),
+            ("wss://node.example/v2/K", "wss://node.example/..."),
+            ("wss://a@b@node.example#f", "wss://node.example/..."),
+            ("n0", "n0"),
+            ("user:pw@host:1/x", "host:1/..."),
+        ] {
+            assert_eq!(redact_url(url), shown, "{url}");
+        }
+    }
+
+    /// Node URLs with a password or an API key are configured for the connection, but the public health and metrics
+    /// routes and the logs show only the scheme, host and port.
+    #[test]
+    fn node_credentials_stay_out_of_health_and_metrics() {
+        let secret = "wss://user:hunter2@node.example/wrpc/json?apikey=SECRETKEY";
+        let board = NodeBoard::new(&[
+            NodeSpec { url: "ws://127.0.0.1:18210".into(), fetch: true, submit: true, connections: 1 },
+            NodeSpec { url: secret.into(), fetch: true, submit: true, connections: 1 },
+        ]);
+        assert_eq!(board.url(1), "wss://node.example/...");
+        let mut h = crate::indexer::status::HealthSnapshot::new("testnet-10");
+        h.nodes = board.snapshot();
+        let (m, j) = (h.metrics_text(), serde_json::to_string(&h).unwrap());
+        for text in [&m, &j] {
+            assert!(!text.contains("hunter2") && !text.contains("SECRETKEY") && !text.contains("user:"), "{text}");
+            assert!(text.contains("wss://node.example/..."), "{text}");
         }
     }
 }

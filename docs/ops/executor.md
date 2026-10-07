@@ -848,8 +848,10 @@ url = "wss://boson-10.kaspa.red/kaspa/testnet-10/wrpc/json"
 url = "wss://alpha-10.kaspa.stream/kaspa/testnet-10/wrpc/json"
 ```
 
-or on the command line `--node <url>` (repeatable) and `--no-primary-fetch`. `ws://` and `wss://` (rustls, webpki roots)
-both work. The windows in flight are `fetch_parallel` on the primary plus each other node's `connections`, sharing one
+or on the command line `--node <url>` (repeatable; or `KOB_INDEX_NODES`, comma-separated) and `--no-primary-fetch`.
+`ws://` and `wss://` (rustls, webpki roots) both work. A URL that carries a password (`wss://user:pass@host/...`) or an
+API key (in its path or `?apikey=...`) belongs in the config file (readable by the service user only) or in the
+environment, not in `--node` / `--rpc-url`: command-line arguments are visible to every local user (`ps`). The windows in flight are `fetch_parallel` on the primary plus each other node's `connections`, sharing one
 `prefetch_max_mb`. Public TN10 nodes: the Kaspa resolver (`https://<resolver>/v2/kaspa/testnet-10/tls/wrpc/borsh`, the
 resolvers of rusty-kaspa's `rpc/wrpc/client/Resolvers.toml`) hands out `wss://<node>/kaspa/testnet-10/wrpc/borsh`; the same
 node serves JSON at `.../wrpc/json`.
@@ -857,7 +859,9 @@ node serves JSON at `.../wrpc/json`.
 Health: `nodes` lists every node (`role`, `state` `ok` / `backoff` / `dropped`, windows, chain blocks, transactions, bytes,
 `bytes_per_sec`, timeouts, `out_of_sync`, `lies`, `dropped_reason`, `submits_ok` / `submits_failed`), plus
 `untrusted_windows_total`, `untrusted_blocks_total`, `confirmed_blocks_total` (chain blocks compared with the primary's
-copy) and `lies_total`; metrics `kob_indexer_node_*{node=...}`.
+copy) and `lies_total`; metrics `kob_indexer_node_*{node=...}`. Health, metrics and logs show a node as
+`scheme://host:port` only: user name, password, path and query are left out (`/...` marks a removed path or query), so a
+node's credentials never reach these public routes.
 
 #### Processing capacity: CPU per transaction (the 3,000 tx/s benchmark)
 

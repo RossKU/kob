@@ -226,7 +226,7 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     cfg.maintenance.fee_rate = a.common.fee_rate;
     cfg.maintenance.inventory = inventory;
     let node = WrpcNode::new(WrpcConfig::new(a.common.rpc_url.clone()));
-    tracing::info!(network = %cfg.network, rpc = %a.common.rpc_url, operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "matcher starting");
+    tracing::info!(network = %cfg.network, rpc = %crate::rpc::redact_url(&a.common.rpc_url), operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "matcher starting");
     let mut r = Runner::new(node, FileSource::new(a.common.book_file.clone()), signer, cfg);
     r.run(shutdown_signal()).await
 }
@@ -267,7 +267,7 @@ pub async fn run_keep(a: KeepArgs) -> anyhow::Result<()> {
         return Ok(());
     }
     let node = WrpcNode::new(WrpcConfig::new(a.common.rpc_url.clone()));
-    tracing::info!(network = %cfg.network, rpc = %a.common.rpc_url, operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "keeper starting");
+    tracing::info!(network = %cfg.network, rpc = %crate::rpc::redact_url(&a.common.rpc_url), operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "keeper starting");
     let mut r = Runner::new(node, FileSource::new(a.common.book_file.clone()), signer, cfg);
     r.run(shutdown_signal()).await
 }

@@ -209,7 +209,7 @@ pub async fn serve_service(svc: Service, listener: tokio::net::TcpListener, shut
         built.listen,
         cfg.auth,
         built.merchants.len(),
-        cfg.node
+        crate::rpc::redact_url(&cfg.node)
     );
     let state = Arc::new(http::AppState::new(fac.clone(), &built));
     let app = http::router(state);

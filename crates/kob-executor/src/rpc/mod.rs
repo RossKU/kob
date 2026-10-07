@@ -24,6 +24,25 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use types::{AddressUtxo, ChainHashes, ChainIds, DagInfo, RawVspcResponse, ServerInfo, Verbosity, VspcRequest};
 
+/// A node URL as it may be shown or logged: `scheme://host[:port]`. User name and password, path, query and fragment are
+/// left out (they can hold credentials or API keys: `wss://user:pass@host/key?apikey=...`); a removed path or query is
+/// marked with `/...`. A value without a scheme keeps its host part only.
+pub fn redact_url(url: &str) -> String {
+    let (scheme, rest) = match url.split_once("://") {
+        Some((s, r)) => (Some(s), r),
+        None => (None, url),
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..end];
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let tail = &rest[end..];
+    let marker = if tail.is_empty() || tail == "/" { "" } else { "/..." };
+    match scheme {
+        Some(s) => format!("{s}://{host}{marker}"),
+        None => format!("{host}{marker}"),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RpcError {
     /// The connection failed; the next call reconnects.

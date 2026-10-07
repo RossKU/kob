@@ -402,7 +402,7 @@ pub async fn run(a: RunArgs) -> Result<()> {
     }
     tracing::info!(
         network = %cfg.network,
-        rpc = %cfg.rpc_url,
+        rpc = %crate::rpc::redact_url(cfg.primary_url()),
         data = %cfg.data_dir.display(),
         operator = %kob_protocol::json::to_hex(&signer.pubkey()),
         matcher = run_cfg.roles.matcher,

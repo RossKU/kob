@@ -7,7 +7,7 @@ use crate::indexer::ingest::Cursor;
 use crate::indexer::{self, Indexer};
 use crate::recover::{self, MakerExport};
 use crate::rpc::multi::{MultiNode, NodeSpec};
-use crate::rpc::{ChainSource, WrpcClient, WrpcConfig};
+use crate::rpc::{redact_url, ChainSource, WrpcClient, WrpcConfig};
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
@@ -36,7 +36,9 @@ pub struct IndexOpts {
     pub rpc_url: Option<String>,
     /// Another node (`ws://` or `wss://` JSON wRPC; repeatable): windows of transaction bodies are fetched from it too
     /// (checked against the primary, `--rpc-url`) and transactions submitted to it too. Added to the config's `nodes`.
-    #[arg(long = "node", global = true, value_name = "URL")]
+    /// Command-line arguments are visible to other local users (`ps`): a URL with a password or an API key belongs in the
+    /// config file (`[[nodes]]`) or in `KOB_INDEX_NODES` (comma-separated).
+    #[arg(long = "node", global = true, value_name = "URL", env = "KOB_INDEX_NODES", value_delimiter = ',')]
     pub nodes: Vec<String>,
     /// With `--node`: the primary serves windows of transaction bodies only when no other node can (it stays the chain
     /// authority).
@@ -167,10 +169,10 @@ fn wrpc(cfg: &IndexerConfig, url: &str, vspc_connections: usize) -> Arc<WrpcClie
     // Borsh only on VSPC connections of its own (with none, VSPC shares the JSON connection)
     w.borsh_url = cfg.borsh_url_of(url).filter(|_| vspc_connections > 0);
     if let Some(b) = &w.borsh_url {
-        tracing::info!(node = url, borsh = %b, connections = vspc_connections, "windows of transaction bodies over Borsh wRPC");
+        tracing::info!(node = %redact_url(url), borsh = %redact_url(b), connections = vspc_connections, "windows of transaction bodies over Borsh wRPC");
     }
     if cfg.borsh && w.borsh_url.is_none() && vspc_connections > 0 {
-        tracing::warn!(node = url, "no Borsh endpoint known for this node: its windows stay JSON (set borsh_url)");
+        tracing::warn!(node = %redact_url(url), "no Borsh endpoint known for this node: its windows stay JSON (set borsh_url)");
     }
     Arc::new(WrpcClient::new(w))
 }
@@ -194,8 +196,8 @@ pub fn node_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
     let verifier = if nodes.len() > 1 { wrpc(cfg, &primary_url, 4) } else { primary };
     if nodes.len() > 1 {
         tracing::info!(
-            primary = %primary_url,
-            others = ?nodes[1..].iter().map(|(s, _)| s.url.as_str()).collect::<Vec<_>>(),
+            primary = %redact_url(&primary_url),
+            others = ?nodes[1..].iter().map(|(s, _)| redact_url(&s.url)).collect::<Vec<_>>(),
             windows = cfg.fetch_windows(),
             "several nodes: bodies from all (checked against the primary), the chain from the primary"
         );
@@ -223,7 +225,7 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
     let cfg = build_config(&a.opts)?;
     match a.sub.unwrap_or(IndexSub::Run) {
         IndexSub::Run => {
-            tracing::info!(network = %cfg.network, rpc = %cfg.rpc_url, data = %cfg.data_dir.display(), "starting indexer");
+            tracing::info!(network = %cfg.network, rpc = %redact_url(cfg.primary_url()), data = %cfg.data_dir.display(), "starting indexer");
             let idx = Indexer::open(cfg)?;
             idx.run(shutdown_signal()).await?;
         }
