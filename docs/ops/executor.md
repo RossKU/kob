@@ -1849,8 +1849,10 @@ It is off by default. `--inventory-policy <file>` (on `run` and `match`) reads i
   "acceptSurplusTokens": true,
   "haircutBps": 8000,
   "keepCarrier": "200000000",
+  "maxFee": "1000000000",
+  "periodDaa": "864000",
   "tokens": [
-    { "token": "<covenant id, hex>", "minAmount": 100000000 },
+    { "token": "<covenant id, hex>", "minAmount": 100000000, "maxAmount": 5000000000 },
     { "token": "<covenant id, hex>", "refPrice": { "sompi": "2300000000", "per": "100000000" } }
   ]
 }
@@ -1863,12 +1865,20 @@ It is off by default. `--inventory-policy <file>` (on `run` and `match`) reads i
 | `keepCarrier` | `200000000` (2 KAS) | sompi locked on the operator's inventory output until the owner sells it (and on the UTXO a maintenance merge of inventory leaves); at least `50000000` (0.5 KAS, the KaspaCom KCC20 0.2.5 floor). The order outputs keep their own carriers. 2 KAS is the smallest round value that adds no fee in either fee mode (below) |
 | `tokens[].token` | (required) | an allowlisted token (covenant id); every other token's surplus goes to the pair ask as before |
 | `tokens[].refPrice` | none | `sompi` per `per` base units: the owner's own valuation (it sells the inventory off-matcher), used instead of the KAS bids |
+| `maxFee` | none | the most network fee (sompi) the batches that keep a surplus may pay per period; once spent, no surplus is kept until the period ends (checked before each tick, so the last tick of a period may overshoot it by its own batches) |
+| `periodDaa` | `864000` (one day) | the budget period of `maxFee` and `tokens[].maxAmount`, DAA; it starts at the first tick of `run` and restarts when it ends (a restart of the process starts a new one) |
+| `tokens[].maxAmount` | none | the most base units of the token kept per period; a batch that would keep more than what is left of it keeps none (the surplus goes to the pair ask) |
 | `tokens[].minAmount` | none | the least surplus worth keeping (base units). With `refPrice`: no bound unless set. Without it the bound is the dust rule, the smallest minimum fill of the bids that value the surplus (a sale of the kept amount alone could fill one), and `minAmount` only raises it (a value below the dust rule, `0` included, changes nothing) |
 
 What the planner does (`matcher::batch`, pure, deterministic):
 
 * A surplus that plain KAS bids take in the same transaction is still sold there first (no inventory risk). Only the rest
   goes to the operator, and only for a token the policy lists.
+* A `refPrice` is used only while it is in line with the token's plain KAS book: at most 4 times its best ask and at
+  least its best bid divided by 4 (a side the book does not have bounds nothing). A reference left behind by a price move,
+  or a unit slip (`per` meant as one whole token instead of base units is `10^decimals` times off), keeps nothing instead
+  of valuing worthless surpluses above the market. Units: `sompi` per `per` BASE units (`"per": "100000000"` for one whole
+  token of 8 decimals).
 * Its value is `refPrice × amount`, or else what the plain resting KAS bids of the token pay for it: best first, each up
   to what it has left in this batch, and each only for an amount its own quantity rules accept (at least its minimum
   fill, or all it has left): a bid that could never take the surplus does not value it, whatever it quotes, so a surplus

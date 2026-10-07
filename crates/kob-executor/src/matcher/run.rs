@@ -249,6 +249,8 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     pub waiting: Option<String>,
     /// The funding of the last step that read it (the metrics keep it while a step reads none).
     pub last_funding: Option<u64>,
+    /// What the surplus-inventory policy used in its current period (`maxFee`, `tokens[].maxAmount`).
+    pub inventory_use: super::planner::InventoryUse,
     /// The node's fee estimate between steps (`crate::fee`).
     pub fee_state: crate::fee::FeeState,
     /// The rates of the last step that planned (the floor before the first).
@@ -357,6 +359,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             reservations: None,
             waiting: None,
             last_funding: None,
+            inventory_use: super::planner::InventoryUse::default(),
         }
     }
 
@@ -577,6 +580,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         excluded.extend(self.quarantined_until.keys().copied());
 
         if self.cfg.roles.matcher {
+            // the inventory policy's budgets of the period (they bound what the tick may keep)
+            let period = self.cfg.engine.planner.inventory.period_daa;
+            self.inventory_use.roll(daa, period);
+            self.cfg.engine.planner.inventory.used = self.inventory_use.clone();
             let inp = TickInput { orders: book.orders.clone(), clock, funding: funding.clone(), excluded: excluded.clone() };
             let report = matcher_tick(&inp, &self.cfg.engine, &self.families, self.signer.as_ref());
             for (id, why) in &report.quarantined {
@@ -650,6 +657,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     unconfirmed: false,
                 };
                 self.send(t, daa, &mut rep).await;
+                if rep.submitted.last() == Some(&p.txid()) {
+                    self.inventory_use.record(&p.plan.kept, p.lowered.built.fee.fee);
+                }
             }
             spent = self.reserved_or_spent();
         }

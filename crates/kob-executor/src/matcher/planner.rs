@@ -6,7 +6,7 @@
 //! settings ([`PlannerConfig`]), the physical limits a transaction is sized against ([`PHYSICAL_TX_BYTES`]) and the cost
 //! estimates ([`est_fee`], [`update_cost`]).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use kob_protocol::family::Family;
 use serde::{Deserialize, Serialize};
@@ -104,6 +104,48 @@ pub struct InventoryToken {
     /// unsellable dust); `min_amount` only raises it (a value below the dust rule changes nothing).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_amount: Option<i64>,
+    /// Most base units of the token kept per period ([`InventoryPolicy::period_daa`]); none: no bound. A batch that would
+    /// keep more than what is left of it keeps none (the surplus goes to the pair ask as without the policy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_amount: Option<i64>,
+}
+
+/// A `refPrice` more than this many times above the best plain KAS ask of its token, or below its best plain bid by the
+/// same factor, is out of line with the book (stale after a price move, or a unit slip: `per` meant as one whole token is
+/// `10^decimals` times off): the token is not kept while that holds.
+pub const REF_PRICE_BAND: i128 = 4;
+
+/// One day at the nominal 10 DAA per second: the default budget period of the inventory policy.
+pub const INVENTORY_PERIOD_DAA: u64 = 864_000;
+
+/// What the inventory policy has used in the current period (kept per token, network fee of the batches that kept a
+/// surplus), recorded by the runner after each tick and read by the planner ([`InventoryPolicy::rule`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InventoryUse {
+    /// DAA score the period started at (None: no period yet).
+    pub since: Option<u64>,
+    pub kept: BTreeMap<[u8; 32], i64>,
+    pub fee: u64,
+}
+
+impl InventoryUse {
+    /// Starts a new period when `period` DAA have passed since the current one began (or none has).
+    pub fn roll(&mut self, daa: u64, period: u64) {
+        if self.since.is_none_or(|s| daa >= s.saturating_add(period.max(1))) {
+            *self = InventoryUse { since: Some(daa), ..InventoryUse::default() };
+        }
+    }
+    /// Records a batch that kept `kept` and paid `fee`.
+    pub fn record(&mut self, kept: &[Kept], fee: u64) {
+        if kept.is_empty() {
+            return;
+        }
+        for k in kept {
+            let e = self.kept.entry(k.token).or_insert(0);
+            *e = e.saturating_add(k.amount.max(0));
+        }
+        self.fee = self.fee.saturating_add(fee);
+    }
 }
 
 /// The surplus-inventory policy (owner decision 2026-10-06, `docs/spec/matcher.md` §3.5): when a batch leaves a token
@@ -127,6 +169,16 @@ pub struct InventoryPolicy {
     /// own terms and never change.
     #[serde(with = "kob_protocol::json::field")]
     pub keep_carrier: u64,
+    /// Most network fee (sompi) the batches that keep a surplus may pay per period; none: no bound. Checked before each
+    /// tick: once it is reached no surplus is kept until the period ends.
+    #[serde(with = "kob_protocol::json::field", skip_serializing_if = "Option::is_none")]
+    pub max_fee: Option<u64>,
+    /// The budget period of `maxFee` and `tokens[].maxAmount`, DAA (default [`INVENTORY_PERIOD_DAA`], one day).
+    #[serde(with = "kob_protocol::json::field")]
+    pub period_daa: u64,
+    /// What the current period has used (kept by the runner, not part of the file).
+    #[serde(skip)]
+    pub used: InventoryUse,
 }
 
 /// Default carrier of a kept surplus's token output (sompi; [`InventoryPolicy::keep_carrier`]): 2 KAS.
@@ -146,7 +198,15 @@ pub const KEEP_CARRIER_MIN: u64 = 50_000_000;
 
 impl Default for InventoryPolicy {
     fn default() -> Self {
-        InventoryPolicy { accept_surplus_tokens: false, haircut_bps: 8_000, tokens: vec![], keep_carrier: KEEP_CARRIER }
+        InventoryPolicy {
+            accept_surplus_tokens: false,
+            haircut_bps: 8_000,
+            tokens: vec![],
+            keep_carrier: KEEP_CARRIER,
+            max_fee: None,
+            period_daa: INVENTORY_PERIOD_DAA,
+            used: InventoryUse::default(),
+        }
     }
 }
 
@@ -159,7 +219,7 @@ impl InventoryPolicy {
         Ok(p)
     }
     /// The policy's own consistency: a haircut of at most 100 %, each token once, a `refPrice` positive, a `minAmount` not
-    /// negative.
+    /// negative, a `maxAmount` positive and not below `minAmount`, a period of at least one DAA.
     pub fn check(&self) -> Result<(), String> {
         if self.haircut_bps > 10_000 {
             return Err(format!("haircutBps {} above 10000", self.haircut_bps));
@@ -182,15 +242,35 @@ impl InventoryPolicy {
             if t.min_amount.is_some_and(|a| a < 0) {
                 return Err(format!("token {id}: minAmount must not be negative"));
             }
+            if let Some(m) = t.max_amount {
+                if m <= 0 {
+                    return Err(format!("token {id}: maxAmount must be positive"));
+                }
+                if t.min_amount.is_some_and(|a| a > m) {
+                    return Err(format!("token {id}: minAmount above maxAmount (nothing could ever be kept)"));
+                }
+            }
+        }
+        if self.period_daa == 0 {
+            return Err("periodDaa must be positive".into());
         }
         Ok(())
     }
-    /// The rule of `token` when the policy is on and lists it.
+    /// The rule of `token` when the policy is on, lists it, and the period's budgets (`maxFee`, the token's `maxAmount`)
+    /// are not used up.
     pub fn rule(&self, token: &[u8; 32]) -> Option<&InventoryToken> {
-        if !self.accept_surplus_tokens {
+        if !self.accept_surplus_tokens || self.max_fee.is_some_and(|m| self.used.fee >= m) {
             return None;
         }
-        self.tokens.iter().find(|t| &t.token == token)
+        let r = self.tokens.iter().find(|t| &t.token == token)?;
+        (self.room(r) > 0).then_some(r)
+    }
+    /// What is left of the token's `maxAmount` this period (`i64::MAX`: no bound).
+    pub fn room(&self, r: &InventoryToken) -> i64 {
+        match r.max_amount {
+            Some(m) => m.saturating_sub(self.used.kept.get(&r.token).copied().unwrap_or(0)).max(0),
+            None => i64::MAX,
+        }
     }
     /// `v` after the haircut (at most 100 %).
     pub fn haircut(&self, v: i128) -> i128 {
@@ -422,5 +502,47 @@ mod inventory_tests {
         let mut twice = p.clone();
         twice.tokens[1].token = t;
         assert!(twice.check().is_err(), "listed twice");
+        assert_eq!(p.period_daa, INVENTORY_PERIOD_DAA);
+        assert!(InventoryPolicy { period_daa: 0, ..p.clone() }.check().is_err(), "a zero period");
+        let mut zero_max = p.clone();
+        zero_max.tokens[0].max_amount = Some(0);
+        assert!(zero_max.check().is_err(), "a zero maxAmount");
+        let mut below = p.clone();
+        below.tokens[0].max_amount = Some(99_999_999);
+        assert!(below.check().is_err(), "maxAmount below minAmount");
+    }
+
+    /// The period budgets: a token's `maxAmount` and the policy's `maxFee`, reset when the period ends.
+    #[test]
+    fn the_period_budgets_stop_keeping_until_the_period_ends() {
+        let doc = r#"{
+          "acceptSurplusTokens": true,
+          "maxFee": "5000000",
+          "periodDaa": "1000",
+          "tokens": [
+            { "token": "7272727272727272727272727272727272727272727272727272727272727272", "maxAmount": 300 },
+            { "token": "7171717171717171717171717171717171717171717171717171717171717171" }
+          ]
+        }"#;
+        let mut p: InventoryPolicy = serde_json::from_str(doc).expect("parses");
+        p.check().expect("consistent");
+        let (a, b) = ([0x72u8; 32], [0x71u8; 32]);
+        let mut used = InventoryUse::default();
+        used.roll(10_000, p.period_daa);
+        used.record(&[Kept { token: a, amount: 200, value: 1 }], 1_000_000);
+        p.used = used.clone();
+        assert_eq!(p.rule(&a).map(|r| p.room(r)), Some(100));
+        used.record(&[Kept { token: a, amount: 100, value: 1 }], 1_000_000);
+        p.used = used.clone();
+        assert!(p.rule(&a).is_none(), "maxAmount reached");
+        assert!(p.rule(&b).is_some(), "another token keeps its own budget");
+        used.record(&[Kept { token: b, amount: 1, value: 1 }], 3_000_000);
+        p.used = used.clone();
+        assert!(p.rule(&b).is_none(), "maxFee reached: nothing is kept");
+        used.roll(10_999, p.period_daa);
+        assert_eq!(used.fee, 5_000_000, "the period is not over");
+        used.roll(11_000, p.period_daa);
+        p.used = used.clone();
+        assert!(p.rule(&a).is_some() && p.rule(&b).is_some(), "a new period");
     }
 }

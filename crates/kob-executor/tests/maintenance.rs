@@ -227,7 +227,7 @@ fn accumulated_surplus_inventory_is_never_sold() {
     // unlisted: sold into the best bid
     let r = run(&input(tokens.clone(), bids.clone(), vec![]), &MaintenanceConfig::default());
     assert_eq!(r.jobs[0].kind, MaintKind::Sell);
-    let listed = InventoryToken { token: token_a(T8), ref_price: None, min_amount: None };
+    let listed = InventoryToken { token: token_a(T8), ref_price: None, min_amount: None, max_amount: None };
     for on in [true, false] {
         let inventory = InventoryPolicy { accept_surplus_tokens: on, tokens: vec![listed.clone()], ..Default::default() };
         let cfg = MaintenanceConfig { inventory, ..Default::default() };

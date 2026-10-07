@@ -98,7 +98,7 @@ fn b_bid(id: u32, price: i64) -> ListedOrder {
 }
 
 fn tusd(min_amount: Option<i64>) -> InventoryToken {
-    InventoryToken { token: TOKEN_B, ref_price: None, min_amount }
+    InventoryToken { token: TOKEN_B, ref_price: None, min_amount, max_amount: None }
 }
 
 /// The KAS of a batch is never negative only because a bid that cannot take the surplus valued it.
@@ -154,7 +154,8 @@ fn a_bid_that_cannot_take_the_surplus_does_not_value_it() {
     assert!(r.prepared.iter().all(|p| p.accounting.profit >= 0));
 
     // (5) the owner's reference price still values the same unit (the owner's own valuation, not a bid's)
-    let rp = InventoryToken { token: TOKEN_B, ref_price: Some(UnitPrice { sompi: 2 * KAS, per: 1 }), min_amount: None };
+    let rp =
+        InventoryToken { token: TOKEN_B, ref_price: Some(UnitPrice { sompi: 2 * KAS, per: 1 }), min_amount: None, max_amount: None };
     let r = run_any(one_unit_crossing(), &policy(vec![rp]));
     assert_eq!(r.prepared.len(), 1, "skipped: {:?} anomalies {:?}", r.skipped, r.anomalies);
     assert_eq!(r.prepared[0].plan.kept.iter().map(|k| (k.token, k.amount)).collect::<Vec<_>>(), vec![(TOKEN_B, 1)]);
@@ -255,11 +256,12 @@ fn operator_token_accounting_matches_the_built_transaction() {
             token: t,
             ref_price: Some(UnitPrice { sompi: 2 * KAS, per: WHOLE as u64 }),
             min_amount: None,
+            max_amount: None,
         };
         let pol = match next(3) {
             0 => policy(vec![
-                InventoryToken { token: ta, ref_price: None, min_amount: Some(0) },
-                InventoryToken { token: tb, ref_price: None, min_amount: Some(0) },
+                InventoryToken { token: ta, ref_price: None, min_amount: Some(0), max_amount: None },
+                InventoryToken { token: tb, ref_price: None, min_amount: Some(0), max_amount: None },
             ]),
             1 => policy(vec![rp(ta), rp(tb)]),
             _ => cfg(),

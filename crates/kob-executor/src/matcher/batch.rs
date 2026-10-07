@@ -94,7 +94,8 @@ use super::candidate::*;
 use super::family::{token_limits, TokenLimits};
 use super::pair::{arm_evidence, trail_evidence, KasTouch, PairEv, PairFillTouch, PairInfo};
 use super::planner::{
-    crosses, est_fee, update_cost, Fill, InventoryPolicy, Kept, Plan, PlanUpdate, PlannerConfig, UpdateKind, KEPT_OUTPUT_BYTES,
+    crosses, est_fee, update_cost, Fill, InventoryPolicy, Kept, Plan, PlanUpdate, PlannerConfig, UnitPrice, UpdateKind,
+    KEPT_OUTPUT_BYTES, REF_PRICE_BAND,
 };
 
 /// Everything one batch plan reads.
@@ -215,6 +216,8 @@ struct Universe {
     surplus_bids: BTreeMap<Market, Vec<usize>>,
     /// The surplus-inventory policy (off: no token is ever kept).
     inv: InventoryPolicy,
+    /// The best plain resting KAS quotes of every market, per base unit (the `refPrice` sanity band).
+    quotes: BTreeMap<(Market, Side), (i128, i128)>,
     /// The netting group of each pair order and whether it sells the group's first token (X).
     net_of: Vec<Option<(usize, bool)>>,
     /// The route bound of every pair order that may net (`i64::MAX`: none): what it may route on top of its netted part
@@ -339,6 +342,7 @@ impl Universe {
                 (pj * di).cmp(&(pi * dj)).then(direct[i].id.cmp(&direct[j].id))
             });
         }
+        let quotes = super::pair::best_quotes(&direct);
         let mut cands = direct;
         let mut twin: Vec<Option<usize>> = vec![None; cands.len()];
         let mut porders = vec![];
@@ -618,6 +622,7 @@ impl Universe {
             nets,
             surplus_bids,
             inv: cfg.inventory.clone(),
+            quotes,
             net_of,
             rcap: vec![],
             by_id,
@@ -625,6 +630,22 @@ impl Universe {
             pair_tries: Cell::new(0),
             net_steps: Cell::new(0),
         }
+    }
+
+    /// Whether a `refPrice` is in line with the plain KAS book of its token: at most [`REF_PRICE_BAND`] times its best ask and
+    /// at least its best bid divided by that factor (a side the book does not have bounds nothing).
+    fn ref_in_line(&self, m: &Market, p: &UnitPrice) -> bool {
+        let (rs, rp) = (p.sompi as i128, p.per as i128);
+        // ref = rs / rp per base unit; a quote is n / d per base unit
+        let above = |(n, d): (i128, i128)| match (rs.checked_mul(d), n.checked_mul(rp).and_then(|x| x.checked_mul(REF_PRICE_BAND))) {
+            (Some(l), Some(r)) => l > r,
+            _ => false,
+        };
+        let below = |(n, d): (i128, i128)| match (rs.checked_mul(d).and_then(|x| x.checked_mul(REF_PRICE_BAND)), n.checked_mul(rp)) {
+            (Some(l), Some(r)) => l < r,
+            _ => false,
+        };
+        !self.quotes.get(&(*m, Side::Ask)).is_some_and(|q| above(*q)) && !self.quotes.get(&(*m, Side::Bid)).is_some_and(|q| below(*q))
     }
 
     fn role(&self, i: usize) -> Option<PairRole> {
@@ -1217,8 +1238,12 @@ impl<'u> Alloc<'u> {
         if limit.is_some_and(|cap| q as i128 > cap as i128) {
             return 0;
         }
+        // the period's budget of the token: a batch keeps all of the surplus or none
+        if q > u.inv.room(r) {
+            return 0;
+        }
         if let Some(p) = r.ref_price {
-            if r.min_amount.is_some_and(|a| q < a) {
+            if r.min_amount.is_some_and(|a| q < a) || !u.ref_in_line(m, &p) {
                 return 0;
             }
             return u.inv.haircut(p.value(q));

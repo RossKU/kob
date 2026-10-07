@@ -216,7 +216,7 @@ fn policy(tokens: Vec<InventoryToken>) -> EngineConfig {
 }
 
 fn tusd(min_amount: Option<i64>, ref_price: Option<UnitPrice>) -> InventoryToken {
-    InventoryToken { token: TOKEN_B, ref_price, min_amount }
+    InventoryToken { token: TOKEN_B, ref_price, min_amount, max_amount: None }
 }
 
 /// A tick without `check_pair`'s no-inventory rule: every transaction engine-validated, no anomaly, and profitable once the
@@ -316,7 +316,7 @@ fn a_kept_surplus_pays_a_zero_tip_crossed_match() {
 fn an_unlisted_token_is_never_kept() {
     let (mut v, ..) = crossed();
     v.push(kas_bid(200, TOKEN_B, bps(KUSD, -2), 6 * S8));
-    let only_tbtc = InventoryToken { token: TOKEN, ref_price: None, min_amount: Some(0) };
+    let only_tbtc = InventoryToken { token: TOKEN, ref_price: None, min_amount: Some(0), max_amount: None };
     assert!(run_keep(v.clone(), &policy(vec![only_tbtc])).prepared.is_empty(), "TUSD not listed");
     let mut off = policy(vec![tusd(Some(0), None)]);
     off.planner.inventory.accept_surplus_tokens = false;
@@ -415,7 +415,12 @@ fn the_kept_output_carrier_adds_no_fee() {
             l_pair(2, pa, pb, pbid(4, pa, pb, n, RATE * 11 / 10, 0), 1_000),
         ];
         let tb = token_b(pa, pb);
-        let pol = policy(vec![InventoryToken { token: tb, ref_price: Some(UnitPrice { sompi: 10 * KAS, per: 1 }), min_amount: None }]);
+        let pol = policy(vec![InventoryToken {
+            token: tb,
+            ref_price: Some(UnitPrice { sompi: 10 * KAS, per: 1 }),
+            min_amount: None,
+            max_amount: None,
+        }]);
         cases.push((format!("{} / {} netting 1 x 1", pa.name(), pb.name()), v, pol, tb));
     }
     let mut smallest_fee_mass = u64::MAX;
@@ -467,7 +472,42 @@ fn the_keep_carrier_has_a_floor() {
         token: token_b(k, k),
         ref_price: Some(UnitPrice { sompi: 10 * KAS, per: 1 }),
         min_amount: None,
+        max_amount: None,
     }]);
     let at = keep_at(&v, &pol, KEEP_CARRIER_MIN);
     assert!(at.validation.is_some());
+}
+
+/// The policy's bounds: a `refPrice` far out of line with the token's KAS book (stale, or `per` meant as one whole token) is
+/// not used, a token's `maxAmount` per period bounds what is kept, and once `maxFee` is spent in the period nothing is kept.
+#[test]
+fn a_kept_surplus_stays_within_the_period_budget_and_a_ref_price_in_line_with_the_book() {
+    use kob_executor::matcher::planner::InventoryUse;
+    let (mut v, _, _, surplus) = crossed();
+    v.push(kas_bid(200, TOKEN_B, bps(KUSD, -2), 6 * S8));
+    v.push(kas_ask(201, TOKEN_B, bps(KUSD, 2), 6 * S8));
+    let rp = UnitPrice { sompi: 2_300_000_000, per: S8 as u64 };
+    let kept = |cfg: &EngineConfig| run_keep(v.clone(), cfg).prepared.iter().map(|p| p.plan.kept.len()).sum::<usize>();
+    assert_eq!(kept(&policy(vec![tusd(None, Some(rp))])), 1, "a reference price in line with the book");
+    // the same price per base unit read as per whole token: 10^8 times off
+    let slip = UnitPrice { sompi: 2_300_000_000, per: 1 };
+    assert_eq!(kept(&policy(vec![tusd(None, Some(slip))])), 0, "a reference price far above the best ask");
+    let stale = UnitPrice { sompi: 2_300_000_000, per: 100 * S8 as u64 };
+    assert_eq!(kept(&policy(vec![tusd(None, Some(stale))])), 0, "a reference price far below the best bid");
+    // maxAmount: what is left of it this period must hold the whole surplus
+    let capped = |max: i64, used: i64| {
+        let mut c = policy(vec![InventoryToken { max_amount: Some(max), ..tusd(None, Some(rp)) }]);
+        c.planner.inventory.used.kept.insert(TOKEN_B, used);
+        c
+    };
+    assert_eq!(kept(&capped(surplus, 0)), 1);
+    assert_eq!(kept(&capped(surplus - 1, 0)), 0, "more than maxAmount");
+    assert_eq!(kept(&capped(surplus, 1)), 0, "more than what is left of maxAmount");
+    // maxFee spent: nothing kept until the period ends
+    let mut c = policy(vec![tusd(None, Some(rp))]);
+    c.planner.inventory.max_fee = Some(10_000_000);
+    c.planner.inventory.used = InventoryUse { since: Some(1), kept: Default::default(), fee: 10_000_000 };
+    assert_eq!(kept(&c), 0, "the fee budget is spent");
+    c.planner.inventory.used.fee = 9_999_999;
+    assert_eq!(kept(&c), 1);
 }
