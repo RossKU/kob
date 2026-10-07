@@ -1168,6 +1168,10 @@ pub enum GenesisError {
     /// A genesis output whose state does not decode, or a negative / overflowing amount.
     #[error("genesis output {0}: bad token state: {1}")]
     BadState(u32, String),
+    /// A genesis output whose extension commitment is not the token's (the one named, or the group's first output's): a
+    /// second class of token under the same covenant id, not fungible with the first and not part of its supply.
+    #[error("genesis output {0}: extension commitment {1} is not the token's ({2})")]
+    ExtensionCommitment(u32, String, String),
 }
 
 /// Checks EVERY output of a token's genesis group against its pinned program: the step behind
@@ -1180,13 +1184,29 @@ pub enum GenesisError {
 /// show it. This function recomputes the covenant id from `authorizing_outpoint` (the previous outpoint of the input that
 /// authorised the group) and `outputs` (so `outputs` must be the complete group), then requires every output to be a P2SH
 /// of a revealed redeem script that is an instance of `template` (prefix, state span, suffix; template hash) with a
-/// decodable state. Returns what it found (record `genesis_verified: true` for the token).
+/// decodable state, all of one extension commitment (fungibility holds only among equal commitments: a second commitment
+/// in the genesis group is a second class of token under the same covenant id). Returns what it found (record
+/// `genesis_verified: true` for the token). [`verify_genesis_of`] also names the commitment the token must carry.
 pub fn verify_genesis(
     template: &Template,
     covenant_id: &str,
     genesis_txid: &str,
     authorizing_outpoint: ([u8; 32], u32),
     outputs: &[GenesisOutput],
+) -> Result<GenesisReport, GenesisError> {
+    verify_genesis_of(template, covenant_id, genesis_txid, authorizing_outpoint, outputs, None)
+}
+
+/// [`verify_genesis`] for a token whose extension commitment is known (the registry entry's `extension_commitment`; all
+/// zero for KRON, which has none): every output of the group must carry exactly `extension_commitment`. `None`: every
+/// output must carry the first output's.
+pub fn verify_genesis_of(
+    template: &Template,
+    covenant_id: &str,
+    genesis_txid: &str,
+    authorizing_outpoint: ([u8; 32], u32),
+    outputs: &[GenesisOutput],
+    extension_commitment: Option<[u8; 32]>,
 ) -> Result<GenesisReport, GenesisError> {
     use kaspa_consensus_core::hashing::covenant_id::covenant_id as cov_id_of;
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint, TransactionOutput};
@@ -1214,6 +1234,8 @@ pub fn verify_genesis(
     }
     let mut supply: i64 = 0;
     let mut minter_outputs = vec![];
+    // the token's one extension commitment: the one named, else the first output's
+    let mut ext = extension_commitment;
     for o in outputs {
         let redeem = o.redeem_script.as_ref().ok_or(GenesisError::Unrevealed(o.index))?;
         if crate::script::p2sh_spk(redeem) != o.script_public_key {
@@ -1223,6 +1245,10 @@ pub fn verify_genesis(
         let st = crate::state::TokenState::decode_with(program, state).map_err(|e| GenesisError::BadState(o.index, e.to_string()))?;
         if st.amount() < 0 {
             return Err(GenesisError::BadState(o.index, "negative amount".into()));
+        }
+        let want = *ext.get_or_insert(st.extension());
+        if st.extension() != want {
+            return Err(GenesisError::ExtensionCommitment(o.index, crate::json::to_hex(&st.extension()), crate::json::to_hex(&want)));
         }
         if let crate::state::TokenState::Kron(k) = &st {
             if k.is_minter != 0 {

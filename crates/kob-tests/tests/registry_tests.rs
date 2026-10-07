@@ -234,3 +234,60 @@ fn genesis_check_refuses_contaminated_genesis() {
         assert!(matches!(verify_genesis(other, &id_of(&clean), &txid, outpoint, &clean), Err(GenesisError::NotTemplate(0, _))));
     }
 }
+
+/// One token, one class: a KCC-20 identity is (covenant id, template, extension commitment) and fungibility holds only among
+/// equal commitments, so a genesis group whose outputs carry two commitments holds a second class under the token's
+/// covenant id. `verify_genesis` refuses it (the second class is not counted in the supply), and `verify_genesis_of` refuses
+/// a group whose one commitment is not the one the registry entry names.
+#[test]
+fn genesis_check_refuses_a_second_extension_commitment() {
+    use kaspa_consensus_core::hashing::covenant_id::covenant_id;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint, TransactionOutput};
+    use kaspa_txscript::pay_to_script_hash_script;
+    use kob_protocol::registry::{verify_genesis, verify_genesis_of, GenesisError, GenesisOutput};
+    use kob_protocol::state::TokenState;
+
+    const EXT: [u8; 32] = [0x11; 32];
+    const OTHER_EXT: [u8; 32] = [0xdd; 32];
+    let r = Registry::default_registry();
+    let tpl = r.template("kcc20-ref-8x8").unwrap();
+    let prog =
+        kob_protocol::artifacts::token_template_by_hash(&kob_protocol::registry::parse_hex32(&tpl.template_hash).unwrap()).unwrap();
+    let outpoint = ([0x99; 32], 0u32);
+    let txid = "ab".repeat(32);
+    let output = |index: u32, amount: i64, ext: [u8; 32]| {
+        let redeem = prog.redeem(&TokenState::user(Family::Kcc20, amount, [0x11; 32], ext).encode());
+        GenesisOutput { index, value: 100_000_000, script_public_key: pay_to_script_hash_script(&redeem), redeem_script: Some(redeem) }
+    };
+    let id_of = |outs: &[GenesisOutput]| -> String {
+        let op = TransactionOutpoint { transaction_id: TransactionId::from_bytes(outpoint.0), index: outpoint.1 };
+        let tx: Vec<TransactionOutput> = outs
+            .iter()
+            .map(|o| TransactionOutput { value: o.value, script_public_key: o.script_public_key.clone(), covenant: None })
+            .collect();
+        hexs(&covenant_id(op, outs.iter().zip(&tx).map(|(o, t)| (o.index, t))).as_bytes())
+    };
+
+    // two classes in one group: refused, whichever comes first
+    let two = vec![output(0, 1_000, EXT), output(1, 1_000_000_000, OTHER_EXT)];
+    let res = verify_genesis(tpl, &id_of(&two), &txid, outpoint, &two);
+    assert_eq!(res, Err(GenesisError::ExtensionCommitment(1, hexs(&OTHER_EXT), hexs(&EXT))));
+    let swapped = vec![output(0, 1_000_000_000, OTHER_EXT), output(1, 1_000, EXT)];
+    assert!(matches!(verify_genesis(tpl, &id_of(&swapped), &txid, outpoint, &swapped), Err(GenesisError::ExtensionCommitment(1, ..))));
+    // and with the registry's commitment named
+    assert!(matches!(
+        verify_genesis_of(tpl, &id_of(&two), &txid, outpoint, &two, Some(EXT)),
+        Err(GenesisError::ExtensionCommitment(1, ..))
+    ));
+
+    // one class: accepted, and its whole supply counted
+    let one = vec![output(0, 1_000, EXT), output(1, 2_000, EXT)];
+    let rec = verify_genesis(tpl, &id_of(&one), &txid, outpoint, &one).expect("one class");
+    assert_eq!((rec.outputs, rec.supply), (2, 3_000));
+    assert_eq!(verify_genesis_of(tpl, &id_of(&one), &txid, outpoint, &one, Some(EXT)), Ok(rec));
+    // one class, but not the one the registry entry names
+    assert!(matches!(
+        verify_genesis_of(tpl, &id_of(&one), &txid, outpoint, &one, Some(OTHER_EXT)),
+        Err(GenesisError::ExtensionCommitment(0, ..))
+    ));
+}

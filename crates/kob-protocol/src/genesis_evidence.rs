@@ -8,7 +8,8 @@
 //!   signature scripts, payload digest separately). A wrong field, including the `sequence` / `lock_time` / `gas` values an
 //!   explorer does not publish, fails the check.
 //! * The genesis group (outputs bound to the token's covenant id) and its authorising input's previous outpoint feed
-//!   [`verify_genesis`], which recomputes the covenant id: so the outputs are exactly the token's complete genesis group.
+//!   [`verify_genesis_of`], which recomputes the covenant id: so the outputs are exactly the token's complete genesis group,
+//!   and every output must carry the registry entry's extension commitment (a second class under the same id is refused).
 //! * Each redeem script (revealed by the spend of the output, or reconstructed for an unspent output) is checked against its
 //!   P2SH script public key, then decoded as an instance of the token's pinned program.
 //!
@@ -26,7 +27,7 @@ use kaspa_consensus_core::tx::{
 };
 use kaspa_consensus_core::Hash;
 
-use crate::registry::{parse_hex32, verify_genesis, Family, GenesisError, GenesisOutput, GenesisRecord, Registry};
+use crate::registry::{parse_hex32, verify_genesis_of, Family, GenesisError, GenesisOutput, GenesisRecord, Registry};
 
 /// The evidence file.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -357,7 +358,13 @@ fn check_token(reg: &Registry, ev: &TokenEvidence, checked_at_daa: u64) -> Resul
             redeem_script: redeem,
         });
     }
-    let report = verify_genesis(tpl, &ev.covenant_id, &g.txid, outpoint, &outs).map_err(|e: GenesisError| e.to_string())?;
+    // every output must be of the token's one class: the registry entry's extension commitment (KRON: none, all zero)
+    let ext = match tok.extension_commitment.as_deref() {
+        Some(h) => hash32(h, "the registry's extension commitment")?,
+        None => [0; 32],
+    };
+    let report =
+        verify_genesis_of(tpl, &ev.covenant_id, &g.txid, outpoint, &outs, Some(ext)).map_err(|e: GenesisError| e.to_string())?;
 
     // 4. C2: live mint authority
     let live_minters = if report.minter_outputs.is_empty() && tpl.family == Family::Kron {
