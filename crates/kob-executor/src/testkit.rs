@@ -1387,7 +1387,7 @@ impl Harness {
         let mut out = vec![];
         for _ in 0..500 {
             let o = self.follower.step().await;
-            let stop = matches!(o, StepOutcome::Idle | StepOutcome::Gap(_) | StepOutcome::Retry(_));
+            let stop = matches!(o, StepOutcome::Idle | StepOutcome::Gap(_) | StepOutcome::Halted(_) | StepOutcome::Retry(_));
             out.push(o);
             if stop {
                 return out;

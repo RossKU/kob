@@ -25,7 +25,9 @@
 //! is appended and fsynced BEFORE the database transaction commits, and the database stores
 //! `records_next_n`. After a crash the log can hold one frame the database never committed;
 //! [`RecordLog::open`] cuts it off. The reverse (database ahead of the log) means the log was lost and is
-//! reported as an error.
+//! reported as an error. A failed append (full disk, I/O error) is rolled back to the last complete frame before the
+//! error is returned, so nothing is ever appended after a partial frame; an incomplete frame with complete frames after
+//! it is corruption (refused), only an incomplete last frame is a torn tail (removed).
 
 use super::record::{DecodeCtx, DecodeStats, TemplateTable, TxRecord};
 use crate::hex::Hash32;
@@ -417,6 +419,10 @@ pub enum RecordLogError {
     Corrupt { n: u64, reason: String },
     #[error("record log ends at frame {log_next} but the database expects {db_next}: the log was lost or replaced")]
     BehindDatabase { log_next: u64, db_next: u64 },
+    /// An append or a truncation failed and the segment could not be put back to its last complete frame: nothing more is
+    /// written until a restart, whose `open` repairs the log (a torn last frame) or refuses it.
+    #[error("record log is not written to any more until a restart: {0}")]
+    Stopped(String),
 }
 
 const ZERO: [u8; 32] = [0u8; 32];
@@ -499,6 +505,30 @@ fn read_frame(r: &mut BufReader<File>) -> std::io::Result<FrameRead> {
     Ok(FrameRead::Frame { body, chain, total: 4 + len as u64 + 32 })
 }
 
+/// Whether the bytes of `path` after `offset` (an incomplete frame) hold a complete frame that continues the chain from
+/// `prev`. A crash during an append leaves nothing after the incomplete frame; a complete, chained frame after it means
+/// the incomplete one sits in the middle of the log, and cutting there would drop good frames.
+fn complete_frame_follows(path: &Path, offset: u64, prev: &[u8; 32]) -> std::io::Result<bool> {
+    let mut f = File::open(path)?;
+    std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(offset))?;
+    let mut tail = Vec::new();
+    f.read_to_end(&mut tail)?;
+    for k in 1..tail.len() {
+        let rest = &tail[k..];
+        if rest.len() < 4 + 1 + 32 {
+            break;
+        }
+        let len = u32::from_le_bytes(rest[..4].try_into().expect("4")) as usize;
+        if len == 0 || len > rest.len() - 36 {
+            continue;
+        }
+        if chain_hash(prev, &rest[4..4 + len]) == rest[4 + len..4 + len + 32] {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Where a scan stopped.
 struct ScanEnd {
     /// Number of frames accepted.
@@ -529,6 +559,14 @@ fn scan(
                 FrameRead::Torn => {
                     if si != segs.len() - 1 {
                         return Err(RecordLogError::Corrupt { n, reason: "incomplete frame before the end of the log".into() });
+                    }
+                    if complete_frame_follows(path, offset, &prev)? {
+                        return Err(RecordLogError::Corrupt {
+                            n,
+                            reason: "incomplete frame followed by complete frames (a write that failed part way, then \
+                                     later appends); the log is left as it is"
+                                .into(),
+                        });
                     }
                     return Ok(ScanEnd { frames: n, last_chain: prev, cut: Some((si, offset)), torn: true });
                 }
@@ -566,9 +604,14 @@ pub struct RecordLog {
     dir: PathBuf,
     segment_bytes: u64,
     file: File,
+    /// The segment `file` appends to.
+    seg_path: PathBuf,
+    /// Bytes of complete frames in the current segment.
     seg_len: u64,
     next_n: u64,
     last_chain: [u8; 32],
+    /// Set when a failed append or truncation could not be undone: every later write is refused.
+    stopped: Option<String>,
 }
 
 impl RecordLog {
@@ -606,7 +649,16 @@ impl RecordLog {
         };
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         Ok((
-            RecordLog { dir: dir.to_path_buf(), segment_bytes, file, seg_len, next_n: total_frames, last_chain: end.last_chain },
+            RecordLog {
+                dir: dir.to_path_buf(),
+                segment_bytes,
+                file,
+                seg_path: path,
+                seg_len,
+                next_n: total_frames,
+                last_chain: end.last_chain,
+                stopped: None,
+            },
             report,
         ))
     }
@@ -622,12 +674,20 @@ impl RecordLog {
 
     /// Append one frame body as it is (tests and tools write frames of other formats with it). Returns the frame number
     /// and size.
+    ///
+    /// A failed write or fsync is rolled back: the segment is cut back to its length before the append, so the next
+    /// append starts right after the last complete frame. When even that fails, the log refuses every later write
+    /// ([`RecordLogError::Stopped`]).
     #[doc(hidden)]
     pub fn append_body(&mut self, body: &[u8]) -> Result<(u64, u64), RecordLogError> {
+        if let Some(why) = &self.stopped {
+            return Err(RecordLogError::Stopped(why.clone()));
+        }
         if self.seg_len >= self.segment_bytes && self.seg_len > 0 {
             self.file.sync_all()?;
             let path = self.dir.join(segment_name(self.next_n));
-            self.file = OpenOptions::new().create(true).append(true).open(path)?;
+            self.file = OpenOptions::new().create(true).append(true).open(&path)?;
+            self.seg_path = path;
             self.seg_len = 0;
         }
         let n = self.next_n;
@@ -636,19 +696,59 @@ impl RecordLog {
         frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
         frame.extend_from_slice(body);
         frame.extend_from_slice(&chain);
-        self.file.write_all(&frame)?;
-        self.file.sync_data()?;
+        if let Err(e) = self.file.write_all(&frame).and_then(|()| self.file.sync_data()) {
+            return Err(self.roll_back(e));
+        }
         self.seg_len += frame.len() as u64;
         self.last_chain = chain;
         self.next_n += 1;
         Ok((n, frame.len() as u64))
     }
 
-    /// Discard frames `>= n` (a commit failed after the append). Only the newest frames can be cut.
+    /// Cut the current segment back to its last complete frame after a failed append. Returns the error to report: the
+    /// append's own when the cut succeeded; [`RecordLogError::Stopped`] when it did not (the log then refuses every later
+    /// write).
+    fn roll_back(&mut self, e: std::io::Error) -> RecordLogError {
+        let undo = OpenOptions::new().write(true).open(&self.seg_path).and_then(|f| {
+            f.set_len(self.seg_len)?;
+            f.sync_all()
+        });
+        match undo {
+            Ok(()) => RecordLogError::Io(e),
+            Err(u) => {
+                let why = format!(
+                    "appending frame {} to {} failed ({e}) and cutting the partial frame off failed too ({u})",
+                    self.next_n,
+                    self.seg_path.display()
+                );
+                self.stopped = Some(why.clone());
+                RecordLogError::Stopped(why)
+            }
+        }
+    }
+
+    /// Whether a failed write could not be undone (every later write is refused until a restart).
+    pub fn is_stopped(&self) -> bool {
+        self.stopped.is_some()
+    }
+
+    /// Discard frames `>= n` (a commit failed after the append). Only the newest frames can be cut. When the cut fails,
+    /// the log refuses every later write ([`RecordLogError::Stopped`]); the next start's `open` cuts the uncommitted frame.
     pub fn truncate_to(&mut self, n: u64) -> Result<(), RecordLogError> {
+        if let Some(why) = &self.stopped {
+            return Err(RecordLogError::Stopped(why.clone()));
+        }
         if n >= self.next_n {
             return Ok(());
         }
+        self.truncate_inner(n).map_err(|e| {
+            let why = format!("discarding record-log frames from {n} on failed: {e}");
+            self.stopped = Some(why.clone());
+            RecordLogError::Stopped(why)
+        })
+    }
+
+    fn truncate_inner(&mut self, n: u64) -> Result<(), RecordLogError> {
         let segs = list_segments(&self.dir)?;
         let end = scan(&segs, |k, _| Ok(k >= n))?;
         if let Some((si, offset)) = end.cut {
@@ -659,6 +759,7 @@ impl RecordLog {
                 std::fs::remove_file(p)?;
             }
             self.file = OpenOptions::new().append(true).open(&segs[si].1)?;
+            self.seg_path = segs[si].1.clone();
             self.seg_len = offset;
         }
         self.next_n = end.frames;
@@ -913,6 +1014,39 @@ mod tests {
         assert!(rep.torn_tail_removed);
         assert_eq!(log.next_n(), 2);
         assert!(!read_all(d.path()).unwrap().torn);
+    }
+
+    /// A partial frame (a write that failed part way) with complete, chained frames after it is not a torn tail: `open` and
+    /// `read_all` refuse the log and leave every byte of it in place, whether the partial frame's length runs past the end
+    /// of the file or into the frames after it.
+    #[test]
+    fn an_incomplete_frame_followed_by_complete_frames_is_refused_and_kept() {
+        for declared in [3_010u32, 12_000, 1 << 20] {
+            let d = tempfile::tempdir().unwrap();
+            let (mut log, _) = RecordLog::open(d.path(), 1 << 20, 0).unwrap();
+            log.append(&batch(0), 0).unwrap();
+            let prev = log.last_chain;
+            drop(log);
+            let seg = segment_paths(d.path()).unwrap().pop().unwrap();
+            let mut bytes = std::fs::read(&seg).unwrap();
+            // the partial frame: its length, then only part of its body
+            bytes.extend_from_slice(&declared.to_le_bytes());
+            bytes.extend_from_slice(&[7u8; 3000]);
+            // two complete frames chained from the last complete one
+            let mut chain = prev;
+            for i in 1..3u8 {
+                let body = batch(i).encode(0);
+                chain = chain_hash(&chain, &body);
+                bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
+                bytes.extend_from_slice(&body);
+                bytes.extend_from_slice(&chain);
+            }
+            std::fs::write(&seg, &bytes).unwrap();
+            let r = RecordLog::open(d.path(), 1 << 20, 3);
+            assert!(matches!(r, Err(RecordLogError::Corrupt { n: 1, .. })), "{declared}: {:?}", r.err());
+            assert!(matches!(read_all(d.path()), Err(RecordLogError::Corrupt { n: 1, .. })));
+            assert_eq!(std::fs::read(&seg).unwrap(), bytes, "{declared}: the log is left as it was");
+        }
     }
 
     #[test]

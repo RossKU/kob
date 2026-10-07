@@ -1397,6 +1397,14 @@ the log can hold one frame the database never committed; `open` cuts it off and 
 of the log the log was lost; the indexer refuses to start rather than silently continue without its
 rebuild source. An empty database next to a populated log is refused as well (use `replay`).
 
+A write to the record log that fails while running (a full disk, an I/O error) is rolled back: the segment is cut back
+to its last complete frame and the database transaction is not committed. The follower then stops (`/v1/health` state
+`stopped`, the error in `last_error`, an `indexer halted: record log write failed` line in the log) and appends nothing
+more; the API keeps serving the last committed state. Free space (or fix the disk) and restart. If even the cut fails,
+the log refuses every later write in that process, and the next start's `open` removes the torn last frame. An
+incomplete frame that is followed by complete frames is never cut: `open` and `replay` refuse with `frame N is corrupt:
+incomplete frame followed by complete frames` and leave the log untouched (restore the segment from a backup).
+
 #### 7.3 The node forgot the cursor (reset, resync, or a reorged-out block that was pruned)
 
 `cannot find header`: the follower walks the stored chain blocks (the reorg window) back to the

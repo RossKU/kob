@@ -421,7 +421,11 @@ impl Ingest {
         }
         if let Err(e) = tx.commit() {
             if let (Some(n), Some(log)) = (log_n, self.log.as_mut()) {
-                let _ = log.truncate_to(n);
+                if let Err(t) = log.truncate_to(n) {
+                    // the log keeps a frame the database never committed: no further append may follow it
+                    tracing::error!(commit = %e, "database commit failed after the record-log append");
+                    return Err(IngestError::Log(t));
+                }
             }
             return Err(IngestError::Db(e.into()));
         }

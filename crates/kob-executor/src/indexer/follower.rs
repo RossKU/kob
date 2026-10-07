@@ -6,7 +6,9 @@
 //!   block the node still knows, revert everything above it, and continue from there. If none is known,
 //!   or the node says `the queried hash does not have retention root on its chain`, the downtime
 //!   exceeded the node's retention: state `gap`, no further progress, operator bootstrap (see docs);
-//! * a `removed` list that contradicts the stored chain: state `gap` (a different node or a bug; never guess).
+//! * a `removed` list that contradicts the stored chain: state `gap` (a different node or a bug; never guess);
+//! * a record-log write that failed (full disk, I/O error; the append is rolled back): state `stopped`, nothing more is
+//!   appended until the operator restarts.
 //!
 //! Batch size: every request is bounded to a window of blue score ahead of the cursor (`rpc::window`), so
 //! a follower that fell behind under a transaction flood pages through the backlog in batches it can
@@ -111,6 +113,9 @@ pub enum StepOutcome {
     Retry(String),
     /// Unrecoverable without operator action.
     Gap(String),
+    /// Writing the record log failed (a full disk, an I/O error): the follower stops and appends nothing more until the
+    /// operator has fixed the cause and restarted (the restart's `open` checks the log).
+    Halted(String),
 }
 
 /// How a batch about to be committed was fetched.
@@ -220,6 +225,13 @@ impl<S: ChainSource> Follower<S> {
                 h.last_error = Some(e);
             }
         });
+    }
+
+    /// A record-log write failed: stop following (state `stopped`, the reason in `last_error`).
+    fn halt(&self, e: &IngestError) -> StepOutcome {
+        let msg = format!("record log write failed, the follower stopped (free space or fix the disk, then restart): {e}");
+        self.set_state(FollowerState::Stopped, Some(msg.clone()));
+        StepOutcome::Halted(msg)
     }
 
     async fn ensure_cursor(&self) -> Result<Cursor, StepOutcome> {
@@ -634,6 +646,7 @@ impl<S: ChainSource> Follower<S> {
                 });
                 StepOutcome::Gap(msg)
             }
+            Err(e @ IngestError::Log(_)) => self.halt(&e),
             Err(e) => {
                 let msg = format!("commit failed: {e}");
                 self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
@@ -707,6 +720,7 @@ impl<S: ChainSource> Follower<S> {
                     }
                     StepOutcome::Rewound { blocks: a.reverted_rows_blocks }
                 }
+                Err(e @ IngestError::Log(_)) => self.halt(&e),
                 Err(e) => StepOutcome::Retry(format!("rewind failed: {e}")),
             };
         }
@@ -749,9 +763,13 @@ impl<S: ChainSource> Follower<S> {
                     tracing::error!("indexer halted: {r}. See docs/ops/executor.md (Part B, 7.4).");
                     Duration::from_secs(5)
                 }
+                StepOutcome::Halted(r) => {
+                    tracing::error!("indexer halted: {r}. See docs/ops/executor.md (Part B, 8).");
+                    Duration::from_secs(5)
+                }
             };
             self.health.update(|h| h.consecutive_failures = failures);
-            if let StepOutcome::Gap(_) = outcome {
+            if let StepOutcome::Gap(_) | StepOutcome::Halted(_) = outcome {
                 // Stay halted: do not poll the node again until the operator restarts after bootstrapping.
                 let _ = shutdown.changed().await;
                 break;
