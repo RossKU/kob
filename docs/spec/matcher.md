@@ -615,13 +615,19 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   larger of the order's own minimum fill and 25% of its amount (`kob_protocol::defaults::default_min_touch`,
   `DEFAULT_MIN_TOUCH_BPS`). A small stop (at most four minimum fills) keeps its minimum fill; a large one is armed only by
   a print of at least a quarter of its size, so the quote that arms it must rest exposed with that much, not with one
-  minimum fill (10 KAS worth) whatever the stop's size. An if-done exit (it holds one entry fill of a size not known at
-  placement) defaults to its own minimum fill. The default is only the wallet's: the order ticket offers the presets
+  minimum fill (10 KAS worth) whatever the stop's size. An if-done exit holds one entry fill of a size not known at
+  placement, at most the entry's amount: its default is computed from the entry's amount (the stop-loss of a bracket is
+  armed only by a print of at least a quarter of the position it protects). The default is only the wallet's: the order ticket offers the presets
   min fill / 25% / 50% / 100% of the order's own amount (rounded up to a base unit, at least 1) plus a custom amount
   (§10.6), and the state's `minTouch` is whatever the user chose. The trade-off: a
   smaller threshold triggers sooner but is easier to hunt; 100% is the strongest protection against stop
   hunting, because a hunter must expose at least the size of the order beyond its stop, but a large stop
   may trigger later in a thin market.
+- What the threshold does not do: the evidence is a fill, and both of its sides may belong to one party (its own resting
+  order filled by its own order, through any matcher). A threshold raises the capital that party must hold for the rest
+  time R (a quarter of the stop's size by default, exposed to every matcher at the trigger price), not its cost (the
+  fees of one fill). The covenants cannot require the evidence's counterparty to be another party: keys are free, and
+  the batch's counterparties are not tied to a maker key. A user who needs more chooses a larger threshold (50 %, 100 %).
 - Once armed, a stop is only a limit bounded by its band (§2.1). A quote placed beyond the stop to
   trigger it must rest there for R, open to every matcher, before its fill counts; the threshold
   sets how much of it must trade.

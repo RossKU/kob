@@ -62,7 +62,7 @@ describe('IFD buy-first (KobIfdBid -> KobCondAsk exit)', () => {
     expect(plan.cond!.repeat).toBeNull();
   });
 
-  it('a stop-loss exit: the sell stop leg with the wallet defaults; its trigger threshold is the exit minimum fill', () => {
+  it('a stop-loss exit: the sell stop leg with the wallet defaults; its trigger threshold is a quarter of the entry amount', () => {
     const env = makeEnv();
     const { plan } = planOk(env, buyFirst({ exit: { stop: 200_000_000n } }));
     expect(askState(plan.states[1]!)).toMatchObject({
@@ -75,9 +75,12 @@ describe('IFD buy-first (KobIfdBid -> KobCondAsk exit)', () => {
 
   it('the exit minimum fill and trigger threshold: defaults and explicit values', () => {
     const env = makeEnv();
-    // a large order: the 10-KAS amount at the 2 KAS stop (5 tokens) is below the entry minimum fill (25 tokens)
+    // a large order: the 10-KAS amount at the 2 KAS stop (5 tokens) is below the entry minimum fill (25 tokens); the
+    // exit's trigger threshold is a quarter of the entry's amount (25 tokens), not its own minimum fill: one print of 5
+    // tokens does not arm the stop-loss of a 100-token position
     const big = planOk(env, buyFirst({ amount: 100n * TOK, exit: { stop: 200_000_000n } }));
-    expect(askState(big.plan.states[1]!)).toMatchObject({ minFill: '5000', minTouch: '5000' });
+    expect(askState(big.plan.states[1]!)).toMatchObject({ minFill: '5000', minTouch: '25000' });
+    expect(BigInt(askState(big.plan.states[1]!).minTouch)).toBe(env.kob.defaultMinTouch(5_000n, 100n * TOK));
     expect(BigInt(askState(big.plan.states[1]!).minFill)).toBe(env.kob.defaultMinFill(100n * TOK, 200_000_000n, SCALE));
     const exp = planOk(env, buyFirst({ exit: { stop: 200_000_000n, minFill: 700n, minTouch: 10n * TOK } }));
     expect(askState(exp.plan.states[1]!)).toMatchObject({ minFill: '700', minTouch: '10000' });

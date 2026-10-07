@@ -87,6 +87,8 @@ describe.each(combos)('KobIfdPair on %s', (_name, mkA, mkB) => {
     expect(BigInt(e.custody)).toBe(K.ifdPairBCustodyNeeded(p.states[0]));
     const committed = K.ifdPairExit(p.states[0]).state as CondPairState;
     expect(committed).toMatchObject({ side: '2', sCovId: b.covenantId, tCovId: a.covenantId, tpPrice: '1399', stopPrice: '1700', slipBps: '300', keeperTip: String(keeperTip) });
+    // the exit's trigger threshold scales with the entry's amount (at most what one exit holds), not its own minimum fill
+    expect(BigInt(committed.minTouch)).toBe(K.defaultMinTouch(BigInt(committed.minFill), amount));
     const proceeds = ceilQ(amount, 1_599n, a.scale);
     const pre = ceilQ(amount, prefund, a.scale);
     expect(exitOf(p)).toMatchObject({ amountLeft: String(amount), custody: String(proceeds + pre) });

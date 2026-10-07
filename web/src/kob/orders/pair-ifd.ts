@@ -103,7 +103,8 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
   const mergeTip = repeat ? mergeTipRate(buyFirst ? PAIR_MERGE_COST_BUY_FIRST : PAIR_MERGE_COST_SELL_FIRST, a.scale, exitMinFill) : 0n;
   const exitTip = exitTipBase + mergeTip;
   log.add(...checkPairTip(env, amount, exitTip, 'exit.tip'));
-  const legs = resolveLegs(lenv, log, exitSide, exitInput, 'exit.', exitMinFill);
+  // the exit's trigger threshold scales with what it will sell or buy: at most the entry's amount, known now (its fills are not)
+  const legs = resolveLegs(lenv, log, exitSide, exitInput, 'exit.', exitMinFill, amount);
   const act = resolveActivation(lenv, log, intent.activeFrom);
   const entryExpiry = act === null ? null : resolveExpiry(lenv, log, intent.expiry, { field: 'expiry', activeFrom: act.activeFrom });
   const exitExpiry = resolveExpiry(lenv, log, exitIn.expiry, { field: 'exit.expiry', exit: true });

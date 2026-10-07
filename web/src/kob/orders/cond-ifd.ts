@@ -168,7 +168,8 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
   // a repeat's exit tip carries the merge cost, paid even by the smallest take-profit fill
   const mergeTip = repeat ? mergeTipRate(buyFirst ? MERGE_COST_BUY_FIRST : MERGE_COST_SELL_FIRST, tk.scale, exitMinFill) : 0n;
   const exitTip = exitTipBase + mergeTip;
-  const legs = resolveLegs(env, log, exitSide, exitInput, 'exit.', exitMinFill);
+  // the exit's trigger threshold scales with what it will sell or buy: at most the entry's amount, known now (its fills are not)
+  const legs = resolveLegs(env, log, exitSide, exitInput, 'exit.', exitMinFill, amount);
   const act = resolveActivation(env, log, intent.activeFrom);
   const entryExpiry = act === null ? null : resolveExpiry(env, log, intent.expiry, { field: 'expiry', activeFrom: act.activeFrom });
   const exitExpiry = resolveExpiry(env, log, exitIn.expiry, { field: 'exit.expiry', exit: true });
