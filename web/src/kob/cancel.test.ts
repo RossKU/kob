@@ -1,7 +1,7 @@
 // Every builder result is checked in the script engine: sign locally, finalize with tightened budgets, validate (consensus rules).
 import { describe, expect, it } from 'vitest';
 import {
-  SnapshotError, planCancel, planCancelAll, planCancelReplace, planRefund, snapshotFromItem, snapshotFromOrderView, snapshotFromRecord, tokenSlotsFor,
+  SnapshotError, amendsInPlace, planCancel, planCancelAll, planCancelReplace, planRefund, snapshotFromItem, snapshotFromOrderView, snapshotFromRecord, tokenSlotsFor,
   type CancelEnv, type CancelPlan, type OrderSnapshot,
 } from './cancel';
 import { decodeSigning } from './decode';
@@ -215,6 +215,10 @@ describe('planCancelReplace: one atomic tx', () => {
       verify(plan, 'quantity');
       expect(plan.request!.action).toBe('cancelOrder');
     }
+    // the ask pins its custody's extension commitment and an amend never moves the custody: another commitment is never
+    // amended in place (the amended order could settle no custody)
+    expect(amendsInPlace(snap, same(snap, (st) => { st.extensionCommitment = '55'.repeat(32); }))).toBe(false);
+    expect(amendsInPlace(snap, next)).toBe(true);
     // a plain bid keeping its token and scale is amended IN PLACE (it owns no custody); with strays to sweep it stays a cancel-replace
     const bid = snapOf('create.bid');
     const b = planCancelReplace(env(), bid, { order: same(bid, (st) => { st.price = '230000000'; }), value: BigInt(bid.order.amount) });

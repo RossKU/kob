@@ -200,8 +200,9 @@ deadline      LEB128    when flag bit 0: day-order deadline, as ORDER
 ```
 
 There is no custody part: the custody does not move. An amended ask keeps the maker, the token (`tokenCovId`,
-`tokenTplHash`, `tplPrefixLen`, `tplSuffixLen`), `scale` and `amountLeft`, so the custody the order already holds stays
-exactly `amountLeft`; it may change `minFill`, `price`, `tip`, `tif`, `activeFrom`, `expiryDaa`, `refundTip`, `interval`,
+`tokenTplHash`, `tplPrefixLen`, `tplSuffixLen`, and the `extensionCommitment` of a KCC-20 ask: the order settles only a
+custody of the commitment it pins), `scale` and `amountLeft`, so the custody the order already holds stays exactly
+`amountLeft` and of its commitment; it may change `minFill`, `price`, `tip`, `tif`, `activeFrom`, `expiryDaa`, `refundTip`, `interval`,
 `maxFill`, `slope`, `priceEnd` and `decayStep` (`kob_protocol::payload::check_amend_terms`). A quantity change
 re-custodies: that is a cancel-replace. An amended bid keeps the maker, the token (the four fields above and the
 `extensionCommitment` its deliveries carry) and `scale`; every other term may change, and its quantity follows its
@@ -271,8 +272,8 @@ all hold (`kob_protocol::payload::verify_amend`):
    (`KobBid` / `KobBidKron`) of a version-4 payload.
 2. `inputs[input]` spends that previous state: its UTXO's script is `P2SH(previous)`, it carries a covenant id, its
    entry is `cancel` (the maker's signature, SIGHASH_ALL: only the maker can amend), and no other input carries the id.
-3. The amended state keeps the terms above (an ask: maker, token, `scale`, `amountLeft`; a bid: maker, token,
-   `extensionCommitment`, `scale`), of the same template; an ask keeps `amountLeft > 0`.
+3. The amended state keeps the terms above (an ask: maker, token, `extensionCommitment`, `scale`, `amountLeft`; a bid:
+   maker, token, `extensionCommitment`, `scale`), of the same template; an ask keeps `amountLeft > 0`.
 4. `outputs[output].scriptPublicKey == P2SH(prefix ‖ state ‖ suffix)`, bound to the order's covenant id with
    `authorizingInput = input`, and it is the ONLY output of the transaction bound to that id (as rule 4: a sibling
    would carry the id and could unlock the custody outside the order's rules).

@@ -625,8 +625,9 @@ function pickTokens(pool: TokenUtxo[], token: Hex, amount: bigint, ext: Hex | nu
   return null;
 }
 
-/** Order-state fields an in-place amend keeps (kob-protocol `payload::check_amend_terms`): an ask's custody, owned by the order's id, stays exact. */
-const AMEND_KEEPS = ['maker', 'tokenCovId', 'tokenTplHash', 'tplPrefixLen', 'tplSuffixLen', 'scale', 'amountLeft'] as const;
+/** Order-state fields an in-place amend keeps (kob-protocol `payload::check_amend_terms`): an ask's custody, owned by the order's id, stays exact and of
+ * the extension commitment the state pins. */
+const AMEND_KEEPS = ['maker', 'tokenCovId', 'tokenTplHash', 'tplPrefixLen', 'tplSuffixLen', 'extensionCommitment', 'scale', 'amountLeft'] as const;
 /** A plain bid owns no custody (its quantity is its escrow): it keeps its maker, its token (with the pinned delivery extension) and its scale. */
 const AMEND_KEEPS_BID = ['maker', 'tokenCovId', 'tokenTplHash', 'tplPrefixLen', 'tplSuffixLen', 'extensionCommitment', 'scale'] as const;
 

@@ -174,6 +174,7 @@ fn forged_amend_records_are_refused() {
         ("scale", AskState { scale: base.scale * 10, ..base.clone() }),
         ("maker", AskState { maker: pk(MAKER_B), ..base.clone() }),
         ("token", AskState { token_cov_id: [0x99; 32], ..base.clone() }),
+        ("extensionCommitment", AskState { extension_commitment: [0x55; 32], ..base.clone() }),
     ] {
         let mut t = with_records(&s, vec![rec(&st)]);
         t.tx.outputs[0].script_public_key = spk_to_string(&AnyState::KobAsk(st.clone()).spk());
@@ -404,4 +405,33 @@ fn bid_amend_rules() {
     let mut req = r.clone();
     req.value = Some(r.order.utxo.amount + 5 * KAS);
     assert!(matches!(build(&Action::AmendOrder(req)).unwrap_err(), Error::InsufficientFunds { .. }));
+}
+
+/// The ask pins the extension commitment of its custody (`KobAsk.settle` takes only a custody of that commitment) and the
+/// custody does not move in an amend: an amend that changes `extensionCommitment` would leave an order that nothing but
+/// the maker's cancel can end (no fill, no IOC end, no refund). The term check, the builder and the record's
+/// verification (the indexer's rule) refuse it; the same amend that keeps the commitment builds and fills.
+#[test]
+fn an_ask_amend_keeps_its_extension_commitment() {
+    let a = scenario(TemplateId::Kcc20Ref, "amend.ask");
+    let r = amend_req(&a).clone();
+    let prev = ask_of(&r.order.state).clone();
+    let mut next = ask_of(&r.amended).clone();
+    assert_ne!(prev.extension_commitment, [0x55; 32]);
+    next.extension_commitment = [0x55; 32];
+    let other = AnyState::KobAsk(next.clone());
+    let e = payload::check_amend_terms(&r.order.state, &other).unwrap_err();
+    assert!(e.to_string().contains("extensionCommitment"), "{e}");
+    let mut req = r.clone();
+    req.amended = other.clone();
+    let e = build(&Action::AmendOrder(req)).unwrap_err();
+    assert!(e.to_string().contains("extensionCommitment"), "{e}");
+    // a transaction carrying such a record (built from the valid amend, its output and record replaced) is refused
+    let (_, s) = signed("amend.ask", &a);
+    let mut t = with_records(&s, vec![Record::amend(0, 0, &other, None)]);
+    t.tx.outputs[0].script_public_key = spk_to_string(&other.spk());
+    let e = recover_amends(&t.tx).unwrap_err();
+    assert!(e.to_string().contains("extensionCommitment"), "{e}");
+    // the amend that keeps it is accepted
+    payload::check_amend_terms(&r.order.state, &r.amended).unwrap();
 }

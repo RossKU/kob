@@ -857,7 +857,8 @@ pub fn amendable(t: TemplateId) -> bool {
 
 /// The terms an in-place amend keeps.
 ///
-/// A plain ask: the template, the maker, the token (covenant id, program and its template lengths), the `scale` (prices
+/// A plain ask: the template, the maker, the token (covenant id, program and its template lengths, and the
+/// `extensionCommitment` its custody carries: the order settles only a custody of that commitment), the `scale` (prices
 /// of one lineage stay comparable) and `amountLeft`, so the custody the order already holds stays exactly `amountLeft`
 /// (C7). What may change: `price`, `tip`, `minFill`, `tif`, `activeFrom`, `expiryDaa`, `refundTip`, `interval`,
 /// `maxFill`, `slope`, `priceEnd`, `decayStep` (a quantity change re-custodies: cancel-replace).
@@ -880,6 +881,10 @@ pub fn check_amend_terms(previous: &AnyState, next: &AnyState) -> Result<()> {
                 != (b.token_cov_id, b.token_tpl_hash, b.tpl_prefix_len, b.tpl_suffix_len)
             {
                 return bad("the token cannot change");
+            }
+            if a.extension_commitment != b.extension_commitment {
+                // the order settles only a custody of the commitment it pins, and the custody stays where it is
+                return bad("the extensionCommitment cannot change (the order settles only the custody it holds)");
             }
             if (a.scale, a.amount_left) != (b.scale, b.amount_left) {
                 return bad("scale and amountLeft cannot change (the custody stays where it is: change the amount by cancel-replace)");
