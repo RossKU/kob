@@ -141,7 +141,15 @@ pub fn swap_requirements(p: &SwapOfferParams) -> Result<PaymentRequirements> {
         }
     };
     let mut list = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for a in &p.pay_assets {
+        let id = match a {
+            PayAssetSpec::Kas => PAY_ASSET_KAS.to_string(),
+            PayAssetSpec::Token(t) => hex(&t.covenant_id),
+        };
+        if !seen.insert(id) {
+            return Err(X402Error::requirements(Diag::PayAssetNotAccepted, "a pay asset is listed twice"));
+        }
         list.push(match a {
             PayAssetSpec::Kas => {
                 if matches!(p.gain, MerchantGain::Kas) {

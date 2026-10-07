@@ -54,6 +54,11 @@ test('offer building rejects bad configuration', () => {
   assert.throws(() => buildOffer({ kind: 'native', amount: '1.5' }, ctx), KobX402Error);
   assert.throws(() => buildOffer({ kind: 'kcc20', asset: 'XYZ', amount: '1', token: { custody: 'unconditional' } }, ctx), KobX402Error);
   assert.throws(() => buildOffer({ kind: 'swap', receive: 'kas', amount: '1', payAssets: [] }, ctx), KobX402Error);
+  // a pay asset listed twice (in any case)
+  assert.throws(
+    () => buildOffer({ kind: 'swap', receive: 'kas', amount: '1', payAssets: [{ asset: TOKEN_A }, { asset: TOKEN_A.toUpperCase() }] } as never, ctx),
+    (e: unknown) => e instanceof KobX402Error && /twice/.test(e.message),
+  );
   assert.throws(() => buildOffers([], ctx), KobX402Error);
 });
 

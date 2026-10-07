@@ -1430,3 +1430,30 @@ fn a_payer_with_a_hundred_small_coins_spends_only_what_the_swap_needs() {
     let e = err_of(f.pay(&offer, &f.sw2_quote(), &PayerFunds { tokens: vec![], funding: dust, change: pk(PAYER) }));
     assert!(e.to_string().contains("within the verifier's 32 inputs"), "{e}");
 }
+
+/// An offer lists each pay asset once: the builder refuses a second entry, and the verifier refuses an offer that has one (a
+/// second entry with other pins would never be the one that applies).
+#[test]
+fn a_pay_asset_listed_twice_is_refused() {
+    let f = fx();
+    let e = swap_requirements(&SwapOfferParams {
+        network: Network::Testnet10,
+        amount: 1_000,
+        pay_to: &addr(MERCHANT),
+        max_timeout_seconds: 600,
+        finality: Finality::Accepted,
+        gain: MerchantGain::Kas,
+        pay_assets: vec![PayAssetSpec::Token(f.a()), PayAssetSpec::Token(f.a())],
+    })
+    .unwrap_err();
+    assert_eq!(e.diag, Diag::PayAssetNotAccepted);
+    let mut offer = kas_offer_for(f.a(), 1_000, MERCHANT);
+    let list = offer.extra["route"]["payAssets"].as_array().unwrap().clone();
+    let mut twice = list.clone();
+    let mut other_pins = list[0].clone();
+    other_pins["templateHash"] = serde_json::json!("ab".repeat(32));
+    twice.push(other_pins);
+    offer.extra.get_mut("route").unwrap()["payAssets"] = serde_json::Value::Array(twice);
+    let e = kob_x402::swap::parse_route_offer(&offer).unwrap_err();
+    assert!(e.to_string().contains("twice"), "{e}");
+}

@@ -116,6 +116,11 @@ pub fn parse_intent_offer(offered: &PaymentRequirements) -> Result<Vec<PayAssetO
         }
         out.push(PayAssetOffer { asset: asset.to_string(), template_hash: th, extension_commitment: ec });
     }
+    // one entry per asset: a second one with other pins is never the one that applies (the first match is)
+    let mut seen = std::collections::HashSet::new();
+    if !out.iter().all(|e| seen.insert(e.asset.as_str())) {
+        return Err(req("extra.route.payAssets lists an asset twice"));
+    }
     Ok(out)
 }
 

@@ -282,6 +282,9 @@ export function buildOffer(spec: OfferSpec, ctx: BuildOfferContext): PaymentRequ
     extra.token = tokenExtra(asset, spec.token);
   } else if (spec.kind === 'swap') {
     if (spec.payAssets.length === 0) throw new KobX402Error('bad_request', 'a swap offer needs at least one pay asset');
+    // one entry per asset: a second one with other pins would never be the one a verifier applies
+    const ids = spec.payAssets.map((p) => (p.asset === ASSET_KAS ? ASSET_KAS : p.asset.toLowerCase()));
+    if (new Set(ids).size !== ids.length) throw new KobX402Error('bad_request', 'a pay asset is listed twice');
     if (spec.receive === 'kcc20') {
       asset = checkAsset(spec.asset);
       if (!spec.token) throw new KobX402Error('bad_request', 'a swap offer that pays a token needs token metadata');
