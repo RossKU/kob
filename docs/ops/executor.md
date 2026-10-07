@@ -1783,7 +1783,7 @@ It is off by default. `--inventory-policy <file>` (on `run` and `match`) reads i
   "haircutBps": 8000,
   "keepCarrier": "200000000",
   "tokens": [
-    { "token": "<covenant id, hex>", "minAmount": 0 },
+    { "token": "<covenant id, hex>", "minAmount": 100000000 },
     { "token": "<covenant id, hex>", "refPrice": { "sompi": "2300000000", "per": "100000000" } }
   ]
 }
@@ -1796,15 +1796,17 @@ It is off by default. `--inventory-policy <file>` (on `run` and `match`) reads i
 | `keepCarrier` | `200000000` (2 KAS) | sompi locked on the operator's inventory output until the owner sells it (and on the UTXO a maintenance merge of inventory leaves); at least `50000000` (0.5 KAS, the KaspaCom KCC20 0.2.5 floor). The order outputs keep their own carriers. 2 KAS is the smallest round value that adds no fee in either fee mode (below) |
 | `tokens[].token` | (required) | an allowlisted token (covenant id); every other token's surplus goes to the pair ask as before |
 | `tokens[].refPrice` | none | `sompi` per `per` base units: the owner's own valuation (it sells the inventory off-matcher), used instead of the KAS bids |
-| `tokens[].minAmount` | none | the least surplus worth keeping (base units). Unset: with `refPrice` no bound; otherwise one valued bid's minimum fill, so a sale of the kept amount alone could fill it. `0` accumulates small surpluses too |
+| `tokens[].minAmount` | none | the least surplus worth keeping (base units). With `refPrice`: no bound unless set. Without it the bound is the dust rule, the smallest minimum fill of the bids that value the surplus (a sale of the kept amount alone could fill one), and `minAmount` only raises it (a value below the dust rule, `0` included, changes nothing) |
 
 What the planner does (`matcher::batch`, pure, deterministic):
 
 * A surplus that plain KAS bids take in the same transaction is still sold there first (no inventory risk). Only the rest
   goes to the operator, and only for a token the policy lists.
 * Its value is `refPrice × amount`, or else what the plain resting KAS bids of the token pay for it: best first, each up
-  to what it has left in this batch, and only bids a later sale could fill (they accept their minimum fill or all they
-  have left). The best bid's quote alone never values a surplus. The value is then cut by
+  to what it has left in this batch, and each only for an amount its own quantity rules accept (at least its minimum
+  fill, or all it has left): a bid that could never take the surplus does not value it, whatever it quotes, so a surplus
+  below every bid's minimum fill is worth nothing at the bids (value such surpluses with `refPrice`). The best bid's quote
+  alone never values a surplus. The value is then cut by
   `haircutBps` and must exceed the fee of the operator's token output (about 205 bytes). It enters the batch's profit
   next to the spread and the tips, so a zero-tip netting whose kept surplus pays its fee is built.
 * The batch request names the kept tokens (`keepSurplus`): the builder hands their surplus to the taker (the operator's

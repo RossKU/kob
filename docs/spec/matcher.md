@@ -443,16 +443,18 @@ id.
   operator may switch the policy on (`PlannerConfig::inventory`, `docs/ops/executor.md`, "Surplus inventory"). A
   surplus that no KAS bid takes in the same transaction (preferred: no inventory risk) then goes to the batch's taker,
   the operator's key (`Batch::keepSurplus`), instead of the pair ask's delivery, and its value counts as income of the
-  batch, so a crossed pair match that pays no KAS (no tips, the surplus below every bid's minimum fill) still pays its
-  fee. The pair ask receives exactly its floor `⌈n·p/scale(A)⌉`, which is all its covenant guarantees (`KobPair.sil`
-  `tOut >= ceil`, and `KobCondPair.sil` likewise; a `KobIfdPair` exit custody is exact and never takes a surplus).
-  Only tokens on the operator's allowlist are kept. The value is the owner's `refPrice` if set (the owner sells the
-  inventory off-matcher); otherwise it is what the plain resting KAS bids of the token pay for the amount (best first,
-  each only up to what it holds, only bids a sale could fill: their minimum fill or all they have left; never the best
-  bid's quote alone). The value is then cut by `haircutBps` (default 80 %); it must exceed the fee of the operator's
-  token output, and the batch as a whole still needs `min_profit`. Without `refPrice` the amount must be at least
-  `minAmount`, by default one of the valued bids' minimum fills (no unsellable dust). The matcher only accumulates: the
-  reference executor's maintenance jobs never sell a listed token (they may merge its UTXOs).
+  batch, so a crossed pair match that pays no KAS (no tips, the surplus below every bid's minimum fill, valued at the
+  owner's `refPrice`) still pays its fee. The pair ask receives exactly its floor `⌈n·p/scale(A)⌉`, which is all its
+  covenant guarantees (`KobPair.sil` `tOut >= ceil`, and `KobCondPair.sil` likewise; a `KobIfdPair` exit custody is exact
+  and never takes a surplus). Only tokens on the operator's allowlist are kept. The value is the owner's `refPrice` if set
+  (the owner sells the inventory off-matcher); otherwise it is what the plain resting KAS bids of the token pay for the
+  amount (best first, each only up to what it holds and only for an amount its own quantity rules accept: at least its
+  minimum fill, or all it has left; a bid that could never take the amount does not value it, whatever it quotes; never
+  the best bid's quote alone). The value is then cut by `haircutBps` (default 80 %); it must exceed the fee of the
+  operator's token output, and the batch as a whole still needs `min_profit`. Without `refPrice` the amount must be at
+  least the smallest minimum fill of the valued bids (no unsellable dust); `minAmount` may raise that bound, never lower
+  it. The matcher only accumulates: the reference executor's maintenance jobs never sell a listed token (they may merge
+  its UTXOs).
   *Carrier of the kept output* (`keepCarrier`, `Batch::keepCarrier`; owner decision 2026-10-06: small enough to cost
   nothing): the operator's inventory output carries 2 KAS by default, not the 10 KAS of its other token outputs; the
   carriers of every order output (deliveries, custodies, exits) are the orders' own terms and do not change. A token

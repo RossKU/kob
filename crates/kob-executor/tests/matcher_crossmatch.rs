@@ -266,8 +266,10 @@ fn crossed() -> (Vec<ListedOrder>, i64, i64, i64) {
 }
 
 /// (a) The zero-tip crossed direct match with no TBTC book: off, nothing (the surplus would go to the ask and the matcher
-/// earns no KAS); on, with a fillable TUSD bid whose minimum fill (10 KAS, ~0.42 TUSD) is above the 0.2 TUSD surplus, the
-/// batch nets both orders, the ask gets exactly its floor, the operator's key the surplus, every token amount conserved.
+/// earns no KAS). On, with only a TUSD bid whose minimum fill (10 KAS, ~0.42 TUSD) is above the 0.2 TUSD surplus: still
+/// nothing, that bid could never take the surplus, so it does not value it (`minAmount` 0 included). On, with the owner's
+/// `refPrice`: the batch nets both orders, the ask gets exactly its floor, the operator's key the surplus, every token
+/// amount conserved.
 #[test]
 fn a_kept_surplus_pays_a_zero_tip_crossed_match() {
     let (pairs, n, need, surplus) = crossed();
@@ -277,15 +279,20 @@ fn a_kept_surplus_pays_a_zero_tip_crossed_match() {
     // policy off (the default), with and without the TUSD bid: no batch
     assert!(run_keep(pairs.clone(), &cfg()).prepared.is_empty(), "off, no KAS book");
     assert!(run_keep(v.clone(), &cfg()).prepared.is_empty(), "off, with the TUSD bid");
-    // policy on, small surpluses accepted (minAmount 0: a later sale of the whole holding clears them)
-    let r = run_keep(v, &policy(vec![tusd(Some(0), None)]));
+    // policy on, valued at the bids: the only bid cannot take 0.2 TUSD, so the surplus is worth nothing there
+    for min_amount in [None, Some(0)] {
+        assert!(run_keep(v.clone(), &policy(vec![tusd(min_amount, None)])).prepared.is_empty(), "minAmount {min_amount:?}");
+    }
+    // the owner's reference price (2.3 KAS per TUSD) values it, with or without the TUSD book
+    let rp = UnitPrice { sompi: 2_300_000_000, per: S8 as u64 };
+    let r = run_keep(v, &policy(vec![tusd(None, Some(rp))]));
     assert_eq!(r.prepared.len(), 1, "skipped: {:?}", r.skipped);
     let p = &r.prepared[0];
     assert_eq!((amount_in(&r, cid(1)), amount_in(&r, cid(2))), (n, n), "both pair orders netted whole");
-    assert_eq!(amount_in(&r, cid(200)), 0, "the TUSD bid only values the surplus");
-    // the value: what the bid pays for 0.2 TUSD, at the 80 % haircut
-    let at_bid = surplus as i128 * bps(KUSD, -2) as i128 / S8 as i128;
-    assert_eq!(p.plan.kept, vec![Kept { token: TOKEN_B, amount: surplus, value: (at_bid * 8_000 / 10_000) as i64 }]);
+    assert_eq!(amount_in(&r, cid(200)), 0, "the TUSD bid is not filled");
+    // the value: refPrice x surplus, at the 80 % haircut
+    let at_ref = surplus as i128 * rp.sompi as i128 / rp.per as i128;
+    assert_eq!(p.plan.kept, vec![Kept { token: TOKEN_B, amount: surplus, value: (at_ref * 8_000 / 10_000) as i64 }]);
     assert_eq!(batch_request(p).keep_surplus, vec![TOKEN_B]);
     // TUSD: the ask's delivery is exactly its ceil, the operator's output the surplus, nothing created or lost
     let (b_in, b_out) = token_flows(p, TOKEN_B);
@@ -299,8 +306,7 @@ fn a_kept_surplus_pays_a_zero_tip_crossed_match() {
     assert_eq!(a_in, a_out.iter().map(|x| x.1).sum::<i64>(), "TBTC conserved");
     // the KAS accounting pays the fee (the operator output's carrier is its own KAS); the inventory pays for it
     assert!(p.accounting.profit < 0 && p.accounting.profit + p.plan.kept_value() > 0, "{:?}", p.accounting);
-    // the owner's reference price values it with no KAS book at all
-    let r = run_keep(pairs, &policy(vec![tusd(None, Some(UnitPrice { sompi: 2_300_000_000, per: S8 as u64 }))]));
+    let r = run_keep(pairs, &policy(vec![tusd(None, Some(rp))]));
     assert_eq!(r.prepared.len(), 1, "skipped: {:?}", r.skipped);
     assert_eq!(r.prepared[0].plan.kept[0].amount, surplus);
 }
@@ -400,7 +406,8 @@ fn the_kept_output_carrier_adds_no_fee() {
     let (pairs, ..) = crossed();
     let mut tbtc = pairs.clone();
     tbtc.push(kas_bid(200, TOKEN_B, bps(KUSD, -2), 6 * S8));
-    let mut cases = vec![("TBTC/TUSD 8/8, zero tip, bid-valued".to_string(), tbtc, policy(vec![tusd(Some(0), None)]), TOKEN_B)];
+    let rp = UnitPrice { sompi: 2_300_000_000, per: S8 as u64 };
+    let mut cases = vec![("TBTC/TUSD 8/8, zero tip".to_string(), tbtc, policy(vec![tusd(None, Some(rp))]), TOKEN_B)];
     for (pa, pb) in [(T3, T3), (T8, T8), (TemplateId::KronToken2433, TemplateId::KronToken2433), (T3, TemplateId::KronToken2433)] {
         let n = 3 * WHOLE;
         let v = vec![

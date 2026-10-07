@@ -99,9 +99,9 @@ pub struct InventoryToken {
     /// Optional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ref_price: Option<UnitPrice>,
-    /// Least surplus (base units) worth keeping. Default: with `ref_price`, none; otherwise the smallest fill one of the
-    /// valued bids accepts (its minimum fill), so the kept amount alone could fill it (no unsellable dust). Set it lower to
-    /// accumulate small surpluses.
+    /// Least surplus (base units) worth keeping. With `ref_price`: none unless set. Without it the bound is the dust rule,
+    /// the smallest fill one of the valued bids accepts (its minimum fill), so the kept amount alone could fill it (no
+    /// unsellable dust); `min_amount` only raises it (a value below the dust rule changes nothing).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_amount: Option<i64>,
 }
@@ -396,7 +396,7 @@ mod inventory_tests {
           "haircutBps": 8000,
           "keepCarrier": "200000000",
           "tokens": [
-            { "token": "7272727272727272727272727272727272727272727272727272727272727272", "minAmount": 0 },
+            { "token": "7272727272727272727272727272727272727272727272727272727272727272", "minAmount": 100000000 },
             { "token": "7171717171717171717171717171717171717171717171717171717171717171",
               "refPrice": { "sompi": "2300000000", "per": "100000000" } }
           ]
@@ -404,7 +404,7 @@ mod inventory_tests {
         let p: InventoryPolicy = serde_json::from_str(doc).expect("parses");
         p.check().expect("consistent");
         let t = [0x72u8; 32];
-        assert_eq!(p.rule(&t).and_then(|r| r.min_amount), Some(0));
+        assert_eq!(p.rule(&t).and_then(|r| r.min_amount), Some(100_000_000));
         assert_eq!(p.rule(&[0x71; 32]).and_then(|r| r.ref_price).map(|r| r.value(50_000_000)), Some(1_150_000_000));
         assert!(p.rule(&[0x70; 32]).is_none() && !p.holds(&[0x70; 32]), "an unlisted token");
         assert_eq!(p.haircut(1_000), 800);

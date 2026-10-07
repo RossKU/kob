@@ -1201,10 +1201,11 @@ impl<'u> Alloc<'u> {
     ///
     /// The value is the owner's `refPrice`, or else what the plain resting KAS bids of `m` pay for `q` (best first, each up
     /// to what it has left: its cap less what this allocation fills of it, less `used`, the in-transaction sales a netting
-    /// estimate already counts), counting only bids a sale could fill (they accept a fill of their minimum fill or of all
-    /// they have left). The best KAS bid alone never
-    /// values a surplus: its depth and quantity rules bound what counts. Without `refPrice` the amount must be at least
-    /// `minAmount`, by default the smallest such fill of the bids valued (no unsellable dust).
+    /// estimate already counts), each only for an amount its own quantity rules accept (at least its minimum fill, or all it
+    /// has left, the rule `surplus_value` sells by): a bid that could never take the amount does not value it, whatever it
+    /// quotes. The best KAS bid alone never values a surplus: its depth and quantity rules bound what counts. Without
+    /// `refPrice` the amount must be at least the smallest minimum fill of the bids valued (no unsellable dust), and at least
+    /// `minAmount` when that is larger (`minAmount` never lowers the dust rule).
     fn keep_value(&self, m: &Market, q: i64, used: Option<&BTreeMap<usize, i64>>) -> i128 {
         let u = self.u;
         let Some(r) = u.inv.rule(&m.token) else { return 0 };
@@ -1237,18 +1238,19 @@ impl<'u> Alloc<'u> {
             if left <= 0 {
                 continue;
             }
-            // a fill a later sale could make: its minimum fill, or all it has
-            let probe = c.min_fill.max(1).min(c.cap);
-            if !c.quantity_ok(probe) {
+            // only an amount the bid's own quantity rules accept (its minimum fill, or all it has left): a bid that could never
+            // take this amount does not value it, whatever it quotes
+            let take = rest.min(left);
+            if !c.quantity_ok(take) {
                 continue;
             }
-            let take = rest.min(left);
             let Some(k) = c.value(take) else { continue };
             v += k as i128;
             rest -= take;
-            dust = dust.min(probe);
+            dust = dust.min(c.min_fill.max(1).min(c.cap));
         }
-        if v <= 0 || q < r.min_amount.unwrap_or(dust) {
+        // `minAmount` raises the dust rule, it never lowers it
+        if v <= 0 || q < r.min_amount.unwrap_or(0).max(dust) {
             return 0;
         }
         u.inv.haircut(v)
