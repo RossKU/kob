@@ -18,7 +18,7 @@ npm run build:release        # release: build + ship the pinned registry as dist
 ```
 
 Configuration (`config.json` next to `index.html`, `window.__KOB_CONFIG__`, Settings screen): `network`, `indexerUrl`, `nodeUrl` (`ws://` wRPC node,
-empty = the SDK's public resolver), `registryUrl` (default `./registry/tokens.json`), `features.kastle`, `fees` (`dynamic`, `maxRate`, `maxFeeKas`: see Fees). URL query overrides are off unless
+empty = the SDK's public resolver; an `http(s)://` URL is the offline mock node and only a test build (`features.test`) or `npm run dev` accepts it), `registryUrl` (default `./registry/tokens.json`), `features.kastle`, `fees` (`dynamic`, `maxRate`, `maxFeeKas`: see Fees). URL query overrides are off unless
 `allowQueryOverrides` is set.
 
 Transaction links: a recent-trades row, an order's placement transaction and its fill rows open the transaction on the block explorer in a new tab (`https://tn10.kaspa.stream/transactions/<txid>` on testnet-10, `https://kaspa.stream/transactions/<txid>` on mainnet); `explorerUrl` (config.json / `__KOB_CONFIG__` only) replaces the base.

@@ -23,7 +23,7 @@ export interface AppConfig {
    * a link must not add verifiers). Empty = a single indexer, unverified.
    */
   extraIndexerUrls: string[];
-  /** wRPC (`ws://` / `wss://`) node, a mock-server base (`http://` / `https://`), or '' = the SDK's public Resolver */
+  /** wRPC (`ws://` / `wss://`) node, '' = the SDK's public Resolver; a mock-server base (`http://` / `https://`) only in test / dev builds */
   nodeUrl: string;
   /** token registry JSON: a relative path (bundled) or an http(s) URL */
   registryUrl: string;

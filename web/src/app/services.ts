@@ -86,7 +86,8 @@ export async function createServices(config: AppConfig, o: CreateServicesOverrid
     o.kob ? Promise.resolve(o.kob) : loadKob(),
     o.sdk ? Promise.resolve(o.sdk) : loadKaspaSdk({ exposeForTests: config.features.test }),
   ]);
-  const node = o.node ?? createNode({ network: config.network, nodeUrl: config.nodeUrl }, sdk);
+  // the offline mock node (an http(s) node URL) only in a test build or on the vite dev server
+  const node = o.node ?? createNode({ network: config.network, nodeUrl: config.nodeUrl, allowMock: config.features.test || import.meta.env.DEV === true }, sdk);
   const indexer = o.indexer !== undefined ? o.indexer : config.indexerUrl ? new HttpIndexer({ baseUrl: config.indexerUrl }) : null;
   const feed = o.feed !== undefined ? o.feed : config.indexerUrl ? new IndexerFeed({ url: config.indexerUrl }) : null;
   const verifiers = o.verifiers ?? config.extraIndexerUrls.filter((u) => u !== config.indexerUrl).map((u) => ({ label: u, api: new HttpIndexer({ baseUrl: u }) as IndexerApi }));

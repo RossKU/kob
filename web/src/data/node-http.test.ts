@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { HttpMockNode } from './node-http';
-import { createNode, nodeKindFor } from './node-factory';
+import { createNode, MockNodeRefused, nodeKindFor } from './node-factory';
 import { KaspaRpcNode } from './node-rpc';
 import { loadKaspaSdkNode } from './kaspa-sdk.node';
 import type { NodeUtxo } from './node';
@@ -149,7 +149,13 @@ describe('createNode', () => {
     expect(() => nodeKindFor('ftp://x')).toThrow(/unsupported/);
     expect(createNode({ network: 'testnet-10', nodeUrl: 'ws://x:1' }, sdk)).toBeInstanceOf(KaspaRpcNode);
     expect(createNode({ network: 'testnet-10', nodeUrl: '' }, sdk).kind).toBe('rpc');
-    expect(createNode({ network: 'testnet-10', nodeUrl: 'http://127.0.0.1:1' }, null)).toBeInstanceOf(HttpMockNode);
+    expect(createNode({ network: 'testnet-10', nodeUrl: 'http://127.0.0.1:1', allowMock: true }, null)).toBeInstanceOf(HttpMockNode);
+  });
+  it('an http(s) node URL is the offline mock only in a test or development build', () => {
+    for (const network of ['mainnet', 'testnet-10']) {
+      expect(() => createNode({ network, nodeUrl: 'https://json.example' }, sdk)).toThrow(MockNodeRefused);
+      expect(() => createNode({ network, nodeUrl: 'http://127.0.0.1:1', allowMock: false }, null)).toThrow(/only test and development builds/);
+    }
   });
   it('needs the SDK only for wRPC', () => {
     expect(() => createNode({ network: 'mainnet', nodeUrl: '' }, null)).toThrow(/SDK is required/);
