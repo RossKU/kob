@@ -5,23 +5,27 @@
 #   argent/build-argentc.sh --verify     also check vendor/argent-artifact against the pinned upstream
 #
 # Inputs: argent/upstream.lock (url, rev) and argent/patches/*.patch (applied in name order).
-# The checkout lives in argent/upstream/ (git-ignored) and is reset to the pinned commit on every
-# run, so local edits there are discarded. The build uses the KOB toolchain (rust-toolchain.toml)
-# and its own target dir (target/argent, override with ARGENT_TARGET_DIR).
+# The checkout lives in argent/upstream/ (git-ignored). On every run its whole tree (tracked, untracked
+# and ignored files) is compared with the pinned commit plus the patches; any difference (a local edit,
+# an extra file, a missing patch) resets it to the pin and re-applies the patches, so local edits there
+# are discarded and argentc is always built from exactly the pinned source. The build uses the KOB
+# toolchain (rust-toolchain.toml) and its own target dir (target/argent, override with ARGENT_TARGET_DIR).
 #   ARGENT_URL=<path or url>   clone source override (the pinned rev is still enforced)
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
+[ -f "$ROOT/argent/upstream.lock" ] || { echo "build-argentc: not in the KOB repository ($ROOT)" >&2; exit 2; }
 UP=$ROOT/argent/upstream
 lock_get() { awk -v k="$1" '$1==k {print $2}' argent/upstream.lock; }
 URL=${ARGENT_URL:-$(lock_get url)}
 REV=$(lock_get rev)
+[[ "$REV" =~ ^[0-9a-f]{40}$ ]] || { echo "argent/upstream.lock: rev must be a full commit id" >&2; exit 2; }
 VERIFY=0
 for arg in "$@"; do
   case "$arg" in
     --verify) VERIFY=1 ;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -29,27 +33,54 @@ done
 if [ ! -d "$UP/.git" ]; then
   git clone --quiet -c core.autocrlf=false "$URL" "$UP"
 fi
-git -C "$UP" config core.autocrlf false
-if ! git -C "$UP" cat-file -e "$REV^{commit}" 2>/dev/null; then
-  git -C "$UP" fetch --quiet origin "$REV" || git -C "$UP" fetch --quiet origin
+# Every git command below runs on the checkout only; a missing or broken checkout must not fall back
+# to an enclosing repository.
+export GIT_CEILING_DIRECTORIES=$ROOT/argent
+ug() { git -C "$UP" "$@"; }
+[ "$(cd "$UP" && git rev-parse --show-toplevel)" -ef "$UP" ] || { echo "argent/upstream is not a git checkout: delete it" >&2; exit 1; }
+ug config core.autocrlf false
+if ! ug cat-file -e "$REV^{commit}" 2>/dev/null; then
+  ug fetch --quiet origin "$REV" || ug fetch --quiet origin
 fi
-# The checkout is reset and patched only when the pin or a patch changed (a stamp records what was
-# applied), so an unchanged tree keeps its mtimes and cargo does not rebuild argentc. Delete
-# argent/upstream to force a fresh clone.
-sha256() { if command -v sha256sum >/dev/null; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi; }
-STAMP=$({ echo "$REV"; cat $(ls argent/patches/*.patch | LC_ALL=C sort); } | tr -d '\015' | sha256)
-if [ "$(cat "$UP/.git/kob-stamp" 2>/dev/null || true)" != "$STAMP" ]; then
-  git -C "$UP" reset --quiet --hard "$REV"
-  git -C "$UP" clean --quiet -fdx
-  [ "$(git -C "$UP" rev-parse HEAD)" = "$REV" ] || { echo "argent upstream is not at $REV" >&2; exit 1; }
-  for p in $(ls argent/patches/*.patch | LC_ALL=C sort); do
-    git -C "$UP" apply --whitespace=nowarn "$ROOT/$p"
+PATCHES=()
+while IFS= read -r p; do PATCHES+=("$p"); done < <(ls argent/patches/*.patch | LC_ALL=C sort)
+
+# Expected tree: the pinned commit with the patches applied, built in a scratch index (the checkout is
+# not touched).
+IDX=$(mktemp -d)
+trap 'rm -rf "$IDX"' EXIT
+GIT_INDEX_FILE=$IDX/want ug read-tree "$REV"
+for p in "${PATCHES[@]}"; do
+  GIT_INDEX_FILE=$IDX/want ug apply --cached --whitespace=nowarn "$ROOT/$p"
+done
+WANT=$(GIT_INDEX_FILE=$IDX/want ug write-tree)
+# Actual tree: every file under argent/upstream except .git, ignored ones included (-f).
+tree_of_checkout() {
+  rm -f "$IDX/have"
+  GIT_INDEX_FILE=$IDX/have ug read-tree "$REV"
+  GIT_INDEX_FILE=$IDX/have ug add -A -f -- .
+  GIT_INDEX_FILE=$IDX/have ug write-tree
+}
+
+# An unchanged, correct tree is left alone so it keeps its mtimes and cargo does not rebuild argentc.
+HAVE=$(tree_of_checkout)
+if [ "$HAVE" != "$WANT" ]; then
+  [ -f "$UP/.git/kob-stamp" ] && echo "argent/upstream differs from $REV + patches: resetting it" >&2
+  ug reset --quiet --hard "$REV"
+  ug clean --quiet -ffdx
+  [ "$(ug rev-parse HEAD)" = "$REV" ] || { echo "argent upstream is not at $REV" >&2; exit 1; }
+  for p in "${PATCHES[@]}"; do
+    ug apply --whitespace=nowarn "$ROOT/$p"
     echo "applied $p" >&2
   done
-  echo "$STAMP" > "$UP/.git/kob-stamp"
+  echo "$WANT" > "$UP/.git/kob-stamp"
+  HAVE=$(tree_of_checkout)
+  [ "$HAVE" = "$WANT" ] || { echo "argent/upstream is not $REV + patches after the reset (tree $HAVE, want $WANT)" >&2; exit 1; }
 fi
 
 if [ "$VERIFY" = 1 ]; then
+  # The tree check above already ran; state what was verified.
+  echo "argent/upstream is $REV + ${#PATCHES[@]} patches, nothing else (tree $WANT)" >&2
   # vendor/argent-artifact must be the pinned upstream crate: src/ identical, Cargo.toml only wired.
   if ! diff -r "$UP/crates/argent-artifact/src" vendor/argent-artifact/src >/dev/null; then
     echo "vendor/argent-artifact/src differs from argent upstream $REV" >&2
@@ -61,6 +92,8 @@ fi
 
 TARGET=${ARGENT_TARGET_DIR:-$ROOT/target/argent}
 cargo build --release --locked -q --manifest-path "$UP/Cargo.toml" --bin argentc --target-dir "$TARGET"
+# --locked must not have rewritten anything in the checkout.
+[ "$(tree_of_checkout)" = "$WANT" ] || { echo "argent/upstream changed during the build" >&2; exit 1; }
 BIN=$TARGET/release/argentc
 [ -x "$BIN" ] || BIN=$BIN.exe
 echo "$BIN"

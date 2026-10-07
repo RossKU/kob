@@ -22,10 +22,14 @@ argent/build-argentc.sh --verify     # also check vendor/argent-artifact against
 ARGENT_URL=<path or url> ...         # clone source override (the pin is still enforced)
 ```
 
-The script uses the toolchain of `rust-toolchain.toml` (1.94.0), builds with `--locked`, and only
-resets and re-patches the checkout when the pin or a patch changed (the applied state is
-stamped in `argent/upstream/.git/kob-stamp`), so an unchanged tree does not rebuild. Delete
-`argent/upstream/` to force a fresh clone. `scripts/build-argent.sh` calls it; that is the
+The script uses the toolchain of `rust-toolchain.toml` (1.94.0) and builds with `--locked`. On
+every run it compares the whole checkout (tracked, untracked and ignored files) with the pinned
+commit plus the patches (the expected git tree is computed in a scratch index); on any difference
+(a local edit, an extra file, a changed pin or patch) it resets the checkout, cleans it and
+re-applies the patches, and it fails if the tree still differs or changes during the build. A
+checkout that already matches is left alone, so an unchanged tree does not rebuild. `--verify`
+reports the verified tree and also checks `vendor/argent-artifact`. Delete `argent/upstream/` to
+force a fresh clone. `scripts/build-argent.sh` calls it; that is the
 entry point CI uses (`scripts/build-contracts.sh --check`).
 
 ## Patches
