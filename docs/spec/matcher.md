@@ -402,6 +402,16 @@ a pair fill may be any mix of:
   goes to the bids' deliveries, the B the bids release to the asks' deliveries;
 - **inventory**: the matcher's own tokens (taker tokens, owned by a key that signs).
 
+**Fill sizes.** A partial fill of a pair order leaves a continuation that must fund the next delivery carrier and the tip
+of what is left (`in − deliveryCarrier − tip > 0`); the fill of everything left needs no continuation. Once the delivery
+carriers prefunded on the order UTXO are used up, only the fill of everything left is possible. The reference planner
+keeps both bounds per order (`PairInfo::cap`, the largest fill, and `PairInfo::part_cap`, the largest partial fill) and
+plans only fills in `[minFill, part_cap]` or exactly `cap`: such an order is matched only in full, like a FOK. A builder
+refusal of the fill chosen for one pair leg names that leg (`fill of leg <i>: ...`); the engine leaves that order out of
+the batch (it is not quarantined) and plans the other legs again, so one order never costs the other books their fills.
+The wallet funds one delivery carrier per possible fill (`ceil(amount / minFill)`, at most 64 by default) and discloses
+when fewer carriers make the rest fill only in full.
+
 Pair asks `i` (fills `nᵢ` of A at quotes `pᵢ`) and pair bids `j` (fills `mⱼ` of A at quotes `qⱼ`) of one pair net in a
 transaction without other legs when `Σ nᵢ = Σ mⱼ` and `Σⱼ ⌊mⱼ·qⱼ/scale(A)⌋ ≥ Σᵢ ⌈nᵢ·pᵢ/scale(A)⌉` (each order's own
 rounding and minimum fill; a `KobCondPair` / `KobIfdPair` bid may release less than its floor, a `KobPair` bid releases

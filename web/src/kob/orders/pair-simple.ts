@@ -6,8 +6,8 @@
 // whole A, prefunded on the order UTXO, never part of a B price). sell -> side 1 ASK (holds exactly the amount of A), buy -> side 2 BID (holds a B
 // escrow, kob-wasm `pairBidEscrow`: the whole amount at its highest price rounded down, plus one base unit). The order UTXO prefunds one delivery carrier per budgeted fill and the
 // tip of the whole amount (kob-wasm `pairKasValue`). Defaults: resting minFill = the amount of A worth 10 KAS on A's KAS book
-// (`defaultMinFillPair`, a quarter of the amount without a KAS reference), immediate orders 1; delivery carriers: resting min(possible fills, 3)
-// (or `maxFills`), IOC / FOK / auctions 1, TWAP / DCA one per slice.
+// (`defaultMinFillPair`, a quarter of the amount without a KAS reference), immediate orders 1; delivery carriers: resting one per possible fill, at most 64
+// (or `maxFills`; fewer carriers than possible fills make what is left after them fill only in full), IOC / FOK / auctions 1, TWAP / DCA one per slice.
 import type { PairOrderPlan, PairPlanEnv, PlanIssue } from '../plan-types';
 import type {
   CloseIntent, DcaIntent, DutchIntent, FokIntent, IocIntent, LimitIntent, MarketIntent, SimpleIntent, StreamingIntent, TwapIntent,
@@ -16,11 +16,11 @@ import { SIMPLE_TYPES } from '../intent-simple';
 import type { Duration, ExpiryKind } from '../daa';
 import { MARKET_ACTIVATION_DAA, MARKET_AUCTION_DAA, SLIPPAGE_BPS, daaToUnix } from '../daa';
 import { checkAmount, checkFok, checkMinFill, checkPriceBand, checkSelfTrade, checkTimes, crossingTouch, depthWithin, referencePrice, touchPrice } from '../guards';
-import { ceilDiv, maxBig, minBig } from '../units';
+import { ceilDiv, maxBig } from '../units';
 import { hasError, issue } from './common-issues';
 import { activationDaa, auctionBound, checkBps, checkFills, decaySlope, lifeDaa, positiveDuration, resolveLifetime } from './simple';
 import {
-  DEFAULT_PAIR_FILLS, checkPairNotional, checkPairPrice, checkPairTip, failedPairPlan, heldOf, makePairState, pairCarrierOf, pairKasLines, pairTipsOf, placePair,
+  checkPairNotional, defaultPairFills, checkPairPrice, checkPairTip, failedPairPlan, heldOf, makePairState, pairCarrierOf, pairKasLines, pairTipsOf, placePair,
   withCustody,
 } from './pair-common';
 import { pairIssue, type PairIssueCode } from './pair-issues';
@@ -45,7 +45,7 @@ interface Draft {
   priceEnd: bigint;
   decayStep: bigint;
   deadline: bigint | null;
-  /** delivery carriers budgeted: a fixed number, or null = resting default min(possible fills, 3) unless `fillsRequested` */
+  /** delivery carriers budgeted: a fixed number, or null = resting default one per possible fill (at most MAX_DEFAULT_PAIR_FILLS) unless `fillsRequested` */
   fills: bigint | null;
   fillsRequested: bigint | undefined;
   /** the most aggressive price the order can trade at (limit, auction bound, decay end) */
@@ -99,7 +99,9 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
   if (hasError(issues)) return failedPairPlan(issues);
 
   const possible = ceilDiv(d.amount, minFill);
-  const fills = d.fills ?? d.fillsRequested ?? minBig(possible, DEFAULT_PAIR_FILLS);
+  const fills = d.fills ?? d.fillsRequested ?? defaultPairFills(possible);
+  // fewer carriers than possible fills: after `fills - 1` partial fills what is left fills only in full (a resting order)
+  if (d.tif === 0 && d.interval === 0n && fills < possible) issues.push(pairIssue('PAIR_FILLS_LIMITED', { fills, partials: fills - 1n }));
   const dc = pairCarrierOf(env);
   const tips = pairTipsOf(env);
   const draft = makePairState(env, {

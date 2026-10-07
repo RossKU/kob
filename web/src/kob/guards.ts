@@ -36,6 +36,19 @@ export function referencePrice(book: BookView): bigint | null {
   return b ?? a ?? null;
 }
 
+/**
+ * A KAS value of a token that one far-off quote cannot move (the default minimum fill of a pair order is the amount worth 10 KAS at it):
+ * the best bid is a firm offer (anyone can sell into it), an ask nobody has to take is not. The midpoint of the touch when the ask is at most
+ * twice the bid, the bid alone when the spread is wider or there is no ask, null when only asks exist.
+ */
+export function firmReferencePrice(book: BookView): bigint | null {
+  const b = book.bids[0]?.price;
+  const a = book.asks[0]?.price;
+  if (b === undefined || b <= 0n) return null;
+  if (a !== undefined && a >= b && a <= 2n * b) return (a + b) / 2n;
+  return b;
+}
+
 // ------------------------------------------------------------------------------------------------ self-trade (10.12)
 
 /**

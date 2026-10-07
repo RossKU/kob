@@ -147,6 +147,21 @@ describe('buildPairPlanEnv', () => {
     expect(await kasReferenceOf(failing, env.token)).toEqual({ book: null, last: null });
   });
 
+  it('KAS references: an ask nobody has to take does not move the reference (the default minimum fill of a pair order)', async () => {
+    const lvl = (price: string) => ({ price, amount: '1000', amount_estimated: false, orders: 1, scale: 1000 });
+    const trades = async () => ({ price_basis: '1000', items: [] });
+    const m = (await buildPairPlanEnv(services(), { pubkey: MAKER_PK }, A, B)).token;
+    // only an ask, far off: no book reference (the newest trade, here none)
+    const onlyAsk = async () => ({ asks: [lvl('900000000000000')], bids: [] });
+    expect(await kasReferenceOf({ book: onlyAsk, trades } as unknown as Parameters<typeof kasReferenceOf>[0], m)).toMatchObject({ book: null });
+    // a bid and a far-off ask: the bid
+    const wide = async () => ({ asks: [lvl('900000000000000')], bids: [lvl('290000000')] });
+    expect(await kasReferenceOf({ book: wide, trades } as unknown as Parameters<typeof kasReferenceOf>[0], m)).toMatchObject({ book: 290_000_000n });
+    // a narrow spread: the midpoint
+    const narrow = async () => ({ asks: [lvl('310000000')], bids: [lvl('290000000')] });
+    expect(await kasReferenceOf({ book: narrow, trades } as unknown as Parameters<typeof kasReferenceOf>[0], m)).toMatchObject({ book: 300_000_000n });
+  });
+
   it('a failed or unsupported pair book and a failed own-order read are reported (guards unavailable), never silently off', async () => {
     const env = await buildPairPlanEnv(services({ pairBook: async () => null, allOrders: async () => { throw new Error('503'); } }), { pubkey: MAKER_PK }, A, B);
     expect(env.guardsUnavailable).toEqual(['book', 'own-orders']);

@@ -335,6 +335,7 @@ export default {
   'issues.PAIR_TP_CROSSES': 'The take-profit crosses the pair book ({touch} {ticker} per token): it fills right away at your limit.',
   'issues.PAIR_TP_NOT_PROFITABLE': 'The take-profit does not beat the entry price: the profit per token would be {profitPerToken} {ticker}.',
   'issues.PAIR_PREFUND_SHORT': 'The prefund does not cover the worst buy-back of the exit: at least {needed} {ticker} per token are needed (you gave {given}).',
+  'issues.PAIR_FILLS_LIMITED': 'The order funds {fills} deliveries: after {partials} partial fills, what is left fills only in full. A larger minimum fill or more fills changes this.',
   'issues.PAIR_KAS_REFERENCE_MISSING': 'The KAS value of {ticker} is unknown: the default minimum fill is a quarter of the amount.',
   'issues.trigger-evidence-invalid': 'Input {input}: its trigger evidence (input {evidence}) is not a fill, in this transaction, of a plain resting order of the same token. Only such a fill arms a stop.',
   'issues.trigger-rule-unmet': 'Input {input}: the fill of input {evidence} does not satisfy the trigger rule of the order (side, price, size or rest time); the network would reject this transaction.',

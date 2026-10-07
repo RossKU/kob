@@ -167,6 +167,17 @@ fn leg_order_error(i: usize, e: Error) -> Error {
     }
 }
 
+/// A refusal of the batch builder of the fill a pair leg `i` asks for (its quantity, its continuation, its evidence): the
+/// message names the leg (`fill of leg <i>: ...`), so a caller that planned the batch can leave that fill out and keep the
+/// other legs. Unlike [`leg_order_error`] it depends on what the plan chose, not on the order alone.
+fn leg_fill_error(i: usize, e: Error) -> Error {
+    match e {
+        Error::Invalid(m) => Error::Invalid(format!("fill of leg {i}: {m}")),
+        Error::State(m) => Error::Invalid(format!("fill of leg {i}: {m}")),
+        other => other,
+    }
+}
+
 /// Order state of a leg, as the kind of the family of its token program.
 fn family_of_token_hash(h: &[u8; 32]) -> Result<Family> {
     token_template_by_hash(h)
@@ -2123,7 +2134,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
             Some((a, bt)) => {
                 leg_tokens.push(pair::leg_main_token(l, a, bt));
                 pair_toks.push(Some((a, bt)));
-                calcs.push(pair::calc_leg(l, lock, strict)?);
+                calcs.push(pair::calc_leg(l, lock, strict).map_err(|e| leg_fill_error(i, e))?);
             }
             None => {
                 leg_tokens.push(leg_state(l).and_then(|s| order_token(&s)).map_err(|e| leg_order_error(i, e))?);
@@ -2852,7 +2863,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
             Leg::Pair { .. } | Leg::CondPair { .. } | Leg::IfdPair { .. } => {
                 let (a, bt) = pair_toks[i].expect("pair leg");
                 pair_exts(l, a, bt, &mut merge_ext)?;
-                pair::plan_leg(b, &lay, i, l, calcs[i].as_ref().expect("pair calc"), a, bt, lock)?
+                pair::plan_leg(b, &lay, i, l, calcs[i].as_ref().expect("pair calc"), a, bt, lock).map_err(|e| leg_fill_error(i, e))?
             }
         };
         plans.push(p);

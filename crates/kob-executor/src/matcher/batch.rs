@@ -1910,8 +1910,10 @@ fn settle(u: &Universe, mut st: State, max_bytes: u64, order: &[usize], deadline
                     continue;
                 }
                 // the largest fill both legs reached (the S sold exactly, the receipt covered), within the order's own
-                // quantity rules (FOK, its minimum fill unless it takes everything left); caps only decrease
-                let new = if x.quantity_ok(n) && n < target && round < ROUNDS { n } else { 0 };
+                // quantity rules (FOK, its minimum fill unless it takes everything left, the partial fills its carriers
+                // fund); caps only decrease
+                let m = x.fit_down(n);
+                let new = if m > 0 && m < target && round < ROUNDS { m } else { 0 };
                 if new == 0 {
                     let id = u.cands[s].id;
                     st.exclude(u, &id);
@@ -2114,8 +2116,9 @@ fn route_cap(u: &Universe, p: usize, cfg: &PlannerConfig) -> Option<i64> {
         Some(bids.kas(sold, false)? - asks.kas(need, forced)? + x.tip_kas(n64) as i128 - fee)
     };
     let pays = |n: i128| margin(n).map(|m| m >= cfg.min_profit as i128);
-    if x.fok {
-        // only the whole size: it pays, or the order is left out
+    if x.whole_only() {
+        // only the whole size (FOK, or a pair order whose prefunded carriers fund no partial fill): it pays, or the order
+        // is left out
         return match pays(x.cap as i128) {
             Some(true) if x.cap as i128 <= n_cap => whole,
             Some(_) => None,
@@ -2167,9 +2170,14 @@ fn route_cap(u: &Universe, p: usize, cfg: &PlannerConfig) -> Option<i64> {
             }
         }
     }
-    // the order's own quantity rule: a fill below its minimum fill only when it takes everything left
+    // the order's own quantity rules: a fill below its minimum fill only when it takes everything left, a partial fill only
+    // as large as its carriers fund
     let n = lo as i64;
     if !x.quantity_ok(n) {
+        let m = x.fit_down(n);
+        if m > 0 && pays(m as i128) == Some(true) {
+            return Some(m);
+        }
         return if x.quantity_ok(x.min_fill) && x.min_fill as i128 <= n_cap && pays(x.min_fill as i128) == Some(true) {
             Some(x.min_fill)
         } else {

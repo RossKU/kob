@@ -56,7 +56,7 @@ describe.each(combos)('KobPair limit orders on %s', (_name, mkA, mkB) => {
     expect(s.refundTip).toBe(K.tipsFor(p.states[0]).refundTip);
     expect(K.pairTips(a.program, b.program).refundTip).toBe(s.refundTip);
     const x = p.pair!;
-    const fills = minB(ceilDivM(amount, mf), 3n);
+    const fills = minB(ceilDivM(amount, mf), 64n); // one delivery carrier per possible fill
     expect(x).toMatchObject({ kind: 'KobPair', side: 'sell', amount, escrowA: amount, escrowB: 0n, payMaxB: null, exitCarrier: null, deliveries: fills, deliveryCarrier: DC });
     expect(x.receiveMinB).toBe(ceilQ(amount, price, a.scale));
     expect(x.minFillB).toBe(ceilQ(mf, price, a.scale));
@@ -293,6 +293,20 @@ describe('KobPair refusals and guards', () => {
     const div = plan(makePairEnv({ lastFillPrice: 3_000n }), { type: 'limit', side: 'sell', amount: 5_000n, price: 1_550n });
     expect(codes(div)).toContain('PAIR_MARKET_REFERENCE_DIVERGES');
     expect(div.issues.find((i) => i.code === 'PAIR_MARKET_REFERENCE_DIVERGES')!.params).toMatchObject({ reference: 1_475n, lastFill: 3_000n, ticker: 'BBB' });
+  });
+
+  it('a resting order funds one delivery carrier per possible fill by default; fewer carriers are disclosed', () => {
+    // minFill 1 000 of 20 000: 20 possible fills, each funded
+    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, minFill: 1_000n });
+    expect(p.pair!.deliveries).toBe(20n);
+    expect(p.pair!.orderValue).toBe(20n * DC);
+    expect(codes(p)).not.toContain('PAIR_FILLS_LIMITED');
+    // more possible fills than the default bound: the bound, and the note that the rest then fills only in full
+    const q = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, minFill: 100n });
+    expect(q.pair!.deliveries).toBe(64n);
+    expect(q.issues.find((i) => i.code === 'PAIR_FILLS_LIMITED')!.params).toMatchObject({ fills: 64n, partials: 63n });
+    const r = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, minFill: 1_000n, maxFills: 5n });
+    expect(codes(r)).toContain('PAIR_FILLS_LIMITED');
   });
 
   it('maxFills of a resting order budgets the delivery carriers (both sides)', () => {

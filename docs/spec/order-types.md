@@ -121,7 +121,8 @@ power is left: the unfilled remainder, worth less than one minimum fill plus one
 
 Wallet default: the amount worth 10 KAS (`DEFAULT_MIN_FILL_SOMPI`, a notional independent of the carrier) at the order's
 limit price, at least 1 base unit and at most the order's amount (a pair order: the amount of A worth 10 KAS on A's KAS
-book); IOC, FOK and market orders 1 base unit; if-done entries `⌈amount / 4⌉` (*Defaults*). At the default carrier the
+book, read at its best bid or at the midpoint when the best ask is at most twice the bid: an ask nobody has to take never
+sets it); IOC, FOK and market orders 1 base unit; if-done entries `⌈amount / 4⌉` (*Defaults*). At the default carrier the
 carriers a filler can make the maker lock are at most 20% of the order's notional, and one fill's fee (paid by the filler)
 is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fill (KaspaCom on both sides the highest;
 `DEFAULT_MIN_FILL_SOMPI`).

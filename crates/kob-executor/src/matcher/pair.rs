@@ -127,6 +127,11 @@ pub struct PairInfo {
     pub b: Market,
     /// Most base units of A fillable now (the covenant's affordability rules).
     pub cap: i64,
+    /// The largest fill below `cap` the covenant accepts (0: none). A partial fill must leave a continuation that funds its
+    /// delivery carrier and tip; once the order UTXO's prefunded carriers are used up only `cap` itself (the fill of
+    /// everything left) is possible, so the fills the covenant accepts are `[minFill, part_cap]` and `cap`, not every n up to
+    /// `cap`.
+    pub part_cap: i64,
     pub amount_left: i64,
     pub min_fill: i64,
     pub fok: bool,
@@ -263,7 +268,30 @@ impl PairInfo {
     }
     /// The covenant's quantity rules of a fill of n: `minFill` unless it takes everything left, FOK whole, the cap.
     pub fn quantity_ok(&self, n: i64) -> bool {
-        n > 0 && n <= self.cap && min_fill_ok(n, self.amount_left, self.min_fill) && (!self.fok || n == self.amount_left)
+        n > 0
+            && n <= self.cap
+            && (n == self.cap || n <= self.part_cap)
+            && min_fill_ok(n, self.amount_left, self.min_fill)
+            && (!self.fok || n == self.amount_left)
+    }
+    /// The largest fill at most `n` the order accepts ([`Self::quantity_ok`]); 0 when none.
+    pub fn fit_down(&self, n: i64) -> i64 {
+        if n <= 0 {
+            return 0;
+        }
+        if self.quantity_ok(n) {
+            return n;
+        }
+        let m = n.min(self.cap).min(self.part_cap);
+        if m > 0 && self.quantity_ok(m) {
+            m
+        } else {
+            0
+        }
+    }
+    /// True when the order can only be filled in full (no partial fill is possible: its carriers are used up, FOK).
+    pub fn whole_only(&self) -> bool {
+        self.fok || self.part_cap < self.min_fill.min(self.cap)
     }
     /// KAS tip a fill of n releases to the filler: `floor(n × tip / scale(A))`.
     pub fn tip_kas(&self, n: i64) -> i64 {
@@ -523,6 +551,7 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
         a: ma,
         b: mb,
         cap: 0,
+        part_cap: 0,
         amount_left: 0,
         min_fill: 0,
         fok: false,
@@ -565,10 +594,7 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                 s.fill(n, p, v).is_ok_and(|f| !f.rest || v - s.delivery_carrier - f.tip_kas > 0)
                     && (s.max_fill == 0 || n <= s.max_fill)
             };
-            x.cap = cap_of(s.amount_left, s.min_fill, fits);
-            if s.max_fill > 0 {
-                x.cap = x.cap.min(s.max_fill);
-            }
+            (x.cap, x.part_cap) = cap_of(s.amount_left, s.min_fill, fits);
             if x.fok && x.cap < s.amount_left {
                 return out;
             }
@@ -645,7 +671,7 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                     let out = s.custody - if s.is_ask() { n } else { so };
                     out >= 0 && (left == 0 || (out > 0 && v - s.delivery_carrier - tp > 0))
                 };
-                x.cap = cap_of(x.cap, s.min_fill, ok);
+                (x.cap, x.part_cap) = cap_of(x.cap, s.min_fill, ok);
                 (x.cap > 0).then_some(x)
             };
             // take-profit / limit leg
@@ -799,7 +825,7 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
             if s.rpt_amount > 0 {
                 cap = cap.min(MERGE_SHIFT - 1);
             }
-            x.cap = cap_of(cap, s.min_fill, ok);
+            (x.cap, x.part_cap) = cap_of(cap, s.min_fill, ok);
             if trigger {
                 x.need = Some(PairNeed {
                     ask_a: !buy,
@@ -822,21 +848,29 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
     out
 }
 
-/// The largest fill in `1..=max` the covenant accepts (`ok`): the whole `max` if possible, else the largest partial fill
-/// (every affordability rule is monotone in n; a partial fill below the minimum fill is refused, which a bisection must not
-/// read as the threshold). 0 when none.
-fn cap_of(max: i64, min_fill: i64, ok: impl Fn(i64) -> bool) -> i64 {
+/// The fills in `1..=max` the covenant accepts (`ok`), as `(cap, part_cap)`: `cap` is the whole `max` if possible, else the
+/// largest partial fill; `part_cap` is the largest partial fill (below `max`). Every affordability rule of a partial fill is
+/// monotone in n (a partial fill below the minimum fill is refused, which a bisection must not read as the threshold), but
+/// the fill of everything left is not a partial fill: it needs no continuation, so it can be possible when no partial fill
+/// is (the order UTXO's prefunded delivery carriers are used up). 0 when none.
+fn cap_of(max: i64, min_fill: i64, ok: impl Fn(i64) -> bool) -> (i64, i64) {
     if max <= 0 {
-        return 0;
+        return (0, 0);
     }
-    if ok(max) {
-        return max;
-    }
-    let n = largest_fit(max - 1, |n| n < min_fill || ok(n));
-    if n > 0 && ok(n) {
-        n
+    let part = if max > 1 {
+        let n = largest_fit(max - 1, |n| n < min_fill || ok(n));
+        if n > 0 && ok(n) {
+            n
+        } else {
+            0
+        }
     } else {
         0
+    };
+    if ok(max) {
+        (max, part)
+    } else {
+        (part, part)
     }
 }
 
@@ -1038,6 +1072,7 @@ pub fn surplus_cand(m: Market, marker: CovId) -> Cand {
         a: m,
         b: m,
         cap: 0,
+        part_cap: 0,
         amount_left: 0,
         min_fill: 0,
         fok: false,
@@ -1183,6 +1218,7 @@ mod tests {
         x.rank_price = price;
         x.a_scale = a_scale;
         x.cap = cap;
+        x.part_cap = cap;
         x.amount_left = cap;
         x.min_fill = 1;
         x.b = Market { token: [4; 32], ..m };

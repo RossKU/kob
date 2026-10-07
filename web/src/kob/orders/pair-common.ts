@@ -23,8 +23,16 @@ import type { Legs } from './cond-legs';
 import { pairIssue } from './pair-issues';
 
 export const ZERO32_HEX = '0'.repeat(64);
-/** KAS fills a resting pair order budgets a delivery carrier for by default (as a KAS bid: at most 3, one per possible fill). */
-export const DEFAULT_PAIR_FILLS = 3n;
+/**
+ * Most delivery carriers a resting pair order budgets by default: one per possible fill (`ceil(amount / minFill)`) up to this bound. A partial
+ * fill must leave a continuation that funds its carrier and tip, so once the budgeted carriers are used up only the fill of everything left is
+ * possible (the matcher then matches the order only in full); with the default minimum fill (10 KAS worth) the carriers of every possible fill
+ * are at most 20 % of the order's notional, and they are delivered back to the maker with the tokens.
+ */
+export const MAX_DEFAULT_PAIR_FILLS = 64n;
+
+/** The delivery carriers a resting pair order budgets by default: one per possible fill, at most MAX_DEFAULT_PAIR_FILLS. */
+export const defaultPairFills = (possible: bigint): bigint => (possible < MAX_DEFAULT_PAIR_FILLS ? possible : MAX_DEFAULT_PAIR_FILLS);
 /** Fills each if-done EXIT budgets a delivery carrier for inside its exitCarrier (a take-profit filled in up to two parts). */
 export const DEFAULT_EXIT_FILLS = 2n;
 

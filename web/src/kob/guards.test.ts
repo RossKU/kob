@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BookView, Clock, OwnOrderRef } from './plan-types';
 import {
   QUOTE_LIMIT, assessFok, checkAmount, checkCarrierRatio, checkFok, checkMinFill, checkNotional, checkPrice, checkPriceBand, checkSelfTrade, checkTimes, checkTip,
-  crosses, crossingTouch, depthWithin, referencePrice, touchPrice,
+  crosses, crossingTouch, depthWithin, firmReferencePrice, referencePrice, touchPrice,
 } from './guards';
 import { CLOCK, bookOrder, level, market3x3, market8x8, marketKron } from '../testing/fixtures';
 import { MAX_IDLE_DAA } from './daa';
@@ -30,6 +30,11 @@ describe('crossing', () => {
     expect(referencePrice(b)).toBe(245n);
     expect(referencePrice({ asks: [level(250n, 1n)], bids: [] })).toBe(250n);
     expect(referencePrice({ asks: [], bids: [] })).toBeNull();
+    // the firm reference: an ask nobody has to take never sets it
+    expect(firmReferencePrice({ asks: [level(250n, 1n)], bids: [level(240n, 1n)] })).toBe(245n);
+    expect(firmReferencePrice({ asks: [level(10_000_000n, 1n)], bids: [level(240n, 1n)] })).toBe(240n);
+    expect(firmReferencePrice({ asks: [level(10_000_000n, 1n)], bids: [] })).toBeNull();
+    expect(firmReferencePrice({ asks: [], bids: [level(240n, 1n)] })).toBe(240n);
     expect(crossingTouch(b, 'sell', 240n, 0n)).toEqual({ crossing: true, touch: 240n });
     expect(crossingTouch(b, 'sell', 241n, 0n)).toEqual({ crossing: false, touch: 240n });
     expect(crossingTouch(b, 'buy', 250n, 0n).crossing).toBe(true);

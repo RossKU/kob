@@ -7,19 +7,19 @@
 // (`stop`, `limit`, `takeProfit`, `trail.step`, `trail.gap`) are B base units per whole A; `tip` and `keeperTip` are KAS. The stop arms on pair
 // trigger evidence (kob-wasm `pairTriggerRule`: two KAS-book fills implying the rate, or a fill of a resting KobPair of the pair), with the same
 // presets as the KAS kinds: slipBps 300, bandDaa 300, minTouch = the order's minimum fill, minRestDaa 50, trailWait 6000. The order UTXO holds
-// one delivery carrier per budgeted fill (default min(possible fills, 3), `maxFills`), the tip of the whole amount (kob-wasm `pairKasValue`) and
+// one delivery carrier per budgeted fill (default one per possible fill, at most 64; `maxFills`), the tip of the whole amount (kob-wasm `pairKasValue`) and
 // the keeper reserve (keeperTip x the expected arm / trail updates; the keeper takes it from the order UTXO).
 import type { CondIntent } from '../intent-cond';
 import { COND_TYPES, isIfdLike } from '../intent-cond';
 import type { CarrierLine, PairOrderPlan, PairPlanEnv } from '../plan-types';
 import { checkAmount, checkMinFill, crossingTouch } from '../guards';
-import { ceilDiv, maxBig, minBig } from '../units';
+import { ceilDiv, maxBig } from '../units';
 import { issue } from './common-issues';
 import { IssueLog, checkSelfTrade, resolveActivation, resolveExpiry, type CondSummary } from './cond-common';
 import { NOTES_BY_TYPE, legInputOf, type LegsIntent } from './cond';
 import { askWorst, bidWorst, resolveLegs } from './cond-legs';
 import {
-  DEFAULT_PAIR_FILLS, checkPairNotional, checkPairTip, failedPairPlan, legEnvOf, makeCondPairState, pairCarrierOf, pairKasLines, pairTipsOf, placePair,
+  checkPairNotional, defaultPairFills, checkPairTip, failedPairPlan, legEnvOf, makeCondPairState, pairCarrierOf, pairKasLines, pairTipsOf, placePair,
   withCustody,
 } from './pair-common';
 import { planPairIfd } from './pair-ifd';
@@ -66,11 +66,13 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
   }
   // KAS delivery carriers: one per budgeted fill, at most one per possible fill
   const possible = ceilDiv(amount, minFill);
-  const fills = intent.maxFills ?? minBig(DEFAULT_PAIR_FILLS, possible);
+  const fills = intent.maxFills ?? defaultPairFills(possible);
   if (fills < 1n || fills > possible) {
     log.shared('MAX_FILLS_INVALID', undefined, 'maxFills');
     return failed(log);
   }
+  // fewer carriers than possible fills: after `fills - 1` partial fills what is left fills only in full
+  if (fills < possible) log.add(pairIssue('PAIR_FILLS_LIMITED', { fills, partials: fills - 1n }));
   if (log.failed) return failed(log);
 
   const tips = pairTipsOf(env);

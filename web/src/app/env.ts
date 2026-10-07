@@ -7,7 +7,7 @@ import type { FeeMode } from '../kob/types';
 import type { BookLevel, BookOrder, BookView, Clock, OwnOrderRef, PairPlanEnv, PlanEnv, TokenMarket } from '../kob/plan-types';
 import type { TokenInfo } from '../kob/registry';
 import { impliedPairRate, isPairOrderView, ownPairOrderRefs, pairBookToBookView } from '../kob/pair';
-import { referencePrice } from '../kob/guards';
+import { firmReferencePrice } from '../kob/guards';
 import { toTokenMarket } from '../kob/token-market';
 import type { Hex } from '../kob/types';
 import type { WalletInfo } from '../wallet/types';
@@ -174,7 +174,8 @@ export async function kasReferenceOf(indexer: Pick<NonNullable<Services['indexer
     indexer.book(market.covenantId, { depth: 20, aggregate: true }).catch(() => null),
     indexer.trades(market.covenantId, { limit: 1 }).catch(() => null),
   ]);
-  const book = bv && Array.isArray(bv.asks) && Array.isArray(bv.bids) ? referencePrice(bookFromIndexer(market, bv)) : null;
+  // a quote nobody has to take (an ask far above the bids, or the only side of the book) does not set the reference
+  const book = bv && Array.isArray(bv.asks) && Array.isArray(bv.bids) ? firmReferencePrice(bookFromIndexer(market, bv)) : null;
   const t = trades?.items?.[0];
   let last: bigint | null = null;
   try {

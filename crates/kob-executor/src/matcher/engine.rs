@@ -277,7 +277,18 @@ pub const REFUSED_BY_THE_BUILDER: &str = "refused by the builder";
 /// that depends on that order alone (its token programs, its family) as `order of leg <i>: ...`; leg `i` is `plan.fills[i]`
 /// ([`super::lower::lower_batch`]).
 pub fn lowering_leg(err: &str) -> Option<usize> {
-    let at = err.find("order of leg ")? + "order of leg ".len();
+    leg_named(err, "order of leg ")
+}
+
+/// The leg a lowering error names as the fill at fault: the batch builder names the leg of a refusal of the fill the plan
+/// chose for a pair order (its quantity, its continuation, its evidence) as `fill of leg <i>: ...`. That order is left out of
+/// the batch (not quarantined: another fill of it may be built), and the other legs are planned again without it.
+pub fn lowering_fill_leg(err: &str) -> Option<usize> {
+    leg_named(err, "fill of leg ")
+}
+
+fn leg_named(err: &str, prefix: &str) -> Option<usize> {
+    let at = err.find(prefix)? + prefix.len();
     let digits: String = err[at..].chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() || !err[at + digits.len()..].starts_with(':') {
         return None;
@@ -462,6 +473,13 @@ impl<'a> Tick<'a> {
                         }
                         ex.insert(id);
                         // the order at fault is out: what is left is planned as if it had never been listed
+                        last = None;
+                        continue;
+                    }
+                    // A refusal of the fill the plan chose for one pair order: that order sits out this batch, the other
+                    // legs (of any book) are planned again without it.
+                    if let Some(id) = lowering_fill_leg(&e).and_then(|i| plan.fills.get(i)).map(|f| f.cand.id) {
+                        ex.insert(id);
                         last = None;
                         continue;
                     }

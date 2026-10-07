@@ -29,6 +29,7 @@ export const PAIR_ISSUE_CATALOG = {
   PAIR_TP_CROSSES: e('warning', 'The take-profit crosses the pair book ({touch} {ticker} per token): it fills right away at your limit.'),
   PAIR_TP_NOT_PROFITABLE: e('error', 'The take-profit does not beat the entry price: the profit per token would be {profitPerToken} base units of {ticker}.'),
   PAIR_PREFUND_SHORT: e('error', 'The prefund does not cover the exit\'s worst buy-back: at least {needed} base units of {ticker} per token are needed (you gave {given}).'),
+  PAIR_FILLS_LIMITED: e('info', 'The order funds {fills} deliveries: after {partials} partial fills, what is left fills only in full. A larger minimum fill or more fills changes this.'),
   PAIR_KAS_REFERENCE_MISSING: e('info', 'The KAS value of {ticker} is unknown: the default minimum fill is a quarter of the amount.'),
 } as const satisfies Record<string, CatalogEntry>;
 

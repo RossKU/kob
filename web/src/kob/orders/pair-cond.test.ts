@@ -46,7 +46,7 @@ describe.each(combos)('KobCondPair on %s', (_name, mkA, mkB) => {
     expect(BigInt(s.minFill)).toBe(mf);
     expect(BigInt(s.minTouch)).toBe(mf);
     const worst = worstOf('sell', 1_401n, 300n);
-    const fills = minB(ceilDivM(amount, mf), 3n);
+    const fills = minB(ceilDivM(amount, mf), 64n); // one delivery carrier per possible fill
     const x = p.pair!;
     expect(x.receiveMinB).toBe(ceilQ(amount, worst, a.scale));
     expect(x.expectedB).toBe(ceilQ(amount, 1_401n, a.scale));
