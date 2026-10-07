@@ -8,7 +8,7 @@ use std::time::Duration;
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction};
 use kob_x402::chain::{ChainError, ChainUtxo, ChainView, FixedClock, Outpoint, OutputStatus, SubmitError, Txid};
 use kob_x402::policy::{AllowedToken, Custody, Policy};
-use kob_x402::testkit::MockChain;
+use kob_x402::testkit::{p2pk_spk, pubkey, MockChain};
 use kob_x402::wire::{hex, Finality, Network, SettlementResponse};
 
 use super::facilitator::Facilitator;
@@ -756,6 +756,7 @@ fn crash_recovery_without_a_reconcile_pass_uses_the_ledger_on_retry() {
 fn reconcile_marks_a_vanished_accepted_output_ambiguous_and_keeps_the_evidence() {
     let f = Fixture::new();
     let a = f.fund(500_000_000);
+    let funding = f.chain.utxo(&a).unwrap();
     let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
     let miner = mine_later(&f.chain, 10, 0);
     assert!(f.fac.settle("shop", &req).success);
@@ -764,8 +765,10 @@ fn reconcile_marks_a_vanished_accepted_output_ambiguous_and_keeps_the_evidence()
     // healthy: nothing to do
     let rep = f.fac.reconcile();
     assert_eq!((rep.checked, rep.reorged), (1, 0));
-    // a reorg drops the block: the merchant output is gone and the transaction is not in the mempool
+    // a reorg drops the block: the merchant output is gone, the payer's input is unspent again and the transaction is not in the
+    // mempool
     f.chain.spend_externally(&out);
+    f.chain.insert_utxo(a, funding);
     let rep = f.fac.reconcile();
     assert_eq!(rep.reorged, 1);
     let e = f.ledger.get(&txid_hex(&tx)).unwrap();
@@ -773,6 +776,66 @@ fn reconcile_marks_a_vanished_accepted_output_ambiguous_and_keeps_the_evidence()
     assert!(e.reason.unwrap().contains("vanished"));
     assert!(f.ledger.is_consumed(&Outpoint::new(tx.inputs[0].previous_outpoint.transaction_id.as_bytes(), 0)), "never reusable");
     assert_eq!(f.fac.metrics.reorgs_detected.load(Ordering::Relaxed), 1);
+    // and never released, however long it stays so
+    f.clock.set(START_MS + 10 * 3_600_000);
+    let rep = f.fac.reconcile();
+    assert_eq!(rep.released_ambiguous, 0);
+    assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Ambiguous);
+}
+
+/// Without an acceptance tracker (the standalone facilitator, or `run` after a restart) the merchant spending its paid output
+/// looks like a vanished output. The payment's own inputs are still spent, so it is no reorg: the entry stays accepted.
+#[test]
+fn a_merchant_spending_its_paid_output_is_not_a_reorg() {
+    let f = Fixture::new();
+    let a = f.fund(500_000_000);
+    let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
+    let miner = mine_later(&f.chain, 10, 0);
+    assert!(f.fac.settle("shop", &req).success);
+    miner.join().unwrap();
+    f.chain.advance_daa(50);
+    f.chain.spend_externally(&Outpoint::new(tx.id().as_bytes(), 0));
+    let rep = f.fac.reconcile();
+    assert_eq!(rep.reorged, 0);
+    assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Accepted);
+    f.clock.set(START_MS + 61 * 60_000);
+    let rep = f.fac.reconcile();
+    assert_eq!((rep.reorged, rep.released_ambiguous), (0, 0));
+    assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Accepted);
+    assert!(f.ledger.is_consumed(&a));
+}
+
+/// The same for an invoice: it stays paid, and a second payment of it is refused as a duplicate.
+#[test]
+fn a_paid_invoice_stays_paid_when_the_merchant_spends_the_payment() {
+    let fx = Fixture::with_invoices();
+    let reqs = kas_requirements(100_000_000, Finality::Accepted, 60);
+    let inv = kob_x402::invoice::Invoice::new(Network::Testnet10, "order-1", START_MS + 3 * 3_600_000, None, vec![reqs.clone()]);
+    let id = fx.fac.register_invoice("shop", inv, &|_| true).unwrap()["id"].as_str().unwrap().to_string();
+    let rh = kob_x402::wire::parse_hash32(&id).unwrap();
+    let a = fx.fund(500_000_000);
+    let (tx, entries) = build_kas_payment(&fx.chain, PAYER_KEY, &[a], &p2pk_spk(&pubkey(MERCHANT_KEY)), 100_000_000);
+    let first = request_for(&tx, &entries, &reqs, rh, "payment-id-invoice-0001");
+    let miner = mine_later(&fx.chain, 10, 0);
+    assert!(fx.fac.pay_invoice(&id, first.payment_payload).success);
+    miner.join().unwrap();
+    fx.chain.advance_daa(50);
+    fx.chain.spend_externally(&Outpoint::new(tx.id().as_bytes(), 0));
+    fx.fac.reconcile();
+    fx.clock.set(START_MS + 61 * 60_000);
+    fx.fac.reconcile();
+    assert_eq!(fx.fac.invoice_status(&id).unwrap().status, kob_x402::invoice::InvoiceState::Paid);
+    // a second, independent payment is refused before broadcast
+    let b = fx.fund(500_000_000);
+    let (tx2, entries2) = build_kas_payment(&fx.chain, PAYER_KEY, &[b], &p2pk_spk(&pubkey(MERCHANT_KEY)), 100_000_000);
+    let mut second = request_for(&tx2, &entries2, &reqs, rh, "payment-id-invoice-0002");
+    second.payment_payload.payload.authorization.expires_at = kob_x402::common::iso_from_ms(START_MS + 61 * 60_000 + 30_000);
+    fx.verifier.expires_at_ms.store(START_MS + 61 * 60_000 + 30_000, Ordering::SeqCst);
+    let submits = fx.chain.submit_count();
+    let r2 = fx.fac.pay_invoice(&id, second.payment_payload);
+    assert!(!r2.success, "{r2:?}");
+    assert_eq!(diag(&r2), "invoice_paid");
+    assert_eq!(fx.chain.submit_count(), submits);
 }
 
 #[test]

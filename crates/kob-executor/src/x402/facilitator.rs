@@ -100,11 +100,12 @@ pub struct FacilitatorConfig {
     /// once it is this old. Until then only the identical retry resolves it. Safe: a success is only ever reported
     /// for the transaction whose own finality was observed.
     pub pending_grace: Duration,
-    /// An `ambiguous` direct payment (the node was unreachable at its broadcast, or its accepted output vanished in a reorg)
-    /// that the node still does not know (not in the mempool, its merchant output not on chain) this long after it became
-    /// ambiguous is failed and its outpoints released (C5 X-9): otherwise its evidence, and an invoice it pays, stay
-    /// `pending` forever. An invoice keeps watching it as a `released` extra payment: if it reaches the chain after all, the
-    /// status reports it `accepted` (the merchant refunds it, as a late payment).
+    /// An `ambiguous` direct payment that never was accepted (the node was unreachable at its broadcast) and that the node still
+    /// does not know (not in the mempool, its merchant output not on chain) this long after it became ambiguous is failed and its
+    /// outpoints released (C5 X-9): otherwise its evidence, and an invoice it pays, stay `pending` forever. An invoice keeps
+    /// watching it as a `released` extra payment: if it reaches the chain after all, the status reports it `accepted` (the
+    /// merchant refunds it, as a late payment). A payment that was accepted once and became ambiguous (its inputs are unspent
+    /// again: a reorg) is never released; its evidence stays consumed.
     pub ambiguous_grace: Duration,
 }
 
@@ -863,6 +864,16 @@ impl Facilitator {
         })
     }
 
+    /// True when an input of the entry's transaction is unspent again (back in the payer's UTXO set): the transaction is not
+    /// in the chain any more, which only a reorg does. A merchant output that is gone while every input stays spent was spent by
+    /// the merchant (or anyone it paid), not undone. Without a payer address nothing is proven (false).
+    fn inputs_back(&self, e: &Entry) -> std::result::Result<bool, ChainError> {
+        let Some(addr) = e.payer.as_deref().and_then(|a| kaspa_addresses::Address::try_from(a).ok()) else { return Ok(false) };
+        let spk = kaspa_txscript::pay_to_address_script(&addr);
+        let consumed: HashSet<Outpoint> = e.consumed_outpoints().into_iter().collect();
+        Ok(self.chain.utxos_of(&spk)?.iter().any(|(o, _)| consumed.contains(o)))
+    }
+
     /// Order outpoints (of `refs`) that are not in the UTXO set any more; `None` if the lookup failed.
     fn spent_orders(&self, refs: &[(Outpoint, ScriptPublicKey)]) -> Option<Vec<Outpoint>> {
         if refs.is_empty() {
@@ -1036,7 +1047,14 @@ impl Facilitator {
             let now = self.clock.now_ms();
             match (e.state, on_chain) {
                 (State::Accepted, Some(_)) => {}
-                (State::Accepted, None) => match self.chain.in_mempool(&txid) {
+                // in the mempool again: fine. An acceptance tracker that followed it and lost its accepting block says reorg; without
+                // one (the standalone facilitator, or after a restart) a spent merchant output looks like a vanished one, so a reorg
+                // is read only when an input of the transaction is unspent again (the merchant spending its output leaves them spent)
+                (State::Accepted, None) => match self
+                    .chain
+                    .in_mempool(&txid)
+                    .and_then(|m| Ok(m || (!matches!(self.chain.tracked(&txid), Tracked::NotAccepted) && !self.inputs_back(&e)?)))
+                {
                     Ok(true) => {}
                     Ok(false) => {
                         Metrics::inc(&self.metrics.reorgs_detected);
@@ -1085,7 +1103,9 @@ impl Facilitator {
                         }
                     }
                     Ok(false) => {
-                        if state == State::Ambiguous {
+                        // a payment that was accepted once is never released: its evidence stays consumed until the chain
+                        // settles it again (kcc20 profile 9.1); only one that never reached the chain is
+                        if state == State::Ambiguous && e.accepted_daa.is_none() {
                             let age = now.saturating_sub(e.updated_ms);
                             if age >= self.config.ambiguous_grace.as_millis() as u64 {
                                 eprintln!(

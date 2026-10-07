@@ -243,8 +243,9 @@ holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignor
   `confirmed` additionally needs the configured DAA depth. This holds when the merchant spends the
   payment output immediately (the UTXO observation alone would then never see the settlement) and
   turns false when the accepting block is reorged away: the periodic reconcile marks such an entry
-  `ambiguous` (evidence stays consumed) only when the tracker, the UTXO set and the mempool all lost
-  the transaction. The UTXO observation stays the fallback for transactions the follower did not see
+  `ambiguous` (evidence stays consumed, never released) only when the tracker, the UTXO set and the mempool all lost
+  the transaction and an input of it is unspent again. Without the tracker (the standalone facilitator, or after a restart)
+  a merchant output the merchant spent is gone too, but the payment's inputs stay spent: the entry stays `accepted`. The UTXO observation stays the fallback for transactions the follower did not see
   from before their broadcast (a restart) and while the indexer catches up.
 * **Watches are per consumer.** The matcher's acceptance bookkeeping drops only its own watches.
 * **Swap-and-pay quotes** are the payer's job (`docs/spec/x402-swap-and-pay.md` §12; the facilitator
@@ -363,10 +364,11 @@ status (`extraPayments[].observed = accepted`) if its payer broadcasts it anyway
 a kept one spends (a fee variant of the same funding: at most one of them can reach the chain) is not kept, and an
 invoice keeps at most `maxExtraPaymentsPerInvoice` (16) refused payments; further ones are refused without being written
 (`kob_x402_invoice_evidence_dropped`). A direct payment whose outcome stayed unknown (`ambiguous`: the node was unreachable at
-its broadcast, or its accepted output vanished in a reorg) and that the node still does not know an hour later (not in
+its broadcast) and that the node still does not know an hour later (not in
 the mempool, its merchant output not on chain) is failed, its outpoints are released and the invoice can be paid again
 until it expires; the invoice keeps watching it as `extraPayments[].kind = released`, so a late acceptance is still
-reported. The store (`store`, default the ledger path plus `.invoices.jsonl`; `:memory:` is
+reported. A payment that was accepted once is never released (a reorg that undid it leaves it `ambiguous`, and the
+invoice `pending`, until the chain settles it again). The store (`store`, default the ledger path plus `.invoices.jsonl`; `:memory:` is
 refused on mainnet) is an append-only JSONL log with an fsync per record and a lock file, like the ledger;
 back it up with the ledger. Metrics: `kob_x402_invoices_registered`, `kob_x402_invoice_refused`; the reconcile
 report counts `extraPaymentsSeen`.
