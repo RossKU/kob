@@ -538,6 +538,11 @@ mod tests {
             ("wss://a@b@node.example#f", "wss://node.example/..."),
             ("n0", "n0"),
             ("user:pw@host:1/x", "host:1/..."),
+            // a password with an unencoded '?', '#' or '/'
+            ("wss://user:pa?ss@node.example/x", "wss://node.example/..."),
+            ("wss://user:pa#ss@node.example", "wss://node.example"),
+            ("wss://user:p/ss@host", "wss://<redacted>/..."),
+            ("ws://[::1]:18210/x", "ws://[::1]:18210/..."),
         ] {
             assert_eq!(redact_url(url), shown, "{url}");
         }

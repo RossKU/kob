@@ -132,12 +132,15 @@ impl WrpcClient {
 
     fn connect(&self) -> Result<Conn, RpcError> {
         let rest = self.url.strip_prefix("ws://").ok_or_else(|| RpcError::Transport("only ws:// node urls are supported".into()))?;
-        let authority = rest.split('/').next().unwrap_or(rest);
+        // the host and port only: user information, path, query and fragment can hold credentials, and error texts reach
+        // merchants (a retryable error's message) and logs, so they name the node by its redacted URL
+        let (authority, _) = crate::rpc::url_host(rest);
+        let shown = crate::rpc::redact_url(&self.url);
         let addr = authority
             .to_socket_addrs()
-            .map_err(|e| RpcError::Transport(format!("resolve {authority}: {e}")))?
+            .map_err(|e| RpcError::Transport(format!("resolve {shown}: {e}")))?
             .next()
-            .ok_or_else(|| RpcError::Transport(format!("no address for {authority}")))?;
+            .ok_or_else(|| RpcError::Transport(format!("no address for {shown}")))?;
         let stream = TcpStream::connect_timeout(&addr, self.timeout).map_err(|e| RpcError::Transport(format!("connect: {e}")))?;
         stream.set_read_timeout(Some(self.timeout)).map_err(|e| RpcError::Transport(e.to_string()))?;
         stream.set_write_timeout(Some(self.timeout)).map_err(|e| RpcError::Transport(e.to_string()))?;
@@ -793,5 +796,21 @@ mod tests {
         assert!(matches!(chain.submit(&sample_tx()), Err(SubmitError::Unavailable(_))));
         assert!(t.elapsed() < Duration::from_secs(2));
         h.join().unwrap();
+    }
+
+    /// The error text of an unreachable node (a retryable error's message, the logs) never carries the URL's credentials.
+    #[test]
+    fn node_error_text_carries_no_url_secret() {
+        for url in [
+            "ws://user:hunter2@127.0.0.1:1",
+            "ws://127.0.0.1:1?apikey=SECRETKEY",
+            "ws://127.0.0.1:1/SECRETKEY",
+            "ws://user:pa?SECRETKEY@127.0.0.1:1",
+            "ws://user:hunter2@no-such-host.invalid:1",
+        ] {
+            let chain = NodeChain::connect(url, Network::Testnet10, Duration::from_millis(300));
+            let e = chain.virtual_daa_score().expect_err("no node").to_string();
+            assert!(!e.contains("hunter2") && !e.contains("SECRETKEY") && !e.contains("user"), "{url} -> {e}");
+        }
     }
 }
