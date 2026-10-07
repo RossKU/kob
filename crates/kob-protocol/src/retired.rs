@@ -35,7 +35,7 @@
 //!   `aFamily`: committed by the v3 no-lot revision 8dd4ebf on 2026-10-05, replaced by the pair orders in 82672b9). It was
 //!   never deployed (no live order is known); it is kept for safety, its cancel built like every other.
 //! * the protocol v3 sell-first entries `KobIfdAsk` / `KobIfdAskKron` before their refund required tokens held (retired
-//!   2026-10-06, security review: an empty repeating entry could be drained through a zero-amount stand-in custody). Only their
+//!   2026-10-06; the refund of an empty repeating entry now requires tokens held). Only their
 //!   code changed: their states are today's ([`Retired::is_current_layout`], read as [`RetiredState::Current`]).
 //!
 //! A booked exit of a retired entry is an order of the conditional template that entry inlines, retired as well (its
@@ -368,14 +368,14 @@ const SOURCES: &[(TemplateId, Family, &str, &str, &str)] = &[
         Family::Kcc20,
         include_str!("../../../contracts/retired/KobIfdAsk-189b9c32.json"),
         "189b9c3297cac33c0de6b5defefcbee5deee42306e8aa72b4615d8f2d4515a17",
-        "sell-first entry (protocol v3) whose refund (settle n = 0) did not require tokens held: an empty repeating entry could be drained through a zero-amount stand-in custody; today's state layout; retired 2026-10-06 (security review)",
+        "sell-first entry (protocol v3) whose refund (settle n = 0) did not require tokens held (an empty repeating entry accepted a refund); today's state layout; retired 2026-10-06",
     ),
     (
         TemplateId::KobIfdAskKron,
         Family::Kron,
         include_str!("../../../contracts/retired/KobIfdAskKron-85d87838.json"),
         "85d8783813f861d16d2679d13fd062d81ce572f7fe4efa111943bd5a6a6b4ac8",
-        "KRON sell-first entry (protocol v3) whose refund (settle n = 0) did not require tokens held (see KobIfdAsk 189b9c32); today's state layout; retired 2026-10-06 (security review)",
+        "KRON sell-first entry (protocol v3) whose refund (settle n = 0) did not require tokens held (see KobIfdAsk 189b9c32); today's state layout; retired 2026-10-06",
     ),
     // ---- the protocol v3 cross limit (no lots; token A of either family by aFamily), committed by the v3 no-lot revision
     // (8dd4ebf, 2026-10-05) and replaced by the pair orders (82672b9) before any deployment.

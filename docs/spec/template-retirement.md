@@ -44,7 +44,7 @@ lives until its deadline, after which anyone (the x402 facilitator first) expire
 (`docs/argent.md`, "Lock pin") changed the 24 token-intent templates (`TokenToKas*`, `TokenSwap*` and their KRON
 twins; the `KasToToken*` templates are unchanged). An intent created from a previous template keeps its script: its
 payer's `cancel` and anyone's `expire` still validate on chain, but today's builders do not build for it, and the lock
-stand-in it was vulnerable to still works on it until it ends.
+rule of the previous template stays in force on it until it ends.
 
 ## Retired templates this build can spend
 
@@ -64,8 +64,8 @@ retired on 2026-10-05 (main kept them unchanged up to `36d569c`).
 
 | Kind | Hash | State | Retired | Note |
 |---|---|---|---|---|
-| `KobIfdAsk` | `189b9c3297cac33c0de6b5defefcbee5deee42306e8aa72b4615d8f2d4515a17` | 594 B (today's layout) | 2026-10-06 (security review) | sell-first entry of protocol v3 whose refund (`settle` n = 0) did not require tokens held: an empty repeating entry could be drained by anyone through a zero-amount stand-in custody after its soft expiry; only the code changed (decoded with today's state type) |
-| `KobIfdAskKron` | `85d8783813f861d16d2679d13fd062d81ce572f7fe4efa111943bd5a6a6b4ac8` | 561 B (today's layout) | 2026-10-06 (security review) | KRON sell-first entry of protocol v3, the same refund fix; only the code changed |
+| `KobIfdAsk` | `189b9c3297cac33c0de6b5defefcbee5deee42306e8aa72b4615d8f2d4515a17` | 594 B (today's layout) | 2026-10-06 | sell-first entry of protocol v3 whose refund (`settle` n = 0) did not require tokens held: the refund of an empty repeating entry (no custody) was accepted after its soft expiry, where `close()` now ends it; only the code changed (decoded with today's state type) |
+| `KobIfdAskKron` | `85d8783813f861d16d2679d13fd062d81ce572f7fe4efa111943bd5a6a6b4ac8` | 561 B (today's layout) | 2026-10-06 | KRON sell-first entry of protocol v3, the same refund rule; only the code changed |
 | `KobAsk` | `66853f1603149ff6371a06655ac58fa9f775ad80fce0141876c31dc41364c3c2` | 243 B (v2.6 lot layout) | 2026-10-05 (`8dd4ebf`) | limit sell, the last lot template (cost pass 1, a7072a1 2026-10-01); TN10 soak ae87d77 to 747797c |
 | `KobAskKron` | `3389eeb2e971cacbbbbda193582d38db5f1bf56acff55478d9afd4a4d956b7d7` | 243 B (v2.6 lot layout) | 2026-10-05 (`8dd4ebf`) | KRON limit sell, the last lot template (a7072a1 2026-10-01); pinned by the TN10 builds ae87d77 to 747797c |
 | `KobBid` | `208589746fefe2ea9082cef18b75b0e5a31f9e1b059421dc0caeef96b3d55728` | 285 B (v2.6 lot layout) | 2026-10-05 (`8dd4ebf`) | limit buy, the last lot template (a7072a1 2026-10-01); TN10 soak ae87d77 to 747797c |

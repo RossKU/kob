@@ -4124,24 +4124,24 @@ fn kron_v2_buy_v3_merge_push() {
     }
 }
 
-/// Security review 2026-10-06 (the KRON twin of `kob_v2_buy_tests::sec_empty_repeating_ifda_refund_drain_is_refused`): the
-/// refund (settle nb = 0) of an EMPTY repeating KobIfdAskKron entry with a zero-amount token UTXO owned by the entry's id
-/// standing in as its custody pinned no output, so its KAS could go anywhere. The refund now requires tokens held: the
-/// entry (input 0) refuses it whatever the token program makes of the stand-in; the empty entry ends by `close()` (RPB8)
+/// The KRON twin of `kob_v2_buy_tests::empty_repeating_ifda_refund_is_refused`: the refund (settle nb = 0) of an EMPTY
+/// repeating KobIfdAskKron entry with a zero-amount token UTXO owned by the entry's id as its custody used to pin no
+/// output, so its KAS could be paid to any output. The refund now requires tokens held: the
+/// entry (input 0) refuses it whatever the token program makes of the custody; the empty entry ends by `close()` (RPB8)
 /// and an entry holding tokens is still refunded to the maker (R1).
 #[test]
-fn kron_sec_empty_repeating_ifda_refund_drain_is_refused() {
+fn kron_empty_repeating_ifda_refund_is_refused() {
     for tpl in TPLS {
         println!("=== KRON template {tpl}");
         let f = fx(tpl);
         let n = &f.net;
         let k = &n.k;
         let i = cov(RPTA_ENTRY);
-        let attacker = pk(&f.taker);
+        let taker_pk = pk(&f.taker);
         let e = rpta_p(&f, 0, TOK);
         let tpl_b = condb_tpl(n);
         let s = Scn {
-            name: "SR2 empty repeating KobIfdAskKron drained via settle(0) with a zero-amount custody".into(),
+            name: "SR2 empty repeating KobIfdAskKron refunded via settle(0) with a zero-amount custody".into(),
             inputs: vec![
                 call(
                     &ifda(n, &e),
@@ -4156,14 +4156,14 @@ fn kron_sec_empty_repeating_ifda_refund_drain_is_refused() {
                 p2pk_in(&f.taker, 10 * KAS),
             ],
             outputs: vec![
-                // output self: every carrier minus refundTip (what the old refund required), to the attacker
-                out(3 * CARRIER - REFUND_TIP, p2pk_spk(&attacker), None),
-                out(CARRIER / 4, tspk(k, 0, &attacker, T_ADDR), Some((1, TOKEN_COV))),
-                out(10 * KAS - CARRIER / 4 - NET_FEE, p2pk_spk(&attacker), None),
+                // output self: every carrier minus refundTip (what the old refund required), to the taker
+                out(3 * CARRIER - REFUND_TIP, p2pk_spk(&taker_pk), None),
+                out(CARRIER / 4, tspk(k, 0, &taker_pk, T_ADDR), Some((1, TOKEN_COV))),
+                out(10 * KAS - CARRIER / 4 - NET_FEE, p2pk_spk(&taker_pk), None),
             ],
             lock_time: EXPIRY as u64,
             payload: vec![],
-            next: vec![tok_state(0, &attacker, T_ADDR)],
+            next: vec![tok_state(0, &taker_pk, T_ADDR)],
         };
         run_bad(&s, 0);
     }

@@ -164,7 +164,7 @@ RetiredLayout { code: 0x04, state_len: 381, hash: "040f5ac8e23b4360a7956028fa05d
     RetiredLayout { code: 0x88, state_len: 351, hash: "ef254324cc270929a9b5b70116af1739983faa3dd4bb7278dc5b01044d631354", tags: &[0xa0893109, 0xbd44243d] }, // KobCrossKron
     // protocol v3 (no lots), committed by 8dd4ebf (2026-10-05) and replaced by the pair orders before any deployment
     RetiredLayout { code: 0x08, state_len: 360, hash: "ea23f1fec9719d56a31f4b54b15cc3e6a286af0384b7e7769f571dfd39a74b89", tags: &[0xa0893109, 0xb62164ca] }, // KobCross
-    // protocol v3 sell-first entries whose refund did not require tokens held, retired 2026-10-06 (security review); today's
+    // protocol v3 sell-first entries whose refund did not require tokens held, retired 2026-10-06; today's
     // state layout under the same codes, told apart by template hash (format 2)
     RetiredLayout { code: 0x06, state_len: 594, hash: "189b9c3297cac33c0de6b5defefcbee5deee42306e8aa72b4615d8f2d4515a17", tags: &[0x2291ad1d, 0x46ade55d, 0x46d7fcb4, 0xa0893109] }, // KobIfdAsk
     RetiredLayout { code: 0x86, state_len: 561, hash: "85d8783813f861d16d2679d13fd062d81ce572f7fe4efa111943bd5a6a6b4ac8", tags: &[0x2291ad1d, 0x46ade55d, 0x46d7fcb4, 0xa0893109] }, // KobIfdAskKron

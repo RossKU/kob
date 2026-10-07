@@ -1,10 +1,10 @@
-//! Transport-level bounds of the read API and the x402 HTTP server (security review 2026-10-06). Each test is the review's
-//! proof of concept turned around: it shows the attack no longer holds the server, with short configured deadlines.
+//! Transport-level bounds of the read API and the x402 HTTP server (added 2026-10-06). Each test runs the
+//! scenario against short configured deadlines and shows the bound holds.
 //!
 //! - read API: header-read deadline and connection caps (slow-header connections used to be held forever);
 //! - x402: a per-address connection cap (one host used to hold every slot of the global cap) and a write-stall deadline
 //!   (a client pipelining requests without reading used to park its slot forever);
-//! - read API: IPv6 /64 rotation inside one site no longer drains the global bucket;
+//! - read API: IPv6 /64 rotation inside one site does not exhaust the global bucket;
 //! - WebSocket: a session that only auto-answers server Pings is closed at the idle limit, one sending `{"op":"ping"}`
 //!   stays.
 
@@ -214,7 +214,7 @@ async fn x402_pipelining_non_reader_loses_its_slot() {
 }
 
 // ----------------------------------------------------------------------------------------------------------------------
-// Read API rate limits: rotating the /64s of one IPv6 site no longer drains the global bucket for everybody else.
+// Read API rate limits: rotating the /64s of one IPv6 site does not exhaust the global bucket for everybody else.
 async fn hit(router: &Router, ip: &str, path: &str) -> StatusCode {
     let mut req = Request::builder().uri(path).body(Body::empty()).unwrap();
     req.extensions_mut().insert(ConnectInfo(SocketAddr::new(ip.parse().unwrap(), 40000)));

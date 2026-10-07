@@ -612,13 +612,13 @@ export const mutations = [
     note: 'repeat merge: the exit\'s fill argument (input k) must start with the 8-byte push 0x08 (a non-minimal 9-byte push is refused)',
     edits: [del('                require(OpTxInputScriptSigSubstr(k, 0, 1) == byte[](0x08));')],
   },
-  // ---- security review 2026-10-06: the refund of an empty (repeating) entry
+  // ---- 2026-10-06: the refund of an empty (repeating) entry
   {
     id: 'IA-refund-held',
     file: 'KobIfdAsk',
-    test: 'sec_empty_repeating_ifda_refund_drain_is_refused',
+    test: 'empty_repeating_ifda_refund_is_refused',
     expect: ['SR1b', 'SR1c'],
-    note: 'refund (settle nb = 0) only while tokens are held: an empty repeating entry with a zero-amount stand-in custody would pin no output (its KAS to anyone)',
+    note: 'refund (settle nb = 0) only while tokens are held: an empty repeating entry with a zero-amount custody would pin no output, so close() is its end',
     edits: [rxDel('    entry settle(byte[8] nb, int tokenIn,', /^\s*require\(amountLeft > 0\);$/m)],
   },
 ];

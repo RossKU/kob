@@ -655,14 +655,14 @@ export const mutations = [
     note: 'merge into an entry armed by update (armed 1, band): the continuation records the band origin (else the auction restarts)',
     edits: [rep('if (armed == 1 && bandDaa > 0) {', 'if (armed == 1 && bandDaa < 0) {')],
   },
-  // ---- security review 2026-10-06: the refund of an empty (repeating) entry
+  // ---- 2026-10-06: the refund of an empty (repeating) entry
   {
     id: 'IA-refund-held',
     file: 'KobIfdAskKron',
-    test: 'kron_sec_empty_repeating_ifda_refund_drain_is_refused',
+    test: 'kron_empty_repeating_ifda_refund_is_refused',
     expect: ['SR2'],
     inputOnly: ['SR2'],
-    note: 'refund (settle nb = 0) only while tokens are held: an empty repeating entry with a zero-amount stand-in custody would pin no output (inputOnly: whether the KRON program itself takes the zero-amount stand-in is not what this check decides)',
+    note: 'refund (settle nb = 0) only while tokens are held: an empty repeating entry with a zero-amount custody would pin no output, so close() is its end (inputOnly: whether the KRON program itself takes the zero-amount custody is not what this check decides)',
     edits: [rxDel('    entry settle(byte[8] nb, int tokenIn,', /^\s*require\(amountLeft > 0\);$/m)],
   },
 ];

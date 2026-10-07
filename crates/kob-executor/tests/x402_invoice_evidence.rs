@@ -1,4 +1,4 @@
-//! Refused invoice payments kept as evidence are bounded (security review 2026-10-06).
+//! Refused invoice payments kept as evidence are bounded (2026-10-06).
 //!
 //! `POST /invoices/<id>/pay` is unauthenticated. A payment to an expired (or paid) invoice is refused, verified and kept as
 //! evidence with the merchant output it would pay, so the reconcile can report it if the payer broadcasts it anyway. Before
@@ -86,7 +86,7 @@ fn refused_invoice_payments_are_kept_once_per_funding_and_capped() {
         assert!(!r.success, "a late payment is refused");
     };
 
-    // the review's attack: 200 fee variants of ONE funded output, each a new txid
+    // the stress case: 200 fee variants of ONE funded output, each a new txid
     pay(0, 0);
     let after_first = std::fs::metadata(&store_path).unwrap().len();
     for i in 1..200u64 {

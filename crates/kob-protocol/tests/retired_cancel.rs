@@ -304,7 +304,7 @@ fn the_maker_cancels_a_v3_cross_limit_without_lots() {
 
 /// The protocol v3 sell-first entries retired 2026-10-06 (their refund did not require tokens held): today's layout, so the
 /// order reads with today's state type; its maker cancels a live entry and an EMPTY repeating one (no custody, the case the
-/// old refund let anyone drain) on every program of its family, and nothing but the cancel is built.
+/// old refund accepted) on every program of its family, and nothing but the cancel is built.
 #[test]
 fn the_maker_cancels_the_v3_sell_first_entries_retired_for_the_empty_refund() {
     let cur: Vec<&Retired> = retired::retired().iter().filter(|r| r.is_current_layout()).collect();
