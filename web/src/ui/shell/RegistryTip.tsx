@@ -1,5 +1,5 @@
 import type { ComponentChildren } from 'preact';
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useId, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { t } from '../../i18n';
 import type { RegistryIdentity } from '../../kob/registry-source';
@@ -46,7 +46,9 @@ export function RegistryTip(props: { children: ComponentChildren; label: string;
     p.style.left = `${Math.max(MARGIN, Math.min(rect.left, vw - width - MARGIN))}px`;
   }, [open]);
 
-  useEffect(() => {
+  // A layout effect: the listeners are in place when the popover is shown (a passive effect runs only after the next paint, and an
+  // Escape pressed right after the popover appeared was lost).
+  useLayoutEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
     const onOutside = (e: Event) => !root.current?.contains(e.target as Node) && close();
