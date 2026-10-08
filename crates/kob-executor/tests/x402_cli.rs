@@ -75,12 +75,17 @@ fn mock_node(network_id: &'static str) -> String {
 }
 
 fn http(port: u16, req: &str) -> String {
-    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    try_http(port, req).expect("the facilitator accepts connections")
+}
+
+/// One request; `None` when nothing listens on the port.
+fn try_http(port: u16, req: &str) -> Option<String> {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    s.write_all(req.as_bytes()).unwrap();
+    s.write_all(req.as_bytes()).ok()?;
     let mut out = String::new();
     let _ = s.read_to_string(&mut out);
-    out
+    Some(out)
 }
 
 struct Child(std::process::Child);
@@ -91,46 +96,56 @@ impl Drop for Child {
     }
 }
 
-fn wait_ready(port: u16, child: &mut Child) {
-    let t = Instant::now();
-    while t.elapsed() < Duration::from_secs(60) {
-        if let Ok(Some(status)) = child.0.try_wait() {
-            panic!("the facilitator exited early: {status}");
+/// Starts the facilitator on a free port and waits until it answers `GET /health` itself. A port from [`free_port`] is free only
+/// when it is picked: a listener of a test running in parallel (a mock node binds port 0) can take it before the facilitator binds,
+/// and that listener accepts connections too. Then the facilitator exits (address in use) and it is started again on another port.
+fn start_facilitator(node: &str, ledger: &str) -> (Child, u16) {
+    for _ in 0..5 {
+        let port = free_port();
+        let mut child = Child(
+            Command::new(BIN)
+                .args([
+                    "x402",
+                    "--auth",
+                    "open",
+                    "--open-auth-no-proxy",
+                    "--node",
+                    node,
+                    "--listen",
+                    &format!("127.0.0.1:{port}"),
+                    "--ledger",
+                    ledger,
+                ])
+                .stderr(Stdio::null())
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(60) {
+            if let Ok(Some(_)) = child.0.try_wait() {
+                break;
+            }
+            if try_http(port, "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+                .is_some_and(|r| r.contains("\"status\":\"ok\""))
+            {
+                return (child, port);
+            }
+            thread::sleep(Duration::from_millis(50));
         }
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return;
+        if child.0.try_wait().ok().flatten().is_none() {
+            panic!("the facilitator did not start");
         }
-        thread::sleep(Duration::from_millis(50));
     }
-    panic!("the facilitator did not start");
+    panic!("the facilitator exited early on every port tried");
 }
 
 #[test]
 fn the_service_starts_against_a_node_and_serves_the_public_routes() {
     let node = mock_node("testnet-10");
-    let port = free_port();
     let dir = tempfile::tempdir().unwrap();
     let ledger = dir.path().join("ledger.jsonl");
-    let mut child = Child(
-        Command::new(BIN)
-            .args([
-                "x402",
-                "--auth",
-                "open",
-                "--open-auth-no-proxy",
-                "--node",
-                &node,
-                "--listen",
-                &format!("127.0.0.1:{port}"),
-                "--ledger",
-                ledger.to_str().unwrap(),
-            ])
-            .stderr(Stdio::null())
-            .stdout(Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
-    wait_ready(port, &mut child);
+    let (_child, port) = start_facilitator(&node, ledger.to_str().unwrap());
     let r = http(port, "GET /supported HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.starts_with("HTTP/1.1 200"), "{r}");
     assert!(r.contains("kaspa-exact-v2") && r.contains("kaspa:testnet-10"));
