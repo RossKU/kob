@@ -2,7 +2,9 @@
 //! `crates/kob-tests/vectors/kcc20/`, see PROVENANCE.md there) executed against KOB's reference KCC-20 build
 //! (`contracts/kcc20/KCC20Ref.sil`, 3 token inputs / 3 outputs) and the KOB 8/8 slot-limit variant
 //! (`contracts/kcc20/variants/KCC20Ref_8x8.sil`, the program KOB issues), in rusty-kaspa v2.1.0's TxScriptEngine
-//! with KIP-20 covenant context.
+//! with KIP-20 covenant context. The optional batch-leader holder (`contracts/kcc20/p2/KCC20Opt.sil`, 3/3, not issued)
+//! runs the same vectors twice: `KCC20Opt-off` (batch leader disabled, `B_TPL` all zeros) and `KCC20Opt-on` (the
+//! `KCC20Batch` template committed); see `kcc20_opt_tests.rs`.
 //!
 //! What is checked, per vector section:
 //!   state_record / dispatch / state_encoding / transfer_arguments  byte-exact against the compiled artifacts and the
@@ -183,29 +185,59 @@ impl St {
 }
 
 struct Prog {
+    /// label (the source name, or the source name and a configuration)
     name: &'static str,
+    /// source name (`contracts/**/<src>.sil`)
+    src: &'static str,
+    /// constructor constants before the state fields (none for the reference and its slot-limit variants)
+    consts: Vec<ArtifactValue>,
     max_in: usize,
     art: SilAbiArtifact,
     prefix: Vec<u8>,
     suffix: Vec<u8>,
 }
+/// `KCC20Opt` constructor constants: the batch-leader template commitment (`KCC20Batch`), or all zeros (disabled).
+fn opt_consts(enabled: bool) -> Vec<ArtifactValue> {
+    if !enabled {
+        return vec![vec![0u8; 32].into(), ArtifactValue::Int(0), ArtifactValue::Int(0)];
+    }
+    let b = compile_contract(
+        &common::contract_source("KCC20Batch"),
+        &[
+            ArtifactValue::Int(0),
+            vec![1u8; 32].into(),
+            vec![2u8; 32].into(),
+            vec![2u8; 32].into(),
+            ArtifactValue::Int(1),
+            ArtifactValue::Int(1),
+        ],
+        CompileOptions::default(),
+    )
+    .expect("compile KCC20Batch");
+    let (p, s, h) = compiled_template_parts_and_hash(&b);
+    vec![h.into(), ArtifactValue::Int(p.len() as i64), ArtifactValue::Int(s.len() as i64)]
+}
 impl Prog {
-    fn new(name: &'static str, max_in: usize) -> Prog {
+    fn new(name: &'static str, src: &'static str, consts: Vec<ArtifactValue>, max_in: usize) -> Prog {
         let art = compile_contract(
-            &common::contract_source(name),
+            &common::contract_source(src),
             &[
-                ArtifactValue::Int(1000),
-                vec![3u8; 32].into(),
-                ArtifactValue::Byte(4),
-                ArtifactValue::Byte(0),
-                vec![0u8; 32].into(),
-                vec![0u8; 32].into(),
-            ],
+                consts.clone(),
+                vec![
+                    ArtifactValue::Int(1000),
+                    vec![3u8; 32].into(),
+                    ArtifactValue::Byte(4),
+                    ArtifactValue::Byte(0),
+                    vec![0u8; 32].into(),
+                    vec![0u8; 32].into(),
+                ],
+            ]
+            .concat(),
             CompileOptions::default(),
         )
         .unwrap_or_else(|e| panic!("compile {name}: {e}"));
         let (prefix, suffix, _) = compiled_template_parts_and_hash(&art);
-        Prog { name, max_in, art, prefix, suffix }
+        Prog { name, src, consts, max_in, art, prefix, suffix }
     }
     fn state_bytes(&self, s: &St) -> Vec<u8> {
         let c = common::single_contract(&self.art);
@@ -452,7 +484,11 @@ fn expect_reject(p: &Prog, s: &Scn, what: &str) -> String {
 // ---------------------------------------------------------------- tests
 
 fn programs() -> Vec<Prog> {
-    PROGRAMS.iter().map(|(n, i, _)| Prog::new(n, *i)).collect()
+    let mut v: Vec<Prog> = PROGRAMS.iter().map(|(n, i, _)| Prog::new(n, n, vec![], *i)).collect();
+    // the optional batch-leader holder (contracts/kcc20/p2/KCC20Opt.sil, 3/3): disabled (B_TPL all zeros) and enabled
+    v.push(Prog::new("KCC20Opt-off", "KCC20Opt", opt_consts(false), 3));
+    v.push(Prog::new("KCC20Opt-on", "KCC20Opt", opt_consts(true), 3));
+    v
 }
 
 #[test]
@@ -572,15 +608,19 @@ fn conformance_state_dispatch_encoding() {
         assert_eq!(want.concat(), hexs(&expect_all));
         // and the compiler itself lays out a program's state identically
         let art = compile_contract(
-            &common::contract_source(p.name),
+            &common::contract_source(p.src),
             &[
-                ArtifactValue::Int(st.amount),
-                st.owner.to_vec().into(),
-                ArtifactValue::Byte(st.scheme),
-                ArtifactValue::Byte(st.borrow),
-                st.guard.to_vec().into(),
-                st.ext.to_vec().into(),
-            ],
+                p.consts.clone(),
+                vec![
+                    ArtifactValue::Int(st.amount),
+                    st.owner.to_vec().into(),
+                    ArtifactValue::Byte(st.scheme),
+                    ArtifactValue::Byte(st.borrow),
+                    st.guard.to_vec().into(),
+                    st.ext.to_vec().into(),
+                ],
+            ]
+            .concat(),
             CompileOptions::default(),
         )
         .unwrap();

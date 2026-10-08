@@ -91,3 +91,51 @@ Observation for upstream: the `covenant-id/v1` minimum check also passes when `o
 (`covenant-self` is approved, and KOB's programs approve it as the vector requires), so such a state can be moved by any
 transaction that spends it. KCC-2 section 6 warns that participation alone is not approval; KCC-20 PR #31 does not
 forbid this owner. KOB issuance cannot create it (the covenant id is derived from the genesis outputs).
+
+## 6. Optional batch leader (proposal for upstream, not issued)
+
+The default configuration compiles `max_token_inputs` / `max_token_outputs` = 3 into the holder program, and every token
+input pushes the whole program, so larger limits make every transfer dearer (1 -> 1 payment: 3/3 0.00702 KAS, 8/8
+0.01448, 16/16 0.02642). `contracts/kcc20/p2/KCC20Opt.sil` (generated from the reference by
+`kob_protocol::kcc20::kcc20_opt_holder_source`) keeps holders on the 3/3 program and adds an optional batch-leader
+commitment: constructor constants `B_TPL` / `B_PRE` / `B_SUF` (template hash and prefix / suffix lengths). The
+delegator path, instead of the reference's unused read of the leader state, accepts as leader its own template (P2SH
+checked) or, when the commitment is set, that template; all zeros disables it (`B_PRE > 0` is required, no reliance on
+the hash comparison). The leader path, slot limits, state layout, entrypoints and dispatch tags are the reference's.
+The leader is `KCC20Batch` (16 slots, amount 0, conservation and the KCC-20 per-output rules, each holder still
+authorizes its own owner), unchanged from proposal P2.
+
+Templates. The reference has no constructor constants, so every reference token shares one template. `KCC20Opt` has one
+template per commitment value: one shared by every token without a leader (all zeros) and one shared by every token
+that commits to `KCC20Batch`, because `KCC20Batch` keeps the holder template it serves, the owner and the
+extension commitment in its state, so its own template does not depend on the token. With the enabled program a token
+has a leader only if its genesis creates a seed: no holder or leader path can create one later. Where the commitment
+lives, and why not elsewhere:
+
+| Option | Effect |
+|---|---|
+| Constructor constant (chosen) | Two templates for the whole ecosystem (disabled, universal leader); a per-token leader of another program gives that token its own template |
+| `KCC20State` field | Breaks the fixed 112-byte state (section 1): the `transfer` dispatch tag (`State[]` field list), every `next_states` encoding, the conformance vectors, and every program and tool that reads token states at fixed offsets (KOB orders, `KCC20Batch`, indexers, wallets); every state pushed in a transaction grows by 33 bytes |
+| Inside `extension_commitment` | Gives one template, but the field is the fungibility class of an application's extended state (section 4): a token could not have both, and a hashed opening would need a witness the delegator entrypoint does not take |
+
+Measured (`kcc20_opt_tests.rs`, `opt_measurements`; P2SH sizes, fee = max(compute mass, 2 x bytes) x 100 sompi):
+
+| Program | Holder | 1 -> 1 | 3 -> 1 | 8-ask sweep | 16-ask sweep | 8 x 8 cross |
+|---|---|---|---|---|---|---|
+| Reference 3/3 | 3,090 B | 0.00702 | 0.01990 | n/a | n/a | n/a |
+| Reference 8/8 (KOB issue) | 6,820 B | 0.01448 | 0.04228 | 0.14060 | n/a | n/a |
+| Reference 16/16 | 12,788 B | 0.02642 | 0.07808 | 0.23608 | 0.47071 | n/a |
+| P2 | 3,095 B | 0.00703 | 0.01993 | 0.09341 | 0.17295 | 0.12110 |
+| `KCC20Opt` disabled | 3,105 B | 0.00705 | 0.01999 | refused | refused | refused |
+| `KCC20Opt` enabled | 3,109 B | 0.00706 | 0.02001 | 0.09364 | 0.17340 | 0.12133 |
+
+Both instances run the KCC-20 conformance vectors in `kcc20_conformance_tests.rs` (`KCC20Opt-off`, `KCC20Opt-on`) with
+the same results as the 3/3 reference.
+
+Observation for upstream: the reference delegator does not check its leader. KCC-20 section 2 says a delegator
+validates only its local owner, and the reference's read of the leader state is unused (it only requires the leader's
+signature script to be at least as long as the holder program). Any program that a token's genesis puts in its
+covenant family can therefore lead reference holders: `KCC20Batch` works with unchanged 3/3 holders (the cheapest
+row, measured as `KCC20Ref 3/3 + lineage leader`: 0.17279 KAS for the 16-ask sweep), and so would a script that does not
+validate the transition (`reference_delegator_accepts_any_lineage_leader`). The reference's safety rests on the
+genesis (KCC-1 section 7.2); `KCC20Opt` makes the holders name the leaders they accept.

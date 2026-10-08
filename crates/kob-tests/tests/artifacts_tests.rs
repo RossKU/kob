@@ -35,8 +35,8 @@ fn sources_with_ctor() -> Vec<PathBuf> {
 fn committed_artifacts_match_sources() {
     let sources = sources_with_ctor();
     // 25 since the pair phase (KobCross replaced by KobPair, KobCondPair, KobIfdPair: one template each for both sides and
-    // both families of a token pair)
-    assert_eq!(sources.len(), 25, "expected 25 contract sources, found {sources:?}");
+    // both families of a token pair); 26 with the optional batch-leader holder (kcc20/p2/KCC20Opt, not issued)
+    assert_eq!(sources.len(), 26, "expected 26 contract sources, found {sources:?}");
     for src in sources {
         let name = src.file_stem().unwrap().to_string_lossy().to_string();
         let ctor_path = src.with_extension("ctor.json");
