@@ -1,0 +1,232 @@
+// Measurement, NOT a KOB contract: the idiomatic variant of kob_ask_port.ag (docs/argent-feedback.md, item 10).
+// It is kob_ask_port.ag without the body checks that the code Argent generates repeats: the order's own
+// output-count checks (OpCovOutputCount(selfId) == 1 / == 0; the generated count bound and
+// `cont.length == count` check them) and its continuation SPK check (== contSpk(amountLeft - n); the generated
+// validateOutputState checks it). Everything else is kob_ask_port.ag verbatim, contSpk included (now unused).
+//
+// Build: scripts/build-argent.sh publishes the generated SilverScript as
+// contracts/argent/port-out/KobAsk.idiomatic.sil; crates/kob-tests/tests/argent_become_splice_tests.rs runs it
+// in the script engine next to the hand-written order, the 1:1 port and a splice prototype of `become`.
+
+const byte SCHEME_P2PK = 0x00;
+const byte SCHEME_COVID = 0x04;
+const byte BORROW_DISABLED = 0x00;
+const byte SIGHASH_ALL = 0x01;
+const int TIF_GTC = 0;
+const int TIF_FOK = 2;
+const int MAX_IDLE = 77760000;
+const int IOC_LIFE = 600;
+const int MAX_TOK_IN = 8;
+
+state KCC20State {
+    int amount;
+    byte[32] owner;
+    byte owner_scheme;
+    byte borrow_scheme;
+    byte[32] borrow_guard;
+    byte[32] extension_commitment;
+}
+
+state KobAskState {
+    pubkey maker;
+    byte[32] tokenCovId;
+    byte[32] tokenTplHash;
+    int tplPrefixLen;
+    int tplSuffixLen;
+    int scale;
+    int minFill;
+    int price;
+    int tip;
+    int tif;
+    int activeFrom;
+    int expiryDaa;
+    int refundTip;
+    int interval;
+    int maxFill;
+    int slope;
+    int priceEnd;
+    int decayStep;
+    int amountLeft;
+    byte[32] extensionCommitment;
+}
+
+actor KobAsk owns KobAskState {
+    // Quote value of n base units at rate r, rounded down (c = 0) or up (c = scale - 1): exact split multiplication.
+    fn quoteOf(int n, int r, int c) -> int {
+        int m = n % scale;
+        int q = n / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    // Redeem script of token input idx: the last sigscript push, P2SH-checked, and its prefix/suffix hash
+    // must equal the pinned template hash tpl.
+    fn tplRs(int idx, int pre, int stLen, int suf, byte[32] tpl) -> byte[] {
+        int size = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - size;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + size);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, size)) == tpl);
+        return rs;
+    }
+
+    // Stray guard: no token input other than `custody` may be owned by covenant id `me`. The owner sits at a
+    // fixed distance from the end of the sigscript: offset 10 inside the 112 B state, which precedes the
+    // template suffix. Unrolled over the MAX_TOK_IN slots.
+    fn noStrays(byte[32] me, int custody) {
+        int cnt = OpCovInputCount(tokenCovId);
+        require(cnt <= MAX_TOK_IN);
+        int off = 10 - 112 - tplSuffixLen;
+        if (cnt > 0) { int x0 = OpCovInputIdx(tokenCovId, 0); if (x0 != custody) { int e0 = OpTxInputScriptSigLen(x0) + off; require(byte[32](OpTxInputScriptSigSubstr(x0, e0, e0 + 32)) != me); } }
+        if (cnt > 1) { int x1 = OpCovInputIdx(tokenCovId, 1); if (x1 != custody) { int e1 = OpTxInputScriptSigLen(x1) + off; require(byte[32](OpTxInputScriptSigSubstr(x1, e1, e1 + 32)) != me); } }
+        if (cnt > 2) { int x2 = OpCovInputIdx(tokenCovId, 2); if (x2 != custody) { int e2 = OpTxInputScriptSigLen(x2) + off; require(byte[32](OpTxInputScriptSigSubstr(x2, e2, e2 + 32)) != me); } }
+        if (cnt > 3) { int x3 = OpCovInputIdx(tokenCovId, 3); if (x3 != custody) { int e3 = OpTxInputScriptSigLen(x3) + off; require(byte[32](OpTxInputScriptSigSubstr(x3, e3, e3 + 32)) != me); } }
+        if (cnt > 4) { int x4 = OpCovInputIdx(tokenCovId, 4); if (x4 != custody) { int e4 = OpTxInputScriptSigLen(x4) + off; require(byte[32](OpTxInputScriptSigSubstr(x4, e4, e4 + 32)) != me); } }
+        if (cnt > 5) { int x5 = OpCovInputIdx(tokenCovId, 5); if (x5 != custody) { int e5 = OpTxInputScriptSigLen(x5) + off; require(byte[32](OpTxInputScriptSigSubstr(x5, e5, e5 + 32)) != me); } }
+        if (cnt > 6) { int x6 = OpCovInputIdx(tokenCovId, 6); if (x6 != custody) { int e6 = OpTxInputScriptSigLen(x6) + off; require(byte[32](OpTxInputScriptSigSubstr(x6, e6, e6 + 32)) != me); } }
+        if (cnt > 7) { int x7 = OpCovInputIdx(tokenCovId, 7); if (x7 != custody) { int e7 = OpTxInputScriptSigLen(x7) + off; require(byte[32](OpTxInputScriptSigSubstr(x7, e7, e7 + 32)) != me); } }
+    }
+
+    // P2SH of this script with amountLeft (payload [236..244), followed only by extensionCommitment) replaced.
+    fn contSpk(int newLeft) -> byte[] {
+        int me = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(me);
+        byte[] rs = OpTxInputScriptSigSubstr(me, len - this.bytecodeSize, len);
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            rs.slice(0, 236) + byte[](newLeft as byte[8]) + rs.slice(244, this.bytecodeSize)
+        ));
+    }
+
+    entry settle(byte[8] nb, int tokenIn, int tokOut, int t) emits next: KobAsk[0..=1] {
+        int n = int(nb);
+        int me = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(me);
+        require(OpCovInputCount(selfId) == 1);
+
+        require(OpInputCovenantId(tokenIn) == tokenCovId);
+        byte[] trs = tplRs(tokenIn, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
+        byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 112);
+        require(byte[32](tin.slice(10, 42)) == selfId);
+        require(tin.slice(43, 46) == byte[](0x040100));
+        // the custody carries the commitment the order names (another commitment is another token)
+        require(byte[32](tin.slice(80, 112)) == extensionCommitment);
+        int tinAmount = int(byte[8](tin.slice(1, 9)));
+        require(tinAmount == amountLeft);
+        noStrays(selfId, tokenIn);
+
+        int carriers = tx.inputs[me].value + tx.inputs[tokenIn].value;
+        int outAmount = tinAmount;
+        byte[32] outOwner = byte[32](maker);
+        byte outScheme = SCHEME_P2PK;
+        int outIdx = me;
+        int utxoDaa = OpTxInputDaaScore(me);
+        KobAskState[] cont;
+
+        if (n == 0) {
+            int idleEnd = utxoDaa + MAX_IDLE;
+            if (tif != TIF_GTC) {
+                int kill = utxoDaa;
+                if (activeFrom > kill) { kill = activeFrom; }
+                kill = kill + IOC_LIFE;
+                if (kill < idleEnd) { idleEnd = kill; }
+            }
+            if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
+            require(tx.daa >= idleEnd);
+            require(refundTip >= 0);
+            require(tx.outputs[me].value + refundTip >= carriers);
+        } else {
+            require(tx.daa >= activeFrom);
+            require(n > 0);
+            require(scale > 0);
+            require(tip >= 0);
+            require(n <= amountLeft);
+            require(n >= minFill || n == amountLeft);
+            if (interval > 0) {
+                require(this.ageDaa >= interval);
+            }
+            require(maxFill == 0 || n <= maxFill);
+            int p = price;
+            if (slope != 0) {
+                require(slope > 0);
+                require(decayStep > 0);
+                int origin = activeFrom;
+                if (interval > 0) {
+                    int slice = utxoDaa + interval;
+                    if (slice > origin) { origin = slice; }
+                }
+                require(tx.daa >= t);
+                require(t >= origin);
+                p = price - slope * ((t - origin) / decayStep);
+                if (p < priceEnd) { p = priceEnd; }
+            }
+            require(p >= tip);
+            int allIn = quoteOf(n, p - tip, scale - 1);
+            outAmount = tinAmount - n;
+            require(tx.outputs[me].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
+            if (outAmount > 0 && tif == TIF_GTC) {
+                int selfOut = OpCovOutputIdx(selfId, 0);
+                require(tx.outputs[selfOut].value >= tx.inputs[me].value);
+                require(tx.outputs[tokOut].value >= tx.inputs[tokenIn].value);
+                require(tx.outputs[me].value >= allIn);
+                outOwner = selfId;
+                outScheme = SCHEME_COVID;
+                outIdx = tokOut;
+                cont = cont.append(KobAskState {
+                    maker: maker,
+                    tokenCovId: tokenCovId,
+                    tokenTplHash: tokenTplHash,
+                    tplPrefixLen: tplPrefixLen,
+                    tplSuffixLen: tplSuffixLen,
+                    scale: scale,
+                    minFill: minFill,
+                    price: price,
+                    tip: tip,
+                    tif: tif,
+                    activeFrom: activeFrom,
+                    expiryDaa: expiryDaa,
+                    refundTip: refundTip,
+                    interval: interval,
+                    maxFill: maxFill,
+                    slope: slope,
+                    priceEnd: priceEnd,
+                    decayStep: decayStep,
+                    amountLeft: amountLeft - n,
+                    extensionCommitment: extensionCommitment,
+                });
+            } else {
+                require(tif != TIF_FOK || outAmount == 0);
+                if (outAmount > 0) {
+                    require(tokOut == tokenIn);
+                    require(tx.outputs[tokOut].value >= tx.inputs[tokenIn].value);
+                    require(tx.outputs[me].value >= allIn + tx.inputs[me].value);
+                    outIdx = tokOut;
+                } else {
+                    require(tx.outputs[me].value >= allIn + carriers);
+                }
+            }
+        }
+
+        if (outAmount > 0) {
+            require(tx.outputs[outIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                trs.slice(0, tplPrefixLen) + byte[](0x08) + byte[](outAmount as byte[8]) + byte[](0x20) + byte[](outOwner)
+                    + byte[](0x01) + byte[](outScheme) + byte[](0x010020) + tin.slice(47, 79) + byte[](0x20) + tin.slice(80, 112)
+                    + trs.slice(tplPrefixLen + 112, trs.length)
+            )));
+            require(OpOutputCovenantId(outIdx) == tokenCovId);
+        }
+
+        // value policy: the body checks the continuation's value (selfOut) itself.
+        unrestricted(next[0].value);
+        become next <- KobAsk[](cont);
+    }
+
+    entry cancel(sig s) emits none {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, maker));
+    }
+}
+
+app KobAskPort {
+    actor KobAsk;
+}

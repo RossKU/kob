@@ -129,6 +129,8 @@ done
 mkdir -p "$STAGE/src/port"
 cp contracts/argent/port/*.ag "$STAGE/src/port/"
 (cd "$STAGE/src/port" && "$ARGENTC" build kob_ask_port.ag --out ../../out/port >/dev/null)
+# its idiomatic variant (the body checks the generated ones repeat removed; argent_become_splice_tests.rs)
+(cd "$STAGE/src/port" && "$ARGENTC" build kob_ask_port_idiomatic.ag --out ../../out/port-idiomatic >/dev/null)
 
 # Publish tree: LF, repo-relative paths.
 PUB="$STAGE/pub"
@@ -145,6 +147,7 @@ done
 # published as KobAsk.port.sil: contracts/**/KobAsk.sil must stay the hand-written order (the tests find sources by name)
 mkdir -p "$PUB/port-out"
 cp "$STAGE/out/port/sil/KobAsk.sil" "$PUB/port-out/KobAsk.port.sil"
+cp "$STAGE/out/port-idiomatic/sil/KobAsk.sil" "$PUB/port-out/KobAsk.idiomatic.sil"
 files=()
 while IFS= read -r f; do files+=("$f"); done < <(find "$PUB" -name '*.json' | LC_ALL=C sort)
 "$S2A" relativize "$STAGE_NATIVE" "${files[@]}"
