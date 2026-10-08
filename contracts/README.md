@@ -33,6 +33,7 @@ pinned third-party token programs the tests run against.
 | `argent/kob_router.ag`, `argent/router/` | KOB's composition layer in Argent (payment intents, swap-and-pay; one actor per fill shape, 30 in all: KCC-20 and KRON token A; the token programs are open ICC handles in each intent's state), written by `tools/router-gen`, and its argentc output (`sil/*.sil` are generated and committed) |
 | `argent/examples/*.ag`, `argent/examples-out/` | Third-party closed- and open-ICC examples (`docs/argent.md`); their argentc SilverScript output is published for the engine test of the closed-ICC gate |
 | `argent/port/kob_ask_port.ag`, `argent/port-out/` | 1:1 Argent port of `KobAsk`, a size measurement (`docs/argent-feedback.md`, item 10), not a KOB contract; its generated SilverScript is compared with the hand-written one by `crates/kob-tests/tests/argent_port_tests.rs` |
+| `argent/port/compare/` | opcode listings of the hand-written `KobAsk`, its idiomatic Argent port and the `become` splice prototype, section by section (`docs/argent-port-compare.md`); written and checked by `crates/kob-tests/tests/argent_port_compare_tests.rs` |
 
 The `argent/` outputs are derived, not authored: `KOBOrders` and `KOBOrdersKron` wrap the silverc artifacts of `v2/*.sil`
 and `adapters/kron/v2/Kob{Ask,Bid}Kron.sil` (their handles are those templates), the router and the token are compiled by `argentc` from the pinned Argent upstream

@@ -1,0 +1,1386 @@
+# KobAsk, hand-written SilverScript: contracts/v2/KobAsk.sil (1684 B redeem script)
+# constructor arguments: contracts/v2/KobAsk.ctor.json; written by crates/kob-tests/tests/argent_port_compare_tests.rs
+# regenerate: KOB_WRITE_COMPARE=1 cargo test --release -p kob-tests --test argent_port_compare_tests
+#
+# Columns: offset in the redeem script (decimal), size, tag, opcode, push data (hex; longer than 16 B abbreviated).
+# `-- Lnnn` the source line of the statement the following opcodes were compiled from (compiler debug info);
+# `-- (no statement)` opcodes the compiler emits outside any statement (branch ends, stack cleanup).
+# Tags: opcodes that disappear when the construct is removed from the source and the script compiled again
+# (removed in this order, each from the previous result). The opcodes of the removed statements always count as
+# removed; the rest is matched against the new listing by a longest common subsequence of (opcode, push data),
+# where a number push may match one with another value (a stack depth the removal shifted). So a tagged run can
+# also hold stack cleanup at a branch end, or a neighbour's operand that became another opcode (`Op5 OpPick` ->
+# `OpDup`). `>>>` lines mark each tagged run with its byte range.
+#
+#   spk  continuation check: scriptPubKey == contSpk(amountLeft - n) (splice of amountLeft)
+#        1684 -> 1605 B (-79 B); removed opcodes 77 B at [1214, 1276) 62 B, [1324, 1339) 15 B
+#        also: 10 number push(es) kept with another value (-3 B); 1 B of new opcodes
+#   cnt  own output-count checks: OpCovOutputCount(selfId) == 1 (rest), == 0 (fill, refund)
+#        1605 -> 1584 B (-21 B); removed opcodes 21 B at [889, 896) 7 B, [1202, 1209) 7 B, [1350, 1357) 7 B
+#   rest 1584 B (the script with all of the above removed)
+
+== prefix [0, 1) 1 B
+  -- (no statement)
+     0    1       OpToAltStack
+
+== state fields [1, 277) 276 B
+     1   33       OpData32               0x0303030303030303..03030303 (32 B)      ; maker, value [2, 34)
+    34   33       OpData32               0x7070707070707070..70707070 (32 B)      ; tokenCovId, value [35, 67)
+    67   33       OpData32               0x1111111111111111..11111111 (32 B)      ; tokenTplHash, value [68, 100)
+   100    9       OpData8                0x0100000000000000                       ; tplPrefixLen, value [101, 109)
+   109    9       OpData8                0x0100000000000000                       ; tplSuffixLen, value [110, 118)
+   118    9       OpData8                0xe803000000000000                       ; scale, value [119, 127)
+   127    9       OpData8                0x0100000000000000                       ; minFill, value [128, 136)
+   136    9       OpData8                0x80b2e60e00000000                       ; price, value [137, 145)
+   145    9       OpData8                0x0000000000000000                       ; tip, value [146, 154)
+   154    9       OpData8                0x0000000000000000                       ; tif, value [155, 163)
+   163    9       OpData8                0x0000000000000000                       ; activeFrom, value [164, 172)
+   172    9       OpData8                0x0065cd1d00000000                       ; expiryDaa, value [173, 181)
+   181    9       OpData8                0xc0c62d0000000000                       ; refundTip, value [182, 190)
+   190    9       OpData8                0x0000000000000000                       ; interval, value [191, 199)
+   199    9       OpData8                0x0000000000000000                       ; maxFill, value [200, 208)
+   208    9       OpData8                0x0000000000000000                       ; slope, value [209, 217)
+   217    9       OpData8                0x0000000000000000                       ; priceEnd, value [218, 226)
+   226    9       OpData8                0x0100000000000000                       ; decayStep, value [227, 235)
+   235    9       OpData8                0x0a00000000000000                       ; amountLeft, value [236, 244)
+   244   33       OpData32               0xeeeeeeeeeeeeeeee..eeeeeeee (32 B)      ; extensionCommitment, value [245, 277)
+
+== entry dispatch [277, 287) 10 B
+  -- (no statement)
+   277    1       OpFromAltStack
+   278    1       OpDup
+   279    5       OpData4                0x26a2c631
+   284    1       OpEqual
+   285    1       OpIf
+   286    1       OpDrop
+
+== entry settle [287, 1605) 1318 B
+  -- (no statement)
+   287    2       OpData1                0x17
+   289    1       OpPick
+   290    1       OpSize
+   291    1       Op8
+   292    1       OpNumEqualVerify
+   293    1       OpDrop
+   294    2       OpData1                0x16
+   296    1       OpPick
+   297    1       OpSize
+   298    1       Op9
+   299    1       OpLessThan
+   300    1       OpVerify
+   301    1       OpDrop
+   302    2       OpData1                0x15
+   304    1       OpPick
+   305    1       OpSize
+   306    1       Op9
+   307    1       OpLessThan
+   308    1       OpVerify
+   309    1       OpDrop
+   310    2       OpData1                0x14
+   312    1       OpPick
+   313    1       OpSize
+   314    1       Op9
+   315    1       OpLessThan
+   316    1       OpVerify
+   317    1       OpDrop
+  -- L196 int n = int(nb);
+   318    2       OpData1                0x17
+   320    1       OpPick
+  -- L197 int self = this.activeInputIndex;
+   321    1       OpTxInputIndex
+  -- L198 byte[32] selfId = OpInputCovenantId(self);
+   322    1       OpDup
+   323    1       OpInputCovenantId
+  -- L199 require(OpCovInputCount(selfId) == 1);
+   324    1       OpDup
+   325    1       OpCovInputCount
+   326    1       OpTrue
+   327    1       OpNumEqual
+   328    1       OpVerify
+  -- L201 require(OpInputCovenantId(tokenIn) == tokenCovId);
+   329    2       OpData1                0x19
+   331    1       OpPick
+   332    1       OpInputCovenantId
+   333    2       OpData1                0x16
+   335    1       OpPick
+   336    1       OpEqual
+   337    1       OpVerify
+  -- L204 byte[] trs = tplRs(tokenIn, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
+   338    2       OpData1                0x19
+   340    1       OpPick
+   341    2       OpData1                0x14
+   343    1       OpPick
+   344    2       OpData1                0x70
+   346    2       OpData1                0x15
+   348    1       OpPick
+   349    2       OpData1                0x18
+   351    1       OpPick
+  -- L156 int size = pre + stLen + suf;
+   352    1       Op3
+   353    1       OpPick
+   354    1       Op3
+   355    1       OpPick
+   356    1       OpAdd
+   357    1       Op2
+   358    1       OpPick
+   359    1       OpAdd
+  -- L157 int base = OpTxInputScriptSigLen(idx) - size;
+   360    1       Op5
+   361    1       OpPick
+   362    1       OpTxInputScriptSigLen
+   363    1       OpOver
+   364    1       OpSub
+  -- L158 byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + size);
+   365    1       Op6
+   366    1       OpPick
+   367    1       OpOver
+   368    1       Op2
+   369    1       OpPick
+   370    1       Op4
+   371    1       OpPick
+   372    1       OpAdd
+   373    1       OpTxInputScriptSigSubstr
+  -- L159 require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+   374    1       Op7
+   375    1       OpPick
+   376    1       OpTxInputSpk
+   377    1       OpOver
+   378    1       OpBlake2b
+   379    3       OpData2                0x0000
+   382    2       OpData1                0xaa
+   384    1       OpCat
+   385    2       OpData1                0x20
+   387    1       OpCat
+   388    1       OpSwap
+   389    1       OpCat
+   390    2       OpData1                0x87
+   392    1       OpCat
+   393    1       OpEqual
+   394    1       OpVerify
+  -- L160 require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, si..
+   395    1       Op6
+   396    1       OpPick
+   397    1       Op8
+   398    1       OpNum2Bin
+   399    1       OpOver
+   400    1       OpFalse
+   401    1       Op9
+   402    1       OpPick
+   403    1       OpSubstr
+   404    1       OpCat
+   405    1       Op5
+   406    1       OpPick
+   407    1       Op8
+   408    1       OpNum2Bin
+   409    1       OpCat
+   410    1       OpOver
+   411    1       Op8
+   412    1       OpPick
+   413    1       Op8
+   414    1       OpPick
+   415    1       OpAdd
+   416    1       Op5
+   417    1       OpPick
+   418    1       OpSubstr
+   419    1       OpCat
+   420    1       OpBlake3
+   421    1       Op4
+   422    1       OpPick
+   423    1       OpEqual
+   424    1       OpVerify
+  -- L204 byte[] trs = tplRs(tokenIn, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
+   425    1       OpDup
+   426    1       OpDup
+  -- L205 byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 112);
+   427    1       OpDup
+   428    2       OpData1                0x1e
+   430    1       OpPick
+   431    2       OpData1                0x1f
+   433    1       OpPick
+   434    2       OpData1                0x70
+   436    1       OpAdd
+   437    1       OpSubstr
+  -- L206 require(byte[32](tin.slice(10, 42)) == selfId);
+   438    1       OpDup
+   439    1       Op10
+   440    2       OpData1                0x2a
+   442    1       OpSubstr
+   443    1       Op12
+   444    1       OpPick
+   445    1       OpEqual
+   446    1       OpVerify
+  -- L207 require(tin.slice(43, 46) == byte[](0x040100));
+   447    1       OpDup
+   448    2       OpData1                0x2b
+   450    2       OpData1                0x2e
+   452    1       OpSubstr
+   453    4       OpData3                0x040100
+   457    1       OpEqual
+   458    1       OpVerify
+  -- L209 require(byte[32](tin.slice(80, 112)) == extensionCommitment);
+   459    1       OpDup
+   460    2       OpData1                0x50
+   462    2       OpData1                0x70
+   464    1       OpSubstr
+   465    1       Op15
+   466    1       OpPick
+   467    1       OpEqual
+   468    1       OpVerify
+  -- L210 int tinAmount = int(byte[8](tin.slice(1, 9)));
+   469    1       OpDup
+   470    1       OpTrue
+   471    1       Op9
+   472    1       OpSubstr
+  -- L212 require(tinAmount == amountLeft);
+   473    1       OpDup
+   474    2       OpData1                0x11
+   476    1       OpPick
+   477    1       OpNumEqual
+   478    1       OpVerify
+  -- L213 noStrays(selfId, tokenIn);
+   479    1       Op12
+   480    1       OpPick
+   481    2       OpData1                0x26
+   483    1       OpPick
+  -- L170 int cnt = OpCovInputCount(tokenCovId);
+   484    2       OpData1                0x23
+   486    1       OpPick
+   487    1       OpCovInputCount
+  -- L171 require(cnt <= MAX_TOK_IN);
+   488    1       OpDup
+   489    1       Op8
+   490    1       OpLessThanOrEqual
+   491    1       OpVerify
+  -- L172 int off = 10 - 112 - tplSuffixLen;
+   492    1       Op10
+   493    2       OpData1                0x70
+   495    1       OpSub
+   496    2       OpData1                0x22
+   498    1       OpPick
+   499    1       OpSub
+  -- L173 if (cnt > 0) { int x0 = OpCovInputIdx(tokenCovId, 0); if (x0 != custody) { int e0 = OpTxInputScriptSigLen(x0..
+   500    1       OpOver
+   501    1       OpFalse
+   502    1       OpGreaterThan
+   503    1       OpIf
+   504    2       OpData1                0x25
+   506    1       OpPick
+   507    1       OpFalse
+   508    1       OpCovInputIdx
+   509    1       OpDup
+   510    1       Op4
+   511    1       OpPick
+   512    1       OpNumNotEqual
+   513    1       OpIf
+   514    1       OpDup
+   515    1       OpTxInputScriptSigLen
+   516    1       Op2
+   517    1       OpPick
+   518    1       OpAdd
+   519    1       OpOver
+   520    1       OpOver
+   521    1       Op2
+   522    1       OpPick
+   523    2       OpData1                0x20
+   525    1       OpAdd
+   526    1       OpTxInputScriptSigSubstr
+   527    1       Op6
+   528    1       OpPick
+   529    1       OpEqual
+   530    1       OpNot
+   531    1       OpVerify
+  -- (no statement)
+   532    1       OpDrop
+   533    1       OpEndIf
+   534    1       OpDrop
+   535    1       OpEndIf
+  -- L174 if (cnt > 1) { int x1 = OpCovInputIdx(tokenCovId, 1); if (x1 != custody) { int e1 = OpTxInputScriptSigLen(x1..
+   536    1       OpOver
+   537    1       OpTrue
+   538    1       OpGreaterThan
+   539    1       OpIf
+   540    2       OpData1                0x25
+   542    1       OpPick
+   543    1       OpTrue
+   544    1       OpCovInputIdx
+   545    1       OpDup
+   546    1       Op4
+   547    1       OpPick
+   548    1       OpNumNotEqual
+   549    1       OpIf
+   550    1       OpDup
+   551    1       OpTxInputScriptSigLen
+   552    1       Op2
+   553    1       OpPick
+   554    1       OpAdd
+   555    1       OpOver
+   556    1       OpOver
+   557    1       Op2
+   558    1       OpPick
+   559    2       OpData1                0x20
+   561    1       OpAdd
+   562    1       OpTxInputScriptSigSubstr
+   563    1       Op6
+   564    1       OpPick
+   565    1       OpEqual
+   566    1       OpNot
+   567    1       OpVerify
+  -- (no statement)
+   568    1       OpDrop
+   569    1       OpEndIf
+   570    1       OpDrop
+   571    1       OpEndIf
+  -- L175 if (cnt > 2) { int x2 = OpCovInputIdx(tokenCovId, 2); if (x2 != custody) { int e2 = OpTxInputScriptSigLen(x2..
+   572    1       OpOver
+   573    1       Op2
+   574    1       OpGreaterThan
+   575    1       OpIf
+   576    2       OpData1                0x25
+   578    1       OpPick
+   579    1       Op2
+   580    1       OpCovInputIdx
+   581    1       OpDup
+   582    1       Op4
+   583    1       OpPick
+   584    1       OpNumNotEqual
+   585    1       OpIf
+   586    1       OpDup
+   587    1       OpTxInputScriptSigLen
+   588    1       Op2
+   589    1       OpPick
+   590    1       OpAdd
+   591    1       OpOver
+   592    1       OpOver
+   593    1       Op2
+   594    1       OpPick
+   595    2       OpData1                0x20
+   597    1       OpAdd
+   598    1       OpTxInputScriptSigSubstr
+   599    1       Op6
+   600    1       OpPick
+   601    1       OpEqual
+   602    1       OpNot
+   603    1       OpVerify
+  -- (no statement)
+   604    1       OpDrop
+   605    1       OpEndIf
+   606    1       OpDrop
+   607    1       OpEndIf
+  -- L176 if (cnt > 3) { int x3 = OpCovInputIdx(tokenCovId, 3); if (x3 != custody) { int e3 = OpTxInputScriptSigLen(x3..
+   608    1       OpOver
+   609    1       Op3
+   610    1       OpGreaterThan
+   611    1       OpIf
+   612    2       OpData1                0x25
+   614    1       OpPick
+   615    1       Op3
+   616    1       OpCovInputIdx
+   617    1       OpDup
+   618    1       Op4
+   619    1       OpPick
+   620    1       OpNumNotEqual
+   621    1       OpIf
+   622    1       OpDup
+   623    1       OpTxInputScriptSigLen
+   624    1       Op2
+   625    1       OpPick
+   626    1       OpAdd
+   627    1       OpOver
+   628    1       OpOver
+   629    1       Op2
+   630    1       OpPick
+   631    2       OpData1                0x20
+   633    1       OpAdd
+   634    1       OpTxInputScriptSigSubstr
+   635    1       Op6
+   636    1       OpPick
+   637    1       OpEqual
+   638    1       OpNot
+   639    1       OpVerify
+  -- (no statement)
+   640    1       OpDrop
+   641    1       OpEndIf
+   642    1       OpDrop
+   643    1       OpEndIf
+  -- L177 if (cnt > 4) { int x4 = OpCovInputIdx(tokenCovId, 4); if (x4 != custody) { int e4 = OpTxInputScriptSigLen(x4..
+   644    1       OpOver
+   645    1       Op4
+   646    1       OpGreaterThan
+   647    1       OpIf
+   648    2       OpData1                0x25
+   650    1       OpPick
+   651    1       Op4
+   652    1       OpCovInputIdx
+   653    1       OpDup
+   654    1       Op4
+   655    1       OpPick
+   656    1       OpNumNotEqual
+   657    1       OpIf
+   658    1       OpDup
+   659    1       OpTxInputScriptSigLen
+   660    1       Op2
+   661    1       OpPick
+   662    1       OpAdd
+   663    1       OpOver
+   664    1       OpOver
+   665    1       Op2
+   666    1       OpPick
+   667    2       OpData1                0x20
+   669    1       OpAdd
+   670    1       OpTxInputScriptSigSubstr
+   671    1       Op6
+   672    1       OpPick
+   673    1       OpEqual
+   674    1       OpNot
+   675    1       OpVerify
+  -- (no statement)
+   676    1       OpDrop
+   677    1       OpEndIf
+   678    1       OpDrop
+   679    1       OpEndIf
+  -- L178 if (cnt > 5) { int x5 = OpCovInputIdx(tokenCovId, 5); if (x5 != custody) { int e5 = OpTxInputScriptSigLen(x5..
+   680    1       OpOver
+   681    1       Op5
+   682    1       OpGreaterThan
+   683    1       OpIf
+   684    2       OpData1                0x25
+   686    1       OpPick
+   687    1       Op5
+   688    1       OpCovInputIdx
+   689    1       OpDup
+   690    1       Op4
+   691    1       OpPick
+   692    1       OpNumNotEqual
+   693    1       OpIf
+   694    1       OpDup
+   695    1       OpTxInputScriptSigLen
+   696    1       Op2
+   697    1       OpPick
+   698    1       OpAdd
+   699    1       OpOver
+   700    1       OpOver
+   701    1       Op2
+   702    1       OpPick
+   703    2       OpData1                0x20
+   705    1       OpAdd
+   706    1       OpTxInputScriptSigSubstr
+   707    1       Op6
+   708    1       OpPick
+   709    1       OpEqual
+   710    1       OpNot
+   711    1       OpVerify
+  -- (no statement)
+   712    1       OpDrop
+   713    1       OpEndIf
+   714    1       OpDrop
+   715    1       OpEndIf
+  -- L179 if (cnt > 6) { int x6 = OpCovInputIdx(tokenCovId, 6); if (x6 != custody) { int e6 = OpTxInputScriptSigLen(x6..
+   716    1       OpOver
+   717    1       Op6
+   718    1       OpGreaterThan
+   719    1       OpIf
+   720    2       OpData1                0x25
+   722    1       OpPick
+   723    1       Op6
+   724    1       OpCovInputIdx
+   725    1       OpDup
+   726    1       Op4
+   727    1       OpPick
+   728    1       OpNumNotEqual
+   729    1       OpIf
+   730    1       OpDup
+   731    1       OpTxInputScriptSigLen
+   732    1       Op2
+   733    1       OpPick
+   734    1       OpAdd
+   735    1       OpOver
+   736    1       OpOver
+   737    1       Op2
+   738    1       OpPick
+   739    2       OpData1                0x20
+   741    1       OpAdd
+   742    1       OpTxInputScriptSigSubstr
+   743    1       Op6
+   744    1       OpPick
+   745    1       OpEqual
+   746    1       OpNot
+   747    1       OpVerify
+  -- (no statement)
+   748    1       OpDrop
+   749    1       OpEndIf
+   750    1       OpDrop
+   751    1       OpEndIf
+  -- L180 if (cnt > 7) { int x7 = OpCovInputIdx(tokenCovId, 7); if (x7 != custody) { int e7 = OpTxInputScriptSigLen(x7..
+   752    1       OpOver
+   753    1       Op7
+   754    1       OpGreaterThan
+   755    1       OpIf
+   756    2       OpData1                0x25
+   758    1       OpPick
+   759    1       Op7
+   760    1       OpCovInputIdx
+   761    1       OpDup
+   762    1       Op4
+   763    1       OpPick
+   764    1       OpNumNotEqual
+   765    1       OpIf
+   766    1       OpDup
+   767    1       OpTxInputScriptSigLen
+   768    1       Op2
+   769    1       OpPick
+   770    1       OpAdd
+   771    1       OpOver
+   772    1       OpOver
+   773    1       Op2
+   774    1       OpPick
+   775    2       OpData1                0x20
+   777    1       OpAdd
+   778    1       OpTxInputScriptSigSubstr
+   779    1       Op6
+   780    1       OpPick
+   781    1       OpEqual
+   782    1       OpNot
+   783    1       OpVerify
+  -- (no statement)
+   784    1       OpDrop
+   785    1       OpEndIf
+   786    1       OpDrop
+   787    1       OpEndIf
+  -- L215 int carriers = tx.inputs[self].value + tx.inputs[tokenIn].value;
+   788    2       OpData1                0x11
+   790    1       OpPick
+   791    1       OpTxInputAmount
+   792    2       OpData1                0x2a
+   794    1       OpPick
+   795    1       OpTxInputAmount
+   796    1       OpAdd
+  -- L216 int outAmount = tinAmount;
+   797    1       Op5
+   798    1       OpPick
+  -- L217 byte[32] outOwner = byte[32](maker);
+   799    2       OpData1                0x28
+   801    1       OpPick
+  -- L218 byte outScheme = SCHEME_P2PK;
+   802    2       OpData1                0x00
+  -- L219 int outIdx = self;
+   804    2       OpData1                0x15
+   806    1       OpPick
+  -- L220 int utxoDaa = OpTxInputDaaScore(self);
+   807    2       OpData1                0x16
+   809    1       OpPick
+   810    1       OpTxInputDaaScore
+  -- L222 if (n == 0) {
+   811    2       OpData1                0x18
+   813    1       OpPick
+   814    1       OpFalse
+   815    1       OpNumEqual
+   816    1       OpIf
+  -- L224 int idleEnd = utxoDaa + MAX_IDLE;
+   817    1       OpDup
+   818    5       OpData4                0x0086a204
+   823    1       OpAdd
+  -- L225 if (tif != TIF_GTC) {
+   824    2       OpData1                0x24
+   826    1       OpPick
+   827    1       OpFalse
+   828    1       OpNumNotEqual
+   829    1       OpIf
+  -- L226 int kill = utxoDaa;
+   830    1       OpOver
+  -- L227 if (activeFrom > kill) { kill = activeFrom; }
+   831    2       OpData1                0x24
+   833    1       OpPick
+   834    1       OpOver
+   835    1       OpGreaterThan
+   836    1       OpIf
+   837    2       OpData1                0x24
+   839    1       OpPick
+   840    1       OpNip
+  -- (no statement)
+   841    1       OpEndIf
+  -- L228 kill = kill + IOC_LIFE;
+   842    1       OpDup
+   843    3       OpData2                0x5802
+   846    1       OpAdd
+   847    1       OpNip
+  -- L229 if (kill < idleEnd) { idleEnd = kill; }
+   848    1       OpDup
+   849    1       Op2
+   850    1       OpPick
+   851    1       OpLessThan
+   852    1       OpIf
+   853    1       OpDup
+   854    1       OpRot
+   855    1       OpDrop
+  -- (no statement)
+   856    1       OpSwap
+   857    1       OpEndIf
+   858    1       OpDrop
+   859    1       OpEndIf
+  -- L231 if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
+   860    2       OpData1                0x22
+   862    1       OpPick
+   863    1       OpOver
+   864    1       OpLessThan
+   865    1       OpIf
+   866    2       OpData1                0x22
+   868    1       OpPick
+   869    1       OpNip
+  -- (no statement)
+   870    1       OpEndIf
+  -- L232 require(tx.daa >= idleEnd);
+   871    1       OpDup
+   872    1       OpDup
+   873    1       OpFalse
+   874    6       OpData5                0x0088526a74
+   880    1       OpWithin
+   881    1       OpVerify
+   882    1       OpCheckLockTimeVerify
+  -- L233 require(refundTip >= 0);
+   883    2       OpData1                0x21
+   885    1       OpPick
+   886    1       OpFalse
+   887    1       OpGreaterThanOrEqual
+   888    1       OpVerify
+  -- L234 require(OpCovOutputCount(selfId) == 0);
+  >>> cnt [889, 896) 7 B
+   889    2  cnt  OpData1                0x17
+   891    1  cnt  OpPick
+   892    1  cnt  OpCovOutputCount
+   893    1  cnt  OpFalse
+   894    1  cnt  OpNumEqual
+   895    1  cnt  OpVerify
+  -- L235 require(tx.outputs[self].value + refundTip >= carriers);
+   896    2       OpData1                0x18
+   898    1       OpPick
+   899    1       OpTxOutputAmount
+   900    2       OpData1                0x22
+   902    1       OpPick
+   903    1       OpAdd
+   904    1       Op7
+   905    1       OpPick
+   906    1       OpGreaterThanOrEqual
+   907    1       OpVerify
+  -- (no statement)
+   908    1       OpDrop
+   909    1       OpElse
+  -- L237 require(tx.daa >= activeFrom);
+   910    2       OpData1                0x22
+   912    1       OpPick
+   913    1       OpDup
+   914    1       OpFalse
+   915    6       OpData5                0x0088526a74
+   921    1       OpWithin
+   922    1       OpVerify
+   923    1       OpCheckLockTimeVerify
+  -- L238 require(n > 0);
+   924    2       OpData1                0x18
+   926    1       OpPick
+   927    1       OpFalse
+   928    1       OpGreaterThan
+   929    1       OpVerify
+  -- L239 require(scale > 0);
+   930    2       OpData1                0x27
+   932    1       OpPick
+   933    1       OpFalse
+   934    1       OpGreaterThan
+   935    1       OpVerify
+  -- L240 require(tip >= 0);
+   936    2       OpData1                0x24
+   938    1       OpPick
+   939    1       OpFalse
+   940    1       OpGreaterThanOrEqual
+   941    1       OpVerify
+  -- L241 require(n <= amountLeft);
+   942    2       OpData1                0x18
+   944    1       OpPick
+   945    2       OpData1                0x1b
+   947    1       OpPick
+   948    1       OpLessThanOrEqual
+   949    1       OpVerify
+  -- L242 require(n >= minFill || n == amountLeft);
+   950    2       OpData1                0x18
+   952    1       OpPick
+   953    2       OpData1                0x27
+   955    1       OpPick
+   956    1       OpGreaterThanOrEqual
+   957    2       OpData1                0x19
+   959    1       OpPick
+   960    2       OpData1                0x1c
+   962    1       OpPick
+   963    1       OpNumEqual
+   964    1       OpBoolOr
+   965    1       OpVerify
+  -- L243 if (interval > 0) {
+   966    2       OpData1                0x1f
+   968    1       OpPick
+   969    1       OpFalse
+   970    1       OpGreaterThan
+   971    1       OpIf
+  -- L244 require(this.ageDaa >= interval);
+   972    2       OpData1                0x1f
+   974    1       OpPick
+   975    1       OpDup
+   976    1       OpFalse
+   977    6       OpData5                0x0000000001
+   983    1       OpWithin
+   984    1       OpVerify
+   985    1       OpCheckSequenceVerify
+  -- (no statement)
+   986    1       OpEndIf
+  -- L246 require(maxFill == 0 || n <= maxFill);
+   987    2       OpData1                0x1e
+   989    1       OpPick
+   990    1       OpFalse
+   991    1       OpNumEqual
+   992    2       OpData1                0x19
+   994    1       OpPick
+   995    2       OpData1                0x20
+   997    1       OpPick
+   998    1       OpLessThanOrEqual
+   999    1       OpBoolOr
+  1000    1       OpVerify
+  -- L247 int p = price;
+  1001    2       OpData1                0x25
+  1003    1       OpPick
+  -- L248 if (slope != 0) {
+  1004    2       OpData1                0x1e
+  1006    1       OpPick
+  1007    1       OpFalse
+  1008    1       OpNumNotEqual
+  1009    1       OpIf
+  -- L249 require(slope > 0);
+  1010    2       OpData1                0x1e
+  1012    1       OpPick
+  1013    1       OpFalse
+  1014    1       OpGreaterThan
+  1015    1       OpVerify
+  -- L250 require(decayStep > 0);
+  1016    2       OpData1                0x1c
+  1018    1       OpPick
+  1019    1       OpFalse
+  1020    1       OpGreaterThan
+  1021    1       OpVerify
+  -- L251 int origin = activeFrom;
+  1022    2       OpData1                0x23
+  1024    1       OpPick
+  -- L252 if (interval > 0) {
+  1025    2       OpData1                0x21
+  1027    1       OpPick
+  1028    1       OpFalse
+  1029    1       OpGreaterThan
+  1030    1       OpIf
+  -- L253 int slice = utxoDaa + interval;
+  1031    1       Op2
+  1032    1       OpPick
+  1033    2       OpData1                0x22
+  1035    1       OpPick
+  1036    1       OpAdd
+  -- L254 if (slice > origin) { origin = slice; }
+  1037    1       OpDup
+  1038    1       Op2
+  1039    1       OpPick
+  1040    1       OpGreaterThan
+  1041    1       OpIf
+  1042    1       OpDup
+  1043    1       OpRot
+  1044    1       OpDrop
+  -- (no statement)
+  1045    1       OpSwap
+  1046    1       OpEndIf
+  1047    1       OpDrop
+  1048    1       OpEndIf
+  -- L256 require(tx.daa >= t);
+  1049    2       OpData1                0x2f
+  1051    1       OpPick
+  1052    1       OpDup
+  1053    1       OpFalse
+  1054    6       OpData5                0x0088526a74
+  1060    1       OpWithin
+  1061    1       OpVerify
+  1062    1       OpCheckLockTimeVerify
+  -- L257 require(t >= origin);
+  1063    2       OpData1                0x2f
+  1065    1       OpPick
+  1066    1       OpOver
+  1067    1       OpGreaterThanOrEqual
+  1068    1       OpVerify
+  -- L258 p = price - slope * ((t - origin) / decayStep);
+  1069    2       OpData1                0x27
+  1071    1       OpPick
+  1072    2       OpData1                0x20
+  1074    1       OpPick
+  1075    2       OpData1                0x31
+  1077    1       OpPick
+  1078    1       Op3
+  1079    1       OpPick
+  1080    1       OpSub
+  1081    2       OpData1                0x20
+  1083    1       OpPick
+  1084    1       OpDiv
+  1085    1       OpMul
+  1086    1       OpSub
+  1087    1       OpRot
+  1088    1       OpDrop
+  -- L259 if (p < priceEnd) { p = priceEnd; }
+  1089    1       OpDup
+  1090    2       OpData1                0x1f
+  1092    1       OpPick
+  1093    1       OpLessThan
+  1094    1       OpIf
+  1095    2       OpData1                0x1e
+  1097    1       OpPick
+  1098    1       OpNip
+  -- (no statement)
+  1099    1       OpEndIf
+  1100    1       OpNip
+  1101    1       OpEndIf
+  -- L261 require(p >= tip);
+  1102    1       OpDup
+  1103    2       OpData1                0x26
+  1105    1       OpPick
+  1106    1       OpGreaterThanOrEqual
+  1107    1       OpVerify
+  -- L263 int allIn = quoteOf(n, p - tip, scale - 1);
+  1108    2       OpData1                0x19
+  1110    1       OpPick
+  1111    1       OpOver
+  1112    2       OpData1                0x27
+  1114    1       OpPick
+  1115    1       OpSub
+  1116    2       OpData1                0x2a
+  1118    1       OpPick
+  1119    1       OpTrue
+  1120    1       OpSub
+  -- L145 int m = n % scale;
+  1121    1       Op2
+  1122    1       OpPick
+  1123    2       OpData1                0x2c
+  1125    1       OpPick
+  1126    1       OpMod
+  -- L146 int q = n / scale;
+  1127    1       Op3
+  1128    1       OpPick
+  1129    2       OpData1                0x2d
+  1131    1       OpPick
+  1132    1       OpDiv
+  -- L263 int allIn = quoteOf(n, p - tip, scale - 1);
+  1133    1       OpDup
+  1134    1       Op4
+  1135    1       OpPick
+  1136    1       OpMul
+  1137    1       Op2
+  1138    1       OpPick
+  1139    1       Op5
+  1140    1       OpPick
+  1141    2       OpData1                0x30
+  1143    1       OpPick
+  1144    1       OpDiv
+  1145    1       OpMul
+  1146    1       OpAdd
+  1147    1       Op2
+  1148    1       OpPick
+  1149    1       Op5
+  1150    1       OpPick
+  1151    2       OpData1                0x30
+  1153    1       OpPick
+  1154    1       OpMod
+  1155    1       OpMul
+  1156    1       Op4
+  1157    1       OpPick
+  1158    1       OpAdd
+  1159    2       OpData1                0x2f
+  1161    1       OpPick
+  1162    1       OpDiv
+  1163    1       OpAdd
+  1164    1       OpDup
+  -- L264 outAmount = tinAmount - n;
+  1165    2       OpData1                0x12
+  1167    1       OpPick
+  1168    2       OpData1                0x21
+  1170    1       OpPick
+  1171    1       OpSub
+  1172    1       Op13
+  1173    1       OpRoll
+  1174    1       OpDrop
+  -- L265 require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
+  1175    2       OpData1                0x1f
+  1177    1       OpPick
+  1178    1       OpTxOutputSpk
+  1179    4       OpData3                0x000020
+  1183    2       OpData1                0x36
+  1185    1       OpPick
+  1186    1       OpCat
+  1187    2       OpData1                0xac
+  1189    1       OpCat
+  1190    1       OpEqual
+  1191    1       OpVerify
+  -- L266 if (outAmount > 0 && tif == TIF_GTC) {
+  1192    1       OpDup
+  1193    1       OpFalse
+  1194    1       OpGreaterThan
+  1195    2       OpData1                0x2c
+  1197    1       OpPick
+  1198    1       OpFalse
+  1199    1       OpNumEqual
+  1200    1       OpBoolAnd
+  1201    1       OpIf
+  -- L268 require(OpCovOutputCount(selfId) == 1);
+  >>> cnt [1202, 1209) 7 B
+  1202    2  cnt  OpData1                0x1e
+  1204    1  cnt  OpPick
+  1205    1  cnt  OpCovOutputCount
+  1206    1  cnt  OpTrue
+  1207    1  cnt  OpNumEqual
+  1208    1  cnt  OpVerify
+  -- L269 int selfOut = OpCovOutputIdx(selfId, 0);
+  1209    2       OpData1                0x1e
+  1211    1       OpPick
+  1212    1       OpFalse
+  1213    1       OpCovOutputIdx
+  -- L270 require(tx.outputs[selfOut].scriptPubKey == contSpk(amountLeft - n));
+  >>> spk [1214, 1276) 62 B
+  1214    2  spk  OpData1                0x23
+  1216    1  spk  OpPick
+  1217    2  spk  OpData1                0x22
+  1219    1  spk  OpPick
+  1220    1  spk  OpSub
+  -- L187 int self = this.activeInputIndex;
+  1221    1  spk  OpTxInputIndex
+  -- L188 int len = OpTxInputScriptSigLen(self);
+  1222    1  spk  OpDup
+  1223    1  spk  OpTxInputScriptSigLen
+  -- L189 byte[] rs = OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+  1224    1  spk  OpOver
+  1225    1  spk  OpOver
+  1226    3  spk  OpData2                0x9406
+  1229    1  spk  OpSub
+  1230    1  spk  Op2
+  1231    1  spk  OpPick
+  1232    1  spk  OpTxInputScriptSigSubstr
+  -- L270 require(tx.outputs[selfOut].scriptPubKey == contSpk(amountLeft - n));
+  1233    1  spk  OpDup
+  1234    1  spk  OpFalse
+  1235    3  spk  OpData2                0xec00
+  1238    1  spk  OpSubstr
+  1239    1  spk  Op4
+  1240    1  spk  OpPick
+  1241    1  spk  Op8
+  1242    1  spk  OpNum2Bin
+  1243    1  spk  OpCat
+  1244    1  spk  OpOver
+  1245    3  spk  OpData2                0xf400
+  1248    3  spk  OpData2                0x9406
+  1251    1  spk  OpSubstr
+  1252    1  spk  OpCat
+  1253    1  spk  OpBlake2b
+  1254    3  spk  OpData2                0x0000
+  1257    2  spk  OpData1                0xaa
+  1259    1  spk  OpCat
+  1260    2  spk  OpData1                0x20
+  1262    1  spk  OpCat
+  1263    1  spk  OpSwap
+  1264    1  spk  OpCat
+  1265    2  spk  OpData1                0x87
+  1267    1  spk  OpCat
+  1268    1  spk  Op5
+  1269    1  spk  OpPick
+  1270    1  spk  OpTxOutputSpk
+  1271    1  spk  OpOver
+  1272    1  spk  OpEqual
+  1273    1  spk  OpVerify
+  -- L271 require(tx.outputs[selfOut].value >= tx.inputs[self].value);
+  1274    1  spk  Op5
+  1275    1  spk  OpPick
+  1276    1       OpTxOutputAmount
+  1277    2       OpData1                0x26
+  1279    1       OpPick
+  1280    1       OpTxInputAmount
+  1281    1       OpGreaterThanOrEqual
+  1282    1       OpVerify
+  -- L272 require(tx.outputs[tokOut].value >= tx.inputs[tokenIn].value);
+  1283    2       OpData1                0x3c
+  1285    1       OpPick
+  1286    1       OpTxOutputAmount
+  1287    2       OpData1                0x3e
+  1289    1       OpPick
+  1290    1       OpTxInputAmount
+  1291    1       OpGreaterThanOrEqual
+  1292    1       OpVerify
+  -- L273 require(tx.outputs[self].value >= allIn);
+  1293    2       OpData1                0x25
+  1295    1       OpPick
+  1296    1       OpTxOutputAmount
+  1297    1       Op8
+  1298    1       OpPick
+  1299    1       OpGreaterThanOrEqual
+  1300    1       OpVerify
+  -- L274 outOwner = selfId;
+  1301    2       OpData1                0x24
+  1303    1       OpPick
+  1304    2       OpData1                0x13
+  1306    1       OpRoll
+  1307    1       OpDrop
+  -- L275 outScheme = SCHEME_COVID;
+  1308    2       OpData1                0x04
+  1310    2       OpData1                0x13
+  1312    1       OpRoll
+  1313    1       OpDrop
+  -- L276 outIdx = tokOut;
+  1314    2       OpData1                0x3c
+  1316    1       OpPick
+  1317    2       OpData1                0x13
+  1319    1       OpRoll
+  1320    1       OpDrop
+  -- (no statement)
+  1321    1       Op3
+  1322    1       OpRoll
+  1323    1       OpDrop
+  >>> spk [1324, 1339) 15 B
+  1324    1  spk  Op3
+  1325    1  spk  OpRoll
+  1326    1  spk  OpDrop
+  1327    1  spk  Op3
+  1328    1  spk  OpRoll
+  1329    1  spk  OpDrop
+  1330    1  spk  Op3
+  1331    1  spk  OpRoll
+  1332    1  spk  OpDrop
+  1333    1  spk  Op3
+  1334    1  spk  OpRoll
+  1335    1  spk  OpDrop
+  1336    1  spk  Op3
+  1337    1  spk  OpRoll
+  1338    1  spk  OpDrop
+  1339    1       OpElse
+  -- L279 require(tif != TIF_FOK || outAmount == 0);
+  1340    2       OpData1                0x2b
+  1342    1       OpPick
+  1343    1       Op2
+  1344    1       OpNumNotEqual
+  1345    1       OpOver
+  1346    1       OpFalse
+  1347    1       OpNumEqual
+  1348    1       OpBoolOr
+  1349    1       OpVerify
+  -- L280 require(OpCovOutputCount(selfId) == 0);
+  >>> cnt [1350, 1357) 7 B
+  1350    2  cnt  OpData1                0x1e
+  1352    1  cnt  OpPick
+  1353    1  cnt  OpCovOutputCount
+  1354    1  cnt  OpFalse
+  1355    1  cnt  OpNumEqual
+  1356    1  cnt  OpVerify
+  -- L281 if (outAmount > 0) {
+  1357    1       OpDup
+  1358    1       OpFalse
+  1359    1       OpGreaterThan
+  1360    1       OpIf
+  -- L284 require(tokOut == tokenIn);
+  1361    2       OpData1                0x36
+  1363    1       OpPick
+  1364    2       OpData1                0x38
+  1366    1       OpPick
+  1367    1       OpNumEqual
+  1368    1       OpVerify
+  -- L285 require(tx.outputs[tokOut].value >= tx.inputs[tokenIn].value);
+  1369    2       OpData1                0x36
+  1371    1       OpPick
+  1372    1       OpTxOutputAmount
+  1373    2       OpData1                0x38
+  1375    1       OpPick
+  1376    1       OpTxInputAmount
+  1377    1       OpGreaterThanOrEqual
+  1378    1       OpVerify
+  -- L286 require(tx.outputs[self].value >= allIn + tx.inputs[self].value);
+  1379    2       OpData1                0x1f
+  1381    1       OpPick
+  1382    1       OpTxOutputAmount
+  1383    1       Op2
+  1384    1       OpPick
+  1385    2       OpData1                0x21
+  1387    1       OpPick
+  1388    1       OpTxInputAmount
+  1389    1       OpAdd
+  1390    1       OpGreaterThanOrEqual
+  1391    1       OpVerify
+  -- L287 outIdx = tokOut;
+  1392    2       OpData1                0x36
+  1394    1       OpPick
+  1395    1       Op11
+  1396    1       OpRoll
+  1397    1       OpDrop
+  -- (no statement)
+  1398    1       OpElse
+  -- L289 require(tx.outputs[self].value >= allIn + carriers);
+  1399    2       OpData1                0x1f
+  1401    1       OpPick
+  1402    1       OpTxOutputAmount
+  1403    1       Op2
+  1404    1       OpPick
+  1405    1       Op15
+  1406    1       OpPick
+  1407    1       OpAdd
+  1408    1       OpGreaterThanOrEqual
+  1409    1       OpVerify
+  -- (no statement)
+  1410    1       Op10
+  1411    1       OpRoll
+  1412    1       OpToAltStack
+  1413    1       OpFromAltStack
+  1414    1       OpEndIf
+  1415    1       OpToAltStack
+  1416    1       Op10
+  1417    1       OpRoll
+  1418    1       OpToAltStack
+  1419    1       Op10
+  1420    1       OpRoll
+  1421    1       OpToAltStack
+  1422    1       OpFromAltStack
+  1423    1       OpFromAltStack
+  1424    1       OpFromAltStack
+  1425    1       OpEndIf
+  1426    1       Op4
+  1427    1       OpRoll
+  1428    1       OpDrop
+  1429    1       Op4
+  1430    1       OpRoll
+  1431    1       OpDrop
+  1432    1       Op4
+  1433    1       OpRoll
+  1434    1       OpDrop
+  1435    1       Op4
+  1436    1       OpRoll
+  1437    1       OpDrop
+  1438    1       Op4
+  1439    1       OpRoll
+  1440    1       OpDrop
+  1441    1       Op4
+  1442    1       OpRoll
+  1443    1       OpDrop
+  1444    1       Op4
+  1445    1       OpRoll
+  1446    1       OpDrop
+  1447    1       Op4
+  1448    1       OpRoll
+  1449    1       OpDrop
+  1450    1       Op4
+  1451    1       OpRoll
+  1452    1       OpToAltStack
+  1453    1       OpFromAltStack
+  1454    1       OpEndIf
+  -- L294 if (outAmount > 0) {
+  1455    1       Op4
+  1456    1       OpPick
+  1457    1       OpFalse
+  1458    1       OpGreaterThan
+  1459    1       OpIf
+  -- L300 require(tx.outputs[outIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+  1460    1       OpOver
+  1461    1       OpTxOutputSpk
+  1462    1       Op13
+  1463    1       OpPick
+  1464    1       OpFalse
+  1465    2       OpData1                0x2c
+  1467    1       OpPick
+  1468    1       OpSubstr
+  1469    2       OpData1                0x08
+  1471    1       OpCat
+  1472    1       Op6
+  1473    1       OpPick
+  1474    1       Op8
+  1475    1       OpNum2Bin
+  1476    1       OpCat
+  1477    2       OpData1                0x20
+  1479    1       OpCat
+  1480    1       Op5
+  1481    1       OpPick
+  1482    1       OpCat
+  1483    2       OpData1                0x01
+  1485    1       OpCat
+  1486    1       Op4
+  1487    1       OpPick
+  1488    1       OpCat
+  1489    4       OpData3                0x010020
+  1493    1       OpCat
+  1494    1       Op13
+  1495    1       OpPick
+  1496    2       OpData1                0x2f
+  1498    2       OpData1                0x4f
+  1500    1       OpSubstr
+  1501    1       OpCat
+  1502    2       OpData1                0x20
+  1504    1       OpCat
+  1505    1       Op13
+  1506    1       OpPick
+  1507    2       OpData1                0x50
+  1509    2       OpData1                0x70
+  1511    1       OpSubstr
+  1512    1       OpCat
+  1513    1       Op14
+  1514    1       OpPick
+  1515    2       OpData1                0x2c
+  1517    1       OpPick
+  1518    2       OpData1                0x70
+  1520    1       OpAdd
+  1521    1       Op16
+  1522    1       OpPick
+  1523    1       OpSize
+  1524    1       OpSwap
+  1525    1       OpDrop
+  1526    1       OpTrue
+  1527    1       OpDiv
+  1528    1       OpSubstr
+  1529    1       OpCat
+  1530    1       OpBlake2b
+  1531    3       OpData2                0x0000
+  1534    2       OpData1                0xaa
+  1536    1       OpCat
+  1537    2       OpData1                0x20
+  1539    1       OpCat
+  1540    1       OpSwap
+  1541    1       OpCat
+  1542    2       OpData1                0x87
+  1544    1       OpCat
+  1545    1       OpEqual
+  1546    1       OpVerify
+  -- L305 require(OpOutputCovenantId(outIdx) == tokenCovId);
+  1547    1       OpOver
+  1548    1       OpOutputCovenantId
+  1549    2       OpData1                0x2c
+  1551    1       OpPick
+  1552    1       OpEqual
+  1553    1       OpVerify
+  -- (no statement)
+  1554    1       OpEndIf
+  1555    1       OpDrop
+  1556    1       OpDrop
+  1557    1       OpDrop
+  1558    1       OpDrop
+  1559    1       OpDrop
+  1560    1       OpDrop
+  1561    1       OpDrop
+  1562    1       OpDrop
+  1563    1       OpDrop
+  1564    1       OpDrop
+  1565    1       OpDrop
+  1566    1       OpDrop
+  1567    1       OpDrop
+  1568    1       OpDrop
+  1569    1       OpDrop
+  1570    1       OpDrop
+  1571    1       OpDrop
+  1572    1       OpDrop
+  1573    1       OpDrop
+  1574    1       OpDrop
+  1575    1       OpDrop
+  1576    1       OpDrop
+  1577    1       OpDrop
+  1578    1       OpDrop
+  1579    1       OpDrop
+  1580    1       OpDrop
+  1581    1       OpDrop
+  1582    1       OpDrop
+  1583    1       OpDrop
+  1584    1       OpDrop
+  1585    1       OpDrop
+  1586    1       OpDrop
+  1587    1       OpDrop
+  1588    1       OpDrop
+  1589    1       OpDrop
+  1590    1       OpDrop
+  1591    1       OpDrop
+  1592    1       OpDrop
+  1593    1       OpDrop
+  1594    1       OpDrop
+  1595    1       OpDrop
+  1596    1       OpDrop
+  1597    1       OpDrop
+  1598    1       OpDrop
+  1599    1       OpDrop
+  1600    1       OpDrop
+  1601    1       OpDrop
+  1602    1       OpDrop
+  1603    1       OpDrop
+  1604    1       OpTrue
+
+== between entries / trailer [1605, 1615) 10 B
+  -- (no statement)
+  1605    1       OpElse
+  1606    1       OpDup
+  1607    5       OpData4                0xa0893109
+  1612    1       OpEqual
+  1613    1       OpIf
+  1614    1       OpDrop
+
+== entry cancel [1615, 1680) 65 B
+  -- (no statement)
+  1615    2       OpData1                0x14
+  1617    1       OpPick
+  1618    1       OpSize
+  1619    2       OpData1                0x41
+  1621    1       OpNumEqualVerify
+  1622    1       OpDrop
+  -- L310 byte[] sb = byte[](s);
+  1623    2       OpData1                0x14
+  1625    1       OpPick
+  -- L311 require(sb.length == 65);
+  1626    1       OpDup
+  1627    1       OpSize
+  1628    1       OpSwap
+  1629    1       OpDrop
+  1630    1       OpTrue
+  1631    1       OpDiv
+  1632    2       OpData1                0x41
+  1634    1       OpNumEqual
+  1635    1       OpVerify
+  -- L312 require(sb[64] == SIGHASH_ALL);
+  1636    1       OpDup
+  1637    2       OpData1                0x40
+  1639    1       OpTrue
+  1640    1       OpMul
+  1641    1       OpDup
+  1642    1       OpTrue
+  1643    1       OpAdd
+  1644    1       OpSubstr
+  1645    2       OpData1                0x01
+  1647    1       OpEqual
+  1648    1       OpVerify
+  -- L313 require(checkSig(s, maker));
+  1649    2       OpData1                0x15
+  1651    1       OpPick
+  1652    2       OpData1                0x15
+  1654    1       OpPick
+  1655    1       OpCheckSig
+  1656    1       OpVerify
+  -- (no statement)
+  1657    1       OpDrop
+  1658    1       OpDrop
+  1659    1       OpDrop
+  1660    1       OpDrop
+  1661    1       OpDrop
+  1662    1       OpDrop
+  1663    1       OpDrop
+  1664    1       OpDrop
+  1665    1       OpDrop
+  1666    1       OpDrop
+  1667    1       OpDrop
+  1668    1       OpDrop
+  1669    1       OpDrop
+  1670    1       OpDrop
+  1671    1       OpDrop
+  1672    1       OpDrop
+  1673    1       OpDrop
+  1674    1       OpDrop
+  1675    1       OpDrop
+  1676    1       OpDrop
+  1677    1       OpDrop
+  1678    1       OpDrop
+  1679    1       OpTrue
+
+== between entries / trailer [1680, 1684) 4 B
+  -- (no statement)
+  1680    1       OpElse
+  1681    1       OpReturn
+  1682    1       OpEndIf
+  1683    1       OpEndIf

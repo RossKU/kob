@@ -223,8 +223,11 @@ generated count bound and `cont.length == count`) and its continuation SPK check
 by the generated `validateOutputState`). An idiomatic port drops them and is still +1,021 B. That
 difference is not duplication but the mechanism: `become` rebuilds the whole 20-field state
 (593 B) and re-encodes and compares it (514 B), where the hand-written order splices one 8-byte
-field into its own script (`contSpk`: the redeem script with bytes [236..244) replaced, 81 B). The
-cost of `become` grows with the number of state fields.
+field into its own script (`contSpk`: the redeem script with bytes [236..244) replaced, 81 B in the
+port, 79 B in the hand-written order). The cost of `become` grows with the number of state fields.
+The 3 B of "port without all four" are the generated local `gen__next_output_count`.
+Opcode-level listings of the hand-written order and the idiomatic port, section by section, and the
+splice prototype: [argent-port-compare.md](argent-port-compare.md).
 
 * Question: could a `become` whose state differs from `self` only in some fields compile
   to a splice of those fields (or offer an opt-in "continuation = self with field := value")? For

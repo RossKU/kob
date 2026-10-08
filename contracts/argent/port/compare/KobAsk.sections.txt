@@ -1,0 +1,52 @@
+# KobAsk: bytes per section (constructor arguments contracts/v2/KobAsk.ctor.json); written by crates/kob-tests/tests/argent_port_compare_tests.rs
+# Each construct is removed from the source after the ones above it and the script compiled again. The
+# first number is the size difference; "removed opcodes" are the offsets, in the full script, of the opcodes
+# that disappear; "also" are the other changes (see the header of KobAsk.<variant>.opcodes.txt).
+
+KobAsk, hand-written SilverScript (contracts/v2/KobAsk.sil): 1684 B
+  entry settle   [287, 1605) 1318 B
+  entry cancel   [1615, 1680) 65 B
+  spk  -  79 B  continuation check: scriptPubKey == contSpk(amountLeft - n) (splice of amountLeft)
+         removed opcodes 77 B at [1214, 1276) 62 B, [1324, 1339) 15 B (settle 77 B)
+         also: 10 number push(es) kept with another value (-3 B); 1 B of new opcodes
+  cnt  -  21 B  own output-count checks: OpCovOutputCount(selfId) == 1 (rest), == 0 (fill, refund)
+         removed opcodes 21 B at [889, 896) 7 B, [1202, 1209) 7 B, [1350, 1357) 7 B (settle 21 B)
+  rest  1584 B  everything else
+
+KobAsk, idiomatic Argent port (argentc output) (contracts/argent/port-out/KobAsk.idiomatic.sil): 2705 B
+  entry settle   [287, 2621) 2334 B
+  entry cancel   [2631, 2701) 70 B
+  bec  - 514 B  generated become: cont.length == count, validateOutputState per continuation
+         removed opcodes 514 B at [2036, 2547) 511 B, [2617, 2620) 3 B (settle 514 B)
+  lit  - 591 B  become state literal: State[] cont, cont.append(State { 20 fields })
+         removed opcodes 568 B at [821, 841) 20 B, [847, 850) 3 B, [862, 865) 3 B, [1283, 1599) 316 B, [1603, 1683) 80 B, [1755, 1757) 2 B, [1764, 1822) 58 B, [1825, 1845) 20 B, [1878, 1898) 20 B, [1902, 1922) 20 B, [1929, 1932) 3 B, [2026, 2029) 3 B, [2597, 2617) 20 B (settle 568 B)
+         also: 99 number push(es) kept with another value (-27 B); 4 B of new opcodes
+  bnd  -   8 B  generated count bounds: 0 <= OpAuthOutputCount <= 1 (emits next: KobAsk[0..=1])
+         removed opcodes 8 B at [320, 328) 8 B (settle 8 B)
+  ocnt -   3 B  generated local: gen__next_output_count = OpAuthOutputCount(this input)
+         removed opcodes 3 B at [318, 320) 2 B, [2596, 2597) 1 B (settle 3 B)
+         also: 78 number push(es) kept with another value (+0 B)
+  cxl  -   5 B  generated cancel check: OpAuthOutputCount == 0 (cancel ... emits none)
+         removed opcodes 5 B at [2639, 2644) 5 B (cancel 5 B)
+  rest  1584 B  everything else
+
+KobAsk, idiomatic port with become lowered to a splice (prototype D1) (contracts/argent/port/KobAsk.splice1.sil): 1713 B
+  entry settle   [287, 1629) 1342 B
+  entry cancel   [1639, 1709) 70 B
+  spl  -  73 B  become as a splice: len == count, scriptPubKey == this script with amountLeft replaced
+         removed opcodes 73 B at [1503, 1570) 67 B, [1575, 1576) 1 B, [1623, 1628) 5 B (settle 73 B)
+  slot -  40 B  become slot: counter and the changed field (amountLeft - n)
+         removed opcodes 42 B at [821, 823) 2 B, [829, 831) 2 B, [843, 845) 2 B, [1257, 1274) 17 B, [1347, 1349) 2 B, [1353, 1354) 1 B, [1357, 1360) 3 B, [1363, 1365) 2 B, [1390, 1393) 3 B, [1397, 1399) 2 B, [1405, 1407) 2 B, [1494, 1496) 2 B, [1621, 1623) 2 B (settle 42 B)
+         also: 99 number push(es) kept with another value (-2 B); 4 B of new opcodes
+  bnd  -   8 B  generated count bounds: 0 <= OpAuthOutputCount <= 1
+         removed opcodes 8 B at [320, 328) 8 B (settle 8 B)
+  ocnt -   3 B  generated local: gen__next_output_count = OpAuthOutputCount(this input)
+         removed opcodes 3 B at [318, 320) 2 B, [1620, 1621) 1 B (settle 3 B)
+         also: 78 number push(es) kept with another value (+0 B)
+  cxl  -   5 B  generated cancel check: OpAuthOutputCount == 0
+         removed opcodes 5 B at [1647, 1652) 5 B (cancel 5 B)
+  rest  1584 B  everything else
+
+the rests compared (opcodes matched as above; offsets in the full scripts)
+  rest of hand (1584 B) vs rest of idiomatic (1584 B): 0 opcode(s) only in one of them, 0 number push(es) with another value
+  rest of idiomatic (1584 B) vs rest of splice1 (1584 B): 0 opcode(s) only in one of them, 0 number push(es) with another value
