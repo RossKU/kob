@@ -192,7 +192,7 @@ export default {
   'market.badge.genesisVerifiedHint': 'The registry maintainers verified the genesis of this token (where its covenant id comes from) against chain data.',
   'market.badge.genesisUnverifiedHint': 'The registry does not state that the genesis of this token was verified against chain data. Check the covenant id yourself.',
   'market.warning.title': 'Registry warning for this token',
-  'market.badge.unverifiedHint': 'A token of an audited program template that KOB has not confirmed. Tickers can collide: check the covenant id.',
+  'market.badge.unverifiedHint': 'A token on a supported token program that KOB has not confirmed. Tickers can collide: check the covenant id.',
   'market.badge.issuerControl': 'issuer can freeze or seize',
   'market.state.official': 'official',
   'market.powers.title': 'The issuer has special powers over this token',

@@ -74,7 +74,7 @@ export default {
   'orders.oldTemplate.badge': 'older contract version',
   'orders.oldTemplate.hint': 'Your record of this order names an order contract version this app does not ship. The app cannot look it up or cancel it.',
   'orders.oldTemplate.title': 'Orders on a contract version this app cannot spend',
-  'orders.oldTemplate.body': '{count} of your saved orders use an older contract version this app cannot find, cancel or refund, and the indexer may no longer list them. They stay yours: export your records (Recover, KOB backup) and cancel them with a transaction that spends the cancel entry of the order itself (for example with the KOB release they were placed with), or wait until they expire and refund them with that release.',
+  'orders.oldTemplate.body': '{count} of your saved orders use an older contract version this app cannot find, cancel or refund, and the indexer may no longer list them. Matchers of this version no longer fill them, arm or trail their stops, or run their exits. They stay yours: export your records (Recover, KOB backup) and cancel them with a transaction that spends the cancel entry of the order itself (for example with the KOB release they were placed with), then place them again; or wait until they expire and refund them with that release.',
 
   'orders.perScale': 'per {scale} base units',
   'orders.limitPrice': 'Limit price',

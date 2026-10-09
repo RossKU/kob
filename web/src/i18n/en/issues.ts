@@ -190,7 +190,7 @@ export default {
   'issues.cancel.strays-abandoned': '{count} stray token UTXO(s) ({amount}) do not fit into the transaction and are abandoned. They are lost when the order closes.',
   'issues.cancel.stray-other-token': 'A stray token UTXO of another token ({amount}) cannot be swept by this cancel and stays behind.',
   'issues.cancel.strays-unknown': 'The stray tokens of this order could not be read. Any that exist are not moved by this cancel and are lost when the order closes.',
-  'issues.cancel.strays-exceed-slots': 'This order has {strays} stray token UTXOs, but one transaction can move only {room} of them. Sweeping them is impossible, and cancelling would abandon the rest.',
+  'issues.cancel.strays-exceed-slots': 'This order has {strays} stray token UTXOs, but one transaction can move only {room} of them. Sweep the strays first (the order stays open); cancelling now would abandon the rest.',
   'issues.cancel.top-up': 'The replacement needs more tokens than the order holds, so {amount} of your free tokens are added.',
   'issues.refund.no-clock': 'The current DAA score is needed to refund, but it is not available yet. Try again in a moment.',
   'issues.refund.not-yet': 'This order cannot be refunded yet. It becomes refundable at DAA {dueDaa} (now {nowDaa}), in about {wait}.',
