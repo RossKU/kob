@@ -353,8 +353,8 @@ Hex of the `create.ask` vector (175 bytes), split at the fields:
 01 a700                          ORDER, length 167 (u16le)
 00 01 01 00                      output 0, family KCC-20, kind KobAsk, flags 0
 00                               zeroMask: no all-zero 32-byte field
-1b84c556…  70707070…  f4ac029d…  maker, tokenCovId, tokenTplHash (32 bytes each)
-01 a117 e807 e807 …              tplPrefixLen 1, tplSuffixLen 2977, scale 1000, minFill 1000, price, tip, ... (LEB128)
+1b84c556…  70707070…  173ca6a7…  maker, tokenCovId, tokenTplHash (32 bytes each)
+01 f215 e807 e807 …              tplPrefixLen 1, tplSuffixLen 2802, scale 1000, minFill 1000, price, tip, ... (LEB128)
 01 eeee…ee                       custody: token output 1, extension commitment (flag bit 1 clear)
 ```
 

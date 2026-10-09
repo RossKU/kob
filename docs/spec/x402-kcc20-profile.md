@@ -258,7 +258,7 @@ The reference KCC-20 program bounds the number of token inputs and outputs per t
 time (3/3 for the upstream reference; KOB issues 8/8; other programs exist). A token payment needs
 one input and up to two outputs (merchant and change); a client SHOULD consolidate before paying
 when the payment needs more inputs than the program allows. Each token input carries the whole
-program in its signature script (about 3.1 kB for the reference 3/3 program, about 6.8 kB for the
+program in its signature script (about 2.9 kB for the reference 3/3 program, about 6.4 kB for the
 8/8 variant); a payment's size, and so its fee floor, is dominated by that.
 
 ### 5.3 Why borrow-enabled token UTXOs are refused
@@ -797,8 +797,8 @@ the expected diagnostic and public reason. Placeholders below are filled at publ
   (`payload_commit_object`, `payload_commit_digest`, `commitment_payload`, `check_payload_commitment`,
   `check_expiry`), `policy.rs` (`Custody`, `TokenAllowlist`), `error.rs` (`Diag`, `Reason`),
   `safe_tx.rs` (covenant projection).
-- KCC-20 reference program (argent-lang/kcc20-reference, pull request 1, unmerged and unaudited at the
-  time of writing): state `{ amount, owner, owner_scheme, borrow_scheme, borrow_guard,
+- KCC-20 reference program (argent-lang/kcc20-reference, master `c8a0871`, pull request 1 merged; unaudited
+  at the time of writing), standalone build (`contracts/kcc20/KCC20Ref.sil`): state `{ amount, owner, owner_scheme, borrow_scheme, borrow_guard,
   extension_commitment }`, leader and delegator entries, borrow path.
 - KIP-9 (extended mass), KIP-10 (introspection), KIP-20 (covenant ids).
 - kas-smiths.org, topic 15, posts #20 and #24.

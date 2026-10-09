@@ -30,7 +30,8 @@ off-chain custody.
 * Token registry (`registry/tokens.json`): the two KRON token programs are `reviewed`, with conditions
   (each token still needs its genesis check and a no-live-minter scan before it is listed, and every
   token entry is `pending-review`); the KCC-20 programs, KaspaCom's included, are `pending-review`.
-  The KCC-20 token standard itself is still a draft.
+  The KCC-20 token standard is in Last Call, not final; KOB's token programs follow its merged reference program
+  (`docs/spec/kcc-conformance.md`).
 * The Argent app build needs two patches to `argentc` that are not upstream (`argent/UPSTREAM.md`).
   Open questions for the Argent team are in `docs/argent-feedback.md`.
 * Interfaces, encodings and artifact ids can still change.
@@ -40,7 +41,7 @@ off-chain custody.
 | Path | Contents |
 |---|---|
 | `contracts/` | SilverScript sources (`v2/` protocol v2 orders, `orders/` first-generation orders, `kcc20/`, `adapters/kron/`), compiled `artifacts/` (committed, reproducible), `silverc.lock`, `SHA256SUMS`, `deploy/` (per-network deployment records), and the Argent app in `contracts/argent/` |
-| `contracts/third-party/` | Pinned third-party token program (KaspaCom KCC20 0.2.5, Apache-2.0) |
+| `contracts/third-party/` | Pinned third-party token programs: KaspaCom KCC20 0.2.5 (Apache-2.0), and the KCC-20 reference source and its published public-mint build (argent-lang/kcc20-reference `c8a0871`, ISC) |
 | `crates/kob-protocol` | Protocol library: pinned artifacts, state and sigscript encoding, builders for every order action and matcher shape, fee and mass pass, compute-budget table, `KOB1` payload, engine validation, golden vectors |
 | `crates/kob-wasm` | wasm-bindgen bindings over `kob-protocol` (used by the web UI and the TypeScript SDK) |
 | `crates/kob-executor` | One binary: indexer + read API (REST and WebSocket), matcher, keepers, and the x402 facilitator |

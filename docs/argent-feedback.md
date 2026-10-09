@@ -170,16 +170,27 @@ differs from the single-actor build.
 
 * The KCC-20 actor of `contracts/argent/kcc20_8x8.ag` built together with a second actor in one app:
   the state span grows from 1 + 112 to 1 + 145 bytes (the context field `gen__kcc20_template`), the
-  `transfer` entry takes two more hidden witnesses (it reads its delegates with the template), and
-  the program grows from 6,820 B to 9,864 B. Its `actor_type_handle` is a correct view of THAT
-  program (state `KCC20State`, context field `gen__kcc20_template`, prefix 34 B, suffix 9,718 B,
-  template `3d08058a...`), which is not the token KOB issues.
-* KOB's token program is fixed outside Argent: it is `KCC20Ref_8x8` (template `40fef59a...`), which
+  `transfer` and `transfer_delegator` entries take two more hidden witnesses (the template lengths;
+  delegates and leader are read with the template), and the program grows from 6,350 B to 9,394 B. Its
+  `actor_type_handle` is a correct view of THAT program (state `KCC20State`, context field
+  `gen__kcc20_template`, prefix 34 B, suffix 9,248 B, template `680b901a...`), which is not the token
+  KOB issues. On argentc `9a9f4b1` (#68: the current actor's template lengths are fixed-width constants,
+  no hidden witnesses) the same build is 9,336 B with the same 1 + 145 state.
+* KOB's token program is fixed outside Argent: it is `KCC20Ref_8x8` (template `666da060...`), which
   the token UTXOs on chain carry and which every KOB order pins as `tokenTplHash`. A handle can only
   describe the program its app compiled; it cannot make a multi-actor build produce, or stand for,
   the deployed program. The single-actor app `KOBToken` compiles to exactly that program, so its
   handle is the deployed template. `KOBToken` therefore stays its own app; this costs nothing,
   the router imports it like any other app.
+* Since the upstream reference was merged (argent-lang/kcc20-reference `c8a0871`), `kcc20.ag` declares
+  no app and the repository publishes the token only as an actor of its `KCC20PublicMint` app
+  (`fixtures/public-mint/sil/KCC20.sil`: 4,031 B, state 1 + 145, every holder reads its leader with
+  the template, so only a `KCC20` can lead). KOB builds `kcc20.ag` as a single-actor app (2,915 B,
+  state 1 + 112) and checks that build in `scripts/build-argent.sh`; both builds are vendored and
+  compared in `contracts/third-party/kcc20-reference/UPSTREAM.md` and
+  `crates/kob-tests/tests/kcc20_reference_tests.rs`. A standard way to publish a single-actor build of
+  a library actor (or a stable state view that keeps the 1 + 112 layout) would let token programs and
+  their importers share one byte layout.
 * Repro: append a second actor and an `app` listing both to `kcc20_8x8.ag`, build, and compare
   `sil/KCC20.sil` and the artifact's `template_plan.templates[KCC20].actor_type_handle` with
   `contracts/argent/KOBToken/`.
