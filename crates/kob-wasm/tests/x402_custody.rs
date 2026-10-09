@@ -46,7 +46,7 @@ fn a_kaspacom_program_cannot_be_offered_as_unconditional() {
 fn a_registry_program_without_capabilities_stays_unconditional() {
     // the reference 3x3 program (registry: no capabilities) keeps the default
     let mut req = offer_req(None);
-    req["templateHash"] = json!("f4ac029d2c3c74dd3dcaeb64245f7d0a0977e27c2956f3977540a11dc7c45b1f");
+    req["templateHash"] = json!("173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b");
     let v: Value = serde_json::from_str(&x402::token_offer(&req.to_string()).unwrap()).unwrap();
     assert_eq!(v["custody"], "unconditional");
 }

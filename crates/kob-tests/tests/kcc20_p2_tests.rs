@@ -1008,7 +1008,7 @@ fn run_bad_ctx_or_input(net: &Net, s: &Scn, expect: usize) {
 fn p2_holder_source_matches_generator() {
     let base = common::contract_source("KCC20Ref");
     let generated = kob_protocol::kcc20::kcc20_p2_holder_source(&base).expect("generate");
-    assert_eq!(common::contract_source("KCC20P2").replace("\r\n", "\n"), generated, "KCC20P2.sil differs from the generator");
+    common::check_generated_source("KCC20P2", &generated);
     const { assert!(!kob_protocol::kcc20::ISSUE_USE_P2_BATCH_LEADER) };
     assert!(
         common::contract_source("KCC20Batch").contains(&format!("int constant MAX_SLOTS = {};", kob_protocol::kcc20::P2_BATCH_SLOTS))

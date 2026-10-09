@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Reproducible contract build.
 #
-# Compiles every contracts/**/*.sil except contracts/argent and contracts/deploy (constructor arguments
+# Compiles every contracts/**/*.sil except contracts/argent, contracts/deploy and contracts/third-party (constructor arguments
 # from the sibling <Name>.ctor.json) with silverc and either writes or verifies contracts/artifacts/<Name>.json.
 #
 #   scripts/build-contracts.sh            write artifacts, contracts/argent and contracts/SHA256SUMS
@@ -67,7 +67,7 @@ while IFS= read -r src; do
     cp "$OUT/$name.json" "contracts/artifacts/$name.json"
     echo "wrote   contracts/artifacts/$name.json"
   fi
-done < <(find contracts -name '*.sil' -not -path 'contracts/argent/*' -not -path 'contracts/deploy/*' | LC_ALL=C sort)
+done < <(find contracts -name '*.sil' -not -path 'contracts/argent/*' -not -path 'contracts/deploy/*' -not -path 'contracts/third-party/*' | LC_ALL=C sort)
 
 # contracts/artifacts holds exactly the artifacts of the sources above: any other file there (one no
 # source produces, left over from a removed or renamed source, or added by hand) is refused.

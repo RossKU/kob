@@ -29,21 +29,10 @@ contract KCC20(
 
     // :: global functions (isolated using the gen__glob_ namespace)
     function require_valid_owner_scheme(byte gen__glob_owner_scheme) {
-        require(
-            gen__glob_owner_scheme == OWNER_P2PK_SCHNORR
-                || gen__glob_owner_scheme == OWNER_P2PKH_SCHNORR
-                || gen__glob_owner_scheme == OWNER_P2PKH_ECDSA
-                || gen__glob_owner_scheme == OWNER_P2SH
-                || gen__glob_owner_scheme == OWNER_COVENANT_ID
-        );
+        require(unsigned(gen__glob_owner_scheme) <= unsigned(OWNER_COVENANT_ID));
     }
     function require_valid_borrow_scheme(byte gen__glob_borrow_scheme) {
-        require(
-            gen__glob_borrow_scheme == BORROW_DISABLED
-                || gen__glob_borrow_scheme == BORROW_AMOUNT_THRESHOLD
-                || gen__glob_borrow_scheme == BORROW_SCHNORR_SIGNATURE
-                || gen__glob_borrow_scheme == BORROW_HASH_CHAIN
-        );
+        require(unsigned(gen__glob_borrow_scheme) <= unsigned(BORROW_HASH_CHAIN));
     }
     function p2pkh_hash(byte[] gen__glob_public_key) : byte[32] {
         return blake3(gen__glob_public_key);
@@ -136,9 +125,6 @@ contract KCC20(
             require(next_states[i].amount >= 0);
             require_valid_owner_scheme(next_states[i].owner_scheme);
             require_valid_borrow_scheme(next_states[i].borrow_scheme);
-            if (next_states[i].borrow_scheme == BORROW_AMOUNT_THRESHOLD) {
-                require(OpBin2Num(next_states[i].borrow_guard.slice(0, 8)) >= 0);
-            }
             require(next_states[i].extension_commitment == extension_commitment);
             output_total = output_total + next_states[i].amount;
         }
@@ -154,8 +140,10 @@ contract KCC20(
                 require(false);
             } else if (borrow_scheme == BORROW_AMOUNT_THRESHOLD) {
                 require(path_witness.length == 0);
-                amount_threshold = OpBin2Num(borrow_guard.slice(0, 8));
-                require(amount_threshold >= 0);
+                amount_threshold = int(byte[8](borrow_guard.slice(0, 8)));
+                if (amount_threshold < 0) {
+                    amount_threshold = 0;
+                }
             } else if (borrow_scheme == BORROW_SCHNORR_SIGNATURE) {
                 require(checkSig(
                     sig(byte[65](path_witness)),

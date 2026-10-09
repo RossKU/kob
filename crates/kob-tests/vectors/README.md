@@ -8,7 +8,7 @@ encoding it labels KCC must pass these.
 |---|---|---|---|
 | `kcc1/` | KCC-1 Covenant Concepts, Byte Layouts, and ABI (Last Call) | `main` `411b41b`, file from #27 | `tests/kcc1_conformance_tests.rs` |
 | `kcc2/` | KCC-2 Authority Schemes (Last Call) | `main` `411b41b`, file from #30 | `tests/kcc2_conformance_tests.rs`, `tests/kcc20_conformance_tests.rs` |
-| `kcc20/` | KCC-20 Fungible Token (Last Call on PR #31, Draft on `main`) | PR #31 head `cfb74cf` | `tests/kcc20_conformance_tests.rs` |
+| `kcc20/` | KCC-20 Fungible Token (Last Call) | `main` `3fbec52`, file from #31 | `tests/kcc20_conformance_tests.rs` |
 
 Each directory's `PROVENANCE.md` records the commit, blob id, sha256 and fetch date. Re-vendor when upstream changes
 the file (the sha256 assertion fails on any local edit).

@@ -363,11 +363,11 @@ pub const PINNED: [(TemplateId, &str); 23] = [
     (TemplateId::KobPair, "c95c92344f08c42992699b0e467cf32fe573dda9b879250438d60a13cab4a9c6"),
     (TemplateId::KobCondPair, "7b8f1a9e957a9def15fd835fb2e47331ccfcc856978f6408f8a3c7a519a6f06e"),
     (TemplateId::KobIfdPair, "4a432afb1bd314e43a5497df414f9e8121866dfa59a59bad6f1a9d141e06669a"),
-    (TemplateId::Kcc20Ref, "f4ac029d2c3c74dd3dcaeb64245f7d0a0977e27c2956f3977540a11dc7c45b1f"),
-    (TemplateId::Kcc20Ref4x5, "6bef67391fd2eb94c9d155591229b6d3676a8b7e8e609063bce1b308559ff12f"),
-    (TemplateId::Kcc20Ref8x8, "40fef59a59bd76991f4d4e2101d1e3e34860997b89fe7714532637cec482a9d7"),
-    (TemplateId::Kcc20Ref16x16, "8319cdc429d7f1b31045120c168e951a316c98fcde0c95c385e5157994ba9ab3"),
-    (TemplateId::Kcc20P2, "16032d0d301c5d8cc7e5a737ac99af8265c6b6956e1e6785585daab566bc1a9c"),
+    (TemplateId::Kcc20Ref, "173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b"),
+    (TemplateId::Kcc20Ref4x5, "10d3d2ff9efacb64e2ba3acb3e442fb2a35128b36a9ad83fb99b7fe053505983"),
+    (TemplateId::Kcc20Ref8x8, "666da060d02663939efdc534ea10cce219e5564af86f4cc8eeea2ca129f7c032"),
+    (TemplateId::Kcc20Ref16x16, "922e9ba7c64b0ddcbd0f1b4b6bd592c791e0813df033d1c78213e4eec374efd7"),
+    (TemplateId::Kcc20P2, "b182879fe8d87659f9424dbdedc6540fba185129c3d7dd5e9caa1332f0ce4d11"),
     (TemplateId::Kcc20KaspaCom025, "911f0638ccb7368bf36d117f1725073ae7ee487ce8b58ca3e8375051c2d40f6c"),
     (TemplateId::KobAskKron, "f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d"),
     (TemplateId::KobBidKron, "6ec1a3dd4a287b73295a08db5f75fedcac4966539d793e9d1a659711ad888efc"),
@@ -833,7 +833,7 @@ pub mod deployment {
     pub const MANIFEST: &str = include_str!("../../../contracts/deploy/mainnet/deployment.json");
     /// sha256 (lowercase hex, LF-normalised bytes) of the registry the record pins: the `registry.sha256` of [`MANIFEST`]
     /// and [`crate::registry::default_registry_sha256`] (checked by the tests).
-    pub const REGISTRY_SHA256: &str = "6baf815424fb69c07499ccb7a28d9cc1a9d0d8ece736ac0a84f87f0d93c93a8d";
+    pub const REGISTRY_SHA256: &str = "73b37e875025c2df46e5233e79de2c11b3d5a371efc907b7f0199a968b7f0553";
 }
 
 /// Summary of one template for front ends and documentation.

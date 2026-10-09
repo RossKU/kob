@@ -399,7 +399,7 @@ describe('planRefund: the maker refunds their own order', () => {
     // no signature: the refund tip pays the node's relay-floor fee and the rest of the tip returns to the maker as change
     expect(plan.built!.fee.fee).toBe(plan.built!.fee.minFee);
     const tipChange = plan.built!.tx.outputs[plan.built!.fee.changeOutput!];
-    expect(BigInt(tipChange.value)).toBe(3_500_000n - BigInt(plan.built!.fee.fee));
+    expect(BigInt(tipChange.value)).toBe(3_400_000n - BigInt(plan.built!.fee.fee));
     const bid = planRefund(env({ clock: { daa: 77_761_000n } }), snapOf('create.bid'));
     const bs = verify(bid, 'refund bid');
     expect(bs.spends[0].action).toBe('refund');
@@ -413,7 +413,7 @@ describe('planRefund: the maker refunds their own order', () => {
     expect(plan.built!.sign).toHaveLength(1);
     expect(plan.built!.fee.fee).toBe(plan.built!.fee.minFee);
     const change = plan.built!.tx.outputs[plan.built!.fee.changeOutput!];
-    expect(BigInt(change.value)).toBe(3n * KAS + 3_500_000n - BigInt(plan.built!.fee.fee));
+    expect(BigInt(change.value)).toBe(3n * KAS + 3_400_000n - BigInt(plan.built!.fee.fee));
     expect(plan.issues).toEqual([]);
     // without a usable funding UTXO it degrades to the signature-free refund
     const none = planRefund(env({ clock: { daa: 77_761_000n }, funding: [] }), snap, { reclaimTip: true });

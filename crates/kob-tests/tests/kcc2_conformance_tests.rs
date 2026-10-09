@@ -165,11 +165,11 @@ fn kcc2_registry_checks() {
     }
 }
 
-/// Tracking test for the upstream KCC-20 reference program (argent-lang/kcc20-reference PR #1, head `600646873e`, unchanged
-/// on 2026-10-02): its `p2pkh_hash` is the unkeyed `blake3(public_key)` (`OP_BLAKE3`), which is KCC-2's `Hash(pubkey)`
-/// after #30, so KOB's copies need no change. If upstream re-vendoring ever brings a keyed form (`OP_BLAKE3_WITH_KEY`,
-/// a `PublicKeyHash` key) back, or the provenance commit moves, this fails and `docs/spec/kcc-conformance.md` section 4
-/// must be revisited (template hashes, registry, Argent KOBToken, budgets, tips, vectors, deploy files, retirement).
+/// Tracking test for the upstream KCC-20 reference program (argent-lang/kcc20-reference `master` `c8a0871`, pull request #1
+/// merged on 2026-10-07): its `p2pkh_hash` is the unkeyed `blake3(public_key)` (`OP_BLAKE3`), which is KCC-2's `Hash(pubkey)`
+/// after #30. If upstream re-vendoring ever brings a keyed form (`OP_BLAKE3_WITH_KEY`, a `PublicKeyHash` key) back, or
+/// the provenance commit moves, this fails and `docs/spec/kcc-conformance.md` section 4 must be revisited (template
+/// hashes, registry, Argent KOBToken, budgets, tips, vectors, deploy files, retirement).
 #[test]
 fn kcc20_programs_use_the_unkeyed_p2pkh_hash() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -183,6 +183,8 @@ fn kcc20_programs_use_the_unkeyed_p2pkh_hash() {
         "contracts/argent/KOBToken/sil/KCC20.sil",
         "contracts/argent/kcc20_8x8.ag",
         "tools/wallet-gate/contracts/KCC20Ref.sil",
+        "contracts/third-party/kcc20-reference/kcc20.ag",
+        "contracts/third-party/kcc20-reference/KCC20.public-mint.sil",
     ];
     for f in files {
         let src = std::fs::read_to_string(root.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
@@ -194,7 +196,7 @@ fn kcc20_programs_use_the_unkeyed_p2pkh_hash() {
     }
     let reference = std::fs::read_to_string(root.join("contracts/kcc20/KCC20Ref.sil")).unwrap();
     assert!(
-        reference.contains("commit 600646873ebfa2ec87a8ae57783c9912caf52857"),
+        reference.contains("c8a087117735a1f87c5c6d115fcddeaf2562c784"),
         "the reference program's provenance moved: re-run the KCC-1/KCC-2 conformance review (docs/spec/kcc-conformance.md)"
     );
 }

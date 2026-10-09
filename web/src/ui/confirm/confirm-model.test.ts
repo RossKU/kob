@@ -73,7 +73,7 @@ describe('confirmation model', () => {
     const locked = section(m, 'locked');
     expect(rowOf(locked.rows, 'locked-total').value).toBe('20 KAS');
     expect(rowOf(locked.rows, 'locked-carriers').detail).toBe('returned when the order ends');
-    expect(rowOf(locked.rows, 'locked-refundTips').value).toBe('0.035 KAS');
+    expect(rowOf(locked.rows, 'locked-refundTips').value).toBe('0.034 KAS');
     expect(locked.rows.find((r) => r.id.startsWith('tok-escrow'))!.value).toBe('10 TST');
     expect(section(m, 'back').rows.find((r) => r.id.startsWith('tok-back'))!.value).toBe('2 TST');
     expect(section(m, 'spend').rows.find((r) => r.id.startsWith('tok-spend'))!.value).toBe('12 TST');

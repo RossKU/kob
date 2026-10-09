@@ -1,5 +1,5 @@
 //! KOB protocol v3 harness (amounts in base units): KobAsk / KobBid / KobCondAsk / KobIfdBid with the reference
-//! KCC-20 (argent kcc20-reference PR#1), executed in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20
+//! KCC-20 (argent kcc20-reference c8a0871), executed in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20
 //! covenant context and script-unit metering.
 //!
 //! Amounts are token base units (any amount); prices and tips are sompi per whole token (`SCALE` base

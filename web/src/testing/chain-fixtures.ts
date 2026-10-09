@@ -30,10 +30,10 @@ export const KEEPER = { sk: KEEPER_SK, pk: pubkeyOf(KEEPER_SK) };
 export const TOKEN = {
   covenantId: '70'.repeat(32),
   program: 'KCC20Ref' as const,
-  templateHash: 'f4ac029d2c3c74dd3dcaeb64245f7d0a0977e27c2956f3977540a11dc7c45b1f',
+  templateHash: '173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b',
   ext: 'ee'.repeat(32),
   prefixLen: 1,
-  suffixLen: 2977,
+  suffixLen: 2802,
   decimals: 3,
   ticker: 'TST',
 };

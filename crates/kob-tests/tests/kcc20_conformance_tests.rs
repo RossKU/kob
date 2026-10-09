@@ -1,4 +1,4 @@
-//! KCC-20 conformance: kaspanet/kccs PR #31 `kcc-0020/vectors/conformance.json` (vendored unmodified in
+//! KCC-20 conformance: kaspanet/kccs `main` `3fbec52` (#31) `kcc-0020/vectors/conformance.json` (vendored unmodified in
 //! `crates/kob-tests/vectors/kcc20/`, see PROVENANCE.md there) executed against KOB's reference KCC-20 build
 //! (`contracts/kcc20/KCC20Ref.sil`, 3 token inputs / 3 outputs) and the KOB 8/8 slot-limit variant
 //! (`contracts/kcc20/variants/KCC20Ref_8x8.sil`, the program KOB issues), in rusty-kaspa v2.1.0's TxScriptEngine
@@ -14,7 +14,7 @@
 //!   owner_witness                                                  witness layouts for schemes 00-04 executed with real keys,
 //!                                                                  P2PKH hash vectors recomputed (unkeyed BLAKE3)
 //!   borrow_witness / hash_chain                                    layouts, the 3-link chain recomputed, one accepted borrow per scheme
-//!   borrowed_receive                                               all 10 cases executed
+//!   borrowed_receive                                               all 17 cases executed (negative thresholds act as zero)
 //!
 //! The vectors' signatures and public keys are placeholder byte patterns ("signature checks are stipulated to
 //! succeed"). Where a case needs a signature to verify, this harness builds the SAME structure with real keys (same
@@ -54,8 +54,8 @@ use silverscript_lang::compiler::CompileOptions;
 use common::{bytecode, compile_contract, compiled_template_parts_and_hash, encode_entry_sig_script, push_redeem_script};
 
 const VECTORS: &str = include_str!("../vectors/kcc20/conformance.json");
-/// sha256 of the vendored file (blob e74b90d2dba8a4ea8f3dab9253ad68e17a1e04b6 at kaspanet/kccs cfb74cf).
-const VECTORS_SHA256: &str = "467c5e7d24c0b44c7cf25b122f61922493466afd7529e0bd7fd23ac7847e724e";
+/// sha256 of the vendored file (blob 5432a8a060b70fec6e19a9b28f56dd93992ab60f at kaspanet/kccs 3fbec52).
+const VECTORS_SHA256: &str = "9b424c96ea0e0093cacfd98e3013fd5cbf93dd149cb27696acf288510133010b";
 
 const TOKEN_COV: Hash = Hash::from_bytes([0x70; 32]);
 const OWNER_COV: Hash = Hash::from_bytes([0xc0; 32]);
@@ -494,7 +494,7 @@ fn programs() -> Vec<Prog> {
 #[test]
 fn conformance_vectors_are_the_pinned_upstream_file() {
     let digest = Sha256::digest(VECTORS.as_bytes());
-    assert_eq!(hexs(&digest), VECTORS_SHA256, "vendored conformance.json drifted from kaspanet/kccs cfb74cf (see PROVENANCE.md)");
+    assert_eq!(hexs(&digest), VECTORS_SHA256, "vendored conformance.json drifted from kaspanet/kccs 3fbec52 (see PROVENANCE.md)");
     let v = vectors();
     assert_eq!(v["kcc"], 20);
     assert_eq!(v["format_version"], 1);
@@ -910,7 +910,8 @@ fn conformance_borrow_witness_and_hash_chain() {
     let x3 = h32(&hc["links"][2]["x_hex"]);
     let pk3_vec = h32(&hc["links"][2]["pubkey_hex"]);
     // the mismatch case's revealed link hash
-    let bad = h32(&v["borrowed_receive"]["cases"][8]["revealed_link_hash_hex"]);
+    let mismatch = v["borrowed_receive"]["cases"].as_array().unwrap().iter().find(|c| c["id"] == "hash-chain-link-mismatch");
+    let bad = h32(&mismatch.expect("hash-chain-link-mismatch case")["revealed_link_hash_hex"]);
     assert_eq!(bad, b3(&[x1.to_vec(), pk3_vec.to_vec()].concat()), "revealed_link_hash of the mismatch case");
     assert_ne!(bad, x3);
 
@@ -1026,21 +1027,16 @@ fn conformance_borrowed_receive() {
             };
             let leader_kas = case.get("leader_kas_value_sompi").map(|x| x.as_i64().unwrap()).unwrap_or(10 * KAS);
             let succ_kas = case.get("successor_kas_value_sompi").map(|x| x.as_i64().unwrap());
+            // the tokens the borrowed successor gains come from a delegator; a case without a gain (unchanged or smaller
+            // successor) conserves the amount on its own, the difference going to a second output, so the borrow rule alone decides
             let added = succ.amount - leader_amount;
-            assert!(added > 0);
-            let scn = Scn {
-                leader: leader.clone(),
-                leader_kas,
-                path,
-                body,
-                delegates: vec![(
-                    St { amount: added, owner: pk(&other), scheme: 0, borrow: 0, guard: [0; 32], ext: leader.ext },
-                    Body::Schnorr(other),
-                )],
-                extras: vec![],
-                next: vec![succ],
-                succ_kas,
+            let other_st = |amount: i64| St { amount, owner: pk(&other), scheme: 0, borrow: 0, guard: [0; 32], ext: leader.ext };
+            let (delegates, next) = match added {
+                a if a > 0 => (vec![(other_st(a), Body::Schnorr(other))], vec![succ]),
+                0 => (vec![], vec![succ]),
+                a => (vec![], vec![succ, other_st(-a)]),
             };
+            let scn = Scn { leader: leader.clone(), leader_kas, path, body, delegates, extras: vec![], next, succ_kas };
             match case["result"].as_str().unwrap() {
                 "accept" => {
                     expect_accept(&p, &scn, id);

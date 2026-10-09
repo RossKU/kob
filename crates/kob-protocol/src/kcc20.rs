@@ -1,6 +1,6 @@
 //! KCC-20 token program parameters used when KOB issues a fixed-supply token.
 //!
-//! The reference KCC-20 program (argent kcc20-reference PR #1, `contracts/kcc20/KCC20Ref.sil`)
+//! The reference KCC-20 program (argent kcc20-reference c8a0871, `contracts/kcc20/KCC20Ref.sil`)
 //! accepts at most 3 token inputs and 3 token outputs per transfer. Those bounds are compile-time
 //! constants of the generated program, so they are fixed per token at issuance and every later
 //! transfer of that token pays for them (the whole program is pushed in every token input's

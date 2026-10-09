@@ -49,14 +49,14 @@ describe('state builders', () => {
     expect(a).toEqual({
       kind: 'KobAsk',
       state: {
-        maker: MAKER_PK, tokenCovId: env.token.covenantId, tokenTplHash: env.token.templateHash, tplPrefixLen: '1', tplSuffixLen: '2977', scale: '1000', minFill: '500',
-        price: String(P), tip: '0', tif: '0', activeFrom: '0', expiryDaa: '99', refundTip: '3500000', interval: '0', maxFill: '0', slope: '0', priceEnd: '0',
+        maker: MAKER_PK, tokenCovId: env.token.covenantId, tokenTplHash: env.token.templateHash, tplPrefixLen: '1', tplSuffixLen: '2802', scale: '1000', minFill: '500',
+        price: String(P), tip: '0', tif: '0', activeFrom: '0', expiryDaa: '99', refundTip: '3400000', interval: '0', maxFill: '0', slope: '0', priceEnd: '0',
         decayStep: '1', amountLeft: '3000', extensionCommitment: env.token.extensionCommitment,
       },
     });
     const b = makeBid(env, { minFill: 1n, price: P, expiryDaa: 99n, tif: 2, reserve: 7n });
     expect(b.kind).toBe('KobBid');
-    expect(b.state).toMatchObject({ extensionCommitment: env.token.extensionCommitment, scale: '1000', minFill: '1', tif: '2', reserve: '7', deliveryCarrier: String(DEFAULT_CARRIER), refundTip: '3500000' });
+    expect(b.state).toMatchObject({ extensionCommitment: env.token.extensionCommitment, scale: '1000', minFill: '1', tif: '2', reserve: '7', deliveryCarrier: String(DEFAULT_CARRIER), refundTip: '3400000' });
     expect(carrierOf(env)).toBe(DEFAULT_CARRIER);
     expect(carrierOf({ carrier: 5n })).toBe(5n);
   });

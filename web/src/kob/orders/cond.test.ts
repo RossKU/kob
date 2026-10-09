@@ -23,7 +23,7 @@ describe('stop-market', () => {
     const s = askState(plan.states[0]!);
     expect(s).toMatchObject({
       maker: MAKER_PK, tokenCovId: env.token.covenantId, tokenTplHash: env.token.templateHash, scale: '1000', amountLeft: '10000',
-      tip: '0', activeFrom: '0', expiryDaa: GTC.toString(), refundTip: '3500000', tpPrice: '0', stopPrice: '230000000',
+      tip: '0', activeFrom: '0', expiryDaa: GTC.toString(), refundTip: '3400000', tpPrice: '0', stopPrice: '230000000',
       slipBps: '300', bandDaa: '300', keeperTip: '2100000', minRestDaa: '50', armed: '0',
       trailStep: '0', trailGap: '0', trailWait: '0', parent: '0'.repeat(64), rptPrice: '0', rptUntil: '0',
     });
@@ -38,7 +38,7 @@ describe('stop-market', () => {
     expect(recovered[0]!.value).toBe(CARRIER.toString());
     const d = plan.disclosure!;
     expect(d).toMatchObject({
-      side: 'sell', tokenAmount: 10_000n, scale: 1_000n, minFill: 4_348n, minTouch: 4_348n, tokensEscrowed: 10_000n, tip: 0n, refundTip: 3_500_000n, keeperTip: 2_100_000n,
+      side: 'sell', tokenAmount: 10_000n, scale: 1_000n, minFill: 4_348n, minTouch: 4_348n, tokensEscrowed: 10_000n, tip: 0n, refundTip: 3_400_000n, keeperTip: 2_100_000n,
       // 230 KAS - 23 000 sompi per bps * 300 = 223.1 KAS: the worst the sell can get; it starts at the stop
       limitPrice: 223_100_000n, worstPrice: 223_100_000n, expectedPrice: 230_000_000n, allInPrice: 223_100_000n, allInTotal: 2_231_000_000n,
       kasLocked: 2n * CARRIER,
@@ -417,7 +417,7 @@ describe('guards and funding', () => {
     const market = market8x8();
     const env = { ...makeEnv({ market, funding: [3n * KAS, 4n * KAS, 15n * KAS] }), tokenUtxos: [tokenUtxo(market, 100n * TOK)] };
     const { plan } = planOk(env, sellStop);
-    expect(askState(plan.states[0]!)).toMatchObject({ refundTip: '5000000', keeperTip: '2100000', tokenTplHash: market.templateHash });
+    expect(askState(plan.states[0]!)).toMatchObject({ refundTip: '4800000', keeperTip: '2100000', tokenTplHash: market.templateHash });
     expect(plan.built!.tx.inputs.length).toBeGreaterThan(2);
   });
 });

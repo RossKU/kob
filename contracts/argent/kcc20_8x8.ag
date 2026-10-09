@@ -1,6 +1,8 @@
 // KOBToken: the KCC-20 token program KOB issues, with up to 8 token inputs and 8 token outputs per
-// transfer. Source: argent-lang/kcc20-reference PR #1 (ISC licence, unaudited), unchanged except for
-// the two limits below (upstream: MAX_DELEGATES = 2, MAX_TOKEN_OUTPUTS = 3) and this header.
+// transfer. Source: argent-lang/kcc20-reference master c8a0871 (pull request #1, merged; ISC licence,
+// unaudited), contracts/kcc20.ag (vendored as contracts/third-party/kcc20-reference/kcc20.ag), unchanged
+// except for the two limits below (upstream: MAX_DELEGATES = 2, MAX_TOKEN_OUTPUTS = 3), this header and
+// the app declaration at the end (upstream declares no app in kcc20.ag since the merge).
 //
 // Entries: transfer (the leader input; `delegates` are the other token inputs of the group) and
 // transfer_delegator (each delegate authorises its own input). Owner schemes 0x00..0x04 (the KOB
@@ -31,23 +33,20 @@ const byte BORROW_HASH_CHAIN = 0x03;
 const int MAX_DELEGATES = 7; // MAX_TOKEN_INPUTS - 1 (KOB: 8 token inputs).
 const int MAX_TOKEN_OUTPUTS = 8; // KOB: 8 token outputs.
 
+// Owner schemes (0x00..0x04) and borrow schemes (0x00..0x03) are contiguous
+// from zero, so an unsigned upper-bound check accepts exactly the valid IDs.
+//
+// Keep both operands unsigned: signed(0xff) is -127 and signed(0x80) is negative
+// zero. Using signed() for the input admits invalid IDs; even adding >= 0 still
+// admits 0x80. The constant upper bounds (0x04 and 0x03) have the same value with
+// either cast, but unsigned() on both sides expresses the intended 0..255 domain
+// and also handles constant upper bounds >= 0x80.
 fn require_valid_owner_scheme(byte owner_scheme) {
-    require(
-        owner_scheme == OWNER_P2PK_SCHNORR
-            || owner_scheme == OWNER_P2PKH_SCHNORR
-            || owner_scheme == OWNER_P2PKH_ECDSA
-            || owner_scheme == OWNER_P2SH
-            || owner_scheme == OWNER_COVENANT_ID
-    );
+    require(unsigned(owner_scheme) <= unsigned(OWNER_COVENANT_ID));
 }
 
 fn require_valid_borrow_scheme(byte borrow_scheme) {
-    require(
-        borrow_scheme == BORROW_DISABLED
-            || borrow_scheme == BORROW_AMOUNT_THRESHOLD
-            || borrow_scheme == BORROW_SCHNORR_SIGNATURE
-            || borrow_scheme == BORROW_HASH_CHAIN
-    );
+    require(unsigned(borrow_scheme) <= unsigned(BORROW_HASH_CHAIN));
 }
 
 fn p2pkh_hash(byte[] public_key) -> byte[32] {
@@ -130,9 +129,6 @@ actor KCC20 owns KCC20State {
             require(next_states[i].amount >= 0);
             require_valid_owner_scheme(next_states[i].owner_scheme);
             require_valid_borrow_scheme(next_states[i].borrow_scheme);
-            if (next_states[i].borrow_scheme == BORROW_AMOUNT_THRESHOLD) {
-                require(OpBin2Num(next_states[i].borrow_guard.slice(0, 8)) >= 0);
-            }
             require(next_states[i].extension_commitment == extension_commitment);
             output_total = output_total + next_states[i].amount;
         }
@@ -153,8 +149,11 @@ actor KCC20 owns KCC20State {
                 require(false);
             } else if (borrow_scheme == BORROW_AMOUNT_THRESHOLD) {
                 require(path_witness.length == 0);
-                amount_threshold = OpBin2Num(borrow_guard.slice(0, 8));
-                require(amount_threshold >= 0);
+                amount_threshold = int(byte[8](borrow_guard.slice(0, 8)));
+                // Negative thresholds behave as zero; borrowing still requires an increase.
+                if (amount_threshold < 0) {
+                    amount_threshold = 0;
+                }
             } else if (borrow_scheme == BORROW_SCHNORR_SIGNATURE) {
                 // The byte[65] conversion below implicitly validates the
                 // witness length.
@@ -211,7 +210,6 @@ actor KCC20 owns KCC20State {
         require_owner_authorized(owner, owner_scheme, witness);
     }
 }
-
 
 app KOBToken {
     actor KCC20;

@@ -82,8 +82,8 @@ for (const t of tests) {
       assert.ok(S.eq(pushes[0], sig65) && S.eq(pushes[2], bid.redeem));
     }
     if (t.id === 'T3') {
-      // amounts[8], owners[32], owner_scheme[1] (0x01 0x00), borrow_scheme[1], guard[32], ext[32], witness[66], tag[4], redeem[3090]
-      assert.deepEqual(pushes.map((p) => p.length), [8, 32, 1, 1, 32, 32, 66, 4, 3090]);
+      // amounts[8], owners[32], owner_scheme[1] (0x01 0x00), borrow_scheme[1], guard[32], ext[32], witness[66], tag[4], redeem[2915]
+      assert.deepEqual(pushes.map((p) => p.length), [8, 32, 1, 1, 32, 32, 66, 4, 2915]);
       assert.equal(pushes[6][0], 0x00);
       assert.ok(S.eq(pushes[6].slice(1), sig65));
       assert.equal(S.hex(pushes[7]), '79c71c23');

@@ -24,6 +24,20 @@ fn find_file(dir: &Path, file_name: &str) -> Option<PathBuf> {
     None
 }
 
+/// Asserts that the committed `contracts/**/<name>.sil` is `generated` (a KOB program derived from the reference KCC-20
+/// program by a `kob_protocol::kcc20` generator). With `KOB_REGEN=1` it writes `generated` there instead, which is
+/// how those files are regenerated after the reference program changes.
+pub fn check_generated_source(name: &str, generated: &str) {
+    let file = format!("{name}.sil");
+    let path =
+        find_file(&repo_root().join("contracts"), &file).unwrap_or_else(|| panic!("contract {file} not found under contracts/"));
+    if std::env::var("KOB_REGEN").is_ok_and(|v| v == "1") {
+        std::fs::write(&path, generated).expect("write generated source");
+    }
+    let committed = std::fs::read_to_string(&path).expect("read contract").replace("\r\n", "\n");
+    assert_eq!(committed, generated.replace("\r\n", "\n"), "{name}.sil differs from its generator: rerun with KOB_REGEN=1");
+}
+
 /// Source of `contracts/**/<name>.sil`. Ablation runs (a check removed from a contract) point the
 /// environment variable `KOB_ABLATION_SRC` at a directory holding a mutated `<name>.sil`; that copy
 /// wins over the committed source, so the committed contracts are never touched by a mutation run.

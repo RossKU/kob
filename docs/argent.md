@@ -23,7 +23,7 @@ artifact id you reviewed; do not pin a file name or a branch.
 |---|---|
 | `KOBOrders` | `173c7c979dd747316aacbf6e93ec04890a4256f043be94d148b943e05b71f127` |
 | `KOBOrdersKron` | `867d24a6c06fb8a38a30941a7f5a79d8dda05c4bee4b01f3dab2ba68c394442f` |
-| `KOBToken` | `dae9bf3f9c4761e8d37aeafe53650dd7b05d65c35dcb38bf97f69a64941006a0` |
+| `KOBToken` | `364f6518d3ae5a31d0fcf768c9a1cc5d6e187cb2d03787dee8d8e9088ffec39f` |
 | `KobRouter` | `7047fc189b70b6bdbd6fb361751f6c185af57bea68f982d833ecf78a8e628dda` |
 
 Actor-type handles (the template hash of the hand-written program: blake3 over prefix and suffix
@@ -42,7 +42,7 @@ around the state span, the same value silverc reports as `template_hash`):
 | `KOBOrders::KobIfdPair` | `4a432afb1bd314e43a5497df414f9e8121866dfa59a59bad6f1a9d141e06669a` | 1+909 | 8,789 B |
 | `KOBOrdersKron::KobAskKron` | `f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d` | 1+243 | 1,487 B |
 | `KOBOrdersKron::KobBidKron` | `6ec1a3dd4a287b73295a08db5f75fedcac4966539d793e9d1a659711ad888efc` | 1+252 | 1,343 B |
-| `KOBToken::KCC20` (8 in / 8 out) | `40fef59a59bd76991f4d4e2101d1e3e34860997b89fe7714532637cec482a9d7` | 1+112 | 6,820 B |
+| `KOBToken::KCC20` (8 in / 8 out) | `666da060d02663939efdc534ea10cce219e5564af86f4cc8eeea2ca129f7c032` | 1+112 | 6,350 B |
 
 The test `tools/sil2argent/tests/published.rs` fails if the ids and handles above, or the router
 actors and entries listed under "Fill shapes", disagree with the committed artifacts.
@@ -71,10 +71,13 @@ single-actor app, argentc output is byte-identical (modulo comments) to
 `contracts/kcc20/variants/KCC20Ref_8x8.sil`, and its handle is the silverc template of
 `contracts/artifacts/KCC20Ref_8x8.json`. Argent's `actor_type_handle` (the stable template view an
 importer uses) does not change this: in a multi-actor app (checked on argentc `b312ded`) the token
-gets a template context field (state 1 + 145 instead of 1 + 112 bytes) and a 9,864 B program instead
-of 6,820 B, and its handle correctly describes THAT program (template `3d08058a...`), not the
-deployed `KCC20Ref_8x8` (`40fef59a...`) that token UTXOs carry and orders pin
-(`docs/argent-feedback.md`, item 8).
+gets a template context field (state 1 + 145 instead of 1 + 112 bytes) and a 9,394 B program instead
+of 6,350 B, and its handle correctly describes THAT program (template `680b901a...`), not the
+deployed `KCC20Ref_8x8` (`666da060...`) that token UTXOs carry and orders pin
+(`docs/argent-feedback.md`, item 8). The same holds for the upstream reference: since its merge
+(argent-lang/kcc20-reference `c8a0871`) it is published only as an actor of its `KCC20PublicMint` app,
+with that template context; KOB builds the merged `kcc20.ag` as a single-actor app
+(`contracts/third-party/kcc20-reference/UPSTREAM.md`).
 
 ## Importing KOBOrders from another Argent app
 
@@ -317,7 +320,7 @@ arguments in transaction order; the asks' escrows are matched to them by owner.
 | `_swap2` / `_swap2_out` | `swap2(bid1, bid2, ask1, ask2, n_a1, n_a2)` / `swap2_out(..)` | 9,412 B / 9,121 B |
 
 Every actor also has `expire()` (anyone, from the deadline on) and `cancel(sig)` (payer,
-SIGHASH_ALL). The redeem sizes include both. For scale: the 8/8 token program is 6.8 kB, a KobAsk
+SIGHASH_ALL). The redeem sizes include both. For scale: the 8/8 token program is 6.4 kB, a KobAsk
 1.7 kB. **The largest scripts are
 `TokenSwap_swap2` and `_swap2_out` (9,856-10,143 B):** they observe four orders and two token groups,
 and every observed order state is 20 or 21 fields read by the script. A payer who wants a sweep of
@@ -439,14 +442,15 @@ forges a payer-signed cancel that spends the payer's own tokens in place of the 
 both KRON programs: the router refuses it, and the same actor with the two owner lines of its cancel removed accepts it
 (ablation). `production_router_matches_the_harness` ties the harness to the KCC-20 actors the builders pin.
 
-Measured (min fee at 100 sompi/gram, 2026-10-06): R1 (`KasToToken_buy`) is 12.1 kB, 0.024 KAS; R2
+Measured (min fee at 100 sompi/gram, 2026-10-06, with the token programs of the unmerged KCC-20 reference; since
+2026-10-09 each 8/8 token input is 470 B and each 3/3 input 175 B smaller): R1 (`KasToToken_buy`) is 12.1 kB, 0.024 KAS; R2
 (`TokenToKas_sell`) 13.3 kB, 0.027 KAS; R3 (`TokenSwap_swap`) 24.9 kB, 0.050 KAS; the 3-ask sweep
 `buy3` 33.2 kB, 0.066 KAS; the largest transaction, the 2 + 2 swap sweep, is 38.8 kB, 53.0k compute
 mass, 0.078 KAS. A `cancel` of a `KasToToken` intent reveals only the intent's own actor: 3.0 kB and
 0.006 KAS; a token intent's cancel and expiry spend its lock and so carry the token program: 11.4 kB
 and 0.023 KAS (`TokenToKas_sell`) to 13.9 kB and 0.028 KAS (`TokenSwap_swap`) on the 8/8 program,
 less on the 3/3 and KRON programs (`intent_builders.rs` prints every one). Most of every composed
-transaction is the token programs (6.8 kB per 8/8 token input, 3.0 kB per 3/3, 2.4-2.7 kB per KRON).
+transaction is the token programs (6.4 kB per 8/8 token input, 2.9 kB per 3/3, 2.4-2.7 kB per KRON).
 
 ### The router generator
 

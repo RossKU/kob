@@ -828,7 +828,7 @@ fn opt_template_sharing() {
     // the leader serves any holder template: its template is the same for different tokens, owners, fungibility
     // classes and holder templates (all state)
     let lead_a = batch_art_raw(0, &ZERO, &EXT, &tpl_hash(&on_a), 1, 3000);
-    let lead_b = batch_art_raw(0, &[7u8; 32], &[0x11; 32], &tpl_hash(&ref_a), 1, 2977);
+    let lead_b = batch_art_raw(0, &[7u8; 32], &[0x11; 32], &tpl_hash(&ref_a), 1, 2802);
     assert_eq!(tpl_hash(&lead_a), tpl_hash(&lead_b), "one batch-leader template for every token");
     assert_eq!(tpl_hash(&lead_a), batch_template().0);
 
@@ -1163,7 +1163,7 @@ fn opt_measurements() {
 fn opt_holder_source_matches_generator() {
     let base = common::contract_source("KCC20Ref");
     let generated = kob_protocol::kcc20::kcc20_opt_holder_source(&base).expect("generate");
-    assert_eq!(common::contract_source("KCC20Opt").replace("\r\n", "\n"), generated, "KCC20Opt.sil differs from the generator");
+    common::check_generated_source("KCC20Opt", &generated);
     // the committed artifact is the disabled instance
     let ctor: Vec<ArtifactValue> =
         serde_json::from_str(&std::fs::read_to_string(common::repo_root().join("contracts/kcc20/p2/KCC20Opt.ctor.json")).unwrap())

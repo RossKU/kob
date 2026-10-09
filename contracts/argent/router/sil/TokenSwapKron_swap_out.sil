@@ -477,21 +477,10 @@ contract TokenSwapKron_swap_out(
         require(gen__glob_n > 0);
     }
     function require_valid_owner_scheme(byte gen__glob_owner_scheme) {
-        require(
-            gen__glob_owner_scheme == OWNER_P2PK_SCHNORR
-                || gen__glob_owner_scheme == OWNER_P2PKH_SCHNORR
-                || gen__glob_owner_scheme == OWNER_P2PKH_ECDSA
-                || gen__glob_owner_scheme == OWNER_P2SH
-                || gen__glob_owner_scheme == OWNER_COVENANT_ID
-        );
+        require(unsigned(gen__glob_owner_scheme) <= unsigned(OWNER_COVENANT_ID));
     }
     function require_valid_borrow_scheme(byte gen__glob_borrow_scheme) {
-        require(
-            gen__glob_borrow_scheme == BORROW_DISABLED
-                || gen__glob_borrow_scheme == BORROW_AMOUNT_THRESHOLD
-                || gen__glob_borrow_scheme == BORROW_SCHNORR_SIGNATURE
-                || gen__glob_borrow_scheme == BORROW_HASH_CHAIN
-        );
+        require(unsigned(gen__glob_borrow_scheme) <= unsigned(BORROW_HASH_CHAIN));
     }
     function p2pkh_hash(byte[] gen__glob_public_key) : byte[32] {
         return blake3(gen__glob_public_key);

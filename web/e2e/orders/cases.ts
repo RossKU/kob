@@ -8,7 +8,7 @@
 // Price fields of the on-chain state are sompi per whole token (per `scale` = 1e8 base units): 0.027 KAS / EXKCC = 2_700_000; amounts are base
 // units. All wallet defaults come from docs/spec/order-types.md and kob-wasm `defaultConstants` (tip 0, carrier 2 KAS per covenant UTXO, market 3%
 // over 20 s, stop 3% band over 30 s, rest time R 5 s, trigger threshold = the minimum fill, keeper tip 0.021 KAS on the 8/8 program, refund tip
-// 0.05 KAS). Minimum fill defaults (matcher.md 10): a resting order the amount worth 10 KAS (a notional, not a carrier) at its price, capped at the whole
+// 0.048 KAS). Minimum fill defaults (matcher.md 10): a resting order the amount worth 10 KAS (a notional, not a carrier) at its price, capped at the whole
 // amount (so every 2-token order here is filled whole: ONE delivery carrier of a bid); IOC / FOK / market 1 base unit; an IFD entry a quarter of
 // the amount (four fills: four delivery carriers and four prefunded exit carriers).
 import type { FieldValues, Side } from '../helpers/ticket';
@@ -80,18 +80,18 @@ export const CASES: OrderCase[] = [
   // ---- limit GTC
   {
     name: 'limit GTC sell', ...limit('sell'), ...SELL, fields: () => ({ amount: '2', price: '0.027' }),
-    disc: { limit: kas('0.027'), allInPrice: kas('0.027'), allInTotal: '0.054 KAS', refundTip: '0.05 KAS', 'expiry-extra': '' },
+    disc: { limit: kas('0.027'), allInPrice: kas('0.027'), allInTotal: '0.054 KAS', refundTip: '0.048 KAS', 'expiry-extra': '' },
     discAbsent: ['tip', 'activates'], notes: ['gtc', 'carrierReturned'],
-    title: 'Sell limit order', rows: { amount: '2 EXKCC', price: kas('0.027'), allIn: kas('0.027'), refundTip: '0.05 KAS', value: '2 KAS' },
-    state: { price: '2700000', tip: '0', tif: '0', activeFrom: '0', amountLeft: '200000000', refundTip: '5000000', scale: '100000000' },
+    title: 'Sell limit order', rows: { amount: '2 EXKCC', price: kas('0.027'), allIn: kas('0.027'), refundTip: '0.048 KAS', value: '2 KAS' },
+    state: { price: '2700000', tip: '0', tif: '0', activeFrom: '0', amountLeft: '200000000', refundTip: '4800000', scale: '100000000' },
     timing: { kind: 'gtc' },
   },
   {
     name: 'limit GTC buy', ...limit('buy'), ...buyLimit('0.049'), fields: () => ({ amount: '2', price: '0.0245' }),
-    disc: { limit: kas('0.0245'), allInPrice: kas('0.0245'), allInTotal: '0.049 KAS', refundTip: '0.05 KAS' },
+    disc: { limit: kas('0.0245'), allInPrice: kas('0.0245'), allInTotal: '0.049 KAS', refundTip: '0.048 KAS' },
     discAbsent: ['tip', 'activates'], notes: ['gtc', 'carrierReturned'],
-    title: 'Buy limit order', rows: { price: kas('0.0245'), allIn: kas('0.0245'), refundTip: '0.05 KAS', value: '2.049 KAS' },
-    state: { price: '2450000', tip: '0', tif: '0', activeFrom: '0', reserve: '0', deliveryCarrier: '200000000', refundTip: '5000000' },
+    title: 'Buy limit order', rows: { price: kas('0.0245'), allIn: kas('0.0245'), refundTip: '0.048 KAS', value: '2.049 KAS' },
+    state: { price: '2450000', tip: '0', tif: '0', activeFrom: '0', reserve: '0', deliveryCarrier: '200000000', refundTip: '4800000' },
     timing: { kind: 'gtc' },
   },
   {

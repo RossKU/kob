@@ -16,7 +16,9 @@ fn sources_with_ctor() -> Vec<PathBuf> {
             if path.is_dir() {
                 // contracts/argent holds Argent apps: argentc output (generated .sil without constructor
                 // files, checked by scripts/build-argent.sh and the router harness) and their sources.
-                if path.file_name().is_some_and(|n| n == "argent") {
+                // contracts/third-party holds vendored upstream programs that are not compiled here (a .sil there is a
+                // reference copy, tested where it is used: kcc20_reference_tests.rs).
+                if path.file_name().is_some_and(|n| n == "argent" || n == "third-party") {
                     continue;
                 }
                 walk(&path, out);

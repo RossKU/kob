@@ -1,7 +1,7 @@
 //! Fixed-supply KCC-20 issuance: program pinning, genesis transaction builder, verification and the
 //! off-chain documents (supply, metadata, registry entry) that describe the issued token.
 //!
-//! What is issued: the reference KCC-20 program (argent kcc20-reference PR #1) compiled with the
+//! What is issued: the reference KCC-20 program (argent kcc20-reference c8a0871) compiled with the
 //! KOB slot limits 8 token inputs / 8 token outputs per transfer (`contracts/kcc20/variants/
 //! KCC20Ref_8x8.sil`). The program has no mint, burn or public-mint entry, so the supply is exactly
 //! the sum of the genesis outputs, fixed forever. Proposal P2 is not used.

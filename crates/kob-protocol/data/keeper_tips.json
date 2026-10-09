@@ -6,32 +6,32 @@
     "keeperTip": "2100000"
   },
   "KCC20P2": {
-    "refundFee": "1714600",
-    "refundTip": "3500000",
+    "refundFee": "1679600",
+    "refundTip": "3400000",
     "updateFee": "1004200",
     "keeperTip": "2100000"
   },
   "KCC20Ref": {
-    "refundFee": "1713600",
-    "refundTip": "3500000",
+    "refundFee": "1678600",
+    "refundTip": "3400000",
     "updateFee": "1004200",
     "keeperTip": "2100000"
   },
   "KCC20Ref_16x16": {
-    "refundFee": "3653200",
-    "refundTip": "7400000",
+    "refundFee": "3464800",
+    "refundTip": "7000000",
     "updateFee": "1004200",
     "keeperTip": "2100000"
   },
   "KCC20Ref_4x5": {
-    "refundFee": "1932000",
-    "refundTip": "3900000",
+    "refundFee": "1873400",
+    "refundTip": "3800000",
     "updateFee": "1004200",
     "keeperTip": "2100000"
   },
   "KCC20Ref_8x8": {
-    "refundFee": "2459600",
-    "refundTip": "5000000",
+    "refundFee": "2365600",
+    "refundTip": "4800000",
     "updateFee": "1004200",
     "keeperTip": "2100000"
   },

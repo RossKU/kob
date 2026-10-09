@@ -15,6 +15,9 @@
 #                  contracts/adapters/kron/v2/*.sil): a separate app, so the KOBOrders id stays as published.
 #   3. KOBToken    argentc compiles kcc20_8x8.ag; its program must equal
 #                  contracts/kcc20/variants/KCC20Ref_8x8.sil and its handle the silverc template.
+#   3b. KCC20Ref   argentc compiles the vendored upstream contracts/third-party/kcc20-reference/kcc20.ag as a
+#                  single-actor app; its program must equal contracts/kcc20/KCC20Ref.sil and its handle the
+#                  silverc template (checked, not published).
 #   4. router      argentc compiles kob_router.ag, importing the KOBOrders and KOBOrdersKron artifacts
 #                  (steps 2, 2b); the token programs are open ICC handles in the intents' state.
 #   5. examples    contracts/argent/examples/*.ag (third-party imports) must compile; their generated SilverScript is
@@ -108,6 +111,18 @@ if ! diff <(strip_sil "$STAGE/out/KOBToken/sil/KCC20.sil") <(strip_sil contracts
   exit 1
 fi
 "$S2A" handles "$STAGE/out/KOBToken/artifact.json" KCC20=contracts/artifacts/KCC20Ref_8x8.json >/dev/null
+
+# 3b. KCC20Ref: upstream kcc20.ag declares no app since the merge; the single-actor app it declared before is appended.
+mkdir -p "$STAGE/src/kcc20ref"
+cp contracts/third-party/kcc20-reference/kcc20.ag "$STAGE/src/kcc20ref/kcc20.ag"
+printf '\napp KCC20Reference {\n    actor KCC20;\n}\n' >> "$STAGE/src/kcc20ref/kcc20.ag"
+(cd "$STAGE/src/kcc20ref" && "$ARGENTC" build kcc20.ag --out ../../out/kcc20ref >/dev/null)
+if ! diff <(strip_sil "$STAGE/out/kcc20ref/sil/KCC20.sil") <(strip_sil contracts/kcc20/KCC20Ref.sil) >/dev/null; then
+  echo "KCC20Ref: argentc output of contracts/third-party/kcc20-reference/kcc20.ag differs from contracts/kcc20/KCC20Ref.sil" >&2
+  diff <(strip_sil "$STAGE/out/kcc20ref/sil/KCC20.sil") <(strip_sil contracts/kcc20/KCC20Ref.sil) >&2 || true
+  exit 1
+fi
+"$S2A" handles "$STAGE/out/kcc20ref/artifact.json" KCC20=contracts/artifacts/KCC20Ref.json >/dev/null
 
 # 4. router (imports ./KOBOrders/artifact.json relative to its source)
 (cd "$STAGE/src" && "$ARGENTC" build kob_router.ag --out ../out/router >/dev/null)

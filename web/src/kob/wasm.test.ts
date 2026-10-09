@@ -13,8 +13,8 @@ const kob = loadKobNode();
 describe('kob-wasm facade', () => {
   it('loads, self-checks and lists the templates', () => {
     expect(kob.templates().map((t) => t.name)).toContain('KobAsk');
-    // the refund tip pays the refund's fee: the larger 8x8 program costs more than the 3x3 reference (3.5M sompi)
-    expect(kob.keeperTips().KCC20Ref_8x8.refundTip).toBe('5000000');
+    // the refund tip pays the refund's fee: the larger 8x8 program costs more than the 3x3 reference (3.4M sompi)
+    expect(kob.keeperTips().KCC20Ref_8x8.refundTip).toBe('4800000');
     expect(BigInt(kob.keeperTips().KCC20Ref_8x8.refundTip)).toBeGreaterThan(BigInt(kob.keeperTips().KCC20Ref.refundTip));
   });
 

@@ -27,7 +27,8 @@ Vendored data and token programs
   Copyright KaspaCom. Apache License 2.0 (contracts/third-party/kaspacom-kcc20/LICENSE).
   Vendored unmodified except for line endings (UPSTREAM.md there).
 
-* Reference KCC-20 token program (argent-lang/kcc20-reference, pull request #1) --
+* Reference KCC-20 token program (argent-lang/kcc20-reference, master c8a0871, pull request #1
+  merged) -- contracts/third-party/kcc20-reference/ (vendored unmodified, UPSTREAM.md there),
   contracts/kcc20/, contracts/argent/kcc20_8x8.ag, tools/wallet-gate/contracts/ and derived
   artifacts. Declared ISC in that repository's Cargo.toml (it had no LICENSE file at the
   pinned commit). The files under contracts/kcc20/ carry a provenance header.

@@ -16,7 +16,7 @@ import { loadGolden, realWasm, skipUnlessWasm } from './helpers/real-wasm.ts';
 const NOW_MS = 1_800_000_000_000;
 const opts = { skip: skipUnlessWasm };
 /** KCC20Ref_8x8, the program KOB issues (the router reads any KCC-20 program the intent names). */
-const P8 = '40fef59a59bd76991f4d4e2101d1e3e34860997b89fe7714532637cec482a9d7';
+const P8 = '666da060d02663939efdc534ea10cce219e5564af86f4cc8eeea2ca129f7c032';
 const TOKEN = '70'.repeat(32);
 const EXT = 'ee'.repeat(32);
 

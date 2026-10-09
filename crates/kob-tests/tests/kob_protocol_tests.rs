@@ -1,5 +1,5 @@
 //! KOB v1 protocol harness: AskOrder / BidOrder + reference KCC-20 (argent kcc20-reference
-//! PR#1 compiled to SilverScript) executed in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20
+//! c8a0871 compiled to SilverScript) executed in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20
 //! covenant context and script-unit metering.
 //!
 //! Contract sources are read from `contracts/` (env KOB_CARRIER_KAS = 2|10|20 sets the order carrier,

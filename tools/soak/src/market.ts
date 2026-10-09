@@ -19,9 +19,9 @@ import type { BotWallet } from './wallet';
 const TEMPLATE_8X8 = {
   id: 'kcc20-ref-8x8',
   family: 'kcc20',
-  template_hash: '40fef59a59bd76991f4d4e2101d1e3e34860997b89fe7714532637cec482a9d7',
+  template_hash: '666da060d02663939efdc534ea10cce219e5564af86f4cc8eeea2ca129f7c032',
   prefix_len: 1,
-  suffix_len: 6707,
+  suffix_len: 6237,
   state_len: 112,
   max_token_inputs: 8,
   max_token_outputs: 8,
