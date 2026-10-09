@@ -86,7 +86,7 @@ describe('confirmation model', () => {
     const m = model('create.bid');
     const card = section(m, 'create').cards[0]!;
     expect(card.title).toBe('Buy limit order');
-    expect(rowOf(card.rows, 'budget').detail).toMatch(/^Covers the amount you buy/);
+    expect(rowOf(card.rows, 'budget').detail).toMatch(/^Covers the amount at the limit price/);
     expect(rowOf(card.rows, 'allIn').label).toBe('You pay at most per token (all-in)');
     expect(rowOf(section(m, 'locked').rows, 'locked-escrow').value).toMatch(/KAS$/);
   });
@@ -115,10 +115,10 @@ describe('confirmation model', () => {
     expect(card.title).toMatch(/^Sell (stop order|OCO order|trailing stop|take-profit order|OCO order with trailing stop)/);
     expect(card.rows.some((r) => r.id === 'stop')).toBe(true);
     // R-4: the trigger direction (a sell stop arms on resting sells at or below it) and the worst fill price after the trigger
-    expect(rowOf(card.rows, 'exposure').value).toMatch(/at least [\d.]+ TST of a resting sell order quoting at or below the stop for \d+ s/);
-    expect(rowOf(card.rows, 'stopWorst').detail).toMatch(/between the stop price and this price/);
+    expect(rowOf(card.rows, 'exposure').value).toMatch(/at least [\d.]+ TST of a sell order resting at or below the stop for \d+ s/);
+    expect(rowOf(card.rows, 'stopWorst').detail).toMatch(/between the stop and this price/);
     const buy = section(model('create.condBid'), 'create').cards[0]!;
-    expect(rowOf(buy.rows, 'exposure').value).toMatch(/resting buy order quoting at or above the stop/);
+    expect(rowOf(buy.rows, 'exposure').value).toMatch(/buy order resting at or above the stop/);
     expect(rowOf(buy.rows, 'stopWorst').value).not.toBe(rowOf(buy.rows, 'stop').value);
   });
 

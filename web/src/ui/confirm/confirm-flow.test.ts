@@ -45,7 +45,7 @@ describe('failure classification', () => {
   it('unknown errors become a retryable, translated message with the raw text behind Details', () => {
     const f = classifyFailure(new Error('boom'));
     expect(f).toMatchObject({ kind: 'retry', raw: 'boom' });
-    expect(f.text).toMatch(/unexpected reason/);
+    expect(f.text).toMatch(/Signing or sending failed/);
     expect(classifyFailure('plain string').raw).toBe('plain string');
     expect(classifyFailure('plain string').text).not.toContain('plain string');
   });

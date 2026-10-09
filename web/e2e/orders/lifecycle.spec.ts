@@ -178,8 +178,8 @@ test.describe('repeat ladder (R-14)', () => {
     await expect(page.getByTestId('order-ladder-level-1')).toHaveText(/Level 1: entry 0\.0245\b.*KAS, take-profit 0\.04\b.*KAS/);
     await expect(page.getByTestId('order-ladder-level-2')).toHaveText(/Level 2: entry 0\.0235\b.*KAS, take-profit 0\.039\b.*KAS/);
     await expect(page.getByTestId('order-ladder-level-3')).toHaveText(/Level 3: entry 0\.0225\b.*KAS, take-profit 0\.038\b.*KAS/);
-    await expect(page.getByTestId('order-ladder-total')).toContainText('Total: 3 EXKCC over 3 orders');
-    await expect(ladder).toContainText('sign 3 separate transactions');
+    await expect(page.getByTestId('order-ladder-total')).toContainText('Total: 3 EXKCC in 3 orders');
+    await expect(ladder).toContainText('you sign 3 transactions in turn');
 
     const before = (await mock.submitted(false)).length;
     await page.getByTestId('order-review').click();
@@ -195,7 +195,7 @@ test.describe('repeat ladder (R-14)', () => {
       await page.getByTestId('confirm-close').click();
     }
     await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
-    await expect(page.getByTestId('order-result-ladder')).toContainText('All 3 levels were placed');
+    await expect(page.getByTestId('order-result-ladder')).toContainText('All 3 levels placed');
 
     // the node got exactly three transactions, one repeat entry each, at the stepped prices
     const subs = (await mock.submitted()).slice(before);
@@ -220,7 +220,7 @@ test.describe('repeat ladder (R-14)', () => {
     await openMarket(page, mock);
     await pickType(page, 'repeatIfd', 'buy');
     await fillFields(page, { amount: '1', price: '0.0245', 'exit.takeProfit': '0.04', 'ladder.levels': '4', 'ladder.step': '0.01' });
-    await expect(page.getByTestId('order-ladder-errors')).toContainText('Level 4 would reach a price at or below zero');
+    await expect(page.getByTestId('order-ladder-errors')).toContainText('Level 4 would price at or below zero');
     await expect(page.getByTestId('order-review')).toBeDisabled();
   });
 });

@@ -179,7 +179,7 @@ test.describe('input validation', () => {
     await fillFields(page, { amount: '2', price: '0.0245' });
     const issue = page.getByTestId('order-issue-INSUFFICIENT_KAS');
     await expect(issue).toBeVisible({ timeout: 30_000 });
-    await expect(issue).toContainText('short by');
+    await expect(issue).toContainText('(short ');
     await expect(page.getByTestId('order-review')).toBeDisabled();
   });
 });

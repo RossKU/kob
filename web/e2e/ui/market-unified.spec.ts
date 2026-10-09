@@ -195,9 +195,9 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     const base = (await mock.token()).covenant_id;
     await page.goto(`/#/market/${base}`);
     const foot = page.locator('.ob-foot');
-    await expect(foot).toContainText('an ask prefills a buy of EXKCC, a bid prefills a sell of EXKCC');
+    await expect(foot).toContainText('an ask a buy of EXKCC, a bid a sell of EXKCC');
     await page.getByTestId('market-flip').click();
-    await expect(foot).toContainText('an ask prefills a buy of KAS, a bid prefills a sell of KAS');
+    await expect(foot).toContainText('an ask a buy of KAS, a bid a sell of KAS');
     await expect(foot).not.toContainText('buy orders hold a KAS budget');
   });
 
@@ -213,7 +213,7 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     // native: the wording of a token market
     await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).toContainText('KAS / EXKCC');
     await page.getByTestId('order-type').selectOption('close');
-    await expect(help).toContainText('Sells the tokens you hold at market');
+    await expect(help).toContainText('Sells your tokens at market');
     await page.getByTestId('order-type').selectOption('twap');
     await expect(page.getByTestId('order-type').locator('option[value="twap"]')).toHaveText('TWAP (sell in slices)');
     await page.getByTestId('order-type').selectOption('limit');
@@ -236,15 +236,15 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     await expect(page.getByTestId('order-balances')).toBeVisible();
     // the helps
     await page.getByTestId('order-type').selectOption('close');
-    await expect(help).toContainText('Buys KAS with the EXKCC you hold');
-    await expect(help).not.toContainText('Sells the tokens you hold');
+    await expect(help).toContainText('Buys KAS with all your EXKCC');
+    await expect(help).not.toContainText('Sells your tokens');
     await expect(page.getByTestId('order-type').locator('option[value="twap"]')).toHaveText('TWAP (buy KAS in slices)');
     await expect(page.getByTestId('order-type').locator('option[value="dca"]')).toHaveText('DCA (sell KAS in slices)');
     await page.getByTestId('order-type').selectOption('stopMarket');
-    await expect(help).toContainText('a Buy stop on a trade at or above its price, a Sell stop on a trade at or below it');
-    await expect(help).not.toContainText('a fill of a sell order resting at or below your stop');
+    await expect(help).toContainText('Buy stop: at or above; Sell stop: at or below');
+    await expect(help).not.toContainText('a sell order resting at or below your stop');
     await page.getByTestId('order-type').selectOption('limit');
-    await expect(page.locator('.field', { has: page.getByTestId('order-tip') })).toContainText('A Buy receives the KAS minus the tip');
+    await expect(page.locator('.field', { has: page.getByTestId('order-tip') })).toContainText('a Buy receives the KAS minus the tip');
   });
 
   test('recent trades: the KAS amount column of the inverted view has one fixed precision, the same rule as the book', async ({ appPage: page, mock }) => {

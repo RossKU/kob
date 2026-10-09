@@ -78,7 +78,7 @@ test('pair book (direct, entry, route) and a pair limit sell through the unified
   expect(d.rows.pairEscrowA).toContain('2 EXKCC');
   expect(d.rows.pairReceiveMinB).toContain('0.103 EXUSD');
   expect(d.notes).toEqual(expect.arrayContaining(['pairPricesFromKasBooks', 'pairTipKas', 'pairRoute', 'pairNetting', 'pairInventory']));
-  expect(d.text).toContain('they never set a price');
+  expect(d.text).toContain('pair fills count only as volume');
 
   const confirm = await openReview(page);
   expect(confirm.kind).toBe('create');
@@ -165,7 +165,7 @@ test('a pair stop discloses the trigger rule (two KAS books or a resting pair or
   await fillFields(page, { amount: '1', stop: '0.046' });
   await waitReviewable(page);
   const d = await readDisclosure(page);
-  const rule = 'arms when the two KAS books imply a rate at or below 0.046 EXUSD / EXKCC (a resting sell of EXKCC and a resting buy of EXUSD, each rested 5 s and filled together), or when a resting pair order selling EXKCC at or below the stop is filled';
+  const rule = 'arms on fills implying a rate at or below 0.046 EXUSD / EXKCC: a resting sell of EXKCC and buy of EXUSD filled together (each rested 5 s), or a resting EXKCC pair sell at or below the stop';
   expect(d.rows.pairTrigger).toContain(rule);
   expect(d.notes).toContain('pairTrigger');
   const confirm = await openReview(page);
@@ -182,7 +182,7 @@ test('a pair stop discloses the trigger rule (two KAS books or a resting pair or
   const row = page.getByTestId(`order-row-${id}`);
   await expect(row).toHaveAttribute('data-type', 'stop');
   await expect(row.getByTestId('order-stop')).toContainText('0.046 EXUSD/EXKCC');
-  await expect(row.getByTestId('order-pair-trigger')).toContainText('arms when the two KAS books imply a rate at or below 0.046 EXUSD/EXKCC');
+  await expect(row.getByTestId('order-pair-trigger')).toContainText('arms on fills implying a rate at or below 0.046 EXUSD/EXKCC');
   // pair orders are replaced from the full pair ticket (no in-place amend in the protocol)
   await expect(row.getByTestId(`order-replace-${id}`)).toBeVisible();
   await page.getByTestId(`order-cancel-${id}`).click();
@@ -296,6 +296,6 @@ test('picking a quote token keeps the layout: the chart stays in the same place 
   expect(ticket.x).toBeGreaterThanOrEqual(after.x + after.width - 1);
   // the pair chart is derived from the two KAS markets, in the pair's unit
   await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD per EXKCC');
-  await expect(page.getByTestId('pair-chart-note')).toContainText('never set a price');
+  await expect(page.getByTestId('pair-chart-note')).toContainText('pair fills count only as volume');
   await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', /^(ready|empty)$/);
 });

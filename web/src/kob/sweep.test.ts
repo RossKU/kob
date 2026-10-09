@@ -110,7 +110,7 @@ describe('planSweep: the order continues under the same script, its strays retur
     expect(en.kind).toBe('sweep');
     expect(en.heading).toBe('Sweep stray tokens');
     expect(en.intro).toBe(
-      '3 stray token UTXO(s) (0.012 TST, 42 base units of unknown token (81818181…81818181)) and their 25 KAS return to you. The order continues unchanged (same price, amount and custody); as a new UTXO, its 90-day idle window restarts.',
+      '3 stray token UTXO(s) (0.012 TST, 42 base units of unknown token (81818181…81818181)) and their 25 KAS return to you. The order continues unchanged; its 90-day idle window restarts.',
     );
     expect(en.sections.map((x) => x.id)).toEqual(['spend', 'sweep', 'back', 'fee', 'net']);
     const card = en.sections.find((x) => x.id === 'sweep')!.cards[0]!;

@@ -62,7 +62,7 @@ describe('feeDisclosure: fallbacks and caps are said plainly', () => {
     expect(row(d.rows, 'fee-speed')).toBeUndefined();
     expect(d.warnings).toHaveLength(1);
     expect(d.warnings[0]).toMatchObject({ code: 'fee-estimate-unavailable', severity: 'warning' });
-    expect(d.warnings[0]!.text).toBe('Fee estimate unavailable: paying the minimum rate (100 sompi per gram). This may confirm slowly when the network is busy.');
+    expect(d.warnings[0]!.text).toBe('Fee estimate unavailable: paying the minimum rate (100 sompi per gram); may confirm slowly when busy.');
   });
 
   it('the policy switched off: an info line, not a warning', () => {
@@ -82,7 +82,7 @@ describe('feeDisclosure: fallbacks and caps are said plainly', () => {
     const d = feeDisclosure({ choice: choice({ maxRate: 150n }, estimate, 'high'), rate: null, fee: 1n }, tr());
     expect(row(d.rows, 'fee-rate')!.value).toBe('150 sompi per gram');
     expect(d.info.map((f) => f.code)).toEqual(['fee-max-rate']);
-    expect(d.info[0]!.text).toBe('The node suggests 194 sompi per gram, above your maximum rate of 150: paying 150. This may confirm slower than the node estimates.');
+    expect(d.info[0]!.text).toBe('The node suggests 194 sompi per gram, above your maximum of 150: paying 150; may confirm slower.');
   });
 
   it('total cap: the lowered rate and why', () => {
@@ -91,7 +91,7 @@ describe('feeDisclosure: fallbacks and caps are said plainly', () => {
     const d = feeDisclosure({ choice: describeFee(p, pick, 400n, 100_000_000n), rate: null, fee: 100_000_000n }, tr());
     expect(row(d.rows, 'fee-rate')!.value).toBe('400 sompi per gram');
     expect(d.info.map((f) => f.code)).toEqual(['fee-total-cap']);
-    expect(d.info[0]!.text).toContain('limited to 1 KAS per transaction');
+    expect(d.info[0]!.text).toContain('Fee capped at 1 KAS');
     expect(d.info[0]!.text).toContain('from 1000 to 400');
     expect(d.warnings).toEqual([]);
   });
@@ -101,7 +101,7 @@ describe('feeDisclosure: fallbacks and caps are said plainly', () => {
     const c = describeFee(p, pickRate(p, estimate, 'normal'), 100n, 2_500_000n);
     const d = feeDisclosure({ choice: c, rate: null, fee: 2_500_000n }, tr());
     expect(d.warnings.map((f) => f.code)).toContain('fee-over-cap');
-    expect(d.warnings.find((f) => f.code === 'fee-over-cap')!.text).toContain('0.025 KAS is above your limit of 0.00001 KAS');
+    expect(d.warnings.find((f) => f.code === 'fee-over-cap')!.text).toContain('0.025 KAS is above your 0.00001 KAS limit');
   });
 
   it('no remembered choice (a transaction planned elsewhere): just the rate of the built transaction; no rate: nothing', () => {

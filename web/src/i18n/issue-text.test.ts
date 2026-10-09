@@ -24,35 +24,35 @@ const issue = (code: string, params?: Params, extra: Partial<IssueLike> = {}): I
 describe('issueText: parameter formatting', () => {
   it('formats {x:kas} params as KAS, trimmed', () => {
     const i = issue('INSUFFICIENT_KAS', { needed: 20n * KAS, have: 150_000_000n, shortfall: 1_850_000_000n });
-    expect(issueText(i, {})).toBe('Not enough KAS: this order needs 20 KAS, your spendable balance is 1.5 KAS (short by 18.5 KAS).');
+    expect(issueText(i, {})).toBe('Not enough KAS: needs 20 KAS, you have 1.5 KAS (short 18.5 KAS).');
   });
 
   it('formats {x:bps} params as a percentage number', () => {
-    expect(issueText(issue('SLIPPAGE_HIGH', { bps: 1250n }), {})).toContain('slippage tolerance of 12.50%');
+    expect(issueText(issue('SLIPPAGE_HIGH', { bps: 1250n }), {})).toContain('slippage of 12.50%');
   });
 
   it('formats the price params that the catalogue prints plainly (prices per token) as KAS', () => {
     const i = issue('PRICE_NOT_ON_TICK', { tick: 100n, below: 245_000_000n, above: 245_000_100n });
-    expect(issueText(i, {})).toBe('The price must be a multiple of the tick (100 sompi per token). The nearest valid prices are 2.45 KAS and 2.450001 KAS.');
-    expect(issueText(issue('PRICE_FAR_FROM_MARKET', { percent: '62.5', reference: 250_000_000n }), {})).toContain('62.5% away from the market (2.5 KAS)');
+    expect(issueText(i, {})).toBe('The price must be a multiple of 100 sompi per token; nearest: 2.45 KAS or 2.450001 KAS.');
+    expect(issueText(issue('PRICE_FAR_FROM_MARKET', { percent: '62.5', reference: 250_000_000n }), {})).toContain('62.5% from the market (2.5 KAS)');
   });
 
   it('formats token amounts with the token decimals and ticker when known, else as base units', () => {
     const i = issue('INSUFFICIENT_TOKENS', { needed: 12_500n, have: 3_000n, shortfall: 9_500n });
-    expect(issueText(i, { tokenDecimals: 3, tokenTicker: 'TST3' })).toBe('Not enough tokens: this order needs 12.5 TST3, you hold 3 TST3 (short by 9.5 TST3).');
-    expect(issueText(i, { tokenDecimals: 3 })).toContain('needs 12.5, you hold 3 (short by 9.5)');
+    expect(issueText(i, { tokenDecimals: 3, tokenTicker: 'TST3' })).toBe('Not enough tokens: needs 12.5 TST3, you hold 3 TST3 (short 9.5 TST3).');
+    expect(issueText(i, { tokenDecimals: 3 })).toContain('needs 12.5, you hold 3 (short 9.5)');
     expect(issueText(i, {})).toContain('needs 12500 base units, you hold 3000 base units');
   });
 
   it('formats the depth amounts of market and fill-or-kill findings in the token decimals', () => {
-    expect(issueText(issue('FOK_INSUFFICIENT_DEPTH', { amount: 3_000n, available: 1_500n }), { tokenDecimals: 3, tokenTicker: 'TST3' })).toBe('Fill-or-kill needs 3 TST3 but only 1.5 TST3 cross at your price, so it could not fill.');
-    expect(issueText(issue('MARKET_DEPTH_INSUFFICIENT', { amount: 3_000n, available: 1_500n }), { tokenDecimals: 3, tokenTicker: 'TST3' })).toContain('holds only 1.5 TST3 of your 3 TST3');
+    expect(issueText(issue('FOK_INSUFFICIENT_DEPTH', { amount: 3_000n, available: 1_500n }), { tokenDecimals: 3, tokenTicker: 'TST3' })).toBe('FOK needs 3 TST3 but only 1.5 TST3 crosses at your price.');
+    expect(issueText(issue('MARKET_DEPTH_INSUFFICIENT', { amount: 3_000n, available: 1_500n }), { tokenDecimals: 3, tokenTicker: 'TST3' })).toContain('Only 1.5 TST3 of your 3 TST3');
   });
 
   it('localises the direction / side / counterparty words the planners pass in English', () => {
     expect(issueText(issue('COND_TP_STOP_ORDER', { direction: 'above', takeProfit: 3n, stop: 2n }), {})).toBe('The take-profit must be above the stop.');
     expect(issueText(issue('COND_STOP_ALREADY_REACHED', { direction: 'at or below' }), {})).toContain('already at or below your stop');
-    expect(issueText(issue('NO_LIQUIDITY', { counterparty: 'bids' }), {})).toContain('no bids');
+    expect(issueText(issue('NO_LIQUIDITY', { counterparty: 'bids' }), {})).toContain('No bids');
   });
 
   it('shortens 64-hex ids and outpoints, and stringifies everything else', () => {
@@ -66,7 +66,7 @@ describe('issueText: parameter formatting', () => {
 
 describe('issueText: context merged into the params', () => {
   it('merges issue.input and issue.output as {input} / {output}', () => {
-    expect(issueText(issue('input-script-mismatch', undefined, { input: 2 }), {})).toBe('Input 2: the script of the spent UTXO is not the one the plan describes.');
+    expect(issueText(issue('input-script-mismatch', undefined, { input: 2 }), {})).toBe('Input 2: the spent script differs from the plan.');
     expect(issueText(issue('output-script-mismatch', undefined, { output: 3 }), {})).toContain('Output 3:');
   });
 
@@ -85,8 +85,8 @@ describe('issueText: context merged into the params', () => {
 
   it('turns cancel.insufficient-tokens into a shortfall in both parameter forms', () => {
     const ctx = { tokenDecimals: 3, tokenTicker: 'TST3' };
-    expect(issueText(issue('cancel.insufficient-tokens', { need: 20_000n, have: 12_500n }), ctx)).toContain('7.5 TST3 more are needed');
-    expect(issueText(issue('cancel.insufficient-tokens', { need: 7_500n }), ctx)).toContain('7.5 TST3 more are needed');
+    expect(issueText(issue('cancel.insufficient-tokens', { need: 20_000n, have: 12_500n }), ctx)).toContain('7.5 TST3 more needed');
+    expect(issueText(issue('cancel.insufficient-tokens', { need: 7_500n }), ctx)).toContain('7.5 TST3 more needed');
   });
 
   it('turns the DAA gap of refund.not-yet into a readable wait (10 DAA per second)', () => {
@@ -148,7 +148,7 @@ describe('issueText: real plan issues (planOrder with the fixture environment)',
     const plan = planOrder(makeEnv(), { type: 'limit', side: 'buy', price: 245_000_050n, amount: 10n * TOK });
     const i = plan.issues.find((x) => x.code === 'PRICE_NOT_ON_TICK');
     expect(i).toBeDefined();
-    expect(issueText(i!, {})).toContain('nearest valid prices are 2.45 KAS and 2.450001 KAS');
+    expect(issueText(i!, {})).toContain('nearest: 2.45 KAS or 2.450001 KAS');
   });
 
   it('too little KAS is INSUFFICIENT_KAS with the exact shortfall', () => {
@@ -162,7 +162,7 @@ describe('issueText: real plan issues (planOrder with the fixture environment)',
     const plan = planOrder(makeEnv({ tokenAmounts: [2n * TOK] }), { type: 'limit', side: 'sell', price: 250_000_000n, amount: 10n * TOK });
     const i = plan.issues.find((x) => x.code === 'INSUFFICIENT_TOKENS');
     expect(i).toBeDefined();
-    expect(issueText(i!, { tokenDecimals: 3, tokenTicker: 'TST3' })).toBe('Not enough tokens: this order needs 10 TST3, you hold 2 TST3 (short by 8 TST3).');
+    expect(issueText(i!, { tokenDecimals: 3, tokenTicker: 'TST3' })).toBe('Not enough tokens: needs 10 TST3, you hold 2 TST3 (short 8 TST3).');
   });
 
   it('a conditional order with a wrong take-profit / stop order uses the localised direction', () => {
@@ -284,7 +284,7 @@ describe('cancel, refund, snapshot, issuance, registry and wallet findings', () 
       expect(s, `${code}`).not.toMatch(leftover);
       expect(s, `${code}`).not.toBe(`English fallback of ${code}`);
     }
-    expect(issueText(issue('cancel.strays-exceed-slots', { strays: 5, room: 2 }), {})).toContain('5 stray token UTXOs, but one transaction can move only 2');
+    expect(issueText(issue('cancel.strays-exceed-slots', { strays: 5, room: 2 }), {})).toContain('5 stray token UTXOs; one transaction moves only 2');
   });
 
   it('renders the findings of a real issuance form validation (holders numbered, amounts in base units)', () => {
@@ -363,7 +363,7 @@ describe('wallet, sign flow and node errors', () => {
 
     const nodeErr = new NodeError('script', 'A script or covenant rule failed: bad signature', 'RPC Server (remote error) -> code:0  message:`Rejected transaction abc: signature verification failed` data:None');
     const submit = new SignFlowError('submitting', nodeErr, nodeErr.message, nodeErr.code);
-    expect(signFlowText(submit)).toBe('A script or covenant rule failed on the node, so the transaction was not accepted. Details: signature verification failed');
+    expect(signFlowText(submit)).toBe('A script rule failed on the node; the transaction was not accepted. Details: signature verification failed');
 
     const orphan = new SignFlowError('submitting', new NodeError('orphan', 'x'), 'x', 'orphan');
     // an unknown code falls back to the English message

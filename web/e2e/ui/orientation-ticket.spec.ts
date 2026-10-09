@@ -44,8 +44,8 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await expect(page.getByTestId('disc-summary')).toHaveText('Sell 0.24 KAS for 10 EXKCC');
     const flipped = await openReview(page);
     // the confirmation states the shown order in KAS and EXKCC, above the decoded transaction, which is the same order
-    await expect(page.getByTestId('confirm-shown-as')).toContainText('KAS/EXKCC Sell: you give 0.24 KAS and receive 10 EXKCC');
-    await expect(page.getByTestId('confirm-shown-as')).toContainText('BUY order of EXKCC');
+    await expect(page.getByTestId('confirm-shown-as')).toContainText('KAS/EXKCC Sell: you give 0.24 KAS, receive 10 EXKCC');
+    await expect(page.getByTestId('confirm-shown-as')).toContainText('a BUY of EXKCC');
     expect(flipped.created.map((c) => c.title)).toEqual(['Buy limit order']);
     expect(flipped.created.map((c) => c.rows)).toEqual(native.created.map((c) => c.rows));
     await page.getByTestId(TESTID.confirmCancel).click();
@@ -74,7 +74,7 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await expect(page.getByTestId('order-price-native')).toContainText('0.025 KAS per EXKCC');
     await expect(page.getByTestId('disc-summary')).toHaveText('Buy 10 KAS for 400 EXKCC');
     const c = await openReview(page);
-    await expect(page.getByTestId('confirm-shown-as')).toContainText('KAS/EXKCC Buy: you give 400 EXKCC and receive 10 KAS (at 40 EXKCC per KAS');
+    await expect(page.getByTestId('confirm-shown-as')).toContainText('KAS/EXKCC Buy: you give 400 EXKCC, receive 10 KAS (at 40 EXKCC per KAS');
     expect(c.created).toHaveLength(1);
     expect(c.created[0]!.title).toBe('Sell limit order');
     expect(c.created[0]!.rows.amount).toBe('400 EXKCC');
@@ -96,7 +96,7 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     // shown Sell KAS = native buy of EXKCC: sized at the best ask, 0.0251 KAS per EXKCC
     await page.getByTestId(TESTID.orderSideSell).click();
     await page.getByTestId(TESTID.orderAmount).fill('0.251');
-    await expect(page.getByTestId('order-amount-tokens')).toContainText('0.251 KAS = 10 EXKCC at the best price in the book');
+    await expect(page.getByTestId('order-amount-tokens')).toContainText('0.251 KAS = 10 EXKCC at the best book price (approximate');
     await expect(page.getByTestId('disc-summary')).toHaveText('Sell about 0.251 KAS for 10 EXKCC');
   });
 });
@@ -147,7 +147,7 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
     await expect(page.getByTestId('order-amount-tokens')).toContainText('0.9 KAS = 3 EXUSD at your price');
     await expect(page.getByTestId('disc-summary')).toHaveText('Sell 0.9 KAS for 3 EXUSD');
     const flipped = await openReview(page);
-    await expect(page.getByTestId('confirm-shown-as')).toContainText('KAS/EXUSD Sell: you give 0.9 KAS and receive 3 EXUSD');
+    await expect(page.getByTestId('confirm-shown-as')).toContainText('KAS/EXUSD Sell: you give 0.9 KAS, receive 3 EXUSD');
     expect(flipped.created.map((c) => c.rows)).toEqual(native.created.map((c) => c.rows));
     await page.getByTestId(TESTID.confirmCancel).click();
     await expect(page.getByTestId(TESTID.confirmScreen)).toHaveCount(0);
@@ -185,7 +185,7 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
     await expect(page.getByTestId(TESTID.orderAmount)).toHaveValue('0.103');
     await expect(page.getByTestId(TESTID.orderPrice)).toHaveValue('19.417476');
     await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderPrice) }).locator('.tk-unit')).toHaveText('EXKCC / EXUSD');
-    await expect(page.getByTestId('ticket-pair-carried')).toContainText('Carried over from EXKCC/EXUSD: the side is now Sell');
+    await expect(page.getByTestId('ticket-pair-carried')).toContainText('Carried over from EXKCC/EXUSD: side now Sell');
 
     // and back: Buy 2 EXKCC (0.103 EXUSD at 19.417476 = 2.0000000 EXKCC, rounded down to EXKCC's 8 decimals)
     await page.getByTestId('market-flip').click();

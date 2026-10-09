@@ -7,7 +7,7 @@ export default {
   'issue.fixed.title': 'What you are creating',
   'issue.fixed.supply': 'The supply is fixed forever: there is no mint function, so nobody (including you) can create more tokens later.',
   'issue.fixed.noBurn': 'There is no burn function either: the program cannot destroy tokens.',
-  'issue.fixed.program': 'Program KCC20Ref_8x8: KOB\'s provisional KCC-20 program (at most 8 token inputs and 8 token outputs per transfer), not the final KCC-20 standard. KOB will follow KCC-20 as finalized; tokens issued now stay on this program.',
+  'issue.fixed.program': 'Program KCC20Ref_8x8: KOB\'s provisional KCC-20 program (up to 8 token inputs and 8 outputs per transfer). KOB will follow KCC-20 as finalized; tokens issued now stay on this program.',
   'issue.fixed.unaudited': 'UNAUDITED: this program has not been audited. Issue only what you can afford to lose and do not present it as safe.',
   'issue.fixed.carrier': 'Every token output locks some KAS (the carrier). It stays in that token UTXO and returns to the holder when the tokens are spent or consolidated.',
   'issue.fixed.custody': 'Tokens sit in covenant outputs, so ordinary wallets do not show them. Only this app can show tokens issued here, by tracking them in this browser.',

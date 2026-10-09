@@ -203,8 +203,8 @@ test.describe('the ticket in an inverted market', () => {
     await expect(page.getByTestId('order-price-native')).toContainText('0.04 KAS per EXKCC');
     const flipped = await openReview(page);
     expect(flipped.heading).toContain('KAS/EXKCC');
-    await expect(page.getByTestId('confirm-shown-as')).toContainText('KAS/EXKCC Buy: you give 1 EXKCC and receive 0.04 KAS (at 25 EXKCC per KAS');
-    await expect(page.getByTestId('confirm-shown-as')).toContainText('SELL order of EXKCC');
+    await expect(page.getByTestId('confirm-shown-as')).toContainText('KAS/EXKCC Buy: you give 1 EXKCC, receive 0.04 KAS (at 25 EXKCC per KAS');
+    await expect(page.getByTestId('confirm-shown-as')).toContainText('a SELL of EXKCC');
     // the decoded confirmation of the built transaction is the same: same order, same price, same locked funds
     expect(flipped.created.length).toBe(native.created.length);
     expect(flipped.created.map((c) => c.rows)).toEqual(native.created.map((c) => c.rows));

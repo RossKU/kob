@@ -37,7 +37,7 @@ test.describe('sweep strays in place', () => {
     expect(confirm.kind).toBe('sweep');
     expect(confirm.heading).toBe('Sweep strays');
     expect(confirm.text).toContain(
-      '3 stray token UTXO(s) (3 EXKCC, 777 base units of unknown token (81818181…81818181)) and their 30 KAS return to you. The order continues unchanged (same price, amount and custody); as a new UTXO, its 90-day idle window restarts.',
+      '3 stray token UTXO(s) (3 EXKCC, 777 base units of unknown token (81818181…81818181)) and their 30 KAS return to you. The order continues unchanged; its 90-day idle window restarts.',
     );
     expect(confirm.closed).toEqual([]);
     expect(confirm.created).toEqual([]);
@@ -107,7 +107,7 @@ test.describe('sweep strays in place', () => {
     await page.getByTestId(`order-cancel-${id}`).click();
     const dialog = page.getByTestId('sweep-first-dialog');
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('cancelling now abandons 1 stray token UTXO(s) for good');
+    await expect(dialog).toContainText('now abandons 1 stray token UTXO(s) for good');
     await expect(page.getByTestId('sweep-first-abandon')).toHaveText('Cancel anyway (abandon 1)');
     await page.getByTestId('sweep-first-confirm').click();
 

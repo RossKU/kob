@@ -88,9 +88,9 @@ describe('pair ticket disclosure (real pair plans)', () => {
     const m = buildDisclosureModel(planned(CASES[6]![1]), CTX)!;
     const r = row(m.pair!.rows, 'pairTrigger');
     const text = textOf(r.value);
-    expect(text).toContain('arms when the two KAS books imply a rate at or below 14 BBB / AAA');
-    expect(text).toContain(`a resting sell of ${A.ticker} and a resting buy of ${B.ticker}, each rested 5 s and filled together`);
-    expect(text).toContain(`or when a resting pair order selling ${A.ticker} at or below the stop is filled`);
+    expect(text).toContain('arms on fills implying a rate at or below 14 BBB / AAA');
+    expect(text).toContain(`a resting sell of ${A.ticker} and buy of ${B.ticker} filled together (each rested 5 s)`);
+    expect(text).toContain(`or a resting ${A.ticker} pair sell at or below the stop`);
     expect(m.notes.map((n) => n.tag)).toContain('pairTrigger');
     const buy = textOf(row(buildDisclosureModel(planned(CASES[7]![1]), CTX)!.pair!.rows, 'pairTrigger').value);
     expect(buy).toContain('at or above 16 BBB / AAA');
@@ -103,7 +103,7 @@ describe('pair ticket disclosure (real pair plans)', () => {
     expect(textOf(row(buyFirst.pair!.rows, 'pairExitCustody').value)).toContain(`the ${A.ticker} its entry fill bought`);
     expect(buyFirst.notes.map((n) => n.tag)).toContain('pairExitCustody');
     const sellFirst = buildDisclosureModel(planned(CASES[11]![1]), CTX)!;
-    expect(textOf(row(sellFirst.pair!.rows, 'pairExitCustody').value)).toContain(`the ${B.ticker} its entry fill received plus the prefund`);
+    expect(textOf(row(sellFirst.pair!.rows, 'pairExitCustody').value)).toContain(`the ${B.ticker} its entry fill received plus that fill's prefund`);
     expect(row(sellFirst.pair!.rows, 'pairEscrowB').labelKey).toBe('ticket.disc.pairPrefundB');
     // a stop entry has the pair trigger rule too
     expect(buildDisclosureModel(planned(CASES[12]![1]), CTX)!.pair!.rows.map((x) => x.id)).toContain('pairTrigger');
@@ -113,13 +113,13 @@ describe('pair ticket disclosure (real pair plans)', () => {
 describe('pair issue sentences: prices in B per whole A, amounts of the token their ticker names', () => {
   const ctx = { tokenDecimals: A.decimals, tokenTicker: A.ticker, quoteDecimals: B.decimals, quoteTicker: B.ticker };
   it('formats the planner\'s raw B prices and token amounts', () => {
-    expect(issueText(pairIssue('PAIR_MARKETABLE_AUCTION', { touch: 1_500n, ticker: B.ticker }), ctx)).toContain('(15 BBB per token)');
-    expect(issueText(pairIssue('PAIR_MARKET_REFERENCE_SOURCE', { reference: 1_450n, worst: 1_400n, ticker: B.ticker }), ctx)).toContain('can fill at 14 BBB per token at worst');
+    expect(issueText(pairIssue('PAIR_MARKETABLE_AUCTION', { touch: 1_500n, ticker: B.ticker }), ctx)).toContain('from 15 BBB per token');
+    expect(issueText(pairIssue('PAIR_MARKET_REFERENCE_SOURCE', { reference: 1_450n, worst: 1_400n, ticker: B.ticker }), ctx)).toContain('worst fill 14 BBB per token');
     expect(issueText(pairIssue('PAIR_INSUFFICIENT_TOKENS', { ticker: B.ticker, needed: 12_345n, have: 100n, shortfall: 12_245n }), ctx)).toBe(
-      'Not enough BBB: this order needs 123.45, you hold 1 (short by 122.45).',
+      'Not enough BBB: needs 123.45, you hold 1 (short 122.45).',
     );
     expect(issueText(pairIssue('PAIR_INSUFFICIENT_TOKENS', { ticker: A.ticker, needed: 2n * A.scale, have: 0n, shortfall: 2n * A.scale }), ctx)).toContain('needs 2,');
-    expect(issueText(pairIssue('PAIR_PREFUND_SHORT', { needed: 250n, given: 100n, ticker: B.ticker }), ctx)).toContain('at least 2.5 BBB per token are needed (you gave 1)');
+    expect(issueText(pairIssue('PAIR_PREFUND_SHORT', { needed: 250n, given: 100n, ticker: B.ticker }), ctx)).toContain('needs 2.5 BBB per token, you gave 1');
   });
 
   it('a shared price finding on a pair speaks B, on a KAS market KAS', () => {

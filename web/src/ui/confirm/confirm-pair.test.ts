@@ -65,7 +65,7 @@ describe('confirmation screen of a pair placement', () => {
     const c = cardOf(model('pair.create.condAsk'));
     const r = c.rows.find((x) => x.id === 'pairTrigger');
     expect(r, ids(c.rows).join(',')).toBeDefined();
-    expect(r!.value).toMatch(/^arms when the two KAS books imply a rate at or below .+ \(a resting sell of .+ and a resting buy of .+, each rested [\d.]+ s and filled together\), or when a resting pair order selling .+ at or below the stop is filled$/);
+    expect(r!.value).toMatch(/^arms on fills implying a rate at or below .+: a resting sell of .+ and buy of .+ filled together \(each rested [\d.]+ s\), or a resting .+ pair sell at or below the stop$/);
     const buy = cardOf(model('pair.create.condBid')).rows.find((x) => x.id === 'pairTrigger');
     expect(buy?.value).toContain('at or above');
   });

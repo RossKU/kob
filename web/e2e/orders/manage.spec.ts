@@ -315,7 +315,7 @@ test.describe('recovery', () => {
     // the stray tokens owned by the order cannot be read without the indexer: the cancel says any that exist are left behind and asks the user to
     // accept that (C5-09: never abandoned silently); signing stays disabled until both boxes are ticked
     await expect(page.getByTestId('confirm-screen')).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId('confirm-plan-warnings')).toContainText('The stray tokens of this order could not be read');
+    await expect(page.getByTestId('confirm-plan-warnings')).toContainText('Strays could not be read');
     await page.getByTestId('confirm-ack').check();
     await expect(page.getByTestId('confirm-sign')).toBeDisabled();
     await page.getByTestId('confirm-ack').uncheck();

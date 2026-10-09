@@ -71,7 +71,7 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   expect(low).toBeGreaterThan(0);
   // the chart is the pair price derived from the two KAS markets
   await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD per EXKCC');
-  await expect(page.getByTestId('pair-chart-note')).toContainText('derived from the EXKCC/KAS and EXUSD/KAS markets');
+  await expect(page.getByTestId('pair-chart-note')).toContainText('derived from EXKCC/KAS and EXUSD/KAS');
 
   // depth chart of the pair book: both sides, in pair units
   const depth = page.getByTestId('depth-section');
@@ -90,7 +90,7 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   await expect(trades).toContainText('Amount (EXUSD)');
   await expect(trades).toContainText('Filled via');
   await expect(trades).not.toContainText('Price');
-  await expect(page.getByTestId('pair-trades-note')).toContainText('volume only (no price)');
+  await expect(page.getByTestId('pair-trades-note')).toContainText('Pair fills: volume only');
   const sides = await rows.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.side));
   expect([...sides].sort()).toEqual(['buy', 'sell']);
   const counterparties = await rows.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.counterparty));
@@ -153,7 +153,7 @@ test('pair page without a pair fill: the prices still come from the two KAS mark
   await expect(page.getByTestId('market-stats')).toHaveAttribute('data-volume-source', 'fills');
   await expect(tile(page, 'stat-trades')).toHaveText('0');
   await expect(page.getByTestId('trades-empty')).toBeVisible();
-  await expect(page.getByTestId('pair-trades-note')).toContainText('Fills of pair orders of this pair');
+  await expect(page.getByTestId('pair-trades-note')).toContainText('Pair fills: volume only');
   await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
   await expect(page.getByTestId('pair-token-details')).toHaveCount(2);
 });
