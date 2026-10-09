@@ -37,7 +37,7 @@ export const ISSUE_CATALOG = {
   ACTIVE_TOO_FAR: e('error', 'The activation time must be within 90 days.'),
   ACTIVE_AFTER_EXPIRY: e('error', 'The order would expire before it activates.'),
   ACTIVE_IN_PAST: e('info', 'The activation time has passed: the order activates immediately.'),
-  DAY_ORDER_ENDS_SOON: e('warning', 'This day order ends at 00:00 UTC in {minutes} minutes.'),
+  DAY_ORDER_ENDS_SOON: e('warning', 'This day order ends by 00:00 UTC, within {minutes} minutes.'),
   // ---- TWAP / DCA / decay
   SLICE_AMOUNT_INVALID: e('error', 'The amount per slice must be greater than zero.'),
   TWAP_EXCEEDS_LIFE: e('error', 'The schedule ({slices} slices every {intervalDaa} DAA) does not fit into the order life.'),

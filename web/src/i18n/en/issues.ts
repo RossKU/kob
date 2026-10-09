@@ -44,7 +44,7 @@ export default {
   'issues.ACTIVE_TOO_FAR': 'The activation time must be within 90 days.',
   'issues.ACTIVE_AFTER_EXPIRY': 'The order would expire before it activates.',
   'issues.ACTIVE_IN_PAST': 'The activation time has passed: the order is active at once.',
-  'issues.DAY_ORDER_ENDS_SOON': 'This day order ends at 00:00 UTC, in {minutes} minutes.',
+  'issues.DAY_ORDER_ENDS_SOON': 'This day order ends by 00:00 UTC, within {minutes} minutes.',
   'issues.SLICE_AMOUNT_INVALID': 'The amount per slice must be greater than zero.',
   'issues.TWAP_EXCEEDS_LIFE': 'The schedule ({slices} slices every {intervalDaa} DAA) does not fit into the order life.',
   'issues.TWAP_SINGLE_SLICE': 'A slice is larger than the order: placed as one slice.',

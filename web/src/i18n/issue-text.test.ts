@@ -60,7 +60,7 @@ describe('issueText: parameter formatting', () => {
     expect(t).toContain('7070…7070');
     expect(t).not.toContain(COV);
     expect(issueText(issue('cancel.stray-other-extension', { outpoint: `${COV}:2`, amount: 5n }), { tokenDecimals: 0 })).toContain('7070…7070:2');
-    expect(issueText(issue('DAY_ORDER_ENDS_SOON', { minutes: 4 }), {})).toBe('This day order ends at 00:00 UTC, in 4 minutes.');
+    expect(issueText(issue('DAY_ORDER_ENDS_SOON', { minutes: 4 }), {})).toBe('This day order ends by 00:00 UTC, within 4 minutes.');
   });
 });
 
