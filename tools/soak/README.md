@@ -143,10 +143,12 @@ again; `setup` and the registry writer refuse a `state.json` whose tokens carry 
 3. `node dist/soak.mjs setup --config run/config.json`: issues TUSD, TETH and TBTC as `KCC20Ref` (kob-wasm `issue`, its default) and
    rewrites `run/registry/tokens.json` (template `kcc20-ref-3x3`, 3 / 3), the executors' allowlist.
 4. Start the executors and bots on the new build. The order templates are unchanged, so the executors' order deployment record is
-   the same; the token programs and the registry are what changed.
+   the same; the token programs and the registry are what changed. To keep one chart per ticker, stop each executor in turn and run
+   `soak.mjs carry-history` on its database (old registry from the backup) before it starts on the new build (see Operate).
 
 With 3 token inputs per transaction a sell-side placement takes at most 3 token UTXOs and a merge takes 2 off the count (chained, see
-"Token consolidation" above).
+"Token consolidation" above); with 3 token outputs the fan-out is a chain of transfers of 2 pieces plus the token change each
+(`fanoutPlan`).
 
 ## Redeploy on a new protocol version (same keys, same TUSD)
 
@@ -179,6 +181,7 @@ cancel every order, retire the receipts, and merge each key's token UTXOs into o
 | cancel an order | `node dist/soak.mjs cancel --config run/config.json <covenant id> ...` (the maker's key, the web app's cancel path) |
 | balances | `node dist/soak.mjs balances --config run/config.json` (JSON: per key the node's KAS total, spendable KAS, and per token the proven holdings: UTXO count, amount, KAS locked in carriers; read-only) |
 | merge every holding | `node dist/soak.mjs consolidate --config run/config.json [<key> ...]` (redeploy helper, bots stopped: each key's plain token UTXOs merged into ONE per token in rounds of up to 8 inputs, fee and change from the freed carriers; the merged output carries 10 KAS, or 1 KAS when the inputs carried less; the outputs are created after the new indexer's start, so it lists them) |
+| carry the history of re-issued tokens | `node dist/soak.mjs carry-history --config run/config.json --db run/<exec>/data/index.sqlite3 --from-registry <old tokens.json> [--to-registry <file>] [--dry-run]` (that executor STOPPED; the new registry defaults to `run/registry/tokens.json`): by ticker, moves the `fill` events (trades, candles, 24 h stats, last price) and the pair fills of each old covenant id to the new id of the same ticker in ONE transaction, so the market pages keep one chart per ticker; orders, token UTXOs and the other events keep the old id. Refuses an old id that still has open / partial orders; records each carry in `meta` (`carried_history:<old id>`), so a re-run is a no-op and a different target is refused. `kob-executor index replay` undoes it (the database is the record log's derived view): run it again after a replay (`src/history-carry.ts`, `test/history-carry.test.ts`) |
 | add a second token | add `token2` to run/config.json (see config.example.json), `scripts/stop.ps1`, `soak.mjs setup` (issues it, rewrites the registry = the executors' allowlist), `scripts/start.ps1`; an interrupted setup whose issuance was broadcast: `setup --recover-issue token2:<txid>` |
 | holdings | `node scripts/holdings.cjs [--seed]` (every key's token UTXOs from the indexer and the trackers, verified on the node; `--seed` writes them into the trackers: a fresh indexer never lists pre-run holdings) |
 | bot fees | `node scripts/fee-compare.mjs --before <ISO> <ISO> --after <ISO> [<ISO>]` (fees, sizes, payloads per action between two windows of `run/state/txs.jsonl`) |
@@ -1197,3 +1200,38 @@ new templates (`KobAsk` 070bb3b2, `KobPair` c95c9234, `KobCondPair` 7b8f1a9e, `K
 + intent path paid on the new router. `/swap` fails with `order_conflict` as before the switch (about half of the attempts on 10-07:
 the market maker amends the bids it takes faster than one quote-to-settle round). The public page (tunnel) shows the carried chart
 history (TUSD/KAS 5m from 10-06, 24h stats) and the recent trades from before the cutoff.
+
+## Redeploy on main 7d826ff (2026-10-10, TN10): the standard 3 / 3 token program, tokens issued again, chart history carried
+
+`m10/soak` moved from 5106845 to main 7d826ff (public master: 29 commits after 68d7edd, the twin of 5106845) plus three soak commits
+(153d331 `carry-history`, bb98ce7 the fan-out chain, this record). **Templates:** the order templates are unchanged; the KCC-20 programs
+follow the merged KCC-20 reference, so the soak tokens of program `KCC20Ref_8x8` (40fef59a, no longer pinned) were issued again as
+`KCC20Ref` (`kcc20-ref-3x3`, 173ca6a7) with the same tickers, supplies and allocations: TUSD 55aac2b5, TETH cf5ee415, TBTC c064d410
+(issuances 13:43:24 to 13:43:37 UTC). The old tokens stay where they are (1,410 token UTXOs, about 2,440 KAS of carriers, not merged).
+**Databases kept** (schema unchanged) and the market history carried to the new ids by ticker (`carry-history`, per database:
+TUSD 26,556 fills and 18,065 pair fills as quote B, TETH 29,692 / 8,615 as base A, TBTC 30,087 / 9,450; the same on both indexers).
+Right after exec-b's carry, its 1 h TUSD candles under the new id equaled exec-a's (still the old build) under the old id, all 91.
+
+Procedure: `invoiceIntent` off and a bots restart (13:31); bots and checker held down (`dist/soak.mjs` renamed to `soak-old.mjs`,
+13:37:08) and both matchers paused; the 120 live orders of both indexers cancelled with `soak-old.mjs cancel` (116 cancels, 4 had
+ended meanwhile) until both indexers listed 0 active orders; balances, database snapshots (`VACUUM INTO`), the old bundle, bindings,
+config, state, registry, trackers and checker state in `run/backup-pre-7d826ff/`. `run/wasm-node` swapped; the token entries removed
+from `run/state.json` and `setup` run with the new bundle (issuance + registry). Each executor in turn was held down by pointing
+`executorBin` at a binary that exits at once and `restart-child.ps1`, its database carried, then started as
+`bin/kob-executor-7d826ff.exe` (same `--borsh`, two `--node`s, `--prefetch-min-lag-blue 30`, `maxLagSecs` 120). The x402 ledger,
+invoices and the payer's record were archived (an empty ledger; the merchant's asset is the new TUSD). `run/web-dist` swapped (built
+with `UI_OUT` into `run/stage-7d826ff/` against the new registry), matchers resumed, bots, checker, UI and the public 8491 instance
+restarted (the tunnel kept running). Bots were down 13:37:08 to 13:46:16 UTC. Config: miner `lowKas` / `highKas` 200,000 / 320,000,
+`consolidate.maxTxPerInterval` 8.
+
+* **The fan-out asked for 1 token input / 5 to 8 outputs** (`KCC20Ref allows 3 token inputs / 3 token outputs per transaction`), so no
+  bot spread its new genesis UTXO for the first 3 minutes. The fan-out is now a chain of transfers of 2 pieces plus the token change,
+  each spending the previous change (bb98ce7, `fanoutPlan` test); chained fan-outs went through from 13:50.
+
+Watch 13:50 to 14:21 UTC: 0 rejected (exec-a 42 submitted / 39 finalized, exec-b 73 / 73), 0 rejects and 0 lies in the indexers
+(both `catching_up` at times, lag 34 to 283 DAA, as before the switch); no new incident besides `health`. Fills per minute
+(14:11 to 14:21): TUSD 3.2, TETH 3.4, TBTC 4.4, pair fills TETH/TUSD 1.3, TBTC/TUSD 0.8 (routed), against 2.3 / 1.9 / 1.9 and 0.6 / 0.8
+in the hour before the switch. The market maker's 39 `INSUFFICIENT_TOKENS` refusals were all before its TUSD fan-out finished. x402
+on the empty ledger: `/native` 2 of 2, `/token` 2 of 2, `/swap` 1 of 2 (one `payment_pending/retry_anchor_spent`), invoice + intent 1
+of 1. The public page shows the carried charts: TUSD/KAS 1 m candles run to 13:36 on the old token and on from 13:49 on the new one,
+at the same price.
