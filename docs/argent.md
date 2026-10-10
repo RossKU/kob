@@ -77,7 +77,10 @@ deployed `KCC20Ref_8x8` (`666da060...`) that token UTXOs carry and orders pin
 (`docs/argent-feedback.md`, item 8). The same holds for the upstream reference: since its merge
 (argent-lang/kcc20-reference `c8a0871`) it is published only as an actor of its `KCC20PublicMint` app,
 with that template context; KOB builds the merged `kcc20.ag` as a single-actor app
-(`contracts/third-party/kcc20-reference/UPSTREAM.md`).
+(`contracts/third-party/kcc20-reference/UPSTREAM.md`). For tokens of that published build the handle is
+exactly the right view: its context field is a constant, so KOB pins `actor_type_handle` of `template/kcc20`
+(prefix 34 B, the 112-byte state open, template `734850b0...`) and the unchanged orders trade them
+(`TemplateId::Kcc20PublicMint`).
 
 ## Importing KOBOrders from another Argent app
 

@@ -112,8 +112,18 @@ The published `KCC20PublicMint` build of the same actor differs from the standal
 token rules: state 1 + 145 bytes (`gen__kcc20_template`, the template hash, before the six fields; constructor likewise),
 the template lengths as fixed-width constants (argent #68), delegates and leader read with `readInputStateWithTemplate`
 (so every holder checks that its leader is a `KCC20`), the template copied into every successor state; 4,031 B, the same
-dispatch tags and limits. KOB's orders, router, indexer, x402 profile and wallets read the token state as the 1 + 112 layout
-at fixed offsets, so adopting that build would change all of them; KOB keeps the standalone build.
+dispatch tags and limits. The context is constant (every UTXO carries the program's own Sil template hash, `9703112e...`) and
+the 112 bytes after it are the standalone state byte for byte, so KOB trades tokens of the published build without any
+order-contract change: it pins the build as its KCC-1 actor-type handle, the view upstream's artifact exports for
+`actor_type<KCC20State>` (prefix 1 + 33 = 34 B ending with the context push, state 112 B, suffix 3,885 B, template
+`734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498`; `TemplateId::Kcc20PublicMint`, registry
+`kcc20-ref-public-mint`, pending review like the other KCC-20 programs). Orders take the token template per order and read
+the state at fixed offsets inside the 112 bytes, the stray guard locates the owner from the end of the redeem script, and
+every token output an order pins is the custody's own prefix (context included), state and suffix, which is what the
+published transfer writes. `crates/kob-tests/tests/kcc20_public_mint_tests.rs` runs every order shape on such tokens
+(custodies of three orders under one published leader included) and refuses holders with another context value or of the
+standalone build; `kob token issue --program public-mint` issues one (a genesis of `KCC20` holders only). The
+published build has the reference's 3 / 3 slots, like the standalone `KCC20Ref`.
 
 Template hashes (all `prefix 1`, state 112):
 

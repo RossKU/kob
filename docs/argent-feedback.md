@@ -191,6 +191,11 @@ differs from the single-actor build.
   `crates/kob-tests/tests/kcc20_reference_tests.rs`. A standard way to publish a single-actor build of
   a library actor (or a stable state view that keeps the 1 + 112 layout) would let token programs and
   their importers share one byte layout.
+* For tokens of the published build, the handle is the view we need: the context field holds the
+  program's own template hash in every UTXO, so the handle of `template/kcc20` (prefix 34 B, the
+  112-byte state open, `734850b0...`) is a fixed template, and KOB's orders custody and fill such
+  tokens unchanged once they pin it (`TemplateId::Kcc20PublicMint`,
+  `crates/kob-tests/tests/kcc20_public_mint_tests.rs`).
 * Repro: append a second actor and an `app` listing both to `kcc20_8x8.ag`, build, and compare
   `sil/KCC20.sil` and the artifact's `template_plan.templates[KCC20].actor_type_handle` with
   `contracts/argent/KOBToken/`.
