@@ -1,7 +1,8 @@
 //! Cross-family routes in ONE transaction, engine-validated for every ordered pair of token families and programs:
 //! the payer's token A is sold into A's bids, the KAS it releases buys token B from B's asks (optionally paying a merchant in KAS
 //! in the same transaction: swap-and-pay). A and B are each one of: the reference KCC-20 (8/8), KaspaCom's third-party KCC20
-//! 0.2.5 (a template of the strict list, 25.5 KB, 8/8), and the two KRON programs (4/5), so every pair covers KCC-20 -> KRON,
+//! 0.2.5 (a template of the strict list, 25.5 KB, 8/8), the published public-mint build of the reference (3/3, its holders carry
+//! the app's context field) and the two KRON programs (4/5), so every pair covers KCC-20 -> KRON,
 //! KRON -> KCC-20, KRON -> KRON (both templates), KCC-20 -> KaspaCom and back. Every transaction runs every order covenant and
 //! every token program in the rusty-kaspa v2.1.0 engine with the exact committed budgets, pays the node's relay floor and is
 //! within the block mass limits.
@@ -14,8 +15,13 @@ use kob_protocol::tx::{finalize, sign_locally, FinalizeOptions, SigPlan};
 use kob_protocol::verify::validate_signed;
 use kob_protocol::Family;
 
-const PROGRAMS: [TemplateId; 4] =
-    [TemplateId::Kcc20Ref8x8, TemplateId::Kcc20KaspaCom025, TemplateId::KronToken2433, TemplateId::KronToken2732];
+const PROGRAMS: [TemplateId; 5] = [
+    TemplateId::Kcc20Ref8x8,
+    TemplateId::Kcc20KaspaCom025,
+    TemplateId::Kcc20PublicMint,
+    TemplateId::KronToken2433,
+    TemplateId::KronToken2732,
+];
 
 fn route_on(p: TemplateId, name: &str) -> kob_protocol::build::SwapRoute {
     match common::scenarios_on(p).into_iter().find(|(n, _)| n.ends_with(name)).unwrap_or_else(|| panic!("no {name} on {}", p.name())).1

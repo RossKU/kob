@@ -28,23 +28,54 @@ fn source_byte(src: &str, name: &str) -> u8 {
     u8::from_str_radix(src[start..].split(';').next().unwrap().trim(), 16).unwrap()
 }
 
+/// The published public-mint build: KOB pins the KCC-1 actor-type handle of upstream's artifact (the compiler-owned
+/// `gen__kcc20_template` push moved into the prefix), not the Sil state cut.
+const PUBLIC_MINT_ARTIFACT: &str = "contracts/artifacts/KCC20PublicMint.json";
+const PUBLIC_MINT_UPSTREAM: &str = "contracts/third-party/kcc20-reference/public-mint.artifact.json";
+const PUBLIC_MINT_SIL: &str = "contracts/third-party/kcc20-reference/KCC20.public-mint.sil";
+
 fn check_kcc20(t: &Template) {
     let json = String::from_utf8(read(&t.source.path)).unwrap();
     let art = kob_protocol::artifacts::parse_artifact(&json).expect("artifact loads");
     let c = art.contracts.values().next().expect("one contract");
-    let off = c.compiled.state_span.offset;
-    let len = c.compiled.state_span.len;
+    let mut off = c.compiled.state_span.offset;
+    let mut len = c.compiled.state_span.len;
     let total = c.compiled.bytecode.len();
-    assert_eq!(t.template_hash, hexs(&c.compiled.template_hash), "{}: template hash", t.id);
+    let bc = &c.compiled.bytecode;
+    if t.source.path == PUBLIC_MINT_ARTIFACT {
+        // the context field (0x20 ‖ the Sil template hash) ends the handle's prefix; the open state is the 112-byte KCC20State
+        assert_eq!(bc[off], 0x20, "{}: context push", t.id);
+        assert_eq!(bc[off + 1..off + 33], c.compiled.template_hash, "{}: the context is the program's own Sil template hash", t.id);
+        off += 33;
+        len -= 33;
+        // the same view as upstream's own artifact names for actor_type<KCC20State>
+        let up: serde_json::Value = serde_json::from_slice(&read(PUBLIC_MINT_UPSTREAM)).unwrap();
+        let tpl = up["argent"]["template_plan"]["templates"].as_array().unwrap().iter().find(|x| x["actor"] == "KCC20").unwrap();
+        let h = &tpl["actor_type_handle"];
+        let bytes = |v: &serde_json::Value| v.as_array().unwrap().iter().map(|b| b.as_u64().unwrap() as u8).collect::<Vec<u8>>();
+        assert_eq!(
+            (h["state"].as_str(), h["context_fields"].clone()),
+            (Some("KCC20State"), serde_json::json!(["gen__kcc20_template"]))
+        );
+        assert_eq!(bytes(&h["template"]["prefix"]), bc[..off], "{}: handle prefix", t.id);
+        assert_eq!(bytes(&h["template"]["suffix"]), bc[off + len..], "{}: handle suffix", t.id);
+        assert_eq!(hexs(&bytes(&h["template"]["hash"])), t.template_hash, "{}: handle hash", t.id);
+        assert_eq!(hexs(&bytes(&tpl["sil_template_hash"])), hexs(&c.compiled.template_hash), "{}: Sil template hash", t.id);
+    } else {
+        assert_eq!(t.template_hash, hexs(&c.compiled.template_hash), "{}: template hash", t.id);
+    }
     assert_eq!(t.prefix_len as usize, off, "{}: prefix_len", t.id);
     assert_eq!(t.state_len as usize, len, "{}: state_len", t.id);
     assert_eq!(t.suffix_len as usize, total - off - len, "{}: suffix_len", t.id);
     // the hash really is the template hash of prefix and suffix of the artifact's own bytecode
-    let bc = &c.compiled.bytecode;
     assert_eq!(hexs(&template_hash(&bc[..off], &bc[off + len..])), t.template_hash, "{}: recomputed template hash", t.id);
     // slot limits: from the compiled program's source, or (third-party programs, no source here) from the artifact's own
     // program information, which must also carry the draft's transfer entries and owner schemes
-    if t.source.path.starts_with("contracts/third-party/") {
+    if t.source.path == PUBLIC_MINT_ARTIFACT {
+        let src = String::from_utf8(read(PUBLIC_MINT_SIL)).unwrap();
+        assert_eq!(t.max_token_inputs as i64, source_int(&src, "MAX_DELEGATES") + 1, "{}: max token inputs", t.id);
+        assert_eq!(t.max_token_outputs as i64, source_int(&src, "MAX_TOKEN_OUTPUTS"), "{}: max token outputs", t.id);
+    } else if t.source.path.starts_with("contracts/third-party/") {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let info = &v["program_information"];
         assert_eq!(info["max_token_inputs"], t.max_token_inputs, "{}: max token inputs (artifact program_information)", t.id);
@@ -87,7 +118,7 @@ fn check_kron(t: &Template) {
 #[test]
 fn shipped_registry_templates_match_the_pinned_programs() {
     let r: Registry = Registry::parse(&String::from_utf8(read("registry/tokens.json")).unwrap()).expect("tokens.json validates");
-    assert_eq!(r.templates.len(), 5);
+    assert_eq!(r.templates.len(), 6);
     for t in &r.templates {
         match t.family {
             Family::Kcc20 => check_kcc20(t),
@@ -99,7 +130,7 @@ fn shipped_registry_templates_match_the_pinned_programs() {
         );
     }
     // the ids the order/issue tooling refers to
-    for id in ["kcc20-ref-3x3", "kcc20-ref-8x8", "kron-2433", "kron-2732", "kcc20-kaspacom-0-2-5"] {
+    for id in ["kcc20-ref-3x3", "kcc20-ref-8x8", "kron-2433", "kron-2732", "kcc20-kaspacom-0-2-5", "kcc20-ref-public-mint"] {
         assert!(r.template(id).is_some(), "template {id} missing");
     }
     // every template of the file is a program this build embeds (same hash, same slots): the strict list is the pinned list

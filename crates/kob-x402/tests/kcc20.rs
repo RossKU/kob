@@ -834,6 +834,58 @@ fn lookalike_token_program_in_an_input_is_rejected() {
     assert_diag(fx.verify(&offer, &with_tx(&honest_p, &tx, &entries)), Diag::TokenTemplateMismatch);
 }
 
+/// The published public-mint build of the reference (`KCC20PublicMint`: the `KCC20` actor of upstream's `KCC20PublicMint`
+/// app, its holders' state opening with the context `gen__kcc20_template`) pays like any other allowlisted KCC-20 program:
+/// the offer names its actor-type handle, the payer's holder is spent by the program's own `transfer`, the merchant
+/// output and the change carry the context, and the engine and the verifier accept it. A holder whose context field
+/// is not the program's template hash, and the standalone build of the same covenant id, are other programs.
+#[test]
+fn published_public_mint_build_pays_and_its_lookalikes_are_rejected() {
+    let pm = TemplateId::Kcc20PublicMint;
+    let fx = Fx::with(token(pm, Custody::Unconditional), |_| {});
+    let offer = fx.offer(400);
+    assert_eq!(offer.extra["token"]["templateHash"], hex(&template(pm).hash));
+    let t = fx.tok(PAYER, 1_000);
+    let p = pay(&fx, &offer, vec![t], vec![]);
+    assert_engine_ok(&fx, &p);
+    let v = fx.verify(&offer, &p).unwrap();
+    fx.chain.submit(&v.tx).unwrap();
+    fx.chain.mine(0);
+    let u = fx.chain.utxo(&v.merchant_output.outpoint).unwrap();
+    let merchant = Kcc20State::p2pk(400, pubkey(MERCHANT), EXT);
+    assert_eq!(u.script_public_key, merchant.spk_with(template(pm)));
+    // the merchant's output is a holder of the published app: 0x6b, then 0x20 and the Sil template hash, then the state
+    let redeem = merchant.redeem_with(template(pm));
+    assert_eq!(redeem[1..34], [&[0x20u8][..], &template(pm).sil_hash[..]].concat());
+    assert_eq!(fx.chain.unspent_of(&Kcc20State::p2pk(600, pubkey(PAYER), EXT).spk_with(template(pm))).len(), 1);
+
+    // (a) a holder of the same covenant id whose context field is another value: the P2SH matches the UTXO, the program
+    //     is not the allowlisted one
+    let fx = Fx::with(token(pm, Custody::Unconditional), |_| {});
+    let offer = fx.offer(400);
+    let honest_p = pay(&fx, &offer, vec![fx.tok(PAYER, 1_000)], vec![]);
+    fx.verify(&offer, &honest_p).unwrap();
+    let mut forged = Kcc20State::p2pk(1_000, pubkey(PAYER), EXT).redeem_with(template(pm));
+    forged[2..34].copy_from_slice(&[0x5a; 32]);
+    let op = fx.chain.add_utxo(CARRIER, pay_to_script_hash_script(&forged), Some(COV));
+    let (mut tx, mut entries) = parse_payload_tx(&fx, &honest_p);
+    tx.inputs[0].previous_outpoint = outpoint_json(op);
+    entries[0] = fx.chain.utxo(&op).unwrap().to_entry();
+    let ss = tx.inputs[0].signature_script.clone();
+    let honest_redeem = Kcc20State::p2pk(1_000, pubkey(PAYER), EXT).redeem_with(template(pm));
+    let at = ss.windows(honest_redeem.len()).position(|w| w == honest_redeem.as_slice()).expect("redeem in the sigscript");
+    tx.inputs[0].signature_script = [&ss[..at], forged.as_slice()].concat();
+    assert_diag(fx.verify(&offer, &with_tx(&honest_p, &tx, &entries)), Diag::TokenTemplateMismatch);
+
+    // (b) the standalone build under the same covenant id, honestly built by the payer
+    let t = fx.tok_state(TemplateId::Kcc20Ref, COV, Kcc20State::p2pk(1_000, pubkey(PAYER), EXT), CARRIER);
+    let mut s = std_send(&offer, vec![t], vec![]);
+    s.token.program = TemplateId::Kcc20Ref;
+    let p = forge(&offer, s);
+    assert_engine_ok(&fx, &p);
+    assert_diag(fx.verify(&offer, &p), Diag::TokenTemplateMismatch);
+}
+
 #[test]
 fn extension_commitment_mismatch_is_rejected() {
     let fx = Fx::new();

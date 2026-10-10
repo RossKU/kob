@@ -52,12 +52,14 @@ fn measure(action: &Action) -> Result<Row, String> {
     })
 }
 
-/// The program pairs of the pair shapes: one per family mix, the 8/8 and P2 programs, and KaspaCom on both sides.
-const PAIRS: [(TemplateId, TemplateId); 7] = [
+/// The program pairs of the pair shapes: one per family mix, the 8/8 and P2 programs, KaspaCom on both sides and the
+/// published public-mint build against the standalone 3/3 reference.
+const PAIRS: [(TemplateId, TemplateId); 8] = [
     (TemplateId::Kcc20Ref, TemplateId::Kcc20Ref),
     (TemplateId::Kcc20Ref8x8, TemplateId::Kcc20Ref8x8),
     (TemplateId::Kcc20P2, TemplateId::Kcc20P2),
     (TemplateId::Kcc20KaspaCom025, TemplateId::Kcc20KaspaCom025),
+    (TemplateId::Kcc20PublicMint, TemplateId::Kcc20Ref),
     (TemplateId::Kcc20Ref, TemplateId::KronToken2433),
     (TemplateId::KronToken2433, TemplateId::Kcc20Ref),
     (TemplateId::KronToken2433, TemplateId::KronToken2732),

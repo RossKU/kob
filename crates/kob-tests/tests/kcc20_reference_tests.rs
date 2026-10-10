@@ -49,6 +49,7 @@ const SIGOP_SCRIPT_UNITS: u64 = 100_000;
 const UPSTREAM_COMMIT: &str = "c8a087117735a1f87c5c6d115fcddeaf2562c784";
 const KCC20_AG_SHA256: &str = "f6131d97368461e74b02507d5ef2d7af57c76226cf945ebbbe9735f0953414e9";
 const PUBLIC_MINT_SIL_SHA256: &str = "9c61d62a1b90ad541bbf5c48ec53faaff1826cbc6f26bd42fa429df5c295316c";
+const PUBLIC_MINT_ARTIFACT_SHA256: &str = "a419f2aa5f18f2917bf1cd69fbf04942ef746fc832f8e1fcd7625582d4c6c771";
 /// `template_hash` of the `KCC20` contract in upstream `fixtures/public-mint/artifact.json` at `c8a0871`.
 const PUBLIC_MINT_TEMPLATE: &str = "9703112ee6e3555107cd168858992b77d3b74f655205b2b463b1f9ec2ec73cf7";
 /// Template hash of the standalone build (argentc `9a9f4b1` and KOB's pinned argentc agree, `scripts/build-argent.sh`).
@@ -210,6 +211,7 @@ fn vendored_reference_is_the_merged_upstream() {
     for (f, want) in [
         ("contracts/third-party/kcc20-reference/kcc20.ag", KCC20_AG_SHA256),
         ("contracts/third-party/kcc20-reference/KCC20.public-mint.sil", PUBLIC_MINT_SIL_SHA256),
+        ("contracts/third-party/kcc20-reference/public-mint.artifact.json", PUBLIC_MINT_ARTIFACT_SHA256),
     ] {
         let bytes = std::fs::read(common::repo_root().join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
         let bytes: Vec<u8> = bytes.into_iter().filter(|b| *b != b'\r').collect();
@@ -236,6 +238,13 @@ fn both_builds_compile_to_the_recorded_templates() {
     }
     // the public-mint build's state is the template hash followed by the standalone state
     assert_eq!(p.state_bytes(7), [vec![0x20], p.hash.clone(), s.state_bytes(7)].concat());
+    // KOB's embedded public-mint program (built by scripts/build-contracts.sh from the same fixture) is this build, cut as
+    // upstream's actor-type handle: the context push joins the prefix, the 112-byte state stays open
+    let emb = kob_protocol::artifacts::template(kob_protocol::artifacts::TemplateId::Kcc20PublicMint);
+    assert_eq!(emb.sil_hash.to_vec(), p.hash);
+    assert_eq!(emb.prefix, [p.prefix.clone(), vec![0x20], p.hash.clone()].concat());
+    assert_eq!((emb.suffix.clone(), emb.state_len), (p.suffix.clone(), 112));
+    assert_eq!(emb.redeem(&s.state_bytes(7)), p.redeem(7));
 }
 
 /// The question behind proposals P2 and `KCC20Opt`: can one transaction settle 16 holders that stay on the standard 3 / 3

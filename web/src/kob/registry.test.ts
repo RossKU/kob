@@ -66,6 +66,10 @@ describe('shipped registries', () => {
     expect(byId['kcc20-ref-8x8']).toMatchObject({ program: 'KCC20Ref_8x8', matchesPinned: true });
     expect(byId['kron-2433']).toMatchObject({ program: 'KronToken2433', matchesPinned: true, problems: [] });
     expect(byId['kron-2732']).toMatchObject({ program: 'KronToken2732', matchesPinned: true, problems: [] });
+    // the published public-mint build of the reference: pinned as its actor-type handle (the context push in a 34-byte prefix)
+    expect(byId['kcc20-ref-public-mint']).toMatchObject({ program: 'KCC20PublicMint', matchesPinned: true, problems: [] });
+    const pm = r.templates.find((t) => t.id === 'kcc20-ref-public-mint')!;
+    expect([pm.prefix_len, pm.state_len, pm.suffix_len, pm.max_token_inputs, pm.review_status]).toEqual([34, 112, 3885, 3, 'pending-review']);
   });
 
   it('the example TN10 registry parses; its pending, unverified tokens are tradable (their templates are reviewed and pinned)', () => {

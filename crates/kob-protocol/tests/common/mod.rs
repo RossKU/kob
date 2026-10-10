@@ -675,13 +675,14 @@ pub fn scenarios() -> Vec<(String, Action)> {
 }
 
 /// Every token program KOB builds for.
-pub const PROGRAMS: [TemplateId; 8] = [
+pub const PROGRAMS: [TemplateId; 9] = [
     TemplateId::Kcc20Ref,
     TemplateId::Kcc20Ref4x5,
     TemplateId::Kcc20Ref8x8,
     TemplateId::Kcc20Ref16x16,
     TemplateId::Kcc20P2,
     TemplateId::Kcc20KaspaCom025,
+    TemplateId::Kcc20PublicMint,
     TemplateId::KronToken2433,
     TemplateId::KronToken2732,
 ];

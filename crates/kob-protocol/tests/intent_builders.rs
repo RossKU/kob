@@ -4,7 +4,7 @@
 //!
 //! The router reads every token under the program the intent's state names (open ICC handles), so every test runs on
 //! several token programs ([`RUNS`]): the 8/8 program KOB issues, the 3/3 reference program, a swap across the two,
-//! and the KRON programs (2,433 B and 2,732 B) for a KRON token A (`TokenToKasKron_*`, `TokenSwapKron_*`, sold into
+//! the published public-mint build of the reference (3/3; token A and token B), and the KRON programs (2,433 B and 2,732 B) for a KRON token A (`TokenToKasKron_*`, `TokenSwapKron_*`, sold into
 //! `KobBidKron`s; token B stays KCC-20).
 //!
 //! Positive: every one of the 30 router actors (fill shapes) is created, executed and validated on every program pair
@@ -34,6 +34,8 @@ const P8: TemplateId = TemplateId::Kcc20Ref8x8;
 const P3: TemplateId = TemplateId::Kcc20Ref;
 const K1: TemplateId = TemplateId::KronToken2433;
 const K2: TemplateId = TemplateId::KronToken2732;
+/// The published public-mint build of the reference (3/3, the app's context field in the template prefix).
+const PM: TemplateId = TemplateId::Kcc20PublicMint;
 const TOK_A: [u8; 32] = TOKEN_COV;
 const TOK_B: [u8; 32] = TOKEN_B;
 const PAYER: u8 = 11;
@@ -50,8 +52,15 @@ struct Progs {
     b: TemplateId,
 }
 /// The program pairs every actor runs on (those of its token A family).
-const RUNS: [Progs; 5] =
-    [Progs { a: P8, b: P8 }, Progs { a: P3, b: P3 }, Progs { a: P3, b: P8 }, Progs { a: K1, b: P8 }, Progs { a: K2, b: P3 }];
+const RUNS: [Progs; 7] = [
+    Progs { a: P8, b: P8 },
+    Progs { a: P3, b: P3 },
+    Progs { a: P3, b: P8 },
+    Progs { a: K1, b: P8 },
+    Progs { a: K2, b: P3 },
+    Progs { a: PM, b: PM },
+    Progs { a: K1, b: PM },
+];
 
 /// The runs of `actor`: a KasToToken intent has no token A (one run per token B program), a token intent runs on
 /// every pair of its family. Pairs whose programs cannot run the shape are returned too (`fits` false).
@@ -287,7 +296,7 @@ fn every_router_shape_is_created_executed_and_validated() {
             let (asks, bids) = legs_for(actor, p);
             let (state, value, lock, merchant_kas) = state_for(actor, p, &asks, &bids);
             if !fits {
-                assert_eq!((p.a, actor.shape.bids), (P3, 3), "{} {p:?}", actor.name);
+                assert!(matches!(p.a, P3 | PM) && actor.shape.bids == 3, "{} {p:?}: only a 3/3 program refuses a shape", actor.name);
                 let e = build_create_intent(&create_req(actor, &state, p, value, lock), &intent_budgets).unwrap_err();
                 assert!(e.to_string().contains("no room"), "{} {p:?}: {e}", actor.name);
                 continue;
