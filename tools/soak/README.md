@@ -1236,3 +1236,31 @@ in the hour before the switch. The market maker's 39 `INSUFFICIENT_TOKENS` refus
 on the empty ledger: `/native` 2 of 2, `/token` 2 of 2, `/swap` 1 of 2 (one `payment_pending/retry_anchor_spent`), invoice + intent 1
 of 1. The public page shows the carried charts: TUSD/KAS 1 m candles run to 13:36 on the old token and on from 13:49 on the new one,
 at the same price.
+
+## Fixes of 2026-10-11 (TN10, m10/soak): self-trades, thin ladders, restarts, incidents, kills
+
+Rolled out one child at a time, nothing stopped (bots 22:03 / 22:17 / 22:38 UTC, checker 22:18, exec-b 22:42 then exec-a 22:45 on
+`bin/kob-executor-1fe051e.exe`; config backup `run/config.json.pre-1fe051e`, bundle backup `dist/soak-pre-selftrade.mjs`).
+
+* **Self-trades** (a960246, ea0baf2). The web app read an unarmed stop (no KAS price) as price 0: a trader's stop-loss sell refused
+  every buy of that trader as SELF_TRADE. The retry after a self-trade cancel planned from the lagging listing and met the cancelled
+  order again (879 "already has this transaction"). Now the refusal's own orders are cancelled and the plan repeated without them.
+* **Market starts** (ea0baf2): pair market orders of 100 KAS or more were refused MARKET_START_UNVERIFIED (no independent reference);
+  the second executor (`indexerUrlB`) is the start reference now, as the app's `extraIndexerUrls`.
+* **Thin ladders** (ea0baf2, 628aa16): the market maker re-amended orders it had just amended, placed unlisted levels again, ran its
+  three books concurrently over one key, and its KAS was spread over 1,227 coins (FUNDING_FRAGMENTED). One lock per key, own pending
+  spends (reservations and the key's transactions in the node's mempool: they waited up to an hour) taken out of every plan, held
+  levels, 2 transactions per side and tick, and a merge of each key's 80 smallest KAS coins once a minute.
+* **Restarts** (c7e3c0d): no crash since 10-06; all were operator restarts or start failures of deploy steps (bundle renamed,
+  `executorBin` pointed at a binary that exits). `scripts/hold-child.ps1` and the missing-file wait replace those steps.
+* **Incidents** (d8c1e77, 1fe051e): ioc-fok 48 of 10-06 were the slope-overflow gate (fixed by 7c9e76a); 10 checker false positives
+  (book-lag stop the checker did not see); 60 real: every IOC / FOK end was a normal-rate refund (fixed: kill at the priority rate).
+  all-in 2: checker rounding, fixed by f030c4c. trigger 3 errors: checker read a stop from before its trail (fixed); 10 warnings are
+  unverifiable evidence. Still open: a kill's rate is capped by the order's refund tip (most kills and refunds go at the 100 floor),
+  and a stuck kill is never re-priced or rebroadcast.
+
+Watch 22:38 to 23:06 UTC (bots counters since the 22:38 restart): trader orders 220 of 280 placed (SELF_TRADE 51 refusals, each
+cleared and retried; MARKET_START_UNVERIFIED 0; FUNDING_FRAGMENTED 0), KAS-book market 18 of 27 and pair market 20 of 32 (before:
+22 of 264 and 12 of 242), market maker placements 46 of 46, transaction conflicts 49 of 630 (8 %, 22 % before; most are amends of
+orders a matcher filled while the listing lagged), ladders 17 / 18 orders on TETH / TBTC, the market maker's KAS coins 1,227 -> 50,
+kills submitted as `kind=kill`. No new incident besides `health`.
