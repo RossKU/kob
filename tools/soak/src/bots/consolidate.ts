@@ -72,7 +72,7 @@ export async function consolidateTokens(env: Env, w: BotWallet, m: TokenMarket, 
       w.stats.inc(`consolidate_merged:${m.ticker}`, fresh.length);
       w.stats.inc('consolidate_freed_sompi', Number(carriersIn - CARRIER));
       const at = built.tx.outputs.findIndex((o) => o.covenant?.covenantId === m.covenantId);
-      if (at < 0) break;
+      if (at < 0 || !r.txid) break;
       const state: Kcc20State = {
         amount: total.toString(),
         owner: w.pk,
