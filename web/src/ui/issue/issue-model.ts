@@ -1,6 +1,8 @@
 // Pure model of the issuance view: UI state (strings) -> `IssueForm`, the wallet's remaining share, display helpers and the result
 // view model. No DOM, no i18n: rows carry i18n KEY SUFFIXES, the component translates them. Amount arithmetic is exact (bigint).
-import { formatUnits, parseDecimal, registryEntryFromIssue, type IssueForm, type IssueLimits, type IssuePlan, type IssueToken } from '../../kob/issue';
+import {
+  formatUnits, parseDecimal, registryEntryFromIssue, type IssueForm, type IssueLimits, type IssuePlan, type IssueProgramChoice, type IssueToken,
+} from '../../kob/issue';
 import type { PlanIssue } from '../../kob/plan-types';
 import type { Hex } from '../../kob/types';
 import { groupDigits, shortId } from '../kit/format';
@@ -17,6 +19,8 @@ export interface HolderRow {
 
 /** Everything the form holds, as the user typed it. */
 export interface IssueUiState {
+  /** the token program: KOB's standard (default) or the reference's published public-mint build */
+  program: IssueProgramChoice;
   name: string;
   ticker: string;
   /** whole number as text ("8") so an emptied field is representable */
@@ -32,7 +36,7 @@ export interface IssueUiState {
 }
 
 export function emptyUiState(): IssueUiState {
-  return { name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', website: '' };
+  return { program: 'standard', name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', website: '' };
 }
 
 // ------------------------------------------------------------------------------------------------ small filters
@@ -117,6 +121,7 @@ export function formToIssueForm(state: IssueUiState, walletKey: Hex | null): Iss
     for (const h of state.extras) holders.push({ owner: h.owner.trim().toLowerCase(), ownerScheme: 0, amount: h.amount.trim() });
   }
   return {
+    ...(state.program === 'public-mint' ? { program: 'public-mint' as const } : {}),
     name: state.name,
     ticker: state.ticker,
     decimals: parseDecimalsText(state.decimals),

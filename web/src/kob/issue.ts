@@ -1,7 +1,8 @@
 // Token issuance ("kob token issue" in the browser): form model, validation and planning over the kob-wasm `issue` export.
 //
 // The genesis is ONE transaction: the wallet's P2PK funding inputs (input 0 authorises the KIP-20 genesis group) -> 1..N token outputs of the
-// fixed-supply reference program `KCC20Ref_8x8` (covenant id derived as consensus does) + change. All protocol logic lives in Rust
+// fixed-supply KCC-20 reference program in its standard 3 / 3 configuration, `KCC20Ref` (or, chosen in the form, the published public-mint
+// build `KCC20PublicMint`; covenant id derived as consensus does) + change. All protocol logic lives in Rust
 // (`kob-protocol::issue`); this module only turns a human form into the wasm spec, selects funding and types the result. The result's
 // `built` is an ordinary `BuiltTx`, so the wallet signing pipeline, `kob.finalize` and `kob.validate` handle it unchanged.
 import { schnorr } from '@noble/curves/secp256k1.js';
@@ -29,7 +30,8 @@ export interface IssueLimits {
   maxDisplayChars: number;
   ownerSchemes: number[];
   covenantOwnerScheme: number;
-  program: 'KCC20Ref_8x8';
+  /** KOB's standard program (the default): the KCC-20 reference with its 3 / 3 slots */
+  program: 'KCC20Ref';
   registryTemplateId: string;
   /** the published public-mint build of the reference (request `program: 'public-mint'`): 3 / 3 slots */
   publicMint: { program: 'KCC20PublicMint'; registryTemplateId: string; maxTokenInputs: number; maxTokenOutputs: number };
@@ -66,8 +68,8 @@ export interface IssueSpec {
   icon?: string;
   website?: string;
   network?: string;
-  /** `8x8` (default, `KCC20Ref_8x8`) or `public-mint` (`KCC20PublicMint`, the published build of the reference) */
-  program?: '8x8' | 'public-mint';
+  /** `3x3` (default, `KCC20Ref`) or `public-mint` (`KCC20PublicMint`, the published build of the reference) */
+  program?: '3x3' | 'public-mint';
 }
 
 export interface IssueTokenOutput {
@@ -81,7 +83,7 @@ export interface IssueTokenOutput {
 
 export interface IssueToken {
   covenantId: Hex;
-  program: 'KCC20Ref_8x8' | 'KCC20PublicMint';
+  program: 'KCC20Ref' | 'KCC20PublicMint';
   templateHash: Hex;
   extensionCommitment: Hex;
   name: string;
@@ -223,7 +225,12 @@ export interface IssueHolderForm {
   borrowGuard?: Hex;
 }
 
+/** The program a form issues: KOB's standard (the KCC-20 reference, 3 / 3) or the reference's published public-mint build (also 3 / 3). */
+export type IssueProgramChoice = 'standard' | 'public-mint';
+
 export interface IssueForm {
+  /** absent = `standard` */
+  program?: IssueProgramChoice;
   name: string;
   /** exactly as it will be issued: 2..12 characters A-Z 0-9 */
   ticker: string;
@@ -319,13 +326,14 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
   const holders: ParsedForm['holders'] = [];
   if (form.holders.length > limits.maxGenesisOutputs) {
     err('holders.too_many', `At most ${limits.maxGenesisOutputs} holders can receive tokens in the issuance.`, 'holders', { max: limits.maxGenesisOutputs });
-  } else if (form.holders.length > limits.maxTokenOutputs) {
+  } else if (form.holders.length > slotsOf(form, limits).maxTokenOutputs) {
+    const slots = slotsOf(form, limits);
     issues.push(
       issue(
         'holders.consolidation',
-        `More than ${limits.maxTokenOutputs} holders: moving these token outputs together later takes several transfers of at most ${limits.maxTokenInputs} inputs each.`,
+        `More than ${slots.maxTokenOutputs} holders: moving these token outputs together later takes several transfers of at most ${slots.maxTokenInputs} inputs each.`,
         'holders',
-        { holders: form.holders.length, maxInputs: limits.maxTokenInputs },
+        { holders: form.holders.length, maxInputs: slots.maxTokenInputs },
         'warning',
       ),
     );
@@ -417,6 +425,11 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
   disp(form.icon, 'icon');
 
   return { issues, parsed: ok && supply !== null ? { supply, holders, carrier } : null };
+}
+
+/** Token inputs / outputs per transfer of the program the form issues. */
+export function slotsOf(form: Pick<IssueForm, 'program'>, limits: IssueLimits): { maxTokenInputs: number; maxTokenOutputs: number } {
+  return form.program === 'public-mint' ? limits.publicMint : limits;
 }
 
 /** Validates an issuance form: `error` issues block the plan, `warning` issues are shown. `registryTickers` = tickers already in the registry. */
@@ -536,6 +549,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
     carrier: parsed.carrier.toString(),
     feeRate: feeRate.toString(),
     changeTo: (opts.changeTo ?? maker).toLowerCase(),
+    ...(form.program === 'public-mint' ? { program: 'public-mint' as const } : {}),
     ...(form.allowBorrow ? { allowBorrow: true } : {}),
     ...(form.description.trim() ? { description: form.description.trim() } : {}),
     ...(form.icon.trim() ? { icon: form.icon.trim() } : {}),
@@ -574,7 +588,8 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
 
 /**
  * The registry entry to submit by pull request (`registry/tokens.json`): status `pending-review`, `verified: false`, program = the
- * pinned `kcc20-ref-8x8` template. Checks that the docs describe this token before handing them out.
+ * pinned template of the issued program (`kcc20-ref-3x3`, or `kcc20-ref-public-mint`). Checks that the docs describe this token before
+ * handing them out.
  */
 export function registryEntryFromIssue(token: IssueToken, docs: IssueDocs): RegistryTokenEntry {
   const e = docs.registryEntry;

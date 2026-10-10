@@ -236,7 +236,7 @@ describe('a real issuance from a model-built form', () => {
 
     // review summary
     const sum = reviewSummary(plan, wallet);
-    expect(sum).toMatchObject({ name: 'Model Coin', ticker: 'MODL', decimals: 2, supplyBase: 100050n, supplyHuman: '1,000.5', carrierEach: 250_000_000n, carrierTotal: 750_000_000n, outputCount: 3, program: 'KCC20Ref_8x8' });
+    expect(sum).toMatchObject({ name: 'Model Coin', ticker: 'MODL', decimals: 2, supplyBase: 100050n, supplyHuman: '1,000.5', carrierEach: 250_000_000n, carrierTotal: 750_000_000n, outputCount: 3, program: 'KCC20Ref' });
     expect(sum.fee).toBe(BigInt(plan.built.fee.fee));
     expect(sum.holders.map((h) => [h.human, h.isWallet])).toEqual([['850.25', true], ['100.25', false], ['50', false]]);
     expect(holderViews(plan.token, null).some((h) => h.isWallet)).toBe(false);

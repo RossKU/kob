@@ -1,18 +1,24 @@
 // Token issuance view (ui/issue). Flat dotted keys, {param} placeholders.
 export default {
   'issue.title': 'Issue a token',
-  'issue.intro': 'Create a new fixed-supply token on KOB\'s provisional KCC-20 program. The whole supply is minted in one transaction and sent to the holders you choose.',
+  'issue.intro': 'Create a new fixed-supply token on the KCC-20 reference program. The whole supply is minted in one transaction and sent to the holders you choose.',
 
   // fixed-supply explanation
   'issue.fixed.title': 'What you are creating',
   'issue.fixed.supply': 'The supply is fixed forever: there is no mint function, so nobody (including you) can create more tokens later.',
   'issue.fixed.noBurn': 'There is no burn function either: the program cannot destroy tokens.',
-  'issue.fixed.program': 'Program KCC20Ref_8x8: KOB\'s provisional KCC-20 program (up to 8 token inputs and 8 outputs per transfer). KOB will follow KCC-20 as finalized; tokens issued now stay on this program.',
+  'issue.fixed.program': 'Program KCC20Ref: the KCC-20 reference in its standard configuration (up to 3 token inputs and 3 outputs per transfer), the program KOB issues. Moving more than 3 token outputs together takes several transfers. Tokens issued now stay on this program.',
+  'issue.fixed.programPublicMint': 'Program KCC20PublicMint: the KCC20 actor of the reference\'s published public-mint app (up to 3 token inputs and 3 outputs per transfer). Only token holders are created: no public minter and no seed, so the supply stays fixed. KOB has not finished reviewing this build. Tokens issued now stay on this program.',
   'issue.fixed.unaudited': 'UNAUDITED: this program has not been audited. Issue only what you can afford to lose and do not present it as safe.',
   'issue.fixed.carrier': 'Every token output locks some KAS (the carrier). It stays in that token UTXO and returns to the holder when the tokens are spent or consolidated.',
   'issue.fixed.custody': 'Tokens sit in covenant outputs, so ordinary wallets do not show them. Only this app can show tokens issued here, by tracking them in this browser.',
 
   // form
+  'issue.section.program': 'Token program',
+  'issue.program.standard': 'KCC-20 reference (standard)',
+  'issue.program.standard.hint': 'KCC20Ref, the reference program in its standard configuration: 3 token inputs and 3 outputs per transfer. Recommended.',
+  'issue.program.publicMint': 'Published public-mint build',
+  'issue.program.publicMint.hint': 'KCC20PublicMint: the holders of the reference\'s published public-mint app, also 3 / 3. A fixed supply all the same (no minter is created). Its review on KOB is still pending.',
   'issue.section.token': 'Token',
   'issue.section.holders': 'Holders',
   'issue.section.carrier': 'Carrier',

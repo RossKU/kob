@@ -14,6 +14,10 @@ test.describe('token issuance', () => {
 
     await expect(page.getByTestId('issue-form')).toBeVisible();
     await expect(page.getByTestId('issue-review')).toBeDisabled();
+    // the program: KOB's standard 3 / 3 reference by default, the published public-mint build as the one alternative
+    await expect(page.getByTestId('issue-program-standard')).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByTestId('issue-program').getByRole('radio')).toHaveCount(2);
+    await expect(page.getByTestId('issue-fixed-program')).toContainText('KCC20Ref');
     await page.getByTestId('issue-name').fill('New Example Coin');
     // the ticker is uppercased as typed
     await page.getByTestId('issue-ticker').fill('newkcc');
@@ -25,6 +29,14 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('issue-holder-0-amount')).toHaveValue('1000000');
     await expect(page.getByTestId('issue-summary')).toBeVisible();
     await expect(page.getByTestId('issue-summary-supply')).toContainText('1,000,000');
+    await expect(page.getByTestId('issue-summary')).toContainText('KCC20Ref');
+    // switching to the public-mint build plans that program; back to the standard one for the issuance below
+    await page.getByTestId('issue-program-public-mint').click();
+    await expect(page.getByTestId('issue-program-public-mint')).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByTestId('issue-summary')).toContainText('KCC20PublicMint');
+    await expect(page.getByTestId('issue-fixed-program')).toContainText('KCC20PublicMint');
+    await page.getByTestId('issue-program-standard').click();
+    await expect(page.getByTestId('issue-summary')).not.toContainText('KCC20PublicMint');
 
     await page.getByTestId('issue-review').click();
     await expect(page.getByTestId('confirm-screen')).toBeVisible();
@@ -51,12 +63,12 @@ test.describe('token issuance', () => {
     // the wallet's token output is remembered by the token tracker (test hook window.__kob, present with features.test)
     const tracked = await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk), TEST_KEYS.alice.pubkey);
     expect(tracked).toHaveLength(1);
-    expect(tracked[0]).toMatchObject({ transactionId: genesis.txid, index: 0, tokenCovId: tokenId, program: 'KCC20Ref_8x8' });
+    expect(tracked[0]).toMatchObject({ transactionId: genesis.txid, index: 0, tokenCovId: tokenId, program: 'KCC20Ref' });
     expect(tracked[0].state.amount).toBe('100000000');
 
     // registry entry: pending review, unverified
     const entry = JSON.parse((await page.getByTestId('issue-registry-entry').textContent()) ?? '');
-    expect(entry).toMatchObject({ ticker: 'NEWKCC', name: 'New Example Coin', decimals: 2, covenant_id: tokenId, status: 'pending-review', verified: false });
+    expect(entry).toMatchObject({ ticker: 'NEWKCC', name: 'New Example Coin', decimals: 2, covenant_id: tokenId, template_id: 'kcc20-ref-3x3', max_token_inputs: 3, status: 'pending-review', verified: false });
     await expect(page.getByTestId('issue-result-unverified')).toBeVisible();
     await expect(page.getByTestId('issue-result-listing-note')).toContainText('registry/tokens.json');
 

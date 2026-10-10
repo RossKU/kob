@@ -1,4 +1,5 @@
-// Token issuance (`kob token issue` in the browser): a fixed-supply KCC-20 token (program KCC20Ref_8x8). Form -> live validation ->
+// Token issuance (`kob token issue` in the browser): a fixed-supply KCC-20 token on the KCC-20 reference program, KOB's standard 3 / 3
+// build `KCC20Ref` by default or the reference's published public-mint build `KCC20PublicMint`. Form -> live validation ->
 // debounced `planIssue` -> summary -> the shared pre-sign screen (ConfirmSign) -> tracker + result panel with the registry entry.
 // All protocol logic is in kob/issue.ts (kob-wasm); this view only collects strings and renders findings.
 import { useMemo, useState } from 'preact/hooks';
@@ -6,12 +7,12 @@ import { readFees } from '../../app/env';
 import { useServices, useWallet } from '../../app/context';
 import { t } from '../../i18n';
 import { issueText } from '../../i18n/issue-text';
-import { issueLimits, issuedTokenUtxos, validateIssueForm, type IssueLimits, type IssuePlan } from '../../kob/issue';
+import { issueLimits, issuedTokenUtxos, validateIssueForm, type IssueLimits, type IssuePlan, type IssueProgramChoice } from '../../kob/issue';
 import type { PlanIssue } from '../../kob/plan-types';
 import { isKeyOwned } from '../../kob/token-state';
 import type { Services } from '../../app/services';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
-import { Badge, Banner, Button, ErrorBanner, Field, KeyValueList, Section, Spinner, kasText, shortId, useAsync } from '../kit';
+import { Badge, Banner, Button, ErrorBanner, Field, KeyValueList, Section, Segmented, Spinner, kasText, shortId, useAsync } from '../kit';
 import {
   defaultCarrierText, emptyUiState, filterDecimals, filterOwner, filterTicker, formToIssueForm, groupByField, modelIssues, parseDecimalsText, remainingText,
   reviewSummary, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState,
@@ -159,13 +160,31 @@ export function IssueView() {
         <p class="muted">{t('issue.intro')}</p>
       </div>
 
-      <FixedSupplyNotes />
+      <FixedSupplyNotes program={state.program} />
 
       {limitsResult.error ? <ErrorBanner error={limitsResult.error} data-testid="issue-limits-error" /> : null}
 
       {renderWalletGate()}
 
       <div class="stack" data-testid="issue-form">
+        <Section title={t('issue.section.program')} data-testid="issue-program-section">
+          <div class="stack-sm">
+            <Segmented<IssueProgramChoice>
+              aria-label={t('issue.section.program')}
+              value={state.program}
+              onChange={(v) => set({ program: v })}
+              options={[
+                { value: 'standard', label: t('issue.program.standard'), 'data-testid': 'issue-program-standard' },
+                { value: 'public-mint', label: t('issue.program.publicMint'), 'data-testid': 'issue-program-public-mint' },
+              ]}
+              data-testid="issue-program"
+            />
+            <p class="muted" data-testid="issue-program-hint">
+              {t(state.program === 'public-mint' ? 'issue.program.publicMint.hint' : 'issue.program.standard.hint')}
+            </p>
+          </div>
+        </Section>
+
         <Section title={t('issue.section.token')}>
           <div class="issue-grid">
             <Field
@@ -523,13 +542,13 @@ export function IssueView() {
 }
 
 /** The fixed-supply explanation block: what the token can and cannot do, and the reference program's unaudited status. */
-function FixedSupplyNotes() {
+function FixedSupplyNotes({ program }: { program: IssueProgramChoice }) {
   return (
     <Section title={t('issue.fixed.title')} data-testid="issue-fixed-supply">
       <ul class="issue-notes">
         <li>{t('issue.fixed.supply')}</li>
         <li>{t('issue.fixed.noBurn')}</li>
-        <li>{t('issue.fixed.program')}</li>
+        <li data-testid="issue-fixed-program">{t(program === 'public-mint' ? 'issue.fixed.programPublicMint' : 'issue.fixed.program')}</li>
         <li>{t('issue.fixed.carrier')}</li>
         <li>{t('issue.fixed.custody')}</li>
       </ul>
