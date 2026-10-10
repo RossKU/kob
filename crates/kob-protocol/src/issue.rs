@@ -1,13 +1,16 @@
 //! Fixed-supply KCC-20 issuance: program pinning, genesis transaction builder, verification and the
 //! off-chain documents (supply, metadata, registry entry) that describe the issued token.
 //!
-//! What is issued ([`IssueProgram`]): by default the reference KCC-20 program (argent kcc20-reference c8a0871) compiled
-//! with the KOB slot limits 8 token inputs / 8 token outputs per transfer (`contracts/kcc20/variants/KCC20Ref_8x8.sil`);
-//! or the `KCC20` actor of upstream's published `KCC20PublicMint` app (`contracts/third-party/kcc20-reference`, 3 / 3
-//! slots), whose holders carry the compiler-owned context `gen__kcc20_template` (the program's own Sil template hash)
-//! before the 112-byte state: the genesis then holds only `KCC20` holders of that app (no `PublicMint`, no `TokenSeed`),
-//! which every wallet of the app reads as its own token. Neither program has a mint, burn or public-mint entry, so the
-//! supply is exactly the sum of the genesis outputs, fixed forever. Proposal P2 is not used.
+//! What is issued ([`IssueProgram`]): by default the reference KCC-20 program (argent kcc20-reference c8a0871) in its
+//! standard configuration, 3 token inputs / 3 token outputs per transfer, built as a single-actor app
+//! (`contracts/kcc20/KCC20Ref.sil`, registry `kcc20-ref-3x3`): KOB's standard token program. Second option: the `KCC20`
+//! actor of upstream's published `KCC20PublicMint` app (`contracts/third-party/kcc20-reference`, also 3 / 3), whose
+//! holders carry the compiler-owned context `gen__kcc20_template` (the program's own Sil template hash) before the
+//! 112-byte state: the genesis then holds only `KCC20` holders of that app (no `PublicMint`, no `TokenSeed`), which every
+//! wallet of the app reads as its own token. Neither program has a mint, burn or public-mint entry, so the supply is
+//! exactly the sum of the genesis outputs, fixed forever. The 8 / 8 slot variant (`KCC20Ref_8x8`) is a prototype: the CLI
+//! issues it only when it is named `8x8-prototype`, the wasm surface and the web app never. Proposal P2 and `KCC20Opt`
+//! are not used.
 //!
 //! The genesis is ONE transaction: a plain P2PK funding input (input 0) authorises a KIP-20 genesis
 //! group of 1..N token outputs whose covenant id is derived exactly as consensus does
@@ -66,8 +69,8 @@ pub const MAX_SUPPLY: u64 = 2_900_000_000_000_000_000;
 /// Default KAS carried by every token UTXO of the genesis group: 10 KAS. Not the order carrier
 /// (`defaults::DEFAULT_ORDER_CARRIER`, 2 KAS): a genesis group puts many token outputs in one transaction, and a token
 /// output's KIP-9 storage mass is `4 × 10^12 / carrier` (plurality 2) against the [`MAX_STANDARD_MASS`] this tool keeps
-/// a genesis within, so 10 KAS outputs fit 24 holders and 2 KAS outputs only 5 (fewer than the program's 8 token
-/// outputs per transaction; `genesis_holders_at_the_default_carrier`). The relay fee does not depend on it.
+/// a genesis within, so 10 KAS outputs fit 24 holders and 2 KAS outputs only 5 (`genesis_holders_at_the_default_carrier`).
+/// The relay fee does not depend on it.
 pub const DEFAULT_CARRIER: u64 = 1_000_000_000;
 /// Default fee rate, sompi per gram: the node's relay floor `rate * max(compute, 2 * size)`
 /// ([`crate::tx::min_fee`]; storage mass needs no relay fee).
@@ -75,58 +78,84 @@ pub const DEFAULT_FEE_RATE: u64 = 100;
 /// Default `extension_commitment` of a fixed-supply standard token: 32 zero bytes, the value the
 /// KCC-20 conformance vectors use for a token without extended state.
 pub const EXTENSION_FIXED_SUPPLY: [u8; 32] = [0u8; 32];
-/// Hard cap on token outputs in one genesis group (a warning is raised above the 8-output slot limit).
+/// Hard cap on token outputs in one genesis group (a warning is raised above the program's output slot limit).
 pub const MAX_GENESIS_OUTPUTS: usize = 64;
 /// Standard transaction mass limit (relay policy).
 pub const MAX_STANDARD_MASS: u64 = 100_000;
 /// Registry class of the extension commitment used by the tool.
 pub const EXTENSION_CLASS: &str = "fixed-supply-standard";
-/// Id of the pinned program in `registry/tokens.json` that KOB-issued tokens run by default (reference KCC-20, 8/8 slots).
-pub const REGISTRY_TEMPLATE_ID: &str = "kcc20-ref-8x8";
+/// Id of the pinned program in `registry/tokens.json` that KOB-issued tokens run by default (reference KCC-20, 3/3 slots).
+pub const REGISTRY_TEMPLATE_ID: &str = "kcc20-ref-3x3";
 /// Id of the published public-mint build in `registry/tokens.json` ([`IssueProgram::PublicMint`]).
 pub const REGISTRY_TEMPLATE_ID_PUBLIC_MINT: &str = "kcc20-ref-public-mint";
+/// Id of the 8 / 8 prototype in `registry/tokens.json` ([`IssueProgram::Ref8x8Prototype`]).
+pub const REGISTRY_TEMPLATE_ID_8X8_PROTOTYPE: &str = "kcc20-ref-8x8";
 
 const SIGOP_SCRIPT_UNITS: u64 = 100_000;
 const FREE_UNITS: u64 = 9_999;
 const UNITS_PER_BUDGET: u64 = 10_000;
-const ARTIFACT_JSON: &str = include_str!("../../../contracts/artifacts/KCC20Ref_8x8.json");
-const ARTIFACT_NAME: &str = "KCC20Ref_8x8";
+const ARTIFACT_JSON: &str = include_str!("../../../contracts/artifacts/KCC20Ref.json");
+const ARTIFACT_NAME: &str = "KCC20Ref";
+const PROTOTYPE_8X8_JSON: &str = include_str!("../../../contracts/artifacts/KCC20Ref_8x8.json");
+const PROTOTYPE_8X8_NAME: &str = "KCC20Ref_8x8";
 const PUBLIC_MINT_JSON: &str = include_str!("../../../contracts/artifacts/KCC20PublicMint.json");
 const PUBLIC_MINT_NAME: &str = "KCC20PublicMint";
 
 /// The token program an issuance runs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum IssueProgram {
-    /// The reference KCC-20 program with KOB's 8 / 8 slot limits (`KCC20Ref_8x8`, registry `kcc20-ref-8x8`).
+    /// KOB's standard: the reference KCC-20 program in its default configuration, 3 / 3 slots (`KCC20Ref`, registry
+    /// `kcc20-ref-3x3`).
     #[default]
-    Ref8x8,
+    Ref3x3,
     /// The `KCC20` actor of upstream's published `KCC20PublicMint` app, 3 / 3 slots (`KCC20PublicMint`, registry
     /// `kcc20-ref-public-mint`): a fixed-supply genesis of holders of that app.
     PublicMint,
+    /// Prototype, not KOB's issuance: the reference program with 8 / 8 slot limits (`KCC20Ref_8x8`, registry
+    /// `kcc20-ref-8x8`). Only the CLI issues it, when it is named `8x8-prototype`, and every plan carries a warning.
+    Ref8x8Prototype,
 }
 
 impl IssueProgram {
-    /// Parses the CLI spelling (`8x8`, `public-mint`).
+    /// Parses the CLI spelling (`3x3`, the default; `public-mint`; `8x8-prototype`).
     pub fn parse(s: &str) -> Result<Self> {
         match s {
-            "8x8" | "ref-8x8" | "kcc20-ref-8x8" => Ok(IssueProgram::Ref8x8),
+            "3x3" | "ref" | "kcc20-ref-3x3" => Ok(IssueProgram::Ref3x3),
             "public-mint" | "kcc20-ref-public-mint" => Ok(IssueProgram::PublicMint),
-            other => invalid(format!("unknown program `{other}` (8x8 or public-mint)")),
+            "8x8-prototype" => Ok(IssueProgram::Ref8x8Prototype),
+            "8x8" | "ref-8x8" | "kcc20-ref-8x8" => invalid(
+                "the 8 / 8 program is a prototype, not KOB's issuance: issue 3x3 (the default) or public-mint, or name the \
+                 prototype 8x8-prototype",
+            ),
+            other => invalid(format!("unknown program `{other}` (3x3 or public-mint)")),
         }
     }
     /// Id of the program in `registry/tokens.json`.
     pub fn registry_template_id(self) -> &'static str {
         match self {
-            IssueProgram::Ref8x8 => REGISTRY_TEMPLATE_ID,
+            IssueProgram::Ref3x3 => REGISTRY_TEMPLATE_ID,
             IssueProgram::PublicMint => REGISTRY_TEMPLATE_ID_PUBLIC_MINT,
+            IssueProgram::Ref8x8Prototype => REGISTRY_TEMPLATE_ID_8X8_PROTOTYPE,
         }
     }
     /// Token inputs / outputs per transfer of the program.
     pub fn slots(self) -> (usize, usize) {
         match self {
-            IssueProgram::Ref8x8 => (ISSUE_MAX_TOKEN_INPUTS, ISSUE_MAX_TOKEN_OUTPUTS),
-            IssueProgram::PublicMint => (3, 3),
+            IssueProgram::Ref3x3 | IssueProgram::PublicMint => (ISSUE_MAX_TOKEN_INPUTS, ISSUE_MAX_TOKEN_OUTPUTS),
+            IssueProgram::Ref8x8Prototype => (8, 8),
         }
+    }
+    /// The pinned template of the program.
+    pub fn template_id(self) -> crate::artifacts::TemplateId {
+        match self {
+            IssueProgram::Ref3x3 => crate::artifacts::TemplateId::Kcc20Ref,
+            IssueProgram::PublicMint => crate::artifacts::TemplateId::Kcc20PublicMint,
+            IssueProgram::Ref8x8Prototype => crate::artifacts::TemplateId::Kcc20Ref8x8,
+        }
+    }
+    /// True for a prototype program (not KOB's issuance).
+    pub fn is_prototype(self) -> bool {
+        self == IssueProgram::Ref8x8Prototype
     }
 }
 
@@ -242,7 +271,7 @@ impl TokenState {
 /// The pinned token program: template prefix and suffix around the 112-byte state.
 #[derive(Debug, Clone)]
 pub struct Program {
-    /// Artifact name (`KCC20Ref_8x8`).
+    /// Artifact name (`KCC20Ref`, `KCC20PublicMint`).
     pub name: &'static str,
     /// Bytes before the state span.
     pub prefix: Vec<u8>,
@@ -263,12 +292,17 @@ pub struct Program {
 }
 
 impl Program {
-    /// The reference KCC-20 program with 8/8 slots, loaded from the committed artifact.
+    /// The reference KCC-20 program with its standard 3/3 slots (KOB's standard), loaded from the committed artifact.
     ///
     /// The splice codec of [`TokenState::encode`] is cross-checked against the artifact's own
     /// bytecode (whose constructor state is `1000 | 0x03^32 | scheme 4 | borrow 0 | 0^32 | 0xee^32`).
-    pub fn kcc20_8x8() -> Result<Self> {
-        Self::load(IssueProgram::Ref8x8)
+    pub fn kcc20_standard() -> Result<Self> {
+        Self::load(IssueProgram::Ref3x3)
+    }
+
+    /// The 8/8 prototype (not KOB's issuance).
+    pub fn kcc20_8x8_prototype() -> Result<Self> {
+        Self::load(IssueProgram::Ref8x8Prototype)
     }
 
     /// The `KCC20` actor of upstream's published `KCC20PublicMint` app (3 / 3 slots), loaded from the committed artifact
@@ -285,8 +319,9 @@ impl Program {
 
     fn load(which: IssueProgram) -> Result<Self> {
         let (json, name) = match which {
-            IssueProgram::Ref8x8 => (ARTIFACT_JSON, ARTIFACT_NAME),
+            IssueProgram::Ref3x3 => (ARTIFACT_JSON, ARTIFACT_NAME),
             IssueProgram::PublicMint => (PUBLIC_MINT_JSON, PUBLIC_MINT_NAME),
+            IssueProgram::Ref8x8Prototype => (PROTOTYPE_8X8_JSON, PROTOTYPE_8X8_NAME),
         };
         let artifact = parse_artifact(json).map_err(|e| IssueError::Artifact(e.to_string()))?;
         let (contract_name, contract) = artifact
@@ -322,10 +357,7 @@ impl Program {
             return Err(IssueError::Artifact("state codec does not match the artifact's constructor state".into()));
         }
         let template_hash = silverscript_abi::template_hash(prefix, suffix);
-        let pinned_id = match which {
-            IssueProgram::Ref8x8 => crate::artifacts::TemplateId::Kcc20Ref8x8,
-            IssueProgram::PublicMint => crate::artifacts::TemplateId::Kcc20PublicMint,
-        };
+        let pinned_id = which.template_id();
         if template_hash != crate::artifacts::pinned_hash(pinned_id) {
             return Err(IssueError::Artifact(format!("{name}: template hash {} is not the pinned one", hex(&template_hash))));
         }
@@ -449,7 +481,7 @@ pub struct IssueSpec {
     pub website: Option<String>,
     /// Network label recorded in supply.json (informational).
     pub network: String,
-    /// The token program issued (default: the reference program with 8 / 8 slots).
+    /// The token program issued (default: the reference program with its standard 3 / 3 slots).
     pub program: IssueProgram,
 }
 
@@ -498,6 +530,13 @@ impl IssueSpec {
         }
         if self.holders.len() > MAX_GENESIS_OUTPUTS {
             return invalid(format!("at most {MAX_GENESIS_OUTPUTS} genesis outputs (got {})", self.holders.len()));
+        }
+        if self.program.is_prototype() {
+            warnings.push(
+                "KCC20Ref_8x8 is a prototype, not KOB's issuance: KOB issues the standard 3 / 3 reference program; every \
+                 transfer of a prototype token pushes the 8 / 8 program, and KCC-20 wallets expect the standard one"
+                    .into(),
+            );
         }
         let (max_in, max_out) = self.program.slots();
         if self.holders.len() > max_out {
@@ -968,7 +1007,7 @@ impl GenesisPlan {
     }
 
     /// Token registry entry in the shape of `registry/tokens.schema.json` (`crate::registry::Token`): status
-    /// `pending-review`, `verified` false, program = the pinned template of the issued program (`kcc20-ref-8x8` or
+    /// `pending-review`, `verified` false, program = the pinned template of the issued program (`kcc20-ref-3x3` or
     /// `kcc20-ref-public-mint`). Supply and borrow facts
     /// live in `supply.json`.
     pub fn registry_entry(&self) -> Value {
@@ -1128,9 +1167,17 @@ mod tests {
 
     #[test]
     fn program_pins_template_and_state_codec() {
-        let p = Program::kcc20_8x8().unwrap();
-        assert_eq!((p.max_token_inputs, p.max_token_outputs), (8, 8));
-        assert_eq!(p.template_hash, silverscript_abi::template_hash(&p.prefix, &p.suffix));
+        let p = Program::kcc20_standard().unwrap();
+        assert_eq!((p.name, p.max_token_inputs, p.max_token_outputs), ("KCC20Ref", 3, 3));
+        assert_eq!(p.template_hash, crate::artifacts::pinned_hash(crate::artifacts::TemplateId::Kcc20Ref));
+        assert_eq!(p.registry_template_id, "kcc20-ref-3x3");
+        assert_eq!(IssueProgram::default(), IssueProgram::Ref3x3);
+        let proto = Program::kcc20_8x8_prototype().unwrap();
+        assert_eq!((proto.name, proto.max_token_inputs, proto.max_token_outputs), ("KCC20Ref_8x8", 8, 8));
+        assert_eq!(proto.template_hash, crate::artifacts::pinned_hash(crate::artifacts::TemplateId::Kcc20Ref8x8));
+        for p in [&p, &proto] {
+            assert_eq!(p.template_hash, silverscript_abi::template_hash(&p.prefix, &p.suffix));
+        }
         assert_eq!(
             TokenState {
                 amount: 1,
@@ -1147,8 +1194,32 @@ mod tests {
     }
 
     #[test]
-    fn scheme4_selftest_passes_for_the_8x8_program() {
-        verify_scheme4_enabled(&Program::kcc20_8x8().unwrap()).unwrap();
+    fn scheme4_selftest_passes_for_every_issuable_program() {
+        for which in [IssueProgram::Ref3x3, IssueProgram::PublicMint, IssueProgram::Ref8x8Prototype] {
+            verify_scheme4_enabled(&Program::of(which).unwrap()).unwrap();
+        }
+    }
+
+    /// KOB issues the standard 3 / 3 program; the 8 / 8 variant is a prototype the CLI issues only by its explicit name,
+    /// and every plan of it says so.
+    #[test]
+    fn the_standard_program_is_the_default_and_8x8_is_a_prototype() {
+        assert_eq!(IssueProgram::parse("3x3").unwrap(), IssueProgram::Ref3x3);
+        assert_eq!(IssueProgram::parse("kcc20-ref-3x3").unwrap(), IssueProgram::Ref3x3);
+        for old in ["8x8", "ref-8x8", "kcc20-ref-8x8"] {
+            assert!(IssueProgram::parse(old).unwrap_err().to_string().contains("prototype"), "{old}");
+        }
+        assert_eq!(IssueProgram::parse("8x8-prototype").unwrap(), IssueProgram::Ref8x8Prototype);
+        let (_, pk) = key();
+        let standard = build_genesis(&spec(vec![Holder::new(pk, 0, 10)], 10)).unwrap();
+        assert!(standard.warnings.is_empty(), "{:?}", standard.warnings);
+        assert_eq!(standard.program.template_hash, crate::artifacts::pinned_hash(crate::artifacts::TemplateId::Kcc20Ref));
+        let mut s = spec(vec![Holder::new(pk, 0, 10)], 10);
+        s.program = IssueProgram::Ref8x8Prototype;
+        let proto = build_genesis(&s).unwrap();
+        assert!(proto.warnings.iter().any(|w| w.contains("prototype")), "{:?}", proto.warnings);
+        assert_eq!(proto.registry_entry()["template_id"], "kcc20-ref-8x8");
+        assert_eq!(proto.registry_entry()["max_token_inputs"], 8);
     }
 
     #[test]
@@ -1198,11 +1269,13 @@ mod tests {
         assert_eq!(plan.registry_entry()["template_id"], "kcc20-ref-public-mint");
         assert_eq!(plan.supply_json()["program"]["template_prefix_len"], 34);
         assert!(plan.warnings.is_empty());
-        // four holders exceed the 3-output transfer limit of this program (the 8x8 program takes them silently)
+        // four holders exceed the 3-output transfer limit of both standard builds (the 8x8 prototype takes them)
         let mut four = spec((0..4).map(|k| Holder::new([k + 1; 32], 0, 250)).collect(), 1000);
-        assert!(build_genesis(&four).unwrap().warnings.is_empty());
+        assert!(build_genesis(&four).unwrap().warnings.iter().any(|w| w.contains("3-output transfer limit")));
         four.program = IssueProgram::PublicMint;
         assert!(build_genesis(&four).unwrap().warnings.iter().any(|w| w.contains("3-output transfer limit")));
+        four.program = IssueProgram::Ref8x8Prototype;
+        assert!(!build_genesis(&four).unwrap().warnings.iter().any(|w| w.contains("transfer limit")));
         assert_eq!(IssueProgram::parse("public-mint").unwrap(), IssueProgram::PublicMint);
         assert!(IssueProgram::parse("public").is_err());
     }
@@ -1239,12 +1312,18 @@ mod tests {
     }
 
     #[test]
-    fn more_than_eight_outputs_is_flagged() {
-        let (_, pk) = key();
+    fn more_than_three_outputs_is_flagged() {
+        let holders: Vec<Holder> = (0..3).map(|i| Holder::new([i as u8 + 1; 32], 0, 100)).collect();
+        assert!(build_genesis(&spec(holders, 300)).unwrap().warnings.is_empty());
         let holders: Vec<Holder> = (0..9).map(|i| Holder::new([i as u8 + 1; 32], 0, 100)).collect();
-        let _ = pk;
         let plan = build_genesis(&spec(holders, 900)).unwrap();
-        assert!(plan.warnings.iter().any(|w| w.contains("9 genesis outputs exceed the 8-output")), "{:?}", plan.warnings);
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|w| w.contains("9 genesis outputs exceed the 3-output") && w.contains("3 transfers of at most 3")),
+            "{:?}",
+            plan.warnings
+        );
         let too_many: Vec<Holder> = (0..65).map(|i| Holder::new([i as u8 + 1; 32], 0, 1)).collect();
         assert!(matches!(spec(too_many, 65).validate().unwrap_err(), IssueError::Invalid(_)));
     }
@@ -1366,7 +1445,7 @@ mod tests {
         }
         assert_eq!(r["family"], "kcc20");
         assert_eq!(r["status"], "pending-review");
-        assert_eq!(r["max_token_inputs"], 8);
+        assert_eq!((r["template_id"].as_str(), r["max_token_inputs"].as_u64()), (Some("kcc20-ref-3x3"), Some(3)));
         let sup = plan.supply_json();
         assert_eq!(sup["total_supply"], "10");
         assert_eq!(sup["genesis_outpoints"].as_array().unwrap().len(), 1);

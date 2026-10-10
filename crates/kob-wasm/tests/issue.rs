@@ -80,7 +80,7 @@ fn normal_issuance_signs_finalizes_and_validates() {
 
     // token facts
     let token = &res["token"];
-    assert_eq!(token["program"], "KCC20Ref_8x8");
+    assert_eq!(token["program"], "KCC20Ref");
     assert_eq!(token["ticker"], "TEST");
     assert_eq!(token["supply"], "1000");
     assert_eq!(token["carrier"], (10 * KAS).to_string());
@@ -111,7 +111,7 @@ fn normal_issuance_signs_finalizes_and_validates() {
         "amount": "1000", "owner": pk(), "owner_scheme": 0, "borrow_scheme": 0,
         "borrow_guard": "00".repeat(32), "extension_commitment": "00".repeat(32),
     });
-    let spk = api::token_script_public_key("KCC20Ref_8x8", &state.to_string()).unwrap();
+    let spk = api::token_script_public_key("KCC20Ref", &state.to_string()).unwrap();
     assert_eq!(built.tx.outputs[0].script_public_key, spk);
     assert_eq!(api::encode_token_state(&state.to_string()).unwrap().len(), 224);
 
@@ -152,7 +152,7 @@ fn multiple_holders_including_a_covenant_held_one() {
             "amount": o["amount"], "owner": o["owner"], "owner_scheme": o["ownerScheme"], "borrow_scheme": o["borrowScheme"],
             "borrow_guard": o["borrowGuard"], "extension_commitment": res["token"]["extensionCommitment"],
         });
-        assert_eq!(built.tx.outputs[i].script_public_key, api::token_script_public_key("KCC20Ref_8x8", &state.to_string()).unwrap());
+        assert_eq!(built.tx.outputs[i].script_public_key, api::token_script_public_key("KCC20Ref", &state.to_string()).unwrap());
     }
     sign_finalize_validate(&res);
 }
@@ -168,7 +168,7 @@ fn covenant_id_depends_on_every_output_of_the_group() {
 }
 
 #[test]
-fn more_than_eight_outputs_is_allowed_with_a_warning() {
+fn more_than_three_outputs_is_allowed_with_a_warning() {
     let mut req = request();
     req["supply"] = json!("900");
     req["holders"] = json!((1..=9)
@@ -177,7 +177,7 @@ fn more_than_eight_outputs_is_allowed_with_a_warning() {
     req["funding"] = json!([funding(0, 2000 * KAS)]);
     let res = issue(&req).unwrap();
     let w = res["warnings"].as_array().unwrap();
-    assert!(w.iter().any(|w| w.as_str().unwrap().contains("9 genesis outputs exceed the 8-output")), "{w:?}");
+    assert!(w.iter().any(|w| w.as_str().unwrap().contains("9 genesis outputs exceed the 3-output")), "{w:?}");
     sign_finalize_validate(&res);
 }
 
@@ -428,10 +428,10 @@ fn limits_mirror_the_protocol_constants() {
     assert_eq!(l["maxSupply"], kob_protocol::issue::MAX_SUPPLY.to_string());
     assert_eq!(l["maxGenesisOutputs"], 64);
     assert_eq!(l["defaultCarrier"], (10 * KAS).to_string());
-    assert_eq!((l["maxTokenInputs"].clone(), l["maxTokenOutputs"].clone()), (json!(8), json!(8)));
+    assert_eq!((l["maxTokenInputs"].clone(), l["maxTokenOutputs"].clone()), (json!(3), json!(3)));
     assert_eq!(l["maxDecimals"], 18);
     assert_eq!(l["ticker"]["pattern"], "^[A-Z0-9]{2,12}$");
-    assert_eq!(l["program"], "KCC20Ref_8x8");
+    assert_eq!((l["program"].as_str(), l["registryTemplateId"].as_str()), (Some("KCC20Ref"), Some("kcc20-ref-3x3")));
     assert_eq!(l["ownerSchemes"], json!([0, 1, 2, 3, 4]));
 }
 
@@ -460,5 +460,27 @@ fn wallets_with_little_more_than_the_carrier_still_get_a_valid_genesis() {
             }
             Err(e) => assert!(e.contains("insufficient funds"), "k={k}: {e}"),
         }
+    }
+}
+
+/// The app issues KOB's standard 3 / 3 program by default and the published public-mint build on request; the 8 / 8
+/// prototype is not offered (the CLI alone issues it, by its explicit name).
+#[test]
+fn programs_the_app_issues() {
+    let mut req = request();
+    for (program, name, tpl) in
+        [(None, "KCC20Ref", "kcc20-ref-3x3"), (Some("public-mint"), "KCC20PublicMint", "kcc20-ref-public-mint")]
+    {
+        if let Some(p) = program {
+            req["program"] = json!(p);
+        }
+        let res = issue(&req).unwrap();
+        assert_eq!((res["token"]["program"].as_str(), res["docs"]["registryEntry"]["template_id"].as_str()), (Some(name), Some(tpl)));
+        assert_eq!(res["docs"]["registryEntry"]["max_token_inputs"], 3);
+        sign_finalize_validate(&res);
+    }
+    for refused in ["8x8", "8x8-prototype", "kcc20-ref-8x8"] {
+        req["program"] = json!(refused);
+        assert!(issue(&req).unwrap_err().contains("prototype"), "{refused}");
     }
 }

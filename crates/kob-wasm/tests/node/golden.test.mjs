@@ -196,8 +196,8 @@ test('errors surface as exceptions', () => {
 
 test('token issuance plans a genesis as a BuiltTx and rejects rule violations', () => {
   const limits = JSON.parse(kob.issueLimits());
-  assert.equal(limits.program, 'KCC20Ref_8x8');
-  assert.equal(limits.maxTokenOutputs, 8);
+  assert.equal(limits.program, 'KCC20Ref');
+  assert.equal(limits.maxTokenOutputs, 3);
   const key = golden.transactions.find((t) => t.name === 'create.ask').request.funding[0];
   const spec = {
     name: 'Node Token',
@@ -209,6 +209,8 @@ test('token issuance plans a genesis as a BuiltTx and rejects rule violations', 
   };
   const res = JSON.parse(kob.issue(s(spec)));
   assert.equal(res.token.outputs.length, 2);
+  assert.equal(res.token.program, 'KCC20Ref');
+  assert.throws(() => kob.issue(s({ ...spec, program: '8x8-prototype' })), /prototype/);
   assert.equal(res.built.tx.outputs.length, 3);
   assert.equal(res.built.sign.length, 1);
   assert.equal(res.built.covenants[0].covenantId, res.token.covenantId);

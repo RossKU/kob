@@ -1,8 +1,9 @@
 //! Token issuance for the wasm surface: the `kob token issue` flow as a `BuiltTx`.
 //!
 //! The genesis is one transaction: P2PK funding inputs (input 0 authorises the KIP-20 genesis group)
-//! -> 1..N token outputs of the reference KCC-20 program (`KCC20Ref_8x8`, or with `"program": "public-mint"` the
-//! `KCC20` actor of upstream's published `KCC20PublicMint` app, `KCC20PublicMint`; covenant id derived as
+//! -> 1..N token outputs of the reference KCC-20 program in its standard 3 / 3 configuration (`KCC20Ref`, KOB's standard;
+//! or with `"program": "public-mint"` the `KCC20` actor of upstream's published `KCC20PublicMint` app, `KCC20PublicMint`.
+//! The 8 / 8 prototype is not offered here; covenant id derived as
 //! consensus does) + change. `kob_protocol::issue::build_genesis` does the planning and its
 //! `GenesisPlan::verify` the consensus-level checks; this module only maps JSON in and the plan out
 //! as a normal [`BuiltTx`], so the existing `finalize` / `validate` exports and the wallet signing
@@ -10,7 +11,6 @@
 
 use std::collections::BTreeSet;
 
-use kob_protocol::artifacts::TemplateId;
 use kob_protocol::issue::{
     self, build_genesis, hex, p2pk_script, FundingUtxo, GenesisPlan, Holder, IssueProgram, IssueSpec, DEFAULT_CARRIER,
     DEFAULT_FEE_RATE, EXTENSION_CLASS, EXTENSION_FIXED_SUPPLY, MAX_GENESIS_OUTPUTS, MAX_STANDARD_MASS, MAX_SUPPLY,
@@ -75,7 +75,8 @@ struct IssueRequest {
     website: Option<String>,
     #[serde(default)]
     network: Option<String>,
-    /// `8x8` (default) or `public-mint` (`kob_protocol::issue::IssueProgram::parse`).
+    /// `3x3` (default) or `public-mint` (`kob_protocol::issue::IssueProgram::parse`); the `8x8-prototype` the CLI knows is
+    /// refused here.
     #[serde(default)]
     program: Option<String>,
 }
@@ -207,6 +208,9 @@ fn to_spec(r: &IssueRequest, fee_rate: u64) -> R<IssueSpec> {
     }
     if let Some(p) = &r.program {
         spec.program = IssueProgram::parse(p).map_err(|e| e.to_string())?;
+        if spec.program.is_prototype() {
+            return Err("the 8 / 8 program is a prototype and is not issued from the app: use 3x3 (the default) or public-mint".into());
+        }
     }
     Ok(spec)
 }
@@ -252,10 +256,7 @@ fn to_built(plan: &GenesisPlan, funding: &[KeyUtxo]) -> R<BuiltTx> {
         outputs: (0..plan.states.len() as u32).collect(),
         authorizing_input: 0,
         covenant_id: plan.covenant_id.as_bytes(),
-        template: Some(match plan.spec.program {
-            IssueProgram::Ref8x8 => TemplateId::Kcc20Ref8x8,
-            IssueProgram::PublicMint => TemplateId::Kcc20PublicMint,
-        }),
+        template: Some(plan.spec.program.template_id()),
     }];
     Ok(BuiltTx {
         tx: tx_json,
@@ -331,7 +332,7 @@ pub fn issue_limits() -> R<String> {
         "maxDisplayChars": MAX_DISPLAY_CHARS,
         "ownerSchemes": OWNER_SCHEMES_ENABLED,
         "covenantOwnerScheme": issue::SCHEME_COVENANT_ID,
-        "program": "KCC20Ref_8x8",
+        "program": "KCC20Ref",
         "registryTemplateId": REGISTRY_TEMPLATE_ID,
         // the published public-mint build of the reference (`"program": "public-mint"` in the request)
         "publicMint": { "program": "KCC20PublicMint", "registryTemplateId": REGISTRY_TEMPLATE_ID_PUBLIC_MINT, "maxTokenInputs": 3, "maxTokenOutputs": 3 },

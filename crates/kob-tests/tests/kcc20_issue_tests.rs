@@ -1,6 +1,7 @@
 //! Fixed-supply KCC-20 issuance (`kob token issue` / `kob_protocol::issue`) against rusty-kaspa
 //! v2.1.0's script engine: the genesis transaction, then first transfers of the issued token UTXOs
-//! (owner scheme 0x04 custody, up to 8 token inputs and 8 token outputs) and the limits.
+//! (owner scheme 0x04 custody; the standard program KOB issues takes up to 3 token inputs and 3 token
+//! outputs, the 8 / 8 prototype up to 8 / 8) and the limits.
 //!
 //! Run: cargo test --release -p kob-tests --test kcc20_issue_tests -- --nocapture --test-threads=1
 
@@ -20,7 +21,7 @@ use kaspa_txscript::opcodes::codes::OpTrue;
 use kaspa_txscript::{pay_to_script_hash_script, EngineCtx, EngineFlags, TxScriptEngine};
 use kaspa_txscript_errors::TxScriptError;
 use kob_protocol::issue::{
-    build_genesis, verify_scheme4_enabled, FundingUtxo, GenesisPlan, Holder, IssueError, IssueSpec, Program, TokenState,
+    build_genesis, verify_scheme4_enabled, FundingUtxo, GenesisPlan, Holder, IssueError, IssueProgram, IssueSpec, Program, TokenState,
     EXTENSION_FIXED_SUPPLY, SCHEME_COVENANT_ID, SCHEME_P2PK_SCHNORR,
 };
 use rand::{thread_rng, RngCore};
@@ -53,10 +54,16 @@ fn pk(kp: &Keypair) -> [u8; 32] {
     kp.x_only_public_key().0.serialize()
 }
 
-/// Issue `holders` (one output each) from a fresh funding UTXO and return the signed, verified plan.
+/// Issue `holders` (one output each) from a fresh funding UTXO and return the signed, verified plan (KOB's standard
+/// program).
 fn issue(holders: Vec<Holder>, funder: &SecretKey) -> GenesisPlan {
+    issue_with(IssueProgram::default(), holders, funder)
+}
+
+/// [`issue`] with the program `which`.
+fn issue_with(which: IssueProgram, holders: Vec<Holder>, funder: &SecretKey) -> GenesisPlan {
     let supply: u64 = holders.iter().map(|h| h.amount).sum();
-    let spec = IssueSpec::new(
+    let mut spec = IssueSpec::new(
         "Engine Test Token",
         "ENGT",
         8,
@@ -68,6 +75,7 @@ fn issue(holders: Vec<Holder>, funder: &SecretKey) -> GenesisPlan {
             owner_pubkey: pk(&keypair(funder)),
         }],
     );
+    spec.program = which;
     let mut plan = build_genesis(&spec).expect("plan");
     plan.sign(funder).expect("sign");
     let report = plan.verify().expect("genesis verifies");
@@ -227,7 +235,11 @@ fn next_state(from: &TokenState, amount: u64, owner: [u8; 32], scheme: u8) -> To
 
 #[test]
 fn issue_splice_codec_matches_the_compiler() {
-    let p = Program::kcc20_8x8().unwrap();
+    splice_codec_matches_the_compiler(Program::kcc20_standard().unwrap(), "KCC20Ref");
+    splice_codec_matches_the_compiler(Program::kcc20_8x8_prototype().unwrap(), "KCC20Ref_8x8");
+}
+
+fn splice_codec_matches_the_compiler(p: Program, source: &str) {
     let st = TokenState {
         amount: 123_456_789,
         owner: [0xab; 32],
@@ -237,7 +249,7 @@ fn issue_splice_codec_matches_the_compiler() {
         extension_commitment: EXTENSION_FIXED_SUPPLY,
     };
     let art = compile_contract(
-        &common::contract_source("KCC20Ref_8x8"),
+        &common::contract_source(source),
         &[
             ArtifactValue::Int(st.amount as i64),
             st.owner.to_vec().into(),
@@ -248,7 +260,7 @@ fn issue_splice_codec_matches_the_compiler() {
         ],
         CompileOptions::default(),
     )
-    .expect("compile KCC20Ref_8x8");
+    .unwrap_or_else(|e| panic!("compile {source}: {e}"));
     assert_eq!(p.redeem(&st), bytecode(&art), "issued redeem script = compiler output for the same state");
     let (prefix, suffix, hash) = compiled_template_parts_and_hash(&art);
     assert_eq!((p.prefix.clone(), p.suffix.clone(), p.template_hash.to_vec()), (prefix, suffix, hash));
@@ -314,12 +326,42 @@ fn issue_genesis_then_first_transfers() {
     );
 }
 
+/// The standard program KOB issues: 3 token inputs (a leader and two delegators) and 3 token outputs per transfer; a fourth
+/// of either is refused, and the rules of every transfer hold.
 #[test]
-fn issue_eight_inputs_and_eight_outputs() {
+fn issue_three_inputs_and_three_outputs() {
+    let funder = secret();
+    let keys: Vec<Keypair> = (0..4).map(|_| keypair(&secret())).collect();
+    let plan = issue(keys.iter().map(|k| held_by(k, 100)).collect(), &funder);
+    assert_eq!((plan.program.name, plan.program.max_token_inputs, plan.program.max_token_outputs), ("KCC20Ref", 3, 3));
+    assert!(plan.warnings.iter().any(|w| w.contains("4 genesis outputs exceed the 3-output")), "{:?}", plan.warnings);
+    let p = &plan.program;
+    let cov = plan.covenant_id;
+    let ins = utxos_of(&plan, &keys.iter().map(|k| Some(*k)).collect::<Vec<_>>());
+
+    run_ok("3 inputs -> 1 output", p, cov, &ins[..3], &[next_state(&ins[0].state, 300, pk(&keys[0]), 0)], &[]);
+    let outs3: Vec<TokenState> = (0..3).map(|i| next_state(&ins[0].state, 100, pk(&keys[i]), 0)).collect();
+    run_ok("3 inputs -> 3 outputs", p, cov, &ins[..3], &outs3, &[]);
+    let outs3b: Vec<TokenState> = (0..3).map(|i| next_state(&ins[0].state, if i == 0 { 80 } else { 10 }, pk(&keys[i]), 0)).collect();
+    run_ok("1 input -> 3 outputs", p, cov, &ins[..1], &outs3b, &[]);
+    run_bad("4 inputs -> 1 output (limit 3)", p, cov, &ins[..4], &[next_state(&ins[0].state, 400, pk(&keys[0]), 0)], &[]);
+    let outs4: Vec<TokenState> = (0..4).map(|i| next_state(&ins[0].state, 25, pk(&keys[i]), 0)).collect();
+    run_bad("1 input -> 4 outputs (limit 3)", p, cov, &ins[..1], &outs4, &[]);
+    run_bad("mint +1 (conservation)", p, cov, &ins[..2], &[next_state(&ins[0].state, 201, pk(&keys[0]), 0)], &[]);
+    run_bad("burn -1 (conservation)", p, cov, &ins[..2], &[next_state(&ins[0].state, 199, pk(&keys[0]), 0)], &[]);
+    let mut stolen = ins[0].clone();
+    stolen.owner = Some(keys[1]);
+    run_bad("spend without the owner's signature", p, cov, &[stolen], &[next_state(&ins[0].state, 100, pk(&keys[1]), 0)], &[]);
+}
+
+/// The 8 / 8 prototype (not KOB's issuance; the CLI issues it only by its explicit name): its slot limits.
+#[test]
+fn issue_eight_inputs_and_eight_outputs_of_the_prototype() {
     let funder = secret();
     let keys: Vec<Keypair> = (0..9).map(|_| keypair(&secret())).collect();
-    let plan = issue(keys.iter().map(|k| held_by(k, 100)).collect(), &funder);
+    let plan = issue_with(IssueProgram::Ref8x8Prototype, keys.iter().map(|k| held_by(k, 100)).collect(), &funder);
     assert!(plan.warnings.iter().any(|w| w.contains("9 genesis outputs exceed")), "{:?}", plan.warnings);
+    assert!(plan.warnings.iter().any(|w| w.contains("prototype")), "{:?}", plan.warnings);
     let p = &plan.program;
     let cov = plan.covenant_id;
     let ins = utxos_of(&plan, &keys.iter().map(|k| Some(*k)).collect::<Vec<_>>());
@@ -372,12 +414,12 @@ fn issue_tool_rules() {
     // supply mismatch
     let spec = IssueSpec::new("T", "T1", 0, 1000, vec![Holder::new(own, 0, 999)], vec![f.clone()]);
     assert!(matches!(build_genesis(&spec).unwrap_err(), IssueError::SupplyMismatch { sum: 999, declared: 1000 }));
-    // more than 8 outputs is flagged (warning), not silently accepted
+    // more than 3 outputs is flagged (warning), not silently accepted
     let spec = IssueSpec::new("T", "T1", 0, 90, (0..9).map(|i| Holder::new([i + 1; 32], 0, 10)).collect(), vec![f.clone()]);
     let plan = build_genesis(&spec).unwrap();
-    assert!(plan.warnings.iter().any(|w| w.contains("exceed the 8-output")));
+    assert!(plan.warnings.iter().any(|w| w.contains("exceed the 3-output")));
     // the program cannot mint: no entry other than transfer / transfer_delegator (supply = sum of genesis outputs)
-    let p = Program::kcc20_8x8().unwrap();
+    let p = Program::kcc20_standard().unwrap();
     let redeem = p.redeem(&plan.states[0]);
     assert!(p.leader_sig_script(&redeem, &plan.states, vec![0]).is_ok());
     assert_eq!(plan.states.iter().map(|s| s.amount).sum::<u64>(), plan.spec.supply);

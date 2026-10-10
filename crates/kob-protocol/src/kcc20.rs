@@ -1,24 +1,24 @@
-//! KCC-20 token program parameters used when KOB issues a fixed-supply token.
+//! KCC-20 token program parameters used when KOB issues a fixed-supply token, and the generators of the prototype
+//! variants.
 //!
 //! The reference KCC-20 program (argent kcc20-reference c8a0871, `contracts/kcc20/KCC20Ref.sil`)
 //! accepts at most 3 token inputs and 3 token outputs per transfer. Those bounds are compile-time
 //! constants of the generated program, so they are fixed per token at issuance and every later
 //! transfer of that token pays for them (the whole program is pushed in every token input's
-//! sigscript). See `crates/kob-tests/tests/kcc20_limits_tests.rs` for the measurements behind the
-//! default below.
+//! sigscript). KOB issues the reference in that standard configuration. The variants with other
+//! limits (4/5, 8/8, 16/16, [`kcc20_source_with_limits`]), proposal P2 and `KCC20Opt` are prototypes:
+//! kept and tested (`crates/kob-tests/tests/kcc20_limits_tests.rs`, `kcc20_p2_tests.rs`,
+//! `kcc20_opt_tests.rs`), never issued.
 
-/// KOB-issued tokens use the reference KCC-20 program with a non-default slot configuration
-/// ([`ISSUE_MAX_TOKEN_INPUTS`] / [`ISSUE_MAX_TOKEN_OUTPUTS`], allowed by KCC-20 "non-default
-/// configuration"). Proposal P2 (holders on the 3/3 program plus a matcher-held batch leader,
-/// `contracts/kcc20/p2/`, tested in `crates/kob-tests/tests/kcc20_p2_tests.rs`) is implemented
-/// for the upstream proposal at launch but is NOT used for issuance until KCC-20 adopts it.
+/// Proposal P2 (holders on the 3/3 program plus a matcher-held batch leader, `contracts/kcc20/p2/`, tested in
+/// `crates/kob-tests/tests/kcc20_p2_tests.rs`) is a prototype and is NOT used for issuance.
 pub const ISSUE_USE_P2_BATCH_LEADER: bool = false;
 /// Holder inputs and outputs a P2 batch leader can process in one transaction.
 pub const P2_BATCH_SLOTS: usize = 16;
-/// Maximum token inputs per transfer for tokens issued by KOB tooling.
-pub const ISSUE_MAX_TOKEN_INPUTS: usize = 8;
-/// Maximum token outputs per transfer for tokens issued by KOB tooling.
-pub const ISSUE_MAX_TOKEN_OUTPUTS: usize = 8;
+/// Maximum token inputs per transfer for tokens issued by KOB tooling: the standard KCC-20 configuration.
+pub const ISSUE_MAX_TOKEN_INPUTS: usize = 3;
+/// Maximum token outputs per transfer for tokens issued by KOB tooling: the standard KCC-20 configuration.
+pub const ISSUE_MAX_TOKEN_OUTPUTS: usize = 3;
 
 /// Errors raised while deriving a KCC-20 source with non-default slot limits.
 #[derive(Debug, thiserror::Error)]

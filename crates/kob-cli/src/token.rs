@@ -1,5 +1,5 @@
-//! `kob token issue`: fixed-supply KCC-20 issuance (reference program with 8/8 slots, or the published public-mint build
-//! with 3/3 slots; owner scheme 0x04 enabled, borrow disabled).
+//! `kob token issue`: fixed-supply KCC-20 issuance (the reference program in its standard 3/3 configuration, KOB's
+//! standard, or the published public-mint build, also 3/3; owner scheme 0x04 enabled, borrow disabled).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -17,8 +17,8 @@ use crate::wrpc;
 
 /// Usage text of `kob token issue`.
 pub const ISSUE_USAGE: &str = "\
-kob token issue: issue a fixed-supply KCC-20 token (reference program, 8 token inputs / 8 outputs per transfer, or
-the published public-mint build of the reference, 3 / 3)
+kob token issue: issue a fixed-supply KCC-20 token (the reference program in its standard configuration, 3 token
+inputs / 3 outputs per transfer, or the published public-mint build of the reference, also 3 / 3)
 
 USAGE
   kob token issue --name <NAME> --ticker <TICKER> --decimals <N> --fund-utxo <TXID:INDEX:AMOUNT:OWNER>...
@@ -40,10 +40,11 @@ SUPPLY
                         whole supply goes to `self` (scheme 0).
   --extension-commitment 64-hex (default: 32 zero bytes)
   --allow-borrow        allow BORROW_SCHEME 1..3 on non-0x04 holders (default: borrow disabled everywhere)
-  --program             8x8 (default): the reference program with KOB's 8 / 8 slots (registry kcc20-ref-8x8);
-                        public-mint: the KCC20 actor of upstream's published KCC20PublicMint app, 3 / 3 slots (registry
-                        kcc20-ref-public-mint). Its holders carry the app's context field; the genesis holds only
-                        KCC20 holders (no PublicMint, no TokenSeed): a fixed supply.
+  --program             3x3 (default): KOB's standard, the reference program with its 3 / 3 slots (registry
+                        kcc20-ref-3x3); public-mint: the KCC20 actor of upstream's published KCC20PublicMint app, 3 / 3
+                        slots (registry kcc20-ref-public-mint). Its holders carry the app's context field; the genesis
+                        holds only KCC20 holders (no PublicMint, no TokenSeed): a fixed supply. 8x8-prototype: the
+                        8 / 8 slot variant, a prototype that is not KOB's issuance (the plan warns).
 
 TRANSACTION
   --carrier             sompi on each token output (default 1000000000 = 10 KAS)
@@ -565,7 +566,7 @@ mod tests {
         assert_eq!(run_issue(&v(&cmd)), 0);
         let reg: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("registry_entry.json")).unwrap()).unwrap();
         assert_eq!(reg["ticker"], "TEST");
-        assert_eq!(reg["template_id"], "kcc20-ref-8x8");
+        assert_eq!(reg["template_id"], "kcc20-ref-3x3");
         // the emitted entry is a valid registry token against the shipped templates
         let mut registry = kob_protocol::registry::Registry::default_registry();
         registry.tokens.push(serde_json::from_value(reg.clone()).expect("registry entry parses as a registry token"));
