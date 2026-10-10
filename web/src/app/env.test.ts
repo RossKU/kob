@@ -64,6 +64,16 @@ describe('ownOrderRefs', () => {
     const condPair = { ...pairAsk, covenant_id: 'c2'.repeat(32), contract: 'KobCondPair', pair: undefined } as unknown as OrderView;
     expect(ownOrderRefs(m, [pairAsk, condPair])).toEqual([]);
   });
+
+  it('an unarmed stop (no KAS price) is no self-trade reference: a stop-loss sell must not refuse every buy of the wallet', () => {
+    const stopSell = {
+      covenant_id: 'c3'.repeat(32), contract: 'KobCondAsk', side: 1, token: m.covenantId, status: 'open', price: null, quote: null, tip: '0', scale: 1000,
+      amount_left: '2000', initial_amount: '2000', expired: false,
+    } as unknown as OrderView;
+    const stopBuy = { ...stopSell, covenant_id: 'c4'.repeat(32), contract: 'KobCondBid', side: 2 } as unknown as OrderView;
+    const armed = { ...stopSell, covenant_id: 'c5'.repeat(32), quote: '4000' } as unknown as OrderView;
+    expect(ownOrderRefs(m, [stopSell, stopBuy, armed])).toEqual([expect.objectContaining({ covenantId: 'c5'.repeat(32), side: 'sell', price: 4000n })]);
+  });
 });
 
 // ------------------------------------------------------------------------------------------------ buildPairPlanEnv

@@ -80,17 +80,20 @@ const isLive = (o: OrderView): boolean => o.status === 'open' || o.status === 'p
 /**
  * Own resting orders of the wallet (indexer `orders?maker=&token=`) in `market`'s KAS book, for self-trade prevention. Pair orders are left out:
  * `orders?token=` lists them under both their tokens but they carry no KAS price (`price` null) and trade in their pair book (a pair plan
- * compares them there: `ownPairOrderRefs`).
+ * compares them there: `ownPairOrderRefs`). An order listed with no KAS price (an unarmed stop, `KobCondAsk` / `KobCondBid`: not in the book,
+ * nothing can trade against it) is left out too: read as 0, an unarmed stop-loss sell refused every buy of the wallet as a self-trade.
  */
 export function ownOrderRefs(market: TokenMarket, orders: OrderView[]): OwnOrderRef[] {
   const out: OwnOrderRef[] = [];
   for (const o of orders) {
     if (!isLive(o) || isPairOrderView(o)) continue;
     if (o.token !== market.covenantId || !sameScale(market, o)) continue;
+    const price = o.quote ?? o.price;
+    if (price === null || price === undefined) continue;
     out.push({
       covenantId: o.covenant_id,
       side: o.side === 1 ? 'sell' : 'buy',
-      price: bi(o.quote ?? o.price),
+      price: bi(price),
       tip: bi(o.tip),
       amountLeft: bi(o.amount_left ?? o.initial_amount ?? 0),
       active: !o.expired,
