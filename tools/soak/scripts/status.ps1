@@ -7,7 +7,20 @@ if ((Test-Path $pidFile) -and (Get-Process -Id (Get-Content $pidFile) -ErrorActi
 } else { Write-Output "supervisor: NOT running" }
 if (Test-Path "$run\supervisor.json") {
   $s = Get-Content "$run\supervisor.json" | ConvertFrom-Json
-  $s.children | Format-Table name, running, pid, restarts -AutoSize | Out-String | Write-Output
+  # restarts split by cause (scripts/restarts.mjs over supervisor.log): requested / held, start failures (a deploy step: missing bundle or
+  # binary), crashes (an exit nobody asked for)
+  $why = $null
+  try { $why = node (Join-Path $PSScriptRoot "restarts.mjs") (Join-Path $run "logs\supervisor.log") | ConvertFrom-Json } catch { }
+  $s.children | ForEach-Object {
+    $w = if ($why) { $why.($_.name) } else { $null }
+    [pscustomobject]@{
+      name = $_.name; running = $_.running; pid = $_.pid; restarts = $_.restarts
+      requested = if ($w) { $w.requested } else { '' }
+      startFail = if ($w) { $w.startFailures } else { '' }
+      crashes = if ($w) { $w.crashes } else { '' }
+      lastCrash = if ($w -and $w.lastCrash) { "$($w.lastCrash.at) up $($w.lastCrash.upSec)s" } else { '' }
+    }
+  } | Format-Table -AutoSize | Out-String | Write-Output
 }
 if (Test-Path "$run\stats\resources.json") {
   $r = Get-Content "$run\stats\resources.json" | ConvertFrom-Json

@@ -1,7 +1,10 @@
 // Soak supervisor: starts the miner, the two executors, the bots and the checker; restarts any that exits (exponential backoff);
 // writes every child's output to a size-rotated log; samples memory / CPU of every child once a minute; stops everything when
 // run/STOP appears (scripts/stop.ps1) or on SIGINT / SIGTERM. run/RESTART-<child> (scripts/restart-child.ps1) restarts one child only,
-// with its spec rebuilt from a fresh read of the config (e.g. the miner after a binary swap or a `miner` block edit).
+// with its spec rebuilt from a fresh read of the config (e.g. the miner after a binary swap or a `miner` block edit). run/HOLD-<child>
+// (scripts/hold-child.ps1) stops that child and keeps it down until the file is removed (a deploy step: a database carried, a bundle
+// rebuilt); a child whose binary or bundle is missing is not started (no crash loop) until the file is there. `restarts` counts only the
+// exits nobody asked for; operator restarts and holds are `requested` (scripts/restarts.mjs classifies the log the same way).
 //
 //   node scripts/supervisor.mjs [--config run/config.json] [--only miner,exec-a,...]
 import { spawn, execFile } from 'node:child_process';
@@ -215,15 +218,44 @@ function restartRequests() {
     }
     say('restart requested', { name: st.spec.name });
     st.backoffMs = 2000;
-    if (st.child) execFile('taskkill', ['/PID', String(st.pid), '/T', '/F'], { windowsHide: true }, () => {});
-    else start(st.spec);
+    if (st.child) {
+      st.asked = true;
+      execFile('taskkill', ['/PID', String(st.pid), '/T', '/F'], { windowsHide: true }, () => {});
+    } else start(st.spec);
+  }
+  for (const st of children.values()) {
+    // run/HOLD-<name>: stop the child and keep it down; once the file is gone (or a missing binary / bundle is there) start it again
+    if (st.child && existsSync(holdFile(st.spec.name)) && !st.asked) {
+      say('hold', { name: st.spec.name });
+      st.asked = true;
+      execFile('taskkill', ['/PID', String(st.pid), '/T', '/F'], { windowsHide: true }, () => {});
+    } else if (!st.child && st.waiting && !stopping) start(st.spec);
   }
 }
 
+const holdFile = (name) => join(RUN, `HOLD-${name}`);
+
+/** why a child must not start now: held (run/HOLD-<name>), or its executable / script missing (a deploy swapping it); null = start */
+function blocker(spec) {
+  if (existsSync(holdFile(spec.name))) return { msg: 'held', path: holdFile(spec.name) };
+  const files = [...(spec.cmd === process.execPath ? [] : [spec.cmd]), ...spec.args.filter((a) => /\.(mjs|cjs|js)$/i.test(a))];
+  const missing = files.find((f) => !existsSync(f));
+  return missing ? { msg: 'waiting for a missing file', path: missing } : null;
+}
+
 function start(spec) {
-  const st = children.get(spec.name) ?? { spec, restarts: 0, backoffMs: 2000, log: new RotatingLog(spec.name), exits: [] };
+  const st = children.get(spec.name) ?? { spec, restarts: 0, requested: 0, backoffMs: 2000, log: new RotatingLog(spec.name), exits: [], asked: false, waiting: null };
   st.log.quiet = spec.name === 'bots' || spec.name === 'checker';
   children.set(spec.name, st);
+  const b = blocker(spec);
+  if (b) {
+    // checked again every 2 s (restartRequests); said once per cause
+    if (st.waiting !== `${b.msg}:${b.path}`) say(b.msg, { name: spec.name, path: b.path });
+    st.waiting = `${b.msg}:${b.path}`;
+    st.child = null;
+    return;
+  }
+  st.waiting = null;
   const child = spawn(spec.cmd, spec.args, { env: { ...process.env, ...spec.env }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   st.child = child;
   st.pid = child.pid;
@@ -234,11 +266,19 @@ function start(spec) {
   child.on('error', (e) => say('spawn error', { name: spec.name, error: String(e) }));
   child.on('exit', (code, signal) => {
     const up = Date.now() - st.startedAt;
-    st.exits.push({ at: Date.now(), code, signal, upMs: up });
+    const asked = st.asked;
+    st.asked = false;
+    st.exits.push({ at: Date.now(), code, signal, upMs: up, requested: asked });
     st.exits = st.exits.slice(-20);
     st.child = null;
-    say('exited', { name: spec.name, code, signal, upSec: Math.round(up / 1000) });
+    say('exited', { name: spec.name, code, signal, upSec: Math.round(up / 1000), ...(asked ? { requested: true } : {}) });
     if (stopping) return;
+    if (asked) {
+      // an operator restart or a hold: no backoff, not a restart of the child's own making
+      st.requested += 1;
+      setTimeout(() => !stopping && !st.child && start(st.spec), 2000);
+      return;
+    }
     if (up > 10 * 60_000) st.backoffMs = 2000;
     const wait = st.backoffMs;
     st.backoffMs = Math.min(st.backoffMs * 2, 60_000);
@@ -258,6 +298,8 @@ function writeStatus() {
       running: !!c.child,
       startedAt: c.startedAt,
       restarts: c.restarts,
+      requested: c.requested,
+      waiting: c.waiting,
       lastExits: c.exits.slice(-5),
     })),
   };

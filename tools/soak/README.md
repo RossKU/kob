@@ -164,11 +164,12 @@ cancel every order, retire the receipts, and merge each key's token UTXOs into o
 
 | | |
 |---|---|
-| status | `powershell -File scripts/status.ps1` (children, restarts, memory, indexer health, the latest report) |
+| status | `powershell -File scripts/status.ps1` (children, restarts by cause: `requested` operator restarts / holds, `startFail` exits within 5 s of a start = a deploy step such as a missing bundle, `crashes` = any other exit; `node scripts/restarts.mjs` classifies `supervisor.log` the same way; memory, indexer health, the latest report) |
 | stop | `powershell -File scripts/stop.ps1` (creates `run/STOP`; the supervisor stops every child) |
 | start / restart | `powershell -File scripts/start.ps1` (state, databases and the record logs persist; executors resume from their cursor) |
 | one child only | `powershell -File scripts/start.ps1 -Only miner,exec-a,exec-b` |
 | restart one child | `powershell -File scripts/restart-child.ps1 -Name miner` (run/RESTART-<name>: the supervisor restarts only that child, its spec rebuilt from a fresh read of config.json; the others keep running) |
+| hold one child down | `powershell -File scripts/hold-child.ps1 -Name exec-b` (run/HOLD-<name>: the supervisor stops it and keeps it down; `-Release` starts it again; refuses to hold the second executor). A child whose binary or bundle is missing waits instead of crash-looping. Use this in a deploy instead of renaming `dist/soak.mjs` or pointing `executorBin` at a binary that exits (supervisor changes of 2026-10-11 take effect at the next supervisor start) |
 | swap the miner binary | rename `run/bin/tn10-miner.exe` (a running exe can be renamed, not overwritten), copy the new one in, `restart-child.ps1 -Name miner` |
 | miner watermarks | edit `run/miner.json`: the running miner re-reads it on change (see "Miner" below); `config.json` `miner` is the persistent value |
 | pause a matcher | create `run/exec-a/pause` (delete to resume) |
