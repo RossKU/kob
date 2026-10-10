@@ -1716,6 +1716,18 @@ mod x402_exports {
     pub fn x402_expire_intent(request: &str) -> Result<String, JsError> {
         js(x402::expire_intent(request))
     }
+
+    /// The retry step (`resend` / `rebuild` / `stop`) after a failed paid request: `{ status?, diagnostic?, retryable? }`.
+    #[wasm_bindgen(js_name = x402RetryDecision)]
+    pub fn x402_retry_decision(request: &str) -> Result<String, JsError> {
+        js(x402::retry_decision(request))
+    }
+
+    /// Every diagnostic spelling of the x402 verifier and facilitator.
+    #[wasm_bindgen(js_name = x402Diagnostics)]
+    pub fn x402_diagnostics() -> Result<String, JsError> {
+        js(x402::diagnostics())
+    }
 }
 
 #[cfg(feature = "x402")]

@@ -1743,3 +1743,31 @@ pub fn check_invoice(json: &str, id: &str, now_ms: u64) -> R<String> {
     let exp = inv.validate(network, now_ms, u64::MAX / 2).map_err(xerr)?;
     out(&json!({ "id": id.to_ascii_lowercase(), "expiresAtMs": exp, "kaspaUri": inv.kaspa_uri() }))
 }
+
+// ------------------------------------------------------------------------------------------------ retry
+
+/// The retry step after a failed paid request (`kob_x402::client::retry`, the table the TS client mirrors): the request is
+/// `{ status?, diagnostic?, retryable? }` (`status` an HTTP status, 0 = no answer; without it the diagnostic alone decides) and
+/// the answer `{ "step": "resend" | "rebuild" | "stop" }`.
+pub fn retry_decision(json: &str) -> R<String> {
+    use kob_x402::client::retry::{classify, classify_status, Next};
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Q {
+        status: Option<u16>,
+        diagnostic: Option<String>,
+        #[serde(default)]
+        retryable: bool,
+    }
+    let q: Q = parse("retry request", json)?;
+    let step = match q.status {
+        Some(s) => classify_status(s, q.diagnostic.as_deref(), q.retryable),
+        None => q.diagnostic.as_deref().map_or(Next::Stop, |d| classify(d, q.retryable)),
+    };
+    out(&json!({ "step": step.as_str() }))
+}
+
+/// Every diagnostic spelling of `kob_x402` (`extensions.kaspa.diagnostic`).
+pub fn diagnostics() -> R<String> {
+    out(&kob_x402::error::Diag::ALL.iter().map(|d| d.as_str()).collect::<Vec<_>>())
+}

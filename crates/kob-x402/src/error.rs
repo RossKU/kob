@@ -102,6 +102,66 @@ pub enum Diag {
 }
 
 impl Diag {
+    /// Every diagnostic (for tables keyed by the wire spelling, e.g. the retry classification).
+    pub const ALL: &'static [Diag] = &[
+        Diag::InvalidKaspaX402Amount,
+        Diag::InvalidKaspaX402Binding,
+        Diag::InvalidKaspaX402Payload,
+        Diag::InvalidKaspaX402Asset,
+        Diag::InvalidKaspaX402Accepted,
+        Diag::InvalidKaspaPaymentIdentifier,
+        Diag::MissingKaspaPaymentIdentifier,
+        Diag::KaspaPaymentIdentifierConflict,
+        Diag::UnsupportedKaspaExactProfile,
+        Diag::InvalidKaspaExactTransaction,
+        Diag::InvalidKaspaExactTransactionId,
+        Diag::InvalidKaspaExactPaymentOutput,
+        Diag::InvalidKaspaExactSignature,
+        Diag::InvalidKaspaExactUtxo,
+        Diag::InvalidKaspaExactFee,
+        Diag::InvalidKaspaExactMass,
+        Diag::InvalidKaspaExactReplay,
+        Diag::InvalidKaspaExactFinality,
+        Diag::ExpiredAuthorization,
+        Diag::AuthorizationExceedsMaxTimeout,
+        Diag::InvalidAuthorization,
+        Diag::TokenNotAllowlisted,
+        Diag::TokenTemplateMismatch,
+        Diag::TokenBorrowEnabled,
+        Diag::TokenOwnerScheme,
+        Diag::TokenConservation,
+        Diag::TokenCustodyPolicy,
+        Diag::CarrierMismatch,
+        Diag::Underpayment,
+        Diag::Overpayment,
+        Diag::RouteUnsupported,
+        Diag::RouteAliasing,
+        Diag::UnknownOrderTemplate,
+        Diag::OrderConflict,
+        Diag::OrderNotSpendable,
+        Diag::PayAssetNotAccepted,
+        Diag::IntentNotExecutable,
+        Diag::IntentExpired,
+        Diag::IntentSpent,
+        Diag::InvoiceUnknown,
+        Diag::InvoiceExpired,
+        Diag::InvoicePaid,
+        Diag::InvoicePending,
+        Diag::InvalidInvoice,
+        Diag::Replay,
+        Diag::Expired,
+        Diag::RateLimited,
+        Diag::Unauthorized,
+        Diag::NodeUnavailable,
+        Diag::SettlementPending,
+        Diag::Internal,
+    ];
+
+    /// The diagnostic of a wire spelling.
+    pub fn parse(s: &str) -> Option<Diag> {
+        Self::ALL.iter().copied().find(|d| d.as_str() == s)
+    }
+
     /// Diagnostic spelling (snake case).
     pub fn as_str(self) -> &'static str {
         use Diag::*;
