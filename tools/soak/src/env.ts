@@ -71,6 +71,11 @@ export interface Env {
   sdk: KaspaSdk;
   node: KaspaRpcNode;
   indexer: HttpIndexer;
+  /**
+   * further indexers a market / close order's start is checked against (the web app's `extraIndexerUrls`): the soak's second executor
+   * (`indexerUrlB`); without one every market order worth 100 KAS or more is refused as MARKET_START_UNVERIFIED
+   */
+  verifiers: { label: string; api: HttpIndexer }[];
   keys: Record<string, KeyEntry>;
   state: SoakState;
   /** the dynamic fee policy (config `fees`) and the oracle over the node's getFeeEstimate (fees.ts) */
@@ -109,6 +114,7 @@ export async function createEnv(cfg: LoadedConfig): Promise<Env> {
   const node = new KaspaRpcNode({ sdk, network: cfg.network, url: cfg.nodeUrl, callTimeoutMs: 30_000 });
   await node.connect();
   const indexer = new HttpIndexer({ baseUrl: cfg.indexerUrl, timeoutMs: 15_000 });
+  const verifiers = cfg.indexerUrlB && cfg.indexerUrlB !== cfg.indexerUrl ? [{ label: cfg.indexerUrlB, api: new HttpIndexer({ baseUrl: cfg.indexerUrlB, timeoutMs: 15_000 }) }] : [];
   const keys = JSON.parse(readFileSync(join(cfg.runPath, 'keys.json'), 'utf8')) as Record<string, KeyEntry>;
   const state = readState(cfg);
   const env: Env = {
@@ -117,6 +123,7 @@ export async function createEnv(cfg: LoadedConfig): Promise<Env> {
     sdk,
     node,
     indexer,
+    verifiers,
     keys,
     state,
     fees: createFeeService(cfg.feeSettings, node),

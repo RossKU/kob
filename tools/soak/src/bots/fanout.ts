@@ -29,7 +29,12 @@ export function fanoutTarget(env: Env, role: 'mm' | 'trader', m: TokenMarket): n
  * the program's token outputs (`fanoutPlan`; 2 pieces + the token change per transaction with KOB's standard 3 / 3 program), each next
  * transfer spending the previous one's token change.
  */
-export async function fanOut(env: Env, w: BotWallet, want: number, each: bigint, which?: Which): Promise<boolean> {
+export function fanOut(env: Env, w: BotWallet, want: number, each: bigint, which?: Which): Promise<boolean> {
+  // one plan-and-submit section of the key at a time: the chain of transfers runs alone over the key's coins
+  return w.exclusive(() => fanOutNow(env, w, want, each, which));
+}
+
+async function fanOutNow(env: Env, w: BotWallet, want: number, each: bigint, which?: Which): Promise<boolean> {
   try {
     const m = tokenMarket(env, which);
     const utxos = await w.tokenUtxos(tokenRef(env, m));

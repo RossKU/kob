@@ -27,8 +27,13 @@ function limiterFor(cfg: ConsolidateConfig): RateLimiter {
  * One consolidation pass for `w` on token market `m`, keeping at least `keep` token UTXOs. Returns the number of merge transactions
  * submitted. Never throws: refusals and failures are counted and logged.
  */
-export async function consolidateTokens(env: Env, w: BotWallet, m: TokenMarket, keep: number, cfg: ConsolidateConfig): Promise<number> {
-  if (!cfg.enabled) return 0;
+export function consolidateTokens(env: Env, w: BotWallet, m: TokenMarket, keep: number, cfg: ConsolidateConfig): Promise<number> {
+  if (!cfg.enabled) return Promise.resolve(0);
+  // one plan-and-submit section of the key at a time (the market maker of three books and the fan-out share it)
+  return w.exclusive(() => consolidateNow(env, w, m, keep, cfg));
+}
+
+async function consolidateNow(env: Env, w: BotWallet, m: TokenMarket, keep: number, cfg: ConsolidateConfig): Promise<number> {
   try {
     const utxos = await w.tokenUtxos(tokenRef(env, m));
     w.stats.set(`token_utxos:${w.name}:${m.ticker}`, utxos.length);

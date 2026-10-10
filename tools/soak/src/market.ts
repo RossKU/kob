@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { bookFromIndexer, kasReferenceOf, ownOrderRefs } from '@/app/env';
 import { impliedPairRate, isPairOrderView, ownPairOrderRefs, pairBookToBookView } from '@/kob/pair';
 import type { CancelEnv } from '@/kob/cancel';
-import type { BookView, Clock, PairPlanEnv, PlanEnv, TokenMarket } from '@/kob/plan-types';
+import { isPairEnv, type BookView, type Clock, type PairPlanEnv, type PlanEnv, type TokenMarket } from '@/kob/plan-types';
+import { readPairReferences, readReferences } from '@/data/indexer-crosscheck';
 import { toTokenMarket } from '@/kob/token-market';
 import type { TokenRef } from '@/data/token-tracker';
 import type { OrderView } from '@/data/indexer-types';
@@ -192,8 +193,8 @@ export async function planEnv(env: Env, w: BotWallet, o: { book?: BookView; mine
     feeContext(env),
   ]);
   // Self-trade guard over the maker's resting orders of THIS book: its KAS-quoted orders (a pair order has no KAS price; its own guard is the
-  // pair planner's, over the pair book: pairPlanEnv)
-  const own = mine.filter((v) => !isPair(v));
+  // pair planner's, over the pair book: pairPlanEnv), less those its own pending transactions already cancel or amend (the listing lags)
+  const own = w.actionable(mine).filter((v) => !isPair(v));
   return { kob: env.kob, token: m, maker: w.pk, clock, book, ownOrders: ownOrderRefs(m, own), funding, tokenUtxos, fees };
 }
 
@@ -223,10 +224,27 @@ export async function pairPlanEnv(env: Env, w: BotWallet, base: Which, quote: Wh
   if (!mine) guardsUnavailable.push('own-orders');
   return {
     kob: env.kob, token: a, maker: w.pk, clock, book: view ? pairBookToBookView(view, a.scale) : { asks: [], bids: [] },
-    ownOrders: mine ? ownPairOrderRefs(mine, a.covenantId, b.covenantId) : [], ...(guardsUnavailable.length ? { guardsUnavailable } : {}),
+    ownOrders: mine ? ownPairOrderRefs(w.actionable(mine), a.covenantId, b.covenantId) : [], ...(guardsUnavailable.length ? { guardsUnavailable } : {}),
     lastFillPrice: impliedPairRate(refA.last, refB.last, b.scale), funding, tokenUtxos, fees,
     pair: { quote: b, quoteTokenUtxos, view, kasPerWholeA: refA.book ?? refA.last, kasPerWholeB: refB.book ?? refB.last },
   };
+}
+
+/**
+ * A market / close order's planner environment with the start references of the verifier indexers (`env.verifiers`, the app's
+ * `extraIndexerUrls`): each one's touch of the KAS book, or for a pair the rate its two KAS books imply. Any other order type: unchanged.
+ */
+export async function withStartReferences<E extends PlanEnv>(env: Env, e: E, intentType: string): Promise<E> {
+  if ((intentType !== 'market' && intentType !== 'close') || !env.verifiers.length) return e;
+  const a = e.token;
+  const refs = isPairEnv(e)
+    ? await readPairReferences(
+        env.verifiers,
+        { covenantId: a.covenantId, toBook: (v) => bookFromIndexer(a, v) },
+        { covenantId: e.pair.quote.covenantId, toBook: (v) => bookFromIndexer(e.pair.quote, v), scale: e.pair.quote.scale },
+      )
+    : await readReferences(env.verifiers, a.covenantId, (v) => bookFromIndexer(a, v));
+  return { ...e, referenceTouches: refs.touches, referencesUnavailable: refs.unavailable };
 }
 
 export async function cancelEnv(env: Env, w: BotWallet, which?: Which): Promise<CancelEnv> {

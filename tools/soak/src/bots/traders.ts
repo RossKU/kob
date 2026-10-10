@@ -17,7 +17,7 @@ import { isPair, myOrders, readBook, readClock, tokenMarket, touch, type AssetBo
 import type { RefSource } from '../price';
 import { bps, expDelay, onTick, pick, randInt, randUnits, sleep, usdToUnits, weighted } from '../util';
 import { walletFor, type BotWallet } from '../wallet';
-import { amend, cancel, cancelAll, priceOf, place, placePair } from './common';
+import { amend, cancel, cancelAll, priceOf, place, placePair, type PlaceResult } from './common';
 import { consolidateTokens } from './consolidate';
 import { consolidateConfig } from './consolidate-math';
 import { fanoutTarget } from './fanout';
@@ -174,7 +174,8 @@ export class Trader {
     const R = ref.perToken;
     const at = (b: number) => onTick(R + bps(R, b), tick);
     const book: BookView = await readBook(env, m);
-    const mine: OrderView[] = await myOrders(env, this.w.pk, m).catch(() => []);
+    // the trader's own orders of this book, less those its pending cancels / amends already spend (the listing lags the chain)
+    const mine: OrderView[] = this.w.actionable(await myOrders(env, this.w.pk, m).catch(() => [] as OrderView[]));
     const t = touch(book);
     const clock = await readClock(env);
     const o = { book, mine };
@@ -327,22 +328,33 @@ export class Trader {
         return;
     }
     if (!intent) return;
-    const res = await place(env, this.w, intent, action, o, m);
-    if (res.planIssue === 'SELF_TRADE') {
-      // a real user would pull their own resting orders on the other side first (matcher.md 10.12: self-trade prevention is the
-      // wallet's job): cancel them now, the next action trades
-      const sideOf = (intent as { side?: 'buy' | 'sell' }).side ?? 'sell';
-      const opposite = mine.filter((v) => v.current && v.state_known && !v.parent && !isPair(v) && (sideOf === 'buy' ? v.side === 1 : v.side === 2));
-      if (opposite.length) {
-        const n = await cancelAll(env, this.w, opposite.slice(0, 6), 'selfTradeCancel');
-        this.stats.inc('selftrade_cancelled_orders', n);
-        // then trade: once the cancel is accepted and indexed, plan the same intent again against the fresh book
-        if (n > 0) {
-          await sleep(6000);
-          await place(env, this.w, intent, action, {}, m);
-        }
-      }
+    const placed = intent;
+    const res = await place(env, this.w, placed, action, o, m);
+    // a real user pulls their own resting orders the order would trade against first (matcher.md 10.12: self-trade prevention is the
+    // wallet's job): exactly the orders the refusal names are cancelled together, then the same intent is planned again
+    await this.clearSelfTrade(res, () => place(env, this.w, placed, action, {}, m), (views) => cancelAll(env, this.w, views, 'selfTradeCancel'));
+  }
+
+  /**
+   * After a SELF_TRADE refusal: cancels the own orders it names (at most 6, those still live and not already being cancelled) and plans the
+   * intent again, at most twice. The next plan no longer sees them (the wallet leaves its pending cancels out of the own orders), so it
+   * does not wait for the indexer to list the cancels.
+   */
+  private async clearSelfTrade<R extends PlaceResult>(res: R, again: () => Promise<R>, cancelViews: (views: OrderView[]) => Promise<number>): Promise<R> {
+    for (let round = 0; round < 2 && res.planIssue === 'SELF_TRADE'; round++) {
+      const ids = (res.selfTrade ?? []).slice(0, 6);
+      const views = this.w.actionable(
+        (await Promise.all(ids.map((id) => this.env.indexer.order(id).catch(() => null)))).filter((v): v is OrderView => !!v && (v.status === 'open' || v.status === 'partial')),
+      );
+      if (!views.length) break;
+      const n = await cancelViews(views);
+      this.stats.inc('selftrade_cancelled_orders', n);
+      if (n < 1) break;
+      // the cancel reaches the node before the order that would have met the cancelled one
+      await sleep(3000);
+      res = await again();
     }
+    return res;
   }
 
   /**
@@ -473,7 +485,7 @@ export class Trader {
           : { type: 'repeatIfo', side: 'sell', amount: usd(3, 8), entry: { price: at(frac(5, 25)) }, exit: { takeProfit: at(-frac(20, 45)), stop: at(frac(120, 200)) }, repeat: { count: 2n } };
         break;
       case 'cancel': {
-        const mine = (await myOrders(env, this.w.pk, baseM).catch(() => [] as OrderView[])).filter((v) => isPair(v) && v.current && v.state_known && !v.parent);
+        const mine = this.w.actionable(await myOrders(env, this.w.pk, baseM).catch(() => [] as OrderView[])).filter((v) => isPair(v) && v.current && v.state_known && !v.parent);
         if (!mine.length) return;
         const v = pick(mine);
         const res = await cancel(env, this.w, v, `cancel:${v.contract}`);
@@ -484,20 +496,15 @@ export class Trader {
         return;
     }
     if (!intent) return;
-    let res = await placePair(env, this.w, intent, tag, baseM, quoteM);
-    // a pair order that would trade against one of this trader's own resting orders (on either KAS book of the route, or an opposite
-    // pair order: netting) is refused (SELF_TRADE, the planner names the order); a real user cancels that order and trades: up to 6
-    // such orders are cancelled, each followed by a fresh plan once the cancel is indexed
-    for (let i = 0; i < 6 && res.planIssue === 'SELF_TRADE'; i++) {
-      const own = String(res.planParams?.ownCovenantId ?? '');
-      const v = own ? await env.indexer.order(own).catch(() => null) : null;
-      if (!v) break;
-      const c = await cancel(env, this.w, v, 'selfTradeCancel');
-      if (!c.ok) break;
-      this.stats.inc('selftrade_cancelled_orders');
-      await sleep(6000);
-      res = await placePair(env, this.w, intent, tag, baseM, quoteM);
-    }
+    const placed = intent;
+    // a pair order that would trade against one of this trader's own resting pair orders (netting) is refused (SELF_TRADE, the planner
+    // names every such order); a real user cancels those and trades (one cancel each: a pair order's custody is in either token)
+    const cancelEach = async (views: OrderView[]) => {
+      let n = 0;
+      for (const v of views) if ((await cancel(env, this.w, v, 'selfTradeCancel')).ok) n++;
+      return n;
+    };
+    const res = await this.clearSelfTrade(await placePair(env, this.w, placed, tag, baseM, quoteM), () => placePair(env, this.w, placed, tag, baseM, quoteM), cancelEach);
     if (res.ok) this.log.info('pair order placed', { tag, kind: res.pair?.kind, amount: (intent as { amount?: bigint }).amount, reference: R, fair, txid: res.txid });
   }
 }

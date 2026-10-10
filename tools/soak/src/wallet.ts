@@ -15,6 +15,7 @@ import type { Env, KeyEntry } from './env';
 import { errText, logger, type Logger, type Stats } from './log';
 import { FileStorage } from './file-storage';
 import { gateRefusal } from './indexer-gate';
+import { mempoolSpent, Mutex, splitPending, type MempoolEntriesLike } from './bots/pending';
 
 const rootLog = logger('wallet');
 
@@ -35,6 +36,31 @@ export interface SubmitOutcome {
 const RESERVE_MS = 600_000;
 /** inputs of a transaction the mempool refused because another transaction spends one of them: skipped this long (the other spend lands) */
 const CONFLICT_RESERVE_MS = 60_000;
+/** how old the wallet's view of its own mempool transactions may be when it plans */
+const MEMPOOL_TTL_MS = 10_000;
+
+/**
+ * One SDK client per process for the wallets' mempool reads (the web app's node wrapper has none). Under the 10-11 flood a transaction
+ * at the normal rate waited up to an hour in the mempool, far beyond RESERVE_MS: its inputs are skipped as long as the node holds it.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mempoolRpc: Promise<any> | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function mempoolClient(env: Env): Promise<any> {
+  const cur = mempoolRpc ? await mempoolRpc.catch(() => null) : null;
+  if (cur?.isConnected) return cur;
+  mempoolRpc = (async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sdk = env.sdk as any;
+    const rpc = new sdk.RpcClient({ url: env.cfg.nodeUrl, networkId: env.cfg.network, encoding: sdk.Encoding.SerdeJson });
+    await rpc.connect({ blockAsyncConnect: true, timeoutDuration: 15_000 });
+    return rpc;
+  })();
+  return mempoolRpc;
+}
+
+const within = <T>(p: Promise<T>, ms: number): Promise<T> =>
+  Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`no answer within ${ms} ms`)), ms))]);
 
 export class BotWallet {
   readonly name: string;
@@ -45,6 +71,11 @@ export class BotWallet {
   readonly tracker: TokenTracker;
   private readonly reserved = new Map<string, number>();
   private readonly adapter: WalletAdapter;
+  private readonly lock = new Mutex();
+  /** outpoints this key's transactions in the node's mempool spend (refreshed at most every MEMPOOL_TTL_MS by funding / tokenUtxos) */
+  private inMempool = new Set<string>();
+  private mempoolAt = 0;
+  private mempoolRead: Promise<void> | null = null;
 
   constructor(
     readonly env: Env,
@@ -79,8 +110,29 @@ export class BotWallet {
     };
   }
 
+  /** reads which outpoints this key's mempool transactions spend; a failed read keeps the previous answer (and the reservations still apply) */
+  private async refreshMempool(): Promise<void> {
+    if (Date.now() - this.mempoolAt < MEMPOOL_TTL_MS) return;
+    this.mempoolRead ??= (async () => {
+      try {
+        const rpc = await within(mempoolClient(this.env), 20_000);
+        const r = (await within(rpc.getMempoolEntriesByAddresses({ addresses: [this.address], includeOrphanPool: true, filterTransactionPool: false }), 15_000)) as MempoolEntriesLike;
+        this.inMempool = mempoolSpent(r);
+        this.stats.set(`mempool_spent:${this.name}`, this.inMempool.size);
+      } catch (e) {
+        this.stats.inc('mempool_read_failed');
+        this.log.debug('mempool read failed', { error: errText(e) });
+      } finally {
+        this.mempoolAt = Date.now();
+        this.mempoolRead = null;
+      }
+    })();
+    await this.mempoolRead;
+  }
+
   private isReserved(txid: string, index: number): boolean {
     const k = `${txid}:${index}`;
+    if (this.inMempool.has(k)) return true;
     const exp = this.reserved.get(k);
     if (exp === undefined) return false;
     if (exp < Date.now()) {
@@ -94,15 +146,33 @@ export class BotWallet {
     this.reserved.set(`${txid}:${index}`, Date.now() + ms);
   }
 
-  /** outpoints ("txid:index") currently reserved by this wallet's own submitted transactions */
+  /** outpoints ("txid:index") currently reserved by this wallet's own submitted transactions, or spent by its transactions in the mempool */
   reservedKeys(): Set<string> {
     const now = Date.now();
-    return new Set([...this.reserved].filter(([, exp]) => exp >= now).map(([k]) => k));
+    return new Set([...[...this.reserved].filter(([, exp]) => exp >= now).map(([k]) => k), ...this.inMempool]);
+  }
+
+  /**
+   * Runs one plan-and-submit section of this key at a time (see pending.ts `Mutex`): every bot action that plans over the key's coins
+   * (place, cancel, amend, cancel-all, fan-out, merge) goes through here, so concurrent loops of one key never pick the same input.
+   */
+  exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    return this.lock.run(fn);
+  }
+
+  /** an order listing split into the orders this key may act on and those its own pending transactions already spend (pending.ts) */
+  pendingSplit<T extends { current?: { txid: string; index: number } | null }>(views: readonly T[]): { live: T[]; pending: T[] } {
+    return splitPending(views, this.reservedKeys());
+  }
+
+  /** the orders of a listing this key may act on (its own pending cancels / amends left out) */
+  actionable<T extends { current?: { txid: string; index: number } | null }>(views: readonly T[]): T[] {
+    return this.pendingSplit(views).live;
   }
 
   /** spendable KAS UTXOs (mature, not reserved), largest first */
   async funding(): Promise<KeyUtxo[]> {
-    const all = await this.utxos.fundingFor(this.pk);
+    const [all] = await Promise.all([this.utxos.fundingFor(this.pk), this.refreshMempool()]);
     return all.filter((u) => !this.isReserved(u.transactionId, u.index));
   }
 
@@ -111,7 +181,7 @@ export class BotWallet {
   }
 
   async tokenUtxos(token: TokenRef): Promise<TokenUtxo[]> {
-    const all = await this.tracker.tokenUtxosFor(this.pk, token);
+    const [all] = await Promise.all([this.tracker.tokenUtxosFor(this.pk, token), this.refreshMempool()]);
     return all.filter((u) => !this.isReserved(u.transactionId, u.index));
   }
 
@@ -160,7 +230,8 @@ export class BotWallet {
       return { ok: true, txid: r.txid, fee: r.fee };
     } catch (e) {
       const text = e instanceof SignFlowError ? `${e.stage}: ${e.message}` : errText(e);
-      const conflict = /double spend|already spent|orphan|not found in the utxo|missing|RejectDoubleSpend|already in the mempool|is not in the utxo set|already being spent/i.test(text);
+      // "already has this transaction": the same transaction again (a plan from a listing that still shows what it spent): benign like a lost race
+      const conflict = /double spend|already spent|orphan|not found in the utxo|missing|RejectDoubleSpend|already in the mempool|is not in the utxo set|already being spent|already has this transaction/i.test(text);
       this.stats.inc(conflict ? 'tx_conflict' : 'tx_failed');
       this.stats.inc(`${conflict ? 'tx_conflict' : 'tx_failed'}:${what}`);
       // a rejected transaction's inputs may still be ours to use; release nothing. When the mempool already holds a spend of one of them
