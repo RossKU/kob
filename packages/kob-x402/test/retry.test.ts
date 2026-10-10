@@ -9,16 +9,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { KobX402Error } from '../src/errors.ts';
 import type { ArtifactRecord } from '../src/artifact-store.ts';
-import type { ChainContext, ChainContextProvider, KobX402ClientOptions, PaymentApproval } from '../src/client.ts';
+import type { ChainContext, ChainContextProvider, KobX402ClientOptions, PaidFetchResult, PaymentApproval } from '../src/client.ts';
 import { backoffMs, classifyFailure, classifyStatus, outpointKey, retryDeadline, retryPolicy } from '../src/retry.ts';
-import type { OfferSpec, PayerUtxo } from '../src/types.ts';
+import type { FacilitatorRequest, OfferSpec, PayerUtxo } from '../src/types.ts';
 import { payInvoiceWithIntent } from '../src/intent.ts';
 import type { FetchedInvoice, InvoiceClient } from '../src/invoice.ts';
 import { ASSET_KAS, BINDING_EXACT, BINDING_INTENT, ROUTER_ARTIFACT_ID, TX_ENCODING } from '../src/types.ts';
 import type { PaymentRequirements, SettlementResponse } from '../src/types.ts';
-import { TOKEN_A, kasUtxo, startRig } from './helpers/env.ts';
+import { KobX402Client } from '../src/client.ts';
+import { NETWORK, PAYER, SPEND_CAPS, SWAP_BOUNDS, TOKEN_A, kasUtxo, startRig } from './helpers/env.ts';
 import type { Rig } from './helpers/env.ts';
-import { failure } from './helpers/stub-facilitator.ts';
+import { defaultSettlement, failure } from './helpers/stub-facilitator.ts';
 
 /** Retries without waiting (the backoff is computed, the sleep is skipped). */
 const FAST: KobX402ClientOptions['retry'] = { sleep: async () => {}, random: () => 0.5 };
@@ -353,6 +354,76 @@ test('concurrency: paid requests for one resource run one at a time; a resume ra
     assert.deepEqual(rig2.handled.map((h) => h.replayed), [false, true]);
   } finally {
     await rig2.close();
+  }
+});
+
+/**
+ * A chain for the stub facilitator: an outpoint is spent by one transaction only (a second transaction spending it is refused
+ * `replay`, as the KOB facilitator's ledger and the node refuse it), and the payer's chain context lists only its unspent
+ * coins. `refuse(n)` scripts a failure of the n-th settle (nothing is spent).
+ */
+function exclusiveChain(refuse: (n: number) => SettlementResponse | undefined) {
+  const spentBy = new Map<string, string>();
+  const settled: string[] = [];
+  const settle = (n: number, req: FacilitatorRequest) => {
+    const scripted = refuse(n);
+    if (scripted) return { body: scripted };
+    const tx = JSON.parse(req.paymentPayload.payload.transaction) as { id: string; inputs: { txid: string; index: number }[] };
+    const taken = tx.inputs.map(outpointKey).find((k) => spentBy.has(k) && spentBy.get(k) !== tx.id);
+    if (taken) return { body: failure('replay', false, `outpoint ${taken} is already consumed by transaction ${spentBy.get(taken)}`) };
+    if (!settled.includes(tx.id)) settled.push(tx.id);
+    for (const i of tx.inputs) spentBy.set(outpointKey(i), tx.id);
+    return { body: defaultSettlement(req) };
+  };
+  const view = (): ChainContext => ({ utxos: [kasUtxo(0), kasUtxo(1)].filter((u) => !spentBy.has(outpointKey(u))), tokenUtxos: [], virtualDaaScore: '1000' });
+  const context: ChainContextProvider = { load: async () => view() };
+  return { settle, context, view, settled };
+}
+
+test('two retries of one payment racing (another process resumes the attempt this one rebuilds): paid once', async () => {
+  // `staleView`: the payer's node does not show the resumed attempt's spend yet, so the rebuilt attempt is sent and only the
+  // anchor it shares with the resumed one keeps it out (the facilitator refuses it); otherwise the rebuild sees the anchor spent
+  for (const staleView of [false, true]) {
+    const chain = exclusiveChain((n) => (n === 1 ? failure('invalid_kaspa_exact_transaction', false, 'the node refused the transaction (mempool full)') : undefined));
+    let ids = 0;
+    let resumed: Promise<string> | undefined;
+    const firstView = chain.view();
+    const rig = await startRig({
+      settle: chain.settle,
+      client: {
+        context: staleView ? { load: async () => firstView } : chain.context,
+        newPaymentId: () => `racing-payment-a-${String(++ids).padStart(4, '0')}`,
+        // the backoff before the rebuild: meanwhile another process holding the stored first attempt re-sends it, and it goes through
+        retry: { random: () => 0.5, sleep: async () => void (await resumed) },
+      },
+    });
+    try {
+      // the other process: its own client over the same artifact store, resuming the first attempt once it was refused
+      const other: KobX402Client = new KobX402Client({ wasm: rig.wasm, network: NETWORK, payerAddress: PAYER, privateKeys: ['01'.repeat(32)], context: chain.context, store: rig.store, capabilities: { maxAmount: SPEND_CAPS }, maxPay: SWAP_BOUNDS, retry: FAST });
+      const resume = async (): Promise<string> => {
+        while (!(await rig.store.list()).some((r) => r.status === 'rejected')) await new Promise((r) => setTimeout(r, 1));
+        const done: PaidFetchResult = await other.resume('racing-payment-a-0001');
+        return done.payment!.transactionId;
+      };
+      resumed = resume();
+      const a = await rig.client.paidFetch(`${rig.base}/report`).then(
+        () => 'paid',
+        (e: KobX402Error) => e.diagnostic ?? e.code,
+      );
+      const winner: string = await resumed;
+      assert.equal(a, staleView ? 'replay' : 'retry_anchor_spent', `stale view ${staleView}: the rebuilt attempt is refused`);
+      const recs = await rig.store.list();
+      const anchor = recs.find((r) => r.paymentId === 'racing-payment-a-0001')!.anchor!;
+      assert.equal(anchor, outpointKey(kasUtxo(0)));
+      assert.ok(recs.every((r) => consumedKeys(r).includes(anchor)), 'every attempt of the payment spends its anchor');
+      assert.equal(recs.length, staleView ? 2 : 1, 'the rebuilt attempt is built only while the anchor looks unspent');
+      // one transaction of the payment went through: the one the resuming process reported, served once by the merchant
+      assert.deepEqual(chain.settled, [winner]);
+      assert.equal(recs.filter((r) => r.status === 'settled').map((r) => r.transactionId).join(), winner);
+      assert.equal(rig.handled.filter((h) => !h.replayed).length, 1);
+    } finally {
+      await rig.close();
+    }
   }
 });
 
