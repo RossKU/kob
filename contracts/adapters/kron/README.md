@@ -44,8 +44,8 @@ State (template offset 0, 46 B): `0x20 owner[32] | 0x01 id_type | 0x08 amount (L
 
 ## KRON token limits that shape the orders
 
-- 1..4 token inputs and 1..5 token outputs per transaction (the KCC-20 reference build is 3/3, KOB-issued
-  KCC-20 is 8/8), every token input runs the whole check itself (no leader): a batch of k asks carries the
+- 1..4 token inputs and 1..5 token outputs per transaction (the KCC-20 reference build is 3/3, and so are the
+  KCC-20 tokens KOB issues), every token input runs the whole check itself (no leader): a batch of k asks carries the
   token program k times.
 - Every output amount must be `1 <= amount <= 1e9`. Order quantities above `1e9` base units can never be
   moved; the KRON wallets and the launchpad never create such UTXOs, and a bid whose delivery would exceed `1e9`

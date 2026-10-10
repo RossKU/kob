@@ -308,8 +308,10 @@ updates − network fee` of the transaction subject to:
   crossing liquidity allows in that transaction (its remainder returns to the maker at once, at
   the output with the index of the ask's custody input: `tokOut = tokenIn`, and
   cannot be filled later);
-- per token: the slot limits of its program (3/3 reference, 4/5, 8/8 KOB tokens, 16/16; KRON 4/5) and `MAX_TOK_IN` of
-  its family (KCC-20 8, KRON 4), one extension commitment;
+- per token: the slot limits of its program (3/3 reference, the program KOB issues; the 4/5, 8/8 and 16/16 prototypes;
+  KRON 4/5) and `MAX_TOK_IN` of its family (KCC-20 8, KRON 4), one extension commitment. `MAX_TOK_IN` is an upper bound: a
+  3/3 transaction never carries more than 3 token inputs of its token, so the orders' stray scan covers all of them
+  (`crates/kob-tests/tests/kcc20_standard_slots_tests.rs`);
 - positional outputs (order input i ↔ output i; if-done fills add one exit output; a custody's rest or return at its
   custody input's index);
 - per token, conservation: what the transaction's inputs of a token carry equals what its outputs of that token carry
@@ -909,6 +911,10 @@ custodies (genuine holder of the token's program, owned by the exit id, exactly 
   covenant path reads the parent's DAA score: no TWAP / DCA slice, stop auction, trigger or trigger evidence (a pair
   trigger's KAS-book or pair-order evidence included) or merge; the pair kinds follow the rule of their KAS
   counterparts).
+  The token slots split a book the same way: with KOB's standard 3/3 program a bid that crosses seven asks takes at
+  most three custodies per transaction, and the tick clears the book over chained transactions, each within the program's
+  slots and validated on its own (`crates/kob-executor/tests/matcher_scenarios.rs`,
+  `a_crossing_beyond_the_standard_programs_three_slots_is_chained`).
   An order takes part in at most `max_chain` (default 4) transactions of one tick; with chaining off
   (`--no-chain`) a continuation waits for the next tick while untouched orders still go into the tick's next
   transactions.

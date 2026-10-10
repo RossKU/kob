@@ -682,7 +682,7 @@ may spend on fillers and the fee. The router links the orders by closed ICC and 
 **program handles the intent's state names** (open ICC): every token is named by covenant id and program,
 so the terms the verifier recomputes include the program of every token (the one the offer's `templateHash`
 and the allowlist give). An intent trades any KCC-20 program of the 112-byte state (the 3/3 reference
-program, the 8/8 program KOB issues, ...) and the KRON programs; a program's own slot limits bound the
+program KOB issues, the 8/8 prototype, ...) and the KRON programs; a program's own slot limits bound the
 shapes it runs (the 3/3 program has no three-bid sell). A KRON token is a pay asset only (`TokenToKasKron_*`,
 `TokenSwapKron_*`, sold into `KobBidKron`s): its lock is a KRON UTXO of `id_type` 2, its deliveries and the
 payer's change are `id_type` 3 (address presence), and because a KRON output holds at least one unit the lock

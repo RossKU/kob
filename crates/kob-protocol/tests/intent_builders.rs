@@ -3,7 +3,7 @@
 //! enforced compute budgets, the storage-mass commitment and the fee floor.
 //!
 //! The router reads every token under the program the intent's state names (open ICC handles), so every test runs on
-//! several token programs ([`RUNS`]): the 8/8 program KOB issues, the 3/3 reference program, a swap across the two,
+//! several token programs ([`RUNS`]): the 8/8 prototype, the 3/3 reference program KOB issues, a swap across the two,
 //! the published public-mint build of the reference (3/3; token A and token B), and the KRON programs (2,433 B and 2,732 B) for a KRON token A (`TokenToKasKron_*`, `TokenSwapKron_*`, sold into
 //! `KobBidKron`s; token B stays KCC-20).
 //!

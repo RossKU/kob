@@ -1,5 +1,5 @@
-// KOBToken: the KCC-20 token program KOB issues, with up to 8 token inputs and 8 token outputs per
-// transfer. Source: argent-lang/kcc20-reference master c8a0871 (pull request #1, merged; ISC licence,
+// KOBToken: a prototype KCC-20 token program (not KOB's issuance: KOB issues the standard 3/3 reference),
+// with up to 8 token inputs and 8 token outputs per transfer. Source: argent-lang/kcc20-reference master c8a0871 (pull request #1, merged; ISC licence,
 // unaudited), contracts/kcc20.ag (vendored as contracts/third-party/kcc20-reference/kcc20.ag), unchanged
 // except for the two limits below (upstream: MAX_DELEGATES = 2, MAX_TOKEN_OUTPUTS = 3), this header and
 // the app declaration at the end (upstream declares no app in kcc20.ag since the merge).

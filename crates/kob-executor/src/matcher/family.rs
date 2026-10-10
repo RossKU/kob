@@ -4,8 +4,9 @@
 //! on the per-transaction token limits a family's program imposes. A family adapter supplies those
 //! limits and lowers a [`Plan`](super::planner::Plan) to a transaction with that family's builders.
 //!
-//! * **KCC-20** (`kob_protocol::build`): slot limits of the pinned program (3/3 reference and P2,
-//!   4/5, 8/8 for KOB-issued tokens, 16/16) and the covenants' `MAX_TOK_IN = 8`.
+//! * **KCC-20** (`kob_protocol::build`): slot limits of the pinned program (3/3 reference, the program KOB issues,
+//!   and P2; the 4/5, 8/8 and 16/16 prototypes) and the covenants' `MAX_TOK_IN = 8`. A book that needs more custodies
+//!   than the slots hold is cleared over several chained transactions of the tick (`super::engine`).
 //! * **KRON** (`contracts/adapters/kron`): 4 token inputs / 5 outputs, every output amount at most
 //!   1e9 (`kob_protocol::registry::KRON_MAX_OUTPUT_AMOUNT`), no extension commitment. The matcher
 //!   plans KRON books with the same planner (the limits below enforced) and lowers them with the KRON

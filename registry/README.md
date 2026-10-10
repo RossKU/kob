@@ -6,7 +6,7 @@ and is not enforced by the order contracts (an order pins its own covenant id an
 
 | File | What |
 |---|---|
-| `tokens.json` | The registry shipped with a build (mainnet). It pins the six token programs of the strict list (reference KCC-20 3/3 and 8/8, the reference's published public-mint build `kcc20-ref-public-mint`, the two KRON programs, KaspaCom's KCC20 0.2.5) and lists the launch candidates: the KRON family of the 2026-09-29 census (template A `2ed46a7e...`: KRON, KASCOV, PEPE, ANSEM, IFWEN, PEEPS, DNBT; template B `8097c96f...`: KDIST). The two KRON templates are `reviewed` (internal review B2, 2026-09-30, with the conditions recorded in their `risks`: a per-token genesis check and no live minter before a token is listed or official); the KCC-20 templates are `pending-review`, KaspaCom's with finding K-1 confirmed by an engine PoC (the creator of a mint_policy 2 token can mint past max_supply or plant a non-program covenant UTXO through `set_public_mint_active`; see its `risks`). Listing verification (2026-10-03): all eight KRON tokens passed the genesis check on mainnet data (C1) and have no live mint authority (C2), so they are `listed`, each with its `genesis` record (re-derived from `evidence/mainnet-genesis.json` by `kob registry verify-genesis`). Six are `official`; PEPE ("The Ultimate test") and DNBT ("dont buy this is test") are test tokens per their own names and are NOT official (founder decision 2026-10-03): verified and listed, with a maintainer `warning` (PEPE's also says it is not the well-known PEPE, whose ticker it shares). The file is the release's pinned registry: its sha256 is in `contracts/deploy/mainnet/deployment.json` (`scripts/build-deploy.sh mainnet`, `docs/ops/release.md`). |
+| `tokens.json` | The registry shipped with a build (mainnet). It pins the six token programs of the strict list (reference KCC-20 3/3, the program KOB issues; the 8/8 prototype, kept so that testnet tokens issued with it stay tradable; the reference's published public-mint build `kcc20-ref-public-mint`, the two KRON programs, KaspaCom's KCC20 0.2.5) and lists the launch candidates: the KRON family of the 2026-09-29 census (template A `2ed46a7e...`: KRON, KASCOV, PEPE, ANSEM, IFWEN, PEEPS, DNBT; template B `8097c96f...`: KDIST). The two KRON templates are `reviewed` (internal review B2, 2026-09-30, with the conditions recorded in their `risks`: a per-token genesis check and no live minter before a token is listed or official); the KCC-20 templates are `pending-review`, KaspaCom's with finding K-1 confirmed by an engine PoC (the creator of a mint_policy 2 token can mint past max_supply or plant a non-program covenant UTXO through `set_public_mint_active`; see its `risks`). Listing verification (2026-10-03): all eight KRON tokens passed the genesis check on mainnet data (C1) and have no live mint authority (C2), so they are `listed`, each with its `genesis` record (re-derived from `evidence/mainnet-genesis.json` by `kob registry verify-genesis`). Six are `official`; PEPE ("The Ultimate test") and DNBT ("dont buy this is test") are test tokens per their own names and are NOT official (founder decision 2026-10-03): verified and listed, with a maintainer `warning` (PEPE's also says it is not the well-known PEPE, whose ticker it shares). The file is the release's pinned registry: its sha256 is in `contracts/deploy/mainnet/deployment.json` (`scripts/build-deploy.sh mainnet`, `docs/ops/release.md`). |
 | `evidence/mainnet-genesis.json` | Chain evidence behind the `genesis` records: each token's genesis transaction, the redeem scripts of its genesis outputs and the node's liveness view, collected read-only by `web/scripts/registry-genesis-evidence.mjs`. Untrusted input: the verifier checks every byte against a hash. |
 | `tokens.schema.json` | JSON Schema (draft 2020-12): structure, types, enums, hex patterns, `additionalProperties: false`. |
 | `tokens.example.json` | Fictional TN10 entries (one `kcc20`, one `kron`; covenant ids are patterns, not deployed tokens). Format example and test fixture; unlike `tokens.json`, its templates are marked `reviewed` so the listing paths can be exercised. |
@@ -45,7 +45,7 @@ order-contract pair per family; a token of one family can never trade through th
   A program whose state opens with compiler-owned context fields (`kcc20-ref-public-mint`: `gen__kcc20_template`, always the
   program's own Sil template hash) is pinned as its KCC-1 actor-type handle: the context belongs to the prefix (34 B), the
   open state is the 112-byte KCC-20 state, and `template_hash` is the handle's (what every order pins)
-- `max_token_inputs`, `max_token_outputs`: slot limits of the program (kcc20 reference 3/3, KOB 8/8 variant 8/8, KRON 4/5)
+- `max_token_inputs`, `max_token_outputs`: slot limits of the program (kcc20 reference 3/3, the 8/8 prototype 8/8, KRON 4/5)
 - `escrow`: owner types the order contracts use. kcc20: `owner_scheme` 4 (covenant id) and `borrow_scheme` 0. kron: `id_type` 2,
   `is_minter` 0 and `delivery_id_type` 3 (address presence, KRON-wallet compatible; 0 = pubkey is the alternative)
 - `review_status`: `pending-review` | `reviewed`; `source`: path of the pinned artifact/bytes, upstream provenance
@@ -107,15 +107,26 @@ the output count, the supply and the outputs that carry a mint authority. Record
 (plus a `warning`), and the facts as the token's `genesis` record:
 
 ```
-genesis: { txid, daa_score, outputs: [..], supply, minter_outputs: [..], live_minters: ["txid:index", ..] (optional),
-           checked_at_daa, source }
+genesis: { txid, daa_score, outputs: [..], supply, minter_outputs: [..], mint_allowance (optional),
+           live_minters: ["txid:index", ..] (optional), checked_at_daa, source }
 ```
+
+`mint_allowance` is recorded for a token of the published public-mint build (`kcc20-ref-public-mint`) whose genesis holds
+`PublicMint` minters: the sum of their `remaining` allowance (non-negative, and only with non-empty `minter_outputs`).
+`supply` is what the genesis holders carry; the token's maximum supply is `supply + mint_allowance`, fixed at genesis (a mint
+moves allowance into a holder, a split or merge of minters keeps their sum, and only a `PublicMint` creates a `PublicMint`),
+and the amount minted so far is that maximum less the `remaining` of the live minters (`kob_protocol::public_mint`).
 
 `live_minters` is condition C2 of the KRON review: `[]` = no live mint authority, absent = not determined. For the KRON programs it
 follows from the genesis: only a transaction that spends a minter can create an `is_minter` output (every non-minter token input refuses
 one, `review_b2_kron` r_kr_01 / r_kr_15), and a covenant id's only other source of outputs is its genesis, so a genesis without a minter
-output proves the token never has a live minter. A genesis with one needs the minter's lineage traced to its live cells. KCC-20 programs
-keep minter lanes behind the extension commitment, which the check cannot see (KaspaCom: read the minter extension by hand).
+output proves the token never has a live minter. A genesis with one needs the minter's lineage traced to its live cells. The same holds
+for the reference KCC-20 programs KOB pins (the standalone 3/3 and its prototype variants, the published public-mint build): a holder
+transfer creates only holders, so a genesis of holders (and seeds) alone gives `live_minters: []`. A public-mint genesis with `PublicMint`
+outputs needs the trace: its live minters are the live `PublicMint` cells with `remaining` above 0, so such a token can be `official` only
+once minting is closed (`live_minters: []`; its supply is then final at `supply + mint_allowance`). The public-mint template itself is
+still `pending-review`, so its tokens cannot be `listed` yet. KaspaCom's program keeps minter lanes behind the extension commitment, which
+the check cannot see (read the minter extension by hand).
 
 Reproduce (both steps read-only; nothing is signed or submitted):
 

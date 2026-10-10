@@ -12,7 +12,7 @@
 //! | order custody | `owner_scheme 0x04` (covenant id), borrow disabled | `id_type 2` (covenant id), `is_minter 0` |
 //! | maker / taker held tokens, deliveries | `owner_scheme 0x00` (P2PK, token-level signature) | `id_type 3` (address presence: a P2PK input of the owner is in the transaction) |
 //! | authorisation | leader (`transfer`) + delegators, owner witness inside the sigscript | one entry per input, shared next-state columns, one witness byte per token input naming the authorising input |
-//! | token inputs / outputs per transaction | 3 / 3 reference, 8 / 8 KOB-issued or third-party (KaspaCom KCC20 0.2.5, a 25.5 KB program: sweeps are bounded by block mass), 4 / 5, 16 / 16 | 4 / 5 |
+//! | token inputs / outputs per transaction | 3 / 3 reference (what KOB issues), 8 / 8 prototype or third-party (KaspaCom KCC20 0.2.5, a 25.5 KB program: sweeps are bounded by block mass), 4 / 5, 16 / 16 | 4 / 5 |
 //! | orders' token input bound (`MAX_TOK_IN`) | 8 | 4 |
 //! | output amount | any positive | `1 ..= 1e9` |
 //! | extension commitment | yes (a token sub-type) | none |

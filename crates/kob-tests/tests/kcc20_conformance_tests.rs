@@ -1,7 +1,7 @@
 //! KCC-20 conformance: kaspanet/kccs `main` `3fbec52` (#31) `kcc-0020/vectors/conformance.json` (vendored unmodified in
 //! `crates/kob-tests/vectors/kcc20/`, see PROVENANCE.md there) executed against KOB's reference KCC-20 build
-//! (`contracts/kcc20/KCC20Ref.sil`, 3 token inputs / 3 outputs) and the KOB 8/8 slot-limit variant
-//! (`contracts/kcc20/variants/KCC20Ref_8x8.sil`, the program KOB issues), in rusty-kaspa v2.1.0's TxScriptEngine
+//! (`contracts/kcc20/KCC20Ref.sil`, 3 token inputs / 3 outputs, the program KOB issues) and the 8/8 slot-limit
+//! prototype (`contracts/kcc20/variants/KCC20Ref_8x8.sil`), in rusty-kaspa v2.1.0's TxScriptEngine
 //! with KIP-20 covenant context. The optional batch-leader holder (`contracts/kcc20/p2/KCC20Opt.sil`, 3/3, not issued)
 //! runs the same vectors twice: `KCC20Opt-off` (batch leader disabled, `B_TPL` all zeros) and `KCC20Opt-on` (the
 //! `KCC20Batch` template committed); see `kcc20_opt_tests.rs`.

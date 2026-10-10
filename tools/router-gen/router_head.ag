@@ -9,7 +9,7 @@
 // and recomputed by a verifier from its token allowlist (the x402 facilitator does). A handle is the
 // token program's template hash; every observed token input is read, and every pinned token output is
 // checked, under it, so one actor serves every KCC-20 program of the 112-byte state (the reference 3/3
-// program, the 8/8 program KOB issues, ...) and every KRON program of the 46-byte state. The program's
+// program KOB issues, the 8/8 prototype, ...) and every KRON program of the 46-byte state. The program's
 // own slot limits bound the shapes it can run (the 3/3 program has no room for a three-bid sell).
 // In every transaction the order validates itself (payout, continuation, custody, escrow
 // pinning); the actors below validate what the payer cares about.
@@ -79,8 +79,8 @@
 // arguments in TRANSACTION ORDER (observed groups are ordered by position; the escrows of the
 // asks are matched to them by owner).
 // Slot limit: at most 3 orders per leg, i.e. at most 3 escrow inputs and 4 token outputs in one
-// token group: inside the 8/8 slots of the program KOB issues and KRON's 4/5; the 3/3 reference
-// program runs every shape but the three-bid sells (4 token outputs).
+// token group: inside the 8/8 slots of the 8/8 prototype and KRON's 4/5; the 3/3 reference program
+// (the one KOB issues) runs every shape but the three-bid sells (4 token outputs).
 //
 // Order invariants the router relies on. KobAsk holds its rest in the state (amountLeft, base units) and
 // its custody UTXO holds EXACTLY amountLeft: the router re-checks that equality, and, because every

@@ -38,7 +38,7 @@ Status tags: **as designed** (confirmed by the Argent team), **planned upstream*
 | 9 | all entries of an actor go into one redeem script | not planned for the first release |
 | 10 | size of a 1:1 port of hand-written orders | measured |
 | 11 | building against rusty-kaspa v2.1.0 | patched (0001), upstream open |
-| 12 | closed ICC import of an artifact without source | patched (0002), PR prepared |
+| 12 | closed ICC import of an artifact without source | patched (0002), PR #69 open |
 | 13 | `argent-runtime` in the browser | closed |
 | 14 | an artifact does not prove which compiler built it | closed |
 | A1-A4 | smaller notes | open |
@@ -121,7 +121,7 @@ In the 2 + 2 swaps the continuation pins do not fit.
   `generated Silverscript for actor TokenSwap_swap2 failed to compile: variable '...' requires 245
   live stack bindings, exceeding the consensus limit of 244`. That message names the first binding
   over the limit, not the peak.
-* Exact peaks (2026-10-03, router after the rewrite for every token program; a build of the same
+* Exact peaks, history (2026-10-03, router after the rewrite for every token program; a build of the same
   compiler that records the peak instead of stopping, its shipped scripts byte-identical to the
   release build), live bindings / combined stack items, limit 244 / 244:
 
@@ -136,8 +136,17 @@ In the 2 + 2 swaps the continuation pins do not fit.
   `become` check. The shipped router therefore still leaves the continuation pin out of every shape:
   the orders enforce their continuation themselves (`docs/argent.md`, "Fill shapes").
 * Protocol v3 (2026-10-05, amounts in base units, no lot arithmetic in the router): with the same compiler the
-  ask pin alone now compiles in every shape (`PIN=ask`); the bid pin still stops `TokenSwap_swap2` at 245 combined
-  stack items and both pins at 245 live bindings. The shipped router still pins neither.
+  ask pin alone compiled in every shape (`PIN=ask`); the bid pin still stopped `TokenSwap_swap2` at 245 combined
+  stack items and both pins at 245 live bindings. Superseded by the next measurement.
+* Re-measured on 2026-10-10 (the router regenerated after the merged KCC-20 reference, same compiler), `TokenSwap_swap2`,
+  live bindings / combined stack items, limit 244 / 244:
+
+  | actor | shipped | + ask pin | + bid pin | + both |
+  |---|---|---|---|---|
+  | `TokenSwap_swap2` | 214 / 221 | 236 / **247** | 237 / **250** | **259** / **270** |
+
+  The ask pin alone no longer fits (247 combined stack items), so no continuation pin fits in that shape. The shipped
+  router pins neither.
 * Most of these bindings are state fields nothing reads: `readInputStateWithTemplate` decodes every
   field of every observed state. With a SilverScript change that drops unused field reads (prepared
   as an upstream proposal; not used by KOB), `TokenSwap_swap2` peaks at 164 / 171 shipped, 199 / 210
@@ -173,15 +182,17 @@ differs from the single-actor build.
   `transfer` and `transfer_delegator` entries take two more hidden witnesses (the template lengths;
   delegates and leader are read with the template), and the program grows from 6,350 B to 9,394 B. Its
   `actor_type_handle` is a correct view of THAT program (state `KCC20State`, context field
-  `gen__kcc20_template`, prefix 34 B, suffix 9,248 B, template `680b901a...`), which is not the token
-  KOB issues. On argentc `9a9f4b1` (#68: the current actor's template lengths are fixed-width constants,
+  `gen__kcc20_template`, prefix 34 B, suffix 9,248 B, template `680b901a...`), which is not the 8/8
+  program the single-actor build gives (`KOBToken`, a provisional prototype: KOB does not issue it). On argentc `9a9f4b1` (#68: the current actor's template lengths are fixed-width constants,
   no hidden witnesses) the same build is 9,336 B with the same 1 + 145 state.
-* KOB's token program is fixed outside Argent: it is `KCC20Ref_8x8` (template `666da060...`), which
-  the token UTXOs on chain carry and which every KOB order pins as `tokenTplHash`. A handle can only
-  describe the program its app compiled; it cannot make a multi-actor build produce, or stand for,
-  the deployed program. The single-actor app `KOBToken` compiles to exactly that program, so its
-  handle is the deployed template. `KOBToken` therefore stays its own app; this costs nothing,
-  the router imports it like any other app.
+* KOB's token program is fixed outside Argent: since 2026-10-10 KOB issues the standard 3/3 reference,
+  `kcc20.ag` built as a single-actor app (`KCC20Ref`, template `173ca6a7...`), which the token UTXOs on
+  chain carry and which every KOB order pins as `tokenTplHash` (the 8/8 `KCC20Ref_8x8`, template
+  `666da060...`, and its app `KOBToken` are a provisional prototype, kept and pinned but not issued). A
+  handle can only describe the program its app compiled; it cannot make a multi-actor build produce,
+  or stand for, the deployed program. A single-actor app compiles to exactly that program, so its
+  handle is the deployed template; `KOBToken` therefore stays its own app, which costs nothing, the
+  router imports it like any other app.
 * Since the upstream reference was merged (argent-lang/kcc20-reference `c8a0871`), `kcc20.ag` declares
   no app and the repository publishes the token only as an actor of its `KCC20PublicMint` app
   (`fixtures/public-mint/sil/KCC20.sil`: 4,031 B, state 1 + 145, every holder reads its leader with
@@ -259,7 +270,7 @@ v2.1.0. Patch 0001 (Argent issue #64) moves the dependencies to `tag = "v2.1.0"`
 * Where: `argent/patches/0001-argent-rusty-kaspa-v2.1.0.patch`, `vendor/silverscript/UPSTREAM.md`.
 * Answer: to be decided (#64).
 
-### 12. Closed ICC import of an artifact without source (status: patched, 0002; PR prepared)
+### 12. Closed ICC import of an artifact without source (status: patched, 0002; PR #69 open)
 
 Artifact-backed imports are still open upstream at `b312ded` ("Support artifact-backed app
 dependencies"). Patch 0002, rebased onto the module loading rework (#62), adds an optional pin to
@@ -273,9 +284,9 @@ refused.
 
 * Where: `argent/patches/0002-argent-artifact-backed-app-imports.patch` (exactly the PR diff),
   `contracts/argent/examples/closed_icc_gate.ag`, `tools/router-gen/router_head.ag`.
-* Answer: a PR is welcome. It will be opened from a fork; the draft text explains the pin (item 4)
-  and the follow-ups it leaves open (project configuration, receipt checks, artifacts with their
-  own dependencies).
+* Answer: a PR is welcome. Opened as argent-lang/argent#69 from the fork RossKU/argent; its text explains
+  the pin (item 4) and the follow-ups it leaves open (project configuration, receipt checks, artifacts
+  with their own dependencies).
 
 ### 13. `argent-runtime` in the browser (status: closed)
 

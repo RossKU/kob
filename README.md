@@ -30,8 +30,9 @@ off-chain custody.
 * Token registry (`registry/tokens.json`): the two KRON token programs are `reviewed`, with conditions
   (each token still needs its genesis check and a no-live-minter scan before it is listed, and every
   token entry is `pending-review`); the KCC-20 programs, KaspaCom's included, are `pending-review`.
-  The KCC-20 token standard is in Last Call, not final; KOB's token programs follow its merged reference program
-  (`docs/spec/kcc-conformance.md`).
+  The KCC-20 token standard is in Last Call, not final; KOB's token programs follow its merged reference program, and KOB
+  issues that program in its standard 3 / 3 configuration (the other slot variants are prototypes;
+  `docs/spec/kcc-conformance.md`).
 * The Argent app build needs two patches to `argentc` that are not upstream (`argent/UPSTREAM.md`).
   Open questions for the Argent team are in `docs/argent-feedback.md`.
 * Interfaces, encodings and artifact ids can still change.

@@ -13,8 +13,9 @@
 // actor-type handles, interface fingerprints and the artifact id. Result:
 // contracts/argent/KOBOrders/artifact.json (generated; see docs/argent.md, argent/UPSTREAM.md).
 //
-// The KCC-20 token KOB issues is the separate single-actor app KOBToken (kcc20_8x8.ag): an actor in
-// a multi-actor app gets compiler-owned template fields, which would change the token program.
+// The 8/8 KCC-20 token prototype is the separate single-actor app KOBToken (kcc20_8x8.ag; KOB issues the
+// standard 3/3 reference, built the same way from kcc20.ag): an actor in a multi-actor app gets
+// compiler-owned template fields, which would change the token program.
 //
 // `emits` lists only continuations that stay in the entry's own covenant (authorised outputs of the
 // input's covenant id). The exit orders that KobIfd* create are fresh genesis covenants, which

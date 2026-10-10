@@ -40,7 +40,7 @@ export function registryToken(template_id: 'kcc20-ref-3x3' | 'kcc20-ref-8x8' | '
 
 /** TokenMarket of the reference 3/3 program (KCC20Ref: prefix 1, suffix 2802). */
 export const market3x3 = (over: Partial<RegistryTokenLike> = {}): TokenMarket => toTokenMarket(kob(), registryToken('kcc20-ref-3x3', over));
-/** TokenMarket of the 8/8 program KOB issues (KCC20Ref_8x8). */
+/** TokenMarket of the 8/8 prototype (KCC20Ref_8x8; KOB issues the 3/3 KCC20Ref). */
 export const market8x8 = (over: Partial<RegistryTokenLike> = {}): TokenMarket => toTokenMarket(kob(), registryToken('kcc20-ref-8x8', over));
 
 /** TokenMarket of the common KRON program (KronToken2433, 46-byte state, no extension commitment). */

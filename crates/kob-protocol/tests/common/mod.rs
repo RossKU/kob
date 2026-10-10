@@ -669,7 +669,7 @@ fn rpt_ask_tp(tpl: TemplateId, exit: CondBidState, n: i64, entry_n: i64, merge: 
 }
 
 /// The golden-vector set: one request per builder shape (reference 3/3 token; the batch and one
-/// creation use the 8/8 program KOB issues).
+/// creation use the 8/8 prototype).
 pub fn scenarios() -> Vec<(String, Action)> {
     scenarios_on(TemplateId::Kcc20Ref)
 }

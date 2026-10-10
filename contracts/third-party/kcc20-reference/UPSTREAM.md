@@ -46,7 +46,9 @@ app's minter and seed live in the token's covenant family); `kcc20.ag` itself co
 
 ## Both builds on KOB
 
-KOB issues with the standalone build by default and trades tokens of both builds. The context field is constant: in
+KOB issues with the standalone 3 / 3 build by default (`kob token issue`, the web app's default program; KOB's standard
+token program) and offers the published build as the second choice (`kob token issue --program public-mint`, the web
+app's second option); it trades tokens of both builds. The context field is constant: in
 every UTXO of the published build it is the program's own Sil template hash (`9703112e...`), and the 112 bytes after
 it are the standalone state byte for byte. So KOB pins the published build as its KCC-1 actor-type handle, the view
 upstream's `public-mint.artifact.json` exports for `actor_type<KCC20State>` (`template/kcc20`): prefix = the 1-byte
@@ -58,3 +60,12 @@ fill and rebuild such tokens unchanged; a holder with any other context value is
 `crates/kob-tests/tests/kcc20_public_mint_tests.rs` and `registry_tests.rs` (the handle cut equals upstream's).
 `kob token issue --program public-mint` issues a fixed-supply token of the published build (a genesis of `KCC20`
 holders, no `PublicMint`, no `TokenSeed`).
+
+A token issued the way upstream recommends (a genesis of one `PublicMint` and `TokenSeed` seeds, with or without
+pre-minted holders) is verified too: `kob registry verify-genesis` reads the app's `PublicMint` and `TokenSeed` programs
+from `public-mint.artifact.json` (`crates/kob-protocol/src/public_mint.rs`, Sil template hashes
+`14b0f06bc176b78c94f19292e409c622636f31dae6bb31ff3d4d3308a6053b49` and
+`f79a3fccf6f87d7076662410a17e54d1531889d9b60f630f9fbb8465a384e62d`), requires their template fields to name the app's
+own programs and one extension commitment, and reports the minters' allowance: the maximum supply is the genesis holders'
+amounts plus that allowance, fixed at genesis. Rules and evidence: `docs/spec/kcc-conformance.md` section 4.3,
+`crates/kob-tests/tests/kcc20_public_mint_genesis_tests.rs`.

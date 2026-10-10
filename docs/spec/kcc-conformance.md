@@ -1,7 +1,8 @@
 # KCC base-spec conformance (KCC-1, KCC-2, KCC-20)
 
 Status: checked on 2026-10-02 against the Last Call texts; KCC-20 and its reference program re-checked on 2026-10-09,
-after both were merged upstream (sections 2 and 4). KOB handles any token through adapters, but its own KCC-20
+after both were merged upstream (sections 2 and 4); KOB's issuance moved to the standard 3 / 3 program and the genesis check of
+public-mint tokens was added on 2026-10-10 (sections 4.3 to 4.5). KOB handles any token through adapters, but its own KCC-20
 programs, its issuance and every encoding it labels KCC must conform to the KCC base specifications. This file records
 what was checked, against which upstream bytes, what did not conform and what changed, and what still depends on
 upstream.
@@ -45,7 +46,7 @@ Every vector file is vendored unmodified (CC0) with a `PROVENANCE.md` and pinned
 |---|---|---|---|
 | 2.1 Registry | 10 (+ all 256 bytes) | `kcc2::classify`, issuance owner-scheme set, x402 `owner_proof`, and the programs (a successor `owner_scheme` of each byte) | pass: `0x00`-`0x04` accepted, `0x05`-`0x7f` and `0x80`-`0xff` rejected |
 | 4.1 Constructions | 5 | `kcc2::p2pkh_authority` (unkeyed `Hash(pubkey)`), `p2sh_authority`, `p2sh_envelope`, push forms, the KCC-20 state `owner` / `owner_scheme` bytes | pass |
-| 4.2 Approval checks | 20 | `kcc2::{signature_approval, p2sh_approval, covenant_approval}`; the same cases executed in `KCC20Ref` (3/3) and `KCC20Ref_8x8` (the issued program) with real signatures (the vector keys are 1G, 2G, -G) | pass; 19 executed per program, `covenant-output-only` refused by construction |
+| 4.2 Approval checks | 20 | `kcc2::{signature_approval, p2sh_approval, covenant_approval}`; the same cases executed in `KCC20Ref` (3/3, the issued program) and `KCC20Ref_8x8` (the 8/8 prototype) with real signatures (the vector keys are 1G, 2G, -G) | pass; 19 executed per program, `covenant-output-only` refused by construction |
 
 ### KCC-20
 
@@ -122,19 +123,20 @@ the state at fixed offsets inside the 112 bytes, the stray guard locates the own
 every token output an order pins is the custody's own prefix (context included), state and suffix, which is what the
 published transfer writes. `crates/kob-tests/tests/kcc20_public_mint_tests.rs` runs every order shape on such tokens
 (custodies of three orders under one published leader included) and refuses holders with another context value or of the
-standalone build; `kob token issue --program public-mint` issues one (a genesis of `KCC20` holders only). The
+standalone build; `kob token issue --program public-mint` issues one (a genesis of `KCC20` holders only); a genesis with the app's
+`PublicMint` and `TokenSeed` actors, as upstream recommends, is verified as in section 4.3. The
 published build has the reference's 3 / 3 slots, like the standalone `KCC20Ref`.
 
 Template hashes (all `prefix 1`, state 112):
 
 | Program | Old template, size | New template, size |
 |---|---|---|
-| `KCC20Ref` (3/3) | `f4ac029d...`, 3,090 B | `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, 2,915 B |
-| `KCC20Ref_4x5` | `6bef6739...`, 4,182 B | `10d3d2ff9efacb64e2ba3acb3e442fb2a35128b36a9ad83fb99b7fe053505983`, 3,889 B |
-| `KCC20Ref_8x8` (KOB issue, `KOBToken::KCC20`) | `40fef59a...`, 6,820 B | `666da060d02663939efdc534ea10cce219e5564af86f4cc8eeea2ca129f7c032`, 6,350 B |
-| `KCC20Ref_16x16` | `8319cdc4...`, 12,788 B | `922e9ba7c64b0ddcbd0f1b4b6bd592c791e0813df033d1c78213e4eec374efd7`, 11,846 B |
-| `KCC20P2` | `16032d0d...`, 3,095 B | `b182879fe8d87659f9424dbdedc6540fba185129c3d7dd5e9caa1332f0ce4d11`, 2,920 B |
-| `KCC20Opt` (disabled instance) | `77e25134...`, 3,105 B | `1de86404b89e381471e7ff2088b41f097e47c4d746a91300d9c8322a52654619`, 2,930 B |
+| `KCC20Ref` (3/3, KOB issue) | `f4ac029d...`, 3,090 B | `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, 2,915 B |
+| `KCC20Ref_4x5` (prototype) | `6bef6739...`, 4,182 B | `10d3d2ff9efacb64e2ba3acb3e442fb2a35128b36a9ad83fb99b7fe053505983`, 3,889 B |
+| `KCC20Ref_8x8` (prototype, `KOBToken::KCC20`) | `40fef59a...`, 6,820 B | `666da060d02663939efdc534ea10cce219e5564af86f4cc8eeea2ca129f7c032`, 6,350 B |
+| `KCC20Ref_16x16` (prototype) | `8319cdc4...`, 12,788 B | `922e9ba7c64b0ddcbd0f1b4b6bd592c791e0813df033d1c78213e4eec374efd7`, 11,846 B |
+| `KCC20P2` (prototype) | `16032d0d...`, 3,095 B | `b182879fe8d87659f9424dbdedc6540fba185129c3d7dd5e9caa1332f0ce4d11`, 2,920 B |
+| `KCC20Opt` (prototype, disabled instance) | `77e25134...`, 3,105 B | `1de86404b89e381471e7ff2088b41f097e47c4d746a91300d9c8322a52654619`, 2,930 B |
 
 `KCC20Batch` is unchanged (`98caa910...`: it names the holder template in its state). The `KOBToken` artifact id is now
 `364f6518...` (`docs/argent.md`). Regenerated with the repository's generators: the slot variants, `KCC20P2` and `KCC20Opt`
@@ -145,8 +147,76 @@ The order templates do not change (they take the token template as a value).
 
 Tokens issued under the old `KCC20Ref_8x8` keep their program on chain; this build pins only the new template, so it no
 longer lists, builds for or matches them (as for any template it does not pin: [template-retirement.md](template-retirement.md)),
-and orders whose `tokenTplHash` names the old template are unknown to it. On testnet the tokens are issued again under the
-new program.
+and orders whose `tokenTplHash` names the old template are unknown to it. On testnet the tokens are issued again, under
+the standard 3 / 3 program (section 4.4).
+
+### 4.3 Genesis check of public-mint tokens
+
+Upstream recommends issuing a token of the published app by a genesis of one `PublicMint` (the advertised supply as its
+allowance) and at least one `TokenSeed`, without pre-minted balances (kcc20-reference README, "Deployment and genesis").
+Such a genesis holds outputs that are not instances of the `KCC20` handle, so `kob registry verify-genesis` used to refuse
+it as not an instance of the program. It now accepts it, for the template `kcc20-ref-public-mint` only
+(`kob_protocol::public_mint`, `registry::verify_genesis_of`):
+
+| Output | Accepted when | Reported |
+|---|---|---|
+| `KCC20` holder | an instance of the pinned handle (context `9703112e...`), amount >= 0 | its amount in `supply` |
+| `PublicMint` | exactly the app's program (Sil `14b0f06bc176b78c94f19292e409c622636f31dae6bb31ff3d4d3308a6053b49`, taken from the vendored `public-mint.artifact.json`), template fields `gen__kcc20_template` = `9703112e...` and its own = its Sil hash, canonical state, `remaining >= 0`, `mint_amount >= 1` | index in `minter_outputs`, `remaining` added to `mint_allowance` |
+| `TokenSeed` | exactly the app's program (Sil `f79a3fccf6f87d7076662410a17e54d1531889d9b60f630f9fbb8465a384e62d`), template fields as above, canonical state | index in `seed_outputs` |
+| anything else | never | `NotTemplate` |
+
+Every output must carry the token's one extension commitment (a minter or seed of another commitment would issue another
+class under the same covenant id). The template fields are checked because they decide what an actor creates: a minter
+whose `gen__kcc20_template` names another program mints that program under the token's covenant id; the test builds one
+that mints an anyone-can-spend script, executes the mint in the engine and shows `verify_genesis` refusing the genesis.
+
+Supply. In the app a mint moves allowance into one new holder (`0 < amount <= min(mint_amount, remaining)`), a split or a
+merge of minters keeps their sum, a reclaim needs `remaining == 0`, seeds create only zero-amount holders, transfers
+conserve, and only a `PublicMint` creates a `PublicMint`. So `supply + mint_allowance` of the genesis is the token's maximum
+supply, fixed forever; KOB reports `supply` (minted at genesis), `mint_allowance` (what anyone may still mint) and their sum,
+and the amount minted at a later time is that maximum less the `remaining` of the live minters
+(`public_mint::GenesisSupply`). The registry records `mint_allowance` in the token's `genesis` record (`registry/README.md`).
+
+Official. `official` needs a genesis record without a live mint authority (`live_minters: []`). A genesis without a
+`PublicMint` proves that (no minter can appear later), like a KRON genesis without a minter and like every genesis of the
+standalone reference programs. With genesis minters the record stays undetermined until the minters' lineage is traced to
+the live `PublicMint` cells with allowance left; such a token can be official once minting is closed, its supply then final
+at `supply + mint_allowance`. The `kcc20-ref-public-mint` template itself remains `pending-review`, so its tokens are not
+listed yet in any case.
+
+Evidence: `crates/kob-tests/tests/kcc20_public_mint_genesis_tests.rs` (rusty-kaspa v2.1.0 engine: the genesis passes the
+covenant context and `verify_genesis`; the genesis minter mints a holder of the pinned handle, the seed creates a
+zero-amount holder, and the two then transfer as `KCC20` holders; the refusals above; the registry record and the official
+rule over chain evidence, `genesis_evidence::verify_token`).
+
+### 4.4 Issuance: the standard 3 / 3 program (2026-10-10)
+
+KOB issues the reference in its standard configuration, `KCC20Ref` (3 token inputs / 3 token outputs per transaction,
+registry `kcc20-ref-3x3`): `kob token issue` and the web app by default; the published public-mint build is the second
+choice. The slot variants (`KCC20Ref_4x5`, `KCC20Ref_8x8`, `KCC20Ref_16x16`), `KCC20P2` / `KCC20Batch` and `KCC20Opt` are
+prototypes: kept, built and tested, not KOB's issuance (the CLI issues the 8/8 only when it is named `--program 8x8-prototype`,
+with a warning; the app does not offer it). `KCC20Ref_8x8` stays a pinned, tradable template.
+
+The order templates do not change. Their stray scan reads up to `MAX_TOK_IN = 8` token inputs of the order's token and
+refuses more; with a 3 / 3 token a transaction carries at most 3 (the leader takes at most 2 delegates, and after a
+verified genesis every input of the token's covenant id is a holder of that program), so the bound is never the binding
+limit and the scan reads every token input such a transaction has. `crates/kob-tests/tests/kcc20_standard_slots_tests.rs`:
+a stray of the settling ask at token-input slot 1 or 2 is refused by the ask; four token inputs (the custody and three
+fillers, no stray) are refused by the 3 / 3 leader while the ask's scan passes; the 8 / 8 prototype takes the same four.
+The builders enforce each program's slots, and the matcher clears a book that needs more custodies than 3 over chained
+transactions of the same tick (`crates/kob-executor/tests/matcher_scenarios.rs`,
+`a_crossing_beyond_the_standard_programs_three_slots_is_chained`).
+
+### 4.5 On testnet-10
+
+* New tokens are issued as `KCC20Ref` (3 / 3); the soak tokens (TUSD, TETH, TBTC) are issued again that way
+  (`tools/soak/README.md`).
+* Tokens issued before the merged reference (`KCC20Ref_8x8` template `40fef59a...`) are not pinned by this build: it does
+  not list, build for or match them, and their orders are unknown to it. Their makers end such orders with the cancel built
+  by the release they were placed with, and their permissionless refunds still validate after expiry
+  ([template-retirement.md](template-retirement.md)).
+* The order templates, and so the order part of the deployment records, do not change; only the token templates and the
+  registry pin change.
 
 ## 5. Pending on upstream
 
@@ -162,7 +232,7 @@ Observation for upstream: the `covenant-id/v1` minimum check also passes when `o
 transaction that spends it. KCC-2 section 6 warns that participation alone is not approval; KCC-20 PR #31 does not
 forbid this owner. KOB issuance cannot create it (the covenant id is derived from the genesis outputs).
 
-## 6. Optional batch leader (proposal for upstream, not issued)
+## 6. Optional batch leader (prototype, proposed for upstream, not issued)
 
 The default configuration compiles `max_token_inputs` / `max_token_outputs` = 3 into the holder program, and every token
 input pushes the whole program, so larger limits make every transfer dearer (1 -> 1 payment: 3/3 0.00667 KAS, 8/8
@@ -193,7 +263,7 @@ Measured (`kcc20_opt_tests.rs`, `opt_measurements`; P2SH sizes, fee = max(comput
 | Program | Holder | 1 -> 1 | 3 -> 1 | 8-ask sweep | 16-ask sweep | 8 x 8 cross |
 |---|---|---|---|---|---|---|
 | Reference 3/3 | 2,915 B | 0.00667 | 0.01885 | n/a | n/a | n/a |
-| Reference 8/8 (KOB issue) | 6,350 B | 0.01354 | 0.03946 | 0.13308 | n/a | n/a |
+| Reference 8/8 (prototype) | 6,350 B | 0.01354 | 0.03946 | 0.13308 | n/a | n/a |
 | Reference 16/16 | 11,846 B | 0.02454 | 0.07243 | 0.22101 | 0.44056 | n/a |
 | P2 | 2,920 B | 0.00668 | 0.01888 | 0.09061 | 0.16735 | 0.11830 |
 | `KCC20Opt` disabled | 2,930 B | 0.00670 | 0.01894 | refused | refused | refused |

@@ -255,11 +255,12 @@ the fee. The merchant receives exactly `amount` tokens on exactly `carrier` KAS.
 ### 5.2 Token program limits
 
 The reference KCC-20 program bounds the number of token inputs and outputs per transfer at compile
-time (3/3 for the upstream reference; KOB issues 8/8; other programs exist). A token payment needs
+time (3/3 for the upstream reference, which is also what KOB issues; the 8/8 variant is a prototype; other programs
+exist). A token payment needs
 one input and up to two outputs (merchant and change); a client SHOULD consolidate before paying
 when the payment needs more inputs than the program allows. Each token input carries the whole
 program in its signature script (about 2.9 kB for the reference 3/3 program, about 6.4 kB for the
-8/8 variant); a payment's size, and so its fee floor, is dominated by that.
+8/8 prototype); a payment's size, and so its fee floor, is dominated by that.
 
 ### 5.3 Why borrow-enabled token UTXOs are refused
 
