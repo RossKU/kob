@@ -6,6 +6,8 @@
 //   balances  KAS / token balances of every soak key (JSON)
 //   consolidate  merge every key's token UTXOs into one per token (redeploy helper; bots stopped), optional key names
 //   report    print the summary report once
+//   carry-history  move the market history of re-issued tokens to their new covenant ids, by ticker (one indexer database, its
+//             executor stopped): --db <index.sqlite3> --from-registry <old tokens.json> [--to-registry <file>] [--dry-run]
 import { loadConfig, type TokenSlot } from './config';
 import { createEnv } from './env';
 import { errText, logger } from './log';
@@ -79,8 +81,33 @@ async function main(): Promise<void> {
       process.exit(0);
       break;
     }
+    case 'carry-history': {
+      // redeploy helper (re-issued tokens, src/history-carry.ts): no node, no keys; the new registry defaults to run/registry/tokens.json
+      const { readFileSync } = await import('node:fs');
+      const { join } = await import('node:path');
+      const { carryHistory, carryPairs } = await import('./history-carry');
+      const db = arg('--db');
+      const fromReg = arg('--from-registry');
+      if (!db || !fromReg) throw new Error('carry-history --db <index.sqlite3> --from-registry <old tokens.json> [--to-registry <file>] [--dry-run]');
+      const toReg = arg('--to-registry', join(cfg.runPath, 'registry', 'tokens.json'))!;
+      const pairs = carryPairs(JSON.parse(readFileSync(fromReg, 'utf8')), JSON.parse(readFileSync(toReg, 'utf8')));
+      if (process.argv.includes('--dry-run')) {
+        process.stdout.write(JSON.stringify({ db, pairs }, null, 1) + '\n');
+        process.exit(0);
+      }
+      const { DatabaseSync } = await import('node:sqlite');
+      const conn = new DatabaseSync(db);
+      try {
+        conn.exec('PRAGMA busy_timeout = 5000');
+        process.stdout.write(JSON.stringify({ db, carried: carryHistory(conn, pairs) }, null, 1) + '\n');
+      } finally {
+        conn.close();
+      }
+      process.exit(0);
+      break;
+    }
     default:
-      process.stderr.write('usage: soak.mjs setup|bots|checker|cancel|balances|consolidate|report --config <file>\n');
+      process.stderr.write('usage: soak.mjs setup|bots|checker|cancel|balances|consolidate|report|carry-history --config <file>\n');
       process.exit(2);
   }
 }
