@@ -4,10 +4,14 @@
 import { slotOfToken, type Env } from '../env';
 import { errText } from '../log';
 import type { TokenMarket } from '@/kob/plan-types';
+import type { Kcc20State, TokenUtxo } from '@/kob/types';
 import { buildAtUrgency } from '../fees';
 import { tokenMarket, tokenRef, type Which } from '../market';
 import { KAS } from '../util';
 import type { BotWallet } from '../wallet';
+import { fanoutPlan } from './consolidate-math';
+
+const CARRIER = 10n * KAS;
 
 /** the fan-out of an asset token without a `fanout` config: outputs and whole tokens per output */
 export const DEFAULT_ASSET_FANOUT: { mm: [number, string]; traders: [number, string] } = { mm: [8, '0.3'], traders: [4, '0.06'] };
@@ -20,38 +24,53 @@ export function fanoutTarget(env: Env, role: 'mm' | 'trader', m: TokenMarket): n
   return role === 'mm' ? fo.mm[0] : fo.traders[0];
 }
 
-/** Splits the largest token UTXO of `w` into outputs of `each` base units until it holds `want` token UTXOs (at most 7 per transaction). */
+/**
+ * Splits the largest token UTXO of `w` into outputs of `each` base units until it holds `want` token UTXOs: a chain of transfers within
+ * the program's token outputs (`fanoutPlan`; 2 pieces + the token change per transaction with KOB's standard 3 / 3 program), each next
+ * transfer spending the previous one's token change.
+ */
 export async function fanOut(env: Env, w: BotWallet, want: number, each: bigint, which?: Which): Promise<boolean> {
   try {
     const m = tokenMarket(env, which);
     const utxos = await w.tokenUtxos(tokenRef(env, m));
     if (utxos.length >= want) return false;
-    const big = [...utxos].sort((a, b) => (BigInt(b.state.amount) > BigInt(a.state.amount) ? 1 : -1))[0];
+    let big: TokenUtxo | undefined = [...utxos].sort((a, b) => (BigInt(b.state.amount) > BigInt(a.state.amount) ? 1 : -1))[0];
     if (!big) return false;
-    const amount = BigInt(big.state.amount);
-    if (each <= 0n) return false;
-    const n = Math.min(want - utxos.length + 1, 7, Number(amount / each));
-    if (n < 2) return false;
-    const funding = (await w.funding()).slice(0, 20);
-    if (funding.reduce((s, u) => s + BigInt(u.amount), 0n) < BigInt(n + 1) * 10n * KAS + KAS) return false;
-    // housekeeping: the LOW bucket of the node's fee estimate (fee policy)
-    const built = await buildAtUrgency(
-      env,
-      'low',
-      {
-        action: 'sendTokens',
-        token: { covenantId: m.covenantId, program: m.program },
-        tokens: [big],
-        recipients: Array.from({ length: n }, () => ({ pubkey: w.pk, amount: each.toString(), carrier: (10n * KAS).toString() })),
-        tokenChange: w.pk,
-        tokenChangeCarrier: (10n * KAS).toString(),
-        funding,
-        change: w.pk,
-      },
-      (r) => env.kob.build(r as unknown as Parameters<typeof env.kob.build>[0]),
-    );
-    const r = await w.submit(built, 'fanout', { token: m.ticker, outputs: n });
-    return r.ok;
+    const plan = fanoutPlan({ amount: BigInt(big.state.amount), each, need: want - utxos.length, maxOutputs: m.slots.outputs, maxTx: 8 });
+    let done = 0;
+    for (const n of plan) {
+      const input: TokenUtxo = big;
+      const funding = (await w.funding()).slice(0, 20);
+      if (funding.reduce((s, u) => s + BigInt(u.amount), 0n) < BigInt(n + 1) * CARRIER + KAS) break;
+      const left = BigInt(input.state.amount) - BigInt(n) * each;
+      // housekeeping: the LOW bucket of the node's fee estimate (fee policy)
+      const built = await buildAtUrgency(
+        env,
+        'low',
+        {
+          action: 'sendTokens',
+          token: { covenantId: m.covenantId, program: m.program },
+          tokens: [input],
+          recipients: Array.from({ length: n }, () => ({ pubkey: w.pk, amount: each.toString(), carrier: CARRIER.toString() })),
+          tokenChange: w.pk,
+          tokenChangeCarrier: CARRIER.toString(),
+          funding,
+          change: w.pk,
+        },
+        (r) => env.kob.build(r as unknown as Parameters<typeof env.kob.build>[0]),
+      );
+      const r = await w.submit(built, 'fanout', { token: m.ticker, outputs: n, chained: done > 0 });
+      if (!r.ok || !r.txid) break;
+      done++;
+      if (left <= 0n) break;
+      // the token change (the token output after the n pieces) leads the next transfer
+      const tokenOuts = built.tx.outputs.map((o, i) => [o, i] as const).filter(([o]) => o.covenant?.covenantId === m.covenantId);
+      const ch = tokenOuts[n];
+      if (!ch) break;
+      const state: Kcc20State = { ...(input.state as Kcc20State), amount: left.toString(), owner: w.pk };
+      big = { transactionId: r.txid, index: ch[1], amount: ch[0].value, covenantId: m.covenantId, state };
+    }
+    return done > 0;
   } catch (e) {
     w.log.warn('fanout failed', { error: errText(e) });
     return false;

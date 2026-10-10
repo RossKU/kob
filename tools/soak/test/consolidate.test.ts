@@ -1,7 +1,7 @@
 // Token-UTXO consolidation: the pure selection (which UTXOs to merge) and the rate limit. No network, no wallet.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consolidateConfig, DEFAULT_CONSOLIDATE, outpointKey, RateLimiter, selectMergeChain, selectMerges, type MergeCandidate } from '../src/bots/consolidate-math.ts';
+import { consolidateConfig, DEFAULT_CONSOLIDATE, fanoutPlan, outpointKey, RateLimiter, selectMergeChain, selectMerges, type MergeCandidate } from '../src/bots/consolidate-math.ts';
 
 const txid = (n: number) => n.toString(16).padStart(4, '0').repeat(16);
 const u = (n: number, amount: number | bigint, index = 1): MergeCandidate => ({ transactionId: txid(n), index, state: { amount: amount.toString() } });
@@ -194,4 +194,20 @@ test('chain: the same threshold, limit and rate rules as the disjoint plan', () 
 test('the default rate keeps up with the standard program: 8 merges a minute', () => {
   assert.equal(DEFAULT_CONSOLIDATE.maxTxPerInterval, 8);
   assert.equal(DEFAULT_CONSOLIDATE.intervalSec, 60);
+});
+
+test('fanoutPlan: 2 pieces + the token change per transfer with the standard 3 / 3 program, chained until the key holds enough', () => {
+  // the market maker lacks 7 TUSD UTXOs of 300: 2 + 2 + 2 + 1
+  assert.deepEqual(fanoutPlan({ amount: 3_000_000n, each: 300n, need: 7, maxOutputs: 3, maxTx: 8 }), [2, 2, 2, 1]);
+  // the 8 / 8 prototype did it in one transfer
+  assert.deepEqual(fanoutPlan({ amount: 3_000_000n, each: 300n, need: 7, maxOutputs: 8, maxTx: 8 }), [7]);
+  // the amount runs out: 5 pieces of 300 in 1,500, the last transfer leaves no change and ends the chain
+  assert.deepEqual(fanoutPlan({ amount: 1500n, each: 300n, need: 7, maxOutputs: 3, maxTx: 8 }), [2, 2, 1]);
+  // capped by maxTx, nothing to do, nothing affordable, a program without room for a change output
+  assert.deepEqual(fanoutPlan({ amount: 3_000_000n, each: 300n, need: 7, maxOutputs: 3, maxTx: 2 }), [2, 2]);
+  assert.deepEqual(fanoutPlan({ amount: 3_000_000n, each: 300n, need: 0, maxOutputs: 3, maxTx: 8 }), []);
+  assert.deepEqual(fanoutPlan({ amount: 299n, each: 300n, need: 3, maxOutputs: 3, maxTx: 8 }), []);
+  assert.deepEqual(fanoutPlan({ amount: 3000n, each: 300n, need: 3, maxOutputs: 1, maxTx: 8 }), []);
+  // every transfer stays within the program's token outputs (pieces + change)
+  for (const k of fanoutPlan({ amount: 10n ** 15n, each: 7n, need: 20, maxOutputs: 3, maxTx: 20 })) assert.ok(k + 1 <= 3);
 });

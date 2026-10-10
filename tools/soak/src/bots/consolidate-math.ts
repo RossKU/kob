@@ -145,3 +145,26 @@ export class RateLimiter {
     for (let i = 0; i < n; i++) xs.push(now);
   }
 }
+
+/**
+ * The fan-out (`fanout.ts`) as a CHAIN of transfers within the program's token outputs: each transaction splits the UTXO it spends into
+ * up to `maxOutputs - 1` pieces of `each` base units plus the token change, and the next one spends that change (not yet accepted).
+ * Returns the pieces per transaction: together at most `need` (the UTXOs the key lacks) and what `amount` covers, in at most `maxTx`
+ * transactions. Pieces that take the whole remainder (no change) end the chain. With KOB's standard program (3 token outputs) that is 2
+ * pieces per transaction; the 8 / 8 prototype took 7 in one.
+ */
+export function fanoutPlan(o: { amount: bigint; each: bigint; need: number; maxOutputs: number; maxTx: number }): number[] {
+  const out: number[] = [];
+  if (o.each <= 0n || o.maxOutputs < 2) return out;
+  let left = o.amount;
+  let need = o.need;
+  while (need > 0 && out.length < o.maxTx) {
+    const k = Math.min(o.maxOutputs - 1, need, Number(left / o.each));
+    if (k < 1) break;
+    out.push(k);
+    left -= BigInt(k) * o.each;
+    need -= k;
+    if (left === 0n) break;
+  }
+  return out;
+}
