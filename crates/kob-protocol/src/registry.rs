@@ -355,13 +355,29 @@ pub struct GenesisReport {
     pub txid: String,
     /// Number of outputs in the genesis group (all checked).
     pub outputs: u32,
-    /// Total token amount the genesis created (sum of the genesis outputs' amounts).
+    /// Total token amount the genesis created (sum of the genesis holders' amounts).
     pub supply: i64,
-    /// Genesis outputs that carry a mint authority (KRON `is_minter != 0`), by output index. A KRON transaction can create a
-    /// minter output only when it spends a minter (every non-minter token input refuses minter outputs), so an empty list
-    /// proves the token can never have a live minter. KCC-20 programs keep their minter lanes behind the extension
-    /// commitment, which this check cannot see: always empty for the kcc20 family.
+    /// Genesis outputs that carry a mint authority, by output index: KRON outputs with `is_minter != 0`, and the
+    /// `PublicMint` outputs of a token of the published `KCC20PublicMint` app ([`crate::public_mint`]). A KRON transaction
+    /// can create a minter output only when it spends a minter (every non-minter token input refuses minter outputs), and
+    /// only a `PublicMint` creates a `PublicMint`, so an empty list proves the token can never have a live minter. KaspaCom's
+    /// KCC-20 program keeps its minter lanes behind the extension commitment, which this check cannot see: always empty
+    /// for it.
     pub minter_outputs: Vec<u32>,
+    /// Sum of the `remaining` allowance of the genesis `PublicMint` outputs (0 without one): what anyone may still mint.
+    /// The token's maximum supply is `supply + mint_allowance`, fixed at genesis ([`crate::public_mint::GenesisSupply`]).
+    #[serde(default)]
+    pub mint_allowance: i64,
+    /// Genesis `TokenSeed` outputs (zero-amount holder factories of the published app), by output index.
+    #[serde(default)]
+    pub seed_outputs: Vec<u32>,
+}
+
+impl GenesisReport {
+    /// What the genesis created and may still mint ([`crate::public_mint::GenesisSupply`]).
+    pub fn genesis_supply(&self) -> crate::public_mint::GenesisSupply {
+        crate::public_mint::GenesisSupply { holders: self.supply, mint_allowance: self.mint_allowance }
+    }
 }
 
 /// The registry's record of a token's genesis check (condition C1) and live-mint-authority check (condition C2), as
@@ -379,6 +395,10 @@ pub struct GenesisRecord {
     pub supply: i64,
     /// Genesis outputs carrying a mint authority (see [`GenesisReport::minter_outputs`]).
     pub minter_outputs: Vec<u32>,
+    /// Allowance of the genesis `PublicMint` outputs (see [`GenesisReport::mint_allowance`]); absent: the genesis holds no
+    /// public minter. The maximum supply is `supply + mint_allowance`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mint_allowance: Option<i64>,
     /// Live mint-authority cells (`txid:index`) at `checked_at_daa`: empty = none (condition C2 holds), absent = not
     /// determined. A token with a live minter needs a `warning` and cannot be official.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -990,6 +1010,14 @@ impl Registry {
                 if g.supply < 0 {
                     e.push(gbad("genesis.supply must not be negative"));
                 }
+                if let Some(a) = g.mint_allowance {
+                    if a < 0 || g.supply.checked_add(a).is_none() {
+                        e.push(gbad("genesis.mint_allowance must be non-negative and supply + mint_allowance must fit 64 bits"));
+                    }
+                    if g.minter_outputs.is_empty() {
+                        e.push(gbad("genesis.mint_allowance needs the genesis minter outputs that hold it"));
+                    }
+                }
                 if g.source.is_empty() || g.source.chars().count() > 512 || has_bad_char(&g.source) {
                     e.push(gbad("genesis.source must be 1-512 characters without control, zero-width or bidi characters"));
                 }
@@ -1187,6 +1215,13 @@ pub enum GenesisError {
 /// decodable state, all of one extension commitment (fungibility holds only among equal commitments: a second commitment
 /// in the genesis group is a second class of token under the same covenant id). Returns what it found (record
 /// `genesis_verified: true` for the token). [`verify_genesis_of`] also names the commitment the token must carry.
+///
+/// A token of the published `KCC20PublicMint` app (template `kcc20-ref-public-mint`) may also hold the app's issuance
+/// actors in its genesis, as upstream recommends ([`crate::public_mint`]): `PublicMint` minters and `TokenSeed` seeds of the
+/// app's exact programs, whose template fields name the app's own programs and whose extension commitment is the
+/// token's. A minter must have `remaining >= 0` and `mint_amount >= 1`. The report then lists them
+/// ([`GenesisReport::minter_outputs`], [`GenesisReport::seed_outputs`]) and sums their allowance
+/// ([`GenesisReport::mint_allowance`]); anything else in the group is refused as for every program.
 pub fn verify_genesis(
     template: &Template,
     covenant_id: &str,
@@ -1234,6 +1269,8 @@ pub fn verify_genesis_of(
     }
     let mut supply: i64 = 0;
     let mut minter_outputs = vec![];
+    let mut seed_outputs = vec![];
+    let mut mint_allowance: i64 = 0;
     // the token's one extension commitment: the one named, else the first output's
     let mut ext = extension_commitment;
     for o in outputs {
@@ -1241,7 +1278,39 @@ pub fn verify_genesis_of(
         if crate::script::p2sh_spk(redeem) != o.script_public_key {
             return Err(GenesisError::WrongRedeem(o.index));
         }
-        let state = program.state_of(redeem).ok_or_else(|| GenesisError::NotTemplate(o.index, template.id.clone()))?;
+        let Some(state) = program.state_of(redeem) else {
+            // the issuance actors of the published public-mint app, beside its holders
+            let companion = if crate::public_mint::is_app_holder(program.id) {
+                crate::public_mint::decode_companion(redeem).map_err(|e| GenesisError::BadState(o.index, e))?
+            } else {
+                None
+            };
+            let c = companion.ok_or_else(|| GenesisError::NotTemplate(o.index, template.id.clone()))?;
+            let want = *ext.get_or_insert(c.extension_commitment());
+            if c.extension_commitment() != want {
+                return Err(GenesisError::ExtensionCommitment(
+                    o.index,
+                    crate::json::to_hex(&c.extension_commitment()),
+                    crate::json::to_hex(&want),
+                ));
+            }
+            match c {
+                crate::public_mint::Companion::Minter(m) => {
+                    if m.remaining < 0 || m.mint_amount < 1 {
+                        return Err(GenesisError::BadState(
+                            o.index,
+                            format!("PublicMint with remaining {} and mint_amount {}: not a minter", m.remaining, m.mint_amount),
+                        ));
+                    }
+                    mint_allowance = mint_allowance
+                        .checked_add(m.remaining)
+                        .ok_or_else(|| GenesisError::BadState(o.index, "mint allowance overflows".into()))?;
+                    minter_outputs.push(o.index);
+                }
+                crate::public_mint::Companion::Seed(_) => seed_outputs.push(o.index),
+            }
+            continue;
+        };
         let st = crate::state::TokenState::decode_with(program, state).map_err(|e| GenesisError::BadState(o.index, e.to_string()))?;
         if st.amount() < 0 {
             return Err(GenesisError::BadState(o.index, "negative amount".into()));
@@ -1257,7 +1326,17 @@ pub fn verify_genesis_of(
         }
         supply = supply.checked_add(st.amount()).ok_or_else(|| GenesisError::BadState(o.index, "supply overflows".into()))?;
     }
-    Ok(GenesisReport { txid: genesis_txid.to_string(), outputs: outputs.len() as u32, supply, minter_outputs })
+    if supply.checked_add(mint_allowance).is_none() {
+        return Err(GenesisError::BadState(outputs[0].index, "supply plus mint allowance overflows".into()));
+    }
+    Ok(GenesisReport {
+        txid: genesis_txid.to_string(),
+        outputs: outputs.len() as u32,
+        supply,
+        minter_outputs,
+        mint_allowance,
+        seed_outputs,
+    })
 }
 
 #[cfg(test)]
@@ -1815,7 +1894,7 @@ mod tests {
         full_tok["official"] = json!(true);
         full_tok["genesis_verified"] = json!(true);
         full_tok["genesis"] = json!({"txid": "11".repeat(32), "daa_score": 1, "outputs": [1, 2], "supply": 3, "minter_outputs": [],
-            "live_minters": [], "checked_at_daa": 4, "source": "s"});
+            "mint_allowance": 0, "live_minters": [], "checked_at_daa": 4, "source": "s"});
         full_tok["warning"] = json!("w");
         // the legacy lot and tick (read and ignored) are declared optional by the schema
         full_tok["lot_size"] = json!(1);
@@ -1828,7 +1907,7 @@ mod tests {
         assert_eq!(keys(&full_tok), props(&defs["token"]), "token properties");
         assert_eq!(keys(&full_tok["display"]), props(&defs["display"]), "display properties");
         assert_eq!(keys(&full_tok["genesis"]), props(&defs["genesis_record"]), "genesis record properties");
-        let optional_gen: BTreeSet<String> = ["live_minters".to_string()].into_iter().collect();
+        let optional_gen: BTreeSet<String> = ["live_minters".to_string(), "mint_allowance".to_string()].into_iter().collect();
         let expect: BTreeSet<String> = keys(&full_tok["genesis"]).difference(&optional_gen).cloned().collect();
         assert_eq!(req(&defs["genesis_record"]), expect, "genesis record required");
         assert_eq!(defs["genesis_record"]["additionalProperties"], false);

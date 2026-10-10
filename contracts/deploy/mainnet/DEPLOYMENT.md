@@ -39,7 +39,7 @@ builds" in contracts/README.md.
 | | |
 |---|---|
 | File | `registry/tokens.json` (schema 1) |
-| sha256 (LF) | `a0b3e94cdf64767189ea2278c807e2731ba60528a196ec9b117efd9790bd135f` |
+| sha256 (LF) | `79a8aa3289eb8d76be61cd3dbd57e018fb1a5e08da5e9d5cffc445b3dce0e4fc` |
 | Strict templates | kron-2433 `2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2`, kron-2732 `8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e` |
 | Pending review | kcc20-ref-3x3, kcc20-ref-8x8, kcc20-kaspacom-0-2-5, kcc20-ref-public-mint |
 

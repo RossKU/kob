@@ -108,8 +108,9 @@
         "daa_score": { "type": "integer", "minimum": 0, "description": "DAA score of the block that accepted the genesis" },
         "outputs": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0 }, "description": "output indices of the genesis group, strictly increasing" },
         "supply": { "type": "integer", "minimum": 0, "description": "token amount the genesis created" },
-        "minter_outputs": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "genesis outputs carrying a mint authority (KRON is_minter != 0); empty proves a KRON token never has a live minter" },
-        "live_minters": { "type": "array", "items": { "type": "string", "pattern": "^[0-9a-f]{64}:[0-9]+$" }, "description": "live mint-authority cells (txid:index): [] = none (C2 holds), absent = not determined; non-empty needs a warning and forbids official" },
+        "minter_outputs": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "genesis outputs carrying a mint authority (KRON is_minter != 0; the PublicMint outputs of a kcc20-ref-public-mint token); empty proves the token never has a live minter" },
+        "mint_allowance": { "type": "integer", "minimum": 0, "description": "sum of the remaining allowance of the genesis PublicMint outputs (kcc20-ref-public-mint tokens); absent = no public minter. Maximum supply = supply + mint_allowance; needs minter_outputs" },
+        "live_minters": { "type": "array", "items": { "type": "string", "pattern": "^[0-9a-f]{64}:[0-9]+$" }, "description": "live mint-authority cells (txid:index; for kcc20-ref-public-mint the live PublicMint cells with remaining > 0): [] = none (C2 holds), absent = not determined; non-empty needs a warning and forbids official" },
         "checked_at_daa": { "type": "integer", "minimum": 0, "description": "virtual DAA score of the node the check read liveness from" },
         "source": { "type": "string", "minLength": 1, "maxLength": 512, "description": "where the bytes came from (node, explorer, issuer) and how they were checked" }
       }

@@ -149,13 +149,17 @@ pub fn run_verify_genesis(args: &[&str]) -> i32 {
     for v in &verdicts {
         match &v.result {
             Ok(g) => println!(
-                "  {:<8} {}  C1 genesis {} (DAA {}) outputs {:?} supply {}: VERIFIED;  C2 live minter: {}",
+                "  {:<8} {}  C1 genesis {} (DAA {}) outputs {:?} supply {}{}: VERIFIED;  C2 live minter: {}",
                 v.ticker,
                 v.covenant_id,
                 g.txid,
                 g.daa_score,
                 g.outputs,
                 g.supply,
+                match g.mint_allowance {
+                    Some(a) => format!(" + mint allowance {a} (max supply {})", g.supply.saturating_add(a)),
+                    None => String::new(),
+                },
                 match &g.live_minters {
                     Some(l) if l.is_empty() => format!("none (genesis minter outputs {:?})", g.minter_outputs),
                     Some(l) => format!("YES {l:?}"),

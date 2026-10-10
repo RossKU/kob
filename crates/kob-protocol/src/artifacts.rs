@@ -887,7 +887,7 @@ pub mod deployment {
     pub const MANIFEST: &str = include_str!("../../../contracts/deploy/mainnet/deployment.json");
     /// sha256 (lowercase hex, LF-normalised bytes) of the registry the record pins: the `registry.sha256` of [`MANIFEST`]
     /// and [`crate::registry::default_registry_sha256`] (checked by the tests).
-    pub const REGISTRY_SHA256: &str = "a0b3e94cdf64767189ea2278c807e2731ba60528a196ec9b117efd9790bd135f";
+    pub const REGISTRY_SHA256: &str = "79a8aa3289eb8d76be61cd3dbd57e018fb1a5e08da5e9d5cffc445b3dce0e4fc";
 }
 
 /// Summary of one template for front ends and documentation.

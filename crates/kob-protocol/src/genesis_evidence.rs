@@ -16,8 +16,13 @@
 //! C2 follows from the genesis for the KRON programs: a token output with `is_minter != 0` can be created only by a
 //! transaction that spends a minter (every non-minter token input refuses minter outputs; `review_b2_kron` r_kr_01 and
 //! r_kr_15), and the only other source of outputs carrying a covenant id is its genesis. So a genesis without a minter output
-//! proves the token never has a live minter. A genesis with one needs its lineage traced to the live cells
-//! ([`TokenEvidence::live_minters`]); without that trace C2 stays undetermined.
+//! proves the token never has a live minter. The same holds for the reference KCC-20 programs KOB pins (the standalone
+//! builds and the published public-mint build): a holder transfer creates only holders of its own program, the delegator
+//! paths authorise no output, and in the public-mint app only a `PublicMint` creates a `PublicMint`
+//! ([`crate::public_mint`]); so a genesis of holders (and seeds) alone has a fixed supply. A genesis with a minter needs its
+//! lineage traced to the live cells ([`TokenEvidence::live_minters`]; for a public-mint token the live `PublicMint` cells
+//! with allowance left); without that trace C2 stays undetermined. KaspaCom's program keeps minter lanes behind the
+//! extension commitment, which this check cannot see: C2 always comes from the trace there.
 
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +32,7 @@ use kaspa_consensus_core::tx::{
 };
 use kaspa_consensus_core::Hash;
 
+use crate::artifacts::TemplateId;
 use crate::registry::{parse_hex32, verify_genesis_of, Family, GenesisError, GenesisOutput, GenesisRecord, Registry};
 
 /// The evidence file.
@@ -367,9 +373,17 @@ fn check_token(reg: &Registry, ev: &TokenEvidence, checked_at_daa: u64) -> Resul
         verify_genesis_of(tpl, &ev.covenant_id, &g.txid, outpoint, &outs, Some(ext)).map_err(|e: GenesisError| e.to_string())?;
 
     // 4. C2: live mint authority
-    let live_minters = if report.minter_outputs.is_empty() && tpl.family == Family::Kron {
-        // no genesis minter: the program never lets one appear later (verify_genesis accepted the output as an instance of an
-        // embedded program, and the embedded KRON programs are exactly the two `review_b2_kron` r_kr_15 tests this on)
+    let program = parse_hex32(&tpl.template_hash).and_then(|h| crate::artifacts::token_template_by_hash(&h)).map(|t| t.id);
+    let no_mint_path_without_genesis_minter = tpl.family == Family::Kron
+        || matches!(
+            program,
+            Some(TemplateId::Kcc20Ref | TemplateId::Kcc20Ref4x5 | TemplateId::Kcc20Ref8x8 | TemplateId::Kcc20Ref16x16)
+                | Some(TemplateId::Kcc20PublicMint)
+        );
+    let live_minters = if report.minter_outputs.is_empty() && no_mint_path_without_genesis_minter {
+        // no genesis minter: the program never lets one appear later (verify_genesis accepted every output as an instance of
+        // an embedded program; the embedded KRON programs are exactly the two `review_b2_kron` r_kr_15 tests this on, and the
+        // reference KCC-20 programs have no mint path at all, the public-mint app none without a genesis PublicMint)
         Some(vec![])
     } else {
         ev.live_minters.as_ref().map(|l| l.iter().map(|c| format!("{}:{}", c.txid, c.index)).collect())
@@ -395,6 +409,8 @@ fn check_token(reg: &Registry, ev: &TokenEvidence, checked_at_daa: u64) -> Resul
         daa_score: g.accepting_block_daa_score,
         outputs: group.iter().map(|(n, _)| *n).collect(),
         supply: report.supply,
+        mint_allowance: (program.is_some_and(crate::public_mint::is_app_holder) && !report.minter_outputs.is_empty())
+            .then_some(report.mint_allowance),
         minter_outputs: report.minter_outputs,
         live_minters,
         checked_at_daa,
@@ -437,6 +453,7 @@ pub fn registry_mismatches(reg: &Registry, verdicts: &[TokenVerdict]) -> Vec<Str
                                 r.outputs.clone(),
                                 r.supply,
                                 r.minter_outputs.clone(),
+                                r.mint_allowance,
                                 r.live_minters.clone(),
                             )
                         };

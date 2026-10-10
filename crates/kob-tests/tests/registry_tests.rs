@@ -216,7 +216,7 @@ fn genesis_check_refuses_contaminated_genesis() {
     };
     for (id, states) in [
         (
-            "kcc20-ref-8x8",
+            "kcc20-ref-3x3",
             vec![
                 TokenState::user(Family::Kcc20, 600, [0x11; 32], [0; 32]).encode(),
                 TokenState::user(Family::Kcc20, 400, [0x22; 32], [0; 32]).encode(),
@@ -261,7 +261,7 @@ fn genesis_check_refuses_contaminated_genesis() {
         wrong[1].redeem_script = Some(prog.redeem(&states[0]));
         assert_eq!(verify_genesis(tpl, &id_of(&clean), &txid, outpoint, &wrong), Err(GenesisError::WrongRedeem(1)), "{id}");
         // a program of the other family is not this token's program
-        let other = r.template(if id == "kron-2433" { "kcc20-ref-8x8" } else { "kron-2433" }).unwrap();
+        let other = r.template(if id == "kron-2433" { "kcc20-ref-3x3" } else { "kron-2433" }).unwrap();
         assert!(matches!(verify_genesis(other, &id_of(&clean), &txid, outpoint, &clean), Err(GenesisError::NotTemplate(0, _))));
     }
 }
@@ -281,7 +281,7 @@ fn genesis_check_refuses_a_second_extension_commitment() {
     const EXT: [u8; 32] = [0x11; 32];
     const OTHER_EXT: [u8; 32] = [0xdd; 32];
     let r = Registry::default_registry();
-    let tpl = r.template("kcc20-ref-8x8").unwrap();
+    let tpl = r.template("kcc20-ref-3x3").unwrap();
     let prog =
         kob_protocol::artifacts::token_template_by_hash(&kob_protocol::registry::parse_hex32(&tpl.template_hash).unwrap()).unwrap();
     let outpoint = ([0x99; 32], 0u32);

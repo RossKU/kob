@@ -24,7 +24,7 @@
       "source": {
         "path": "contracts/artifacts/KCC20Ref.json",
         "upstream": "https://github.com/argent-lang/kcc20-reference master, commit c8a087117735a1f87c5c6d115fcddeaf2562c784 (pull request 1 merged; contracts/kcc20.ag built as a single-actor app; unaudited)",
-        "note": "Pre-audit notes (reference program, engine conformance suites in crates/kob-tests): one leader plus delegators, owner-authorised transfers only, no mint, burn, freeze or seize entry. Reference KCC-20 at its default 3 token inputs / 3 outputs per transfer."
+        "note": "Pre-audit notes (reference program, engine conformance suites in crates/kob-tests): one leader plus delegators, owner-authorised transfers only, no mint, burn, freeze or seize entry. Reference KCC-20 at its default 3 token inputs / 3 outputs per transfer: KOB's standard token program, the one kob token issue and the web app issue by default."
       }
     },
     {
@@ -48,7 +48,7 @@
       "source": {
         "path": "contracts/artifacts/KCC20Ref_8x8.json",
         "upstream": "https://github.com/argent-lang/kcc20-reference master, commit c8a087117735a1f87c5c6d115fcddeaf2562c784 (pull request 1 merged; contracts/kcc20.ag built as a single-actor app; unaudited)",
-        "note": "Pre-audit notes (reference program with 8/8 slots, engine conformance suites in crates/kob-tests): owner-authorised transfers only, no mint, burn, freeze or seize entry. The program KOB issues: the reference with 8/8 slot limits (only MAX_DELEGATES, MAX_TOKEN_OUTPUTS and the loop bounds differ). No mint, burn or public-mint entry."
+        "note": "Pre-audit notes (reference program with 8/8 slots, engine conformance suites in crates/kob-tests): owner-authorised transfers only, no mint, burn, freeze or seize entry. Prototype, not issued by KOB (KOB issues the standard 3/3 reference): the reference with 8/8 slot limits (only MAX_DELEGATES, MAX_TOKEN_OUTPUTS and the loop bounds differ), kept so that tokens issued with it on testnet stay tradable. No mint, burn or public-mint entry."
       }
     },
     {
@@ -163,7 +163,7 @@
       "risks": [
         "A UTXO owned (owner_scheme 4) by the token's own covenant id is spendable by anyone (any input of the token unlocks it); KOB never creates such an output (informational).",
         "Genesis contamination: the covenant id commits only to the P2SH hashes of the genesis outputs, so a genesis may hide a non-template output able to mint look-alike tokens or feed a fake balance into a transfer; a token is verified only after every genesis output was checked (registry genesis record), until then it carries the warning genesis-unchecked.",
-        "Issuance lives beside the program: the KCC20PublicMint app puts PublicMint minters (permissionless mint up to their remaining allowance) and TokenSeed seeds (zero-amount holders for any owner) in the token's covenant id. kob registry verify-genesis accepts only a genesis of KCC20 holders (a fixed supply); a genesis with a PublicMint or TokenSeed output is refused as not an instance of this program until KOB accounts for minter allowances."
+        "Issuance lives beside the program: the KCC20PublicMint app puts PublicMint minters (anyone mints up to their remaining allowance) and TokenSeed seeds (zero-amount holders) in the token's covenant id. kob registry verify-genesis accepts genesis minters and seeds of the published programs and records their allowance (genesis.mint_allowance): max supply = supply + mint_allowance, fixed at genesis. A token with a genesis minter is official only once no live minter has allowance left."
       ],
       "source": {
         "path": "contracts/artifacts/KCC20PublicMint.json",

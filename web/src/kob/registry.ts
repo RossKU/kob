@@ -73,6 +73,8 @@ export interface RegistryTokenJson {
 /** A token's genesis record (mirrors `GenesisRecord` of registry.rs). */
 export interface RegistryGenesisJson {
   txid: Hex; daa_score: number; outputs: number[]; supply: number; minter_outputs: number[];
+  /** allowance of the genesis PublicMint outputs (kcc20-ref-public-mint); absent = no public minter; max supply = supply + mint_allowance */
+  mint_allowance?: number;
   /** live mint-authority cells (`txid:index`): [] = none, absent = not determined; official needs [] */
   live_minters?: string[];
   checked_at_daa: number; source: string;
@@ -230,7 +232,7 @@ const TEMPLATE_KEYS = ['id', 'family', 'template_hash', 'prefix_len', 'suffix_le
 const ESCROW_KEYS = ['owner_scheme', 'borrow_scheme', 'id_type', 'is_minter', 'delivery_id_type'];
 const SOURCE_KEYS = ['path', 'upstream', 'note'];
 const TOKEN_KEYS = ['ticker', 'name', 'family', 'covenant_id', 'template_id', 'extension_commitment', 'extension_class', 'decimals', 'lot_size', 'tick', 'max_token_inputs', 'max_token_outputs', 'status', 'verified', 'official', 'genesis_verified', 'genesis', 'warning', 'display'];
-const GENESIS_KEYS = ['txid', 'daa_score', 'outputs', 'supply', 'minter_outputs', 'live_minters', 'checked_at_daa', 'source'];
+const GENESIS_KEYS = ['txid', 'daa_score', 'outputs', 'supply', 'minter_outputs', 'mint_allowance', 'live_minters', 'checked_at_daa', 'source'];
 const OUTPOINT = /^[0-9a-f]{64}:(0|[1-9][0-9]{0,9})$/;
 const DISPLAY_KEYS = ['description', 'website', 'icon', 'kcc23'];
 const STATE_LEN: Record<Family, number> = { kcc20: 112, kron: 46 };
@@ -366,6 +368,10 @@ function validate(doc: unknown, expectedNetwork?: string): { json: RegistryJson;
         const outs = indices(g.outputs) ? g.outputs : null;
         if (!outs || outs.length === 0 || outs.some((x, i) => i > 0 && x <= outs[i - 1])) gbad('genesis.outputs must be a non-empty, strictly increasing list of output indices');
         if (!indices(g.minter_outputs) || (outs && g.minter_outputs.some((m) => !outs.includes(m)))) gbad('genesis.minter_outputs must be genesis outputs');
+        if (g.mint_allowance !== undefined) {
+          if (!isInt(g.mint_allowance) || g.mint_allowance < 0) gbad('genesis.mint_allowance must be a non-negative integer');
+          else if (!Array.isArray(g.minter_outputs) || g.minter_outputs.length === 0) gbad('genesis.mint_allowance needs the genesis minter outputs that hold it');
+        }
         if (typeof g.source !== 'string' || !g.source || [...g.source].length > 512 || hasBadChar(g.source)) gbad('genesis.source must be 1..=512 printable characters');
         if (g.live_minters !== undefined) {
           if (!Array.isArray(g.live_minters) || g.live_minters.some((o) => typeof o !== 'string' || !OUTPOINT.test(o))) gbad('genesis.live_minters entries must be <txid>:<index>');
