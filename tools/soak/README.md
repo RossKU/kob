@@ -1,6 +1,7 @@
 # KOB TN10 soak
 
-A live testnet-10 market that looks and behaves like a real one: a test KCC-20 token **TUSD** (program `KCC20Ref_8x8`, fixed supply,
+A live testnet-10 market that looks and behaves like a real one: a test KCC-20 token **TUSD** (program `KCC20Ref`, KOB's standard KCC-20 program: the reference with 3 token inputs / 3 token
+outputs per transaction; fixed supply,
 8 decimals) whose KAS price follows **Binance KAS/USDT** (1 TUSD ≈ 1 USD worth of KAS), a second test token **TETH** (same program,
 1 TETH ≈ 1 ETH worth of KAS, Binance ETH/USDT over KAS/USDT) with its own KAS book and the TETH/TUSD pair, a market maker quoting both
 books, five traders placing every KOB order type in both books plus cross limits and pair market orders between the two tokens, x402 payments (KAS, KCC-20 and swap-and-pay), two competing `kob-executor run` instances (indexer + matcher + keepers), an
@@ -77,7 +78,7 @@ web / SDK sources) into one file, `dist/soak.mjs`, with rolldown from `web/node_
 | pair orders | a share of the trader actions (`token2.pairShare`, older spelling `crossShare`, 15 %) are **pair orders** of the asset token A (TETH, TBTC) against TUSD B through the web planner (`planOrder` with a PairPlanEnv built by `market.ts` `pairPlanEnv`, the same environment as the app's `buildPairPlanEnv`): KobPair limits on both sides (35 % resting 0.2 .. 1 % passive for 5 to 20 min, the rest crossing by 0.2 .. 1 %: the matcher nets opposite pair orders or routes them through the two KAS books), IOC and market orders, Dutch, TWAP / DCA, FOK, streaming and close, KobCondPair stop-market, stop-limit, trailing stops, take-profit and OCO (armed by the matcher from pair evidence: two KAS-book fills of A and B, or a resting pair order filled at or beyond the stop), KobIfdPair IFD / IFO buy-first and sell-first, IFO stop entries and repeat IFD / IFO: every order type of the KAS ticket (`DEFAULT_PAIR_WEIGHTS` in traders.ts, `token2.pairWeights` overrides). Prices are B base units per whole A around the pair book's touch midpoint (when within 3 % of the Binance-derived fair rate refA / refB, else the fair rate); sizes 3 to 20 USD of A (`pairUsd`). Pair fills are volume only: they never set a price (checker invariant 11). The retired cross limits (`KobCross`) and their bot paths are gone |
 | x402 | a paywall with three resources (`/native` 0.5 KAS, `/token` 0.25 TUSD, `/swap` 0.5 KAS paid with TUSD through KOB bids) settled by exec-a's facilitator; the payer pays them in turn every ~2 min. With `x402.invoiceIntent.enabled` every fourth turn is an **invoice paid by an intent** (docs/ops/executor.md A.7): the merchant registers an invoice of `amountKas` (20) KAS whose only entry is an intent swap offer paid with TUSD, the payer signs the router intent's creation (`payInvoiceWithIntent`, at most `maxSellTusd` sold) and the facilitator executes it against the TUSD bids; the supervisor then switches the facilitator's `intents` (keeper = exec-a's key) and `invoices` on |
 
-**Token consolidation** (`consolidate` in the config; the market maker per book, the traders too). Every fill, refund and fan-out leaves a token UTXO with a ~10 KAS carrier, so a bot wallet fragments. After each ladder pass (each trader action) a bot counts its plain, unreserved token UTXOs per token; above the fan-out target (`token2.fanout`: 8 for the market maker, 4 for a trader; TUSD 8 / 4) plus `slack` (8) it merges the **smallest** ones, up to the program's token inputs (8 for `KCC20Ref_8x8`) into one UTXO per `sendTokens` transaction, fee and change from the freed carriers (no KAS UTXO is spent), never taking the visible count below the fan-out target (so the fan-out is not undone and parallel sell-side placements keep their inputs). At most `maxTxPerInterval` (3) merge transactions per `intervalSec` (60) per key and token; counters `tx_ok:consolidate`, `consolidate_merged:<ticker>`, `consolidate_freed_sompi`, gauge `token_utxos:<key>:<ticker>` in `run/stats/bots.json`. `"consolidate": {"enabled": false}` switches it off, `"traders": false` leaves the traders out.
+**Token consolidation** (`consolidate` in the config; the market maker per book, the traders too). Every fill, refund and fan-out leaves a token UTXO with a ~10 KAS carrier, so a bot wallet fragments. After each ladder pass (each trader action) a bot counts its plain, unreserved token UTXOs per token; above the fan-out target (`token2.fanout`: 8 for the market maker, 4 for a trader; TUSD 8 / 4) plus `slack` (8) it merges the **smallest** ones in a chain of `sendTokens` transactions within the program's token inputs (3 for `KCC20Ref`): the first merges 3 UTXOs into one, each next one spends that (not yet accepted) output with 2 more, so a pass of k transactions leaves one UTXO in place of 2k + 1 (`selectMergeChain`); fee and change come from the freed carriers (no KAS UTXO is spent), and the visible count never drops below the fan-out target (so the fan-out is not undone and parallel sell-side placements keep their inputs). At most `maxTxPerInterval` (8; it was 3 while the soak ran the 8 / 8 program, which merged 8 at a time) merge transactions per `intervalSec` (60) per key and token; counters `tx_ok:consolidate`, `consolidate_merged:<ticker>`, `consolidate_freed_sompi`, gauge `token_utxos:<key>:<ticker>` in `run/stats/bots.json`. `"consolidate": {"enabled": false}` switches it off, `"traders": false` leaves the traders out.
 
 Sizes are half a dollar to the trader's `maxUsd` (3 to 8 USD; 1 TUSD is about 22 KAS), in every book (an asset token at its USD reference), any amount of base units.
 `token2.bookShare` (30 %) of the other trader actions trade the TETH book, the rest the TUSD book; their stat tags carry `@TETH`. Every plan refusal is counted by code (`plan_refused:<action>:<code>` in
@@ -128,9 +129,29 @@ powershell -File scripts/start.ps1
 `setup` is idempotent (state in `run/state.json`). Stops need no setup: since protocol v2.6 (touch trigger) a stop arms or trails in the
 transaction that fills a resting ask / bid of the same token (see the checker's invariant 5); there are no receipts to create.
 
+## Switching to the standard token program (2026-10-10)
+
+KOB issues the standard 3 / 3 reference program `KCC20Ref` (registry `kcc20-ref-3x3`); the 8 / 8 program the soak tokens ran is a
+prototype, and the TUSD, TETH and TBTC issued before the merged KCC-20 reference carry an 8 / 8 template this build does not pin at all
+(`docs/spec/kcc-conformance.md` sections 4.2 and 4.5): it neither lists, builds for nor matches them. So the soak tokens are issued
+again; `setup` and the registry writer refuse a `state.json` whose tokens carry another template (the message names the token).
+
+1. Wind the old run down with its own build (`soak-old.mjs`, as in the redeploys below): cancel every order, sweep strays and
+   consolidate, so the old tokens' carriers return to the keys.
+2. Remove `token`, `token2`, `token3`, `genesisOutputs`, `genesisOutputs2` and `genesisOutputs3` from `run/state.json` (keep a
+   backup).
+3. `node dist/soak.mjs setup --config run/config.json`: issues TUSD, TETH and TBTC as `KCC20Ref` (kob-wasm `issue`, its default) and
+   rewrites `run/registry/tokens.json` (template `kcc20-ref-3x3`, 3 / 3), the executors' allowlist.
+4. Start the executors and bots on the new build. The order templates are unchanged, so the executors' order deployment record is
+   the same; the token programs and the registry are what changed.
+
+With 3 token inputs per transaction a sell-side placement takes at most 3 token UTXOs and a merge takes 2 off the count (chained, see
+"Token consolidation" above).
+
 ## Redeploy on a new protocol version (same keys, same TUSD)
 
-The token program does not change with the order covenants, so a new run keeps the funded keys and the TUSD token: copy `keys.json`,
+The token program does not change with the order covenants, so a new run keeps the funded keys and the TUSD token (except across the
+switch above, which issues the tokens again): copy `keys.json`,
 `exec-*/operator.key`, `x402-merchant.key` / `.sha256` and the `token` / `genesisOutputs` of `state.json` into the new `run/`;
 `setup` then only writes the registry. The executors start at the sink (`--start sink`), so their indexers never saw the holdings
 created before: seed `run/state/tracker-<key>.json` with each key's token UTXOs (the bots' token tracker verifies every candidate on

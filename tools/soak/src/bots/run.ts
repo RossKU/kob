@@ -3,7 +3,7 @@
 import { genesisOf, type Env, type GenesisOutputs } from '../env';
 import { symbolOfUrl } from '../config';
 import { logger, Stats } from '../log';
-import { assetMarkets, tokenMarket, type AssetBook } from '../market';
+import { assetMarkets, tokenMarket, SOAK_PROGRAM, type AssetBook } from '../market';
 import { Bank } from '../bank';
 import { DAA_PER_SECOND, DEFAULT_MAX_LAG_SECS, IndexerGate } from '../indexer-gate';
 import { DerivedFeed, PriceFeed, RefRecorder, UsdFeed } from '../price';
@@ -30,7 +30,7 @@ function seedGenesis(env: Env, stats: Stats, m: TokenMarket, g: GenesisOutputs |
       transactionId: o.transactionId,
       index: o.index,
       tokenCovId: m.covenantId,
-      program: m.program as 'KCC20Ref_8x8',
+      program: m.program as typeof SOAK_PROGRAM,
       state: { amount: o.amount, owner: k.publicKey, owner_scheme: 0, borrow_scheme: 0, borrow_guard: '00'.repeat(32), extension_commitment: m.extensionCommitment ?? '00'.repeat(32) },
       carrier: o.carrier,
     });

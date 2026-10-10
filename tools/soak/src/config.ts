@@ -178,7 +178,7 @@ export interface SoakConfig {
     meanIntervalSec: number;
     /**
      * Intent payments of invoices (facilitator `intents` + `invoices`, docs/ops/executor.md A.7): every fourth payer turn the merchant
-     * registers an invoice of `amountKas` KAS whose only entry is an intent swap offer paid with TUSD (KCC20Ref_8x8), and the payer pays
+     * registers an invoice of `amountKas` KAS whose only entry is an intent swap offer paid with TUSD (KCC20Ref), and the payer pays
      * it with `payInvoiceWithIntent` (one signed creation; the facilitator executes the router intent against the TUSD bids).
      * The supervisor switches the facilitator's `intents` / `invoices` on when this is enabled (keeper = the executor's own key).
      */

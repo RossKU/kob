@@ -1,7 +1,7 @@
 // Token-UTXO consolidation: the pure selection (which UTXOs to merge) and the rate limit. No network, no wallet.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consolidateConfig, DEFAULT_CONSOLIDATE, outpointKey, RateLimiter, selectMerges, type MergeCandidate } from '../src/bots/consolidate-math.ts';
+import { consolidateConfig, DEFAULT_CONSOLIDATE, outpointKey, RateLimiter, selectMergeChain, selectMerges, type MergeCandidate } from '../src/bots/consolidate-math.ts';
 
 const txid = (n: number) => n.toString(16).padStart(4, '0').repeat(16);
 const u = (n: number, amount: number | bigint, index = 1): MergeCandidate => ({ transactionId: txid(n), index, state: { amount: amount.toString() } });
@@ -147,4 +147,51 @@ test('rate limit: allowance feeds maxBatches', () => {
 test('a disabled limit (0 per interval) plans nothing', () => {
   const rl = new RateLimiter(0, 60_000);
   assert.deepEqual(selectMerges(many(50), { ...base, maxBatches: rl.allowance('k', 0) }), []);
+});
+
+// ---------------------------------------------------------------- the chained pass (KOB's standard program: 3 token inputs)
+
+const std = { ...base, maxInputs: 3 };
+
+test('chain: 3 -> 1, then the previous output plus 2 more, every link within the 3 token inputs', () => {
+  const links = selectMergeChain(many(30), { ...std, maxBatches: 4 });
+  assert.deepEqual(links.map((l) => l.length), [3, 2, 2, 2]);
+  // with the carried output every link spends at most 3 token inputs into one output
+  links.forEach((l, i) => assert.ok(l.length + (i === 0 ? 0 : 1) <= 3));
+  // smallest first, across the links, and disjoint
+  const flat = links.flat();
+  const sorted = many(30).map((x) => BigInt(x.state.amount)).sort((a, b) => (a < b ? -1 : 1));
+  assert.deepEqual(amounts(flat), sorted.slice(0, flat.length));
+  assert.equal(new Set(flat.map(outpointKey)).size, flat.length);
+});
+
+test('chain: one pass ends with one merged UTXO and never below keep', () => {
+  for (const n of [17, 20, 31, 64, 200]) {
+    for (const keep of [3, 4, 8]) {
+      const links = selectMergeChain(many(n), { ...std, keep, maxBatches: 1000 });
+      const fresh = total(links);
+      assert.ok(n - fresh >= keep, `n=${n} keep=${keep}: visible ${n - fresh} < keep`);
+      if (links.length > 0) assert.equal(n - fresh + 1, keep + 1, `n=${n} keep=${keep}: the pass merges the excess into one UTXO`);
+    }
+  }
+});
+
+test('chain: the same threshold, limit and rate rules as the disjoint plan', () => {
+  assert.deepEqual(selectMergeChain(many(16), std), []);
+  assert.deepEqual(selectMergeChain(many(50), { ...std, maxInputs: 1 }), []);
+  assert.deepEqual(selectMergeChain(many(50), { ...std, maxBatches: 0 }), []);
+  assert.equal(selectMergeChain(many(200), { ...std, maxBatches: 8 }).length, 8);
+  // just above the threshold: 17 eligible, keep 8 -> 9 fresh inputs: 3 + 2 + 2 + 2
+  assert.deepEqual(selectMergeChain(many(17), { ...std, maxBatches: 100 }).map((l) => l.length), [3, 2, 2, 2]);
+  // the 8 / 8 prototype: 8, then 7 per link
+  assert.deepEqual(selectMergeChain(many(40), { ...base, maxBatches: 3 }).map((l) => l.length), [8, 7, 7]);
+  // a reserved UTXO is never selected
+  const us = many(30);
+  const smallest = [...us].sort((a, b) => Number(BigInt(a.state.amount) - BigInt(b.state.amount)))[0];
+  assert.ok(!selectMergeChain(us, { ...std, reserved: new Set([outpointKey(smallest)]) }).flat().some((x) => outpointKey(x) === outpointKey(smallest)));
+});
+
+test('the default rate keeps up with the standard program: 8 merges a minute', () => {
+  assert.equal(DEFAULT_CONSOLIDATE.maxTxPerInterval, 8);
+  assert.equal(DEFAULT_CONSOLIDATE.intervalSec, 60);
 });

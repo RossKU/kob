@@ -1,15 +1,18 @@
 // Merges a bot's own plain token UTXOs (see consolidate-math.ts for the selection rule). The reverse of fanout.ts: a `sendTokens` of up to
 // `slots.inputs` token inputs into ONE output of the same key; the other carriers are freed (the fee comes out of them, the rest returns
-// to the key's KAS as the change output, like the executor's own maintenance merge). Only token UTXOs are spent, never KAS funding, so
-// the key's order placements (which fund from KAS UTXOs) are not affected; the inputs are reserved on submit like every other transaction.
+// to the key's KAS as the change output, like the executor's own maintenance merge). A pass is a CHAIN (`selectMergeChain`): from the second
+// transaction on, the previous merge's output (not yet accepted) is one of the inputs, so with KOB's standard program (3 token inputs) a
+// pass of k transactions merges 2k + 1 UTXOs into one. Only token UTXOs are spent, never KAS funding, so the key's order placements (which
+// fund from KAS UTXOs) are not affected; the inputs are reserved on submit like every other transaction.
 import type { TokenMarket } from '@/kob/plan-types';
+import type { Kcc20State, TokenUtxo } from '@/kob/types';
 import type { Env } from '../env';
 import { errText } from '../log';
 import { buildAtUrgency } from '../fees';
 import { tokenRef } from '../market';
 import { KAS } from '../util';
 import type { BotWallet } from '../wallet';
-import { RateLimiter, selectMerges, type ConsolidateConfig } from './consolidate-math';
+import { RateLimiter, selectMergeChain, type ConsolidateConfig } from './consolidate-math';
 
 const CARRIER = 10n * KAS;
 
@@ -33,9 +36,13 @@ export async function consolidateTokens(env: Env, w: BotWallet, m: TokenMarket, 
     const key = `${w.name}:${m.covenantId}`;
     const allowed = rl.allowance(key, Date.now());
     if (allowed < 1) return 0;
-    const batches = selectMerges(utxos, { keep, slack: cfg.slack, maxInputs: m.slots.inputs, maxBatches: allowed, reserved: w.reservedKeys() });
+    const links = selectMergeChain(utxos, { keep, slack: cfg.slack, maxInputs: m.slots.inputs, maxBatches: allowed, reserved: w.reservedKeys() });
     let done = 0;
-    for (const batch of batches) {
+    let merged = 0;
+    let carry: TokenUtxo | null = null;
+    for (const fresh of links) {
+      // the previous link's output (unaccepted) leads the next merge: one UTXO at the end of the pass
+      const batch: TokenUtxo[] = carry ? [carry, ...fresh] : fresh;
       const carriersIn = batch.reduce((s, u) => s + BigInt(u.amount), 0n);
       if (carriersIn < CARRIER + KAS) {
         w.stats.inc(`consolidate_skipped:carriers`);
@@ -58,13 +65,25 @@ export async function consolidateTokens(env: Env, w: BotWallet, m: TokenMarket, 
         (r) => env.kob.build(r as unknown as Parameters<typeof env.kob.build>[0]),
       );
       w.stats.inc('consolidate_try');
-      const r = await w.submit(built, 'consolidate', { token: m.ticker, inputs: batch.length, base: total, freedKas: Number(carriersIn - CARRIER) / 1e8 });
+      const r = await w.submit(built, 'consolidate', { token: m.ticker, inputs: batch.length, chained: carry !== null, base: total, freedKas: Number(carriersIn - CARRIER) / 1e8 });
       if (!r.ok) break; // the view is stale (a lost race) or the node refused: the next pass starts from fresh state
       done++;
-      w.stats.inc(`consolidate_merged:${m.ticker}`, batch.length);
+      merged += fresh.length;
+      w.stats.inc(`consolidate_merged:${m.ticker}`, fresh.length);
       w.stats.inc('consolidate_freed_sompi', Number(carriersIn - CARRIER));
+      const at = built.tx.outputs.findIndex((o) => o.covenant?.covenantId === m.covenantId);
+      if (at < 0) break;
+      const state: Kcc20State = {
+        amount: total.toString(),
+        owner: w.pk,
+        owner_scheme: 0,
+        borrow_scheme: 0,
+        borrow_guard: '00'.repeat(32),
+        extension_commitment: (batch[0]!.state as Kcc20State).extension_commitment,
+      };
+      carry = { transactionId: r.txid, index: at, amount: built.tx.outputs[at]!.value, covenantId: m.covenantId, state };
     }
-    if (done) w.log.info('consolidated token utxos', { token: m.ticker, had: utxos.length, txs: done });
+    if (done) w.log.info('consolidated token utxos', { token: m.ticker, had: utxos.length, txs: done, merged });
     return done;
   } catch (e) {
     w.stats.inc('consolidate_errors');

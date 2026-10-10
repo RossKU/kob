@@ -22,7 +22,7 @@ ws.onopen = async () => {
       let cursor = '';
       for (;;) {
         const r = await (await fetch(`${API}/v1/token-utxos?owner=${pk}&token=${tok}&spent=false&limit=500${cursor ? `&cursor=${cursor}` : ''}`)).json();
-        for (const x of r.items) if (x.role === 'owned' && x.state) cand.set(`${x.txid}:${x.index}`, { transactionId: x.txid, index: x.index, tokenCovId: tok, program: 'KCC20Ref_8x8', state: x.state, carrier: String(x.value), addedAt: Date.now() });
+        for (const x of r.items) if (x.role === 'owned' && x.state) cand.set(`${x.txid}:${x.index}`, { transactionId: x.txid, index: x.index, tokenCovId: tok, program: x.program ?? 'KCC20Ref', state: x.state, carrier: String(x.value), addedAt: Date.now() });
         cursor = r.next_cursor; if (!cursor || !r.items.length) break;
       }
     }

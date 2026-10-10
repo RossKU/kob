@@ -8,7 +8,7 @@ import { feeContext } from './fees';
 import { issuedOf, key, setIssued, type Env, type GenesisOutputs, type IssuedToken } from './env';
 import { ASSET_SLOTS, type TokenConfig, type TokenSlot } from './config';
 import { logger, Stats } from './log';
-import { writeRegistry } from './market';
+import { checkSoakProgram, SOAK_PROGRAM, writeRegistry } from './market';
 import { KAS, kas, sleep, unitsOf } from './util';
 import { spkStringToAddress } from '@/data/kaspa-sdk';
 import { walletFor, type BotWallet } from './wallet';
@@ -81,14 +81,14 @@ export async function recoverIssue(env: Env, stats: Stats, slot: TokenSlot, txid
   const bank = walletOf(env, env.cfg.bank.key, stats);
   const { holders } = holdersOf(env, t, bank.pk);
   const ext = issueLimits(env.kob).extensionCommitment;
-  const tpl = env.kob.templates().find((x) => x.name === 'KCC20Ref_8x8');
-  if (!tpl) throw new Error('kob-wasm has no KCC20Ref_8x8');
+  const tpl = env.kob.templates().find((x) => x.name === SOAK_PROGRAM);
+  if (!tpl) throw new Error(`kob-wasm has no ${SOAK_PROGRAM}`);
   const owners = new Map(Object.entries(env.keys).map(([n, k]) => [k.publicKey, n]));
   const genesis: GenesisOutputs = {};
   let covenantId: string | null = null;
   for (const h of holders) {
     const state = { amount: h.amount, owner: h.owner, owner_scheme: 0, borrow_scheme: 0, borrow_guard: '00'.repeat(32), extension_commitment: ext };
-    const addr = spkStringToAddress(env.sdk, env.kob.tokenScriptPublicKey('KCC20Ref_8x8', state as never), env.cfg.network);
+    const addr = spkStringToAddress(env.sdk, env.kob.tokenScriptPublicKey(SOAK_PROGRAM, state as never), env.cfg.network);
     const u = (await env.node.getUtxosByAddresses([addr])).find((x) => x.transactionId === txid);
     if (!u || !u.covenantId) throw new Error(`genesis output of ${owners.get(h.owner)} not found on the node at ${addr}`);
     if (covenantId && covenantId !== u.covenantId) throw new Error('genesis outputs carry different covenant ids');
@@ -113,10 +113,12 @@ export async function recoverIssue(env: Env, stats: Stats, slot: TokenSlot, txid
   log.info('issuance recovered', { slot, ticker: t.ticker, covenantId, txid, holders: Object.keys(genesis).length });
 }
 
-/** Issues the soak token of `slot` (config `token` = TUSD, `token2`, `token3`) with KOB's own issuance (kob-wasm `issue`: KCC20Ref_8x8, fixed supply). */
+/** Issues the soak token of `slot` (config `token` = TUSD, `token2`, `token3`) with KOB's own issuance (kob-wasm `issue`: KOB's standard program KCC20Ref, 3 / 3, fixed supply). */
 export async function issueToken(env: Env, stats: Stats, slot: TokenSlot = 'token'): Promise<void> {
   const have = issuedOf(env.state, slot);
   if (have) {
+    // a token of the soak before the switch to the standard program is not tradable on this build: say so before anything runs
+    checkSoakProgram(have);
     log.info('token already issued', { slot, ticker: have.ticker, covenantId: have.covenantId });
     return;
   }
@@ -175,7 +177,7 @@ export async function issueToken(env: Env, stats: Stats, slot: TokenSlot = 'toke
     if (!name) continue;
     genesis[name] = { transactionId: txid, index: u.index, amount: u.state.amount, carrier: u.amount };
     const w = walletOf(env, name, stats);
-    w.tracker.add(w.pk, { transactionId: txid, index: u.index, tokenCovId: res.token.covenantId, program: 'KCC20Ref_8x8', state: u.state, carrier: u.amount });
+    w.tracker.add(w.pk, { transactionId: txid, index: u.index, tokenCovId: res.token.covenantId, program: res.token.program, state: u.state, carrier: u.amount });
   }
   setIssued(env.state, slot, issued, genesis);
   env.saveState();

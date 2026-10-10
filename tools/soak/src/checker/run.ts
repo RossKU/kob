@@ -32,6 +32,7 @@ import { spkStringToAddress } from '@/data/kaspa-sdk';
 import type { AnyState, TokenProgram, TokenState } from '@/kob/types';
 import { genesisOf, slotOfToken, type Env } from '../env';
 import { ASSET_SLOTS } from '../config';
+import { SOAK_PROGRAM } from '../market';
 import { errText, logger } from '../log';
 import { sleep } from '../util';
 import { IncidentLog } from './incidents.ts';
@@ -1074,7 +1075,7 @@ function knownHoldings(x: Ctx, token: string): Holding[] {
   for (const [name, g] of Object.entries(gen ?? {})) {
     const k = x.env.keys[name];
     if (!k) continue;
-    out.push({ txid: g.transactionId, index: g.index, program: 'KCC20Ref_8x8', state: { amount: g.amount, owner: k.publicKey, owner_scheme: 0, borrow_scheme: 0, borrow_guard: '00'.repeat(32), extension_commitment: ext ?? '00'.repeat(32) } });
+    out.push({ txid: g.transactionId, index: g.index, program: SOAK_PROGRAM, state: { amount: g.amount, owner: k.publicKey, owner_scheme: 0, borrow_scheme: 0, borrow_guard: '00'.repeat(32), extension_commitment: ext ?? '00'.repeat(32) } });
   }
   return out;
 }

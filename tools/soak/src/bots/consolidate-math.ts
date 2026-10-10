@@ -23,7 +23,12 @@ export interface ConsolidateConfig {
   traders: boolean;
 }
 
-export const DEFAULT_CONSOLIDATE: ConsolidateConfig = { enabled: true, slack: 8, maxTxPerInterval: 3, intervalSec: 60, traders: true };
+/**
+ * Defaults. KOB's standard KCC-20 program takes 3 token inputs per transaction, so a merge takes 2 UTXOs off the count (8 with the 8 / 8
+ * prototype the soak ran before): 8 merge transactions per minute per key and token keep a market maker's fragmentation (about 8 new token
+ * UTXOs a minute at the 2026-10-01 rates) in check.
+ */
+export const DEFAULT_CONSOLIDATE: ConsolidateConfig = { enabled: true, slack: 8, maxTxPerInterval: 8, intervalSec: 60, traders: true };
 
 export function consolidateConfig(raw?: Partial<ConsolidateConfig>): ConsolidateConfig {
   const c = { ...DEFAULT_CONSOLIDATE, ...(raw ?? {}) };
@@ -35,7 +40,7 @@ export interface SelectOptions {
   keep: number;
   /** a merge is planned only when the eligible count exceeds `keep + slack` */
   slack: number;
-  /** token inputs one transfer of the program takes (KCC20Ref_8x8: 8) */
+  /** token inputs one transfer of the program takes (KOB's standard KCC20Ref: 3) */
   maxInputs: number;
   /** most batches (merge transactions) to plan */
   maxBatches: number;
@@ -53,19 +58,9 @@ export const outpointKey = (u: { transactionId: string; index: number }): string
  * and even while the merge outputs are not yet visible to the indexer it never drops below `keep`. Batches are disjoint.
  */
 export function selectMerges<T extends MergeCandidate>(utxos: readonly T[], o: SelectOptions): T[][] {
-  const reserved = o.reserved;
-  const eligible = utxos.filter((u) => BigInt(u.state.amount) > 0n && !(reserved?.has(outpointKey(u)) ?? false));
-  const n = eligible.length;
-  const keep = Math.max(1, Math.floor(o.keep));
-  const maxIn = Math.floor(o.maxInputs);
-  if (n <= keep + Math.max(1, Math.floor(o.slack)) || maxIn < 2 || o.maxBatches < 1) return [];
-  const sorted = [...eligible].sort((a, b) => {
-    const x = BigInt(a.state.amount);
-    const y = BigInt(b.state.amount);
-    if (x !== y) return x < y ? -1 : 1;
-    if (a.transactionId !== b.transactionId) return a.transactionId < b.transactionId ? -1 : 1;
-    return a.index - b.index;
-  });
+  const plan = planOf(utxos, o);
+  if (!plan) return [];
+  const { sorted, n, keep, maxIn } = plan;
   const batches: T[][] = [];
   let budget = n - keep;
   let at = 0;
@@ -77,6 +72,50 @@ export function selectMerges<T extends MergeCandidate>(utxos: readonly T[], o: S
     budget -= k;
   }
   return batches;
+}
+
+/**
+ * The merges of one pass as a CHAIN of transactions: the first merges up to `maxInputs` of the smallest eligible UTXOs into one output, and
+ * every next one spends that (still unaccepted) output together with up to `maxInputs - 1` more, so a pass ends with ONE merged UTXO even on
+ * a 3-input program (KOB's standard KCC-20 program: 3 -> 1, then 1 + 2 -> 1, ...). Each link is a transfer of at most `maxInputs` token inputs
+ * into one output, valid on its own. Returns the FRESH UTXOs of each link (from the second link on the caller adds the previous link's
+ * output). The rule of `selectMerges` holds: the threshold, smallest first, and the fresh inputs of all links within n - keep, so the
+ * visible count never drops below `keep` (the chain's one output only adds to it).
+ */
+export function selectMergeChain<T extends MergeCandidate>(utxos: readonly T[], o: SelectOptions): T[][] {
+  const plan = planOf(utxos, o);
+  if (!plan) return [];
+  const { sorted, n, keep, maxIn } = plan;
+  const links: T[][] = [];
+  let budget = n - keep;
+  let at = 0;
+  while (links.length < o.maxBatches) {
+    const first = links.length === 0;
+    const k = Math.min(first ? maxIn : maxIn - 1, budget);
+    if (k < (first ? 2 : 1)) break;
+    links.push(sorted.slice(at, at + k));
+    at += k;
+    budget -= k;
+  }
+  return links;
+}
+
+/** The eligible UTXOs (positive amount, not reserved) sorted smallest first, ties by outpoint; null when nothing is to be merged. */
+function planOf<T extends MergeCandidate>(utxos: readonly T[], o: SelectOptions): { sorted: T[]; n: number; keep: number; maxIn: number } | null {
+  const reserved = o.reserved;
+  const eligible = utxos.filter((u) => BigInt(u.state.amount) > 0n && !(reserved?.has(outpointKey(u)) ?? false));
+  const n = eligible.length;
+  const keep = Math.max(1, Math.floor(o.keep));
+  const maxIn = Math.floor(o.maxInputs);
+  if (n <= keep + Math.max(1, Math.floor(o.slack)) || maxIn < 2 || o.maxBatches < 1) return null;
+  const sorted = [...eligible].sort((a, b) => {
+    const x = BigInt(a.state.amount);
+    const y = BigInt(b.state.amount);
+    if (x !== y) return x < y ? -1 : 1;
+    if (a.transactionId !== b.transactionId) return a.transactionId < b.transactionId ? -1 : 1;
+    return a.index - b.index;
+  });
+  return { sorted, n, keep, maxIn };
 }
 
 /** sliding-window rate limit per key: at most `max` events in any `windowMs` */
