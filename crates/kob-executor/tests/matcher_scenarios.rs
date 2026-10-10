@@ -788,6 +788,40 @@ fn oversize_crossing_is_chained() {
     assert_eq!(r.prepared[0].plan.amount_of(&cid(100)), WHOLE);
 }
 
+/// KOB's standard token program (the reference KCC-20, 3 token inputs / 3 token outputs per transaction): a bid that
+/// needs the custodies of seven asks cannot take them in one transaction, so the tick chains several, each within the
+/// program's slots on its own and validated in the engine, each step spending its parent's bid continuation.
+#[test]
+fn a_crossing_beyond_the_standard_programs_three_slots_is_chained() {
+    let bd = bid(1, P260, T3);
+    let mut orders = vec![listed(cid(1), AnyState::KobBid(bd.clone()), bd.escrow(7 * WHOLE, 7).expect("escrow") as u64, 1_000)];
+    orders.extend((0..7).map(|i| l_ask(100 + i, ask(2, P250 + i as i64 * 100_000, WHOLE, T3))));
+    let r = run(&input(&book(orders)), &cfg());
+    assert!(r.prepared.len() >= 3, "seven custodies in steps of at most three token inputs: {}", r.prepared.len());
+    for (k, p) in r.prepared.iter().enumerate() {
+        assert!(p.validation.is_some(), "step {k} engine-validated");
+        let tx = &p.signed.tx;
+        let tin = tx.inputs.iter().filter(|i| i.utxo.covenant_id == Some(TOKEN)).count();
+        let tout = tx.outputs.iter().filter(|o| o.covenant.as_ref().is_some_and(|c| c.covenant_id == TOKEN)).count();
+        assert!((1..=3).contains(&tin) && (1..=3).contains(&tout), "step {k}: {tin} token inputs / {tout} token outputs");
+    }
+    for w in r.prepared.windows(2) {
+        assert_eq!(w[1].parent, Some(w[0].txid()), "each step spends its parent's outputs");
+    }
+    assert_eq!(amount_all(&r, cid(1)), 7 * WHOLE, "every ask filled across the chain");
+    for i in 0..7 {
+        assert_eq!(amount_all(&r, cid(100 + i)), WHOLE, "ask {i}");
+    }
+    // without chaining the first transaction takes what fits and the rest waits for the next tick
+    let mut orders = vec![l_bid(1, bid(1, P260, T3), 7 * WHOLE)];
+    orders.extend((0..7).map(|i| l_ask(100 + i, ask(2, P250, WHOLE, T3))));
+    let mut k = cfg();
+    k.chain_unconfirmed = false;
+    let r = run(&input(&book(orders)), &k);
+    assert_eq!(r.prepared.len(), 1);
+    assert!(amount_of(&r, cid(1)) <= 3 * WHOLE);
+}
+
 #[test]
 fn chaining_can_be_disabled() {
     let mut orders = vec![l_bid(1, bid(1, P260, T8), 12 * WHOLE)];
