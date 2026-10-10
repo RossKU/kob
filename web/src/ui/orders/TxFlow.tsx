@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { t, tIssue } from '../../i18n';
 import type { CancelPlan } from '../../kob/cancel';
-import { Banner, IssueLine, Section } from '../kit';
+import { Banner, IssueLine, Section, Spinner } from '../kit';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
 import { withoutRaw } from '../../i18n/build-error';
 
@@ -13,9 +13,13 @@ export interface FlowStep {
   label?: string;
   /** covenant ids this step spends: their records are dropped after the step is submitted */
   spends: string[];
+  /** one line above the decoded transaction on the confirmation screen (a merge: the whole chain) */
+  shownAs?: string;
+  /** the toast once the step is submitted (default: the cancel / sweep wording) */
+  toast?: string;
 }
 
-export type StepState = 'pending' | 'confirming' | 'submitted' | 'cancelled' | 'failed';
+export type StepState = 'pending' | 'preparing' | 'confirming' | 'submitted' | 'cancelled' | 'failed';
 
 export interface FlowOutcome {
   submitted: number;
@@ -31,6 +35,13 @@ export interface TxFlowProps {
   onStepSubmitted(step: FlowStep, result: Extract<ConfirmResult, { status: 'submitted' }>): void | Promise<void>;
   /** called once when the flow is over (all steps done, or the user stopped) */
   onDone(outcome: FlowOutcome): void;
+  /**
+   * A CHAINED flow (a token merge): step `index` spends an output of step `index - 1`, so it is built again from the node once that step was
+   * submitted (`prev`) and replaces the planned step. A rejection ends the flow with its message.
+   */
+  next?(index: number, prev: { txid: string }): Promise<FlowStep>;
+  /** the line above each confirmation screen (default: the cancel race note) */
+  note?: string;
 }
 
 /** Plan findings the user must explicitly accept before signing (the confirm screen shows them with their own checkbox). */
@@ -56,6 +67,7 @@ function PlanNotes({ plan }: { plan: CancelPlan }) {
  * UTXOs, so a partial sequence leaves everything consistent.
  */
 export function TxFlow(props: TxFlowProps) {
+  const [steps, setSteps] = useState<FlowStep[]>(props.steps);
   const [states, setStates] = useState<StepState[]>(() => props.steps.map((_, i) => (i === 0 ? 'confirming' : 'pending')));
   const [index, setIndex] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
@@ -70,40 +82,60 @@ export function TxFlow(props: TxFlowProps) {
 
   const onClose = async (step: FlowStep, result: ConfirmResult) => {
     const next = [...states];
+    const total = steps.length;
     if (result.status === 'submitted') {
       next[index] = 'submitted';
+      // the confirmation screen closes at once; the step's bookkeeping (and a chained step's build) follows
+      if (props.next && index + 1 < total) next[index + 1] = 'preparing';
+      setStates([...next]);
       setTxids((m) => ({ ...m, [index]: result.txid }));
       await props.onStepSubmitted(step, result);
-      if (index + 1 < props.steps.length) {
+      if (index + 1 < total) {
+        if (props.next) {
+          try {
+            const built = await props.next(index + 1, result);
+            if (done.current) return;
+            setSteps((xs) => xs.map((x, i) => (i === index + 1 ? built : x)));
+          } catch (e) {
+            next[index + 1] = 'failed';
+            setMessage(e instanceof Error ? e.message : String(e));
+            setStates(next);
+            setIndex(total);
+            finish(next);
+            return;
+          }
+        }
         next[index + 1] = 'confirming';
         setStates(next);
         setIndex(index + 1);
         return;
       }
       setStates(next);
-      setIndex(props.steps.length);
+      setIndex(total);
       finish(next);
       return;
     }
     next[index] = result.status === 'cancelled' ? 'cancelled' : 'failed';
     if (result.status === 'failed') setMessage(result.message);
     setStates(next);
-    setIndex(props.steps.length);
+    setIndex(total);
     finish(next);
   };
 
   // leaving the page mid-flow must still report (records / refresh are the caller's)
   useEffect(() => () => void (done.current = true), []);
 
-  const running = index < props.steps.length;
-  const step = props.steps[index];
+  const running = index < steps.length;
+  const step = steps[index];
+  const confirming = running && states[index] === 'confirming';
+  const preparing = states.some((s) => s === 'preparing');
   const anySubmitted = states.some((s) => s === 'submitted');
 
   return (
     <Section title={props.heading} data-testid="tx-flow">
-      {props.steps.length > 1 ? (
+      {steps.length > 1 ? (
         <ol class="progress" data-testid="flow-progress">
-          {props.steps.map((s, i) => (
+          {steps.map((s, i) => (
             <li key={i} data-testid={`flow-step-${i}`} data-state={states[i]}>
               <span class="pill-step" aria-hidden="true">
                 {states[i] === 'submitted' ? '✓' : states[i] === 'failed' ? '✗' : states[i] === 'cancelled' ? '–' : i + 1}
@@ -116,10 +148,15 @@ export function TxFlow(props: TxFlowProps) {
           ))}
         </ol>
       ) : null}
-      {running ? <PlanNotes plan={step.plan} /> : null}
-      {running && step.plan.built ? (
+      {confirming ? <PlanNotes plan={step.plan} /> : null}
+      {preparing ? (
+        <p class="small muted" data-testid="flow-preparing">
+          <Spinner /> {t('orders.flow.preparing')}
+        </p>
+      ) : null}
+      {confirming && step.plan.built ? (
         <>
-          <p class="small muted">{t('orders.flow.race')}</p>
+          <p class="small muted">{props.note ?? t('orders.flow.race')}</p>
           <ConfirmSign
             key={index}
             built={step.plan.built}
@@ -127,6 +164,7 @@ export function TxFlow(props: TxFlowProps) {
             expected={step.plan.expected}
             label={step.label}
             acknowledge={ackTexts(step.plan)}
+            shownAs={step.shownAs}
             onClose={(r) => void onClose(step, r)}
           />
         </>

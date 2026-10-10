@@ -7,13 +7,25 @@ import { Amount, Banner, Button, ErrorBanner, KeyValueList, Loading, Section, Ta
 import { labelState, tokenLabel } from '../market/token-model';
 import { loadFreeBalances } from './balances-data';
 import { combineBalances } from './balances-model';
+import { mergeableCounts } from './merge-model';
 import type { OrdersData } from './orders-data';
 
 /**
  * The balances wallets do not show: tokens inside the wallet's sell orders (0x04 custody), stray tokens, KAS locked in orders, next to the free
  * amounts. Free amounts come from the node / token tracker, the rest from the wallet's live orders (indexer, or records resolved on the node).
  */
-export function BalancesPanel(props: { data: OrdersData; pubkey: Hex; canSign: boolean; onCancelToken(token: Hex): void }) {
+export function BalancesPanel(props: {
+  data: OrdersData;
+  pubkey: Hex;
+  canSign: boolean;
+  onCancelToken(token: Hex): void;
+  /** outpoints held for open orders (never merged) */
+  reserved?: ReadonlySet<string>;
+  /** an action is being planned (its id) */
+  busy?: string | null;
+  /** merge the wallet's plain UTXOs of a token into one */
+  onMergeToken?(token: Hex): void;
+}) {
   const services = useServices();
   const { registry } = services;
   const free = useAsync((_signal) => loadFreeBalances(services, props.pubkey, registry.tokens), [props.pubkey, props.data]);
@@ -23,6 +35,12 @@ export function BalancesPanel(props: { data: OrdersData; pubkey: Hex; canSign: b
     const live = props.data.views.filter((v) => v.status === 'open' || v.status === 'partial');
     return combineBalances({ maker: props.pubkey, freeKas: free.data.kasFree ?? 0n, freeTokens: free.data.freeTokens, liveOrders: [...live, ...props.data.snapshots], strays: props.data.strays });
   }, [free.data, props.data, props.pubkey]);
+
+  // free token UTXOs a merge may take, per token (two or more)
+  const mergeable = useMemo(
+    () => (free.data ? mergeableCounts(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set()) : new Map<Hex, number>()),
+    [free.data, registry, props.pubkey, props.reserved],
+  );
 
   // fixed decimals per column: the finest amount of the column, so every row shows the same number of decimals (decimal points line up)
   const cols = useMemo(() => {
@@ -82,6 +100,18 @@ export function BalancesPanel(props: { data: OrdersData; pubkey: Hex; canSign: b
                       <td class="right" data-testid="balance-strays"><Amount kind="token" value={b.strays} decimals={d} unit={false} fraction={cols.strays} group /></td>
                       <td class="right"><Amount kind="kas" value={b.kasLocked} unit={false} fraction={cols.kas} group /></td>
                       <td class="right">
+                        {props.onMergeToken && info && mergeable.has(b.token) ? (
+                          <Button
+                            small
+                            disabled={!props.canSign || !!props.busy}
+                            loading={props.busy === `merge-${b.token}`}
+                            title={t('orders.merge.hint', { count: mergeable.get(b.token)!, max: info.slots.inputs })}
+                            onClick={() => props.onMergeToken!(b.token)}
+                            data-testid={`orders-merge-token-${b.token}`}
+                          >
+                            {t('orders.merge.button', { count: mergeable.get(b.token)! })}
+                          </Button>
+                        ) : null}{' '}
                         {b.orderCount > 0 ? (
                           <Button small variant="danger" disabled={!props.canSign} onClick={() => props.onCancelToken(b.token)} data-testid={`orders-cancel-token-${b.token}`}>
                             {t('orders.cancelToken')}

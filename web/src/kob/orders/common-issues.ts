@@ -71,7 +71,7 @@ export const ISSUE_CATALOG = {
   // ---- funding
   INSUFFICIENT_KAS: e('error', 'Not enough KAS: this order needs {needed:kas}, your spendable balance is {have:kas} (short by {shortfall:kas}).'),
   INSUFFICIENT_TOKENS: e('error', 'Not enough tokens: this order needs {needed} base units, you hold {have} (short by {shortfall}).'),
-  TOKEN_UTXOS_FRAGMENTED: e('error', 'Your tokens are spread over too many UTXOs: one transaction can spend at most {max}. Merge them first (send them to yourself).'),
+  TOKEN_UTXOS_FRAGMENTED: e('error', 'Your tokens are spread over too many UTXOs: one transaction can spend at most {max}. Merge them first (My orders, Balances: Merge).'),
   FUNDING_FRAGMENTED: e('error', 'Your KAS is spread over too many UTXOs: one transaction can spend at most {max}. Consolidate them first.'),
   CLOSE_NOTHING_TO_SELL: e('error', 'You hold none of this token: there is nothing to close.'),
   CARRIER_BELOW_FLOOR: e('error', 'The KAS carrier ({carrier:kas}) is below {floor:kas}, the least this token output can carry (the floor of the token program or the dust bound of the network).'),

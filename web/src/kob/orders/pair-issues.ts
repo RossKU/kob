@@ -23,7 +23,7 @@ export const PAIR_ISSUE_CATALOG = {
   PAIR_MARKET_REFERENCE_SOURCE: e('info', 'Market reference: {reference} {ticker} per token from the indexer pair book (resting pair orders and the route through the two KAS books). The order can fill at {worst} {ticker} per token at worst.'),
   PAIR_MARKET_REFERENCE_DIVERGES: e('warning', 'The pair book shows {reference} {ticker} per token, but the last KAS trades of the two tokens imply {lastFill} ({percent}% apart). Both come from the indexer: check the price yourself before signing.'),
   PAIR_INSUFFICIENT_TOKENS: e('error', 'Not enough {ticker}: this order needs {needed} base units, you hold {have} (short by {shortfall}).'),
-  PAIR_TOKEN_UTXOS_FRAGMENTED: e('error', 'Your {ticker} is spread over too many UTXOs: one transaction can spend at most {max}. Merge them first (send them to yourself).'),
+  PAIR_TOKEN_UTXOS_FRAGMENTED: e('error', 'Your {ticker} is spread over too many UTXOs: one transaction can spend at most {max}. Merge them first (My orders, Balances: Merge).'),
   PAIR_KRON_CUSTODY_TOO_LARGE: e('error', 'The order would hold {amount} base units of {ticker} in one custody, more than a KRON token output can hold ({max}): lower the amount or the price.'),
   PAIR_KRON_DELIVERY_TOO_LARGE: e('error', 'One minimum fill would deliver more {ticker} than a KRON token output can hold ({max} base units): lower the minimum fill or the price.'),
   PAIR_TP_CROSSES: e('warning', 'The take-profit crosses the pair book ({touch} {ticker} per token): it fills right away at your limit.'),

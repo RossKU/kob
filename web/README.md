@@ -136,6 +136,12 @@ and the pair ticket (`src/ui/market/PairPage.tsx`, `CrossTicket.tsx`, `pair-mode
   kind `sweep`) re-checks the record (`src/kob/sweep.ts`, as `verify_sweep`) and blocks another script, a record that does not verify, the swept
   order's custody being spent or any token to another key. A cancel that would abandon strays (more than one transaction can move) offers "Sweep
   first". Cancels return foreign strays too. The placement record stays and points at the continuation.
+* **Merge tokens.** A token whose free UTXOs exceed what one transaction can spend (`TOKEN_UTXOS_FRAGMENTED`; KOB's standard program takes 3)
+  gets "Merge (n)" in My orders > Balances (`src/kob/merge.ts`): a chain of transfers to the wallet itself, the first 3 -> 1, each next the previous
+  output + 2 more, each valid on its own, at most 10 per run. Only the wallet's own plain UTXOs of the token (tracker, verified on the node) are
+  taken, never an open order's custody or strays. The freed carriers pay the fee (low bucket), a wallet coin only when they cannot (and for KRON).
+  Every confirmation screen states the whole merge (UTXOs before / after, transactions, total fee); a later transaction is built only once the
+  previous one is on the node, from the node's UTXO.
 
 ## Wallet events
 

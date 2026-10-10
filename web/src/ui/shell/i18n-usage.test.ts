@@ -55,7 +55,7 @@ describe('i18n key usage', () => {
     family('shell.theme', ['toLight', 'toDark']);
     family('orders.status', ORDER_STATUSES);
     family('orders.source', ['node', 'nodeHint', 'record', 'recordHint', 'none', 'noneHint']);
-    family('orders.flow.state', ['pending', 'confirming', 'submitted', 'cancelled', 'failed']);
+    family('orders.flow.state', ['pending', 'preparing', 'confirming', 'submitted', 'cancelled', 'failed']);
     family('orders.position', ['single', 'ifd', 'repeat']);
     family('orders.position.first', ['buy', 'sell']);
     family('orders.position.phase', POSITION_PHASES);

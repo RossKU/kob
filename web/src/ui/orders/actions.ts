@@ -13,8 +13,12 @@ import { familyOfKind, quoteCovIdOf, tokenCovIdOf } from '../../kob/order-facts'
 import { isLiveStatus, type Position } from '../../kob/positions';
 import { custodyState, extensionOfState } from '../../kob/token-state';
 import type { Family, Hex, TokenUtxo } from '../../kob/types';
-import { t } from '../../i18n';
+import { t, tIssue } from '../../i18n';
 import { buildErrorText } from '../../i18n/build-error';
+import { buildMergeLink, mergeCarry, planMerge, type MergeLink, type MergePlan } from '../../kob/merge';
+import type { TokenInfo } from '../../kob/registry';
+import { waitForAcceptance } from '../../wallet/sign';
+import { mergeTokenOf } from './merge-model';
 import { buildReplacement, type AmendInput, type AmendKind, type AmendResult } from './amend';
 import { spkToAddressFor } from './orders-data';
 import type { OrderEntry } from './orders-model';
@@ -282,6 +286,38 @@ export async function dropRecords(store: RecordStore, ids: readonly Hex[]): Prom
       /* the record store is a convenience: a failure must not turn an accepted transaction into an error */
     }
   }
+}
+
+// ------------------------------------------------------------------------------------------------ token merge
+
+/**
+ * Plans the merge of the wallet's plain UTXOs of `token` (kob/merge.ts): the token UTXOs come from the tracker (indexer + local candidates,
+ * verified on the node), never one of `reserved` (the open orders' custodies and strays).
+ */
+export async function planMergeFor(s: Services, pubkey: Hex, token: TokenInfo, reserved: ReadonlySet<string>): Promise<MergePlan> {
+  const mt = mergeTokenOf(token);
+  if (!mt) throw new Error(t('orders.merge.unsupported'));
+  const env = await buildCancelEnv(s, { pubkey }, token);
+  return planMerge(env, mt, env.tokenUtxos ?? [], reserved);
+}
+
+/**
+ * Link `k` of a merge, once link `k - 1` (`prev`, submitted as `txid`) is accepted: its merged output is read from the NODE, the KAS UTXOs
+ * afresh, and the link is built again over them (its other inputs are the planned ones; the confirmation screen re-checks every input on the node).
+ */
+export async function nextMergeLink(s: Services, pubkey: Hex, token: TokenInfo, plan: MergePlan, k: number, prev: MergeLink, txid: Hex, timeoutMs = 60_000): Promise<MergeLink> {
+  const mt = mergeTokenOf(token);
+  const group = plan.groups[k];
+  if (!mt || !group) throw new Error(t('orders.merge.unsupported'));
+  const out = prev.built.tx.outputs[prev.output.index]!;
+  const res = await waitForAcceptance(s.node, { address: spkToAddressFor(s)(out.scriptPublicKey), transactionId: txid, index: prev.output.index }, { timeoutMs });
+  const found = res.found[0];
+  if (!res.accepted || !found) throw new Error(t('orders.merge.notAccepted'));
+  const carry = mergeCarry(prev, txid, mt, found);
+  const env = await buildCancelEnv(s, { pubkey });
+  const link = buildMergeLink(env, mt, [carry, ...group], group);
+  if ('error' in link) throw new Error(tIssue('orders.issue', link.error));
+  return link;
 }
 
 /** The user-facing text of a planning failure (a raw builder / node text becomes a plain sentence; `rawActionError` keeps it for "Details"). */

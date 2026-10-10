@@ -17,15 +17,16 @@ import { OrderRow, type OrderRowActions } from './OrderRow';
 import { PositionCard } from './PositionCard';
 import { RecoverPanel } from './RecoverPanel';
 import { StraysPanel } from './StraysPanel';
-import { PlanErrors, TxFlow, type FlowOutcome, type FlowStep } from './TxFlow';
+import { PlanErrors, TxFlow, type FlowOutcome, type FlowStep, type TxFlowProps } from './TxFlow';
+import { mergeFailure, mergeStep, mergeSummary, reservedOutpoints } from './merge-model';
 import { unwindAmount } from './position-model';
 import { fillHistory, fillsCsv, fillsFileName } from './fills-model';
 import { filledAmountOf } from './OrderFills';
 import { downloadText, exportFileName } from '../kit/download';
 import { backupFileText } from './recover';
 import {
-  abandoningOrders, abandonsStrays, describeActionError, liveExitsOfRepeatEntry, markCancelling, rawActionError, planCancelFor, planCancelMany, planRefundFor, planSweepFor,
-  planSweepMany, warnEntryOnly,
+  abandoningOrders, abandonsStrays, describeActionError, liveExitsOfRepeatEntry, markCancelling, nextMergeLink, rawActionError, planCancelFor, planCancelMany, planMergeFor,
+  planRefundFor, planSweepFor, planSweepMany, warnEntryOnly,
 } from './actions';
 import { amendKind, describeEntries, entryState, countByStatus, type OrderRowModel } from './orders-model';
 import { buildListItems, cancellableIds, filterItems, tabCounts, type ListTab } from './list-model';
@@ -35,6 +36,9 @@ interface Flow {
   key: number;
   heading: string;
   steps: FlowStep[];
+  /** a chained flow (token merge): builds step `index` once the previous one was submitted */
+  next?: TxFlowProps['next'];
+  note?: string;
 }
 
 const REFRESH_MS = 15_000;
@@ -98,10 +102,10 @@ export function OrdersView() {
   // a failed stray fetch is passed on as "unknown" (null): a record-path cancel then warns instead of silently abandoning strays
   const strayList = d?.straysError ? null : strays;
 
-  const startFlow = (heading: string, steps: FlowStep[]) => {
+  const startFlow = (heading: string, steps: FlowStep[], chain: Pick<Flow, 'next' | 'note'> = {}) => {
     setPlanFail(null);
     setFailure(null);
-    setFlow({ key: Date.now(), heading, steps });
+    setFlow({ key: Date.now(), heading, steps, ...chain });
   };
 
   const guarded = async (id: string, fn: () => Promise<void>) => {
@@ -202,6 +206,33 @@ export function OrdersView() {
       go();
     });
 
+  // the open orders' custodies and strays: a merge never spends them
+  const reserved = useMemo(() => reservedOutpoints(d), [d]);
+
+  /** Merges the wallet's plain UTXOs of `token` into one: a chain of transfers to itself, each signed on its own confirmation screen. */
+  const mergeToken = (token: Hex) =>
+    void guarded(`merge-${token}`, async () => {
+      const info = tokenOf(token);
+      if (!pubkey || !info) return;
+      const plan = await planMergeFor(services, pubkey, info, reserved);
+      if (!plan.ok) return setPlanFail({ plans: [mergeFailure(plan)], failed: [] });
+      const summary = mergeSummary(plan, info.ticker);
+      const total = plan.links.length;
+      let prev = plan.links[0]!;
+      startFlow(
+        t('orders.merge.heading', { ticker: info.ticker }),
+        plan.links.map((l, i) => mergeStep(l, i, total, summary)),
+        {
+          note: t('orders.merge.note'),
+          next: async (k, r) => {
+            const link = await nextMergeLink(services, pubkey, info, plan, k, prev, r.txid);
+            prev = link;
+            return mergeStep(link, k, total, summary);
+          },
+        },
+      );
+    });
+
   const onCancelPosition = (p: Position) => cancelMany(t('orders.flow.positionHeading'), p.cancelIds, p.id);
   // close: cancel the position's live orders, then unwind at market. Buy first: the exits hold the bought tokens, the cancel returns them and
   // step 2 sells the released + free tokens. Sell first: the exits hold the proceeds (+ prefund) in KAS, the cancel returns it and step 2 buys back
@@ -217,7 +248,7 @@ export function OrdersView() {
     // the records stay (marked) until the cancel is final: a fill may win the race, a reorg may undo it (C5-06)
     // (a sweep continues the order: markCancelling leaves its record unmarked, ConfirmSign moved its last state to the continuation)
     if (pubkey) await markCancelling(wallet.records, { cancelIds: step.spends, built: step.plan.built }, result.txid);
-    showToast(step.plan.sweep ? t('orders.flow.sweepSubmitted', { count: step.plan.sweep.utxos }) : t('orders.flow.submitted', { count: step.spends.length }), 'ok');
+    showToast(step.toast ?? (step.plan.sweep ? t('orders.flow.sweepSubmitted', { count: step.plan.sweep.utxos }) : t('orders.flow.submitted', { count: step.spends.length })), 'ok');
   };
   const onFlowDone = (o: FlowOutcome) => {
     setSweepFollowUp((c) => (c && c.pending ? (o.submitted > 0 ? { ...c, pending: false } : null) : c));
@@ -381,7 +412,17 @@ export function OrdersView() {
           {t('orders.sweepFirst.doneBody')}
         </Banner>
       ) : null}
-      {flow ? <TxFlow key={flow.key} heading={flow.heading} steps={flow.steps} onStepSubmitted={onStepSubmitted} onDone={onFlowDone} /> : null}
+      {flow ? (
+        <TxFlow
+          key={flow.key}
+          heading={flow.heading}
+          steps={flow.steps}
+          onStepSubmitted={onStepSubmitted}
+          onDone={onFlowDone}
+          {...(flow.next ? { next: flow.next } : {})}
+          {...(flow.note ? { note: flow.note } : {})}
+        />
+      ) : null}
 
       <Section
         title={t('orders.list.title')}
@@ -438,7 +479,17 @@ export function OrdersView() {
         </div>
       </Section>
 
-      {d ? <BalancesPanel data={d} pubkey={wallet.info.pubkey} canSign={canSign} onCancelToken={(token) => setConfirmAll({ token, ids: cancellableIds(rows, token) })} /> : null}
+      {d ? (
+        <BalancesPanel
+          data={d}
+          pubkey={wallet.info.pubkey}
+          canSign={canSign}
+          onCancelToken={(token) => setConfirmAll({ token, ids: cancellableIds(rows, token) })}
+          reserved={reserved}
+          busy={busy}
+          onMergeToken={mergeToken}
+        />
+      ) : null}
       <StraysPanel
         strays={strays}
         orderTokens={sweepable}
