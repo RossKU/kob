@@ -5,13 +5,13 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
 use kob_executor::x402::ledger::State;
 use kob_executor::x402::testutil::{Fixture, MERCHANT_KEY, PAYER_KEY};
-use kob_x402::chain::{Outpoint, SubmitError};
+use kob_x402::chain::{Outpoint, SubmitError, Txid};
 use kob_x402::client::retry::{pay_with_retry, Built, GiveUp, RetryPolicy, RetryTransport, Sent};
 use kob_x402::error::{Diag, X402Error};
 use kob_x402::testkit::{p2pk_spk, pubkey};
@@ -31,6 +31,21 @@ fn diag(r: &SettlementResponse) -> (String, bool, String) {
 
 fn merchant_outputs(f: &Fixture) -> usize {
     f.chain.unspent_of(&p2pk_spk(&pubkey(MERCHANT_KEY))).len()
+}
+
+/// What reached the merchant: the transactions of one payment's attempts (`attempts`: every signed id, hex and raw) that the
+/// chain accepted, after checking that the merchant holds exactly one payment of `AMOUNT` per accepted attempt and that the
+/// facilitator's ledger reports `Accepted` for exactly those attempts (never for one the chain did not accept).
+fn paid_attempts(f: &Fixture, attempts: &[(String, Txid)]) -> Vec<String> {
+    // a rebuild from unchanged inputs signs the same transaction again: one transaction, counted once
+    let attempts: BTreeSet<(String, Txid)> = attempts.iter().cloned().collect();
+    let on_chain: Vec<String> = attempts.iter().filter(|(_, id)| f.chain.is_accepted(id)).map(|(h, _)| h.clone()).collect();
+    let in_ledger: Vec<String> =
+        attempts.iter().filter(|(h, _)| f.ledger.get(h).is_some_and(|e| e.state == State::Accepted)).map(|(h, _)| h.clone()).collect();
+    assert_eq!(in_ledger, on_chain, "the facilitator reports paid exactly the attempts the chain accepted");
+    let received: u64 = f.chain.unspent_of(&p2pk_spk(&pubkey(MERCHANT_KEY))).iter().map(|(_, u)| u.amount).sum();
+    assert_eq!(received, AMOUNT * on_chain.len() as u64, "the merchant holds one payment per accepted attempt");
+    on_chain
 }
 
 /// Mines the mempool every few ms while it lives.
@@ -85,10 +100,16 @@ struct Payer<'a> {
     max_pay: u64,
     /// A second coin this payer adds to each attempt (two racing payers spend the anchor plus their own coin).
     extra: Option<Outpoint>,
+    /// The coin the first attempt spends (its anchor) instead of the payer's largest one: two retries of one payment hold
+    /// the same signed first attempt's anchor, whatever the chain looks like when each of them starts.
+    first_coin: Option<Outpoint>,
+    /// Waited on once the first attempt is signed: racing retries have all signed before any of them sends.
+    signed_together: Option<Arc<Barrier>>,
     faults: HashMap<u32, Fault>,
     reqs: HashMap<String, FacilitatorRequest>,
     /// Transaction ids of the attempts, in order.
     txids: Vec<String>,
+    ids: Vec<Txid>,
     builds: u32,
     sends: u32,
     now: u64,
@@ -102,9 +123,12 @@ impl<'a> Payer<'a> {
             orders: vec![],
             max_pay: u64::MAX,
             extra: None,
+            first_coin: None,
+            signed_together: None,
             faults: HashMap::new(),
             reqs: HashMap::new(),
             txids: vec![],
+            ids: vec![],
             builds: 0,
             sends: 0,
             now: 0,
@@ -112,6 +136,10 @@ impl<'a> Payer<'a> {
     }
     fn order_set(&self) -> BTreeSet<Outpoint> {
         self.orders.iter().map(|(o, _)| *o).collect()
+    }
+    /// Every signed attempt: (hex id, id).
+    fn attempts(&self) -> Vec<(String, Txid)> {
+        self.txids.iter().cloned().zip(self.ids.iter().copied()).collect()
     }
 }
 
@@ -131,7 +159,7 @@ impl RetryTransport for Payer<'_> {
             .map(|(o, u)| (o, u.amount))
             .collect();
         coins.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        let first = match anchor {
+        let first = match anchor.or(self.first_coin.as_ref()) {
             Some(a) => *a,
             None => coins.first().ok_or_else(|| X402Error::state(Diag::InvalidKaspaExactUtxo, "no funds"))?.0,
         };
@@ -156,11 +184,21 @@ impl RetryTransport for Payer<'_> {
         if let Some(x) = self.extra {
             inputs.push(x);
         }
+        // a wallet signs only coins the node reports as spendable (an input gone or spent in the mempool fails the build)
+        if let Some(gone) = inputs.iter().find(|o| !self.f.chain.is_spendable(o)) {
+            return Err(X402Error::state(Diag::InvalidKaspaExactUtxo, format!("input {gone} is not spendable")));
+        }
         *self.f.verifier.orders.lock().unwrap() = order.into_iter().collect();
         let id = format!("{}-retry-attempt-{n:02}", self.tag);
         let (req, tx) = self.f.payment(&inputs, AMOUNT, &id, 7);
         self.reqs.insert(id.clone(), req);
         self.txids.push(hex(&tx.id().as_bytes()));
+        self.ids.push(tx.id().as_bytes());
+        if n == 1 {
+            if let Some(b) = &self.signed_together {
+                b.wait();
+            }
+        }
         let payer_inputs = inputs.iter().filter(|o| Some(**o) != order).copied().collect();
         Ok(Built { payment: (), payment_id: id, transaction_id: hex(&tx.id().as_bytes()), consumed: inputs, payer_inputs })
     }
@@ -193,7 +231,7 @@ impl RetryTransport for Payer<'_> {
     }
 
     fn unspent(&mut self, of: &[Outpoint]) -> Result<BTreeSet<Outpoint>, X402Error> {
-        Ok(of.iter().filter(|o| self.f.chain.utxo(o).is_some()).copied().collect())
+        Ok(of.iter().filter(|o| self.f.chain.is_spendable(o)).copied().collect())
     }
     fn now_ms(&mut self) -> u64 {
         self.now
@@ -226,6 +264,7 @@ fn a_lost_order_race_is_rebuilt_from_a_fresh_quote_and_paid_once() {
     assert_ne!(p.txids[0], p.txids[1]);
     assert_eq!(f.ledger.get(&r.attempt.transaction_id).unwrap().state, State::Accepted);
     assert_eq!(merchant_outputs(&f), 1);
+    assert_eq!(paid_attempts(&f, &p.attempts()), vec![r.attempt.transaction_id]);
 }
 
 #[test]
@@ -239,6 +278,7 @@ fn an_unreachable_facilitator_gets_the_same_payment_again() {
     let r = pay_with_retry(&policy(), 60, &mut p).unwrap();
     assert_eq!((r.attempts, r.resends, p.builds, p.sends), (1, 2, 1, 3));
     assert_eq!(merchant_outputs(&f), 1);
+    assert_eq!(paid_attempts(&f, &p.attempts()), vec![r.attempt.transaction_id]);
 }
 
 #[test]
@@ -251,6 +291,7 @@ fn a_rejected_broadcast_is_rebuilt_and_paid_once() {
     let r = pay_with_retry(&policy(), 60, &mut p).unwrap();
     assert_eq!((r.attempts, p.builds, p.sends), (2, 2, 2));
     assert_eq!(merchant_outputs(&f), 1);
+    assert_eq!(paid_attempts(&f, &p.attempts()), vec![r.attempt.transaction_id]);
 }
 
 #[test]
@@ -265,6 +306,7 @@ fn a_payment_whose_answer_was_lost_is_found_never_paid_again() {
     assert_eq!(r.settlement.extensions.as_ref().unwrap()["kob"]["replayed"], true, "the facilitator's cached settlement");
     assert!(f.chain.utxo(&coin).is_none());
     assert_eq!(merchant_outputs(&f), 1);
+    assert_eq!(paid_attempts(&f, &p.attempts()), vec![r.attempt.transaction_id]);
     assert_eq!(f.chain.submit_count(), 1, "broadcast once");
 }
 
@@ -286,6 +328,7 @@ fn every_attempt_failing_gives_up_after_three_and_moves_no_funds() {
     assert!(e.signed.iter().all(|b| b.consumed.contains(&coin)));
     assert!(f.chain.utxo(&coin).is_some());
     assert_eq!(merchant_outputs(&f), 0);
+    assert!(paid_attempts(&f, &p.attempts()).is_empty());
 }
 
 #[test]
@@ -302,6 +345,7 @@ fn a_worse_requote_above_the_payers_bound_is_not_paid() {
     assert_eq!((e.why, p.builds, p.sends), (GiveUp::Build, 2, 1));
     assert_eq!(e.last.diag, Diag::Overpayment);
     assert_eq!(merchant_outputs(&f), 0);
+    assert!(paid_attempts(&f, &p.attempts()).is_empty());
 }
 
 #[test]
@@ -310,24 +354,37 @@ fn two_retries_of_one_payment_racing_pay_once() {
     let _miner = Miner::start(&f);
     let anchor = f.fund(500_000_000);
     let (x, y) = (f.fund(200_000_000), f.fund(200_000_000));
-    // both retry the payment whose anchor is `anchor`, each adding a coin of its own (two different transactions)
-    let run = |tag: &'static str, extra: Outpoint, f: Arc<Fixture>| {
+    // both retry the payment whose anchor is `anchor`, each adding a coin of its own (two different transactions); both have
+    // signed their first attempt before either sends, so neither can start from a chain where the other already paid (it
+    // would then pick another coin, the other's change, and make a second, unrelated payment)
+    let signed = Arc::new(Barrier::new(2));
+    let run = |tag: &'static str, extra: Outpoint, f: Arc<Fixture>, signed: Arc<Barrier>| {
         thread::spawn(move || {
             let mut p = Payer::new(&f, tag);
             p.extra = Some(extra);
+            p.first_coin = Some(anchor);
+            p.signed_together = Some(signed);
             let r = pay_with_retry(&RetryPolicy::default(), 60, &mut p);
-            r.map(|r| r.attempt.transaction_id).map_err(|e| (e.why, e.last.diag))
+            let anchored = match &r {
+                Ok(r) => r.anchor,
+                Err(e) => e.anchor,
+            };
+            assert_eq!(anchored, Some(anchor), "{tag}: every attempt sent spends the one anchor");
+            (r.map(|r| r.attempt.transaction_id).map_err(|e| (e.why, e.last.diag)), p.attempts())
         })
     };
-    let (a, b) = (run("racer-a", x, f.clone()), run("racer-b", y, f.clone()));
-    let (a, b) = (a.join().unwrap(), b.join().unwrap());
+    let (a, b) = (run("racer-a", x, f.clone(), signed.clone()), run("racer-b", y, f.clone(), signed));
+    let ((a, mut attempts), (b, attempts_b)) = (a.join().unwrap(), b.join().unwrap());
+    attempts.extend(attempts_b);
     let paid = [&a, &b].iter().filter(|r| r.is_ok()).count();
     assert_eq!(paid, 1, "{a:?} {b:?}");
-    let refused = if a.is_ok() { &b } else { &a };
+    let (winner, refused) = if a.is_ok() { (&a, &b) } else { (&b, &a) };
     assert!(
         matches!(refused, Err((GiveUp::Stopped, Diag::Replay)) | Err((GiveUp::AnchorSpent, _))),
         "the loser is refused or finds the anchor spent: {refused:?}"
     );
+    // the chain, the merchant and the facilitator's ledger agree: one attempt of the payment went through, the reported one
+    assert_eq!(paid_attempts(&f, &attempts), vec![winner.clone().unwrap()]);
     assert!(f.chain.utxo(&anchor).is_none());
     assert_eq!(merchant_outputs(&f), 1);
 }

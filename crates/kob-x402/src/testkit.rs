@@ -173,6 +173,12 @@ impl MockChain {
         self.state.lock().unwrap().utxos.get(op).cloned()
     }
 
+    /// True if `op` is in the UTXO set and no mempool transaction spends it (what a node reports as spendable).
+    pub fn is_spendable(&self, op: &Outpoint) -> bool {
+        let s = self.state.lock().unwrap();
+        s.utxos.contains_key(op) && !s.mempool_spent.contains(op)
+    }
+
     /// All unspent outputs locked by `spk`.
     pub fn unspent_of(&self, spk: &ScriptPublicKey) -> Vec<(Outpoint, ChainUtxo)> {
         self.state.lock().unwrap().utxos.iter().filter(|(_, u)| &u.script_public_key == spk).map(|(o, u)| (*o, u.clone())).collect()
