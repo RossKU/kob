@@ -18,7 +18,9 @@ import {
   diffSets,
   type EvidenceFact,
   healthIssues,
+  keepersCanAct,
   killDaa,
+  nextFollowingSince,
   metricIssues,
   parseProm,
   partialTerms,
@@ -27,6 +29,7 @@ import {
   replayLedger,
   stopFloor,
   stopCeiling,
+  stopMayHaveMoved,
   termsAtFill,
   worstBound,
 } from '../src/checker/rules.ts';
@@ -201,6 +204,34 @@ test('an IOC / FOK created after its own expiry is overdue only from its creatio
   assert.equal(v[0].detail.overdueSinceFollowingDaa, '1201');
 });
 
+test('keeper gate: a book stale against the live node closes it although /v1/health reads within tolerance (TN10 IOC d5e78d02)', () => {
+  const now = 1_791_000_000;
+  const h = { state: 'catching_up', lag_daa: 900, within_lag_tolerance: true };
+  const m = (o: Record<string, number> = {}) => ({ kob_matcher_last_step_seconds: now - 2, kob_matcher_book_stale: 0, kob_matcher_waiting_for_indexer: 0, kob_matcher_paused: 0, ...o });
+  assert.equal(keepersCanAct(h, m(), now), true);
+  assert.equal(keepersCanAct(h, null, now), true, 'no metrics file: the health verdict alone');
+  // 2026-10-09 14:03:34-14:04:41: "the book lags the node; planning nothing" (book 592206751, node 592207955), health within tolerance
+  assert.equal(keepersCanAct(h, m({ kob_matcher_book_stale: 1 }), now), false);
+  assert.equal(keepersCanAct(h, m({ kob_matcher_waiting_for_indexer: 1 }), now), false);
+  assert.equal(keepersCanAct(h, m({ kob_matcher_paused: 1 }), now), false);
+  assert.equal(keepersCanAct(h, m({ kob_matcher_last_step_seconds: now - 121 }), now), false, 'a matcher that stopped ticking plans no kill');
+  assert.equal(keepersCanAct({ ...h, within_lag_tolerance: false }, m(), now), false);
+  assert.equal(keepersCanAct({ state: 'following', lag_daa: 50 }, m(), now), true, 'an older executor: following within 100 DAA');
+  assert.equal(keepersCanAct({ state: 'following', lag_daa: 150 }, m(), now), false);
+  assert.equal(keepersCanAct(null, m(), now), false);
+  // the deadline: kill 592207282; the gate sampled closed during the episode and open again at cursor 592208400 -> the kill accepted at
+  // 592208670 is inside the grace (it was reported 1201 DAA overdue with the stale followingSince 592206280 of the minute sample)
+  let fs: bigint | null = 592_206_280n;
+  fs = nextFollowingSince(fs, keepersCanAct(h, m({ kob_matcher_book_stale: 1 }), now), 592_207_100n);
+  assert.equal(fs, null);
+  fs = nextFollowingSince(fs, keepersCanAct(h, m(), now), 592_208_400n);
+  assert.equal(fs, 592_208_400n);
+  assert.equal(nextFollowingSince(fs, true, 592_208_480n), 592_208_400n, 'an open gate keeps its start');
+  const o = ioc({ last_daa: 592_207_141, current_daa: 592_207_141, expiry_daa: 592_207_282 });
+  assert.equal(checkKill(o, 592_208_483n, 1200n, 592_206_280n).length, 1, 'the incident as reported');
+  assert.equal(checkKill(o, 592_208_483n, 1200n, fs).length, 0);
+});
+
 test('FOK events: a non-closing fill or a remainder kill in the fill transaction', () => {
   const o = { covenant_id: ID, contract: 'KobAsk', tif: 2 };
   assert.equal(checkFokEvents(o, [fill({ closes: true })]).length, 0);
@@ -312,6 +343,29 @@ test('buy stop trails down on a resting ask fill', () => {
   assert.ok(checkTrigger(CB, trailing, trail, [evd({ price: '2100000000' })], latest).ok);
   assert.equal(checkTrigger(CB, trailing, trail, [evd({ price: '2100000001' })], latest).ok, false);
   assert.equal(checkTrigger(CB, trailing, trail, [evd({ contract: 'KobBid', side: 2, price: '2100000000' })], latest).ok, false);
+});
+
+test('an arm of a trailing stop read from a memo older than its trail is a warning, not an error (TN10 KobCondBid ba1e1310)', () => {
+  // the stop of the memo (before the trail at 591217066 on an ask at 6390843734549); the arm's bid 6417709759338 is below it
+  const memo = { tokenCovId: TOKEN, scale: String(U), stopPrice: '6428402249437', tpPrice: '0', trailStep: '1000000000', trailGap: '20000000000', minTouch: '1', minRestDaa: '50', activeFrom: '0' };
+  const CB = { covenant_id: ID, contract: 'KobCondBid' };
+  const armAt = fill({ kind: 'arm', daa: 591217250, amount: null, price: null, payout: null });
+  const bid = evd({ contract: 'KobBid', side: 2, price: '6417709759338', exposedSince: '591217078' });
+  // events: create, trail, arm, fill; the order filled before the round: no live state
+  const unknown = stopMayHaveMoved(memo, false, 2, 1);
+  assert.equal(unknown, true);
+  const r = checkTrigger(CB, memo, armAt, [bid], { stopUnknown: unknown });
+  assert.equal(r.violations.length, 1);
+  assert.equal(r.violations[0].severity, 'warn');
+  assert.match(r.reasons.join(';'), /may have trailed/);
+  // the stop it is read with is certain: a live state (no later trail) or a stop that does not trail -> still an error
+  assert.equal(stopMayHaveMoved(memo, true, 2, 1), false);
+  assert.equal(stopMayHaveMoved({ ...memo, trailStep: '0' }, false, 2, 1), false);
+  assert.equal(checkTrigger(CB, memo, armAt, [bid], { stopUnknown: stopMayHaveMoved(memo, true, 2, 1) }).violations[0].severity, 'error');
+  // a live state read after a later trail
+  assert.equal(stopMayHaveMoved(memo, true, 1, 2), true);
+  // an unknown stop never hides another failed rule (the wrong side)
+  assert.equal(checkTrigger(CB, memo, armAt, [evd({ price: '6417709759338' })], { stopUnknown: true }).violations[0].severity, 'error');
 });
 
 // ------------------------------------------------------------------------------------------------ repeat

@@ -51,6 +51,9 @@ import {
   isPairContract,
   checkAmountBalance,
   checkKill,
+  keepersCanAct,
+  nextFollowingSince,
+  stopMayHaveMoved,
   checkSupply,
   big,
   quoteOf,
@@ -97,7 +100,10 @@ interface Ctx {
   inc: IncidentLog;
   /** custody lookups by order id, valid while the order's last_daa is unchanged */
   custodyCache: Map<string, { lastDaa: number; items: TokenUtxo[] }>;
-  /** indexer A's cursor DAA at which it last started following the tip (null while it lags): the IOC / FOK deadline starts no earlier */
+  /**
+   * indexer A's cursor DAA since which executor A's keepers could act without a break (null while they cannot: see `keepersCanAct`):
+   * the IOC / FOK deadline starts no earlier. Sampled every round and every `GATE_MS` between rounds (a minute sample missed lag episodes)
+   */
   followingSince: bigint | null;
 }
 
@@ -183,6 +189,8 @@ export async function runChecker(env: Env): Promise<void> {
   log.info('checker starting', { tokens, indexer: cfg.indexerUrl, indexerB: cfg.indexerUrlB, rounds: st.rounds, orders: Object.keys(st.orders).length });
   // the fast sweep runs between rounds (the round's scan then finds the terms in st.early)
   setInterval(() => void sweepTerms(x).catch((e) => log.debug('sweep failed', { error: errText(e) })), SWEEP_MS);
+  // the keepers' gate between rounds: a book that lags the node for a minute between two round samples restarts the kill deadline
+  setInterval(() => void health(x.A).then((h) => trackKeepers(x, h)).catch((e) => log.debug('keeper gate sample failed', { error: errText(e) })), GATE_MS);
   let lastReport = 0;
   for (;;) {
     const t0 = Date.now();
@@ -210,6 +218,19 @@ export async function runChecker(env: Env): Promise<void> {
   }
 }
 
+/**
+ * The keepers act only on a book that follows the node: the kill deadline runs from the moment they can (see checkKill). Their gate is
+ * indexer A's lag tolerance (/v1/health) and executor A's matcher metrics (book stale against the live node, waiting for the indexer, paused).
+ */
+function trackKeepers(x: Ctx, hA: HealthLike | null): void {
+  // an unanswered health request (a busy API) says nothing about the gate: the sample is skipped
+  if (!hA) return;
+  const can = keepersCanAct(hA as HealthLike & { within_lag_tolerance?: boolean }, readMetrics(x, x.nameA), Date.now() / 1000);
+  x.followingSince = nextFollowingSince(x.followingSince, can, BigInt(hA.cursor_daa));
+}
+
+const GATE_MS = 5_000;
+
 async function health(ix: HttpIndexer | null): Promise<(HealthView & HealthLike) | null> {
   if (!ix) return null;
   try {
@@ -225,12 +246,9 @@ async function round(x: Ctx): Promise<void> {
   x.st.stats.rounds = x.st.rounds;
   const [hA, hB] = await Promise.all([health(x.A), health(x.B)]);
   await step('health', async () => checkHealth(x, hA, hB, now));
+  trackKeepers(x, hA);
   if (!hA) return;
   const aOk = hA.state === 'following' && (hA.lag_daa ?? 0) <= 100;
-  // the keepers act only on a book that follows the node: the kill deadline runs from the moment it does (see checkKill)
-  // (the executors plan within their lag tolerance, `within_lag_tolerance` of /v1/health; an older executor: only while following)
-  const keepersCanAct = (hA as { within_lag_tolerance?: boolean }).within_lag_tolerance ?? aOk;
-  x.followingSince = keepersCanAct ? (x.followingSince ?? BigInt(hA.cursor_daa)) : null;
   const scan = await step('orders', () => scanOrders(x, hA));
   if (!scan) return;
   await step('kill', async () => {
@@ -477,8 +495,9 @@ async function processEvents(x: Ctx, v: OrderView, now: number): Promise<boolean
         const facts = await evidenceIn(x, e);
         stat(x, 'triggers');
         // a trailing stop's stop price read after a later trail (or from a memo) is not the one this event saw
-        const stopUnknown = b0s(s.trailStep) > 0n && (!cur || i < lastTrail);
-        const r = checkTrigger(like(v), s, evLike(e), facts, { latestStopChange: !!cur && i === lastTrail, stopUnknown: triggeredFill && stopUnknown });
+        // (an arm reads the stop as much as a triggered fill does: a memo older than a trail before the arm holds the stop before it)
+        const stopUnknown = (triggeredFill || e.kind === 'arm') && stopMayHaveMoved(s, !!cur, i, lastTrail);
+        const r = checkTrigger(like(v), s, evLike(e), facts, { latestStopChange: !!cur && i === lastTrail, stopUnknown });
         if (r.ok) stat(x, 'triggersOk');
         else if (r.violations.every((w) => w.severity === 'warn')) stat(x, 'triggersUnverifiable');
         for (const viol of r.violations) report(x, viol);

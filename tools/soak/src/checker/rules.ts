@@ -315,6 +315,34 @@ export function checkKill(o: OrderLike, cursorDaa: bigint, grace = 1200n, follow
   return out;
 }
 
+/**
+ * Whether executor A's keepers can plan a kill right now (the `followingSince` gate of `checkKill`). The executor plans nothing while
+ * its indexer is outside the lag tolerance (`within_lag_tolerance` of /v1/health; an older executor: `following` within 100 DAA), nor
+ * while its matcher finds the book more than `max_book_lag` behind the node it reads LIVE (`kob_matcher_book_stale`), waits for the
+ * indexer (`kob_matcher_waiting_for_indexer`) or is paused (`kob_matcher_paused`), nor when it stopped ticking (`kob_matcher_last_step_seconds`
+ * older than `maxStepAgeSec`). /v1/health alone misses the book-lag gate: its `node_daa` is the indexer's polled one, behind the node
+ * during slow window fetches. TN10 2026-10-09 14:03:34-14:04:41 exec-a logged "the book lags the node" (book 592206751, node 592207955)
+ * while the checker's minute sample read within tolerance; the kill of IOC d5e78d02 went out 2 s after the book caught up and was
+ * reported 1201 DAA overdue. A missing metrics file leaves the health verdict alone.
+ */
+export function keepersCanAct(
+  h: (Pick<HealthLike, 'state' | 'lag_daa'> & { within_lag_tolerance?: boolean }) | null,
+  m: Record<string, number> | null,
+  nowSec: number,
+  maxStepAgeSec = 120,
+): boolean {
+  if (!h) return false;
+  if (!(h.within_lag_tolerance ?? (h.state === 'following' && (h.lag_daa ?? 0) <= 100))) return false;
+  if (!m) return true;
+  if (m.kob_matcher_last_step_seconds !== undefined && nowSec - m.kob_matcher_last_step_seconds > maxStepAgeSec) return false;
+  return !(m.kob_matcher_book_stale === 1 || m.kob_matcher_waiting_for_indexer === 1 || m.kob_matcher_paused === 1);
+}
+
+/** the indexer cursor DAA since which the keepers have been able to act without a break, after one more sample (null: they cannot) */
+export function nextFollowingSince(prev: bigint | null, canAct: boolean, cursorDaa: bigint): bigint | null {
+  return canAct ? (prev ?? cursorDaa) : null;
+}
+
 /** invariant 4 on the events of a FOK: every fill closes the order, and no remainder is returned in a fill's transaction */
 export function checkFokEvents(o: { covenant_id: string; contract: string; tif?: number | null }, events: EventLike[]): Violation[] {
   if (o.tif !== 2) return [];
@@ -364,6 +392,18 @@ export interface TriggerCheck {
   violations: Violation[];
   /** why each candidate evidence fill failed */
   reasons: string[];
+}
+
+/**
+ * Whether the stop price in `s` may not be the one an `arm` or a triggered `fill` (event `index` of the order's events) was checked
+ * against on chain: a trailing stop (`trailStep > 0`) whose terms are the memo of an order no longer live (the last state a round read:
+ * a trail between that read and the event moved the stop), or whose live state was read after a later trail. TN10 2026-10-08:
+ * KobCondBid ba1e1310 / 53e09f86 / d290a9b6 trailed down at DAA 591217066 (evidence ask 6390843734549), were armed at 591217250 by a
+ * bid at 6417709759338 and filled at 591217368, all between two rounds: the memo held the stops from before the trail (6428402249437,
+ * 6429829142713, 6426067116442) and the consensus-accepted arms were reported as errors. Such a stop is checked as unknown (a warning).
+ */
+export function stopMayHaveMoved(s: Record<string, string>, live: boolean, index: number, lastTrail: number): boolean {
+  return b0(s.trailStep) > 0n && (!live || index < lastTrail);
 }
 
 /**
