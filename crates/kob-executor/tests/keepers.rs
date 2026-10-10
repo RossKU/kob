@@ -96,6 +96,32 @@ fn ioc_and_fok_are_killed_in_the_first_block_that_allows_it() {
 }
 
 #[test]
+fn an_ioc_or_fok_ending_at_its_own_expiry_is_a_kill_at_the_priority_rate() {
+    // the wallets give an IOC / FOK expiryDaa = start + 300 DAA (before the covenant kill time start + 600): its end is that expiry,
+    // and it is a kill (priority rate), never a normal-rate refund
+    let mut ioc = ask(1, P250, 5 * WHOLE, T3);
+    ioc.tif = TIF_IOC;
+    ioc.expiry_daa = 5_300;
+    let o = listed(cid(1), AnyState::KobAsk(ioc), CARRIER, 5_000);
+    let mut fok = bid(2, P245, T3);
+    fok.tif = TIF_FOK;
+    fok.expiry_daa = 5_300;
+    let b = listed(cid(2), AnyState::KobBid(fok.clone()), (fok.used(3 * WHOLE).unwrap() + DC) as u64, 5_000);
+    let cfg = KeeperConfig::default();
+    assert!(keep(vec![o.clone(), b.clone()], 5_299, &cfg).jobs.is_empty());
+    let r = keep(vec![o, b], 5_300, &cfg);
+    let mut k = kinds(&r);
+    k.sort_by_key(|(_, c)| *c);
+    assert_eq!(k, vec![(JobKind::Kill, cid(1)), (JobKind::Kill, cid(2))], "{:?}", r.skipped);
+    assert!(r.jobs.iter().all(|j| j.kind.urgency() == kob_executor::fee::Urgency::High));
+    // a GTD limit at its expiry stays a normal-rate refund
+    let mut gtd = ask(3, P250, 5 * WHOLE, T3);
+    gtd.expiry_daa = 5_300;
+    let g = listed(cid(3), AnyState::KobAsk(gtd), CARRIER, 5_000);
+    assert_eq!(kinds(&keep(vec![g], 5_300, &cfg)), vec![(JobKind::Refund, cid(3))]);
+}
+
+#[test]
 fn expiry_idle_and_repeating_entries_are_refunded() {
     let cfg = KeeperConfig::default();
     // GTD ask at expiry; GTC ask after 90 days idle.

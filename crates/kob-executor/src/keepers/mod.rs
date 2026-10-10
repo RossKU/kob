@@ -179,14 +179,17 @@ pub fn refund_job(o: &ListedOrder, daa: u64) -> Option<(JobKind, u64)> {
     if due < 0 || (daa as i64) < due {
         return None;
     }
+    // an IOC / FOK leaves at the priority rate whatever ends it: the kill time, or its own expiry before that (the wallets give an
+    // IOC / FOK `expiryDaa` = start + 300 DAA, before the covenant kill time start + 600, so its end is always the expiry; TN10
+    // 10-07..10-09: every IOC / FOK end went out as a normal-rate refund and waited up to 106 minutes in a flooded mempool)
     let kind = match &o.base_state() {
         AnyState::KobIfdAsk(s) if s.amount_left == 0 => JobKind::Close,
-        AnyState::KobAsk(s) if s.tif != TIF_GTC && due < s.expiry_daa => JobKind::Kill,
-        AnyState::KobBid(s) if s.tif != TIF_GTC && due < s.expiry_daa => JobKind::Kill,
+        AnyState::KobAsk(s) if s.tif != TIF_GTC => JobKind::Kill,
+        AnyState::KobBid(s) if s.tif != TIF_GTC => JobKind::Kill,
         // a pair order is refunded (an IOC / FOK one killed) like an ask: its custodies back to the maker (a sell-first
         // entry's A custody and B prefund at their own indices), never its strays (strays of either token move only with
         // the maker's cancel or a sweep)
-        AnyState::KobPair(s) if s.tif != TIF_GTC && due < s.expiry_daa => JobKind::Kill,
+        AnyState::KobPair(s) if s.tif != TIF_GTC => JobKind::Kill,
         _ => JobKind::Refund,
     };
     Some((kind, due as u64))
