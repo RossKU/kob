@@ -1,7 +1,7 @@
 // Token-UTXO consolidation: the pure selection (which UTXOs to merge) and the rate limit. No network, no wallet.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consolidateConfig, DEFAULT_CONSOLIDATE, fanoutPlan, outpointKey, RateLimiter, selectMergeChain, selectMerges, type MergeCandidate } from '../src/bots/consolidate-math.ts';
+import { consolidateConfig, DEFAULT_CONSOLIDATE, fanoutPlan, kasMergeSelection, outpointKey, RateLimiter, selectMergeChain, selectMerges, type MergeCandidate } from '../src/bots/consolidate-math.ts';
 
 const txid = (n: number) => n.toString(16).padStart(4, '0').repeat(16);
 const u = (n: number, amount: number | bigint, index = 1): MergeCandidate => ({ transactionId: txid(n), index, state: { amount: amount.toString() } });
@@ -210,4 +210,13 @@ test('fanoutPlan: 2 pieces + the token change per transfer with the standard 3 /
   assert.deepEqual(fanoutPlan({ amount: 3000n, each: 300n, need: 3, maxOutputs: 1, maxTx: 8 }), []);
   // every transfer stays within the program's token outputs (pieces + change)
   for (const k of fanoutPlan({ amount: 10n ** 15n, each: 7n, need: 20, maxOutputs: 3, maxTx: 20 })) assert.ok(k + 1 <= 3);
+});
+test('KAS merge: nothing at or below the threshold; above it the smallest unreserved coins, at most maxInputs', () => {
+  const c = (i: number, kas: number) => ({ transactionId: `t${i}`, index: 0, amount: BigInt(kas) * 100_000_000n });
+  const coins = [c(1, 500), c(2, 3), c(3, 7), c(4, 1), c(5, 40), c(6, 2)];
+  assert.deepEqual(kasMergeSelection(coins, { above: 6, maxInputs: 3 }), []);
+  assert.deepEqual(kasMergeSelection(coins, { above: 4, maxInputs: 3 }).map((x) => x.transactionId), ['t4', 't6', 't2']);
+  // a coin our pending transaction spends is never offered; the count is of the free coins
+  assert.deepEqual(kasMergeSelection(coins, { above: 4, maxInputs: 3, reserved: new Set(['t4:0']) }).map((x) => x.transactionId), ['t6', 't2', 't3']);
+  assert.deepEqual(kasMergeSelection(coins, { above: 5, maxInputs: 3, reserved: new Set(['t4:0']) }), []);
 });

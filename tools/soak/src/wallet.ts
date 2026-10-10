@@ -16,6 +16,9 @@ import { errText, logger, type Logger, type Stats } from './log';
 import { FileStorage } from './file-storage';
 import { gateRefusal } from './indexer-gate';
 import { mempoolSpent, Mutex, splitPending, type MempoolEntriesLike } from './bots/pending';
+import { kasMergeSelection } from './bots/consolidate-math';
+import { pickFor } from '@/kob/fee-policy';
+import { feeContext } from './fees';
 
 const rootLog = logger('wallet');
 
@@ -76,6 +79,7 @@ export class BotWallet {
   private inMempool = new Set<string>();
   private mempoolAt = 0;
   private mempoolRead: Promise<void> | null = null;
+  private lastKasMerge = 0;
 
   constructor(
     readonly env: Env,
@@ -168,6 +172,59 @@ export class BotWallet {
   /** the orders of a listing this key may act on (its own pending cancels / amends left out) */
   actionable<T extends { current?: { txid: string; index: number } | null }>(views: readonly T[]): T[] {
     return this.pendingSplit(views).live;
+  }
+
+  /**
+   * Merges this key's smallest plain KAS coins into one (consolidate-math `kasMergeSelection`): a compound transaction of the official SDK's
+   * generator back to the key, at the LOW bucket rate, at most once a minute per key. Returns the transactions submitted; never throws.
+   */
+  mergeKas(o: { above: number; maxInputs: number }): Promise<number> {
+    if (o.above <= 0 || Date.now() - this.lastKasMerge < 60_000) return Promise.resolve(0);
+    this.lastKasMerge = Date.now();
+    return this.exclusive(async () => {
+      try {
+        await this.refreshMempool();
+        const rpc = await within(mempoolClient(this.env), 20_000);
+        const { entries } = (await within(rpc.getUtxosByAddresses({ addresses: [this.address] }), 30_000)) as { entries: unknown[] };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const coins = (entries as any[])
+          .filter((e) => !e.isCoinbase && !e.entry?.covenantId)
+          .map((e) => ({ transactionId: String(e.outpoint.transactionId), index: Number(e.outpoint.index), amount: BigInt(e.amount), e }));
+        this.stats.set(`kas_utxos:${this.name}`, coins.length);
+        const pick = kasMergeSelection(coins, { ...o, reserved: this.reservedKeys() });
+        const total = pick.reduce((t, c) => t + c.amount, 0n);
+        // one output of all but 1 KAS: the generator then spends every picked coin (with no output it spends one); the change (1 KAS less
+        // the fee) stays clear of the storage-mass dead band. A pile worth less than 2 KAS waits.
+        if (!pick.length || total < 2n * 100_000_000n) return 0;
+        const rate = pickFor(await feeContext(this.env), 'low').rate;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sdk = this.env.sdk as any;
+        const { transactions } = await sdk.createTransactions({
+          entries: pick.map((c) => c.e),
+          outputs: [{ address: this.address, amount: total - 100_000_000n }],
+          changeAddress: this.address,
+          priorityFee: 0n,
+          feeRate: Number(rate),
+          networkId: this.env.cfg.network,
+        });
+        const key = new sdk.PrivateKey(this.sk);
+        let n = 0;
+        for (const tx of transactions) {
+          tx.sign([key]);
+          const id = await tx.submit(rpc);
+          for (const i of tx.serializeToObject().inputs as { transactionId: string; index: number }[]) this.reserve(i.transactionId, i.index);
+          n++;
+          this.stats.inc('tx_ok');
+          this.stats.inc('tx_ok:mergeKas');
+          this.log.info('submitted', { what: 'mergeKas', txid: id, rate: rate.toString(), urgency: 'low', inputs: tx.serializeToObject().inputs.length, coins: coins.length });
+        }
+        return n;
+      } catch (e) {
+        this.stats.inc('tx_failed:mergeKas');
+        this.log.warn('kas merge failed', { error: errText(e) });
+        return 0;
+      }
+    });
   }
 
   /** spendable KAS UTXOs (mature, not reserved), largest first */

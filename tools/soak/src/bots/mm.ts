@@ -80,7 +80,10 @@ export class MarketMaker {
         this.log.warn('mm tick failed', { error: errText(e) });
       }
       // after the ladder, in the same loop: this book's placements and the merge never plan over the same token UTXOs
-      await consolidateTokens(this.env, this.w, this.m, fanoutTarget(this.env, 'mm', this.m), consolidateConfig(this.env.cfg.consolidate));
+      const cc = consolidateConfig(this.env.cfg.consolidate);
+      await consolidateTokens(this.env, this.w, this.m, fanoutTarget(this.env, 'mm', this.m), cc);
+      // the KAS the fills pay back in small coins: merged, so a bid's funding stays within one plan's inputs
+      if (cc.enabled) await this.w.mergeKas({ above: cc.kasAbove, maxInputs: cc.kasInputs });
       await sleep(this.c.intervalSec * 1000);
     }
   }

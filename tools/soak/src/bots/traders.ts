@@ -130,6 +130,7 @@ export class Trader {
     if (!cc.enabled || !cc.traders) return;
     const ms = [tokenMarket(this.env), ...this.assets.map((a) => a.m)];
     for (const m of ms) await consolidateTokens(this.env, this.w, m, fanoutTarget(this.env, 'trader', m), cc);
+    await this.w.mergeKas({ above: cc.kasAbove, maxInputs: cc.kasInputs });
   }
 
   /** the book being traded: its decimals and the USD value of one whole token (TUSD: 1, an asset token: its reference) */

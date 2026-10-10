@@ -21,6 +21,10 @@ export interface ConsolidateConfig {
   intervalSec: number;
   /** the traders (and the x402 payer's tokens, if ever wired) run the step too */
   traders: boolean;
+  /** plain KAS coins: a key holding more than this merges its smallest ones (`kasMergeSelection`; 0 = never) */
+  kasAbove: number;
+  /** plain KAS coins per merge (the SDK generator splits a set above the mass limit into several transactions) */
+  kasInputs: number;
 }
 
 /**
@@ -28,11 +32,18 @@ export interface ConsolidateConfig {
  * prototype the soak ran before): 8 merge transactions per minute per key and token keep a market maker's fragmentation (about 8 new token
  * UTXOs a minute at the 2026-10-01 rates) in check.
  */
-export const DEFAULT_CONSOLIDATE: ConsolidateConfig = { enabled: true, slack: 8, maxTxPerInterval: 8, intervalSec: 60, traders: true };
+export const DEFAULT_CONSOLIDATE: ConsolidateConfig = { enabled: true, slack: 8, maxTxPerInterval: 8, intervalSec: 60, traders: true, kasAbove: 100, kasInputs: 80 };
 
 export function consolidateConfig(raw?: Partial<ConsolidateConfig>): ConsolidateConfig {
   const c = { ...DEFAULT_CONSOLIDATE, ...(raw ?? {}) };
-  return { ...c, slack: Math.max(1, Math.floor(c.slack)), maxTxPerInterval: Math.max(0, Math.floor(c.maxTxPerInterval)), intervalSec: Math.max(1, c.intervalSec) };
+  return {
+    ...c,
+    slack: Math.max(1, Math.floor(c.slack)),
+    maxTxPerInterval: Math.max(0, Math.floor(c.maxTxPerInterval)),
+    intervalSec: Math.max(1, c.intervalSec),
+    kasAbove: Math.max(0, Math.floor(c.kasAbove)),
+    kasInputs: Math.max(2, Math.floor(c.kasInputs)),
+  };
 }
 
 export interface SelectOptions {
@@ -167,4 +178,19 @@ export function fanoutPlan(o: { amount: bigint; each: bigint; need: number; maxO
     if (left === 0n) break;
   }
   return out;
+}
+
+/**
+ * The plain KAS coins of a bot key to merge into one: none while it holds at most `above`; else its `maxInputs` SMALLEST unreserved coins
+ * (the payouts of fills, refunds and cancels, a few KAS each: the 10-11 soak had 1,227 on the market maker and 8,771 on one trader). Left
+ * unmerged, a bid's funding needs more than the 50 inputs a plan may take (FUNDING_FRAGMENTED: the market maker's top 50 coins held 865 of
+ * its 2,476 KAS) while the balance stays above the bank's top-up threshold, and every plan reads thousands of UTXOs.
+ */
+export function kasMergeSelection<T extends { transactionId: string; index: number; amount: bigint | string }>(
+  coins: readonly T[],
+  o: { above: number; maxInputs: number; reserved?: ReadonlySet<string> },
+): T[] {
+  const free = coins.filter((c) => !o.reserved?.has(outpointKey(c)));
+  if (free.length <= o.above || o.maxInputs < 2) return [];
+  return [...free].sort((a, b) => (BigInt(a.amount) < BigInt(b.amount) ? -1 : BigInt(a.amount) > BigInt(b.amount) ? 1 : 0)).slice(0, o.maxInputs);
 }
