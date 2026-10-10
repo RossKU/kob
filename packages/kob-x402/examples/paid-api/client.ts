@@ -88,31 +88,21 @@ const client = new KobX402Client({
   // swap-and-pay needs an explicit bound on what it may cost, per pay asset and in that asset's units:
   // KOB_X402_MAX_PAY="KAS=500000000,<token covenant id>=900" (a bare number counts sompi of KAS only)
   ...(process.env.KOB_X402_MAX_PAY ? { maxPay: parseMaxPay(process.env.KOB_X402_MAX_PAY) } : {}),
-  // The demo retries a retryable failure below. That signs a SECOND payment, so it is an explicit policy: the client first
-  // revokes the earlier artifact (needs `submit`) and refuses to sign again when the revoke was not submitted.
-  allowResign: () => true,
+  // The SDK retries a payment itself (the default: 3 attempts, 4 re-sends each, backoff, within the offer's maxTimeoutSeconds):
+  // an unknown outcome re-sends the same signed artifact, an order taken by someone else (order_conflict) or a refused broadcast
+  // rebuilds it from a fresh quote, held to the same limits and spending the first attempt's anchor input (so at most one
+  // attempt can ever be accepted). `retry: false` turns it off.
+  retry: { attempts: 3 },
 });
 
 try {
-  // The SDK never re-sends a payment on its own. A failure the facilitator marks `retryable` (an order that was
-  // consumed meanwhile) is the CALLER's decision: calling again re-quotes and re-signs, after revoking the first artifact.
-  for (let attempt = 1; ; attempt++) {
-    try {
-      const { response, payment } = await client.paidFetch(url);
-      console.log(response.status, await response.text());
-      if (payment) console.log('paid', payment.amount, payment.asset, 'tx', payment.transactionId);
-      break;
-    } catch (e) {
-      if (e instanceof KobX402Error && e.retryable && attempt < 3) {
-        console.warn(`retryable failure (${e.diagnostic}): ${e.message}; trying again with a fresh quote`);
-        continue;
-      }
-      throw e;
-    }
-  }
+  const { response, payment } = await client.paidFetch(url);
+  console.log(response.status, await response.text());
+  if (payment) console.log('paid', payment.amount, payment.asset, 'tx', payment.transactionId, `(attempts ${payment.attempts}, re-sends ${payment.resends})`);
 } catch (e) {
   if (e instanceof KobX402Error) {
     console.error(`${e.code}${e.diagnostic ? ` (${e.diagnostic})` : ''}: ${e.message}`);
+    for (const a of e.attempts ?? []) console.error(`  attempt ${a.paymentId} tx ${a.transactionId}: ${a.outcome} after ${a.sends} send(s)`);
     if (e.paymentId) console.error(`artifact ${e.paymentId} is stored; reconcile it with client.resume(id) or revoke it with client.revoke(id)`);
     process.exitCode = 1;
   } else {

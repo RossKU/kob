@@ -12,6 +12,7 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 | [kob1-payload.md](spec/kob1-payload.md) | The `KOB1` transaction payload and the placement record that makes an order visible |
 | [x402-kcc20-profile.md](spec/x402-kcc20-profile.md) | Proposal: a KCC-20 payment profile for the Kaspa x402 `exact` binding |
 | [x402-swap-and-pay.md](spec/x402-swap-and-pay.md) | Proposal: swap-and-pay, paying a merchant in one token from another token or KAS |
+| [x402-retry.md](spec/x402-retry.md) | Retrying an x402 payment (re-send, rebuild around the anchor input, stop) without paying twice |
 | [kcc-conformance.md](spec/kcc-conformance.md) | Conformance with the KCC base specs (KCC-1, KCC-2, KCC-20): pinned upstream vectors, results, mismatches fixed, what still depends on upstream |
 | [template-retirement.md](spec/template-retirement.md) | Templates this build does not pin: unsupported, ended by their maker with a raw cancel transaction |
 

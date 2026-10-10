@@ -15,6 +15,8 @@ import type { FetchedInvoice } from './invoice.ts';
 import type { CancelIntentRequest, ExpireIntentRequest, IntentPayRequest, IntentPayResult, InputSignature, KobWasm, PreparedIntent, SignedTransaction } from './wasm.ts';
 import { BINDING_INTENT } from './types.ts';
 import { withFeeFloor } from './fee.ts';
+import { backoffMs, classifyFailure, classifyStatus, retryPolicy } from './retry.ts';
+import type { RetryOptions, RetryStep } from './retry.ts';
 import type { PaymentRequirements, SettlementResponse } from './types.ts';
 
 function need<K extends keyof KobWasm>(wasm: KobWasm, k: K): NonNullable<KobWasm[K]> {
@@ -86,6 +88,14 @@ export interface PayInvoiceWithIntentOptions {
    * broadcast the creation, and without the handle the payer cannot cancel or recover the intent.
    */
   persist?: (payment: IntentPayResult) => void | Promise<void>;
+  /**
+   * Re-sends of the SAME signed creation while its outcome is unknown or it may still go through as it is (no answer, a 5xx,
+   * `settlement_pending`, `node_unavailable`, `rate_limited`, `intent_not_executable`: the facilitator answers an identical
+   * retry from its ledger, and its keeper re-plans the execution against the current book itself). Default
+   * `{ resends: 4 }` with backoff, within the intent's deadline; `false`: one send. A creation is never re-signed here: a
+   * refusal is returned (or thrown) as before.
+   */
+  retry?: RetryOptions | false;
 }
 
 /**
@@ -107,7 +117,7 @@ export async function payInvoiceWithIntent(
   inv: FetchedInvoice,
   req: Omit<IntentPayRequest, 'requirements' | 'requestHash'> & { acceptIndex?: number },
   opts: PayInvoiceWithIntentOptions = {},
-): Promise<{ payment: IntentPayResult; settlement: SettlementResponse }> {
+): Promise<{ payment: IntentPayResult; settlement: SettlementResponse; sends: number }> {
   const idx = req.acceptIndex ?? inv.invoice.accepts.findIndex(isIntentOffer);
   const requirements = inv.invoice.accepts[idx];
   if (!requirements || !isIntentOffer(requirements)) throw new KobX402Error('no_acceptable_offer', 'the invoice has no intent entry');
@@ -117,18 +127,32 @@ export async function payInvoiceWithIntent(
   const payment = payIntent(wasm, { ...rest, options: { ...rest.options, expiresInMs }, requirements, requestHash: inv.id });
   // the handle is stored before the facilitator can see the creation
   if (opts.persist) await opts.persist(payment);
-  let settlement: SettlementResponse;
-  try {
-    settlement = await invoices.pay(inv.id, payment.paymentPayload);
-  } catch (e) {
-    if (e instanceof KobX402Error) {
-      e.payment = payment;
-      throw e;
+  const policy = retryPolicy(opts.retry);
+  const deadline = Math.min(Date.now() + policy.budgetMs, payment.expiresAtMs);
+  for (let sends = 1; ; sends++) {
+    let settlement: SettlementResponse | undefined;
+    let error: KobX402Error | undefined;
+    let step: RetryStep;
+    try {
+      settlement = await invoices.pay(inv.id, payment.paymentPayload);
+      const k = settlement.extensions?.kaspa as { diagnostic?: unknown; retryable?: unknown } | undefined;
+      step = settlement.success ? 'stop' : classifyFailure(typeof k?.diagnostic === 'string' ? k.diagnostic : undefined, k?.retryable === true);
+    } catch (e) {
+      error =
+        e instanceof KobX402Error
+          ? e
+          : new KobX402Error('payment_pending', `the submission of the signed intent failed (${(e as Error)?.message ?? String(e)}); the facilitator may have broadcast it: cancel or reconcile with error.payment.intent`, {
+              cause: e,
+            });
+      error.payment = payment;
+      step = classifyStatus(error.status ?? 0, error.diagnostic, error.retryable);
     }
-    throw new KobX402Error('payment_pending', `the submission of the signed intent failed (${(e as Error)?.message ?? String(e)}); the facilitator may have broadcast it: cancel or reconcile with error.payment.intent`, {
-      cause: e,
-      payment,
-    });
+    // only the same signed creation is ever sent again: a rebuild is the payer's own new payment
+    const wait = backoffMs(policy, sends, policy.random());
+    if (step !== 'resend' || sends > policy.resends || Date.now() + wait >= deadline) {
+      if (error) throw error;
+      return { payment, settlement: settlement as SettlementResponse, sends };
+    }
+    await policy.sleep(wait);
   }
-  return { payment, settlement };
 }

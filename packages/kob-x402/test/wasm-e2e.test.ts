@@ -168,11 +168,17 @@ test('a verifier rejection surfaces with its diagnostic, and nothing is served',
   try {
     await assert.rejects(
       r.client.fetch(`${r.base}/report`),
-      (e: unknown) => e instanceof KobX402Error && e.code === 'payment_failed' && e.diagnostic === 'expired_authorization' && e.retryable === false,
+      (e: unknown) =>
+        e instanceof KobX402Error && e.code === 'payment_failed' && e.diagnostic === 'expired_authorization' && e.retryable === false && e.attempts?.length === 3,
     );
-    assert.equal(r.verified.length, 1);
-    assert.equal(r.verified[0]!.ok, false);
-    assert.equal((await r.client.store.list())[0]!.status, 'rejected');
+    // an expired authorization is rebuilt (a new authorization), up to the 3 attempts of the default retry; the real builders
+    // spend the first attempt's anchor input every time, so at most one of them could ever be accepted
+    assert.equal(r.verified.length, 3);
+    assert.ok(r.verified.every((v) => !v.ok));
+    const recs = await r.client.store.list();
+    assert.deepEqual(recs.map((x) => x.status), ['rejected', 'rejected', 'rejected']);
+    const anchor = recs[0]!.anchor!;
+    assert.ok(anchor && recs.every((x) => x.anchor === anchor && x.consumed.some((c) => `${c.txid.toLowerCase()}:${c.index}` === anchor)));
   } finally {
     await r.close();
   }

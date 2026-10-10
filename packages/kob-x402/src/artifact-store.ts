@@ -18,7 +18,12 @@ export type ArtifactStatus =
   /** The merchant reported a failure (see `failure`); the transaction may still have been broadcast. */
   | 'rejected'
   /** The payer spent one of the inputs back to itself. */
-  | 'revoked';
+  | 'revoked'
+  /**
+   * An earlier attempt of a payment whose later attempt settled: the later one spent the payment's anchor (an input every
+   * attempt spends), so this one can never be accepted.
+   */
+  | 'superseded';
 
 export interface ArtifactRecord {
   paymentId: string;
@@ -40,6 +45,12 @@ export interface ArtifactRecord {
   failure?: { diagnostic?: string; retryable?: boolean; message?: string; details?: unknown };
   revokeTransactionId?: string;
   note?: string;
+  /** Attempt number of the payment (1 = the first signed one; a retry that rebuilt the payment counts up). */
+  attempt?: number;
+  /** The payment id of the attempt this one replaces (a rebuild after that one failed). */
+  replaces?: string;
+  /** `txid:index` of the payment's anchor: an input of the first attempt the payer owns, spent by every attempt. */
+  anchor?: string;
 }
 
 export interface ArtifactStore {

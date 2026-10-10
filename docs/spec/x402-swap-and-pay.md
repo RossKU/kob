@@ -449,6 +449,12 @@ accepted; then the payment cannot be accepted, and a payer input can likewise be
   exclusive on chain and the payer cannot pay twice. If it does not, the client MUST first obtain
   the binding's permanent-absence proof (a trusted, confirmed spend of a persisted outpoint by a
   different transaction, for example the conflicting order spend, or its own revocation, section 13).
+- The KOB SDKs do this within the limits the payer pre-set ([x402-retry.md](x402-retry.md)): the TS
+  client (`retry`, default 3 attempts) and the Rust driver (`kob_x402::client::retry`) rebuild after
+  `order_conflict` from a fresh quote, under the same `maxPay` bounds and KAS ceiling (an `approve`
+  policy is asked again at the new cost), and only when the replacement spends the payment's anchor (an
+  input of the first attempt the payer owns, still unspent); an attempt whose outcome is unknown is only
+  ever re-sent as it is.
 - A facilitator MUST NOT cache `order_conflict` (or any verification failure that consumed nothing)
   as the idempotent outcome of a `payment-identifier`. It SHOULD, after it definitively abandons a
   transaction, discard the bytes, never rebroadcast it, and keep its transaction id marked dead.

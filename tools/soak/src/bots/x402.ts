@@ -191,7 +191,9 @@ export class X402Bots {
         const body = await response.text();
         if (response.status === 200 && payment) {
           this.stats.inc(`x402_paid:${path}`);
-          this.log.info('x402 paid', { path, tx: payment.transactionId, amount: payment.amount, asset: payment.asset, kind: payment.kind });
+          // the SDK's own retry (re-send of an unknown outcome, rebuild after an order lost to another taker): counted apart
+          if (payment.attempts > 1 || payment.resends > 0) this.stats.inc(`x402_retried:${path}`);
+          this.log.info('x402 paid', { path, tx: payment.transactionId, amount: payment.amount, asset: payment.asset, kind: payment.kind, attempts: payment.attempts, resends: payment.resends });
           this.recordPayment(path, payment.transactionId, payment.amount, payment.asset, pick);
         } else {
           this.stats.inc(`x402_unpaid:${path}:${response.status}`);
@@ -200,7 +202,7 @@ export class X402Bots {
       } catch (e) {
         const code = e instanceof KobX402Error ? `${e.code}${e.diagnostic ? `/${e.diagnostic}` : ''}` : 'error';
         this.stats.inc(`x402_error:${path}:${code}`);
-        this.log.warn('x402 payment failed', { path, code, error: errText(e), retryable: e instanceof KobX402Error ? e.retryable : undefined });
+        this.log.warn('x402 payment failed', { path, code, error: errText(e), retryable: e instanceof KobX402Error ? e.retryable : undefined, attempts: e instanceof KobX402Error ? e.attempts?.map((a) => a.outcome) : undefined });
       }
       await sleep(expDelay(cfg.meanIntervalSec, 20));
     }
@@ -228,7 +230,7 @@ export class X402Bots {
       this.stats.inc('x402_invoice_registered');
       const fetched = await fetchInvoice(invoices.urlOf(reg.id), { nowMs: Date.now(), wasm, allowInsecureHttp: true });
       const pk = key(this.env, cfg.payerKey);
-      const { payment, settlement } = await payInvoiceWithIntent(
+      const { payment, settlement, sends } = await payInvoiceWithIntent(
         wasm,
         invoices,
         fetched,
@@ -240,7 +242,7 @@ export class X402Bots {
       if (settlement.success || status === 'paid') {
         this.stats.inc('x402_paid:invoice-intent');
         const creation = (settlement.extensions as { kob?: { intent?: { creation?: string } } } | undefined)?.kob?.intent?.creation;
-        this.log.info('x402 invoice paid by intent', { invoice: reg.id, tx: settlement.transaction, creation, payerSpent: payment.payerSpent, ms: Date.now() - t0 });
+        this.log.info('x402 invoice paid by intent', { invoice: reg.id, tx: settlement.transaction, creation, payerSpent: payment.payerSpent, sends, ms: Date.now() - t0 });
         // the facilitator ledger keys an intent entry by its creation id (docs/ops/executor.md A.7): the checker looks it up by that
         this.recordPayment('invoice-intent', creation ?? settlement.transaction, amount.toString(), 'KAS', pick);
       } else {

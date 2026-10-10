@@ -341,6 +341,10 @@ export interface KobWasm {
   invoiceId?(invoice: unknown): string;
   /** Checks a fetched invoice against its id and its structure at `nowMs`. */
   checkInvoice?(invoice: unknown, id: string, nowMs: number): { id: string; expiresAtMs: number; kaspaUri: string | null };
+  /** The Rust retry table (`kob_x402::client::retry`): the step after a failed paid request; the SDK's `retry.ts` mirrors it. */
+  retryDecision?(req: { status?: number; diagnostic?: string; retryable?: boolean }): 'resend' | 'rebuild' | 'stop';
+  /** Every diagnostic spelling of the Rust verifier and facilitator. */
+  diagnostics?(): string[];
 }
 
 /**

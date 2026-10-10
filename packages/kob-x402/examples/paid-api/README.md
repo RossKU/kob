@@ -73,11 +73,19 @@ Coinbase maturity is 1000 DAA (about 100 s): mined funds are spendable after tha
   transaction a payment id was settled with is answered from memory, any other one under that id gets `409`
   `kaspa_payment_identifier_conflict`) and
   `client.revoke(paymentId)` invalidates it by spending one of its inputs back to the payer.
-* A payment is never re-sent automatically. A failure that the facilitator marks `retryable` (for example `order_conflict`, a
-  swap order that was consumed meanwhile) reaches the caller as `KobX402Error{ retryable: true }`. Calling `fetch` again does
-  NOT silently sign a second, independent payment: while the first artifact is live the client refuses (`payment_in_flight`)
-  unless the caller opts in with `allowResign`, and then it revokes the first artifact (needs `submit`) before it re-quotes and
-  re-signs (`client.ts` opts in and does this up to 3 times).
+* A payment that fails is retried inside the same `paidFetch` (`retry`, default 3 attempts and 4 re-sends each, exponential
+  backoff with jitter, never past the offer's `maxTimeoutSeconds`; [docs/spec/x402-retry.md](../../../../docs/spec/x402-retry.md)):
+  an unknown outcome (no answer, a timeout, a 5xx, `settlement_pending`) RE-SENDS the same stored artifact, which the paywall
+  and the facilitator answer from memory (a payment that went through is found, never paid again); a failure that left the
+  payer's funds where they were (`order_conflict`: an order was taken by someone else; the node refused the transaction; the
+  authorization expired) REBUILDS the payment from a fresh quote, under the same limits, `approve` asked again at the new cost,
+  a fresh payment id, and spending the payment's anchor input (an input of the first attempt), so two attempts of one payment
+  can never both be accepted; a refusal (policy, limits, an invalid offer, a payment id conflict) stops. `retry: false` sends
+  once. The earlier attempts of a payment that settled end `superseded` in the store; when every attempt failed the error
+  lists them (`e.attempts`).
+* Calling `fetch` again does NOT silently sign a second, independent payment: while an earlier artifact for the resource is
+  live the client refuses (`payment_in_flight`) unless the caller opts in with `allowResign`, and then it revokes the earlier
+  artifacts (needs `submit`) before it signs anew. Paid requests for one resource run one at a time in a client.
 * Nothing is paid without a spend authorisation: `capabilities.maxAmount` must name a ceiling for the merchant asset (and
   `maxPay` / `KOB_X402_MAX_PAY` bounds a swap per pay asset, e.g. `KAS=500000000,<token id>=900`; a bare number bounds KAS
   only; a swap is never built without one), or the `approve` hook must say yes to the built payment's cost

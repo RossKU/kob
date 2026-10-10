@@ -4,6 +4,34 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Payer: a failed payment is retried without paying twice
+
+- **Breaking (behaviour):** `KobX402Client` retries a payment inside the same `paidFetch` (`retry`, default
+  `{ attempts: 3, resends: 4 }`, 500 ms backoff doubling to 8 s with equal jitter, deadline the shorter of 120 s and the offer's
+  `maxTimeoutSeconds`; `retry: false` restores one send). An unknown outcome (no answer, a timeout, a 5xx, a 2xx without
+  `PAYMENT-RESPONSE`, `409 settlement_pending`, `node_unavailable`) re-sends the SAME stored artifact; a failure that left the
+  payer's funds where they were (`order_conflict`, `order_not_spendable`, `invalid_kaspa_exact_utxo`, the node refusing the
+  transaction, `expired_authorization`) rebuilds the payment: a fresh chain context and quote, the limits, the preflight and
+  `approve` again (asked for every rebuilt attempt, `PaymentApproval.attempt` / `replaces`), a fresh payment id, and the
+  payment's anchor (the first input of the first attempt the payer owns) spent by every attempt, so two attempts of one payment
+  can never both be accepted. A rebuild is refused when the anchor is no longer unspent (`payment_pending` /
+  `retry_anchor_spent`) or the rebuilt attempt does not spend it (`retry_unanchored`). Anything else stops.
+  See `docs/spec/x402-retry.md`.
+- `PaymentReceipt.attempts`, `.resends`, `.superseded`; `KobX402Error.attempts` (every attempt with its outcome when the retry
+  gave up); `ArtifactRecord.attempt`, `.replaces`, `.anchor` and the status `superseded` (an earlier attempt of a payment that
+  settled). `PaymentApproval.attempt` is set (1 for the first attempt).
+- Paid requests for one resource (method + URL) run one at a time in a client; `resume()` waits for a running payment of the
+  same resource and re-sends within the `retry` bounds (it never rebuilds). The `allowResign` revoke of live attempts revokes an
+  attempt whose input an earlier revoke spent together with it.
+- `payInvoiceWithIntent(..., { retry })` re-sends the same signed creation while the answer is unknown or the intent may still
+  execute (`settlement_pending`, `intent_not_executable`, ...), within the intent's expiry; it never signs a second creation. It
+  returns `sends`.
+- `retry.ts`: `classifyFailure`, `classifyStatus`, `retryPolicy`, `backoffMs`, the same table as the Rust
+  `kob_x402::client::retry` (checked against the wasm build's `x402RetryDecision` / `x402Diagnostics`; `KobWasm.retryDecision`,
+  `KobWasm.diagnostics`).
+- Facilitator (kob-executor): a submit the node could not take is retried with the same transaction (`submitRetries`, default 2)
+  and a transaction evicted while observed is broadcast again (`rebroadcasts`, default 2).
+
 ### Paywall: confirmed finality by default
 
 - **Breaking:** `PaywallConfig.finality` defaults to `confirmed` (was `accepted`): the offers ask for it and the settlement must

@@ -109,11 +109,11 @@ test('kcc20 and swap-and-pay entries go through the matching KobWasm builders', 
   }
 });
 
-test('order_conflict: the client surfaces the retryable failure; a second call revokes the first artifact (allowResign), re-quotes, re-signs and succeeds', async () => {
+test('retry off: order_conflict is surfaced as retryable; a second call revokes the first artifact (allowResign), re-quotes, re-signs and succeeds', async () => {
   const conflicts = [{ txid: '99'.repeat(32), index: 0 }];
   const rig = await startRig({
     settle: (n) => (n === 1 ? { body: failure('order_conflict', true, 'an order was consumed', conflicts) } : undefined),
-    client: { allowResign: () => true, submit: async (tx) => (JSON.parse(tx) as { id: string }).id },
+    client: { retry: false, allowResign: () => true, submit: async (tx) => (JSON.parse(tx) as { id: string }).id },
   });
   try {
     let err: unknown;
@@ -147,8 +147,8 @@ test('order_conflict: the client surfaces the retryable failure; a second call r
   }
 });
 
-test('a retryable 402 never makes the client silently sign a second payment (no allowResign policy)', async () => {
-  const rig = await startRig({ settle: (n) => (n === 1 ? { body: failure('order_conflict', true, 'an order was consumed') } : undefined) });
+test('retry off: a retryable 402 never makes a new fetch silently sign a second payment (no allowResign policy)', async () => {
+  const rig = await startRig({ settle: (n) => (n === 1 ? { body: failure('order_conflict', true, 'an order was consumed') } : undefined), client: { retry: false } });
   try {
     await assert.rejects(rig.client.fetch(`${rig.base}/report`), (e: unknown) => e instanceof KobX402Error && e.retryable === true);
     const signed = () => rig.wasm.calls.filter((c) => c.method === 'payNative').length;
@@ -192,7 +192,8 @@ test('crash recovery: resume() re-sends the STORED artifact; idempotency replays
     if (dropPaidResponse && new Headers(init?.headers).has('payment-signature')) throw new TypeError('connection reset after the merchant processed the payment');
     return r;
   };
-  const rig = await startRig({ client: { fetch: lossy } });
+  // retry off: the paid answer is lost every time until the test lets it through (with retry on, the client re-sends it itself)
+  const rig = await startRig({ client: { fetch: lossy, retry: false } });
   try {
     const id = 'idempotent-payment-id-0001';
     const url = `${rig.base}/report`;

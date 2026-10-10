@@ -59,6 +59,8 @@ export interface KobBindings {
   x402FinishCancel(built: string, signatures: string): string;
   x402InvoiceId(invoice: string): string;
   x402CheckInvoice(invoice: string, id: string, nowMs: number): string;
+  x402RetryDecision(request: string): string;
+  x402Diagnostics(): string;
 }
 
 export interface KobWasmNode extends KobWasm {
@@ -227,6 +229,8 @@ export function createKobWasm(opts: { pkgDir?: string } = {}): KobWasmNode {
       }
     },
     checkInvoice: (invoice, id, nowMs) => run(() => kob.x402CheckInvoice(j(invoice), id, nowMs)),
+    retryDecision: (req) => run<{ step: 'resend' | 'rebuild' | 'stop' }>(() => kob.x402RetryDecision(j(req))).step,
+    diagnostics: () => run<string[]>(() => kob.x402Diagnostics()),
     revoke(req) {
       const b: Record<string, unknown> = { payload: req.paymentPayload, secretKeys: req.privateKeys };
       if (req.feeRate !== undefined) b.feeRate = req.feeRate;

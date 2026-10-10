@@ -127,7 +127,8 @@ See [docs/README.md](docs/README.md) for the index. The main entries:
 * `docs/spec/matcher.md`: normative matcher, executor and wallet rules
 * `docs/spec/order-types.md`: the order types and their semantics
 * `docs/spec/kob1-payload.md`: the `KOB1` payload and placement record
-* `docs/spec/x402-kcc20-profile.md`, `docs/spec/x402-swap-and-pay.md`: x402 proposals
+* `docs/spec/x402-kcc20-profile.md`, `docs/spec/x402-swap-and-pay.md`: x402 proposals; `docs/spec/x402-retry.md`: how a
+  payment is retried without paying twice
 * `docs/argent.md`: KOB as an Argent app, how to import it, the router
 * `docs/ops/executor.md`: running the indexer, matcher and keepers
 * `contracts/README.md`, `registry/README.md`: contracts and token registry

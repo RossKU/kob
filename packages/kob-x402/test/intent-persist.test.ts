@@ -75,7 +75,8 @@ test('a failed submission (KobX402Error) carries the signed payment; the same er
   const failure = new KobX402Error('facilitator', 'POST /invoices/x/pay: HTTP 503', { status: 503, details: { error: 'busy' }, retryable: true });
   let stored: any;
   await assert.rejects(
-    payInvoiceWithIntent(fakeWasm(log), fakeInvoices(log, async () => { throw failure; }), fetched, req, { persist: (p) => { stored = p; } }),
+    // retry off: one submission (the re-sends of the same creation are covered in retry.test.ts)
+    payInvoiceWithIntent(fakeWasm(log), fakeInvoices(log, async () => { throw failure; }), fetched, req, { persist: (p) => { stored = p; }, retry: false }),
     (e: unknown) => {
       assert.equal(e, failure, 'the same error object');
       assert.equal((e as KobX402Error).payment, stored, 'the payment equals what persist saw');
@@ -91,7 +92,7 @@ test('a failed submission works without persist, and a foreign error is wrapped 
   const log: string[] = [];
   const boom = new TypeError('socket hang up');
   await assert.rejects(
-    payInvoiceWithIntent(fakeWasm(log), fakeInvoices(log, async () => { throw boom; }), fetched, req),
+    payInvoiceWithIntent(fakeWasm(log), fakeInvoices(log, async () => { throw boom; }), fetched, req, { retry: false }),
     (e: unknown) => {
       assert.ok(e instanceof KobX402Error);
       assert.equal(e.code, 'payment_pending');
