@@ -400,7 +400,8 @@ fn an_outpoint_is_consumed_at_most_once() {
     assert!(!s2.success);
     assert_eq!(s2.error_reason.as_deref(), Some("invalid_transaction_state"));
     assert_eq!(diag(&s2), "replay");
-    assert_eq!(f.chain.submit_count(), 1, "the conflicting spend was never broadcast");
+    // the first one was submitted once and re-submitted `submit_retries` times while the node was down
+    assert_eq!(f.chain.submit_count(), 1 + u64::from(f.fac.config.submit_retries), "the conflicting spend was never broadcast");
     assert!(f.ledger.get(&txid_hex(&tx2)).is_none());
 }
 
@@ -492,7 +493,7 @@ fn node_outage_at_submit_is_ambiguous_and_recovers_on_retry() {
     let s = f.fac.settle("shop", &req);
     miner.join().unwrap();
     assert!(s.success, "{s:?}");
-    assert_eq!(f.chain.submit_count(), 2);
+    assert_eq!(f.chain.submit_count(), 2 + u64::from(f.fac.config.submit_retries));
     assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Accepted);
 }
 
@@ -523,7 +524,7 @@ fn an_ambiguous_payment_unknown_to_the_node_is_released_after_the_grace() {
     assert_eq!(e.state, State::Failed);
     assert!(e.reason.as_deref().unwrap().starts_with("ambiguous"), "{:?}", e.reason);
     assert!(!f.ledger.is_consumed(&input), "the payer's outpoints are released");
-    assert_eq!(f.chain.submit_count(), 1, "nothing was resubmitted");
+    assert_eq!(f.chain.submit_count(), 1 + u64::from(f.fac.config.submit_retries), "re-submitted only inside the settle");
 }
 
 #[test]
@@ -1183,4 +1184,121 @@ fn metrics_text_counts_settlements_and_ledger_states() {
     assert!(text.contains("kob_x402_settle_success 1"));
     assert!(text.contains("kob_x402_broadcasts 1"));
     assert!(text.contains("kob_x402_ledger_entries{state=\"accepted\"} 1"));
+}
+
+// ------------------------------------------------------------------------------- retry: re-submission, re-broadcast
+
+/// A chain whose first `fail` submits answer `Unavailable`: `forward` decides whether the node took the transaction
+/// anyway (the answer was lost) and `then` what a later submit answers instead of the mock's own reply.
+struct FlakySubmit {
+    inner: Arc<MockChain>,
+    fail: std::sync::atomic::AtomicU32,
+    forward: bool,
+    /// After the failures: answer this instead of submitting (a node refusing the repeat of a transaction it already mined).
+    then: std::sync::Mutex<Option<SubmitError>>,
+}
+
+impl FlakySubmit {
+    fn new(inner: Arc<MockChain>, fail: u32, forward: bool) -> Arc<FlakySubmit> {
+        Arc::new(FlakySubmit { inner, fail: std::sync::atomic::AtomicU32::new(fail), forward, then: std::sync::Mutex::new(None) })
+    }
+}
+
+impl ChainView for FlakySubmit {
+    fn utxos(&self, w: &[(Outpoint, ScriptPublicKey)]) -> Result<Vec<Option<ChainUtxo>>, ChainError> {
+        self.inner.utxos(w)
+    }
+    fn utxos_of(&self, s: &ScriptPublicKey) -> Result<Vec<(Outpoint, ChainUtxo)>, ChainError> {
+        self.inner.utxos_of(s)
+    }
+    fn virtual_daa_score(&self) -> Result<u64, ChainError> {
+        self.inner.virtual_daa_score()
+    }
+    fn output_status(&self, o: &Outpoint, s: &ScriptPublicKey) -> Result<OutputStatus, ChainError> {
+        self.inner.output_status(o, s)
+    }
+    fn in_mempool(&self, t: &Txid) -> Result<bool, ChainError> {
+        self.inner.in_mempool(t)
+    }
+    fn submit(&self, tx: &Transaction) -> Result<Txid, SubmitError> {
+        if self.fail.load(Ordering::SeqCst) > 0 {
+            self.fail.fetch_sub(1, Ordering::SeqCst);
+            if self.forward {
+                let _ = self.inner.submit(tx);
+                self.inner.mine(0);
+            }
+            return Err(SubmitError::Unavailable("connection reset by peer".into()));
+        }
+        if let Some(e) = self.then.lock().unwrap().take() {
+            return Err(e);
+        }
+        self.inner.submit(tx)
+    }
+}
+
+#[test]
+fn a_submit_the_node_could_not_take_is_resubmitted_within_the_settle() {
+    let f = Fixture::new();
+    let a = f.fund(500_000_000);
+    let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
+    let flaky = FlakySubmit::new(f.chain.clone(), 2, false);
+    let g = Fixture::with_view(f.ledger.clone(), f.chain.clone(), flaky.clone(), f.clock.clone());
+    let miner = mine_later(&f.chain, 20, 0);
+    let s = g.fac.settle("shop", &req);
+    miner.join().unwrap();
+    assert!(s.success, "{s:?}");
+    assert_eq!(s.transaction, txid_hex(&tx));
+    assert_eq!(g.fac.metrics.submit_retries.load(Ordering::Relaxed), 2);
+    assert_eq!(g.ledger.get(&txid_hex(&tx)).unwrap().state, State::Accepted);
+    // the same transaction every time: one merchant output
+    assert_eq!(f.chain.unspent_of(&p2pk_spk(&pubkey(MERCHANT_KEY))).len(), 1);
+    // with the retries spent the outcome stays unknown (ambiguous), never failed
+    let b = f.fund(500_000_000);
+    let (req2, tx2) = f.payment(&[b], 110_000_000, ID2, 8);
+    let flaky = FlakySubmit::new(f.chain.clone(), 10, false);
+    let h = Fixture::with_view(f.ledger.clone(), f.chain.clone(), flaky, f.clock.clone());
+    let s = h.fac.settle("shop", &req2);
+    assert_eq!(diag(&s), "node_unavailable");
+    assert_eq!(h.ledger.get(&txid_hex(&tx2)).unwrap().state, State::Ambiguous);
+    assert_eq!(h.fac.metrics.submit_retries.load(Ordering::Relaxed), u64::from(h.fac.config.submit_retries));
+}
+
+#[test]
+fn a_refused_resubmit_of_a_transaction_that_went_through_is_not_a_failure() {
+    let f = Fixture::new();
+    let a = f.fund(500_000_000);
+    let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
+    // the node took (and mined) the first try but its answer was lost; the repeat is refused as a double spend
+    let flaky = FlakySubmit::new(f.chain.clone(), 1, true);
+    *flaky.then.lock().unwrap() = Some(SubmitError::Conflict("input is not an unspent output".into()));
+    let g = Fixture::with_view(f.ledger.clone(), f.chain.clone(), flaky, f.clock.clone());
+    let s = g.fac.settle("shop", &req);
+    assert!(s.success, "{s:?}");
+    assert_eq!(s.transaction, txid_hex(&tx));
+    assert_eq!(g.ledger.get(&txid_hex(&tx)).unwrap().state, State::Accepted);
+}
+
+#[test]
+fn a_transaction_evicted_while_observed_is_rebroadcast() {
+    let f = Fixture::new();
+    let a = f.fund(500_000_000);
+    let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
+    // the node drops it from its mempool right after the broadcast; it is mined only once it is sent again
+    let evict = after_submit(&f.chain, 1, |c| c.evict_mempool());
+    let c = f.chain.clone();
+    let miner = thread::spawn(move || {
+        let t = std::time::Instant::now();
+        while c.submit_count() < 2 && t.elapsed() < Duration::from_secs(10) {
+            thread::sleep(Duration::from_millis(1));
+        }
+        thread::sleep(Duration::from_millis(5));
+        c.mine(0);
+    });
+    let s = f.fac.settle("shop", &req);
+    evict.join().unwrap();
+    miner.join().unwrap();
+    assert!(s.success, "{s:?}");
+    assert_eq!(s.transaction, txid_hex(&tx));
+    assert_eq!(f.fac.metrics.rebroadcasts.load(Ordering::Relaxed), 1);
+    assert_eq!(f.chain.submit_count(), 2);
 }

@@ -168,7 +168,8 @@ fn attacks_against_the_facilitator_with_real_payments() {
     e.chain.set_submit_failure(None);
     let s2 = e.fac.settle("shop", &second);
     assert_eq!(diag(&s2), "replay");
-    assert_eq!(e.chain.submit_count(), 1);
+    // the first one: submitted, then re-submitted `submit_retries` times while the node was unreachable
+    assert_eq!(e.chain.submit_count(), 1 + u64::from(e.fac.config.submit_retries));
     // the first payment is still recoverable by its identical retry
     let miner = e.mine_after_submit(0);
     let s1b = e.fac.settle("shop", &req);

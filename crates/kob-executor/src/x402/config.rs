@@ -26,6 +26,8 @@
 //!   "headerTimeoutMs": 10000,
 //!   "settleWaitMs": 30000,
 //!   "pollIntervalMs": 200,
+//!   "submitRetries": 2,
+//!   "rebroadcasts": 2,
 //!   "nodeTimeoutMs": 5000,
 //!   "reorgWatchDaa": 36000,
 //!   "reconcileIntervalSeconds": 30,
@@ -262,6 +264,12 @@ pub struct X402Config {
     pub header_timeout_ms: u64,
     pub settle_wait_ms: u64,
     pub poll_interval_ms: u64,
+    /// Re-submissions of the same verified transaction when the node could not be reached on submit (idempotent: the
+    /// node answers a transaction it already has as known), before the settlement is left `ambiguous`. 0..=10.
+    pub submit_retries: u32,
+    /// Re-broadcasts of the same transaction while a settle observes it and it left the mempool unaccepted (an eviction).
+    /// 0..=10.
+    pub rebroadcasts: u32,
     pub node_timeout_ms: u64,
     pub reorg_watch_daa: u64,
     pub reconcile_interval_seconds: u64,
@@ -332,6 +340,8 @@ impl Default for X402Config {
             header_timeout_ms: 10_000,
             settle_wait_ms: 30_000,
             poll_interval_ms: 200,
+            submit_retries: 2,
+            rebroadcasts: 2,
             node_timeout_ms: 5_000,
             reorg_watch_daa: 36_000,
             reconcile_interval_seconds: 30,
@@ -492,6 +502,9 @@ impl X402Config {
             if v == 0 {
                 return err(format!("{name} must be a positive finite value"));
             }
+        }
+        if self.submit_retries > 10 || self.rebroadcasts > 10 {
+            return err("submitRetries and rebroadcasts must be within 0..=10");
         }
         if self.max_body_bytes == 0 || self.max_body_bytes > 64 * 1024 * 1024 {
             return err("maxBodyBytes must be within 1..=67108864");
@@ -869,6 +882,8 @@ mod tests {
             r#","rateLimit":{"perIp":{"burst":0,"perSecond":1}}"#,
             r#","adminKeySha256":"zz""#,
             r#","ledger":"""#,
+            r#","submitRetries":11"#,
+            r#","rebroadcasts":11"#,
         ] {
             let cfg = X402Config::from_json(&doc(bad)).unwrap();
             assert!(cfg.build().is_err(), "{bad}");

@@ -63,6 +63,12 @@ struct RivalChain {
     rivals: std::sync::atomic::AtomicU64,
     /// (transaction id, fee) of every submitted transaction whose inputs the chain knows.
     fees: Mutex<Vec<(Txid, u64)>>,
+    /// Runs once right after the rival's fill (the book moves at the same moment).
+    #[allow(clippy::type_complexity)]
+    on_rival: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// `(creation, n, forward)`: the next `n` submits of a transaction spending an output of `creation` (an execution)
+    /// answer `Unavailable`; with `forward` the node took the transaction anyway (only the answer was lost).
+    unknown_exec: Mutex<Option<(Txid, u32, bool)>>,
 }
 
 impl ChainView for RivalChain {
@@ -92,9 +98,24 @@ impl ChainView for RivalChain {
                 self.inner.spend_externally(&o);
                 self.rivals.fetch_add(1, Ordering::SeqCst);
                 *r = None;
+                if let Some(f) = self.on_rival.lock().unwrap().take() {
+                    f();
+                }
             }
         }
         drop(r);
+        {
+            let mut u = self.unknown_exec.lock().unwrap();
+            if let Some((creation, n, forward)) = u.as_mut() {
+                if *n > 0 && tx.inputs.iter().any(|i| i.previous_outpoint.transaction_id.as_bytes() == *creation) {
+                    *n -= 1;
+                    if *forward {
+                        let _ = self.inner.submit(tx);
+                    }
+                    return Err(SubmitError::Unavailable("connection reset by peer".into()));
+                }
+            }
+        }
         let ins: Option<u64> = tx
             .inputs
             .iter()
@@ -182,8 +203,14 @@ fn world() -> World {
     for f in &funding {
         put(&chain, &f.utxo, p2pk_spk(&f.pubkey));
     }
-    let view =
-        Arc::new(RivalChain { inner: chain.clone(), rival: Mutex::new(None), rivals: Default::default(), fees: Default::default() });
+    let view = Arc::new(RivalChain {
+        inner: chain.clone(),
+        rival: Mutex::new(None),
+        rivals: Default::default(),
+        fees: Default::default(),
+        on_rival: Mutex::new(None),
+        unknown_exec: Mutex::new(None),
+    });
     let clock = Arc::new(FixedClock::new(NOW_MS));
     let ledger = Arc::new(Ledger::in_memory());
     let book = Arc::new(Mutex::new(book));
@@ -649,4 +676,58 @@ fn intent_executions_pay_the_high_rate_within_the_cap_and_what_the_intent_holds(
     assert!(capped <= 2 * floor && capped > floor, "floor {floor}, capped at {}: {capped}", 2 * floor);
     // a rate the intent cannot pay: the keeper's own rate
     assert_eq!(execution_fee(board(10_000_000, 0)), floor);
+}
+
+// ------------------------------------------------------------------------------------------ retry: the keeper re-plans
+
+fn merchant_outputs(w: &World) -> usize {
+    w.chain.unspent_of(&p2pk_spk(&pk(MERCHANT))).len()
+}
+
+#[test]
+fn the_keeper_replans_against_the_book_of_the_moment_after_losing_an_order() {
+    let w = world();
+    let offer = w.kas_intent_offer(5 * KAS, MERCHANT);
+    let p = w.pay_t2k(&offer, RH, 3 * WHOLE);
+    let best = w.book.lock().unwrap().bids[0].utxo.clone();
+    let stale = w.book.lock().unwrap().bids[1].utxo.clone();
+    let fresh = bid_a(22, common::MAKER_A, P250, 10);
+    let fresh_op = Outpoint::new(fresh.utxo.transaction_id, fresh.utxo.index);
+    *w.view.rival.lock().unwrap() = Some(Outpoint::new(best.transaction_id, best.index));
+    let (book, chain) = (w.book.clone(), w.chain.clone());
+    *w.view.on_rival.lock().unwrap() = Some(Box::new(move || {
+        // the book moves with the rival's fill: the taken bid leaves it, a new bid at the best price arrives
+        put(&chain, &fresh.utxo, fresh.state.spk());
+        let mut b = book.lock().unwrap();
+        b.bids.retain(|x| x.utxo.transaction_id != best.transaction_id);
+        b.bids.insert(0, fresh);
+    }));
+    let r = with_miner(&w, || w.fac.settle(SHOP, &request(&offer, &p.payload)));
+    assert!(r.success, "{r:?}");
+    assert_eq!(w.view.rivals.load(Ordering::SeqCst), 1);
+    assert_eq!(r.extensions.as_ref().unwrap()["kob"]["intent"]["executions"], 2, "one re-plan, no new payer signature");
+    assert!(w.chain.utxo(&fresh_op).is_none(), "the re-plan filled the bid that is in the book now");
+    assert!(w.chain.utxo(&Outpoint::new(stale.transaction_id, stale.index)).is_some(), "not the stale fallback");
+    assert_eq!(merchant_outputs(&w), 1, "one execution paid the merchant");
+    assert_eq!(w.ledger.get(&hex(&p.txid)).unwrap().state, State::Accepted);
+}
+
+#[test]
+fn an_execution_whose_submit_outcome_is_unknown_is_never_executed_twice() {
+    // forward: the node took it (only the answer was lost): the keeper waits for it, no second execution. Not forwarded: it
+    // is not in the mempool and not accepted, so it is dead; the keeper plans again. Every execution spends the intent, so
+    // at most one can ever pay.
+    for (forward, executions) in [(true, 1), (false, 2)] {
+        let w = world();
+        let offer = w.kas_intent_offer(5 * KAS, MERCHANT);
+        let p = w.pay_t2k(&offer, RH, 3 * WHOLE);
+        *w.view.unknown_exec.lock().unwrap() = Some((p.txid, 1, forward));
+        let r = with_miner(&w, || w.fac.settle(SHOP, &request(&offer, &p.payload)));
+        assert!(r.success, "forward {forward}: {r:?}");
+        assert_eq!(r.extensions.as_ref().unwrap()["kob"]["intent"]["executions"], executions, "forward {forward}");
+        assert_eq!(merchant_outputs(&w), 1, "forward {forward}: paid once");
+        let again = w.fac.settle(SHOP, &request(&offer, &p.payload));
+        assert!(is_repeat_of(&again, &r), "the identical retry reads the outcome: {again:?}");
+        assert_eq!(merchant_outputs(&w), 1);
+    }
 }

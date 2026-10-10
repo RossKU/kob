@@ -146,6 +146,8 @@ pub fn prepare_with(built: Built, chain: Arc<dyn ChainView>, book: Option<BookFn
         FacilitatorConfig {
             settle_wait: Duration::from_millis(cfg.settle_wait_ms),
             poll_interval: Duration::from_millis(cfg.poll_interval_ms),
+            submit_retries: cfg.submit_retries,
+            rebroadcasts: cfg.rebroadcasts,
             reorg_watch_daa: cfg.reorg_watch_daa,
             kill_switch_file: cfg.kill_switch_file.clone().map(Into::into),
             pause_file: cfg.pause_file.clone(),

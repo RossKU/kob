@@ -237,6 +237,11 @@ holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignor
   "Fee policy"), within what the intent itself can pay; the payers' own transactions are submitted as signed.
 * **UTXO facts and submission** go to the node (`getUtxosByAddresses`, `submitTransaction`), as in the
   standalone `kob-executor x402`.
+* **Re-submission and re-broadcast** (`docs/spec/x402-retry.md` section 6). A submit the node could not take is retried with
+  the same transaction up to `submitRetries` times (default 2, within the settle wait) before the settlement is left
+  `ambiguous`; a transaction that left the mempool unaccepted while a settle observes it is broadcast again up to
+  `rebroadcasts` times (default 2). Both 0..=10; metrics `kob_x402_submit_retries`, `kob_x402_rebroadcasts`. The payer's own
+  retry (the SDKs' `retry`) re-sends an artifact whose outcome is unknown and rebuilds one the facilitator failed.
 * **Minimum finality.** A settlement is answered at the stronger of the offer's finality and `minFinality` (default
   `confirmed`: `confirmationsDaa` DAA, 100 by default, about 10 s, past the accepting block). `"minFinality": "accepted"`
   answers at depth 0, a few seconds sooner, while a payer can still race a conflicting spend through another node; raise

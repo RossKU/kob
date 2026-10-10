@@ -40,7 +40,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use kaspa_consensus_core::tx::ScriptPublicKey;
+use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction};
 use kob_x402::canonical::requirements_hash;
 use kob_x402::chain::{ChainError, ChainView, Clock, Outpoint, OutputStatus, SubmitError, Tracked, Txid};
 use kob_x402::common;
@@ -107,6 +107,14 @@ pub struct FacilitatorConfig {
     /// merchant refunds it, as a late payment). A payment that was accepted once and became ambiguous (its inputs are unspent
     /// again: a reorg) is never released; its evidence stays consumed.
     pub ambiguous_grace: Duration,
+    /// Re-submissions of the same verified transaction when the node could not be reached on submit, with a doubling pause
+    /// from `poll_interval` (within the settle wait), before the settlement is left `ambiguous`. Idempotent: a node that took
+    /// an earlier try answers `AlreadyKnown`, and a refusal after an unreachable try is read against the chain first (the
+    /// earlier try may have gone through and spent the inputs itself).
+    pub submit_retries: u32,
+    /// Re-broadcasts of the same transaction while a settle observes it and it left the mempool without being accepted (an
+    /// eviction, a node restart). A refused re-broadcast ends them; the observation goes on as before.
+    pub rebroadcasts: u32,
 }
 
 impl Default for FacilitatorConfig {
@@ -119,6 +127,8 @@ impl Default for FacilitatorConfig {
             pause_file: None,
             pending_grace: Duration::from_secs(15 * 60),
             ambiguous_grace: Duration::from_secs(60 * 60),
+            submit_retries: 2,
+            rebroadcasts: 2,
         }
     }
 }
@@ -151,6 +161,10 @@ metrics! {
     settle_resumed,
     replay_rejected,
     broadcasts,
+    /// Re-submissions of a transaction after the node could not be reached on submit.
+    submit_retries,
+    /// Re-broadcasts of an observed transaction that left the mempool unaccepted.
+    rebroadcasts,
     node_unavailable,
     order_conflicts,
     expired_rejected,
@@ -679,10 +693,11 @@ impl Facilitator {
         let wait = self.observe_wait(req);
 
         // (1) identity and the ledger first: an identical retry resumes without re-verifying
-        let parsed_id = {
+        let parsed_tx = {
             let ctx = VerifyCtx { chain: &*self.chain, clock: &*self.clock, policy: &self.policy };
-            common::parse_tx(&ctx, &req.payment_payload).ok().map(|p| p.tx.id().as_bytes())
+            common::parse_tx(&ctx, &req.payment_payload).ok().map(|p| p.tx)
         };
+        let parsed_id = parsed_tx.as_ref().map(|t| t.id().as_bytes());
         let mut guard = parsed_id.map(|id| self.locks.lock(id));
         if let Some(id) = parsed_id {
             if let Some(e) = self.ledger.get(&hex(&id)) {
@@ -706,7 +721,7 @@ impl Facilitator {
                             self.check_known_id(&e, req)?;
                             Metrics::inc(&self.metrics.settle_resumed);
                             let e = self.ledger.transition(&e.txid, State::Broadcast, None, self.clock.now_ms())?;
-                            return self.observe_and_finish(&e, wait);
+                            return self.observe_and_finish(&e, wait, parsed_tx.as_ref());
                         }
                         Ok(false) => {} // unknown to the chain: the full path below re-verifies and resubmits the same transaction
                         Err(ce) => return Err(unavailable(format!("cannot reconcile the earlier attempt: {ce}"))),
@@ -798,7 +813,7 @@ impl Facilitator {
         }
         // the acceptance tracker (the indexer, in `kob-executor run`) follows it from before the broadcast
         self.chain.track(&v.txid);
-        let entry = match self.chain.submit(&v.tx) {
+        let entry = match self.submit_retrying(&v.tx, wait, || self.chain_seen(&entry)) {
             Ok(_) | Err(SubmitError::AlreadyKnown) => {
                 Metrics::inc(&self.metrics.broadcasts);
                 self.ledger.transition(&entry.txid, State::Broadcast, None, self.clock.now_ms())?
@@ -832,9 +847,44 @@ impl Facilitator {
             }
         };
         // (6) observe finality (the per-transaction lock stays held: an identical retry waits, then reads the outcome)
-        let result = self.observe_and_finish(&entry, wait);
+        let result = self.observe_and_finish(&entry, wait, Some(&v.tx));
         drop(guard);
         result
+    }
+
+    /// Submits `tx`; while the node cannot be reached, submits the SAME transaction again up to `config.submit_retries` times
+    /// (a pause from `poll_interval`, doubling, within `wait`). Idempotent: a node that took an earlier try answers
+    /// `AlreadyKnown`. A definitive refusal after an unreachable try is read against the chain (`seen`): the earlier try may
+    /// have gone through, and the node then refuses the repeat because its own inputs are spent; seen = `AlreadyKnown`.
+    pub(super) fn submit_retrying(
+        &self,
+        tx: &Transaction,
+        wait: Duration,
+        seen: impl Fn() -> std::result::Result<bool, ChainError>,
+    ) -> std::result::Result<Txid, SubmitError> {
+        let until = Instant::now() + wait;
+        let mut pause = self.config.poll_interval.max(Duration::from_millis(1));
+        let mut unknown = false;
+        let mut tries = 0u32;
+        loop {
+            match self.chain.submit(tx) {
+                Err(SubmitError::Unavailable(m)) => {
+                    unknown = true;
+                    if tries >= self.config.submit_retries || Instant::now() + pause >= until {
+                        return Err(SubmitError::Unavailable(m));
+                    }
+                    tries += 1;
+                    Metrics::inc(&self.metrics.submit_retries);
+                    eprintln!("x402: submit of {} could not reach the node ({m}); re-submitting the same transaction", tx.id());
+                    std::thread::sleep(pause);
+                    pause = (pause * 2).min(Duration::from_secs(2));
+                }
+                Err(e @ (SubmitError::Conflict(_) | SubmitError::Rejected(_))) if unknown => {
+                    return if seen().unwrap_or(false) { Err(SubmitError::AlreadyKnown) } else { Err(e) };
+                }
+                other => return other,
+            }
+        }
     }
 
     fn fail(&self, txid: &str, reason: &str) {
@@ -929,8 +979,9 @@ impl Facilitator {
         })
     }
 
-    fn observe(&self, e: &Entry, wait: Duration) -> Observed {
+    fn observe(&self, e: &Entry, wait: Duration, tx: Option<&Transaction>) -> Observed {
         let Ok(watch) = watch_of(e) else { return Observed::Timeout { node_down: true } };
+        let mut rebroadcasts = if tx.is_some() { self.config.rebroadcasts } else { 0 };
         let required = Finality::parse(&e.finality).unwrap_or(Finality::Accepted).max(Finality::Accepted);
         let orders = e.order_refs();
         let deadline = Instant::now() + wait;
@@ -951,6 +1002,24 @@ impl Facilitator {
                         Ok(Some(daa)) => Observed::Final { accepted_daa: daa },
                         _ => Observed::OrderConflict(spent),
                     };
+                }
+            }
+            if rebroadcasts > 0 && !last && polls % 5 == 4 {
+                if let Some(tx) = tx {
+                    // left the mempool without being accepted (evicted, a node restart): the same transaction again
+                    if let Ok(OutputStatus::Unknown) = self.chain.output_status(&watch.0, &watch.1) {
+                        if matches!(self.chain.in_mempool(&watch.0.txid), Ok(false)) {
+                            rebroadcasts -= 1;
+                            match self.chain.submit(tx) {
+                                Ok(_) | Err(SubmitError::AlreadyKnown) => {
+                                    Metrics::inc(&self.metrics.rebroadcasts);
+                                    eprintln!("x402: {} left the mempool unaccepted; re-broadcast", e.txid);
+                                }
+                                // refused (an input spent meanwhile, or the node is down): no more re-broadcasts, observe on
+                                Err(_) => rebroadcasts = 0,
+                            }
+                        }
+                    }
                 }
             }
             if last {
@@ -990,7 +1059,7 @@ impl Facilitator {
         }
     }
 
-    fn observe_and_finish(&self, e: &Entry, wait: Duration) -> Result<SettlementResponse> {
+    fn observe_and_finish(&self, e: &Entry, wait: Duration, tx: Option<&Transaction>) -> Result<SettlementResponse> {
         if e.is_intent() {
             return Err(X402Error::new(
                 Reason::UnexpectedSettleError,
@@ -998,7 +1067,7 @@ impl Facilitator {
                 "an intent payment is not finalized as a direct payment",
             ));
         }
-        match self.observe(e, wait) {
+        match self.observe(e, wait, tx) {
             Observed::Final { accepted_daa } => {
                 let resp = self.success_response(e, accepted_daa);
                 let value = serde_json::to_value(&resp)

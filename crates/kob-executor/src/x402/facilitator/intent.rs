@@ -358,7 +358,7 @@ impl Facilitator {
                 .retryable());
             }
             self.chain.track(&v.txid);
-            match self.chain.submit(&v.tx) {
+            match self.submit_retrying(&v.tx, wait, || self.creation_seen(&entry)) {
                 Ok(_) | Err(SubmitError::AlreadyKnown) => {
                     Metrics::inc(&self.metrics.broadcasts);
                     self.ledger.transition(&entry.txid, State::Broadcast, None, self.clock.now_ms())?;
