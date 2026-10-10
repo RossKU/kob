@@ -35,6 +35,7 @@ export const PROGRAM_OF_TEMPLATE_ID: Readonly<Record<string, TokenProgram>> = {
   'kcc20-ref-3x3': 'KCC20Ref',
   'kcc20-ref-8x8': 'KCC20Ref_8x8',
   'kcc20-kaspacom-0-2-5': 'KCC20KaspaCom_0_2_5',
+  'kcc20-ref-public-mint': 'KCC20PublicMint',
   'kron-2433': 'KronToken2433',
   'kron-2732': 'KronToken2732',
 };

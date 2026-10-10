@@ -142,6 +142,14 @@ pub enum TemplateId {
     /// accepted like every other program: through the strict template list of the registry.
     #[serde(rename = "KCC20KaspaCom_0_2_5")]
     Kcc20KaspaCom025,
+    /// The `KCC20` actor of upstream's published `KCC20PublicMint` app (argent-lang/kcc20-reference c8a0871, the fixture
+    /// `fixtures/public-mint/sil/KCC20.sil`, vendored in `contracts/third-party/kcc20-reference`): 3 / 3 slots, state
+    /// 1+145 B whose first field is the compiler-owned context `gen__kcc20_template` (always the program's own Sil
+    /// template hash). KOB embeds it as its KCC-1 actor-type handle: the context belongs to the template prefix
+    /// (34 B), the open state is the same 112-byte `KCC20State` as every other KCC-20 program, the template hash is the
+    /// handle's (see [`Template::sil_hash`] for the Sil one).
+    #[serde(rename = "KCC20PublicMint")]
+    Kcc20PublicMint,
     // ---- KRON family (46-byte token state)
     KobAskKron,
     KobBidKron,
@@ -157,7 +165,7 @@ pub enum TemplateId {
 
 impl TemplateId {
     /// All embedded templates (artifact-backed order kinds and token programs, raw KRON programs).
-    pub const ALL: [TemplateId; 23] = [
+    pub const ALL: [TemplateId; 24] = [
         TemplateId::KobAsk,
         TemplateId::KobBid,
         TemplateId::KobCondAsk,
@@ -173,6 +181,7 @@ impl TemplateId {
         TemplateId::Kcc20Ref16x16,
         TemplateId::Kcc20P2,
         TemplateId::Kcc20KaspaCom025,
+        TemplateId::Kcc20PublicMint,
         TemplateId::KobAskKron,
         TemplateId::KobBidKron,
         TemplateId::KobCondAskKron,
@@ -201,6 +210,7 @@ impl TemplateId {
             TemplateId::Kcc20Ref16x16 => "KCC20Ref_16x16",
             TemplateId::Kcc20P2 => "KCC20P2",
             TemplateId::Kcc20KaspaCom025 => "KCC20KaspaCom_0_2_5",
+            TemplateId::Kcc20PublicMint => "KCC20PublicMint",
             TemplateId::KobAskKron => "KobAskKron",
             TemplateId::KobBidKron => "KobBidKron",
             TemplateId::KobCondAskKron => "KobCondAskKron",
@@ -286,15 +296,26 @@ impl TemplateId {
                 | TemplateId::Kcc20Ref16x16
                 | TemplateId::Kcc20P2
                 | TemplateId::Kcc20KaspaCom025
+                | TemplateId::Kcc20PublicMint
                 | TemplateId::KronToken2433
                 | TemplateId::KronToken2732
         )
     }
 
+    /// Compiler-owned context fields at the head of the program's state (Argent `runtime_states` field roles), which the
+    /// KCC-1 actor-type handle fixes in the template prefix: `gen__kcc20_template` of the `KCC20` actor of the published
+    /// `KCC20PublicMint` app (it holds the program's own Sil template hash in every UTXO). Empty for every other template.
+    pub fn context_fields(self) -> &'static [&'static str] {
+        match self {
+            TemplateId::Kcc20PublicMint => &["gen__kcc20_template"],
+            _ => &[],
+        }
+    }
+
     /// Per-transaction token input / output slots of a token program (KCC-20: leader included).
     pub fn token_slots(self) -> Option<(usize, usize)> {
         match self {
-            TemplateId::Kcc20Ref | TemplateId::Kcc20P2 => Some((3, 3)),
+            TemplateId::Kcc20Ref | TemplateId::Kcc20P2 | TemplateId::Kcc20PublicMint => Some((3, 3)),
             TemplateId::Kcc20Ref4x5 => Some((4, 5)),
             TemplateId::Kcc20Ref8x8 | TemplateId::Kcc20KaspaCom025 => Some((8, 8)),
             TemplateId::Kcc20Ref16x16 => Some((16, 16)),
@@ -353,7 +374,7 @@ pub const RETIRED_KIND_CODES: [u8; 1] = [0x07];
 
 /// Template hashes pinned by this protocol version (hex). A different artifact is a different
 /// protocol and fails to load.
-pub const PINNED: [(TemplateId, &str); 23] = [
+pub const PINNED: [(TemplateId, &str); 24] = [
     (TemplateId::KobAsk, "070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c"),
     (TemplateId::KobBid, "b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3"),
     (TemplateId::KobCondAsk, "d9ed37c5aa03d5c62619659f86c6a1e08ab4ba9a1092d144b2160935331e6adb"),
@@ -369,6 +390,9 @@ pub const PINNED: [(TemplateId, &str); 23] = [
     (TemplateId::Kcc20Ref16x16, "922e9ba7c64b0ddcbd0f1b4b6bd592c791e0813df033d1c78213e4eec374efd7"),
     (TemplateId::Kcc20P2, "b182879fe8d87659f9424dbdedc6540fba185129c3d7dd5e9caa1332f0ce4d11"),
     (TemplateId::Kcc20KaspaCom025, "911f0638ccb7368bf36d117f1725073ae7ee487ce8b58ca3e8375051c2d40f6c"),
+    // the actor-type handle of upstream's artifact (`actor_type_handle.template.hash` of `template/kcc20`); the Sil template
+    // hash of the same program is 9703112ee6e3555107cd168858992b77d3b74f655205b2b463b1f9ec2ec73cf7 (`Template::sil_hash`)
+    (TemplateId::Kcc20PublicMint, "734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498"),
     (TemplateId::KobAskKron, "f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d"),
     (TemplateId::KobBidKron, "6ec1a3dd4a287b73295a08db5f75fedcac4966539d793e9d1a659711ad888efc"),
     (TemplateId::KobCondAskKron, "6c4f92cee1613899b5d680e784b11fd567b1bfac63a5006018cc6c54cfd35839"),
@@ -396,6 +420,7 @@ fn embedded_json(id: TemplateId) -> &'static str {
         TemplateId::Kcc20Ref16x16 => include_str!("../../../contracts/artifacts/KCC20Ref_16x16.json"),
         TemplateId::Kcc20P2 => include_str!("../../../contracts/artifacts/KCC20P2.json"),
         TemplateId::Kcc20KaspaCom025 => include_str!("../../../contracts/third-party/kaspacom-kcc20/KCC20.placeholder.json"),
+        TemplateId::Kcc20PublicMint => include_str!("../../../contracts/artifacts/KCC20PublicMint.json"),
         TemplateId::KobAskKron => include_str!("../../../contracts/artifacts/KobAskKron.json"),
         TemplateId::KobBidKron => include_str!("../../../contracts/artifacts/KobBidKron.json"),
         TemplateId::KobCondAskKron => include_str!("../../../contracts/artifacts/KobCondAskKron.json"),
@@ -495,6 +520,10 @@ pub struct Template {
     pub state_len: usize,
     /// blake3 template hash (see the module docs).
     pub hash: [u8; 32],
+    /// Template hash of the compiler's state cut (`compiled.template_hash` of the artifact). Equal to [`Template::hash`]
+    /// except for a program whose state begins with compiler-owned context fields ([`TemplateId::context_fields`]):
+    /// KOB moves them into the prefix (the KCC-1 actor-type handle), and `hash` is the handle's.
+    pub sil_hash: [u8; 32],
 }
 
 impl Template {
@@ -553,20 +582,45 @@ pub fn template_from_artifact(id: TemplateId, artifact: SilAbiArtifact) -> Resul
     if offset + len > bytecode.len() {
         return Err(ArtifactError::Span { offset, len, size: bytecode.len() });
     }
-    let prefix = bytecode[..offset].to_vec();
+    let mut prefix = bytecode[..offset].to_vec();
     let suffix = bytecode[offset + len..].to_vec();
     let computed = silverscript_abi::template_hash(&prefix, &suffix);
     let recorded = contract.compiled.template_hash;
     if computed != recorded {
         return Err(ArtifactError::HashMismatch { name: id.name().into(), recorded: to_hex(&recorded), computed: to_hex(&computed) });
     }
+    let mut state_len = len;
+    let context = id.context_fields();
+    if !context.is_empty() {
+        // The actor-type handle (KCC-1 template view): the leading compiler-owned fields, each a `byte[32]` template
+        // commitment whose canonical value is the program's own Sil template hash, move into the prefix in their canonical
+        // encoding (`0x20 ‖ hash`); the rest of the state stays open.
+        let fields = &contract.runtime_state.fields;
+        let ctx_err = |m: String| ArtifactError::Constant(format!("{}: {m}", id.name()));
+        let mut at = offset;
+        for (k, want) in context.iter().enumerate() {
+            let f = fields.get(k).ok_or_else(|| ctx_err(format!("no runtime field {k}")))?;
+            if f.name != *want || !matches!(f.ty, silverscript_abi::TypeArtifact::FixedBytes { len: 32 }) {
+                return Err(ctx_err(format!("runtime field {k} is {} ({:?}), not the context field byte[32] {want}", f.name, f.ty)));
+            }
+            let enc = [&[0x20u8][..], &computed[..]].concat();
+            if bytecode.get(at..at + enc.len()) != Some(enc.as_slice()) {
+                return Err(ctx_err(format!("{want} of the compiled instance is not the canonical 0x20 ‖ {}", to_hex(&computed))));
+            }
+            prefix.extend_from_slice(&enc);
+            at += enc.len();
+        }
+        state_len = offset + len - at;
+    }
+    let hash = silverscript_abi::template_hash(&prefix, &suffix);
     Ok(Template {
         id,
         contract_name: contract_name.clone(),
         prefix,
         suffix,
-        state_len: len,
-        hash: computed,
+        state_len,
+        hash,
+        sil_hash: computed,
         artifact: artifact.clone(),
     })
 }
@@ -833,7 +887,7 @@ pub mod deployment {
     pub const MANIFEST: &str = include_str!("../../../contracts/deploy/mainnet/deployment.json");
     /// sha256 (lowercase hex, LF-normalised bytes) of the registry the record pins: the `registry.sha256` of [`MANIFEST`]
     /// and [`crate::registry::default_registry_sha256`] (checked by the tests).
-    pub const REGISTRY_SHA256: &str = "73b37e875025c2df46e5233e79de2c11b3d5a371efc907b7f0199a968b7f0553";
+    pub const REGISTRY_SHA256: &str = "a0b3e94cdf64767189ea2278c807e2731ba60528a196ec9b117efd9790bd135f";
 }
 
 /// Summary of one template for front ends and documentation.

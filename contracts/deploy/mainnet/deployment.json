@@ -112,7 +112,7 @@
   ],
   "registry": {
     "path": "registry/tokens.json",
-    "sha256": "73b37e875025c2df46e5233e79de2c11b3d5a371efc907b7f0199a968b7f0553",
+    "sha256": "a0b3e94cdf64767189ea2278c807e2731ba60528a196ec9b117efd9790bd135f",
     "schema_version": 1,
     "strict_templates": [
       {
@@ -127,7 +127,8 @@
     "pending_templates": [
       "kcc20-ref-3x3",
       "kcc20-ref-8x8",
-      "kcc20-kaspacom-0-2-5"
+      "kcc20-kaspacom-0-2-5",
+      "kcc20-ref-public-mint"
     ],
     "listed": [
       {

@@ -1,4 +1,5 @@
-//! `kob token issue`: fixed-supply KCC-20 issuance (8/8 slots, owner scheme 0x04 enabled, borrow disabled).
+//! `kob token issue`: fixed-supply KCC-20 issuance (reference program with 8/8 slots, or the published public-mint build
+//! with 3/3 slots; owner scheme 0x04 enabled, borrow disabled).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -6,8 +7,8 @@ use std::time::Duration;
 use kaspa_addresses::{Address, Version};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kob_protocol::issue::{
-    build_genesis, hex, hex_array, p2pk_script, FundingUtxo, GenesisPlan, Holder, IssueSpec, DEFAULT_CARRIER, DEFAULT_FEE_RATE,
-    EXTENSION_FIXED_SUPPLY,
+    build_genesis, hex, hex_array, p2pk_script, FundingUtxo, GenesisPlan, Holder, IssueProgram, IssueSpec, DEFAULT_CARRIER,
+    DEFAULT_FEE_RATE, EXTENSION_FIXED_SUPPLY,
 };
 use secp256k1::{Keypair, Secp256k1, SecretKey};
 use serde_json::Value;
@@ -16,7 +17,8 @@ use crate::wrpc;
 
 /// Usage text of `kob token issue`.
 pub const ISSUE_USAGE: &str = "\
-kob token issue: issue a fixed-supply KCC-20 token (reference program, 8 token inputs / 8 outputs per transfer)
+kob token issue: issue a fixed-supply KCC-20 token (reference program, 8 token inputs / 8 outputs per transfer, or
+the published public-mint build of the reference, 3 / 3)
 
 USAGE
   kob token issue --name <NAME> --ticker <TICKER> --decimals <N> --fund-utxo <TXID:INDEX:AMOUNT:OWNER>...
@@ -38,6 +40,10 @@ SUPPLY
                         whole supply goes to `self` (scheme 0).
   --extension-commitment 64-hex (default: 32 zero bytes)
   --allow-borrow        allow BORROW_SCHEME 1..3 on non-0x04 holders (default: borrow disabled everywhere)
+  --program             8x8 (default): the reference program with KOB's 8 / 8 slots (registry kcc20-ref-8x8);
+                        public-mint: the KCC20 actor of upstream's published KCC20PublicMint app, 3 / 3 slots (registry
+                        kcc20-ref-public-mint). Its holders carry the app's context field; the genesis holds only
+                        KCC20 holders (no PublicMint, no TokenSeed): a fixed supply.
 
 TRANSACTION
   --carrier             sompi on each token output (default 1000000000 = 10 KAS)
@@ -136,6 +142,8 @@ pub struct IssueArgs {
     pub dry_run: bool,
     /// Node URL.
     pub node: Option<String>,
+    /// The issued program.
+    pub program: IssueProgram,
 }
 
 const ADDRESS_PREFIXES: [&str; 4] = ["kaspa", "kaspatest", "kaspasim", "kaspadev"];
@@ -261,6 +269,7 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
         network: "testnet-10".into(),
         dry_run: false,
         node: None,
+        program: IssueProgram::default(),
     };
     let (mut have_name, mut have_ticker, mut have_decimals) = (false, false, false);
     let mut it = args.iter();
@@ -299,6 +308,7 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
             "--network" => a.network = val("--network")?,
             "--dry-run" => a.dry_run = true,
             "--node" => a.node = Some(val("--node")?),
+            "--program" => a.program = IssueProgram::parse(&val("--program")?).map_err(|e| e.to_string())?,
             other => return Err(format!("unknown argument `{other}` (see `kob token issue --help`)")),
         }
     }
@@ -363,6 +373,7 @@ pub fn to_spec(a: &IssueArgs) -> Result<IssueSpec, String> {
     spec.icon = a.icon.clone();
     spec.website = a.website.clone();
     spec.network = a.network.clone();
+    spec.program = a.program;
     Ok(spec)
 }
 
@@ -424,7 +435,8 @@ fn issue(args: &[String]) -> Result<(), String> {
     );
     println!("covenant id  {}", hex(plan.covenant_id.as_bytes().as_slice()));
     println!(
-        "template     {}  (prefix {} B, suffix {} B, {}/{} slots)",
+        "template     {} {}  (prefix {} B, suffix {} B, {}/{} slots)",
+        plan.program.registry_template_id,
         hex(&plan.program.template_hash),
         plan.program.prefix.len(),
         plan.program.suffix.len(),

@@ -11,6 +11,12 @@
     "updateFee": "1004200",
     "keeperTip": "2100000"
   },
+  "KCC20PublicMint": {
+    "refundFee": "1901800",
+    "refundTip": "3900000",
+    "updateFee": "1004200",
+    "keeperTip": "2100000"
+  },
   "KCC20Ref": {
     "refundFee": "1678600",
     "refundTip": "3400000",

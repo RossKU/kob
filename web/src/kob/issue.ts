@@ -31,6 +31,8 @@ export interface IssueLimits {
   covenantOwnerScheme: number;
   program: 'KCC20Ref_8x8';
   registryTemplateId: string;
+  /** the published public-mint build of the reference (request `program: 'public-mint'`): 3 / 3 slots */
+  publicMint: { program: 'KCC20PublicMint'; registryTemplateId: string; maxTokenInputs: number; maxTokenOutputs: number };
   extensionClass: string;
   extensionCommitment: Hex;
 }
@@ -64,6 +66,8 @@ export interface IssueSpec {
   icon?: string;
   website?: string;
   network?: string;
+  /** `8x8` (default, `KCC20Ref_8x8`) or `public-mint` (`KCC20PublicMint`, the published build of the reference) */
+  program?: '8x8' | 'public-mint';
 }
 
 export interface IssueTokenOutput {
@@ -77,7 +81,7 @@ export interface IssueTokenOutput {
 
 export interface IssueToken {
   covenantId: Hex;
-  program: 'KCC20Ref_8x8';
+  program: 'KCC20Ref_8x8' | 'KCC20PublicMint';
   templateHash: Hex;
   extensionCommitment: Hex;
   name: string;

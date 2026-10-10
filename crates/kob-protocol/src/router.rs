@@ -951,10 +951,13 @@ mod tests {
                 (IntentKind::TokenSwap, Family::Kron) => (Some(KronToken2732), Some(Kcc20Ref8x8)),
             };
             assert!(s.fits(pa, pb), "{}", a.name);
-            let three = |p: Option<TemplateId>| p.map(|_| Kcc20Ref);
-            let fits3 = s.fits(if s.a_family == Family::Kcc20 { three(pa) } else { pa }, three(pb));
-            // (a KRON token A keeps its program: only token B moves to the 3/3 program, and a KRON sell has no token B)
-            assert_eq!(fits3, !(s.a_family == Family::Kcc20 && s.bids == 3), "{} on the 3/3 program", a.name);
+            // the 3/3 programs: the reference and its published public-mint build
+            for p3 in [Kcc20Ref, Kcc20PublicMint] {
+                let three = |p: Option<TemplateId>| p.map(|_| p3);
+                let fits3 = s.fits(if s.a_family == Family::Kcc20 { three(pa) } else { pa }, three(pb));
+                // (a KRON token A keeps its program: only token B moves to the 3/3 program, and a KRON sell has no token B)
+                assert_eq!(fits3, !(s.a_family == Family::Kcc20 && s.bids == 3), "{} on {}", a.name, p3.name());
+            }
             if pa.is_some() {
                 assert!(!s.fits(Some(Kcc20KaspaCom025), pb), "{}", a.name);
             }
@@ -969,7 +972,7 @@ mod tests {
         }
         assert!(intent_program(Kcc20KaspaCom025).is_err());
         assert!(intent_program(KobAsk).is_err());
-        for p in [Kcc20Ref, Kcc20Ref4x5, Kcc20Ref8x8, Kcc20Ref16x16, Kcc20P2, KronToken2433, KronToken2732] {
+        for p in [Kcc20Ref, Kcc20Ref4x5, Kcc20Ref8x8, Kcc20Ref16x16, Kcc20P2, Kcc20PublicMint, KronToken2433, KronToken2732] {
             intent_program(p).unwrap();
         }
     }

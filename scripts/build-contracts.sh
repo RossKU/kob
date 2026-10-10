@@ -2,7 +2,9 @@
 # Reproducible contract build.
 #
 # Compiles every contracts/**/*.sil except contracts/argent, contracts/deploy and contracts/third-party (constructor arguments
-# from the sibling <Name>.ctor.json) with silverc and either writes or verifies contracts/artifacts/<Name>.json.
+# from the sibling <Name>.ctor.json) with silverc and either writes or verifies contracts/artifacts/<Name>.json. The
+# third-party programs KOB embeds unmodified are listed in THIRD_PARTY below with their artifact name (constructor
+# arguments from the sibling <source>.ctor.json, written by KOB).
 #
 #   scripts/build-contracts.sh            write artifacts, contracts/argent and contracts/SHA256SUMS
 #   scripts/build-contracts.sh --check    fail (exit 1) if any of them differs, or if contracts/artifacts holds
@@ -46,8 +48,13 @@ names=()
 srcs=()
 # index of a source name in names (bash 3 has no associative arrays), empty if none
 name_index() { local i; for i in "${!names[@]}"; do [ "${names[$i]}" = "$1" ] && { echo "$i"; return 0; }; done; return 0; }
-while IFS= read -r src; do
+# Third-party sources compiled as they are vendored (source|artifact name): the KCC20 actor of upstream's KCC20PublicMint
+# app (contracts/third-party/kcc20-reference/UPSTREAM.md).
+THIRD_PARTY=("contracts/third-party/kcc20-reference/KCC20.public-mint.sil|KCC20PublicMint")
+while IFS= read -r line; do
+  src=${line%%|*}
   name=$(basename "$src" .sil)
+  [ "$line" = "$src" ] || name=${line#*|}
   # contracts/artifacts is flat: two sources with one basename would write the same artifact.
   i=$(name_index "$name")
   [ -z "$i" ] || { echo "duplicate source name $name: ${srcs[$i]} and $src" >&2; exit 2; }
@@ -67,7 +74,7 @@ while IFS= read -r src; do
     cp "$OUT/$name.json" "contracts/artifacts/$name.json"
     echo "wrote   contracts/artifacts/$name.json"
   fi
-done < <(find contracts -name '*.sil' -not -path 'contracts/argent/*' -not -path 'contracts/deploy/*' -not -path 'contracts/third-party/*' | LC_ALL=C sort)
+done < <(find contracts -name '*.sil' -not -path 'contracts/argent/*' -not -path 'contracts/deploy/*' -not -path 'contracts/third-party/*' | LC_ALL=C sort; printf '%s\n' "${THIRD_PARTY[@]}")
 
 # contracts/artifacts holds exactly the artifacts of the sources above: any other file there (one no
 # source produces, left over from a removed or renamed source, or added by hand) is refused.

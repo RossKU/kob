@@ -13,7 +13,7 @@ import { TEST_PUBKEYS } from './keys.mjs';
 import { bidEscrow } from './model.mjs';
 import { HEX64, badRequest, syntheticId } from './util.mjs';
 
-const PROGRAM_OF_TEMPLATE = { 'kcc20-ref-3x3': 'KCC20Ref', 'kcc20-ref-8x8': 'KCC20Ref_8x8', 'kcc20-kaspacom-0-2-5': 'KCC20KaspaCom_0_2_5' };
+const PROGRAM_OF_TEMPLATE = { 'kcc20-ref-3x3': 'KCC20Ref', 'kcc20-ref-8x8': 'KCC20Ref_8x8', 'kcc20-kaspacom-0-2-5': 'KCC20KaspaCom_0_2_5', 'kcc20-ref-public-mint': 'KCC20PublicMint' };
 const registryPath = new URL('../../registry/tokens.example.json', import.meta.url);
 
 /** The default token: the first KCC-20 entry of the example registry (ticker EXKCC, 8 decimals: scale 10^8 base units per whole token). */

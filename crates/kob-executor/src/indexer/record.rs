@@ -101,6 +101,7 @@ pub fn program_code(t: TemplateId) -> Option<u8> {
         TemplateId::KronToken2433 => 6,
         TemplateId::KronToken2732 => 7,
         TemplateId::Kcc20KaspaCom025 => 8,
+        TemplateId::Kcc20PublicMint => 9,
         _ => return None,
     })
 }
@@ -115,6 +116,7 @@ pub fn program_from_code(c: u8) -> Option<TemplateId> {
         6 => TemplateId::KronToken2433,
         7 => TemplateId::KronToken2732,
         8 => TemplateId::Kcc20KaspaCom025,
+        9 => TemplateId::Kcc20PublicMint,
         _ => return None,
     })
 }
