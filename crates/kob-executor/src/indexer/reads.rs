@@ -150,7 +150,7 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
         let rows = st.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, i64>(2)?)))?;
         let mut seen: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
         for r in rows {
-            let (cov, tpl, fam) = r?;
+            let (cov, tpl, _fam) = r?;
             let (Ok(cov32), Ok(tpl32)) = (<[u8; 32]>::try_from(cov.as_slice()), <[u8; 32]>::try_from(tpl.as_slice())) else {
                 continue;
             };
@@ -158,13 +158,20 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
             if tokens.get(&cid).is_some() || !seen.insert(cov.clone()) {
                 continue;
             }
-            let strict = tokens.strict_template(&crate::hex::Hash32(tpl32));
+            // a token whose program is not on the strict list is not listed, whatever listed orders it still has in the history (a retired
+            // program: its orders were listed under an earlier registry), and neither is a delisted token
+            let Some(strict) = tokens.strict_template(&crate::hex::Hash32(tpl32)) else {
+                continue;
+            };
+            if tokens.is_delisted(&cid) {
+                continue;
+            }
             out.push(TokenView {
                 ticker: String::new(),
                 covenant_id: cid.to_hex(),
                 template_hash: Some(hex::encode(&tpl32)),
                 extension_commitment: None,
-                family: strict.map(|t| t.family.as_str()).or(if fam == 2 { Some("kron") } else { Some("kcc20") }),
+                family: Some(strict.family.as_str()),
                 decimals: None,
                 scale: None,
                 standing: "unverified",
@@ -172,8 +179,8 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 registry: tokens.info().cloned(),
                 genesis_verified: None,
                 warnings: tokens.warnings_for(&cid),
-                powers: strict.map(|t| t.powers.clone()).unwrap_or_default(),
-                template_id: strict.map(|t| t.id.clone()),
+                powers: strict.powers.clone(),
+                template_id: Some(strict.id.clone()),
                 open_asks: counts.get(&(cov.clone(), 1)).copied().unwrap_or(0),
                 open_bids: counts.get(&(cov, 2)).copied().unwrap_or(0),
             });

@@ -211,7 +211,7 @@ export function unknownRow(
 
 /**
  * Registry tokens first (registry order), then indexer-only tokens (those with open orders first, then by ticker). Duplicates by covenant id are
- * merged. `held`: covenant ids of the tokens the connected wallet holds (its local token tracker), compared with every unregistered token for a
+ * merged; an indexer-only token with `template_id: null` (a program off the strict list) is left out. `held`: covenant ids of the tokens the connected wallet holds (its local token tracker), compared with every unregistered token for a
  * shared short id besides the registry and the indexer's list.
  */
 export function buildTokenRows(
@@ -224,6 +224,9 @@ export function buildTokenRows(
   const unregistered = [...(indexerTokens ?? []), ...pasted].filter((v) => !reg.byCovenantId.has(v.covenant_id));
   for (const v of indexerTokens ?? []) {
     if (seen.has(v.covenant_id)) continue;
+    // an indexer that says the token's program is on no strict list (`template_id: null`, no ticker: a retired program kept in its history)
+    // has nothing to trade or show; an older executor that sends no `template_id` at all is unaffected
+    if (v.template_id === null) continue;
     seen.add(v.covenant_id);
     extra.push(unknownRow(reg, v, 'indexer', unregistered, held));
   }

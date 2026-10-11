@@ -180,6 +180,18 @@ describe('templateDetail', () => {
   });
 });
 
+describe('indexer-only tokens of a program off the strict list', () => {
+  it('are not listed (template_id null); a token with no template_id field is still shown', () => {
+    const reg = registry('reviewed', [tokJson('GOOD', ID('a'))]);
+    const rows = buildTokenRows(reg, [
+      view('', ID('1'), 0, 0, { template_id: null, decimals: null, scale: null }),
+      view('OLD', ID('2'), 0, 0, { template_id: undefined }),
+      view('', ID('3'), 2, 1, { template_id: 'kcc20-ref-8x8' }),
+    ]);
+    expect(rows.map((r) => r.covenantId)).toEqual([ID('a'), ID('3'), ID('2')]);
+  });
+});
+
 describe('registry standing, powers and empty tickers (GET /v1/tokens)', () => {
   const reg = registry('reviewed', [tokJson('GOOD', ID('a'))]);
 

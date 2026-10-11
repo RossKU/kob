@@ -137,17 +137,24 @@ async fn the_open_token_list_lists_a_token_of_a_strict_program_without_an_entry(
             let tokens = TokenAllowlist::from_entries([]).with_strict_templates([strict(TemplateId::Kcc20Ref, &["freeze"])]);
             reads::token_list(g.conn(), &tokens).unwrap()
         };
-        (v, rows)
+        let stale = {
+            let g = c.hs.ingest.lock().unwrap();
+            let tokens = TokenAllowlist::from_entries([]).with_strict_templates([strict(TemplateId::KronToken2433, &[])]);
+            reads::token_list(g.conn(), &tokens).unwrap()
+        };
+        (v, rows, stale)
     };
     // the fixtures' token program is the reference 3/3: on the strict list -> listed, unverified, powers from the template
-    let (v, rows) = run(vec![strict(TemplateId::Kcc20Ref, &["freeze"])]).await;
+    let (v, rows, stale) = run(vec![strict(TemplateId::Kcc20Ref, &["freeze"])]).await;
     assert!(v.listed, "{:?}", v.unlisted_reason);
     assert_eq!(rows.len(), 1);
     assert_eq!((rows[0].standing, rows[0].ticker.as_str(), rows[0].family), ("unverified", "", Some("kcc20")));
     assert_eq!(rows[0].powers, vec!["freeze".to_string()]);
     assert_eq!((rows[0].open_asks, rows[0].template_id.as_deref()), (1, Some("KCC20Ref")));
+    // the order stays listed in the history, but under a strict list that no longer has its program the token is not in the list
+    assert!(stale.is_empty(), "{stale:?}");
     // another program on the list, the order's program is not: refused with the reason
-    let (v, _) = run(vec![strict(TemplateId::KronToken2433, &[])]).await;
+    let (v, _, _) = run(vec![strict(TemplateId::KronToken2433, &[])]).await;
     assert!(!v.listed);
     assert_eq!(v.unlisted_reason.as_deref(), Some("token_template_not_strict"));
 }
