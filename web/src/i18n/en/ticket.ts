@@ -403,7 +403,7 @@ export default {
   'ticket.note.dayOrder': 'Day order: ends by 00:00 UTC (09:00 JST); the refund follows shortly after.',
   'ticket.note.gtd': 'Refundable from the date you chose.',
   'ticket.note.auction': 'Fills as a short auction from the market toward your worst price.',
-  'ticket.note.marketable': 'Crosses the market: auctions from the best price to your limit, then rests.',
+  'ticket.note.marketable': 'Crosses the market: fills immediately as a taker (an auction from the best price to your limit), any rest stays at your limit.',
   'ticket.note.fokAllOrNothing': 'FOK: fills in full in one transaction or not at all.',
   'ticket.note.iocRemainderReturned': 'IOC: the unfilled rest returns in the same transaction.',
   'ticket.note.market': 'Market: fills near the best price, never beyond your worst price; the rest is returned.',

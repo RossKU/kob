@@ -45,8 +45,8 @@ export const ISSUE_CATALOG = {
   // ---- market and book
   NO_LIQUIDITY: e('error', 'There is no {counterparty} in the book to price a market order against.'),
   MARKET_DEPTH_INSUFFICIENT: e('warning', 'The visible book within your slippage bound holds only {available} of your {amount} base units; the rest is returned unfilled.'),
-  MARKETABLE_AUCTION: e('info', 'Your limit crosses the market: it is placed as an auction from the best price ({touch:kas}) down to your limit.'),
-  MARKETABLE_LIMIT_FILLS_AT_LIMIT: e('warning', 'Your limit crosses the market and fills at your limit price; a matcher keeps the difference to the better price ({touch:kas}).'),
+  MARKETABLE_AUCTION: e('info', 'Your limit crosses the market: it fills immediately as a taker, placed as an auction from the best price ({touch:kas}) to your limit; any rest stays at your limit.'),
+  MARKETABLE_LIMIT_FILLS_AT_LIMIT: e('warning', 'Your limit crosses the market: it fills immediately as a taker at your limit price; a matcher keeps the difference to the better price ({touch:kas}).'),
   MARKETABLE_REJECTED: e('error', 'Your limit crosses the market at {touch:kas}.'),
   PRICE_AGGRESSIVE_VS_MARKET: e('warning', 'Your price is {percent}% through the market ({reference:kas}): check for a typing error.'),
   PRICE_FAR_FROM_MARKET: e('warning', 'Your price is {percent}% away from the market ({reference:kas}): it is unlikely to fill soon.'),

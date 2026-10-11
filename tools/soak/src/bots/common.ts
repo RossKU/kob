@@ -10,6 +10,7 @@ import { errText } from '../log';
 import { cancelEnv, pairPlanEnv, planEnv, tokenMarket, withStartReferences, type Which } from '../market';
 import type { BotWallet, SubmitOutcome } from '../wallet';
 import { selfTradeIds } from './pending';
+import { takerIntent } from './taker';
 
 export interface PlaceResult extends SubmitOutcome {
   /** covenant ids of the orders the transaction creates */
@@ -31,13 +32,22 @@ function refusal(w: BotWallet, plan: Parameters<typeof errors>[0], tag: string, 
   return { ok: false, planIssue: code, planParams: errs[0]?.params as Record<string, unknown> | undefined, error: errs[0]?.message, ...(own.length ? { selfTrade: own } : {}) };
 }
 
-/** Plans `intent` against the live book / wallet and submits it; plan refusals are counted per code (never thrown). */
-export function place(env: Env, w: BotWallet, intent: Intent, tag: string, o: { book?: BookView; mine?: OrderView[] } = {}, which?: Which): Promise<PlaceResult> {
+/**
+ * Plans `intent` against the live book / wallet and submits it; plan refusals are counted per code (never thrown). `o.taker`: a limit that is
+ * marketable against the planner's own book is placed as an IOC at the same price instead of a resting / auctioning limit (taker.ts).
+ */
+export function place(env: Env, w: BotWallet, intent: Intent, tag: string, o: { book?: BookView; mine?: OrderView[]; taker?: boolean } = {}, which?: Which): Promise<PlaceResult> {
   return w.exclusive(async (): Promise<PlaceResult> => {
     w.stats.inc(`try:${tag}`);
     let plan;
     try {
-      plan = planOrder(await withStartReferences(env, await planEnv(env, w, o, which), intent.type), intent);
+      const penv = await planEnv(env, w, o, which);
+      if (o.taker) {
+        const t = takerIntent(intent, penv.book);
+        if (t.taker) w.stats.inc(`taker:${tag}`);
+        intent = t.intent;
+      }
+      plan = planOrder(await withStartReferences(env, penv, intent.type), intent);
     } catch (e) {
       w.stats.inc(`plan_throw:${tag}`);
       w.log.warn('planner threw', { tag, error: errText(e) });
@@ -60,12 +70,18 @@ export function marketOfView(env: Env, view: OrderView) {
  * Plans a PAIR order through the web planner (`planOrder` with a PairPlanEnv: every order type of the KAS ticket on the pair `base`/`quote`,
  * prices B base units per whole A) and submits it. Refusals are counted like `place`.
  */
-export function placePair(env: Env, w: BotWallet, intent: Intent, tag: string, base: TokenMarket, quote: TokenMarket): Promise<PlaceResult & { pair?: PairOrderPlan['pair'] }> {
+export function placePair(env: Env, w: BotWallet, intent: Intent, tag: string, base: TokenMarket, quote: TokenMarket, o: { taker?: boolean } = {}): Promise<PlaceResult & { pair?: PairOrderPlan['pair'] }> {
   return w.exclusive(async (): Promise<PlaceResult & { pair?: PairOrderPlan['pair'] }> => {
     w.stats.inc(`try:${tag}`);
     let plan: PairOrderPlan;
     try {
-      plan = planOrder(await withStartReferences(env, await pairPlanEnv(env, w, base, quote), intent.type), intent) as PairOrderPlan;
+      const penv = await pairPlanEnv(env, w, base, quote);
+      if (o.taker) {
+        const t = takerIntent(intent, penv.book, true);
+        if (t.taker) w.stats.inc(`taker:${tag}`);
+        intent = t.intent;
+      }
+      plan = planOrder(await withStartReferences(env, penv, intent.type), intent) as PairOrderPlan;
     } catch (e) {
       w.stats.inc(`plan_throw:${tag}`);
       w.log.warn('pair planner threw', { tag, error: errText(e) });

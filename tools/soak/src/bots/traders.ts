@@ -179,7 +179,8 @@ export class Trader {
     const mine: OrderView[] = this.w.actionable(await myOrders(env, this.w.pk, m).catch(() => [] as OrderView[]));
     const t = touch(book);
     const clock = await readClock(env);
-    const o = { book, mine };
+    // taker: a limit that is marketable when planned is placed as an IOC at its own price (a taker with that slippage bound), never as a resting or auctioning limit
+    const o = { book, mine, taker: true };
     const s = side();
     const amount = this.size();
     let intent: Intent | null = null;
@@ -193,7 +194,7 @@ export class Trader {
         intent = { type: 'limit', side: s, amount, price: at(s === 'buy' ? -frac(5, 60) : frac(5, 60)), ...(s === 'buy' ? { maxFills: 3n } : {}) };
         break;
       case 'limitCross': {
-        // aggressive limit through the touch: the default crossing policy turns it into an auction from the touch to the limit
+        // aggressive limit through the touch: placed as an IOC taker at that price (the slippage bound), see common.ts `taker`
         const lim = s === 'buy' ? (t.ask ?? R) + bps(t.ask ?? R, 30) : (t.bid ?? R) - bps(t.bid ?? R, 30);
         intent = { type: 'limit', side: s, amount: this.size(3), price: onTick(lim, tick) };
         break;
@@ -333,7 +334,7 @@ export class Trader {
     const res = await place(env, this.w, placed, action, o, m);
     // a real user pulls their own resting orders the order would trade against first (matcher.md 10.12: self-trade prevention is the
     // wallet's job): exactly the orders the refusal names are cancelled together, then the same intent is planned again
-    await this.clearSelfTrade(res, () => place(env, this.w, placed, action, {}, m), (views) => cancelAll(env, this.w, views, 'selfTradeCancel'));
+    await this.clearSelfTrade(res, () => place(env, this.w, placed, action, { taker: true }, m), (views) => cancelAll(env, this.w, views, 'selfTradeCancel'));
   }
 
   /**
@@ -505,7 +506,7 @@ export class Trader {
       for (const v of views) if ((await cancel(env, this.w, v, 'selfTradeCancel')).ok) n++;
       return n;
     };
-    const res = await this.clearSelfTrade(await placePair(env, this.w, placed, tag, baseM, quoteM), () => placePair(env, this.w, placed, tag, baseM, quoteM), cancelEach);
+    const res = await this.clearSelfTrade(await placePair(env, this.w, placed, tag, baseM, quoteM, { taker: true }), () => placePair(env, this.w, placed, tag, baseM, quoteM, { taker: true }), cancelEach);
     if (res.ok) this.log.info('pair order placed', { tag, kind: res.pair?.kind, amount: (intent as { amount?: bigint }).amount, reference: R, fair, txid: res.txid });
   }
 }

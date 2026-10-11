@@ -15,8 +15,8 @@ const e = (severity: IssueSeverity, message: string): CatalogEntry => ({ severit
 export const PAIR_ISSUE_CATALOG = {
   PAIR_SAME_TOKEN: e('error', 'A pair needs two different tokens.'),
   PAIR_NOTIONAL_TOO_LARGE: e('error', 'The order value at this price is too large for the protocol (it must stay below 2^62 base units of {ticker}).'),
-  PAIR_MARKETABLE_AUCTION: e('info', 'Your limit crosses the pair book: it is placed as an auction from the best price ({touch} {ticker} per token) to your limit.'),
-  PAIR_MARKETABLE_LIMIT_FILLS_AT_LIMIT: e('warning', 'Your limit crosses the pair book and fills at your limit price; a filler keeps the difference to the better price ({touch} {ticker} per token).'),
+  PAIR_MARKETABLE_AUCTION: e('info', 'Your limit crosses the pair book: it fills immediately as a taker, placed as an auction from the best price ({touch} {ticker} per token) to your limit; any rest stays at your limit.'),
+  PAIR_MARKETABLE_LIMIT_FILLS_AT_LIMIT: e('warning', 'Your limit crosses the pair book: it fills immediately as a taker at your limit price; a filler keeps the difference to the better price ({touch} {ticker} per token).'),
   PAIR_MARKETABLE_REJECTED: e('error', 'Your limit crosses the pair book at {touch} {ticker} per token.'),
   PAIR_PRICE_AGGRESSIVE_VS_MARKET: e('warning', 'Your price is {percent}% through the pair market ({reference} {ticker} per token): check for a typing error.'),
   PAIR_PRICE_FAR_FROM_MARKET: e('warning', 'Your price is {percent}% away from the pair market ({reference} {ticker} per token): it is unlikely to fill soon.'),
