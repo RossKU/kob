@@ -2,11 +2,10 @@ import { useServices } from '../../app/context';
 import { t } from '../../i18n';
 import { version as appVersion } from '../../../package.json';
 import { indexerTrust } from '../../data/indexer-crosscheck';
-import { registryLine } from './RegistryNote';
 
 /** Non-custodial statement, versions, links. */
 export function Footer() {
-  const { kob, registryIdentity: reg, indexer, verifiers } = useServices();
+  const { kob, indexer, verifiers } = useServices();
   const trust = indexerTrust(!!indexer, verifiers?.length ?? 0);
   let kobVersion = '?';
   try {
@@ -20,13 +19,7 @@ export function Footer() {
         <div class="grow">
           <p data-testid="footer-statement">{t('shell.footer.statement')}</p>
           <p class="small" data-testid="footer-versions">{t('shell.footer.versions', { app: appVersion, kob: kobVersion })}</p>
-          {reg ? (
-            <p class="small wrap-anywhere" data-testid="footer-registry" data-default={reg.isDefault ? 'true' : 'false'}>
-              <a href="#/settings">{registryLine(reg)}</a>
-              {' - '}
-              <span data-testid="footer-indexer-trust" data-trust={trust}>{t(`shell.indexers.badge.${trust}`)}</span>
-            </p>
-          ) : null}
+          <p class="small" data-testid="footer-indexer-trust" data-trust={trust}><a href="#/settings">{t(`shell.indexers.badge.${trust}`)}</a></p>
         </div>
         <nav class="stack-sm small" aria-label={t('shell.footer.protocol')}>
           <span>{t('shell.footer.protocol')}</span>

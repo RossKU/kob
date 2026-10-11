@@ -22,7 +22,7 @@ import { readPairReferences, readReferences, type References } from '../../data/
 import type { MarketStartAck, PlanEnv } from '../../kob/plan-types';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
 import { nativeToInvertedPriceText, oppositeSide, pairLabel } from '../market/orientation';
-import { needsOpenCaution, OpenTokenCaution, PowersWarning } from '../market/TokenBadges';
+import { OpenTokenNote, PowersWarning, SharedTickerNote } from '../market/TokenBadges';
 import { DisclosurePanel } from './DisclosurePanel';
 import { useCovenantSignGate } from './CovenantSignGate';
 import { TicketFields } from './TicketFields';
@@ -34,7 +34,6 @@ import {
 } from './form-state';
 import { expectedFromPlan, newWarnings } from './plan-expected';
 import { expandLadder, ladderOfForm, ladderTotals } from './ladder';
-import { RegistryNote } from '../shell/RegistryNote';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan } from './use-ticket';
 import { rememberPairForm, takePairFlip } from './pair-flip';
 import './ticket.css';
@@ -53,6 +52,8 @@ export interface OrderTicketProps {
   prefill?: { side?: 'buy' | 'sell'; price?: bigint; amount?: bigint; type?: OrderTypeId };
   /** template capabilities of the token program (indexer `powers`): freeze / seize put escrowed orders at the issuer's discretion */
   powers?: readonly string[];
+  /** another listed token uses this token's ticker (or the pair's base / quote): a short note names the covenant id as the identity */
+  sharedTicker?: boolean;
   /**
    * the market is shown inverted (KAS/TOKEN): the ticket speaks the shown pair, whose base is KAS. The side buttons name the side of KAS (Buy = buy
    * KAS = sell the token), prices are tokens per KAS and amounts are KAS, converted at the order's price (form-state.ts, KAS amounts). The order
@@ -514,8 +515,8 @@ export function OrderTicket(props: OrderTicketProps) {
         ) : null}
       </div>
 
-      <RegistryNote data-testid="ticket-registry-note" />
-      <OpenTokenCaution token={token} data-testid="ticket-open-caution" />
+      <SharedTickerNote shared={!!props.sharedTicker} block data-testid="ticket-shared-ticker" />
+      <OpenTokenNote token={token} data-testid="ticket-open-caution" />
       <PowersWarning powers={props.powers} data-testid="ticket-powers-warning" />
 
       {ladder ? (
@@ -593,7 +594,6 @@ export function OrderTicket(props: OrderTicketProps) {
           freshWarnings={confirm.freshWarnings}
           tokenPowers={props.powers}
           openToken={token.openList ? token : undefined}
-          cautionToken={!token.openList && needsOpenCaution(token) ? token : undefined}
           onSubmitted={() => void refresh()}
           onClose={onConfirmClose}
         />

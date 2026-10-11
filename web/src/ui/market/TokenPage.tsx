@@ -26,8 +26,7 @@ import { displayedPair, marketFor, type DisplayedPair } from './market-select';
 import { PriceChart } from './PriceChart';
 import { TokenDetails, TokenHeader } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
-import { buildTokenRows, tradableRows } from './token-model';
-import { useHeldTokenIds } from './use-held-tokens';
+import { buildTokenRows, sharedTickerIds, tradableRows } from './token-model';
 import { TradeTape } from './TradesPanel';
 import { tradeRows } from './trades-model';
 import { WalletTokenBalances } from './WalletTokenBalances';
@@ -58,13 +57,14 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const [groupIdxInv, setGroupIdxInv] = useState(0);
 
   const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
-  const held = useHeldTokenIds();
-  const allRows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, [], held), [registry, tokens.data, held]);
+  const allRows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, []), [registry, tokens.data]);
   const baseRow = useMemo(() => allRows.find((r) => r.covenantId === id) ?? null, [allRows, id]);
   // the pair selector offers only tokens this build can trade
   const choiceRows = useMemo(() => tradableRows(allRows, kob.templates()), [allRows, kob]);
-  // an open-list token (program on the strict list, no registry entry) is tradable with a TokenInfo synthesised from its orders: unverified, its
-  // decimals taken from the scale its orders share
+  // another listed token uses this ticker: a short note at the title and the ticket
+  const sharedTicker = useMemo(() => sharedTickerIds(choiceRows).has(id), [choiceRows, id]);
+  // an open-list token (program on the strict list, no registry entry) is tradable with a TokenInfo synthesised from its orders: its decimals taken
+  // from the scale its orders share
   const open = useOpenToken(baseRow, liveKey);
   const row = useMemo(
     () =>
@@ -245,6 +245,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       header={
         <TokenHeader
           row={row}
+          sharedTicker={sharedTicker}
           badges={liveBadge}
           pair={
             <>
@@ -304,7 +305,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           {info && row.tradable ? (
             <div data-testid="ticket-container">
               {wallet.networkMismatch ? <Banner tone="error" data-testid="ticket-network-blocked">{t('market.ticket.networkBlocked')}</Banner> : null}
-              <OrderTicket token={info} prefill={prefill} powers={row.powers} inverted={inverted} />
+              <OrderTicket token={info} prefill={prefill} powers={row.powers} inverted={inverted} sharedTicker={sharedTicker} />
             </div>
           ) : (
             <Section title={t('market.ticket.title')} data-testid="ticket-unavailable" class="mkt-card">

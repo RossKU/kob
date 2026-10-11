@@ -26,7 +26,6 @@
 .issue-h3 { margin: 16px 0 8px; }
 
 .issue-holder-list { margin: 0; padding-left: 18px; }
-.issue-status-badges { margin: 8px 0 12px; }
 
 .issue-json {
   margin: 0 0 12px; padding: 10px 12px; max-height: 360px; overflow: auto; white-space: pre; tab-size: 2;

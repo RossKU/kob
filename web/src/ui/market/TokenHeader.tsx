@@ -1,60 +1,10 @@
 import type { ComponentChildren } from 'preact';
 import type { Services } from '../../app/services';
 import { t } from '../../i18n';
-import { displayName, longId } from '../../kob/registry';
-import { Amount, Badge, Banner, CopyText, KeyValueList, Section } from '../kit';
-import { RegistryNote } from '../shell/RegistryNote';
-import { PowersWarning, StatusBadges, powerName, tokenTitle } from './TokenBadges';
+import { longId } from '../../kob/registry';
+import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
+import { PowersWarning, SharedTickerNote, StatusBadges, powerName, tokenTitle } from './TokenBadges';
 import { shortCovenantId, templateDetail, type TokenRow } from './token-model';
-
-/**
- * Warning shown for tokens that are not in the registry: a strong one when the ticker copies a registered token's, a ticker-collision banner when the
- * only namesakes are registry entries marked not official with a warning (`shared`).
- */
-export function LookalikeWarning(props: { row: TokenRow }) {
-  const l = props.row.lookalike;
-  if (!l) return null;
-  if (l.level === 'strong') {
-    const real = l.lookalikes.map((x) => displayName(x.token)).join(', ');
-    return (
-      <div class="lookalike-warning" role="alert" data-testid="lookalike-strong">
-        <strong>{t('market.lookalike.strongTitle')}</strong>
-        <div>{t('market.lookalike.strong', { ticker: props.row.ticker, id: longId(props.row.covenantId), real })}</div>
-      </div>
-    );
-  }
-  if (l.level === 'shared') {
-    const real = l.lookalikes.map((x) => displayName(x.token)).join(', ');
-    return (
-      <div class="banner banner-warn" role="status" data-testid="lookalike-shared">
-        <div class="banner-body">
-          <div class="banner-title">{t('market.lookalike.sharedTitle')}</div>
-          <div>{t('market.lookalike.shared', { ticker: props.row.ticker, id: longId(props.row.covenantId), real })}</div>
-        </div>
-      </div>
-    );
-  }
-  if (l.level === 'collision') {
-    const others = l.collisions.map((c) => longId(c.covenantId)).join(', ');
-    return (
-      <div class="banner banner-warn" role="status" data-testid="lookalike-collision">
-        <div class="banner-body">
-          <div class="banner-title">{t('market.lookalike.collisionTitle')}</div>
-          <div>{t('market.lookalike.collision', { id: longId(props.row.covenantId), others })}</div>
-          <div class="small wrap-anywhere"><code>{props.row.covenantId}</code></div>
-        </div>
-      </div>
-    );
-  }
-  if (l.level === 'unknown' && props.row.standing !== 'official') {
-    return (
-      <div class="banner banner-warn" role="status" data-testid="lookalike-unknown">
-        <div class="banner-body">{t('market.lookalike.unknown')}</div>
-      </div>
-    );
-  }
-  return null;
-}
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
 export function IndexerProblems(props: { codes: string[] }) {
@@ -103,18 +53,13 @@ function TemplateVerification(props: { row: TokenRow; services: Pick<Services, '
   );
 }
 
-/** Impersonation / indexer warnings and why a token cannot be traded: shown under the title of a token market and in the facts of each token of a pair. */
-export function TokenWarnings(props: { row: TokenRow }) {
+/** The shared-ticker note, indexer warnings and why a token cannot be traded: shown under the title of a token market and in the facts of each token of a pair. */
+export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) {
   const r = props.row;
   return (
     <>
-      <LookalikeWarning row={r} />
+      <SharedTickerNote shared={!!props.sharedTicker} block data-testid="token-shared-ticker" />
       <IndexerProblems codes={r.indexerProblems} />
-      {r.info?.warning ? (
-        <Banner tone="warn" title={t('market.warning.title')} data-testid="token-registry-warning">
-          {r.info.warning}
-        </Banner>
-      ) : null}
       <PowersWarning powers={r.powers} />
       {!r.tradable && r.reason ? (
         <p class="small" style="margin:0" data-testid="token-untradable">
@@ -125,9 +70,11 @@ export function TokenWarnings(props: { row: TokenRow }) {
   );
 }
 
-/** Token title bar (top of the page): labelled name, badges, name, impersonation / indexer warnings, why it cannot be traded. */
+/** Token title bar (top of the page): labelled name, badges, name, the shared-ticker note, indexer warnings, why it cannot be traded. */
 export function TokenHeader(props: {
   row: TokenRow;
+  /** another listed token uses this ticker */
+  sharedTicker?: boolean;
   badges?: ComponentChildren;
   tools?: ComponentChildren;
   /** the pair selector (`BTC / KAS`, `KAS / TUSD`; MarketBar.tsx) */
@@ -149,8 +96,7 @@ export function TokenHeader(props: {
         </div>
         {props.tools}
       </div>
-      <RegistryNote data-testid="token-registry-note" />
-      <TokenWarnings row={r} />
+      <TokenWarnings row={r} sharedTicker={props.sharedTicker} />
     </div>
   );
 }
@@ -187,13 +133,12 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
 }
 
 /**
- * The facts of both tokens of a pair (bottom of the pair page, the same panel as a token market's): per token its title with the verification badges
+ * The facts of both tokens of a pair (bottom of the pair page, the same panel as a token market's): per token its title with the badges
  * and warnings, then the covenant id, decimals, price scale, tick, open orders and the template verification.
  */
-export function PairDetails(props: { rows: readonly TokenRow[]; services: Pick<Services, 'registry' | 'kob'> }) {
+export function PairDetails(props: { rows: readonly TokenRow[]; shared?: ReadonlySet<string>; services: Pick<Services, 'registry' | 'kob'> }) {
   return (
     <div class="stack" data-testid="pair-details">
-      <RegistryNote data-testid="pair-registry-note" />
       {props.rows.map((r) => (
         <div class="stack-sm" key={r.covenantId} data-testid="pair-token-details" data-token={r.covenantId}>
           <div class="mkt-title">
@@ -201,7 +146,7 @@ export function PairDetails(props: { rows: readonly TokenRow[]; services: Pick<S
             <StatusBadges row={r} />
             {r.name ? <span class="mkt-name">{r.name}</span> : null}
           </div>
-          <TokenWarnings row={r} />
+          <TokenWarnings row={r} sharedTicker={props.shared?.has(r.covenantId) ?? false} />
           <TokenDetails row={r} services={props.services} />
         </div>
       ))}

@@ -1,7 +1,7 @@
 // Open-list tokens: every token whose program is on KOB's strict template list is listed by the executor, whether or not the registry has an
 // entry for it (`GET /v1/tokens`: `standing: unverified`, `ticker: ""`, no scale, no decimals). To trade one from the web app a TokenInfo is
 // synthesised from what the chain and the indexer show, with the conservative conventions below. Nothing here vouches for the token: the
-// caller shows the `unverified` badge, the short covenant id and a caution line next to every order, and the pre-sign screen re-derives the rest.
+// caller shows the long covenant id and a note on base units next to every order, and the pre-sign screen re-derives the rest.
 //
 //   * program / family: the token's template hash must be one this build embeds (kob.templates()); else `program-unknown`;
 //   * extension commitment (KCC-20): the indexer row's, else the one of the token's listed orders; none found: `no-extension` (KRON has none);
@@ -80,7 +80,7 @@ export function synthesizeOpenToken(kob: KobWasm, view: IndexerTokenView, orderS
     ok: true,
     info: {
       ticker: label, name: label, family, covenantId: id, templateId, templateHash: tpl.hash, extensionCommitment: ext, extensionClass: 'other', decimals,
-      tick: 1n, status: 'listed', verified: false, official: false, capabilities, display: null, openList: true, program,
+      tick: 1n, status: 'listed', capabilities, display: null, openList: true, program,
       templateMatchesPinned: true, prefixLen: tpl.prefixLen, suffixLen: tpl.suffixLen, slots: { inputs: tpl.tokenSlots[0], outputs: tpl.tokenSlots[1] },
       tradable: true, untradableReason: null, json,
     },

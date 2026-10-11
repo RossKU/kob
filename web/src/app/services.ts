@@ -9,7 +9,6 @@ import { createNode } from '../data/node-factory';
 import { TokenTracker } from '../data/token-tracker';
 import { createUtxoService, type UtxoService } from '../data/utxos';
 import { parseRegistry, type TokenRegistry } from '../kob/registry';
-import { identifyRegistry, markCustomRegistry, type RegistryIdentity } from '../kob/registry-source';
 import type { KobWasm } from '../kob/wasm';
 import { loadKob } from '../kob/wasm.browser';
 
@@ -24,8 +23,6 @@ export interface Services {
   /** empty registry (no tokens) when loading failed: see `registryError` */
   registry: TokenRegistry;
   registryError: string | null;
-  /** which registry this is (source, network, sha256 of the exact bytes, counts) and whether it is the build-pinned default */
-  registryIdentity: RegistryIdentity;
   /** further indexers (config `extraIndexerUrls`) that key facts are cross-checked against; empty = single indexer, unverified */
   verifiers: { label: string; api: IndexerApi }[];
   utxos: UtxoService;
@@ -49,28 +46,14 @@ async function loadRegistry(
   config: AppConfig,
   kob: KobWasm,
   fetchFn: typeof fetch,
-): Promise<{ registry: TokenRegistry; error: string | null; identity: RegistryIdentity }> {
+): Promise<{ registry: TokenRegistry; error: string | null }> {
   const empty = (network: string): TokenRegistry => ({ network, templates: [], templateChecks: [], tokens: [], byCovenantId: new Map() });
   try {
     const res = await fetchFn(config.registryUrl, { cache: 'no-cache' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    // the identity is the hash of the EXACT bytes that are parsed
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    const parsed = parseRegistry(new TextDecoder().decode(bytes), { kob, network: config.network });
-    let schemaVersion: number | null = null;
-    try {
-      const v = (JSON.parse(new TextDecoder().decode(bytes)) as { schema_version?: unknown }).schema_version;
-      schemaVersion = typeof v === 'number' ? v : null;
-    } catch {
-      /* parseRegistry accepted it, so this cannot fail; the version is only informative */
-    }
-    const identity = identifyRegistry({ url: config.registryUrl, network: config.network, bytes, registry: parsed, schemaVersion });
-    // anything but the pinned default registry is a custom one: never official / verified by KOB
-    const registry = identity.isDefault ? parsed : markCustomRegistry(parsed, identity.shortHash ?? '?');
-    return { registry, error: null, identity };
+    return { registry: parseRegistry(await res.text(), { kob, network: config.network }), error: null };
   } catch (e) {
-    const registry = empty(config.network);
-    return { registry, error: e instanceof Error ? e.message : String(e), identity: identifyRegistry({ url: config.registryUrl, network: config.network, bytes: null, registry }) };
+    return { registry: empty(config.network), error: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -98,8 +81,8 @@ export async function createServices(config: AppConfig, o: CreateServicesOverrid
   const feed = o.feed !== undefined ? o.feed : config.indexerUrl ? new IndexerFeed({ url: config.indexerUrl }) : null;
   // the primary indexer in another spelling (case, default port, trailing slash) is not an independent verifier
   const verifiers = o.verifiers ?? independentIndexers(config).map((u) => ({ label: u, api: new HttpIndexer({ baseUrl: u }) as IndexerApi }));
-  const { registry, error, identity } = await loadRegistry(config, kob, fetchFn);
+  const { registry, error } = await loadRegistry(config, kob, fetchFn);
   const utxos = createUtxoService({ node, sdk, network: config.network });
   const tracker = new TokenTracker({ kob, node, sdk, network: config.network, indexer });
-  return { config, kob, sdk, node, indexer, feed, registry, registryError: error, registryIdentity: identity, verifiers, utxos, tracker, fees: o.fees ?? feeServiceFor(config, node) };
+  return { config, kob, sdk, node, indexer, feed, registry, registryError: error, verifiers, utxos, tracker, fees: o.fees ?? feeServiceFor(config, node) };
 }

@@ -1,12 +1,14 @@
-// View model of the token list and the token header: registry tokens + indexer tokens (unknown ones are UNVERIFIED; they are tradable only through the open-list path, kob/open-token.ts),
-// status badges, lookalike protection, the localized `TICKER (abcd...1234) [state]` label, template-verification detail. Pure.
-import type { IndexerTokenView, TokenStanding } from '../../data/indexer-types';
+// View model of the token list and the token header: registry tokens + indexer tokens (tokens the registry does not list are tradable only through the
+// open-list path, kob/open-token.ts), technical badges (program family, untradable reason, issuer powers), the localized `TICKER (abcd...1234)` label,
+// the shared-ticker note, template-verification detail. Token issuance is permissionless: nothing here says whether a token is verified, official or listed.
+// Pure.
+import type { IndexerTokenView } from '../../data/indexer-types';
 import {
-  longId, lookalikeReport, normalizeTicker, sanitizeUntrusted, verifyIndexerToken, type LookalikeReport, type TokenInfo, type TokenRegistry, type UntradableReason,
+  longId, normalizeTicker, sanitizeUntrusted, verifyIndexerToken, type TokenInfo, type TokenRegistry, type UntradableReason,
 } from '../../kob/registry';
 import type { TemplateInfo } from '../../kob/types';
 
-export type BadgeKind = 'official' | 'verified' | 'unverified' | 'delisted' | 'pending-review' | 'untradable' | 'custom-registry';
+export type BadgeKind = 'delisted' | 'untradable';
 export type BadgeTone = 'ok' | 'warn' | 'bad' | 'info' | 'neutral';
 
 export interface TokenBadge {
@@ -16,78 +18,21 @@ export interface TokenBadge {
   reason: UntradableReason | null;
 }
 
-/** Reasons already told by the status badge: no second `untradable` badge for them. */
-const CONVEYED: ReadonlySet<UntradableReason> = new Set(['delisted', 'unverified']);
-
 /**
- * What the executor's standing (`GET /v1/tokens`) adds to the pinned registry's own word about a registry token, the ONE rule every label and badge
- * shares (the market list and page, the pair page, My orders, balances: the same registry token must read the same everywhere):
- *   * `delisted` always wins;
- *   * `unverified` is the executor not CONFIRMING the token as official. The word has no room for "verified": it is what the executor says of every
- *     token that is not official, so against a registry token that only claims `verified` it adds nothing (the registry's `verified` stands: a
- *     soak or testnet registry with verified, non-official tokens reads `[verified]` on every page). Against a token the registry claims as
- *     `official` it is a real conflict, and the more cautious word wins;
- *   * `official` never upgrades anything (trust comes from the signed / shipped registry).
+ * Badges of a registry token: `delisted` (the registry or the executor delists it) and, when the build cannot trade it for another
+ * reason (template not reviewed, unsupported, or different from the pinned one), an `untradable` badge naming the reason. A tradable token has none.
  */
-export function indexerDowngrade(token: { official?: boolean }, standing: TokenStanding | null): 'delisted' | 'unverified' | null {
-  if (standing === 'delisted') return 'delisted';
-  if (standing === 'unverified' && token.official === true) return 'unverified';
-  return null;
-}
-
-/**
- * Badges of a registry token: one status (verified / unverified / delisted / pending-review) and, when the build cannot trade it for another
- * reason (template not reviewed, unsupported, or different from the pinned one), an `untradable` badge naming the reason.
- */
-export function tokenBadges(
-  token: Pick<TokenInfo, 'status' | 'verified' | 'tradable' | 'untradableReason'> & { official?: boolean; customRegistry?: string | null },
-  standing: TokenStanding | null = null,
-): TokenBadge[] {
+export function tokenBadges(token: Pick<TokenInfo, 'status' | 'tradable' | 'untradableReason'>, delisted = false): TokenBadge[] {
   const out: TokenBadge[] = [];
-  // Trust comes from the SIGNED / shipped registry (`official`, `verified`), never from the indexer: the executor's `standing` may only DOWNGRADE, and
-  // only as far as `indexerDowngrade` says.
-  const down = indexerDowngrade(token, standing);
-  if (token.status === 'delisted' || down === 'delisted') out.push({ kind: 'delisted', tone: 'bad', reason: null });
-  else if (token.status === 'pending-review') {
-    // pending review does not block trading: the token is shown like an open-list token, plus the pending-review badge (and unverified when nothing vouches for it)
-    out.push({ kind: 'pending-review', tone: 'warn', reason: null });
-    if (down === 'unverified' || !token.verified) out.push({ kind: 'unverified', tone: 'warn', reason: null });
-  } else if (down === 'unverified') out.push({ kind: 'unverified', tone: 'warn', reason: null });
-  // a token of a registry that is not the pinned default is only "listed in custom registry": never official / verified by KOB
-  else if (token.customRegistry && token.verified) out.push({ kind: 'custom-registry', tone: 'warn', reason: null });
-  else if (token.official === true && token.verified) out.push({ kind: 'official', tone: 'ok', reason: null });
-  else if (token.verified) out.push({ kind: 'verified', tone: 'ok', reason: null });
-  else out.push({ kind: 'unverified', tone: 'warn', reason: null });
-  if (!token.tradable && token.untradableReason && !CONVEYED.has(token.untradableReason)) {
+  if (token.status === 'delisted' || delisted) out.push({ kind: 'delisted', tone: 'bad', reason: null });
+  else if (!token.tradable && token.untradableReason && token.untradableReason !== 'delisted') {
     out.push({ kind: 'untradable', tone: 'bad', reason: token.untradableReason });
   }
   return out;
 }
 
-/** State word of the label: delisted beats verified (same rule as `displayName`); a pending-review registry entry says so (`*-pending`). The standing goes through `indexerDowngrade`, like the badges. */
-export type LabelState = 'official' | 'verified' | 'unverified' | 'delisted' | 'custom' | 'verified-pending' | 'unverified-pending';
-export function labelState(t: Pick<TokenInfo, 'status' | 'verified'> & { official?: boolean; customRegistry?: string | null }, standing: TokenStanding | null = null): LabelState {
-  const down = indexerDowngrade(t, standing);
-  return t.status === 'delisted' || down === 'delisted'
-    ? 'delisted'
-    : t.status === 'pending-review'
-      ? down === 'unverified' || !t.verified
-        ? 'unverified-pending'
-        : 'verified-pending'
-      : down === 'unverified'
-        ? 'unverified'
-        : t.customRegistry && t.verified
-          ? 'custom'
-          : t.official === true && t.verified
-            ? 'official'
-            : t.verified
-              ? 'verified'
-              : 'unverified';
-}
-
 /**
- * `abcd…1234`: the short form of a covenant id NEXT TO A REGISTRY TICKER (registry tickers are unique and look-alike checked; identity is the
- * covenant id and the template hash, never the ticker). A token outside the registry is shown with `unregisteredId` (8 + 8 hex).
+ * `abcd…1234`: the short form of a covenant id NEXT TO A REGISTRY TICKER (identity is the covenant id and the template hash, never the ticker). A token outside the registry is shown with `unregisteredId` (8 + 8 hex).
  */
 export const shortCovenantId = (c: string): string => (c.length >= 8 ? `${c.slice(0, 4)}…${c.slice(-4)}` : c);
 
@@ -95,14 +40,14 @@ export const shortCovenantId = (c: string): string => (c.length >= 8 ? `${c.slic
 export const unregisteredId = longId;
 
 /**
- * `EXKCC (e5e5…e5e5) [state]`: the ticker is NEVER shown without the covenant id fragment. `stateWord` is the (translated) state text.
- * A token outside the registry has an EMPTY ticker (or an indexer ticker): 8 + 8 hex of its covenant id (`e5e5e5e5…e5e5e5e5 [state]`).
+ * `EXKCC (e5e5…e5e5)`: the ticker is NEVER shown without the covenant id fragment.
+ * A token outside the registry has an EMPTY ticker (or an indexer ticker): 8 + 8 hex of its covenant id (`e5e5e5e5…e5e5e5e5`).
  */
-export function tokenLabel(t: { ticker: string; covenantId: string; info?: TokenInfo | null; openList?: boolean }, stateWord: string): string {
+export function tokenLabel(t: { ticker: string; covenantId: string; info?: TokenInfo | null; openList?: boolean }): string {
   // a row of a token outside the registry (`info: null`), an open-list token or one without a ticker: 8 + 8 hex; a registry ticker: 4 + 4
   const unregistered = t.ticker === '' || t.info === null || t.openList === true || t.info?.openList === true;
   const short = unregistered ? unregisteredId(t.covenantId) : shortCovenantId(t.covenantId);
-  return t.ticker === '' ? `${short} [${stateWord}]` : `${t.ticker} (${short}) [${stateWord}]`;
+  return t.ticker === '' ? short : `${t.ticker} (${short})`;
 }
 
 /** Ticker for display: the registry ticker, else the short covenant id. */
@@ -128,27 +73,17 @@ export interface TokenRow {
   /** null for tokens that are not in the registry */
   info: TokenInfo | null;
   index: IndexerTokenView | null;
-  /** the executor's standing of the token when the indexer sent one */
-  standing: TokenStanding | null;
+  /** the executor (indexer) delists the token: this build does not trade it */
+  delisted: boolean;
   /** template capabilities the indexer reported (may be empty) */
   powers: string[];
   /** the token program can freeze or seize balances: escrowed orders are at the issuer's discretion */
   issuerControl: boolean;
   templateId: string | null;
-  /**
-   * genesis verification status from the shipped registry (`genesis_verified`): 'verified' only when the registry says so; a registry token whose
-   * entry does not say is 'unverified'; null for tokens outside the registry (no statement at all)
-   */
-  genesis: 'verified' | 'unverified' | null;
-  labelState: LabelState;
-  /** short hash of the non-default registry this token is listed in (label state `custom`), else null */
-  customHash: string | null;
   badges: TokenBadge[];
   tradable: boolean;
-  /** registry tokens: the untradable reason; unknown tokens: always `unverified` */
+  /** registry tokens: the untradable reason; unknown tokens: `delisted` or `unregistered` (tradable only through the open-list path) */
   reason: UntradableReason | null;
-  /** lookalike analysis of the ticker (unknown tokens only) */
-  lookalike: LookalikeReport | null;
   /** cross-check of the indexer's view against the registry (registry tokens with an indexer entry) */
   indexerProblems: string[];
   openAsks: number | null;
@@ -165,44 +100,32 @@ const unionPowers = (...lists: readonly (readonly string[])[]): string[] => [...
 
 function registryRow(info: TokenInfo, index: IndexerTokenView | null): TokenRow {
   const check = index ? verifyIndexerToken(info, index) : null;
-  // the indexer's standing can only downgrade, and only as far as `indexerDowngrade` says; `official` comes from the registry flag alone
-  const down = indexerDowngrade(info, index?.standing ?? null);
-  const standing: TokenStanding | null = down ?? (info.official ? ('official' as const) : null);
+  // the executor can only delist (never upgrade) a registry token
+  const delisted = index?.standing === 'delisted';
   // registry capabilities always apply; whatever the indexer reports for the template is added, never subtracted
   const powers = unionPowers(info.capabilities, powersOf(index));
   return {
-    covenantId: info.covenantId, ticker: info.ticker, name: info.name, source: 'registry', info, index, standing, powers, issuerControl: hasIssuerControl(powers),
-    templateId: index?.template_id ?? info.templateId, genesis: info.genesisVerified === undefined ? null : info.genesisVerified === true ? 'verified' : 'unverified', labelState: labelState(info, standing), customHash: info.customRegistry ?? null, badges: tokenBadges(info, standing),
-    tradable: info.tradable, reason: info.untradableReason, lookalike: null,
+    covenantId: info.covenantId, ticker: info.ticker, name: info.name, source: 'registry', info, index, delisted, powers, issuerControl: hasIssuerControl(powers),
+    templateId: index?.template_id ?? info.templateId, badges: tokenBadges(info, delisted),
+    tradable: info.tradable && !delisted, reason: delisted ? 'delisted' : info.untradableReason,
     indexerProblems: check ? check.problems.map((p) => p.code) : [],
     openAsks: index ? index.open_asks : null, openBids: index ? index.open_bids : null, decimals: info.decimals, scale: 10n ** BigInt(Math.min(info.decimals, 9)), tick: info.tick,
   };
 }
 
-/** A token the registry does not know (found through the indexer or pasted): unverified, not tradable, with lookalike protection. */
-export function unknownRow(
-  reg: TokenRegistry, view: IndexerTokenView, source: TokenSource = 'indexer', others: readonly IndexerTokenView[] = [], held: readonly string[] = [],
-): TokenRow {
+/** A token the registry does not know (found through the indexer or pasted): not tradable from here, only through the open-list path (kob/open-token.ts). */
+export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: TokenSource = 'indexer'): TokenRow {
   const ticker = sanitizeUntrusted(view.ticker ?? '', 16);
-  // a token this build's registry does not list is never official or verified, whatever the indexer claims
-  const standing: TokenStanding = view.standing === 'delisted' ? 'delisted' : 'unverified';
-  const kind: BadgeKind = standing === 'delisted' ? 'delisted' : 'unverified';
+  const delisted = view.standing === 'delisted';
   // the template's capabilities in the shipped registry (found by template hash / id) always apply; the indexer's powers are added
   const tpl = reg.templates.find((t) => (view.template_hash && t.template_hash === view.template_hash) || (view.template_id && t.id === view.template_id));
   const powers = unionPowers(tpl?.capabilities ?? [], powersOf(view));
   return {
-    covenantId: view.covenant_id, ticker, name: null, source, info: null, index: view, standing, powers, issuerControl: hasIssuerControl(powers), templateId: view.template_id ?? null, genesis: null,
-    labelState: standing, customHash: null, badges: [{ kind, tone: kind === 'delisted' ? 'bad' : 'warn', reason: null }],
-    // this build's own registry does not list the token: it cannot trade it whatever its standing
-    tradable: false, reason: standing === 'delisted' ? 'delisted' : 'unverified',
-    // an indexer that calls an unregistered token official is contradicting the registry: recorded as a problem
-    // other unregistered tokens with the same short id or ticker are named too (`collision`): only the full covenant id tells them apart
-    lookalike: lookalikeReport(reg, view.ticker, view.covenant_id, undefined, [
-      ...others.map((o) => ({ covenantId: o.covenant_id, ticker: o.ticker ?? '' })),
-      // the tokens this wallet holds (its own record, not the indexer's): a token copying the short id of one of them is named even when
-      // the indexer leaves the held token out of its list
-      ...held.filter((id) => !others.some((o) => o.covenant_id === id)).map((id) => ({ covenantId: id, ticker: '' })),
-    ]), indexerProblems: view.standing === 'official' ? ['standing-official-unregistered'] : [], openAsks: view.open_asks, openBids: view.open_bids,
+    covenantId: view.covenant_id, ticker, name: null, source, info: null, index: view, delisted, powers, issuerControl: hasIssuerControl(powers), templateId: view.template_id ?? null,
+    badges: delisted ? [{ kind: 'delisted', tone: 'bad', reason: null }] : [],
+    // this build's own registry does not list the token: it cannot trade it from the list
+    tradable: false, reason: delisted ? 'delisted' : 'unregistered',
+    indexerProblems: [], openAsks: view.open_asks, openBids: view.open_bids,
     decimals: view.decimals,
     scale: view.scale != null ? BigInt(view.scale) : view.decimals != null ? 10n ** BigInt(Math.min(view.decimals, 9)) : null,
     tick: null,
@@ -211,29 +134,27 @@ export function unknownRow(
 
 /**
  * Registry tokens first (registry order), then indexer-only tokens (those with open orders first, then by ticker). Duplicates by covenant id are
- * merged; an indexer-only token with `template_id: null` (a program off the strict list) is left out. `held`: covenant ids of the tokens the connected wallet holds (its local token tracker), compared with every unregistered token for a
- * shared short id besides the registry and the indexer's list.
+ * merged; an indexer-only token with `template_id: null` (a program off the strict list) is left out.
  */
 export function buildTokenRows(
-  reg: TokenRegistry, indexerTokens: readonly IndexerTokenView[] | null, pasted: readonly IndexerTokenView[] = [], held: readonly string[] = [],
+  reg: TokenRegistry, indexerTokens: readonly IndexerTokenView[] | null, pasted: readonly IndexerTokenView[] = [],
 ): TokenRow[] {
   const byId = new Map((indexerTokens ?? []).map((t) => [t.covenant_id, t]));
   const rows: TokenRow[] = reg.tokens.map((t) => registryRow(t, byId.get(t.covenantId) ?? null));
   const seen = new Set(rows.map((r) => r.covenantId));
   const extra: TokenRow[] = [];
-  const unregistered = [...(indexerTokens ?? []), ...pasted].filter((v) => !reg.byCovenantId.has(v.covenant_id));
   for (const v of indexerTokens ?? []) {
     if (seen.has(v.covenant_id)) continue;
     // an indexer that says the token's program is on no strict list (`template_id: null`, no ticker: a retired program kept in its history)
     // has nothing to trade or show; an older executor that sends no `template_id` at all is unaffected
     if (v.template_id === null) continue;
     seen.add(v.covenant_id);
-    extra.push(unknownRow(reg, v, 'indexer', unregistered, held));
+    extra.push(unknownRow(reg, v, 'indexer'));
   }
   for (const v of pasted) {
     if (seen.has(v.covenant_id)) continue;
     seen.add(v.covenant_id);
-    extra.push(unknownRow(reg, v, 'pasted', unregistered, held));
+    extra.push(unknownRow(reg, v, 'pasted'));
   }
   extra.sort((a, b) => (b.openAsks ?? 0) + (b.openBids ?? 0) - ((a.openAsks ?? 0) + (a.openBids ?? 0)) || (a.ticker < b.ticker ? -1 : a.ticker > b.ticker ? 1 : 0));
   return [...rows, ...extra];
@@ -244,15 +165,29 @@ export function buildTokenRows(
  * reviewed, supported and equal to the pinned program); a token outside the registry (open list, pasted) is tradable through the open-list path unless the
  * executor delists it or its template hash is one this build does not embed (`pinned`: `kob.templates()`). A token without a template hash is kept.
  */
-export function tradableHere(row: Pick<TokenRow, 'source' | 'info' | 'index' | 'standing'>, pinned: readonly TemplateInfo[]): boolean {
-  if (row.source === 'registry') return row.info !== null && row.info.tradable;
-  if (row.standing === 'delisted') return false;
+export function tradableHere(row: Pick<TokenRow, 'source' | 'info' | 'index' | 'delisted'>, pinned: readonly TemplateInfo[]): boolean {
+  if (row.source === 'registry') return row.info !== null && row.info.tradable && !row.delisted;
+  if (row.delisted) return false;
   const hash = row.index?.template_hash;
   return !hash || pinned.some((p) => p.tokenSlots && p.hash === hash);
 }
 
 /** The rows a market list, selector or pair choice offers: only tokens this build can trade (see `tradableHere`). */
-export const tradableRows = <R extends Pick<TokenRow, 'source' | 'info' | 'index' | 'standing'>>(rows: readonly R[], pinned: readonly TemplateInfo[]): R[] => rows.filter((r) => tradableHere(r, pinned));
+export const tradableRows = <R extends Pick<TokenRow, 'source' | 'info' | 'index' | 'delisted'>>(rows: readonly R[], pinned: readonly TemplateInfo[]): R[] => rows.filter((r) => tradableHere(r, pinned));
+
+/**
+ * Covenant ids of the listed tokens that share their ticker with another listed token (case, look-alike letters and homoglyphs ignored: `KR0N` is `KRON`).
+ * The UI shows a short note on those: tickers are not unique, the covenant id is the identity. Tokens without a ticker are never compared.
+ */
+export function sharedTickerIds(rows: readonly Pick<TokenRow, 'covenantId' | 'ticker'>[]): Set<string> {
+  const byTicker = new Map<string, string[]>();
+  for (const r of rows) {
+    const key = normalizeTicker(r.ticker);
+    if (r.ticker === '' || key === '') continue;
+    byTicker.set(key, [...(byTicker.get(key) ?? []), r.covenantId]);
+  }
+  return new Set([...byTicker.values()].filter((ids) => new Set(ids).size > 1).flat());
+}
 
 /** Case-insensitive search over ticker, name and covenant id; homoglyph-normalised tickers match too (`kr0n` finds `KRON`). Empty query = everything. */
 export function filterTokens(rows: readonly TokenRow[], query: string): TokenRow[] {

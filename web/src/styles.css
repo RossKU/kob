@@ -392,20 +392,6 @@ body.modal-open { overflow: hidden; }
 .raw-details summary { cursor: pointer; }
 .raw-details code { display: block; white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
 
-/* ------------------------------------------------------------------ custom-registry indicator (network badge dot + tooltip) */
-
-.reg-tip { display: inline-block; }
-.reg-tip-trigger { font: inherit; cursor: pointer; }
-.reg-tip-badge { position: relative; border: 1px solid transparent; }
-.reg-dot { position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border-radius: 50%; background: var(--bad); border: 2px solid var(--surface); box-sizing: content-box; }
-.reg-tip-link { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; }
-.reg-tip-pop {
-  position: fixed; z-index: 60; max-width: calc(100vw - 16px); box-sizing: border-box; padding: 10px 12px; margin-top: 0; border-top: 6px solid transparent; background-clip: padding-box;
-  background: var(--surface); color: var(--text); border-radius: var(--radius-sm); box-shadow: var(--shadow); font-size: 0.85rem; font-weight: 400; line-height: 1.45; text-align: left; white-space: normal;
-}
-.reg-tip-pop[hidden] { display: none; }
-.reg-tip-pop > span { display: block; }
-.reg-tip-title { display: block; margin-bottom: 2px; }
 .banner-compact { padding: 4px 12px; align-items: center; font-size: 0.85rem; }
 
 /* transaction ids that link to the block explorer (CopyText with `href`) */

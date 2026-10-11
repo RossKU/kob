@@ -359,7 +359,7 @@ export default {
   'orders.strays.unproven': 'cannot be moved',
   'orders.strays.unprovenHint': 'The indexer has not proven its state: it cannot be moved.',
   'orders.strays.unknownToken': 'unknown token',
-  'orders.strays.unknownTokenHint': 'Not in this app\'s token registry: it may be worthless or imitate another token. Check its covenant id yourself.',
+  'orders.strays.unknownTokenHint': 'Not in this app\'s token registry. Check its covenant id yourself.',
 
   'orders.recover.title': 'Recover and back up',
   'orders.recover.why': 'An order\'s terms exist only in its placement transaction. This browser keeps a record of each order so you can cancel it without the indexer: export a backup and keep it.',

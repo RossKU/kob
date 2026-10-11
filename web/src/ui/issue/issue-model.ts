@@ -307,8 +307,6 @@ export interface ResultViewModel {
   supplyFile: string;
   metadataJson: string;
   metadataFile: string;
-  /** the result panel always says: unverified, not in the registry yet (pending review once merged) */
-  status: { verified: false; pendingReview: true };
 }
 
 /** Rows and file contents of the result panel. Throws when the docs do not describe the issued token (`registryEntryFromIssue`). */
@@ -329,6 +327,5 @@ export function resultViewModel(plan: Pick<IssuePlan, 'token' | 'docs'>, txid: s
     supplyFile: supplyDocFileName(plan.token.ticker),
     metadataJson: jsonText(plan.docs.metadata),
     metadataFile: metadataDocFileName(plan.token.ticker),
-    status: { verified: false, pendingReview: true },
   };
 }

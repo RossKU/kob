@@ -154,16 +154,14 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   indexer answer the node does not confirm falls back to the node-resolved placement record, else nothing is built. The confirmation screen re-reads
   every input of the transaction from the node too and `decodeSigning` blocks any input whose amount / script / covenant id differs
   (`input-unconfirmed`); `signAndSubmit` repeats that check right before the wallet popup and compares the txid the node returns with the signed one.
-* **Trust badges come from the shipped registry.** `official` / `verified` and the freeze / seize / blacklist warnings are read from the bundled registry
-  (`official`, template `capabilities`); the indexer's `standing` can only downgrade (delisted / unverified) and its `powers` can only add. A registry
-  token also shows `genesis verified` / `genesis not verified` (registry field `genesis_verified`, absent = not verified) and an optional `warning`.
-* **Official = listed in the registry this build pins.** The app hashes (sha256, exact bytes) the registry it loaded and compares it with the hash of
-  `registry/tokens.json` pinned at build time (`registry-pin.mjs`, vite `define`). Any other list (a `registryUrl` override, an edited file, a third-party build)
-  is a **non-default registry**: a persistent banner, no token labelled official / verified (they read "listed in custom registry <hash>"), and the identity
-  (source, network, sha256, counts) is shown in the footer, in Settings ("Trust sources"), on the token page and in the ticket. Updating the registry file of a
-  deployment therefore requires rebuilding the app (the pin moves with the file).
+* **No curation of tokens.** Token issuance is permissionless, so the UI shows no verified / official / pending-review labels, no "genesis verified" badge and
+  no registry notes about who listed what. What it does show is technical: the token program family, the freeze / seize / blacklist warnings (template
+  `capabilities` from the registry, plus the indexer's `powers`, which can only add), the full covenant id with a copy button, and an `untradable` reason.
+  A token this build cannot trade (its program is not one this build embeds, or it is delisted) is not listed, not offered in selectors and has no market
+  page. When two or more listed tokens share a ticker (look-alike letters and homoglyphs count as the same), the list row, the token page header, the pair
+  facts and the order ticket say "Another token uses this ticker — check the covenant id". The covenant id, not the ticker, is the identity.
 * **Several indexers.** `extraIndexerUrls` (config.json / `__KOB_CONFIG__`, at most 4) are cross-checked on the token page: standing, powers and best ask / bid are
-  compared and any disagreement is shown. With one indexer the footer and Settings say "single indexer, unverified".
+  compared and any disagreement is shown. With one indexer the footer and Settings say "single indexer, not cross-checked".
 * **Guards.** If the indexer cannot list the wallet's own orders (self-trade prevention) or the book, the ticket says so and blocks until the user
   acknowledges. Market orders show their reference price source and are cross-checked with the last fill.
 * **Market start.** A market or close order starts at the best price of the indexer book, which is not checked against the node. Its start is compared

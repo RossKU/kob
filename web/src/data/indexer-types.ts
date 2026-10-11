@@ -25,7 +25,7 @@ export interface HealthView {
   alarms?: unknown[];
 }
 
-/** How much KOB vouches for a token: `official` = confirmed genuine; `unverified` = tradable token of an audited program template that KOB has not confirmed (tickers collide: identify it by covenant id); `delisted`. */
+/** The executor's standing of a token (API field). The UI acts only on `delisted` (not traded); `official` / `unverified` are not shown. */
 export type TokenStanding = 'official' | 'unverified' | 'delisted';
 /** Capabilities of a token's program template that can act on holders or supply. `freeze` and `seize` put escrowed orders at the issuer's discretion. */
 export type TokenPower = 'mint-authority' | 'public-mint' | 'burn' | 'freeze' | 'seize' | 'blacklist';

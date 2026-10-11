@@ -48,10 +48,10 @@ for testnet-10 and mainnet.
 * **Tokens:** the eight KRON tokens of the census are listed with their genesis records (genesis verified on
   mainnet data, no live mint authority). Six are `official`: KRON, KASCOV, ANSEM, IFWEN, PEEPS, KDIST.
   **PEPE** ("The Ultimate test") and **DNBT** ("dont buy this is test") are listed and verified but **not
-  official**: they are test tokens per their own names, and each carries a maintainer `warning` that every UI
-  shows (PEPE's also says it is not the well-known PEPE: the ticker collides). A token on another program
-  that copies one of these two tickers is shown as a ticker collision, not as an impersonation
-  (`lookalikeReport` level `shared`): the registry itself disowns them.
+  official**: they are test tokens per their own names, and each carries a maintainer `warning` in the registry
+  file (PEPE's also says it is not the well-known PEPE: the ticker collides). The web app does not show
+  verification, officialness or registry warnings: token issuance is permissionless and the UI does not curate
+  tokens. It shows a short note on every listed token whose ticker another listed token uses too.
 * Before the release: `cargo run -p kob-cli -- registry verify-genesis --network mainnet` must pass on the
   committed evidence (`registry/README.md`, "Genesis check").
 
@@ -90,8 +90,7 @@ and `GET /v1/tokens` reports `registry.source` and `registry.sha256` either way)
 The web bundle carries no network-dependent code (the browser build is the slim kob-wasm variant: no x402
 payer entry point); its defaults are `network: mainnet` and `./registry/tokens.json`, which `npm run build:release`
 ships in `dist/registry/` (the pinned file; a plain `npm run build` leaves the registry to the host). A hosting
-operator may set `config.json` next to the app (`indexerUrl`, `nodeUrl`, ...); a registry other
-than the pinned one is labelled "non-default registry" and none of its tokens is shown as official.
+operator may set `config.json` next to the app (`indexerUrl`, `nodeUrl`, ...).
 
 ## 5. Tests before tagging
 

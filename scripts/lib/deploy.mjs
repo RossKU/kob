@@ -11,8 +11,8 @@
 //
 // When registry/tokens.json is the registry OF THIS NETWORK (its `network` field; today: mainnet), the record also
 // pins it: path, sha256 of its bytes (line endings normalised to LF, as SHA256SUMS hashes them), its strict
-// template list and its listed tokens. A deploy-mainnet binary embeds the same file and checks the pin, and the
-// web build pins the same sha256 (web/registry-pin.mjs), so a changed registry makes the record stale.
+// template list and its listed tokens. A deploy-mainnet binary embeds the same file and checks the pin, so a changed
+// registry makes the record stale.
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 
@@ -113,9 +113,8 @@ function registrySection(r) {
 | Strict templates | ${r.strict_templates.map((t) => `${t.id} ${code(t.template_hash)}`).join(', ') || 'none'} |
 | Pending review | ${r.pending_templates.join(', ') || 'none'} |
 
-The deploy-${network} build embeds this file as its default registry and checks this hash; the web build
-pins the same hash (${code('web/registry-pin.mjs')}). An operator may load another registry (${code('--tokens')}):
-its hash is reported by ${code('GET /v1/tokens')} and the web app shows it as a non-default registry.
+The deploy-${network} build embeds this file as its default registry and checks this hash. An operator may load another
+registry (${code('--tokens')}): its hash is reported by ${code('GET /v1/tokens')}.
 
 | Listed token | Covenant id | Standing |
 |---|---|---|

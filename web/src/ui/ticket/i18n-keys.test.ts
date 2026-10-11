@@ -102,7 +102,6 @@ describe('confirm keys', () => {
     for (const k of ['order', 'custody', 'token-change', 'token-out', 'kas-change', 'payment-out', 'unknown-covenant', 'unknown', 'issued']) both(`confirm.outkind.${k}`);
     for (const s of ['signing', 'finalizing', 'validating', 'submitting']) both(`confirm.stage.${s}`);
     for (const a of ['cancel', 'refund', 'fill', 'update', 'other']) both(`confirm.action.${a}`);
-    for (const s of ['official', 'verified', 'unverified', 'delisted']) both(`confirm.token.${s}`);
     const src = read(dir('../confirm/issuance-model.ts'));
     const codes = new Set([...src.matchAll(/\b(?:block|warn|info)\('([A-Za-z]+)'/g)].map((m) => m[1]!));
     expect(codes.size).toBeGreaterThanOrEqual(15);

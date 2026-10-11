@@ -4,7 +4,7 @@ import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { Amount, Banner, Button, ErrorBanner, KeyValueList, Loading, Section, Table, TableMessage, unitsFraction, useAsync } from '../kit';
-import { labelState, tokenLabel } from '../market/token-model';
+import { tokenLabel } from '../market/token-model';
 import { loadFreeBalances } from './balances-data';
 import { combineBalances } from './balances-model';
 import { mergeableCounts } from './merge-model';
@@ -94,7 +94,7 @@ export function BalancesPanel(props: {
                   const d = info?.decimals ?? 0;
                   return (
                     <tr key={b.token} data-testid={`balance-row-${b.token}`}>
-                      <td>{info ? tokenLabel(info, t(`market.state.${labelState(info)}`, { hash: info.customRegistry ?? '' })) : t('orders.unknownToken', { id: longId(b.token) })}</td>
+                      <td>{info ? tokenLabel(info) : t('orders.unknownToken', { id: longId(b.token) })}</td>
                       <td class="right"><Amount kind="token" value={b.free} decimals={d} unit={false} fraction={cols.free} group /></td>
                       <td class="right" data-testid="balance-escrowed"><Amount kind="token" value={b.escrowed} decimals={d} unit={false} fraction={cols.escrowed} group /></td>
                       <td class="right" data-testid="balance-strays"><Amount kind="token" value={b.strays} decimals={d} unit={false} fraction={cols.strays} group /></td>

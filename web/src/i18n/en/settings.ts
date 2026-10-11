@@ -58,6 +58,6 @@ export default {
   'settings.local.confirmBody': 'This deletes {count} stored item(s): settings, placement records and tracked tokens. Orders that are on chain are not affected, but without their records the app can only find them through the indexer. This cannot be undone.',
   'settings.local.failed': 'The browser refused to clear the stored data.',
 
-  'settings.trust.title': 'Trust sources',
+  'settings.trust.title': 'Indexers',
 
 } as Record<string, string>;

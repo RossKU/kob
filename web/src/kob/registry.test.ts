@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  RegistryError, displayName, hasBadChar, lookalikeReport, normalizeTicker, parseRegistry, sanitizeUntrusted, tokenById, tokenMarketInput, tradableTokens,
+  RegistryError, displayName, hasBadChar, normalizeTicker, parseRegistry, sanitizeUntrusted, tokenById, tokenMarketInput, tradableTokens,
   verifyIndexerToken, verifyTokenUtxo, type ChainTokenUtxo, type RegistryIssueCode, type TokenRegistry,
 } from './registry';
 import { exampleRegistryJson, officialGenesis, placeGolden, shippedRegistryJson, TOKEN, tradableRegistryJson } from '../testing/chain-fixtures';
@@ -30,24 +30,17 @@ describe('shipped registries', () => {
     expect(r.network).toBe('mainnet');
     expect(r.tokens.length).toBe(8);
     // listing verification (registry/evidence/mainnet-genesis.json, `kob registry verify-genesis`): genesis verified (C1), no live minter (C2)
-    expect(r.tokens.every((t) => t.family === 'kron' && t.status === 'listed' && t.verified && t.genesisVerified === true)).toBe(true);
+    expect(r.tokens.every((t) => t.family === 'kron' && t.status === 'listed' && t.json.verified && t.json.genesis_verified === true)).toBe(true);
     // founder 2026-10-03: PEPE ("The Ultimate test") and DNBT ("dont buy this is test") are test tokens per their own names: verified, listed, NOT official,
     // with a maintainer warning (PEPE: also not the well-known PEPE); the other six are official without a warning
-    expect(r.tokens.filter((t) => !t.official).map((t) => t.ticker)).toEqual(['PEPE', 'DNBT']);
+    expect(r.tokens.filter((t) => !t.json.official).map((t) => t.ticker)).toEqual(['PEPE', 'DNBT']);
     for (const t of r.tokens) {
-      if (t.official) expect(t.warning, t.ticker).toBeNull();
-      else expect(t.warning, t.ticker).toMatch(/^Not official: a test token per its own name/);
+      if (t.json.official) expect(t.json.warning, t.ticker).toBeUndefined();
+      else expect(t.json.warning, t.ticker).toMatch(/^Not official: a test token per its own name/);
     }
     const pepe = r.tokens.find((t) => t.ticker === 'PEPE')!;
-    expect(pepe.warning).toContain('well-known PEPE');
-    expect(displayName(pepe)).toBe('PEPE (a73c…47cd) [verified]');
-    // a namesake of a disowned test token is a ticker collision, not an impersonation; a namesake of an official token stays a strong warning
-    const other = 'cd'.repeat(32);
-    expect(lookalikeReport(r, 'PEPE', other)).toMatchObject({ level: 'shared', lookalikes: [{ kind: 'same-ticker' }] });
-    expect(lookalikeReport(r, 'PEPE', other).message).toContain('marks as not official');
-    expect(lookalikeReport(r, 'DNBT', other).level).toBe('shared');
-    expect(lookalikeReport(r, 'KR0N', other).level).toBe('strong');
-    expect(lookalikeReport(r, 'PEPE', pepe.covenantId).level).toBe('none');
+    expect(pepe.json.warning).toContain('well-known PEPE');
+    expect(displayName(pepe)).toBe('PEPE (a73c…47cd)');
     const raw = JSON.parse(shippedRegistryJson());
     expect(raw.tokens.every((t: { genesis?: { live_minters?: string[]; minter_outputs: number[] } }) => t.genesis?.live_minters?.length === 0 && t.genesis.minter_outputs.length === 0)).toBe(true);
     // the KRON programs are reviewed with conditions (internal review, `crates/kob-tests/tests/review_b2_kron.rs`)
@@ -75,7 +68,7 @@ describe('shipped registries', () => {
   it('the example TN10 registry parses; its pending, unverified tokens are tradable (their templates are reviewed and pinned)', () => {
     const r = parse(exampleRegistryJson(), 'testnet-10');
     expect(r.tokens.map((t) => t.ticker)).toEqual(['EXKCC', 'EXKRON']);
-    expect(r.tokens.every((t) => t.status === 'pending-review' && !t.verified)).toBe(true);
+    expect(r.tokens.every((t) => t.status === 'pending-review' && !t.json.verified)).toBe(true);
     expect(r.tokens.map((t) => t.untradableReason)).toEqual([null, null]);
     expect(tradableTokens(r).map((t) => t.ticker)).toEqual(['EXKCC', 'EXKRON']);
   });
@@ -120,7 +113,7 @@ describe('tradability (listing verified against the pinned templates)', () => {
     const r = parse(doc);
     expect(r.tokens.map((t) => t.untradableReason)).toEqual([null, 'delisted']);
     expect(r.tokens.map((t) => t.tradable)).toEqual([true, false]);
-    expect(tokenById(r, TOKEN.covenantId)).toMatchObject({ status: 'pending-review', verified: false, official: false, program: 'KCC20Ref', tick: null });
+    expect(tokenById(r, TOKEN.covenantId)).toMatchObject({ status: 'pending-review', program: 'KCC20Ref', tick: null });
     // listed but unverified (an entry the maintainers have not checked against chain yet) is no stricter
     const doc2 = tradableRegistryJson();
     doc2.tokens[0].verified = false;
@@ -157,7 +150,7 @@ describe('tradability (listing verified against the pinned templates)', () => {
     const open = synthesizeOpenToken(kob, { covenant_id: entry.covenantId, template_hash: entry.templateHash, extension_commitment: entry.extensionCommitment } as any, [{ scale: 1000 }], null, null);
     expect(open.ok).toBe(true);
     if (!open.ok) return;
-    for (const k of ['tradable', 'untradableReason', 'verified', 'official', 'program', 'templateMatchesPinned', 'family', 'capabilities'] as const) expect(entry[k]).toEqual(open.info[k]);
+    for (const k of ['tradable', 'untradableReason', 'program', 'templateMatchesPinned', 'family', 'capabilities'] as const) expect(entry[k]).toEqual(open.info[k]);
   });
 
   it.each([
@@ -293,7 +286,7 @@ describe('validation (mirror of the Rust rules)', () => {
     }
   });
 
-  it('reads template capabilities and the official flag: powers reach the token info, [official] the display name', () => {
+  it('reads template capabilities: powers reach the token info; the display name carries no state', () => {
     const doc = clone(base());
     doc.templates[0].capabilities = ['freeze', 'seize'];
     doc.tokens[0].official = true;
@@ -301,11 +294,9 @@ describe('validation (mirror of the Rust rules)', () => {
     doc.tokens[0].genesis = GENESIS;
     const r = parse(doc);
     const t = r.tokens[0];
-    expect(t).toMatchObject({ official: true, capabilities: ['freeze', 'seize'] });
-    expect(displayName(t).endsWith(' [official]')).toBe(true);
-    expect(displayName({ ...t, status: 'delisted' }).endsWith(' [delisted]')).toBe(true);
-    expect(r.tokens[1]).toMatchObject({ official: false, capabilities: [] });
-    expect(displayName(r.tokens[1]).endsWith(' [verified]')).toBe(true);
+    expect(t).toMatchObject({ capabilities: ['freeze', 'seize'] });
+    expect(displayName(t)).toBe(`${t.ticker} (${t.covenantId.slice(0, 4)}…${t.covenantId.slice(-4)})`);
+    expect(r.tokens[1]).toMatchObject({ capabilities: [] });
   });
 
   it('rejects two tokens with the same identity', () => {
@@ -331,15 +322,13 @@ describe('validation (mirror of the Rust rules)', () => {
   });
 });
 
-describe('display and lookalikes', () => {
+describe('display and ticker skeletons', () => {
   const reg = () => parse(tradableRegistryJson());
 
-  it('displayName is TICKER (abcd...1234) [state], never the name alone', () => {
+  it('displayName is TICKER (abcd...1234), never the name alone and with no state word', () => {
     const r = reg();
     const tst = tokenById(r, TOKEN.covenantId)!;
-    expect(displayName(tst)).toBe('TST (7070…7070) [verified]');
-    expect(displayName({ ...tst, verified: false })).toBe('TST (7070…7070) [unverified]');
-    expect(displayName({ ...tst, status: 'delisted' })).toBe('TST (7070…7070) [delisted]');
+    expect(displayName(tst)).toBe('TST (7070…7070)');
     expect(displayName(tst)).not.toContain(tst.name);
   });
 
@@ -367,70 +356,6 @@ describe('display and lookalikes', () => {
     expect(normalizeTicker('ⅠⅬ')).toBe(normalizeTicker('IL')); // roman numerals
     expect(normalizeTicker('ՕՕ')).toBe(normalizeTicker('OO')); // Armenian Oh
     expect(normalizeTicker('ß')).toBe(normalizeTicker('SS'));
-  });
-
-  it('lookalikeReport: registered id is fine, unknown is flagged, a copied ticker names the real token', () => {
-    const r = reg();
-    expect(lookalikeReport(r, 'TST', TOKEN.covenantId)).toMatchObject({ level: 'none', lookalikes: [] });
-    expect(lookalikeReport(r, 'ZZZ', 'cd'.repeat(32))).toMatchObject({ level: 'unknown', lookalikes: [] });
-    const same = lookalikeReport(r, 'TST', 'cd'.repeat(32));
-    expect(same.level).toBe('strong');
-    expect(same.lookalikes[0]).toMatchObject({ kind: 'same-ticker' });
-    expect(same.lookalikes[0].token.covenantId).toBe(TOKEN.covenantId);
-    expect(same.message).toContain('TST (7070…7070)');
-    const homoglyph = lookalikeReport(r, 'E1GHT', 'cd'.repeat(32));
-    expect(homoglyph.level).toBe('strong');
-    expect(homoglyph.lookalikes[0]).toMatchObject({ kind: 'confusable-ticker' });
-    expect(lookalikeReport(r, 'tst', 'cd'.repeat(32)).lookalikes[0].kind).toBe('same-ticker');
-  });
-
-  it('lookalikeReport: a namesake is only a ticker collision (shared) when every registered match is NOT official AND carries a maintainer warning', () => {
-    const other = 'cd'.repeat(32);
-    const doc = tradableRegistryJson();
-    doc.tokens[0].warning = 'Not official: a test token per its own name';
-    // TST: not official, warned -> shared
-    const warned = parse(doc);
-    expect(lookalikeReport(warned, 'TST', other)).toMatchObject({ level: 'shared', lookalikes: [{ kind: 'same-ticker' }] });
-    expect(lookalikeReport(warned, 'T5T', other).level).toBe('shared');
-    // not official, no warning -> still strong (the registry does not disown it)
-    expect(lookalikeReport(reg(), 'TST', other).level).toBe('strong');
-    // official (a warning does not make an official token a non-target) -> strong
-    const off = tradableRegistryJson();
-    Object.assign(off.tokens[0], { official: true, warning: 'w' }, officialGenesis());
-    expect(lookalikeReport(parse(off), 'TST', other).level).toBe('strong');
-    // one disowned match and one plain match -> strong (the plain one may be impersonated)
-    const both = tradableRegistryJson();
-    both.tokens[0].warning = 'w';
-    both.tokens[1].name = 'TST';
-    expect(lookalikeReport(parse(both), 'TST', other).level).toBe('strong');
-  });
-
-  it('lookalikeReport: Unicode homoglyphs, full-width letters and the 5/S, 8/B, rn/m folds are strong lookalikes too', () => {
-    const r = reg();
-    const other = 'cd'.repeat(32);
-    // Cyrillic Т (U+0422) and Ѕ (U+0405) in "TST"
-    for (const t of ['ТЅТ', 'ТSТ', 'T5T', 'ＴＳＴ', 'tśt', 'тѕт']) {
-      const rep = lookalikeReport(r, t, other);
-      expect(rep.level, t).toBe('strong');
-      expect(rep.lookalikes[0].token.covenantId).toBe(TOKEN.covenantId);
-    }
-    expect(lookalikeReport(r, 'TST', TOKEN.covenantId).level).toBe('none');
-    expect(lookalikeReport(r, 'ТЅТ', TOKEN.covenantId).level).toBe('none');
-    expect(lookalikeReport(r, 'TSU', other).level).toBe('unknown');
-  });
-
-  it('lookalikeReport: a token NAME that copies a registered ticker or name is flagged (case, spaces, homoglyphs)', () => {
-    const r = reg();
-    const tst = tokenById(r, TOKEN.covenantId)!;
-    const other = 'cd'.repeat(32);
-    expect(lookalikeReport(r, 'XYZ', other, 'not related').level).toBe('unknown');
-    const byTicker = lookalikeReport(r, 'XYZ', other, 't s t');
-    expect(byTicker.level).toBe('strong');
-    expect(byTicker.lookalikes[0]).toMatchObject({ kind: 'confusable-name' });
-    const spaced = tst.name.toUpperCase().split('').join(' ');
-    expect(lookalikeReport(r, 'XYZ', other, spaced).level).toBe('strong');
-    const cyr = tst.name.replace(/[AEOPCXTH]/gi, (c) => ({ A: 'А', E: 'Е', O: 'О', P: 'Р', C: 'С', X: 'Х', T: 'Т', H: 'Н' }[c.toUpperCase() as 'A'] ?? c));
-    expect(lookalikeReport(r, 'XYZ', other, cyr).level).toBe('strong');
   });
 
   it('sanitizeUntrusted neutralises control / bidi characters and caps the length', () => {
@@ -539,20 +464,20 @@ describe('registry genesis record (C1 / C2) and the official rule', () => {
   });
 });
 
-describe('registry fields of the contracts review: genesis_verified and warning (optional)', () => {
+describe('registry file fields of the contracts review: genesis_verified and warning (optional, validated, not shown by the UI)', () => {
   const base = (over: Record<string, unknown>) => {
     const raw = JSON.parse(JSON.stringify(tradableRegistryJson()));
     Object.assign(raw.tokens[0], over);
     return raw;
   };
-  it('are optional: a registry without them parses and reports genesisVerified null (= not verified)', () => {
+  it('are optional: a registry without them parses', () => {
     const reg = parseRegistry(tradableRegistryJson(), { kob });
-    expect(reg.tokens[0].genesisVerified).toBeNull();
-    expect(reg.tokens[0].warning).toBeNull();
+    expect(reg.tokens[0].json.genesis_verified).toBeUndefined();
+    expect(reg.tokens[0].json.warning).toBeUndefined();
   });
-  it('are carried into TokenInfo when present and type-checked', () => {
+  it('are kept in the entry json when present and type-checked', () => {
     const reg = parseRegistry(base({ genesis_verified: true, warning: 'genesis checked by hand' }), { kob });
-    expect(reg.tokens[0]).toMatchObject({ genesisVerified: true, warning: 'genesis checked by hand' });
+    expect(reg.tokens[0].json).toMatchObject({ genesis_verified: true, warning: 'genesis checked by hand' });
     expect(() => parseRegistry(base({ genesis_verified: 'yes' }), { kob })).toThrow(/genesis_verified must be a boolean/);
     expect(() => parseRegistry(base({ warning: '' }), { kob })).toThrow(/warning must be/);
     expect(() => parseRegistry(base({ warning: 'a\u202eb' }), { kob })).toThrow(/warning must be/);

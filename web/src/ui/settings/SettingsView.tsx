@@ -8,7 +8,7 @@ import {
   showToast, toError,
 } from '../kit';
 import { NotifySettingsSection } from '../notify/NotifySettings';
-import { TrustSources } from '../shell/RegistryNote';
+import { IndexerTrust } from '../shell/IndexerTrust';
 import { changedFields, changesServers, clearKobStorage, describeStorageKey, formFromConfig, kobStorageKeys, settingsPatch, validateSettings, type SettingsForm } from './settings-model';
 
 const reload = () => window.location.reload();
@@ -103,7 +103,7 @@ function Versions() {
 function TrustSection() {
   return (
     <Section title={t('settings.trust.title')} data-testid="settings-trust">
-      <TrustSources />
+      <IndexerTrust />
     </Section>
   );
 }

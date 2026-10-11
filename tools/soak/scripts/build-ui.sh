@@ -5,11 +5,8 @@
 #
 #   tools/soak/scripts/build-ui.sh [<kob-wasm web bindings dir, default crates/kob-wasm/pkg-tn10>]
 #
-# The build pins the sha256 of the soak's own registry (tools/soak/run/registry/tokens.json, the file serve-ui.mjs serves) as the app's
-# default registry: no custom-registry dot or notice on the network badge and no "not official" labels on the soak tokens.
+# The registry the app loads is the file serve-ui.mjs serves (tools/soak/run/registry/tokens.json); the build does not embed it.
 # `UI_OUT=<dir under the repository>` builds elsewhere (a staging copy while the soak keeps serving run/web-dist).
-# `UI_REGISTRY=<file>` pins another file (`UI_REGISTRY=registry/tokens.json`: the repository's default, as a release build does).
-# Rebuild after `soak.mjs setup` rewrites the registry (a new token): a served registry that no longer matches the pin shows the notice again.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 ROOT=$PWD
@@ -22,12 +19,6 @@ OUT=${UI_OUT:-tools/soak/run/web-dist}
 rm -rf "$STAGE"
 mkdir -p "$STAGE/wasm"
 cp -r web/src web/public web/index.html web/vite.config.ts web/tsconfig.json web/package.json web/*.mjs web/*.d.mts "$STAGE/"
-# vite.config.ts pins the sha256 of the default registry (web/registry-pin.mjs reads ../registry/tokens.json): stage the soak's registry there
-REG=${UI_REGISTRY:-tools/soak/run/registry/tokens.json}
-[ -f "$REG" ] || { echo "no registry at $REG (soak.mjs setup writes tools/soak/run/registry/tokens.json)" >&2; exit 1; }
-mkdir -p "$STAGE/../registry"
-cp "$REG" "$STAGE/../registry/tokens.json"
-echo "registry pin: $REG (sha256 $(sha256sum "$REG" | cut -d' ' -f1))"
 cp -r web/vendor "$STAGE/vendor"
 cp -r "$PKG" "$STAGE/wasm/web"
 # node_modules: a directory junction on Windows, a symlink elsewhere

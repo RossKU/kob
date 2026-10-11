@@ -1,10 +1,9 @@
-// The panel shown after an accepted issuance: identifiers, the registry entry to submit by pull request, downloads, and the plain
-// statement that the token is unverified and not in the registry yet (pending review once its entry is merged).
+// The panel shown after an accepted issuance: identifiers, the registry entry to submit by pull request, downloads.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import type { IssuePlan } from '../../kob/issue';
 import type { Hex } from '../../kob/types';
-import { Badge, Banner, Button, CopyText, copyToClipboard, KeyValueList, Section } from '../kit';
+import { Banner, Button, CopyText, copyToClipboard, KeyValueList, Section } from '../kit';
 import { downloadText } from './download';
 import { resultViewModel } from './issue-model';
 
@@ -49,11 +48,6 @@ export function ResultPanel(props: ResultPanelProps) {
     <div class="stack issue-result" data-testid="issue-result">
       <Section title={t('issue.result.title')}>
         <p>{t('issue.result.body', { ticker: plan.token.ticker, txid: `${txid.slice(0, 8)}...${txid.slice(-6)}` })}</p>
-        <div class="row issue-status-badges">
-          <Badge tone="warn" data-testid="issue-result-unverified">{t('issue.result.unverified')}</Badge>
-          <Badge tone="info" data-testid="issue-result-pending">{t('issue.result.pending')}</Badge>
-          <Badge tone="bad" data-testid="issue-result-nottradable">{t('issue.result.notTradable')}</Badge>
-        </div>
         <KeyValueList
           items={vm.rows.map((r) => ({
             label: t(`issue.result.${r.id}`),

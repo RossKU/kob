@@ -148,7 +148,7 @@ describe('indexer REST', () => {
 
   it('serves the registry standing of tokens: standing, powers, template_id, family, and an empty ticker for a token outside the registry', async () => {
     const t0 = (await get('/v1/tokens')).body.tokens[0];
-    expect(t0).toMatchObject({ standing: 'unverified', powers: [], template_id: null, family: 'kcc20' });
+    expect(t0).toMatchObject({ standing: 'unverified', powers: [], template_id: 'kcc20-ref-8x8', family: 'kcc20' });
     await post('/mock/seed', {
       tokens: [
         { ticker: 'OFFI', covenant_id: 'ab'.repeat(32), decimals: 2, standing: 'official', template_id: 'kcc20-ref-8x8' },

@@ -5,7 +5,6 @@ import { Banner } from '../kit';
 import { shortAddress } from '../kit/format';
 import { formatLag } from './health';
 import { useSystemStatus } from './StatusProvider';
-import { CustomRegistryBanner } from './RegistryNote';
 
 /**
  * Global banners under the status bar: settings that were ignored, test mode, registry failure, wallet trouble, node / indexer health.
@@ -34,8 +33,7 @@ export function GlobalBanners(props: { warnings: ConfigWarning[]; storedOverride
     );
   }
   if (config.features.test) banners.push(<Banner key="test" tone="warn" data-testid="banner-test-mode">{t('shell.banner.testMode')}</Banner>);
-  banners.push(<CustomRegistryBanner key="custom-registry" />);
-  // a node / indexer saved in this browser's settings applies to every visit: said on every page, like a non-default registry
+  // a node / indexer saved in this browser's settings applies to every visit: said on every page
   const shown = (o: StoredOverride, url: string): string => url || t(o.field === 'nodeUrl' ? 'settings.nodeUrl.resolver' : 'shell.banner.storedNone');
   for (const o of props.storedOverrides ?? []) {
     if (o.field === 'extraIndexerUrls' || o.field === 'allowQueryOverrides') {

@@ -4,11 +4,9 @@ import { navigate, tokenRoute } from '../../app/router';
 import type { IndexerTokenView } from '../../data/indexer-types';
 import { t } from '../../i18n';
 import { Banner, Button, CopyText, ErrorBanner, Field, Loading, Section, Table, TableMessage, toError, useAsync } from '../kit';
-import { StatusBadges, tokenTitle } from './TokenBadges';
-import { LookalikeWarning } from './TokenHeader';
+import { SharedTickerNote, StatusBadges, tokenTitle } from './TokenBadges';
 import './market.css';
-import { buildTokenRows, filterTokens, parseCovenantId, tradableHere, tradableRows, type TokenRow } from './token-model';
-import { useHeldTokenIds } from './use-held-tokens';
+import { buildTokenRows, filterTokens, parseCovenantId, sharedTickerIds, tradableHere, tradableRows, type TokenRow } from './token-model';
 
 function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
   const { indexer, registry, kob } = useServices();
@@ -32,7 +30,7 @@ function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
     try {
       const found = (await indexer.tokens()).find((x) => x.covenant_id === id);
       if (!found) setMessage({ tone: 'error', text: t('market.add.notFound') });
-      else if (!tradableHere({ source: 'indexer', info: null, index: found, standing: found.standing === 'delisted' ? 'delisted' : 'unverified' }, kob.templates())) setMessage({ tone: 'error', text: t('market.add.untradable') });
+      else if (!tradableHere({ source: 'indexer', info: null, index: found, delisted: found.standing === 'delisted' }, kob.templates())) setMessage({ tone: 'error', text: t('market.add.untradable') });
       else {
         props.onFound(found);
         setMessage({ tone: 'info', text: t('market.add.found') });
@@ -73,7 +71,7 @@ function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
   );
 }
 
-function TokenTableRow({ row }: { row: TokenRow }) {
+function TokenTableRow({ row, shared }: { row: TokenRow; shared: boolean }) {
   return (
     <tr data-testid={`token-row-${row.covenantId}`} data-source={row.source} data-tradable={row.tradable ? '1' : '0'}>
       <td>
@@ -81,7 +79,7 @@ function TokenTableRow({ row }: { row: TokenRow }) {
           {tokenTitle(row)}
         </a>
         {row.name ? <div class="small muted">{row.name}</div> : null}
-        {row.lookalike && (row.lookalike.level === 'strong' || row.lookalike.level === 'shared' || row.lookalike.level === 'collision') ? <LookalikeWarning row={row} /> : null}
+        <SharedTickerNote shared={shared} data-testid={`shared-ticker-${row.covenantId}`} />
       </td>
       <td class="token-hash-cell">
         <CopyText value={row.covenantId} short={false} class="token-hash" data-testid={`token-hash-${row.covenantId}`} />
@@ -93,16 +91,16 @@ function TokenTableRow({ row }: { row: TokenRow }) {
   );
 }
 
-/** Token list: registry tokens with badges, the full token hash (covenant id) and the open order counts, tokens the indexer knows but the registry does not (UNVERIFIED, never tradable), search, add by covenant id. */
+/** Token list: the tokens this build can trade, with badges, the full token hash (covenant id), the open order counts and a note on a shared ticker; search, add by covenant id. */
 export function TokenList(props: { invalidToken?: string }) {
   const { registry, indexer, kob } = useServices();
   const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
   const [query, setQuery] = useState('');
   const [pasted, setPasted] = useState<IndexerTokenView[]>([]);
 
-  const held = useHeldTokenIds();
   // a token this build cannot trade is not listed (a direct link to it shows a short "not tradable" page)
-  const rows = useMemo(() => tradableRows(buildTokenRows(registry, tokens.data ?? null, pasted, held), kob.templates()), [registry, tokens.data, pasted, held, kob]);
+  const rows = useMemo(() => tradableRows(buildTokenRows(registry, tokens.data ?? null, pasted), kob.templates()), [registry, tokens.data, pasted, kob]);
+  const shared = useMemo(() => sharedTickerIds(rows), [rows]);
   const shown = filterTokens(rows, query);
 
   return (
@@ -133,7 +131,7 @@ export function TokenList(props: { invalidToken?: string }) {
             ) : shown.length === 0 ? (
               <TableMessage colSpan={5} data-testid="token-list-empty">{query ? t('market.list.noMatch') : t('market.list.empty')}</TableMessage>
             ) : (
-              shown.map((r) => <TokenTableRow key={r.covenantId} row={r} />)
+              shown.map((r) => <TokenTableRow key={r.covenantId} row={r} shared={shared.has(r.covenantId)} />)
             )}
           </tbody>
         </Table>

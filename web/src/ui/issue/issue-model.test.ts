@@ -248,7 +248,6 @@ describe('a real issuance from a model-built form', () => {
     expect(vm.rows.find((r) => r.id === 'txid')?.value).toBe(txid);
     expect(vm.rows.find((r) => r.id === 'templateHash')?.value).toBe(plan.token.templateHash);
     expect(vm.rows.find((r) => r.id === 'extension')?.value).toBe(plan.token.extensionCommitment);
-    expect(vm.status).toEqual({ verified: false, pendingReview: true });
     const entry = JSON.parse(vm.registryEntryJson);
     expect(entry).toMatchObject({ ticker: 'MODL', covenant_id: plan.token.covenantId, status: 'pending-review', verified: false, decimals: 2 });
     expect(vm.registryEntryJson.endsWith('}\n')).toBe(true);

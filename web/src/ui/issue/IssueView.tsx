@@ -12,7 +12,7 @@ import type { PlanIssue } from '../../kob/plan-types';
 import { isKeyOwned } from '../../kob/token-state';
 import type { Services } from '../../app/services';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
-import { Badge, Banner, Button, ErrorBanner, Field, KeyValueList, Section, Segmented, Spinner, kasText, shortId, useAsync } from '../kit';
+import { Banner, Button, ErrorBanner, Field, KeyValueList, Section, Segmented, Spinner, kasText, shortId, useAsync } from '../kit';
 import {
   defaultCarrierText, emptyUiState, filterDecimals, filterOwner, filterTicker, formToIssueForm, groupByField, modelIssues, parseDecimalsText, remainingText,
   reviewSummary, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState,
@@ -530,10 +530,7 @@ export function IssueView() {
               { label: t('issue.summary.fee'), value: t('issue.summary.feeValue', { fee: kasText(summary.fee) }), 'data-testid': 'issue-summary-fee' },
             ]}
           />
-          <div class="row">
-            <Badge tone="warn">{t('issue.result.unverified')}</Badge>
-            <span class="muted">{t('issue.summary.fixed')}</span>
-          </div>
+          <p class="muted">{t('issue.summary.fixed')}</p>
         </div>
       );
     }

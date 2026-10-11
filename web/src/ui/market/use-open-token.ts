@@ -21,7 +21,7 @@ const NONE: OpenTokenState = { info: null, reason: null, loading: false };
 /** `refreshKey` changes when the book moved: the scales are read again. */
 export function useOpenToken(row: TokenRow | null, refreshKey = 0): OpenTokenState {
   const { indexer, kob, registry } = useServices();
-  const view = row && row.source !== 'registry' && row.index && row.standing !== 'delisted' ? row.index : null;
+  const view = row && row.source !== 'registry' && row.index && !row.delisted ? row.index : null;
   const facts = useAsync(
     async (signal): Promise<{ scales: ScaleSample[]; ext: Hex | null } | null> => {
       if (!view || !indexer) return null;

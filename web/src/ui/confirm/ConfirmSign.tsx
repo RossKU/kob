@@ -20,7 +20,7 @@ import { formatUtc } from '../../kob/daa';
 import { expectedOutputs, signAndSubmit, waitForAcceptance, type SignStage } from '../../wallet/sign';
 import { Banner, Button, CopyText, Modal, RawDetails, Spinner, copyToClipboard } from '../kit';
 import { shortId } from '../kit/format';
-import { OpenTokenCaution, PowersWarning } from '../market/TokenBadges';
+import { OpenTokenNote, PowersWarning } from '../market/TokenBadges';
 import { buildConfirmModel, type Card, type ConfirmModel, type Finding, type Row, type Section } from './confirm-model';
 import { buildIssuanceModel } from './issuance-model';
 import { feeDisclosureOf } from './fee-disclosure';
@@ -40,10 +40,8 @@ export interface ConfirmSignProps {
   label?: string;
   /** template capabilities of the token program of the order (indexer `powers`): freeze / seize show a warning above the summary */
   tokenPowers?: readonly string[];
-  /** the order trades an open-list token (no registry entry): a caution line is shown and the token is labelled with its covenant id */
+  /** the order trades an open-list token (no registry entry): a note on base units and the full covenant id is shown, and the token is labelled with its covenant id */
   openToken?: TokenInfo;
-  /** an unverified registry token (not synthesised): only the caution is shown, the registry already knows it */
-  cautionToken?: TokenInfo;
   /** issuance (genesis) transaction: it has no token inputs, so the order decoder cannot describe it; the token facts the planner claims are verified against the tx instead */
   issue?: { token: IssueToken };
   /**
@@ -313,7 +311,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
           </Banner>
         ) : null}
 
-        <OpenTokenCaution token={props.openToken ?? props.cautionToken} data-testid="confirm-open-caution" />
+        <OpenTokenNote token={props.openToken} data-testid="confirm-open-caution" />
         <PowersWarning powers={props.tokenPowers} data-testid="confirm-powers-warning" />
 
         {mustAck.length > 0 ? (

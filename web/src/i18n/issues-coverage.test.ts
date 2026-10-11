@@ -46,7 +46,6 @@ const decodeSrc = source('../kob/decode.ts');
 const walletNoticeCodes = unique(matches(decodeSrc.slice(decodeSrc.indexOf('export function describeInputsForWallet')), /\bn\('([\w-]+)'/g));
 
 const registrySrc = source('../kob/registry.ts');
-const lookalikeLevels = unique(matches(/type LookalikeLevel = ([^;]+);/.exec(registrySrc)?.[1] ?? '', /'([\w-]+)'/g));
 const verifyCodes = unique(matches(registrySrc, /problems\.push\(\{ code: '([\w-]+)'/g));
 
 /** dictionary key of every code, by catalogue */
@@ -60,7 +59,6 @@ const catalogues: Record<string, string[]> = {
   'issuance form (issue.ts)': issueFormCodes().map((c) => `issues.${c}`),
   'registry issues (REGISTRY_ISSUE_CODES)': REGISTRY_ISSUE_CODES.map((c) => `issues.${c}`),
   'untradable reasons (UNTRADABLE_REASONS)': UNTRADABLE_REASONS.map((r) => `issues.untradable.${r}`),
-  'lookalike levels': lookalikeLevels.map((l) => `issues.lookalike.${l}`),
   'registry verification problems': verifyCodes.map((c) => `issues.verify.${c}`),
   'wallet errors (WalletError.code)': walletCodes.map((c) => `issues.wallet.${c}`),
   'sign flow errors (SignFlowError.code)': unique([...walletCodes, ...signFlowOwnCodes]).map((c) => `issues.signflow.${c}`),
@@ -83,7 +81,6 @@ describe('finding catalogues are found in the sources', () => {
       'issuance form (issue.ts)': 33,
       'registry issues (REGISTRY_ISSUE_CODES)': 20,
       'untradable reasons (UNTRADABLE_REASONS)': 5,
-      'lookalike levels': 4,
       'registry verification problems': 8,
       'wallet errors (WalletError.code)': 6,
       'sign flow errors (SignFlowError.code)': 8,

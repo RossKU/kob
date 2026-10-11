@@ -41,7 +41,7 @@ describe('create transactions: what the wallet will sign, derived from the built
     // inputs: token leader (maker-owned, signed) + funding (signed)
     expect(s.inputs.map((i) => [i.type, i.ownedBy, i.willSign])).toEqual([['token', 'maker', true], ['kas', 'maker', true]]);
     expect(s.inputs[0].token).toMatchObject({ amount: 12_000n, ownerScheme: 0, leader: true, program: 'KCC20Ref' });
-    expect(s.inputs[0].token!.ref.display).toBe('TST (7070…7070) [verified]');
+    expect(s.inputs[0].token!.ref.display).toBe('TST (7070…7070)');
     // outputs: order, custody, token change, KAS change
     expect(s.outputs.map((x) => x.kind)).toEqual(['order', 'custody', 'token-change', 'kas-change']);
     expect(s.outputs[1].token).toMatchObject({ amount: 10_000n, ownerScheme: 4, escrowOf: o.covenantId });

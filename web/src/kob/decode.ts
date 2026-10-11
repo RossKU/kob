@@ -105,7 +105,7 @@ export interface TokenRef {
   covenantId: Hex;
   ticker: string | null;
   decimals: number | null;
-  /** `TICKER (abcd...1234) [verified]` for registry tokens, `unknown token (abcd...1234)` otherwise: never a bare name */
+  /** `TICKER (abcd...1234)` for registry tokens, `unknown token (abcd...1234)` otherwise: never a bare name */
   display: string;
   inRegistry: boolean;
   tradable: boolean;

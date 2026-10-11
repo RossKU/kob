@@ -7,7 +7,7 @@ import { COND_ISSUE_CATALOG } from '../kob/orders/cond-issues';
 import { SIGNING_ISSUE_CODES, decodeSigning, describeInputsForWallet, type SigningIssue } from '../kob/decode';
 import { emptyIssueForm, issueLimits, validateIssueForm } from '../kob/issue';
 import { planOrder } from '../kob/plan';
-import { REGISTRY_ISSUE_CODES, UNTRADABLE_REASONS, lookalikeReport, parseRegistry } from '../kob/registry';
+import { REGISTRY_ISSUE_CODES, UNTRADABLE_REASONS, parseRegistry } from '../kob/registry';
 import type { ActionRequest, BuiltTx, Hex } from '../kob/types';
 import { formatKas } from '../kob/units';
 import { NodeError } from '../data/node-error';
@@ -328,16 +328,8 @@ describe('cancel, refund, snapshot, issuance, registry and wallet findings', () 
     expect(issueText(issue('funds.insufficient', { need: 30n * KAS, have: 12n * KAS }), {})).toContain('locks 30 KAS as carriers');
   });
 
-  it('gives every untradable reason and lookalike level a sentence', () => {
-    for (const r of UNTRADABLE_REASONS) expect(keyedText('untradable', r, undefined, undefined), `${r}`).not.toMatch(/^issues\./);
-    const registry = parseRegistry(tradableRegistryJson(), { kob: K });
-    const real = registry.tokens[0];
-    const strong = lookalikeReport(registry, real.ticker, '99'.repeat(32));
-    expect(strong.level).toBe('strong');
-    const en = keyedText('lookalike', strong.level, { ticker: real.ticker, real: `${real.ticker} (7070…7070)`, id: '9999…9999' }, strong.message);
-    expect(en).toContain('WARNING');
-    expect(en).toContain('is NOT');
-    expect(keyedText('lookalike', 'none', { name: 'TST (7070…7070) [verified]' }, undefined)).toBe('TST (7070…7070) [verified] is a registered token.');
+  it('gives every untradable reason a sentence', () => {
+    for (const r of UNTRADABLE_REASONS) expect(keyedText('untradable', r, undefined, undefined), r).not.toMatch(/^issues[.]/);
   });
 });
 

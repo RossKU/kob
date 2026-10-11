@@ -43,9 +43,8 @@ builds" in contracts/README.md.
 | Strict templates | kron-2433 `2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2`, kron-2732 `8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e` |
 | Pending review | kcc20-ref-3x3, kcc20-ref-8x8, kcc20-kaspacom-0-2-5, kcc20-ref-public-mint |
 
-The deploy-mainnet build embeds this file as its default registry and checks this hash; the web build
-pins the same hash (`web/registry-pin.mjs`). An operator may load another registry (`--tokens`):
-its hash is reported by `GET /v1/tokens` and the web app shows it as a non-default registry.
+The deploy-mainnet build embeds this file as its default registry and checks this hash. An operator may load another
+registry (`--tokens`): its hash is reported by `GET /v1/tokens`.
 
 | Listed token | Covenant id | Standing |
 |---|---|---|

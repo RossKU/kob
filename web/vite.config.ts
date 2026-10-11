@@ -3,7 +3,6 @@ import preact from '@preact/preset-vite';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { CSP_META } from './csp.mjs';
-import { defaultRegistrySha256 } from './registry-pin.mjs';
 
 // Embeds the Content-Security-Policy (csp.mjs) into the BUILT index.html only: the dev server needs inline scripts for hot reload.
 const kobCsp = () => ({
@@ -41,8 +40,6 @@ const kobStableMapRefs = (): Plugin => ({
 // Static, client-side build: `vite build` -> dist/ (serve from any static host; relative asset URLs).
 export default defineConfig({
   base: './',
-  // sha256 of registry/tokens.json at build time: the pin the loaded registry is compared with (src/kob/registry-source.ts)
-  define: { __KOB_DEFAULT_REGISTRY_SHA256__: JSON.stringify(defaultRegistrySha256()) },
   plugins: [preact(), kobCsp(), kobStableMapRefs()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   // keepNames: the official kaspa-wasm SDK identifies its JS classes (Transaction, TransactionOutput, Hash ...) by their `name` when it converts

@@ -30,17 +30,17 @@ describe('standardScaleOf', () => {
 });
 
 describe('synthesizeOpenToken', () => {
-  it('builds a tradable, unverified token from the indexer row and its orders: the decimals are the exponent of the orders\' scale', () => {
+  it('builds a tradable token from the indexer row and its orders: the decimals are the exponent of the orders\' scale', () => {
     const r = synthesizeOpenToken(kob, view({ powers: ['burn', 'freeze', 'weird'] }), scales);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const t = r.info;
     expect(t).toMatchObject({
       covenantId: ID, program: 'KCC20Ref_8x8', family: 'kcc20', templateHash: kcc.hash, extensionCommitment: EXT, decimals: 3, tick: 1n,
-      tradable: true, verified: false, official: false, openList: true, capabilities: ['burn', 'freeze'], slots: { inputs: 8, outputs: 8 },
+      tradable: true, openList: true, capabilities: ['burn', 'freeze'], slots: { inputs: 8, outputs: 8 },
     });
     expect(t.ticker).toBe('abababab…abababab');
-    expect(displayName(t)).toBe('abababab…abababab [unverified]');
+    expect(displayName(t)).toBe('abababab…abababab');
     // the planners accept it like a registry token, and quote at the book's scale
     const m = toTokenMarket(kob, t.json);
     expect(m).toMatchObject({ covenantId: ID, program: 'KCC20Ref_8x8', scale: 1000n, tick: 1n, decimals: 3, extensionCommitment: EXT });

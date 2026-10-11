@@ -252,7 +252,7 @@ export function issueText(issue: IssueLike, ctx: IssueTextContext = {}): string 
   return t(key, displayParams(issue.code, withoutRaw(issue), ctx));
 }
 
-/** Same for a keyed message without an issue object, e.g. `keyedText('wallet', 'rejected')`, `keyedText('untradable', reason)`, `keyedText('lookalike', level, { ... })`. */
+/** Same for a keyed message without an issue object, e.g. `keyedText('wallet', 'rejected')`, `keyedText('untradable', reason)`. */
 export function keyedText(prefix: string, code: string, params?: Params, fallback?: string): string {
   const key = `issues.${prefix}.${code}`;
   if (!has(key)) return fallback ?? key;

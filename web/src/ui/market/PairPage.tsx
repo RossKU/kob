@@ -35,8 +35,7 @@ import { PairTrades } from './PairTrades';
 import { tokenTitle } from './TokenBadges';
 import { PairDetails } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
-import { buildTokenRows, tradableRows } from './token-model';
-import { useHeldTokenIds } from './use-held-tokens';
+import { buildTokenRows, sharedTickerIds, tradableRows } from './token-model';
 import { ratioCandles, usdDp, usdStats } from './usd-model';
 import './market.css';
 import '../ticket/ticket.css';
@@ -55,9 +54,10 @@ export function PairPage(props: { base: string; quote: string }) {
   const [liveKey, setLiveKey] = useState(0);
   const [prefill, setPrefill] = useState<{ side: 'buy' | 'sell'; price: bigint } | undefined>(undefined);
   const tokenList = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
-  const held = useHeldTokenIds();
-  const rows = useMemo(() => buildTokenRows(registry, tokenList.data ?? null, [], held), [registry, tokenList.data, held]);
+  const rows = useMemo(() => buildTokenRows(registry, tokenList.data ?? null, []), [registry, tokenList.data]);
   const choiceRows = useMemo(() => tradableRows(rows, kob.templates()), [rows, kob]);
+  // listed tokens that share a ticker with another listed token: a short note at each token's facts and at the ticket
+  const shared = useMemo(() => sharedTickerIds(choiceRows), [choiceRows]);
   const baseRow = rows.find((r) => r.covenantId === props.base);
   const quoteRow = rows.find((r) => r.covenantId === props.quote);
 
@@ -247,13 +247,13 @@ export function PairPage(props: { base: string; quote: string }) {
       }
       ticket={
         <div class="stack mkt-area-ticket">
-          <OrderTicket token={baseInfo} quote={quoteInfo} prefill={prefill} powers={powers} />
+          <OrderTicket token={baseInfo} quote={quoteInfo} prefill={prefill} powers={powers} sharedTicker={shared.has(props.base) || shared.has(props.quote)} />
           <p class="small muted">
             <a href="#/orders" data-testid="pair-my-orders">{t('pair.myOrders')}</a>
           </p>
         </div>
       }
-      details={<PairDetails rows={[baseRow, quoteRow].filter((r): r is NonNullable<typeof r> => !!r)} services={services} />}
+      details={<PairDetails shared={shared} rows={[baseRow, quoteRow].filter((r): r is NonNullable<typeof r> => !!r)} services={services} />}
     />
   );
 }

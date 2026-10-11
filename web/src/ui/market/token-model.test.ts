@@ -3,9 +3,8 @@ import type { IndexerTokenView } from '../../data/indexer-types';
 import { normalizeTokenView } from '../../data/indexer';
 import { parseRegistry, displayName, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
-import { officialGenesis } from '../../testing/chain-fixtures';
-import { needsOpenCaution, tokenTitle } from './TokenBadges';
-import { buildTokenRows, filterTokens, hasIssuerControl, indexerDowngrade, labelState, parseCovenantId, templateDetail, tickerOrId, tokenBadges, tokenLabel, tradableHere, tradableRows, unknownRow } from './token-model';
+import { tokenTitle } from './TokenBadges';
+import { buildTokenRows, filterTokens, hasIssuerControl, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenLabel, tradableHere, tradableRows, unknownRow } from './token-model';
 
 const kob = await loadKobNode();
 const tpl = kob.templates().find((t) => t.name === 'KCC20Ref_8x8')!;
@@ -30,90 +29,77 @@ const view = (ticker: string, id: string, asks = 0, bids = 0, over: Partial<Inde
 });
 
 describe('tokenBadges', () => {
-  it('verified, tradable token: a single verified badge', () => {
+  it('a tradable token has no badge at all, whatever the registry says of verification', () => {
     const reg = registry('reviewed', [tokJson('GOOD', ID('a'))]);
     expect(reg.tokens[0].tradable).toBe(true);
-    expect(tokenBadges(reg.tokens[0]).map((b) => b.kind)).toEqual(['verified']);
+    expect(tokenBadges(reg.tokens[0])).toEqual([]);
   });
 
   it('a reviewed template that differs from the one pinned in this build makes a listed token untradable with the reason', () => {
     const reg = registry('reviewed', [tokJson('NEW', ID('b'))], 'ab'.repeat(32));
     const b = tokenBadges(reg.tokens[0]);
-    expect(b.map((x) => x.kind)).toEqual(['verified', 'untradable']);
-    expect(b[1].reason).toBe('template-mismatch');
+    expect(b.map((x) => x.kind)).toEqual(['untradable']);
+    expect(b[0].reason).toBe('template-mismatch');
   });
 
-  it('pending-review and unverified tokens are tradable and show pending review plus unverified; delisted shows the status only (the reason is already told)', () => {
-    const reg = registry('reviewed', [tokJson('UNV', ID('c'), 'pending-review', false), tokJson('DEL', ID('d'), 'delisted', true), tokJson('PEN', ID('e'), 'pending-review', false)]);
-    expect(tokenBadges(reg.tokens[0]).map((x) => x.kind)).toEqual(['pending-review', 'unverified']);
+  it('pending-review and unverified entries are tradable and carry no badge; delisted shows the status only (the reason is already told)', () => {
+    const reg = registry('reviewed', [tokJson('UNV', ID('c'), 'pending-review', false), tokJson('DEL', ID('d'), 'delisted', true), tokJson('VER', ID('f'), 'pending-review', true)]);
+    expect(tokenBadges(reg.tokens[0])).toEqual([]);
     expect(tokenBadges(reg.tokens[1]).map((x) => x.kind)).toEqual(['delisted']);
-    expect(tokenBadges(reg.tokens[2]).map((x) => x.kind)).toEqual(['pending-review', 'unverified']);
-    // a pending entry that is verified against chain carries the pending badge only
-    const ver = registry('reviewed', [tokJson('VER', ID('f'), 'pending-review', true)]);
-    expect(tokenBadges(ver.tokens[0]).map((x) => x.kind)).toEqual(['pending-review']);
+    expect(tokenBadges(reg.tokens[2])).toEqual([]);
   });
 
+  it('the executor delisting a token shows the delisted badge', () => {
+    const reg = registry('reviewed', [tokJson('GOOD', ID('a'))]);
+    expect(tokenBadges(reg.tokens[0], true).map((x) => x.kind)).toEqual(['delisted']);
+  });
 });
 
 describe('labels', () => {
-  it('matches the registry displayName in English and keeps the covenant id fragment', () => {
+  it('matches the registry displayName in English, keeps the covenant id fragment and has no state word', () => {
     const reg = registry('reviewed', [tokJson('GOOD', ID('a'))]);
     const t = reg.tokens[0];
-    expect(tokenLabel(t, labelState(t))).toBe(displayName(t));
-    expect(tokenLabel(t, 'ok')).toBe('GOOD (aaaa…aaaa) [ok]');
+    expect(tokenLabel(t)).toBe(displayName(t));
+    expect(tokenLabel(t)).toBe('GOOD (aaaa…aaaa)');
   });
 
-  it('a pending-review entry says so in the label, in English (displayName) and by state word', () => {
-    const reg = registry('reviewed', [tokJson('PEN', ID('e'), 'pending-review', false), tokJson('VER', ID('f'), 'pending-review', true)]);
-    const [pen, ver] = reg.tokens;
-    expect(labelState(pen)).toBe('unverified-pending');
-    expect(labelState(ver)).toBe('verified-pending');
-    expect(displayName(pen)).toBe('PEN (eeee…eeee) [unverified, pending review]');
-    expect(displayName(ver)).toBe('VER (ffff…ffff) [verified, pending review]');
-    expect(tokenLabel(pen, 'unverified, pending review')).toBe(displayName(pen));
-    expect(labelState({ status: 'pending-review', verified: true, official: true }, 'unverified')).toBe('unverified-pending');
-    expect(labelState({ status: 'pending-review', verified: true }, 'unverified')).toBe('verified-pending'); // the executor's word adds nothing to a non-official claim
-    expect(labelState({ status: 'delisted', verified: false })).toBe('delisted');
-  });
-
-  it('delisted overrides verified', () => {
-    expect(labelState({ status: 'delisted', verified: true })).toBe('delisted');
-    expect(labelState({ status: 'listed', verified: false })).toBe('unverified');
+  it('a pending-review, unverified or delisted registry entry reads exactly like a verified one', () => {
+    const reg = registry('reviewed', [tokJson('PEN', ID('e'), 'pending-review', false), tokJson('VER', ID('f'), 'pending-review', true), tokJson('DEL', ID('d'), 'delisted', true)]);
+    expect(reg.tokens.map((t) => displayName(t))).toEqual(['PEN (eeee…eeee)', 'VER (ffff…ffff)', 'DEL (dddd…dddd)']);
+    expect(reg.tokens.map((t) => tokenLabel(t))).toEqual(reg.tokens.map((t) => displayName(t)));
   });
 });
 
 describe('open token list: a registry entry is never stricter than an indexer-only token', () => {
-  it('a pending-review, unverified entry on a reviewed template is tradable and carries the same caution as the open-list token', () => {
+  it('a pending-review, unverified entry on a reviewed template is tradable and looks like any other token', () => {
     const reg = registry('reviewed', [tokJson('PEN', ID('e'), 'pending-review', false)]);
     const [row] = buildTokenRows(reg, [view('PEN', ID('e'), 1, 1)]);
-    expect(row).toMatchObject({ source: 'registry', tradable: true, reason: null, labelState: 'unverified-pending', genesis: 'unverified' });
-    expect(row.badges.map((b) => b.kind)).toEqual(['pending-review', 'unverified']);
+    expect(row).toMatchObject({ source: 'registry', tradable: true, reason: null });
+    expect(row.badges).toEqual([]);
     expect(row.issuerControl).toBe(false);
-    expect(needsOpenCaution(row.info!)).toBe(true); // the ticket and the pre-sign screen show the unverified caution
-    // the same program as an open-list token (no entry): unverified badge, tradable through the open path
+    // the same program as an open-list token (no entry): no badge, tradable through the open path
     const unknown = unknownRow(reg, view('PEN', ID('9'), 1, 1));
-    expect(unknown.badges.map((b) => b.kind)).toEqual(['unverified']);
-    for (const b of unknown.badges) expect(row.badges.map((x) => x.kind)).toContain(b.kind);
+    expect(unknown.badges).toEqual([]);
     expect(row.powers).toEqual(unknown.powers);
     // delisted stays untradable; a template that is not reviewed still blocks
     const del = buildTokenRows(registry('reviewed', [tokJson('DEL', ID('d'), 'delisted', false)]), null)[0];
     expect(del).toMatchObject({ tradable: false, reason: 'delisted' });
     const pend = buildTokenRows(registry('pending-review', [tokJson('PEN', ID('e'), 'pending-review', false)]), null)[0];
     expect(pend).toMatchObject({ tradable: false, reason: 'template-pending-review' });
-    expect(pend.badges.map((b) => b.kind)).toEqual(['pending-review', 'unverified', 'untradable']);
+    expect(pend.badges.map((b) => b.kind)).toEqual(['untradable']);
   });
 });
 
 describe('buildTokenRows', () => {
   const reg = registry('reviewed', [tokJson('KRON', ID('a')), tokJson('GOOD', ID('b'))]);
 
-  it('lists registry tokens first with their indexer counts, then unknown ones as unverified and not tradable', () => {
+  it('lists registry tokens first with their indexer counts, then unknown ones (tradable only through the open-list path)', () => {
     const rows = buildTokenRows(reg, [view('GOOD', ID('b'), 3, 4), view('WIDE', ID('9'), 1, 1), view('QUIET', ID('8'), 0, 0)]);
     expect(rows.map((r) => r.ticker)).toEqual(['KRON', 'GOOD', 'WIDE', 'QUIET']);
     expect(rows[1]).toMatchObject({ source: 'registry', openAsks: 3, openBids: 4, tradable: true });
     expect(rows[0].openAsks).toBeNull(); // the indexer has not seen it
-    expect(rows[2]).toMatchObject({ source: 'indexer', tradable: false, reason: 'unverified', labelState: 'unverified' });
-    expect(rows[2].badges.map((b) => b.kind)).toEqual(['unverified']);
+    expect(rows[2]).toMatchObject({ source: 'indexer', tradable: false, reason: 'unregistered', delisted: false });
+    expect(rows[2].badges).toEqual([]);
   });
 
   it('cross-checks the indexer view against the registry', () => {
@@ -121,13 +107,9 @@ describe('buildTokenRows', () => {
     expect(rows[1].indexerProblems).toContain('template-hash-mismatch');
   });
 
-  it('flags a lookalike of a registered ticker as a strong warning and sanitizes hostile text', () => {
-    const fake = unknownRow(reg, view('KR0N', ID('7')));
-    expect(fake.lookalike?.level).toBe('strong');
-    expect(fake.lookalike?.lookalikes[0].token.ticker).toBe('KRON');
-    expect(fake.tradable).toBe(false);
-    const evil = unknownRow(reg, view('A‮B\u0000C', ID('6')));
-    expect(evil.ticker).not.toMatch(/[‮\u0000]/);
+  it('sanitizes hostile text of an unknown token', () => {
+    const evil = unknownRow(reg, view('A\u202eB\u0000C', ID('6')));
+    expect(evil.ticker).not.toMatch(/[\u202e\u0000]/);
   });
 
   it('merges pasted tokens without duplicating known ones', () => {
@@ -197,6 +179,8 @@ describe('tokens this build cannot trade are not offered', () => {
   it('drops registry tokens that are delisted, off the pinned template or unreviewed; keeps the tradable ones', () => {
     const ok = registry('reviewed', [tokJson('GOOD', ID('a')), tokJson('DEL', ID('d'), 'delisted', true)]);
     expect(tradableRows(buildTokenRows(ok, null), pinned).map((r) => r.ticker)).toEqual(['GOOD']);
+    // the executor delisting a registry token drops it too
+    expect(tradableRows(buildTokenRows(ok, [view('GOOD', ID('a'), 0, 0, { standing: 'delisted' })]), pinned)).toEqual([]);
     const bad = registry('reviewed', [tokJson('NEW', ID('b'))], 'ab'.repeat(32));
     expect(tradableRows(buildTokenRows(bad, null), pinned)).toEqual([]);
     const pend = registry('pending-review', [tokJson('PEN', ID('e'), 'pending-review', false)]);
@@ -219,56 +203,21 @@ describe('tokens this build cannot trade are not offered', () => {
 describe('registry standing, powers and empty tickers (GET /v1/tokens)', () => {
   const reg = registry('reviewed', [tokJson('GOOD', ID('a'))]);
 
-  it('an official standing shows the official badge on a registry token; without a standing the registry decides', () => {
+  it('an official or unverified standing changes nothing about a registry token; delisted makes it untradable', () => {
     const [plain] = buildTokenRows(reg, [view('GOOD', ID('a'))]);
-    expect(plain.badges.map((b) => b.kind)).toEqual(['verified']);
-    // `official` comes from the registry flag alone: the indexer's word does not upgrade a merely verified token
-    const [off] = buildTokenRows(reg, [view('GOOD', ID('a'), 0, 0, { standing: 'official' })]);
-    expect(off.badges.map((b) => b.kind)).toEqual(['verified']);
-    expect(off.labelState).toBe('verified');
-    const officialReg = registry('reviewed', [{ ...tokJson('GOOD', ID('a')), official: true, ...officialGenesis() }]);
-    const [real] = buildTokenRows(officialReg, [view('GOOD', ID('a'))]);
-    expect(real.badges.map((b) => b.kind)).toEqual(['official']);
-    expect(tokenLabel(real, 'official')).toBe('GOOD (aaaa…aaaa) [official]');
-    // ...and an indexer may still downgrade it
-    expect(buildTokenRows(officialReg, [view('GOOD', ID('a'), 0, 0, { standing: 'unverified' })])[0].labelState).toBe('unverified');
-  });
-
-  it('a delisted standing beats everything; an unverified standing adds nothing to a verified, non-official registry token (one word for it on every page)', () => {
-    expect(buildTokenRows(reg, [view('GOOD', ID('a'), 0, 0, { standing: 'delisted' })])[0].badges.map((b) => b.kind)).toEqual(['delisted']);
-    // the executor says `unverified` of every token that is not official: that is not "less than verified" (soak registry: verified tokens, none official)
-    const [row] = buildTokenRows(reg, [view('GOOD', ID('a'), 0, 0, { standing: 'unverified' })]);
-    expect(row.labelState).toBe('verified');
-    expect(row.badges.map((b) => b.kind)).toEqual(['verified']);
-    expect(row.standing).toBeNull();
-  });
-
-  it('the market row and the registry-only label (My orders, balances) agree for every standing the indexer can send, except an official claim the executor does not confirm', () => {
-    const t = reg.tokens[0];
-    for (const standing of [undefined, 'official', 'unverified'] as const) {
-      const [row] = buildTokenRows(reg, [view('GOOD', ID('a'), 0, 0, standing ? { standing } : {})]);
-      expect(row.labelState, String(standing)).toBe(labelState(t));
-      expect(row.badges.map((b) => b.kind), String(standing)).toEqual(tokenBadges(t).map((b) => b.kind));
-      expect(tokenTitle(row), String(standing)).toBe(`GOOD (aaaa…aaaa) [verified]`);
+    expect(plain.badges).toEqual([]);
+    for (const standing of ['official', 'unverified'] as const) {
+      const [row] = buildTokenRows(reg, [view('GOOD', ID('a'), 0, 0, { standing })]);
+      expect(row, standing).toMatchObject({ tradable: true, reason: null, delisted: false });
+      expect(row.badges, standing).toEqual([]);
+      expect(tokenTitle(row), standing).toBe('GOOD (aaaa…aaaa)');
     }
-    // a token the registry itself marks unverified stays unverified on both
-    const bad = registry('reviewed', [tokJson('GOOD', ID('a'), 'pending-review', false)]);
-    expect(buildTokenRows(bad, [view('GOOD', ID('a'), 0, 0, { standing: 'unverified' })])[0].labelState).toBe('unverified-pending');
-    expect(labelState(bad.tokens[0])).toBe('unverified-pending');
+    const [del] = buildTokenRows(reg, [view('GOOD', ID('a'), 0, 0, { standing: 'delisted' })]);
+    expect(del).toMatchObject({ tradable: false, reason: 'delisted', delisted: true });
+    expect(del.badges.map((b) => b.kind)).toEqual(['delisted']);
   });
 
-  it('indexerDowngrade: delisted always; unverified only against an official registry claim; official never upgrades', () => {
-    expect(indexerDowngrade({}, 'delisted')).toBe('delisted');
-    expect(indexerDowngrade({ official: true }, 'delisted')).toBe('delisted');
-    expect(indexerDowngrade({ official: true }, 'unverified')).toBe('unverified');
-    expect(indexerDowngrade({ official: false }, 'unverified')).toBeNull();
-    expect(indexerDowngrade({}, 'unverified')).toBeNull();
-    expect(indexerDowngrade({ official: true }, 'official')).toBeNull();
-    expect(indexerDowngrade({}, 'official')).toBeNull();
-    expect(indexerDowngrade({ official: true }, null)).toBeNull();
-  });
-
-  it('a token outside the registry is unverified by default, delisted only when the executor says so, never official (registry only); never tradable here', () => {
+  it('a token outside the registry has no badge, is delisted only when the executor says so, whatever else the indexer claims; never tradable from the list', () => {
     const rows = buildTokenRows(reg, [
       view('AAA', ID('1')),
       view('BBB', ID('2'), 0, 0, { standing: 'official' }),
@@ -276,13 +225,13 @@ describe('registry standing, powers and empty tickers (GET /v1/tokens)', () => {
       view('DDD', ID('4'), 0, 0, { standing: 'unverified' }),
     ]).slice(1);
     const by = Object.fromEntries(rows.map((r) => [r.ticker, r]));
-    expect(by.AAA.badges.map((b) => b.kind)).toEqual(['unverified']);
-    expect(by.BBB.badges.map((b) => b.kind)).toEqual(['unverified']);
-    expect(by.BBB.labelState).toBe('unverified');
-    expect(by.BBB.indexerProblems).toEqual(['standing-official-unregistered']);
-    expect(tokenLabel(by.BBB, 'unverified')).not.toContain('official');
+    expect(by.AAA.badges).toEqual([]);
+    expect(by.BBB.badges).toEqual([]);
+    expect(by.BBB.indexerProblems).toEqual([]);
+    expect(tokenLabel(by.BBB)).toBe('BBB (22222222…22222222)');
     expect(by.CCC.badges.map((b) => b.kind)).toEqual(['delisted']);
-    expect(by.DDD.badges.map((b) => b.kind)).toEqual(['unverified']);
+    expect(by.CCC.reason).toBe('delisted');
+    expect(by.DDD.badges).toEqual([]);
     expect(rows.every((r) => !r.tradable)).toBe(true);
   });
 
@@ -290,7 +239,7 @@ describe('registry standing, powers and empty tickers (GET /v1/tokens)', () => {
     const rows = buildTokenRows(reg, [view('', ID('e'))]);
     const r = rows[1];
     expect(r.ticker).toBe('');
-    expect(tokenLabel(r, 'unverified')).toBe('eeeeeeee…eeeeeeee [unverified]');
+    expect(tokenLabel(r)).toBe('eeeeeeee…eeeeeeee');
     expect(tickerOrId(r.ticker, r.covenantId)).toBe('eeeeeeee…eeeeeeee');
     expect(tickerOrId('GOOD', ID('a'))).toBe('GOOD');
     expect(filterTokens(rows, 'eeee').map((x) => x.covenantId)).toEqual([ID('e')]);
@@ -298,7 +247,8 @@ describe('registry standing, powers and empty tickers (GET /v1/tokens)', () => {
 
   it('two tokens with the same ticker stay two rows, told apart by covenant id and template hash', () => {
     const rows = buildTokenRows(reg, [view('SAME', ID('5')), view('SAME', ID('6'), 0, 0, { template_hash: 'ff'.repeat(32) })]).slice(1);
-    expect(rows.map((r) => tokenLabel(r, 'x'))).toEqual(['SAME (55555555…55555555) [x]', 'SAME (66666666…66666666) [x]']);
+    expect(rows.map((r) => tokenLabel(r))).toEqual(['SAME (55555555…55555555)', 'SAME (66666666…66666666)']);
+    expect(sharedTickerIds(rows)).toEqual(new Set([ID('5'), ID('6')]));
     expect(rows.map((r) => r.index?.template_hash)).toEqual([tpl.hash, 'ff'.repeat(32)]);
   });
 
@@ -314,22 +264,13 @@ describe('registry standing, powers and empty tickers (GET /v1/tokens)', () => {
     expect(buildTokenRows(reg, [view('GOOD', ID('a'))])[0]).toMatchObject({ powers: [], issuerControl: false });
   });
 
-  it('tokenBadges takes the standing as a second argument', () => {
-    const t = reg.tokens[0];
-    expect(tokenBadges(t, 'official').map((b) => b.kind)).toEqual(['verified']);
-    expect(tokenBadges(t, 'unverified').map((b) => b.kind)).toEqual(['verified']);
-    expect(tokenBadges({ ...t, official: true }, 'unverified').map((b) => b.kind)).toEqual(['unverified']);
-    expect(tokenBadges(t, 'delisted').map((b) => b.kind)).toEqual(['delisted']);
-    expect(tokenBadges({ ...t, official: true }, 'official').map((b) => b.kind)).toEqual(['official']);
-    expect(tokenBadges(t, null).map((b) => b.kind)).toEqual(['verified']);
-  });
 });
 
-describe('the registry always wins over the indexer for trust and issuer powers', () => {
+describe('the registry always wins over the indexer for issuer powers', () => {
   const reg = registry('reviewed', [tokJson('GOOD', ID('a'))]);
   const REAL = 'aa'.repeat(32);
-  const withCaps = (caps: string[], official = false) => {
-    const r = registry('reviewed', [{ ...tokJson('REAL', REAL), official }]);
+  const withCaps = (caps: string[]) => {
+    const r = registry('reviewed', [tokJson('REAL', REAL)]);
     const info = { ...r.tokens[0], capabilities: caps } as unknown as TokenInfo;
     return { ...r, tokens: [info], byCovenantId: new Map([[REAL, info]]) } as TokenRegistry;
   };
@@ -351,24 +292,12 @@ describe('the registry always wins over the indexer for trust and issuer powers'
     expect(row.issuerControl).toBe(true);
   });
 
-  it('an unregistered token is never [official], whatever ticker and standing the indexer chooses', () => {
+  it('an unregistered token is shown like any other whatever ticker and standing the indexer chooses: no badge, never tradable from the list', () => {
     const scam = normalizeTokenView(view('KASPER', 'ee'.repeat(32), 0, 0, { standing: 'official' }));
     const row = buildTokenRows(reg, [scam]).find((r) => r.covenantId === scam.covenant_id)!;
     expect(row.info).toBeNull();
-    expect(row.badges.map((b) => b.kind)).toEqual(['unverified']);
-    expect(row.labelState).toBe('unverified');
-    expect(tokenLabel(row, row.labelState)).toBe('KASPER (eeeeeeee…eeeeeeee) [unverified]');
+    expect(row.badges).toEqual([]);
+    expect(tokenLabel(row)).toBe('KASPER (eeeeeeee…eeeeeeee)');
     expect(row.tradable).toBe(false);
-  });
-
-  it('genesis verification comes from the registry statement only: verified when it says so, "not verified" when it does not, nothing for unregistered tokens', () => {
-    const r0 = buildTokenRows(withCaps([]), null)[0];
-    expect(r0.genesis).toBe('unverified'); // registry silent = not verified
-    const r1 = registry('reviewed', [{ ...tokJson('REAL', REAL), genesis_verified: true, warning: 'audited by hand' }]);
-    expect(r1.tokens[0]).toMatchObject({ genesisVerified: true, warning: 'audited by hand' });
-    expect(buildTokenRows(r1, null)[0].genesis).toBe('verified');
-    expect(buildTokenRows(r1, [view('X', ID('7'))])[1].genesis).toBeNull();
-    // an indexer field of the same name is not read
-    expect(buildTokenRows(withCaps([]), [view('REAL', REAL, 0, 0, { genesis_verified: true } as never)])[0].genesis).toBe('unverified');
   });
 });

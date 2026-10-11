@@ -7,7 +7,7 @@ import { statePriceToTokenPrice } from '../../kob/units';
 import { formatJst, formatUtc } from '../../kob/daa';
 import { longId, type TokenInfo } from '../../kob/registry';
 import { Amount, Badge, Banner, Button, CopyText, KeyValueList, tickKasFraction, tickPriceFraction, type Tone } from '../kit';
-import { labelState, tokenLabel } from '../market/token-model';
+import { tokenLabel } from '../market/token-model';
 import type { EventView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import { OrderFills, filledAmountOf } from './OrderFills';
@@ -166,7 +166,7 @@ export function OrderRow(props: OrderRowProps) {
           {tk && row.pair ? (
             <a href={routeToHash(pairRoute(row.pair.base, row.pair.quote))} data-testid="order-token">{`${tk.ticker}/${bToken?.ticker ?? shortId(row.pair.quote)}`}</a>
           ) : tk ? (
-            <a href={`#/market/${tk.covenantId}`} data-testid="order-token">{tokenLabel(tk, t(`market.state.${labelState(tk)}`, { hash: tk.customRegistry ?? '' }))}</a>
+            <a href={`#/market/${tk.covenantId}`} data-testid="order-token">{tokenLabel(tk)}</a>
           ) : row.token ? (
             <span>{t('orders.unknownToken', { id: longId(row.token) })}</span>
           ) : null}

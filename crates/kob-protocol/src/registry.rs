@@ -28,8 +28,8 @@ pub const DEFAULT_REGISTRY_JSON: &str = include_str!("../../../registry/tokens.j
 pub const SCHEMA_JSON: &str = include_str!("../../../registry/tokens.schema.json");
 
 /// Lowercase hex sha256 of the embedded default registry ([`DEFAULT_REGISTRY_JSON`]) over its LF-normalised bytes: the hash
-/// the mainnet deployment record pins (`contracts/deploy/mainnet/deployment.json` `registry.sha256`, the web build's
-/// `web/registry-pin.mjs`, and `GET /v1/tokens` `registry.sha256` of an executor that loads it).
+/// the mainnet deployment record pins (`contracts/deploy/mainnet/deployment.json` `registry.sha256`
+/// and `GET /v1/tokens` `registry.sha256` of an executor that loads it).
 pub fn default_registry_sha256() -> String {
     use sha2::{Digest, Sha256};
     let lf = DEFAULT_REGISTRY_JSON.replace("\r\n", "\n");

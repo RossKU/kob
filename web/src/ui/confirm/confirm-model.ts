@@ -106,14 +106,13 @@ const FAR_FUTURE_DAA = 2n * 365n * 86_400n * BigInt(DAA_PER_SECOND);
 
 // ------------------------------------------------------------------------------------------------ token labels
 
-/** The identity line of a token: `TICKER (abcd...1234) [verified]` for registry tokens, `unknown token (abcd...1234)` otherwise. Never the ticker alone. */
+/** The identity line of a token: `TICKER (abcd...1234)` for registry tokens, `unknown token (abcd...1234)` otherwise. Never the ticker alone. */
 export function tokenLabel(ref: TokenRef, tr: Translate = t, registry?: TokenRegistry | null): string {
   const info = registry?.byCovenantId.get(ref.covenantId);
   // a token outside the registry is identified by its id alone: 8 + 8 hex, not the 4 + 4 fragment
   if (!info) return tr('confirm.token.unknown', { id: longId(ref.covenantId) });
-  const state = info.status === 'delisted' ? 'delisted' : info.official ? 'official' : info.verified ? 'verified' : 'unverified';
-  if (info.openList) return tr('confirm.token.labelOpen', { id: longId(info.covenantId), state: tr(`confirm.token.${state}`) });
-  return tr('confirm.token.label', { ticker: info.ticker, id: short(info.covenantId), state: tr(`confirm.token.${state}`) });
+  if (info.openList) return tr('confirm.token.labelOpen', { id: longId(info.covenantId) });
+  return tr('confirm.token.label', { ticker: info.ticker, id: short(info.covenantId) });
 }
 
 /** A token amount in human units when the decimals are known (registry), else raw base units. */

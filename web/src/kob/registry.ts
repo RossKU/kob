@@ -1,4 +1,4 @@
-// Token registry: validation of `registry/tokens.json`, template-hash-verified listing, lookalike protection and on-chain verification helpers.
+// Token registry: validation of `registry/tokens.json`, template-hash-verified listing and on-chain verification helpers.
 //
 // The registry file is data, not authority. The token list is OPEN (founder decision 2026-09-30): what gates trading is the TEMPLATE, not the token.
 // A token is TRADABLE in this build if
@@ -8,7 +8,7 @@
 //   (protocol v3 has no lots and no price tick: an order's scale is `10^decimals` of the token and any price in sompi is valid, so the
 //   registry's legacy `lot_size` and `tick` are optional, read from older registry files and ignored, exactly as the Rust validator does.)
 // A registry entry is never treated more strictly than a token with no entry (open-list token, kob/open-token.ts): status `pending-review` and
-// `verified: false` do not block trading. They are shown (badges, label, caution lines) exactly like the open-list token's `unverified`.
+// `verified: false` do not block trading. Token issuance is permissionless: the UI shows no verification or officialness of any token.
 // Everything else is viewable (balances, positions) but not tradable, with a machine-readable reason.
 //
 // Mirrors crates/kob-protocol/src/registry.rs (validation rules, `normalize_ticker`, `display_name`); keys of the JSON are snake_case.
@@ -110,11 +110,11 @@ export class RegistryError extends Error {
 }
 
 /**
- * Why a token cannot be traded in this build (`null` = tradable). `unverified` is only given to tokens the registry does not know (token-model
+ * Why a token cannot be traded in this build (`null` = tradable). `unregistered` is only given to tokens the registry does not know (token-model
  * `unknownRow`: no template at hand); a registry entry is never untradable for being unverified or pending review.
  */
 export const UNTRADABLE_REASONS = [
-  'delisted', 'unverified', 'template-pending-review', 'template-unsupported', 'template-mismatch',
+  'delisted', 'unregistered', 'template-pending-review', 'template-unsupported', 'template-mismatch',
 ] as const;
 export type UntradableReason = (typeof UNTRADABLE_REASONS)[number];
 
@@ -161,11 +161,6 @@ export function normalizeTicker(ticker: string): string {
   return [...latin.replace(/RN/g, 'M').replace(/VV/g, 'W')].map((c) => (c === 'O' ? '0' : c === 'I' || c === 'L' ? '1' : c === 'S' ? '5' : c === 'B' ? '8' : c)).join('');
 }
 
-/** Skeleton of a display NAME: like `normalizeTicker`, with spaces, dots, dashes and underscores dropped ("Kaspa Coin" ~ "KASPACOIN"). */
-export function normalizeName(name: string): string {
-  return normalizeTicker(name).replace(/[\s.\-_·]+/gu, '');
-}
-
 /** Makes an UNTRUSTED name (indexer, pasted) safe to render: control, zero-width and bidi characters become U+FFFD, length capped. */
 export function sanitizeUntrusted(s: string, max = 32): string {
   const cleaned = [...s].map((c) => (BAD_CHAR.test(c) ? '�' : c)).join('');
@@ -189,18 +184,10 @@ export interface TokenInfo {
   extensionCommitment: Hex | null; extensionClass: ExtensionClass; decimals: number;
   /** minimum price increment, sompi per whole token: always null (= 1 sompi). Protocol v3 has no price tick; the registry's legacy `tick` is ignored. */
   tick: bigint | null;
-  status: TokenStatus; verified: boolean; display: RegistryTokenJson['display'] | null;
-  /** confirmed genuine by KOB (registry `official`) */
-  official: boolean;
-  /** registry `genesis_verified`: true / false as declared, null when the registry says nothing (= not verified) */
-  genesisVerified?: boolean | null;
-  /** maintainer warning of the registry entry (`warning`) */
-  warning?: string | null;
+  status: TokenStatus; display: RegistryTokenJson['display'] | null;
   /** capabilities of the token's program template (registry `capabilities`), possibly empty */
   capabilities: Capability[];
-  /** set when the registry in use is NOT the build-pinned default (registry-source.ts): its short hash. Such a token is never official / verified by KOB. */
-  customRegistry?: string | null;
-  /** synthesised from the indexer for an open-list token that has no registry entry (kob/open-token.ts): unverified, decimals 0, tick 1 */
+  /** synthesised from the indexer for an open-list token that has no registry entry (kob/open-token.ts): decimals inferred, tick 1 */
   openList?: boolean;
   /** kob-wasm program (null when this build cannot handle the template) */
   program: TokenProgram | null;
@@ -217,8 +204,6 @@ export interface TokenRegistry {
   templateChecks: TemplateCheck[];
   tokens: TokenInfo[];
   byCovenantId: ReadonlyMap<Hex, TokenInfo>;
-  /** set when this is not the pinned default registry (registry-source.ts `markCustomRegistry`) */
-  custom?: { shortHash: string };
 }
 
 // ------------------------------------------------------------------------------------------------ validation
@@ -479,8 +464,8 @@ export function parseRegistry(json: string | unknown, opts: ParseOptions): Token
     return {
       ticker: t.ticker, name: t.name, family: t.family, covenantId: t.covenant_id, templateId: t.template_id, templateHash: tpl.template_hash,
       extensionCommitment: t.extension_commitment, extensionClass: t.extension_class, decimals: t.decimals,
-      tick: null, status: t.status, verified: t.verified,
-      official: t.official === true, genesisVerified: t.genesis_verified ?? null, warning: t.warning ?? null, capabilities: tpl.capabilities ?? [], display: t.display ?? null, program: check.program, templateMatchesPinned: check.matchesPinned, prefixLen: tpl.prefix_len, suffixLen: tpl.suffix_len,
+      tick: null, status: t.status,
+      capabilities: tpl.capabilities ?? [], display: t.display ?? null, program: check.program, templateMatchesPinned: check.matchesPinned, prefixLen: tpl.prefix_len, suffixLen: tpl.suffix_len,
       slots: { inputs: tpl.max_token_inputs, outputs: tpl.max_token_outputs }, tradable: reason === null, untradableReason: reason, json: t,
     };
   });
@@ -493,20 +478,15 @@ export const tokenById = (reg: TokenRegistry, covenantId: Hex): TokenInfo | unde
 export const tradableTokens = (reg: TokenRegistry): TokenInfo[] => reg.tokens.filter((t) => t.tradable);
 export const templateById = (reg: TokenRegistry, id: string): RegistryTemplateJson | undefined => reg.templates.find((t) => t.id === id);
 
-/**
- * `TICKER (abcd…1234) [verified]`: never the name alone, so lookalike tokens are told apart by covenant id. `[delisted]` overrides `[official]`, which overrides
- * `[verified]`; a `pending-review` token says so (`[unverified, pending review]`, `[verified, pending review]`).
- */
-export function displayName(token: Pick<TokenInfo, 'ticker' | 'covenantId' | 'status' | 'verified'> & { official?: boolean; customRegistry?: string | null }): string {
+/** `TICKER (abcd…1234)`: never the name alone, so tokens with the same ticker are told apart by covenant id. */
+export function displayName(token: Pick<TokenInfo, 'ticker' | 'covenantId'>): string {
   const c = token.covenantId;
   const short = shortId(c);
-  const base = token.customRegistry && token.verified ? `listed in custom registry ${token.customRegistry}` : token.official && token.status !== 'pending-review' ? 'official' : token.verified ? 'verified' : 'unverified';
-  const state = token.status === 'delisted' ? '[delisted]' : token.status === 'pending-review' ? `[${base}, pending review]` : `[${base}]`;
   // a token synthesised from the indexer has its covenant id fragment as ticker: shown once, in the long form
-  return token.ticker === short || token.ticker === longId(c) ? `${longId(c)} ${state}` : `${token.ticker} (${short}) ${state}`;
+  return token.ticker === short || token.ticker === longId(c) ? longId(c) : `${token.ticker} (${short})`;
 }
 
-/** `abcd…1234`: 4 + 4 hex of a covenant id, enough next to a registry ticker (registry tickers are unique and look-alike checked). */
+/** `abcd…1234`: 4 + 4 hex of a covenant id, enough next to a registry ticker. */
 export const shortId = (c: string): string => (c.length >= 8 ? `${c.slice(0, 4)}…${c.slice(-4)}` : c);
 
 /**
@@ -578,82 +558,4 @@ export function verifyIndexerToken(token: TokenInfo, view: IndexerTokenView): Ve
   const scale = 10n ** BigInt(Math.min(token.decimals, 9));
   if (view.scale != null && BigInt(view.scale) !== scale) problems.push({ code: 'scale-mismatch', message: 'the indexer lists another price scale' });
   return { ok: problems.length === 0 && missing.length === 0, problems, missing };
-}
-
-// ------------------------------------------------------------------------------------------------ lookalike protection
-
-export type LookalikeLevel = 'none' | 'unknown' | 'collision' | 'shared' | 'strong';
-export interface Lookalike { token: TokenInfo; kind: 'same-ticker' | 'confusable-ticker' | 'confusable-name' | 'same-short-id' }
-/** Another token outside the registry (listed by the indexer) whose short id or ticker is the same as this one's. */
-export interface IdCollision { covenantId: Hex; ticker: string; kind: 'same-short-id' | 'same-ticker' }
-export interface LookalikeReport {
-  /**
-   * `none`: this exact covenant id is registered; `unknown`: not registered, no lookalike; `strong`: not registered AND its ticker equals / resembles a
-   * registered token's; `shared`: the same, but every registered token it resembles is NOT official and carries a maintainer `warning` (e.g. the KRON
-   * test token PEPE, whose ticker collides with the well-known PEPE): the registry itself says that token is not a genuine reference, so a namesake
-   * is a ticker collision, not an impersonation of it (still not confirmed genuine either)
-   */
-  level: LookalikeLevel;
-  /** the registry entry of this covenant id, if any */
-  known: TokenInfo | null;
-  lookalikes: Lookalike[];
-  /** `collision`: other unregistered tokens (`others`) with the same short id or ticker; only those two tokens' full ids tell them apart */
-  collisions: IdCollision[];
-  /** English fallback; the UI translates from `level` + `lookalikes` */
-  message: string;
-}
-
-/**
- * For a token the user pasted or the indexer lists (UNTRUSTED ticker + covenant id): a token with the same ticker, or one that is confusable
- * after homoglyph normalisation (KR0N vs KRON), but a DIFFERENT covenant id than a registered token is a strong scam signal naming the real one.
- */
-export function lookalikeReport(
-  reg: TokenRegistry, ticker: string, covenantId: Hex, name?: string, others: readonly { covenantId: Hex; ticker: string }[] = [],
-): LookalikeReport {
-  const known = reg.byCovenantId.get(covenantId) ?? null;
-  if (known) {
-    return { level: 'none', known, lookalikes: [], collisions: [], message: `${displayName(known)} is registered` };
-  }
-  const short = shortId(covenantId);
-  // The untrusted ticker (and name, when the source has one) are compared as homoglyph skeletons with each registered TICKER and each
-  // registered NAME: a token called "Kaspa Coin" or ticker "КRON" (Cyrillic К) copies a registered token as well as "KR0N" does.
-  const n = normalizeTicker(ticker);
-  const nn = name ? normalizeName(name) : '';
-  const claims = [n, normalizeName(ticker), ...(nn ? [nn] : [])].filter((x) => x.length > 0);
-  const lookalikes: Lookalike[] = [];
-  for (const t of reg.tokens) {
-    if (t.covenantId === covenantId) continue;
-    // the short id a registered token is shown with (and an open-list token's ticker) is only 32 bits: the same fragment is a copy too
-    if (shortId(t.covenantId) === short) lookalikes.push({ token: t, kind: 'same-short-id' });
-    else if (t.ticker === ticker.toUpperCase()) lookalikes.push({ token: t, kind: 'same-ticker' });
-    else if (normalizeTicker(t.ticker) === n) lookalikes.push({ token: t, kind: 'confusable-ticker' });
-    else if (claims.includes(normalizeTicker(t.ticker)) || claims.includes(normalizeName(t.name))) lookalikes.push({ token: t, kind: 'confusable-name' });
-  }
-  if (!lookalikes.length) {
-    const collisions: IdCollision[] = [];
-    for (const o of others) {
-      if (o.covenantId === covenantId || reg.byCovenantId.has(o.covenantId)) continue;
-      if (shortId(o.covenantId) === short) collisions.push({ covenantId: o.covenantId, ticker: o.ticker, kind: 'same-short-id' });
-      else if (n.length > 0 && normalizeTicker(o.ticker) === n) collisions.push({ covenantId: o.covenantId, ticker: o.ticker, kind: 'same-ticker' });
-    }
-    if (collisions.length) {
-      return {
-        level: 'collision', known: null, lookalikes, collisions,
-        message: `${longId(covenantId)} has the same short id or ticker as ${collisions.map((c) => longId(c.covenantId)).join(', ')}: tell them apart by the full covenant id`,
-      };
-    }
-    return { level: 'unknown', known: null, lookalikes, collisions, message: 'this token is not in the KOB registry: check its covenant id yourself' };
-  }
-  const real = lookalikes.map((l) => displayName(l.token)).join(', ');
-  // impersonation needs a target the registry vouches for, or at least does not disown: a non-official entry with a maintainer warning is not one
-  if (lookalikes.every((l) => !l.token.official && !!l.token.warning)) {
-    return {
-      level: 'shared', known: null, lookalikes, collisions: [],
-      message: `"${sanitizeUntrusted(ticker)}" (${covenantId.slice(0, 8)}…) shares its ticker with ${real}, which the KOB registry marks as not official: neither is confirmed genuine, check the covenant id`,
-    };
-  }
-  return {
-    level: 'strong', known: null, lookalikes, collisions: [],
-    message: `WARNING: "${sanitizeUntrusted(ticker)}" (${covenantId.slice(0, 8)}…) copies the ticker of ${real}: it is NOT that token`,
-  };
 }
