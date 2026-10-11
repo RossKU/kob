@@ -863,3 +863,64 @@ async fn a_waiting_buy_first_entry_without_escrow_gets_a_new_b_custody_from_its_
     assert_eq!(c.hs.status(&exit), "filled");
     assert_eq!(c.hs.event_detail(&exit, "fill")["merged_into"], cov.to_hex());
 }
+
+/// The soak's crossed pair book (2026-10-11, up to 6 %): takers in flight and TWAP orders between slices were levels. A market
+/// sell of A (IOC) under the resting bid of A made a route ask below the route bid; a TWAP ask of B between its slices made a
+/// route bid above the route ask; an IOC pair bid sat above both. A level is resting liquidity a matcher can fill now: the pair
+/// book leaves the IOC / FOK orders (KAS and pair) out, and shows a TWAP order once its slice is due, for one slice.
+#[tokio::test]
+async fn the_pair_book_shows_resting_liquidity_only_and_is_not_crossed_by_takers_or_twap_slices_not_due() {
+    let p = AB;
+    let c = Ctx::new();
+    let (ta, tb) = (p.a(), p.b());
+    const P270: i64 = 270_000_000;
+    const P240: i64 = 240_000_000;
+    const P190: i64 = 190_000_000;
+    const P180: i64 = 180_000_000;
+    // resting: a bid of A at 2.60 and an ask of B at 2.00 (route bid ~1.30), an ask of A at 2.70 and a bid of B at 1.90 (route
+    // ask ~1.42), a pair bid at 1.00
+    resting_for(&c, p.fa, SIDE_BID, P260).await;
+    resting_for(&c, p.fb, SIDE_ASK, P200).await;
+    resting_for(&c, p.fa, SIDE_ASK, P270).await;
+    resting_for(&c, p.fb, SIDE_BID, P190).await;
+    place_pair(&c, p, AnyState::KobPair(pair_order(p, MAKER_A, false, RATE, 10)), PV, MAKER_A).await;
+    // not resting: a market sell of A at 2.40 (IOC), a FOK bid of B at 2.10, a TWAP ask of B at 1.80 between its slices (one
+    // whole B per 100 DAA), an IOC pair bid at 1.50
+    kas_order_for(&c, p.fa, SIDE_ASK, P240, (TIF_IOC, 0, 0)).await;
+    kas_order_for(&c, p.fb, SIDE_BID, 210_000_000, (TIF_FOK, 0, 0)).await;
+    let twap = kas_order_for(&c, p.fb, SIDE_ASK, P180, (0, 100, WHOLE)).await;
+    let ioc = PairState { tif: TIF_IOC, ..pair_order(p, MAKER_A, false, 3 * RATE / 2, 10) };
+    place_pair(&c, p, AnyState::KobPair(ioc), PV, MAKER_A).await;
+    age(&c, 20).await;
+
+    let ratio = |l: &pairs::PairLevel| (l.price_num.parse::<u128>().unwrap(), l.price_den.parse::<u128>().unwrap());
+    let below = |a: (u128, u128), b: (u128, u128)| a.0 * b.1 < b.0 * a.1;
+    let rate = |num: i64, den: i64| {
+        let (n, d) = (num as u128, den as u128);
+        let g = (1..=n.min(d)).rev().find(|g| n % g == 0 && d % g == 0).unwrap_or(1);
+        (n / g, d / g)
+    };
+    {
+        let g = c.hs.ingest.lock().unwrap();
+        let pb = pairs::pair_book(g.conn(), &rctx(&c), &ta, &tb, 10).unwrap();
+        // one route ask (A at 2.70 against B at 1.90), the route bid (A at 2.60 against B at 2.00) and the resting pair bid
+        assert_eq!(pb.asks.iter().map(|l| (l.source, ratio(l))).collect::<Vec<_>>(), [("route", rate(P270 - TIP, P190 + TIP))]);
+        assert_eq!(
+            pb.bids.iter().map(|l| (l.source, ratio(l))).collect::<Vec<_>>(),
+            [("route", rate(P260 + TIP, P200 - TIP)), ("direct", (1, 1))]
+        );
+        assert!(below(ratio(&pb.bids[0]), ratio(&pb.asks[0])), "not crossed: {pb:?}");
+    }
+
+    // the TWAP's slice is due: one whole B at 1.80, a route bid of what that slice pays for A at 2.60
+    let due = (twap.daa(&c) + 100).saturating_sub(c.daa()) as usize;
+    age(&c, due).await;
+    {
+        let g = c.hs.ingest.lock().unwrap();
+        let pb = pairs::pair_book(g.conn(), &rctx(&c), &ta, &tb, 10).unwrap();
+        let slice_kas = WHOLE as u128 * (P180 - TIP) as u128 / SCALE as u128;
+        let a_units = slice_kas * SCALE as u128 / (P260 + TIP) as u128;
+        assert_eq!((pb.bids[0].source, ratio(&pb.bids[0])), ("route", rate(P260 + TIP, P180 - TIP)), "{pb:?}");
+        assert_eq!(pb.bids[0].amount, a_units.to_string(), "one slice, not the whole TWAP order");
+    }
+}

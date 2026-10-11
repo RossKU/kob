@@ -26,7 +26,13 @@
 //!
 //! Only listed, live orders are used: open or partially filled, exact custody (every custody the state holds, one live
 //! custody UTXO per token at its exact amount), not flagged possibly frozen, active at the node's DAA score, not past their
-//! refund time (expiry, 90 days idle, IOC / FOK kill) or day-order deadline. The route uses plain `KobAsk` / `KobBid` orders.
+//! refund time (expiry, 90 days idle) or day-order deadline. The route uses plain `KobAsk` / `KobBid` orders.
+//!
+//! A level is resting liquidity a matcher can fill now, so the book is never crossed by what cannot (or does not) rest:
+//! **IOC / FOK orders** (`tif` 1 / 2: market, IOC and FOK takers, KAS or pair) are takers in flight, filled against the books
+//! or killed, never levels; a **TWAP / DCA order** (`interval` > 0) is a level only once its next slice is due (its UTXO
+//! `interval` DAA old, the covenant's CSV), for at most one slice (`maxFill`). A taker waits for a matcher for about the
+//! indexer's lag; shown as a level it crossed the pair book for that long (soak 2026-10-11, up to 6 %).
 //!
 //! **Prices of a pair are never recorded from pair fills** (founder rule): the pair charts are derived from the two KAS series
 //! ([`pair_candles`]); a pair fill records volume only ([`pair_fills`], `price_source: "none"`).
@@ -35,7 +41,7 @@ use super::db::DbResult;
 use super::market::{self, Candle};
 use super::reads::{reduce, tip_state, ReadCtx, CUSTODY_OK, NOT_FROZEN};
 use crate::hex::Hash32;
-use kob_protocol::state::AnyState;
+use kob_protocol::state::{AnyState, TIF_GTC};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -244,14 +250,17 @@ fn kas_orders(conn: &Connection, token: &Hash32, side: i64, limit: usize, now: i
         }
         // the quote at the evaluation time (auctions move), all-in per whole token with checked arithmetic: what the ask's
         // maker receives (`price - tip`), what the bid's maker pays (`price + tip`); a bid's amount is its buying power
+        // (resting orders only, a TWAP slice once due and at most one slice: the module doc)
+        let resting = |tif: i64, interval: i64| tif == TIF_GTC && (interval <= 0 || now >= udaa.saturating_add(interval));
+        let slice = |amount: i64, max_fill: i64| if max_fill > 0 { amount.min(max_fill) } else { amount };
         let k = crate::indexer::processor::guarded(|| match s.clone().into_family(kob_protocol::family::Family::Kcc20) {
-            AnyState::KobAsk(a) => {
+            AnyState::KobAsk(a) if resting(a.tif, a.interval) => {
                 let q = a.price_at(now, udaa)?;
-                Some((q.checked_sub(a.tip)?, a.scale, a.amount_left))
+                Some((q.checked_sub(a.tip)?, a.scale, slice(a.amount_left, a.max_fill)))
             }
-            AnyState::KobBid(b) => {
+            AnyState::KobBid(b) if resting(b.tif, b.interval) => {
                 let q = b.price_at(now, udaa)?;
-                Some((q.checked_add(b.tip)?, b.scale, remaining?))
+                Some((q.checked_add(b.tip)?, b.scale, slice(remaining?, b.max_fill)))
             }
             _ => None,
         })
@@ -351,10 +360,13 @@ fn finish(mut levels: Vec<Lvl>, asks: bool, depth: usize) -> Vec<PairLevel> {
 }
 
 /// The resting level of a pair order now: `(ask, source, quote B per whole A, scale(A), amount of A)`; `None` for the orders
-/// the book leaves out (a `KobCondPair`, an unarmed stop entry, nothing left).
+/// the book leaves out (a `KobCondPair`, an unarmed stop entry, an IOC / FOK taker, a TWAP slice not due yet, nothing left).
 fn resting_level(p: &LivePair, now: i64) -> Option<(bool, &'static str, i64, i64, i64)> {
     crate::indexer::processor::guarded(|| match &p.state {
-        AnyState::KobPair(s) => Some((s.is_ask(), "direct", s.price_at(now, p.udaa)?, s.a_scale(), s.amount_left)),
+        AnyState::KobPair(s) if s.tif == TIF_GTC && (s.interval <= 0 || now >= p.udaa.saturating_add(s.interval)) => {
+            let amount = if s.max_fill > 0 { s.amount_left.min(s.max_fill) } else { s.amount_left };
+            Some((s.is_ask(), "direct", s.price_at(now, p.udaa)?, s.a_scale(), amount))
+        }
         AnyState::KobIfdPair(e) if e.entry_stop == 0 || e.armed != 0 => {
             Some((!e.is_buy_first(), "entry", e.price_at(false, now, p.udaa)?, e.a_scale, e.amount_left))
         }

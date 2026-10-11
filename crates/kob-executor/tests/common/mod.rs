@@ -166,12 +166,18 @@ pub async fn resting(c: &Ctx, side: i64, price: i64) -> Resting {
 
 /// [`resting`] in a token family.
 pub async fn resting_for(c: &Ctx, fam: Family, side: i64, price: i64) -> Resting {
+    kas_order_for(c, fam, side, price, (0, 0, 0)).await
+}
+
+/// [`resting_for`] with its time in force, TWAP interval and maximum fill `(tif, interval, max_fill)` (an IOC / FOK taker or a
+/// TWAP order; `(0, 0, 0)`: a plain resting order).
+pub async fn kas_order_for(c: &Ctx, fam: Family, side: i64, price: i64, (tif, interval, max_fill): (i64, i64, i64)) -> Resting {
     // the fixtures as KCC-20-typed states with the family's token; the kind created is the family's
     let fx = |s: AnyState| if fam == Family::Kron { kron(s).into_family(Family::Kcc20) } else { s };
     let (state, value, tokens) = if side == SIDE_ASK {
-        (fx(AnyState::KobAsk(ask(MAKER_B, price))), CARRIER, 10 * WHOLE)
+        (fx(AnyState::KobAsk(AskState { tif, interval, max_fill, ..ask(MAKER_B, price) })), CARRIER, 10 * WHOLE)
     } else {
-        let s = fx(AnyState::KobBid(bid(MAKER_B, price)));
+        let s = fx(AnyState::KobBid(BidState { tif, interval, max_fill, ..bid(MAKER_B, price) }));
         let AnyState::KobBid(b) = &s else { unreachable!() };
         let escrow = b.escrow(10 * WHOLE, 3).unwrap() as u64;
         (s, escrow, 0)

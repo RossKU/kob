@@ -1200,9 +1200,14 @@ the node's DAA score, not past their refund time (expiry, 90 days idle, IOC / FO
   sell-first entry is an ask, a buy-first one a bid; `amount = amountLeft`.
 * **Left out**: every `KobCondPair` (stops, take-profits, OCO and the exits of entries) and unarmed stop entries, as the KAS
   books leave out their KAS counterparts (nothing fills a stop before its trigger; a take-profit leg is not resting liquidity).
+* **Resting liquidity only** (direct and route): an **IOC / FOK** order (`tif` 1 / 2: market, IOC and FOK takers, KAS or pair)
+  is a taker in flight, filled against the books or killed, never a level; a **TWAP / DCA** order (`interval` > 0) is a level
+  only once its next slice is due (its UTXO `interval` DAA old), for at most one slice (`maxFill`). A taker waits for a matcher
+  about the indexer's lag; as a level it crossed the pair book for that long (soak 2026-10-11, up to 6 %).
 * **route**: route bids (sell base → KAS → quote) walk the base token's plain KAS bids (best first by all-in sompi per base unit,
   `(quote + tip) / scale`) against the quote token's plain KAS asks (cheapest first, all-in `(quote − tip) / scale` per quote
-  unit); route asks (buy base with quote) walk the quote token's KAS bids against the base token's KAS asks. Quotes are taken at
+  unit); route asks (buy base with quote) walk the quote token's KAS bids against the base token's KAS asks (resting orders
+  only, as above). Quotes are taken at
   `daa_score`. Each step pairs the current bid and ask and consumes the smaller of their KAS amounts (`floor(amount × all-in /
   scale)`, a bid's amount its buying power); its price is the ratio of the two all-in prices per base unit, its amount the base
   units that KAS buys or sells. Consecutive steps at one price merge (`orders` counts the KAS orders of the level). Indicative:
