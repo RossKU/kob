@@ -104,7 +104,12 @@ KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kob-executor run \
   would idle the executor for as long as the flood lasts (the TN10 soak at 400 to 1,400 tx/s paused its bots for 448 s
   at a lag of at most about 30 s). A plan over a view that is a few seconds old is harmless: the covenants enforce every
   order's terms, a spent input only loses the race (`MissingInput` / `DoubleSpend`, counted as a conflict, nothing
-  built from it is final), and the book-lag bound above uses the same number. Beyond the tolerance, and in the states
+  built from it is final), and the book-lag bound above uses the same number. A lost race still costs every other
+  crossing of that batch a tick, so before planning the runner asks the node (one address query, when it has its UTXO
+  index) which listed orders it still holds and leaves out those it no longer does (`gone=` in the `tick` log line); an
+  order newer than the node's virtual DAA score is not judged, and an answer holding none of the queried orders is taken
+  as no evidence (the TN10 soak of 2026-10-11, lag 10 to 40 s, lost about five batches in six to such orders before).
+  Beyond the tolerance, and in the states
   `starting` (a restart: the store is where the last run left it until the first batch lands, a 141-block batch took
   24 s on TN10, and the TN10 soak's restarts lost maintenance sells to `MissingInput` that way), `node_unavailable`,
   `gap` and `stopped`, nothing is planned: `kob_matcher_waiting_for_indexer` is 1, the log says `waiting for the

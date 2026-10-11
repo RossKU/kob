@@ -217,6 +217,9 @@ pub struct StepReport {
     pub rolled_back: usize,
     /// The operator's spendable funding read this step (`None`: not read, nothing was planned).
     pub funding: Option<u64>,
+    /// Listed orders left out of this step because the node no longer holds their UTXO (spent in a block the book has not
+    /// reached yet, [`gone_orders`]).
+    pub gone: usize,
 }
 
 /// The matcher / keeper process.
@@ -322,6 +325,39 @@ fn input_addresses(
         }
     }
     out
+}
+
+/// The listed orders whose current UTXO the node no longer holds, from one answer of the node to an address query of every
+/// order (`utxos`: what it holds at those addresses). The book lags the chain by the indexer's lag (seconds to tens of seconds
+/// on a busy network), so an order filled, amended or cancelled meanwhile is still listed; a batch over it is refused
+/// (`MissingInput`) and costs every other crossing of the batch a tick, which kept takers unfilled (and their auctions moving)
+/// for tens of seconds on the soak. Only an order accepted at or before the node's virtual DAA score `node_daa` is judged (a
+/// node behind the book cannot hold a newer one), and an answer that holds none of the queried orders is no evidence (a node
+/// whose address index cannot serve the query): nothing is taken as spent then.
+pub fn gone_orders(
+    orders: &[ListedOrder],
+    addresses: &BTreeMap<CovId, String>,
+    utxos: &[super::node::AddressUtxo],
+    node_daa: u64,
+) -> BTreeSet<CovId> {
+    let held: BTreeSet<super::book::Outpoint> = utxos.iter().map(|u| (u.transaction_id, u.index)).collect();
+    let judged: Vec<&ListedOrder> = orders.iter().filter(|o| addresses.contains_key(&o.id()) && o.utxo_daa() <= node_daa).collect();
+    if !judged.iter().any(|o| held.contains(&outpoint(&o.order.utxo))) {
+        return BTreeSet::new();
+    }
+    judged.into_iter().filter(|o| !held.contains(&outpoint(&o.order.utxo))).map(|o| o.id()).collect()
+}
+
+/// The address of every listed order's current UTXO (its covenant script with the listed state).
+fn order_addresses(orders: &[ListedOrder], network: &str) -> BTreeMap<CovId, String> {
+    orders
+        .iter()
+        .filter_map(|o| {
+            let spk = kob_protocol::tx::spk_to_string(&o.order.state.spk());
+            let a = crate::hex::decode(&spk).ok().and_then(|b| crate::script::spk_address(&b, network))?;
+            Some((o.id(), a))
+        })
+        .collect()
 }
 
 /// Every outpoint the book lists: the order UTXOs and their custodies.
@@ -492,6 +528,22 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
     }
 
+    /// [`gone_orders`] of the book, asked of the node in one query (no answer: nothing is taken as spent).
+    async fn gone(&self, orders: &[ListedOrder], daa: u64) -> BTreeSet<CovId> {
+        let addresses = order_addresses(orders, &self.cfg.network);
+        if addresses.is_empty() {
+            return BTreeSet::new();
+        }
+        let query: Vec<String> = addresses.values().cloned().collect::<BTreeSet<_>>().into_iter().collect();
+        match self.node.utxos_by_addresses(&query).await {
+            Ok(utxos) => gone_orders(orders, &addresses, &utxos, daa),
+            Err(e) => {
+                tracing::debug!(error = %e, "cannot ask the node which listed orders it still holds");
+                BTreeSet::new()
+            }
+        }
+    }
+
     async fn send(&mut self, t: Tracked, daa: u64, rep: &mut StepReport) {
         let txid = t.txid;
         let kind = t.kind.clone();
@@ -584,7 +636,11 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         rep.funding = Some(funding.iter().map(|k| k.utxo.amount).sum());
         self.last_funding = rep.funding;
         let clock = Clock { daa, utc: utc_now() };
+        // the orders the node no longer holds (the book lags the chain): never planned, by the matcher or the keepers
+        let gone = if info.has_utxo_index { self.gone(&book.orders, daa).await } else { BTreeSet::new() };
+        rep.gone = gone.len();
         let mut excluded = self.tracker.backed_off(daa);
+        excluded.extend(gone.iter().copied());
         excluded.extend(busy_orders(&book.orders, &spent));
         self.frozen_until.retain(|_, until| *until > daa);
         excluded.extend(self.frozen_until.keys().copied());
@@ -688,6 +744,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             let listed: BTreeSet<CovId> = orders.iter().map(|o| o.id()).collect();
             orders.extend(self.source.keeper_only_orders().into_iter().filter(|o| !listed.contains(&o.id())));
             let mut excluded = self.tracker.backed_off(daa);
+            excluded.extend(gone.iter().copied());
             excluded.extend(busy_orders(&orders, &spent));
             // a token program refused to move these in the matcher's pre-simulation: a refund would fail the same way
             excluded.extend(self.frozen_until.keys().copied());
@@ -872,6 +929,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                             submitted = r.submitted.len(),
                             conflicts = r.conflicts.len(),
                             skipped = r.skipped.len(),
+                            gone = r.gone,
                             "tick"
                         );
                         // why a book or job was skipped (an engine rejection, unprofitable, too large): the operator's only

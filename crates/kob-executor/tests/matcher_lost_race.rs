@@ -6,7 +6,10 @@
 //!   input is gone;
 //! * the batch reached the mempool, but another transaction spending one of its inputs was accepted instead: once the book
 //!   no longer lists that input and the node confirms it spent, the batch is dropped before `pending_timeout` and only the
-//!   owner of that input backs off.
+//!   owner of that input backs off;
+//! * before planning, the runner asks the node which listed orders it still holds: an order spent in a block the book has
+//!   not reached yet (the book lags the chain by the indexer's lag) is left out, so no batch is refused over it (the soak of
+//!   2026-10-11 lost about five batches in six that way, and every crossing in them waited a tick each time).
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -31,6 +34,8 @@ struct State {
     blind: bool,
     /// The node runs without its UTXO index (an address query proves nothing).
     no_index: bool,
+    /// Outpoints another transaction spends while ours is on its way (gone from `live` at our submit).
+    spent_on_submit: Vec<Outpoint>,
 }
 
 #[derive(Clone, Default)]
@@ -53,6 +58,8 @@ impl NodeApi for Node {
     }
     async fn submit(&self, _tx: Value) -> Result<[u8; 32], RpcError> {
         let mut s = self.0.lock().unwrap();
+        let gone = std::mem::take(&mut s.spent_on_submit);
+        s.live.retain(|(op, _)| !gone.contains(op));
         match s.replies.pop_front() {
             Some(m) => Err(RpcError::Node(m)),
             None => Ok([0; 32]),
@@ -142,7 +149,13 @@ fn at(r: &mut Runner<Node, ViewSource<MemoryBook>>, node: &Node, daa: u64) {
 async fn a_missing_input_backs_off_only_the_order_whose_input_is_gone() {
     let daa = NOW + 5;
     let (mut r, node) = runner(daa);
-    node.0.lock().unwrap().replies.push_back(orphan());
+    {
+        // the node still holds every order when the runner asks; the cheapest ask is spent before the batch arrives
+        let mut s = node.0.lock().unwrap();
+        s.live = r.source.0.orders.iter().flat_map(outpoints).collect();
+        s.spent_on_submit = outpoints(&r.source.0.orders[2]).into_iter().map(|(op, _)| op).collect();
+        s.replies.push_back(orphan());
+    }
     let rep = r.step().await.unwrap();
     assert_eq!(rep.conflicts.len(), 1, "the batch lost its race: {:?}", rep.skipped);
     let off = r.tracker.backed_off(daa);
@@ -233,4 +246,40 @@ async fn without_the_utxo_index_a_pending_batch_is_left_to_its_timeout() {
     }
     assert_eq!(r.tracker.txs.len(), 1, "not dropped as lost: the node cannot tell");
     assert!(r.tracker.backed_off(daa0 + 30).is_empty(), "nothing backs off on a guess");
+}
+
+#[tokio::test]
+async fn an_order_the_node_no_longer_holds_is_left_out_before_planning() {
+    let daa = NOW + 5;
+    // the book still lists the cheapest ask; the node spent it in a block the book has not reached
+    let (mut r, _node) = runner(daa);
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.gone, 1);
+    assert_eq!((rep.conflicts.len(), rep.submitted.len()), (0, 1), "no batch is refused over it: {:?}", rep.skipped);
+    let t = r.tracker.txs.values().next().unwrap();
+    assert!(t.orders.contains(&cid(VICTIM)) && t.orders.contains(&cid(OTHER)) && !t.orders.contains(&cid(SPENT)));
+    assert!(r.tracker.backed_off(daa).is_empty(), "nothing backs off: it was never planned");
+}
+
+#[tokio::test]
+async fn an_answer_holding_none_of_the_orders_is_no_evidence_of_a_spend() {
+    let daa = NOW + 5;
+    let (mut r, node) = runner(daa);
+    // an address query that serves nothing (an index that cannot answer it): nothing is taken as spent
+    node.0.lock().unwrap().live = vec![];
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.gone, 0);
+    assert_eq!(rep.submitted.len(), 1, "{:?}", rep.skipped);
+    assert!(r.tracker.txs.values().next().unwrap().orders.contains(&cid(SPENT)), "planned as before");
+}
+
+#[tokio::test]
+async fn an_order_newer_than_the_nodes_virtual_state_is_not_judged() {
+    // a node behind the book (its virtual DAA score before the orders were accepted) cannot hold them yet: none is left out
+    let daa = NOW + 5;
+    let (mut r, node) = runner(daa);
+    let newest = r.source.0.orders.iter().map(|o| o.utxo_daa()).max().unwrap();
+    node.0.lock().unwrap().daa = newest - 1;
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.gone, 0, "the spent ask is not judged either");
 }
