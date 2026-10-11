@@ -10,6 +10,7 @@ import { simulatePairArm, simulatePairFill } from './pair-fill.mjs';
 import { leaderNextStates, revealOf } from './script.mjs';
 import { ApiError, HEX64, Rejection, badRequest, notFound, syntheticId } from './util.mjs';
 
+const TEMPLATE_ID_OF_PROGRAM = { KCC20Ref: 'kcc20-ref-3x3', KCC20Ref_8x8: 'kcc20-ref-8x8', KCC20KaspaCom_0_2_5: 'kcc20-kaspacom-0-2-5', KCC20PublicMint: 'kcc20-ref-public-mint' };
 const ZERO_FEE = { fee: '0', minFee: '0', feeRate: '0', mass: { size: 0, compute: 0, transient: 0, transientNormalized: 0, storage: 0, feeMass: 0 }, changeOutput: null };
 const KOB1 = '4b4f4231';
 export const DEFAULT_CARRIER = 1_000_000_000n; // 10 KAS per covenant UTXO
@@ -177,7 +178,8 @@ export class MockChain {
       // registry standing (`GET /v1/tokens`): official | unverified | delisted; powers of the program template; the audited template id; the ticker is '' for tokens outside the registry
       standing: t.standing ?? 'unverified',
       powers: t.powers ?? [],
-      template_id: t.template_id ?? null,
+      // like the executor: the id of the strict-list template of the program (null only when a test says so: a program off the list)
+      template_id: 'template_id' in t ? (t.template_id ?? null) : (TEMPLATE_ID_OF_PROGRAM[program] ?? null),
       family: t.family ?? 'kcc20',
       // a token the indexer tracks only as foreign strays: not listed by `/v1/tokens`
       hidden: !!t.hidden,
