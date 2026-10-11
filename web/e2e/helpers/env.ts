@@ -14,7 +14,7 @@ export const TOKEN = 100_000_000n;
 /** Mock wallets a spec can connect through: the header button carries the wallet id. */
 export type WalletName = 'kasware' | 'kaspire' | 'kastle';
 
-/** The example registry lists EXKCC as pending-review (tradable, but shown with the `[unverified, pending review]` caveat): the order specs serve a copy in which the token is listed and verified, so the ticket shows no caveat. */
+/** The example registry lists EXKCC as pending-review (tradable; the UI shows no verification state either way): the order specs serve a copy in which the token is listed and verified, i.e. a fully reviewed registry entry. */
 export async function listExkcc(page: Page): Promise<void> {
   const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';

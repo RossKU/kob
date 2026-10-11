@@ -1,7 +1,7 @@
 // Smoke tests of the order ticket and the pre-sign confirmation flow against the mock stack (mock indexer + node + KasWare-style mock wallet).
 // The per-order-type matrix is the next phase's job: here every type is reachable, and the limit-sell flow runs end to end.
 //
-// The example registry of the mock lists EXKCC as pending-review (tradable, but shown with the pending-review caveat). Every test serves a copy in which
+// The example registry of the mock lists EXKCC as pending-review (tradable; the UI no longer shows any verification state). Every test serves a copy in which
 // the token is listed and verified, exactly what a fully reviewed registry entry looks like.
 import { readFileSync } from 'node:fs';
 import { test, expect } from '../fixtures';

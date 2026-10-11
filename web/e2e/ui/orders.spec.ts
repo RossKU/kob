@@ -40,16 +40,16 @@ test.describe('my orders', () => {
     await expect(appPage.getByTestId('orders-empty')).toBeVisible();
   });
 
-  test('the same token reads the same on the market list, the token page and My orders (registry says verified, the mock indexer says unverified)', async ({ appPage, mock }) => {
-    // EXKCC listed and verified in a registry served by the spec (so it is a custom registry for this build: `[listed in custom registry <hash>]`, never
-    // `[unverified]`); the mock executor's standing for it is `unverified` (it says that of every token that is not official)
+  test('the same token reads the same on the market list, the token page and My orders, with no verification wording (registry says verified, the mock indexer says unverified)', async ({ appPage, mock }) => {
+    // EXKCC listed and verified in a registry served by the spec; the mock executor's standing for it is `unverified` (it says that of every token that is not
+    // official). Token issuance is permissionless: the label is `TICKER (abcd…1234)` whatever either side says
     await listExkcc(appPage);
     const { tok, order } = await seedAsk(mock);
     const short = `${tok.covenant_id.slice(0, 4)}…${tok.covenant_id.slice(-4)}`;
     await appPage.goto('/#/market');
     const listText = (await appPage.getByTestId(`token-link-${tok.covenant_id}`).textContent()) ?? '';
-    expect(listText.startsWith(`EXKCC (${short}) [listed in custom registry `)).toBe(true);
-    expect(listText).not.toContain('unverified');
+    expect(listText).toBe(`EXKCC (${short})`);
+    await expect(appPage.getByTestId(`token-row-${tok.covenant_id}`)).not.toContainText(/unverified|verified|official|registry/i);
     await expect(appPage.getByTestId(`token-row-${tok.covenant_id}`).getByTestId('badge-unverified')).toHaveCount(0);
     await appPage.goto(`/#/market/${tok.covenant_id}`);
     await expect(appPage.getByTestId('token-header')).toContainText(listText);

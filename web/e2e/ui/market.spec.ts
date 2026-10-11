@@ -1,5 +1,5 @@
 // Smoke specs of the shell and the market views against the mock stack (seeded book: token EXKCC, 10 levels per side, 8 fills).
-// Per-order-type specs belong to the ticket work; here: the list, the token page, live status, wallet, lookalike protection, health banners.
+// Per-order-type specs belong to the ticket work; here: the list, the token page, live status, wallet, the shared-ticker note, health banners.
 import { expect, test, TEST_KEYS } from '../fixtures';
 import { TESTID } from '../testids';
 
@@ -13,14 +13,17 @@ async function seeded(mock: import('../fixtures').MockClient) {
 test.describe('shell and token list', () => {
   test.use({ appPath: '/#/market' });
 
-  test('lists the registry token with a status badge and never the ticker without its covenant id', async ({ appPage, mock }) => {
+  test('lists the registry token as `TICKER (abcd…1234)` with no verification wording, and never the ticker without its covenant id', async ({ appPage, mock }) => {
     const { id, short } = await seeded(mock);
     await expect(appPage.getByTestId(TESTID.navMarket)).toHaveAttribute('aria-current', 'page');
     const row = appPage.getByTestId(`token-row-${id}`);
     await expect(row).toBeVisible();
-    await expect(row.getByTestId(`token-link-${id}`)).toHaveText(`EXKCC (${short}) [unverified, pending review]`);
-    // the example registry lists EXKCC as pending review: shown with the badge, but tradable (its template is reviewed; only delisting blocks a token)
-    await expect(row.getByTestId('badge-pending-review')).toBeVisible();
+    await expect(row.getByTestId(`token-link-${id}`)).toHaveText(`EXKCC (${short})`);
+    // token issuance is permissionless: the row never says verified / unverified / official / pending review, even though the example registry lists EXKCC as pending review
+    await expect(row).not.toContainText(/unverified|verified|official|pending review|registry/i);
+    await expect(row.getByTestId('badge-family')).toBeVisible();
+    for (const badge of ['verified', 'unverified', 'official', 'pending-review', 'custom-registry', 'not-in-registry']) await expect(row.getByTestId(`badge-${badge}`)).toHaveCount(0);
+    await expect(row.locator('[data-testid^="shared-ticker-"]')).toHaveCount(0); // a unique ticker has no note
     await expect(row).toHaveAttribute('data-tradable', '1');
     // the indexer's open order counts are merged in
     await expect(row).toContainText('11');
@@ -51,26 +54,40 @@ test.describe('shell and token list', () => {
     await expect(appPage.getByTestId('status-indexer')).toContainText('following');
   });
 
-  test('a lookalike of a registered ticker is shown as unverified with a strong warning and cannot be traded', async ({ appPage, mock }) => {
+  test('two listed tokens with one ticker: both rows, the token page and the ticket carry the shared-ticker note; a unique ticker has none', async ({ appPage, mock }) => {
     const { id } = await seeded(mock);
-    const fake = 'bb'.repeat(32);
-    await mock.seed({ tokens: [{ ticker: 'EXKCC', covenant_id: fake, extension_commitment: 'cc'.repeat(32), decimals: 8 }] });
+    const twin = 'bb'.repeat(32);
+    const solo = 'dd'.repeat(32);
+    // the twin is found through the indexer only (no registry entry) and reads EXKCC in a different case; SOLO is unique
+    await mock.seed({ tokens: [
+      { ticker: 'exkcc', covenant_id: twin, extension_commitment: 'cc'.repeat(32), decimals: 8 },
+      { ticker: 'SOLO', covenant_id: solo, extension_commitment: 'cc'.repeat(32), decimals: 8 },
+    ] });
     await appPage.reload();
-    const row = appPage.getByTestId(`token-row-${fake}`);
-    await expect(row).toBeVisible();
-    await expect(row).toHaveAttribute('data-source', 'indexer');
-    await expect(row).toHaveAttribute('data-tradable', '0');
-    await expect(row.getByTestId('lookalike-strong')).toContainText('NOT that token');
-    await expect(row.getByTestId('badge-not-in-registry')).toBeVisible();
-    await expect(appPage.getByTestId(`token-row-${id}`).getByTestId('lookalike-strong')).toHaveCount(0);
-    // the token page repeats the warning and offers no ticket
-    await row.getByTestId(`token-link-${fake}`).click();
-    await expect(appPage.getByTestId('token-header').getByTestId('lookalike-strong')).toBeVisible();
-    await expect(appPage.getByTestId('ticket-unavailable')).toBeVisible();
-    await expect(appPage.getByTestId('ticket-container')).toHaveCount(0);
+    const note = 'Another token uses this ticker — check the covenant id';
+    const regRow = appPage.getByTestId(`token-row-${id}`);
+    const twinRow = appPage.getByTestId(`token-row-${twin}`);
+    const soloRow = appPage.getByTestId(`token-row-${solo}`);
+    await expect(twinRow).toBeVisible();
+    await expect(twinRow).toHaveAttribute('data-source', 'indexer');
+    await expect(regRow.getByTestId(`shared-ticker-${id}`)).toHaveText(note);
+    await expect(twinRow.getByTestId(`shared-ticker-${twin}`)).toHaveText(note);
+    await expect(soloRow).toBeVisible();
+    await expect(soloRow.locator('[data-testid^="shared-ticker-"]')).toHaveCount(0);
+    // no row says whether a token is verified or official
+    for (const r of [regRow, twinRow, soloRow]) await expect(r).not.toContainText(/unverified|verified|official|pending review|NOT that token/i);
+    // the token page header and the ticket of the registry token repeat the note
+    await regRow.getByTestId(`token-link-${id}`).click();
+    await expect(appPage.getByTestId('token-header').getByTestId('token-shared-ticker')).toHaveText(note);
+    await expect(appPage.getByTestId('ticket-container').getByTestId('ticket-shared-ticker')).toHaveText(note);
+    // the unique ticker's page has neither
+    await appPage.goto(`/#/market/${solo}`);
+    await expect(appPage.getByTestId('token-header')).toBeVisible();
+    await expect(appPage.getByTestId('token-shared-ticker')).toHaveCount(0);
+    await expect(appPage.getByTestId('ticket-shared-ticker')).toHaveCount(0);
   });
 
-  test('add an unknown token by covenant id: found through the indexer, listed as unverified', async ({ appPage, mock }) => {
+  test('add an unknown token by covenant id: found through the indexer, listed by its covenant id with no verification wording', async ({ appPage, mock }) => {
     const other = 'dd'.repeat(32);
     await mock.seed({ tokens: [{ ticker: 'NEWT', covenant_id: other, extension_commitment: 'cc'.repeat(32), decimals: 8 }] });
     await appPage.reload();
@@ -83,7 +100,9 @@ test.describe('shell and token list', () => {
     await expect(appPage.getByTestId('token-add-button')).toBeDisabled();
     await appPage.getByTestId('token-add-input').fill(other);
     await appPage.getByTestId('token-add-button').click();
-    await expect(appPage.getByTestId(`token-row-${other}`)).toHaveAttribute('data-tradable', '0');
+    const row = appPage.getByTestId(`token-row-${other}`);
+    await expect(row).toHaveAttribute('data-tradable', '0');
+    await expect(row).not.toContainText(/unverified|verified|official|pending review/i);
   });
 });
 
@@ -144,11 +163,12 @@ test.describe('token page', () => {
     await expect(appPage.getByTestId('token-list-view')).toBeVisible();
   });
 
-  test('shows the header facts, template verification against the pinned hash, and that a pending-review token on a reviewed template is tradable', async ({ appPage, mock }) => {
+  test('shows the header facts, template verification against the pinned hash, and that a token the example registry marks pending-review is tradable, with no caveat', async ({ appPage, mock }) => {
     const { id } = await seeded(mock);
     await appPage.goto(`/#/market/${id}`);
     await expect(appPage.getByTestId('token-scale')).toContainText('per 100000000 base units');
     await expect(appPage.getByTestId('token-untradable')).toHaveCount(0);
+    await expect(appPage.getByTestId('token-header')).not.toContainText(/unverified|verified|official|pending review/i);
     await expect(appPage.getByTestId('ticket-unavailable')).toHaveCount(0);
     await expect(appPage.getByTestId('ticket-container')).toBeVisible();
     await appPage.getByTestId('template-verification').getByRole('button').first().click();
