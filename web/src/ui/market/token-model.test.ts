@@ -5,7 +5,7 @@ import { parseRegistry, displayName, type TokenInfo, type TokenRegistry } from '
 import { loadKobNode } from '../../kob/wasm.node';
 import { officialGenesis } from '../../testing/chain-fixtures';
 import { needsOpenCaution, tokenTitle } from './TokenBadges';
-import { buildTokenRows, filterTokens, hasIssuerControl, indexerDowngrade, labelState, parseCovenantId, templateDetail, tickerOrId, tokenBadges, tokenLabel, unknownRow } from './token-model';
+import { buildTokenRows, filterTokens, hasIssuerControl, indexerDowngrade, labelState, parseCovenantId, templateDetail, tickerOrId, tokenBadges, tokenLabel, tradableHere, tradableRows, unknownRow } from './token-model';
 
 const kob = await loadKobNode();
 const tpl = kob.templates().find((t) => t.name === 'KCC20Ref_8x8')!;
@@ -189,6 +189,30 @@ describe('indexer-only tokens of a program off the strict list', () => {
       view('', ID('3'), 2, 1, { template_id: 'kcc20-ref-8x8' }),
     ]);
     expect(rows.map((r) => r.covenantId)).toEqual([ID('a'), ID('3'), ID('2')]);
+  });
+});
+
+describe('tokens this build cannot trade are not offered', () => {
+  const pinned = kob.templates();
+  it('drops registry tokens that are delisted, off the pinned template or unreviewed; keeps the tradable ones', () => {
+    const ok = registry('reviewed', [tokJson('GOOD', ID('a')), tokJson('DEL', ID('d'), 'delisted', true)]);
+    expect(tradableRows(buildTokenRows(ok, null), pinned).map((r) => r.ticker)).toEqual(['GOOD']);
+    const bad = registry('reviewed', [tokJson('NEW', ID('b'))], 'ab'.repeat(32));
+    expect(tradableRows(buildTokenRows(bad, null), pinned)).toEqual([]);
+    const pend = registry('pending-review', [tokJson('PEN', ID('e'), 'pending-review', false)]);
+    expect(tradableRows(buildTokenRows(pend, null), pinned)).toEqual([]);
+  });
+
+  it('indexer-only tokens: kept unless delisted or of a template hash this build does not embed', () => {
+    const reg = registry('reviewed', [tokJson('GOOD', ID('a'))]);
+    const rows = buildTokenRows(reg, [
+      view('', ID('1'), 1, 1),
+      view('', ID('2'), 1, 1, { template_hash: 'cd'.repeat(32) }),
+      view('', ID('3'), 1, 1, { standing: 'delisted' }),
+      view('', ID('4'), 1, 1, { template_hash: undefined }),
+    ]);
+    expect(tradableRows(rows, pinned).map((r) => r.covenantId)).toEqual([ID('a'), ID('1'), ID('4')]);
+    expect(tradableHere(rows.find((r) => r.covenantId === ID('2'))!, pinned)).toBe(false);
   });
 });
 

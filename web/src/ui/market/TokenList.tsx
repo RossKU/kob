@@ -7,11 +7,11 @@ import { Banner, Button, CopyText, ErrorBanner, Field, Loading, Section, Table, 
 import { StatusBadges, tokenTitle } from './TokenBadges';
 import { LookalikeWarning } from './TokenHeader';
 import './market.css';
-import { buildTokenRows, filterTokens, parseCovenantId, type TokenRow } from './token-model';
+import { buildTokenRows, filterTokens, parseCovenantId, tradableHere, tradableRows, type TokenRow } from './token-model';
 import { useHeldTokenIds } from './use-held-tokens';
 
 function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
-  const { indexer, registry } = useServices();
+  const { indexer, registry, kob } = useServices();
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(null);
@@ -32,6 +32,7 @@ function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
     try {
       const found = (await indexer.tokens()).find((x) => x.covenant_id === id);
       if (!found) setMessage({ tone: 'error', text: t('market.add.notFound') });
+      else if (!tradableHere({ source: 'indexer', info: null, index: found, standing: found.standing === 'delisted' ? 'delisted' : 'unverified' }, kob.templates())) setMessage({ tone: 'error', text: t('market.add.untradable') });
       else {
         props.onFound(found);
         setMessage({ tone: 'info', text: t('market.add.found') });
@@ -94,13 +95,14 @@ function TokenTableRow({ row }: { row: TokenRow }) {
 
 /** Token list: registry tokens with badges, the full token hash (covenant id) and the open order counts, tokens the indexer knows but the registry does not (UNVERIFIED, never tradable), search, add by covenant id. */
 export function TokenList(props: { invalidToken?: string }) {
-  const { registry, indexer } = useServices();
+  const { registry, indexer, kob } = useServices();
   const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
   const [query, setQuery] = useState('');
   const [pasted, setPasted] = useState<IndexerTokenView[]>([]);
 
   const held = useHeldTokenIds();
-  const rows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, pasted, held), [registry, tokens.data, pasted, held]);
+  // a token this build cannot trade is not listed (a direct link to it shows a short "not tradable" page)
+  const rows = useMemo(() => tradableRows(buildTokenRows(registry, tokens.data ?? null, pasted, held), kob.templates()), [registry, tokens.data, pasted, held, kob]);
   const shown = filterTokens(rows, query);
 
   return (

@@ -25,7 +25,8 @@ import { openPair } from './market-nav';
 import { displayedPair, marketFor, type DisplayedPair } from './market-select';
 import { PriceChart } from './PriceChart';
 import { TokenDetails, TokenHeader } from './TokenHeader';
-import { buildTokenRows } from './token-model';
+import { NotTradablePage } from './NotTradablePage';
+import { buildTokenRows, tradableRows } from './token-model';
 import { useHeldTokenIds } from './use-held-tokens';
 import { TradeTape } from './TradesPanel';
 import { tradeRows } from './trades-model';
@@ -43,7 +44,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const services = useServices();
   const wallet = useWallet();
   const { indexer: health } = useSystemStatus();
-  const { registry, indexer } = services;
+  const { registry, indexer, kob } = services;
   const id = props.covenantId;
   // a `?ticket=close` link (My orders, close position) opens the ticket on "close": sell the whole free balance at market; `?ticket=cover&amount=N`
   // (close of a sell-first position) on a market BUY of the N base units the position sold and has not bought back yet
@@ -60,6 +61,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const held = useHeldTokenIds();
   const allRows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, [], held), [registry, tokens.data, held]);
   const baseRow = useMemo(() => allRows.find((r) => r.covenantId === id) ?? null, [allRows, id]);
+  // the pair selector offers only tokens this build can trade
+  const choiceRows = useMemo(() => tradableRows(allRows, kob.templates()), [allRows, kob]);
   // an open-list token (program on the strict list, no registry entry) is tradable with a TokenInfo synthesised from its orders: unverified, its
   // decimals taken from the scale its orders share
   const open = useOpenToken(baseRow, liveKey);
@@ -213,6 +216,11 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     );
   }
 
+  // a registry token this build cannot trade (or an open-list token whose program it does not embed) has no market page here
+  if ((row.source === 'registry' && !row.tradable) || open.reason === 'program-unknown') {
+    return <NotTradablePage ticker={row.ticker} covenantId={row.covenantId} reason={open.reason === 'program-unknown' ? t('market.open.program-unknown') : row.reason ? t(`market.reason.${row.reason}`) : null} />;
+  }
+
   const info = row.info;
   const stale = health.assessment.level === 'warn' || health.assessment.level === 'bad';
   const liveBadge = (
@@ -241,7 +249,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           pair={
             <>
               {canFlip ? <FlipButton pair={pairLabel(name, !inverted)} pressed={inverted} onClick={toggleInverted} /> : null}
-              <PairSelector pair={displayedPair(id, null, inverted)} rows={allRows} onChange={onPair} />
+              <PairSelector pair={displayedPair(id, null, inverted)} rows={choiceRows} onChange={onPair} />
             </>
           }
         />

@@ -239,6 +239,21 @@ export function buildTokenRows(
   return [...rows, ...extra];
 }
 
+/**
+ * Whether this build can trade the token, as far as a LIST can tell: a registry token by the registry's own verdict (`tradable`: not delisted, template
+ * reviewed, supported and equal to the pinned program); a token outside the registry (open list, pasted) is tradable through the open-list path unless the
+ * executor delists it or its template hash is one this build does not embed (`pinned`: `kob.templates()`). A token without a template hash is kept.
+ */
+export function tradableHere(row: Pick<TokenRow, 'source' | 'info' | 'index' | 'standing'>, pinned: readonly TemplateInfo[]): boolean {
+  if (row.source === 'registry') return row.info !== null && row.info.tradable;
+  if (row.standing === 'delisted') return false;
+  const hash = row.index?.template_hash;
+  return !hash || pinned.some((p) => p.tokenSlots && p.hash === hash);
+}
+
+/** The rows a market list, selector or pair choice offers: only tokens this build can trade (see `tradableHere`). */
+export const tradableRows = <R extends Pick<TokenRow, 'source' | 'info' | 'index' | 'standing'>>(rows: readonly R[], pinned: readonly TemplateInfo[]): R[] => rows.filter((r) => tradableHere(r, pinned));
+
 /** Case-insensitive search over ticker, name and covenant id; homoglyph-normalised tickers match too (`kr0n` finds `KRON`). Empty query = everything. */
 export function filterTokens(rows: readonly TokenRow[], query: string): TokenRow[] {
   const q = query.trim().toLowerCase();

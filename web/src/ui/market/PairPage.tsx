@@ -34,7 +34,8 @@ import { pairDepthSeries, pairFillsOf, pairRatioCandles, pairStatsModel, pairVol
 import { PairTrades } from './PairTrades';
 import { tokenTitle } from './TokenBadges';
 import { PairDetails } from './TokenHeader';
-import { buildTokenRows } from './token-model';
+import { NotTradablePage } from './NotTradablePage';
+import { buildTokenRows, tradableRows } from './token-model';
 import { useHeldTokenIds } from './use-held-tokens';
 import { ratioCandles, usdDp, usdStats } from './usd-model';
 import './market.css';
@@ -48,7 +49,7 @@ const pairToken = (x: TokenInfo): PairToken => ({ covenantId: x.covenantId, tick
 
 export function PairPage(props: { base: string; quote: string }) {
   const services = useServices();
-  const { registry, indexer } = services;
+  const { registry, indexer, kob } = services;
   const baseInfo = registry.byCovenantId.get(props.base) ?? null;
   const quoteInfo = registry.byCovenantId.get(props.quote) ?? null;
   const [liveKey, setLiveKey] = useState(0);
@@ -56,6 +57,7 @@ export function PairPage(props: { base: string; quote: string }) {
   const tokenList = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
   const held = useHeldTokenIds();
   const rows = useMemo(() => buildTokenRows(registry, tokenList.data ?? null, [], held), [registry, tokenList.data, held]);
+  const choiceRows = useMemo(() => tradableRows(rows, kob.templates()), [rows, kob]);
   const baseRow = rows.find((r) => r.covenantId === props.base);
   const quoteRow = rows.find((r) => r.covenantId === props.quote);
 
@@ -141,6 +143,8 @@ export function PairPage(props: { base: string; quote: string }) {
   const depthSeries = useMemo(() => (book.data && base && quote ? pairDepthSeries(book.data, base, quote) : null), [book.data, base, quote]);
   const powers = useMemo(() => [...new Set([...(baseRow?.powers ?? []), ...(quoteRow?.powers ?? [])])], [baseRow, quoteRow]);
 
+  const blocked = [baseInfo, quoteInfo].find((x) => x && !x.tradable);
+  if (blocked) return <NotTradablePage ticker={blocked.ticker} covenantId={blocked.covenantId} reason={blocked.untradableReason ? t(`market.reason.${blocked.untradableReason}`) : null} />;
   if (!baseInfo || !quoteInfo || !base || !quote || !pairStats) {
     return (
       <div class="stack" data-testid="pair-not-found">
@@ -172,7 +176,7 @@ export function PairPage(props: { base: string; quote: string }) {
                 navigate(pairRoute(props.quote, props.base));
               }}
             />
-            <PairSelector pair={displayedPair(props.base, props.quote, false)} rows={rows} onChange={openPair} />
+            <PairSelector pair={displayedPair(props.base, props.quote, false)} rows={choiceRows} onChange={openPair} />
             <span class="muted small" data-testid="pair-subtitle" title={t('pair.explainer', { base: baseInfo.ticker, quote: quoteInfo.ticker })}>{t('pair.subtitle', { base: baseRow ? tokenTitle(baseRow) : baseInfo.ticker, quote: quoteRow ? tokenTitle(quoteRow) : quoteInfo.ticker })}</span>
             <Badge tone={mode === 'live' ? 'ok' : mode === 'polling' ? 'info' : 'neutral'} data-testid="pair-live" title={t(`market.live.${mode}Hint`)}>
               {t(`market.live.${mode}`)}
