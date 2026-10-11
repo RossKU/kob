@@ -1264,3 +1264,22 @@ cleared and retried; MARKET_START_UNVERIFIED 0; FUNDING_FRAGMENTED 0), KAS-book 
 22 of 264 and 12 of 242), market maker placements 46 of 46, transaction conflicts 49 of 630 (8 %, 22 % before; most are amends of
 orders a matcher filled while the listing lagged), ladders 17 / 18 orders on TETH / TBTC, the market maker's KAS coins 1,227 -> 50,
 kills submitted as `kind=kill`. No new incident besides `health`.
+
+## Takers and the retired tokens (2026-10-11, TN10, m10/soak ed54aa3 + 115bab8)
+
+Rolled out one child at a time, nothing stopped (ui and bots 01:08 UTC, exec-b 01:09, exec-a 01:14 on `bin/kob-executor-115bab8.exe`;
+config backup `run/config.json.pre-115bab8`; the old UI build is `run/web-dist.old-9a3d9e6`).
+
+* **A marketable limit is a taker** (`src/bots/taker.ts`, `common.ts` `place` / `placePair` with `taker: true`, used by the traders only). A trader
+  limit (KAS books and pair orders: limit, GTD, day, the 30 bps `limitCross`, the pair `limitSell` / `limitBuy`) that crosses the opposite best
+  price of the planner's own book (tips counted on a KAS book) is placed as an IOC at the intended limit, the slippage bound; it fills what
+  crosses up to that price and returns the rest, instead of an auction that then rests at the limit through the opposite side. A passive limit
+  rests as before. The counter `taker:<tag>` in `run/stats/bots.json` counts the conversions (23 in the first 5 minutes). The market maker keeps its
+  plain `crossing: 'limit'` ladder. Not converted: the entry limit of an if-done / bracket / repeat order, TWAP / DCA / Dutch prices and the take-profit leg.
+* **The web ticket** already warned of a marketable limit; its texts now say it fills immediately as a taker (an auction from the best price to the limit,
+  any rest staying at the limit): `MARKETABLE_AUCTION`, `MARKETABLE_LIMIT_FILLS_AT_LIMIT` and the pair versions, `ticket.note.marketable`. No behaviour change.
+* **The retired 8 / 8 tokens** (three covenants with the program `40fef59a...`, no ticker) were no longer in the registry or in `state.json` (all three live tokens
+  TUSD, TETH and TBTC are the standard 3 / 3 `KCC20Ref`, registry `kcc20-ref-3x3`) and had no open order, but `/v1/tokens` and the market list still showed them as
+  unverified rows because their old orders stayed `listed` in the database. The open token list now lists only tokens of a program on the registry's strict list (and not
+  delisted); the app's market list also drops an indexer-only token whose `template_id` is null. Both indexers list exactly TUSD, TETH and TBTC. No KRON token exists
+  in this soak (the strict list still lists KRON programs for other deployments).
