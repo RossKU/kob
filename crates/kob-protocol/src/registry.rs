@@ -1397,9 +1397,16 @@ mod tests {
         assert_eq!(d.listed_allowlist().len(), 8);
         assert_eq!(d.templates.len(), 6);
         // internal review of the two KRON programs (2026-09-30, `review_b2_kron.rs`): reviewed with conditions (per-token genesis check and
-        // no live minter before a token is listed or official); the reference KCC-20 programs and KaspaCom's are pending
+        // no live minter before a token is listed or official); the reference KCC-20 3/3 program, KOB's standard one, is reviewed
+        // (internal review only, maintainer decision 2026-10-12: tradable on mainnet); its prototypes, the public-mint build and
+        // KaspaCom's are pending
         let strict: Vec<&str> = d.strict_templates().map(|t| t.id.as_str()).collect();
-        assert_eq!(strict, ["kron-2433", "kron-2732"]);
+        assert_eq!(strict, ["kcc20-ref-3x3", "kron-2433", "kron-2732"]);
+        let r3 = d.template("kcc20-ref-3x3").unwrap();
+        assert!(r3.risks.iter().any(|r| r.starts_with("Reviewed (internal review only") && r.contains("verify_genesis")));
+        for id in ["kcc20-ref-8x8", "kcc20-ref-public-mint", "kcc20-kaspacom-0-2-5"] {
+            assert_eq!(d.template(id).unwrap().review_status, ReviewStatus::PendingReview, "{id}");
+        }
         for id in ["kron-2433", "kron-2732"] {
             let t = d.template(id).unwrap();
             assert!(

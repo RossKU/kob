@@ -112,9 +112,13 @@
   ],
   "registry": {
     "path": "registry/tokens.json",
-    "sha256": "79a8aa3289eb8d76be61cd3dbd57e018fb1a5e08da5e9d5cffc445b3dce0e4fc",
+    "sha256": "fbc2be6e326db2107368d82dfe3855ae580dceb8a50f7343de94d2a6b816efa1",
     "schema_version": 1,
     "strict_templates": [
+      {
+        "id": "kcc20-ref-3x3",
+        "template_hash": "173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b"
+      },
       {
         "id": "kron-2433",
         "template_hash": "2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2"
@@ -125,7 +129,6 @@
       }
     ],
     "pending_templates": [
-      "kcc20-ref-3x3",
       "kcc20-ref-8x8",
       "kcc20-kaspacom-0-2-5",
       "kcc20-ref-public-mint"

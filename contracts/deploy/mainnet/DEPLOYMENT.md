@@ -39,9 +39,9 @@ builds" in contracts/README.md.
 | | |
 |---|---|
 | File | `registry/tokens.json` (schema 1) |
-| sha256 (LF) | `79a8aa3289eb8d76be61cd3dbd57e018fb1a5e08da5e9d5cffc445b3dce0e4fc` |
-| Strict templates | kron-2433 `2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2`, kron-2732 `8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e` |
-| Pending review | kcc20-ref-3x3, kcc20-ref-8x8, kcc20-kaspacom-0-2-5, kcc20-ref-public-mint |
+| sha256 (LF) | `fbc2be6e326db2107368d82dfe3855ae580dceb8a50f7343de94d2a6b816efa1` |
+| Strict templates | kcc20-ref-3x3 `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, kron-2433 `2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2`, kron-2732 `8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e` |
+| Pending review | kcc20-ref-8x8, kcc20-kaspacom-0-2-5, kcc20-ref-public-mint |
 
 The deploy-mainnet build embeds this file as its default registry and checks this hash. An operator may load another
 registry (`--tokens`): its hash is reported by `GET /v1/tokens`.

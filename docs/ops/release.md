@@ -4,9 +4,10 @@ What a release manager does to cut a mainnet release, and what an operator needs
 software only (ISC): the release is a commit, its reproducible artifacts and the hashes below; the
 mainnet services (node, indexer, matcher, keepers, x402 facilitator) are run by community operators.
 
-Nothing in KOB has been independently audited. The order contracts and the token programs on the strict
-list were reviewed internally only, and nothing on chain can pause or rescue an order. The launch
-therefore runs with a strict template list (section 3).
+Nothing in KOB has been independently audited, and no external audit precedes the launch (maintainer decision
+2026-10-12): mainnet launches as a canary, with a visible pre-audit notice in the web app (`SECURITY.md`). The order
+contracts and the token programs on the strict list were reviewed internally only, and nothing on chain can pause or
+rescue an order. The launch therefore runs with a strict template list (section 3).
 
 ## 1. No genesis step: the build is reproducible from source
 
@@ -32,7 +33,9 @@ for testnet-10 and mainnet.
 
 1. Wallet signing gate passed for the wallets the release supports (covenant inputs signed by the wallet).
 2. KCC-20 template bytes pinned against the merged upstream specification and its conformance vectors
-   (`crates/kob-tests/vectors`); until then the KCC-20 programs stay `pending-review` (not on the strict list).
+   (`crates/kob-tests/vectors`); until then the KCC-20 programs other than the reference 3/3 stay `pending-review`
+   (not on the strict list). The reference 3/3 (`kcc20-ref-3x3`, KOB's standard program) is `reviewed` by internal
+   review only (maintainer decision 2026-10-12, canary launch).
 3. Internal review: no open high or critical finding.
 4. The TN10 soak completed by the operator, including the incident, `recover` and backup / restore drills
    (`docs/ops/executor.md` 7.8).
@@ -42,9 +45,12 @@ for testnet-10 and mainnet.
 
 `registry/tokens.json` is the mainnet registry the release pins. At launch (founder decision 2026-10-03):
 
-* **Strict template list:** the two KRON programs (`kron-2433`, `kron-2732`), reviewed with conditions. The
-  reference KCC-20 programs and KaspaCom's KCC20 0.2.5 are `pending-review` (finding K-1), so their tokens
-  are not listed.
+* **Strict template list:** the two KRON programs (`kron-2433`, `kron-2732`), reviewed with conditions, and the
+  reference KCC-20 3/3 (`kcc20-ref-3x3`, the program `kob token issue` and the web app issue), reviewed internally
+  (maintainer decision 2026-10-12): every token of these programs is tradable, listed or not (issuance is
+  permissionless; there is no listing step for a KCC-20 3/3 token). The other reference KCC-20 programs (the 8/8
+  prototype, the public-mint build) and KaspaCom's KCC20 0.2.5 (finding K-1) stay `pending-review`: their tokens are
+  not tradable on mainnet.
 * **Tokens:** the eight KRON tokens of the census are listed with their genesis records (genesis verified on
   mainnet data, no live mint authority). Six are `official`: KRON, KASCOV, ANSEM, IFWEN, PEEPS, KDIST.
   **PEPE** ("The Ultimate test") and **DNBT** ("dont buy this is test") are listed and verified but **not

@@ -46,7 +46,7 @@ describe('shipped registries', () => {
     // the KRON programs are reviewed with conditions (internal review, `crates/kob-tests/tests/review_b2_kron.rs`)
     expect(r.tokens.every((t) => t.tradable && t.untradableReason === null && t.templateMatchesPinned)).toBe(true);
     const review = Object.fromEntries(r.templates.map((t) => [t.id, t.review_status]));
-    expect(review).toMatchObject({ 'kcc20-ref-3x3': 'pending-review', 'kcc20-ref-8x8': 'pending-review', 'kron-2433': 'reviewed', 'kron-2732': 'reviewed', 'kcc20-kaspacom-0-2-5': 'pending-review' });
+    expect(review).toMatchObject({ 'kcc20-ref-3x3': 'reviewed', 'kcc20-ref-8x8': 'pending-review', 'kron-2433': 'reviewed', 'kron-2732': 'reviewed', 'kcc20-kaspacom-0-2-5': 'pending-review' });
     for (const id of ['kron-2433', 'kron-2732']) {
       expect(r.templates.find((t) => t.id === id)!.risks!.some((x) => x.startsWith('Reviewed with conditions') && x.includes('live is_minter'))).toBe(true);
     }

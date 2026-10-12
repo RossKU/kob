@@ -17,7 +17,8 @@ Token programs (`registry/tokens.json`): the two KRON programs are `reviewed` af
 review with per-token conditions, and the KRON tokens in the registry are listed. KCC-20 token
 issuance is permissionless: tokens issued with KOB's standard 3 / 3 reference program are tradable
 on mainnet with no listing or curation step, and being tradable says nothing about a token's
-safety. The KCC-20 programs themselves are `pending-review`.
+safety. That 3 / 3 program (`kcc20-ref-3x3`) is `reviewed` by internal review only (2026-10-12); the other
+KCC-20 programs (the 8 / 8 prototype, the public-mint build, KaspaCom's) are `pending-review` and not tradable on mainnet.
 
 ## Reporting a vulnerability
 
