@@ -473,6 +473,7 @@
           "scheme": "exact"
         },
         "options": {
+          "maxAmountSompi": "50000000",
           "paymentId": "pay-native-golden-0001"
         },
         "requestHash": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",

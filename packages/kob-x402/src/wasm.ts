@@ -96,6 +96,11 @@ export interface PayRequest {
   extensions?: PaymentPayload['extensions'];
   resource?: Resource;
   nowMs: number;
+  /**
+   * Native KAS: the most sompi the payer pays for the offer (decimal string). Required by `payNative`: an offer above it is
+   * refused, and there is no default (never the offer's own amount).
+   */
+  maxAmountSompi?: string;
   /** Highest acceptable fee in sompi (decimal string); the builder fails above it. */
   maxFeeSompi?: string;
   /**

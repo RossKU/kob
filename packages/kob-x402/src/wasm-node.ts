@@ -183,8 +183,10 @@ export function createKobWasm(opts: { pkgDir?: string } = {}): KobWasmNode {
     resolveToken: (network, asset) => run(() => kob.x402ResolveToken(network, asset)),
     tokenOffer: (req: TokenOfferRequest) => run<TokenExtra>(() => kob.x402TokenOffer(j(req))),
     payNative(req) {
+      if (!req.maxAmountSompi) throw new KobX402Error('bad_request', 'payNative needs maxAmountSompi: the most sompi the payer pays for the offer');
       const b = payBody(req, { secretKey: keys(req)[0], utxos: req.utxos });
       (b.options as Record<string, unknown>).paymentId = req.paymentId;
+      (b.options as Record<string, unknown>).maxAmountSompi = req.maxAmountSompi;
       if (req.ttlSeconds !== undefined) (b.options as Record<string, unknown>).ttlSeconds = req.ttlSeconds;
       return run<PayResult>(() => kob.x402PayNative(j(b)));
     },

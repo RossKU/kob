@@ -4,6 +4,14 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Native payments: the payer cap is required (audit A1-3)
+
+- **Breaking (wasm API):** `x402PayNative` (`kob-wasm`) requires `options.maxAmountSompi`, the most sompi the payer pays for
+  the offer, like the Rust `PayOptions::new`; a request without it is refused (`invalid_payload`) instead of defaulting to the
+  offer's own amount. `PayRequest.maxAmountSompi` carries it, and `payNative` of `createKobWasm` refuses a request without it
+  (`bad_request`). `KobX402Client` passes `capabilities.maxAmount.KAS` when set, else exactly the offered amount (the one
+  `approve` is asked about); no change for its callers.
+
 ### Payer: a failed payment is retried without paying twice
 
 - **Breaking (behaviour):** `KobX402Client` retries a payment inside the same `paidFetch` (`retry`, default

@@ -1613,7 +1613,8 @@ mod x402_exports {
         js(x402::swap_requirements(request))
     }
 
-    /// Builds and signs a KAS payment with a local key; returns the payload and its summary.
+    /// Builds and signs a KAS payment with a local key; returns the payload and its summary. `options.maxAmountSompi` (the payer's
+    /// cap on the offer amount) is required.
     #[wasm_bindgen(js_name = x402PayNative)]
     pub fn pay_native(request: &str) -> Result<String, JsError> {
         js(x402::pay_native(request))

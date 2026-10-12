@@ -17,6 +17,7 @@ import type { OfferSpec, PaymentRequired } from '../src/types.ts';
 import { defaultSettlement } from './helpers/stub-facilitator.ts';
 import { MERCHANT, NATIVE_OFFER, NETWORK, PAYER, SPEND_CAPS, kasUtxo, startRaw, startRig, staticContext } from './helpers/env.ts';
 import { stubWasm } from './helpers/stub-wasm.ts';
+import { loadGolden, realWasm, skipUnlessWasm } from './helpers/real-wasm.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -257,4 +258,45 @@ test('a facilitator that settles the transaction that was sent is served as befo
   } finally {
     await rig.close();
   }
+});
+
+// ------------------------------------------------------------------------------------------------ native payer cap (A1-3)
+
+test('a native payment always carries the payer cap: the KAS ceiling, else exactly the approved offer amount', async () => {
+  const cases: [Record<string, string> | undefined, string][] = [
+    [SPEND_CAPS, SPEND_CAPS.KAS],
+    [{ KAS: '60000000' }, '60000000'],
+    [undefined, '50000000'], // no ceiling: approve says yes, and the builder is pinned to the offered amount
+  ];
+  for (const [maxAmount, want] of cases) {
+    const w = stubWasm();
+    const srv = await startRaw(challenge(NATIVE_OFFER, 60));
+    try {
+      const c = new KobX402Client({
+        network: NETWORK,
+        payerAddress: PAYER,
+        privateKeys: ['01'.repeat(32)],
+        wasm: w,
+        context: { load: async () => ({ utxos: [kasUtxo(0)] }) },
+        ...(maxAmount ? { capabilities: { maxAmount } } : { approve: () => true }),
+      });
+      await c.fetch(srv.base + '/x').catch(() => undefined);
+      const arg = w.calls.find((x) => x.method === 'payNative')!.arg as { maxAmountSompi?: string };
+      assert.equal(arg.maxAmountSompi, want, JSON.stringify(maxAmount));
+    } finally {
+      await srv.close();
+    }
+  }
+});
+
+test('the wasm payNative refuses a request without maxAmountSompi (no default to the offer amount)', { skip: skipUnlessWasm }, () => {
+  const wasm = realWasm()!;
+  const golden = loadGolden().find((c) => c.name === 'pay.native')!;
+  const raw = wasm.raw as unknown as Record<string, (s: string) => string>;
+  const { maxAmountSompi, ...options } = golden.request.options as Record<string, unknown>;
+  assert.equal(maxAmountSompi, '50000000');
+  assert.throws(() => raw.x402PayNative!(JSON.stringify({ ...golden.request, options })), /maxAmountSompi is required/);
+  assert.throws(() => raw.x402PayNative!(JSON.stringify({ ...golden.request, options: { ...options, maxAmountSompi: '49999999' } })));
+  const base = { requirements: golden.request.offer, requestHash: golden.request.requestHash, payerAddress: PAYER, privateKeys: [golden.request.secretKey], utxos: golden.request.utxos, paymentId: 'p', nowMs: Number(golden.request.nowMs) };
+  assert.throws(() => wasm.payNative(base as never), (e: unknown) => e instanceof KobX402Error && e.code === 'bad_request');
 });

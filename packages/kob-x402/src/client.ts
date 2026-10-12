@@ -898,6 +898,12 @@ export class KobX402Client {
     }
     const bound = offer.kind === 'swap' && offer.payAsset ? this.#payBound(offer.payAsset) : undefined;
     if (bound !== undefined) req.maxPayAmount = bound;
+    if (offer.kind === 'native') {
+      // The builder requires the payer's own cap (audit A1-3): the configured KAS ceiling, else exactly the offered
+      // amount, which `approve` is then asked about (an offer above the ceiling was never selected).
+      const cap = o.capabilities?.maxAmount?.KAS;
+      req.maxAmountSompi = cap === undefined ? offer.requirements.amount : cap.toString();
+    }
     if (o.maxCarrierSompi) req.maxCarrierSompi = o.maxCarrierSompi;
 
     let result: PayResult;

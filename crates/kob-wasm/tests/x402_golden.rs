@@ -227,7 +227,7 @@ fn generate() -> Value {
     let funding2 = common::key_utxo(13, PAYER, 7 * KAS);
     let native_req = json!({
         "offer": native_offer, "requestHash": RH, "secretKey": to_hex(&sk(PAYER)), "utxos": [payer_utxo(&funding2), payer_utxo(&funding1)],
-        "nowMs": NOW_MS.to_string(), "options": { "paymentId": "pay-native-golden-0001" },
+        "nowMs": NOW_MS.to_string(), "options": { "paymentId": "pay-native-golden-0001", "maxAmountSompi": "50000000" },
     });
     let (rq, native_pay) = call(x402::pay_native, "pay native", native_req);
     let native_header = header_of(&native_pay);
@@ -488,4 +488,27 @@ fn x402_golden_vectors_are_current() {
     let committed: Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("golden file missing: run with KOB_REGEN=1")).unwrap();
     assert_eq!(committed, fresh, "x402 golden vectors drifted: review, then regenerate with KOB_REGEN=1");
+}
+
+/// Audit A1-3: the payer cap of a native payment is required (no default to the offer amount, as `PayOptions::new`),
+/// and an offer above it is refused.
+#[test]
+fn pay_native_requires_the_payer_cap() {
+    let req_native = json!({ "network": "kaspa:testnet-10", "amount": "50000000", "payTo": address(MERCHANT), "maxTimeoutSeconds": 60, "finality": "accepted" });
+    let (_, offer) = call(x402::native_requirements, "native offer", req_native);
+    let funding = common::key_utxo(12, PAYER, 20 * KAS);
+    let req = |options: Value| {
+        json!({
+            "offer": offer, "requestHash": RH, "secretKey": to_hex(&sk(PAYER)), "utxos": [payer_utxo(&funding)],
+            "nowMs": NOW_MS.to_string(), "options": options,
+        })
+        .to_string()
+    };
+    let missing = x402::pay_native(&req(json!({ "paymentId": "pay-native-cap-0001" }))).expect_err("a missing cap must be refused");
+    assert!(missing.contains("maxAmountSompi is required"), "{missing}");
+    assert!(x402::pay_native(&req(json!({}))).is_err(), "no options at all");
+    let below = x402::pay_native(&req(json!({ "paymentId": "pay-native-cap-0001", "maxAmountSompi": "49999999" })))
+        .expect_err("an offer above the cap");
+    assert!(!below.contains("is required") && below.contains("amount"), "{below}");
+    x402::pay_native(&req(json!({ "paymentId": "pay-native-cap-0001", "maxAmountSompi": "50000000" }))).expect("at the cap");
 }

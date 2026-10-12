@@ -705,6 +705,8 @@ fn route_requirements(json: &str, intent: bool) -> R<String> {
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct NativeOptions {
+    /// Payer cap on the offer's amount in sompi. Required, as in the Rust `PayOptions::new`: a missing cap is refused
+    /// rather than defaulted to whatever the merchant asks (audit A1-3).
     #[serde(default)]
     max_amount_sompi: Option<String>,
     #[serde(default)]
@@ -745,7 +747,7 @@ pub fn pay_native(json: &str) -> R<String> {
     let utxos = key_utxos(&p.utxos, &pubkey)?;
     let max_amount = match &p.options.max_amount_sompi {
         Some(m) => u64s("maxAmountSompi", m)?,
-        None => offer.amount_u64().map_err(xerr)?, // pin the offered amount
+        None => return Err(perr("options.maxAmountSompi is required: the most sompi this payer pays for the offer")),
     };
     let mut o = PayOptions::new(max_amount);
     if let Some(r) = p.options.fee_rate {
