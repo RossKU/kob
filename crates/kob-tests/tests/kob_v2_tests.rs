@@ -320,6 +320,8 @@ struct CondP {
     parent: [u8; 32],
     rpt_price: i64,
     rpt_until: i64,
+    /// base units per whole token its prices quote (default SCALE; a merge refuses an exit at another scale)
+    scale: i64,
 }
 impl CondP {
     /// OCO: take-profit at 3.00, stop 2.00 with the default 3% band (stop leg 1.94), evidence fills of
@@ -346,6 +348,7 @@ impl CondP {
             parent: [0; 32],
             rpt_price: 0,
             rpt_until: 0,
+            scale: SCALE,
         }
     }
 }
@@ -492,7 +495,7 @@ impl Net {
         a.push(bytes(&p.maker));
         a.extend(self.tok_args());
         a.extend([
-            int(SCALE),
+            int(p.scale),
             int(p.min_fill),
             int(p.tip),
             int(p.active_from),
@@ -561,6 +564,9 @@ struct Token {
     prefix: Vec<u8>,
     suffix: Vec<u8>,
     hash: Vec<u8>,
+    /// The program's slot limits per covenant and transaction: token inputs (leader + MAX_DELEGATES) and token
+    /// outputs (MAX_TOKEN_OUTPUTS); 3 / 3 for the reference program, 8 / 8 for "KCC20Ref_8x8".
+    slots: (usize, usize),
 }
 fn tok_state_bytes(amount: i64, owner: &[u8; 32], scheme: u8, borrow: u8) -> Vec<u8> {
     let mut v = vec![0x08];
@@ -586,7 +592,12 @@ impl Token {
         )
         .expect("compile KCC20Ref");
         let (prefix, suffix, hash) = compiled_template_parts_and_hash(&art);
-        let t = Token { art, prefix, suffix, hash };
+        // the variants are named after their limits ("KCC20Ref_8x8": 8 inputs, 8 outputs); the reference is 3 / 3
+        let slots = match name.rsplit_once('_').and_then(|(_, l)| l.split_once('x')) {
+            Some((i, o)) => (i.parse().expect("input slots"), o.parse().expect("output slots")),
+            None => (3, 3),
+        };
+        let t = Token { art, prefix, suffix, hash, slots };
         assert_eq!(t.redeem(1000, &[3u8; 32], SCHEME_COVID, 0), bytecode(&t.art));
         t
     }
@@ -1394,6 +1405,33 @@ fn not_p2sh_ev(real: &[u8], n: i64, value: i64, c: Hash, daa: u64) -> Inp {
     Inp {
         entry: UtxoEntry::new(value as u64, ScriptPublicKey::new(0, vec![0x6d, 0x51].into()), daa, false, Some(c)),
         role: Role::Raw { ss, name: "ev.not_p2sh" },
+        seq: 0,
+    }
+}
+
+/// A look-alike token holder: a P2SH script of the genuine holder redeem script's length under another program
+/// ("PUSHDATA2 data, DROP, TRUE"; the 3-byte header overwrites only the template prefix and state [0..2), so the
+/// owner at state [10..44) is the genuine one), carrying covenant id `c`. Its sigscript pushes the redeem script.
+fn lookalike_holder(t: &Token, real: &[u8], value: i64, c: Hash, daa: u64) -> Inp {
+    let data_len = real.len() - 5;
+    let mut redeem = vec![0x4d, (data_len & 0xff) as u8, (data_len >> 8) as u8];
+    redeem.extend_from_slice(&real[3..3 + data_len]);
+    redeem.extend([0x75, 0x51]);
+    assert_eq!(redeem.len(), real.len());
+    let st = t.prefix.len();
+    assert_eq!(redeem[st + 2..st + 112], real[st + 2..st + 112], "the look-alike keeps the holder state from byte 2");
+    Inp {
+        entry: UtxoEntry::new(value as u64, pay_to_script_hash_script(&redeem), daa, false, Some(c)),
+        role: Role::Raw { ss: push(&redeem), name: "holder.lookalike" },
+        seq: 0,
+    }
+}
+/// The genuine holder redeem script `real` pushed by an input of covenant id `c` whose script public key is not its
+/// P2SH ("DROP TRUE").
+fn not_p2sh_holder(real: &[u8], value: i64, c: Hash, daa: u64) -> Inp {
+    Inp {
+        entry: UtxoEntry::new(value as u64, ScriptPublicKey::new(0, vec![0x75, 0x51].into()), daa, false, Some(c)),
+        role: Role::Raw { ss: push(real), name: "holder.not_p2sh" },
         seq: 0,
     }
 }
@@ -2780,6 +2818,18 @@ fn add_second_update(f: &Fx, s: &mut Scn, kind: Kind, ev: i64, tk: i64) -> usize
     }
     at
 }
+/// Why the token program refuses the shape of `s` whatever the orders do (more inputs or outputs of one token
+/// covenant than its slots), or None. The batteries run on the reference 3 / 3 program and on the 8 / 8 variant.
+fn over_slots(net: &Net, s: &Scn) -> Option<String> {
+    let (max_in, max_out) = net.t.slots;
+    s.inputs.iter().filter(|i| matches!(i.role, Role::TokLeader { .. } | Role::TokDelegate { .. })).find_map(|t| {
+        let c = t.entry.covenant_id;
+        let ins = s.inputs.iter().filter(|i| i.entry.covenant_id == c).count();
+        let outs = s.outputs.iter().filter(|o| o.covenant.as_ref().map(|b| b.covenant_id) == c).count();
+        (ins > max_in || outs > max_out)
+            .then(|| format!("{ins} inputs / {outs} outputs of one token covenant, the program takes {max_in} / {max_out}"))
+    })
+}
 /// The evidence input (ev) and custody (tk) a scenario of `kind` passes to its order.
 fn ev_args(s: &Scn, kind: Kind) -> (i64, i64) {
     let (pe, pt) = kind.ev_pos();
@@ -2794,9 +2844,10 @@ fn ev_args(s: &Scn, kind: Kind) -> (i64, i64) {
 }
 
 /// Every evidence rule of one trigger: exposure (UTXO, custody, activeFrom, TWAP/DCA interval; exactly R
-/// accepted, one DAA short rejected), slope, side, token, scale, size threshold, an evidence that does not
-/// fill, wrong ev / tk indices, look-alike templates, the price rule at its edge, one evidence shared by
-/// two orders, and the update-only rules (own tokens, other fill kinds). Input 0 is the order throughout.
+/// accepted, one DAA short rejected; an ask's custody must be a holder UTXO of the token's program), slope, side,
+/// token, scale, size threshold, an evidence that does not fill, wrong ev / tk indices, look-alike templates, the
+/// price rule at its edge, one evidence shared by two orders, and the update-only rules (own tokens, other fill
+/// kinds). Input 0 is the order throughout. Scenarios beyond the token program's slots are skipped (`over_slots`).
 fn touch_battery(f: &Fx, kind: Kind) {
     let n = &f.net;
     let tag = kind.tag();
@@ -2804,11 +2855,29 @@ fn touch_battery(f: &Fx, kind: Kind) {
     let matcher = pk(&f.matcher);
     let (pe, pt) = kind.ev_pos();
     let name = |neg: bool, id: &str, what: &str| format!("{}{tag}{id} {what}", if neg { "N" } else { "" });
-    let ok = |e: &Ev, mu: i64, id: &str, what: &str| {
-        run_ok(n, &with_name(trig(f, kind, e, mu), &name(false, id, what)));
+    // a scenario of more token inputs / outputs of one covenant than the program's slots is refused by the token
+    // program whatever the orders do: skipped (on the 3 / 3 program; the 8 / 8 runs cover it)
+    let fits = |s: &Scn| match over_slots(n, s) {
+        Some(why) => {
+            println!("SKIPPED {} ({why})", s.name);
+            false
+        }
+        None => true,
     };
-    let bad = |e: &Ev, mu: i64, id: &str, what: &str| run_bad(n, &with_name(trig(f, kind, e, mu), &name(true, id, what)), 0);
-    let bad_s = |s: Scn, id: &str, what: &str, at: usize| run_bad(n, &with_name(s, &name(true, id, what)), at);
+    let ok_s = |s: Scn, id: &str, what: &str| {
+        let s = with_name(s, &name(false, id, what));
+        if fits(&s) {
+            run_ok(n, &s);
+        }
+    };
+    let bad_s = |s: Scn, id: &str, what: &str, at: usize| {
+        let s = with_name(s, &name(true, id, what));
+        if fits(&s) {
+            run_bad(n, &s, at);
+        }
+    };
+    let ok = |e: &Ev, mu: i64, id: &str, what: &str| ok_s(trig(f, kind, e, mu), id, what);
+    let bad = |e: &Ev, mu: i64, id: &str, what: &str| bad_s(trig(f, kind, e, mu), id, what, 0);
 
     ok(&good, TOK, "00", "triggered by a plain fill in the same transaction");
     // exposure = max(UTXO DAA + interval, activeFrom, custody DAA) + R <= lock time
@@ -2825,6 +2894,31 @@ fn touch_battery(f: &Fx, kind: Kind) {
         s.outputs.push(out(CARRIER, n.t.spk(5 * TOK, &matcher, SCHEME_P2PK), Some((l as u16, OTHER_COV))));
         set_arg(&mut s, 0, pt, iv(at));
         bad_s(s, "02b", "fresh custody; tk names an old UTXO of another token owned by the evidence ask", 0);
+        // the fresh custody hidden behind an old input carrying THIS token's covenant id whose bytes at the custody
+        // offset read the evidence ask as owner, but which is no holder UTXO of the token's program: a look-alike
+        // holder under another program (02c), the genuine holder script pushed by an input that is not its P2SH
+        // (02d). The evidence ask's stray guard and the token program refuse such an input as well; the order's own
+        // refusal (input 0) is what removing the custody's template hash / P2SH check flips (input-only).
+        let real = n.t.redeem(5 * TOK, &good.cov.as_bytes(), SCHEME_COVID, 0);
+        for (id, inp, what) in [
+            (
+                "02c",
+                lookalike_holder(&n.t, &real, CARRIER, TOKEN_COV, 1_000),
+                "fresh custody; tk names an old look-alike holder (another program, this token's covenant id, owner = the evidence ask)",
+            ),
+            (
+                "02d",
+                not_p2sh_holder(&real, CARRIER, TOKEN_COV, 1_000),
+                "fresh custody; tk names an old input of this token's covenant id pushing the evidence ask's holder script, not its P2SH",
+            ),
+        ] {
+            let mut s = trig(f, kind, &good.with(|e| e.tok_daa = NOW - R + 1), TOK);
+            let at = s.inputs.len() as i64;
+            s.inputs.push(inp);
+            s.outputs.push(out(CARRIER, p2pk_spk(&matcher), None));
+            set_arg(&mut s, 0, pt, iv(at));
+            bad_s(s, id, what, 0);
+        }
     }
     ok(&good.with(|e| e.active_from = (NOW - R) as i64), TOK, "03", "evidence active exactly R DAA (activeFrom)");
     bad(&good.with(|e| e.active_from = (NOW - R) as i64 + 1), TOK, "03", "evidence active only R - 1 DAA (activeFrom)");
@@ -2926,7 +3020,7 @@ fn touch_battery(f: &Fx, kind: Kind) {
     // one evidence, two orders
     let mut s = base.clone();
     add_second_update(f, &mut s, kind, ei, tk);
-    run_ok(n, &with_name(s, &name(false, "20", "two orders arm (trail) from ONE evidence fill in the same transaction")));
+    ok_s(s, "20", "two orders arm (trail) from ONE evidence fill in the same transaction");
     // the order's own counterparty is on the other side of the book: never evidence
     if let Some((s, what)) = counterparty(f, kind) {
         bad_s(s, "21", what, 0);
@@ -2951,10 +3045,7 @@ fn touch_battery(f: &Fx, kind: Kind) {
         // the taker's own P2PK input (KRON id_type 3 authorises by its presence)
         s.inputs.push(p2pk_in(&f.taker, KAS));
         s.outputs.push(out(KAS, p2pk_spk(&thief), None));
-        run_ok(
-            n,
-            &with_name(s, &name(false, "23", "update next to the evidence and another foreign token input (the taker's own tokens)")),
-        );
+        ok_s(s, "23", "update next to the evidence and another foreign token input (the taker's own tokens)");
     }
     if kind == Kind::IfdArm {
         // update arms only an entry that has an amount to fill and its stop on the limit's side (else the arm only takes keeperTip)
@@ -3064,7 +3155,7 @@ fn ifd_from_ask(f: &Fx) -> Scn {
 }
 
 /// The touch batteries run on the 8/8 token (evidence fills add token inputs and outputs next to the
-/// order's own).
+/// order's own) and on the reference 3/3 token (the `_3x3` test fns, the scenarios that fit its slots).
 fn fx8() -> Fx {
     Fx {
         net: Net::with_token(Token::named("KCC20Ref_8x8")),
@@ -3100,6 +3191,34 @@ fn v2_touch_ifd_fill() {
 #[test]
 fn v2_touch_ifd_arm() {
     touch_battery(&fx8(), Kind::IfdArm);
+}
+// The same batteries on the reference 3 / 3 program (the tradable KCC-20 program): every scenario that fits 3 token
+// inputs and 3 token outputs of one covenant; the others print SKIPPED (the token program refuses their shape) and
+// run on 8 / 8 above.
+/// Touch trigger on the 3 / 3 program: KobCondAsk stop leg armed inside its own fill.
+#[test]
+fn v2_touch_cond_settle_3x3() {
+    touch_battery(&fx(), Kind::Settle);
+}
+/// Touch trigger on the 3 / 3 program: KobCondAsk stop leg armed by update.
+#[test]
+fn v2_touch_cond_arm_3x3() {
+    touch_battery(&fx(), Kind::Arm);
+}
+/// Touch trigger on the 3 / 3 program: KobCondAsk trailing ratchet.
+#[test]
+fn v2_touch_cond_trail_3x3() {
+    touch_battery(&fx(), Kind::Trail);
+}
+/// Touch trigger on the 3 / 3 program: KobIfdBid buy-stop entry armed inside its own fill.
+#[test]
+fn v2_touch_ifd_fill_3x3() {
+    touch_battery(&fx(), Kind::IfdFill);
+}
+/// Touch trigger on the 3 / 3 program: KobIfdBid buy-stop entry armed by update.
+#[test]
+fn v2_touch_ifd_arm_3x3() {
+    touch_battery(&fx(), Kind::IfdArm);
 }
 
 /// Merge-value safety of update: a repeat merge requires its partner's sigscript to START with 0x08 (the 8-byte
@@ -3721,11 +3840,13 @@ fn rpt_merge(f: &Fx, k: &MergeKnobs) -> Scn {
     let xp = k.exit.clone().unwrap_or_else(|| booked_from(&k.entry, k.exit_amount));
     let xp = CondP { amount: k.exit_amount, ..xp };
     let leg_price = if k.leg == 0 { xp.tp } else { stop_leg(xp.stop, xp.slip_bps) };
-    let all_in = ask_all_in(k.n, leg_price, xp.tip);
+    // the exit's proceeds and re-arm budget at its own scale (the entry's budget below at the entry's)
+    let all_in = quote_at(k.n, leg_price - xp.tip, xp.scale, true).expect("exit proceeds");
     let rest = k.exit_amount - k.n;
     let claim = k.claim_m.unwrap_or(k.n);
     let rearm = k.with_entry && k.leg == 0 && xp.parent != [0; 32];
-    let maker_pay = if rearm { all_in - q_up(k.n, xp.rpt_price) } else { all_in + if rest == 0 { 2 * CARRIER } else { 0 } };
+    let budget = quote_at(k.n, xp.rpt_price, xp.scale, true).expect("exit re-arm budget");
+    let maker_pay = if rearm { all_in - budget } else { all_in + if rest == 0 { 2 * CARRIER } else { 0 } };
     let mut next = vec![];
     if rest > 0 {
         next.push(tok_state(rest, &c.as_bytes(), SCHEME_COVID));
@@ -4175,6 +4296,12 @@ fn v2_repeat_ifd_attacks() {
     let x = CondP { tp: booked_exit(m, 4 * TOK).tp + 1, ..booked_exit(m, 4 * TOK) };
     let s = rpt_merge(&f, &MergeKnobs { exit: Some(x), ..MergeKnobs::new(m, 0, 4 * TOK, 4 * TOK) });
     run_bad(n, &with_name(s, "NRP27 look-alike exit with other terms (take-profit + 1) re-arms the entry"), 2);
+    // an entry whose committed exit (exitState, and so the booked exit) quotes per 100 base units while the entry quotes
+    // per SCALE = 1000: the exit returns budget(3000) at its scale, the entry re-arms 3000 for budget(3000) at its own
+    // (every other check passes: the maker gets exactly what the exit computes at scale 100)
+    let x100 = IfdP { exit: CondP { scale: 100, ..ifd_exit(m) }, ..rpt_entry(m, 6 * TOK, 21 * TOK) };
+    let s = rpt_merge(&f, &MergeKnobs::of(x100, 4 * TOK, 3 * TOK));
+    run_bad(n, &with_name(s, "NRP30 merge of a booked exit quoting per another scale (100) than its entry (1000)"), 2);
     // ---- a merge into a stop entry armed by update and not filled yet keeps its band origin (the armed UTXO's DAA)
     let ae = IfdP { entry_stop: 220_000_000, band_daa: 300, armed: 1, ..rpt_entry(m, 6 * TOK, 21 * TOK) };
     let k = MergeKnobs::of(ae.clone(), 4 * TOK, 3 * TOK);
@@ -4866,7 +4993,8 @@ fn v3_fok() {
 }
 
 /// Repeat merges: nb = -(k * 2^53 + m), the 0x08 first-byte checks on both sides, the exit's update never next
-/// to its entry, booked amounts below 2^53, and the largest merge (m = 2^53 - 1 at input k = 999).
+/// to its entry, booked amounts below 2^53, the largest merge (m = 2^53 - 1 at input k = 999), and a re-arming
+/// exit's n below 2^53 (an exit of 2^53 + m at input i reads as the merge of input i + 1).
 #[test]
 fn v3_merge_push() {
     let f = fx();
@@ -4943,6 +5071,84 @@ fn v3_merge_push() {
 
     // the largest merge: m = 2^53 - 1 sold by the exit at input k = 999
     run_ok(n, &with_name(merge_far(&f, 999, MERGE_K - 1), "V3IB04+ merge of m = 2^53 - 1 from the exit at input 999"));
+
+    // re-arm: an exit selling n >= 2^53 would alias the merge argument of input self + 1
+    run_bad(
+        n,
+        &with_name(
+            merge_alias(&f),
+            "V3CA09 exit selling 2^53 + 4000 at input 0 reads the merge of the booked exit at input 1 as its own (budget skimmed)",
+        ),
+        0,
+    );
+}
+
+/// The merge alias: E1 (input 0, cov 0xc3, parent = the entry, scale 10^16 so that quoteOf of 2^53 + 4000 base units
+/// fits, take-profit 1000 sompi per whole token, tip 0, rptPrice 100) sells out n1 = 2^53 + 4000 on its take-profit;
+/// E2 (input 1, cov 0xc1) is a genuine booked exit of the entry selling out m = 4000; their custodies (inputs 2, 3) go
+/// to the taker. The entry (input 4, nothing left) merges -(1 * 2^53 + 4000) = -(0 * 2^53 + n1): E2's merge, and E1's
+/// as E1 reads it. The entry continuation holds E2's budget and carriers only, which also covers what E1 requires of
+/// it (its rptBudget of 91 and its own carriers): E1's carriers and budget go to the taker.
+fn merge_alias(f: &Fx) -> Scn {
+    let tk = &f.net.t;
+    let m = pk(&f.maker_a);
+    let taker = pk(&f.taker);
+    let e = cov(RPT_ENTRY);
+    let (c1, c3) = (cov(0xc1), cov(0xc3));
+    let sold = 4 * TOK;
+    let n1 = MERGE_K + sold;
+    let ip = rpt_entry(m, 0, 21 * TOK);
+    let x2 = booked_from(&ip, sold);
+    let x1 =
+        CondP { scale: 10_000_000_000_000_000, tp: 1_000, tip: 0, rpt_price: 100, amount: n1, maker: taker, ..booked_from(&ip, n1) };
+    let all_in1 = quote_at(n1, x1.tp, x1.scale, true).expect("E1 proceeds");
+    let budget1 = quote_at(n1, x1.rpt_price, x1.scale, true).expect("E1 budget");
+    let budget2 = q_up(sold, ip.rate());
+    assert!(budget1 <= budget2, "E2's budget covers what E1 requires of the entry");
+    let entry_value = ifd_value(&ip) + EC;
+    let settle = |art: &SilAbiArtifact, n: i64, tok: i64, c: Hash| {
+        call(art, "settle", vec![nb(n), iv(tok), iv(0), iv(0), iv(0), iv(0), iv(0)], "cond.settle", CARRIER, c, 2_000)
+    };
+    let mut s = Scn {
+        name: "merge alias".into(),
+        inputs: vec![
+            settle(&f.net.cond(&x1), n1, 2, c3),
+            settle(&f.net.cond(&x2), sold, 3, c1),
+            tok_in(
+                tk,
+                CARRIER,
+                n1,
+                &c3.as_bytes(),
+                SCHEME_COVID,
+                TOKEN_COV,
+                Some(vec![tok_state(n1 + sold, &taker, SCHEME_P2PK)]),
+                Wit::CovId,
+                2_000,
+            ),
+            tok_in(tk, CARRIER, sold, &c1.as_bytes(), SCHEME_COVID, TOKEN_COV, None, Wit::CovId, 2_000),
+            call(
+                &f.net.ifd(&ip),
+                "fill",
+                vec![nb_merge(1, sold), iv(3), iv(0), Arg::V(bytes(&[])), Arg::V(bytes(&[])), iv(0), iv(0)],
+                "ifd.merge",
+                entry_value,
+                e,
+                1_000,
+            ),
+            p2pk_in(&f.taker, 1000 * KAS),
+        ],
+        outputs: vec![
+            out(all_in1 - budget1, p2pk_spk(&taker), None),
+            out(ask_all_in(sold, x2.tp, x2.tip) - budget2, p2pk_spk(&m), None),
+            out(CARRIER, tk.spk(n1 + sold, &taker, SCHEME_P2PK), Some((2, TOKEN_COV))),
+            out(entry_value + budget2 + 2 * CARRIER, spk_of(&f.net.ifd(&IfdP { amount: sold, ..ip.clone() })), Some((4, e))),
+            out(0, p2pk_spk(&taker), None),
+        ],
+        lock_time: NOW,
+        payload: vec![],
+    };
+    balance(&mut s, 4);
+    s
 }
 
 /// A booked exit at input `k` (k >= 3) sells out `amount` on its take-profit (0.001 per whole token, tip 0) and its

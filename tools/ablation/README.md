@@ -41,19 +41,22 @@ directory (line endings normalised to LF) and mutates only the copies.
 
 | Suite | Family | Test binary | Contracts (`srcDir`) | Contracts mutated | Mutations |
 |---|---|---|---|---|---|
-| `kcc20-sell` | KCC-20, sell side: repeat IFD lifecycle, touch trigger, v3 checks (minFill, rounding, tip, merge push) | `kob_v2_tests` | `contracts/v2` | KobAsk, KobBid, KobCondAsk, KobIfdBid | 95 |
-| `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger, v3 checks | `kob_v2_buy_tests` | `contracts/v2` | KobCondBid, KobIfdAsk | 95 |
-| `kron-sell` | KRON adapter, sell side (v3) | `kob_kron_v2_tests` | `contracts/adapters/kron/v2` | KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron | 142 |
-| `kron-buy` | KRON adapter, buy side (v3) | `kob_kron_v2_buy_tests` | `contracts/adapters/kron/v2` | KobCondBidKron, KobIfdAskKron | 108 |
+| `kcc20-sell` | KCC-20, sell side: repeat IFD lifecycle, touch trigger (the `TA` / `TU` / `TI` entries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale) | `kob_v2_tests` | `contracts/v2` | KobAsk, KobBid, KobCondAsk, KobIfdBid | 101 |
+| `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger (the `TB` / `TV` / `TW` / `TK` / `TL` entries of the touch batteries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale, re-arm bound) | `kob_v2_buy_tests` | `contracts/v2` | KobCondBid, KobIfdAsk | 101 |
+| `kron-sell` | KRON adapter, sell side (v3) | `kob_kron_v2_tests` | `contracts/adapters/kron/v2` | KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron | 148 |
+| `kron-buy` | KRON adapter, buy side (v3) | `kob_kron_v2_buy_tests` | `contracts/adapters/kron/v2` | KobCondBidKron, KobIfdAskKron | 114 |
 | `pair` | pair orders, plain (`KobPair`, both sides, both families of A and B) | `kob_pair_tests` | `contracts/v2` | KobPair | 84 |
-| `cond-pair` | pair conditionals (`KobCondPair`): legs, trigger evidence in both modes, trailing, updates | `kob_cond_pair_tests` | `contracts/v2` | KobCondPair | 122 |
-| `cond-pair-rpt` | the repeat-IFD checks of `KobCondPair` (TP fills with / without the entry, re-arm profit, budget, prefund) | `kob_ifd_pair_tests` | `contracts/v2` | KobCondPair | 11 |
-| `ifd-pair` | pair if-done entries (`KobIfdPair`, buy-first and sell-first, merges, stop entries) | `kob_ifd_pair_tests` | `contracts/v2` | KobIfdPair | 120 |
+| `cond-pair` | pair conditionals (`KobCondPair`): legs, trigger evidence in both modes, trailing, updates | `kob_cond_pair_tests` | `contracts/v2` | KobCondPair | 126 |
+| `cond-pair-rpt` | the repeat-IFD checks of `KobCondPair` (TP fills with / without the entry, re-arm profit, budget, prefund, the merge bound) | `kob_ifd_pair_tests` | `contracts/v2` | KobCondPair | 12 |
+| `ifd-pair` | pair if-done entries (`KobIfdPair`, buy-first and sell-first, merges, stop entries) | `kob_ifd_pair_tests` | `contracts/v2` | KobIfdPair | 126 |
 
 The pair suites run every scenario on token pairs of both families (`common/pair_harness.rs`: the three pair templates are
 compiled from source in dependency order, KobCondPair against the compiled KobPair and KobIfdPair against both, so a
 mutation of KobPair is also seen where a resting KobPair is the trigger evidence of a conditional, and a mutation of
-KobCondPair where an entry creates its exit). The cross limit catalogs (`kcc20-cross`, `kron-cross`) are gone with
+KobCondPair where an entry creates its exit). The `cond-pair`, `cond-pair-rpt` and `ifd-pair` test functions run their
+KCC-20 mixes on both KCC-20 programs, KCC20Ref_8x8 and the 3 / 3 KCC20Ref (the tradable one on mainnet), so their
+mutations must flip on both; a scenario whose transaction or honest build exceeds the 3 / 3 token slots is skipped there
+(`SKIP-SLOTS` lines: the stray-scan slots beyond the third input, shapes with a 4th token output). The cross limit catalogs (`kcc20-cross`, `kron-cross`) are gone with
 `KobCross` (retired in the pair phase).
 
 Each suite is a catalog in `catalogs/<suite>.mjs` exporting `suite` (`name`, `family`, `testBin`, `srcDir`,
@@ -73,7 +76,14 @@ are the same in every contract of both families, so `lib/touch.mjs` generates on
 by its header: `<prefix>-push08` (the evidence sigscript starts with the 8-byte push of n), `-npos` (n > 0), `-tpl` (template
 hash only; the P2SH check kept), `-p2sh` (P2SH only; the template hash kept), `-token`, `-scale` (the evidence quotes per the
 same scale), `-mintouch` (n >= minTouch base units), `-slope`, `-cltv` (tx.daa >= exposed + minRestDaa), the three exposure terms `-interval`, `-active`,
-`-tokdaa`, and for ask evidence `-tkcov` / `-owner` (the custody input carries the token and is owned by the evidence ask).
+`-tokdaa`, and for ask evidence `-tkcov` / `-owner` (the custody input carries the token and is owned by the evidence ask)
+and `-tktpl` / `-tkp2sh` (the custody is a holder UTXO of the token's program: template hash only / P2SH only, the other
+kept; their scenarios 02c / 02d are also refused by the evidence ask's stray guard and the token program, so they are
+`inputOnly`). The KCC-20 batteries run on the 8/8 program (`v2_touch_*`) and on the reference 3/3 program
+(`v2_touch_*_3x3`, the scenarios that fit 3 token inputs / 3 token outputs of one covenant; the others print `SKIPPED`):
+the generated `TA` / `TU` / `TI` entries of `kcc20-sell` must flip on both. Likewise `kcc20-buy` (`v2_buy_touch_*` and
+`v2_buy_touch_*_3x3`): every touch entry whose run names a battery test fn (`TB-*`, `TV-*`, `TW-k`, `TW-step`, `TK-*`
+except `TK-auc`, `TL-*` except `TL-origin`) expects its ids on both programs, except `NTK16` (8/8 only).
 Hand-written entries cover the side / price rules in settle and update (`-rule`), the trailing step (`TT-k` / `TW-k`: k = 0
 would drain keeperTip, k < 0 would move the stop back), the auction that opens at the trigger (`TI-auc` / `TK-auc`) and
 update's own-token guard (`-own`, or the re-pointed `I14` / `CB3` / `IA3` entries in the KRON catalogs).
@@ -83,7 +93,8 @@ arm scenarios `NTU*` and the trail scenarios `NTT*`), `TI` KobIfdBid buy-stop en
 KobCondBid buy-stop leg armed in settle, `TV` KobCondBid update (`NTV*` arm, `NTW*` trail), `TK` KobIfdAsk sell-stop entry
 (`NTK*` settle, `NTL*` update). The scenario numbers are the same in every battery (`crates/kob-tests`, `touch_battery`):
 01..04 exposure (UTXO, custody, activeFrom, interval; exactly R accepted, R - 1 refused), 02b a fresh custody hidden behind an
-old token UTXO of another token, 05 slope, 06 side, 07 / 07b token, 08 another scale, 09 minTouch (one base unit below refused), 10 a cancel whose signature is
+old token UTXO of another token, 02c / 02d behind an old input of this token's covenant id reading the evidence ask as
+owner: a look-alike holder under another program / the genuine holder script pushed by a non-P2SH input, 05 slope, 06 side, 07 / 07b token, 08 another scale, 09 minTouch (one base unit below refused), 10 a cancel whose signature is
 ground to read as n > 0, 11 / 11b refund / n = 0, 12..14 ev at the order, a token input, a P2PK input, 15 / 16 tk at a token
 input the evidence ask does not own / another ask's custody (fresh real custody), 17 look-alike template, 18 non-P2SH redeem,
 19 / 19b the price edge, 20 one fill arming two orders, 21 the order's own counterparty, 22 conditional / if-done fills, 23

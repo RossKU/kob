@@ -81,13 +81,14 @@ The lifecycle rules of `contracts/v2/` apply with the KRON codec and limits:
   amount (`id_type 2`, owner = the entry) and `close()` refunds an empty repeating entry.
   Day orders need no on-chain rule (the wallet sets `expiryDaa` for 00:00 UTC).
 - **Touch trigger.** Stop legs, trailing ratchets and stop entries read their trigger evidence from a plain
-  `KobAskKron` / `KobBidKron` filled in the same transaction (`ev`, and `tk` for an ask's custody: the KRON input
-  with `id_type 2` and owner = the ask's id), exactly as the KCC-20 kinds (`docs/spec/matcher.md` section 4).
+  `KobAskKron` / `KobBidKron` filled in the same transaction (`ev`, and `tk` for an ask's custody: a holder UTXO of
+  the KRON program, template hash + P2SH, with `id_type 2` and owner = the ask's id), exactly as the KCC-20 kinds
+  (`docs/spec/matcher.md` section 4).
   There is no receipt covenant and no genesis.
 
-Sizes (bytecode B / state B): KobAskKron 1,487 / 243, KobBidKron 1,343 / 252, KobCondAskKron 3,178 / 330,
-KobCondBidKron 3,125 / 348, KobIfdBidKron 3,467 / 552, KobIfdAskKron 4,354 / 561 (the pair orders for KRON tokens: `KobPair` 2,960 / 447,
-`KobCondPair` 6,284 / 543, `KobIfdPair` 8,789 / 909, one template each for both families).
+Sizes (bytecode B / state B): KobAskKron 1,487 / 243, KobBidKron 1,343 / 252, KobCondAskKron 3,451 / 330,
+KobCondBidKron 3,253 / 348, KobIfdBidKron 3,478 / 552, KobIfdAskKron 4,628 / 561 (the pair orders for KRON tokens: `KobPair` 2,960 / 447,
+`KobCondPair` 6,669 / 543, `KobIfdPair` 9,108 / 909, one template each for both families).
 
 ## Layout notes (hand-coded byte windows)
 

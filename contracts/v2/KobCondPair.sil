@@ -310,12 +310,14 @@ contract KobCondPair(
     // with an 8-byte item, and that order's own script enforces the fill for that n), n >= minN, slope 0 (a decaying
     // price is not a quote), scale == sc, and exposed at its quote >= minRestDaa DAA before this transaction (CLTV):
     // exposed = max(its UTXO DAA + its TWAP / DCA interval, its activeFrom, its custody's DAA (ask)). An ask's custody is
-    // input tk: the token input owned by the ask's covenant id (covenant marker: KCC-20 state [10..44) = owner || 0x01
-    // 0x04, KRON state [1..36) = owner || 0x01 0x02 0x08; the ask admits no other token input owned by its id).
+    // input tk: the token input owned by the ask's covenant id, a holder UTXO of the token's program (template hash
+    // tokTpl + P2SH: an input of another program carrying the covenant id never stands in for it) with the covenant
+    // marker (KCC-20 state [10..44) = owner || 0x01 0x04, KRON state [1..36) = owner || 0x01 0x02 0x08; the ask admits
+    // no other token input owned by its id).
     // State offsets: KobAsk / KobAskKron tokenCovId [34..66) scale [118..126) price [136..144) activeFrom [163..171)
     // interval [190..198) slope [208..216); KobBid scale / price / activeFrom 33 bytes later, interval / slope 51 later;
     // KobBidKron scale / price / activeFrom as KobAsk, interval / slope 18 later. Returns the quote (sompi per whole token).
-    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, int tk, int tokSuf, int minN) : int {
+    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, int tk, byte[32] tokTpl, int tokPre, int tokSuf, int minN) : int {
         require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
         int n = int(byte[8](OpTxInputScriptSigSubstr(ev, 1, 9)));
         require(n > 0);
@@ -359,14 +361,18 @@ contract KobCondPair(
         int act = int(byte[8](q.slice(45, 53)));
         if (act > exposed) { exposed = act; }
         if (ask) {
+            // the custody: a holder UTXO of tok's program (template hash + P2SH) with the covenant marker
             require(OpInputCovenantId(tk) == tok);
             byte[] mark = byte[](0x0104);
-            int end = OpTxInputScriptSigLen(tk) + 10 - 112 - tokSuf;
+            int sl = 112;
+            int ow = 10;
             if (fam == FAM_KRON) {
                 mark = byte[](0x010208);
-                end = OpTxInputScriptSigLen(tk) + 1 - 46 - tokSuf;
+                sl = 46;
+                ow = 1;
             }
-            require(OpTxInputScriptSigSubstr(tk, end, end + 32 + mark.length) == byte[](OpInputCovenantId(ev)) + mark);
+            byte[] cs = tplState(tk, tokPre, sl, tokSuf, tokTpl);
+            require(cs.slice(ow, ow + 32 + mark.length) == byte[](OpInputCovenantId(ev)) + mark);
             int td = OpTxInputDaaScore(tk);
             if (td > exposed) { exposed = td; }
         }
@@ -380,10 +386,12 @@ contract KobCondPair(
     // enforces the fill), n >= minN, side ASK (it sells A = its S for B = its T) when `ask`, else side BID (sells B for A),
     // its S, T and their scales exactly ours (side || S id at [34..75), S scale || T id at [136..177), T scale at
     // [271..279)), slope 0, exposed >= minRestDaa: max(its UTXO DAA + its interval, its activeFrom, its custody's DAA).
-    // Its custody is input tk: the input of its S (A for an ask: family fam, suffix kSuf; B for a bid: oFam, oSuf) owned
-    // by its covenant id with the covenant marker. KobPair state offsets are the KobAsk ones shifted: price [289..297) and
+    // Its custody is input tk: the input of its S (A for an ask: family fam, program kTpl / kPre / kSuf; B for a bid: oFam,
+    // oTpl / oPre / oSuf), a holder UTXO of that program (template hash + P2SH) owned by its covenant id with the covenant
+    // marker. KobPair state offsets are the KobAsk ones shifted: price [289..297) and
     // activeFrom [316..324) by d = 153, interval [352..360) and slope [370..378) by w = 162. Returns the quote.
-    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, int kSuf, byte[32] oTok, int oFam, int osc, int oSuf, int tk, int minN) : int {
+    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, byte[32] kTpl, int kPre, int kSuf, byte[32] oTok, int oFam, int osc,
+                byte[32] oTpl, int oPre, int oSuf, int tk, int minN) : int {
         require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
         int n = int(byte[8](OpTxInputScriptSigSubstr(ev, 1, 9)));
         require(n > 0);
@@ -421,6 +429,8 @@ contract KobCondPair(
         bool cust = ask;
         byte[32] cTok = tok;
         int cFam = fam;
+        byte[32] cTpl = kTpl;
+        int cPre = kPre;
         int cSuf = kSuf;
         if (pair) {
             tpl = PAIR_TPL;
@@ -443,6 +453,8 @@ contract KobCondPair(
                 tS = sc;
                 cTok = oTok;
                 cFam = oFam;
+                cTpl = oTpl;
+                cPre = oPre;
                 cSuf = oSuf;
             }
             want = byte[](sd as byte[8]) + byte[](0x20) + byte[](sI) + byte[](sS as byte[8]) + byte[](0x20) + byte[](tI) + byte[](tS as byte[8]);
@@ -458,14 +470,18 @@ contract KobCondPair(
         int act = int(byte[8](o.slice(163 + d, 171 + d)));
         if (act > exposed) { exposed = act; }
         if (cust) {
+            // the custody: a holder UTXO of cTok's program (template hash + P2SH) with the covenant marker
             require(OpInputCovenantId(tk) == cTok);
             byte[] mark = byte[](0x0104);
-            int end = OpTxInputScriptSigLen(tk) + 10 - 112 - cSuf;
+            int sl = 112;
+            int ow = 10;
             if (cFam == FAM_KRON) {
                 mark = byte[](0x010208);
-                end = OpTxInputScriptSigLen(tk) + 1 - 46 - cSuf;
+                sl = 46;
+                ow = 1;
             }
-            require(OpTxInputScriptSigSubstr(tk, end, end + 32 + mark.length) == byte[](OpInputCovenantId(ev)) + mark);
+            byte[] cs = tplState(tk, cPre, sl, cSuf, cTpl);
+            require(cs.slice(ow, ow + 32 + mark.length) == byte[](OpInputCovenantId(ev)) + mark);
             int td = OpTxInputDaaScore(tk);
             if (td > exposed) { exposed = td; }
         }
@@ -486,26 +502,34 @@ contract KobCondPair(
         byte[32] aTok = sCovId;
         int aFam = sFamily;
         int aSc = sScale;
+        byte[32] aTp = sTplHash;
+        int aPr = sPre;
         int aSf = sSuf;
         byte[32] bTok = tCovId;
         int bFam = tFamily;
         int bSc = tScale;
+        byte[32] bTp = tTplHash;
+        int bPr = tPre;
         int bSf = tSuf;
         if (side == SIDE_BID) {
             aTok = tCovId;
             aFam = tFamily;
             aSc = tScale;
+            aTp = tTplHash;
+            aPr = tPre;
             aSf = tSuf;
             bTok = sCovId;
             bFam = sFamily;
             bSc = sScale;
+            bTp = sTplHash;
+            bPr = sPre;
             bSf = sSuf;
         }
         // read 1: the A leg (mode 0) or the pair order (mode 1); read 2 (mode 0 only): the B leg
-        int a = rd(evA, askA, evMode != 0, aTok, aFam, aSc, aSf, bTok, bFam, bSc, bSf, tk, minTouch);
+        int a = rd(evA, askA, evMode != 0, aTok, aFam, aSc, aTp, aPr, aSf, bTok, bFam, bSc, bTp, bPr, bSf, tk, minTouch);
         int b = bSc;
         if (evMode == 0) {
-            b = evLeg(evB, !askA, bTok, bFam, bSc, tk, bSf, quoteOf(minTouch, stop, aSc, aSc - 1));
+            b = evLeg(evB, !askA, bTok, bFam, bSc, tk, bTp, bPr, bSf, quoteOf(minTouch, stop, aSc, aSc - 1));
         } else {
             require(evMode == 1);
         }

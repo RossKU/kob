@@ -22,6 +22,27 @@ const T_ARM = 'v2_touch_cond_arm';
 const T_TRL = 'v2_touch_cond_trail';
 const T_IF = 'v2_touch_ifd_fill';
 const T_IA = 'v2_touch_ifd_arm';
+// Every touch battery runs on the 8/8 program (the test fns above) and on the reference 3/3 program (the same fn
+// with _3x3). on3x3 adds the 3/3 twin of every battery run of a touchMutations spec, without the scenarios whose
+// shape the 3/3 program refuses (SKIPPED in its output: NTA16 needs 3 token inputs and 4 token outputs).
+const BATTERIES = new Set([T_SET, T_ARM, T_TRL, T_IF, T_IA]);
+const NOT_ON_3x3 = new Set(['NTA16']);
+function with3x3(run) {
+  const out = { ...run };
+  for (const [t, ids] of Object.entries(run)) {
+    const k = BATTERIES.has(t) ? ids.filter(id => !NOT_ON_3x3.has(id)) : [];
+    if (k.length) out[`${t}_3x3`] = k;
+  }
+  return out;
+}
+function on3x3(runs) {
+  return Object.fromEntries(
+    Object.entries(runs).map(([check, r]) => [
+      check,
+      r.run || r.hold ? { ...r, ...(r.run && { run: with3x3(r.run) }), ...(r.hold && { hold: with3x3(r.hold) }) } : with3x3(r),
+    ]),
+  );
+}
 const T_TM = 'v2_negative_trigger_manipulation';
 const T_LC = 'v2_lifecycle_stop_auction_keeper_trailing';
 const T_STRAY = 'v2_lifecycle_stray_custody';
@@ -175,10 +196,11 @@ export const mutations = [
     file: 'KobIfdBid',
     test: T_RPT,
     expect: ['NRP6'],
-    note: 'booking time t <= lockTime (CLTV)',
+    note: "booking: the exit's rptUntil counts from the entry UTXO's DAA (its last activity), never from the filler's t (the cycle dated by t instead)",
     edits: [
-      rep(`                require(tx.daa >= t);
-                int utxoDaa`, '                int utxoDaa'),
+      rep(`                int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
+                xUntil`, `                int idleEnd = t + MAX_IDLE;
+                xUntil`),
     ],
   },
   {
@@ -233,13 +255,21 @@ export const mutations = [
     note: 'the merge requires parent = this entry and rptPrice = its budget rate (price + tip)',
     edits: [rxDel('int rate = price + tip;', /^\s*require\(x\.slice\(279, 322\) == [^\n]*\);$/m)],
   },
+  {
+    id: 'V-IB-scale',
+    file: 'KobIfdBid',
+    test: T_RPT,
+    expect: ['NRP30'],
+    note: "merge: the committed exit (exitState, compared with the exit's state) quotes at the entry's scale (else the exit returns budget(m) at its scale and the entry re-arms m at its own)",
+    edits: [del('            require(int(byte[8](st.slice(118, 126))) == scale);\n')],
+  },
   // ---- touch trigger: KobCondAsk touchAsk (stop leg armed inside its fill), touch (update: arm / trail)
   ...touchMutations({
     prefix: 'TA',
     file: 'KobCondAsk',
     fn: 'function touchAsk(int ev, int tk) : int {',
     what: 'touchAsk (settle, stop leg)',
-    runs: {
+    runs: on3x3({
       push08: { [T_SET]: ['NTA10'] },
       npos: { [T_SET]: ['NTA11'] },
       tpl: { [T_SET]: ['NTA17'] },
@@ -254,7 +284,10 @@ export const mutations = [
       tokdaa: { [T_SET]: ['NTA02'] },
       tkcov: { [T_SET]: ['NTA02b'] },
       owner: { [T_SET]: ['NTA15', 'NTA16'] },
-    },
+      // the look-alike holder / non-P2SH input is also refused by the evidence ask's stray guard and the token program
+      tktpl: { run: { [T_SET]: ['NTA02c'] }, inputOnly: ['NTA02c'] },
+      tkp2sh: { run: { [T_SET]: ['NTA02d'] }, inputOnly: ['NTA02d'] },
+    }),
   }),
   {
     id: 'TA-rule',
@@ -268,7 +301,7 @@ export const mutations = [
     file: 'KobCondAsk',
     fn: 'function touch(int ev, int tk) : (int, int) {',
     what: 'touch (update: arm on an ask, trail on a bid)',
-    runs: {
+    runs: on3x3({
       push08: { [T_ARM]: ['NTU10'], [T_TRL]: ['NTT10', 'NTT11'] },
       npos: { [T_ARM]: ['NTU11'] },
       tpl: { [T_ARM]: ['NTU17'], [T_TRL]: ['NTT17'] },
@@ -283,7 +316,9 @@ export const mutations = [
       tokdaa: { [T_ARM]: ['NTU02'] },
       tkcov: { [T_ARM]: ['NTU02b'] },
       owner: { [T_ARM]: ['NTU15', 'NTU16'] },
-    },
+      tktpl: { run: { [T_ARM]: ['NTU02c'] }, inputOnly: ['NTU02c'] },
+      tkp2sh: { run: { [T_ARM]: ['NTU02d'] }, inputOnly: ['NTU02d'] },
+    }),
   }),
   {
     id: 'TU-rule',
@@ -344,7 +379,7 @@ export const mutations = [
     file: 'KobIfdBid',
     fn: 'function touchBid(int ev) : int {',
     what: 'touchBid (buy-stop entry)',
-    runs: {
+    runs: on3x3({
       push08: { [T_IF]: ['NTI10'], [T_IA]: ['NTJ10', 'NTJ11'] },
       npos: { run: { [T_IF]: ['NTI11b'], [T_IA]: ['NTJ11b'] }, inputOnly: ['NTI11b', 'NTJ11b'] },
       tpl: { [T_IF]: ['NTI17'], [T_IA]: ['NTJ17'] },
@@ -356,7 +391,7 @@ export const mutations = [
       cltv: { [T_IF]: ['NTI01', 'NTI03', 'NTI04'], [T_IA]: ['NTJ01', 'NTJ03', 'NTJ04'] },
       interval: { [T_IF]: ['NTI04'], [T_IA]: ['NTJ04'] },
       active: { [T_IF]: ['NTI03'], [T_IA]: ['NTJ03'] },
-    },
+    }),
   }),
   {
     id: 'TI-auc',
@@ -556,6 +591,14 @@ export const mutations = [
     hold: { [T_RPT]: ['NRP22'] },
     note: "update never next to the repeat entry (OpCovInputCount(parent) == 0): an 8-byte ev push would alias the merge amount (NRP22, a minimal push, is also refused by the entry's 0x08 check)",
     edits: [del('        require(OpCovInputCount(parent) == 0);\n')],
+  },
+  {
+    id: 'V-CA-mergek',
+    file: 'KobCondAsk',
+    test: T_MRG,
+    expect: ['V3CA09'],
+    note: "re-arm: the exit sells n < 2^53 (the merge argument -(self * 2^53 + n) names this input and n only then: an exit of 2^53 + m at input i reads the merge of the booked exit at input i + 1 as its own)",
+    edits: [del('                require(n < MERGE_K);\n')],
   },
   // ---- KobIfdBid
   {

@@ -11,7 +11,8 @@ pragma silverscript ^0.1.0;
 //  - noStrays: MAX_TOK_IN = 4 (KRON's token-input limit; 8 in the base), owner read at
 //    sigscript_len + 1 - 46 - tplSuffixLen.
 //  - Evidence: BID_STATE_LEN = 252; a bid's fields sit at the ask's offsets except interval [208..216)
-//    and slope [226..234). An ask's custody tk is recognised by owner || 0x01 0x02 0x08 (id_type 2).
+//    and slope [226..234). An ask's custody tk is a holder UTXO of this token's program (template hash +
+//    P2SH) whose state[1..36) is owner || 0x01 0x02 0x08 (id_type 2).
 // Same as the base: amounts and prices (base units at sompi per whole token, quoteOf rounding in the maker's
 // favour), minimum fill, legs, triggers, repeat-IFD rules (merge argument -(i * MERGE_K + n), MERGE_K = 2^53),
 // entries.
@@ -201,8 +202,8 @@ contract KobCondBidKron(
         if (act > exposed) { exposed = act; }
         if (tk >= 0) {
             require(OpInputCovenantId(tk) == tokenCovId);
-            int end = OpTxInputScriptSigLen(tk) + 1 - 46 - tplSuffixLen;
-            require(OpTxInputScriptSigSubstr(tk, end, end + 35) == byte[](OpInputCovenantId(ev)) + byte[](0x010208));
+            byte[] ts = tplState(tk, tplPrefixLen, 46, tplSuffixLen, tokenTplHash);
+            require(ts.slice(1, 36) == byte[](OpInputCovenantId(ev)) + byte[](0x010208));
             int td = OpTxInputDaaScore(tk);
             if (td > exposed) { exposed = td; }
         }
@@ -279,7 +280,9 @@ contract KobCondBidKron(
 
         if (rearm) {
             // merge: the entry takes the n base units into its custody and prefund(n); the maker gets the profit at
-            // output i: the entry's proceeds for n minus the buy-back (see KobCondBid)
+            // output i: the entry's proceeds for n minus the buy-back (see KobCondBid); the merge argument names this
+            // input and n only while n < 2^53
+            require(n < MERGE_K);
             int pin = OpCovInputIdx(parent, 0);
             // the entry's sigscript starts with the 8-byte push of its merge argument (see KobCondBid)
             require(OpTxInputScriptSigSubstr(pin, 0, 1) == byte[](0x08));

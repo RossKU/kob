@@ -196,6 +196,9 @@ contract KobIfdBidKron(
             byte[] x = tplState(k, COND_PRE, EXIT_STATE_LEN, COND_SUF, COND_TPL);
             byte[] st = byte[](exitState);
             require(x.slice(0, 181) == st.slice(0, 181));
+            // the exit quotes at this entry's scale (exitState [118..126)): both compute the merge's rounded amounts
+            // alike
+            require(int(byte[8](st.slice(118, 126))) == scale);
             require(x.slice(189, 244) == st.slice(189, 244));
             require(x.slice(252, 271) == st.slice(252, 271));
             int rate = price + tip;

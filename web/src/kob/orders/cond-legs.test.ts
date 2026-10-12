@@ -93,11 +93,11 @@ describe('resolveLegs', () => {
     // without a minimum fill the trigger threshold is kob-wasm defaultMinTouch(1) = 1 base unit
     expect(l.minTouch).toBe(1n);
     expect(l.keeperTip).toBe(BigInt(env.token.keeperTip));
-    expect(l.keeperTip).toBe(2_100_000n);
+    expect(l.keeperTip).toBe(2_200_000n);
     expect(l.tpPrice).toBe(0n);
     expect(l.stopWorst).toBe(223_100_000n);
     expect(askWorst(l)).toBe(223_100_000n);
-    expect(l.keeper).toMatchObject({ expectedUpdates: 1, reserve: 2_100_000n, fundedFrom: 'carrier' });
+    expect(l.keeper).toMatchObject({ expectedUpdates: 1, reserve: 2_200_000n, fundedFrom: 'carrier' });
   });
 
   it('a take-profit only leg has no keeper, band or slippage', () => {
@@ -218,7 +218,7 @@ describe('resolveLegs', () => {
     const l = resolveLegs(env, new IssueLog(), 'sell', { stop: 230_000_000n, trail: { step: 1_000_000n, gap: 5_000_000n } })!;
     expect(l).toMatchObject({ trailStep: 1_000_000n, trailGap: 5_000_000n, trailWait: 6_000n });
     // 20 updates pre-funded plus the arm that follows a trail
-    expect(l.keeper).toMatchObject({ expectedUpdates: 21, reserve: 21n * 2_100_000n });
+    expect(l.keeper).toMatchObject({ expectedUpdates: 21, reserve: 21n * 2_200_000n });
     expect(l.trail).toMatchObject({ step: 1_000_000n, gap: 5_000_000n, waitDaa: 6_000n, waitSeconds: 600n, maxUpdatesPerDay: 144n, expectedUpdates: 20 });
     const custom = resolveLegs(env, new IssueLog(), 'buy', { stop: 260_000_000n, trail: { step: 200n, gap: 0n, wait: 600n, expectedUpdates: 0 } })!;
     expect(custom.trail).toMatchObject({ waitSeconds: 60n, maxUpdatesPerDay: 1_440n, expectedUpdates: 0 });

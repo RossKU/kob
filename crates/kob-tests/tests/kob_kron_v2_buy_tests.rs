@@ -44,7 +44,7 @@ use secp256k1::{Keypair, Secp256k1, SecretKey};
 use silverscript_abi::{ArtifactValue, SilAbiArtifact};
 use silverscript_lang::compiler::CompileOptions;
 
-use common::kron::{kron_ss, ks, Kron, KS, TPL_2433, TPL_2732, T_ADDR, T_COVID, T_PUBKEY};
+use common::kron::{kron_ss, ks, Kron, KS, STATE_LEN, TPL_2433, TPL_2732, T_ADDR, T_COVID, T_PUBKEY};
 use common::{
     bytecode, compile_contract, compiled_template_parts_and_hash, encode_entry_sig_script, push_redeem_script, state_layout,
 };
@@ -860,6 +860,8 @@ struct CondBP {
     rpt_price: i64,
     rpt_pre: i64,
     rpt_until: i64,
+    /// base units of a whole token (the order's price denominator); default SCALE
+    scale: i64,
 }
 impl CondBP {
     /// Buy OCO: limit leg at 2.00 (below the market), buy-stop 3.00 with the default 3% band
@@ -887,6 +889,7 @@ impl CondBP {
             rpt_price: 0,
             rpt_pre: 0,
             rpt_until: 0,
+            scale: SCALE,
         }
     }
     fn with_amount(&self, amount: i64) -> Self {
@@ -948,7 +951,7 @@ fn condb(n: &Net, p: &CondBP) -> SilAbiArtifact {
     a.push(bytes(&p.maker));
     a.extend(n.tok_args());
     a.extend([
-        int(SCALE),
+        int(p.scale),
         int(p.min_fill),
         int(p.tip),
         int(p.active_from),
@@ -2315,6 +2318,11 @@ fn buy_lifecycle(f: &Fx) {
         0,
     );
     run_bad(&with_name(condb_update_tip(f, &kt, &kt.armed(), &r, 0, 1_000_001), "NB30 arming keeper takes keeperTip + 1"), 0);
+    // funded 2 x keeperTip beyond the budget: keeperTip + 1 leaves the budget whole, only the keeperTip bound refuses it
+    let mut over = condb_update_tip(f, &kt, &kt.armed(), &r, 0, 1_000_001);
+    over.inputs[0].entry.amount += 2_000_000;
+    over.outputs[0].value += 2_000_000;
+    run_bad(&with_name(over, "NB30c arming keeper takes keeperTip + 1 of a tip funded beyond the budget"), 0);
 
     // Multi-step trail down, capped above the limit leg (2.00).
     let tr = trailing_b(m);
@@ -2735,6 +2743,9 @@ fn ev_args(s: &Scn, kind: Kind) -> (i64, i64) {
 /// accepted, one DAA short rejected), slope, side, token, scale, size threshold (minTouch base units), an evidence that
 /// does not fill, wrong ev / tk indices, look-alike templates, the price rule at its edge, one evidence shared by
 /// two orders, and the update-only rules (own tokens, other fill kinds). Input 0 is the order throughout.
+/// The ask-evidence kinds also check that the custody tk is a holder UTXO of this token's program: 02c / 02d name
+/// an old input carrying the token's covenant id whose state bytes read the evidence ask as owner, under another
+/// program (02c) or not the P2SH of the holder redeem script it pushes (02d).
 fn touch_battery(f: &Fx, kind: Kind) {
     let n = &f.net;
     let tag = kind.tag();
@@ -2763,6 +2774,42 @@ fn touch_battery(f: &Fx, kind: Kind) {
         s.outputs.push(out(CARRIER, tspk(&n.k, 5 * TOK, &matcher, SCHEME_P2PK), Some((l as u16, OTHER_COV))));
         set_arg(&mut s, 0, pt, iv(at));
         bad_s(s, "02b", "fresh custody; tk names an old UTXO of another token owned by the evidence ask", 0);
+        // the fresh custody hidden behind an old input of THIS token's covenant id whose bytes at the custody offset
+        // read the evidence ask as owner, but which is no holder UTXO of the token's program (the evidence ask's own
+        // stray guard and the token program refuse such an input as well: the order's input is the one judged)
+        let real = n.k.redeem(&tok_state(5 * TOK, &good.cov.as_bytes(), SCHEME_COVID));
+        // 02c: a script of the holder redeem script's length under another program: the 46 state bytes (four pushes),
+        // then "2DROP 2DROP PUSHDATA2 <filler> DROP TRUE" in place of the token program's suffix
+        let filler = real.len() - STATE_LEN - 7;
+        let mut look = real[..STATE_LEN].to_vec();
+        look.extend([0x6d, 0x6d, 0x4d, (filler & 0xff) as u8, (filler >> 8) as u8]);
+        look.extend(vec![0u8; filler]);
+        look.extend([0x75, 0x51]);
+        assert_eq!(look.len(), real.len());
+        let stand_in = |spk: ScriptPublicKey, redeem: &[u8], name: &'static str| Inp {
+            entry: UtxoEntry::new(CARRIER as u64, spk, 1_000, false, Some(TOKEN_COV)),
+            role: Role::RawSs { ss: push(redeem), name },
+            seq: 0,
+        };
+        let cases = [
+            (
+                "02c",
+                "fresh custody; tk names an old look-alike holder of this token's covenant id (another program, P2SH of it) owned by the evidence ask",
+                stand_in(pay_to_script_hash_script(&look), &look, "tk.lookalike"),
+            ),
+            (
+                "02d",
+                "fresh custody; tk names an old input of this token's covenant id pushing the genuine holder redeem script that is not its P2SH",
+                stand_in(ScriptPublicKey::new(0, vec![0x75, 0x51].into()), &real, "tk.not_p2sh"),
+            ),
+        ];
+        for (id, what, inp) in cases {
+            let mut s = trig(f, kind, &good.with(|e| e.tok_daa = NOW - R + 1), TOK);
+            let at = s.inputs.len() as i64;
+            s.inputs.push(inp);
+            set_arg(&mut s, 0, pt, iv(at));
+            bad_s(s, id, what, 0);
+        }
     }
     ok(&good.with(|e| e.active_from = (NOW - R) as i64), TOK, "03", "evidence active exactly R DAA (activeFrom)");
     bad(&good.with(|e| e.active_from = (NOW - R) as i64 + 1), TOK, "03", "evidence active only R - 1 DAA (activeFrom)");
@@ -3416,7 +3463,8 @@ fn buy_repeat_positive(f: &Fx) {
     println!("LEDGER-B v0={v0} profit(4)={profit4} maker_total={maker_total}");
 }
 
-/// Single-lever attacks on repeat IFD, sell-first (see the sell-side twin).
+/// Single-lever attacks on repeat IFD, sell-first (see the sell-side twin); NRPB36: the committed exit quotes at the
+/// entry's scale.
 #[test]
 fn kron_v2_buy_repeat_ifd_attacks() {
     for tpl in TPLS {
@@ -3741,6 +3789,24 @@ fn buy_repeat_attacks(f: &Fx) {
     run_ok(&with_name(rpta_merge(f, &k), "RPB10 merge into an armed, unfilled stop entry: the continuation records its band origin"));
     let s = rpta_merge(f, &MergeBKnobs { cont: Some(IfdAP { amount: 9 * TOK, ..ae.clone() }), ..k.clone() });
     run_bad(&with_name(s, "NRPB35 merge into an armed, unfilled stop entry keeps armed = 1 (its band auction restarts)"), 2);
+
+    // ---- the committed exit quotes at the entry's scale: an entry whose exitState (and so its booked exit) quotes at
+    // scale 999 instead of 1000. The exit computes its re-arm at its own scale (the maker's profit and what it keeps),
+    // the entry its merge floor at its own; every output is laid out as each side computes it, so only the entry's
+    // scale check refuses the merge (the two would round the merge differently)
+    let xs = 999;
+    let mut k = MergeBKnobs::new(f, 6 * TOK, 4 * TOK, 3 * TOK);
+    k.entry.exit.scale = xs;
+    let mut s = rpta_merge(f, &k);
+    let xp = booked_exit_b(&k.entry, 4 * TOK, 0);
+    assert_eq!(xp.scale, xs);
+    let q = |r: i64, up: bool| quote_at(3 * TOK, r, xs, up).expect("quote");
+    let x_value = s.inputs[0].entry.amount as i64;
+    s.outputs[0].value = (q(xp.rpt_price, UP) - q(xp.tp + xp.tip, DOWN)) as u64;
+    s.outputs[1].value = (x_value - q(xp.rpt_price, UP) - q(xp.rpt_pre, UP)) as u64;
+    let last = s.outputs.len() - 1;
+    balance(&mut s, last);
+    run_bad(&with_name(s, "NRPB36 merge of a booked exit whose committed exit quotes at another scale (999, the entry 1000)"), 2);
 }
 /// An armed repeating sell-stop entry (stop 2.60, limit 2.50) with nothing left.
 fn stop_ip_armed(f: &Fx) -> IfdAP {
@@ -4084,7 +4150,9 @@ fn kron_v2_buy_v3_merge_push() {
     // 2^53, so a booked exit amount can never approach the merge-argument limit on KRON (the token program rejects
     // any UTXO of that size). The n < MERGE_K booking guard is therefore unreachable on KRON and is exercised on the
     // KCC-20 twin; here only the argument encoding is checked (above). Positive and attack merges at buildable
-    // amounts are covered by the RPB* / NRPB* battery.
+    // amounts are covered by the RPB* / NRPB* battery. The re-arm guard n < MERGE_K of KobCondBidKron IS reachable: a
+    // re-arming take-profit moves no tokens of its own (the entry takes the booked exit's m), so an order of 2^53 + m
+    // base units needs no token UTXO of that size (NV3CB43 below).
 
     for tpl in TPLS {
         println!("=== KRON template {tpl}");
@@ -4135,6 +4203,49 @@ fn kron_v2_buy_v3_merge_push() {
         run_bad(
             &with_name(s, "NV3IA40 entry merges an exit whose 9-byte first push aliases m (not the 8-byte settle push)"),
             entry_in,
+        );
+
+        // NV3CB43: the re-arm names its own input and amount by -(self * 2^53 + n) only while n < 2^53. A genuine booked
+        // exit (input 1) buys back m = 3000 and the entry merges -(1 * 2^53 + 3000); a KobCondBidKron of the same parent at
+        // input 0 filled with n1 = 2^53 + 3000 on its take-profit reads that same argument as its own merge
+        // (-(0 * 2^53 + n1)), takes no tokens (the entry accounts for input 1 only) and leaves its escrow beyond the
+        // maker's proceeds to the filler. Scale 10^16 and prices of 100 / 200 sompi keep its quoteOf of n1 in range.
+        let mut s = rpta_merge(f, &MergeBKnobs { claim_k: 1, ..MergeBKnobs::new(f, 6 * TOK, 4 * TOK, 3 * TOK) });
+        let n1 = MERGE_K + 3 * TOK;
+        let big = 10_000_000_000_000_000;
+        let e1 = CondBP {
+            scale: big,
+            tp: 100,
+            tip: 0,
+            amount: n1,
+            parent: i.as_bytes(),
+            rpt_price: 200,
+            rpt_pre: 0,
+            rpt_until: EXPIRY,
+            ..CondBP::oco(pk(&f.maker_b))
+        };
+        let q = |r: i64, up: bool| quote_at(n1, r, big, up).expect("quote");
+        for o in s.outputs.iter_mut() {
+            if let Some(b) = o.covenant.as_mut() {
+                b.authorizing_input += 1;
+            }
+        }
+        let alias =
+            call(&condb(&f.net, &e1), "settle", vec![nb(n1), iv(2), iv(0), iv(0), iv(0)], "condb.alias", 10 * KAS, cov(0xe5), 2_000);
+        s.inputs.insert(0, alias);
+        s.outputs.insert(0, out(q(e1.rpt_price, UP) - q(e1.tp, DOWN), p2pk_spk(&pk(&f.maker_b)), None));
+        // the booked exit's token template input, the entry's custody input and token output move up by one
+        set_arg(&mut s, 1, 1, iv(2));
+        set_arg(&mut s, 3, 1, iv(4));
+        set_arg(&mut s, 3, 2, iv(3));
+        let last = s.outputs.len() - 1;
+        balance(&mut s, last);
+        run_bad(
+            &with_name(
+                s,
+                "NV3CB43 a TP fill of 2^53 + m beside the booked exit of m at the next input aliases its merge argument (escrow to the filler)",
+            ),
+            0,
         );
     }
 }

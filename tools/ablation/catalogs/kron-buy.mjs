@@ -94,11 +94,10 @@ export const mutations = [
   {
     id: 'CB7',
     file: 'KobCondBidKron',
-    run: { [T_LIFE]: ['NB30'], [T_NEG]: ['NB25'] },
-    note: 'update: keeper takes at most keeperTip (value >= in - keeperTip)',
-    edits: [
-      rx('entry update(', /tx\.outputs\[selfOut\]\.value >= tx\.inputs\[self\]\.value - keeperTip/, 'tx.outputs[selfOut].value >= 0'),
-    ],
+    run: { [T_LIFE]: ['NB30c'] },
+    hold: { [T_LIFE]: ['NB30'], [T_NEG]: ['NB25'] },
+    note: 'update: keeper takes at most keeperTip (the continuation keeps at least in - keeperTip, floorOut); NB30 / NB25 (an escrow of exactly the budget) stay refused by the budget floor (need), NB30c (a tip funded beyond the budget) is refused by this bound only',
+    edits: [rep('        int floorOut = tx.inputs[self].value - keeperTip;', '        int floorOut = tx.inputs[self].value - keeperTip - 1;')],
   },
   {
     id: 'CB8',
@@ -200,6 +199,14 @@ export const mutations = [
     inputOnly: ['NV3CB42'], // the crafted entry fails its own 9-byte-push exec; the exit (rearm) input is what flips
     note: 'v3: the repeat entry pin starts with the 8-byte merge push (0x08); a 9-byte push whose low 8 bytes alias the merge argument passes the value check but not this one',
     edits: [rxDel('entry settle(', /^\s*require\(OpTxInputScriptSigSubstr\(pin, 0, 1\) == byte\[\]\(0x08\)\);\s*$/m)],
+  },
+  {
+    id: 'CB-rearm-mergek',
+    file: 'KobCondBidKron',
+    test: T_MERGE,
+    expect: ['NV3CB43'],
+    note: 'v3: re-arm: n < MERGE_K (2^53), so the merge argument -(self * 2^53 + n) names this input and n (a TP fill of 2^53 + m would read as the merge of the booked exit at self + 1; the re-arm moves no tokens of its own, so the KRON amount cap does not stop it)',
+    edits: [del('            require(n < MERGE_K);\n')],
   },
   // ---- KobIfdAskKron
   {
@@ -322,8 +329,12 @@ export const mutations = [
     file: 'KobIfdAskKron',
     test: T_RPT,
     expect: ['NRPB6'],
-    note: 'booking time: require(tx.daa >= t) before dating rptUntil',
-    edits: [rxDel('if (rptAmount > n)', /^\s*require\(tx\.daa >= t\);\s*$/m)],
+    note: "booking: the exit's rptUntil counts from the entry UTXO's DAA (its last activity), never from the filler's t (the cycle dated by t instead)",
+    edits: [
+      rep(`                    int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
+                    xUntil`, `                    int idleEnd = t + MAX_IDLE;
+                    xUntil`),
+    ],
   },
   {
     id: 'IA14',
@@ -485,6 +496,14 @@ export const mutations = [
     note: 'v3: the booked exit at k starts with the 8-byte fill push (0x08); a 9-byte push whose low 8 bytes alias m passes the value check and the exit-terms comparison but not this one',
     edits: [rxDel('entry settle(', /^\s*require\(OpTxInputScriptSigSubstr\(k, 0, 1\) == byte\[\]\(0x08\)\);\s*$/m)],
   },
+  {
+    id: 'IA-merge-scale',
+    file: 'KobIfdAskKron',
+    test: T_RPT,
+    expect: ['NRPB36'],
+    note: "v3: the merge requires the committed exit to quote at the entry's scale (exitState [118..126); an exit at scale 999 refused: the two would round the merge differently)",
+    edits: [del('                require(int(byte[8](st.slice(118, 126))) == scale);\n')],
+  },
   // ---- fix pass
   {
     id: 'FXL3c',
@@ -567,6 +586,8 @@ export const mutations = [
       tokdaa: { [T_BT]: ['NTW02'] },
       tkcov: { [T_BT]: ['NTW02b'] },
       owner: { [T_BT]: ['NTW15', 'NTW16'] },
+      tktpl: { run: { [T_BT]: ['NTW02c'] }, inputOnly: ['NTW02c'] },
+      tkp2sh: { run: { [T_BT]: ['NTW02d'] }, inputOnly: ['NTW02d'] },
     },
   }),
   {
@@ -621,6 +642,8 @@ export const mutations = [
       tokdaa: { [T_AF]: ['NTK02'], [T_AA]: ['NTL02'] },
       tkcov: { [T_AF]: ['NTK02b'], [T_AA]: ['NTL02b'] },
       owner: { [T_AF]: ['NTK15', 'NTK16'], [T_AA]: ['NTL15', 'NTL16'] },
+      tktpl: { run: { [T_AF]: ['NTK02c'], [T_AA]: ['NTL02c'] }, inputOnly: ['NTK02c', 'NTL02c'] },
+      tkp2sh: { run: { [T_AF]: ['NTK02d'], [T_AA]: ['NTL02d'] }, inputOnly: ['NTK02d', 'NTL02d'] },
     },
   }),
   {

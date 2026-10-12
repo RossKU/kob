@@ -704,7 +704,8 @@ impl Run<'_> {
             .unwrap_or_else(|e| panic!("{} {}: tx-level failure {e}", ed.name, self.pair))
     }
     pub fn ok(&self, ed: &Ed) {
-        let res = self.exec(ed);
+        let (tx, en) = ed.finish(self.subs);
+        let Some(res) = self.run_fitting(ed, &tx, &en) else { return };
         let failed: Vec<String> =
             res.iter().enumerate().filter_map(|(i, r)| r.as_ref().err().map(|e| format!("in[{i}]: {e}"))).collect();
         if failed.is_empty() {
@@ -720,7 +721,8 @@ impl Run<'_> {
         self.ok(&Ed::new(name, &built(a)));
     }
     pub fn bad(&self, ed: &Ed, expect: usize) {
-        let res = self.exec(ed);
+        let (tx, en) = ed.finish(self.subs);
+        let Some(res) = self.run_fitting(ed, &tx, &en) else { return };
         let r = &res[expect];
         if r.is_ok() && ablating() {
             println!("ABLATION-PASS {} {} all_inputs_ok={}", ed.name, self.pair, res.iter().all(|r| r.is_ok()));
@@ -987,7 +989,8 @@ impl Run<'_> {
         kob_protocol::verify::execute(&tx, &en, false).unwrap_or_else(|x| panic!("{} {}: tx-level failure {x}", e.name, self.pair))
     }
     pub fn ok_patched(&self, e: &Ed, patch: Patch) {
-        let res = self.exec_patched(e, patch);
+        let (tx, en) = self.finish_patched(e, patch);
+        let Some(res) = self.run_fitting(e, &tx, &en) else { return };
         let failed: Vec<String> =
             res.iter().enumerate().filter_map(|(i, x)| x.as_ref().err().map(|m| format!("in[{i}]: {m}"))).collect();
         if failed.is_empty() {
@@ -999,7 +1002,8 @@ impl Run<'_> {
         }
     }
     pub fn bad_patched(&self, e: &Ed, expect: usize, patch: Patch) {
-        let res = self.exec_patched(e, patch);
+        let (tx, en) = self.finish_patched(e, patch);
+        let Some(res) = self.run_fitting(e, &tx, &en) else { return };
         let x = &res[expect];
         if x.is_ok() && ablating() {
             println!("ABLATION-PASS {} {} all_inputs_ok={}", e.name, self.pair, res.iter().all(|r| r.is_ok()));
@@ -1091,4 +1095,85 @@ pub fn stray_at_slot(e: &mut Ed, tok: [u8; 32], owner: [u8; 32], k: usize, stray
     };
     e.add_out_amount(m, 3);
     i
+}
+
+// ---------------------------------------------------------------- stop-trigger custody stand-ins (appended)
+
+/// The stop-trigger custody attacks of `KobCondPair` / `KobIfdPair` (`rd` and `evLeg`: the custody `tk` of an ask / pair
+/// evidence must be a holder UTXO of the token's program, template hash + P2SH, owned by the evidence). The real custody
+/// at input `tk` is made fresh (exposed less than minRestDaa, so the honest trigger fails, as in NC51), and an OLD input
+/// carrying the custody token's covenant id, whose redeem bytes read the evidence order as owner with the covenant marker,
+/// is appended (a P2PK placeholder that the returned patch turns into the stand-in). `look`: a look-alike holder under
+/// another program (the P2SH of a redeem script of the same length that keeps the genuine state bytes, other prefix /
+/// suffix: another template hash); else the GENUINE holder redeem pushed by a non-P2SH input. The evidence order's own
+/// stray guard (and the token program) refuse the stand-in at their inputs; the attack is judged at the order's input.
+/// Returns the stand-in's input index (name it as tk) and the patch (`Run::bad_patched`).
+pub fn old_custody_standin(e: &mut Ed, tk: usize, look: bool) -> (usize, impl Fn(&mut Transaction, &mut Vec<UtxoEntry>)) {
+    let tok = cov_of(&e.entries[tk]).expect("the custody carries its token");
+    let tt = token_template(e.programs[&tok]);
+    let st = e.in_tok(tk);
+    let rs = if look { fake_rs(tt.prefix.len(), &st.encode(), tt.suffix.len()) } else { st.redeem_with(tt) };
+    e.set_input_daa(tk, crate::fx::NOW - 10);
+    let u = utxo(0xe7, KAS, 1_000, None);
+    e.tx.inputs.push(TransactionInput::new_with_compute_budget(u.outpoint(), vec![], 0, 80));
+    e.entries.push(UtxoEntry::new(u.amount, p2pk_spk(&pk(MATCHER)), u.block_daa_score, false, None));
+    e.plans.push(SigPlan::P2pk { pubkey: pk(MATCHER) });
+    let j = e.tx.inputs.len() - 1;
+    (j, move |tx: &mut Transaction, en: &mut Vec<UtxoEntry>| plant_input(tx, en, j, tok, &rs, look))
+}
+
+// ---------------------------------------------------------------- the 3 / 3 KCC-20 program (appended)
+
+/// The mixed pairs on the 3 / 3 reference KCC-20 program (KCC20Ref, the tradable KCC-20 program on mainnet) instead of
+/// KCC20Ref_8x8. A scenario whose transaction exceeds that program's token slots is skipped on it ([`slot_excess`]).
+pub fn mixed_pairs_33() -> [(TemplateId, TemplateId); 2] {
+    use TemplateId::{Kcc20Ref, KronToken2433};
+    [(Kcc20Ref, KronToken2433), (KronToken2433, Kcc20Ref)]
+}
+
+/// Opt-in of a test binary (the KobCondPair / KobIfdPair suites, which run their KCC-20 mixes on the 3 / 3 program too)
+/// to skip the scenarios that exceed a 3 / 3 program's slots ([`slot_excess`]). Off by default: the other binaries of
+/// this harness run every scenario as written.
+pub static SLOT_GATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Some token of the transaction has more inputs or outputs than its program's slots, for a program with fewer slots than
+/// its family's MAX_TOK_IN (the 3 / 3 KCC20Ref; an 8 / 8 program is never gated, so the attacks beyond the scan bound
+/// stay). Such a transaction does not exist on that program (its token inputs refuse it whatever the orders do).
+pub fn slot_excess(programs: &BTreeMap<[u8; 32], TemplateId>, tx: &Transaction, en: &[UtxoEntry]) -> Option<String> {
+    for (cov, p) in programs {
+        let tt = token_template(*p);
+        if tt.slots.0 >= p.family().max_tok_in() {
+            continue;
+        }
+        let ins = en.iter().filter(|e| cov_of(e) == Some(*cov)).count();
+        let outs = tx.outputs.iter().filter(|o| o.covenant.map(|c| c.covenant_id.as_bytes()) == Some(*cov)).count();
+        if ins > tt.slots.0 || outs > tt.slots.1 {
+            return Some(format!("{} in {ins}/{} out {outs}/{}", p.name(), tt.slots.0, tt.slots.1));
+        }
+    }
+    None
+}
+
+/// [`built`], or None when the builder refuses the shape for a program's token slots (a shape the 3 / 3 program cannot
+/// carry; the caller skips it there).
+pub fn try_built(a: Action) -> Option<BuiltTx> {
+    match build_with(&a, &budgets) {
+        Ok(b) => Some(b),
+        Err(e) if e.to_string().contains("token inputs /") => None,
+        Err(e) => panic!("honest build: {e}"),
+    }
+}
+
+impl Run<'_> {
+    /// Executes a finished transaction, or (with [`SLOT_GATE`] on) prints `SKIP-SLOTS <name> <pair> (...)` and returns
+    /// None when it exceeds the token slots of a 3 / 3 program ([`slot_excess`]).
+    pub fn run_fitting(&self, e: &Ed, tx: &Transaction, en: &[UtxoEntry]) -> Option<Vec<Result<u64, String>>> {
+        if SLOT_GATE.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Some(why) = slot_excess(&e.programs, tx, en) {
+                println!("SKIP-SLOTS {} {} ({why})", e.name, self.pair);
+                return None;
+            }
+        }
+        Some(kob_protocol::verify::execute(tx, en, false).unwrap_or_else(|x| panic!("{} {}: tx-level failure {x}", e.name, self.pair)))
+    }
 }

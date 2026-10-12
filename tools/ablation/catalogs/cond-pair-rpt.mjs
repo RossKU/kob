@@ -45,6 +45,8 @@ export const mutations = [
   { id: 'CR9c', file: F, test: TR, expect: ['NCR7'], note: 'outAmount == 0 AND the S-output pins (script, covenant) removed: a look-alike exit holding one A more than its amountLeft sells out and the extra A goes to the matcher', edits: [del('                        require(outAmount == 0);\n'), del(S_PIN), del('                require(OpOutputCovenantId(outIdx) == sCovId);\n')] },
   { id: 'CR10', file: F, test: TR, expect: ['NCR8'], note: "a sold-out re-arm: the maker's profit output carries deliveryCarrier (the rest of the exit's KAS is the entry's)", edits: [rep('                        require(outAmount == 0);\n                        require(tx.outputs[self].value >= deliveryCarrier);\n', '                        require(outAmount == 0);\n')] },
   { id: 'CR11', file: F, test: 'ifd_merge_rules', expect: ['NIX9'], note: "the exit's S stray guard keeps the entry's xc honest: xc named at a genuine A UTXO owned by the exit (with one sompi of KAS) passes the entry's heldGx, only the exit refuses it as a stray (duplicate of cond-pair G1, witnessed by a merge)", edits: [del('        noStrays(sCovId, selfId, cust, sOff);\n')] },
+  // ---- the re-arm's bound n < 2^53: a look-alike exit of 2^53 + m right before the booked exit aliases its merge argument
+  { id: 'CR12', file: F, test: 'cond_rpt_merge_k', expect: ['NCR10'], note: "re-arm: n < MERGE_K. A look-alike exit (parent = the entry, attacker-funded, KCC-20 A) trading n1 = 2^53 + m at input i reads the entry's merge of the booked exit at i + 1 for m, -((i + 1) * 2^53 + m), as its own -(i * 2^53 + n1) and re-arms without the entry crediting it", edits: [del('                    require(n < MERGE_K);\n')] },
 ];
 
 
@@ -53,13 +55,9 @@ export const mutations = [
 //  `present == 0` CR4; the entry's first push 0x08 CR6; the entry's merge argument CR7 (hold) + ifd-pair IF110c
 //  (combined); `dOut > 0` CR8; the re-arming sell-out's `outAmount == 0` CR9 (hold) + CR9c (combined) and its profit
 //  output's deliveryCarrier CR10; the maker's profit pin CR1. CR11 re-witnesses the exit's S stray guard (cond-pair G1)
-//  through a merge's xc.
+//  through a merge's xc. The re-arm's `n < MERGE_K` CR12: not reachable by a genuine booked exit (KobIfdPair books only
+//  n < 2^53, ifd-pair IF115, and a booked exit's amountLeft only shrinks), witnessed by an attacker-funded look-alike exit
+//  of a KCC-20 A (NCR10, cond_rpt_merge_k, KCC/KRON only: KRON amounts are capped at 10^9) trading 2^53 + m right
+//  before the genuine booked exit trading m, whose merge argument it aliases.
 //
-// Not in the catalog:
-//  * `require(n < MERGE_K)` in the re-arm branch: not reachable by a genuine booked exit. KobIfdPair books an exit only
-//    for n < 2^53 (ifd-pair IF115, witnessed by NIF12k), and a booked exit's amountLeft only shrinks. A look-alike exit
-//    (any KobCondPair whose committed bytes equal the entry's, funded by whoever creates it) with amountLeft >= 2^53
-//    could, without this check, name the entry's push of a second look-alike at input k + 1. It would re-arm without
-//    the entry crediting its own budget. That budget is the look-alike's own custody, i.e. the attacker's own tokens, so
-//    no third party's value is at stake. The witness needs two KCC-20 look-alike exits of more than 2^53 base units in
-//    one transaction, and it was not built (left as a leftover). Hardening only.
+// Not in the catalog: none of the repeat / merge requires.

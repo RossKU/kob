@@ -203,9 +203,9 @@ contract KobIfdAsk(
     // and its custody's DAA. A resting ask is sold at its quote or better, so the quote is a conservative print.
     // The evidence is read, never consumed (any number of orders may read one fill). KobCross, conditional and
     // if-done fills are never evidence (other templates).
-    // The ask's custody (input tk) is identified by its owner: every input carrying tokenCovId is a genuine token
-    // UTXO (see noStrays), and the ask admits no other token input owned by its id in a fill, so the token input
-    // owned by the ask's id (owner_scheme 0x04) is its custody.
+    // The ask's custody (input tk) is identified by its owner: a holder UTXO of this token's program (template hash +
+    // P2SH: an input of another program carrying tokenCovId never stands in for it), and the ask admits no other token
+    // input owned by its id in a fill, so the token input owned by the ask's id (owner_scheme 0x04) is its custody.
     // KobAsk state offsets: tokenCovId[34..66) scale[118..126) price[136..144)
     // activeFrom[163..171) interval[190..198) slope[208..216).
     // Returns the evidence ask's quote.
@@ -222,8 +222,8 @@ contract KobIfdAsk(
         int act = int(byte[8](o.slice(163, 171)));
         if (act > exposed) { exposed = act; }
         require(OpInputCovenantId(tk) == tokenCovId);
-        int end = OpTxInputScriptSigLen(tk) + 10 - 112 - tplSuffixLen;
-        require(OpTxInputScriptSigSubstr(tk, end, end + 34) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
+        byte[] ts = tplState(tk, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
+        require(ts.slice(10, 44) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
         int td = OpTxInputDaaScore(tk);
         if (td > exposed) { exposed = td; }
         require(tx.daa >= exposed + minRestDaa);
@@ -332,6 +332,9 @@ contract KobIfdAsk(
                 byte[] x = tplState(k, COND_BID_PRE, EXIT_STATE_LEN, COND_BID_SUF, COND_BID_TPL);
                 byte[] st = byte[](exitState);
                 require(x.slice(0, 223) == st.slice(0, 223));
+                // the exit quotes at this entry's scale (exitState [151..159)): both compute the merge's rounded
+                // amounts alike
+                require(int(byte[8](st.slice(151, 159))) == scale);
                 require(x.slice(231, 286) == st.slice(231, 286));
                 require(x.slice(294, 295) == st.slice(294, 295));
                 require(x.slice(303, 321) == st.slice(303, 321));

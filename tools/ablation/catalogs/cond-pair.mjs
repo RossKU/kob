@@ -51,8 +51,35 @@ const MISC = 'cond_pair_evidence_misc';
 const both = id => [`${id}a`, `${id}b`];
 
 // anchors for function-scoped rx edits
-const A_EVLEG = '    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, int tk, int tokSuf, int minN) : int {';
-const A_RD = '    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, int kSuf, byte[32] oTok, int oFam, int osc, int oSuf, int tk, int minN) : int {';
+const A_EVLEG = '    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, int tk, byte[32] tokTpl, int tokPre, int tokSuf, int minN) : int {';
+const A_RD = '    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, byte[32] kTpl, int kPre, int kSuf, byte[32] oTok, int oFam, int osc,';
+
+// the custody tk of the ask / pair evidence: a holder UTXO of the token's program. tplState without the template-hash
+// check (P2SH kept) / without the P2SH check (template hash kept), called for tk only (lib/touch.mjs NO_HASH / NO_P2SH)
+const TPL_END = '        return rs.slice(pre, pre + stLen);\n    }\n';
+const NO_HASH = `
+    function tplStateNoHash(int idx, int pre, int stLen, int suf) : byte[] {
+        int size = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - size;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + size);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs.slice(pre, pre + stLen);
+    }
+`;
+const NO_P2SH = `
+    function tplStateNoP2sh(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int size = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - size;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + size);
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, size)) == tpl);
+        return rs.slice(pre, pre + stLen);
+    }
+`;
+const tkNoHash = a => [rep(TPL_END, TPL_END + NO_HASH), rx(a, /tplState\(tk, ([^,]+), ([^,]+), ([^,]+), [^)]+\)/, m => `tplStateNoHash(tk, ${m[1]}, ${m[2]}, ${m[3]})`)];
+const tkNoP2sh = a => [rep(TPL_END, TPL_END + NO_P2SH), rx(a, /tplState\(tk, /, 'tplStateNoP2sh(tk, ')];
+// the owner / covenant-marker comparison of the custody state read
+const OWNER = /require\(cs\.slice\(ow, ow \+ 32 \+ mark\.length\) == byte\[\]\(OpInputCovenantId\(ev\)\) \+ mark\);/;
+
 const A_TRAIL = '            bool cap = true;\n            if (trail) {';
 const A_UPDATE = '        if (update) {\n            // UPDATE: never next to the repeat entry';
 
@@ -95,7 +122,13 @@ export const mutations = [
   { id: 'EVACT', file: F, test: EXP, expect: ['NC52'], inputOnly: ['NC52'], note: 'rd: the activeFrom exposure term', edits: [rx(A_RD, /int act = int\(byte\[8\]\(o\.slice\(163 \+ d, 171 \+ d\)\)\);/, 'int act = 0;')] },
   { id: 'EVTKDAA', file: F, test: EXP, expect: ['NC51a'], note: "rd: the ask evidence's custody DAA exposure term", edits: [rx(A_RD, /int td = OpTxInputDaaScore\(tk\);/, 'int td = 0;')] },
   { id: 'EVTK', file: F, test: 'cond_pair_evidence_tk', expect: ['NC59a'], note: "rd: the ask evidence's custody is a token input of its token", edits: [rx(A_RD, /require\(OpInputCovenantId\(tk\) == cTok\);/, 'require(true);')] },
-  { id: 'EVTKOWN', file: F, test: EXP, expect: ['NC57a'], note: "rd: the ask evidence's custody is owned by the evidence ask (covenant marker)", edits: [rx(A_RD, /require\(OpTxInputScriptSigSubstr\(tk, end, end \+ 32 \+ mark\.length\) == byte\[\]\(OpInputCovenantId\(ev\)\) \+ mark\);/, 'require(true);')] },
+  { id: 'EVTKOWN', file: F, test: EXP, expect: ['NC57a'], note: "rd: the ask evidence's custody is owned by the evidence ask (covenant marker)", edits: [rx(A_RD, OWNER, 'require(true);')] },
+  // the custody is a holder UTXO of the token's program: the real custody fresh, tk named at an OLD stand-in carrying the
+  // token's covenant id that reads the evidence as owner (NC5H / NC3H a look-alike holder of another program, NC5S / NC3S
+  // the genuine holder redeem on a non-P2SH input; mode 0 the A ask, mode 1 the pair order's custody). The evidence
+  // order's own stray guard and the token program refuse the stand-in at their inputs: inputOnly.
+  { id: 'EVTKTPL', file: F, test: EXP, expect: ['NC5Ha', 'NC3Ha', 'NC3Hb'], inputOnly: ['NC5Ha', 'NC3Ha', 'NC3Hb'], note: "rd: the ask / pair evidence's custody is a holder of the token's program (template hash; P2SH kept): an old look-alike holder of another program refused", edits: tkNoHash(A_RD) },
+  { id: 'EVTKP2SH', file: F, test: EXP, expect: ['NC5Sa', 'NC3Sa', 'NC3Sb'], inputOnly: ['NC5Sa', 'NC3Sa', 'NC3Sb'], note: "rd: the ask / pair evidence's custody is the P2SH of the holder redeem it shows (template hash kept): an old non-P2SH input with the genuine redeem refused", edits: tkNoP2sh(A_RD) },
   // evLeg (the B leg of mode 0)
   { id: 'EVBPUSH', file: F, test: EXP, expect: both('NC5D'), note: 'evLeg: the B evidence sigscript starts with the 8-byte fill push (a cancel ground to read as a fill)', edits: [rx(A_EVLEG, /require\(OpTxInputScriptSigSubstr\(ev, 0, 1\) == byte\[\]\(0x08\)\);/, 'require(true);')] },
   { id: 'EVBN', file: F, test: EV0, expect: both('NC2N'), inputOnly: both('NC2N'), note: 'evLeg: the B evidence is filled (n > 0)', edits: [rx(A_EVLEG, /require\(n > 0\);/, 'require(true);')] },
@@ -108,7 +141,9 @@ export const mutations = [
   { id: 'EVBACT', file: F, test: EV0, expect: both('NC2A'), inputOnly: both('NC2A'), note: 'evLeg: the activeFrom exposure term', edits: [rx(A_EVLEG, /int act = int\(byte\[8\]\(q\.slice\(45, 53\)\)\);/, 'int act = 0;')] },
   { id: 'EVBTKDAA', file: F, test: EXP, expect: ['NC51b'], note: "evLeg: the ask evidence's custody DAA exposure term", edits: [rx(A_EVLEG, /int td = OpTxInputDaaScore\(tk\);/, 'int td = 0;')] },
   { id: 'EVBTK', file: F, test: 'cond_pair_evidence_tk', expect: ['NC59b'], note: "evLeg: the ask evidence's custody is a token input of its token", edits: [rx(A_EVLEG, /require\(OpInputCovenantId\(tk\) == tok\);/, 'require(true);')] },
-  { id: 'EVBTKOWN', file: F, test: EXP, expect: ['NC57b'], note: "evLeg: the ask evidence's custody is owned by the evidence ask", edits: [rx(A_EVLEG, /require\(OpTxInputScriptSigSubstr\(tk, end, end \+ 32 \+ mark\.length\) == byte\[\]\(OpInputCovenantId\(ev\)\) \+ mark\);/, 'require(true);')] },
+  { id: 'EVBTKOWN', file: F, test: EXP, expect: ['NC57b'], note: "evLeg: the ask evidence's custody is owned by the evidence ask", edits: [rx(A_EVLEG, OWNER, 'require(true);')] },
+  { id: 'EVBTKTPL', file: F, test: EXP, expect: ['NC5Hb'], inputOnly: ['NC5Hb'], note: "evLeg: the B ask evidence's custody is a holder of token B's program (template hash; P2SH kept): an old look-alike holder of another program refused", edits: tkNoHash(A_EVLEG) },
+  { id: 'EVBTKP2SH', file: F, test: EXP, expect: ['NC5Sb'], inputOnly: ['NC5Sb'], note: "evLeg: the B ask evidence's custody is the P2SH of the holder redeem it shows (template hash kept): an old non-P2SH input with the genuine redeem refused", edits: tkNoP2sh(A_EVLEG) },
   // tplState (both readers)
   { id: 'EVHASH', file: F, run: { [EXP]: ['NC58'] }, hold: { [EV0]: both('NC26'), [EXP]: ['NC54', 'NC55', 'NC56'] }, note: 'the evidence template hash (a look-alike P2SH redeem; the wrong side and a wrong input are also refused by the P2SH check or the fill push)', edits: [rx('    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {', /require\(blake3\([\s\S]*?\) == tpl\);/, 'require(true);')] },
   { id: 'EVP2SH', file: F, run: { [EXP]: ['NC5P'] }, hold: { [EV0]: both('NC26'), [EXP]: ['NC54', 'NC55', 'NC56'] }, note: 'the evidence is a P2SH spend of the redeem it shows (a planted UTXO with genuine redeem bytes)', edits: [rx('    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {', /require\(tx\.inputs\[idx\]\.scriptPubKey == byte\[\]\(new ScriptPubKeyP2SHFromRedeemScript\(rs\)\)\);/, 'require(true);')] },

@@ -4,7 +4,7 @@
 // flip its scenarios on BOTH pinned KRON templates (the tests loop over both and print "=== KRON template <file>").
 // Touch trigger: the T*-* entries (lib/touch.mjs generates one per evidence check; see README). The V3-* entries mutate
 // the checks protocol v3 added (minFill, rounding direction, tip <= price, the 0x08 merge checks, the update parent guard,
-// n < MERGE_K on booking).
+// n < MERGE_K on booking and on a re-arming take-profit, the merge exit at the entry's scale).
 import { del, rep, rx, rxDel } from '../lib/edits.mjs';
 import { touchMutations } from '../lib/touch.mjs';
 
@@ -715,10 +715,11 @@ export const mutations = [
     file: 'KobIfdBidKron',
     test: T_RPT,
     expect: ['NRP6'],
-    note: 'booking time t <= lockTime (CLTV)',
+    note: "booking: the exit's rptUntil counts from the entry UTXO's DAA (its last activity), never from the filler's t (the cycle dated by t instead)",
     edits: [
-      rep(`                require(tx.daa >= t);
-                int utxoDaa`, '                int utxoDaa'),
+      rep(`                int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
+                xUntil`, `                int idleEnd = t + MAX_IDLE;
+                xUntil`),
     ],
   },
   {
@@ -828,6 +829,14 @@ export const mutations = [
     note: 'the merge requires parent = this entry and rptPrice = its budget rate',
     edits: [rxDel('int rate = price + tip;', /^\s*require\(x\.slice\(279, 322\) == [^\n]*\);$/m)],
   },
+  {
+    id: 'V3-I-scale',
+    file: 'KobIfdBidKron',
+    test: T_RPT,
+    expect: ['NRP30'],
+    note: "merge: the committed exit (exitState, compared with the exit's state) quotes at the entry's scale (else the exit returns budget(m) at its scale and the entry re-arms m at its own)",
+    edits: [del('            require(int(byte[8](st.slice(118, 126))) == scale);\n')],
+  },
   // ---- touch trigger: KobCondAsk touchAsk (stop leg armed inside its fill), touch (update: arm / trail)
   ...touchMutations({
     prefix: 'TA',
@@ -849,6 +858,9 @@ export const mutations = [
       tokdaa: { [T_SET]: ['NTA02'] },
       tkcov: { [T_SET]: ['NTA02b'] },
       owner: { [T_SET]: ['NTA15', 'NTA16'] },
+      // the look-alike holder / non-P2SH input is also refused by the evidence ask's stray guard and the token program
+      tktpl: { run: { [T_SET]: ['NTA02c'] }, inputOnly: ['NTA02c'] },
+      tkp2sh: { run: { [T_SET]: ['NTA02d'] }, inputOnly: ['NTA02d'] },
     },
   }),
   {
@@ -878,6 +890,8 @@ export const mutations = [
       tokdaa: { [T_ARM]: ['NTU02'] },
       tkcov: { [T_ARM]: ['NTU02b'] },
       owner: { [T_ARM]: ['NTU15', 'NTU16'] },
+      tktpl: { run: { [T_ARM]: ['NTU02c'] }, inputOnly: ['NTU02c'] },
+      tkp2sh: { run: { [T_ARM]: ['NTU02d'] }, inputOnly: ['NTU02d'] },
     },
   }),
   {
@@ -1118,6 +1132,15 @@ export const mutations = [
     hold: { [T_RPT]: ['NRP22'] },
     note: 'update never next to the repeat entry (OpCovInputCount(parent) == 0): an 8-byte ev push would alias the merge amount',
     edits: [rxDel('    entry update(int ev, int tk) {', /^\s*require\(OpCovInputCount\(parent\) == 0\);$/m)],
+  },
+  {
+    id: 'V3-C-mergek',
+    file: 'KobCondAskKron',
+    test: T_PUSH,
+    expect: ['V3CA09'],
+    inputOnly: ['V3CA09'],
+    note: "re-arm: the exit sells n < 2^53 (the merge argument -(self * 2^53 + n) names this input and n only then: an exit of 2^53 + m at input i reads the merge of the booked exit at input i + 1 as its own; the KRON token refuses custodies above 10^9, so the exit input alone proves it)",
+    edits: [del('                require(n < MERGE_K);\n')],
   },
   // ---- protocol v3: KobIfdBidKron
   {

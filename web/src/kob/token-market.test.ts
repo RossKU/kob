@@ -34,7 +34,7 @@ describe('toTokenMarket', () => {
     expect(m.templateHash.startsWith('173ca6a7')).toBe(true);
     expect(m.suffixLen).toBe(2802);
     expect(m.slots).toEqual({ inputs: 3, outputs: 3 });
-    expect(m.refundTip).toBe(3_400_000n);
+    expect(m.refundTip).toBe(3_500_000n);
     expect(m.scale).toBe(1000n);
   });
 

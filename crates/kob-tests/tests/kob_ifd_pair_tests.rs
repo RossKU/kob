@@ -73,7 +73,7 @@ fn ifd_pair_dump() {
 
 use kob_protocol::build::{CancelOrder, RefundOrder};
 use kob_protocol::tx::{TokenUtxo, Witness};
-use TemplateId::{Kcc20Ref8x8, KronToken2433};
+use TemplateId::{Kcc20Ref, Kcc20Ref8x8, KronToken2433};
 
 const IFD: TemplateId = TemplateId::KobIfdPair;
 const COND: TemplateId = TemplateId::KobCondPair;
@@ -93,26 +93,31 @@ const TT: usize = 13;
 const XC: usize = 16;
 const UPD: usize = 17;
 
-/// The four family mixes (positives).
+// Every mix list carries the KCC-20 program twice: KCC20Ref_8x8 and the 3 / 3 KCC20Ref (the tradable KCC-20 program on
+// mainnet). A scenario whose transaction (or honest build) exceeds the 3 / 3 slots is skipped there (`SKIP-SLOTS`,
+// `ph::try_built`): the stray-scan slots 3..7 and the 16-input bound, and the shapes that need a 4th token output.
+
+/// The four family mixes and the three mixes with the 3 / 3 KCC-20 program (positives).
 fn all_mixes() -> Vec<(TemplateId, TemplateId)> {
-    family_mixes().to_vec()
+    [family_mixes().as_slice(), &ph::mixed_pairs_33(), &[(Kcc20Ref, Kcc20Ref)]].concat()
 }
-/// The two mixed pairs (generic attacks: each family as A and as B).
+/// The two mixed pairs (generic attacks: each family as A and as B), on both KCC-20 programs.
 fn mixed() -> Vec<(TemplateId, TemplateId)> {
-    vec![(Kcc20Ref8x8, KronToken2433), (KronToken2433, Kcc20Ref8x8)]
+    vec![(Kcc20Ref8x8, KronToken2433), (KronToken2433, Kcc20Ref8x8), (Kcc20Ref, KronToken2433), (KronToken2433, Kcc20Ref)]
 }
-/// The mixed pair whose A is KCC-20 (B KRON).
+/// The mixed pairs whose A is KCC-20 (B KRON).
 fn a_kcc() -> Vec<(TemplateId, TemplateId)> {
-    vec![(Kcc20Ref8x8, KronToken2433)]
+    vec![(Kcc20Ref8x8, KronToken2433), (Kcc20Ref, KronToken2433)]
 }
-/// The mixed pair whose A is KRON (B KCC-20).
+/// The mixed pairs whose A is KRON (B KCC-20).
 fn a_kron() -> Vec<(TemplateId, TemplateId)> {
-    vec![(KronToken2433, Kcc20Ref8x8)]
+    vec![(KronToken2433, Kcc20Ref8x8), (KronToken2433, Kcc20Ref)]
 }
 
 /// Runs `f` on each program pair with a `Run` of the templates under test.
 fn each(subs: &Subs, mixes: &[(TemplateId, TemplateId)], mut f: impl FnMut(&Run, TemplateId, TemplateId)) {
     for (pa, pb) in mixes {
+        ph::SLOT_GATE.store(true, std::sync::atomic::Ordering::Relaxed);
         let r = Run { subs, pair: pair_name(*pa, *pb) };
         f(&r, *pa, *pb);
     }
@@ -390,7 +395,12 @@ fn ifd_pair_positives() {
     let mut count = 0;
     each(&subs, &all_mixes(), |r, pa, pb| {
         for (name, a) in positives(pa, pb) {
-            r.ok(&ed_of(&name, a));
+            // a shape the 3 / 3 KCC-20 program cannot carry is not built there
+            let Some(b) = ph::try_built(a) else {
+                println!("SKIP-SLOTS {name} {} (build)", r.pair);
+                continue;
+            };
+            r.ok(&Ed::new(&name, &b));
             count += 1;
         }
     });
@@ -1508,7 +1518,7 @@ fn ifd_custody_marks() {
         }
     });
     // A and B on the same program (KCC-20 / KCC-20): only the covenant ids tell the tokens apart
-    let kk = [family_mixes()[0]];
+    let kk = [family_mixes()[0], (Kcc20Ref, Kcc20Ref)];
     each(&subs, &kk, |r, pa, pb| {
         // PIH4 / NIH4 a sell-first entry selling out with its prefund equal to its A: the B custody named at the A custody
         // input (the real prefund custody stays behind; the matcher pays the B)
@@ -1713,12 +1723,6 @@ fn grind(r: &Run, e: &mut Ed, ai: usize, min: i64) {
     }
     panic!("{}: no signature reads as a fill", e.name);
 }
-/// A token input of `tok` (not an order) other than `not`, preferring one owned by covenant `own` (None: any).
-fn tok_in(e: &Ed, tok: [u8; 32], not: usize) -> Option<usize> {
-    (0..e.plans.len()).find(|k| {
-        *k != not && ph::cov_of(&e.entries[*k]) == Some(tok) && !matches!(e.plans[*k], SigPlan::Entry { .. } | SigPlan::P2pk { .. })
-    })
-}
 
 fn ev_battery(r: &Run, pa: TemplateId, pb: TemplateId) {
     for buy in [true, false] {
@@ -1850,21 +1854,30 @@ fn ev_battery(r: &Run, pa: TemplateId, pb: TemplateId) {
             // ---- the custody of an ask / pair evidence (tk): the A ask (sell, mode 0), the pair (mode 1) are read by rd(),
             // the B ask (buy, mode 0) by evLeg()
             {
-                // NE18 tk is a token input of the other token
-                let mut e = base(&format!("{} evidence custody of another token", x("NE18")));
+                // NE18 tk is a UTXO of the other token owned by the evidence (covenant marker right): on the mixed pairs
+                // the other token is of the other program, so the holder template check refuses it too (the covenant id
+                // check alone stands on KCC / KCC: ifd_ev_tk, NE18k)
+                let e = other_token_custody(&x("NE18"), pa, pb, buy, mode);
                 let i = ein(&e);
-                let t = arg(&e, i, TK) as usize;
-                let tok = ph::cov_of(&e.entries[t]).unwrap();
-                let other = if tok == TOKEN_COV { TOKEN_B } else { TOKEN_COV };
-                let w = tok_in(&e, other, usize::MAX).expect("a token input of the other token");
-                set_int(&mut e, i, TK, w as i64);
                 r.bad(&e, i);
                 // NE19 tk is a key-held UTXO of the right token (not owned by the evidence order)
                 let mut e = base(&format!("{} evidence custody not owned by the evidence", x("NE19")));
+                let tok = ph::cov_of(&e.entries[arg(&e, i, TK) as usize]).unwrap();
                 let w = take(&mut e, tok, 0xe1, 5);
                 give(&mut e, tok, 5);
                 set_int(&mut e, i, TK, w as i64);
                 r.bad(&e, i);
+                // NE25 / NE26 the real custody fresh (exposed less than minRestDaa), tk named at an OLD input of the custody
+                // token whose redeem bytes read the evidence as owner: NE25 a look-alike holder under another program
+                // (template hash), NE26 the genuine holder redeem pushed by a non-P2SH input (P2SH)
+                for (id, look) in [("NE25", true), ("NE26", false)] {
+                    let what = if look { "an old look-alike holder" } else { "an old non-P2SH genuine holder redeem" };
+                    let mut e = base(&format!("{} evidence custody stood in for by {what}", x(id)));
+                    let t = arg(&e, i, TK) as usize;
+                    let (j, patch) = ph::old_custody_standin(&mut e, t, look);
+                    set_int(&mut e, i, TK, j as i64);
+                    r.bad_patched(&e, i, &patch);
+                }
             }
             if mode == 0 {
                 // ---- the B leg: read by evLeg()
@@ -1936,6 +1949,37 @@ fn ev_battery(r: &Run, pa: TemplateId, pb: TemplateId) {
 fn ifd_ev_battery() {
     let subs = Subs::compile();
     each(&subs, &mixed(), ev_battery);
+}
+
+/// The evidence custody tk named at a UTXO of the OTHER token owned by the evidence order (an old stray: the order's
+/// covenant marker is right), `id` = NE18<side><mode> / NE18k<side><mode>.
+fn other_token_custody(id: &str, pa: TemplateId, pb: TemplateId, buy: bool, mode: u8) -> Ed {
+    let mut e = ed_of(&format!("{id} evidence custody of another token"), update_entry(stop_entry(pa, pb, buy, 0), pa, pb, mode));
+    let i = ein(&e);
+    let t = arg(&e, i, TK) as usize;
+    let tok = ph::cov_of(&e.entries[t]).unwrap();
+    let owner = e.in_tok(t).owner();
+    let (other, op) = if tok == TOKEN_COV { (TOKEN_B, pb) } else { (TOKEN_COV, pa) };
+    let w = e.add_stray(other, op, owner, 7, 98);
+    set_int(&mut e, i, TK, w as i64);
+    e
+}
+
+/// NE18k: as NE18 where both tokens share one program (KCC-20 / KCC-20, both KCC-20 programs): the holder template and
+/// the covenant marker are right, only the covenant id check (`OpInputCovenantId(tk) == cTok` in rd / evLeg) refuses it.
+#[test]
+fn ifd_ev_tk() {
+    let subs = Subs::compile();
+    each(&subs, &[family_mixes()[0], (Kcc20Ref, Kcc20Ref)], |r, pa, pb| {
+        for buy in [true, false] {
+            let sd = if buy { "b" } else { "a" };
+            for mode in [0u8, 1] {
+                let e = other_token_custody(&format!("NE18k{sd}{mode}"), pa, pb, buy, mode);
+                let i = ein(&e);
+                r.bad(&e, i);
+            }
+        }
+    });
 }
 
 // ---------------------------------------------------------------- merge: the exit read, the amounts, the custodies
@@ -2165,11 +2209,14 @@ fn ifd_merge_rules() {
             r.bad(&e, i);
         }
         // NIM9 a sell-first merge of m = 0 next to the exit's take-profit of n (judged at the entry: its m > 0 check and its
-        // check of the exit's push both refuse it)
+        // check of the exit's push both refuse it). The exit moves to input 1: at input 0 the argument -(0 * 2^53 + 0) is
+        // a (negative) zero, the entry's refund encoding, and never reaches the merge.
         {
             let mut e = asell("NIM9 sell merge of m = 0 next to a take-profit");
+            swap01(&mut e);
             let i = ein(&e);
             let x = xin(&e);
+            assert_eq!(x, 1, "{}: the exit at input 1", e.name);
             let n = arg(&e, x, C_NB);
             let s = ist(&e, i);
             e.set_arg(i, NB, merge_nb(x as i64, 0));
@@ -2188,12 +2235,21 @@ fn ifd_merge_rules() {
         }
     });
     // NIX3 the committed exit is of the entry's own side: a buy-first entry (made from a sell-first re-arm) whose booked
-    // exit is a BID (a partial re-arm: the exit continues)
-    each(&subs, &mixed(), |r, pa, pb| {
+    // exit is a BID (a partial re-arm: the exit continues). NIX3 runs on KCC / KCC, where the exit's sExt (the commitment
+    // of its custody token B) equals the entry's aExt, so only the side check refuses it; NIX3m on the mixed pairs, where
+    // the exit's sExt check (B's commitment is not A's) refuses it too (defence in depth).
+    let kk = [family_mixes()[0], (Kcc20Ref, Kcc20Ref)];
+    for (id, mixes) in [("NIX3", kk.to_vec()), ("NIX3m", mixed())] {
+        each(&subs, &mixes, |r, pa, pb| nix3(r, pa, pb, id));
+    }
+}
+
+fn nix3(r: &Run, pa: TemplateId, pb: TemplateId, id: &str) {
+    {
         if !pair_scenarios(pa, pb).iter().any(|(n, _)| n == "pair.rearm.ask") {
             return;
         }
-        let mut e = ed_shape(pa, pb, "pair.rearm.ask", "NIX3 committed exit of the entry's own side");
+        let mut e = ed_shape(pa, pb, "pair.rearm.ask", &format!("{id} committed exit of the entry's own side"));
         let i = ein(&e);
         let x = xin(&e);
         let m = arg(&e, x, C_NB);
@@ -2225,7 +2281,7 @@ fn ifd_merge_rules() {
         let grow = (s.custody + budget) - (s.custody + s.pre_of(m).unwrap());
         take(&mut e, TOKEN_B, 162, grow + back);
         r.bad(&e, i);
-    });
+    }
 }
 
 // ---------------------------------------------------------------- the re-arming exit (KobCondPair repeat rules)
@@ -2283,14 +2339,20 @@ fn cond_rpt_rules() {
                     c.parent = [0x55; 32];
                 }
             }
-            let mut e = edb("NCR4 booked exit's update next to a fill of its entry", b);
-            let xi = xin(&e);
-            restate_x(&mut e, |c| c.parent = E_ID);
-            let xc = xcont(&e).expect("exit continuation");
-            let mut cs = ost::<CondPairState>(&e, xc);
-            cs.parent = E_ID;
-            e.set_out_spk_state(xc, COND, &cs.encode());
-            r.bad(&e, xi);
+            let name = "NCR4 booked exit's update next to a fill of its entry";
+            // the entry's fill and the update's evidence need a 4th token output: not on the 3 / 3 KCC-20 program
+            if let Some(bt) = ph::try_built(Action::Batch(b)) {
+                let mut e = Ed::new(name, &bt);
+                let xi = xin(&e);
+                restate_x(&mut e, |c| c.parent = E_ID);
+                let xc = xcont(&e).expect("exit continuation");
+                let mut cs = ost::<CondPairState>(&e, xc);
+                cs.parent = E_ID;
+                e.set_out_spk_state(xc, COND, &cs.encode());
+                r.bad(&e, xi);
+            } else {
+                println!("SKIP-SLOTS {name} {} (build)", r.pair);
+            }
         }
         // NCR6 the committed take-profit equals the entry price: the re-arm leaves the maker a profit of 0 (a zero token
         // output; the KRON program refuses one too)
@@ -2354,6 +2416,53 @@ fn cond_rpt_rules() {
             set_nb(&mut e, i, n);
             r.bad(&e, x);
         }
+    });
+}
+
+/// NCR10: the re-arm's `n < MERGE_K`. A look-alike exit E1 (a KobCondPair ASK with parent = the entry, created and funded
+/// by the attacker: it holds 2^53 + m base units of a KCC-20 A) takes profit for n1 = 2^53 + m at input i, the genuine
+/// booked exit E2 at input i + 1 for m, sold out, and the entry merges E2: its argument -((i + 1) * 2^53 + m) is also
+/// E1's -(i * 2^53 + n1). Without the bound E1 re-arms on the entry's merge of E2 (the entry credits only m). E1 is built
+/// as a plain conditional (parent 0, rptPrice 0: its re-arm then owes the entry nothing, so the delivery the builder
+/// lays out is exactly the re-arm's), then given parent = the entry. Its scale of A is 10^9 and its take-profit 2 B per
+/// 10^9 units, so its quote of ~1.8e7 B fits the KRON B. KCC-20 A only (KRON amounts are capped at 10^9).
+#[test]
+fn cond_rpt_merge_k() {
+    let subs = Subs::compile();
+    each(&subs, &a_kcc(), |r, pa, pb| {
+        let m = 4 * WHOLE;
+        let n1 = (1i64 << 53) + m;
+        let (sc, tp) = (1_000_000_000i64, 2i64);
+        let x1 = CondPairState {
+            s_scale: sc,
+            tp_price: tp,
+            stop_price: 1,
+            amount_left: n1,
+            custody: n1,
+            tip: 0,
+            parent: [0; 32],
+            rpt_price: 0,
+            rpt_pre: 0,
+            rpt_until: 0,
+            ..ifd_pair_exit_ask(MAKER_A, pa, pb)
+        };
+        let t_out = qof(n1, tp, sc, sc - 1);
+        let mut b = fx::pair::rearm_with(true, pa, pb, Rearm::default());
+        b.legs.insert(0, cond_pair_leg_amount(x1, pa, pb, cov(0x5a), 0x40, n1, 0));
+        b.taker_tokens.push(tutxo(pb, TOKEN_B, 0x42, t_out, pk(MATCHER), false));
+        let mut e = edb("NCR10 a look-alike exit of 2^53 + m aliases the merge of the booked exit at the next input", b);
+        let (x1i, x2i, i) = (e.input_of_cov(cov(0x5a)), xin(&e), ein(&e));
+        assert_eq!((x1i + 1, arg(&e, x2i, C_NB)), (x2i, m), "{}: E1 right before E2, E2 trades m", e.name);
+        let bytes = |a: Arg| match a {
+            Arg::Bytes(v) => v,
+            a => panic!("not bytes: {a:?}"),
+        };
+        assert_eq!(bytes(e.args(i)[NB].clone()), bytes(merge_nb(x2i as i64, m)), "{}: the entry merges E2", e.name);
+        assert_eq!(bytes(merge_nb(x2i as i64, m)), bytes(merge_nb(x1i as i64, n1)), "{}: the merge arguments alias", e.name);
+        let mut s = xst(&e, x1i);
+        s.parent = E_ID;
+        e.set_entry_state(x1i, s.encode());
+        r.bad(&e, x1i);
     });
 }
 

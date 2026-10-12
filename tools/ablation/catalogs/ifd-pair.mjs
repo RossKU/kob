@@ -11,7 +11,10 @@
 //    range), and a longer one is no Schnorr signature for checkSig, so removing it accepts no transaction.
 // Defence in depth (hold entries plus one combined entry each): the exit spk pin / genesis id (IF9 / IF10 / IF9b), the
 // exit prefix hash (IF11), pinTok's spk / covenant pins for a custody moved off its index (IF8b / IF47 / IF8c), the
-// entry <-> exit push cross-check (IF110 / cond-pair-rpt CR7 / IF110c), m > 0 next to a take-profit (IF104 / IF104c).
+// entry <-> exit push cross-check (IF110 / cond-pair-rpt CR7 / IF110c), m > 0 next to a take-profit (IF104 / IF104c),
+// the merged exit's side and sExt on the mixed pairs (IF107 / IF107x / IF107c; IF107 alone flips NIX3 on KCC / KCC). The
+// evidence custody's covenant id (IF90 / IF98) flips on KCC / KCC (NE18k, ifd_ev_tk); on the mixed pairs the holder
+// template check also refuses the other token (held).
 // Reachable only by the order's own hostile state (maker-set fields the builders refuse), witnessed as such: side 3,
 // a negative scale, family 3, negative tip / carriers / prefund / keeperTip / refundTip, price 0.
 import { del, rep, rx } from '../lib/edits.mjs';
@@ -49,8 +52,35 @@ const T_MRF = 'ifd_merge_refund';
 const T_LIM = 'ifd_limits';
 // anchors of function-scoped edits
 const A_TPL = '    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {';
-const A_RD = '    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, int kSuf, byte[32] oTok, int oFam, int osc, int oSuf, int tk, int minN) : int {';
-const A_EVLEG = '    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, int tk, int tokSuf, int minN) : int {';
+const A_RD = '    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, byte[32] kTpl, int kPre, int kSuf, byte[32] oTok, int oFam, int osc,';
+const A_EVLEG = '    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, int tk, byte[32] tokTpl, int tokPre, int tokSuf, int minN) : int {';
+
+// the custody tk of the ask / pair evidence: a holder UTXO of the token's program. tplState without the template-hash
+// check (P2SH kept) / without the P2SH check (template hash kept), called for tk only (lib/touch.mjs NO_HASH / NO_P2SH)
+const TPL_END = '        return rs.slice(pre, pre + stLen);\n    }\n';
+const NO_HASH = `
+    function tplStateNoHash(int idx, int pre, int stLen, int suf) : byte[] {
+        int size = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - size;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + size);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return rs.slice(pre, pre + stLen);
+    }
+`;
+const NO_P2SH = `
+    function tplStateNoP2sh(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int size = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - size;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + size);
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, size)) == tpl);
+        return rs.slice(pre, pre + stLen);
+    }
+`;
+const tkNoHash = a => [rep(TPL_END, TPL_END + NO_HASH), rx(a, /tplState\(tk, ([^,]+), ([^,]+), ([^,]+), [^)]+\)/, m => `tplStateNoHash(tk, ${m[1]}, ${m[2]}, ${m[3]})`)];
+const tkNoP2sh = a => [rep(TPL_END, TPL_END + NO_P2SH), rx(a, /tplState\(tk, /, 'tplStateNoP2sh(tk, ')];
+// the owner / covenant-marker comparison of the custody state read
+const OWNER = /require\(cs\.slice\(ow, ow \+ 32 \+ mark\.length\) == byte\[\]\(OpInputCovenantId\(ev\)\) \+ mark\);/;
+
 const A_STOP = '    function stopTouch(int evA, int evB, int tk, int evMode) {';
 // the entry's check of the exit's push (KobIfdPair) and the exit's check of the entry's push (KobCondPair)
 const PUSH_M = '                require(int(byte[8](OpTxInputScriptSigSubstr(k, 1, 9))) == m);\n';
@@ -113,7 +143,7 @@ export const mutations = [
   { id: 'IF31', file: F, test: T_FR, expect: ['NIF09'], note: 'the auction time t is proven by CLTV (tx.daa >= t)', edits: [rep('                            require(tx.daa >= t);\n                            require(t >= newArmed);\n', '                            require(t >= newArmed);\n')] },
   { id: 'IF32', file: F, test: T_FR, expect: ['NIF10'], note: 'the auction time t is not before the auction origin', edits: [del('                            require(t >= newArmed);\n')] },
   { id: 'IF33', file: F, test: T_FR, expect: ['NIF11'], note: 'the entry quote p is positive (a price-0 entry never trades)', edits: [del('                require(p > 0);\n')] },
-  { id: 'IF34', file: F, test: T_FR, expect: ['NIF13'], note: 'a booking dates its cycle by a CLTV-proven t (rptUntil cannot be pushed out)', edits: [rep('                    require(tx.daa >= t);\n                    int utxoDaa', '                    int utxoDaa')] },
+  { id: 'IF34', file: F, test: T_FR, expect: ['NIF13'], note: "a booking dates its cycle (rptUntil) by the entry UTXO's DAA, never by the filler's t argument (dated by t, a filler pushes rptUntil out)", edits: [rep('                    int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;\n                    xUntil', '                    int idleEnd = t + MAX_IDLE;\n                    xUntil')] },
   { id: 'IF35', file: F, test: T_FR, expect: ['NIF14'], note: 'buy-first: the B released is not negative (sign check)', edits: [del('                    require(amt >= 0);\n')] },
   { id: 'IF36', file: F, test: T_FR, expect: ['NIF15'], note: 'buy-first: the release does not exceed the escrow (bNew >= 0; sign check)', edits: [del('                    require(bNew >= 0);\n')] },
   { id: 'IF37', file: F, test: T_FR, expect: ['NIF16'], note: 'sell-first: prefund >= 0 (hostile field: a negative pre(n) moves the exit custody into the prefund)', edits: [del('                    require(prefund >= 0);\n')] },
@@ -165,24 +195,33 @@ export const mutations = [
   { id: 'IF75', file: F, test: T_CM, expect: ['NIP2'], inputOnly: ['NIP2'], note: 'pinTok: the template bytes read from the source hash to the token template (a planted look-alike source; the A program also refuses the output written on its bytes, so only the entry input flips)', edits: [del('        require(blake3(byte[](pre as byte[8]) + p + byte[](suf as byte[8]) + x) == th);\n')] },
   // ---- the stray scan, slot by slot (a refund of a buy-first entry; the KCC-20 token for slots 4..7, a 16-input program for the bound)
   { id: 'IF76', file: F, test: T_SS, expect: ['NIS8'], note: 'noStrays: at most MAX_TOK_IN (8) inputs of the token (the scan is unrolled for 8; a 16-input KCC-20 program carries a 9th)', edits: [del('        require(cnt <= MAX_TOK_IN);\n')] },
-  ...[0, 1, 2, 3, 4, 5, 6, 7].map(j => ({ id: `IF77s${j}`, file: F, test: T_SS, expect: [`NIS${j}`], note: `noStrays: the input at token-input slot ${j} is not owned by this entry`, edits: [del(`require(byte[32](OpTxInputScriptSigSubstr(x${j}, e${j}, e${j} + 32)) != me);`)] })),
+  // slots 1..3 on the KRON-A mixes: the KRON token inputs of the scenario also refuse it, so only the entry input flips there
+  ...[0, 1, 2, 3, 4, 5, 6, 7].map(j => ({ id: `IF77s${j}`, file: F, test: T_SS, expect: [`NIS${j}`], ...(j >= 1 && j <= 3 ? { inputOnly: [`NIS${j}`] } : {}), note: `noStrays: the input at token-input slot ${j} is not owned by this entry`, edits: [del(`require(byte[32](OpTxInputScriptSigSubstr(x${j}, e${j}, e${j} + 32)) != me);`)] })),
   // ---- the stop-entry evidence: rd() (the A leg in mode 0, the pair order in mode 1)
   { id: 'IF85', file: F, test: T_EVB, expect: ['NE03a0', 'NE03b0', 'NE03a1', 'NE03b1'], hold: { [T_EVB]: ['NE16a0', 'NE16b0', 'NE16a1', 'NE16b1'] }, note: 'rd: the evidence sigscript starts with the 8-byte fill push (a cancel whose signature reads as a fill refused; an index at a P2PK input also fails the template read)', edits: [rx(A_RD, /require\(OpTxInputScriptSigSubstr\(ev, 0, 1\) == byte\[\]\(0x08\)\);/, '')] },
   { id: 'IF86', file: F, test: T_EVB, expect: ['NE01a0', 'NE01b0', 'NE01a1', 'NE01b1'], inputOnly: ['NE01a0', 'NE01b0', 'NE01a1', 'NE01b1'], note: 'rd: the evidence is filled (n > 0; an entry with minTouch 0 would otherwise arm on an unfilled order: the n = 0 push is its refund / update encoding, which the evidence order itself refuses here before expiry, so only the entry input flips)', edits: [rx(A_RD, /require\(n > 0\);/, '')] },
   { id: 'IF87', file: F, test: T_EVB, expect: ['NE07a0', 'NE07b0', 'NE07a1', 'NE07b1'], note: 'rd: the A / pair evidence fills at least minTouch', edits: [rx(A_RD, /require\(n >= minN\);/, '')] },
-  { id: 'IF88', file: F, test: T_EVB, expect: ['NE09a0', 'NE09b0', 'NE09a1', 'NE09b1', 'NE11a0', 'NE11b0', 'NE11a1', 'NE11b1'], hold: { [T_EVB]: ['NE13a1', 'NE13b1'] }, note: "rd: the evidence's token and scale (mode 1: side, S, T and both scales) are the entry's. NE13 (the opposite pair order) stays rejected: its custody is the other token (the tk read)", edits: [rx(A_RD, /require\(got == want\);/, '')] },
-  { id: 'IF89', file: F, test: T_EVB, expect: ['NE05a0', 'NE05b0', 'NE05a1', 'NE05b1'], note: 'rd: the evidence is not decaying (slope 0)', edits: [rx(A_RD, /require\(int\(byte\[8\]\(o\.slice\(208 \+ w, 216 \+ w\)\)\) == 0\);/, '')] },
-  { id: 'IF90', file: F, test: T_EVB, expect: ['NE18a0', 'NE18a1', 'NE18b1'], note: "rd: the ask / pair evidence's custody tk carries its S token", edits: [rx(A_RD, /require\(OpInputCovenantId\(tk\) == cTok\);/, '')] },
-  { id: 'IF91', file: F, test: T_EVB, expect: ['NE19a0', 'NE19a1', 'NE19b1'], note: 'rd: tk is owned by the evidence order with the covenant marker', edits: [rx(A_RD, /require\(OpTxInputScriptSigSubstr\(tk, end, end \+ 32 \+ mark\.length\) == byte\[\]\(OpInputCovenantId\(ev\)\) \+ mark\);/, '')] },
+  { id: 'IF88', file: F, test: T_EVB, expect: ['NE09a0', 'NE09b0', 'NE09a1', 'NE09b1', 'NE11a0', 'NE11b0', 'NE11a1', 'NE11b1'], inputOnly: ['NE09a0', 'NE09b0', 'NE09a1', 'NE09b1', 'NE11a0', 'NE11b0', 'NE11a1', 'NE11b1'], hold: { [T_EVB]: ['NE13a1', 'NE13b1'] }, note: "rd: the evidence's token and scale (mode 1: side, S, T and both scales) are the entry's. NE13 (the opposite pair order) stays rejected: its custody is the other token (the tk read) (the edited evidence order also refuses its doctored state by its own script, so only the entry input flips)", edits: [rx(A_RD, /require\(got == want\);/, '')] },
+  { id: 'IF89', file: F, test: T_EVB, expect: ['NE05a0', 'NE05b0', 'NE05a1', 'NE05b1'], inputOnly: ['NE05b0', 'NE05a1', 'NE05b1'], note: 'rd: the evidence is not decaying (slope 0) (the edited evidence order also refuses its doctored state by its own script, so only the entry input flips)', edits: [rx(A_RD, /require\(int\(byte\[8\]\(o\.slice\(208 \+ w, 216 \+ w\)\)\) == 0\);/, '')] },
+  { id: 'IF90', file: F, run: { ifd_ev_tk: ['NE18ka0', 'NE18ka1', 'NE18kb1'] }, inputOnly: ['NE18ka1', 'NE18kb1'], hold: { [T_EVB]: ['NE18a0', 'NE18a1', 'NE18b1'] }, note: "rd: the ask / pair evidence's custody tk carries its S token (KCC / KCC: an old UTXO of the other token owned by the evidence, marker right; the pair evidence's own stray guard refuses it at its input). On the mixed pairs NE18 stays rejected: the other token is of another program, so the holder template check (IF116) refuses it too", edits: [rx(A_RD, /require\(OpInputCovenantId\(tk\) == cTok\);/, '')] },
+  { id: 'IF91', file: F, test: T_EVB, expect: ['NE19a0', 'NE19a1', 'NE19b1'], note: 'rd: tk is owned by the evidence order with the covenant marker', edits: [rx(A_RD, OWNER, '')] },
+  // the custody is a holder UTXO of the token's program: the real custody fresh, tk named at an OLD stand-in carrying the
+  // token's covenant id that reads the evidence as owner (NE25 a look-alike holder of another program, NE26 the genuine
+  // holder redeem on a non-P2SH input). The evidence order's own stray guard and the token program refuse the stand-in at
+  // their inputs: inputOnly.
+  { id: 'IF116', file: F, test: T_EVB, expect: ['NE25a0', 'NE25a1', 'NE25b1'], inputOnly: ['NE25a0', 'NE25a1', 'NE25b1'], note: "rd: the ask / pair evidence's custody tk is a holder of its token's program (template hash; P2SH kept): an old look-alike holder of another program refused", edits: tkNoHash(A_RD) },
+  { id: 'IF117', file: F, test: T_EVB, expect: ['NE26a0', 'NE26a1', 'NE26b1'], inputOnly: ['NE26a0', 'NE26a1', 'NE26b1'], note: "rd: tk is the P2SH of the holder redeem it shows (template hash kept): an old non-P2SH input with the genuine redeem refused", edits: tkNoP2sh(A_RD) },
   // ---- the stop-entry evidence: evLeg() (the B leg in mode 0)
   { id: 'IF92', file: F, test: T_EVB, expect: ['NE04a0', 'NE04b0'], note: 'evLeg: the B evidence sigscript starts with the 8-byte fill push (a cancel read as a fill refused)', edits: [rx(A_EVLEG, /require\(OpTxInputScriptSigSubstr\(ev, 0, 1\) == byte\[\]\(0x08\)\);/, '')] },
   { id: 'IF93', file: F, test: T_EVB, expect: ['NE02a0', 'NE02b0'], inputOnly: ['NE02a0', 'NE02b0'], note: 'evLeg: the B evidence is filled (n > 0; minTouch 0 makes the B threshold 0; the unfilled order itself refuses its n = 0 push here, so only the entry input flips)', edits: [rx(A_EVLEG, /require\(n > 0\);/, '')] },
   { id: 'IF94', file: F, test: T_EVB, expect: ['NE08a0', 'NE08b0'], note: 'evLeg: the B evidence fills at least ceil(minTouch * entryStop / scale(A))', edits: [rx(A_EVLEG, /require\(n >= minN\);/, '')] },
-  { id: 'IF95', file: F, test: T_EVB, expect: ['NE12a0', 'NE12b0'], note: 'evLeg: the B evidence is of token B', edits: [rx(A_EVLEG, /require\(byte\[32\]\(o\.slice\(34, 66\)\) == tok\);/, '')] },
-  { id: 'IF96', file: F, test: T_EVB, expect: ['NE10a0', 'NE10b0'], note: "evLeg: the B evidence quotes per B's scale", edits: [rx(A_EVLEG, /require\(int\(byte\[8\]\(q\.slice\(0, 8\)\)\) == sc\);/, '')] },
-  { id: 'IF97', file: F, test: T_EVB, expect: ['NE06a0', 'NE06b0'], note: 'evLeg: the B evidence is not decaying', edits: [rx(A_EVLEG, /require\(int\(byte\[8\]\(r\.slice\(18, 26\)\)\) == 0\);/, '')] },
-  { id: 'IF98', file: F, test: T_EVB, expect: ['NE18b0'], note: "evLeg: the B ask evidence's custody tk carries token B", edits: [rx(A_EVLEG, /require\(OpInputCovenantId\(tk\) == tok\);/, '')] },
-  { id: 'IF99', file: F, test: T_EVB, expect: ['NE19b0'], note: 'evLeg: tk is owned by the B ask evidence with the covenant marker', edits: [rx(A_EVLEG, /require\(OpTxInputScriptSigSubstr\(tk, end, end \+ 32 \+ mark\.length\) == byte\[\]\(OpInputCovenantId\(ev\)\) \+ mark\);/, '')] },
+  { id: 'IF95', file: F, test: T_EVB, expect: ['NE12a0', 'NE12b0'], inputOnly: ['NE12a0', 'NE12b0'], note: 'evLeg: the B evidence is of token B (the edited evidence order also refuses its doctored state by its own script, so only the entry input flips)', edits: [rx(A_EVLEG, /require\(byte\[32\]\(o\.slice\(34, 66\)\) == tok\);/, '')] },
+  { id: 'IF96', file: F, test: T_EVB, expect: ['NE10a0', 'NE10b0'], inputOnly: ['NE10a0', 'NE10b0'], note: "evLeg: the B evidence quotes per B's scale (the edited evidence order also refuses its doctored state by its own script, so only the entry input flips)", edits: [rx(A_EVLEG, /require\(int\(byte\[8\]\(q\.slice\(0, 8\)\)\) == sc\);/, '')] },
+  { id: 'IF97', file: F, test: T_EVB, expect: ['NE06a0', 'NE06b0'], inputOnly: ['NE06a0'], note: 'evLeg: the B evidence is not decaying (the edited evidence order also refuses its doctored state by its own script, so only the entry input flips)', edits: [rx(A_EVLEG, /require\(int\(byte\[8\]\(r\.slice\(18, 26\)\)\) == 0\);/, '')] },
+  { id: 'IF98', file: F, run: { ifd_ev_tk: ['NE18kb0'] }, hold: { [T_EVB]: ['NE18b0'] }, note: "evLeg: the B ask evidence's custody tk carries token B (KCC / KCC: an old UTXO of A owned by the B ask). On the mixed pairs NE18b0 stays rejected by the holder template check (IF118)", edits: [rx(A_EVLEG, /require\(OpInputCovenantId\(tk\) == tok\);/, '')] },
+  { id: 'IF99', file: F, test: T_EVB, expect: ['NE19b0'], note: 'evLeg: tk is owned by the B ask evidence with the covenant marker', edits: [rx(A_EVLEG, OWNER, '')] },
+  { id: 'IF118', file: F, test: T_EVB, expect: ['NE25b0'], inputOnly: ['NE25b0'], note: "evLeg: the B ask evidence's custody tk is a holder of token B's program (template hash; P2SH kept): an old look-alike holder of another program refused", edits: tkNoHash(A_EVLEG) },
+  { id: 'IF119', file: F, test: T_EVB, expect: ['NE26b0'], inputOnly: ['NE26b0'], note: "evLeg: tk is the P2SH of the holder redeem it shows (template hash kept): an old non-P2SH input with the genuine redeem refused", edits: tkNoP2sh(A_EVLEG) },
   // ---- the stop-entry evidence: stopTouch()
   { id: 'IF100', file: F, test: T_EVB, expect: ['NE21a1', 'NE21b1'], note: 'stopTouch: evMode is 0 or 1', edits: [rx(A_STOP, /require\(evMode == 1\);/, '')] },
   { id: 'IF101', file: F, test: T_EVB, expect: ['NE22b0'], note: 'stopTouch: the B quote is positive (an ask of B at price 0 would arm any buy stop: ceil(stop * 0 / scale(B)) = 0)', edits: [rx(A_STOP, /require\(b > 0\);/, '')] },
@@ -190,10 +229,12 @@ export const mutations = [
   { id: 'IF103', file: F, test: T_EVB, expect: ['NE17b0', 'NE17b1'], note: 'stopTouch: a buy stop arms only at a rate >= entryStop', edits: [rx(A_STOP, /require\(a >= q\);/, '')] },
   // ---- merge (ifd_merge_rules, ifd_merge_refund)
   { id: 'IF104', file: F, test: T_MRF, expect: ['NIM10'], hold: { [T_MR]: ['NIM9'] }, note: 'merge: m > 0 (a merge never reads the exit refund / update push n = 0 as an amount). NIM9 (m = 0 next to a take-profit of n) stays rejected by the push check IF110', edits: [del('                require(m > 0);\n')] },
-  { id: 'IF104c', file: F, test: T_MR, expect: ['NIM9'], note: 'm > 0 AND the entry / exit push cross-checks removed: a merge of 0 next to a take-profit of n leaves the n bought A and back(n) to the matcher', edits: [del('                require(m > 0);\n'), del(PUSH_M)], also: [{ file: 'KobCondPair', edits: [del(PUSH_X)] }] },
+  { id: 'IF104c', file: F, test: T_MR, expect: ['NIM9'], note: 'NIM9 has the exit at input 1 (at input 0 a merge of 0 is the refund encoding 0). m > 0 AND the entry / exit push cross-checks removed: a merge of 0 next to a take-profit of n leaves the n bought A and back(n) to the matcher', edits: [del('                require(m > 0);\n'), del(PUSH_M)], also: [{ file: 'KobCondPair', edits: [del(PUSH_X)] }] },
   { id: 'IF105', file: F, test: T_MR, expect: ['NIX1'], note: 'merge: the exit at k carries the committed exit state (outside the mutable payloads): a look-alike with another tpPrice refused', edits: [del('                require(x.slice(0, 415) == st.slice(0, 415));\n')] },
   { id: 'IF106', file: F, test: T_MR, expect: ['NIX2'], note: 'merge: the exit is booked by this entry (push opcodes, parent, rptPrice = price, rptPre): another rptPrice refused', edits: [rx('                require(x.slice(423, 424)', /require\(x\.slice\(423, 424\)[\s\S]*?\);/, '')] },
-  { id: 'IF107', file: F, test: T_MR, expect: ['NIX3'], note: "merge: the committed exit is the entry's opposite side (a buy-first entry whose committed exit is a BID refused)", edits: [del('                require(int(byte[8](st.slice(34, 42))) == xSide);\n')] },
+  { id: 'IF107', file: F, test: T_MR, expect: ['NIX3'], hold: { [T_MR]: ['NIX3m'] }, note: "merge: the committed exit is the entry's opposite side (KCC / KCC: a buy-first entry whose committed exit is a BID refused). On the mixed pairs NIX3m stays rejected by the exit's sExt check (B's commitment is not A's; IF107x / IF107c)", edits: [del('                require(int(byte[8](st.slice(34, 42))) == xSide);\n')] },
+  { id: 'IF107x', file: F, hold: { [T_MR]: ['NIX3m'] }, note: "merge: the exit's sExt is the commitment of its custody token as fill writes it (aExt buy-first, bExt sell-first). DEFENCE IN DEPTH on NIX3m with the side check IF107; IF107c removes both", edits: [del('                require(x.slice(510, 543) == byte[](0x20) + byte[](xsExt));\n')] },
+  { id: 'IF107c', file: F, test: T_MR, expect: ['NIX3m'], note: "the committed exit's side AND its sExt check removed: a buy-first entry merges a BID exit (mixed pairs: its sExt is B's commitment)", edits: [del('                require(int(byte[8](st.slice(34, 42))) == xSide);\n'), del('                require(x.slice(510, 543) == byte[](0x20) + byte[](xsExt));\n')] },
   { id: 'IF108', file: F, test: T_MR, expect: ['NIX4'], note: "merge: the committed exit quotes at the entry's scale of A (an exit at scale 999 refused: the two would round the merge differently)", edits: [del('                require(int(byte[8](st.slice(xsOff, xsOff + 8))) == aScale);\n')] },
   { id: 'IF109', file: F, test: T_MR, expect: ['NIX5'], inputOnly: ['NIX5'], hold: { [T_MR]: ['NIX6'] }, note: "merge: the exit's sigscript starts with an 8-byte push (a 9-byte push whose bytes [1..9) are m refused; the exit's own byte[8] argument refuses it too). NIX6 (a minimal push) stays rejected by the amount check", edits: [del('                require(OpTxInputScriptSigSubstr(k, 0, 1) == byte[](0x08));\n')] },
   { id: 'IF110', file: F, hold: { [T_MR]: ['NIX7'] }, note: "merge: the exit's pushed n is m. DEFENCE IN DEPTH with the exit's own check of the entry's push (KobCondPair, cond-pair-rpt CR7): an entry merging m != n stays rejected by the exit (NIX7, judged at the exit); IF110c removes both", edits: [del(PUSH_M)] },

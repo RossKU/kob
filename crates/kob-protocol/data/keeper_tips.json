@@ -1,56 +1,56 @@
 {
   "KCC20KaspaCom_0_2_5": {
-    "refundFee": "6206000",
-    "refundTip": "12500000",
-    "updateFee": "1004200",
-    "keeperTip": "2100000"
+    "refundFee": "6261200",
+    "refundTip": "12600000",
+    "updateFee": "1059400",
+    "keeperTip": "2200000"
   },
   "KCC20P2": {
-    "refundFee": "1679600",
-    "refundTip": "3400000",
-    "updateFee": "1004200",
-    "keeperTip": "2100000"
+    "refundFee": "1734800",
+    "refundTip": "3500000",
+    "updateFee": "1059400",
+    "keeperTip": "2200000"
   },
   "KCC20PublicMint": {
-    "refundFee": "1901800",
-    "refundTip": "3900000",
-    "updateFee": "1004200",
-    "keeperTip": "2100000"
+    "refundFee": "1957000",
+    "refundTip": "4000000",
+    "updateFee": "1059400",
+    "keeperTip": "2200000"
   },
   "KCC20Ref": {
-    "refundFee": "1678600",
-    "refundTip": "3400000",
-    "updateFee": "1004200",
-    "keeperTip": "2100000"
+    "refundFee": "1733800",
+    "refundTip": "3500000",
+    "updateFee": "1059400",
+    "keeperTip": "2200000"
   },
   "KCC20Ref_16x16": {
-    "refundFee": "3464800",
-    "refundTip": "7000000",
-    "updateFee": "1004200",
-    "keeperTip": "2100000"
+    "refundFee": "3520000",
+    "refundTip": "7100000",
+    "updateFee": "1059400",
+    "keeperTip": "2200000"
   },
   "KCC20Ref_4x5": {
-    "refundFee": "1873400",
-    "refundTip": "3800000",
-    "updateFee": "1004200",
-    "keeperTip": "2100000"
+    "refundFee": "1928600",
+    "refundTip": "3900000",
+    "updateFee": "1059400",
+    "keeperTip": "2200000"
   },
   "KCC20Ref_8x8": {
-    "refundFee": "2365600",
-    "refundTip": "4800000",
-    "updateFee": "1004200",
-    "keeperTip": "2100000"
+    "refundFee": "2420800",
+    "refundTip": "4900000",
+    "updateFee": "1059400",
+    "keeperTip": "2200000"
   },
   "KronToken2433": {
-    "refundFee": "1464800",
-    "refundTip": "3000000",
-    "updateFee": "901000",
-    "keeperTip": "1900000"
+    "refundFee": "1519600",
+    "refundTip": "3100000",
+    "updateFee": "955800",
+    "keeperTip": "2000000"
   },
   "KronToken2732": {
-    "refundFee": "1524600",
-    "refundTip": "3100000",
-    "updateFee": "901000",
-    "keeperTip": "1900000"
+    "refundFee": "1579400",
+    "refundTip": "3200000",
+    "updateFee": "955800",
+    "keeperTip": "2000000"
   }
 }

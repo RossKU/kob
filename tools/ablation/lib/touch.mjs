@@ -16,7 +16,7 @@
 // mintouch (n >= minTouch base units),
 // slope (== 0), cltv (tx.daa >= exposed + minRestDaa), interval / active / tokdaa (the three exposure terms),
 // tkcov (the custody carries the token's covenant id), owner (the custody is owned by the evidence ask, scheme
-// covenant id).
+// covenant id), tktpl / tkp2sh (the custody is a holder UTXO of the token's program: template hash, P2SH; the other kept).
 import { rep, rx, rxDel } from './edits.mjs';
 
 const TPL_END = '        return rs.slice(pre, pre + stLen);\n    }\n';
@@ -66,7 +66,15 @@ const CHECKS = {
   tkcov: { note: 'the custody input tk carries the token covenant id', edits: f => [rxDel(f, /^\s*require\(OpInputCovenantId\(tk\) == tokenCovId\);$/m)] },
   owner: {
     note: 'the custody input tk is owned by the evidence ask (owner = its covenant id, scheme covenant id)',
-    edits: f => [rxDel(f, /^\s*require\(OpTxInputScriptSigSubstr\(tk, end, end \+ \d+\) == [^\n]*\);$/m)],
+    edits: f => [rxDel(f, /^\s*require\(ts\.slice\(\d+, \d+\) == byte\[\]\(OpInputCovenantId\(ev\)\) \+ [^\n]*\);$/m)],
+  },
+  tktpl: {
+    note: "the custody input tk is a holder UTXO of the token's program (template hash; P2SH kept)",
+    edits: f => [rep(TPL_END, TPL_END + NO_HASH), rx(f, /tplState\(tk, ([^,]+), ([^,]+), ([^,]+), [^)]+\)/, m => `tplStateNoHash(tk, ${m[1]}, ${m[2]}, ${m[3]})`)],
+  },
+  tkp2sh: {
+    note: 'the custody input tk is the P2SH of the holder redeem script read (template hash kept)',
+    edits: f => [rep(TPL_END, TPL_END + NO_P2SH), rx(f, /tplState\(tk, /, 'tplStateNoP2sh(tk, ')],
   },
 };
 

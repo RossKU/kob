@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "id": "7047fc189b70b6bdbd6fb361751f6c185af57bea68f982d833ecf78a8e628dda",
+  "id": "565ec0c550bf3e4c1ab9892c510a7a814a1828dc69fe35b4239b5762a6eeb12e",
   "generator": {
     "name": "argentc",
     "version": "0.1.0"
@@ -9,7 +9,7 @@
   "dependencies": [
     {
       "app": "KOBOrders",
-      "artifact_id": "173c7c979dd747316aacbf6e93ec04890a4256f043be94d148b943e05b71f127"
+      "artifact_id": "66b1efc12020d0c31a921783208dd705bc39c2ad56e8a60c2d01d38cc4920b3e"
     },
     {
       "app": "KOBOrdersKron",

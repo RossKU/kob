@@ -23,8 +23,8 @@ describe('stop-market', () => {
     const s = askState(plan.states[0]!);
     expect(s).toMatchObject({
       maker: MAKER_PK, tokenCovId: env.token.covenantId, tokenTplHash: env.token.templateHash, scale: '1000', amountLeft: '10000',
-      tip: '0', activeFrom: '0', expiryDaa: GTC.toString(), refundTip: '3400000', tpPrice: '0', stopPrice: '230000000',
-      slipBps: '300', bandDaa: '300', keeperTip: '2100000', minRestDaa: '50', armed: '0',
+      tip: '0', activeFrom: '0', expiryDaa: GTC.toString(), refundTip: '3500000', tpPrice: '0', stopPrice: '230000000',
+      slipBps: '300', bandDaa: '300', keeperTip: '2200000', minRestDaa: '50', armed: '0',
       trailStep: '0', trailGap: '0', trailWait: '0', parent: '0'.repeat(64), rptPrice: '0', rptUntil: '0',
     });
     // the minimum fill is worth 10 KAS at the stop (ceil(10 / 2.3 tokens) = 4348 base units); the trigger threshold defaults to it
@@ -38,7 +38,7 @@ describe('stop-market', () => {
     expect(recovered[0]!.value).toBe(CARRIER.toString());
     const d = plan.disclosure!;
     expect(d).toMatchObject({
-      side: 'sell', tokenAmount: 10_000n, scale: 1_000n, minFill: 4_348n, minTouch: 4_348n, tokensEscrowed: 10_000n, tip: 0n, refundTip: 3_400_000n, keeperTip: 2_100_000n,
+      side: 'sell', tokenAmount: 10_000n, scale: 1_000n, minFill: 4_348n, minTouch: 4_348n, tokensEscrowed: 10_000n, tip: 0n, refundTip: 3_500_000n, keeperTip: 2_200_000n,
       // 230 KAS - 23 000 sompi per bps * 300 = 223.1 KAS: the worst the sell can get; it starts at the stop
       limitPrice: 223_100_000n, worstPrice: 223_100_000n, expectedPrice: 230_000_000n, allInPrice: 223_100_000n, allInTotal: 2_231_000_000n,
       kasLocked: 2n * CARRIER,
@@ -50,7 +50,7 @@ describe('stop-market', () => {
     ]);
     expect(d.expiry).toMatchObject({ kind: 'gtc', daa: GTC, deadlineUnixSeconds: null });
     expect(d.notes).toEqual(expect.arrayContaining(['stopTrigger', 'stopAuction', 'triggerExposure', 'keeperReserve', 'carrierReturned']));
-    expect(plan.cond).toMatchObject({ type: 'stopMarket', keeper: { tip: 2_100_000n, expectedUpdates: 1, reserve: 2_100_000n, fundedFrom: 'carrier' } });
+    expect(plan.cond).toMatchObject({ type: 'stopMarket', keeper: { tip: 2_200_000n, expectedUpdates: 1, reserve: 2_200_000n, fundedFrom: 'carrier' } });
     expect(plan.cond!.legs).toMatchObject({ stop: 230_000_000n, stopWorst: 223_100_000n, slipBps: 300, bandDaa: 300n, limit: null, takeProfit: null, minTouch: 4_348n });
   });
 
@@ -75,12 +75,12 @@ describe('stop-market', () => {
     const { plan, recovered } = planOk(env, { type: 'stopMarket', side: 'buy', amount: 10n * TOK, stop: 260_000_000n });
     const s = bidState(plan.states[0]!);
     expect(s).toMatchObject({
-      extensionCommitment: env.token.extensionCommitment, tpPrice: '0', stopPrice: '260000000', slipBps: '300', bandDaa: '300', keeperTip: '2100000',
+      extensionCommitment: env.token.extensionCommitment, tpPrice: '0', stopPrice: '260000000', slipBps: '300', bandDaa: '300', keeperTip: '2200000',
       minTouch: '3847', minFill: '3847', armed: '0', amountLeft: '10000', deliveryCarrier: CARRIER.toString(), tip: '0',
     });
     // 10 tokens at the worst price 260 KAS + 26 000 * 300 = 267.8 KAS; three fills funded (ceil(10000 / 3847) = 3); the keeper's arm on top
     const ceiling = 260_000_000n + 26_000n * 300n;
-    expect(BigInt(recovered[0]!.value)).toBe(10n * ceiling + 3n * CARRIER + 2_100_000n);
+    expect(BigInt(recovered[0]!.value)).toBe(10n * ceiling + 3n * CARRIER + 2_200_000n);
     // the escrow part is exactly kob-wasm condBidEscrow (the spend of the whole amount at the worst leg, rounded down, plus the carriers)
     expect(env.kob.condBidEscrow(plan.states[0]!, 3n)).toBe(10n * ceiling + 3n * CARRIER);
     expect(recovered[0]!.custody).toBeNull();
@@ -89,9 +89,9 @@ describe('stop-market', () => {
     expect(d.carriers).toEqual([
       { kind: 'escrow', amount: 10n * ceiling, count: 1 },
       { kind: 'deliveryCarrier', amount: CARRIER, count: 3 },
-      { kind: 'keeperReserve', amount: 2_100_000n, count: 1 },
+      { kind: 'keeperReserve', amount: 2_200_000n, count: 1 },
     ]);
-    expect(d.kasLocked).toBe(10n * ceiling + 3n * CARRIER + 2_100_000n);
+    expect(d.kasLocked).toBe(10n * ceiling + 3n * CARRIER + 2_200_000n);
   });
 
   it('buy: a tip raises the all-in ceiling and the escrow; maxFills sets the delivery carriers', () => {
@@ -191,7 +191,7 @@ describe('trailing stop', () => {
     expect(askState(plan.states[0]!)).toMatchObject({ trailStep: '1000000', trailGap: '5000000', trailWait: '6000', stopPrice: '230000000', tpPrice: '0', armed: '0' });
     expect(plan.cond!.trail).toEqual({ step: 1_000_000n, gap: 5_000_000n, waitDaa: 6_000n, waitSeconds: 600n, maxUpdatesPerDay: 144n, expectedUpdates: 20 });
     // 20 trail updates plus the arm: 21 x 0.021 KAS, inside the 10 KAS carrier (nothing extra is locked)
-    expect(plan.cond!.keeper).toEqual({ tip: 2_100_000n, expectedUpdates: 21, reserve: 44_100_000n, fundedFrom: 'carrier' });
+    expect(plan.cond!.keeper).toEqual({ tip: 2_200_000n, expectedUpdates: 21, reserve: 46_200_000n, fundedFrom: 'carrier' });
     expect(plan.disclosure!.kasLocked).toBe(2n * CARRIER);
     expect(plan.disclosure!.notes).toEqual(expect.arrayContaining(['trailing', 'keeperReserve']));
   });
@@ -203,8 +203,8 @@ describe('trailing stop', () => {
     expect(bidState(plan.states[0]!)).toMatchObject({ trailStep: '1000000', trailGap: '5000000', trailWait: '3000' });
     const ceiling = 267_800_000n;
     // 5 tokens with a minimum fill of 3847 base units: at most two fills, two carriers
-    expect(BigInt(recovered[0]!.value)).toBe(5n * ceiling + 2n * CARRIER + 11n * 2_100_000n);
-    expect(plan.disclosure!.carriers).toContainEqual({ kind: 'keeperReserve', amount: 2_100_000n, count: 11 });
+    expect(BigInt(recovered[0]!.value)).toBe(5n * ceiling + 2n * CARRIER + 11n * 2_200_000n);
+    expect(plan.disclosure!.carriers).toContainEqual({ kind: 'keeperReserve', amount: 2_200_000n, count: 11 });
   });
 
   it('a take-profit caps the trail (trailing OCO)', () => {
@@ -262,7 +262,7 @@ describe('OCO', () => {
   it('sell: ONE KobCondAsk carries both legs; the disclosure spans them', () => {
     const { plan, recovered } = planOk(makeEnv(), { type: 'oco', side: 'sell', amount: 10n * TOK, takeProfit: 300_000_000n, stop: 230_000_000n });
     expect(recovered).toHaveLength(1);
-    expect(askState(plan.states[0]!)).toMatchObject({ tpPrice: '300000000', stopPrice: '230000000', slipBps: '300', bandDaa: '300', keeperTip: '2100000', armed: '0' });
+    expect(askState(plan.states[0]!)).toMatchObject({ tpPrice: '300000000', stopPrice: '230000000', slipBps: '300', bandDaa: '300', keeperTip: '2200000', armed: '0' });
     const d = plan.disclosure!;
     expect(d).toMatchObject({ limitPrice: 300_000_000n, worstPrice: 223_100_000n, expectedPrice: null, kasLocked: 2n * CARRIER });
     expect(d.notes).toEqual(expect.arrayContaining(['oco', 'partialFillsKeepLegs']));
@@ -272,7 +272,7 @@ describe('OCO', () => {
     const { plan, recovered } = planOk(makeEnv(), { type: 'oco', side: 'buy', amount: 10n * TOK, takeProfit: 200_000_000n, stop: 260_000_000n });
     expect(bidState(plan.states[0]!)).toMatchObject({ tpPrice: '200000000', stopPrice: '260000000' });
     const ceiling = 267_800_000n;
-    expect(BigInt(recovered[0]!.value)).toBe(10n * ceiling + 3n * CARRIER + 2_100_000n);
+    expect(BigInt(recovered[0]!.value)).toBe(10n * ceiling + 3n * CARRIER + 2_200_000n);
     expect(plan.disclosure).toMatchObject({ limitPrice: 200_000_000n, worstPrice: ceiling });
   });
 
@@ -417,7 +417,7 @@ describe('guards and funding', () => {
     const market = market8x8();
     const env = { ...makeEnv({ market, funding: [3n * KAS, 4n * KAS, 15n * KAS] }), tokenUtxos: [tokenUtxo(market, 100n * TOK)] };
     const { plan } = planOk(env, sellStop);
-    expect(askState(plan.states[0]!)).toMatchObject({ refundTip: '4800000', keeperTip: '2100000', tokenTplHash: market.templateHash });
+    expect(askState(plan.states[0]!)).toMatchObject({ refundTip: '4900000', keeperTip: '2200000', tokenTplHash: market.templateHash });
     expect(plan.built!.tx.inputs.length).toBeGreaterThan(2);
   });
 });

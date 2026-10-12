@@ -196,7 +196,9 @@ contract KobCondBid(
     // TRIGGER EVIDENCE, as in KobCondAsk: input ev is a plain resting KobAsk / KobBid of this token
     // that this transaction fills (8-byte fill argument n > 0 at sigscript[1..9)); same scale, slope 0,
     // n >= minTouch, exposed >= minRestDaa DAA before this transaction (CLTV); read,
-    // never consumed. An ask's custody is the token input tk owned by the ask's covenant id.
+    // never consumed. An ask's custody is the token input tk owned by the ask's covenant id, a holder UTXO
+    // of this token's program (template hash + P2SH: an input of another program carrying tokenCovId never
+    // stands in for it).
     // State offsets: KobAsk tokenCovId[34..66) scale[118..126) price[136..144)
     // activeFrom[163..171) interval[190..198) slope[208..216); KobBid tokenCovId[34..66)
     // scale[151..159) price[169..177) activeFrom[196..204) interval[241..249)
@@ -253,8 +255,8 @@ contract KobCondBid(
         if (act > exposed) { exposed = act; }
         if (tk >= 0) {
             require(OpInputCovenantId(tk) == tokenCovId);
-            int end = OpTxInputScriptSigLen(tk) + 10 - 112 - tplSuffixLen;
-            require(OpTxInputScriptSigSubstr(tk, end, end + 34) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
+            byte[] ts = tplState(tk, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
+            require(ts.slice(10, 44) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
             int td = OpTxInputDaaScore(tk);
             if (td > exposed) { exposed = td; }
         }
@@ -334,7 +336,10 @@ contract KobCondBid(
 
         if (rearm) {
             // The entry takes the n base units into its custody (it pins that) and prefund(n); the maker
-            // gets the profit at output i: the entry's proceeds for n minus the buy-back.
+            // gets the profit at output i: the entry's proceeds for n minus the buy-back. The merge argument
+            // -(i * 2^53 + n) names this input and n only while n < 2^53 (a look-alike exit of 2^53 units or more
+            // would read as the merge of another input).
+            require(n < MERGE_K);
             int pin = OpCovInputIdx(parent, 0);
             // the entry's sigscript starts with the 8-byte push of its merge argument -(i * 2^53 + n) < 0: its
             // fill arguments are >= 0, close starts with its dispatch tag, cancel with a 65-byte signature, and

@@ -30,6 +30,31 @@ const T_TIP = 'v3_buy_tip';
 const T_MB = 'v3_buy_merge_base';
 const T_MP = 'v3_buy_merge_push';
 
+// The touch batteries run on the 8/8 variant (T_BS ... T_AA) and on the 3/3 reference program KCC20Ref, the tradable
+// KCC-20 program (their `_3x3` twins): every run of a touch test fn below is expected on both programs. NTK16 (the
+// custody of a second ask filled in the same transaction) needs more than 3 token inputs / outputs of one covenant and
+// runs on 8/8 only.
+const ON3 = Object.fromEntries([T_BS, T_BA, T_BT, T_AF, T_AA].map(t => [t, `${t}_3x3`]));
+const NOT_ON3 = new Set(['NTK16']);
+/** A run / hold map with each touch test fn's ids also expected on its 3/3 twin. */
+function on3(run) {
+  const o = { ...run };
+  for (const [t, ids] of Object.entries(run)) {
+    const k = ON3[t] ? ids.filter(id => !NOT_ON3.has(id)) : [];
+    if (k.length) o[ON3[t]] = k;
+  }
+  return o;
+}
+/** touchMutations runs, every one on both programs. */
+function on3Runs(runs) {
+  return Object.fromEntries(
+    Object.entries(runs).map(([c, r]) => [
+      c,
+      r.run || r.hold ? { ...r, ...(r.run && { run: on3(r.run) }), ...(r.hold && { hold: on3(r.hold) }) } : on3(r),
+    ]),
+  );
+}
+
 export const mutations = [
   // ---- KobCondBid
   {
@@ -213,10 +238,11 @@ export const mutations = [
     file: 'KobIfdAsk',
     test: T_RPT,
     expect: ['NRPB6'],
-    note: 'booking time t <= lockTime',
+    note: "booking: the exit's rptUntil counts from the entry UTXO's DAA (its last activity), never from the filler's t (the cycle dated by t instead)",
     edits: [
-      rep(`                    require(tx.daa >= t);
-                    int utxoDaa`, '                    int utxoDaa'),
+      rep(`                    int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
+                    xUntil`, `                    int idleEnd = t + MAX_IDLE;
+                    xUntil`),
     ],
   },
   {
@@ -331,7 +357,7 @@ export const mutations = [
     file: 'KobCondBid',
     fn: 'function touchBid(int ev) : int {',
     what: 'touchBid (settle, buy-stop leg)',
-    runs: {
+    runs: on3Runs({
       push08: { [T_BS]: ['NTB10'] },
       npos: { run: { [T_BS]: ['NTB11b'] }, inputOnly: ['NTB11b'] },
       tpl: { [T_BS]: ['NTB17'] },
@@ -343,12 +369,12 @@ export const mutations = [
       cltv: { [T_BS]: ['NTB01', 'NTB03', 'NTB04'] },
       interval: { [T_BS]: ['NTB04'] },
       active: { [T_BS]: ['NTB03'] },
-    },
+    }),
   }),
   {
     id: 'TB-rule',
     file: 'KobCondBid',
-    run: { [T_BS]: ['NTB19'], [T_NEG]: ['NB13'] },
+    run: on3({ [T_BS]: ['NTB19'], [T_NEG]: ['NB13'] }),
     note: 'settle, unarmed buy-stop leg: the evidence bid quotes >= stopPrice',
     edits: [rxDel('    entry settle(', /^\s*require\(rp >= stopPrice\);$/m)],
   },
@@ -357,7 +383,7 @@ export const mutations = [
     file: 'KobCondBid',
     fn: 'function touch(int ev, int tk) : (int, int) {',
     what: 'touch (update: arm on a bid, trail on an ask)',
-    runs: {
+    runs: on3Runs({
       push08: { [T_BA]: ['NTV10', 'NTV11'], [T_BT]: ['NTW10'] },
       npos: { [T_BT]: ['NTW11'] },
       tpl: { [T_BA]: ['NTV17'], [T_BT]: ['NTW17'] },
@@ -372,21 +398,21 @@ export const mutations = [
       tokdaa: { [T_BT]: ['NTW02'] },
       tkcov: { [T_BT]: ['NTW02b'] },
       owner: { [T_BT]: ['NTW15', 'NTW16'] },
-    },
+      tktpl: { run: { [T_BT]: ['NTW02c'] }, inputOnly: ['NTW02c'] },
+      tkp2sh: { run: { [T_BT]: ['NTW02d'] }, inputOnly: ['NTW02d'] },
+    }),
   }),
   {
     id: 'TV-rule',
     file: 'KobCondBid',
-    test: T_BA,
-    expect: ['NTV19'],
+    run: on3({ [T_BA]: ['NTV19'] }),
     note: 'update, arm: the evidence bid quotes >= stopPrice',
     edits: [rxDel('    entry update(int ev, int tk) {', /^\s*require\(rp >= stopPrice\);$/m)],
   },
   {
     id: 'TW-k',
     file: 'KobCondBid',
-    test: T_BT,
-    expect: ['NTW19', 'NTW19b'],
+    run: on3({ [T_BT]: ['NTW19', 'NTW19b'] }),
     note: 'update, trail: the evidence ask justifies k >= 1 steps (k = 0 drains keeperTip and resets trailWait, k < 0 moves the stop up)',
     edits: [del('            require(k >= 1);\n')],
   },
@@ -409,7 +435,7 @@ export const mutations = [
   {
     id: 'TW-step',
     file: 'KobCondBid',
-    hold: { [T_NEG]: ['NB24'], [T_BA]: ['NTV06'] },
+    hold: on3({ [T_NEG]: ['NB24'], [T_BA]: ['NTV06'] }),
     note: 'update, trail: trailStep > 0 (a non-trailing order divides by trailStep = 0 and fails anyway)',
     edits: [del('            require(trailStep > 0);\n')],
   },
@@ -424,7 +450,7 @@ export const mutations = [
   {
     id: 'TV-own',
     file: 'KobCondBid',
-    run: { [T_BA]: ['NTV23'], [T_BT]: ['NTW23'], [T_LC]: ['NS12'] },
+    run: on3({ [T_BA]: ['NTV23'], [T_BT]: ['NTW23'], [T_LC]: ['NS12'] }),
     note: 'update spends no token input owned by the order (bounded scan; the evidence fill brings foreign token inputs)',
     edits: [rxDel('    entry update(int ev, int tk) {', /^\s*noStrays\(selfId\);$/m)],
   },
@@ -434,7 +460,7 @@ export const mutations = [
     file: 'KobIfdAsk',
     fn: 'function touchAsk(int ev, int tk) : int {',
     what: 'touchAsk (sell-stop entry)',
-    runs: {
+    runs: on3Runs({
       push08: { [T_AF]: ['NTK10'], [T_AA]: ['NTL10'] },
       npos: { [T_AF]: ['NTK11'], [T_AA]: ['NTL11'] },
       tpl: { [T_AF]: ['NTK17'], [T_AA]: ['NTL17'] },
@@ -449,7 +475,9 @@ export const mutations = [
       tokdaa: { [T_AF]: ['NTK02'], [T_AA]: ['NTL02'] },
       tkcov: { [T_AF]: ['NTK02b'], [T_AA]: ['NTL02b'] },
       owner: { [T_AF]: ['NTK15', 'NTK16'], [T_AA]: ['NTL15', 'NTL16'] },
-    },
+      tktpl: { run: { [T_AF]: ['NTK02c'], [T_AA]: ['NTL02c'] }, inputOnly: ['NTK02c', 'NTL02c'] },
+      tkp2sh: { run: { [T_AF]: ['NTK02d'], [T_AA]: ['NTL02d'] }, inputOnly: ['NTK02d', 'NTL02d'] },
+    }),
   }),
   {
     id: 'TK-auc',
@@ -467,23 +495,21 @@ export const mutations = [
   {
     id: 'TK-rule',
     file: 'KobIfdAsk',
-    test: T_AF,
-    expect: ['NTK19'],
+    run: on3({ [T_AF]: ['NTK19'] }),
     note: 'settle, unarmed stop entry: the evidence ask quotes <= entryStop',
     edits: [rx('    entry settle(', /require\(touchAsk\(ev, tk\) <= entryStop\);/, 'require(touchAsk(ev, tk) >= 0);')],
   },
   {
     id: 'TL-rule',
     file: 'KobIfdAsk',
-    test: T_AA,
-    expect: ['NTL19'],
+    run: on3({ [T_AA]: ['NTL19'] }),
     note: 'update: the evidence ask quotes <= entryStop',
     edits: [rx('    entry update(int ev, int tk) {', /require\(touchAsk\(ev, tk\) <= entryStop\);/, 'require(touchAsk(ev, tk) >= 0);')],
   },
   {
     id: 'TL-own',
     file: 'KobIfdAsk',
-    run: { [T_AA]: ['NTL23'], [T_LC]: ['NI22'] },
+    run: on3({ [T_AA]: ['NTL23'], [T_LC]: ['NI22'] }),
     note: 'update spends no token input owned by the entry (bounded scan; the evidence fill brings foreign token inputs)',
     edits: [del('        noStrays(selfId, -1);\n')],
   },
@@ -491,16 +517,14 @@ export const mutations = [
   {
     id: 'TL-amount',
     file: 'KobIfdAsk',
-    test: T_AA,
-    expect: ['NTL24'],
+    run: on3({ [T_AA]: ['NTL24'] }),
     note: 'update: the entry has a positive amount to fill (an empty repeating entry would pay keeperTip for a useless arm)',
     edits: [rxDel('    entry update(int ev, int tk) {', /^\s*require\(amountLeft > 0\);$/m)],
   },
   {
     id: 'TL-limit',
     file: 'KobIfdAsk',
-    test: T_AA,
-    expect: ['NTL25'],
+    run: on3({ [T_AA]: ['NTL25'] }),
     note: "update: the stop is on the limit's side (entryStop >= price; else no fill can follow the arm)",
     edits: [rxDel('    entry update(int ev, int tk) {', /^\s*require\(entryStop >= price\);$/m)],
   },
@@ -554,6 +578,14 @@ export const mutations = [
     inputOnly: ['NV3CB40'],
     note: 'repeat merge: the entry pin\'s fill argument must start with the 8-byte push 0x08 (a non-minimal 9-byte push is refused)',
     edits: [del('            require(OpTxInputScriptSigSubstr(pin, 0, 1) == byte[](0x08));')],
+  },
+  {
+    id: 'CB-rearm-mergek',
+    file: 'KobCondBid',
+    test: T_MP,
+    expect: ['NV3CB43'],
+    note: 're-arm: n < MERGE_K (2^53), so the merge argument -(self * 2^53 + n) names this input and n (a TP fill of 2^53 + m would read as the merge of the booked exit at self + 1)',
+    edits: [del('            require(n < MERGE_K);\n')],
   },
   // ---- KobIfdAsk
   {
@@ -611,6 +643,14 @@ export const mutations = [
     inputOnly: ['NV3IA40'],
     note: 'repeat merge: the exit\'s fill argument (input k) must start with the 8-byte push 0x08 (a non-minimal 9-byte push is refused)',
     edits: [del('                require(OpTxInputScriptSigSubstr(k, 0, 1) == byte[](0x08));')],
+  },
+  {
+    id: 'IA-merge-scale',
+    file: 'KobIfdAsk',
+    test: T_RPT,
+    expect: ['NRPB36'],
+    note: "repeat merge: the committed exit quotes at the entry's scale (an exit at scale 999 refused: the two would round the merge differently)",
+    edits: [del('                require(int(byte[8](st.slice(151, 159))) == scale);\n')],
   },
   // ---- 2026-10-06: the refund of an empty (repeating) entry
   {

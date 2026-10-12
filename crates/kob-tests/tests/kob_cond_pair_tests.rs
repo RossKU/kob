@@ -166,9 +166,20 @@ pub fn cancel_of(c: CondPairState, pa: TemplateId, pb: TemplateId, strays: Vec<T
     })
 }
 
+/// The attack mixes: the two mixed program pairs on the 8 / 8 KCC-20 program and on the 3 / 3 one (KCC20Ref, the tradable
+/// KCC-20 program on mainnet). A scenario whose transaction exceeds the 3 / 3 slots is skipped there (`SKIP-SLOTS`):
+/// NC18t3..7 and NC19t (stray-scan slots beyond the third input), PC18t (eight T inputs), and 4 KCC-20 outputs in PC16a1 /
+/// PC16b1 (two stops on one mode-1 evidence), NC123 (KRON A) and NC59 (KCC / KCC).
+pub fn mixes() -> Vec<(TemplateId, TemplateId)> {
+    [mixed_pairs(), mixed_pairs_33()].concat()
+}
+/// KCC-20 / KCC-20 on the 3 / 3 program.
+pub const KK33: (TemplateId, TemplateId) = (TemplateId::Kcc20Ref, TemplateId::Kcc20Ref);
+
 pub fn suite(mixes: &[(TemplateId, TemplateId)], f: impl Fn(&Run, TemplateId, TemplateId)) {
     let subs = Subs::compile();
     for (pa, pb) in mixes {
+        ph::SLOT_GATE.store(true, std::sync::atomic::Ordering::Relaxed);
         let r = Run { subs: &subs, pair: pair_name(*pa, *pb) };
         f(&r, *pa, *pb);
     }
@@ -176,59 +187,73 @@ pub fn suite(mixes: &[(TemplateId, TemplateId)], f: impl Fn(&Run, TemplateId, Te
 
 // ---------------------------------------------------------------- positives
 
+/// A positive of an honest build, skipped (`SKIP-SLOTS`) where the 3 / 3 KCC-20 program cannot carry its shape.
+fn ok_a(r: &Run, name: &str, a: Action) {
+    match try_built(a) {
+        Some(b) => r.ok(&Ed::new(name, &b)),
+        None => println!("SKIP-SLOTS {name} {} (build)", r.pair),
+    }
+}
+fn ok_b(r: &Run, name: &str, b: Batch) {
+    ok_a(r, name, Action::Batch(b));
+}
+
 fn positives(r: &Run, pa: TemplateId, pb: TemplateId) {
     // TP / limit leg (no evidence), both sides, rest and sold out
-    r.ok(&edb("PC01 ask take-profit leg, rest", tp_inv(ca(pa, pb), pa, pb, 4 * WHOLE)));
-    r.ok(&edb("PC02 ask take-profit leg, sold out", tp_inv(cleft(ca(pa, pb), 4 * WHOLE), pa, pb, 4 * WHOLE)));
-    r.ok(&edb("PC03 bid limit leg, rest", tp_inv(cb(pa, pb), pa, pb, 4 * WHOLE)));
-    r.ok(&edb("PC04 bid limit leg, done", tp_inv(cleft(cb(pa, pb), 4 * WHOLE), pa, pb, 4 * WHOLE)));
+    ok_b(r, "PC01 ask take-profit leg, rest", tp_inv(ca(pa, pb), pa, pb, 4 * WHOLE));
+    ok_b(r, "PC02 ask take-profit leg, sold out", tp_inv(cleft(ca(pa, pb), 4 * WHOLE), pa, pb, 4 * WHOLE));
+    ok_b(r, "PC03 bid limit leg, rest", tp_inv(cb(pa, pb), pa, pb, 4 * WHOLE));
+    ok_b(r, "PC04 bid limit leg, done", tp_inv(cleft(cb(pa, pb), 4 * WHOLE), pa, pb, 4 * WHOLE));
     // stop armed in the fill, both modes, both sides
-    r.ok(&edb("PC05 sell stop armed in the fill, mode 0", stop_ev0(true, pa, pb)));
-    r.ok(&edb("PC06 buy stop armed in the fill, mode 0", stop_ev0(false, pa, pb)));
-    r.ok(&edb("PC07 sell stop armed in the fill, mode 1", stop_ev1(true, pa, pb)));
-    r.ok(&edb("PC08 buy stop armed in the fill, mode 1", stop_ev1(false, pa, pb)));
+    ok_b(r, "PC05 sell stop armed in the fill, mode 0", stop_ev0(true, pa, pb));
+    ok_b(r, "PC06 buy stop armed in the fill, mode 0", stop_ev0(false, pa, pb));
+    ok_b(r, "PC07 sell stop armed in the fill, mode 1", stop_ev1(true, pa, pb));
+    ok_b(r, "PC08 buy stop armed in the fill, mode 1", stop_ev1(false, pa, pb));
     // an already-armed stop's auction (bandDaa > 0), sold out
     let armed = CondPairState { armed: NOW as i64 - 100, amount_left: 4 * WHOLE, custody: 4 * WHOLE, ..ca(pa, pb) };
-    r.ok(&edb(
+    ok_b(
+        r,
         "PC09 armed stop auction, sold out",
         route(vec![
             cond_pair_leg(armed, pa, pb, OID, 70, 4, 1),
             kbid_leg(TOKEN_COV, pa, MAKER_B, P260, cov(0x91), 72, 10, 4),
             kask_leg(TOKEN_B, pb, MAKER_C, P250, cov(0x92), 74, 10, 4),
         ]),
-    ));
+    );
     // armed stop that trades the whole band at once (bandDaa 0)
     let whole = CondPairState { armed: 1, band_daa: 0, amount_left: 4 * WHOLE, custody: 4 * WHOLE, ..ca(pa, pb) };
-    r.ok(&edb(
+    ok_b(
+        r,
         "PC10 armed stop, whole band at once",
         route(vec![
             cond_pair_leg(whole, pa, pb, OID, 70, 4, 1),
             kbid_leg(TOKEN_COV, pa, MAKER_B, P260, cov(0x91), 72, 10, 4),
             kask_leg(TOKEN_B, pb, MAKER_C, P250, cov(0x92), 74, 10, 4),
         ]),
-    ));
+    );
     // refunds / cancels / kills
-    r.ok(&ed("PC11 ask refund at expiry", refund_of(ca(pa, pb), pa, pb, EXPIRY as u64)));
-    r.ok(&ed("PC12 bid refund at expiry", refund_of(cb(pa, pb), pa, pb, EXPIRY as u64)));
-    r.ok(&ed(
+    ok_a(r, "PC11 ask refund at expiry", refund_of(ca(pa, pb), pa, pb, EXPIRY as u64));
+    ok_a(r, "PC12 bid refund at expiry", refund_of(cb(pa, pb), pa, pb, EXPIRY as u64));
+    ok_a(
+        r,
         "PC13 refund after 90 days idle",
         refund_of(CondPairState { expiry_daa: NO_EXPIRY, ..ca(pa, pb) }, pa, pb, (ODAA + MAX_IDLE) as u64),
-    ));
+    );
     let strays = || vec![tutxo(pa, TOKEN_COV, 76, 3, OID, true), tutxo(pb, TOKEN_B, 77, 5, OID, true)];
-    r.ok(&ed("PC14 ask cancel sweeping strays of both tokens", cancel_of(ca(pa, pb), pa, pb, strays())));
-    r.ok(&ed("PC15 bid cancel sweeping strays of both tokens", cancel_of(cb(pa, pb), pa, pb, strays())));
+    ok_a(r, "PC14 ask cancel sweeping strays of both tokens", cancel_of(ca(pa, pb), pa, pb, strays()));
+    ok_a(r, "PC15 bid cancel sweeping strays of both tokens", cancel_of(cb(pa, pb), pa, pb, strays()));
     // one evidence fill arming two stops (legal by design: the evidence is read, never consumed), both modes, both sides
     for ask in [true, false] {
         let side = if ask { "a" } else { "b" };
         for mode1 in [false, true] {
             let m = if mode1 { 1 } else { 0 };
-            r.ok(&edb(&format!("PC16{side}{m} one evidence fill arms two stops, mode {m}"), two_armed(ask, pa, pb, mode1)));
+            ok_b(r, &format!("PC16{side}{m} one evidence fill arms two stops, mode {m}"), two_armed(ask, pa, pb, mode1));
         }
     }
     // updates: arm and trail without a fill (both modes); OCO is the ask / bid fixtures (tp + stop legs present)
     for (n, a) in pair_scenarios(pa, pb) {
         if n.starts_with("pair.update.") || n == "pair.cond.ask.tp" || n == "pair.cond.bid.limit" {
-            r.ok(&Ed::new(&format!("PC.{n}"), &built(a)));
+            ok_a(r, &format!("PC.{n}"), a);
         }
     }
 }
@@ -273,7 +298,7 @@ fn two_armed(ask: bool, pa: TemplateId, pb: TemplateId, mode1: bool) -> Batch {
 
 #[test]
 fn cond_pair_positives() {
-    suite(&family_mixes(), positives);
+    suite(&[family_mixes().as_slice(), &mixed_pairs_33(), &[KK33]].concat(), positives);
 }
 
 // ---------------------------------------------------------------- settlement (ceil / floor, custody, strays, aliasing)
@@ -425,7 +450,7 @@ fn settlement(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn cond_pair_settlement() {
-    suite(&mixed_pairs(), settlement);
+    suite(&mixes(), settlement);
 }
 
 // ---------------------------------------------------------------- trigger evidence
@@ -605,7 +630,7 @@ fn evidence_ev0(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn cond_pair_evidence_ev0() {
-    suite(&mixed_pairs(), evidence_ev0);
+    suite(&mixes(), evidence_ev0);
 }
 
 fn evidence_ev1(r: &Run, pa: TemplateId, pb: TemplateId) {
@@ -680,7 +705,7 @@ fn evidence_ev1(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn cond_pair_evidence_ev1() {
-    suite(&mixed_pairs(), evidence_ev1);
+    suite(&mixes(), evidence_ev1);
 }
 
 // ---------------------------------------------------------------- evidence: exposure, location, look-alike
@@ -749,6 +774,24 @@ fn evidence_exposure(r: &Run, pa: TemplateId, pb: TemplateId) {
         e.set_entry(bi, "cancel", vec![Arg::Sig(pk(if ask { MAKER_B } else { MAKER_C }))]);
         grind_fill_n(r, &mut e, bi, c_min_b(ask, pa, pb));
         r.bad(&e, i);
+        // the ask / pair evidence's custody stand-ins: the real custody fresh (as NC51), tk named at an OLD input of the
+        // custody token whose redeem bytes read the evidence as owner. NC5H / NC3H a look-alike holder under another
+        // program (template hash), NC5S / NC3S the genuine holder redeem pushed by a non-P2SH input (P2SH). Mode 0: the A
+        // ask of a sell stop (rd), the B ask of a buy stop (evLeg); mode 1: the pair order's custody (rd).
+        for (mode, look) in [(0, true), (0, false), (1, true), (1, false)] {
+            let id = match (mode, look) {
+                (0, true) => format!("NC5H{side} ask evidence custody stood in for by an old look-alike holder"),
+                (0, false) => format!("NC5S{side} ask evidence custody stood in for by an old non-P2SH genuine holder redeem"),
+                (_, true) => format!("NC3H{side} pair evidence custody stood in for by an old look-alike holder"),
+                (_, false) => format!("NC3S{side} pair evidence custody stood in for by an old non-P2SH genuine holder redeem"),
+            };
+            let mut e = edb(&id, if mode == 0 { stop_ev0(ask, pa, pb) } else { stop_ev1(ask, pa, pb) });
+            let i = e.order_in(OID);
+            let tk = e.arg_int(i, 9) as usize;
+            let (j, patch) = old_custody_standin(&mut e, tk, look);
+            e.set_arg(i, 9, Arg::Int(j as i64));
+            r.bad_patched(&e, i, &patch);
+        }
     }
     // NC58 a look-alike template as the A evidence: a P2SH UTXO of the evidence's covenant id whose redeem script carries
     // a genuine-looking KobAsk state at the KobAsk offsets but other prefix / suffix bytes (another template hash); its
@@ -813,7 +856,7 @@ fn grind_fill_n(r: &Run, e: &mut Ed, ai: usize, min: i64) {
 
 #[test]
 fn cond_pair_evidence_exposure() {
-    suite(&mixed_pairs(), evidence_exposure);
+    suite(&mixes(), evidence_exposure);
 }
 
 // ---------------------------------------------------------------- trailing and update encodings
@@ -905,7 +948,7 @@ fn restate_cont(e: &mut Ed, i: usize, f: impl Fn(&mut CondPairState)) {
 
 #[test]
 fn cond_pair_trailing() {
-    suite(&mixed_pairs(), trailing);
+    suite(&mixes(), trailing);
 }
 
 fn updates(r: &Run, pa: TemplateId, pb: TemplateId) {
@@ -1007,7 +1050,7 @@ fn updates(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn cond_pair_updates() {
-    suite(&mixed_pairs(), updates);
+    suite(&mixes(), updates);
 }
 
 // ---------------------------------------------------------------- refunds, cancels
@@ -1077,7 +1120,7 @@ fn cin_refund(e: &Ed) -> usize {
 
 #[test]
 fn cond_pair_lifecycle() {
-    suite(&mixed_pairs(), lifecycle);
+    suite(&mixes(), lifecycle);
 }
 
 // ---------------------------------------------------------------- overflow
@@ -1107,7 +1150,7 @@ fn overflow(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn cond_pair_overflow() {
-    suite(&mixed_pairs(), overflow);
+    suite(&mixes(), overflow);
 }
 
 // ---------------------------------------------------------------- the C1 fake quotes read as evidence
@@ -1246,7 +1289,7 @@ fn fake_quotes(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn cond_pair_evidence_fake_quotes() {
-    suite(&mixed_pairs(), fake_quotes);
+    suite(&mixes(), fake_quotes);
 }
 
 /// Grinds the signature of input `ai` (a maker's cancel) until its sigscript bytes [1..9) read as a fill amount of at
@@ -1291,7 +1334,7 @@ fn evidence_tk(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn cond_pair_evidence_tk() {
-    suite(&family_mixes()[..1], evidence_tk);
+    suite(&[family_mixes()[0], KK33], evidence_tk);
 }
 
 // ---------------------------------------------------------------- the custody: identity, codec, planted inputs
@@ -1394,7 +1437,7 @@ fn custody(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn cond_pair_custody() {
-    suite(&mixed_pairs(), custody);
+    suite(&mixes(), custody);
 }
 
 // ---------------------------------------------------------------- fill parameters, legs, the stop band and auction
@@ -1567,7 +1610,7 @@ fn fills(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn cond_pair_fills() {
-    suite(&mixed_pairs(), fills);
+    suite(&mixes(), fills);
 }
 
 // ---------------------------------------------------------------- the T template source, rests, returns, carriers
@@ -1653,7 +1696,7 @@ fn carriers(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn cond_pair_carriers() {
-    suite(&mixed_pairs(), carriers);
+    suite(&mixes(), carriers);
 }
 
 // ---------------------------------------------------------------- trigger evidence: mode argument, B quote, trail gap / step
@@ -1722,5 +1765,5 @@ fn evidence_misc(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn cond_pair_evidence_misc() {
-    suite(&mixed_pairs(), evidence_misc);
+    suite(&mixes(), evidence_misc);
 }

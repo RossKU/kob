@@ -9,7 +9,9 @@ pragma silverscript ^0.1.0;
 //   - The exit is a KobCondBidKron: exitState is 288 B (EXIT_STATE_LEN 348 with repeat fields), so the exit windows sit
 //     33 bytes earlier than in KobIfdAsk (no extension commitment): stopPrice [190..198), amountLeft [253..261),
 //     armed [262..270) (state offsets); the repeat fields start at 288.
-//   - The evidence ask custody check reads the owner and id_type at state offset 1 of the 46 B state (35 bytes: owner || 0x010208).
+//   - The evidence ask custody check authenticates the custody as a holder UTXO of this token's program (template
+//     hash + P2SH) and reads the owner and id_type at state offset 1 of its 46 B state (35 bytes: owner || 0x010208).
+//   - The merge checks the exit's scale at exitState [118..126) (KobIfdAsk: [151..159)).
 //   - Stray scan: MAX_TOK_IN = 4 (KRON allows 1..4 token inputs per transaction).
 //   - The entry's own state has no token-codec field, so the contSpk windows equal KobIfdAsk's: armed [245..253),
 //     amountLeft [254..262), rptAmount [263..271). KobAsk evidence offsets are unchanged (ask state 243 B).
@@ -128,9 +130,10 @@ contract KobIfdAskKron(
     }
 
     // TRIGGER EVIDENCE: a resting KobAskKron of this token filled in this transaction, with its custody at tk; the
-    // rules are those of KobIfdAsk.touchAsk (same scale, n >= minTouch base units). The custody is identified by its
-    // owner (the ask's covenant id) and id_type 2: the 35 bytes at state offset 1 are owner || 0x01 0x02 0x08 (the
-    // last byte is the amount push opcode). KobAskKron state offsets (as KobAsk): tokenCovId[34..66) scale[118..126)
+    // rules are those of KobIfdAsk.touchAsk (same scale, n >= minTouch base units). The custody is a holder UTXO of
+    // this token's program (template hash + P2SH) identified by its owner (the ask's covenant id) and id_type 2: the 35
+    // bytes at state offset 1 are owner || 0x01 0x02 0x08 (the last byte is the amount push opcode). KobAskKron state
+    // offsets (as KobAsk): tokenCovId[34..66) scale[118..126)
     // price[136..144) activeFrom[163..171) interval[190..198) slope[208..216).
     // Returns the evidence ask's quote.
     function touchAsk(int ev, int tk) : int {
@@ -146,8 +149,8 @@ contract KobIfdAskKron(
         int act = int(byte[8](o.slice(163, 171)));
         if (act > exposed) { exposed = act; }
         require(OpInputCovenantId(tk) == tokenCovId);
-        int end = OpTxInputScriptSigLen(tk) + 1 - 46 - tplSuffixLen;
-        require(OpTxInputScriptSigSubstr(tk, end, end + 35) == byte[](OpInputCovenantId(ev)) + byte[](0x010208));
+        byte[] ts = tplState(tk, tplPrefixLen, 46, tplSuffixLen, tokenTplHash);
+        require(ts.slice(1, 36) == byte[](OpInputCovenantId(ev)) + byte[](0x010208));
         int td = OpTxInputDaaScore(tk);
         if (td > exposed) { exposed = td; }
         require(tx.daa >= exposed + minRestDaa);
@@ -251,6 +254,9 @@ contract KobIfdAskKron(
                 byte[] x = tplState(k, COND_BID_PRE, EXIT_STATE_LEN, COND_BID_SUF, COND_BID_TPL);
                 byte[] st = byte[](exitState);
                 require(x.slice(0, 190) == st.slice(0, 190));
+                // the exit quotes at this entry's scale (exitState [118..126)): both compute the merge's rounded
+                // amounts alike
+                require(int(byte[8](st.slice(118, 126))) == scale);
                 require(x.slice(198, 253) == st.slice(198, 253));
                 require(x.slice(261, 262) == st.slice(261, 262));
                 require(x.slice(270, 288) == st.slice(270, 288));

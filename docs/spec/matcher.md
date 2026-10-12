@@ -590,7 +590,9 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   if-done (`KobIfd*`) and pair orders (`KobPair` included) are never evidence of a KAS-quoted order.
 - **Covenant arguments.** `ev` is the input index of the evidence order; `tk` (ask evidence) is the
   input index of the ask's custody token UTXO: the input of the stop's token owned by the ask's
-  covenant id (KCC-20 owner scheme 0x04, KRON `id_type` 2), whose DAA score the exposure reads.
+  covenant id (KCC-20 owner scheme 0x04, KRON `id_type` 2), whose DAA score the exposure reads. It is
+  authenticated as a holder UTXO of the token's program (template hash `tokenTplHash` + P2SH of its redeem
+  script, like the order's own custody), so no other input carrying the token's covenant id stands in for it.
   `KobCondAsk.update(ev, tk)` and `KobCondBid.update(ev, tk)` read an ask for `tk ≥ 0` and a bid for
   `tk = −1`; `KobCondAsk.settle` and `KobIfdAsk.settle` / `update` take `(ev, tk)` of an ask;
   `KobCondBid.settle`, `KobIfdBid.fill` and `KobIfdBid.update` take `ev` of a bid. The builders
@@ -715,7 +717,8 @@ token's family, authenticated by template hash (the evidence templates `KobAsk`,
 build constants of both pair conditionals), each running its fill entry (8-byte first push `n > 0`) in this transaction,
 each with `slope = 0`, a scale equal to its token's scale (A: the pair's `scale(A)`; B: `scale(B)`) and exposed for at
 least `minRestDaa` (§4.2, per order: `max(UTXO DAA + interval, activeFrom, custody DAA)`); `tk` is the custody input of
-whichever of the two is an ask (owner = that ask's covenant id with the covenant marker). Thresholds: `n_A ≥ minTouch`
+whichever of the two is an ask (a holder UTXO of that token's program, template hash + P2SH, owner = that ask's covenant
+id with the covenant marker). Thresholds: `n_A ≥ minTouch`
 (base units of A) and `n_B ≥ ⌈minTouch·X/scale(A)⌉` (base units of B), X the order's current stop (`stopPrice`, or
 `entryStop`). With the quotes `a` of A and `b` of B (sompi per whole token) the implied rate is `r = a·scale(B)/b` B base
 units per whole A; the covenant compares exactly through `quoteOf(x, b, scale(B), c)` (no 128-bit arithmetic):
@@ -830,11 +833,13 @@ then has no custody and keeps the custody carrier in its own UTXO) and waits for
 k MUST spend its entry in the same transaction in **merge mode**: the entry's `fill` / `settle`
 with the 8-byte first argument `−(k·2^53 + m)` (sign-magnitude script number; `k` an input index below 1024,
 `0 < m < 2^53`). Both sides check the other's signature script: the exit requires that the entry's starts with the
-8-byte push (first byte `0x08`) of exactly `−(k·2^53 + m)` for its own index k and fill m; the entry requires that the
+8-byte push (first byte `0x08`) of exactly `−(k·2^53 + m)` for its own index k and fill m, and requires `m < 2^53`
+itself (an exit trading 2^53 base units or more would read as the merge of input k + 1); the entry requires that the
 exit's starts with the 8-byte push of its `settle` with `n = m`. The entry also checks that the exit is exactly one it
 books: its template, every immutable byte of its state (the committed `exitState` outside the mutable
 `stopPrice`, `armed` and `amountLeft` windows: maker, legs, trigger and band rules, carriers), `parent`
-= the entry and `rptPrice` (sell-first also `rptPre`) = the entry's own values. A covenant id does
+= the entry and `rptPrice` (sell-first also `rptPre`) = the entry's own values, and that the committed exit quotes
+at the entry's own `scale` (both sides round the merge's amounts at their own scale). A covenant id does
 not reveal its genesis outpoint, so a look-alike exit that someone else builds and funds cannot be
 told apart; it can only give: it pays this maker on this maker's terms, and the merge returns the
 full budget (buy-first) or at least the prefund of m (sell-first, also on a sell-out), so a merge
@@ -1037,7 +1042,7 @@ for both tokens `KobPair` 6 to 11, `KobCondPair` 7 to 21 (a stop armed in its fi
 (a sell-first fill that arms its stop entry and books its exit 34); over every program pair at most 72, 91 and 136 (the
 largest token programs, whose custody inputs the scans read).
 
-**Template sizes.** `KobPair` 2,960 B (state 447 B), `KobCondPair` 6,284 B (state 543 B), `KobIfdPair` 8,789 B (state
+**Template sizes.** `KobPair` 2,960 B (state 447 B), `KobCondPair` 6,669 B (state 543 B), `KobIfdPair` 9,108 B (state
 909 B; the committed exit 432 B). The scans of both tokens are unrolled to `MAX_TOK_IN` = 8 slots each (a KRON program
 accepts fewer), so every spend of a pair order pays for them; a larger route or net is split into several fills (§7).
 

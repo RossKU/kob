@@ -219,9 +219,10 @@ contract KobCondAsk(
     // better and a resting bid buys at its quote or better, so the quote is the conservative print
     // for both trigger directions. The evidence is read, never consumed (any number of orders may
     // read one fill). KobCross, conditional and if-done fills are never evidence (other templates).
-    // An ask's custody (input tk) is its token input owned by the ask's covenant id: every input
-    // carrying tokenCovId is a genuine token UTXO and the ask's fill admits no other token input
-    // owned by its id (noStrays), so that input is the custody.
+    // An ask's custody (input tk) is its token input owned by the ask's covenant id, authenticated as a
+    // holder UTXO of this token's program (template hash + P2SH, like the order's own custody: an input of
+    // another program carrying tokenCovId never stands in for it); the ask's fill admits no other token
+    // input owned by its id (noStrays), so that input is the custody.
     // State offsets (KobAsk): tokenCovId[34..66) scale[118..126) price[136..144)
     // activeFrom[163..171) interval[190..198) slope[208..216); in KobBid scale, price and
     // activeFrom sit 33 bytes later (extensionCommitment), interval and slope 51 bytes later.
@@ -239,9 +240,10 @@ contract KobCondAsk(
         int act = int(byte[8](o.slice(163, 171)));
         if (act > exposed) { exposed = act; }
         require(OpInputCovenantId(tk) == tokenCovId);
-        // custody check: state[10..44) of tk = owner (this ask's covenant id) || owner_scheme push 0x01 0x04
-        int end = OpTxInputScriptSigLen(tk) + 10 - 112 - tplSuffixLen;
-        require(OpTxInputScriptSigSubstr(tk, end, end + 34) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
+        // custody check: tk is a holder UTXO of this token's program (template hash + P2SH) whose state [10..44) =
+        // owner (this ask's covenant id) || owner_scheme push 0x01 0x04
+        byte[] ts = tplState(tk, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
+        require(ts.slice(10, 44) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
         int td = OpTxInputDaaScore(tk);
         if (td > exposed) { exposed = td; }
         require(tx.daa >= exposed + minRestDaa);
@@ -283,8 +285,8 @@ contract KobCondAsk(
         if (act > exposed) { exposed = act; }
         if (tk >= 0) {
             require(OpInputCovenantId(tk) == tokenCovId);
-            int end = OpTxInputScriptSigLen(tk) + 10 - 112 - tplSuffixLen;
-            require(OpTxInputScriptSigSubstr(tk, end, end + 34) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
+            byte[] ts = tplState(tk, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
+            require(ts.slice(10, 44) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
             int td = OpTxInputDaaScore(tk);
             if (td > exposed) { exposed = td; }
         }
@@ -386,6 +388,9 @@ contract KobCondAsk(
             int pin = 0;
             int rptBudget = 0;
             if (rearm) {
+                // the merge argument -(self * 2^53 + n) names this input and n only while n < 2^53 (a look-alike exit
+                // of 2^53 units or more would read as the merge of another input)
+                require(n < MERGE_K);
                 pin = OpCovInputIdx(parent, 0);
                 // the entry's sigscript starts with the 8-byte push of its merge argument -(i * 2^53 + n) < 0: its
                 // fill arguments are >= 0, refund starts with its dispatch tag, cancel with a 65-byte signature, and
