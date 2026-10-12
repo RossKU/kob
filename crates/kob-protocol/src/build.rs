@@ -329,6 +329,14 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
         }
         Ok(())
     };
+    // the trailing gap and wait and the trigger exposure the pair builder refuses below zero (`check_new_cond_pair`): a negative
+    // gap ratchets a stop through the market (it arms at once), a negative wait or exposure means none
+    let trail_rules = |gap: i64, wait: i64, rest: i64| -> Result<()> {
+        if gap < 0 || wait < 0 || rest < 0 {
+            return invalid("trailGap, trailWait and minRestDaa must be >= 0");
+        }
+        Ok(())
+    };
     match s {
         AnyState::KobAsk(a) | AnyState::KobAskKron(a) => {
             base(a.min_fill, a.tip, a.refund_tip)?;
@@ -355,6 +363,7 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
         AnyState::KobCondAsk(c) | AnyState::KobCondAskKron(c) => {
             base(c.min_fill, c.tip, c.refund_tip)?;
             cond(c.tp_price, c.stop_price, c.slip_bps, c.trail_step, c.armed, c.band_daa, c.keeper_tip, c.amount_left, c.min_touch)?;
+            trail_rules(c.trail_gap, c.trail_wait, c.min_rest_daa)?;
             if c.is_booked() || c.rpt_price != 0 || c.rpt_until != 0 {
                 return invalid("repeat fields are written by an if-done entry, never by a new order");
             }
@@ -366,6 +375,7 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
         AnyState::KobCondBid(c) | AnyState::KobCondBidKron(c) => {
             base(c.min_fill, c.tip, c.refund_tip)?;
             cond(c.tp_price, c.stop_price, c.slip_bps, c.trail_step, c.armed, c.band_daa, c.keeper_tip, c.amount_left, c.min_touch)?;
+            trail_rules(c.trail_gap, c.trail_wait, c.min_rest_daa)?;
             if c.delivery_carrier < 0 {
                 return invalid("deliveryCarrier must be >= 0");
             }
@@ -377,6 +387,7 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
         AnyState::KobIfdBid(i) | AnyState::KobIfdBidKron(i) => {
             base(i.min_fill, i.tip, i.refund_tip)?;
             entry_rules(i.entry_stop, i.band_daa, i.keeper_tip, i.armed, i.rpt_amount, i.min_touch)?;
+            trail_rules(0, 0, i.min_rest_daa)?;
             if i.amount_left <= 0 || i.price <= 0 || i.delivery_carrier < 0 || i.exit_carrier < 0 {
                 return invalid("if-done bid: amountLeft and price > 0, carriers >= 0");
             }
@@ -402,6 +413,7 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
         AnyState::KobIfdAsk(i) | AnyState::KobIfdAskKron(i) => {
             base(i.min_fill, i.tip, i.refund_tip)?;
             entry_rules(i.entry_stop, i.band_daa, i.keeper_tip, i.armed, i.rpt_amount, i.min_touch)?;
+            trail_rules(0, 0, i.min_rest_daa)?;
             if i.amount_left <= 0 || i.price <= 0 || i.prefund < 0 || i.exit_carrier < 0 {
                 return invalid("if-done ask: amountLeft and price > 0, prefund and exitCarrier >= 0");
             }

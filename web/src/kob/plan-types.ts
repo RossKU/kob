@@ -40,6 +40,12 @@ export interface TokenMarket {
   /** default refund tip and keeper tip (sompi) of this token program (kob.keeperTips()) */
   refundTip: bigint;
   keeperTip: bigint;
+  /**
+   * The registry checked every genesis output of the token (`genesis_verified: true`): for a KCC-20 token this proves its covenant id carries ONE
+   * extension commitment. Absent / false (every open-list token): NOT verified, and a stop (stop leg, trailing stop, stop entry) of this token
+   * can be armed by trades of another commitment of the same covenant id (STOP_EVIDENCE_GENESIS_UNVERIFIED).
+   */
+  genesisVerified?: boolean;
 }
 
 /** UTC clock and the node's virtual DAA score, read together (matcher.md 10.10). */

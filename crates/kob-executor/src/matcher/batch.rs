@@ -846,7 +846,7 @@ impl<'u> Alloc<'u> {
                 continue;
             }
             if let Some(src) = c.touch {
-                kas.push(KasTouch { ix: e, token: c.book.token, src, n: self.qty[e] });
+                kas.push(KasTouch { ix: e, token: c.book.token, ext: c.book.extension, src, n: self.qty[e] });
             }
             if let (Some(x), Some(p)) = (&c.pair, u.porder_of[e]) {
                 if x.is_primary() {

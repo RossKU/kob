@@ -12,7 +12,9 @@ import { crossingTouch, referencePrice } from './guards';
 import { issue } from './orders/common-issues';
 import { planPair } from './orders/pair-plan';
 import { pairIssue } from './orders/pair-issues';
-import { isPairEnv, type MarketStartAck, type OrderPlan, type PlanEnv, type PlanIssue } from './plan-types';
+import { describeOrder, type OrderDescription } from './order-facts';
+import { isPairEnv, type MarketStartAck, type OrderPlan, type PlanEnv, type PlanIssue, type TokenMarket } from './plan-types';
+import { longId } from './registry';
 import { BPS, formatUnits } from './units';
 
 export type Intent = SimpleIntent | CondIntent;
@@ -48,9 +50,30 @@ export function orderUrgency(env: Pick<PlanEnv, 'book'> & { pair?: unknown }, in
 export function planOrder(env0: PlanEnv, intent: Intent): OrderPlan {
   const env = withUrgency(env0, orderUrgency(env0, intent));
   const plan = isPairEnv(env) ? planPair(env, intent) : isCondIntent(intent) ? planCond(env, intent) : planSimple(env, intent);
-  const extra = [...envIssues(env), ...marketStartIssues(env, intent, plan)];
+  const extra = [...envIssues(env), ...marketStartIssues(env, intent, plan), ...stopEvidenceIssues(env, plan)];
   if (!extra.length) return plan;
   return { ...plan, issues: [...plan.issues, ...extra], ok: plan.ok && !extra.some((i) => i.severity === 'error') };
+}
+
+/** True when an order (or the exit an if-done entry commits) has a stop that trigger evidence arms or trails: a stop leg or a stop entry. */
+function hasEvidenceStop(d: OrderDescription | null | undefined): boolean {
+  if (!d) return false;
+  return (d.trigger?.stopPrice ?? 0n) > 0n || (d.entry?.entryStop ?? 0n) > 0n || hasEvidenceStop(d.entry?.exit);
+}
+
+/**
+ * Finding AUD-EXT (off-chain mitigation): the stop-trigger evidence of the conditional / if-done covenants (KAS and pair) compares the evidence order's
+ * token covenant id, template and scale, NOT its KCC-20 extension commitment. A covenant id that carries a second commitment (only its genesis can
+ * mint one) is a look-alike token whose trades, at any price its holder chooses, can arm or trail a stop of the real token. The registry's genesis
+ * check (`genesis_verified: true`) proves a single commitment; every other KCC-20 token (all open-list tokens) gets this warning on any plan that
+ * places a stop leg, a trailing stop or a stop entry (also inside a committed exit). KRON tokens have no extension commitment.
+ */
+export function stopEvidenceIssues(env: PlanEnv, plan: Pick<OrderPlan, 'states'>): PlanIssue[] {
+  if (!plan.states.some((s) => hasEvidenceStop(describeOrder(s, env.kob)))) return [];
+  const tokens: TokenMarket[] = [env.token, ...(isPairEnv(env) ? [env.pair.quote] : [])];
+  return tokens
+    .filter((t) => t.family === 'kcc20' && t.genesisVerified !== true)
+    .map((t) => issue('STOP_EVIDENCE_GENESIS_UNVERIFIED', { token: t.ticker && t.ticker !== longId(t.covenantId) ? `${t.ticker} (${longId(t.covenantId)})` : longId(t.covenantId) }));
 }
 
 /** A book price and the newest fill this far apart (bps) are flagged: one lying data path cannot move the reference unnoticed. */

@@ -15,6 +15,8 @@ export interface RegistryTokenLike {
   /** minimum price increment, sompi per whole token; null = none (1 sompi). The registry's `lot_size` (protocol v2.6) is ignored. */
   tick?: number | string | bigint | null;
   family?: string;
+  /** registry `genesis_verified`: every genesis output of the token was checked (absent / false: NOT verified; every open-list token) */
+  genesis_verified?: boolean;
 }
 
 /** The fields of a `registry/tokens.json` template entry used to pin the token program (optional: built-in ids cover the shipped ones). */
@@ -104,5 +106,6 @@ export function toTokenMarket(kob: KobWasm, token: RegistryTokenLike, templates?
     tick,
     refundTip: BigInt(tips.refundTip),
     keeperTip: BigInt(tips.keeperTip),
+    genesisVerified: token.genesis_verified === true,
   };
 }

@@ -330,3 +330,63 @@ fn an_if_done_entry_with_an_exit_at_another_scale_is_refused() {
         assert!(AnyState::decode(bad.template_id(), &bad.try_encode().unwrap()).is_err(), "{}", t.name());
     }
 }
+
+/// Audit A2: terms that hurt the maker are refused by `check_new_order` (every builder of a new order and of an in-place
+/// amend runs it), in both families: a trailing gap, trailing wait or trigger exposure below zero (the pair builder already
+/// refused these), a slippage band outside 0..=10000, a negative keeper tip or trigger threshold, a stop / take-profit
+/// below an ask's tip, an armed new order, and an if-done exit that is not the maker's order of the same token at the
+/// entry's scale.
+#[test]
+fn audit_maker_harming_terms_of_new_orders_are_refused() {
+    for t in [TemplateId::Kcc20Ref8x8, TemplateId::KronToken2433] {
+        let f = t.family();
+        let ca = cond_ask(MAKER_A, t);
+        let ask = |c: CondAskState| AnyState::KobCondAsk(c).into_family(f);
+        check_new_order(&ask(ca.clone())).unwrap();
+        let bad_asks = [
+            CondAskState { trail_step: 1_000, trail_gap: -1, ..ca.clone() },
+            CondAskState { trail_step: 1_000, trail_wait: -1, ..ca.clone() },
+            CondAskState { min_rest_daa: -1, ..ca.clone() },
+            CondAskState { slip_bps: 10_001, ..ca.clone() },
+            CondAskState { slip_bps: -1, ..ca.clone() },
+            CondAskState { keeper_tip: -1, ..ca.clone() },
+            CondAskState { min_touch: -1, ..ca.clone() },
+            CondAskState { trail_step: -1, ..ca.clone() },
+            CondAskState { armed: 1, ..ca.clone() },
+            CondAskState { tip: ca.tp_price + 1, ..ca.clone() },
+            CondAskState { tp_price: 0, stop_price: 0, ..ca.clone() },
+        ];
+        for (k, bad) in bad_asks.into_iter().enumerate() {
+            assert!(check_new_order(&ask(bad)).is_err(), "{} conditional ask case {k}", t.name());
+        }
+        let cb = cond_bid(MAKER_A, t);
+        let bid = |c: CondBidState| AnyState::KobCondBid(c).into_family(f);
+        check_new_order(&bid(cb.clone())).unwrap();
+        for (k, bad) in [
+            CondBidState { trail_step: 1_000, trail_gap: -1, ..cb.clone() },
+            CondBidState { trail_step: 1_000, trail_wait: -1, ..cb.clone() },
+            CondBidState { min_rest_daa: -1, ..cb.clone() },
+            CondBidState { slip_bps: 10_001, ..cb.clone() },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert!(check_new_order(&bid(bad)).is_err(), "{} conditional bid case {k}", t.name());
+        }
+        // if-done entries: the exit must be the maker's order of the same token; no negative exposure
+        let ib = ifd_bid(MAKER_A, 10, t);
+        let ifd = |s: IfdBidState| AnyState::KobIfdBid(s).into_family(f);
+        check_new_order(&ifd(ib.clone())).unwrap();
+        let foreign_exit = IfdBidState { exit_state: IfdBidState::commit_exit(&ifd_exit(MAKER_B, t)), ..ib.clone() };
+        assert!(check_new_order(&ifd(foreign_exit)).is_err(), "{}: an exit paying another maker", t.name());
+        let other_token = IfdBidState { exit_state: IfdBidState::commit_exit(&CondAskState { token_cov_id: TOKEN_B, ..ifd_exit(MAKER_A, t) }), ..ib.clone() };
+        assert!(check_new_order(&ifd(other_token)).is_err(), "{}: an exit of another token", t.name());
+        assert!(check_new_order(&ifd(IfdBidState { min_rest_daa: -1, ..ib.clone() })).is_err(), "{}", t.name());
+        let ia = ifd_ask(MAKER_A, t);
+        let ifda = |s: IfdAskState| AnyState::KobIfdAsk(s).into_family(f);
+        check_new_order(&ifda(ia.clone())).unwrap();
+        let foreign_exit = IfdAskState { exit_state: IfdAskState::commit_exit_for(f, &ifda_exit(MAKER_B, t)), ..ia.clone() };
+        assert!(check_new_order(&ifda(foreign_exit)).is_err(), "{}: a buy-back exit of another maker", t.name());
+        assert!(check_new_order(&ifda(IfdAskState { min_rest_daa: -1, ..ia })).is_err(), "{}", t.name());
+    }
+}

@@ -248,7 +248,7 @@ describe('issueText: pre-sign findings of the decoder', () => {
       'fee-high': { params: { fee: 5_000_000n, minimum: 1_000_000n } }, 'unsigned-maker-input': { input: 1 }, 'foreign-input': { input: 1 }, 'payload-unknown': {},
       'payload-invalid': {}, 'token-unlisted': { params: { covenantId: COV } }, 'no-order-records': {}, 'payment-expected': { output: 1 }, 'transfer-expected': { output: 1 },
       'strays-swept': { input: 1, params: { amount: 250n } }, 'kas-released': { params: { released: 20n * KAS } },
-      'pair-token-mismatch': { output: 0, params: { covenantId: COV, token: 'B' } }, 'pair-family-mismatch': { output: 0, params: { token: 'A' } }, 'pair-terms-invalid': { output: 0 },
+      'pair-token-mismatch': { output: 0, params: { covenantId: COV, token: 'B' } }, 'pair-family-mismatch': { output: 0, params: { token: 'A' } }, 'pair-terms-invalid': { output: 0 }, 'order-terms-invalid': { output: 0 },
       'expected-quote-escrowed': { params: { expected: 1000n, actual: 900n } },
       'trigger-evidence-invalid': { input: 0, params: { evidence: 2 } }, 'trigger-rule-unmet': { input: 0, params: { evidence: 1 } }, 'trigger-evidence': { input: 0, params: { evidence: 1 } },
       'other-strays-swept': { input: 1, params: { amount: '2.5 TSTB', token: 'TSTB (7171…7171)' } },

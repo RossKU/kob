@@ -70,7 +70,7 @@ export const SIGNING_ISSUE_CODES = [
   'token-output-count', 'token-unbalanced', 'kas-unbalanced', 'fee-mismatch', 'fee-excessive', 'fee-rate-excessive', 'payment-out', 'transfer-out', 'token-to-unknown-owner',
   'output-unknown', 'sign-foreign-key', 'sign-mismatch', 'sign-unexpected', 'sighash-type', 'expected-orders', 'expected-kas-locked',
   'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'pair-token-mismatch', 'pair-family-mismatch',
-  'pair-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
+  'pair-terms-invalid', 'order-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
   // warnings
   'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
   // info
@@ -688,6 +688,21 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
   }
 
+  /**
+   * A NEW (or amended in place) KAS-quoted order: kob-wasm's rules for a new order (`check_new_order`: tips, slippage band, trailing terms, trigger
+   * threshold and exposure, carriers, and an if-done exit that is the maker's order of the same token at the entry's scale). The builders run the
+   * same rules; the decoder re-checks them so that what is shown never rests on the transaction having come from those builders (an exit that pays
+   * another key, for one, is not on the confirmation screen).
+   */
+  function checkNewKasOrder(j: number, os: OrderState) {
+    if (isPairKind(os.kind)) return;
+    try {
+      kob.checkNewOrder(os);
+    } catch (e) {
+      add('order-terms-invalid', `output ${j}: the order's terms are invalid: ${e instanceof Error ? e.message : String(e)}`, { output: j });
+    }
+  }
+
   const orders: DecodedOrder[] = [];
   const outputs: DecodedOutput[] = tx.outputs.map((out, j) => decodeOutput(j, out));
 
@@ -707,6 +722,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       if (os.state.maker !== maker) add('order-not-maker', `output ${j}: the new order names ${shortId(os.state.maker)} as maker, not the connected wallet key: you could not cancel it`, { output: j, params: { maker: os.state.maker } });
       checkOrderToken(j, os, rec);
       checkNewPairOrder(j, os, value);
+      checkNewKasOrder(j, os);
       const description = describeOrder(os, kob);
       const locked = splitOrderValue(description, value);
       // the custody parts of the record follow the state's custodies (a sell-first pair entry: A, then its B prefund), each of its own token
@@ -737,6 +753,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       if (!verified) add('order-spk-mismatch', `output ${j}: the script is not the P2SH of the amended order's state`, { output: j });
       if (os.state.maker !== maker) add('order-not-maker', `output ${j}: the amended order names ${shortId(os.state.maker)} as maker, not the connected wallet key: you could not cancel it`, { output: j, params: { maker: os.state.maker } });
       checkOrderToken(j, os, { custody: null, prefund: null });
+      checkNewKasOrder(j, os);
       const description = describeOrder(os, kob);
       const locked = splitOrderValue(description, value);
       const deadline = am.deadline != null ? big(am.deadline) : null;

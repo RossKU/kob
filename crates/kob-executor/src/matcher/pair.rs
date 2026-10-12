@@ -85,6 +85,11 @@ pub struct PairNeed {
     pub ask_a: bool,
     pub a: [u8; 32],
     pub b: [u8; 32],
+    /// The extension commitment of A's and of B's market (the order's own: [`markets`]). The covenants do not compare it
+    /// (finding AUD-EXT): the planner only ever reads evidence of the order's own markets, never of another commitment of
+    /// the same covenant id.
+    pub a_ext: [u8; 32],
+    pub b_ext: [u8; 32],
     pub a_scale: i64,
     pub b_scale: i64,
     /// `minTouch` (base units of A) and its B value at the stop (mode 0's B threshold).
@@ -102,6 +107,9 @@ pub struct PairTouch {
     pub ask: bool,
     pub a: [u8; 32],
     pub b: [u8; 32],
+    /// The extension commitments of the resting order's markets of A and B ([`markets`]).
+    pub a_ext: [u8; 32],
+    pub b_ext: [u8; 32],
     pub a_scale: i64,
     pub b_scale: i64,
     /// The order's `price` (B base units per whole A).
@@ -383,6 +391,8 @@ pub fn need_arms(state: &AnyState, ev: PairEvidence) -> bool {
 pub struct KasTouch {
     pub ix: usize,
     pub token: [u8; 32],
+    /// The extension commitment of the fill's book (a KAS book is one commitment of its token).
+    pub ext: [u8; 32],
     pub src: TouchSrc,
     pub n: i64,
 }
@@ -411,8 +421,9 @@ pub fn evidence_options(
     let mut out = vec![];
     for p in pairs {
         let s = &p.src;
+        // the same tokens AND the same extension commitments: the covenant does not compare the commitment (AUD-EXT)
         if s.ask == ask_a
-            && (s.a, s.b, s.a_scale, s.b_scale) == (need.a, need.b, need.a_scale, need.b_scale)
+            && (s.a, s.b, s.a_ext, s.b_ext, s.a_scale, s.b_scale) == (need.a, need.b, need.a_ext, need.b_ext, need.a_scale, need.b_scale)
             && p.n >= need.min_touch
             && s.exposed_since.saturating_add(need.min_rest) <= t
         {
@@ -423,6 +434,7 @@ pub fn evidence_options(
     let side_a = if ask_a { SIDE_ASK } else { SIDE_BID };
     for x in kas {
         if x.token != need.a
+            || x.ext != need.a_ext
             || x.src.side != side_a
             || x.src.scale != need.a_scale
             || !touch_ok(&x.src, x.n, need.min_touch, need.min_rest, t)
@@ -431,6 +443,7 @@ pub fn evidence_options(
         }
         for y in kas {
             if y.token != need.b
+                || y.ext != need.b_ext
                 || y.src.side == side_a
                 || y.src.scale != need.b_scale
                 || y.src.price <= 0
@@ -622,6 +635,8 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                         ask: s.is_ask(),
                         a: tk.a.cov_id,
                         b: tk.b.cov_id,
+                        a_ext: ma.extension,
+                        b_ext: mb.extension,
                         a_scale: tk.a.scale,
                         b_scale: tk.b.scale,
                         price: s.price,
@@ -755,6 +770,8 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                             ask_a: s.is_ask(),
                             a: tk.a.cov_id,
                             b: tk.b.cov_id,
+                            a_ext: ma.extension,
+                            b_ext: mb.extension,
                             a_scale: tk.a.scale,
                             b_scale: tk.b.scale,
                             min_touch: s.min_touch,
@@ -860,6 +877,8 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                     ask_a: !buy,
                     a: tk.a.cov_id,
                     b: tk.b.cov_id,
+                    a_ext: ma.extension,
+                    b_ext: mb.extension,
                     a_scale: tk.a.scale,
                     b_scale: tk.b.scale,
                     min_touch: s.min_touch,
@@ -1158,7 +1177,7 @@ pub fn updatable(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<UpCand> {
         if udaa == u64::MAX || udaa as i64 > t || excluded_by_expiry(o, t, cx.utc) || crate::sanity::check(&o.order.state).is_err() {
             continue;
         }
-        let Some((ma, _)) = markets(o) else { continue };
+        let Some((ma, mb)) = markets(o) else { continue };
         let old_enough = |wait: i64| t - udaa as i64 >= wait.max(0);
         let (need, trail, active_from, parent) = match &o.order.state {
             AnyState::KobCondPair(s)
@@ -1169,6 +1188,8 @@ pub fn updatable(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<UpCand> {
                     ask_a: s.is_ask(),
                     a: tk.a.cov_id,
                     b: tk.b.cov_id,
+                    a_ext: ma.extension,
+                    b_ext: mb.extension,
                     a_scale: tk.a.scale,
                     b_scale: tk.b.scale,
                     min_touch: s.min_touch,
@@ -1188,6 +1209,8 @@ pub fn updatable(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<UpCand> {
                     ask_a: !buy,
                     a: tk.a.cov_id,
                     b: tk.b.cov_id,
+                    a_ext: ma.extension,
+                    b_ext: mb.extension,
                     a_scale: tk.a.scale,
                     b_scale: tk.b.scale,
                     min_touch: s.min_touch,
@@ -1291,5 +1314,48 @@ mod tests {
         let entry = info(PairShape::AskExact, 1_234, 1_000, 10_000);
         assert!(entry.buy_exact() && entry.primary() == PairRole::Sell);
         assert_eq!(entry.tip_kas(1_000), 0);
+    }
+    /// AUD-EXT: the covenants do not compare the KCC-20 extension commitment of a pair stop's evidence, so the planner
+    /// must: a fill of another commitment of A's (or B's) covenant id, or a resting `KobPair` of other commitments, is
+    /// never evidence (mode 0 or mode 1). The same fills under the order's own commitments are.
+    #[test]
+    fn pair_stop_evidence_is_only_of_the_orders_own_commitments() {
+        let (a, b, ea, eb, other) = ([1; 32], [4; 32], [3; 32], [5; 32], [9; 32]);
+        let need = PairNeed {
+            ask_a: true,
+            a,
+            b,
+            a_ext: ea,
+            b_ext: eb,
+            a_scale: 1_000,
+            b_scale: 100,
+            min_touch: 1,
+            min_touch_b: Some(1),
+            min_rest: 0,
+            state: placeholder_state(),
+        };
+        let src = |side, scale| TouchSrc { side, price: 1_000, scale, exposed_since: 0 };
+        let kas = |ext_a: [u8; 32], ext_b: [u8; 32]| {
+            vec![
+                KasTouch { ix: 0, token: a, ext: ext_a, src: src(SIDE_ASK, 1_000), n: 10 },
+                KasTouch { ix: 1, token: b, ext: ext_b, src: src(SIDE_BID, 100), n: 10 },
+            ]
+        };
+        let pair = |ext_a: [u8; 32], ext_b: [u8; 32]| {
+            vec![PairFillTouch {
+                ix: 2,
+                src: PairTouch { ask: true, a, b, a_ext: ext_a, b_ext: ext_b, a_scale: 1_000, b_scale: 100, price: 7, exposed_since: 0 },
+                n: 10,
+            }]
+        };
+        let count = |k: &[KasTouch], p: &[PairFillTouch]| evidence_options(&need, true, k, p, 100).len();
+        // the order's own commitments: one mode-0 pair of fills and the mode-1 resting pair order
+        assert_eq!(count(&kas(ea, eb), &pair(ea, eb)), 2);
+        // another commitment of A's covenant id, of B's, or of both: nothing
+        assert_eq!(count(&kas(other, eb), &[]), 0);
+        assert_eq!(count(&kas(ea, other), &[]), 0);
+        assert_eq!(count(&[], &pair(other, eb)), 0);
+        assert_eq!(count(&[], &pair(ea, other)), 0);
+        assert_eq!(count(&kas(other, other), &pair(other, other)), 0);
     }
 }
