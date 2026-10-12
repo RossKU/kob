@@ -1354,6 +1354,21 @@ fn crest(ask: bool, pa: TemplateId, pb: TemplateId) -> CondPairState {
     CondPairState { tp_price: if ask { RATE + 1 } else { RATE - 1 }, ..cside(ask, pa, pb) }
 }
 
+/// Every input and output of token `tok` with the extension commitment `ext` (consistent for the token program: one
+/// commitment per transfer). Audit 2026-10-13: the witness of the custody commitment check.
+fn reclass_ext(e: &mut Ed, tok: [u8; 32], ext: [u8; 32]) {
+    for i in 0..e.entries.len() {
+        if ph::cov_of(&e.entries[i]) == Some(tok) {
+            let st = e.in_tok(i);
+            e.set_in_tok(i, ph::map_tok(st, |k| Kcc20State { extension_commitment: ext, ..k }, |k| k));
+        }
+    }
+    for k in e.tok_outs_of(tok) {
+        let st = e.out_state(k);
+        e.set_out_state(k, ph::map_tok(st, |x| Kcc20State { extension_commitment: ext, ..x }, |x| x));
+    }
+}
+
 fn custody(r: &Run, pa: TemplateId, pb: TemplateId) {
     // ---- per family of S
     for fam in [Family::Kcc20, Family::Kron] {
@@ -1389,6 +1404,11 @@ fn custody(r: &Run, pa: TemplateId, pb: TemplateId) {
             let (mut e, i) = tp_ed("NC103tk hostile tFamily 3", crest(tk_ask, pa, pb), pa, pb, NR);
             restate(&mut e, i, |s| s.t_family = 3);
             restate_cont(&mut e, i, |s| s.t_family = 3);
+            r.bad(&e, i);
+            // NC107sk the custody of another extension commitment (another token of S's covenant id; every S input and
+            // output of the transaction carries it, so the token program accepts)
+            let (mut e, i) = tp_ed("NC107sk custody of another extension commitment", crest(ask, pa, pb), pa, pb, NR);
+            reclass_ext(&mut e, s_tok(ask), [0xdd; 32]);
             r.bad(&e, i);
         }
     }

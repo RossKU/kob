@@ -1078,6 +1078,8 @@ struct CondBP {
     rpt_until: i64,
     /// base units of a whole token (the order's price denominator); default SCALE
     scale: i64,
+    /// deliveryCarrier (sompi on every delivery); default DC
+    dc: i64,
 }
 impl CondBP {
     /// Buy OCO: limit leg at 2.00 (below the market), buy-stop 3.00 with the default 3% band
@@ -1107,6 +1109,7 @@ impl CondBP {
             rpt_pre: 0,
             rpt_until: 0,
             scale: SCALE,
+            dc: DC,
         }
     }
     fn with_qty(&self, qty: i64) -> Self {
@@ -1157,6 +1160,10 @@ struct IfdAP {
     rpt_base: Option<i64>,
     /// stop entry: smallest evidence fill (whole tokens; multiplied by UNIT into base units)
     min_touch: i64,
+    /// base units of a whole token (the entry's price denominator); default UNIT
+    scale: i64,
+    /// activeFrom (DAA); default 0
+    active_from: i64,
 }
 impl IfdAP {
     /// rptAmount in base units: the raw override, or the whole-token budget scaled.
@@ -1177,7 +1184,7 @@ fn condb(n: &Net, p: &CondBP) -> SilAbiArtifact {
         int(p.active_from),
         int(p.expiry),
         int(REFUND_TIP),
-        int(DC),
+        int(p.dc),
         int(p.tp),
         int(p.stop),
         int(p.slip_bps),
@@ -1212,10 +1219,10 @@ fn ifda(n: &Net, p: &IfdAP) -> SilAbiArtifact {
     a.push(bytes(&p.maker));
     a.extend(n.tok_args());
     a.extend([
-        int(UNIT), // scale
+        int(p.scale), // scale
         int(p.price),
         int(p.tip),
-        int(0), // activeFrom
+        int(p.active_from), // activeFrom
         int(EXPIRY),
         int(REFUND_TIP),
         int(p.prefund),
@@ -1358,6 +1365,8 @@ fn ifda_p(f: &Fx) -> IfdAP {
         rpt: 0,
         rpt_base: None,
         min_touch: 1,
+        scale: UNIT,
+        active_from: 0,
     }
 }
 /// Recomputes the genesis covenant id of output `out` (authorised by input `auth`) exactly as
@@ -4383,4 +4392,1017 @@ fn empty_repeating_ifda_refund_is_refused() {
     };
     run_ok(n, &refund(m, "SR1f refund of a repeating entry holding 3 whole returns tokens and carriers to the maker"));
     run_bad(n, &refund(taker_pk, "SR1g refund of a repeating entry holding tokens, paid to anyone else"), 0);
+}
+
+// ---------------------------------------------------------------- audit completion (2026-10-13)
+//
+// Witnesses for the KobCondBid / KobIfdAsk checks that no attack scenario reached before (tools/ablation, the AU-CB /
+// AU-IA entries of the kcc20-buy catalog). Each NAU-CB* (conditional buy) / NAU-IA* (sell-first entry) scenario is
+// refused by the committed contracts and accepted by every input once the one check it names is removed (unless the
+// catalog marks it input-only or defence in depth). Planted inputs (a UTXO carrying the token's covenant id that no
+// token program created) follow the pair suite's NP25 / NP26: consensus cannot produce them, the order must refuse
+// them anyway. Hostile fields (a maker-set parameter out of range) are witnessed whenever some transaction becomes
+// acceptable without the check, even a maker-favourable one.
+
+/// A KCC-20 holder redeem script with a free borrow scheme and extension commitment.
+fn tok_redeem_x(t: &Token, amount: i64, owner: &[u8; 32], scheme: u8, borrow: u8, ext: &[u8; 32]) -> Vec<u8> {
+    let mut st = tok_state_bytes(amount, owner, scheme, borrow);
+    let l = st.len();
+    st[l - 32..].copy_from_slice(ext);
+    [t.prefix.clone(), st, t.suffix.clone()].concat()
+}
+fn tok_state_x(amount: i64, owner: &[u8; 32], scheme: u8, borrow: u8, ext: &[u8; 32]) -> ArtifactValue {
+    BTreeMap::from([
+        ("amount".to_string(), int(amount)),
+        ("owner".to_string(), bytes(owner)),
+        ("owner_scheme".to_string(), ArtifactValue::Byte(scheme)),
+        ("borrow_scheme".to_string(), ArtifactValue::Byte(borrow)),
+        ("borrow_guard".to_string(), bytes(&[0u8; 32])),
+        ("extension_commitment".to_string(), bytes(ext)),
+    ])
+    .into()
+}
+/// The redeem script of token input k.
+fn tok_redeem_of(s: &Scn, k: usize) -> Vec<u8> {
+    match &s.inputs[k].role {
+        Role::TokLeader { redeem, .. } | Role::TokDelegate { redeem, .. } => redeem.clone(),
+        _ => panic!("input {k} is not a token input"),
+    }
+}
+/// Token input k holds `redeem` (its UTXO is the P2SH of it).
+fn set_tok_redeem(s: &mut Scn, k: usize, redeem: Vec<u8>) {
+    let e = &s.inputs[k].entry;
+    s.inputs[k].entry = UtxoEntry::new(e.amount, pay_to_script_hash_script(&redeem), e.block_daa_score, false, e.covenant_id);
+    match &mut s.inputs[k].role {
+        Role::TokLeader { redeem: r, .. } | Role::TokDelegate { redeem: r, .. } => *r = redeem,
+        _ => panic!("input {k} is not a token input"),
+    }
+}
+/// The UTXO of input k carries covenant id c.
+fn set_cov(s: &mut Scn, k: usize, c: Option<Hash>) {
+    let e = &s.inputs[k].entry;
+    s.inputs[k].entry = UtxoEntry::new(e.amount, e.script_public_key.clone(), e.block_daa_score, false, c);
+}
+/// The genuine holder redeem script `real` pushed by an input of covenant id `c` whose script public key is not its
+/// P2SH ("DROP TRUE").
+fn not_p2sh_holder(real: &[u8], value: i64, c: Hash, daa: u64) -> Inp {
+    Inp {
+        entry: UtxoEntry::new(value as u64, ScriptPublicKey::new(0, vec![0x75, 0x51].into()), daa, false, Some(c)),
+        role: Role::RawSs { ss: push(real), name: "holder.not_p2sh" },
+        seq: 0,
+    }
+}
+/// Push-only filler of exactly `len` bytes.
+fn filler(mut len: usize) -> Vec<u8> {
+    let mut v = vec![];
+    while len > 0 {
+        let take = len.min(300);
+        let rest = len - take;
+        let (take, rest) = if rest > 0 && rest < 2 { (take - 2, rest + 2) } else { (take, rest) };
+        if take <= 76 {
+            v.push((take - 1) as u8);
+            v.extend(std::iter::repeat_n(0xaau8, take - 1));
+        } else if take <= 257 {
+            v.extend([0x4c, (take - 2) as u8]);
+            v.extend(std::iter::repeat_n(0xaau8, take - 2));
+        } else {
+            v.push(0x4d);
+            v.extend_from_slice(&((take - 3) as u16).to_le_bytes());
+            v.extend(std::iter::repeat_n(0xaau8, take - 3));
+        }
+        len = rest;
+    }
+    v
+}
+fn push_count(b: &[u8]) -> usize {
+    let (mut i, mut n) = (0usize, 0usize);
+    while i < b.len() {
+        let op = b[i] as usize;
+        i += match op {
+            0 => 1,
+            1..=75 => 1 + op,
+            0x4c => 2 + b[i + 1] as usize,
+            0x4d => 3 + u16::from_le_bytes([b[i + 1], b[i + 2]]) as usize,
+            _ => panic!("not a push: {op:#x}"),
+        };
+        n += 1;
+    }
+    n
+}
+/// A look-alike of the holder redeem script `real` (the token's prefix / state / suffix split): push-only filler for
+/// the prefix, the genuine 112-byte state, and a suffix of the same length that drops every push and returns true
+/// (another template, anyone can spend it).
+fn fake_holder(t: &Token, real: &[u8]) -> Vec<u8> {
+    use kaspa_txscript::opcodes::codes::{OpDrop, OpEndIf, OpFalse, OpIf};
+    let (pre, suf) = (t.prefix.len(), t.suffix.len());
+    let mut v = filler(pre);
+    v.extend_from_slice(&real[pre..pre + 112]);
+    let drops = push_count(&v);
+    v.extend(std::iter::repeat_n(OpDrop, drops));
+    let pad = suf - drops - 1;
+    v.extend([OpFalse, OpIf]);
+    v.extend(filler(pad - 3));
+    v.push(OpEndIf);
+    v.push(OpTrue);
+    assert_eq!(v.len(), real.len());
+    v
+}
+/// Replaces token input k by a planted UTXO of the same covenant id, value and redeem script: a P2SH of a look-alike
+/// template (`look`, see fake_holder) or a UTXO that is no P2SH of the redeem script it pushes. Returns the redeem
+/// script the planted input pushes.
+fn plant_tok(f: &Fx, s: &mut Scn, k: usize, look: bool) -> Vec<u8> {
+    let rs = tok_redeem_of(s, k);
+    let e = &s.inputs[k].entry;
+    let (v, c, d) = (e.amount as i64, e.covenant_id.expect("token input"), e.block_daa_score);
+    if look {
+        let fake = fake_holder(&f.net.t, &rs);
+        s.inputs[k] = Inp {
+            entry: UtxoEntry::new(v as u64, pay_to_script_hash_script(&fake), d, false, Some(c)),
+            role: Role::RawSs { ss: push(&fake), name: "holder.lookalike" },
+            seq: 0,
+        };
+        fake
+    } else {
+        s.inputs[k] = not_p2sh_holder(&rs, v, c, d);
+        rs
+    }
+}
+/// Appends an output of `v` sompi to `to` bound to covenant id c (authorising input `auth`), funded from the last output.
+fn bind_extra(s: &mut Scn, c: Hash, auth: u16, to: &[u8; 32], v: i64) {
+    let l = s.outputs.len() - 1;
+    s.outputs[l].value -= v as u64;
+    s.outputs.push(out(v, p2pk_spk(to), Some((auth, c))));
+}
+/// Spends a P2PK UTXO of `kp` (value v) that carries covenant id c (a sibling UTXO of an order's id); its value goes to
+/// the last output.
+fn add_sibling(s: &mut Scn, kp: &Keypair, c: Hash, v: i64) {
+    let mut i = p2pk_in(kp, v);
+    i.entry = UtxoEntry::new(v as u64, i.entry.script_public_key.clone(), 1_000, false, Some(c));
+    s.inputs.push(i);
+    let l = s.outputs.len() - 1;
+    s.outputs[l].value += v as u64;
+}
+fn input_named(s: &Scn, name: &str) -> usize {
+    s.inputs.iter().position(|i| role_name(&i.role) == name).unwrap_or_else(|| panic!("no input {name}"))
+}
+/// Quote of n at rate r as the covenants compute it for any scale (truncating division): a hostile scale.
+fn quote_raw(n: i64, r: i64, scale: i64, c: i64) -> i64 {
+    let (m, q) = (n % scale, n / scale);
+    q * r + m * (r / scale) + (m * (r % scale) + c) / scale
+}
+/// Replaces the order called by input k (a Call) by `art` (its UTXO becomes the P2SH of that artifact).
+fn set_art(s: &mut Scn, k: usize, art: SilAbiArtifact) {
+    let e = &s.inputs[k].entry;
+    s.inputs[k].entry = UtxoEntry::new(e.amount, spk_of(&art), e.block_daa_score, false, e.covenant_id);
+    match &mut s.inputs[k].role {
+        Role::Call { art: a, .. } => *a = art,
+        _ => panic!("input {k} is not an order"),
+    }
+}
+/// The conditional buy (cov 0xe1) cancelled by `kp` with sighash type `ht`.
+fn condb_cancel(f: &Fx, cp: &CondBP, kp: Keypair, ht: u8) -> Scn {
+    let v = condb_value(cp);
+    Scn {
+        name: "condb cancel".into(),
+        inputs: vec![call(&condb(&f.net, cp), "cancel", vec![Arg::Sig(kp, ht)], "condb.cancel", v, cov(0xe1), 2_000)],
+        outputs: vec![out(v - NET_FEE, p2pk_spk(&cp.maker), None)],
+        lock_time: NOW,
+        payload: vec![],
+    }
+}
+/// The sell-first entry (cov 0xf1, 10 whole in custody, not spent) cancelled by `kp` with sighash type `ht`.
+fn ifda_cancel(f: &Fx, kp: Keypair, ht: u8) -> Scn {
+    let ip = ifda_p(f);
+    Scn {
+        name: "ifda cancel".into(),
+        inputs: vec![call(&ifda(&f.net, &ip), "cancel", vec![Arg::Sig(kp, ht)], "ifda.cancel", IFDA_VALUE, cov(0xf1), 1_000)],
+        outputs: vec![out(IFDA_VALUE - NET_FEE, p2pk_spk(&ip.maker), None)],
+        lock_time: NOW,
+        payload: vec![],
+    }
+}
+/// Anyone refunds a (non-repeating) sell-first entry holding 3 whole (settle nb = 0, UTXO DAA EXPIRY - 1000) at
+/// lock time `lock`: the tokens and both carriers (minus refundTip) to the maker at output 0.
+fn ifda_refund(f: &Fx, lock: u64) -> Scn {
+    let t = &f.net.t;
+    let ip = IfdAP { qty: 3, ..ifda_p(f) };
+    let i = cov(0xf1);
+    let tpl = condb_tpl(&f.net);
+    let v = 2 * CARRIER;
+    Scn {
+        name: "ifda refund".into(),
+        inputs: vec![
+            call(
+                &ifda(&f.net, &ip),
+                "settle",
+                vec![nb(0), iv(1), iv(0), iv(0), Arg::V(bytes(&tpl.pre)), Arg::V(bytes(&tpl.suf)), iv(0), iv(0), iv(0)],
+                "ifda.settle",
+                v,
+                i,
+                (EXPIRY - 1_000) as u64,
+            ),
+            tok_in(
+                t,
+                CARRIER,
+                3 * WHOLE,
+                &i.as_bytes(),
+                SCHEME_COVID,
+                TOKEN_COV,
+                Some(vec![tok_state(3 * WHOLE, &ip.maker, SCHEME_P2PK)]),
+                Wit::CovId,
+                1_500,
+            ),
+        ],
+        outputs: vec![out(v + CARRIER - REFUND_TIP, t.spk(3 * WHOLE, &ip.maker, SCHEME_P2PK), Some((1, TOKEN_COV)))],
+        lock_time: lock,
+        payload: vec![],
+    }
+}
+/// close() of an empty repeating entry (cov 0xf1) at its soft expiry: the carrier minus refundTip to the maker.
+fn ifda_close(f: &Fx) -> Scn {
+    let e = rpta_p(f, 0, 1);
+    Scn {
+        name: "ifda close".into(),
+        inputs: vec![call(&ifda(&f.net, &e), "close", vec![], "ifda.close", 2 * CARRIER, cov(RPTA_ENTRY), (EXPIRY - 1_000) as u64)],
+        outputs: vec![out(2 * CARRIER - REFUND_TIP, p2pk_spk(&e.maker), None)],
+        lock_time: EXPIRY as u64,
+        payload: vec![],
+    }
+}
+
+/// A sell-first entry fill (4 of its 10 whole, outputs: [0] exit, [1] entry continuation, [2] rest custody, [3] the
+/// taker's tokens, [4] change) on the 8/8 token whose token inputs put a stray of the entry (3 whole owned by its id) at
+/// token slot k: k - 1 key-held whole tokens of the taker fill the slots between the custody (slot 0) and the stray; at
+/// k = 0 the stray leads and the custody follows. The stray and the taker's units go to the taker. `stray = false`: a
+/// taker unit stands at slot k instead (the control shape).
+fn ifda_stray_at_slot(f: &Fx, k: usize, stray: bool) -> Scn {
+    let t = &f.net.t;
+    let i = cov(0xf1);
+    let taker = pk(&f.taker);
+    let ip = ifda_p(f);
+    let n = 4 * WHOLE;
+    let cust = (10 * WHOLE, i.as_bytes(), SCHEME_COVID, Wit::CovId);
+    let unit = (WHOLE, taker, SCHEME_P2PK, Wit::P2pk(f.taker));
+    let odd = if stray { (3 * WHOLE, i.as_bytes(), SCHEME_COVID, Wit::CovId) } else { unit.clone() };
+    let mut toks = vec![];
+    if k == 0 {
+        toks.push(odd);
+        toks.push(cust);
+    } else {
+        toks.push(cust);
+        for _ in 1..k {
+            toks.push(unit.clone());
+        }
+        toks.push(odd);
+    }
+    let got = n + toks.iter().map(|x| x.0).sum::<i64>() - 10 * WHOLE;
+    let custody_in = if k == 0 { 2 } else { 1 };
+    let tpl = condb_tpl(&f.net);
+    let args = vec![nb(n), iv(custody_in), iv(2), iv(0), Arg::V(bytes(&tpl.pre)), Arg::V(bytes(&tpl.suf)), iv(0), iv(0), iv(0)];
+    let mut inputs = vec![call(&ifda(&f.net, &ip), "settle", args, "ifda.settle", IFDA_VALUE, i, 1_000)];
+    for (j, (amt, owner, scheme, wit)) in toks.into_iter().enumerate() {
+        let next = (j == 0).then(|| vec![tok_state(6 * WHOLE, &i.as_bytes(), SCHEME_COVID), tok_state(got, &taker, SCHEME_P2PK)]);
+        inputs.push(tok_in(t, CARRIER, amt, &owner, scheme, TOKEN_COV, next, wit, 1_000));
+    }
+    inputs.push(p2pk_in(&f.taker, 1000 * KAS));
+    let proceeds = ask_all_in(4, ip.price, ip.tip);
+    let mut s = Scn {
+        name: format!("ifda fill with a stray at token slot {k}"),
+        inputs,
+        outputs: vec![
+            out(proceeds + 4 * ip.prefund + ip.exit_carrier, spk_of(&condb(&f.net, &ip.exit.with_qty(4))), None),
+            out(IFDA_VALUE - 4 * ip.prefund - ip.exit_carrier, spk_of(&ifda(&f.net, &IfdAP { qty: 6, ..ip.clone() })), Some((0, i))),
+            out(CARRIER, t.spk(6 * WHOLE, &i.as_bytes(), SCHEME_COVID), Some((1, TOKEN_COV))),
+            out(CARRIER, t.spk(got, &taker, SCHEME_P2PK), Some((1, TOKEN_COV))),
+            out(0, p2pk_spk(&taker), None),
+        ],
+        lock_time: NOW,
+        payload: vec![],
+    };
+    balance(&mut s, 4);
+    regen(&mut s, 0, 0);
+    s
+}
+
+/// A terminating conditional-buy fill (limit leg, the last 4 whole: [0] delivery, [1] the taker's extra tokens, [2] change)
+/// on the 8/8 token whose token inputs put a stray of the order (3 whole owned by its id) at token slot k (k - 1 key-held
+/// whole tokens of the taker between the taker's 4 sold whole at slot 0 and the stray; at k = 0 the stray leads). The
+/// stray and the units go to the taker. `stray = false`: a taker unit stands at slot k instead (the control shape).
+fn condb_stray_at_slot(f: &Fx, k: usize, stray: bool) -> Scn {
+    let t = &f.net.t;
+    let e = cov(0xe1);
+    let taker = pk(&f.taker);
+    let cp = CondBP::oco(pk(&f.maker_b)).with_qty(4);
+    let n = 4 * WHOLE;
+    let v = condb_value(&cp);
+    let spend = bid_all_in(4, cp.tp, cp.tip);
+    let sold = (n, taker, SCHEME_P2PK, Wit::P2pk(f.taker));
+    let unit = (WHOLE, taker, SCHEME_P2PK, Wit::P2pk(f.taker));
+    let odd = if stray { (3 * WHOLE, e.as_bytes(), SCHEME_COVID, Wit::CovId) } else { unit.clone() };
+    let mut toks = vec![];
+    if k == 0 {
+        toks.push(odd);
+        toks.push(sold);
+    } else {
+        toks.push(sold);
+        for _ in 1..k {
+            toks.push(unit.clone());
+        }
+        toks.push(odd);
+    }
+    let extra = toks.iter().map(|x| x.0).sum::<i64>() - n;
+    let mut inputs = vec![call(&condb(&f.net, &cp), "settle", vec![nb(n), iv(1), iv(0), iv(0), iv(0)], "condb.settle", v, e, 2_000)];
+    for (j, (amt, owner, scheme, wit)) in toks.into_iter().enumerate() {
+        let next = (j == 0).then(|| vec![tok_state(n, &cp.maker, SCHEME_P2PK), tok_state(extra, &taker, SCHEME_P2PK)]);
+        inputs.push(tok_in(t, CARRIER, amt, &owner, scheme, TOKEN_COV, next, wit, 1_000));
+    }
+    let nt = (inputs.len() - 1) as i64;
+    Scn {
+        name: format!("condb fill with a stray at token slot {k}"),
+        inputs,
+        outputs: vec![
+            out(v - spend, t.spk(n, &cp.maker, SCHEME_P2PK), Some((1, TOKEN_COV))),
+            out(CARRIER, t.spk(extra, &taker, SCHEME_P2PK), Some((1, TOKEN_COV))),
+            out(spend + (nt - 1) * CARRIER - NET_FEE, p2pk_spk(&taker), None),
+        ],
+        lock_time: NOW,
+        payload: vec![],
+    }
+}
+
+#[test]
+fn v3_buy_audit_cond_bid() {
+    let f = fx();
+    let n = &f.net;
+    let t = &n.t;
+    let e = cov(0xe1);
+    let m = pk(&f.maker_b);
+    let taker = pk(&f.taker);
+    let oco = CondBP::oco(m);
+    let small = oco.with_qty(4);
+    // limit leg 4 of 10: [order, taker tokens] -> [delivery (DC), continuation (0, order id), taker KAS]
+    let part = || condb_fill(&f, &oco, 4, 0, &oco.with_qty(6), None);
+    // limit leg, the last 4: -> [delivery (the rest of the escrow), taker KAS]
+    let term = || condb_fill(&f, &small, 4, 0, &small, None);
+
+    // the order's identity, activeFrom, the fill size
+    let mut s = with_name(part(), "NAU-CB01 a sibling UTXO of the order's covenant id spent beside its fill");
+    add_sibling(&mut s, &f.taker, e, KAS);
+    run_bad(n, &s, 0);
+    let late = CondBP { active_from: NOW as i64 + 1, ..oco.clone() };
+    run_bad(
+        n,
+        &with_name(
+            condb_fill(&f, &late, 4, 0, &late.with_qty(6), None),
+            "NAU-CB02 conditional buy filled one DAA before its activeFrom",
+        ),
+        0,
+    );
+    // n = 0 on an order with minFill 0 (a maker-set field): the zero fill moves deliveryCarrier of the escrow into an
+    // empty token delivery (the order is drained one carrier per call)
+    let z = CondBP { min_fill: 0, ..oco.clone() };
+    let v = condb_value(&z);
+    let s = Scn {
+        name: "NAU-CB03 zero fill (n = 0, minFill 0): an empty delivery takes deliveryCarrier out of the escrow".into(),
+        inputs: vec![
+            call(&condb(n, &z), "settle", vec![nb(0), iv(1), iv(0), iv(0), iv(0)], "condb.settle", v, e, 2_000),
+            tok_in(
+                t,
+                CARRIER,
+                WHOLE,
+                &taker,
+                SCHEME_P2PK,
+                TOKEN_COV,
+                Some(vec![tok_state(0, &m, SCHEME_P2PK), tok_state(WHOLE, &taker, SCHEME_P2PK)]),
+                Wit::P2pk(f.taker),
+                1_000,
+            ),
+        ],
+        outputs: vec![
+            out(DC, t.spk(0, &m, SCHEME_P2PK), Some((1, TOKEN_COV))),
+            out(v - DC, spk_of(&condb(n, &z)), Some((0, e))),
+            out(CARRIER - NET_FEE, t.spk(WHOLE, &taker, SCHEME_P2PK), Some((1, TOKEN_COV))),
+        ],
+        lock_time: NOW,
+        payload: vec![],
+    };
+    run_bad(n, &s, 0);
+
+    // hostile fields
+    let hs = CondBP { scale: -SCALE, ..small.clone() };
+    let v = condb_value(&hs);
+    let spend = quote_raw(4 * WHOLE, hs.tp + hs.tip, -SCALE, 0);
+    assert!(spend < 0);
+    let s = Scn {
+        name: "NAU-CB04 hostile field: a conditional buy at scale -1000 (its delivery takes the escrow and 4 x the quote from the seller)"
+            .into(),
+        inputs: vec![
+            call(&condb(n, &hs), "settle", vec![nb(4 * WHOLE), iv(1), iv(0), iv(0), iv(0)], "condb.settle", v, e, 2_000),
+            tok_in(
+                t,
+                CARRIER,
+                4 * WHOLE,
+                &taker,
+                SCHEME_P2PK,
+                TOKEN_COV,
+                Some(vec![tok_state(4 * WHOLE, &m, SCHEME_P2PK)]),
+                Wit::P2pk(f.taker),
+                1_000,
+            ),
+            p2pk_in(&f.taker, 20 * KAS),
+        ],
+        outputs: vec![
+            out(v - spend, t.spk(4 * WHOLE, &m, SCHEME_P2PK), Some((1, TOKEN_COV))),
+            out(20 * KAS + CARRIER + spend - NET_FEE, p2pk_spk(&taker), None),
+        ],
+        lock_time: NOW,
+        payload: vec![],
+    };
+    run_bad(n, &s, 0);
+    let nt = CondBP { tip: -TIP, ..oco.clone() };
+    run_bad(
+        n,
+        &with_name(
+            condb_fill(&f, &nt, 4, 0, &nt.with_qty(6), None),
+            "NAU-CB05 hostile field: a negative tip (pays below its leg price)",
+        ),
+        0,
+    );
+    // deliveryCarrier -1 KAS on a partial fill: the delivery carries nothing, the continuation the escrow's rest + 1 KAS
+    let nd = CondBP { dc: -KAS, ..oco.clone() };
+    let mut s = with_name(
+        condb_fill(&f, &nd, 4, 0, &nd.with_qty(6), None),
+        "NAU-CB06 hostile field: a negative delivery carrier (the delivery carries nothing)",
+    );
+    let v = s.inputs[0].entry.amount as i64;
+    let spend = bid_all_in(4, nd.tp, nd.tip);
+    s.outputs[0].value = 0;
+    s.outputs[1].value = (v - spend + KAS) as u64;
+    s.outputs[2].value = (spend + CARRIER - NET_FEE - KAS) as u64;
+    run_bad(n, &s, 0);
+
+    // the stop leg
+    let mut s = with_name(
+        condb_fill(&f, &oco.armed(), 4, 1, &oco.with_qty(6).armed(), None),
+        "NAU-CB07 armed stop-leg fill naming leg 2 (only 0 and 1 are legs)",
+    );
+    set_arg(&mut s, 0, 2, iv(2));
+    run_bad(n, &s, 0);
+    let lim = CondBP { stop: 0, ..oco.clone() };
+    run_bad(
+        n,
+        &with_name(
+            condb_fill_at(&f, &lim, 4, 1, &lim.with_qty(6).armed(), Some(&arm_ev()), 0, 0),
+            "NAU-CB08 limit-only order (stopPrice 0) filled on a stop leg at price 0 (the seller gets the tip only)",
+        ),
+        0,
+    );
+    let neg = CondBP { slip_bps: -300, ..oco.armed() };
+    run_bad(
+        n,
+        &with_name(
+            condb_fill(&f, &neg, 4, 1, &neg.with_qty(6), None),
+            "NAU-CB09 hostile field: a negative band (slipBps -300, stop leg 2.91)",
+        ),
+        0,
+    );
+    // an auction armed 100 DAA ago (origin NOW - 100, band 3% over 300 DAA) charged its ceiling with t = NOW + 1000
+    let au = CondBP { band_daa: 300, armed: NOW as i64 - 100, ..oco.clone() };
+    run_bad(
+        n,
+        &with_name(
+            condb_fill_at(&f, &au, 4, 1, &au.with_qty(6), None, NOW as i64 + 1_000, au.stop_leg()),
+            "NAU-CB10 buy-stop auction time t in the future (the band ceiling 1000 DAA early)",
+        ),
+        0,
+    );
+    // a stop above MAX_STOP with band 0: no product overflows, the 1-base-unit fill pays the stop
+    let big = CondBP { stop: 922_337_203_685_478, slip_bps: 0, tp: 0, armed: 1, qty_base: Some(1), ..oco.clone() };
+    let spend = quote_raw(1, big.stop + big.tip, SCALE, 0);
+    let v = spend + DC;
+    let s = Scn {
+        name: "NAU-CB11 armed buy-stop at MAX_STOP + 1 (band 0) filled at its stop".into(),
+        inputs: vec![
+            call(&condb(n, &big), "settle", vec![nb(1), iv(1), iv(1), iv(0), iv(0)], "condb.settle", v, e, 2_000),
+            tok_in(
+                t,
+                CARRIER,
+                1,
+                &taker,
+                SCHEME_P2PK,
+                TOKEN_COV,
+                Some(vec![tok_state(1, &m, SCHEME_P2PK)]),
+                Wit::P2pk(f.taker),
+                1_000,
+            ),
+        ],
+        outputs: vec![
+            out(DC, t.spk(1, &m, SCHEME_P2PK), Some((1, TOKEN_COV))),
+            out(spend + CARRIER - NET_FEE, p2pk_spk(&taker), None),
+        ],
+        lock_time: NOW,
+        payload: vec![],
+    };
+    run_bad(n, &s, 0);
+
+    // the re-arm and the delivery
+    let mut s = with_name(
+        rpta_merge(&f, &MergeBKnobs::new(&f, 6, 4, 3)),
+        "NAU-CB12 re-arming take-profit pays the maker's profit to the filler",
+    );
+    s.outputs[0].script_public_key = p2pk_spk(&taker);
+    run_bad(n, &s, 0);
+    let mut s = with_name(term(), "NAU-CB13 delivery template read from a token input of another covenant (same program)");
+    s.inputs.push(tok_in(
+        t,
+        CARRIER,
+        WHOLE,
+        &taker,
+        SCHEME_P2PK,
+        OTHER_COV,
+        Some(vec![tok_state(WHOLE, &taker, SCHEME_P2PK)]),
+        Wit::P2pk(f.taker),
+        1_000,
+    ));
+    s.outputs.push(out(CARRIER, t.spk(WHOLE, &taker, SCHEME_P2PK), Some((2, OTHER_COV))));
+    set_arg(&mut s, 0, 1, iv(2));
+    run_bad(n, &s, 0);
+    // a planted look-alike holder of the token's covenant id: the delivery is built from its bytes (an anyone-can-spend
+    // script bound to the token's id by the planted input); the seller keeps its real tokens
+    let mut s = with_name(
+        term(),
+        "NAU-CB14 delivery template read from a planted look-alike holder (the maker gets an anyone-can-spend fake)",
+    );
+    let mut rs = plant_tok(&f, &mut s, 1, true);
+    let st = t.prefix.len();
+    rs[st..st + 112].copy_from_slice(&tok_state_bytes(4 * WHOLE, &m, SCHEME_P2PK, 0));
+    s.outputs[0].script_public_key = pay_to_script_hash_script(&rs);
+    run_bad(n, &s, 0);
+    let mut s = with_name(
+        term(),
+        "NAU-CB15 delivery not bound to the token's covenant (a copy of its holder script; the seller keeps the tokens)",
+    );
+    s.outputs[0].covenant = None;
+    set_leader_next(&mut s, 1, vec![tok_state(4 * WHOLE, &taker, SCHEME_P2PK)]);
+    let l = s.outputs.len() - 1;
+    s.outputs[l].value -= CARRIER as u64;
+    s.outputs.push(out(CARRIER, t.spk(4 * WHOLE, &taker, SCHEME_P2PK), Some((1, TOKEN_COV))));
+    run_bad(n, &s, 0);
+
+    // continuation and termination
+    let mut s = with_name(part(), "NAU-CB16 partial fill leaving a second output bound to the order's id (to the taker)");
+    bind_extra(&mut s, e, 0, &taker, KAS);
+    run_bad(n, &s, 0);
+    let mut s = with_name(term(), "NAU-CB17 terminating fill leaving an output bound to the order's id (to the taker)");
+    bind_extra(&mut s, e, 0, &taker, KAS);
+    run_bad(n, &s, 0);
+
+    // update
+    let r = arm_ev();
+    let mut s = with_name(
+        condb_update(&f, &oco, &oco.armed(), &r, 0),
+        "NAU-CB18 a sibling UTXO of the order's covenant id spent beside its update",
+    );
+    add_sibling(&mut s, &f.taker, e, KAS);
+    run_bad(n, &s, 0);
+    // keeperTip -1 (hostile field): the floor in - keeperTip is capped at the escrow, so the order arms like keeperTip 0
+    let nk = CondBP { keeper_tip: -1, ..oco.clone() };
+    run_bad(
+        n,
+        &with_name(
+            condb_update_tip(&f, &nk, &nk.armed(), &r, 0, 0),
+            "NAU-CB31 hostile field: an order with a negative keeperTip armed (accepted as keeperTip 0)",
+        ),
+        0,
+    );
+    // a limit-only order (stopPrice 0) "armed": its keeper takes the keeperTip (funded beyond the budget) for nothing
+    let lk = CondBP { stop: 0, keeper_tip: 1_000_000, ..oco.clone() };
+    let mut s = condb_update_tip(&f, &lk, &lk.armed(), &r, 0, 1_000_000);
+    s.inputs[0].entry.amount += 1_000_000;
+    s.outputs[0].value += 1_000_000;
+    run_bad(n, &with_name(s, "NAU-CB19 arm update of a limit-only order (stopPrice 0): the keeper paid for a useless arm"), 0);
+    let late = CondBP { active_from: NOW as i64 + 1, ..oco.clone() };
+    run_bad(
+        n,
+        &with_name(condb_update(&f, &late, &late.armed(), &r, 0), "NAU-CB20 arm update one DAA before the order's activeFrom"),
+        0,
+    );
+    let mut s =
+        with_name(condb_update(&f, &oco, &oco.armed(), &r, 0), "NAU-CB21 arm update leaving a second output bound to the order's id");
+    bind_extra(&mut s, e, 0, &taker, KAS);
+    run_bad(n, &s, 0);
+    // scale -1000 (hostile): the keeper's budget floor (need) turns negative, so the keeper takes keeperTip out of the
+    // buying budget. The evidence ask must quote at the same scale and refuses its own negative scale (KobAsk scale > 0):
+    // defence in depth, the scenario is judged at the evidence input (the catalog removes both checks to flip it)
+    let mut tr = trailing_b(m);
+    tr.scale = -SCALE;
+    tr.keeper_tip = KAS;
+    let tr2 = CondBP { stop: tr.stop - 2 * tr.step, ..tr.clone() };
+    let mut s = condb_update_tip(&f, &tr, &tr2, &trail_ev(), tr.wait as u64, KAS);
+    let ei = input_named(&s, "ev.ask.settle");
+    // the evidence ask at scale -1000 (qty -5 x unit -1000: amountLeft 5000 base units, minFill -1000)
+    set_art(&mut s, ei, n.ask(&AskP { qty: -5, unit: -SCALE, ..AskP::new(pk(&f.maker_c), trail_ev().price) }));
+    run_bad(
+        n,
+        &with_name(s, "NAU-CB22 trail update of an order at scale -1000: the keeper takes keeperTip out of the buying budget"),
+        ei,
+    );
+
+    // cancel
+    run_ok(n, &with_name(condb_cancel(&f, &oco, f.maker_b, 0x01), "PAU-CB01 conditional buy cancelled by its maker (SIGHASH_ALL)"));
+    run_bad(
+        n,
+        &with_name(condb_cancel(&f, &oco, f.maker_b, 0x81), "NAU-CB23 conditional buy cancel signed SIGHASH_ALL|ANYONECANPAY"),
+        0,
+    );
+    run_bad(n, &with_name(condb_cancel(&f, &oco, f.taker, 0x01), "NAU-CB24 conditional buy cancel signed by another key"), 0);
+
+    // refund
+    let refund = || condb_refund(&f, &oco);
+    let keeper = keypair();
+    let mut s = with_name(refund(), "NAU-CB25 refund one DAA before the soft expiry");
+    s.lock_time -= 1;
+    run_bad(n, &s, 0);
+    let mut s = with_name(refund(), "NAU-CB26 a sibling UTXO of the order's covenant id spent beside its refund");
+    add_sibling(&mut s, &keeper, e, KAS);
+    run_bad(n, &s, 0);
+    let mut s = with_name(refund(), "NAU-CB27 refund leaving an output bound to the order's id (the keeper's UTXO of the id)");
+    s.outputs.push(out(REFUND_TIP / 2, p2pk_spk(&pk(&keeper)), Some((0, e))));
+    run_bad(n, &s, 0);
+    let mut s = with_name(refund(), "NAU-CB28 refund paid to the keeper instead of the maker");
+    s.outputs[0].script_public_key = p2pk_spk(&pk(&keeper));
+    run_bad(n, &s, 0);
+    let mut s = with_name(refund(), "NAU-CB29 refund paying the maker 1 sompi below the escrow minus refundTip");
+    s.outputs[0].value -= 1;
+    run_bad(n, &s, 0);
+
+    // the stray scan, slot by slot (8/8 token), and its bound
+    let f8 = fx8();
+    run_ok(
+        &f8.net,
+        &with_name(
+            condb_stray_at_slot(&f8, 7, false),
+            "PAU-CB02 conditional-buy fill with eight token inputs (every scan slot), no stray",
+        ),
+    );
+    for k in 0..8 {
+        run_bad(
+            &f8.net,
+            &with_name(condb_stray_at_slot(&f8, k, true), &format!("NAU-CBS{k} stray of the order at token slot {k} (to the taker)")),
+            0,
+        );
+    }
+    run_bad(
+        &f8.net,
+        &with_name(condb_stray_at_slot(&f8, 8, true), "NAU-CB30 stray of the order as a 9th token input (beyond the scan)"),
+        0,
+    );
+}
+
+#[test]
+fn v3_buy_audit_ifd_ask() {
+    let f = fx();
+    let n = &f.net;
+    let t = &n.t;
+    let i = cov(0xf1);
+    let taker = pk(&f.taker);
+    let ip = ifda_p(&f);
+    // 4 of 10: [entry, custody (leads), taker KAS] -> [exit, continuation, rest custody, taker tokens, change]
+    let part = || b7(&f);
+    // sold out 6 of 6: -> [exit, taker tokens, change]
+    let sold = || b7b(&f);
+
+    // the custody
+    for (id, look) in [("NAU-IA01", false), ("NAU-IA02", true)] {
+        let what = if look { "P2SH of a look-alike template" } else { "not the P2SH of the holder script it pushes" };
+        let mut s =
+            with_name(sold(), &format!("{id} planted custody carrying the token's covenant id ({what}): sold out, no token anywhere"));
+        plant_tok(&f, &mut s, 1, look);
+        let o = s.outputs.remove(1);
+        let l = s.outputs.len() - 1;
+        s.outputs[l].value += o.value;
+        run_bad(n, &s, 0);
+    }
+    let mut s = with_name(part(), "NAU-IA03 a sibling UTXO of the entry's covenant id spent beside its fill");
+    add_sibling(&mut s, &f.taker, i, KAS);
+    run_bad(n, &s, 0);
+    let mut s =
+        with_name(sold(), "NAU-IA04 custody of another token (same program) owned by the entry: sold out, that token to the taker");
+    set_cov(&mut s, 1, Some(OTHER_COV));
+    s.outputs[1].covenant = Some(CovenantBinding { authorizing_input: 1, covenant_id: OTHER_COV });
+    run_bad(n, &s, 0);
+    let x = cov(0xd5);
+    let mut s = with_name(
+        sold(),
+        "NAU-IA05 custody owned by another covenant id (the taker's tokens, owned by its UTXO of id X): sold out, the entry's custody orphaned",
+    );
+    set_tok_redeem(&mut s, 1, tok_redeem_x(t, 6 * WHOLE, &x.as_bytes(), SCHEME_COVID, 0, &EXT));
+    set_cov(&mut s, 2, Some(x));
+    run_bad(n, &s, 0);
+    let mut s = with_name(sold(), "NAU-IA06 custody of the entry's id with borrowing enabled (borrow scheme 1)");
+    set_tok_redeem(&mut s, 1, tok_redeem_x(t, 6 * WHOLE, &i.as_bytes(), SCHEME_COVID, 1, &EXT));
+    run_bad(n, &s, 0);
+    let x2 = [0xef; 32];
+    let mut s =
+        with_name(sold(), "NAU-IA07 custody of another extension commitment (another token of the same covenant id): sold out");
+    set_tok_redeem(&mut s, 1, tok_redeem_x(t, 6 * WHOLE, &i.as_bytes(), SCHEME_COVID, 0, &x2));
+    set_leader_next(&mut s, 1, vec![tok_state_x(6 * WHOLE, &taker, SCHEME_P2PK, 0, &x2)]);
+    s.outputs[1].script_public_key = pay_to_script_hash_script(&tok_redeem_x(t, 6 * WHOLE, &taker, SCHEME_P2PK, 0, &x2));
+    run_bad(n, &s, 0);
+
+    // refund (settle nb = 0)
+    run_ok(n, &with_name(ifda_refund(&f, EXPIRY as u64), "PAU-IA02 refund of an entry holding 3 whole at its soft expiry"));
+    run_bad(n, &with_name(ifda_refund(&f, EXPIRY as u64 - 1), "NAU-IA08 refund one DAA before the soft expiry"), 0);
+    let mut s =
+        with_name(ifda_refund(&f, EXPIRY as u64), "NAU-IA09 refund paying the maker 1 sompi below the carriers minus refundTip");
+    s.outputs[0].value -= 1;
+    run_bad(n, &s, 0);
+
+    // merge: m > 0. A merge argument -(1 * 2^53 + 0) names the exit at input 1 and m = 0 (a no-op re-arm); the exit must
+    // then run its settle with n = 0, which it refuses itself (n > 0; its committed minFill is 0 here, so only that check):
+    // defence in depth, judged at the exit input (the catalog removes both checks to flip it)
+    let mut zp = rpta_p(&f, 6, 21);
+    zp.exit.min_fill = 0;
+    let zx = booked_exit_b(&zp, 4, 0);
+    let x_value = 4 * (sell_proceeds(&zp) + zp.prefund) + zp.exit_carrier;
+    let e_value = CARRIER + 6 * (IFDA_PREFUND + IFDA_EXIT_CARRIER);
+    let mut s = Scn {
+        name: "NAU-IA10 merge of m = 0 (argument -(1 * 2^53)) beside the booked exit's zero fill".into(),
+        inputs: vec![
+            p2pk_in(&f.taker, 10 * KAS),
+            call(&condb(n, &zx), "settle", vec![nb(0), iv(3), iv(0), iv(0), iv(0)], "condb.settle", x_value, cov(RPTA_EXIT), 2_000),
+            call(
+                &ifda(n, &zp),
+                "settle",
+                vec![nb_merge(1, 0), iv(3), iv(3), iv(0), Arg::V(bytes(&[])), Arg::V(bytes(&[])), iv(0), iv(0), iv(0)],
+                "ifda.merge",
+                e_value,
+                i,
+                1_000,
+            ),
+            tok_in(
+                t,
+                CARRIER,
+                6 * WHOLE,
+                &i.as_bytes(),
+                SCHEME_COVID,
+                TOKEN_COV,
+                Some(vec![tok_state(6 * WHOLE, &i.as_bytes(), SCHEME_COVID)]),
+                Wit::CovId,
+                1_000,
+            ),
+        ],
+        outputs: vec![
+            out(0, p2pk_spk(&taker), None),
+            out(0, p2pk_spk(&zp.maker), None),
+            out(x_value, spk_of(&condb(n, &zx)), Some((1, cov(RPTA_EXIT)))),
+            out(CARRIER, t.spk(6 * WHOLE, &i.as_bytes(), SCHEME_COVID), Some((3, TOKEN_COV))),
+            out(e_value, spk_of(&ifda(n, &zp)), Some((2, i))),
+        ],
+        lock_time: NOW,
+        payload: vec![],
+    };
+    balance(&mut s, 0);
+    run_bad(n, &s, 1);
+    // the merge exit's terms beyond [0..223): slipBps .. minRestDaa ([231..286)), bandDaa / keeperTip ([303..321))
+    let x6 = booked_exit_b(&rpta_p(&f, 6, 21), 4, 0);
+    run_bad(
+        n,
+        &with_name(
+            rpta_merge(&f, &MergeBKnobs { exit: Some(CondBP { slip_bps: 1_000, ..x6.clone() }), ..MergeBKnobs::new(&f, 6, 4, 3) }),
+            "NAU-IA11 look-alike exit with another stop band (slipBps 10%) re-arms the entry",
+        ),
+        2,
+    );
+    run_bad(
+        n,
+        &with_name(
+            rpta_merge(&f, &MergeBKnobs { exit: Some(CondBP { band_daa: 300, ..x6.clone() }), ..MergeBKnobs::new(&f, 6, 4, 3) }),
+            "NAU-IA12 look-alike exit with another auction length (bandDaa 300) re-arms the entry",
+        ),
+        2,
+    );
+    // state byte 294 (the push opcode of the exit's `armed`): a genuine KobCondBid whose armed field is pushed as
+    // OP_DATA_7 + 7 bytes + OP_NOP (the same stack item, state [303..) unchanged) sells out and re-arms the entry
+    let mut s = rpta_merge(&f, &MergeBKnobs::new(&f, 6, 4, 4));
+    let art = condb(n, &CondBP { qty: 4, ..x6.clone() });
+    let mut rs = bytecode(&art);
+    assert_eq!((rs[295], &rs[296..304]), (0x08, &[0u8; 8][..]), "armed push at state 294 (bytecode 295)");
+    rs[295] = 0x07;
+    rs[296..303].copy_from_slice(&[0u8; 7]);
+    rs[303] = 0x61; // OP_NOP
+    let mut ss = encode_entry_sig_script(&art, "settle", &[bytes(&(4 * WHOLE).to_le_bytes()), int(1), int(0), int(0), int(0)])
+        .expect("encode settle");
+    ss.extend_from_slice(&push(&rs));
+    let x_in = s.inputs[0].entry.clone();
+    s.inputs[0] = Inp {
+        entry: UtxoEntry::new(x_in.amount, pay_to_script_hash_script(&rs), x_in.block_daa_score, false, x_in.covenant_id),
+        role: Role::RawSs { ss, name: "exit.data7" },
+        seq: 0,
+    };
+    run_bad(n, &with_name(s, "NAU-IA38 look-alike exit whose armed field is pushed as OP_DATA_7 + OP_NOP re-arms the entry"), 2);
+    // merge: scale > 0. An entry at scale -1000 (hostile) merges its booked exit (exitState at the same scale, as the
+    // merge requires); that exit refuses its own negative scale (KobCondBid scale > 0): defence in depth, judged at the
+    // exit input (the catalog removes both checks to flip it). The sell-out floor is in + x_in + 4 x rate there.
+    let mut k = MergeBKnobs::new(&f, 6, 4, 4);
+    k.entry.scale = -SCALE;
+    k.entry.exit.scale = -SCALE;
+    k.cont_delta = 8 * sell_proceeds(&k.entry);
+    let mut s = rpta_merge(&f, &k);
+    s.inputs.push(p2pk_in(&f.taker, 100 * KAS));
+    let l = s.outputs.len() - 1;
+    balance(&mut s, l);
+    run_bad(n, &with_name(s, "NAU-IA36 merge of an entry and its booked exit at scale -1000 (the entry takes 4 x the rate more)"), 0);
+
+    // fill: activeFrom and the hostile fields
+    let late = IfdAP { active_from: NOW as i64 + 1, ..ip.clone() };
+    run_bad(n, &with_name(ifda_fill(&f, &late, 10, 4, IFDA_VALUE), "NAU-IA13 entry filled one DAA before its activeFrom"), 0);
+    let hs = IfdAP { scale: -SCALE, ..ip.clone() };
+    let mut s = with_name(
+        ifda_fill(&f, &hs, 4, 4, IFDA_VALUE),
+        "NAU-IA14 hostile field: an entry at scale -1000 sells out at negative proceeds (the taker takes 4 x the rate from it)",
+    );
+    let real = ask_all_in(4, hs.price, hs.tip);
+    let raw = quote_raw(4 * WHOLE, hs.price - hs.tip, -SCALE, -SCALE - 1);
+    assert!(raw < 0);
+    s.outputs[0].value -= (real - raw) as u64;
+    let l = s.outputs.len() - 1;
+    s.outputs[l].value += (real - raw) as u64;
+    regen(&mut s, 0, 0);
+    run_bad(n, &s, 0);
+    let np = IfdAP { prefund: -IFDA_PREFUND, ..ip.clone() };
+    run_bad(
+        n,
+        &with_name(
+            ifda_fill(&f, &np, 10, 4, IFDA_VALUE),
+            "NAU-IA15 hostile field: a negative prefund (the exit gets less than its proceeds)",
+        ),
+        0,
+    );
+    let nc = IfdAP { exit_carrier: -KAS, ..ip.clone() };
+    run_bad(
+        n,
+        &with_name(ifda_fill(&f, &nc, 10, 4, IFDA_VALUE), "NAU-IA16 hostile field: a negative exit carrier (the exit gets less)"),
+        0,
+    );
+    // n > amountLeft: 11 whole sold from a 10-whole custody (the exit buys back 11)
+    let mut s = with_name(ifda_fill(&f, &ip, 10, 10, IFDA_VALUE), "NAU-IA17 fill of 11 whole from a 10-whole custody (sold out)");
+    set_arg(&mut s, 0, 0, nb(11 * WHOLE));
+    s.outputs[0].script_public_key = spk_of(&condb(n, &ip.exit.with_qty(11)));
+    let extra = ask_all_in(1, ip.price, ip.tip);
+    s.outputs[0].value += extra as u64;
+    let l = s.outputs.len() - 1;
+    s.outputs[l].value -= extra as u64;
+    regen(&mut s, 0, 0);
+    run_bad(n, &s, 0);
+
+    // the sell-stop auction time
+    let au = IfdAP { entry_stop: 260_000_000, band_daa: 1_000, armed: NOW as i64 - 100, ..ip.clone() };
+    run_bad(
+        n,
+        &with_name(
+            ifda_fill_x(&f, &au, 10, 4, IFDA_VALUE, P250, None, NOW as i64 + 900, NOW as i64 - 100),
+            "NAU-IA18 sell-stop auction time t in the future (the limit 2.50 900 DAA early)",
+        ),
+        0,
+    );
+    let a1 = IfdAP { entry_stop: 260_000_000, band_daa: 1_000, armed: 1, ..ip.clone() };
+    run_bad(
+        n,
+        &with_name(
+            ifda_fill_x(&f, &a1, 10, 4, IFDA_VALUE, 260_010_000, None, 999, 1_000),
+            "NAU-IA19 sell-stop auction time one DAA before its origin (priced above the stop)",
+        ),
+        0,
+    );
+
+    // the exit template: an anyone-can-spend script around the exit's state ("0 IF <state> ENDIF TRUE")
+    let mut s = with_name(part(), "NAU-IA20 exit built from an anyone-can-spend template (the taker takes the proceeds and prefund)");
+    let real = bytecode(&condb(n, &ip.exit.with_qty(4)));
+    let tpl = condb_tpl(n);
+    let (cpre, csuf) = (vec![0x00u8, 0x63], vec![0x68u8, 0x51]);
+    let fake = [cpre.clone(), real[tpl.pre.len()..real.len() - tpl.suf.len()].to_vec(), csuf.clone()].concat();
+    s.outputs[0].script_public_key = pay_to_script_hash_script(&fake);
+    set_arg(&mut s, 0, 4, Arg::V(bytes(&cpre)));
+    set_arg(&mut s, 0, 5, Arg::V(bytes(&csuf)));
+    regen(&mut s, 0, 0);
+    run_bad(n, &s, 0);
+
+    // the remainder, the continuation, termination, the token output
+    let mut s = with_name(part(), "NAU-IA21 partial fill: the rest custody's carrier taken by the taker");
+    s.outputs[2].value = 0;
+    s.outputs[4].value += CARRIER as u64;
+    run_bad(n, &s, 0);
+    let mut s = with_name(part(), "NAU-IA22 partial fill leaving a second output bound to the entry's id (to the taker)");
+    bind_extra(&mut s, i, 0, &taker, KAS);
+    run_bad(n, &s, 0);
+    let mut s = with_name(sold(), "NAU-IA23 sold-out fill leaving an output bound to the entry's id (to the taker)");
+    bind_extra(&mut s, i, 0, &taker, KAS);
+    run_bad(n, &s, 0);
+    let mut s =
+        with_name(part(), "NAU-IA24 partial fill: the rest is an unbound copy of its holder script, the taker takes all 10 whole");
+    s.outputs[2].covenant = None;
+    s.outputs[3].script_public_key = t.spk(10 * WHOLE, &taker, SCHEME_P2PK);
+    set_leader_next(&mut s, 1, vec![tok_state(10 * WHOLE, &taker, SCHEME_P2PK)]);
+    run_bad(n, &s, 0);
+
+    // close
+    let keeper = keypair();
+    let mut s = with_name(ifda_close(&f), "NAU-IA25 a sibling UTXO of the entry's covenant id spent beside its close");
+    add_sibling(&mut s, &keeper, i, KAS);
+    run_bad(n, &s, 0);
+    let mut s = with_name(ifda_close(&f), "NAU-IA26 close leaving an output bound to the entry's id (the keeper's UTXO of the id)");
+    s.outputs.push(out(REFUND_TIP / 2, p2pk_spk(&pk(&keeper)), Some((0, i))));
+    run_bad(n, &s, 0);
+    let mut s = with_name(ifda_close(&f), "NAU-IA27 close paying the maker 1 sompi below the carrier minus refundTip");
+    s.outputs[0].value -= 1;
+    run_bad(n, &s, 0);
+
+    // update
+    let sp = IfdAP { entry_stop: 260_000_000, ..ip.clone() };
+    let down = Ev::ask(255_000_000);
+    let mut s = with_name(
+        ifda_update(&f, &sp, &IfdAP { armed: 1, ..sp.clone() }, &down, 0, false),
+        "NAU-IA28 a sibling UTXO of the entry's covenant id spent beside its update",
+    );
+    add_sibling(&mut s, &f.taker, i, KAS);
+    run_bad(n, &s, 0);
+    // a limit entry at price 0 (tip 0, entryStop 0) "armed" next to an ask fill quoting 0: the keeper takes keeperTip for
+    // nothing (settle never reads armed without entryStop > 0)
+    let z = IfdAP { price: 0, tip: 0, entry_stop: 0, keeper_tip: 1_000_000, ..ip.clone() };
+    let mut s = ifda_update(&f, &z, &IfdAP { armed: 1, ..z.clone() }, &Ev::ask(0), 1_000_000, false);
+    let ei = input_named(&s, "ev.ask.settle");
+    set_art(&mut s, ei, n.ask(&AskP { qty: 5, tip: 0, ..AskP::new(pk(&f.maker_c), 0) }));
+    let d = 2 * CARRIER as u64 - s.outputs[ei].value;
+    s.outputs[ei].value += d;
+    let l = s.outputs.len() - 1;
+    s.outputs[l].value -= d;
+    run_bad(n, &with_name(s, "NAU-IA29 arm update of a limit entry (entryStop 0, price 0): the keeper paid for a useless arm"), 0);
+    let kp = IfdAP { keeper_tip: 1_000_000, armed: 1, ..sp.clone() };
+    run_bad(
+        n,
+        &with_name(
+            ifda_update(&f, &kp, &kp, &down, 1_000_000, false),
+            "NAU-IA30 update of an already armed entry (the keeper paid again)",
+        ),
+        0,
+    );
+    let late = IfdAP { active_from: NOW as i64 + 1, ..sp.clone() };
+    run_bad(
+        n,
+        &with_name(
+            ifda_update(&f, &late, &IfdAP { armed: 1, ..late.clone() }, &down, 0, false),
+            "NAU-IA31 arm update one DAA before the entry's activeFrom",
+        ),
+        0,
+    );
+    let mut s = with_name(
+        ifda_update(&f, &sp, &IfdAP { armed: 1, ..sp.clone() }, &down, 0, false),
+        "NAU-IA32 arm update leaving a second output bound to the entry's id",
+    );
+    bind_extra(&mut s, i, 0, &taker, KAS);
+    run_bad(n, &s, 0);
+    run_bad(
+        n,
+        &with_name(
+            ifda_update(&f, &sp, &IfdAP { armed: 1, price: 240_000_000, ..sp.clone() }, &down, 0, false),
+            "NAU-IA33 arm update reprices the entry (limit 2.50 -> 2.40)",
+        ),
+        0,
+    );
+
+    // keeperTip -1 (hostile field): the keeper tops the entry up by 1 sompi
+    let nk = IfdAP { keeper_tip: -1, ..sp.clone() };
+    run_bad(
+        n,
+        &with_name(
+            ifda_update(&f, &nk, &IfdAP { armed: 1, ..nk.clone() }, &down, -1, false),
+            "NAU-IA39 hostile field: a negative keeperTip (the keeper tops the entry up by 1 sompi)",
+        ),
+        0,
+    );
+
+    // cancel
+    run_ok(n, &with_name(ifda_cancel(&f, f.maker_a, 0x01), "PAU-IA03 entry cancelled by its maker (SIGHASH_ALL)"));
+    run_bad(n, &with_name(ifda_cancel(&f, f.maker_a, 0x81), "NAU-IA34 entry cancel signed SIGHASH_ALL|ANYONECANPAY"), 0);
+    run_bad(n, &with_name(ifda_cancel(&f, f.taker, 0x01), "NAU-IA35 entry cancel signed by another key"), 0);
+
+    // the stray scan, slot by slot (8/8 token), and its bound
+    let f8 = fx8();
+    run_ok(
+        &f8.net,
+        &with_name(ifda_stray_at_slot(&f8, 7, false), "PAU-IA01 entry fill with eight token inputs (every scan slot), no stray"),
+    );
+    for k in 0..8 {
+        run_bad(
+            &f8.net,
+            &with_name(ifda_stray_at_slot(&f8, k, true), &format!("NAU-IAS{k} stray of the entry at token slot {k} (to the taker)")),
+            0,
+        );
+    }
+    run_bad(
+        &f8.net,
+        &with_name(ifda_stray_at_slot(&f8, 8, true), "NAU-IA37 stray of the entry as a 9th token input (beyond the scan)"),
+        0,
+    );
 }

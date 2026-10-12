@@ -691,6 +691,21 @@ fn pair_fake_quotes() {
 
 // ---------------------------------------------------------------- the custody (identity, codec), planted inputs
 
+/// Every input and output of token `tok` with the extension commitment `ext` (consistent for the token program: one
+/// commitment per transfer). Audit 2026-10-13: the witness of the custody commitment check.
+fn reclass_ext(e: &mut Ed, tok: [u8; 32], ext: [u8; 32]) {
+    for i in 0..e.entries.len() {
+        if ph::cov_of(&e.entries[i]) == Some(tok) {
+            let st = e.in_tok(i);
+            e.set_in_tok(i, ph::map_tok(st, |k| Kcc20State { extension_commitment: ext, ..k }, |k| k));
+        }
+    }
+    for k in e.tok_outs_of(tok) {
+        let st = e.out_state(k);
+        e.set_out_state(k, ph::map_tok(st, |x| Kcc20State { extension_commitment: ext, ..x }, |x| x));
+    }
+}
+
 fn custody(r: &Run, pa: TemplateId, pb: TemplateId) {
     // ---- per family of S: owner, covenant marker, minter / borrowing
     for fam in [Family::Kcc20, Family::Kron] {
@@ -740,6 +755,11 @@ fn custody(r: &Run, pa: TemplateId, pb: TemplateId) {
             let tk_ask = side_with(Family::Kcc20, false, pa, pb);
             let (mut e, i) = inv_ed("NP23tk hostile tFamily 3", side_pr(tk_ask, pa, pb), pa, pb, NR);
             restate(&mut e, i, |s| s.t_family = 3);
+            r.bad(&e, i);
+            // NP28sk the custody of another extension commitment (another token of S's covenant id; every S input and
+            // output of the transaction carries it, so the token program accepts)
+            let (mut e, i) = inv_ed("NP28sk custody of another extension commitment", side_pr(ask, pa, pb), pa, pb, NR);
+            reclass_ext(&mut e, s_tok(ask), [0xdd; 32]);
             r.bad(&e, i);
         }
     }

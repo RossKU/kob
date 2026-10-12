@@ -1,10 +1,12 @@
-# Contract ablation (mutation) tooling
+128 |127 |85 |209 |311 |218 |297 |# Contract ablation (mutation) tooling
 
 One runner, `ablate.mjs`, for the contract-source ablations of the harness suites: the KAS-quoted order kinds (KCC-20 and
 KRON: sell side, buy side) and the pair orders (`KobPair`, `KobCondPair` with its repeat-IFD checks, `KobIfdPair`). Node 22, no dependencies, no `cargo` unless you do not pass `--exe-dir`. Works on Windows, Linux and macOS (the
 repo root is derived from the script location, `tools/ablation/../..`).
 
-Latest results: [RESULTS.md](RESULTS.md). Pre-mainnet covenant fixes (2026-10-12): every suite of the changed templates in full, **698/698 confirmed, 30/30 held** (kcc20-sell 98 + 3, kcc20-buy 97 + 4, kron-sell 145 + 3, kron-buy 110 + 4, cond-pair 116 + 10, cond-pair-rpt 10 + 2, ifd-pair 122 + 4; the KCC-20 touch entries and the pair suites also on the reference 3/3 program). Earlier: pair phase (2026-10-06): `pair` 82/82 confirmed + 2 held, `cond-pair` 112/112 + 10 held; `ifd-pair` (120 entries) and `cond-pair-rpt` (11) were partly run then (run in full on 2026-10-12). Protocol v3 KAS kinds (2026-10-05/06): 438 mutations, **424/424 confirmed, 14/14 held** (kcc20-sell 92/92 + 3, kcc20-buy 90/90 + 4, kron-sell 139/139 + 3, kron-buy 103/103 + 4).
+Latest results: [RESULTS.md](RESULTS.md). Audit completion (2026-10-13): every `require` of the KAS-kind templates has an entry (or is documented as
+unwitnessable in its catalog header; `coverage.mjs`: 598 -> 35 require lines without a mutation over all eight catalogs, the 35
+all documented), **562/562 new entries confirmed, 14/14 held**. Pre-mainnet covenant fixes (2026-10-12): every suite of the changed templates in full, **698/698 confirmed, 30/30 held** (kcc20-sell 98 + 3, kcc20-buy 97 + 4, kron-sell 145 + 3, kron-buy 110 + 4, cond-pair 116 + 10, cond-pair-rpt 10 + 2, ifd-pair 122 + 4; the KCC-20 touch entries and the pair suites also on the reference 3/3 program). Earlier: pair phase (2026-10-06): `pair` 82/82 confirmed + 2 held, `cond-pair` 112/112 + 10 held; `ifd-pair` (120 entries) and `cond-pair-rpt` (11) were partly run then (run in full on 2026-10-12). Protocol v3 KAS kinds (2026-10-05/06): 438 mutations, **424/424 confirmed, 14/14 held** (kcc20-sell 92/92 + 3, kcc20-buy 90/90 + 4, kron-sell 139/139 + 3, kron-buy 103/103 + 4).
 
 ## What ablation proves
 
@@ -41,14 +43,14 @@ directory (line endings normalised to LF) and mutates only the copies.
 
 | Suite | Family | Test binary | Contracts (`srcDir`) | Contracts mutated | Mutations |
 |---|---|---|---|---|---|
-| `kcc20-sell` | KCC-20, sell side: repeat IFD lifecycle, touch trigger (the `TA` / `TU` / `TI` entries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale) | `kob_v2_tests` | `contracts/v2` | KobAsk, KobBid, KobCondAsk, KobIfdBid | 101 |
-| `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger (the `TB` / `TV` / `TW` / `TK` / `TL` entries of the touch batteries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale, re-arm bound) | `kob_v2_buy_tests` | `contracts/v2` | KobCondBid, KobIfdAsk | 101 |
-| `kron-sell` | KRON adapter, sell side (v3) | `kob_kron_v2_tests` | `contracts/adapters/kron/v2` | KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron | 148 |
-| `kron-buy` | KRON adapter, buy side (v3) | `kob_kron_v2_buy_tests` | `contracts/adapters/kron/v2` | KobCondBidKron, KobIfdAskKron | 114 |
-| `pair` | pair orders, plain (`KobPair`, both sides, both families of A and B) | `kob_pair_tests` | `contracts/v2` | KobPair | 84 |
-| `cond-pair` | pair conditionals (`KobCondPair`): legs, trigger evidence in both modes, trailing, updates | `kob_cond_pair_tests` | `contracts/v2` | KobCondPair | 126 |
+| `kcc20-sell` | KCC-20, sell side: repeat IFD lifecycle, touch trigger (the `TA` / `TU` / `TI` entries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale) | `kob_v2_tests` | `contracts/v2` | KobAsk, KobBid, KobCondAsk, KobIfdBid | 297 |
+| `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger (the `TB` / `TV` / `TW` / `TK` / `TL` entries of the touch batteries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale, re-arm bound) | `kob_v2_buy_tests` | `contracts/v2` | KobCondBid, KobIfdAsk | 218 |
+| `kron-sell` | KRON adapter, sell side (v3) | `kob_kron_v2_tests` | `contracts/adapters/kron/v2` | KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron | 311 |
+| `kron-buy` | KRON adapter, buy side (v3) | `kob_kron_v2_buy_tests` | `contracts/adapters/kron/v2` | KobCondBidKron, KobIfdAskKron | 209 |
+| `pair` | pair orders, plain (`KobPair`, both sides, both families of A and B) | `kob_pair_tests` | `contracts/v2` | KobPair | 85 |
+| `cond-pair` | pair conditionals (`KobCondPair`): legs, trigger evidence in both modes, trailing, updates | `kob_cond_pair_tests` | `contracts/v2` | KobCondPair | 127 |
 | `cond-pair-rpt` | the repeat-IFD checks of `KobCondPair` (TP fills with / without the entry, re-arm profit, budget, prefund, the merge bound) | `kob_ifd_pair_tests` | `contracts/v2` | KobCondPair | 12 |
-| `ifd-pair` | pair if-done entries (`KobIfdPair`, buy-first and sell-first, merges, stop entries) | `kob_ifd_pair_tests` | `contracts/v2` | KobIfdPair | 126 |
+| `ifd-pair` | pair if-done entries (`KobIfdPair`, buy-first and sell-first, merges, stop entries) | `kob_ifd_pair_tests` | `contracts/v2` | KobIfdPair | 128 |
 
 The pair suites run every scenario on token pairs of both families (`common/pair_harness.rs`: the three pair templates are
 compiled from source in dependency order, KobCondPair against the compiled KobPair and KobIfdPair against both, so a
@@ -209,6 +211,22 @@ input 1 whatever the order does), so the proof is that the order's own input (0)
 A mutation of a contract that a test function does not exercise cannot flip, and shows as `not reached` or
 `still rejected`.
 
+## Coverage (which checks have no mutation)
+
+```
+node tools/ablation/coverage.mjs [--suite kcc20-sell,...|all] [--file REGEX] [--summary] [--root REPO]
+```
+
+Lists, per mutated template, the `require` lines (the line holding a statement's `require(`) that no catalog mutation
+deletes or changes. A line counts as covered when at least one mutation of the selected catalogs (its `edits`, or an
+`also` part on that contract) changes that very line: the committed source and the mutated text are compared with an
+exact LCS line diff, so a check that merely lies between two edits of a multi-edit mutation is not covered. Covered means
+"some entry removes it", not "confirmed": run the entries with `ablate.mjs`. Contracts mutated by several catalogs collect
+the mutations of all of them; commented-out lines are ignored. `--summary` prints the counts only; `--root` points at
+another checkout's contracts (e.g. to measure an older catalog). Completion criterion of the catalogs: every line it lists
+is documented in the catalog's header as a check without a witness attack (with the reason). Since the audit completion of
+2026-10-13 it lists, over all eight catalogs, only such documented lines (see RESULTS.md).
+
 ## Runtime
 
 Debug-build executables, one machine: an earlier full run (before the cross-limit suites were added; 16 baseline runs plus 155 mutations in 165 test runs) took 22 minutes with `--jobs 6`; the six-suite run of 2026-09-30 (247 mutations) took 2,575 s with `--jobs 2`; the run in `RESULTS.md` (440 mutations, v2.6) took 1,847 s + 1,295 s + 2,985 s in three invocations with `--jobs 3`; the protocol v3 runs (438 mutations, one suite per invocation, `--jobs 2`) took 736 s (kcc20-sell), 1,165 s (kcc20-buy), 1,430 s (kron-sell) and 2,693 s (kron-buy). One test run takes 5 to 120 s (the KRON tests run both
@@ -236,5 +254,6 @@ count is the right setting.
   cannot silently be a no-op. That in-test variant is kept as is; this tool covers only the contract-source ablations of
   the order suites.
 
-Checks without a witness attack (for example `keeperTip >= 0` in the other three conditional/IFD contracts) are not in
-the catalogs; a mutation needs a scenario that covers it.
+Checks without a witness attack (no transaction becomes acceptable when the check is removed, e.g. `sb.length == 65`
+before checkSig, `refundTip >= 0`) are not in the catalogs; each catalog lists them, with the reason, in its header, and
+`coverage.mjs` shows that nothing else is left without a mutation.

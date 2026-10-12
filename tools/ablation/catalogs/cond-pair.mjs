@@ -182,6 +182,7 @@ export const mutations = [
   { id: 'C4r', file: F, test: CUS, expect: ['NC101sr'], inputOnly: ['NC101sr'], note: 'KRON custody of owner type 2 (covenant id)', edits: [del('                require(tin.slice(33, 36) == byte[](0x010208));\n')] },
   { id: 'C5r', file: F, test: CUS, expect: ['NC102sr'], note: 'KRON custody not a minter', edits: [del('                require(tin.slice(44, 46) == byte[](0x0100));\n')] },
   { id: 'C4k', file: F, test: CUS, expect: ['NC101sk'], note: 'KCC-20 custody of owner scheme 0x04, borrowing disabled', edits: [del('                require(tin.slice(43, 46) == byte[](0x040100));\n')] },
+  { id: 'C10k', file: F, test: CUS, expect: ['NC107sk'], note: "KCC-20 custody of the extension commitment sExt (another commitment is another token; audit 2026-10-13: before, only kob_pair_custody_ext_tests asserted it)", edits: [del('                require(byte[32](tin.slice(80, 112)) == sExt);\n')] },
   { id: 'C6k', file: F, test: CUS, expect: ['NC102sk'], note: 'sFamily is 1 or 2 (hostile field read as KCC-20)', edits: [del('                require(sFamily == FAM_KCC20);\n')] },
   { id: 'C6tk', file: F, test: CUS, expect: ['NC103tk'], note: 'tFamily is 1 or 2 (hostile field read as KCC-20)', edits: [del('            require(tFamily == FAM_KCC20);\n')] },
   { id: 'C0', file: F, test: CUS, expect: both('NC104'), note: 'the custody carries the S covenant (not a UTXO of another token owned by the order)', edits: [del('            require(OpInputCovenantId(custIn) == sCovId);\n')] },

@@ -1,5 +1,95 @@
 # Ablation results
 
+## Audit completion (2026-10-13): every require of the KAS kinds has an entry
+
+Pre-mainnet internal audit. The KAS-kind catalogs left most `require` lines of the twelve KAS-kind templates (KobAsk,
+KobBid, KobCondAsk, KobCondBid, KobIfdAsk, KobIfdBid and the KRON twins) without a mutation, the core checks of KobAsk and
+KobBid included (payout floors, cancel signature, refund rules, custody identity, the stray scans). Every one of them now
+has an entry: a confirmed flip, or a held defence-in-depth entry plus a combined entry that flips, or it is listed with
+its reason in the catalog header as a check without a witness attack. New tool `coverage.mjs` (README, "Coverage")
+measures this with an exact line diff; the earlier ad-hoc measure (a prefix / suffix diff) counted every require lying
+between two edits of a multi-edit entry as covered (KobCondAsk's whole stray scan, for example).
+
+`require` lines without any mutation (`node tools/ablation/coverage.mjs --summary`; before = the catalogs of `cda2cb4`):
+
+| Template | require lines | before | after |
+|---|---|---|---|
+| KobAsk / KobAskKron | 51 / 47 | 47 / 39 | 2 / 2 |
+| KobBid / KobBidKron | 46 / 42 | 43 / 38 | 2 / 2 |
+| KobCondAsk / KobCondAskKron | 91 / 87 | 55 / 47 | 3 / 3 |
+| KobCondBid / KobCondBidKron | 86 / 82 | 55 / 46 | 3 / 3 |
+| KobIfdAsk / KobIfdAskKron | 91 / 87 | 64 / 52 | 3 / 3 |
+| KobIfdBid / KobIfdBidKron | 77 / 72 | 57 / 46 | 2 / 2 |
+| KobPair / KobCondPair / KobIfdPair | 71 / 116 / 113 | 2 / 3 / 4 | 1 / 2 / 2 |
+| **total** | **1,159** | **598** | **35** |
+
+The 35 left are documented in the catalog headers, none can make a transaction acceptable: `sb.length == 65` before
+checkSig (15: every cancel), `refundTip >= 0` (15: it only raises what the maker must receive), the touch side checks of
+the four conditional updates (4: `touch()` returns one of the two sides), and KobIfdPair's fill-branch `n > 0` (1).
+
+Entries added (`AU-*`; scenarios `NAU-*`, positive controls `PAU-*`, in new `*audit*` test fns, the existing baselines
+untouched):
+
+| Suite | New entries | Test fns | Scenarios |
+|---|---|---|---|
+| `kcc20-sell` | 196 (KobAsk 46, KobBid 41, KobCondAsk 53, KobIfdBid 56) | `v3_audit_ask`, `v3_audit_bid`, `v3_audit_cond_ask`, `v3_audit_cond_ask_strays`, `v3_audit_ifd_bid` | NAU-A01..A22, AS0..7; B01..B26, BS0..7; CA01..CA39, CAS0..7; IB01..IB35, IBS0..7 |
+| `kcc20-buy` | 117 (KobCondBid 53, KobIfdAsk 64) | `v3_buy_audit_cond_bid`, `v3_buy_audit_ifd_ask` | NAU-CB01..CB31, CBS0..7; IA01..IA39, IAS0..7 |
+| `kron-sell` | 164 (KobAskKron 38, KobBidKron 36, KobCondAskKron 45, KobIfdBidKron 45) | `v3_audit_{ask,bid,cond_ask,ifd_bid}_kron` | NAU-KA, KB, KCA, KIB (+ KAS / KBS / KCAS / KIBS 0..3) |
+| `kron-buy` | 95 (KobCondBidKron 45, KobIfdAskKron 50) | `kron_v2_buy_audit_cond_bid`, `kron_v2_buy_audit_ifd_ask` | NAU-KCB01..KCB25, KCBS0..3; KIA01..KIA35, KIAS0..3 |
+| `pair` / `cond-pair` / `ifd-pair` | 1 / 1 / 2 | `pair_custody`, `cond_pair_custody`, `ifd_refund`; `audit_pair_sec_tests::aud_rb_ifd_pair_rearm_bound` | NP28sk, NC107sk, NIH5k; NIAUD-RB1 / RB2 (IF-AUD-RB) |
+
+Witness classes (the KRON scenarios mirror the KCC-20 ones, adapted to the KRON encoding and its 4-input limit):
+
+* **Custody identity** (every custody-holding order): a sibling UTXO of the order's covenant id beside it
+  (`OpCovInputCount(selfId) == 1`), a custody of another token of the same program, planted custodies of the token's
+  covenant id (not P2SH; P2SH of a look-alike template built around the genuine 112-byte state, so only the template hash
+  refuses it), tokens of another owner, borrowing enabled, another extension commitment (KCC-20; also the pair orders'
+  `sExt` / `ext`, which only `kob_pair_custody_ext_tests` asserted before).
+* **Outputs**: a second output bound to the order's id (rest, termination, refund, update: a keeper or taker would own
+  a UTXO of the id, and with it every later stray), continuations re-priced or handed to the taker, carriers of the rest
+  custody / returned rest / delivery skimmed, the rest or delivery left unbound (a copy of the holder script while the
+  taker keeps the tokens), deliveries owned by the seller, the payout slot paid to the taker, refunds paid to the keeper or
+  short, sold-out payouts one sompi short, the IFD exit built from a look-alike template (anyone could spend the exit and
+  the tokens it owns).
+* **Time and fill size**: fills / updates before activeFrom, refunds before the idle bound, auction times above the
+  lockTime or before their origin, n > amountLeft (on a plain ask only an evidence fill claiming more than it sells can use
+  it: NAU-A09 arms a stop of minTouch 1000 with a 1-base-unit ask), a zero fill closing an exhausted bid or booking an empty
+  exit, re-arm and merge rules (merge of an exit whose terms differ in the windows [189..244) / [252..271) or in its
+  extension commitment, the repeat bound of an unbooked fill).
+* **Hostile fields** (maker-set parameters the builders refuse; witnessed as the existing NV7 and the pair suite's
+  C9s / C9t): negative scale, tip, reserve, delivery / exit carrier, slope, decayStep, slipBps outside 0..10000, stopPrice
+  above MAX_STOP, negative keeperTip (as M4 / NK2), a stop-only order filled on the TP leg, an armed order without a stop leg.
+* **Stray scans**: one entry per unrolled slot line (a stray of the order at token slot k: 8 slots on the 8/8 KCC-20
+  token, 4 on KRON) plus the bound (a 9th / 5th token input, `inputOnly`: the token program refuses it on its own input).
+
+Defence in depth (hold + combined entry): `n > 0` and the minFill rule of the asks and conditional sells (AU-A-13 / 13x,
+AU-CA-15 / 15x and the KRON twins), the IFD exit script equality and its genesis id (AU-IB-20 / 20x, AU-KIB-18 / 18x; the
+covenant id is derived from the script), the exit template hash beside NI4 (AU-IB-19, AU-KIB-17 hold NI4), the conditional
+buy's update `scale > 0` and the evidence ask's own `scale > 0` (AU-CB-34 / 34x, AU-KCB-39 / 39x, judged at the evidence
+input), and the cross-contract pairs of the buy side (AU-IA-13 / 13x, 14 / 14x, 28 / 28x; AU-KCB-5 / 5x, AU-KIA-12 / 12x).
+
+Also: duplicate scenario ids made unique (`NT-IOC2`, KCC-20 and KRON; `NT-FOK2`, KRON), harness fixture fields with
+defaults that change nothing (BidP `reserve` / `dc`, IfdP `scale` / `active_from` / `dc` / `ec`, CondP `ext`, Ev `claim`,
+IfdKnobs `edit`, and the buy / KRON equivalents).
+
+Runs: debug executables, `--exe-dir`, `--jobs 2`, one suite per invocation, baselines clean in every run. Final
+consolidated runs of every new entry (scratch `--out` directories):
+
+| Suite | Command (`--only` = every `AU-*` id of the catalog, or the ids named) | Totals line | Wall time |
+|---|---|---|---|
+| `kcc20-sell` | `ablate.mjs --suite kcc20-sell --only <196 AU-*> --jobs 2 --exe-dir <bin>` | 193/193 confirmed, 3/3 defence-in-depth held | 1,108 s |
+| `kcc20-buy` | `ablate.mjs --suite kcc20-buy --only <117 AU-*> --jobs 2 --exe-dir <bin>` | 113/113 confirmed, 4/4 defence-in-depth held | 1,786 s |
+| `kron-sell` | `ablate.mjs --suite kron-sell --only <164 AU-*> --jobs 2 --exe-dir <bin>` | 161/161 confirmed, 3/3 defence-in-depth held | 1,392 s |
+| `kron-buy` | `ablate.mjs --suite kron-buy --only <95 AU-*> --jobs 2 --exe-dir <bin>` | 91/91 confirmed, 4/4 defence-in-depth held | 2,538 s |
+| `pair` | `ablate.mjs --suite pair --only C10k --jobs 2 --exe-dir <bin>` | 1/1 confirmed | 2 s |
+| `cond-pair` | `ablate.mjs --suite cond-pair --only C10k --jobs 2 --exe-dir <bin>` | 1/1 confirmed | 3 s |
+| `ifd-pair` | `ablate.mjs --suite ifd-pair --only IF73x,IF-AUD-RB --jobs 2 --exe-dir <bin>` | 2/2 confirmed | 2 s |
+
+**562/562 confirmed, 14/14 held**, no `NOT-CONFIRMED`, `EDIT-ERROR` or `BASELINE-DIRTY` (`--dry-run --suite all`: 1,388 edits
+applied, 0 edit errors). The baselines of every test fn these entries name (75, the existing touch batteries and negative suites
+included) were clean. The existing entries were not re-run: no contract changed, and the harness edits only add
+scenarios, fields with neutral defaults and the id renames above (the renamed `NT-IOC2` entry, AU-A-34, is in this run).
+
 ## Pre-mainnet covenant fixes (2026-10-12): every suite of the changed templates, in full
 
 Contracts of `8f5784f`: the IFD merge scale (KobIfdBid / KobIfdAsk and the KRON twins), the exit re-arm bound n < 2^53

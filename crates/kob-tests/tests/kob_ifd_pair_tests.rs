@@ -644,6 +644,17 @@ fn ifd_refund() {
             e.tx.lock_time = 1_500;
             r.bad(&e, i);
         }
+        // NIH5k a refund of a sell-first entry whose A custody has another extension commitment (another token of A's
+        // covenant id; the custody and its return carry it, so the token program accepts)
+        if pa.family() == kob_protocol::Family::Kcc20 {
+            let mut e = ed_of(
+                "NIH5k refund of an A custody of another extension commitment",
+                refund_entry(ifd_pair(MAKER_A, false, pa, pb), pa, pb),
+            );
+            let i = ein(&e);
+            reclass_ext(&mut e, TOKEN_COV, [0xdd; 32]);
+            r.bad(&e, i);
+        }
         // NI34 the maker's KAS at output i is short of the UTXO value minus refundTip
         {
             let mut e = ed_of("NI34 refund maker KAS short", refund_entry(ifd_pair(MAKER_A, false, pa, pb), pa, pb));
@@ -1480,6 +1491,21 @@ fn ifd_refund_rules() {
 }
 
 // ---------------------------------------------------------------- the custody marks (heldGx) and the template sources (pinTok)
+
+/// Every input and output of token `tok` with the extension commitment `ext` (consistent for the token program: one
+/// commitment per transfer). Audit 2026-10-13: the witness of the custody commitment check.
+fn reclass_ext(e: &mut Ed, tok: [u8; 32], ext: [u8; 32]) {
+    for i in 0..e.entries.len() {
+        if ph::cov_of(&e.entries[i]) == Some(tok) {
+            let st = e.in_tok(i);
+            e.set_in_tok(i, ph::map_tok(st, |k| Kcc20State { extension_commitment: ext, ..k }, |k| k));
+        }
+    }
+    for k in e.tok_outs_of(tok) {
+        let st = e.out_state(k);
+        e.set_out_state(k, ph::map_tok(st, |x| Kcc20State { extension_commitment: ext, ..x }, |x| x));
+    }
+}
 
 #[test]
 fn ifd_custody_marks() {
