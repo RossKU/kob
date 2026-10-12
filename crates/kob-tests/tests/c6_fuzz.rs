@@ -113,14 +113,27 @@ fn c6_fuzz_ci() {
     assert!(reports.is_empty(), "the fuzzer found invariant violations:\n{s}");
 }
 
+/// `KOB_C6_SEEDS`: `kas` keeps the seeds of the KAS-quoted kinds and the router intents (every seed whose name does not
+/// start with `pair`), `pair` keeps the pair order seeds (`pair.*`, `pairgrid.*`); unset or anything else keeps all.
+fn select_seeds(seeds: Vec<c6::seeds::Seed>) -> Vec<c6::seeds::Seed> {
+    let is_pair = |s: &c6::seeds::Seed| s.name.starts_with("pair");
+    match std::env::var("KOB_C6_SEEDS").as_deref() {
+        Ok("kas") => seeds.into_iter().filter(|s| !is_pair(s)).collect(),
+        Ok("pair") => seeds.into_iter().filter(is_pair).collect(),
+        _ => seeds,
+    }
+}
+
+/// `KOB_C6_SECS` seconds (default 600) or, if set, `KOB_C6_LONG_ITERS` mutants, whichever comes first.
 #[test]
 #[ignore]
 fn c6_fuzz_long() {
     let keys = keys();
     let (seeds, _) = build_seeds(&keys, true);
+    let seeds = select_seeds(seeds);
     let cfg = Config {
         seed: env_u64("KOB_C6_SEED", 0xc6c6),
-        iterations: None,
+        iterations: std::env::var("KOB_C6_LONG_ITERS").ok().and_then(|v| v.parse().ok()),
         time: Some(Duration::from_secs(env_u64("KOB_C6_SECS", 600))),
         max_chain: 6,
         corpus_cap: 20_000,
