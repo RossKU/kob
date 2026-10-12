@@ -61,6 +61,8 @@ jobs:
           # the live TN10 tests (node follow, x402 end-to-end) need a reachable testnet node and mine their own funds: not for CI
           KOB_SKIP_NETWORK_TESTS: "1"
         run: cargo test --workspace --locked
+      - name: Mainnet deployment build (feature deploy-mainnet: the embedded record, the pinned registry, the network checks; docs/ops/release.md 5)
+        run: cargo test --locked -p kob-protocol -p kob-executor --lib --features deploy-mainnet
       - name: Engine harness, carrier sensitivity (2 KAS = the wallet default order carrier)
         shell: bash
         run: |
@@ -196,7 +198,11 @@ jobs:
       - run: npm run build:wasm -- --copy
       - run: npm run typecheck
       - run: npm test
-      - run: npm run build
+      # the release bundle (vite build plus dist/registry/tokens.json, docs/ops/release.md 4)
+      - run: npm run build:release
+      - name: Release hashes (the deployment record reproduces, the bundle embeds and ships the registry the mainnet record pins)
+        working-directory: .
+        run: bash scripts/release-hashes.sh
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
       - if: failure()

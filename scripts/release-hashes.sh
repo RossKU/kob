@@ -7,8 +7,8 @@
 # deployment record (contracts/deploy/<network>), the sha256 of the record files, of contracts/SHA256SUMS,
 # of every file of the built web app (web/dist) and of each binary given (e.g. target/release/kob-executor).
 # Fails when the deployment record does not reproduce (scripts/build-deploy.sh --check), when web/dist is
-# missing, or when the web bundle does not embed and ship (dist/registry/tokens.json, `npm run build:release`)
-# the registry the record pins. Read-only. Needs node.
+# missing, or when the web bundle does not ship the registry the record pins as dist/registry/tokens.json
+# (`npm run build:release`; the bundle itself embeds no registry hash since 7182e66). Read-only. Needs node.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -31,8 +31,8 @@ scripts/build-deploy.sh "$NETWORK" --check > /dev/null
 [ -d web/dist ] || { echo "web/dist is missing: cd web && npm run build:release" >&2; exit 1; }
 PIN=$(node -e 'const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); console.log(m.registry ? m.registry.sha256 : "")' "$DIR/deployment.json")
 if [ -n "$PIN" ]; then
-  grep -rqs "$PIN" web/dist/assets || { echo "web/dist does not embed the pinned registry hash $PIN: rebuild it from this commit" >&2; exit 1; }
-  [ -f web/dist/registry/tokens.json ] && [ "$(sha web/dist/registry/tokens.json)" = "$PIN" ]     || { echo "web/dist/registry/tokens.json is missing or not the pinned registry: cd web && npm run build:release" >&2; exit 1; }
+  [ -f web/dist/registry/tokens.json ] && [ "$(sha web/dist/registry/tokens.json)" = "$PIN" ] \
+    || { echo "web/dist/registry/tokens.json is missing or not the pinned registry: cd web && npm run build:release" >&2; exit 1; }
 fi
 
 echo "## KOB release hashes ($NETWORK)"
@@ -47,7 +47,7 @@ if [ -n "$PIN" ]; then
   echo
   echo "### Token registry"
   echo
-  echo "- registry/tokens.json sha256 (LF): \`$PIN\` (executor \`GET /v1/tokens\` \`registry.sha256\`, web bundle pin)"
+  echo "- registry/tokens.json sha256 (LF): \`$PIN\` (executor \`GET /v1/tokens\` \`registry.sha256\`, \`web/dist/registry/tokens.json\`)"
 fi
 echo
 echo "### Files (sha256, line endings normalised to LF for text sources)"

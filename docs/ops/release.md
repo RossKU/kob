@@ -79,8 +79,8 @@ cargo run --locked -p kob-cli -- registry verify-genesis --network mainnet
 # binaries: the deployment build records mainnet, refuses any other --network, and embeds the pinned registry
 cargo build --release --locked -p kob-executor -p kob-cli --features deploy-mainnet
 
-# web app (static; network-independent bundle whose default network is mainnet and whose registry pin is
-# the sha256 of registry/tokens.json at build time)
+# web app (static; network-independent bundle whose default network is mainnet; build:release ships the
+# pinned registry/tokens.json as dist/registry/tokens.json, the bundle itself embeds no registry hash)
 cd web && npm ci && npm run fetch-sdk && npm run build:wasm && npm run typecheck && npm test && npm run build:release && cd ..
 
 # optional: node / bot bindings of the deployment variant (crates/kob-wasm/pkg-node-mainnet, pkg-mainnet)
@@ -109,6 +109,9 @@ scripts/build-wasm.sh --test
 cd web && npm test && npm run e2e
 ```
 
+CI runs all of these on every push (`.github/workflows/ci.yml`: the `deploy-mainnet` lib tests in job `test`), and
+`scripts/release-hashes.sh` over the release bundle (`npm run build:release`) in job `web`.
+
 ## 6. Hashes to publish
 
 ```
@@ -117,15 +120,15 @@ scripts/release-hashes.sh target/release/kob-executor target/release/kob-cli
 
 prints the commit, every order template hash of the record, the registry sha256 and the sha256 of
 `contracts/SHA256SUMS`, the deployment record, every file of `web/dist` and the binaries given. It refuses
-to run when the record does not reproduce, and when the web bundle does not embed the pinned registry hash or
-does not ship the pinned file as `dist/registry/tokens.json`.
+to run when the record does not reproduce, and when the web bundle does not ship the pinned registry as
+`dist/registry/tokens.json` (the bundle embeds no registry hash: the app shows no registry identity).
 Publish its output with the release (release notes, the operator announcement and an on-chain `KOB-REL`
 anchor when one is made). Users and operators check:
 
 * the template hashes against `contracts/deploy/mainnet/DEPLOYMENT.md` of the commit and the chain (an order's
   P2SH is the template over its state; kob-wasm `templates()` lists what a build embeds);
-* the registry hash against `GET /v1/tokens` `registry.sha256` of the operator's executor and the web app's
-  registry note (Settings, the sha256 of the registry in use);
+* the registry hash against `GET /v1/tokens` `registry.sha256` of the operator's executor and the sha256 of the
+  `registry/tokens.json` the web host serves;
 * the web files against what the host serves (`index.html` carries the Content-Security-Policy).
 
 Rust release binaries are reproducible only on an identical toolchain and host; the hashes say what was
