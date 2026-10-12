@@ -1,5 +1,7 @@
 // The pre-sign confirmation screen (ui/confirm). Keys `confirm.*`. Findings of the decoder are in `issues.*`.
 export default {
+  'confirm.ladder.title': 'All {levels} orders of this ladder (each is signed on its own)',
+  'confirm.ladder.now': 'this one',
   'confirm.ack': 'I checked this screen. My wallet popup will not show these details.',
   'confirm.planAck.title': 'This transaction cannot do everything',
   'confirm.planAck.accept': 'I accept what is described above.',

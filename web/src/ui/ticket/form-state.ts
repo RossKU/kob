@@ -28,6 +28,9 @@ import {
 
 /** most levels of a repeat ladder (one transaction and one signature each) */
 export const MAX_LADDER_LEVELS = 20n;
+/** a limit ladder places 2 to 20 limit orders */
+export const MIN_LIMIT_LADDER_LEVELS = 2n;
+export const MAX_LIMIT_LADDER_LEVELS = 20n;
 
 /**
  * Trigger-threshold presets of the ticket (matcher.md 10.6): `min` = the order's minimum fill (the wallet default), or a percent of the order's
@@ -118,7 +121,7 @@ export const FIELDS: Readonly<Record<string, FieldSpec>> = Object.fromEntries(
     F('exit.kind', 'select', ['takeProfit', 'stop']), F('exit.takeProfit', 'price'), F('exit.stop', 'price'), F('exit.stopLimit', 'price'),
     F('exit.slipBps', 'percent'), F('exit.minTouch', 'touch'), F('exit.minRestDaa', 'seconds'), F('exit.trail', 'bool'), F('exit.trail.step', 'delta'), F('exit.trail.gap', 'delta'), F('exit.tip', 'tip'),
     F('exit.minFill', 'amount'), F('exit.lifetime', 'select', ['gtc', 'gtd']), F('exit.lifetimeAt', 'datetime'),
-    F('ladder.levels', 'int'), F('ladder.step', 'delta'),
+    F('ladder.levels', 'int'), F('ladder.step', 'delta'), F('ladder.on', 'bool'), F('ladder.pct', 'percent'), F('ladder.end', 'price'),
     F('prefund', 'delta'), F('repeat.count', 'int'),
   ].map((f) => [f.id, f]),
 );
@@ -200,7 +203,7 @@ export function switchType(form: TicketForm, type: OrderTypeId): TicketForm {
   const side = sidesOf(type).includes(form.side) ? form.side : sidesOf(type)[0]!;
   const next = initialForm(type, side, !!form.kas);
   const values = { ...next.values };
-  const applicable = new Set([...layoutOf({ type, side, values: {} }).main, ...layoutOf({ type, side, values: {} }).advanced]);
+  const applicable = new Set([...layoutOf({ type, side, values: {} }).main, ...layoutOf({ type, side, values: {} }).advanced, ...(type === 'limit' ? LIMIT_LADDER : [])]);
   for (const [k, v] of Object.entries(form.values)) {
     // an exact base amount kept for a KAS amount box travels with its box
     const field = k.endsWith(BASE_SUFFIX) ? k.slice(0, -BASE_SUFFIX.length) : k;
@@ -230,6 +233,8 @@ export interface Layout {
 }
 
 const LIFE = ['lifetime', 'lifetimeAt'];
+/** the fields of a limit ladder (shown while the Ladder switch is on) */
+export const LIMIT_LADDER = ['ladder.levels', 'ladder.pct', 'ladder.end'];
 const STOP_KNOBS = ['minTouch', 'minRestDaa', 'bandDaa', 'keeperTip'];
 /** trigger knobs of a stop entry / an exit stop (touch rule): shown for every trigger kind */
 const ENTRY_TRIGGER = ['entry.minTouch', 'entry.minRestDaa'];
@@ -247,7 +252,7 @@ export function layoutOf(form: TicketForm): Layout {
   const ladder = (): string[] => (Number((v['ladder.levels'] ?? '').trim()) > 1 ? ['ladder.levels', 'ladder.step'] : ['ladder.levels']);
   // the minimum fill is an advanced option of every type (its default is shown in the disclosure; IOC / FOK / market orders: 1 base unit)
   switch (form.type) {
-    case 'limit': return { main: ['amount', 'price', 'tip', ...life()], advanced: ['minFill', 'activeFrom', 'crossing', ...fills] };
+    case 'limit': return { main: ['amount', 'price', 'ladder.on', ...(v['ladder.on'] === 'true' ? LIMIT_LADDER : []), 'tip', ...life()], advanced: ['minFill', 'activeFrom', 'crossing', ...fills] };
     case 'ioc':
     case 'fok': return { main: ['amount', 'price', 'tip'], advanced: ['minFill', 'life', 'activeFrom'] };
     case 'market': return { main: ['amount', 'slippageBps', 'tip'], advanced: ['minFill', 'auction', 'life', 'allOrNothing'] };
@@ -311,6 +316,14 @@ const unitsCode = (e: unknown): FieldErrorCode => {
 type Parsed<T> = { ok: true; value: T } | { ok: false; code: FieldErrorCode; params?: Record<string, string | number> };
 const good = <T,>(value: T): Parsed<T> => ({ ok: true, value });
 const bad = (code: FieldErrorCode, params?: Record<string, string | number>): Parsed<never> => ({ ok: false, code, ...(params ? { params } : {}) });
+
+/** Percent text (up to two decimals, 0.01 to 99.99) -> basis points, else null. */
+export function parseBps(text: string): bigint | null {
+  const m = /^(\d{1,2})(?:[.,](\d{1,2}))?$/.exec(text.trim());
+  if (!m) return null;
+  const bps = BigInt(m[1]!) * 100n + BigInt((m[2] ?? '').padEnd(2, '0') || '0');
+  return bps >= 1n && bps <= 9_999n ? bps : null;
+}
 
 /** A whole number >= 0 typed as digits only. */
 export function parseWhole(text: string): Parsed<bigint> {
@@ -701,6 +714,17 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     const levels = r.whole('ladder.levels', false);
     if (levels !== undefined && (levels < 1n || levels > MAX_LADDER_LEVELS)) r.err('ladder.levels', 'range');
     else if (levels !== undefined && levels > 1n) r.delta('ladder.step', true, false, true);
+  }
+
+  // a limit ladder: 2 to 20 levels, and either a step in percent or an end price (the end price wins when both are typed)
+  if (type === 'limit' && r.raw('ladder.on') === 'true') {
+    const levels = r.whole('ladder.levels', true);
+    if (levels !== undefined && (levels < MIN_LIMIT_LADDER_LEVELS || levels > MAX_LIMIT_LADDER_LEVELS)) r.err('ladder.levels', 'range');
+    if (r.has('ladder.end')) {
+      const end = r.price('ladder.end');
+      if (end !== undefined && intent !== null && end === (intent as { price?: bigint }).price) r.err('ladder.end', 'range');
+    } else if (!r.has('ladder.pct')) r.err('ladder.pct', 'required');
+    else if (parseBps(r.raw('ladder.pct')) === null) r.err('ladder.pct', 'range');
   }
 
   if (r.errors.length > 0 || intent === null) return { intent: null, errors: r.errors };

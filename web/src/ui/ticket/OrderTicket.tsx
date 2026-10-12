@@ -14,7 +14,7 @@ import { errors, isPairEnv, type OrderPlan } from '../../kob/plan-types';
 import type { TokenInfo } from '../../kob/registry';
 import type { ExpectedSigning } from '../../kob/decode';
 import type { BuiltTx } from '../../kob/types';
-import { formatKas, formatUnits } from '../../kob/units';
+import { formatKas, formatUnits, quoteOf } from '../../kob/units';
 import { DEFAULT_CARRIER } from '../../kob/orders/common';
 import { Banner, Button, CopyText, Loading, RawDetails, Segmented, useAsync } from '../kit';
 import { bookFromIndexer } from '../../app/env';
@@ -28,12 +28,13 @@ import { useCovenantSignGate } from './CovenantSignGate';
 import { TicketFields } from './TicketFields';
 import { buildDisclosureModel } from './disclosure-model';
 import {
-  TYPE_GROUPS, amountPriceOf, baseToKas, buildIntent, formatPrice, initialForm, intentSizingPrice, layoutOf, maxAmount, parsePrice, reorientAmounts, setAmountBase,
+  TYPE_GROUPS, amountPriceOf, baseToKas, buildIntent, formatPrice, initialForm, intentSizingPrice, layoutOf, parsePrice, reorientAmounts, setAmountBase,
   setSide, setValue, sidesOf, switchType, visibleErrors,
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 import { expectedFromPlan, newWarnings } from './plan-expected';
-import { expandLadder, ladderOfForm, ladderTotals } from './ladder';
+import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
+import { maxBuyAmount } from './max-amount';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan } from './use-ticket';
 import { rememberPairForm, takePairFlip } from './pair-flip';
 import './ticket.css';
@@ -71,6 +72,8 @@ interface ConfirmState {
   shownAs?: string | undefined;
   /** warnings of the plan made at Review from fresh data that the plan the user looked at did not have */
   freshWarnings?: string[];
+  /** a ladder: every order of it, and the index of the one being signed */
+  ladder?: { lines: string[]; current: number };
 }
 
 const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
@@ -101,8 +104,10 @@ export function OrderTicket(props: OrderTicketProps) {
   // a plain note, or a refusal: its sentence with the raw builder text behind "Details"
   const [reviewNote, setReviewNote] = useState<string | { text: string; raw: string } | null>(null);
   const [result, setResult] = useState<{ txid: string; label: string; note?: string } | null>(null);
-  // a ladder in progress: the intents of every level and the txids placed so far (each level is its own transaction, signed in turn)
-  const run = useRef<{ intents: Intent[]; txids: string[] } | null>(null);
+  // a ladder in progress: the intents of every level, the line the confirmation shows for each, and the txids placed so far (each level is its own transaction, signed in turn)
+  const run = useRef<{ intents: Intent[]; txids: string[]; lines: string[] } | null>(null);
+  // what Max just did, in a sentence (cleared by the next edit)
+  const [maxNote, setMaxNote] = useState<string | null>(null);
 
   // one of the two environments is live: the token's KAS market, or the pair A/B (both tokens' UTXOs, the pair book, own pair orders)
   const kasEnv = useTicketEnv(token, enabled && !quote);
@@ -171,7 +176,13 @@ export function OrderTicket(props: OrderTicketProps) {
   }, [prefillKey]);
 
   const ladderSet = useMemo(() => ladderOfForm(form, ctx), [form, ctx]);
-  const ladder = useMemo(() => (ladderSet && built.intent ? expandLadder(built.intent, ladderSet.levels, ladderSet.step, ctx.tick) : null), [ladderSet, built.intent, ctx.tick]);
+  const limitSet = useMemo(() => limitLadderOfForm(form, ctx), [form, ctx]);
+  const ladder = useMemo(() => {
+    if (!built.intent) return null;
+    if (ladderSet) return expandLadder(built.intent, ladderSet.levels, ladderSet.step, ctx.tick);
+    if (limitSet) return expandLimitLadder(built.intent, limitSet, ctx.tick);
+    return null;
+  }, [ladderSet, limitSet, built.intent, ctx.tick]);
 
   const layout = layoutOf(form);
   const errs = visibleErrors(built.errors).filter((e) => (form.values[e.field] ?? '') !== '');
@@ -191,30 +202,60 @@ export function OrderTicket(props: OrderTicketProps) {
   // what the inverted fields need to speak KAS: the price of the form (else the book's best), per whole token of `scale` base units
   const ownPrice = parsePrice(form.values.price ?? form.values.displayedPrice ?? '', form.side, ctx).ok;
   const flip = { name, price: refPrice > 0n ? refPrice : null, ownPrice, scale, decimals: token.decimals };
+  /**
+   * The largest buy the wallet can place at the form's price (or the book's best when it is empty): a binary search on the amount, each step planned
+   * by the real planner, so carriers, the network fee and the escrow rounding are exact; a small reserve stays in the wallet. A ladder searches the
+   * amount of ONE order such that all its orders together are affordable. Fields the planner cannot plan without (a missing stop ...) fall back to a
+   * conservative rule of thumb.
+   */
+  const maxBuy = (tip: bigint): bigint => {
+    if (!env || refPrice <= 0n) return 0n;
+    const withAmount = (amount: bigint): TicketForm => {
+      const f = setAmountBase(form, 'amount', amount, ctx);
+      return (form.values.price ?? '') === '' && layoutOf(f).main.includes('price') ? setValue(f, 'price', formatPrice(refPrice, ctx)) : f;
+    };
+    // the prices of a ladder do not depend on the amount: read them off a probe
+    let prices: bigint[] = [refPrice];
+    if (limitSet) {
+      const probe = buildIntent(withAmount(1n), ctx).intent;
+      const lad = probe ? expandLimitLadder(probe, limitSet, ctx.tick) : null;
+      if (lad?.ok) prices = lad.levels.map((l) => l.entryPrice);
+    }
+    const levels = BigInt(prices.length);
+    const sumPrice = prices.reduce((a, p) => a + p + (quote ? 0n : tip), 0n);
+    const balance = quote ? quoteBalance : kasBalance;
+    const keep = quote ? 4n * levels : (DEFAULT_CARRIER * 4n + 20_000_000n) * levels;
+    const conservative = balance > keep ? ((balance - keep) * scale) / sumPrice : 0n;
+    const upper = (balance * scale) / sumPrice + 1n;
+    return maxBuyAmount({
+      upper, conservative, kasBalance, ...(quote ? { quoteBalance } : {}), ladderPrices: prices.length > 1 ? prices : null,
+      planAt: (amount) => {
+        const intent = buildIntent(withAmount(amount), ctx).intent;
+        return intent ? planOrder(env, intent) : null;
+      },
+    });
+  };
   const onMax = () => {
     const tip = built.intent && 'tip' in built.intent && built.intent.tip ? built.intent.tip : 0n;
-    // a pair: a sell uses the A balance, a buy the B balance at the price (B per whole A; the KAS tip is not part of it), less one base unit
-    // of B per possible fill (the escrow slack of a bid)
-    const n = quote
-      ? form.side === 'sell'
-        ? tokenBalance
-        : refPrice > 0n && quoteBalance > 4n
-          ? ((quoteBalance - 4n) * scale) / refPrice
-          : 0n
-      : maxAmount({ side: form.side, tokenBalance, kasBalance, scale, allInPrice: refPrice + tip, carrier: env?.carrier ?? DEFAULT_CARRIER });
+    // a sell is the whole token balance (split over the orders of a ladder); a buy is searched against the planner
+    const n = form.side === 'sell' ? tokenBalance / BigInt(limitSet?.levels ?? 1) : maxBuy(tip);
     setForm((f) => (n > 0n ? setAmountBase(f, 'amount', n, ctx) : setValue(f, 'amount', '')));
+    setMaxNote(form.side === 'buy' ? t(n > 0n ? 'ticket.max.done' : 'ticket.max.none') : null);
   };
 
   const onChange = (id: string, value: string) => {
     setReviewNote(null);
+    setMaxNote(null);
     setForm((f) => setValue(f, id, value));
   };
   const onType = (type: OrderTypeId) => {
     setReviewNote(null);
+    setMaxNote(null);
     setForm((f) => switchType(f, type));
   };
   const onSide = (side: Side) => {
     setReviewNote(null);
+    setMaxNote(null);
     setForm((f) => setSide(f, side));
   };
   // the start acknowledgement is for this order only: a change of token, pair, type, side or size asks again
@@ -232,10 +273,21 @@ export function OrderTicket(props: OrderTicketProps) {
         : null,
     [shownPlan, env, ticker, token.decimals, quote?.ticker, quote?.decimals],
   );
+  /** an amount of the market's quote (KAS, or a pair's token B) in words */
+  const quoteText = (v: bigint): string => (quote ? `${formatUnits(v, quote.decimals, { group: ',' })} ${quote.ticker}` : `${formatKas(v, { group: ',' })} KAS`);
+  // the LAST order of a limit ladder is the one furthest from the typed price: planned too, so a level that could never be placed is refused before the first is signed
+  const lastOrderErrors = useMemo(() => {
+    if (!enabled || !env || !limitSet || !ladder?.ok) return [];
+    try {
+      return errors(planOrder(env, ladder.levels[ladder.levels.length - 1]!.intent));
+    } catch {
+      return [];
+    }
+  }, [enabled, env, limitSet, ladder]);
   const ladderTot = useMemo(() => (shownPlan && ladder ? ladderTotals(shownPlan, ladder) : null), [shownPlan, ladder]);
   // C5-10: a wallet not known to sign covenant inputs (every cancel needs one) passes a one-time test signature before its first order
   const gate = useCovenantSignGate(enabled ? env : null);
-  const canReview = enabled && gate.ready && !!shownPlan && shownPlan.ok && planErrors.length === 0 && !!shownPlan.built && !pending && !reviewing && !confirm && !crash && (!ladder || ladder.ok);
+  const canReview = enabled && gate.ready && !!shownPlan && shownPlan.ok && planErrors.length === 0 && !!shownPlan.built && !pending && !reviewing && !confirm && !crash && (!ladder || ladder.ok) && lastOrderErrors.length === 0;
 
   // an inverted market words the type where the native name / help speaks of buying or selling the token
   const typeKey = (id: OrderTypeId, part: 'name' | 'help'): string => (inverted && has(`ticket.type.${id}.${part}Inv`) ? `ticket.type.${id}.${part}Inv` : `ticket.type.${id}.${part}`);
@@ -276,6 +328,23 @@ export function OrderTicket(props: OrderTicketProps) {
     return s ? t(s.about ? 'ticket.disc.summaryKasAbout' : 'ticket.disc.summaryKas', { side: sideName, kas: s.kas, amount: s.tokens, ticker }) : undefined;
   })();
 
+  /** one order of the ladder in words: the level, its prices (a limit ladder: side, amount, price and value) */
+  const ladderRow = (l: LadderLevel): string => {
+    if (!limitSet) return ladderRepeatRow(l);
+    const amount = (l.intent as { amount: bigint }).amount;
+    return t('ticket.ladder.rowLimit', {
+      level: l.level, side: t(form.side === 'buy' ? 'common.side.buy' : 'common.side.sell'), amount: `${formatUnits(amount, token.decimals, { group: ',' })} ${ticker}`,
+      price: `${formatPrice(l.entryPrice, ctx)} ${quoteTicker}`, value: quoteText(quoteOf(amount, l.entryPrice, scale, form.side === 'sell' ? 'up' : 'down')),
+    });
+  };
+  const ladderRepeatRow = (l: LadderLevel): string =>
+    t(l.exitStop !== null ? 'ticket.ladder.rowStop' : 'ticket.ladder.row', {
+      level: l.level,
+      entry: `${formatPrice(l.entryPrice, ctx)} ${quoteTicker}`,
+      exit: l.exitTakeProfit !== null ? `${formatPrice(l.exitTakeProfit, ctx)} ${quoteTicker}` : '-',
+      stop: l.exitStop !== null ? `${formatPrice(l.exitStop, ctx)} ${quoteTicker}` : '-',
+    });
+
   /** Plans level `index` of the run against freshly read coins and opens its confirmation. A level that cannot be planned ends the run. */
   const prepareLevel = async (index: number): Promise<void> => {
     const r = run.current;
@@ -299,7 +368,10 @@ export function OrderTicket(props: OrderTicketProps) {
       const label = laddered ? `${form.type} ${form.side} ${index + 1}/${levels}` : `${form.type} ${form.side}`;
       // a warning that only the fresh data raised (the price moved, the depth shrank, a reference now disagrees) is shown on the confirmation
       const freshWarnings = newWarnings(shownPlan, p).map((i) => issueText(i, issueCtx));
-      setConfirm({ built: p.built, expected: expectedFromPlan(p), title, label, shownAs: shownAsText(r.intents[index]!), freshWarnings });
+      setConfirm({
+        built: p.built, expected: expectedFromPlan(p), title, label, shownAs: shownAsText(r.intents[index]!), freshWarnings,
+        ...(laddered && r.lines.length === levels ? { ladder: { lines: r.lines, current: index } } : {}),
+      });
     } catch (e) {
       run.current = null;
       const raw = e instanceof Error ? e.message : String(e);
@@ -311,7 +383,7 @@ export function OrderTicket(props: OrderTicketProps) {
 
   const review = async () => {
     if (!canReview || !built.intent) return;
-    run.current = { intents: ladder?.ok ? ladder.levels.map((l) => l.intent) : [built.intent], txids: [] };
+    run.current = { intents: ladder?.ok ? ladder.levels.map((l) => l.intent) : [built.intent], txids: [], lines: ladder?.ok ? ladder.levels.map(ladderRow) : [] };
     await prepareLevel(0);
   };
 
@@ -440,6 +512,12 @@ export function OrderTicket(props: OrderTicketProps) {
           {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker } : {})}
         />
 
+        {maxNote ? (
+          <p class="muted" data-testid="order-max-note">
+            {maxNote}
+          </p>
+        ) : null}
+
         <details class="tk-advanced" data-testid="order-advanced">
           <summary>{t('ticket.advanced')}</summary>
           <div class="tk-advanced-body">
@@ -517,16 +595,18 @@ export function OrderTicket(props: OrderTicketProps) {
               <ol data-testid="order-ladder-levels">
                 {ladder.levels.map((l) => (
                   <li key={l.level} data-testid={`order-ladder-level-${l.level}`}>
-                    {t(l.exitStop !== null ? 'ticket.ladder.rowStop' : 'ticket.ladder.row', {
-                      level: l.level,
-                      entry: `${formatPrice(l.entryPrice, ctx)} ${quoteTicker}`,
-                      exit: l.exitTakeProfit !== null ? `${formatPrice(l.exitTakeProfit, ctx)} ${quoteTicker}` : '-',
-                      stop: l.exitStop !== null ? `${formatPrice(l.exitStop, ctx)} ${quoteTicker}` : '-',
-                    })}
+                    {ladderRow(l)}
                   </li>
                 ))}
               </ol>
-              {ladderTot ? (
+              {limitSet ? (
+                <p data-testid="order-ladder-total">
+                  {t('ticket.ladder.totalLimit', {
+                    amount: `${formatUnits(ladder.totalAmount, token.decimals, { group: ',' })} ${ticker}`, levels: ladder.levels.length,
+                    value: quoteText(limitLadderValues(ladder, form.side, scale).total),
+                  })}
+                </p>
+              ) : ladderTot ? (
                 <p data-testid="order-ladder-total">
                   {t('ticket.ladder.total', { amount: `${formatUnits(ladderTot.amount, token.decimals, { group: ',' })} ${ticker}`, levels: ladder.levels.length, kas: `${formatKas(ladderTot.kasLocked, { group: ',' })} KAS` })}
                 </p>
@@ -540,6 +620,20 @@ export function OrderTicket(props: OrderTicketProps) {
                 <p class="tk-issue tk-issue-warning" data-testid="order-ladder-funds">
                   {t('ticket.ladder.fundsTokens', { need: formatUnits(ladderTot.tokens, token.decimals, { group: ',' }), have: formatUnits(tokenBalance, token.decimals, { group: ',' }), ticker })}
                 </p>
+              ) : null}
+              {env && limitSet && quote && form.side === 'buy' && limitLadderValues(ladder, 'buy', scale).total > quoteBalance ? (
+                <p class="tk-issue tk-issue-warning" data-testid="order-ladder-funds">
+                  {t('ticket.ladder.fundsQuote', { need: quoteText(limitLadderValues(ladder, 'buy', scale).total), have: quoteText(quoteBalance) })}
+                </p>
+              ) : null}
+              {lastOrderErrors.length > 0 ? (
+                <ul data-testid="order-ladder-last-errors">
+                  {lastOrderErrors.map((i, n) => (
+                    <li key={n} class="tk-issue tk-issue-error">
+                      {t('ticket.ladder.lastLevel', { text: issueText(i, issueCtx) })}
+                    </li>
+                  ))}
+                </ul>
               ) : null}
               <p class="muted">{t('ticket.ladder.separate', { levels: ladder.levels.length })}</p>
             </>
@@ -582,6 +676,7 @@ export function OrderTicket(props: OrderTicketProps) {
           label={confirm.label}
           shownAs={confirm.shownAs}
           freshWarnings={confirm.freshWarnings}
+          ladder={confirm.ladder}
           tokenPowers={props.powers}
           openToken={token.openList ? token : undefined}
           onSubmitted={() => void refresh()}

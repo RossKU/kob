@@ -99,7 +99,7 @@ export function TicketFields(props: TicketFieldsProps) {
         // the inverted market drops "(per token)": the unit next to the box says what the amount is
         const label = t(props.flip && has(`ticket.label.${id}.inv`) ? `ticket.label.${id}.inv` : labelKey(form.type, id));
         // an inverted market has its own wording where the native help speaks of buying / selling the token
-        const helpKey = props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : `ticket.help.${id}`;
+        const helpKey = props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
         const help = has(helpKey) ? t(helpKey, { ticker }) : undefined;
         const phKey = has(`ticket.ph.${id}.${form.type}`) ? `ticket.ph.${id}.${form.type}` : `ticket.ph.${id}`;
         const defaultHint = value === '' && FIELD_DEFAULTS[id] === undefined && has(phKey) ? t(phKey) : undefined;

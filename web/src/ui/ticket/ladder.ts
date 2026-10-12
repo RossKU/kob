@@ -7,14 +7,15 @@
 //     distance from the entry and the profit per whole token is identical on every level;
 //   * the step is on the tick (the form rounds it), so a shifted price stays on the tick whenever the original one is.
 import type { Intent } from '../../kob/plan';
+import type { LimitIntent } from '../../kob/intent-simple';
 import type { ExitSpec, RepeatIfdIntent, RepeatIfoIntent } from '../../kob/intent-cond';
 import type { OrderPlan } from '../../kob/plan-types';
-import { quoteOf } from '../../kob/units';
-import { MAX_LADDER_LEVELS, parsePrice, parseWhole, type TicketCtx, type TicketForm } from './form-state';
+import { quoteOf, roundToTick, safeRounding } from '../../kob/units';
+import { MAX_LADDER_LEVELS, MAX_LIMIT_LADDER_LEVELS, MIN_LIMIT_LADDER_LEVELS, parseBps, parsePrice, parseWhole, type TicketCtx, type TicketForm } from './form-state';
 
 export type RepeatIntent = RepeatIfdIntent | RepeatIfoIntent;
 
-export type LadderErrorCode = 'notRepeat' | 'levels' | 'step' | 'tick' | 'price';
+export type LadderErrorCode = 'notRepeat' | 'levels' | 'step' | 'tick' | 'price' | 'same' | 'collapse';
 export interface LadderError {
   code: LadderErrorCode;
   /** 1-based level the problem is at (absent for the whole ladder) */
@@ -27,7 +28,8 @@ export interface LadderLevel {
   level: number;
   /** the price shift of this level versus level 1, sompi per whole token (negative buy-first) */
   shift: bigint;
-  intent: RepeatIntent;
+  /** the order of this level (a repeat IFD / IFO of a repeat ladder, a plain limit of a limit ladder) */
+  intent: Intent;
   /** entry limit price, sompi per whole token */
   entryPrice: bigint;
   exitTakeProfit: bigint | null;
@@ -106,7 +108,7 @@ export function expandLadder(intent: Intent, levels: number, step: bigint, tick:
   return { ok: errors.length === 0, levels: out, errors, totalAmount: BigInt(levels) * intent.amount };
 }
 
-const isRepeatIntent = (i: Intent): i is RepeatIntent => (i as { type?: string }).type === 'repeatIfd' || (i as { type?: string }).type === 'repeatIfo';
+export const isRepeatIntent = (i: Intent): i is RepeatIntent => (i as { type?: string }).type === 'repeatIfd' || (i as { type?: string }).type === 'repeatIfo';
 
 export interface LadderTotals {
   /** base units over all levels */
@@ -126,10 +128,87 @@ export function ladderTotals(level1: OrderPlan, ladder: LadderResult): LadderTot
   const d = level1.disclosure;
   if (!d || !ladder.ok || ladder.levels.length === 0) return null;
   const first = ladder.levels[0]!;
+  const amount = (first.intent as { amount: bigint }).amount;
   let kas = 0n;
   for (const l of ladder.levels) {
-    const delta = d.side === 'buy' ? quoteOf(first.intent.amount, l.shift < 0n ? -l.shift : l.shift, d.scale, 'down') : 0n;
+    const delta = d.side === 'buy' ? quoteOf(amount, l.shift < 0n ? -l.shift : l.shift, d.scale, 'down') : 0n;
     kas += d.kasLocked + (l.shift < 0n ? -delta : delta);
   }
   return { amount: ladder.totalAmount, kasLocked: kas, tokens: d.tokensEscrowed * BigInt(ladder.levels.length) };
+}
+
+// ------------------------------------------------------------------------------------------------ limit ladder
+//
+// Several plain limit orders of the same size at stepped prices, same side. Nothing is a new order kind: every level is a normal, independent limit
+// order with its own transaction and signature (the builder creates one order per transaction), so a cancelled or filled level never touches another.
+//   * `pct`: each level is `bps` basis points from the previous one, buy ladders go DOWN, sell ladders go UP (compounded, on the tick);
+//   * `end`: the levels are evenly spaced from the start price to `end` (either direction).
+
+export type LimitLadderSetting = { levels: number } & ({ mode: 'pct'; bps: bigint } | { mode: 'end'; end: bigint });
+
+/** The limit ladder the form asks for; null when it is off, not a limit, or its numbers do not parse (`buildIntent` reports those). */
+export function limitLadderOfForm(form: TicketForm, ctx: TicketCtx): LimitLadderSetting | null {
+  if (form.type !== 'limit' || form.values['ladder.on'] !== 'true') return null;
+  const lv = parseWhole(form.values['ladder.levels'] ?? '');
+  if (!lv.ok || lv.value < MIN_LIMIT_LADDER_LEVELS || lv.value > MAX_LIMIT_LADDER_LEVELS) return null;
+  const levels = Number(lv.value);
+  const endText = (form.values['ladder.end'] ?? '').trim();
+  if (endText !== '') {
+    const end = parsePrice(endText, form.side, ctx);
+    return end.ok ? { levels, mode: 'end', end: end.value.price } : null;
+  }
+  const bps = parseBps(form.values['ladder.pct'] ?? '');
+  return bps !== null ? { levels, mode: 'pct', bps } : null;
+}
+
+/**
+ * The prices of a limit ladder, level 1 = `start`. Rounded on the tick the way that never makes a limit worse (buy down, sell up). Returns an error
+ * instead when the ladder cannot be built: a price at or below zero, levels that collapse onto the same tick, an end equal to the start.
+ */
+export function limitLadderPrices(start: bigint, side: 'buy' | 'sell', set: LimitLadderSetting, tick: bigint): { prices: bigint[] } | { error: LadderError } {
+  const rounding = safeRounding(side);
+  const snap = (p: bigint): bigint => (tick > 1n ? roundToTick(p, tick, rounding) : p);
+  const n = BigInt(set.levels);
+  const prices: bigint[] = [start];
+  if (set.mode === 'end') {
+    if (set.end === start) return { error: { code: 'same', field: 'ladder.end' } };
+    for (let k = 1n; k < n; k++) prices.push(k === n - 1n ? snap(set.end) : snap(start + ((set.end - start) * k) / (n - 1n)));
+  } else {
+    const factor = side === 'buy' ? 10_000n - set.bps : 10_000n + set.bps;
+    let cur = start;
+    for (let k = 1n; k < n; k++) {
+      cur = snap((cur * factor) / 10_000n);
+      prices.push(cur);
+    }
+  }
+  for (let k = 0; k < prices.length; k++) {
+    if (prices[k]! <= 0n) return { error: { code: 'price', level: k + 1, field: set.mode === 'end' ? 'ladder.end' : 'ladder.pct' } };
+    if (k > 0 && prices[k] === prices[k - 1]) return { error: { code: 'collapse', level: k + 1, field: set.mode === 'end' ? 'ladder.end' : 'ladder.pct' } };
+  }
+  return { prices };
+}
+
+/** Expands a limit intent into one limit intent per price of the ladder (level 1 = the typed order). Pure; every violation is reported, nothing throws. */
+export function expandLimitLadder(intent: Intent, set: LimitLadderSetting, tick: bigint): LadderResult {
+  if (intent.type !== 'limit') return { ok: false, levels: [], errors: [{ code: 'notRepeat' }], totalAmount: 0n };
+  if (!Number.isInteger(set.levels) || BigInt(set.levels) < MIN_LIMIT_LADDER_LEVELS || BigInt(set.levels) > MAX_LIMIT_LADDER_LEVELS) {
+    return { ok: false, levels: [], errors: [{ code: 'levels', field: 'ladder.levels' }], totalAmount: 0n };
+  }
+  const r = limitLadderPrices(intent.price, intent.side, set, tick);
+  if ('error' in r) return { ok: false, levels: [], errors: [r.error], totalAmount: 0n };
+  const levels: LadderLevel[] = r.prices.map((price, k) => ({
+    level: k + 1,
+    shift: price - intent.price,
+    intent: { ...(intent as LimitIntent), price } as Intent,
+    entryPrice: price,
+    exitTakeProfit: null,
+    exitStop: null,
+  }));
+  return { ok: true, levels, errors: [], totalAmount: BigInt(set.levels) * intent.amount };
+}
+
+/** Quote value of every level at its own price (`amount x price / scale`; a buy rounds down, a sell up, like the covenant) and their sum. */
+export function limitLadderValues(ladder: LadderResult, side: 'buy' | 'sell', scale: bigint): { values: bigint[]; total: bigint } {
+  const values = ladder.levels.map((l) => quoteOf((l.intent as { amount: bigint }).amount, l.entryPrice, scale, side === 'sell' ? 'up' : 'down'));
+  return { values, total: values.reduce((a, b) => a + b, 0n) };
 }

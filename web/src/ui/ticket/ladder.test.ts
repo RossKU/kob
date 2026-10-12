@@ -3,7 +3,7 @@ import { errors } from '../../kob/plan-types';
 import { planOrder } from '../../kob/plan';
 import { CTX, TOKEN, form, ticketEnv } from './ticket-fixtures';
 import { buildIntent } from './form-state';
-import { expandLadder, ladderOfForm, ladderTotals } from './ladder';
+import { expandLadder, ladderOfForm, ladderTotals, type RepeatIntent } from './ladder';
 
 const buy = (extra: Record<string, string> = {}) =>
   form('repeatIfd', 'buy', { amount: '2', price: '2.3', 'exit.takeProfit': '2.6', 'ladder.levels': '3', 'ladder.step': '0.1', ...extra });
@@ -34,7 +34,7 @@ describe('ladder expansion', () => {
     const f = form('repeatIfo', 'sell', { amount: '1', price: '2.7', 'entry.stop': '2.65', 'exit.takeProfit': '2.4', 'exit.stop': '2.9', 'exit.stopLimit': '2.95' });
     const r = expandLadder(intentOf(f), 2, 5_000_000n, 100n);
     expect(r.ok).toBe(true);
-    const l2 = r.levels[1]!.intent;
+    const l2 = r.levels[1]!.intent as RepeatIntent;
     expect(l2.entry).toMatchObject({ price: 275_000_000n, stop: 270_000_000n });
     expect(l2.exit).toMatchObject({ takeProfit: 245_000_000n, stop: 295_000_000n, stopLimit: 300_000_000n });
   });

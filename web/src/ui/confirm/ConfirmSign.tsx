@@ -63,6 +63,8 @@ export interface ConfirmSignProps {
    * stated above the decoded transaction, which stays the authority
    */
   shownAs?: string | undefined;
+  /** one order of a ladder placed in turns: every order of it in words and the index of the one on this screen */
+  ladder?: { lines: readonly string[]; current: number } | undefined;
 }
 
 type Phase = 'review' | 'busy' | 'submitted';
@@ -362,6 +364,19 @@ export function ConfirmSign(props: ConfirmSignProps) {
           <p class="cf-shown-as" data-testid="confirm-shown-as">
             {props.shownAs}
           </p>
+        ) : null}
+        {props.ladder ? (
+          <div class="cf-ladder" data-testid="confirm-ladder">
+            <p class="cf-ladder-title">{t('confirm.ladder.title', { levels: props.ladder.lines.length })}</p>
+            <ul>
+              {props.ladder.lines.map((line, i) => (
+                <li key={i} class={i === props.ladder!.current ? 'cf-ladder-now' : ''} data-testid={`confirm-ladder-level-${i + 1}`} aria-current={i === props.ladder!.current ? 'true' : undefined}>
+                  {line}
+                  {i === props.ladder!.current ? <strong> ({t('confirm.ladder.now')})</strong> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : null}
         <div class="cf-summary" data-testid="confirm-summary">
           {model.sections.map((s) => (
