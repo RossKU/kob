@@ -79,6 +79,9 @@ export function Header(props: { route: Route }) {
         <div class="header-tools">
           <ReorgIndicator />
           <NetworkBadge network={config.network} />
+          <Badge tone="warn" title={t('preaudit.badgeTip')} data-testid="preaudit-badge">
+            {t('preaudit.badge')}
+          </Badge>
           <Button
             small
             variant="ghost"

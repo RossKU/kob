@@ -2,6 +2,7 @@ import { useServices } from '../../app/context';
 import { t } from '../../i18n';
 import { version as appVersion } from '../../../package.json';
 import { indexerTrust } from '../../data/indexer-crosscheck';
+import { SECURITY_POLICY_URL } from './preaudit';
 
 /** Non-custodial statement, versions, links. */
 export function Footer() {
@@ -17,6 +18,10 @@ export function Footer() {
     <footer class="footer" data-testid="footer">
       <div class="container footer-inner">
         <div class="grow">
+          <p data-testid="footer-preaudit">
+            <strong>{t('preaudit.footer')}</strong>{' '}
+            <a href={SECURITY_POLICY_URL} target="_blank" rel="noopener noreferrer">{t('preaudit.policy')}</a>
+          </p>
           <p data-testid="footer-statement">{t('shell.footer.statement')}</p>
           <p class="small" data-testid="footer-versions">{t('shell.footer.versions', { app: appVersion, kob: kobVersion })}</p>
           <p class="small" data-testid="footer-indexer-trust" data-trust={trust}><a href="#/settings">{t(`shell.indexers.badge.${trust}`)}</a></p>

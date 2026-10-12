@@ -11,6 +11,7 @@ import { SettingsView } from '../ui/settings/SettingsView';
 import { GlobalBanners } from '../ui/shell/Banners';
 import { Footer } from '../ui/shell/Footer';
 import { Header } from '../ui/shell/Header';
+import { PreAuditBanner } from '../ui/shell/PreAuditBanner';
 import { StatusBar } from '../ui/shell/StatusBar';
 import { StatusProvider } from '../ui/shell/StatusProvider';
 import { NotifyProvider } from '../ui/notify/NotifyProvider';
@@ -95,6 +96,7 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
           <Header route={route} />
           <StatusBar />
           <main class="container main" id="main" data-testid="main" data-route={routeToHash(route)}>
+            <PreAuditBanner />
             <GlobalBanners warnings={props.warnings} storedOverrides={props.storedOverrides ?? []} />
             <ViewBoundary resetKey={routeToHash(route)}>
               <RoutedView route={route} warnings={props.warnings} />
