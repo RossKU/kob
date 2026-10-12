@@ -401,3 +401,167 @@ async fn a_subsidised_kill_is_counted_in_the_metrics() {
     let m = kob_executor::matcher::run::metrics_text(&r, &rep);
     assert!(m.contains("kob_keeper_subsidised_total 1"), "{m}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// the rolling subsidy budget (`--keeper-subsidy-budget-kas` per `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs`):
+// without it, a flood of small IOC / GTD orders whose tips pay only the floor, expiring under fee pressure, drains the
+// operator's funding `subsidy_max` at a time
+
+/// An IOC ask listed at `daa` (killable from `daa + 600`) whose refund tip is `tip`.
+fn ioc_at(n: u32, tip: i64, daa: u64) -> ListedOrder {
+    let o = ioc(n, tip);
+    listed(cid(n), o.order.state, CARRIER, daa)
+}
+
+/// A keeper runner (no replacement unless asked) with the given budget and window, over `orders`.
+fn budgeted(
+    node: MockNode,
+    orders: Vec<ListedOrder>,
+    max_replacements: u32,
+    budget: u64,
+    window: u64,
+) -> Runner<MockNode, ViewSource<MemoryBook>> {
+    let mut r = runner(node, orders, K, max_replacements);
+    r.cfg.keeper.subsidy_budget = budget;
+    r.cfg.keeper.subsidy_window_daa = window;
+    r
+}
+
+/// (fee rate, operator subsidy) of every tracked keeper transaction submitted at `daa` over one of `ids`, by order.
+fn jobs_at(r: &Runner<MockNode, ViewSource<MemoryBook>>, daa: u64, ids: &[u32]) -> Vec<(u64, u64)> {
+    let want: BTreeSet<[u8; 32]> = ids.iter().map(|n| cid(*n)).collect();
+    let mut v: Vec<([u8; 32], u64, u64)> = r
+        .tracker
+        .txs
+        .values()
+        .filter(|t| t.submitted_daa == daa && t.orders.iter().any(|o| want.contains(o)))
+        .map(|t| (*t.orders.iter().next().unwrap(), t.fee_rate, if t.profit < 0 { t.profit.unsigned_abs() } else { 0 }))
+        .collect();
+    v.sort();
+    v.into_iter().map(|(_, rate, s)| (rate, s)).collect()
+}
+
+/// Subsidy of the kill of `ioc(1, tip)` at the priority rate `rate` (one funding input and a change output, as in the runner).
+fn full_subsidy(tip: i64, rate: u64) -> u64 {
+    let r = keep(vec![ioc(1, tip)], &high(rate, KAS, 0));
+    assert_eq!(r.jobs[0].built.fee.fee_rate, rate);
+    r.jobs[0].subsidy
+}
+
+/// The rate the tip alone pays (the subsidy off).
+fn own_rate(tip: i64, rate: u64) -> u64 {
+    keep(vec![ioc(1, tip)], &high(rate, 0, 0)).jobs[0].built.fee.fee_rate
+}
+
+fn count(jobs: &[(u64, u64)], want: (u64, u64)) -> usize {
+    jobs.iter().filter(|j| **j == want).count()
+}
+
+#[tokio::test]
+async fn the_subsidy_budget_bounds_the_operator_across_ticks_and_rolls_with_the_window() {
+    let tip = 2 * floor_fee() as i64;
+    let s1 = full_subsidy(tip, 1_000);
+    let plain = own_rate(tip, 1_000);
+    assert!(s1 > 0 && plain < 1_000);
+    const W: u64 = 1_000;
+    // a budget of exactly two full subsidies per 1,000 DAA; five floor-tip kills due at once
+    let node = MockNode::new(KILL_DAA, 1_000.0);
+    // funding for every tick (the node keeps reporting the UTXOs; the runner leaves out those its pending jobs spend), so
+    // only the budget can deny a subsidy
+    {
+        let mut s = node.0.lock().unwrap();
+        let f = s.funding[0].clone();
+        s.funding = (0..12u8).map(|i| AddressUtxo { transaction_id: [0xf0 ^ i; 32], ..f.clone() }).collect();
+    }
+    let mut orders: Vec<ListedOrder> = (1..=5).map(|n| ioc_at(n, tip, 5_000)).collect();
+    orders.extend((11..=13).map(|n| ioc_at(n, tip, 5_100))); // due at 5,700 (inside the window)
+    orders.extend((21..=23).map(|n| ioc_at(n, tip, 6_000))); // due at 6,600 (the first charges left the window)
+    let mut r = budgeted(node.clone(), orders, 0, 2 * s1, W);
+    r.source.0.daa_score = KILL_DAA;
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.submitted.len(), 5, "{:?}", rep.skipped);
+    let first = jobs_at(&r, KILL_DAA, &[1, 2, 3, 4, 5]);
+    assert_eq!(first.len(), 5);
+    assert_eq!(count(&first, (1_000, s1)), 2, "two kills subsidised to the priority rate: {first:?}");
+    assert_eq!(count(&first, (plain, 0)), 3, "the rest at the rate their tip pays: {first:?}");
+    assert_eq!(r.keeper_subsidy.spent(&r.cfg.keeper, KILL_DAA), 2 * s1);
+    assert_eq!(r.keeper_subsidy.left(&r.cfg.keeper, KILL_DAA), 0);
+    assert_eq!((r.keeper_subsidised, r.keeper_subsidy_sompi), (2, 2 * s1));
+    let m = kob_executor::matcher::run::metrics_text(&r, &rep);
+    assert!(m.contains("kob_keeper_subsidy_budget_left_sompi 0"), "{m}");
+    // the next tick inside the window: the budget is still spent, the kills go at their own rate (subsidy_max = 0 behaviour)
+    node.set_daa(KILL_DAA + 100);
+    r.source.0.daa_score = KILL_DAA + 100;
+    r.step().await.unwrap();
+    let second = jobs_at(&r, KILL_DAA + 100, &[11, 12, 13]);
+    assert_eq!(second, vec![(plain, 0); 3], "budget spent: no subsidy inside the window");
+    assert_eq!(r.keeper_subsidy_sompi, 2 * s1);
+    // a full window after the first charges: subsidy resumes, again within the budget
+    node.set_daa(KILL_DAA + W);
+    r.source.0.daa_score = KILL_DAA + W;
+    r.step().await.unwrap();
+    let third = jobs_at(&r, KILL_DAA + W, &[21, 22, 23]);
+    assert_eq!(count(&third, (1_000, s1)), 2, "subsidy resumes after the window: {third:?}");
+    assert_eq!(count(&third, (plain, 0)), 1, "{third:?}");
+    assert_eq!(r.keeper_subsidy.spent(&r.cfg.keeper, KILL_DAA + W), 2 * s1, "the old charges left the window");
+    assert_eq!(r.keeper_subsidy_sompi, 4 * s1);
+}
+
+#[tokio::test]
+async fn a_zero_budget_or_job_cap_means_no_subsidy_and_the_cap_bounds_one_step() {
+    let tip = 2 * floor_fee() as i64;
+    let plain = own_rate(tip, 1_000);
+    let s1 = full_subsidy(tip, 1_000);
+    // budget 0: exactly the subsidy_max = 0 behaviour
+    let node = MockNode::new(KILL_DAA, 1_000.0);
+    let mut r = budgeted(node, (1..=3).map(|n| ioc_at(n, tip, 5_000)).collect(), 0, 0, 36_000);
+    r.step().await.unwrap();
+    assert_eq!(jobs_at(&r, KILL_DAA, &[1, 2, 3]), vec![(plain, 0); 3]);
+    assert_eq!((r.keeper_subsidised, r.keeper_subsidy_sompi), (0, 0));
+    // job cap 0: the same
+    let node = MockNode::new(KILL_DAA, 1_000.0);
+    let mut r = budgeted(node, (1..=3).map(|n| ioc_at(n, tip, 5_000)).collect(), 0, KAS, 36_000);
+    r.cfg.keeper.subsidy_max_jobs = 0;
+    r.step().await.unwrap();
+    assert_eq!(jobs_at(&r, KILL_DAA, &[1, 2, 3]), vec![(plain, 0); 3]);
+    // job cap 1: one subsidised kill per step, whatever the budget left
+    let node = MockNode::new(KILL_DAA, 1_000.0);
+    let mut r = budgeted(node, (1..=3).map(|n| ioc_at(n, tip, 5_000)).collect(), 0, KAS, 36_000);
+    r.cfg.keeper.subsidy_max_jobs = 1;
+    r.step().await.unwrap();
+    let mut jobs = jobs_at(&r, KILL_DAA, &[1, 2, 3]);
+    jobs.sort();
+    assert_eq!(jobs, vec![(plain, 0), (plain, 0), (1_000, s1)]);
+    assert_eq!(r.keeper_subsidy_sompi, s1);
+}
+
+#[tokio::test]
+async fn a_replacement_is_charged_its_added_subsidy_and_refused_past_the_budget() {
+    let tip = 2 * floor_fee() as i64;
+    let s400 = full_subsidy(tip, 400);
+    let s1000 = full_subsidy(tip, 1_000);
+    assert!(s1000 > s400);
+    for (budget, replaced) in [(s1000, true), (s1000 - 1, false)] {
+        let node = MockNode::new(KILL_DAA, 400.0);
+        let mut r = budgeted(node.clone(), vec![ioc(1, tip)], 3, budget, 36_000);
+        r.step().await.unwrap();
+        assert_eq!(jobs_at(&r, KILL_DAA, &[1]), vec![(400, s400)]);
+        assert_eq!(r.keeper_subsidy.spent(&r.cfg.keeper, KILL_DAA), s400);
+        // the estimate rises; the stuck kill wants the priority rate, which needs s1000 of subsidy in all
+        node.0.lock().unwrap().fee = Some(serde_json::json!({"estimate": {"priorityBucket": {"feerate": 1000.0}}}));
+        node.set_daa(KILL_DAA + 100);
+        let rep = r.step().await.unwrap();
+        let spent = r.keeper_subsidy.spent(&r.cfg.keeper, KILL_DAA + 100);
+        if replaced {
+            assert_eq!(rep.replaced.len(), 1, "within the budget: replaced");
+            assert_eq!(tracked(&r).1, 1_000);
+            assert_eq!(spent, s1000, "the original's subsidy plus the replacement's increase");
+            assert_eq!(r.keeper_subsidy_sompi, s1000);
+            assert_eq!(r.keeper_subsidy.left(&r.cfg.keeper, KILL_DAA + 100), 0);
+        } else {
+            assert!(rep.replaced.is_empty(), "the increase does not fit the budget: not replaced");
+            assert_eq!(node.replacements(), 0);
+            assert_eq!((tracked(&r).1, spent), (400, s400), "the original stays, nothing more charged");
+        }
+    }
+}

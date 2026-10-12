@@ -22,7 +22,10 @@
 //! Liveness under fee pressure (`docs/ops/executor.md`, fee policy): a kill or refund whose tip pays it at the floor but not
 //! at its urgency's rate may be topped up from the operator's own funding, at most [`KeeperConfig::subsidy_max`] per job
 //! (the maker's outputs stay what the covenant requires), and a kill or refund of this process that stays unaccepted is
-//! rebuilt at a higher rate ([`reprice`]) and replaced by the runner (`crate::matcher::run`).
+//! rebuilt at a higher rate ([`reprice`]) and replaced by the runner (`crate::matcher::run`). The subsidies of all jobs
+//! together are bounded by a rolling budget ([`KeeperConfig::subsidy_budget`] per [`KeeperConfig::subsidy_window_daa`],
+//! kept by the runner in a [`SubsidyBudget`], replacements included) and by a number of subsidised jobs per step
+//! ([`KeeperConfig::subsidy_max_jobs`]): once either is used up, jobs go at the rate their own tip pays.
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -72,6 +75,18 @@ pub struct KeeperConfig {
     /// requires whatever the fee (the maker gets `value - refundTip`): the top-up only comes out of the operator's P2PK
     /// funding inputs. 0: off (the job goes at the highest rate its tip pays). Closes and sweeps are never subsidised.
     pub subsidy_max: u64,
+    /// The most sompi of subsidy ([`KeeperConfig::subsidy_max`]) all jobs together may take within any
+    /// [`KeeperConfig::subsidy_window_daa`] DAA (a rolling window the runner keeps in a [`SubsidyBudget`], the subsidy
+    /// added by replacements included). [`tick`] alone never hands out more than this in one tick. Once it is used up, kills
+    /// and refunds go at the highest rate their own tip pays (exactly as with `subsidy_max = 0`). 0: no subsidy at all.
+    /// Without it, a flood of small IOC / GTD orders whose tips pay only the floor, expiring under fee pressure (which a miner
+    /// can create and collect), drains the operator's funding `subsidy_max` at a time.
+    pub subsidy_budget: u64,
+    /// The rolling window of [`KeeperConfig::subsidy_budget`], DAA (10 per second; 0 is taken as 1).
+    pub subsidy_window_daa: u64,
+    /// The most kills and refunds one runner step subsidises (new jobs and replacements that add subsidy together): a burst of
+    /// due orders cannot take the whole window's budget in one step. 0: no subsidy.
+    pub subsidy_max_jobs: usize,
     /// Replace-by-fee of the operator's own stuck kills and refunds (`crate::matcher::run`): a kill or refund this process
     /// submitted that no chain block accepted after this many DAA is rebuilt at a higher rate and resubmitted with
     /// `submitTransactionReplacement`.
@@ -94,11 +109,21 @@ impl Default for KeeperConfig {
             max_attempts: 128,
             validate: true,
             subsidy_max: 0,
+            subsidy_budget: DEFAULT_SUBSIDY_BUDGET,
+            subsidy_window_daa: DEFAULT_SUBSIDY_WINDOW_DAA,
+            subsidy_max_jobs: DEFAULT_SUBSIDY_MAX_JOBS,
             replace_after_daa: 100,
             max_replacements: 0,
         }
     }
 }
+
+/// Default [`KeeperConfig::subsidy_budget`]: 1 KAS.
+pub const DEFAULT_SUBSIDY_BUDGET: u64 = 100_000_000;
+/// Default [`KeeperConfig::subsidy_window_daa`]: 36,000 DAA (one hour at 10 blocks per second).
+pub const DEFAULT_SUBSIDY_WINDOW_DAA: u64 = 36_000;
+/// Default [`KeeperConfig::subsidy_max_jobs`].
+pub const DEFAULT_SUBSIDY_MAX_JOBS: usize = 8;
 
 /// Command-line options of the keepers' liveness under fee pressure (`kob-executor run`, `keep`, `match --keep`).
 #[derive(clap::Args, Debug, Clone)]
@@ -108,6 +133,17 @@ pub struct LivenessArgs {
     /// `--fee-max-tx-kas`). 0: never (the job goes at the highest rate its tip pays).
     #[arg(long, default_value_t = 0.05)]
     pub keeper_subsidy_max_kas: f64,
+    /// Keepers: the most KAS of its own funding the operator adds to kills and refunds ALTOGETHER (replacements included)
+    /// within any `--keeper-subsidy-window-daa` (a rolling window; it starts empty when the process starts). Once it is used
+    /// up, jobs go at the highest rate their own tip pays until older subsidies leave the window. 0: never subsidise.
+    #[arg(long, default_value_t = 1.0)]
+    pub keeper_subsidy_budget_kas: f64,
+    /// Keepers: the rolling window of `--keeper-subsidy-budget-kas`, DAA (10 per second; 36,000 = one hour).
+    #[arg(long, default_value_t = DEFAULT_SUBSIDY_WINDOW_DAA)]
+    pub keeper_subsidy_window_daa: u64,
+    /// Keepers: the most kills and refunds subsidised per tick (new jobs and replacements together). 0: never subsidise.
+    #[arg(long, default_value_t = DEFAULT_SUBSIDY_MAX_JOBS)]
+    pub keeper_subsidy_max_jobs: usize,
     /// Keepers: a kill or refund this process submitted that is still unaccepted after this many DAA (10 per second) is
     /// rebuilt at a higher rate and replaced (`submitTransactionReplacement`).
     #[arg(long, default_value_t = 100)]
@@ -125,6 +161,16 @@ impl LivenessArgs {
             return Err(format!("--keeper-subsidy-max-kas {k} is not an amount of KAS"));
         }
         cfg.subsidy_max = (k * 100_000_000.0).round() as u64;
+        let b = self.keeper_subsidy_budget_kas;
+        if !b.is_finite() || !(0.0..=1e9).contains(&b) {
+            return Err(format!("--keeper-subsidy-budget-kas {b} is not an amount of KAS"));
+        }
+        cfg.subsidy_budget = (b * 100_000_000.0).round() as u64;
+        if self.keeper_subsidy_window_daa == 0 {
+            return Err("--keeper-subsidy-window-daa must be at least 1".into());
+        }
+        cfg.subsidy_window_daa = self.keeper_subsidy_window_daa;
+        cfg.subsidy_max_jobs = self.keeper_subsidy_max_jobs;
         cfg.replace_after_daa = self.keeper_replace_after_daa.max(1);
         cfg.max_replacements = self.keeper_max_replacements;
         Ok(())
@@ -213,6 +259,78 @@ pub struct KeeperReport {
     /// backoff (`excluded_outpoints`), so unbuildable orders cannot eat the attempt budget of every tick and starve the
     /// buildable kills and refunds queued behind them.
     pub failed: Vec<(CovId, Outpoint)>,
+}
+
+/// What one keeper tick may still hand out as operator subsidy ([`tick_with_subsidy`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SubsidyAllowance {
+    /// Sompi, all jobs of the tick together.
+    pub sompi: u64,
+    /// Subsidised jobs.
+    pub jobs: usize,
+}
+
+impl SubsidyAllowance {
+    /// The allowance of a tick without a runner: one window's budget and the per-step job cap.
+    pub fn of(cfg: &KeeperConfig) -> Self {
+        SubsidyAllowance { sompi: cfg.subsidy_budget, jobs: cfg.subsidy_max_jobs }
+    }
+
+    /// The most subsidy the next job may take (0 when the allowance is used up).
+    pub fn per_job(&self, cfg: &KeeperConfig) -> u64 {
+        if self.jobs == 0 {
+            0
+        } else {
+            cfg.subsidy_max.min(self.sompi)
+        }
+    }
+
+    /// Takes one job's subsidy out of the allowance (nothing for a job its tip pays).
+    pub fn take(&mut self, subsidy: u64) {
+        if subsidy > 0 {
+            self.sompi = self.sompi.saturating_sub(subsidy);
+            self.jobs = self.jobs.saturating_sub(1);
+        }
+    }
+}
+
+/// The operator subsidies of a rolling window ([`KeeperConfig::subsidy_budget`]), kept by the runner across ticks and
+/// replacements: (virtual DAA score, sompi) of every subsidy charged. A subsidy is charged when its transaction is submitted
+/// (also without a verdict: it may be accepted), only the increase for a replacement; a transaction that never makes it into
+/// a block is not refunded (conservative: the total charged is at least what the operator actually paid). In memory only:
+/// a restart starts with an empty window.
+#[derive(Clone, Debug, Default)]
+pub struct SubsidyBudget {
+    spends: VecDeque<(u64, u64)>,
+}
+
+impl SubsidyBudget {
+    /// Sompi charged within the window that ends at `daa` (charges at a later DAA score, from before a node switch to one
+    /// that is behind, count too).
+    pub fn spent(&self, cfg: &KeeperConfig, daa: u64) -> u64 {
+        let w = cfg.subsidy_window_daa.max(1);
+        self.spends.iter().filter(|(d, _)| d.saturating_add(w) > daa).fold(0u64, |a, (_, s)| a.saturating_add(*s))
+    }
+
+    /// What the window ending at `daa` still allows.
+    pub fn left(&self, cfg: &KeeperConfig, daa: u64) -> u64 {
+        cfg.subsidy_budget.saturating_sub(self.spent(cfg, daa))
+    }
+
+    /// Records `sompi` of subsidy at `daa` and forgets the charges that left the window.
+    pub fn charge(&mut self, cfg: &KeeperConfig, daa: u64, sompi: u64) {
+        let w = cfg.subsidy_window_daa.max(1);
+        while self.spends.front().is_some_and(|(d, _)| d.saturating_add(w) <= daa) {
+            self.spends.pop_front();
+        }
+        if sompi == 0 {
+            return;
+        }
+        match self.spends.back_mut() {
+            Some((d, s)) if *d == daa => *s = s.saturating_add(sompi),
+            _ => self.spends.push_back((daa, sompi)),
+        }
+    }
 }
 
 /// Cheap lower bound of what a refund of `o` costs in fees: the order input and its payout output at the standard mass floor
@@ -345,9 +463,10 @@ struct JobRate {
     subsidised: Option<u64>,
 }
 
-/// The least profit a subsidised job may make: the operator pays at most `subsidy_max` of the fee out of its own funding.
-fn subsidy_floor(cfg: &KeeperConfig) -> i64 {
-    -(cfg.subsidy_max.min(i64::MAX as u64) as i64)
+/// The least profit a subsidised job may make: the operator pays at most `cap` (`subsidy_max` within what the budget still
+/// allows) of the fee out of its own funding.
+fn subsidy_floor(cap: u64) -> i64 {
+    -(cap.min(i64::MAX as u64) as i64)
 }
 
 /// The fee rate a job is built at (`crate::fee`): its urgency's rate, held to the total cap and, for a paid job, to the
@@ -356,9 +475,9 @@ fn subsidy_floor(cfg: &KeeperConfig) -> i64 {
 ///
 /// A kill or refund with funding whose tip pays the job at the floor but not at its urgency's rate may also get a subsidised
 /// rate ([`KeeperConfig::subsidy_max`]): the highest rate up to its urgency's (within the total cap) at which the operator's
-/// funding adds at most `subsidy_max` to the tip. An order whose tip does not pay even the floor is never subsidised (a maker
+/// funding adds at most `cap` (`subsidy_max` within the budget left) to the tip. An order whose tip does not pay even the floor is never subsidised (a maker
 /// cannot make the operator pay for its order's end).
-fn job_rate(action: &Action, kind: JobKind, cfg: &KeeperConfig, funding: &[KeyUtxo]) -> JobRate {
+fn job_rate(action: &Action, kind: JobKind, cfg: &KeeperConfig, funding: &[KeyUtxo], cap: u64) -> JobRate {
     let floor = cfg.fees.floor_of(cfg.fee_rate);
     let want = cfg.fees.rate(kind.urgency(), cfg.fee_rate);
     let flat = JobRate { plain: floor, subsidised: None };
@@ -386,8 +505,8 @@ fn job_rate(action: &Action, kind: JobKind, cfg: &KeeperConfig, funding: &[KeyUt
             _ => floor,
         }
     };
-    let subsidised = (kind.liveness() && cfg.subsidy_max > 0 && !funding.is_empty() && profit0 >= cfg.min_profit)
-        .then(|| cfg.fees.priced(want, floor, fee0, Some(profit0), subsidy_floor(cfg).min(cfg.min_profit)))
+    let subsidised = (kind.liveness() && cap > 0 && !funding.is_empty() && profit0 >= cfg.min_profit)
+        .then(|| cfg.fees.priced(want, floor, fee0, Some(profit0), subsidy_floor(cap).min(cfg.min_profit)))
         .filter(|r| *r > plain);
     JobRate { plain, subsidised }
 }
@@ -397,7 +516,8 @@ fn job_rate(action: &Action, kind: JobKind, cfg: &KeeperConfig, funding: &[KeyUt
 /// subsidises (the tip alone may not pay the higher rate). The rate is lowered to the total cap; a build that then pays no
 /// more than `above` (the stuck transaction's rate: a replacement must pay a higher one), costs the operator more than
 /// [`KeeperConfig::subsidy_max`] (or, without a subsidy, leaves less than `min_profit`), or does not build or validate is an
-/// error. The maker's outputs are the covenant's whatever the rate.
+/// error. The maker's outputs are the covenant's whatever the rate. The runner lowers `subsidy_max` to the job's subsidy so
+/// far plus what the rolling budget still allows ([`SubsidyBudget`]); 0 then means the job's own tip alone pays.
 pub fn reprice(
     kind: JobKind,
     order: CovId,
@@ -422,7 +542,7 @@ pub fn reprice(
         Action::RefundOrder(r) => r.funding.clone(),
         _ => return Err("not a refund request".into()),
     };
-    let min_ok = if cfg.subsidy_max > 0 { subsidy_floor(cfg).min(cfg.min_profit) } else { cfg.min_profit };
+    let min_ok = if cfg.subsidy_max > 0 { subsidy_floor(cfg.subsidy_max).min(cfg.min_profit) } else { cfg.min_profit };
     let floor = cfg.fees.floor_of(cfg.fee_rate);
     let mut rate = rate.max(floor);
     for _ in 0..2 {
@@ -492,8 +612,17 @@ fn spends_of(built: &BuiltTx) -> BTreeSet<Outpoint> {
 }
 
 /// Plans, builds, signs and validates every keeper job of a snapshot. Funding is chained through
-/// each job's change output (a P2PK spend never depends on its parent's DAA score).
+/// each job's change output (a P2PK spend never depends on its parent's DAA score). The tick's subsidies are bounded by one
+/// window's budget and the per-step job cap ([`SubsidyAllowance::of`]); the runner uses [`tick_with_subsidy`] with what its
+/// rolling budget still allows.
 pub fn tick(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Signer) -> KeeperReport {
+    tick_with_subsidy(inp, cfg, signer, SubsidyAllowance::of(cfg))
+}
+
+/// [`tick`] with an explicit subsidy allowance: the subsidies of the tick's jobs together stay within `allowance.sompi`
+/// and at most `allowance.jobs` jobs are subsidised; past either, a job goes at the rate its own tip pays.
+pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Signer, allowance: SubsidyAllowance) -> KeeperReport {
+    let mut allowance = allowance;
     let mut report = KeeperReport::default();
     let operator = signer.pubkey();
     let daa = inp.clock.daa;
@@ -578,14 +707,15 @@ pub fn tick(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Signer) -> Keepe
         }
         let Some((kind, mut action)) = attempt else { continue };
         attempts += 1;
-        let rates = job_rate(&action, kind, cfg, &funding_vec);
-        // the subsidised rate first: kept when it builds within the total cap and costs the operator at most `subsidy_max`
+        let cap = allowance.per_job(cfg);
+        let rates = job_rate(&action, kind, cfg, &funding_vec, cap);
+        // the subsidised rate first: kept when it builds within the total cap and costs the operator at most `cap`
         let subsidised = rates.subsidised.and_then(|rate| {
             let mut a = action.clone();
             crate::fee::set_rate(&mut a, rate);
             let r = finish(a.clone(), signer, cfg.validate, &funding_vec).ok()?;
             let fits = cfg.fees.max_tx_fee == 0 || r.0.fee.fee <= cfg.fees.max_tx_fee;
-            (fits && r.3 >= subsidy_floor(cfg)).then_some((a, r))
+            (fits && r.3 >= subsidy_floor(cap)).then_some((a, r))
         });
         if let Some((a, (built, signed, validation, profit))) = subsidised {
             pool.pop_front();
@@ -602,6 +732,7 @@ pub fn tick(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Signer) -> Keepe
             }
             let spends = spends_of(&built);
             let subsidy = if profit < 0 { profit.unsigned_abs() } else { 0 };
+            allowance.take(subsidy);
             report.jobs.push(Job { kind, order: id, action: a, built, signed, validation, profit, subsidy, spends });
             continue;
         }
@@ -665,4 +796,75 @@ pub fn tick(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Signer) -> Keepe
         }
     }
     report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(budget: u64, window: u64) -> KeeperConfig {
+        KeeperConfig { subsidy_max: 50, subsidy_budget: budget, subsidy_window_daa: window, ..KeeperConfig::default() }
+    }
+
+    #[test]
+    fn the_budget_rolls_with_the_window() {
+        let c = cfg(100, 1_000);
+        let mut b = SubsidyBudget::default();
+        assert_eq!(b.left(&c, 0), 100);
+        b.charge(&c, 10, 40);
+        b.charge(&c, 500, 50);
+        assert_eq!(b.left(&c, 500), 10);
+        // the first charge leaves the window 1,000 DAA after it was made, the second one later
+        assert_eq!(b.left(&c, 1_009), 10);
+        assert_eq!(b.left(&c, 1_010), 50);
+        assert_eq!(b.left(&c, 1_500), 100);
+        // over-charging (a replacement without a verdict) saturates at 0
+        b.charge(&c, 1_500, 500);
+        assert_eq!(b.left(&c, 1_500), 0);
+        // charges of one DAA score are coalesced, old ones forgotten
+        b.charge(&c, 1_500, 1);
+        assert_eq!(b.spends.len(), 1);
+        // a node behind the last charge still sees it (no subsidy re-granted by a DAA score going backwards)
+        assert_eq!(b.left(&c, 100), 0);
+    }
+
+    #[test]
+    fn a_zero_budget_or_job_cap_allows_no_subsidy() {
+        let mut a = SubsidyAllowance::of(&cfg(0, 1_000));
+        assert_eq!(a.per_job(&cfg(0, 1_000)), 0);
+        let c = KeeperConfig { subsidy_max_jobs: 0, ..cfg(100, 1_000) };
+        assert_eq!(SubsidyAllowance::of(&c).per_job(&c), 0);
+        // the per-job cap is subsidy_max within what is left, and every subsidised job takes one of the cap
+        let c = KeeperConfig { subsidy_max_jobs: 2, ..cfg(80, 1_000) };
+        a = SubsidyAllowance::of(&c);
+        assert_eq!(a.per_job(&c), 50);
+        a.take(45);
+        assert_eq!(a.per_job(&c), 35);
+        a.take(0);
+        assert_eq!(a.jobs, 1, "a job its tip pays takes nothing");
+        a.take(10);
+        assert_eq!((a.per_job(&c), a.sompi), (0, 25));
+    }
+
+    #[test]
+    fn the_liveness_options_set_the_budget() {
+        let args = LivenessArgs {
+            keeper_subsidy_max_kas: 0.05,
+            keeper_subsidy_budget_kas: 1.0,
+            keeper_subsidy_window_daa: 36_000,
+            keeper_subsidy_max_jobs: 8,
+            keeper_replace_after_daa: 100,
+            keeper_max_replacements: 3,
+        };
+        let mut c = KeeperConfig::default();
+        args.apply(&mut c).unwrap();
+        assert_eq!((c.subsidy_max, c.subsidy_budget, c.subsidy_window_daa, c.subsidy_max_jobs), (5_000_000, 100_000_000, 36_000, 8));
+        let d = KeeperConfig::default();
+        assert_eq!((d.subsidy_budget, d.subsidy_window_daa, d.subsidy_max_jobs), (c.subsidy_budget, c.subsidy_window_daa, 8));
+        assert!(LivenessArgs { keeper_subsidy_budget_kas: -1.0, ..args.clone() }.apply(&mut c).is_err());
+        assert!(LivenessArgs { keeper_subsidy_budget_kas: f64::NAN, ..args.clone() }.apply(&mut c).is_err());
+        assert!(LivenessArgs { keeper_subsidy_window_daa: 0, ..args.clone() }.apply(&mut c).is_err());
+        LivenessArgs { keeper_subsidy_budget_kas: 0.0, ..args }.apply(&mut c).unwrap();
+        assert_eq!(c.subsidy_budget, 0);
+    }
 }

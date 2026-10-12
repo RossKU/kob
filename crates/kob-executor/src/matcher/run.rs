@@ -26,7 +26,7 @@ use super::family::Families;
 use super::node::{NodeApi, RpcError, SubmitOutcome};
 use super::submit::{Tracked, Tracker, TrackerConfig};
 use super::wallet::{address_of, p2pk_spk_string, Signer};
-use crate::keepers::{tick as keeper_tick, JobKind, KeeperConfig, KeeperInput};
+use crate::keepers::{tick_with_subsidy as keeper_tick, JobKind, KeeperConfig, KeeperInput, SubsidyAllowance, SubsidyBudget};
 
 /// Where the book comes from each tick.
 pub trait BookSource: Send {
@@ -298,6 +298,9 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     /// Keeper jobs submitted with an operator subsidy, and the sompi of those subsidies (metrics).
     pub keeper_subsidised: u64,
     pub keeper_subsidy_sompi: u64,
+    /// The operator subsidies of the rolling window (`KeeperConfig::subsidy_budget`): every subsidy of a kill or refund this
+    /// process submitted, the increase of each replacement included. In memory: a restart starts with an empty window.
+    pub keeper_subsidy: SubsidyBudget,
     /// Stuck kills and refunds replaced at a higher rate, and replacements the node refused (metrics).
     pub keeper_replaced: u64,
     pub keeper_replace_refused: u64,
@@ -446,6 +449,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             keeper_inflight: BTreeMap::new(),
             keeper_subsidised: 0,
             keeper_subsidy_sompi: 0,
+            keeper_subsidy: SubsidyBudget::default(),
             keeper_replaced: 0,
             keeper_replace_refused: 0,
         }
@@ -460,12 +464,17 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
     /// tracked transaction spends (a chained keeper job), whose submit had no verdict, or that a chain block accepted is left
     /// alone. A refused replacement (the original was accepted meanwhile, another transaction spent the order, ...) ends the
     /// replacements of that job: the tracker's pending timeout and backoff handle it as before.
-    pub async fn replace_stuck(&mut self, daa: u64, spare: &[KeyUtxo], rep: &mut StepReport) -> anyhow::Result<()> {
+    ///
+    /// A replacement may add subsidy only within the rolling budget (`KeeperConfig::subsidy_budget`, [`Runner::keeper_subsidy`])
+    /// and the step's subsidised-job cap (`subsidy_max_jobs`): past either, it must be paid by the job's own tip and the
+    /// subsidy it already has. Returns how many replacements added subsidy (they count toward the step's cap).
+    pub async fn replace_stuck(&mut self, daa: u64, spare: &[KeyUtxo], rep: &mut StepReport) -> anyhow::Result<usize> {
         let tracker = &self.tracker;
         self.keeper_inflight.retain(|id, _| tracker.txs.get(id).is_some_and(|t| t.accepted.is_none()));
         let kc = self.cfg.keeper.clone();
+        let mut subsidised = 0usize;
         if kc.max_replacements == 0 || self.cfg.dry_run {
-            return Ok(());
+            return Ok(subsidised);
         }
         // transactions whose outputs a tracked transaction spends: replacing one would orphan its child
         let parents: BTreeSet<[u8; 32]> = self.tracker.txs.values().flat_map(|t| t.spends.iter().map(|op| op.0)).collect();
@@ -492,10 +501,13 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             let hex_old = kob_protocol::json::to_hex(&old);
             let want = kc.fees.rate(j.kind.urgency(), kc.fee_rate);
             let rate = want.max(t.fee_rate.saturating_add((t.fee_rate / 4).max(1))).min(ceiling);
+            // the subsidy this replacement may have: what the job has, plus what the budget and the step's cap still allow
+            let more = if subsidised < kc.subsidy_max_jobs { self.keeper_subsidy.left(&kc, daa) } else { 0 };
+            let jc = KeeperConfig { subsidy_max: kc.subsidy_max.min(j.subsidy.saturating_add(more)), ..kc.clone() };
             let job = if rate <= t.fee_rate {
                 Err(format!("already at the highest rate {ceiling}"))
             } else {
-                crate::keepers::reprice(j.kind, j.order, &j.action, rate, t.fee_rate, spare.front(), &kc, self.signer.as_ref())
+                crate::keepers::reprice(j.kind, j.order, &j.action, rate, t.fee_rate, spare.front(), &jc, self.signer.as_ref())
             };
             let job = match job {
                 Ok(job) => job,
@@ -523,6 +535,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             };
             self.source.watch(new);
             let (fee, fee_rate) = (replacement.fee, replacement.fee_rate);
+            let added = job.subsidy.saturating_sub(j.subsidy);
             match self.node.submit_replacement(replacement.rpc_tx.clone()).await {
                 Ok(_) => {
                     tracing::info!(
@@ -538,11 +551,13 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     self.tracker.txs.remove(&old);
                     self.tracker.txs.insert(new, replacement);
                     self.keeper_inflight.remove(&old);
-                    if job.subsidy > j.subsidy {
+                    if added > 0 {
                         if j.subsidy == 0 {
                             self.keeper_subsidised += 1;
                         }
-                        self.keeper_subsidy_sompi += job.subsidy - j.subsidy;
+                        self.keeper_subsidy_sompi += added;
+                        self.charge_subsidy(daa, added);
+                        subsidised += 1;
                     }
                     let next = InFlightJob {
                         action: job.action,
@@ -569,12 +584,31 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     if let Some(e) = self.keeper_inflight.get_mut(&old) {
                         e.done = true;
                     }
+                    // the replacement may be accepted: its added subsidy counts against the budget
+                    if added > 0 {
+                        self.charge_subsidy(daa, added);
+                        subsidised += 1;
+                    }
                     self.tracker.unknown += 1;
                     self.tracker.txs.insert(new, Tracked { unconfirmed: true, ..replacement });
                 }
             }
         }
-        Ok(())
+        Ok(subsidised)
+    }
+
+    /// Charges `sompi` of operator subsidy to the rolling budget; logs when that uses it up.
+    fn charge_subsidy(&mut self, daa: u64, sompi: u64) {
+        let kc = &self.cfg.keeper;
+        let before = self.keeper_subsidy.left(kc, daa);
+        self.keeper_subsidy.charge(kc, daa, sompi);
+        if before > 0 && self.keeper_subsidy.left(kc, daa) == 0 {
+            tracing::warn!(
+                budget = kc.subsidy_budget,
+                window_daa = kc.subsidy_window_daa,
+                "keeper subsidy budget of the window used up: kills and refunds go at the rate their own tip pays"
+            );
+        }
     }
 
     /// Outpoints no plan may spend: the tracker's pending and unfinalized transactions and the reservations.
@@ -908,7 +942,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         if self.cfg.roles.keeper {
             // this process's stuck kills and refunds first: their replacements keep their inputs (and may take a funding UTXO)
             let spare: Vec<KeyUtxo> = funding.iter().filter(|k| !spent.contains(&outpoint(&k.utxo))).cloned().collect();
-            self.replace_stuck(daa, &spare, &mut rep).await?;
+            let replaced_subsidised = self.replace_stuck(daa, &spare, &mut rep).await?;
             spent = self.reserved_or_spent();
             let funding: Vec<KeyUtxo> = funding.iter().filter(|k| !spent.contains(&outpoint(&k.utxo))).cloned().collect();
             // the listed orders plus the proven unlisted ones (kill / refund / close only: the keepers never match)
@@ -940,8 +974,13 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 excluded_outpoints,
                 known_unprofitable: self.keeper_unprofitable.clone(),
             };
+            // the subsidy this step may still hand out: the rolling budget left, the step's cap less the replacements'
+            let allowance = SubsidyAllowance {
+                sompi: self.keeper_subsidy.left(&self.cfg.keeper, daa),
+                jobs: self.cfg.keeper.subsidy_max_jobs.saturating_sub(replaced_subsidised),
+            };
             let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                keeper_tick(&inp, &self.cfg.keeper, self.signer.as_ref())
+                keeper_tick(&inp, &self.cfg.keeper, self.signer.as_ref(), allowance)
             })) {
                 Ok(r) => r,
                 Err(_) => {
@@ -990,7 +1029,12 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 };
                 let txid = t.txid;
                 self.send(t, daa, &mut rep).await;
-                if rep.submitted.last() != Some(&txid) {
+                let sent = rep.submitted.last() == Some(&txid);
+                // a submit without a verdict may still be accepted: its subsidy counts against the budget too
+                if j.subsidy > 0 && (sent || rep.unknown.last() == Some(&txid)) {
+                    self.charge_subsidy(daa, j.subsidy);
+                }
+                if !sent {
                     continue;
                 }
                 if j.subsidy > 0 {
@@ -1208,6 +1252,11 @@ pub fn metrics_text<N: NodeApi, S: BookSource>(r: &Runner<N, S>, rep: &StepRepor
         r.keeper_subsidised.to_string(),
     );
     g("kob_keeper_subsidy_sompi_total", "Sompi of the operator's funding those top-ups took.", r.keeper_subsidy_sompi.to_string());
+    g(
+        "kob_keeper_subsidy_budget_left_sompi",
+        "Sompi of keeper subsidy the rolling window still allows (--keeper-subsidy-budget-kas).",
+        r.keeper_subsidy.left(&r.cfg.keeper, rep.daa).to_string(),
+    );
     g("kob_keeper_replaced_total", "Stuck kills and refunds replaced at a higher fee rate.", r.keeper_replaced.to_string());
     g(
         "kob_keeper_replace_refused_total",
