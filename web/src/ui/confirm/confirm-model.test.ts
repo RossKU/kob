@@ -66,10 +66,10 @@ describe('confirmation model', () => {
     expect(rowOf(card.rows, 'amount').value).toBe('10 TST');
     expect(rowOf(card.rows, 'minFill').value).toMatch(/ TST$/);
     // golden token TST has 3 decimals (scale 1000 base units): 250_000_000 sompi per whole token = 2.5 KAS per token
-    expect(rowOf(card.rows, 'price').value).toBe('2.5 KAS / TST');
-    expect(rowOf(card.rows, 'tip').value).toBe('0.001 KAS / TST');
+    expect(rowOf(card.rows, 'price').value).toBe('2.5 TST / KAS');
+    expect(rowOf(card.rows, 'tip').value).toBe('0.001 TST / KAS');
     expect(rowOf(card.rows, 'allIn').label).toBe('You receive at least per token (all-in)');
-    expect(rowOf(card.rows, 'allIn').value).toBe('2.499 KAS / TST');
+    expect(rowOf(card.rows, 'allIn').value).toBe('2.499 TST / KAS');
     const locked = section(m, 'locked');
     expect(rowOf(locked.rows, 'locked-total').value).toBe('20 KAS');
     expect(rowOf(locked.rows, 'locked-carriers').detail).toBe('returned when the order ends');
@@ -192,7 +192,7 @@ describe('confirmation model', () => {
     const m = model('create.ask', null);
     const card = section(m, 'create').cards[0]!;
     expect(rowOf(card.rows, 'amount').value).toContain('10000 base units');
-    expect(card.rows.some((r) => r.value.includes('KAS / '))).toBe(false);
+    expect(card.rows.some((r) => r.value.includes(' / KAS'))).toBe(false);
     expect(m.warnings.map((w) => w.code)).toContain('token-unlisted');
     expect(tokenAmountText({ ...ref, decimals: null, ticker: null }, 5n, (k, p) => t(k, p))).toBe('5 base units (unknown token)');
   });

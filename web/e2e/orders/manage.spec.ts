@@ -27,7 +27,7 @@ test.describe('cancel', () => {
     expect(confirm.closed).toHaveLength(1);
     expect(confirm.closed[0]!.title).toBe('Cancel: Sell limit order');
     expect(confirm.closed[0]!.badge).toMatch(/your order/i);
-    expect(confirm.closed[0]!.rows.price).toContain('0.027 KAS / EXKCC');
+    expect(confirm.closed[0]!.rows.price).toContain('0.027 EXKCC / KAS');
     const netTok = Object.entries(confirm.sections.net!.rows).find(([k]) => k.startsWith('tok-net-'));
     expect(netTok?.[1]).toContain('+3 EXKCC');
     expect(confirm.sections.others, 'nothing goes to other keys').toBeUndefined();
@@ -72,7 +72,7 @@ test.describe('cancel', () => {
     expect(confirm.closed[0]!.title).toBe('Cancel: Sell limit order');
     expect(confirm.created).toHaveLength(1);
     expect(confirm.created[0]!.title).toBe('Sell limit order');
-    expect(confirm.created[0]!.rows.price).toContain('0.0272 KAS / EXKCC');
+    expect(confirm.created[0]!.rows.price).toContain('0.0272 EXKCC / KAS');
     expect(confirm.created[0]!.rows.amount).toBe('3 EXKCC');
     // in place (AMEND record): nothing is closed, the same covenant id continues with the new price
     expect(placed.submission.closed).toEqual([]);

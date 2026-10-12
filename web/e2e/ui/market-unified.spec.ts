@@ -211,7 +211,7 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     const help = page.getByTestId('order-type-help');
 
     // native: the wording of a token market
-    await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).toContainText('KAS / EXKCC');
+    await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).toContainText('EXKCC / KAS');
     await page.getByTestId('order-type').selectOption('close');
     await expect(help).toContainText('Sells your tokens at market');
     await page.getByTestId('order-type').selectOption('twap');
@@ -230,7 +230,7 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     await expect(page.getByTestId('order-amount-tokens')).toContainText('your price');
     // the tip is an amount of KAS per token traded; its share of the KAS traded is shown
     await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).toContainText('KAS per EXKCC traded');
-    await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).not.toContainText('KAS / EXKCC');
+    await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).not.toContainText('EXKCC / KAS');
     await page.getByTestId(TESTID.orderTip).fill('0.001');
     await expect(page.getByTestId('order-tip-share')).toContainText('2.5%');
     await expect(page.getByTestId('order-balances')).toBeVisible();

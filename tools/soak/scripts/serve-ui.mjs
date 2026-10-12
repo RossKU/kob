@@ -11,7 +11,7 @@
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, extname, isAbsolute, join, normalize, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -123,7 +123,13 @@ const server = createServer((req, res) => {
   let file = normalize(join(DIST, path === '/' ? 'index.html' : path));
   if (!file.startsWith(DIST)) return void res.writeHead(403).end();
   if (!existsSync(file) || statSync(file).isDirectory()) file = join(DIST, 'index.html');
-  res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' });
+  // index.html and every file without a content hash are revalidated on each load (a browser must never keep an old bundle's entry);
+  // the hashed build output under /assets/ never changes under its name
+  const hashed = file.startsWith(join(DIST, 'assets') + sep);
+  res.writeHead(200, {
+    'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
+    'cache-control': hashed ? 'public, max-age=31536000, immutable' : 'no-cache',
+  });
   res.end(readFileSync(file));
 });
 

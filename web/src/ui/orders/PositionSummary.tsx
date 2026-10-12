@@ -29,13 +29,13 @@ function Price(p: { value: bigint | null; token: TokenInfo | undefined; scale: b
   if (p.pair) {
     const q = p.pair.quote;
     const base = tk?.ticker ?? '?';
-    return <span data-unit="pair">{q ? `${formatUnits(p.value, q.decimals, { group: ',' })} ${q.ticker}/${base}` : `${p.value.toString()} ${t('common.baseUnits')}/${base}`}</span>;
+    return <span data-unit="pair">{q ? `${formatUnits(p.value, q.decimals, { group: ',' })} ${base}/${q.ticker}` : `${p.value.toString()} ${base}/${t('common.baseUnits')}`}</span>;
   }
   // fixed decimals from the market's tick: every price of the card (entry, exits, averages) has the same number of decimals
   const pf = tk ? tickPriceFraction(tk.tick, tk.decimals, p.scale) : null;
   const lf = tickKasFraction(tk?.tick ?? null);
   return tk ? (
-    <Amount kind="price" value={p.value} decimals={tk.decimals} scale={p.scale} unit={`KAS/${tk.ticker}`} {...(pf === null ? {} : { fraction: pf })} group />
+    <Amount kind="price" value={p.value} decimals={tk.decimals} scale={p.scale} unit={`${tk.ticker}/KAS`} {...(pf === null ? {} : { fraction: pf })} group />
   ) : (
     <Amount kind="kas" value={p.value} unit={`KAS ${t('orders.perScale', { scale: p.scale.toString() })}`} fraction={lf} group />
   );
@@ -105,7 +105,7 @@ function Fills({ fills: f, token, amount }: { fills: PositionFills; token: Token
         <div class="pc-fill-row" data-testid="position-fills-spread">
           <span>{t('orders.position.fills.spread')}</span>
           {token ? (
-            <Amount kind="price" value={spread} decimals={token.decimals} scale={f.scale} signed unit={`KAS/${token.ticker}`} class={spread > 0n ? 'pc-pos' : spread < 0n ? 'pc-neg' : ''} />
+            <Amount kind="price" value={spread} decimals={token.decimals} scale={f.scale} signed unit={`${token.ticker}/KAS`} class={spread > 0n ? 'pc-pos' : spread < 0n ? 'pc-neg' : ''} />
           ) : (
             <Amount kind="kas" value={spread} signed unit={`KAS ${t('orders.perScale', { scale: f.scale.toString() })}`} class={spread > 0n ? 'pc-pos' : spread < 0n ? 'pc-neg' : ''} />
           )}

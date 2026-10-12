@@ -90,7 +90,7 @@ test.describe('input validation', () => {
     await waitReviewable(page);
     await expect(page.getByTestId('order-price-rounded')).toHaveCount(0);
     const sell = await openReview(page);
-    expect(sell.created[0]!.rows.price).toContain('0.02705011 KAS / EXKCC');
+    expect(sell.created[0]!.rows.price).toContain('0.02705011 EXKCC / KAS');
     await page.getByTestId('confirm-cancel').click();
     await pickType(page, 'limit', 'buy');
     await fillFields(page, { price: '0.024450011' });

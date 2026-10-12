@@ -65,7 +65,7 @@ export interface OrderCase {
 }
 
 const SELL_CARRIERS = { orderCarrier: '2 KAS', tokenCarrier: '2 KAS' };
-const kas = (v: string) => `${v} KAS / EXKCC`;
+const kas = (v: string) => `${v} EXKCC / KAS`;
 
 // ------------------------------------------------------------------------------------------------ limit family
 const limit = (side: Side): Pick<OrderCase, 'type' | 'side' | 'kind' | 'listType' | 'listLabel'> => ({

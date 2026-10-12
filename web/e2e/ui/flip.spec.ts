@@ -64,7 +64,7 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     const chart = page.getByTestId('price-chart');
     await expect(chart).toHaveAttribute('data-state', 'ready');
     await expect(chart).toHaveAttribute('data-inverted', '0');
-    await expect(page.getByTestId('chart-unit')).toHaveText('KAS per EXKCC');
+    await expect(page.getByTestId('chart-unit')).toHaveText('EXKCC / KAS');
     const nativeLegend = await legend(page);
     const nativeAsks = await bookRows(page, 'asks');
     const nativeBids = await bookRows(page, 'bids');
@@ -76,7 +76,7 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     expect(nativeAsks).toHaveLength(10);
     expect(nativeBids).toHaveLength(10);
     expect(nativeSides.length).toBeGreaterThan(5);
-    await expect(page.getByTestId('order-book')).toContainText('Price (KAS)');
+    await expect(page.getByTestId('order-book')).toContainText('Price (EXKCC / KAS)');
 
     // ---- flip
     await flip.click();
@@ -85,8 +85,8 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     await expect(flip).toHaveAttribute('aria-pressed', 'true');
     await expect(chart).toHaveAttribute('data-inverted', '1');
     await expect(chart).toHaveAttribute('data-state', 'ready');
-    await expect(page.getByTestId('chart-unit')).toHaveText('EXKCC per KAS');
-    await expect(page.getByTestId('order-book')).toContainText('Price (EXKCC)');
+    await expect(page.getByTestId('chart-unit')).toHaveText('KAS / EXKCC');
+    await expect(page.getByTestId('order-book')).toContainText('Price (KAS / EXKCC)');
     await expect(page.getByTestId('order-book')).toContainText('Size (KAS)');
     await expect(page.getByTestId('order-book')).toContainText('Total (EXKCC)');
 
@@ -134,7 +134,7 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     await expect(page.getByTestId('stat-quote-volume')).toContainText('24h volume (EXKCC)');
 
     // remembered per market: a reload keeps it, another market is not affected
-    await expect.poll(() => page.evaluate((k) => localStorage.getItem(k), `kob.flip.v1:token:${id}`)).toBe('1');
+    await expect.poll(() => page.evaluate((k) => localStorage.getItem(k), `kob.flip.v2:token:${id}`)).toBe('1');
     await page.reload();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXKCC');
     await page.goto(`/#/market/${id}`);
@@ -148,7 +148,7 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     expect(await bookRows(page, 'asks')).toEqual(nativeAsks);
     expect(await bookRows(page, 'bids')).toEqual(nativeBids);
     expect(await sides(page)).toEqual(nativeSides);
-    await expect.poll(() => page.evaluate((k) => localStorage.getItem(k), `kob.flip.v1:token:${id}`)).toBe('0');
+    await expect.poll(() => page.evaluate((k) => localStorage.getItem(k), `kob.flip.v2:token:${id}`)).toBe('0');
   });
 
   test('blocked storage does not break the toggle', async ({ appPage: page, mock }) => {
@@ -299,8 +299,8 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
     await expect(page.getByTestId('token-title')).toContainText('EXUSD');
     await expect(page.getByTestId('token-page')).toHaveAttribute('data-token', QUOTE);
     await expect(page.getByTestId('order-book')).toBeVisible();
-    await expect(page.getByTestId('order-book')).toContainText('Price (KAS)');
-    await expect(page.getByTestId('chart-unit')).toHaveText('KAS per EXUSD');
+    await expect(page.getByTestId('order-book')).toContainText('Price (EXUSD / KAS)');
+    await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD / KAS');
     await expect(page.getByTestId('main')).toHaveAttribute('data-route', '#/');
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '0');
     await expect(page.getByTestId('token-usd-chart')).toHaveCount(0);
@@ -308,7 +308,7 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
     // a flip: KAS/EXUSD, remembered
     await page.getByTestId('market-flip').click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');
-    await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD per KAS');
+    await expect(page.getByTestId('chart-unit')).toHaveText('KAS / EXUSD');
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '1');
     await page.reload();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');

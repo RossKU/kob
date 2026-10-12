@@ -35,7 +35,7 @@ export interface DisclosureRow {
   id: string;
   labelKey: string;
   labelParams?: Record<string, string>;
-  /** main value, e.g. "2.5 KAS / EXKCC" */
+  /** main value, e.g. "2.5 EXKCC / KAS" */
   value: Txt;
   /** second line */
   detail?: Txt;
@@ -117,11 +117,11 @@ const kasPerToken = (price: bigint, c: DisclosureCtx): string => formatPricePerT
 const tokens = (amount: bigint, c: DisclosureCtx): string => `${formatTokenAmount(amount, c.decimals, GROUP)} ${c.ticker}`;
 /** base units of the quote token B -> "1.25 EXUSD" */
 const quoteTokens = (amount: bigint, q: NonNullable<DisclosureCtx['quote']>): string => `${formatTokenAmount(amount, q.decimals, GROUP)} ${q.ticker}`;
-/** "2.5 KAS / EXKCC" or, on a pair, "2.5 EXUSD / EXKCC" (a state price per whole token of `scale` base units). */
+/** "2.5 EXKCC / KAS" or, on a pair, "2.5 EXKCC / EXUSD" (a state price per whole token of `scale` base units). */
 const quotePrice = (price: bigint, c: DisclosureCtx): string => `${perToken(price, c)} ${quoteOf(c)}`;
 
 function priceValue(price: bigint, c: DisclosureCtx): { value: Txt } {
-  return { value: `${perToken(price, c)} ${quoteOf(c)} / ${c.ticker}` };
+  return { value: `${perToken(price, c)} ${c.ticker} / ${quoteOf(c)}` };
 }
 
 function priceRow(id: string, labelKey: string, price: bigint, c: DisclosureCtx, tone: Tone = 'normal', labelParams?: Record<string, string>): DisclosureRow {
@@ -129,7 +129,7 @@ function priceRow(id: string, labelKey: string, price: bigint, c: DisclosureCtx,
 }
 /** A KAS price per whole token (tips: KAS on every market). */
 function kasPriceRow(id: string, labelKey: string, price: bigint, c: DisclosureCtx, tone: Tone = 'normal'): DisclosureRow {
-  return { id, labelKey, tone, value: `${kasPerToken(price, c)} KAS / ${c.ticker}` };
+  return { id, labelKey, tone, value: `${kasPerToken(price, c)} ${c.ticker} / KAS` };
 }
 
 const timeParts = (unix: bigint) => ({ unix, utc: formatUtc(unix), jst: formatJst(unix) });
@@ -328,7 +328,7 @@ function pairRows(p: PairFacts | null, c: DisclosureCtx): DisclosureRow[] {
   }
   const r = p.trigger;
   if (r) {
-    const stop = `${perToken(BigInt(r.stop), c)} ${q.ticker} / ${c.ticker}`;
+    const stop = `${perToken(BigInt(r.stop), c)} ${c.ticker} / ${q.ticker}`;
     const seconds = String(Number(r.minRestDaa) / 10);
     out.push({
       id: 'pairTrigger', labelKey: 'ticket.disc.pairTrigger', tone: 'normal',

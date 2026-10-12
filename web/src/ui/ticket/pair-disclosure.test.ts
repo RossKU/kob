@@ -81,19 +81,19 @@ describe('pair ticket disclosure (real pair plans)', () => {
     expect(buy.pair!.payMaxB).toBe((AMOUNT * 1_400n) / A.scale);
     // the tip is KAS, never folded into the B price
     expect(row(mb.price, 'tip').value).toContain('KAS');
-    expect(row(mb.price, 'limit').value).toBe(`14 ${B.ticker} / ${A.ticker}`);
+    expect(row(mb.price, 'limit').value).toBe(`14 ${A.ticker} / ${B.ticker}`);
   });
 
   it('a pair stop discloses the founder\'s trigger rule: the two KAS books imply a rate beyond the stop, or a resting pair order fills at or beyond it', () => {
     const m = buildDisclosureModel(planned(CASES[6]![1]), CTX)!;
     const r = row(m.pair!.rows, 'pairTrigger');
     const text = textOf(r.value);
-    expect(text).toContain('arms on fills implying a rate at or below 14 BBB / AAA');
+    expect(text).toContain('arms on fills implying a rate at or below 14 AAA / BBB');
     expect(text).toContain(`a resting sell of ${A.ticker} and buy of ${B.ticker} filled together (each rested 5 s)`);
     expect(text).toContain(`or a resting ${A.ticker} pair sell at or below the stop`);
     expect(m.notes.map((n) => n.tag)).toContain('pairTrigger');
     const buy = textOf(row(buildDisclosureModel(planned(CASES[7]![1]), CTX)!.pair!.rows, 'pairTrigger').value);
-    expect(buy).toContain('at or above 16 BBB / AAA');
+    expect(buy).toContain('at or above 16 AAA / BBB');
     // a trailing pair stop also says how it trails
     expect(buildDisclosureModel(planned(CASES[9]![1]), CTX)!.pair!.rows.map((x) => x.id)).toContain('pairTrail');
   });

@@ -39,7 +39,7 @@ describe('notify i18n', () => {
     // a known token: amounts in token units (2 decimals), the price per whole token
     const reg = { byCovenantId: new Map([[tok, { ticker: 'EXT', decimals: 2 } as unknown as TokenInfo]]) };
     const fill = describeEvent(ev({ what: 'fill', amount: '300', filled: '0', total: '1000', state: 'open', price: '25050' }), reg).body;
-    expect(fill).toContain('Your fill of 3 EXT at 0.0002505 KAS/EXT');
+    expect(fill).toContain('Your fill of 3 EXT at 0.0002505 EXT/KAS');
     expect(fill).toContain(' at ');
     expect(fill).toContain('reverted');
     expect(fill).toContain('open again');

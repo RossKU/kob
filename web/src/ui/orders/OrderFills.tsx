@@ -33,7 +33,7 @@ export function OrderFills(props: OrderFillsProps) {
   const data = useAsync(async (signal) => (open ? fillHistory(await props.loadEvents(row.id, signal), row.scale) : null), [open, row.id]);
   // prices are the order's state prices (sompi per whole token of `row.scale` base units)
   const price = (p: bigint) =>
-    token ? `${formatPricePerToken(p, token.decimals, row.scale)} KAS/${token.ticker}` : `${formatKas(p)} KAS ${t('orders.perScale', { scale: row.scale.toString() })}`;
+    token ? `${formatPricePerToken(p, token.decimals, row.scale)} ${token.ticker}/KAS` : `${formatKas(p)} KAS ${t('orders.perScale', { scale: row.scale.toString() })}`;
   // the price column: fixed decimals for every row (from the token's tick, else 8), the unit in the header (decimal points line up)
   const priceFraction = token ? (tickPriceFraction(token.tick, token.decimals, row.scale) ?? 8) : 8;
   const priceCell = (p: bigint) => (token ? fixedPricePerToken(p, token.decimals, row.scale, priceFraction) : fixedUnits(p, 8, priceFraction));
@@ -76,7 +76,7 @@ export function OrderFills(props: OrderFillsProps) {
                           <th>{t('orders.fills.via')}</th>
                         </>
                       ) : (
-                        <th class="right">{t('orders.fills.priceIn', { unit: token ? `KAS/${token.ticker}` : `KAS ${t('orders.perScale', { scale: row.scale.toString() })}` })}</th>
+                        <th class="right">{t('orders.fills.priceIn', { unit: token ? `${token.ticker}/KAS` : `KAS ${t('orders.perScale', { scale: row.scale.toString() })}` })}</th>
                       )}
                       <th>{t('orders.fills.tx')}</th>
                     </tr>

@@ -58,7 +58,7 @@ test.describe('order ticket', () => {
     // disclosure: all-in price, carriers, escrow, expiry
     const disclosure = page.getByTestId('order-disclosure');
     await expect(disclosure).toBeVisible();
-    await expect(page.getByTestId('disc-allInPrice')).toContainText('2.59 KAS / EXKCC');
+    await expect(page.getByTestId('disc-allInPrice')).toContainText('2.59 EXKCC / KAS');
     await expect(page.getByTestId('disc-allInTotal')).toContainText('7.77 KAS');
     await expect(page.getByTestId('disc-tokensEscrowed')).toContainText('3 EXKCC');
     await expect(page.getByTestId('disc-kasLocked')).toContainText('4 KAS');
@@ -75,8 +75,8 @@ test.describe('order ticket', () => {
     const summary = page.getByTestId('confirm-summary');
     await expect(summary).toContainText('Sell limit order');
     await expect(summary).toContainText('3 EXKCC');
-    await expect(summary).toContainText('2.6 KAS / EXKCC');
-    await expect(summary).toContainText('2.59 KAS / EXKCC'); // all-in: limit minus tip
+    await expect(summary).toContainText('2.6 EXKCC / KAS');
+    await expect(summary).toContainText('2.59 EXKCC / KAS'); // all-in: limit minus tip
     await expect(page.getByTestId('confirm-locked-locked-total')).toContainText('4 KAS');
     await expect(page.getByTestId('confirm-wallet-notice')).toBeVisible();
     // signing needs the explicit acknowledgement
@@ -256,7 +256,7 @@ test.describe('order ticket', () => {
     await expect(page.getByTestId('disc-notes').locator('[data-note="stopTrigger"]')).toBeVisible();
     await page.getByTestId('order-review').click();
     await expect(page.getByTestId('confirm-summary')).toContainText('Sell stop order');
-    await expect(page.getByTestId('confirm-summary')).toContainText('2.2 KAS / EXKCC');
+    await expect(page.getByTestId('confirm-summary')).toContainText('2.2 EXKCC / KAS');
     await expect(page.getByTestId('confirm-blocking')).toHaveCount(0);
     await page.getByTestId('confirm-cancel').click();
     await expect(page.getByTestId('confirm-screen')).toHaveCount(0);

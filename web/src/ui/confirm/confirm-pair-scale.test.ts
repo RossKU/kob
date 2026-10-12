@@ -1,5 +1,5 @@
 // A pair order's state price is B base units per scale(A) base units of A, scale(A) = 10^min(decimals(A), 9). The pre-sign screen shows it per
-// WHOLE A, like the ticket's disclosure: for every decimals of A (0..18) both show the same "150 BBB / AAA" for the same planned state.
+// WHOLE A, like the ticket's disclosure: for every decimals of A (0..18) both show the same "150 AAA / BBB" for the same planned state.
 import { describe, expect, it } from 'vitest';
 import { makePairEnv, level } from '../../kob/orders/pair-fixtures';
 import { pairValid, K } from '../../kob/orders/pair-testkit';
@@ -38,7 +38,7 @@ describe('pair order price on the ticket and on the confirmation, decimals of A 
       const rows = orderRows(d, { value: null, locked: null, deadline: null }, { tr: t, ref, clock: null, time: (u: bigint) => u.toString(), registry } as never);
       const confirm = rows.find((r) => r.id === 'price')!.value;
 
-      expect(ticket).toBe('150 BBB / AAA');
+      expect(ticket).toBe('150 AAA / BBB');
       expect(confirm).toBe(ticket);
       expect(rows.find((r) => r.id === 'pairTotal')!.value).toBe('300 BBB');
     });

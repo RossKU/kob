@@ -208,7 +208,7 @@ export function TicketFields(props: TicketFieldsProps) {
           // a price is shown per KAS in the inverted market; a tip or a distance is an amount of KAS per token, which it says in words
           // a pair prices in its quote token B; a tip is KAS on every market
           const quote = spec.kind === 'tip' ? 'KAS' : props.quoteTicker ?? 'KAS';
-          suffix = <span class="tk-unit">{flipped ? `${flipped.name} / KAS` : props.flip ? t('ticket.flip.tipUnit', { name: props.flip.name }) : `${quote} / ${ticker}`}</span>;
+          suffix = <span class="tk-unit">{flipped ? `KAS / ${flipped.name}` : props.flip ? t('ticket.flip.tipUnit', { name: props.flip.name }) : `${ticker} / ${quote}`}</span>;
           if (props.flip && spec.kind === 'tip' && value !== '') {
             const f = props.flip;
             const tip = Number(value);

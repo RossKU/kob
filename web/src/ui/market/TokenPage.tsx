@@ -196,8 +196,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       dp,
       tick: baseTick,
       labels: inverted
-        ? { price: t('market.book.priceIn', { unit: name }), size: t('market.book.sizeIn', { unit: 'KAS' }), total: t('market.book.totalIn', { unit: name }) }
-        : { price: t('market.book.priceIn', { unit: 'KAS' }), size: t('market.book.sizeIn', { unit: name || t('common.baseUnits') }), total: t('market.book.totalIn', { unit: 'KAS' }) },
+        ? { price: t('market.book.priceIn', { unit: `KAS / ${name}` }), size: t('market.book.sizeIn', { unit: 'KAS' }), total: t('market.book.totalIn', { unit: name }) }
+        : { price: t('market.book.priceIn', { unit: `${name} / KAS` }), size: t('market.book.sizeIn', { unit: name || t('common.baseUnits') }), total: t('market.book.totalIn', { unit: 'KAS' }) },
     }),
     [name, decimals, bookScale, dp, baseTick, inverted],
   );
@@ -292,7 +292,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       }
       depth={
         <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card">
-          <DepthChart series={depthSeries} loading={!!indexer && depth.data === undefined} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? name : 'KAS'} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
+          <DepthChart series={depthSeries} loading={!!indexer && depth.data === undefined} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? `KAS / ${name}` : `${name} / KAS`} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
         </Section>
       }
       tape={

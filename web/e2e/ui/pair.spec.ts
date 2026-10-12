@@ -74,7 +74,7 @@ test('pair book (direct, entry, route) and a pair limit sell through the unified
   await fillFields(page, { price: '0.0515', amount: '2' });
   await waitReviewable(page);
   const d = await readDisclosure(page);
-  expect(d.rows.limit).toContain('0.0515 EXUSD / EXKCC');
+  expect(d.rows.limit).toContain('0.0515 EXKCC / EXUSD');
   expect(d.rows.pairEscrowA).toContain('2 EXKCC');
   expect(d.rows.pairReceiveMinB).toContain('0.103 EXUSD');
   expect(d.notes).toEqual(expect.arrayContaining(['pairPricesFromKasBooks', 'pairTipKas', 'pairRoute', 'pairNetting', 'pairInventory']));
@@ -87,7 +87,7 @@ test('pair book (direct, entry, route) and a pair limit sell through the unified
   expect(card.rows.pairPair).toContain('sells EXKCC for EXUSD');
   expect(card.rows.pairEscrowA).toContain('2 EXKCC');
   expect(card.rows.pairTotal).toContain('0.103 EXUSD');
-  expect(card.rows.price).toContain('0.0515 EXUSD / EXKCC');
+  expect(card.rows.price).toContain('0.0515 EXKCC / EXUSD');
   const txid = await acknowledgeAndSign(page);
   const placed = await placedBy(mock, txid);
   expect(placed.views).toHaveLength(1);
@@ -109,7 +109,7 @@ test('pair book (direct, entry, route) and a pair limit sell through the unified
   await expect(row).toHaveAttribute('data-type', 'limit');
   await expect(row).toHaveAttribute('data-side', 'sell');
   await expect(row.getByTestId('order-pair')).toHaveText('EXKCC/EXUSD');
-  await expect(row.getByTestId('order-price')).toContainText('0.0515 EXUSD/EXKCC');
+  await expect(row.getByTestId('order-price')).toContainText('0.0515 EXKCC/EXUSD');
   await expect(row.getByTestId('order-pair-escrow-a')).toHaveText('2 EXKCC');
   await expect(row.getByTestId('order-allin')).toHaveCount(0);
   await page.getByTestId(`order-cancel-${id}`).click();
@@ -165,7 +165,7 @@ test('a pair stop discloses the trigger rule (two KAS books or a resting pair or
   await fillFields(page, { amount: '1', stop: '0.046' });
   await waitReviewable(page);
   const d = await readDisclosure(page);
-  const rule = 'arms on fills implying a rate at or below 0.046 EXUSD / EXKCC: a resting sell of EXKCC and buy of EXUSD filled together (each rested 5 s), or a resting EXKCC pair sell at or below the stop';
+  const rule = 'arms on fills implying a rate at or below 0.046 EXKCC / EXUSD: a resting sell of EXKCC and buy of EXUSD filled together (each rested 5 s), or a resting EXKCC pair sell at or below the stop';
   expect(d.rows.pairTrigger).toContain(rule);
   expect(d.notes).toContain('pairTrigger');
   const confirm = await openReview(page);
@@ -181,8 +181,8 @@ test('a pair stop discloses the trigger rule (two KAS books or a resting pair or
   const id = view.covenant_id as string;
   const row = page.getByTestId(`order-row-${id}`);
   await expect(row).toHaveAttribute('data-type', 'stop');
-  await expect(row.getByTestId('order-stop')).toContainText('0.046 EXUSD/EXKCC');
-  await expect(row.getByTestId('order-pair-trigger')).toContainText('arms on fills implying a rate at or below 0.046 EXUSD/EXKCC');
+  await expect(row.getByTestId('order-stop')).toContainText('0.046 EXKCC/EXUSD');
+  await expect(row.getByTestId('order-pair-trigger')).toContainText('arms on fills implying a rate at or below 0.046 EXKCC/EXUSD');
   // pair orders are replaced from the full pair ticket (no in-place amend in the protocol)
   await expect(row.getByTestId(`order-replace-${id}`)).toBeVisible();
   await page.getByTestId(`order-cancel-${id}`).click();
@@ -214,8 +214,8 @@ test('an IFD pair (buy first): the exit custody in the ticket, the entry in My o
   const position = page.locator(`[data-testid^="position-"][data-kind]`).first();
   await expect(position).toBeVisible({ timeout: 15_000 });
   await expect(position.getByTestId('position-token')).toHaveText('EXKCC/EXUSD');
-  await expect(position.getByTestId('position-entry-price')).toContainText('0.048 EXUSD/EXKCC');
-  await expect(position.getByTestId('position-exit-prices')).toContainText('0.055 EXUSD/EXKCC');
+  await expect(position.getByTestId('position-entry-price')).toContainText('0.048 EXKCC/EXUSD');
+  await expect(position.getByTestId('position-exit-prices')).toContainText('0.055 EXKCC/EXUSD');
   await expect(position.getByTestId(`order-row-${id}`)).toHaveAttribute('data-type', 'ifd');
   // the exit holds the EXKCC the fill bought
   await expect(position.locator('[data-testid^="order-row-"][data-type="take-profit"] [data-testid="order-pair-escrow-a"]')).toHaveText('1 EXKCC');
@@ -235,8 +235,8 @@ test('the pair ticket offers every order type of the KAS ticket in the same layo
   const labels = async () => (await page.getByTestId('order-ticket').locator('.tk-form > .field > label').allTextContents());
   const pairLabels = await labels();
   // the price is typed in EXUSD per EXKCC, the tip in KAS per EXKCC
-  await expect(page.getByTestId('order-ticket').locator('.tk-form')).toContainText('EXUSD / EXKCC');
-  await expect(page.getByTestId('order-ticket').locator('.tk-form')).toContainText('KAS / EXKCC');
+  await expect(page.getByTestId('order-ticket').locator('.tk-form')).toContainText('EXKCC / EXUSD');
+  await expect(page.getByTestId('order-ticket').locator('.tk-form')).toContainText('EXKCC / KAS');
   // a pair market buy / sell, an OCO and a trailing stop plan on the pair too
   for (const [type, side, values] of [
     ['market', 'buy', { amount: '1' }],
@@ -295,7 +295,7 @@ test('picking a quote token keeps the layout: the chart stays in the same place 
   expect(book.x + book.width).toBeLessThanOrEqual(after.x + 1);
   expect(ticket.x).toBeGreaterThanOrEqual(after.x + after.width - 1);
   // the pair chart is derived from the two KAS markets, in the pair's unit
-  await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD per EXKCC');
+  await expect(page.getByTestId('chart-unit')).toHaveText('EXKCC / EXUSD');
   await expect(page.getByTestId('pair-chart-note')).toContainText('pair fills count only as volume');
   await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', /^(ready|empty)$/);
 });

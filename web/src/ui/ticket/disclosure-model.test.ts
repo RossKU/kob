@@ -28,13 +28,13 @@ const text = (t: Txt | undefined): string => (t === undefined ? '' : typeof t ==
 describe('disclosure model', () => {
   it('a sell receives the limit minus the tip, a buy pays the limit plus the tip (all-in)', () => {
     const sell = modelOf('limit', 'sell', { amount: '4', price: '2.6', tip: '0.01' });
-    expect(row(sell.price, 'limit').value).toBe('2.6 KAS / EXKCC');
+    expect(row(sell.price, 'limit').value).toBe('2.6 EXKCC / KAS');
     expect(row(sell.price, 'allInPrice').labelKey).toBe('ticket.disc.allInReceive');
-    expect(row(sell.price, 'allInPrice').value).toBe('2.59 KAS / EXKCC');
+    expect(row(sell.price, 'allInPrice').value).toBe('2.59 EXKCC / KAS');
     expect(row(sell.price, 'allInTotal').value).toBe('10.36 KAS');
     const buy = modelOf('limit', 'buy', { amount: '4', price: '2.3', tip: '0.01' });
     expect(row(buy.price, 'allInPrice').labelKey).toBe('ticket.disc.allInPay');
-    expect(row(buy.price, 'allInPrice').value).toBe('2.31 KAS / EXKCC');
+    expect(row(buy.price, 'allInPrice').value).toBe('2.31 EXKCC / KAS');
     expect(row(buy.price, 'allInTotal').labelKey).toBe('ticket.disc.totalPay');
     expect(row(buy.price, 'allInTotal').value).toBe('9.24 KAS');
     // the tip row shows only when there is a tip
@@ -55,7 +55,7 @@ describe('disclosure model', () => {
 
   it('shows expected and worst price of a market order and its auction notes', () => {
     const m = modelOf('market', 'buy', { amount: '2' });
-    expect(row(m.price, 'expected').value).toBe('2.5 KAS / EXKCC');
+    expect(row(m.price, 'expected').value).toBe('2.5 EXKCC / KAS');
     expect(row(m.price, 'worst').tone).toBe('warn');
     expect(m.notes.map((n) => n.tag)).toEqual(expect.arrayContaining(['auction', 'iocRemainderReturned', 'market']));
   });
@@ -80,8 +80,8 @@ describe('disclosure model', () => {
 
   it('stops: trigger, worst price of the band, keeper reserve and the exposure sentence', () => {
     const m = modelOf('stopMarket', 'sell', { amount: '5', stop: '2.2' });
-    expect(row(m.extras, 'stop').value).toBe('2.2 KAS / EXKCC');
-    expect(row(m.extras, 'stopWorst').value).toBe('2.134 KAS / EXKCC');
+    expect(row(m.extras, 'stop').value).toBe('2.2 EXKCC / KAS');
+    expect(row(m.extras, 'stopWorst').value).toBe('2.134 EXKCC / KAS');
     expect(text(row(m.extras, 'trigger').value)).toContain('ticket.val.trigger');
     const trigger = m.notes.find((n) => n.tag === 'stopTrigger')!;
     expect(trigger.params.exposure).toBe('5');
@@ -108,8 +108,8 @@ describe('disclosure model', () => {
     const m = modelOf('repeatIfd', 'buy', { amount: '4', price: '2.3', 'exit.takeProfit': '2.6', 'repeat.count': '3' });
     expect(text(row(m.extras, 'repeat').value)).toContain('ticket.val.repeatCount');
     // 2.6 - 2.3 = 0.3 KAS per token, minus the merge tip every repeat pays
-    expect(row(m.extras, 'profitPerToken').value).toBe('0.29 KAS / EXKCC');
-    expect(row(m.extras, 'exitTakeProfit').value).toBe('2.6 KAS / EXKCC');
+    expect(row(m.extras, 'profitPerToken').value).toBe('0.29 EXKCC / KAS');
+    expect(row(m.extras, 'exitTakeProfit').value).toBe('2.6 EXKCC / KAS');
     expect(m.notes.map((n) => n.tag)).toEqual(expect.arrayContaining(['repeat', 'repeatCounted', 'repeatReBuys', 'repeatStopLossEnds', 'cancelPosition', 'position']));
     expect(m.notes.find((n) => n.tag === 'repeatCounted')!.params.count).toBe('3');
     const unlimited = modelOf('repeatIfd', 'buy', { amount: '4', price: '2.3', 'exit.takeProfit': '2.6' });
@@ -198,8 +198,8 @@ describe('disclosure model of a token/token pair', () => {
 
   it('prices in B per whole A, the total in B, the tip in KAS, the pair trigger rule', () => {
     const m = buildDisclosureModel(plan as unknown as Parameters<typeof buildDisclosureModel>[0], PC)!;
-    expect(row(m.price, 'limit').value).toBe('2.5 EXUSD / EXKCC');
-    expect(row(m.price, 'tip').value).toBe('0.001 KAS / EXKCC');
+    expect(row(m.price, 'limit').value).toBe('2.5 EXKCC / EXUSD');
+    expect(row(m.price, 'tip').value).toBe('0.001 EXKCC / KAS');
     expect(row(m.price, 'allInTotal').value).toBe('10.000001 EXUSD');
     expect(m.kasLocked).toBe('10 KAS');
     expect(m.pair?.quoteTicker).toBe('EXUSD');
@@ -209,7 +209,7 @@ describe('disclosure model of a token/token pair', () => {
     expect(row(rows, 'pairTipKas').value).toBe('0.004 KAS');
     const t = text(row(rows, 'pairTrigger').value);
     expect(t).toContain('ticket.val.pairTriggerSell');
-    expect(t).toContain('"stop":"2.2 EXUSD / EXKCC"');
+    expect(t).toContain('"stop":"2.2 EXKCC / EXUSD"');
     expect(t).toContain('"seconds":"5"');
     expect(text(row(rows, 'pairTrigger').detail)).toContain('"b":"2.2 EXUSD"');
     // the same plan on a KAS market has no pair rows

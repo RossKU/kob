@@ -283,7 +283,7 @@ export function PriceChart(props: PriceChartProps) {
             </button>
           ))}
         </div>
-        <span class="small muted" data-testid="chart-unit">{t('market.chart.unitOf', inverted ? { quote: props.ticker, base: usd ? (props.quoteTicker ?? 'USD') : 'KAS' } : { quote: usd ? (props.quoteTicker ?? 'USD') : 'KAS', base: props.ticker })}</span>
+        <span class="small muted" data-testid="chart-unit">{t('market.chart.unitOf', inverted ? { base: usd ? (props.quoteTicker ?? 'USD') : 'KAS', quote: props.ticker } : { base: props.ticker, quote: usd ? (props.quoteTicker ?? 'USD') : 'KAS' })}</span>
       </div>
       <ErrorBanner error={candles.error ?? libError} title={t('market.chart.error')} onRetry={candles.reload} />
       <div class="chart-box">

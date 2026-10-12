@@ -24,7 +24,24 @@ import {
 
 // ------------------------------------------------------------------------------------------------ remembered choice
 
-const KEY_PREFIX = 'kob.flip.v1:';
+// v2: the unit labels changed to BASE/QUOTE (TOKEN/KAS); the stored choice is read afresh and the v1 keys are removed once, so a browser that cached the
+// old labelling starts clean.
+const KEY_PREFIX = 'kob.flip.v2:';
+const LEGACY_PREFIX = 'kob.flip.v1:';
+
+function purgeLegacy(): void {
+  try {
+    const stale: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k !== null && k.startsWith(LEGACY_PREFIX)) stale.push(k);
+    }
+    for (const k of stale) localStorage.removeItem(k);
+  } catch {
+    /* no storage */
+  }
+}
+purgeLegacy();
 
 /** The remembered orientation of a market (`true` = inverted), or null when the user never chose (the convention applies). Never throws. */
 export function readInverted(market: string): boolean | null {

@@ -39,7 +39,7 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await expect(page.getByTestId(TESTID.orderAmount)).toHaveValue('0.24');
     await expect(page.getByTestId('order-amount-tokens')).toContainText('0.24 KAS = 10 EXKCC at your price');
     await expect(page.getByTestId(TESTID.orderPrice)).toHaveValue('41.666667');
-    await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderPrice) }).locator('.tk-unit')).toHaveText('EXKCC / KAS');
+    await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderPrice) }).locator('.tk-unit')).toHaveText('KAS / EXKCC');
     await expect(page.getByTestId(TESTID.orderReview)).toContainText('Review Sell');
     await expect(page.getByTestId('disc-summary')).toHaveText('Sell 0.24 KAS for 10 EXKCC');
     const flipped = await openReview(page);
@@ -78,7 +78,7 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     expect(c.created).toHaveLength(1);
     expect(c.created[0]!.title).toBe('Sell limit order');
     expect(c.created[0]!.rows.amount).toBe('400 EXKCC');
-    expect(c.created[0]!.rows.price).toBe('0.025 KAS / EXKCC');
+    expect(c.created[0]!.rows.price).toBe('0.025 EXKCC / KAS');
     const txid = await acknowledgeAndSign(page);
     const placed = await placedBy(mock, txid);
     expect(placed.views).toHaveLength(1);
@@ -184,7 +184,7 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
     await expect(amountUnit(page)).toHaveText('EXUSD');
     await expect(page.getByTestId(TESTID.orderAmount)).toHaveValue('0.103');
     await expect(page.getByTestId(TESTID.orderPrice)).toHaveValue('19.417476');
-    await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderPrice) }).locator('.tk-unit')).toHaveText('EXKCC / EXUSD');
+    await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderPrice) }).locator('.tk-unit')).toHaveText('EXUSD / EXKCC');
     await expect(page.getByTestId('ticket-pair-carried')).toHaveCount(0);
 
     // and back: Buy 2 EXKCC (0.103 EXUSD at 19.417476 = 2.0000000 EXKCC, rounded down to EXKCC's 8 decimals)

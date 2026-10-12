@@ -55,7 +55,7 @@ export default {
   'ticket.flip.tipUnit': 'KAS per {name} traded',
   'ticket.flip.tipShare': 'about {pct}% of the KAS traded at {basis}',
   'ticket.flip.executesAs': 'Order price: {price} KAS per {ticker}',
-  'ticket.priceRounded': 'Rounded to the price step: {price} {quote} / {ticker}.',
+  'ticket.priceRounded': 'Rounded to the price step: {price} {ticker} / {quote}.',
   'ticket.severity.error': 'Error',
   'ticket.severity.warning': 'Warning',
   'ticket.severity.info': 'Note',

@@ -1,6 +1,6 @@
 export default {
   'pair.book.title': 'Pair book',
-  'pair.book.price': 'Price ({quote})',
+  'pair.book.price': 'Price ({base} / {quote})',
   'pair.book.amount': 'Amount ({base})',
   'pair.book.source': 'Source',
   'pair.book.pickAsk': 'Buy {base} at {price} {quote}',
