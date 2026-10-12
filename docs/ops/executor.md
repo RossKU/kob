@@ -105,10 +105,13 @@ KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kob-executor run \
   at a lag of at most about 30 s). A plan over a view that is a few seconds old is harmless: the covenants enforce every
   order's terms, a spent input only loses the race (`MissingInput` / `DoubleSpend`, counted as a conflict, nothing
   built from it is final), and the book-lag bound above uses the same number. A lost race still costs every other
-  crossing of that batch a tick, so before planning the runner asks the node (one address query, when it has its UTXO
+  crossing of that batch a tick, so while the book lags the node by at least `verify_live_orders_min_lag_secs` (default
+  10 s; 0 asks every tick) the runner asks the node before planning (one address query, when it has its UTXO
   index) which listed orders it still holds and leaves out those it no longer does (`gone=` in the `tick` log line); an
   order newer than the node's virtual DAA score is not judged, and an answer holding none of the queried orders is taken
   as no evidence (the TN10 soak of 2026-10-11, lag 10 to 40 s, lost about five batches in six to such orders before).
+  Below that lag the query is skipped: its node round trip every tick loses races to other executors, and a book that
+  current rarely lists a spent order.
   Beyond the tolerance, and in the states
   `starting` (a restart: the store is where the last run left it until the first batch lands, a 141-block batch took
   24 s on TN10, and the TN10 soak's restarts lost maintenance sells to `MissingInput` that way), `node_unavailable`,
@@ -996,6 +999,7 @@ primary_fetch = true             # with [[nodes]]: the primary (rpc_url) serves 
 verify_threads = 0               # threads of the pure per-batch work before the single database pass (0: cores, at most 4)
 prefetch_max_mb = 128            # memory budget (hard) of the windows held ahead of the cursor; the process holds ~3x at the peak
 max_lag_secs = 30                # `kob-executor run` plans while the store is caught up or at most this many seconds behind (0: only caught up); A.1
+verify_live_orders_min_lag_secs = 10  # `kob-executor run` asks the node which listed orders it still holds only while the store is this many seconds behind (0: every tick); A.1
 settle_depth_daa = 100           # "settled" = accepted + N DAA (about 10 s at 10 BPS)
 reorg_window_hours = 12          # chain-block rows older than this are deleted (consensus finality)
 checkpoint_secs = 3600           # log an otherwise empty batch when the cursor moved this far

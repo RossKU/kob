@@ -121,8 +121,13 @@ fn outpoints(o: &ListedOrder) -> Vec<(Outpoint, [u8; 32])> {
     v
 }
 
-/// The runner over the book `orders()`, with a node that holds every listed outpoint but those of `SPENT`.
+/// The runner over the book `orders()`, with a node that holds every listed outpoint but those of `SPENT`, asked every step.
 fn runner(daa: u64) -> (Runner<Node, ViewSource<MemoryBook>>, Node) {
+    runner_with(daa, 0)
+}
+
+/// As `runner`, asking the node only while the book is `verify_live_min_lag` DAA behind it.
+fn runner_with(daa: u64, verify_live_min_lag: u64) -> (Runner<Node, ViewSource<MemoryBook>>, Node) {
     let listed = orders();
     let node = Node::default();
     {
@@ -130,7 +135,7 @@ fn runner(daa: u64) -> (Runner<Node, ViewSource<MemoryBook>>, Node) {
         s.daa = daa;
         s.live = listed.iter().filter(|o| o.id() != cid(SPENT)).flat_map(outpoints).collect();
     }
-    let cfg = RunConfig { roles: Roles { matcher: true, keeper: false }, ..RunConfig::default() };
+    let cfg = RunConfig { roles: Roles { matcher: true, keeper: false }, verify_live_min_lag, ..RunConfig::default() };
     let book = MemoryBook { daa_score: daa, orders: listed, wallet_tokens: vec![] };
     (Runner::new(node.clone(), ViewSource(book), Box::new(signer()), cfg), node)
 }
@@ -282,4 +287,33 @@ async fn an_order_newer_than_the_nodes_virtual_state_is_not_judged() {
     node.0.lock().unwrap().daa = newest - 1;
     let rep = r.step().await.unwrap();
     assert_eq!(rep.gone, 0, "the spent ask is not judged either");
+}
+
+#[tokio::test]
+async fn the_node_is_not_asked_while_the_book_lags_less_than_the_threshold() {
+    // a book 99 DAA behind with the threshold at 100: no query, the spent ask is planned as before (and loses its race on chain)
+    let daa = NOW + 5;
+    let (mut r, _node) = runner_with(daa, 100);
+    r.source.0.daa_score = daa - 99;
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.gone, 0, "not asked, nothing left out");
+    assert!(r.tracker.txs.values().next().unwrap().orders.contains(&cid(SPENT)), "planned over the listed order");
+}
+
+#[tokio::test]
+async fn the_node_is_asked_once_the_book_lags_by_the_threshold() {
+    let daa = NOW + 5;
+    let (mut r, _node) = runner_with(daa, 100);
+    r.source.0.daa_score = daa - 100;
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.gone, 1, "asked: the spent ask is left out");
+    assert!(!r.tracker.txs.values().next().unwrap().orders.contains(&cid(SPENT)));
+}
+
+#[tokio::test]
+async fn a_threshold_of_zero_asks_even_a_current_book() {
+    let daa = NOW + 5;
+    let (mut r, _node) = runner_with(daa, 0);
+    assert_eq!(r.source.0.daa_score, daa, "the book is current");
+    assert_eq!(r.step().await.unwrap().gone, 1);
 }

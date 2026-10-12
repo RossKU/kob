@@ -389,16 +389,6 @@ export function OrderTicket(props: OrderTicketProps) {
       ) : null}
 
       <div class="tk-form">
-        {carried && quote ? (
-          <p class="small muted" data-testid="ticket-pair-carried">
-            {t('ticket.pairFlip.carried', { from: `${quote.ticker}/${token.ticker}`, side: sideName, pair: `${token.ticker}/${quote.ticker}` })}
-          </p>
-        ) : null}
-        {inverted ? (
-          <p class="small muted" data-testid="ticket-flip-note">
-            {t('ticket.flip.note', { pair: pairLabel(name, true), ticker, name })}
-          </p>
-        ) : null}
         <Segmented<Side>
           block
           aria-label={t('ticket.side')}

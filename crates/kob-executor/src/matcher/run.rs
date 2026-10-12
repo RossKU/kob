@@ -162,6 +162,10 @@ pub struct RunConfig {
     /// Plan nothing while the book is more than this many DAA behind the node (a lagging indexer would
     /// offer spent orders). Acceptance tracking continues. `None`: no check (snapshot files).
     pub max_book_lag: Option<u64>,
+    /// Ask the node which listed orders it still holds ([`gone_orders`]) only while the book is at least this many DAA behind
+    /// the node (10 per second): the query costs a node round trip every tick, which loses races to other executors, and it
+    /// only matters while the book can list orders the chain has already spent. 0: ask every step.
+    pub verify_live_min_lag: u64,
     /// The fee policy (`crate::fee`): each step that plans reads the node's fee estimate (at most every `refresh_ms`) and
     /// sets the tick's rates of the matcher, the keepers and the maintenance jobs. Their configured `fee_rate`s stay the
     /// lowest rate each pays.
@@ -184,6 +188,7 @@ impl Default for RunConfig {
             inventory_state: None,
             low_funds: 100 * 100_000_000,
             max_book_lag: None,
+            verify_live_min_lag: 100,
             fee_policy: crate::fee::FeePolicy::default(),
         }
     }
@@ -218,7 +223,7 @@ pub struct StepReport {
     /// The operator's spendable funding read this step (`None`: not read, nothing was planned).
     pub funding: Option<u64>,
     /// Listed orders left out of this step because the node no longer holds their UTXO (spent in a block the book has not
-    /// reached yet, [`gone_orders`]).
+    /// reached yet, [`gone_orders`]; always 0 while the book lags by less than `RunConfig::verify_live_min_lag`).
     pub gone: usize,
 }
 
@@ -637,7 +642,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         self.last_funding = rep.funding;
         let clock = Clock { daa, utc: utc_now() };
         // the orders the node no longer holds (the book lags the chain): never planned, by the matcher or the keepers
-        let gone = if info.has_utxo_index { self.gone(&book.orders, daa).await } else { BTreeSet::new() };
+        // (only while the book lags by `verify_live_min_lag`: the node round trip costs races when the book is current)
+        let verify = info.has_utxo_index && daa.saturating_sub(book.daa_score) >= self.cfg.verify_live_min_lag;
+        let gone = if verify { self.gone(&book.orders, daa).await } else { BTreeSet::new() };
         rep.gone = gone.len();
         let mut excluded = self.tracker.backed_off(daa);
         excluded.extend(gone.iter().copied());

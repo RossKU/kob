@@ -267,6 +267,10 @@ pub struct IndexerConfig {
     /// follower's state (`catching_up` included); beyond it they plan nothing. 0: only while `following` (the strict gate).
     /// `/v1/health` keeps `caught_up` strict and adds `within_lag_tolerance`.
     pub max_lag_secs: u64,
+    /// `kob-executor run` asks the node which listed orders it still holds (and leaves out those it no longer does) only while
+    /// the store is at least this many seconds behind the node: the query is a node round trip per tick, which loses races to
+    /// other executors when the book is current anyway. 0: ask every tick.
+    pub verify_live_orders_min_lag_secs: u64,
     /// A transaction counts as settled once its chain block is this many DAA behind the node's virtual DAA.
     /// Default 100 (about 10 s at 10 BPS), the release plan's "accepted plus N DAA".
     pub settle_depth_daa: u64,
@@ -312,6 +316,7 @@ impl Default for IndexerConfig {
             prefetch_max_mb: 128,
             prefetch_min_lag_blue: 1_200,
             max_lag_secs: 30,
+            verify_live_orders_min_lag_secs: 10,
             settle_depth_daa: 100,
             max_walkback_blocks: 100_000,
             reorg_window_hours: 12,
@@ -344,6 +349,11 @@ impl IndexerConfig {
             tracing::warn!("config: the [receipts] table is retired and ignored");
         }
         Ok(cfg)
+    }
+
+    /// [`Self::verify_live_orders_min_lag_secs`] in DAA score.
+    pub fn verify_live_min_lag_daa(&self) -> u64 {
+        self.verify_live_orders_min_lag_secs.saturating_mul(self.daa_per_second)
     }
 
     /// [`Self::max_lag_secs`] in DAA score.
@@ -414,6 +424,14 @@ mod tests {
         assert_eq!(c.api.trusted_proxies, vec!["10.0.0.0/8".to_string()]);
         assert_eq!(c.max_walkback_blocks, 100_000);
         assert!(c.records.enabled);
+    }
+
+    #[test]
+    fn verify_live_orders_lag_defaults_to_ten_seconds() {
+        let d: IndexerConfig = toml::from_str("").unwrap();
+        assert_eq!((d.verify_live_orders_min_lag_secs, d.verify_live_min_lag_daa()), (10, 100));
+        let always: IndexerConfig = toml::from_str("verify_live_orders_min_lag_secs = 0").unwrap();
+        assert_eq!(always.verify_live_min_lag_daa(), 0);
     }
 
     #[test]

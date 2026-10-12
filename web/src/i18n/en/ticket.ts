@@ -42,7 +42,6 @@ export default {
   'ticket.ladder.reviewing': 'Level {level} of {levels}',
   'ticket.result.title': 'Order submitted',
   'ticket.result.text': 'The node accepted your {label} order. It appears in My orders once indexed.',
-  'ticket.flip.note': '{pair}: Buy buys KAS with {ticker}, Sell sells KAS for {ticker}; amounts in KAS, prices in {name} per KAS. On chain it is a {ticker}/KAS order (buying KAS = selling {ticker}).',
   'ticket.flip.qtyOwn': 'your price',
   'ticket.flip.qtyBook': 'the best price in the book',
   'ticket.flip.tipUnit': 'KAS per {name} traded',
@@ -296,7 +295,6 @@ export default {
   'ticket.shownAs.about': 'about ',
   'ticket.shownAs.price': 'at {price} {ticker} per KAS',
   'ticket.shownAs.book': 'at about the best price in the book',
-  'ticket.pairFlip.carried': 'Carried over from {from}: side now {side}, amount and prices converted to {pair}. Check the other fields.',
 
   'ticket.disc.title': 'Cost and terms',
   'ticket.disc.summary': '{side} {amount} {ticker}',

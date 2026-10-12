@@ -183,7 +183,8 @@ test.describe('the ticket in an inverted market', () => {
     await page.getByTestId('market-flip').click();
     const ticket = page.getByTestId('order-ticket');
     await expect(ticket).toHaveAttribute('data-inverted', '1');
-    await expect(page.getByTestId('ticket-flip-note')).toContainText('KAS/EXKCC');
+    // no orientation explainer at the ticket top: it looks the same in both orientations
+    await expect(page.getByTestId('ticket-flip-note')).toHaveCount(0);
     // the native Sell is the shown Buy (buying KAS with EXKCC), at 25 EXKCC per KAS
     await expect(ticket).toHaveAttribute('data-side', 'sell');
     await expect(ticket).toHaveAttribute('data-shown-side', 'buy');

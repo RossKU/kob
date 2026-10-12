@@ -185,7 +185,7 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
     await expect(page.getByTestId(TESTID.orderAmount)).toHaveValue('0.103');
     await expect(page.getByTestId(TESTID.orderPrice)).toHaveValue('19.417476');
     await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderPrice) }).locator('.tk-unit')).toHaveText('EXKCC / EXUSD');
-    await expect(page.getByTestId('ticket-pair-carried')).toContainText('Carried over from EXKCC/EXUSD: side now Sell');
+    await expect(page.getByTestId('ticket-pair-carried')).toHaveCount(0);
 
     // and back: Buy 2 EXKCC (0.103 EXUSD at 19.417476 = 2.0000000 EXKCC, rounded down to EXKCC's 8 decimals)
     await page.getByTestId('market-flip').click();

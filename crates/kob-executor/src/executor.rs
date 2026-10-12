@@ -424,6 +424,7 @@ pub async fn run(a: RunArgs) -> Result<()> {
         // one bound for both gates: a store within the tolerance is a book the runner may plan against
         run_cfg.max_book_lag = Some(cfg.lag_tolerance_daa());
     }
+    run_cfg.verify_live_min_lag = cfg.verify_live_min_lag_daa();
     tracing::info!(
         network = %cfg.network,
         rpc = %crate::rpc::redact_url(cfg.primary_url()),
