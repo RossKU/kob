@@ -4,17 +4,19 @@
 // caller shows the long covenant id and a note on base units next to every order, and the pre-sign screen re-derives the rest.
 //
 //   * program / family: the token's template hash must be one this build embeds (kob.templates()); else `program-unknown`;
-//   * extension commitment (KCC-20): the indexer row's, else the one of the token's listed orders; none found: `no-extension` (KRON has none);
+//   * extension commitment (KCC-20): the indexer row's, else the one of the token's listed orders; none found: `no-extension` (KRON has none).
+//     The pick and its source are kept on the TokenInfo (`extension`) so the pre-sign screen shows them, cross-checked against the commitments
+//     known without the indexer (`extensionReferences`: a genesis-verified registry entry, the wallet's node-verified holdings; audit A1-2);
 //   * scale: the order scale (a power of ten, the price denominator) shared by most open orders of the token, so the wallet's orders quote the
 //     same whole token as the book; no orders: `no-scale`; decimals = its exponent (the chain carries no decimals: amounts are shown in that
 //     whole token, prices per it);
 //   * tick: 1 sompi.
 import type { IndexerTokenView } from '../data/indexer-types';
-import type { Hex, TokenProgram } from './types';
+import type { Hex, TokenProgram, TokenUtxo } from './types';
 import type { KobWasm } from './wasm';
-import { familyOfProgram } from './token-state';
+import { extensionOfState, familyOfProgram } from './token-state';
 import { TEMPLATE_ID_PROGRAM, toTokenMarket } from './token-market';
-import { CAPABILITIES, longId, type Capability, type TokenInfo, type TokenRegistry } from './registry';
+import { CAPABILITIES, longId, type Capability, type ExtensionCheck, type ExtensionReference, type TokenInfo, type TokenRegistry } from './registry';
 
 export type OpenTokenIssue = 'program-unknown' | 'no-scale' | 'no-extension' | 'scale-invalid';
 export type OpenTokenResult = { ok: true; info: TokenInfo } | { ok: false; reason: OpenTokenIssue };
@@ -41,13 +43,44 @@ export function standardScaleOf(rows: readonly ScaleSample[]): number | null {
   return best;
 }
 
+/**
+ * The commitments of a KCC-20 covenant id known without the indexer: the registry's entry of the id when its genesis was verified (one
+ * commitment), and the distinct commitments of the wallet's own token UTXOs of the id that the node confirmed (`TokenTracker.tokenUtxosFor`).
+ */
+export function extensionReferences(covenantId: Hex, reg: TokenRegistry | null, holdings: readonly TokenUtxo[] = []): ExtensionReference[] {
+  const out: ExtensionReference[] = [];
+  const entry = reg?.tokens.find((t) => t.covenantId === covenantId);
+  if (entry && entry.family === 'kcc20' && entry.json.genesis_verified === true && entry.extensionCommitment) out.push({ commitment: entry.extensionCommitment, source: 'registry-genesis' });
+  const held = new Set<Hex>();
+  for (const u of holdings) {
+    const ext = u.covenantId === covenantId ? extensionOfState(u.state) : null;
+    if (ext) held.add(ext.toLowerCase());
+  }
+  for (const c of [...held].sort()) out.push({ commitment: c, source: 'holdings' });
+  return out;
+}
+
+/** The extension check of an open-list KCC-20 token's commitment: every reference that names another commitment is a mismatch. */
+export function checkExtension(commitment: Hex, source: ExtensionCheck['source'], references: readonly ExtensionReference[]): ExtensionCheck {
+  const c = commitment.toLowerCase();
+  return { commitment: c, source, references: [...references], mismatch: references.filter((r) => r.commitment.toLowerCase() !== c) };
+}
+
 const PROGRAM_TEMPLATE_ID: Readonly<Record<string, string>> = Object.fromEntries(Object.entries(TEMPLATE_ID_PROGRAM).map(([id, p]) => [p, id]));
 
 /**
  * TokenInfo of an open-list token, or the reason it cannot be traded here. `orderScales` are the scales of the token's open orders (book rows);
- * `extFromOrders` the extension commitment read from one of its listed orders.
+ * `extFromOrders` the extension commitment read from one of its listed orders; `references` the commitments known without the indexer
+ * (`extensionReferences`), compared with the pick (`info.extension`).
  */
-export function synthesizeOpenToken(kob: KobWasm, view: IndexerTokenView, orderScales: readonly ScaleSample[], extFromOrders: Hex | null = null, reg: TokenRegistry | null = null): OpenTokenResult {
+export function synthesizeOpenToken(
+  kob: KobWasm,
+  view: IndexerTokenView,
+  orderScales: readonly ScaleSample[],
+  extFromOrders: Hex | null = null,
+  reg: TokenRegistry | null = null,
+  references: readonly ExtensionReference[] = [],
+): OpenTokenResult {
   const tpl = view.template_hash ? kob.templates().find((t) => t.hash === view.template_hash && t.tokenSlots) : undefined;
   if (!tpl || !tpl.tokenSlots) return { ok: false, reason: 'program-unknown' };
   const program = tpl.name as TokenProgram;
@@ -83,6 +116,7 @@ export function synthesizeOpenToken(kob: KobWasm, view: IndexerTokenView, orderS
       tick: 1n, status: 'listed', capabilities, display: null, openList: true, program,
       templateMatchesPinned: true, prefixLen: tpl.prefixLen, suffixLen: tpl.suffixLen, slots: { inputs: tpl.tokenSlots[0], outputs: tpl.tokenSlots[1] },
       tradable: true, untradableReason: null, json,
+      ...(family === 'kcc20' && ext ? { extension: checkExtension(ext, view.extension_commitment ? 'indexer' : 'orders', references) } : {}),
     },
   };
 }

@@ -2,7 +2,8 @@
 // (a compromised planner path, a hostile kob-wasm, a hand-made transaction) and for indexer-chosen token facts.
 import { describe, expect, it } from 'vitest';
 import { decodeSigning, type SigningSummary } from './decode';
-import { parseRegistry, withExtraToken, type TokenInfo, type TokenRegistry } from './registry';
+import { parseRegistry, withExtraToken, type ExtensionReference, type TokenInfo, type TokenRegistry } from './registry';
+import { buildConfirmModel } from '../ui/confirm/confirm-model';
 import { loadKobNode } from './wasm.node';
 import type { BuiltTx, Hex, OrderState, PayloadRecord } from './types';
 import type { KobWasm } from './wasm';
@@ -61,7 +62,7 @@ describe('A1: an if-done entry whose committed exit pays another key', () => {
   });
 });
 
-describe('A1: an open-list KCC-20 token: the extension commitment is the indexer\'s and is not shown', () => {
+describe('A1-2: an open-list KCC-20 token: the commitment is the indexer\'s pick; the confirm screen shows it and blocks a known mismatch', () => {
   it('a bid that pins ANY extension commitment decodes without a finding once the indexer\'s token is added to the registry', () => {
     const placed = placeGolden(kob, 'create.bid');
     const bid = placed.recovered[0]!.order as OrderState;
@@ -80,5 +81,33 @@ describe('A1: an open-list KCC-20 token: the extension commitment is the indexer
     expect(codes(s.warnings)).not.toContain('order-token-mismatch');
     // nothing in the decoded order names the commitment the bid will receive: the screen identifies the token by covenant id only
     expect(JSON.stringify(s.orders[0]!.description, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))).not.toContain(lookalike);
+
+    // the confirm screen shows the commitment and its source (the fix of A1-2): the user can check it
+    const withExt = (refs: ExtensionReference[]): TokenRegistry => {
+      const info: TokenInfo = { ...open, extension: { commitment: lookalike, source: 'indexer', references: refs, mismatch: refs.filter((r) => r.commitment !== lookalike) } };
+      return withExtraToken({ ...registry, tokens: registry.tokens.filter((t) => t.covenantId !== cov), byCovenantId: new Map([...registry.byCovenantId].filter(([k]) => k !== cov)) }, info);
+    };
+    const shown = (r: TokenRegistry) => buildConfirmModel(decode(forged.built, r, forged.kob), { registry: r });
+    const plain = shown(withExt([]));
+    const idRow = plain.sections.find((x) => x.id === 'identity')!.rows[0]!;
+    expect(idRow.value).toBe(lookalike);
+    expect(idRow.tone).toBe('warn');
+    expect(idRow.detail).toContain("indexer's token list");
+    expect(plain.canSign).toBe(true);
+    // a commitment known without the indexer (node-verified holdings, a genesis-verified registry entry) that differs blocks signing
+    const genuine = base.extensionCommitment!;
+    for (const source of ['holdings', 'registry-genesis'] as const) {
+      const m = shown(withExt([{ commitment: genuine, source }]));
+      expect(m.blocking.map((b) => b.code)).toEqual(['open-token-extension-mismatch']);
+      expect(m.blocking[0]!.text).toContain(genuine);
+      expect(m.canSign).toBe(false);
+      expect(m.sections.find((x) => x.id === 'identity')!.rows[0]!.tone).toBe('bad');
+    }
+    // a matching reference is shown as confirmed
+    const good = shown(withExt([{ commitment: lookalike, source: 'holdings' }]));
+    expect(good.blocking).toEqual([]);
+    expect(good.sections.find((x) => x.id === 'identity')!.rows[0]!.tone).toBe('good');
+    // a registry token is not an open-list token: no identity section
+    expect(buildConfirmModel(decode(placed.built), { registry }).sections.some((x) => x.id === 'identity')).toBe(false);
   });
 });

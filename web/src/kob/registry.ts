@@ -189,6 +189,8 @@ export interface TokenInfo {
   capabilities: Capability[];
   /** synthesised from the indexer for an open-list token that has no registry entry (kob/open-token.ts): decimals inferred, tick 1 */
   openList?: boolean;
+  /** an open-list KCC-20 token: where its extension commitment came from and how it compares with commitments known without the indexer */
+  extension?: ExtensionCheck;
   /** kob-wasm program (null when this build cannot handle the template) */
   program: TokenProgram | null;
   /** the registry template agrees with the wasm's pinned template (hash, prefix, suffix, slots) */
@@ -197,6 +199,20 @@ export interface TokenInfo {
   tradable: boolean; untradableReason: UntradableReason | null;
   json: RegistryTokenJson;
 }
+
+/**
+ * Audit A1-2. An open-list KCC-20 token's extension commitment is the indexer's pick (`source`): its token row, else one of its listed orders. A
+ * covenant id carries a second commitment only if its genesis minted one; the pick is cross-checked against the commitments known without the
+ * indexer (`references`): the registry's genesis-verified entry of the covenant id, and the commitments of the wallet's own token UTXOs of it,
+ * which the node confirmed (their address commits to the state). `mismatch` lists the references that name another commitment.
+ */
+export interface ExtensionCheck {
+  commitment: Hex;
+  source: 'indexer' | 'orders';
+  references: ExtensionReference[];
+  mismatch: ExtensionReference[];
+}
+export interface ExtensionReference { commitment: Hex; source: 'registry-genesis' | 'holdings' }
 
 export interface TokenRegistry {
   network: string;

@@ -11,7 +11,7 @@ import { UNLIMITED_REPEAT_COUNT } from '../../kob/orders/cond-common';
 import { stopWorstPrice } from '../../kob/orders/cond-legs';
 import { baseKind, type OrderDescription } from '../../kob/order-facts';
 import type { Clock } from '../../kob/plan-types';
-import { longId, type TokenRegistry } from '../../kob/registry';
+import { longId, type ExtensionReference, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import type { Hex, PayloadRecord } from '../../kob/types';
 import { formatKas, formatPricePerToken, formatTokenAmount, quoteOf, statePriceToTokenPrice } from '../../kob/units';
 import { formatDateTime, t, type Params } from '../../i18n';
@@ -42,7 +42,7 @@ export interface Card {
 }
 
 export interface Section {
-  id: 'spend' | 'create' | 'sweep' | 'close' | 'locked' | 'tokens' | 'back' | 'others' | 'fee' | 'net' | 'issue';
+  id: 'identity' | 'spend' | 'create' | 'sweep' | 'close' | 'locked' | 'tokens' | 'back' | 'others' | 'fee' | 'net' | 'issue';
   title: string;
   /** one explaining sentence under the title */
   note?: string;
@@ -103,6 +103,66 @@ const short = (h: string): string => (h.length > 12 ? `${h.slice(0, 4)}...${h.sl
 const DAA_PER_SECOND = 10;
 /** Exit orders committed inside an entry carry a "never" expiry (2^62); anything past two years is not a date. */
 const FAR_FUTURE_DAA = 2n * 365n * 86_400n * BigInt(DAA_PER_SECOND);
+
+// ------------------------------------------------------------------------------------------------ open-list token identity (A1-2)
+
+/** Covenant ids of every token the transaction names: order tokens (a pair: both), spent orders, token movements. */
+function tokensOf(summary: SigningSummary): Set<Hex> {
+  const ids = new Set<Hex>();
+  const add = (d: OrderDescription | null | undefined): void => {
+    if (!d) return;
+    if (d.tokenCovId) ids.add(d.tokenCovId);
+    if (d.pair) {
+      ids.add(d.pair.base.covId);
+      ids.add(d.pair.quote.covId);
+    }
+    add(d.entry?.exit);
+  };
+  for (const o of summary.orders) add(o.description);
+  for (const sp of summary.spends) add(sp.description);
+  for (const n of summary.net.tokens) ids.add(n.ref.covenantId);
+  return ids;
+}
+
+type CheckedOpenToken = TokenInfo & { extension: NonNullable<TokenInfo['extension']> };
+
+/**
+ * Audit A1-2: an open-list KCC-20 token's extension commitment is the indexer's pick, and the decoder only checks the transaction against it. The
+ * screen shows the commitment and where it came from, so the user can check it (a token's identity is its covenant id AND this commitment); a
+ * commitment known without the indexer (the registry's genesis-verified entry, the wallet's node-verified holdings) that differs is blocking.
+ */
+export function openTokenIdentity(summary: SigningSummary, registry: TokenRegistry | null, tr: Translate = t): { rows: Row[]; blocking: Finding[] } {
+  const rows: Row[] = [];
+  const blocking: Finding[] = [];
+  const open = [...tokensOf(summary)]
+    .map((id) => registry?.byCovenantId.get(id))
+    .filter((i): i is CheckedOpenToken => !!i && i.openList === true && i.family === 'kcc20' && !!i.extension);
+  for (const info of open) {
+    const x = info.extension;
+    const token = longId(info.covenantId);
+    const refName = (src: ExtensionReference['source']): string => tr(src === 'holdings' ? 'confirm.ext.ref.holdings' : 'confirm.ext.ref.registryGenesis');
+    const source = tr(x.source === 'indexer' ? 'confirm.ext.fromIndexer' : 'confirm.ext.fromOrders');
+    const check =
+      x.mismatch.length > 0
+        ? tr('confirm.ext.checkMismatch')
+        : x.references.length > 0
+          ? tr('confirm.ext.checkMatch', { sources: [...new Set(x.references.map((r) => refName(r.source)))].join(', ') })
+          : tr('confirm.ext.checkNone');
+    const tone: Tone = x.mismatch.length ? 'bad' : x.references.length ? 'good' : 'warn';
+    rows.push(row('ext-' + info.covenantId, tr('confirm.ext.label', { token }), x.commitment, tone, source + ' ' + check));
+    for (const m of x.mismatch) {
+      const params = { token, shown: x.commitment, known: m.commitment, source: refName(m.source) };
+      blocking.push({
+        code: 'open-token-extension-mismatch',
+        severity: 'blocking',
+        message: 'extension commitment ' + x.commitment + ' differs from ' + m.commitment + ' (' + m.source + ')',
+        params,
+        text: tr('confirm.ext.mismatch', params),
+      });
+    }
+  }
+  return { rows, blocking };
+}
 
 // ------------------------------------------------------------------------------------------------ token labels
 
@@ -572,6 +632,8 @@ export function buildConfirmModel(summary: SigningSummary, ctx: ConfirmContext =
   const mk = (tokenCov: Hex): Fmt => ({ tr, ref: refOf(registry, tokenCov), clock, time, registry });
   const kasNet = summary.net.kas;
   const sections: Section[] = [];
+  const identity = openTokenIdentity(summary, registry, tr);
+  if (identity.rows.length > 0) sections.push({ id: 'identity', title: tr('confirm.section.identity'), note: tr('confirm.section.identityNote'), rows: identity.rows, cards: [] });
   // an order swept in place stays where it was: its input and its continuation are not KAS released / newly locked (the difference is the fee)
   const swept = summary.spends.filter((s) => s.sweptTo);
   const sweptIn = swept.reduce((a, s) => a + (summary.inputs[s.input]?.amount ?? 0n), 0n);
@@ -652,10 +714,10 @@ export function buildConfirmModel(summary: SigningSummary, ctx: ConfirmContext =
     heading: tr(HEADING[summary.kind]),
     intro: summary.kind === 'sweep' ? sweepIntro(summary.spends, mk(''), (cov) => refOf(registry, cov)) : tr(`${HEADING[summary.kind]}Intro`),
     sections,
-    blocking: summary.blocking,
+    blocking: [...summary.blocking, ...identity.blocking],
     warnings: [...summary.warnings, ...(feeDisc?.warnings ?? [])],
     info: [...summary.info, ...(feeDisc?.info ?? [])],
-    canSign: summary.ok,
+    canSign: summary.ok && identity.blocking.length === 0,
     notices,
     advanced,
   };

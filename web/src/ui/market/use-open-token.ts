@@ -1,10 +1,12 @@
 // Loads what the trading of an OPEN-LIST token needs (kob/open-token.ts): the scales of its open orders and, for a KCC-20 token whose indexer row has
-// no extension commitment, the commitment of one of its listed orders. Registry tokens are not touched.
+// no extension commitment, the commitment of one of its listed orders. Registry tokens are not touched. For a KCC-20 token the wallet's own
+// node-verified token UTXOs of it are read too: their commitments cross-check the indexer's pick (audit A1-2, `info.extension`).
 import { useMemo } from 'preact/hooks';
-import { useServices } from '../../app/context';
-import { synthesizeOpenToken, type ScaleSample, type OpenTokenIssue } from '../../kob/open-token';
+import { useServices, useWallet } from '../../app/context';
+import { extensionReferences, synthesizeOpenToken, type ScaleSample, type OpenTokenIssue } from '../../kob/open-token';
+import { familyOfProgram } from '../../kob/token-state';
 import type { TokenInfo } from '../../kob/registry';
-import type { Hex } from '../../kob/types';
+import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
 import { useAsync } from '../kit';
 import type { TokenRow } from './token-model';
 
@@ -20,10 +22,11 @@ const NONE: OpenTokenState = { info: null, reason: null, loading: false };
 
 /** `refreshKey` changes when the book moved: the scales are read again. */
 export function useOpenToken(row: TokenRow | null, refreshKey = 0): OpenTokenState {
-  const { indexer, kob, registry } = useServices();
+  const { indexer, kob, registry, tracker } = useServices();
+  const pubkey = useWallet().info?.pubkey ?? null;
   const view = row && row.source !== 'registry' && row.index && !row.delisted ? row.index : null;
   const facts = useAsync(
-    async (signal): Promise<{ scales: ScaleSample[]; ext: Hex | null } | null> => {
+    async (signal): Promise<{ scales: ScaleSample[]; ext: Hex | null; holdings: TokenUtxo[] } | null> => {
       if (!view || !indexer) return null;
       const book = await indexer.book(view.covenant_id, { depth: 100, aggregate: false }, { signal });
       const scales = [...book.asks, ...book.bids] as ScaleSample[];
@@ -32,14 +35,21 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0): OpenTokenSta
         const orders = await indexer.orders({ token: view.covenant_id, status: 'active', limit: 20 }, { signal }).catch(() => null);
         ext = orders?.items.find((o) => o.extension_commitment)?.extension_commitment ?? null;
       }
-      return { scales, ext };
+      // the wallet's own holdings of a KCC-20 token, each confirmed by the node (a failure leaves the pick unchecked, never blocks the page)
+      const program = kob.templates().find((t) => t.hash === view.template_hash && t.tokenSlots)?.name as TokenProgram | undefined;
+      const holdings =
+        pubkey && tracker && program && familyOfProgram(program) === 'kcc20'
+          ? await tracker.tokenUtxosFor(pubkey, { covenantId: view.covenant_id, program }).catch(() => [])
+          : [];
+      return { scales, ext, holdings };
     },
-    [indexer, view?.covenant_id, view?.template_hash, refreshKey],
+    [indexer, view?.covenant_id, view?.template_hash, refreshKey, pubkey],
   );
   return useMemo((): OpenTokenState => {
     if (!view) return NONE;
     if (!facts.data) return { info: null, reason: facts.error ? 'no-scale' : null, loading: facts.loading };
-    const r = synthesizeOpenToken(kob, view, facts.data.scales, facts.data.ext, registry);
+    const refs = extensionReferences(view.covenant_id, registry, facts.data.holdings);
+    const r = synthesizeOpenToken(kob, view, facts.data.scales, facts.data.ext, registry, refs);
     return r.ok ? { info: r.info, reason: null, loading: false } : { info: null, reason: r.reason, loading: false };
   }, [view, facts.data, facts.error, facts.loading, kob, registry]);
 }

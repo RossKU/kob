@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { IndexerTokenView } from '../data/indexer-types';
 import { displayName } from './registry';
-import { standardScaleOf, synthesizeOpenToken } from './open-token';
+import { checkExtension, extensionReferences, standardScaleOf, synthesizeOpenToken } from './open-token';
 import { toTokenMarket } from './token-market';
 import { loadKobNode } from './wasm.node';
 
@@ -65,5 +65,44 @@ describe('synthesizeOpenToken', () => {
     const k = synthesizeOpenToken(kob, view({ template_hash: kron.hash, extension_commitment: null }), [{ scale: 1 }]);
     expect(k.ok && k.info).toMatchObject({ family: 'kron', program: 'KronToken2433', extensionCommitment: null, decimals: 0 });
     expect(k.ok && toTokenMarket(kob, k.info.json).scale).toBe(1n);
+  });
+});
+
+describe('A1-2: the extension commitment of an open-list KCC-20 token is kept with its source and cross-checked', () => {
+  const OTHER = 'cd'.repeat(32);
+  const held = (ext: string, cov = ID) =>
+    ({ transactionId: '11'.repeat(32), index: 0, amount: '100000000', covenantId: cov, state: { amount: '5', owner: '22'.repeat(32), owner_scheme: 0, borrow_scheme: 0, borrow_guard: '00'.repeat(32), extension_commitment: ext } }) as never;
+  const reg = (ext: string, verified: boolean) =>
+    ({ tokens: [{ covenantId: ID, family: 'kcc20', extensionCommitment: ext, json: { genesis_verified: verified } }], byCovenantId: new Map() }) as never;
+
+  it('records where the commitment came from: the indexer row, else the listed orders', () => {
+    const a = synthesizeOpenToken(kob, view(), scales);
+    expect(a.ok && a.info.extension).toEqual({ commitment: EXT, source: 'indexer', references: [], mismatch: [] });
+    const b = synthesizeOpenToken(kob, view({ extension_commitment: null }), scales, OTHER);
+    expect(b.ok && b.info.extension).toEqual({ commitment: OTHER, source: 'orders', references: [], mismatch: [] });
+    // KRON has no commitment: nothing to check
+    const k = synthesizeOpenToken(kob, view({ template_hash: kron.hash, extension_commitment: null }), scales);
+    expect(k.ok && k.info.extension).toBeUndefined();
+  });
+
+  it('references: the genesis-verified registry entry of the id and the distinct commitments of node-verified holdings of the id', () => {
+    expect(extensionReferences(ID, reg(EXT, true), [held(EXT), held(EXT), held(OTHER, 'ff'.repeat(32))])).toEqual([
+      { commitment: EXT, source: 'registry-genesis' },
+      { commitment: EXT, source: 'holdings' },
+    ]);
+    // a registry entry whose genesis was not verified proves nothing
+    expect(extensionReferences(ID, reg(EXT, false), [])).toEqual([]);
+    expect(extensionReferences(ID, null, [held(OTHER), held(EXT)]).map((r) => r.commitment)).toEqual([OTHER, EXT].sort());
+  });
+
+  it('a pick that differs from a reference is a mismatch; a matching one is not', () => {
+    const ok = synthesizeOpenToken(kob, view(), scales, null, null, extensionReferences(ID, reg(EXT, true), [held(EXT)]));
+    expect(ok.ok && ok.info.extension?.mismatch).toEqual([]);
+    const bad = synthesizeOpenToken(kob, view({ extension_commitment: OTHER }), scales, null, null, extensionReferences(ID, reg(EXT, true), [held(EXT)]));
+    expect(bad.ok && bad.info.extension?.mismatch).toEqual([
+      { commitment: EXT, source: 'registry-genesis' },
+      { commitment: EXT, source: 'holdings' },
+    ]);
+    expect(checkExtension(EXT.toUpperCase(), 'indexer', [{ commitment: EXT, source: 'holdings' }]).mismatch).toEqual([]);
   });
 });
