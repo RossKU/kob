@@ -46,7 +46,7 @@ describe('shipped registries', () => {
     // the KRON programs are reviewed with conditions (internal review, `crates/kob-tests/tests/review_b2_kron.rs`)
     expect(r.tokens.every((t) => t.tradable && t.untradableReason === null && t.templateMatchesPinned)).toBe(true);
     const review = Object.fromEntries(r.templates.map((t) => [t.id, t.review_status]));
-    expect(review).toMatchObject({ 'kcc20-ref-3x3': 'reviewed', 'kcc20-ref-8x8': 'pending-review', 'kron-2433': 'reviewed', 'kron-2732': 'reviewed', 'kcc20-kaspacom-0-2-5': 'pending-review' });
+    expect(review).toMatchObject({ 'kcc20-ref-3x3': 'reviewed', 'kcc20-ref-8x8': 'pending-review', 'kron-2433': 'reviewed', 'kron-2732': 'reviewed', 'kcc20-kaspacom-0-2-5': 'pending-review', 'kcc20-ref-public-mint': 'reviewed' });
     for (const id of ['kron-2433', 'kron-2732']) {
       expect(r.templates.find((t) => t.id === id)!.risks!.some((x) => x.startsWith('Reviewed with conditions') && x.includes('live is_minter'))).toBe(true);
     }
@@ -62,7 +62,7 @@ describe('shipped registries', () => {
     // the published public-mint build of the reference: pinned as its actor-type handle (the context push in a 34-byte prefix)
     expect(byId['kcc20-ref-public-mint']).toMatchObject({ program: 'KCC20PublicMint', matchesPinned: true, problems: [] });
     const pm = r.templates.find((t) => t.id === 'kcc20-ref-public-mint')!;
-    expect([pm.prefix_len, pm.state_len, pm.suffix_len, pm.max_token_inputs, pm.review_status]).toEqual([34, 112, 3885, 3, 'pending-review']);
+    expect([pm.prefix_len, pm.state_len, pm.suffix_len, pm.max_token_inputs, pm.review_status]).toEqual([34, 112, 3885, 3, 'reviewed']);
   });
 
   it('the example TN10 registry parses; its pending, unverified tokens are tradable (their templates are reviewed and pinned)', () => {

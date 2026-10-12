@@ -39,9 +39,9 @@ builds" in contracts/README.md.
 | | |
 |---|---|
 | File | `registry/tokens.json` (schema 1) |
-| sha256 (LF) | `fbc2be6e326db2107368d82dfe3855ae580dceb8a50f7343de94d2a6b816efa1` |
-| Strict templates | kcc20-ref-3x3 `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, kron-2433 `2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2`, kron-2732 `8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e` |
-| Pending review | kcc20-ref-8x8, kcc20-kaspacom-0-2-5, kcc20-ref-public-mint |
+| sha256 (LF) | `dc3bd15389e548862a956ccded01cb6ecee51946d76241d7da1e028711322d10` |
+| Strict templates | kcc20-ref-3x3 `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, kron-2433 `2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2`, kron-2732 `8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e`, kcc20-ref-public-mint `734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498` |
+| Pending review | kcc20-ref-8x8, kcc20-kaspacom-0-2-5 |
 
 The deploy-mainnet build embeds this file as its default registry and checks this hash. An operator may load another
 registry (`--tokens`): its hash is reported by `GET /v1/tokens`.

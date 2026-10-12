@@ -35,7 +35,8 @@ for testnet-10 and mainnet.
 2. KCC-20 template bytes pinned against the merged upstream specification and its conformance vectors
    (`crates/kob-tests/vectors`); until then the KCC-20 programs other than the reference 3/3 stay `pending-review`
    (not on the strict list). The reference 3/3 (`kcc20-ref-3x3`, KOB's standard program) is `reviewed` by internal
-   review only (maintainer decision 2026-10-12, canary launch).
+   review only (maintainer decision 2026-10-12, canary launch), and so is the reference's published public-mint build
+   (`kcc20-ref-public-mint`, maintainer decision 2026-10-13, the same permissionless KCC-20 policy).
 3. Internal review: no open high or critical finding.
 4. The TN10 soak completed by the operator, including the incident, `recover` and backup / restore drills
    (`docs/ops/executor.md` 7.8).
@@ -48,9 +49,12 @@ for testnet-10 and mainnet.
 * **Strict template list:** the two KRON programs (`kron-2433`, `kron-2732`), reviewed with conditions, and the
   reference KCC-20 3/3 (`kcc20-ref-3x3`, the program `kob token issue` and the web app issue), reviewed internally
   (maintainer decision 2026-10-12): every token of these programs is tradable, listed or not (issuance is
-  permissionless; there is no listing step for a KCC-20 3/3 token). The other reference KCC-20 programs (the 8/8
-  prototype, the public-mint build) and KaspaCom's KCC20 0.2.5 (finding K-1) stay `pending-review`: their tokens are
-  not tradable on mainnet.
+  permissionless; there is no listing step for a KCC-20 3/3 token). The reference's published public-mint build
+  (`kcc20-ref-public-mint`, KOB's second issuance option and the program of third-party launchpads such as Kasseal) is
+  reviewed internally too (maintainer decision 2026-10-13) and on the strict list: its tokens are tradable the same way;
+  a token whose genesis carries a `PublicMint` can grow up to `supply + mint_allowance` (recorded by verify-genesis).
+  The 8/8 prototype and KaspaCom's KCC20 0.2.5 (finding K-1) stay `pending-review`: their tokens are not tradable on
+  mainnet.
 * **Tokens:** the eight KRON tokens of the census are listed with their genesis records (genesis verified on
   mainnet data, no live mint authority). Six are `official`: KRON, KASCOV, ANSEM, IFWEN, PEEPS, KDIST.
   **PEPE** ("The Ultimate test") and **DNBT** ("dont buy this is test") are listed and verified but **not

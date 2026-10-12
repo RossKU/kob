@@ -118,7 +118,7 @@ the 112 bytes after it are the standalone state byte for byte, so KOB trades tok
 order-contract change: it pins the build as its KCC-1 actor-type handle, the view upstream's artifact exports for
 `actor_type<KCC20State>` (prefix 1 + 33 = 34 B ending with the context push, state 112 B, suffix 3,885 B, template
 `734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498`; `TemplateId::Kcc20PublicMint`, registry
-`kcc20-ref-public-mint`, pending review like the other KCC-20 programs). Orders take the token template per order and read
+`kcc20-ref-public-mint`, reviewed by internal review only since 2026-10-13, like the standalone 3/3). Orders take the token template per order and read
 the state at fixed offsets inside the 112 bytes, the stray guard locates the owner from the end of the redeem script, and
 every token output an order pins is the custody's own prefix (context included), state and suffix, which is what the
 published transfer writes. `crates/kob-tests/tests/kcc20_public_mint_tests.rs` runs every order shape on such tokens
@@ -181,8 +181,8 @@ Official. `official` needs a genesis record without a live mint authority (`live
 `PublicMint` proves that (no minter can appear later), like a KRON genesis without a minter and like every genesis of the
 standalone reference programs. With genesis minters the record stays undetermined until the minters' lineage is traced to
 the live `PublicMint` cells with allowance left; such a token can be official once minting is closed, its supply then final
-at `supply + mint_allowance`. The `kcc20-ref-public-mint` template itself remains `pending-review`, so its tokens are not
-listed yet in any case.
+at `supply + mint_allowance`. The `kcc20-ref-public-mint` template is `reviewed` (internal review only, 2026-10-13): its tokens
+are tradable without a registry entry, and listed or official only with a genesis record as above.
 
 Evidence: `crates/kob-tests/tests/kcc20_public_mint_genesis_tests.rs` (rusty-kaspa v2.1.0 engine: the genesis passes the
 covenant context and `verify_genesis`; the genesis minter mints a holder of the pinned handle, the seed creates a

@@ -1398,13 +1398,13 @@ mod tests {
         assert_eq!(d.templates.len(), 6);
         // internal review of the two KRON programs (2026-09-30, `review_b2_kron.rs`): reviewed with conditions (per-token genesis check and
         // no live minter before a token is listed or official); the reference KCC-20 3/3 program, KOB's standard one, is reviewed
-        // (internal review only, maintainer decision 2026-10-12: tradable on mainnet); its prototypes, the public-mint build and
-        // KaspaCom's are pending
+        // (internal review only, maintainer decision 2026-10-12: tradable on mainnet), and so is the reference's published public-mint
+        // build (2026-10-13, the same permissionless KCC-20 policy); the 8/8 prototype and KaspaCom's are pending
         let strict: Vec<&str> = d.strict_templates().map(|t| t.id.as_str()).collect();
-        assert_eq!(strict, ["kcc20-ref-3x3", "kron-2433", "kron-2732"]);
+        assert_eq!(strict, ["kcc20-ref-3x3", "kron-2433", "kron-2732", "kcc20-ref-public-mint"]);
         let r3 = d.template("kcc20-ref-3x3").unwrap();
         assert!(r3.risks.iter().any(|r| r.starts_with("Reviewed (internal review only") && r.contains("verify_genesis")));
-        for id in ["kcc20-ref-8x8", "kcc20-ref-public-mint", "kcc20-kaspacom-0-2-5"] {
+        for id in ["kcc20-ref-8x8", "kcc20-kaspacom-0-2-5"] {
             assert_eq!(d.template(id).unwrap().review_status, ReviewStatus::PendingReview, "{id}");
         }
         for id in ["kron-2433", "kron-2732"] {
@@ -1435,9 +1435,14 @@ mod tests {
         assert!(d.template("kron-2433").unwrap().risks.iter().any(|r| r.starts_with("Missing hardening")));
         assert!(!d.template("kron-2732").unwrap().risks.iter().any(|r| r.starts_with("Missing hardening")));
         assert!(d.templates.iter().all(|t| t.risks.iter().any(|r| r.starts_with("Genesis contamination"))));
-        // the published public-mint build: its KCC-1 actor-type handle (34-byte prefix with the context field), pending review
+        // the published public-mint build: its KCC-1 actor-type handle (34-byte prefix with the context field), reviewed (internal
+        // review only, 2026-10-13): tradable on mainnet, a live PublicMint bounded by the genesis allowance
         let pm = d.template("kcc20-ref-public-mint").unwrap();
-        assert_eq!(pm.review_status, ReviewStatus::PendingReview);
+        assert_eq!(pm.review_status, ReviewStatus::Reviewed);
+        assert!(pm.risks.iter().any(|r| r.starts_with("Reviewed (internal review only")
+            && r.contains("mint_allowance")
+            && r.contains("verify_genesis")));
+        assert!(d.strict_template_by_hash(&parse_hex32(&pm.template_hash).unwrap()).is_some());
         assert_eq!((pm.prefix_len, pm.state_len, pm.suffix_len, pm.max_token_inputs, pm.max_token_outputs), (34, 112, 3_885, 3, 3));
         assert_eq!(pm.capabilities, vec![Capability::PublicMint]);
         assert!(pm.risks.iter().any(|r| r.starts_with("Issuance lives beside the program") && r.contains("verify-genesis")));

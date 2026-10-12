@@ -477,7 +477,8 @@ fn the_registry_record_carries_the_allowance_and_official_waits_for_the_end_of_m
     assert_eq!(rec.live_minters, None, "a live minter may mint: C2 undetermined until traced");
 
     // the record in the registry: official is refused while C2 is undetermined. (Listing needs a reviewed template: the
-    // shipped kcc20-ref-public-mint stays pending review, so this registry marks it reviewed for the rule under test.)
+    // shipped kcc20-ref-public-mint is reviewed since 2026-10-13; the registry here is marked reviewed explicitly so the rule
+    // under test does not depend on the shipped status.)
     let mut reg2 = reg.clone();
     for t in reg2.templates.iter_mut().filter(|t| t.id == "kcc20-ref-public-mint") {
         t.review_status = kob_protocol::registry::ReviewStatus::Reviewed;
@@ -520,4 +521,111 @@ fn the_registry_record_carries_the_allowance_and_official_waits_for_the_end_of_m
         (s.minted(&[21_000_000]), s.minted(&[20_000_000, 500_000]), s.minted(&[0])),
         (Some(0), Some(500_000), Some(21_000_000))
     );
+}
+
+/// A Kasseal launch (testnet-10 launchpad: bonding curve then pool) issues its token with the published build, so its genesis
+/// is a public-mint genesis without minter or seed: the real launch of SEAL (`b44f8238...`, transaction `962b4c2d...`, DAA
+/// 594,283,028; fields from Kasseal's launch proof `GET /v1/tokens/:id/launch-proof`, the txid and the unspent reserve cell
+/// read from a TN10 node). The launch transaction carries companions beside the token: the curve's genesis (covenant id
+/// `ac3222be...`, authorised by another input) and the creator's change. They are not in the token's genesis group: KIP-20
+/// binds an output to the covenant id it names, and the token id is recomputed over the outputs bound to it (0 and 1 only),
+/// so the companions need no rule of their own. Both token outputs are KCC20 holders of KOB's pinned handle owned by the
+/// curve (owner scheme 4: the curve's covenant id, extension commitment zero): 800,000,000 for sale, 400,000,000 kept for
+/// the pool, a fixed supply of 1,200,000,000 (no PublicMint).
+#[test]
+fn a_kasseal_launch_genesis_verifies_as_a_fixed_supply_public_mint_token() {
+    const TOKEN: &str = "b44f823811e15bd03bb5989ae4c891ac27ebf0b4c2e9aec2a5adbf439e12c094";
+    const CURVE: &str = "ac3222be526728418fe23c0488fd824ef040b28a1cc85a7f7e45cd781ceace3f";
+    const TXID: &str = "962b4c2d8001a3d6a5d2a5a5be1eb537de5b14fe7b994074cf70fc8783329d49";
+    const PREV: &str = "1d13668c5545bac5d9b7d527f48e51d38d91637aae60da0d84de122935be2a4b";
+    let curve_owned = |amount: u64| TokenState {
+        amount,
+        owner: parse_hex(CURVE).try_into().unwrap(),
+        owner_scheme: 4,
+        borrow_scheme: 0,
+        borrow_guard: [0; 32],
+        extension_commitment: [0; 32],
+    };
+    let sale = holder_redeem(&curve_owned(800_000_000));
+    let reserve = holder_redeem(&curve_owned(400_000_000));
+    // the chain's script public keys of the two token outputs are these holders' P2SH
+    assert_eq!(hex(p2sh_spk(&sale).script()), "aa201d791fcbea2cb5aad52381879ad380579dffc26998a305302de41f2758cc3f8587");
+    assert_eq!(hex(p2sh_spk(&reserve).script()), "aa201c6082450996a9aa06f55ebe26b3f39b55dc18c0ad808fecaa5066656b16369087");
+
+    let evidence = |outputs: Value| -> TokenEvidence {
+        serde_json::from_value(json!({
+            "ticker": "SEAL",
+            "covenant_id": TOKEN,
+            "template_id": "kcc20-ref-public-mint",
+            "genesis": {
+                "txid": TXID,
+                "accepting_block_daa_score": 594_283_028u64,
+                "source": "Kasseal launch proof (api.kasseal.com), txid and unspent output 1 checked on a TN10 node",
+                "tx": {
+                    "version": 1,
+                    "inputs": ([0, 1, 2].iter().map(|i| json!({"txid": PREV, "index": i, "sequence": 0})).collect::<Vec<_>>()),
+                    "outputs": outputs,
+                    "lock_time": 0,
+                    "subnetwork_id": "00".repeat(20),
+                    "gas": 0,
+                    "payload": "",
+                },
+                "reveals": [
+                    {"index": 0, "redeem_script": hex(&sale), "source": "reconstructed from the launch proof"},
+                    {"index": 1, "redeem_script": hex(&reserve), "source": "reconstructed from the launch proof"},
+                ],
+            },
+        }))
+        .unwrap()
+    };
+    let out = |value: u64, spk: &str, cov: Option<(u16, &str)>| {
+        json!({"value": value, "spk_version": 0, "spk": spk,
+            "covenant": cov.map(|(a, c)| json!({"authorizing_input": a, "covenant_id": c}))})
+    };
+    let outputs = vec![
+        out(1_000_000_000, "aa201d791fcbea2cb5aad52381879ad380579dffc26998a305302de41f2758cc3f8587", Some((0, TOKEN))),
+        out(1_000_000_000, "aa201c6082450996a9aa06f55ebe26b3f39b55dc18c0ad808fecaa5066656b16369087", Some((0, TOKEN))),
+        out(500_000_000, "aa2093a3a0adf27142d5cf1f373c8ab3fa7f78aa6e05ed6bff46b9a2ae32be473c6587", Some((1, CURVE))),
+        out(14_936_849_257, "20d94889cb40332f3b882f23d358e082d676a8e525c8e21b2a2fffa0f0d22539f0ac", None),
+    ];
+    let mut reg = Registry::default_registry();
+    reg.tokens.push(
+        serde_json::from_value(json!({
+            "ticker": "SEAL", "name": "KasSeal", "family": "kcc20", "covenant_id": TOKEN,
+            "template_id": "kcc20-ref-public-mint", "extension_commitment": "00".repeat(32), "extension_class": "fixed-supply-standard",
+            "decimals": 0, "status": "pending-review", "verified": false,
+        }))
+        .unwrap(),
+    );
+    let rec = verify_token(&reg, &evidence(json!(outputs)), 594_300_000).result.expect("the Kasseal launch genesis verifies");
+    assert_eq!(rec.txid, TXID, "txid recomputed from the recorded fields");
+    assert_eq!(rec.outputs, vec![0, 1], "the token's group: the curve genesis and the change are not part of it");
+    assert_eq!((rec.supply, rec.mint_allowance, rec.minter_outputs.clone()), (1_200_000_000, None, vec![]));
+    assert_eq!(rec.live_minters, Some(vec![]), "no PublicMint in the genesis: the supply is fixed (C2 from the genesis alone)");
+
+    // a companion output bound to the token's own id would be part of its group and refused (here an anyone-can-spend script:
+    // a launch that put its curve under the token's id would be refused the same way, its program not being the token's)
+    let op = TransactionOutpoint { transaction_id: TransactionId::from_bytes(parse_hex(PREV).try_into().unwrap()), index: 0 };
+    let foreign = vec![OpTrue];
+    let spks = [p2sh_spk(&sale), p2sh_spk(&reserve), p2sh_spk(&foreign)];
+    let txouts: Vec<TransactionOutput> =
+        spks.iter().map(|s| TransactionOutput { value: 1_000_000_000, script_public_key: s.clone(), covenant: None }).collect();
+    let cov = covenant_id(op, txouts.iter().enumerate().map(|(i, o)| (i as u32, o)));
+    let group: Vec<GenesisOutput> = [&sale, &reserve, &foreign]
+        .iter()
+        .enumerate()
+        .map(|(i, r)| GenesisOutput {
+            index: i as u32,
+            value: 1_000_000_000,
+            script_public_key: spks[i].clone(),
+            redeem_script: Some(r.to_vec()),
+        })
+        .collect();
+    let tpl = reg.template("kcc20-ref-public-mint").unwrap();
+    let e = verify_genesis(tpl, &hex(&cov.as_bytes()), TXID, (op.transaction_id.as_bytes(), 0), &group).unwrap_err();
+    assert_eq!(e, GenesisError::NotTemplate(2, "kcc20-ref-public-mint".into()));
+}
+
+fn parse_hex(s: &str) -> Vec<u8> {
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
 }
