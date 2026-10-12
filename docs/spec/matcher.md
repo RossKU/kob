@@ -605,7 +605,9 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   (§2.2). Evidence that is itself an unaccepted continuation is not chain-safe (§7).
 - **Book.** The covenant needs the same token covenant id and `scale` (prices are comparable only at the same
   `scale`); the reference planner takes evidence only from the stop's own book (same token, token program, extension
-  commitment and `scale`), which is the same set in practice.
+  commitment and `scale`), which is the same set for a token whose genesis has one commitment; for pair stops it also
+  takes the commitments of the order's own markets (the covenants do not compare the commitment: `order-types.md`, Evidence
+  identity).
 - **Amount.** The evidence fill `n` (base units of the token; evidence of another token or `scale` is refused) must be
   ≥ the stop's `minTouch` (base units).
 - **Sharing.** The evidence is read, never consumed: any number of stops may read one fill of the

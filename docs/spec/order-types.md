@@ -413,6 +413,12 @@ exactly as it books it (the committed `exitState` outside the mutable window, `p
 checks the other's leading 8-byte push); a merge into an armed, not yet filled entry fixes the auction origin, a merge
 into an entry with nothing left resets `armed` to 0.
 
+Token slots (audit 2026-10, AUD-33): a sell-first repeating exit's PARTIAL take-profit that re-arms moves four B outputs in
+one transaction (the exit's custody rest, the maker's profit, the entry's prefund custody and the filler's B). A program
+with 3 token outputs per transaction (the KCC-20 reference 3/3 and the public-mint build) cannot carry that shape when it is
+B, so while its entry is live such an exit takes profit (and re-arms) only by a fill that sells it out; a partial
+take-profit is possible only after `rptUntil`, without re-arming. No value is at risk; the wallet should set the exit's `minFill` to its whole amount for such pairs.
+
 ### Pair trigger rule
 
 A pair stop (a `KobCondPair` stop leg or trailing ratchet, a `KobIfdPair` stop entry) changes state only on trigger
@@ -450,6 +456,13 @@ record (`matcher.md` §3.5).
 
 The evidence is read, never consumed: one fill (or pair of fills) may arm any number of pair stops. Conditional, if-done
 and pair fills are never evidence of a KAS-quoted order; a KAS-quoted conditional keeps its KAS-book evidence only.
+
+Evidence identity (audit 2026-10, AUD-EXT): every trigger check, KAS-quoted and pair, compares the evidence token's covenant id
+and scale, not its KCC-20 extension commitment. A covenant id carries one commitment unless its genesis minted another;
+the registry's genesis check (`genesis_verified`) proves a single commitment. For any other KCC-20 token, units of a second
+commitment (or units minted through a contaminated genesis) can arm or trail a stop at a price nobody else can take: the
+wallet warns on stops of such tokens (`STOP_EVIDENCE_GENESIS_UNVERIFIED`) and the reference planner reads evidence of the
+order's own commitment only. KRON tokens have no commitment.
 
 ### Pair view
 
