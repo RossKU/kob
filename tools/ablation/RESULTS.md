@@ -1,5 +1,47 @@
 # Ablation results
 
+## Pre-mainnet covenant fixes (2026-10-12): every suite of the changed templates, in full
+
+Contracts of `8f5784f`: the IFD merge scale (KobIfdBid / KobIfdAsk and the KRON twins), the exit re-arm bound n < 2^53
+(KobCondAsk / KobCondBid and the KRON twins) and the authenticated stop-trigger evidence custody (tplState on `tk`: every
+conditional and if-done kind of both families, KobCondPair / KobIfdPair `rd` and `evLeg`). Every suite whose contracts
+changed was run in full on the final test sources (debug executables, `--exe-dir`, one suite per invocation, baselines
+clean in every run). The KCC-20 touch entries and the pair suites now also run on the reference 3/3 program (`KCC20Ref`,
+tradable on mainnet), besides 8/8; a scenario whose shape exceeds 3 token inputs / outputs is skipped there.
+**698/698 confirmed, 30/30 defence-in-depth held**, no `NOT-CONFIRMED`, `EDIT-ERROR` or `BASELINE-DIRTY`:
+
+| Suite | Entries | Confirmed | Held | Wall time (jobs) |
+|---|---|---|---|---|
+| `kcc20-sell` | 101 | 98/98 | 3 | 991 s (4) |
+| `kcc20-buy` | 101 | 97/97 | 4 | 1,950 s (3) |
+| `kron-sell` | 148 | 145/145 | 3 | 1,127 s (4) |
+| `kron-buy` | 114 | 110/110 | 4 | 2,424 s (3), IA24 re-run 270 s |
+| `cond-pair` | 126 | 116/116 | 10 | 78 s (3) |
+| `cond-pair-rpt` | 12 | 10/10 | 2 | 46 s (3) |
+| `ifd-pair` | 126 | 122/122 | 4 | 317 s (3) |
+| `pair` | 84 | not re-run (KobPair unchanged) | | |
+
+* **New checks** (each removed alone flips the attack only it refuses): `tktpl` / `tkp2sh` per touch function (`TA`, `TU`,
+  `TV`, `TK` of both families; cond-pair `EVTKTPL`, `EVTKP2SH`, `EVBTKTPL`, `EVBTKP2SH`; ifd-pair `IF116`..`IF119`): the
+  custody stand-ins 02c (a look-alike holder of the token's covenant id under another program) and 02d (the genuine holder
+  redeem pushed by a non-P2SH input), `NC5H*` / `NC5S*` / `NC3H*` / `NC3S*`, `NE25*` / `NE26*`; they flip at the order's input
+  only (`inputOnly`: the evidence ask's own stray guard, which reads the owner at the same offset, refuses such an input too).
+  Merge scale `V-IB-scale` (NRP30), `V3-I-scale`, `IA-merge-scale` (NRPB36, both catalogs): every input accepts without it.
+  Re-arm bound `V-CA-mergek` (V3CA09, every input), `V3-C-mergek` (input-only: the KRON program refuses the oversized
+  custody), `CB-rearm-mergek` (NV3CB43, both families), cond-pair-rpt `CR12` (NCR10, every input; formerly listed as
+  unreachable).
+* **Repaired entries** (no longer applied or no longer witnessed by their scenario before this run, independent of the
+  contract change unless noted): `B8` / `R9` / `D9` / `IA13` / `IF34` repointed to dating the booked exit's `rptUntil` by
+  the filler's `t` (the `int utxoDaa` they edited is gone); `CB7` repointed to the keeper's `in - keeperTip` floor with a new
+  witness `NB30c` (`NB30`, `NB25` held: the budget floor also refuses them); kron-buy `IA24`: its scenario `NRPB2` broke the
+  re-arm rule of the fill first (rptAmount 4 whole tokens), now rptAmount 4 base units as in the KCC-20 suite. ifd-pair:
+  the pending entries of the pair phase all confirm: `IF88`, `IF89`, `IF95`, `IF96`, `IF97` `inputOnly` (the edited evidence
+  order's own script refuses its doctored token / scale / slope), `IF90` / `IF98` (custody of the other token: with the
+  template check the mixed pairs are a hold; `NE18k*` on KCC-20 / KCC-20 isolate the covenant-id check), `IF104c` (`NIM9`
+  rebuilt: with the exit at input 0 the merge of 0 encoded as negative zero, the entry's refund), `IF107` (`NIX3` on
+  KCC-20 / KCC-20; the mixed-pair `NIX3m` is held by `IF107` and the new `IF107x`, flipped by `IF107c`).
+* The detail tables of these seven suites below are this run's (`pair` keeps its 2026-10-06 table).
+
 ## Refund rule (2026-10-06): the refund of an empty sell-first entry
 
 `IA-refund-held` in `kcc20-buy` (KobIfdAsk) and `kron-buy` (KobIfdAskKron): the refund (`settle` nb = 0) requires
@@ -46,7 +88,7 @@ executables, `--jobs 2`, one suite per invocation, baselines clean in every run.
   `p > 0` makes the seller's worst quote 1, not "no fill"; fixed). `c6_pair_long_run_regressions` replays all 12: the
   oracle is clean. A second long run on the final contracts is pending (not run in this session).
 
-Detail tables: [pair](#pair), [cond-pair](#cond-pair), [ifd-pair (partial)](#ifd-pair-partial) at the end of this file.
+Detail tables: [pair](#pair) (this phase), [cond-pair](#cond-pair), [cond-pair-rpt](#cond-pair-rpt) and [ifd-pair](#ifd-pair) (the 2026-10-12 run, which replaces the partial ifd-pair runs of this phase) at the end of this file.
 
 ## Protocol v3 KAS kinds (2026-10-05/06)
 
@@ -94,8 +136,8 @@ kron-buy 2,693 s. Each run did its own baseline first (clean).
 
 ## kcc20-sell
 
-KCC-20 v2; test binary `kob_v2_tests`; contracts `contracts/v2`. 92/92 confirmed, 3/3 defence-in-depth held (expected NOT to flip).
-Baseline (no mutation): v3_merge_push clean, v3_rounding clean, v2_lifecycle_stop_auction_keeper_trailing clean, v2_fix_pass_regressions clean, v2_repeat_ifd_attacks clean, v2_negative_trigger_manipulation clean, v2_touch_cond_settle clean, v2_touch_cond_trail clean, v2_touch_cond_arm clean, v2_touch_ifd_arm clean, v2_touch_ifd_fill clean, v3_min_fill clean, v3_tip clean, v2_lifecycle_stray_custody clean, v3_fok clean, v2_lifecycle_ifd_stop_entry clean.
+KCC-20 v2; test binary `kob_v2_tests`; contracts `contracts/v2`. 98/98 confirmed, 3/3 defence-in-depth held (expected NOT to flip).
+Baseline (no mutation): v2_lifecycle_stop_auction_keeper_trailing clean, v3_rounding clean, v2_fix_pass_regressions clean, v3_merge_push clean, v2_negative_trigger_manipulation clean, v2_touch_cond_settle clean, v2_touch_cond_settle_3x3 clean, v2_repeat_ifd_attacks clean, v2_touch_cond_arm clean, v2_touch_cond_trail clean, v2_touch_cond_arm_3x3 clean, v2_touch_cond_trail_3x3 clean, v2_touch_ifd_arm clean, v2_touch_ifd_fill clean, v2_touch_ifd_fill_3x3 clean, v3_min_fill clean, v3_tip clean, v2_lifecycle_stray_custody clean, v3_fok clean, v2_touch_ifd_arm_3x3 clean, v2_lifecycle_ifd_stop_entry clean.
 
 | id | contract | check ablated | expected | flipped | status |
 |---|---|---|---|---|---|
@@ -112,13 +154,14 @@ Baseline (no mutation): v3_merge_push clean, v3_rounding clean, v2_lifecycle_sto
 | B5b | KobIfdBid | empty stop entry re-arms unarmed | NRP18 | NRP18 | CONFIRMED |
 | B6 | KobIfdBid | merge floor (the budget of m) | NRP15 | NRP15 | CONFIRMED |
 | B7 | KobIfdBid | stray scan in merge (shares the fill guard) | NRP24 | NRP24 | CONFIRMED |
-| B8 | KobIfdBid | booking time t <= lockTime (CLTV) | NRP6 | NRP6 | CONFIRMED |
+| B8 | KobIfdBid | booking: the exit's rptUntil counts from the entry UTXO's DAA (its last activity), never from the filler's t (the cycle dated by t instead) | NRP6 | NRP6 | CONFIRMED |
 | B9 | KobIfdBid | repeating entry never terminates on a fill | NRP7 | NRP7 | CONFIRMED |
 | M2 | KobCondAsk | control: stop auction time >= arming origin (require(t >= newArmed)) | NA3 | NA3 | CONFIRMED |
 | M4 | KobCondAsk | control: keeperTip >= 0 on update | NK2 | NK2 | CONFIRMED |
 | FXE1 | KobAsk | the IOC return is positional (tokOut == tokenIn): no shared remainder, no remainder that is also a bid delivery | FXE1, FXE2 | FXE1 FXE2 | CONFIRMED |
 | FXL3a | KobIfdBid | the merge requires the exit terms [0..181) (maker, legs) to be the committed exitState | NRP25, NRP27 | NRP25 NRP27 | CONFIRMED |
 | FXL3b | KobIfdBid | the merge requires parent = this entry and rptPrice = its budget rate (price + tip) | NRP26 | NRP20 NRP26 | CONFIRMED |
+| V-IB-scale | KobIfdBid | merge: the committed exit (exitState, compared with the exit's state) quotes at the entry's scale (else the exit returns budget(m) at its scale and the entry re-arms m at its own) | NRP30 | NRP30 | CONFIRMED |
 | TA-push08 | KobCondAsk | touchAsk (settle, stop leg): the evidence sigscript starts with the fixed 8-byte push of its fill argument (0x08) | NTA10 | NTA10 | CONFIRMED |
 | TA-npos | KobCondAsk | touchAsk (settle, stop leg): the evidence fill argument n > 0 | NTA11 | NTA11 | CONFIRMED |
 | TA-tpl | KobCondAsk | touchAsk (settle, stop leg): the evidence is an instance of the KobAsk / KobBid template (template hash; P2SH kept) | NTA17 | NTA17 | CONFIRMED |
@@ -133,6 +176,8 @@ Baseline (no mutation): v3_merge_push clean, v3_rounding clean, v2_lifecycle_sto
 | TA-tokdaa | KobCondAsk | touchAsk (settle, stop leg): exposure counts the evidence ask custody DAA | NTA02 | NTA02 | CONFIRMED |
 | TA-tkcov | KobCondAsk | touchAsk (settle, stop leg): the custody input tk carries the token covenant id | NTA02b | NTA02b | CONFIRMED |
 | TA-owner | KobCondAsk | touchAsk (settle, stop leg): the custody input tk is owned by the evidence ask (owner = its covenant id, scheme covenant id) | NTA15, NTA16 | NTA15 NTA16 | CONFIRMED |
+| TA-tktpl | KobCondAsk | touchAsk (settle, stop leg): the custody input tk is a holder UTXO of the token's program (template hash; P2SH kept) | NTA02c | NTA02c(F) | CONFIRMED |
+| TA-tkp2sh | KobCondAsk | touchAsk (settle, stop leg): the custody input tk is the P2SH of the holder redeem script read (template hash kept) | NTA02d | NTA02d(F) | CONFIRMED |
 | TA-rule | KobCondAsk | settle, unarmed stop leg: the evidence ask quotes <= stopPrice | NTA19, NT3 | NTA19 NT3 | CONFIRMED |
 | TU-push08 | KobCondAsk | touch (update: arm on an ask, trail on a bid): the evidence sigscript starts with the fixed 8-byte push of its fill argument (0x08) | NTU10, NTT10, NTT11 | NTU10 NTT10 NTT11 | CONFIRMED |
 | TU-npos | KobCondAsk | touch (update: arm on an ask, trail on a bid): the evidence fill argument n > 0 | NTU11 | NTU11 | CONFIRMED |
@@ -148,6 +193,8 @@ Baseline (no mutation): v3_merge_push clean, v3_rounding clean, v2_lifecycle_sto
 | TU-tokdaa | KobCondAsk | touch (update: arm on an ask, trail on a bid): exposure counts the evidence ask custody DAA | NTU02 | NTU02 | CONFIRMED |
 | TU-tkcov | KobCondAsk | touch (update: arm on an ask, trail on a bid): the custody input tk carries the token covenant id | NTU02b | NTU02b | CONFIRMED |
 | TU-owner | KobCondAsk | touch (update: arm on an ask, trail on a bid): the custody input tk is owned by the evidence ask (owner = its covenant id, scheme covenant id) | NTU15, NTU16 | NTU15 NTU16 | CONFIRMED |
+| TU-tktpl | KobCondAsk | touch (update: arm on an ask, trail on a bid): the custody input tk is a holder UTXO of the token's program (template hash; P2SH kept) | NTU02c | NTU02c(F) | CONFIRMED |
+| TU-tkp2sh | KobCondAsk | touch (update: arm on an ask, trail on a bid): the custody input tk is the P2SH of the holder redeem script read (template hash kept) | NTU02d | NTU02d(F) | CONFIRMED |
 | TU-rule | KobCondAsk | update, arm: the evidence ask quotes <= stopPrice | NTU19 | NTU19 | CONFIRMED |
 | TT-k | KobCondAsk | update, trail: the evidence bid justifies k >= 1 steps (rp >= stop + step + gap; k = 0 drains keeperTip and resets trailWait, k < 0 moves the stop down) | NTT19, NTT19b | NTT19 NTT19b | CONFIRMED |
 | TT-cap | KobCondAsk | update, trail: the ratchet is capped below tpPrice | NT18b | NT18b | CONFIRMED [positive scenarios rejected: S15c] |
@@ -189,6 +236,7 @@ Baseline (no mutation): v3_merge_push clean, v3_rounding clean, v2_lifecycle_sto
 | V-CA-08 | KobCondAsk | repeat merge: the entry's sigscript starts with 0x08 (V3CA08: the merge argument as a 9-byte push, bytes [1..9) = the merge value; the entry refuses its own 9-byte argument, so the exit's flip is input-only) (NRP28, a minimal index push, is also refused by the merge-value comparison; V3CA07, a negative 8-byte index, by the entry's own update; V-CA-08x removes both) | V3CA08; stay rejected: V3CA07, NRP28 | V3CA08(F) | CONFIRMED |
 | V-CA-08x | KobCondAsk | repeat merge: the 0x08 first byte and the merge value of the entry's sigscript removed together (the entry's arming update read as a merge) | NRP28 | NRP14 NRP19(F) NRP28 | CONFIRMED |
 | V-CA-parent | KobCondAsk | update never next to the repeat entry (OpCovInputCount(parent) == 0): an 8-byte ev push would alias the merge amount (NRP22, a minimal push, is also refused by the entry's 0x08 check) | V3CA05; stay rejected: NRP22 | V3CA05 | CONFIRMED |
+| V-CA-mergek | KobCondAsk | re-arm: the exit sells n < 2^53 (the merge argument -(self * 2^53 + n) names this input and n only then: an exit of 2^53 + m at input i reads the merge of the booked exit at input i + 1 as its own) | V3CA09 | V3CA09 | CONFIRMED |
 | V-IB-minfill | KobIfdBid | minFill: n >= minFill unless the fill takes everything left | V3IB01, NI18 | V3IB01 NI18 | CONFIRMED |
 | V-IB-floor | KobIfdBid | the maker's spend is rounded down (quoteOf c = 0 -> scale - 1) | V3IB02, V3IB02b | V3IB02 V3IB02b | CONFIRMED |
 | V-IB-mergek | KobIfdBid | booking: a booked exit amount is below 2^53 (the merge argument -(k * 2^53 + m) must name it) | V3IB03 | V3IB03 | CONFIRMED |
@@ -205,8 +253,8 @@ Collateral flips (scenarios accepted besides the expected ones):
 
 ## kcc20-buy
 
-KCC-20 v3; test binary `kob_v2_buy_tests`; contracts `contracts/v2`. 90/90 confirmed, 4/4 defence-in-depth held (expected NOT to flip).
-Baseline (no mutation): v3_buy_merge_base clean, v2_buy_lifecycle clean, v2_buy_touch_cond_settle clean, v2_buy_repeat_ifd_attacks clean, v2_buy_touch_cond_arm clean, v2_buy_touch_cond_trail clean, v2_buy_negative clean, v2_buy_touch_ifd_arm clean, v2_buy_touch_ifd_fill clean, v3_buy_min_fill clean, v3_buy_rounding clean, v3_buy_tip clean, v3_buy_merge_push clean.
+KCC-20 v3; test binary `kob_v2_buy_tests`; contracts `contracts/v2`. 97/97 confirmed, 4/4 defence-in-depth held (expected NOT to flip).
+Baseline (no mutation): v3_buy_merge_base clean, v2_buy_touch_cond_settle clean, v2_buy_touch_cond_settle_3x3 clean, v2_buy_lifecycle clean, v2_buy_touch_cond_arm clean, v2_buy_touch_cond_trail clean, v2_buy_repeat_ifd_attacks clean, v2_buy_negative clean, v2_buy_touch_cond_arm_3x3 clean, v2_buy_touch_cond_trail_3x3 clean, v2_buy_touch_ifd_arm clean, v2_buy_touch_ifd_fill clean, v3_buy_min_fill clean, v2_buy_touch_ifd_fill_3x3 clean, v3_buy_rounding clean, v3_buy_tip clean, v3_buy_merge_push clean, empty_repeating_ifda_refund_is_refused clean, v2_buy_touch_ifd_arm_3x3 clean.
 
 | id | contract | check ablated | expected | flipped | status |
 |---|---|---|---|---|---|
@@ -227,7 +275,7 @@ Baseline (no mutation): v3_buy_merge_base clean, v2_buy_lifecycle clean, v2_buy_
 | D7 | KobIfdAsk | an empty entry has no custody (custody = 0 - 1 statement removed) | NRPB24b | NRPB24b | CONFIRMED |
 | D7b | KobIfdAsk | stray scan in merge (noStrays(selfId, custody)) | NRPB24 | NRPB24 NRPB24b | CONFIRMED |
 | D8 | KobIfdAsk | custody holds exactly amountLeft base units (amount check) | NRPB25 | NRPB25 | CONFIRMED |
-| D9 | KobIfdAsk | booking time t <= lockTime | NRPB6 | NRPB6 | CONFIRMED |
+| D9 | KobIfdAsk | booking: the exit's rptUntil counts from the entry UTXO's DAA (its last activity), never from the filler's t (the cycle dated by t instead) | NRPB6 | NRPB6 | CONFIRMED |
 | D10 | KobIfdAsk | repeating entry never terminates on a fill | NRPB7 | NRPB7 | CONFIRMED |
 | D11 | KobIfdAsk | sold out: entry keeps the custody carrier | NRPB8 | NRPB8 | CONFIRMED |
 | D12 | KobIfdAsk | close only with no amount left | NRPB26 | NRPB26 | CONFIRMED |
@@ -264,6 +312,8 @@ Baseline (no mutation): v3_buy_merge_base clean, v2_buy_lifecycle clean, v2_buy_
 | TV-tokdaa | KobCondBid | touch (update: arm on a bid, trail on an ask): exposure counts the evidence ask custody DAA | NTW02 | NTW02 | CONFIRMED |
 | TV-tkcov | KobCondBid | touch (update: arm on a bid, trail on an ask): the custody input tk carries the token covenant id | NTW02b | NTW02b | CONFIRMED |
 | TV-owner | KobCondBid | touch (update: arm on a bid, trail on an ask): the custody input tk is owned by the evidence ask (owner = its covenant id, scheme covenant id) | NTW15, NTW16 | NTW15 NTW16 | CONFIRMED |
+| TV-tktpl | KobCondBid | touch (update: arm on a bid, trail on an ask): the custody input tk is a holder UTXO of the token's program (template hash; P2SH kept) | NTW02c | NTW02c(F) | CONFIRMED |
+| TV-tkp2sh | KobCondBid | touch (update: arm on a bid, trail on an ask): the custody input tk is the P2SH of the holder redeem script read (template hash kept) | NTW02d | NTW02d(F) | CONFIRMED |
 | TV-rule | KobCondBid | update, arm: the evidence bid quotes >= stopPrice | NTV19 | NTV19 | CONFIRMED |
 | TW-k | KobCondBid | update, trail: the evidence ask justifies k >= 1 steps (k = 0 drains keeperTip and resets trailWait, k < 0 moves the stop up) | NTW19, NTW19b | NTW19 NTW19b | CONFIRMED |
 | TW-cap | KobCondBid | update, trail: the ratchet stays above the limit leg (tpPrice) and 0 | NB22b | NB22b | CONFIRMED [positive scenarios rejected: B5c] |
@@ -285,6 +335,8 @@ Baseline (no mutation): v3_buy_merge_base clean, v2_buy_lifecycle clean, v2_buy_
 | TK-tokdaa | KobIfdAsk | touchAsk (sell-stop entry): exposure counts the evidence ask custody DAA | NTK02, NTL02 | NTK02 NTL02 | CONFIRMED |
 | TK-tkcov | KobIfdAsk | touchAsk (sell-stop entry): the custody input tk carries the token covenant id | NTK02b, NTL02b | NTK02b NTL02b | CONFIRMED |
 | TK-owner | KobIfdAsk | touchAsk (sell-stop entry): the custody input tk is owned by the evidence ask (owner = its covenant id, scheme covenant id) | NTK15, NTK16, NTL15, NTL16 | NTK15 NTK16 NTL15 NTL16 | CONFIRMED |
+| TK-tktpl | KobIfdAsk | touchAsk (sell-stop entry): the custody input tk is a holder UTXO of the token's program (template hash; P2SH kept) | NTK02c, NTL02c | NTK02c(F) NTL02c(F) | CONFIRMED |
+| TK-tkp2sh | KobIfdAsk | touchAsk (sell-stop entry): the custody input tk is the P2SH of the holder redeem script read (template hash kept) | NTK02d, NTL02d | NTK02d(F) NTL02d(F) | CONFIRMED |
 | TK-auc | KobIfdAsk | sell-stop entry armed inside its fill with an auction: the fill sells at the stop (the auction opens at the trigger) | NI18b | NI18b | CONFIRMED |
 | TK-rule | KobIfdAsk | settle, unarmed stop entry: the evidence ask quotes <= entryStop | NTK19 | NTK19 | CONFIRMED |
 | TL-rule | KobIfdAsk | update: the evidence ask quotes <= entryStop | NTL19 | NTL19 | CONFIRMED |
@@ -297,6 +349,7 @@ Baseline (no mutation): v3_buy_merge_base clean, v2_buy_lifecycle clean, v2_buy_
 | CB-rearm-proceeds-ceil | KobCondBid | repeat merge: the maker receives the CEIL of its proceeds (c = scale - 1) | NV3CB12 | NV3CB12 | CONFIRMED [positive scenarios rejected: V3CB20] |
 | CB-update-parent | KobCondBid | update (arm / trail) may not run next to the repeat entry (OpCovInputCount(parent) == 0) | NV3CB41 | NV3CB41 | CONFIRMED |
 | CB-merge-0x08 | KobCondBid | repeat merge: the entry pin's fill argument must start with the 8-byte push 0x08 (a non-minimal 9-byte push is refused) | NV3CB40 | NV3CB40(F) | CONFIRMED |
+| CB-rearm-mergek | KobCondBid | re-arm: n < MERGE_K (2^53), so the merge argument -(self * 2^53 + n) names this input and n (a TP fill of 2^53 + m would read as the merge of the booked exit at self + 1) | NV3CB43 | NV3CB43 | CONFIRMED |
 | IA-price-tip | KobIfdAsk | the all-in price is at least the tip (price >= tip), so a booked exit's rptPrice = price - tip is never negative | NV3IA20, NV3IA21 | NV3IA20 NV3IA21 | CONFIRMED |
 | IA-minfill | KobIfdAsk | minFill: n >= minFill unless the fill sells out | NV3IA01 | NV3IA01 | CONFIRMED |
 | IA-proceeds-ceil | KobIfdAsk | the exit receives the CEIL of the seller proceeds (c = scale - 1) | NV3IA10 | NV3IA10 NV3IA11 | CONFIRMED |
@@ -304,6 +357,8 @@ Baseline (no mutation): v3_buy_merge_base clean, v2_buy_lifecycle clean, v2_buy_
 | IA-merge-prefund-ceil | KobIfdAsk | repeat merge floor: the entry keeps at least in + CEIL(m * prefund / scale) | NV3IA12 | NV3IA12 | CONFIRMED |
 | IA-booking-mergek | KobIfdAsk | a booked exit's amount stays below MERGE_K (2^53), so it fits the merge argument without overflowing into k | NV3IA31 | NV3IA31 | CONFIRMED |
 | IA-merge-0x08 | KobIfdAsk | repeat merge: the exit's fill argument (input k) must start with the 8-byte push 0x08 (a non-minimal 9-byte push is refused) | NV3IA40 | NV3IA40(F) | CONFIRMED |
+| IA-merge-scale | KobIfdAsk | repeat merge: the committed exit quotes at the entry's scale (an exit at scale 999 refused: the two would round the merge differently) | NRPB36 | NRPB36 | CONFIRMED |
+| IA-refund-held | KobIfdAsk | refund (settle nb = 0) only while tokens are held: an empty repeating entry with a zero-amount custody would pin no output, so close() is its end | SR1b, SR1c | SR1b SR1c | CONFIRMED |
 
 Collateral flips (scenarios accepted besides the expected ones):
 
@@ -319,7 +374,8 @@ Collateral flips (scenarios accepted besides the expected ones):
 
 ## kron-sell
 
-KRON adapter (protocol v3, sell-side contracts); test binary `kob_kron_v2_tests`; contracts `contracts/adapters/kron/v2`. 139/139 confirmed, 3/3 defence-in-depth held (expected NOT to flip).
+KRON adapter (protocol v3, sell-side contracts); test binary `kob_kron_v2_tests`; contracts `contracts/adapters/kron/v2`. 145/145 confirmed, 3/3 defence-in-depth held (expected NOT to flip).
+Baseline (no mutation): v2_lifecycle_stray_custody clean, v2_lifecycle_auctions_and_kill clean, v2_kron_v23_extra_attacks clean, v2_lifecycle_stop_auction_keeper_trailing clean, v2_negative_trigger_manipulation clean, v3_min_fill clean, v3_merge_push clean, v2_kron_fix_pass_regressions clean, v2_lifecycle_ifd_stop_entry clean, v2_touch_ifd_arm clean, v2_touch_cond_settle clean, v2_repeat_ifd_attacks clean, v2_touch_cond_arm clean, v3_tip clean, v3_merge_limits clean, v3_rounding clean, v2_touch_cond_trail clean, v2_touch_ifd_fill clean.
 
 | id | contract | check ablated | expected | flipped 2433 | flipped 2732 | status |
 |---|---|---|---|---|---|---|
@@ -383,7 +439,7 @@ KRON adapter (protocol v3, sell-side contracts); test binary `kob_kron_v2_tests`
 | R6 | KobIfdBidKron | empty stop entry re-arms unarmed | NRP18 | NRP18 | NRP18 | CONFIRMED |
 | R7 | KobIfdBidKron | merge floor (the budget of m) | NRP15 | NRP15 | NRP15 | CONFIRMED |
 | R8 | KobIfdBidKron | stray scan in merge (shares the fill guard) | NRP24 | NRP24 | NRP24 | CONFIRMED |
-| R9 | KobIfdBidKron | booking time t <= lockTime (CLTV) | NRP6 | NRP6 | NRP6 | CONFIRMED |
+| R9 | KobIfdBidKron | booking: the exit's rptUntil counts from the entry UTXO's DAA (its last activity), never from the filler's t (the cycle dated by t instead) | NRP6 | NRP6 | NRP6 | CONFIRMED |
 | R10 | KobIfdBidKron | repeating entry never terminates on a fill | NRP7 | NRP7 | NRP7 | CONFIRMED |
 | R11 | KobIfdBidKron | continuation floor on a fill | NRP8 | NRP8 | NRP8 | CONFIRMED |
 | R12 | KobIfdBidKron | cycle count decremented | NRP3 | NRP3 | NRP3 | CONFIRMED |
@@ -395,6 +451,7 @@ KRON adapter (protocol v3, sell-side contracts); test binary `kob_kron_v2_tests`
 | FXE1 | KobAskKron | the IOC return is positional (tokOut == tokenIn): no shared remainder, no remainder that is also a bid delivery | FXE1, FXE2 | FXE1 FXE2 | FXE1 FXE2 | CONFIRMED |
 | FXL3a | KobIfdBidKron | the merge requires the exit terms [0..181) (maker, legs) to be the committed exitState | NRP25, NRP27 | NRP25 NRP27 | NRP25 NRP27 | CONFIRMED |
 | FXL3b | KobIfdBidKron | the merge requires parent = this entry and rptPrice = its budget rate | NRP26 | NRP20 NRP26 | NRP20 NRP26 | CONFIRMED |
+| V3-I-scale | KobIfdBidKron | merge: the committed exit (exitState, compared with the exit's state) quotes at the entry's scale (else the exit returns budget(m) at its scale and the entry re-arms m at its own) | NRP30 | NRP30 | NRP30 | CONFIRMED |
 | TA-push08 | KobCondAskKron | touchAsk (settle, stop leg): the evidence sigscript starts with the fixed 8-byte push of its fill argument (0x08) | NTA10 | NTA10 | NTA10 | CONFIRMED |
 | TA-npos | KobCondAskKron | touchAsk (settle, stop leg): the evidence fill argument n > 0 | NTA11 | NTA11 | NTA11 | CONFIRMED |
 | TA-tpl | KobCondAskKron | touchAsk (settle, stop leg): the evidence is an instance of the KobAsk / KobBid template (template hash; P2SH kept) | NTA17 | NTA17 | NTA17 | CONFIRMED |
@@ -409,6 +466,8 @@ KRON adapter (protocol v3, sell-side contracts); test binary `kob_kron_v2_tests`
 | TA-tokdaa | KobCondAskKron | touchAsk (settle, stop leg): exposure counts the evidence ask custody DAA | NTA02 | NTA02 | NTA02 | CONFIRMED |
 | TA-tkcov | KobCondAskKron | touchAsk (settle, stop leg): the custody input tk carries the token covenant id | NTA02b | NTA02b | NTA02b | CONFIRMED |
 | TA-owner | KobCondAskKron | touchAsk (settle, stop leg): the custody input tk is owned by the evidence ask (owner = its covenant id, scheme covenant id) | NTA15, NTA16 | NTA15 NTA16 | NTA15 NTA16 | CONFIRMED |
+| TA-tktpl | KobCondAskKron | touchAsk (settle, stop leg): the custody input tk is a holder UTXO of the token's program (template hash; P2SH kept) | NTA02c | NTA02c(F) | NTA02c(F) | CONFIRMED |
+| TA-tkp2sh | KobCondAskKron | touchAsk (settle, stop leg): the custody input tk is the P2SH of the holder redeem script read (template hash kept) | NTA02d | NTA02d(F) | NTA02d(F) | CONFIRMED |
 | TA-rule | KobCondAskKron | settle, unarmed stop leg: the evidence ask quotes <= stopPrice | NTA19, NT3 | NTA19 NT3 | NTA19 NT3 | CONFIRMED |
 | TU-push08 | KobCondAskKron | touch (update: arm on an ask, trail on a bid): the evidence sigscript starts with the fixed 8-byte push of its fill argument (0x08) | NTU10, NTT10, NTT11 | NTU10 NTT10 NTT11 | NTU10 NTT10 NTT11 | CONFIRMED |
 | TU-npos | KobCondAskKron | touch (update: arm on an ask, trail on a bid): the evidence fill argument n > 0 | NTU11 | NTU11 | NTU11 | CONFIRMED |
@@ -424,6 +483,8 @@ KRON adapter (protocol v3, sell-side contracts); test binary `kob_kron_v2_tests`
 | TU-tokdaa | KobCondAskKron | touch (update: arm on an ask, trail on a bid): exposure counts the evidence ask custody DAA | NTU02 | NTU02 | NTU02 | CONFIRMED |
 | TU-tkcov | KobCondAskKron | touch (update: arm on an ask, trail on a bid): the custody input tk carries the token covenant id | NTU02b | NTU02b | NTU02b | CONFIRMED |
 | TU-owner | KobCondAskKron | touch (update: arm on an ask, trail on a bid): the custody input tk is owned by the evidence ask (owner = its covenant id, scheme covenant id) | NTU15, NTU16 | NTU15 NTU16 | NTU15 NTU16 | CONFIRMED |
+| TU-tktpl | KobCondAskKron | touch (update: arm on an ask, trail on a bid): the custody input tk is a holder UTXO of the token's program (template hash; P2SH kept) | NTU02c | NTU02c(F) | NTU02c(F) | CONFIRMED |
+| TU-tkp2sh | KobCondAskKron | touch (update: arm on an ask, trail on a bid): the custody input tk is the P2SH of the holder redeem script read (template hash kept) | NTU02d | NTU02d(F) | NTU02d(F) | CONFIRMED |
 | TU-rule | KobCondAskKron | update, arm: the evidence ask quotes <= stopPrice | NTU19 | NTU19 | NTU19 | CONFIRMED |
 | TT-k | KobCondAskKron | update, trail: the evidence bid justifies k >= 1 steps (rp >= stop + step + gap; k = 0 drains keeperTip and resets trailWait, k < 0 moves the stop down) | NTT19, NTT19b | NTT19 NTT19b | NTT19 NTT19b | CONFIRMED |
 | TT-wait | KobCondAskKron | update, trail: at most once per trailWait DAA (CSV) | NT15 | NT15 | NT15 | CONFIRMED |
@@ -461,6 +522,7 @@ KRON adapter (protocol v3, sell-side contracts); test binary `kob_kron_v2_tests`
 | V3-C-tip | KobCondAskKron | legPrice >= tip (either leg) | V3CA04, V3CA04b | V3CA04 V3CA04b | V3CA04 V3CA04b | CONFIRMED |
 | V3-C-push | KobCondAskKron | the entry's sigscript starts with 0x08 (its merge argument is an 8-byte push; a fill of n >= 2^55 pushed by OP_PUSHDATA1 would alias a merge value; the KRON token refuses such amounts, so the exit input alone proves it) | V3CA06; stay rejected: NRP28 | V3CA06(F) | V3CA06(F) | CONFIRMED |
 | V3-C-parent | KobCondAskKron | update never next to the repeat entry (OpCovInputCount(parent) == 0): an 8-byte ev push would alias the merge amount | V3CA05; stay rejected: NRP22 | V3CA05 | V3CA05 | CONFIRMED |
+| V3-C-mergek | KobCondAskKron | re-arm: the exit sells n < 2^53 (the merge argument -(self * 2^53 + n) names this input and n only then: an exit of 2^53 + m at input i reads the merge of the booked exit at input i + 1 as its own; the KRON token refuses custodies above 10^9, so the exit input alone proves it) | V3CA09 | V3CA09(F) | V3CA09(F) | CONFIRMED |
 | V3-I-floor | KobIfdBidKron | the maker pays the floor (spend c = 0 -> scale - 1) | V3IB02 | V3IB02 | V3IB02 | CONFIRMED |
 | V3-I-mergeceil | KobIfdBidKron | merge floor: the budget of m comes back rounded up (c = scale - 1 -> 0) | V3IB03 | V3IB03 | V3IB03 | CONFIRMED |
 | V3-I-push | KobIfdBidKron | the exit's sigscript starts with 0x08 (its settle n is an 8-byte push; a refund pushed by OP_PUSHDATA1 would read as m = 8) | V3IB04; stay rejected: NRP22 | V3IB04 | V3IB04 | CONFIRMED |
@@ -481,8 +543,8 @@ Collateral flips (scenarios accepted besides the expected ones):
 
 ## kron-buy
 
-KRON adapter (v3, buy-side contracts); test binary `kob_kron_v2_buy_tests`; contracts `contracts/adapters/kron/v2`. 103/103 confirmed, 4/4 defence-in-depth held (expected NOT to flip).
-Baseline (no mutation): kron_v2_buy_lifecycle clean, kron_v2_buy_touch_cond_arm clean, kron_v2_buy_touch_cond_trail clean, kron_v2_buy_trail_cap_attack clean, kron_v2_buy_negative clean, kron_v2_buy_v3_min_fill clean, kron_v2_buy_v3_rounding clean, kron_v2_buy_v3_merge_push clean, kron_v2_buy_lifecycle_dust_custody clean, kron_v2_buy_repeat_ifd_attacks clean, kron_v2_buy_touch_ifd_arm clean, kron_v2_buy_v3_tip clean, kron_v2_buy_touch_cond_settle clean, kron_v2_buy_touch_ifd_fill clean.
+KRON adapter (v3, buy-side contracts); test binary `kob_kron_v2_buy_tests`; contracts `contracts/adapters/kron/v2`. 110/110 confirmed, 4/4 defence-in-depth held (expected NOT to flip; IA24 after the NRPB2 fix, re-run alone).
+Baseline (no mutation): kron_v2_buy_touch_cond_arm clean, kron_v2_buy_touch_cond_trail clean, kron_v2_buy_trail_cap_attack clean, kron_v2_buy_lifecycle clean, kron_v2_buy_v3_min_fill clean, kron_v2_buy_v3_rounding clean, kron_v2_buy_v3_merge_push clean, kron_v2_buy_lifecycle_dust_custody clean, kron_v2_buy_negative clean, kron_v2_buy_repeat_ifd_attacks clean, kron_v2_buy_v3_tip clean, kron_v2_buy_touch_ifd_arm clean, kron_empty_repeating_ifda_refund_is_refused clean, kron_v2_buy_touch_cond_settle clean, kron_v2_buy_touch_ifd_fill clean.
 
 | id | contract | check ablated | expected | flipped 2433 | flipped 2732 | status |
 |---|---|---|---|---|---|---|
@@ -493,7 +555,7 @@ Baseline (no mutation): kron_v2_buy_lifecycle clean, kron_v2_buy_touch_cond_arm 
 | CB4 | KobCondBidKron | stop auction: require(t >= newArmed) (origin bound) | NB29 | NB29 | NB29 | CONFIRMED |
 | CB5 | KobCondBidKron | settle: continuation value >= keep | NB27, NB1, NB4 | NB27 NB1 NB4 | NB27 NB1 NB4 | CONFIRMED |
 | CB6 | KobCondBidKron | settle: continuation script == contSpk (auction origin carried, no restart) | NB28, NB15, NB16 | NB28 NB15 NB16 | NB28 NB15 NB16 | CONFIRMED |
-| CB7 | KobCondBidKron | update: keeper takes at most keeperTip (value >= in - keeperTip) | NB30, NB25 | NB30 NB25 | NB30 NB25 | CONFIRMED |
+| CB7 | KobCondBidKron | update: keeper takes at most keeperTip (the continuation keeps at least in - keeperTip, floorOut); NB30 / NB25 (an escrow of exactly the budget) stay refused by the budget floor (need), NB30c (a tip funded beyond the budget) is refused by this bound only | NB30c; stay rejected: NB30, NB25 | NB30c | NB30c | CONFIRMED |
 | CB8 | KobCondBidKron | trail: cap step count below the limit leg (k = min(k, kf)) | NB22b | NB22b | NB22b | CONFIRMED |
 | CB9 | KobCondBidKron | repeat: stop-leg fill refuses the entry (require(present == 0)) | NRPB13 | NRPB13 | NRPB13 | CONFIRMED |
 | CB10 | KobCondBidKron | repeat: TP without the entry only from rptUntil | NRPB10 | NRPB10 | NRPB10 | CONFIRMED |
@@ -506,6 +568,7 @@ Baseline (no mutation): kron_v2_buy_lifecycle clean, kron_v2_buy_touch_cond_arm 
 | CB-spendround | KobCondBidKron | v3: the buy spend is rounded DOWN (the maker pays at most the floor); ceil would let the filler keep one sompi more | NV3CB10 | NV3CB10 | NV3CB10 | CONFIRMED |
 | CB-updateparent | KobCondBidKron | v3: an exit never arms/trails next to its repeat entry (require(OpCovInputCount(parent) == 0)) | NV3CB41 | NV3CB41 | NV3CB41 | CONFIRMED |
 | CB-pin08 | KobCondBidKron | v3: the repeat entry pin starts with the 8-byte merge push (0x08); a 9-byte push whose low 8 bytes alias the merge argument passes the value check but not this one | NV3CB42 | NV3CB42(F) | NV3CB42(F) | CONFIRMED |
+| CB-rearm-mergek | KobCondBidKron | v3: re-arm: n < MERGE_K (2^53), so the merge argument -(self * 2^53 + n) names this input and n (a TP fill of 2^53 + m would read as the merge of the booked exit at self + 1; the re-arm moves no tokens of its own, so the KRON amount cap does not stop it) | NV3CB43 | NV3CB43 | NV3CB43 | CONFIRMED |
 | IA1 | KobIfdAskKron | settle: custody holds exactly amountLeft base units (amount check) | NS15b, NRPB25 | NS15b NRPB25 | NS15b NRPB25 | CONFIRMED |
 | IA2 | KobIfdAskKron | settle: noStrays(selfId, custody) call | NS13, NS14, NRPB24, NRPB24b | NS13 NS14 NRPB24 NRPB24b | NS13 NS14 NRPB24 NRPB24b | CONFIRMED |
 | IA2b | KobIfdAskKron | noStrays: scan bound require(cnt <= MAX_TOK_IN) | KI-P3b | KI-P3b(F) | KI-P3b(F) | CONFIRMED |
@@ -521,7 +584,7 @@ Baseline (no mutation): kron_v2_buy_lifecycle clean, kron_v2_buy_touch_cond_arm 
 | IA10 | KobIfdAskKron | minFill: require(n >= minFill \|\| outAmount == 0) | NI20 | NI20 | NI20 | CONFIRMED |
 | IA11 | KobIfdAskKron | exit funded with proceeds + prefund + carrier (auction price paid) | NI18, NI6 | NI18b NI18 NI6 | NI18b NI18 NI6 | CONFIRMED |
 | IA12 | KobIfdAskKron | continuation script == contSpk (auction origin, cycle count, amount, unarmed re-arm) | NI19, NRPB3, NRPB19, NRPB19b, NRPB19c, NRPB19d | NI19 NRPB3 NRPB19 NRPB19b NRPB19c NRPB19d NRPB35 | NI19 NRPB3 NRPB19 NRPB19b NRPB19c NRPB19d NRPB35 | CONFIRMED |
-| IA13 | KobIfdAskKron | booking time: require(tx.daa >= t) before dating rptUntil | NRPB6 | NRPB6 | NRPB6 | CONFIRMED |
+| IA13 | KobIfdAskKron | booking: the exit's rptUntil counts from the entry UTXO's DAA (its last activity), never from the filler's t (the cycle dated by t instead) | NRPB6 | NRPB6 | NRPB6 | CONFIRMED |
 | IA14 | KobIfdAskKron | booking: rptAmount decremented by n | NRPB3 | NRPB3 | NRPB3 | CONFIRMED |
 | IA15 | KobIfdAskKron | repeating entry never terminates on a fill (outAmount > 0 \|\| rptAmount > 0) | NRPB7 | NRPB7 | NRPB7 | CONFIRMED |
 | IA16 | KobIfdAskKron | sold-out repeating entry keeps the custody carrier (floor + tokenIn value) | NRPB8 | NRPB8 | NRPB8 | CONFIRMED |
@@ -532,7 +595,7 @@ Baseline (no mutation): kron_v2_buy_lifecycle clean, kron_v2_buy_touch_cond_arm 
 | IA21 | KobIfdAskKron | merge: custody carrier kept (tokOut value >= keepCarrier) | NRPB16b, NRPB16c | NRPB16b NRPB16c | NRPB16b NRPB16c | CONFIRMED |
 | IA22 | KobIfdAskKron | token output pin (custody / remainder / refund state: owner, amount, type) | NRPB17, NRPB18 | NRPB17 NRPB18 | NRPB17 NRPB18 | CONFIRMED |
 | IA23 | KobIfdAskKron | merge into an empty stop entry re-arms unarmed (newArmed = 0) | NRPB19d | NRPB19d | NRPB19d | CONFIRMED |
-| IA24 | KobIfdAskKron | booking, both binds of the exit removed: exit script equality AND exit genesis id (NI4 is rejected by the covenant rules independently of both) | NRPB1, NRPB2, NRPB4, NRPB4b, NRPB5, NI1, NI2, NI2b, NI3, NI3b, NI5 | NRPB1 NRPB2 NRPB4 NRPB4b NRPB5 NI1 NI2 NI2b NI3 NI3b NI5 | NRPB1 NRPB2 NRPB4 NRPB4b NRPB5 NI1 NI2 NI2b NI3 NI3b NI5 | CONFIRMED |
+| IA24 | KobIfdAskKron | booking, both binds of the exit removed: exit script equality AND exit genesis id (NI4 is rejected by the covenant rules independently of both) | NRPB1, NRPB2, NRPB4, NRPB4b, NRPB5, NI1, NI2, NI2b, NI3, NI3b, NI5 | NRPB1 NRPB2 NRPB4 NRPB4b NRPB5 NRPB6 NI1 NI2 NI2b NI3 NI3b NI5 | NRPB1 NRPB2 NRPB4 NRPB4b NRPB5 NRPB6 NI1 NI2 NI2b NI3 NI3b NI5 | CONFIRMED |
 | IA24a | KobIfdAskKron | ONLY the exit script equality removed: the genesis id binds the exit script too (defence in depth) | stay rejected: NRPB1, NRPB4, NRPB5, NI1, NI2, NI2b |  |  | held (defence in depth) |
 | IA24b | KobIfdAskKron | ONLY the exit genesis id removed: double / aliased / attacker-authorised exits are accepted; the script equality still binds the tampered / plain / altered exits | NI3, NI3b, NI5; stay rejected: NI1, NI2, NI2b, NRPB1, NRPB4, NRPB5 | NI3 NI3b NI5 | NI3 NI3b NI5 | CONFIRMED |
 | IA-minfill | KobIfdAskKron | v3: minimum fill (n >= minFill unless the fill sells out) | NV3IA01 | NV3IA01 | NV3IA01 | CONFIRMED |
@@ -541,6 +604,7 @@ Baseline (no mutation): kron_v2_buy_lifecycle clean, kron_v2_buy_touch_cond_arm 
 | IA-mergeround | KobIfdAskKron | v3: a re-arming buy-back returns at least ceil(prefund of m) to the entry | NV3IA12 | NV3IA12 | NV3IA12 | CONFIRMED |
 | IA-pricetip | KobIfdAskKron | v3: a sell entry requires price >= tip (so p >= price >= tip; a booked rptPrice = price - tip is never negative) | NV3IA21 | NV3IA21 | NV3IA21 | CONFIRMED |
 | IA-k08 | KobIfdAskKron | v3: the booked exit at k starts with the 8-byte fill push (0x08); a 9-byte push whose low 8 bytes alias m passes the value check and the exit-terms comparison but not this one | NV3IA40; stay rejected: NRPB32 | NV3IA40(F) | NV3IA40(F) | CONFIRMED |
+| IA-merge-scale | KobIfdAskKron | v3: the merge requires the committed exit to quote at the entry's scale (exitState [118..126); an exit at scale 999 refused: the two would round the merge differently) | NRPB36 | NRPB36 | NRPB36 | CONFIRMED |
 | FXL3c | KobIfdAskKron | the merge requires the exit terms [0..190) (maker, legs) to be the committed exitState | NRPB29 | NRPB29 | NRPB29 | CONFIRMED |
 | FXL3d | KobIfdAskKron | the merge requires parent = this entry, rptPrice and rptPre = its own (exit tail [288..340)) | NRPB30 | NRPB20 NRPB30 | NRPB20 NRPB30 | CONFIRMED |
 | FXL3e | KobIfdAskKron | the merge requires the exit to run its settle with n = m (sigscript [1..9)); NRPB33: an arming update of the exit whose ev is pushed as 0x08 \|\| ev is no settle | NRPB33; stay rejected: NRPB32 | NRPB33(F) | NRPB33(F) | CONFIRMED |
@@ -571,6 +635,8 @@ Baseline (no mutation): kron_v2_buy_lifecycle clean, kron_v2_buy_touch_cond_arm 
 | TV-tokdaa | KobCondBidKron | touch (update: arm on a bid, trail on an ask): exposure counts the evidence ask custody DAA | NTW02 | NTW02 | NTW02 | CONFIRMED |
 | TV-tkcov | KobCondBidKron | touch (update: arm on a bid, trail on an ask): the custody input tk carries the token covenant id | NTW02b | NTW02b | NTW02b | CONFIRMED |
 | TV-owner | KobCondBidKron | touch (update: arm on a bid, trail on an ask): the custody input tk is owned by the evidence ask (owner = its covenant id, scheme covenant id) | NTW15, NTW16 | NTW15 NTW16 | NTW15 NTW16 | CONFIRMED |
+| TV-tktpl | KobCondBidKron | touch (update: arm on a bid, trail on an ask): the custody input tk is a holder UTXO of the token's program (template hash; P2SH kept) | NTW02c | NTW02c(F) | NTW02c(F) | CONFIRMED |
+| TV-tkp2sh | KobCondBidKron | touch (update: arm on a bid, trail on an ask): the custody input tk is the P2SH of the holder redeem script read (template hash kept) | NTW02d | NTW02d(F) | NTW02d(F) | CONFIRMED |
 | TV-rule | KobCondBidKron | update, arm: the evidence bid quotes >= stopPrice | NTV19 | NTV19 | NTV19 | CONFIRMED |
 | TW-k | KobCondBidKron | update, trail: the evidence ask justifies k >= 1 steps (k = 0 drains keeperTip and resets trailWait, k < 0 moves the stop up) | NTW19, NTW19b | NTW19 NTW19b | NTW19 NTW19b | CONFIRMED |
 | TW-step | KobCondBidKron | update, trail: trailStep > 0 (a non-trailing order divides by trailStep = 0 and fails anyway) | stay rejected: NB24, NTV06 |  |  | held (defence in depth) |
@@ -589,10 +655,13 @@ Baseline (no mutation): kron_v2_buy_lifecycle clean, kron_v2_buy_touch_cond_arm 
 | TK-tokdaa | KobIfdAskKron | touchAsk (sell-stop entry): exposure counts the evidence ask custody DAA | NTK02, NTL02 | NTK02 NTL02 | NTK02 NTL02 | CONFIRMED |
 | TK-tkcov | KobIfdAskKron | touchAsk (sell-stop entry): the custody input tk carries the token covenant id | NTK02b, NTL02b | NTK02b NTL02b | NTK02b NTL02b | CONFIRMED |
 | TK-owner | KobIfdAskKron | touchAsk (sell-stop entry): the custody input tk is owned by the evidence ask (owner = its covenant id, scheme covenant id) | NTK15, NTK16, NTL15, NTL16 | NTK15 NTK16 NTL15 NTL16 | NTK15 NTK16 NTL15 NTL16 | CONFIRMED |
+| TK-tktpl | KobIfdAskKron | touchAsk (sell-stop entry): the custody input tk is a holder UTXO of the token's program (template hash; P2SH kept) | NTK02c, NTL02c | NTK02c(F) NTL02c(F) | NTK02c(F) NTL02c(F) | CONFIRMED |
+| TK-tkp2sh | KobIfdAskKron | touchAsk (sell-stop entry): the custody input tk is the P2SH of the holder redeem script read (template hash kept) | NTK02d, NTL02d | NTK02d(F) NTL02d(F) | NTK02d(F) NTL02d(F) | CONFIRMED |
 | TL-rule | KobIfdAskKron | update: the evidence ask quotes <= entryStop | NTL19 | NTL19 | NTL19 | CONFIRMED |
 | TL-amount | KobIfdAskKron | update: the entry has base units to fill (an empty repeating entry would pay keeperTip for a useless arm) | NTL24 | NTL24 | NTL24 | CONFIRMED |
 | TL-limit | KobIfdAskKron | update: the stop is on the limit's side (entryStop >= price; else no fill can follow the arm) | NTL25 | NTL25 | NTL25 | CONFIRMED |
 | TL-origin | KobIfdAskKron | merge into an entry armed by update (armed 1, band): the continuation records the band origin (else the auction restarts) | NRPB35 | NRPB35 | NRPB35 | CONFIRMED [positive scenarios rejected: RPB10] |
+| IA-refund-held | KobIfdAskKron | refund (settle nb = 0) only while tokens are held: an empty repeating entry with a zero-amount custody would pin no output, so close() is its end (inputOnly: whether the KRON program itself takes the zero-amount custody is not what this check decides) | SR2 | SR2(F) | SR2(F) | CONFIRMED |
 
 Collateral flips (scenarios accepted besides the expected ones):
 
@@ -600,6 +669,7 @@ Collateral flips (scenarios accepted besides the expected ones):
 - IA12: NRPB35
 - IA19: NRPB31
 - IA20: NRPB31
+- IA24: NRPB6
 - FXL3d: NRPB20
 - TB-push08: NTB11
 
@@ -705,8 +775,8 @@ Collateral flips (scenarios accepted besides the expected ones):
 
 ## cond-pair
 
-pair orders: KobCondPair (excl. repeat merges); test binary `kob_cond_pair_tests`; contracts `contracts/v2`. 112/112 confirmed, 10/10 defence-in-depth held (expected NOT to flip).
-Baseline (no mutation): cond_pair_lifecycle clean, cond_pair_settlement clean, cond_pair_updates clean, cond_pair_evidence_ev0 clean, cond_pair_evidence_ev1 clean, cond_pair_evidence_exposure clean, cond_pair_evidence_tk clean, cond_pair_trailing clean, cond_pair_fills clean, cond_pair_overflow clean, cond_pair_custody clean, cond_pair_evidence_misc clean, cond_pair_carriers clean.
+pair orders: KobCondPair (excl. repeat merges); test binary `kob_cond_pair_tests`; contracts `contracts/v2`. 116/116 confirmed, 10/10 defence-in-depth held (expected NOT to flip).
+Baseline (no mutation): cond_pair_updates clean, cond_pair_lifecycle clean, cond_pair_settlement clean, cond_pair_evidence_ev1 clean, cond_pair_evidence_ev0 clean, cond_pair_evidence_tk clean, cond_pair_evidence_exposure clean, cond_pair_trailing clean, cond_pair_fills clean, cond_pair_overflow clean, cond_pair_custody clean, cond_pair_evidence_misc clean, cond_pair_carriers clean.
 
 | id | contract | check ablated | expected | flipped | status |
 |---|---|---|---|---|---|
@@ -746,6 +816,8 @@ Baseline (no mutation): cond_pair_lifecycle clean, cond_pair_settlement clean, c
 | EVTKDAA | KobCondPair | rd: the ask evidence's custody DAA exposure term | NC51a | NC51a | CONFIRMED |
 | EVTK | KobCondPair | rd: the ask evidence's custody is a token input of its token | NC59a | NC59a | CONFIRMED |
 | EVTKOWN | KobCondPair | rd: the ask evidence's custody is owned by the evidence ask (covenant marker) | NC57a | NC57a | CONFIRMED |
+| EVTKTPL | KobCondPair | rd: the ask / pair evidence's custody is a holder of the token's program (template hash; P2SH kept): an old look-alike holder of another program refused | NC5Ha, NC3Ha, NC3Hb | NC5Ha(F) NC3Ha(F) NC3Hb(F) | CONFIRMED |
+| EVTKP2SH | KobCondPair | rd: the ask / pair evidence's custody is the P2SH of the holder redeem it shows (template hash kept): an old non-P2SH input with the genuine redeem refused | NC5Sa, NC3Sa, NC3Sb | NC5Sa(F) NC3Sa(F) NC3Sb(F) | CONFIRMED |
 | EVBPUSH | KobCondPair | evLeg: the B evidence sigscript starts with the 8-byte fill push (a cancel ground to read as a fill) | NC5Da, NC5Db | NC5Da NC5Db | CONFIRMED |
 | EVBN | KobCondPair | evLeg: the B evidence is filled (n > 0) | NC2Na, NC2Nb | NC2Na(F) NC2Nb(F) | CONFIRMED |
 | EVBMT | KobCondPair | evLeg: n_B >= ceil(minTouch * stop / scale(A)) | NC25a, NC25b | NC25a(F) NC25b(F) | CONFIRMED |
@@ -758,8 +830,10 @@ Baseline (no mutation): cond_pair_lifecycle clean, cond_pair_settlement clean, c
 | EVBTKDAA | KobCondPair | evLeg: the ask evidence's custody DAA exposure term | NC51b | NC51b | CONFIRMED |
 | EVBTK | KobCondPair | evLeg: the ask evidence's custody is a token input of its token | NC59b | NC59b | CONFIRMED |
 | EVBTKOWN | KobCondPair | evLeg: the ask evidence's custody is owned by the evidence ask | NC57b | NC57b | CONFIRMED |
-| EVHASH | KobCondPair | the evidence template hash (a look-alike P2SH redeem; the wrong side and a wrong input are also refused by the P2SH check or the fill push) | NC58; stay rejected: NC54, NC55, NC56, NC26a, NC26b | NC58 | CONFIRMED |
-| EVP2SH | KobCondPair | the evidence is a P2SH spend of the redeem it shows (a planted UTXO with genuine redeem bytes) | NC5P; stay rejected: NC54, NC55, NC56, NC26a, NC26b | NC5P | CONFIRMED |
+| EVBTKTPL | KobCondPair | evLeg: the B ask evidence's custody is a holder of token B's program (template hash; P2SH kept): an old look-alike holder of another program refused | NC5Hb | NC5Hb(F) | CONFIRMED |
+| EVBTKP2SH | KobCondPair | evLeg: the B ask evidence's custody is the P2SH of the holder redeem it shows (template hash kept): an old non-P2SH input with the genuine redeem refused | NC5Sb | NC5Sb(F) | CONFIRMED |
+| EVHASH | KobCondPair | the evidence template hash (a look-alike P2SH redeem; the wrong side and a wrong input are also refused by the P2SH check or the fill push) | NC58; stay rejected: NC54, NC55, NC56, NC26a, NC26b | NC5Ha(F) NC3Ha(F) NC5Hb(F) NC3Hb(F) NC58 | CONFIRMED |
+| EVP2SH | KobCondPair | the evidence is a P2SH spend of the redeem it shows (a planted UTXO with genuine redeem bytes) | NC5P; stay rejected: NC54, NC55, NC56, NC26a, NC26b | NC5Sa(F) NC3Sa(F) NC5Sb(F) NC3Sb(F) NC5P | CONFIRMED |
 | EVARM | KobCondPair | the implied rate reaches the stop / the trail is valid (a >= q hi, a <= q lo) | NC36a, NC36b, NC60a, NC60b | NC36a(F) NC36b(F) NC60a NC60b | CONFIRMED |
 | TRMAX | KobCondPair | the trail is maximal (a < q2 hi, a > q2 lo) | NC61a, NC61b | NC61a NC61b | CONFIRMED |
 | EVARMH | KobCondPair | hi branch: a buy stop arms only at a rate >= its stop; a sell stop trails only to a valid stop | NC36b, NC60a | NC36b(F) NC60a | CONFIRMED |
@@ -831,30 +905,28 @@ Baseline (no mutation): cond_pair_lifecycle clean, cond_pair_settlement clean, c
 | TRGAP | KobCondPair | trailGap >= 0 (hostile field: a sell stop would trail above the rate) | NC143 | NC143 | CONFIRMED |
 | TRSTEP | KobCondPair | trailStep > 0: defence in depth (a zero / negative step makes validity and maximality contradict) | stay rejected: NC144 |  | held (defence in depth) |
 | TRX | KobCondPair | a buy stop's s' - gap >= 0: defence in depth (a negative x makes the validity a <= floor(x * b / sB) fail) | stay rejected: NC145 |  | held (defence in depth) |
-| EVTPL | KobCondPair | evidence template hash and P2SH both removed: the wrong side (the order own counterparties) and the order / a token / a P2PK input are still refused (state read at the other template offsets fails the token / scale identity; the fill push refuses token / P2PK inputs) | stay rejected: NC26a, NC26b, NC54, NC55, NC56 | NC58 NC5P | held (defence in depth) |
+| EVTPL | KobCondPair | evidence template hash and P2SH both removed: the wrong side (the order own counterparties) and the order / a token / a P2PK input are still refused (state read at the other template offsets fails the token / scale identity; the fill push refuses token / P2PK inputs) | stay rejected: NC26a, NC26b, NC54, NC55, NC56 | NC5Ha(F) NC5Sa(F) NC3Ha(F) NC3Sa(F) NC5Hb(F) NC5Sb(F) NC3Hb(F) NC3Sb(F) NC58 NC5P | held (defence in depth) |
 
 Collateral flips (scenarios accepted besides the expected ones):
 
 - G2: NC18t0 NC18t1 NC18t2 NC18t3 NC18t4 NC18t5 NC18t6 NC18t7 NC19t
 - GS0: NC09a NC09b
 - GS1: NC06a NC07a NC08a NC06b NC07b NC08b
-- EVTPL: NC58 NC5P
+- EVHASH: NC5Ha NC3Ha NC5Hb NC3Hb
+- EVP2SH: NC5Sa NC3Sa NC5Sb NC3Sb
+- EVTPL: NC5Ha NC5Sa NC3Ha NC3Sa NC5Hb NC5Sb NC3Hb NC3Sb NC58 NC5P
 
-## ifd-pair (partial)
+## ifd-pair
 
-Two runs of the catalog as it stood then (the entries changed afterwards are listed above).
-
-### Run 1: IF1..IF22 and cond-pair-rpt CR1, CR2
-
-KobIfdPair pair order; test binary `kob_ifd_pair_tests`; contracts `contracts/v2`. 21/21 confirmed, 2/2 defence-in-depth held (expected NOT to flip).
-Baseline (no mutation): ifd_fill_buy clean, ifd_fill_sell clean, ifd_update clean, ifd_custody clean, ifd_strays clean, ifd_encoding clean, ifd_aliasing clean, ifd_exit_genesis clean, ifd_evidence clean, ifd_merge clean, ifd_refund clean.
+KobIfdPair pair order; test binary `kob_ifd_pair_tests`; contracts `contracts/v2`. 122/122 confirmed, 4/4 defence-in-depth held (expected NOT to flip).
+Baseline (no mutation): ifd_fill_sell clean, ifd_fill_buy clean, ifd_update clean, ifd_strays clean, ifd_custody clean, ifd_encoding clean, ifd_aliasing clean, ifd_exit_genesis clean, ifd_merge_rules clean, ifd_refund clean, ifd_evidence clean, ifd_merge clean, ifd_hostile clean, ifd_update_rules clean, ifd_refund_rules clean, ifd_ev_template clean, ifd_outputs clean, ifd_stray_slots clean, ifd_custody_marks clean, ifd_fill_rules clean, ifd_ev_tk clean, ifd_ev_battery clean, ifd_merge_refund clean, ifd_limits clean.
 
 | id | contract | check ablated | expected | flipped | status |
 |---|---|---|---|---|---|
 | IF1 | KobIfdPair | buy-first: the B released is at most floor(n * p / scale(A)) | NI01 | NI01 | CONFIRMED |
 | IF2 | KobIfdPair | sell-first: the proceeds put into the exit custody are at least ceil(n * p / scale(A)) | NI05 | NI05 | CONFIRMED |
 | IF3 | KobIfdPair | the exit custody (output i) carries deliveryCarrier | NI03, NI06 | NI03 NI06 | CONFIRMED |
-| IF4 | KobIfdPair | the continuation holds at least its floor (also the update keeper floor, NI30) | NI04, NI07 | NI04 NI07 | CONFIRMED |
+| IF4 | KobIfdPair | the continuation holds at least its floor (also the update keeper floor, NI30) | NI04, NI07, NIM5 | NI04 NI07 NIM5 | CONFIRMED |
 | IF12 | KobIfdPair | an arming keeper takes at most keeperTip from the entry UTXO | NI30 | NI30 | CONFIRMED |
 | IF5 | KobIfdPair | each custody (A, B escrow, B prefund) holds exactly its state amount (heldGx) | NI09, NI10, NI11 | NI09 NI10 NI11 | CONFIRMED |
 | IF6 | KobIfdPair | no input of A owned by this id other than the A custody (fill, update) | NI12, NI15 | NI12 NI15 | CONFIRMED |
@@ -874,28 +946,6 @@ Baseline (no mutation): ifd_fill_buy clean, ifd_fill_sell clean, ifd_update clea
 | IF22 | KobIfdPair | evLeg(): the mode-0 B leg (a KAS-book order of B) was exposed >= minRestDaa before the fill | NEV2 | NEV2 | CONFIRMED |
 | IF15 | KobIfdPair | refund only from the expiry / 90-day idle time | NI33 | NI33 | CONFIRMED |
 | IF16 | KobIfdPair | refund pays the maker everything but refundTip | NI34 | NI34 | CONFIRMED |
-
-Collateral flips (scenarios accepted besides the expected ones):
-
-- IF9b: NI19
-
-#### cond-pair-rpt
-
-KobCondPair repeat / merge (exit of KobIfdPair); test binary `kob_ifd_pair_tests`; contracts `contracts/v2`. 2/2 confirmed.
-Baseline (no mutation): cond_rpt_profit clean, cond_rpt_until clean.
-
-| id | contract | check ablated | expected | flipped | status |
-|---|---|---|---|---|---|
-| CR1 | KobCondPair | a re-arming take-profit pays the maker exactly its profit dOut at output i (ASK exit: tOut - budget). Removing the maker-delivery pin lets the re-arm skim the profit. | NCR1 | NCR1 | CONFIRMED |
-| CR2 | KobCondPair | a booked exit (parent set) takes profit on leg 0 without its entry present only once tx.daa >= rptUntil; before that it must run together with its entry merge | NCRU | NCRU | CONFIRMED |
-
-### Run 2: IF23..IF65 (IF8b, IF61 not confirmed in this run, since re-split / rebuilt, not re-run)
-
-KobIfdPair pair order; test binary `kob_ifd_pair_tests`; contracts `contracts/v2`. 42/44 confirmed, 2 not confirmed.
-Baseline (no mutation): ifd_outputs clean, ifd_fill_rules clean, ifd_exit_genesis clean, ifd_aliasing clean, ifd_merge clean, ifd_hostile clean, ifd_update_rules clean, ifd_encoding clean, ifd_refund_rules clean.
-
-| id | contract | check ablated | expected | flipped | status |
-|---|---|---|---|---|---|
 | IF23 | KobIfdPair | a fill waits for activeFrom (CLTV) | NIF01 | NIF01 | CONFIRMED |
 | IF24 | KobIfdPair | n <= amountLeft (a fill of amountLeft + 1 would write an exit of more than the entry holds / buys) | NIF02 | NIF02 | CONFIRMED |
 | IF25 | KobIfdPair | n >= minFill unless the fill takes everything left (one base unit below minFill refused) | NIF03 | NIF03 | CONFIRMED |
@@ -907,7 +957,7 @@ Baseline (no mutation): ifd_outputs clean, ifd_fill_rules clean, ifd_exit_genesi
 | IF31 | KobIfdPair | the auction time t is proven by CLTV (tx.daa >= t) | NIF09 | NIF09 | CONFIRMED |
 | IF32 | KobIfdPair | the auction time t is not before the auction origin | NIF10 | NIF10 | CONFIRMED |
 | IF33 | KobIfdPair | the entry quote p is positive (a price-0 entry never trades) | NIF11 | NIF11 | CONFIRMED |
-| IF34 | KobIfdPair | a booking dates its cycle by a CLTV-proven t (rptUntil cannot be pushed out) | NIF13 | NIF13 | CONFIRMED |
+| IF34 | KobIfdPair | a booking dates its cycle (rptUntil) by the entry UTXO's DAA, never by the filler's t argument (dated by t, a filler pushes rptUntil out) | NIF13 | NIF13 | CONFIRMED |
 | IF35 | KobIfdPair | buy-first: the B released is not negative (sign check) | NIF14 | NIF14 | CONFIRMED |
 | IF36 | KobIfdPair | buy-first: the release does not exceed the escrow (bNew >= 0; sign check) | NIF15 | NIF15 | CONFIRMED |
 | IF37 | KobIfdPair | sell-first: prefund >= 0 (hostile field: a negative pre(n) moves the exit custody into the prefund) | NIF16 | NIF16 | CONFIRMED |
@@ -920,8 +970,9 @@ Baseline (no mutation): ifd_outputs clean, ifd_fill_rules clean, ifd_exit_genesi
 | IF44 | KobIfdPair | a continuing entry has exactly one output bound to its id | NIO1 | NIO1 | CONFIRMED |
 | IF45 | KobIfdPair | the continuation is this script with the new mutable window | NIO2 | NIO2 | CONFIRMED |
 | IF46 | KobIfdPair | a terminated entry leaves no output bound to its id | NIO3 | NIO3 | CONFIRMED |
-| IF47 | KobIfdPair | pinTok: the pinned token output is bound to the token covenant (an unbound look-alike of the exit custody refused) | NIO9 | NIO9 | CONFIRMED |
-| IF8b | KobIfdPair | pinTok: the pinned token output has exactly the token state on the token template (amount, owner, index) | NI17, NI23, NIM3, NIM4, NIO10 | NI17 NIM3 NIM4 | NOT-CONFIRMED: NI23: still rejected; NIO10: still rejected |
+| IF47 | KobIfdPair | pinTok: the pinned token output is bound to the token covenant (an unbound look-alike of the exit custody refused). Holds NI23 / NIO10 (a custody moved off its index: the spk pin IF8b also refuses the plain output there; IF8c removes both) | NIO9; stay rejected: NIO10, NI23 | NIO9 | CONFIRMED |
+| IF8b | KobIfdPair | pinTok: the pinned token output has exactly the token state on the token template (amount, owner). Holds NI23 / NIO10 (a custody moved off its index: the covenant-id pin IF47 also refuses the plain output there) | NI17, NIM3, NIM4; stay rejected: NI23, NIO10 | NI17 NIM3 NIM4 | CONFIRMED |
+| IF8c | KobIfdPair | pinTok spk pin AND covenant-id pin removed together: a custody (the exit custody, the escrow rest) may then sit at any index (IF8b / IF47 each alone hold) | NI23, NIO10 | NI23 NIO9 NIO10 | CONFIRMED |
 | IF48 | KobIfdPair | side is 1 or 2 (hostile side 3 read as sell-first) | NIH5 | NIH5 | CONFIRMED |
 | IF49 | KobIfdPair | scale(A) > 0 (a hostile negative scale makes every quote negative; zero divides by zero anyway) | NIH6 | NIH6 | CONFIRMED |
 | IF50k | KobIfdPair | aFamily is 1 or 2 (hostile family 3 read as KCC-20) | NIH7k | NIH7k | CONFIRMED |
@@ -935,8 +986,99 @@ Baseline (no mutation): ifd_outputs clean, ifd_fill_rules clean, ifd_exit_genesi
 | IF58 | KobIfdPair | update: only an unarmed entry (an armed one would restart its auction at armed = 1) | NIU5 | NIU5 | CONFIRMED |
 | IF59 | KobIfdPair | update: keeperTip >= 0 (hostile field) | NIU6 | NIU6 | CONFIRMED |
 | IF60 | KobIfdPair | update: waits for activeFrom | NIU7 | NIU7 | CONFIRMED |
-| IF61 | KobIfdPair | upd 1 needs nb == 0: a stop fill run as an update (no custody spent, the matcher pays the B, the entry state shrinks below its UTXO) is refused. NI27 (an update tx with nb > 0, no exit) stays rejected by the exit checks. | NIU8; stay rejected: NI27 |  | NOT-CONFIRMED: NIU8: still rejected |
+| IF61 | KobIfdPair | upd 1 needs nb == 0: a stop fill run as an update (no custody spent, the matcher pays the B, the entry state shrinks below its UTXO) is refused. NI27 (an update tx with nb > 0, no exit) stays rejected by the exit checks. | NIU8; stay rejected: NI27 | NIU8 | CONFIRMED |
 | IF62 | KobIfdPair | refund: refundTip >= 0 (hostile field: the keeper would top up the maker) | NIR1 | NIR1 | CONFIRMED |
 | IF63 | KobIfdPair | refund: the A custody returns with its carrier | NIR2 | NIR2 | CONFIRMED |
 | IF64 | KobIfdPair | refund: the B custody returns with its carrier | NIR3 | NIR3 | CONFIRMED |
 | IF65 | KobIfdPair | refund: the KAS at output i is the maker's | NIR4 | NIR4 | CONFIRMED |
+| IF66 | KobIfdPair | tplState: the input is a P2SH spend of the redeem script it carries (a planted non-P2SH UTXO of the evidence id with the genuine KobAsk bytes refused) | NE24 | NE24 | CONFIRMED |
+| IF67 | KobIfdPair | tplState: the redeem script is the template (hash of prefix and suffix; a look-alike evidence with the genuine state refused) | NE23 | NE23 | CONFIRMED |
+| IF68 | KobIfdPair | heldGx: the custody input carries the custody token (KCC/KCC: the B custody named at the A custody input of the same program, the real prefund left behind) | NIH4 | NIH4 | CONFIRMED |
+| IF69r | KobIfdPair | heldGx KRON: the custody is owned by this entry (not another covenant) | NIH1r | NIH1r | CONFIRMED |
+| IF70r | KobIfdPair | heldGx KRON: the custody owner is a covenant id (id_type 2); an id_type-3 custody is also refused by the KRON program (no key), so only the entry input flips | NIH2r | NIH2r(F) | CONFIRMED |
+| IF71r | KobIfdPair | heldGx KRON: the custody is not a minter | NIH3r | NIH3r | CONFIRMED |
+| IF72k | KobIfdPair | heldGx KCC-20: the custody is owned by this entry (not another covenant) | NIH1k | NIH1k | CONFIRMED |
+| IF73k | KobIfdPair | heldGx KCC-20: the custody is covenant-owned (scheme 0x04) with borrowing disabled | NIH2k | NIH2k | CONFIRMED |
+| IF74 | KobIfdPair | pinTok: the template source input carries the token (KCC/KCC: a B input as the A template source) | NIP1 | NIP1 | CONFIRMED |
+| IF75 | KobIfdPair | pinTok: the template bytes read from the source hash to the token template (a planted look-alike source; the A program also refuses the output written on its bytes, so only the entry input flips) | NIP2 | NIP2(F) | CONFIRMED |
+| IF76 | KobIfdPair | noStrays: at most MAX_TOK_IN (8) inputs of the token (the scan is unrolled for 8; a 16-input KCC-20 program carries a 9th) | NIS8 | NIS8 NIS9 | CONFIRMED |
+| IF77s0 | KobIfdPair | noStrays: the input at token-input slot 0 is not owned by this entry | NIS0 | NIS0 | CONFIRMED |
+| IF77s1 | KobIfdPair | noStrays: the input at token-input slot 1 is not owned by this entry | NIS1 | NIS1 NIS1(F) | CONFIRMED |
+| IF77s2 | KobIfdPair | noStrays: the input at token-input slot 2 is not owned by this entry | NIS2 | NIS2 NIS2(F) | CONFIRMED |
+| IF77s3 | KobIfdPair | noStrays: the input at token-input slot 3 is not owned by this entry | NIS3 | NIS3 NIS3(F) | CONFIRMED |
+| IF77s4 | KobIfdPair | noStrays: the input at token-input slot 4 is not owned by this entry | NIS4 | NIS4 | CONFIRMED |
+| IF77s5 | KobIfdPair | noStrays: the input at token-input slot 5 is not owned by this entry | NIS5 | NIS5 | CONFIRMED |
+| IF77s6 | KobIfdPair | noStrays: the input at token-input slot 6 is not owned by this entry | NIS6 | NIS6 | CONFIRMED |
+| IF77s7 | KobIfdPair | noStrays: the input at token-input slot 7 is not owned by this entry | NIS7 | NIS7 | CONFIRMED |
+| IF85 | KobIfdPair | rd: the evidence sigscript starts with the 8-byte fill push (a cancel whose signature reads as a fill refused; an index at a P2PK input also fails the template read) | NE03a0, NE03b0, NE03a1, NE03b1; stay rejected: NE16a0, NE16b0, NE16a1, NE16b1 | NE03b0 NE03b1 NE03a0 NE03a1 | CONFIRMED |
+| IF86 | KobIfdPair | rd: the evidence is filled (n > 0; an entry with minTouch 0 would otherwise arm on an unfilled order: the n = 0 push is its refund / update encoding, which the evidence order itself refuses here before expiry, so only the entry input flips) | NE01a0, NE01b0, NE01a1, NE01b1 | NE01b0(F) NE01b1(F) NE01a0(F) NE01a1(F) | CONFIRMED |
+| IF87 | KobIfdPair | rd: the A / pair evidence fills at least minTouch | NE07a0, NE07b0, NE07a1, NE07b1 | NE07b0 NE07b1 NE07a0 NE07a1 | CONFIRMED |
+| IF88 | KobIfdPair | rd: the evidence's token and scale (mode 1: side, S, T and both scales) are the entry's. NE13 (the opposite pair order) stays rejected: its custody is the other token (the tk read) (the edited evidence order also refuses its doctored state by its own script, so only the entry input flips) | NE09a0, NE09b0, NE09a1, NE09b1, NE11a0, NE11b0, NE11a1, NE11b1; stay rejected: NE13a1, NE13b1 | NE09b0(F) NE11b0(F) NE09b1(F) NE11b1(F) NE09a0(F) NE11a0(F) NE09a1(F) NE11a1(F) | CONFIRMED |
+| IF89 | KobIfdPair | rd: the evidence is not decaying (slope 0) (the edited evidence order also refuses its doctored state by its own script, so only the entry input flips) | NE05a0, NE05b0, NE05a1, NE05b1 | NE05b0(F) NE05b1(F) NE05a0 NE05a1(F) | CONFIRMED |
+| IF90 | KobIfdPair | rd: the ask / pair evidence's custody tk carries its S token (KCC / KCC: an old UTXO of the other token owned by the evidence, marker right; the pair evidence's own stray guard refuses it at its input). On the mixed pairs NE18 stays rejected: the other token is of another program, so the holder template check (IF116) refuses it too | NE18ka0, NE18ka1, NE18kb1; stay rejected: NE18a0, NE18a1, NE18b1 | NE18kb1(F) NE18ka0 NE18ka1(F) | CONFIRMED |
+| IF91 | KobIfdPair | rd: tk is owned by the evidence order with the covenant marker | NE19a0, NE19a1, NE19b1 | NE19b1 NE19a0 NE19a1 | CONFIRMED |
+| IF116 | KobIfdPair | rd: the ask / pair evidence's custody tk is a holder of its token's program (template hash; P2SH kept): an old look-alike holder of another program refused | NE25a0, NE25a1, NE25b1 | NE25b1(F) NE25a0(F) NE25a1(F) | CONFIRMED |
+| IF117 | KobIfdPair | rd: tk is the P2SH of the holder redeem it shows (template hash kept): an old non-P2SH input with the genuine redeem refused | NE26a0, NE26a1, NE26b1 | NE26b1(F) NE26a0(F) NE26a1(F) | CONFIRMED |
+| IF92 | KobIfdPair | evLeg: the B evidence sigscript starts with the 8-byte fill push (a cancel read as a fill refused) | NE04a0, NE04b0 | NE04b0 NE04a0 | CONFIRMED |
+| IF93 | KobIfdPair | evLeg: the B evidence is filled (n > 0; minTouch 0 makes the B threshold 0; the unfilled order itself refuses its n = 0 push here, so only the entry input flips) | NE02a0, NE02b0 | NE02b0(F) NE02a0(F) | CONFIRMED |
+| IF94 | KobIfdPair | evLeg: the B evidence fills at least ceil(minTouch * entryStop / scale(A)) | NE08a0, NE08b0 | NE08b0 NE08a0 | CONFIRMED |
+| IF95 | KobIfdPair | evLeg: the B evidence is of token B (the edited evidence order also refuses its doctored state by its own script, so only the entry input flips) | NE12a0, NE12b0 | NE12b0(F) NE12a0(F) | CONFIRMED |
+| IF96 | KobIfdPair | evLeg: the B evidence quotes per B's scale (the edited evidence order also refuses its doctored state by its own script, so only the entry input flips) | NE10a0, NE10b0 | NE10b0(F) NE10a0(F) | CONFIRMED |
+| IF97 | KobIfdPair | evLeg: the B evidence is not decaying (the edited evidence order also refuses its doctored state by its own script, so only the entry input flips) | NE06a0, NE06b0 | NE06b0 NE06a0(F) | CONFIRMED |
+| IF98 | KobIfdPair | evLeg: the B ask evidence's custody tk carries token B (KCC / KCC: an old UTXO of A owned by the B ask). On the mixed pairs NE18b0 stays rejected by the holder template check (IF118) | NE18kb0; stay rejected: NE18b0 | NE18kb0 | CONFIRMED |
+| IF99 | KobIfdPair | evLeg: tk is owned by the B ask evidence with the covenant marker | NE19b0 | NE19b0 | CONFIRMED |
+| IF118 | KobIfdPair | evLeg: the B ask evidence's custody tk is a holder of token B's program (template hash; P2SH kept): an old look-alike holder of another program refused | NE25b0 | NE25b0(F) | CONFIRMED |
+| IF119 | KobIfdPair | evLeg: tk is the P2SH of the holder redeem it shows (template hash kept): an old non-P2SH input with the genuine redeem refused | NE26b0 | NE26b0(F) | CONFIRMED |
+| IF100 | KobIfdPair | stopTouch: evMode is 0 or 1 | NE21a1, NE21b1 | NE21b1 NE21a1 | CONFIRMED |
+| IF101 | KobIfdPair | stopTouch: the B quote is positive (an ask of B at price 0 would arm any buy stop: ceil(stop * 0 / scale(B)) = 0) | NE22b0 | NE22b0 | CONFIRMED |
+| IF102 | KobIfdPair | stopTouch: a sell stop arms only at a rate <= entryStop (one unit beyond refused; PE17 exactly at the stop accepted) | NE17a0, NE17a1 | NE17a0 NE17a1 | CONFIRMED |
+| IF103 | KobIfdPair | stopTouch: a buy stop arms only at a rate >= entryStop | NE17b0, NE17b1 | NE17b0 NE17b1 | CONFIRMED |
+| IF104 | KobIfdPair | merge: m > 0 (a merge never reads the exit refund / update push n = 0 as an amount). NIM9 (m = 0 next to a take-profit of n) stays rejected by the push check IF110 | NIM10; stay rejected: NIM9 | NIM10 | CONFIRMED |
+| IF104c | KobIfdPair | NIM9 has the exit at input 1 (at input 0 a merge of 0 is the refund encoding 0). m > 0 AND the entry / exit push cross-checks removed: a merge of 0 next to a take-profit of n leaves the n bought A and back(n) to the matcher | NIM9 | NIX7 NIX7e NIM9 | CONFIRMED |
+| IF105 | KobIfdPair | merge: the exit at k carries the committed exit state (outside the mutable payloads): a look-alike with another tpPrice refused | NIX1 | NIX1 | CONFIRMED |
+| IF106 | KobIfdPair | merge: the exit is booked by this entry (push opcodes, parent, rptPrice = price, rptPre): another rptPrice refused | NIX2 | NIX2 | CONFIRMED |
+| IF107 | KobIfdPair | merge: the committed exit is the entry's opposite side (KCC / KCC: a buy-first entry whose committed exit is a BID refused). On the mixed pairs NIX3m stays rejected by the exit's sExt check (B's commitment is not A's; IF107x / IF107c) | NIX3; stay rejected: NIX3m | NIX3 | CONFIRMED |
+| IF107x | KobIfdPair | merge: the exit's sExt is the commitment of its custody token as fill writes it (aExt buy-first, bExt sell-first). DEFENCE IN DEPTH on NIX3m with the side check IF107; IF107c removes both | stay rejected: NIX3m |  | held (defence in depth) |
+| IF107c | KobIfdPair | the committed exit's side AND its sExt check removed: a buy-first entry merges a BID exit (mixed pairs: its sExt is B's commitment) | NIX3m | NIX3 NIX3m | CONFIRMED |
+| IF108 | KobIfdPair | merge: the committed exit quotes at the entry's scale of A (an exit at scale 999 refused: the two would round the merge differently) | NIX4 | NIX4 | CONFIRMED |
+| IF109 | KobIfdPair | merge: the exit's sigscript starts with an 8-byte push (a 9-byte push whose bytes [1..9) are m refused; the exit's own byte[8] argument refuses it too). NIX6 (a minimal push) stays rejected by the amount check | NIX5; stay rejected: NIX6 | NIX5(F) | CONFIRMED |
+| IF110 | KobIfdPair | merge: the exit's pushed n is m. DEFENCE IN DEPTH with the exit's own check of the entry's push (KobCondPair, cond-pair-rpt CR7): an entry merging m != n stays rejected by the exit (NIX7, judged at the exit); IF110c removes both | stay rejected: NIX7 | NIX7e(F) | held (defence in depth) |
+| IF110c | KobIfdPair | the entry's check of the exit's push AND the exit's check of the entry's push removed: an entry merging m = n - 1 leaves budget(1 whole A) and the exit's KAS to the matcher | NIX7, NIX7e | NIX7 NIX7e | CONFIRMED |
+| IF111 | KobIfdPair | merge: the buy-first budget(m) is positive (a price-0 entry re-armed with no escrow growth refused) | NIM8 | NIM8 | CONFIRMED |
+| IF112 | KobIfdPair | merge into an existing A custody: it keeps its carrier | NIM6 | NIM6 | CONFIRMED |
+| IF113 | KobIfdPair | merge into an existing B custody: it keeps its carrier | NIM7 | NIM7 | CONFIRMED |
+| IF114 | KobIfdPair | merge sell-out: the exit custody input xc is authenticated (heldGx): xc named at a P2PK input would shrink the entry's claim of the exit's KAS | NIX11 | NIX11 | CONFIRMED |
+| IF115 | KobIfdPair | a booking needs n < 2^53 (the merge argument): a KCC-20 A booked for 2^53 refused (PIF12k books 2^53 - 1) | NIF12k | NIF12k | CONFIRMED |
+
+Collateral flips (scenarios accepted besides the expected ones):
+
+- IF9b: NI19
+- IF8c: NIO9
+- IF76: NIS9
+- IF104c: NIX7 NIX7e
+- IF107c: NIX3
+- IF110: NIX7e
+
+## cond-pair-rpt
+
+KobCondPair repeat / merge (exit of KobIfdPair); test binary `kob_ifd_pair_tests`; contracts `contracts/v2`. 10/10 confirmed, 2/2 defence-in-depth held (expected NOT to flip).
+Baseline (no mutation): cond_rpt_until clean, cond_rpt_profit clean, cond_rpt_merge_k clean, cond_rpt_rules clean, ifd_merge_rules clean.
+
+| id | contract | check ablated | expected | flipped | status |
+|---|---|---|---|---|---|
+| CR1 | KobCondPair | a re-arming take-profit pays the maker exactly its profit dOut at output i (ASK exit: tOut - budget). Removing the maker-delivery pin lets the re-arm skim the profit. | NCR1 | NCR1 | CONFIRMED |
+| CR2 | KobCondPair | a booked exit (parent set) takes profit on leg 0 without its entry present only once tx.daa >= rptUntil; before that it must run together with its entry merge | NCRU | NCRU | CONFIRMED |
+| CR3 | KobCondPair | update: a booked exit is never armed next to its repeat entry (here: next to a fill of the entry) | NCR4 | NCR4 | CONFIRMED |
+| CR4 | KobCondPair | the stop leg never re-arms: a booked exit's stop fill is refused next to its entry (here its merge: the matcher would fund a re-arm after a stop-loss) | NCR5 | NCR5 | CONFIRMED |
+| CR6 | KobCondPair | the entry's sigscript starts with an 8-byte push (a 9-byte push carrying the merge argument refused; the entry's own byte[8] argument refuses it too) | NCR9 | NCR9(F) | CONFIRMED |
+| CR7 | KobCondPair | the entry's pushed merge argument names this exit and its n. DEFENCE IN DEPTH with the entry's check of this exit's push (KobIfdPair IF110): an entry merging m != n stays rejected by the entry (NIX7e); ifd-pair IF110c removes both | stay rejected: NIX7e | NIX7(F) | held (defence in depth) |
+| CR8 | KobCondPair | re-arm: the maker profit is positive (a committed take-profit at the entry price gives 0: refused; a 0-amount token output is also refused by the KRON program, so on KCC/KRON only the exit input flips) | NCR6 | NCR6(F) NCR6 | CONFIRMED |
+| CR9 | KobCondPair | a sold-out re-arm leaves no S: DEFENCE IN DEPTH with the S-output pin (outIdx = output i, where the profit output sits: the two pins collide). CR9c removes both | stay rejected: NCR7 |  | held (defence in depth) |
+| CR9c | KobCondPair | outAmount == 0 AND the S-output pins (script, covenant) removed: a look-alike exit holding one A more than its amountLeft sells out and the extra A goes to the matcher | NCR7 | NCR7 | CONFIRMED |
+| CR10 | KobCondPair | a sold-out re-arm: the maker's profit output carries deliveryCarrier (the rest of the exit's KAS is the entry's) | NCR8 | NCR8 | CONFIRMED |
+| CR11 | KobCondPair | the exit's S stray guard keeps the entry's xc honest: xc named at a genuine A UTXO owned by the exit (with one sompi of KAS) passes the entry's heldGx, only the exit refuses it as a stray (duplicate of cond-pair G1, witnessed by a merge) | NIX9 | NIX9 | CONFIRMED |
+| CR12 | KobCondPair | re-arm: n < MERGE_K. A look-alike exit (parent = the entry, attacker-funded, KCC-20 A) trading n1 = 2^53 + m at input i reads the entry's merge of the booked exit at i + 1 for m, -((i + 1) * 2^53 + m), as its own -(i * 2^53 + n1) and re-arms without the entry crediting it | NCR10 | NCR10 | CONFIRMED |
+
+Collateral flips (scenarios accepted besides the expected ones):
+
+- CR7: NIX7

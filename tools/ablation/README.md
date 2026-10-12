@@ -4,7 +4,7 @@ One runner, `ablate.mjs`, for the contract-source ablations of the harness suite
 KRON: sell side, buy side) and the pair orders (`KobPair`, `KobCondPair` with its repeat-IFD checks, `KobIfdPair`). Node 22, no dependencies, no `cargo` unless you do not pass `--exe-dir`. Works on Windows, Linux and macOS (the
 repo root is derived from the script location, `tools/ablation/../..`).
 
-Latest results: [RESULTS.md](RESULTS.md). Pair phase (2026-10-06): `pair` 82/82 confirmed + 2 held, `cond-pair` 112/112 + 10 held; `ifd-pair` (120 entries) and `cond-pair-rpt` (11) are partly run (67 confirmed / held in earlier runs, 87 entries pending in their current form, see RESULTS.md). Protocol v3 KAS kinds (2026-10-05/06): 438 mutations, **424/424 confirmed, 14/14 held** (kcc20-sell 92/92 + 3, kcc20-buy 90/90 + 4, kron-sell 139/139 + 3, kron-buy 103/103 + 4).
+Latest results: [RESULTS.md](RESULTS.md). Pre-mainnet covenant fixes (2026-10-12): every suite of the changed templates in full, **698/698 confirmed, 30/30 held** (kcc20-sell 98 + 3, kcc20-buy 97 + 4, kron-sell 145 + 3, kron-buy 110 + 4, cond-pair 116 + 10, cond-pair-rpt 10 + 2, ifd-pair 122 + 4; the KCC-20 touch entries and the pair suites also on the reference 3/3 program). Earlier: pair phase (2026-10-06): `pair` 82/82 confirmed + 2 held, `cond-pair` 112/112 + 10 held; `ifd-pair` (120 entries) and `cond-pair-rpt` (11) were partly run then (run in full on 2026-10-12). Protocol v3 KAS kinds (2026-10-05/06): 438 mutations, **424/424 confirmed, 14/14 held** (kcc20-sell 92/92 + 3, kcc20-buy 90/90 + 4, kron-sell 139/139 + 3, kron-buy 103/103 + 4).
 
 ## What ablation proves
 

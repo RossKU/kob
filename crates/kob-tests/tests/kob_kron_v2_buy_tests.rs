@@ -3485,8 +3485,10 @@ fn buy_repeat_attacks(f: &Fx) {
     let base = || RaKnobs::new(10 * TOK, 4 * TOK, 21 * TOK);
     let until = EXPIRY.min(1_000 + MAX_IDLE);
     bad(RaKnobs { exit_rpt: Some(([0; 32], 0, 0, 0)), ..base() }, "NRPB1 booked exit written as a plain exit (re-arm skipped)");
+    // rptAmount 4 = 3 base units of re-arms left, below minFill: the fill of 4 whole tokens books nothing (a larger rptAmount
+    // would make the fill itself break the re-arm rule, which the entry refuses before the exit is read)
     bad(
-        RaKnobs { exit_rpt: Some((i.as_bytes(), sell_price(&ip21), ip21.prefund, until)), ..RaKnobs::new(10 * TOK, 4 * TOK, 4 * TOK) },
+        RaKnobs { exit_rpt: Some((i.as_bytes(), sell_price(&ip21), ip21.prefund, until)), ..RaKnobs::new(10 * TOK, 4 * TOK, 4) },
         "NRPB2 exit booked although the re-arms are exhausted",
     );
     bad(RaKnobs { next_rpt: Some(21 * TOK), ..base() }, "NRPB3 continuation keeps rptAmount (cycle count not decremented)");
