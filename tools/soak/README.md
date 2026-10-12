@@ -1283,3 +1283,57 @@ config backup `run/config.json.pre-115bab8`; the old UI build is `run/web-dist.o
   unverified rows because their old orders stayed `listed` in the database. The open token list now lists only tokens of a program on the registry's strict list (and not
   delisted); the app's market list also drops an indexer-only token whose `template_id` is null. Both indexers list exactly TUSD, TETH and TBTC. No KRON token exists
   in this soak (the strict list still lists KRON programs for other deployments).
+
+## Redeploy on main b937ebf (2026-10-12 UTC / 10-13 JST, TN10): pre-audit templates, a Kasseal token on the public-mint program
+
+**Redeploy window: 2026-10-12 16:21:57 to 16:37:20 UTC (2026-10-13 01:21 to 01:37 JST).** Live TN10 orders on the changed templates
+were cancelled at 16:22 to 16:24 UTC; anything that probes soak orders should re-read the books after that time.
+
+`m10/soak` fast-forwarded from e3fe485 to main b937ebf (the pre-audit fixes 8f5784f and the audit hardening on main, the public-mint
+registry review 41b7fdb, the soak's `externalTokens` / `order` command b937ebf). **Templates:** 10 of the 15 order templates changed
+(`KobCondAsk`, `KobCondBid`, `KobIfdAsk`, `KobIfdBid`, `KobCondPair`, `KobIfdPair` and the four KRON conditional / if-done ones);
+`KobAsk`, `KobBid`, `KobPair` (and their KRON twins) and the token-intent router did not, so their orders stayed. **Databases kept**
+(schema unchanged, `VACUUM INTO` snapshots in `run/backup-pre-b937ebf/` with config, state, registry and the old bundle).
+
+Procedure (the running supervisor predates `hold-child.ps1`, so the HOLD files are ignored: bots and checker were held by moving
+`dist/soak.mjs` away and `restart-child.ps1`): new executor, bindings, bundle and UI built first into `run/stage-b937ebf/`; bots and
+checker down 16:21:57; the 75 live orders on changed templates (both indexers) cancelled with the old bundle (`dist/soak-e3fe485.mjs
+cancel`, 74 cancels, one had filled meanwhile) until both indexers listed none (16:24:16); `run/wasm-node` swapped (old one kept as
+`wasm-node.old-e3fe485`), `dist/soak.mjs` replaced, `executorBin` `bin/kob-executor-b937ebf.exe` (deploy-tn10), `externalTokens`
+added (`run/config.json.pre-b937ebf`), `soak setup` rewrote the registry; the bots and checker came back on the new bundle at 16:26:00
+(the supervisor's retry found the file); exec-b restarted 16:25:40, exec-a 16:36:30 (never both down); `run/web-dist` swapped
+(`web-dist.old-e3fe485`), ui child and the public 8491 instance restarted 16:37 (tunnel kept). One x402 invoice failed at 16:34
+(bots on the new bundle, exec-a's facilitator still old); invoices paid by intent again from 16:54.
+
+### KOBKS: a Kasseal token traded on KOB (2026-10-12 16:37 to 17:02 UTC)
+
+Kasseal (https://app.kasseal.com, TN10 launchpad: bonding curve, then pool) issues every token with the reference's published
+public-mint build (`H_T` 9703112e..., KOB's handle `kcc20-ref-public-mint` 734850b0...). A token was launched with Kasseal's own
+production app code (its launch engine and Kaspire adapter run in node, the wallet answered by a dedicated key; keys
+`run/kasseal-keys.json` ksA / ksB, funded 2,500 / 1,500 KAS from the bank, tx bc775648): **KOBKS** `4c9948013250170cd5f2c5711392380376615ad357ef67c355dc352da3c164c6`
+(tx01 bea710d9 anchor + curve genesis, tx2 7a9c61b1 token genesis, developer buy b48f8a88: 3,211,000 KOBKS to ksA, 400 KAS;
+Kasseal's launch proof `bound`). Listed in the soak registry through `externalTokens` (template `kcc20-ref-public-mint`), traded by
+hand with `soak.mjs order` / `cancel --keys run/kasseal-keys.json`:
+
+| Step | Order | Transaction |
+|---|---|---|
+| ask, ksA 1,000,000 @ 14,000 sompi | KobAsk 95c095c0 | 146524f4 |
+| bid, ksB 200,000 @ 12,000 | KobBid 7b2def27 | f67e6b8b |
+| fill through the matcher, ksB limit 14,500 (`crossing: limit`) | KobBid c7276f37 | place e6fb0335, fill 965d09ea (327,586 @ 14,000) |
+| cancel, ksB bid @ 14,000 (zero spread, never matched) | KobBid 3e928cc1 | 13ae1dea |
+| stop-market sell, ksA 200,000, stop 13,500 | KobCondAsk 00279f34 (new template 1e1285bf) | 20079f45 |
+| sell into the bid (ksA limit 11,500): fill + the stop armed in the same transaction | KobAsk a76a6f5f | place 3f78e1a4, fill 64b2ed7e (100,000 @ 12,000) |
+| the armed stop fills against ksB's bid 13,400 | KobBid c2149130 | place 049727f2, fill 74f73c65 (200,000 @ 13,095) |
+
+Both indexers listed the orders and fills; Kasseal's indexer reports every transaction confirmed and counts ksB as a second holder
+(its KOB deliveries are ordinary holders). The public page (tunnel) lists KOBKS on the market list, its book, last price and trades,
+the program power "public mint", and no untradable notice. The ask (672,414 left) and the 12,000 bid stay open.
+
+* **Zero spread never fills:** a crossing at the same price (bid = ask, no tips) leaves the matcher nothing for the fee, so it
+  stays crossed (the bid 3e928cc1, a sell at 12,000 into the 12,000 bid). Give a spread or a tip.
+* **IOC and indexer lag:** an IOC lives 300 DAA (30 s) by default; with the indexers 30 to 60 s behind (exec-a `catching_up`), the
+  IOC 0f6d5827 was killed unfilled before the matcher's book held it. Rest a crossing limit instead, or a longer `life`.
+* **3 token inputs / 3 outputs:** the program moves at most 3 token UTXOs in and 3 out per transaction (like `KCC20Ref`), so a sell
+  placement takes at most 3 token UTXOs and a matcher batch at most 3 token legs of this token.
+* A token UTXO received outside KOB (a curve buy) is not known to the wallet's tracker: `order --seed <txid>:<index>:<amount>:<carrier>`
+  announces it (Kasseal's API lists a key's cells: `GET /v1/tokens/<id>/cells?owner=pk:<x-only key>`).
