@@ -61,7 +61,7 @@ jobs:
           # the live TN10 tests (node follow, x402 end-to-end) need a reachable testnet node and mine their own funds: not for CI
           KOB_SKIP_NETWORK_TESTS: "1"
         run: cargo test --workspace --locked
-      - name: Mainnet deployment build (feature deploy-mainnet: the embedded record, the pinned registry, the network checks; docs/ops/release.md 5)
+      - name: "Mainnet deployment build (feature deploy-mainnet: the embedded record, the pinned registry, the network checks; docs/ops/release.md 5)"
         run: cargo test --locked -p kob-protocol -p kob-executor --lib --features deploy-mainnet
       - name: Engine harness, carrier sensitivity (2 KAS = the wallet default order carrier)
         shell: bash
