@@ -28,10 +28,12 @@ pub struct IndexOpts {
     /// TOML configuration file (all keys optional); flags override it.
     #[arg(long, global = true, env = "KOB_INDEX_CONFIG")]
     pub config: Option<PathBuf>,
-    /// Network id the node must report (`testnet-10`, `mainnet`).
-    #[arg(long, global = true)]
+    /// Network id the node must report (`mainnet`, `testnet-10`). Required on the reference build (no default); a deployment
+    /// build (`deploy-mainnet`, `deploy-tn10`) implies its own and refuses another.
+    #[arg(long, global = true, env = "KOB_NETWORK")]
     pub network: Option<String>,
-    /// Node JSON wRPC endpoint (`ws://127.0.0.1:18210`).
+    /// Node JSON wRPC endpoint. Default: the local node's port of the network (`ws://127.0.0.1:18110` on mainnet,
+    /// `ws://127.0.0.1:18210` on testnet-10).
     #[arg(long, global = true, env = "KOB_NODE_WRPC")]
     pub rpc_url: Option<String>,
     /// Another node (`ws://` or `wss://` JSON wRPC; repeatable): windows of transaction bodies are fetched from it too
@@ -153,11 +155,13 @@ pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
         cfg.reorg_window_hours = v;
     }
     // A deployment build (e.g. `--features deploy-tn10`) records the network it was built for (protocol v2.6: the templates
-    // are the reference ones; the build only refuses to index another network).
-    if let Some(n) = kob_protocol::artifacts::deployment_network() {
-        if cfg.network != n {
-            return Err(anyhow!("this binary is the {n} deployment build but the configured network is {}", cfg.network));
-        }
+    // are the reference ones; the build only refuses to index another network). The reference build implies none: the network
+    // is given explicitly, never a silent testnet-10.
+    cfg.network = crate::config::resolve_network(Some(&cfg.network)).map_err(|e| anyhow!(e))?;
+    if cfg.rpc_url.trim().is_empty() {
+        cfg.rpc_url = crate::config::default_wrpc_url(&cfg.network).ok_or_else(|| {
+            anyhow!("no node endpoint for network {}: pass --rpc-url (or `rpc_url` in the configuration)", cfg.network)
+        })?;
     }
     Ok(cfg)
 }

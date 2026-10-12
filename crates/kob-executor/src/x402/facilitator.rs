@@ -330,8 +330,18 @@ fn kind_str(k: PaymentKind) -> &'static str {
     }
 }
 
-/// DAA scores before a coinbase output may be spent (consensus `coinbase_maturity`, Kaspa mainnet and testnets).
-const COINBASE_MATURITY_DAA: u64 = 100;
+/// DAA scores before a coinbase output may be spent on `net`: the consensus `coinbase_maturity` of the rusty-kaspa v2.1.0
+/// parameters the node runs (`consensus/core/src/config/params.rs`: `MAINNET_PARAMS` and `TESTNET_PARAMS`, the testnet-10
+/// one, both have `blockrate: BlockrateParams::new::<10>()`, whose `coinbase_maturity` is `Bps::<10>::coinbase_maturity()` =
+/// 10 BPS x `COINBASE_MATURITY_SECONDS` (100, `constants.rs`) = 1,000 DAA). 100 was the pre-Crescendo 1 BPS value: a coinbase
+/// output 100 to 999 DAA old was called spendable while the node refuses it.
+pub fn coinbase_maturity_daa(net: kob_x402::wire::Network) -> u64 {
+    use kaspa_consensus_core::config::params::{MAINNET_PARAMS, TESTNET_PARAMS};
+    match net {
+        kob_x402::wire::Network::Mainnet => MAINNET_PARAMS.coinbase_maturity(),
+        kob_x402::wire::Network::Testnet10 => TESTNET_PARAMS.coinbase_maturity(),
+    }
+}
 
 fn unavailable(msg: impl Into<String>) -> X402Error {
     X402Error::new(Reason::UnexpectedSettleError, Diag::NodeUnavailable, msg).retryable()
@@ -501,11 +511,12 @@ impl Facilitator {
             return Ok(());
         }
         let daa = self.chain.virtual_daa_score().map_err(|e| unavailable(e.to_string()))?;
+        let maturity = coinbase_maturity_daa(self.policy.network);
         for (i, e) in v.entries.iter().enumerate() {
-            if e.is_coinbase && daa < e.block_daa_score.saturating_add(COINBASE_MATURITY_DAA) {
+            if e.is_coinbase && daa < e.block_daa_score.saturating_add(maturity) {
                 return Err(X402Error::state(
                     Diag::InvalidKaspaExactUtxo,
-                    format!("input {i} is a coinbase output that has not reached its maturity ({COINBASE_MATURITY_DAA} DAA)"),
+                    format!("input {i} is a coinbase output that has not reached its maturity ({maturity} DAA)"),
                 ));
             }
         }

@@ -25,6 +25,33 @@ pub const NODE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Most funding UTXOs tried (smallest first) before giving up.
 const FUNDING_TRIES: usize = 16;
 
+/// The network of a command: `--network` when given (empty: not given), else the build's deployment network
+/// (`kob_protocol::artifacts::deployment_network`: `testnet-10` with the feature `deploy-tn10`, `mainnet` with
+/// `deploy-mainnet`). The reference build implies none, so `--network` is then required; a deployment build refuses another
+/// network. Never an implicit testnet-10.
+pub fn resolve_network(given: &str) -> Result<String, String> {
+    resolve_network_for(given, kob_protocol::artifacts::deployment_network())
+}
+
+/// [`resolve_network`] for a build whose deployment network is `build`.
+pub fn resolve_network_for(given: &str, build: Option<&str>) -> Result<String, String> {
+    let given = given.trim();
+    let n = match (given.is_empty(), build) {
+        (false, Some(b)) if given != b => {
+            return Err(format!("this binary is the {b} deployment build but --network is {given}"));
+        }
+        (false, _) => given.to_string(),
+        (true, Some(b)) => b.to_string(),
+        (true, None) => {
+            return Err("--network is required (mainnet or testnet-10): only a deployment build (--features deploy-mainnet \
+                        or deploy-tn10) implies its network"
+                .into())
+        }
+    };
+    prefix_for_network(&n)?;
+    Ok(n)
+}
+
 /// Address prefix of a network name (`mainnet`, `testnet-10`, `simnet`, `devnet`).
 pub fn prefix_for_network(network: &str) -> Result<Prefix, String> {
     if network.starts_with("mainnet") {
@@ -361,6 +388,22 @@ pub fn kas(sompi: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_network_is_explicit_or_the_deployment_builds() {
+        // the reference build: --network is required (never an implicit testnet-10)
+        let e = resolve_network_for("", None).unwrap_err();
+        assert!(e.contains("--network is required"), "{e}");
+        assert_eq!(resolve_network_for("mainnet", None).unwrap(), "mainnet");
+        assert_eq!(resolve_network_for("testnet-10", None).unwrap(), "testnet-10");
+        assert!(resolve_network_for("nonsense", None).is_err());
+        // a deployment build implies its network and refuses another
+        assert_eq!(resolve_network_for("", Some("mainnet")).unwrap(), "mainnet");
+        assert_eq!(resolve_network_for("", Some("testnet-10")).unwrap(), "testnet-10");
+        let e = resolve_network_for("testnet-10", Some("mainnet")).unwrap_err();
+        assert!(e.contains("mainnet deployment build"), "{e}");
+        assert_eq!(resolve_network("").ok().as_deref(), kob_protocol::artifacts::deployment_network());
+    }
 
     #[test]
     fn addresses_follow_the_network() {

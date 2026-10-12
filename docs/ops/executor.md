@@ -231,7 +231,7 @@ serves the facilitator (`GET /supported`, `POST /verify`, `POST /settle`, `GET /
 `invoices` the `/invoices` routes of A.7)
 in the same process, on the configuration's `listen` address (bound before anything else starts). It
 holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignored) and its `network`
-(`kaspa:testnet-10`, `kaspa:mainnet`) must be the one the indexer follows, or `run` refuses to start.
+(`kaspa:testnet-10`, `kaspa:mainnet`; absent from the file: the indexer's) must be the one the indexer follows, or `run` refuses to start.
 
 * **Pausing.** `run`'s `--pause-file` disables the facilitator as its own `killSwitchFile` does: while either exists,
   `/verify` and `/settle` are refused (503, `/supported` empty) and no intent execution or expiry is broadcast (they wait
@@ -275,7 +275,8 @@ holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignor
 
 The standalone `kob-executor x402 --config <file>` (flags `--network`, `--node`, `--listen`,
 `--ledger`, `--auth` override the file) runs the facilitator alone, with finality from the node's UTXO
-set.
+set. Its `network` is required on the reference build (absent: a deployment build's own) and its `node` defaults to the
+network's local endpoint (`ws://127.0.0.1:18110` mainnet, `ws://127.0.0.1:18210` testnet-10).
 
 **Authentication.** `"auth": "required"` (the default) needs a merchant API key on `/verify`, `/settle` and the invoice
 routes. `"auth": "open"` (no key, any `payTo`, any asset) is for a local operator only: it is refused unless `listen` is a
@@ -984,9 +985,16 @@ kob-executor index \
   --listen 127.0.0.1:8090
 ```
 
-`--config file.toml` holds the same settings (flags override the file). Every key is optional; an unknown key (a
-misspelt one included) is refused at start (`unknown field`), except the retired `[receipts]` table, which is ignored
-with a warning:
+The network is never implied by the reference build: `--network` (or `network` in the file, or `$KOB_NETWORK`) is required
+there, for every command that talks to a node (`index`, `run`, `match`, `keep`, the facilitator's `network`, and `kob order`,
+`kob recover`, `kob token issue`). A deployment build (`--features deploy-mainnet` or `deploy-tn10`) implies its own network
+and refuses another. `--rpc-url` (`rpc_url`; the facilitator's `node`) defaults to the local node's JSON wRPC port of that
+network, `ws://127.0.0.1:18110` on mainnet and `ws://127.0.0.1:18210` on testnet-10 (rusty-kaspa's defaults), never a
+testnet endpoint on mainnet.
+
+`--config file.toml` holds the same settings (flags override the file). Every key is optional (`network` on the reference
+build aside, above); an unknown key (a misspelt one included) is refused at start (`unknown field`), except the retired
+`[receipts]` table, which is ignored with a warning:
 
 ```toml
 network = "testnet-10"
@@ -1571,9 +1579,9 @@ N is corrupt: chain hash mismatch`); the lock makes that impossible.
 **Without an indexer: `kob recover`.** The maker finds and cancels their orders from a node alone:
 
 ```
-kob recover --from backup.json --from orders.json --node ws://127.0.0.1:18210 [--maker <pubkey>] [--out report.json]
-kob recover --from orders.json --node ws://127.0.0.1:18210 --amount-left <covenant id>=6.5   # the amount a partly filled order has left
-kob recover --from backup.json --node ws://127.0.0.1:18210 --cancel --key file:maker.key [--dry-run] [--out-dir signed/]
+kob recover --from backup.json --from orders.json --node ws://127.0.0.1:18210 --network testnet-10 [--maker <pubkey>] [--out report.json]
+kob recover --from orders.json --node ws://127.0.0.1:18210 --network testnet-10 --amount-left <covenant id>=6.5   # the amount a partly filled order has left
+kob recover --from backup.json --node ws://127.0.0.1:18210 --network testnet-10 --cancel --key file:maker.key [--dry-run] [--out-dir signed/]
 ```
 
 Inputs: the web wallet's backup (`kob-backup`), this export format (version 1 or 2), or indexer order views
@@ -2172,22 +2180,23 @@ kob-executor match --book-file book.json --offline
 
 # Live, but build and validate only:
 KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kob-executor match --book-file book.json \
-  --rpc-url ws://127.0.0.1:18210 --dry-run
+  --network testnet-10 --rpc-url ws://127.0.0.1:18210 --dry-run
 
 # Indexer, matcher and keepers in one process, one store (Part A):
-KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kob-executor run --data-dir /var/lib/kob-index \
+KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kob-executor run --network testnet-10 --data-dir /var/lib/kob-index \
   --tokens /etc/kob/tokens.json --metrics-file /var/lib/node_exporter/kob.prom
 
 # Matcher and keepers in one process, book from a snapshot file:
-kob-executor match --book-file book.json --keep --metrics-file /var/lib/node_exporter/kob.prom
+kob-executor match --network testnet-10 --book-file book.json --keep --metrics-file /var/lib/node_exporter/kob.prom
 
 # Keepers alone (a separate host / key is fine):
-kob-executor keep --book-file book.json --metrics-file /var/lib/node_exporter/kob-keeper.prom
+kob-executor keep --network testnet-10 --book-file book.json --metrics-file /var/lib/node_exporter/kob-keeper.prom
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--network` | `testnet-10` | network id the node must report |
+| `--network` | none (reference build) | network id the node must report (`mainnet`, `testnet-10`; also `$KOB_NETWORK`). Required on the reference build; a deployment build (`--features deploy-mainnet` or `deploy-tn10`) implies its own network and refuses another. Never an implicit testnet-10; not needed with `--offline` |
+| `--rpc-url` | the network's local node | the node's JSON wRPC endpoint (also `$KOB_NODE_WRPC`); default `ws://127.0.0.1:18110` on mainnet, `ws://127.0.0.1:18210` on testnet-10 (rusty-kaspa's default JSON wRPC ports) |
 | `--tick-ms` | 1000 | tick period |
 | `--fee-rate` | 100 | the lowest fee rate, sompi per gram (see Fee policy) |
 | `--no-fee-estimate` | off | always pay `--fee-rate` (no `getFeeEstimate`) |
@@ -2211,7 +2220,7 @@ A systemd unit for the keyed role:
 
 ```
 [Service]
-ExecStart=/usr/local/bin/kob-executor match --book-file /var/lib/kob/book.json --keep \
+ExecStart=/usr/local/bin/kob-executor match --network testnet-10 --book-file /var/lib/kob/book.json --keep \
   --rpc-url ws://127.0.0.1:18210 --pause-file /var/lib/kob/pause --metrics-file /var/lib/node_exporter/kob.prom
 LoadCredential=kob-operator-key:/etc/kob/operator.key
 DynamicUser=yes

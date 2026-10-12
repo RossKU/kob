@@ -246,7 +246,7 @@ fn full_http_stack_with_a_real_payment() {
     let offer = e.offer(AMOUNT, Finality::Accepted);
     let req = e.request(&offer, &[e.coin(500_000_000)], "https://api.example.test/e", None);
     let cfg = format!(
-        r#"{{"merchants":[{{"id":"shop","apiKeySha256":"{}","allowedPayTo":["{}"],"allowedAssets":["KAS"]}}]}}"#,
+        r#"{{"network":"kaspa:testnet-10","merchants":[{{"id":"shop","apiKeySha256":"{}","allowedPayTo":["{}"],"allowedAssets":["KAS"]}}]}}"#,
         hex(&api_key_hash("k-secret")),
         addr(MERCHANT)
     );

@@ -56,7 +56,9 @@ TRANSACTION
 OUTPUT
   --out-dir             write genesis_tx.json, submit_request.json, supply.json, metadata.json, metadata.payload.hex,
                         registry_entry.json here
-  --description --icon --website --network   recorded in metadata/supply
+  --description --icon --website   recorded in metadata/supply
+  --network             mainnet or testnet-10, recorded in metadata/supply; required unless the build is a deployment
+                        build (deploy-mainnet, deploy-tn10), which implies its own
   --dry-run             build and verify everything offline (signs and executes the funding inputs when --key is
                         given, else the transaction stays unsigned); never submits
   --node ws://HOST:PORT submit the signed transaction via wRPC JSON (`submitTransaction`; JSON port 18110 mainnet,
@@ -267,7 +269,7 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
         description: None,
         icon: None,
         website: None,
-        network: "testnet-10".into(),
+        network: String::new(),
         dry_run: false,
         node: None,
         program: IssueProgram::default(),
@@ -328,6 +330,7 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
     if !a.dry_run && a.key.is_none() {
         return Err("--key is required unless --dry-run (an unsigned transaction cannot be submitted)".into());
     }
+    a.network = crate::common::resolve_network(&a.network)?;
     Ok(a)
 }
 
@@ -495,7 +498,7 @@ mod tests {
     const PK: &str = "aa2c17c5f5e5d5a3b6c0d2f1e4b7a9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2";
 
     fn base() -> String {
-        format!("--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:1:5000000000:{PK} --dry-run")
+        format!("--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:1:5000000000:{PK} --dry-run --network testnet-10")
     }
 
     #[test]
@@ -559,7 +562,7 @@ mod tests {
             .serialize();
         let dir = std::env::temp_dir().join(format!("kob-issue-test-{}", std::process::id()));
         let cmd = format!(
-            "--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:0:5000000000:{} --supply 1000 --holder self:0:900 --holder {PK}:4:100 --dry-run --key {sk} --out-dir {}",
+            "--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:0:5000000000:{} --supply 1000 --holder self:0:900 --holder {PK}:4:100 --dry-run --network testnet-10 --key {sk} --out-dir {}",
             hex(&pk),
             dir.display()
         );
@@ -580,7 +583,10 @@ mod tests {
         let req: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("submit_request.json")).unwrap()).unwrap();
         assert_eq!(req["method"], "submitTransaction");
         // unsigned dry run needs no key
-        let cmd2 = format!("--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:0:5000000000:{} --supply 5 --dry-run", hex(&pk));
+        let cmd2 = format!(
+            "--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:0:5000000000:{} --supply 5 --dry-run --network testnet-10",
+            hex(&pk)
+        );
         assert_eq!(run_issue(&v(&cmd2)), 0);
         // wrong key refused
         let cmd3 = format!("{cmd2} --key 5555555555555555555555555555555555555555555555555555555555555555");

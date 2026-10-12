@@ -399,7 +399,8 @@ fn recover_finds_cancels_and_submits() {
     let (url, node) = mock::start(f.utxos.clone());
     let dir = tmp("recover");
     let (backup, export) = files(&f, &dir);
-    let base = format!("--from {} --from {} --node {url} --maker {}", backup.display(), export.display(), to_hex(&pk(1)));
+    let base =
+        format!("--from {} --from {} --node {url} --network {NET} --maker {}", backup.display(), export.display(), to_hex(&pk(1)));
 
     // the search
     let a = recover::parse_args(&v(&base)).unwrap();
@@ -476,8 +477,12 @@ fn recover_finds_cancels_and_submits() {
     assert_eq!(node.lock().unwrap().submitted.len(), 4);
 
     // without --maker: another maker's order is found live, and its cancel is skipped, never attempted with this key
-    let a = recover::parse_args(&v(&format!("--from {} --node {url} --cancel --dry-run --key {}", export.display(), to_hex(&sk(1)))))
-        .unwrap();
+    let a = recover::parse_args(&v(&format!(
+        "--from {} --node {url} --network {NET} --cancel --dry-run --key {}",
+        export.display(),
+        to_hex(&sk(1))
+    )))
+    .unwrap();
     let (report, ok) = recover::execute(&a).unwrap();
     assert!(ok);
     assert_eq!(by_cov(&report, A6)["status"], "live");
@@ -497,8 +502,12 @@ fn amount_left_hint_finds_a_partial_fill_the_fallback_misses() {
     let dir = tmp("hint");
     let (_, export) = files(&f, &dir);
     let run = |extra: &str| {
-        let a =
-            recover::parse_args(&v(&format!("--from {} --node {url} --maker {} {extra}", export.display(), to_hex(&pk(1))))).unwrap();
+        let a = recover::parse_args(&v(&format!(
+            "--from {} --node {url} --network {NET} --maker {} {extra}",
+            export.display(),
+            to_hex(&pk(1))
+        )))
+        .unwrap();
         recover::execute(&a).unwrap().0
     };
     // no hint: the fallback grid (10000, 9000, ..., 1000) does not reach 6500
@@ -532,12 +541,15 @@ fn amount_left_hint_finds_a_partial_fill_the_fallback_misses() {
     let s = signed_from(c["file"].as_str().unwrap());
     assert_eq!(s.tx.inputs.len(), 2, "order + custody of 6500");
     // arguments
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --amount-left abc")).is_err());
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --amount-left 1.2.3")).is_err());
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --amount-left zz=5")).is_err());
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --amount-left")).is_err());
-    let a =
-        recover::parse_args(&v(&format!("--from a.json --node ws://x:1 --amount-left {}=1.5 --amount-left 7", to_hex(&A9)))).unwrap();
+    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --amount-left abc")).is_err());
+    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --amount-left 1.2.3")).is_err());
+    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --amount-left zz=5")).is_err());
+    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --amount-left")).is_err());
+    let a = recover::parse_args(&v(&format!(
+        "--from a.json --node ws://x:1 --network testnet-10 --amount-left {}=1.5 --amount-left 7",
+        to_hex(&A9)
+    )))
+    .unwrap();
     assert_eq!(a.amount_left, vec![(Some(A9), "1.5".to_string()), (None, "7".to_string())]);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -621,7 +633,11 @@ fn order_sweep_and_cancel_from_views() {
     let sweep = |file: &Path, extra: &str| {
         let a = order::parse_args(
             order::Op::Sweep,
-            &v(&format!("--view {} --key {key} --node {url} --out-dir {} {extra}", file.display(), dir.join("out").display())),
+            &v(&format!(
+                "--view {} --key {key} --node {url} --network {NET} --out-dir {} {extra}",
+                file.display(),
+                dir.join("out").display()
+            )),
         )
         .unwrap();
         order::execute(&a).unwrap()
@@ -665,7 +681,13 @@ fn order_sweep_and_cancel_from_views() {
     assert!(!ok);
     assert_eq!(report["orders"][0]["status"], "refused");
     assert!(report["orders"][0]["reason"].as_str().unwrap().contains("stale view"));
-    assert_eq!(order::run(&v(&format!("sweep --view {} --key {key} --node {url} --dry-run", dir.join("stale.json").display()))), 1);
+    assert_eq!(
+        order::run(&v(&format!(
+            "sweep --view {} --key {key} --node {url} --network {NET} --dry-run",
+            dir.join("stale.json").display()
+        ))),
+        1
+    );
 
     // a page: the key's order is swept and submitted, another maker's is skipped
     let other = view(
@@ -687,7 +709,11 @@ fn order_sweep_and_cancel_from_views() {
     // the maker's cancel from the view: custody, own and foreign strays back to the maker
     let a = order::parse_args(
         order::Op::Cancel,
-        &v(&format!("--view {} --key {key} --node {url} --dry-run --out-dir {}", p.display(), dir.join("out").display())),
+        &v(&format!(
+            "--view {} --key {key} --node {url} --network {NET} --dry-run --out-dir {}",
+            p.display(),
+            dir.join("out").display()
+        )),
     )
     .unwrap();
     let (report, ok) = order::execute(&a).unwrap();
@@ -704,7 +730,11 @@ fn order_sweep_and_cancel_from_views() {
     let up = write(&dir, "unpinned.json", &unpinned);
     let a = order::parse_args(
         order::Op::Cancel,
-        &v(&format!("--view {} --key {key} --node {url} --dry-run --out-dir {}", up.display(), dir.join("out").display())),
+        &v(&format!(
+            "--view {} --key {key} --node {url} --network {NET} --dry-run --out-dir {}",
+            up.display(),
+            dir.join("out").display()
+        )),
     )
     .unwrap();
     let (report, _) = order::execute(&a).unwrap();
@@ -714,14 +744,17 @@ fn order_sweep_and_cancel_from_views() {
     assert_eq!(report["orders"][0]["status"], "skipped");
 
     // a key that is not the maker builds nothing
-    let a =
-        order::parse_args(order::Op::Cancel, &v(&format!("--view {} --key {} --node {url} --dry-run", p.display(), to_hex(&sk(2)))))
-            .unwrap();
+    let a = order::parse_args(
+        order::Op::Cancel,
+        &v(&format!("--view {} --key {} --node {url} --network {NET} --dry-run", p.display(), to_hex(&sk(2)))),
+    )
+    .unwrap();
     let (report, _) = order::execute(&a).unwrap();
     assert_eq!(report["orders"][0]["status"], "skipped");
     // a backup is not a view
     let (b, _) = files(&f, &dir);
-    let a = order::parse_args(order::Op::Sweep, &v(&format!("--view {} --key {key} --node {url}", b.display()))).unwrap();
+    let a =
+        order::parse_args(order::Op::Sweep, &v(&format!("--view {} --key {key} --node {url} --network {NET}", b.display()))).unwrap();
     assert!(order::execute(&a).is_err());
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -789,12 +822,22 @@ fn input_formats_and_bad_input() {
     // arguments
     assert!(recover::parse_args(&v("--node ws://x:1")).is_err(), "needs --from");
     assert!(recover::parse_args(&v("--from a.json")).is_err(), "needs --node");
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --cancel")).is_err(), "--cancel needs --key");
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --dry-run")).is_err(), "--dry-run belongs to --cancel");
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network moon")).is_err());
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --fee-rate 5 --cancel --key 00")).is_err());
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --bogus")).is_err());
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --lots 3")).is_err(), "no lot flags remain");
+    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel")).is_err(), "--cancel needs --key");
+    assert!(
+        recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --dry-run")).is_err(),
+        "--dry-run belongs to --cancel"
+    );
+    // the reference build implies no network (never testnet-10 by default)
+    if kob_protocol::artifacts::deployment_network().is_none() {
+        let e = recover::parse_args(&v("--from a.json --node ws://x:1")).unwrap_err();
+        assert!(e.contains("--network is required"), "{e}");
+        let e = order::parse_args(order::Op::Cancel, &v("--view a.json --key 00 --node ws://x:1")).unwrap_err();
+        assert!(e.contains("--network is required"), "{e}");
+    }
+    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --network moon")).is_err());
+    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --fee-rate 5 --cancel --key 00")).is_err());
+    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --bogus")).is_err());
+    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --lots 3")).is_err(), "no lot flags remain");
     assert!(order::parse_args(order::Op::Sweep, &v("--view a.json --node ws://x:1")).is_err(), "needs --key");
     assert!(order::parse_args(order::Op::Sweep, &v("--view a.json --key 00")).is_err(), "needs --node");
     let _ = std::fs::remove_dir_all(dir);
@@ -898,7 +941,11 @@ fn pair_orders_cancel_from_views_and_recover_with_two_custodies() {
     let cancel_args = |file: &Path| {
         order::parse_args(
             order::Op::Cancel,
-            &v(&format!("--view {} --key {key} --node {url} --dry-run --out-dir {}", file.display(), dir.join("out").display())),
+            &v(&format!(
+                "--view {} --key {key} --node {url} --network {NET} --dry-run --out-dir {}",
+                file.display(),
+                dir.join("out").display()
+            )),
         )
         .unwrap()
     };
@@ -937,7 +984,7 @@ fn pair_orders_cancel_from_views_and_recover_with_two_custodies() {
     ]});
     let ep = write(&dir, "export.json", &export);
     let a = recover::parse_args(&v(&format!(
-        "--from {} --node {url} --maker {} --cancel --dry-run --key {key} --out-dir {}",
+        "--from {} --node {url} --network {NET} --maker {} --cancel --dry-run --key {key} --out-dir {}",
         ep.display(),
         to_hex(&pk(1)),
         dir.join("signed").display()

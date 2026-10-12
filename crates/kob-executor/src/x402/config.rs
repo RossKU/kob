@@ -231,7 +231,11 @@ impl Default for InvoiceCfg {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase", default)]
 pub struct X402Config {
+    /// `kaspa:mainnet` or `kaspa:testnet-10`. Absent: the build's deployment network ([`X402Config::fill_defaults`]); the
+    /// reference build requires it.
     pub network: String,
+    /// The node's JSON wRPC endpoint. Absent: the local node's port of the network (`ws://127.0.0.1:18110` on mainnet,
+    /// `ws://127.0.0.1:18210` on testnet-10).
     pub node: String,
     pub listen: String,
     /// The replay ledger (`:memory:` = volatile). A relative path is relative to the configuration file's directory
@@ -317,8 +321,8 @@ pub struct X402Config {
 impl Default for X402Config {
     fn default() -> Self {
         X402Config {
-            network: "kaspa:testnet-10".into(),
-            node: "ws://127.0.0.1:18210".into(),
+            network: String::new(),
+            node: String::new(),
             listen: "127.0.0.1:8402".into(),
             ledger: "x402-ledger.jsonl".into(),
             auth: AuthMode::Required,
@@ -409,6 +413,22 @@ impl X402Config {
         }
     }
 
+    /// Fills an absent `network` with the build's deployment network (`crate::config::resolve_network`: none on the reference
+    /// build, which then requires it) and an absent `node` with the local node's JSON wRPC endpoint of that network. Never an
+    /// implicit testnet-10, never a testnet node on a mainnet build.
+    pub fn fill_defaults(&mut self) -> Result<(), ConfigError> {
+        if self.network.trim().is_empty() {
+            let n = crate::config::resolve_network(None).map_err(ConfigError)?;
+            self.network = format!("kaspa:{n}");
+        }
+        if self.node.trim().is_empty() {
+            if let Some(url) = Network::parse(&self.network).and_then(|n| crate::config::default_wrpc_url(n.registry_name())) {
+                self.node = url;
+            }
+        }
+        Ok(())
+    }
+
     /// Parses a config document (unknown fields are rejected).
     pub fn from_json(text: &str) -> Result<X402Config, ConfigError> {
         serde_json::from_str(text).map_err(|e| ConfigError(e.to_string()))
@@ -463,12 +483,18 @@ impl X402Config {
 
     /// Validates everything strictly and derives the runtime structures.
     pub fn build(&self) -> Result<Built, ConfigError> {
+        if self.network.trim().is_empty() {
+            return err("no network configured: set \"network\" (kaspa:mainnet or kaspa:testnet-10) or pass --network");
+        }
         let network = Network::parse(&self.network)
             .ok_or_else(|| ConfigError(format!("network {:?} is not kaspa:mainnet or kaspa:testnet-10", self.network)))?;
+        // a deployment build serves its own network only
+        crate::config::resolve_network(Some(network.registry_name())).map_err(ConfigError)?;
         if network == Network::Mainnet && !self.allow_mainnet {
             return err("mainnet needs \"allowMainnet\": true (the binding's mainnet enablement requires independently corroborated chain evidence)");
         }
-        if !self.node.starts_with("ws://") {
+        // absent: the network's local endpoint ([`X402Config::fill_defaults`])
+        if !self.node.is_empty() && !self.node.starts_with("ws://") {
             return err("node must be a ws:// wRPC JSON url (put a TLS-terminating proxy in front of a remote node)");
         }
         let listen: SocketAddr = self.listen.parse().map_err(|e| ConfigError(format!("listen {:?}: {e}", self.listen)))?;
@@ -718,7 +744,9 @@ mod tests {
     }
 
     fn doc(extra: &str) -> String {
-        format!(r#"{{"merchants":[{}]{extra}}}"#, merchant_json("secret"))
+        // an explicit network (the reference build implies none) unless the case sets its own
+        let net = if extra.contains("\"network\"") { "" } else { r#","network":"kaspa:testnet-10""# };
+        format!(r#"{{"merchants":[{}]{net}{extra}}}"#, merchant_json("secret"))
     }
 
     #[test]
@@ -751,22 +779,37 @@ mod tests {
 
     #[test]
     fn auth_open_requires_loopback_and_no_merchants() {
-        let ok = X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:8402"}"#).unwrap().build();
+        let ok =
+            X402Config::from_json(r#"{"network":"kaspa:testnet-10","auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:8402"}"#)
+                .unwrap()
+                .build();
         assert!(ok.is_ok());
         // a same-host relay without forwarding headers cannot be told from a local caller: the operator must state there is none
-        let e = X402Config::from_json(r#"{"auth":"open","listen":"127.0.0.1:8402"}"#).unwrap().build().unwrap_err();
+        let e = X402Config::from_json(r#"{"network":"kaspa:testnet-10","auth":"open","listen":"127.0.0.1:8402"}"#)
+            .unwrap()
+            .build()
+            .unwrap_err();
         assert!(e.0.contains("openAuthNoProxy"), "{}", e.0);
         let e =
-            X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"listen":"0.0.0.0:8402"}"#).unwrap().build().unwrap_err();
+            X402Config::from_json(r#"{"network":"kaspa:testnet-10","auth":"open","openAuthNoProxy":true,"listen":"0.0.0.0:8402"}"#)
+                .unwrap()
+                .build()
+                .unwrap_err();
         assert!(e.0.contains("loopback"));
-        let e = X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"listen":"[::]:8402"}"#).unwrap().build().unwrap_err();
+        let e = X402Config::from_json(r#"{"network":"kaspa:testnet-10","auth":"open","openAuthNoProxy":true,"listen":"[::]:8402"}"#)
+            .unwrap()
+            .build()
+            .unwrap_err();
         assert!(e.0.contains("loopback"));
-        assert!(X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"listen":"[::1]:8402"}"#).unwrap().build().is_ok());
+        assert!(X402Config::from_json(r#"{"network":"kaspa:testnet-10","auth":"open","openAuthNoProxy":true,"listen":"[::1]:8402"}"#)
+            .unwrap()
+            .build()
+            .is_ok());
         let e = X402Config::from_json(&doc(r#","auth":"open","openAuthNoProxy":true"#)).unwrap().build().unwrap_err();
         assert!(e.0.contains("contradict"));
         // behind a reverse proxy (declared as trusted) open auth would serve every caller
         let e = X402Config::from_json(
-            r#"{"auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:8402","trustedProxies":["127.0.0.1"]}"#,
+            r#"{"network":"kaspa:testnet-10","auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:8402","trustedProxies":["127.0.0.1"]}"#,
         )
         .unwrap()
         .build()
@@ -815,7 +858,7 @@ mod tests {
     fn relative_ledger_and_store_are_next_to_the_configuration_file() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("x402.json");
-        let base = r#"{"auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:8402""#;
+        let base = r#"{"network":"kaspa:testnet-10","auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:8402""#;
         std::fs::write(&path, format!(r#"{base},"ledger":"state/ledger.jsonl","invoices":{{"store":"inv.jsonl"}}}}"#)).unwrap();
         let c = X402Config::load(&path).unwrap();
         assert_eq!(std::path::PathBuf::from(&c.ledger), d.path().join("state/ledger.jsonl"));
@@ -862,6 +905,33 @@ mod tests {
     }
 
     #[test]
+    fn the_network_is_explicit_or_the_deployment_builds_and_the_node_follows_it() {
+        // no network in the file: the build's deployment network, none on the reference build (never an implicit testnet-10)
+        let mut c = X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true}"#).unwrap();
+        assert_eq!((c.network.as_str(), c.node.as_str()), ("", ""));
+        let e = c.build().unwrap_err();
+        assert!(e.0.contains("no network configured"), "{}", e.0);
+        match kob_protocol::artifacts::deployment_network() {
+            None => assert!(c.fill_defaults().unwrap_err().0.contains("--network mainnet or --network testnet-10")),
+            Some(n) => {
+                c.fill_defaults().unwrap();
+                assert_eq!(c.network, format!("kaspa:{n}"));
+            }
+        }
+        // the node defaults to the local endpoint of the network: mainnet's on mainnet, testnet-10's on testnet-10
+        let mut m = X402Config::from_json(r#"{"network":"kaspa:mainnet"}"#).unwrap();
+        m.fill_defaults().unwrap();
+        assert_eq!(m.node, "ws://127.0.0.1:18110");
+        let mut t = X402Config::from_json(r#"{"network":"kaspa:testnet-10"}"#).unwrap();
+        t.fill_defaults().unwrap();
+        assert_eq!(t.node, "ws://127.0.0.1:18210");
+        // a configured node is kept
+        let mut k = X402Config::from_json(r#"{"network":"kaspa:mainnet","node":"ws://10.0.0.5:18110"}"#).unwrap();
+        k.fill_defaults().unwrap();
+        assert_eq!(k.node, "ws://10.0.0.5:18110");
+    }
+
+    #[test]
     fn mainnet_needs_an_explicit_flag() {
         let e = X402Config::from_json(r#"{"auth":"open","network":"kaspa:mainnet"}"#).unwrap().build().unwrap_err();
         assert!(e.0.contains("allowMainnet"));
@@ -901,14 +971,14 @@ mod tests {
             good.replace(r#""allowedPayTo":["#, r#""allowedPayTo":["nonsense","#),
         ];
         for m in cases {
-            let cfg = X402Config::from_json(&format!(r#"{{"merchants":[{m}]}}"#)).unwrap();
+            let cfg = X402Config::from_json(&format!(r#"{{"network":"kaspa:testnet-10","merchants":[{m}]}}"#)).unwrap();
             assert!(cfg.build().is_err(), "{m}");
         }
         // duplicate ids / shared keys
-        let cfg = X402Config::from_json(&format!(r#"{{"merchants":[{good},{good}]}}"#)).unwrap();
+        let cfg = X402Config::from_json(&format!(r#"{{"network":"kaspa:testnet-10","merchants":[{good},{good}]}}"#)).unwrap();
         assert!(cfg.build().is_err());
         let other = good.replace("shop-1", "shop-2");
-        let cfg = X402Config::from_json(&format!(r#"{{"merchants":[{good},{other}]}}"#)).unwrap();
+        let cfg = X402Config::from_json(&format!(r#"{{"network":"kaspa:testnet-10","merchants":[{good},{other}]}}"#)).unwrap();
         assert!(cfg.build().unwrap_err().0.contains("shared"));
     }
 

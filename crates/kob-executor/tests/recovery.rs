@@ -23,6 +23,7 @@ fn test_config(dir: &std::path::Path, node: &MockNode) -> IndexerConfig {
     let tokens_path = dir.join("tokens.json");
     std::fs::write(&tokens_path, format!(r#"[{{"ticker":"TST","covenantId":"{}"}}]"#, Hash32(TOKEN_COV))).unwrap();
     let mut cfg = IndexerConfig {
+        network: "testnet-10".into(),
         data_dir: dir.join("data"),
         tokens_path: Some(tokens_path),
         start: StartMode::Hash(node.anchor()),

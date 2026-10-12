@@ -19,12 +19,14 @@ use crate::keepers::KeeperConfig;
 /// Options shared by `match` and `keep`.
 #[derive(Args, Debug, Clone)]
 pub struct CommonArgs {
-    /// Network id the node must report (`testnet-10`, `mainnet`).
-    #[arg(long, default_value = "testnet-10", env = "KOB_NETWORK")]
-    pub network: String,
-    /// Node JSON wRPC endpoint (keep it on loopback), e.g. `ws://127.0.0.1:18210`.
-    #[arg(long, env = "KOB_NODE_WRPC", default_value = "ws://127.0.0.1:18210")]
-    pub rpc_url: String,
+    /// Network id the node must report (`mainnet`, `testnet-10`). Required on the reference build (no default); a deployment
+    /// build (`deploy-mainnet`, `deploy-tn10`) implies its own and refuses another. Not needed with `--offline`.
+    #[arg(long, env = "KOB_NETWORK")]
+    pub network: Option<String>,
+    /// Node JSON wRPC endpoint (keep it on loopback). Default: the local node's port of the network (`ws://127.0.0.1:18110`
+    /// on mainnet, `ws://127.0.0.1:18210` on testnet-10).
+    #[arg(long, env = "KOB_NODE_WRPC")]
+    pub rpc_url: Option<String>,
     /// Book snapshot (JSON, `MemoryBook`), re-read when it changes. Written by the indexer export.
     #[arg(long, env = "KOB_BOOK_FILE")]
     pub book_file: PathBuf,
@@ -130,9 +132,23 @@ fn engine_cfg(a: &MatchArgs) -> EngineConfig {
     e
 }
 
-fn run_cfg(c: &CommonArgs, roles: Roles) -> RunConfig {
+impl CommonArgs {
+    /// The network and the node endpoint of a live run ([`crate::config::resolve_network`], [`crate::config::default_wrpc_url`]):
+    /// never an implicit testnet-10, never a testnet node on a mainnet build.
+    pub fn endpoint(&self) -> anyhow::Result<(String, String)> {
+        let network = crate::config::resolve_network(self.network.as_deref()).map_err(anyhow::Error::msg)?;
+        let url = match self.rpc_url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+            Some(u) => u.to_string(),
+            None => crate::config::default_wrpc_url(&network)
+                .ok_or_else(|| anyhow::anyhow!("no node endpoint for network {network}: pass --rpc-url"))?,
+        };
+        Ok((network, url))
+    }
+}
+
+fn run_cfg(c: &CommonArgs, network: String, roles: Roles) -> RunConfig {
     RunConfig {
-        network: c.network.clone(),
+        network,
         roles,
         dry_run: c.dry_run,
         tick: Duration::from_millis(c.tick_ms.max(100)),
@@ -215,6 +231,8 @@ async fn shutdown_signal() {
 /// `kob-executor match`.
 pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     a.common.fees.policy(a.common.fee_rate).map_err(anyhow::Error::msg)?;
+    // the network and the node first (`--offline` needs neither): nothing secret is read for a run that cannot start
+    let (network, rpc_url) = if a.common.offline { Default::default() } else { a.common.endpoint()? };
     let signer = load_key(&a.common)?;
     let mut engine = engine_cfg(&a);
     let inventory = match &a.inventory_policy {
@@ -225,14 +243,14 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     if a.common.offline {
         return offline(&read_snapshot(&a.common.book_file)?, &engine, signer.as_ref());
     }
-    let mut cfg = run_cfg(&a.common, Roles { matcher: true, keeper: a.keep });
+    let mut cfg = run_cfg(&a.common, network, Roles { matcher: true, keeper: a.keep });
     cfg.engine = engine;
     cfg.keeper.fee_rate = a.common.fee_rate;
     a.liveness.apply(&mut cfg.keeper).map_err(anyhow::Error::msg)?;
     cfg.maintenance.fee_rate = a.common.fee_rate;
     cfg.maintenance.inventory = inventory;
-    let node = WrpcNode::new(WrpcConfig::new(a.common.rpc_url.clone()));
-    tracing::info!(network = %cfg.network, rpc = %crate::rpc::redact_url(&a.common.rpc_url), operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "matcher starting");
+    let node = WrpcNode::new(WrpcConfig::new(rpc_url.clone()));
+    tracing::info!(network = %cfg.network, rpc = %crate::rpc::redact_url(&rpc_url), operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "matcher starting");
     let mut r = Runner::new(node, FileSource::new(a.common.book_file.clone()), signer, cfg);
     r.run(shutdown_signal()).await
 }
@@ -240,8 +258,10 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
 /// `kob-executor keep`.
 pub async fn run_keep(a: KeepArgs) -> anyhow::Result<()> {
     a.common.fees.policy(a.common.fee_rate).map_err(anyhow::Error::msg)?;
+    // `--offline` needs no node (and no network)
+    let (network, rpc_url) = if a.common.offline { Default::default() } else { a.common.endpoint()? };
     let signer = load_key(&a.common)?;
-    let mut cfg = run_cfg(&a.common, Roles { matcher: false, keeper: true });
+    let mut cfg = run_cfg(&a.common, network, Roles { matcher: false, keeper: true });
     cfg.keeper = KeeperConfig {
         fee_rate: a.common.fee_rate,
         refund: !a.no_refund,
@@ -273,8 +293,8 @@ pub async fn run_keep(a: KeepArgs) -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    let node = WrpcNode::new(WrpcConfig::new(a.common.rpc_url.clone()));
-    tracing::info!(network = %cfg.network, rpc = %crate::rpc::redact_url(&a.common.rpc_url), operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "keeper starting");
+    let node = WrpcNode::new(WrpcConfig::new(rpc_url.clone()));
+    tracing::info!(network = %cfg.network, rpc = %crate::rpc::redact_url(&rpc_url), operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "keeper starting");
     let mut r = Runner::new(node, FileSource::new(a.common.book_file.clone()), signer, cfg);
     r.run(shutdown_signal()).await
 }

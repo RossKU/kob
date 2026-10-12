@@ -176,6 +176,7 @@ pub struct RunConfig {
 impl Default for RunConfig {
     fn default() -> Self {
         RunConfig {
+            // tests and embedders only: every command sets the network it resolved (`crate::config::resolve_network`)
             network: "testnet-10".into(),
             roles: Roles { matcher: true, keeper: false },
             engine: EngineConfig::default(),

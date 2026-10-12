@@ -85,6 +85,7 @@ async fn run(url: &str, start: Hash32, start_daa: u64, n: usize, secs: u64) -> R
     let health = Arc::new(HealthState::new("testnet-10"));
     let (events, _rx) = tokio::sync::broadcast::channel(16);
     let mut cfg = FollowerConfig::from_indexer(&kob_executor::config::IndexerConfig {
+        network: "testnet-10".into(),
         fetch_parallel: n,
         start: StartMode::Hash(start),
         ..Default::default()

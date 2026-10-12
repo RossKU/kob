@@ -367,6 +367,10 @@ pub fn x402_service(
 ) -> Result<crate::x402::Service> {
     use crate::x402::config::X402Config;
     let mut xcfg = X402Config::load(path)?;
+    // absent from the file: the indexer's network (which `build_config` resolved), never an implicit one
+    if xcfg.network.trim().is_empty() {
+        xcfg.network = format!("kaspa:{}", index.network);
+    }
     xcfg.node = index.rpc_url.clone();
     xcfg.pause_file = pause_file;
     let built = xcfg.build()?;

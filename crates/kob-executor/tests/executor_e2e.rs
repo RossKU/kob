@@ -631,6 +631,7 @@ async fn run_indexes_matches_and_shuts_down_cleanly() {
         )
         .unwrap();
         let mut cfg = IndexerConfig {
+            network: "testnet-10".into(),
             data_dir: dir.path().join("data"),
             tokens_path: Some(tokens),
             start: StartMode::Hash(node.anchor()),

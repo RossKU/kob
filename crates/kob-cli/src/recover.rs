@@ -43,7 +43,8 @@ INPUT
                 indexer order view (GET /v1/orders/{id}) or page of views ({\"items\":[..]}). Orders are deduplicated by
                 covenant id; every state a file names is a search candidate, nothing in a file is trusted.
   --node        node wRPC JSON endpoint (18110 mainnet, 18210 testnet-10); `getUtxosByAddresses` needs --utxoindex
-  --network     network of the files and the addresses (default testnet-10)
+  --network     network of the files and the addresses (mainnet, testnet-10); required unless the build is a
+                deployment build (deploy-mainnet, deploy-tn10), which implies its own
   --maker       only this maker's orders (64-hex x-only pubkey or kaspa address); others are reported `other_maker`
   --amount-left the amount the order has left after partial fills, as an indexer view shows it (`amount_left`):
                 base units, or a decimal amount of whole tokens with at most the token's decimals (`1.5` with 8
@@ -134,7 +135,7 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut a = Args {
         from: vec![],
         node: String::new(),
-        network: "testnet-10".into(),
+        network: String::new(),
         maker: None,
         amount_left: vec![],
         out: None,
@@ -171,7 +172,7 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
     if a.node.is_empty() {
         return Err("--node is required (every order is verified on the node)".into());
     }
-    crate::common::prefix_for_network(&a.network)?;
+    a.network = crate::common::resolve_network(&a.network)?;
     if a.cancel && a.key.is_none() {
         return Err("--cancel needs --key".into());
     }

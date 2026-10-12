@@ -47,10 +47,12 @@ pub struct X402Args {
     /// Strict JSON configuration file (`crates/kob-executor/x402.example.json`).
     #[arg(long)]
     pub config: Option<PathBuf>,
-    /// `kaspa:testnet-10` or `kaspa:mainnet`.
+    /// `kaspa:mainnet` or `kaspa:testnet-10`. Required on the reference build (no default); a deployment build implies its own
+    /// and refuses another.
     #[arg(long)]
     pub network: Option<String>,
-    /// Node JSON wRPC endpoint (`ws://host:port`).
+    /// Node JSON wRPC endpoint (`ws://host:port`). Default: the local node's port of the network (`ws://127.0.0.1:18110` on
+    /// mainnet, `ws://127.0.0.1:18210` on testnet-10).
     #[arg(long)]
     pub node: Option<String>,
     /// HTTP listen address (`addr:port`).
@@ -96,6 +98,7 @@ impl X402Args {
         if self.open_auth_no_proxy {
             cfg.open_auth_no_proxy = true;
         }
+        cfg.fill_defaults().map_err(|e| e.to_string())?;
         Ok(cfg)
     }
 }

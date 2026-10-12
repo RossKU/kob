@@ -89,3 +89,20 @@ fn a_mature_coinbase_input_verifies() {
     let v = fac.verify(&req);
     assert!(v.is_valid, "{v:?}");
 }
+
+/// The maturity is the consensus one of the network (rusty-kaspa v2.1.0: 10 BPS x 100 s = 1,000 DAA on mainnet and
+/// testnet-10), not the pre-Crescendo 100: a coinbase output 500 DAA old is still refused, one 1,000 DAA old is spendable.
+#[test]
+fn the_coinbase_maturity_is_the_networks_consensus_value() {
+    use kob_executor::x402::facilitator::coinbase_maturity_daa;
+    assert_eq!(coinbase_maturity_daa(Network::Mainnet), 1_000);
+    assert_eq!(coinbase_maturity_daa(Network::Testnet10), 1_000);
+    let chain = Arc::new(MockChain::new());
+    let fac = facilitator(chain.clone(), Arc::new(Ledger::in_memory()), Arc::new(FixedClock::new(NOW_MS)), Duration::from_secs(900));
+    let daa = chain.daa();
+    let v = fac.verify(&request(&chain, Some(daa.saturating_sub(500))));
+    assert!(!v.is_valid, "500 DAA old: immature ({v:?})");
+    assert!(format!("{:?}", v.extensions).contains("1000 DAA"), "{v:?}");
+    let v = fac.verify(&request(&chain, Some(daa.saturating_sub(1_000))));
+    assert!(v.is_valid, "1,000 DAA old: mature ({v:?})");
+}

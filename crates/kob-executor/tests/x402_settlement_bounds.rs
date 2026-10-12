@@ -137,7 +137,7 @@ fn an_intent_entry_is_never_finalized_as_a_direct_payment() {
 
 fn cfg_json(extra: &str) -> String {
     format!(
-        r#"{{"merchants":[
+        r#"{{"network":"kaspa:testnet-10","merchants":[
             {{"id":"shop","apiKeySha256":"{}","allowedPayTo":["{}"],"allowedAssets":["KAS"]}}
         ]{extra}}}"#,
         hex(&api_key_hash(KEY1)),

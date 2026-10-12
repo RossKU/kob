@@ -222,10 +222,12 @@ impl Default for NodeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct IndexerConfig {
-    /// Expected network id reported by the node (`testnet-10`, `mainnet`).
+    /// Expected network id reported by the node (`testnet-10`, `mainnet`). Empty (the default): the build's deployment network
+    /// ([`resolve_network`]); the reference build requires it.
     pub network: String,
-    /// JSON wRPC endpoint of the node, e.g. `ws://127.0.0.1:18210`: the primary (chain authority) unless `nodes` names
-    /// another one.
+    /// JSON wRPC endpoint of the node: the primary (chain authority) unless `nodes` names another one. Empty (the default):
+    /// the local node's default JSON wRPC port of the network ([`default_wrpc_url`]: `ws://127.0.0.1:18110` on mainnet,
+    /// `ws://127.0.0.1:18210` on testnet-10).
     pub rpc_url: String,
     /// Further nodes: windows of transaction bodies are fetched from all of them in parallel (checked against the primary)
     /// and transactions submitted to all of them. Empty: the one node of `rpc_url`.
@@ -300,8 +302,8 @@ pub struct IndexerConfig {
 impl Default for IndexerConfig {
     fn default() -> Self {
         IndexerConfig {
-            network: "testnet-10".to_string(),
-            rpc_url: "ws://127.0.0.1:18210".to_string(),
+            network: String::new(),
+            rpc_url: String::new(),
             nodes: Vec::new(),
             primary_fetch: true,
             data_dir: PathBuf::from("kob-index"),
@@ -330,6 +332,39 @@ impl Default for IndexerConfig {
             receipts: None,
         }
     }
+}
+
+/// The network a command serves: the one given (`--network`, `network = ...`), else the build's deployment network
+/// (`kob_protocol::artifacts::deployment_network`: `testnet-10` with the feature `deploy-tn10`, `mainnet` with
+/// `deploy-mainnet`). The reference build has none, so it requires the network explicitly; a deployment build refuses
+/// another network. Never an implicit testnet-10.
+pub fn resolve_network(given: Option<&str>) -> Result<String, String> {
+    resolve_network_for(given, kob_protocol::artifacts::deployment_network())
+}
+
+/// [`resolve_network`] for a build whose deployment network is `build`.
+pub fn resolve_network_for(given: Option<&str>, build: Option<&str>) -> Result<String, String> {
+    match (given.map(str::trim).filter(|s| !s.is_empty()), build) {
+        (Some(n), Some(b)) if n != b => Err(format!("this binary is the {b} deployment build but the configured network is {n}")),
+        (Some(n), _) => Ok(n.to_string()),
+        (None, Some(b)) => Ok(b.to_string()),
+        (None, None) => Err("no network configured: pass --network mainnet or --network testnet-10 (or `network = \"...\"` in \
+                             the configuration file); only a deployment build (--features deploy-mainnet or deploy-tn10) \
+                             implies its network"
+            .to_string()),
+    }
+}
+
+/// The local node's JSON wRPC endpoint of a network: rusty-kaspa v2.1.0 `NetworkType::default_json_rpc_port`
+/// (`consensus/core/src/network.rs`: mainnet 18110, testnet 18210; the Borsh ports are 17110 / 17210). `None` for any
+/// other network (pass the endpoint explicitly).
+pub fn default_wrpc_url(network: &str) -> Option<String> {
+    let port = match network {
+        "mainnet" => 18110,
+        "testnet-10" => 18210,
+        _ => return None,
+    };
+    Some(format!("ws://127.0.0.1:{port}"))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -414,6 +449,33 @@ impl IndexerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_network_is_explicit_or_the_deployment_builds() {
+        // the reference build: no implicit network
+        let e = resolve_network_for(None, None).unwrap_err();
+        assert!(e.contains("--network mainnet or --network testnet-10"), "{e}");
+        assert_eq!(resolve_network_for(Some("  "), None), Err(e));
+        assert_eq!(resolve_network_for(Some("mainnet"), None).unwrap(), "mainnet");
+        assert_eq!(resolve_network_for(Some("testnet-10"), None).unwrap(), "testnet-10");
+        // a deployment build implies its network and refuses another one
+        assert_eq!(resolve_network_for(None, Some("mainnet")).unwrap(), "mainnet");
+        assert_eq!(resolve_network_for(None, Some("testnet-10")).unwrap(), "testnet-10");
+        assert_eq!(resolve_network_for(Some("mainnet"), Some("mainnet")).unwrap(), "mainnet");
+        let e = resolve_network_for(Some("testnet-10"), Some("mainnet")).unwrap_err();
+        assert!(e.contains("mainnet deployment build") && e.contains("testnet-10"), "{e}");
+        // this build
+        assert_eq!(resolve_network(None).ok().as_deref(), kob_protocol::artifacts::deployment_network());
+        // the node endpoint follows the network (rusty-kaspa's default JSON wRPC ports), never TN10's on mainnet
+        assert_eq!(default_wrpc_url("mainnet").as_deref(), Some("ws://127.0.0.1:18110"));
+        assert_eq!(default_wrpc_url("testnet-10").as_deref(), Some("ws://127.0.0.1:18210"));
+        assert_eq!(default_wrpc_url("devnet"), None);
+        // the configuration's defaults name no network and no node
+        let d = IndexerConfig::default();
+        assert_eq!((d.network.as_str(), d.rpc_url.as_str()), ("", ""));
+        let t: IndexerConfig = toml::from_str("data_dir = \"x\"").unwrap();
+        assert_eq!((t.network.as_str(), t.rpc_url.as_str()), ("", ""));
+    }
 
     #[test]
     fn partial_toml_uses_defaults() {

@@ -32,7 +32,7 @@ struct App {
 
 fn cfg_json(extra: &str) -> String {
     format!(
-        r#"{{"merchants":[
+        r#"{{"network":"kaspa:testnet-10","merchants":[
             {{"id":"shop","apiKeySha256":"{}","allowedPayTo":["{}"],"allowedAssets":["KAS"]}},
             {{"id":"other","apiKeySha256":"{}","allowedPayTo":["{}"],"allowedAssets":["KAS"]}}
         ]{extra}}}"#,
@@ -461,7 +461,7 @@ async fn a_merchant_override_beats_the_default() {
     let fx = Fixture::new();
     let key_hash = hex(&api_key_hash(KEY1));
     let cfg = format!(
-        r#"{{"merchants":[{{"id":"shop","apiKeySha256":"{key_hash}","allowedPayTo":["{}"],"allowedAssets":["KAS"],"rateLimit":{{"burst":1,"perSecond":0.01}}}}]}}"#,
+        r#"{{"network":"kaspa:testnet-10","merchants":[{{"id":"shop","apiKeySha256":"{key_hash}","allowedPayTo":["{}"],"allowedAssets":["KAS"],"rateLimit":{{"burst":1,"perSecond":0.01}}}}]}}"#,
         address_of_key(MERCHANT_KEY)
     );
     let built = X402Config::from_json(&cfg).unwrap().build().unwrap();
@@ -548,7 +548,10 @@ async fn metrics_are_for_loopback_or_the_admin_key() {
 #[tokio::test]
 async fn open_mode_on_loopback_needs_no_key() {
     let fx = Fixture::new();
-    let built = X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:0"}"#).unwrap().build().unwrap();
+    let built = X402Config::from_json(r#"{"network":"kaspa:testnet-10","auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:0"}"#)
+        .unwrap()
+        .build()
+        .unwrap();
     let app = router(Arc::new(AppState::new(fx.fac.clone(), &built)));
     let input = fx.fund(500_000_000);
     let (req, tx) = fx.payment(&[input], 100_000_000, ID1, 7);
@@ -563,7 +566,10 @@ async fn open_mode_on_loopback_needs_no_key() {
 #[tokio::test]
 async fn open_mode_refuses_requests_through_a_proxy_or_from_another_host() {
     let fx = Fixture::new();
-    let built = X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:0"}"#).unwrap().build().unwrap();
+    let built = X402Config::from_json(r#"{"network":"kaspa:testnet-10","auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:0"}"#)
+        .unwrap()
+        .build()
+        .unwrap();
     let app = router(Arc::new(AppState::new(fx.fac.clone(), &built)));
     let input = fx.fund(500_000_000);
     let (req, _) = fx.payment(&[input], 100_000_000, ID1, 7);

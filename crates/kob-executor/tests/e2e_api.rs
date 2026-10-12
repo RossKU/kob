@@ -58,6 +58,7 @@ async fn rest_and_websocket_follow_the_chain() {
     let tokens_path = dir.path().join("tokens.json");
     std::fs::write(&tokens_path, format!(r#"{{"tokens":[{{"ticker":"TST","covenantId":"{}"}}]}}"#, Hash32(TOKEN_COV))).unwrap();
     let mut cfg = IndexerConfig {
+        network: "testnet-10".into(),
         data_dir: dir.path().join("data"),
         tokens_path: Some(tokens_path),
         start: StartMode::Hash(node.anchor()),

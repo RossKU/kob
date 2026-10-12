@@ -33,17 +33,34 @@ fn strict_config_is_enforced_at_startup() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("bogusField"), "{}", String::from_utf8_lossy(&out.stderr));
     // open auth on a public address is refused
-    let out = Command::new(BIN).args(["x402", "--auth", "open", "--listen", "0.0.0.0:0", "--ledger", ":memory:"]).output().unwrap();
+    let out = Command::new(BIN)
+        .args(["x402", "--network", "kaspa:testnet-10", "--auth", "open", "--listen", "0.0.0.0:0", "--ledger", ":memory:"])
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("loopback"));
     // open auth on loopback without the operator's statement that nothing relays to it
-    let out = Command::new(BIN).args(["x402", "--auth", "open", "--listen", "127.0.0.1:0", "--ledger", ":memory:"]).output().unwrap();
+    let out = Command::new(BIN)
+        .args(["x402", "--network", "kaspa:testnet-10", "--auth", "open", "--listen", "127.0.0.1:0", "--ledger", ":memory:"])
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("openAuthNoProxy"), "{}", String::from_utf8_lossy(&out.stderr));
     // required auth without merchants
-    let out = Command::new(BIN).args(["x402", "--ledger", ":memory:"]).output().unwrap();
+    let out = Command::new(BIN).args(["x402", "--network", "kaspa:testnet-10", "--ledger", ":memory:"]).output().unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("merchant"));
+    // the reference build names no network: it must be given (never an implicit testnet-10)
+    if kob_protocol::artifacts::deployment_network().is_none() {
+        let out = Command::new(BIN)
+            .args(["x402", "--auth", "open", "--open-auth-no-proxy", "--listen", "127.0.0.1:0", "--ledger", ":memory:"])
+            .env_remove("KOB_NETWORK")
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("--network mainnet or --network testnet-10"), "{err}");
+    }
 }
 
 /// A node that answers `getServerInfo` on every connection.
@@ -106,6 +123,8 @@ fn start_facilitator(node: &str, ledger: &str) -> (Child, u16) {
             Command::new(BIN)
                 .args([
                     "x402",
+                    "--network",
+                    "kaspa:testnet-10",
                     "--auth",
                     "open",
                     "--open-auth-no-proxy",
@@ -166,6 +185,8 @@ fn a_node_on_another_network_is_refused_at_startup() {
     let out = Command::new(BIN)
         .args([
             "x402",
+            "--network",
+            "kaspa:testnet-10",
             "--auth",
             "open",
             "--open-auth-no-proxy",

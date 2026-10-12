@@ -39,7 +39,8 @@ INPUT
                 stray are looked up on the node the same way (a stray the node does not hold is left out).
   --key         the maker's signing secret (64 hex; env:NAME and file:PATH keep it out of shell history)
   --node        node wRPC JSON endpoint (18110 mainnet, 18210 testnet-10; --utxoindex)
-  --network     network of the addresses (default testnet-10)
+  --network     network of the addresses (mainnet, testnet-10); required unless the build is a deployment build
+                (deploy-mainnet, deploy-tn10), which implies its own
 
 SWEEP (every live order of the key's maker that has strays)
   The maker's `cancel` entry continues the order IN PLACE: same covenant id, same script, custody untouched; strays of
@@ -105,7 +106,7 @@ pub fn parse_args(op: Op, args: &[String]) -> Result<Args, String> {
         views: vec![],
         key: String::new(),
         node: String::new(),
-        network: "testnet-10".into(),
+        network: String::new(),
         dry_run: false,
         fee_rate: MIN_FEE_RATE,
         out_dir: None,
@@ -138,7 +139,7 @@ pub fn parse_args(op: Op, args: &[String]) -> Result<Args, String> {
     if a.node.is_empty() {
         return Err("--node is required (the view is verified on the node)".into());
     }
-    crate::common::prefix_for_network(&a.network)?;
+    a.network = crate::common::resolve_network(&a.network)?;
     if a.fee_rate < MIN_FEE_RATE {
         return Err(format!("--fee-rate must be at least {MIN_FEE_RATE}"));
     }

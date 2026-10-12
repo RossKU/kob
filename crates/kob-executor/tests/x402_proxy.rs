@@ -33,7 +33,7 @@ async fn send(app: &axum::Router, mut req: Request<Body>, peer: &str) -> StatusC
 fn app(extra: &str) -> axum::Router {
     let pay_to = Address::new(Network::Testnet10.prefix(), Version::PubKey, &pubkey(8)).to_string();
     let cfg = format!(
-        r#"{{{extra}"merchants":[{{"id":"shop","apiKeySha256":"{}","allowedPayTo":["{pay_to}"],"allowedAssets":["KAS"]}}]}}"#,
+        r#"{{{extra}"network":"kaspa:testnet-10","merchants":[{{"id":"shop","apiKeySha256":"{}","allowedPayTo":["{pay_to}"],"allowedAssets":["KAS"]}}]}}"#,
         hex(&api_key_hash("merchant-secret-key"))
     );
     let built = X402Config::from_json(&cfg).unwrap().build().unwrap();
@@ -146,7 +146,9 @@ fn the_concurrency_settings_are_validated_and_defaulted() {
     let d = X402Config::default();
     assert_eq!((d.max_settles_per_merchant, d.max_concurrent_verifies), (8, 64));
     assert!(d.max_settles_per_merchant < d.max_concurrent_settles, "one merchant cannot hold the whole pool");
-    let mut c = X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true,"maxSettlesPerMerchant":0}"#).unwrap();
+    let mut c =
+        X402Config::from_json(r#"{"network":"kaspa:testnet-10","auth":"open","openAuthNoProxy":true,"maxSettlesPerMerchant":0}"#)
+            .unwrap();
     assert!(c.build().is_err());
     c.max_settles_per_merchant = 1;
     c.trusted_proxies = vec!["not-an-ip".into()];

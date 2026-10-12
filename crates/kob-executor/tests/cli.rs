@@ -22,6 +22,8 @@ fn exe(args: &[&str]) -> (String, String) {
         .args(args)
         .env_remove("KOB_OPERATOR_KEY")
         .env_remove("KOB_OPERATOR_KEY_FILE")
+        .env_remove("KOB_NETWORK")
+        .env_remove("KOB_NODE_WRPC")
         .env("RUST_LOG", "error")
         .output()
         .unwrap();
@@ -57,6 +59,8 @@ fn exe_fails(args: &[&str]) -> String {
         .args(args)
         .env_remove("KOB_OPERATOR_KEY")
         .env_remove("KOB_OPERATOR_KEY_FILE")
+        .env_remove("KOB_NETWORK")
+        .env_remove("KOB_NODE_WRPC")
         .env("RUST_LOG", "error")
         .output()
         .unwrap();
@@ -72,9 +76,22 @@ fn run_needs_a_role_and_a_key_and_index_keeps_its_subcommands() {
     let err = exe_fails(&["run", "--no-match", "--no-keep", "--data-dir", data]);
     assert!(err.contains("kob-executor index"), "{err}");
     // the keyed roles never start without a key (and never touch the data directory first)
-    let err = exe_fails(&["run", "--data-dir", data]);
+    let err = exe_fails(&["run", "--data-dir", data, "--network", "testnet-10"]);
     assert!(err.contains("no operator key"), "{err}");
     assert!(!dir.exists());
+    // the reference build implies no network: `run`, `index`, `match` and `keep` refuse to guess one (never testnet-10)
+    if kob_protocol::artifacts::deployment_network().is_none() {
+        for args in [
+            vec!["run", "--data-dir", data],
+            vec!["index", "export-orders", "--data-dir", data],
+            vec!["match", "--book-file", "book.json"],
+            vec!["keep", "--book-file", "book.json"],
+        ] {
+            let err = exe_fails(&args);
+            assert!(err.contains("--network mainnet or --network testnet-10"), "{args:?}: {err}");
+        }
+        assert!(!dir.exists());
+    }
     // the indexer's own subcommands and global options still parse after the refactor
     let (out, _) = exe(&["index", "export-orders", "--data-dir", data, "--network", "testnet-10", "--live-only"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
