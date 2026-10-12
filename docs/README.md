@@ -23,6 +23,12 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 | [ops/executor.md](ops/executor.md) | Running `kob-executor`: one process (`run`), the indexer (node, storage, read API, runbook) and the matcher and keepers (keys, economics, flags) |
 | [ops/indexer.md](ops/indexer.md), [ops/matcher.md](ops/matcher.md) | Pointers into `executor.md` (the roles are one binary) |
 
+## Security (`docs/security/`)
+
+| Document | What it covers |
+|---|---|
+| [security/AUDIT-2026-10.md](security/AUDIT-2026-10.md) | The internal pre-mainnet security audit (canary gate): invariants, findings, ablation, fuzzing, live testnet-10 attacks, residual risks |
+
 ## Argent
 
 | Document | What it covers |
