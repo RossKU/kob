@@ -1,6 +1,8 @@
 // KOB TN10 soak: `node dist/soak.mjs <command> --config run/config.json`
 //   setup     one-time: TUSD and asset-token (token2, token3) issuance, registry / allowlist (--recover-issue <slot>:<txid> after an interrupted setup)
-//   cancel    cancel orders by covenant id with their makers' keys (the web app's cancel path)
+//   cancel    cancel orders by covenant id with their makers' keys (the web app's cancel path); --keys <file> adds keys
+//   order     place one order by hand (the bots' path), also on an external token: --key <name> --token <covenant id> --intent <json>
+//             [--keys <file>] [--seed <txid>:<index>:<amount>:<carrier>] (src/bots/order-cli.ts)
 //   bots      bank (funding), market maker, traders, x402 merchant + payer (one process)
 //   checker   protocol invariants from indexer + node, incident log, periodic report
 //   balances  KAS / token balances of every soak key (JSON)
@@ -51,8 +53,21 @@ async function main(): Promise<void> {
       // operator tool: cancel the given orders with their makers' keys through the web app's cancel path (order view -> snapshot -> planCancel)
       const env = await createEnv(cfg);
       const { cancelOrders } = await import('./bots/cancel-cli');
+      const { addKeys } = await import('./bots/order-cli');
+      addKeys(env, arg('--keys'));
       const ids = process.argv.slice(3).filter((a, i, all) => /^[0-9a-f]{64}$/i.test(a) && all[i - 1] !== '--config');
       const ok = await cancelOrders(env, ids);
+      process.exit(ok ? 0 : 1);
+      break;
+    }
+    case 'order': {
+      const env = await createEnv(cfg);
+      const { orderCli } = await import('./bots/order-cli');
+      const key = arg('--key');
+      const token = arg('--token');
+      const intent = arg('--intent');
+      if (!key || !token || !intent) throw new Error('order --key <name> --token <covenant id> --intent <json> [--keys <file>] [--seed <txid>:<index>:<amount>:<carrier>]');
+      const ok = await orderCli(env, { keys: arg('--keys'), key, token, intent, seed: arg('--seed') });
       process.exit(ok ? 0 : 1);
       break;
     }

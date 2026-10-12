@@ -115,6 +115,11 @@ export interface SoakConfig {
   token2?: Token2Config;
   /** a third soak token (optional), configured and handled exactly like `token2` (2026-10-03: TBTC, Binance BTCUSDT / KASUSDT) */
   token3?: Token2Config;
+  /**
+   * tokens issued elsewhere that the soak lists beside its own (2026-10-13: a Kasseal launchpad token, program KCC20PublicMint): written
+   * to the soak registry (the executors' allowlist and the UI's token list) so they can be traded by hand; the bots do not trade them
+   */
+  externalTokens?: ExternalTokenConfig[];
   price: {
     /** Binance USD-M futures KASUSDT (Binance has no KAS spot market) */
     url: string;
@@ -200,6 +205,19 @@ export interface SoakConfig {
 }
 
 /** The config / state slots of the soak tokens beside TUSD, in order (each: config `tokenN`, state `tokenN` + `genesisOutputsN`). */
+/** A token the soak lists but did not issue (`externalTokens`). */
+export interface ExternalTokenConfig {
+  ticker: string;
+  name: string;
+  covenantId: string;
+  /** its token program: the reference KCC-20 3 / 3 (`KCC20Ref`) or the reference's published public-mint build (`KCC20PublicMint`) */
+  program: 'KCC20Ref' | 'KCC20PublicMint';
+  decimals: number;
+  /** 64-hex, default all zero */
+  extensionCommitment?: string;
+  description?: string;
+}
+
 export const ASSET_SLOTS = ['token2', 'token3'] as const;
 export type AssetSlot = (typeof ASSET_SLOTS)[number];
 export type TokenSlot = 'token' | AssetSlot;
