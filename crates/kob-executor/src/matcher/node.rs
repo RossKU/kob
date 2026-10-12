@@ -136,6 +136,13 @@ pub trait NodeApi: Send + Sync {
     fn fee_estimate(&self) -> impl Future<Output = Result<crate::fee::FeeEstimate, RpcError>> + Send {
         async { Err(RpcError::Node("no fee estimate".into())) }
     }
+    /// Replace-by-fee (`submitTransactionReplacement`, rusty-kaspa v2.1.0 `RbfPolicy::Mandatory`): the node takes `tx` only
+    /// when exactly one mempool transaction spends an input of `tx` and `tx` pays a strictly higher fee rate; that
+    /// transaction (and its mempool descendants) is removed. Returns the new transaction id or the node's refusal. The default:
+    /// refused (a node client without replacement; the runner then waits for the pending timeout as before).
+    fn submit_replacement(&self, _tx: Value) -> impl Future<Output = Result<[u8; 32], RpcError>> + Send {
+        async { Err(RpcError::Node("submitTransactionReplacement is not supported by this node client".into())) }
+    }
 }
 
 /// Connection settings.
@@ -331,6 +338,11 @@ impl NodeApi for WrpcNode {
         p.get("transactionId").and_then(hex32).ok_or_else(|| RpcError::Decode(format!("no transactionId in {p}")))
     }
 
+    async fn submit_replacement(&self, tx: Value) -> Result<[u8; 32], RpcError> {
+        let p = self.call("submitTransactionReplacement", json!({"transaction": tx})).await?;
+        p.get("transactionId").and_then(hex32).ok_or_else(|| RpcError::Decode(format!("no transactionId in {p}")))
+    }
+
     async fn chain_from(&self, start_hash: &str) -> Result<ChainUpdate, RpcError> {
         let plan = self.chain_plan(start_hash).await?;
         let timeout = self.cfg.request_timeout.saturating_mul(plan.timeout_scale.max(1));
@@ -472,6 +484,24 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
             Some(e @ RpcError::Node(_)) => e,
             p => other_verdict.or(p).or(first_err).unwrap_or_else(|| RpcError::Transport("no node took the transaction".into())),
         })
+    }
+
+    /// The primary decides (it holds the replaced transaction); the other nodes get the replacement in the background (their
+    /// verdicts are only counted).
+    async fn submit_replacement(&self, tx: Value) -> Result<[u8; 32], RpcError> {
+        let r = self.primary.submit_replacement(tx.clone()).await;
+        if r.is_ok() {
+            for (i, node) in self.others.iter().cloned() {
+                let (tx, board) = (tx.clone(), self.board.clone());
+                tokio::spawn(async move {
+                    let r = node.submit_replacement(tx).await;
+                    if let Some(b) = &board {
+                        b.submitted(i, r.is_ok(), r.as_ref().err().map(|e| e.to_string()));
+                    }
+                });
+            }
+        }
+        r
     }
 
     async fn chain_from(&self, start_hash: &str) -> Result<ChainUpdate, RpcError> {

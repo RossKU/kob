@@ -138,6 +138,7 @@ matcher and keeper options (C, "Running"):
 | `--no-maintenance`, `--no-dust-sell`, `--maintenance-max-jobs` | off, off, 2 | the operator's own token UTXOs: merge and sell (C, "Maintenance") |
 | `--inventory-policy <file>` | none (off) | the surplus-inventory policy (C, "Surplus inventory"): the pair surpluses the operator may accumulate as inventory; maintenance never sells a listed token (also on `match`) |
 | `--no-refund`, `--sweep-own-strays`, `--return-foreign-strays`, `--keeper-min-profit` | as C | keepers (`--keeper-min-profit` is `keep --min-profit`) |
+| `--keeper-subsidy-max-kas`, `--keeper-replace-after-daa`, `--keeper-max-replacements` | 0.05, 100, 3 | keepers' liveness under fee pressure (C, "Fee policy"): the most KAS of its own funding the operator adds to one kill or refund its tip cannot pay at its urgency's rate (0: off); replace a stuck kill or refund of this process after this many DAA, at most this many times (0: never). Also on `keep` and `match --keep` |
 
 `index` (with `replay`, `export-orders`, `import-orders`, `rebase`), `match` and `keep` stay as
 standalone modes. The database and the record log are the same files in every mode; never run two
@@ -2000,8 +2001,9 @@ book has not shown yet) names no outpoint: the executor asks the node (`getUtxos
 addresses) which of them are gone and backs off only their orders. A batch that reached the mempool but lost to another
 transaction spending one of its inputs is dropped as soon as the book no longer lists that input on two ticks in a row
 and the node confirms it spent, instead of holding its other orders until the pending timeout (600 DAA). Only a refusal
-the node cannot place backs off every order of the batch. The executor never calls `submitTransactionReplacement`: no blind
-replacement of anyone's transaction, its own included.
+the node cannot place backs off every order of the batch. The matcher never calls `submitTransactionReplacement`: no blind
+replacement of anyone's transaction, its own included. Only the keepers replace, and only their own stuck kills and refunds
+("Fee policy", *Replacement (RBF)*).
 
 ### Fee policy
 
@@ -2028,6 +2030,16 @@ bucket of its urgency:
   built at its urgency's rate when its `refundTip` pays the fee there, else at the highest rate the tip pays, else it is
   unprofitable at the floor as before; a maintenance sale likewise. These prices come from unsigned builds: none is done
   while every rate is the floor.
+* Liveness: a kill or refund whose `refundTip` pays it at the floor but not at its urgency's rate is topped up from the
+  operator's own funding, at most `--keeper-subsidy-max-kas` per job (default 0.05 KAS; 0: off, the job goes at the
+  highest rate its tip pays as above). It is built at the highest rate up to its urgency's that the tip plus that amount
+  pays, still within `--fee-max-rate` and `--fee-max-tx-kas`. The order's outputs are what the covenant requires whatever
+  the fee (the maker receives `value - refundTip`, its custodies and strays as before): the top-up comes only out of the
+  operator's P2PK funding input, which the job must carry (a job without funding is never subsidised). An order whose tip
+  does not pay even the floor is not subsidised (a maker cannot make the operator pay for its order's end), and closes and
+  sweeps never are. With the default subsidy a kill (about 10,400 grams, 0.0104 KAS at the floor, a default refund tip of
+  twice that) reaches about 680 sompi per gram. Subsidised jobs are logged (`keeper job subsidised from the operator's
+  funding`, with the `subsidy` in sompi) and counted: `kob_keeper_subsidised_total`, `kob_keeper_subsidy_sompi_total`.
 * The estimate is read at most every `--fee-refresh-ms` (10 s), only by steps that plan; the last good one is used for
   `--fee-max-age-ms` (60 s) while the node answers none, then every rate is the floor (logged once per outage: `no fee
   estimate from the node`). The policy never stops a job, it only prices it. `--no-fee-estimate` pays the floor always (the
@@ -2042,11 +2054,22 @@ bucket of its urgency:
   one while every KOB transaction paid 100; orders, fills and IOC / FOK kills were accepted 2 to 4 minutes late
   (`tools/soak/README.md`).
 
-**Replacement (RBF).** rusty-kaspa v2.1.0 offers `submitTransactionReplacement`, but the executor does not use it: a
-transaction is never re-sent at a higher fee. A transaction stuck at a low rate is tracked as pending until it is accepted or
-the pending timeout (600 DAA) drops it and its orders back off; the next plan is priced at the rates of that moment. A
-replacement would need the same inputs (the matcher's funding UTXO) and a higher fee rate per the node's rules, and must not
-replace a competitor's transaction; it is a possible later addition, not part of this policy.
+**Replacement (RBF).** The matcher never re-sends a transaction at a higher fee: a batch stuck at a low rate is tracked as
+pending until it is accepted or the pending timeout (600 DAA) drops it and its orders back off, and the next plan is priced
+at the rates of that moment. Kills and refunds are the exception (`--keeper-replace-after-daa`, default 100 DAA, about
+10 s; `--keeper-max-replacements`, default 3; 0: never): a kill or refund that this process submitted and the node took,
+still unaccepted that long after its last submission, is rebuilt from its own request (the same order inputs, lock time and
+funding UTXO) at its urgency's current rate, at least a quarter above its stuck rate, within `--fee-max-rate`,
+`--fee-max-tx-kas` and the operator subsidy, and sent with `submitTransactionReplacement` (rusty-kaspa v2.1.0, mandatory
+RBF: the node takes it only when exactly one mempool transaction spends one of its inputs, here our own original, and the
+replacement pays a strictly higher fee rate; the original is removed). Only transactions recorded at their own successful
+submission are candidates: a competitor's transaction (ours was refused as a double spend) is never replaced, nor a matcher
+batch, a close, a sweep, a maintenance job, a submit that had no verdict, or a job whose change output funds another
+pending job. A refused replacement (the original was accepted meanwhile, another transaction spent the order, the rate did
+not satisfy the node) ends the replacements of that job, and the original falls back to the pending timeout and backoff as
+before; a replacement without a verdict is followed beside the original (whichever a block accepts settles the order). Each
+replacement is logged (`stuck keeper job replaced at a higher rate`, with the old and new rates) and counted:
+`kob_keeper_replaced_total`, `kob_keeper_replace_refused_total`. The pending timeout still counts from the first submission.
 
 ### Keys and funds
 
@@ -2177,6 +2200,8 @@ kob-executor keep --book-file book.json --metrics-file /var/lib/node_exporter/ko
 | `--tick-budget-ms`, `--max-candidates-per-group` | 20000, 0 | wall-clock budget of a matcher tick; optional cap on the candidates per (book, class, side), 0: all |
 | `--keep` (match) | off | run the keepers too |
 | `--no-refund` (keep) | off | disable refunds, kills and closes |
+| `--keeper-subsidy-max-kas` (keep, match) | 0.05 | the most KAS of the operator's funding added to the fee of one kill or refund whose tip pays the floor but not its urgency's rate (0: off; see Fee policy) |
+| `--keeper-replace-after-daa`, `--keeper-max-replacements` (keep, match) | 100, 3 | replace a kill or refund of this process still unaccepted after this many DAA at a higher rate, at most this many times (0: never; see Fee policy, Replacement) |
 | `--sweep-own-strays` (keep) | off | sweep the strays of the operator's own orders IN PLACE (`SweepOrder`, a `SWEEP` record: the order continues unchanged; own-token, token-B and foreign strays, per token within its program's inputs) |
 | `--return-foreign-strays` (keep) | off | carry proven FOREIGN strays (tokens other than the order's own) back to the maker inside the refund, kill or close that ends an order (permissionless: no refund path reads another token; after the order ends nothing could move them). A job that would not pay with them is built without them |
 | `--pause-file` | none | kill switch: nothing is built or submitted while the file exists (or cannot be checked); keep it on persistent storage |

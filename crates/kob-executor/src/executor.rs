@@ -218,6 +218,8 @@ pub struct RunArgs {
     /// Keepers: smallest profit (tip - fee) per job, sompi.
     #[arg(long, default_value_t = 0)]
     pub keeper_min_profit: i64,
+    #[command(flatten)]
+    pub liveness: crate::keepers::LivenessArgs,
     /// Also serve the x402 facilitator (strict JSON configuration, `crates/kob-executor/x402.example.json`).
     /// Its `node` is the indexer's `--rpc-url`; its `network` must be the indexer's.
     #[arg(long, env = "KOB_X402_CONFIG")]
@@ -249,19 +251,22 @@ impl RunArgs {
             safety_margin: engine.planner.safety_margin,
             ..crate::maintenance::MaintenanceConfig::default()
         };
+        let mut keeper = KeeperConfig {
+            fee_rate: self.fee_rate,
+            refund: !self.no_refund,
+            sweep_own_strays: self.sweep_own_strays,
+            return_foreign_strays: self.return_foreign_strays,
+            min_profit: self.keeper_min_profit,
+            ..KeeperConfig::default()
+        };
+        // `run` refuses invalid liveness options before it gets here
+        let _ = self.liveness.apply(&mut keeper);
         RunConfig {
             maintenance,
             network: network.to_string(),
             roles: Roles { matcher: !self.no_match, keeper: !self.no_keep },
             engine,
-            keeper: KeeperConfig {
-                fee_rate: self.fee_rate,
-                refund: !self.no_refund,
-                sweep_own_strays: self.sweep_own_strays,
-                return_foreign_strays: self.return_foreign_strays,
-                min_profit: self.keeper_min_profit,
-                ..KeeperConfig::default()
-            },
+            keeper,
             dry_run: self.dry_run,
             tick: Duration::from_millis(self.tick_ms.max(100)),
             pause_file: self.pause_file.clone(),
@@ -403,6 +408,7 @@ pub async fn run(a: RunArgs) -> Result<()> {
         bail!("both roles are off: `kob-executor index` is the indexer alone");
     }
     let fee_policy = a.fees.policy(a.fee_rate).map_err(anyhow::Error::msg)?;
+    a.liveness.apply(&mut KeeperConfig::default()).map_err(anyhow::Error::msg)?;
     let cfg = build_config(&a.index)?;
     let signer = HotKey::load(a.key_file.as_deref())?;
     let mut run_cfg = a.run_config(&cfg.network);

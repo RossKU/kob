@@ -8,7 +8,8 @@
 //! 3. funding: the operator's P2PK UTXOs from the node, minus everything pending transactions spend;
 //! 4. matcher tick (plans, chains, engine-validated transactions) and keeper tick;
 //! 5. submission through the [`Tracker`]: benign double spends back off, nothing is replaced
-//!    blindly, chained steps are only sent after their parent was accepted into the mempool.
+//!    blindly, chained steps are only sent after their parent was accepted into the mempool; a kill or refund
+//!    of this process that stays unaccepted is rebuilt at a higher rate and replaced ([`Runner::replace_stuck`]).
 //!
 //! The kill switch is a file (`--pause-file`): while it exists nothing is built or submitted,
 //! acceptance tracking continues.
@@ -25,7 +26,7 @@ use super::family::Families;
 use super::node::{NodeApi, RpcError, SubmitOutcome};
 use super::submit::{Tracked, Tracker, TrackerConfig};
 use super::wallet::{address_of, p2pk_spk_string, Signer};
-use crate::keepers::{tick as keeper_tick, KeeperConfig, KeeperInput};
+use crate::keepers::{tick as keeper_tick, JobKind, KeeperConfig, KeeperInput};
 
 /// Where the book comes from each tick.
 pub trait BookSource: Send {
@@ -225,6 +226,26 @@ pub struct StepReport {
     /// Listed orders left out of this step because the node no longer holds their UTXO (spent in a block the book has not
     /// reached yet, [`gone_orders`]; always 0 while the book lags by less than `RunConfig::verify_live_min_lag`).
     pub gone: usize,
+    /// Stuck kills and refunds of this process replaced at a higher rate this step: (replaced txid, new txid).
+    pub replaced: Vec<([u8; 32], [u8; 32])>,
+}
+
+/// A kill or refund this process submitted and may still replace at a higher rate ([`Runner::replace_stuck`]). Only
+/// transactions the node took from this process are ever recorded: nobody else's transaction is replaced.
+#[derive(Clone, Debug)]
+pub struct InFlightJob {
+    pub kind: JobKind,
+    pub order: CovId,
+    /// The builder request of the submitted transaction (its rate is replaced, nothing else).
+    pub action: kob_protocol::build::Action,
+    /// Replacements so far.
+    pub replacements: u32,
+    /// DAA score of the last submission (the original or the last replacement).
+    pub sent_daa: u64,
+    /// The operator's subsidy of the submitted transaction (sompi).
+    pub subsidy: u64,
+    /// No further replacement (refused by the node, no verdict, or no higher rate fits).
+    pub done: bool,
 }
 
 /// The matcher / keeper process.
@@ -271,6 +292,14 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     pub plan_base_rate: u64,
     /// Where the rates are published for the rest of the process (the x402 facilitator of `kob-executor run`).
     pub fee_board: Option<crate::fee::FeeBoard>,
+    /// Kills and refunds this process submitted that are not accepted yet, by txid ([`Runner::replace_stuck`]).
+    pub keeper_inflight: BTreeMap<[u8; 32], InFlightJob>,
+    /// Keeper jobs submitted with an operator subsidy, and the sompi of those subsidies (metrics).
+    pub keeper_subsidised: u64,
+    pub keeper_subsidy_sompi: u64,
+    /// Stuck kills and refunds replaced at a higher rate, and replacements the node refused (metrics).
+    pub keeper_replaced: u64,
+    pub keeper_replace_refused: u64,
 }
 
 /// A source of reserved outpoints ([`Runner::reservations`]).
@@ -413,7 +442,138 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             waiting: None,
             last_funding: None,
             inventory_use,
+            keeper_inflight: BTreeMap::new(),
+            keeper_subsidised: 0,
+            keeper_subsidy_sompi: 0,
+            keeper_replaced: 0,
+            keeper_replace_refused: 0,
         }
+    }
+
+    /// Replace-by-fee of this process's own stuck kills and refunds (`docs/ops/executor.md`, fee policy): one that no chain
+    /// block accepted `keeper.replace_after_daa` DAA after its last submission is rebuilt from its own request (the same order
+    /// inputs and funding; one `spare` funding UTXO added when it had none and the operator subsidises) at its urgency's
+    /// current rate, at least a quarter above its rate, within the policy's highest rate and the total cap
+    /// ([`crate::keepers::reprice`]), and sent with `submitTransactionReplacement`; at most `keeper.max_replacements` times.
+    /// Only transactions the node took from this process are candidates ([`Runner::keeper_inflight`]); one whose outputs a
+    /// tracked transaction spends (a chained keeper job), whose submit had no verdict, or that a chain block accepted is left
+    /// alone. A refused replacement (the original was accepted meanwhile, another transaction spent the order, ...) ends the
+    /// replacements of that job: the tracker's pending timeout and backoff handle it as before.
+    pub async fn replace_stuck(&mut self, daa: u64, spare: &[KeyUtxo], rep: &mut StepReport) -> anyhow::Result<()> {
+        let tracker = &self.tracker;
+        self.keeper_inflight.retain(|id, _| tracker.txs.get(id).is_some_and(|t| t.accepted.is_none()));
+        let kc = self.cfg.keeper.clone();
+        if kc.max_replacements == 0 || self.cfg.dry_run {
+            return Ok(());
+        }
+        // transactions whose outputs a tracked transaction spends: replacing one would orphan its child
+        let parents: BTreeSet<[u8; 32]> = self.tracker.txs.values().flat_map(|t| t.spends.iter().map(|op| op.0)).collect();
+        let due: Vec<[u8; 32]> = self
+            .keeper_inflight
+            .iter()
+            .filter(|(id, j)| {
+                !j.done
+                    && j.replacements < kc.max_replacements
+                    && daa >= j.sent_daa.saturating_add(kc.replace_after_daa)
+                    && !parents.contains(*id)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        let mut spare: std::collections::VecDeque<KeyUtxo> = spare.iter().cloned().collect();
+        let ceiling = self.cfg.fee_policy.max_rate.max(kc.fees.floor_of(kc.fee_rate));
+        for old in due {
+            let (Some(t), Some(j)) = (self.tracker.txs.get(&old).cloned(), self.keeper_inflight.get(&old).cloned()) else {
+                continue;
+            };
+            if t.unconfirmed || t.parent.is_some() {
+                continue;
+            }
+            let hex_old = kob_protocol::json::to_hex(&old);
+            let want = kc.fees.rate(j.kind.urgency(), kc.fee_rate);
+            let rate = want.max(t.fee_rate.saturating_add((t.fee_rate / 4).max(1))).min(ceiling);
+            let job = if rate <= t.fee_rate {
+                Err(format!("already at the highest rate {ceiling}"))
+            } else {
+                crate::keepers::reprice(j.kind, j.order, &j.action, rate, t.fee_rate, spare.front(), &kc, self.signer.as_ref())
+            };
+            let job = match job {
+                Ok(job) => job,
+                Err(why) => {
+                    tracing::info!(txid = %hex_old, kind = j.kind.name(), %why, "stuck keeper job not replaced");
+                    if let Some(e) = self.keeper_inflight.get_mut(&old) {
+                        e.done = true;
+                    }
+                    continue;
+                }
+            };
+            if spare.front().is_some_and(|f| job.spends.contains(&outpoint(&f.utxo))) {
+                spare.pop_front();
+            }
+            let new = job.signed.tx.id;
+            let replacement = Tracked {
+                txid: new,
+                spends: job.spends.clone(),
+                rpc_tx: rpc_json(&job.signed)?,
+                profit: job.profit,
+                fee: job.built.fee.fee,
+                fee_rate: job.built.fee.fee_rate,
+                unconfirmed: false,
+                ..t.clone()
+            };
+            self.source.watch(new);
+            let (fee, fee_rate) = (replacement.fee, replacement.fee_rate);
+            match self.node.submit_replacement(replacement.rpc_tx.clone()).await {
+                Ok(_) => {
+                    tracing::info!(
+                        replaced = %hex_old,
+                        txid = %kob_protocol::json::to_hex(&new),
+                        kind = j.kind.name(),
+                        old_rate = t.fee_rate,
+                        fee_rate,
+                        fee,
+                        subsidy = job.subsidy,
+                        "stuck keeper job replaced at a higher rate"
+                    );
+                    self.tracker.txs.remove(&old);
+                    self.tracker.txs.insert(new, replacement);
+                    self.keeper_inflight.remove(&old);
+                    if job.subsidy > j.subsidy {
+                        if j.subsidy == 0 {
+                            self.keeper_subsidised += 1;
+                        }
+                        self.keeper_subsidy_sompi += job.subsidy - j.subsidy;
+                    }
+                    let next = InFlightJob {
+                        action: job.action,
+                        replacements: j.replacements + 1,
+                        sent_daa: daa,
+                        subsidy: job.subsidy.max(j.subsidy),
+                        ..j
+                    };
+                    self.keeper_inflight.insert(new, next);
+                    self.keeper_replaced += 1;
+                    rep.replaced.push((old, new));
+                }
+                Err(RpcError::Node(m)) => {
+                    tracing::info!(txid = %hex_old, kind = j.kind.name(), why = %m, "replacement refused; the original stays pending");
+                    self.keeper_replace_refused += 1;
+                    if let Some(e) = self.keeper_inflight.get_mut(&old) {
+                        e.done = true;
+                    }
+                }
+                Err(e) => {
+                    // no verdict: the node may hold either one; both are followed (the replacement as an unconfirmed submit
+                    // the tracker resends idempotently), whichever a chain block accepts settles the order
+                    tracing::warn!(txid = %hex_old, error = %e, "replacement without a verdict; following both");
+                    if let Some(e) = self.keeper_inflight.get_mut(&old) {
+                        e.done = true;
+                    }
+                    self.tracker.unknown += 1;
+                    self.tracker.txs.insert(new, Tracked { unconfirmed: true, ..replacement });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Outpoints no plan may spend: the tracker's pending and unfinalized transactions and the reservations.
@@ -745,6 +905,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
 
         if self.cfg.roles.keeper {
+            // this process's stuck kills and refunds first: their replacements keep their inputs (and may take a funding UTXO)
+            let spare: Vec<KeyUtxo> = funding.iter().filter(|k| !spent.contains(&outpoint(&k.utxo))).cloned().collect();
+            self.replace_stuck(daa, &spare, &mut rep).await?;
+            spent = self.reserved_or_spent();
             let funding: Vec<KeyUtxo> = funding.iter().filter(|k| !spent.contains(&outpoint(&k.utxo))).cloned().collect();
             // the listed orders plus the proven unlisted ones (kill / refund / close only: the keepers never match)
             let mut orders = book.orders.clone();
@@ -823,7 +987,34 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     fee_rate: j.built.fee.fee_rate,
                     unconfirmed: false,
                 };
+                let txid = t.txid;
                 self.send(t, daa, &mut rep).await;
+                if rep.submitted.last() != Some(&txid) {
+                    continue;
+                }
+                if j.subsidy > 0 {
+                    tracing::info!(
+                        txid = %kob_protocol::json::to_hex(&txid),
+                        kind = j.kind.name(),
+                        subsidy = j.subsidy,
+                        fee_rate = j.built.fee.fee_rate,
+                        "keeper job subsidised from the operator's funding"
+                    );
+                    self.keeper_subsidised += 1;
+                    self.keeper_subsidy_sompi += j.subsidy;
+                }
+                if j.kind.liveness() && self.cfg.keeper.max_replacements > 0 {
+                    let f = InFlightJob {
+                        kind: j.kind,
+                        order: j.order,
+                        action: j.action,
+                        replacements: 0,
+                        sent_daa: daa,
+                        subsidy: j.subsidy,
+                        done: false,
+                    };
+                    self.keeper_inflight.insert(txid, f);
+                }
             }
         }
 
@@ -1010,6 +1201,18 @@ pub fn metrics_text<N: NodeApi, S: BookSource>(r: &Runner<N, S>, rep: &StepRepor
     g("kob_fee_rate_low", "Fee rate of housekeeping transactions (sompi per gram).", f.low.to_string());
     g("kob_fee_estimated", "1 when the rates come from the node's fee estimate, 0 at the floor.", (f.estimated as u8).to_string());
     g("kob_fee_estimate_failures_total", "Fee estimate reads that failed.", r.fee_state.failures.to_string());
+    g(
+        "kob_keeper_subsidised_total",
+        "Kills and refunds submitted with a fee top-up from the operator's funding.",
+        r.keeper_subsidised.to_string(),
+    );
+    g("kob_keeper_subsidy_sompi_total", "Sompi of the operator's funding those top-ups took.", r.keeper_subsidy_sompi.to_string());
+    g("kob_keeper_replaced_total", "Stuck kills and refunds replaced at a higher fee rate.", r.keeper_replaced.to_string());
+    g(
+        "kob_keeper_replace_refused_total",
+        "Replacements the node refused (the original stayed pending).",
+        r.keeper_replace_refused.to_string(),
+    );
     s
 }
 

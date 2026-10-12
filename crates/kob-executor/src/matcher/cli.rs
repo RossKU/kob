@@ -89,6 +89,8 @@ pub struct MatchArgs {
     /// operator may accumulate as inventory (never sold by maintenance). Default: none (off).
     #[arg(long)]
     pub inventory_policy: Option<PathBuf>,
+    #[command(flatten)]
+    pub liveness: crate::keepers::LivenessArgs,
     /// Also run the keepers in this process.
     #[arg(long)]
     pub keep: bool,
@@ -109,6 +111,8 @@ pub struct KeepArgs {
     /// close that ends the order (permissionless; dropped from a job that would not pay with them).
     #[arg(long)]
     pub return_foreign_strays: bool,
+    #[command(flatten)]
+    pub liveness: crate::keepers::LivenessArgs,
     /// Smallest profit (tip − fee) per job, sompi.
     #[arg(long, default_value_t = 0)]
     pub min_profit: i64,
@@ -224,6 +228,7 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     let mut cfg = run_cfg(&a.common, Roles { matcher: true, keeper: a.keep });
     cfg.engine = engine;
     cfg.keeper.fee_rate = a.common.fee_rate;
+    a.liveness.apply(&mut cfg.keeper).map_err(anyhow::Error::msg)?;
     cfg.maintenance.fee_rate = a.common.fee_rate;
     cfg.maintenance.inventory = inventory;
     let node = WrpcNode::new(WrpcConfig::new(a.common.rpc_url.clone()));
@@ -245,6 +250,7 @@ pub async fn run_keep(a: KeepArgs) -> anyhow::Result<()> {
         min_profit: a.min_profit,
         ..KeeperConfig::default()
     };
+    a.liveness.apply(&mut cfg.keeper).map_err(anyhow::Error::msg)?;
     if a.common.offline {
         let book = read_snapshot(&a.common.book_file)?;
         let inp = crate::keepers::KeeperInput {

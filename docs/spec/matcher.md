@@ -947,10 +947,11 @@ custodies (genuine holder of the token's program, owned by the exit id, exactly 
 - The planner sizes a batch by an estimate of its bytes; when the built transaction exceeds a block mass limit, the
   budget is scaled down by the overrun and the batch planned again (no fill is dropped for it).
 - Competing matchers race by fee; the loser's transaction is invalid, not harmful. The node offers replacement by fee
-  (`submitTransactionReplacement`, RBF), but the reference executor never uses it: no transaction, its own or a
-  competitor's, is replaced; a transaction stuck at a low rate stays pending until it is accepted or the pending timeout
-  drops it (§8), and the next plan is priced at the rates of that moment. Re-submitting a stuck transaction at a higher fee
-  is a possible later addition, not part of this specification.
+  (`submitTransactionReplacement`, RBF); the reference matcher never uses it: a batch stuck at a low rate stays pending
+  until it is accepted or the pending timeout drops it (§8), and the next plan is priced at the rates of that moment. Only
+  the keepers replace, and only their own kills and refunds: one that stays unaccepted is rebuilt from the same request
+  (same order inputs and funding) at a higher rate and replaced, a bounded number of times; a competitor's transaction is
+  never replaced (`docs/ops/executor.md`, fee policy).
 - A cancel may lose to a fill and a fill may lose to a cancel (accepted spec).
 
 ---

@@ -18,6 +18,11 @@
 //!
 //! Every job is built with `kob_protocol` builders, signed with the hot key and validated in the
 //! v2.1.0 engine before submission, exactly like matcher batches.
+//!
+//! Liveness under fee pressure (`docs/ops/executor.md`, fee policy): a kill or refund whose tip pays it at the floor but not
+//! at its urgency's rate may be topped up from the operator's own funding, at most [`KeeperConfig::subsidy_max`] per job
+//! (the maker's outputs stay what the covenant requires), and a kill or refund of this process that stays unaccepted is
+//! rebuilt at a higher rate ([`reprice`]) and replaced by the runner (`crate::matcher::run`).
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -61,6 +66,18 @@ pub struct KeeperConfig {
     /// that yields no job, and building costs about 1.6 ms of CPU.
     pub max_attempts: usize,
     pub validate: bool,
+    /// Operator fee subsidy (liveness, `docs/ops/executor.md`, fee policy): the most sompi of its own funding the operator
+    /// adds to ONE kill or refund whose refund tip pays the job at the floor but not at its urgency's rate, so the job still
+    /// goes at that rate (within `fees.max_tx_fee` and the policy's highest rate). The order's outputs are what the covenant
+    /// requires whatever the fee (the maker gets `value - refundTip`): the top-up only comes out of the operator's P2PK
+    /// funding inputs. 0: off (the job goes at the highest rate its tip pays). Closes and sweeps are never subsidised.
+    pub subsidy_max: u64,
+    /// Replace-by-fee of the operator's own stuck kills and refunds (`crate::matcher::run`): a kill or refund this process
+    /// submitted that no chain block accepted after this many DAA is rebuilt at a higher rate and resubmitted with
+    /// `submitTransactionReplacement`.
+    pub replace_after_daa: u64,
+    /// Most replacements of one kill or refund (0: never replace).
+    pub max_replacements: u32,
 }
 
 impl Default for KeeperConfig {
@@ -76,7 +93,41 @@ impl Default for KeeperConfig {
             max_jobs: 32,
             max_attempts: 128,
             validate: true,
+            subsidy_max: 0,
+            replace_after_daa: 100,
+            max_replacements: 0,
         }
+    }
+}
+
+/// Command-line options of the keepers' liveness under fee pressure (`kob-executor run`, `keep`, `match --keep`).
+#[derive(clap::Args, Debug, Clone)]
+pub struct LivenessArgs {
+    /// Keepers: the most KAS of its own funding the operator adds to the fee of ONE kill or refund whose refund tip pays it
+    /// at the floor but not at its urgency's rate (the maker's outputs never change; still within `--fee-max-rate` and
+    /// `--fee-max-tx-kas`). 0: never (the job goes at the highest rate its tip pays).
+    #[arg(long, default_value_t = 0.05)]
+    pub keeper_subsidy_max_kas: f64,
+    /// Keepers: a kill or refund this process submitted that is still unaccepted after this many DAA (10 per second) is
+    /// rebuilt at a higher rate and replaced (`submitTransactionReplacement`).
+    #[arg(long, default_value_t = 100)]
+    pub keeper_replace_after_daa: u64,
+    /// Keepers: most replacements of one kill or refund (0: never replace; then a stuck one waits for the pending timeout).
+    #[arg(long, default_value_t = 3)]
+    pub keeper_max_replacements: u32,
+}
+
+impl LivenessArgs {
+    /// Sets the liveness options of `cfg`.
+    pub fn apply(&self, cfg: &mut KeeperConfig) -> Result<(), String> {
+        let k = self.keeper_subsidy_max_kas;
+        if !k.is_finite() || !(0.0..=1e9).contains(&k) {
+            return Err(format!("--keeper-subsidy-max-kas {k} is not an amount of KAS"));
+        }
+        cfg.subsidy_max = (k * 100_000_000.0).round() as u64;
+        cfg.replace_after_daa = self.keeper_replace_after_daa.max(1);
+        cfg.max_replacements = self.keeper_max_replacements;
+        Ok(())
     }
 }
 
@@ -102,6 +153,13 @@ impl JobKind {
         }
     }
 
+    /// Whether the operator may top up the job's fee from its own funding ([`KeeperConfig::subsidy_max`]) and replace it
+    /// when it is stuck ([`KeeperConfig::max_replacements`]): a kill (an IOC / FOK must end at its deadline) and a refund (a
+    /// maker's funds go back), never a close or a sweep (housekeeping).
+    pub fn liveness(self) -> bool {
+        matches!(self, JobKind::Kill | JobKind::Refund)
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             JobKind::Kill => "kill",
@@ -123,6 +181,9 @@ pub struct Job {
     pub validation: Option<Validation>,
     /// Operator profit: change − funding (sompi).
     pub profit: i64,
+    /// Sompi of the operator's own funding the fee took beyond the refund tip ([`KeeperConfig::subsidy_max`]); 0 for a job its
+    /// tip pays.
+    pub subsidy: u64,
     pub spends: BTreeSet<Outpoint>,
 }
 
@@ -274,14 +335,35 @@ fn finish_with(
     Ok((built, signed, v, change as i64 - f as i64))
 }
 
+/// The fee rates a job may be built at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct JobRate {
+    /// What the job's own tip pays ([`job_rate`]).
+    plain: u64,
+    /// A higher rate the operator's subsidy reaches ([`KeeperConfig::subsidy_max`]): tried first, `plain` when it does not
+    /// build or costs more than the subsidy.
+    subsidised: Option<u64>,
+}
+
+/// The least profit a subsidised job may make: the operator pays at most `subsidy_max` of the fee out of its own funding.
+fn subsidy_floor(cfg: &KeeperConfig) -> i64 {
+    -(cfg.subsidy_max.min(i64::MAX as u64) as i64)
+}
+
 /// The fee rate a job is built at (`crate::fee`): its urgency's rate, held to the total cap and, for a paid job, to the
 /// highest rate its tip still pays (at least the floor). Priced from an unsigned build at the floor and checked with one at
 /// the rate found (none while the urgency's rate is the floor); a job that does not build or pay there goes at the floor.
-fn job_rate(action: &Action, kind: JobKind, cfg: &KeeperConfig, funding: &[KeyUtxo]) -> u64 {
+///
+/// A kill or refund with funding whose tip pays the job at the floor but not at its urgency's rate may also get a subsidised
+/// rate ([`KeeperConfig::subsidy_max`]): the highest rate up to its urgency's (within the total cap) at which the operator's
+/// funding adds at most `subsidy_max` to the tip. An order whose tip does not pay even the floor is never subsidised (a maker
+/// cannot make the operator pay for its order's end).
+fn job_rate(action: &Action, kind: JobKind, cfg: &KeeperConfig, funding: &[KeyUtxo]) -> JobRate {
     let floor = cfg.fees.floor_of(cfg.fee_rate);
     let want = cfg.fees.rate(kind.urgency(), cfg.fee_rate);
+    let flat = JobRate { plain: floor, subsidised: None };
     if want <= floor {
-        return floor;
+        return flat;
     }
     let funded: u64 = funding.iter().map(|k| k.utxo.amount).sum();
     let paid = kind != JobKind::Sweep;
@@ -290,18 +372,80 @@ fn job_rate(action: &Action, kind: JobKind, cfg: &KeeperConfig, funding: &[KeyUt
         let change = built.fee.change_output.map(|i| built.tx.outputs[i as usize].value).unwrap_or(0);
         Some((built.fee.fee, change as i64 - funded as i64))
     };
+    let fits = |fee: u64| cfg.fees.max_tx_fee == 0 || fee <= cfg.fees.max_tx_fee;
     let mut a = action.clone();
     crate::fee::set_rate(&mut a, floor);
-    let Some((fee0, profit0)) = profit_at(&a) else { return floor };
+    let Some((fee0, profit0)) = profit_at(&a) else { return flat };
     let rate = cfg.fees.priced(want, floor, fee0, paid.then_some(profit0), cfg.min_profit);
-    if rate <= floor {
-        return floor;
+    let plain = if rate <= floor {
+        floor
+    } else {
+        crate::fee::set_rate(&mut a, rate);
+        match profit_at(&a) {
+            Some((fee, profit)) if (!paid || profit >= cfg.min_profit) && fits(fee) => rate,
+            _ => floor,
+        }
+    };
+    let subsidised = (kind.liveness() && cfg.subsidy_max > 0 && !funding.is_empty() && profit0 >= cfg.min_profit)
+        .then(|| cfg.fees.priced(want, floor, fee0, Some(profit0), subsidy_floor(cfg).min(cfg.min_profit)))
+        .filter(|r| *r > plain);
+    JobRate { plain, subsidised }
+}
+
+/// A kill or refund the runner rebuilds at `rate` to replace its stuck transaction (`submitTransactionReplacement`): the same
+/// request (the same order inputs, lock time and funding), plus `extra` funding when the request has none and the operator
+/// subsidises (the tip alone may not pay the higher rate). The rate is lowered to the total cap; a build that then pays no
+/// more than `above` (the stuck transaction's rate: a replacement must pay a higher one), costs the operator more than
+/// [`KeeperConfig::subsidy_max`] (or, without a subsidy, leaves less than `min_profit`), or does not build or validate is an
+/// error. The maker's outputs are the covenant's whatever the rate.
+pub fn reprice(
+    kind: JobKind,
+    order: CovId,
+    action: &Action,
+    rate: u64,
+    above: u64,
+    extra: Option<&KeyUtxo>,
+    cfg: &KeeperConfig,
+    signer: &dyn Signer,
+) -> Result<Job, String> {
+    if !kind.liveness() {
+        return Err(format!("a {} is never replaced", kind.name()));
     }
-    crate::fee::set_rate(&mut a, rate);
-    match profit_at(&a) {
-        Some((fee, profit)) if (!paid || profit >= cfg.min_profit) && (cfg.fees.max_tx_fee == 0 || fee <= cfg.fees.max_tx_fee) => rate,
-        _ => floor,
+    let mut action = action.clone();
+    if let (Action::RefundOrder(r), Some(f)) = (&mut action, extra) {
+        if r.funding.is_empty() && cfg.subsidy_max > 0 {
+            r.funding.push(f.clone());
+            r.change = r.change.or(Some(signer.pubkey()));
+        }
     }
+    let funding: Vec<KeyUtxo> = match &action {
+        Action::RefundOrder(r) => r.funding.clone(),
+        _ => return Err("not a refund request".into()),
+    };
+    let min_ok = if cfg.subsidy_max > 0 { subsidy_floor(cfg).min(cfg.min_profit) } else { cfg.min_profit };
+    let floor = cfg.fees.floor_of(cfg.fee_rate);
+    let mut rate = rate.max(floor);
+    for _ in 0..2 {
+        if rate <= above {
+            return Err(format!("no rate above {above} fits the fee cap"));
+        }
+        crate::fee::set_rate(&mut action, rate);
+        let (built, signed, validation, profit) = finish(action.clone(), signer, cfg.validate, &funding)?;
+        if let Some(r) = cfg.fees.capped(rate, built.fee.fee, floor) {
+            rate = r;
+            continue;
+        }
+        if cfg.fees.max_tx_fee > 0 && built.fee.fee > cfg.fees.max_tx_fee {
+            return Err(format!("fee {} above the cap {}", built.fee.fee, cfg.fees.max_tx_fee));
+        }
+        if profit < min_ok {
+            return Err(format!("the fee at {rate} sompi/g costs the operator {} (most {})", -profit, -min_ok));
+        }
+        let spends = spends_of(&built);
+        let subsidy = if profit < 0 { profit.unsigned_abs() } else { 0 };
+        return Ok(Job { kind, order, action, built, signed, validation, profit, subsidy, spends });
+    }
+    Err(format!("no rate above {above} fits the fee cap"))
 }
 
 /// The foreign strays of an order one transaction can move: per token, the plain UTXOs that share the first one's extension
@@ -434,8 +578,34 @@ pub fn tick(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Signer) -> Keepe
         }
         let Some((kind, mut action)) = attempt else { continue };
         attempts += 1;
-        let rate = job_rate(&action, kind, cfg, &funding_vec);
-        crate::fee::set_rate(&mut action, rate);
+        let rates = job_rate(&action, kind, cfg, &funding_vec);
+        // the subsidised rate first: kept when it builds within the total cap and costs the operator at most `subsidy_max`
+        let subsidised = rates.subsidised.and_then(|rate| {
+            let mut a = action.clone();
+            crate::fee::set_rate(&mut a, rate);
+            let r = finish(a.clone(), signer, cfg.validate, &funding_vec).ok()?;
+            let fits = cfg.fees.max_tx_fee == 0 || r.0.fee.fee <= cfg.fees.max_tx_fee;
+            (fits && r.3 >= subsidy_floor(cfg)).then_some((a, r))
+        });
+        if let Some((a, (built, signed, validation, profit))) = subsidised {
+            pool.pop_front();
+            if let Some(i) = built.fee.change_output {
+                let v = built.tx.outputs[i as usize].value;
+                let u = kob_protocol::tx::Utxo {
+                    transaction_id: built.tx.id,
+                    index: i,
+                    amount: v,
+                    block_daa_score: UNACCEPTED_DAA,
+                    covenant_id: None,
+                };
+                pool.push_back(KeyUtxo { utxo: u, pubkey: operator });
+            }
+            let spends = spends_of(&built);
+            let subsidy = if profit < 0 { profit.unsigned_abs() } else { 0 };
+            report.jobs.push(Job { kind, order: id, action: a, built, signed, validation, profit, subsidy, spends });
+            continue;
+        }
+        crate::fee::set_rate(&mut action, rates.plain);
         let mut funding = funding;
         let mut result = finish(action.clone(), signer, cfg.validate, &funding_vec);
         // A paid job that loses money only because of its funding input (its mass, a change output) or fails or loses money
@@ -486,7 +656,7 @@ pub fn tick(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Signer) -> Keepe
                     }
                 }
                 let spends = spends_of(&built);
-                report.jobs.push(Job { kind, order: id, action, built, signed, validation, profit, spends });
+                report.jobs.push(Job { kind, order: id, action, built, signed, validation, profit, subsidy: 0, spends });
             }
             Err(e) => {
                 report.skipped.push((id, format!("{}: {e}", kind.name())));

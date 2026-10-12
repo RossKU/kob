@@ -5,7 +5,8 @@
 //! * `RejectDoubleSpendInMempool` is benign (a competing matcher, a cancel, a refund): the order
 //!   whose input the node names backs off exponentially (every order of the transaction when the
 //!   input is no order's, [`Tracked::owners`]); nothing is ever replaced blindly (the matcher never
-//!   calls `submitTransactionReplacement`).
+//!   calls `submitTransactionReplacement`; the runner replaces only its own stuck keeper kills and
+//!   refunds, `crate::matcher::run::Runner::replace_stuck`).
 //! * A missing input (an orphan: the input's spend is already in a block the book has not shown
 //!   yet) names no outpoint: the tracker asks the node which of the order inputs are still unspent
 //!   ([`Tracked::addresses`]) and backs off the orders whose inputs are gone; the other orders of
