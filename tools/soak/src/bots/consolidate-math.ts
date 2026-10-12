@@ -25,6 +25,12 @@ export interface ConsolidateConfig {
   kasAbove: number;
   /** plain KAS coins per merge (the SDK generator splits a set above the mass limit into several transactions) */
   kasInputs: number;
+  /**
+   * The market maker keeps FEW LARGE token UTXOs (one ask level spends one UTXO and returns change; a sell whose inputs exceed the program's 3
+   * is refused as TOKEN_UTXOS_FRAGMENTED): it merges down to the fan-out target + `mmSlack` UTXOs (the 10-minute fan-out then never has pieces to re-split), with its own, higher rate cap.
+   */
+  mmSlack: number;
+  mmMaxTxPerInterval: number;
 }
 
 /**
@@ -32,7 +38,7 @@ export interface ConsolidateConfig {
  * prototype the soak ran before): 8 merge transactions per minute per key and token keep a market maker's fragmentation (about 8 new token
  * UTXOs a minute at the 2026-10-01 rates) in check.
  */
-export const DEFAULT_CONSOLIDATE: ConsolidateConfig = { enabled: true, slack: 8, maxTxPerInterval: 8, intervalSec: 60, traders: true, kasAbove: 100, kasInputs: 80 };
+export const DEFAULT_CONSOLIDATE: ConsolidateConfig = { enabled: true, slack: 8, maxTxPerInterval: 8, intervalSec: 60, traders: true, kasAbove: 100, kasInputs: 80, mmSlack: 4, mmMaxTxPerInterval: 24 };
 
 export function consolidateConfig(raw?: Partial<ConsolidateConfig>): ConsolidateConfig {
   const c = { ...DEFAULT_CONSOLIDATE, ...(raw ?? {}) };
@@ -43,7 +49,37 @@ export function consolidateConfig(raw?: Partial<ConsolidateConfig>): Consolidate
     intervalSec: Math.max(1, c.intervalSec),
     kasAbove: Math.max(0, Math.floor(c.kasAbove)),
     kasInputs: Math.max(2, Math.floor(c.kasInputs)),
+    mmSlack: Math.max(1, Math.floor(c.mmSlack)),
+    mmMaxTxPerInterval: Math.max(0, Math.floor(c.mmMaxTxPerInterval)),
   };
+}
+
+/** The market maker's view of the config: few large UTXOs (the fan-out target + `mmSlack`) and its own rate cap. */
+export function mmConsolidateConfig(c: ConsolidateConfig): ConsolidateConfig {
+  return { ...c, slack: c.mmSlack, maxTxPerInterval: c.mmMaxTxPerInterval };
+}
+
+/**
+ * True when the `maxInputs` largest UTXOs together hold less than `need` base units although the key holds more in total: a sell of `need`
+ * would be refused (TOKEN_UTXOS_FRAGMENTED) until the dust is merged. False when the key simply lacks the tokens (merging cannot help).
+ */
+export function isFragmented(amounts: readonly (bigint | string)[], need: bigint, maxInputs: number): boolean {
+  const xs = amounts.map((a) => BigInt(a)).sort((a, b) => (a > b ? -1 : a < b ? 1 : 0));
+  const total = xs.reduce((t, x) => t + x, 0n);
+  if (total < need) return false;
+  const top = xs.slice(0, Math.max(1, Math.floor(maxInputs))).reduce((t, x) => t + x, 0n);
+  return top < need;
+}
+
+/**
+ * KAS the merged output carries: the largest input carrier, at most `ceiling` (the order planner's default carrier), at least `floor` (the
+ * program's minimum token output). The old fixed 10 KAS never fit: UTXOs the soak creates carry 2 KAS, so three of them (6 KAS) never covered
+ * the output plus the fee and every merge was skipped.
+ */
+export function mergedCarrier(inputs: readonly { amount: bigint | string }[], floor: bigint, ceiling: bigint): bigint {
+  const largest = inputs.reduce((m, u) => (BigInt(u.amount) > m ? BigInt(u.amount) : m), 0n);
+  const c = largest < ceiling ? largest : ceiling;
+  return c < floor ? floor : c;
 }
 
 export interface SelectOptions {

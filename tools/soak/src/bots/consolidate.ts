@@ -12,15 +12,19 @@ import { buildAtUrgency } from '../fees';
 import { tokenRef } from '../market';
 import { KAS } from '../util';
 import type { BotWallet } from '../wallet';
-import { RateLimiter, selectMergeChain, type ConsolidateConfig } from './consolidate-math';
+import { DEFAULT_CARRIER, tokenCarrierFloor } from '@/kob/orders/common';
+import { mergedCarrier, RateLimiter, selectMergeChain, type ConsolidateConfig } from './consolidate-math';
 
-const CARRIER = 10n * KAS;
+/** KAS a merge must free (inputs' carriers minus the output's) to pay its fee; below it the batch is skipped */
+const MIN_FREED = KAS;
 
-let limiter: { rl: RateLimiter; max: number; windowMs: number } | null = null;
+// one limiter per (cap, window): the traders and the market maker (own, higher cap) share the process and must not reset each other's history
+const limiters = new Map<string, RateLimiter>();
 function limiterFor(cfg: ConsolidateConfig): RateLimiter {
-  const windowMs = cfg.intervalSec * 1000;
-  if (!limiter || limiter.max !== cfg.maxTxPerInterval || limiter.windowMs !== windowMs) limiter = { rl: new RateLimiter(cfg.maxTxPerInterval, windowMs), max: cfg.maxTxPerInterval, windowMs };
-  return limiter.rl;
+  const k = `${cfg.maxTxPerInterval}/${cfg.intervalSec}`;
+  let rl = limiters.get(k);
+  if (!rl) limiters.set(k, (rl = new RateLimiter(cfg.maxTxPerInterval, cfg.intervalSec * 1000)));
+  return rl;
 }
 
 /**
@@ -49,7 +53,8 @@ async function consolidateNow(env: Env, w: BotWallet, m: TokenMarket, keep: numb
       // the previous link's output (unaccepted) leads the next merge: one UTXO at the end of the pass
       const batch: TokenUtxo[] = carry ? [carry, ...fresh] : fresh;
       const carriersIn = batch.reduce((s, u) => s + BigInt(u.amount), 0n);
-      if (carriersIn < CARRIER + KAS) {
+      const carrier = mergedCarrier(batch, tokenCarrierFloor(env.kob, m.templateHash), DEFAULT_CARRIER);
+      if (carriersIn < carrier + MIN_FREED) {
         w.stats.inc(`consolidate_skipped:carriers`);
         break;
       }
@@ -63,19 +68,19 @@ async function consolidateNow(env: Env, w: BotWallet, m: TokenMarket, keep: numb
           action: 'sendTokens',
           token: { covenantId: m.covenantId, program: m.program },
           tokens: batch,
-          recipients: [{ pubkey: w.pk, amount: total.toString(), carrier: CARRIER.toString() }],
+          recipients: [{ pubkey: w.pk, amount: total.toString(), carrier: carrier.toString() }],
           funding: [],
           change: w.pk,
         } as const,
         (r) => env.kob.build(r as unknown as Parameters<typeof env.kob.build>[0]),
       );
       w.stats.inc('consolidate_try');
-      const r = await w.submit(built, 'consolidate', { token: m.ticker, inputs: batch.length, chained: carry !== null, base: total, freedKas: Number(carriersIn - CARRIER) / 1e8 });
+      const r = await w.submit(built, 'consolidate', { token: m.ticker, inputs: batch.length, chained: carry !== null, base: total, freedKas: Number(carriersIn - carrier) / 1e8 });
       if (!r.ok) break; // the view is stale (a lost race) or the node refused: the next pass starts from fresh state
       done++;
       merged += fresh.length;
       w.stats.inc(`consolidate_merged:${m.ticker}`, fresh.length);
-      w.stats.inc('consolidate_freed_sompi', Number(carriersIn - CARRIER));
+      w.stats.inc('consolidate_freed_sompi', Number(carriersIn - carrier));
       const at = built.tx.outputs.findIndex((o) => o.covenant?.covenantId === m.covenantId);
       if (at < 0 || !r.txid) break;
       const state: Kcc20State = {

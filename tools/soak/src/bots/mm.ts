@@ -14,7 +14,7 @@ import { bps, onTick, randUnits, sleep, unitsOf } from '../util';
 import { walletFor, type BotWallet } from '../wallet';
 import { amend, cancel, cancelAll, priceOf, place } from './common';
 import { consolidateTokens } from './consolidate';
-import { consolidateConfig } from './consolidate-math';
+import { consolidateConfig, isFragmented, mmConsolidateConfig } from './consolidate-math';
 import { fanoutTarget } from './fanout';
 import { ladderSteps, requoteThreshold, type LadderSlot } from './mm-math';
 
@@ -73,19 +73,39 @@ export class MarketMaker {
     while (!this.stopped) {
       // no ladder work against a book that lags the chain: wait here instead of planning and being refused at submit
       if (!(await this.env.gate?.waitOpen(() => this.stopped) ?? true)) break;
+      const cc = consolidateConfig(this.env.cfg.consolidate);
+      // BEFORE quoting: the maker's token holdings are kept in a few large UTXOs, so a sell level (smallest sufficient UTXO + change) never
+      // needs more input UTXOs than the program takes (TOKEN_UTXOS_FRAGMENTED); the merge and the placements share the key's exclusive section
+      try {
+        await this.keepTokensWhole(cc);
+      } catch (e) {
+        this.log.warn('mm token merge failed', { error: errText(e) });
+      }
       try {
         await this.tick();
       } catch (e) {
         this.stats.inc(`mm_errors${this.sfx}`);
         this.log.warn('mm tick failed', { error: errText(e) });
       }
-      // after the ladder, in the same loop: this book's placements and the merge never plan over the same token UTXOs
-      const cc = consolidateConfig(this.env.cfg.consolidate);
-      await consolidateTokens(this.env, this.w, this.m, fanoutTarget(this.env, 'mm', this.m), cc);
       // the KAS the fills pay back in small coins: merged, so a bid's funding stays within one plan's inputs
       if (cc.enabled) await this.w.mergeKas({ above: cc.kasAbove, maxInputs: cc.kasInputs });
       await sleep(this.c.intervalSec * 1000);
     }
+  }
+
+  /**
+   * Merges the maker's token dust (chained merges, smallest first, its own rate cap) down to the fan-out target + `mmSlack` UTXOs. Runs every loop;
+   * counts a pass as "fragmented" (stat `mm_fragmented`) when even the whole ask side of the ladder could not be funded by the program's inputs
+   * largest UTXOs.
+   */
+  private async keepTokensWhole(cc: ReturnType<typeof consolidateConfig>): Promise<void> {
+    if (!cc.enabled) return;
+    const x = this.sfx;
+    const utxos = await this.w.tokenUtxos(tokenRef(this.env, this.m));
+    const ladderNeed = unitsOf(this.c.maxTokens, this.m.decimals) * BigInt(this.c.levels);
+    const frag = isFragmented(utxos.map((u) => u.state.amount), ladderNeed, this.m.slots.inputs);
+    this.stats.set(`mm_fragmented${x}`, frag ? 1 : 0);
+    await consolidateTokens(this.env, this.w, this.m, fanoutTarget(this.env, 'mm', this.m), mmConsolidateConfig(cc));
   }
 
   /** tokens held by the MM: P2PK balance plus the custody of its open asks, in base units */

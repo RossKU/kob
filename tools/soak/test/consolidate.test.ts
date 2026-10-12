@@ -1,7 +1,7 @@
 // Token-UTXO consolidation: the pure selection (which UTXOs to merge) and the rate limit. No network, no wallet.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consolidateConfig, DEFAULT_CONSOLIDATE, fanoutPlan, kasMergeSelection, outpointKey, RateLimiter, selectMergeChain, selectMerges, type MergeCandidate } from '../src/bots/consolidate-math.ts';
+import { consolidateConfig, DEFAULT_CONSOLIDATE, fanoutPlan, isFragmented, kasMergeSelection, mergedCarrier, mmConsolidateConfig, outpointKey, RateLimiter, selectMergeChain, selectMerges, type MergeCandidate } from '../src/bots/consolidate-math.ts';
 
 const txid = (n: number) => n.toString(16).padStart(4, '0').repeat(16);
 const u = (n: number, amount: number | bigint, index = 1): MergeCandidate => ({ transactionId: txid(n), index, state: { amount: amount.toString() } });
@@ -219,4 +219,36 @@ test('KAS merge: nothing at or below the threshold; above it the smallest unrese
   // a coin our pending transaction spends is never offered; the count is of the free coins
   assert.deepEqual(kasMergeSelection(coins, { above: 4, maxInputs: 3, reserved: new Set(['t4:0']) }).map((x) => x.transactionId), ['t6', 't2', 't3']);
   assert.deepEqual(kasMergeSelection(coins, { above: 5, maxInputs: 3, reserved: new Set(['t4:0']) }), []);
+});
+
+test('isFragmented: the largest inputs cannot fund the need although the total could', () => {
+  const dust = Array.from({ length: 50 }, () => 10n);
+  assert.equal(isFragmented(dust, 100n, 3), true); // 3 x 10 < 100 <= 500
+  assert.equal(isFragmented(dust, 600n, 3), false); // the key lacks the tokens: merging cannot help
+  assert.equal(isFragmented([300n, ...dust], 100n, 3), false); // one big UTXO suffices
+  assert.equal(isFragmented([60n, 50n, 40n, 5n], 150n, 3), false); // the top 3 sum to exactly 150
+  assert.equal(isFragmented([60n, 50n, 39n, 5n], 150n, 3), true);
+});
+
+test('mergedCarrier: largest input carrier, at most the default, at least the floor (UTXOs of 2 KAS merge into a 2 KAS output)', () => {
+  const KAS = 100_000_000n;
+  assert.equal(mergedCarrier([{ amount: 2n * KAS }, { amount: 2n * KAS }, { amount: 2n * KAS }], 2_000_000n, 2n * KAS), 2n * KAS);
+  assert.equal(mergedCarrier([{ amount: 10n * KAS }, { amount: 2n * KAS }], 2_000_000n, 2n * KAS), 2n * KAS);
+  assert.equal(mergedCarrier([{ amount: KAS }, { amount: KAS / 2n }], 2_000_000n, 2n * KAS), KAS);
+  assert.equal(mergedCarrier([{ amount: 1_000n }], 2_000_000n, 2n * KAS), 2_000_000n);
+  // three 2 KAS UTXOs free 4 KAS: the old fixed 10 KAS output made every such merge impossible
+  assert.ok(3n * 2n * KAS >= mergedCarrier([{ amount: 2n * KAS }], 2_000_000n, 2n * KAS) + KAS);
+});
+
+test('the market maker merges harder than the traders: own rate cap, slack on top of the fan-out target', () => {
+  const c = consolidateConfig({});
+  const mm = mmConsolidateConfig(c);
+  assert.ok(mm.maxTxPerInterval > c.maxTxPerInterval);
+  assert.ok(mm.slack < c.slack);
+  assert.equal(mm.intervalSec, c.intervalSec);
+  // a backlog of 1000 dust UTXOs is merged down to the target in as few passes as the cap allows
+  const bs = selectMergeChain(many(1000), { keep: 8, slack: mm.slack, maxInputs: 3, maxBatches: mm.maxTxPerInterval });
+  assert.equal(bs.length, mm.maxTxPerInterval);
+  assert.equal(bs[0].length, 3);
+  assert.equal(bs[1].length, 2);
 });
