@@ -1,6 +1,6 @@
 # KOB documentation
 
-Everything here describes a **pre-audit** system that runs on testnet-10 only. Where a document
+Everything here describes a **pre-audit** system (no external audit; mainnet launches as a canary, testnet-10 is the test network). Where a document
 says "normative", it is normative for this repository's code, not for the Kaspa network.
 
 ## Specifications (`docs/spec/`)

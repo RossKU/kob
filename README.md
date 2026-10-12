@@ -22,14 +22,15 @@ off-chain custody.
 
 ## Status
 
-**Pre-audit. Testnet-10 only. Not for mainnet funds.**
+**Pre-audit. Mainnet launches as a canary: use at your own risk, only funds you can afford to lose.**
 
-* No independent audit has been done. The author's own review passes and an extensive test and
-  mutation suite (`tools/ablation`) exist; they are not a substitute. See `SECURITY.md`.
-* Nothing is deployed to mainnet. The only network the project runs on is testnet-10.
+* There is no external audit, and none is planned before launch. The author's own review passes and an extensive test,
+  mutation (`tools/ablation`) and fuzz suite exist; they are not a substitute. The app shows a visible pre-audit notice. See `SECURITY.md`.
+* Mainnet launches as a canary; testnet-10 remains the network for testing.
 * Token registry (`registry/tokens.json`): the two KRON token programs are `reviewed`, with conditions
-  (each token still needs its genesis check and a no-live-minter scan before it is listed, and every
-  token entry is `pending-review`); the KCC-20 programs, KaspaCom's included, are `pending-review`.
+  (a KRON token is listed after its genesis check and a no-live-minter scan, and the registry lists the KRON tokens);
+  the KCC-20 programs, KaspaCom's included, are `pending-review`. KCC-20 token issuance is permissionless: tokens of the
+  standard 3 / 3 reference program are tradable without any listing.
   The KCC-20 token standard is in Last Call, not final; KOB's token programs follow its merged reference program, and KOB
   issues that program in its standard 3 / 3 configuration (the other slot variants are prototypes;
   `docs/spec/kcc-conformance.md`).
@@ -135,7 +136,7 @@ See [docs/README.md](docs/README.md) for the index. The main entries:
 
 ## Security and disclaimer
 
-This is experimental software that handles funds. It is unaudited, may contain bugs that lose
+This is experimental software that handles funds. It has had no external audit, may contain bugs that lose
 money, and is provided as is, without warranty. Report vulnerabilities privately as described in
 [SECURITY.md](SECURITY.md). Running a matcher or a facilitator is up to whoever chooses to do
 it; the project operates no production service.

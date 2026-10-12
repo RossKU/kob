@@ -2,16 +2,22 @@
 
 ## Status
 
-KOB is **pre-audit software**. It has had internal review passes by the author and an
-extensive engine-level test and ablation suite (see `tools/ablation/README.md`), but **no
-independent third-party audit**. Nothing here is deployed to Kaspa mainnet, and the token
-program templates in `registry/tokens.json` are `review_status: pending-review` except the two KRON
-programs, `reviewed` after an internal review with per-token conditions (no token entry is listed yet). Do not put
-funds you cannot afford to lose into these contracts, and do not treat a passing test suite as an
-audit.
+KOB is **pre-audit software**, and there is **no external security audit before launch** (a
+maintainer decision, 2026-10-12). What exists: internal review passes by the author, the engine
+test suites in `crates/kob-tests` (the contracts run in the real rusty-kaspa script engine), the
+ablation (mutation) suites that show which check rejects which attack (`tools/ablation/README.md`)
+and fuzz/soak tests. None of that is an independent audit, and a passing test suite is not one
+either.
 
-Testnet-10 is the only network the project runs on. Mainnet use is not recommended until an
-independent review exists; this file will say so when that changes.
+Mainnet launches as a **canary**, with a visible pre-audit notice in the app (a header badge, a
+first-visit banner and a footer line on every page). **Use it at your own risk, and only with funds
+you can afford to lose.**
+
+Token programs (`registry/tokens.json`): the two KRON programs are `reviewed` after an internal
+review with per-token conditions, and the KRON tokens in the registry are listed. KCC-20 token
+issuance is permissionless: tokens issued with KOB's standard 3 / 3 reference program are tradable
+on mainnet with no listing or curation step, and being tradable says nothing about a token's
+safety. The KCC-20 programs themselves are `pending-review`.
 
 ## Reporting a vulnerability
 
