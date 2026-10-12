@@ -415,11 +415,16 @@ impl X402Config {
 
     /// Fills an absent `network` with the build's deployment network (`crate::config::resolve_network`: none on the reference
     /// build, which then requires it) and an absent `node` with the local node's JSON wRPC endpoint of that network. Never an
-    /// implicit testnet-10, never a testnet node on a mainnet build.
+    /// implicit testnet-10, never a testnet node on a mainnet build. A deployment build refuses another network here, at the
+    /// standalone facilitator's startup ([`super::X402Args::config`]; inside `run` the facilitator serves the indexer's network,
+    /// which `build_config` resolved the same way), not in [`X402Config::build`], which validates the document alone.
     pub fn fill_defaults(&mut self) -> Result<(), ConfigError> {
         if self.network.trim().is_empty() {
             let n = crate::config::resolve_network(None).map_err(ConfigError)?;
             self.network = format!("kaspa:{n}");
+        }
+        if let Some(n) = Network::parse(&self.network) {
+            crate::config::resolve_network(Some(n.registry_name())).map_err(ConfigError)?;
         }
         if self.node.trim().is_empty() {
             if let Some(url) = Network::parse(&self.network).and_then(|n| crate::config::default_wrpc_url(n.registry_name())) {
@@ -488,8 +493,6 @@ impl X402Config {
         }
         let network = Network::parse(&self.network)
             .ok_or_else(|| ConfigError(format!("network {:?} is not kaspa:mainnet or kaspa:testnet-10", self.network)))?;
-        // a deployment build serves its own network only
-        crate::config::resolve_network(Some(network.registry_name())).map_err(ConfigError)?;
         if network == Network::Mainnet && !self.allow_mainnet {
             return err("mainnet needs \"allowMainnet\": true (the binding's mainnet enablement requires independently corroborated chain evidence)");
         }
@@ -918,17 +921,23 @@ mod tests {
                 assert_eq!(c.network, format!("kaspa:{n}"));
             }
         }
-        // the node defaults to the local endpoint of the network: mainnet's on mainnet, testnet-10's on testnet-10
-        let mut m = X402Config::from_json(r#"{"network":"kaspa:mainnet"}"#).unwrap();
-        m.fill_defaults().unwrap();
-        assert_eq!(m.node, "ws://127.0.0.1:18110");
-        let mut t = X402Config::from_json(r#"{"network":"kaspa:testnet-10"}"#).unwrap();
-        t.fill_defaults().unwrap();
-        assert_eq!(t.node, "ws://127.0.0.1:18210");
-        // a configured node is kept
-        let mut k = X402Config::from_json(r#"{"network":"kaspa:mainnet","node":"ws://10.0.0.5:18110"}"#).unwrap();
-        k.fill_defaults().unwrap();
-        assert_eq!(k.node, "ws://10.0.0.5:18110");
+        // the node defaults to the local endpoint of the network (mainnet's on mainnet, testnet-10's on testnet-10); a deployment
+        // build refuses the other network at startup
+        let build = kob_protocol::artifacts::deployment_network();
+        for (net, url) in [("mainnet", "ws://127.0.0.1:18110"), ("testnet-10", "ws://127.0.0.1:18210")] {
+            let mut c = X402Config::from_json(&format!(r#"{{"network":"kaspa:{net}"}}"#)).unwrap();
+            match build {
+                Some(b) if b != net => assert!(c.fill_defaults().unwrap_err().0.contains("deployment build"), "{net} on {b}"),
+                _ => {
+                    c.fill_defaults().unwrap();
+                    assert_eq!(c.node, url);
+                    // a configured node is kept
+                    let mut k = X402Config::from_json(&format!(r#"{{"network":"kaspa:{net}","node":"ws://10.0.0.5:1"}}"#)).unwrap();
+                    k.fill_defaults().unwrap();
+                    assert_eq!(k.node, "ws://10.0.0.5:1");
+                }
+            }
+        }
     }
 
     #[test]
