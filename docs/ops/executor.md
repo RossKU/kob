@@ -951,10 +951,8 @@ Reference PC: **AMD Ryzen 7 5800HS (8 cores, 16 threads), 15.4 GB RAM, NVMe SSD,
 | busy: 10, 10, 5, 5 (10 % KOB) | 21,400 tx/s, 40 us/tx | 35,800 tx/s, 30 us/tx | 9 to 12 % | 1.0 MB/s |
 | KOB only: 100, 100, 50, 50 (10 s of chain) | **3,490 tx/s**, 287 us/tx | **4,290 tx/s**, 254 us/tx | 76 to 86 % | 10 to 15 MB/s |
 
-Before 2026-10-03 the KOB-only mix ran at 1,700 to 2,100 tx/s (546 us per transaction): the write path runs about 60
-distinct SQL statements per KOB transaction cycle and rusqlite's statement cache held 16, so nearly every execution
-re-parsed and re-planned its statement (SQLite's own step time was 20 % of the total). Every connection now keeps 256
-prepared statements. The pure work of a batch (signature-script parsing, script hashing, placement verification:
+The write path runs about 60 distinct SQL statements per KOB transaction cycle; every connection keeps 256 prepared
+statements, so none is parsed and planned again. The pure work of a batch (signature-script parsing, script hashing, placement verification:
 `indexer::record::precompute`, about 35 us per KOB transaction) runs on `verify_threads` threads (default: the cores, at
 most 4) before the single-threaded database pass, which consults its results; `capacity.rs` checks that both paths give the
 same rows. A KOB-only chain of 3,000 tx/s is followed at the tip with 1.2x headroom on one core of this (busy) PC.
@@ -966,11 +964,10 @@ no single dominant step. The database pass is single-threaded: its ceiling is ab
 while catching up on this PC; at 10 % KOB a 3,000 tx/s chain is followed with 7x headroom at the tip.
 Memory: 32 MB peak at the tip, about 200 MB while committing 100-block windows (one 40 MB response parsed).
 
-Fixed by this benchmark: the per-order fill sum in `refresh_order_state` (run after every placement and fill) was planned
-through the market index `order_events (kind, token, ts)` and read every fill of the chain: per KOB transaction it grew
-from 0.5 ms after 5 s to 2.9 ms after 60 s of the busy mix (3,400 tx/s). It now goes through the order's own events
-(`+kind`, a unit test pins the plans of the per-order queries), and the writer keeps 64 MiB of page cache instead of
-2 MiB; the busy mix runs at 14,600 to 20,300 tx/s after 60 s.
+The per-order queries go through the order's own events, never the market index `order_events (kind, token, ts)` (a
+unit test pins their query plans; through the market index the fill sum of `refresh_order_state` grew with the chain, from
+0.5 ms to 2.9 ms per KOB transaction over 60 s of the busy mix), and the writer keeps 64 MiB of page cache: the busy mix
+runs at 14,600 to 20,300 tx/s after 60 s.
 
 **Per tx/s of chain load**, at `High`: **1.4 KB/s of link** (1,400 to 1,454 B per accepted transaction on TN10 on 10-02),
 **3 to 10 us of one core** for a realistic mix plus **0.25 to 0.3 ms per KOB transaction**, and about 1 KB of disk per KOB
