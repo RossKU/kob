@@ -195,3 +195,12 @@ test('closing a buy-first position that bought nothing yet does not offer to sel
   await expect(banner).toContainText('nothing to sell');
   await expect(page.getByTestId('orders-close-sell')).toHaveCount(0);
 });
+
+test('on a phone the auto-refund checkbox keeps its text beside it', async ({ appPage: page, mock }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await openMarket(page, mock, { route: '/orders' });
+  const box = await page.getByTestId('orders-auto-refund').boundingBox();
+  const text = await page.getByTestId('orders-auto-refund-label').locator('span').boundingBox();
+  expect(text!.x).toBeGreaterThan(box!.x + box!.width - 1);
+  expect(Math.abs(text!.y - box!.y)).toBeLessThan(12);
+});
