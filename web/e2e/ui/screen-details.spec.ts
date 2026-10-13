@@ -80,3 +80,21 @@ test('the order book column titles keep their units (they wrap, no ellipsis)', a
   const cut = await head.evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).length);
   expect(cut).toBe(0);
 });
+
+test.describe('the pair ticket', () => {
+  test('the limit price help names the quote token, not KAS', async ({ appPage: page, mock }) => {
+    const QUOTE = 'e7'.repeat(32);
+    await mock.seed({ pair: true });
+    const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
+    for (const t of reg.templates) t.review_status = 'reviewed';
+    const exkcc = reg.tokens.find((t: { ticker: string }) => t.ticker === 'EXKCC');
+    Object.assign(exkcc, { status: 'listed', verified: true });
+    reg.tokens.push({ ...exkcc, ticker: 'EXUSD', name: 'Example USD (fictional)', covenant_id: QUOTE, decimals: 6 });
+    await page.route('**/registry/tokens.json', (route) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(reg) }));
+    const base = (await mock.token()).covenant_id;
+    await page.goto(`/#/market/${base}/${QUOTE}`);
+    await expect(page.getByTestId('order-ticket')).toBeVisible();
+    const hint = page.getByTestId('order-price').locator('xpath=ancestor::div[contains(@class,"field")][1]').locator('.field-hint');
+    await expect(hint).toContainText('EXUSD per EXKCC');
+  });
+});

@@ -210,7 +210,7 @@ export default {
   'ticket.help.stop.inv': 'Arms only when a matcher fills a trade at or beyond it (Buy stop: at or above; Sell stop: at or below) resting the rest time (default 5 s), of at least your threshold. Quotes and unused trades do not count: it can trigger later than the chart suggests.',
   'ticket.help.ladder.step.inv': 'KAS per {ticker} between levels: higher each level for sell first, lower for buy first. Entry and exit move together.',
   'ticket.help.amount': 'Amount of {ticker}; the cost is shown below.',
-  'ticket.help.price': 'KAS per {ticker}, rounded to the price step in your favour.',
+  'ticket.help.price': '{quote} per {ticker}, rounded to the price step in your favour.',
   'ticket.help.lifetime': 'GTC lasts 90 days from placement (renew before day 85 in My orders). A day order ends by 00:00 UTC (09:00 JST).',
   'ticket.help.crossing': 'Default: auction from the best price to your limit, then rest. "Plain limit" fills at your limit; the matcher keeps the difference.',
   'ticket.help.maxFills': 'Each fill pays a delivery carrier from the escrow. Default 3 (DCA: one per slice; pair orders: one per possible fill, max 64).',
