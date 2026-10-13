@@ -580,7 +580,13 @@ impl Net {
 // ---------------------------------------------------------------- token (reference KCC-20, 3/3)
 
 struct Token {
+    /// The program's name (source name, or the pinned template's): printed with every attack verdict, so an ablation run
+    /// shows which program a scenario ran on.
+    name: String,
     art: SilAbiArtifact,
+    /// The contract of `art` whose entries a holder calls: None for a single-contract artifact compiled from source, the
+    /// actor's name for a pinned multi-contract program (the public-mint build's `KCC20`).
+    contract: Option<String>,
     prefix: Vec<u8>,
     suffix: Vec<u8>,
     hash: Vec<u8>,
@@ -601,7 +607,34 @@ fn tok_state_bytes(amount: i64, owner: &[u8; 32], scheme: u8, borrow: u8) -> Vec
 }
 impl Token {
     fn new() -> Self {
-        Self::named("KCC20Ref")
+        match common::kcc20_33_program() {
+            kob_protocol::artifacts::TemplateId::Kcc20Ref => Self::named("KCC20Ref"),
+            p => Self::pinned(p),
+        }
+    }
+    /// A 3 / 3 KCC-20 program by its pinned template (`KOB_KCC20_PROGRAM=KCC20PublicMint`: the published public-mint build,
+    /// whose prefix carries the compiler-owned context push before the standard 112-byte state).
+    fn pinned(id: kob_protocol::artifacts::TemplateId) -> Self {
+        let t = kob_protocol::artifacts::template(id);
+        let slots = kob_protocol::artifacts::token_template(id).slots;
+        assert_eq!(t.state_len, tok_state_bytes(0, &[0; 32], 0, 0).len(), "{}: the standard KCC-20 state", id.name());
+        Token {
+            name: id.name().to_string(),
+            art: t.artifact.clone(),
+            contract: Some(t.contract_name.clone()),
+            prefix: t.prefix.clone(),
+            suffix: t.suffix.clone(),
+            hash: t.hash.to_vec(),
+            slots,
+        }
+    }
+    /// Signature script of a holder entry (`transfer`, `transfer_delegator`) of this program, without the redeem push.
+    fn entry_ss(&self, entry: &str, args: &[ArtifactValue]) -> Vec<u8> {
+        match &self.contract {
+            None => encode_entry_sig_script(&self.art, entry, args),
+            Some(c) => silverscript_abi::encode_contract_entry_sig_script(&self.art, c, entry, args),
+        }
+        .unwrap_or_else(|e| panic!("token {entry}: {e}"))
     }
     /// A KCC-20 program by source name (e.g. the 8/8 slot-limit variant "KCC20Ref_8x8").
     fn named(name: &str) -> Self {
@@ -617,7 +650,7 @@ impl Token {
             Some((i, o)) => (i.parse().expect("input slots"), o.parse().expect("output slots")),
             None => (3, 3),
         };
-        let t = Token { art, prefix, suffix, hash, slots };
+        let t = Token { name: name.to_string(), art, contract: None, prefix, suffix, hash, slots };
         assert_eq!(t.redeem(1000, &[3u8; 32], SCHEME_COVID, 0), bytecode(&t.art));
         t
     }
@@ -803,7 +836,7 @@ fn build(net: &Net, s: &Scn, budgets: &[u16]) -> (Transaction, Vec<UtxoEntry>) {
                     Wit::CovId => vec![0x00],
                     Wit::P2pk(kp) => [vec![0x00], sig_of(kp, 0x01)].concat(),
                 };
-                let mut s = encode_entry_sig_script(&net.t.art, "transfer", &[ArtifactValue::Array(next.clone()), w.into()]).unwrap();
+                let mut s = net.t.entry_ss("transfer", &[ArtifactValue::Array(next.clone()), w.into()]);
                 s.extend_from_slice(&push(redeem));
                 s
             }
@@ -812,7 +845,7 @@ fn build(net: &Net, s: &Scn, budgets: &[u16]) -> (Transaction, Vec<UtxoEntry>) {
                     Wit::CovId => vec![],
                     Wit::P2pk(kp) => sig_of(kp, 0x01),
                 };
-                let mut s = encode_entry_sig_script(&net.t.art, "transfer_delegator", &[w.into()]).unwrap();
+                let mut s = net.t.entry_ss("transfer_delegator", &[w.into()]);
                 s.extend_from_slice(&push(redeem));
                 s
             }
@@ -920,15 +953,16 @@ fn run_bad(net: &Net, s: &Scn, expect: usize) {
             let r = &res[expect];
             if r.is_ok() && std::env::var_os("KOB_ABLATION").is_some() {
                 // mutation run (a check removed from a contract): report instead of failing
-                println!("ABLATION-PASS {} all_inputs_ok={}", s.name, res.iter().all(|r| r.is_ok()));
+                println!("ABLATION-PASS {} @{} all_inputs_ok={}", s.name, net.t.name, res.iter().all(|r| r.is_ok()));
                 return;
             }
             assert!(r.is_err(), "{}: expected input {expect} ({}) to REJECT but it passed", s.name, role_name(&s.inputs[expect].role));
             let others: Vec<String> =
                 res.iter().enumerate().filter(|(i, r)| *i != expect && r.is_err()).map(|(i, _)| i.to_string()).collect();
             println!(
-                "NEGATIVE {}  [REJECTED at in[{expect}] {}: {:?}]{}",
+                "NEGATIVE {} @{}  [REJECTED at in[{expect}] {}: {:?}]{}",
                 s.name,
+                net.t.name,
                 role_name(&s.inputs[expect].role),
                 r.as_ref().unwrap_err(),
                 if others.is_empty() { String::new() } else { format!(" (also failing: {})", others.join(",")) }
@@ -3246,6 +3280,43 @@ fn v2_touch_ifd_fill_3x3() {
 #[test]
 fn v2_touch_ifd_arm_3x3() {
     touch_battery(&fx(), Kind::IfdArm);
+}
+// The same batteries on the published public-mint build (KCC20PublicMint, 3 / 3, tradable since 41b7fdb; audit AUD-PM): the
+// scenarios that fit its slots.
+fn fx_pm() -> Fx {
+    Fx {
+        net: Net::with_token(Token::pinned(kob_protocol::artifacts::TemplateId::Kcc20PublicMint)),
+        maker_a: keypair(),
+        maker_b: keypair(),
+        maker_c: keypair(),
+        taker: keypair(),
+        matcher: keypair(),
+    }
+}
+/// Touch trigger on the public-mint program: KobCondAsk stop leg armed inside its own fill.
+#[test]
+fn v2_touch_cond_settle_pm() {
+    touch_battery(&fx_pm(), Kind::Settle);
+}
+/// Touch trigger on the public-mint program: KobCondAsk stop leg armed by update.
+#[test]
+fn v2_touch_cond_arm_pm() {
+    touch_battery(&fx_pm(), Kind::Arm);
+}
+/// Touch trigger on the public-mint program: KobCondAsk trailing ratchet.
+#[test]
+fn v2_touch_cond_trail_pm() {
+    touch_battery(&fx_pm(), Kind::Trail);
+}
+/// Touch trigger on the public-mint program: KobIfdBid buy-stop entry armed inside its own fill.
+#[test]
+fn v2_touch_ifd_fill_pm() {
+    touch_battery(&fx_pm(), Kind::IfdFill);
+}
+/// Touch trigger on the public-mint program: KobIfdBid buy-stop entry armed by update.
+#[test]
+fn v2_touch_ifd_arm_pm() {
+    touch_battery(&fx_pm(), Kind::IfdArm);
 }
 
 /// Merge-value safety of update: a repeat merge requires its partner's sigscript to START with 0x08 (the 8-byte

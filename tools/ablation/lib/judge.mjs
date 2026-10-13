@@ -1,5 +1,5 @@
 // Verdicts: decide from parsed run output whether a mutation is confirmed, or a baseline is clean.
-import { idState } from './parse.mjs';
+import { idState, idOf, programsOf } from './parse.mjs';
 
 const short = n => (n === '' ? '' : n.replace(/^kron_token_/, '').replace(/\.bin$/, ''));
 const at = s => (s.name === '' ? '' : `@${short(s.name)}`);
@@ -28,6 +28,8 @@ export function judgeMutation(suite, mut, runs) {
   const posFails = new Set();
   const collateral = new Set();
   const notes = [];
+  // the token programs the verdict was seen on: the names of the flipped expected scenarios and of the held ones
+  const programs = new Set();
   for (const run of runs) {
     const expect = new Set([...run.expect, ...run.hold]);
     const problems = runProblems(suite, run);
@@ -39,6 +41,8 @@ export function judgeMutation(suite, mut, runs) {
         if (!expect.has(p.id)) collateral.add(p.id);
       }
       for (const pf of s.posFails) posFails.add(pf.id);
+      for (const p of s.passes) if (run.expect.includes(p.id)) for (const g of programsOf(p.name)) programs.add(g);
+      for (const n of s.negNames ?? []) if (run.hold.includes(idOf(n))) for (const g of programsOf(n)) programs.add(g);
       for (const id of run.expect) {
         const st = idState(s, id);
         if (st === 'partial' && mut.inputOnly.includes(id)) continue; // proven by the attacked input alone
@@ -56,7 +60,7 @@ export function judgeMutation(suite, mut, runs) {
   let status;
   if (why.length) status = 'NOT-CONFIRMED';
   else status = mut.holdOnly ? 'HELD' : 'CONFIRMED';
-  return { status, why, notes, flipped, collateral: [...collateral], posFails: [...posFails] };
+  return { status, why, notes, flipped, collateral: [...collateral], posFails: [...posFails], programs: [...programs].sort() };
 }
 
 /** Baseline (no mutation): zero ABLATION-PASS / ABLATION-POS-FAIL, clean exit, every expected attack reached and rejected. */

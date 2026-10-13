@@ -1131,6 +1131,13 @@ pub fn mixed_pairs_33() -> [(TemplateId, TemplateId); 2] {
     [(Kcc20Ref, KronToken2433), (KronToken2433, Kcc20Ref)]
 }
 
+/// The mixed pairs on the published public-mint build (KCC20PublicMint, 3 / 3, tradable since 41b7fdb; audit AUD-PM), gated
+/// like the 3 / 3 ones ([`slot_excess`]).
+pub fn mixed_pairs_pm() -> [(TemplateId, TemplateId); 2] {
+    use TemplateId::{Kcc20PublicMint, KronToken2433};
+    [(Kcc20PublicMint, KronToken2433), (KronToken2433, Kcc20PublicMint)]
+}
+
 /// Opt-in of a test binary (the KobCondPair / KobIfdPair suites, which run their KCC-20 mixes on the 3 / 3 program too)
 /// to skip the scenarios that exceed a 3 / 3 program's slots ([`slot_excess`]). Off by default: the other binaries of
 /// this harness run every scenario as written.

@@ -73,7 +73,7 @@ fn ifd_pair_dump() {
 
 use kob_protocol::build::{CancelOrder, RefundOrder};
 use kob_protocol::tx::{TokenUtxo, Witness};
-use TemplateId::{Kcc20Ref, Kcc20Ref8x8, KronToken2433};
+use TemplateId::{Kcc20PublicMint, Kcc20Ref, Kcc20Ref8x8, KronToken2433};
 
 const IFD: TemplateId = TemplateId::KobIfdPair;
 const COND: TemplateId = TemplateId::KobCondPair;
@@ -99,19 +99,33 @@ const UPD: usize = 17;
 
 /// The four family mixes and the three mixes with the 3 / 3 KCC-20 program (positives).
 fn all_mixes() -> Vec<(TemplateId, TemplateId)> {
-    [family_mixes().as_slice(), &ph::mixed_pairs_33(), &[(Kcc20Ref, Kcc20Ref)]].concat()
+    [
+        family_mixes().as_slice(),
+        &ph::mixed_pairs_33(),
+        &[(Kcc20Ref, Kcc20Ref)],
+        &ph::mixed_pairs_pm(),
+        &[(Kcc20PublicMint, Kcc20PublicMint)],
+    ]
+    .concat()
 }
 /// The two mixed pairs (generic attacks: each family as A and as B), on both KCC-20 programs.
 fn mixed() -> Vec<(TemplateId, TemplateId)> {
-    vec![(Kcc20Ref8x8, KronToken2433), (KronToken2433, Kcc20Ref8x8), (Kcc20Ref, KronToken2433), (KronToken2433, Kcc20Ref)]
+    vec![
+        (Kcc20Ref8x8, KronToken2433),
+        (KronToken2433, Kcc20Ref8x8),
+        (Kcc20Ref, KronToken2433),
+        (KronToken2433, Kcc20Ref),
+        (Kcc20PublicMint, KronToken2433),
+        (KronToken2433, Kcc20PublicMint),
+    ]
 }
 /// The mixed pairs whose A is KCC-20 (B KRON).
 fn a_kcc() -> Vec<(TemplateId, TemplateId)> {
-    vec![(Kcc20Ref8x8, KronToken2433), (Kcc20Ref, KronToken2433)]
+    vec![(Kcc20Ref8x8, KronToken2433), (Kcc20Ref, KronToken2433), (Kcc20PublicMint, KronToken2433)]
 }
 /// The mixed pairs whose A is KRON (B KCC-20).
 fn a_kron() -> Vec<(TemplateId, TemplateId)> {
-    vec![(KronToken2433, Kcc20Ref8x8), (KronToken2433, Kcc20Ref)]
+    vec![(KronToken2433, Kcc20Ref8x8), (KronToken2433, Kcc20Ref), (KronToken2433, Kcc20PublicMint)]
 }
 
 /// Runs `f` on each program pair with a `Run` of the templates under test.
@@ -1544,7 +1558,7 @@ fn ifd_custody_marks() {
         }
     });
     // A and B on the same program (KCC-20 / KCC-20): only the covenant ids tell the tokens apart
-    let kk = [family_mixes()[0], (Kcc20Ref, Kcc20Ref)];
+    let kk = [family_mixes()[0], (Kcc20Ref, Kcc20Ref), (Kcc20PublicMint, Kcc20PublicMint)];
     each(&subs, &kk, |r, pa, pb| {
         // PIH4 / NIH4 a sell-first entry selling out with its prefund equal to its A: the B custody named at the A custody
         // input (the real prefund custody stays behind; the matcher pays the B)
@@ -1996,7 +2010,7 @@ fn other_token_custody(id: &str, pa: TemplateId, pb: TemplateId, buy: bool, mode
 #[test]
 fn ifd_ev_tk() {
     let subs = Subs::compile();
-    each(&subs, &[family_mixes()[0], (Kcc20Ref, Kcc20Ref)], |r, pa, pb| {
+    each(&subs, &[family_mixes()[0], (Kcc20Ref, Kcc20Ref), (Kcc20PublicMint, Kcc20PublicMint)], |r, pa, pb| {
         for buy in [true, false] {
             let sd = if buy { "b" } else { "a" };
             for mode in [0u8, 1] {
@@ -2264,7 +2278,7 @@ fn ifd_merge_rules() {
     // exit is a BID (a partial re-arm: the exit continues). NIX3 runs on KCC / KCC, where the exit's sExt (the commitment
     // of its custody token B) equals the entry's aExt, so only the side check refuses it; NIX3m on the mixed pairs, where
     // the exit's sExt check (B's commitment is not A's) refuses it too (defence in depth).
-    let kk = [family_mixes()[0], (Kcc20Ref, Kcc20Ref)];
+    let kk = [family_mixes()[0], (Kcc20Ref, Kcc20Ref), (Kcc20PublicMint, Kcc20PublicMint)];
     for (id, mixes) in [("NIX3", kk.to_vec()), ("NIX3m", mixed())] {
         each(&subs, &mixes, |r, pa, pb| nix3(r, pa, pb, id));
     }

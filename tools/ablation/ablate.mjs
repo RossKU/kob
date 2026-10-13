@@ -301,7 +301,8 @@ for (const r of results) {
   r.mutations.sort((a, b) => catalogOrder.indexOf(a.id) - catalogOrder.indexOf(b.id));
   r.templates.sort();
 }
-const meta = { date: new Date().toISOString().slice(0, 10), secs: secs(T0), jobs: opt.jobs };
+// the KCC-20 program of the KAS-kind suites' 3 / 3 runs (crates/kob-tests `KOB_KCC20_PROGRAM`; audit AUD-PM)
+const meta = { date: new Date().toISOString().slice(0, 10), secs: secs(T0), jobs: opt.jobs, kcc20Program: process.env.KOB_KCC20_PROGRAM || 'KCC20Ref' };
 const t = writeReport(OUT, meta, results);
 for (const s of suites) {
   try {

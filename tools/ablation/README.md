@@ -31,7 +31,7 @@ alone leaves the booked-exit attacks rejected, removing both flips them (`IA24a`
 
 | Env var | Effect |
 |---|---|
-| `KOB_ABLATION=1` (any value) | `run_bad` prints `ABLATION-PASS <scenario name> all_inputs_ok=<bool>` and returns, instead of failing, when the attacked input is accepted (every suite). `run_ok` of every suite (KCC-20 sell / buy, KRON sell / buy, the pair suites) prints `ABLATION-POS-FAIL <name> (...)` and returns when a positive scenario is rejected by a weakened contract, instead of panicking. Without `KOB_ABLATION` a rejected positive scenario still panics. Rejected attacks print `NEGATIVE <name> [REJECTED ...]` as always. |
+| `KOB_ABLATION=1` (any value) | `run_bad` prints `ABLATION-PASS <scenario name> all_inputs_ok=<bool>` and returns, instead of failing, when the attacked input is accepted (every suite). `run_ok` of every suite (KCC-20 sell / buy, KRON sell / buy, the pair suites) prints `ABLATION-POS-FAIL <name> (...)` and returns when a positive scenario is rejected by a weakened contract, instead of panicking. Without `KOB_ABLATION` a rejected positive scenario still panics. Rejected attacks print `NEGATIVE <name> [REJECTED ...]` as always. The KCC-20 KAS-kind suites print the token program after the name (`@KCC20Ref`, `@KCC20PublicMint`), the pair suites the pair tag `<A>+<B>`. |
 | `KOB_ABLATION_SRC=<dir>` | `common::contract_source(name)` reads `<dir>/<name>.sil` if that file exists, else the committed `contracts/**/<name>.sil`. The committed contracts are never touched. |
 
 The runner sets both for every run and uses the repo root as working directory. The executables find the repo through
@@ -226,6 +226,33 @@ the mutations of all of them; commented-out lines are ignored. `--summary` print
 another checkout's contracts (e.g. to measure an older catalog). Completion criterion of the catalogs: every line it lists
 is documented in the catalog's header as a check without a witness attack (with the reason). Since the audit completion of
 2026-10-13 it lists, over all eight catalogs, only such documented lines (see RESULTS.md).
+
+```
+node tools/ablation/coverage.mjs --suite ... --results A/results.json,B/results.json [--program KCC20PublicMint]
+```
+
+With `--results`, only the mutations those `ablate.mjs` runs report as `CONFIRMED` or `HELD` count, so a covered line is a
+confirmed one; with `--program`, only those whose verdict was seen on that token program (`programs` in `results.json`:
+the program names printed with the flipped scenarios, or for a hold the rejected ones: the pair tag `<A>+<B>` of the pair
+suites, `@<program>` of the KCC-20 KAS-kind suites). The completion criterion of a run on another program is that this
+lists exactly the documented lines of the static check.
+
+## Other KCC-20 programs (public-mint build, audit AUD-PM)
+
+The KCC-20 KAS-kind suites run their default token (`Token::new()`, every test fn but the 8/8 touch batteries) on the
+reference 3 / 3 program; `KOB_KCC20_PROGRAM=KCC20PublicMint` runs them on the published public-mint build instead (the pinned
+template, 3 / 3), and `ablate.mjs` records the program in its report. The touch batteries also have permanent `_pm` twins
+(`kob_v2_tests`, `kob_v2_buy_tests`), and every id a catalog expects on a `_3x3` twin is expected on the `_pm` twin too
+(`lib/pm.mjs`). The pair suites run the public-mint build permanently, next to 8/8 and 3/3 (`pair_harness::mixed_pairs_pm`,
+`KKPM`; `kob_pair_tests` now gates slots too). A full run on the public-mint build:
+
+```
+KOB_KCC20_PROGRAM=KCC20PublicMint node tools/ablation/ablate.mjs --suite kcc20-sell --exe-dir target/debug/deps --out target/ablation-pm-sell
+KOB_KCC20_PROGRAM=KCC20PublicMint node tools/ablation/ablate.mjs --suite kcc20-buy  --exe-dir target/debug/deps --out target/ablation-pm-buy
+node tools/ablation/ablate.mjs --suite pair,cond-pair,cond-pair-rpt,ifd-pair --exe-dir target/debug/deps --out target/ablation-pm-pair
+node tools/ablation/coverage.mjs --suite kcc20-sell,kcc20-buy,pair,cond-pair,cond-pair-rpt,ifd-pair \
+  --results target/ablation-pm-sell/results.json,target/ablation-pm-buy/results.json,target/ablation-pm-pair/results.json --program KCC20PublicMint
+```
 
 ## Runtime
 

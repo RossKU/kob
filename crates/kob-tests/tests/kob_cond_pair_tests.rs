@@ -171,10 +171,12 @@ pub fn cancel_of(c: CondPairState, pa: TemplateId, pb: TemplateId, strays: Vec<T
 /// NC18t3..7 and NC19t (stray-scan slots beyond the third input), PC18t (eight T inputs), and 4 KCC-20 outputs in PC16a1 /
 /// PC16b1 (two stops on one mode-1 evidence), NC123 (KRON A) and NC59 (KCC / KCC).
 pub fn mixes() -> Vec<(TemplateId, TemplateId)> {
-    [mixed_pairs(), mixed_pairs_33()].concat()
+    [mixed_pairs(), mixed_pairs_33(), mixed_pairs_pm()].concat()
 }
 /// KCC-20 / KCC-20 on the 3 / 3 program.
 pub const KK33: (TemplateId, TemplateId) = (TemplateId::Kcc20Ref, TemplateId::Kcc20Ref);
+/// KCC-20 / KCC-20 on the public-mint build (audit AUD-PM).
+pub const KKPM: (TemplateId, TemplateId) = (TemplateId::Kcc20PublicMint, TemplateId::Kcc20PublicMint);
 
 pub fn suite(mixes: &[(TemplateId, TemplateId)], f: impl Fn(&Run, TemplateId, TemplateId)) {
     let subs = Subs::compile();
@@ -298,7 +300,7 @@ fn two_armed(ask: bool, pa: TemplateId, pb: TemplateId, mode1: bool) -> Batch {
 
 #[test]
 fn cond_pair_positives() {
-    suite(&[family_mixes().as_slice(), &mixed_pairs_33(), &[KK33]].concat(), positives);
+    suite(&[family_mixes().as_slice(), &mixed_pairs_33(), &[KK33], &mixed_pairs_pm(), &[KKPM]].concat(), positives);
 }
 
 // ---------------------------------------------------------------- settlement (ceil / floor, custody, strays, aliasing)
@@ -1334,7 +1336,7 @@ fn evidence_tk(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn cond_pair_evidence_tk() {
-    suite(&[family_mixes()[0], KK33], evidence_tk);
+    suite(&[family_mixes()[0], KK33, KKPM], evidence_tk);
 }
 
 // ---------------------------------------------------------------- the custody: identity, codec, planted inputs

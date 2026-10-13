@@ -38,6 +38,20 @@ pub fn check_generated_source(name: &str, generated: &str) {
     assert_eq!(committed, generated.replace("\r\n", "\n"), "{name}.sil differs from its generator: rerun with KOB_REGEN=1");
 }
 
+/// The KCC-20 program the default token of the KAS-kind suites runs on (`kob_v2_tests`, `kob_v2_buy_tests`: `Token::new()`,
+/// the 3 / 3 runs). Unset (or `KCC20Ref`): the reference 3 / 3 program. `KCC20PublicMint`: the published public-mint build
+/// (`TemplateId::Kcc20PublicMint`, 3 / 3, pinned template), how the KAS-kind suites and their ablation catalogs are run on
+/// that program (audit AUD-PM). Anything else panics.
+#[allow(dead_code)]
+pub fn kcc20_33_program() -> kob_protocol::artifacts::TemplateId {
+    use kob_protocol::artifacts::TemplateId;
+    match std::env::var("KOB_KCC20_PROGRAM").as_deref() {
+        Err(_) | Ok("") | Ok("KCC20Ref") => TemplateId::Kcc20Ref,
+        Ok("KCC20PublicMint") => TemplateId::Kcc20PublicMint,
+        Ok(other) => panic!("KOB_KCC20_PROGRAM={other}: expected KCC20Ref or KCC20PublicMint"),
+    }
+}
+
 /// Source of `contracts/**/<name>.sil`. Ablation runs (a check removed from a contract) point the
 /// environment variable `KOB_ABLATION_SRC` at a directory holding a mutated `<name>.sil`; that copy
 /// wins over the committed source, so the committed contracts are never touched by a mutation run.

@@ -5,7 +5,11 @@
 //   ABLATION-PASS <scenario name> all_inputs_ok=<bool>         an attack scenario was ACCEPTED (run_bad in ablation mode)
 //   ABLATION-POS-FAIL <scenario name> (...)                    a positive scenario was rejected (every suite)
 //   NEGATIVE <scenario name>  [REJECTED ...]                   an attack scenario was rejected (normal outcome)
-// A scenario id is the first whitespace-delimited token of the scenario name.
+// A scenario id is the first whitespace-delimited token of the scenario name. The rest of a verdict line names the token
+// program(s) the scenario ran on: the pair tag `<A>+<B>` of the pair suites, `@<program>` of the KCC-20 KAS-kind suites.
+
+/** Token program names in a scenario line (KCC-20 programs, KRON token programs). */
+export const programsOf = name => [...name.matchAll(/\b(KCC20\w*|KronToken\d+)\b/g)].map(m => m[1]);
 
 export const idOf = name => name.trim().split(/\s+/)[0];
 
@@ -19,7 +23,7 @@ export const shortTemplate = name => name.replace(/^kron_token_/, '').replace(/\
 export function parseOutput(stdout, stderr, marker) {
   const sections = [];
   const newSection = name => {
-    const s = { name, passes: [], negatives: [], posFails: [] };
+    const s = { name, passes: [], negatives: [], negNames: [], posFails: [] };
     sections.push(s);
     return s;
   };
@@ -41,6 +45,7 @@ export function parseOutput(stdout, stderr, marker) {
       (cur ??= newSection('?')).posFails.push({ id: idOf(m[1]), name: m[1] });
     } else if ((m = /^NEGATIVE (.*?)\s+\[REJECTED/.exec(line))) {
       (cur ??= newSection('?')).negatives.push(idOf(m[1]));
+      cur.negNames.push(m[1]);
     }
   }
   const all = stdout + '\n' + stderr;

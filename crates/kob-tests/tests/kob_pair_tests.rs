@@ -49,9 +49,12 @@ pub const NR: i64 = 4 * WHOLE + 1;
 
 // ---------------------------------------------------------------- fixtures
 
-pub fn mixed() -> [(TemplateId, TemplateId); 2] {
+/// The two mixed pairs (each family as A and as B) on the 8 / 8 KCC-20 program, then on the published public-mint build (3 / 3,
+/// audit AUD-PM; a scenario beyond its token slots is skipped there, `SKIP-SLOTS`).
+pub fn mixed() -> [(TemplateId, TemplateId); 4] {
     let m = family_mixes();
-    [m[1], m[2]]
+    let pm = mixed_pairs_pm();
+    [m[1], m[2], pm[0], pm[1]]
 }
 
 pub fn ftag(p: TemplateId) -> &'static str {
@@ -447,6 +450,7 @@ pub fn bad_p(r: &Run, e: &Ed, expect: usize, patch: Patch) {
 pub fn suite(mixes: &[(TemplateId, TemplateId)], f: impl Fn(&Run, TemplateId, TemplateId)) {
     let subs = Subs::compile();
     for (pa, pb) in mixes {
+        ph::SLOT_GATE.store(true, std::sync::atomic::Ordering::Relaxed);
         let r = Run { subs: &subs, pair: pair_name(*pa, *pb) };
         f(&r, *pa, *pb);
     }
@@ -461,67 +465,76 @@ pub fn inv_ed(name: &str, s: PairState, pa: TemplateId, pb: TemplateId, n: i64) 
 
 // ---------------------------------------------------------------- positives
 
+/// A positive of an honest build, skipped (`SKIP-SLOTS`) where a 3 / 3 KCC-20 program (the public-mint build) cannot carry
+/// its shape.
+fn okb(r: &Run, name: &str, b: Batch) {
+    match try_built(Action::Batch(b)) {
+        Some(bt) => r.ok(&Ed::new(name, &bt)),
+        None => println!("SKIP-SLOTS {name} {} (build)", r.pair),
+    }
+}
+
 fn positives(r: &Run, pa: TemplateId, pb: TemplateId) {
     let ask = || ask0(pa, pb);
     let bid = || bid0(pa, pb);
     // routes through the KAS books
-    r.ok(&edb("PP01 ask through the KAS books, rest", route_ask(ask(), pa, pb, 4)));
-    r.ok(&edb("PP02 ask IOC, the rest returned at the custody index", route_ask(PairState { tif: TIF_IOC, ..ask() }, pa, pb, 4)));
-    r.ok(&edb("PP03 ask sold out", route_ask(with_left(ask(), 4), pa, pb, 4)));
-    r.ok(&edb("PP04 ask FOK, all of it", route_ask(PairState { tif: TIF_FOK, ..with_left(ask(), 4) }, pa, pb, 4)));
-    r.ok(&edb("PP05 bid through the KAS books, rest", route_bid(bid(), pa, pb, 4)));
-    r.ok(&edb("PP06 bid IOC, the escrow rest returned", route_bid(PairState { tif: TIF_IOC, ..bid() }, pa, pb, 4)));
-    r.ok(&edb("PP07 bid done, the escrow slack returned", route_bid(with_left(bid(), 4), pa, pb, 4)));
-    r.ok(&edb(
-        "PP08 bid close: the exact escrow used up",
-        route_bid(PairState { custody: 4 * WHOLE, ..with_left(bid(), 4) }, pa, pb, 4),
-    ));
+    okb(r, "PP01 ask through the KAS books, rest", route_ask(ask(), pa, pb, 4));
+    okb(r, "PP02 ask IOC, the rest returned at the custody index", route_ask(PairState { tif: TIF_IOC, ..ask() }, pa, pb, 4));
+    okb(r, "PP03 ask sold out", route_ask(with_left(ask(), 4), pa, pb, 4));
+    okb(r, "PP04 ask FOK, all of it", route_ask(PairState { tif: TIF_FOK, ..with_left(ask(), 4) }, pa, pb, 4));
+    okb(r, "PP05 bid through the KAS books, rest", route_bid(bid(), pa, pb, 4));
+    okb(r, "PP06 bid IOC, the escrow rest returned", route_bid(PairState { tif: TIF_IOC, ..bid() }, pa, pb, 4));
+    okb(r, "PP07 bid done, the escrow slack returned", route_bid(with_left(bid(), 4), pa, pb, 4));
+    okb(r, "PP08 bid close: the exact escrow used up", route_bid(PairState { custody: 4 * WHOLE, ..with_left(bid(), 4) }, pa, pb, 4));
     // decay: a Dutch ask mid-way, a rising bid mid-way, both at their origin edge (t == origin == tx.daa) and at the end
     let dutch = PairState { price: RATE + 50, slope: 1, decay_step: 10, price_end: RATE - 50, active_from: NOW as i64 - 600, ..ask() };
-    r.ok(&edb("PP09 Dutch ask mid-way", route_ask(dutch.clone(), pa, pb, 4)));
+    okb(r, "PP09 Dutch ask mid-way", route_ask(dutch.clone(), pa, pb, 4));
     let at_origin = PairState { active_from: NOW as i64, ..dutch.clone() };
-    r.ok(&edb(
+    okb(
+        r,
         "PP10 Dutch ask at its origin (t == origin == tx.daa)",
         route(vec![
             pair_leg(at_origin, pa, pb, X_ID, 70, 4),
             kbid_leg(TOKEN_COV, pa, MAKER_B, P260, cov(0x91), 72, 10, 4),
             kask_leg(TOKEN_B, pb, MAKER_C, P250, cov(0x92), 74, 10, 5),
         ]),
-    ));
-    r.ok(&edb("PP11 Dutch ask past its end (priceEnd)", route_ask(PairState { active_from: NOW as i64 - 5_000, ..dutch }, pa, pb, 4)));
+    );
+    okb(r, "PP11 Dutch ask past its end (priceEnd)", route_ask(PairState { active_from: NOW as i64 - 5_000, ..dutch }, pa, pb, 4));
     let rising =
         PairState { price: RATE - 50, slope: 1, decay_step: 10, price_end: RATE + 50, active_from: NOW as i64 - 500, ..bid() };
     let rising = PairState { custody: rising.bid_escrow(10 * WHOLE, 4).unwrap(), ..rising };
-    r.ok(&edb("PP12 rising bid mid-way", route_bid(rising.clone(), pa, pb, 4)));
+    okb(r, "PP12 rising bid mid-way", route_bid(rising.clone(), pa, pb, 4));
     let ro = PairState { active_from: NOW as i64, ..rising };
     let q = ro.s_out(4 * WHOLE, ro.price).unwrap();
-    r.ok(&edb(
+    okb(
+        r,
         "PP13 rising bid at its origin",
         route(vec![
             pair_leg(ro, pa, pb, Y_ID, 70, 4),
             kbid_units(TOKEN_B, pb, MAKER_B, P260, cov(0x91), 72, q),
             kask_leg(TOKEN_COV, pa, MAKER_C, P250, cov(0x92), 74, 10, 4),
         ]),
-    ));
+    );
     // TWAP / DCA: interval (the input's sequence), maxFill, tip
-    r.ok(&edb(
+    okb(
+        r,
         "PP14 TWAP ask: interval, maxFill, tip",
         route_ask(PairState { interval: 100, max_fill: 4 * WHOLE, tip: 10_000, ..ask() }, pa, pb, 4),
-    ));
+    );
     let dca = PairState { interval: 100, max_fill: 4 * WHOLE, tip: 10_000, ..bid() };
-    r.ok(&edb("PP15 DCA bid: interval, maxFill, tip", route_bid(dca, pa, pb, 4)));
+    okb(r, "PP15 DCA bid: interval, maxFill, tip", route_bid(dca, pa, pb, 4));
     // netting with opposite pair orders (no KAS-book leg): 1 x 1, 2 x 2, 1 x 3, 3 x 1, resting and closing
-    r.ok(&edb("PP16 netting 1 x 1, both rest", netting(pa, pb, 1, 1, false)));
-    r.ok(&edb("PP17 netting 1 x 1, both close", netting(pa, pb, 1, 1, true)));
-    r.ok(&edb("PP18 netting 2 x 2, rest", netting(pa, pb, 2, 2, false)));
-    r.ok(&edb("PP19 netting 2 x 2, close", netting(pa, pb, 2, 2, true)));
-    r.ok(&edb("PP20 netting 1 ask x 3 bids", netting(pa, pb, 1, 3, false)));
-    r.ok(&edb("PP21 netting 3 asks x 1 bid, close", netting(pa, pb, 3, 1, true)));
+    okb(r, "PP16 netting 1 x 1, both rest", netting(pa, pb, 1, 1, false));
+    okb(r, "PP17 netting 1 x 1, both close", netting(pa, pb, 1, 1, true));
+    okb(r, "PP18 netting 2 x 2, rest", netting(pa, pb, 2, 2, false));
+    okb(r, "PP19 netting 2 x 2, close", netting(pa, pb, 2, 2, true));
+    okb(r, "PP20 netting 1 ask x 3 bids", netting(pa, pb, 1, 3, false));
+    okb(r, "PP21 netting 3 asks x 1 bid, close", netting(pa, pb, 3, 1, true));
     // inventory fills: the matcher's own tokens are the counterparty
-    r.ok(&edb("PP22 ask inventory fill (rounding price), rest", inv(side_pr(true, pa, pb), pa, pb, NR)));
-    r.ok(&edb("PP23 bid inventory fill (rounding price), rest", inv(side_pr(false, pa, pb), pa, pb, NR)));
-    r.ok(&edb("PP24 ask inventory fill, sold out", inv(left_units(side_pr(true, pa, pb), NR), pa, pb, NR)));
-    r.ok(&edb("PP25 bid inventory fill, done", inv(left_units(side_pr(false, pa, pb), NR), pa, pb, NR)));
+    okb(r, "PP22 ask inventory fill (rounding price), rest", inv(side_pr(true, pa, pb), pa, pb, NR));
+    okb(r, "PP23 bid inventory fill (rounding price), rest", inv(side_pr(false, pa, pb), pa, pb, NR));
+    okb(r, "PP24 ask inventory fill, sold out", inv(left_units(side_pr(true, pa, pb), NR), pa, pb, NR));
+    okb(r, "PP25 bid inventory fill, done", inv(left_units(side_pr(false, pa, pb), NR), pa, pb, NR));
     // refunds (expiry, 90 days idle, IOC / FOK kill) and cancels
     r.ok(&ed("PP26 ask refund at expiry", refund_of(ask(), pa, pb, EXPIRY as u64, PV)));
     r.ok(&ed("PP27 bid refund at expiry", refund_of(bid(), pa, pb, EXPIRY as u64, PV)));
@@ -537,7 +550,10 @@ fn positives(r: &Run, pa: TemplateId, pb: TemplateId) {
 
 #[test]
 fn pair_positives() {
-    suite(&family_mixes(), positives);
+    suite(
+        &[family_mixes().as_slice(), &mixed_pairs_pm(), &[(TemplateId::Kcc20PublicMint, TemplateId::Kcc20PublicMint)]].concat(),
+        positives,
+    );
 }
 
 // ---------------------------------------------------------------- settlement: rounding, exact custody, C1 fake quotes

@@ -25,6 +25,7 @@
 //    the else branch of `side == SIDE_ASK` always has side == SIDE_BID.
 import { del, rep, rx, rxDel } from '../lib/edits.mjs';
 import { touchMutations } from '../lib/touch.mjs';
+import { withPublicMint } from '../lib/pm.mjs';
 
 export const suite = {
   name: 'kcc20-sell',
@@ -85,7 +86,7 @@ const T_AU_CAS = 'v3_audit_cond_ask_strays';
 const T_AU_IB = 'v3_audit_ifd_bid';
 const T_OI = 'v2_negative_oco_and_ifd';
 
-export const mutations = [
+export const mutations = withPublicMint([
   // ---- KobCondAsk
   {
     id: 'A1',
@@ -872,4 +873,4 @@ export const mutations = [
   { id: "AU-IB-45", file: "KobIfdBid", run: { [T_AU_IB]: ["NAU-IB27"] }, note: "refund: no output bound to the entry's id", edits: [rep("        require(OpCovInputCount(tokenCovId) == 0);\n        require(OpCovOutputCount(selfId) == 0);\n", "        require(OpCovInputCount(tokenCovId) == 0);\n")] },
   { id: "AU-IB-46", file: "KobIfdBid", run: { [T_AU_IB]: ["NAU-IB28"] }, note: "refund: output i pays P2PK(maker)", edits: [del("        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n")] },
   { id: "AU-IB-47", file: "KobIfdBid", run: { [T_AU_IB]: ["NAU-IB29"] }, note: "refund: the maker gets the escrow minus at most refundTip", edits: [del("        require(tx.outputs[self].value + refundTip >= tx.inputs[self].value);\n")] },
-];
+]);

@@ -29,7 +29,7 @@ use kob_protocol::build::{Action, Batch, BatchUpdate, Leg};
 use kob_protocol::state::*;
 use kob_protocol::tx::SigPlan;
 use ph::*;
-use TemplateId::{Kcc20Ref, Kcc20Ref8x8, KronToken2433};
+use TemplateId::{Kcc20PublicMint, Kcc20Ref, Kcc20Ref8x8, KronToken2433};
 
 /// Another extension commitment than the fixtures' (`EXT`): another token of A's covenant id.
 const OTHER_EXT: [u8; 32] = [0xdd; 32];
@@ -38,7 +38,14 @@ const ODAA: u64 = 1_000;
 
 /// The pairs whose A is a KCC-20 token, on both KCC-20 programs (8 / 8 and the tradable 3 / 3 reference program).
 fn a_kcc_mixes() -> Vec<(TemplateId, TemplateId)> {
-    vec![(Kcc20Ref8x8, Kcc20Ref8x8), (Kcc20Ref8x8, KronToken2433), (Kcc20Ref, Kcc20Ref), (Kcc20Ref, KronToken2433)]
+    vec![
+        (Kcc20Ref8x8, Kcc20Ref8x8),
+        (Kcc20Ref8x8, KronToken2433),
+        (Kcc20Ref, Kcc20Ref),
+        (Kcc20Ref, KronToken2433),
+        (Kcc20PublicMint, Kcc20PublicMint),
+        (Kcc20PublicMint, KronToken2433),
+    ]
 }
 
 fn reext_state(any: &mut AnyState, tok: [u8; 32], ext: [u8; 32]) -> bool {
@@ -351,7 +358,14 @@ fn set_rpt(e: &mut Ed, rpt: i64) {
 #[test]
 fn aud_rb_ifd_pair_rearm_bound() {
     let subs = Subs::compile();
-    for (pa, pb) in [(Kcc20Ref8x8, KronToken2433), (KronToken2433, Kcc20Ref8x8), (Kcc20Ref, KronToken2433), (Kcc20Ref, Kcc20Ref)] {
+    for (pa, pb) in [
+        (Kcc20Ref8x8, KronToken2433),
+        (KronToken2433, Kcc20Ref8x8),
+        (Kcc20Ref, KronToken2433),
+        (Kcc20Ref, Kcc20Ref),
+        (Kcc20PublicMint, KronToken2433),
+        (Kcc20PublicMint, Kcc20PublicMint),
+    ] {
         ph::SLOT_GATE.store(true, std::sync::atomic::Ordering::Relaxed);
         let r = Run { subs: &subs, pair: pair_name(pa, pb) };
         for buy in [true, false] {
