@@ -65,7 +65,8 @@ const pinFiles = [
   'README.md',
   'contracts/README.md',
   ...walk(path.join(root, 'contracts/argent/examples')).map(rel),
-  ...walk(path.join(root, 'docs')).filter((f) => f.endsWith('.md')).map(rel),
+  // docs/testing holds test reports: their 64-hex values are transaction ids (chain evidence), not build-output pins
+  ...walk(path.join(root, 'docs')).filter((f) => f.endsWith('.md')).map(rel).filter((f) => !f.startsWith('docs/testing/')),
 ];
 let checked = 0;
 const missing = [];
