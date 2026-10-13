@@ -91,11 +91,23 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
 
   return (
     <div class="app">
+      {/* keyboard users jump past the header; a hash link would be a route here, so it moves the focus itself */}
+      <a
+        class="skip-link"
+        href="#/"
+        data-testid="skip-link"
+        onClick={(e) => {
+          e.preventDefault();
+          document.getElementById('main')?.focus();
+        }}
+      >
+        {t('shell.skip')}
+      </a>
       <NotifyProvider>
         <StatusProvider>
           <Header route={route} />
           <StatusBar />
-          <main class="container main" id="main" data-testid="main" data-route={routeToHash(route)}>
+          <main class="container main" id="main" tabIndex={-1} data-testid="main" data-route={routeToHash(route)}>
             <PreAuditBanner />
             <GlobalBanners warnings={props.warnings} storedOverrides={props.storedOverrides ?? []} />
             <ViewBoundary resetKey={routeToHash(route)}>

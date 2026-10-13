@@ -140,6 +140,10 @@ small, .small { font-size: 0.85em; }
 }
 
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+/* "Skip to content": off screen until it has the keyboard focus */
+.skip-link { position: absolute; left: 8px; top: -48px; z-index: 1000; padding: 8px 12px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.skip-link:focus { top: 8px; }
+.main:focus { outline: none; }
 
 /* ------------------------------------------------------------------ layout */
 

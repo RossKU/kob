@@ -132,3 +132,14 @@ test.describe('settings', () => {
     await expect(page.getByTestId('settings-indexer-url')).toHaveValue(mock.url);
   });
 });
+
+test('the skip link is the first stop of the keyboard and moves the focus to the content', async ({ appPage: page, mock }) => {
+  await openMarket(page, mock, { connect: false });
+  await page.locator('body').focus();
+  await page.keyboard.press('Tab');
+  await expect(page.getByTestId('skip-link')).toBeFocused();
+  await expect(page.getByTestId('skip-link')).toBeInViewport();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('main')).toBeFocused();
+  await expect(page).toHaveURL(/#\/market\//);
+});
