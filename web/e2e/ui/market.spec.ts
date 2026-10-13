@@ -25,13 +25,15 @@ test.describe('shell and token list', () => {
     for (const badge of ['verified', 'unverified', 'official', 'pending-review', 'custom-registry', 'not-in-registry']) await expect(row.getByTestId(`badge-${badge}`)).toHaveCount(0);
     await expect(row.locator('[data-testid^="shared-ticker-"]')).toHaveCount(0); // a unique ticker has no note
     await expect(row).toHaveAttribute('data-tradable', '1');
-    // the indexer's open order counts are merged in
-    await expect(row).toContainText('11');
-    // the full token hash (covenant id) is shown, monospace, never truncated; no market / pair column and no size-convention column
+    // the indexer's open order counts are merged in (one column: asks + bids, the split in the tooltip)
+    await expect(row.getByTestId(`token-orders-${id}`)).toHaveText('22');
+    await expect(row.getByTestId(`token-orders-${id}`)).toHaveAttribute('title', '11 asks · 11 bids');
+    // the full token hash (covenant id) is shown, monospace, never truncated; no market / pair column and no size-convention column; the figure
+    // headers sort (the list opens by 24 h volume) and the program badges sit under the name
     const hash = row.getByTestId(`token-hash-${id}`);
     await expect(hash).toHaveText(id);
     await expect(hash).toHaveCSS('font-family', /mono|Consolas|Courier/i);
-    await expect(appPage.locator('[data-testid="token-list"] thead th')).toHaveText(['Token', 'Token hash (covenant id)', 'Status', 'Asks', 'Bids']);
+    await expect(appPage.locator('[data-testid="token-table"] thead th')).toHaveText([/^Token/, /^Price \(KAS\)/, /^24h/, /^24h volume \(KAS\)/, /^Spread/, /^Orders/, 'Token hash (covenant id)']);
     await expect(row.locator('[data-testid^="token-pair-"]')).toHaveCount(0);
     await expect(appPage.getByTestId('network-badge')).toHaveText('testnet-10');
     await expect(appPage.getByTestId('footer-statement')).toContainText('non-custodial');

@@ -203,3 +203,18 @@ a.tape-row:hover .tape-time { color: var(--text); }
 .token-hash-cell { min-width: 14rem; }
 .token-hash { align-items: flex-start; }
 .token-hash code { font-size: 0.82rem; overflow-wrap: anywhere; word-break: break-all; }
+
+/* ---- market list (#/market): sortable figure columns; a phone keeps the name, the price and the change */
+.ml-table .nowrap { white-space: nowrap; }
+.ml-table th .th-sort { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 3px; color: inherit; font: inherit; border-radius: var(--radius-sm); }
+.ml-table th .th-sort:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ml-table th .th-sort.active { color: var(--text); }
+.ml-table th .th-sort-mark { font-size: 0.7em; opacity: 0.55; }
+.ml-table th .th-sort.active .th-sort-mark { opacity: 1; }
+.ml-table .ml-skel { display: inline-block; width: 52px; margin: 0; vertical-align: middle; }
+.ml-badges:empty { display: none; }
+.ml-badges { margin-top: 2px; }
+.ml-pairs { margin-top: 16px; }
+.ml-subtitle { font-size: 0.95rem; font-weight: 700; margin: 0 0 6px; }
+@media (max-width: 1099px) { .ml-table .ml-lg { display: none; } }
+@media (max-width: 759px) { .ml-table .ml-md { display: none; } }
