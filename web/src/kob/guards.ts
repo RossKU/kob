@@ -5,7 +5,7 @@
 //   * tick / amount / minimum fill / value / time-range checks
 // Every function is pure and returns PlanIssue[] (never throws for user-input problems). Amounts are token base units, prices sompi per
 // whole token (`scale` base units), all bigint.
-import type { BookLevel, BookOrder, BookView, Clock, OwnOrderRef, PlanIssue, TokenMarket } from './plan-types';
+import type { BookLevel, BookOrder, BookView, CarrierLine, Clock, OwnOrderRef, PlanIssue, TokenMarket } from './plan-types';
 import { issue } from './orders/common-issues';
 import { MAX_IDLE_DAA } from './daa';
 import { BPS, fitsI64, formatUnits, isOnTick, quoteOf, roundToTick } from './units';
@@ -322,7 +322,17 @@ export function checkPriceBand(reference: bigint | null, side: 'sell' | 'buy', p
   return bps >= PRICE_AWAY_BPS ? [issue('PRICE_FAR_FROM_MARKET', { percent: pct(bps), reference }, field)] : [];
 }
 
-/** KAS locked as carriers dwarfing the order: warns when the carriers exceed the order's notional value. */
-export function checkCarrierRatio(locked: bigint, notional: bigint | null): PlanIssue[] {
+/** Lines of the KAS a bid holds to pay for its fills, not to carry anything: the escrow and the reserve. */
+const NOT_CARRIERS = new Set(['escrow', 'reserve']);
+
+/** The KAS locked as carriers (outputs' minimum KAS, returned when the order ends): the disclosure's lines without the ones the wallet
+ *  keeps and without a bid's escrow and reserve (they are the order's value, not carriers). */
+export function carrierKas(carriers: readonly CarrierLine[]): bigint {
+  return carriers.filter((c) => !c.kept && !NOT_CARRIERS.has(c.kind)).reduce((s, c) => s + c.amount * BigInt(c.count), 0n);
+}
+
+/** KAS locked as carriers dwarfing the order: warns when the carriers ([`carrierKas`]) exceed the order's notional value. */
+export function checkCarrierRatio(carriers: readonly CarrierLine[], notional: bigint | null): PlanIssue[] {
+  const locked = carrierKas(carriers);
   return notional !== null && locked > notional ? [issue('CARRIERS_DOMINATE', { locked })] : [];
 }

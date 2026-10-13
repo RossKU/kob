@@ -682,6 +682,16 @@ describe('validation and guards through the planner', () => {
     expect(p.ok).toBe(true);
     expect(p.issues.find((i) => i.code === 'CARRIERS_DOMINATE')?.severity).toBe('warning');
   });
+
+  it('a bid whose escrow is its value is not warned for carriers (the escrow is not a carrier)', () => {
+    const p = planSimple(makeEnv(), { type: 'limit', side: 'buy', price: P, amount: 100n * TOK });
+    expect(p.ok).toBe(true);
+    expect(p.disclosure?.carriers.some((c) => c.kind === 'escrow')).toBe(true);
+    expect(p.issues.map((i) => i.code)).not.toContain('CARRIERS_DOMINATE');
+    // a tiny bid still is: its delivery carriers exceed what it spends
+    const tiny = planSimple(makeEnv(), { type: 'limit', side: 'buy', price: 100n, amount: TOK });
+    expect(tiny.issues.map((i) => i.code)).toContain('CARRIERS_DOMINATE');
+  });
 });
 
 describe('funding and token selection', () => {

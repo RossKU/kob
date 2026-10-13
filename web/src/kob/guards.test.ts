@@ -340,8 +340,19 @@ describe('field checks', () => {
   });
 
   it('carrier ratio warns when carriers exceed the order value', () => {
-    expect(checkCarrierRatio(2_000_000_000n, 1_000_000_000n)).toHaveLength(1);
-    expect(checkCarrierRatio(2_000_000_000n, 2_000_000_000n)).toEqual([]);
-    expect(checkCarrierRatio(1n, null)).toEqual([]);
+    const two = [{ kind: 'orderCarrier', amount: 1_000_000_000n, count: 2 }];
+    expect(checkCarrierRatio(two, 1_000_000_000n)).toHaveLength(1);
+    expect(checkCarrierRatio(two, 2_000_000_000n)).toEqual([]);
+    expect(checkCarrierRatio([{ kind: 'orderCarrier', amount: 1n, count: 1 }], null)).toEqual([]);
+    // a bid's escrow and reserve are its value, not carriers (every bid warned: TN10 2026-10-14); a kept line is the wallet's
+    const bid = [
+      { kind: 'escrow', amount: 25_000_000_000n, count: 1 },
+      { kind: 'deliveryCarrier', amount: 200_000_000n, count: 3 },
+      { kind: 'reserve', amount: 5_000_000_000n, count: 1 },
+      { kind: 'tokenChangeCarrier', amount: 900_000_000n, count: 1, kept: true },
+    ];
+    expect(checkCarrierRatio(bid, 25_000_000_000n)).toEqual([]);
+    expect(checkCarrierRatio(bid, 500_000_000n)).toHaveLength(1);
+    expect(checkCarrierRatio(bid, 500_000_000n)[0]!.params).toEqual({ locked: 600_000_000n });
   });
 });

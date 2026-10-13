@@ -195,6 +195,12 @@ fn gtc_buy_is_the_golden_create_bid_escrow() {
     assert_eq!((d.all_in_price, d.all_in_total, d.kas_locked), (Some(245_100_000), Some(2_451_000_000), 5_451_000_002));
     assert_eq!(d.carriers[0].amount, 2_451_000_002);
     assert_eq!((d.carriers[1].amount, d.carriers[1].count), (C as i128, 3));
+    // the escrow is the bid's value, not a carrier: 3 delivery carriers exceed 2.451 KAS, but not 24.51 KAS (every bid warned
+    // CARRIERS_DOMINATE: TN10 2026-10-14)
+    let dominates = |issues: &[Issue]| issues.iter().any(|i| i.code == "CARRIERS_DOMINATE");
+    assert!(dominates(&p.issues));
+    let big = valid(&env(&m), Intent::Limit(LimitIntent { tip: 100_000, ..limit(Side::Buy, 10 * TOK, 2_450_000_000) }));
+    assert!(!dominates(&big.issues), "{:?}", big.issues);
 }
 
 #[test]

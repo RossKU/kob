@@ -164,7 +164,7 @@ function place(env: PlanEnv, d: Draft, pre: PlanIssue[]): OrderPlan {
       order, amount: d.amount, limitPrice: d.limitPrice, expectedPrice: d.expectedPrice, worstPrice: d.worstPrice,
       expiryKind: d.expiryKind, activatesAt: d.activatesAt, fills: d.fills, notes: d.notes,
     });
-    issues.push(...checkCarrierRatio(disclosure.kasLocked, disclosure.allInTotal));
+    issues.push(...checkCarrierRatio(disclosure.carriers, disclosure.allInTotal));
   }
   return finishPlan(issues, [order], res, disclosure);
 }

@@ -1556,10 +1556,12 @@ pub(crate) fn place_simple(env: &Env, d: Draft, mut issues: Vec<Issue>) -> Plan 
         _ => unreachable!("plain kinds"),
     }
     let kas_locked: i128 = carriers.iter().filter(|c| !c.kept).map(|c| c.amount * c.count as i128).sum();
-    if all_in_total.is_some_and(|t| kas_locked > t as i128) {
+    // the carriers alone: a bid's escrow is its value, not a carrier (every bid warned)
+    let carrier_kas: i128 = carriers.iter().filter(|c| !c.kept && c.kind != "escrow").map(|c| c.amount * c.count as i128).sum();
+    if all_in_total.is_some_and(|t| carrier_kas > t as i128) {
         issues.push(warning(
             "CARRIERS_DOMINATE",
-            format!("the KAS locked as carriers ({kas_locked} sompi) exceeds the order value; it is returned when the order ends"),
+            format!("the KAS locked as carriers ({carrier_kas} sompi) exceeds the order value; it is returned when the order ends"),
         ));
     }
     let all_in_price = Some(if d.side == Side::Sell { d.limit_price - tip } else { d.limit_price + tip });
