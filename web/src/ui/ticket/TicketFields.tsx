@@ -1,10 +1,11 @@
 // The input fields of the ticket, rendered from the layout of `form-state.ts`. Thin: every rule (parsing, rounding, which fields exist) lives there.
-import type { ComponentChildren } from 'preact';
+import { Fragment, type ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { has, t } from '../../i18n';
 import { formatUnits, safeRounding } from '../../kob/units';
 import { invertedToNativePriceText, nativeToInvertedPriceText } from '../market/orientation';
 import { Checkbox, Field, FieldShell, Segmented } from '../kit';
+import { AmountSlider, type AmountSliderProps } from './AmountSlider';
 import {
   BASE_SUFFIX, FIELDS, FIELD_DEFAULTS, TOUCH_MIN, TOUCH_PRESETS, amountBaseOf, amountPriceOf, kasTextOf, parseTouch, priceInfo,
   type FieldError, type FieldSpec, type Side, type TicketCtx, type TicketForm,
@@ -20,6 +21,8 @@ export interface TicketFieldsProps {
   onChange(id: string, value: string): void;
   /** "max" button of the amount field */
   onMax?: () => void;
+  /** the 0..100 % of Max slider under the amount field */
+  slider?: AmountSliderProps;
   maxLabel?: string;
   disabled?: boolean;
   /**
@@ -270,7 +273,7 @@ export function TicketFields(props: TicketFieldsProps) {
             </>
           );
         }
-        return (
+        const field = (
           <Field
             key={id}
             {...common}
@@ -281,6 +284,14 @@ export function TicketFields(props: TicketFieldsProps) {
             hint={hint}
             suffix={suffix ? <span class="tk-suffix">{suffix}</span> : undefined}
           />
+        );
+        return id === 'amount' && props.slider ? (
+          <Fragment key={id}>
+            {field}
+            <AmountSlider {...props.slider} disabled={props.disabled || props.slider.disabled} />
+          </Fragment>
+        ) : (
+          field
         );
       })}
     </>

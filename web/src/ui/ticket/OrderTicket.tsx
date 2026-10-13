@@ -28,7 +28,7 @@ import { useCovenantSignGate } from './CovenantSignGate';
 import { TicketFields } from './TicketFields';
 import { buildDisclosureModel } from './disclosure-model';
 import {
-  TYPE_GROUPS, amountPriceOf, baseToKas, buildIntent, followQuote, formatPrice, streamingQuoteText, initialForm, intentSizingPrice, layoutOf, parsePrice, reorientAmounts, setAmountBase,
+  BASE_SUFFIX, TYPE_GROUPS, amountBaseOf, amountPriceOf, baseToKas, buildIntent, kasTextOf, followQuote, formatPrice, streamingQuoteText, initialForm, intentSizingPrice, layoutOf, parsePrice, reorientAmounts, setAmountBase,
   setSide, setValue, sidesOf, switchType, visibleErrors,
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
@@ -245,12 +245,60 @@ export function OrderTicket(props: OrderTicketProps) {
       },
     });
   };
+  /** What Max gives for the form as it is: a sell the whole token balance (split over the orders of a ladder); a buy is searched against the planner. */
+  const computeMax = (): bigint => {
+    if (form.side === 'sell') return tokenBalance / BigInt(limitSet?.levels ?? 1);
+    // the form's own tip (read off the order at one base unit: the amount may still be empty)
+    const probe = built.intent ?? buildIntent(setAmountBase(form, 'amount', 1n, ctx), ctx).intent;
+    const tip = probe && 'tip' in probe && probe.tip ? probe.tip : 0n;
+    return maxBuy(tip);
+  };
   const onMax = () => {
-    const tip = built.intent && 'tip' in built.intent && built.intent.tip ? built.intent.tip : 0n;
-    // a sell is the whole token balance (split over the orders of a ladder); a buy is searched against the planner
-    const n = form.side === 'sell' ? tokenBalance / BigInt(limitSet?.levels ?? 1) : maxBuy(tip);
+    const n = computeMax();
     setForm((f) => (n > 0n ? setAmountBase(f, 'amount', n, ctx) : setValue(f, 'amount', '')));
     setMaxNote(form.side === 'buy' ? t(n > 0n ? 'ticket.max.done' : 'ticket.max.none') : null);
+  };
+  // the amount slider: 0..100 % of Max, recomputed when anything but the amount changes (type, side, price, tip, balances, the book); a buy's
+  // search runs the planner, so it waits for typing to pause
+  // the Max of the slider with the form it was computed for: a stale one (another side, type or price) is never used
+  const [sliderMax, setSliderMax] = useState<{ key: string; max: bigint | null } | null>(null);
+  const { amount: _amount, [`amount${BASE_SUFFIX}`]: _amountBase, ...otherValues } = form.values;
+  void _amount;
+  void _amountBase;
+  const maxKey = enabled && env ? JSON.stringify([form.type, form.side, !!form.kas, otherValues, String(tokenBalance), String(kasBalance), String(quoteBalance), String(refPrice)]) : '';
+  useEffect(() => {
+    if (!maxKey) {
+      setSliderMax(null);
+      return;
+    }
+    const key = maxKey;
+    const h = setTimeout(() => {
+      let max: bigint | null = null;
+      try {
+        max = computeMax();
+      } catch {
+        max = null;
+      }
+      setSliderMax({ key, max });
+    }, form.side === 'sell' ? 0 : 250);
+    return () => clearTimeout(h);
+  }, [maxKey, env]);
+  const baseOf = (id: string): bigint | null => {
+    if ((form.values[id] ?? '') === '' && form.values[id + BASE_SUFFIX] === undefined) return null;
+    const b = amountBaseOf(form, ctx, id);
+    return b.ok && b.value > 0n ? b.value : null;
+  };
+  const slider = {
+    max: sliderMax && sliderMax.key === maxKey ? sliderMax.max : null,
+    amount: baseOf('amount'),
+    minFill: baseOf('minFill'),
+    describe: (b: bigint) => (form.kas ? `${kasTextOf(form, ctx, 'amount', b)} KAS` : `${formatUnits(b, token.decimals, { group: ',' })} ${ticker}`),
+    onPick: (b: bigint | null) => {
+      setReviewNote(null);
+      setMaxNote(null);
+      setForm((f) => (b === null ? setValue(f, 'amount', '') : setAmountBase(f, 'amount', b, ctx)));
+    },
+    disabled: !enabled || !env,
   };
 
   const onChange = (id: string, value: string) => {
@@ -518,7 +566,7 @@ export function OrderTicket(props: OrderTicketProps) {
         ) : null}
 
         <TicketFields
-          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} onMax={enabled && env ? onMax : undefined}
+          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} onMax={enabled && env ? onMax : undefined} slider={slider}
           {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker } : {})}
         />
 

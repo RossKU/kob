@@ -305,4 +305,62 @@ test.describe('order ticket', () => {
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('aria-busy', 'false');
     await expect(seen).toHaveValue('0.03');
   });
+
+  test('the amount slider: 0 / 25 / 50 / 75 / 100 % of Max, 1 % steps by keyboard, a typed amount moves it', async ({ appPage: page, mock }) => {
+    await fundAlice(mock);
+    await openTicket(page, mock);
+    const amount = page.getByTestId('order-amount');
+    const slider = page.getByTestId('order-amount-slider');
+    const range = page.getByTestId('order-amount-range');
+    const base = async () => BigInt(Math.round(Number(await amount.inputValue()) * 1e8));
+    // a sell: Max is the free balance (100 EXKCC)
+    await page.getByTestId('order-side-sell').click();
+    await page.getByTestId('order-price').fill('0.03');
+    await expect(range).toBeEnabled();
+    await page.getByTestId('order-amount-pct-50').click();
+    await expect(amount).toHaveValue('50');
+    await expect(slider).toHaveAttribute('data-pct', '50');
+    await page.getByTestId('order-amount-pct-100').click();
+    await expect(amount).toHaveValue('100');
+    // keyboard: one step is 1 %
+    await range.focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect(amount).toHaveValue('99');
+    await expect(range).toHaveAttribute('aria-valuetext', '99% · 99 EXKCC');
+    // typing moves the slider
+    await amount.fill('25');
+    await expect(slider).toHaveAttribute('data-pct', '25');
+    await expect(page.getByTestId('order-amount-pct-25')).toHaveAttribute('aria-pressed', 'true');
+    // a minimum fill of 30 tokens: the 25 % point is off, 0 % empties the box
+    await page.getByTestId('order-advanced').locator('summary').click();
+    await page.getByTestId('field-minFill').fill('30');
+    await expect(page.getByTestId('order-amount-pct-25')).toBeDisabled();
+    await page.getByTestId('order-amount-pct-0').click();
+    await expect(amount).toHaveValue('');
+    await page.getByTestId('field-minFill').fill('');
+
+    // a buy: 50 % is half of what Max gives (the planner's search)
+    await page.getByTestId('order-side-buy').click();
+    await page.getByTestId('order-price').fill('0.0245');
+    // the slider waits for the buy's Max (a planner search) before it takes a pick
+    await expect(range).toBeEnabled();
+    await page.getByTestId('order-amount-max').click();
+    await expect(amount).not.toHaveValue('');
+    const max = await base();
+    expect(max).toBeGreaterThan(0n);
+    await expect(slider).toHaveAttribute('data-pct', '100');
+    await page.getByTestId('order-amount-pct-50').click();
+    await expect.poll(base).toBe(max / 2n);
+    await expect(slider).toHaveAttribute('data-pct', '50');
+    await expect(page.getByTestId('order-review')).toBeEnabled();
+    // a phone: the slider is one row inside the ticket, nothing scrolls sideways
+    await page.setViewportSize({ width: 375, height: 800 });
+    const box = (await slider.boundingBox())!;
+    const pt = (await page.getByTestId('order-amount-pct-100').boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(375);
+    expect(pt.y).toBeLessThan(box.y + box.height);
+    expect(pt.x + pt.width).toBeLessThanOrEqual(375);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+  });
 });

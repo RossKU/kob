@@ -276,6 +276,31 @@ test('a pair sell budgets its fills like a buy: "Fills to fund" reaches the plan
   await expect(page.getByTestId('field-maxFills')).toHaveCount(1);
 });
 
+test('the amount slider on a pair: a sell is a share of the EXKCC balance, a buy a share of what the EXUSD balance buys', async ({ appPage: page, mock }) => {
+  await openPair(page, mock, { usd: 10n });
+  const amount = page.getByTestId('order-amount');
+  const range = page.getByTestId('order-amount-range');
+  await pickType(page, 'limit', 'sell');
+  await fillFields(page, { price: '0.0515' });
+  await expect(range).toBeEnabled();
+  const held = await balanceOf(mock, 'EXKCC');
+  await page.getByTestId('order-amount-pct-100').click();
+  await expect.poll(async () => BigInt(Math.round(Number(await amount.inputValue()) * 1e8))).toBe(held);
+  await page.getByTestId('order-amount-pct-50').click();
+  await expect.poll(async () => BigInt(Math.round(Number(await amount.inputValue()) * 1e8))).toBe(held / 2n);
+  // a buy pays EXUSD: 100 % is what Max gives
+  await page.getByTestId('order-side-buy').click();
+  await fillFields(page, { price: '0.049' });
+  await expect(range).toBeEnabled();
+  await page.getByTestId('order-amount-max').click();
+  await expect(amount).not.toHaveValue('');
+  const max = await amount.inputValue();
+  await page.getByTestId('order-amount-pct-0').click();
+  await expect(amount).toHaveValue('');
+  await page.getByTestId('order-amount-pct-100').click();
+  await expect(amount).toHaveValue(max);
+});
+
 test('without the pair routes the view says "pair book unavailable" and still plans pair orders', async ({ appPage: page, mock }) => {
   await page.route('**/v1/pairs/**', (route) => route.fulfill({ status: 404, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{"error":{"code":"not_found","message":"no such route"}}' }));
   await openPair(page, mock);
