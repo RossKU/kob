@@ -84,7 +84,6 @@ The lifecycle rules of `contracts/v2/` apply with the KRON codec and limits:
   `KobAskKron` / `KobBidKron` filled in the same transaction (`ev`, and `tk` for an ask's custody: a holder UTXO of
   the KRON program, template hash + P2SH, with `id_type 2` and owner = the ask's id), exactly as the KCC-20 kinds
   (`docs/spec/matcher.md` section 4).
-  There is no receipt covenant and no genesis.
 
 Sizes (bytecode B / state B): KobAskKron 1,487 / 243, KobBidKron 1,343 / 252, KobCondAskKron 3,451 / 330,
 KobCondBidKron 3,253 / 348, KobIfdBidKron 3,478 / 552, KobIfdAskKron 4,628 / 561 (the pair orders for KRON tokens: `KobPair` 2,960 / 447,
@@ -129,4 +128,4 @@ validates every builder output on both real templates in the v2.1.0 engine (`kro
 
 Tests: `crates/kob-tests/tests/kob_kron_v2_tests.rs` (sell side) and `kob_kron_v2_buy_tests.rs` (buy side),
 both against the real KRON bytes of both templates; `kob_kron_adapter_tests.rs` is the v1 suite.
-Nothing here has been independently audited yet (pre-audit).
+Nothing here has been independently audited (the internal pre-mainnet audit: `docs/security/AUDIT-2026-10.md`).

@@ -36,6 +36,7 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 |---|---|
 | [argent.md](argent.md) | KOB as an Argent app: published artifacts, importing KOB orders from another Argent app, the swap-and-pay router |
 | [argent-feedback.md](argent-feedback.md) | Questions and findings for the Argent team, each with its status and where it can be reproduced |
+| [argent-port-compare.md](argent-port-compare.md) | `KobAsk` hand-written versus its Argent port: where the size difference comes from |
 | [../argent/UPSTREAM.md](../argent/UPSTREAM.md) | The pinned Argent commit, our two patches, how to rebuild `argentc` and update the pin |
 
 ## Component documentation
@@ -47,8 +48,8 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 | [../registry/README.md](../registry/README.md) | The token registry: strict template list, open token list |
 | [../web/README.md](../web/README.md) | The web UI, its mock stack and tests |
 | [../packages/kob-x402/examples/paid-api/README.md](../packages/kob-x402/examples/paid-api/README.md) | Example paid API using the TypeScript x402 SDK |
-| [../tools/ablation/README.md](../tools/ablation/README.md) | Contract mutation testing: what each check is for |
-| [../tools/soak/README.md](../tools/soak/README.md) | The testnet market simulator |
+| [../tools/ablation/README.md](../tools/ablation/README.md) | Contract mutation testing: which check rejects which attack ([RESULTS.md](../tools/ablation/RESULTS.md): the latest runs) |
+| [../tools/soak/README.md](../tools/soak/README.md) | The testnet-10 market simulator: processes, bots, checker, operation, the latest run |
 | [../tools/wallet-gate/README.md](../tools/wallet-gate/README.md) | Checks that browser wallets can sign covenant inputs |
 
 ## Project files

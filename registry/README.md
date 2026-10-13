@@ -13,7 +13,7 @@ and is not enforced by the order contracts (an order pins its own covenant id an
 
 ## Two lists: strict templates, open tokens
 
-* **`templates` is the STRICT list.** Only token programs marked `review_status: reviewed` are on it. In the shipped `tokens.json` three programs have reached that state: the two KRON programs, after an internal review with conditions, and the reference KCC-20 3/3, KOB's standard program, by internal review (maintainer decision 2026-10-12). No independent audit has been done; the other KCC-20 programs are `pending-review`. Because the token list is open (below), every token on a reviewed program is shown and tradable as `unverified`, with the `genesis_unverified` warning, until its entry is verified and listed. A program is accepted
+* **`templates` is the STRICT list.** Only token programs marked `review_status: reviewed` are on it. In the shipped `tokens.json` four programs have reached that state: the two KRON programs, after an internal review with conditions, the reference KCC-20 3/3, KOB's standard program (maintainer decision 2026-10-12), and the reference's published public-mint build (2026-10-13), both by internal review only. No independent audit has been done; the other KCC-20 programs are `pending-review`. Because the token list is open (below), every token on a reviewed program is tradable, and the executor returns it with standing `unverified` and the `genesis_unverified` warning until its entry is verified and listed. A program is accepted
   because its template hash is here, never by code special-casing: a third-party KCC-20-compatible program (same 112-byte state,
   draft transfer tags, owner scheme 4) such as KaspaCom's KCC20 0.2.5 is one more template entry plus its pinned artifact. Adding one
   is data plus review: the artifact or raw bytes under `contracts/third-party/` (with provenance and licence), its profile in
@@ -23,8 +23,8 @@ and is not enforced by the order contracts (an order pins its own covenant id an
   the profile's family, layout, slots and custody owner (the validator checks it).
 * **`tokens` is the OPEN list.** Every token whose program is on the strict list is tradable and shown by the executor, whether or not it
   has an entry here (an order pins its own covenant id and template hash; the executor lists it when the hash is on the strict list).
-  An entry adds metadata (ticker, decimals) and standing: `official` (confirmed genuine: shown with an
-  "official" badge) or, by default, `unverified`. Tokens are identified by covenant id plus template hash: tickers collide (a KRON-launchpad
+  An entry adds metadata (ticker, decimals) and standing: `official` (confirmed genuine) or, by default, `unverified`. The
+  standing is registry and API data (`GET /v1/tokens`); the KOB web app shows no verification or officialness. Tokens are identified by covenant id plus template hash: tickers collide (a KRON-launchpad
   "NACHO" is unrelated to the KRC-20 NACHO), so UIs always show the short covenant id next to the ticker.
 * **`capabilities`** on a template label what its authorities can do beyond owner-authorised transfers: `mint-authority`, `public-mint`,
   `burn`, and `freeze`, `seize`, `blacklist`. KOB has no special mechanism for frozen or seized tokens (the token program simply
@@ -83,14 +83,10 @@ order-contract pair per family; a token of one family can never trade through th
 ## Display
 
 `display_name(token)` gives `TICKER (abcd…1234) [verified]`: ticker, first and last four hex digits of the covenant id, and the state
-(`[official]`, `[verified]`, `[unverified]`, `[delisted]`). UIs show this string (never the name alone) so lookalike tokens are told apart by covenant id.
-
-**Lookalikes and ticker collisions** (web `lookalikeReport`). A token outside the registry whose ticker or name equals or resembles a registered
-token's is a strong warning ("possible impersonation: do not trade") when any token it resembles is official or carries no maintainer warning.
-When every registered namesake is NOT official AND carries a `warning` (the registry itself disowns it, like the test tokens PEPE and DNBT), the
-match is reported as a ticker collision instead (level `shared`: neither token is confirmed genuine; identify by covenant id), so a well-known
-token is not called an impersonation of a test token. The validator still refuses confusable tickers WITHIN the registry, so listing another
-"PEPE" later means renaming or removing this entry first.
+(`[official]`, `[verified]`, `[unverified]`, `[delisted]`), for tools and logs. The KOB web app shows the ticker with the covenant id
+and no standing; when two listed tokens share a ticker (look-alike letters and homoglyphs count as the same) it says "Another token
+uses this ticker — check the covenant id" (`web/README.md`, "Trust boundaries"). The validator refuses confusable tickers WITHIN the
+registry, so listing another "PEPE" later means renaming or removing this entry first.
 
 ## Relation to the launch allowlist
 
@@ -127,8 +123,8 @@ output proves the token never has a live minter. A genesis with one needs the mi
 for the reference KCC-20 programs KOB pins (the standalone 3/3 and its prototype variants, the published public-mint build): a holder
 transfer creates only holders, so a genesis of holders (and seeds) alone gives `live_minters: []`. A public-mint genesis with `PublicMint`
 outputs needs the trace: its live minters are the live `PublicMint` cells with `remaining` above 0, so such a token can be `official` only
-once minting is closed (`live_minters: []`; its supply is then final at `supply + mint_allowance`). The public-mint template itself is
-still `pending-review`, so its tokens cannot be `listed` yet. KaspaCom's program keeps minter lanes behind the extension commitment, which
+once minting is closed (`live_minters: []`; its supply is then final at `supply + mint_allowance`). The public-mint template is
+`reviewed` (internal review only, 2026-10-13), so its tokens can be `listed` once their entry is verified. KaspaCom's program keeps minter lanes behind the extension commitment, which
 the check cannot see (read the minter extension by hand).
 
 Reproduce (both steps read-only; nothing is signed or submitted):

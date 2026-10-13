@@ -15,8 +15,9 @@ off-chain custody.
   contracts.
 * **Order types.** Limit (GTC / GTD / day / timed), IOC, FOK, market (bounded IOC auction), stop,
   stop-limit, stop-market, trailing stop, take-profit, OCO, IFD / IFO (with repeat), TWAP / DCA /
-  Dutch, cancel-replace, partial fills everywhere, and a token-to-token cross limit that settles
-  through two KAS books in one transaction. See `docs/spec/order-types.md`.
+  Dutch, cancel-replace, partial fills everywhere. Every type also exists on a token/token pair: a pair order
+  is netted against opposite pair orders or settled through the two KAS books in one transaction. See
+  `docs/spec/order-types.md`.
 * **Payments.** A [x402](https://github.com/elldeeone/kaspa-x402) profile for KCC-20 payments and
   a swap-and-pay router (pay a merchant in token B from token A or KAS) built as an Argent app.
 
@@ -24,16 +25,18 @@ off-chain custody.
 
 **Pre-audit. Mainnet launches as a canary: use at your own risk, only funds you can afford to lose.**
 
-* There is no external audit, and none is planned before launch. The author's own review passes and an extensive test,
-  mutation (`tools/ablation`) and fuzz suite exist; they are not a substitute. The app shows a visible pre-audit notice. See `SECURITY.md`.
+* There is no external audit, and none is planned before launch. An internal pre-mainnet audit
+  (`docs/security/AUDIT-2026-10.md`) and an extensive test, mutation (`tools/ablation`) and fuzz suite exist; they are not
+  a substitute. The app shows a visible pre-audit notice. See `SECURITY.md`.
 * Mainnet launches as a canary; testnet-10 remains the network for testing.
-* Token registry (`registry/tokens.json`): the two KRON token programs are `reviewed`, with conditions
-  (a KRON token is listed after its genesis check and a no-live-minter scan, and the registry lists the KRON tokens);
-  the KCC-20 programs, KaspaCom's included, are `pending-review`. KCC-20 token issuance is permissionless: tokens of the
-  standard 3 / 3 reference program are tradable without any listing.
-  The KCC-20 token standard is in Last Call, not final; KOB's token programs follow its merged reference program, and KOB
-  issues that program in its standard 3 / 3 configuration (the other slot variants are prototypes;
-  `docs/spec/kcc-conformance.md`).
+* Token programs (`registry/tokens.json`): the two KRON programs are `reviewed` with conditions (a KRON token is listed
+  after its genesis check and a no-live-minter scan; the registry lists the KRON tokens). KCC-20 token issuance is
+  permissionless: tokens of the standard 3 / 3 reference program and of the reference's published public-mint build are
+  tradable without any listing (both `reviewed` by internal review only). The other KCC-20 programs (the 8 / 8 prototype,
+  KaspaCom's) are `pending-review` and not tradable on mainnet.
+* The KCC-20 token standard is in Last Call, not final. KOB's token programs follow its merged reference program, and
+  KOB issues that program in its standard 3 / 3 configuration; the other slot variants are prototypes
+  (`docs/spec/kcc-conformance.md`).
 * The Argent app build needs two patches to `argentc` that are not upstream (`argent/UPSTREAM.md`).
   Open questions for the Argent team are in `docs/argent-feedback.md`.
 * Interfaces, encodings and artifact ids can still change.
@@ -42,13 +45,13 @@ off-chain custody.
 
 | Path | Contents |
 |---|---|
-| `contracts/` | SilverScript sources (`v2/` protocol v2 orders, `orders/` first-generation orders, `kcc20/`, `adapters/kron/`), compiled `artifacts/` (committed, reproducible), `silverc.lock`, `SHA256SUMS`, `deploy/` (per-network deployment records), and the Argent app in `contracts/argent/` |
+| `contracts/` | SilverScript sources (`v2/` the order covenants, `orders/` the original plain orders of the v1 test suites, `kcc20/`, `adapters/kron/`), compiled `artifacts/` (committed, reproducible), `silverc.lock`, `SHA256SUMS`, `deploy/` (per-network deployment records), and the Argent app in `contracts/argent/` |
 | `contracts/third-party/` | Pinned third-party token programs: KaspaCom KCC20 0.2.5 (Apache-2.0), and the KCC-20 reference source and its published public-mint build (argent-lang/kcc20-reference `c8a0871`, ISC) |
 | `crates/kob-protocol` | Protocol library: pinned artifacts, state and sigscript encoding, builders for every order action and matcher shape, fee and mass pass, compute-budget table, `KOB1` payload, engine validation, golden vectors |
 | `crates/kob-wasm` | wasm-bindgen bindings over `kob-protocol` (used by the web UI and the TypeScript SDK) |
 | `crates/kob-executor` | One binary: indexer + read API (REST and WebSocket), matcher, keepers, and the x402 facilitator |
 | `crates/kob-x402` | x402 wire types, verifiers (KAS, KCC-20, swap-and-pay), payer and merchant SDK, in-memory chain test kit |
-| `crates/kob-cli` | Command line: `kob token issue`, `kob registry validate` (the rest is planned) |
+| `crates/kob-cli` | Command line: `kob token issue`, `kob registry` (validate, verify-genesis, programs, add-program), `kob recover`, `kob order sweep` / `cancel`; orders are placed with the web app or the `kob-protocol` / `kob-wasm` builders |
 | `crates/kob-tests` | The contracts executed in the rusty-kaspa v2.1.0 script engine: positive and negative harnesses |
 | `web/` | Static, client-side, non-custodial web UI (TypeScript, Preact) over `kob-wasm`; mock indexer and node for offline use |
 | `packages/kob-x402` | TypeScript x402 SDK and an example paid API |
@@ -99,8 +102,8 @@ npm run dev                                # then Settings: indexer URL and node
 ```
 
 The web app defaults to mainnet, no indexer and the SDK's public resolver. A real run needs
-your own settings and a browser wallet; see `web/README.md`. Do not use it with mainnet funds
-yet.
+your own settings and a browser wallet; see `web/README.md`. On mainnet it is a pre-audit canary:
+use only funds you can afford to lose.
 
 **Run `kob-executor` against testnet-10.** You need a testnet-10 node with the JSON wRPC
 listener (`kaspad --utxoindex --testnet --netsuffix=10 --rpclisten-json=127.0.0.1:18210`,
@@ -130,8 +133,10 @@ See [docs/README.md](docs/README.md) for the index. The main entries:
 * `docs/spec/kob1-payload.md`: the `KOB1` payload and placement record
 * `docs/spec/x402-kcc20-profile.md`, `docs/spec/x402-swap-and-pay.md`: x402 proposals; `docs/spec/x402-retry.md`: how a
   payment is retried without paying twice
+* `docs/spec/token-programs.md`: token-program profiles and onboarding a launchpad's program
 * `docs/argent.md`: KOB as an Argent app, how to import it, the router
-* `docs/ops/executor.md`: running the indexer, matcher and keepers
+* `docs/ops/executor.md`: running the indexer, matcher and keepers; `docs/ops/release.md`: the mainnet release checklist
+* `docs/security/AUDIT-2026-10.md`: the internal pre-mainnet security audit
 * `contracts/README.md`, `registry/README.md`: contracts and token registry
 
 ## Security and disclaimer
