@@ -265,7 +265,9 @@ the next transaction on the book the previous one leaves (§7).
 triggers); any transaction they accept is a valid fill. The selection rules of this section (priority classes, ranking,
 netting and routing of pair orders, the greedy objective) are the reference algorithm of `kob-executor`, not consensus.
 Matchers compete, and an operator is free to plan differently; two honest matchers running this algorithm on the same
-view build the same batch.
+view build the same batch. Which work units an executor takes in a tick when several executors compete for them (§3.6,
+weighted selection) is a choice of the same kind: random per executor, not consensus, and invisible to the covenants;
+inside a unit the rules of this section apply unchanged.
 
 ### 3.1 Priority classes
 
@@ -542,6 +544,69 @@ runs the facilitator in the same process treats the order outpoints of every set
 `broadcast`, `ambiguous`) like those of its own pending transactions: its batches plan around them, so a signed route
 is never raced by the operator's own batch.
 
+### 3.6 Weighted selection among competing executors
+
+*Not consensus, and not a rule a conforming matcher must follow: like §3.1 to §3.5 it is the reference executor's
+choice. No covenant reads it and no order's terms depend on it.*
+
+The reference planner is deterministic: executors with the same view build the same transactions, so with several of
+them (the long-term plan is that miners run executors) all but one transaction of every race are refused
+(`MissingInput` / `DoubleSpend`), and the loser backs off only the order whose input is gone (§8). The TN10 soak measured
+about four such races a minute with two executors; their number grows with the number of executors. Kaspa's node avoids
+the same waste for block templates: when the mempool frontier holds more than one block, each miner samples its
+transactions without replacement with probability proportional to a weight `feerate^ALPHA`, so parallel blocks of the DAG
+carry different transactions; when the frontier fits one block it takes everything (rusty-kaspa v2.1.0
+`mining/src/mempool/model/frontier.rs:379-390` `Frontier::build_selector`: `TakeAllSelector`, else `sample_inplace` or the
+`MutatingTreeSelector` of `frontier/selectors.rs:284-376`, which draws `rng.gen::<f64>() · total_weight` and removes the drawn
+key, `:349-350`; the weight `(fee / mass)^ALPHA` at `frontier/feerate_key.rs:31`, `ALPHA = 3` at `frontier/selectors.rs:18`).
+The reference executor mirrors it (`crates/kob-executor/src/matcher/select.rs`):
+
+- **Work units.** The components of the view (§3.1: the books of one token, joined by the pair orders between tokens).
+  Each is planned by the reference planner on its own, with no byte budget (the allocation that orders the components
+  in §3.1): its profit (the spread and tips of its fills and the keeper tips of its updates, less the fee of their bytes),
+  its bytes, its orders. A unit's **weight** is its profit per byte, the executor's "fee rate", to the power `alpha`
+  (default 1: proportional; `--select-alpha`).
+- **Mandatory units.** Every executor plans, every tick: a unit that holds class 1 or class 2 work (immediate orders,
+  triggered stops: §3.1 requires them in the first batch after they become visible), and a unit holding an order that has
+  been crossable (in a unit's standalone allocation) for `max_defer_daa` DAA (default 30, 3 s; `--select-max-defer-daa`):
+  the **starvation bound**. An order nobody takes within the bound is taken by every executor, deterministically.
+- **Sampling.** Of the other units the executor takes `share · m` in expectation (`m` units; the fraction rounded at
+  random), drawn without replacement with probability proportional to their weights (the `MutatingTreeSelector` draw).
+  The units it does not draw sit out the tick: another executor usually takes them meanwhile, and the others wait for
+  the next tick. The best unit is drawn with probability at least `share` (it has the largest weight, and the inclusion
+  probabilities add up to `share · m`); every weight is positive, so every unit keeps a chance.
+- **Planning.** Mandatory units first, then the sample in draw order, each unit in transactions of its own (a lost race
+  then costs that unit alone); inside a unit everything is the reference planner's: priority classes, price → tip → age,
+  FOK / IOC, netting and routing, triggers and updates, the profit step. A unit's fills are exactly the fills the reference
+  planner makes of that unit alone, so no selection skips a better price for a user (`tests/matcher_select.rs`).
+- **The share** is the executor's fair share `1 / n̂` of the work, `n̂` the number of executors racing for it, estimated
+  from the fraction of its own transactions that lose races (a moving average `L`): with `K` other executors taking a unit
+  it takes, `K` about Poisson with mean `λ = (n − 1)·share`, it loses that unit with probability `1 − (1 − e^−λ) / λ`; the
+  observed `L` gives `λ`, and the new share is `share / (share + λ)`. It starts at 1 and stays 1 while `L` is below 2 %: a
+  lone executor plans exactly as the reference planner, in one transaction sequence (Kaspa's `TakeAllSelector`). Two
+  executors settle near one half, three near one third; never below `min_share` (default 0.1; `--select-min-share`).
+- **Random source.** Per executor, seeded from OS randomness (`--select-seed` for a reproducible run); each tick gets its
+  own seed, so a tick is reproducible from it.
+- **Keepers.** Kills, refunds and closes are each their own transaction: the keepers sample the jobs due for less than
+  `max_defer_daa` the same way (weight: refund tip less the fee floor, per byte, to the power `alpha`), with their own
+  share; a job due for `max_defer_daa` is built by every keeper. Sweeps (the operator's own orders) are never sampled. An
+  x402 intent execution is not sampled: its keeper is the facilitator the payer chose and its order choice is the payer's
+  best price (`x402-swap-and-pay.md`).
+
+Measured on a simulated race (`crates/kob-executor/tests/matcher_select.rs`, `weighted_selection_cuts_the_races_between_executors`:
+six token books, a new crossing on each with probability 35 % per one-second tick, 200 ticks, every executor planning the
+same view and the node taking the first transaction that spends an input):
+
+| Executors | Lost transactions, reference → weighted | Fills in lost transactions | Mean latency (ticks) | Longest wait |
+|---|---|---|---|---|
+| 2 | 50.0 % → 15.0 % | 828 → 176 | 1.00 → 1.26 | 10 → 40 DAA |
+| 3 | 66.7 % → 25.1 % | 1,604 → 296 | 1.00 → 1.29 | 10 → 40 DAA |
+| 5 | 80.0 % → 41.2 % | 3,272 → 716 | 1.00 → 1.56 | 10 → 40 DAA |
+
+The longest wait is the starvation bound (30 DAA) plus the tick at which a new order is listed but not yet fillable.
+With `alpha = 3` (Kaspa's exponent) every executor prefers the same best units: five executors lose 61 % of their
+transactions instead of 41 % (`explore_selection_parameters`).
+
 ---
 
 ## 4. Triggers
@@ -754,7 +819,8 @@ apply unchanged.
 
 - **IOC / FOK kill**: at `max(UTXO DAA, activeFrom) + 600` (or `expiryDaa` if earlier) anyone may
   refund (a `KobPair` IOC / FOK alike). A keeper SHOULD submit the refund in the first block that allows it; the maker's
-  wallet SHOULD do it itself when online (it saves the `refundTip`).
+  wallet SHOULD do it itself when online (it saves the `refundTip`). Among competing keepers the reference keeper samples
+  its due jobs (§3.6): a job may wait for another keeper, never longer than `max_defer_daa` (3 s by default).
 - **GTD / day**: refund at `expiryDaa`. **GTC**: refund once idle 90 days (77,760,000 DAA).
 - **Repeating entries** (§6.1) are refunded like any if-done entry (`KobIfdBid.refund`,
   `KobIfdAsk.settle(n = 0)` while it holds tokens); a repeating `KobIfdAsk` with `amountLeft = 0` has no
@@ -955,7 +1021,8 @@ custodies (genuine holder of the token's program, owned by the exit id, exactly 
   budgets) rather than skipping the batch.
 - The planner sizes a batch by an estimate of its bytes; when the built transaction exceeds a block mass limit, the
   budget is scaled down by the overrun and the batch planned again (no fill is dropped for it).
-- Competing matchers race by fee; the loser's transaction is invalid, not harmful. The node offers replacement by fee
+- Competing matchers race by fee; the loser's transaction is invalid, not harmful. The reference executor spreads the work
+  among competing executors by a weighted random selection (§3.6), so most races are never run. The node offers replacement by fee
   (`submitTransactionReplacement`, RBF); the reference matcher never uses it: a batch stuck at a low rate stays pending
   until it is accepted or the pending timeout drops it (§8), and the next plan is priced at the rates of that moment. Only
   the keepers replace, and only their own kills and refunds: one that stays unaccepted is rebuilt from the same request
@@ -1239,3 +1306,7 @@ tick. Planning time with pair books is not measured.
 - Global batch (§3): one transaction fills several token books and pair orders, each token within its own slots;
   no size or candidate cap below the physical limits; a book set larger than one transaction is split, most profitable
   first; the plan is a pure function of the view, `t` and the configuration.
+- Weighted selection (§3.6, reference executor only): units with class 1 or 2 work and units with an order crossable for
+  `max_defer_daa` planned by every executor; a planned unit filled exactly as the reference planner fills it alone; a
+  share of one is the reference planner; a tick reproducible from its seed; keeper jobs due for `max_defer_daa` built by
+  every keeper (`crates/kob-executor/tests/matcher_select.rs`).

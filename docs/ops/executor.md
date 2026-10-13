@@ -140,6 +140,7 @@ matcher and keeper options (C, "Running"):
 | `--no-refund`, `--sweep-own-strays`, `--return-foreign-strays`, `--keeper-min-profit` | as C | keepers (`--keeper-min-profit` is `keep --min-profit`) |
 | `--keeper-subsidy-max-kas`, `--keeper-replace-after-daa`, `--keeper-max-replacements` | 0.05, 100, 3 | keepers' liveness under fee pressure (C, "Fee policy"): the most KAS of its own funding the operator adds to one kill or refund its tip cannot pay at its urgency's rate (0: off); replace a stuck kill or refund of this process after this many DAA, at most this many times (0: never). Also on `keep` and `match --keep` |
 | `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` | 1, 36000, 8 | the operator's total keeper subsidy: at most this many KAS within any rolling window of this many DAA (36,000 = one hour), replacements included, and at most this many subsidised kills and refunds per tick; past either, jobs go at the rate their own tip pays (budget 0 or max jobs 0: no subsidy). Also on `keep` and `match --keep` |
+| `--no-weighted-select`, `--select-alpha`, `--select-max-defer-daa`, `--select-min-share`, `--select-seed` | on, 1, 30, 0.1, OS randomness | the weighted selection among competing executors (C, "Competing executors"; `docs/spec/matcher.md` §3.6): off plans deterministically; the weight exponent; the starvation bound in DAA; the lowest share of the optional work per tick; a fixed seed for a reproducible run. Also on `match` and `keep` |
 
 `index` (with `replay`, `export-orders`, `export-book`, `import-orders`, `rebase`), `match` and `keep` stay as
 standalone modes. The database and the record log are the same files in every mode; never run two
@@ -2024,6 +2025,31 @@ the node cannot place backs off every order of the batch. The matcher never call
 replacement of anyone's transaction, its own included. Only the keepers replace, and only their own stuck kills and refunds
 ("Fee policy", *Replacement (RBF)*).
 
+### Competing executors: weighted selection
+
+Most of those races are never run (`docs/spec/matcher.md` §3.6, `matcher::select`). Like a Kaspa miner sampling the mempool
+for its block template, each executor takes, per tick, every *mandatory* work unit (a token's books with the pair orders
+between tokens, holding an immediate order or a triggered stop, or an order crossable for `--select-max-defer-daa`, 30 DAA
+by default) and a weighted random sample of the others: a unit is drawn with probability proportional to its profit per
+byte (to the power `--select-alpha`, default 1), without replacement, until it holds its *share* of them. The units it
+leaves sit out the tick; another executor usually takes them meanwhile, and none waits past the bound, after which every
+executor plans it. The share is the executor's estimate of its fair share, one over the executors racing for the work,
+from the fraction of its own transactions that lose races: 1 while it loses none (alone, it plans exactly as the reference
+planner, every unit in one transaction sequence), about one half against one other executor, one third against two, never
+below `--select-min-share` (0.1). While it samples, each unit goes in transactions of its own, so a lost race costs that
+unit alone. Inside a unit nothing is random: priority classes, price → tip → age and every user guarantee are the reference
+planner's. The keepers sample their due kills, refunds and closes the same way (weight: tip per byte), with their own share;
+a job due for the bound is built by every keeper. `--no-weighted-select` turns it off (deterministic, as before);
+`--select-seed` fixes the random source (otherwise seeded from OS randomness).
+
+Keep several funding UTXOs while competing (`--funding-target-utxos` at least the number of units a tick usually takes): the
+transactions of a tick spend them in turn, and one funded only by the change of another unit's transaction is lost with it.
+
+On a simulated race (`crates/kob-executor/tests/matcher_select.rs`; six token books, 200 one-second ticks) the share of
+transactions lost to races falls from 50 % to 15 % with two executors, from 67 % to 25 % with three and from 80 % to 41 %
+with five; the fills inside lost transactions by about four fifths; the mean time to a fill rises by a quarter to a half of
+a tick, and no crossing waits longer than the bound (plus the tick at which a new order is listed but not yet fillable).
+
 ### Fee policy
 
 Every transaction the executor builds (matcher batches, keeper jobs, maintenance jobs, and the x402 facilitator's intent
@@ -2235,6 +2261,11 @@ kob-executor keep --network testnet-10 --book-file book.json --metrics-file /var
 | `--no-chain` | off | do not chain onto unaccepted parents |
 | `--no-arm` | off | do not arm or ratchet stops with updates (stops the batch fills next to their evidence still trigger) |
 | `--tick-budget-ms`, `--max-candidates-per-group` | 20000, 0 | wall-clock budget of a matcher tick; optional cap on the candidates per (book, class, side), 0: all |
+| `--no-weighted-select` | off (the selection is on) | plan deterministically, as the reference planner and keepers: every executor with the same view builds the same transactions ("Competing executors") |
+| `--select-alpha` | 1 | weight exponent: a work unit (a due keeper job) is drawn with probability proportional to its profit (tip) per byte to this power; 0: uniform; Kaspa's template selection uses 3 |
+| `--select-max-defer-daa` | 30 | the starvation bound: a unit holding an order crossable for this many DAA (a keeper job due for this many) is taken by every executor |
+| `--select-min-share` | 0.1 | the lowest share of the optional work per tick the races may push the executor to (room for `1 / share` executors) |
+| `--select-seed` | OS randomness | seed of the selection's random source (a reproducible run) |
 | `--keep` (match) | off | run the keepers too |
 | `--no-refund` (keep) | off | disable refunds, kills and closes |
 | `--keeper-subsidy-max-kas` (keep, match) | 0.05 | the most KAS of the operator's funding added to the fee of one kill or refund whose tip pays the floor but not its urgency's rate (0: off; see Fee policy) |
@@ -2275,6 +2306,11 @@ cannot be read counts as present (paused, with a warning).
 | `kob_operator_low_funds`, `kob_matcher_funding_sompi` | 1 / below N days of fees |
 | `kob_matcher_rejected_total` | increasing (a stale plan or a bug: investigate the logs) |
 | `kob_matcher_conflicts_total` | a sharp rise (a faster competitor; consider the fee rate) |
+| `kob_select_share_match`, `kob_select_share_keep` | the share of the optional work the matcher (the keepers) takes per tick: 1 alone, about `1 / n` against `n − 1` competitors; at `--select-min-share` for long: an executor that takes everything competes for the same books |
+| `kob_select_taken_total`, `kob_select_deferred_total`, `kob_select_overdue_total`, `kob_select_units_total`, `kob_select_sampled_ticks_total` | the matcher's selection: units drawn, left for later, taken by every executor at the starvation bound, judged; ticks that sampled. A rising `overdue` share: the executors leave too much (lower `--select-max-defer-daa`) |
+| `kob_select_keeper_taken_total`, `kob_select_keeper_deferred_total`, `kob_select_keeper_overdue_total` | the same for the keepers' due jobs |
+| `kob_select_ceded_total` | orders this executor left for later that another transaction took first: races not run (the proxy of the collisions avoided) |
+| `kob_select_lost_steps_match_total`, `kob_select_lost_steps_keep_total`, `kob_select_enabled` | steps that lost a race; 1 while the selection is on |
 | `kob_matcher_pending_txs` | stays above 0 for minutes (transactions not mined) |
 | `kob_matcher_finalized_total`, `kob_matcher_finalized_profit_sompi` | income tracking |
 | `kob_matcher_skipped_books` | persistent (unsupported programs, unprofitable books) |
