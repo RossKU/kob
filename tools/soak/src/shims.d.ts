@@ -11,4 +11,7 @@ interface ImportMetaEnv {
 }
 interface ImportMeta {
   readonly env: ImportMetaEnv;
+  // vite's `import.meta.glob` of the web app's i18n dictionary (web/src/i18n/index.ts, reached through the order labels of My orders'
+  // model): the bundle expands it (rolldown's import-glob plugin, rolldown.config.mjs)
+  glob(pattern: string, options: { eager: true }): Record<string, unknown>;
 }
