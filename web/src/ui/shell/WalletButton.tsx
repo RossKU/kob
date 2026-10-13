@@ -1,15 +1,22 @@
 import { useWallet } from '../../app/context';
 import { useServices } from '../../app/context';
 import { t } from '../../i18n';
-import { Badge, Button, CopyText, shortAddress } from '../kit';
+import { Badge, Button, CopyText } from '../kit';
+
+/** The address in the chip: without the network prefix (the header names the network), the head and tail of the body; the full one is in its title. */
+export const chipAddress = (address: string): string => {
+  const body = address.slice(address.indexOf(':') + 1);
+  return body.length <= 14 ? body : `${body.slice(0, 6)}…${body.slice(-6)}`;
+};
 
 const KASWARE_URL = 'https://chromewebstore.google.com/detail/kasware-wallet/hklhheigdmpoolooomdihmhlpjjdbklf';
 const KASPIRE_URL = 'https://github.com/KaspaHUB21/Kaspire-Kaspa-Wallet';
 
 /**
  * Wallet area of the header. Not connected: one connect button per DETECTED wallet (extensions inject late, the list updates by itself),
- * or an install hint while none is found. Connected: the address (shortened, copyable), the wallet's network (red when it differs
- * from the app's) and a disconnect button.
+ * or an install hint while none is found. Connected: one compact chip with the wallet's name (wide screens), its address (shortened,
+ * copyable), the wallet's network ONLY when it differs from the app's (the header's network badge already names the app's), and a disconnect button
+ * (an icon on a phone).
  */
 export function WalletButton() {
   const { config } = useServices();
@@ -17,16 +24,21 @@ export function WalletButton() {
 
   if (w.info && w.adapter) {
     return (
-      <div class="row" data-testid="wallet-connected">
-        <span class="small muted">{w.info.label}</span>
-        <span title={t('shell.wallet.address')} class="small">
-          <CopyText value={w.info.address} text={shortAddress(w.info.address)} data-testid="wallet-address" label={t('shell.wallet.address')} />
+      <div class="wallet-chip" data-testid="wallet-connected" data-network={w.info.network} title={t('shell.wallet.chip', { wallet: w.info.label, network: w.info.network })}>
+        <span class="small muted wallet-name">{w.info.label}</span>
+        <span class="small">
+          <CopyText value={w.info.address} text={chipAddress(w.info.address)} data-testid="wallet-address" label={t('shell.wallet.address')} />
         </span>
-        <Badge tone={w.networkMismatch ? 'bad' : 'ok'} data-testid="wallet-network" title={t('shell.wallet.networkOk', { network: w.info.network })}>
-          {w.info.network}
-        </Badge>
-        <Button small variant="ghost" data-testid="wallet-disconnect" onClick={w.disconnect}>
-          {t('shell.wallet.disconnect')}
+        {w.networkMismatch ? (
+          <Badge tone="bad" data-testid="wallet-network" title={t('shell.wallet.networkOk', { network: w.info.network })}>
+            {w.info.network}
+          </Badge>
+        ) : null}
+        <Button small variant="ghost" class="wallet-disconnect" data-testid="wallet-disconnect" onClick={w.disconnect} aria-label={t('shell.wallet.disconnect')} title={t('shell.wallet.disconnect')}>
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10" />
+          </svg>
+          <span class="wallet-disconnect-text">{t('shell.wallet.disconnect')}</span>
         </Button>
       </div>
     );

@@ -94,6 +94,8 @@ export function Header(props: { route: Route }) {
             <ThemeIcon dark={dark} />
           </Button>
           <NotifyBell />
+        </div>
+        <div class="header-wallet">
           <WalletButton />
         </div>
       </div>

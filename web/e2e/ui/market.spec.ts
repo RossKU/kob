@@ -215,9 +215,12 @@ test.describe('wallet', () => {
     const addr = appPage.getByTestId(TESTID.walletAddress);
     await expect(addr).toBeVisible();
     await expect(addr).toHaveAttribute('data-value', TEST_KEYS.alice.testnetAddress);
-    await expect(addr).toContainText('kaspatest:');
+    // the chip drops the network prefix (the header names the network); the full address is its title and value
+    await expect(addr).not.toContainText('kaspatest:');
     await expect(addr).not.toHaveText(TEST_KEYS.alice.testnetAddress); // shortened
-    await expect(appPage.getByTestId(TESTID.walletNetwork)).toHaveText('testnet-10');
+    // the wallet's network is shown only when it differs from the app's
+    await expect(appPage.getByTestId('wallet-network')).toHaveCount(0);
+    await expect(appPage.getByTestId('wallet-connected')).toHaveAttribute('data-network', 'testnet-10');
     await expect(appPage.getByTestId('banner-network-mismatch')).toHaveCount(0);
     await appPage.getByTestId('wallet-disconnect').click();
     await expect(appPage.getByTestId(TESTID.walletConnectKasware)).toBeVisible();

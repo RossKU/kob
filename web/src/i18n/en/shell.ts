@@ -29,6 +29,7 @@ export default {
   'shell.wallet.noticeLostTitle': '{wallet} no longer exposes an account',
   'shell.wallet.noticeLost': 'The wallet was locked or disconnected this site, so the session was closed. Unlock it and connect again.',
   'shell.wallet.networkOk': 'Wallet network: {network}',
+  'shell.wallet.chip': '{wallet} on {network}',
   'shell.wallet.address': 'Wallet address',
 
   'shell.status.label': 'System status',

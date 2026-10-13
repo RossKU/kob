@@ -16,7 +16,9 @@ test.describe('KasWare that starts on mainnet and switches', () => {
   test.use({ walletOptions: { network: 'mainnet' } });
   test('the address shown is the testnet one after the switch', async ({ appPage: page, mock }) => {
     await openMarket(page, mock);
-    await expect(page.getByTestId('wallet-network')).toHaveText('testnet-10');
+    // the wallet's network is shown only when it differs from the app's
+    await expect(page.getByTestId('wallet-network')).toHaveCount(0);
+    await expect(page.getByTestId('wallet-connected')).toHaveAttribute('data-network', 'testnet-10');
     await expect(page.getByTestId('wallet-address')).toHaveAttribute('data-value', TEST_KEYS.alice.testnetAddress);
   });
 });
@@ -270,4 +272,25 @@ test('the confirmation screen starts with the net effect; the wallet inputs and 
   await flows.locator('summary').click();
   await expect(page.getByTestId('confirm-section-spend')).toBeVisible();
   await expect(page.getByTestId('confirm-section-back')).toBeVisible();
+});
+
+test('the header after connecting: one network badge, a compact wallet chip, short on a phone', async ({ appPage: page, mock }) => {
+  await openMarket(page, mock);
+  const header = page.locator('header.header');
+  // 1280 px: the app's network once (the wallet's only when it differs), the wallet chip with its name and address
+  await expect(header.getByText('testnet-10', { exact: true })).toHaveCount(1);
+  await expect(page.getByTestId('wallet-network')).toHaveCount(0);
+  await expect(page.getByTestId('wallet-connected')).toContainText('KasWare');
+  await expect(page.getByTestId('wallet-address')).not.toContainText('kaspatest:');
+  await expect(page.getByTestId('wallet-disconnect')).toHaveAccessibleName('Disconnect');
+  const wide = await header.boundingBox();
+  expect(wide!.height).toBeLessThan(70);
+  // 375 px: brand and tools, one line of navigation, the wallet chip (it took ~220 px)
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(page.getByTestId('wallet-address')).toBeVisible();
+  const phone = await header.boundingBox();
+  expect(phone!.height).toBeLessThan(130);
+  expect(await noPageScroll(page)).toBe(true);
+  await page.getByTestId('wallet-disconnect').click();
+  await expect(page.getByTestId('wallet-connected')).toHaveCount(0);
 });

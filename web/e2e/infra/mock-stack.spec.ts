@@ -83,7 +83,9 @@ for (const walletId of WALLETS) {
       await expect(appPage.getByTestId(TESTID.txStatus)).toHaveText('ready', { timeout: 30_000 });
       await appPage.getByTestId(`wallet-connect-${walletId}`).click();
       await expect(appPage.getByTestId(TESTID.walletAddress)).toHaveText(TEST_KEYS.alice.testnetAddress);
-      await expect(appPage.getByTestId(TESTID.walletNetwork)).toHaveText('testnet-10');
+      // the wallet's network is shown only when it differs from the app's
+      await expect(appPage.getByTestId('wallet-network')).toHaveCount(0);
+      await expect(appPage.getByTestId('wallet-connected')).toHaveAttribute('data-network', 'testnet-10');
 
       const tok = await mock.token();
       await mock.giveKas('alice', TEN_KAS_X5);

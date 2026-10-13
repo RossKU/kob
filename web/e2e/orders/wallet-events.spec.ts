@@ -75,7 +75,9 @@ for (const id of ['kasware', 'kaspire', 'kastle'] as WalletName[]) {
       await wallet!.setNetwork('testnet-10');
 
       await expect(page.getByTestId('banner-network-mismatch')).toHaveCount(0);
-      await expect(page.getByTestId('wallet-network')).toHaveText('testnet-10');
+      // the wallet's network is shown only when it differs from the app's
+      await expect(page.getByTestId('wallet-network')).toHaveCount(0);
+      await expect(page.getByTestId('wallet-connected')).toHaveAttribute('data-network', 'testnet-10');
       await expect(page.getByTestId('banner-wallet-network-restored')).toBeVisible();
       await expect(page.getByTestId('confirm-blocking')).toHaveCount(0);
       // same key, same network, same plan: signing works again

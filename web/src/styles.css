@@ -176,6 +176,11 @@ small, .small { font-size: 0.85em; }
 .nav a:hover { background: var(--surface-2); color: var(--text); }
 .nav a[aria-current='page'] { background: var(--surface-2); color: var(--text); box-shadow: inset 0 -2px 0 var(--primary); }
 .header-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: auto; }
+.header-wallet { display: flex; align-items: center; min-width: 0; }
+/* the connected wallet: one chip (name, address, a network badge only when it differs from the app's, disconnect) */
+.wallet-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 2px 2px 2px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }
+.wallet-chip .copy { white-space: nowrap; }
+.wallet-disconnect { display: inline-flex; align-items: center; gap: 4px; }
 
 .statusbar { background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 0.85rem; color: var(--muted); }
 .statusbar-inner { display: flex; flex-wrap: wrap; gap: 4px 16px; padding-top: 4px; padding-bottom: 4px; align-items: center; }
@@ -393,6 +398,15 @@ body.modal-open { overflow: hidden; }
 
 @media (max-width: 640px) {
   .header-inner { gap: 6px 10px; }
+  /* a phone: brand and tools on the first line, the navigation on one scrolling line, the wallet chip below */
+  .header .nav { order: 3; flex: 1 0 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .header .nav { gap: 0; }
+  .header .nav a { padding: 4px 6px; white-space: nowrap; font-size: 0.86rem; }
+  .header-tools { gap: 4px; }
+  /* the logo alone (the name stays for screen readers): the tools fit beside it */
+  .header .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .header-wallet { order: 4; flex: 1 0 100%; }
+  .wallet-chip .wallet-name, .wallet-disconnect-text { display: none; }
   .toast-host { left: 12px; right: 12px; width: auto; }
 }
 .raw-details { margin-top: 2px; }
