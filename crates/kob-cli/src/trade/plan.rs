@@ -16,7 +16,7 @@
 //! Every number is the covenant's own arithmetic (`kob_protocol::state`); prices are the state's (quote units per `scale`
 //! base units), amounts base units, KAS sompi.
 
-use kob_protocol::build::{build, check_new_order, min_order_value, Action, CreateOrder};
+use kob_protocol::build::{build, Action, CreateOrder};
 use kob_protocol::defaults::{
     day_order, default_min_fill, default_min_fill_ifd, default_min_fill_pair, default_min_touch, pair_tips, DEFAULT_ORDER_CARRIER,
 };
@@ -65,6 +65,24 @@ pub const MARKET_START_UNVERIFIED_MIN_SOMPI: i128 = 100 * 100_000_000;
 pub const MARKET_START_TOLERANCE_BPS: i128 = 1_000;
 /// KRON outputs hold at most this many base units.
 pub const KRON_MAX_OUTPUT_AMOUNT: i64 = kob_protocol::registry::KRON_MAX_OUTPUT_AMOUNT;
+/// `expiryDaa` of an if-done exit with the default GTC: "90 days idle from the exit's creation" (`cond-common.ts`).
+pub const GTC_EXIT_EXPIRY_DAA: i64 = 1 << 62;
+/// Trailing: the default update interval (10 minutes) and the shortest accepted (60 s).
+pub const DEFAULT_TRAIL_WAIT_DAA: i64 = 6_000;
+/// Shortest trailing interval.
+pub const MIN_TRAIL_WAIT_DAA: i64 = 600;
+/// Trail updates pre-funded by default, and the most accepted.
+pub const DEFAULT_EXPECTED_UPDATES: i64 = 20;
+/// Most pre-funded trail updates.
+pub const MAX_EXPECTED_UPDATES: i64 = 1_000;
+/// Repeat: "unlimited" is K large enough that only the 90-day bound ends it.
+pub const UNLIMITED_REPEAT_COUNT: i64 = 10_000_000;
+/// The KAS one repeat merge costs (buy-first / sell-first), spread over the smallest take-profit fill.
+pub const MERGE_COST_BUY_FIRST: i64 = 1_000_000;
+/// Sell-first merge cost.
+pub const MERGE_COST_SELL_FIRST: i64 = 1_500_000;
+/// A repeating stop entry pre-funds at most this many arming updates.
+pub const MAX_ENTRY_ARM_UPDATES: i64 = 10;
 
 // ------------------------------------------------------------------------------------------------ vocabulary
 
@@ -85,7 +103,7 @@ impl Side {
             Side::Buy => "buy",
         }
     }
-    fn other(self) -> Side {
+    pub(crate) fn other(self) -> Side {
         match self {
             Side::Sell => Side::Buy,
             Side::Buy => Side::Sell,
@@ -115,19 +133,19 @@ pub struct Issue {
     pub message: String,
 }
 
-fn issue(code: &'static str, severity: Severity, message: impl Into<String>) -> Issue {
+pub(crate) fn issue(code: &'static str, severity: Severity, message: impl Into<String>) -> Issue {
     Issue { code, severity, message: message.into() }
 }
-fn error(code: &'static str, m: impl Into<String>) -> Issue {
+pub(crate) fn error(code: &'static str, m: impl Into<String>) -> Issue {
     issue(code, Severity::Error, m)
 }
-fn warning(code: &'static str, m: impl Into<String>) -> Issue {
+pub(crate) fn warning(code: &'static str, m: impl Into<String>) -> Issue {
     issue(code, Severity::Warning, m)
 }
-fn info(code: &'static str, m: impl Into<String>) -> Issue {
+pub(crate) fn info(code: &'static str, m: impl Into<String>) -> Issue {
     issue(code, Severity::Info, m)
 }
-fn has_error(v: &[Issue]) -> bool {
+pub(crate) fn has_error(v: &[Issue]) -> bool {
     v.iter().any(|i| i.severity == Severity::Error)
 }
 
@@ -207,6 +225,8 @@ pub struct PairPart {
     pub quote_utxos: Vec<TokenUtxo>,
     /// KAS per whole A (the default minimum fill), when known.
     pub kas_per_whole_a: Option<i64>,
+    /// KAS per whole B (the value of a market start), when known.
+    pub kas_per_whole_b: Option<i64>,
 }
 
 /// Everything a planner needs from the outside world (`PlanEnv`).
@@ -243,7 +263,7 @@ pub struct Env {
 }
 
 impl Env {
-    fn carrier(&self) -> i64 {
+    pub(crate) fn carrier(&self) -> i64 {
         self.carrier.unwrap_or(DEFAULT_ORDER_CARRIER) as i64
     }
 }
@@ -353,6 +373,57 @@ pub enum CondKind {
     TakeProfit,
     /// OCO: take-profit and stop in one covenant.
     Oco,
+    /// Trailing stop (optionally with a take-profit: a trailing OCO).
+    Trailing,
+}
+
+/// Trailing parameters of a stop leg (`TrailSpec`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Trail {
+    /// The stop moves by every whole step the market justifies (on the tick).
+    pub step: i64,
+    /// Distance kept between the market and the stop.
+    pub gap: i64,
+    /// At most one update per this many DAA (default 6000, at least 600).
+    pub wait: Option<i64>,
+    /// Updates pre-funded (default 20, at most 1000).
+    pub updates: Option<i64>,
+}
+
+/// Optional stop-leg knobs (`StopSpec`): band length, keeper tip, trigger rest time; `None` = the wallet default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StopKnobs {
+    /// Auction length of the stop band (default 300 DAA).
+    pub band_daa: Option<i64>,
+    /// Keeper tip per arm / trail (default: the program's).
+    pub keeper_tip: Option<i64>,
+    /// Trigger rest time (default 50 DAA).
+    pub min_rest: Option<i64>,
+}
+
+/// If-done options beyond the plain IFD / IFO: a stop entry, the exit's band, trailing and expiry, repeat.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IfdMore {
+    /// Stop entry: the trigger (buy: at most the entry price, sell: at least).
+    pub entry_stop: Option<i64>,
+    /// Stop entry knobs.
+    pub entry_knobs: StopKnobs,
+    /// Stop entry trigger threshold (default max(minimum fill, 25 % of the amount)).
+    pub entry_min_touch: Option<i64>,
+    /// Exit stop band (bps, default 300; ignored with a stop-limit).
+    pub exit_slip_bps: Option<i64>,
+    /// Exit stop knobs.
+    pub exit_knobs: StopKnobs,
+    /// Exit trigger threshold.
+    pub exit_min_touch: Option<i64>,
+    /// Exit trailing.
+    pub exit_trail: Option<Trail>,
+    /// Exit minimum fill.
+    pub exit_min_fill: Option<i64>,
+    /// A dated exit (DAA); `None`: GTC from each exit's creation.
+    pub exit_expiry_daa: Option<i64>,
+    /// Repeat: `None` = no repeat; `Some(None)` = unlimited (90-day bound); `Some(Some(k))` = k re-arms.
+    pub repeat: Option<Option<i64>>,
 }
 
 /// A conditional order (stop-market, stop-limit, take-profit, OCO).
@@ -384,6 +455,10 @@ pub struct CondIntent {
     pub active_from: Option<Activation>,
     /// Delivery carriers of a buy.
     pub max_fills: Option<i64>,
+    /// Trailing (kind `Trailing`).
+    pub trail: Option<Trail>,
+    /// Stop knobs.
+    pub knobs: StopKnobs,
 }
 
 /// An if-done order: an entry whose fills create the committed exit (IFD: one leg, IFO: both).
@@ -413,23 +488,120 @@ pub struct IfdIntent {
     pub lifetime: Lifetime,
     /// Activation.
     pub active_from: Option<Activation>,
+    /// Stop entry, exit knobs, repeat.
+    pub more: IfdMore,
 }
 
-/// Every intent `kob place` plans.
+/// Streaming / quote-and-execute: an auction from the price the user saw, within the user's tolerance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamingIntent {
+    /// Side.
+    pub side: Side,
+    /// Base units.
+    pub amount: i64,
+    /// Tip.
+    pub tip: i64,
+    /// Minimum fill (default 1).
+    pub min_fill: Option<i64>,
+    /// The displayed price the user accepted.
+    pub displayed_price: i64,
+    /// Tolerance in bps.
+    pub tolerance_bps: i64,
+    /// FOK.
+    pub all_or_nothing: bool,
+}
+
+/// Close: a market sell of the held tokens (`amount` `None`: all of them).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloseIntent {
+    /// Base units (`None`: the whole balance).
+    pub amount: Option<i64>,
+    /// Tip.
+    pub tip: i64,
+    /// Bound in bps from the touch (default 300).
+    pub slippage_bps: Option<i64>,
+    /// FOK.
+    pub all_or_nothing: bool,
+}
+
+/// TWAP (sell) / DCA (buy): at most `slice` per `interval_daa`, optionally each slice its own auction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleIntent {
+    /// DCA (buy) instead of TWAP (sell).
+    pub dca: bool,
+    /// Base units.
+    pub amount: i64,
+    /// Tip.
+    pub tip: i64,
+    /// Minimum fill.
+    pub min_fill: Option<i64>,
+    /// Base units per slice (`maxFill`).
+    pub slice: i64,
+    /// Minimum DAA between fills.
+    pub interval_daa: i64,
+    /// Price of every slice (its auction's start with `price_end`).
+    pub price: i64,
+    /// Each slice an auction to this price.
+    pub price_end: Option<i64>,
+    /// Each slice's auction length (default 200 DAA).
+    pub slice_auction_daa: Option<i64>,
+    /// Lifetime.
+    pub lifetime: Lifetime,
+    /// Activation.
+    pub active_from: Option<Activation>,
+    /// DCA: delivery carriers (default one per slice).
+    pub max_fills: Option<i64>,
+}
+
+/// Dutch decay (sell) / rising bid (buy): from `price` to `price_end` over `duration_daa`, then resting there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DutchIntent {
+    /// Side.
+    pub side: Side,
+    /// Base units.
+    pub amount: i64,
+    /// Tip.
+    pub tip: i64,
+    /// Minimum fill.
+    pub min_fill: Option<i64>,
+    /// Start price.
+    pub price: i64,
+    /// End price (a sell: lower, a buy: higher).
+    pub price_end: i64,
+    /// DAA to reach the end.
+    pub duration_daa: i64,
+    /// DAA per price step (default 1).
+    pub step_daa: Option<i64>,
+    /// Lifetime.
+    pub lifetime: Lifetime,
+    /// Start (default: placement + 30 DAA).
+    pub active_from: Option<Activation>,
+    /// Delivery carriers of a buy.
+    pub max_fills: Option<i64>,
+}
+
+/// Every intent `kob place` plans. With `env.pair` set every kind is planned on the pair A/B (prices B per whole A, the
+/// tip KAS): `KobPair`, `KobCondPair`, `KobIfdPair`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Intent {
-    /// Limit on the KAS book.
+    /// Limit.
     Limit(LimitIntent),
     /// IOC / FOK.
     Immediate(ImmediateIntent),
     /// Market.
     Market(MarketIntent),
+    /// Streaming.
+    Streaming(StreamingIntent),
+    /// Close.
+    Close(CloseIntent),
+    /// TWAP / DCA.
+    Schedule(ScheduleIntent),
+    /// Dutch / rising.
+    Dutch(DutchIntent),
     /// Conditional.
     Cond(CondIntent),
-    /// If-done (IFD / IFO).
+    /// If-done (IFD / IFO, repeat).
     Ifd(IfdIntent),
-    /// Limit on a pair A/B (`env.pair`): prices in B per whole A.
-    PairLimit(LimitIntent),
 }
 
 /// A line of KAS the order locks (or keeps, `kept`).
@@ -515,24 +687,21 @@ pub struct Plan {
     pub disclosure: Option<Disclosure>,
 }
 
-fn failed(issues: Vec<Issue>) -> Plan {
+pub(crate) fn failed(issues: Vec<Issue>) -> Plan {
     Plan { ok: false, issues, states: vec![], request: None, built: None, disclosure: None }
 }
 
 // ------------------------------------------------------------------------------------------------ integer helpers
 
-fn ceil_div(a: i128, b: i128) -> i128 {
+pub(crate) fn ceil_div(a: i128, b: i128) -> i128 {
     (a + b - 1) / b
 }
-fn round_div(a: i128, b: i128) -> i128 {
+pub(crate) fn round_div(a: i128, b: i128) -> i128 {
     (2 * a + b) / (2 * b)
-}
-fn fits(v: i128) -> bool {
-    (0..=i64::MAX as i128).contains(&v)
 }
 
 /// Rounds to a multiple of `tick`.
-fn round_to_tick(price: i64, tick: i64, up: bool) -> i64 {
+pub(crate) fn round_to_tick(price: i64, tick: i64, up: bool) -> i64 {
     if tick <= 0 {
         return price;
     }
@@ -547,10 +716,10 @@ fn round_to_tick(price: i64, tick: i64, up: bool) -> i64 {
 pub fn clamp_rate(r: i64) -> i64 {
     r.clamp(9_500, 10_500)
 }
-fn seconds_to_daa(c: &Clock, s: i64) -> i64 {
+pub(crate) fn seconds_to_daa(c: &Clock, s: i64) -> i64 {
     ceil_div(s as i128 * clamp_rate(c.rate_milli) as i128, 1000) as i64
 }
-fn daa_to_seconds(c: &Clock, d: i64) -> i64 {
+pub(crate) fn daa_to_seconds(c: &Clock, d: i64) -> i64 {
     round_div(d as i128 * 1000, clamp_rate(c.rate_milli) as i128) as i64
 }
 /// Wall clock at a DAA score.
@@ -562,7 +731,7 @@ pub fn daa_to_unix(c: &Clock, daa: i64) -> i64 {
         c.unix - daa_to_seconds(c, -delta)
     }
 }
-fn unix_to_daa(c: &Clock, unix: i64) -> i64 {
+pub(crate) fn unix_to_daa(c: &Clock, unix: i64) -> i64 {
     let delta = unix - c.unix;
     if delta >= 0 {
         c.daa + seconds_to_daa(c, delta)
@@ -585,20 +754,20 @@ pub fn unix_to_daa_bound(c: &Clock, unix: i64, end: bool) -> i64 {
     }
 }
 
-struct Expiry {
-    kind: &'static str,
-    daa: i64,
-    deadline: Option<i64>,
+pub(crate) struct Expiry {
+    pub(crate) kind: &'static str,
+    pub(crate) daa: i64,
+    pub(crate) deadline: Option<i64>,
 }
 
-fn activation_daa(c: &Clock, a: Option<Activation>) -> Option<i64> {
+pub(crate) fn activation_daa(c: &Clock, a: Option<Activation>) -> Option<i64> {
     a.map(|a| match a {
         Activation::Daa(d) => d,
         Activation::Unix(u) => unix_to_daa_bound(c, u, false),
     })
 }
 
-fn resolve_lifetime(c: &Clock, lt: Lifetime, pre: &mut Vec<Issue>) -> Expiry {
+pub(crate) fn resolve_lifetime(c: &Clock, lt: Lifetime, pre: &mut Vec<Issue>) -> Expiry {
     match lt {
         Lifetime::Gtc => Expiry { kind: "gtc", daa: c.daa + MAX_IDLE_DAA, deadline: None },
         Lifetime::GtdUnix(at) => Expiry { kind: "gtd", daa: unix_to_daa_bound(c, at, true), deadline: None },
@@ -616,7 +785,7 @@ fn resolve_lifetime(c: &Clock, lt: Lifetime, pre: &mut Vec<Issue>) -> Expiry {
 
 // ------------------------------------------------------------------------------------------------ guards (guards.ts)
 
-fn crosses(sell: (i64, i64), buy: (i64, i64)) -> bool {
+pub(crate) fn crosses(sell: (i64, i64), buy: (i64, i64)) -> bool {
     buy.0 as i128 + buy.1 as i128 >= sell.0 as i128 - sell.1 as i128
 }
 
@@ -638,7 +807,7 @@ pub fn reference_price(book: &Book) -> Option<i64> {
     }
 }
 
-fn crossing_touch(book: &Book, side: Side, price: i64, tip: i64) -> Option<i64> {
+pub(crate) fn crossing_touch(book: &Book, side: Side, price: i64, tip: i64) -> Option<i64> {
     let lv = match side {
         Side::Sell => book.bids.first(),
         Side::Buy => book.asks.first(),
@@ -652,7 +821,7 @@ fn crossing_touch(book: &Book, side: Side, price: i64, tip: i64) -> Option<i64> 
     x.then_some(lv.price)
 }
 
-fn depth_within(book: &Book, side: Side, bound: i64, tip: i64) -> i128 {
+pub(crate) fn depth_within(book: &Book, side: Side, bound: i64, tip: i64) -> i128 {
     let levels = if side == Side::Sell { &book.bids } else { &book.asks };
     levels
         .iter()
@@ -664,7 +833,7 @@ fn depth_within(book: &Book, side: Side, bound: i64, tip: i64) -> i128 {
         .sum()
 }
 
-fn check_self_trade(own: &[OwnOrder], side: Side, price: i64, tip: i64) -> Vec<Issue> {
+pub(crate) fn check_self_trade(own: &[OwnOrder], side: Side, price: i64, tip: i64) -> Vec<Issue> {
     let mut out = vec![];
     for o in own {
         if !o.active || o.side == side || o.amount_left <= 0 {
@@ -685,7 +854,7 @@ fn check_self_trade(own: &[OwnOrder], side: Side, price: i64, tip: i64) -> Vec<I
     out
 }
 
-fn check_fok(side: Side, amount: i64, limit: i64, tip: i64, slots: (usize, usize), book: &Book) -> Vec<Issue> {
+pub(crate) fn check_fok(side: Side, amount: i64, limit: i64, tip: i64, slots: (usize, usize), book: &Book) -> Vec<Issue> {
     let sell = side == Side::Sell;
     let max_cp = if sell { slots.1 } else { slots.0.min(MAX_TOKEN_INPUTS) };
     let ok = |p: i64, t: i64| {
@@ -751,7 +920,7 @@ fn check_fok(side: Side, amount: i64, limit: i64, tip: i64, slots: (usize, usize
     vec![]
 }
 
-fn check_amount(amount: i64, m: &TokenMarket, custody: bool) -> Vec<Issue> {
+pub(crate) fn check_amount(amount: i64, m: &TokenMarket, custody: bool) -> Vec<Issue> {
     if amount <= 0 {
         return vec![error("AMOUNT_NOT_POSITIVE", "the amount must be greater than zero")];
     }
@@ -761,14 +930,14 @@ fn check_amount(amount: i64, m: &TokenMarket, custody: bool) -> Vec<Issue> {
     vec![]
 }
 
-fn check_min_fill(min_fill: i64, amount: i64, field: &str) -> Vec<Issue> {
+pub(crate) fn check_min_fill(min_fill: i64, amount: i64, field: &str) -> Vec<Issue> {
     if min_fill < 1 || min_fill > amount {
         return vec![error("MIN_FILL_INVALID", format!("{field} must be at least one base unit and at most the order amount"))];
     }
     vec![]
 }
 
-fn check_notional(amount: i64, rate: i64, scale: i64) -> Vec<Issue> {
+pub(crate) fn check_notional(amount: i64, rate: i64, scale: i64) -> Vec<Issue> {
     if amount <= 0 || rate <= 0 {
         return vec![];
     }
@@ -778,7 +947,7 @@ fn check_notional(amount: i64, rate: i64, scale: i64) -> Vec<Issue> {
     vec![]
 }
 
-fn check_price(m: &TokenMarket, price: i64, field: &str) -> Vec<Issue> {
+pub(crate) fn check_price(m: &TokenMarket, price: i64, field: &str) -> Vec<Issue> {
     if price <= 0 {
         return vec![error("PRICE_NOT_POSITIVE", format!("{field} must be greater than zero"))];
     }
@@ -796,7 +965,7 @@ fn check_price(m: &TokenMarket, price: i64, field: &str) -> Vec<Issue> {
     vec![]
 }
 
-fn check_tip(side: Side, tip: i64, worst: i64) -> Vec<Issue> {
+pub(crate) fn check_tip(side: Side, tip: i64, worst: i64) -> Vec<Issue> {
     if tip < 0 {
         return vec![error("TIP_NEGATIVE", "the priority tip cannot be negative")];
     }
@@ -806,7 +975,7 @@ fn check_tip(side: Side, tip: i64, worst: i64) -> Vec<Issue> {
     vec![]
 }
 
-fn check_times(c: &Clock, active_from: i64, expiry: i64, requested: Option<i64>) -> Vec<Issue> {
+pub(crate) fn check_times(c: &Clock, active_from: i64, expiry: i64, requested: Option<i64>) -> Vec<Issue> {
     let mut out = vec![];
     let horizon = c.daa + MAX_IDLE_DAA;
     if requested.is_some_and(|r| r > 0 && r <= c.daa) {
@@ -826,7 +995,7 @@ fn check_times(c: &Clock, active_from: i64, expiry: i64, requested: Option<i64>)
     out
 }
 
-fn check_price_band(reference: Option<i64>, side: Side, price: i64) -> Vec<Issue> {
+pub(crate) fn check_price_band(reference: Option<i64>, side: Side, price: i64) -> Vec<Issue> {
     let Some(r) = reference.filter(|r| *r > 0) else { return vec![] };
     let through = if side == Side::Sell { r as i128 - price as i128 } else { price as i128 - r as i128 };
     let pct = |bps: i128| format!("{}.{:02}", bps / 100, bps % 100);
@@ -850,7 +1019,7 @@ fn check_price_band(reference: Option<i64>, side: Side, price: i64) -> Vec<Issue
     vec![]
 }
 
-fn check_bps(bps: i64, pre: &mut Vec<Issue>) {
+pub(crate) fn check_bps(bps: i64, pre: &mut Vec<Issue>) {
     if !(1..=9_999).contains(&bps) {
         pre.push(error("SLIPPAGE_INVALID", "the slippage tolerance must be between 0.01% and 99.99%"));
     } else if bps > 1_000 {
@@ -879,7 +1048,7 @@ pub fn decay_slope(from: i64, to: i64, duration: i64, step: i64) -> i64 {
 
 // ------------------------------------------------------------------------------------------------ coin selection (funding.ts)
 
-fn outpoint_key(u: &kob_protocol::tx::Utxo) -> ([u8; 32], u32) {
+pub(crate) fn outpoint_key(u: &kob_protocol::tx::Utxo) -> ([u8; 32], u32) {
     (u.transaction_id, u.index)
 }
 
@@ -912,7 +1081,7 @@ pub fn select_funding(utxos: &[KeyUtxo], need: i128, reserve: i128) -> Result<Ve
     Ok(picked)
 }
 
-fn insufficient_kas(needed: i128, have: i128) -> Issue {
+pub(crate) fn insufficient_kas(needed: i128, have: i128) -> Issue {
     error(
         "INSUFFICIENT_KAS",
         format!(
@@ -985,14 +1154,14 @@ pub fn order_carrier_floor(m: &TokenMarket) -> i64 {
 
 // ------------------------------------------------------------------------------------------------ building (common.ts)
 
-struct CreateSpec {
+pub(crate) struct CreateSpec {
     order: AnyState,
     value: i64,
     token_amount: i64,
     deadline: Option<i64>,
 }
 
-struct CreateResult {
+pub(crate) struct CreateResult {
     request: Option<CreateOrder>,
     built: Option<BuiltTx>,
     token_carrier: i64,
@@ -1000,11 +1169,11 @@ struct CreateResult {
     issues: Vec<Issue>,
 }
 
-fn fee_options(env: &Env) -> FeeOptions {
+pub(crate) fn fee_options(env: &Env) -> FeeOptions {
     FeeOptions { fee_rate: env.fee_rate, ..Default::default() }
 }
 
-fn carrier_issues(env: &Env, order: &AnyState, token_carrier: i64) -> Vec<Issue> {
+pub(crate) fn carrier_issues(env: &Env, order: &AnyState, token_carrier: i64) -> Vec<Issue> {
     let m = &env.market;
     let mut out = vec![];
     let mut check = |field: &str, v: i64, token: bool| {
@@ -1033,7 +1202,7 @@ fn carrier_issues(env: &Env, order: &AnyState, token_carrier: i64) -> Vec<Issue>
     out
 }
 
-fn build_create(env: &Env, spec: &CreateSpec) -> CreateResult {
+pub(crate) fn build_create(env: &Env, spec: &CreateSpec) -> CreateResult {
     let mut res = CreateResult { request: None, built: None, token_carrier: 0, token_change: 0, issues: vec![] };
     let carrier = env.carrier();
     let low = carrier_issues(env, &spec.order, if spec.token_amount > 0 { carrier } else { 0 });
@@ -1083,7 +1252,7 @@ fn build_create(env: &Env, spec: &CreateSpec) -> CreateResult {
 }
 
 /// Funding selection with an adaptive fee reserve: the reserve grows by the shortfall the builder reports.
-fn build_with_reserve(
+pub(crate) fn build_with_reserve(
     env: &Env,
     need: i128,
     request: impl Fn(Vec<KeyUtxo>) -> CreateOrder,
@@ -1120,7 +1289,13 @@ fn build_with_reserve(
 }
 
 /// The placement record of `built` must yield the planned state, value, deadline and every custody amount.
-fn verify_built(built: &BuiltTx, order: &AnyState, value: i64, deadline: Option<i64>, draws: &[([u8; 32], i64)]) -> Option<String> {
+pub(crate) fn verify_built(
+    built: &BuiltTx,
+    order: &AnyState,
+    value: i64,
+    deadline: Option<i64>,
+    draws: &[([u8; 32], i64)],
+) -> Option<String> {
     let rec = match recover_orders(&built.tx) {
         Ok(r) => r,
         Err(e) => return Some(format!("placement record does not verify: {e}")),
@@ -1161,7 +1336,7 @@ fn verify_built(built: &BuiltTx, order: &AnyState, value: i64, deadline: Option<
 
 // ------------------------------------------------------------------------------------------------ plain kinds (simple.ts)
 
-fn make_ask(env: &Env, p: &Draft, min_fill: i64) -> AnyState {
+pub(crate) fn make_ask(env: &Env, p: &Draft, min_fill: i64) -> AnyState {
     let m = &env.market;
     let s = AskState {
         maker: env.maker,
@@ -1191,7 +1366,7 @@ fn make_ask(env: &Env, p: &Draft, min_fill: i64) -> AnyState {
     }
 }
 
-fn make_bid(env: &Env, p: &Draft, min_fill: i64) -> AnyState {
+pub(crate) fn make_bid(env: &Env, p: &Draft, min_fill: i64) -> AnyState {
     let m = &env.market;
     let s = BidState {
         maker: env.maker,
@@ -1224,7 +1399,7 @@ fn make_bid(env: &Env, p: &Draft, min_fill: i64) -> AnyState {
 
 /// A resolved plain order (simple.ts `Draft`).
 #[derive(Debug, Clone)]
-struct Draft {
+pub(crate) struct Draft {
     side: Side,
     amount: i64,
     min_fill: Option<i64>,
@@ -1252,7 +1427,7 @@ struct Draft {
     notes: Vec<&'static str>,
 }
 
-fn blank(side: Side, amount: i64, price: i64, tip: i64, min_fill: Option<i64>) -> Draft {
+pub(crate) fn blank(side: Side, amount: i64, price: i64, tip: i64, min_fill: Option<i64>) -> Draft {
     Draft {
         side,
         amount,
@@ -1292,7 +1467,7 @@ pub fn default_min_fill_for(m: &TokenMarket, amount: i64, price: i64) -> i64 {
 }
 
 /// Resting bids budget a delivery carrier per expected fill, at most 3, unless the user asked.
-fn resting_fills(m: &TokenMarket, amount: i64, price: i64, min_fill: Option<i64>, requested: Option<i64>) -> i64 {
+pub(crate) fn resting_fills(m: &TokenMarket, amount: i64, price: i64, min_fill: Option<i64>, requested: Option<i64>) -> i64 {
     if let Some(r) = requested {
         return r;
     }
@@ -1301,7 +1476,7 @@ fn resting_fills(m: &TokenMarket, amount: i64, price: i64, min_fill: Option<i64>
     possible.min(DEFAULT_BID_FILLS)
 }
 
-fn place_simple(env: &Env, d: Draft, mut issues: Vec<Issue>) -> Plan {
+pub(crate) fn place_simple(env: &Env, d: Draft, mut issues: Vec<Issue>) -> Plan {
     let m = &env.market;
     issues.extend(check_amount(d.amount, m, d.side == Side::Sell));
     issues.extend(check_tip(d.side, d.tip, d.reach));
@@ -1418,9 +1593,48 @@ fn place_simple(env: &Env, d: Draft, mut issues: Vec<Issue>) -> Plan {
     }
 }
 
-fn plan_limit(env: &Env, i: &LimitIntent) -> Plan {
+/// A price of the order's own book: on a pair (B per whole A) only positive (the KAS tick of A does not apply).
+pub(crate) fn price_check(env: &Env, p: i64, field: &str) -> Vec<Issue> {
+    if env.pair.is_some() {
+        if p <= 0 {
+            return vec![error("PRICE_NOT_POSITIVE", format!("{field} must be greater than zero"))];
+        }
+        return vec![];
+    }
+    check_price(&env.market, p, field)
+}
+
+/// The price step of the order's own book (a pair: none).
+pub(crate) fn tick_of(env: &Env) -> i64 {
+    if env.pair.is_some() {
+        1
+    } else {
+        env.market.tick
+    }
+}
+
+/// A plain draft placed on the KAS book (`KobAsk` / `KobBid`) or on the pair (`KobPair`).
+pub(crate) fn place_draft(env: &Env, d: Draft, pre: Vec<Issue>) -> Plan {
+    match &env.pair {
+        Some(pair) => place_pair(env, pair, d, pre),
+        None => place_simple(env, d, pre),
+    }
+}
+
+/// Timed activation of a draft; whether it lies in the future.
+pub(crate) fn set_activation(env: &Env, d: &mut Draft, a: Option<Activation>) -> bool {
+    let requested = activation_daa(&env.clock, a);
+    let future = requested.is_some_and(|r| r > env.clock.daa);
+    d.requested_active_from = requested;
+    d.active_from = if future { requested.unwrap_or(0) } else { 0 };
+    d.activates_at = if future { requested } else { None };
+    future
+}
+
+pub(crate) fn plan_limit(env: &Env, i: &LimitIntent) -> Plan {
     let m = &env.market;
-    let mut pre = check_price(m, i.price, "the price");
+    let pair = env.pair.is_some();
+    let mut pre = price_check(env, i.price, "the price");
     if i.max_fills.is_some_and(|f| f < 1) {
         pre.push(error("MAX_FILLS_INVALID", "the number of fills must be a positive integer"));
     }
@@ -1428,11 +1642,7 @@ fn plan_limit(env: &Env, i: &LimitIntent) -> Plan {
         return failed(pre);
     }
     let mut d = blank(i.side, i.amount, i.price, i.tip, i.min_fill);
-    let requested = activation_daa(&env.clock, i.active_from);
-    let future = requested.is_some_and(|r| r > env.clock.daa);
-    d.requested_active_from = requested;
-    d.active_from = if future { requested.unwrap_or(0) } else { 0 };
-    d.activates_at = if future { requested } else { None };
+    let future = set_activation(env, &mut d, i.active_from);
     let exp = resolve_lifetime(&env.clock, i.lifetime, &mut pre);
     d.expiry_daa = exp.daa;
     d.deadline = exp.deadline;
@@ -1442,16 +1652,27 @@ fn plan_limit(env: &Env, i: &LimitIntent) -> Plan {
         "day" => "dayOrder",
         _ => "gtd",
     });
-    d.fills = Some(if i.side == Side::Buy { resting_fills(m, i.amount, i.price, i.min_fill, i.max_fills) } else { 1 });
-    if i.side == Side::Sell && i.max_fills.is_some() {
-        pre.push(error("SIDE_INVALID", "--max-fills applies to a buy only"));
+    if pair {
+        // resting pair orders: one delivery carrier per possible fill (at most 64) unless asked
+        d.fills = None;
+        d.fills_requested = i.max_fills;
+        d.worst_price = Some(i.price);
+    } else {
+        d.fills = Some(if i.side == Side::Buy { resting_fills(m, i.amount, i.price, i.min_fill, i.max_fills) } else { 1 });
+        if i.side == Side::Sell && i.max_fills.is_some() {
+            pre.push(error("SIDE_INVALID", "--max-fills applies to a buy only"));
+        }
     }
     pre.extend(check_price_band(reference_price(&env.book), i.side, i.price));
-    let touch = if future { None } else { crossing_touch(&env.book, i.side, i.price, i.tip) };
+    // a pair order's tip is KAS: it never makes a B price cross
+    let touch = if future { None } else { crossing_touch(&env.book, i.side, i.price, if pair { 0 } else { i.tip }) };
     if let Some(t) = touch {
         let start = if i.side == Side::Sell { t.max(i.price) } else { t.min(i.price) };
         match i.crossing {
-            Crossing::Reject => pre.push(error("MARKETABLE_REJECTED", format!("your limit crosses the market at {t}"))),
+            Crossing::Reject => pre.push(error(
+                if pair { "PAIR_MARKETABLE_REJECTED" } else { "MARKETABLE_REJECTED" },
+                format!("your limit crosses the market at {t}"),
+            )),
             Crossing::Auction if start != i.price => {
                 d.price = start;
                 d.price_end = i.price;
@@ -1465,21 +1686,21 @@ fn plan_limit(env: &Env, i: &LimitIntent) -> Plan {
                 d.worst_price = Some(i.price);
                 d.notes.extend(["auction", "marketable"]);
                 pre.push(info(
-                    "MARKETABLE_AUCTION",
+                    if pair { "PAIR_MARKETABLE_AUCTION" } else { "MARKETABLE_AUCTION" },
                     format!("your limit crosses the market: placed as an auction from the best price ({t}) to your limit; any rest stays at your limit"),
                 ));
             }
             _ if start != i.price => pre.push(warning(
-                "MARKETABLE_LIMIT_FILLS_AT_LIMIT",
+                if pair { "PAIR_MARKETABLE_LIMIT_FILLS_AT_LIMIT" } else { "MARKETABLE_LIMIT_FILLS_AT_LIMIT" },
                 format!("your limit crosses the market: it fills at your limit price; a matcher keeps the difference to the better price ({t})"),
             )),
             _ => {}
         }
     }
-    place_simple(env, d, pre)
+    place_draft(env, d, pre)
 }
 
-fn life_daa(life: Option<i64>, pre: &mut Vec<Issue>) -> i64 {
+pub(crate) fn life_daa(life: Option<i64>, pre: &mut Vec<Issue>) -> i64 {
     let v = life.unwrap_or(IOC_LIFE_DAA);
     if !(1..=IOC_KILL_DAA).contains(&v) {
         pre.push(error("LIFE_OUT_OF_RANGE", format!("the order life must be between 1 and {IOC_KILL_DAA} DAA")));
@@ -1487,49 +1708,61 @@ fn life_daa(life: Option<i64>, pre: &mut Vec<Issue>) -> i64 {
     v
 }
 
-fn plan_immediate(env: &Env, i: &ImmediateIntent) -> Plan {
-    let mut pre = check_price(&env.market, i.price, "the price");
+pub(crate) fn plan_immediate(env: &Env, i: &ImmediateIntent) -> Plan {
+    let mut pre = price_check(env, i.price, "the price");
     let life = life_daa(i.life_daa, &mut pre);
     if has_error(&pre) {
         return failed(pre);
     }
     let mut d = blank(i.side, i.amount, i.price, i.tip, i.min_fill);
     d.immediate = true;
-    let requested = activation_daa(&env.clock, i.active_from);
-    let future = requested.is_some_and(|r| r > env.clock.daa);
-    d.requested_active_from = requested;
-    d.active_from = if future { requested.unwrap_or(0) } else { 0 };
-    d.activates_at = if future { requested } else { None };
+    let future = set_activation(env, &mut d, i.active_from);
     d.tif = if i.fok { 2 } else { 1 };
     d.expiry_kind = if i.fok { "fok" } else { "ioc" };
-    d.expiry_daa = if future { requested.unwrap_or(0) } else { env.clock.daa } + life;
+    d.expiry_daa = if future { d.active_from } else { env.clock.daa } + life;
     d.fills = Some(1);
+    if env.pair.is_some() {
+        d.worst_price = Some(i.price);
+    }
     d.notes.push(if i.fok { "fokAllOrNothing" } else { "iocRemainderReturned" });
     pre.extend(check_price_band(reference_price(&env.book), i.side, i.price));
-    place_simple(env, d, pre)
+    place_draft(env, d, pre)
 }
 
-fn plan_market(env: &Env, i: &MarketIntent) -> Plan {
-    let mut pre = vec![];
-    let bps = i.slippage_bps.unwrap_or(SLIPPAGE_BPS);
-    check_bps(bps, &mut pre);
+/// An IOC / FOK auction from `reference` to the slippage bound (`planAuction`).
+pub(crate) struct AuctionReq {
+    pub(crate) side: Side,
+    pub(crate) amount: i64,
+    pub(crate) tip: i64,
+    pub(crate) min_fill: Option<i64>,
+    /// The start: the book's touch (market, close) or the displayed price (streaming).
+    pub(crate) reference: Option<i64>,
+    pub(crate) bps: i64,
+    pub(crate) all_or_nothing: bool,
+    pub(crate) notes: Vec<&'static str>,
+    /// Where the start comes from (shown).
+    pub(crate) source: &'static str,
+}
+
+pub(crate) fn plan_auction(env: &Env, r: AuctionReq, mut pre: Vec<Issue>) -> Plan {
+    let pair = env.pair.is_some();
+    check_bps(r.bps, &mut pre);
     let life = IOC_LIFE_DAA;
-    let touch = touch_price(&env.book, i.side);
-    if touch.is_none() {
+    if r.reference.is_none() {
         pre.push(error(
             "NO_LIQUIDITY",
-            format!("there are no {} in the book to price a market order against", if i.side == Side::Sell { "bids" } else { "asks" }),
+            format!("there are no {} in the book to price a market order against", if r.side == Side::Sell { "bids" } else { "asks" }),
         ));
     }
     if has_error(&pre) {
         return failed(pre);
     }
-    let touch = touch.unwrap_or(0);
-    let end = auction_bound(i.side, touch, bps, env.market.tick);
-    let mut d = blank(i.side, i.amount, touch, i.tip, i.min_fill);
+    let touch = r.reference.unwrap_or(0);
+    let end = auction_bound(r.side, touch, r.bps, tick_of(env));
+    let mut d = blank(r.side, r.amount, touch, r.tip, r.min_fill);
     d.immediate = true;
-    d.tif = if i.all_or_nothing { 2 } else { 1 };
-    d.expiry_kind = if i.all_or_nothing { "fok" } else { "ioc" };
+    d.tif = if r.all_or_nothing { 2 } else { 1 };
+    d.expiry_kind = if r.all_or_nothing { "fok" } else { "ioc" };
     d.active_from = env.clock.daa + MARKET_ACTIVATION_DAA;
     d.expiry_daa = d.active_from + life;
     d.slope = decay_slope(touch, end, MARKET_AUCTION_DAA, 1);
@@ -1540,38 +1773,237 @@ fn plan_market(env: &Env, i: &MarketIntent) -> Plan {
     d.expected_price = Some(touch);
     d.worst_price = Some(end);
     d.fills = Some(1);
-    d.notes.extend(["auction", if i.all_or_nothing { "fokAllOrNothing" } else { "iocRemainderReturned" }, "market"]);
+    d.notes.extend(["auction", if r.all_or_nothing { "fokAllOrNothing" } else { "iocRemainderReturned" }]);
+    d.notes.extend(r.notes);
     pre.push(info(
-        "MARKET_REFERENCE_SOURCE",
-        format!("market reference: {touch} per token from the indexer order book; the order can fill at {end} per token at worst"),
+        if pair { "PAIR_MARKET_REFERENCE_SOURCE" } else { "MARKET_REFERENCE_SOURCE" },
+        format!("market reference: {touch} per token from {}; the order can fill at {end} per token at worst", r.source),
     ));
-    if !i.all_or_nothing {
-        let depth = depth_within(&env.book, i.side, end, i.tip);
-        if depth < i.amount as i128 {
+    if !r.all_or_nothing {
+        let depth = depth_within(&env.book, r.side, end, if pair { 0 } else { r.tip });
+        if depth < r.amount as i128 {
             pre.push(warning(
                 "MARKET_DEPTH_INSUFFICIENT",
                 format!(
                     "the visible book within your bound holds only {depth} of your {} base units; the rest is returned unfilled",
-                    i.amount
+                    r.amount
                 ),
             ));
         }
     }
-    place_simple(env, d, pre)
+    place_draft(env, d, pre)
+}
+
+pub(crate) fn plan_market(env: &Env, i: &MarketIntent) -> Plan {
+    plan_auction(
+        env,
+        AuctionReq {
+            side: i.side,
+            amount: i.amount,
+            tip: i.tip,
+            min_fill: i.min_fill,
+            reference: touch_price(&env.book, i.side),
+            bps: i.slippage_bps.unwrap_or(SLIPPAGE_BPS),
+            all_or_nothing: i.all_or_nothing,
+            notes: vec!["market"],
+            source: "the indexer order book",
+        },
+        vec![],
+    )
+}
+
+pub(crate) fn plan_streaming(env: &Env, i: &StreamingIntent) -> Plan {
+    let mut pre = vec![];
+    if i.displayed_price <= 0 {
+        pre.push(error("REFERENCE_PRICE_INVALID", "the displayed price is not valid"));
+    }
+    plan_auction(
+        env,
+        AuctionReq {
+            side: i.side,
+            amount: i.amount,
+            tip: i.tip,
+            min_fill: i.min_fill,
+            reference: (i.displayed_price > 0).then_some(i.displayed_price),
+            bps: i.tolerance_bps,
+            all_or_nothing: i.all_or_nothing,
+            notes: vec!["streaming"],
+            source: "the price you accepted",
+        },
+        pre,
+    )
+}
+
+/// Base units of the market's token the maker holds in usable UTXOs (`heldAmount`).
+pub fn held_amount(env: &Env) -> i64 {
+    usable_token_utxos(&env.market, &env.maker, &env.token_utxos).iter().map(|u| u.state.amount()).sum()
+}
+
+pub(crate) fn plan_close(env: &Env, i: &CloseIntent) -> Plan {
+    let held = held_amount(env);
+    if i.amount.is_none() && held <= 0 {
+        return failed(vec![error("CLOSE_NOTHING_TO_SELL", "you hold none of this token: there is nothing to close")]);
+    }
+    plan_auction(
+        env,
+        AuctionReq {
+            side: Side::Sell,
+            amount: i.amount.unwrap_or(held),
+            tip: i.tip,
+            min_fill: None,
+            reference: touch_price(&env.book, Side::Sell),
+            bps: i.slippage_bps.unwrap_or(SLIPPAGE_BPS),
+            all_or_nothing: i.all_or_nothing,
+            notes: vec!["market", "close"],
+            source: "the indexer order book",
+        },
+        vec![],
+    )
+}
+
+pub(crate) fn plan_schedule(env: &Env, i: &ScheduleIntent) -> Plan {
+    let side = if i.dca { Side::Buy } else { Side::Sell };
+    let pair = env.pair.is_some();
+    let mut pre = price_check(env, i.price, "the price");
+    if i.interval_daa <= 0 {
+        pre.push(error("DURATION_INVALID", "the interval must be positive"));
+    }
+    if i.slice < 1 {
+        pre.push(error("SLICE_AMOUNT_INVALID", "the amount per slice must be greater than zero"));
+    }
+    if let Some(pe) = i.price_end {
+        pre.extend(price_check(env, pe, "the end price"));
+        if if side == Side::Sell { pe >= i.price } else { pe <= i.price } {
+            pre.push(error(
+                "PRICE_END_INVALID",
+                format!("the end price must be {} the start price", if side == Side::Sell { "below" } else { "above" }),
+            ));
+        }
+    }
+    let slice_auction = i.slice_auction_daa.unwrap_or(MARKET_AUCTION_DAA);
+    if slice_auction <= 0 {
+        pre.push(error("DURATION_INVALID", "the slice auction must be positive"));
+    }
+    if i.dca && i.max_fills.is_some_and(|f| f < 1) {
+        pre.push(error("MAX_FILLS_INVALID", "the number of fills must be a positive integer"));
+    }
+    if !i.dca && i.max_fills.is_some() {
+        pre.push(error("SIDE_INVALID", "--max-fills applies to a DCA (buy) only"));
+    }
+    if has_error(&pre) {
+        return failed(pre);
+    }
+    let mut d = blank(side, i.amount, i.price, i.tip, i.min_fill);
+    let future = set_activation(env, &mut d, i.active_from);
+    let exp = resolve_lifetime(&env.clock, i.lifetime, &mut pre);
+    d.expiry_daa = exp.daa;
+    d.deadline = exp.deadline;
+    d.expiry_kind = exp.kind;
+    d.interval = i.interval_daa;
+    d.max_fill = i.slice.min(i.amount);
+    if i.slice >= i.amount {
+        pre.push(info("TWAP_SINGLE_SLICE", "every slice is larger than the whole order: it is placed as one slice"));
+    }
+    let slices = ceil_div(i.amount as i128, d.max_fill.max(1) as i128) as i64;
+    // the first slice opens `interval` after placement and every fill restarts the clock
+    let start = if future { d.active_from } else { env.clock.daa };
+    if start as i128 + slices as i128 * i.interval_daa as i128 > d.expiry_daa as i128 {
+        pre.push(error(
+            "TWAP_EXCEEDS_LIFE",
+            format!("the schedule ({slices} slices every {} DAA) does not fit into the order life", i.interval_daa),
+        ));
+    }
+    if let Some(pe) = i.price_end {
+        d.price_end = pe;
+        d.slope = decay_slope(i.price, pe, slice_auction, 1);
+        d.reach = pe;
+        d.worst_price = Some(pe);
+        d.expected_price = Some(i.price);
+        d.limit_price = pe;
+        d.notes.push("auction");
+    } else {
+        d.worst_price = Some(i.price);
+    }
+    d.notes.extend([if i.dca { "dca" } else { "twap" }, if exp.kind == "day" { "dayOrder" } else { "gtc" }]);
+    // every slice is a fill with its own delivery: one carrier per slice (a DCA may budget more)
+    if side == Side::Buy || pair {
+        let wanted = if i.dca { i.max_fills } else { None };
+        if wanted.is_some_and(|w| w < slices) {
+            pre.push(error("MAX_FILLS_INVALID", format!("a DCA of {slices} slices needs at least {slices} fills")));
+        }
+        d.fills = Some(wanted.filter(|w| *w >= slices).unwrap_or(slices));
+    }
+    pre.extend(check_price_band(reference_price(&env.book), side, i.price));
+    place_draft(env, d, pre)
+}
+
+pub(crate) fn plan_dutch(env: &Env, i: &DutchIntent) -> Plan {
+    let m = &env.market;
+    let pair = env.pair.is_some();
+    let mut pre = price_check(env, i.price, "the start price");
+    pre.extend(price_check(env, i.price_end, "the end price"));
+    if if i.side == Side::Sell { i.price_end >= i.price } else { i.price_end <= i.price } {
+        pre.push(error(
+            "PRICE_END_INVALID",
+            format!("the end price must be {} the start price", if i.side == Side::Sell { "below" } else { "above" }),
+        ));
+    }
+    if i.duration_daa <= 0 {
+        pre.push(error("DURATION_INVALID", "the duration must be positive"));
+    }
+    let step = i.step_daa.unwrap_or(1);
+    if step < 1 {
+        pre.push(error("DURATION_INVALID", "the step must be at least 1 DAA"));
+    }
+    if i.max_fills.is_some_and(|f| f < 1) {
+        pre.push(error("MAX_FILLS_INVALID", "the number of fills must be a positive integer"));
+    }
+    if has_error(&pre) {
+        return failed(pre);
+    }
+    let mut d = blank(i.side, i.amount, i.price, i.tip, i.min_fill);
+    let future = set_activation(env, &mut d, i.active_from);
+    // the decay origin IS activeFrom: a real DAA score (0 would put the price at its end at once)
+    if !future {
+        d.active_from = env.clock.daa + MARKET_ACTIVATION_DAA;
+    }
+    let exp = resolve_lifetime(&env.clock, i.lifetime, &mut pre);
+    d.expiry_daa = exp.daa;
+    d.deadline = exp.deadline;
+    d.expiry_kind = exp.kind;
+    d.price_end = i.price_end;
+    d.decay_step = step;
+    d.slope = decay_slope(i.price, i.price_end, i.duration_daa, step);
+    d.reach = i.price_end;
+    d.limit_price = i.price_end;
+    d.worst_price = Some(i.price_end);
+    d.expected_price = Some(i.price);
+    if pair {
+        d.fills = None;
+        d.fills_requested = i.max_fills;
+    } else {
+        d.fills = Some(if i.side == Side::Buy { resting_fills(m, i.amount, i.price_end, i.min_fill, i.max_fills) } else { 1 });
+    }
+    d.notes.extend(["auction", if i.side == Side::Sell { "dutch" } else { "rising" }]);
+    pre.extend(check_price_band(reference_price(&env.book), i.side, i.price_end));
+    place_draft(env, d, pre)
 }
 
 // ------------------------------------------------------------------------------------------------ conditional kinds (cond*.ts)
 
-struct Legs {
-    tp: i64,
-    stop: i64,
-    slip: i64,
-    band: i64,
-    keeper_tip: i64,
-    min_touch: i64,
-    min_rest: i64,
-    stop_worst: i64,
-    expected_updates: i64,
+pub(crate) struct Legs {
+    pub(crate) tp: i64,
+    pub(crate) stop: i64,
+    pub(crate) slip: i64,
+    pub(crate) band: i64,
+    pub(crate) keeper_tip: i64,
+    pub(crate) min_touch: i64,
+    pub(crate) min_rest: i64,
+    pub(crate) stop_worst: i64,
+    pub(crate) expected_updates: i64,
+    pub(crate) trail_step: i64,
+    pub(crate) trail_gap: i64,
+    pub(crate) trail_wait: i64,
 }
 
 /// The largest `slipBps` whose band ends at or inside `limit`.
@@ -1596,16 +2028,19 @@ pub fn stop_worst_price(side: Side, stop: i64, slip: i64) -> i64 {
     }
 }
 
-struct LegInput {
-    tp: Option<i64>,
-    stop: Option<i64>,
-    limit: Option<i64>,
-    slip_bps: Option<i64>,
-    min_touch: Option<i64>,
+#[derive(Default)]
+pub(crate) struct LegInput {
+    pub(crate) tp: Option<i64>,
+    pub(crate) stop: Option<i64>,
+    pub(crate) limit: Option<i64>,
+    pub(crate) slip_bps: Option<i64>,
+    pub(crate) min_touch: Option<i64>,
+    pub(crate) knobs: StopKnobs,
+    pub(crate) trail: Option<Trail>,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn resolve_legs(
+pub(crate) fn resolve_legs(
     env: &Env,
     log: &mut Vec<Issue>,
     side: Side,
@@ -1667,7 +2102,11 @@ fn resolve_legs(
         }
         slip = slip_for_limit(side, stop, lim);
     }
-    let mut band = STOP_BAND_DAA;
+    let mut band = input.knobs.band_daa.unwrap_or(STOP_BAND_DAA);
+    if band < 0 {
+        log.push(error("COND_BAND_INVALID", format!("{f}stop band length must not be negative")));
+        return None;
+    }
     if input.stop.is_some() && slip == 0 {
         band = 0;
     }
@@ -1676,26 +2115,94 @@ fn resolve_legs(
         log.push(error("COND_WORST_PRICE_INVALID", format!("{f}stop is too low for its price band")));
         return None;
     }
+    let min_rest = input.knobs.min_rest.unwrap_or(MIN_REST_DAA);
+    if min_rest < 0 {
+        log.push(error("COND_MIN_REST_INVALID", format!("{f}trigger rest time must not be negative")));
+        return None;
+    }
     let min_touch = input.min_touch.unwrap_or_else(|| default_min_touch(min_fill, amount));
     if min_touch <= 0 {
         log.push(error("COND_MIN_TOUCH_INVALID", format!("{f}trigger threshold must be positive")));
         return None;
     }
     let has_stop = input.stop.is_some();
+    let keeper_tip = if has_stop { input.knobs.keeper_tip.unwrap_or(keeper_tip) } else { 0 };
+    if keeper_tip < 0 {
+        log.push(error("COND_KEEPER_TIP_INVALID", format!("{f}keeper tip must not be negative")));
+        return None;
+    }
+    let (mut trail_step, mut trail_gap, mut trail_wait) = (0, 0, 0);
+    let mut expected = i64::from(has_stop);
+    if let Some(t) = input.trail {
+        if !has_stop {
+            log.push(error("COND_TRAIL_NEEDS_STOP", format!("a trailing {f}stop needs a stop")));
+            return None;
+        }
+        if t.step <= 0 {
+            log.push(error("COND_TRAIL_STEP_INVALID", format!("the {f}trail step must be greater than zero")));
+            return None;
+        }
+        let tick = env.market.tick;
+        if tick > 0 && t.step % tick != 0 {
+            log.push(error(
+                "PRICE_NOT_ON_TICK",
+                format!(
+                    "the {f}trail step must be a multiple of the tick ({tick}); nearest valid steps: {} / {}",
+                    round_to_tick(t.step, tick, false),
+                    round_to_tick(t.step, tick, true)
+                ),
+            ));
+            return None;
+        }
+        if t.gap < 0 {
+            log.push(error("COND_TRAIL_GAP_INVALID", format!("the {f}trail gap must not be negative")));
+            return None;
+        }
+        let wait = t.wait.unwrap_or(DEFAULT_TRAIL_WAIT_DAA);
+        if wait < MIN_TRAIL_WAIT_DAA {
+            log.push(error(
+                "COND_TRAIL_WAIT_TOO_SHORT",
+                format!("the {f}trail interval must be at least {MIN_TRAIL_WAIT_DAA} DAA (60 s)"),
+            ));
+            return None;
+        }
+        let upd = t.updates.unwrap_or(DEFAULT_EXPECTED_UPDATES);
+        if !(0..=MAX_EXPECTED_UPDATES).contains(&upd) {
+            log.push(error(
+                "COND_TRAIL_UPDATES_INVALID",
+                format!("the {f}trail updates to pre-fund must be 0..{MAX_EXPECTED_UPDATES}"),
+            ));
+            return None;
+        }
+        (trail_step, trail_gap, trail_wait) = (t.step, t.gap, wait);
+        // the arm that follows a trail is one more update
+        expected = upd + 1;
+    }
     Some(Legs {
         tp,
         stop,
         slip: if has_stop { slip } else { 0 },
         band: if has_stop { band } else { 0 },
-        keeper_tip: if has_stop { keeper_tip } else { 0 },
+        keeper_tip,
         min_touch,
-        min_rest: MIN_REST_DAA,
+        min_rest,
         stop_worst,
-        expected_updates: i64::from(has_stop),
+        expected_updates: expected,
+        trail_step,
+        trail_gap,
+        trail_wait,
     })
 }
 
-fn cond_ask_state(env: &Env, amount: i64, min_fill: i64, tip: i64, expiry: i64, active_from: i64, l: &Legs) -> CondAskState {
+pub(crate) fn cond_ask_state(
+    env: &Env,
+    amount: i64,
+    min_fill: i64,
+    tip: i64,
+    expiry: i64,
+    active_from: i64,
+    l: &Legs,
+) -> CondAskState {
     let m = &env.market;
     CondAskState {
         maker: env.maker,
@@ -1712,9 +2219,9 @@ fn cond_ask_state(env: &Env, amount: i64, min_fill: i64, tip: i64, expiry: i64, 
         tp_price: l.tp,
         stop_price: l.stop,
         slip_bps: l.slip,
-        trail_step: 0,
-        trail_gap: 0,
-        trail_wait: 0,
+        trail_step: l.trail_step,
+        trail_gap: l.trail_gap,
+        trail_wait: l.trail_wait,
         min_touch: l.min_touch,
         min_rest_daa: l.min_rest,
         armed: 0,
@@ -1729,7 +2236,7 @@ fn cond_ask_state(env: &Env, amount: i64, min_fill: i64, tip: i64, expiry: i64, 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn cond_bid_state(
+pub(crate) fn cond_bid_state(
     env: &Env,
     amount: i64,
     min_fill: i64,
@@ -1757,9 +2264,9 @@ fn cond_bid_state(
         tp_price: l.tp,
         stop_price: l.stop,
         slip_bps: l.slip,
-        trail_step: 0,
-        trail_gap: 0,
-        trail_wait: 0,
+        trail_step: l.trail_step,
+        trail_gap: l.trail_gap,
+        trail_wait: l.trail_wait,
         min_touch: l.min_touch,
         min_rest_daa: l.min_rest,
         amount_left: amount,
@@ -1773,14 +2280,14 @@ fn cond_bid_state(
     }
 }
 
-fn bid_worst(l: &Legs) -> i64 {
+pub(crate) fn bid_worst(l: &Legs) -> i64 {
     if l.stop > 0 && l.stop_worst > l.tp {
         l.stop_worst
     } else {
         l.tp
     }
 }
-fn ask_worst(l: &Legs) -> i64 {
+pub(crate) fn ask_worst(l: &Legs) -> i64 {
     let mut c = vec![];
     if l.tp > 0 {
         c.push(l.tp);
@@ -1791,12 +2298,12 @@ fn ask_worst(l: &Legs) -> i64 {
     c.into_iter().min().unwrap_or(0)
 }
 
-struct Act {
-    active_from: i64,
-    activates_at: Option<i64>,
+pub(crate) struct Act {
+    pub(crate) active_from: i64,
+    pub(crate) activates_at: Option<i64>,
 }
 
-fn resolve_activation(env: &Env, log: &mut Vec<Issue>, a: Option<Activation>) -> Option<Act> {
+pub(crate) fn resolve_activation(env: &Env, log: &mut Vec<Issue>, a: Option<Activation>) -> Option<Act> {
     let Some(requested) = activation_daa(&env.clock, a) else { return Some(Act { active_from: 0, activates_at: None }) };
     let future = requested > env.clock.daa;
     let active_from = if future { requested } else { 0 };
@@ -1812,7 +2319,7 @@ fn resolve_activation(env: &Env, log: &mut Vec<Issue>, a: Option<Activation>) ->
     Some(Act { active_from, activates_at: future.then_some(requested) })
 }
 
-fn resolve_expiry(env: &Env, log: &mut Vec<Issue>, lt: Lifetime, active_from: i64) -> Option<Expiry> {
+pub(crate) fn resolve_expiry(env: &Env, log: &mut Vec<Issue>, lt: Lifetime, active_from: i64) -> Option<Expiry> {
     let mut pre = vec![];
     let e = resolve_lifetime(&env.clock, lt, &mut pre);
     log.extend(pre);
@@ -1827,7 +2334,7 @@ fn resolve_expiry(env: &Env, log: &mut Vec<Issue>, lt: Lifetime, active_from: i6
     Some(e)
 }
 
-fn min_fill_price(side: Side, l: &LegInput) -> i64 {
+pub(crate) fn min_fill_price(side: Side, l: &LegInput) -> i64 {
     let c: Vec<i64> = [l.tp, l.stop].into_iter().flatten().filter(|p| *p > 0).collect();
     match side {
         Side::Sell => c.into_iter().min().unwrap_or(0),
@@ -1835,7 +2342,7 @@ fn min_fill_price(side: Side, l: &LegInput) -> i64 {
     }
 }
 
-struct CondSpec {
+pub(crate) struct CondSpec {
     order: AnyState,
     exit: Option<AnyState>,
     lines: Vec<CarrierLine>,
@@ -1854,7 +2361,7 @@ struct CondSpec {
     notes: Vec<&'static str>,
 }
 
-fn finish_cond(env: &Env, mut log: Vec<Issue>, spec: CondSpec) -> Plan {
+pub(crate) fn finish_cond(env: &Env, mut log: Vec<Issue>, spec: CondSpec) -> Plan {
     let mut states = vec![spec.order.clone()];
     states.extend(spec.exit.clone());
     let value: i128 = spec.lines.iter().map(|l| l.amount * l.count as i128).sum();
@@ -1920,7 +2427,75 @@ fn finish_cond(env: &Env, mut log: Vec<Issue>, spec: CondSpec) -> Plan {
     Plan { ok: true, issues: log, states, request: res.request, built: Some(built), disclosure: Some(disclosure) }
 }
 
-fn plan_cond(env: &Env, i: &CondIntent) -> Plan {
+/// The legs of a conditional intent (`legInputOf`).
+pub(crate) fn cond_leg_input(i: &CondIntent) -> LegInput {
+    let k = i.knobs;
+    match i.kind {
+        CondKind::TakeProfit => LegInput { tp: i.take_profit, ..Default::default() },
+        CondKind::StopMarket => {
+            LegInput { stop: i.stop, slip_bps: i.slip_bps, min_touch: i.min_touch, knobs: k, ..Default::default() }
+        }
+        CondKind::StopLimit => LegInput { stop: i.stop, limit: i.limit, min_touch: i.min_touch, knobs: k, ..Default::default() },
+        CondKind::Oco => LegInput {
+            tp: i.take_profit,
+            stop: i.stop,
+            limit: i.limit,
+            slip_bps: i.slip_bps,
+            min_touch: i.min_touch,
+            knobs: k,
+            trail: None,
+        },
+        CondKind::Trailing => LegInput {
+            tp: i.take_profit,
+            stop: i.stop,
+            limit: None,
+            slip_bps: i.slip_bps,
+            min_touch: i.min_touch,
+            knobs: k,
+            trail: i.trail,
+        },
+    }
+}
+
+/// Sentence tags of a conditional kind (`NOTES_BY_TYPE`).
+pub(crate) fn cond_notes(k: CondKind) -> Vec<&'static str> {
+    match k {
+        CondKind::StopMarket => vec!["stopTrigger", "stopAuction", "triggerExposure"],
+        CondKind::StopLimit => vec!["stopTrigger", "stopAuction", "triggerExposure", "stopLimitMayNotFill"],
+        CondKind::TakeProfit => vec!["takeProfitLeg"],
+        CondKind::Oco => vec!["oco", "partialFillsKeepLegs", "stopTrigger", "stopAuction", "triggerExposure"],
+        CondKind::Trailing => vec!["stopTrigger", "stopAuction", "triggerExposure", "trailing"],
+    }
+}
+
+/// The checks of a conditional intent's required legs.
+pub(crate) fn cond_shape(i: &CondIntent, log: &mut Vec<Issue>) {
+    let need = |x: Option<i64>, what: &str, log: &mut Vec<Issue>| {
+        if x.is_none() {
+            log.push(error("COND_LEGS_MISSING", format!("this order type needs {what}")));
+        }
+    };
+    match i.kind {
+        CondKind::TakeProfit => need(i.take_profit, "--take-profit", log),
+        CondKind::StopMarket => need(i.stop, "--stop", log),
+        CondKind::StopLimit => {
+            need(i.stop, "--stop", log);
+            need(i.limit, "--limit", log);
+        }
+        CondKind::Oco => {
+            need(i.stop, "--stop", log);
+            need(i.take_profit, "--take-profit", log);
+        }
+        CondKind::Trailing => {
+            need(i.stop, "--stop", log);
+            if i.trail.is_none() {
+                log.push(error("COND_LEGS_MISSING", "a trailing stop needs its trail step"));
+            }
+        }
+    }
+}
+
+pub(crate) fn plan_cond(env: &Env, i: &CondIntent) -> Plan {
     let m = &env.market;
     let mut log = check_amount(i.amount, m, i.side == Side::Sell);
     if i.tip < 0 {
@@ -1931,29 +2506,8 @@ fn plan_cond(env: &Env, i: &CondIntent) -> Plan {
     }
     let carrier = env.carrier();
     let sell = i.side == Side::Sell;
-    let input = match i.kind {
-        CondKind::TakeProfit => LegInput { tp: i.take_profit, stop: None, limit: None, slip_bps: None, min_touch: None },
-        CondKind::StopMarket => LegInput { tp: None, stop: i.stop, limit: None, slip_bps: i.slip_bps, min_touch: i.min_touch },
-        CondKind::StopLimit => LegInput { tp: None, stop: i.stop, limit: i.limit, slip_bps: None, min_touch: i.min_touch },
-        CondKind::Oco => LegInput { tp: i.take_profit, stop: i.stop, limit: i.limit, slip_bps: i.slip_bps, min_touch: i.min_touch },
-    };
-    let need = |x: Option<i64>, what: &str, log: &mut Vec<Issue>| {
-        if x.is_none() {
-            log.push(error("COND_LEGS_MISSING", format!("this order type needs {what}")));
-        }
-    };
-    match i.kind {
-        CondKind::TakeProfit => need(i.take_profit, "--take-profit", &mut log),
-        CondKind::StopMarket => need(i.stop, "--stop", &mut log),
-        CondKind::StopLimit => {
-            need(i.stop, "--stop", &mut log);
-            need(i.limit, "--limit", &mut log);
-        }
-        CondKind::Oco => {
-            need(i.stop, "--stop", &mut log);
-            need(i.take_profit, "--take-profit", &mut log);
-        }
-    }
+    let input = cond_leg_input(i);
+    cond_shape(i, &mut log);
     if has_error(&log) {
         return failed(log);
     }
@@ -2051,12 +2605,7 @@ fn plan_cond(env: &Env, i: &CondIntent) -> Plan {
         AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => s.spend(i.amount, limit_price),
         _ => None,
     };
-    let mut notes: Vec<&'static str> = match i.kind {
-        CondKind::StopMarket => vec!["stopTrigger", "stopAuction", "triggerExposure"],
-        CondKind::StopLimit => vec!["stopTrigger", "stopAuction", "triggerExposure", "stopLimitMayNotFill"],
-        CondKind::TakeProfit => vec!["takeProfitLeg"],
-        CondKind::Oco => vec!["oco", "partialFillsKeepLegs", "stopTrigger", "stopAuction", "triggerExposure"],
-    };
+    let mut notes = cond_notes(i.kind);
     if has_stop {
         notes.push("keeperReserve");
     }
@@ -2084,10 +2633,189 @@ fn plan_cond(env: &Env, i: &CondIntent) -> Plan {
     )
 }
 
-fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
+/// Which exit legs each if-done kind demands (`checkExitShape`): IFD one leg, IFO both, a repeat needs the take-profit.
+pub(crate) fn check_exit_shape(i: &IfdIntent, log: &mut Vec<Issue>) -> bool {
+    if i.stop_limit.is_some() && i.stop.is_none() {
+        log.push(error("COND_EXIT_LIMIT_NEEDS_STOP", "an exit stop-limit needs an exit stop"));
+        return false;
+    }
+    if i.take_profit.is_none() && i.stop.is_none() {
+        log.push(error("COND_EXIT_NEEDS_ONE_LEG", "an if-done order needs an exit take-profit and / or an exit stop"));
+        return false;
+    }
+    if i.more.repeat.is_some() && i.take_profit.is_none() {
+        log.push(error("COND_EXIT_NEEDS_TP_ONLY", "a repeat re-arms on its take-profit: give the exit a take-profit"));
+        return false;
+    }
+    true
+}
+
+/// The exit legs of an if-done intent (`exitLegInput`).
+pub(crate) fn exit_leg_input(i: &IfdIntent) -> LegInput {
+    LegInput {
+        tp: i.take_profit,
+        stop: i.stop,
+        limit: i.stop_limit,
+        slip_bps: i.more.exit_slip_bps,
+        min_touch: i.more.exit_min_touch,
+        knobs: i.more.exit_knobs,
+        trail: i.more.exit_trail,
+    }
+}
+
+/// The merge cost as a tip rate that pays `cost` even on the smallest take-profit fill: `ceil(cost * scale / minFill)`.
+pub fn merge_tip_rate(cost: i64, scale: i64, min_fill: i64) -> i64 {
+    ceil_div(cost as i128 * scale as i128, min_fill.max(1) as i128) as i64
+}
+
+/// `rptAmount` of a repeat (`1 + K * N`; 0 without a repeat) and the count asked for (`None`: unlimited), or the error.
+pub(crate) fn repeat_amount(repeat: Option<Option<i64>>, amount: i64, log: &mut Vec<Issue>) -> Option<(i64, Option<i64>)> {
+    let Some(k) = repeat else { return Some((0, None)) };
+    if k.is_some_and(|k| k < 1) {
+        log.push(error("COND_REPEAT_COUNT_INVALID", "the repeat count must be at least 1"));
+        return None;
+    }
+    if amount >= 1 << 53 {
+        log.push(error("AMOUNT_TOO_LARGE", "the amount is too large for a repeat"));
+        return None;
+    }
+    let k_max = (i64::MAX - 1) / amount.max(1);
+    let kk = k.unwrap_or(UNLIMITED_REPEAT_COUNT.min(k_max));
+    if kk > k_max {
+        log.push(error("COND_REPEAT_COUNT_INVALID", "the repeat count is too large for this amount"));
+        return None;
+    }
+    Some((1 + kk * amount, k))
+}
+
+/// The exit's own expiry: GTC = `GTC_EXIT_EXPIRY_DAA` (90 days idle from each exit's creation), or a date.
+pub(crate) fn exit_expiry(env: &Env, log: &mut Vec<Issue>, daa: Option<i64>) -> Option<i64> {
+    let Some(d) = daa else { return Some(GTC_EXIT_EXPIRY_DAA) };
+    let bad: Vec<Issue> = check_times(&env.clock, 0, d, None)
+        .into_iter()
+        .filter(|i| matches!(i.code, "EXPIRY_TOO_FAR" | "EXPIRY_TOO_SOON" | "ACTIVE_AFTER_EXPIRY"))
+        .collect();
+    if !bad.is_empty() {
+        log.extend(bad);
+        return None;
+    }
+    Some(d)
+}
+
+/// The entry's stop parameters, checked (a limit entry: all zero but the rest time).
+pub(crate) struct EntryStop {
+    pub(crate) stop: i64,
+    pub(crate) band: i64,
+    pub(crate) keeper_tip: i64,
+    pub(crate) min_touch: i64,
+    pub(crate) min_rest: i64,
+    /// Arming updates pre-funded (a repeating stop entry re-arms each cycle).
+    pub(crate) arm_updates: i64,
+}
+
+/// The stop entry of `i` at entry limit `price` (`count`: the repeat count asked for).
+pub(crate) fn entry_stop_of(
+    i: &IfdIntent,
+    price: i64,
+    min_fill: i64,
+    count: Option<i64>,
+    default_keeper_tip: i64,
+    log: &mut Vec<Issue>,
+) -> Option<EntryStop> {
+    let stop = i.more.entry_stop.unwrap_or(0);
+    let stop_entry = stop > 0;
+    let k = i.more.entry_knobs;
+    let band = if stop_entry && stop != price { k.band_daa.unwrap_or(STOP_BAND_DAA) } else { 0 };
+    let keeper_tip = if stop_entry { k.keeper_tip.unwrap_or(default_keeper_tip) } else { 0 };
+    let min_touch = if stop_entry { i.more.entry_min_touch.unwrap_or_else(|| default_min_touch(min_fill, i.amount)) } else { 0 };
+    let min_rest = k.min_rest.unwrap_or(MIN_REST_DAA);
+    if band < 0 {
+        log.push(error("COND_BAND_INVALID", "the entry's band length must not be negative"));
+    }
+    if keeper_tip < 0 {
+        log.push(error("COND_KEEPER_TIP_INVALID", "the entry's keeper tip must not be negative"));
+    }
+    if stop_entry && min_touch < 1 {
+        log.push(error("COND_MIN_TOUCH_INVALID", "the entry's trigger threshold must be positive"));
+    }
+    if min_rest < 0 {
+        log.push(error("COND_MIN_REST_INVALID", "the entry's trigger rest time must not be negative"));
+    }
+    if has_error(log) {
+        return None;
+    }
+    let arm_updates = if !stop_entry {
+        0
+    } else if i.more.repeat.is_some() {
+        match count {
+            Some(c) if c < MAX_ENTRY_ARM_UPDATES => c + 1,
+            _ => MAX_ENTRY_ARM_UPDATES,
+        }
+    } else {
+        1
+    };
+    Some(EntryStop { stop, band, keeper_tip, min_touch, min_rest, arm_updates })
+}
+
+/// The entry stop must be on the near side of the entry limit (buy: at most, sell: at least).
+pub(crate) fn check_entry_stop(i: &IfdIntent, log: &mut Vec<Issue>) -> bool {
+    if let Some(st) = i.more.entry_stop {
+        let buy = i.side == Side::Buy;
+        if if buy { st > i.price } else { st < i.price } {
+            log.push(error(
+                "COND_ENTRY_STOP_BEYOND_LIMIT",
+                format!("the stop of a {} entry must be at or {} its limit", i.side.name(), if buy { "below" } else { "above" }),
+            ));
+            return false;
+        }
+    }
+    true
+}
+
+/// Sentence tags of an if-done plan.
+pub(crate) fn ifd_notes(i: &IfdIntent, legs: &Legs, stop_entry: bool, count: Option<i64>) -> Vec<&'static str> {
+    let buy_first = i.side == Side::Buy;
+    let repeat = i.more.repeat.is_some();
+    let mut notes: Vec<&'static str> = vec![if i.take_profit.is_some() && i.stop.is_some() { "ifo" } else { "ifd" }, "position"];
+    notes.extend([
+        if buy_first { "buyFirst" } else { "sellFirst" },
+        "minFill",
+        if i.more.exit_expiry_daa.is_none() { "exitGtc" } else { "exitGtd" },
+    ]);
+    if stop_entry {
+        notes.extend(["stopEntry", "stopEntryTrigger", "stopEntryAuction", "triggerExposure", "keeperReserve"]);
+    }
+    if legs.stop > 0 {
+        notes.extend(["exitStop", "triggerExposure"]);
+    }
+    if legs.stop > 0 && i.stop_limit.is_some() {
+        notes.push("stopLimitMayNotFill");
+    }
+    if legs.trail_step > 0 {
+        notes.push("trailing");
+    }
+    if repeat {
+        notes.extend([
+            "repeat",
+            if count.is_none() { "repeatUnlimited" } else { "repeatCounted" },
+            if buy_first { "repeatReBuys" } else { "repeatReSells" },
+            "repeatStopLossEnds",
+            "mergeTip",
+            "cancelPosition",
+        ]);
+    }
+    if !buy_first {
+        notes.push("prefund");
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    notes.retain(|n| seen.insert(*n));
+    notes
+}
+
+pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
     let m = &env.market;
     let mut log = check_amount(i.amount, m, true);
-    if i.tip < 0 || i.exit_tip < 0 {
+    if i.tip < 0 {
         log.push(error("TIP_NEGATIVE", "the priority tip cannot be negative"));
     }
     if has_error(&log) {
@@ -2096,16 +2824,16 @@ fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
     let carrier = env.carrier();
     let buy_first = i.side == Side::Buy;
     let exit_side = i.side.other();
-    if i.stop_limit.is_some() && i.stop.is_none() {
-        log.push(error("COND_EXIT_LIMIT_NEEDS_STOP", "an exit stop-limit needs an exit stop"));
+    let repeat = i.more.repeat.is_some();
+    if !check_exit_shape(i, &mut log) {
         return failed(log);
     }
-    if i.take_profit.is_none() && i.stop.is_none() {
-        log.push(error("COND_EXIT_NEEDS_ONE_LEG", "an if-done order needs an exit take-profit and / or an exit stop"));
-        return failed(log);
-    }
+    // ---- entry
     log.extend(check_price(m, i.price, "the entry price"));
-    if has_error(&log) {
+    if let Some(st) = i.more.entry_stop {
+        log.extend(check_price(m, st, "the entry stop"));
+    }
+    if has_error(&log) || !check_entry_stop(i, &mut log) {
         return failed(log);
     }
     let entry_all_in = if buy_first { i.price + i.tip } else { i.price - i.tip };
@@ -2119,28 +2847,48 @@ fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
         return failed(log);
     }
     let fills = ceil_div(i.amount as i128, min_fill as i128) as i64;
-    let exit_input = LegInput { tp: i.take_profit, stop: i.stop, limit: i.stop_limit, slip_bps: None, min_touch: None };
+    // ---- repeat: rptAmount = 1 + K * N
+    let Some((rpt_amount, count)) = repeat_amount(i.more.repeat, i.amount, &mut log) else { return failed(log) };
+    // ---- exit (built first: the entry commits to it, its minimum fill included)
+    if i.exit_tip < 0 {
+        log.push(error("TIP_NEGATIVE", "the exit tip cannot be negative"));
+        return failed(log);
+    }
+    let exit_input = exit_leg_input(i);
     let exit_min_default = default_min_fill_for(m, i.amount, min_fill_price(exit_side, &exit_input));
-    let exit_min_fill = exit_min_default.min(min_fill);
+    let exit_min_fill = i.more.exit_min_fill.unwrap_or(exit_min_default.min(min_fill));
     log.extend(check_min_fill(exit_min_fill, i.amount, "the exit minimum fill"));
     if has_error(&log) {
         return failed(log);
     }
-    let exit_tip = i.exit_tip;
+    // a repeat's exit tip carries the merge cost, paid even by the smallest take-profit fill
+    let merge_tip = if repeat {
+        merge_tip_rate(if buy_first { MERGE_COST_BUY_FIRST } else { MERGE_COST_SELL_FIRST }, m.scale, exit_min_fill)
+    } else {
+        0
+    };
+    let exit_tip = i.exit_tip + merge_tip;
     let legs = resolve_legs(env, &mut log, exit_side, &exit_input, "exit ", exit_min_fill, i.amount, m.keeper_tip);
     let act = resolve_activation(env, &mut log, i.active_from);
     let entry_expiry = act.as_ref().and_then(|a| resolve_expiry(env, &mut log, i.lifetime, a.active_from));
-    let (Some(legs), Some(act), Some(entry_expiry)) = (legs, act, entry_expiry) else { return failed(log) };
+    let exit_exp = exit_expiry(env, &mut log, i.more.exit_expiry_daa);
+    let (Some(legs), Some(act), Some(entry_expiry), Some(exit_exp)) = (legs, act, entry_expiry, exit_exp) else {
+        return failed(log);
+    };
     if has_error(&log) {
         return failed(log);
     }
-    // the exit's GTC is "90 days idle from its creation": committed as 2^62
-    let exit_expiry = 1i64 << 62;
+    // ---- economics: a repeat re-arms only on a profitable take-profit; a plain IFD may knowingly exit at a loss
     if legs.tp > 0 {
         let tp_all_in = if buy_first { legs.tp - exit_tip } else { legs.tp + exit_tip };
         let profit = if buy_first { tp_all_in - entry_all_in } else { entry_all_in - tp_all_in };
         if profit <= 0 {
-            log.push(warning("COND_TP_NOT_PROFITABLE", format!("the exit take-profit loses {} per token against the entry", -profit)));
+            let msg = format!("the exit take-profit loses {} per token against the entry", -profit);
+            if repeat {
+                log.push(error("COND_TP_NOT_PROFITABLE", msg));
+                return failed(log);
+            }
+            log.push(warning("COND_TP_NOT_PROFITABLE", msg));
         }
     }
     log.extend(check_notional(i.amount, if buy_first { i.price + i.tip } else { i.price }, m.scale));
@@ -2149,24 +2897,31 @@ fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
     if has_error(&log) {
         return failed(log);
     }
+    // ---- self-trade: the entry is a real order now; the exit only later (warning)
     log.extend(check_self_trade(&env.own, i.side, entry_all_in, 0));
     let exit_worst_all_in = if buy_first { ask_worst(&legs) - exit_tip } else { bid_worst(&legs) + exit_tip };
     for mut w in check_self_trade(&env.own, exit_side, exit_worst_all_in, 0) {
         w.severity = Severity::Warning;
         log.push(w);
     }
-    if let Some(t) = touch_price(&env.book, i.side) {
-        if if buy_first { t <= i.price } else { t >= i.price } {
-            log.push(warning("COND_ENTRY_CROSSES", "the entry crosses the book: it fills right away at its limit"));
+    if i.more.entry_stop.is_none() {
+        if let Some(t) = touch_price(&env.book, i.side) {
+            if if buy_first { t <= i.price } else { t >= i.price } {
+                log.push(warning("COND_ENTRY_CROSSES", "the entry crosses the book: it fills right away at its limit"));
+            }
         }
     }
     if has_error(&log) {
         return failed(log);
     }
+    // ---- entry stop parameters
+    let Some(es) = entry_stop_of(i, i.price, min_fill, count, m.keeper_tip, &mut log) else { return failed(log) };
+    let stop_entry = es.stop > 0;
+    let keeper_reserve = es.keeper_tip * es.arm_updates;
     let mut lines = vec![];
     let fam = m.family;
-    let (order, exit, prefund) = if buy_first {
-        let ask = cond_ask_state(env, i.amount, exit_min_fill, exit_tip, exit_expiry, 0, &legs);
+    let (order, exit, _prefund) = if buy_first {
+        let ask = cond_ask_state(env, i.amount, exit_min_fill, exit_tip, exit_exp, 0, &legs);
         let bid = IfdBidState {
             maker: env.maker,
             token_cov_id: m.cov,
@@ -2184,38 +2939,47 @@ fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
             delivery_carrier: carrier,
             exit_carrier: carrier,
             min_fill,
-            entry_stop: 0,
-            band_daa: 0,
-            min_touch: 0,
-            min_rest_daa: MIN_REST_DAA,
-            keeper_tip: 0,
+            entry_stop: es.stop,
+            band_daa: es.band,
+            min_touch: es.min_touch,
+            min_rest_daa: es.min_rest,
+            keeper_tip: es.keeper_tip,
             armed: 0,
-            rpt_amount: 0,
+            rpt_amount,
             exit_state: IfdBidState::commit_exit(&ask),
         };
         let Some(escrow) = bid.escrow() else {
             log.push(error("AMOUNT_TOO_LARGE", "the amount is too large for one order"));
             return failed(log);
         };
+        // a repeating entry outlives its last fill: one more exit carrier of its own
+        let exit_carriers = fills + i64::from(repeat);
         lines.push(CarrierLine {
             kind: "escrow",
-            amount: escrow as i128 - 2 * carrier as i128 * fills as i128,
+            amount: escrow as i128 - carrier as i128 * fills as i128 - carrier as i128 * exit_carriers as i128,
             count: 1,
             kept: false,
         });
         lines.push(CarrierLine { kind: "delivery carrier", amount: carrier as i128, count: fills, kept: false });
-        lines.push(CarrierLine { kind: "exit carrier", amount: carrier as i128, count: fills, kept: false });
+        lines.push(CarrierLine { kind: "exit carrier", amount: carrier as i128, count: exit_carriers, kept: false });
+        if keeper_reserve > 0 {
+            lines.push(CarrierLine { kind: "keeper reserve", amount: es.keeper_tip as i128, count: es.arm_updates, kept: false });
+        }
         let (o, x) = match fam {
             Family::Kcc20 => (AnyState::KobIfdBid(bid), AnyState::KobCondAsk(ask)),
             Family::Kron => (AnyState::KobIfdBidKron(bid), AnyState::KobCondAskKron(ask)),
         };
         (o, x, None)
     } else {
-        let bid_exit = cond_bid_state(env, i.amount, exit_min_fill, exit_tip, exit_expiry, 0, carrier, &legs);
+        let bid_exit = cond_bid_state(env, i.amount, exit_min_fill, exit_tip, exit_exp, 0, carrier, &legs);
         let proceeds = i.price - i.tip;
         let worst_buy_back = bid_worst(&legs) + exit_tip;
         let min_prefund = (worst_buy_back - proceeds).max(0);
         let prefund = i.prefund.unwrap_or(min_prefund);
+        if prefund < 0 {
+            log.push(error("COND_PREFUND_INVALID", "the prefund must not be negative"));
+            return failed(log);
+        }
         if prefund < min_prefund {
             log.push(error("COND_PREFUND_SHORT", format!("the prefund must be at least {min_prefund} per token (given {prefund})")));
             return failed(log);
@@ -2235,14 +2999,14 @@ fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
             prefund,
             exit_carrier: carrier,
             min_fill,
-            entry_stop: 0,
-            band_daa: 0,
-            min_touch: 0,
-            min_rest_daa: MIN_REST_DAA,
-            keeper_tip: 0,
+            entry_stop: es.stop,
+            band_daa: es.band,
+            min_touch: es.min_touch,
+            min_rest_daa: es.min_rest,
+            keeper_tip: es.keeper_tip,
             armed: 0,
             amount_left: i.amount,
-            rpt_amount: 0,
+            rpt_amount,
             exit_state: IfdAskState::commit_exit_for(fam, &bid_exit),
         };
         let Some(value) = ask.escrow(carrier) else {
@@ -2255,13 +3019,19 @@ fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
             lines.push(CarrierLine { kind: "prefund", amount: prefund_kas, count: 1, kept: false });
         }
         lines.push(CarrierLine { kind: "exit carrier", amount: carrier as i128, count: fills, kept: false });
+        // the arming keeper is paid from the entry's carrier: it must stay a carrier (the exit and the refund need it too)
+        if keeper_reserve * 2 > carrier {
+            log.push(error("COND_KEEPER_FUNDING_TOO_LARGE", "the entry keeper reserve does not fit the carrier"));
+            return failed(log);
+        }
         let (o, x) = match fam {
             Family::Kcc20 => (AnyState::KobIfdAsk(ask), AnyState::KobCondBid(bid_exit)),
             Family::Kron => (AnyState::KobIfdAskKron(ask), AnyState::KobCondBidKron(bid_exit)),
         };
         (o, x, Some(prefund))
     };
-    if legs.keeper_tip * legs.expected_updates * 2 > carrier {
+    // exit keepers are paid from the exit's own carrier
+    if legs.stop > 0 && legs.keeper_tip * legs.expected_updates * 2 > carrier {
         log.push(error("COND_KEEPER_FUNDING_TOO_LARGE", "the exit keeper reserve does not fit the carrier"));
         return failed(log);
     }
@@ -2270,14 +3040,7 @@ fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
         AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => s.proceeds(i.amount, i.price),
         _ => None,
     };
-    let mut notes: Vec<&'static str> = vec![if i.take_profit.is_some() && i.stop.is_some() { "ifo" } else { "ifd" }, "position"];
-    notes.extend([if buy_first { "buyFirst" } else { "sellFirst" }, "minFill", "exitGtc"]);
-    if legs.stop > 0 {
-        notes.extend(["exitStop", "triggerExposure"]);
-    }
-    if prefund.is_some() {
-        notes.push("prefund");
-    }
+    let notes = ifd_notes(i, &legs, stop_entry, count);
     finish_cond(
         env,
         log,
@@ -2293,10 +3056,10 @@ fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
             limit_price: i.price,
             all_in_price: entry_all_in,
             all_in_total,
-            expected_price: None,
+            expected_price: stop_entry.then_some(es.stop),
             worst_price: i.price,
             tip: i.tip,
-            min_touch: None,
+            min_touch: stop_entry.then_some(es.min_touch),
             notes,
         },
     )
@@ -2304,73 +3067,7 @@ fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
 
 // ------------------------------------------------------------------------------------------------ pair limit (pair-*.ts)
 
-fn plan_pair_limit(env: &Env, i: &LimitIntent) -> Plan {
-    let Some(pair) = &env.pair else { return failed(vec![error("PAIR_MISSING", "a pair order needs a quote token")]) };
-    let a = &env.market;
-    let b = &pair.quote;
-    if a.cov == b.cov {
-        return failed(vec![error("PAIR_SAME_TOKEN", "a pair needs two different tokens")]);
-    }
-    let mut pre = vec![];
-    if i.price <= 0 {
-        pre.push(error("PRICE_NOT_POSITIVE", "the price must be greater than zero"));
-    }
-    if i.max_fills.is_some_and(|f| f < 1) {
-        pre.push(error("MAX_FILLS_INVALID", "the number of fills must be a positive integer"));
-    }
-    if has_error(&pre) {
-        return failed(pre);
-    }
-    let mut d = blank(i.side, i.amount, i.price, i.tip, i.min_fill);
-    d.fills = None;
-    let requested = activation_daa(&env.clock, i.active_from);
-    let future = requested.is_some_and(|r| r > env.clock.daa);
-    d.requested_active_from = requested;
-    d.active_from = if future { requested.unwrap_or(0) } else { 0 };
-    d.activates_at = if future { requested } else { None };
-    let exp = resolve_lifetime(&env.clock, i.lifetime, &mut pre);
-    d.expiry_daa = exp.daa;
-    d.deadline = exp.deadline;
-    d.expiry_kind = exp.kind;
-    d.fills_requested = i.max_fills;
-    d.worst_price = Some(i.price);
-    d.notes.push(match exp.kind {
-        "gtc" => "gtc",
-        "day" => "dayOrder",
-        _ => "gtd",
-    });
-    pre.extend(check_price_band(reference_price(&env.book), i.side, i.price));
-    let touch = if future { None } else { crossing_touch(&env.book, i.side, i.price, 0) };
-    if let Some(t) = touch {
-        let start = if i.side == Side::Sell { t.max(i.price) } else { t.min(i.price) };
-        match i.crossing {
-            Crossing::Reject => pre.push(error("PAIR_MARKETABLE_REJECTED", format!("your limit crosses the pair book at {t}"))),
-            Crossing::Auction if start != i.price => {
-                d.price = start;
-                d.price_end = i.price;
-                d.slope = decay_slope(start, i.price, MARKET_AUCTION_DAA, 1);
-                d.decay_step = 1;
-                d.active_from = env.clock.daa + MARKET_ACTIVATION_DAA;
-                d.activates_at = None;
-                d.reach = i.price;
-                d.expected_price = Some(t);
-                d.notes.extend(["auction", "marketable"]);
-                pre.push(info(
-                    "PAIR_MARKETABLE_AUCTION",
-                    format!("your limit crosses the pair book: placed as an auction from {t} to your limit"),
-                ));
-            }
-            _ if start != i.price => pre.push(warning(
-                "PAIR_MARKETABLE_LIMIT_FILLS_AT_LIMIT",
-                format!("your limit crosses the pair book ({t}): it fills at your limit"),
-            )),
-            _ => {}
-        }
-    }
-    place_pair(env, pair, d, pre)
-}
-
-fn place_pair(env: &Env, pair: &PairPart, d: Draft, mut issues: Vec<Issue>) -> Plan {
+pub(crate) fn place_pair(env: &Env, pair: &PairPart, d: Draft, mut issues: Vec<Issue>) -> Plan {
     let a = &env.market;
     let b = &pair.quote;
     issues.extend(check_amount(d.amount, a, d.side == Side::Sell));
@@ -2401,6 +3098,9 @@ fn place_pair(env: &Env, pair: &PairPart, d: Draft, mut issues: Vec<Issue>) -> P
     }
     if has_error(&issues) {
         return failed(issues);
+    }
+    if d.tif == 2 {
+        issues.extend(check_fok(d.side, d.amount, d.reach, 0, a.slots, &env.book));
     }
     issues.extend(check_self_trade(&env.own, d.side, d.reach, 0));
     if has_error(&issues) {
@@ -2468,152 +3168,44 @@ fn place_pair(env: &Env, pair: &PairPart, d: Draft, mut issues: Vec<Issue>) -> P
         issues.push(error("TIP_TOO_LARGE", "the priority tip is too large for this quantity"));
         return failed(issues);
     };
-    let tip_total = total - dc * funded.max(1);
-    let mut lines = vec![CarrierLine { kind: "delivery carrier", amount: dc as i128, count: funded.max(1), kept: false }];
-    if tip_total > 0 {
-        lines.push(CarrierLine { kind: "tip prefund", amount: tip_total as i128, count: 1, kept: false });
-    }
-    let order = AnyState::KobPair(st.clone());
-    // KRON caps of what the order holds and delivers
-    for (tok, amount) in order.custodies() {
-        let m = if tok == a.cov { a } else { b };
-        if m.family == Family::Kron && amount > KRON_MAX_OUTPUT_AMOUNT {
-            issues.push(error(
-                "PAIR_KRON_CUSTODY_TOO_LARGE",
-                format!("a KRON custody of {} holds at most {KRON_MAX_OUTPUT_AMOUNT} base units", m.name()),
-            ));
-        }
-    }
-    let n1 = min_fill.min(d.amount);
-    let delivery = if d.side == Side::Sell { (b, st.t_out_min(n1, st.price_max()).unwrap_or(0)) } else { (a, n1) };
-    if delivery.0.family == Family::Kron && delivery.1 > KRON_MAX_OUTPUT_AMOUNT {
-        issues.push(error("PAIR_KRON_DELIVERY_TOO_LARGE", "a minimum fill would deliver more than a KRON output holds"));
-    }
-    if has_error(&issues) {
-        return Plan { states: vec![order], ..failed(issues) };
-    }
-    if let Err(e) = check_new_order(&order) {
-        issues.push(error("BUILD_REJECTED", format!("the protocol refused this order: {e}")));
-        return Plan { states: vec![order], ..failed(issues) };
-    }
-    let value: i128 = lines.iter().map(|l| l.amount * l.count as i128).sum();
-    let min_value = min_order_value(&order) as i128;
-    if value < min_value || !fits(value) {
-        issues.push(error("BUILD_REJECTED", format!("the order UTXO needs at least {min_value} sompi (planned {value})")));
-        return Plan { states: vec![order], ..failed(issues) };
-    }
-    let value = value as i64;
-    // the custodies: each from the maker's UTXOs of its own token
-    let mut tokens = vec![];
-    let mut draws: Vec<([u8; 32], i64)> = vec![];
-    let mut outputs_kas = 0i128;
-    let mut inputs_kas = 0i128;
-    let mut changes = vec![];
-    for (tok, amount) in order.custodies() {
-        let (m, utxos) = if tok == a.cov { (a, &env.token_utxos) } else { (b, &pair.quote_utxos) };
-        let floor = order_carrier_floor(m);
-        if dc < floor {
-            issues.push(error(
-                "CARRIER_BELOW_FLOOR",
-                format!("the carrier ({dc} sompi) is below {floor} sompi, the least a token output of {} carries", m.name()),
-            ));
-            return Plan { states: vec![order], ..failed(issues) };
-        }
-        let usable = usable_token_utxos(m, &env.maker, utxos);
-        let picked = match select_tokens(&usable, amount, m.slots.0.min(MAX_TOKEN_INPUTS), &m.name()) {
-            Ok(p) => p,
-            Err(e) => {
-                issues.push(e);
-                return Plan { states: vec![order], ..failed(issues) };
-            }
-        };
-        let have: i128 = picked.iter().map(|u| u.state.amount() as i128).sum();
-        inputs_kas += picked.iter().map(|u| u.utxo.amount as i128).sum::<i128>();
-        outputs_kas += dc as i128 + if have > amount as i128 { dc as i128 } else { 0 };
-        changes.push((tok, have - amount as i128));
-        tokens.extend(picked);
-        draws.push((tok, amount));
-    }
-    let need = (value as i128 + outputs_kas - inputs_kas).max(0);
-    let request = |funding: Vec<KeyUtxo>| CreateOrder {
-        order: order.clone(),
-        value: value as u64,
-        tokens: tokens.clone(),
-        token_carrier: if tokens.is_empty() { 0 } else { dc as u64 },
-        funding,
-        change: None,
-        lock_time: 0,
-        deadline: d.deadline.map(|x| x as u64),
-        records: vec![],
-        fee: fee_options(env),
-    };
-    let (req, built) = match build_with_reserve(env, need, request, |bt| verify_built(bt, &order, value, d.deadline, &draws)) {
-        Ok(x) => x,
-        Err(e) => {
-            issues.push(e);
-            return Plan { states: vec![order], ..failed(issues) };
-        }
-    };
-    let mut carriers = lines.clone();
-    let mut escrow_a = 0;
-    let mut escrow_b = 0;
-    for (k, (tok, amount)) in draws.iter().enumerate() {
-        let is_a = *tok == a.cov;
-        carriers.push(CarrierLine {
-            kind: if is_a { "custody carrier" } else { "quote custody carrier" },
-            amount: dc as i128,
-            count: 1,
-            kept: false,
-        });
-        if changes[k].1 > 0 {
-            carriers.push(CarrierLine {
-                kind: if is_a { "token change carrier" } else { "quote change carrier" },
-                amount: dc as i128,
-                count: 1,
-                kept: true,
-            });
-        }
-        if is_a {
-            escrow_a += amount;
-        } else {
-            escrow_b += amount;
-        }
-    }
-    let kas_locked = carriers.iter().filter(|c| !c.kept).map(|c| c.amount * c.count as i128).sum();
+    let lines = super::plan_pair::pair_kas_lines(total, funded, dc);
     let sell = d.side == Side::Sell;
     let b_of = |n: i64, p: i64| if sell { st.t_out_min(n, p) } else { st.s_out(n, p) };
-    let disclosure = Disclosure {
-        side: d.side,
-        amount: d.amount,
-        scale: a.scale,
-        min_fill,
-        min_touch: None,
-        limit_price: Some(d.limit_price),
-        all_in_price: Some(d.limit_price),
-        all_in_total: b_of(d.amount, d.limit_price),
-        expected_price: d.expected_price,
-        worst_price: d.worst_price,
-        tip: d.tip,
-        carriers,
-        kas_locked,
-        tokens_escrowed: escrow_a,
-        quote_escrowed: escrow_b,
-        fee: built.fee.fee,
-        refund_tip: st.refund_tip,
-        keeper_tip: 0,
-        expiry_kind: d.expiry_kind,
-        expiry_daa: d.expiry_daa,
-        expiry_unix: daa_to_unix(&env.clock, d.expiry_daa),
-        deadline: d.deadline,
-        activates_at: d.activates_at.filter(|x| *x > env.clock.daa).map(|x| (x, daa_to_unix(&env.clock, x))),
-        notes: [d.notes.clone(), vec!["pairTipKas", "carrierReturned"]].concat(),
-    };
-    Plan { ok: !has_error(&issues), issues, states: vec![order], request: Some(req), built: Some(built), disclosure: Some(disclosure) }
+    let n1 = min_fill.min(d.amount);
+    let delivery = if sell { (true, st.t_out_min(n1, st.price_max()).unwrap_or(0)) } else { (false, n1) };
+    super::plan_pair::place_pair_order(
+        env,
+        pair,
+        issues,
+        super::plan_pair::PairSpec {
+            all_in_total: b_of(d.amount, d.limit_price),
+            refund_tip: st.refund_tip,
+            order: AnyState::KobPair(st),
+            exit: None,
+            lines,
+            deadline: d.deadline,
+            side: d.side,
+            amount: d.amount,
+            min_fill,
+            min_touch: None,
+            limit_price: Some(d.limit_price),
+            expected_price: d.expected_price,
+            worst_price: d.worst_price,
+            tip: d.tip,
+            keeper_tip: 0,
+            expiry_kind: d.expiry_kind,
+            expiry_daa: d.expiry_daa,
+            activates_at: d.activates_at,
+            delivery,
+            notes: d.notes.clone(),
+            carrier: dc,
+        },
+    )
 }
 
 // ------------------------------------------------------------------------------------------------ entry point (plan.ts)
 
-fn env_issues(env: &Env) -> Vec<Issue> {
+pub(crate) fn env_issues(env: &Env) -> Vec<Issue> {
     let mut out = vec![];
     if !env.guards_unavailable.is_empty() {
         let g = env.guards_unavailable.join(", ");
@@ -2638,7 +3230,7 @@ fn env_issues(env: &Env) -> Vec<Issue> {
     out
 }
 
-fn market_start_issues(env: &Env, plan: &Plan) -> Vec<Issue> {
+pub(crate) fn market_start_issues(env: &Env, plan: &Plan) -> Vec<Issue> {
     let Some(d) = &plan.disclosure else { return vec![] };
     let Some(start) = d.expected_price.filter(|s| *s > 0) else { return vec![] };
     let buy = d.side == Side::Buy;
@@ -2665,8 +3257,13 @@ fn market_start_issues(env: &Env, plan: &Plan) -> Vec<Issue> {
             }
         }
     }
-    let value = d.amount as i128 * start as i128 / d.scale as i128;
-    if value >= MARKET_START_UNVERIFIED_MIN_SOMPI {
+    // the KAS value at the start; a pair converts B at its KAS reference (unknown: held as unverified)
+    let quote = d.amount as i128 * start as i128 / d.scale as i128;
+    let value = match &env.pair {
+        None => Some(quote),
+        Some(p) => p.kas_per_whole_b.filter(|k| *k > 0).map(|k| quote * k as i128 / p.quote.scale.max(1) as i128),
+    };
+    if value.is_none_or(|v| v >= MARKET_START_UNVERIFIED_MIN_SOMPI) {
         vec![if ack {
             warning(
                 "MARKET_START_UNVERIFIED_ACKNOWLEDGED",
@@ -2693,38 +3290,57 @@ fn market_start_issues(env: &Env, plan: &Plan) -> Vec<Issue> {
     }
 }
 
-fn stop_evidence_issues(env: &Env, plan: &Plan) -> Vec<Issue> {
+pub(crate) fn stop_evidence_issues(env: &Env, plan: &Plan) -> Vec<Issue> {
     let has_stop = plan.states.iter().any(|s| match s {
         AnyState::KobCondAsk(x) | AnyState::KobCondAskKron(x) => x.stop_price > 0,
         AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x) => x.stop_price > 0,
-        AnyState::KobIfdBid(x) | AnyState::KobIfdBidKron(x) => x.entry_stop > 0,
-        AnyState::KobIfdAsk(x) | AnyState::KobIfdAskKron(x) => x.entry_stop > 0,
+        AnyState::KobIfdBid(x) | AnyState::KobIfdBidKron(x) => x.entry_stop > 0 || x.exit().is_ok_and(|e| e.stop_price > 0),
+        AnyState::KobIfdAsk(x) | AnyState::KobIfdAskKron(x) => x.entry_stop > 0 || x.exit().is_ok_and(|e| e.stop_price > 0),
+        AnyState::KobCondPair(x) => x.stop_price > 0,
+        AnyState::KobIfdPair(x) => x.entry_stop > 0 || x.exit().is_ok_and(|e| e.stop_price > 0),
         _ => false,
     });
-    if !has_stop || env.market.family != Family::Kcc20 || env.market.genesis_verified {
+    if !has_stop {
         return vec![];
     }
-    vec![warning(
-        "STOP_EVIDENCE_GENESIS_UNVERIFIED",
-        format!(
-            "the genesis of {} was not verified: trades of a look-alike token under the same covenant id can arm or trail this stop",
-            env.market.name()
-        ),
-    )]
+    std::iter::once(&env.market)
+        .chain(env.pair.as_ref().map(|p| &p.quote))
+        .filter(|m| m.family == Family::Kcc20 && !m.genesis_verified)
+        .map(|m| {
+            warning(
+                "STOP_EVIDENCE_GENESIS_UNVERIFIED",
+                format!(
+                    "the genesis of {} was not verified: trades of a look-alike token under the same covenant id can arm or trail this stop",
+                    m.name()
+                ),
+            )
+        })
+        .collect()
 }
 
 /// Plans an order. Never panics for user input: problems are issues (`ok: false` when one is an error).
 pub fn plan_order(env: &Env, intent: &Intent) -> Plan {
+    if let Some(p) = &env.pair {
+        if p.quote.cov == env.market.cov {
+            return failed(vec![error("PAIR_SAME_TOKEN", "a pair needs two different tokens")]);
+        }
+    }
+    let pair = env.pair.is_some();
     let mut plan = match intent {
         Intent::Limit(i) => plan_limit(env, i),
         Intent::Immediate(i) => plan_immediate(env, i),
         Intent::Market(i) => plan_market(env, i),
+        Intent::Streaming(i) => plan_streaming(env, i),
+        Intent::Close(i) => plan_close(env, i),
+        Intent::Schedule(i) => plan_schedule(env, i),
+        Intent::Dutch(i) => plan_dutch(env, i),
+        Intent::Cond(i) if pair => super::plan_pair::plan_pair_cond(env, i),
         Intent::Cond(i) => plan_cond(env, i),
+        Intent::Ifd(i) if pair => super::plan_pair::plan_pair_ifd(env, i),
         Intent::Ifd(i) => plan_ifd(env, i),
-        Intent::PairLimit(i) => plan_pair_limit(env, i),
     };
     let mut extra = env_issues(env);
-    if matches!(intent, Intent::Market(_)) {
+    if matches!(intent, Intent::Market(_) | Intent::Close(_)) {
         extra.extend(market_start_issues(env, &plan));
     }
     extra.extend(stop_evidence_issues(env, &plan));

@@ -297,6 +297,74 @@ fn place_signs_only_with_yes_and_matches_the_planner() {
 }
 
 #[test]
+fn place_every_new_kind() {
+    let w = world("kinds", &[]);
+    let place = crate::trade::place::run;
+    let order = |suffix: &str| recover_orders(&w.signed(suffix).tx).unwrap()[0].order.clone();
+    // TWAP (sell implied) and DCA (buy implied): interval and slice in the state
+    assert_eq!(run(place, w.args(0x11, "twap --token TST --amount 10TST --slice 2TST --interval 60s --price 3KAS --yes")), 0);
+    let AnyState::KobAsk(a) = order(".place.json") else { panic!() };
+    assert_eq!((a.interval, a.max_fill, a.amount_left), (600, 2 * SCALE, 10 * SCALE));
+    assert_eq!(run(place, w.args(0x11, "dca --token TST --amount 4TST --slice 1TST --interval 600daa --price 2KAS --yes")), 0);
+    let AnyState::KobBid(b) = order(".place.json") else { panic!() };
+    assert_eq!((b.interval, b.max_fill), (600, SCALE));
+    // a Dutch decay, a streaming buy from the displayed price, a trailing stop, a repeat IFD with a stop entry
+    assert_eq!(
+        run(place, w.args(0x11, "dutch --token TST --side sell --amount 2TST --price 3KAS --price-end 2KAS --duration 10m --yes")),
+        0
+    );
+    let AnyState::KobAsk(a) = order(".place.json") else { panic!() };
+    assert_eq!((a.price, a.price_end, a.active_from), (300_000_000, 200_000_000, 1_000_030));
+    assert_eq!(
+        run(place, w.args(0x11, "streaming --token TST --side buy --amount 1TST --displayed-price 2.5KAS --tolerance 1% --yes")),
+        0
+    );
+    let AnyState::KobBid(b) = order(".place.json") else { panic!() };
+    assert_eq!((b.price, b.price_end, b.tif), (250_000_000, 252_500_000, 1));
+    assert_eq!(
+        run(
+            place,
+            w.args(
+                0x11,
+                "trailing-stop --token TST --side sell --amount 3TST --stop 2KAS --trail-step 0.01KAS --trail-gap 0.05KAS --yes"
+            )
+        ),
+        0
+    );
+    let AnyState::KobCondAsk(c) = order(".place.json") else { panic!() };
+    assert_eq!((c.stop_price, c.trail_step, c.trail_gap, c.trail_wait), (200_000_000, 1_000_000, 5_000_000, 6_000));
+    assert_eq!(
+        run(
+            place,
+            w.args(0x11, "repeat-ifd --token TST --side buy --amount 4TST --price 2KAS --entry-stop 1.9KAS --take-profit 2.5KAS --repeat-count 3 --yes")
+        ),
+        0
+    );
+    let AnyState::KobIfdBid(e) = order(".place.json") else { panic!() };
+    assert_eq!((e.rpt_amount, e.entry_stop), (1 + 3 * 4 * SCALE, 190_000_000));
+    assert_eq!(w.submitted(), 6);
+    // refused before anything is read: a side against the kind, a half trailing stop, an option of another kind
+    assert_eq!(
+        run(place, w.args(0x11, "twap --token TST --side buy --amount 1TST --slice 1TST --interval 60s --price 3KAS --yes")),
+        2
+    );
+    assert_eq!(
+        run(place, w.args(0x11, "trailing-stop --token TST --side sell --amount 1TST --stop 2KAS --trail-step 0.01KAS --yes")),
+        2
+    );
+    assert_eq!(
+        run(
+            place,
+            w.args(0x11, "dutch --token TST --side sell --amount 1TST --price 3KAS --price-end 2KAS --duration 1m --slice 1TST --yes")
+        ),
+        2
+    );
+    // close against an empty book: no bids to sell into
+    assert_eq!(run(place, w.args(0x11, "close --token TST --yes")), 1);
+    assert_eq!(w.submitted(), 6);
+}
+
+#[test]
 fn replace_amends_in_place_or_cancel_replaces() {
     let maker = pk(0x11);
     let cov = [0xa1; 32];

@@ -1,4 +1,4 @@
-//! `kob place <kind>`: a new order, planned exactly like the web wallet's order ticket (`plan.rs`).
+//! `kob place <kind>`: a new order, planned exactly like the web wallet's order ticket (`plan.rs`, `plan_pair.rs`).
 
 use kob_protocol::json::to_hex;
 use kob_protocol::state::AnyState;
@@ -9,8 +9,8 @@ use super::flow::{finish, Ready};
 use super::market::{self, TokenMarket};
 use super::opts::{parse, Common, Parsed, COMMON_HELP};
 use super::plan::{
-    plan_order, Activation, CondIntent, CondKind, Crossing, Env, IfdIntent, ImmediateIntent, Intent, Lifetime, LimitIntent,
-    MarketIntent, PairPart, Plan, Side,
+    plan_order, Activation, CloseIntent, CondIntent, CondKind, Crossing, DutchIntent, Env, IfdIntent, IfdMore, ImmediateIntent,
+    Intent, Lifetime, LimitIntent, MarketIntent, PairPart, Plan, ScheduleIntent, Side, StopKnobs, StreamingIntent, Trail,
 };
 use super::show::Units;
 use super::units::{
@@ -22,20 +22,38 @@ pub const USAGE: &str = "\
 kob place: place a new order (the web wallet's planner: same defaults, same checks, same transaction)
 
 USAGE
-  kob place <KIND> --token TOKEN --side buy|sell --amount AMOUNT [options]
+  kob place <KIND> --token TOKEN [--quote TOKEN_B] --side buy|sell --amount AMOUNT [options]
 
 KINDS
   limit          --price P [--gtd WHEN | --day] [--active-from WHEN] [--crossing auction|limit|reject] [--max-fills N]
   ioc | fok      --price P [--life DURATION] [--active-from WHEN]
   market         [--slippage BPS] [--all-or-nothing]          an IOC auction from the best price to the bound
+  streaming      --displayed-price P --tolerance BPS [--all-or-nothing]
+                                                              an IOC auction from the price you saw, within your tolerance
+  close          [--amount AMOUNT] [--slippage BPS] [--all-or-nothing]
+                                                              a market sell of the held tokens (no --amount: all of them)
+  twap | dca     --price P --slice AMOUNT --interval DURATION [--price-end P [--slice-auction DURATION]]
+                 [--gtd WHEN | --day] [--active-from WHEN] [dca: --max-fills N]
+                                                              twap sells, dca buys (--side may be left out)
+  dutch          --price P --price-end P --duration DURATION [--step DURATION] [--gtd WHEN | --day] [--active-from WHEN]
+                                                              sell: a decaying price; buy: a rising bid
   stop-market    --stop P [--slippage BPS]
   stop-limit     --stop P --limit P
+  trailing-stop  --stop P --trail-step P --trail-gap P [--trail-wait DURATION] [--trail-updates N] [--take-profit P]
+                 [--slippage BPS]
   take-profit    --take-profit P
   oco            --take-profit P --stop P [--limit P]
+                 every stop: [--min-touch AMOUNT] [--band DURATION] [--keeper-tip KAS] [--min-rest DURATION]
   ifd            --price P (the entry) and --take-profit P or --stop P (the exit); --side is the entry's side:
                  buy = buy first and sell the exit later, sell = sell first and buy back; [--prefund P] (sell first)
   ifo            as ifd with both --take-profit and --stop
-  pair-limit     --quote TOKEN_B --price P (B per whole TOKEN) [same options as limit]
+  repeat-ifd     as ifd with --take-profit only: the entry re-arms after every take-profit [--repeat-count K] (none:
+  repeat-ifo     unlimited within the 90-day bound); repeat-ifo adds the --stop that ends the repeat
+                 if-done options: [--entry-stop P] (a stop entry), [--limit P] (the exit stop-limit), [--exit-tip T],
+                 [--exit-min-fill AMOUNT] [--exit-min-touch AMOUNT] [--exit-slippage BPS], a trailing exit stop with
+                 --trail-step P --trail-gap P [--trail-wait DURATION] [--trail-updates N]
+  pair-limit     limit with --quote TOKEN_B (every kind takes --quote: the order trades TOKEN for TOKEN_B, a KobPair /
+                 KobCondPair / KobIfdPair; prices are TOKEN_B per whole TOKEN, the tips stay KAS)
 
 AMOUNTS (always with a unit; never rounded)
   AMOUNT         12.5TUSD or 12.5tok (whole tokens, up to the token's decimals), 1250000000base (base units)
@@ -49,7 +67,7 @@ AMOUNTS (always with a unit; never rounded)
 
 SAFETY
   --ack-no-guards       place even when the indexer could not answer for the self-trade / book checks
-  --ack-market-start    accept a market auction start the CLI cannot check against an independent reference
+  --ack-market-start    accept a market / close auction start the CLI cannot check against an independent reference
   GTC orders end after 90 days idle (renew with `kob replace <id> --renew`).
 
 ";
@@ -75,19 +93,96 @@ const VALUE_FLAGS: &[&str] = &[
     "--exit-tip",
     "--prefund",
     "--carrier",
+    "--displayed-price",
+    "--tolerance",
+    "--slice",
+    "--interval",
+    "--price-end",
+    "--slice-auction",
+    "--duration",
+    "--step",
+    "--trail-step",
+    "--trail-gap",
+    "--trail-wait",
+    "--trail-updates",
+    "--band",
+    "--keeper-tip",
+    "--min-rest",
+    "--entry-stop",
+    "--exit-min-fill",
+    "--exit-min-touch",
+    "--exit-slippage",
+    "--repeat-count",
 ];
 const BOOL_FLAGS: &[&str] = &["--day", "--all-or-nothing", "--ack-no-guards", "--ack-market-start"];
+
+/// Options every kind takes.
+const ANY_KIND: &[&str] = &["--token", "--quote", "--side", "--amount", "--tip", "--carrier", "--ack-no-guards", "--ack-market-start"];
+const LIFE: &[&str] = &["--gtd", "--day", "--active-from"];
+const STOP_KNOBS: &[&str] = &["--min-touch", "--band", "--keeper-tip", "--min-rest"];
+const TRAIL: &[&str] = &["--trail-step", "--trail-gap", "--trail-wait", "--trail-updates"];
+
+/// The kind-specific options a kind takes (besides [`ANY_KIND`]).
+fn kind_flags(kind: &str) -> Option<Vec<&'static str>> {
+    let v = |xs: &[&[&'static str]]| Some(xs.concat());
+    match kind {
+        "limit" | "pair-limit" => v(&[&["--price", "--min-fill", "--crossing", "--max-fills"], LIFE]),
+        "ioc" | "fok" => v(&[&["--price", "--min-fill", "--life", "--active-from"]]),
+        "market" => v(&[&["--min-fill", "--slippage", "--all-or-nothing"]]),
+        "streaming" => v(&[&["--min-fill", "--displayed-price", "--tolerance", "--all-or-nothing"]]),
+        "close" => v(&[&["--slippage", "--all-or-nothing"]]),
+        "twap" => v(&[&["--price", "--min-fill", "--slice", "--interval", "--price-end", "--slice-auction"], LIFE]),
+        "dca" => v(&[&["--price", "--min-fill", "--slice", "--interval", "--price-end", "--slice-auction", "--max-fills"], LIFE]),
+        "dutch" => v(&[&["--price", "--min-fill", "--price-end", "--duration", "--step", "--max-fills"], LIFE]),
+        "stop-market" => v(&[&["--stop", "--min-fill", "--slippage", "--max-fills"], STOP_KNOBS, LIFE]),
+        "stop-limit" => v(&[&["--stop", "--limit", "--min-fill", "--max-fills"], STOP_KNOBS, LIFE]),
+        "trailing-stop" => v(&[&["--stop", "--take-profit", "--min-fill", "--slippage", "--max-fills"], TRAIL, STOP_KNOBS, LIFE]),
+        "take-profit" => v(&[&["--take-profit", "--min-fill", "--max-fills"], LIFE]),
+        "oco" => v(&[&["--take-profit", "--stop", "--limit", "--min-fill", "--slippage", "--max-fills"], STOP_KNOBS, LIFE]),
+        "ifd" | "ifo" | "repeat-ifd" | "repeat-ifo" => v(&[
+            &[
+                "--price",
+                "--min-fill",
+                "--take-profit",
+                "--stop",
+                "--limit",
+                "--exit-tip",
+                "--prefund",
+                "--entry-stop",
+                "--exit-min-fill",
+                "--exit-min-touch",
+                "--exit-slippage",
+            ],
+            TRAIL,
+            LIFE,
+            if kind.starts_with("repeat-") { &["--repeat-count"] } else { &[] },
+        ]),
+        _ => None,
+    }
+}
 
 /// The least carrier `--carrier` accepts: a token or order output carries a covenant id (KIP-9 storage plurality 2), so
 /// below 0.08 KAS its storage mass alone exceeds the block limit.
 pub const MIN_CARRIER: u64 = 8_000_000;
 
-fn side_of(p: &Parsed) -> Result<Side, String> {
-    match p.get("--side") {
-        Some("buy") => Ok(Side::Buy),
-        Some("sell") => Ok(Side::Sell),
-        Some(o) => Err(format!("--side must be buy or sell, got `{o}`")),
-        None => Err("--side buy|sell is required".into()),
+/// The side of `kind`: `--side`, or the side a kind implies (close and twap sell, dca buys).
+pub fn side_for(kind: &str, p: &Parsed) -> Result<Side, String> {
+    let fixed = match kind {
+        "close" | "twap" => Some(Side::Sell),
+        "dca" => Some(Side::Buy),
+        _ => None,
+    };
+    let given = match p.get("--side") {
+        Some("buy") => Some(Side::Buy),
+        Some("sell") => Some(Side::Sell),
+        Some(o) => return Err(format!("--side must be buy or sell, got `{o}`")),
+        None => None,
+    };
+    match (fixed, given) {
+        (Some(f), Some(g)) if f != g => Err(format!("{kind} is a {} order (--side {} does not apply)", f.name(), g.name())),
+        (Some(f), _) => Ok(f),
+        (None, Some(g)) => Ok(g),
+        (None, None) => Err("--side buy|sell is required".into()),
     }
 }
 
@@ -112,12 +207,33 @@ fn activation_of(p: &Parsed) -> Result<Option<Activation>, String> {
     }))
 }
 
+/// The kind is known, takes every option given, and has its side.
+pub fn check_flags(kind: &str, p: &Parsed) -> Result<Side, String> {
+    let Some(allowed) = kind_flags(kind) else { return Err(format!("unknown order kind `{kind}` (see `kob place --help`)")) };
+    for k in VALUE_FLAGS.iter().chain(BOOL_FLAGS) {
+        if (p.vals.contains_key(*k) || p.has(k)) && !ANY_KIND.contains(k) && !allowed.contains(k) {
+            return Err(format!("{k} does not apply to {kind}"));
+        }
+    }
+    if kind == "pair-limit" && p.get("--quote").is_none() {
+        return Err("pair-limit needs --quote TOKEN_B".into());
+    }
+    side_for(kind, p)
+}
+
 /// The intent of `kind` from the arguments (`quote`: a pair's B).
 pub fn intent_of(kind: &str, p: &Parsed, m: &TokenMarket, quote: Option<&TokenMarket>) -> Result<Intent, String> {
-    let side = side_of(p)?;
+    let side = check_flags(kind, p)?;
+    if kind == "pair-limit" && quote.is_none() {
+        return Err("pair-limit needs --quote TOKEN_B".into());
+    }
     let unit = m.unit();
-    let amount = parse_token_amount(p.get("--amount").ok_or("--amount is required")?, &unit, "--amount")?;
-    let opt_amount = |k: &str| p.get(k).map(|v| parse_token_amount(v, &unit, k)).transpose();
+    let amount_of = |k: &str| p.get(k).map(|v| parse_token_amount(v, &unit, k)).transpose();
+    let amount = match amount_of("--amount")? {
+        Some(a) => a,
+        None if kind == "close" => 0,
+        None => return Err("--amount is required".into()),
+    };
     let price_of = |k: &str| -> Result<Option<i64>, String> {
         match (p.get(k), quote) {
             (None, _) => Ok(None),
@@ -125,50 +241,49 @@ pub fn intent_of(kind: &str, p: &Parsed, m: &TokenMarket, quote: Option<&TokenMa
             (Some(v), None) => parse_kas_price(v, &unit, m.scale, k, false).map(Some),
         }
     };
+    let delta_of = |k: &str| -> Result<Option<i64>, String> {
+        match (p.get(k), quote) {
+            (None, _) => Ok(None),
+            (Some(v), Some(b)) => parse_pair_price(v, &unit, m.scale, &b.unit(), k).map(Some),
+            (Some(v), None) => parse_kas_price(v, &unit, m.scale, k, true).map(Some),
+        }
+    };
     let need = |k: &str| -> Result<i64, String> { price_of(k)?.ok_or_else(|| format!("{kind} needs {k}")) };
     let tip_of = |k: &str| -> Result<i64, String> {
         p.get(k).map(|v| parse_kas_price(v, &unit, m.scale, k, true)).transpose().map(Option::unwrap_or_default)
     };
+    let int_of = |k: &str| -> Result<Option<i64>, String> {
+        p.get(k).map(|v| v.parse::<i64>().map_err(|_| format!("{k} must be an integer, got `{v}`"))).transpose()
+    };
+    let dur_of = |k: &str| p.get(k).map(|v| parse_duration_daa(v, k)).transpose();
+    let bps_of = |k: &str| p.get(k).map(|v| parse_bps(v, k)).transpose();
     let tip = tip_of("--tip")?;
-    let min_fill = opt_amount("--min-fill")?;
-    let max_fills = p
-        .get("--max-fills")
-        .map(|v| v.parse::<i64>().map_err(|_| format!("--max-fills must be an integer, got `{v}`")))
-        .transpose()?;
+    let min_fill = amount_of("--min-fill")?;
+    let max_fills = int_of("--max-fills")?;
     let crossing = match p.get("--crossing") {
         None | Some("auction") => Crossing::Auction,
         Some("limit") => Crossing::Limit,
         Some("reject") => Crossing::Reject,
         Some(o) => return Err(format!("--crossing must be auction, limit or reject, got `{o}`")),
     };
-    let slip = p.get("--slippage").map(|v| parse_bps(v, "--slippage")).transpose()?;
-    let unused = |ks: &[&str]| -> Result<(), String> {
-        for k in ks {
-            if p.vals.contains_key(*k) || p.has(k) {
-                return Err(format!("{k} does not apply to {kind}"));
-            }
-        }
-        Ok(())
+    let slip = bps_of("--slippage")?;
+    let knobs = StopKnobs {
+        band_daa: dur_of("--band")?,
+        keeper_tip: p.get("--keeper-tip").map(|v| parse_kas(v, "--keeper-tip", true).map(|x| x as i64)).transpose()?,
+        min_rest: dur_of("--min-rest")?,
     };
-    if quote.is_some() && kind != "pair-limit" {
-        return Err("--quote applies to pair-limit only".into());
-    }
-    let limit = |i: Option<LimitIntent>| -> Result<LimitIntent, String> {
-        if let Some(i) = i {
-            return Ok(i);
+    let trail = match (delta_of("--trail-step")?, delta_of("--trail-gap")?) {
+        (None, None) => {
+            if p.get("--trail-wait").is_some() || p.get("--trail-updates").is_some() {
+                return Err("--trail-wait / --trail-updates need --trail-step and --trail-gap".into());
+            }
+            None
         }
-        unused(&[
-            "--life",
-            "--slippage",
-            "--stop",
-            "--limit",
-            "--take-profit",
-            "--min-touch",
-            "--exit-tip",
-            "--prefund",
-            "--all-or-nothing",
-        ])?;
-        Ok(LimitIntent {
+        (Some(step), Some(gap)) => Some(Trail { step, gap, wait: dur_of("--trail-wait")?, updates: int_of("--trail-updates")? }),
+        _ => return Err("a trailing stop needs both --trail-step and --trail-gap".into()),
+    };
+    Ok(match kind {
+        "limit" | "pair-limit" => Intent::Limit(LimitIntent {
             side,
             amount,
             price: need("--price")?,
@@ -178,65 +293,74 @@ pub fn intent_of(kind: &str, p: &Parsed, m: &TokenMarket, quote: Option<&TokenMa
             active_from: activation_of(p)?,
             crossing,
             max_fills,
-        })
-    };
-    Ok(match kind {
-        "limit" => Intent::Limit(limit(None)?),
-        "pair-limit" => {
-            if quote.is_none() {
-                return Err("pair-limit needs --quote TOKEN_B".into());
-            }
-            Intent::PairLimit(limit(None)?)
-        }
-        "ioc" | "fok" => {
-            unused(&[
-                "--gtd",
-                "--day",
-                "--crossing",
-                "--max-fills",
-                "--slippage",
-                "--stop",
-                "--limit",
-                "--take-profit",
-                "--prefund",
-                "--exit-tip",
-            ])?;
-            Intent::Immediate(ImmediateIntent {
-                fok: kind == "fok",
-                side,
-                amount,
-                price: need("--price")?,
-                tip,
-                min_fill,
-                life_daa: p.get("--life").map(|v| parse_duration_daa(v, "--life")).transpose()?,
-                active_from: activation_of(p)?,
-            })
-        }
+        }),
+        "ioc" | "fok" => Intent::Immediate(ImmediateIntent {
+            fok: kind == "fok",
+            side,
+            amount,
+            price: need("--price")?,
+            tip,
+            min_fill,
+            life_daa: dur_of("--life")?,
+            active_from: activation_of(p)?,
+        }),
         "market" => {
-            unused(&[
-                "--price",
-                "--gtd",
-                "--day",
-                "--crossing",
-                "--max-fills",
-                "--life",
-                "--stop",
-                "--limit",
-                "--take-profit",
-                "--prefund",
-                "--exit-tip",
-                "--active-from",
-            ])?;
             Intent::Market(MarketIntent { side, amount, tip, min_fill, slippage_bps: slip, all_or_nothing: p.has("--all-or-nothing") })
         }
-        "stop-market" | "stop-limit" | "take-profit" | "oco" => {
-            unused(&["--price", "--crossing", "--life", "--prefund", "--exit-tip", "--all-or-nothing"])?;
+        "streaming" => Intent::Streaming(StreamingIntent {
+            side,
+            amount,
+            tip,
+            min_fill,
+            displayed_price: need("--displayed-price")?,
+            tolerance_bps: bps_of("--tolerance")?
+                .ok_or("streaming needs --tolerance BPS (what you accept beyond the displayed price)")?,
+            all_or_nothing: p.has("--all-or-nothing"),
+        }),
+        "close" => Intent::Close(CloseIntent {
+            amount: (amount > 0).then_some(amount),
+            tip,
+            slippage_bps: slip,
+            all_or_nothing: p.has("--all-or-nothing"),
+        }),
+        "twap" | "dca" => Intent::Schedule(ScheduleIntent {
+            dca: kind == "dca",
+            amount,
+            tip,
+            min_fill,
+            slice: amount_of("--slice")?.ok_or_else(|| format!("{kind} needs --slice AMOUNT"))?,
+            interval_daa: dur_of("--interval")?.ok_or_else(|| format!("{kind} needs --interval DURATION"))?,
+            price: need("--price")?,
+            price_end: price_of("--price-end")?,
+            slice_auction_daa: dur_of("--slice-auction")?,
+            lifetime: lifetime_of(p)?,
+            active_from: activation_of(p)?,
+            max_fills,
+        }),
+        "dutch" => Intent::Dutch(DutchIntent {
+            side,
+            amount,
+            tip,
+            min_fill,
+            price: need("--price")?,
+            price_end: need("--price-end")?,
+            duration_daa: dur_of("--duration")?.ok_or("dutch needs --duration DURATION")?,
+            step_daa: dur_of("--step")?,
+            lifetime: lifetime_of(p)?,
+            active_from: activation_of(p)?,
+            max_fills,
+        }),
+        "stop-market" | "stop-limit" | "take-profit" | "oco" | "trailing-stop" => {
             let k = match kind {
                 "stop-market" => CondKind::StopMarket,
                 "stop-limit" => CondKind::StopLimit,
                 "take-profit" => CondKind::TakeProfit,
+                "trailing-stop" => CondKind::Trailing,
                 _ => CondKind::Oco,
             };
+            if k == CondKind::Trailing && trail.is_none() {
+                return Err("trailing-stop needs --trail-step P and --trail-gap P".into());
+            }
             Intent::Cond(CondIntent {
                 kind: k,
                 side,
@@ -247,25 +371,37 @@ pub fn intent_of(kind: &str, p: &Parsed, m: &TokenMarket, quote: Option<&TokenMa
                 limit: price_of("--limit")?,
                 take_profit: price_of("--take-profit")?,
                 slip_bps: slip,
-                min_touch: opt_amount("--min-touch")?,
+                min_touch: amount_of("--min-touch")?,
                 lifetime: lifetime_of(p)?,
                 active_from: activation_of(p)?,
                 max_fills,
+                trail,
+                knobs,
             })
         }
-        "ifd" | "ifo" => {
-            unused(&["--crossing", "--life", "--slippage", "--max-fills", "--all-or-nothing", "--min-touch"])?;
+        _ => {
+            // ifd, ifo, repeat-ifd, repeat-ifo
             let (tp, stop) = (price_of("--take-profit")?, price_of("--stop")?);
             match (kind, tp.is_some(), stop.is_some()) {
                 ("ifd", true, true) | ("ifd", false, false) => {
                     return Err("ifd needs exactly one exit leg: --take-profit or --stop (both: ifo)".into())
                 }
-                ("ifo", a, b) if !(a && b) => return Err("ifo needs both --take-profit and --stop".into()),
+                ("ifo" | "repeat-ifo", a, b) if !(a && b) => return Err(format!("{kind} needs both --take-profit and --stop")),
+                ("repeat-ifd", a, b) if !a || b => return Err("repeat-ifd needs --take-profit only (with a stop: repeat-ifo)".into()),
                 _ => {}
+            }
+            if trail.is_some() && stop.is_none() {
+                return Err("a trailing exit needs an exit --stop".into());
             }
             if p.get("--prefund").is_some() && side == Side::Buy {
                 return Err("--prefund applies to a sell-first entry only".into());
             }
+            let prefund = match (p.get("--prefund"), quote) {
+                (None, _) => None,
+                (Some(v), Some(b)) => Some(parse_pair_price(v, &unit, m.scale, &b.unit(), "--prefund")?),
+                (Some(v), None) => Some(parse_kas_price(v, &unit, m.scale, "--prefund", true)?),
+            };
+            let repeat = if kind.starts_with("repeat-") { Some(int_of("--repeat-count")?) } else { None };
             Intent::Ifd(IfdIntent {
                 side,
                 amount,
@@ -276,12 +412,20 @@ pub fn intent_of(kind: &str, p: &Parsed, m: &TokenMarket, quote: Option<&TokenMa
                 stop,
                 stop_limit: price_of("--limit")?,
                 exit_tip: tip_of("--exit-tip")?,
-                prefund: p.get("--prefund").map(|v| parse_kas_price(v, &unit, m.scale, "--prefund", true)).transpose()?,
+                prefund,
                 lifetime: lifetime_of(p)?,
                 active_from: activation_of(p)?,
+                more: IfdMore {
+                    entry_stop: price_of("--entry-stop")?,
+                    exit_slip_bps: bps_of("--exit-slippage")?,
+                    exit_min_touch: amount_of("--exit-min-touch")?,
+                    exit_trail: trail,
+                    exit_min_fill: amount_of("--exit-min-fill")?,
+                    repeat,
+                    ..Default::default()
+                },
             })
         }
-        other => return Err(format!("unknown order kind `{other}` (see `kob place --help`)")),
     })
 }
 
@@ -374,7 +518,7 @@ pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> 
 }
 
 /// The planning environment of `kob place`, read from the node and the indexer.
-pub fn env_for(c: &Common, p: &Parsed, maker: [u8; 32]) -> Result<(Env, TokenMarket, Option<TokenMarket>), String> {
+pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<(Env, TokenMarket, Option<TokenMarket>), String> {
     let node = c.need_node()?.to_string();
     let indexer = c.need_indexer()?.to_string();
     let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(&indexer))?;
@@ -385,7 +529,8 @@ pub fn env_for(c: &Common, p: &Parsed, maker: [u8; 32]) -> Result<(Env, TokenMar
     };
     let clock = data::clock(&node)?;
     let funding = data::funding(&node, &c.network, &maker)?;
-    let side = side_of(p)?;
+    let side = side_for(kind, p)?;
+    let if_done = matches!(kind, "ifd" | "ifo" | "repeat-ifd" | "repeat-ifo");
     let mut guards = vec![];
     let carrier = match p.get("--carrier") {
         Some(v) => {
@@ -445,13 +590,21 @@ pub fn env_for(c: &Common, p: &Parsed, maker: [u8; 32]) -> Result<(Env, TokenMar
                 guards.push("own-orders".to_string());
                 vec![]
             });
-            let kas_a =
-                data::book(&indexer, &a)
+            let kas_of = |m: &TokenMarket| {
+                data::book(&indexer, m)
                     .ok()
-                    .and_then(|bk| data::firm_reference(&bk, a.scale))
-                    .or(data::last_fill(&indexer, &a).ok().flatten());
-            let quote_utxos = if side == Side::Buy { data::token_utxos(&indexer, &node, &c.network, bm, &maker)? } else { vec![] };
-            (book, own, None, Some(PairPart { quote: bm.clone(), quote_utxos, kas_per_whole_a: kas_a }))
+                    .and_then(|bk| data::firm_reference(&bk, m.scale))
+                    .or(data::last_fill(&indexer, m).ok().flatten())
+            };
+            // a pair buy holds B; a sell-first pair entry holds a B prefund
+            let quote_utxos =
+                if side == Side::Buy || if_done { data::token_utxos(&indexer, &node, &c.network, bm, &maker)? } else { vec![] };
+            (
+                book,
+                own,
+                None,
+                Some(PairPart { quote: bm.clone(), quote_utxos, kas_per_whole_a: kas_of(&a), kas_per_whole_b: kas_of(bm) }),
+            )
         }
     };
     Ok((
@@ -530,7 +683,8 @@ pub fn run(args: &[String]) -> i32 {
     let step = || -> Result<Planned, (i32, String)> {
         let c = Common::from(&p).map_err(|e| (2, e))?;
         let signer = c.signer(args).map_err(|e| (2, e))?;
-        let (env, a, b) = env_for(&c, &p, signer.pubkey).map_err(|e| (1, e))?;
+        check_flags(&kind, &p).map_err(|e| (2, e))?;
+        let (env, a, b) = env_for(&c, &p, &kind, signer.pubkey).map_err(|e| (1, e))?;
         let intent = intent_of(&kind, &p, &a, b.as_ref()).map_err(|e| (2, e))?;
         let mut plan = plan_order(&env, &intent);
         // a registry token that is not tradable is refused, an unlisted one flagged (`web/src/kob/decode.ts` token-unlisted)
@@ -547,7 +701,7 @@ pub fn run(args: &[String]) -> i32 {
             return code;
         }
     };
-    let side = p.get("--side").unwrap_or("");
+    let side = side_for(&kind, &p).map(Side::name).unwrap_or("");
     let title = format!("place {kind} {side} {}{}", a.name(), b.as_ref().map(|b| format!(" for {}", b.name())).unwrap_or_default());
     match ready(&plan, title, &a, b.as_ref()) {
         Some(r) if plan.ok || plan.built.is_some() => finish(&c, &signer, r, &units_of(&a, b.as_ref()), "this order"),

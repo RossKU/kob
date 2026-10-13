@@ -18,50 +18,50 @@ use serde_json::Value;
 use super::market::TokenMarket;
 use super::plan::*;
 
-const KAS: i64 = 100_000_000;
-const TOK: i64 = 1000;
-const C: i64 = 1_000_000_000;
-const GTC: i64 = 1_000_000 + MAX_IDLE_DAA;
-const MAKER_SK: [u8; 32] = [0x11; 32];
+pub(super) const KAS: i64 = 100_000_000;
+pub(super) const TOK: i64 = 1000;
+pub(super) const C: i64 = 1_000_000_000;
+pub(super) const GTC: i64 = 1_000_000 + MAX_IDLE_DAA;
+pub(super) const MAKER_SK: [u8; 32] = [0x11; 32];
 
-fn maker() -> [u8; 32] {
+pub(super) fn maker() -> [u8; 32] {
     pubkey_of(&MAKER_SK).unwrap()
 }
 
-fn market(p: TemplateId) -> TokenMarket {
+pub(super) fn market(p: TemplateId) -> TokenMarket {
     let ext = (p.family() == kob_protocol::Family::Kcc20).then_some([0xee; 32]);
     TokenMarket::new([0x70; 32], "TST", 3, p, ext, Some(100)).unwrap()
 }
 
-fn markets() -> Vec<TokenMarket> {
+pub(super) fn markets() -> Vec<TokenMarket> {
     vec![market(TemplateId::Kcc20Ref), market(TemplateId::Kcc20Ref8x8), market(TemplateId::KronToken2433)]
 }
 
-fn txid(n: u8) -> [u8; 32] {
+pub(super) fn txid(n: u8) -> [u8; 32] {
     let mut t = [0u8; 32];
     t[31] = n;
     t
 }
 
-fn key_utxo(n: u8, amount: i64) -> KeyUtxo {
+pub(super) fn key_utxo(n: u8, amount: i64) -> KeyUtxo {
     KeyUtxo {
         utxo: Utxo { transaction_id: txid(n), index: 0, amount: amount as u64, block_daa_score: 500, covenant_id: None },
         pubkey: maker(),
     }
 }
 
-fn token_utxo(m: &TokenMarket, n: u8, amount: i64) -> TokenUtxo {
+pub(super) fn token_utxo(m: &TokenMarket, n: u8, amount: i64) -> TokenUtxo {
     TokenUtxo {
         utxo: Utxo { transaction_id: txid(n), index: 1, amount: 10 * KAS as u64, block_daa_score: 500, covenant_id: Some(m.cov) },
         state: TokenState::user(m.family, amount, maker(), m.ext),
     }
 }
 
-fn level(price: i64, amount: i64, orders: i64) -> Level {
+pub(super) fn level(price: i64, amount: i64, orders: i64) -> Level {
     Level { price, amount, orders, tip: 0 }
 }
 
-fn default_book() -> Book {
+pub(super) fn default_book() -> Book {
     Book {
         asks: vec![level(250_000_000, 5 * TOK, 2), level(252_000_000, 10 * TOK, 3), level(260_000_000, 20 * TOK, 4)],
         bids: vec![level(245_000_000, 5 * TOK, 1), level(243_000_000, 10 * TOK, 2), level(240_000_000, 20 * TOK, 3)],
@@ -70,9 +70,9 @@ fn default_book() -> Book {
     }
 }
 
-const CLOCK: Clock = Clock { daa: 1_000_000, unix: 1_790_694_000, rate_milli: 10_000 };
+pub(super) const CLOCK: Clock = Clock { daa: 1_000_000, unix: 1_790_694_000, rate_milli: 10_000 };
 
-fn env(m: &TokenMarket) -> Env {
+pub(super) fn env(m: &TokenMarket) -> Env {
     Env {
         market: m.clone(),
         maker: maker(),
@@ -92,7 +92,7 @@ fn env(m: &TokenMarket) -> Env {
 }
 
 /// Plans, expects success, signs, finalizes, validates in the engine and recovers the placement record.
-fn valid(e: &Env, i: Intent) -> Plan {
+pub(super) fn valid(e: &Env, i: Intent) -> Plan {
     let p = plan_order(e, &i);
     let errs: Vec<&Issue> = p.issues.iter().filter(|x| x.severity == Severity::Error).collect();
     assert!(errs.is_empty() && p.ok, "{errs:?}");
@@ -111,24 +111,24 @@ fn valid(e: &Env, i: Intent) -> Plan {
     p
 }
 
-fn codes(p: &Plan) -> Vec<&'static str> {
+pub(super) fn codes(p: &Plan) -> Vec<&'static str> {
     p.issues.iter().map(|i| i.code).collect()
 }
 
-fn ask(p: &Plan) -> kob_protocol::state::AskState {
+pub(super) fn ask(p: &Plan) -> kob_protocol::state::AskState {
     match &p.states[0] {
         AnyState::KobAsk(s) | AnyState::KobAskKron(s) => s.clone(),
         o => panic!("not an ask: {o:?}"),
     }
 }
-fn bid(p: &Plan) -> kob_protocol::state::BidState {
+pub(super) fn bid(p: &Plan) -> kob_protocol::state::BidState {
     match &p.states[0] {
         AnyState::KobBid(s) | AnyState::KobBidKron(s) => s.clone(),
         o => panic!("not a bid: {o:?}"),
     }
 }
 
-fn limit(side: Side, amount: i64, price: i64) -> LimitIntent {
+pub(super) fn limit(side: Side, amount: i64, price: i64) -> LimitIntent {
     LimitIntent {
         side,
         amount,
@@ -142,7 +142,7 @@ fn limit(side: Side, amount: i64, price: i64) -> LimitIntent {
     }
 }
 
-fn golden(name: &str) -> (AnyState, u64) {
+pub(super) fn golden(name: &str) -> (AnyState, u64) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../kob-protocol/vectors/golden.json");
     let g: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let t = g["transactions"].as_array().unwrap().iter().find(|t| t["name"] == name).unwrap();
@@ -394,7 +394,7 @@ fn market_orders_equal_the_golden_vectors() {
     assert!(!p.ok && codes(&p).contains(&"MARKET_START_VS_LAST_FILL"));
 }
 
-fn cond(kind: CondKind, side: Side, amount: i64) -> CondIntent {
+pub(super) fn cond(kind: CondKind, side: Side, amount: i64) -> CondIntent {
     CondIntent {
         kind,
         side,
@@ -409,6 +409,8 @@ fn cond(kind: CondKind, side: Side, amount: i64) -> CondIntent {
         lifetime: Lifetime::Gtc,
         active_from: None,
         max_fills: None,
+        trail: None,
+        knobs: StopKnobs::default(),
     }
 }
 
@@ -488,7 +490,7 @@ fn stops_take_profit_and_oco_like_the_web_planner() {
         .contains(&"STOP_EVIDENCE_GENESIS_UNVERIFIED"));
 }
 
-fn ifd(side: Side, price: i64, tp: Option<i64>, stop: Option<i64>) -> IfdIntent {
+pub(super) fn ifd(side: Side, price: i64, tp: Option<i64>, stop: Option<i64>) -> IfdIntent {
     IfdIntent {
         side,
         amount: 10 * TOK,
@@ -502,6 +504,7 @@ fn ifd(side: Side, price: i64, tp: Option<i64>, stop: Option<i64>) -> IfdIntent 
         prefund: None,
         lifetime: Lifetime::Gtc,
         active_from: None,
+        more: IfdMore::default(),
     }
 }
 
@@ -549,10 +552,11 @@ fn pair_limits_equal_the_golden_vectors() {
                 quote: b.clone(),
                 quote_utxos: vec![token_utxo(&b, 3, 1_000_000 * 1000)],
                 kas_per_whole_a: Some(3 * KAS),
+                kas_per_whole_b: None,
             }),
             ..env(&a)
         };
-        let p = valid(&e, Intent::PairLimit(LimitIntent { min_fill: Some(1_000), max_fills: Some(9), ..limit(side, 10_000, 1_000) }));
+        let p = valid(&e, Intent::Limit(LimitIntent { min_fill: Some(1_000), max_fills: Some(9), ..limit(side, 10_000, 1_000) }));
         let (AnyState::KobPair(g), gv) = golden(name) else { panic!() };
         let AnyState::KobPair(s) = &p.states[0] else { panic!() };
         // equal but for what the vector fixes differently: maker, expiry, decay step; the escrow is the floor plus one unit

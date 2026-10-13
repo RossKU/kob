@@ -12,6 +12,7 @@ pub mod market;
 pub mod opts;
 pub mod place;
 pub mod plan;
+pub mod plan_pair;
 pub mod show;
 pub mod units;
 
@@ -19,3 +20,5 @@ pub mod units;
 mod tests_e2e;
 #[cfg(test)]
 mod tests_plan;
+#[cfg(test)]
+mod tests_plan_kinds;
