@@ -534,7 +534,7 @@ export function IssueView() {
         </div>
       );
     }
-    return <p class="muted">{t('issue.review.fix')}</p>;
+    return <p class="muted" data-testid="issue-summary-empty">{t('issue.summary.empty')}</p>;
   }
 }
 

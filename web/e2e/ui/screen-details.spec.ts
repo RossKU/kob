@@ -170,3 +170,8 @@ test.describe('a token of 18 decimals', () => {
     expect(await noPageScroll(page)).toBe(true);
   });
 });
+
+test('the issue summary does not ask to fix fields before the form is filled', async ({ appPage: page }) => {
+  await page.goto('/#/issue');
+  await expect(page.getByTestId('issue-summary-empty')).toHaveText('The summary appears once the form is complete.');
+});
