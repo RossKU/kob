@@ -5,8 +5,8 @@
 //                 ladder's token and side, at its own price, the asks with the ladder's one size; the prices step away from the market.
 //   ladderCancel  cancelling one rung touches no other rung (no other rung has an event in the cancel's transaction).
 //   replace       a GTC renewal keeps every term of the order and only extends its expiry (expect = before but expiryDaa, which grows); a pair
-//                 amend keeps the pair, side, size, tip and minimum fill and takes the new price; on chain the replacement holds exactly
-//                 the planned terms (fills, arming and custody aside).
+//                 amend keeps the pair, side, size, tip and minimum fill and takes the new price (one that crosses the market: the crossing
+//                 auction's slope and end price); on chain the replacement holds exactly the planned terms (fills, arming and custody aside).
 //   cancel-all    every order of a cancel-all ends: cancelled, or spent by a fill that won the race; one still live at the very outpoint
 //                 the cancel spent after the grace period is reported (warn: the cancel neither landed nor lost a race).
 //   merge         a token merge ends in ONE output of the wallet holding exactly the inputs' total.
@@ -40,6 +40,16 @@ export const MUTABLE_FIELDS: ReadonlySet<string> = new Set(['amountLeft', 'custo
 /** what a pair amend keeps of the replaced order (PairState fields); its price is the new one */
 export const PAIR_AMEND_KEEPS = ['maker', 'side', 'sCovId', 'tCovId', 'sScale', 'tScale', 'tip', 'tif', 'minFill', 'amountLeft', 'slope', 'interval', 'maxFill'] as const;
 
+/**
+ * A plain resting pair limit (no slope) whose new price crosses the market by the time the amend is planned is planned as a crossing auction (the
+ * pair ticket's default `crossing: 'auction'`, as the app's Replace): from the touch to the new limit, so `slope` and `priceEnd` (and `activeFrom`)
+ * are set. That is the replacement's own shape at its new price, not a term the amend lost; a schedule (`interval`, `maxFill`) still must not change.
+ */
+export function becameCrossingAuction(before: Record<string, string>, expect: Record<string, string>): boolean {
+  const zero = (v: string | undefined) => v === undefined || String(v) === '0';
+  return zero(before.slope) && !zero(expect.slope) && !zero(expect.priceEnd);
+}
+
 /** fields of `a` and `b` (both present) that differ, `skip` left out */
 export function diffTerms(a: Record<string, string>, b: Record<string, string>, skip: ReadonlySet<string> = new Set()): string[] {
   const out: string[] = [];
@@ -65,7 +75,9 @@ export function checkPlannedReplacement(rec: ReplaceRecord): Violation | null {
     }
     return null;
   }
-  const changed = PAIR_AMEND_KEEPS.filter((k) => before[k] !== undefined && rec.expect[k] !== undefined && String(before[k]) !== String(rec.expect[k]));
+  const auction = becameCrossingAuction(before, rec.expect);
+  const changed = PAIR_AMEND_KEEPS.filter((k) => before[k] !== undefined && rec.expect[k] !== undefined && String(before[k]) !== String(rec.expect[k]))
+    .filter((k) => !(k === 'slope' && auction));
   if (changed.length) {
     return { invariant: INV.replace, severity: 'error', subject: `${rec.old.id}:amend-plan`, detail: { order: rec.old.id, txid: rec.txid, changed, problem: 'the pair amend changes the pair, side, size, tip or minimum fill' } };
   }

@@ -172,6 +172,20 @@ test('a pair amend plan keeps pair, side, size, tip and minimum fill', () => {
   assert.deepEqual((v?.detail as { changed: string[] }).changed, ['tCovId', 'amountLeft']);
 });
 
+test('a pair amend whose new price crosses the market is planned as a crossing auction: accepted (TN10 2026-10-14 B-10)', () => {
+  const pair = { maker: 'm', side: '2', sCovId: 'a', tCovId: 'b', sScale: '100', tScale: '100', tip: '3', tif: '0', minFill: '5', amountLeft: '50', price: '1000', slope: '0', priceEnd: '0', activeFrom: '0', interval: '0', maxFill: '0', expiryDaa: '10' };
+  const auction = { ...pair, price: '990', slope: '85571259', priceEnd: '1010', activeFrom: '595000000', expiryDaa: '12' };
+  const rec = renewRec({ kind: 'pairAmend', inPlace: false, id: NEW, before: pair, expect: auction });
+  assert.equal(checkPlannedReplacement(rec), null);
+  // a slope without an end price is no crossing auction; an order with a schedule must keep it; an auction that changes another kept term is still caught
+  assert.deepEqual((checkPlannedReplacement({ ...rec, expect: { ...auction, priceEnd: '0' } })?.detail as { changed: string[] }).changed, ['slope']);
+  assert.deepEqual((checkPlannedReplacement({ ...rec, expect: { ...auction, interval: '600' } })?.detail as { changed: string[] }).changed, ['interval']);
+  assert.deepEqual((checkPlannedReplacement({ ...rec, expect: { ...auction, tip: '4' } })?.detail as { changed: string[] }).changed, ['tip']);
+  // an order that was already an auction keeps its slope
+  const dutch = { ...pair, slope: '7', priceEnd: '900' };
+  assert.deepEqual((checkPlannedReplacement({ ...rec, before: dutch, expect: { ...dutch, slope: '8' } })?.detail as { changed: string[] }).changed, ['slope']);
+});
+
 test('the renewal on chain: planned terms (fills aside), superseded by a later amend, not landed, pending', () => {
   const rec = renewRec();
   const st = (s: Record<string, string>) => ({ kind: 'KobAsk', state: s });
