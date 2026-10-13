@@ -1009,10 +1009,15 @@ impl Facilitator {
                 if let Some(spent) = self.spent_orders(&orders).filter(|s| !s.is_empty()) {
                     // an order is gone: only a still-unaccepted transaction is dead (re-check to avoid the race
                     // in which our own acceptance consumed the order)
-                    return match self.check_final(&watch, required) {
-                        Ok(Some(daa)) => Observed::Final { accepted_daa: daa },
-                        _ => Observed::OrderConflict(spent),
-                    };
+                    if let Ok(Some(daa)) = self.check_final(&watch, required) {
+                        return Observed::Final { accepted_daa: daa };
+                    }
+                    // accepted but not yet `confirmationsDaa` deep (a `confirmed` payment): our own transaction consumed
+                    // the order, so keep waiting for the depth; only an unaccepted transaction lost the order (a node that
+                    // does not answer proves nothing either way: observe on)
+                    if let Ok(None) = self.accepted_daa(&watch.0, &watch.1) {
+                        return Observed::OrderConflict(spent);
+                    }
                 }
             }
             if rebroadcasts > 0 && !last && polls % 5 == 4 {

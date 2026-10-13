@@ -1013,6 +1013,34 @@ fn an_unspent_order_is_only_pending_and_our_own_acceptance_is_no_conflict() {
     assert!(s.success, "{s:?}");
 }
 
+/// A `confirmed` swap whose transaction is accepted but not yet `confirmationsDaa` deep: the orders it filled are gone from the
+/// UTXO set because OUR transaction spent them. That is pending (then success at the depth), never an order conflict that
+/// fails the entry while the merchant is paid.
+#[test]
+fn a_confirmed_payment_that_consumed_its_orders_is_pending_until_deep_not_a_conflict() {
+    let f = Fixture::new();
+    f.fac.set_settle_wait(Duration::from_millis(60));
+    let order = f.fund(300_000_000);
+    let payer_in = f.fund(300_000_000);
+    let (req, tx) = f.payment_with(&[order, payer_in], 100_000_000, ID1, 7, Finality::Confirmed);
+    *f.verifier.orders.lock().unwrap() = vec![order];
+    let miner = mine_later(&f.chain, 10, 0);
+    let s = f.fac.settle("shop", &req);
+    miner.join().unwrap();
+    assert!(f.chain.utxo(&order).is_none(), "accepted: the order is consumed by our own transaction");
+    assert!(!s.success);
+    assert_eq!(diag(&s), "settlement_pending", "{s:?}");
+    let e = f.ledger.get(&txid_hex(&tx)).unwrap();
+    assert_eq!(e.state, State::Broadcast);
+    assert!(f.ledger.is_consumed(&payer_in), "the inputs stay reserved");
+    // at the configured depth: settled
+    f.chain.advance_daa(100);
+    let s = f.fac.settle("shop", &req);
+    assert!(s.success, "{s:?}");
+    assert_eq!(s.extensions.as_ref().unwrap()["kaspa"]["finality"], "confirmed");
+    assert_eq!(f.chain.submit_count(), 1);
+}
+
 // -------------------------------------------------------------------------------------- kill switch etc.
 
 #[test]
