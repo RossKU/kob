@@ -69,9 +69,9 @@ export function BalancesPanel(props: {
             compact
             data-testid="kas-balance"
             items={[
-              { label: t('market.balances.kasFree'), value: free.data.kasFree !== null ? <Amount kind="kas" value={combined.kas.free} /> : t('common.unavailable'), 'data-testid': 'kas-free' },
-              { label: t('market.balances.kasLocked'), value: <Amount kind="kas" value={combined.kas.locked} />, 'data-testid': 'kas-locked' },
-              { label: t('common.total'), value: <Amount kind="kas" value={combined.kas.total} />, show: free.data.kasFree !== null },
+              { label: t('market.balances.kasFree'), value: free.data.kasFree !== null ? <Amount kind="kas" value={combined.kas.free} group /> : t('common.unavailable'), 'data-testid': 'kas-free' },
+              { label: t('market.balances.kasLocked'), value: <Amount kind="kas" value={combined.kas.locked} group />, 'data-testid': 'kas-locked' },
+              { label: t('common.total'), value: <Amount kind="kas" value={combined.kas.total} group />, show: free.data.kasFree !== null },
             ]}
           />
           <Table dense data-testid="token-balances-table" caption={t('orders.balances.tokens')}>

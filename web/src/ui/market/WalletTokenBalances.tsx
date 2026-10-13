@@ -40,11 +40,11 @@ export function WalletTokenBalances(props: { token: TokenInfo; refreshKey?: numb
           compact
           data-testid="token-balances"
           items={[
-            { label: t('market.balances.free'), value: <Amount kind="token" value={b?.free ?? 0n} decimals={d} unit={props.token.ticker} />, 'data-testid': 'balance-free' },
-            { label: t('market.balances.escrowed'), value: <Amount kind="token" value={b?.escrowed ?? 0n} decimals={d} unit={props.token.ticker} />, 'data-testid': 'balance-escrowed' },
-            { label: t('market.balances.strays'), value: <Amount kind="token" value={b?.strays ?? 0n} decimals={d} unit={props.token.ticker} />, 'data-testid': 'balance-strays', show: (b?.strays ?? 0n) > 0n },
-            { label: t('market.balances.kasFree'), value: st.data.kasKnown ? <Amount kind="kas" value={st.data.combined.kas.free} /> : t('common.unavailable'), 'data-testid': 'balance-kas-free' },
-            { label: t('market.balances.kasLocked'), value: <Amount kind="kas" value={b?.kasLocked ?? 0n} />, 'data-testid': 'balance-kas-locked' },
+            { label: t('market.balances.free'), value: <Amount kind="token" value={b?.free ?? 0n} decimals={d} unit={props.token.ticker} group />, 'data-testid': 'balance-free' },
+            { label: t('market.balances.escrowed'), value: <Amount kind="token" value={b?.escrowed ?? 0n} decimals={d} unit={props.token.ticker} group />, 'data-testid': 'balance-escrowed' },
+            { label: t('market.balances.strays'), value: <Amount kind="token" value={b?.strays ?? 0n} decimals={d} unit={props.token.ticker} group />, 'data-testid': 'balance-strays', show: (b?.strays ?? 0n) > 0n },
+            { label: t('market.balances.kasFree'), value: st.data.kasKnown ? <Amount kind="kas" value={st.data.combined.kas.free} group /> : t('common.unavailable'), 'data-testid': 'balance-kas-free' },
+            { label: t('market.balances.kasLocked'), value: <Amount kind="kas" value={b?.kasLocked ?? 0n} group />, 'data-testid': 'balance-kas-locked' },
           ]}
         />
       ) : null}
