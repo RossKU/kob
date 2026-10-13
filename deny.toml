@@ -32,6 +32,11 @@ ignore = [
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained (build-time proc macro); via kaspa-rpc-macros and workflow-core-macros <- rusty-kaspa v2.1.0" },
   { id = "RUSTSEC-2024-0388", reason = "derivative unmaintained (build-time proc macro); via ark 0.5 <- risc0-groth16 <- kaspa-txscript-zk-sdk" },
   { id = "RUSTSEC-2024-0436", reason = "paste unmaintained (build-time proc macro); via ark-ff 0.5 <- risc0-groth16 <- kaspa-txscript-zk-sdk" },
+  # unsafe-libyaml 0.2.11 unmaintained (archived; no defect known). Only via serde_yaml 0.9 <- log4rs 1.4.0 (the latest log4rs;
+  # its default yaml_format feature) <- kaspa-core (rusty-kaspa v2.1.0), which enables log4rs's defaults. KOB never initialises
+  # kaspa-core's logger and parses no YAML; features are additive, so KOB cannot switch the feature off. Removed when
+  # rusty-kaspa drops log4rs's YAML config support or log4rs moves to another YAML parser.
+  { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml unmaintained; transitive via serde_yaml <- log4rs 1.4.0 <- kaspa-core (rusty-kaspa v2.1.0); KOB parses no YAML" },
 ]
 
 [licenses]
