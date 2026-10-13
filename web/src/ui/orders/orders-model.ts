@@ -212,6 +212,11 @@ export interface OrderRowModel {
   /** an amend form exists for this order */
   canAmend: boolean;
   /**
+   * an if-done entry: the exit it commits (decoded from its `exitState` with kob-wasm), booked for what the entry fills: take-profit and stop
+   * (state prices; null when the exit has no such leg) and the amount still to enter (base units). Absent for other kinds or without kob-wasm.
+   */
+  plannedExit?: { takeProfit: bigint | null; stop: bigint | null; amount: bigint | null } | null;
+  /**
    * why a live order cannot be cancelled although it was found: 'no-extension' (its custody token cannot be rebuilt: the token's extension
    * commitment is unknown), 'custody-missing' (no custody UTXO at its address), 'old-template' (placed with an older contract version)
    */
@@ -273,6 +278,16 @@ export function amendKind(state: OrderState, typeKey: OrderTypeKey): 'limit' | '
   if (typeKey === 'trailing') return k === 'KobCondAsk' || k === 'KobCondBid' ? 'replace' : null;
   if (typeKey === 'ifd' || typeKey === 'ifo') return k === 'KobIfdAsk' || k === 'KobIfdBid' ? 'replace' : null;
   return null;
+}
+
+/** The exit an if-done entry commits (`describeOrder` decodes its `exitState` with kob-wasm), for what the entry has still to fill. */
+function plannedExitOf(desc: OrderDescription | null, amountLeft: bigint | null): OrderRowModel['plannedExit'] {
+  const x = desc?.entry?.exit;
+  if (!x) return null;
+  const takeProfit = x.price > 0n ? x.price : null;
+  const stop = x.trigger && x.trigger.stopPrice > 0n ? x.trigger.stopPrice : null;
+  if (takeProfit === null && stop === null) return null;
+  return { takeProfit, stop, amount: amountLeft ?? desc?.amountLeft ?? null };
 }
 
 export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowModel {
@@ -366,6 +381,7 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
     canCancel: live && (viaView || viaRecord),
     canRefund: refundable,
     canAmend: live && !!es && amendKind(es.state, typeKey) !== null && es.source !== 'record',
+    plannedExit: plannedExitOf(desc, amountLeft),
     cancelBlocked: live || oldTemplate ? cancelBlocked : null,
     oldTemplate,
     strayCount: v?.strays ? v.strays.filter((s) => !s.spent).length : 0,

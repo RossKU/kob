@@ -55,6 +55,27 @@ test.describe('position cards', () => {
     await expect(card.getByTestId('position-exit-prices')).toContainText('0.04');
   });
 
+  test('an IFO waiting for entry shows the take-profit and stop its entry commits, marked planned with the amount', async ({ appPage: page, mock }) => {
+    const entryId = await placeAndFill(page, mock, 'ifo', { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026', 'exit.stop': '0.023' }, 0);
+    await page.getByTestId('nav-orders').click();
+    const card = page.getByTestId(`position-${entryId}`);
+    await expect(card).toHaveAttribute('data-phase', 'entry-waiting');
+    const tp = card.getByTestId('position-exit-prices');
+    await expect(tp).toContainText('0.026');
+    await expect(tp).toHaveAttribute('data-planned', '1');
+    await expect(card.getByTestId('position-exit-planned')).toHaveText('planned · 2 EXKCC');
+    const stop = card.getByTestId('position-exit-stops');
+    await expect(stop).toContainText('0.023');
+    await expect(stop).toHaveAttribute('data-planned', '1');
+    await expect(card.getByTestId('position-stop-planned')).toHaveText('planned · 2 EXKCC');
+    // a fill books the exit: the live exit's take-profit replaces the planned one
+    await mock.fill(entryId, 2n * 100_000_000n);
+    await mock.until(async () => (await mock.order(entryId)).children as string[], (c) => c.length >= 1);
+    await expect(card.getByTestId('position-exit-prices')).not.toHaveAttribute('data-planned', '1', { timeout: 20_000 });
+    await expect(card.getByTestId('position-exit-prices')).toContainText('0.026');
+    await expect(card.getByTestId('position-exit-planned')).toHaveCount(0);
+  });
+
   test('an IFD entry with nothing filled is a card (waiting for entry); cancelling it moves the card to history as cancelled', async ({ appPage: page, mock, wallet }) => {
     const entryId = await placeAndFill(page, mock, 'ifd', { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' }, 0);
     await page.getByTestId('nav-orders').click();

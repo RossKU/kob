@@ -163,6 +163,8 @@ export default {
   'orders.position.stat.entry': 'Entry price',
   'orders.position.stat.entryStop': 'Entry trigger',
   'orders.position.stat.takeProfit': 'Take profit',
+  'orders.position.planned': 'planned',
+  'orders.position.plannedAmount': 'planned · {amount}',
   'orders.position.stat.stop': 'Stop',
   'orders.position.stat.open': 'Open',
   'orders.position.stat.amount': 'Amount',

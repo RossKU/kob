@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { EventView } from '../../data/indexer-types';
 import { groupPositions } from '../../kob/positions';
 import { loadKobNode } from '../../kob/wasm.node';
+import { asOrderState, describeOrder } from '../../kob/order-facts';
 import { orderViewOf, placeGolden } from '../../testing/chain-fixtures';
 import { buildEntries, describeEntry } from './orders-model';
 import { positionPhase, ratio, realisedPnl, summarizePosition, summarizePositionFills, unwindAmount, POSITION_PHASES } from './position-model';
@@ -173,5 +174,40 @@ describe('ratio', () => {
     expect(ratio(null, 3n)).toBeNull();
     // exact beyond 2^53 base units
     expect(ratio(12_345_678_901_234_567n, 24_691_357_802_469_134n)).toBe(0.5);
+  });
+});
+
+describe('the planned exit of an entry still waiting (decoded from its exitState)', () => {
+  it('an IFD entry waiting shows the take-profit / stop it commits and the amount it is booked for; a live exit takes over', () => {
+    const e = entry();
+    const s = summarizePosition(pos([e]), rowsOf([e]));
+    // the committed exit, decoded with kob-wasm from the entry state
+    const committed = describeOrder(asOrderState(e.state)!, kob).entry!.exit!;
+    expect(committed.price + (committed.trigger?.stopPrice ?? 0n)).toBeGreaterThan(0n);
+    expect(s.exitTakeProfits).toEqual([]);
+    expect(s.plannedExit).toEqual({
+      takeProfit: committed.price > 0n ? committed.price : null,
+      stop: committed.trigger && committed.trigger.stopPrice > 0n ? committed.trigger.stopPrice : null,
+      amount: 10n,
+    });
+    // partly filled: the rest is still planned, the filled part has its live exit
+    const part = entry({ status: 'partial', filled_amount: '3', amount_left: '7' });
+    const x = exit('a1', 'e1');
+    const sp = summarizePosition(pos([part, x]), rowsOf([part, x]));
+    expect(sp.plannedExit?.amount).toBe(7n);
+    expect(sp.exitTakeProfits.length).toBe(1);
+    // the entry done: nothing planned any more
+    const done = entry({ status: 'filled', filled_amount: '10', amount_left: '0' });
+    expect(summarizePosition(pos([done, x]), rowsOf([done, x])).plannedExit).toBeNull();
+  });
+
+  it('a sell-first entry plans its buy-back exit the same way', () => {
+    const se = orderViewOf(kob, { ...snap('create.ifdAsk'), covenantId: id('e3') }, { genesis: genesis(100), initial_amount: '10', amount_left: '10', filled_amount: '0' });
+    const s = summarizePosition(pos([se]), rowsOf([se]));
+    const committed = describeOrder(asOrderState(se.state)!, kob).entry!.exit!;
+    expect(s.plannedExit).toMatchObject({ takeProfit: committed.price > 0n ? committed.price : null, amount: 10n });
+    // without kob-wasm the exit cannot be decoded: nothing is invented
+    const bare = new Map(buildEntries([se], []).map((x) => [x.id, describeEntry(x, { kob: null, clock })]));
+    expect(summarizePosition(pos([se]), bare).plannedExit).toBeNull();
   });
 });

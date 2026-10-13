@@ -142,6 +142,15 @@ export function PositionSummaryPanel({ position, summary: s, token, loadEvents, 
   const entryStop = s.entryStop !== null && s.entryPrice === null;
   const tps = s.exitTakeProfits;
   const stops = [...new Set(s.exits.filter((e) => e.stop !== null && (e.status === 'open' || e.status === 'partial')).map((e) => e.stop as bigint))];
+  // no exit of a leg is live yet: the exit the entry commits, marked as planned, with the amount it is booked for
+  const planned = s.plannedExit;
+  const plannedTp = !tps.length && planned?.takeProfit != null ? planned.takeProfit : null;
+  const plannedStop = !stops.length && planned?.stop != null ? planned.stop : null;
+  const plannedNote = (id: string) => (
+    <span class="pc-planned" data-testid={id}>
+      {planned?.amount != null ? t('orders.position.plannedAmount', { amount: amount(planned.amount) }) : t('orders.position.planned')}
+    </span>
+  );
   const amountLine = t('orders.position.amountLine', { total: amount(s.amountTotal), entered: amount(s.amountEntered), exited: amount(s.amountExited), open: amount(s.amountOpen) });
   const r = s.repeat;
   // the re-arms left as whole cycles of the entry's amount (rounded down)
@@ -165,13 +174,19 @@ export function PositionSummaryPanel({ position, summary: s, token, loadEvents, 
               <Price value={entryStop ? s.entryStop : s.entryPrice} token={token} scale={scale} pair={pair} />
             </span>
           </Stat>
-          <Stat label={t('orders.position.stat.takeProfit')} class="pc-tp">
-            <span data-testid="position-exit-prices">{tps.length ? <Prices values={tps} token={token} scale={scale} pair={pair} /> : '—'}</span>
+          <Stat label={t('orders.position.stat.takeProfit')} class="pc-tp" sub={plannedTp !== null ? plannedNote('position-exit-planned') : undefined}>
+            {plannedTp !== null ? (
+              <span data-testid="position-exit-prices" data-planned="1">
+                <Price value={plannedTp} token={token} scale={scale} pair={pair} />
+              </span>
+            ) : (
+              <span data-testid="position-exit-prices">{tps.length ? <Prices values={tps} token={token} scale={scale} pair={pair} /> : '—'}</span>
+            )}
           </Stat>
-          <Stat label={t('orders.position.stat.stop')} class="pc-sl">
-            {stops.length ? (
-              <span data-testid="position-exit-stops">
-                <Prices values={stops} token={token} scale={scale} pair={pair} />
+          <Stat label={t('orders.position.stat.stop')} class="pc-sl" sub={plannedStop !== null ? plannedNote('position-stop-planned') : undefined}>
+            {stops.length || plannedStop !== null ? (
+              <span data-testid="position-exit-stops" {...(stops.length ? {} : { 'data-planned': '1' })}>
+                <Prices values={stops.length ? stops : [plannedStop as bigint]} token={token} scale={scale} pair={pair} />
               </span>
             ) : (
               '—'

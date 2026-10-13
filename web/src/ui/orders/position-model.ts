@@ -61,6 +61,11 @@ export interface PositionSummary {
   exits: ExitLeg[];
   /** distinct take-profit prices of the exits that are still live, ascending */
   exitTakeProfits: bigint[];
+  /**
+   * the exit the live entry commits (decoded from its `exitState`), booked for what it fills: shown while no exit of that leg is live yet (an entry
+   * waiting: its take-profit / stop would otherwise read "—"). `amount` = what the entry has still to fill (base units).
+   */
+  plannedExit: { takeProfit: bigint | null; stop: bigint | null; amount: bigint | null } | null;
   /** base units of the entry (one cycle) */
   amountTotal: bigint | null;
   /** base units the entry has filled */
@@ -117,6 +122,7 @@ export function summarizePosition(p: Position, rows: ReadonlyMap<Hex, OrderRowMo
     entryStop: entryRow?.stopPrice ?? null,
     exits,
     exitTakeProfits: tps,
+    plannedExit: entryRow?.live && entryRow.plannedExit ? entryRow.plannedExit : null,
     amountTotal: p.amountTotal,
     amountEntered: p.amountDone,
     amountExited: p.exits.reduce((s, x) => s + (amountOf(x.filled_amount) ?? 0n), 0n),
