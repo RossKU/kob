@@ -1619,7 +1619,6 @@ fn c6_wallet_vectors_are_consistent() {
 
 /// The committed vectors of the web suite are the Rust results (regenerate with `KOB_REGEN=1`).
 #[test]
-#[ignore = "web wallet vectors not regenerated for v3 yet: the web port must make c6-economics.test.ts read the v3 keys (quoteOf, bidUsed, bidEscrow, bidBuyingPower), then run KOB_REGEN=1 once"]
 fn c6_wallet_vectors_are_current() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/kob/orders/c6-economics.vectors.json");
     let mut json = serde_json::to_string_pretty(&wallet_vectors()).unwrap();
