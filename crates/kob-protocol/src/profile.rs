@@ -608,6 +608,17 @@ impl ProgramProfile {
         if !codec_is_state(self.codec, &loaded.state) {
             return Err(e(format!("the source's state span is not a canonical {} state", self.codec.as_str())));
         }
+        // the public-mint companion decoders accept the actors of the published app, whose minter names the app's KCC20
+        // program (`gen__kcc20_template`): only that program's profile may declare them
+        let app_decoders =
+            self.genesis.companions.iter().any(|c| c.decoder.as_deref().is_some_and(|d| d.starts_with("kcc20-public-mint/")));
+        if app_decoders && to_hex(&loaded.sil_hash) != crate::public_mint::KCC20_SIL_HASH {
+            return Err(e(format!(
+                "the kcc20-public-mint companion decoders belong to the published app's KCC20 program (Sil hash {}), not to this one ({})",
+                crate::public_mint::KCC20_SIL_HASH,
+                to_hex(&loaded.sil_hash)
+            )));
+        }
         if self.witness.scheme == WitnessScheme::Kcc20Transfer {
             let art = loaded.artifact.as_ref().expect("artifact source");
             let entries = &art.contracts.values().next().expect("one contract").entries;
@@ -1308,6 +1319,12 @@ mod tests {
         for path in ["../outside.bin", "contracts/../../x.bin", "/etc/x.bin", "C:/x.bin", "contracts\\x.bin", "data/x.bin"] {
             assert!(bad(&|p| p.source.path = path.into()).contains("under contracts/"), "{path}");
         }
+        // the public-mint decoders on another program than the app's KCC20
+        let mut r3 = by_name("KCC20Ref").unwrap().clone();
+        r3.genesis.companions = by_name("KCC20PublicMint").unwrap().genesis.companions.clone();
+        r3.check_shape().unwrap();
+        let src = crate::artifacts::embedded_program_source("KCC20Ref").unwrap();
+        assert!(r3.check_bytes(&src).unwrap_err().message.contains("published app's KCC20 program"));
         // duplicates across the table
         let mut f = table().clone();
         f.programs.push(ProgramProfile { name: "Other".into(), variant: "Other".into(), ..base.clone() });
