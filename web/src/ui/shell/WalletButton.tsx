@@ -1,6 +1,7 @@
 import { useWallet } from '../../app/context';
 import { useServices } from '../../app/context';
 import { t } from '../../i18n';
+import { visibilityCheckSupported } from '../../signer/seen';
 import { Badge, Button, CopyText } from '../kit';
 
 /** The address in the chip: without the network prefix (the header names the network), the head and tail of the body; the full one is in its title. */
@@ -46,7 +47,14 @@ export function WalletButton() {
 
   // the private key is typed into the sandboxed signer frame (SignerFrame.tsx), never into this page
   const privateKey = (
-    <Button small variant="ghost" data-testid="wallet-connect-local-key" disabled={w.connecting} onClick={w.openPrivateKey} title={t('signer.recommend')}>
+    <Button
+      small
+      variant="ghost"
+      data-testid="wallet-connect-local-key"
+      disabled={w.connecting || !visibilityCheckSupported()}
+      onClick={w.openPrivateKey}
+      title={visibilityCheckSupported() ? t('signer.recommend') : t('signer.unsupported')}
+    >
       {t('signer.option')}
     </Button>
   );

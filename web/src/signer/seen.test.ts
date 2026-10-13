@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SEEN_MIN_MS, SeenTracker } from './seen';
+import { SEEN_MIN_MS, SeenTracker, visibilityCheckSupported } from './seen';
 
 describe('signer: what has been shown before Approve', () => {
   it('the buttons alone are not enough: every part must have been fully visible for a moment', () => {
@@ -42,5 +42,17 @@ describe('signer: what has been shown before Approve', () => {
     s.part('x', true, 0);
     s.buttons(true, 0);
     expect(s.ready(SEEN_MIN_MS)).toBe(true);
+  });
+});
+
+describe('visibilityCheckSupported', () => {
+  it('needs IntersectionObserver v2 (isVisible on the entry)', () => {
+    class Entry {}
+    class EntryV2 {}
+    Object.defineProperty(EntryV2.prototype, 'isVisible', { value: false });
+    const v2 = { IntersectionObserver: class {}, IntersectionObserverEntry: EntryV2 };
+    expect(visibilityCheckSupported(v2)).toBe(true);
+    expect(visibilityCheckSupported({ IntersectionObserver: class {}, IntersectionObserverEntry: Entry })).toBe(false);
+    expect(visibilityCheckSupported({})).toBe(false);
   });
 });

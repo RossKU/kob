@@ -7,6 +7,15 @@
 // since the request appeared, and the buttons must be so now. A long summary is read by scrolling the frame; nothing the app does can mark a
 // part as seen without showing it.
 
+/**
+ * Whether this browser reports real visibility (IntersectionObserver v2, Chromium). Without it the frame cannot tell a clipped or covered
+ * frame from a shown one, so the private-key signer is not offered and never approves there.
+ */
+export function visibilityCheckSupported(g: { IntersectionObserver?: unknown; IntersectionObserverEntry?: unknown } = globalThis): boolean {
+  const proto = (g.IntersectionObserverEntry as { prototype?: unknown } | undefined)?.prototype;
+  return typeof g.IntersectionObserver === 'function' && typeof proto === 'object' && proto !== null && 'isVisible' in proto;
+}
+
 /** How long a part must stay fully visible to count as seen. */
 export const SEEN_MIN_MS = 400;
 

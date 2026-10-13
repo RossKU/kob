@@ -8,7 +8,7 @@ import { loadKob } from '../kob/wasm.browser';
 import { t } from '../i18n';
 import { createSignerCore, SignerKeyError, type PendingRequest, type SignerCore } from './core';
 import { fromParent, parseAppMessage, toApp, type SignerToApp } from './protocol';
-import { SeenTracker } from './seen';
+import { SeenTracker, visibilityCheckSupported } from './seen';
 import type { SummaryOrder } from './summary';
 
 /** the app's origin: the origin of this page's URL (this document's own origin is opaque, "null") */
@@ -74,8 +74,8 @@ const FULL = 0.98;
  * a page that clips the frame down to its buttons gets no approval.
  */
 function watchRequest(parts: Element[], buttons: Element, onChange: (ready: boolean) => void): () => void {
-  if (typeof IntersectionObserver === 'undefined' || !('isVisible' in IntersectionObserverEntry.prototype)) {
-    onChange(true); // not supported: the delay and the trusted click remain
+  if (!visibilityCheckSupported()) {
+    onChange(false); // no visibility check in this browser: never approvable (the app does not offer the private key here)
     return () => undefined;
   }
   const ids = new Map<Element, string>(parts.map((p, i) => [p, `part-${i}`]));
@@ -130,6 +130,7 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   const title = el('h1', { 'data-testid': 'signer-title' }, s.title);
   const orders = s.orders.map((o, i) => orderView(o, `signer-order-${i}`));
   const problems = s.problems > 0 ? [el('p', { class: 'error', 'data-testid': 'signer-problems' }, t('signer.problems', { count: s.problems }))] : [];
+  if (!visibilityCheckSupported()) problems.push(el('p', { class: 'error', 'data-testid': 'signer-unsupported' }, t('signer.unsupported')));
   let delayOver = false;
   let visible = false;
   const update = () => {
