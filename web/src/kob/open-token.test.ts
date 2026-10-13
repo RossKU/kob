@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { IndexerTokenView } from '../data/indexer-types';
 import { displayName } from './registry';
-import { checkExtension, extensionReferences, heldTokenView, parseOpenDecimals, programAllowed, standardScaleOf, synthesizeOpenToken } from './open-token';
+import { checkExtension, extensionReferences, findHeldToken, heldTokenView, parseOpenDecimals, programAllowed, standardScaleOf, synthesizeOpenToken } from './open-token';
 import { toTokenMarket } from './token-market';
 import { loadKobNode } from './wasm.node';
 
@@ -169,5 +169,27 @@ describe('heldTokenView: a covenant id the indexer does not list, from the walle
     expect(heldTokenView(kob, ID, ['KCC20Ref_8x8'], [utxo(EXT)], 'testnet-10').ok).toBe(true);
     expect(heldTokenView(kob, ID, ['KronToken2433'], [utxo(EXT)], 'mainnet')).toEqual({ ok: false, reason: 'not-kcc20' });
     expect(heldTokenView(kob, ID, ['KCC20Ref'], [utxo(EXT), utxo('cd'.repeat(32))], 'mainnet')).toEqual({ ok: false, reason: 'extension-ambiguous' });
+  });
+});
+
+describe('findHeldToken: the programs of the stored candidates and of the node-confirmed holdings', () => {
+  const OWNER = '22'.repeat(32);
+  const state = { amount: '5', owner: OWNER, owner_scheme: 0, borrow_scheme: 0, borrow_guard: '00'.repeat(32), extension_commitment: EXT };
+  const utxo = { transactionId: '11'.repeat(32), index: 0, amount: '100000000', covenantId: ID, state } as never;
+  const tracker = (stored: string[], held: string[]) => ({
+    list: () => stored.map((program) => ({ tokenCovId: ID, program }) as never),
+    heldTokens: async () => held.map((program) => ({ covenantId: ID, program, state }) as never),
+    tokenUtxosFor: async () => [utxo],
+  });
+
+  it('a token bought elsewhere (nothing stored) opens from the holdings (TN10 2026-10-14 B-5)', async () => {
+    const r = await findHeldToken(tracker([], ['KCC20Ref']), kob, OWNER, ID.toUpperCase(), 'mainnet');
+    expect(r.ok && r.view.extension_commitment).toBe(EXT);
+    expect((await findHeldToken(tracker(['KCC20Ref'], []), kob, OWNER, ID, 'mainnet')).ok).toBe(true);
+    expect(await findHeldToken(tracker([], []), kob, OWNER, ID, 'mainnet')).toEqual({ ok: false, reason: 'not-held' });
+    expect(await findHeldToken(tracker(['KCC20Ref'], ['KCC20PublicMint']), kob, OWNER, ID, 'mainnet')).toEqual({ ok: false, reason: 'program-ambiguous' });
+    // a failed holdings read: the stored candidates only
+    const failing = { ...tracker(['KCC20Ref'], []), heldTokens: async () => Promise.reject(new Error('node down')) };
+    expect((await findHeldToken(failing, kob, OWNER, ID, 'mainnet')).ok).toBe(true);
   });
 });

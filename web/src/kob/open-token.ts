@@ -19,10 +19,10 @@
 //     extension commitment. Without such holdings there is nothing to check the covenant id against, and the token is not offered;
 //   * tick: 1 sompi.
 import type { IndexerTokenView } from '../data/indexer-types';
-import type { Hex, TokenProgram, TokenUtxo } from './types';
+import type { Hex, TokenProgram, TokenState, TokenUtxo } from './types';
 import { TOKEN_PROGRAMS } from './programs.generated';
 import type { KobWasm } from './wasm';
-import { extensionOfState, familyOfProgram } from './token-state';
+import { extensionOfState, familyOfProgram, isKeyOwned } from './token-state';
 import { TEMPLATE_ID_PROGRAM, toTokenMarket } from './token-market';
 import { CAPABILITIES, longId, type Capability, type ExtensionCheck, type ExtensionReference, type TokenInfo, type TokenRegistry } from './registry';
 
@@ -173,6 +173,35 @@ export type HeldTokenResult = { ok: true; view: IndexerTokenView } | { ok: false
  * (`programAllowed`), of the KCC-20 family, and the UTXOs must carry ONE extension commitment. No decimals, no scale, no orders: the
  * first order names its decimals (`synthesizeOpenToken`, `opts.decimals`).
  */
+/** What [`findHeldToken`] reads of the wallet's token tracker (`data/token-tracker.ts` `TokenTracker`). */
+export interface HeldTokenSource {
+  /** the candidates this browser stores (an issuance made here, transfers built here, an import) */
+  list(pubkey: Hex): readonly { tokenCovId: Hex; program: TokenProgram }[];
+  /** every token UTXO of the key the node confirms, of any token (the indexer's holdings and the stored candidates), with its program */
+  heldTokens(pubkey: Hex): Promise<readonly { covenantId: Hex; program: TokenProgram; state: TokenState }[]>;
+  /** the key-owned UTXOs of one token, confirmed on the node */
+  tokenUtxosFor(pubkey: Hex, token: { covenantId: Hex; program: TokenProgram }): Promise<TokenUtxo[]>;
+}
+
+/**
+ * [`heldTokenView`] of `covenantId` for the wallet `pubkey`. The program candidates are the stored ones and the programs of the wallet's
+ * node-confirmed holdings of the id (a token bought or received elsewhere, which this browser never stored: its market opened only after a
+ * manual import). The UTXOs are then read and confirmed on the node under that one program (`tokenUtxosFor`), as before.
+ */
+export async function findHeldToken(
+  tracker: HeldTokenSource, kob: KobWasm, pubkey: Hex, covenantId: Hex, network: string | null | undefined,
+): Promise<HeldTokenResult> {
+  const id = covenantId.toLowerCase();
+  const stored = tracker.list(pubkey).filter((c) => c.tokenCovId.toLowerCase() === id).map((c) => c.program);
+  // a failed holdings read leaves the stored candidates (the node check below still decides)
+  const holdings = await tracker.heldTokens(pubkey).catch(() => []);
+  const held = holdings.filter((u) => u.covenantId.toLowerCase() === id && isKeyOwned(u.state)).map((u) => u.program);
+  // one program per covenant id: candidates naming two programs are refused by heldTokenView, without asking the node
+  const programs = [...new Set([...stored, ...held])];
+  const utxos = programs.length === 1 ? await tracker.tokenUtxosFor(pubkey, { covenantId: id, program: programs[0]! }) : [];
+  return heldTokenView(kob, id, programs, utxos, network);
+}
+
 export function heldTokenView(
   kob: KobWasm, covenantId: Hex, programs: readonly TokenProgram[], held: readonly TokenUtxo[], network: string | null | undefined,
 ): HeldTokenResult {

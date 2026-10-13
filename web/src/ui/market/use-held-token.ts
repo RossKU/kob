@@ -1,9 +1,10 @@
 // A KCC-20 token that neither the registry nor the indexer lists (no order of it was ever placed): its market page is offered only from the
-// wallet's own token UTXOs of it that the node confirms (`kob/open-token.ts` `heldTokenView`). The candidates are the ones this browser stores
-// (an issuance made here, transfers built here, an import); the node check is `TokenTracker.tokenUtxosFor`.
+// wallet's own token UTXOs of it that the node confirms (`kob/open-token.ts` `findHeldToken`, `heldTokenView`). The program candidates are the
+// ones this browser stores (an issuance made here, transfers built here, an import) and those of the wallet's node-confirmed holdings (a token
+// bought elsewhere); the node check is `TokenTracker.tokenUtxosFor`.
 import { useMemo } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
-import { heldTokenView, type HeldTokenIssue } from '../../kob/open-token';
+import { findHeldToken, type HeldTokenIssue } from '../../kob/open-token';
 import type { Hex } from '../../kob/types';
 import { useAsync } from '../kit';
 import { unknownRow, type TokenRow } from './token-model';
@@ -23,10 +24,7 @@ export function useHeldToken(covenantId: Hex, active: boolean): HeldTokenState {
   const held = useAsync(
     async () => {
       if (!active || !pubkey) return null;
-      const programs = [...new Set(tracker.list(pubkey).filter((c) => c.tokenCovId === id).map((c) => c.program))];
-      // one program per covenant id: candidates naming two programs are refused below, without asking the node
-      const utxos = programs.length === 1 ? await tracker.tokenUtxosFor(pubkey, { covenantId: id, program: programs[0]! }) : [];
-      return heldTokenView(kob, id, programs, utxos, config.network);
+      return findHeldToken(tracker, kob, pubkey, id, config.network);
     },
     [active, pubkey, id, tracker, kob, config.network],
   );
