@@ -108,13 +108,56 @@ export interface FokAssessment {
   enough: boolean;
   /** the counterparty limit of this transaction: FOK ask -> token output slots; FOK bid -> min(input slots, 8) */
   maxCounterparties: number;
+  /**
+   * Per-order entries only: no set of at most `maxCounterparties` crossing orders can take exactly `amount` because of their minimum fills (the
+   * last order of the fewest would need a partial fill below its minimum fill, and no other choice of orders avoids it). From the fewest: `left` =
+   * what is left of the FOK for the last order, `minFill` = the least that order takes, `below` = what the orders before it take in full (never 0:
+   * one order that holds the whole amount fills it), `above` = the amount that fills with that last order at its minimum. Absent when a fill exists
+   * or the search could not decide.
+   */
+  minFillBlock?: { left: bigint; minFill: bigint; below: bigint; above: bigint };
+}
+
+/** A crossing order of the per-order book: what it can give (`amount`) and the least fill it takes (`lo`: its minimum fill, or all it has left). */
+interface FokCand { amount: bigint; lo: bigint }
+
+/** Search budget of the exact FOK feasibility check (nodes): beyond it the check gives up and refuses nothing. */
+const FOK_SEARCH_BUDGET = 50_000;
+
+/**
+ * Whether at most `max` of `cands` (sorted by amount, largest first) can fill exactly `need`: some set S with sum(lo) <= need <= sum(amount) (every
+ * order of S then takes between its least fill and all it has). null when the search ran out of budget (undecided).
+ */
+function fokFillable(cands: readonly FokCand[], need: bigint, max: number): boolean | null {
+  const n = cands.length;
+  // prefix sums of the amounts: the largest `k` amounts from index i on are cands[i .. i+k) (sorted)
+  const prefix: bigint[] = [0n];
+  for (const c of cands) prefix.push(prefix[prefix.length - 1]! + c.amount);
+  let budget = FOK_SEARCH_BUDGET;
+  const go = (i: number, count: number, sumAmt: bigint, sumLo: bigint): boolean | null => {
+    if (sumLo > need) return false;
+    if (sumAmt >= need) return true;
+    if (count >= max || i >= n) return false;
+    const room = Math.min(max - count, n - i);
+    if (sumAmt + (prefix[i + room]! - prefix[i]!) < need) return false;
+    if (--budget < 0) return null;
+    const c = cands[i]!;
+    const take = go(i + 1, count + 1, sumAmt + c.amount, sumLo + c.lo);
+    if (take !== false) return take;
+    return go(i + 1, count, sumAmt, sumLo);
+  };
+  return go(0, 0, 0n, 0n);
 }
 
 /**
- * How many counterparties a FOK needs. With per-order entries the answer is exact: the FEWEST crossing orders that hold `amount` (a
- * matcher may pick any crossing subset; matcher.md 3.2 repairs a FOK from unallocated liquidity); an order whose minimum fill exceeds the
- * whole FOK amount can never take part and is left out. With aggregated levels it is a conservative bound: levels are taken best-first and
- * every order of a touched level counts.
+ * How many counterparties a FOK needs. With per-order entries the answer is exact: the FEWEST crossing orders that hold `amount` (a matcher may
+ * pick any crossing subset; matcher.md 3.2 repairs a FOK from unallocated liquidity), and whether their minimum fills let at most the slots'
+ * counterparties take exactly `amount` (`minFillBlock`): an order fills at least its minimum fill unless it gives all it has left, so a FOK whose
+ * last counterparty would need a smaller partial fill cannot complete unless another choice of orders avoids it. An order that cannot take part at
+ * all (its least fill exceeds the whole FOK) is left out. With aggregated levels it is a conservative bound: levels are taken best-first and every
+ * order of a touched level counts, except on a pair route level (`routeOrders` KAS orders of `routeRows` route levels of the indexer): every
+ * route level combines at least one KAS order of each token and only the traded token's orders use its slots, so a route level of n orders counts
+ * n - 1.
  */
 export function assessFok(f: FokInput): FokAssessment {
   const sellSide = f.side === 'sell';
@@ -126,18 +169,31 @@ export function assessFok(f: FokInput): FokAssessment {
     sellSide ? price + (tip ?? 0n) >= f.limit - f.tip : price - (tip ?? 0n) <= f.limit + f.tip;
 
   if (detail) {
-    const cross = detail
-      .filter((o: BookOrder) => o.amount > 0n && okPrice(o.price, o.tip) && (o.minFill ?? 1n) <= f.amount)
-      .sort((a, b) => (a.amount === b.amount ? 0 : a.amount > b.amount ? -1 : 1));
+    const cross: FokCand[] = detail
+      .filter((o: BookOrder) => o.amount > 0n && okPrice(o.price, o.tip))
+      .map((o) => {
+        const min = o.minFill ?? 1n;
+        return { amount: o.amount, lo: min < o.amount ? min : o.amount };
+      })
+      .filter((c) => c.lo <= f.amount)
+      .sort((a, b) => (a.amount === b.amount ? (a.lo === b.lo ? 0 : a.lo < b.lo ? -1 : 1) : a.amount > b.amount ? -1 : 1));
     const available = cross.reduce((s, o) => s + o.amount, 0n);
     let need = f.amount;
     let count = 0;
+    let before = 0n;
+    let last: FokCand | null = null;
     for (const o of cross) {
       if (need <= 0n) break;
+      if (need <= o.amount) last = o;
+      else before += o.amount;
       need -= o.amount;
       count++;
     }
-    return { available, counterparties: count, exact: true, enough: available >= f.amount, maxCounterparties };
+    const out: FokAssessment = { available, counterparties: count, exact: true, enough: available >= f.amount, maxCounterparties };
+    if (out.enough && count <= maxCounterparties && last !== null && f.amount - before < last.lo && fokFillable(cross, f.amount, maxCounterparties) === false) {
+      out.minFillBlock = { left: f.amount - before, minFill: last.lo, below: before, above: before + last.lo };
+    }
+    return out;
   }
   const cross = levels.filter((l: BookLevel) => l.amount > 0n && okPrice(l.price, l.tip));
   const available = cross.reduce((s, l) => s + l.amount, 0n);
@@ -146,12 +202,14 @@ export function assessFok(f: FokInput): FokAssessment {
   for (const l of cross) {
     if (need <= 0n) break;
     need -= l.amount;
-    count += l.orders;
+    const route = Math.min(l.routeOrders ?? 0, l.orders);
+    const rows = Math.min(l.routeRows ?? 0, route);
+    count += l.orders - route + (route - rows);
   }
   return { available, counterparties: count, exact: false, enough: available >= f.amount, maxCounterparties };
 }
 
-/** Rejects a FOK the visible book cannot fill in ONE transaction (matcher.md 10.4): depth, counterparty slots, 8 token inputs. */
+/** Rejects a FOK the visible book cannot fill in ONE transaction (matcher.md 10.4): depth, counterparty slots, 8 token inputs, minimum fills. */
 export function checkFok(f: FokInput): PlanIssue[] {
   const a = assessFok(f);
   if (!a.enough) return [issue('FOK_INSUFFICIENT_DEPTH', { amount: f.amount, available: a.available })];
@@ -161,7 +219,8 @@ export function checkFok(f: FokInput): PlanIssue[] {
     }
     return [issue('FOK_TOO_MANY_COUNTERPARTIES', { count: a.counterparties, max: a.maxCounterparties, exact: a.exact ? 1 : 0 })];
   }
-  return [];
+  const m = a.minFillBlock;
+  return m ? [issue('FOK_MIN_FILL_BLOCKS', { left: m.left, minFill: m.minFill, below: m.below, above: m.above }, 'amount')] : [];
 }
 
 // ------------------------------------------------------------------------------------------------ marketable limit (10.5)

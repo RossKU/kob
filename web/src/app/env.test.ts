@@ -122,7 +122,7 @@ describe('buildPairPlanEnv', () => {
     expect((env.tokenUtxos[0] as unknown as { marker: string }).marker).toBe(A.covenantId);
     expect((env.pair.quoteTokenUtxos[0] as unknown as { marker: string }).marker).toBe(B.covenantId);
     expect(env.pair.view).toBe(pv);
-    expect(env.book).toEqual({ asks: [{ price: 334n, amount: 500n, orders: 1 }, { price: 500n, amount: 100n, orders: 1 }], bids: [{ price: 333n, amount: 700n, orders: 2 }] });
+    expect(env.book).toEqual({ asks: [{ price: 334n, amount: 500n, orders: 1 }, { price: 500n, amount: 100n, orders: 1 }], bids: [{ price: 333n, amount: 700n, orders: 2, routeOrders: 2, routeRows: 1 }] });
     expect(env.guardsUnavailable).toBeUndefined();
   });
 

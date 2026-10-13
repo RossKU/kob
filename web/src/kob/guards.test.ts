@@ -6,6 +6,12 @@ import {
 } from './guards';
 import { CLOCK, bookOrder, level, market3x3, market8x8, marketKron } from '../testing/fixtures';
 import { MAX_IDLE_DAA } from './daa';
+import { errors } from './plan-types';
+import { planOrder } from './plan';
+import { pairBookToBookView } from './pair';
+import { makePairEnv } from './orders/pair-fixtures';
+import { makeEnv } from '../testing/fixtures';
+import { issueText } from '../i18n/issue-text';
 
 const own = (side: 'sell' | 'buy', price: bigint, tip = 0n, over: Partial<OwnOrderRef> = {}): OwnOrderRef => ({
   covenantId: 'cd'.repeat(32), side, price, tip, amountLeft: 5n, active: true, ...over,
@@ -171,6 +177,88 @@ describe('FOK pre-check (matcher.md 10.4, spec 9.9)', () => {
     const b: BookView = { asks: [], bids: [], bidOrders: [bookOrder(245n, 100n, 0n, 11n), bookOrder(245n, 4n, 0n, 1n)] };
     expect(assessFok({ side: 'sell', amount: 10n, limit: 240n, tip: 0n, slots: m8, book: b })).toMatchObject({ available: 4n, enough: false });
     expect(assessFok({ side: 'sell', amount: 11n, limit: 240n, tip: 0n, slots: m8, book: b })).toMatchObject({ available: 104n, enough: true, counterparties: 1 });
+  });
+});
+
+describe('FOK pre-check: the minimum fill of the last counterparty', () => {
+  const m3 = market3x3().slots;
+  const bids = (...orders: [bigint, bigint][]): BookView => ({ asks: [], bids: [], bidOrders: orders.map(([amount, minFill]) => bookOrder(245n, amount, 0n, minFill)) });
+  const fok = (amount: bigint, book: BookView, slots = m3) => checkFok({ side: 'sell', amount, limit: 240n, tip: 0n, slots, book });
+
+  it('refuses a FOK whose last order would need a partial fill below its minimum fill, with the amounts that do fill', () => {
+    // 6 (fills only in full) + 5 (at least 3): 8 needs 2 of the second order, below its minimum of 3, and no other split exists
+    const b = bids([6n, 6n], [5n, 3n]);
+    const r = fok(8n, b);
+    expect(codes(r)).toEqual(['FOK_MIN_FILL_BLOCKS']);
+    expect(r[0]!.params).toEqual({ left: 2n, minFill: 3n, below: 6n, above: 9n });
+    expect(r[0]!.field).toBe('amount');
+    expect(issueText(r[0]!, { tokenDecimals: 0, tokenTicker: 'T' })).toBe("FOK can't complete: the last order it needs fills at least 3 T, only 2 T would be left for it. Use at most 6 T or at least 9 T, or IOC.");
+    // the boundary: the suggested amounts fill (6 in full; 6 + the minimum 3), and so does everything up to both in full
+    for (const ok of [6n, 9n, 10n, 11n]) expect(fok(ok, b), `${ok}`).toEqual([]);
+    for (const no of [7n, 8n]) expect(codes(fok(no, b)), `${no}`).toEqual(['FOK_MIN_FILL_BLOCKS']);
+    // an order with less left than its minimum fill gives all it has: 6 + 2 (minimum 3, only 2 left) fills 8 exactly
+    expect(fok(8n, bids([6n, 6n], [2n, 3n]))).toEqual([]);
+  });
+
+  it('accepts when another split or another order avoids it', () => {
+    // the first order can take less: 5 + 3 = 8 (minimums 1 and 3)
+    expect(fok(8n, bids([6n, 1n], [5n, 3n]))).toEqual([]);
+    // the greedy pair (6, 5 at least 3) cannot, but a third order (2, any fill) completes 6 + 2 within the slots
+    expect(fok(8n, bids([6n, 6n], [5n, 3n], [2n, 1n]))).toEqual([]);
+    // two output slots are enough for 6 + 2
+    expect(fok(8n, bids([6n, 6n], [5n, 3n], [2n, 1n]), { inputs: 3, outputs: 2 })).toEqual([]);
+    expect(codes(checkFok({ side: 'sell', amount: 8n, limit: 240n, tip: 0n, slots: { inputs: 3, outputs: 2 }, book: bids([6n, 6n], [5n, 3n]) }))).toEqual(['FOK_MIN_FILL_BLOCKS']);
+  });
+
+  it('applies to a FOK buy against asks the same way', () => {
+    const b: BookView = { bids: [], asks: [], askOrders: [bookOrder(250n, 6n, 0n, 6n), bookOrder(251n, 5n, 0n, 3n)] };
+    expect(codes(checkFok({ side: 'buy', amount: 8n, limit: 260n, tip: 0n, slots: m3, book: b }))).toEqual(['FOK_MIN_FILL_BLOCKS']);
+    expect(checkFok({ side: 'buy', amount: 9n, limit: 260n, tip: 0n, slots: m3, book: b })).toEqual([]);
+  });
+
+  it('reaches the KAS planner: a FOK of the per-order book is refused on its amount', () => {
+    const market = market8x8();
+    const book: BookView = { asks: [level(250n * 10n ** 6n, 11n * market.scale, 2)], bids: [], askOrders: [bookOrder(250n * 10n ** 6n, 6n * market.scale, 0n, 6n * market.scale), bookOrder(250n * 10n ** 6n, 5n * market.scale, 0n, 3n * market.scale)] };
+    const env = makeEnv({ market, book });
+    const p = planOrder(env, { type: 'fok', side: 'buy', amount: 8n * market.scale, price: 260n * 10n ** 6n });
+    expect(errors(p).map((i) => [i.code, i.field])).toEqual([['FOK_MIN_FILL_BLOCKS', 'amount']]);
+    expect(errors(planOrder(env, { type: 'fok', side: 'buy', amount: 9n * market.scale, price: 260n * 10n ** 6n }))).toEqual([]);
+  });
+});
+
+describe('pair FOK: a route level counts only the traded token KAS orders', () => {
+  const route = (price: bigint, amount: bigint) => ({ ...level(price, amount, 2), routeOrders: 2, routeRows: 1 });
+
+  it('the pair book view keeps how many of the orders of a level are route orders (merged levels add up)', () => {
+    const v = pairBookToBookView({
+      asks: [],
+      bids: [
+        { source: 'direct', price_num: '29', price_den: '20', amount: '1000', orders: 1 },
+        { source: 'route', price_num: '29', price_den: '20', amount: '1000', orders: 2 },
+        { source: 'route', price_num: '72', price_den: '50', amount: '500', orders: 3 },
+      ],
+    }, 1000n);
+    expect(v.bids).toEqual([
+      { price: 1450n, amount: 2000n, orders: 3, routeOrders: 2, routeRows: 1 },
+      { price: 1440n, amount: 500n, orders: 3, routeOrders: 3, routeRows: 1 },
+    ]);
+    // a route level of n KAS orders holds at least one of the other token: n - 1 counterparties of A at most; a direct order counts in full
+    expect(assessFok({ side: 'sell', amount: 2500n, limit: 1400n, tip: 0n, slots: { inputs: 3, outputs: 3 }, book: v }).counterparties).toBe(1 + 1 + 2);
+  });
+
+  it('boundary on a 3/3 token A: three route levels fill a FOK sell (it was refused as six counterparties), four are too many', () => {
+    const three = makePairEnv({ book: { asks: [], bids: [route(1450n, 1000n), route(1449n, 1000n), route(1448n, 1000n)] } });
+    expect(errors(planOrder(three, { type: 'fok', side: 'sell', amount: 3000n, price: 1400n }))).toEqual([]);
+    const four = makePairEnv({ book: { asks: [], bids: [route(1450n, 1000n), route(1449n, 1000n), route(1448n, 1000n), route(1447n, 1000n)] } });
+    const r = errors(planOrder(four, { type: 'fok', side: 'sell', amount: 4000n, price: 1400n }));
+    expect(r.map((i) => i.code)).toEqual(['FOK_TOO_MANY_COUNTERPARTIES']);
+    expect(r[0]!.params).toMatchObject({ count: 4, max: 3 });
+    // direct pair orders still count one each
+    const direct = makePairEnv({ book: { asks: [], bids: [level(1450n, 1000n, 2), level(1449n, 1000n, 2)] } });
+    expect(errors(planOrder(direct, { type: 'fok', side: 'sell', amount: 2000n, price: 1400n })).map((i) => i.code)).toEqual(['FOK_TOO_MANY_COUNTERPARTIES']);
+    // a FOK buy: the asks' route orders of A are token inputs
+    const buy = makePairEnv({ book: { bids: [], asks: [route(1500n, 1000n), route(1501n, 1000n), route(1502n, 1000n)] } });
+    expect(errors(planOrder(buy, { type: 'fok', side: 'buy', amount: 3000n, price: 1600n }))).toEqual([]);
   });
 });
 

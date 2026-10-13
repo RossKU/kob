@@ -124,6 +124,7 @@ declare('token', {
   INSUFFICIENT_TOKENS: ['needed', 'have', 'shortfall'],
   MARKET_DEPTH_INSUFFICIENT: ['available', 'amount'],
   FOK_INSUFFICIENT_DEPTH: ['amount', 'available'],
+  FOK_MIN_FILL_BLOCKS: ['minFill', 'left', 'below', 'above'],
   COND_MIN_FILL_INVALID: ['amount'],
   'cancel.insufficient-tokens': ['need', 'have', 'short'],
   'cancel.top-up': ['amount'],

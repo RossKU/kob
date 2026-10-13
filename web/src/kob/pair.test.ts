@@ -24,8 +24,8 @@ describe('pairBookToBookView', () => {
       bids: [lvl('route', '29', '20', '10', 2), lvl('direct', '1449', '1000', '5'), lvl('entry', '1', '1', '1')],
     } as unknown as PairBookView;
     expect(pairBookToBookView(v, 1000n)).toEqual({
-      asks: [{ price: 1500n, amount: 100n, orders: 1 }, { price: 1501n, amount: 50n, orders: 1 }, { price: 1505n, amount: 7n, orders: 3 }],
-      bids: [{ price: 1450n, amount: 10n, orders: 2 }, { price: 1449n, amount: 5n, orders: 1 }, { price: 1000n, amount: 1n, orders: 1 }],
+      asks: [{ price: 1500n, amount: 100n, orders: 1 }, { price: 1501n, amount: 50n, orders: 1 }, { price: 1505n, amount: 7n, orders: 3, routeOrders: 3, routeRows: 1 }],
+      bids: [{ price: 1450n, amount: 10n, orders: 2, routeOrders: 2, routeRows: 1 }, { price: 1449n, amount: 5n, orders: 1 }, { price: 1000n, amount: 1n, orders: 1 }],
     });
     // 1/3 and 1/3 + a hair round up to one ask price: one level
     const merged = pairBookToBookView({ asks: [lvl('direct', '1', '3', '1'), lvl('route', '1000001', '3000000', '2')], bids: [] } as unknown as PairBookView, 1000n);

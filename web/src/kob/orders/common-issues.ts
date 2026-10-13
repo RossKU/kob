@@ -67,6 +67,7 @@ export const ISSUE_CATALOG = {
   SELF_TRADE: e('error', 'This order would trade against your own resting order {ownCovenantId}. Cancel it first or change the price.'),
   FOK_INSUFFICIENT_DEPTH: e('error', 'Fill-or-kill needs {amount} base units but only {available} cross at your price: it could not fill.'),
   FOK_TOO_MANY_COUNTERPARTIES: e('error', 'Filling in one transaction would need {count} counterparties, more than the token allows ({max}): use IOC or a smaller size.'),
+  FOK_MIN_FILL_BLOCKS: e('error', 'Fill-or-kill cannot complete: the last order it needs takes at least {minFill} base units but only {left} would be left for it, and no other choice of orders avoids it. Use at most {below} or at least {above}, or IOC.'),
   FOK_TOO_MANY_TOKEN_INPUTS: e('error', 'Filling in one transaction would need {count} token inputs, more than the 8 a transaction may carry.'),
   CARRIERS_DOMINATE: e('warning', 'The KAS locked as carriers ({locked:kas}) exceeds the order value; it is returned when the order ends, but this order is very small.'),
   // ---- funding

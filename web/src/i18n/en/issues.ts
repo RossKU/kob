@@ -71,6 +71,7 @@ export default {
   'issues.SELF_TRADE': 'This order would trade against your own order {ownCovenantId}: cancel that first or change the price.',
   'issues.FOK_INSUFFICIENT_DEPTH': 'FOK needs {amount} but only {available} crosses at your price.',
   'issues.FOK_TOO_MANY_COUNTERPARTIES': 'Filling in one transaction needs {count} counterparties; the token allows {max}. Use IOC or a smaller size.',
+  'issues.FOK_MIN_FILL_BLOCKS': "FOK can't complete: the last order it needs fills at least {minFill}, only {left} would be left for it. Use at most {below} or at least {above}, or IOC.",
   'issues.FOK_TOO_MANY_TOKEN_INPUTS': 'Filling in one transaction needs {count} token inputs; at most 8 fit.',
   'issues.CARRIERS_DOMINATE': 'The carrier KAS ({locked}) exceeds the order value: it returns when the order ends, but this order is very small.',
   'issues.INSUFFICIENT_KAS': 'Not enough KAS: needs {needed}, you have {have} (short {shortfall}).',

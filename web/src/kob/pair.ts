@@ -158,11 +158,17 @@ export function pairBookToBookView(view: Pick<PairBookView, 'asks' | 'bids'>, sc
       const price = wholePriceOf(num, den, scaleA, round);
       if (price === null || price <= 0n) continue;
       const orders = Number.isSafeInteger(l.orders) && l.orders > 0 ? l.orders : 1;
+      // a route level: its KAS orders are of both tokens (the FOK pre-check counts only the traded token's)
+      const route = l.source === 'route' && orders > 1 ? { routeOrders: orders, routeRows: 1 } : null;
       const last = out[out.length - 1];
       if (last && last.price === price) {
         last.amount += amount;
         last.orders += orders;
-      } else out.push({ price, amount, orders });
+        if (route) {
+          last.routeOrders = (last.routeOrders ?? 0) + route.routeOrders;
+          last.routeRows = (last.routeRows ?? 0) + 1;
+        }
+      } else out.push({ price, amount, orders, ...(route ?? {}) });
     }
     // keep the order the planners assume even if the server's order and the rounding disagree: asks ascending, bids descending
     return out.sort((a, b) => (a.price === b.price ? 0 : (round === 'up' ? a.price < b.price : a.price > b.price) ? -1 : 1));

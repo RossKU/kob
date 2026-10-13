@@ -57,7 +57,18 @@ export interface Clock {
 }
 
 /** One aggregated price level of the visible book (`price` in sompi per whole token as posted, i.e. without tips; `amount` base units). */
-export interface BookLevel { price: bigint; amount: bigint; orders: number; tip?: bigint }
+export interface BookLevel {
+  price: bigint;
+  amount: bigint;
+  orders: number;
+  tip?: bigint;
+  /**
+   * a pair book: how many of `orders` are KAS orders of route levels (the route through the two KAS books), and of how many route levels of the
+   * indexer (each combines at least one KAS order of each token: only the traded token's use its slots, the FOK pre-check's count)
+   */
+  routeOrders?: number;
+  routeRows?: number;
+}
 /** One resting order of the NON-aggregated book (indexer orders view), for exact FOK pre-checks: price as posted, `tip` its priority tip, `minFill` its minimum fill. */
 export interface BookOrder { covenantId?: Hex; price: bigint; amount: bigint; tip?: bigint; minFill?: bigint }
 export interface BookView {

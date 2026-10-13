@@ -79,6 +79,32 @@ test.describe('fill-or-kill pre-check', () => {
     await expect(issue).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId('order-review')).toBeDisabled();
   });
+
+  test('FOK whose last counterparty would need a partial fill below its minimum fill is refused with the amounts that fill', async ({ appPage: page, mock }) => {
+    await fund(mock, 'alice', { tokens: 100n });
+    // two bids above the book at 0.025: 6 tokens that fill only in full, 5 tokens that fill at least 3
+    const tok = await mock.token();
+    const T = 100_000_000n;
+    await mock.seed({
+      orders: [
+        { token: tok.covenant_id, side: 'bid', maker: 'maker', price: 2_500_000, amount: (6n * T).toString(), min_fill: (6n * T).toString() },
+        { token: tok.covenant_id, side: 'bid', maker: 'maker', price: 2_500_000, amount: (5n * T).toString(), min_fill: (3n * T).toString() },
+      ],
+    });
+    await openMarket(page, mock);
+    await pickType(page, 'fok', 'sell');
+    // 8 = 6 + 2 of the second bid, below its minimum of 3; no other split exists
+    await fillFields(page, { amount: '8', price: '0.025' });
+    const issue = page.getByTestId('order-issue-FOK_MIN_FILL_BLOCKS');
+    await expect(issue).toBeVisible({ timeout: 30_000 });
+    await expect(issue).toContainText('at least 3 EXKCC');
+    await expect(issue).toContainText('at most 6 EXKCC or at least 9 EXKCC');
+    await expect(page.getByTestId('order-review')).toBeDisabled();
+    // the suggested size fills: 6 + the minimum 3
+    await fillFields(page, { amount: '9' });
+    await expect(page.getByTestId('order-issue-FOK_MIN_FILL_BLOCKS')).toHaveCount(0);
+    await waitReviewable(page);
+  });
 });
 
 test.describe('input validation', () => {
