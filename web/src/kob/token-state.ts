@@ -4,8 +4,9 @@
 // Ownership in the two layouts:
 //   * KCC-20 `owner_scheme` 0 = a key (signature inside the token input), 4 = a covenant id (KOB custody);
 //   * KRON `id_type` 3 = address presence (a P2PK input of the key must be in the transaction: what wallets hold and KOB delivers), 2 = covenant
-//     id (KOB custody), 0 = pubkey (token-level signature) and 1 = script hash: the builders do not spend those (move them to id_type 3 first).
-import { CODEC_OF_PROGRAM } from './programs.generated';
+//     id (KOB custody), 0 = pubkey (token-level signature) and 1 = script hash. Which key-held type a program's holders are is its profile's
+//     `holderOwner` (KForge: 0, the token-level signature; KOB then delivers to id_type 0); the builders spend that one and refuse the other.
+import { CODEC_OF_PROGRAM, TOKEN_PROGRAMS } from './programs.generated';
 import type { Family, Hex, KronState, TokenProgram, TokenState, Kcc20State, U64 } from './types';
 
 export const KCC20_SCHEME_P2PK = 0;
@@ -23,26 +24,38 @@ export const isKcc20State = (s: TokenState): s is Kcc20State => !isKronState(s);
 export const familyOfState = (s: TokenState): Family => (isKronState(s) ? 'kron' : 'kcc20');
 export const familyOfProgram = (p: TokenProgram): Family => CODEC_OF_PROGRAM[p];
 
-/** A UTXO the wallet key can spend by itself (KCC-20 scheme 0; KRON address presence): the only kind the builders accept from a wallet. */
-export const isKeyOwned = (s: TokenState): boolean => (isKronState(s) ? s.id_type === KRON_ID_ADDR : s.owner_scheme === KCC20_SCHEME_P2PK);
+/** The embedded token program with this template hash (`null`: none). */
+export const programOfHash = (hash: Hex | null | undefined): TokenProgram | null =>
+  (TOKEN_PROGRAMS.find((p) => p.templateHash === hash?.toLowerCase())?.name as TokenProgram | undefined) ?? null;
+/** The owner value of a key-held state of `program` (profile `holderOwner`); the family default without a program (KCC-20 0, KRON 3). */
+export const holderOwnerOf = (program: TokenProgram | null | undefined, family: Family): number =>
+  TOKEN_PROGRAMS.find((p) => p.name === program)?.holderOwner ?? (family === 'kron' ? KRON_ID_ADDR : KCC20_SCHEME_P2PK);
+/**
+ * A UTXO the wallet key can spend by itself (KCC-20 scheme 0; KRON: the holder owner of its program, address presence unless the program's holders
+ * are id_type 0): the only kind the builders accept from a wallet. Without `program` the family default.
+ */
+export const isKeyOwned = (s: TokenState, program?: TokenProgram | null): boolean =>
+  isKronState(s) ? s.id_type === holderOwnerOf(program, 'kron') : s.owner_scheme === KCC20_SCHEME_P2PK;
 /** Owned by a covenant id (KOB order custody). */
 export const isCovenantOwned = (s: TokenState): boolean => (isKronState(s) ? s.id_type === KRON_ID_COVID : s.owner_scheme === KCC20_SCHEME_COVID);
-/** KRON tokens held by a pubkey / script hash: visible in balances, but not spendable by the builders. */
-export const isKronUnspendable = (s: TokenState): boolean => isKronState(s) && s.id_type !== KRON_ID_ADDR && s.id_type !== KRON_ID_COVID;
+/** KRON tokens held by another key-held type than its program's holder owner (or a script hash): visible in balances, not spendable by the builders. */
+export const isKronUnspendable = (s: TokenState, program?: TokenProgram | null): boolean =>
+  isKronState(s) && s.id_type !== holderOwnerOf(program, 'kron') && s.id_type !== KRON_ID_COVID;
 /** No borrowing (KCC-20) / no minter flag (KRON): the builders refuse anything else. */
 export const isPlainState = (s: TokenState): boolean => (isKronState(s) ? s.is_minter === 0 : s.borrow_scheme === 0);
 /** The extension commitment of a KCC-20 state; KRON tokens have none (`null`). */
 export const extensionOfState = (s: TokenState): Hex | null => (isKronState(s) ? null : s.extension_commitment);
 /** Human label of the owner type (issue text, tracker listings). */
-export const ownerKindOf = (s: TokenState): 'key' | 'covenant' | 'other' => (isKeyOwned(s) ? 'key' : isCovenantOwned(s) ? 'covenant' : 'other');
+export const ownerKindOf = (s: TokenState, program?: TokenProgram | null): 'key' | 'covenant' | 'other' =>
+  isKeyOwned(s, program) ? 'key' : isCovenantOwned(s) ? 'covenant' : 'other';
 /** Numeric owner scheme / id type, whichever the layout has (decoder facts). */
 export const ownerTypeOf = (s: TokenState): number => (isKronState(s) ? s.id_type : s.owner_scheme);
 
-/** State of a token UTXO owned by a wallet key. */
-export function keyState(family: Family, amount: U64 | bigint, owner: Hex, extension: Hex | null): TokenState {
+/** State of a token UTXO owned by a wallet key (KRON: the holder owner of `program`, address presence without one). */
+export function keyState(family: Family, amount: U64 | bigint, owner: Hex, extension: Hex | null, program?: TokenProgram | null): TokenState {
   const a = amount.toString();
   return family === 'kron'
-    ? { amount: a, owner, id_type: KRON_ID_ADDR, is_minter: 0 }
+    ? { amount: a, owner, id_type: holderOwnerOf(program, 'kron'), is_minter: 0 }
     : { amount: a, owner, owner_scheme: KCC20_SCHEME_P2PK, borrow_scheme: 0, borrow_guard: ZERO32, extension_commitment: extension ?? ZERO32 };
 }
 /** State of an order's custody token UTXO (owned by the order covenant id). */

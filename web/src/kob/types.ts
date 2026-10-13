@@ -24,7 +24,12 @@ export type KasKind = 'KobAsk' | 'KobBid' | 'KobCondAsk' | 'KobCondBid' | 'KobIf
 export type BaseKind = KasKind | PairKind;
 /** Order kinds as kob-wasm tags them: the KRON family has its own templates of the KAS kinds (`KobAskKron`, ...); the pair kinds have one each (their states name both families). */
 export type OrderKind = BaseKind | `${KasKind}Kron`;
-export type TemplateName = OrderKind | TokenProgram;
+/**
+ * The delivery id_type 0 builds of the KRON kinds (`KobAskKronD0`, ...): the templates kob-wasm instantiates for a KRON program whose holders are
+ * id_type 0 (KForge, testnet-10). Their states are the KRON kinds' (`AnyState` tags them `KobAskKron`, ...); only plans and records name the build.
+ */
+export type KronD0Template = `${KasKind}KronD0`;
+export type TemplateName = OrderKind | KronD0Template | TokenProgram;
 // the token programs are declared once, in crates/kob-protocol/data/programs.json (generated: scripts/gen-programs.mjs)
 import type { Kcc20Program, KronProgram, TokenProgram } from './programs.generated';
 export type { Kcc20Program, KronProgram, TokenProgram };
@@ -444,7 +449,7 @@ export type SigPlan =
   | { kind: 'tokenLeader'; template: TokenProgram; state: Kcc20State; nextStates: Kcc20State[]; witness: SigWitness }
   | { kind: 'tokenDelegator'; template: TokenProgram; state: Kcc20State; witness: SigWitness }
   /** KRON token input: no leader and no signature of its own (address presence = a P2PK input of the owner elsewhere); `witnesses` = hex, one input index per token input */
-  | { kind: 'kronToken'; template: TokenProgram; state: KronState; nextStates: KronState[]; witnesses: Hex };
+  | { kind: 'kronToken'; template: TokenProgram; state: KronState; nextStates: KronState[]; witnesses: Hex; signer?: Hex };
 
 export interface SignRequest {
   inputIndex: number;

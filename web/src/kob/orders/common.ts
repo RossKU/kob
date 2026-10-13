@@ -199,7 +199,7 @@ export function usableTokenUtxos(env: Pick<PlanEnv, 'token' | 'maker' | 'tokenUt
   return env.tokenUtxos.filter(
     (u) =>
       u.covenantId === m.covenantId &&
-      isKeyOwned(u.state) &&
+      isKeyOwned(u.state, m.program) &&
       u.state.owner === env.maker &&
       isPlainState(u.state) &&
       (m.family === 'kron' ? isKronState(u.state) : extensionOfState(u.state) === m.extensionCommitment),
@@ -265,7 +265,7 @@ function buildCreateAt(env: PlanEnv, spec: CreateSpec): CreateResult {
 
   if (spec.tokenAmount > 0n) {
     try {
-      tokens = selectTokens(usableTokenUtxos(env), spec.tokenAmount, Math.min(env.token.slots.inputs, MAX_TOKEN_INPUTS));
+      tokens = selectTokens(usableTokenUtxos(env), spec.tokenAmount, Math.min(env.token.slots.inputs, MAX_TOKEN_INPUTS), env.token.program);
     } catch (e) {
       if (e instanceof InsufficientFunds) {
         return fail(

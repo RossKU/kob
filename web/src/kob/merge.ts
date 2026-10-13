@@ -98,7 +98,7 @@ export function mergeCandidates(utxos: readonly TokenUtxo[], token: Pick<MergeTo
     .filter(
       (u) =>
         u.covenantId === token.covenantId &&
-        isKeyOwned(u.state) &&
+        isKeyOwned(u.state, token.program) &&
         isPlainState(u.state) &&
         u.state.owner === maker &&
         big(u.state.amount) > 0n &&
@@ -182,7 +182,7 @@ export function buildMergeLink(env0: MergeEnv, token: MergeToken, inputs: TokenU
       const r = buildWithCap(env.fees?.policy, request, (q) => env.kob.build(q));
       recordFee(env, r.built, r.rate);
       const index = r.built.tx.outputs.findIndex((o) => o.covenant?.covenantId === token.covenantId);
-      const state = keyState(familyOfProgram(token.program), total, env.maker, kron ? null : extensionOfState(inputs[0]!.state));
+      const state = keyState(familyOfProgram(token.program), total, env.maker, kron ? null : extensionOfState(inputs[0]!.state), token.program);
       const out = r.built.tx.outputs[index];
       if (!out || r.built.tx.outputs.filter((o) => o.covenant?.covenantId === token.covenantId).length !== 1 || out.scriptPublicKey !== env.kob.tokenScriptPublicKey(token.program, state)) {
         return { error: issue('merge.build-failed', 'error', 'the built transfer does not end in one token output of the wallet holding the whole amount') };

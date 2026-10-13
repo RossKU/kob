@@ -28,7 +28,7 @@ import type {
   ActionRequest, AmendOrderRequest, BuiltTx, FeeMode, CancelItem, CancelOrderRequest, CancelPositionRequest, Family, ForeignStrays, Hex, KeyUtxo, OrderState, OrderUtxo,
   Replacement, SweepOrderRequest, TokenProgram, TokenState, TokenUtxo, U64, Utxo,
 } from './types';
-import { custodyState, extensionMatches, extensionOfState, familyOfProgram, familyOfState, isCovenantOwned, isKeyOwned } from './token-state';
+import { custodyState, extensionMatches, extensionOfState, familyOfProgram, familyOfState, isCovenantOwned, isKeyOwned, programOfHash } from './token-state';
 import { atFloor, buildWithCap, recordFee, withUrgency, type FeeContext, type RatePick } from './fee-policy';
 import { guardRequest } from './request-guard';
 import { KobError, type KobWasm } from './wasm';
@@ -431,7 +431,7 @@ const foreignReturnedOf = (gs: readonly ForeignStrays[]): CancelPlan['foreignRet
   gs.length ? gs.map((g) => ({ covenantId: g.token.covenantId, amount: totalAmount(g.utxos), utxos: g.utxos.length })) : undefined;
 
 /** One own token of a prepared order: its program's input slots, the extension commitment of its transfer (null: no input), its inputs. */
-interface TokenGroup { token: Hex; role: 'base' | 'quote'; slots: number; ext: Hex | null; inputs: number }
+interface TokenGroup { token: Hex; role: 'base' | 'quote'; slots: number; ext: Hex | null; inputs: number; program: TokenProgram | null }
 interface Prepared {
   item: CancelItem; snap: OrderSnapshot; issues: PlanIssue[];
   /** the order token's (A's) slots and extension commitment */
@@ -559,7 +559,7 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
       issues.push(issue('cancel.strays-abandoned', 'warning', `${dropped.length} stray token UTXO(s) do not fit the transaction and are abandoned (lost when the order closes)`, { count: dropped.length, amount: totalAmount(dropped), order: snap.covenantId }));
     }
     kept.push(...strays);
-    groups.push({ token: t.covenantId, role: t.role, slots, ext: held.length || strays.length ? ext : null, inputs: held.length + strays.length });
+    groups.push({ token: t.covenantId, role: t.role, slots, ext: held.length || strays.length ? ext : null, inputs: held.length + strays.length, program: programOfHash(t.tplHash) });
   }
   const foreign = prepareForeign(env, snap, opts, issues);
   if (!Array.isArray(foreign)) return foreign;
@@ -609,8 +609,8 @@ export interface ReplacementSpec {
 }
 
 /** Cheapest set of maker P2PK token UTXOs of `token` (fewest inputs, smallest sufficient single first) covering `amount`. */
-function pickTokens(pool: TokenUtxo[], token: Hex, amount: bigint, ext: Hex | null, maker: Hex, maxInputs: number): TokenUtxo[] | null {
-  const usable = pool.filter((t) => (!t.covenantId || t.covenantId === token) && isKeyOwned(t.state) && t.state.owner === maker && extensionMatches(t.state, ext));
+function pickTokens(pool: TokenUtxo[], token: Hex, amount: bigint, ext: Hex | null, maker: Hex, maxInputs: number, program: TokenProgram | null = null): TokenUtxo[] | null {
+  const usable = pool.filter((t) => (!t.covenantId || t.covenantId === token) && isKeyOwned(t.state, program) && t.state.owner === maker && extensionMatches(t.state, ext));
   const sorted = [...usable].sort((a, b) => (big(b.state.amount) > big(a.state.amount) ? 1 : big(b.state.amount) < big(a.state.amount) ? -1 : 0));
   const single = [...sorted].reverse().find((t) => big(t.state.amount) >= amount);
   if (single) return [single];
@@ -723,7 +723,7 @@ export function planCancelReplace(env0: CancelEnv, order: OrderSnapshot, replace
     if (extraTokens) return failed([...p0.issues, issue('cancel.insufficient-tokens', 'error', 'the supplied top-up tokens do not cover the replacement\'s amount', { need, have: have + supplied })], [order.covenantId]);
     const g = p0.groups.find((x) => x.token === token);
     const ext = g?.ext ?? (token === tokenCovIdOf(newState) ? extensionOf(newState) : pairExtFor(newState, token));
-    const picked = pickTokens(env.tokenUtxos ?? [], token, need - have, ext ?? null, env.maker, Math.max((g?.slots ?? 3) - (g?.inputs ?? 0), 0));
+    const picked = pickTokens(env.tokenUtxos ?? [], token, need - have, ext ?? null, env.maker, Math.max((g?.slots ?? 3) - (g?.inputs ?? 0), 0), g?.program ?? null);
     if (!picked) return failed([...p0.issues, issue('cancel.insufficient-tokens', 'error', 'not enough free tokens to top the replacement up', { need: need - have })], [order.covenantId]);
     tokens = [...tokens, ...picked];
     topUps.set(token, picked.length);

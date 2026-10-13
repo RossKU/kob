@@ -10,7 +10,7 @@ import type { OrderSnapshot } from './cancel';
 import { asOrderState, big, custodiesOf, describeOrder, tokenCovIdOf } from './order-facts';
 import { pairOfView } from './pair-view';
 import { isKeyOwned, isKronUnspendable } from './token-state';
-import type { Hex, OrderState, TokenUtxo } from './types';
+import type { Hex, OrderState, TokenProgram, TokenUtxo } from './types';
 
 export interface EscrowedBalance {
   token: Hex;
@@ -145,7 +145,12 @@ export function escrowedBalances(orders: Input[]): EscrowedBalance[] {
  * and apart from it (`notSpendable`) KRON UTXOs of the maker held by pubkey (`id_type` 0) or script hash (1), which the builders do not spend. UTXOs of
  * other owners and covenant-owned ones (custody, strays) are ignored. Tokens present on one side only still appear. Sorted by token id.
  */
-export function withFreeBalances(escrowed: EscrowedBalance[], freeUtxos: TokenUtxo[], maker: Hex): TokenBalance[] {
+export function withFreeBalances(
+  escrowed: EscrowedBalance[],
+  freeUtxos: TokenUtxo[],
+  maker: Hex,
+  programOf: (token: Hex) => TokenProgram | null | undefined = () => null,
+): TokenBalance[] {
   const free = new Map<Hex, bigint>();
   const other = new Map<Hex, bigint>();
   const seen = new Set<string>();
@@ -154,7 +159,9 @@ export function withFreeBalances(escrowed: EscrowedBalance[], freeUtxos: TokenUt
     // one outpoint counts once (sources may overlap)
     const k = `${u.transactionId}:${u.index}`;
     if (seen.has(k)) continue;
-    const into = isKeyOwned(u.state) ? free : isKronUnspendable(u.state) ? other : null;
+    // KRON: the program's holder owner is spendable (address presence, or id_type 0 for a program whose holders are id_type 0)
+    const program = programOf(u.covenantId);
+    const into = isKeyOwned(u.state, program) ? free : isKronUnspendable(u.state, program) ? other : null;
     if (!into) continue;
     seen.add(k);
     into.set(u.covenantId, (into.get(u.covenantId) ?? 0n) + big(u.state.amount));

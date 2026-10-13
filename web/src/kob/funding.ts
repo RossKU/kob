@@ -1,6 +1,6 @@
 // Coin selection for placement transactions: KAS funding inputs and token inputs. Deterministic (ties broken by outpoint) and pure.
 import { isKeyOwned } from './token-state';
-import type { KeyUtxo, TokenUtxo } from './types';
+import type { KeyUtxo, TokenProgram, TokenUtxo } from './types';
 
 /** Default network-fee reserve added to the KAS a placement needs (0.05 KAS; the planner re-selects if the built fee turns out higher). */
 export const DEFAULT_FEE_RESERVE = 5_000_000n;
@@ -71,9 +71,9 @@ export function selectFunding(utxos: KeyUtxo[], needSompi: bigint, reserve: bigi
  * is large enough but too fragmented throws InsufficientFunds('fragmented'). Only P2PK-owned UTXOs are considered (custody and strays
  * of orders are not spendable this way).
  */
-export function selectTokens(utxos: TokenUtxo[], amount: bigint, maxInputs: number): TokenUtxo[] {
+export function selectTokens(utxos: TokenUtxo[], amount: bigint, maxInputs: number, program: TokenProgram | null = null): TokenUtxo[] {
   if (amount <= 0n) throw new RangeError('selectTokens: amount must be positive');
-  const usable = utxos.filter((u) => isKeyOwned(u.state) && BigInt(u.state.amount) > 0n);
+  const usable = utxos.filter((u) => isKeyOwned(u.state, program) && BigInt(u.state.amount) > 0n);
   const amt = (u: TokenUtxo): bigint => BigInt(u.state.amount);
   const have = usable.reduce((s, u) => s + amt(u), 0n);
   if (have < amount) throw new InsufficientFunds('tokens', amount, have);

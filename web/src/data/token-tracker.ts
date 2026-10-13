@@ -283,7 +283,7 @@ export class TokenTracker {
         const hit = expected.find((e) => !e.used && e.spk === out.scriptPublicKey.toLowerCase());
         if (!hit) return;
         hit.used = true;
-        if (!isKeyOwned(hit.state) || hit.state.owner.toLowerCase() !== me) return;
+        if (!isKeyOwned(hit.state, plan.template) || hit.state.owner.toLowerCase() !== me) return;
         if (BigInt(hit.state.amount) === 0n) return;
         found.push({ transactionId: txId, index, tokenCovId, program: plan.template, state: hit.state, carrier: out.value, addedAt: this.now() });
       });
@@ -306,8 +306,8 @@ export class TokenTracker {
     if (v.state) return v.state;
     const family = familyOfProgram(token.program);
     if (family === 'kcc20' && !token.extensionCommitment) return null;
-    // a key-owned token UTXO (KCC-20: P2PK owner without borrow guard; KRON: address presence)
-    return keyState(family, v.amount, v.owner, token.extensionCommitment ?? null);
+    // a key-owned token UTXO (KCC-20: P2PK owner without borrow guard; KRON: the program's holder owner)
+    return keyState(family, v.amount, v.owner, token.extensionCommitment ?? null, token.program);
   }
 
   /**
@@ -327,7 +327,7 @@ export class TokenTracker {
     for (const v of views) {
       if (v.spent || v.token.toLowerCase() !== token.covenantId) continue;
       const state = this.stateFromView(v, token);
-      if (!state || state.owner.toLowerCase() !== pubkey.toLowerCase() || !isKeyOwned(state)) continue;
+      if (!state || state.owner.toLowerCase() !== pubkey.toLowerCase() || !isKeyOwned(state, token.program)) continue;
       // the state must be of this token's family (a KCC-20 state under a KRON program cannot derive a script)
       if (isKronState(state) !== (familyOfProgram(token.program) === 'kron')) continue;
       const program = v.program && PROGRAMS.includes(v.program) && familyOfProgram(v.program as TokenProgram) === familyOfProgram(token.program) ? (v.program as TokenProgram) : token.program;
@@ -404,7 +404,8 @@ export class TokenTracker {
   async heldTokens(pubkey: Hex, o: { skip?: ReadonlySet<Hex> } = {}): Promise<HeldTokenUtxo[]> {
     const me = pubkey.toLowerCase();
     const skip = o.skip ?? new Set<Hex>();
-    const wanted = (c: TrackedToken) => (isKeyOwned(c.state) || isKronUnspendable(c.state)) && !(skip.has(c.tokenCovId) && isKeyOwned(c.state));
+    const wanted = (c: TrackedToken) =>
+      (isKeyOwned(c.state, c.program) || isKronUnspendable(c.state, c.program)) && !(skip.has(c.tokenCovId) && isKeyOwned(c.state, c.program));
     const fromIndexer = (await this.allFromIndexer(me)).filter(wanted);
     const local = this.load(me).filter(wanted);
     const byClaim = new Map<string, TrackedToken>();

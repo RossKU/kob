@@ -42,10 +42,18 @@ export function strayTotals(strays: readonly StrayView[]): Map<Hex, { recoverabl
  * `liveOrders`: the wallet's live orders (list views are fine: a missing custody UTXO falls back to the amount the order's state must hold).
  * The strays of the separate stray list REPLACE any stray numbers inside the order views, so nothing is counted twice.
  */
-export function combineBalances(o: { maker: Hex; freeKas: bigint; freeTokens: readonly TokenUtxo[]; liveOrders: readonly (OrderView | OrderSnapshot)[]; strays: readonly StrayView[] }): CombinedBalances {
+export function combineBalances(o: {
+  maker: Hex;
+  freeKas: bigint;
+  freeTokens: readonly TokenUtxo[];
+  liveOrders: readonly (OrderView | OrderSnapshot)[];
+  strays: readonly StrayView[];
+  /** the token program of each token (decides which KRON key-held type is spendable); absent: the family default */
+  programs?: ReadonlyMap<Hex, TokenProgram>;
+}): CombinedBalances {
   // views: the separate stray list is authoritative; snapshots (resolved from a node) never know strays
   const noStrays = o.liveOrders.map((v) => ('covenant_id' in v ? { ...v, strays: undefined } : { ...v, strays: [] }));
-  const balances = withFreeBalances(escrowedBalances(noStrays), [...o.freeTokens], o.maker);
+  const balances = withFreeBalances(escrowedBalances(noStrays), [...o.freeTokens], o.maker, (t) => o.programs?.get(t));
   const totals = strayTotals(o.strays);
   const by = new Map(balances.map((b) => [b.token, { ...b, strays: 0n }]));
   let lost = 0n;

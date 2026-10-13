@@ -33,6 +33,8 @@ export const familyOfKind = (k: TemplateName | string): Family => (isTokenProgra
 export const kindFor = (k: BaseKind, family: Family): OrderKind => (family === 'kron' && !isPairKind(k) ? (`${k}Kron` as OrderKind) : k);
 
 export const isOrderKind = (k: string): k is OrderKind => (ORDER_KINDS as readonly string[]).includes(k);
+/** The order kind of a template name: a delivery id_type 0 build (`KobAskKronD0`, a KRON program with id_type 0 holders) is its KRON kind. */
+export const orderKindOfTemplate = (t: string): string => (/^Kob[A-Za-z]+KronD0$/.test(t) ? t.slice(0, -2) : t);
 /**
  * Ask-side KAS kinds hold the maker's tokens in one custody UTXO owned by the order (matcher.md 1.2); every pair kind may hold custodies (of A,
  * of B or both: {@link custodiesOf} says which, from the state).

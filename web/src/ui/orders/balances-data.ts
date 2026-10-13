@@ -18,6 +18,8 @@ export interface FreeBalances {
   freeTokens: TokenUtxo[];
   /** the program of each token outside `tokens` (or without a program there) whose UTXOs were read (`anyToken`): the one its scripts verified under */
   programs: Map<Hex, TokenProgram>;
+  /** the program of every token read (registry tokens and `programs`) */
+  programOf?: Map<Hex, TokenProgram>;
   errors: BalanceError[];
 }
 
@@ -47,7 +49,9 @@ export async function loadFreeBalances(s: Services, pubkey: Hex, tokens: readonl
   const [kasFree, freeTokens, held] = await Promise.all([kasP, tokensP, heldP]);
   const programs = new Map<Hex, TokenProgram>();
   for (const u of held) if (!read.has(u.covenantId)) programs.set(u.covenantId, u.program);
-  return { kasFree, freeTokens: [...freeTokens, ...held.map(({ program: _p, ...u }) => u)], programs, errors };
+  const programOf = new Map<Hex, TokenProgram>(programs);
+  for (const t of tokens) if (t.program) programOf.set(t.covenantId, t.program);
+  return { kasFree, freeTokens: [...freeTokens, ...held.map(({ program: _p, ...u }) => u)], programs, programOf, errors };
 }
 
 export interface BalancesData {
@@ -88,7 +92,14 @@ export async function loadBalances(s: Services, pubkey: Hex, o: BalancesInput): 
   const extra = (o.extraSnapshots ?? []).filter((x) => !known.has(x.covenantId));
   const scoped = o.token ? strays.filter((x) => x.token === o.token) : strays;
   return {
-    combined: combineBalances({ maker: pubkey, freeKas: free.kasFree ?? 0n, freeTokens: free.freeTokens, liveOrders: [...liveOrders, ...extra], strays: scoped }),
+    combined: combineBalances({
+      maker: pubkey,
+      freeKas: free.kasFree ?? 0n,
+      freeTokens: free.freeTokens,
+      liveOrders: [...liveOrders, ...extra],
+      strays: scoped,
+      ...(free.programOf ? { programs: free.programOf } : {}),
+    }),
     kasKnown: free.kasFree !== null,
     ordersKnown: orders !== null,
     errors: [...free.errors, ...errors],

@@ -164,6 +164,24 @@ export const TOKEN_PROGRAMS = [
     routerIntents: true,
     review: 'reviewed',
   },
+  {
+    name: 'KForgeToken1785',
+    registryId: 'kforge-token-1785',
+    codec: 'kron',
+    templateHash: '5b136633944a2371a1d0f6a94fdc0d329327ffc700fdec097fc59e76e1d33ae1',
+    prefixLen: 1,
+    stateLen: 46,
+    suffixLen: 1738,
+    maxTokenInputs: 1,
+    maxTokenOutputs: 3,
+    custodyOwner: 2,
+    holderOwner: 0,
+    carrierFloor: '1',
+    witnessScheme: 'kron-columns',
+    trailingPushes: [''],
+    routerIntents: false,
+    review: 'pending-review',
+  },
 ] as const;
 
 type Row = (typeof TOKEN_PROGRAMS)[number];

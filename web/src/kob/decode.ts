@@ -30,7 +30,8 @@
 // The Schnorr digests in `built.sign` are produced by kob-wasm; TypeScript cannot recompute them, `kob.finalize` verifies signatures against them.
 import type { WalletId } from '../wallet/types';
 import {
-  baseKind, custodiesOf, describeOrder, familyOfKind, formatKas, formatUnits, isOrderKind, isPairKind, kindFor, big, pairFactsOf, type OrderDescription,
+  baseKind, custodiesOf, describeOrder, familyOfKind, formatKas, formatUnits, isOrderKind, isPairKind, kindFor, big, orderKindOfTemplate, pairFactsOf,
+  type OrderDescription,
   type PairTokenFacts,
 } from './order-facts';
 import { declaredRateLimit, type FeePolicy } from './fee-policy';
@@ -407,7 +408,9 @@ function planSigner(p: SigPlan): Hex | null {
     case 'entry': return p.args.find((a) => a.kind === 'sig')?.value ?? null;
     case 'tokenLeader':
     case 'tokenDelegator': return p.witness.kind === 'p2pk' ? p.witness.value : null;
-    case 'kronToken': return null; // KRON token inputs carry no signature: address presence is a P2PK input of the owner elsewhere
+    // a KRON token input carries no signature (address presence is a P2PK input of the owner elsewhere), except an id_type 0 holder's
+    // (a token-level signature in its signature column: KForge)
+    case 'kronToken': return p.signer ?? null;
   }
 }
 
@@ -581,7 +584,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const newCovenantIds = new Set<Hex>(recovered.map((r) => r.covenantId));
   const recoveredByOutput = new Map(recovered.map((r) => [r.output, r]));
   for (const c of built.covenants) {
-    if (c.template && isOrderKind(c.template) && !c.outputs.some((o) => recoveredByOutput.has(o))) {
+    if (c.template && isOrderKind(orderKindOfTemplate(c.template)) && !c.outputs.some((o) => recoveredByOutput.has(o))) {
       add('order-unrecorded', `output ${c.outputs[0]} creates a ${c.template} covenant without a valid placement record: it would be invisible to matchers and to you`, { output: c.outputs[0] });
     }
   }
