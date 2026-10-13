@@ -253,7 +253,9 @@ the IOC / FOK kill time `max(UTXO DAA, activeFrom) + 600`, or UTXO DAA + 77,760,
 order whose placement-record `deadline` has passed by the matcher's UTC clock (§10.10), even if
 its `expiryDaa` is still ahead. Those orders belong to the refund keeper (§5). The covenants still
 accept such fills at the order's own limit (accepted spec: soft expiry). A merge (§6.1) is not a
-fill: it is always allowed.
+fill: it is always allowed. The reference indexer's books show the same orders the matcher may fill: the KAS books
+(`/v1/books`, `indexer::reads::fillable_now`) and the pair books (`indexer::pairs`) leave out an order before its
+`activeFrom` and every order of this paragraph; `/v1/orders` keeps showing them, flagged `expired`.
 
 ---
 

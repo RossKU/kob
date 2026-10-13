@@ -91,7 +91,7 @@ fn seed_order(
     c.execute(
         "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, scale, min_fill, price, tip, \
          expiry_daa, in_book, initial_amount, genesis_state, genesis_block, genesis_daa, listed, unlisted_reason) \
-         VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, 1000, 1000, ?7, 0, 900, 1, ?8, x'00', ?9, ?10, ?11, ?12)",
+         VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, 1000, 1000, ?7, 0, 100000000, 1, ?8, x'00', ?9, ?10, ?11, ?12)",
         params![
             cid(id),
             if side == 1 { "KobAsk" } else { "KobBid" },
@@ -275,8 +275,8 @@ async fn book_aggregated_and_per_order() {
     assert_eq!((v["asks"][0]["scale"].as_i64(), v["asks"][0]["min_fill"].as_str()), (Some(1000), Some("1000")));
     assert_eq!(v["asks"][0]["confirmations"], 800);
     assert_eq!(v["asks"][0]["settled"], true);
-    // order 2 expires at DAA 900 < node DAA 1000
-    assert_eq!(v["asks"][0]["expired"], true);
+    // every order of the book is fillable now (an expired one is not in the book: `the_kas_book_lists_only_...`)
+    assert_eq!(v["asks"][0]["expired"], false);
 
     let (_, v) = get(&app, &format!("/v1/books/{}?aggregate=false&depth=1", h(TOKEN))).await;
     assert_eq!(ids(&v["asks"]), vec![h(2)]);
@@ -293,6 +293,45 @@ async fn book_aggregated_and_per_order() {
     assert_eq!(s, StatusCode::BAD_REQUEST);
     let (s, _) = get(&app, &format!("/v1/books/{}?aggregate=maybe", h(TOKEN))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+/// The KAS book (`/v1/books`, aggregated and per order, and the stats' best bid and ask) lists only the orders a conforming
+/// matcher may fill at the node's DAA score (`docs/spec/matcher.md` §2.2, §2.3), as the pair books do: not one past its soft
+/// expiry, nor one not yet active, nor an IOC past its kill time, nor a day order past its deadline. They stay in
+/// `/v1/orders`, flagged `expired`, for their makers and the refund keepers.
+#[tokio::test]
+async fn the_kas_book_lists_only_orders_a_matcher_may_fill_now() {
+    let e = env(|_| {});
+    seed_all(&e.w);
+    let set = |sql: &str, id: u8| {
+        e.w.execute(sql, params![cid(id)]).unwrap();
+    };
+    // node DAA 1000: ask 2 expires at it, ask 3 activates after it, ask 1 is an IOC whose kill time passed (its UTXO at DAA
+    // 100, killed from 700), bid 7 a day order whose deadline passed
+    set("UPDATE orders SET expiry_daa = 1000 WHERE covenant_id = ?1", 2);
+    set("UPDATE orders SET active_from = 1001 WHERE covenant_id = ?1", 3);
+    set("UPDATE orders SET tif = 1 WHERE covenant_id = ?1", 1);
+    set("UPDATE orders SET deadline = 1 WHERE covenant_id = ?1", 7);
+    let app = router(e.state.clone());
+    let (s, v) = get(&app, &format!("/v1/books/{}", h(TOKEN))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(v["asks"].as_array().unwrap().is_empty(), "{v}");
+    let bids = v["bids"].as_array().unwrap();
+    assert_eq!(bids.len(), 1, "{v}");
+    assert_eq!(bids[0]["price"], "240000");
+    let (_, v) = get(&app, &format!("/v1/books/{}?aggregate=false", h(TOKEN))).await;
+    assert!(ids(&v["asks"]).is_empty(), "{v}");
+    assert_eq!(ids(&v["bids"]), vec![h(6)]);
+    // the orders themselves stay visible, the expired one flagged
+    let (_, v) = get(&app, &format!("/v1/orders/{}", h(2))).await;
+    assert_eq!((v["status"].as_str(), v["expired"].as_bool()), (Some("partial"), Some(true)));
+    // one block earlier every one of them was fillable (the IOC from its activation to its kill time)
+    e.state.health.update(|h| h.node_daa = Some(650));
+    set("UPDATE orders SET active_from = 600 WHERE covenant_id = ?1", 3);
+    set("UPDATE orders SET deadline = NULL WHERE covenant_id = ?1", 7);
+    let (_, v) = get(&app, &format!("/v1/books/{}?aggregate=false", h(TOKEN))).await;
+    assert_eq!(ids(&v["asks"]), vec![h(2), h(3), h(1)]);
+    assert_eq!(ids(&v["bids"]), vec![h(7), h(6)]);
 }
 
 #[tokio::test]

@@ -289,14 +289,46 @@ const BOOK_WHERE: &str = concat!(
     not_frozen!()
 );
 
+/// The DAA score a book is evaluated at: the node's, else the store's cursor.
+pub(crate) fn book_daa(conn: &Connection, ctx: &ReadCtx) -> DbResult<i64> {
+    Ok(match ctx.node_daa {
+        Some(n) => n,
+        None => super::book::cursor_daa(conn)?,
+    }
+    .min(i64::MAX as u64) as i64)
+}
+
+/// SQL predicate of an order a conforming matcher may fill at DAA `now` (`docs/spec/matcher.md` §2.2, §2.3), over the
+/// aliases `o` (orders), `s` (order_state) and `u` (the current order UTXO, LEFT JOINed): active (`activeFrom <= now`), not
+/// due for a refund (`AnyState::refund_due`: the soft expiry, 90 days idle since the UTXO, the IOC / FOK kill time
+/// `max(UTXO DAA, activeFrom) + 600` of a plain ask or bid) and, with a wall clock, its day-order deadline not passed. The
+/// KAS books (`/v1/books`, the stats' best bid and ask) list only these, as the pair books do from the decoded state
+/// (`pairs::eligible`) and the matcher (`matcher::candidate::excluded_by_expiry`); an order outside it waits for a refund
+/// keeper (or its activation) and is shown by `/v1/orders`, flagged `expired`.
+pub(crate) fn fillable_now(now: i64, now_unix: Option<u64>) -> String {
+    use kob_protocol::state::{IOC_LIFE, MAX_IDLE, TIF_GTC};
+    // the current UTXO's DAA (the order state's last DAA when the UTXO row is not stored)
+    let udaa = "COALESCE(u.created_daa, s.last_daa)";
+    let mut w = format!(
+        "(o.expiry_daa IS NULL OR o.expiry_daa > {now}) AND COALESCE(o.active_from, 0) <= {now} AND {udaa} + {MAX_IDLE} > {now} \
+         AND (COALESCE(o.tif, {TIF_GTC}) = {TIF_GTC} OR o.contract NOT IN ('KobAsk','KobAskKron','KobBid','KobBidKron') \
+              OR MAX({udaa}, COALESCE(o.active_from, 0)) + {IOC_LIFE} > {now})"
+    );
+    if let Some(unix) = now_unix {
+        w.push_str(&format!(" AND (o.deadline IS NULL OR o.deadline > {})", unix.min(i64::MAX as u64)));
+    }
+    w
+}
+
 fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64, depth: usize) -> DbResult<Vec<BookOrderView>> {
     let dir = if side == 1 { "ASC" } else { "DESC" };
+    let live = fillable_now(book_daa(conn, ctx)?, ctx.now_unix);
     let sql = format!(
         "SELECT o.covenant_id, o.contract, o.maker, o.price, o.tip, o.min_fill, o.scale, o.expiry_daa, o.genesis_daa, \
                 s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, u.state, u.created_daa \
          FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-         WHERE {BOOK_WHERE} AND {CUSTODY_OK} \
+         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} \
          ORDER BY {PER_BASE_UNIT} {dir}, o.genesis_block ASC, o.covenant_id ASC LIMIT ?3"
     );
     let mut st = conn.prepare(&sql)?;
@@ -341,11 +373,14 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
 /// Aggregated levels of one side: per (`price`, `scale`), the amounts summed in 128 bits (base units of hostile orders can sum
 /// past an `i64`, where SQLite's `SUM` fails), ordered EXACTLY by the price per base unit (`price / scale`, compared by
 /// cross-multiplication; asks ascending, bids descending; at one price per base unit by `price`, then `scale`, in the same
-/// direction). Every live listed order of the side is read (the book of one token).
-fn book_side_levels(conn: &Connection, token: &Hash32, side: i64, depth: usize) -> DbResult<Vec<LevelView>> {
+/// direction). Every live listed order of the side a matcher may fill now ([`fillable_now`]) is read (the book of one token).
+fn book_side_levels(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64, depth: usize) -> DbResult<Vec<LevelView>> {
+    let live = fillable_now(book_daa(conn, ctx)?, ctx.now_unix);
     let sql = format!(
         "SELECT o.price, COALESCE(o.scale, 1), s.remaining_amount, s.amount_exact \
-         FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id WHERE {BOOK_WHERE} AND {CUSTODY_OK}"
+         FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
+         LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
+         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live}"
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(rusqlite::params![token.0.to_vec(), side], |r| {
@@ -473,7 +508,10 @@ pub fn auction_of(state: &AnyState, utxo_daa: i64, node_daa: Option<u64>) -> Opt
 /// The listed book of one token: asks ascending, bids descending (ties by age, then covenant id).
 pub fn book(conn: &Connection, ctx: &ReadCtx, token: &Hash32, depth: usize, aggregate: bool) -> DbResult<BookView> {
     let (asks, bids) = if aggregate {
-        (BookSide::Levels(book_side_levels(conn, token, 1, depth)?), BookSide::Levels(book_side_levels(conn, token, 2, depth)?))
+        (
+            BookSide::Levels(book_side_levels(conn, ctx, token, 1, depth)?),
+            BookSide::Levels(book_side_levels(conn, ctx, token, 2, depth)?),
+        )
     } else {
         (
             BookSide::Orders(book_side_orders(conn, ctx, token, 1, depth)?),
