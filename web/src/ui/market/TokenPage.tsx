@@ -9,6 +9,9 @@ import { useSystemStatus } from '../shell/StatusProvider';
 import { buildBookModel, groupSizes, inferTick, levelsFromView } from './book-model';
 import { useCoalescedReload, useStaleSince } from './book-stale';
 import { useOpenToken } from './use-open-token';
+import { useHeldToken } from './use-held-token';
+import { FirstOrderDecimals } from './FirstOrderDecimals';
+import { issuedDecimals } from '../../data/issued-decimals';
 import { DepthChart } from './DepthChart';
 import { useLiveRefresh } from './live';
 import { basisToTokenSompi, depthFromBook, depthFromView, priceDecimals, priceText, statsModel, tapeFromFills, tapeFromTrades } from './market-model';
@@ -62,14 +65,20 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
 
   const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
   const allRows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, []), [registry, tokens.data]);
-  const baseRow = useMemo(() => allRows.find((r) => r.covenantId === id) ?? null, [allRows, id]);
+  const listedRow = useMemo(() => allRows.find((r) => r.covenantId === id) ?? null, [allRows, id]);
+  // a KCC-20 token in neither list (no order of it yet): its market only from the wallet's node-verified holdings of it (kob/open-token.ts)
+  const held = useHeldToken(id, !listedRow && !tokens.loading);
+  const baseRow = listedRow ?? held.row;
   // the pair selector offers only tokens this build can trade
   const choiceRows = useMemo(() => tradableRows(allRows, kob.templates()), [allRows, kob]);
   // another listed token uses this ticker: a short note at the title and the ticket
   const sharedTicker = useMemo(() => sharedTickerIds(choiceRows).has(id), [choiceRows, id]);
   // an open-list token (program on the strict list, no registry entry) is tradable with a TokenInfo synthesised from its orders: its decimals taken
   // from the scale its orders share
-  const open = useOpenToken(baseRow, liveKey);
+  // the decimals entered for the token's first order (used only while no order tells the scale); per token
+  const [entered, setEntered] = useState<{ id: string; decimals: number } | null>(null);
+  const enteredDecimals = entered && entered.id === id ? entered.decimals : null;
+  const open = useOpenToken(baseRow, liveKey, enteredDecimals);
   const row = useMemo(
     () =>
       baseRow && open.info
@@ -212,18 +221,24 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   );
 
   if (!row) {
-    if (tokens.loading) return <Loading />;
+    if (tokens.loading || held.loading) return <Loading />;
     return (
       <div class="stack" data-testid="token-not-found">
-        <Banner tone="warn" title={t('market.token.notFound')}>{t('market.token.notFoundBody', { id })}</Banner>
+        <Banner tone="warn" title={t('market.token.notFound')}>
+          {t('market.token.notFoundBody', { id })}
+          {held.reason && held.reason !== 'not-held' ? <div data-testid="token-held-reason">{t(`market.held.${held.reason}`)}</div> : null}
+          {!wallet.info ? <div data-testid="token-held-connect">{t('market.held.connect')}</div> : null}
+        </Banner>
         <div><a href="#/market">{t('market.token.back')}</a></div>
       </div>
     );
   }
 
-  // a registry token this build cannot trade (or an open-list token whose program it does not embed) has no market page here
-  if ((row.source === 'registry' && !row.tradable) || open.reason === 'program-unknown') {
-    return <NotTradablePage ticker={row.ticker} covenantId={row.covenantId} reason={open.reason === 'program-unknown' ? t('market.open.program-unknown') : row.reason ? t(`market.reason.${row.reason}`) : null} />;
+  // a registry token this build cannot trade (or an open-list token whose program it does not embed, or does not trade on this network) has
+  // no market page here
+  if ((row.source === 'registry' && !row.tradable) || open.reason === 'program-unknown' || open.reason === 'program-unreviewed') {
+    const reason = open.reason === 'program-unknown' || open.reason === 'program-unreviewed' ? t(`market.open.${open.reason}`) : row.reason ? t(`market.reason.${row.reason}`) : null;
+    return <NotTradablePage ticker={row.ticker} covenantId={row.covenantId} reason={reason} />;
   }
 
   const info = row.info;
@@ -310,9 +325,17 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
         <div class="stack mkt-area-ticket">
           {info && row.tradable ? (
             <div data-testid="ticket-container">
+              {info.openScale === 'entered' ? (
+                <Banner tone="info" data-testid="first-order-entered">
+                  {t('market.first.entered', { decimals: info.decimals })}{' '}
+                  <Button small variant="ghost" onClick={() => setEntered(null)} data-testid="first-order-change">{t('market.first.change')}</Button>
+                </Banner>
+              ) : null}
               {wallet.networkMismatch ? <Banner tone="error" data-testid="ticket-network-blocked">{t('market.ticket.networkBlocked')}</Banner> : null}
               <OrderTicket token={info} prefill={prefill} powers={row.powers} inverted={inverted} sharedTicker={sharedTicker} />
             </div>
+          ) : open.reason === 'no-scale' ? (
+            <FirstOrderDecimals key={id} known={issuedDecimals(services.config.network, id)} onSet={(d) => setEntered({ id, decimals: d })} />
           ) : (
             <Section title={t('market.ticket.title')} data-testid="ticket-unavailable" class="mkt-card">
               <Banner tone="warn" data-testid="ticket-untradable">

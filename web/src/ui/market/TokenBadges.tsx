@@ -54,12 +54,12 @@ export function SharedTickerNote(props: { shared: boolean; block?: boolean; 'dat
  * Notes for a token found through the indexer only (open list): its amounts are in base units, and the covenant id is all that identifies it. Shows the
  * full covenant id. Renders nothing for a registry token.
  */
-export function OpenTokenNote(props: { token: Pick<TokenInfo, 'covenantId' | 'openList'> | null | undefined; 'data-testid'?: string }) {
+export function OpenTokenNote(props: { token: (Pick<TokenInfo, 'covenantId' | 'openList'> & Partial<Pick<TokenInfo, 'openScale' | 'decimals'>>) | null | undefined; 'data-testid'?: string }) {
   const tk = props.token;
   if (!tk || tk.openList !== true) return null;
   return (
     <Banner tone="info" title={t('market.open.title', { id: longId(tk.covenantId) })} data-testid={props['data-testid'] ?? 'open-token-caution'}>
-      {t('market.open.baseUnits')}
+      {tk.openScale === 'entered' ? t('market.open.enteredScale', { decimals: tk.decimals ?? 0 }) : t('market.open.baseUnits')}
       <div class="small wrap-anywhere" data-testid="open-token-full-id">
         {t('market.open.fullId')} <code>{tk.covenantId}</code>
       </div>

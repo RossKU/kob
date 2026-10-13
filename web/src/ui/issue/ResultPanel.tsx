@@ -1,5 +1,6 @@
 // The panel shown after an accepted issuance: identifiers, the registry entry to submit by pull request, downloads.
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { IssuePlan } from '../../kob/issue';
 import type { Hex } from '../../kob/types';
@@ -80,6 +81,7 @@ export function ResultPanel(props: ResultPanelProps) {
       </Section>
 
       <div class="row">
+        <a class="btn btn-primary" href={routeToHash(tokenRoute(plan.token.covenantId))} data-testid="issue-open-market">{t('issue.result.openMarket')}</a>
         <Button onClick={props.onAnother} data-testid="issue-another">{t('issue.result.another')}</Button>
       </div>
     </div>

@@ -110,4 +110,26 @@ describe('A1-2: an open-list KCC-20 token: the commitment is the indexer\'s pick
     // a registry token is not an open-list token: no identity section
     expect(buildConfirmModel(decode(placed.built), { registry }).sections.some((x) => x.id === 'identity')).toBe(false);
   });
+
+  it('a first order (decimals entered, no order of the token yet) shows its decimals; a commitment read from the holdings says so', () => {
+    const placed = placeGolden(kob, 'create.bid');
+    const bid = placed.recovered[0]!.order as OrderState;
+    const cov = (bid.state as unknown as { tokenCovId: Hex }).tokenCovId;
+    const base = registry.byCovenantId.get(cov)!;
+    const ext = base.extensionCommitment!;
+    const info: TokenInfo = {
+      ...base, openList: true, openScale: 'entered',
+      extension: { commitment: ext, source: 'holdings', references: [{ commitment: ext, source: 'holdings' }], mismatch: [] },
+    };
+    const reg = withExtraToken({ ...registry, tokens: registry.tokens.filter((t) => t.covenantId !== cov), byCovenantId: new Map([...registry.byCovenantId].filter(([k]) => k !== cov)) }, info);
+    const m = buildConfirmModel(decode(placed.built, reg), { registry: reg });
+    const rows = m.sections.find((x) => x.id === 'identity')!.rows;
+    expect(rows.map((r) => r.id)).toEqual([`scale-${cov}`, `ext-${cov}`]);
+    expect(rows[0]!.value).toBe(`${base.decimals} (entered by you)`);
+    expect(rows[0]!.tone).toBe('warn');
+    expect(rows[0]!.detail).toContain('does not record decimals');
+    expect(rows[1]!.detail).toContain('node-verified holdings');
+    expect(rows[1]!.tone).toBe('good');
+    expect(m.canSign).toBe(true);
+  });
 });

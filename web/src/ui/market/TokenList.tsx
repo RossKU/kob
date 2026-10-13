@@ -19,7 +19,8 @@ function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
   const { indexer, registry, kob } = useServices();
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(null);
+  // `page`: the token's page, where a wallet that holds a token the indexer does not list yet can open its market
+  const [message, setMessage] = useState<{ tone: 'error' | 'info'; text: string; page?: string } | null>(null);
   const id = parseCovenantId(text);
 
   const lookup = async () => {
@@ -36,7 +37,7 @@ function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
     setMessage(null);
     try {
       const found = (await indexer.tokens()).find((x) => x.covenant_id === id);
-      if (!found) setMessage({ tone: 'error', text: t('market.add.notFound') });
+      if (!found) setMessage({ tone: 'error', text: t('market.add.notFound'), page: routeToHash(tokenRoute(id)) });
       else if (!tradableHere({ source: 'indexer', info: null, index: found, delisted: found.standing === 'delisted' }, kob.templates())) setMessage({ tone: 'error', text: t('market.add.untradable') });
       else {
         props.onFound(found);
@@ -73,7 +74,12 @@ function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
           </Button>
         </div>
       </div>
-      {message ? <Banner tone={message.tone} data-testid="token-add-result">{message.text}</Banner> : null}
+      {message ? (
+        <Banner tone={message.tone} data-testid="token-add-result">
+          {message.text}
+          {message.page ? <> <a href={message.page} data-testid="token-add-page">{t('market.add.openPage')}</a></> : null}
+        </Banner>
+      ) : null}
     </Section>
   );
 }

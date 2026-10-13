@@ -1,6 +1,8 @@
 // Loads what the trading of an OPEN-LIST token needs (kob/open-token.ts): the scales of its open orders and, for a KCC-20 token whose indexer row has
 // no extension commitment, the commitment of one of its listed orders. Registry tokens are not touched. For a KCC-20 token the wallet's own
-// node-verified token UTXOs of it are read too: their commitments cross-check the indexer's pick (audit A1-2, `info.extension`).
+// node-verified token UTXOs of it are read too: their commitments cross-check the indexer's pick (audit A1-2, `info.extension`). A token without
+// orders takes the decimals the user entered for its first order (`decimals`); a book that cannot be read never lets them stand in for the
+// scale of orders that may exist.
 import { useMemo } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { extensionReferences, synthesizeOpenToken, type ScaleSample, type OpenTokenIssue } from '../../kob/open-token';
@@ -20,9 +22,9 @@ export interface OpenTokenState {
 
 const NONE: OpenTokenState = { info: null, reason: null, loading: false };
 
-/** `refreshKey` changes when the book moved: the scales are read again. */
-export function useOpenToken(row: TokenRow | null, refreshKey = 0): OpenTokenState {
-  const { indexer, kob, registry, tracker } = useServices();
+/** `refreshKey` changes when the book moved: the scales are read again. `decimals`: entered for a first order (used only without orders). */
+export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: number | null = null): OpenTokenState {
+  const { indexer, kob, registry, tracker, config } = useServices();
   const pubkey = useWallet().info?.pubkey ?? null;
   const view = row && row.source !== 'registry' && row.index && !row.delisted ? row.index : null;
   const facts = useAsync(
@@ -47,9 +49,11 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0): OpenTokenSta
   );
   return useMemo((): OpenTokenState => {
     if (!view) return NONE;
-    if (!facts.data) return { info: null, reason: facts.error ? 'no-scale' : null, loading: facts.loading };
+    if (!facts.data) return { info: null, reason: facts.error ? 'book-unavailable' : null, loading: facts.loading };
     const refs = extensionReferences(view.covenant_id, registry, facts.data.holdings);
-    const r = synthesizeOpenToken(kob, view, facts.data.scales, facts.data.ext, registry, refs);
+    const r = synthesizeOpenToken(kob, view, facts.data.scales, facts.data.ext, registry, refs, {
+      decimals, network: config.network, fromHoldings: row?.source === 'held',
+    });
     return r.ok ? { info: r.info, reason: null, loading: false } : { info: null, reason: r.reason, loading: false };
-  }, [view, facts.data, facts.error, facts.loading, kob, registry]);
+  }, [view, facts.data, facts.error, facts.loading, kob, registry, decimals, config.network, row?.source]);
 }

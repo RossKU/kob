@@ -4,6 +4,7 @@
 // All protocol logic is in kob/issue.ts (kob-wasm); this view only collects strings and renders findings.
 import { useMemo, useState } from 'preact/hooks';
 import { readFees } from '../../app/env';
+import { rememberIssuedDecimals } from '../../data/issued-decimals';
 import { useServices, useWallet } from '../../app/context';
 import { t } from '../../i18n';
 import { issueText } from '../../i18n/issue-text';
@@ -126,6 +127,8 @@ export function IssueView() {
     if (!current) return;
     if (r.status === 'submitted') {
       const trackFailed = !trackIssued(services, current);
+      // the issuer's own decimals: they prefill (never set) the decimals of the token's first order in this browser
+      rememberIssuedDecimals(config.network, current.token.covenantId, current.token.decimals);
       setNotice(null);
       setPhase({ kind: 'result', plan: current, txid: r.txid, trackFailed });
       return;

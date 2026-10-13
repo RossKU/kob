@@ -183,6 +183,8 @@ export interface TokenInfo {
   capabilities: Capability[];
   /** synthesised from the indexer for an open-list token that has no registry entry (kob/open-token.ts): decimals inferred, tick 1 */
   openList?: boolean;
+  /** an open-list token: its scale (and decimals) from the token's orders, or `entered` by the user for its first order (no order yet) */
+  openScale?: 'orders' | 'entered';
   /** an open-list KCC-20 token: where its extension commitment came from and how it compares with commitments known without the indexer */
   extension?: ExtensionCheck;
   /** kob-wasm program (null when this build cannot handle the template) */
@@ -202,7 +204,8 @@ export interface TokenInfo {
  */
 export interface ExtensionCheck {
   commitment: Hex;
-  source: 'indexer' | 'orders';
+  /** `holdings`: a token the indexer does not list, read from the wallet's node-verified token UTXOs of it (`heldTokenView`) */
+  source: 'indexer' | 'orders' | 'holdings';
   references: ExtensionReference[];
   mismatch: ExtensionReference[];
 }

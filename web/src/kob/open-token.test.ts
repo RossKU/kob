@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { IndexerTokenView } from '../data/indexer-types';
 import { displayName } from './registry';
-import { checkExtension, extensionReferences, standardScaleOf, synthesizeOpenToken } from './open-token';
+import { checkExtension, extensionReferences, heldTokenView, parseOpenDecimals, programAllowed, standardScaleOf, synthesizeOpenToken } from './open-token';
 import { toTokenMarket } from './token-market';
 import { loadKobNode } from './wasm.node';
 
@@ -104,5 +104,70 @@ describe('A1-2: the extension commitment of an open-list KCC-20 token is kept wi
       { commitment: EXT, source: 'holdings' },
     ]);
     expect(checkExtension(EXT.toUpperCase(), 'indexer', [{ commitment: EXT, source: 'holdings' }]).mismatch).toEqual([]);
+  });
+});
+
+describe('the first order of an open-list token: decimals entered by the user, never assumed', () => {
+  it('no orders: the entered decimals (0..=9) give the scale, marked as entered; nothing entered is still no-scale', () => {
+    const r = synthesizeOpenToken(kob, view(), [], null, null, [], { decimals: 6 });
+    expect(r.ok && r.info).toMatchObject({ decimals: 6, openScale: 'entered', openList: true });
+    expect(r.ok && toTokenMarket(kob, r.info.json).scale).toBe(1_000_000n);
+    expect(synthesizeOpenToken(kob, view(), [], null, null, [], { decimals: null })).toEqual({ ok: false, reason: 'no-scale' });
+    for (const bad of [10, -1, 2.5, Number.NaN]) expect(synthesizeOpenToken(kob, view(), [], null, null, [], { decimals: bad })).toEqual({ ok: false, reason: 'no-scale' });
+    const zero = synthesizeOpenToken(kob, view(), [], null, null, [], { decimals: 0 });
+    expect(zero.ok && zero.info.decimals).toBe(0);
+  });
+
+  it('once an order exists its scale decides, whatever was entered', () => {
+    const r = synthesizeOpenToken(kob, view(), scales, null, null, [], { decimals: 6 });
+    expect(r.ok && r.info).toMatchObject({ decimals: 3, openScale: 'orders' });
+  });
+
+  it('parseOpenDecimals: one digit 0..9, else null', () => {
+    expect(['0', ' 9 ', '6'].map(parseOpenDecimals)).toEqual([0, 9, 6]);
+    expect(['', '10', '-1', '1.5', 'x', '٣'].map(parseOpenDecimals)).toEqual([null, null, null, null, null, null]);
+  });
+});
+
+describe('program review: prototypes are not traded on mainnet without a registry entry', () => {
+  const tpl = (name: string) => kob.templates().find((t) => t.name === name)!;
+  it('mainnet: only reviewed programs; a test network: every embedded program', () => {
+    expect(programAllowed('KCC20Ref', 'mainnet')).toBe(true);
+    expect(programAllowed('KCC20PublicMint', 'mainnet')).toBe(true);
+    expect(programAllowed('KCC20Ref_8x8', 'mainnet')).toBe(false);
+    expect(programAllowed('KCC20Ref_8x8', 'testnet-10')).toBe(true);
+    expect(programAllowed('NoSuchProgram', 'testnet-10')).toBe(false);
+    expect(synthesizeOpenToken(kob, view(), scales, null, null, [], { network: 'mainnet' })).toEqual({ ok: false, reason: 'program-unreviewed' });
+    const ok = synthesizeOpenToken(kob, view({ template_hash: tpl('KCC20Ref').hash }), scales, null, null, [], { network: 'mainnet' });
+    expect(ok.ok && ok.info.program).toBe('KCC20Ref');
+  });
+});
+
+describe('heldTokenView: a covenant id the indexer does not list, from the wallet\'s node-verified holdings', () => {
+  const ref = kob.templates().find((t) => t.name === 'KCC20Ref')!;
+  const utxo = (ext: string, cov = ID) =>
+    ({ transactionId: '11'.repeat(32), index: 0, amount: '100000000', covenantId: cov, state: { amount: '5', owner: '22'.repeat(32), owner_scheme: 0, borrow_scheme: 0, borrow_guard: '00'.repeat(32), extension_commitment: ext } }) as never;
+
+  it('one program, one commitment: a row of the program, the commitment, no scale; tradable with entered decimals, the commitment from the holdings', () => {
+    const r = heldTokenView(kob, ID.toUpperCase(), ['KCC20Ref'], [utxo(EXT), utxo(EXT)], 'mainnet');
+    expect(r).toEqual({
+      ok: true,
+      view: { ticker: '', covenant_id: ID, template_hash: ref.hash, extension_commitment: EXT, scale: null, decimals: null, open_asks: 0, open_bids: 0, standing: 'unverified', powers: [], template_id: 'kcc20-ref-3x3', family: 'kcc20' },
+    });
+    if (!r.ok) return;
+    expect(synthesizeOpenToken(kob, r.view, [], null, null, [], { network: 'mainnet', fromHoldings: true })).toEqual({ ok: false, reason: 'no-scale' });
+    const s = synthesizeOpenToken(kob, r.view, [], null, null, extensionReferences(ID, null, [utxo(EXT)]), { network: 'mainnet', fromHoldings: true, decimals: 8 });
+    expect(s.ok && s.info).toMatchObject({ program: 'KCC20Ref', decimals: 8, openScale: 'entered', extension: { commitment: EXT, source: 'holdings', mismatch: [] } });
+  });
+
+  it('refuses: no holdings of the id, two programs, a prototype on mainnet, a KRON program, two commitments', () => {
+    expect(heldTokenView(kob, ID, ['KCC20Ref'], [], 'mainnet')).toEqual({ ok: false, reason: 'not-held' });
+    expect(heldTokenView(kob, ID, ['KCC20Ref'], [utxo(EXT, 'ff'.repeat(32))], 'mainnet')).toEqual({ ok: false, reason: 'not-held' });
+    expect(heldTokenView(kob, ID, [], [utxo(EXT)], 'mainnet')).toEqual({ ok: false, reason: 'not-held' });
+    expect(heldTokenView(kob, ID, ['KCC20Ref', 'KCC20PublicMint'], [utxo(EXT)], 'mainnet')).toEqual({ ok: false, reason: 'program-ambiguous' });
+    expect(heldTokenView(kob, ID, ['KCC20Ref_8x8'], [utxo(EXT)], 'mainnet')).toEqual({ ok: false, reason: 'program-unreviewed' });
+    expect(heldTokenView(kob, ID, ['KCC20Ref_8x8'], [utxo(EXT)], 'testnet-10').ok).toBe(true);
+    expect(heldTokenView(kob, ID, ['KronToken2433'], [utxo(EXT)], 'mainnet')).toEqual({ ok: false, reason: 'not-kcc20' });
+    expect(heldTokenView(kob, ID, ['KCC20Ref'], [utxo(EXT), utxo('cd'.repeat(32))], 'mainnet')).toEqual({ ok: false, reason: 'extension-ambiguous' });
   });
 });

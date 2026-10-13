@@ -8,18 +8,45 @@
 //     The pick and its source are kept on the TokenInfo (`extension`) so the pre-sign screen shows them, cross-checked against the commitments
 //     known without the indexer (`extensionReferences`: a genesis-verified registry entry, the wallet's node-verified holdings; audit A1-2);
 //   * scale: the order scale (a power of ten, the price denominator) shared by most open orders of the token, so the wallet's orders quote the
-//     same whole token as the book; no orders: `no-scale`; decimals = its exponent (the chain carries no decimals: amounts are shown in that
-//     whole token, prices per it);
+//     same whole token as the book; decimals = its exponent (the chain carries no decimals: amounts are shown in that whole token, prices per
+//     it). No orders: the decimals the user entered for the token's first order (0..=9, scale 10^decimals; `openScale: 'entered'`), else
+//     `no-scale`. Nothing on chain or in the indexer states a token's decimals (an issuance's KCC-23 metadata and supply.json are off-chain
+//     files), so they are never assumed; once an order exists its scale decides again;
+//   * program review: on mainnet only a `reviewed` program (the KCC-20 3/3 reference, its public-mint build, the KRON programs) is traded
+//     here, whatever the indexer lists; prototypes (8x8, ...) are `program-unreviewed`;
+//   * a KCC-20 token the indexer does not list at all (no order of it was ever placed) is known only from the wallet's own token UTXOs of it
+//     that the node confirmed (`heldTokenView`): their addresses commit to the program and the state, so they show the program and the
+//     extension commitment. Without such holdings there is nothing to check the covenant id against, and the token is not offered;
 //   * tick: 1 sompi.
 import type { IndexerTokenView } from '../data/indexer-types';
 import type { Hex, TokenProgram, TokenUtxo } from './types';
+import { TOKEN_PROGRAMS } from './programs.generated';
 import type { KobWasm } from './wasm';
 import { extensionOfState, familyOfProgram } from './token-state';
 import { TEMPLATE_ID_PROGRAM, toTokenMarket } from './token-market';
 import { CAPABILITIES, longId, type Capability, type ExtensionCheck, type ExtensionReference, type TokenInfo, type TokenRegistry } from './registry';
 
-export type OpenTokenIssue = 'program-unknown' | 'no-scale' | 'no-extension' | 'scale-invalid';
+export type OpenTokenIssue = 'program-unknown' | 'program-unreviewed' | 'no-scale' | 'no-extension' | 'scale-invalid' | 'book-unavailable';
 export type OpenTokenResult = { ok: true; info: TokenInfo } | { ok: false; reason: OpenTokenIssue };
+
+/** Most decimals a first order can name: the scale is `10^decimals`, at most 10^9 (`MAX_SCALE`, kob-protocol `state.rs`). */
+export const MAX_OPEN_DECIMALS = 9;
+
+/** Decimals entered for a first order: an integer 0..=9 (one digit), else null. */
+export function parseOpenDecimals(text: string): number | null {
+  const s = text.trim();
+  return /^[0-9]$/.test(s) ? Number(s) : null;
+}
+
+/**
+ * Whether this build trades a token of `program` without a registry entry on `network`: on mainnet only a program the profile table marks
+ * `reviewed` (`programs.generated.ts`); on a test network every embedded program (the indexer's strict list decides there).
+ */
+export function programAllowed(program: string, network: string | null | undefined): boolean {
+  const p = TOKEN_PROGRAMS.find((x) => x.name === program);
+  if (!p) return false;
+  return network !== 'mainnet' || p.review === 'reviewed';
+}
 
 /** What an order tells about its scale: base units per whole token (its price denominator). */
 export interface ScaleSample { scale?: number | null }
@@ -68,10 +95,19 @@ export function checkExtension(commitment: Hex, source: ExtensionCheck['source']
 
 const PROGRAM_TEMPLATE_ID: Readonly<Record<string, string>> = Object.fromEntries(Object.entries(TEMPLATE_ID_PROGRAM).map(([id, p]) => [p, id]));
 
+export interface OpenTokenOptions {
+  /** decimals the user entered for the token's first order (0..=9): used only when no order tells the scale */
+  decimals?: number | null;
+  /** the app's network: on `mainnet` only reviewed programs are traded (`programAllowed`) */
+  network?: string | null;
+  /** the row was built from the wallet's node-verified holdings (`heldTokenView`): the extension commitment's source is `holdings` */
+  fromHoldings?: boolean;
+}
+
 /**
  * TokenInfo of an open-list token, or the reason it cannot be traded here. `orderScales` are the scales of the token's open orders (book rows);
  * `extFromOrders` the extension commitment read from one of its listed orders; `references` the commitments known without the indexer
- * (`extensionReferences`), compared with the pick (`info.extension`).
+ * (`extensionReferences`), compared with the pick (`info.extension`); `opts.decimals` the decimals entered for a first order.
  */
 export function synthesizeOpenToken(
   kob: KobWasm,
@@ -80,6 +116,7 @@ export function synthesizeOpenToken(
   extFromOrders: Hex | null = null,
   reg: TokenRegistry | null = null,
   references: readonly ExtensionReference[] = [],
+  opts: OpenTokenOptions = {},
 ): OpenTokenResult {
   const tpl = view.template_hash ? kob.templates().find((t) => t.hash === view.template_hash && t.tokenSlots) : undefined;
   if (!tpl || !tpl.tokenSlots) return { ok: false, reason: 'program-unknown' };
@@ -87,9 +124,13 @@ export function synthesizeOpenToken(
   const family = familyOfProgram(program);
   const templateId = PROGRAM_TEMPLATE_ID[program];
   if (!templateId) return { ok: false, reason: 'program-unknown' };
+  if (!programAllowed(program, opts.network)) return { ok: false, reason: 'program-unreviewed' };
   const ext = family === 'kron' ? null : (view.extension_commitment ?? extFromOrders);
   if (family === 'kcc20' && !ext) return { ok: false, reason: 'no-extension' };
-  const scale = standardScaleOf(orderScales);
+  const fromOrders = standardScaleOf(orderScales);
+  const d = opts.decimals;
+  const entered = fromOrders === null && typeof d === 'number' && Number.isInteger(d) && d >= 0 && d <= MAX_OPEN_DECIMALS ? d : null;
+  const scale = fromOrders ?? (entered !== null ? 10 ** entered : null);
   if (scale === null) return { ok: false, reason: 'no-scale' };
   const decimals = exponentOf(scale);
   if (decimals === null) return { ok: false, reason: 'scale-invalid' };
@@ -113,10 +154,46 @@ export function synthesizeOpenToken(
     ok: true,
     info: {
       ticker: label, name: label, family, covenantId: id, templateId, templateHash: tpl.hash, extensionCommitment: ext, extensionClass: 'other', decimals,
-      tick: 1n, status: 'listed', capabilities, display: null, openList: true, program,
+      tick: 1n, status: 'listed', capabilities, display: null, openList: true, openScale: entered !== null ? 'entered' : 'orders', program,
       templateMatchesPinned: true, prefixLen: tpl.prefixLen, suffixLen: tpl.suffixLen, slots: { inputs: tpl.tokenSlots[0], outputs: tpl.tokenSlots[1] },
       tradable: true, untradableReason: null, json,
-      ...(family === 'kcc20' && ext ? { extension: checkExtension(ext, view.extension_commitment ? 'indexer' : 'orders', references) } : {}),
+      ...(family === 'kcc20' && ext ? { extension: checkExtension(ext, opts.fromHoldings ? 'holdings' : view.extension_commitment ? 'indexer' : 'orders', references) } : {}),
+    },
+  };
+}
+
+export type HeldTokenIssue = 'not-held' | 'program-ambiguous' | 'program-unknown' | 'program-unreviewed' | 'not-kcc20' | 'extension-ambiguous';
+export type HeldTokenResult = { ok: true; view: IndexerTokenView } | { ok: false; reason: HeldTokenIssue };
+
+/**
+ * The token row of a KCC-20 covenant id the indexer does not list, from the wallet's own token UTXOs of it that the node confirmed
+ * (`TokenTracker.tokenUtxosFor`, called with `programs[0]`; `programs` are the programs of the wallet's stored candidates of the covenant
+ * id). Each confirmed UTXO's address is the P2SH of the program and its state, at an outpoint the node lists under `covenantId`: the
+ * covenant id holds tokens of that program. The candidates must name ONE program, one this build embeds and allows on `network`
+ * (`programAllowed`), of the KCC-20 family, and the UTXOs must carry ONE extension commitment. No decimals, no scale, no orders: the
+ * first order names its decimals (`synthesizeOpenToken`, `opts.decimals`).
+ */
+export function heldTokenView(
+  kob: KobWasm, covenantId: Hex, programs: readonly TokenProgram[], held: readonly TokenUtxo[], network: string | null | undefined,
+): HeldTokenResult {
+  const id = covenantId.toLowerCase();
+  const mine = held.filter((u) => (u.covenantId ?? '').toLowerCase() === id);
+  const distinct = [...new Set(programs)];
+  if (distinct.length > 1) return { ok: false, reason: 'program-ambiguous' };
+  if (mine.length === 0 || distinct.length === 0) return { ok: false, reason: 'not-held' };
+  const program = distinct[0]!;
+  const tpl = kob.templates().find((t) => t.name === program && t.tokenSlots);
+  const templateId = PROGRAM_TEMPLATE_ID[program];
+  if (!tpl || !templateId) return { ok: false, reason: 'program-unknown' };
+  if (familyOfProgram(program) !== 'kcc20') return { ok: false, reason: 'not-kcc20' };
+  if (!programAllowed(program, network)) return { ok: false, reason: 'program-unreviewed' };
+  const exts = new Set(mine.map((u) => extensionOfState(u.state)?.toLowerCase() ?? ''));
+  if (exts.size !== 1 || exts.has('')) return { ok: false, reason: 'extension-ambiguous' };
+  return {
+    ok: true,
+    view: {
+      ticker: '', covenant_id: id, template_hash: tpl.hash, extension_commitment: [...exts][0]!, scale: null, decimals: null, open_asks: 0, open_bids: 0,
+      standing: 'unverified', powers: [], template_id: templateId, family: 'kcc20',
     },
   };
 }

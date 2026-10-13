@@ -62,7 +62,8 @@ export const KNOWN_POWERS = ['mint-authority', 'public-mint', 'burn', 'freeze', 
 export const hasIssuerControl = (powers: readonly string[] | null | undefined): boolean =>
   !!powers && powers.some((p) => (ISSUER_CONTROL_POWERS as readonly string[]).includes(p));
 
-export type TokenSource = 'registry' | 'indexer' | 'pasted';
+/** `held`: a token the indexer does not list, known from the wallet's node-verified holdings of it (`kob/open-token.ts` `heldTokenView`) */
+export type TokenSource = 'registry' | 'indexer' | 'pasted' | 'held';
 
 export interface TokenRow {
   covenantId: string;

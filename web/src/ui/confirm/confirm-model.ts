@@ -139,14 +139,19 @@ type CheckedOpenToken = TokenInfo & { extension: NonNullable<TokenInfo['extensio
 export function openTokenIdentity(summary: SigningSummary, registry: TokenRegistry | null, tr: Translate = t): { rows: Row[]; blocking: Finding[] } {
   const rows: Row[] = [];
   const blocking: Finding[] = [];
-  const open = [...tokensOf(summary)]
-    .map((id) => registry?.byCovenantId.get(id))
-    .filter((i): i is CheckedOpenToken => !!i && i.openList === true && i.family === 'kcc20' && !!i.extension);
+  const tokens = [...tokensOf(summary)].map((id) => registry?.byCovenantId.get(id));
+  // a first order: the scale is the one the user entered (no order of the token tells one yet), shown with its decimals
+  for (const info of tokens) {
+    if (!info || info.openList !== true || info.openScale !== 'entered') continue;
+    const token = longId(info.covenantId);
+    rows.push(row('scale-' + info.covenantId, tr('confirm.openScale.label', { token }), tr('confirm.openScale.value', { decimals: info.decimals }), 'warn', tr('confirm.openScale.detail')));
+  }
+  const open = tokens.filter((i): i is CheckedOpenToken => !!i && i.openList === true && i.family === 'kcc20' && !!i.extension);
   for (const info of open) {
     const x = info.extension;
     const token = longId(info.covenantId);
     const refName = (src: ExtensionReference['source']): string => tr(src === 'holdings' ? 'confirm.ext.ref.holdings' : 'confirm.ext.ref.registryGenesis');
-    const source = tr(x.source === 'indexer' ? 'confirm.ext.fromIndexer' : 'confirm.ext.fromOrders');
+    const source = tr(x.source === 'indexer' ? 'confirm.ext.fromIndexer' : x.source === 'holdings' ? 'confirm.ext.fromHoldings' : 'confirm.ext.fromOrders');
     const check =
       x.mismatch.length > 0
         ? tr('confirm.ext.checkMismatch')
