@@ -275,7 +275,11 @@ pub fn branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
     let wav = wa.escrow(carrier() as i64).unwrap() as u64;
     v.push(("branch.ifd.ask.repeat.waitUnbooked".into(), Action::Batch(ifda_fill(wa, 4, wav, None, 1_000))));
     if p.family() == Family::Kron {
-        v = v.into_iter().map(|(n, a)| (n, kron_action(a))).collect();
+        v = v.into_iter().map(|(n, a)| (n, kron_action_on(p, a))).collect();
+    }
+    // a program with fewer token slots than the fixtures assume keeps the shapes that fit them (`scenarios_on`)
+    if p.token_slots().is_some_and(|(i, o)| i < 3 || o < 3) {
+        v.retain(|(_, a)| fits_slots(a));
     }
     v
 }

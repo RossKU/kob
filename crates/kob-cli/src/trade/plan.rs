@@ -1137,7 +1137,7 @@ pub fn usable_token_utxos(m: &TokenMarket, maker: &[u8; 32], utxos: &[TokenUtxo]
         .iter()
         .filter(|u| {
             u.utxo.covenant_id == Some(m.cov)
-                && u.state.is_user()
+                && u.state.is_holder(m.program)
                 && u.state.owner() == *maker
                 && u.state.is_plain()
                 && u.state.family() == m.family

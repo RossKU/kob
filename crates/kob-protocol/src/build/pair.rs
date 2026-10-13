@@ -23,6 +23,16 @@ pub fn pair_programs(s: &AnyState) -> Result<(Token, Token)> {
         if Some(p.family()) != k.family_of() {
             return invalid(format!("pair order: token {what} program {} is not of the family its state names", p.name()));
         }
+        // the pair templates deliver a KRON token with id_type 3 (address presence, `KRON_DELIVERY`): a program whose holders
+        // are another owner type (KForge: id_type 0) has no pair template, its maker could never spend such a delivery
+        if !p.serves_pairs() {
+            return invalid(format!(
+                "pair order: token {what} program {} holds tokens with id_type {}; the pair templates deliver KRON tokens with \
+                 id_type 3 only (no pair template serves it)",
+                p.name(),
+                crate::state::HolderOf::Program(p).owner_type()
+            ));
+        }
         Ok((k.cov_id, p))
     };
     let (a, b) = (prog(&t.a, "A")?, prog(&t.b, "B")?);

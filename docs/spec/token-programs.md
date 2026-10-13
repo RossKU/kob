@@ -24,13 +24,14 @@ reads the entry.
 | `template_hash` | blake3 `template_hash(prefix, suffix)` of the cut, lowercase hex: the pin | `artifacts.rs`, order states, registry |
 | `layout` | `prefix_len`, `state_len`, `suffix_len` of the cut | every redeem script KOB derives or recognises |
 | `codec` | State codec family, `kcc20` (112-byte state) or `kron` (46-byte state) | state codec, the order templates of that family |
-| `owners` | `custody` (owner value of order custody, a covenant id) and `holder` (owner value of wallet holdings and maker deliveries) | must equal the family's order templates (checked) |
+| `owners` | `custody` (owner value of order custody, a covenant id) and `holder` (owner value of wallet holdings and maker deliveries) | custody equal to the family's order templates, holder one a build of them delivers to (checked); the holder selects the build (KRON: 3, or 0 for the `*KronD0` builds) |
 | `slots` | `inputs` / `outputs`: token inputs and outputs one transaction may carry (leader included) | builders, planner (`matcher/family.rs`), keepers, router |
 | `carrier_floor` | Smallest KAS value (sompi) of a token output the program accepts (measured) | builders, order-term checks (`check_new_order`) |
 | `witness` | `scheme` (`kcc20-transfer` or `kron-columns`) and, for `kron-columns`, `trailing_pushes` (constant pushes after the witness column, e.g. an entry selector); `kcc1-tagged` (with `entries`) only in a derived, non-tradable profile (onboarding, step 1) | `tx.rs` signature scripts, the indexer's next-state parser |
 | `router_intents` | Whether router intents may name the program | `router::intent_program` |
 | `genesis` | `minters` (`genesis-only` or `unknown`) and `companions` (section 3) | `registry::verify_genesis`, `genesis_evidence` (condition C2) |
 | `review` | `status` (`reviewed`, `pending-review`, `test-only`) and its `basis` | equal to the shipped registry's `review_status` (checked) |
+| `networks` | The networks the program's tokens exist on (empty: any). A program not on mainnet is not on the shipped (mainnet) registry and no mainnet build trades it; a KRON program with holder 0 must name its networks, without mainnet | registry tests, `kob place` / web open markets |
 
 The compute budgets and keeper tips are measured, not declared: `data/compute_budgets.json`, `data/keeper_tips.json` and
 `data/pair_keeper_tips.json` are generated over every profile (`KOB_REGEN=1`, the test list `common::PROGRAMS` is
@@ -41,8 +42,9 @@ stale). `kob registry programs [--json]` prints the embedded table.
 
 ### Checks
 
-* **Shape** (`ProgramProfile::check_shape`, on load and in `add-program`): the codec's state length; owners equal to the
-  family's order templates (KCC-20: custody 4, holder 0; KRON: custody 2, holder 3); a witness scheme the family's builders
+* **Shape** (`ProgramProfile::check_shape`, on load and in `add-program`): the codec's state length; owners the family's
+  order templates serve (KCC-20: custody 4, holder 0; KRON: custody 2, holder 3, or holder 0 with the testnet-only `*KronD0`
+  builds, so a holder-0 KRON program lists its networks without mainnet); a witness scheme the family's builders
   implement; trailing pushes only for `kron-columns`; companions either a known decoder of the right role or an opaque
   program (a minter needs a decoder); a non-empty review basis.
 * **Table**: unique names, variants, registry ids, record codes and template hashes.
@@ -51,7 +53,7 @@ stale). `kob registry programs [--json]` prints the embedded table.
   `transfer` / `transfer_delegator` entries with their dispatch tags (`79c71c23`, `fd3ef14a`).
 * **Registry**: a strict-list entry whose template hash is an embedded program must state the profile's family, layout, slots
   and custody owner (`profile::check_registry_template`, run by `Registry::validate`); the shipped registry's review status of
-  every program equals the profile's, and every non-`test-only` program is on it (`profile` tests).
+  every program equals the profile's, and every non-`test-only` program on mainnet is on it, no other (`profile` tests).
 
 ## 2. What is data and what is code
 
@@ -119,7 +121,7 @@ kob registry add-program <ARTIFACT.json | REDEEM.bin | REDEEM.hex | HEX> --name 
    the strict list.
 3. **Registry.** Add the printed entry to `registry/tokens.json` `templates` as `pending-review` (with provenance under
    `source`, licence and `UPSTREAM.md` next to the bytes), declare its `capabilities` and `risks`.
-4. **Measure.** Replace the ignored stub tests with engine tests: owners, slots, carrier floor (the KForge dry run below is a
+4. **Measure.** Replace the ignored stub tests with engine tests: owners, slots, carrier floor (KForge below is a
    worked example), then `KOB_REGEN=1 cargo test -p kob-protocol --test budget_table --test keeper_tips` and the budget,
    tip and cost tests.
 5. **Review** (section 5). Only then `review.status: reviewed` in the profile and `review_status: reviewed` in the registry,
@@ -161,27 +163,37 @@ notes:
 | Kasseal | `kcc20-ref-public-mint` (no new program) | Nothing new: its launches use the reference's published public-mint build. Curve and pool are their own covenants, outside the token's genesis group; the SEAL launch genesis verifies as a fixed supply |
 | KaspaCom 0.2.5 | `kcc20-kaspacom-0-2-5` | Data: profile with `carrier_floor` 0.5 KAS (measured), `router_intents: false`, `minters: unknown` (minter lanes behind the extension commitment). Stays `pending-review` (finding K-1) |
 | KRON launchpad | `kron-2433`, `kron-2732` | The KRON codec family (orders and builders, reviewed B2); both programs are data on it |
-| KForge (testnet-10) | `5b136633...` (dry run, not added) | Blocked at review item 4, see below |
+| KForge (testnet-10) | `KForgeToken1785` | Code: the delivery id_type 0 builds of the KRON order kinds and id_type 0 holder spends (a token-level signature in the signature column). Data: profile with holder 0, slots 1 / 3, `networks: [testnet-10]`, `pending-review`; see below |
 
-### KForge dry run
+### KForge
 
-`crates/kob-tests/tests/program_kforge_dry_run.rs`, fixtures in `contracts/third-party/kforge/` (`program.bin`, a redeem script
-observed on testnet-10; `observed-transfer.json`, a real transfer; `profile.candidate.json`, the derived profile plus the
-measured facts). The program is not in `programs.json` and not tradable.
+`crates/kob-tests/tests/program_kforgetoken1785.rs`, fixtures in `contracts/third-party/kforge/` (`program.bin`, a redeem script
+observed on testnet-10; `observed-transfer.json`, a real transfer).
 
-* Derived from the bytes alone: KRON codec, a one-byte prefix (`OP_TOALTSTACK`: an entry selector) before the 46-byte state,
-  template hash `5b136633944a2371a1d0f6a94fdc0d329327ffc700fdec097fc59e76e1d33ae1`, witness `kron-columns` with one trailing
-  `OP_0`. KOB's builder with that profile reproduces the signature script of the observed transfer byte for byte, and its token
-  outputs are the P2SH of the derived cut.
+* Derived from the bytes alone (`kob registry add-program ... --slots 1/3 --holder 0 --network testnet-10`): KRON codec, a one-byte
+  prefix (`OP_TOALTSTACK`: an entry selector) before the 46-byte state, template hash
+  `5b136633944a2371a1d0f6a94fdc0d329327ffc700fdec097fc59e76e1d33ae1`, witness `kron-columns` with one trailing `OP_0`. KOB's
+  builder with that profile reproduces the signature script of the observed transfer byte for byte, and its token outputs are the
+  P2SH of the derived cut.
 * Measured in the engine: custody (id_type 2) released by the order covenant's input is accepted, and refused without the
   selector push, without the covenant's input, or when it mints; 1 token input and 3 token outputs per transaction; a carrier
-  floor of 1 sompi; holders are id_type 0 (a token-level signature); **address presence (id_type 3) is refused**.
-* Result: the profile check refuses the candidate, because KOB's KRON order templates deliver to makers with id_type 3
-  (`TYPE_DELIVERY`, compiled in) and a KForge maker could never spend such a delivery. With holder 3 every other fact is a
-  valid table entry, and with the derived (unmeasured) profile `add-program --write` embeds it without any code change. So
-  KForge needs one codec variant before it is data plus review: KRON order templates built with delivery id_type 0 and a
-  builder for id_type 0 holder spends (token-level signatures in the signature column), then items 5 to 10 of the checklist
-  (the other selector branches, genesis, suites and ablation, budgets).
+  floor of 1 sompi; amounts up to 1e9 (and, unlike the KRON programs, a zero-amount output, which KOB never builds); holders are id_type 0, authorised by the owner's SIGHASH_ALL signature of the token input in
+  the signature column (the witness byte is not read for them; no signature, another key's or another input's signature is
+  refused); **address presence (id_type 3) is refused**. No minting, no burning, no minter output on the transfer branch, and no
+  other selector value moves a holder's tokens without its signature, releases a custody without its covenant or mints.
+* Because KOB's KRON order templates deliver to makers with id_type 3 (`TYPE_DELIVERY`), a KForge maker could never spend such a
+  delivery: the KRON kinds have a second build with `TYPE_DELIVERY = 0x00` (`KobAskKronD0` .. `KobIfdAskKronD0`, a build parameter
+  of the same sources, `contracts/adapters/kron/README.md`), and the profile's `owners.holder` selects it
+  (`TemplateId::for_program`; an order's build follows from the token program its state pins, an instance of the other build is
+  not recognised). The builders spend id_type 0 holdings with the owner's signature (`SigPlan::KronToken.signer`, a sign request
+  for the token input with its redeem script, as for a KCC-20 holder input: KasWare's `signPskt` and Kaspire's `signPskt` with a
+  `scripts` entry sign it, the app assembles the script). An id_type 0 input is its token's only input in a transaction (the
+  program's slots are 1 / 3 anyway). The pair templates deliver KRON tokens with id_type 3: they refuse the program.
+* Still open before `reviewed`: what the other entries (selector branches) let the launchpad do (`minters: unknown`, capabilities);
+  a real KForge launch genesis verified with `kob registry verify-genesis` (the curve "rung" is its own covenant); the
+  hand-written KRON order suites and their ablation run with the KForge program and the `*KronD0` builds (the builder scenarios
+  over every program already run on it in the engine, with the shapes that fit 1 / 3 slots); a testnet-10 registry entry
+  (`templates`, `delivery_id_type: 0`) for an operator who lists its tokens.
 
 ## 7. Invariants
 

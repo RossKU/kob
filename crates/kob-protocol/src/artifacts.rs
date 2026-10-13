@@ -115,7 +115,7 @@ pub mod spk_trace {
 include!(concat!(env!("OUT_DIR"), "/token_programs.rs"));
 
 /// Number of KOB order kinds (`TemplateId` variants that are not token programs).
-pub const ORDER_KIND_COUNT: usize = 15;
+pub const ORDER_KIND_COUNT: usize = 21;
 
 macro_rules! define_template_id {
     (
@@ -150,6 +150,14 @@ macro_rules! define_template_id {
             KobCondBidKron,
             KobIfdBidKron,
             KobIfdAskKron,
+            // ---- KRON family, maker deliveries of id_type 0 (the `TYPE_DELIVERY = 0x00` builds of the six KRON kinds, for
+            // token programs whose holders are id_type 0: [`TemplateId::for_program`])
+            KobAskKronD0,
+            KobBidKronD0,
+            KobCondAskKronD0,
+            KobCondBidKronD0,
+            KobIfdBidKronD0,
+            KobIfdAskKronD0,
             $( #[doc = $rd] #[serde(rename = $rn)] $rv, )*
         }
 
@@ -172,6 +180,12 @@ macro_rules! define_template_id {
                 TemplateId::KobCondBidKron,
                 TemplateId::KobIfdBidKron,
                 TemplateId::KobIfdAskKron,
+                TemplateId::KobAskKronD0,
+                TemplateId::KobBidKronD0,
+                TemplateId::KobCondAskKronD0,
+                TemplateId::KobCondBidKronD0,
+                TemplateId::KobIfdBidKronD0,
+                TemplateId::KobIfdAskKronD0,
                 $( TemplateId::$rv, )*
             ];
 
@@ -196,6 +210,12 @@ macro_rules! define_template_id {
                     TemplateId::KobCondBidKron => "KobCondBidKron",
                     TemplateId::KobIfdBidKron => "KobIfdBidKron",
                     TemplateId::KobIfdAskKron => "KobIfdAskKron",
+                    TemplateId::KobAskKronD0 => "KobAskKronD0",
+                    TemplateId::KobBidKronD0 => "KobBidKronD0",
+                    TemplateId::KobCondAskKronD0 => "KobCondAskKronD0",
+                    TemplateId::KobCondBidKronD0 => "KobCondBidKronD0",
+                    TemplateId::KobIfdBidKronD0 => "KobIfdBidKronD0",
+                    TemplateId::KobIfdAskKronD0 => "KobIfdAskKronD0",
                     $( TemplateId::$kv => $kn, )*
                     $( TemplateId::$rv => $rn, )*
                 }
@@ -217,6 +237,12 @@ macro_rules! define_template_id {
                     | TemplateId::KobCondBidKron
                     | TemplateId::KobIfdBidKron
                     | TemplateId::KobIfdAskKron
+                    | TemplateId::KobAskKronD0
+                    | TemplateId::KobBidKronD0
+                    | TemplateId::KobCondAskKronD0
+                    | TemplateId::KobCondBidKronD0
+                    | TemplateId::KobIfdBidKronD0
+                    | TemplateId::KobIfdAskKronD0
                     $( | TemplateId::$rv )* => Family::Kron,
                     _ => Family::Kcc20,
                 }
@@ -228,9 +254,9 @@ macro_rules! define_template_id {
 with_token_programs!(define_template_id);
 
 impl TemplateId {
-    /// The KCC-20 counterpart of a KRON order kind (identity for everything else).
+    /// The KCC-20 counterpart of a KRON order kind, of either delivery build (identity for everything else).
     pub fn base(self) -> TemplateId {
-        match self {
+        match self.canonical() {
             TemplateId::KobAskKron => TemplateId::KobAsk,
             TemplateId::KobBidKron => TemplateId::KobBid,
             TemplateId::KobCondAskKron => TemplateId::KobCondAsk,
@@ -241,8 +267,93 @@ impl TemplateId {
         }
     }
 
-    /// The same order kind in `family` (`KobAsk` in `Kron` is `KobAskKron`); token programs and the pair kinds (one
-    /// template for both families) are returned unchanged.
+    /// The default build of a KRON order kind: a `*KronD0` kind is its `*Kron` kind (identity for everything else).
+    pub fn canonical(self) -> TemplateId {
+        match self {
+            TemplateId::KobAskKronD0 => TemplateId::KobAskKron,
+            TemplateId::KobBidKronD0 => TemplateId::KobBidKron,
+            TemplateId::KobCondAskKronD0 => TemplateId::KobCondAskKron,
+            TemplateId::KobCondBidKronD0 => TemplateId::KobCondBidKron,
+            TemplateId::KobIfdBidKronD0 => TemplateId::KobIfdBidKron,
+            TemplateId::KobIfdAskKronD0 => TemplateId::KobIfdAskKron,
+            other => other,
+        }
+    }
+
+    /// The delivery id_type 0 build of a KRON order kind (`KobAskKron` -> `KobAskKronD0`; identity for everything else).
+    pub fn delivery0(self) -> TemplateId {
+        match self {
+            TemplateId::KobAskKron => TemplateId::KobAskKronD0,
+            TemplateId::KobBidKron => TemplateId::KobBidKronD0,
+            TemplateId::KobCondAskKron => TemplateId::KobCondAskKronD0,
+            TemplateId::KobCondBidKron => TemplateId::KobCondBidKronD0,
+            TemplateId::KobIfdBidKron => TemplateId::KobIfdBidKronD0,
+            TemplateId::KobIfdAskKron => TemplateId::KobIfdAskKronD0,
+            other => other,
+        }
+    }
+
+    /// True for the delivery id_type 0 builds of the KRON kinds (`*KronD0`). They serve token programs whose holders are
+    /// id_type 0 (KForge, testnet-10); the mainnet deployment record does not list them.
+    pub fn is_delivery0(self) -> bool {
+        self.canonical() != self
+    }
+
+    /// The owner value an order kind gives the token outputs it delivers to a maker (KCC-20 `owner_scheme` 0; KRON `id_type`
+    /// 3, or 0 for the `*KronD0` builds); `None` for a token program. The pair kinds deliver a KCC-20 token with scheme 0 and
+    /// a KRON token with id_type 3 (they report the KCC-20 value here).
+    pub fn delivery_owner(self) -> Option<u8> {
+        self.kind_code()?;
+        Some(if self.is_delivery0() {
+            crate::family::KRON_TYPE_PUBKEY
+        } else if self.family() == Family::Kron {
+            crate::family::KRON_TYPE_ADDR
+        } else {
+            crate::state::SCHEME_P2PK
+        })
+    }
+
+    /// The order kind (`self`, of any family or build) as instantiated for tokens of `program`: the kind of the program's
+    /// family, in the build whose maker deliveries carry the program's holder owner (profile `owners.holder`; a KRON program
+    /// with id_type 0 holders takes the `*KronD0` builds). A pair kind, a token program and a `program` that is not a token
+    /// program are returned unchanged.
+    pub fn for_program(self, program: TemplateId) -> TemplateId {
+        match program.profile() {
+            Some(p) => self.for_profile(p),
+            None => self,
+        }
+    }
+
+    /// [`TemplateId::for_program`] for the token program whose template hash is `token_hash`; a hash of no embedded program
+    /// of `family` gives the default build of `family`.
+    pub fn for_token_hash(self, family: Family, token_hash: &[u8; 32]) -> TemplateId {
+        match crate::profile::by_hash(token_hash) {
+            Some(p) if p.codec == family => self.for_profile(p),
+            _ => self.in_family(family),
+        }
+    }
+
+    /// True for a token program the pair kinds serve: they deliver a KRON token with id_type 3 (address presence), so a KRON
+    /// program whose holders are another owner type (KForge: id_type 0) has no pair template.
+    pub fn serves_pairs(self) -> bool {
+        self.profile().is_some_and(|p| p.codec != Family::Kron || p.owners.holder == crate::family::KRON_TYPE_ADDR)
+    }
+
+    fn for_profile(self, p: &crate::profile::ProgramProfile) -> TemplateId {
+        if self.is_pair() || self.kind_code().is_none() {
+            return self;
+        }
+        let k = self.in_family(p.codec);
+        if p.codec == Family::Kron && p.owners.holder == crate::family::KRON_TYPE_PUBKEY {
+            k.delivery0()
+        } else {
+            k
+        }
+    }
+
+    /// The same order kind in `family` (`KobAsk` in `Kron` is `KobAskKron`, the default build; [`TemplateId::for_program`]
+    /// picks a token program's build); token programs and the pair kinds (one template for both families) are returned
+    /// unchanged.
     pub fn in_family(self, family: Family) -> TemplateId {
         let b = self.base();
         if family == Family::Kcc20 {
@@ -259,9 +370,10 @@ impl TemplateId {
         }
     }
 
-    /// True when instances of this order template may escrow tokens of `family` (the pair kinds: both families).
+    /// True when instances of this order template may escrow tokens of `family` (the pair kinds: both families; a
+    /// `*KronD0` build: KRON).
     pub fn serves(self, family: Family) -> bool {
-        self.kind_code().is_some() && self.in_family(family) == self
+        self.kind_code().is_some() && self.in_family(family) == self.canonical()
     }
 
     /// The token program's profile (`data/programs.json`); `None` for an order kind.
@@ -348,7 +460,8 @@ impl TemplateId {
     }
 
     /// Inverse of [`TemplateId::kind_code`] within a family over the pinned templates (`None` for a reserved code; `0x08`,
-    /// `0x09`, `0x0a` are the pair kinds in both families).
+    /// `0x09`, `0x0a` are the pair kinds in both families). A KRON code names the default build: an instance's build follows
+    /// from its token program ([`TemplateId::for_token_hash`], [`crate::state::AnyState::template_id`]).
     pub fn from_kind_code(family: Family, code: u8) -> Option<TemplateId> {
         TemplateId::ALL.into_iter().find(|t| t.kind_code() == Some(code) && t.serves(family))
     }
@@ -376,6 +489,12 @@ pub const PINNED: [(TemplateId, &str); ORDER_KIND_COUNT] = [
     (TemplateId::KobCondBidKron, "296a2ffb289ee74abd936c2e1bc25692638d7efc5accfcd8cc2c9b9e96774dd3"),
     (TemplateId::KobIfdBidKron, "b705e2c3db279403276d0d0ccfe1e26dd0775620e383d13c98a2dca00892a335"),
     (TemplateId::KobIfdAskKron, "4797dc300d40ce968d8f26000c890e74f85f1c0d24ee227dac936a69ec034d12"),
+    (TemplateId::KobAskKronD0, "f43ae142343fe54313e2f742931c76da11cb49e66d823280829a3f91ed227c2c"),
+    (TemplateId::KobBidKronD0, "436fbbbb676f05d6402745298976aa6f1fe59faa1d7eb354060ba87e97966531"),
+    (TemplateId::KobCondAskKronD0, "e334e85e308e20bdeb3c3350f7fac0e97484d39f974409c9e09174c66a9c6c3e"),
+    (TemplateId::KobCondBidKronD0, "f47fe24d8d4566d0074ecf5627031d69348fa4ec3ece48ba8739685775ea3fa3"),
+    (TemplateId::KobIfdBidKronD0, "c9cbbbdbd0ecdde70c0f3130ca1a7d2802f8682bbde5532907ef3c2589252f52"),
+    (TemplateId::KobIfdAskKronD0, "4ee20455e942d978f3be267c0b99deffa4c43ee55b9bfc49c53610500ca238f2"),
 ];
 
 /// The embedded artifact of an artifact-backed template (an order kind, or a token program whose profile source is a
@@ -397,6 +516,12 @@ fn embedded_json(id: TemplateId) -> &'static str {
         TemplateId::KobCondBidKron => include_str!("../../../contracts/artifacts/KobCondBidKron.json"),
         TemplateId::KobIfdBidKron => include_str!("../../../contracts/artifacts/KobIfdBidKron.json"),
         TemplateId::KobIfdAskKron => include_str!("../../../contracts/artifacts/KobIfdAskKron.json"),
+        TemplateId::KobAskKronD0 => include_str!("../../../contracts/artifacts/KobAskKronD0.json"),
+        TemplateId::KobBidKronD0 => include_str!("../../../contracts/artifacts/KobBidKronD0.json"),
+        TemplateId::KobCondAskKronD0 => include_str!("../../../contracts/artifacts/KobCondAskKronD0.json"),
+        TemplateId::KobCondBidKronD0 => include_str!("../../../contracts/artifacts/KobCondBidKronD0.json"),
+        TemplateId::KobIfdBidKronD0 => include_str!("../../../contracts/artifacts/KobIfdBidKronD0.json"),
+        TemplateId::KobIfdAskKronD0 => include_str!("../../../contracts/artifacts/KobIfdAskKronD0.json"),
         program => match embedded_program_source(program.name()) {
             Some(EmbeddedSource::Artifact(json)) => json,
             _ => unreachable!("{} is pinned as raw bytes and has no artifact", program.name()),
@@ -427,6 +552,10 @@ const KRON_CTOR_COND_ASK: &str = include_str!("../../../contracts/adapters/kron/
 const KRON_CTOR_COND_BID: &str = include_str!("../../../contracts/adapters/kron/v2/KobCondBidKron.ctor.json");
 const KRON_CTOR_IFD_BID: &str = include_str!("../../../contracts/adapters/kron/v2/KobIfdBidKron.ctor.json");
 const KRON_CTOR_IFD_ASK: &str = include_str!("../../../contracts/adapters/kron/v2/KobIfdAskKron.ctor.json");
+const KRON_D0_CTOR_COND_ASK: &str = include_str!("../../../contracts/adapters/kron/v2/delivery0/KobCondAskKronD0.ctor.json");
+const KRON_D0_CTOR_COND_BID: &str = include_str!("../../../contracts/adapters/kron/v2/delivery0/KobCondBidKronD0.ctor.json");
+const KRON_D0_CTOR_IFD_BID: &str = include_str!("../../../contracts/adapters/kron/v2/delivery0/KobIfdBidKronD0.ctor.json");
+const KRON_D0_CTOR_IFD_ASK: &str = include_str!("../../../contracts/adapters/kron/v2/delivery0/KobIfdAskKronD0.ctor.json");
 
 /// A pinned token program of either family: the redeem script of a token UTXO is
 /// `prefix ‖ state ‖ suffix`. KCC-20 programs come from their artifacts, KRON programs from the raw
@@ -675,15 +804,17 @@ fn ctor_int(v: &ArtifactValue) -> i64 {
     }
 }
 
-fn check_constants(t: &BTreeMap<TemplateId, Template>, fam: Family) -> Result<(), ArtifactError> {
+/// `d0`: the delivery id_type 0 builds of the KRON kinds (`fam` KRON), a template chain of their own.
+fn check_constants(t: &BTreeMap<TemplateId, Template>, fam: Family, d0: bool) -> Result<(), ArtifactError> {
     fn err<T>(m: String) -> Result<T, ArtifactError> {
         Err(ArtifactError::Constant(m))
     }
-    // The templates of this family, by their KCC-20 name.
-    let id = |base: TemplateId| base.in_family(fam);
-    let (c_cond_ask, c_cond_bid, c_ifd_bid, c_ifd_ask) = match fam {
-        Family::Kcc20 => (CTOR_COND_ASK, CTOR_COND_BID, CTOR_IFD_BID, CTOR_IFD_ASK),
-        Family::Kron => (KRON_CTOR_COND_ASK, KRON_CTOR_COND_BID, KRON_CTOR_IFD_BID, KRON_CTOR_IFD_ASK),
+    // The templates of this family (and build), by their KCC-20 name.
+    let id = |base: TemplateId| if d0 { base.in_family(fam).delivery0() } else { base.in_family(fam) };
+    let (c_cond_ask, c_cond_bid, c_ifd_bid, c_ifd_ask) = match (fam, d0) {
+        (Family::Kcc20, _) => (CTOR_COND_ASK, CTOR_COND_BID, CTOR_IFD_BID, CTOR_IFD_ASK),
+        (Family::Kron, false) => (KRON_CTOR_COND_ASK, KRON_CTOR_COND_BID, KRON_CTOR_IFD_BID, KRON_CTOR_IFD_ASK),
+        (Family::Kron, true) => (KRON_D0_CTOR_COND_ASK, KRON_D0_CTOR_COND_BID, KRON_D0_CTOR_IFD_BID, KRON_D0_CTOR_IFD_ASK),
     };
     let tpl_ref =
         |args: &[ArtifactValue], at: usize, want_id: TemplateId, with_lens: bool, who: TemplateId| -> Result<(), ArtifactError> {
@@ -719,7 +850,7 @@ fn check_constants(t: &BTreeMap<TemplateId, Template>, fam: Family) -> Result<()
     let cp = ctor(CTOR_COND_PAIR);
     let ip = ctor(CTOR_IFD_PAIR);
     let mut pair_needles: Vec<(TemplateId, TemplateId)> = vec![];
-    if fam == Family::Kcc20 {
+    if fam == Family::Kcc20 && !d0 {
         for (k, want) in evidence_refs.into_iter().enumerate() {
             tpl_ref(&cp, 3 * k, want, true, TemplateId::KobCondPair)?;
             tpl_ref(&ip, 3 + 3 * k, want, true, TemplateId::KobIfdPair)?;
@@ -801,8 +932,9 @@ fn build_registry() -> Result<Registry, ArtifactError> {
             );
         }
     }
-    check_constants(&templates, Family::Kcc20)?;
-    check_constants(&templates, Family::Kron)?;
+    check_constants(&templates, Family::Kcc20, false)?;
+    check_constants(&templates, Family::Kron, false)?;
+    check_constants(&templates, Family::Kron, true)?;
     Ok(Registry { templates, tokens })
 }
 
@@ -893,6 +1025,12 @@ pub mod deployment {
     /// sha256 (lowercase hex, LF-normalised bytes) of the registry the record pins: the `registry.sha256` of [`MANIFEST`]
     /// and [`crate::registry::default_registry_sha256`] (checked by the tests).
     pub const REGISTRY_SHA256: &str = "dc3bd15389e548862a956ccded01cb6ecee51946d76241d7da1e028711322d10";
+}
+
+/// The order templates a network's deployment record lists (`scripts/build-deploy.sh`): every embedded order kind; on mainnet
+/// without the `*KronD0` builds, which serve only token programs with id_type 0 holders (KForge, testnet-10).
+pub fn deployed_order_kinds(network: &str) -> Vec<TemplateId> {
+    TemplateId::ALL.into_iter().filter(|t| t.kind_code().is_some() && (network != "mainnet" || !t.is_delivery0())).collect()
 }
 
 /// Summary of one template for front ends and documentation.
@@ -994,8 +1132,9 @@ mod tests {
         assert_eq!(deployment_registry_sha256().is_some(), cfg!(feature = "deploy-mainnet"));
     }
 
-    /// The mainnet record (checked in every build, whatever the features): it lists exactly the embedded order templates and
-    /// pins the registry this crate embeds, so a template or registry change without `scripts/build-deploy.sh mainnet` fails here.
+    /// The mainnet record (checked in every build, whatever the features): it lists exactly the order templates deployed on
+    /// mainnet (every embedded one but the testnet-only `*KronD0` builds) and pins the registry this crate embeds, so a template
+    /// or registry change without `scripts/build-deploy.sh mainnet` fails here.
     #[test]
     fn mainnet_deployment_record_matches_the_embedded_templates_and_registry() {
         self_check().unwrap();
@@ -1003,7 +1142,7 @@ mod tests {
         assert_eq!(m["network"], "mainnet");
         assert!(m.get("receipt_covenant_id").is_none(), "no receipt genesis since v2.6");
         let listed = m["templates"].as_array().unwrap();
-        let kinds: Vec<TemplateId> = TemplateId::ALL.into_iter().filter(|t| t.kind_code().is_some()).collect();
+        let kinds = deployed_order_kinds("mainnet");
         assert_eq!(listed.len(), kinds.len());
         for id in kinds {
             let e = listed.iter().find(|e| e["name"] == id.name()).unwrap_or_else(|| panic!("{} not listed", id.name()));
@@ -1030,6 +1169,23 @@ mod tests {
         assert_eq!(deployment::REGISTRY_SHA256, pinned, "update deployment::REGISTRY_SHA256 with the record");
     }
 
+    /// The testnet-10 record (checked in every build): every embedded order template, the `*KronD0` builds included.
+    #[test]
+    fn testnet_deployment_record_lists_every_embedded_order_template() {
+        let m: serde_json::Value = serde_json::from_str(include_str!("../../../contracts/deploy/testnet-10/deployment.json")).unwrap();
+        assert_eq!(m["network"], "testnet-10");
+        let listed: Vec<(&str, &str)> =
+            m["templates"].as_array().unwrap().iter().map(|e| (e["name"].as_str().unwrap(), e["hash"].as_str().unwrap())).collect();
+        let want: Vec<(&str, String)> =
+            deployed_order_kinds("testnet-10").into_iter().map(|id| (id.name(), template(id).hash_hex())).collect();
+        assert_eq!(listed.len(), want.len(), "run scripts/build-deploy.sh testnet-10");
+        for (name, hash) in want {
+            assert!(listed.contains(&(name, hash.as_str())), "{name} {hash} is not in the testnet-10 record");
+        }
+        assert!(deployed_order_kinds("testnet-10").iter().any(|t| t.is_delivery0()));
+        assert!(!deployed_order_kinds("mainnet").iter().any(|t| t.is_delivery0()));
+    }
+
     #[cfg(any(feature = "deploy-tn10", feature = "deploy-mainnet"))]
     #[test]
     fn deployment_record_lists_the_embedded_templates() {
@@ -1041,7 +1197,7 @@ mod tests {
         assert_eq!(m["network"], NETWORK);
         assert!(m.get("receipt_covenant_id").is_none(), "no receipt genesis since v2.6");
         let listed = m["templates"].as_array().unwrap();
-        let kinds: Vec<TemplateId> = TemplateId::ALL.into_iter().filter(|t| t.kind_code().is_some()).collect();
+        let kinds = deployed_order_kinds(NETWORK);
         assert_eq!(listed.len(), kinds.len());
         for id in kinds {
             let e = listed.iter().find(|e| e["name"] == id.name()).unwrap_or_else(|| panic!("{} not listed", id.name()));

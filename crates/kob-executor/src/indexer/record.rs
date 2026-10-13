@@ -442,7 +442,7 @@ pub fn parse_reveal(sigscript: &[u8], spent_spk: &[u8]) -> Option<Reveal> {
 /// trigger evidence (a `KobPair` is the mode-1 evidence of the pair conditionals of its pair).
 fn is_evidence_fill(r: &Reveal) -> bool {
     matches!(
-        r.template,
+        r.template.canonical(),
         TemplateId::KobAsk | TemplateId::KobAskKron | TemplateId::KobBid | TemplateId::KobBidKron | TemplateId::KobPair
     ) && matches!(r.nb(), Some(model::Nb::Fill(n)) if n > 0)
 }

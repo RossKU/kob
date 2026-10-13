@@ -13,8 +13,8 @@ use std::sync::OnceLock;
 /// Token family byte of the KOB1 placement record for KCC-20 (`Family::code`; KRON is `0x02`).
 pub const FAMILY_KCC20: u8 = 1;
 
-/// The order kinds of both families.
-pub const ORDER_KINDS: [TemplateId; 15] = [
+/// The order kinds of both families (KRON: both delivery builds).
+pub const ORDER_KINDS: [TemplateId; 21] = [
     TemplateId::KobAsk,
     TemplateId::KobBid,
     TemplateId::KobCondAsk,
@@ -27,6 +27,12 @@ pub const ORDER_KINDS: [TemplateId; 15] = [
     TemplateId::KobCondBidKron,
     TemplateId::KobIfdBidKron,
     TemplateId::KobIfdAskKron,
+    TemplateId::KobAskKronD0,
+    TemplateId::KobBidKronD0,
+    TemplateId::KobCondAskKronD0,
+    TemplateId::KobCondBidKronD0,
+    TemplateId::KobIfdBidKronD0,
+    TemplateId::KobIfdAskKronD0,
     TemplateId::KobPair,
     TemplateId::KobCondPair,
     TemplateId::KobIfdPair,
@@ -71,11 +77,12 @@ pub fn in_book(id: TemplateId) -> bool {
     matches!(id.base(), TemplateId::KobAsk | TemplateId::KobBid | TemplateId::KobIfdAsk | TemplateId::KobIfdBid)
 }
 
-/// The order an if-done entry spawns on each fill (of the entry's family).
+/// The order an if-done entry spawns on each fill (of the entry's family and delivery build).
 pub fn exit_template(id: TemplateId) -> Option<TemplateId> {
+    let same = |k: TemplateId| if id.is_delivery0() { k.in_family(id.family()).delivery0() } else { k.in_family(id.family()) };
     match id.base() {
-        TemplateId::KobIfdBid => Some(TemplateId::KobCondAsk.in_family(id.family())),
-        TemplateId::KobIfdAsk => Some(TemplateId::KobCondBid.in_family(id.family())),
+        TemplateId::KobIfdBid => Some(same(TemplateId::KobCondAsk)),
+        TemplateId::KobIfdAsk => Some(same(TemplateId::KobCondBid)),
         TemplateId::KobIfdPair => Some(TemplateId::KobCondPair),
         _ => None,
     }
@@ -119,16 +126,24 @@ pub fn identify_kron_token(redeem: &[u8]) -> Option<(TemplateId, &[u8])> {
 }
 
 // One-byte code of an order template in the record log: the KOB1 kind code, with the high bit set for the
-/// KRON kinds (which share the codes of their KCC-20 twins). Logs written before the KRON family existed only
-/// hold codes below `0x80` and read back unchanged.
+/// KRON kinds (which share the codes of their KCC-20 twins) and bit `0x40` for the delivery id_type 0 builds of the KRON
+/// kinds (`*KronD0`). Logs written before the KRON family existed only hold codes below `0x80`, logs written before the
+/// `*KronD0` builds none with `0x40`: both read back unchanged.
 pub fn wire_code(t: TemplateId) -> u8 {
-    t.kind_code().expect("order template") | if t.family() == Family::Kron { 0x80 } else { 0 }
+    t.kind_code().expect("order template")
+        | if t.family() == Family::Kron { 0x80 } else { 0 }
+        | if t.is_delivery0() { 0x40 } else { 0 }
 }
 
 /// Inverse of [`wire_code`].
 pub fn from_wire_code(code: u8) -> Option<TemplateId> {
     let family = if code & 0x80 != 0 { Family::Kron } else { Family::Kcc20 };
-    TemplateId::from_kind_code(family, code & 0x7f)
+    let id = TemplateId::from_kind_code(family, code & 0x3f)?;
+    match code & 0x40 != 0 {
+        false => Some(id),
+        true if family == Family::Kron && id.delivery0() != id => Some(id.delivery0()),
+        true => None,
+    }
 }
 
 /// The family of a token program template hash (`None`: not a supported program).

@@ -191,6 +191,7 @@ fn finalize_refuses_a_malformed_built_tx_instead_of_panicking() {
         state: KronState::addr(5, [1; 32]),
         next_states: vec![],
         witnesses: vec![],
+        signer: None,
     };
     assert!(refused(&b), "artifact template in KronToken");
     // outputs beyond inputs

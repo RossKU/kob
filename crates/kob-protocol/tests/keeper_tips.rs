@@ -70,8 +70,8 @@ fn measure() -> (BTreeMap<String, Tips>, BTreeMap<String, Tips>) {
         kas.insert(p.name().to_string(), tips_of(r, u));
     }
     let mut pair = BTreeMap::new();
-    for pa in common::PROGRAMS {
-        for pb in common::PROGRAMS {
+    for pa in common::pair_programs() {
+        for pb in common::pair_programs() {
             let key = pair_tips_key(pa, pb);
             // the scenarios plus the refund of every custody state and every update (side x arm / trail x evidence mode)
             let mut shapes = common::pair::pair_scenarios(pa, pb);

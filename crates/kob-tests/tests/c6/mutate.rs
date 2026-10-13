@@ -683,14 +683,14 @@ fn token_out(m: &mut MTx, r: &mut StdRng) -> Option<String> {
             let a = if r.gen_bool(0.5) { s.amount() + d } else { s.amount() - d };
             (s.with_amount(a), format!("amount {} -> {a}", s.amount()))
         }
-        2 => (s.with_user_owner(pk(ATTACKER)), "owner -> attacker".to_string()),
+        2 => (s.with_holder_owner(t, pk(ATTACKER)), "owner -> attacker".to_string()),
         3 => {
             let c = covs.get(r.gen_range(0..covs.len().max(1)))?;
             (TokenState::custody(s.family(), s.amount(), *c, s.extension()), "owner -> covenant".to_string())
         }
         _ => {
             let a = s.amount();
-            (s.with_user_owner(pk(ATTACKER)).with_amount(a), "owner -> attacker (same amount)".to_string())
+            (s.with_holder_owner(t, pk(ATTACKER)).with_amount(a), "owner -> attacker (same amount)".to_string())
         }
     };
     let tt = kob_protocol::artifacts::try_token_template(t)?;
@@ -768,7 +768,13 @@ fn add_stray(m: &mut MTx, r: &mut StdRng) -> Option<String> {
             let mut w = witnesses.clone();
             w.push(wi as u8);
             (
-                SigPlan::KronToken { template: *template, state: s.clone(), next_states: next_states.clone(), witnesses: w },
+                SigPlan::KronToken {
+                    template: *template,
+                    state: s.clone(),
+                    next_states: next_states.clone(),
+                    witnesses: w,
+                    signer: None,
+                },
                 TokenState::Kron(s),
             )
         }

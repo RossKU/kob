@@ -17,6 +17,7 @@
 //! | `genesis` | genesis rules: where mint authority can come from, the companion outputs a genesis group may hold ([`crate::registry::verify_genesis`]) |
 //! | `record_code` | the executor's persisted one-byte program code (never reused) |
 //! | `review` | review status (`reviewed`, `pending-review`, `test-only`) and its basis; equal to the shipped registry's |
+//! | `networks` | the networks the program's tokens exist on (empty: any); a program not on mainnet is not on the shipped registry |
 //!
 //! The compute budgets and keeper tips are measured, not declared: `data/compute_budgets.json`, `data/keeper_tips.json` and
 //! `data/pair_keeper_tips.json` are regenerated over every profile (`KOB_REGEN=1`), keyed by `name`.
@@ -330,6 +331,10 @@ pub struct ProgramProfile {
     pub router_intents: bool,
     pub genesis: GenesisRules,
     pub review: Review,
+    /// The networks the program's tokens exist on (`mainnet`, `testnet-10`, ...; empty: not restricted). A program that is
+    /// not on mainnet is not on the shipped (mainnet) registry, and no mainnet build trades it (KForge: testnet-10 only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub networks: Vec<String>,
 }
 
 // ------------------------------------------------------------------------------------------------ codec families
@@ -345,8 +350,13 @@ pub trait CodecFamily {
     const STATE_LEN: usize;
     /// Owner value of order custody (a covenant id).
     const CUSTODY: u8;
-    /// Owner value of a wallet holder / maker delivery.
+    /// Owner value of a wallet holder / maker delivery the default build of the order templates uses (what a derived profile
+    /// assumes).
     const HOLDER: u8;
+    /// Every holder owner some build of the family's order templates delivers to (KRON: 3, the default build, and 0, the
+    /// `*KronD0` builds); a program's `owners.holder` must be one of them and selects the build
+    /// ([`crate::artifacts::TemplateId::for_program`]).
+    const HOLDERS: &'static [u8];
     /// Witness schemes the family's builders implement.
     const WITNESS: &'static [WitnessScheme];
     /// Largest amount one token output may carry (`None`: any positive amount).
@@ -365,6 +375,7 @@ impl CodecFamily for Kcc20Codec {
     const STATE_LEN: usize = 112;
     const CUSTODY: u8 = crate::state::SCHEME_COVID;
     const HOLDER: u8 = crate::state::SCHEME_P2PK;
+    const HOLDERS: &'static [u8] = &[crate::state::SCHEME_P2PK];
     const WITNESS: &'static [WitnessScheme] = &[WitnessScheme::Kcc20Transfer];
     const MAX_OUTPUT_AMOUNT: Option<i64> = None;
     fn is_state(state: &[u8]) -> bool {
@@ -380,6 +391,7 @@ impl CodecFamily for KronCodec {
     const STATE_LEN: usize = crate::artifacts::KRON_STATE_LEN;
     const CUSTODY: u8 = crate::family::KRON_TYPE_COVID;
     const HOLDER: u8 = crate::family::KRON_TYPE_ADDR;
+    const HOLDERS: &'static [u8] = &[crate::family::KRON_TYPE_ADDR, crate::family::KRON_TYPE_PUBKEY];
     const WITNESS: &'static [WitnessScheme] = &[WitnessScheme::KronColumns];
     const MAX_OUTPUT_AMOUNT: Option<i64> = Some(crate::registry::KRON_MAX_OUTPUT_AMOUNT);
     fn is_state(state: &[u8]) -> bool {
@@ -394,6 +406,7 @@ pub struct CodecFacts {
     pub state_len: usize,
     pub custody: u8,
     pub holder: u8,
+    pub holders: &'static [u8],
     pub witness: &'static [WitnessScheme],
     pub max_output_amount: Option<i64>,
 }
@@ -404,6 +417,7 @@ fn facts<C: CodecFamily>() -> CodecFacts {
         state_len: C::STATE_LEN,
         custody: C::CUSTODY,
         holder: C::HOLDER,
+        holders: C::HOLDERS,
         witness: C::WITNESS,
         max_output_amount: C::MAX_OUTPUT_AMOUNT,
     }
@@ -453,6 +467,11 @@ impl ProgramProfile {
         codec(self.codec)
     }
 
+    /// True when the program's tokens exist on `network` (`networks` empty: on every network).
+    pub fn on_network(&self, network: &str) -> bool {
+        self.networks.is_empty() || self.networks.iter().any(|n| n == network)
+    }
+
     /// Structural rules that need no bytes: the fields agree with the codec family and with each other.
     pub fn check_shape(&self) -> Result<(), ProfileError> {
         self.check_shape_with(true)
@@ -489,16 +508,28 @@ impl ProgramProfile {
         if self.layout.suffix_len == 0 {
             return e("empty suffix".into());
         }
-        if (self.owners.custody, self.owners.holder) != (c.custody, c.holder) {
+        if self.owners.custody != c.custody || !c.holders.contains(&self.owners.holder) {
             return e(format!(
-                "owners {{custody {}, holder {}}}: the {} order templates use custody {} and holder {} (a program that cannot hold \
-                 those owners needs new order templates)",
+                "owners {{custody {}, holder {}}}: the {} order templates use custody {} and deliver to holder {} (a program that \
+                 cannot hold those owners needs new order templates)",
                 self.owners.custody,
                 self.owners.holder,
                 self.codec.as_str(),
                 c.custody,
-                c.holder
+                c.holders.iter().map(u8::to_string).collect::<Vec<_>>().join(" or ")
             ));
+        }
+        let mut nets = BTreeSet::new();
+        for n in &self.networks {
+            if n.is_empty() || !n.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-') || !nets.insert(n) {
+                return e(format!("networks: `{n}` must be a distinct network id ([a-z0-9-]+)"));
+            }
+        }
+        // the `*KronD0` order builds (maker deliveries of id_type 0) are not in the mainnet deployment record
+        if self.codec == Family::Kron && self.owners.holder == crate::family::KRON_TYPE_PUBKEY && self.on_network("mainnet") {
+            return e("a KRON program with id_type 0 holders takes the *KronD0 order builds, which are testnet only: list its \
+                      networks (without mainnet)"
+                .into());
         }
         if self.slots.inputs == 0 || self.slots.outputs == 0 || self.slots.inputs > 127 || self.slots.outputs > 255 {
             return e(format!("slots {}/{} out of range", self.slots.inputs, self.slots.outputs));
@@ -842,6 +873,11 @@ pub struct DeriveOptions {
     pub source_path: Option<String>,
     /// Token inputs / outputs per transaction (measured by the reviewer when the bytes do not say).
     pub slots: Option<Slots>,
+    /// Holder owner (measured by the reviewer): one of the family's delivery owners (KRON: 3 address presence, the default; 0
+    /// a token-level signature, served by the `*KronD0` order builds).
+    pub holder: Option<u8>,
+    /// The networks the program's tokens exist on (empty: not restricted).
+    pub networks: Vec<String>,
     pub summary: Option<String>,
 }
 
@@ -1003,11 +1039,16 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
         }
     };
     tasks.push("carrier_floor: measure the smallest token output value the program accepts (engine; c6_diff c6_7)".into());
+    let holder = opt.holder.unwrap_or(c.holder);
     tasks.push(format!(
-        "owners: confirm the program accepts custody owner {} (covenant id) and holder owner {} ({}), which the {} order templates use",
+        "owners: confirm the program accepts custody owner {} (covenant id) and holder owner {} ({}), which the {} order templates \
+         use (measure it: a KRON program that refuses address presence and takes a token-level signature is holder 0, --holder 0)",
         c.custody,
-        c.holder,
-        if cut.codec == Family::Kcc20 { "P2PK, token-level signature" } else { "address presence" },
+        holder,
+        match (cut.codec, holder) {
+            (Family::Kcc20, _) | (Family::Kron, 0) => "token-level signature",
+            _ => "address presence",
+        },
         cut.codec.as_str()
     ));
     if let Some(max) = c.max_output_amount {
@@ -1037,13 +1078,14 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
         template_hash: to_hex(&cut.loaded.hash),
         layout: Layout { prefix_len: cut.loaded.prefix.len(), state_len: cut.loaded.state.len(), suffix_len: cut.loaded.suffix.len() },
         codec: cut.codec,
-        owners: Owners { custody: c.custody, holder: c.holder },
+        owners: Owners { custody: c.custody, holder },
         slots,
         carrier_floor: 1,
         witness: cut.witness,
         router_intents: false,
         genesis: GenesisRules { minters: MinterSource::Unknown, companions: vec![] },
         review: Review { status: ProgramReview::PendingReview, basis: "derived by kob registry add-program; not reviewed".into() },
+        networks: opt.networks.clone(),
         name,
     };
     let blocked = (!c.witness.contains(&profile.witness.scheme)).then(|| {
@@ -1257,12 +1299,16 @@ pub fn check_registry_template(t: &crate::registry::Template) -> Result<(), Stri
     cmp("suffix_len", t.suffix_len.to_string(), p.layout.suffix_len.to_string());
     cmp("max_token_inputs", t.max_token_inputs.to_string(), p.slots.inputs.to_string());
     cmp("max_token_outputs", t.max_token_outputs.to_string(), p.slots.outputs.to_string());
-    // the custody owner is what the order templates pin; a registry may name either KRON delivery type (0 or 3)
+    // the custody owner is what the order templates pin; the KRON delivery type is the build of the order templates the
+    // program's holders take (3: the default build, 0: the `*KronD0` builds)
     let custody = match p.codec {
         Family::Kcc20 => t.escrow.owner_scheme,
         Family::Kron => t.escrow.id_type,
     };
     cmp("escrow custody owner", format!("{custody:?}"), format!("{:?}", Some(p.owners.custody)));
+    if p.codec == Family::Kron {
+        cmp("escrow delivery_id_type", format!("{:?}", t.escrow.delivery_id_type), format!("{:?}", Some(p.owners.holder)));
+    }
     if diffs.is_empty() {
         Ok(())
     } else {
@@ -1296,7 +1342,21 @@ mod tests {
             f(&mut p);
             p.check_shape().unwrap_err().message
         };
-        assert!(bad(&|p| p.owners.holder = 0).contains("order templates use"));
+        assert!(bad(&|p| p.owners.holder = 1).contains("order templates use"));
+        assert!(bad(&|p| p.owners.custody = 3).contains("order templates use"));
+        // KRON holder 0 takes the *KronD0 builds, which are testnet only
+        assert!(bad(&|p| p.owners.holder = 0).contains("testnet only"));
+        assert!(bad(&|p| {
+            p.owners.holder = 0;
+            p.networks = vec!["testnet-10".into(), "mainnet".into()];
+        })
+        .contains("testnet only"));
+        let mut d0 = base.clone();
+        d0.owners.holder = 0;
+        d0.networks = vec!["testnet-10".into()];
+        d0.check_shape().unwrap();
+        assert!(bad(&|p| p.networks = vec!["Testnet 10".into()]).contains("networks"));
+        assert!(bad(&|p| p.networks = vec!["testnet-10".into(), "testnet-10".into()]).contains("networks"));
         assert!(bad(&|p| p.layout.state_len = 112).contains("46-byte state"));
         assert!(bad(&|p| p.witness.scheme = WitnessScheme::Kcc20Transfer).contains("not one of the kron builders"));
         assert!(bad(&|p| p.genesis.companions.push(CompanionRule {
@@ -1364,8 +1424,17 @@ mod tests {
             };
             assert_eq!(p.review.status, want, "{}: the profile's review status is the shipped registry's", t.id);
         }
+        // the shipped registry is the mainnet one: a program not on mainnet (KForge, testnet-10) is not on it
         for p in profiles().iter().filter(|p| p.review.status != ProgramReview::TestOnly) {
-            assert!(reg.template(&p.registry_id).is_some(), "{} is {:?} but not on the shipped registry", p.name, p.review.status);
+            let on = reg.template(&p.registry_id).is_some();
+            assert_eq!(
+                on,
+                p.on_network("mainnet"),
+                "{} is {:?}, networks {:?}: on the shipped registry {on}",
+                p.name,
+                p.review.status,
+                p.networks
+            );
         }
     }
 

@@ -138,7 +138,8 @@ fn build_shapes() -> Vec<(String, Action)> {
 
 /// Every ordered pair of programs (A, B).
 fn program_pairs() -> Vec<(TemplateId, TemplateId)> {
-    common::PROGRAMS.iter().flat_map(|a| common::PROGRAMS.iter().map(move |b| (*a, *b))).collect()
+    let ps = common::pair_programs();
+    ps.iter().flat_map(|a| ps.iter().map(move |b| (*a, *b))).collect()
 }
 
 /// Is `e` a build failure on the token slots of a program (a shape the 3 / 3 or 4 / 5 programs cannot hold)?
@@ -278,7 +279,8 @@ fn an_ifd_ask_close_after_another_ask_fits_its_budget() {
 #[test]
 fn wide_pad_shapes_are_measured_on_every_program() {
     let names: Vec<&str> = shapes().iter().map(|(n, _)| n.as_str()).collect();
-    for p in common::PROGRAMS {
+    // a program of one token input per transaction (KForge) has no room for a pad leg next to any batch
+    for p in common::PROGRAMS.into_iter().filter(|p| p.token_slots().is_some_and(|(i, _)| i >= 2)) {
         for w in [format!("+n{}p{}", WIDE_PADS[0].0, WIDE_PADS[0].1), format!("+n{}p{}", WIDE_PADS[1].0, WIDE_PADS[1].1)] {
             assert!(
                 names.iter().any(|n| n.contains(&w) && n.ends_with(&w) && n.contains(&format!("@{}", p.name()))),
@@ -293,8 +295,8 @@ fn wide_pad_shapes_are_measured_on_every_program() {
 #[test]
 fn pair_shapes_are_measured_on_every_program_pair() {
     let names: Vec<&str> = shapes().iter().map(|(n, _)| n.as_str()).collect();
-    for pa in common::PROGRAMS {
-        for pb in common::PROGRAMS {
+    for pa in common::pair_programs() {
+        for pb in common::pair_programs() {
             let pn = format!("@{}", common::pair::pair_name(pa, pb));
             for (n, a) in common::pair::pair_scenarios(pa, pb) {
                 assert!(names.contains(&format!("{n}{pn}").as_str()), "{n}{pn}");

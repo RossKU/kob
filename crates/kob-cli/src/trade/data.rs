@@ -88,7 +88,7 @@ pub fn token_utxos(indexer: &str, node: &str, network: &str, m: &TokenMarket, ow
             continue;
         }
         let Some(st) = it.get("state").and_then(|s| serde_json::from_value::<TokenState>(s.clone()).ok()) else { continue };
-        if st.family() != m.family || !st.is_user() || st.owner() != *owner {
+        if st.family() != m.family || !st.is_holder(m.program) || st.owner() != *owner {
             continue;
         }
         let (Some(txid), Some(index)) = (

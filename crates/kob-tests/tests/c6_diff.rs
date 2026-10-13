@@ -1691,7 +1691,7 @@ fn c6_5_an_empty_or_inverted_stop_entry_cannot_be_armed() {
             let a = |s: &AnyState| {
                 let a = Action::Batch(update_batch(NOW, order(70, 5 * KAS, c, 1_000, s.clone()), ev.clone()));
                 if fam == Family::Kron {
-                    kron_action(a)
+                    kron_action_on(tpl, a)
                 } else {
                     a
                 }
@@ -1741,7 +1741,7 @@ fn c6_7_token_output_floors_are_measured() {
             records: vec![],
             fee: fee(),
         });
-        let a = if p.family() == Family::Kron { kron_action(send) } else { send };
+        let a = if p.family() == Family::Kron { kron_action_on(p, send) } else { send };
         let built = build(&a).unwrap_or_else(|e| panic!("{}: {e}", p.name()));
         let m = MTx::from_built(&built);
         let o = m.outs.iter().position(|o| o.covenant.is_some()).expect("a token output");

@@ -20,6 +20,10 @@ OPTIONS
   --name NAME          program name ([A-Za-z0-9_]+; the TemplateId name and budget-table key)
   --registry-id ID     registry template id ([a-z0-9-]+; default: the name in kebab case)
   --slots I/O          token inputs / outputs per transfer (measured; default: a review task)
+  --holder N           holder owner value (measured; KRON: 3 address presence, the default, or 0 a token-level
+                       signature, served by the *KronD0 order builds, testnet only)
+  --network NET        a network the program's tokens exist on (repeatable; default: not restricted). A program not on
+                       mainnet is not on the shipped (mainnet) registry
   --summary TEXT       one-line description
   --upstream TEXT      provenance for the registry entry
   --source-path PATH   repo-relative path of the pinned bytes (default: contracts/third-party/<name>/...)
@@ -168,6 +172,17 @@ pub fn run_add_program(args: &[&str]) -> i32 {
                     eprintln!("--slots takes INPUTS/OUTPUTS\n\n{USAGE_ADD}");
                     return 2;
                 }
+            },
+            "--holder" => match val("--holder").as_deref().and_then(|v| v.parse::<u8>().ok()) {
+                Some(h) => opt.holder = Some(h),
+                None => {
+                    eprintln!("--holder takes an owner value (0..=255)\n\n{USAGE_ADD}");
+                    return 2;
+                }
+            },
+            "--network" => match val("--network") {
+                Some(v) => opt.networks.push(v),
+                None => return 2,
             },
             "--write" => write = true,
             "--json" => json = true,
@@ -393,10 +408,18 @@ mod tests {
         std::fs::create_dir_all(root.join("crates/kob-protocol/data")).unwrap();
         std::fs::create_dir_all(root.join("crates/kob-tests/tests")).unwrap();
         let table = std::fs::read_to_string(repo.join("crates/kob-protocol/data/programs.json")).unwrap();
+        // the scratch table is the embedded one without KForge (embedded since): the write adds it again
+        let at = table.find(",\n    {\n      \"name\": \"KForgeToken1785\"").expect("the KForge entry");
+        let table = format!("{}{}", &table[..at], &table[at + table[at..].find("\n  ]").unwrap()..]);
         std::fs::write(root.join("crates/kob-protocol/data/programs.json"), &table).unwrap();
         let bytes = std::fs::read(repo.join("contracts/third-party/kforge/program.bin")).unwrap();
-        let opt =
-            DeriveOptions { name: Some("KForgeToken1785".into()), slots: Some(Slots { inputs: 1, outputs: 3 }), ..Default::default() };
+        // record code 10, as in the embedded table (the derivation alone takes the next free one, 11, now that KForge is embedded)
+        let opt = DeriveOptions {
+            name: Some("KForgeToken1785".into()),
+            slots: Some(Slots { inputs: 1, outputs: 3 }),
+            record_code: Some(10),
+            ..Default::default()
+        };
         let d = derive_profile(&ProgramInput::Redeem(bytes.clone()), &opt).unwrap();
         let written = write_program(&root, &d.profile, &bytes).unwrap();
         assert_eq!(written.len(), 3, "{written:?}");

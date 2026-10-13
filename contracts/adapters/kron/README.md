@@ -38,8 +38,17 @@ State (template offset 0, 46 B): `0x20 owner[32] | 0x01 id_type | 0x08 amount (L
   KRON wallet shows and can spend them without any KOB tooling. Type 3 means any transaction that includes a
   P2PK input of the maker can move those tokens (the wallet's SIGHASH_ALL signature covers all outputs). The
   alternative is `id_type 0` (needs a token-level signature; less wallet-friendly). It is one constant per
-  contract, `TYPE_DELIVERY = 0x03` (`KRON_DELIVERY` in the pair templates); switching means changing that constant,
-  rebuilding the artifacts (`scripts/build-contracts.sh`) and re-pinning the template hashes.
+  contract, `TYPE_DELIVERY = 0x03` (`KRON_DELIVERY` in the pair templates), and a **build parameter**: the
+  delivery id_type 0 builds `KobAskKronD0` .. `KobIfdAskKronD0` are the same sources with `TYPE_DELIVERY = 0x00`
+  (`scripts/build-contracts.sh`, `VARIANTS`: the derived source exists only in the build directory; one byte of each
+  bytecode differs, `01 03` -> `01 00`, the lengths are the same), their constructor arguments in `v2/delivery0/`
+  (the template chain of that build: evidence `KobAskKronD0` / `KobBidKronD0`, exits `KobCondAskKronD0` /
+  `KobCondBidKronD0`; token placeholder: the KForge program). `KobIfdBidKronD0` delivers only into its exit's custody
+  and differs in its template chain alone. They serve the KRON programs whose holders are id_type 0 (the profile's
+  `owners.holder`; KForge, testnet-10, which refuses address presence): the build of an order follows from the token
+  program its state pins (`TemplateId::for_program`, `AnyState::template_id`), and an instance of the other build is
+  not an order KOB recognises. They are testnet only (the testnet-10 deployment record lists them, the mainnet one
+  does not). The pair templates have no such build: they refuse a token whose holders are id_type 0.
 - **Never accepted**: `is_minter = 1`, foreign owners, `id_type 0/1` on custody or continuation outputs.
 
 ## KRON token limits that shape the orders

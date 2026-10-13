@@ -374,7 +374,9 @@ impl Ed {
         let tpl = self.programs[&cov];
         let plan = match &st {
             TokenState::Kcc20(k) => SigPlan::TokenDelegator { template: tpl, state: k.clone(), witness },
-            TokenState::Kron(k) => SigPlan::KronToken { template: tpl, state: k.clone(), next_states: vec![], witnesses: vec![] },
+            TokenState::Kron(k) => {
+                SigPlan::KronToken { template: tpl, state: k.clone(), next_states: vec![], witnesses: vec![], signer: None }
+            }
         };
         self.tx.inputs.push(TransactionInput::new_with_compute_budget(u.outpoint(), vec![], 0, 80));
         self.entries.push(UtxoEntry::new(

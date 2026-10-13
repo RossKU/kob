@@ -544,7 +544,7 @@ pub fn replace_env(env: &Env, cov: &[u8; 32], s: &AnyState, value: u64) -> Env {
     let held = |token: [u8; 32]| -> i64 { s.custodies().iter().filter(|c| c.0 == token).map(|c| c.1).sum() };
     let synth = |m: &super::market::TokenMarket, amount: i64, index: u32| TokenUtxo {
         utxo: Utxo { transaction_id: SYNTH_TXID, index, amount: 100_000_000, block_daa_score: 0, covenant_id: Some(m.cov) },
-        state: kob_protocol::state::TokenState::user(m.family, amount, env.maker, m.ext),
+        state: kob_protocol::state::TokenState::user(m.program, amount, env.maker, m.ext),
     };
     let a = held(env.market.cov);
     if a > 0 {

@@ -4,7 +4,9 @@
 # Compiles every contracts/**/*.sil except contracts/argent, contracts/deploy and contracts/third-party (constructor arguments
 # from the sibling <Name>.ctor.json) with silverc and either writes or verifies contracts/artifacts/<Name>.json. The
 # third-party programs KOB embeds unmodified are listed in THIRD_PARTY below with their artifact name (constructor
-# arguments from the sibling <source>.ctor.json, written by KOB).
+# arguments from the sibling <source>.ctor.json, written by KOB). VARIANTS below are further builds of a source with build
+# parameters (a `byte constant` of the source set to another value, the contract renamed to the build's artifact name,
+# constructor arguments from the file the entry names); the derived source exists only in the build directory.
 #
 #   scripts/build-contracts.sh            write artifacts, contracts/argent and contracts/SHA256SUMS
 #   scripts/build-contracts.sh --check    fail (exit 1) if any of them differs, or if contracts/artifacts holds
@@ -51,16 +53,53 @@ name_index() { local i; for i in "${!names[@]}"; do [ "${names[$i]}" = "$1" ] &&
 # Third-party sources compiled as they are vendored (source|artifact name): the KCC20 actor of upstream's KCC20PublicMint
 # app (contracts/third-party/kcc20-reference/UPSTREAM.md).
 THIRD_PARTY=("contracts/third-party/kcc20-reference/KCC20.public-mint.sil|KCC20PublicMint")
+# Parameterised builds (source|artifact name|constructor arguments|NAME=value ...): the KRON order kinds whose maker
+# deliveries are KRON id_type 0 (a token-level signature) instead of 3 (address presence), for token programs whose holders
+# are id_type 0 (KForge, testnet-10; contracts/adapters/kron/README.md). TYPE_DELIVERY is the parameter; their constructor
+# arguments carry the template chain of this build (the evidence and exit templates are the *KronD0 builds).
+D0=contracts/adapters/kron/v2/delivery0
+VARIANTS=()
+for k in Ask Bid CondAsk CondBid IfdAsk; do
+  VARIANTS+=("contracts/adapters/kron/v2/Kob${k}Kron.sil|Kob${k}KronD0|$D0/Kob${k}KronD0.ctor.json|TYPE_DELIVERY=0x00")
+done
+# KobIfdBidKron delivers only into its exit's custody (no TYPE_DELIVERY): its build differs in the template chain alone.
+VARIANTS+=("contracts/adapters/kron/v2/KobIfdBidKron.sil|KobIfdBidKronD0|$D0/KobIfdBidKronD0.ctor.json|")
+mkdir -p "$OUT/variants"
+# The source of a parameterised build on stdout: each NAME=value sets the one `byte constant NAME = 0x..;` line of the
+# source, and the contract (named as the source file) takes the build's name. Anything else is an error.
+derive_source() {
+  local src=$1 name=$2 base kv k v n
+  shift 2
+  base=$(basename "$src" .sil)
+  n=$(grep -c "^contract $base(" "$src" || true)
+  [ "$n" = 1 ] || { echo "$src: expected one 'contract $base(' line, found $n" >&2; return 2; }
+  local expr=(-e "s/^contract $base(/contract $name(/")
+  for kv in "$@"; do
+    k=${kv%%=*}; v=${kv#*=}
+    [[ "$k" =~ ^[A-Z_]+$ && "$v" =~ ^0x[0-9a-f]{2}$ ]] || { echo "bad build parameter $kv" >&2; return 2; }
+    n=$(grep -cE "^[[:space:]]*byte constant $k = 0x[0-9a-f]{2};" "$src" || true)
+    [ "$n" = 1 ] || { echo "$src: expected one 'byte constant $k' line, found $n" >&2; return 2; }
+    expr+=(-e "s/^\([[:space:]]*byte constant $k = \)0x[0-9a-f][0-9a-f];/\1$v;/")
+  done
+  tr -d '\r' < "$src" | sed "${expr[@]}"
+}
 while IFS= read -r line; do
-  src=${line%%|*}
-  name=$(basename "$src" .sil)
-  [ "$line" = "$src" ] || name=${line#*|}
+  IFS='|' read -r src name ctor params <<< "$line"
+  [ -n "$name" ] || name=$(basename "$src" .sil)
   # contracts/artifacts is flat: two sources with one basename would write the same artifact.
   i=$(name_index "$name")
   [ -z "$i" ] || { echo "duplicate source name $name: ${srcs[$i]} and $src" >&2; exit 2; }
-  ctor="${src%.sil}.ctor.json"
+  input=$src
+  if [ -n "$ctor" ]; then
+    # a parameterised build (VARIANTS: the entry names its constructor arguments)
+    # shellcheck disable=SC2086 # NAME=value words
+    derive_source "$src" "$name" $params > "$OUT/variants/$name.sil" || exit 2
+    input=$OUT/variants/$name.sil
+  else
+    ctor="${src%.sil}.ctor.json"
+  fi
   [ -f "$ctor" ] || { echo "missing constructor arguments: $ctor" >&2; exit 2; }
-  "$COMPILER" "$src" --constructor-args "$ctor" -o "$OUT/$name.json"
+  "$COMPILER" "$input" --constructor-args "$ctor" -o "$OUT/$name.json"
   tr -d '\r' < "$OUT/$name.json" > "$OUT/$name.json.lf" && mv "$OUT/$name.json.lf" "$OUT/$name.json"
   names+=("$name"); srcs+=("$src")
   if [ "$MODE" = check ]; then
@@ -74,7 +113,7 @@ while IFS= read -r line; do
     cp "$OUT/$name.json" "contracts/artifacts/$name.json"
     echo "wrote   contracts/artifacts/$name.json"
   fi
-done < <(find contracts -name '*.sil' -not -path 'contracts/argent/*' -not -path 'contracts/deploy/*' -not -path 'contracts/third-party/*' | LC_ALL=C sort; printf '%s\n' "${THIRD_PARTY[@]}")
+done < <(find contracts -name '*.sil' -not -path 'contracts/argent/*' -not -path 'contracts/deploy/*' -not -path 'contracts/third-party/*' | LC_ALL=C sort; printf '%s\n' "${THIRD_PARTY[@]}" "${VARIANTS[@]}")
 
 # contracts/artifacts holds exactly the artifacts of the sources above: any other file there (one no
 # source produces, left over from a removed or renamed source, or added by hand) is refused.

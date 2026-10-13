@@ -154,13 +154,13 @@ pub fn build_create_intent(r: &CreateIntent, budgets: BudgetFn) -> Result<BuiltT
         }
         for t in &r.tokens {
             check_token_input(t, token)?;
-            if !t.state.is_user() {
-                return invalid("intent tokens must come from key-owned UTXOs (owner scheme 0x00 / KRON address presence)");
+            if !t.state.is_holder(token.1) {
+                return invalid("intent tokens must come from key-owned UTXOs (owner scheme 0x00 / the KRON program's holder owner)");
             }
             if *ext.get_or_insert(t.state.extension()) != t.state.extension() {
                 return invalid("token inputs mix extension commitments");
             }
-            d.add_token_input(t, token, token_witness(&t.state)?)?;
+            d.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
         }
     } else if !r.tokens.is_empty() {
         return invalid("a KasToToken intent locks KAS only");

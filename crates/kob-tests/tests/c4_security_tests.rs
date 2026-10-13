@@ -573,7 +573,7 @@ fn c4_router_token_cancel_checks_the_lock_owner() {
                 fund.utxo.script_public_key = spk_to_string(&kob_protocol::script::p2pk_spk(&payer));
                 b.tx.inputs.push(fund);
                 b.plans.push(SigPlan::P2pk { pubkey: payer });
-                SigPlan::KronToken { template, state: KronState::addr(units, payer), next_states, witnesses: vec![2] }
+                SigPlan::KronToken { template, state: KronState::addr(units, payer), next_states, witnesses: vec![2], signer: None }
             }
             other => panic!("{actor}: input 1 is a token input, not {other:?}"),
         };

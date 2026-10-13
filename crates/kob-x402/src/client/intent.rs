@@ -409,7 +409,7 @@ pub fn prepare_intent(
             .iter()
             .filter(|x| {
                 x.utxo.covenant_id == Some(t.covenant_id)
-                    && x.state.is_user()
+                    && x.state.is_holder(t.program)
                     && x.state.is_plain()
                     && x.state.extension() == t.extension_commitment
             })

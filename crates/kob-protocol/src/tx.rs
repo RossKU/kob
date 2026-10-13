@@ -166,9 +166,10 @@ pub enum Arg {
 ///
 /// KCC-20: `CovenantId` (owner scheme 0x04) needs the owning covenant spent in the same transaction;
 /// `P2pk` (scheme 0x00) carries a SIGHASH_ALL Schnorr signature by the key inside the token input.
-/// KRON has no signature in the token input: `CovenantId` (`id_type` 2) and `P2pk` (`id_type` 3, address
-/// presence) both name another input of the transaction, resolved when the transaction is sealed: the
-/// input carrying the owner covenant id, respectively a P2PK input of the owner key.
+/// KRON: `CovenantId` (`id_type` 2) and `P2pk` of an `id_type` 3 state (address presence) name another input of the
+/// transaction, resolved when the transaction is sealed: the input carrying the owner covenant id, respectively a P2PK
+/// input of the owner key. `P2pk` of an `id_type` 0 state (a program whose holders are id_type 0, KForge) carries a
+/// SIGHASH_ALL Schnorr signature by the key in the input's signature column.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 pub enum Witness {
@@ -205,8 +206,9 @@ pub enum SigPlan {
     /// KRON token input: no leader. Every token input of the token carries the next states of the
     /// whole covenant group (`next_states`, in output order) and one witness byte per token input
     /// of the token (`witnesses`, in input order), each the index of the input that authorises it.
-    /// The token needs no signature of its own: address presence is a P2PK input of the owner
-    /// elsewhere in the transaction.
+    /// An input of `id_type` 2 or 3 needs no signature of its own (address presence is a P2PK input of the owner
+    /// elsewhere in the transaction); an `id_type` 0 input (a token-level signature) carries the SIGHASH_ALL signature of
+    /// `signer`, its owner, in the signature column (its witness byte names the input itself).
     #[serde(rename_all = "camelCase")]
     KronToken {
         template: TemplateId,
@@ -214,6 +216,8 @@ pub enum SigPlan {
         next_states: Vec<KronState>,
         #[serde(with = "crate::json::field")]
         witnesses: Vec<u8>,
+        #[serde(with = "crate::json::field", default, skip_serializing_if = "Option::is_none")]
+        signer: Option<[u8; 32]>,
     },
     /// Entry call of a KOB router intent (`crate::router`): the actor by name and its state span.
     #[serde(rename_all = "camelCase")]
@@ -242,7 +246,7 @@ impl SigPlan {
                 Witness::P2pk(k) => Some(*k),
                 Witness::CovenantId => None,
             },
-            SigPlan::KronToken { .. } => None,
+            SigPlan::KronToken { signer, .. } => *signer,
         }
     }
 
@@ -335,8 +339,12 @@ impl SigPlan {
                 };
                 entry_sigscript(tpl, &state.redeem_with(tpl), "transfer_delegator", &[ArtifactValue::Bytes(w)]).map_err(Error::Invalid)
             }
-            SigPlan::KronToken { template: t, state, next_states, witnesses } => {
-                Ok(kron_columns_sigscript(&state.redeem_with(token_template(*t)), next_states, &[], witnesses, &t.witness_trailing()))
+            SigPlan::KronToken { template: t, state, next_states, witnesses, signer } => {
+                let sigs = match signer {
+                    Some(_) => need("kron id_type 0 token")?,
+                    None => &[][..],
+                };
+                Ok(kron_columns_sigscript(&state.redeem_with(token_template(*t)), next_states, sigs, witnesses, &t.witness_trailing()))
             }
             SigPlan::Router { actor, state, entry, args } => {
                 let a = router_actor(actor)?;
@@ -1175,13 +1183,15 @@ impl Draft {
         self.inputs.iter().position(|i| matches!(i.plan, DPlan::Token { cov: c, .. } if c == cov))
     }
 
-    /// Index of the input that authorises a KRON token input with owner witness `w` (the input
-    /// carrying the owner covenant id, or a P2PK input of the owner key).
-    fn kron_witness_index(&self, state: &KronState, w: &Witness) -> Result<u8> {
+    /// Index of the input that authorises the KRON token input `own` with owner witness `w` (the input
+    /// carrying the owner covenant id, a P2PK input of the owner key, or for an `id_type` 0 state the token input itself, whose
+    /// signature column carries the owner's signature).
+    fn kron_witness_index(&self, own: usize, state: &KronState, w: &Witness) -> Result<u8> {
         let found = match w {
             Witness::CovenantId => {
                 self.inputs.iter().position(|i| matches!(i.plan, DPlan::Plain(_)) && i.utxo.covenant_id == Some(state.owner))
             }
+            Witness::P2pk(_) if state.id_type == crate::family::KRON_TYPE_PUBKEY => Some(own),
             Witness::P2pk(k) => {
                 self.inputs.iter().position(|i| matches!(&i.plan, DPlan::Plain(SigPlan::P2pk { pubkey }) if pubkey == k))
             }
@@ -1220,7 +1230,7 @@ impl Draft {
                         SigPlan::TokenDelegator { template: *template, state: state.clone(), witness: witness.clone() }
                     }
                 }
-                DPlan::Token { cov, template, state: TokenState::Kron(state), .. } => {
+                DPlan::Token { cov, template, state: TokenState::Kron(state), witness } => {
                     let next: Vec<KronState> = self
                         .outputs
                         .iter()
@@ -1231,14 +1241,31 @@ impl Draft {
                         .collect();
                     // One witness byte per token input of this token, in input order.
                     let mut witnesses = vec![];
-                    for j in self.inputs.iter() {
+                    let mut signed = 0;
+                    for (k, j) in self.inputs.iter().enumerate() {
                         if let DPlan::Token { cov: c, state: TokenState::Kron(st), witness, .. } = &j.plan {
                             if c == cov {
-                                witnesses.push(self.kron_witness_index(st, witness)?);
+                                witnesses.push(self.kron_witness_index(k, st, witness)?);
+                                signed += usize::from(st.id_type == crate::family::KRON_TYPE_PUBKEY);
                             }
                         }
                     }
-                    SigPlan::KronToken { template: *template, state: state.clone(), next_states: next, witnesses }
+                    // An id_type 0 input reads its signature from the signature column; how a program indexes that column
+                    // with several such inputs is not established, so an id_type 0 input is its token's only input.
+                    if signed > 0 && witnesses.len() > 1 {
+                        return invalid(
+                            "a KRON token input of id_type 0 (a token-level signature) must be the only input of its token in the \
+                             transaction",
+                        );
+                    }
+                    let signer = match (state.id_type, witness) {
+                        (crate::family::KRON_TYPE_PUBKEY, Witness::P2pk(k)) if *k == state.owner => Some(*k),
+                        (crate::family::KRON_TYPE_PUBKEY, _) => {
+                            return invalid("a KRON token input of id_type 0 is authorised by its owner's signature only")
+                        }
+                        _ => None,
+                    };
+                    SigPlan::KronToken { template: *template, state: state.clone(), next_states: next, witnesses, signer }
                 }
             });
         }
@@ -1317,14 +1344,15 @@ impl Draft {
                 SigPlan::TokenDelegator { template, witness, .. } => {
                     format!("{}.delegator.{}.i{}.o{}", template.name(), witness_tag(witness), counts.0, counts.1)
                 }
-                SigPlan::KronToken { template, .. } => {
+                SigPlan::KronToken { template, signer, .. } => {
                     let DPlan::Token { witness, .. } = &inp.plan else { unreachable!("KRON plans come from token inputs") };
                     format!(
                         "{}.token.{}.i{}.o{}",
                         template.name(),
-                        match witness {
-                            Witness::CovenantId => "covid",
-                            Witness::P2pk(_) => "addr",
+                        match (witness, signer) {
+                            (Witness::CovenantId, _) => "covid",
+                            (Witness::P2pk(_), Some(_)) => "sig",
+                            (Witness::P2pk(_), None) => "addr",
                         },
                         counts.0,
                         counts.1

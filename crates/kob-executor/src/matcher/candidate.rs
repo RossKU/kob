@@ -421,7 +421,11 @@ fn base(o: &ListedOrder, idx: usize, kind: TemplateId, side: Side, book: BookKey
     Cand {
         order: idx,
         id: o.id(),
-        kind: kind.in_family(o.order.state.family()),
+        // the kind of the order's family, in the build of its token program (KRON id_type 0 holders: `*KronD0`)
+        kind: match o.order.state.token_tpl_hash() {
+            Some(h) => kind.for_token_hash(o.order.state.family(), &h),
+            None => kind.in_family(o.order.state.family()),
+        },
         side,
         leg: 0,
         class: Class::Resting,

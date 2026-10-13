@@ -396,9 +396,10 @@ pub fn tok_of(tag: u8, amount: i64, owner: [u8; 32], scheme: u8, daa: u64, token
     let state = Kcc20State { amount, owner, owner_scheme: scheme, borrow_scheme: 0, borrow_guard: [0; 32], extension_commitment: EXT };
     TokenUtxo { utxo: utxo(tag, carrier(), daa, Some(token)), state: state.into() }
 }
-/// A key-owned token UTXO of the family of `prog` (KCC-20 P2PK / KRON address presence).
+/// A key-owned token UTXO of `prog` with its holder owner (KCC-20 P2PK / KRON address presence, or id_type 0 for a program
+/// whose holders are id_type 0).
 pub fn tok_on(prog: TemplateId, tag: u8, amount: i64, owner: [u8; 32], daa: u64) -> TokenUtxo {
-    TokenUtxo { utxo: utxo(tag, carrier(), daa, Some(TOKEN_COV)), state: TokenState::user(prog.family(), amount, owner, EXT) }
+    TokenUtxo { utxo: utxo(tag, carrier(), daa, Some(TOKEN_COV)), state: TokenState::user(prog, amount, owner, EXT) }
 }
 /// Changes the owner of a token state (keeping its owner type).
 pub fn set_owner(s: &mut TokenState, owner: [u8; 32]) {
@@ -678,13 +679,41 @@ pub fn scenarios() -> Vec<(String, Action)> {
 /// (`KOB_REGEN=1`) cover a newly added program without a code change.
 pub const PROGRAMS: [TemplateId; kob_protocol::artifacts::TOKEN_PROGRAM_COUNT] = TemplateId::TOKEN_PROGRAMS;
 
+/// The programs the pair kinds serve ([`TemplateId::serves_pairs`]: not a KRON program with id_type 0 holders).
+pub fn pair_programs() -> Vec<TemplateId> {
+    PROGRAMS.into_iter().filter(|p| p.serves_pairs()).collect()
+}
+
 /// The KRON golden-vector set: every builder shape on the common KRON program.
 pub fn scenarios_kron() -> Vec<(String, Action)> {
     scenarios_on(TemplateId::KronToken2433).into_iter().map(|(n, a)| (format!("kron.{n}"), a)).collect()
 }
 
-/// The scenarios with the given token program in place of the reference one.
+/// The scenarios with the given token program in place of the reference one. A program with fewer token slots than the
+/// fixtures assume (KForge: one token input, three outputs per transaction) keeps the scenarios that fit them: a scenario
+/// the builders refuse for the program's slots (or for its one-input rule of id_type 0 holders) is left out, every other
+/// refusal stays an error of the scenario.
 pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
+    let all = scenarios_all(t3);
+    if t3.token_slots().is_some_and(|(i, o)| i >= 3 && o >= 3) {
+        return all;
+    }
+    all.into_iter().filter(|(_, a)| fits_slots(a)).collect()
+}
+
+/// False when the builders refuse `a` for its token programs' slots alone.
+pub fn fits_slots(a: &Action) -> bool {
+    match kob_protocol::build::build(a) {
+        Ok(_) => true,
+        Err(e) => {
+            let m = e.to_string();
+            !(m.contains("token inputs /") && m.contains("token outputs per transaction")
+                || m.contains("must be the only input of its token"))
+        }
+    }
+}
+
+fn scenarios_all(t3: TemplateId) -> Vec<(String, Action)> {
     let kron = t3.family() == Family::Kron;
     // The program of the creation / batch fixtures that exercise a large token program (KCC-20: 8/8).
     let t8 = if kron { t3 } else { T8 };
@@ -1342,30 +1371,43 @@ pub fn scenarios_on(t3: TemplateId) -> Vec<(String, Action)> {
     add("route.swapAndPay.x402", Action::SwapRoute(route(true)));
 
     if kron {
-        return v.into_iter().map(|(n, a)| (n, kron_action(a))).collect();
+        return v.into_iter().map(|(n, a)| (n, kron_action_on(t3, a))).collect();
     }
     v
 }
 
 // ---------------------------------------------------------------- KRON conversion of the fixtures
 
-/// Converts a KCC-20 fixture request into its KRON counterpart (see the module docs).
+/// Converts a KCC-20 fixture request into its KRON counterpart (see the module docs): key-held states become address
+/// presence (id_type 3).
 pub fn kron_action(a: Action) -> Action {
+    kron_action_holder(a, kob_protocol::family::KRON_TYPE_ADDR)
+}
+
+/// [`kron_action`] for the KRON program `t`: key-held states take its holder owner (KForge: id_type 0).
+pub fn kron_action_on(t: TemplateId, a: Action) -> Action {
+    kron_action_holder(a, kob_protocol::state::HolderOf::Program(t).owner_type())
+}
+
+fn kron_action_holder(a: Action, holder: u8) -> Action {
     let mut v = serde_json::to_value(&a).expect("action json");
-    to_kron_json(&mut v);
+    to_kron_json(&mut v, holder);
     let mut out: Action = serde_json::from_value(v).unwrap_or_else(|e| panic!("KRON conversion of a fixture: {e}"));
-    fund_presence(&mut out);
+    if holder == kob_protocol::family::KRON_TYPE_ADDR {
+        fund_presence(&mut out);
+    }
     out
 }
 
-fn to_kron_json(v: &mut serde_json::Value) {
+fn to_kron_json(v: &mut serde_json::Value, holder: u8) {
     use serde_json::Value;
     match v {
         Value::Object(m) => {
             if let Some(scheme) = m.get("owner_scheme").and_then(|x| x.as_u64()) {
-                // A KCC-20 token state -> the KRON layout: owner scheme 0 (P2PK) = address presence, 4 = covenant id.
+                // A KCC-20 token state -> the KRON layout: owner scheme 0 (P2PK) = the program's holder owner (address
+                // presence, or id_type 0), 4 = covenant id.
                 let id_type: u64 = match scheme {
-                    0 => 3,
+                    0 => holder as u64,
                     4 => 2,
                     other => panic!("fixture token owner scheme {other}"),
                 };
@@ -1387,10 +1429,10 @@ fn to_kron_json(v: &mut serde_json::Value) {
                 }
             }
             for x in m.values_mut() {
-                to_kron_json(x);
+                to_kron_json(x, holder);
             }
         }
-        Value::Array(a) => a.iter_mut().for_each(to_kron_json),
+        Value::Array(a) => a.iter_mut().for_each(|x| to_kron_json(x, holder)),
         _ => {}
     }
 }
@@ -1480,7 +1522,7 @@ pub fn grid() -> Vec<(String, Action)> {
         }
         if tpl.family() == Family::Kron {
             for (_, a) in &mut v[start..] {
-                *a = kron_action(a.clone());
+                *a = kron_action_on(tpl, a.clone());
             }
         }
     }
@@ -1514,7 +1556,7 @@ fn in_family(t: TemplateId, pad: Batch) -> Batch {
     if t.family() != Family::Kron {
         return pad;
     }
-    match kron_action(Action::Batch(pad)) {
+    match kron_action_on(t, Action::Batch(pad)) {
         Action::Batch(b) => b,
         _ => unreachable!(),
     }

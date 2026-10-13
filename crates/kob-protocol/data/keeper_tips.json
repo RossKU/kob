@@ -41,6 +41,12 @@
     "updateFee": "1059400",
     "keeperTip": "2200000"
   },
+  "KForgeToken1785": {
+    "refundFee": "1390400",
+    "refundTip": "2800000",
+    "updateFee": "955800",
+    "keeperTip": "2000000"
+  },
   "KronToken2433": {
     "refundFee": "1519600",
     "refundTip": "3100000",

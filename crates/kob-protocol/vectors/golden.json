@@ -337,6 +337,92 @@
       "tokenSlots": null
     },
     {
+      "name": "KobAskKronD0",
+      "hash": "f43ae142343fe54313e2f742931c76da11cb49e66d823280829a3f91ed227c2c",
+      "prefixLen": 1,
+      "stateLen": 243,
+      "suffixLen": 1243,
+      "entries": {
+        "cancel": "a0893109",
+        "settle": "26a2c631"
+      },
+      "kindCode": 1,
+      "tokenSlots": null
+    },
+    {
+      "name": "KobBidKronD0",
+      "hash": "436fbbbb676f05d6402745298976aa6f1fe59faa1d7eb354060ba87e97966531",
+      "prefixLen": 1,
+      "stateLen": 252,
+      "suffixLen": 1090,
+      "entries": {
+        "cancel": "a0893109",
+        "fill": "5f698675",
+        "refund": "777f5b11"
+      },
+      "kindCode": 2,
+      "tokenSlots": null
+    },
+    {
+      "name": "KobCondAskKronD0",
+      "hash": "e334e85e308e20bdeb3c3350f7fac0e97484d39f974409c9e09174c66a9c6c3e",
+      "prefixLen": 1,
+      "stateLen": 330,
+      "suffixLen": 3120,
+      "entries": {
+        "cancel": "a0893109",
+        "settle": "68a357bc",
+        "update": "46ade55d"
+      },
+      "kindCode": 3,
+      "tokenSlots": null
+    },
+    {
+      "name": "KobCondBidKronD0",
+      "hash": "f47fe24d8d4566d0074ecf5627031d69348fa4ec3ece48ba8739685775ea3fa3",
+      "prefixLen": 1,
+      "stateLen": 348,
+      "suffixLen": 2904,
+      "entries": {
+        "cancel": "a0893109",
+        "refund": "777f5b11",
+        "settle": "bd44243d",
+        "update": "46ade55d"
+      },
+      "kindCode": 4,
+      "tokenSlots": null
+    },
+    {
+      "name": "KobIfdBidKronD0",
+      "hash": "c9cbbbdbd0ecdde70c0f3130ca1a7d2802f8682bbde5532907ef3c2589252f52",
+      "prefixLen": 1,
+      "stateLen": 552,
+      "suffixLen": 2925,
+      "entries": {
+        "cancel": "a0893109",
+        "fill": "d434627a",
+        "refund": "777f5b11",
+        "update": "cd93c503"
+      },
+      "kindCode": 5,
+      "tokenSlots": null
+    },
+    {
+      "name": "KobIfdAskKronD0",
+      "hash": "4ee20455e942d978f3be267c0b99deffa4c43ee55b9bfc49c53610500ca238f2",
+      "prefixLen": 1,
+      "stateLen": 561,
+      "suffixLen": 4066,
+      "entries": {
+        "cancel": "a0893109",
+        "close": "2291ad1d",
+        "settle": "46d7fcb4",
+        "update": "46ade55d"
+      },
+      "kindCode": 6,
+      "tokenSlots": null
+    },
+    {
       "name": "KronToken2433",
       "hash": "2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2",
       "prefixLen": 0,
@@ -361,6 +447,20 @@
       "tokenSlots": [
         4,
         5
+      ],
+      "minTokenOutput": "1"
+    },
+    {
+      "name": "KForgeToken1785",
+      "hash": "5b136633944a2371a1d0f6a94fdc0d329327ffc700fdec097fc59e76e1d33ae1",
+      "prefixLen": 1,
+      "stateLen": 46,
+      "suffixLen": 1738,
+      "entries": {},
+      "kindCode": null,
+      "tokenSlots": [
+        1,
+        3
       ],
       "minTokenOutput": "1"
     }
@@ -249805,6 +249905,12 @@
       "refundTip": "4900000",
       "updateFee": "1059400",
       "keeperTip": "2200000"
+    },
+    "KForgeToken1785": {
+      "refundFee": "1390400",
+      "refundTip": "2800000",
+      "updateFee": "955800",
+      "keeperTip": "2000000"
     },
     "KronToken2433": {
       "refundFee": "1519600",

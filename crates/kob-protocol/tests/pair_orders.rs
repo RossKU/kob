@@ -184,7 +184,10 @@ fn positional_outputs_of_any_token_leave_no_gap() {
 fn diag_pair_shapes() {
     use kob_protocol::tx::{finalize, sign_locally, FinalizeOptions};
     let pairs: Vec<(TemplateId, TemplateId)> = match std::env::var("KOB_DIAG_ALL") {
-        Ok(_) => common::PROGRAMS.iter().flat_map(|a| common::PROGRAMS.iter().map(move |b| (*a, *b))).collect(),
+        Ok(_) => {
+            let ps = common::pair_programs();
+            ps.iter().flat_map(|a| ps.iter().map(move |b| (*a, *b))).collect()
+        }
         Err(_) => vec![(TemplateId::Kcc20Ref, TemplateId::Kcc20Ref), (TemplateId::KronToken2433, TemplateId::Kcc20P2)],
     };
     for (pa, pb) in pairs {

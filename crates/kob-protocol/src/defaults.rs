@@ -299,14 +299,15 @@ mod tests {
             assert_eq!(t.keeper_tip, tip_for_fee(t.update_fee), "{}", id.name());
             assert!(t.refund_tip >= 2 * t.refund_fee && t.keeper_tip >= 2 * t.update_fee);
         }
-        // every program pair has its pair tips
-        for a in &programs {
-            for b in &programs {
+        // every pair of programs the pair kinds serve has its pair tips
+        let pair_programs: Vec<TemplateId> = programs.iter().copied().filter(|p| p.serves_pairs()).collect();
+        for a in &pair_programs {
+            for b in &pair_programs {
                 let t = pair_tips(*a, *b).unwrap_or_else(|e| panic!("{e}"));
                 assert_eq!(t.refund_tip, tip_for_fee(t.refund_fee), "{}", pair_tips_key(*a, *b));
                 assert_eq!(t.keeper_tip, tip_for_fee(t.update_fee), "{}", pair_tips_key(*a, *b));
             }
         }
-        assert_eq!(pair_tips_table().len(), programs.len() * programs.len());
+        assert_eq!(pair_tips_table().len(), pair_programs.len() * pair_programs.len());
     }
 }

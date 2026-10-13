@@ -484,7 +484,7 @@ fn check_payer_token(t: &TokenUtxo, allowed: &AllowedToken) -> Result<()> {
         }
         _ => {}
     }
-    if !t.state.is_user() {
+    if !t.state.is_holder(allowed.program) {
         return Err(err(Diag::TokenOwnerScheme, "a payer token UTXO is not key-owned"));
     }
     if t.state.extension() != allowed.extension_commitment {

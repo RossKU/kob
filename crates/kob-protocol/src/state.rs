@@ -215,29 +215,49 @@ pub trait OrderState: StateCodec {
     fn from_redeem(redeem: &[u8]) -> Result<Self, StateError> {
         Self::from_redeem_for(Family::Kcc20, redeem)
     }
-    /// Template of this kind in `fam`.
+    /// Template of this kind in `fam` (the default build: an instance's build is [`OrderState::template_of`]).
     fn template_for(fam: Family) -> TemplateId {
         Self::TEMPLATE.in_family(fam)
     }
-    /// Encoded state span under the template of `fam`.
+    /// The template of this instance in `fam`: the build of the kind whose maker deliveries carry the holder owner of the
+    /// token program the state pins (`tokenTplHash`; a KRON program with id_type 0 holders: the `*KronD0` build,
+    /// [`TemplateId::for_token_hash`]).
+    fn template_of(&self, fam: Family) -> TemplateId {
+        match self.to_values().get("tokenTplHash") {
+            Some(ArtifactValue::Bytes(b)) => match <[u8; 32]>::try_from(b.as_slice()) {
+                Ok(h) => Self::TEMPLATE.for_token_hash(fam, &h),
+                Err(_) => Self::template_for(fam),
+            },
+            _ => Self::template_for(fam),
+        }
+    }
+    /// Encoded state span under the template of `fam` (every build of a kind has the same state layout).
     fn encode_for(&self, fam: Family) -> Vec<u8> {
         self.encode_as(Self::template_for(fam))
     }
-    /// Redeem script of this instance under the template of `fam`.
+    /// Redeem script of this instance under its template in `fam`.
     fn redeem_for(&self, fam: Family) -> Vec<u8> {
-        let id = Self::template_for(fam);
+        let id = self.template_of(fam);
         template(id).redeem(&self.encode_as(id))
     }
-    /// P2SH script public key of this instance under the template of `fam`.
+    /// P2SH script public key of this instance under its template in `fam`.
     fn spk_for(&self, fam: Family) -> ScriptPublicKey {
-        let id = Self::template_for(fam);
+        let id = self.template_of(fam);
         template(id).spk(&self.encode_as(id))
     }
-    /// Decodes an instance from its redeem script under the template of `fam`.
+    /// Decodes an instance from its redeem script under its template in `fam` (either build of a KRON kind; the build must
+    /// be the one of the token program the state pins).
     fn from_redeem_for(fam: Family, redeem: &[u8]) -> Result<Self, StateError> {
-        let id = Self::template_for(fam);
-        let st = template(id).state_of(redeem).ok_or(StateError::NotInstance(Self::NAME))?;
-        Self::decode_as(id, st)
+        for id in [Self::template_for(fam), Self::template_for(fam).delivery0()] {
+            if let Some(st) = template(id).state_of(redeem) {
+                let s = Self::decode_as(id, st)?;
+                if s.template_of(fam) != id {
+                    return Err(StateError::NotInstance(Self::NAME));
+                }
+                return Ok(s);
+            }
+        }
+        Err(StateError::NotInstance(Self::NAME))
     }
 }
 
@@ -611,6 +631,11 @@ impl KronState {
     pub fn addr(amount: i64, owner: [u8; 32]) -> Self {
         KronState { owner, id_type: KRON_TYPE_ADDR, amount, is_minter: 0 }
     }
+    /// Token state owned by a key that signs for it (`id_type` 0, a token-level signature): the holders of a program that
+    /// refuses address presence (KForge), what the `*KronD0` order builds deliver to makers.
+    pub fn pubkey(amount: i64, owner: [u8; 32]) -> Self {
+        KronState { owner, id_type: crate::family::KRON_TYPE_PUBKEY, amount, is_minter: 0 }
+    }
     /// Token state held in custody by a covenant (a KOB order, `id_type` 2).
     pub fn custody(amount: i64, covenant_id: [u8; 32]) -> Self {
         KronState { owner: covenant_id, id_type: KRON_TYPE_COVID, amount, is_minter: 0 }
@@ -649,6 +674,47 @@ impl KronState {
     /// P2SH script public key under a KRON token program.
     pub fn spk_with(&self, tpl: &TokenTemplate) -> ScriptPublicKey {
         tpl.spk(&self.encode())
+    }
+}
+
+/// What fixes the owner value of a key-held token state: a token program (its profile's `owners.holder`) or a family (its
+/// default holder owner: KCC-20 `owner_scheme` 0, KRON `id_type` 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HolderOf {
+    Family(Family),
+    Program(TemplateId),
+}
+
+impl From<Family> for HolderOf {
+    fn from(f: Family) -> Self {
+        HolderOf::Family(f)
+    }
+}
+
+impl From<TemplateId> for HolderOf {
+    fn from(t: TemplateId) -> Self {
+        HolderOf::Program(t)
+    }
+}
+
+impl HolderOf {
+    /// The family.
+    pub fn family(self) -> Family {
+        match self {
+            HolderOf::Family(f) => f,
+            HolderOf::Program(t) => t.family(),
+        }
+    }
+    /// The owner value (`owner_scheme` / `id_type`) of a key-held state.
+    pub fn owner_type(self) -> u8 {
+        match self {
+            HolderOf::Program(t) => match t.profile() {
+                Some(p) => p.owners.holder,
+                None => HolderOf::Family(t.family()).owner_type(),
+            },
+            HolderOf::Family(Family::Kcc20) => SCHEME_P2PK,
+            HolderOf::Family(Family::Kron) => KRON_TYPE_ADDR,
+        }
     }
 }
 
@@ -715,12 +781,23 @@ impl TokenState {
             TokenState::Kron(s) => s.owner,
         }
     }
-    /// Owned by a key: KCC-20 `owner_scheme` 0 (P2PK), KRON `id_type` 3 (address presence).
+    /// Owned by a key: KCC-20 `owner_scheme` 0 (P2PK), KRON `id_type` 3 (address presence) or 0 (a token-level signature).
+    /// Which of the KRON two a program authorises is its holder owner: [`TokenState::is_holder`].
     pub fn is_user(&self) -> bool {
         match self {
             TokenState::Kcc20(s) => s.owner_scheme == SCHEME_P2PK,
-            TokenState::Kron(s) => s.id_type == KRON_TYPE_ADDR,
+            TokenState::Kron(s) => s.id_type == KRON_TYPE_ADDR || s.id_type == crate::family::KRON_TYPE_PUBKEY,
         }
+    }
+    /// Owned by a key with the holder owner of `of` (a token program: its profile's `owners.holder`; a family: its default),
+    /// i.e. a key-held state the builders spend for that program.
+    pub fn is_holder(&self, of: impl Into<HolderOf>) -> bool {
+        let of = of.into();
+        self.family() == of.family()
+            && match self {
+                TokenState::Kcc20(s) => s.owner_scheme == of.owner_type(),
+                TokenState::Kron(s) => s.id_type == of.owner_type(),
+            }
     }
     /// Owned by a covenant id: KCC-20 `owner_scheme` 4, KRON `id_type` 2.
     pub fn is_covenant_owned(&self) -> bool {
@@ -750,11 +827,13 @@ impl TokenState {
             TokenState::Kron(s) => s.is_minter == 0,
         }
     }
-    /// Token state owned by `owner` as a key (`ext` is ignored by KRON).
-    pub fn user(fam: Family, amount: i64, owner: [u8; 32], ext: [u8; 32]) -> Self {
-        match fam {
+    /// Token state owned by `owner` as a key, with the holder owner of `of` (a token program: its profile's `owners.holder`,
+    /// e.g. KRON id_type 0 for KForge; a family: its default, KCC-20 scheme 0 / KRON id_type 3). `ext` is ignored by KRON.
+    pub fn user(of: impl Into<HolderOf>, amount: i64, owner: [u8; 32], ext: [u8; 32]) -> Self {
+        let of = of.into();
+        match of.family() {
             Family::Kcc20 => TokenState::Kcc20(Kcc20State::p2pk(amount, owner, ext)),
-            Family::Kron => TokenState::Kron(KronState::addr(amount, owner)),
+            Family::Kron => TokenState::Kron(KronState { owner, id_type: of.owner_type(), amount, is_minter: 0 }),
         }
     }
     /// Token state in custody of a covenant id (`ext` is ignored by KRON).
@@ -771,11 +850,17 @@ impl TokenState {
             TokenState::Kron(s) => TokenState::Kron(KronState { amount, ..s.clone() }),
         }
     }
-    /// The same state owned by `owner` as a key (a refund or delivery to the maker).
+    /// The same state owned by `owner` as a key with its family's default holder owner (KCC-20 scheme 0, KRON id_type 3).
     pub fn with_user_owner(&self, owner: [u8; 32]) -> Self {
+        self.with_holder_owner(self.family(), owner)
+    }
+    /// The same state owned by `owner` as a key with the holder owner of `of` (a token program: its profile's
+    /// `owners.holder`): a refund or delivery to the maker.
+    pub fn with_holder_owner(&self, of: impl Into<HolderOf>, owner: [u8; 32]) -> Self {
+        let id = of.into().owner_type();
         match self {
             TokenState::Kcc20(s) => TokenState::Kcc20(Kcc20State { owner, owner_scheme: SCHEME_P2PK, ..s.clone() }),
-            TokenState::Kron(s) => TokenState::Kron(KronState { owner, id_type: KRON_TYPE_ADDR, ..s.clone() }),
+            TokenState::Kron(s) => TokenState::Kron(KronState { owner, id_type: id, ..s.clone() }),
         }
     }
     /// The encoded state span.
@@ -1633,7 +1718,18 @@ pub enum AnyState {
 }
 
 impl AnyState {
+    /// The order template of this instance. A KRON kind's build follows from the token program the state pins: the `*KronD0`
+    /// build (maker deliveries of id_type 0) for a program whose holders are id_type 0, the default build otherwise
+    /// ([`TemplateId::for_token_hash`]).
     pub fn template_id(&self) -> TemplateId {
+        let k = self.kind();
+        match self.token_tpl_hash() {
+            Some(h) if k.family() == Family::Kron && !k.is_pair() => k.for_token_hash(Family::Kron, &h),
+            _ => k,
+        }
+    }
+    /// The order kind of the variant (a KRON kind: its default build).
+    fn kind(&self) -> TemplateId {
         match self {
             AnyState::KobAsk(_) => TemplateId::KobAsk,
             AnyState::KobBid(_) => TemplateId::KobBid,
@@ -1849,13 +1945,42 @@ impl AnyState {
             TemplateId::KobCondBidKron => AnyState::KobCondBidKron(CondBidState::decode_as(id, bytes)?),
             TemplateId::KobIfdBidKron => AnyState::KobIfdBidKron(IfdBidState::decode_as(id, bytes)?),
             TemplateId::KobIfdAskKron => AnyState::KobIfdAskKron(IfdAskState::decode_as(id, bytes)?),
+            TemplateId::KobAskKronD0 => AnyState::KobAskKron(AskState::decode_as(id, bytes)?),
+            TemplateId::KobBidKronD0 => AnyState::KobBidKron(BidState::decode_as(id, bytes)?),
+            TemplateId::KobCondAskKronD0 => AnyState::KobCondAskKron(CondAskState::decode_as(id, bytes)?),
+            TemplateId::KobCondBidKronD0 => AnyState::KobCondBidKron(CondBidState::decode_as(id, bytes)?),
+            TemplateId::KobIfdBidKronD0 => AnyState::KobIfdBidKron(IfdBidState::decode_as(id, bytes)?),
+            TemplateId::KobIfdAskKronD0 => AnyState::KobIfdAskKron(IfdAskState::decode_as(id, bytes)?),
             TemplateId::KobPair => AnyState::KobPair(PairState::decode_as(id, bytes)?),
             TemplateId::KobCondPair => AnyState::KobCondPair(CondPairState::decode_as(id, bytes)?),
             TemplateId::KobIfdPair => AnyState::KobIfdPair(IfdPairState::decode_as(id, bytes)?),
             other => return Err(StateError::Codec("AnyState", format!("{} is not an order template", other.name()))),
         };
         s.validate()?;
+        // The build of a KRON kind is the token program's (the state span of both builds is the same): an instance of one
+        // build whose state pins a program of the other is not an order KOB recognises (a delivery the maker could not spend).
+        if s.template_id() != id {
+            return Err(StateError::Codec(
+                "AnyState",
+                format!(
+                    "{}: the state's token program takes the {} build (maker deliveries of the program's holder owner)",
+                    id.name(),
+                    s.template_id().name()
+                ),
+            ));
+        }
         Ok(s)
+    }
+    /// [`AnyState::decode`] of a state named by its kind (a `KOB1` record's family and kind code), whatever the build: the
+    /// template is then [`AnyState::template_id`] (the build of the token program the state pins).
+    pub fn decode_kind(kind: TemplateId, bytes: &[u8]) -> Result<AnyState, StateError> {
+        match AnyState::decode(kind, bytes) {
+            Ok(s) => Ok(s),
+            Err(e) => match kind.delivery0() {
+                d0 if d0 != kind => AnyState::decode(d0, bytes).map_err(|_| e),
+                _ => Err(e),
+            },
+        }
     }
     pub fn redeem(&self) -> Vec<u8> {
         template(self.template_id()).redeem(&self.encode())
@@ -2094,9 +2219,10 @@ impl AnyState {
 /// Mutable fields of each order template and their bytecode payload windows `[start, end)` (the
 /// 8-byte values the covenants splice into their continuations; `docs/spec/matcher.md` §1.1).
 /// Every other byte of an order's redeem script is fixed for the life of its covenant id. The KRON
-/// bid-side kinds have no extension commitment, so their windows sit 33 bytes earlier.
+/// bid-side kinds have no extension commitment, so their windows sit 33 bytes earlier. Both builds of a KRON kind have the
+/// same windows.
 pub fn mutable_windows(id: TemplateId) -> &'static [(&'static str, usize, usize)] {
-    match id {
+    match id.canonical() {
         TemplateId::KobAsk | TemplateId::KobAskKron => &[("amountLeft", 236, 244)],
         TemplateId::KobPair => &[("amountLeft", 398, 406), ("custody", 407, 415)],
         TemplateId::KobCondPair => &[("stopPrice", 416, 424), ("armed", 425, 433), ("amountLeft", 434, 442), ("custody", 443, 451)],
@@ -2115,7 +2241,7 @@ pub fn mutable_windows(id: TemplateId) -> &'static [(&'static str, usize, usize)
 
 /// Bytecode windows of the repeat fields an if-done entry writes into its exits (immutable).
 pub fn repeat_window(id: TemplateId) -> Option<(usize, usize)> {
-    match id {
+    match id.canonical() {
         TemplateId::KobCondAsk | TemplateId::KobCondAskKron => Some((280, 331)),
         TemplateId::KobCondBid => Some((322, 382)),
         TemplateId::KobCondBidKron => Some((289, 349)),

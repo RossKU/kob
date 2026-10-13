@@ -139,7 +139,7 @@ pub fn build_link(
         return Err("merging KRON tokens needs a KAS UTXO of the key in the transaction".into());
     }
     let ext = if kron { [0; 32] } else { inputs.first().map(|u| u.state.extension()).unwrap_or(m.ext) };
-    let state = TokenState::user(m.family, total, *maker, ext);
+    let state = TokenState::user(m.program, total, *maker, ext);
     let spk = spk_to_string(&state.spk_with(token_template(m.program)));
     let mut used: Vec<KeyUtxo> = seed.into_iter().collect();
     for _ in 0..8 {

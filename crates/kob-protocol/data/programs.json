@@ -169,6 +169,50 @@
       "router_intents": true,
       "genesis": { "minters": "genesis-only" },
       "review": { "status": "reviewed", "basis": "internal review B2 (2026-09-30) with conditions: a per-token genesis check and no live minter before a token is listed or official" }
+    },
+    {
+      "name": "KForgeToken1785",
+      "variant": "KForgeToken1785",
+      "registry_id": "kforge-token-1785",
+      "record_code": 10,
+      "summary": "KForge launchpad token program (testnet-10, pre-standard): KRON 46-byte state behind a one-byte entry-selector prefix, 1,785-byte redeem script; holders are id_type 0 (token-level signature).",
+      "source": {
+        "kind": "raw-redeem",
+        "path": "contracts/third-party/kforge/program.bin"
+      },
+      "template_hash": "5b136633944a2371a1d0f6a94fdc0d329327ffc700fdec097fc59e76e1d33ae1",
+      "layout": {
+        "prefix_len": 1,
+        "state_len": 46,
+        "suffix_len": 1738
+      },
+      "codec": "kron",
+      "owners": {
+        "custody": 2,
+        "holder": 0
+      },
+      "slots": {
+        "inputs": 1,
+        "outputs": 3
+      },
+      "carrier_floor": 1,
+      "witness": {
+        "scheme": "kron-columns",
+        "trailing_pushes": [
+          ""
+        ]
+      },
+      "router_intents": false,
+      "genesis": {
+        "minters": "unknown"
+      },
+      "review": {
+        "status": "pending-review",
+        "basis": "derived by kob registry add-program; measured in the engine (crates/kob-tests/tests/program_kforgetoken1785.rs): the witness reproduced byte for byte, custody 2 and holder 0 (a token-level signature; address presence refused), slots 1 / 3, carrier floor 1 sompi, no minting, burning or minter on the transfer branch; served by the *KronD0 order builds; the other entries and the genesis not reviewed"
+      },
+      "networks": [
+        "testnet-10"
+      ]
     }
   ]
 }

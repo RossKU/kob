@@ -30,6 +30,12 @@ every network.
 | KobCondBidKron | `296a2ffb289ee74abd936c2e1bc25692638d7efc5accfcd8cc2c9b9e96774dd3` | 1 / 2904 |
 | KobIfdBidKron | `b705e2c3db279403276d0d0ccfe1e26dd0775620e383d13c98a2dca00892a335` | 1 / 2925 |
 | KobIfdAskKron | `4797dc300d40ce968d8f26000c890e74f85f1c0d24ee227dac936a69ec034d12` | 1 / 4066 |
+| KobAskKronD0 | `f43ae142343fe54313e2f742931c76da11cb49e66d823280829a3f91ed227c2c` | 1 / 1243 |
+| KobBidKronD0 | `436fbbbb676f05d6402745298976aa6f1fe59faa1d7eb354060ba87e97966531` | 1 / 1090 |
+| KobCondAskKronD0 | `e334e85e308e20bdeb3c3350f7fac0e97484d39f974409c9e09174c66a9c6c3e` | 1 / 3120 |
+| KobCondBidKronD0 | `f47fe24d8d4566d0074ecf5627031d69348fa4ec3ece48ba8739685775ea3fa3` | 1 / 2904 |
+| KobIfdBidKronD0 | `c9cbbbdbd0ecdde70c0f3130ca1a7d2802f8682bbde5532907ef3c2589252f52` | 1 / 2925 |
+| KobIfdAskKronD0 | `4ee20455e942d978f3be267c0b99deffa4c43ee55b9bfc49c53610500ca238f2` | 1 / 4066 |
 
 The token programs are the reference artifacts too. Binaries embedding this record: see "Deployment
 records" in contracts/README.md.

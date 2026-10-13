@@ -699,8 +699,8 @@ pub fn verify_swap_facts(
             kinds.push(InKind::Order);
             continue;
         }
-        let (_, state) = token_input(pol, entry, redeem)?;
-        if state.is_user() {
+        let (allowed, state) = token_input(pol, entry, redeem)?;
+        if state.is_holder(allowed.program) {
             kinds.push(InKind::PayerToken(state.owner(), state));
         } else if state.is_covenant_owned() {
             kinds.push(InKind::Custody(state));
@@ -838,8 +838,10 @@ pub fn verify_swap_facts(
                 InKind::Custody(st) => st,
                 _ => unreachable!("custody index"),
             };
-            let st = if l.tif == TIF_GTC { cust.with_amount(rest) } else { cust.with_amount(rest).with_user_owner(l.maker) };
-            let tpl = token_template(pol.tokens.find(&l.token).expect("allowlisted").program);
+            let program = pol.tokens.find(&l.token).expect("allowlisted").program;
+            let st =
+                if l.tif == TIF_GTC { cust.with_amount(rest) } else { cust.with_amount(rest).with_holder_owner(program, l.maker) };
+            let tpl = token_template(program);
             rests.push(Rest { token: l.token, spk: st.spk_with(tpl), used: false });
         }
     }

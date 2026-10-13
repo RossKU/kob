@@ -171,6 +171,12 @@ KRON (family `0x02`), same kind codes:
 | `0x09` | `KobCondPair` (token A KRON; the same template) | 543 | the custody of S (`sExt`) | `98b137f6…a779374` |
 | `0x0a` | `KobIfdPair` (token A KRON; the same template) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `a9c04066…ee67c5a` |
 
+Codes `0x01` to `0x06` of family `0x02` also name the delivery id_type 0 builds of the KRON kinds (`KobAskKronD0` ..
+`KobIfdAskKronD0`, testnet only: the same state layouts, maker deliveries of KRON id_type 0, for a token program whose holders are
+id_type 0, KForge). A record names the kind, not the build: the build is the one of the token program its state pins
+(`AnyState::template_id`), and a decoder recomputes the output's P2SH under that build. The executor's record log keeps the build
+of a spent order in its template byte (`0x40` set for a `*KronD0` build).
+
 Full hashes: see `kob_protocol::artifacts::PINNED` (the artifacts in `contracts/artifacts`, also the `templates` list of
 the golden vectors).
 An ORDER record is critical, so a decoder that does not know its kind rejects the payload (and lists nothing of that

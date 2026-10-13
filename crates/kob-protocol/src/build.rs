@@ -735,20 +735,27 @@ pub struct TokenPayee {
     pub pubkey: [u8; 32],
 }
 
-fn token_witness(s: &TokenState) -> Result<Witness> {
+/// How a token input of `program` is authorised: a covenant-owned state by its covenant's input, a key-held state with the
+/// program's holder owner by its key (KCC-20 and KRON id_type 0: a signature in the input; KRON id_type 3: a P2PK input of
+/// the key).
+fn token_witness(s: &TokenState, program: TemplateId) -> Result<Witness> {
     match s {
         TokenState::Kcc20(k) => match k.owner_scheme {
             SCHEME_P2PK => Ok(Witness::P2pk(k.owner)),
             SCHEME_COVID => Ok(Witness::CovenantId),
             other => invalid(format!("token owner scheme {other:#04x} is not supported by the builders")),
         },
-        TokenState::Kron(k) => match k.id_type {
-            crate::family::KRON_TYPE_ADDR => Ok(Witness::P2pk(k.owner)),
-            crate::family::KRON_TYPE_COVID => Ok(Witness::CovenantId),
-            other => invalid(format!(
-                "KRON tokens of id_type {other} (pubkey / script hash) are not supported by the builders: move them to an address-presence (id_type 3) UTXO first"
-            )),
-        },
+        TokenState::Kron(k) if k.id_type == crate::family::KRON_TYPE_COVID => Ok(Witness::CovenantId),
+        TokenState::Kron(k) if s.is_holder(program) => Ok(Witness::P2pk(k.owner)),
+        TokenState::Kron(k) => {
+            let holder = crate::state::HolderOf::Program(program).owner_type();
+            invalid(format!(
+                "KRON tokens of id_type {} are not spendable under {} (its holders are id_type {holder}{})",
+                k.id_type,
+                program.name(),
+                if holder == crate::family::KRON_TYPE_ADDR { ", address presence: move them to such a UTXO first" } else { "" }
+            ))
+        }
     }
 }
 
@@ -827,13 +834,13 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
         }
         for t in &r.tokens {
             check_token_input(t, token)?;
-            if !t.state.is_user() {
-                return invalid("order tokens must come from key-owned UTXOs (P2PK owner scheme / KRON address presence)");
+            if !t.state.is_holder(token.1) {
+                return invalid("order tokens must come from key-owned UTXOs (P2PK owner scheme / the KRON program's holder owner)");
             }
             if *ext.get_or_insert(t.state.extension()) != t.state.extension() {
                 return invalid("token inputs mix extension commitments");
             }
-            d.add_token_input(t, token, token_witness(&t.state)?)?;
+            d.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
         }
         // the custody carries the commitment the order pins (its covenant refuses any other)
         if fam == Family::Kcc20 && pinned_ext(&r.order, token.0).is_some_and(|e| Some(e) != ext) {
@@ -865,7 +872,7 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
         if have > amount {
             // Token change returns to the owner of the first token input.
             let owner = r.tokens[0].state.owner();
-            d.add_token_output(token, TokenState::user(fam, have - amount, owner, ext), carrier)?;
+            d.add_token_output(token, TokenState::user(token.1, have - amount, owner, ext), carrier)?;
         }
     }
     let mut records = vec![Record::order(0, &r.order, custody, r.deadline)];
@@ -900,8 +907,8 @@ fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
             _ => return invalid("a pair order takes tokens of its own two tokens only"),
         };
         check_token_input(t, tok)?;
-        if !t.state.is_user() {
-            return invalid("order tokens must come from key-owned UTXOs (P2PK owner scheme / KRON address presence)");
+        if !t.state.is_holder(tok.1) {
+            return invalid("order tokens must come from key-owned UTXOs (P2PK owner scheme / the KRON program's holder owner)");
         }
         match groups.iter_mut().find(|g| g.0 == tok) {
             Some(g) => {
@@ -912,7 +919,7 @@ fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
             }
             None => groups.push((tok, t.state.amount(), t.state.extension(), t.state.owner())),
         }
-        d.add_token_input(t, tok, token_witness(&t.state)?)?;
+        d.add_token_input(t, tok, token_witness(&t.state, tok.1)?)?;
     }
     let auth = d.inputs.len();
     for f in &r.funding {
@@ -940,7 +947,7 @@ fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     }
     for (tok, rest, ext, owner) in groups {
         if rest > 0 {
-            d.add_token_output(tok, TokenState::user(tok.1.family(), rest, owner, ext), carrier)?;
+            d.add_token_output(tok, TokenState::user(tok.1, rest, owner, ext), carrier)?;
         }
     }
     let mut parts = parts.into_iter();
@@ -1066,11 +1073,11 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
     for t in r.tokens {
         let tok = tokens.iter().copied().find(|x| t.utxo.covenant_id == Some(x.0)).unwrap_or(tokens[0]);
         check_token_input(t, tok)?;
-        if !t.state.is_user() || t.state.owner() != maker {
+        if !t.state.is_holder(tok.1) || t.state.owner() != maker {
             return invalid("top-up tokens must be the maker's own key-owned tokens");
         }
         put(&mut groups, t, "top-up")?;
-        d.add_token_input(t, tok, Witness::P2pk(maker))?;
+        d.add_token_input(t, tok, token_witness(&t.state, tok.1)?)?;
     }
     let own: Vec<[u8; 32]> = tokens.iter().map(|t| t.0).collect();
     let foreign = add_foreign_inputs(&mut d, r.foreign, order_cov, &own)?;
@@ -1119,7 +1126,7 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
     }
     for (tok, back, e, carriers) in groups {
         if back > 0 {
-            let st = TokenState::user(tok.1.family(), back, maker, e.expect("tokens"));
+            let st = TokenState::user(tok.1, back, maker, e.expect("tokens"));
             d.add_token_output(tok, st, pos(carriers[0] as i64, "token carrier")?)?;
         }
     }
@@ -1302,7 +1309,7 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
     for (tok, total, ext, carrier) in groups {
         if total > 0 {
             let v = pos(r.token_carrier.unwrap_or(carrier) as i64, "token carrier")?;
-            d.add_token_output(tok, TokenState::user(tok.1.family(), total, maker, ext.expect("tokens")), v)?;
+            d.add_token_output(tok, TokenState::user(tok.1, total, maker, ext.expect("tokens")), v)?;
         }
     }
     if !r.records.is_empty() {
@@ -1379,7 +1386,7 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     }
     for (t, units, kas, e) in own_groups {
         let carrier = r.token_carrier.unwrap_or(kas);
-        d.add_token_output(t, TokenState::user(t.1.family(), units, maker, e), pos(carrier as i64, "stray carrier")?)?;
+        d.add_token_output(t, TokenState::user(t.1, units, maker, e), pos(carrier as i64, "stray carrier")?)?;
     }
     add_foreign_outputs(&mut d, foreign, maker)?;
     let mut records = vec![Record::Sweep { output: out as u16, input: oi as u16 }];
@@ -1432,7 +1439,7 @@ fn add_foreign_inputs(d: &mut Draft, foreign: &[ForeignStrays], order_cov: [u8; 
 /// The maker's outputs of [`add_foreign_inputs`]: each token's units, with the KAS its strays carried.
 fn add_foreign_outputs(d: &mut Draft, groups: Vec<ForeignOut>, maker: [u8; 32]) -> Result<()> {
     for (t, units, kas, e) in groups {
-        d.add_token_output(t, TokenState::user(t.1.family(), units, maker, e), pos(kas as i64, "foreign stray carrier")?)?;
+        d.add_token_output(t, TokenState::user(t.1, units, maker, e), pos(kas as i64, "foreign stray carrier")?)?;
     }
     Ok(())
 }
@@ -1499,7 +1506,7 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
                 d.add_p2pk(f);
             }
             let foreign = add_foreign_inputs(&mut d, &r.foreign, order_cov, &own)?;
-            let st = c.state.with_user_owner(maker);
+            let st = c.state.with_holder_owner(token.1, maker);
             d.add_token_output(token, st, keep + c.utxo.amount)?;
             foreign
         }
@@ -1579,7 +1586,6 @@ pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
     if r.tokens.is_empty() || r.recipients.is_empty() {
         return invalid("send needs token inputs and recipients");
     }
-    let fam = token.1.family();
     for rc in &r.recipients {
         check_key(&rc.pubkey, "recipient")?;
     }
@@ -1594,7 +1600,7 @@ pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
         if t.state.extension() != ext {
             return invalid("token inputs mix extension commitments");
         }
-        d.add_token_input(t, token, token_witness(&t.state)?)?;
+        d.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
     }
     for f in &r.funding {
         d.add_p2pk(f);
@@ -1608,7 +1614,7 @@ pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
     for rc in &r.recipients {
         pos(rc.amount, "recipient amount")?;
         sent = sent.checked_add(rc.amount).ok_or_else(|| Error::Invalid("the recipients' amounts overflow an i64".into()))?;
-        d.add_token_output(token, TokenState::user(fam, rc.amount, rc.pubkey, ext), pos(rc.carrier as i64, "recipient carrier")?)?;
+        d.add_token_output(token, TokenState::user(token.1, rc.amount, rc.pubkey, ext), pos(rc.carrier as i64, "recipient carrier")?)?;
     }
     if sent > have {
         return invalid(format!("sending {sent} with only {have}"));
@@ -1617,7 +1623,7 @@ pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
         let owner = r.token_change.unwrap_or(r.tokens[0].state.owner());
         d.add_token_output(
             token,
-            TokenState::user(fam, have - sent, owner, ext),
+            TokenState::user(token.1, have - sent, owner, ext),
             pos(r.token_change_carrier as i64, "token change carrier")?,
         )?;
     }
@@ -2331,7 +2337,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                     if s.tif == TIF_FOK {
                         return invalid("FOK ask must be filled completely");
                     }
-                    let st = custody.state.with_amount(rest).with_user_owner(s.maker);
+                    let st = custody.state.with_amount(rest).with_holder_owner(tok.1, s.maker);
                     extras.push(Extra::AtInput {
                         slot: Slot::Custody,
                         value: custody.utxo.amount,
@@ -2343,7 +2349,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                 } else {
                     (add(add(proceeds, v, "ask payout")?, custody.utxo.amount as i64, "ask payout")?, "close")
                 };
-                let mut role = format!("{}.settle.{branch}", fam.kind_name("KobAsk"));
+                let mut role = format!("{}.settle.{branch}", TemplateId::KobAsk.for_program(tok.1).name());
                 if s.interval > 0 {
                     role.push_str(".twap");
                 }
@@ -2355,7 +2361,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                     role,
                     sequence: s.interval.max(0) as u64,
                     plan: entry(
-                        TemplateId::KobAsk.in_family(fam),
+                        TemplateId::KobAsk.for_program(tok.1),
                         s.encode_for(fam),
                         "settle",
                         vec![nb(n), Arg::Int(lay.at[&(i, Slot::Custody)] as i64), Arg::Int(0), Arg::Int(t)],
@@ -2403,7 +2409,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                     }
                     (v - spend, "close")
                 };
-                let mut role = format!("{}.fill.{branch}", fam.kind_name("KobBid"));
+                let mut role = format!("{}.fill.{branch}", TemplateId::KobBid.for_program(tok.1).name());
                 if s.interval > 0 {
                     role.push_str(".dca");
                 }
@@ -2414,13 +2420,13 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                 LegPlan {
                     pos: PosOut::Deliver(
                         pos(delivery, "bid delivery")?,
-                        TokenState::user(fam, n, s.maker, s.extension_commitment),
+                        TokenState::user(tok.1, n, s.maker, s.extension_commitment),
                         tok,
                     ),
                     role,
                     sequence: s.interval.max(0) as u64,
                     plan: entry(
-                        TemplateId::KobBid.in_family(fam),
+                        TemplateId::KobBid.for_program(tok.1),
                         s.encode_for(fam),
                         "fill",
                         vec![nb(n), Arg::Int(first_tok("bid")? as i64), Arg::Int(t)],
@@ -2520,12 +2526,16 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                             Arg::Int(0),
                             Arg::Int(0),
                         ];
-                        let plan = entry(TemplateId::KobIfdBid.in_family(fam), es.encode_for(fam), "fill", args);
+                        let plan = entry(TemplateId::KobIfdBid.for_program(tok.1), es.encode_for(fam), "fill", args);
                         (
                             proceeds - budget,
                             Some((
                                 plan,
-                                format!("{}.fill.merge{}", fam.kind_name("KobIfdBid"), if rest == 0 { ".sellout" } else { "" }),
+                                format!(
+                                    "{}.fill.merge{}",
+                                    TemplateId::KobIfdBid.for_program(tok.1).name(),
+                                    if rest == 0 { ".sellout" } else { "" }
+                                ),
                                 e.utxo.clone(),
                             )),
                         )
@@ -2533,7 +2543,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                 };
                 let role = format!(
                     "{}.settle.leg{leg}{}{}{}.{}",
-                    fam.kind_name("KobCondAsk"),
+                    TemplateId::KobCondAsk.for_program(tok.1).name(),
                     if trigger { ".trigger" } else { "" },
                     if t_arg != 0 { ".auction" } else { "" },
                     if merge.is_some() { ".merge" } else { "" },
@@ -2544,7 +2554,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                     role,
                     sequence: 0,
                     plan: entry(
-                        TemplateId::KobCondAsk.in_family(fam),
+                        TemplateId::KobCondAsk.for_program(tok.1),
                         s.encode_for(fam),
                         "settle",
                         vec![
@@ -2622,7 +2632,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                         (
                             PosOut::Deliver(
                                 pos(delivery, "delivery")?,
-                                TokenState::user(fam, n, s.maker, s.extension_commitment),
+                                TokenState::user(tok.1, n, s.maker, s.extension_commitment),
                                 tok,
                             ),
                             None,
@@ -2695,10 +2705,10 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                             Arg::Int(0),
                             Arg::Int(0),
                         ];
-                        let plan = entry(TemplateId::KobIfdAsk.in_family(fam), es.encode_for(fam), "settle", args);
+                        let plan = entry(TemplateId::KobIfdAsk.for_program(tok.1), es.encode_for(fam), "settle", args);
                         let role = format!(
                             "{}.settle.merge{}{}",
-                            fam.kind_name("KobIfdAsk"),
+                            TemplateId::KobIfdAsk.for_program(tok.1).name(),
                             if es.amount_left == 0 { ".new" } else { "" },
                             if n == s.amount_left { ".sellout" } else { "" }
                         );
@@ -2707,7 +2717,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                 };
                 let role = format!(
                     "{}.settle.leg{leg}{}{}{}.{}",
-                    fam.kind_name("KobCondBid"),
+                    TemplateId::KobCondBid.for_program(tok.1).name(),
                     if trigger { ".trigger" } else { "" },
                     if t_arg != 0 { ".auction" } else { "" },
                     if merge.is_some() { ".merge" } else { "" },
@@ -2718,7 +2728,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                     role,
                     sequence: 0,
                     plan: entry(
-                        TemplateId::KobCondBid.in_family(fam),
+                        TemplateId::KobCondBid.for_program(tok.1),
                         s.encode_for(fam),
                         "settle",
                         vec![nb(n), Arg::Int(first_tok("conditional bid")? as i64), Arg::Int(leg), Arg::Int(ev_arg), Arg::Int(t_arg)],
@@ -2776,19 +2786,19 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                     extras.push(Extra::Exit {
                         value: u(s.exit_carrier, "exit carrier")?,
                         spk: exit.spk_for(fam),
-                        tpl: TemplateId::KobCondAsk.in_family(fam),
+                        tpl: TemplateId::KobCondAsk.for_program(tok.1),
                         arg: 2,
                     });
                 } else {
                     extras.push(Extra::Exit {
                         value: pos(left, "exit value")?,
                         spk: exit.spk_for(fam),
-                        tpl: TemplateId::KobCondAsk.in_family(fam),
+                        tpl: TemplateId::KobCondAsk.for_program(tok.1),
                         arg: 2,
                     });
                 }
                 merge_ext(tok.0, s.extension_commitment)?;
-                let c = template(TemplateId::KobCondAsk.in_family(fam));
+                let c = template(TemplateId::KobCondAsk.for_program(tok.1));
                 LegPlan {
                     pos: PosOut::DeliverToExit {
                         value: u(s.delivery_carrier, "delivery carrier")?,
@@ -2798,7 +2808,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                     },
                     role: format!(
                         "{}.fill{}{}{}.{}",
-                        fam.kind_name("KobIfdBid"),
+                        TemplateId::KobIfdBid.for_program(tok.1).name(),
                         if trigger { ".trigger" } else { "" },
                         if s.entry_stop > 0 && s.armed != 0 && s.band_daa > 0 { ".auction" } else { "" },
                         if booked { ".book" } else { "" },
@@ -2812,7 +2822,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                     ),
                     sequence: 0,
                     plan: entry(
-                        TemplateId::KobIfdBid.in_family(fam),
+                        TemplateId::KobIfdBid.for_program(tok.1),
                         s.encode_for(fam),
                         "fill",
                         vec![
@@ -2891,12 +2901,12 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                 } else {
                     add(add(proceeds, v, "exit value")?, custody.utxo.amount as i64, "exit value")?
                 };
-                let c = template(TemplateId::KobCondBid.in_family(fam));
+                let c = template(TemplateId::KobCondBid.for_program(tok.1));
                 LegPlan {
-                    pos: PosOut::Exit(pos(exit_value, "exit value")?, exit.spk_for(fam), TemplateId::KobCondBid.in_family(fam)),
+                    pos: PosOut::Exit(pos(exit_value, "exit value")?, exit.spk_for(fam), TemplateId::KobCondBid.for_program(tok.1)),
                     role: format!(
                         "{}.settle{}{}{}.{}",
-                        fam.kind_name("KobIfdAsk"),
+                        TemplateId::KobIfdAsk.for_program(tok.1).name(),
                         if trigger { ".trigger" } else { "" },
                         if s.entry_stop > 0 && s.armed != 0 && s.band_daa > 0 { ".auction" } else { "" },
                         if booked { ".book" } else { "" },
@@ -2910,7 +2920,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                     ),
                     sequence: 0,
                     plan: entry(
-                        TemplateId::KobIfdAsk.in_family(fam),
+                        TemplateId::KobIfdAsk.for_program(tok.1),
                         s.encode_for(fam),
                         "settle",
                         vec![
@@ -2963,11 +2973,11 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
             TokIn::Taker(k) => {
                 let tk = &b.taker_tokens[k];
                 check_token_input(tk, *t)?;
-                if strict && !tk.state.is_user() {
+                if strict && !tk.state.is_holder(t.1) {
                     return invalid("taker tokens must be key-owned (a token owned by an order id is a stray)");
                 }
                 merge_ext(t.0, tk.state.extension())?;
-                let w = if tk.state.is_user() { Witness::P2pk(tk.state.owner()) } else { Witness::CovenantId };
+                let w = if tk.state.is_user() { token_witness(&tk.state, t.1)? } else { Witness::CovenantId };
                 d.add_token_input(tk, *t, w)?;
             }
         }
@@ -3062,7 +3072,7 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
                 Some(c) if b.keep_surplus.contains(&t.0) => pos(c as i64, "keepCarrier")?,
                 _ => pos(b.taker_token_carrier as i64, "takerTokenCarrier")?,
             };
-            d.add_token_output(*t, TokenState::user(t.1.family(), net, to, e), carrier)?;
+            d.add_token_output(*t, TokenState::user(t.1, net, to, e), carrier)?;
         }
     }
     // Pinned outputs at their custody input's index.
@@ -3368,7 +3378,7 @@ fn update_plan(b: &Batch, lay: &Layout, u: &BatchUpdate, spent: &BTreeSet<[u8; 3
     let id = o.state.template_id();
     // KobIfdBid.update(ev) reads a bid only; the others take (ev, tk).
     let args = if id.base() == TemplateId::KobIfdBid { vec![Arg::Int(ev_arg)] } else { vec![Arg::Int(ev_arg), Arg::Int(tk_arg)] };
-    let role = format!("{}.update.{what}@{}", fam.kind_name(id.base().name()), tok.1.name());
+    let role = format!("{}.update.{what}@{}", id.name(), tok.1.name());
     Ok((entry(id, o.state.encode(), "update", args), role, sequence, next, take))
 }
 

@@ -108,6 +108,48 @@
       "hash": "4797dc300d40ce968d8f26000c890e74f85f1c0d24ee227dac936a69ec034d12",
       "prefix_len": 1,
       "suffix_len": 4066
+    },
+    {
+      "name": "KobAskKronD0",
+      "artifact": "contracts/artifacts/KobAskKronD0.json",
+      "hash": "f43ae142343fe54313e2f742931c76da11cb49e66d823280829a3f91ed227c2c",
+      "prefix_len": 1,
+      "suffix_len": 1243
+    },
+    {
+      "name": "KobBidKronD0",
+      "artifact": "contracts/artifacts/KobBidKronD0.json",
+      "hash": "436fbbbb676f05d6402745298976aa6f1fe59faa1d7eb354060ba87e97966531",
+      "prefix_len": 1,
+      "suffix_len": 1090
+    },
+    {
+      "name": "KobCondAskKronD0",
+      "artifact": "contracts/artifacts/KobCondAskKronD0.json",
+      "hash": "e334e85e308e20bdeb3c3350f7fac0e97484d39f974409c9e09174c66a9c6c3e",
+      "prefix_len": 1,
+      "suffix_len": 3120
+    },
+    {
+      "name": "KobCondBidKronD0",
+      "artifact": "contracts/artifacts/KobCondBidKronD0.json",
+      "hash": "f47fe24d8d4566d0074ecf5627031d69348fa4ec3ece48ba8739685775ea3fa3",
+      "prefix_len": 1,
+      "suffix_len": 2904
+    },
+    {
+      "name": "KobIfdBidKronD0",
+      "artifact": "contracts/artifacts/KobIfdBidKronD0.json",
+      "hash": "c9cbbbdbd0ecdde70c0f3130ca1a7d2802f8682bbde5532907ef3c2589252f52",
+      "prefix_len": 1,
+      "suffix_len": 2925
+    },
+    {
+      "name": "KobIfdAskKronD0",
+      "artifact": "contracts/artifacts/KobIfdAskKronD0.json",
+      "hash": "4ee20455e942d978f3be267c0b99deffa4c43ee55b9bfc49c53610500ca238f2",
+      "prefix_len": 1,
+      "suffix_len": 4066
     }
   ]
 }

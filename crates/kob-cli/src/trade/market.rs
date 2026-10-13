@@ -396,6 +396,12 @@ pub fn resolve_with(
             return Err(format!("`{key}`: its token program {} is not reviewed: it is not traded on mainnet", program.name()));
         }
     }
+    // a program whose tokens exist on other networks only (profile `networks`; KForge: testnet-10)
+    if let (Some(p), Some(o)) = (kob_protocol::profile::by_hash(&tpl), open) {
+        if !p.on_network(o.network) {
+            return Err(format!("`{key}`: its token program {} exists on {} only", program.name(), p.networks.join(", ")));
+        }
+    }
     // an all-zero commitment is a commitment (the standard fixed-supply class: every token `kob token issue` makes), not a
     // missing one; a KRON token has none, whatever a source says
     let ext = if program.family() == Family::Kron {

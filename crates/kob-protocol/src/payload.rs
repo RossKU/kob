@@ -566,6 +566,13 @@ fn decode_kind(family: u8, kind: u8) -> Result<TemplateId> {
     TemplateId::from_kind_code(fam, kind).ok_or_else(|| Error::Payload(format!("unknown order kind {kind:#04x}")))
 }
 
+/// The build of a KRON kind a record's state takes: both builds of a kind share its code and its state layout, and the token
+/// program the state pins decides ([`AnyState::template_id`]: the `*KronD0` build for a program whose holders are id_type 0).
+/// The kind itself when the state does not decode (the record's checks then report why).
+fn build_of(t: TemplateId, state: &[u8]) -> TemplateId {
+    AnyState::decode_kind(t, state).map(|s| s.template_id()).unwrap_or(t)
+}
+
 /// Compact ORDER record (version 4): `output:LEB128 family:u8 kind:u8 flags:u8 state [custody] [deadline:LEB128]`.
 fn decode_order_compact(v: &[u8]) -> Result<Record> {
     let mut p = 0;
@@ -577,6 +584,7 @@ fn decode_order_compact(v: &[u8]) -> Result<Record> {
         return Err(Error::Payload(format!("order record flags {flags:#04x}: unknown bits")));
     }
     let state = get_compact_state(v, &mut p, template(t))?;
+    let t = build_of(t, &state);
     let fams = custody_families(&check_order_state(family, t, &state)?);
     let mut parts = vec![];
     for (k, cfam) in fams.iter().enumerate() {
@@ -637,6 +645,7 @@ fn decode_amend(v: &[u8]) -> Result<Record> {
         return Err(Error::Payload(format!("amend record flags {flags:#04x}: unknown bits")));
     }
     let state = get_compact_state(v, &mut p, template(t))?;
+    let t = build_of(t, &state);
     check_order_state(family, t, &state)?;
     let deadline = if flags & FLAG_DEADLINE != 0 { Some(get_varint(v, &mut p, "deadline")?) } else { None };
     if p != v.len() {
