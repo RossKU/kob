@@ -13,6 +13,7 @@ import { connect } from 'node:net';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SIGNER_CSP_HEADER } from '../../../web/csp.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -120,15 +121,21 @@ const server = createServer((req, res) => {
   }
   if (PUBLIC && (path === '/indexer' || path.startsWith('/indexer/'))) return relayIndexer(req, res, path);
   if (req.method !== 'GET' && req.method !== 'HEAD') return void res.writeHead(405).end();
-  let file = normalize(join(DIST, path === '/' ? 'index.html' : path));
+  let file = normalize(join(DIST, path === '/' ? 'index.html' : path === '/signer' ? 'signer.html' : path));
   if (!file.startsWith(DIST)) return void res.writeHead(403).end();
   if (!existsSync(file) || statSync(file).isDirectory()) file = join(DIST, 'index.html');
   // index.html and every file without a content hash are revalidated on each load (a browser must never keep an old bundle's entry);
   // the hashed build output under /assets/ never changes under its name
   const hashed = file.startsWith(join(DIST, 'assets') + sep);
+  // what web/public/_headers asks of a host for the private-key signer (`vite preview` serves the same, web/vite.config.ts): the signer
+  // page's header policy (sandbox, frame-ancestors 'self'), and CORS on /assets/*: the signer runs in an opaque origin, so its scripts,
+  // stylesheet and wasm are cross-origin requests to this host
+  const signerPage = file === join(DIST, 'signer.html');
   res.writeHead(200, {
     'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
     'cache-control': hashed ? 'public, max-age=31536000, immutable' : 'no-cache',
+    ...(hashed ? { 'access-control-allow-origin': '*' } : {}),
+    ...(signerPage ? { 'content-security-policy': SIGNER_CSP_HEADER, 'x-frame-options': 'SAMEORIGIN' } : {}),
   });
   res.end(readFileSync(file));
 });

@@ -18,7 +18,7 @@ OUT=${UI_OUT:-tools/soak/run/web-dist}
 [ -f web/vendor/kaspa-web/kaspa.js ] || { echo "run npm run fetch-sdk in web/ first" >&2; exit 1; }
 rm -rf "$STAGE"
 mkdir -p "$STAGE/wasm"
-cp -r web/src web/public web/index.html web/vite.config.ts web/tsconfig.json web/package.json web/*.mjs web/*.d.mts "$STAGE/"
+cp -r web/src web/public web/*.html web/vite.config.ts web/tsconfig.json web/package.json web/*.mjs web/*.d.mts "$STAGE/"
 cp -r web/vendor "$STAGE/vendor"
 cp -r "$PKG" "$STAGE/wasm/web"
 # node_modules: a directory junction on Windows, a symlink elsewhere
