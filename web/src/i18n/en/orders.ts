@@ -334,6 +334,7 @@ export default {
   'orders.amend.more': 'More options (band, trigger rule, trailing, expiry, activation)',
   'orders.replace.title': 'Amend: {type}',
   'orders.replace.explain': 'Edit in the ticket: the order is cancelled and the edited one placed in one transaction. A GTC order gets a fresh 90 days.',
+  'orders.replace.dutchNote': 'Goes on from the current price to the same end at the same pace.',
   'orders.replace.ifdNote': 'Existing exits stay; the edited entry creates its new exits on the new terms.',
   'orders.replace.unsupported.repeat': 'A repeat entry is not replaced: its exits re-arm it. Cancel the position and place a new one.',
   'orders.replace.unsupported.booked': 'An exit of a position is not amended on its own: cancel the position instead.',

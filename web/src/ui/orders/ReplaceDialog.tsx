@@ -43,6 +43,12 @@ export interface ReplaceDialogProps {
 // the planning environment of a replacement and the spec of its plan live in replace-env.ts (shared with the TN10 soak's pair amend)
 export { replaceEnv, specOfPlan } from './replace-env';
 
+/** KAS on the order UTXO now (the indexer's current output, else the node-resolved order). */
+const orderValueOf = (row: OrderRowModel): bigint | null => {
+  const v = row.entry.view?.current?.value ?? row.entry.resolved?.order?.amount ?? null;
+  return v === null ? null : BigInt(v);
+};
+
 export function ReplaceDialog(props: ReplaceDialogProps) {
   const services = useServices();
   const { row, state, token, quote } = props;
@@ -62,9 +68,16 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
   );
   const source = useMemo(
     () => {
-      const clock = rawEnv?.clock;
+      const clock = rawEnv?.clock ?? null;
       const daaToUnixOf = clock ? (daa: bigint) => daaToUnix(clock, daa) : undefined;
-      return intentFromOrder(state, { typeKey: row.typeKey, expiryKind: row.expiry.kind, nowDaa: clock?.daa ?? null, expiryUnix: row.expiry.approxUnix, daaToUnix: daaToUnixOf }, services.kob);
+      return intentFromOrder(
+        state,
+        {
+          typeKey: row.typeKey, expiryKind: row.expiry.kind, nowDaa: clock?.daa ?? null, expiryUnix: row.expiry.approxUnix, daaToUnix: daaToUnixOf, clock,
+          value: orderValueOf(row), ...(token.tick ? { tick: token.tick } : {}),
+        },
+        services.kob,
+      );
     },
     // the clock only decides whether a future activation is kept: the first reading is enough
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -143,6 +156,7 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
       <p class="small muted">{t('orders.replace.explain')}</p>
       {row.armed === true ? <Banner tone="warn">{t('orders.amend.restartsUnarmed')}</Banner> : null}
       {row.typeKey === 'ifd' || row.typeKey === 'ifo' ? <p class="small muted" data-testid="replace-ifd-note">{t('orders.replace.ifdNote')}</p> : null}
+      {row.typeKey === 'dutch' ? <p class="small muted" data-testid="replace-dutch-note">{t('orders.replace.dutchNote')}</p> : null}
       {!source.ok ? (
         <Banner tone="warn" data-testid="replace-unsupported">{t(`orders.replace.unsupported.${source.reason}`)}</Banner>
       ) : !shownForm || !layout ? null : (

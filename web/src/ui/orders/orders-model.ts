@@ -23,6 +23,9 @@ export const ORDER_TYPE_KEYS = [
 // a token pair.
 export type OrderTypeKey = (typeof ORDER_TYPE_KEYS)[number];
 
+/** The scheduled plain kinds (KAS and pair): TWAP, DCA, Dutch / rising, timed activation; replaced from the full ticket form with their schedule. */
+export const SCHEDULED_TYPES: readonly OrderTypeKey[] = ['twap', 'dca', 'dutch', 'timed'];
+
 export interface OrderEntry {
   id: Hex;
   /** the indexer's view (null when it does not know the order: fresh placement, indexer outage) */
@@ -260,6 +263,8 @@ export interface DescribeContext {
  */
 export function amendKind(state: OrderState, typeKey: OrderTypeKey): 'limit' | 'cond' | 'replace' | null {
   const k = baseKind(state.kind);
+  // TWAP, DCA, Dutch / rising and timed orders (KAS and pair): replaced from the full ticket form with their schedule (replace-intent.ts)
+  if ((k === 'KobPair' || k === 'KobAsk' || k === 'KobBid') && SCHEDULED_TYPES.includes(typeKey)) return 'replace';
   if (k === 'KobPair') return typeKey === 'limit' || typeKey === 'limit-gtd' || typeKey === 'limit-day' ? 'replace' : null;
   if (k === 'KobCondPair') return typeKey === 'stop' || typeKey === 'take-profit' || typeKey === 'oco' || typeKey === 'trailing' ? 'replace' : null;
   if (k === 'KobIfdPair') return typeKey === 'ifd' || typeKey === 'ifo' ? 'replace' : null;

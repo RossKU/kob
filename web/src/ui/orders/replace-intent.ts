@@ -9,16 +9,21 @@
 //     orders of the position); the replacement commits the edited exit for the amount it still has to fill.
 //   * pair orders (no in-place amend in the protocol): resting pair limits (KobPair GTC / GTD / day), pair conditionals (KobCondPair) and pair
 //     if-done entries (KobIfdPair) the same way as their KAS twins; prices B base units per whole A, the tip KAS.
+//   * scheduled plain orders (KobAsk / KobBid / KobPair): TWAP and DCA (slice, interval, per-slice auction), Dutch / rising (the decay goes on from
+//     where it is now: its current price, the same end and pace; a decay that has ended rests at its end, replaced as a limit there) and timed
+//     limits (the activation kept, to the next whole minute: never earlier). A buy's amount is what its escrow buys now (kob-wasm bidBuyingPower).
 // Not replaced here: repeat entries (their booked exits re-arm THIS entry: a new entry would strand their take-profit until rptUntil, so the position
-// cancel is the way), booked exits (bound to their entry), plain KAS limits (amended in place or by the quick amend form), pair auctions / IOC /
-// TWAP (they end within their window).
-import { SLIPPAGE_BPS } from '../../kob/daa';
+// cancel is the way), booked exits (bound to their entry), plain KAS limits (amended in place or by the quick amend form), IOC / FOK / market
+// auctions (they end within their window).
+import { SLIPPAGE_BPS, daaToUnix } from '../../kob/daa';
 import type { CondExpiry, ExitSpec, TrailSpec } from '../../kob/intent-cond';
 import { baseKind, describeOrder, type OrderDescription, type TriggerTerms } from '../../kob/order-facts';
 import type { Intent } from '../../kob/plan';
+import type { Clock } from '../../kob/plan-types';
 import type { OrderState } from '../../kob/types';
+import { ceilDiv, roundToTick, safeRounding } from '../../kob/units';
 import type { KobWasm } from '../../kob/wasm';
-import type { OrderTypeKey } from './orders-model';
+import { SCHEDULED_TYPES, type OrderTypeKey } from './orders-model';
 
 export interface ReplaceContext {
   /** the row's type key (orders-model orderTypeKey) */
@@ -27,16 +32,24 @@ export interface ReplaceContext {
   expiryKind: 'gtc' | 'gtd' | 'day' | 'none';
   /** the current DAA: an activation still in the future is kept */
   nowDaa: bigint | null;
-  /** a dated order: its approximate end (UTC unix seconds), kept as the replacement's date (the ticket form holds dates, not DAA scores) */
+  /** a dated order (KAS or pair): its approximate end (UTC unix seconds), kept as the replacement's date (the ticket form holds dates, not DAA scores) */
   expiryUnix?: bigint | null;
   /** DAA score -> approximate UTC unix seconds (the wallet clock): a dated exit keeps its own date through the form */
   daaToUnix?: (daa: bigint) => bigint | null;
+  /** the chain clock: a future activation is carried as a date of the ticket (to the next whole minute), a decay's current point is read at `nowDaa` */
+  clock?: Clock | null;
+  /** a plain bid (KobBid): the KAS its order UTXO holds now (its escrow), for the amount it buys (kob-wasm bidBuyingPower) */
+  value?: bigint | null;
+  /** the token's price tick (a decay's current price is rounded onto it, never worse for the maker) */
+  tick?: bigint;
 }
 
 export type ReplaceResult = { ok: true; intent: Intent } | { ok: false; reason: 'repeat' | 'booked' | 'kind' | 'state' };
 
 /** The order types the replace form handles (`orders-model` amendKind 'replace'; the limits only for pair orders). */
-export const REPLACEABLE_TYPES: readonly OrderTypeKey[] = ['stop', 'trailing', 'take-profit', 'oco', 'ifd', 'ifo', 'limit', 'limit-gtd', 'limit-day'];
+export const REPLACEABLE_TYPES: readonly OrderTypeKey[] = ['stop', 'trailing', 'take-profit', 'oco', 'ifd', 'ifo', 'limit', 'limit-gtd', 'limit-day', 'twap', 'dca', 'dutch', 'timed'];
+
+const PLAIN_LIMITS: readonly OrderTypeKey[] = ['limit', 'limit-gtd', 'limit-day'];
 
 /** A dated expiry as the ticket form can show it: its date when the clock gives one (the form drops a bare DAA score), else the DAA score. */
 function datedExpiry(daa: bigint, unix: bigint | null | undefined): { kind: 'gtdUnix'; atUnixSeconds: bigint } | { kind: 'gtdDaa'; daa: bigint } {
@@ -75,22 +88,64 @@ function stopFields(t: TriggerTerms, side: 'sell' | 'buy'): { stop: bigint; slip
  */
 export function intentFromOrder(state: OrderState, ctx: ReplaceContext, kob?: KobWasm): ReplaceResult {
   const d = describeOrder(state, kob);
-  const amount = d.amountLeft;
-  if (amount === null || amount < 1n) return { ok: false, reason: 'state' };
   const base = baseKind(state.kind);
+  // a plain bid holds KAS, not an amount: what its escrow buys now at its own terms
+  let amount = d.amountLeft;
+  if (amount === null && base === 'KobBid' && kob && ctx.value != null && ctx.value > 0n) {
+    try {
+      amount = kob.bidBuyingPower(state, ctx.value);
+    } catch {
+      amount = null;
+    }
+  }
+  if (amount === null || amount < 1n) return { ok: false, reason: 'state' };
   const expiry = expiryOf(ctx, d.expiryDaa);
-  const activeFrom = ctx.nowDaa !== null && d.activeFrom > ctx.nowDaa ? { activeFrom: { daa: d.activeFrom } } : {};
+  // a future activation: a date of the ticket when the clock is known (rounded UP to the minute the date field shows: never earlier), else its DAA
+  const future = ctx.nowDaa !== null && d.activeFrom > ctx.nowDaa;
+  const activeFrom = !future ? {} : ctx.clock ? { activeFrom: { unixSeconds: ceilDiv(daaToUnix(ctx.clock, d.activeFrom), 60n) * 60n } } : { activeFrom: { daa: d.activeFrom } };
   // the order's own minimum fill is kept (at most the amount left)
   const minFill = d.minFill > 0n && d.minFill <= amount ? { minFill: d.minFill } : {};
   const common = { side: d.side, amount, tip: d.tip, expiry, ...minFill, ...activeFrom };
 
-  if (base === 'KobPair') {
-    // a resting pair limit (a decaying / rising one, IOC / FOK, TWAP / DCA end within their window: not replaced)
-    if (ctx.typeKey !== 'limit' && ctx.typeKey !== 'limit-gtd' && ctx.typeKey !== 'limit-day') return { ok: false, reason: 'kind' };
+  if (base === 'KobPair' || base === 'KobAsk' || base === 'KobBid') {
+    // plain orders: the resting pair limits and the scheduled kinds (a plain KAS limit is amended in place; IOC / FOK / market end within their window)
+    const ok = SCHEDULED_TYPES.includes(ctx.typeKey) || (base === 'KobPair' && PLAIN_LIMITS.includes(ctx.typeKey));
+    if (!ok) return { ok: false, reason: 'kind' };
     const lifetime = ctx.expiryKind === 'day' ? { kind: 'day' as const } : ctx.expiryKind === 'gtd' && ctx.expiryUnix ? { kind: 'gtd' as const, at: ctx.expiryUnix } : { kind: 'gtc' as const };
     const { expiry: _e, ...rest } = common;
     void _e;
-    return { ok: true, intent: { type: 'limit', ...rest, price: d.price, lifetime } as Intent };
+    const plain = { ...rest, lifetime };
+    const a = d.auction;
+    if (ctx.typeKey === 'twap' || ctx.typeKey === 'dca') {
+      if (!a || a.interval <= 0n || a.maxFill <= 0n) return { ok: false, reason: 'state' };
+      // the per-slice auction: from the price to its end at `slope` per DAA (step 1)
+      const diff = d.price > a.priceEnd ? d.price - a.priceEnd : a.priceEnd - d.price;
+      const slice = a.slope > 0n && a.priceEnd > 0n && diff > 0n ? { priceEnd: a.priceEnd, sliceAuction: { daa: ceilDiv(diff, a.slope) } } : {};
+      // the minimum fill never above a slice
+      const capped = d.minFill > a.maxFill && d.minFill <= amount ? { minFill: a.maxFill } : {};
+      return {
+        ok: true,
+        intent: { type: ctx.typeKey, ...plain, ...capped, sliceAmount: a.maxFill < amount ? a.maxFill : amount, interval: { daa: a.interval }, price: d.price, ...slice } as Intent,
+      };
+    }
+    if (ctx.typeKey === 'dutch') {
+      if (!a || a.slope <= 0n || a.priceEnd <= 0n) return { ok: false, reason: 'state' };
+      const sell = d.side === 'sell';
+      const step = a.decayStep > 0n ? a.decayStep : 1n;
+      const ended = (p: bigint): boolean => (sell ? p <= a.priceEnd : p >= a.priceEnd);
+      // where the decay is now: the price after the steps taken since its origin (activeFrom), never past its end
+      const steps = ctx.nowDaa !== null && ctx.nowDaa > d.activeFrom ? (ctx.nowDaa - d.activeFrom) / step : 0n;
+      const moved = steps * a.slope;
+      let start = sell ? d.price - moved : d.price + moved;
+      if (!ended(start) && ctx.tick !== undefined && ctx.tick > 1n) start = roundToTick(start, ctx.tick, safeRounding(d.side));
+      // the decay has ended: the order rests at its end, as a limit does
+      if (ended(start)) return { ok: true, intent: { type: 'limit', ...plain, price: a.priceEnd } as Intent };
+      // the same pace: the steps left at `slope` per step
+      const left = ceilDiv(sell ? start - a.priceEnd : a.priceEnd - start, a.slope);
+      return { ok: true, intent: { type: 'dutch', ...plain, price: start, priceEnd: a.priceEnd, duration: { daa: left * step }, stepDaa: step } as Intent };
+    }
+    // a resting or timed limit
+    return { ok: true, intent: { type: 'limit', ...plain, price: d.price } as Intent };
   }
 
   if (base === 'KobCondAsk' || base === 'KobCondBid' || base === 'KobCondPair') {

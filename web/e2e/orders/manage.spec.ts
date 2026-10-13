@@ -103,6 +103,66 @@ test.describe('cancel', () => {
     await expect(page.getByTestId(`order-row-${id}`).getByTestId('order-price')).toContainText('0.0235');
   });
 
+  test('amend a TWAP: the replace form opens on its schedule; the edited TWAP replaces it in one transaction', async ({ appPage: page, mock, wallet }) => {
+    await fund(mock);
+    await openMarket(page, mock);
+    await pickType(page, 'twap', 'sell');
+    await fillFields(page, { amount: '6', sliceAmount: '2', interval: '1', price: '0.027' });
+    const { placed } = await reviewAndSign(page, mock);
+    const id = placed.views[0].covenant_id as string;
+    const before = (await mock.order(id)).state.state;
+    await page.getByTestId('nav-orders').click();
+    const row = page.getByTestId(`order-row-${id}`);
+    await expect(row).toHaveAttribute('data-type', 'twap');
+    await row.getByTestId(`order-replace-${id}`).click();
+    const dialog = page.getByTestId('replace-dialog');
+    await expect(dialog.getByTestId('replace-form')).toHaveAttribute('data-type', 'twap');
+    // the schedule as placed: slice, interval, price
+    await expect(dialog.getByTestId('field-sliceAmount')).toHaveValue('2');
+    await expect(dialog.getByTestId('field-interval')).toHaveValue('1');
+    await expect(dialog.getByTestId('order-price')).toHaveValue('0.027');
+    await dialog.getByTestId('order-price').fill('0.0272');
+    await expect(dialog.getByTestId('replace-review')).toBeEnabled({ timeout: 30_000 });
+    await dialog.getByTestId('replace-review').click();
+    const [step] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(step!.confirm.kind).toBe('cancel-replace');
+    expect(step!.confirm.closed).toHaveLength(1);
+    expect(step!.confirm.created).toHaveLength(1);
+    expect(step!.confirm.created[0]!.rows.price).toContain('0.0272 EXKCC / KAS');
+    // amended in place: the same covenant id continues as a TWAP with the same slice and interval, at the new price
+    expect(step!.placed.submission.closed).toEqual([]);
+    const after = (await mock.until(() => mock.order(id), (o) => o.state?.state?.price === '2720000')).state.state;
+    expect(after).toMatchObject({ interval: before.interval, maxFill: before.maxFill, amountLeft: before.amountLeft, price: '2720000' });
+  });
+
+  test('renew a GTC DCA near the end of its 90 days: the renewal replaces it with the same schedule and a fresh expiry', async ({ appPage: page, mock, wallet }) => {
+    await fund(mock);
+    await openMarket(page, mock);
+    await pickType(page, 'dca', 'buy');
+    await fillFields(page, { amount: '4', sliceAmount: '2', interval: '5', price: '0.0245' });
+    const { placed } = await reviewAndSign(page, mock);
+    const id = placed.views[0].covenant_id as string;
+    const before = (await mock.order(id)).state.state;
+    // day 86 of 90: the renewal is due
+    await mock.advanceSeconds(86 * 86_400);
+    await page.getByTestId('nav-orders').click();
+    const row = page.getByTestId(`order-row-${id}`);
+    await expect(row).toHaveAttribute('data-type', 'dca');
+    await expect(row.getByTestId('order-renewal-due')).toBeVisible({ timeout: 30_000 });
+    await row.getByTestId(`order-renew-${id}`).click();
+    const dialog = page.getByTestId('replace-dialog');
+    await expect(dialog.getByTestId('replace-form')).toHaveAttribute('data-type', 'dca');
+    await expect(dialog.getByTestId('field-interval')).toHaveValue('5');
+    await expect(dialog.getByTestId('replace-review')).toBeEnabled({ timeout: 30_000 });
+    await dialog.getByTestId('replace-review').click();
+    const [step] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(step!.confirm.kind).toBe('cancel-replace');
+    // amended in place: the same covenant id, the same schedule, a fresh 90 days
+    const after = (await mock.until(() => mock.order(id), (o) => o.state?.state?.expiryDaa !== before.expiryDaa)).state.state;
+    expect(after).toMatchObject({ interval: before.interval, maxFill: before.maxFill, price: before.price });
+    expect(BigInt(after.expiryDaa)).toBeGreaterThan(BigInt(before.expiryDaa) + 80n * 86_400n * 10n);
+  });
+
   test('cancel-all of a position: the entry and its exit are cancelled in ONE transaction', async ({ appPage: page, mock, wallet }) => {
     await fund(mock);
     await openMarket(page, mock);
