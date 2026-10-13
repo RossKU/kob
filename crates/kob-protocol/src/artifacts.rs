@@ -597,9 +597,35 @@ pub fn template_from_artifact(id: TemplateId, artifact: SilAbiArtifact) -> Resul
     })
 }
 
-/// Parse an artifact produced by `silverc` (see `scripts/build-contracts.sh`).
+/// Parse an artifact produced by `silverc` (see `scripts/build-contracts.sh`), or an Argent app-bundle artifact (see
+/// [`parse_sil_abi`]).
 pub fn parse_artifact(json: &str) -> Result<SilAbiArtifact, ArtifactError> {
-    Ok(serde_json::from_str(json)?)
+    Ok(parse_sil_abi(json)?.0)
+}
+
+/// Which artifact schema a program file is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArtifactSchema {
+    /// The compiler's own ABI artifact (`schema_version, compiler_version, structs, contracts`).
+    Silverc,
+    /// An Argent app bundle (`schema_version, id, generator, app, ..., argent, sil_abi`): the compiler artifact is its
+    /// `sil_abi` member (the bundle records the compiler in `generator`, not in a `compiler_version` field).
+    Argent,
+}
+
+/// Parses a program artifact of either schema and returns the compiler artifact and the schema found. An object with a
+/// `sil_abi` object and an `argent` member and no `contracts` of its own is an Argent bundle; anything else is read as a
+/// silverc artifact (so a malformed one still reports its own missing field).
+pub fn parse_sil_abi(json: &str) -> Result<(SilAbiArtifact, ArtifactSchema), serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(json)?;
+    let is_bundle = value
+        .as_object()
+        .is_some_and(|o| !o.contains_key("contracts") && o.contains_key("argent") && o.get("sil_abi").is_some_and(|s| s.is_object()));
+    if is_bundle {
+        let inner = value.get("sil_abi").cloned().expect("checked above");
+        return Ok((serde_json::from_value(inner)?, ArtifactSchema::Argent));
+    }
+    Ok((serde_json::from_value(value)?, ArtifactSchema::Silverc))
 }
 
 /// Loads an artifact supplied at run time and requires its template hash to be the pinned hash

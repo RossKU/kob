@@ -32,7 +32,7 @@ use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 use silverscript_abi::SilAbiArtifact;
 
-use crate::artifacts::TemplateId;
+use crate::artifacts::{parse_sil_abi, ArtifactSchema, TemplateId};
 use crate::json::to_hex;
 use crate::registry::Family;
 
@@ -519,8 +519,9 @@ impl ProgramProfile {
         let e = |m: String| perr(&self.name, m);
         let loaded = match (self.source.kind, source) {
             (SourceKind::SilvercArtifact, EmbeddedSource::Artifact(json)) => {
-                let artifact: SilAbiArtifact = serde_json::from_str(json).map_err(|x| e(format!("artifact json: {x}")))?;
-                cut_artifact(&self.name, artifact, &self.source.context_fields)?
+                let (artifact, schema) = parse_sil_abi(json).map_err(|x| e(format!("artifact json: {x}")))?;
+                let artifact = select_token_contract(&self.name, artifact)?;
+                cut_artifact_in(&self.name, artifact, &self.source.context_fields, schema == ArtifactSchema::Argent)?
             }
             (SourceKind::RawRedeem, EmbeddedSource::Raw(bytes)) => {
                 let l = self.layout;
@@ -603,9 +604,47 @@ pub struct LoadedProgram {
     pub artifact: Option<SilAbiArtifact>,
 }
 
+/// An app bundle carries every actor of its covenant family (the public-mint app: `KCC20`, `PublicMint`, `TokenSeed`); the
+/// token program is the one contract with the KCC-20 draft entry pair. An artifact of one contract is returned as it is.
+pub fn select_token_contract(name: &str, mut artifact: SilAbiArtifact) -> Result<SilAbiArtifact, ProfileError> {
+    if artifact.contracts.len() <= 1 {
+        return Ok(artifact);
+    }
+    let is_token = |c: &silverscript_abi::SilContractArtifact| {
+        KCC20_DRAFT_TAGS.iter().all(|(n, t)| c.entries.get(*n).is_some_and(|x| x.dispatch_tag.to_hex() == *t))
+    };
+    let tokens: Vec<String> = artifact.contracts.iter().filter(|(_, c)| is_token(c)).map(|(n, _)| n.clone()).collect();
+    match tokens.as_slice() {
+        [one] => {
+            artifact.contracts.retain(|n, _| n == one);
+            Ok(artifact)
+        }
+        _ => Err(perr(
+            name,
+            format!(
+                "the artifact has {} contracts ({:?}); exactly one must have the KCC-20 draft entries transfer / transfer_delegator                  to be the token program, found {tokens:?}",
+                artifact.contracts.len(),
+                artifact.contracts.keys().collect::<Vec<_>>()
+            ),
+        )),
+    }
+}
+
 /// Cuts a silverc artifact: the compiler's state span, with the leading `context` fields moved into the prefix (the KCC-1
 /// actor-type handle: each a `byte[32]` whose canonical value `0x20 ‖ sil_hash` is the program's own Sil template hash).
 pub fn cut_artifact(name: &str, artifact: SilAbiArtifact, context: &[String]) -> Result<LoadedProgram, ProfileError> {
+    cut_artifact_in(name, artifact, context, false)
+}
+
+/// [`cut_artifact`] for either artifact schema. An Argent app bundle publishes the program as a template with an all-zero
+/// example instance, so there a context field may hold the zero placeholder instead of the canonical `0x20 ‖ sil_hash`
+/// (`zero_context_ok`); the cut moves the canonical value into the prefix either way.
+pub fn cut_artifact_in(
+    name: &str,
+    artifact: SilAbiArtifact,
+    context: &[String],
+    zero_context_ok: bool,
+) -> Result<LoadedProgram, ProfileError> {
     let e = |m: String| perr(name, m);
     if artifact.contracts.len() != 1 {
         return Err(e(format!("expected exactly one contract in the artifact, found {}", artifact.contracts.len())));
@@ -633,7 +672,9 @@ pub fn cut_artifact(name: &str, artifact: SilAbiArtifact, context: &[String]) ->
             return Err(e(format!("runtime field {k} is {} ({:?}), not the context field byte[32] {want}", f.name, f.ty)));
         }
         let enc = [&[0x20u8][..], &sil_hash[..]].concat();
-        if bytecode.get(at..at + enc.len()) != Some(enc.as_slice()) {
+        let found = bytecode.get(at..at + enc.len());
+        let placeholder = [&[0x20u8][..], &[0u8; 32][..]].concat();
+        if found != Some(enc.as_slice()) && !(zero_context_ok && found == Some(placeholder.as_slice())) {
             return Err(e(format!("{want} of the compiled instance is not the canonical 0x20 ‖ {}", to_hex(&sil_hash))));
         }
         prefix.extend_from_slice(&enc);
@@ -761,7 +802,8 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
     let mut tasks = vec![];
     let cut = match input {
         ProgramInput::Artifact(json) => {
-            let artifact: SilAbiArtifact = serde_json::from_str(json).map_err(|x| e(format!("artifact json: {x}")))?;
+            let (artifact, schema) = parse_sil_abi(json).map_err(|x| e(format!("artifact json: {x}")))?;
+            let artifact = select_token_contract(&label, artifact)?;
             let (cname, contract) = artifact.contracts.iter().next().ok_or_else(|| e("artifact without a contract".into()))?;
             let cname = cname.clone();
             // leading compiler-owned `gen__*` byte[32] fields are context (the KCC-1 handle moves them into the prefix)
@@ -775,7 +817,7 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
             let names: Vec<String> = contract.entries.keys().cloned().collect();
             let has_draft =
                 KCC20_DRAFT_TAGS.iter().all(|(n, t)| contract.entries.get(*n).is_some_and(|x| x.dispatch_tag.to_hex() == *t));
-            let loaded = cut_artifact(&label, artifact, &context)?;
+            let loaded = cut_artifact_in(&label, artifact, &context, schema == ArtifactSchema::Argent)?;
             let codec = [Family::Kcc20, Family::Kron]
                 .into_iter()
                 .find(|f| codec_is_state(*f, &loaded.state))
@@ -794,7 +836,11 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
                 ));
             }
             let mut detection = format!(
-                "silverc artifact, contract {cname}, open state {} bytes after a {}-byte prefix",
+                "{} artifact, contract {cname}, open state {} bytes after a {}-byte prefix",
+                match schema {
+                    ArtifactSchema::Silverc => "silverc",
+                    ArtifactSchema::Argent => "Argent app-bundle (its sil_abi)",
+                },
                 loaded.state.len(),
                 loaded.prefix.len()
             );

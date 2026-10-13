@@ -272,3 +272,54 @@ fn transfer_capacity_per_transaction() {
     assert!(v.iter().all(|ok| *ok), "{}: {v:?}", s.name);
     println!("BATCH {}: foreign leader + 16 holders: accepted (the delegator does not check the leader)", s.name);
 }
+
+/// `kob registry add-program` accepts the upstream Argent app-bundle artifact (the file upstream publishes) as well as the
+/// silverc artifact: both derive the profile embedded as `KCC20PublicMint`, and a file of neither schema keeps reporting its
+/// own missing field.
+#[test]
+fn add_program_accepts_the_upstream_argent_artifact() {
+    use kob_protocol::artifacts::{parse_sil_abi, ArtifactSchema};
+    use kob_protocol::profile::{by_name, derive_profile, DeriveOptions, ProgramInput};
+
+    let upstream = read("contracts/third-party/kcc20-reference/public-mint.artifact.json");
+    let silverc = read("contracts/artifacts/KCC20PublicMint.json");
+    assert_eq!(parse_sil_abi(&upstream).unwrap().1, ArtifactSchema::Argent);
+    assert_eq!(parse_sil_abi(&silverc).unwrap().1, ArtifactSchema::Silverc);
+
+    let opt = DeriveOptions {
+        name: Some("KCC20PublicMint".into()),
+        registry_id: Some("kcc20-ref-public-mint".into()),
+        record_code: Some(9),
+        source_path: Some("contracts/artifacts/KCC20PublicMint.json".into()),
+        slots: Some(kob_protocol::profile::Slots { inputs: 3, outputs: 3 }),
+        ..Default::default()
+    };
+    let want = by_name("KCC20PublicMint").expect("embedded profile");
+    let from_argent = derive_profile(&ProgramInput::Artifact(upstream), &opt).expect("argent artifact derives");
+    let from_silverc = derive_profile(&ProgramInput::Artifact(silverc), &opt).expect("silverc artifact derives");
+    for d in [&from_argent, &from_silverc] {
+        let p = &d.profile;
+        assert_eq!(d.already_embedded.as_deref(), Some("KCC20PublicMint"));
+        assert_eq!(p.template_hash, want.template_hash);
+        assert!(p.template_hash.starts_with("734850b0"));
+        assert_eq!((p.layout, p.codec), (want.layout, want.codec));
+        assert_eq!(p.source.context_fields, want.source.context_fields);
+        assert_eq!(p.source.kind, want.source.kind);
+        assert_eq!(p.witness, want.witness);
+        assert_eq!((p.owners, p.slots, p.name.as_str()), (want.owners, want.slots, want.name.as_str()));
+    }
+    assert!(from_argent.detection.contains("Argent"), "{}", from_argent.detection);
+    assert_eq!(from_argent.profile.template_hash, from_silverc.profile.template_hash);
+
+    // the zero placeholder instance is accepted for the Argent schema only: the same contract as a silverc artifact is refused
+    let inner = serde_json::from_str::<serde_json::Value>(&read("contracts/third-party/kcc20-reference/public-mint.artifact.json"))
+        .unwrap()["sil_abi"]
+        .to_string();
+    assert_eq!(parse_sil_abi(&inner).unwrap().1, ArtifactSchema::Silverc);
+    let err = derive_profile(&ProgramInput::Artifact(inner), &opt).unwrap_err();
+    assert!(err.to_string().contains("not the canonical"), "{err}");
+
+    // neither schema: the silverc reading reports its own missing field
+    let err = derive_profile(&ProgramInput::Artifact(r#"{"schema_version":1,"contracts":{}}"#.into()), &opt).unwrap_err();
+    assert!(err.to_string().contains("compiler_version"), "{err}");
+}
