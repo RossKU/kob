@@ -45,15 +45,16 @@ use node::NodeChain;
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct X402Args {
     /// Strict JSON configuration file (`crates/kob-executor/x402.example.json`).
-    #[arg(long)]
+    #[arg(long, env = "KOB_X402_CONFIG")]
     pub config: Option<PathBuf>,
     /// `kaspa:mainnet` or `kaspa:testnet-10`. Required on the reference build (no default); a deployment build implies its own
     /// and refuses another.
     #[arg(long)]
     pub network: Option<String>,
     /// Node JSON wRPC endpoint (`ws://host:port`). Default: the local node's port of the network (`ws://127.0.0.1:18110` on
-    /// mainnet, `ws://127.0.0.1:18210` on testnet-10).
-    #[arg(long)]
+    /// mainnet, `ws://127.0.0.1:18210` on testnet-10). Command-line arguments are visible to other local users (`ps`): a URL
+    /// with a password or an API key belongs in the configuration file (`node`) or in `KOB_NODE_WRPC`.
+    #[arg(long, env = "KOB_NODE_WRPC")]
     pub node: Option<String>,
     /// HTTP listen address (`addr:port`).
     #[arg(long)]

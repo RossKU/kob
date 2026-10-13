@@ -221,7 +221,7 @@ pub fn lookup(node: &str, network: &str, spks: &[ScriptPublicKey]) -> Result<BTr
         wanted.insert(spk_bytes(spk));
     }
     let addrs: Vec<String> = addrs.into_iter().collect();
-    let entries = wrpc::utxos_by_addresses(node, &addrs, NODE_TIMEOUT).map_err(|e| format!("node {node}: {e}"))?;
+    let entries = wrpc::utxos_by_addresses(node, &addrs, NODE_TIMEOUT).map_err(|e| format!("node {}: {e}", wrpc::shown(node)))?;
     let mut out: BTreeMap<Vec<u8>, Vec<NodeUtxo>> = BTreeMap::new();
     for e in entries {
         // keyed by the script the node reports: an entry counts only for the exact script it carries

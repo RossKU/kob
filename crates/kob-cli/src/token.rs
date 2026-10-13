@@ -62,7 +62,8 @@ OUTPUT
   --dry-run             build and verify everything offline (signs and executes the funding inputs when --key is
                         given, else the transaction stays unsigned); never submits
   --node ws://HOST:PORT submit the signed transaction via wRPC JSON (`submitTransaction`; JSON port 18110 mainnet,
-                        18210 testnet-10). Required unless --dry-run.
+                        18210 testnet-10). Required unless --dry-run; default $KOB_NODE_WRPC (a URL with a password or
+                        an API key belongs there: arguments are visible in `ps`).
 ";
 
 /// Where the signing key comes from.
@@ -324,8 +325,9 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
     if a.holders.is_empty() && a.supply.is_none() {
         return Err("give --supply and/or at least one --holder".into());
     }
+    a.node = crate::wrpc::node_arg(a.node.take());
     if !a.dry_run && a.node.is_none() {
-        return Err("--node is required unless --dry-run".into());
+        return Err(format!("--node (or ${}) is required unless --dry-run", crate::wrpc::NODE_ENV));
     }
     if !a.dry_run && a.key.is_none() {
         return Err("--key is required unless --dry-run (an unsigned transaction cannot be submitted)".into());

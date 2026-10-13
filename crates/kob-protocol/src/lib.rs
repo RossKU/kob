@@ -21,6 +21,7 @@
 //! | [`public_mint`] | the `PublicMint` / `TokenSeed` actors of the published `KCC20PublicMint` app (genesis check of its tokens) |
 //! | [`verify`] | validation through the rusty-kaspa v2.1.0 script engine (feature `engine`) |
 //! | [`vectors`] | golden-vector file format |
+//! | [`redact`] | node and indexer URLs as they may be logged or shown (no credentials, no API keys) |
 //!
 //! Flow: `build::build(&action)` -> [`tx::BuiltTx`] (unsigned tx, sign requests) -> wallet
 //! signatures -> [`tx::finalize`] -> [`tx::SignedTx`] -> node RPC `submitTransaction`.
@@ -40,6 +41,7 @@ pub mod kcc20;
 pub mod payload;
 pub mod profile;
 pub mod public_mint;
+pub mod redact;
 pub mod registry;
 pub mod router;
 pub mod script;

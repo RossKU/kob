@@ -24,7 +24,8 @@ pub struct CommonArgs {
     #[arg(long, env = "KOB_NETWORK")]
     pub network: Option<String>,
     /// Node JSON wRPC endpoint (keep it on loopback). Default: the local node's port of the network (`ws://127.0.0.1:18110`
-    /// on mainnet, `ws://127.0.0.1:18210` on testnet-10).
+    /// on mainnet, `ws://127.0.0.1:18210` on testnet-10). Command-line arguments are visible to other local users (`ps`): a URL
+    /// with a password or an API key belongs in `KOB_NODE_WRPC`; logs show it redacted.
     #[arg(long, env = "KOB_NODE_WRPC")]
     pub rpc_url: Option<String>,
     /// Book snapshot (JSON, `MemoryBook`), re-read when it changes. Written by `kob-executor index export-book --out FILE`.

@@ -28,6 +28,25 @@ use tungstenite::{Message, WebSocket};
 /// Addresses per `getUtxosByAddresses` request.
 pub const ADDRESS_CHUNK: usize = 50;
 
+/// The node endpoint when `--node` is not given (the executor's name for the same endpoint). Command-line arguments are
+/// visible to other local users (`ps`): a URL with a password or an API key belongs here, not in `--node`.
+pub const NODE_ENV: &str = "KOB_NODE_WRPC";
+
+/// `--node` if given, else [`NODE_ENV`] (`env` is its value; empty or blank counts as unset).
+pub fn node_or_env(flag: Option<String>, env: Option<String>) -> Option<String> {
+    flag.filter(|v| !v.trim().is_empty()).or_else(|| env.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+}
+
+/// [`node_or_env`] with the process environment.
+pub fn node_arg(flag: Option<String>) -> Option<String> {
+    node_or_env(flag, std::env::var(NODE_ENV).ok())
+}
+
+/// A node URL as messages and reports show it: scheme, host and port only ([`kob_protocol::redact::redact_url`]).
+pub fn shown(url: &str) -> String {
+    kob_protocol::redact::redact_url(url)
+}
+
 /// Errors of the wRPC client.
 #[derive(Debug, thiserror::Error)]
 pub enum WrpcError {
@@ -95,7 +114,15 @@ pub struct Conn {
 impl Conn {
     /// Connect to `url` (`ws://host:port`, JSON wRPC port: 18110 mainnet, 18210 testnet-10).
     pub fn connect(url: &str, timeout: Duration) -> Result<Conn, WrpcError> {
-        let (mut ws, _) = tungstenite::connect(url).map_err(|e| WrpcError::Socket(e.to_string()))?;
+        // tungstenite echoes the URL it could not reach: the message names the node by its redacted URL
+        let (mut ws, _) = tungstenite::connect(url).map_err(|e| {
+            WrpcError::Socket(match e {
+                tungstenite::Error::Url(tungstenite::error::UrlError::UnableToConnect(_)) => {
+                    format!("URL error: Unable to connect to {}", shown(url))
+                }
+                other => kob_protocol::redact::scrub_url(&other.to_string(), url),
+            })
+        })?;
         if let MaybeTlsStream::Plain(s) = ws.get_mut() {
             set_timeouts(s, timeout)?;
         }
@@ -419,6 +446,28 @@ mod tests {
     fn unreachable_node_is_a_socket_error() {
         let e = submit_transaction("ws://127.0.0.1:1", &json!({}), false, Duration::from_millis(500)).unwrap_err();
         assert!(matches!(e, WrpcError::Socket(_)));
+    }
+
+    /// A node URL with credentials or an API key never reaches an error message.
+    #[test]
+    fn connection_errors_name_the_node_redacted() {
+        for url in ["ws://alice:s3cret@127.0.0.1:1/apikey/K?token=T", "ws://alice:s3cret@127.0.0.1:1"] {
+            let e = submit_transaction(url, &json!({}), false, Duration::from_millis(500)).unwrap_err().to_string();
+            assert!(e.contains("127.0.0.1:1"), "{e}");
+            for secret in ["alice", "s3cret", "apikey", "token"] {
+                assert!(!e.contains(secret), "{e}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_node_comes_from_the_flag_else_the_environment() {
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(node_or_env(s("ws://a:1"), s("ws://b:2")), s("ws://a:1"));
+        assert_eq!(node_or_env(None, s(" ws://b:2 ")), s("ws://b:2"));
+        assert_eq!(node_or_env(s(""), s("ws://b:2")), s("ws://b:2"));
+        assert_eq!(node_or_env(None, s("  ")), None);
+        assert_eq!(node_or_env(None, None), None);
     }
 
     #[test]

@@ -42,7 +42,8 @@ INPUT
                 ({\"version\":1|2,\"orders\":[..]}, `kob-executor index export-orders`, the web's indexer export), or an
                 indexer order view (GET /v1/orders/{id}) or page of views ({\"items\":[..]}). Orders are deduplicated by
                 covenant id; every state a file names is a search candidate, nothing in a file is trusted.
-  --node        node wRPC JSON endpoint (18110 mainnet, 18210 testnet-10); `getUtxosByAddresses` needs --utxoindex
+  --node        node wRPC JSON endpoint (18110 mainnet, 18210 testnet-10); `getUtxosByAddresses` needs --utxoindex;
+                default $KOB_NODE_WRPC (a URL with a password or an API key belongs there: arguments are visible in `ps`)
   --network     network of the files and the addresses (mainnet, testnet-10); required unless the build is a
                 deployment build (deploy-mainnet, deploy-tn10), which implies its own
   --maker       only this maker's orders (64-hex x-only pubkey or kaspa address); others are reported `other_maker`
@@ -169,8 +170,9 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
     if a.from.is_empty() {
         return Err("at least one --from file is required".into());
     }
+    a.node = crate::wrpc::node_arg(Some(a.node)).unwrap_or_default();
     if a.node.is_empty() {
-        return Err("--node is required (every order is verified on the node)".into());
+        return Err(format!("--node (or ${}) is required (every order is verified on the node)", crate::wrpc::NODE_ENV));
     }
     a.network = crate::common::resolve_network(&a.network)?;
     if a.cancel && a.key.is_none() {
@@ -576,7 +578,7 @@ pub fn report_json(a: &Args, found: &[Found], rejected: &[Rejected]) -> Value {
     let count = |s: Status| found.iter().filter(|f| f.status == s).count();
     json!({
         "network": a.network,
-        "node": a.node,
+        "node": crate::wrpc::shown(&a.node),
         "orders": found.iter().map(order_json).collect::<Vec<_>>(),
         "rejected": rejected.iter().map(|r| json!({"source": r.source, "reason": r.reason})).collect::<Vec<_>>(),
         "summary": {

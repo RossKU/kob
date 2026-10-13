@@ -38,7 +38,8 @@ INPUT
                 script with its covenant id at that outpoint, else the view is refused as stale. The custody and every
                 stray are looked up on the node the same way (a stray the node does not hold is left out).
   --key         the maker's signing secret (64 hex; env:NAME and file:PATH keep it out of shell history)
-  --node        node wRPC JSON endpoint (18110 mainnet, 18210 testnet-10; --utxoindex)
+  --node        node wRPC JSON endpoint (18110 mainnet, 18210 testnet-10; --utxoindex); default $KOB_NODE_WRPC
+                (a URL with a password or an API key belongs there: arguments are visible in `ps`)
   --network     network of the addresses (mainnet, testnet-10); required unless the build is a deployment build
                 (deploy-mainnet, deploy-tn10), which implies its own
 
@@ -136,8 +137,9 @@ pub fn parse_args(op: Op, args: &[String]) -> Result<Args, String> {
     if a.key.is_empty() {
         return Err("--key is required".into());
     }
+    a.node = crate::wrpc::node_arg(Some(a.node)).unwrap_or_default();
     if a.node.is_empty() {
-        return Err("--node is required (the view is verified on the node)".into());
+        return Err(format!("--node (or ${}) is required (the view is verified on the node)", crate::wrpc::NODE_ENV));
     }
     a.network = crate::common::resolve_network(&a.network)?;
     if a.fee_rate < MIN_FEE_RATE {

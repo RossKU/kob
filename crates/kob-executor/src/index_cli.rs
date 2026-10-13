@@ -33,7 +33,8 @@ pub struct IndexOpts {
     #[arg(long, global = true, env = "KOB_NETWORK")]
     pub network: Option<String>,
     /// Node JSON wRPC endpoint. Default: the local node's port of the network (`ws://127.0.0.1:18110` on mainnet,
-    /// `ws://127.0.0.1:18210` on testnet-10).
+    /// `ws://127.0.0.1:18210` on testnet-10). A URL with a password or an API key belongs in the config file (`rpc_url`) or
+    /// in `KOB_NODE_WRPC`, not on the command line (`ps`).
     #[arg(long, global = true, env = "KOB_NODE_WRPC")]
     pub rpc_url: Option<String>,
     /// Another node (`ws://` or `wss://` JSON wRPC; repeatable): windows of transaction bodies are fetched from it too
