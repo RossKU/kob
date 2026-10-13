@@ -66,6 +66,25 @@ describe('intentFromOrder round trip (the replace form opens on the order as it 
   });
 });
 
+describe('a dated order keeps its date through the replace form', () => {
+  it('a GTD stop and an IFD entry with a GTD exit: the form shows the dates (not GTC)', () => {
+    const at = CLOCK.unixSeconds + 3n * 86_400n;
+    const { state } = placed({ type: 'stopMarket', side: 'sell', amount: 5n * TOK, stop: 230_000_000n, expiry: { kind: 'gtdUnix', atUnixSeconds: at } });
+    const toUnix = (daa: bigint) => CLOCK.unixSeconds + ((daa - CLOCK.daa) * 1000n) / 10_000n;
+    const back = intentFromOrder(state, { ...ctx, expiryKind: 'gtd', expiryUnix: at, daaToUnix: toUnix }, env.kob);
+    expect(back.ok && (back.intent as CondIntent & { expiry: unknown }).expiry).toEqual({ kind: 'gtdUnix', atUnixSeconds: at });
+    // without a date the DAA score is kept (the planner reads it)
+    const bare = intentFromOrder(state, { ...ctx, expiryKind: 'gtd' }, env.kob);
+    expect(bare.ok && (bare.intent as CondIntent & { expiry: { kind: string } }).expiry.kind).toBe('gtdDaa');
+
+    const ifd = placed({ type: 'ifd', side: 'buy', amount: 10n * TOK, entry: { price: 240_000_000n }, exit: { takeProfit: 300_000_000n, expiry: { kind: 'gtdUnix', atUnixSeconds: at } }, expiry: { kind: 'gtdUnix', atUnixSeconds: at } });
+    const r = intentFromOrder(ifd.state, { ...ctx, typeKey: 'ifd', expiryKind: 'gtd', expiryUnix: at, daaToUnix: toUnix }, env.kob);
+    expect(r.ok).toBe(true);
+    const exit = (r as { intent: { exit: { expiry: { kind: string } } } }).intent.exit;
+    expect(exit.expiry.kind).toBe('gtdUnix');
+  });
+});
+
 describe('an edited intent becomes one atomic cancel + replacement (consensus valid)', () => {
   const cancelEnv = { kob: env.kob, maker: MAKER_PK, funding: [keyUtxo(100n * KAS)], tokenUtxos: env.tokenUtxos, clock: { daa: CLOCK.daa } };
 

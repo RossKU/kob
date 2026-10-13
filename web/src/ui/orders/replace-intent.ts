@@ -27,8 +27,10 @@ export interface ReplaceContext {
   expiryKind: 'gtc' | 'gtd' | 'day' | 'none';
   /** the current DAA: an activation still in the future is kept */
   nowDaa: bigint | null;
-  /** a dated pair limit: its approximate end (UTC unix seconds), kept as the replacement's date */
+  /** a dated order: its approximate end (UTC unix seconds), kept as the replacement's date (the ticket form holds dates, not DAA scores) */
   expiryUnix?: bigint | null;
+  /** DAA score -> approximate UTC unix seconds (the wallet clock): a dated exit keeps its own date through the form */
+  daaToUnix?: (daa: bigint) => bigint | null;
 }
 
 export type ReplaceResult = { ok: true; intent: Intent } | { ok: false; reason: 'repeat' | 'booked' | 'kind' | 'state' };
@@ -36,17 +38,22 @@ export type ReplaceResult = { ok: true; intent: Intent } | { ok: false; reason: 
 /** The order types the replace form handles (`orders-model` amendKind 'replace'; the limits only for pair orders). */
 export const REPLACEABLE_TYPES: readonly OrderTypeKey[] = ['stop', 'trailing', 'take-profit', 'oco', 'ifd', 'ifo', 'limit', 'limit-gtd', 'limit-day'];
 
-function expiryOf(kind: ReplaceContext['expiryKind'], expiryDaa: bigint): CondExpiry {
-  if (kind === 'day') return { kind: 'day' };
-  if (kind === 'gtd' && expiryDaa > 0n) return { kind: 'gtdDaa', daa: expiryDaa };
+/** A dated expiry as the ticket form can show it: its date when the clock gives one (the form drops a bare DAA score), else the DAA score. */
+function datedExpiry(daa: bigint, unix: bigint | null | undefined): { kind: 'gtdUnix'; atUnixSeconds: bigint } | { kind: 'gtdDaa'; daa: bigint } {
+  return unix !== null && unix !== undefined && unix > 0n ? { kind: 'gtdUnix', atUnixSeconds: unix } : { kind: 'gtdDaa', daa };
+}
+
+function expiryOf(ctx: ReplaceContext, expiryDaa: bigint): CondExpiry {
+  if (ctx.expiryKind === 'day') return { kind: 'day' };
+  if (ctx.expiryKind === 'gtd' && expiryDaa > 0n) return datedExpiry(expiryDaa, ctx.expiryUnix ?? ctx.daaToUnix?.(expiryDaa));
   return { kind: 'gtc' };
 }
 
 /** The exit's own lifetime: a dated exit keeps its date, anything else is GTC (an exit has no day order). */
-function exitExpiryOf(x: OrderDescription, entryExpiryKind: ReplaceContext['expiryKind']): Exclude<CondExpiry, { kind: 'day' }> {
+function exitExpiryOf(x: OrderDescription, ctx: ReplaceContext): Exclude<CondExpiry, { kind: 'day' }> {
   // an exit committed with a date below the no-date sentinel and not the GTC bound of its creation: keep it as a date only when the entry is dated
   // too (the exit's GTC bound is counted from its own creation, which the committed state cannot tell apart from a date)
-  return entryExpiryKind === 'gtd' && x.expiryDaa > 0n && x.expiryDaa < 1n << 60n ? { kind: 'gtdDaa', daa: x.expiryDaa } : { kind: 'gtc' };
+  return ctx.expiryKind === 'gtd' && x.expiryDaa > 0n && x.expiryDaa < 1n << 60n ? datedExpiry(x.expiryDaa, ctx.daaToUnix?.(x.expiryDaa)) : { kind: 'gtc' };
 }
 
 /** Stop-leg fields of a trigger (shared by conditional orders and if-done exits). */
@@ -71,7 +78,7 @@ export function intentFromOrder(state: OrderState, ctx: ReplaceContext, kob?: Ko
   const amount = d.amountLeft;
   if (amount === null || amount < 1n) return { ok: false, reason: 'state' };
   const base = baseKind(state.kind);
-  const expiry = expiryOf(ctx.expiryKind, d.expiryDaa);
+  const expiry = expiryOf(ctx, d.expiryDaa);
   const activeFrom = ctx.nowDaa !== null && d.activeFrom > ctx.nowDaa ? { activeFrom: { daa: d.activeFrom } } : {};
   // the order's own minimum fill is kept (at most the amount left)
   const minFill = d.minFill > 0n && d.minFill <= amount ? { minFill: d.minFill } : {};
@@ -111,7 +118,7 @@ export function intentFromOrder(state: OrderState, ctx: ReplaceContext, kob?: Ko
     const x = e.exit;
     if (!x || !x.trigger) return { ok: false, reason: 'state' };
     const exitSide = x.side;
-    const exit: ExitSpec = { tip: x.tip, expiry: exitExpiryOf(x, ctx.expiryKind), ...(x.minFill > 0n ? { minFill: x.minFill } : {}) };
+    const exit: ExitSpec = { tip: x.tip, expiry: exitExpiryOf(x, ctx), ...(x.minFill > 0n ? { minFill: x.minFill } : {}) };
     if (x.price > 0n) exit.takeProfit = x.price;
     if (x.trigger.stopPrice > 0n) {
       const s = stopFields(x.trigger, exitSide);

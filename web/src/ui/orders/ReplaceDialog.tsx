@@ -9,6 +9,7 @@ import { t } from '../../i18n';
 import { issueText } from '../../i18n/issue-text';
 import { buildErrorText, rawOf } from '../../i18n/build-error';
 import type { CancelPlan, OrderSnapshot, ReplacementSpec } from '../../kob/cancel';
+import { daaToUnix } from '../../kob/daa';
 import { custodiesOf, scaleOf } from '../../kob/order-facts';
 import { planOrder } from '../../kob/plan';
 import { errors, isPairEnv, type OrderPlan, type PlanEnv } from '../../kob/plan-types';
@@ -93,7 +94,11 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
     [token.decimals, scale, token.tick, rateMilli, quote?.decimals],
   );
   const source = useMemo(
-    () => intentFromOrder(state, { typeKey: row.typeKey, expiryKind: row.expiry.kind, nowDaa: rawEnv?.clock.daa ?? null, expiryUnix: row.expiry.approxUnix }, services.kob),
+    () => {
+      const clock = rawEnv?.clock;
+      const daaToUnixOf = clock ? (daa: bigint) => daaToUnix(clock, daa) : undefined;
+      return intentFromOrder(state, { typeKey: row.typeKey, expiryKind: row.expiry.kind, nowDaa: clock?.daa ?? null, expiryUnix: row.expiry.approxUnix, daaToUnix: daaToUnixOf }, services.kob);
+    },
     // the clock only decides whether a future activation is kept: the first reading is enough
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [state, row.typeKey, row.expiry.kind, services.kob, !!rawEnv],
