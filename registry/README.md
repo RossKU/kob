@@ -13,7 +13,7 @@ and is not enforced by the order contracts (an order pins its own covenant id an
 
 ## Two lists: strict templates, open tokens
 
-* **`templates` is the STRICT list.** Only token programs marked `review_status: reviewed` are on it. In the shipped `tokens.json` four programs have reached that state: the two KRON programs, after an internal review with conditions, the reference KCC-20 3/3, KOB's standard program (maintainer decision 2026-10-12), and the reference's published public-mint build (2026-10-13), both by internal review only. No independent audit has been done; the other KCC-20 programs are `pending-review`. Because the token list is open (below), every token on a reviewed program is tradable, and the executor returns it with standing `unverified` and the `genesis_unverified` warning until its entry is verified and listed. A program is accepted
+* **`templates` is the STRICT list.** Only token programs marked `review_status: reviewed` on it are tradable. In the shipped `tokens.json` four programs have reached that state: the two KRON programs, after an internal review with conditions, the reference KCC-20 3/3, KOB's standard program, by internal review (maintainer decision 2026-10-12), and the reference's published public-mint build, by internal review (maintainer decision 2026-10-13). No independent audit has been done; the other KCC-20 programs (the 8/8 prototype, KaspaCom's KCC20 0.2.5) are `pending-review`: they are template entries too, but nothing of them is tradable until they are reviewed. Because the token list is open (below), every token on a reviewed program is shown and tradable as `unverified`, with the `genesis_unverified` warning, until its entry is verified and listed. A program is accepted
   because its template hash is here, never by code special-casing: a third-party KCC-20-compatible program (same 112-byte state,
   draft transfer tags, owner scheme 4) such as KaspaCom's KCC20 0.2.5 is one more template entry plus its pinned artifact. Adding one
   is data plus review: the artifact or raw bytes under `contracts/third-party/` (with provenance and licence), its profile in
@@ -124,7 +124,7 @@ for the reference KCC-20 programs KOB pins (the standalone 3/3 and its prototype
 transfer creates only holders, so a genesis of holders (and seeds) alone gives `live_minters: []`. A public-mint genesis with `PublicMint`
 outputs needs the trace: its live minters are the live `PublicMint` cells with `remaining` above 0, so such a token can be `official` only
 once minting is closed (`live_minters: []`; its supply is then final at `supply + mint_allowance`). The public-mint template is
-`reviewed` (internal review only, 2026-10-13), so its tokens can be `listed` once their entry is verified. KaspaCom's program keeps minter lanes behind the extension commitment, which
+`reviewed` (internal review only, 2026-10-13): its tokens are tradable as `unverified` and are `listed` once their genesis record passes. KaspaCom's program keeps minter lanes behind the extension commitment, which
 the check cannot see (read the minter extension by hand).
 
 Reproduce (both steps read-only; nothing is signed or submitted):
