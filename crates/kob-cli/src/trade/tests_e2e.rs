@@ -744,6 +744,19 @@ fn replace_replans_trailing_if_done_and_pair_orders() {
     let w = world_x("replan", &orders, with_b);
     let replace = crate::trade::actions::run_replace;
     let rec = |s: &SignedTx| recover_orders(&s.tx).unwrap()[0].clone();
+    // a token the registry delists is not re-planned either (refused like every amendment)
+    let mut v: Value = serde_json::from_str(include_str!("../../../../registry/tokens.example.json")).unwrap();
+    v["tokens"] = json!([{
+        "ticker": "TST", "name": "Test token", "family": "kcc20", "covenant_id": to_hex(&TOKEN), "template_id": "kcc20-ref-3x3",
+        "extension_commitment": to_hex(&EXT), "extension_class": "fixed-supply-standard", "decimals": 3, "status": "delisted",
+        "verified": false,
+    }]);
+    let reg = w.dir.join("registry.json");
+    std::fs::write(&reg, v.to_string()).unwrap();
+    let mut delisted = w.args(0x11, &format!("{} --stop 2.1KAS --yes", to_hex(&t_cov)));
+    delisted.extend(["--registry".to_string(), reg.display().to_string()]);
+    assert_eq!(run(replace, delisted), 1);
+    assert_eq!(w.submitted(), 0);
     // a trailing stop: a new stop, the trail kept, a new covenant id, the custody moved
     assert_eq!(run(replace, w.args(0x11, &format!("{} --stop 2.1KAS --yes", to_hex(&t_cov)))), 0);
     let s = w.signed(".replace.json");

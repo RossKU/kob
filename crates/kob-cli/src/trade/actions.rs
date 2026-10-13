@@ -656,6 +656,8 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
     lines.extend(super::place::plan_lines(&plan, a, b).into_iter().map(|l| format!("  {l}")));
     let mut issues: Vec<Issue> = plan.issues.iter().filter(|i| i.severity != Severity::Error).cloned().collect();
     issues.extend(notes);
+    // a registry token that is not tradable (delisted, its program pending review) is refused here as for every amendment
+    issues.extend(ms.iter().filter_map(|m| m.listing_issue(true)));
     issues.extend(more.into_iter().map(|n| issue("REPLACE_NOTE", Severity::Info, n)));
     let mut states = vec![serde_json::to_value(&rep).unwrap_or_default()];
     states.extend(plan.states.iter().skip(1).map(|x| serde_json::to_value(x).unwrap_or_default()));
