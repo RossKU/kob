@@ -1284,6 +1284,57 @@ fn supported_follows_the_node_and_the_book() {
     f.chain.set_unavailable(false);
 }
 
+/// A node whose virtual DAA score answers after `delay` (a black-holed node until its timeout).
+struct SlowProbe {
+    inner: Arc<MockChain>,
+    delay: Duration,
+}
+
+impl ChainView for SlowProbe {
+    fn utxos(&self, w: &[(Outpoint, ScriptPublicKey)]) -> Result<Vec<Option<ChainUtxo>>, ChainError> {
+        self.inner.utxos(w)
+    }
+    fn utxos_of(&self, s: &ScriptPublicKey) -> Result<Vec<(Outpoint, ChainUtxo)>, ChainError> {
+        self.inner.utxos_of(s)
+    }
+    fn virtual_daa_score(&self) -> Result<u64, ChainError> {
+        thread::sleep(self.delay);
+        Err(ChainError("timed out".into()))
+    }
+    fn output_status(&self, o: &Outpoint, s: &ScriptPublicKey) -> Result<OutputStatus, ChainError> {
+        self.inner.output_status(o, s)
+    }
+    fn in_mempool(&self, t: &Txid) -> Result<bool, ChainError> {
+        self.inner.in_mempool(t)
+    }
+    fn submit(&self, tx: &Transaction) -> Result<Txid, SubmitError> {
+        self.inner.submit(tx)
+    }
+}
+
+#[test]
+fn the_cached_health_does_not_wait_for_a_node_probe_in_flight() {
+    use super::facilitator::FacilitatorConfig;
+    let f = Fixture::new();
+    let view = Arc::new(SlowProbe { inner: f.chain.clone(), delay: Duration::from_millis(1500) });
+    let fac = Arc::new(Facilitator::new(
+        Policy::new(Network::Testnet10),
+        view,
+        f.clock.clone(),
+        f.ledger.clone(),
+        FacilitatorConfig { health_cache: Duration::ZERO, ..Default::default() },
+    ));
+    let f2 = fac.clone();
+    let probe = thread::spawn(move || f2.supported());
+    thread::sleep(Duration::from_millis(200));
+    // `/health` reads the last probe on an async worker: it must not block behind the probe's node call
+    let t = std::time::Instant::now();
+    let _ = fac.settle_health_cached();
+    assert!(t.elapsed() < Duration::from_millis(500), "the cached health waited {:?} for the probe", t.elapsed());
+    probe.join().unwrap();
+    assert!(!fac.settle_health_cached().degraded().is_empty(), "the probe's answer is cached once it is in");
+}
+
 #[test]
 fn metrics_text_counts_settlements_and_ledger_states() {
     let f = Fixture::new();
@@ -1309,11 +1360,21 @@ struct FlakySubmit {
     forward: bool,
     /// After the failures: answer this instead of submitting (a node refusing the repeat of a transaction it already mined).
     then: std::sync::Mutex<Option<SubmitError>>,
+    /// Once `then` was answered, the chain cannot be read (`output_status` / `in_mempool` fail): a node that stays flaky.
+    blind_after_then: std::sync::atomic::AtomicBool,
+    blind: std::sync::atomic::AtomicBool,
 }
 
 impl FlakySubmit {
     fn new(inner: Arc<MockChain>, fail: u32, forward: bool) -> Arc<FlakySubmit> {
-        Arc::new(FlakySubmit { inner, fail: std::sync::atomic::AtomicU32::new(fail), forward, then: std::sync::Mutex::new(None) })
+        Arc::new(FlakySubmit {
+            inner,
+            fail: std::sync::atomic::AtomicU32::new(fail),
+            forward,
+            then: std::sync::Mutex::new(None),
+            blind_after_then: std::sync::atomic::AtomicBool::new(false),
+            blind: std::sync::atomic::AtomicBool::new(false),
+        })
     }
 }
 
@@ -1328,9 +1389,15 @@ impl ChainView for FlakySubmit {
         self.inner.virtual_daa_score()
     }
     fn output_status(&self, o: &Outpoint, s: &ScriptPublicKey) -> Result<OutputStatus, ChainError> {
+        if self.blind.load(Ordering::SeqCst) {
+            return Err(ChainError("connection reset by peer".into()));
+        }
         self.inner.output_status(o, s)
     }
     fn in_mempool(&self, t: &Txid) -> Result<bool, ChainError> {
+        if self.blind.load(Ordering::SeqCst) {
+            return Err(ChainError("connection reset by peer".into()));
+        }
         self.inner.in_mempool(t)
     }
     fn submit(&self, tx: &Transaction) -> Result<Txid, SubmitError> {
@@ -1343,6 +1410,9 @@ impl ChainView for FlakySubmit {
             return Err(SubmitError::Unavailable("connection reset by peer".into()));
         }
         if let Some(e) = self.then.lock().unwrap().take() {
+            if self.blind_after_then.load(Ordering::SeqCst) {
+                self.blind.store(true, Ordering::SeqCst);
+            }
             return Err(e);
         }
         self.inner.submit(tx)
@@ -1389,6 +1459,26 @@ fn a_refused_resubmit_of_a_transaction_that_went_through_is_not_a_failure() {
     assert!(s.success, "{s:?}");
     assert_eq!(s.transaction, txid_hex(&tx));
     assert_eq!(g.ledger.get(&txid_hex(&tx)).unwrap().state, State::Accepted);
+}
+
+#[test]
+fn a_refused_resubmit_with_an_unreadable_chain_stays_unknown_never_failed() {
+    let f = Fixture::new();
+    let a = f.fund(500_000_000);
+    let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
+    // the node took (and mined) the first try but its answer was lost; the repeat is refused as a double spend, and the chain
+    // cannot be read to tell whether the first try went through
+    let flaky = FlakySubmit::new(f.chain.clone(), 1, true);
+    *flaky.then.lock().unwrap() = Some(SubmitError::Conflict("input is not an unspent output".into()));
+    flaky.blind_after_then.store(true, Ordering::SeqCst);
+    let g = Fixture::with_view(f.ledger.clone(), f.chain.clone(), flaky, f.clock.clone());
+    let s = g.fac.settle("shop", &req);
+    assert!(!s.success);
+    // not `invalid_kaspa_exact_utxo` (a dead attempt the payer rebuilds): the outcome is unknown, the inputs stay reserved
+    assert_eq!(diag(&s), "node_unavailable", "{s:?}");
+    assert_eq!(g.ledger.get(&txid_hex(&tx)).unwrap().state, State::Ambiguous);
+    // the payment did go through
+    assert_eq!(f.chain.unspent_of(&p2pk_spk(&pubkey(MERCHANT_KEY))).len(), 1);
 }
 
 #[test]

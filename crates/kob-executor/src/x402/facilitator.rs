@@ -352,8 +352,11 @@ pub struct Facilitator {
     invoice_locks: KeyLocks,
     /// The indexer's readiness for intent executions (`None`: always ready).
     book_readiness: Option<BookReadiness>,
-    /// The last probe of the node (when, and its answer), shared by `/supported` calls within `config.health_cache`.
+    /// The last probe of the node (when, and its answer), shared by `/supported` calls within `config.health_cache`. Held only
+    /// to read or write it, never across a node call (`/health` reads it on an async worker).
     node_probe: Mutex<Option<(Instant, std::result::Result<(), String>)>>,
+    /// One probe at a time: held across the node call by the prober only.
+    node_probing: Mutex<()>,
     /// The fee rates of the process (`crate::fee`): intent executions go at the high rate, expiries at the normal rate, both
     /// held to the total cap. Inside `kob-executor run` the runner publishes them; elsewhere they stay the floor.
     pub fees: crate::fee::FeeBoard,
@@ -421,6 +424,7 @@ impl Facilitator {
             fees: crate::fee::FeeBoard::default(),
             book_readiness: None,
             node_probe: Mutex::new(None),
+            node_probing: Mutex::new(()),
         }
     }
 
@@ -433,14 +437,20 @@ impl Facilitator {
 
     /// The node's answer to a cheap read (its virtual DAA score), probed at most once per `config.health_cache`.
     fn node_reachable(&self) -> std::result::Result<(), String> {
-        let mut g = self.node_probe.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some((at, r)) = g.as_ref() {
-            if at.elapsed() < self.config.health_cache {
-                return r.clone();
-            }
+        let fresh = || -> Option<std::result::Result<(), String>> {
+            let g = self.node_probe.lock().unwrap_or_else(|p| p.into_inner());
+            g.as_ref().filter(|(at, _)| at.elapsed() < self.config.health_cache).map(|(_, r)| r.clone())
+        };
+        if let Some(r) = fresh() {
+            return r;
+        }
+        // single flight: a caller that waited for another probe takes its answer
+        let _probing = self.node_probing.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(r) = fresh() {
+            return r;
         }
         let r = self.chain.virtual_daa_score().map(|_| ()).map_err(|e| e.to_string());
-        *g = Some((Instant::now(), r.clone()));
+        *self.node_probe.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), r.clone()));
         r
     }
 
@@ -975,7 +985,16 @@ impl Facilitator {
                     pause = (pause * 2).min(Duration::from_secs(2));
                 }
                 Err(e @ (SubmitError::Conflict(_) | SubmitError::Rejected(_))) if unknown => {
-                    return if seen().unwrap_or(false) { Err(SubmitError::AlreadyKnown) } else { Err(e) };
+                    // a chain that cannot be read proves nothing: the earlier try may have gone through, so the outcome stays
+                    // unknown (never a failure that releases the inputs and tells the payer to sign a new payment)
+                    return match seen() {
+                        Ok(true) => Err(SubmitError::AlreadyKnown),
+                        Ok(false) => Err(e),
+                        Err(c) => Err(SubmitError::Unavailable(format!(
+                            "the node refused a repeat of a submit with an unknown outcome and the chain could not be read: {}",
+                            c.0
+                        ))),
+                    };
                 }
                 other => return other,
             }

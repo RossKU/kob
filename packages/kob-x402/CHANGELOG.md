@@ -4,6 +4,16 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Facilitator: a refused repeat submit with an unreadable chain stays unknown
+
+- kob-executor: when a submit with an unknown outcome is repeated and the node refuses the repeat, the facilitator reads the
+  chain to tell whether the first try went through. A chain read that failed counted as "not seen", so a payment the node had
+  taken was marked failed, its inputs released, and the payer told `invalid_kaspa_exact_utxo` / `invalid_kaspa_exact_transaction`
+  (a rebuild). It is now `node_unavailable` (ambiguous, the inputs stay reserved), for direct payments and intent creations.
+- kob-executor: `GET /health` (`settle_health_cached`, on an async worker) no longer waits for a node probe in flight: the
+  probe of `/supported` held the cache's lock across its node call (up to the node timeout). The probe is single-flight on
+  a lock of its own; the cache is locked only to read or write it.
+
 ### Payer: an expired artifact stays live while its inputs are unspent
 
 - `KobX402Client` (a new `fetch` / `payInvoice` for a resource with an earlier signed, pending or rejected artifact): an
