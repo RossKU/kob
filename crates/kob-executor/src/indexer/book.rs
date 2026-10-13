@@ -78,8 +78,8 @@ pub fn snapshot(conn: &Connection, _operator: Option<[u8; 32]>) -> DbResult<Memo
     Ok(book)
 }
 
-/// The operator's own key-owned token UTXOs, live and accepted, with their programs (`token_holdings`: every proven output of
-/// a tracked token, whoever owns it), oldest first. Tokens a transaction leaves the operator (a route of an older planner,
+/// The operator's own key-owned token UTXOs, live and accepted, with their programs (`token_holdings`: every proven token
+/// output of a pinned program, whoever owns it; the runner keeps the tokens `Processor::operator_token` accepts), oldest first. Tokens a transaction leaves the operator (a route of an older planner,
 /// a taker's own inventory) land here; the maintenance jobs (`crate::maintenance`) merge or sell them.
 pub fn operator_tokens(conn: &Connection, operator: &[u8; 32]) -> DbResult<Vec<crate::maintenance::OwnToken>> {
     let mut st = conn.prepare_cached(

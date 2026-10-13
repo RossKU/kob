@@ -281,6 +281,60 @@ pub fn decode_companion(redeem: &[u8]) -> Result<Option<Companion>, String> {
     Ok(None)
 }
 
+/// The ABI of the published app (`sil_abi` of the vendored artifact).
+fn app_abi() -> &'static silverscript_abi::SilAbiArtifact {
+    static A: OnceLock<silverscript_abi::SilAbiArtifact> = OnceLock::new();
+    A.get_or_init(|| {
+        let doc: Value = serde_json::from_str(APP_ARTIFACT).expect("vendored public-mint artifact parses");
+        serde_json::from_value(doc["sil_abi"].clone()).expect("vendored public-mint ABI parses")
+    })
+}
+
+/// The app's `KCC20` program (the Sil cut: its state span starts with `gen__kcc20_template`), what a `mint` / `create`
+/// call passes as `gen__kcc20_prefix` / `gen__kcc20_suffix`.
+pub fn kcc20_program() -> &'static AppProgram {
+    static P: OnceLock<AppProgram> = OnceLock::new();
+    P.get_or_init(|| load("KCC20", "KCC20", 145, KCC20_SIL_HASH))
+}
+
+/// Signature script of a `PublicMint::mint` call (minter `m`) creating the holder `recipient` (wallets and tests; KOB
+/// itself only reads such calls, [`created_holder`]).
+pub fn mint_sigscript(m: &MinterState, recipient: &crate::state::Kcc20State) -> Option<Vec<u8>> {
+    use crate::state::FieldMap;
+    use silverscript_abi::ArtifactValue;
+    let k = kcc20_program();
+    let args = vec![ArtifactValue::Object(recipient.to_values()), k.prefix.clone().into(), k.suffix.clone().into()];
+    let mut s = silverscript_abi::encode_contract_entry_sig_script(app_abi(), "PublicMint", "mint", &args).ok()?;
+    s.extend_from_slice(&crate::script::push_data(&minter_redeem(m)?));
+    Some(s)
+}
+
+/// The holder a `PublicMint::mint` or `TokenSeed::create` call creates (its `recipient_state` argument), from the calling
+/// input's signature script, with the holder program it is an output of ([`TemplateId::Kcc20PublicMint`]: the app's
+/// `KCC20`, which every canonical minter and seed names in `gen__kcc20_template`).
+///
+/// `None` unless the redeem script is a canonical `PublicMint` / `TokenSeed` of the app, the dispatch tag is that entry's
+/// and the arguments decode strictly. The state is a claim of the signature script: a reader proves it by comparing the
+/// P2SH it produces under the holder program with the output's script public key (as for a transfer's `next_states`).
+pub fn created_holder(signature_script: &[u8]) -> Option<(TemplateId, crate::state::Kcc20State)> {
+    use crate::state::FieldMap;
+    let (args, tag, redeem) = crate::kcc1::split_invocation(signature_script).ok()?;
+    let (contract, entry) = match decode_companion(&redeem).ok()?? {
+        Companion::Minter(_) => ("PublicMint", "mint"),
+        Companion::Seed(_) => ("TokenSeed", "create"),
+    };
+    let abi = app_abi();
+    let c = abi.contracts.get(contract)?;
+    let e = c.entry(entry)?;
+    if e.dispatch_tag.into_bytes() != tag {
+        return None;
+    }
+    let types: Vec<_> = e.params.iter().map(|p| p.ty.clone()).collect();
+    let values = crate::kcc1::decode_arguments(&types, &crate::kcc1::contract_records(abi, c), args).ok()?;
+    let silverscript_abi::ArtifactValue::Object(m) = values.first()? else { return None };
+    Some((TemplateId::Kcc20PublicMint, crate::state::Kcc20State::from_values(m).ok()?))
+}
+
 /// True when `id` is a holder program of the published app: its profile declares the app's actors as genesis companions
 /// (`genesis.companions` decoders `kcc20-public-mint/*` in `data/programs.json`), so its genesis may hold them and its
 /// genesis record carries the minters' `mint_allowance`.
@@ -365,6 +419,35 @@ mod tests {
         let n = other.len();
         other[n - 1] ^= 1;
         assert_eq!(decode_companion(&other).unwrap(), None);
+    }
+
+    #[test]
+    fn mint_and_create_calls_reveal_the_holder_they_create() {
+        use crate::state::{FieldMap, Kcc20State};
+        let a = abi();
+        let holder = Kcc20State::p2pk(250, [3; 32], [0xee; 32]);
+        let tpl = template(TemplateId::Kcc20PublicMint);
+        let (pre, suf) = (tpl.prefix.clone(), tpl.suffix.clone());
+        let call = |contract: &str, entry: &str, redeem: &[u8]| {
+            let args = vec![ArtifactValue::Object(holder.to_values()), pre.clone().into(), suf.clone().into()];
+            let mut s = silverscript_abi::encode_contract_entry_sig_script(&a, contract, entry, &args).unwrap();
+            s.extend_from_slice(&crate::script::push_data(redeem));
+            s
+        };
+        let m = MinterState { remaining: 1_000, mint_amount: 500, owner: [7; 32], extension_commitment: [0xee; 32] };
+        let minter = minter_redeem(&m).unwrap();
+        let seed = seed_redeem(&SeedState { owner: [9; 32], extension_commitment: [0xee; 32] });
+        assert_eq!(created_holder(&call("PublicMint", "mint", &minter)), Some((TemplateId::Kcc20PublicMint, holder.clone())));
+        assert_eq!(created_holder(&mint_sigscript(&m, &holder).unwrap()), Some((TemplateId::Kcc20PublicMint, holder.clone())));
+        assert_eq!(created_holder(&call("TokenSeed", "create", &seed)), Some((TemplateId::Kcc20PublicMint, holder.clone())));
+        // the entry must be the actor's: a seed's `create` arguments under a minter redeem script carry the other dispatch tag
+        assert_eq!(created_holder(&call("TokenSeed", "create", &minter)), None);
+        // neither actor: a holder redeem script, or a minter whose template field names another program
+        let mut foreign = minter.clone();
+        foreign[2] ^= 1;
+        assert_eq!(created_holder(&call("PublicMint", "mint", &foreign)), None);
+        assert_eq!(created_holder(&call("PublicMint", "mint", &[0x51])), None);
+        assert_eq!(created_holder(&[]), None);
     }
 
     #[test]

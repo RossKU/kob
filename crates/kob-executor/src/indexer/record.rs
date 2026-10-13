@@ -15,9 +15,11 @@
 //!   after a fill, a delivery to an if-done exit, or a stray (`docs/spec/matcher.md` §1.2). The
 //!   token output states are read from the transfer leader's `next_states` argument and each one
 //!   is checked against the output's script public key,
-//! * an output of a TRACKED token (allowlisted; every token an order trades when the allowlist is not required) whose
-//!   state the transfer leader reveals and the output's script public key proves: a *holding* (`HeldOut`), whoever
-//!   owns it; an input that spends a tracked holding is relevant too (it marks the holding spent).
+//! * an output of ANY token of a pinned token program (listed or not, traded by an order or not) whose state the
+//!   creating input reveals (a transfer leader's `next_states`, the columns of a KRON token input, the `recipient_state`
+//!   of a public-mint app's `mint` / `create`) and the output's script public key proves: a *holding* (`HeldOut`),
+//!   whoever owns it; an input that spends a tracked holding is relevant too (it marks the holding spent). Outputs of a
+//!   program this build does not pin, or of a look-alike, prove nothing and are not kept.
 
 use super::db::DbResult;
 use crate::hex::Hash32;
@@ -81,7 +83,7 @@ pub struct RecOut {
     pub cov: Option<(u32, Hash32)>,
 }
 
-/// A token output of a tracked token whose state was proven against its script public key.
+/// A token output of a pinned token program whose state was proven against its script public key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeldOut {
     pub out: u32,
@@ -449,9 +451,12 @@ fn is_evidence_fill(r: &Reveal) -> bool {
 /// script public key it produces (computed once per state, not once per output and state).
 pub type Leader = (TemplateId, Vec<(TokenState, kaspa_consensus_core::tx::ScriptPublicKey)>);
 
-/// [`token_next_states`] with each state's script public key under the program.
+/// The states a covenant input authorises (a token transfer's [`token_next_states`], else the holder a public-mint app's
+/// `mint` / `create` call creates, [`kob_protocol::public_mint::created_holder`]), each with its script public key under
+/// the program.
 pub fn leader_of(sigscript: &[u8]) -> Option<Leader> {
-    let (tid, states) = token_next_states(sigscript)?;
+    let (tid, states) = token_next_states(sigscript)
+        .or_else(|| kob_protocol::public_mint::created_holder(sigscript).map(|(id, s)| (id, vec![TokenState::Kcc20(s)])))?;
     let tpl = token_template(tid);
     Some((
         tid,
@@ -638,16 +643,6 @@ fn kcc20_leader_next_states(sigscript: &[u8]) -> Option<(TemplateId, Vec<Kcc20St
 /// Turns accepted transactions into records, consulting the database for relevance.
 pub struct Extractor<'a> {
     pub conn: &'a Connection,
-    /// The token allowlist: its tokens' holdings are tracked.
-    pub tokens: &'a crate::tokens::TokenAllowlist,
-    /// The allowlist is not required (open listing): every token an order trades is tracked too.
-    pub track_traded: bool,
-}
-
-impl Extractor<'_> {
-    fn tracked(&self, token: &Hash32) -> DbResult<bool> {
-        Ok(self.tokens.get(token).is_some() || (self.track_traded && token_known(self.conn, token)?))
-    }
 }
 
 impl Extractor<'_> {
@@ -761,14 +756,11 @@ impl Extractor<'_> {
             let Some(c) = &o.covenant else { continue };
             let token = c.covenant_id;
             let order_gate = payload_tokens.contains(&token) || token_known(self.conn, &token)?;
-            let tracked = self.tracked(&token)?;
-            // Any other token program's output may still be owned by an order id: a FOREIGN stray (matcher.md 1.2), which the
-            // indexer must flag. Its leader is read unless the authorising input is a tracked order (an order's continuation is
-            // never a token output), so the probe costs one signature-script parse per foreign token transfer.
-            let foreign_probe = !order_gate
-                && !tracked
-                && !inputs.get(c.authorizing_input as usize).is_some_and(|i: &RecIn| i.reveal.is_some() || i.daa > 0);
-            if !order_gate && !tracked && !foreign_probe {
+            // Every token output is a holding candidate (a wallet's balance of a token no order trades, received from another
+            // DEX, a launchpad or a bridge), and may be owned by an order id: a FOREIGN stray (matcher.md 1.2), which the indexer
+            // must flag. The leader is read for every output except one of a token no order trades whose authorising input is
+            // a tracked order (an order's continuation is never a token output): one signature-script parse per token transfer.
+            if !order_gate && inputs.get(c.authorizing_input as usize).is_some_and(|i: &RecIn| i.reveal.is_some() || i.daa > 0) {
                 continue;
             }
             let leader =
@@ -789,17 +781,15 @@ impl Extractor<'_> {
                     && if order_gate {
                         fresh.contains(&owner) || order_known(self.conn, &owner)?
                     } else {
-                        // a token no order trades (tracked or probed): a foreign stray of an order the indexer already knows
+                        // a token no order trades: a foreign stray of an order the indexer already knows
                         order_known(self.conn, &owner)?
                     };
                 if order_owned {
                     tok_outs.push(TokOut { out: j as u32, amount: s.amount(), owner });
-                    relevant = true;
                 }
-                if tracked || order_owned {
-                    holds.push(HeldOut { out: j as u32, program: *tid, state: s.clone() });
-                    relevant = true;
-                }
+                // every proven output is a holding, whoever owns it
+                holds.push(HeldOut { out: j as u32, program: *tid, state: s.clone() });
+                relevant = true;
                 break;
             }
         }
@@ -899,6 +889,57 @@ mod tests {
         let mut w = Writer::new();
         rec.encode(&mut w);
         assert_eq!(TxRecord::decode(&mut Reader::new(&w.buf)).unwrap(), rec);
+    }
+
+    /// A public-mint app's `mint` reveals the holder it creates: the minted output is a holding from its first block (no
+    /// transfer needed), for a token no order trades and no allowlist names. A claimed state its output does not prove is not.
+    #[test]
+    fn a_minted_holder_is_a_holding_and_an_unproven_claim_is_not() {
+        use crate::rpc::types::*;
+        use kob_protocol::public_mint::{mint_sigscript, minter_redeem, MinterState};
+        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+        let ex = Extractor { conn: &conn };
+        let m = MinterState { remaining: 1_000, mint_amount: 500, owner: [7; 32], extension_commitment: [0xee; 32] };
+        let holder = Kcc20State::p2pk(400, [3; 32], [0xee; 32]);
+        let cov = Hash32([0x42; 32]);
+        let holder_spk = TokenState::Kcc20(holder.clone()).spk_with(token_template(TemplateId::Kcc20PublicMint));
+        let tx = |out_spk: Vec<u8>| Tx {
+            inputs: vec![TxInput {
+                previous_outpoint: Outpoint { transaction_id: Hash32([1; 32]), index: 0 },
+                signature_script: crate::hex::HexBytes(mint_sigscript(&m, &holder).unwrap()),
+                sequence: Some(0),
+                verbose_data: Some(InputVerbose {
+                    utxo_entry: Some(SpentUtxo {
+                        amount: 5_000,
+                        script_public_key: crate::hex::HexBytes(p2sh_spk(&minter_redeem(&m).unwrap())),
+                        block_daa_score: None,
+                        covenant_id: Some(cov),
+                    }),
+                }),
+            }],
+            outputs: vec![TxOutput {
+                value: 1_000,
+                script_public_key: crate::hex::HexBytes(out_spk),
+                covenant: Some(CovenantBinding { authorizing_input: 0, covenant_id: cov }),
+            }],
+            payload: crate::hex::HexBytes(vec![]),
+            verbose_data: TxVerbose { transaction_id: Hash32([2; 32]), block_time: 0 },
+            version: Some(1),
+            lock_time: Some(0),
+            subnetwork_id: None,
+            gas: None,
+        };
+        let rec = ex.extract(&tx(crate::script::spk_bytes(&holder_spk)), 0).unwrap().expect("a minted holding is relevant");
+        assert_eq!(
+            rec.holds,
+            vec![HeldOut { out: 0, program: TemplateId::Kcc20PublicMint, state: TokenState::Kcc20(holder.clone()) }]
+        );
+        // the same claim next to an output of another amount (or another program) proves nothing: not relevant at all
+        let other =
+            TokenState::Kcc20(Kcc20State::p2pk(401, [3; 32], [0xee; 32])).spk_with(token_template(TemplateId::Kcc20PublicMint));
+        assert!(ex.extract(&tx(crate::script::spk_bytes(&other)), 0).unwrap().is_none());
+        let look_alike = TokenState::Kcc20(holder.clone()).spk_with(token_template(TemplateId::Kcc20Ref));
+        assert!(ex.extract(&tx(crate::script::spk_bytes(&look_alike)), 0).unwrap().is_none());
     }
 
     #[test]

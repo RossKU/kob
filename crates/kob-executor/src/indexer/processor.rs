@@ -61,6 +61,16 @@ pub struct Processor {
     pub rules: ListingRules,
 }
 
+impl Processor {
+    /// A token the operator's own jobs (maintenance merges and sales) may touch: allowlisted, or, when the allowlist is not
+    /// required (open listing), traded by an order. Holdings are tracked for every token of a pinned program, so anyone can
+    /// send the operator a token; only these are worth the operator's fees.
+    pub fn operator_token(&self, conn: &Connection, token: &Hash32) -> DbResult<bool> {
+        Ok(self.tokens.get(token).is_some()
+            || ((!self.rules.require_allowlist || self.tokens.is_open()) && super::record::token_known(conn, token)?))
+    }
+}
+
 /// The chain block being applied.
 pub struct BlockCtx<'a> {
     pub header: &'a ChainBlockHeader,
@@ -416,7 +426,7 @@ impl Processor {
         delta: &mut Delta,
     ) -> DbResult<Vec<TxRecord>> {
         let ctx = BlockCtx::new(conn, header)?;
-        let ex = Extractor { conn, tokens: &self.tokens, track_traded: !self.rules.require_allowlist || self.tokens.is_open() };
+        let ex = Extractor { conn };
         let mut out = Vec::new();
         for (pos, tx) in txs.iter().enumerate() {
             let p = pre.and_then(|m| m.get(&tx.verbose_data.transaction_id));
@@ -602,7 +612,7 @@ impl Processor {
             delta.tokens.insert(token);
             delta.orders.insert(t.owner);
         }
-        // 5b. holdings: every proven output of a tracked token, whoever owns it
+        // 5b. holdings: every proven token output of a pinned program, whoever owns it
         for h in &rec.holds {
             let Some(out) = rec.outputs.get(h.out as usize) else { continue };
             let Some((_, token)) = out.cov else { continue };

@@ -13,8 +13,7 @@ use kob_executor::testkit::*;
 #[test]
 fn a_junk_kob1_payload_is_recorded_as_a_stand_in() {
     let conn = open_memory("testnet-10").unwrap();
-    let tokens = allowlist();
-    let ex = Extractor { conn: &conn, tokens: &tokens, track_traded: false };
+    let ex = Extractor { conn: &conn };
     for size in [1_000usize, 20_000, 90_000] {
         let mut tx = noise_tx(1, false);
         let mut payload = b"KOB1\x02\xff\xff".to_vec();
@@ -30,8 +29,7 @@ fn a_junk_kob1_payload_is_recorded_as_a_stand_in() {
 fn a_valid_payload_full_of_padding_records_keeps_no_padding() {
     use kob_protocol::payload::{encode, Record};
     let conn = open_memory("testnet-10").unwrap();
-    let tokens = allowlist();
-    let ex = Extractor { conn: &conn, tokens: &tokens, track_traded: false };
+    let ex = Extractor { conn: &conn };
     let mut tx = noise_tx(1, false);
     // valid records that are not orders: unknown optional records
     let records: Vec<Record> = (0..50).map(|i| Record::Unknown { record_type: 0x90, value: vec![i as u8; 200] }).collect();

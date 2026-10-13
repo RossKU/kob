@@ -1,5 +1,5 @@
-//! Token holdings (`GET /v1/token-utxos`): user-to-user transfers of allowlisted tokens in both families, spends, reorgs,
-//! order custody and strays, the allowlist gate, the record log, and the `scale` listing rule on real orders.
+//! Token holdings (`GET /v1/token-utxos`): user-to-user transfers of tokens in both families, spends, reorgs,
+//! order custody and strays, tokens outside the allowlist (tracked too, not maintained), the record log, and the `scale` listing rule on real orders.
 
 mod common;
 
@@ -136,8 +136,10 @@ async fn kron_transfers_are_held_spent_and_reverted() {
     transfers_and_spends(Family::Kron).await;
 }
 
+/// Holdings do not depend on the listing: a token outside the allowlist, traded by no order (received from another DEX, a
+/// launchpad or a bridge), is tracked like a listed one as long as its program is pinned.
 #[tokio::test]
-async fn a_token_outside_the_allowlist_is_not_tracked() {
+async fn a_token_outside_the_allowlist_is_tracked_too() {
     let allow = TokenAllowlist::from_entries([TokenEntry {
         ticker: "OTHER".into(),
         covenant_id: Hash32([0x55; 32]),
@@ -150,7 +152,8 @@ async fn a_token_outside_the_allowlist_is_not_tracked() {
         template_id: None,
         powers: vec![],
     }]);
-    let proc = kob_executor::indexer::processor::Processor { tokens: Arc::new(allow), ..processor() };
+    // the allowlist is required (the default rules): TOKEN_COV is neither listed nor traded
+    let proc = kob_executor::indexer::processor::Processor { tokens: Arc::new(allow), rules: ListingRules::default() };
     let c = Ctx::with(Harness::with_processor(
         MockNode::new("testnet-10"),
         conn(),
@@ -159,9 +162,22 @@ async fn a_token_outside_the_allowlist_is_not_tracked() {
         proc,
     ));
     let tok = c.w.token(TAKER, 1_000);
-    let (_tx1, _, _) = send(&c, Family::Kcc20, tok, TAKER, MAKER_A, 300).await;
-    assert!(list(&c, &HoldingFilter { owner: None, token: Some(Hash32(TOKEN_COV)), include_spent: true }).is_empty());
-    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM token_holdings", []), 0);
+    let (_tx1, got, _) = send(&c, Family::Kcc20, tok, TAKER, MAKER_A, 300).await;
+    let mut held: Vec<String> = list(&c, &HoldingFilter { owner: None, token: Some(Hash32(TOKEN_COV)), include_spent: true })
+        .into_iter()
+        .map(|v| v.amount)
+        .collect();
+    held.sort();
+    assert_eq!(held, ["300", "700"]);
+    assert_eq!(list(&c, &by_owner(MAKER_A, false))[0].role, "owned");
+    // and its spend is followed
+    let (tx2, _, _) = send(&c, Family::Kcc20, got, MAKER_A, MAKER_B, 100).await;
+    let a_all = list(&c, &by_owner(MAKER_A, true));
+    assert_eq!(a_all.iter().find(|v| v.amount == "300").and_then(|v| v.spent_txid.clone()), Some(hex_of(&tx2.tx.id)));
+    // tracked, but not a token the operator's maintenance touches (anyone can send the operator one)
+    let g = c.hs.ingest.lock().unwrap();
+    assert!(!g.processor().operator_token(g.conn(), &Hash32(TOKEN_COV)).unwrap());
+    assert!(g.processor().operator_token(g.conn(), &Hash32([0x55; 32])).unwrap());
 }
 
 #[tokio::test]

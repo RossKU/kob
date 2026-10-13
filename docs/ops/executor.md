@@ -562,7 +562,7 @@ kept:
 
 | Data | Kept | Where | Size |
 |---|---|---|---|
-| KOB1 genesis transactions (placement records), every transaction that touches a KOB covenant, token custody / stray outputs, transfers of allowlisted tokens (holdings), reorgs, operator operations | forever, as compact extracted records | record log (`records/seg-*.kobrec`) | about 1 KB per KOB transaction, about 1 to 2 KB per order lifecycle |
+| KOB1 genesis transactions (placement records), every transaction that touches a KOB covenant, token custody / stray outputs, transfers of every token of a pinned program (holdings), reorgs, operator operations | forever, as compact extracted records | record log (`records/seg-*.kobrec`) | about 1 KB per KOB transaction, about 1 to 2 KB per order lifecycle |
 | Orders, UTXOs, events, custody, token registry events | forever, derived | `index.sqlite3` | about 2.6 KB per order |
 | Chain-block rows (hash, DAA) | the reorg / finality window only (`reorg_window_hours`, 12) | `blocks` | 98 B per block, about 42 MB in steady state at 10 BPS |
 | Everything else in the node's responses | never | | 0 |
@@ -1334,10 +1334,13 @@ One item (the leading fields are those of the custody / stray token UTXO views, 
 
 **What is indexed, and why it can be trusted.** A token output is a P2SH output: its script hash commits to the whole state, so
 the state is not readable from the output. It is read from the transaction that *created* it (the KCC-20 transfer leader's
-`next_states`; the columns of a KRON token input, which every input of the token carries) and kept only if the P2SH of that
-state under the pinned token program equals the output's script public key (the same proof custody and strays already
-use). Only tokens in the allowlist are tracked (with `require_allowlist = false`: every token an order trades). An empty
-allowlist tracks nothing. A transaction that creates such an output, or spends a tracked one, is a relevant transaction
+`next_states`; the columns of a KRON token input, which every input of the token carries; the `recipient_state` of a
+public-mint app's `PublicMint::mint` / `TokenSeed::create`) and kept only if the P2SH of that state under the pinned token
+program equals the output's script public key (the same proof custody and strays already use). Every token of a pinned
+program is tracked, listed or not and traded by an order or not (tokens received from another DEX, a launchpad or a
+bridge): the allowlist decides what is listed, not what a wallet holds. An output of a program this build does not pin,
+or of a look-alike template, proves nothing and is not kept; `program` says which pinned program it is (a consumer marks
+the programs whose profile is not `reviewed`). A transaction that creates such an output, or spends a tracked one, is a relevant transaction
 and is written to the record log; a rebuild by `index replay` reproduces the holdings. Reorgs revert them like every
 other row (created rows deleted, spent rows live again).
 
@@ -1347,14 +1350,18 @@ other row (created rows deleted, spent rows live again).
   until they are spent, and the spend is the moment they stop being unspent. The same holds for any output whose creating
   transaction did not reveal it (a token program the indexer does not pin, an unrecognised leader). The web app keeps its local
   tracker for the issuer's own genesis outputs; the indexer lists everything from the first transfer on.
-* Tokens sent before the indexer started (`--start sink`, or blocks older than its start) are unknown until they move.
+* Tokens sent before the indexer started (`--start sink`, or blocks older than its start) are unknown until they move; so
+  are holdings created while an older build tracked only allowlisted / traded tokens (they are not in the record log, so
+  `index replay` cannot add them; a fresh sync from an earlier `--start` on a node that still has those blocks can). The
+  holder makes them visible by sending them to themselves. The UTXO set cannot be scanned for them: the address commits to
+  the whole state, amount included, so neither the node nor the indexer can read a holding from the output alone.
 * A holding is listed once its transaction is in a chain block the indexer applied (`confirmations` and `settled` say how
   deep); the mempool is not served. Spent-ness is exact only for spends the indexer saw: a holding spent
   inside a gap (section 7.4) stays listed as live (only the custody rows of closed orders are marked spent), and a stale
   row can never be corrected by a rebuild. Consumers must therefore check a UTXO against the node before spending it (the web
   app verifies every candidate on the node); an indexer answer is a lead, not a lock.
-* Volume: every transfer of an allowlisted token becomes a record (about 1 KB), so the log grows with the token's traffic,
-  not only with KOB's.
+* Volume: every transfer of a token of a pinned program becomes a record (about 1 KB), so the log grows with the token
+  traffic of the network, not only with KOB's.
 
 Order status: `open`, `partial`, `filled`, `cancelled`, `refunded`, `killed` (IOC / FOK: the
 unfilled rest returned, by the same transaction or by a keeper), `closed` (spent by something the
@@ -1743,7 +1750,7 @@ A relevant transaction is stored as a *reduced transaction*:
 | inputs | outpoint; for covenant inputs the covenant id and the DAA score of the block that created the spent output; for spent KOB orders: the template (one byte: the KOB1 kind code, with the high bit set for the KRON kinds; logs written before the KRON family only hold codes below `0x80` and read back unchanged; a v2.4 log's receipt reveals, codes `0x07` / `0x87`, are read past and dropped), the revealed **state span**, the 4-byte dispatch tag and the small arguments (arguments over 40 bytes, the template prefix / suffix pushes and signatures, are elided) |
 | outputs | value; for covenant-bound outputs the script public key and the binding (authorising input, covenant id) |
 | token outputs | output index, amount and owner order id of every token output owned (KCC-20 scheme `0x04`, KRON `id_type` 2) by a tracked or freshly created order id |
-| holdings | output index, token program (one byte) and the state span of every output of a tracked token whose state the transfer leader revealed and whose script public key proves it (`GET /v1/token-utxos`). Present only when there are holdings: the top bit of the encoded position flags the section, so logs written before it existed decode unchanged |
+| holdings | output index, token program (one byte) and the state span of every token output of a pinned program whose state the creating input (transfer leader, KRON columns, public-mint `mint` / `create`) revealed and whose script public key proves it (`GET /v1/token-utxos`). Present only when there are holdings: the top bit of the encoded position flags the section, so logs written before it existed decode unchanged |
 
 A transaction is relevant if it carries a placement record (or a malformed KOB1 payload, recorded as a five-byte stand-in for
 the `rejects` table; only placement records of a decodable payload are kept, at most one per output), spends a tracked order or token UTXO, creates

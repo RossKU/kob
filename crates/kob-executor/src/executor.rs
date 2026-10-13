@@ -84,10 +84,25 @@ impl BookSource for IndexerSource {
     }
 
     fn operator_tokens(&mut self, operator: &[u8; 32]) -> Vec<crate::maintenance::OwnToken> {
-        book::operator_tokens(self.lock().conn(), operator).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "cannot read the operator's tokens from the store; no maintenance this tick");
-            vec![]
-        })
+        let g = self.lock();
+        let listed = |t: &crate::maintenance::OwnToken| match t.token.utxo.covenant_id {
+            Some(c) => g.processor().operator_token(g.conn(), &Hash32(c)),
+            None => Ok(false),
+        };
+        book::operator_tokens(g.conn(), operator)
+            .and_then(|all| {
+                let mut out = Vec::with_capacity(all.len());
+                for t in all {
+                    if listed(&t)? {
+                        out.push(t);
+                    }
+                }
+                Ok(out)
+            })
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "cannot read the operator's tokens from the store; no maintenance this tick");
+                vec![]
+            })
     }
 
     fn report_frozen(&mut self, daa: u64, flagged: &[([u8; 32], String)], cleared: &[[u8; 32]]) {
