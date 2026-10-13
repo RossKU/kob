@@ -112,7 +112,7 @@ const FAR_FUTURE_DAA = 2n * 365n * 86_400n * BigInt(DAA_PER_SECOND);
 // ------------------------------------------------------------------------------------------------ open-list token identity (A1-2)
 
 /** Covenant ids of every token the transaction names: order tokens (a pair: both), spent orders, token movements. */
-function tokensOf(summary: SigningSummary): Set<Hex> {
+export function tokensOf(summary: SigningSummary): Set<Hex> {
   const ids = new Set<Hex>();
   const add = (d: OrderDescription | null | undefined): void => {
     if (!d) return;

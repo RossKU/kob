@@ -7,7 +7,7 @@ import { dispatchTagFrom } from '../wallet/kaspire';
 import { createLocalKeyAdapter, type SignerHost } from '../wallet/local-key';
 import type { WalletAdapter, WalletId, WalletInfo } from '../wallet/types';
 import type { BuiltTx } from '../kob/types';
-import type { TokenHint } from '../signer/protocol';
+import { signerTokenHints } from './token-hints';
 import { SignerFrame, type SignerMode } from '../ui/shell/SignerFrame';
 import type { Services } from './services';
 import { watchWallet, type WalletNotice } from './wallet-events';
@@ -88,17 +88,9 @@ export function WalletProvider(props: { services: Services; children: ComponentC
       createLocalKeyAdapter({
         host: () => hostRef.current,
         sdk,
-        tokenHints: (built: BuiltTx): TokenHint[] => {
-          const ids = new Set<string>();
-          for (const i of built.tx.inputs) if (i.utxo.covenantId) ids.add(i.utxo.covenantId);
-          for (const o of built.tx.outputs) if (o.covenant) ids.add(o.covenant.covenantId);
-          return [...ids].flatMap((id) => {
-            const tk = registry.byCovenantId.get(id);
-            return tk && /^[\x20-\x7e]{1,24}$/.test(tk.ticker) ? [{ covenantId: id, ticker: tk.ticker, decimals: tk.decimals }] : [];
-          });
-        },
+        tokenHints: (built: BuiltTx) => signerTokenHints(kob, built, infoRef.current?.pubkey ?? null, registry),
       }),
-    [sdk, registry],
+    [sdk, registry, kob],
   );
 
   const disconnect = useCallback(() => {
