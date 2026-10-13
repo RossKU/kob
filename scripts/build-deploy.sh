@@ -7,12 +7,12 @@
 #
 #   networks: testnet-10, mainnet (contracts/deploy/<network>; docs/ops/release.md is the mainnet checklist)
 #
-# No template depends on a network or a genesis (protocol v2.6: a stop is armed by a fill in the same
-# transaction; there is no receipt covenant and no R_ID), so nothing is recompiled: the record lists the
-# reference artifacts of contracts/artifacts (scripts/lib/deploy.mjs) and SHA256SUMS pins them, so a change
-# of any order template makes the deployment record stale. When registry/tokens.json is the registry of the
-# network (mainnet), the record pins it too (sha256, strict templates, listed tokens) and SHA256SUMS lists it,
-# so a registry change makes the record stale as well. Needs node.
+# No template depends on a network or a genesis (a stop is armed by a fill in the same transaction), so
+# nothing is recompiled: the record lists the reference artifacts of contracts/artifacts (scripts/lib/deploy.mjs)
+# and SHA256SUMS pins them, so a change of any order template makes the deployment record stale. When
+# registry/tokens.json is the registry of the network (mainnet), the record pins it too (sha256, strict
+# templates, listed tokens) and SHA256SUMS lists it, so a registry change makes the record stale as well.
+# Needs node.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
