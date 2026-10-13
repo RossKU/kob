@@ -11,6 +11,7 @@
   "scripts": {
     "fetch-sdk": "node scripts/fetch-sdk.mjs",
     "build:wasm": "node scripts/build-wasm.mjs",
+    "gen:programs": "node scripts/gen-programs.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

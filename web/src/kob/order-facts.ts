@@ -8,6 +8,7 @@
 import type { AnyState, BaseKind, Family, Hex, IfdAskState, IfdBidState, KasKind, OrderKind, OrderState, PairKind, PairTriggerRule, TemplateName } from './types';
 import type { KobWasm } from './wasm';
 import { quoteOf } from './units';
+import { isTokenProgram, CODEC_OF_PROGRAM } from './programs.generated';
 
 export const ASK_KINDS: readonly BaseKind[] = ['KobAsk', 'KobCondAsk', 'KobIfdAsk'];
 export const BID_KINDS: readonly BaseKind[] = ['KobBid', 'KobCondBid', 'KobIfdBid'];
@@ -27,7 +28,7 @@ export const baseKind = (k: OrderKind): BaseKind => (k.endsWith('Kron') ? k.slic
  * Family of an order kind or template name (KAS-quoted kinds and token programs). A pair kind names no family: its state names one per token
  * (use {@link familyOfOrder} for an order: a pair order's family is its base token A's, as kob-protocol `AnyState::family`).
  */
-export const familyOfKind = (k: TemplateName | string): Family => (k.endsWith('Kron') || k.startsWith('Kron') ? 'kron' : 'kcc20');
+export const familyOfKind = (k: TemplateName | string): Family => (isTokenProgram(k) ? CODEC_OF_PROGRAM[k] : k.endsWith('Kron') ? 'kron' : 'kcc20');
 /** The kind tag of a base kind in a family (the pair kinds have one template for every family). */
 export const kindFor = (k: BaseKind, family: Family): OrderKind => (family === 'kron' && !isPairKind(k) ? (`${k}Kron` as OrderKind) : k);
 

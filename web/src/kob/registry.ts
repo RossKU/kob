@@ -13,6 +13,7 @@
 //
 // Mirrors crates/kob-protocol/src/registry.rs (validation rules, `normalize_ticker`, `display_name`); keys of the JSON are snake_case.
 import type { IndexerTokenView } from '../data/indexer-types';
+import { PROGRAM_OF_REGISTRY_ID, TOKEN_PROGRAMS } from './programs.generated';
 import { extensionOfState, familyOfProgram, isKronState } from './token-state';
 import type { Hex, TokenProgram, TokenState } from './types';
 import type { KobWasm } from './wasm';
@@ -30,15 +31,8 @@ export type ExtensionClass = 'none' | 'fixed-supply-standard' | 'other';
 export const CAPABILITIES = ['mint-authority', 'public-mint', 'burn', 'freeze', 'seize', 'blacklist'] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
-/** Registry template id -> kob-wasm token program (only the programs compiled into this build; both families). */
-export const PROGRAM_OF_TEMPLATE_ID: Readonly<Record<string, TokenProgram>> = {
-  'kcc20-ref-3x3': 'KCC20Ref',
-  'kcc20-ref-8x8': 'KCC20Ref_8x8',
-  'kcc20-kaspacom-0-2-5': 'KCC20KaspaCom_0_2_5',
-  'kcc20-ref-public-mint': 'KCC20PublicMint',
-  'kron-2433': 'KronToken2433',
-  'kron-2732': 'KronToken2732',
-};
+/** Registry template id -> kob-wasm token program (every program kob-protocol embeds; generated from the profile table, both families). */
+export const PROGRAM_OF_TEMPLATE_ID: Readonly<Record<string, TokenProgram>> = PROGRAM_OF_REGISTRY_ID;
 
 // ------------------------------------------------------------------------------------------------ JSON shapes (snake_case)
 
@@ -238,6 +232,25 @@ const OUTPOINT = /^[0-9a-f]{64}:(0|[1-9][0-9]{0,9})$/;
 const DISPLAY_KEYS = ['description', 'website', 'icon', 'kcc23'];
 const STATE_LEN: Record<Family, number> = { kcc20: 112, kron: 46 };
 
+/** A template whose hash is a known program must agree with that program's profile (mirrors `check_registry_template` of profile.rs); null when it does, or when the hash is unknown. */
+function profileDisagreement(t: RegistryTemplateJson): string | null {
+  const p = TOKEN_PROGRAMS.find((x) => x.templateHash === t.template_hash);
+  if (!p) return null;
+  const diffs: string[] = [];
+  const cmp = (what: string, a: unknown, b: unknown) => {
+    if (a !== b) diffs.push(`${what} ${String(a)} (profile ${p.name} says ${String(b)})`);
+  };
+  cmp('family', t.family, p.codec);
+  cmp('prefix_len', t.prefix_len, p.prefixLen);
+  cmp('state_len', t.state_len, p.stateLen);
+  cmp('suffix_len', t.suffix_len, p.suffixLen);
+  cmp('max_token_inputs', t.max_token_inputs, p.maxTokenInputs);
+  cmp('max_token_outputs', t.max_token_outputs, p.maxTokenOutputs);
+  // the custody owner is what the order templates pin; a registry may name either KRON delivery type (0 or 3)
+  cmp('escrow custody owner', p.codec === 'kcc20' ? t.escrow.owner_scheme : t.escrow.id_type, p.custodyOwner);
+  return diffs.length ? diffs.join('; ') : null;
+}
+
 function validate(doc: unknown, expectedNetwork?: string): { json: RegistryJson; issues: RegistryIssue[] } {
   const issues: RegistryIssue[] = [];
   const add = (code: RegistryIssueCode, path: string, message: string) => issues.push({ code, path, message });
@@ -279,7 +292,6 @@ function validate(doc: unknown, expectedNetwork?: string): { json: RegistryJson;
     for (const k of ['prefix_len', 'suffix_len', 'state_len', 'max_token_inputs', 'max_token_outputs'] as const) if (!isInt(t[k]) || t[k] < 0) bad(`${k} must be a non-negative integer`);
     if (FAMILIES.includes(t.family) && t.state_len !== STATE_LEN[t.family]) bad(`state_len ${t.state_len} but family ${t.family} has ${STATE_LEN[t.family]}`);
     if (!(t.suffix_len > 0)) bad('suffix_len must be > 0');
-    if (t.family === 'kron' && t.prefix_len !== 0) bad('kron templates have no prefix (state span at offset 0)');
     if (!(t.max_token_inputs >= 1 && t.max_token_outputs >= 1 && t.max_token_inputs <= 64 && t.max_token_outputs <= 64)) bad(`slot limits ${t.max_token_inputs}/${t.max_token_outputs} must be within 1..=64`);
     if (!isObj(t.escrow)) bad('escrow must be an object');
     else {
@@ -302,6 +314,8 @@ function validate(doc: unknown, expectedNetwork?: string): { json: RegistryJson;
     if (t.risks !== undefined && (!Array.isArray(t.risks) || t.risks.some((r) => typeof r !== 'string' || r.length < 1 || r.length > 512 || hasBadChar(r)))) bad('risks must be a list of texts (1..512 characters)');
     if (!isObj(t.source) || typeof t.source.path !== 'string' || !t.source.path) bad('source.path is empty');
     else noExtra(t.source, SOURCE_KEYS, `${p}.source`);
+    const disagreement = isObj(t.escrow) ? profileDisagreement(t) : null;
+    if (disagreement) bad(`disagrees with the embedded program profile: ${disagreement}`);
   });
 
   // ---- tokens

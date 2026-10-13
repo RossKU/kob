@@ -41,6 +41,7 @@ import type {
 } from './types';
 import type { NodeInputFacts } from './node-verify';
 import { outpointKey } from './node-verify';
+import { CODEC_OF_PROGRAM, isTokenProgram } from './programs.generated';
 import { extensionOfState, isCovenantOwned, isKeyOwned, ownerTypeOf } from './token-state';
 import { recoverSweeps, type RecoveredSweep } from './sweep';
 import type { KobWasm } from './wasm';
@@ -650,7 +651,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     });
     for (const [role, t] of [['A', pf.a], ['B', pf.b]] as const) {
       const program = kob.templates().find((tp) => tp.hash === t.tplHash && tp.tokenSlots);
-      const programFam = program ? (program.name.startsWith('Kron') ? 2n : 1n) : null;
+      const programFam = program ? ((isTokenProgram(program.name) ? CODEC_OF_PROGRAM[program.name] === 'kron' : program.name.startsWith('Kron')) ? 2n : 1n) : null;
       if (t.family === null || (programFam !== null && programFam !== t.familyCode) || (t.family === 'kron' && t.ext !== null && /[1-9a-f]/.test(t.ext))) {
         add('pair-family-mismatch', `output ${j}: token ${role} family ${t.familyCode} does not match its program${program ? ` ${program.name}` : ''} (or a KRON token carries an extension commitment)`, { output: j, params: { token: role } });
       }

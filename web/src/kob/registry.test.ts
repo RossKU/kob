@@ -155,9 +155,6 @@ describe('tradability (listing verified against the pinned templates)', () => {
 
   it.each([
     ['template hash', (t: any) => { t.template_hash = 'ab'.repeat(32); }, 'hash-mismatch'],
-    ['prefix length', (t: any) => { t.prefix_len = 2; }, 'prefix-mismatch'],
-    ['suffix length', (t: any) => { t.suffix_len = 2978; }, 'suffix-mismatch'],
-    ['slot limits', (t: any) => { t.max_token_inputs = 4; t.max_token_outputs = 4; }, 'slots-mismatch'],
   ])('a tampered %s makes the token untradable (template-mismatch), never trusted', (_n, mutate, problem) => {
     const doc = tradableRegistryJson();
     mutate(doc.templates.find((t: any) => t.id === 'kcc20-ref-3x3'));
@@ -170,14 +167,33 @@ describe('tradability (listing verified against the pinned templates)', () => {
     expect(tokenById(r, '80'.repeat(32))!.tradable).toBe(true);
   });
 
-  it('a template id that points at another program\'s hash is a mismatch', () => {
+  it.each([
+    ['prefix length', (t: any) => { t.prefix_len = 2; }, 'prefix_len 2 \\(profile KCC20Ref says 1\\)'],
+    ['suffix length', (t: any) => { t.suffix_len = 2978; }, 'suffix_len 2978 \\(profile KCC20Ref says 2802\\)'],
+    ['slot limits', (t: any) => { t.max_token_inputs = 4; t.max_token_outputs = 4; }, 'max_token_inputs 4 \\(profile KCC20Ref says 3\\)'],
+    ['custody owner', (t: any) => { t.escrow.owner_scheme = 0; }, 'escrow custody owner 0 \\(profile KCC20Ref says 4\\)'],
+  ])('a template of a program this build embeds whose %s differs from the program profile is rejected, not merely untradable', (_n, mutate, text) => {
+    const doc = tradableRegistryJson();
+    mutate(doc.templates.find((t: any) => t.id === 'kcc20-ref-3x3'));
+    expect(codes(doc)).toContain('template-invalid');
+    expect(() => parse(doc)).toThrow(/disagrees with the embedded program profile/);
+    expect(() => parse(doc)).toThrow(new RegExp(text));
+  });
+
+  it('a template id that points at another program\'s hash is rejected against the profiles', () => {
     const doc = tradableRegistryJson();
     const a = doc.templates.find((t: any) => t.id === 'kcc20-ref-3x3');
     const b = doc.templates.find((t: any) => t.id === 'kcc20-ref-8x8');
     [a.template_hash, b.template_hash] = [b.template_hash, a.template_hash];
-    const r = parse(doc);
-    expect(r.templateChecks.filter((c) => c.problems.includes('hash-mismatch')).map((c) => c.id)).toEqual(['kcc20-ref-3x3', 'kcc20-ref-8x8']);
-    expect(tradableTokens(r)).toEqual([]);
+    expect(() => parse(doc)).toThrow(/disagrees with the embedded program profile/);
+  });
+
+  it('a template whose hash no profile knows keeps only the structural rules: a kron template may carry a prefix', () => {
+    const doc = tradableRegistryJson();
+    const t = doc.templates.find((x: any) => x.id === 'kron-2433');
+    t.template_hash = 'cd'.repeat(32);
+    t.prefix_len = 1;
+    expect(codes(doc)).not.toContain('template-invalid');
   });
 
   it('kron templates are supported: a listed, verified token on a reviewed kron template is tradable', () => {

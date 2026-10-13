@@ -1,6 +1,7 @@
 // Registry token entry -> TokenMarket (the parameters every planner needs). The registry loader is another work item: this module only
 // depends on the STRUCTURAL shape of `registry/tokens.json` (snake_case), so it works with whatever the loader returns.
 import type { Family, Hex, TokenProgram } from './types';
+import { PROGRAM_OF_REGISTRY_ID } from './programs.generated';
 import { familyOfProgram } from './token-state';
 import type { TokenMarket } from './plan-types';
 import type { KobWasm } from './wasm';
@@ -30,18 +31,8 @@ export interface RegistryTemplateLike {
   family?: string;
 }
 
-/** Registry template ids of the token programs kob-wasm embeds. */
-export const TEMPLATE_ID_PROGRAM: Readonly<Record<string, TokenProgram>> = {
-  'kcc20-ref-3x3': 'KCC20Ref',
-  'kcc20-ref-4x5': 'KCC20Ref_4x5',
-  'kcc20-ref-8x8': 'KCC20Ref_8x8',
-  'kcc20-ref-16x16': 'KCC20Ref_16x16',
-  'kcc20-p2': 'KCC20P2',
-  'kcc20-kaspacom-0-2-5': 'KCC20KaspaCom_0_2_5',
-  'kcc20-ref-public-mint': 'KCC20PublicMint',
-  'kron-2433': 'KronToken2433',
-  'kron-2732': 'KronToken2732',
-};
+/** Registry template ids of the token programs kob-wasm embeds (generated from the profile table). */
+export const TEMPLATE_ID_PROGRAM: Readonly<Record<string, TokenProgram>> = PROGRAM_OF_REGISTRY_ID;
 
 export class TokenMarketError extends Error {
   constructor(message: string) {

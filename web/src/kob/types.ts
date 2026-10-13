@@ -25,9 +25,9 @@ export type BaseKind = KasKind | PairKind;
 /** Order kinds as kob-wasm tags them: the KRON family has its own templates of the KAS kinds (`KobAskKron`, ...); the pair kinds have one each (their states name both families). */
 export type OrderKind = BaseKind | `${KasKind}Kron`;
 export type TemplateName = OrderKind | TokenProgram;
-export type Kcc20Program = 'KCC20Ref' | 'KCC20Ref_4x5' | 'KCC20Ref_8x8' | 'KCC20Ref_16x16' | 'KCC20P2' | 'KCC20KaspaCom_0_2_5' | 'KCC20PublicMint';
-export type KronProgram = 'KronToken2433' | 'KronToken2732';
-export type TokenProgram = Kcc20Program | KronProgram;
+// the token programs are declared once, in crates/kob-protocol/data/programs.json (generated: scripts/gen-programs.mjs)
+import type { Kcc20Program, KronProgram, TokenProgram } from './programs.generated';
+export type { Kcc20Program, KronProgram, TokenProgram };
 
 export interface AskState {
   maker: Hex; tokenCovId: Hex; tokenTplHash: Hex; tplPrefixLen: I64; tplSuffixLen: I64;

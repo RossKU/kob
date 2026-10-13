@@ -12,6 +12,7 @@
 // pruned after MISS_CONFIRMATIONS misses on separate checks that span the grace period, an empty node answer counts for nothing, and a
 // store this code cannot read is copied aside before it is overwritten.
 import type { Hex, TokenProgram, TokenState, TokenUtxo, BuiltTx, U64 } from '../kob/types';
+import { TOKEN_PROGRAMS } from '../kob/programs.generated';
 import { familyOfProgram, isKeyOwned, isKronState, keyState } from '../kob/token-state';
 import type { KobWasm } from '../kob/wasm';
 import type { NodeApi } from './node';
@@ -67,7 +68,7 @@ const STORE_VERSION = 1;
 const MISS_CONFIRMATIONS = 3;
 const HEX32 = /^[0-9a-f]{64}$/;
 const DEC = /^\d+$/;
-const PROGRAMS: readonly string[] = ['KCC20Ref', 'KCC20Ref_4x5', 'KCC20Ref_8x8', 'KCC20Ref_16x16', 'KCC20P2', 'KCC20KaspaCom_0_2_5', 'KCC20PublicMint', 'KronToken2433', 'KronToken2732'];
+const PROGRAMS: readonly string[] = TOKEN_PROGRAMS.map((p) => p.name);
 
 const outpointKey = (txid: string, index: number) => `${txid}:${index}`;
 
