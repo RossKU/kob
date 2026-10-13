@@ -13,8 +13,8 @@ export type Route =
    */
   | { name: 'usd'; asset: string; covenantId?: undefined }
   /**
-   * `ticket`: the order ticket opens on this preset (`#/market/<id>?ticket=close`: sell everything at market, used by "close position" of a buy-first
-   * position; `?ticket=cover&amount=N`: buy N base units back at market, the close of a sell-first position)
+   * `ticket`: the order ticket opens on this preset (`?ticket=sell&amount=N`: sell N base units at market, the close of a buy-first position;
+   * `?ticket=cover&amount=N`: buy N base units back at market, the close of a sell-first position; `?ticket=close`: the "close (sell all)" type)
    */
   | { name: 'token'; covenantId: string; ticket?: TicketPreset; amount?: string }
   /** token/token pair BASE/QUOTE (pair orders of every type, prices in QUOTE per BASE): `#/market/<base>/<quote>` (alias `#/pair/<base>/<quote>`) */
@@ -24,7 +24,10 @@ export type Route =
 export type RouteName = Route['name'];
 
 /** Order-ticket presets a link may ask for. */
-export const TICKET_PRESETS = ['close', 'cover'] as const;
+export const TICKET_PRESETS = ['close', 'cover', 'sell'] as const;
+/** Presets that carry an amount (`&amount=N`, base units). */
+const AMOUNT_PRESETS: readonly TicketPreset[] = ['cover', 'sell'];
+const takesAmount = (p: TicketPreset | undefined): boolean => p !== undefined && AMOUNT_PRESETS.includes(p);
 export type TicketPreset = (typeof TICKET_PRESETS)[number];
 
 const HEX64 = /^[0-9a-f]{64}$/i;
@@ -39,9 +42,9 @@ export function parseHash(hash: string): Route {
   if (cut >= 0) h = h.slice(0, cut);
   const preset = query?.get('ticket') ?? null;
   const ticket = (TICKET_PRESETS as readonly string[]).includes(preset ?? '') ? (preset as TicketPreset) : undefined;
-  // an amount in base units (1..10^18) for the cover preset; anything else is dropped
+  // an amount in base units (1..10^18) for the cover / sell presets; anything else is dropped
   const amountRaw = query?.get('amount') ?? '';
-  const amount = ticket === 'cover' && /^[1-9][0-9]{0,17}$/.test(amountRaw) ? amountRaw : undefined;
+  const amount = takesAmount(ticket) && /^[1-9][0-9]{0,17}$/.test(amountRaw) ? amountRaw : undefined;
   const parts = h.split('/').filter((p) => p !== '');
   const [first, second, third] = parts;
   if (!first) return { name: 'home' };
@@ -86,7 +89,7 @@ export function parseHash(hash: string): Route {
 export function routeToHash(route: Route): string {
   switch (route.name) {
     case 'token':
-      return `#/market/${route.covenantId.toLowerCase()}${route.ticket ? `?ticket=${route.ticket}${route.ticket === 'cover' && route.amount ? `&amount=${route.amount}` : ''}` : ''}`;
+      return `#/market/${route.covenantId.toLowerCase()}${route.ticket ? `?ticket=${route.ticket}${takesAmount(route.ticket) && route.amount ? `&amount=${route.amount}` : ''}` : ''}`;
     case 'market':
       return '#/market';
     case 'pair':
@@ -105,7 +108,7 @@ export const navOf = (route: Route): 'market' | 'orders' | 'issue' | 'settings' 
   route.name === 'token' || route.name === 'pair' || route.name === 'usd' || route.name === 'home' ? 'market' : route.name;
 
 export const tokenRoute = (covenantId: string, ticket?: TicketPreset, amount?: number | bigint): Route => ({
-  name: 'token', covenantId: covenantId.toLowerCase(), ...(ticket ? { ticket } : {}), ...(ticket === 'cover' && amount !== undefined && BigInt(amount) > 0n ? { amount: BigInt(amount).toString() } : {}),
+  name: 'token', covenantId: covenantId.toLowerCase(), ...(ticket ? { ticket } : {}), ...(takesAmount(ticket) && amount !== undefined && BigInt(amount) > 0n ? { amount: BigInt(amount).toString() } : {}),
 });
 export const pairRoute = (base: string, quote: string): Route => ({ name: 'pair', base: base.toLowerCase(), quote: quote.toLowerCase() });
 /**

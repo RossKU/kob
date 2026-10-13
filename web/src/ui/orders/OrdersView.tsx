@@ -379,15 +379,16 @@ export function OrdersView() {
           data-testid="orders-close-followup"
           onDismiss={() => setCloseFollowUp(null)}
           actions={
-            // nothing bought yet: there is nothing of the position to sell (the "close" ticket would sell the whole free balance)
+            // the ticket opens on a market sell of what the position bought and did not sell yet (never the whole free balance);
+            // nothing bought yet: nothing to sell
             closeFollowUp.amount > 0n ? (
-              <a class="btn btn-primary btn-sm" href={routeToHash(tokenRoute(closeFollowUp.token, 'close'))} data-testid="orders-close-sell">
-                {t('orders.close.sell', { ticker: tokenOf(closeFollowUp.token)?.ticker ?? '' })}
+              <a class="btn btn-primary btn-sm" href={routeToHash(tokenRoute(closeFollowUp.token, 'sell', closeFollowUp.amount))} data-testid="orders-close-sell">
+                {t('orders.close.sell', { amount: coverText(closeFollowUp.token, closeFollowUp.amount) })}
               </a>
             ) : undefined
           }
         >
-          {t(closeFollowUp.amount > 0n ? 'orders.close.body' : 'orders.close.bodyDone')}
+          {t(closeFollowUp.amount > 0n ? 'orders.close.body' : 'orders.close.bodyDone', { amount: coverText(closeFollowUp.token, closeFollowUp.amount) })}
         </Banner>
       ) : null}
       {sweepFollowUp && !sweepFollowUp.pending ? (

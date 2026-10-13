@@ -111,8 +111,9 @@ in the registry) shows the pair book, the panels of a token market and the order
   into its ticket intent (`src/ui/orders/replace-intent.ts`), edited in the ticket's own fields (band, trigger rule, trailing, expiry,
   activation) and re-planned as ONE cancel-replace transaction (pair orders always take this path). Repeat entries and booked
   exits are cancelled as a position (their exits re-arm the entry). A GTC replacement gets a fresh 90 days.
-* **Close.** Buy first: cancel the position's orders, then sell the released tokens at market (`?ticket=close`). Sell first: cancel
-  them (their KAS comes back), then buy back the amount sold and not yet bought back at market (`?ticket=cover&amount=N`).
+* **Close.** Buy first: cancel the position's orders, then sell the amount the entry bought and the exits did not sell yet at market
+  (`?ticket=sell&amount=N`; never the whole free balance). Sell first: cancel them (their KAS comes back), then buy back the amount sold and
+  not yet bought back at market (`?ticket=cover&amount=N`).
 * **Fills.** Per order on demand (time, amount, price, payout, average) and every fill of the wallet as one CSV (`src/ui/orders/fills-model.ts`).
 * **Notifications** (opt-in, client side only): fills, partial fills, stops armed / triggered, expiry soon, expired / refunded / killed,
   incoming payments and watched x402 invoices; in-app list and toasts, optionally browser notifications (`src/kob/notifications.ts`,

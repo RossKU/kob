@@ -92,4 +92,22 @@ test.describe('position cards', () => {
     await expect(page.getByTestId('order-amount')).toHaveValue('1');
   });
 
+  // close of a partly filled BUY-first position: the ticket sells what the entry bought (1 of 2), not the wallet's whole free balance
+  test('close a partly filled buy-first position: the ticket opens on a market sell of the amount bought', async ({ appPage: page, mock, wallet }) => {
+    const entryId = await placeAndFill(page, mock, 'ifd', { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' }, 1);
+    await page.getByTestId('nav-orders').click();
+    await page.getByTestId(`position-close-${entryId}`).click();
+    await runFlow(page, mock, wallet, { steps: 1 });
+    const banner = page.getByTestId('orders-close-followup');
+    await expect(banner).toContainText('1 EXKCC bought is not sold yet');
+    await expect(banner).not.toContainText('free balance');
+    const sell = page.getByTestId('orders-close-sell');
+    await expect(sell).toHaveText('Sell 1 EXKCC at market');
+    await expect(sell).toHaveAttribute('href', /\?ticket=sell&amount=100000000$/);
+    await sell.click();
+    await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-type', 'market');
+    await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-side', 'sell');
+    await expect(page.getByTestId('order-amount')).toHaveValue('1');
+  });
+
 });

@@ -45,10 +45,14 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const { indexer: health } = useSystemStatus();
   const { registry, indexer, kob } = services;
   const id = props.covenantId;
-  // a `?ticket=close` link (My orders, close position) opens the ticket on "close": sell the whole free balance at market; `?ticket=cover&amount=N`
-  // (close of a sell-first position) on a market BUY of the N base units the position sold and has not bought back yet
+  // the close of a position (My orders): `?ticket=sell&amount=N` (buy first) opens the ticket on a market SELL of the N base units the position
+  // bought and has not sold yet, `?ticket=cover&amount=N` (sell first) on a market BUY of the N it sold; `?ticket=close` on "close (sell all)"
   const [prefill, setPrefill] = useState<{ side?: 'buy' | 'sell'; price?: bigint; amount?: bigint; type?: 'close' | 'market' } | undefined>(
-    props.ticket === 'close' ? { side: 'sell', type: 'close' } : props.ticket === 'cover' ? { side: 'buy', type: 'market', ...(props.amount ? { amount: BigInt(props.amount) } : {}) } : undefined,
+    props.ticket === 'close'
+      ? { side: 'sell', type: 'close' }
+      : props.ticket === 'cover' || props.ticket === 'sell'
+        ? { side: props.ticket === 'cover' ? 'buy' : 'sell', type: 'market', ...(props.amount ? { amount: BigInt(props.amount) } : {}) }
+        : undefined,
   );
   const [balKey, setBalKey] = useState(0);
   const [liveKey, setLiveKey] = useState(0);

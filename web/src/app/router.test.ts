@@ -75,6 +75,14 @@ describe('router', () => {
     expect(tokenRoute(ID, 'cover', 0)).toEqual({ name: 'token', covenantId: ID, ticket: 'cover' });
   });
 
+  it('a sell link (close of a buy-first position) carries the amount the position bought, like cover', () => {
+    expect(parseHash(`#/market/${ID}?ticket=sell&amount=250000000`)).toEqual({ name: 'token', covenantId: ID, ticket: 'sell', amount: '250000000' });
+    expect(routeToHash(tokenRoute(ID, 'sell', 250_000_000n))).toBe(`#/market/${ID}?ticket=sell&amount=250000000`);
+    expect(parseHash(routeToHash(tokenRoute(ID, 'sell', 10n ** 18n - 1n)))).toEqual(tokenRoute(ID, 'sell', 10n ** 18n - 1n));
+    expect(parseHash(`#/market/${ID}?ticket=sell&amount=0`)).toEqual({ name: 'token', covenantId: ID, ticket: 'sell' });
+    expect(parseHash(`#/market/${ID}?ticket=sell&amount=1e9`)).toEqual({ name: 'token', covenantId: ID, ticket: 'sell' });
+  });
+
   it('round-trips every route', () => {
     const routes: Route[] = [{ name: 'market' }, tokenRoute(ID.toUpperCase()), { name: 'orders' }, { name: 'issue' }, { name: 'settings' }];
     for (const r of routes) expect(parseHash(routeToHash(r))).toEqual(r.name === 'token' ? tokenRoute(ID) : r);
