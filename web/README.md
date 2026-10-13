@@ -37,7 +37,7 @@ chart of the first tradable token, else the list), `list`, `kas-usd` (the USD to
 
 | Path | Contents |
 |---|---|
-| `src/kob/` | pure protocol-side logic over kob-wasm: order planners for every order type (`orders/`, `intent-*.ts`, `plan.ts`; cross limits `orders/cross*.ts`, pair math `pair.ts`), pre-sign decoding (`decode.ts`), token registry (`registry.ts`), placement records and recovery, cancel / cancel-replace / cancel-all, balances, positions, issuance |
+| `src/kob/` | pure protocol-side logic over kob-wasm: order planners for every order type (`orders/`, `intent-*.ts`, `plan.ts`; pair orders `orders/pair-*.ts`, pair math `pair.ts`), pre-sign decoding (`decode.ts`), token registry (`registry.ts`), placement records and recovery, cancel / cancel-replace / cancel-all, balances, positions, issuance |
 | `src/data/`, `src/wallet/` | node RPC (official SDK) and mock-node client, indexer client + WebSocket feed, UTXO services, token tracker, wallet adapters, sign-and-submit pipeline |
 | `src/app/`, `src/ui/`, `src/i18n/` | composition root, views (market, ticket, confirmation, my orders, issuance, settings), English text |
 | `mock/`, `e2e/` | mock indexer + node server and fake wallets; Playwright specs for every order type (`e2e/README.md`) |
@@ -70,56 +70,50 @@ https://www.tradingview.com/ on the pages that use it. We keep the library's def
 README says satisfies the link requirement) and show the notice with the link in the footer (`src/ui/shell/Footer.tsx`). Do not remove either.
 Its only dependency, `fancy-canvas`, is MIT.
 
-## Token/token pairs and cross limits
+## Token/token pairs
 
-There is no token/token book: a pair BASE/QUOTE (e.g. BTC/USDT) settles through the BASE/KAS and QUOTE/KAS books in ONE transaction. `#/market/<base>/<quote>`
-(reached from the quote side of the title's `BASE / QUOTE` selector; both tokens must be in the registry) shows the implied book of `GET /v1/pairs/{base}/{quote}/book`
-and the pair ticket (`src/ui/market/PairPage.tsx`, `CrossTicket.tsx`, `pair-model.ts`).
+A pair BASE/QUOTE (e.g. TBTC/TUSD) is traded with pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`: one template each for
+both sides and both token families; `docs/spec/order-types.md`, "Pair orders"). A pair order enforces only its own price: a
+matcher nets it against opposite pair orders, routes it through the BASE/KAS and QUOTE/KAS books in one transaction, or fills it
+from inventory. `#/market/<base>/<quote>` (reached from the quote side of the title's `BASE / QUOTE` selector; both tokens must be
+in the registry) shows the pair book, the panels of a token market and the order ticket (`src/ui/market/PairPage.tsx`,
+`pair-model.ts`, `pair-market.ts`).
 
-* **Prices.** Exact rationals: the indexer quotes `price_num / price_den` QUOTE base units per BASE base unit; the UI shows QUOTE per WHOLE BASE
-  = num/den x 10^(baseDecimals - quoteDecimals) as exact decimal text (asks rounded up, bids down; floats only for depth bars; `src/kob/pair.ts`).
-  **Direct** levels are resting cross limits of the pair, **route** levels (labelled "via KAS") are quotes implied through the two KAS books. Live
-  refresh on `book:<base>` / `book:<quote>`; an indexer without the pair routes (404 / 405 / 501) shows "pair book unavailable" and the ticket still works.
-* **Cross limit** (`KobCross` / `KobCrossKron`, `src/kob/orders/cross.ts`). "Sell BASE for QUOTE" is a cross order A = BASE -> B = QUOTE, "Buy BASE
-  with QUOTE" one A = QUOTE -> B = BASE. The amount is whole lots of the SOLD token (its registry `lot_size`, written as `lotUnits = 1, unit = lot_size`).
-  The price becomes `bLot` = the RECEIVED base units per lot (at least), rounded UP (sell: `ceil(price x lot x 10^qd / 10^bd)`, buy: `ceil(lot x 10^bd /
-  (price x 10^qd))`), so every fill pays at least the entered price; the ticket shows the effective rate, the amount per lot and the minimum
-  received. The optional tip is typed as on the KAS ticket (KAS per whole token of the sold token) and prefunded in the order per lot. Time in force: GTC / day / GTD, IOC, FOK. Refund tip = the sold token program's default
-  (kob-wasm `keeperTips`).
-* **The pair ticket is the KAS ticket.** Same order types by name (Limit, Market, IOC, FOK: `PAIR_TYPES` in `cross-form.ts`), same fields, labels and wording (`ticket.*` keys), no
-  cross-only control: the amount is rounded to whole lots of the received token and the number of prefunded deliveries is chosen by the form, both silently. The KAS ticket's
-  streaming, close, stop, trailing, take-profit, OCO, if-done, repeat, TWAP, DCA and Dutch types are hidden on a pair (`PAIR_HIDDEN_TYPES`): a cross order cannot be them.
-* **Carriers.** `deliveryCarrier` = the covenant carrier (2 KAS by default, like a bid's). A resting order prefunds one delivery per partial fill it can take,
-  `min(lots - 1, 3)` (the bid default of 3 fills): order value = carrier + deliveries x deliveryCarrier; an IOC / FOK order takes one fill that moves
-  the whole order value onto the delivery, so its value is the carrier. The value is at least deliveryCarrier + 1 sompi (protocol minimum; a 1-lot or IOC
-  order gets that). Unused carriers come back with the last fill, a refund or a cancel (disclosed).
-* **Market order on a pair** (`src/kob/orders/cross-market.ts`): an IOC cross limit AUCTION (protocol v2.6: `bLotEnd`, `auctionDaa`), filled by a matcher
-  through the KAS route (A -> KAS -> B in one transaction). The guaranteed rate starts at what the route pays for the order in whole lots of the received token (`bStartLot`: at most the best level, rounded
-  down; a matcher delivers whole ask lots, so a higher start only delays the first possible fill; `CROSS_WHOLE_LOTS_BELOW_BOUND` when a size cannot fill)
-  and relaxes linearly to the worst bound over 20 s (`MARKET_AUCTION_DAA`), then stays there until the IOC kill; activation and life are the plain market
-  order's (+30 DAA, 300 DAA). The worst bound is the worst ROUTE level the amount needs (direct levels are not route liquidity) minus / plus the slippage
-  bound (default 3%); the maker receives exactly `n x (rate(t) - tipLot)` at the fill's time `t`, so matcher competition improves the price. The ticket
-  shows the expected average, the start and the worst rate ("fills between {start} and {worst}; better if matchers compete"); resting cross limits keep a
-  fixed rate. The app signs no taker (`swapRoute`) transaction.
-* **Confirmation screen.** `decodeSigning` describes a cross limit from the state alone (pair, lots, guaranteed rate per lot and per whole token (an auction: the start-to-worst range and its window),
-  minimum received at the worst rate, tip, time in force, delivery carrier). A token B outside the registry is a warning; a B pinned to another program, family or
-  extension than its registry entry, a `bFamily` its program contradicts, or a rate the covenant refuses (at or below the tip, a fixed rate with an end, a malformed or overflowing auction) is blocking. A cancel sweeps the strays of
-  BOTH tokens (each in its own transfer; `cross-strays-swept`); cancel-all cancels every cross limit in a transaction of its own.
-* **My orders** lists cross limits with the pair (link to the pair view), the guaranteed rate, filled / left and status; cancel and refund work as for asks.
-* **Mock.** `npm run mock -- --pair` (or `POST /mock/seed {pair: true}`) adds EXUSD (6 decimals) with a KAS book and resting cross limits on EXKCC/EXUSD;
-  `mock/pairs.mjs` serves both pair endpoints. The e2e registry patch lists EXUSD (`e2e/ui/pair.spec.ts`).
+* **Book.** `GET /v1/pairs/{base}/{quote}/book`, three sources drawn apart: `direct` (resting `KobPair` orders), `entry` (if-done
+  pair entries resting at their limit) and `via KAS` (quotes implied through the two KAS books). Prices are exact rationals: the
+  indexer quotes `price_num / price_den` QUOTE base units per BASE base unit; the UI shows QUOTE per WHOLE BASE as exact decimal
+  text (asks rounded up, bids down; floats only for depth bars; `src/kob/pair.ts`). A crossed book is drawn as it is. Live refresh
+  on `book:<base>` / `book:<quote>`; an indexer without the pair routes (404 / 405 / 501) shows "pair book unavailable" and the
+  ticket still works.
+* **Prices come only from KAS-book fills.** The chart is the indexer's pair candles (derived from the two KAS series) or the
+  client-side ratio of the two KAS candle series; last / change / high / low are KAS-derived. A pair fill is volume only: the
+  fills list has no price column.
+* **Ticket.** The same ticket and order types as a KAS market (`planPair`, `src/kob/orders/pair-plan.ts`): limit / IOC / FOK /
+  market / streaming / close / TWAP / DCA / Dutch are `KobPair`, stops / trailing / take-profit / OCO are `KobCondPair`, IFD / IFO
+  / bracket / repeat are `KobIfdPair` with a `KobCondPair` exit. Amounts are base units of A, prices B base units per whole A,
+  tips KAS. A sell holds exactly its amount of A; a buy holds a B escrow; the order UTXO prefunds one delivery carrier per
+  budgeted fill and the tip. A pair stop arms from evidence of one of two modes: two KAS-book fills of A and B in the same
+  transaction, or a resting `KobPair` filled at or beyond the stop.
+* **Confirmation screen.** `decodeSigning` checks both tokens against the registry and a new order's terms against kob-wasm,
+  shows what returns of A and of B (custodies and strays of both tokens) and, for a pair stop armed or trailed by the
+  transaction, its evidence in either mode. Nothing of a pair order is shown as a KAS price.
+* **My orders** lists a pair order under the type of the KAS kind it mirrors, with the pair (link to the pair view), its prices
+  in B, filled / left and status; cancel and refund work as for the KAS kinds, an amend is always a cancel-replace.
+* **Mock.** `npm run mock -- --pair` (or `POST /mock/seed {pair: true}`) adds EXUSD (6 decimals) with a KAS book and resting pair
+  orders of every kind on EXKCC/EXUSD; `mock/pairs.mjs` serves the pair endpoints. The e2e registry patch lists EXUSD
+  (`e2e/ui/pair.spec.ts`).
 
 ## My orders: amend, close, fills, notifications
 
-* **Amend.** A plain ask keeping its lots, and a plain bid keeping its token and lot, are amended IN PLACE (one `AMEND` record: same
+* **Amend.** A plain ask keeping its scale and amount, and a plain bid keeping its token and scale, are amended IN PLACE (one `AMEND` record: same
   order id, the ask's custody never moves, the bid's escrow pays the fee or is topped up). Stops / take-profit / OCO have a quick form
-  (prices, lots, tip, the stop's worst price) and, like trailing stops and IFD / IFO entries, the full replace form: the order is turned back
+  (prices, amount, tip, the stop's worst price) and, like trailing stops and IFD / IFO entries, the full replace form: the order is turned back
   into its ticket intent (`src/ui/orders/replace-intent.ts`), edited in the ticket's own fields (band, trigger rule, trailing, expiry,
-  activation) and re-planned as ONE cancel-replace transaction. A resting cross limit amends its rate, lots and tip. Repeat entries and booked
+  activation) and re-planned as ONE cancel-replace transaction (pair orders always take this path). Repeat entries and booked
   exits are cancelled as a position (their exits re-arm the entry). A GTC replacement gets a fresh 90 days.
 * **Close.** Buy first: cancel the position's orders, then sell the released tokens at market (`?ticket=close`). Sell first: cancel
-  them (their KAS comes back), then buy back the lots sold and not yet bought back at market (`?ticket=cover&lots=N`).
-* **Fills.** Per order on demand (time, lots, price, payout, average) and every fill of the wallet as one CSV (`src/ui/orders/fills-model.ts`).
+  them (their KAS comes back), then buy back the amount sold and not yet bought back at market (`?ticket=cover&amount=N`).
+* **Fills.** Per order on demand (time, amount, price, payout, average) and every fill of the wallet as one CSV (`src/ui/orders/fills-model.ts`).
 * **Notifications** (opt-in, client side only): fills, partial fills, stops armed / triggered, expiry soon, expired / refunded / killed,
   incoming payments and watched x402 invoices; in-app list and toasts, optionally browser notifications (`src/kob/notifications.ts`,
   `src/ui/notify/`).
@@ -130,8 +124,8 @@ and the pair ticket (`src/ui/market/PairPage.tsx`, `CrossTicket.tsx`, `pair-mode
 * **Records.** When the browser refuses to store the placement records they live in the tab only: My orders says so and offers the backup.
 * **Strays (sweep in place).** Token UTXOs sent to an order from outside are listed per order and in the strays panel (foreign ones, of another token,
   flagged; a token outside the registry marked unknown). "Sweep strays" (`planSweep`, kob-wasm `sweepOrder`, KOB1 `SWEEP` record) returns them while
-  the order lives on: the maker's cancel continues the order under the SAME script (same price, lots, custody; its 90-day idle window restarts), one
-  token output per token (own token within one extension commitment and the program's inputs, a cross limit's B, foreign strays with a proven state);
+  the order lives on: the maker's cancel continues the order under the SAME script (same price, amount, custody; its 90-day idle window restarts), one
+  token output per token (own token within one extension commitment and the program's inputs, a pair order's other token, foreign strays with a proven state);
   the rest stays for a later sweep. A plain ask's carrier pays the fee, every other kind one wallet coin. The confirmation screen (`decodeSigning`,
   kind `sweep`) re-checks the record (`src/kob/sweep.ts`, as `verify_sweep`) and blocks another script, a record that does not verify, the swept
   order's custody being spent or any token to another key. A cancel that would abandon strays (more than one transaction can move) offers "Sweep
@@ -195,16 +189,17 @@ sha256 (`scripts/fetch-sdk.mjs`); a mismatch aborts before anything is unpacked.
   wallet's token UTXOs (`src/data/token-tracker.ts`). Every UTXO is still verified on the node (its P2SH is derived from the claimed state) before it is spent. The
   indexer cannot list issuance (genesis) outputs and may lag a block, so the local tracker (outputs of the app's own transactions, manual import) stays as the
   complement; an outpoint the indexer lists is dropped from the local list. An indexer without the endpoint (404 / 501) degrades to the local tracker.
-* **One lot convention.** `lot_size` is the standard lot in TOKEN BASE UNITS in the registry, in the indexer allowlist and in `GET /v1/tokens`; an order is listed only when
-  `lotUnits * unit == lot_size`. The app writes `lotUnits = 1, unit = lot_size` (price of a state = sompi per lot); other clients may split the lot differently, so every
-  book level and order row carries its own `lot_units` and the app converts to per-lot prices row by row (equal per-lot prices merge).
+* **Units.** Amounts are token base units and prices sompi per whole token: every order carries its `scale` (`10^decimals` of its
+  token, at most `10^9`), and `GET /v1/tokens` returns each token's `scale` (`src/kob/units.ts`). There are no lots and the protocol
+  has no price tick: the book's grouping step and column decimals use a display tick, the finest step the visible prices sit on
+  (`src/ui/market/book-model.ts`).
 * **Token families.** KCC-20 and KRON tokens trade through the same planners: the family follows the registry template (`kcc20-*` / `kron-*`), order states are tagged
   `KobAsk` / `KobAskKron` etc. (`src/kob/order-facts.ts`: `baseKind`, `kindFor`), token states are `Kcc20State | KronState` (`src/kob/token-state.ts`; a wallet's KRON tokens are
   address-presence UTXOs, `id_type` 3, authorised by a P2PK funding input, never by a signature of their own). Issuance is KCC-20 only.
 * **Fees.** A transaction pays `rate x max(compute, normalized transient)` (storage mass is not charged). The RATE is the dynamic fee policy (`src/kob/fee-policy.ts`, the same
   policy as the Rust executor): the node's `getFeeEstimate` bucket of the action's urgency, clamped to [100 sompi per gram (the relay floor), `fees.maxRate` (default 1000)], with a once-only
   rebuild at a lower rate when the fee would exceed `fees.maxFeeKas` (default 1 KAS per transaction; 0 = no cap). Urgency: HIGH = IOC / FOK / market / streaming / close, a limit that
-  crosses the book now and cross IOC / FOK (priority bucket, sub-second); NORMAL = resting orders, schedules, stops, if-done, cancels, amends, refunds, issuance (first normal bucket,
+  crosses the book now and pair IOC / FOK (priority bucket, sub-second); NORMAL = resting orders, schedules, stops, if-done, cancels, amends, refunds, issuance (first normal bucket,
   sub-minute); LOW = housekeeping (first low bucket). No usable estimate (call failed, method missing, malformed, older than 60 s), `fees.dynamic: false`, or a wallet that cannot afford
   the picked rate = the floor, never an error. The confirmation screen (and the ticket's disclosure) shows the rate, its bucket and expected time, and a note for every fallback or cap.
   `fees.dynamic` is also a Settings switch. The mock server answers `GET /node/fee-estimate` once `POST /mock/fee-estimate {priority, normal, low}` set it (404 otherwise = floor).

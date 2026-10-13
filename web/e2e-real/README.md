@@ -4,6 +4,10 @@ Drives the built KOB web app with the REAL released wallet extensions (KasWare 0
 (`KOB_TN10_WRPC`, default `ws://127.0.0.1:18210`; `NODE_WS` in `.env` overrides it) and proves, per wallet: issue a token, then place and cancel a limit sell, a limit buy, a buy-first IFD and a sell OCO.
 Test money only. Kastle is not covered (optional, off in the app).
 
+**Status.** The scenarios were written before the current ticket: they size orders in lots (the removed `order-lots` field and a
+registry entry with a lot and a tick, `scenarios.mjs`), so they need porting to base-unit amounts before the next run. The results
+below are those of the run of 2026-09-29.
+
 ## Run
 
 ```
