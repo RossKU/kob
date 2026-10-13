@@ -24,20 +24,20 @@ trader between half a dollar and its `maxUsd`, a pair order `pairUsd` dollars of
 and every KAS amount (bid escrows, prefunds, carriers) come from the web planners and kob-wasm's exact helpers. The registry the soak
 writes has no `lot_size` and no `tick` (`kob_protocol::registry` reads and ignores both).
 
-The checker (`src/checker/rules.ts`; incidents in `run/incidents.jsonl`) runs every invariant over every soak token:
+The checker (`src/checker/run.ts`, formulas in `rules.ts`; incidents in `run/incidents.jsonl`) runs every invariant over every soak token:
 
 | # | Invariant | What it asserts |
 |---|---|---|
 | 1 | custody | an ask-side order's live custody token UTXO holds exactly `amountLeft` base units and is in the node's UTXO set; a live plain ask or `KobPair` keeps `filled_amount + amount_left == initial_amount` |
-| 2 | stray | token UTXOs sent to an order from outside are tracked until a cancel or a sweep returns them |
+| 2 | stray | a stray that disappears from `/v1/strays` was spent by a `cancel` of its order |
 | 3 | all-in | a sell receives at least `ceil(n × (q − tip) / scale)`, a buy pays at most `floor(n × (q + tip) / scale)`; a merged repeat take-profit pays the maker the proceeds minus `ceil(n × rptPrice / scale)`; a sell-first entry funds its exit with at least `ceil(n × (q − tip) / scale)` |
-| 4 | ioc-fok | no IOC / FOK is still open after its kill time; a FOK fill closes the order |
+| 4 | ioc-fok | no IOC / FOK is live 1,200 DAA past its kill time; a FOK is never partial |
 | 5 | trigger | every `arm` / `trail` event is backed by a fill of the stop's token and `scale`, of at least `minTouch` base units, in the same transaction |
 | 6 | repeat | entry `amountLeft` + live booked exit `amountLeft` `<= initial_amount`; an exit's `rptPrice` is the entry's `price + tip` (buy-first) or `price − tip` with `rptPre = prefund` (sell-first) |
 | 7 | x402 | every payment the payer got a 200 for is in the facilitator ledger exactly once and `accepted` |
-| 8 | fee | every bot transaction pays exactly rate × mass, at a rate in [100, `fees.maxRate`] sompi per gram |
-| 9 | indexers-agree | sampled orders have the same `filled_amount` and `amount_left` on both indexers |
-| 10 | health | both indexers follow the chain |
+| 8 | fee | every bot transaction (`run/state/txs.jsonl`) pays exactly rate × max(compute, normalized transient mass), at a rate in [100, `fees.maxRate`] |
+| 9 | indexers-agree | both indexers list the same orders and fills (up to the lower cursor less 200 DAA) and agree on sampled orders' `filled_amount` and `amount_left` |
+| 10 | health | follower state, lag and progress of both indexers; node sync, book staleness and step age of both executors |
 | 11 | pair | a pair order fill carries no price (volume only) and honours the order's guarantee at its quote; a pair stop arms only from evidence of one of the two modes |
 | 12 | supply | per token, the live token UTXOs add up to the supply |
 
