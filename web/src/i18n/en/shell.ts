@@ -64,7 +64,7 @@ export default {
   'shell.banner.wrong-network': 'The indexer serves another network than this app ({network}). Its data is ignored for trading: fix the indexer URL in Settings.',
   'shell.banner.noIndexer': 'No indexer is configured. The order book and order history are unavailable; set an indexer URL in Settings.',
   'shell.banner.nodeDown': 'The Kaspa node cannot be reached: balances, DAA time and sending transactions are unavailable until it is back.',
-  'shell.banner.registry': 'The token registry could not be loaded ({message}). Only tokens found through the indexer are shown, and they are not tradable.',
+  'shell.banner.registry': 'The token registry could not be loaded ({message}). Only tokens found through the indexer are shown, as unlisted tokens named by their covenant id: check the id before trading.',
   'shell.reorg.deep': 'Deep chain reorganisation',
   'shell.reorg.deepTip': 'The chain replaced its last {blocks} blocks, far more than a normal reorganisation. Displayed data was refreshed; recent confirmations may have changed.',
   'shell.banner.configWarnings': 'Some settings were ignored',

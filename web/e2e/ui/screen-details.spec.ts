@@ -204,3 +204,13 @@ test('on a phone the auto-refund checkbox keeps its text beside it', async ({ ap
   expect(text!.x).toBeGreaterThan(box!.x + box!.width - 1);
   expect(Math.abs(text!.y - box!.y)).toBeLessThan(12);
 });
+
+test('without the registry the banner matches what the page does: indexer tokens trade as unlisted tokens', async ({ appPage: page, mock }) => {
+  await page.route('**/registry/tokens.json', (r) => r.fulfill({ status: 500, body: 'down' }));
+  const tok = await mock.token();
+  await page.goto(`/#/market/${tok.covenant_id}`);
+  await expect(page.getByTestId('banner-registry')).toContainText('unlisted tokens named by their covenant id');
+  await expect(page.getByTestId('banner-registry')).not.toContainText('not tradable');
+  await expect(page.getByTestId('order-ticket')).not.toHaveAttribute('data-state', 'untradable');
+  await expect(page.getByTestId('ticket-open-caution')).toBeVisible();
+});
