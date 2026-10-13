@@ -339,6 +339,7 @@ body.modal-open { overflow: hidden; }
 .kv { display: grid; grid-template-columns: minmax(110px, max-content) 1fr; gap: 4px 16px; margin: 0; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.kv dd .amount { white-space: normal; } /* a very long amount (18 decimals) wraps inside its card instead of widening the page */
 .kv-compact { gap: 2px 12px; font-size: 0.9rem; }
 @media (max-width: 520px) { .kv { grid-template-columns: 1fr; gap: 0; } .kv dd { margin-bottom: 6px; } }
 

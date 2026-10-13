@@ -37,6 +37,14 @@ describe('issueText: parameter formatting', () => {
     expect(issueText(issue('PRICE_FAR_FROM_MARKET', { percent: '62.5', reference: 250_000_000n }), {})).toContain('62.5% from the market (2.5 KAS)');
   });
 
+  it('prices of a token with more than 9 decimals are per whole token (the state price is per 10^9 base units)', () => {
+    const i = issue('PRICE_AGGRESSIVE_VS_MARKET', { percent: '50', reference: 2_500_000n });
+    // 18 decimals: the standard scale is 10^9 base units, a billionth of a token: 0.025 KAS per 10^9 base units = 25,000,000 KAS per token
+    expect(issueText(i, { tokenDecimals: 18, tokenTicker: 'T18' })).toContain('(25000000 KAS)');
+    expect(issueText(i, { tokenDecimals: 9 })).toContain('(0.025 KAS)');
+    expect(issueText(issue('MARKETABLE_AUCTION', { touch: 2_490_000n }), { tokenDecimals: 12 })).toContain('(24.9 KAS)');
+  });
+
   it('formats token amounts with the token decimals and ticker when known, else as base units', () => {
     const i = issue('INSUFFICIENT_TOKENS', { needed: 12_500n, have: 3_000n, shortfall: 9_500n });
     expect(issueText(i, { tokenDecimals: 3, tokenTicker: 'TST3' })).toBe('Not enough tokens: needs 12.5 TST3, you hold 3 TST3 (short 9.5 TST3).');

@@ -213,4 +213,5 @@ export default {
   'market.stats.unitOf': '{base} / {quote}',
   'market.chart.unitOf': '{base} / {quote}',
   'market.token.scaleValue': 'per {scale} base units (one whole token)',
+  'market.token.scaleValuePart': 'per {scale} base units ({part} token); prices are shown per whole token',
 } as Record<string, string>;

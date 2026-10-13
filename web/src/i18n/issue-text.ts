@@ -172,8 +172,18 @@ function formatWait(seconds: bigint): string {
   return t('issues.dur.m', { m: m.toString() });
 }
 
+/**
+ * The findings carry the state price (per `scale` base units, the standard scale `10^min(decimals, 9)`): for a token of more than 9 decimals
+ * that is a part of a token, so the sentence's "per token" needs the price of `10^decimals` base units.
+ */
+function perWholeToken(b: bigint, ctx: IssueTextContext): bigint {
+  const d = ctx.tokenDecimals ?? 0;
+  return d > 9 ? b * 10n ** BigInt(d - 9) : b;
+}
+
 /** A price per whole token: KAS on a KAS market, the quote token B on a pair (B base units per whole A). */
-function formatPrice(b: bigint, ctx: IssueTextContext): string {
+function formatPrice(raw: bigint, ctx: IssueTextContext): string {
+  const b = perWholeToken(raw, ctx);
   if (ctx.quoteDecimals === undefined) return `${formatKas(b)} KAS`;
   const amount = formatTokenAmount(b, ctx.quoteDecimals);
   return ctx.quoteTicker ? `${amount} ${ctx.quoteTicker}` : amount;
@@ -194,7 +204,7 @@ function formatParam(code: string, name: string, v: string | number | bigint, ct
       if (fmt === 'kas') return `${formatKas(b)} KAS`;
       if (fmt === 'bps') return formatBps(b);
       if (fmt === 'price') return formatPrice(b, ctx);
-      if (fmt === 'pairPrice') return ctx.quoteDecimals === undefined ? t('issues.fmt.baseUnits', { n: b.toString() }) : formatTokenAmount(b, ctx.quoteDecimals);
+      if (fmt === 'pairPrice') return ctx.quoteDecimals === undefined ? t('issues.fmt.baseUnits', { n: b.toString() }) : formatTokenAmount(perWholeToken(b, ctx), ctx.quoteDecimals);
       if (fmt === 'pairToken') return formatPairToken(b, params.ticker, ctx);
       return formatToken(b, ctx);
     }

@@ -2,6 +2,7 @@ import type { ComponentChildren } from 'preact';
 import type { Services } from '../../app/services';
 import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
+import { formatUnits } from '../../kob/units';
 import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
 import { PowersWarning, SharedTickerNote, StatusBadges, powerName, tokenTitle } from './TokenBadges';
 import { shortCovenantId, templateDetail, type TokenRow } from './token-model';
@@ -114,7 +115,13 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
             { label: t('market.token.decimals'), value: r.decimals ?? '-' },
             {
               label: t('market.token.scale'),
-              value: r.scale !== null ? t('market.token.scaleValue', { scale: r.scale.toString() }) : '-',
+              // the standard scale is 10^decimals, at most 10^9: a token of more than 9 decimals quotes per a part of a token
+              value:
+                r.scale === null
+                  ? '-'
+                  : r.decimals !== null && r.scale !== 10n ** BigInt(r.decimals)
+                    ? t('market.token.scaleValuePart', { scale: r.scale.toString(), part: formatUnits(r.scale, r.decimals) })
+                    : t('market.token.scaleValue', { scale: r.scale.toString() }),
               'data-testid': 'token-scale',
             },
             {

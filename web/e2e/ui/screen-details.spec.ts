@@ -10,6 +10,7 @@ import { fillFields, pickType, reviewAndSign, waitReviewable } from '../helpers/
 
 test.use({ autoOpen: false });
 
+const noPageScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
 
 test.describe('KasWare that starts on mainnet and switches', () => {
   test.use({ walletOptions: { network: 'mainnet' } });
@@ -142,4 +143,30 @@ test('the skip link is the first stop of the keyboard and moves the focus to the
   await page.keyboard.press('Enter');
   await expect(page.getByTestId('main')).toBeFocused();
   await expect(page).toHaveURL(/#\/market\//);
+});
+
+test.describe('a token of 18 decimals', () => {
+  const D18 = 'd1'.repeat(32);
+  test('price scale text, issue prices per whole token and a long balance that stays inside its card', async ({ appPage: page, mock }) => {
+    await mock.seed({ tokens: [{ ticker: 'EIGHTEEN', name: 'Eighteen decimals', covenant_id: D18, program: 'KCC20Ref_8x8', extension_commitment: 'ee'.repeat(32), decimals: 18, tick: 10_000 }] });
+    await mock.seed({ book: { token: D18, mid: 2_500_000, tick: 10_000, levels: 3 } });
+    await mock.giveKas('alice', 1000n * 100_000_000n, 1);
+    await mock.giveTokens('alice', 1_234_567_890_123_456_789n, { token: 'EIGHTEEN' });
+    const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
+    for (const t of reg.templates) t.review_status = 'reviewed';
+    const exkcc = reg.tokens.find((t: { ticker: string }) => t.ticker === 'EXKCC');
+    reg.tokens.push({ ...exkcc, status: 'listed', verified: true, ticker: 'EIGHTEEN', name: 'Eighteen decimals', covenant_id: D18, decimals: 18 });
+    await page.route('**/registry/tokens.json', (route) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(reg) }));
+    await page.goto(`/#/market/${D18}`);
+    await connectWallet(page);
+    await expect(page.getByTestId('order-ticket')).toBeVisible();
+    // the standard scale is 10^9 base units: a billionth of a token, not "one whole token"
+    await expect(page.getByTestId('token-scale')).toContainText('per 1000000000 base units (0.000000001 token)');
+    // the book quotes 0.025 KAS per 10^9 base units = 25,000,000 KAS per token; a sell far below it is flagged with the per-token reference
+    await pickType(page, 'limit', 'sell');
+    await fillFields(page, { amount: '1', price: '1' });
+    await expect(page.getByTestId('order-issue-PRICE_AGGRESSIVE_VS_MARKET')).toContainText(/\(2[45]\d{6} KAS\)/);
+    await expect(page.getByTestId('balance-free')).toContainText('1.234567890123456789');
+    expect(await noPageScroll(page)).toBe(true);
+  });
 });
