@@ -35,6 +35,7 @@ import {
 import { expectedFromPlan, newWarnings } from './plan-expected';
 import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
 import { maxBuyAmount } from './max-amount';
+import { orderLabel } from './order-label';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan } from './use-ticket';
 import { rememberPairForm, takePairFlip } from './pair-flip';
 import './ticket.css';
@@ -365,7 +366,7 @@ export function OrderTicket(props: OrderTicketProps) {
       const p = planOrder(withRefs(fresh, await touchesOf().catch(() => ({ touches: [], unavailable: verifiers.map((v) => v.label) }))), r.intents[index]!);
       if (!p.ok || !p.built || errors(p).length > 0) return stop(t('ticket.reviewChanged'));
       const title = laddered ? t('ticket.ladder.confirmTitle', { level: index + 1, levels, side: confirmSide, type: typeName }) : t('ticket.confirmTitle', { side: confirmSide, type: typeName });
-      const label = laddered ? `${form.type} ${form.side} ${index + 1}/${levels}` : `${form.type} ${form.side}`;
+      const label = orderLabel(form.type, form.side, laddered ? { level: index + 1, levels } : undefined, name);
       // a warning that only the fresh data raised (the price moved, the depth shrank, a reference now disagrees) is shown on the confirmation
       const freshWarnings = newWarnings(shownPlan, p).map((i) => issueText(i, issueCtx));
       setConfirm({
@@ -400,7 +401,7 @@ export function OrderTicket(props: OrderTicketProps) {
         return;
       }
       run.current = null;
-      const label = levels > 1 ? `${form.type} ${form.side} x${levels}` : c?.label ?? '';
+      const label = levels > 1 ? orderLabel(form.type, form.side, { levels }, name) : c?.label ?? '';
       setResult({ txid: r.txid, label, ...(levels > 1 ? { note: t('ticket.ladder.done', { levels }) } : {}) });
       // the order is placed: the next one starts empty (the price, type and side stay: the next click is usually a variation)
       setForm((f) => setValue(f, 'amount', ''));

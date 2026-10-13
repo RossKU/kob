@@ -86,7 +86,7 @@ describe('loadOrders', () => {
     const data = await loadOrders(services({ chain: chainWith(a) }), MAKER.pk, store, { spkToAddress: testAddress });
     expect(data.entries).toHaveLength(1);
     const row = describeEntry(data.entries[0], { kob, clock: data.clock });
-    expect(row).toMatchObject({ status: 'open', live: true, canCancel: true, source: 'node', label: 'limit sell' });
+    expect(row).toMatchObject({ status: 'open', live: true, canCancel: true, source: 'node', label: 'Sell · Limit' });
     expect(data.snapshots).toHaveLength(1);
     expect(data.indexerError).toBeNull();
     expect(data.nodeError).toBeNull();

@@ -56,7 +56,20 @@ test.describe('market panels when the indexer cannot be reached', () => {
     await expect(page.getByTestId('trades-section').getByText('No trades yet.')).toHaveCount(0);
     await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'empty');
     await expect(page.getByTestId('depth-empty')).toHaveText('The book could not be loaded.');
+    // no book, no grouping to offer (it showed "1x · 0.00000001")
+    await expect(page.getByTestId('book-group')).toHaveCount(0);
   });
+});
+
+test('a new page takes the keyboard focus to its content', async ({ appPage: page, mock }) => {
+  await openMarket(page, mock, { connect: false });
+  await page.getByTestId('nav-orders').click();
+  await expect(page).toHaveURL(/#\/orders/);
+  await expect(page.getByTestId('main')).toBeFocused();
+  await page.getByTestId('nav-settings').focus();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/#\/settings/);
+  await expect(page.getByTestId('main')).toBeFocused();
 });
 
 test('the depth legend keeps the estimate mark with its amounts', async ({ appPage: page, mock }) => {

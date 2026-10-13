@@ -83,6 +83,8 @@ for (const decimals of [0, 18]) {
     await atBothWidths(page, async () => {
       expect(await cutCells(page)).toEqual([]);
     });
+    // a token without decimals takes whole numbers: its amount box says so
+    await expect(page.getByTestId('order-amount')).toHaveAttribute('placeholder', decimals === 0 ? '0' : '0.0');
   });
 }
 

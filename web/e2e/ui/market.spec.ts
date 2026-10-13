@@ -35,7 +35,9 @@ test.describe('shell and token list', () => {
     await expect(row.locator('[data-testid^="token-pair-"]')).toHaveCount(0);
     await expect(appPage.getByTestId('network-badge')).toHaveText('testnet-10');
     await expect(appPage.getByTestId('footer-statement')).toContainText('non-custodial');
-    await expect(appPage.getByTestId('footer-versions')).toContainText('kob-wasm');
+    // the app's version; the engine of an unreleased build (0.0.0) is not shown as a version
+    await expect(appPage.getByTestId('footer-versions')).toContainText(/^App \d+\.\d+\.\d+/);
+    await expect(appPage.getByTestId('footer-versions')).not.toContainText('0.0.0');
   });
 
   test('search filters, and an unknown route falls back to the list', async ({ appPage, mock }) => {

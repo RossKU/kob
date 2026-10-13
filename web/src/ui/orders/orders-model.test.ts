@@ -230,7 +230,7 @@ describe('merging with placement records', () => {
   it('a fresh placement the indexer has not seen yet still shows up, cancellable once resolved live on the node', () => {
     const [e] = buildEntries([], [rec], new Map([[rec.covenantId, live]]));
     const row = describeEntry(e, ctx);
-    expect(row).toMatchObject({ status: 'open', live: true, source: 'node', canCancel: true, side: 'sell', typeKey: 'limit-gtd', label: 'limit sell', placementTx: placed.txid });
+    expect(row).toMatchObject({ status: 'open', live: true, source: 'node', canCancel: true, side: 'sell', typeKey: 'limit-gtd', label: 'Sell · Limit', placementTx: placed.txid });
     expect(row.price).toBe(250_000_000n);
   });
 

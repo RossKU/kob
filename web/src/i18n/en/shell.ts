@@ -72,6 +72,7 @@ export default {
 
   'shell.footer.statement': 'KOB is non-custodial. Your keys never leave your wallet, and before every signature this app decodes exactly what the transaction does.',
   'shell.footer.versions': 'App {app} - kob-wasm {kob}',
+  'shell.footer.version': 'App {app}',
   'shell.footer.protocol': 'Covenant order book for KCC-20 tokens on Kaspa',
   'shell.footer.settings': 'Settings and data',
   'shell.footer.recover': 'Recover orders',

@@ -270,7 +270,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           actions={
             <>
               {stale ? <Badge tone={health.assessment.level === 'bad' ? 'bad' : 'warn'} data-testid="book-stale">{t('market.book.stale')}</Badge> : null}
-              <BookGrouping options={groupOptions} value={String(groupIdx)} onChange={(v) => (inverted ? setGroupIdxInv : setGroupIdxNative)(Math.max(0, Number(v) || 0))} />
+              {/* the steps come from the book's tick: no book on screen yet (loading, indexer unreachable), no grouping to offer */}
+              {book.data ? <BookGrouping options={groupOptions} value={String(groupIdx)} onChange={(v) => (inverted ? setGroupIdxInv : setGroupIdxNative)(Math.max(0, Number(v) || 0))} /> : null}
               <Button small variant="ghost" onClick={() => refreshAll(true)} loading={book.loading && !!book.data} title={t('common.refresh')} aria-label={t('common.refresh')} data-testid="book-refresh">
                 {'↻'}
               </Button>

@@ -1,5 +1,5 @@
 // Application shell: header, status bar, global banners, the routed view, footer, toasts.
-import { useEffect } from 'preact/hooks';
+import { useEffect, useRef } from 'preact/hooks';
 import type { ConfigWarning, StoredOverride } from '../config';
 import { t } from '../i18n';
 import { IssueView } from '../ui/issue/IssueView';
@@ -75,6 +75,18 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
   useEffect(() => {
     document.title = `${t('common.appName')} - ${t('common.tagline')}`;
   }, []);
+
+  // a new page moves the focus to its content (screen readers announce it, Tab continues from there), not on the first load and not from an open dialog
+  const routeKey = routeToHash(route);
+  const firstRoute = useRef(true);
+  useEffect(() => {
+    if (firstRoute.current) {
+      firstRoute.current = false;
+      return;
+    }
+    if (document.querySelector('[role="dialog"]')) return;
+    document.getElementById('main')?.focus({ preventScroll: true });
+  }, [routeKey]);
 
   // one socket for the whole app: the shell subscribes to the global channels, views add their own (book:<token>, fills:<token>)
   useEffect(() => {

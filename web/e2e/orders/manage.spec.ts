@@ -263,7 +263,7 @@ test.describe('recovery', () => {
     const backup = JSON.parse(readFileSync(file, 'utf8'));
     expect(backup).toMatchObject({ format: 'kob-backup', version: 1, network: 'testnet-10' });
     expect(backup.records.map((r: any) => r.covenantId)).toEqual([id]);
-    expect(backup.records[0].label).toBe('limit sell');
+    expect(backup.records[0].label).toBe('Sell · Limit');
 
     // clear the local data through Settings
     await page.getByTestId('nav-settings').click();

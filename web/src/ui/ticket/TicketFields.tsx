@@ -102,7 +102,9 @@ export function TicketFields(props: TicketFieldsProps) {
         const helpKey = props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
         const help = has(helpKey) ? t(helpKey, { ticker, quote: props.quoteTicker ?? 'KAS' }) : undefined;
         const phKey = has(`ticket.ph.${id}.${form.type}`) ? `ticket.ph.${id}.${form.type}` : `ticket.ph.${id}`;
-        const defaultHint = value === '' && FIELD_DEFAULTS[id] === undefined && has(phKey) ? t(phKey) : undefined;
+        // a token without decimals takes whole numbers: its amount box says "0", not "0.0"
+        const wholeAmount = spec.kind === 'amount' && !form.kas && ctx.decimals === 0 && phKey === 'ticket.ph.amount';
+        const defaultHint = value === '' && FIELD_DEFAULTS[id] === undefined && has(phKey) ? (wholeAmount ? t('ticket.amountWholePh') : t(phKey)) : undefined;
         const common = { label, error: e ? errorText(e) : null, 'data-testid': spec.testid, disabled: props.disabled };
 
         if (spec.kind === 'bool') {

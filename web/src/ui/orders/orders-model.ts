@@ -9,6 +9,7 @@ import type { Clock } from '../../kob/plan-types';
 import { recordCodec, type PlacementRecord, type ResolvedRecord } from '../../kob/records';
 import type { Hex, OrderState, PairKind, PairTriggerRule } from '../../kob/types';
 import type { KobWasm } from '../../kob/wasm';
+import { labelText } from '../ticket/order-label';
 
 export const ORDER_STATUSES = ['open', 'partial', 'filled', 'cancelled', 'refunded', 'killed', 'closed', 'unknown'] as const;
 export type OrderStatusUi = (typeof ORDER_STATUSES)[number];
@@ -354,7 +355,8 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
     scale, minFill: desc ? desc.minFill : bi(v?.min_fill ?? null),
     auction, armed: armedRaw === null ? null : armedRaw !== 0n, startsAtDaa: activeFrom !== null && nowDaa !== null && activeFrom > nowDaa ? activeFrom : null,
     expiry, renewalUnix, renewalDue, refundDueDaa: refundDue, refundable, custodyOk, placementTx: v?.genesis.txid ?? e.record?.txid ?? null, parent: v?.parent ?? null,
-    label: e.record?.label ?? null,
+    // older versions stored the form's ids ("ifd buy"): shown in the ticket's words
+    label: labelText(e.record?.label),
     // a cancel needs a live order whose current UTXO can be found: proven indexer state, or a node-resolved record
     canCancel: live && (viaView || viaRecord),
     canRefund: refundable,

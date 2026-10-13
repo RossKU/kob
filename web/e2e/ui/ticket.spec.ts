@@ -101,6 +101,8 @@ test.describe('order ticket', () => {
     await page.getByTestId('confirm-close').click();
     await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
     await expect(page.getByTestId('order-result')).toBeVisible();
+    // the order in the ticket's words, not the form's ids ("limit sell")
+    await expect(page.getByTestId('order-result')).toContainText('The node accepted your order (Sell · Limit).');
     await expect(page.getByTestId('order-result-txid')).toHaveAttribute('data-value', txid!);
     // the form starts the next order empty
     await expect(page.getByTestId('order-amount')).toHaveValue('');
