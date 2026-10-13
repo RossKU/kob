@@ -45,7 +45,7 @@ use kob_x402::canonical::requirements_hash;
 use kob_x402::chain::{ChainError, ChainView, Clock, Outpoint, OutputStatus, SubmitError, Tracked, Txid};
 use kob_x402::common;
 use kob_x402::error::{Diag, Reason, Result, X402Error};
-use kob_x402::policy::Policy;
+use kob_x402::policy::{Custody, Policy};
 use kob_x402::safe_tx::{spk_from_hex, spk_to_hex};
 use kob_x402::verify::{PaymentKind, Verified, VerifyCtx};
 use kob_x402::wire::{
@@ -425,9 +425,13 @@ impl Facilitator {
             return json!({ "kinds": [], "extensions": [], "signers": {} });
         }
         let mut profiles = vec![Profile::StandardNative.as_str()];
-        let has_tokens = self.policy.tokens.iter().next().is_some();
+        // only the tokens this facilitator accepts: an issuer-controlled one only when the operator enabled them (every
+        // verifier refuses it otherwise, as a merchant asset and as a swap pay asset)
+        let accepted =
+            || self.policy.tokens.iter().filter(|t| t.custody != Custody::IssuerControlled || self.policy.allow_issuer_controlled);
+        let has_tokens = accepted().next().is_some();
         // the kcc20 profile takes KCC-20 merchant assets only (a KRON token is a swap pay asset)
-        if self.policy.tokens.iter().any(|t| t.is_merchant_capable()) {
+        if accepted().any(|t| t.is_merchant_capable()) {
             profiles.push(Profile::Kcc20.as_str());
         }
         let mut extra = Map::new();
@@ -449,10 +453,7 @@ impl Facilitator {
             extra.insert("invoices".into(), json!(kob_x402::invoice::INVOICE_VERSION));
         }
         if has_tokens {
-            let tokens: Vec<Value> = self
-                .policy
-                .tokens
-                .iter()
+            let tokens: Vec<Value> = accepted()
                 .map(|t| {
                     json!({
                         "asset": hex(&t.covenant_id),

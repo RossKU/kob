@@ -1175,10 +1175,16 @@ fn supported_advertises_only_what_is_configured() {
     assert!(extra.get("routeBindings").is_none() && extra.get("tokens").is_none());
     assert!(!s.to_string().contains("additive"), "additive is never advertised");
 
-    // with a token
+    // with a token: an issuer-controlled one is accepted (and advertised) only when the operator enabled them
     let mut policy = Policy::new(Network::Testnet10);
     let prog = kob_protocol::artifacts::template(kob_protocol::artifacts::TemplateId::Kcc20Ref);
     policy.tokens.insert(AllowedToken::new([0xaa; 32], prog.id, [0xcc; 32], Custody::IssuerControlled, "TKN", 6)).unwrap();
+    assert!(!policy.allow_issuer_controlled);
+    let s = facilitator_with(policy.clone()).supported();
+    let extra = &s["kinds"][0]["extra"];
+    assert_eq!(extra["profiles"], serde_json::json!(["standard-native"]), "every verifier would refuse it");
+    assert!(extra.get("tokens").is_none() && extra.get("routeBindings").is_none());
+    policy.allow_issuer_controlled = true;
     let s = facilitator_with(policy.clone()).supported();
     let extra = &s["kinds"][0]["extra"];
     assert_eq!(extra["profiles"], serde_json::json!(["standard-native", "kcc20"]));
