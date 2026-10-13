@@ -745,6 +745,14 @@ impl Facilitator {
                 }
                 return Ok(Drive::Waiting("creation not seen yet"));
             }
+            // An execution of ours may have been accepted since step (a) read it (one that left the mempool inside a block
+            // merged only now, after it was marked dead): the intent being gone is then this payment, not someone else's spend.
+            for x in &rec.executions {
+                let Some(w) = Self::exec_out(&rec, x) else { continue };
+                if self.accepted_daa(&w.0, &w.1).map_err(node)?.is_some() {
+                    return Ok(Drive::Waiting("confirmations"));
+                }
+            }
             return Ok(self.give_up(
                 &e,
                 "intent_spent: the intent was spent outside this facilitator (the payer's cancel or another keeper's execution)"

@@ -72,10 +72,19 @@ struct RivalChain {
     /// `(creation, n, forward)`: the next `n` submits of a transaction spending an output of `creation` (an execution)
     /// answer `Unavailable`; with `forward` the node took the transaction anyway (only the answer was lost).
     unknown_exec: Mutex<Option<(Txid, u32, bool)>>,
+    /// `creation`: while set, no transaction shows in the mempool (an execution that left it inside a block not merged yet),
+    /// and the first UTXO lookup of an output of `creation` (the intent) mines the mempool first (that block is merged).
+    merge_on_intent_lookup: Mutex<Option<Txid>>,
 }
 
 impl ChainView for RivalChain {
     fn utxos(&self, wanted: &[(Outpoint, ScriptPublicKey)]) -> Result<Vec<Option<ChainUtxo>>, ChainError> {
+        let mut m = self.merge_on_intent_lookup.lock().unwrap();
+        if m.is_some_and(|c| wanted.iter().any(|(o, _)| o.txid == c)) {
+            *m = None;
+            self.inner.mine(0);
+        }
+        drop(m);
         self.inner.utxos(wanted)
     }
     fn utxos_of(&self, spk: &ScriptPublicKey) -> Result<Vec<(Outpoint, ChainUtxo)>, ChainError> {
@@ -88,6 +97,9 @@ impl ChainView for RivalChain {
         self.inner.output_status(out, spk)
     }
     fn in_mempool(&self, txid: &Txid) -> Result<bool, ChainError> {
+        if self.merge_on_intent_lookup.lock().unwrap().is_some() {
+            return Ok(false);
+        }
         self.inner.in_mempool(txid)
     }
     fn submit(&self, tx: &Transaction) -> Result<Txid, SubmitError> {
@@ -213,6 +225,7 @@ fn world() -> World {
         fees: Default::default(),
         on_rival: Mutex::new(None),
         unknown_exec: Mutex::new(None),
+        merge_on_intent_lookup: Mutex::new(None),
     });
     let clock = Arc::new(FixedClock::new(NOW_MS));
     let ledger = Arc::new(Ledger::in_memory());
@@ -733,6 +746,28 @@ fn an_execution_whose_submit_outcome_is_unknown_is_never_executed_twice() {
         assert!(is_repeat_of(&again, &r), "the identical retry reads the outcome: {again:?}");
         assert_eq!(merchant_outputs(&w), 1);
     }
+}
+
+#[test]
+fn an_execution_merged_while_the_keeper_looks_at_the_intent_is_the_payment() {
+    let w = world();
+    let offer = w.kas_intent_offer(5 * KAS, MERCHANT);
+    let p = w.pay_t2k(&offer, RH, 3 * WHOLE);
+    let req = request(&offer, &p.payload);
+    // the creation is broadcast; nothing is mined within the settle wait
+    let r = w.fac.settle(SHOP, &req);
+    assert_eq!(diag(&r), "settlement_pending", "{r:?}");
+    w.chain.mine(0);
+    // the identical retry executes the intent; the execution stays in the mempool
+    let r = w.fac.settle(SHOP, &req);
+    assert_eq!(diag(&r), "settlement_pending", "{r:?}");
+    assert_eq!(merchant_outputs(&w), 0);
+    // the execution leaves the mempool in a block that is merged only while the keeper reads the intent's UTXO
+    *w.view.merge_on_intent_lookup.lock().unwrap() = Some(p.txid);
+    let r = w.fac.settle(SHOP, &req);
+    assert_eq!(merchant_outputs(&w), 1, "the execution paid the merchant");
+    assert!(r.success, "the payment that went through is reported, not `intent_spent`: {r:?}");
+    assert_eq!(w.ledger.get(&hex(&p.txid)).unwrap().state, State::Accepted);
 }
 
 /// Runs once, at the first backoff of the payer's retry.

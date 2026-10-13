@@ -4,6 +4,13 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Facilitator: an execution accepted while the keeper reads the intent is the payment
+
+- kob-executor intents: an execution that left the mempool without being accepted yet (inside a block not merged) was marked
+  dead; when it was accepted before the keeper read the intent's UTXO, the intent was gone and the payment was answered
+  `intent_spent` and failed for good, though the merchant was paid. Before giving up on a spent intent the keeper now checks
+  every execution of its own for acceptance and waits for its finality.
+
 ### Facilitator: a refused repeat submit with an unreadable chain stays unknown
 
 - kob-executor: when a submit with an unknown outcome is repeated and the node refuses the repeat, the facilitator reads the
