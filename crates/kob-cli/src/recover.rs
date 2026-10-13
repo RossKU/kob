@@ -631,7 +631,8 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
     })?;
     let cov = to_hex(&f.entry.covenant_id);
     let info = json!({"action": "cancel", "covenant_id": cov, "kind": state.template_id().name()});
-    let sent = sign_validate_send(&built, signer, a.out_dir.as_deref(), &format!("{cov}.cancel.json"), info, a.dry_run, &a.node)?;
+    let sent =
+        sign_validate_send(&built, signer, a.out_dir.as_deref(), &format!("{cov}.cancel.json"), info, a.dry_run, &a.node, &a.network)?;
     Ok(json!({
         "status": if sent.submitted.is_some() { "submitted" } else { "signed" },
         "txid": sent.txid,

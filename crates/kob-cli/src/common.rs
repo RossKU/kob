@@ -335,9 +335,14 @@ pub fn sign_validate_send(
     extra: Value,
     dry_run: bool,
     node: &str,
+    network: &str,
 ) -> Result<Sent, String> {
     if let Some(r) = built.sign.iter().find(|r| r.pubkey != signer.pubkey) {
         return Err(format!("input {} needs the signature of {}, not of this key", r.input_index, to_hex(&r.pubkey)));
+    }
+    if !dry_run {
+        // a signature commits to no network: never sign for one network what a node of another would accept
+        wrpc::check_node_network(node, network, NODE_TIMEOUT)?;
     }
     let keys = BTreeMap::from([(signer.pubkey, signer.secret)]);
     let sigs = sign_locally(built, &keys).map_err(|e| format!("sign: {e}"))?;

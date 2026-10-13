@@ -242,7 +242,7 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
         Err(o) => return Ok(o),
     };
     let Prepared { built, name, info, disclosure, funding, returned, left } = p;
-    let sent = sign_validate_send(&built, signer, a.out_dir.as_deref(), &name, info, a.dry_run, &a.node)?;
+    let sent = sign_validate_send(&built, signer, a.out_dir.as_deref(), &name, info, a.dry_run, &a.node, &a.network)?;
     Ok(Outcome {
         status: if sent.submitted.is_some() { "submitted" } else { "signed" },
         json: json!({

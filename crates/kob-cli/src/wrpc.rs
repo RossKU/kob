@@ -170,6 +170,48 @@ pub fn call(url: &str, method: &str, params: Value, timeout: Duration) -> Result
     r
 }
 
+/// A network name in the CLI's canonical form (`mainnet`, `testnet-10`, `simnet`, `devnet`): what `getBlockDagInfo` reports
+/// (`mainnet`, `testnet-10`) and spellings such as `kaspa-testnet-10` or `Testnet_10` compare equal (the web app's
+/// `normalizeNetwork`).
+pub fn normalize_network(raw: &str) -> String {
+    let s = raw.trim().to_ascii_lowercase();
+    let s = s.strip_prefix("kaspa").map(|r| r.trim_start_matches([':', '_', '-', ' '])).unwrap_or(&s).replace(['_', ' '], "-");
+    match s.as_str() {
+        "main" => "mainnet".into(),
+        _ => match s.strip_prefix("testnet") {
+            Some(n) if !n.is_empty() && n.trim_start_matches('-').chars().all(|c| c.is_ascii_digit()) => {
+                format!("testnet-{}", n.trim_start_matches('-'))
+            }
+            _ => s,
+        },
+    }
+}
+
+/// The network the node at `url` runs: `getBlockDagInfo`'s `network` (rusty-kaspa `NetworkId`, `mainnet` / `testnet-10`),
+/// normalized ([`normalize_network`]).
+pub fn node_network(url: &str, timeout: Duration) -> Result<String, WrpcError> {
+    let p = call(url, "getBlockDagInfo", json!({}), timeout)?;
+    p.get("network")
+        .and_then(Value::as_str)
+        .map(normalize_network)
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| WrpcError::Protocol("getBlockDagInfo names no network".into()))
+}
+
+/// Refuses a node that runs another network than `network`. A signature commits to no network: a transaction signed for
+/// testnet-10 against a mainnet node spends mainnet coins of the same key, so every signing command checks the node first.
+pub fn check_node_network(url: &str, network: &str, timeout: Duration) -> Result<(), String> {
+    let got = node_network(url, timeout).map_err(|e| format!("node {}: cannot confirm its network: {e}", shown(url)))?;
+    let want = normalize_network(network);
+    if got != want {
+        return Err(format!(
+            "the node {} runs {got}, not {want}: nothing signed (check --node / ${NODE_ENV} and --network)",
+            shown(url)
+        ));
+    }
+    Ok(())
+}
+
 /// Submit a transaction (RPC JSON shape) to the node at `url` and return the accepted transaction id.
 pub fn submit_transaction(url: &str, transaction: &Value, allow_orphan: bool, timeout: Duration) -> Result<String, WrpcError> {
     let p = call(url, "submitTransaction", json!({ "transaction": transaction, "allowOrphan": allow_orphan }), timeout)?;
@@ -316,13 +358,15 @@ pub mod mock {
         pub requests: Vec<(String, Value)>,
         /// The virtual DAA score `getBlockDagInfo` reports.
         pub daa: u64,
+        /// The network `getBlockDagInfo` reports (`testnet-10` by default).
+        pub network: String,
     }
 
     /// Start a mock node; it serves connections until the test process ends.
     pub fn start(utxos: Vec<NodeUtxo>) -> (String, Arc<Mutex<MockState>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
-        let state = Arc::new(Mutex::new(MockState { utxos, daa: 1_000_000, ..Default::default() }));
+        let state = Arc::new(Mutex::new(MockState { utxos, daa: 1_000_000, network: "testnet-10".into(), ..Default::default() }));
         let st = state.clone();
         thread::spawn(move || {
             for stream in listener.incoming() {
@@ -358,7 +402,7 @@ pub mod mock {
                                     json!({"id": id, "method": method, "params": {"entries": entries}})
                                 }
                                 "getBlockDagInfo" => {
-                                    json!({"id": id, "method": method, "params": {"virtualDaaScore": s.daa, "networkName": "kaspa-testnet-10"}})
+                                    json!({"id": id, "method": method, "params": {"virtualDaaScore": s.daa, "network": s.network}})
                                 }
                                 "submitTransaction" => {
                                     s.submitted.push(params["transaction"].clone());
@@ -463,6 +507,37 @@ mod tests {
                 assert!(!e.contains(secret), "{e}");
             }
         }
+    }
+
+    #[test]
+    fn network_names_normalize_like_the_web_app() {
+        for (raw, want) in [
+            ("mainnet", "mainnet"),
+            ("kaspa-mainnet", "mainnet"),
+            ("Main", "mainnet"),
+            ("testnet-10", "testnet-10"),
+            ("kaspa-testnet-10", "testnet-10"),
+            ("Testnet_10", "testnet-10"),
+            ("testnet10", "testnet-10"),
+            ("testnet-11", "testnet-11"),
+            ("simnet", "simnet"),
+        ] {
+            assert_eq!(normalize_network(raw), want, "{raw}");
+        }
+        assert_ne!(normalize_network("testnet-10"), normalize_network("mainnet"));
+    }
+
+    /// The node's own network decides: another one, or none named, is refused.
+    #[test]
+    fn a_node_of_another_network_is_refused() {
+        let (url, st) = mock::start(vec![]);
+        assert!(check_node_network(&url, "testnet-10", Duration::from_secs(5)).is_ok());
+        st.lock().unwrap().network = "mainnet".into();
+        let e = check_node_network(&url, "testnet-10", Duration::from_secs(5)).unwrap_err();
+        assert!(e.contains("runs mainnet, not testnet-10"), "{e}");
+        assert!(check_node_network(&url, "mainnet", Duration::from_secs(5)).is_ok());
+        st.lock().unwrap().network = String::new();
+        assert!(check_node_network(&url, "mainnet", Duration::from_secs(5)).unwrap_err().contains("cannot confirm"));
     }
 
     #[test]

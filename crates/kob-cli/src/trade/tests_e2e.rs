@@ -384,3 +384,24 @@ fn send_kas_and_tokens() {
     assert_eq!(w.submitted(), 2);
     let _ = Path::new(".");
 }
+
+/// A node of another network than `--network` is refused before anything is signed: a signature commits to no network,
+/// so a testnet-10 command against a mainnet node (a mainnet `$KOB_NODE_WRPC` left set) would spend mainnet coins of the
+/// same key.
+#[test]
+fn a_node_of_another_network_is_refused_before_signing() {
+    let w = world("othernet", &[]);
+    w.node_state.lock().unwrap().network = "mainnet".into();
+    let taker = pk(0x22);
+    let to = address_of(&p2pk_spk(&taker), NET).unwrap();
+    let place = crate::trade::place::run;
+    assert_eq!(run(place, w.args(0x11, "limit --token TST --side sell --amount 10TST --price 3KAS --yes")), 1);
+    assert_eq!(run(crate::trade::actions::run_send, w.args(0x11, &format!("KAS {to} 2.5KAS --yes"))), 1);
+    assert_eq!(w.submitted(), 0);
+    assert!(!w.dir.join("out").exists(), "nothing signed or written");
+    // the same node on the named network signs
+    w.node_state.lock().unwrap().network = "testnet-10".into();
+    assert_eq!(run(crate::trade::actions::run_send, w.args(0x11, &format!("KAS {to} 2.5KAS --yes"))), 0);
+    assert_eq!(w.submitted(), 1);
+}
+

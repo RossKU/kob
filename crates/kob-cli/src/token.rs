@@ -480,6 +480,7 @@ fn issue(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let node = a.node.as_deref().expect("checked");
+    wrpc::check_node_network(node, &a.network, Duration::from_secs(30))?;
     let txid =
         wrpc::submit_transaction(node, &plan.rpc_transaction_json(), false, Duration::from_secs(30)).map_err(|e| e.to_string())?;
     println!("submitted    {txid}");

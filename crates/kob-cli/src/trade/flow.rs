@@ -51,6 +51,12 @@ pub fn issues_json(issues: &[Issue]) -> Value {
 
 /// Show, confirm, sign, submit. Returns the process exit code.
 pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &str) -> i32 {
+    // the plan was read from this node: it must run the network the command names (mainnet only when named), before
+    // anything is shown as a plan of that network or signed
+    if let Err(e) = c.need_node().and_then(|n| crate::wrpc::check_node_network(n, &c.network, crate::common::NODE_TIMEOUT)) {
+        eprintln!("error: {e}");
+        return 1;
+    }
     let decoded = show::decode(&r.built, &signer.pubkey, units);
     let failed = print_issues(&r.issues, c.json);
     let new_ids: Vec<String> = r.built.covenants.iter().map(|x| to_hex(&x.covenant_id)).collect();
@@ -96,7 +102,7 @@ pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &
             return 2;
         }
     };
-    match sign_validate_send(&r.built, signer, c.out_dir.as_deref(), &r.file, plan_json.clone(), false, &node) {
+    match sign_validate_send(&r.built, signer, c.out_dir.as_deref(), &r.file, plan_json.clone(), false, &node, &c.network) {
         Ok(sent) => {
             let out = json!({
                 "status": "submitted",
