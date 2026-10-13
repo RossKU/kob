@@ -146,6 +146,8 @@ export function fakeKasware(o: FakeWalletOptions): FakeKasware {
       w.calls.push({ method: 'switchNetwork', args: [n] });
       if (!(o.switchAccepts ?? ['kaspa_testnet_10', 'testnet-10', 'kaspa_mainnet', 'mainnet']).includes(n)) throw new Error(`unknown network ${n}`);
       w.network = n === 'testnet-10' ? 'kaspa_testnet_10' : n === 'mainnet' ? 'kaspa_mainnet' : n;
+      // like the real wallet, the account's address prefix follows the network
+      if (address) address = address.replace(/^kaspa(test)?:/, w.network.includes('mainnet') ? 'kaspa:' : 'kaspatest:');
       return w.network;
     },
     async getPublicKey() {

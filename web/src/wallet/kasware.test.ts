@@ -30,6 +30,13 @@ describe('KasWare adapter: connect', () => {
     expect(provider.calls.filter((c) => c.method === 'switchNetwork').map((c) => c.args[0])).toEqual(['kaspa_testnet_10']);
   });
 
+  it('after a network switch the address is read again (its prefix follows the network)', async () => {
+    const { adapter } = mk({ network: 'kaspa_mainnet', address: 'kaspa:qfake-kasware' });
+    const info = await adapter.connect('testnet-10');
+    expect(info.network).toBe('testnet-10');
+    expect(info.address).toBe('kaspatest:qfake-kasware');
+  });
+
   it('falls back to the plain SDK spelling when the wallet rejects the native one', async () => {
     const { adapter, provider } = mk({ network: 'kaspa_mainnet', switchAccepts: ['testnet-10'] });
     expect((await adapter.connect('testnet-10')).network).toBe('testnet-10');

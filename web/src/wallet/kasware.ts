@@ -57,7 +57,7 @@ export function createKaswareAdapter(deps: KaswareDeps = {}): WalletAdapter {
       const p = need();
       const want = normalizeNetwork(wantNetwork);
       try {
-        const accounts = await withTimeout(p.requestAccounts(), CONNECT_TIMEOUT_MS, `${LABEL}.requestAccounts`);
+        let accounts = await withTimeout(p.requestAccounts(), CONNECT_TIMEOUT_MS, `${LABEL}.requestAccounts`);
         if (!Array.isArray(accounts) || typeof accounts[0] !== 'string') throw new WalletError('other', `${LABEL} returned no account.`);
         let network = normalizeNetwork(await p.getNetwork());
         if (network !== want) {
@@ -69,6 +69,11 @@ export function createKaswareAdapter(deps: KaswareDeps = {}): WalletAdapter {
             }
             network = normalizeNetwork(await p.getNetwork());
             if (network === want) break;
+          }
+          // the address prefix changes with the network: the account read before the switch is the other network's address
+          if (network === want) {
+            const again = await withTimeout(p.getAccounts ? p.getAccounts() : p.requestAccounts(), CONNECT_TIMEOUT_MS, `${LABEL}.getAccounts`);
+            if (Array.isArray(again) && typeof again[0] === 'string') accounts = again;
           }
         }
         const pubkey = normalizePubkey(await p.getPublicKey());
