@@ -285,6 +285,12 @@ pub fn intent_of(kind: &str, p: &Parsed, m: &TokenMarket, quote: Option<&TokenMa
     })
 }
 
+/// A state tip (sompi per `scale` base units) as KAS per whole token (a token of more than 9 decimals has a scale of 10^9
+/// base units, less than one whole token).
+pub fn tip_per_whole(tip: i64, m: &TokenMarket) -> String {
+    units::kas(tip as i128 * 10i128.pow(m.decimals) / m.scale as i128)
+}
+
 /// Plan lines of a placed order.
 pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> Vec<String> {
     let Some(d) = &plan.disclosure else { return vec![] };
@@ -313,7 +319,7 @@ pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> 
                 price(a),
                 if d.side == Side::Sell { "you receive the price" } else { "you pay the price" },
                 if d.side == Side::Sell { "minus" } else { "plus" },
-                units::kas(d.tip as i128 * 10i128.pow(m.decimals) / m.scale as i128)
+                tip_per_whole(d.tip, m)
             ));
         }
         if let Some(t) = d.all_in_total {
@@ -329,7 +335,7 @@ pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> 
             if d.side == Side::Sell { "you receive at least" } else { "you pay at most" },
             units::tokens(t as i128, &b.unit())
         ));
-        v.push(format!("tip: {} per whole {} (KAS, prefunded)", units::kas(d.tip as i128), m.name()));
+        v.push(format!("tip: {} per whole {} (KAS, prefunded)", tip_per_whole(d.tip, m), m.name()));
     }
     v.push(format!("minimum fill: {}", units::tokens(d.min_fill as i128, &u)));
     if let Some(t) = d.min_touch {
@@ -529,5 +535,23 @@ pub fn run(args: &[String]) -> i32 {
             eprintln!("error: the order could not be planned: nothing signed");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kob_protocol::artifacts::TemplateId;
+
+    /// The tip a pair order shows is the one typed, per whole token, also above 9 decimals (scale 10^9).
+    #[test]
+    fn a_tip_shows_per_whole_token_above_nine_decimals() {
+        let a = TokenMarket::new([0x70; 32], "BIG", 12, TemplateId::Kcc20Ref, Some([0xee; 32]), None).unwrap();
+        let tip = units::parse_kas_price("0.01KAS", &a.unit(), a.scale, "--tip", true).unwrap();
+        assert_eq!(tip, 1_000);
+        assert_eq!(tip_per_whole(tip, &a), units::kas(1_000_000));
+        let small = TokenMarket::new([0x71; 32], "S", 3, TemplateId::Kcc20Ref, Some([0xee; 32]), None).unwrap();
+        let tip = units::parse_kas_price("0.01KAS", &small.unit(), small.scale, "--tip", true).unwrap();
+        assert_eq!(tip_per_whole(tip, &small), units::kas(1_000_000));
     }
 }
