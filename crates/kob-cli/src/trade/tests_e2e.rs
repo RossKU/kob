@@ -707,3 +707,106 @@ fn replace_replans_trailing_if_done_and_pair_orders() {
     assert_eq!(run(replace, w.args(0x11, &format!("{} --yes", to_hex(&p_cov)))), 1);
     assert_eq!(w.submitted(), 3);
 }
+
+fn view_args(
+    w: &World,
+    key: u8,
+    rest: &str,
+    value_flags: &[&str],
+    bool_flags: &[&str],
+) -> (crate::trade::opts::Parsed, crate::trade::opts::Common, Vec<String>) {
+    let args = w.args(key, rest);
+    let p = crate::trade::opts::parse(&args, value_flags, bool_flags).unwrap();
+    let c = crate::trade::opts::Common::from(&p).unwrap();
+    (p, c, args)
+}
+
+#[test]
+fn book_orders_and_balances_views() {
+    use crate::trade::views;
+    let maker = pk(0x11);
+    let cov = [0xa1; 32];
+    let order = AnyState::KobAsk(ask(maker, 10 * SCALE, 1_000_000 + 77_000_000));
+    let w = world_x("views", &[(order, cov, 0x10, 2 * KAS)], |_, routes| {
+        routes.insert(
+            format!("/v1/books/{}", to_hex(&TOKEN)),
+            json!({"token": to_hex(&TOKEN), "aggregated": true,
+                   "asks": [{"price": "250000000", "amount": "5000", "amount_estimated": false, "orders": 2, "scale": 1000},
+                            {"price": "260000000", "amount": "7000", "amount_estimated": false, "orders": 1, "scale": 1000}],
+                   "bids": [{"price": "245000000", "amount": "3000", "amount_estimated": true, "orders": 1, "scale": 1000}]}),
+        );
+        let view = routes[&format!("/v1/orders/{}", to_hex(&cov))].clone();
+        routes.insert(
+            format!("/v1/orders?maker={}&status=active&limit=200", to_hex(&maker)),
+            json!({"items": [view], "next_cursor": null}),
+        );
+        routes.insert(
+            format!("/v1/token-utxos?owner={}&limit=500", to_hex(&maker)),
+            json!({"items": [token_item(0x03, &user_token(maker, 100 * SCALE))], "next_cursor": null}),
+        );
+    });
+    // the book: asks highest first above the spread, bids below, prices per whole token
+    let (p, c, _) = view_args(&w, 0x11, "TST", &["--quote", "--depth"], &[]);
+    let (v, lines) = views::book_view(&c, &p).unwrap();
+    assert_eq!((v["best_ask"].as_str(), v["best_bid"].as_str()), (Some("250000000"), Some("245000000")));
+    assert_eq!(v["asks"][0]["price_text"], "2.5 KAS per TST");
+    let at = |s: &str| lines.iter().position(|l| l.starts_with("    ") && l.contains(s)).unwrap_or_else(|| panic!("{s}: {lines:?}"));
+    let spread = lines.iter().position(|l| l.contains("spread 0.05 KAS per TST")).unwrap_or_else(|| panic!("{lines:?}"));
+    assert!(at("2.6 KAS per TST") < at("2.5 KAS per TST") && at("2.5 KAS per TST") < spread && spread < at("2.45 KAS per TST"));
+    // the maker's orders: the live ask in words
+    let (p, c, args) = view_args(&w, 0x11, "", &["--token", "--maker"], &["--all"]);
+    let (v, lines) = views::orders_view(&c, &p, &args).unwrap();
+    assert_eq!(v["orders"][0]["covenant_id"], to_hex(&cov));
+    assert_eq!(v["orders"][0]["what"], "sell 10 TST at 3 KAS per TST");
+    assert!(lines[1].contains(&to_hex(&cov)) && lines[1].contains("[open, expiry DAA 78000000]"), "{lines:?}");
+    // another owner by address: no key needed
+    let addr = address_of(&p2pk_spk(&pk(0x22)), NET).unwrap();
+    let (p, c, args) = view_args(&w, 0x22, &format!("--maker {addr}"), &["--token", "--maker"], &["--all"]);
+    assert!(views::orders_view(&c, &p, &args).unwrap_err().contains("HTTP 404"), "the mock lists no orders of the taker");
+    // balances: free KAS, the free tokens confirmed on the node, the ask's custody and KAS
+    let (p, c, args) = view_args(&w, 0x11, "", &["--maker"], &[]);
+    let (v, lines) = views::balances_view(&c, &p, &args).unwrap();
+    assert_eq!(v["kas"]["free"], (1000 * KAS).to_string());
+    let t = &v["tokens"][0];
+    assert_eq!((t["ticker"].as_str(), t["free"].as_str(), t["free_verified"].as_bool()), (Some("TST"), Some("100000"), Some(true)));
+    assert_eq!((t["in_orders"].as_str(), t["orders"].as_u64()), (Some("10000"), Some(1)));
+    // the ask's UTXO and its custody's carrier (10 KAS as the view reports it) are locked; no budget
+    assert_eq!((t["kas_escrow"].as_str(), t["kas_locked"].as_str()), (Some("0"), Some((12 * KAS).to_string().as_str())));
+    assert!(lines.iter().any(|l| l.contains("TST: free 100 TST in 1 UTXO, in orders 10 TST")), "{lines:?}");
+    // nothing is signed or submitted by a view
+    assert_eq!(w.submitted(), 0);
+}
+
+#[test]
+fn merge_chains_transfers_to_the_key() {
+    let maker = pk(0x11);
+    let extra = [(0x06u8, 5 * SCALE), (0x07, 7 * SCALE), (0x08, SCALE), (0x09, 2 * SCALE)];
+    let w = world_x("merge", &[], |utxos, routes| {
+        let mut items = vec![token_item(0x03, &user_token(maker, 100 * SCALE))];
+        for (tag, a) in extra {
+            utxos.push(node_utxo(&token_spk(&user_token(maker, a)), tag, 0, KAS, Some(TOKEN)));
+            items.push(token_item(tag, &user_token(maker, a)));
+        }
+        routes.insert(
+            format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(&maker), to_hex(&TOKEN)),
+            json!({"items": items, "next_cursor": null}),
+        );
+    });
+    let merge = crate::trade::merge::run;
+    // the plan alone; a key with one UTXO has nothing to merge
+    assert_eq!(run(merge, w.args(0x11, "TST --dry-run")), 0);
+    assert_eq!(run(merge, w.args(0x22, "TST --yes")), 1);
+    assert_eq!(w.submitted(), 0);
+    // five UTXOs: 1 + 2 + 5 TST in the first link, its output + 7 + 100 TST in the second
+    assert_eq!(run(merge, w.args(0x11, "TST --yes --wait-secs 0")), 0);
+    assert_eq!(w.submitted(), 2);
+    let s1 = w.signed("merge-1.json");
+    let s2 = w.signed("merge-2.json");
+    let one = spk_to_string(&token_spk(&user_token(maker, 8 * SCALE)));
+    let out1 = s1.tx.outputs.iter().position(|o| o.script_public_key == one).expect("the first link's merged output");
+    assert!(s2.tx.inputs.iter().any(|i| i.transaction_id == s1.tx.id && i.index == out1 as u32), "the second link spends it");
+    let all = spk_to_string(&token_spk(&user_token(maker, 115 * SCALE)));
+    assert_eq!(s2.tx.outputs.iter().filter(|o| o.covenant.is_some()).count(), 1);
+    // the largest input carrier (the 100 TST UTXO's 10 KAS), at most 2 KAS
+    assert!(s2.tx.outputs.iter().any(|o| o.script_public_key == all && o.value == 2 * KAS), "one output of the whole amount");
+}

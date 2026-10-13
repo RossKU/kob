@@ -289,6 +289,16 @@ mod tests {
     }
 
     #[test]
+    fn pair_deltas_allow_zero() {
+        let (a, b) = (TokenUnit { ticker: "AAA".into(), decimals: 3 }, TokenUnit { ticker: "BBB".into(), decimals: 2 });
+        assert_eq!(parse_pair_delta("0BBB", &a, 1000, &b, "gap"), Ok(0));
+        assert_eq!(parse_pair_delta("0.00tok", &a, 1000, &b, "gap"), Ok(0));
+        assert_eq!(parse_pair_delta("0.3BBB", &a, 1000, &b, "gap"), Ok(30));
+        assert!(parse_pair_delta("0", &a, 1000, &b, "gap").is_err());
+        assert!(parse_pair_price("0BBB", &a, 1000, &b, "price").is_err());
+    }
+
+    #[test]
     fn kas_amounts_and_prices() {
         assert_eq!(parse_kas("2KAS", "c", false), Ok(200_000_000));
         assert_eq!(parse_kas("0.08kas", "c", false), Ok(8_000_000));

@@ -58,5 +58,13 @@ fn mainnet_must_be_named_and_urls_are_redacted() {
     // help works without anything
     let (code, out) = kob(&["place", "--help"], &[]);
     assert_eq!(code, 0);
-    assert!(out.contains("--key-file") && out.contains("pair-limit"), "{out}");
+    assert!(out.contains("--key-file") && out.contains("pair-limit") && out.contains("trailing-stop"), "{out}");
+    for cmd in ["book", "orders", "balances", "merge"] {
+        let (code, out) = kob(&[cmd, "--help"], &[]);
+        assert_eq!(code, 0, "{cmd}: {out}");
+    }
+    // a view of nobody: no key and no --maker
+    let (code, out) = kob(&["orders", "--network", "testnet-10", "--indexer", "http://127.0.0.1:1"], &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("--maker"), "{out}");
 }

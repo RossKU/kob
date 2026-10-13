@@ -1,4 +1,5 @@
-//! The trading commands: `kob place`, `kob replace`, `kob cancel`, `kob refund`, `kob take`, `kob send`.
+//! The trading commands: `kob place`, `kob replace`, `kob cancel`, `kob refund`, `kob take`, `kob send`, `kob merge`, and
+//! the read-only views `kob book`, `kob orders`, `kob balances`.
 //!
 //! Every command reads the node and the indexer, plans the transaction with the same rules and defaults as the web wallet
 //! (`plan`), shows what it does (`show`), and signs only after `--yes` or a terminal's confirmation, with a key read from
@@ -9,6 +10,7 @@ pub mod data;
 pub mod flow;
 pub mod http;
 pub mod market;
+pub mod merge;
 pub mod opts;
 pub mod place;
 pub mod plan;
@@ -16,6 +18,7 @@ pub mod plan_pair;
 pub mod replan;
 pub mod show;
 pub mod units;
+pub mod views;
 
 #[cfg(test)]
 mod tests_e2e;
