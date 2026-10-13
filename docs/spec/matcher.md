@@ -407,10 +407,6 @@ token at the order's input index, the custody rest or return at the custody inpu
 output carrying its id), its minimum fill, time and KAS rules. It does not constrain where the other side of the trade
 comes from.
 
-*Decision 2026-10-05 (founder): no route enforcement. This reverses the earlier rule of the cross limit (`KobCross`), which
-accepted token B only from plain asks of B or from one opposite cross limit and delivered token A only to plain bids of A
-or to that opposite cross limit.*
-
 **Settlement.** Each token of a transaction is conserved (its program enforces it); within that, the counterparty side of
 a pair fill may be any mix of:
 

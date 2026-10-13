@@ -127,7 +127,8 @@ genuine and a forged artifact).
 2. Build with an argentc that supports artifact-backed imports: `argent/build-argentc.sh` builds
    the pinned upstream commit plus our patch 0002 (`argent/UPSTREAM.md`). Stock upstream argentc
    reads a `.json` import as Argent source and fails (artifact-backed imports are Argent's own open
-   item "Support artifact-backed app dependencies"; patch 0002 is opened upstream as argent-lang/argent#69).
+   item "Support artifact-backed app dependencies"; a smaller version of patch 0002 is open upstream as
+   argent-lang/argent#69).
 3. argentc does not compile KOBOrders. It loads and consistency-checks the artifact, checks the
    pinned id, turns its states and exported actors into a declaration-only module (so
    `KOBOrders::KobAsk` and `KobAskState` resolve as for a source import), links the handle as a
@@ -484,8 +485,9 @@ sil2argent drops the absolute paths argentc records.
 ## Not done / open
 
 - **Patch 0002 is ours.** It implements Argent's own open item "Support artifact-backed app
-  dependencies" and is opened upstream as argent-lang/argent#69, rebased onto the module loading rework of
-  `b312ded`. Argent is pre-1.0; the pin moves deliberately (`argent/UPSTREAM.md`).
+  dependencies", rebased onto the module loading rework of `b312ded`; a smaller version of it (one commit) is open
+  upstream as argent-lang/argent#69, and KOB keeps applying the fuller patch. Argent is pre-1.0; the pin moves
+  deliberately (`argent/UPSTREAM.md`).
 - **No external audit.** The handles are final; the contracts had an internal pre-mainnet audit only
   (`docs/security/AUDIT-2026-10.md`), and no external audit is planned before launch (`SECURITY.md`). Pin the
   artifact at your own risk.

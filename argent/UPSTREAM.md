@@ -56,9 +56,11 @@ Both patches are needed at `b312ded`:
    app name and ABI is self-consistent too; `id` on a source or standard-module import is refused. This is closed ICC for apps whose source is not Argent source,
    which is what KOBOrders is (hand-written SilverScript). Artifact-backed dependencies are still
    Argent's own open item ("Support artifact-backed app dependencies",
-   `docs/app-linking-followups.md`). The patch is byte for byte the branch prepared as an upstream
-   PR (two commits on `b312ded`, with upstream-style tests and docs). Open ICC (`actor_type<State>`
-   handles) needs no patch.
+   `docs/app-linking-followups.md`). A smaller version of the change is open upstream as
+   [argent-lang/argent#69](https://github.com/argent-lang/argent/pull/69) (one commit, opened from
+   RossKU/argent); KOB still applies its own patch 0002, the fuller version (with upstream-style tests
+   and docs), until upstream merges an equivalent. Open ICC (`actor_type<State>` handles) needs no
+   patch.
 
 Evidence: the v2 contracts, the KOBOrders artifact and the router
 (`crates/kob-tests/tests/argent_router_tests.rs`, `argent_import_pin_tests.rs`).

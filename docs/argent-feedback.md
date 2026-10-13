@@ -38,7 +38,7 @@ Status tags: **as designed** (confirmed by the Argent team), **planned upstream*
 | 9 | all entries of an actor go into one redeem script | not planned for the first release |
 | 10 | size of a 1:1 port of hand-written orders | measured |
 | 11 | building against rusty-kaspa v2.1.0 | patched (0001), upstream open |
-| 12 | closed ICC import of an artifact without source | patched (0002), PR #69 open |
+| 12 | closed ICC import of an artifact without source | patched (0002); a smaller version open upstream as PR #69 |
 | 13 | `argent-runtime` in the browser | closed |
 | 14 | an artifact does not prove which compiler built it | closed |
 | A1-A4 | smaller notes | open |
@@ -281,11 +281,13 @@ importer's artifact is identical to the one built against the source import, and
 unpinned artifact, a pin on a source import, a tampered artifact and an artifact as the root are
 refused.
 
-* Where: `argent/patches/0002-argent-artifact-backed-app-imports.patch` (exactly the PR diff),
-  `contracts/argent/examples/closed_icc_gate.ag`, `tools/router-gen/router_head.ag`.
-* Answer: a PR is welcome. Opened as argent-lang/argent#69 from the fork RossKU/argent; its text explains
-  the pin (item 4) and the follow-ups it leaves open (project configuration, receipt checks, artifacts
-  with their own dependencies).
+* Where: `argent/patches/0002-argent-artifact-backed-app-imports.patch` (the fuller version KOB
+  applies, with upstream-style tests and docs), `contracts/argent/examples/closed_icc_gate.ag`,
+  `tools/router-gen/router_head.ag`.
+* Answer: a PR is welcome. Opened as argent-lang/argent#69 (open, one commit) from the fork
+  RossKU/argent: a smaller version of the change; KOB still applies its own patch 0002. The PR text
+  explains the pin (item 4) and the follow-ups it leaves open (project configuration, receipt checks,
+  artifacts with their own dependencies).
 
 ### 13. `argent-runtime` in the browser (status: closed)
 
