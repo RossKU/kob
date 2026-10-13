@@ -423,7 +423,8 @@ pub fn evidence_options(
         let s = &p.src;
         // the same tokens AND the same extension commitments: the covenant does not compare the commitment (AUD-EXT)
         if s.ask == ask_a
-            && (s.a, s.b, s.a_ext, s.b_ext, s.a_scale, s.b_scale) == (need.a, need.b, need.a_ext, need.b_ext, need.a_scale, need.b_scale)
+            && (s.a, s.b, s.a_ext, s.b_ext, s.a_scale, s.b_scale)
+                == (need.a, need.b, need.a_ext, need.b_ext, need.a_scale, need.b_scale)
             && p.n >= need.min_touch
             && s.exposed_since.saturating_add(need.min_rest) <= t
         {
@@ -1344,7 +1345,17 @@ mod tests {
         let pair = |ext_a: [u8; 32], ext_b: [u8; 32]| {
             vec![PairFillTouch {
                 ix: 2,
-                src: PairTouch { ask: true, a, b, a_ext: ext_a, b_ext: ext_b, a_scale: 1_000, b_scale: 100, price: 7, exposed_since: 0 },
+                src: PairTouch {
+                    ask: true,
+                    a,
+                    b,
+                    a_ext: ext_a,
+                    b_ext: ext_b,
+                    a_scale: 1_000,
+                    b_scale: 100,
+                    price: 7,
+                    exposed_since: 0,
+                },
                 n: 10,
             }]
         };

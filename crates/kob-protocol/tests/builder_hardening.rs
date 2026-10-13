@@ -379,7 +379,10 @@ fn audit_maker_harming_terms_of_new_orders_are_refused() {
         check_new_order(&ifd(ib.clone())).unwrap();
         let foreign_exit = IfdBidState { exit_state: IfdBidState::commit_exit(&ifd_exit(MAKER_B, t)), ..ib.clone() };
         assert!(check_new_order(&ifd(foreign_exit)).is_err(), "{}: an exit paying another maker", t.name());
-        let other_token = IfdBidState { exit_state: IfdBidState::commit_exit(&CondAskState { token_cov_id: TOKEN_B, ..ifd_exit(MAKER_A, t) }), ..ib.clone() };
+        let other_token = IfdBidState {
+            exit_state: IfdBidState::commit_exit(&CondAskState { token_cov_id: TOKEN_B, ..ifd_exit(MAKER_A, t) }),
+            ..ib.clone()
+        };
         assert!(check_new_order(&ifd(other_token)).is_err(), "{}: an exit of another token", t.name());
         assert!(check_new_order(&ifd(IfdBidState { min_rest_daa: -1, ..ib.clone() })).is_err(), "{}", t.name());
         let ia = ifd_ask(MAKER_A, t);
