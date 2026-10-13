@@ -158,3 +158,51 @@ async fn the_open_token_list_lists_a_token_of_a_strict_program_without_an_entry(
     assert!(!v.listed);
     assert_eq!(v.unlisted_reason.as_deref(), Some("token_template_not_strict"));
 }
+
+/// The open token list also lists a token whose only order was NOT listed (here: below the minimum order value): the order's
+/// placement recorded the token's identity (`token_events`), which proves its program, so the token is in `/v1/tokens` (no open
+/// orders, no scale) and its first listed order can be placed from a client. The strict list still decides.
+#[tokio::test]
+async fn the_open_token_list_lists_a_token_known_only_from_an_unlisted_order() {
+    use kob_executor::tokens::{ListingRules, StrictTemplate, TokenAllowlist};
+    use kob_protocol::artifacts::{token_template, TemplateId};
+
+    let strict =
+        |t: TemplateId| (Hash32(token_template(t).hash), StrictTemplate { id: t.name().into(), family: t.family(), powers: vec![] });
+    let tokens = TokenAllowlist::from_entries([]).with_strict_templates([strict(TemplateId::Kcc20Ref)]);
+    let mut proc = processor();
+    proc.tokens = std::sync::Arc::new(tokens);
+    proc.rules = ListingRules { min_order_value_sompi: i64::MAX / 4, max_expiry_span_daa: 1 << 40, ..ListingRules::default() };
+    let c = Ctx::with(Harness::with_processor(MockNode::new("testnet-10"), conn(), None, wide_window(), proc));
+    let create = c.w.create_tx(AnyState::KobAsk(ask(MAKER_A, P250)), CARRIER, MAKER_A, 10 * WHOLE);
+    c.push(&[&create]).await;
+    let v = view(&c, &c.w.cov(&create, 0));
+    assert!(!v.listed);
+    assert_eq!(v.unlisted_reason.as_deref(), Some("order_value_below_minimum"));
+    let list = |t: TemplateId| {
+        let g = c.hs.ingest.lock().unwrap();
+        reads::token_list(g.conn(), &TokenAllowlist::from_entries([]).with_strict_templates([strict(t)])).unwrap()
+    };
+    let rows = list(TemplateId::Kcc20Ref);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].covenant_id, Hash32(TOKEN_COV).to_hex());
+    assert_eq!((rows[0].standing, rows[0].family, rows[0].scale), ("unverified", Some("kcc20"), None));
+    assert_eq!((rows[0].open_asks, rows[0].open_bids), (0, 0));
+    // the one extension commitment its placements named (a client checks it against what it knows without the indexer)
+    assert_eq!(rows[0].extension_commitment.as_deref(), Some(Hash32(EXT).to_hex().as_str()));
+    assert_eq!(rows[0].template_hash.as_deref(), Some(Hash32(token_template(TemplateId::Kcc20Ref).hash).to_hex().as_str()));
+    // a strict list without the token's program: not listed
+    assert!(list(TemplateId::KronToken2433).is_empty());
+    // a placement that named another commitment for the same token: no commitment is reported (a client reads its orders)
+    {
+        let g = c.hs.ingest.lock().unwrap();
+        g.conn()
+            .execute(
+                "INSERT INTO token_events (token_cov_id, tpl_hash, ext_commit, kind, txid, block_seq, daa) VALUES (?1, ?2, ?3, 'seen', ?4, 1, 1)",
+                rusqlite::params![&TOKEN_COV[..], &token_template(TemplateId::Kcc20Ref).hash[..], &[0xabu8; 32][..], &[0x77u8; 32][..]],
+            )
+            .unwrap();
+    }
+    let rows = list(TemplateId::Kcc20Ref);
+    assert_eq!((rows.len(), rows[0].extension_commitment.as_deref()), (1, None));
+}

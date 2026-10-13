@@ -101,6 +101,25 @@ pub struct TokenView {
     pub open_bids: i64,
 }
 
+/// The one KCC-20 extension commitment the order placements of a token (and program) named (`token_events`), `None` when
+/// they named none or more than one (a genesis that minted a second commitment, or an order that claims another): a client
+/// then takes it from the token's orders and shows where it came from.
+fn sole_extension(conn: &Connection, cov: &[u8], tpl: &[u8]) -> DbResult<Option<String>> {
+    let mut st = conn.prepare_cached(
+        "SELECT DISTINCT ext_commit FROM token_events WHERE token_cov_id = ?1 AND tpl_hash = ?2 AND ext_commit IS NOT NULL          AND ext_commit != ?3 LIMIT 2",
+    )?;
+    let found = st
+        .query_map(rusqlite::params![cov, tpl, &[0u8; 32][..]], |r| r.get::<_, Vec<u8>>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(match found.as_slice() {
+        [one] => Some(hex::encode(one)),
+        _ => None,
+    })
+}
+
+/// Most (token, program) rows the open part of [`token_list`] reads (tokens without a registry entry).
+pub const OPEN_TOKEN_ROWS_MAX: i64 = 5_000;
+
 pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<TokenView>> {
     let mut counts: BTreeMap<(Vec<u8>, i64), i64> = BTreeMap::new();
     // the orders the books list (`BOOK_WHERE`): an ask only with its exact custody, nothing with no amount left
@@ -140,15 +159,21 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
         })
         .collect();
     // The open token list: tokens of a strict-list program that have listed orders but no registry entry (unverified, no ticker);
-    // the quote token B of a listed pair order too (its program from the token identities its placement recorded).
+    // the quote token B of a listed pair order too (its program from the token identities its placement recorded); and every token
+    // identity an order placement recorded (`token_events`): an order that was not listed (below the minimum value, say) still
+    // shows the token's program, so the token is in the list and its first listed order can be placed from it. The strict-list
+    // and delisting checks below apply to every row; at most `OPEN_TOKEN_ROWS_MAX` rows are read.
     if tokens.is_open() {
         let mut st = conn.prepare(
             "SELECT DISTINCT token_cov_id, token_tpl_hash, family FROM orders WHERE listed = 1 AND token_cov_id IS NOT NULL \
              AND token_tpl_hash IS NOT NULL \
              UNION SELECT DISTINCT o.quote_cov_id, e.tpl_hash, 0 FROM orders o JOIN token_events e ON e.token_cov_id = o.quote_cov_id \
-             WHERE o.listed = 1 AND o.quote_cov_id IS NOT NULL AND e.tpl_hash IS NOT NULL ORDER BY 1, 3 DESC",
+             WHERE o.listed = 1 AND o.quote_cov_id IS NOT NULL AND e.tpl_hash IS NOT NULL \
+             UNION SELECT DISTINCT token_cov_id, tpl_hash, 0 FROM token_events WHERE tpl_hash IS NOT NULL \
+             ORDER BY 1, 3 DESC LIMIT ?1",
         )?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, i64>(2)?)))?;
+        let rows =
+            st.query_map([OPEN_TOKEN_ROWS_MAX], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, i64>(2)?)))?;
         let mut seen: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
         for r in rows {
             let (cov, tpl, _fam) = r?;
@@ -156,22 +181,27 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 continue;
             };
             let cid = crate::hex::Hash32(cov32);
-            if tokens.get(&cid).is_some() || !seen.insert(cov.clone()) {
+            if tokens.get(&cid).is_some() || seen.contains(&cov) {
                 continue;
             }
             // a token whose program is not on the strict list is not listed, whatever listed orders it still has in the history (a retired
-            // program: its orders were listed under an earlier registry), and neither is a delisted token
+            // program: its orders were listed under an earlier registry), and neither is a delisted token. A row of another program
+            // (an unlisted order naming the covenant id with a program off the list) neither lists the token nor hides it: the
+            // token's next row is read. Rows of listed orders come first (`family` > 0).
             let Some(strict) = tokens.strict_template(&crate::hex::Hash32(tpl32)) else {
                 continue;
             };
             if tokens.is_delisted(&cid) {
                 continue;
             }
+            seen.insert(cov.clone());
+            let extension_commitment =
+                if strict.family == kob_protocol::Family::Kcc20 { sole_extension(conn, &cov, &tpl)? } else { None };
             out.push(TokenView {
                 ticker: String::new(),
                 covenant_id: cid.to_hex(),
                 template_hash: Some(hex::encode(&tpl32)),
-                extension_commitment: None,
+                extension_commitment,
                 family: Some(strict.family.as_str()),
                 decimals: None,
                 scale: None,
