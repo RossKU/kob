@@ -1,4 +1,5 @@
-//! C5 liveness audit, recovery: an order the gap reconciliation closed cannot be re-imported.
+//! C5 liveness audit, recovery: an order the gap reconciliation closed can be re-imported by its maker (fixed; the finding
+//! as reported follows).
 //!
 //! `index rebase` (`recover::reconcile_open_orders`) closes every tracked order UTXO the node no longer has at the SAME
 //! script (`LogOp::CloseGap`, status `closed`, its custody rows marked spent) and only adopts a successor with the same script
@@ -7,7 +8,6 @@
 //! to `import-orders`, but `Processor::apply_op(LogOp::Import)` goes through `create_order`, which answers
 //! `duplicate_covenant` for any known covenant id (`order_exists`) and is reported as `already_known`: the order stays `closed`,
 //! has no current outpoint and no custody, is not listed (matcher / keepers) and cannot be cancelled from the view.
-//! (The CLI `recover` command the doc names is not implemented: `kob-cli` lists it as "Planned".)
 
 mod common;
 
@@ -40,8 +40,8 @@ fn node_utxo(spk: &[u8], cov: Hash32, txid: Hash32, idx: u32, amount: u64) -> (S
 
 #[tokio::test]
 async fn an_ask_partially_filled_in_the_gap_can_be_imported_by_its_maker_after_the_rebase() {
-    // C5: expected to fail until `LogOp::Import` revives a known order whose every UTXO was closed by the gap (insert the
-    // verified UTXO and custody, event `update`/`import`, refresh the state) instead of answering `already_known`.
+    // C5: `LogOp::Import` revives a known order whose every UTXO was closed by the gap (inserts the verified UTXO and custody,
+    // refreshes the state) instead of answering `already_known`.
     let c = Ctx::new();
     let a = ask(MAKER_A, P250); // 10 whole tokens
     let create = c.w.create_tx(AnyState::KobAsk(a.clone()), CARRIER, MAKER_A, 10 * WHOLE);
