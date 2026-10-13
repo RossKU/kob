@@ -340,8 +340,13 @@ pub fn resolve_with(
             return Err(format!("`{key}`: its token program {} is not reviewed: it is not traded on mainnet", program.name()));
         }
     }
-    let ext = pick(&|t| t.ext.filter(|e| *e != [0; 32]).map(|h| to_hex(&h)), "the extension commitment")?
-        .and_then(|e| kob_protocol::registry::parse_hex32(&e));
+    // an all-zero commitment is a commitment (the standard fixed-supply class: every token `kob token issue` makes), not a
+    // missing one; a KRON token has none, whatever a source says
+    let ext = if program.family() == Family::Kron {
+        None
+    } else {
+        pick(&|t| t.ext.map(|h| to_hex(&h)), "the extension commitment")?.and_then(|e| kob_protocol::registry::parse_hex32(&e))
+    };
     let known: Option<u32> = pick(&|t| t.decimals.map(|d| d.to_string()), "decimals")?.and_then(|d| d.parse().ok());
     let entered = open.and_then(|o| o.entered);
     if let Some(e) = entered.filter(|e| *e > MAX_ENTERED_DECIMALS) {
@@ -465,6 +470,13 @@ mod tests {
         // an unlisted token by covenant id from the indexer alone
         let m = resolve(&to_hex(&[2; 32]), &[], &idx).unwrap();
         assert_eq!((m.decimals, m.scale), (3, 1000));
+        // the all-zero commitment of a standard fixed-supply token is its commitment (it was dropped as missing, and every
+        // trading command refused the token); a zero against a non-zero one is a disagreement
+        let zero = vec![facts(5, "TZERO", 8, TemplateId::Kcc20Ref, 0)];
+        assert_eq!(resolve("TZERO", &zero, &zero).unwrap().ext, [0; 32]);
+        assert_eq!(resolve(&to_hex(&[5; 32]), &[], &zero).unwrap().ext, [0; 32]);
+        let other = vec![facts(5, "TZERO", 8, TemplateId::Kcc20Ref, 0xee)];
+        assert!(resolve("TZERO", &zero, &other).unwrap_err().contains("extension commitment"));
         // a disagreement is refused
         let bad = vec![facts(1, "TUSD", 6, TemplateId::Kcc20Ref, 0xee)];
         assert!(resolve("TUSD", &reg, &bad).unwrap_err().contains("decimals"));

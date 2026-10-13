@@ -126,8 +126,9 @@ const VALUE_FLAGS: &[&str] = &[
 ];
 const BOOL_FLAGS: &[&str] = &["--day", "--all-or-nothing", "--ack-no-guards", "--ack-market-start"];
 
-/// Options every kind takes.
-const ANY_KIND: &[&str] = &["--token", "--quote", "--side", "--amount", "--tip", "--carrier", "--ack-no-guards", "--ack-market-start"];
+/// Options every kind takes (`--decimals`: the first order of a token without a registry entry and without orders, any kind).
+const ANY_KIND: &[&str] =
+    &["--token", "--quote", "--side", "--amount", "--tip", "--carrier", "--ack-no-guards", "--ack-market-start", "--decimals"];
 const LIFE: &[&str] = &["--gtd", "--day", "--active-from"];
 const STOP_KNOBS: &[&str] = &["--min-touch", "--band", "--keeper-tip", "--min-rest"];
 const TRAIL: &[&str] = &["--trail-step", "--trail-gap", "--trail-wait", "--trail-updates"];
@@ -817,5 +818,22 @@ mod tests {
         let small = TokenMarket::new([0x71; 32], "S", 3, TemplateId::Kcc20Ref, Some([0xee; 32]), None).unwrap();
         let tip = units::parse_kas_price("0.01KAS", &small.unit(), small.scale, "--tip", true).unwrap();
         assert_eq!(tip_per_whole(tip, &small), units::kas(1_000_000));
+    }
+
+    /// `--decimals` (the first order of a token without orders) is taken by every kind: it was parsed but no kind listed it, so
+    /// every `kob place ... --decimals N` was refused (`--decimals does not apply to limit`).
+    #[test]
+    fn every_kind_takes_decimals_for_a_first_order() {
+        let args = |kind: &str| -> Vec<String> {
+            ["--token", "TKN", "--side", "sell", "--amount", "1tok", "--decimals", "2"]
+                .iter()
+                .map(|s| s.to_string())
+                .chain([kind.to_string()])
+                .collect()
+        };
+        for kind in ["limit", "ioc", "market", "stop-market", "oco", "ifd", "twap", "dutch", "trailing-stop"] {
+            let p = crate::trade::opts::parse(&args(kind), VALUE_FLAGS, BOOL_FLAGS).unwrap();
+            assert!(check_flags(kind, &p).is_ok(), "{kind}: {:?}", check_flags(kind, &p));
+        }
     }
 }
