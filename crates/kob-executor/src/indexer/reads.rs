@@ -103,11 +103,12 @@ pub struct TokenView {
 
 pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<TokenView>> {
     let mut counts: BTreeMap<(Vec<u8>, i64), i64> = BTreeMap::new();
-    let mut st = conn.prepare(
+    // the orders the books list (`BOOK_WHERE`): an ask only with its exact custody, nothing with no amount left
+    let mut st = conn.prepare(&format!(
         "SELECT o.token_cov_id, o.side, COUNT(*) FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
-         WHERE o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') AND s.state_known = 1 AND o.token_cov_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM order_flags f WHERE f.covenant_id = o.covenant_id AND f.txid = s.cur_txid AND f.idx = s.cur_idx) \
-         GROUP BY o.token_cov_id, o.side",
-    )?;
+         WHERE o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') AND s.state_known = 1 AND o.token_cov_id IS NOT NULL AND {NOT_FROZEN} \
+         AND {HAS_AMOUNT} AND {CUSTODY_OK} GROUP BY o.token_cov_id, o.side",
+    ))?;
     let rows = st.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))?;
     for r in rows {
         let (t, side, n) = r?;
@@ -278,9 +279,13 @@ macro_rules! not_frozen {
 /// [`not_frozen!`] for other read modules.
 pub(crate) const NOT_FROZEN: &str = not_frozen!();
 
+/// Something left to trade: an order whose amount left (a bid: the amount its escrow funds) is 0 is no liquidity, e.g. a
+/// sold-out repeating if-done entry that lives on for the re-arms of its exits (an unknown amount is kept).
+pub(crate) const HAS_AMOUNT: &str = "COALESCE(s.remaining_amount, 1) > 0";
+
 const BOOK_WHERE: &str = concat!(
     "o.token_cov_id = ?1 AND o.side = ?2 AND o.listed = 1 AND o.in_book = 1 \
-     AND s.status IN ('open','partial') AND s.state_known = 1 AND o.price IS NOT NULL AND ",
+     AND s.status IN ('open','partial') AND s.state_known = 1 AND o.price IS NOT NULL AND COALESCE(s.remaining_amount, 1) > 0 AND ",
     not_frozen!()
 );
 

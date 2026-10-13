@@ -175,3 +175,36 @@ async fn a_ratchet_by_the_smaller_fill_lags_at_most_one_trail_wait() {
     c.push(&[&next]).await;
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobCondAsk(CondAskState { stop_price: 230_000_000, ..co })));
 }
+
+/// Bid levels of the public KAS book (per order) and the stats' open bid count.
+fn public_bids(c: &Ctx) -> (Vec<String>, i64) {
+    use kob_executor::hex::Hash32;
+    use kob_executor::indexer::{market, reads};
+    let g = c.hs.ingest.lock().unwrap();
+    let ctx = reads::ReadCtx { node_daa: Some(c.daa()), settle_depth_daa: 100, now_unix: None };
+    let b = reads::book(g.conn(), &ctx, &Hash32(TOKEN_COV), 50, false).unwrap();
+    let ids = match b.bids {
+        reads::BookSide::Orders(v) => v.into_iter().map(|o| o.covenant_id).collect(),
+        reads::BookSide::Levels(_) => unreachable!(),
+    };
+    let stats = market::stats(g.conn(), &ctx, &Hash32(TOKEN_COV), Some(8)).unwrap();
+    (ids, stats.open_bids)
+}
+
+/// A sold-out repeating buy-first entry lives on (its booked exits re-arm it) with nothing to buy: it is no bid level of the
+/// public book and no open bid, until a merge gives it an amount again.
+#[tokio::test]
+async fn a_sold_out_repeating_entry_is_no_bid_of_the_public_book() {
+    let c = Ctx::new();
+    let ib = IfdBidState { rpt_amount: 1 + 10 * WHOLE, ..entry() };
+    let create = c.w.create_tx(AnyState::KobIfdBid(ib.clone()), ib.escrow().unwrap() as u64, MAKER_A, 0);
+    c.push(&[&create]).await;
+    let cov = c.w.cov(&create, 0);
+    assert_eq!(public_bids(&c), (vec![cov.to_hex()], 1));
+    let f = c.w.sign(&Action::Batch(fill(&c, &create, &ib, 10 * WHOLE, None)));
+    c.push(&[&f]).await;
+    let Some(AnyState::KobIfdBid(rest)) = c.hs.tip_state(&cov) else { panic!("the entry lives on") };
+    assert_eq!(rest.amount_left, 0);
+    assert_eq!(c.hs.status(&cov), "partial");
+    assert_eq!(public_bids(&c), (vec![], 0), "nothing left to buy: no bid level, no open bid");
+}

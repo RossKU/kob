@@ -532,10 +532,15 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         _ => None,
     };
     let (mut open_asks, mut open_bids) = (0i64, 0i64);
-    let mut st = conn.prepare(
+    // the orders the book lists (`reads::BOOK_WHERE`): an ask only with its exact custody, nothing with no amount left
+    let mut st = conn.prepare(&format!(
         "SELECT o.side, COUNT(*) FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
-         WHERE o.token_cov_id = ?1 AND o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') AND s.state_known = 1 AND NOT EXISTS (SELECT 1 FROM order_flags f WHERE f.covenant_id = o.covenant_id AND f.txid = s.cur_txid AND f.idx = s.cur_idx) GROUP BY o.side",
-    )?;
+         WHERE o.token_cov_id = ?1 AND o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') AND s.state_known = 1 AND {} \
+         AND {} AND {} GROUP BY o.side",
+        reads::NOT_FROZEN,
+        reads::HAS_AMOUNT,
+        reads::CUSTODY_OK
+    ))?;
     for r in st.query_map(params![token.0.to_vec()], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))? {
         let (side, n) = r?;
         if side == 1 {
