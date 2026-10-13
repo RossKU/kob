@@ -590,3 +590,39 @@ fn new_order_carriers_clear_the_covenant_output_minimum() {
         }
     }
 }
+
+/// A hostile indexer's numbers (prices and amounts at the i64 limits, sums that overflow) never panic the planner or the
+/// book readers: they are refused or flagged like any other bad book.
+#[test]
+fn a_hostile_book_never_panics() {
+    let m = market(TemplateId::Kcc20Ref);
+    let big = Book {
+        asks: vec![level(i64::MAX - 1, i64::MAX, 1), level(i64::MAX, i64::MAX, i64::MAX)],
+        bids: vec![level(i64::MAX, i64::MAX, 1), level(1, i64::MAX, 1)],
+        ask_orders: None,
+        bid_orders: None,
+    };
+    let e = Env { book: big, own: vec![], ..env(&m) };
+    for side in [Side::Buy, Side::Sell] {
+        let mk = MarketIntent { side, amount: TOK, tip: 0, min_fill: None, slippage_bps: Some(9_999), all_or_nothing: false };
+        let _ = plan_order(&e, &Intent::Market(mk.clone()));
+        let _ = plan_order(&e, &Intent::Limit(limit(side, 10 * TOK, 250_000_000)));
+        let _ = plan_order(&e, &Intent::Market(MarketIntent { all_or_nothing: true, ..mk }));
+    }
+    let row = |id: &str| serde_json::json!({"covenant_id": id, "price": i64::MAX.to_string(), "amount_left": i64::MAX.to_string()});
+    let v = serde_json::json!({"asks": [row("a"), row("b")], "bids": [row("c"), row("d")]});
+    let b = super::data::book_from_indexer(1000, &v);
+    assert_eq!(b.asks.len(), 1);
+    let agg = |p: &str| serde_json::json!({"price": p, "amount": i64::MAX.to_string(), "orders": i64::MAX});
+    let v = serde_json::json!({"asks": [agg("5"), agg("5")], "bids": []});
+    let _ = super::data::book_from_indexer(1000, &v);
+    let pl = |n: &str| serde_json::json!({"price_num": n, "price_den": "1", "amount": i64::MAX.to_string(), "orders": i64::MAX});
+    let huge = "170141183460469231731687303715884105727"; // i128::MAX
+    let v = serde_json::json!({"asks": [pl(huge), pl("7"), pl("7")], "bids": [pl("7"), pl("7")]});
+    let b = super::data::pair_book_from(&v, 1_000_000_000);
+    assert!(b.asks.iter().all(|l| l.price > 0));
+    let wide = serde_json::json!({"price_num": huge, "price_den": huge, "amount": "1"});
+    let b = super::data::pair_book_from(&serde_json::json!({"asks": [wide], "bids": []}), 1);
+    assert!(b.asks.iter().all(|l| l.price > 0));
+    let _ = super::data::firm_reference(&b, 1);
+}

@@ -138,8 +138,8 @@ pub fn book_from_indexer(scale: i64, v: &Value) -> Book {
             for o in &orders {
                 match levels.last_mut() {
                     Some(l) if l.price == o.price => {
-                        l.amount += o.amount;
-                        l.orders += 1;
+                        l.amount = l.amount.saturating_add(o.amount);
+                        l.orders = l.orders.saturating_add(1);
                     }
                     _ => levels.push(Level { price: o.price, amount: o.amount, orders: 1, tip: 0 }),
                 }
@@ -152,8 +152,8 @@ pub fn book_from_indexer(scale: i64, v: &Value) -> Book {
                 let n = r.get("orders").and_then(Value::as_i64).unwrap_or(1);
                 match levels.iter_mut().find(|l| l.price == price) {
                     Some(l) => {
-                        l.amount += amount;
-                        l.orders += n;
+                        l.amount = l.amount.saturating_add(amount);
+                        l.orders = l.orders.saturating_add(n);
                     }
                     None => levels.push(Level { price, amount, orders: n, tip: 0 }),
                 }
@@ -213,7 +213,7 @@ pub fn firm_reference(b: &Book, scale: i64) -> Option<i64> {
     let mut value = 0i128;
     let mut bid = None;
     for l in &b.bids {
-        value += l.amount as i128 * l.price as i128 / scale as i128;
+        value = value.saturating_add(l.amount as i128 * l.price as i128 / scale as i128);
         if value >= 1_000_000_000 {
             bid = Some(l.price);
             break;
@@ -247,8 +247,9 @@ pub fn pair_book_from(v: &Value, scale_a: i64) -> Book {
             if den <= 0 || amount <= 0 {
                 continue;
             }
-            let n = num * scale_a as i128;
-            let price = if up { (n + den - 1) / den } else { n / den };
+            // the indexer's numbers: an overflow drops the level
+            let Some(n) = num.checked_mul(scale_a as i128) else { continue };
+            let Some(price) = (if up { n.checked_add(den - 1).map(|x| x / den) } else { Some(n / den) }) else { continue };
             let Ok(price) = i64::try_from(price) else { continue };
             if price <= 0 {
                 continue;
@@ -256,8 +257,8 @@ pub fn pair_book_from(v: &Value, scale_a: i64) -> Book {
             let orders = l.get("orders").and_then(Value::as_i64).filter(|o| *o > 0).unwrap_or(1);
             match out.last_mut() {
                 Some(x) if x.price == price => {
-                    x.amount += amount;
-                    x.orders += orders;
+                    x.amount = x.amount.saturating_add(amount);
+                    x.orders = x.orders.saturating_add(orders);
                 }
                 _ => out.push(Level { price, amount, orders, tip: 0 }),
             }

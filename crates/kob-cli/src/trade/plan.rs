@@ -538,7 +538,7 @@ fn round_to_tick(price: i64, tick: i64, up: bool) -> i64 {
     }
     let p = price as i128;
     let t = tick as i128;
-    (if up { ceil_div(p, t) } else { p / t } * t) as i64
+    i64::try_from(if up { ceil_div(p, t) } else { p / t } * t).unwrap_or(price)
 }
 
 // ------------------------------------------------------------------------------------------------ time (daa.ts)
@@ -861,9 +861,10 @@ fn check_bps(bps: i64, pre: &mut Vec<Issue>) {
 /// Worst price of an auction from `touch`.
 pub fn auction_bound(side: Side, touch: i64, bps: i64, tick: i64) -> i64 {
     let mv = (touch as i128 * bps as i128 / 10_000) as i64;
+    // a touch near the i64 limit (an indexer's number) saturates instead of overflowing; the builders refuse such a price
     match side {
-        Side::Sell => round_to_tick(touch - mv, tick, true).min(touch),
-        Side::Buy => round_to_tick(touch + mv, tick, false).max(touch),
+        Side::Sell => round_to_tick(touch.saturating_sub(mv), tick, true).min(touch),
+        Side::Buy => round_to_tick(touch.saturating_add(mv), tick, false).max(touch),
     }
 }
 
