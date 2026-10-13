@@ -35,6 +35,8 @@ test.describe('my orders', () => {
     // tokens inside the sell order are shown (wallets do not show them)
     const bal = appPage.getByTestId(TESTID.balancesPanel).getByTestId(`balance-row-${tok.covenant_id}`);
     await expect(bal.getByTestId('balance-escrowed')).toHaveText(/^3/);
+    // the token's name opens its market (the way to a first sell of a token received elsewhere)
+    await expect(bal.getByTestId('balance-market')).toHaveAttribute('href', new RegExp(tok.covenant_id.toLowerCase()));
     await expect(appPage.getByTestId('orders-tab-active')).toContainText('(1)');
     await appPage.getByTestId('orders-tab-history').click();
     await expect(appPage.getByTestId('orders-empty')).toBeVisible();

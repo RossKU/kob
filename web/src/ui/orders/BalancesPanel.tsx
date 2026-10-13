@@ -1,5 +1,6 @@
 import { useMemo } from 'preact/hooks';
 import { useServices } from '../../app/context';
+import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
@@ -97,7 +98,9 @@ export function BalancesPanel(props: {
                   return (
                     <tr key={b.token} data-testid={`balance-row-${b.token}`}>
                       <td>
-                        {info ? tokenLabel(info) : t('orders.unknownToken', { id: longId(b.token) })}
+                        <a href={routeToHash(tokenRoute(b.token))} data-testid="balance-market">
+                          {info ? tokenLabel(info) : t('orders.unknownToken', { id: longId(b.token) })}
+                        </a>
                         {unreviewedProgram(program) ? (
                           <span class="small muted" title={t('orders.balances.unreviewedHint', { program: program ?? '?' })} data-testid="balance-unreviewed">{' '}({t('orders.balances.unreviewed')})</span>
                         ) : null}
