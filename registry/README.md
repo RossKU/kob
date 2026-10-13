@@ -16,8 +16,11 @@ and is not enforced by the order contracts (an order pins its own covenant id an
 * **`templates` is the STRICT list.** Only token programs marked `review_status: reviewed` are on it. In the shipped `tokens.json` three programs have reached that state: the two KRON programs, after an internal review with conditions, and the reference KCC-20 3/3, KOB's standard program, by internal review (maintainer decision 2026-10-12). No independent audit has been done; the other KCC-20 programs are `pending-review`. Because the token list is open (below), every token on a reviewed program is shown and tradable as `unverified`, with the `genesis_unverified` warning, until its entry is verified and listed. A program is accepted
   because its template hash is here, never by code special-casing: a third-party KCC-20-compatible program (same 112-byte state,
   draft transfer tags, owner scheme 4) such as KaspaCom's KCC20 0.2.5 is one more template entry plus its pinned artifact. Adding one
-  needs the artifact under `contracts/third-party/` (with provenance and licence), a `TemplateId` in `kob-protocol`, its compute budgets
-  and keeper tips (`KOB_REGEN=1`) and the engine tests.
+  is data plus review: the artifact or raw bytes under `contracts/third-party/` (with provenance and licence), its profile in
+  `crates/kob-protocol/data/programs.json` (`kob registry add-program` derives it from the bytes and writes the test stub), its compute
+  budgets and keeper tips (`KOB_REGEN=1`), the engine tests and the reviewer checklist of
+  [`docs/spec/token-programs.md`](../docs/spec/token-programs.md). A strict-list entry whose program this build embeds must state
+  the profile's family, layout, slots and custody owner (the validator checks it).
 * **`tokens` is the OPEN list.** Every token whose program is on the strict list is tradable and shown by the executor, whether or not it
   has an entry here (an order pins its own covenant id and template hash; the executor lists it when the hash is on the strict list).
   An entry adds metadata (ticker, decimals) and standing: `official` (confirmed genuine: shown with an
@@ -152,7 +155,8 @@ covenant id).
 
 ## Adding a token
 
-1. Make sure its program is in `templates` (new program: pin the artifact or bytes, add the entry, extend `registry_tests.rs`, do the review).
+1. Make sure its program is in `templates` (new program: `kob registry add-program`, then the onboarding steps and the reviewer
+   checklist of [`docs/spec/token-programs.md`](../docs/spec/token-programs.md)).
 2. Add the token with `status: "pending-review"`, `verified: false`; set `verified: true` after checking the covenant id and template hash against a chain UTXO,
    and `genesis_verified: true` plus its `genesis` record after `kob registry verify-genesis` accepted every output of its genesis group
    (`false` and a `warning` when it did not; add the token to the evidence by rerunning the collector).

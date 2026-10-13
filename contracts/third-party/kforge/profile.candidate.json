@@ -1,0 +1,41 @@
+{
+  "name": "KForgeToken1785",
+  "variant": "KForgeToken1785",
+  "registry_id": "kforge-token-1785",
+  "record_code": 10,
+  "summary": "KForge launchpad token program (testnet-10, pre-standard): KRON 46-byte state behind a one-byte entry-selector prefix, 1,785-byte redeem script.",
+  "source": {
+    "kind": "raw-redeem",
+    "path": "contracts/third-party/kforge/program.bin"
+  },
+  "template_hash": "5b136633944a2371a1d0f6a94fdc0d329327ffc700fdec097fc59e76e1d33ae1",
+  "layout": {
+    "prefix_len": 1,
+    "state_len": 46,
+    "suffix_len": 1738
+  },
+  "codec": "kron",
+  "owners": {
+    "custody": 2,
+    "holder": 0
+  },
+  "slots": {
+    "inputs": 1,
+    "outputs": 3
+  },
+  "carrier_floor": 1,
+  "witness": {
+    "scheme": "kron-columns",
+    "trailing_pushes": [
+      ""
+    ]
+  },
+  "router_intents": false,
+  "genesis": {
+    "minters": "unknown"
+  },
+  "review": {
+    "status": "pending-review",
+    "basis": "dry run only (crates/kob-tests/tests/program_kforge_dry_run.rs): profile derived from the bytes, witness reproduced byte for byte, owners (custody 2, holder 0: address presence refused), slots 1 / 3 and carrier floor 1 sompi measured in the engine; refused by the profile check (KOB KRON order templates deliver with id_type 3); semantic review not done"
+  }
+}

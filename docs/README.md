@@ -14,6 +14,7 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 | [x402-swap-and-pay.md](spec/x402-swap-and-pay.md) | Proposal: swap-and-pay, paying a merchant in one token from another token or KAS |
 | [x402-retry.md](spec/x402-retry.md) | Retrying an x402 payment (re-send, rebuild around the anchor input, stop) without paying twice |
 | [kcc-conformance.md](spec/kcc-conformance.md) | Conformance with the KCC base specs (KCC-1, KCC-2, KCC-20): pinned upstream vectors, results, mismatches fixed, what still depends on upstream |
+| [token-programs.md](spec/token-programs.md) | Token-program profiles (everything KOB needs per program, in `crates/kob-protocol/data/programs.json`), onboarding a launchpad's program with `kob registry add-program`, launchpad genesis shapes, the reviewer checklist, the KForge dry run |
 | [template-retirement.md](spec/template-retirement.md) | Templates this build does not pin: unsupported, ended by their maker with a raw cancel transaction |
 
 ## Operations (`docs/ops/`)
