@@ -171,10 +171,12 @@ export function PriceChart(props: PriceChartProps) {
     return { ...ratioSeries(rc), text: (i) => (rc[i] ? { o: p(rc[i]!.o), h: p(rc[i]!.h), l: p(rc[i]!.l), c: p(rc[i]!.c) } : null) };
   }, [current, interval, props.decimals, props.dp, usdKey, inverted]);
 
-  const state: 'loading' | 'unsupported' | 'empty' | 'ready' | 'off' = !indexer
+  const state: 'loading' | 'error' | 'unsupported' | 'empty' | 'ready' | 'off' = !indexer
     ? 'off'
     : current === undefined
-      ? 'loading'
+      ? candles.error
+        ? 'error' // the banner above says it; no endless skeleton
+        : 'loading'
       : current.view === null
         ? 'unsupported'
         : series.bars.length === 0

@@ -115,6 +115,7 @@ export default {
   'market.trades.buy': 'buy',
   'market.trades.sell': 'sell',
   'market.trades.empty': 'No trades yet.',
+  'market.trades.error': 'The trades could not be loaded',
   'market.trades.unsettled': 'unsettled',
 
   'market.ticket.title': 'Trade',
@@ -159,6 +160,7 @@ export default {
   'market.depth.asks': 'Asks',
   'market.depth.tip': '{price} {priceUnit} · {amount} {ticker} cumulative',
   'market.depth.empty': 'No orders in the book.',
+  'market.depth.unavailable': 'The book could not be loaded.',
   'market.depth.estimated': 'Bid amounts are upper bounds: buy orders hold a KAS budget, not tokens.',
   'market.depth.estimatedInv': 'Ask amounts are approximate: orders that sell KAS hold it as a budget, not an amount of tokens.',
 

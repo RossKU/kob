@@ -231,7 +231,8 @@ export function PairPage(props: { base: string; quote: string }) {
         <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card">
           <DepthChart
             series={depthSeries}
-            loading={!!indexer && book.data === undefined}
+            loading={!!indexer && book.data === undefined && !book.error}
+            unavailable={!!book.error && !depthSeries}
             ticker={baseInfo.ticker}
             priceUnit={`${baseInfo.ticker} / ${quoteInfo.ticker}`}
             dp={dp}

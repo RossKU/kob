@@ -38,7 +38,7 @@ export function TradeTape(props: {
   }
   return (
     <Section title={t('market.trades.title')} data-testid="trades-section" class="mkt-card" actions={tape?.source === 'fills' ? <span class="small muted" title={t('market.trades.fallbackHint')}>{t('market.trades.fallback')}</span> : null}>
-      <ErrorBanner error={props.error} onRetry={props.onRetry} />
+      <ErrorBanner error={props.error} title={t('market.trades.error')} onRetry={props.onRetry} data-testid="trades-error" />
       <div class="tape" data-testid="trades-list" data-source={tape?.source ?? ''} role="table" aria-label={t('market.trades.title')}>
         <div class="tape-head" role="row">
           <span role="columnheader">{perBasis ? t('market.trades.priceBasis') : t('market.trades.priceIn', { unit: inv ? `KAS / ${props.ticker}` : `${props.ticker} / KAS` })}</span>
@@ -47,7 +47,8 @@ export function TradeTape(props: {
         </div>
         <div class="tape-body" role="rowgroup">
           {tape === undefined ? (
-            props.loading ? (
+            // a failed load is the banner above, not "no trades"
+            props.error ? null : props.loading ? (
               Array.from({ length: 10 }, (_, i) => <div key={i} class="skeleton skeleton-line" style={`margin:9px 8px;opacity:${1 - i * 0.08}`} />)
             ) : (
               <div class="mkt-empty">{t('market.trades.empty')}</div>

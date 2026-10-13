@@ -40,3 +40,20 @@ test('copy buttons keep their label on one line (token details)', async ({ appPa
   const box = await btn.boundingBox();
   expect(box!.height).toBeLessThan(30);
 });
+
+test.describe('market panels when the indexer cannot be reached', () => {
+  test('chart and depth show no endless skeleton, the trades panel no "No trades yet"', async ({ appPage: page, mock }) => {
+    await listExkcc(page);
+    const tok = await mock.token();
+    // the app learns the token from the registry; every indexer read fails
+    await page.route('**/v1/**', (r) => r.abort());
+    await page.goto(`/#/market/${tok.covenant_id}`);
+    await expect(page.getByTestId('book-error')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', 'error');
+    await expect(page.getByTestId('chart-loading')).toHaveCount(0);
+    await expect(page.getByTestId('trades-error')).toBeVisible();
+    await expect(page.getByTestId('trades-section').getByText('No trades yet.')).toHaveCount(0);
+    await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'empty');
+    await expect(page.getByTestId('depth-empty')).toHaveText('The book could not be loaded.');
+  });
+});

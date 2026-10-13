@@ -33,13 +33,13 @@ const fmtAmount = (v: number) =>
  * Depth chart: cumulative bids (left, green) and asks (right, red) around the mid price, step areas with a soft gradient, a subtle grid,
  * price and amount axes, a hover read-out. Drawn in SVG at the panel's pixel width (crisp text at any size).
  */
-export function DepthChart(props: { series: DepthSeries | null; loading: boolean; ticker: string; /** the unit of the price axis: KAS natively, the token when inverted */ priceUnit?: string; /** shown as KAS/TOKEN */ inverted?: boolean; dp: number; /** fixed decimals of the cumulative amount in the hover read-out (token decimals / tick of the market); default 2 */ amountDp?: number; source: 'depth' | 'book' }) {
+export function DepthChart(props: { series: DepthSeries | null; loading: boolean; ticker: string; /** the unit of the price axis: KAS natively, the token when inverted */ priceUnit?: string; /** shown as KAS/TOKEN */ inverted?: boolean; dp: number; /** fixed decimals of the cumulative amount in the hover read-out (token decimals / tick of the market); default 2 */ amountDp?: number; source: 'depth' | 'book'; /** the data could not be loaded (not an empty book) */ unavailable?: boolean }) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<{ x: number; y: number; side: 'bid' | 'ask'; price: number; cum: number } | null>(null);
   const s = props.series;
   const plotH = HEIGHT - AXIS;
   const g = s && width > 0 ? depthGeometry(s, width, plotH) : null;
-  const summary = s ? t('market.depth.summary', { bids: fmtAmount(s.bids.at(-1)?.cum ?? 0), asks: fmtAmount(s.asks.at(-1)?.cum ?? 0), ticker: props.ticker }) : t('market.depth.title');
+  const summary = s ? t('market.depth.summary', { bids: fmtAmount(s.bids.at(-1)?.cum ?? 0), asks: fmtAmount(s.asks.at(-1)?.cum ?? 0), ticker: props.ticker }) : null;
 
   const onMove = (e: MouseEvent) => {
     if (!g || !s || !g.hasData) return;
@@ -60,7 +60,7 @@ export function DepthChart(props: { series: DepthSeries | null; loading: boolean
     <figure style="margin:0" data-testid="depth-chart" data-source={props.source} data-state={g?.hasData ? 'ready' : props.loading ? 'loading' : 'empty'}>
       <div class="depth-box" ref={ref}>
         {g && g.hasData ? (
-          <svg class="depth-svg" width={width} height={HEIGHT} role="img" aria-label={summary} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+          <svg class="depth-svg" width={width} height={HEIGHT} role="img" aria-label={summary ?? t('market.depth.title')} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
             <title>{t('market.depth.title')}</title>
             <defs>
               <linearGradient id="depth-bid-fill" x1="0" y1="0" x2="0" y2="1">
@@ -101,7 +101,7 @@ export function DepthChart(props: { series: DepthSeries | null; loading: boolean
           <div class="skeleton" style={`height:${HEIGHT}px`} data-testid="depth-loading" />
         ) : (
           <div class="mkt-empty" style={`height:${HEIGHT}px`} data-testid="depth-empty">
-            {t('market.depth.empty')}
+            {t(props.unavailable ? 'market.depth.unavailable' : 'market.depth.empty')}
           </div>
         )}
         {hover ? (

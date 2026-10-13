@@ -37,7 +37,7 @@ export function PairTrades(props: {
   }
   return (
     <Section title={t('pair.trades.title')} data-testid="trades-section" class="mkt-card">
-      <ErrorBanner error={props.error} onRetry={props.onRetry} />
+      <ErrorBanner error={props.error} title={t('market.trades.error')} onRetry={props.onRetry} data-testid="trades-error" />
       <div class="tape pair-tape" data-testid="trades-list" data-source="pair" data-count={rows?.length ?? ''} role="table" aria-label={t('pair.trades.title')}>
         <div class="tape-head" role="row">
           <span role="columnheader">{t('market.trades.amountIn', { unit: props.base.ticker })}</span>
@@ -47,7 +47,7 @@ export function PairTrades(props: {
         </div>
         <div class="tape-body" role="rowgroup">
           {rows === undefined ? (
-            props.loading ? (
+            props.error ? null : props.loading ? (
               Array.from({ length: 10 }, (_, i) => <div key={i} class="skeleton skeleton-line" style={`margin:9px 8px;opacity:${1 - i * 0.08}`} />)
             ) : (
               <div class="mkt-empty">{t('pair.trades.empty')}</div>

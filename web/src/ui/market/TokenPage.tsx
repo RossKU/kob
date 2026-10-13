@@ -180,7 +180,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
 
   const freshDepth = useMemo(() => {
     if (depth.data) return inverted ? depthFromViewFlipped(depth.data, decimals) : depthFromView(depth.data, decimals);
-    if (depth.data === null && freshModel && scale) {
+    // no depth endpoint, or it failed: the depth of the book on screen
+    if ((depth.data === null || (depth.data === undefined && depth.error)) && freshModel && scale) {
       const full = buildBookModel(book.data!, { scale, depth: 60 });
       return inverted ? depthFromBookFlipped(full, decimals, scale) : depthFromBook(full, decimals, scale);
     }
@@ -292,7 +293,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       }
       depth={
         <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card">
-          <DepthChart series={depthSeries} loading={!!indexer && depth.data === undefined} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? `KAS / ${name}` : `${name} / KAS`} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
+          <DepthChart series={depthSeries} loading={!!indexer && depth.data === undefined && !depth.error} unavailable={!!depth.error && !!book.error && !depthSeries} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? `KAS / ${name}` : `${name} / KAS`} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
         </Section>
       }
       tape={
