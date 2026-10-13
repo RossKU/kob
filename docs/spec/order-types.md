@@ -477,8 +477,8 @@ KAS price series; a netted or inventory pair fill shows as volume only.
 | market auction (token and pair) | 3% bound over 200 DAA (20 s), activation +30 DAA, IOC life 300 DAA |
 | stop band / auction | 3% (`slipBps` 300) over 300 DAA (30 s) |
 | trigger rest / threshold (per order, the wallet exposes both) | 5 s (`minRestDaa` 50) / `minTouch` = the order's own `minFill` (presets: min fill / 25% / 50% / 100% of the order's own amount, or custom); a pair stop in mode 0 also needs `⌈minTouch·stop / scale(A)⌉` of B traded |
-| keeper tip (arm / trail, taken by the arming matcher) | to be measured (pair phase) (`data/keeper_tips.json`, `matcher.md` §10.6) |
-| refund tip | per token program (a pair order: the larger of its two programs): to be measured (pair phase) (`data/keeper_tips.json`, `matcher.md` §5) |
+| keeper tip (arm / trail, taken by the arming matcher) | 0.022 KAS (KCC-20 programs), 0.020 KAS (KRON), 0.038 KAS (pair orders) (`data/keeper_tips.json`, `data/pair_keeper_tips.json`, `matcher.md` §10.6) |
+| refund tip | per token program: 0.035 KAS on the standard 3/3 program (public-mint build 0.040, KRON 0.031 / 0.032); a pair order by its two programs, 0.064 KAS for two 3/3 tokens (`data/keeper_tips.json`, `data/pair_keeper_tips.json`, `matcher.md` §5) |
 | day order | until 00:00 UTC |
 | GTC | 90 days idle (renew before day 85) |
 | carriers | 2 KAS per covenant UTXO (`DEFAULT_ORDER_CARRIER`; a pair entry's `exitCarrier` also funds its exit's deliveries, `IfdPairState::exit_carrier_needed`): the relay fee of no transaction shape rises below 10 KAS (storage mass is not part of it), and at 2 KAS the largest shape commits 35% of the block storage limit (1 KAS: 71%; 0.5 KAS refuses pair fills with evidence or netting); the opt-in storage-inclusive priority fee rises by at most 0.13 KAS (`tests/carrier_fees.rs`). Never below the floor of a token output (KaspaCom KCC20 0.2.5: 0.5 KAS; every other supported program: none) nor the KIP-9 dust bound of 0.02 KAS (`TemplateId::min_token_output`, `tx::DUST_OUTPUT_MIN`): orders and builders refuse less |

@@ -772,8 +772,10 @@ apply unchanged.
   ask-side refund pushes the whole token program in its custody input; a pair refund the program of each custody), so
   wallets MUST set `refundTip` per token program (a pair order: by the programs of its custodies), at least the defaults
   derived from measured fees (`kob_protocol::defaults`, wasm `keeperTips`: 2× the largest fee floor of a funded keeper's
-  refund, kill or close, rounded up to 0.001 KAS; `crates/kob-protocol/data/keeper_tips.json`): to be measured (pair
-  phase). A flat 0.03 KAS does not pay a 4/5 or 8/8 refund.
+  refund, kill or close, rounded up to 0.001 KAS; `crates/kob-protocol/data/keeper_tips.json`, pair orders
+  `pair_keeper_tips.json`): 0.035 KAS on the standard 3/3 program (the public-mint build 0.040, KRON 0.031 / 0.032), 0.064
+  KAS for a pair order of two 3/3 tokens (0.060 to 0.245 KAS over every program pair). A flat tip does not fit every
+  program: a KaspaCom refund alone costs 0.063 KAS.
 
 ---
 
@@ -1082,8 +1084,8 @@ tick. Planning time with pair books is not measured.
    the touch to the limit (then resting at the limit), or warn that a crossing limit fills at its
    limit (the matcher keeps the difference).
 6. **Stop-market / stop-limit**: `slipBps` default 300 (3%),
-   `bandDaa` default 300 (30 s auction), `keeperTip` default: to be measured (pair phase) (2× the
-   marginal fee of an update inside a batch, rounded up to 0.001 KAS; `kob_protocol::defaults`,
+   `bandDaa` default 300 (30 s auction), `keeperTip` default: 0.022 KAS on the KCC-20 programs, 0.020 KAS on KRON,
+   0.038 KAS for a pair order (2× the marginal fee of an update inside a batch, rounded up to 0.001 KAS; `kob_protocol::defaults`,
    `data/keeper_tips.json`). Trigger rules (§4) are
    per order; the wallet MUST expose both on every stop, stop-limit, trailing stop, OCO stop leg and stop entry:
    - rest time `minRestDaa`: default 50 DAA (5 s);
