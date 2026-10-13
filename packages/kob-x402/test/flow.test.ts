@@ -8,7 +8,7 @@ import { canonicalJson, httpRequestHash, requirementsHash } from '../src/canonic
 import { MemoryArtifactStore } from '../src/artifact-store.ts';
 import type { ArtifactRecord } from '../src/artifact-store.ts';
 import type { OfferSpec, PaymentRequired } from '../src/types.ts';
-import { KobX402Client } from '../src/client.ts';
+import { KobX402Client, kcc20Custody, verifySettlement } from '../src/client.ts';
 import type { KobX402ClientOptions } from '../src/client.ts';
 import { NATIVE_OFFER, NETWORK, PAYER, SPEND_CAPS, TOKEN_A, TOKEN_B, staticContext, startRig } from './helpers/env.ts';
 import { stubWasm } from './helpers/stub-wasm.ts';
@@ -529,6 +529,53 @@ test('wallet flow: kcc20 and swap payments are built unsigned, the wallet signs 
     }
   }
   assert.equal(wallet.asked.length, 2);
+});
+
+test('kcc20: a settlement must carry the offer\'s custody class (x402-kcc20-profile.md 4.3); the paywall refuses one without it', async () => {
+  const offers = [{ kind: 'kcc20', asset: TOKEN_B, amount: '700', token: { custody: 'unconditional' } }] as unknown as OfferSpec[];
+  const capabilities = { tokens: { [TOKEN_B]: '1000' } };
+  // the facilitator's answer carries it: paid
+  const ok = await startRig({ offers, capabilities });
+  try {
+    const { response } = await ok.client.paidFetch(`${ok.base}/report`);
+    assert.equal(response.status, 200);
+    assert.equal((decodePaymentResponse(response.headers.get('payment-response')!).extensions as any).kaspa.custody, 'unconditional');
+  } finally {
+    await ok.close();
+  }
+  // a facilitator that leaves it out (or names another class) does not settle the paywall's offer
+  for (const custody of [undefined, 'issuer-controlled']) {
+    const rig = await startRig({
+      offers,
+      capabilities,
+      settle: (_n, fr) => {
+        const s = defaultSettlement(fr) as any;
+        const { custody: _c, ...kaspa } = s.extensions.kaspa;
+        return { body: { ...s, extensions: { ...s.extensions, kaspa: custody ? { ...kaspa, custody } : kaspa } } };
+      },
+    });
+    try {
+      const res = await rig.client.paidFetch(`${rig.base}/report`).then((r) => r.response, (e: unknown) => e);
+      assert.ok(!(res instanceof Response) || res.status !== 200, `custody ${custody}: not served`);
+      assert.equal(rig.handled.length, 0);
+    } finally {
+      await rig.close();
+    }
+  }
+});
+
+test('verifySettlement checks the custody class of a kcc20 offer only', () => {
+  const tx = 'ab'.repeat(32);
+  const base = { success: true, transaction: tx, network: NETWORK, amount: '700' } as any;
+  const kcc20 = { extra: { profile: 'kcc20', token: { custody: 'unconditional' } } } as any;
+  assert.equal(kcc20Custody(kcc20), 'unconditional');
+  assert.equal(kcc20Custody({ extra: { profile: 'kcc20', route: {}, token: { custody: 'unconditional' } } } as any), null, 'swap-and-pay');
+  assert.equal(kcc20Custody({ extra: { profile: 'standard-native' } } as any), null);
+  verifySettlement({ ...base, extensions: { kaspa: { custody: 'unconditional' } } }, '700', NETWORK, tx, 'unconditional');
+  verifySettlement(base, '700', NETWORK, tx, null);
+  for (const ext of [undefined, { kaspa: {} }, { kaspa: { custody: 'issuer-controlled' } }]) {
+    assert.throws(() => verifySettlement({ ...base, extensions: ext }, '700', NETWORK, tx, 'unconditional'), (e: unknown) => e instanceof KobX402Error && e.code === 'invalid_settlement');
+  }
 });
 
 test('wallet mode cannot pay a native offer (the authorization digest needs a raw Schnorr signature); a revoke needs an artifact', async () => {

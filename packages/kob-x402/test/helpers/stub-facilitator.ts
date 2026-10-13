@@ -24,13 +24,16 @@ export interface StubFacilitator {
 /** Success settlement derived from the payload the way the real facilitator would answer. */
 export function defaultSettlement(req: FacilitatorRequest): SettlementResponse {
   const tx = JSON.parse(req.paymentPayload.payload.transaction) as { id: string };
+  // a plain kcc20 settlement repeats the requirement's custody class (x402-kcc20-profile.md 4.3)
+  const extra = req.paymentRequirements.extra as { profile?: string; route?: unknown; token?: { custody?: string } } | undefined;
+  const custody = extra?.profile === 'kcc20' && extra.route === undefined ? extra.token?.custody : undefined;
   return {
     success: true,
     transaction: tx.id,
     network: req.paymentRequirements.network,
     payer: req.paymentPayload.payload.payerAddress ?? '',
     amount: req.paymentRequirements.amount,
-    extensions: { kaspa: { exactProfile: req.paymentPayload.payload.profile, paymentOutputIndex: 0, finality: (req.paymentRequirements.extra as { finality?: string } | undefined)?.finality ?? 'accepted', requestHash: req.requestHash } },
+    extensions: { kaspa: { exactProfile: req.paymentPayload.payload.profile, paymentOutputIndex: 0, finality: (req.paymentRequirements.extra as { finality?: string } | undefined)?.finality ?? 'accepted', requestHash: req.requestHash, ...(custody ? { custody } : {}) } },
   };
 }
 

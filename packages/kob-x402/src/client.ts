@@ -31,7 +31,7 @@ import { randomBytes } from 'node:crypto';
 import { canonicalJson, httpRequestHash, normalizeBody, normalizeMethod, normalizeUrl, requirementsHash } from './canonical.ts';
 import { KobX402Error } from './errors.ts';
 import { decodePaymentResponse, encodePaymentSignature } from './headers.ts';
-import { payableAssets, rankOffers, parsePaymentRequired } from './offers.ts';
+import { isRecord, payableAssets, rankOffers, parsePaymentRequired } from './offers.ts';
 import type { PayerCapabilities, SelectedOffer } from './offers.ts';
 import { MemoryArtifactStore } from './artifact-store.ts';
 import { assertSecureUrl } from './url-policy.ts';
@@ -48,6 +48,7 @@ import {
   X402_VERSION,
 } from './types.ts';
 import type {
+  Custody,
   KaspaFailure,
   NetworkId,
   OfferKind,
@@ -55,6 +56,7 @@ import type {
   PaymentIdentifierExtension,
   PaymentPayload,
   PaymentRequired,
+  PaymentRequirements,
   SettlementResponse,
 } from './types.ts';
 
@@ -592,7 +594,7 @@ export class KobX402Client {
     let settlement: SettlementResponse;
     try {
       settlement = decodePaymentResponse(header);
-      verifySettlement(settlement, record.amount, record.network, transactionId);
+      verifySettlement(settlement, record.amount, record.network, transactionId, kcc20Custody(record.paymentPayload?.accepted));
     } catch (e) {
       await this.#mark(paymentId, { status: 'pending', note: 'PAYMENT-RESPONSE did not verify' });
       const error = new KobX402Error('invalid_settlement', `PAYMENT-RESPONSE rejected: ${(e as Error).message}`, {
@@ -1119,11 +1121,29 @@ function pendingError(paymentId: string, transactionId: string, message: string,
   return new KobX402Error('payment_pending', `${message} (artifact ${paymentId} is stored; reconcile or revoke it)`, init);
 }
 
-/** The PAYMENT-RESPONSE of a paid retry must show success for exactly the transaction the client signed. */
-export function verifySettlement(s: SettlementResponse, amount: string, network: string, transactionId: string): void {
+/**
+ * The custody class a plain `kcc20` requirement names (`extra.token.custody`), which its settlement must repeat in `extensions.kaspa.custody`
+ * (x402-kcc20-profile.md 4.3, section 10); null for every other offer (native, swap-and-pay, intent).
+ */
+export function kcc20Custody(r: PaymentRequirements | undefined): Custody | null {
+  const extra = r && isRecord(r.extra) ? r.extra : null;
+  if (!extra || extra.profile !== 'kcc20' || extra.route !== undefined || !isRecord(extra.token)) return null;
+  const c = extra.token.custody;
+  return c === 'unconditional' || c === 'issuer-controlled' ? c : null;
+}
+
+/**
+ * The PAYMENT-RESPONSE of a paid retry must show success for exactly the transaction the client signed; a `kcc20` one also the custody class
+ * of the accepted offer (`custody`: `kcc20Custody` of it).
+ */
+export function verifySettlement(s: SettlementResponse, amount: string, network: string, transactionId: string, custody: Custody | null = null): void {
   if (s === null || typeof s !== 'object' || s.success !== true) throw new KobX402Error('invalid_settlement', 'settlement is not a success');
   if (typeof s.transaction !== 'string' || !HEX64.test(lc(s.transaction))) throw new KobX402Error('invalid_settlement', 'settlement transaction is not a transaction id');
   if (lc(s.transaction) !== lc(transactionId)) throw new KobX402Error('invalid_settlement', 'settlement transaction id differs from the signed transaction');
   if (s.amount !== amount) throw new KobX402Error('invalid_settlement', 'settlement amount differs from the accepted amount');
   if (s.network !== network) throw new KobX402Error('invalid_settlement', 'settlement network differs from the accepted network');
+  if (custody !== null) {
+    const k = isRecord(s.extensions) && isRecord(s.extensions.kaspa) ? s.extensions.kaspa : null;
+    if (!k || k.custody !== custody) throw new KobX402Error('invalid_settlement', `settlement custody class differs from the accepted offer's (${custody})`);
+  }
 }

@@ -32,6 +32,7 @@ import { KobX402Error } from './errors.ts';
 import { FacilitatorClient } from './facilitator-client.ts';
 import type { Facilitator, FacilitatorOptions } from './facilitator-client.ts';
 import { decodePaymentSignature, encodePaymentRequired, encodePaymentResponse } from './headers.ts';
+import { kcc20Custody } from './client.ts';
 import { isIntentOffer } from './intent.ts';
 import { buildOffers, isRecord } from './offers.ts';
 import type { KobWasm } from './wasm.ts';
@@ -376,6 +377,12 @@ export function createPaywall(config: PaywallConfig): Paywall {
     if (!HEX64.test(lc(settlement.transaction)) || settlement.amount !== offer.amount || settlement.network !== offer.network) {
       settling.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settlement does not match the offer' } } });
+    }
+    // ... and on a `kcc20` one that does not carry the offer's custody class (x402-kcc20-profile.md 4.3: required, equal)
+    const custody = kcc20Custody(offer);
+    if (custody !== null && !(isRecord(settlement.extensions?.kaspa) && (settlement.extensions?.kaspa as Record<string, unknown>).custody === custody)) {
+      settling.delete(id);
+      return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settlement does not carry the custody class of the offer' } } });
     }
     // ... and on one that stands on less than the finality the offer asked for (`extensions.kaspa.finality`)
     if (finalityRank(settledFinality(settlement)) < finalityRank(offerFinality(offer))) {

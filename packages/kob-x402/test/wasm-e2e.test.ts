@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createNodeServer, createPaywall } from '../src/server.ts';
-import { KobX402Client } from '../src/client.ts';
+import { KobX402Client, kcc20Custody } from '../src/client.ts';
 import { MemoryArtifactStore } from '../src/artifact-store.ts';
 import { decodePaymentResponse } from '../src/headers.ts';
 import { KobX402Error } from '../src/errors.ts';
@@ -48,8 +48,13 @@ async function rig(spec: OfferSpec, capabilities: Record<string, unknown>, verif
           network: body.paymentRequirements.network,
           amount: body.paymentRequirements.amount,
           payer: body.paymentPayload.payload.payerAddress,
-          // the finality the settlement reached, as the facilitator reports it
-          extensions: { kaspa: { finality: (body.paymentRequirements.extra as { finality?: string } | undefined)?.finality ?? 'accepted' } },
+          // the finality the settlement reached, as the facilitator reports it, and a kcc20 offer's custody class (x402-kcc20-profile.md 4.3)
+          extensions: {
+            kaspa: {
+              finality: (body.paymentRequirements.extra as { finality?: string } | undefined)?.finality ?? 'accepted',
+              ...(kcc20Custody(body.paymentRequirements) ? { custody: kcc20Custody(body.paymentRequirements) } : {}),
+            },
+          },
         },
       };
     },
