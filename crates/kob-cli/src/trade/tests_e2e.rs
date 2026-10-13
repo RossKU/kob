@@ -491,6 +491,16 @@ fn a_node_of_another_network_is_refused_before_signing() {
     assert_eq!(run(crate::trade::actions::run_send, w.args(0x11, &format!("KAS {to} 2.5KAS --yes"))), 1);
     assert_eq!(w.submitted(), 0);
     assert!(!w.dir.join("out").exists(), "nothing signed or written");
+    // checked before planning: a node of another network (whose UTXO set is another) is refused for its network, not with
+    // a planning error such as "not enough KAS" (TN10 2026-10-14 B-8); nothing but its network is read from it
+    let saved = std::mem::take(&mut w.node_state.lock().unwrap().utxos);
+    w.node_state.lock().unwrap().requests.clear();
+    assert_eq!(run(place, w.args(0x11, "limit --token TST --side buy --amount 10TST --price 3KAS --yes")), 1);
+    assert_eq!(run(crate::trade::actions::run_send, w.args(0x11, &format!("KAS {to} 2.5KAS --yes"))), 1);
+    assert_eq!(run(crate::trade::merge::run, w.args(0x11, "TST --yes")), 1);
+    let methods: Vec<String> = w.node_state.lock().unwrap().requests.iter().map(|r| r.0.clone()).collect();
+    assert!(!methods.is_empty() && methods.iter().all(|m| m == "getBlockDagInfo"), "{methods:?}");
+    w.node_state.lock().unwrap().utxos = saved;
     // the same node on the named network signs
     w.node_state.lock().unwrap().network = "testnet-10".into();
     assert_eq!(run(crate::trade::actions::run_send, w.args(0x11, &format!("KAS {to} 2.5KAS --yes"))), 0);

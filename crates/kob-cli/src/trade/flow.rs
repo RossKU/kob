@@ -49,6 +49,13 @@ pub fn issues_json(issues: &[Issue]) -> Value {
     json!(issues.iter().map(|i| json!({"code": i.code, "severity": sev(i.severity), "message": i.message})).collect::<Vec<_>>())
 }
 
+/// The node a signing command plans from must run the network the command names: checked before anything is read from it
+/// for a plan (a node of another network has another UTXO set, so a planning error such as "not enough KAS" would hide the
+/// cause), and again in [`finish`] right before anything is shown as a plan of that network or signed.
+pub fn check_network_first(c: &Common) -> Result<(), String> {
+    crate::wrpc::check_node_network(c.need_node()?, &c.network, crate::common::NODE_TIMEOUT)
+}
+
 /// Show, confirm, sign, submit. Returns the process exit code.
 pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &str) -> i32 {
     // the plan was read from this node: it must run the network the command names (mainnet only when named), before

@@ -790,6 +790,7 @@ pub fn run(args: &[String]) -> i32 {
         let c = Common::from(&p).map_err(|e| (2, e))?;
         let signer = c.signer(args).map_err(|e| (2, e))?;
         check_flags(&kind, &p).map_err(|e| (2, e))?;
+        super::flow::check_network_first(&c).map_err(|e| (1, e))?;
         let (env, a, b, notes) = env_for(&c, &p, &kind, signer.pubkey).map_err(|e| (1, e))?;
         let intent = intent_of(&kind, &p, &a, b.as_ref()).map_err(|e| (2, e))?;
         let mut plan = plan_order(&env, &intent);

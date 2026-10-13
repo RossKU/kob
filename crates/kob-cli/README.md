@@ -76,7 +76,7 @@ valid ones.
   terminal the command refuses. A transaction that needs another key's signature is never signed.
 * Mainnet is refused unless named: `--network mainnet`, even by a mainnet deployment build. The node must run the
   network named (`getBlockDagInfo`): a signature commits to no network, so a node of another one is refused before
-  anything is signed.
+  anything is planned from it, and again before anything is signed.
 * Tokens are read from the registry (`--registry FILE`, validated for the network, else the embedded one of the same
   network) and the indexer. A registry token that is delisted or on a program pending review is not traded; a token only
   the indexer knows is flagged `TOKEN_UNLISTED` (its ticker and decimals are the indexer's: check its covenant id).

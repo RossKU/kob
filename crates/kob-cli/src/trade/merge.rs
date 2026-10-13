@@ -261,6 +261,9 @@ pub fn run(args: &[String]) -> i32 {
         Ok(x) => x,
         Err(e) => return fail(e, 2),
     };
+    if let Err(e) = super::flow::check_network_first(&c) {
+        return fail(e, 1);
+    }
     let [key] = p.pos.as_slice() else { return fail("give exactly one token (ticker or covenant id)".into(), 2) };
     let r = (|| -> Result<i32, String> {
         let node = c.need_node()?;

@@ -78,6 +78,10 @@ fn ctx(args: &[String], value_flags: &[&str], bool_flags: &[&str], usage: &str) 
     let p = parse(args, value_flags, bool_flags).map_err(fail)?;
     let c = Common::from(&p).map_err(fail)?;
     let s = c.signer(args).map_err(fail)?;
+    super::flow::check_network_first(&c).map_err(|e| {
+        eprintln!("error: {e}");
+        1
+    })?;
     Ok((p, c, s))
 }
 
