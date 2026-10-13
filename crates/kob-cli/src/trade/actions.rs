@@ -632,7 +632,7 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
     let intent = intent_from_order(s, lifetime, clock.daa, &ch)?;
     // what the replacement draws on: the order's own KAS and custody (stand-ins) and the maker's free tokens of A and B
     let needs = super::place::Needs { a: true, b: b.is_some() };
-    let mut env = super::place::env_of(c, a, b, needs, signer.pubkey)?;
+    let (mut env, notes) = super::place::env_of(c, a, b, needs, signer.pubkey)?;
     env.carrier = super::place::carrier_arg(p)?.or(order_carrier(live));
     env.guards_acknowledged = p.has("--ack-no-guards");
     env.market_start_ack = true;
@@ -655,6 +655,7 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
     lines.push(format!("replacement: {} holding {}", rep.template_id().name(), units::kas(value as i128)));
     lines.extend(super::place::plan_lines(&plan, a, b).into_iter().map(|l| format!("  {l}")));
     let mut issues: Vec<Issue> = plan.issues.iter().filter(|i| i.severity != Severity::Error).cloned().collect();
+    issues.extend(notes);
     issues.extend(more.into_iter().map(|n| issue("REPLACE_NOTE", Severity::Info, n)));
     let mut states = vec![serde_json::to_value(&rep).unwrap_or_default()];
     states.extend(plan.states.iter().skip(1).map(|x| serde_json::to_value(x).unwrap_or_default()));

@@ -10,7 +10,8 @@ use super::market::{self, TokenMarket};
 use super::opts::{parse, Common, Parsed, COMMON_HELP};
 use super::plan::{
     plan_order, Activation, CloseIntent, CondIntent, CondKind, Crossing, DutchIntent, Env, IfdIntent, IfdMore, ImmediateIntent,
-    Intent, Lifetime, LimitIntent, MarketIntent, PairPart, Plan, ScheduleIntent, Side, StopKnobs, StreamingIntent, Trail,
+    Intent, Issue, Lifetime, LimitIntent, MarketIntent, PairPart, Plan, ScheduleIntent, Severity, Side, StopKnobs, StreamingIntent,
+    Trail,
 };
 use super::show::Units;
 use super::units::{
@@ -527,8 +528,12 @@ pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> 
     v
 }
 
-/// The planning environment of `kob place`, read from the node and the indexer.
-pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<(Env, TokenMarket, Option<TokenMarket>), String> {
+/// The planning environment of `kob place`, read from the node and the indexer, with the findings of the tokens'
+/// extension commitments ([`env_of`]).
+pub type PlaceEnv = (Env, TokenMarket, Option<TokenMarket>, Vec<Issue>);
+
+/// [`PlaceEnv`] of the command line `p`.
+pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<PlaceEnv, String> {
     let indexer = c.need_indexer()?.to_string();
     let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(&indexer))?;
     let entered = p
@@ -547,11 +552,11 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<(E
     let carrier = carrier_arg(p)?;
     // a sell (and a sell-first entry) holds tokens of A; a pair buy holds B, a sell-first pair entry a B prefund
     let needs = Needs { a: side == Side::Sell, b: b.is_some() && (side == Side::Buy || if_done) };
-    let mut env = env_of(c, &a, b.as_ref(), needs, maker)?;
+    let (mut env, notes) = env_of(c, &a, b.as_ref(), needs, maker)?;
     env.carrier = carrier;
     env.guards_acknowledged = p.has("--ack-no-guards");
     env.market_start_ack = p.has("--ack-market-start");
-    Ok((env, a, b))
+    Ok((env, a, b, notes))
 }
 
 /// `--carrier`, checked against the covenant output minimum.
@@ -582,7 +587,16 @@ pub struct Needs {
 
 /// The planning environment of an order of A (a pair: A/B) for `maker`, read from the node and the indexer: the clock,
 /// the KAS and token UTXOs, the book, the maker's own orders and the last fill (`web/src/app/env.ts`).
-pub fn env_of(c: &Common, a: &TokenMarket, b: Option<&TokenMarket>, needs: Needs, maker: [u8; 32]) -> Result<Env, String> {
+///
+/// With it, what the wallet's own holdings tell about an unlisted KCC-20 token's extension commitment (the indexer's): a
+/// mismatch is refused here; no holdings to compare with is a warning (the web app's unchecked commitment).
+pub fn env_of(
+    c: &Common,
+    a: &TokenMarket,
+    b: Option<&TokenMarket>,
+    needs: Needs,
+    maker: [u8; 32],
+) -> Result<(Env, Vec<Issue>), String> {
     let node = c.need_node()?.to_string();
     let indexer = c.need_indexer()?.to_string();
     let clock = data::clock(&node)?;
@@ -591,7 +605,9 @@ pub fn env_of(c: &Common, a: &TokenMarket, b: Option<&TokenMarket>, needs: Needs
     let token_utxos = if needs.a { data::token_utxos(&indexer, &node, &c.network, a, &maker)? } else { vec![] };
     // an unlisted KCC-20 token's extension commitment is the indexer's: the wallet's own holdings of the token (their states
     // confirmed on the node) are a reference without the indexer, and one of another commitment blocks (the web app's
-    // open-token-extension-mismatch); a buy would otherwise pin a commitment that only a look-alike genesis can fill
+    // open-token-extension-mismatch); a buy would otherwise pin a commitment that only a look-alike genesis can fill. The
+    // indexer's commitment is never taken alone: without holdings to compare with, the plan says it is unchecked
+    let mut notes = vec![];
     for m in [Some(a), b].into_iter().flatten() {
         if m.family != kob_protocol::Family::Kcc20 || m.listing != market::Listing::Unlisted {
             continue;
@@ -609,6 +625,30 @@ pub fn env_of(c: &Common, a: &TokenMarket, b: Option<&TokenMarket>, needs: Needs
                 to_hex(&u.state.extension())
             ));
         }
+        notes.push(if held.is_empty() {
+            Issue {
+                code: "TOKEN_EXTENSION_UNCHECKED",
+                severity: Severity::Warning,
+                message: format!(
+                    "{}: its extension commitment {} is the indexer's, and nothing checks it (no registry entry, and this wallet \
+                     holds none of the token): an order pins it, and only tokens of that commitment fill it; check the token's \
+                     genesis yourself",
+                    m.name(),
+                    to_hex(&m.ext)
+                ),
+            }
+        } else {
+            Issue {
+                code: "TOKEN_EXTENSION_CHECKED",
+                severity: Severity::Info,
+                message: format!(
+                    "{}: the indexer's extension commitment {} matches your {} token UTXO(s) of it (checked on the node)",
+                    m.name(),
+                    to_hex(&m.ext),
+                    held.len()
+                ),
+            }
+        });
     }
     let (book, own, last_fill, pair) = match b {
         None => {
@@ -646,7 +686,7 @@ pub fn env_of(c: &Common, a: &TokenMarket, b: Option<&TokenMarket>, needs: Needs
             )
         }
     };
-    Ok(Env {
+    let env = Env {
         market: a.clone(),
         maker,
         clock,
@@ -661,7 +701,8 @@ pub fn env_of(c: &Common, a: &TokenMarket, b: Option<&TokenMarket>, needs: Needs
         fee_rate: c.fee_rate,
         carrier: None,
         pair,
-    })
+    };
+    Ok((env, notes))
 }
 
 /// Units of the plan's tokens.
@@ -719,12 +760,13 @@ pub fn run(args: &[String]) -> i32 {
         let c = Common::from(&p).map_err(|e| (2, e))?;
         let signer = c.signer(args).map_err(|e| (2, e))?;
         check_flags(&kind, &p).map_err(|e| (2, e))?;
-        let (env, a, b) = env_for(&c, &p, &kind, signer.pubkey).map_err(|e| (1, e))?;
+        let (env, a, b, notes) = env_for(&c, &p, &kind, signer.pubkey).map_err(|e| (1, e))?;
         let intent = intent_of(&kind, &p, &a, b.as_ref()).map_err(|e| (2, e))?;
         let mut plan = plan_order(&env, &intent);
+        plan.issues.extend(notes);
         // a registry token that is not tradable is refused, an unlisted one flagged (`web/src/kob/decode.ts` token-unlisted)
         for i in [Some(&a), b.as_ref()].into_iter().flatten().filter_map(|m| m.listing_issue(true)) {
-            plan.ok &= i.severity != super::plan::Severity::Error;
+            plan.ok &= i.severity != Severity::Error;
             plan.issues.push(i);
         }
         Ok((c, signer, plan, a, b))

@@ -226,6 +226,19 @@ impl World {
     fn submitted(&self) -> usize {
         self.node_state.lock().unwrap().submitted.len()
     }
+    /// The codes of the findings the newest file written for `suffix` carries.
+    fn issue_codes(&self, suffix: &str) -> Vec<String> {
+        let dir = self.dir.join("out");
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.display().to_string().ends_with(suffix))
+            .collect();
+        files.sort_by_key(|p| std::fs::metadata(p).unwrap().modified().unwrap());
+        let path = files.last().unwrap_or_else(|| panic!("no {suffix} in {}", dir.display()));
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        doc["info"]["issues"].as_array().unwrap().iter().map(|i| i["code"].as_str().unwrap().to_string()).collect()
+    }
     /// The newest signed transaction written for `suffix`, re-validated in the engine.
     fn signed(&self, suffix: &str) -> SignedTx {
         let dir = self.dir.join("out");
@@ -537,6 +550,8 @@ fn a_delisted_registry_token_is_not_traded() {
 
 /// An unlisted KCC-20 token whose extension commitment the indexer names differently from the wallet's own node-checked
 /// holdings of it: a buy (which would pin the indexer's commitment) is refused; with the holdings' commitment it is placed.
+/// The indexer's commitment is never taken alone: a wallet that holds none of the token places with the commitment marked
+/// unchecked (as the web app's pre-sign row), one that holds it with the commitment marked checked.
 #[test]
 fn an_unlisted_token_commitment_must_match_the_wallets_holdings() {
     let w = world("extmismatch", &[]);
@@ -553,6 +568,23 @@ fn an_unlisted_token_commitment_must_match_the_wallets_holdings() {
     set_ext(EXT);
     assert_eq!(run(place, w.args(0x11, buy)), 0);
     assert_eq!(w.submitted(), 1);
+    let codes = w.issue_codes(".place.json");
+    assert!(
+        codes.iter().any(|c| c == "TOKEN_EXTENSION_CHECKED") && !codes.iter().any(|c| c == "TOKEN_EXTENSION_UNCHECKED"),
+        "{codes:?}"
+    );
+    // a wallet without the token: nothing to compare the indexer's commitment with
+    w.indexer_state.lock().unwrap().routes.insert(
+        format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(&pk(0x22)), to_hex(&TOKEN)),
+        json!({"items": [], "next_cursor": null}),
+    );
+    assert_eq!(run(place, w.args(0x22, buy)), 0);
+    assert_eq!(w.submitted(), 2);
+    let codes = w.issue_codes(".place.json");
+    assert!(
+        codes.iter().any(|c| c == "TOKEN_EXTENSION_UNCHECKED") && !codes.iter().any(|c| c == "TOKEN_EXTENSION_CHECKED"),
+        "{codes:?}"
+    );
 }
 
 const TOKEN_B: [u8; 32] = [0x71; 32];
