@@ -90,6 +90,7 @@ fn run_until(mut cmd: Command, until: &str, timeout: Duration) -> (Option<bool>,
     let mut out = String::new();
     let t = Instant::now();
     let mut seen_at = None;
+    let mut closed = false;
     while t.elapsed() < timeout {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(l) => {
@@ -99,7 +100,10 @@ fn run_until(mut cmd: Command, until: &str, timeout: Duration) -> (Option<bool>,
                     seen_at = Some(Instant::now());
                 }
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                closed = true;
+                break;
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         // after the awaited line, a little longer: the connection attempts that follow it are logged too
@@ -107,7 +111,15 @@ fn run_until(mut cmd: Command, until: &str, timeout: Duration) -> (Option<bool>,
             break;
         }
     }
-    let status = child.0.try_wait().ok().flatten().map(|s| s.success());
+    // both pipes closed: the process is exiting, give it a moment to be reaped (a Windows runner can lag behind the pipes)
+    let reap = Instant::now();
+    let status = loop {
+        match child.0.try_wait() {
+            Ok(Some(s)) => break Some(s.success()),
+            Ok(None) if closed && reap.elapsed() < Duration::from_secs(10) => thread::sleep(Duration::from_millis(50)),
+            _ => break None,
+        }
+    };
     (status, out)
 }
 
