@@ -5130,6 +5130,22 @@ fn v3_buy_audit_cond_bid() {
         &with_name(condb_stray_at_slot(&f8, 8, true), "NAU-CB30 stray of the order as a 9th token input (beyond the scan)"),
         0,
     );
+    // the same scan on the 3 / 3 program of the run (the reference, or KOB_KCC20_PROGRAM's): the slots its token takes
+    let f3 = fx();
+    run_ok(
+        &f3.net,
+        &with_name(
+            condb_stray_at_slot(&f3, 2, false),
+            "PAU-CB02s conditional-buy fill with three token inputs (every slot of a 3 / 3 token), no stray",
+        ),
+    );
+    for k in 0..8 {
+        let s =
+            with_name(condb_stray_at_slot(&f3, k, true), &format!("NAU-CBS{k} stray of the order at token slot {k} (to the taker)"));
+        if fits_slots(&f3.net.t, &s) {
+            run_bad(&f3.net, &s, 0);
+        }
+    }
 }
 
 #[test]
@@ -5478,4 +5494,20 @@ fn v3_buy_audit_ifd_ask() {
         &with_name(ifda_stray_at_slot(&f8, 8, true), "NAU-IA37 stray of the entry as a 9th token input (beyond the scan)"),
         0,
     );
+    // the same scan on the 3 / 3 program of the run (the reference, or KOB_KCC20_PROGRAM's): the slots its token takes
+    let f3 = fx();
+    run_ok(
+        &f3.net,
+        &with_name(
+            ifda_stray_at_slot(&f3, 2, false),
+            "PAU-IA01s entry fill with three token inputs (every slot of a 3 / 3 token), no stray",
+        ),
+    );
+    for k in 0..8 {
+        let s =
+            with_name(ifda_stray_at_slot(&f3, k, true), &format!("NAU-IAS{k} stray of the entry at token slot {k} (to the taker)"));
+        if fits_slots(&f3.net.t, &s) {
+            run_bad(&f3.net, &s, 0);
+        }
+    }
 }

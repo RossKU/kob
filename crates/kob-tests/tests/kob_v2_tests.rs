@@ -5730,6 +5730,20 @@ fn v3_audit_ask() {
         &with_name(ask_stray_at_slot(&f8, 8, true), "NAU-A22 stray of the ask as a 9th token input (beyond the scan)"),
         0,
     );
+    // the same scan on the 3 / 3 program of the run (the reference, or KOB_KCC20_PROGRAM's): the slots its token takes
+    run_ok(
+        n,
+        &with_name(
+            ask_stray_at_slot(&f, 2, false),
+            "PAU-A01s ask fill with three token inputs (every slot of a 3 / 3 token), no stray",
+        ),
+    );
+    for k in 0..8 {
+        let s = with_name(ask_stray_at_slot(&f, k, true), &format!("NAU-AS{k} stray of the ask at token slot {k} (to the taker)"));
+        if over_slots(n, &s).is_none() {
+            run_bad(n, &s, 0);
+        }
+    }
 }
 
 #[test]
@@ -5987,6 +6001,20 @@ fn v3_audit_bid() {
         &with_name(bid_stray_at_slot(&f8, 8, true), "NAU-B26 stray of the bid as a 9th token input (beyond the scan)"),
         0,
     );
+    // the same scan on the 3 / 3 program of the run (the reference, or KOB_KCC20_PROGRAM's): the slots its token takes
+    run_ok(
+        n,
+        &with_name(
+            bid_stray_at_slot(&f, 2, false),
+            "PAU-B01s bid fill with three token inputs (every slot of a 3 / 3 token), no stray",
+        ),
+    );
+    for k in 0..8 {
+        let s = with_name(bid_stray_at_slot(&f, k, true), &format!("NAU-BS{k} stray of the bid at token slot {k} (to the taker)"));
+        if over_slots(n, &s).is_none() {
+            run_bad(n, &s, 0);
+        }
+    }
 }
 
 /// The custody attacks every custody-holding order must refuse, on its sold-out shape `sold` ([order, custody (leads, all
@@ -6726,6 +6754,20 @@ fn v3_audit_ifd_bid() {
         add_strays_at_slot(&f8, &mut s, 1, i, k, true, ko);
         run_bad(&f8.net, &s, 0);
     }
+    // the same scan on the 3 / 3 program of the run (the reference, or KOB_KCC20_PROGRAM's): the slots its token takes
+    let mut s =
+        with_name(ifd_fill(&f, &base()), "PAU-IB03s entry fill with three token inputs (every slot of a 3 / 3 token), no stray");
+    let ko = kas(&s);
+    add_strays_at_slot(&f, &mut s, 1, i, 2, false, ko);
+    run_ok(n, &s);
+    for k in 0..8 {
+        let mut s = with_name(ifd_fill(&f, &base()), &format!("NAU-IBS{k} stray of the entry at token slot {k} (to the taker)"));
+        let ko = kas(&s);
+        add_strays_at_slot(&f, &mut s, 1, i, k, true, ko);
+        if over_slots(n, &s).is_none() {
+            run_bad(n, &s, 0);
+        }
+    }
 }
 
 /// The stray scan of KobCondAsk slot by slot (8/8 token) and its bound: a partial take-profit fill whose custody leads
@@ -6733,20 +6775,29 @@ fn v3_audit_ifd_bid() {
 #[test]
 fn v3_audit_cond_ask_strays() {
     let f8 = fx8();
-    let oco = CondP::oco(pk(&f8.maker_a));
     let c = cov(0xc1);
-    let shape = |k: usize, stray: bool, name: &str| {
-        let mut s = with_name(cond_fill(&f8, &oco, 4 * TOK, 0, &oco, None), name);
+    let shape = |f: &Fx, k: usize, stray: bool, name: &str| {
+        let oco = CondP::oco(pk(&f.maker_a));
+        let mut s = with_name(cond_fill(f, &oco, 4 * TOK, 0, &oco, None), name);
         let ko = s.outputs.len() - 1;
-        add_strays_at_slot(&f8, &mut s, 1, c, k, stray, ko);
+        add_strays_at_slot(f, &mut s, 1, c, k, stray, ko);
         if k == 0 {
             set_arg(&mut s, 0, 1, iv(2));
         }
         s
     };
-    run_ok(&f8.net, &shape(7, false, "PAU-CA02 conditional fill with eight token inputs (every scan slot), no stray"));
+    run_ok(&f8.net, &shape(&f8, 7, false, "PAU-CA02 conditional fill with eight token inputs (every scan slot), no stray"));
     for k in 0..8 {
-        run_bad(&f8.net, &shape(k, true, &format!("NAU-CAS{k} stray of the conditional at token slot {k} (to the taker)")), 0);
+        run_bad(&f8.net, &shape(&f8, k, true, &format!("NAU-CAS{k} stray of the conditional at token slot {k} (to the taker)")), 0);
     }
-    run_bad(&f8.net, &shape(8, true, "NAU-CA39 stray of the conditional as a 9th token input (beyond the scan)"), 0);
+    run_bad(&f8.net, &shape(&f8, 8, true, "NAU-CA39 stray of the conditional as a 9th token input (beyond the scan)"), 0);
+    // the same scan on the 3 / 3 program of the run (the reference, or KOB_KCC20_PROGRAM's): the slots its token takes
+    let f = fx();
+    run_ok(&f.net, &shape(&f, 2, false, "PAU-CA02s conditional fill with three token inputs (every slot of a 3 / 3 token), no stray"));
+    for k in 0..8 {
+        let s = shape(&f, k, true, &format!("NAU-CAS{k} stray of the conditional at token slot {k} (to the taker)"));
+        if over_slots(&f.net, &s).is_none() {
+            run_bad(&f.net, &s, 0);
+        }
+    }
 }

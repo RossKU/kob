@@ -808,4 +808,4 @@ export const mutations = withPublicMint([
   { id: "AU-IA-51", file: "KobIfdAsk", run: { [T_AU_IA]: ["NAU-IA35"] }, note: "cancel: the maker's signature", edits: [del("        require(checkSig(s, maker));\n")] },
   { id: "AU-CB-44", file: "KobCondBid", run: { [T_AU_CB]: ["NAU-CB31"] }, note: "update: keeperTip >= 0 (hostile field: a negative keeperTip, its floor clamped to the escrow, would arm as keeperTip 0; as M4 / NK2 for KobCondAsk)", edits: [del("        require(keeperTip >= 0);\n")] },
   { id: "AU-IA-52", file: "KobIfdAsk", run: { [T_AU_IA]: ["NAU-IA39"] }, note: "update: keeperTip >= 0 (hostile field: the keeper tops the entry up; as M4 / NK2 for KobCondAsk)", edits: [del("        require(keeperTip >= 0);\n")] },
-]);
+], { batteries: new Set(Object.keys(ON3)), skip: NOT_ON3 });

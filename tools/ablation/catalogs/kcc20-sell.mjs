@@ -873,4 +873,4 @@ export const mutations = withPublicMint([
   { id: "AU-IB-45", file: "KobIfdBid", run: { [T_AU_IB]: ["NAU-IB27"] }, note: "refund: no output bound to the entry's id", edits: [rep("        require(OpCovInputCount(tokenCovId) == 0);\n        require(OpCovOutputCount(selfId) == 0);\n", "        require(OpCovInputCount(tokenCovId) == 0);\n")] },
   { id: "AU-IB-46", file: "KobIfdBid", run: { [T_AU_IB]: ["NAU-IB28"] }, note: "refund: output i pays P2PK(maker)", edits: [del("        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n")] },
   { id: "AU-IB-47", file: "KobIfdBid", run: { [T_AU_IB]: ["NAU-IB29"] }, note: "refund: the maker gets the escrow minus at most refundTip", edits: [del("        require(tx.outputs[self].value + refundTip >= tx.inputs[self].value);\n")] },
-]);
+], { batteries: BATTERIES, skip: NOT_ON_3x3 });
