@@ -505,7 +505,12 @@ pub fn run(args: &[String]) -> i32 {
         let signer = c.signer(args).map_err(|e| (2, e))?;
         let (env, a, b) = env_for(&c, &p, signer.pubkey).map_err(|e| (1, e))?;
         let intent = intent_of(&kind, &p, &a, b.as_ref()).map_err(|e| (2, e))?;
-        let plan = plan_order(&env, &intent);
+        let mut plan = plan_order(&env, &intent);
+        // a registry token that is not tradable is refused, an unlisted one flagged (`web/src/kob/decode.ts` token-unlisted)
+        for i in [Some(&a), b.as_ref()].into_iter().flatten().filter_map(|m| m.listing_issue(true)) {
+            plan.ok &= i.severity != super::plan::Severity::Error;
+            plan.issues.push(i);
+        }
         Ok((c, signer, plan, a, b))
     };
     let (c, signer, plan, a, b) = match step() {

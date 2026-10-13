@@ -7,7 +7,19 @@ use kob_protocol::defaults::{default_scale, tips};
 use kob_protocol::json::to_hex;
 use kob_protocol::Family;
 
+use super::plan::{Issue, Severity};
 use super::units::TokenUnit;
+
+/// How the registry knows a token (the web app's `tradable` / `untradableReason` and its `token-unlisted` finding).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Listing {
+    /// A tradable registry token.
+    Listed,
+    /// In the registry but not tradable there (delisted, or its token program not reviewed): the reason.
+    NotTradable(String),
+    /// Not in the registry: ticker and decimals are the indexer's.
+    Unlisted,
+}
 
 /// Everything a planner needs of one token.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +54,8 @@ pub struct TokenMarket {
     pub keeper_tip: i64,
     /// The registry checked every genesis output.
     pub genesis_verified: bool,
+    /// How the registry knows it ([`resolve`] sets it; a market built by [`TokenMarket::new`] alone is unlisted).
+    pub listing: Listing,
 }
 
 impl TokenMarket {
@@ -87,7 +101,33 @@ impl TokenMarket {
             refund_tip: tip.refund_tip as i64,
             keeper_tip: tip.keeper_tip as i64,
             genesis_verified: false,
+            listing: Listing::Unlisted,
         })
+    }
+
+    /// The finding a signing command raises for a token it trades (`trades`) or sends: a registry token that is not
+    /// tradable is refused for trading (a warning for a plain send); a token the registry does not list is a warning (its
+    /// ticker and decimals, which read every amount and price, come from the indexer).
+    pub fn listing_issue(&self, trades: bool) -> Option<Issue> {
+        match &self.listing {
+            Listing::Listed => None,
+            Listing::NotTradable(why) => Some(Issue {
+                code: "TOKEN_NOT_TRADABLE",
+                severity: if trades { Severity::Error } else { Severity::Warning },
+                message: format!("{} is not tradable in the registry: {why}", self.name()),
+            }),
+            Listing::Unlisted => Some(Issue {
+                code: "TOKEN_UNLISTED",
+                severity: Severity::Warning,
+                message: format!(
+                    "{} is not in the registry: its ticker and its decimals ({}, which read every amount and price) come from the \
+                     indexer; check its covenant id {} yourself",
+                    self.name(),
+                    self.decimals,
+                    to_hex(&self.cov)
+                ),
+            }),
+        }
     }
 
     /// Ticker and decimals.
@@ -129,13 +169,30 @@ pub struct TokenFacts {
     pub tick: Option<i64>,
     /// Genesis verified.
     pub genesis_verified: bool,
+    /// A registry token that is not tradable there: why (delisted, its token program pending review).
+    pub not_tradable: Option<String>,
 }
 
-/// The tokens of a registry file (`registry/tokens.json` format).
-pub fn registry_tokens(json: &str) -> Result<Vec<TokenFacts>, String> {
-    let r = kob_protocol::registry::Registry::parse_unvalidated(json).map_err(|e| e.to_string())?;
+/// The tokens of a registry file (`registry/tokens.json` format) of `network`: the registry must pass every rule of the
+/// validator (`kob registry validate`) and be of that network (the web app's `parseRegistry`).
+pub fn registry_tokens(json: &str, network: &str) -> Result<Vec<TokenFacts>, String> {
+    use kob_protocol::registry::{Registry, ReviewStatus, Status};
+    let r = Registry::parse_unvalidated(json).map_err(|e| format!("registry: {e}"))?;
+    r.validate_for_network(network).map_err(|errs| {
+        let list: Vec<String> = errs.iter().take(5).map(|e| e.to_string()).collect();
+        format!("the registry is not valid for {network} ({} findings): {}", errs.len(), list.join("; "))
+    })?;
     let mut out = vec![];
     for t in &r.tokens {
+        let not_tradable = if t.status == Status::Delisted {
+            Some("delisted".to_string())
+        } else {
+            match r.template(&t.template_id) {
+                Some(x) if x.review_status == ReviewStatus::Reviewed => None,
+                Some(x) => Some(format!("its token program {} is pending review", x.id)),
+                None => Some(format!("unknown template {}", t.template_id)),
+            }
+        };
         let cov = kob_protocol::registry::parse_hex32(&t.covenant_id).ok_or(format!("{}: bad covenant id", t.ticker))?;
         let tpl = r
             .template(&t.template_id)
@@ -149,6 +206,7 @@ pub fn registry_tokens(json: &str) -> Result<Vec<TokenFacts>, String> {
             ext: t.extension_commitment.as_deref().and_then(kob_protocol::registry::parse_hex32),
             tick: t.tick,
             genesis_verified: t.genesis_verified == Some(true),
+            not_tradable,
         });
     }
     Ok(out)
@@ -169,6 +227,7 @@ pub fn indexer_tokens(v: &serde_json::Value) -> Result<Vec<TokenFacts>, String> 
                 ext: h(t.get("extension_commitment")),
                 tick: None,
                 genesis_verified: false,
+                not_tradable: None,
             })
         })
         .collect()
@@ -220,6 +279,10 @@ pub fn resolve(key: &str, registry: &[TokenFacts], indexer: &[TokenFacts]) -> Re
     let ext = if program.family() == Family::Kron { None } else { ext };
     let mut m = TokenMarket::new(cov, &ticker, decimals, program, ext, r.and_then(|t| t.tick))?;
     m.genesis_verified = r.is_some_and(|t| t.genesis_verified);
+    m.listing = match r {
+        Some(t) => t.not_tradable.clone().map_or(Listing::Listed, Listing::NotTradable),
+        None => Listing::Unlisted,
+    };
     Ok(m)
 }
 
@@ -236,6 +299,7 @@ mod tests {
             ext: Some([ext; 32]),
             tick: None,
             genesis_verified: false,
+            not_tradable: None,
         }
     }
 
@@ -254,5 +318,44 @@ mod tests {
         let bad = vec![facts(1, "TUSD", 8, TemplateId::Kcc20Ref, 0xef)];
         assert!(resolve("TUSD", &reg, &bad).unwrap_err().contains("extension"));
         assert!(resolve("NOPE", &reg, &idx).is_err());
+    }
+
+    /// A registry file passes the validator for the command's network (as the web app's `parseRegistry`), and a registry
+    /// token that is not tradable there (delisted, or on a program pending review) is refused for trading, like the web
+    /// app's `assess`; a token only the indexer knows is flagged.
+    #[test]
+    fn the_registry_decides_what_is_tradable() {
+        let ex = include_str!("../../../../registry/tokens.example.json");
+        let e = registry_tokens(ex, "mainnet").unwrap_err();
+        assert!(e.contains("not valid for mainnet"), "{e}");
+        assert_eq!(resolve("EXKCC", &registry_tokens(ex, "testnet-10").unwrap(), &[]).unwrap().listing, Listing::Listed);
+        // a token of the 8/8 prototype while that program is pending review
+        let mut v: serde_json::Value = serde_json::from_str(ex).unwrap();
+        assert_eq!(v["templates"][1]["id"], "kcc20-ref-8x8");
+        v["templates"][1]["review_status"] = "pending-review".into();
+        let reg = registry_tokens(&v.to_string(), "testnet-10").unwrap();
+        let m = resolve("EXKCC", &reg, &[]).unwrap();
+        assert!(matches!(&m.listing, Listing::NotTradable(w) if w.contains("pending review")), "{:?}", m.listing);
+        assert_eq!(m.listing_issue(true).unwrap().severity, Severity::Error);
+        assert_eq!(m.listing_issue(false).unwrap().severity, Severity::Warning);
+        // a pending-review token of a reviewed program is tradable
+        assert_eq!(resolve("EXKRON", &reg, &[]).unwrap().listing, Listing::Listed);
+        // delisted
+        let mut v: serde_json::Value = serde_json::from_str(ex).unwrap();
+        v["tokens"][1]["status"] = "delisted".into();
+        let reg = registry_tokens(&v.to_string(), "testnet-10").unwrap();
+        assert_eq!(resolve("EXKRON", &reg, &[]).unwrap().listing, Listing::NotTradable("delisted".into()));
+        // a registry the validator refuses (a token listed on a program pending review) is not read at all
+        let mut v: serde_json::Value = serde_json::from_str(ex).unwrap();
+        v["templates"][1]["review_status"] = "pending-review".into();
+        v["tokens"][0]["status"] = "listed".into();
+        assert!(registry_tokens(&v.to_string(), "testnet-10").unwrap_err().contains("not valid"));
+        // a token only the indexer knows
+        let idx = vec![facts(2, "TOK", 8, TemplateId::Kcc20Ref, 0xdd)];
+        let m = resolve(&to_hex(&[2; 32]), &[], &idx).unwrap();
+        assert_eq!(m.listing, Listing::Unlisted);
+        let i = m.listing_issue(true).unwrap();
+        assert_eq!((i.code, i.severity), ("TOKEN_UNLISTED", Severity::Warning));
+        assert!(i.message.contains(&to_hex(&[2; 32])), "{}", i.message);
     }
 }

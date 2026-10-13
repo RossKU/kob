@@ -46,12 +46,15 @@ pub fn token_lists(
     indexer: Option<&str>,
 ) -> Result<(Vec<market::TokenFacts>, Vec<market::TokenFacts>), String> {
     let reg = match registry {
-        Some(p) => market::registry_tokens(&std::fs::read_to_string(p).map_err(|e| format!("cannot read {}: {e}", p.display()))?)?,
+        Some(p) => {
+            market::registry_tokens(&std::fs::read_to_string(p).map_err(|e| format!("cannot read {}: {e}", p.display()))?, network)
+                .map_err(|e| format!("{}: {e}", p.display()))?
+        }
         None => {
             let r = kob_protocol::registry::DEFAULT_REGISTRY_JSON;
             let net = serde_json::from_str::<Value>(r).ok().and_then(|v| v.get("network").and_then(Value::as_str).map(str::to_owned));
             if net.as_deref() == Some(network) {
-                market::registry_tokens(r)?
+                market::registry_tokens(r, network)?
             } else {
                 vec![]
             }

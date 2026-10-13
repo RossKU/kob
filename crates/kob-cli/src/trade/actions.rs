@@ -501,7 +501,8 @@ pub fn run_replace(args: &[String]) -> i32 {
         if let Some(a) = rep.amount_left() {
             lines.push(format!("amount: {}", units::tokens(a as i128, &u)));
         }
-        let issues = notes.into_iter().map(|n| issue("REPLACE_NOTE", Severity::Info, n)).collect();
+        let mut issues: Vec<Issue> = notes.into_iter().map(|n| issue("REPLACE_NOTE", Severity::Info, n)).collect();
+        issues.extend(ms.iter().filter_map(|m| m.listing_issue(true)));
         Ok((
             Ready {
                 title: format!("{} {}", if in_place { "amend in place" } else { "cancel-replace" }, to_hex(&cov)),
@@ -873,7 +874,7 @@ pub fn run_take(args: &[String]) -> i32 {
             Ready {
                 title: format!("take {} {}", to_hex(&cov), if sells { "(buy from a sell order)" } else { "(sell into a buy order)" }),
                 lines,
-                issues: vec![],
+                issues: ms.iter().filter_map(|m| m.listing_issue(true)).collect(),
                 file: format!("{}.take.json", to_hex(&cov)),
                 json: json!({"order": to_hex(&cov), "amount": amount.to_string(), "lockTime": lock}),
                 built,
@@ -1156,7 +1157,7 @@ pub fn run_send(args: &[String]) -> i32 {
                     format!("amount: {}", units::tokens(base as i128, &m.unit())),
                     format!("recipient's token output carries {}", units::kas(carrier as i128)),
                 ],
-                issues: vec![],
+                issues: m.listing_issue(false).into_iter().collect(),
                 file: format!("send-{}.json", to_hex(&built.tx.id)),
                 json: json!({"to": to, "token": to_hex(&m.cov), "amount": base.to_string(), "carrier": carrier.to_string()}),
                 built,

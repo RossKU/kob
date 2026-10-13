@@ -424,3 +424,33 @@ fn a_kas_payment_never_pays_its_change_as_fee() {
     assert_eq!(b.tx.outputs.len(), 1);
     assert!(b.fee.fee < DUST_OUTPUT_MIN, "{}", b.fee.fee);
 }
+
+/// `--registry FILE` is validated for the command's network, and a registry token that is not tradable there (here the
+/// fixture token, delisted) is refused for trading; a send still goes (with a warning).
+#[test]
+fn a_delisted_registry_token_is_not_traded() {
+    let w = world("delisted", &[]);
+    let mut v: Value = serde_json::from_str(include_str!("../../../../registry/tokens.example.json")).unwrap();
+    v["tokens"] = json!([{
+        "ticker": "TST", "name": "Test token", "family": "kcc20", "covenant_id": to_hex(&TOKEN), "template_id": "kcc20-ref-3x3",
+        "extension_commitment": to_hex(&EXT), "extension_class": "fixed-supply-standard", "decimals": 3, "status": "delisted",
+        "verified": false,
+    }]);
+    let reg = w.dir.join("registry.json");
+    std::fs::write(&reg, v.to_string()).unwrap();
+    let with_reg = |key: u8, rest: &str| {
+        let mut a = w.args(key, rest);
+        a.extend(["--registry".to_string(), reg.display().to_string()]);
+        a
+    };
+    let place = crate::trade::place::run;
+    assert_eq!(run(place, with_reg(0x11, "limit --token TST --side sell --amount 10TST --price 3KAS --yes")), 1);
+    assert_eq!(w.submitted(), 0);
+    assert_eq!(run(crate::trade::actions::run_send, with_reg(0x11, &format!("TST {} 1TST --yes", to_hex(&pk(0x22))))), 0);
+    assert_eq!(w.submitted(), 1);
+    // a registry of another network is refused
+    v["network"] = "mainnet".into();
+    std::fs::write(&reg, v.to_string()).unwrap();
+    assert_eq!(run(place, with_reg(0x11, "limit --token TST --side sell --amount 10TST --price 3KAS --yes")), 1);
+    assert_eq!(w.submitted(), 1);
+}
