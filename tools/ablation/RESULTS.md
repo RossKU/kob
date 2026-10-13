@@ -1,5 +1,37 @@
 # Ablation results
 
+## Public-mint program (2026-10-13, audit AUD-PM)
+
+`kcc20-ref-public-mint` (`KCC20PublicMint`, the published build of the KCC-20 reference, 3 / 3, tradable since `41b7fdb`) was
+run through every KCC-20 and pair catalog. Harness (`f7748cd`, `4677f31`): the KAS-kind suites' default token is the pinned
+public-mint template under `KOB_KCC20_PROGRAM=KCC20PublicMint` (every test fn but the 8/8 ones); the touch batteries have
+permanent `_pm` twins (slots gate as for `_3x3`); the audit stray-scan scenarios also run on the 3 / 3 token of the run at the
+slots it takes; the pair suites (KobPair now included, which never ran on a 3 / 3 program before) run the public-mint build
+permanently next to 8/8 and 3/3. Every verdict line names its program, the results record the programs each entry was seen
+on, and `coverage.mjs --results ... --program KCC20PublicMint` counts only the entries confirmed or held on that program.
+
+Runs: debug executables built from `4677f31` (pinned in a private `--exe-dir`), `--jobs 3`, baselines clean in every run:
+
+| Suites | Program | Entries | Confirmed | Held | Seen on the public-mint build | Wall time |
+|---|---|---|---|---|---|---|
+| `kcc20-sell` | `KOB_KCC20_PROGRAM=KCC20PublicMint` | 297 | 291 / 291 | 6 / 6 | 273 | 1,979 s |
+| `kcc20-buy` | `KOB_KCC20_PROGRAM=KCC20PublicMint` | 218 | 210 / 210 | 8 / 8 | 206 | 3,261 s |
+| `pair`, `cond-pair`, `cond-pair-rpt`, `ifd-pair` | 8/8, 3/3 and public-mint mixes | 352 | 334 / 334 | 18 / 18 | 329 | 578 s |
+| `kcc20-sell` / `kcc20-buy`, every entry with a 3 / 3 run (`--only`) | reference 3 / 3 | 89 / 73 | 88 / 88 / 72 / 72 | 1 / 1 / 1 / 1 | | 1,153 / 1,867 s |
+
+No `NOT-CONFIRMED`, `EDIT-ERROR` or `BASELINE-DIRTY`. Completion (`coverage.mjs --suite kcc20-sell,kcc20-buy,pair,cond-pair,cond-pair-rpt,ifd-pair
+--results <the three result files> --program KCC20PublicMint`): of the 742 `require` lines of the nine KCC-20 and pair
+templates, 78 are not witnessed on the public-mint build, and each is one of
+
+* the documented lines of the static check (20: `sb.length == 65`, `refundTip >= 0`, the side checks after `touch()`,
+  KobIfdPair's fill `n > 0`);
+* a stray-scan slot 3..7 or the scan bound `cnt <= MAX_TOK_IN` (53 lines over the nine templates): a fourth token input of one
+  covenant does not exist on a 3 / 3 program (the token program refuses the transaction whatever the orders do);
+* a check whose only attack needs a fourth token output of one covenant (5, the 3 / 3 reference has the same gap):
+  KobCondPair `OpInputCovenantId(tk) == tok` / `== cTok` (NC59a / b, the evidence custody of another KCC-20 token), the
+  re-arm merge's `OpCovInputCount(parent) == 0` (NCR4), KobIfdPair's committed-exit side and `sExt` checks (NIX3 / NIX3m,
+  the `pair.rearm.ask` shape of AUD-33).
+
 ## Audit completion (2026-10-13): every require of the KAS kinds has an entry
 
 Pre-mainnet internal audit. The KAS-kind catalogs left most `require` lines of the twelve KAS-kind templates (KobAsk,
