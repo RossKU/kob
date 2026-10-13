@@ -112,8 +112,7 @@ delivery) moves a `deliveryCarrier` (2 KAS by default) from the maker's funds on
 if-done entry also creates an exit with its own carrier, and every fill restarts a TWAP / DCA interval. Without a minimum
 a griefer could split an order into 1-base-unit fills, turning the maker's funds into carriers on dust token UTXOs,
 fragmenting the maker's tokens and stretching a TWAP. For a non-repeating order `minFill` bounds the number of fills
-(deliveries, carriers, exits, token UTXOs, payouts) to `⌈amount / minFill⌉`, exactly as the if-done `minLots` of protocol
-v2.6 did. A REPEATING if-done entry has no such bound over its life: every merge re-arms an amount, and the "takes
+(deliveries, carriers, exits, token UTXOs, payouts) to `⌈amount / minFill⌉`. A REPEATING if-done entry has no such bound over its life: every merge re-arms an amount, and the "takes
 everything left" exception applies again after each one, so an entry fill (and so an exit) can be as small as what was
 re-armed, down to the exit's own `minFill`; the bound holds per cycle, not per entry. A `KobBid`'s quantity is its escrow:
 its FOK completeness and the end of a GTC bid are exact in value terms (it ends when less than one minimum fill of buying
@@ -300,9 +299,7 @@ at most its price in B), the exact amounts of the tokens it holds, the stray gua
 token owned by its covenant id other than its own custodies) and its positional outputs. It does not check where the
 counterparty side comes from: a matcher may route it through the KAS books of A and B, net it against any number of
 opposite pair orders, or fill it from its own tokens (`matcher.md` §3.5). Prices are recorded only from KAS-book order
-fills: a pair fill against a pair order or inventory is volume only (`matcher.md` §3.5). *Decision 2026-10-05: this
-reverses the earlier rule that a token/token order may settle only through the two KAS books or against one opposite
-order.*
+fills: a pair fill against a pair order or inventory is volume only (`matcher.md` §3.5). *Decision 2026-10-05.*
 
 ### Plain pair orders (`KobPair`)
 

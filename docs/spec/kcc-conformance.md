@@ -232,9 +232,11 @@ Observation for upstream: the `covenant-id/v1` minimum check also passes when `o
 transaction that spends it. KCC-2 section 6 warns that participation alone is not approval; KCC-20 PR #31 does not
 forbid this owner. KOB issuance cannot create it (the covenant id is derived from the genesis outputs).
 
-## 6. Optional batch leader (prototype, proposed for upstream, not issued)
+## 6. Optional batch leader (prototype, not issued)
 
-The default configuration compiles `max_token_inputs` / `max_token_outputs` = 3 into the holder program, and every token
+KOB proposed this for upstream KCC-20 and withdrew the proposal on 2026-10-10 (a batch leader is not the standard's
+role; KOB uses the standard 3 / 3). The prototype stays as a measurement. The default configuration compiles
+`max_token_inputs` / `max_token_outputs` = 3 into the holder program, and every token
 input pushes the whole program, so larger limits make every transfer dearer (1 -> 1 payment: 3/3 0.00667 KAS, 8/8
 0.01354, 16/16 0.02454). `contracts/kcc20/p2/KCC20Opt.sil` (generated from the reference by
 `kob_protocol::kcc20::kcc20_opt_holder_source`) keeps holders on the 3/3 program and adds an optional batch-leader

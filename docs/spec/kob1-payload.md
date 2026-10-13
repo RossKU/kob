@@ -179,8 +179,7 @@ transaction) instead of misreading it.
 The family byte of a pair order record is the family of its base token A and must equal the family the state names
 for A (`KobPair` / `KobCondPair`: `sFamily` of an ask, `tFamily` of a bid; `KobIfdPair`: `aFamily`); its other token is
 named by the state (covenant id, program hash, prefix and suffix lengths, family 1 = KCC-20 or 2 = KRON, scale, and the
-extension commitment of the outputs the order creates of it) and may be of either family. Kind `0x08` of version 4
-never names a cross limit: the v3 `KobCross` was replaced by the pair kinds before any deployment.
+extension commitment of the outputs the order creates of it) and may be of either family.
 
 One transaction may announce several orders (one record each, any output order). The builders
 place a created order at output 0 and its custody tokens right after it; a cancel-replace places
