@@ -33,6 +33,7 @@ use silverscript_abi::{ArtifactValue, SilAbiArtifact, SilContractArtifact};
 
 use crate::family::Family;
 use crate::json::to_hex;
+pub use crate::profile::EmbeddedSource;
 
 /// Errors raised while loading or pinning a compiled artifact.
 #[derive(Debug, thiserror::Error)]
@@ -109,136 +110,124 @@ pub mod spk_trace {
     }
 }
 
-/// Every template the library knows. The names are the artifact file names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum TemplateId {
-    KobAsk,
-    KobBid,
-    KobCondAsk,
-    KobCondBid,
-    KobIfdBid,
-    KobIfdAsk,
-    /// Plain order of a token/token pair A/B (ask or bid, IOC / FOK, decay, TWAP / DCA): ONE template for both sides and
-    /// both families of A and B (state fields `side`, `sFamily`, `tFamily`). Kind code 0x08.
-    KobPair,
-    /// Conditional order of a pair (stop, stop-limit, trailing, take-profit / limit leg, OCO; the exits of
-    /// `KobIfdPair`): one template for both sides and families. Kind code 0x09.
-    KobCondPair,
-    /// If-done entry of a pair (IFD / IFO / bracket / repeat; buy-first and sell-first): one template for both sides and
-    /// families. Kind code 0x0a.
-    KobIfdPair,
-    #[serde(rename = "KCC20Ref")]
-    Kcc20Ref,
-    #[serde(rename = "KCC20Ref_4x5")]
-    Kcc20Ref4x5,
-    #[serde(rename = "KCC20Ref_8x8")]
-    Kcc20Ref8x8,
-    #[serde(rename = "KCC20Ref_16x16")]
-    Kcc20Ref16x16,
-    #[serde(rename = "KCC20P2")]
-    Kcc20P2,
-    /// KaspaCom's KCC20 0.2.5 (`contracts/third-party/kaspacom-kcc20`, Apache-2.0): a third-party
-    /// KCC-20-compatible program (112-byte state, draft tags, owner scheme 0x04, 8 / 8 slots, 25.5 KB)
-    /// accepted like every other program: through the strict template list of the registry.
-    #[serde(rename = "KCC20KaspaCom_0_2_5")]
-    Kcc20KaspaCom025,
-    /// The `KCC20` actor of upstream's published `KCC20PublicMint` app (argent-lang/kcc20-reference c8a0871, the fixture
-    /// `fixtures/public-mint/sil/KCC20.sil`, vendored in `contracts/third-party/kcc20-reference`): 3 / 3 slots, state
-    /// 1+145 B whose first field is the compiler-owned context `gen__kcc20_template` (always the program's own Sil
-    /// template hash). KOB embeds it as its KCC-1 actor-type handle: the context belongs to the template prefix
-    /// (34 B), the open state is the same 112-byte `KCC20State` as every other KCC-20 program, the template hash is the
-    /// handle's (see [`Template::sil_hash`] for the Sil one).
-    #[serde(rename = "KCC20PublicMint")]
-    Kcc20PublicMint,
-    // ---- KRON family (46-byte token state)
-    KobAskKron,
-    KobBidKron,
-    KobCondAskKron,
-    KobCondBidKron,
-    KobIfdBidKron,
-    KobIfdAskKron,
-    /// The common KRON token program (2,433 B).
-    KronToken2433,
-    /// The newer KRON token program (2,732 B).
-    KronToken2732,
+// The token-program variants of `TemplateId` and their embedded sources come from the profile table `data/programs.json`
+// (`build.rs`, `crate::profile`): adding a program of an existing codec family is a profile entry, not code.
+include!(concat!(env!("OUT_DIR"), "/token_programs.rs"));
+
+/// Number of KOB order kinds (`TemplateId` variants that are not token programs).
+pub const ORDER_KIND_COUNT: usize = 15;
+
+macro_rules! define_template_id {
+    (
+        kcc20: [$(($kv:ident, $kn:literal, $kd:literal)),* $(,)?],
+        kron: [$(($rv:ident, $rn:literal, $rd:literal)),* $(,)?]
+    ) => {
+        /// Every template the library knows: the KOB order kinds (artifact file names) and the token programs of the profile
+        /// table (`data/programs.json`; serde and [`TemplateId::name`] use the profile `name`). Variant order: the KCC-20 order
+        /// kinds and pair kinds, the KCC-20-codec programs, the KRON order kinds, the KRON-codec programs (each in table order).
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        pub enum TemplateId {
+            KobAsk,
+            KobBid,
+            KobCondAsk,
+            KobCondBid,
+            KobIfdBid,
+            KobIfdAsk,
+            /// Plain order of a token/token pair A/B (ask or bid, IOC / FOK, decay, TWAP / DCA): ONE template for both sides and
+            /// both families of A and B (state fields `side`, `sFamily`, `tFamily`). Kind code 0x08.
+            KobPair,
+            /// Conditional order of a pair (stop, stop-limit, trailing, take-profit / limit leg, OCO; the exits of
+            /// `KobIfdPair`): one template for both sides and families. Kind code 0x09.
+            KobCondPair,
+            /// If-done entry of a pair (IFD / IFO / bracket / repeat; buy-first and sell-first): one template for both sides and
+            /// families. Kind code 0x0a.
+            KobIfdPair,
+            $( #[doc = $kd] #[serde(rename = $kn)] $kv, )*
+            // ---- KRON family (46-byte token state)
+            KobAskKron,
+            KobBidKron,
+            KobCondAskKron,
+            KobCondBidKron,
+            KobIfdBidKron,
+            KobIfdAskKron,
+            $( #[doc = $rd] #[serde(rename = $rn)] $rv, )*
+        }
+
+        impl TemplateId {
+            /// All embedded templates (order kinds and token programs), in variant order.
+            pub const ALL: [TemplateId; ORDER_KIND_COUNT + TOKEN_PROGRAM_COUNT] = [
+                TemplateId::KobAsk,
+                TemplateId::KobBid,
+                TemplateId::KobCondAsk,
+                TemplateId::KobCondBid,
+                TemplateId::KobIfdBid,
+                TemplateId::KobIfdAsk,
+                TemplateId::KobPair,
+                TemplateId::KobCondPair,
+                TemplateId::KobIfdPair,
+                $( TemplateId::$kv, )*
+                TemplateId::KobAskKron,
+                TemplateId::KobBidKron,
+                TemplateId::KobCondAskKron,
+                TemplateId::KobCondBidKron,
+                TemplateId::KobIfdBidKron,
+                TemplateId::KobIfdAskKron,
+                $( TemplateId::$rv, )*
+            ];
+
+            /// The token programs (both codec families), in variant order: one per profile of `data/programs.json`.
+            pub const TOKEN_PROGRAMS: [TemplateId; TOKEN_PROGRAM_COUNT] = [$( TemplateId::$kv, )* $( TemplateId::$rv, )*];
+
+            /// Name: the artifact file stem of an order kind, the profile `name` of a token program.
+            pub fn name(self) -> &'static str {
+                match self {
+                    TemplateId::KobAsk => "KobAsk",
+                    TemplateId::KobBid => "KobBid",
+                    TemplateId::KobCondAsk => "KobCondAsk",
+                    TemplateId::KobCondBid => "KobCondBid",
+                    TemplateId::KobIfdBid => "KobIfdBid",
+                    TemplateId::KobIfdAsk => "KobIfdAsk",
+                    TemplateId::KobPair => "KobPair",
+                    TemplateId::KobCondPair => "KobCondPair",
+                    TemplateId::KobIfdPair => "KobIfdPair",
+                    TemplateId::KobAskKron => "KobAskKron",
+                    TemplateId::KobBidKron => "KobBidKron",
+                    TemplateId::KobCondAskKron => "KobCondAskKron",
+                    TemplateId::KobCondBidKron => "KobCondBidKron",
+                    TemplateId::KobIfdBidKron => "KobIfdBidKron",
+                    TemplateId::KobIfdAskKron => "KobIfdAskKron",
+                    $( TemplateId::$kv => $kn, )*
+                    $( TemplateId::$rv => $rn, )*
+                }
+            }
+
+            /// True for the token programs (both codec families).
+            pub fn is_token(self) -> bool {
+                matches!(self, $( TemplateId::$kv )|* $( | TemplateId::$rv )*)
+            }
+
+            /// Token family of this template (order kinds: the family whose tokens they escrow; token programs: the profile
+            /// `codec`). The pair kinds (`KobPair`, `KobCondPair`, `KobIfdPair`) serve both families (an instance's family is
+            /// the family of its base token A, a state field): they report KCC-20 here, see [`TemplateId::serves`].
+            pub fn family(self) -> Family {
+                match self {
+                    TemplateId::KobAskKron
+                    | TemplateId::KobBidKron
+                    | TemplateId::KobCondAskKron
+                    | TemplateId::KobCondBidKron
+                    | TemplateId::KobIfdBidKron
+                    | TemplateId::KobIfdAskKron
+                    $( | TemplateId::$rv )* => Family::Kron,
+                    _ => Family::Kcc20,
+                }
+            }
+        }
+    };
 }
 
+with_token_programs!(define_template_id);
+
 impl TemplateId {
-    /// All embedded templates (artifact-backed order kinds and token programs, raw KRON programs).
-    pub const ALL: [TemplateId; 24] = [
-        TemplateId::KobAsk,
-        TemplateId::KobBid,
-        TemplateId::KobCondAsk,
-        TemplateId::KobCondBid,
-        TemplateId::KobIfdBid,
-        TemplateId::KobIfdAsk,
-        TemplateId::KobPair,
-        TemplateId::KobCondPair,
-        TemplateId::KobIfdPair,
-        TemplateId::Kcc20Ref,
-        TemplateId::Kcc20Ref4x5,
-        TemplateId::Kcc20Ref8x8,
-        TemplateId::Kcc20Ref16x16,
-        TemplateId::Kcc20P2,
-        TemplateId::Kcc20KaspaCom025,
-        TemplateId::Kcc20PublicMint,
-        TemplateId::KobAskKron,
-        TemplateId::KobBidKron,
-        TemplateId::KobCondAskKron,
-        TemplateId::KobCondBidKron,
-        TemplateId::KobIfdBidKron,
-        TemplateId::KobIfdAskKron,
-        TemplateId::KronToken2433,
-        TemplateId::KronToken2732,
-    ];
-
-    /// Artifact name (file stem under `contracts/artifacts`).
-    pub fn name(self) -> &'static str {
-        match self {
-            TemplateId::KobAsk => "KobAsk",
-            TemplateId::KobBid => "KobBid",
-            TemplateId::KobCondAsk => "KobCondAsk",
-            TemplateId::KobCondBid => "KobCondBid",
-            TemplateId::KobIfdBid => "KobIfdBid",
-            TemplateId::KobIfdAsk => "KobIfdAsk",
-            TemplateId::KobPair => "KobPair",
-            TemplateId::KobCondPair => "KobCondPair",
-            TemplateId::KobIfdPair => "KobIfdPair",
-            TemplateId::Kcc20Ref => "KCC20Ref",
-            TemplateId::Kcc20Ref4x5 => "KCC20Ref_4x5",
-            TemplateId::Kcc20Ref8x8 => "KCC20Ref_8x8",
-            TemplateId::Kcc20Ref16x16 => "KCC20Ref_16x16",
-            TemplateId::Kcc20P2 => "KCC20P2",
-            TemplateId::Kcc20KaspaCom025 => "KCC20KaspaCom_0_2_5",
-            TemplateId::Kcc20PublicMint => "KCC20PublicMint",
-            TemplateId::KobAskKron => "KobAskKron",
-            TemplateId::KobBidKron => "KobBidKron",
-            TemplateId::KobCondAskKron => "KobCondAskKron",
-            TemplateId::KobCondBidKron => "KobCondBidKron",
-            TemplateId::KobIfdBidKron => "KobIfdBidKron",
-            TemplateId::KobIfdAskKron => "KobIfdAskKron",
-            TemplateId::KronToken2433 => "KronToken2433",
-            TemplateId::KronToken2732 => "KronToken2732",
-        }
-    }
-
-    /// Token family of this template (order kinds: the family whose tokens they escrow). The pair kinds (`KobPair`,
-    /// `KobCondPair`, `KobIfdPair`) serve both families (an instance's family is the family of its base token A, a state
-    /// field): they report KCC-20 here, see [`TemplateId::serves`].
-    pub fn family(self) -> Family {
-        match self {
-            TemplateId::KobAskKron
-            | TemplateId::KobBidKron
-            | TemplateId::KobCondAskKron
-            | TemplateId::KobCondBidKron
-            | TemplateId::KobIfdBidKron
-            | TemplateId::KobIfdAskKron
-            | TemplateId::KronToken2433
-            | TemplateId::KronToken2732 => Family::Kron,
-            _ => Family::Kcc20,
-        }
-    }
-
     /// The KCC-20 counterpart of a KRON order kind (identity for everything else).
     pub fn base(self) -> TemplateId {
         match self {
@@ -275,10 +264,19 @@ impl TemplateId {
         self.kind_code().is_some() && self.in_family(family) == self
     }
 
-    /// True for templates compiled from a SilverScript source (an artifact under
-    /// `contracts/artifacts`); false for the raw KRON token programs.
+    /// The token program's profile (`data/programs.json`); `None` for an order kind.
+    pub fn profile(self) -> Option<&'static crate::profile::ProgramProfile> {
+        if self.is_token() {
+            Some(crate::profile::by_name(self.name()).unwrap_or_else(|| panic!("{}: no profile", self.name())))
+        } else {
+            None
+        }
+    }
+
+    /// True for templates compiled from a SilverScript source (the order kinds, the token programs pinned as `silverc`
+    /// artifacts); false for a token program pinned as a raw redeem script (the KRON programs).
     pub fn is_artifact(self) -> bool {
-        !matches!(self, TemplateId::KronToken2433 | TemplateId::KronToken2732)
+        self.profile().is_none_or(|p| p.source.kind == crate::profile::SourceKind::SilvercArtifact)
     }
 
     /// Parses an artifact name.
@@ -286,56 +284,43 @@ impl TemplateId {
         TemplateId::ALL.into_iter().find(|t| t.name() == name)
     }
 
-    /// True for the KCC-20 token programs.
-    pub fn is_token(self) -> bool {
-        matches!(
-            self,
-            TemplateId::Kcc20Ref
-                | TemplateId::Kcc20Ref4x5
-                | TemplateId::Kcc20Ref8x8
-                | TemplateId::Kcc20Ref16x16
-                | TemplateId::Kcc20P2
-                | TemplateId::Kcc20KaspaCom025
-                | TemplateId::Kcc20PublicMint
-                | TemplateId::KronToken2433
-                | TemplateId::KronToken2732
-        )
-    }
-
     /// Compiler-owned context fields at the head of the program's state (Argent `runtime_states` field roles), which the
-    /// KCC-1 actor-type handle fixes in the template prefix: `gen__kcc20_template` of the `KCC20` actor of the published
-    /// `KCC20PublicMint` app (it holds the program's own Sil template hash in every UTXO). Empty for every other template.
-    pub fn context_fields(self) -> &'static [&'static str] {
-        match self {
-            TemplateId::Kcc20PublicMint => &["gen__kcc20_template"],
-            _ => &[],
-        }
+    /// KCC-1 actor-type handle fixes in the template prefix (profile `source.context_fields`: `gen__kcc20_template` of the
+    /// `KCC20` actor of the published `KCC20PublicMint` app, which holds the program's own Sil template hash in every UTXO).
+    /// Empty for every other template.
+    pub fn context_fields(self) -> &'static [String] {
+        self.profile().map(|p| p.source.context_fields.as_slice()).unwrap_or(&[])
     }
 
-    /// Per-transaction token input / output slots of a token program (KCC-20: leader included).
+    /// Per-transaction token input / output slots of a token program (KCC-20: leader included; profile `slots`).
     pub fn token_slots(self) -> Option<(usize, usize)> {
-        match self {
-            TemplateId::Kcc20Ref | TemplateId::Kcc20P2 | TemplateId::Kcc20PublicMint => Some((3, 3)),
-            TemplateId::Kcc20Ref4x5 => Some((4, 5)),
-            TemplateId::Kcc20Ref8x8 | TemplateId::Kcc20KaspaCom025 => Some((8, 8)),
-            TemplateId::Kcc20Ref16x16 => Some((16, 16)),
-            TemplateId::KronToken2433 | TemplateId::KronToken2732 => Some((4, 5)),
-            _ => None,
-        }
+        self.profile().map(|p| (p.slots.inputs, p.slots.outputs))
     }
 
-    /// Smallest KAS value (sompi) a token program accepts on a token output it authorises (`None` for a template that is
-    /// not a token program). Measured in the script engine for every program (`kob-tests` `c6_diff`,
-    /// `c6_7_token_output_floors_are_measured`): KaspaCom's KCC20 0.2.5 refuses a token output below 0.5 KAS; the reference
-    /// programs, P2 and the KRON programs take any value. Every builder refuses a token output below it, and
+    /// Smallest KAS value (sompi) a token program accepts on a token output it authorises (profile `carrier_floor`; `None`
+    /// for a template that is not a token program). Measured in the script engine for every program (`kob-tests`
+    /// `c6_diff`, `c6_7_token_output_floors_are_measured`): KaspaCom's KCC20 0.2.5 refuses a token output below 0.5 KAS;
+    /// the reference programs, P2 and the KRON programs take any value. Every builder refuses a token output below it, and
     /// [`crate::build::check_new_order`] refuses order terms whose token outputs (delivery and exit carriers) would be.
     /// The storage-mass bound of a small output is separate ([`crate::tx::DUST_OUTPUT_MIN`]).
     pub fn min_token_output(self) -> Option<u64> {
-        match self {
-            TemplateId::Kcc20KaspaCom025 => Some(50_000_000),
-            t if t.is_token() => Some(1),
-            _ => None,
-        }
+        self.profile().map(|p| p.carrier_floor)
+    }
+
+    /// The executor's one-byte record-log code of a token program (profile `record_code`).
+    pub fn record_code(self) -> Option<u8> {
+        self.profile().map(|p| p.record_code)
+    }
+
+    /// Inverse of [`TemplateId::record_code`].
+    pub fn from_record_code(code: u8) -> Option<TemplateId> {
+        crate::profile::by_record_code(code).and_then(|p| TemplateId::from_name(&p.name))
+    }
+
+    /// The constant pushes a token input of this program carries after its witness column (profile
+    /// `witness.trailing_pushes`, `kron-columns` only; empty for every other template).
+    pub fn witness_trailing(self) -> Vec<Vec<u8>> {
+        self.profile().map(|p| p.witness.trailing()).unwrap_or_default()
     }
 
     /// One-byte code used by the `KOB1` payload for the KOB order templates. A KRON kind has the
@@ -372,9 +357,9 @@ impl TemplateId {
 /// (`KobReceipt` / `KobReceiptKron`), which no longer exists.
 pub const RETIRED_KIND_CODES: [u8; 1] = [0x07];
 
-/// Template hashes pinned by this protocol version (hex). A different artifact is a different
-/// protocol and fails to load.
-pub const PINNED: [(TemplateId, &str); 24] = [
+/// Template hashes of the KOB order kinds pinned by this protocol version (hex). A different artifact is a different
+/// protocol and fails to load. The token programs are pinned by their profiles (`template_hash` of `data/programs.json`).
+pub const PINNED: [(TemplateId, &str); ORDER_KIND_COUNT] = [
     (TemplateId::KobAsk, "070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c"),
     (TemplateId::KobBid, "b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3"),
     (TemplateId::KobCondAsk, "1e1285bf5a02448fdcfbc1623017a59fa64e61a95a4ea93693a42515a62ff1d1"),
@@ -384,25 +369,16 @@ pub const PINNED: [(TemplateId, &str); 24] = [
     (TemplateId::KobPair, "c95c92344f08c42992699b0e467cf32fe573dda9b879250438d60a13cab4a9c6"),
     (TemplateId::KobCondPair, "98b137f64c552ccbbd11f66e55e2b5ffe18ff8500c924903b900fe1c4a779374"),
     (TemplateId::KobIfdPair, "a9c04066e3b332a8108b7caf9b17b59966e5ce62d4eaff57f8a202654ee67c5a"),
-    (TemplateId::Kcc20Ref, "173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b"),
-    (TemplateId::Kcc20Ref4x5, "10d3d2ff9efacb64e2ba3acb3e442fb2a35128b36a9ad83fb99b7fe053505983"),
-    (TemplateId::Kcc20Ref8x8, "666da060d02663939efdc534ea10cce219e5564af86f4cc8eeea2ca129f7c032"),
-    (TemplateId::Kcc20Ref16x16, "922e9ba7c64b0ddcbd0f1b4b6bd592c791e0813df033d1c78213e4eec374efd7"),
-    (TemplateId::Kcc20P2, "b182879fe8d87659f9424dbdedc6540fba185129c3d7dd5e9caa1332f0ce4d11"),
-    (TemplateId::Kcc20KaspaCom025, "911f0638ccb7368bf36d117f1725073ae7ee487ce8b58ca3e8375051c2d40f6c"),
-    // the actor-type handle of upstream's artifact (`actor_type_handle.template.hash` of `template/kcc20`); the Sil template
-    // hash of the same program is 9703112ee6e3555107cd168858992b77d3b74f655205b2b463b1f9ec2ec73cf7 (`Template::sil_hash`)
-    (TemplateId::Kcc20PublicMint, "734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498"),
     (TemplateId::KobAskKron, "f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d"),
     (TemplateId::KobBidKron, "6ec1a3dd4a287b73295a08db5f75fedcac4966539d793e9d1a659711ad888efc"),
     (TemplateId::KobCondAskKron, "27fa0ee2b17e75aabb6cccf6cd68f3f56568caeb4170031e44e3cd954947d3b7"),
     (TemplateId::KobCondBidKron, "296a2ffb289ee74abd936c2e1bc25692638d7efc5accfcd8cc2c9b9e96774dd3"),
     (TemplateId::KobIfdBidKron, "b705e2c3db279403276d0d0ccfe1e26dd0775620e383d13c98a2dca00892a335"),
     (TemplateId::KobIfdAskKron, "4797dc300d40ce968d8f26000c890e74f85f1c0d24ee227dac936a69ec034d12"),
-    (TemplateId::KronToken2433, "2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2"),
-    (TemplateId::KronToken2732, "8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e"),
 ];
 
+/// The embedded artifact of an artifact-backed template (an order kind, or a token program whose profile source is a
+/// `silverc` artifact).
 fn embedded_json(id: TemplateId) -> &'static str {
     match id {
         TemplateId::KobAsk => include_str!("../../../contracts/artifacts/KobAsk.json"),
@@ -414,33 +390,29 @@ fn embedded_json(id: TemplateId) -> &'static str {
         TemplateId::KobPair => include_str!("../../../contracts/artifacts/KobPair.json"),
         TemplateId::KobCondPair => include_str!("../../../contracts/artifacts/KobCondPair.json"),
         TemplateId::KobIfdPair => include_str!("../../../contracts/artifacts/KobIfdPair.json"),
-        TemplateId::Kcc20Ref => include_str!("../../../contracts/artifacts/KCC20Ref.json"),
-        TemplateId::Kcc20Ref4x5 => include_str!("../../../contracts/artifacts/KCC20Ref_4x5.json"),
-        TemplateId::Kcc20Ref8x8 => include_str!("../../../contracts/artifacts/KCC20Ref_8x8.json"),
-        TemplateId::Kcc20Ref16x16 => include_str!("../../../contracts/artifacts/KCC20Ref_16x16.json"),
-        TemplateId::Kcc20P2 => include_str!("../../../contracts/artifacts/KCC20P2.json"),
-        TemplateId::Kcc20KaspaCom025 => include_str!("../../../contracts/third-party/kaspacom-kcc20/KCC20.placeholder.json"),
-        TemplateId::Kcc20PublicMint => include_str!("../../../contracts/artifacts/KCC20PublicMint.json"),
         TemplateId::KobAskKron => include_str!("../../../contracts/artifacts/KobAskKron.json"),
         TemplateId::KobBidKron => include_str!("../../../contracts/artifacts/KobBidKron.json"),
         TemplateId::KobCondAskKron => include_str!("../../../contracts/artifacts/KobCondAskKron.json"),
         TemplateId::KobCondBidKron => include_str!("../../../contracts/artifacts/KobCondBidKron.json"),
         TemplateId::KobIfdBidKron => include_str!("../../../contracts/artifacts/KobIfdBidKron.json"),
         TemplateId::KobIfdAskKron => include_str!("../../../contracts/artifacts/KobIfdAskKron.json"),
-        TemplateId::KronToken2433 | TemplateId::KronToken2732 => unreachable!("raw KRON programs have no artifact"),
+        program => match embedded_program_source(program.name()) {
+            Some(EmbeddedSource::Artifact(json)) => json,
+            _ => unreachable!("{} is pinned as raw bytes and has no artifact", program.name()),
+        },
     }
 }
 
-/// The raw KRON token programs (redeem script of the reference state: 46-byte state, then the suffix).
-fn kron_program_bytes(id: TemplateId) -> &'static [u8] {
-    match id {
-        TemplateId::KronToken2433 => include_bytes!("../../../contracts/adapters/kron/templates/kron_token_2433.bin"),
-        TemplateId::KronToken2732 => include_bytes!("../../../contracts/adapters/kron/templates/kron_token_2732.bin"),
-        _ => unreachable!("not a KRON program"),
+/// The raw bytes of a token program pinned as a raw redeem script (profile source `raw-redeem`: the redeem script of one
+/// instance, `prefix ‖ state ‖ suffix`).
+fn raw_program_bytes(id: TemplateId) -> &'static [u8] {
+    match embedded_program_source(id.name()) {
+        Some(EmbeddedSource::Raw(b)) => b,
+        _ => unreachable!("{} is not pinned as a raw redeem script", id.name()),
     }
 }
 
-/// Length of the KRON token state span (`0x20 owner | 0x01 id_type | 0x08 amount | 0x01 is_minter`).
+// Length of the KRON token state span (`0x20 owner | 0x01 id_type | 0x08 amount | 0x01 is_minter`).
 pub const KRON_STATE_LEN: usize = 46;
 
 /// Constructor files that carry build constants (checked against the templates).
@@ -643,7 +615,10 @@ pub fn load_artifact(id: TemplateId, json: &str) -> Result<Template, ArtifactErr
 
 /// Pinned hash of a template.
 pub fn pinned_hash(id: TemplateId) -> [u8; 32] {
-    let hex = PINNED.iter().find(|(t, _)| *t == id).expect("every template is pinned").1;
+    if let Some(p) = id.profile() {
+        return p.hash();
+    }
+    let hex = PINNED.iter().find(|(t, _)| *t == id).expect("every order kind is pinned").1;
     crate::json::hex32(hex).expect("pinned hex")
 }
 
@@ -748,50 +723,50 @@ fn check_constants(t: &BTreeMap<TemplateId, Template>, fam: Family) -> Result<()
     Ok(())
 }
 
-fn kron_token_template(id: TemplateId) -> Result<TokenTemplate, ArtifactError> {
-    let bin = kron_program_bytes(id);
-    if bin.len() < KRON_STATE_LEN {
-        return Err(ArtifactError::Span { offset: 0, len: KRON_STATE_LEN, size: bin.len() });
-    }
-    let suffix = bin[KRON_STATE_LEN..].to_vec();
-    let hash = silverscript_abi::template_hash(&[], &suffix);
+fn raw_token_template(id: TemplateId) -> Result<TokenTemplate, ArtifactError> {
+    let p = id.profile().expect("a token program");
+    let loaded = p.check_bytes(&EmbeddedSource::Raw(raw_program_bytes(id))).map_err(|e| ArtifactError::Constant(e.to_string()))?;
     let pinned = pinned_hash(id);
-    if hash != pinned {
-        return Err(ArtifactError::NotPinned { name: id.name().into(), got: to_hex(&hash), pinned: to_hex(&pinned) });
+    if loaded.hash != pinned {
+        return Err(ArtifactError::NotPinned { name: id.name().into(), got: to_hex(&loaded.hash), pinned: to_hex(&pinned) });
     }
     Ok(TokenTemplate {
         id,
-        family: Family::Kron,
-        prefix: vec![],
-        suffix,
-        state_len: KRON_STATE_LEN,
-        hash,
-        slots: id.token_slots().expect("KRON program slots"),
+        family: p.codec,
+        prefix: loaded.prefix,
+        suffix: loaded.suffix,
+        state_len: p.layout.state_len,
+        hash: loaded.hash,
+        slots: (p.slots.inputs, p.slots.outputs),
     })
 }
 
 fn build_registry() -> Result<Registry, ArtifactError> {
+    // the profile table (shape and uniqueness)
+    crate::profile::ProfileFile::parse(crate::profile::PROGRAMS_JSON).map_err(|e| ArtifactError::Constant(e.to_string()))?;
     let mut templates = BTreeMap::new();
     let mut tokens = BTreeMap::new();
     for id in TemplateId::ALL {
         if id.is_artifact() {
             templates.insert(id, load_artifact(id, embedded_json(id))?);
         } else {
-            tokens.insert(id, kron_token_template(id)?);
+            tokens.insert(id, raw_token_template(id)?);
         }
     }
     for (id, t) in &templates {
-        if id.is_token() {
+        if let Some(p) = id.profile() {
+            // every profile fact against the bytes (layout, hash, state, entries)
+            p.check_bytes(&EmbeddedSource::Artifact(embedded_json(*id))).map_err(|e| ArtifactError::Constant(e.to_string()))?;
             tokens.insert(
                 *id,
                 TokenTemplate {
                     id: *id,
-                    family: Family::Kcc20,
+                    family: p.codec,
                     prefix: t.prefix.clone(),
                     suffix: t.suffix.clone(),
                     state_len: t.state_len,
                     hash: t.hash,
-                    slots: id.token_slots().expect("token program slots"),
+                    slots: (p.slots.inputs, p.slots.outputs),
                 },
             );
         }
@@ -957,8 +932,10 @@ mod tests {
                 assert_eq!(t.hash, pinned_hash(id), "{}", id.name());
                 assert_eq!(token_template_by_hash(&t.hash).unwrap().id, id);
                 assert_eq!(t.family, Family::Kron);
-                assert_eq!((t.prefix.len(), t.state_len), (0, KRON_STATE_LEN));
-                assert_eq!(t.redeem(&kron_program_bytes(id)[..KRON_STATE_LEN]), kron_program_bytes(id));
+                let raw = raw_program_bytes(id);
+                let (p, n) = (t.prefix.len(), t.state_len);
+                assert_eq!((p, n), (id.profile().unwrap().layout.prefix_len, KRON_STATE_LEN));
+                assert_eq!(t.redeem(&raw[p..p + n]), raw);
                 continue;
             }
             let t = template(id);

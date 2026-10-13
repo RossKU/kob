@@ -281,9 +281,13 @@ pub fn decode_companion(redeem: &[u8]) -> Result<Option<Companion>, String> {
     Ok(None)
 }
 
-/// True when `id` is the holder program of the published app (the template whose genesis may hold companions).
+/// True when `id` is a holder program of the published app: its profile declares the app's actors as genesis companions
+/// (`genesis.companions` decoders `kcc20-public-mint/*` in `data/programs.json`), so its genesis may hold them and its
+/// genesis record carries the minters' `mint_allowance`.
 pub fn is_app_holder(id: TemplateId) -> bool {
-    id == TemplateId::Kcc20PublicMint
+    id.profile().is_some_and(|p| {
+        p.genesis.companions.iter().any(|c| c.decoder.as_deref().is_some_and(|d| d.starts_with("kcc20-public-mint/")))
+    })
 }
 
 /// The pinned `KCC20` handle names the same Sil program as [`KCC20_SIL_HASH`] (checked by the tests).

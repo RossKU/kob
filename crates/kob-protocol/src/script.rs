@@ -66,6 +66,13 @@ pub fn leader_witness(sig: Option<&[u8]>) -> Vec<u8> {
 /// witness column (one byte per token input of the token, in input order: the index of the input
 /// that authorises it) and the redeem script. There is no dispatch tag: the program has one entry.
 pub fn kron_token_sigscript(redeem: &[u8], next: &[KronState], sigs: &[u8], witnesses: &[u8]) -> Vec<u8> {
+    kron_columns_sigscript(redeem, next, sigs, witnesses, &[])
+}
+
+/// The `kron-columns` witness scheme of a token-program profile ([`crate::profile::WitnessScheme::KronColumns`]): the
+/// columns of [`kron_token_sigscript`], then the profile's constant `trailing` pushes (an entry selector of a program with
+/// several entries, e.g. KForge's `OP_0`), then the redeem script.
+pub fn kron_columns_sigscript(redeem: &[u8], next: &[KronState], sigs: &[u8], witnesses: &[u8], trailing: &[Vec<u8>]) -> Vec<u8> {
     let mut s = vec![];
     s.extend(push_data(&next.iter().flat_map(|x| x.owner.to_vec()).collect::<Vec<u8>>()));
     s.extend(push_data(&next.iter().map(|x| x.id_type).collect::<Vec<u8>>()));
@@ -73,6 +80,9 @@ pub fn kron_token_sigscript(redeem: &[u8], next: &[KronState], sigs: &[u8], witn
     s.extend(push_data(&next.iter().map(|x| x.is_minter).collect::<Vec<u8>>()));
     s.extend(push_data(sigs));
     s.extend(push_data(witnesses));
+    for t in trailing {
+        s.extend(push_data(t));
+    }
     s.extend(push_data(redeem));
     s
 }

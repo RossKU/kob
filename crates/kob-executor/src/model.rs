@@ -109,14 +109,16 @@ pub fn identify_redeem(redeem: &[u8]) -> Option<(TemplateId, &[u8])> {
     TemplateId::ALL.into_iter().filter(|t| t.is_artifact()).find_map(|id| template(id).state_of(redeem).map(|s| (id, s)))
 }
 
-/// Identifies a revealed redeem script as one of the two pinned KRON token programs.
+/// Identifies a revealed redeem script as one of the token programs pinned as raw redeem scripts (profile source
+/// `raw-redeem`: the KRON programs), which [`identify_redeem`] does not cover.
 pub fn identify_kron_token(redeem: &[u8]) -> Option<(TemplateId, &[u8])> {
-    [TemplateId::KronToken2433, TemplateId::KronToken2732]
+    TemplateId::TOKEN_PROGRAMS
         .into_iter()
+        .filter(|t| !t.is_artifact())
         .find_map(|id| token_template(id).state_of(redeem).map(|s| (id, s)))
 }
 
-/// One-byte code of an order template in the record log: the KOB1 kind code, with the high bit set for the
+// One-byte code of an order template in the record log: the KOB1 kind code, with the high bit set for the
 /// KRON kinds (which share the codes of their KCC-20 twins). Logs written before the KRON family existed only
 /// hold codes below `0x80` and read back unchanged.
 pub fn wire_code(t: TemplateId) -> u8 {

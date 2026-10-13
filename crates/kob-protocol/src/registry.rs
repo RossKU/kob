@@ -190,7 +190,7 @@ impl ExtensionClass {
 ///
 /// kcc20: `owner_scheme` 4 (covenant id), `borrow_scheme` 0. kron: `id_type` 2 (covenant id), `is_minter` 0, deliveries to
 /// makers with `delivery_id_type` 3 (address presence, KRON-wallet compatible) or 0 (pubkey).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Escrow {
     /// KCC-20 owner scheme used for escrow.
@@ -371,6 +371,19 @@ pub struct GenesisReport {
     /// Genesis `TokenSeed` outputs (zero-amount holder factories of the published app), by output index.
     #[serde(default)]
     pub seed_outputs: Vec<u32>,
+    /// Genesis outputs that are opaque companions the program's profile declares (a launchpad's curve, pool or vault bound
+    /// to the token's covenant id; `genesis.companions` of `data/programs.json`): no amount, no mint authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub companion_outputs: Vec<CompanionOutput>,
+}
+
+/// An opaque companion output of a genesis group (see [`GenesisReport::companion_outputs`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanionOutput {
+    /// Output index in the genesis transaction.
+    pub index: u32,
+    /// The role the profile declares (`curve`, `pool`, `vault`, `seed`).
+    pub role: String,
 }
 
 impl GenesisReport {
@@ -811,8 +824,10 @@ impl Registry {
             if t.suffix_len == 0 {
                 e.push(bad("suffix_len must be > 0".into()));
             }
-            if t.family == Family::Kron && t.prefix_len != 0 {
-                e.push(bad("kron templates have no prefix (state span at offset 0)".into()));
+            // a program this build embeds: the entry states its profile's facts (data/programs.json). A KRON-codec program may
+            // have a prefix (an entry selector): the order templates take the prefix length as a parameter.
+            if let Err(m) = crate::profile::check_registry_template(t) {
+                e.push(bad(format!("disagrees with the embedded program profile: {m}")));
             }
             if t.max_token_inputs == 0 || t.max_token_outputs == 0 || t.max_token_inputs > 64 || t.max_token_outputs > 64 {
                 e.push(bad(format!("slot limits {}/{} must be within 1..=64", t.max_token_inputs, t.max_token_outputs)));
@@ -1243,10 +1258,31 @@ pub fn verify_genesis_of(
     outputs: &[GenesisOutput],
     extension_commitment: Option<[u8; 32]>,
 ) -> Result<GenesisReport, GenesisError> {
+    let hash = parse_hex32(&template.template_hash).ok_or_else(|| GenesisError::Malformed("bad template hash".into()))?;
+    let program = crate::artifacts::token_template_by_hash(&hash).ok_or_else(|| GenesisError::UnknownProgram(template.id.clone()))?;
+    let profile = program.id.profile().ok_or_else(|| GenesisError::UnknownProgram(template.id.clone()))?;
+    verify_genesis_with(template, profile, covenant_id, genesis_txid, authorizing_outpoint, outputs, extension_commitment)
+}
+
+/// [`verify_genesis_of`] under an explicit program profile: its `genesis.companions` are the outputs beside the token's own
+/// that the group may hold (the embedded profile of the template's program is what [`verify_genesis_of`] passes; a review
+/// passes a candidate profile to try a launchpad's genesis shape before the profile is committed).
+pub fn verify_genesis_with(
+    template: &Template,
+    profile: &crate::profile::ProgramProfile,
+    covenant_id: &str,
+    genesis_txid: &str,
+    authorizing_outpoint: ([u8; 32], u32),
+    outputs: &[GenesisOutput],
+    extension_commitment: Option<[u8; 32]>,
+) -> Result<GenesisReport, GenesisError> {
     use kaspa_consensus_core::hashing::covenant_id::covenant_id as cov_id_of;
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint, TransactionOutput};
 
     let hash = parse_hex32(&template.template_hash).ok_or_else(|| GenesisError::Malformed("bad template hash".into()))?;
+    if hash != profile.hash() {
+        return Err(GenesisError::Malformed(format!("profile {} is not the program of template {}", profile.name, template.id)));
+    }
     let program = crate::artifacts::token_template_by_hash(&hash).ok_or_else(|| GenesisError::UnknownProgram(template.id.clone()))?;
     let want =
         parse_hex32(covenant_id).ok_or_else(|| GenesisError::Malformed("covenant id must be 64 lowercase hex characters".into()))?;
@@ -1270,6 +1306,7 @@ pub fn verify_genesis_of(
     let mut supply: i64 = 0;
     let mut minter_outputs = vec![];
     let mut seed_outputs = vec![];
+    let mut companion_outputs = vec![];
     let mut mint_allowance: i64 = 0;
     // the token's one extension commitment: the one named, else the first output's
     let mut ext = extension_commitment;
@@ -1279,13 +1316,16 @@ pub fn verify_genesis_of(
             return Err(GenesisError::WrongRedeem(o.index));
         }
         let Some(state) = program.state_of(redeem) else {
-            // the issuance actors of the published public-mint app, beside its holders
-            let companion = if crate::public_mint::is_app_holder(program.id) {
-                crate::public_mint::decode_companion(redeem).map_err(|e| GenesisError::BadState(o.index, e))?
-            } else {
-                None
+            // a companion the program's profile declares (the issuance actors of the published public-mint app, a
+            // launchpad's curve or pool bound to the token's id); anything else is genesis contamination
+            let found = crate::profile::match_companion(profile, redeem).map_err(|e| GenesisError::BadState(o.index, e))?;
+            let c = match found.ok_or_else(|| GenesisError::NotTemplate(o.index, template.id.clone()))? {
+                crate::profile::CompanionMatch::Decoded(c) => c,
+                crate::profile::CompanionMatch::Opaque(role) => {
+                    companion_outputs.push(CompanionOutput { index: o.index, role: role.as_str().to_string() });
+                    continue;
+                }
             };
-            let c = companion.ok_or_else(|| GenesisError::NotTemplate(o.index, template.id.clone()))?;
             let want = *ext.get_or_insert(c.extension_commitment());
             if c.extension_commitment() != want {
                 return Err(GenesisError::ExtensionCommitment(
@@ -1336,6 +1376,7 @@ pub fn verify_genesis_of(
         minter_outputs,
         mint_allowance,
         seed_outputs,
+        companion_outputs,
     })
 }
 
@@ -2002,5 +2043,76 @@ mod tests {
         assert_eq!(defs["token"]["additionalProperties"], false);
         assert_eq!(defs["template"]["additionalProperties"], false);
         assert_eq!(schema["additionalProperties"], false);
+    }
+
+    /// Generic genesis rule: a group may hold, beside the token's own outputs, exactly the companions its program's profile
+    /// declares (here a launchpad's bonding curve bound to the token's id, as an opaque companion of the reference 3 / 3
+    /// program); the same group is refused under the embedded profile, and an impostor of the curve is refused under both.
+    #[test]
+    fn a_genesis_group_holds_the_companions_its_profile_declares_and_nothing_else() {
+        use crate::profile::{CompanionRole, CompanionRule, Layout};
+        use crate::state::{Kcc20State, SCHEME_P2PK};
+        use kaspa_consensus_core::hashing::covenant_id::covenant_id;
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint, TransactionOutput};
+
+        let reg = Registry::default_registry();
+        let tpl = reg.template("kcc20-ref-3x3").unwrap();
+        let program = crate::artifacts::template(crate::artifacts::TemplateId::Kcc20Ref);
+        let holder = Kcc20State {
+            amount: 1_000,
+            owner: [7; 32],
+            owner_scheme: SCHEME_P2PK,
+            borrow_scheme: 0,
+            borrow_guard: [0; 32],
+            extension_commitment: [0; 32],
+        }
+        .redeem_with(program);
+        let (c_prefix, c_suffix) = (vec![0x6b, 0x51], vec![0x75, 0x51, 0x87, 0x69, 0x51]);
+        let curve = |state: [u8; 9], suffix: &[u8]| [c_prefix.as_slice(), &state, suffix].concat();
+        let rule = CompanionRule {
+            role: CompanionRole::Curve,
+            decoder: None,
+            template_hash: Some(crate::json::to_hex(&silverscript_abi::template_hash(&c_prefix, &c_suffix))),
+            layout: Some(Layout { prefix_len: c_prefix.len(), state_len: 9, suffix_len: c_suffix.len() }),
+            note: None,
+        };
+        let embedded = crate::profile::by_name("KCC20Ref").unwrap();
+        let mut launchpad = embedded.clone();
+        launchpad.genesis.companions.push(rule);
+        launchpad.check_shape().unwrap();
+
+        let txid = [0x11; 32];
+        let check = |profile: &crate::profile::ProgramProfile, redeems: &[Vec<u8>]| {
+            let op = TransactionOutpoint { transaction_id: TransactionId::from_bytes(txid), index: 0 };
+            let outs: Vec<TransactionOutput> = redeems
+                .iter()
+                .map(|r| TransactionOutput { value: 100_000_000, script_public_key: crate::script::p2sh_spk(r), covenant: None })
+                .collect();
+            let cov = covenant_id(op, outs.iter().enumerate().map(|(i, o)| (i as u32, o)));
+            let group: Vec<GenesisOutput> = redeems
+                .iter()
+                .enumerate()
+                .map(|(i, r)| GenesisOutput {
+                    index: i as u32,
+                    value: 100_000_000,
+                    script_public_key: outs[i].script_public_key.clone(),
+                    redeem_script: Some(r.clone()),
+                })
+                .collect();
+            verify_genesis_with(tpl, profile, &crate::json::to_hex(&cov.as_bytes()), &"22".repeat(32), (txid, 0), &group, None)
+        };
+        let good = [holder.clone(), curve([0x08, 1, 2, 3, 4, 5, 6, 7, 8], &c_suffix)];
+        let r = check(&launchpad, &good).expect("the declared curve is accepted");
+        assert_eq!((r.supply, r.outputs), (1_000, 2));
+        assert_eq!(r.companion_outputs, vec![CompanionOutput { index: 1, role: "curve".into() }]);
+        assert!(r.minter_outputs.is_empty(), "an opaque companion is no mint authority");
+        assert_eq!(check(embedded, &good).unwrap_err(), GenesisError::NotTemplate(1, "kcc20-ref-3x3".into()));
+        let impostor = [holder, curve([0x08, 1, 2, 3, 4, 5, 6, 7, 8], &[0x75, 0x51])];
+        assert_eq!(check(&launchpad, &impostor).unwrap_err(), GenesisError::NotTemplate(1, "kcc20-ref-3x3".into()));
+        // the embedded entry point uses the embedded profile
+        assert_eq!(
+            verify_genesis(tpl, &"00".repeat(32), &"22".repeat(32), (txid, 0), &[]).unwrap_err(),
+            GenesisError::Malformed("a genesis group has at least one output".into())
+        );
     }
 }

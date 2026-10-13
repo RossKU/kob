@@ -90,38 +90,17 @@ pub struct HeldOut {
     pub state: TokenState,
 }
 
-/// One-byte record-log code of a token program.
+/// One-byte record-log code of a token program (its profile's `record_code`, `kob_protocol::profile`: persisted, never
+/// reused).
 pub fn program_code(t: TemplateId) -> Option<u8> {
-    Some(match t {
-        TemplateId::Kcc20Ref => 1,
-        TemplateId::Kcc20Ref4x5 => 2,
-        TemplateId::Kcc20Ref8x8 => 3,
-        TemplateId::Kcc20Ref16x16 => 4,
-        TemplateId::Kcc20P2 => 5,
-        TemplateId::KronToken2433 => 6,
-        TemplateId::KronToken2732 => 7,
-        TemplateId::Kcc20KaspaCom025 => 8,
-        TemplateId::Kcc20PublicMint => 9,
-        _ => return None,
-    })
+    t.record_code()
 }
 
 pub fn program_from_code(c: u8) -> Option<TemplateId> {
-    Some(match c {
-        1 => TemplateId::Kcc20Ref,
-        2 => TemplateId::Kcc20Ref4x5,
-        3 => TemplateId::Kcc20Ref8x8,
-        4 => TemplateId::Kcc20Ref16x16,
-        5 => TemplateId::Kcc20P2,
-        6 => TemplateId::KronToken2433,
-        7 => TemplateId::KronToken2732,
-        8 => TemplateId::Kcc20KaspaCom025,
-        9 => TemplateId::Kcc20PublicMint,
-        _ => return None,
-    })
+    TemplateId::from_record_code(c)
 }
 
-/// A token output owned by an order covenant id (owner scheme `0x04`).
+// A token output owned by an order covenant id (owner scheme `0x04`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokOut {
     pub out: u32,
@@ -606,15 +585,19 @@ pub fn token_next_states(sigscript: &[u8]) -> Option<(TemplateId, Vec<TokenState
         .or_else(|| kron_next_states(sigscript).map(|(id, v)| (id, v.into_iter().map(TokenState::Kron).collect())))
 }
 
-/// The next states of a KRON token input (`kob_protocol::script::kron_token_sigscript`): the columns
+/// The next states of a KRON token input (`kob_protocol::script::kron_columns_sigscript`): the columns
 /// `owners`, `id_types`, `amounts`, `is_minters` of the whole covenant group, the signature column, the
-/// witness column and the redeem script. Every token input of the token carries the same columns.
+/// witness column, the program's constant trailing pushes (profile `witness.trailing_pushes`: none for the KRON
+/// programs, an entry selector for a multi-entry program) and the redeem script. Every token input of the token carries
+/// the same columns.
 pub fn kron_next_states(sigscript: &[u8]) -> Option<(TemplateId, Vec<KronState>)> {
     let pushes = parse_pushes(sigscript)?;
-    if pushes.len() != 7 {
+    let redeem = pushes.last()?;
+    let (id, _) = model::identify_kron_token(redeem)?;
+    let trailing = id.witness_trailing();
+    if pushes.len() != 7 + trailing.len() || pushes[6..pushes.len() - 1] != trailing[..] {
         return None;
     }
-    let (id, _) = model::identify_kron_token(&pushes[6])?;
     let n = pushes[1].len();
     if pushes[0].len() != 32 * n || pushes[2].len() != 8 * n || pushes[3].len() != n {
         return None;

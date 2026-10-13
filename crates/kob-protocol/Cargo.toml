@@ -21,6 +21,9 @@ sha2 = "0.10"
 silverscript-abi.workspace = true
 thiserror.workspace = true
 
+[build-dependencies]
+serde_json.workspace = true
+
 [features]
 default = ["engine"]
 # Script-engine validation (verify module, exact budget tightening). Off in the slim web build.

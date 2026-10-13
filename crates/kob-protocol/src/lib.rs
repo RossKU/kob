@@ -7,6 +7,7 @@
 //! | Module | Contents |
 //! |---|---|
 //! | [`family`] | token families (KCC-20, KRON): what differs between them and nothing else |
+//! | [`profile`] | token-program profiles (`data/programs.json`): everything KOB needs per token program, codec families, profile derivation for onboarding |
 //! | [`artifacts`] | embedded `silverc` artifacts and raw KRON token programs, template-hash pinning, network-constant checks |
 //! | [`state`] | typed state of every order kind (both families) and the token states; the quote rule (`quote_of`) and the per-kind order arithmetic |
 //! | [`kcc1`] / [`kcc2`] | KCC-1 hash notation, push forms, type names, dispatch tags, strict argument and state decoding; KCC-2 authority-scheme registry, authority values, minimum approval checks |
@@ -37,6 +38,7 @@ pub mod kcc1;
 pub mod kcc2;
 pub mod kcc20;
 pub mod payload;
+pub mod profile;
 pub mod public_mint;
 pub mod registry;
 pub mod router;

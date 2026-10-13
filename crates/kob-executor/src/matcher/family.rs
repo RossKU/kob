@@ -13,8 +13,6 @@
 //!   builders through [`KronAdapter`].
 
 use kob_protocol::artifacts::token_template_by_hash;
-use kob_protocol::registry::KRON_MAX_OUTPUT_AMOUNT;
-use kob_protocol::state::MAX_TOK_IN;
 use kob_protocol::tx::BuiltTx;
 
 use super::lower::LowerCtx;
@@ -43,26 +41,19 @@ pub const KRON_SLOTS: (usize, usize) = (4, 5);
 /// Token inputs a KRON order accepts in one transaction.
 pub const KRON_MAX_TOK_IN: usize = 4;
 
-/// Limits of the token program with template hash `tpl` in `family` (None: not a supported program).
+/// Limits of the token program with template hash `tpl` in `family` (None: not a supported program): the program's
+/// profile slots (`kob_protocol::profile`), the inputs capped by the family's order templates (`Family::max_tok_in`), and
+/// the family's output amount bound (KRON: 1e9).
 pub fn token_limits(family: Family, tpl: &[u8; 32]) -> Option<TokenLimits> {
-    match family {
-        Family::Kcc20 => {
-            let t = token_template_by_hash(tpl).filter(|t| t.family == Family::Kcc20)?;
-            let (i, o) = t.slots;
-            Some(TokenLimits { max_in: i.min(MAX_TOK_IN), max_out: o, max_output_amount: None })
-        }
-        Family::Kron => {
-            let t = token_template_by_hash(tpl).filter(|t| t.family == Family::Kron)?;
-            Some(TokenLimits {
-                max_in: t.slots.0.min(KRON_MAX_TOK_IN),
-                max_out: t.slots.1,
-                max_output_amount: Some(KRON_MAX_OUTPUT_AMOUNT),
-            })
-        }
-    }
+    let t = token_template_by_hash(tpl).filter(|t| t.family == family)?;
+    Some(TokenLimits {
+        max_in: t.slots.0.min(family.max_tok_in()),
+        max_out: t.slots.1,
+        max_output_amount: kob_protocol::profile::codec(family).max_output_amount,
+    })
 }
 
-/// A lowered plan: the builder request (for logs and dry runs) and the unsigned transaction.
+// A lowered plan: the builder request (for logs and dry runs) and the unsigned transaction.
 #[derive(Clone, Debug)]
 pub struct Lowered {
     /// The family's builder request as JSON (KCC-20: a `kob_protocol::build::Action`).

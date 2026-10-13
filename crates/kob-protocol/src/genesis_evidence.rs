@@ -32,8 +32,7 @@ use kaspa_consensus_core::tx::{
 };
 use kaspa_consensus_core::Hash;
 
-use crate::artifacts::TemplateId;
-use crate::registry::{parse_hex32, verify_genesis_of, Family, GenesisError, GenesisOutput, GenesisRecord, Registry};
+use crate::registry::{parse_hex32, verify_genesis_of, GenesisError, GenesisOutput, GenesisRecord, Registry};
 
 /// The evidence file.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -374,12 +373,11 @@ fn check_token(reg: &Registry, ev: &TokenEvidence, checked_at_daa: u64) -> Resul
 
     // 4. C2: live mint authority
     let program = parse_hex32(&tpl.template_hash).and_then(|h| crate::artifacts::token_template_by_hash(&h)).map(|t| t.id);
-    let no_mint_path_without_genesis_minter = tpl.family == Family::Kron
-        || matches!(
-            program,
-            Some(TemplateId::Kcc20Ref | TemplateId::Kcc20Ref4x5 | TemplateId::Kcc20Ref8x8 | TemplateId::Kcc20Ref16x16)
-                | Some(TemplateId::Kcc20PublicMint)
-        );
+    // the profile's genesis rule (`genesis.minters` of data/programs.json): `genesis-only` for the KRON programs (review B2,
+    // `review_b2_kron` r_kr_15), the reference KCC-20 programs (no mint path at all) and the public-mint app (none without a
+    // genesis PublicMint); `unknown` for KaspaCom's (minter lanes behind the extension commitment) and P2
+    let no_mint_path_without_genesis_minter =
+        program.and_then(|p| p.profile()).is_some_and(|p| p.genesis.minters == crate::profile::MinterSource::GenesisOnly);
     let live_minters = if report.minter_outputs.is_empty() && no_mint_path_without_genesis_minter {
         // no genesis minter: the program never lets one appear later (verify_genesis accepted every output as an instance of
         // an embedded program; the embedded KRON programs are exactly the two `review_b2_kron` r_kr_15 tests this on, and the

@@ -674,18 +674,9 @@ pub fn scenarios() -> Vec<(String, Action)> {
     scenarios_on(TemplateId::Kcc20Ref)
 }
 
-/// Every token program KOB builds for.
-pub const PROGRAMS: [TemplateId; 9] = [
-    TemplateId::Kcc20Ref,
-    TemplateId::Kcc20Ref4x5,
-    TemplateId::Kcc20Ref8x8,
-    TemplateId::Kcc20Ref16x16,
-    TemplateId::Kcc20P2,
-    TemplateId::Kcc20KaspaCom025,
-    TemplateId::Kcc20PublicMint,
-    TemplateId::KronToken2433,
-    TemplateId::KronToken2732,
-];
+/// Every token program KOB builds for: one per profile of `data/programs.json`, so the budget and tip tables
+/// (`KOB_REGEN=1`) cover a newly added program without a code change.
+pub const PROGRAMS: [TemplateId; kob_protocol::artifacts::TOKEN_PROGRAM_COUNT] = TemplateId::TOKEN_PROGRAMS;
 
 /// The KRON golden-vector set: every builder shape on the common KRON program.
 pub fn scenarios_kron() -> Vec<(String, Action)> {

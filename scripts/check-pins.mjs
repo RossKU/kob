@@ -7,7 +7,7 @@
 // contracts/deploy and contracts/third-party (the outputs scripts/build-contracts.sh and scripts/build-deploy.sh
 // reproduce, plus the vendored third-party artifacts they list), except the Argent sources (`.ag`, written by hand) and
 // the pin files among them (contracts/argent/examples): a pin never vouches for itself. Pin files: the Rust pin tables, the TS SDK
-// constants, the router generator head, the Argent examples, the registry's template hashes and the docs. In
+// constants, the token-program profiles, the router generator head, the Argent examples, the registry's template hashes and the docs. In
 // registry/tokens.json only the values of `*hash*` keys are build outputs; transaction ids and the other
 // chain data there are not, and are skipped. Run it after scripts/build-contracts.sh --check (CI does).
 import fs from 'node:fs';
@@ -57,6 +57,8 @@ for (const f of outputs) {
 // 2. Constants in the pin files.
 const pinFiles = [
   'crates/kob-protocol/src/artifacts.rs',
+  // the token-program profiles: every 64-hex value there is a template hash
+  'crates/kob-protocol/data/programs.json',
   'crates/kob-protocol/src/router.rs',
   'packages/kob-x402/src/types.ts',
   'tools/router-gen/router_head.ag',

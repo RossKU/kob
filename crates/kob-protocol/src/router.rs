@@ -49,14 +49,15 @@ pub const EXPIRE_MAX_FEE: u64 = 10_000_000;
 /// mass): an intent below this could be neither cancelled nor expired. The builder and the verifier refuse it.
 pub const MIN_INTENT_VALUE: u64 = 2 * EXPIRE_MAX_FEE;
 
-/// Checks that `p` is a token program an intent may name: a KCC-20 program of the 112-byte state or a KRON
-/// program (the router observes tokens by open ICC under the program the intent's state names). KaspaCom's
-/// KCC20 0.2.5 is refused while it is pending review (a 25.5 KB program with a 0.5 KAS token output floor).
+/// Checks that `p` is a token program an intent may name: a program whose profile allows router intents
+/// (`router_intents` of `data/programs.json`; the router observes tokens by open ICC under the program the intent's state
+/// names, so a KCC-20 program needs the 112-byte state). KaspaCom's KCC20 0.2.5 is refused while it is pending review (a
+/// 25.5 KB program with a 0.5 KAS token output floor).
 pub fn intent_program(p: TemplateId) -> Result<()> {
-    if !p.is_token() {
+    let Some(profile) = p.profile() else {
         return Err(Error::Invalid(format!("{} is not a token program", p.name())));
-    }
-    if p == TemplateId::Kcc20KaspaCom025 {
+    };
+    if !profile.router_intents {
         return Err(Error::Invalid(format!("{} is pending review: no router intent trades it", p.name())));
     }
     if p.family() == Family::Kcc20 && crate::artifacts::token_template(p).state_len != 112 {
@@ -65,7 +66,7 @@ pub fn intent_program(p: TemplateId) -> Result<()> {
     Ok(())
 }
 
-/// True when the token slots of `p` (inputs, outputs of one token per transaction) hold `ins` / `outs`.
+// True when the token slots of `p` (inputs, outputs of one token per transaction) hold `ins` / `outs`.
 fn slots_fit(p: TemplateId, ins: usize, outs: usize) -> bool {
     p.token_slots().is_some_and(|(i, o)| ins <= i && outs <= o)
 }

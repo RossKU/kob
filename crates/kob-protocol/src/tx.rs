@@ -37,7 +37,7 @@ use crate::error::{invalid, Error, Result};
 use crate::family::Family;
 use crate::json::{from_hex, to_hex};
 use crate::registry::KRON_MAX_OUTPUT_AMOUNT;
-use crate::script::{entry_sigscript, kcc20_state_value, kron_token_sigscript, leader_witness, p2pk_spk, push_data, SIGHASH_ALL};
+use crate::script::{entry_sigscript, kcc20_state_value, kron_columns_sigscript, leader_witness, p2pk_spk, push_data, SIGHASH_ALL};
 use crate::state::{Kcc20State, KronState, TokenState};
 
 /// Minimum relay fee rate, sompi per gram (rusty-kaspa v2.1.0 `DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE`,
@@ -320,7 +320,7 @@ impl SigPlan {
                 entry_sigscript(tpl, &state.redeem_with(tpl), "transfer_delegator", &[ArtifactValue::Bytes(w)]).map_err(Error::Invalid)
             }
             SigPlan::KronToken { template: t, state, next_states, witnesses } => {
-                Ok(kron_token_sigscript(&state.redeem_with(token_template(*t)), next_states, &[], witnesses))
+                Ok(kron_columns_sigscript(&state.redeem_with(token_template(*t)), next_states, &[], witnesses, &t.witness_trailing()))
             }
             SigPlan::Router { actor, state, entry, args } => {
                 let a = router_actor(actor)?;
