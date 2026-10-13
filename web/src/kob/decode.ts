@@ -1487,7 +1487,8 @@ export function describeInputsForWallet(built: BuiltTx, wallet?: WalletId): Wall
     if (!wallet || !w || w === wallet) notices.push({ code, message, ...(w ? { wallet: w } : {}), ...(params ? { params } : {}) });
   };
   if (covenant.length) {
-    n('blind-tokens', 'Your wallet does not understand KOB orders or tokens. It will not show token amounts, order prices or where tokens go. Check this screen, not the popup.');
+    // the private-key signer decodes the transaction itself (src/signer): only the extension popups are blind
+    if (wallet !== 'local-key') n('blind-tokens', 'Your wallet does not understand KOB orders or tokens. It will not show token amounts, order prices or where tokens go. Check this screen, not the popup.');
     n('kasware-spend', 'KasWare shows "Sign Transaction" with KAS amounts and a generic "Spend" output; it shows no token amount or owner change.', 'kasware');
     n('kaspire-covenant', 'Kaspire warns that an input is a covenant or non-standard script it cannot verify; that warning is expected here. Token semantics appear nowhere in it.', 'kaspire');
     n('kastle-balance', 'Kastle may show covenant inputs as "Change to your balance" and covenant outputs as "Sending amount": ignore those labels.', 'kastle');

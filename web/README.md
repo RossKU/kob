@@ -181,6 +181,21 @@ shipped `connect-src` only names schemes (`'self' https: wss: http: ws:`): **a p
 node and indexer, e.g. `connect-src 'self' https://indexer.example wss://node.example:18210`. The SDK zip that `npm run fetch-sdk` downloads is checked against a pinned
 sha256 (`scripts/fetch-sdk.mjs`); a mismatch aborts before anything is unpacked.
 
+The private-key signer (`signer.html`, see below) is a second page with its own policy (`SIGNER_CSP_HEADER`: no network beyond its own bundle,
+`frame-ancestors 'self'`); `public/_headers` detaches the app's policy and `X-Frame-Options: DENY` from it (`! Header`, Cloudflare Pages syntax; on
+other hosts give `/signer.html` only the signer policy and `X-Frame-Options: SAMEORIGIN`). It runs sandboxed in an opaque origin, so its scripts,
+stylesheet and wasm are cross-origin requests: `/assets/*` must be served with `Access-Control-Allow-Origin: *` (public, static files).
+
+### Private key wallet
+
+"Private key" in the header opens `signer.html` in `<iframe sandbox="allow-scripts">` (no `allow-same-origin`). The key is typed into that frame and
+held in its memory only (the SDK's `PrivateKey`; no storage of any kind, the frame has none); a reload, closing the tab, disconnecting or removing the
+frame forgets it. The app and the frame exchange only the validated messages of `src/signer/protocol.ts`: the unsigned transaction goes in, the
+public key and signatures come out. The frame decodes every request itself with kob-wasm (`decodeSigning`), shows the net effect and the fee, and
+signs only after a trusted click on its own Approve button. What this does NOT protect against: a script already running in the app page (XSS, a
+malicious extension) can draw a fake key field or a fake signer and collect what the user types there; the frame only keeps a key that was typed
+into it out of the page's reach. A browser extension wallet is the recommended setup.
+
 ## Tests
 
 * `npm test`: unit tests (vitest), including consensus checks: every planned transaction is signed locally, finalized and validated in the wasm script engine.

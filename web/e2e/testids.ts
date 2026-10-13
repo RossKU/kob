@@ -10,6 +10,9 @@ export const TESTID = {
   walletConnectKasware: 'wallet-connect-kasware',
   walletConnectKaspire: 'wallet-connect-kaspire',
   walletConnectKastle: 'wallet-connect-kastle',
+  walletConnectLocalKey: 'wallet-connect-local-key',
+  signerOverlay: 'signer-overlay',
+  signerFrame: 'signer-frame',
   walletAddress: 'wallet-address',
   walletNetwork: 'wallet-network',
   // market

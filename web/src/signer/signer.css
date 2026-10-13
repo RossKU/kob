@@ -1,0 +1,45 @@
+/* The private-key signer page (signer.html): its own small stylesheet, no inline styles (its CSP has no 'unsafe-inline'). */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #0f172a;
+  --muted: #64748b;
+  --border: #cbd5e1;
+  --accent: #0f766e;
+  --accent-fg: #ffffff;
+  --bad: #b91c1c;
+  --ok: #047857;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f172a;
+    --fg: #e2e8f0;
+    --muted: #94a3b8;
+    --border: #334155;
+    --accent: #14b8a6;
+    --accent-fg: #042f2e;
+    --bad: #f87171;
+    --ok: #34d399;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+main { padding: 12px 14px; }
+h1 { font-size: 1rem; margin: 0 0 8px; }
+p { margin: 6px 0; }
+.muted { color: var(--muted); }
+.error { color: var(--bad); font-weight: 600; min-height: 1.2em; }
+.row { display: flex; gap: 8px; align-items: center; }
+.row.end { justify-content: flex-end; margin-top: 12px; }
+.key { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
+button { padding: 7px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
+/* no opacity on disabled buttons: the visibility check (IntersectionObserver v2) counts the opacity of what it observes */
+button:disabled { color: var(--muted); background: var(--bg); border-color: var(--border); cursor: default; }
+.lines { margin: 0; }
+.line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.line dt { color: var(--muted); }
+.line dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+.line.out dd { color: var(--bad); }
+.line.in dd { color: var(--ok); }
+.line.fee { border-bottom: 0; }

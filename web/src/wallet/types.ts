@@ -2,7 +2,10 @@
 // showed on the pre-sign confirmation screen. Proven on TN10 in tools/wallet-gate (RESULTS.md).
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
 
-export type WalletId = 'kasware' | 'kaspire' | 'kastle';
+/** Browser extension wallets (discovered on `window`). */
+export type ExtensionWalletId = 'kasware' | 'kaspire' | 'kastle';
+/** `local-key`: the private key typed into the sandboxed signer frame (wallet/local-key.ts, src/signer). */
+export type WalletId = ExtensionWalletId | 'local-key';
 
 export interface WalletInfo {
   id: WalletId;

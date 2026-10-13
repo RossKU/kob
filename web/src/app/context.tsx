@@ -4,7 +4,11 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'p
 import { LocalStorageRecordStore, MemoryRecordStore, type RecordStore } from '../kob/records';
 import { watchWallets } from '../wallet/discover';
 import { dispatchTagFrom } from '../wallet/kaspire';
+import { createLocalKeyAdapter, type SignerHost } from '../wallet/local-key';
 import type { WalletAdapter, WalletId, WalletInfo } from '../wallet/types';
+import type { BuiltTx } from '../kob/types';
+import type { TokenHint } from '../signer/protocol';
+import { SignerFrame, type SignerMode } from '../ui/shell/SignerFrame';
 import type { Services } from './services';
 import { watchWallet, type WalletNotice } from './wallet-events';
 
@@ -35,6 +39,8 @@ export interface WalletSession {
   notice: WalletNotice | null;
   dismissNotice(): void;
   connect(id: WalletId): Promise<void>;
+  /** opens the private-key signer frame (the key is typed there, never into this page) */
+  openPrivateKey(): void;
   disconnect(): void;
   /** placement records of the connected key (memory store when not connected) */
   records: RecordStore;
@@ -73,6 +79,37 @@ export function WalletProvider(props: { services: Services; children: ComponentC
   const kob = props.services.kob;
   useEffect(() => watchWallets(setDetected, { kastle: config.features.kastle, timeoutMs: 8000, kaspire: { dispatchTag: dispatchTagFrom(kob) } }), [config.features.kastle, kob]);
 
+  // ---- the private-key signer frame (wallet/local-key.ts, ui/shell/SignerFrame.tsx): mounted while its session lives, removing it forgets the key
+  const [signerMode, setSignerMode] = useState<SignerMode>('closed');
+  const hostRef = useRef<SignerHost | null>(null);
+  const { sdk, registry } = props.services;
+  const localKey = useMemo(
+    () =>
+      createLocalKeyAdapter({
+        host: () => hostRef.current,
+        sdk,
+        tokenHints: (built: BuiltTx): TokenHint[] => {
+          const ids = new Set<string>();
+          for (const i of built.tx.inputs) if (i.utxo.covenantId) ids.add(i.utxo.covenantId);
+          for (const o of built.tx.outputs) if (o.covenant) ids.add(o.covenant.covenantId);
+          return [...ids].flatMap((id) => {
+            const tk = registry.byCovenantId.get(id);
+            return tk && /^[\x20-\x7e]{1,24}$/.test(tk.ticker) ? [{ covenantId: id, ticker: tk.ticker, decimals: tk.decimals }] : [];
+          });
+        },
+      }),
+    [sdk, registry],
+  );
+
+  const disconnect = useCallback(() => {
+    infoRef.current = null;
+    setAdapter(null);
+    setInfo(null);
+    setNotice(null);
+    hostRef.current?.forget();
+    setSignerMode('closed');
+  }, []);
+
   const connect = useCallback(
     async (id: WalletId) => {
       const a = detected.find((d) => d.id === id);
@@ -80,6 +117,7 @@ export function WalletProvider(props: { services: Services; children: ComponentC
         setError(`wallet ${id} not detected`);
         return;
       }
+      setSignerMode('closed');
       setConnecting(true);
       setError(null);
       try {
@@ -97,12 +135,38 @@ export function WalletProvider(props: { services: Services; children: ComponentC
     [detected, config.network],
   );
 
-  const disconnect = useCallback(() => {
-    infoRef.current = null;
-    setAdapter(null);
-    setInfo(null);
-    setNotice(null);
+  const openPrivateKey = useCallback(() => {
+    setError(null);
+    setSignerMode('connect');
   }, []);
+
+  const signerEvents = {
+    onConnected: () => {
+      void localKey.connect(config.network).then(
+        (i) => {
+          infoRef.current = i;
+          setNotice(null);
+          setError(null);
+          setAdapter(localKey);
+          setInfo(i);
+          setSignerMode('hidden');
+        },
+        (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
+      );
+    },
+    onForgotten: () => {
+      if (infoRef.current?.id === 'local-key') {
+        infoRef.current = null;
+        setAdapter(null);
+        setInfo(null);
+      }
+    },
+    onRequest: (active: boolean) => setSignerMode((m) => (m === 'closed' ? m : active ? 'sign' : 'hidden')),
+  };
+  const closeSigner = () => {
+    if (signerMode === 'sign') hostRef.current?.cancel();
+    else if (signerMode === 'connect') setSignerMode('closed');
+  };
 
   // Account and network changes after connect: see wallet-events.ts. Listeners live exactly as long as the session.
   useEffect(() => {
@@ -129,8 +193,13 @@ export function WalletProvider(props: { services: Services; children: ComponentC
   );
 
   const session: WalletSession = {
-    detected, adapter, info, connecting, error, epoch, notice, dismissNotice, connect, disconnect, records,
+    detected, adapter, info, connecting, error, epoch, notice, dismissNotice, connect, openPrivateKey, disconnect, records,
     networkMismatch: info !== null && info.network !== config.network,
   };
-  return <WalletContext.Provider value={session}>{props.children}</WalletContext.Provider>;
+  return (
+    <WalletContext.Provider value={session}>
+      {props.children}
+      <SignerFrame mode={signerMode} events={signerEvents} onHost={(h) => (hostRef.current = h)} onClose={closeSigner} />
+    </WalletContext.Provider>
+  );
 }

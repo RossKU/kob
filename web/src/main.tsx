@@ -8,6 +8,10 @@ import { createServices, type Services } from './app/services';
 import { loadConfigWithWarnings, type ConfigWarning, type StoredOverride } from './config';
 import { BootError, BootScreen } from './ui/shell/Boot';
 import { initTheme } from './ui/shell/theme';
+import { installTrustedTypesPolicy } from './app/trusted-types';
+
+// before anything renders: the only Trusted Types policy (csp.mjs), letting just the chart's attribution logo reach a DOM sink
+installTrustedTypesPolicy();
 
 declare global {
   interface Window {

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { CSP_HEADER, CSP_META, META_DIRECTIVES } from '../csp.mjs';
+import { CSP_HEADER, CSP_META, META_DIRECTIVES, SIGNER_CSP_HEADER, SIGNER_CSP_META, SIGNER_META_DIRECTIVES } from '../csp.mjs';
 
 const web = (rel: string) => fileURLToPath(new URL(`../${rel}`, import.meta.url));
 
@@ -12,7 +12,9 @@ describe('strict Content-Security-Policy and framing protection', () => {
     expect(META_DIRECTIVES['script-src']).toEqual(["'self'", "'wasm-unsafe-eval'"]); // no 'unsafe-inline', no 'unsafe-eval', no remote scripts
     expect(META_DIRECTIVES['object-src']).toEqual(["'none'"]);
     expect(META_DIRECTIVES['base-uri']).toEqual(["'none'"]);
-    expect(META_DIRECTIVES['frame-src']).toEqual(["'none'"]);
+    expect(META_DIRECTIVES['frame-src']).toEqual(["'self'"]); // the app's own private-key signer frame only
+    expect(META_DIRECTIVES['require-trusted-types-for']).toEqual(["'script'"]);
+    expect(META_DIRECTIVES['trusted-types']).toEqual(['default']); // one policy, installed at boot (src/app/trusted-types.ts)
     expect(META_DIRECTIVES['form-action']).toEqual(["'none'"]);
     expect(CSP_META).not.toMatch(/frame-ancestors/); // not expressible in a <meta>
     expect(CSP_HEADER).toBe(`${CSP_META}; frame-ancestors 'none'`);
@@ -41,6 +43,33 @@ describe('strict Content-Security-Policy and framing protection', () => {
     expect(readme).toMatch(/Content-Security-Policy/);
     expect(readme).toMatch(/frame-ancestors/);
     expect(readme).toMatch(/connect-src/);
+  });
+});
+
+describe('the private-key signer page has its own strict policy and is framed sandboxed', () => {
+  it('no network beyond its own bundle, no inline styles, Trusted Types, framed only by the app (header)', () => {
+    expect(SIGNER_META_DIRECTIVES['default-src']).toEqual(["'none'"]);
+    expect(SIGNER_META_DIRECTIVES['script-src']).toEqual(["'self'", "'wasm-unsafe-eval'"]);
+    expect(SIGNER_META_DIRECTIVES['connect-src']).toEqual(["'self'"]);
+    expect(SIGNER_META_DIRECTIVES['style-src']).toEqual(["'self'"]);
+    expect(SIGNER_META_DIRECTIVES['frame-src']).toEqual(["'none'"]);
+    expect(SIGNER_META_DIRECTIVES['trusted-types']).toEqual(["'none'"]);
+    expect(SIGNER_CSP_META).not.toMatch(/frame-ancestors/);
+    expect(SIGNER_CSP_HEADER).toBe(`${SIGNER_CSP_META}; frame-ancestors 'self'`);
+    const h = readFileSync(web('public/_headers'), 'utf8');
+    expect(h).toContain(`/signer.html\n  ! Content-Security-Policy\n  ! X-Frame-Options\n  Content-Security-Policy: ${SIGNER_CSP_HEADER}\n  X-Frame-Options: SAMEORIGIN`);
+    expect(h).toMatch(/\/assets\/\*\n  Access-Control-Allow-Origin: \*/); // the sandboxed (opaque-origin) signer loads its modules and wasm with CORS
+  });
+
+  it('the build has the signer page as a second entry with its own policy; the frame is sandboxed WITHOUT allow-same-origin', () => {
+    const cfg = readFileSync(web('vite.config.ts'), 'utf8');
+    expect(cfg).toMatch(/signer: fileURLToPath\(new URL\('\.\/signer\.html'/);
+    expect(cfg).toContain('SIGNER_CSP_META');
+    const html = readFileSync(web('signer.html'), 'utf8');
+    expect(/<script\b(?![^>]*\bsrc=)[^>]*>\s*\S/i.test(html)).toBe(false);
+    const frame = readFileSync(web('src/ui/shell/SignerFrame.tsx'), 'utf8');
+    // the JSX attribute (own line in SignerFrame.tsx): scripts only, never allow-same-origin
+    expect([...frame.matchAll(/^\s+sandbox="([^"]*)"$/gm)].map((m) => m[1])).toEqual(['allow-scripts']);
   });
 });
 

@@ -44,13 +44,23 @@ export function WalletButton() {
     );
   }
 
+  // the private key is typed into the sandboxed signer frame (SignerFrame.tsx), never into this page
+  const privateKey = (
+    <Button small variant="ghost" data-testid="wallet-connect-local-key" disabled={w.connecting} onClick={w.openPrivateKey} title={t('signer.recommend')}>
+      {t('signer.option')}
+    </Button>
+  );
+
   if (w.detected.length === 0) {
     return (
-      <div class="small muted" data-testid="wallet-install-hint" title={t('shell.wallet.none')}>
-        <strong>{t('shell.wallet.noneTitle')}</strong>{' '}
-        <a href={KASWARE_URL} target="_blank" rel="noopener noreferrer">{t('shell.wallet.installKasware')}</a>
-        {' / '}
-        <a href={KASPIRE_URL} target="_blank" rel="noopener noreferrer">{t('shell.wallet.installKaspire')}</a>
+      <div class="row">
+        <div class="small muted" data-testid="wallet-install-hint" title={t('shell.wallet.none')}>
+          <strong>{t('shell.wallet.noneTitle')}</strong>{' '}
+          <a href={KASWARE_URL} target="_blank" rel="noopener noreferrer">{t('shell.wallet.installKasware')}</a>
+          {' / '}
+          <a href={KASPIRE_URL} target="_blank" rel="noopener noreferrer">{t('shell.wallet.installKaspire')}</a>
+        </div>
+        {privateKey}
       </div>
     );
   }
@@ -62,6 +72,7 @@ export function WalletButton() {
           {w.connecting ? t('shell.wallet.connecting') : t('shell.wallet.connect', { wallet: a.label })}
         </Button>
       ))}
+      {privateKey}
     </div>
   );
 }
