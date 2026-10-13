@@ -175,3 +175,18 @@ test('the issue summary does not ask to fix fields before the form is filled', a
   await page.goto('/#/issue');
   await expect(page.getByTestId('issue-summary-empty')).toHaveText('The summary appears once the form is complete.');
 });
+
+test('closing a buy-first position that bought nothing yet does not offer to sell the wallet\'s tokens', async ({ appPage: page, mock, wallet }) => {
+  await fund(mock);
+  await openMarket(page, mock);
+  await pickType(page, 'ifd', 'buy');
+  await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' });
+  const { placed } = await reviewAndSign(page, mock);
+  const entryId = placed.views[0].covenant_id as string;
+  await page.getByTestId('nav-orders').click();
+  await page.getByTestId(`position-close-${entryId}`).click();
+  await runFlow(page, mock, wallet, { steps: 1 });
+  const banner = page.getByTestId('orders-close-followup');
+  await expect(banner).toContainText('nothing to sell');
+  await expect(page.getByTestId('orders-close-sell')).toHaveCount(0);
+});

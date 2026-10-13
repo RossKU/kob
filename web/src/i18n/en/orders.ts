@@ -193,6 +193,7 @@ export default {
   'orders.close.title': 'Step 2 of 2: sell the released tokens',
   'orders.close.body': 'Orders cancelled; the tokens are back in your wallet. Sell them at market (Close sells your whole free balance).',
   'orders.close.sell': 'Sell {ticker} at market',
+  'orders.close.bodyDone': 'Orders cancelled; the entry had bought nothing yet, so there is nothing to sell.',
   'orders.autoRefund.toggle': 'Refund my expired orders automatically while the app is open (no signature; you keep the refund tip)',
   'orders.autoRefund.done': 'Refunded {count} expired orders.',
   'orders.recordsMemory.title': 'Your order records are not saved',

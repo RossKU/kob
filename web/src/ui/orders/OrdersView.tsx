@@ -375,16 +375,19 @@ export function OrdersView() {
       {closeFollowUp && !closeFollowUp.pending && closeFollowUp.side === 'buy' ? (
         <Banner
           tone="info"
-          title={t('orders.close.title')}
+          title={t(closeFollowUp.amount > 0n ? 'orders.close.title' : 'orders.close.titleSellDone')}
           data-testid="orders-close-followup"
           onDismiss={() => setCloseFollowUp(null)}
           actions={
-            <a class="btn btn-primary btn-sm" href={routeToHash(tokenRoute(closeFollowUp.token, 'close'))} data-testid="orders-close-sell">
-              {t('orders.close.sell', { ticker: tokenOf(closeFollowUp.token)?.ticker ?? '' })}
-            </a>
+            // nothing bought yet: there is nothing of the position to sell (the "close" ticket would sell the whole free balance)
+            closeFollowUp.amount > 0n ? (
+              <a class="btn btn-primary btn-sm" href={routeToHash(tokenRoute(closeFollowUp.token, 'close'))} data-testid="orders-close-sell">
+                {t('orders.close.sell', { ticker: tokenOf(closeFollowUp.token)?.ticker ?? '' })}
+              </a>
+            ) : undefined
           }
         >
-          {t('orders.close.body')}
+          {t(closeFollowUp.amount > 0n ? 'orders.close.body' : 'orders.close.bodyDone')}
         </Banner>
       ) : null}
       {sweepFollowUp && !sweepFollowUp.pending ? (
