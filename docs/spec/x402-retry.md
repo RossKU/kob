@@ -66,7 +66,7 @@ facilitator's ledger also refuses a second attempt while the first one's anchor 
 | Broadcast refused by the node | rebuild | the facilitator failed the attempt (inputs released); should the refused transaction become valid later, it shares the anchor with the rebuild |
 | Accepted, but the answer lost | resend | the same transaction is found settled: `extensions.kob.replayed = true`, the paywall serves it as a replay; nothing is built |
 | `paid` finality not reached in time | resend | the facilitator observes the same transaction again |
-| Every attempt fails | stop after the bound | the attempts share the anchor: at most one can still be accepted; they stay `rejected` / `pending` in the store and a new `fetch` refuses to sign while they are live (`payment_in_flight`) until revoked (`allowResign` revokes them; attempts that contain an input a revoke already spent are revoked with it) |
+| Every attempt fails | stop after the bound | the attempts share the anchor: at most one can still be accepted; they stay `rejected` / `pending` in the store and a new `fetch` refuses to sign while they are live (`payment_in_flight`: unexpired, or expired with the payer's inputs still unspent, since expiry does not expire the transaction) until revoked (`allowResign` revokes them; attempts that contain an input a revoke already spent are revoked with it) |
 | Two retries racing (two calls, two processes) | | in one client paid requests for one resource run one at a time; across processes every attempt spends the anchor (on chain exclusive, refused by the ledger while another is live) |
 
 **Payment ids.** A resend keeps the payment id. A rebuilt attempt takes a FRESH random payment id (from `newPaymentId`;

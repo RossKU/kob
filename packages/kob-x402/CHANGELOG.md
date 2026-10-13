@@ -4,6 +4,15 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Payer: an expired artifact stays live while its inputs are unspent
+
+- `KobX402Client` (a new `fetch` / `payInvoice` for a resource with an earlier signed, pending or rejected artifact): an
+  artifact whose authorization expired was no longer counted as live, so a new payment was signed beside it without a revoke.
+  Expiry only bounds when a facilitator settles; the transaction stays valid on chain (x402-kcc20-profile.md 9.4), and a
+  merchant holding it could broadcast both. An expired artifact now stays live (`payment_in_flight`, or revoked first with
+  `allowResign`) until one of the payer's inputs it spends (its anchor, else every input that is not an order of its route) is
+  gone from the payer's chain context.
+
 ### Facilitator: `/supported` advertises only what it can settle now
 
 - kob-executor: `GET /supported` is empty while the facilitator is paused (as before) or its node does not answer a probe

@@ -946,9 +946,11 @@ export class KobX402Client {
   /** no second independent payment for the same resource while an earlier artifact is live. */
   async #guardResign(url: string, method: string): Promise<void> {
     const now = this.#now();
-    const live = (await this.#store.list()).filter(
-      (r) => r.url === url && r.method === method && (r.status === 'signed' || r.status === 'pending' || r.status === 'rejected') && r.expiresAtMs > now,
-    );
+    const open = (await this.#store.list()).filter((r) => r.url === url && r.method === method && (r.status === 'signed' || r.status === 'pending' || r.status === 'rejected'));
+    // Expiry bounds when a facilitator settles the payment, not the transaction (x402-kcc20-profile.md 9.4): a merchant that holds
+    // an expired artifact can still broadcast it while its inputs are unspent, so it stays live until one of them is spent.
+    const live: ArtifactRecord[] = [];
+    for (const r of open) if (r.expiresAtMs > now || (await this.#inputsUnspent(r))) live.push(r);
     if (live.length === 0) return;
     const ids = live.map((r) => r.paymentId);
     const allowed = this.#o.allowResign ? (await this.#o.allowResign(live)) === true : false;
@@ -977,6 +979,27 @@ export class KobX402Client {
       if (!rv.submitted) throw new KobX402Error('payment_in_flight', `the revoke of ${r.paymentId} was built but not submitted (configure submit)`, { paymentId: r.paymentId });
       if (rv.spent) revoked.set(outpointKey(rv.spent), rv.transactionId);
     }
+  }
+
+  /**
+   * Whether the payer's inputs of a stored artifact are all still unspent outputs of the payer (its chain context of now): its
+   * anchor, else every input that is not an order of its route. One that is gone (accepted, or spent by anything else) means
+   * the transaction can never be accepted again. A context that cannot be loaded counts as unspent.
+   */
+  async #inputsUnspent(r: ArtifactRecord): Promise<boolean> {
+    const route = r.paymentPayload?.payload?.route;
+    const q: ChainContextQuery = { payerAddress: this.#o.payerAddress, network: this.#o.network, kind: r.kind, asset: r.asset, amount: r.amount };
+    if (route?.payAsset) q.payAsset = route.payAsset;
+    let ctx: ChainContext;
+    try {
+      ctx = await this.#o.context.load(q);
+    } catch {
+      return true;
+    }
+    const owned = new Set([...ctx.utxos.map(outpointKey), ...collectOutpoints(ctx.tokenUtxos).map(outpointKey)]);
+    const orders = new Set((route?.orders ?? []).map(outpointKey));
+    const mine = r.anchor !== undefined ? [r.anchor] : r.consumed.map(outpointKey).filter((k) => !orders.has(k));
+    return mine.length > 0 && mine.every((k) => owned.has(k));
   }
 
   async #send(expectedHref: string, init: RequestInit, stage: string, paid: boolean): Promise<Response> {

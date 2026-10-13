@@ -210,6 +210,39 @@ test('every attempt fails: gives up after 3 with the attempts on the error; all 
   }
 });
 
+test('an expired artifact whose inputs are unspent stays live: a new fetch does not sign a second payment beside it', async () => {
+  // Expiry bounds when a facilitator settles a payment, not the transaction (x402-kcc20-profile.md 9.4): the merchant that
+  // never answered still holds a transaction it can broadcast while its inputs are unspent.
+  let clock = Date.now();
+  const big: PayerUtxo = kasUtxo(7, '9000000000');
+  let spent = false;
+  const rig = await startRig({
+    settle: () => ({ status: 500, body: { error: 'boom' } }),
+    client: {
+      retry: false,
+      now: () => clock,
+      allowResign: () => false,
+      // a larger coin arrived after the first payment: a new payment would not spend the first one's inputs
+      context: contexts((n) => (n === 1 ? { utxos: [kasUtxo(0)] } : { utxos: spent ? [big] : [big, kasUtxo(0)] })),
+    },
+  });
+  try {
+    const url = `${rig.base}/report`;
+    await assert.rejects(rig.client.fetch(url), (e: unknown) => e instanceof KobX402Error && e.code === 'payment_pending');
+    const [first] = await rig.store.list();
+    assert.equal(first!.anchor, outpointKey(kasUtxo(0)));
+    clock = first!.expiresAtMs + 1;
+    await assert.rejects(rig.client.fetch(url), (e: unknown) => e instanceof KobX402Error && e.code === 'payment_in_flight' && e.paymentId === first!.paymentId);
+    assert.equal(rig.wasm.calls.filter((c) => c.method === 'payNative').length, 1, 'no second payment was signed');
+    // once its anchor is spent (accepted, or spent by anything else) the expired artifact can never be accepted: a new fetch pays
+    spent = true;
+    await assert.rejects(rig.client.fetch(url), (e: unknown) => e instanceof KobX402Error && e.code === 'payment_pending');
+    assert.equal(rig.wasm.calls.filter((c) => c.method === 'payNative').length, 2);
+  } finally {
+    await rig.close();
+  }
+});
+
 test('refusals are not retried: a non-retryable failure stops at once, retry: false sends once', async () => {
   const rig = await startRig({ settle: () => ({ body: failure('underpayment', false, 'too little', undefined, 'invalid_payload') }), client: { retry: FAST } });
   try {
