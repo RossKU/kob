@@ -114,9 +114,10 @@ export const MARKET_START_TOLERANCE_BPS = 1_000n;
  * A market or close order is an auction that starts at the best price of the indexer order book. That book is not checked against the node, so the
  * start is compared with every reference the app has that is not the book itself: the last fill (the indexer trades) and the best price of each
  * further indexer (`referenceTouches`). A start more than the tolerance on the costly side (above a reference for a buy, below for a sell) is an
- * error until acknowledged. The last fill comes from the same indexer as the book, so it is not independent: with no further indexer answering, an
- * order worth `marketStartUnverifiedMinSompi` or more is an error until acknowledged (MARKET_START_UNVERIFIED), a smaller one a warning. An
- * acknowledgement (`marketStartAck`) covers the gap (or start) it was given for and nothing worse.
+ * error until acknowledged. The last fill comes from the same indexer as the book, so it is not independent: with no further indexer answering, a
+ * sell (whatever its value: a wrong bid sells at its price) and a buy worth `marketStartUnverifiedMinSompi` or more are an error until
+ * acknowledged (MARKET_START_UNVERIFIED), a smaller buy a warning. An acknowledgement (`marketStartAck`) covers the gap (or start) it was given
+ * for and nothing worse.
  */
 export function marketStartIssues(env: PlanEnv, intent: Intent, plan: OrderPlan): PlanIssue[] {
   if (intent.type !== 'market' && intent.type !== 'close') return [];
@@ -159,7 +160,7 @@ export function marketStartIssues(env: PlanEnv, intent: Intent, plan: OrderPlan)
   // no independent reference: the last fill (if any) comes from the same indexer as the book, so it cannot catch a wrong book
   const value = startValueSompi(env, d.tokenAmount, start, d.scale);
   const min = env.marketStartUnverifiedMinSompi ?? MARKET_START_UNVERIFIED_MIN_SOMPI;
-  if (value === null || value >= min) {
+  if (!buy || value === null || value >= min) {
     const params = { start, direction, bps: 0n };
     const covered = ack?.kind === 'unverified' && ack.direction === direction && (buy ? start <= ack.start : start >= ack.start);
     out.push(issue(covered ? 'MARKET_START_UNVERIFIED_ACKNOWLEDGED' : 'MARKET_START_UNVERIFIED', params));

@@ -587,6 +587,35 @@ fn an_unlisted_token_commitment_must_match_the_wallets_holdings() {
     );
 }
 
+/// A market sell whose start is only the indexer's best bid does not go on `--yes` alone: it needs `--ack-market-start`
+/// every time, or a floor price of the user's own; the same for `close`.
+#[test]
+fn a_market_sell_needs_the_start_acknowledged_or_a_floor() {
+    let w = world("marketsell", &[]);
+    w.indexer_state.lock().unwrap().routes.insert(
+        format!("/v1/books/{}?depth=100&aggregate=false", to_hex(&TOKEN)),
+        json!({"token": to_hex(&TOKEN), "aggregated": false, "asks": [],
+               "bids": [{"covenant_id": to_hex(&[0xb1; 32]), "price": "250000000", "amount_left": "40000", "scale": 1000}]}),
+    );
+    let place = crate::trade::place::run;
+    let sell = "market --token TST --side sell --amount 1TST --yes";
+    assert_eq!(run(place, w.args(0x11, sell)), 1);
+    assert_eq!(run(place, w.args(0x11, "close --token TST --amount 1TST --yes")), 1);
+    assert_eq!(w.submitted(), 0);
+    assert_eq!(run(place, w.args(0x11, &format!("{sell} --ack-market-start"))), 0);
+    assert_eq!(w.submitted(), 1);
+    assert!(w.issue_codes(".place.json").iter().any(|c| c == "MARKET_START_UNVERIFIED_ACKNOWLEDGED"));
+    // the acknowledgement is per command: the next sell asks again
+    assert_eq!(run(place, w.args(0x11, sell)), 1);
+    assert_eq!(run(place, w.args(0x11, &format!("{sell} --floor-price 2.45KAS"))), 0);
+    assert_eq!(w.submitted(), 2);
+    let AnyState::KobAsk(a) = &recover_orders(&w.signed(".place.json").tx).unwrap()[0].order else { panic!() };
+    assert_eq!((a.price, a.price_end), (250_000_000, 245_000_000));
+    // a floor names a sell's bound only
+    assert_eq!(run(place, w.args(0x11, "market --token TST --side buy --amount 1TST --floor-price 2KAS --yes")), 1);
+    assert_eq!(w.submitted(), 2);
+}
+
 const TOKEN_B: [u8; 32] = [0x71; 32];
 const PB: TemplateId = TemplateId::Kcc20Ref8x8;
 

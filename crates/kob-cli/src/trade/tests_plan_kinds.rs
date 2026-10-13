@@ -79,7 +79,7 @@ fn streaming_starts_from_the_displayed_price() {
 }
 
 fn close(amount: Option<i64>) -> Intent {
-    Intent::Close(CloseIntent { amount, tip: 0, slippage_bps: None, all_or_nothing: false })
+    Intent::Close(CloseIntent { amount, tip: 0, slippage_bps: None, all_or_nothing: false, floor: None })
 }
 
 #[test]
@@ -793,6 +793,7 @@ fn every_simple_kind_runs_on_a_pair() {
             min_fill: None,
             slippage_bps: None,
             all_or_nothing: false,
+            floor: None,
         }),
     );
     let AnyState::KobPair(s) = &p.states[0] else { panic!() };

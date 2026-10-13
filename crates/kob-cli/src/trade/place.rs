@@ -28,10 +28,11 @@ USAGE
 KINDS
   limit          --price P [--gtd WHEN | --day] [--active-from WHEN] [--crossing auction|limit|reject] [--max-fills N]
   ioc | fok      --price P [--life DURATION] [--active-from WHEN]
-  market         [--slippage BPS] [--all-or-nothing]          an IOC auction from the best price to the bound
+  market         [--slippage BPS] [--all-or-nothing] [--floor-price P]
+                                                              an IOC auction from the best price to the bound
   streaming      --displayed-price P --tolerance BPS [--all-or-nothing]
                                                               an IOC auction from the price you saw, within your tolerance
-  close          [--amount AMOUNT] [--slippage BPS] [--all-or-nothing]
+  close          [--amount AMOUNT] [--slippage BPS] [--all-or-nothing] [--floor-price P]
                                                               a market sell of the held tokens (no --amount: all of them)
   twap | dca     --price P --slice AMOUNT --interval DURATION [--price-end P [--slice-auction DURATION]]
                  [--gtd WHEN | --day] [--active-from WHEN] [dca: --max-fills N]
@@ -72,6 +73,9 @@ AMOUNTS (always with a unit; never rounded)
 SAFETY
   --ack-no-guards       place even when the indexer could not answer for the self-trade / book checks
   --ack-market-start    accept a market / close auction start the CLI cannot check against an independent reference
+                        (the start is the indexer's best price: every market / close sell needs it, or --floor-price;
+                        a buy when it is worth 100 KAS or more or far above the last fill)
+  --floor-price P       a market / close sell never fills below P (the bound is max(slippage bound, P))
   GTC orders end after 90 days idle (renew with `kob replace <id> --renew`).
 
 ";
@@ -118,6 +122,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--exit-slippage",
     "--repeat-count",
     "--decimals",
+    "--floor-price",
 ];
 const BOOL_FLAGS: &[&str] = &["--day", "--all-or-nothing", "--ack-no-guards", "--ack-market-start"];
 
@@ -133,9 +138,9 @@ fn kind_flags(kind: &str) -> Option<Vec<&'static str>> {
     match kind {
         "limit" | "pair-limit" => v(&[&["--price", "--min-fill", "--crossing", "--max-fills"], LIFE]),
         "ioc" | "fok" => v(&[&["--price", "--min-fill", "--life", "--active-from"]]),
-        "market" => v(&[&["--min-fill", "--slippage", "--all-or-nothing"]]),
+        "market" => v(&[&["--min-fill", "--slippage", "--all-or-nothing", "--floor-price"]]),
         "streaming" => v(&[&["--min-fill", "--displayed-price", "--tolerance", "--all-or-nothing"]]),
-        "close" => v(&[&["--slippage", "--all-or-nothing"]]),
+        "close" => v(&[&["--slippage", "--all-or-nothing", "--floor-price"]]),
         "twap" => v(&[&["--price", "--min-fill", "--slice", "--interval", "--price-end", "--slice-auction"], LIFE]),
         "dca" => v(&[&["--price", "--min-fill", "--slice", "--interval", "--price-end", "--slice-auction", "--max-fills"], LIFE]),
         "dutch" => v(&[&["--price", "--min-fill", "--price-end", "--duration", "--step", "--max-fills"], LIFE]),
@@ -309,9 +314,15 @@ pub fn intent_of(kind: &str, p: &Parsed, m: &TokenMarket, quote: Option<&TokenMa
             life_daa: dur_of("--life")?,
             active_from: activation_of(p)?,
         }),
-        "market" => {
-            Intent::Market(MarketIntent { side, amount, tip, min_fill, slippage_bps: slip, all_or_nothing: p.has("--all-or-nothing") })
-        }
+        "market" => Intent::Market(MarketIntent {
+            side,
+            amount,
+            tip,
+            min_fill,
+            slippage_bps: slip,
+            all_or_nothing: p.has("--all-or-nothing"),
+            floor: price_of("--floor-price")?,
+        }),
         "streaming" => Intent::Streaming(StreamingIntent {
             side,
             amount,
@@ -327,6 +338,7 @@ pub fn intent_of(kind: &str, p: &Parsed, m: &TokenMarket, quote: Option<&TokenMa
             tip,
             slippage_bps: slip,
             all_or_nothing: p.has("--all-or-nothing"),
+            floor: price_of("--floor-price")?,
         }),
         "twap" | "dca" => Intent::Schedule(ScheduleIntent {
             dca: kind == "dca",

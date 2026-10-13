@@ -346,6 +346,7 @@ fn market_orders_equal_the_golden_vectors() {
                 min_fill: mf,
                 slippage_bps: None,
                 all_or_nothing: false,
+                floor: None,
             })
         };
         assert_eq!(ask(&valid(&sell_env, mk(Side::Sell, None))).min_fill, 1);
@@ -389,6 +390,7 @@ fn market_orders_equal_the_golden_vectors() {
             min_fill: None,
             slippage_bps: None,
             all_or_nothing: false,
+            floor: None,
         }),
     );
     assert!(!p.ok && codes(&p).contains(&"MARKET_START_VS_LAST_FILL"));
@@ -608,7 +610,8 @@ fn a_hostile_book_never_panics() {
     };
     let e = Env { book: big, own: vec![], ..env(&m) };
     for side in [Side::Buy, Side::Sell] {
-        let mk = MarketIntent { side, amount: TOK, tip: 0, min_fill: None, slippage_bps: Some(9_999), all_or_nothing: false };
+        let mk =
+            MarketIntent { side, amount: TOK, tip: 0, min_fill: None, slippage_bps: Some(9_999), all_or_nothing: false, floor: None };
         let _ = plan_order(&e, &Intent::Market(mk.clone()));
         let _ = plan_order(&e, &Intent::Limit(limit(side, 10 * TOK, 250_000_000)));
         let _ = plan_order(&e, &Intent::Market(MarketIntent { all_or_nothing: true, ..mk }));
@@ -661,4 +664,46 @@ fn a_stop_only_sell_with_a_tip_can_be_amended() {
     // a tip at the stop band's floor is still refused
     let input = super::actions::AmendInput { tip: Some(230_000_000), ..Default::default() };
     assert!(super::actions::replacement(&live, &input, CLOCK.daa, 1).unwrap_err().contains("below every leg price"));
+}
+
+/// A market / close sell starts at the indexer's best bid, and the CLI has no reference independent of that indexer: the
+/// sell waits for the acknowledgement whatever its value (a small one, its start in line with the last fill, too), unless a
+/// floor price of the user's own bounds it. A small buy in line with the last fill stays a warning.
+#[test]
+fn a_market_sell_needs_an_acknowledgement_or_a_floor() {
+    let m = market(TemplateId::Kcc20Ref);
+    let book = Book { bids: vec![level(250_000_000, 40 * TOK, 2)], asks: vec![level(250_000_000, 40 * TOK, 2)], ..Default::default() };
+    let e = Env { market_start_ack: false, last_fill: Some(250_000_000), book, ..env(&m) };
+    let mk = |side, floor| {
+        Intent::Market(MarketIntent { side, amount: TOK, tip: 0, min_fill: None, slippage_bps: None, all_or_nothing: false, floor })
+    };
+    // 1 token at 2.5 KAS: held all the same
+    let p = plan_order(&e, &mk(Side::Sell, None));
+    assert!(!p.ok && codes(&p).contains(&"MARKET_START_UNVERIFIED"), "{:?}", codes(&p));
+    let close = Intent::Close(CloseIntent { amount: Some(TOK), tip: 0, slippage_bps: None, all_or_nothing: false, floor: None });
+    assert!(codes(&plan_order(&e, &close)).contains(&"MARKET_START_UNVERIFIED"));
+    // acknowledged
+    let acked = Env { market_start_ack: true, ..e.clone() };
+    let p = plan_order(&acked, &mk(Side::Sell, None));
+    assert!(p.ok && codes(&p).contains(&"MARKET_START_UNVERIFIED_ACKNOWLEDGED"), "{:?}", p.issues);
+    // a floor of the user's own: no acknowledgement, and the bound never below it (300 bps alone: 2.425 KAS)
+    let p = plan_order(&e, &mk(Side::Sell, Some(245_000_000)));
+    assert!(p.ok && codes(&p).contains(&"MARKET_START_FLOOR"), "{:?}", p.issues);
+    assert_eq!(p.disclosure.as_ref().unwrap().worst_price, Some(245_000_000));
+    let p = plan_order(&e, &mk(Side::Sell, Some(200_000_000)));
+    assert_eq!(p.disclosure.as_ref().unwrap().worst_price, Some(242_500_000));
+    let floored = Intent::Close(CloseIntent {
+        floor: Some(245_000_000),
+        ..match close {
+            Intent::Close(c) => c,
+            _ => unreachable!(),
+        }
+    });
+    assert!(plan_order(&e, &floored).ok);
+    // a floor above the best bid would never fill; a floor on a buy is refused
+    assert!(codes(&plan_order(&e, &mk(Side::Sell, Some(260_000_000)))).contains(&"MARKET_FLOOR_ABOVE_START"));
+    assert!(codes(&plan_order(&e, &mk(Side::Buy, Some(245_000_000)))).contains(&"MARKET_FLOOR_SIDE"));
+    // a small buy in line with the last fill: a warning
+    let p = plan_order(&e, &mk(Side::Buy, None));
+    assert!(p.ok && codes(&p).contains(&"MARKET_START_NO_INDEPENDENT_REFERENCE"), "{:?}", p.issues);
 }

@@ -5,7 +5,7 @@ export default {
   'ticket.guards.ack': 'Place the order without these checks',
   'ticket.marketStart.title': 'Check the start price',
   'ticket.marketStart.text': 'The start is the best price of the indexer book, which the app cannot check against the node. It is more than {percent}% beyond the last fill or another indexer (extraIndexerUrls).',
-  'ticket.marketStart.unverified': 'The start is the best price of the indexer book and nothing independent checks it: no further indexer answered (extraIndexerUrls), and the last fill comes from the same indexer. Orders of {kas} KAS or more need your acknowledgement.',
+  'ticket.marketStart.unverified': 'The start is the best price of the indexer book and nothing independent checks it: no further indexer answered (extraIndexerUrls), and the last fill comes from the same indexer. Every sell, and buys of {kas} KAS or more, need your acknowledgement.',
   'ticket.marketStart.ackScope': 'Covers this start only: a new token, side, type or size, a reload or a worse start asks again.',
   'ticket.marketStart.ack':'I checked the price: place at this start',
   'ticket.title': 'Order ticket',

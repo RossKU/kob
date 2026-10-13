@@ -360,6 +360,9 @@ pub struct MarketIntent {
     pub slippage_bps: Option<i64>,
     /// FOK.
     pub all_or_nothing: bool,
+    /// A sell's floor, the user's own: the least price per whole token the auction reaches (none: the slippage bound
+    /// alone, from the indexer's best bid).
+    pub floor: Option<i64>,
 }
 
 /// The conditional kinds `kob place` offers.
@@ -522,6 +525,9 @@ pub struct CloseIntent {
     pub slippage_bps: Option<i64>,
     /// FOK.
     pub all_or_nothing: bool,
+    /// A sell's floor, the user's own: the least price per whole token the auction reaches (none: the slippage bound
+    /// alone, from the indexer's best bid).
+    pub floor: Option<i64>,
 }
 
 /// TWAP (sell) / DCA (buy): at most `slice` per `interval_daa`, optionally each slice its own auction.
@@ -1742,6 +1748,8 @@ pub(crate) struct AuctionReq {
     pub(crate) notes: Vec<&'static str>,
     /// Where the start comes from (shown).
     pub(crate) source: &'static str,
+    /// A sell's floor, the user's own: the bound is never below it.
+    pub(crate) floor: Option<i64>,
 }
 
 pub(crate) fn plan_auction(env: &Env, r: AuctionReq, mut pre: Vec<Issue>) -> Plan {
@@ -1758,7 +1766,24 @@ pub(crate) fn plan_auction(env: &Env, r: AuctionReq, mut pre: Vec<Issue>) -> Pla
         return failed(pre);
     }
     let touch = r.reference.unwrap_or(0);
-    let end = auction_bound(r.side, touch, r.bps, tick_of(env));
+    let mut end = auction_bound(r.side, touch, r.bps, tick_of(env));
+    if let Some(f) = r.floor {
+        if r.side != Side::Sell {
+            pre.push(error("MARKET_FLOOR_SIDE", "a floor price bounds a sell; a market buy is bounded by --slippage"));
+        } else if f <= 0 {
+            pre.push(error("MARKET_FLOOR_INVALID", "the floor price must be positive"));
+        } else if f > touch {
+            pre.push(error(
+                "MARKET_FLOOR_ABOVE_START",
+                format!("the best bid ({touch} per token) is below your floor ({f}): nothing would fill; place a limit order instead"),
+            ));
+        } else {
+            end = end.max(round_to_tick(f, tick_of(env), true)).min(touch);
+        }
+        if has_error(&pre) {
+            return failed(pre);
+        }
+    }
     let mut d = blank(r.side, r.amount, touch, r.tip, r.min_fill);
     d.immediate = true;
     d.tif = if r.all_or_nothing { 2 } else { 1 };
@@ -1807,6 +1832,7 @@ pub(crate) fn plan_market(env: &Env, i: &MarketIntent) -> Plan {
             all_or_nothing: i.all_or_nothing,
             notes: vec!["market"],
             source: "the indexer order book",
+            floor: i.floor,
         },
         vec![],
     )
@@ -1829,6 +1855,7 @@ pub(crate) fn plan_streaming(env: &Env, i: &StreamingIntent) -> Plan {
             all_or_nothing: i.all_or_nothing,
             notes: vec!["streaming"],
             source: "the price you accepted",
+            floor: None,
         },
         pre,
     )
@@ -1856,6 +1883,7 @@ pub(crate) fn plan_close(env: &Env, i: &CloseIntent) -> Plan {
             all_or_nothing: i.all_or_nothing,
             notes: vec!["market", "close"],
             source: "the indexer order book",
+            floor: i.floor,
         },
         vec![],
     )
@@ -3230,7 +3258,11 @@ pub(crate) fn env_issues(env: &Env) -> Vec<Issue> {
     out
 }
 
-pub(crate) fn market_start_issues(env: &Env, plan: &Plan) -> Vec<Issue> {
+/// The start of a market / close auction is the indexer's best price, which the node cannot confirm; the CLI has no
+/// reference independent of that indexer (the last fill comes from it too). A start far on the costly side of the last
+/// fill waits for `--ack-market-start`; so does a sell, whatever its value (a wrong bid sells at its price), unless the
+/// user's own `--floor-price` bounds it; a buy worth 100 KAS or more waits too.
+pub(crate) fn market_start_issues(env: &Env, plan: &Plan, floor: Option<i64>) -> Vec<Issue> {
     let Some(d) = &plan.disclosure else { return vec![] };
     let Some(start) = d.expected_price.filter(|s| *s > 0) else { return vec![] };
     let buy = d.side == Side::Buy;
@@ -3256,6 +3288,24 @@ pub(crate) fn market_start_issues(env: &Env, plan: &Plan) -> Vec<Issue> {
                 }];
             }
         }
+    }
+    if !buy {
+        return vec![match (floor, ack) {
+            (Some(f), _) => info(
+                "MARKET_START_FLOOR",
+                format!("the auction start ({start}) is the indexer's best bid; your floor ({f}) bounds the price the order accepts"),
+            ),
+            (None, true) => warning(
+                "MARKET_START_UNVERIFIED_ACKNOWLEDGED",
+                format!("acknowledged: nothing independent of the indexer checks the auction start ({start})"),
+            ),
+            (None, false) => error(
+                "MARKET_START_UNVERIFIED",
+                format!(
+                    "the sell's auction starts at {start} per token, the indexer's best bid, and nothing independent of that indexer checks it; check it, then --ack-market-start, or bound the sell with --floor-price"
+                ),
+            ),
+        }];
     }
     // the KAS value at the start; a pair converts B at its KAS reference (unknown: held as unverified)
     let quote = d.amount as i128 * start as i128 / d.scale as i128;
@@ -3340,8 +3390,10 @@ pub fn plan_order(env: &Env, intent: &Intent) -> Plan {
         Intent::Ifd(i) => plan_ifd(env, i),
     };
     let mut extra = env_issues(env);
-    if matches!(intent, Intent::Market(_) | Intent::Close(_)) {
-        extra.extend(market_start_issues(env, &plan));
+    match intent {
+        Intent::Market(i) => extra.extend(market_start_issues(env, &plan, i.floor)),
+        Intent::Close(i) => extra.extend(market_start_issues(env, &plan, i.floor)),
+        _ => {}
     }
     extra.extend(stop_evidence_issues(env, &plan));
     if has_error(&extra) {

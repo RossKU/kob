@@ -45,6 +45,31 @@ describe('a market start with no independent reference', () => {
     expect(find(p, 'MARKET_START_NO_INDEPENDENT_REFERENCE').severity).toBe('warning');
   });
 
+  it('a sell is held whatever its value: its start (the best bid) comes only from the indexer; the acknowledgement covers that start', () => {
+    const sell = { type: 'market', side: 'sell', amount: 2n * TOK } as never;
+    const small = { marketStartUnverifiedMinSompi: 10n ** 12n };
+    // the bid agrees with the last fill and the order is small: still held, an error until acknowledged (the buy is only told)
+    const p = planOrder(envAt(FAKE, REAL, small), sell);
+    expect(p.ok).toBe(false);
+    expect(errors(p).map((i) => i.code)).toEqual(['MARKET_START_UNVERIFIED']);
+    expect(find(p, 'MARKET_START_UNVERIFIED').params).toMatchObject({ direction: 'below', start: REAL });
+    expect(planOrder(envAt(REAL, REAL, small), buy).ok).toBe(true);
+    const close = planOrder(envAt(FAKE, REAL, small), { type: 'close', amount: 2n * TOK } as never);
+    expect(codes(close)).toContain('MARKET_START_UNVERIFIED');
+    const ack = marketStartAckOf(find(p, 'MARKET_START_UNVERIFIED'));
+    const acked = planOrder(envAt(FAKE, REAL, { ...small, marketStartAck: ack }), sell);
+    expect(acked.ok).toBe(true);
+    expect(codes(acked)).toContain('MARKET_START_UNVERIFIED_ACKNOWLEDGED');
+    // a lower bid is a new start: asked again
+    const lower = makeEnv({ book: { asks: [level(FAKE, 1_000n * TOK, 1)], bids: [level(REAL - 1n, 1_000n * TOK, 1)] } });
+    Object.assign(lower, { lastFillPrice: REAL, ...small, marketStartAck: ack });
+    expect(planOrder(lower, sell).ok).toBe(false);
+    // a further indexer that answers and agrees checks the start
+    const checked = planOrder(envAt(FAKE, REAL, { ...small, referenceTouches: [{ label: 'https://idx2.example', bestAsk: FAKE, bestBid: REAL }] }), sell);
+    expect(checked.ok).toBe(true);
+    expect(codes(checked).filter((c) => c.startsWith('MARKET_START'))).toEqual([]);
+  });
+
   it('the acknowledgement covers that start only: a costlier start, or the other side, is held again', () => {
     const first = planOrder(envAt(FAKE, null), buy);
     const ack = marketStartAckOf(find(first, 'MARKET_START_UNVERIFIED'));

@@ -52,6 +52,14 @@ export async function settlePlan(page: Page): Promise<void> {
 /** Waits for a plan without errors: the disclosure is shown and review is enabled. */
 export async function waitReviewable(page: Page): Promise<void> {
   await settlePlan(page);
+  // a market / close start that nothing independent of the indexer checks (every sell here: the mock stack has no further indexer) holds the
+  // ticket until its box is ticked: review stays disabled until then
+  const startAck = page.getByTestId('order-market-start-ack');
+  if ((await startAck.count()) > 0 && !(await startAck.isChecked())) {
+    await expect(page.getByTestId('order-review')).toBeDisabled();
+    await startAck.check();
+    await settlePlan(page);
+  }
   await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
   await expect(page.getByTestId('order-review')).toBeEnabled();
   await expect(page.getByTestId('order-disclosure')).toBeVisible();
