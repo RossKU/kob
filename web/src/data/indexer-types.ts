@@ -300,6 +300,8 @@ export interface OrderView {
   pair?: PairOrderView | null;
   /** the executor's pre-simulation of the order's next fill failed (the token program may have frozen / blacklisted it or its owner): the order is NOT in the book depth; absent on older executors */
   possibly_frozen?: boolean;
+  /** warnings of the order's token(s) (`genesis_unverified`, matcher.md 1.2a), as on `/v1/tokens`; absent on older executors */
+  warnings?: string[];
 }
 
 export interface EventView {

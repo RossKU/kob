@@ -1111,7 +1111,7 @@ should default to settled. The mempool tier is not served by the indexer.
 | `GET /v1/pairs/{base}/{quote}/book?depth=` | the pair book: `direct` (`KobPair`) and `entry` (`KobIfdPair` at its limit) levels and the implied quotes of the KAS route (section 5.4) |
 | `GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=` | pair candles derived from the KAS series of A and of B (never from pair fills; section 5.4) |
 | `GET /v1/pairs/{base}/{quote}/fills?limit=&before=` | pair-order fills (volume, `counterparty`, `price_source: none`) and the 24 h pair volume (section 5.4) |
-| `GET /v1/orders/{covenant_id}` | order terms, status, current outpoint and decoded `state`, `auction`, `quote`, `kill_daa`, `refund_due_daa`, `deadline`, `repeat`, `custody`, `strays`, parent/children; pair orders add `pair` (5.4) |
+| `GET /v1/orders/{covenant_id}` | order terms, status, current outpoint and decoded `state`, `auction`, `quote`, `kill_daa`, `refund_due_daa`, `deadline`, `repeat`, `custody`, `strays`, parent/children, `warnings` (`genesis_unverified` unless every token it trades is `genesis_verified`, as on `GET /v1/tokens`); pair orders add `pair` (5.4) |
 | `GET /v1/orders?maker=&token=&status=&limit=&cursor=` | orders of a maker or token (a pair order is listed under both its tokens), keyset paging |
 | `GET /v1/orders/{covenant_id}/events` | lifecycle events: `create`, `fill`, `arm`, `trail`, `rearm`, `cancel`, `refund`, `kill`, `unknown`; `arm`, `trail` and the `fill` of a triggered stop carry `detail.evidence` (`input`, `order`: the evidence order's covenant id, `side` 1 ask / 2 bid, `price`: its quote) |
 | `GET /v1/fills?token=&side=&limit=&before=` | recent fills |

@@ -233,6 +233,17 @@ async fn tokens_list_counts() {
     assert_eq!(t["open_bids"], 2);
 }
 
+/// A token whose registry entry says `genesis_verified: true`: its order views carry no warning.
+#[tokio::test]
+async fn an_order_of_a_genesis_verified_token_has_no_warning() {
+    let mut e = env(|_| {});
+    seed_all(&e.w);
+    let tokens = (*e.state.tokens).clone().with_genesis([(Hash32([TOKEN; 32]), true)]);
+    e.state.tokens = Arc::new(tokens);
+    let (_, v) = get(&router(e.state.clone()), &format!("/v1/orders/{}", h(2))).await;
+    assert_eq!(v["warnings"], serde_json::json!([]));
+}
+
 #[tokio::test]
 async fn book_aggregated_and_per_order() {
     let e = env(|_| {});
@@ -309,6 +320,12 @@ async fn order_by_id() {
     let (_, v) = get(&app, &format!("/v1/orders/{}", h(5))).await;
     assert_eq!(v["parent"], h(2));
     assert_eq!(v["expired"], false, "closed orders are never expired");
+
+    // docs/spec/matcher.md 1.2a: the token's genesis is not verified: every order view carries the warning
+    assert_eq!(v["warnings"], serde_json::json!(["genesis_unverified"]));
+    let (_, page) = get(&app, &format!("/v1/orders?token={}", h(TOKEN))).await;
+    let items = page["items"].as_array().unwrap();
+    assert!(!items.is_empty() && items.iter().all(|o| o["warnings"] == serde_json::json!(["genesis_unverified"])), "{page}");
 
     let (s, v) = get(&app, &format!("/v1/orders/{}", h(0x42))).await;
     assert_eq!(s, StatusCode::NOT_FOUND);

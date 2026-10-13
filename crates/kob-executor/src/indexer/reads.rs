@@ -594,6 +594,37 @@ pub struct OrderView {
     /// `token` is the base token A, `price` / `quote` are null (no KAS price), `tip` is the KAS tip per whole A.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pair: Option<PairView>,
+    /// Warnings a client must show for the order's token(s) (`docs/spec/matcher.md` 1.2a): `genesis_unverified` unless the
+    /// registry says `genesis_verified: true` of every token the order trades (a pair order: A and B). Filled by the API
+    /// ([`OrderView::with_warnings`]), which holds the token registry.
+    pub warnings: Vec<&'static str>,
+}
+
+impl OrderView {
+    /// The covenant ids of the tokens the order trades: its token, and a pair order's quote token B.
+    pub fn token_ids(&self) -> Vec<Hash32> {
+        let mut out: Vec<Hash32> = vec![];
+        for t in self.token.iter().chain(self.pair.as_ref().map(|p| &p.quote)) {
+            if let Ok(h) = Hash32::parse(t) {
+                if !out.contains(&h) {
+                    out.push(h);
+                }
+            }
+        }
+        out
+    }
+
+    /// The order with the warnings of its tokens (`warnings_of` a token's covenant id), each code once.
+    pub fn with_warnings(mut self, warnings_of: impl Fn(&Hash32) -> Vec<&'static str>) -> Self {
+        for t in self.token_ids() {
+            for w in warnings_of(&t) {
+                if !self.warnings.contains(&w) {
+                    self.warnings.push(w);
+                }
+            }
+        }
+        self
+    }
 }
 
 /// One custody a pair order holds (`AnyState::custodies`).
@@ -847,6 +878,7 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
         last_daa,
         children: None,
         pair,
+        warnings: vec![],
     })
 }
 

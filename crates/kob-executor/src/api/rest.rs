@@ -187,7 +187,8 @@ pub async fn order(State(app): State<Arc<App>>, Path(id): Path<String>) -> ApiRe
     let id = parse_hash("covenant_id", &id)?;
     let ctx = app.ctx();
     match app.state.pool.with(move |c| reads::order(c, &ctx, &id)).await? {
-        Some(o) => json_ok(o),
+        // the genesis warning of its token(s) (docs/spec/matcher.md 1.2a: on every order view of that token)
+        Some(o) => json_ok(o.with_warnings(|t| app.state.tokens.warnings_for(t))),
         None => Err(ApiError::not_found("unknown covenant id")),
     }
 }
@@ -210,7 +211,8 @@ pub async fn orders(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult 
     let n = limit(&q, "limit", 50, app.state.cfg.max_page_size)?;
     let ctx = app.ctx();
     let filter = OrderFilter { maker, token, status };
-    let v = app.state.pool.with(move |c| reads::orders(c, &ctx, &filter, n, cursor)).await?;
+    let mut v = app.state.pool.with(move |c| reads::orders(c, &ctx, &filter, n, cursor)).await?;
+    v.items = v.items.into_iter().map(|o| o.with_warnings(|t| app.state.tokens.warnings_for(t))).collect();
     json_ok(v)
 }
 
