@@ -32,3 +32,11 @@ test('the confirmation screen opens at its title, not scrolled past it', async (
   await expect(screen.locator('.modal-head h2')).toBeInViewport();
   expect(await page.locator('.modal-backdrop').evaluate((el) => el.scrollTop)).toBe(0);
 });
+
+test('copy buttons keep their label on one line (token details)', async ({ appPage: page, mock }) => {
+  await openMarket(page, mock, { connect: false });
+  const btn = page.getByTestId('token-covenant-id').locator('xpath=..').locator('.copy-btn');
+  await expect(btn).toHaveText('Copy');
+  const box = await btn.boundingBox();
+  expect(box!.height).toBeLessThan(30);
+});
