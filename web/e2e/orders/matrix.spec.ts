@@ -7,6 +7,7 @@
 // against `kob.dayOrder`, timed activation, IOC / auction lifetimes).
 import { test, expect } from '../fixtures';
 import { loadKobNode } from '../../src/kob/wasm.node';
+import ticketText from '../../src/i18n/en/ticket';
 import { browserTzOffset, fund, mockClock, openMarket } from '../helpers/env';
 import { fillFields, openReview, pickType, readDisclosure, acknowledgeAndSign, placedBy, expectWalletSigned, waitReviewable } from '../helpers/ticket';
 import { CASES, type Ctx, type Timing } from './cases';
@@ -185,7 +186,9 @@ for (const c of CASES) {
     await expect(page.getByTestId(`order-type-${view.covenant_id}`)).toHaveText(c.listLabel);
     await expect(row.getByTestId('order-status')).toHaveText(/^open$/i);
     await expect(row.getByTestId(`order-tx-${view.covenant_id}`)).toBeVisible();
-    await expect(row).toContainText(`${c.type} ${c.side}`); // the placement note the app stored with the record
+    // the placement note the app stored with the record, in the ticket's words ("Sell · Limit"), never the form's ids
+    const typeName = (ticketText as Record<string, string>)[`ticket.type.${c.type}.name`]!.replace('{name}', 'EXKCC');
+    await expect(row).toContainText(`${c.side === 'buy' ? 'Buy' : 'Sell'} · ${typeName}`);
   });
 }
 
