@@ -1,8 +1,14 @@
 # Real-wallet run on Kaspa testnet-10
 
-Drives the built KOB web app with the REAL released wallet extensions (KasWare 0.10.0, Kaspire 0.5.1) against a testnet-10 node of your own
-(`KOB_TN10_WRPC`, default `ws://127.0.0.1:18210`; `NODE_WS` in `.env` overrides it) and proves, per wallet: issue a token, then place and cancel a limit sell, a limit buy, a buy-first IFD and a sell OCO.
-Test money only. Kastle is not covered (optional, off in the app).
+Drives the built KOB web app with the REAL released wallet extensions (KasWare 0.10.0, Kaspire 0.5.1, Kastle 2.61.0, pinned in
+`tools/wallet-gate/lib/extension-pins.mjs`) against a testnet-10 node of your own (`KOB_TN10_WRPC`, default `ws://127.0.0.1:18210`; `NODE_WS` in
+`.env` overrides it) and proves, per wallet: issue a token of KOB's standard 3 / 3 program, place and cancel the main order types, amend an order,
+merge the token's UTXOs and read My orders / Balances, with every accepted transaction checked on the node independently of the app.
+Test money only. On demand only: CI never runs it (it needs extensions, funded keys and a node; `.github/workflows/ci.yml` says so).
+
+`--mock` runs the SAME scenarios, selectors and checks offline against the mock stack of `web/e2e` (mock indexer + mock node that runs every
+transaction through kob-wasm) with the in-page mock wallets of `src/testing/mock-wallets.ts`: it keeps the run in step with the UI and the protocol
+on any machine. It proves nothing about the real extensions, their popups or a real node (see "What still needs a live run").
 
 **Status.** The scenarios were written before the current ticket: they size orders in lots (the removed `order-lots` field and a
 registry entry with a lot and a tick, `scenarios.mjs`), so they need porting to base-unit amounts before the next run. The results
@@ -12,104 +18,118 @@ below are those of the run of 2026-09-29.
 
 ```
 cd web
-npm run build:wasm -- --copy           # once (kob-wasm bindings), plus the vendored SDK (npm run fetch-sdk)
-node e2e-real/run.mjs                  # both wallets, everything (about 10 minutes)
-node e2e-real/run.mjs --wallet kaspire --only oco --headless
+npm run fetch-sdk && npm run build:wasm -- --copy    # once (kob-wasm bindings and the vendored SDK)
+
+# TN10, real extensions (the owner's machine: .env, extension cache, a TN10 node)
+node e2e-real/run.mjs                                 # KasWare, Kaspire and Kastle, every scenario (market SKIPs without an indexer)
+node e2e-real/run.mjs --indexer http://127.0.0.1:8080 # also the market scenario (an indexer of the same TN10 node; or INDEXER_URL in .env)
+node e2e-real/run.mjs --wallet kaspire --only limit,amend --headless
+
+# offline, mock stack + mock wallets (any machine, no secrets; about 20 min per wallet, most of it the app's acceptance wait)
+node e2e-real/run.mjs --mock                          # node-only, like the TN10 default
+node e2e-real/run.mjs --mock --indexer                # with the mock indexer: market scenario and position cards
 ```
 
-Flags: `--wallet kasware|kaspire|all`, `--only limit,ifd,oco`, `--skip-issue` (reuse the token of the previous run of that wallet from
-`out/token-<wallet>.json`, including its tracker entries and placement records), `--headless` (Chromium `--headless=new`: works for Kaspire,
-KasWare needs a headed browser), `--keep-open`, `--rebuild` (rebuild `dist-real/`), `--port N`. `NODE_WS=ws://...` overrides the node.
-The app is built into `dist-real/` (`npx vite build --outDir dist-real --emptyOutDir`, done automatically when missing); `dist/` is never touched.
+Flags: `--wallet kasware,kaspire,kastle|all` (default all), `--only <ids>` (default all: `limit,amend,ioc,stop,oco,ifd,pair,market,merge,balances`;
+the issuance always runs first), `--indexer [url]` (TN10: that indexer, or `INDEXER_URL` of `.env`; `--mock`: the mock's), `--skip-issue` (TN10:
+reuse the tokens of the previous run of that wallet from `out/token-<wallet>.json`, with its tracker entries and placement records), `--headless`
+(Chromium `--headless=new`: works for Kaspire, KasWare needs a headed browser; `--mock` is always headless), `--keep-open`, `--rebuild` (rebuild
+`dist-real/`), `--port N`. `NODE_WS=ws://...` and `INDEXER_URL=...` in the environment override `.env`.
+The app is built into `dist-real/` (`npx vite build --outDir dist-real --emptyOutDir`, done automatically when missing; `--rebuild` after a source
+change); `dist/` is never touched.
 
-Exit codes: `0` all selected scenarios passed, `1` a scenario failed, `77` SKIP with a message (no `.env`, missing DEV key or mnemonic, no extension
-cache, node unreachable, no SDK vendor, failed app build): CI and other machines skip cleanly.
+Exit codes: `0` every selected scenario passed or was skipped with a reason, `1` a scenario failed, `77` SKIP with a message (no `.env`, no DEV key,
+no extension cache, node unreachable, no SDK vendor / kob-wasm node bindings, failed app build).
 
-Prerequisites (all gitignored, never printed): `e2e-real/.env` (`NODE_WS`, `DEV_PRIVATE_KEY`, `DEV_ADDRESS`, `WALLET_MNEMONIC_KASWARE`,
-`WALLET_MNEMONIC_KASPIRE`), the extensions in `e2e-real/.ext/<wallet>` (copied from the wallet-gate cache, or downloaded by `common.mjs`; each wallet is pinned by manifest version and
-the sha256 of its CRX / zip in `EXTENSIONS` of `tools/wallet-gate/lib/extension-pins.mjs`, shared with the wallet-gate drivers, and another version is refused until the pin is moved there),
-Playwright's bundled Chromium (branded Chrome >= 137 ignores `--load-extension`). Each wallet gets a fresh profile in `.browser-profiles/<wallet>`
-(kept after the run, so a stuck order can be recovered by re-opening it on the same port). Wallets below 80 KAS are topped up with 60 KAS from the
-DEV key (an IFD locks 41 KAS, every issuance leaves a 10 KAS carrier in the token UTXO).
+Prerequisites of the TN10 run (all gitignored, never printed): `e2e-real/.env` with `NODE_WS`, `DEV_PRIVATE_KEY`, `DEV_ADDRESS`, optionally
+`INDEXER_URL` and `WALLET_MNEMONIC_KASWARE` / `_KASPIRE` / `_KASTLE` (a missing mnemonic is generated into `.env` on first use: a throw-away
+wallet the run funds), the extensions in `e2e-real/.ext/<wallet>` (copied from the wallet-gate cache, or downloaded; only the pinned version and
+sha256 is accepted), Playwright's bundled Chromium (branded Chrome >= 137 ignores `--load-extension`). Each wallet gets a fresh profile in
+`.browser-profiles/<wallet>` (kept after the run, so a stuck order can be recovered by re-opening it). A wallet below 120 KAS is topped up with
+100 KAS from the DEV key (two issuances leave 10 KAS each in their token UTXOs; an IFD locks about 17 KAS while it is open). The market scenario
+also spends from the DEV key: about 3 KAS for the counterparty bid, returned by its cancel.
+
+## Scenarios (per wallet, in this order)
+
+Every placement, cancel, amend and merge link goes through the app's pre-sign confirmation screen (blocking findings stop the run; plan and
+fresh-warning acknowledgements are ticked and recorded; the decoded kind is asserted: `create`, `cancel`, `cancel-replace`, `send`), then the
+wallet (popup approved on TN10), then the node: the covenant outputs of a placement are unspent, the outpoints a cancel / amend spends are gone and
+its own covenant outputs exist (the submitted transaction is read from the page's wRPC frames, or from the HTTP submit body with `--mock`, not
+from app state). After a placement the app's placement record must point at one of those covenant outputs; My orders must list the order as live
+(`order-row-<id>`, `data-live="1"`); after the cancel it must no longer be live, and tokens a cancel releases must be tracked by the app's token
+tracker (`kob.tokens.v1.testnet-10.<pubkey>`) as an output of the cancel.
+
+| id | What it does |
+|---|---|
+| issue | Issuance screen (`#/issue`): the standard 3 / 3 program (`issue-program-standard`, KCC20Ref) is the default, 1,000,000 tokens with 8 decimals to the wallet. Result panel token id / txid, the registry entry (`template_id` `kcc20-ref-3x3`, `max_token_inputs` 3), the genesis UTXO tracked with program KCC20Ref. Token B (the pair's quote) is issued the same way when `pair` is selected. The run then serves a test registry with both tokens listed. |
+| limit | Limit GTC sell 3 @ 50 KAS (while it rests, Balances shows 3 in orders), cancelled, 3 tokens back; limit GTC buy 2 @ 0.5 KAS, cancelled. |
+| amend | Limit sell 2 @ 50, My orders `order-replace-<id>` -> amend dialog (`amend-price` 55, `amend-preview`) -> one cancel-replace transaction; the SAME order id lives on at 55 (in-place AMEND record), then cancelled, 2 tokens back. |
+| ioc | IOC buy 2 @ 0.4 with a 60 s life (advanced field `life`), cancelled while alive. |
+| stop | Stop-market sell 2, stop 0.2: rests unarmed, cancelled, 2 tokens back. |
+| oco | OCO sell 2, take-profit 60, stop 0.2, cancelled, 2 tokens back. |
+| ifd | IFD buy-first 2 @ 0.5 with exit take-profit 1, cancelled from its row (node only) or its position card (`position-cancel-<id>`, with an indexer). |
+| pair | On the pair page `#/market/<A>/<B>`: limit sell 2 A @ 5 B (escrows A) and limit buy 1 A @ 0.5 B (escrows B), each cancelled, the escrow back. |
+| market | Needs an indexer (SKIP otherwise): the DEV key (`maker` with `--mock`), driven through the same app in its own browser with an in-page signer (`features.test`, injected config only), rests a limit buy of 1 A @ 0.6; the wallet market-sells 1 A into it once the book shows it (`order-market-start-ack` ticked when shown; the disclosure must start from 0.6). If a matcher fills it, that is recorded; else it is cancelled. The counterparty bid is cancelled when still live. |
+| merge | My orders > Balances: `orders-merge-token-<A>` ("Merge (n)") -> the chain of transfers to itself (at most 3 token inputs each), one confirmation screen per link (`confirm-shown-as` states the merge); the last link's single token output is unspent on the node and holds the whole supply; the button disappears. |
+| balances | Balances panel: for A and B free = 1,000,000, nothing in orders, no strays; no order left live. |
+
+Covenant-signing gate: a wallet the app does not know to sign covenant inputs (Kastle) is asked once for a test signature before its first order
+(`order-covenant-check`); the run approves it. A wallet the app then refuses (`order-covenant-unsupported`) fails the order scenarios with the
+app's text: that is a finding about the wallet, not about the run.
+
+At the end of each wallet, any order still live is cancelled (best effort, recorded as `sweptOpenOrders`).
 
 ## Files
 
-* `run.mjs` CLI, preflight, per-wallet flow, summary table. `scenarios.mjs` issue / limit / IFD / OCO steps and the node checks.
-* `driver.mjs` independent node checker (official SDK), wallet drivers (onboarding, popup approvers incl. KasWare unlock), app driver, sign step.
-* `server.mjs` static server (`http://localhost:<port>`, a secure context) with the generated TN10 test registry at `/registry-tn10.test.json`
-  (the templates of `registry/tokens.example.json`, which the example fixture marks `reviewed`, + the freshly issued token, listed, verified, lot = 1 token, tick 1000 sompi; also saved as `out/registry-tn10.test.json`).
-* `common.mjs`, `fund.mjs` helpers. `out/` (gitignored): `real-<wallet>.json` (full record: txids, popup texts and screenshots, confirmation screen text,
-  node checks), `real-summary.json`, `screens/<wallet>/*.png`.
+* `run.mjs` CLI, preflight, per-wallet flow, summary table. `scenarios.mjs` the scenarios and node checks. `driver.mjs` node checker (official
+  SDK), wallet drivers (real extensions or mock wallets), app driver (connect, confirmation screen, My orders flows).
+* `mock.mjs` the `--mock` mode: mock stack in-process on a free port with an empty chain, the mock wallet page script (transpiled from
+  `src/testing/mock-wallets.ts` with vite's oxc transform, so plain Node 22 runs it), the mock node checker.
+* `server.mjs` static server of `dist-real/` (`http://localhost:<port>`, a secure context) with the generated test registry at
+  `/registry-tn10.test.json` (the templates of `registry/tokens.example.json` marked reviewed + the issued tokens, listed; also saved as
+  `out/registry-tn10.test.<wallet>.json`).
+* `common.mjs`, `fund.mjs` helpers (extensions, onboarding, popups; DEV-key funding). `out/` (gitignored): `real-<wallet>.json` /
+  `real-mock-<wallet>.json` (txids, popup texts and screenshots, confirmation texts, node checks, records, balances), `real-summary.json`,
+  `screens/<wallet>/*.png`, `token-<wallet>.json`.
 
-## What is verified
+## What changed against the 2026-09-29 run (port to the current UI and protocol)
 
-1. Onboarding through the wallet UI (mnemonic import, switch to Testnet 10), connect popup approved, header shows the address and `testnet-10`.
-2. Issue (fixed supply 1,000,000, 8 decimals, all to the wallet): confirmation screen, real wallet popup, node acceptance, token UTXO tracked by the app.
-3. Limit sell (3 lots at 50 KAS), limit buy (2 lots at 0.5 KAS), IFD (buy 2 lots at 0.5, exit take-profit 1), OCO (sell 2 lots, take-profit 60, stop 0.2):
-   each through the app's pre-sign confirmation screen (blocking findings would stop the run), the wallet popup, acceptance; My orders (indexerUrl EMPTY:
-   rows come from the placement records resolved on the node) lists the order; cancel through My orders, again confirmation screen + popup; the order
-   leaves the active list; for sells the app tracks the tokens released by the cancel.
-4. Independently of the app, through a second SDK connection: every P2SH (covenant) output of an accepted placement is unspent on the node, the
-   placement record points at one of them, and after the cancel the spent covenant outpoints are gone and the cancel's own covenant outputs
-   (returned tokens / carrier) are unspent. The submitted transaction is read from the wRPC frames of the page, not from app state.
+The previous scenarios typed lots (`order-lots`, removed: amounts are whole tokens in `order-amount`), relied on the old ticket fields, issued
+a token without choosing the program (the issuance now offers the standard 3 / 3 program and the public-mint build; the run asserts the
+standard one and its registry entry), marked the test registry `verified` for a badge the UI no longer has, stopped at the old confirmation screen
+(no plan / fresh-warning acknowledgements, no decoded kind), cancelled through a single dialog (cancels now run in a My orders transaction flow,
+`tx-flow` / `flow-done`), had no amend, IOC, stop, pair, market, merge or Balances steps, read only KasWare / Kaspire, and the node checker read
+outpoints only in the wRPC form. All of that is replaced; Kastle is a third wallet (the app's optional `features.kastle`, switched on by the run).
 
-## Results (run of 2026-09-29, both wallets, exit 0)
+## Verified offline (2026-10-13, `--mock`, WSL Ubuntu 24.04, Node 22.23, Playwright Chromium 1243)
 
-| Wallet | issue | limit (sell + buy) | IFD | OCO |
-|---|---|---|---|---|
-| KasWare 0.10.0 | PASS | PASS | PASS | PASS |
-| Kaspire 0.5.1 | PASS | PASS | PASS | PASS |
+Built as CI builds (`scripts/build-wasm.sh --install-bindgen --web --slim`, `npm run fetch-sdk`, `npm run build:wasm -- --copy`), app in
+`dist-real/`. Every step, selector and node check of the TN10 run ran end to end; each signed step is a transaction the mock node accepted after
+running it through kob-wasm (consensus-valid).
 
-Transaction ids (all accepted on TN10):
+| Run | KasWare | Kaspire | Kastle |
+|---|---|---|---|
+| `--mock` (node only) | issue, limit, amend, ioc, stop, oco, ifd, pair, merge, balances PASS; market SKIP (no indexer) | same | same (the covenant-signing check ran and passed before the first order) |
+| `--mock --indexer` | all 11 PASS, market included (counterparty bid, market sell, both cancelled) | issue, ifd, pair, market PASS | issue, ifd, pair, market PASS |
 
-| Wallet | Step | txid |
-|---|---|---|
-| KasWare | issue | 80d60b2ee45ff67bf5e15306b624ed200575193fe36c9e9ba8d0c3576b6b8436 |
-| KasWare | limit sell place / cancel | e619444216781f8c05e1d8831621a634bcbec720627b74e0820dd33726221ebd / f4407b41706f0b9f5a0ea23b900d189cef45696dcea6764f661e1261855398e3 |
-| KasWare | limit buy place / cancel | 598a2d13143c6815fb47e842149e24edc24900712e40e21cd30708bdfa790d16 / e9bcd6ed6800ea657428060639c7ed2c2c4c48f92a8538ce9246cd2727185f74 |
-| KasWare | IFD place / cancel | 3f61022279513d3d99cbe9ef6e9c189e32f44266a83da8a61ddd84d0dbd02912 / 950a60555bfaae9ba887727fc9796d6a2479b7ab5188456ebf4b42b3cfa3396c |
-| KasWare | OCO place / cancel | eebd3225531e3f2aa3f255203aa70b70a5bf6fb0fbdcdbbd6f5db4cf9f4858f7 / 66499802791194040b44fd3769a126ae63b2c17885e59b833c3f084a311c1360 |
-| Kaspire | issue | 5b903fe774e9d2bac2116bd7624550152dd08a3bbeea59dfe5a769420c6d6789 |
-| Kaspire | limit sell place / cancel | 39937c8e621c418c9efa62777201310fda53e8b21fe0329606b1a49a270f9faa / d179d82ddff6d765ee5fb1ffd4b0f48437bf1f8bc3f2af2d72bf49a7e63df536 |
-| Kaspire | limit buy place / cancel | c20d5475dde4ff0b71f9b6f074927468c2dd5ecb67b46a6fdbffa838df0386a0 / b43c040cb420c92aadc2963eec5878beb734053e35cdb9c1c6e6b5f899ab7c4f |
-| Kaspire | IFD place / cancel | 52051f78ea9c1c8ec6eb33c5c0fb1c47135c2e2b701e18242307e740744c3edb / a91fbc195941f611f4c59393cd4913d7408c9d513bb7a238ccc3b96f6911cec1 |
-| Kaspire | OCO place / cancel | 363dc27df8a8107cf6e452aa5886d1f9e3b018c91b250706e68269e7cd0c1784 / daab972ba0d01c11f8bdbac6cf5ad8a9f8806bf11b929ed51bd114cab626e6e3 |
+Other checks: `node --check` of every module, `test/e2e-infra.test.ts` (12 tests, the shared `common.mjs` helpers), the TN10 preflight without
+`.env` exits 77 with its SKIP message. Timing with the mock: about 31 s per signed step, almost all of it the app's own acceptance wait
+(`tx-status` = `confirmed`); about 20 minutes per wallet for everything.
 
-Timings: Kaspire signs in 5-7 s per transaction. KasWare needs 20-24 s per transaction, almost all of it the run's popup reader (it waits for the
-popup text to settle before clicking Sign), not the wallet or the node (acceptance is seen within about 1 s).
+## What still needs a live run (TN10, the owner's machine)
 
-## Popup observations (blind signing, as expected)
+* Everything wallet-specific: onboarding and the popups of KasWare 0.10.0, Kaspire 0.5.1 and Kastle 2.61.0 for every transaction kind above
+  (amend, merge links, pair orders, IOC / stop / OCO are new to the TN10 run; Kastle has never been run here), Kastle's covenant-signing check,
+  Kaspire's signature modes on the new inputs (token transfers of a merge, pair custody).
+* The real node: wRPC submission of every new kind, acceptance timing, the app's acceptance status.
+* Market against a real indexer (`--indexer` / `INDEXER_URL`) and whatever matcher runs on TN10 (a fill is recorded, not a failure).
+* Command: `cd web && node e2e-real/run.mjs --rebuild` (add `--indexer <url>` for the market scenario). Commit the result table here.
 
-* **KasWare** ("Sign Transaction"): origin, balance change, inputs / outputs with addresses and amounts, fee, the raw KOB1 payload hex, and the
-  generic disclaimer about unknown protocols. Covenant outputs appear as "Spend" to P2SH addresses; no order type, price, lots or token amounts.
-  A profile that was closed and re-opened shows a KasWare "Unlock" window first (the run unlocks it).
-* **Kaspire** ("Approve reviewed PSKT?"): txid, fee, wallet balance change, per-output "SIGNATURE-BOUND", "1 of N inputs selected", the warning
-  "Input 0 is a covenant or non-standard script; Kaspire cannot verify its dApp business rules" and, for custody-token inputs, "partial signature". The
-  request (scripts, mode per input) is in its Raw JSON. No token semantics. Modes seen on TN10: `ordered-args` for the order cancel inputs (the wallet
-  emits the script itself), `wrap-signature` for the custody / token-transfer inputs of sell placements and OCO; both accepted (the app takes the signature
-  and lets kob-wasm `finalize` assemble and verify the script).
-* The app's own confirmation screen is what tells the user the order type, price, lots, locked KAS and escrowed tokens; its text is stored per step in `out/real-<wallet>.json`.
+## Earlier results
 
-## Problems found by this run and fixed
+The run of 2026-09-29 (old protocol: lots, KasWare and Kaspire, issue / limit / IFD / OCO, all PASS on TN10) and its findings (minified build vs
+SDK class names: `keepNames`; Kaspire `ordered-args` wiring; an IFD without an indexer is a row, not a position card) are in the git history of
+this file.
 
-1. Minified production build broke wRPC submission of covenant transactions: `Error converting property "covenant": size error: Slice must have the
-   length of Hash`. The official kaspa-wasm SDK identifies its JS classes by `name`; the minifier renamed them (the same tx submitted fine with the
-   raw SDK, in node, and in an unminified build). Fix: `build.rolldownOptions.output.keepNames` in `vite.config.ts`, with a regression test
-   (`test/build-sdk-names.test.ts`, in-memory production build). The mock e2e could not see this: it submits over HTTP.
-2. The app never enabled Kaspire's `ordered-args` mode (the adapter supports it, the provider was created without `dispatchTag`): wired in
-   `src/app/context.tsx` with `dispatchTagFrom(kob)`.
-3. In node-only mode (no indexer) an IFD entry without exits shows as one order row, not as a position card: the run cancels it with the row's cancel button. With the indexer available the entry, its exits and the repeat state are one position card (mock e2e: `e2e/orders/positions.spec.ts`).
-
-Known noise: the app requests `/config.json` (optional, 404 on the static server).
-
-## Re-run after merging main (2026-09-29): node-floor fee, KRON family, token-utxos, wallet events
-
-KasWare 0.10.0, `node e2e-real/run.mjs --wallet kasware --only limit,ifd` (exit 0): issue, limit sell + buy (place and cancel) and buy-first IFD (place and cancel) all PASS with the
-default relay-floor fee. Kaspire was not re-run here: its wallet held 77.5 KAS (below the 80 KAS top-up threshold) and the DEV key held 48 KAS (a 60 KAS top-up needs 62).
-
-| Step | txid |
-|---|---|
-| issue | f8c67400e4aa053979409a90299008449480280d7efa31fb4d24d4e63bc1a04a |
-| limit sell place / cancel | ac4485bea6ba6ea0d2613915f4469619b14110e59005203f68f9f08a9eb3ebe3 / b83391607ed736acdc4cb7ef5ec8df362ce22127d47c63ec1d26e3198f5c4679 |
-| limit buy place / cancel | 75c0be708c6fac6f6f07a655d9989caab77b68f65b0d4251b41182680096213c / f17a63f3eb8e1a8af99bb3d50cbb8f4971f56765af8cebda6185bf4df1650c0f |
-| IFD place / cancel | cfc3f33a915055105461fb4104a242ee5e3dad9aca262e93be02e49e25510154 / 51de596798483077639625505d3e89ff79d7811645757d9dc5b110181684620c |
+Known noise: the app requests `/config.json` (optional, 404 on the static server) and, on the mock node, `/node/fee-estimate` (404 until a test
+sets it).

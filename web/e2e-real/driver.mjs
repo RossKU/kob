@@ -1,20 +1,24 @@
-// Building blocks of the real-wallet run: the independent node checker, the wallet drivers (KasWare / Kaspire) and the app driver
-// (connect, issue, place, cancel through the pre-sign confirmation screen). Nothing runs on import. Secrets (mnemonics, keys) are never printed.
+// Building blocks of the real-wallet run: the independent node checker, the wallet drivers (KasWare / Kaspire / Kastle, real extensions or the
+// in-page mock wallets of `--mock`) and the app driver (connect, the pre-sign confirmation screen, multi-step flows). Nothing runs on import.
+// Secrets (mnemonics, keys) are never printed.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  OUT_DIR, collapse, extensionId, kaspaNode, kaswareAddress, kaswareApprover, kaspireApprover, log, onboardKasware, onboardKaspire, shot, sleep,
-  switchKaswareToTn10, withPopupApproval,
+  OUT_DIR, collapse, extensionId, kaspaNode, kaswareAddress, kaswareApprover, kaspireApprover, kastleApprover, log, onboardKasware, onboardKaspire,
+  onboardKastle, shot, sleep, switchKaswareToTn10, withPopupApproval,
 } from './common.mjs';
 import * as T from '../../tools/wallet-gate/lib/txbuild.mjs';
 import { TN10_NODE } from './fund.mjs';
+import { installMockWallet } from './mock.mjs';
 
 export const KASPIRE_PASSWORD = 'kob-real-kaspire-throwaway-2026'; // throwaway vault password of a throwaway profile
+export const KASTLE_PASSWORD = 'kob-real-kastle-throwaway-2026'; // throwaway wallet password of a throwaway profile
 export const KAS = 100_000_000n;
 export const POPUP_TIMEOUT_MS = 180_000;
 export const ACCEPT_TIMEOUT_MS = 90_000;
 
 const P2SH_RE = /^aa20[0-9a-f]{64}87$/;
+export const WALLET_LABELS = { kasware: 'KasWare', kaspire: 'Kaspire', kastle: 'Kastle' };
 
 /** Retries `fn` once (a dropped node socket is the known transient failure); never loops. */
 export async function retryOnce(label, fn) {
@@ -53,6 +57,10 @@ export class NodeChecker {
         }
       }
     });
+  }
+
+  async init() {
+    return this;
   }
 
   async ping() {
@@ -99,22 +107,31 @@ export class NodeChecker {
       await sleep(1500);
     }
   }
-
-  /** Every output of a submitted tx (JSON from the wRPC frame) with its address and whether it is a P2SH (covenant) output. */
-  outputsOf(tx) {
-    return (tx.outputs ?? []).map((o, i) => {
-      const spk = o.scriptPublicKey;
-      const script = typeof spk === 'string' ? spk.slice(4) : spk?.script ?? spk?.scriptPublicKey ?? '';
-      let address = null;
-      try {
-        address = this.addressOfSpk(spk);
-      } catch {
-        /* non standard */
-      }
-      return { index: i, value: BigInt(o.value ?? o.amount ?? 0), address, p2sh: P2SH_RE.test(script), covenant: o.covenant ?? null };
-    });
-  }
 }
+
+/**
+ * Every output of a submitted tx (JSON from the wRPC frame on TN10, from the HTTP submit body in `--mock`) with its address and whether it is a
+ * P2SH (covenant) output. `node` is a NodeChecker or a MockNodeChecker (address derivation).
+ */
+export function outputsOf(node, tx) {
+  return (tx?.outputs ?? []).map((o, i) => {
+    const spk = o.scriptPublicKey;
+    const script = typeof spk === 'string' ? spk.slice(4) : spk?.script ?? spk?.scriptPublicKey ?? '';
+    let address = null;
+    try {
+      address = node.addressOfSpk(spk);
+    } catch {
+      /* non standard */
+    }
+    return { index: i, value: BigInt(o.value ?? o.amount ?? 0), address, p2sh: P2SH_RE.test(script), covenant: o.covenant ?? null };
+  });
+}
+
+/** The outpoints a submitted tx spends: `txid:index`. */
+export const spentBy = (tx) => (tx?.inputs ?? []).map((inp) => {
+  const op = inp.previousOutpoint ?? inp.previous_outpoint ?? inp; // wRPC frame: previousOutpoint; kob-wasm JSON (mock node): flat
+  return `${op.transactionId ?? op.transaction_id}:${op.index}`;
+});
 
 // ------------------------------------------------------------------------------------------------ wallet drivers
 
@@ -138,19 +155,42 @@ export const kaswareApproverWithUnlock = (opts = {}) => {
 };
 
 /**
- * A wallet under test: `setup(ctx)` onboards it in the browser context and returns what the run needs.
- * `approver()` is the popup handler (reads the popup text, clicks approve).
+ * A wallet under test. `setup(ctx)` prepares it in the browser context (onboarding through the extension UI, or the mock wallet injection);
+ * `approve(ctx, start)` runs `start()` (an app action that makes the wallet ask) while approving the wallet's windows, resolving with
+ * `{result, popups}`. The mock wallets approve by themselves (no window): `popups` is empty.
+ *
+ *   real:  walletDriver('kaspire', env)
+ *   mock:  walletDriver('kaspire', env, { mock: { secretKey } })
  */
-export function walletDriver(name, env) {
+export function walletDriver(name, env, { mock = null } = {}) {
+  if (!WALLET_LABELS[name]) throw new Error(`unknown wallet ${name}`);
+  const label = WALLET_LABELS[name];
+  if (mock) {
+    return {
+      name,
+      label: `${label} (mock)`,
+      mock: true,
+      expectedAddress: null,
+      async setup(ctx) {
+        const cfg = await installMockWallet(ctx, name, mock.secretKey);
+        this.expectedAddress = cfg.addresses['testnet-10'];
+        this.pubkey = cfg.pubkey;
+        return {};
+      },
+      async approve(_ctx, start) {
+        return { result: await start(), popups: [] };
+      },
+    };
+  }
+  const withApprover = (approver) => async (ctx, start) => withPopupApproval(ctx, name, start, approver());
   if (name === 'kasware') {
     const mnemonic = env.WALLET_MNEMONIC_KASWARE;
     return {
       name,
-      label: 'KasWare',
+      label,
       mnemonicKey: 'WALLET_MNEMONIC_KASWARE',
-      hasMnemonic: !!mnemonic,
       expectedAddress: mnemonic ? kaswareAddress(mnemonic) : null,
-      approver: () => kaswareApproverWithUnlock({ screenshotDir: 'kasware' }),
+      approve: withApprover(() => kaswareApproverWithUnlock({ screenshotDir: 'kasware' })),
       async setup(ctx) {
         const wp = await onboardKasware(ctx, mnemonic.trim().split(/\s+/));
         const text = await switchKaswareToTn10(wp);
@@ -163,11 +203,10 @@ export function walletDriver(name, env) {
     const mnemonic = env.WALLET_MNEMONIC_KASPIRE;
     return {
       name,
-      label: 'Kaspire',
+      label,
       mnemonicKey: 'WALLET_MNEMONIC_KASPIRE',
-      hasMnemonic: !!mnemonic,
       expectedAddress: null, // derived by the wallet; read after connecting
-      approver: () => kaspireApprover({ password: KASPIRE_PASSWORD, screenshotDir: 'kaspire' }),
+      approve: withApprover(() => kaspireApprover({ password: KASPIRE_PASSWORD, screenshotDir: 'kaspire' })),
       async setup(ctx) {
         const id = await extensionId(ctx);
         await onboardKaspire(ctx, id, mnemonic, { password: KASPIRE_PASSWORD });
@@ -175,13 +214,29 @@ export function walletDriver(name, env) {
       },
     };
   }
-  throw new Error(`unknown wallet ${name}`);
+  // kastle: optional in the app (`features.kastle`); the run switches it on. Its network switch to TN10 is a popup of the connect step.
+  const mnemonic = env.WALLET_MNEMONIC_KASTLE;
+  return {
+    name,
+    label,
+    mnemonicKey: 'WALLET_MNEMONIC_KASTLE',
+    expectedAddress: null,
+    approve: withApprover(() => kastleApprover({ password: KASTLE_PASSWORD, screenshotDir: 'kastle' })),
+    async setup(ctx) {
+      const id = await extensionId(ctx);
+      await onboardKastle(ctx, id, { mnemonic, password: KASTLE_PASSWORD });
+      return { extId: id };
+    },
+  };
 }
 
 // ------------------------------------------------------------------------------------------------ app driver
 
-/** Opens the app in a new page of `ctx` with the injected TN10 config; records console errors and the node's submitTransaction frames. */
-export async function openApp(ctx, baseUrl, { registryUrl, nodeUrl = TN10_NODE } = {}) {
+/**
+ * Opens the app in a new page of `ctx` with the injected config (`window.__KOB_CONFIG__`); records console errors and every transaction the
+ * app submits: wRPC `submitTransaction` frames (TN10) and `POST /node/submit` bodies (the mock node).
+ */
+export async function openApp(ctx, baseUrl, config) {
   const page = await ctx.newPage();
   const h = { page, consoleErrors: [], pageErrors: [], badResponses: [], submits: [], baseUrl };
   page.on('console', (m) => {
@@ -191,6 +246,14 @@ export async function openApp(ctx, baseUrl, { registryUrl, nodeUrl = TN10_NODE }
     if (r.status() >= 400) h.badResponses.push(`${r.status()} ${r.url().replace(baseUrl, '')}`.slice(0, 200));
   });
   page.on('pageerror', (e) => h.pageErrors.push(String(e.message).slice(0, 400)));
+  page.on('request', (req) => {
+    if (req.method() !== 'POST' || !/\/node\/submit$/.test(new URL(req.url()).pathname)) return;
+    try {
+      h.submits.push({ at: Date.now(), tx: JSON.parse(req.postData() ?? '{}').transaction });
+    } catch {
+      /* not JSON */
+    }
+  });
   page.on('websocket', (ws) => {
     ws.on('framesent', (f) => {
       const p = typeof f.payload === 'string' ? f.payload : '';
@@ -206,24 +269,9 @@ export async function openApp(ctx, baseUrl, { registryUrl, nodeUrl = TN10_NODE }
       }
     });
   });
-  if (process.env.KOB_DEBUG_TX) {
-    // debugging aid: remember every serialized transaction JSON the app produced
-    await page.addInitScript(() => {
-      const orig = JSON.stringify;
-      window.__txs = [];
-      JSON.stringify = function (...a) {
-        const r = orig.apply(this, a);
-        if (typeof r === 'string' && r.includes('covenantId') && r.includes('"outputs"') && r.includes('signatureScript')) window.__txs.push(r);
-        return r;
-      };
-    });
-  }
-  await page.addInitScript(
-    (c) => {
-      window.__KOB_CONFIG__ = c;
-    },
-    { network: 'testnet-10', indexerUrl: '', nodeUrl, registryUrl, features: { kastle: false, test: false } },
-  );
+  await page.addInitScript((c) => {
+    window.__KOB_CONFIG__ = c;
+  }, config);
   await page.goto(baseUrl + '/');
   await page.getByTestId('main').waitFor({ timeout: 60_000 }).catch(() => {});
   return h;
@@ -238,29 +286,20 @@ export const goto = async (h, hash) => {
 
 const tid = (h, id) => h.page.getByTestId(id);
 
-/** Connects the wallet through the app (approves the wallet's connect popup) and reads what the header shows. */
+/** Connects the wallet through the app's header (approves the wallet's connect / network windows) and reads what the header shows. */
 export async function connectWallet(h, ctx, wallet) {
   const btn = tid(h, `wallet-connect-${wallet.name}`);
   await btn.waitFor({ timeout: 60_000 });
-  const { popups } = await withPopupApproval(
-    ctx,
-    wallet.name,
-    async () => {
-      await btn.click();
-      await tid(h, 'wallet-address').waitFor({ timeout: POPUP_TIMEOUT_MS });
-    },
-    wallet.approver(),
-  );
-  // the shortened address is display only: read the full one from the provider (already approved, no popup)
-  const address = await h.page.evaluate(async (name) => {
-    if (name === 'kasware') return (await window.kasware.getAccounts())[0];
-    return (await window.kaspire.request({ method: 'getAccounts' }))[0];
-  }, wallet.name);
+  const { popups } = await wallet.approve(ctx, async () => {
+    await btn.click();
+    await tid(h, 'wallet-address').waitFor({ timeout: POPUP_TIMEOUT_MS });
+  });
+  const address = await tid(h, 'wallet-address').getAttribute('data-value');
   const network = (await tid(h, 'wallet-network').innerText()).trim();
   return { address, network, popups, shownAddress: (await tid(h, 'wallet-address').innerText()).trim() };
 }
 
-/** The wallet's own addresses' KAS balance on the node, sompi. */
+/** The wallet's plain (non-covenant) KAS on the node, sompi. */
 export async function kasBalance(node, address) {
   const us = await node.utxos(address);
   return us.filter((u) => !u.covenantId).reduce((a, u) => a + u.amount, 0n);
@@ -269,40 +308,47 @@ export async function kasBalance(node, address) {
 const CONFIRM_ERR = ['confirm-error', 'confirm-rejected'];
 
 /**
- * The pre-sign screen -> wallet popup -> node acceptance round trip. Precondition: `confirm-screen` is (about to be) open.
- * Returns what a human would have seen and the node's answer. Throws with the app's own error text on any failure.
+ * The pre-sign screen -> wallet -> node acceptance round trip. Precondition: `confirm-screen` is (about to be) open.
+ * Acknowledges what the screen asks for (plan warnings, fresh warnings, the final "I checked" box), refuses BLOCKING findings, signs, waits
+ * for the transaction id and the app's acceptance status, closes the screen. Throws with the app's own error text on any failure.
+ * `expectKind`: the decoded kind the screen must show (`create`, `cancel`, `cancel-replace`, `send` ...).
  */
-export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir) {
+export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expectKind } = {}) {
   const t0 = Date.now();
   const screen = tid(h, 'confirm-screen');
   await screen.waitFor({ timeout: 90_000 });
-  await sleep(500);
-  const blocking = await tid(h, 'confirm-blocking').count();
+  await tid(h, 'confirm-summary').waitFor({ timeout: 60_000 });
+  await sleep(300);
+  const kind = await h.page.locator('[data-testid="confirm-screen"] .cf').getAttribute('data-kind').catch(() => null);
   const summary = collapse(await tid(h, 'confirm-summary').innerText().catch(() => ''));
+  const shownAs = collapse(await tid(h, 'confirm-shown-as').innerText().catch(() => ''));
   const fullText = await screen.innerText().catch(() => '');
   const screenshots = [await shot(h.page, shotDir, `${label}-confirm`)];
-  if (blocking) throw new Error(`the confirmation screen shows BLOCKING findings: ${collapse(await tid(h, 'confirm-blocking').innerText())}`);
-  const ack = tid(h, 'confirm-ack');
-  if (await ack.count()) await ack.check();
+  if (await tid(h, 'confirm-blocking').count()) throw new Error(`the confirmation screen shows BLOCKING findings: ${collapse(await tid(h, 'confirm-blocking').innerText())}`);
+  if (expectKind && kind !== expectKind) throw new Error(`the confirmation screen decodes the transaction as "${kind}", expected "${expectKind}": ${summary.slice(0, 300)}`);
+  const acks = [];
+  for (const id of ['confirm-plan-ack', 'confirm-fresh-ack']) {
+    const box = tid(h, id);
+    if (await box.count()) {
+      acks.push({ id, text: collapse(await tid(h, id.replace('-ack', '-warnings')).innerText().catch(() => '')) });
+      await box.check();
+    }
+  }
+  await tid(h, 'confirm-ack').check();
   const submitsBefore = h.submits.length;
   const tSign = Date.now();
-  const { popups } = await withPopupApproval(
-    ctx,
-    wallet.name,
-    async () => {
-      await tid(h, 'confirm-sign').click();
-      const t1 = Date.now();
-      for (;;) {
-        if (await tid(h, 'tx-id').count()) return;
-        for (const e of CONFIRM_ERR) {
-          if (await tid(h, e).count()) throw new Error(`${e}: ${collapse(await tid(h, e).innerText())}`);
-        }
-        if (Date.now() - t1 > POPUP_TIMEOUT_MS + 60_000) throw new Error('timed out waiting for the transaction id');
-        await sleep(400);
+  const { popups } = await wallet.approve(ctx, async () => {
+    await tid(h, 'confirm-sign').click();
+    const t1 = Date.now();
+    for (;;) {
+      if (await tid(h, 'tx-id').count()) return;
+      for (const e of CONFIRM_ERR) {
+        if (await tid(h, e).count()) throw new Error(`${e}: ${collapse(await tid(h, e).innerText())}`);
       }
-    },
-    wallet.approver(),
-  );
+      if (Date.now() - t1 > POPUP_TIMEOUT_MS + 60_000) throw new Error('timed out waiting for the transaction id');
+      await sleep(400);
+    }
+  });
   const txid = await tid(h, 'tx-id').getAttribute('data-value');
   const signMs = Date.now() - tSign;
   // the app's own acceptance status (node UTXO polling), bounded
@@ -317,7 +363,31 @@ export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir) {
   const submitted = h.submits.slice(submitsBefore).at(-1)?.tx ?? null;
   await tid(h, 'confirm-close').click();
   await sleep(500);
-  return { txid, appStatus: status, summary, confirmText: fullText, popups, screenshots, signMs, totalMs: Date.now() - t0, submitted };
+  return { txid, kind, appStatus: status, summary, shownAs, acks, confirmText: fullText, popups, screenshots, signMs, totalMs: Date.now() - t0, submitted };
+}
+
+/**
+ * Runs every confirmation screen of a My orders transaction flow (cancel, cancel of a position, merge ...) until the flow shows its result.
+ * Returns the signed steps in order. Throws when the flow ends with an error or without a submitted transaction. Open My orders fresh before the
+ * action (scenarios.mjs `openOrders`): an error banner of an earlier flow on the same page would be taken for this one's.
+ */
+export async function runFlow(h, ctx, wallet, label, shotDir, { expectKind, maxSteps = 12 } = {}) {
+  const steps = [];
+  for (let i = 0; i < maxSteps; i++) {
+    const t0 = Date.now();
+    for (;;) {
+      if (await tid(h, 'confirm-screen').count()) break;
+      // (a result banner before the first step is the previous flow's: the new one is still being planned)
+      if (steps.length > 0 && (await tid(h, 'flow-done').count())) return { steps, done: collapse(await tid(h, 'flow-done').innerText()) };
+      for (const e of ['flow-error', 'flow-plan-errors', 'orders-action-error']) {
+        if (await tid(h, e).count()) throw new Error(`${e}: ${collapse(await tid(h, e).innerText()).slice(0, 600)}`);
+      }
+      if (Date.now() - t0 > 90_000) throw new Error(`${label}: neither a confirmation screen nor the flow result after 90 s`);
+      await sleep(400);
+    }
+    steps.push(await signOnConfirmScreen(h, ctx, wallet, `${label}-${i + 1}`, shotDir, { expectKind }));
+  }
+  throw new Error(`${label}: more than ${maxSteps} confirmation screens`);
 }
 
 export function writeJson(name, obj) {
