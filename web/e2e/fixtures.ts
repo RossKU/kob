@@ -88,6 +88,10 @@ export class MockClient {
   seedDefaults() {
     return this.reset({ seed: true });
   }
+  /** The node's fee estimate (sompi per gram per bucket; the default after a reset: every bucket at the relay floor); `'off'`: the route answers 404. */
+  feeEstimate(v: { priority?: number; normal?: number; low?: number } | 'off') {
+    return this.post('/mock/fee-estimate', v === 'off' ? { off: true } : v);
+  }
   /** Additive declarative seed: `{tokens, orders, book, fills, utxos}`; see mock/seed.mjs. */
   seed(spec: Record<string, unknown>) {
     return this.post('/mock/seed', spec);

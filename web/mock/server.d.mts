@@ -19,7 +19,12 @@ export interface MockServerOptions {
   network?: string;
   healthEveryMs?: number;
   log?: (line: string) => void;
+  /** what `GET /node/fee-estimate` answers (sompi per gram per bucket); default DEFAULT_FEE_ESTIMATE, null: the route answers 404 */
+  feeEstimate?: { priority: number; normal: number; low: number } | null;
 }
+
+/** The default fee estimate: every bucket at the relay floor (100 sompi per gram). */
+export const DEFAULT_FEE_ESTIMATE: Readonly<{ priority: number; normal: number; low: number }>;
 
 export interface MockServer {
   /** `http://host:port` (no trailing slash): indexer under `/v1`, node under `/node`, control under `/mock`, WebSocket at `/v1/ws` */

@@ -119,16 +119,21 @@ async function readJson(req) {
   }
 }
 
+/** The node's fee estimate the mock answers by default: a quiet network, every bucket at the relay floor (100 sompi per gram: fees stay the minimum). */
+export const DEFAULT_FEE_ESTIMATE = Object.freeze({ priority: 100, normal: 100, low: 100 });
+
 /**
  * @param {{port?: number, host?: string, seed?: boolean, fund?: boolean, history?: boolean | object, settleDepthDaa?: number, daaPerSecond?: number,
- *          startDaa?: number, network?: string, healthEveryMs?: number, log?: (line: string) => void}} [opts]
+ *          startDaa?: number, network?: string, healthEveryMs?: number, log?: (line: string) => void,
+ *          feeEstimate?: {priority: number, normal: number, low: number} | null}} [opts]
  */
 export async function startMockServer(opts = {}) {
   const { port = 8790, host = '127.0.0.1', seed = true, fund = false, history = false, pair = false, healthEveryMs = 15_000, log = () => {} } = opts;
   const kob = loadKobMock();
   const chain = new MockChain(kob, { network: opts.network, settleDepthDaa: opts.settleDepthDaa, daaPerSecond: opts.daaPerSecond, startDaa: opts.startDaa });
   const ctl = { latencyMs: 0 };
-  let feeEstimate = null;
+  // `GET /node/fee-estimate` answers this (null: the route is missing, 404, as on a node without getFeeEstimate)
+  let feeEstimate = opts.feeEstimate === undefined ? { ...DEFAULT_FEE_ESTIMATE } : opts.feeEstimate;
   const sessions = new Set();
 
   const seedAll = (withSeed, withFund, withHistory = false, withPair = false) => {
@@ -249,7 +254,8 @@ export async function startMockServer(opts = {}) {
       if (chain.health.state === 'node_unavailable') throw new ApiError(503, 'node_unavailable', 'mock: node unavailable');
       return ok(chain.nodeInfo());
     }
-    // the node's getFeeEstimate (the wallet's fee policy reads it); `POST /mock/fee-estimate` { priority, normal, low } sets it, { off: true } removes the route
+    // the node's getFeeEstimate (the wallet's fee policy reads it): DEFAULT_FEE_ESTIMATE until `POST /mock/fee-estimate` { priority, normal, low } sets it;
+    // { off: true } removes the route (a node without the method: the wallet pays the floor and says so); `/mock/reset` restores the default
     if (get && path === '/node/fee-estimate') {
       if (!feeEstimate) throw notFound('no such route');
       return ok({ estimate: { priorityBucket: { feerate: feeEstimate.priority, estimatedSeconds: 1 }, normalBuckets: [{ feerate: feeEstimate.normal, estimatedSeconds: 30 }], lowBuckets: [{ feerate: feeEstimate.low, estimatedSeconds: 1800 }] } });
@@ -276,6 +282,7 @@ export async function startMockServer(opts = {}) {
     if (post && path === '/mock/reset') {
       chain.reset();
       ctl.latencyMs = 0;
+      feeEstimate = { ...DEFAULT_FEE_ESTIMATE };
       seedAll(body.seed !== false, body.fund === true, body.history ?? false, body.pair ?? false);
       return ok(summary(chain));
     }

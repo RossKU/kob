@@ -206,7 +206,7 @@ sha256 (`scripts/fetch-sdk.mjs`); a mismatch aborts before anything is unpacked.
   crosses the book now and pair IOC / FOK (priority bucket, sub-second); NORMAL = resting orders, schedules, stops, if-done, cancels, amends, refunds, issuance (first normal bucket,
   sub-minute); LOW = housekeeping (first low bucket). No usable estimate (call failed, method missing, malformed, older than 60 s), `fees.dynamic: false`, or a wallet that cannot afford
   the picked rate = the floor, never an error. The confirmation screen (and the ticket's disclosure) shows the rate, its bucket and expected time, and a note for every fallback or cap.
-  `fees.dynamic` is also a Settings switch. The mock server answers `GET /node/fee-estimate` once `POST /mock/fee-estimate {priority, normal, low}` set it (404 otherwise = floor).
+  `fees.dynamic` is also a Settings switch. The mock server answers `GET /node/fee-estimate` with every bucket at the relay floor (100 sompi per gram) after each reset; `POST /mock/fee-estimate {priority, normal, low}` changes it, `{off: true}` makes the route answer 404 (no estimate: the floor, and the confirmation screen says so).
   Independently, Settings > "Pay the priority fee" (`features.priorityFee`) switches every planner to the storage-inclusive fee MODE (`feeMode: 'priority'`); the confirmation
   screen's technical details show the mode and both masses. Mode and rate are independent.
 * **Order views** need `state`, `current`, `custody.utxo`, `strays`, the position grouping needs `parent` / `repeat` (indexer available; without it My orders shows node-derived rows).

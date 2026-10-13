@@ -353,6 +353,17 @@ describe('indexer REST', () => {
 // ------------------------------------------------------------------------------------------------------------------------------
 
 describe('mock node', () => {
+  it('answers a fee estimate by default (every bucket at the relay floor); off is a 404 until the next reset', async () => {
+    const floor = { estimate: { priorityBucket: { feerate: 100, estimatedSeconds: 1 }, normalBuckets: [{ feerate: 100, estimatedSeconds: 30 }], lowBuckets: [{ feerate: 100, estimatedSeconds: 1800 }] } };
+    expect((await get('/node/fee-estimate')).body).toEqual(floor);
+    await post('/mock/fee-estimate', { priority: 250, normal: 150, low: 100 });
+    expect((await get('/node/fee-estimate')).body.estimate.priorityBucket.feerate).toBe(250);
+    await post('/mock/fee-estimate', { off: true });
+    expect((await get('/node/fee-estimate')).status).toBe(404);
+    await post('/mock/reset', {});
+    expect((await get('/node/fee-estimate')).body).toEqual(floor);
+  });
+
   it('reports info, advances the DAA on demand and indexes UTXOs by address', async () => {
     const a = (await get('/node/info')).body;
     expect(a).toMatchObject({ network: 'testnet-10', serverVersion: expect.any(String), daaRateMilli: 10000 });
