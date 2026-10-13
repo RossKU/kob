@@ -524,6 +524,13 @@ impl ProgramProfile {
         if self.witness.trailing_pushes.iter().any(|h| !is_hex(h) || h.len() > 2 * 75) {
             return e("trailing_pushes must be lowercase hex of at most 75 bytes each".into());
         }
+        // `build.rs` embeds the file at this path: a repo-relative path under contracts/, nothing that leaves the tree
+        let path_ok = self.source.path.starts_with("contracts/")
+            && !self.source.path.contains(['\\', ':'])
+            && self.source.path.split('/').all(|c| !c.is_empty() && c != "." && c != "..");
+        if !path_ok {
+            return e(format!("source.path `{}` must be a relative path under contracts/ (no `..`)", self.source.path));
+        }
         if !self.source.context_fields.is_empty() && self.source.kind != SourceKind::SilvercArtifact {
             return e("context_fields need a silverc artifact".into());
         }
@@ -695,11 +702,12 @@ pub fn cut_artifact_in(
     let contract = artifact.contracts.values().next().expect("one contract");
     let bytecode = &contract.compiled.bytecode;
     let (offset, len) = (contract.compiled.state_span.offset, contract.compiled.state_span.len);
-    if offset + len > bytecode.len() {
+    // an artifact supplied to `kob registry add-program` is untrusted: an out-of-range span is an error, never a panic
+    let Some(end) = offset.checked_add(len).filter(|end| *end <= bytecode.len()) else {
         return Err(e(format!("state span {offset}+{len} outside bytecode of {} bytes", bytecode.len())));
-    }
+    };
     let mut prefix = bytecode[..offset].to_vec();
-    let suffix = bytecode[offset + len..].to_vec();
+    let suffix = bytecode[end..].to_vec();
     let sil_hash = silverscript_abi::template_hash(&prefix, &suffix);
     if sil_hash != contract.compiled.template_hash {
         return Err(e(format!(
@@ -715,6 +723,9 @@ pub fn cut_artifact_in(
             return Err(e(format!("runtime field {k} is {} ({:?}), not the context field byte[32] {want}", f.name, f.ty)));
         }
         let enc = [&[0x20u8][..], &sil_hash[..]].concat();
+        if at + enc.len() > end {
+            return Err(e(format!("context field {want} runs past the state span {offset}+{len}")));
+        }
         let found = bytecode.get(at..at + enc.len());
         let placeholder = [&[0x20u8][..], &[0u8; 32][..]].concat();
         if found != Some(enc.as_slice()) && !(zero_context_ok && found == Some(placeholder.as_slice())) {
@@ -723,7 +734,7 @@ pub fn cut_artifact_in(
         prefix.extend_from_slice(&enc);
         at += enc.len();
     }
-    let state = bytecode[at..offset + len].to_vec();
+    let state = bytecode[at..end].to_vec();
     let hash = silverscript_abi::template_hash(&prefix, &suffix);
     Ok(LoadedProgram { prefix, state, suffix, hash, sil_hash, artifact: Some(artifact) })
 }
@@ -1294,6 +1305,9 @@ mod tests {
         }))
         .contains("decodes a minter"));
         assert!(bad(&|p| p.record_code = 0).contains("reserved"));
+        for path in ["../outside.bin", "contracts/../../x.bin", "/etc/x.bin", "C:/x.bin", "contracts\\x.bin", "data/x.bin"] {
+            assert!(bad(&|p| p.source.path = path.into()).contains("under contracts/"), "{path}");
+        }
         // duplicates across the table
         let mut f = table().clone();
         f.programs.push(ProgramProfile { name: "Other".into(), variant: "Other".into(), ..base.clone() });
@@ -1336,6 +1350,31 @@ mod tests {
         for p in profiles().iter().filter(|p| p.review.status != ProgramReview::TestOnly) {
             assert!(reg.template(&p.registry_id).is_some(), "{} is {:?} but not on the shipped registry", p.name, p.review.status);
         }
+    }
+
+    /// `kob registry add-program` reads an artifact it is given: a state span out of range (an `offset + len` that wraps) or
+    /// context fields that run past the span are errors, never a panic.
+    #[test]
+    fn a_malformed_artifact_span_is_an_error() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        let EmbeddedSource::Artifact(j) = crate::artifacts::embedded_program_source("KCC20Ref").unwrap() else { panic!() };
+        let derive = |json: String| {
+            catch_unwind(AssertUnwindSafe(|| derive_profile(&ProgramInput::Artifact(json), &DeriveOptions::default()).map(|_| ())))
+        };
+        let mut v: serde_json::Value = serde_json::from_str(j).unwrap();
+        v["contracts"]["KCC20"]["compiled"]["state_span"]["offset"] = serde_json::json!(usize::MAX);
+        assert!(matches!(derive(v.to_string()), Ok(Err(_))), "a wrapping span");
+        // an Argent bundle whose leading context field (zero placeholder) is longer than the 1-byte span
+        let mut v: serde_json::Value = serde_json::from_str(j).unwrap();
+        let c = &mut v["contracts"]["KCC20"];
+        c["runtime_state"]["fields"][0] = serde_json::json!({"name": "gen__x", "type": {"kind": "fixed_bytes", "len": 32}});
+        let mut bc: Vec<u8> = serde_json::from_value(c["compiled"]["bytecode"].clone()).unwrap();
+        bc.splice(1..34, std::iter::once(0x20u8).chain([0u8; 32]));
+        c["compiled"]["state_span"]["len"] = serde_json::json!(1);
+        c["compiled"]["template_hash"] = serde_json::json!(silverscript_abi::template_hash(&bc[..1], &bc[2..]).to_vec());
+        c["compiled"]["bytecode"] = serde_json::json!(bc);
+        let bundle = serde_json::json!({"argent": {}, "sil_abi": v});
+        assert!(matches!(derive(bundle.to_string()), Ok(Err(_))), "context past the span");
     }
 
     #[test]

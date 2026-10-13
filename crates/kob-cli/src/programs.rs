@@ -291,18 +291,8 @@ fn write_program(root: &Path, p: &ProgramProfile, bytes: &[u8]) -> Result<Vec<St
     // the table refuses it too (`check_shape`); refused here before anything is written
     p.check_shape().map_err(|e| e.to_string())?;
     let mut written = vec![];
-    // 1. the bytes
-    let src = root.join(&p.source.path);
-    if src.exists() {
-        if std::fs::read(&src).map_err(|e| e.to_string())? != bytes {
-            return Err(format!("{} exists with other content", p.source.path));
-        }
-    } else {
-        std::fs::create_dir_all(src.parent().expect("source path has a directory")).map_err(|e| e.to_string())?;
-        std::fs::write(&src, bytes).map_err(|e| e.to_string())?;
-        written.push(p.source.path.clone());
-    }
-    // 2. the profile, appended to the table without reformatting the existing entries
+    // 1. the profile, appended to the table without reformatting the existing entries; every check of the table runs before
+    // anything is written (a refused program leaves no file behind)
     let table = root.join("crates/kob-protocol/data/programs.json");
     let text = std::fs::read_to_string(&table).map_err(|e| e.to_string())?;
     let mut file = kob_protocol::profile::ProfileFile::parse(&text).map_err(|e| e.to_string())?;
@@ -315,6 +305,17 @@ fn write_program(root: &Path, p: &ProgramProfile, bytes: &[u8]) -> Result<Vec<St
     let close = text.rfind("\n  ]").ok_or("data/programs.json: no closing `]` of `programs`")?;
     let new_text = format!("{},\n{}{}", &text[..close], profile_entry_text(p), &text[close..]);
     kob_protocol::profile::ProfileFile::parse(&new_text).map_err(|e| format!("the edited table does not parse: {e}"))?;
+    // 2. the bytes
+    let src = root.join(&p.source.path);
+    if src.exists() {
+        if std::fs::read(&src).map_err(|e| e.to_string())? != bytes {
+            return Err(format!("{} exists with other content", p.source.path));
+        }
+    } else {
+        std::fs::create_dir_all(src.parent().expect("source path has a directory")).map_err(|e| e.to_string())?;
+        std::fs::write(&src, bytes).map_err(|e| e.to_string())?;
+        written.push(p.source.path.clone());
+    }
     std::fs::write(&table, new_text).map_err(|e| e.to_string())?;
     written.push("crates/kob-protocol/data/programs.json".into());
     // 3. the conformance test stub
@@ -410,6 +411,11 @@ mod tests {
         assert!(stub.contains("TemplateId::KForgeToken1785") && stub.contains("#[ignore = \"review:"));
         // a second write of the same program is refused
         assert!(write_program(&root, &d.profile, &bytes).unwrap_err().contains("already"));
+        // a refused program (here under another source path) leaves no file behind
+        let mut dup = d.profile.clone();
+        dup.source.path = "contracts/third-party/elsewhere/program.bin".into();
+        assert!(write_program(&root, &dup, &bytes).unwrap_err().contains("already"));
+        assert!(!root.join(&dup.source.path).exists(), "nothing written for a refused program");
         let _ = std::fs::remove_dir_all(&root);
     }
 

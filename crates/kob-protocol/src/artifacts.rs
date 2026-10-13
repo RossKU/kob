@@ -552,7 +552,7 @@ pub fn template_from_artifact(id: TemplateId, artifact: SilAbiArtifact) -> Resul
     let bytecode = &contract.compiled.bytecode;
     let span = contract.compiled.state_span;
     let (offset, len) = (span.offset, span.len);
-    if offset + len > bytecode.len() {
+    if offset.checked_add(len).is_none_or(|end| end > bytecode.len()) {
         return Err(ArtifactError::Span { offset, len, size: bytecode.len() });
     }
     let mut prefix = bytecode[..offset].to_vec();
@@ -577,6 +577,9 @@ pub fn template_from_artifact(id: TemplateId, artifact: SilAbiArtifact) -> Resul
                 return Err(ctx_err(format!("runtime field {k} is {} ({:?}), not the context field byte[32] {want}", f.name, f.ty)));
             }
             let enc = [&[0x20u8][..], &computed[..]].concat();
+            if at + enc.len() > offset + len {
+                return Err(ctx_err(format!("{want} runs past the state span")));
+            }
             if bytecode.get(at..at + enc.len()) != Some(enc.as_slice()) {
                 return Err(ctx_err(format!("{want} of the compiled instance is not the canonical 0x20 ‖ {}", to_hex(&computed))));
             }
