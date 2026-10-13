@@ -121,7 +121,9 @@ body:has(.market-page) .container { max-width: 1520px; }
 .ob-tools .select { min-height: 26px; padding: 1px 6px; font-size: 0.8rem; width: auto; }
 .ob-head, .ob .book-row { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
 .ob-head { padding: 2px 8px 4px; color: var(--muted); font-size: 0.74rem; }
-.ob-head > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the column titles carry their units ("Price (TICKER / KAS)"): they wrap instead of losing the unit to an ellipsis */
+.ob-head { align-items: end; }
+.ob-head > span { white-space: normal; overflow-wrap: break-word; min-width: 0; }
 .ob-head > span { text-align: right; } /* every numeric column is right-aligned so the decimal points line up (fixed decimals per column) */
 .ob .book-side { min-height: calc(var(--ob-rows, 12) * 21px); }
 .ob .book-side[data-testid='book-asks'] { justify-content: flex-end; }

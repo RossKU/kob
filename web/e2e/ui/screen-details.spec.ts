@@ -72,3 +72,11 @@ test('the depth legend keeps the estimate mark with its amounts', async ({ appPa
   });
   expect(out).toBe(0);
 });
+
+test('the order book column titles keep their units (they wrap, no ellipsis)', async ({ appPage: page, mock }) => {
+  await openMarket(page, mock, { connect: false });
+  const head = page.getByTestId('order-book').locator('.ob-head > span');
+  await expect(head.first()).toHaveText('Price (EXKCC / KAS)');
+  const cut = await head.evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).length);
+  expect(cut).toBe(0);
+});
