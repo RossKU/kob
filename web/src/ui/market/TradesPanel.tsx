@@ -27,7 +27,7 @@ export function TradeTape(props: {
   const basis = tape?.basis ?? null;
   const inv = !!props.inverted;
   // fixed decimals per column, chosen once for the whole tape (decimal points line up)
-  const cols = tape ? tapeColumns(tape, { decimals: props.decimals, dp: props.dp, inverted: inv, tick: props.tick ?? null }) : [];
+  const cols = tape ? tapeColumns(tape, { decimals: props.decimals, dp: props.dp, inverted: inv, tick: props.tick ?? null, ticker: props.ticker }) : [];
   // fill events of an indexer without /v1/trades and a market without a known scale: prices stay per the orders' own basis
   const perBasis = !inv && tape?.source === 'fills' && basis === null;
   // rows that arrive after the first render flash once
@@ -57,7 +57,7 @@ export function TradeTape(props: {
             <div class="mkt-empty" data-testid="trades-empty">{t('market.trades.empty')}</div>
           ) : (
             tape.rows.map((r, i) => {
-              const { price, size } = cols[i]!;
+              const { price, priceTitle, size, sizeTitle } = cols[i]!;
               const side = inv && r.side ? oppositeSide(r.side) : r.side;
               const detail = inv ? [r.amount !== null ? `${amountText(r.amount, props.decimals)} ${props.ticker}` : '', r.quote !== null ? `${kasText(r.quote)} KAS` : ''].filter(Boolean).map((x) => ` · ${x}`).join('') : r.quote !== null ? ` · ${kasText(r.quote)} KAS` : '';
               const when = r.timeMs !== null ? formatDateTime(Math.floor(r.timeMs / 1000), { timeStyle: 'medium' }) : `DAA ${formatNumber(r.daa)}`;
@@ -73,8 +73,8 @@ export function TradeTape(props: {
               };
               const cells = (
                 <>
-                  <span class="tape-price" role="cell">{price}</span>
-                  <span role="cell">{size}</span>
+                  <span class="tape-price" role="cell" title={priceTitle ?? undefined}>{price}</span>
+                  <span role="cell" title={sizeTitle ?? undefined}>{size}</span>
                   <span class="tape-time" role="cell">{tapeTime(r.timeMs)}{r.settled ? '' : '*'}</span>
                 </>
               );

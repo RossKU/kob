@@ -49,8 +49,8 @@ function Row(props: { row: BookRowView; kind: 'ask' | 'bid'; onPick: OrderBookPr
       onClick={() => props.onPick?.(row.pick, row.nativePrice)}
     >
       <i class="book-bar" style={{ width: `${row.depthPct}%` }} aria-hidden="true" />
-      <span class="book-price">{row.priceText}</span>
-      <span>
+      <span class="book-price" title={row.priceTitle ?? undefined}>{row.priceShown}</span>
+      <span title={row.sizeTitle ?? undefined}>
         {row.estimated ? <span class="est" title={estimatedNote(props.inverted, props.token)}>~</span> : null}
         {row.sizeText}
       </span>

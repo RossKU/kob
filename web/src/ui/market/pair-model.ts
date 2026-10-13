@@ -6,7 +6,7 @@
 // from inventory, so a crossing of ANY sources is fillable. A crossed book is shown as it is (a negative spread). Pure and DOM-free.
 import type { PairBookView, PairLevelSource, PairLevelView } from '../../data/indexer-types';
 import { cmpRational, formatRational, ratToNumber, reduce, significantDp, wholePrice, type PairToken, type Rational } from '../../kob/pair';
-import { columnFraction, fixedUnits } from '../kit/format';
+import { columnFraction, fitAmountColumn, fitDecimalTexts } from '../kit/format';
 
 export interface PairLevelRow {
   side: 'ask' | 'bid';
@@ -16,9 +16,15 @@ export interface PairLevelRow {
   /** QUOTE per whole BASE */
   price: Rational;
   priceText: string;
+  /** the price as the cell shows it (fewer decimals / K / M / B when the column is too wide; never a cut digit) and `priceText` when that is not exact */
+  priceShown: string;
+  priceTitle: string | null;
   /** BASE base units */
   amount: bigint;
+  /** never a cut digit: fewer decimals or K / M / B when the column is too wide */
   amountText: string;
+  /** the exact amount when `amountText` is rounded or compact */
+  amountTitle: string | null;
   /** QUOTE (whole) the level is worth: amount x price */
   totalText: string;
   orders: number;
@@ -63,7 +69,7 @@ const toRat = (l: PairLevelView): Rational => reduce({ num: BigInt(l.price_num),
  */
 export function buildPairBook(view: PairBookView, base: PairToken, quote: PairToken, depth = 15): PairBookModel | null {
   if (view.base !== base.covenantId || view.quote !== quote.covenantId) return null;
-  const mk = (l: PairLevelView, side: 'ask' | 'bid'): Omit<PairLevelRow, 'priceText' | 'amountText' | 'bar' | 'totalText'> => {
+  const mk = (l: PairLevelView, side: 'ask' | 'bid'): Omit<PairLevelRow, 'priceText' | 'priceShown' | 'priceTitle' | 'amountText' | 'amountTitle' | 'bar' | 'totalText'> => {
     const unitPrice = toRat(l);
     return { side, source: l.source, unitPrice, price: wholePrice(unitPrice, base.decimals, quote.decimals), amount: BigInt(l.amount), orders: l.orders };
   };
@@ -75,18 +81,26 @@ export function buildPairBook(view: PairBookView, base: PairToken, quote: PairTo
   // the amount column: the finest amount of the shown levels fixes the decimals of every row
   const amountDp = columnFraction([...asks0, ...bids0].map((r) => r.amount), base.decimals);
   const max = [...asks0, ...bids0].reduce((m, r) => (r.amount > m ? r.amount : m), 0n);
-  const finish = (r: Omit<PairLevelRow, 'priceText' | 'amountText' | 'bar' | 'totalText'>): PairLevelRow => {
+  // never a cut digit: fewer decimals or K / M / B when the column is too wide (the exact amount is in the row's title)
+  const shownAmounts = [...asks0, ...bids0];
+  const fitted = fitAmountColumn(shownAmounts.map((x) => x.amount), base.decimals, { fraction: amountDp, unit: base.ticker });
+  const amountCells = new Map(shownAmounts.map((r, i) => [r, fitted[i]!]));
+  const finish = (r: Omit<PairLevelRow, 'priceText' | 'priceShown' | 'priceTitle' | 'amountText' | 'amountTitle' | 'bar' | 'totalText'>): Omit<PairLevelRow, 'priceShown' | 'priceTitle'> => {
     const total = reduce({ num: r.amount * r.unitPrice.num, den: r.unitPrice.den });
     return {
       ...r,
       priceText: formatRational(r.price, dp, r.side === 'ask' ? 'up' : 'down', dp, ','),
-      amountText: fixedUnits(r.amount, base.decimals, amountDp),
+      amountText: amountCells.get(r)!.text,
+      amountTitle: amountCells.get(r)!.exact,
       totalText: formatRational({ num: total.num, den: total.den * 10n ** BigInt(quote.decimals) }, Math.min(quote.decimals, dp + 2), 'down', Math.min(quote.decimals, dp + 2), ','),
       bar: max > 0n ? ratToNumber({ num: r.amount, den: max }) : 0,
     };
   };
-  const asks = asks0.map(finish);
-  const bids = bids0.map(finish);
+  const asks1 = asks0.map(finish);
+  const bids1 = bids0.map(finish);
+  const prices = fitDecimalTexts([...asks1, ...bids1].map((r) => r.priceText));
+  const asks = asks1.map((r, i) => ({ ...r, priceShown: prices[i]!.text, priceTitle: prices[i]!.exact }));
+  const bids = bids1.map((r, i) => ({ ...r, priceShown: prices[asks1.length + i]!.text, priceTitle: prices[asks1.length + i]!.exact }));
   const bestAsk = asks[0] ?? null;
   const bestBid = bids[0] ?? null;
   let spreadText: string | null = null;

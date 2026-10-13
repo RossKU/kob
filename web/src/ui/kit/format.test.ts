@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { amountText, columnFraction, fixedPricePerToken, fixedUnits, groupDigits, kasText, pricePerTokenText, scaleOfDecimals, shortAddress, shortId, signedKasText, tickKasFraction, tickPriceFraction, tokenText, tokenTextShort, trailingZeros, unitsFraction } from './format';
+import { amountText, CELL_CHARS, columnFraction, fitAmountColumn, fixedPricePerToken, fixedUnits, groupDigits, kasText, pricePerTokenText, scaleOfDecimals, shortAddress, shortId, signedKasText, tickKasFraction, tickPriceFraction, tokenText, tokenTextShort, trailingZeros, unitsFraction } from './format';
 
 describe('kit format', () => {
   it('shortens ids without touching short strings', () => {
@@ -118,5 +118,57 @@ describe('fixed-decimal column helpers', () => {
     expect(amountText({ kind: 'token', value: 12_340_000n, decimals: 4, fraction: 3 })).toBe('1234.000');
     expect(amountText({ kind: 'price', value: 25_100n, decimals: 8, scale: 100_000_000n, fraction: 6 })).toBe('0.000251');
     expect(amountText({ kind: 'kas', value: null, fraction: 4 })).toBe('—');
+  });
+});
+
+describe('amount columns never cut a digit', () => {
+  const texts = (cells: { text: string }[]) => cells.map((c) => c.text);
+  const fits = (cells: { text: string }[]) => cells.every((c) => c.text.length <= CELL_CHARS);
+
+  it('a column that fits keeps its fixed decimals and needs no tooltip', () => {
+    const cells = fitAmountColumn([700_000n, 3_000_000n, 12_345_600_000n], 8);
+    expect(texts(cells)).toEqual(['0.007', '0.030', '123.456']);
+    expect(cells.every((c) => c.exact === null)).toBe(true);
+  });
+
+  it('0 decimals: whole numbers, grouped; a huge amount is compact with the exact amount in the tooltip', () => {
+    expect(texts(fitAmountColumn([1n, 42n, 999_999n], 0))).toEqual(['1', '42', '999,999']);
+    const cells = fitAmountColumn([56_609_953_123n, 7n, 1_500n], 0, { unit: 'ZERO' });
+    expect(texts(cells)).toEqual(['56.61B', '7', '1.50K']);
+    expect(cells.map((c) => c.exact)).toEqual(['56,609,953,123 ZERO', null, '1,500 ZERO']);
+    expect(fits(cells)).toBe(true);
+    // a column of 10 whole digits still fits as it is
+    expect(texts(fitAmountColumn([1_234_567n, 8n], 0))).toEqual(['1,234,567', '8']);
+  });
+
+  it('18 decimals: one base unit no longer forces 18 decimals on the column (the old "56,609,95…" / "0.0000000…")', () => {
+    const one = 10n ** 18n;
+    const cells = fitAmountColumn([56_609_953n * one + 1n, 1n, 25n * one / 10n], 18, { unit: 'EIGHTEEN' });
+    expect(texts(cells)).toEqual(['56.61M', '<0.01', '2.50']);
+    expect(cells[0]!.exact).toBe('56,609,953.000000000000000001 EIGHTEEN');
+    expect(cells[1]!.exact).toBe('0.000000000000000001 EIGHTEEN');
+    expect(cells[2]!.exact).toBeNull();
+    expect(fits(cells)).toBe(true);
+    // whole digits that fit: the decimals shrink for the whole column, a tiny amount reads "<0.0001", never 0
+    const mid = fitAmountColumn([12_345n * one, 1n, one / 3n], 18);
+    expect(texts(mid)).toEqual(['12,345.000', '<0.001', '0.333']);
+    // a narrower cell (the trade tape): two decimals
+    expect(texts(fitAmountColumn([12_345n * one, 1n, one / 3n], 18, { width: 9 }))).toEqual(['12,345.00', '<0.01', '0.33']);
+    expect(fits(mid)).toBe(true);
+    // every amount of 18 decimals exactly at 10 characters or less is shown as it is
+    expect(texts(fitAmountColumn([one / 1000n], 18))).toEqual(['0.001']);
+  });
+
+  it('huge amounts of every size fit; nothing above a thousand reads as a small number', () => {
+    for (const decimals of [0, 8, 18]) {
+      const u = 10n ** BigInt(decimals);
+      const values = [1n, u, 999n * u, 1_000n * u, 123_456_789n * u, 98_765_432_101n * u, 5_000_000_000_000n * u];
+      const cells = fitAmountColumn(values, decimals);
+      expect(fits(cells), `decimals ${decimals}: ${texts(cells).join(' ')}`).toBe(true);
+      expect(cells.at(-1)!.text).toBe('5.00T');
+      expect(cells[4]!.text).toBe('123.46M');
+      expect(cells.map((c) => c.text).every((s) => !s.includes('…'))).toBe(true);
+    }
+    expect(texts(fitAmountColumn([null, 5n], 0))).toEqual(['—', '5']);
   });
 });

@@ -39,7 +39,8 @@ describe('pair fills: volume only (a pair fill never makes a price)', () => {
   it('columns have one number of decimals per token (the finest amount shown); an unknown B amount shows a dash', () => {
     const rows = pairFillsOf(fillsView([fill('ask', 2n * BTC, 101_000n), fill('bid', 60_000_001n, 3_000_000n), fill('ask', BTC, null)]), BASE, QUOTE);
     const cols = pairTapeColumns(rows, BASE, QUOTE);
-    expect(cols.map((c) => c.base)).toEqual(['1.00000000', '0.60000001', '2.00000000']);
+    // eight decimals take ten characters, a tape cell shows nine: six for the column (the exact amounts are in the row title)
+    expect(cols.map((c) => c.base)).toEqual(['1.000000', '0.600000', '2.000000']);
     expect(cols.map((c) => c.quote)).toEqual(['—', '3.000', '0.101']);
   });
 

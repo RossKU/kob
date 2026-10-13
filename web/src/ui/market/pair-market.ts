@@ -11,7 +11,7 @@
 import type { PairBookView, PairCandlesView, PairFillsView, PairLevelView, PairRateView } from '../../data/indexer-types';
 import { formatUnits } from '../../kob/units';
 import { cmpRational, ratToNumber, reduce, wholePrice, type PairToken, type Rational } from '../../kob/pair';
-import { columnFraction, fixedUnits } from '../kit/format';
+import { columnFraction, fitAmountColumn, TAPE_CELL_CHARS } from '../kit/format';
 import { compactText, unitsToNumber, toneOf, bpsPercentText, type DepthSeries, type StatsModel } from './market-model';
 import type { RatioCandle } from './usd-model';
 import { usdText } from './usd-model';
@@ -118,7 +118,10 @@ export function pairFillsOf(view: PairFillsView | null | undefined, base: PairTo
 export function pairTapeColumns(fills: readonly PairFill[], base: PairToken, quote: PairToken): { base: string; quote: string }[] {
   const fa = columnFraction(fills.map((f) => f.baseUnits), base.decimals);
   const fb = columnFraction(fills.flatMap((f) => (f.quoteUnits === null ? [] : [f.quoteUnits])), quote.decimals);
-  return fills.map((f) => ({ base: fixedUnits(f.baseUnits, base.decimals, fa), quote: f.quoteUnits === null ? '—' : fixedUnits(f.quoteUnits, quote.decimals, fb) }));
+  // never a cut digit: a column too wide for its cell shows fewer decimals or K / M / B (the exact amounts are in the row title)
+  const a = fitAmountColumn(fills.map((f) => f.baseUnits), base.decimals, { fraction: fa, width: TAPE_CELL_CHARS });
+  const b = fitAmountColumn(fills.map((f) => f.quoteUnits), quote.decimals, { fraction: fb, width: TAPE_CELL_CHARS });
+  return fills.map((_f, i) => ({ base: a[i]!.text, quote: b[i]!.text }));
 }
 
 // ------------------------------------------------------------------------------------------------ 24 h figures

@@ -171,6 +171,12 @@ body:has(.market-page) .container { max-width: 1520px; }
 .pair-book .pair-entry .book-price { text-decoration: underline dotted; text-underline-offset: 3px; }
 /* the pair fills: amounts of BASE and QUOTE, the counterparty, the time (no price: a pair fill never makes one) */
 .pair-tape .tape-head, .pair-tape .tape-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 0.8fr); }
+/* a narrow panel has no room for four columns: the counterparty (also in each row's title) gives way so the amounts and the time keep every digit */
+.pair-tape { container-type: inline-size; }
+@container (max-width: 360px) {
+  .pair-tape .tape-head, .pair-tape .tape-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.8fr); }
+  .pair-tape .tape-head > span:nth-child(3), .pair-tape .tape-row > span:nth-child(3) { display: none; }
+}
 .pair-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
 
 /* ---- the pair selector of the title bar: `BASE / QUOTE`, each side a drop-down laid invisibly over its label */

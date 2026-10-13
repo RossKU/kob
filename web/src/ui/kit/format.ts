@@ -164,3 +164,88 @@ export function tickPriceFraction(tick: bigint | null | undefined, decimals: num
   for (let f = 0; f <= max; f++) if ((num * pow10(f)) % den === 0n) return Math.min(max, Math.max(min, f));
   return max;
 }
+
+// ------------------------------------------------------------------------------------------------ amount columns that never cut digits
+
+/** Characters a numeric cell of the order book shows without cutting a digit (its narrowest column, desktop and phone). */
+export const CELL_CHARS = 10;
+/** The same for the trade tapes (three or four columns in a narrower panel). */
+export const TAPE_CELL_CHARS = 9;
+
+/** One cell of an amount column: the text shown and, when that text is not the exact amount, the exact amount for the tooltip. */
+export interface AmountCell {
+  text: string;
+  /** the exact amount (thousands grouped, trailing zeros trimmed, with the unit when given); null when `text` is already exact */
+  exact: string | null;
+}
+
+const COMPACT: readonly [string, number][] = [['T', 12], ['B', 9], ['M', 6], ['K', 3]];
+
+/** A whole-number compact form: `56.61M` for 56,609,953.4 (two decimals, half up), `1,234.57T` beyond the largest suffix. */
+function compactUnits(value: bigint, decimals: number): string {
+  const whole = value / pow10(decimals);
+  for (const [suffix, exp] of COMPACT) {
+    if (whole >= pow10(exp)) return `${formatUnits(value, decimals + exp, { maxFraction: 2, trim: false, group: ',' })}${suffix}`;
+  }
+  return formatUnits(value, decimals, { maxFraction: 2, trim: false, group: ',' });
+}
+
+/** Whether a column text reads as exactly `value` (no `<`, no suffix, no rounded-away digit). */
+function shownExactly(text: string, value: bigint, decimals: number): boolean {
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(text.replace(/,/g, ''));
+  if (!m) return false;
+  const frac = (m[2] ?? '').replace(/0+$/, '');
+  if (frac.length > decimals) return false;
+  return BigInt(m[1]!) * pow10(decimals) + BigInt(frac.padEnd(decimals, '0') || '0') === value;
+}
+
+/** `fixedUnits`, except a positive amount that rounds to zero shows as `<0.01` (never a plain zero for something that is there). */
+function fixedOrBelow(value: bigint, decimals: number, fraction: number): string {
+  const t = fixedUnits(value, decimals, fraction);
+  if (value > 0n && /^[0.,]+$/.test(t)) return fraction > 0 ? `<0.${'0'.repeat(fraction - 1)}1` : '<1';
+  return t;
+}
+
+/**
+ * The texts of an amount column (`values` in base units of `decimals`) that fit `width` characters WITHOUT cutting a digit: the column's own fixed
+ * decimals (`fraction`, default: the finest amount shown) when every row fits; else fewer decimals for the whole column, so the largest amount keeps
+ * every whole digit (a positive amount that would read 0 shows `<0.001`); else, when even the whole digits do not fit, compact K / M / B / T
+ * (`56.61M`). A text that is not the exact amount carries the exact amount (`exact`) for the tooltip. Null values show `—`.
+ */
+export function fitAmountColumn(values: readonly (bigint | null | undefined)[], decimals: number, o: { fraction?: number; width?: number; unit?: string } = {}): AmountCell[] {
+  const width = o.width ?? CELL_CHARS;
+  const fraction = o.fraction ?? columnFraction(values, decimals);
+  const exactOf = (v: bigint): string => `${formatUnits(v, decimals, { group: ',' })}${o.unit ? ` ${o.unit}` : ''}`;
+  const cell = (v: bigint | null | undefined, text: (v: bigint) => string): AmountCell => {
+    if (v === null || v === undefined) return { text: '—', exact: null };
+    const shown = text(v);
+    return { text: shown, exact: shownExactly(shown, v, decimals) ? null : exactOf(v) };
+  };
+  const present = values.filter((v): v is bigint => v !== null && v !== undefined);
+  const longest = (f: (v: bigint) => string): number => present.reduce((m, v) => Math.max(m, f(v).length), 0);
+  const full = (v: bigint) => fixedUnits(v, decimals, fraction);
+  if (longest(full) <= width) return values.map((v) => cell(v, full));
+  const small = Math.min(fraction, 2);
+  const intLen = longest((v) => fixedUnits(v, decimals, 0));
+  // `<0.001` takes one character more than `0.001`: a one-digit column keeps room for it
+  const f = Math.min(fraction, Math.max(0, width - Math.max(intLen, 2) - 1));
+  // the whole digits fit with at least two decimals (or every decimal the column has): fewer decimals for the whole column
+  if (intLen <= width && f >= small) return values.map((v) => cell(v, (x) => fixedOrBelow(x, decimals, f)));
+  // else thousands and up are compact, smaller amounts keep two decimals
+  return values.map((v) => cell(v, (x) => (x >= pow10(decimals + 3) ? compactUnits(x, decimals) : fixedOrBelow(x, decimals, small))));
+}
+
+/**
+ * `fitAmountColumn` for a column already formatted as decimal text with ONE number of decimals (a price column: `25,300,000.00`): the same
+ * texts when they fit `width`, else fewer decimals or K / M / B (`25.30M`), `exact` = the original text. Texts that are not plain numbers (`—`)
+ * pass unchanged.
+ */
+export function fitDecimalTexts(texts: readonly string[], o: { width?: number; unit?: string } = {}): AmountCell[] {
+  const width = o.width ?? CELL_CHARS;
+  if (texts.every((s) => s.length <= width)) return texts.map((text) => ({ text, exact: null }));
+  const parsed = texts.map((s) => /^(\d[\d,]*)(?:\.(\d+))?$/.exec(s));
+  const dp = parsed.reduce((m, p) => Math.max(m, p?.[2]?.length ?? 0), 0);
+  const values = parsed.map((p) => (p ? BigInt(p[1]!.replace(/,/g, '') + (p[2] ?? '').padEnd(dp, '0')) : null));
+  const cells = fitAmountColumn(values, dp, { fraction: dp, width });
+  return cells.map((c, i) => (values[i] === null ? { text: texts[i]!, exact: null } : { text: c.text, exact: c.exact === null ? null : `${texts[i]}${o.unit ? ` ${o.unit}` : ''}` }));
+}

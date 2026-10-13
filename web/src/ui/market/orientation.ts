@@ -15,7 +15,7 @@
 import type { DepthView, StatsView } from '../../data/indexer-types';
 import { formatRational, parseDecimal, ratToNumber, reduce, significantDp, type Rational } from '../../kob/pair';
 import { formatUnits, pow10, quoteOf, SOMPI_PER_KAS } from '../../kob/units';
-import { columnFraction, fixedUnits, tickKasFraction } from '../kit/format';
+import { columnFraction, fitAmountColumn, fitDecimalTexts, TAPE_CELL_CHARS, tickKasFraction, type AmountCell } from '../kit/format';
 import type { BookModel, BookRow, Level } from './book-model';
 import {
   amountText, basisOf, basisToNumber, bigOrNull, bpsPercentText, compactText, priceText, toneOf, unitsToNumber,
@@ -184,10 +184,18 @@ export function invertedRegrouper(c: { decimals: number; scale: bigint; dp: numb
 /** One level of the book as drawn (strings and the figures the tests read). */
 export interface BookRowView {
   key: string;
+  /** the price at the column's fixed decimals (exact; labels and tests read it) */
   priceText: string;
+  /** the price as the cell shows it: `priceText`, or fewer decimals / K / M / B when the column is too wide for its cells (never a cut digit) */
+  priceShown: string;
+  /** `priceText` when `priceShown` is not exact */
+  priceTitle: string | null;
   /** the price as plain decimal text (no grouping), for tests and tooltips */
   priceValue: string;
+  /** the size and the cumulative total: never a cut digit (fewer decimals or K / M / B when a column is too wide; the exact amount is in the title) */
   sizeText: string;
+  /** the exact size when `sizeText` is rounded or compact */
+  sizeTitle: string | null;
   totalText: string;
   totalTitle: string;
   estimated: boolean;
@@ -241,16 +249,29 @@ export function bookColumnFractions(c: Pick<BookViewCtx, 'decimals' | 'tick'>, a
   return { tokens: columnFraction(amounts, c.decimals), kas, totalKas: Math.min(kas, TOTAL_KAS_MAX_FRACTION) };
 }
 
+/** The price column of a book view as its cells show it (see `BookRowView.priceShown`). */
+function fitPrices(rows: Omit<BookRowView, 'priceShown' | 'priceTitle'>[]): BookRowView[] {
+  const cells = fitDecimalTexts(rows.map((r) => r.priceText));
+  return rows.map((r, i) => ({ ...r, priceShown: cells[i]!.text, priceTitle: cells[i]!.exact }));
+}
+
+/** The cells of a fitted column by row. */
+const columnOf = <R,>(rows: readonly R[], cells: readonly AmountCell[]): Map<R, AmountCell> => new Map(rows.map((r, i) => [r, cells[i]!]));
+
 /** The book as the exchange convention draws it: TOKEN/KAS, price in KAS per whole token, sizes in tokens. */
 export function nativeBookView(m: BookModel, c: BookViewCtx): BookView {
   const price = (v: bigint) => priceText(v, c.decimals, c.scale, c.dp);
   const fr = bookColumnFractions(c, [...m.asks, ...m.bids].map((r) => r.amount));
-  const row = (r: BookRow, side: 'ask' | 'bid'): BookRowView => ({
+  const shown = [...m.asksDisplay, ...m.bids];
+  const sizes = columnOf(shown, fitAmountColumn(shown.map((r) => r.amount), c.decimals, { fraction: fr.tokens, unit: c.name }));
+  const totals = columnOf(shown, fitAmountColumn(shown.map((r) => r.cumValue), 8, { fraction: fr.totalKas, unit: 'KAS' }));
+  const row = (r: BookRow, side: 'ask' | 'bid'): Omit<BookRowView, 'priceShown' | 'priceTitle'> => ({
     key: r.price.toString(),
     priceText: price(r.price),
     priceValue: r.price.toString(),
-    sizeText: fixedUnits(r.amount, c.decimals, fr.tokens),
-    totalText: fixedUnits(r.cumValue, 8, fr.totalKas),
+    sizeText: sizes.get(r)!.text,
+    sizeTitle: sizes.get(r)!.exact,
+    totalText: totals.get(r)!.text,
     totalTitle: `${formatUnits(r.cumValue, 8, { group: ',' })} KAS`,
     estimated: r.estimated,
     depthPct: r.depthPct,
@@ -259,9 +280,10 @@ export function nativeBookView(m: BookModel, c: BookViewCtx): BookView {
     nativePrice: r.price,
     pick: side === 'ask' ? 'buy' : 'sell',
   });
+  const priced = fitPrices([...m.asksDisplay.map((r) => row(r, 'ask')), ...m.bids.map((r) => row(r, 'bid'))]);
   return {
-    asks: m.asksDisplay.map((r) => row(r, 'ask')),
-    bids: m.bids.map((r) => row(r, 'bid')),
+    asks: priced.slice(0, m.asksDisplay.length),
+    bids: priced.slice(m.asksDisplay.length),
     head: c.labels,
     mid: m.mid !== null ? { text: price(m.mid), value: m.mid.toString() } : null,
     spread: m.spread !== null ? { text: price(m.spread), pct: m.spreadBps !== null ? (m.spreadBps / 100).toFixed(2) : null } : null,
@@ -277,19 +299,23 @@ export function nativeBookView(m: BookModel, c: BookViewCtx): BookView {
 export function flippedBookView(m: BookModel, c: BookViewCtx): BookView {
   const scale = c.scale;
   const fr = bookColumnFractions(c, [...m.asks, ...m.bids].map((r) => r.cumAmount));
+  const shown = [...m.asks, ...m.bids];
+  const sizes = columnOf(shown, fitAmountColumn(shown.map((r) => quoteOf(r.amount, r.price, scale, 'down')), 8, { fraction: fr.kas, unit: 'KAS' }));
+  const totals = columnOf(shown, fitAmountColumn(shown.map((r) => r.cumAmount), c.decimals, { fraction: fr.tokens, unit: c.name }));
   const inv = (p: bigint): Rational => invert(kasPerToken(p, c.decimals, scale)) ?? ZERO;
   const invOf = (r: BookRow): Rational => r.inv ?? inv(r.price);
   const totalValue = (rows: BookRow[]): bigint => rows.at(-1)?.cumValue ?? 0n;
   const maxValue = totalValue(m.asks) > totalValue(m.bids) ? totalValue(m.asks) : totalValue(m.bids);
-  const row = (r: BookRow, side: 'ask' | 'bid'): BookRowView => {
+  const row = (r: BookRow, side: 'ask' | 'bid'): Omit<BookRowView, 'priceShown' | 'priceTitle'> => {
     const p = invOf(r);
     const tokens = r.cumAmount;
     return {
       key: r.price.toString(),
       priceText: ratioText(p, c.dp),
       priceValue: plain(p, c.dp),
-      sizeText: fixedUnits(quoteOf(r.amount, r.price, scale, 'down'), 8, fr.kas),
-      totalText: fixedUnits(tokens, c.decimals, fr.tokens),
+      sizeText: sizes.get(r)!.text,
+      sizeTitle: sizes.get(r)!.exact,
+      totalText: totals.get(r)!.text,
       totalTitle: `${amountText(tokens, c.decimals, c.decimals)} ${c.name}`,
       estimated: r.estimated,
       depthPct: maxValue > 0n ? Number((r.cumValue * 10_000n) / maxValue) / 100 : 0,
@@ -301,8 +327,9 @@ export function flippedBookView(m: BookModel, c: BookViewCtx): BookView {
     };
   };
   // displayed bids = native asks (best = lowest native price = highest inverted), displayed asks = native bids; asks are listed best-last
-  const bids = m.asks.map((r) => row(r, 'ask'));
-  const asks = m.bids.map((r) => row(r, 'bid')).reverse();
+  const priced = fitPrices([...m.bids.map((r) => row(r, 'bid')).reverse(), ...m.asks.map((r) => row(r, 'ask'))]);
+  const asks = priced.slice(0, m.bids.length);
+  const bids = priced.slice(m.bids.length);
   let mid: BookView['mid'] = null;
   let spread: BookView['spread'] = null;
   if (m.bestAsk !== null && m.bestBid !== null) {
@@ -326,23 +353,29 @@ export interface TapeColumnsCtx {
   inverted: boolean;
   /** the market's tick, sompi per whole token (fixes the decimals of the KAS size column of the inverted view) */
   tick?: bigint | null;
+  /** the token's ticker (the unit of a rounded size's exact amount in its tooltip) */
+  ticker?: string;
 }
 
 /**
  * The price and size texts of every tape row with ONE number of decimals per column (chosen once for the whole tape: price `dp`, size from the
  * finest row / the tick), trailing zeros kept, so the decimal points line up. '—' for a value the row does not have.
  */
-export function tapeColumns(tape: Tape, c: TapeColumnsCtx): { price: string; size: string }[] {
+export function tapeColumns(tape: Tape, c: TapeColumnsCtx): { price: string; priceTitle: string | null; size: string; sizeTitle: string | null }[] {
   const basis = tape.basis;
   const sizeFr = c.inverted
     ? c.tick
       ? tickKasFraction(c.tick) // the market's tick fixes the KAS column (like the book's size column); a finer row is rounded, its exact amount is in the row title
       : columnFraction(tape.rows.map((r) => r.quote), 8)
     : columnFraction(tape.rows.map((r) => r.amount), c.decimals);
-  return tape.rows.map((r) => ({
-    price: r.price === null ? '—' : c.inverted ? (basis ? flippedPriceText(r.price, c.decimals, basis, c.dp) : '—') : priceText(r.price, c.decimals, basis ?? 0n, c.dp),
-    size: c.inverted ? (r.quote !== null ? fixedUnits(r.quote, 8, sizeFr) : '—') : r.amount !== null ? fixedUnits(r.amount, c.decimals, sizeFr) : '—',
-  }));
+  // never a cut digit: a column too wide for its cell shows fewer decimals or K / M / B (the exact amount is in the row title)
+  const width = TAPE_CELL_CHARS;
+  const sizes = c.inverted ? fitAmountColumn(tape.rows.map((r) => r.quote), 8, { fraction: sizeFr, width, unit: 'KAS' }) : fitAmountColumn(tape.rows.map((r) => r.amount), c.decimals, { fraction: sizeFr, width, unit: c.ticker });
+  const prices = fitDecimalTexts(
+    tape.rows.map((r) => (r.price === null ? '—' : c.inverted ? (basis ? flippedPriceText(r.price, c.decimals, basis, c.dp) : '—') : priceText(r.price, c.decimals, basis ?? 0n, c.dp))),
+    { width },
+  );
+  return tape.rows.map((_r, i) => ({ price: prices[i]!.text, priceTitle: prices[i]!.exact, size: sizes[i]!.text, sizeTitle: sizes[i]!.exact }));
 }
 
 // ------------------------------------------------------------------------------------------------ 24 h stats

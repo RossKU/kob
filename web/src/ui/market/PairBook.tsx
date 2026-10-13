@@ -33,8 +33,8 @@ function Level(props: { row: PairLevelRow; p: PairBookProps }) {
       onClick={() => p.onPick?.(row)}
     >
       <i class="book-bar" style={{ width: `${Math.round(row.bar * 100)}%` }} aria-hidden="true" />
-      <span class="book-price">{row.priceText}</span>
-      <span>{row.amountText}</span>
+      <span class="book-price" title={row.priceTitle ?? undefined}>{row.priceShown}</span>
+      <span title={row.amountTitle ?? undefined}>{row.amountText}</span>
       <span class="pair-src">
         {row.source === 'route' ? (
           <span class="pair-via" data-testid="pair-via-kas">{t('pair.book.viaKas')}</span>
