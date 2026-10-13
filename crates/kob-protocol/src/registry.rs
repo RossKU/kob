@@ -1480,9 +1480,10 @@ mod tests {
         // review only, 2026-10-13): tradable on mainnet, a live PublicMint bounded by the genesis allowance
         let pm = d.template("kcc20-ref-public-mint").unwrap();
         assert_eq!(pm.review_status, ReviewStatus::Reviewed);
-        assert!(pm.risks.iter().any(|r| r.starts_with("Reviewed (internal review only")
-            && r.contains("mint_allowance")
-            && r.contains("verify_genesis")));
+        assert!(pm
+            .risks
+            .iter()
+            .any(|r| r.starts_with("Reviewed (internal review only") && r.contains("mint_allowance") && r.contains("verify_genesis")));
         assert!(d.strict_template_by_hash(&parse_hex32(&pm.template_hash).unwrap()).is_some());
         assert_eq!((pm.prefix_len, pm.state_len, pm.suffix_len, pm.max_token_inputs, pm.max_token_outputs), (34, 112, 3_885, 3, 3));
         assert_eq!(pm.capabilities, vec![Capability::PublicMint]);
