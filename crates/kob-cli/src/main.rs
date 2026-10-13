@@ -1,6 +1,6 @@
 //! `kob` command line.
 //!
-//! Implemented: `kob token issue` (fixed-supply KCC-20 issuance), `kob registry validate` / `verify-genesis`, `kob recover` (find the maker's
+//! Implemented: `kob token issue` (fixed-supply KCC-20 issuance), `kob registry validate` / `verify-genesis` / `programs` / `add-program`, `kob recover` (find the maker's
 //! orders on the node from a backup, a recovery / export file or an indexer view, and cancel them with `--cancel`), and
 //! `kob order sweep|cancel` (the maker's stray sweep in place and the maker's cancel from an indexer order view). Planned:
 //! place, replace, take, refund, send.
@@ -8,6 +8,7 @@
 mod common;
 mod inputs;
 mod order;
+mod programs;
 mod recover;
 mod registry;
 mod token;
@@ -24,6 +25,9 @@ USAGE
   kob registry validate <tokens.json> [--network NET]   check a token registry file
   kob registry verify-genesis --network NET [--evidence FILE] [--registry FILE] [--json]
                                re-derive each token's genesis check and live-minter check from chain evidence
+  kob registry programs [--json]   the token-program profiles this build embeds
+  kob registry add-program <ARTIFACT|REDEEM> [--name N] [--slots I/O] [--write] [...]
+                               derive a new token program's profile from its bytes (`kob registry add-program --help`)
   kob recover --from <FILE>... --node ws://HOST:PORT [--amount-left <AMOUNT>] [--cancel --key <KEY> ...]
                                find orders on the node from a backup / export / indexer view; cancel them
                                (`kob recover --help`; `--amount-left` names the amount a partly filled order has left)
@@ -40,6 +44,8 @@ fn main() {
         ["token", "issue", rest @ ..] => token::run_issue(&args[2..2 + rest.len()]),
         ["registry", "validate", rest @ ..] => registry::run_validate(rest),
         ["registry", "verify-genesis", rest @ ..] => registry::run_verify_genesis(rest),
+        ["registry", "programs", rest @ ..] => programs::run_programs(rest),
+        ["registry", "add-program", rest @ ..] => programs::run_add_program(rest),
         ["recover", ..] => recover::run(&args[1..]),
         ["order", ..] => order::run(&args[1..]),
         ["--version"] | ["-V"] => {
