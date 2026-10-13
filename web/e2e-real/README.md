@@ -10,9 +10,9 @@ Test money only. On demand only: CI never runs it (it needs extensions, funded k
 transaction through kob-wasm) with the in-page mock wallets of `src/testing/mock-wallets.ts`: it keeps the run in step with the UI and the protocol
 on any machine. It proves nothing about the real extensions, their popups or a real node (see "What still needs a live run").
 
-**Status.** The scenarios were written before the current ticket: they size orders in lots (the removed `order-lots` field and a
-registry entry with a lot and a tick, `scenarios.mjs`), so they need porting to base-unit amounts before the next run. The results
-below are those of the run of 2026-09-29.
+**Status.** The scenarios are ported to the current UI and protocol (base-unit amounts, the current ticket, confirmation screen and
+My orders flows, the compact header wallet chip) and run offline with `--mock` ("Verified offline" below); the last TN10 run with real
+extensions is the one of 2026-09-29 ("Earlier results").
 
 ## Run
 
@@ -110,6 +110,8 @@ running it through kob-wasm (consensus-valid).
 | Run | KasWare | Kaspire | Kastle |
 |---|---|---|---|
 | `--mock` (node only) | issue, limit, amend, ioc, stop, oco, ifd, pair, merge, balances PASS; market SKIP (no indexer) | same | same (the covenant-signing check ran and passed before the first order) |
+| `--mock` (node only), again on the integrated UI of 2026-10-13 (header wallet chip, net-effect confirmation screen, private-key wallet) | same | same | same |
+| `--mock --indexer`, again on that integrated UI | all 11 PASS, market included | all 11 PASS, market included | all 11 PASS, market included |
 | `--mock --indexer` | all 11 PASS, market included (counterparty bid, market sell, both cancelled) | issue, ifd, pair, market PASS | issue, ifd, pair, market PASS |
 
 Other checks: `node --check` of every module, `test/e2e-infra.test.ts` (12 tests, the shared `common.mjs` helpers), the TN10 preflight without
@@ -131,5 +133,4 @@ The run of 2026-09-29 (old protocol: lots, KasWare and Kaspire, issue / limit / 
 SDK class names: `keepNames`; Kaspire `ordered-args` wiring; an IFD without an indexer is a row, not a position card) are in the git history of
 this file.
 
-Known noise: the app requests `/config.json` (optional, 404 on the static server) and, on the mock node, `/node/fee-estimate` (404 until a test
-sets it).
+Known noise: the app requests `/config.json` (optional, 404 on the static server). The mock node answers `/node/fee-estimate` by default.

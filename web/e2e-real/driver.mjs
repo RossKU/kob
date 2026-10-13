@@ -295,7 +295,9 @@ export async function connectWallet(h, ctx, wallet) {
     await tid(h, 'wallet-address').waitFor({ timeout: POPUP_TIMEOUT_MS });
   });
   const address = await tid(h, 'wallet-address').getAttribute('data-value');
-  const network = (await tid(h, 'wallet-network').innerText()).trim();
+  // the header's wallet chip carries the wallet's network; a network badge (`wallet-network`) appears only when it differs from the app's
+  const network = ((await tid(h, 'wallet-connected').getAttribute('data-network')) ?? '').trim();
+  if ((await tid(h, 'wallet-network').count()) > 0) throw new Error(`the header shows a network mismatch (wallet ${network})`);
   return { address, network, popups, shownAddress: (await tid(h, 'wallet-address').innerText()).trim() };
 }
 
