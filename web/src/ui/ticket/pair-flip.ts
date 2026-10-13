@@ -24,6 +24,9 @@ function flippedType(type: OrderTypeId, side: Side): OrderTypeId {
   return 'market';
 }
 
+/** Layout context of a pair ticket (the flipped form is a pair form too: its sells budget their fills). */
+const PAIR_CTX = { quoteDecimals: 0 };
+
 const textOf = (r: Rational, dp: number, mode: 'down' | 'nearest'): string => formatRational(r, dp, mode, 0);
 
 export interface FlipDecimals {
@@ -45,7 +48,7 @@ export function flipPairForm(form: TicketForm, dec: FlipDecimals): TicketForm {
   const pField = primaryPriceField(form.type);
   const p = pField ? parseDecimal(form.values[pField] ?? '') : null;
   const price = p && p.num > 0n ? p : null;
-  const applicable = new Set([...layoutOf({ type, side, values: form.values }).main, ...layoutOf({ type, side, values: form.values }).advanced]);
+  const applicable = new Set([...layoutOf({ type, side, values: form.values }, PAIR_CTX).main, ...layoutOf({ type, side, values: form.values }, PAIR_CTX).advanced]);
   for (const [id, raw] of Object.entries(form.values)) {
     const text = raw.trim();
     const spec = FIELDS[id];

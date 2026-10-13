@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { errors } from '../../kob/plan-types';
+import { errors, type PairOrderPlan } from '../../kob/plan-types';
+import { makePairEnv } from '../../kob/orders/pair-fixtures';
 import { planOrder } from '../../kob/plan';
 import { consensusCheck, kob, makeEnv, market8x8 } from '../../testing/fixtures';
 import { CASES, CTX, TOKEN, WIDE, form, json, ticketEnv } from './ticket-fixtures';
@@ -602,5 +603,44 @@ describe('pair ticket: prices in the quote token B, tips in KAS', () => {
       exit: { takeProfit: 1_800_000n, stop: 2_400_000n, tip: 50_000n, trail: { step: 10_000n, gap: 20_000n } },
     });
     expect(json(buildIntent(formFromIntent(r.intent!, PAIR), PAIR).intent)).toBe(json(r.intent));
+  });
+});
+
+describe('pair sells budget their fills (maxFills)', () => {
+  // the pair fixtures: A 3 decimals (scale 1000), B 2 decimals; prices B base units per whole A (1_550 = 15.50 BBB per A)
+  const PAIR: TicketCtx = { decimals: 3, scale: 1000n, tick: 1n, quoteDecimals: 2 };
+  const env = makePairEnv();
+
+  it('a pair sell shows the fills field where a buy does; a KAS sell still does not', () => {
+    for (const type of ['limit', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'] as const) {
+      expect(layoutOf(form(type, 'sell', {}), PAIR).advanced, `${type} pair sell`).toContain('maxFills');
+      expect(layoutOf(form(type, 'buy', {}), PAIR).advanced, `${type} pair buy`).toContain('maxFills');
+      expect(layoutOf(form(type, 'sell', {})).advanced, `${type} KAS sell`).not.toContain('maxFills');
+      expect(layoutOf(form(type, 'sell', {}), CTX).advanced, `${type} KAS sell (ctx)`).not.toContain('maxFills');
+    }
+  });
+
+  it('a pair limit / dutch / stop sell carries maxFills to the planner, which funds exactly that many deliveries', () => {
+    const cases: [OrderTypeId, Record<string, string>][] = [
+      ['limit', { amount: '10', price: '15.5', minFill: '1', maxFills: '2' }],
+      ['dutch', { amount: '10', price: '17', priceEnd: '15.5', duration: '10', minFill: '1', maxFills: '2' }],
+      ['stopMarket', { amount: '10', stop: '14', minFill: '1', maxFills: '2' }],
+    ];
+    for (const [type, values] of cases) {
+      const r = buildIntent(form(type, 'sell', values), PAIR);
+      expect(r.errors, type).toEqual([]);
+      expect(r.intent, type).toMatchObject({ maxFills: 2n });
+      const p = planOrder(env, r.intent!) as PairOrderPlan;
+      expect(errors(p), type).toEqual([]);
+      expect(p.pair?.deliveries, type).toBe(2n);
+      expect(p.issues.map((i) => i.code), type).toContain('PAIR_FILLS_LIMITED');
+      // the same form round-trips (the replace dialog)
+      expect(json(buildIntent(formFromIntent(r.intent!, PAIR), PAIR).intent), type).toBe(json(r.intent));
+    }
+    // as many fills as the order can have: no longer limited
+    const all = buildIntent(form('limit', 'sell', { amount: '10', price: '15.5', minFill: '5', maxFills: '2' }), PAIR).intent!;
+    expect(planOrder(env, all).issues.map((i) => i.code)).not.toContain('PAIR_FILLS_LIMITED');
+    // on a KAS market a sell never sends maxFills (the planner would refuse it)
+    expect(buildIntent(form('limit', 'sell', { amount: '1', price: '2.5', maxFills: '2' }), CTX).intent).not.toHaveProperty('maxFills');
   });
 });

@@ -175,7 +175,10 @@ export interface TicketCtx {
   decimals: number;
   scale: bigint;
   tick: bigint;
-  /** decimals of the quote the prices are typed in: 8 (KAS, the default) or a pair's quote token B (prices in B base units per whole A) */
+  /**
+   * decimals of the quote the prices are typed in: 8 (KAS, the default) or a pair's quote token B (prices in B base units per whole A). Set only on
+   * a token/token pair ticket: its presence makes the ticket a pair ticket (`isPairCtx`).
+   */
   quoteDecimals?: number;
   /** minutes WEST of UTC as `Date.getTimezoneOffset()` (0 = UTC): `datetime-local` text is wall-clock time of the browser */
   tzOffsetMin?: number;
@@ -187,6 +190,12 @@ export interface TicketCtx {
    */
   ref?: { buy?: bigint | null; sell?: bigint | null };
 }
+
+/** A token/token pair ticket (the quote is a token B): a pair sell delivers B per fill, so it budgets its fills (`maxFills`) like a buy. */
+export const isPairCtx = (ctx: Pick<TicketCtx, 'quoteDecimals'> | undefined): boolean => ctx?.quoteDecimals !== undefined;
+
+/** Whether an order of `side` budgets its delivery carriers (`maxFills`): a buy on any market, a sell on a pair (it receives token B). */
+const budgetsFills = (side: Side, ctx: Pick<TicketCtx, 'quoteDecimals'> | undefined): boolean => side === 'buy' || isPairCtx(ctx);
 
 export function initialForm(type: OrderTypeId = 'limit', side: Side = 'sell', kas = false): TicketForm {
   const sides = sidesOf(type);
@@ -256,12 +265,15 @@ const STOP_KNOBS = ['minTouch', 'minRestDaa', 'bandDaa', 'keeperTip'];
 const ENTRY_TRIGGER = ['entry.minTouch', 'entry.minRestDaa'];
 const EXIT_TRIGGER = ['exit.minTouch', 'exit.minRestDaa'];
 
-/** Which fields the form shows for its type, side and current selections (conditional fields appear when their switch is on). */
-export function layoutOf(form: TicketForm): Layout {
+/**
+ * Which fields the form shows for its type, side and current selections (conditional fields appear when their switch is on). `ctx` tells a pair
+ * ticket (`isPairCtx`): its sells budget their fills too.
+ */
+export function layoutOf(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals'>): Layout {
   const v = form.values;
   const buy = form.side === 'buy';
   const life = (): string[] => (v.lifetime === 'gtd' ? LIFE : ['lifetime']);
-  const fills = buy ? ['maxFills'] : [];
+  const fills = budgetsFills(form.side, ctx) ? ['maxFills'] : [];
   /** how long the exits of an if-done order live (GTC = 90 days idle from each exit's creation, or until a date) */
   const exitLife = (): string[] => (v['exit.lifetime'] === 'gtd' ? ['exit.lifetime', 'exit.lifetimeAt'] : ['exit.lifetime']);
   /** ladder: the step is asked once there is more than one level */
@@ -624,7 +636,7 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     expiry: lifetimeCond(),
     activeFrom: activeFrom(),
     carrier: r.kas('carrier'),
-    ...(side === 'buy' ? { maxFills: r.positive('maxFills', false) } : {}),
+    ...(budgetsFills(side, ctx) ? { maxFills: r.positive('maxFills', false) } : {}),
   });
   // lifetime of the exits (no day order: the exit is created later); empty = good till cancelled
   const exitExpiry = (): Exclude<CondExpiry, { kind: 'day' }> | undefined => {
@@ -644,7 +656,7 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
   let intent: Record<string, unknown> | null = null;
   switch (type) {
     case 'limit':
-      intent = { type, side, amount, minFill, price: r.price('price'), tip, lifetime: lifetimeSimple(), activeFrom: activeFrom(), crossing: r.pick('crossing', ['auction', 'limit', 'reject'] as const), ...(side === 'buy' ? { maxFills: r.positive('maxFills', false) } : {}) };
+      intent = { type, side, amount, minFill, price: r.price('price'), tip, lifetime: lifetimeSimple(), activeFrom: activeFrom(), crossing: r.pick('crossing', ['auction', 'limit', 'reject'] as const), ...(budgetsFills(side, ctx) ? { maxFills: r.positive('maxFills', false) } : {}) };
       break;
     case 'ioc':
     case 'fok':
@@ -673,7 +685,7 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
       const duration = r.minutes('duration', true);
       intent = {
         type, side, amount, minFill, tip, price: r.price('price'), priceEnd: r.price('priceEnd'), duration: duration === undefined ? undefined : { seconds: duration },
-        stepDaa: r.positive('stepDaa', false), lifetime: lifetimeSimple(), activeFrom: activeFrom(), ...(side === 'buy' ? { maxFills: r.positive('maxFills', false) } : {}),
+        stepDaa: r.positive('stepDaa', false), lifetime: lifetimeSimple(), activeFrom: activeFrom(), ...(budgetsFills(side, ctx) ? { maxFills: r.positive('maxFills', false) } : {}),
       };
       break;
     }

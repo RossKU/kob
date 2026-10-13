@@ -257,6 +257,25 @@ test('the pair ticket offers every order type of the KAS ticket in the same layo
   expect(strip(await labels())).toEqual(strip(pairLabels));
 });
 
+test('a pair sell budgets its fills like a buy: "Fills to fund" reaches the planner; the KAS sell has no such field', async ({ appPage: page, mock }) => {
+  const base = await openPair(page, mock);
+  await pickType(page, 'limit', 'sell');
+  // 2 EXKCC with a minimum fill of 0.5: four possible fills, two funded -> after one partial fill the rest fills only in full
+  await fillFields(page, { price: '0.0515', amount: '2', minFill: '0.5', maxFills: '2' });
+  await waitReviewable(page);
+  await expect(page.getByTestId('order-issue-PAIR_FILLS_LIMITED')).toBeVisible();
+  // one delivery per possible fill: no longer limited
+  await fillFields(page, { maxFills: '4' });
+  await waitReviewable(page);
+  await expect(page.getByTestId('order-issue-PAIR_FILLS_LIMITED')).toHaveCount(0);
+  // the KAS ticket of the same token: a sell has no fills to fund
+  await page.goto(`/#/market/${base}`);
+  await pickType(page, 'limit', 'sell');
+  await expect(page.getByTestId('field-maxFills')).toHaveCount(0);
+  await page.getByTestId('order-side-buy').click();
+  await expect(page.getByTestId('field-maxFills')).toHaveCount(1);
+});
+
 test('without the pair routes the view says "pair book unavailable" and still plans pair orders', async ({ appPage: page, mock }) => {
   await page.route('**/v1/pairs/**', (route) => route.fulfill({ status: 404, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{"error":{"code":"not_found","message":"no such route"}}' }));
   await openPair(page, mock);

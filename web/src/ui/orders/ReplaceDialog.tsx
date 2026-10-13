@@ -121,7 +121,7 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
     }
   };
 
-  const layout = shownForm ? layoutOf(shownForm) : null;
+  const layout = shownForm ? layoutOf(shownForm, ctx) : null;
   const errs = built && shownForm ? visibleErrors(built.errors).filter((e) => (shownForm.values[e.field] ?? '') !== '') : [];
   const issueCtx = { tokenDecimals: token.decimals, tokenTicker: token.ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
 

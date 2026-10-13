@@ -168,7 +168,7 @@ export function OrderTicket(props: OrderTicketProps) {
       if (p.side && !sidesOf(f.type).includes(p.side)) f = switchType(f, 'limit');
       if (p.side) f = setSide(f, p.side);
       if (p.price !== undefined) {
-        if (!layoutOf(f).main.includes('price')) f = switchType(f, 'limit');
+        if (!layoutOf(f, ctx).main.includes('price')) f = switchType(f, 'limit');
         f = setValue(f, 'price', formatPrice(p.price, ctx));
       }
       if (p.amount !== undefined) f = setAmountBase(f, 'amount', p.amount, ctx);
@@ -185,7 +185,7 @@ export function OrderTicket(props: OrderTicketProps) {
     return null;
   }, [ladderSet, limitSet, built.intent, ctx.tick]);
 
-  const layout = layoutOf(form);
+  const layout = layoutOf(form, ctx);
   const errs = visibleErrors(built.errors).filter((e) => (form.values[e.field] ?? '') !== '');
   const ticker = token.ticker;
 
@@ -213,7 +213,7 @@ export function OrderTicket(props: OrderTicketProps) {
     if (!env || refPrice <= 0n) return 0n;
     const withAmount = (amount: bigint): TicketForm => {
       const f = setAmountBase(form, 'amount', amount, ctx);
-      return (form.values.price ?? '') === '' && layoutOf(f).main.includes('price') ? setValue(f, 'price', formatPrice(refPrice, ctx)) : f;
+      return (form.values.price ?? '') === '' && layoutOf(f, ctx).main.includes('price') ? setValue(f, 'price', formatPrice(refPrice, ctx)) : f;
     };
     // the prices of a ladder do not depend on the amount: read them off a probe
     let prices: bigint[] = [refPrice];
