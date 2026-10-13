@@ -453,7 +453,10 @@ function timingRows(d: OrderDescription, extra: { value: bigint | null; deadline
     const at = extra.deadline;
     rows.push(row('deadline', tr('confirm.f.dayDeadline'), `${formatUtc(at)} / ${formatJst(at)}`, 'warn'));
   } else if (d.expiryDaa > 0n) {
-    if (d.expiryDaa >= (f.clock?.daa ?? 0n) + FAR_FUTURE_DAA || (d.expiryDaa >= 1n << 60n)) {
+    // an if-done exit's GTC expiry (`GTC_EXIT_EXPIRY_DAA`, 2^62: 90 days idle from the exit's creation) or one years ahead of the clock. Without
+    // a clock (the signer frame, the app before its clock loads) only the sentinel range is told apart: today's DAA scores are above
+    // FAR_FUTURE_DAA as numbers, and every plain GTC order read as an exit's expiry. The DAA score is shown then.
+    if (d.expiryDaa >= 1n << 60n || (f.clock !== null && d.expiryDaa >= f.clock.daa + FAR_FUTURE_DAA)) {
       rows.push(row('expiry', tr('confirm.f.expiry'), tr('confirm.f.expiryExit'), 'muted'));
     } else {
       const at = approxTime(d.expiryDaa, f);

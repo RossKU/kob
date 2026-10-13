@@ -65,3 +65,14 @@ describe('signer summary: order terms', () => {
     expect(s.orders).toEqual([]);
   });
 });
+
+describe('signer summary: timing without a clock', () => {
+  it("a plain GTC order's expiry is its DAA score, not an if-done exit's (TN10 2026-10-14 B-6); an exit's sentinel still reads as one", () => {
+    const expiry = (name: string, edit: (s: Record<string, string>) => void) =>
+      summarize(kob, build(name, edit), MAKER_PK, HINTS).orders[0]!.rows.find((r) => /expir/i.test(r.label))?.value;
+    // a GTC order placed on testnet-10 in October 2026: DAA ~595.8M now, + 90 days
+    expect(expiry('create.ask', (s) => (s.expiryDaa = '673560000'))).toBe('DAA score 673560000');
+    expect(expiry('create.bid', (s) => (s.expiryDaa = '673560000'))).toBe('DAA score 673560000');
+    expect(expiry('create.ask', (s) => (s.expiryDaa = (1n << 62n).toString()))).toContain('when the exit is created');
+  });
+});
