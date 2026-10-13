@@ -10,6 +10,7 @@ mod common;
 mod inputs;
 mod order;
 mod programs;
+mod recent;
 mod recover;
 mod registry;
 mod token;

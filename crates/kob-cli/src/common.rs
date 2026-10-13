@@ -374,6 +374,8 @@ pub fn sign_validate_send(
         if id != txid {
             eprintln!("warning: the node reported transaction id {id}, expected {txid}");
         }
+        // the key's own token outputs, for the next command within the indexer's lag (confirmed on the node before use)
+        crate::recent::record(network, &signer.pubkey, built, &txid);
         Some(id)
     };
     Ok(Sent { txid, fee: signed.fee.fee, file, submitted })

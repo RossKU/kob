@@ -37,6 +37,9 @@ a market start checked against the last fill (`--ack-market-start`; the start is
 independent checks it, so every market / close sell needs `--ack-market-start` on its own command line, `--yes` is not
 enough, unless `--floor-price P` bounds it: the auction then never goes below P), self-trade and book checks that need the
 indexer (`--ack-no-guards` when it cannot answer). Every UTXO the indexer names is looked up on the node before it is spent.
+The token outputs a command's own transaction creates (its token change) are recorded locally (`$KOB_STATE_DIR`, else the
+per-user state directory), so the next command can spend them before the indexer has seen the transaction; they too are
+looked up on the node first.
 `crates/kob-cli/src/trade/tests_plan.rs` and `tests_plan_kinds.rs` replay the web planner's test cases (every kind: the plain,
 conditional and if-done kinds, on KAS and on a pair) and the golden vectors those tests compare with
 (`crates/kob-protocol/vectors/golden.json`).

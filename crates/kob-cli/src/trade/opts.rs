@@ -34,6 +34,10 @@ COMMON OPTIONS
   --yes, -y         sign and submit without asking (otherwise a terminal asks; without a terminal, refused)
   --json            print the plan and the result as JSON
   --out-dir DIR     also write the signed transaction (and its submitRequest) here
+
+  The token outputs the key's own transactions create are recorded in $KOB_STATE_DIR (default: the per-user state
+  directory, %LOCALAPPDATA%\\kob or ~/.local/state/kob), so the next command can spend its token change before the indexer
+  has seen the transaction; each is still used only when the node holds it.
 ";
 
 /// Parsed arguments: positionals, valued options (repeatable) and flags.

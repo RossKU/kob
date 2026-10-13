@@ -911,3 +911,46 @@ fn merge_chains_transfers_to_the_key() {
     // the largest input carrier (the 100 TST UTXO's 10 KAS), at most 2 KAS
     assert!(s2.tx.outputs.iter().any(|o| o.script_public_key == all && o.value == 2 * KAS), "one output of the whole amount");
 }
+
+/// Two sells in a row within the indexer's lag (TN10 2026-10-14 B-9): the indexer still lists the token UTXO the first one
+/// spent and not its change. The CLI's record of its own transaction's token outputs gives the second sell the change,
+/// confirmed on the node like every token UTXO; without the record (another machine, a lost file) only the indexer's stale
+/// list is there and the sell finds nothing to sell.
+#[test]
+fn a_second_sell_within_the_indexer_lag_spends_the_first_ones_token_change() {
+    use kob_protocol::tx::spk_from_string;
+    let w = world("backtoback", &[]);
+    let place = crate::trade::place::run;
+    let sell = |p: &str| format!("limit --token TST --side sell --amount 30TST --price {p} --yes");
+    assert_eq!(run(place, w.args(0x11, &sell("3KAS"))), 0);
+    let s = w.signed(".place.json");
+    // the node confirms the transaction (the indexer has not seen it): its inputs are spent, its outputs unspent
+    let txid = s.tx.id;
+    {
+        let mut n = w.node_state.lock().unwrap();
+        let spent: Vec<([u8; 32], u32)> = s.tx.inputs.iter().map(|i| (i.transaction_id, i.index)).collect();
+        n.utxos.retain(|u| !spent.contains(&(u.txid, u.index)));
+        for (i, o) in s.tx.outputs.iter().enumerate() {
+            let spk = spk_from_string(&o.script_public_key).unwrap();
+            n.utxos.push(NodeUtxo {
+                address: Some(address_of(&spk, NET).unwrap()),
+                txid,
+                index: i as u32,
+                amount: o.value,
+                spk: spk_bytes(&spk),
+                daa: 1_000_000,
+                coinbase: false,
+                covenant_id: o.covenant.as_ref().map(|c| c.covenant_id),
+            });
+        }
+    }
+    let record = crate::recent::state_dir().unwrap().join("recent-token-outputs.json");
+    let kept = std::fs::read_to_string(&record).expect("the record of the first sell's token change");
+    std::fs::remove_file(&record).unwrap();
+    assert_eq!(run(place, w.args(0x11, &sell("3.1KAS"))), 1, "the indexer's stale list alone: nothing to sell");
+    std::fs::write(&record, kept).unwrap();
+    assert_eq!(run(place, w.args(0x11, &sell("3.1KAS"))), 0);
+    let s2 = w.signed(".place.json");
+    assert!(s2.tx.inputs.iter().any(|i| i.transaction_id == txid && i.utxo.covenant_id == Some(TOKEN)), "spends the change");
+    assert_eq!(w.submitted(), 2);
+}

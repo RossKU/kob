@@ -75,7 +75,8 @@ fn i64_of(v: Option<&Value>) -> Option<i64> {
     }
 }
 
-/// The maker's token UTXOs of `m`: listed by the indexer (`GET /v1/token-utxos`), each confirmed on the node.
+/// The maker's token UTXOs of `m`: listed by the indexer (`GET /v1/token-utxos`) or by the record of the key's own recent
+/// transactions ([`crate::recent`]: outputs the indexer may not have seen yet), each confirmed on the node.
 pub fn token_utxos(indexer: &str, node: &str, network: &str, m: &TokenMarket, owner: &[u8; 32]) -> Result<Vec<TokenUtxo>, String> {
     let path = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(owner), to_hex(&m.cov));
     let v = http::get_ok(indexer, &path, INDEXER_TIMEOUT)?;
@@ -97,6 +98,13 @@ pub fn token_utxos(indexer: &str, node: &str, network: &str, m: &TokenMarket, ow
             continue;
         };
         cands.push((st, txid, index as u32));
+    }
+    // the key's own outputs the indexer has not seen yet (its token change of a transaction just sent): candidates like the
+    // indexer's, confirmed on the node below
+    for (st, txid, index) in crate::recent::candidates(network, owner, &m.cov) {
+        if st.family() == m.family && st.owner() == *owner && !cands.iter().any(|c| c.1 == txid && c.2 == index) {
+            cands.push((st, txid, index));
+        }
     }
     let spks: Vec<_> = cands.iter().map(|c| c.0.spk_with(tt)).collect();
     let at = lookup(node, network, &spks)?;
