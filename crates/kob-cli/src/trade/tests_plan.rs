@@ -626,3 +626,34 @@ fn a_hostile_book_never_panics() {
     assert!(b.asks.iter().all(|l| l.price > 0));
     let _ = super::data::firm_reference(&b, 1);
 }
+
+/// `kob replace` of a stop-only sell (no take-profit leg) with a tip: the tip is bounded by the stop band's floor, not by a
+/// missing take-profit (it refused every amendment of such an order).
+#[test]
+fn a_stop_only_sell_with_a_tip_can_be_amended() {
+    let m = market(TemplateId::Kcc20Ref);
+    let e = env(&m);
+    let p = valid(
+        &e,
+        Intent::Cond(CondIntent { stop: Some(230_000_000), tip: 1_000_000, ..cond(CondKind::StopMarket, Side::Sell, 10 * TOK) }),
+    );
+    let live = super::data::Live {
+        cov: [0xa1; 32],
+        order: kob_protocol::tx::OrderUtxo {
+            utxo: Utxo { transaction_id: txid(9), index: 0, amount: C as u64, block_daa_score: 500, covenant_id: Some([0xa1; 32]) },
+            state: p.states[0].clone(),
+        },
+        custody: None,
+        prefund: None,
+        strays: vec![],
+        foreign: 0,
+        deadline: None,
+    };
+    let input = super::actions::AmendInput { stop: Some(220_000_000), ..Default::default() };
+    let (rep, _, _) = super::actions::replacement(&live, &input, CLOCK.daa, 1).unwrap();
+    let AnyState::KobCondAsk(c) = rep else { panic!("{rep:?}") };
+    assert_eq!((c.stop_price, c.tip), (220_000_000, 1_000_000));
+    // a tip at the stop band's floor is still refused
+    let input = super::actions::AmendInput { tip: Some(230_000_000), ..Default::default() };
+    assert!(super::actions::replacement(&live, &input, CLOCK.daa, 1).unwrap_err().contains("below every leg price"));
+}

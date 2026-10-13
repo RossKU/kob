@@ -274,7 +274,7 @@ pub fn replacement(live: &Live, i: &AmendInput, now_daa: i64, tick: i64) -> Resu
                     legs!(x, Side::Sell);
                     if x.tip < 0
                         || x.tip
-                            >= x.tp_price.max(1).min(if x.stop_price > 0 {
+                            >= (if x.tp_price > 0 { x.tp_price } else { i64::MAX }).min(if x.stop_price > 0 {
                                 stop_worst_price(Side::Sell, x.stop_price, x.slip_bps)
                             } else {
                                 i64::MAX
