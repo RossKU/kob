@@ -1205,6 +1205,85 @@ fn supported_advertises_only_what_is_configured() {
     assert_eq!(s["kinds"][0]["extra"]["profiles"], serde_json::json!(["standard-native", "kcc20"]));
 }
 
+/// `/supported` advertises only what can be settled now: nothing while the node does not answer, and no intent mode while the
+/// book it executes against is not ready (the indexer lags); the node probe is shared for `healthCache`.
+#[test]
+fn supported_follows_the_node_and_the_book() {
+    use super::facilitator::{FacilitatorConfig, IntentRuntime};
+    use std::sync::atomic::AtomicBool;
+    let f = Fixture::new();
+    let mut policy = Policy::new(Network::Testnet10);
+    let prog = kob_protocol::artifacts::template(kob_protocol::artifacts::TemplateId::Kcc20Ref);
+    policy.tokens.insert(AllowedToken::new([0xaa; 32], prog.id, [0xcc; 32], Custody::Unconditional, "TKN", 6)).unwrap();
+    let lagging = Arc::new(AtomicBool::new(false));
+    let lag = lagging.clone();
+    let fac = |cache: Duration| {
+        let lag = lag.clone();
+        Facilitator::new(
+            policy.clone(),
+            f.chain.clone(),
+            f.clock.clone(),
+            f.ledger.clone(),
+            FacilitatorConfig { health_cache: cache, ..Default::default() },
+        )
+        .with_intents(IntentRuntime {
+            book: Arc::new(|| Ok(kob_x402::intent::BookView::default())),
+            keeper: Default::default(),
+            max_attempts: 1,
+            lock_margin_daa: 0,
+        })
+        .with_book_readiness(Arc::new(move || {
+            if lag.load(Ordering::SeqCst) {
+                Err("indexer catching_up, 9000 DAA behind the node".into())
+            } else {
+                Ok(())
+            }
+        }))
+    };
+    let kinds = |s: &serde_json::Value| s["kinds"].as_array().unwrap().len();
+    let fac0 = fac(Duration::ZERO);
+    let s = fac0.supported();
+    assert_eq!(kinds(&s), 1);
+    assert_eq!(s["kinds"][0]["extra"]["routeBindings"], serde_json::json!(["kob-swap-v1", "kob-intent-v1"]));
+    assert!(s["kinds"][0]["extra"].get("router").is_some());
+    assert!(fac0.settle_health().degraded().is_empty());
+
+    // the indexer lags: the intent mode (and its router) is not offered; everything settled from the node still is
+    lagging.store(true, Ordering::SeqCst);
+    let s = fac0.supported();
+    assert_eq!(s["kinds"][0]["extra"]["routeBindings"], serde_json::json!(["kob-swap-v1"]));
+    assert!(s["kinds"][0]["extra"].get("router").is_none());
+    assert_eq!(s["kinds"][0]["extra"]["profiles"], serde_json::json!(["standard-native", "kcc20"]));
+    assert!(fac0.settle_health().degraded()[0].starts_with("book not ready: indexer catching_up"));
+    lagging.store(false, Ordering::SeqCst);
+
+    // the node does not answer: nothing can be verified or settled, nothing is advertised
+    f.chain.set_unavailable(true);
+    let s = fac0.supported();
+    assert_eq!(kinds(&s), 0, "{s}");
+    let h = fac0.settle_health();
+    assert!(!h.paused && h.node.is_err());
+    assert!(h.degraded()[0].starts_with("node unreachable"));
+    assert_eq!(fac0.settle_health_cached().node, h.node, "the last probe, without probing");
+    f.chain.set_unavailable(false);
+    assert_eq!(kinds(&fac0.supported()), 1, "back as soon as the node answers");
+
+    // one probe serves `healthCache`: a node lost right after it is noticed at the next probe
+    let cached = fac(Duration::from_secs(3600));
+    assert_eq!(kinds(&cached.supported()), 1);
+    f.chain.set_unavailable(true);
+    assert_eq!(kinds(&cached.supported()), 1, "within the cache");
+    assert_eq!(kinds(&fac(Duration::ZERO).supported()), 0);
+    f.chain.set_unavailable(false);
+
+    // paused: empty without probing the node
+    fac0.set_kill(true);
+    f.chain.set_unavailable(true);
+    assert_eq!(kinds(&fac0.supported()), 0);
+    assert_eq!(fac0.settle_health().degraded(), vec!["paused".to_string()]);
+    f.chain.set_unavailable(false);
+}
+
 #[test]
 fn metrics_text_counts_settlements_and_ledger_states() {
     let f = Fixture::new();

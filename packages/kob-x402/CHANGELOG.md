@@ -4,6 +4,16 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Facilitator: `/supported` advertises only what it can settle now
+
+- kob-executor: `GET /supported` is empty while the facilitator is paused (as before) or its node does not answer a probe
+  (`getBlockDagInfo`, cached for `FacilitatorConfig::health_cache`, default 2 s, one probe at a time, off the async
+  workers), and lists the intent mode (`kob-intent-v1`, `router`) only while the book it executes against is ready
+  (`Facilitator::with_book_readiness`; inside `kob-executor run` the indexer caught up or within its lag tolerance, which
+  also gates the intent executions' book). `GET /health` adds `degraded` (from the last probe, no chain access).
+  `Facilitator::settle_health` / `settle_health_cached`, `SettleHealth`, `BookReadiness`; `x402::prepare_with` and
+  `executor::x402_service` take the readiness / the indexer's health (**breaking**, Rust).
+
 ### Rust payer: the retry driver pays intents (re-send only)
 
 - `kob_x402::client::retry::pay_intent_with_retry(policy, max_timeout_seconds, deadline_ms, creation, transport)` over a

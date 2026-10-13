@@ -115,6 +115,8 @@ pub struct FacilitatorConfig {
     /// Re-broadcasts of the same transaction while a settle observes it and it left the mempool without being accepted (an
     /// eviction, a node restart). A refused re-broadcast ends them; the observation goes on as before.
     pub rebroadcasts: u32,
+    /// How long `/supported` trusts its last probe of the node (one probe at a time; `0` probes on every call).
+    pub health_cache: Duration,
 }
 
 impl Default for FacilitatorConfig {
@@ -129,7 +131,41 @@ impl Default for FacilitatorConfig {
             ambiguous_grace: Duration::from_secs(60 * 60),
             submit_retries: 2,
             rebroadcasts: 2,
+            health_cache: Duration::from_secs(2),
         }
+    }
+}
+
+/// Whether the book intents are executed against may be planned against now (inside `kob-executor run`: the indexer is
+/// caught up with the node or within its lag tolerance); `Err` names why not.
+pub type BookReadiness = Arc<dyn Fn() -> std::result::Result<(), String> + Send + Sync>;
+
+/// What the facilitator can settle right now, as `/supported` advertises it (and `/health` reports it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettleHealth {
+    /// The kill switch, its file or the process's pause file: nothing is verified, settled or broadcast.
+    pub paused: bool,
+    /// The node did not answer the last probe: nothing can be verified or settled.
+    pub node: std::result::Result<(), String>,
+    /// The book of intent executions cannot be planned against (the indexer lags or is not following): intents are not
+    /// offered. `Ok` when no readiness is wired (`kob-executor x402`, tests).
+    pub book: std::result::Result<(), String>,
+}
+
+impl SettleHealth {
+    /// Why something is not offered now (empty: everything configured is).
+    pub fn degraded(&self) -> Vec<String> {
+        let mut out = vec![];
+        if self.paused {
+            out.push("paused".to_string());
+        }
+        if let Err(e) = &self.node {
+            out.push(format!("node unreachable: {e}"));
+        }
+        if let Err(e) = &self.book {
+            out.push(format!("book not ready: {e}"));
+        }
+        out
     }
 }
 
@@ -314,6 +350,10 @@ pub struct Facilitator {
     /// Invoices; `None` = not served.
     pub invoices: Option<InvoiceRuntime>,
     invoice_locks: KeyLocks,
+    /// The indexer's readiness for intent executions (`None`: always ready).
+    book_readiness: Option<BookReadiness>,
+    /// The last probe of the node (when, and its answer), shared by `/supported` calls within `config.health_cache`.
+    node_probe: Mutex<Option<(Instant, std::result::Result<(), String>)>>,
     /// The fee rates of the process (`crate::fee`): intent executions go at the high rate, expiries at the normal rate, both
     /// held to the total cap. Inside `kob-executor run` the runner publishes them; elsewhere they stay the floor.
     pub fees: crate::fee::FeeBoard,
@@ -379,7 +419,45 @@ impl Facilitator {
             invoices: None,
             invoice_locks: KeyLocks::default(),
             fees: crate::fee::FeeBoard::default(),
+            book_readiness: None,
+            node_probe: Mutex::new(None),
         }
+    }
+
+    /// Wires the readiness of the book intents are executed against (inside `kob-executor run`: the indexer's health). While
+    /// it is not ready the intent mode is not advertised (`/supported`).
+    pub fn with_book_readiness(mut self, f: BookReadiness) -> Facilitator {
+        self.book_readiness = Some(f);
+        self
+    }
+
+    /// The node's answer to a cheap read (its virtual DAA score), probed at most once per `config.health_cache`.
+    fn node_reachable(&self) -> std::result::Result<(), String> {
+        let mut g = self.node_probe.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((at, r)) = g.as_ref() {
+            if at.elapsed() < self.config.health_cache {
+                return r.clone();
+            }
+        }
+        let r = self.chain.virtual_daa_score().map(|_| ()).map_err(|e| e.to_string());
+        *g = Some((Instant::now(), r.clone()));
+        r
+    }
+
+    /// What the facilitator can settle right now (probes the node, see `config.health_cache`).
+    pub fn settle_health(&self) -> SettleHealth {
+        let paused = self.killed();
+        // a paused facilitator settles nothing whatever the node says: no probe
+        let node = if paused { Ok(()) } else { self.node_reachable() };
+        let book = self.book_readiness.as_ref().map_or(Ok(()), |f| f());
+        SettleHealth { paused, node, book }
+    }
+
+    /// [`Facilitator::settle_health`] from the last node probe only (no chain access; `Ok` before the first probe).
+    pub fn settle_health_cached(&self) -> SettleHealth {
+        let node = self.node_probe.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map_or(Ok(()), |(_, r)| r.clone());
+        let book = self.book_readiness.as_ref().map_or(Ok(()), |f| f());
+        SettleHealth { paused: self.killed(), node, book }
     }
 
     /// Serves intent-based swap-and-pay with this book and keeper.
@@ -419,9 +497,14 @@ impl Facilitator {
 
     // ------------------------------------------------------------------------------- supported
 
-    /// `GET /supported` (x402 v2 supported response with the binding's `extra`). Empty while killed.
+    /// `GET /supported` (x402 v2 supported response with the binding's `extra`): only what the facilitator can settle NOW.
+    /// Empty while it is paused (the kill switch, its file, the process's pause file) or the node does not answer (nothing
+    /// can be verified or settled); the intent mode only while the book it executes against is ready (the indexer caught up
+    /// or within its lag tolerance). A payer or merchant reading it never sees a scheme, a route or a token that would only
+    /// fail at `/settle`.
     pub fn supported(&self) -> Value {
-        if self.killed() {
+        let health = self.settle_health();
+        if health.paused || health.node.is_err() {
             return json!({ "kinds": [], "extensions": [], "signers": {} });
         }
         let mut profiles = vec![Profile::StandardNative.as_str()];
@@ -443,7 +526,7 @@ impl Facilitator {
         // KOB extras (proposals to the binding): swap-and-pay routes and the accepted token list
         if self.policy.swap_enabled && has_tokens {
             let mut b = vec![kob_x402::wire::BINDING_SWAP];
-            if self.intents.is_some() && kob_protocol::router::check_router().is_ok() {
+            if self.intents.is_some() && health.book.is_ok() && kob_protocol::router::check_router().is_ok() {
                 b.push(kob_x402::wire::BINDING_INTENT);
                 extra.insert("router".into(), json!(kob_protocol::router::ROUTER_ARTIFACT_ID));
             }

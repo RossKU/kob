@@ -358,12 +358,14 @@ where
 /// The x402 facilitator of `kob-executor run`: the configuration at `path` with the indexer's node
 /// and network, over [`IndexedChain`](crate::x402::indexed::IndexedChain) (node RPC + the indexer's
 /// acceptance tracking). `pause_file` (`--pause-file`) disables it like its own `killSwitchFile`: nothing is verified,
-/// settled or broadcast while it exists.
+/// settled or broadcast while it exists. With the indexer's `health`, intents are executed only against a book that is caught
+/// up or within the lag tolerance (the same gate as the matcher's), and `/supported` offers them only then.
 pub fn x402_service(
     path: &std::path::Path,
     index: &crate::config::IndexerConfig,
     ingest: Arc<Mutex<Ingest>>,
     pause_file: Option<PathBuf>,
+    health: Option<Arc<HealthState>>,
 ) -> Result<crate::x402::Service> {
     use crate::x402::config::X402Config;
     let mut xcfg = X402Config::load(path)?;
@@ -379,14 +381,25 @@ pub fn x402_service(
         bail!("x402: the facilitator is configured for {}, the indexer follows {}", built.network, index.network);
     }
     let node = crate::x402::node_chain(&xcfg, &built).map_err(anyhow::Error::msg)?;
+    let ready: Option<crate::x402::facilitator::BookReadiness> = health.map(|h| {
+        Arc::new(move || match h.snapshot().not_ready() {
+            Some(why) => Err(why),
+            None => Ok(()),
+        }) as crate::x402::facilitator::BookReadiness
+    });
     let book_ingest = ingest.clone();
+    let book_ready = ready.clone();
     let book: crate::x402::BookFn = Arc::new(move || {
+        // a lagging store may list orders that are spent by now: no intent is planned against it
+        if let Some(r) = &book_ready {
+            r()?;
+        }
         let g = book_ingest.lock().unwrap_or_else(|e| e.into_inner());
         let b = book::snapshot(g.conn(), None).map_err(|e| e.to_string())?;
         Ok(crate::x402::quote::book_view(&b))
     });
     let chain = crate::x402::indexed::IndexedChain::new(node, ingest);
-    crate::x402::prepare_with(built, Arc::new(chain), Some(book)).map_err(anyhow::Error::msg)
+    crate::x402::prepare_with(built, Arc::new(chain), Some(book), ready).map_err(anyhow::Error::msg)
 }
 
 /// An open facilitator (`auth: "open"`) is for a host where nothing relays connections to it. A read API that listens on a
@@ -456,7 +469,8 @@ pub async fn run(a: RunArgs) -> Result<()> {
             let c = cfg.clone();
             let p = p.clone();
             let pause = a.pause_file.clone();
-            Some(tokio::task::block_in_place(move || x402_service(&p, &c, ingest, pause))?)
+            let health = indexer.health.clone();
+            Some(tokio::task::block_in_place(move || x402_service(&p, &c, ingest, pause, Some(health)))?)
         }
         None => None,
     };

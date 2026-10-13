@@ -4,10 +4,10 @@
 //!
 //! | Route | Access |
 //! |---|---|
-//! | `GET /supported` | public (empty while the kill switch is on) |
+//! | `GET /supported` | public: what can be settled now (empty while paused or the node is unreachable; no intents while the book lags) |
 //! | `POST /verify` | merchant API key |
 //! | `POST /settle` | merchant API key |
-//! | `GET /health` | public, no chain access |
+//! | `GET /health` | public, no chain access (the last node probe of `/supported`) |
 //! | `GET /metrics` | admin key or loopback peer |
 //! | `POST /invoices` | merchant API key (invoices enabled) |
 //! | `GET /invoices/{id}` | public: the invoice (its canonical JSON hashes to `id`) |
@@ -481,14 +481,23 @@ async fn supported_h(State(st): State<Arc<AppState>>, req: Request) -> Response 
     if let Err(r) = ip_check(&st, &req) {
         return r;
     }
-    json_response(StatusCode::OK, &st.fac.supported())
+    // `supported` probes the node (at most once per `FacilitatorConfig::health_cache`): off the async workers
+    let fac = st.fac.clone();
+    match tokio::task::spawn_blocking(move || fac.supported()).await {
+        Ok(v) => json_response(StatusCode::OK, &v),
+        Err(_) => internal_error(),
+    }
 }
 
 async fn health_h(State(st): State<Arc<AppState>>, req: Request) -> Response {
     if let Err(r) = ip_check(&st, &req) {
         return r;
     }
-    json_response(StatusCode::OK, &json!({ "status": "ok", "network": st.fac.policy.network.as_str(), "enabled": !st.fac.killed() }))
+    let h = st.fac.settle_health_cached();
+    json_response(
+        StatusCode::OK,
+        &json!({ "status": "ok", "network": st.fac.policy.network.as_str(), "enabled": !h.paused, "degraded": h.degraded() }),
+    )
 }
 
 async fn metrics_h(State(st): State<Arc<AppState>>, req: Request) -> Response {

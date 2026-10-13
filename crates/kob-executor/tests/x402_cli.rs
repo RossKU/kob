@@ -63,7 +63,7 @@ fn strict_config_is_enforced_at_startup() {
     }
 }
 
-/// A node that answers `getServerInfo` on every connection.
+/// A node that answers `getServerInfo` (and `getBlockDagInfo`, the facilitator's health probe) on every connection.
 fn mock_node(network_id: &'static str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("ws://{}", listener.local_addr().unwrap());
@@ -79,6 +79,9 @@ fn mock_node(network_id: &'static str) -> String {
                             "id": req["id"],
                             "params": { "networkId": network_id, "hasUtxoIndex": true, "isSynced": true, "virtualDaaScore": 7 }
                         }),
+                        Some("getBlockDagInfo") => {
+                            json!({ "id": req["id"], "params": { "network": network_id, "virtualDaaScore": 7 } })
+                        }
                         _ => json!({ "id": req["id"], "error": { "code": 0, "message": "unsupported", "data": null } }),
                     };
                     if ws.send(tungstenite::Message::text(reply.to_string())).is_err() {

@@ -129,11 +129,17 @@ pub type BookFn = Arc<dyn Fn() -> Result<kob_x402::intent::BookView, String> + S
 /// Opens the ledger and builds the facilitator over `chain`, then reconciles the ledger once. Without a book,
 /// intent payments are refused (`intents.enabled` is an error).
 pub fn prepare(built: Built, chain: Arc<dyn ChainView>) -> Result<Service, String> {
-    prepare_with(built, chain, None)
+    prepare_with(built, chain, None, None)
 }
 
-/// [`prepare`] with the book intent payments are executed against.
-pub fn prepare_with(built: Built, chain: Arc<dyn ChainView>, book: Option<BookFn>) -> Result<Service, String> {
+/// [`prepare`] with the book intent payments are executed against, and its readiness (the indexer's health: while it is not
+/// ready `/supported` does not offer the intent mode).
+pub fn prepare_with(
+    built: Built,
+    chain: Arc<dyn ChainView>,
+    book: Option<BookFn>,
+    book_ready: Option<facilitator::BookReadiness>,
+) -> Result<Service, String> {
     let cfg = &built.cfg;
     let ledger = if cfg.ledger == ":memory:" {
         tracing::warn!("x402: volatile ledger; replay protection is lost on restart");
@@ -174,6 +180,9 @@ pub fn prepare_with(built: Built, chain: Arc<dyn ChainView>, book: Option<BookFn
             lock_margin_daa: cfg.intents.lock_margin_daa,
         });
         tracing::info!("x402: intent-based swap-and-pay on (router {})", kob_protocol::router::ROUTER_ARTIFACT_ID);
+    }
+    if let Some(r) = book_ready {
+        fac = fac.with_book_readiness(r);
     }
     if cfg.invoices.enabled {
         let path = cfg.invoices.store.clone().unwrap_or_else(|| {

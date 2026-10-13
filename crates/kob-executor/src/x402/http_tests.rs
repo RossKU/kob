@@ -179,6 +179,19 @@ async fn supported_and_health_are_public_json() {
     assert_eq!(json_of(&body)["status"], "ok");
 }
 
+#[tokio::test]
+async fn supported_is_empty_and_health_degraded_while_the_node_does_not_answer() {
+    let a = app();
+    a.fx.chain.set_unavailable(true);
+    let (status, _, b) = send(&a.app, get("/supported"), "10.0.0.1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json_of(&b)["kinds"].as_array().unwrap().is_empty(), "nothing it could not settle is advertised");
+    let h = json_of(&send(&a.app, get("/health"), "10.0.0.1").await.2);
+    assert_eq!(h["status"], "ok");
+    assert_eq!(h["enabled"], true);
+    assert!(h["degraded"][0].as_str().unwrap().starts_with("node unreachable"), "{h}");
+}
+
 // -------------------------------------------------------------------------------------- authentication
 
 #[tokio::test]

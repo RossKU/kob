@@ -238,6 +238,12 @@ holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignor
   `/verify` and `/settle` are refused (503, `/supported` empty) and no intent execution or expiry is broadcast (they wait
   and continue once both are gone). A relative `killSwitchFile` is resolved against the configuration file's directory
   (the example's `x402.kill` sits next to the file), not the working directory.
+* **What `/supported` advertises.** Only what can be settled at that moment: nothing while the facilitator is paused or
+  the node does not answer a probe (`getBlockDagInfo`, at most one every 2 s, shared by every caller), and the intent mode
+  (`kob-intent-v1`, `router`) only while the indexer is caught up or within its lag tolerance (`max_lag_secs`, the same
+  gate as the matcher's); while it lags, intent executions are not planned either (a settle answers `node_unavailable`,
+  retryable). `GET /health` reports why in `degraded` (`paused`, `node unreachable: ...`, `book not ready: ...`) from the
+  last probe, without probing.
 * **Paths.** A relative `ledger`, `invoices.store` or `registry` in the configuration file is resolved against the file's
   directory too (under systemd the working directory is `/`). A relative ledger or invoice store that exists next to the
   working directory but not next to the configuration file (written by an earlier build) is refused at startup: set the
@@ -359,7 +365,8 @@ at any time, and the SDK builds the same expiry for anyone to submit (`expireInt
   executed against the book's `KobBidKron`s.
 * The executions' orders are reserved for the matcher of the same process while they are in flight, like
   payer-signed swap-and-pay routes.
-* `/supported` lists `kob-intent-v1` in `routeBindings` and the `router` artifact id.
+* `/supported` lists `kob-intent-v1` in `routeBindings` and the `router` artifact id (while the indexer's book is ready,
+  A.6).
 * Metrics: `kob_x402_intent_executions`, `kob_x402_intent_conflicts`, `kob_x402_intent_failed`.
 * Ledger: an intent entry is keyed by the creation id; `intent.executions` lists every execution with its
   state (`live`, `dead`, `accepted`) and `intent.lost` the orders lost to other fills. The settlement response
