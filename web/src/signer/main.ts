@@ -8,6 +8,7 @@ import { loadKob } from '../kob/wasm.browser';
 import { t } from '../i18n';
 import { createSignerCore, SignerKeyError, type PendingRequest, type SignerCore } from './core';
 import { fromParent, parseAppMessage, toApp, type SignerToApp } from './protocol';
+import type { SummaryOrder } from './summary';
 
 /** the app's origin: the origin of this page's URL (this document's own origin is opaque, "null") */
 const APP_ORIGIN = new URL(location.href).origin;
@@ -80,6 +81,20 @@ function watchVisibility(target: Element, onChange: (visible: boolean) => void):
 
 let stopVisibility: () => void = () => undefined;
 
+/** One order the request creates or amends: its title, token and terms (an if-done entry's committed exit nested below). */
+function orderView(o: SummaryOrder, testid: string): HTMLElement {
+  const rows = el('dl', { class: 'lines' });
+  for (const r of o.rows) rows.append(el('div', { class: 'line' }, el('dt', {}, r.label), el('dd', {}, r.value)));
+  return el(
+    'section',
+    { class: 'order', 'data-testid': testid },
+    el('h2', {}, o.title),
+    el('p', { class: 'muted token' }, o.token),
+    rows,
+    ...(o.exit ? [orderView(o.exit, `${testid}-exit`)] : []),
+  );
+}
+
 function requestView(core: SignerCore, req: PendingRequest): void {
   stopVisibility();
   const s = req.summary;
@@ -117,6 +132,7 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   show(
     el('h1', { 'data-testid': 'signer-title' }, s.title),
     list,
+    ...s.orders.map((o, i) => orderView(o, `signer-order-${i}`)),
     ...(s.problems > 0 ? [el('p', { class: 'error', 'data-testid': 'signer-problems' }, t('signer.problems', { count: s.problems }))] : []),
     actions,
   );

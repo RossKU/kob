@@ -43,3 +43,7 @@ button:disabled { color: var(--muted); background: var(--bg); border-color: var(
 .line.out dd { color: var(--bad); }
 .line.in dd { color: var(--ok); }
 .line.fee { border-bottom: 0; }
+.order { margin-top: 10px; padding-top: 6px; border-top: 2px solid var(--border); }
+.order h2 { font-size: 0.95rem; margin: 0 0 2px; }
+.order .token { margin: 0 0 4px; overflow-wrap: anywhere; }
+.order .order { margin-left: 10px; }

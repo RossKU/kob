@@ -161,21 +161,21 @@ describe('signer core: no storage, no key in any message', () => {
   });
 });
 
-describe('signer summary: decoded in the frame, net effect and fee only', () => {
+describe('signer summary: decoded in the frame, net effect, order terms and fee', () => {
   it('a token send: the tokens leave this key, KAS pays the fee', () => {
     const s = summarize(kob, buildSend(), MAKER_PK, [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 2 }]);
     expect(s.title).toBe('Send');
     const token = s.lines.find((l) => l.label.startsWith('EXKCC'))!;
     expect(token.value).toBe('−90'); // 9000 base units at 2 decimals
     expect(token.dir).toBe('out');
-    expect(s.lines.find((l) => l.label === 'EXKCC (7070…7070) to other keys')?.value).toBe('90');
+    expect(s.lines.find((l) => l.label === 'EXKCC (70707070…70707070) to other keys')?.value).toBe('90');
     expect(s.fee).toMatch(/ KAS$/);
   });
 
   it('without a hint a token is named by its covenant id and counted in base units', () => {
     const d = decodeSigning({ kob, built: buildSend(), maker: MAKER_PK, registry: null });
     const s = summaryLines(d, []);
-    expect(s.lines.some((l) => l.label === 'Token 7070…7070' && l.value === '−9000 base units')).toBe(true);
+    expect(s.lines.some((l) => l.label === 'Token 70707070…70707070' && l.value === '−9000 base units')).toBe(true);
   });
 
   it('a cancel', () => {

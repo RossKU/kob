@@ -235,7 +235,7 @@ export function orderTypeCode(d: OrderDescription, dayDeadline: bigint | null = 
   }
 }
 
-interface Fmt {
+export interface Fmt {
   tr: Translate;
   ref: TokenRef;
   clock: Clock | null;
@@ -461,7 +461,7 @@ function timingRows(d: OrderDescription, extra: { value: bigint | null; deadline
   return rows;
 }
 
-function orderTitle(d: OrderDescription, deadline: bigint | null, f: Fmt): string {
+export function orderTitle(d: OrderDescription, deadline: bigint | null, f: Fmt): string {
   const type = orderTypeCode(d, deadline);
   const kind = f.tr(`confirm.order.${type}`);
   return f.tr('confirm.order.title', { side: f.tr(d.side === 'sell' ? 'common.side.sell' : 'common.side.buy'), type: kind });
