@@ -555,17 +555,25 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<Pl
         .transpose()?;
     let order_scale = |cov: &[u8; 32]| data::order_scale(&indexer, cov);
     let open = |entered| market::OpenToken { network: &c.network, order_scale: &order_scale, entered };
-    let a = market::resolve_with(p.get("--token").ok_or("--token is required")?, &reg, &idx, Some(&open(entered)))?;
-    let b = match p.get("--quote") {
+    let mut a = market::resolve_with(p.get("--token").ok_or("--token is required")?, &reg, &idx, Some(&open(entered)))?;
+    let mut b = match p.get("--quote") {
         Some(q) => Some(market::resolve_with(q, &reg, &idx, Some(&open(None)))?),
         None => None,
     };
+    // a commitment no source names: the one the wallet's own holdings of the token have (checked on the node), never assumed
+    let mut found = vec![];
+    for m in [Some(&mut a), b.as_mut()].into_iter().flatten().filter(|m| m.ext_source == market::ExtSource::Unknown) {
+        let held = data::token_utxos(&indexer, c.need_node()?, &c.network, m, &maker)?;
+        let exts: Vec<[u8; 32]> = held.iter().map(|u| u.state.extension()).collect();
+        found.extend(m.take_ext_from_holdings(&exts)?);
+    }
     let side = side_for(kind, p)?;
     let if_done = matches!(kind, "ifd" | "ifo" | "repeat-ifd" | "repeat-ifo");
     let carrier = carrier_arg(p)?;
     // a sell (and a sell-first entry) holds tokens of A; a pair buy holds B, a sell-first pair entry a B prefund
     let needs = Needs { a: side == Side::Sell, b: b.is_some() && (side == Side::Buy || if_done) };
-    let (mut env, notes) = env_of(c, &a, b.as_ref(), needs, maker)?;
+    let (mut env, mut notes) = env_of(c, &a, b.as_ref(), needs, maker)?;
+    notes.extend(found);
     env.carrier = carrier;
     env.guards_acknowledged = p.has("--ack-no-guards");
     env.market_start_ack = p.has("--ack-market-start");
@@ -625,11 +633,20 @@ pub fn env_of(
         if m.family != kob_protocol::Family::Kcc20 || m.listing != market::Listing::Unlisted {
             continue;
         }
+        match m.ext_source {
+            // taken from these holdings (`env_for`), with its finding
+            market::ExtSource::Holdings => continue,
+            market::ExtSource::Unknown => {
+                return Err(format!("{}: its extension commitment is unknown (no source names it): nothing planned", m.name()))
+            }
+            market::ExtSource::Lists | market::ExtSource::Order => {}
+        }
+        let origin = if m.ext_source == market::ExtSource::Order { "the order's own state" } else { "the indexer" };
         let held =
             if m.cov == a.cov && needs.a { token_utxos.clone() } else { data::token_utxos(&indexer, &node, &c.network, m, &maker)? };
         if let Some(u) = held.iter().find(|u| u.state.extension() != m.ext) {
             return Err(format!(
-                "{}: the indexer names extension commitment {}, but your token UTXO {}:{} (checked on the node) has {}: the token \
+                "{}: {origin} names extension commitment {}, but your token UTXO {}:{} (checked on the node) has {}: the token \
                  has more than one commitment; refused (check the token's genesis)",
                 m.name(),
                 to_hex(&m.ext),
@@ -643,7 +660,7 @@ pub fn env_of(
                 code: "TOKEN_EXTENSION_UNCHECKED",
                 severity: Severity::Warning,
                 message: format!(
-                    "{}: its extension commitment {} is the indexer's, and nothing checks it (no registry entry, and this wallet \
+                    "{}: its extension commitment {} is from {origin}, and nothing checks it (no registry entry, and this wallet \
                      holds none of the token): an order pins it, and only tokens of that commitment fill it; check the token's \
                      genesis yourself",
                     m.name(),
@@ -655,7 +672,7 @@ pub fn env_of(
                 code: "TOKEN_EXTENSION_CHECKED",
                 severity: Severity::Info,
                 message: format!(
-                    "{}: the indexer's extension commitment {} matches your {} token UTXO(s) of it (checked on the node)",
+                    "{}: the extension commitment {} from {origin} matches your {} token UTXO(s) of it (checked on the node)",
                     m.name(),
                     to_hex(&m.ext),
                     held.len()

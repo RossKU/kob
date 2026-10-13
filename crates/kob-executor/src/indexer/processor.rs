@@ -948,18 +948,8 @@ impl Processor {
             })
             .to_string()
         ])?;
-        // token registry event: first sighting of this (token, program, extension) identity (a pair order names two tokens:
-        // each with the extension commitment its listing input carries)
-        let identities: Vec<(Hash32, Option<Hash32>, Option<[u8; 32]>)> = match pair_listing(&n.state, n.daa, n.out_value) {
-            Some((ia, ib)) => [ia, ib]
-                .into_iter()
-                .filter_map(|i| {
-                    Some((i.token_cov_id?, i.token_tpl_hash, Some(i.extension_commitment.map(|e| e.0).unwrap_or([0; 32]))))
-                })
-                .collect(),
-            None => vec![(token, tpl_hash, ext)],
-        };
-        for (tok, tpl, e) in identities {
+        // token registry event: first sighting of this (token, program, extension) identity
+        for (tok, tpl, e) in placement_identities(&n.state, token, tpl_hash, ext) {
             let seen = conn
                 .prepare_cached("SELECT 1 FROM token_events WHERE token_cov_id = ?1 AND tpl_hash IS ?2 AND ext_commit IS ?3")?
                 .exists(params![&tok.0[..], tpl.map(|t| t.0.to_vec()), e.map(|e| e.to_vec())])?;
@@ -1615,6 +1605,25 @@ impl Processor {
 /// and expiry; B with its own scale. Neither carries a KAS price (a pair order is not measured in KAS). The extension
 /// commitment of each KCC-20 token: the state names it (`sExt` of the custody of S, `tExt` of the deliveries of T; an entry
 /// `aExt` and `bExt`).
+/// The token identities (token covenant id, program, extension commitment) an order placement names (`token_events`): a
+/// plain order its token with `ext`; a pair order both its tokens, each with the commitment its state carries for a KCC-20
+/// token and none (NULL) when the state's family code is not KCC-20. An unknown commitment is never recorded as the
+/// all-zero one, which is a real commitment (the standard fixed-supply class) the token list reports.
+pub fn placement_identities(
+    state: &AnyState,
+    token: Hash32,
+    tpl_hash: Option<Hash32>,
+    ext: Option<[u8; 32]>,
+) -> Vec<(Hash32, Option<Hash32>, Option<[u8; 32]>)> {
+    match pair_listing(state, 0, 0) {
+        Some((ia, ib)) => [ia, ib]
+            .into_iter()
+            .filter_map(|i| Some((i.token_cov_id?, i.token_tpl_hash, i.extension_commitment.map(|e| e.0))))
+            .collect(),
+        None => vec![(token, tpl_hash, ext)],
+    }
+}
+
 fn pair_listing(state: &AnyState, genesis_daa: u64, carrier: u64) -> Option<(ListingInput, ListingInput)> {
     let t = state.pair_tokens()?;
     let terms = model::terms_of(state);

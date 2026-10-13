@@ -103,14 +103,13 @@ pub struct TokenView {
 
 /// The one KCC-20 extension commitment the order placements of a token (and program) named (`token_events`), `None` when
 /// they named none or more than one (a genesis that minted a second commitment, or an order that claims another): a client
-/// then takes it from the token's orders and shows where it came from.
+/// then takes it from the token's orders and shows where it came from. The all-zero commitment (the standard fixed-supply
+/// class) is one like any other: a placement that does not know a token's commitment records none (NULL), not zero.
 fn sole_extension(conn: &Connection, cov: &[u8], tpl: &[u8]) -> DbResult<Option<String>> {
     let mut st = conn.prepare_cached(
-        "SELECT DISTINCT ext_commit FROM token_events WHERE token_cov_id = ?1 AND tpl_hash = ?2 AND ext_commit IS NOT NULL          AND ext_commit != ?3 LIMIT 2",
+        "SELECT DISTINCT ext_commit FROM token_events WHERE token_cov_id = ?1 AND tpl_hash = ?2 AND ext_commit IS NOT NULL LIMIT 2",
     )?;
-    let found = st
-        .query_map(rusqlite::params![cov, tpl, &[0u8; 32][..]], |r| r.get::<_, Vec<u8>>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let found = st.query_map(rusqlite::params![cov, tpl], |r| r.get::<_, Vec<u8>>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(match found.as_slice() {
         [one] => Some(hex::encode(one)),
         _ => None,

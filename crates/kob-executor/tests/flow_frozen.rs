@@ -206,3 +206,33 @@ async fn the_open_token_list_lists_a_token_known_only_from_an_unlisted_order() {
     let rows = list(TemplateId::Kcc20Ref);
     assert_eq!((rows.len(), rows[0].extension_commitment.as_deref()), (1, None));
 }
+
+/// The all-zero extension commitment (the standard fixed-supply KCC-20 class: TUSD, every `kob token issue`) is a commitment:
+/// the open token list reports it (it reported none, and the CLI refused every such token: TN10 2026-10-14 B-4), and the
+/// migration of earlier pair rows leaves a real zero commitment alone.
+#[tokio::test]
+async fn the_open_token_list_reports_the_zero_extension_commitment() {
+    use kob_executor::tokens::{StrictTemplate, TokenAllowlist};
+    use kob_protocol::artifacts::{token_template, TemplateId};
+
+    let strict = (
+        Hash32(token_template(TemplateId::Kcc20Ref).hash),
+        StrictTemplate { id: "KCC20Ref".into(), family: TemplateId::Kcc20Ref.family(), powers: vec![] },
+    );
+    let c = Ctx::new();
+    let b = BidState { extension_commitment: [0; 32], ..bid(MAKER_B, P250) };
+    let create = c.w.create_tx(AnyState::KobBid(b.clone()), b.escrow(5 * WHOLE, 2).unwrap() as u64, MAKER_B, 0);
+    c.push(&[&create]).await;
+    let list = || {
+        let g = c.hs.ingest.lock().unwrap();
+        reads::token_list(g.conn(), &TokenAllowlist::from_entries([]).with_strict_templates([strict.clone()])).unwrap()
+    };
+    let rows = list();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].extension_commitment.as_deref(), Some(Hash32([0; 32]).to_hex().as_str()));
+    {
+        let g = c.hs.ingest.lock().unwrap();
+        assert_eq!(kob_executor::indexer::db::backfill_unknown_pair_extensions(g.conn()).unwrap(), 0);
+    }
+    assert_eq!(list()[0].extension_commitment.as_deref(), Some(Hash32([0; 32]).to_hex().as_str()));
+}

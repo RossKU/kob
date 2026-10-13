@@ -102,7 +102,18 @@ fn markets_of(c: &Common, live: &Live) -> Result<Vec<TokenMarket>, String> {
         Ok(listed.or((*cov == own_token).then_some(own_scale)))
     };
     let open = market::OpenToken { network: &c.network, order_scale: &order_scale, entered: None };
-    toks.iter().map(|t| market::resolve_with(&to_hex(t), &reg, &idx, Some(&open))).collect()
+    let mut ms: Vec<TokenMarket> =
+        toks.iter().map(|t| market::resolve_with(&to_hex(t), &reg, &idx, Some(&open))).collect::<Result<_, _>>()?;
+    // a commitment no source names: the one the order's own state (read from the node) carries for the token
+    for m in ms.iter_mut().filter(|m| m.ext_source == market::ExtSource::Unknown) {
+        let s = &live.order.state;
+        let own = s.custody_ext(m.cov).or_else(|| (s.token_cov_id() == m.cov).then(|| s.extension_commitment()).flatten());
+        if let Some(e) = own {
+            m.ext = e;
+            m.ext_source = market::ExtSource::Order;
+        }
+    }
+    Ok(ms)
 }
 
 fn units_of(ms: &[TokenMarket]) -> Units {

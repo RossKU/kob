@@ -21,6 +21,21 @@ pub enum Listing {
     Unlisted,
 }
 
+/// Where a KCC-20 market's extension commitment comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtSource {
+    /// The registry and / or the indexer's token list (they agree); a KRON token's (none) too.
+    Lists,
+    /// No source names it (a token without a registry entry the indexer names none for: an older indexer, or placements that
+    /// named more than one): `ext` is a placeholder nothing plans with. A signing command takes it from the wallet's own
+    /// node-verified holdings ([`TokenMarket::take_ext_from_holdings`]) or from the live order's own state; a view needs none.
+    Unknown,
+    /// The wallet's own token UTXOs of it, their states confirmed on the node.
+    Holdings,
+    /// The live order's own state (read from the node).
+    Order,
+}
+
 /// Everything a planner needs of one token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenMarket {
@@ -42,6 +57,8 @@ pub struct TokenMarket {
     pub suffix_len: i64,
     /// KCC-20 extension commitment (zero for KRON).
     pub ext: [u8; 32],
+    /// Where `ext` comes from.
+    pub ext_source: ExtSource,
     /// Token inputs / outputs one transfer may carry.
     pub slots: (usize, usize),
     /// Base units per whole token of new orders (`10^min(decimals, 9)`).
@@ -98,6 +115,7 @@ impl TokenMarket {
             prefix_len: t.prefix.len() as i64,
             suffix_len: t.suffix.len() as i64,
             ext,
+            ext_source: ExtSource::Lists,
             slots: t.slots,
             scale: default_scale(decimals),
             tick,
@@ -107,6 +125,44 @@ impl TokenMarket {
             listing: Listing::Unlisted,
             entered_decimals: false,
         })
+    }
+
+    /// An unknown extension commitment ([`ExtSource::Unknown`]) from the commitments of the wallet's own token UTXOs of the
+    /// token (`held`, their states confirmed on the node): the one they share, with the finding that says so; refused when
+    /// they name none (nothing to take it from) or more than one (the token has look-alike units). A known commitment is
+    /// left as it is (`Ok(None)`: the caller compares it with the holdings).
+    pub fn take_ext_from_holdings(&mut self, held: &[[u8; 32]]) -> Result<Option<Issue>, String> {
+        if self.ext_source != ExtSource::Unknown {
+            return Ok(None);
+        }
+        let distinct: std::collections::BTreeSet<[u8; 32]> = held.iter().copied().collect();
+        let one = match distinct.len() {
+            0 => {
+                return Err(format!(
+                    "{}: its extension commitment is unknown: no registry entry, the indexer names none, and this wallet holds none                      of the token to take it from (an order pins it: only tokens of that commitment fill it)",
+                    self.name()
+                ))
+            }
+            1 => *distinct.first().expect("one"),
+            n => {
+                return Err(format!(
+                    "{}: your token UTXOs of it (checked on the node) have {n} different extension commitments and no source names                      the token's: refused (check the token's genesis)",
+                    self.name()
+                ))
+            }
+        };
+        self.ext = one;
+        self.ext_source = ExtSource::Holdings;
+        Ok(Some(Issue {
+            code: "TOKEN_EXTENSION_FROM_HOLDINGS",
+            severity: Severity::Info,
+            message: format!(
+                "{}: the indexer names no extension commitment; {} is the one your {} token UTXO(s) of it have (checked on the node)",
+                self.name(),
+                to_hex(&one),
+                held.len()
+            ),
+        }))
     }
 
     /// The finding a signing command raises for a token it trades (`trades`) or sends: a registry token that is not
@@ -381,7 +437,13 @@ pub fn resolve_with(
     };
     let ticker = r.map(|t| t.ticker.clone()).or_else(|| i.map(|t| t.ticker.clone())).unwrap_or_default();
     let ext = if program.family() == Family::Kron { None } else { ext };
-    let mut m = TokenMarket::new(cov, &ticker, decimals, program, ext, r.and_then(|t| t.tick))?;
+    // a token without a registry entry the indexer names no commitment for: a view needs none, and a signing command takes it
+    // from what it can check without the indexer (the wallet's node-verified holdings, the order's own state)
+    let unknown = ext.is_none() && r.is_none() && program.family() == Family::Kcc20;
+    let mut m = TokenMarket::new(cov, &ticker, decimals, program, if unknown { Some([0; 32]) } else { ext }, r.and_then(|t| t.tick))?;
+    if unknown {
+        m.ext_source = ExtSource::Unknown;
+    }
     m.genesis_verified = r.is_some_and(|t| t.genesis_verified);
     m.listing = match r {
         Some(t) => t.not_tradable.clone().map_or(Listing::Listed, Listing::NotTradable),
@@ -483,6 +545,33 @@ mod tests {
         let bad = vec![facts(1, "TUSD", 8, TemplateId::Kcc20Ref, 0xef)];
         assert!(resolve("TUSD", &reg, &bad).unwrap_err().contains("extension"));
         assert!(resolve("NOPE", &reg, &idx).is_err());
+    }
+
+    /// A token without a registry entry the indexer names no commitment for (an older indexer reported none for every token
+    /// of the standard zero commitment, TN10 2026-10-14 B-4): a view resolves it, and a signing command takes the commitment
+    /// from the wallet's node-verified holdings, refused when they name none or several. A registry token still needs one.
+    #[test]
+    fn an_unknown_commitment_comes_from_the_wallets_holdings_never_from_nothing() {
+        let no_ext = vec![TokenFacts { ext: None, ..facts(6, "", 0, TemplateId::Kcc20Ref, 0) }];
+        let mut m = resolve(&to_hex(&[6; 32]), &[], &no_ext).unwrap();
+        assert_eq!(m.ext_source, ExtSource::Unknown);
+        assert!(resolve("TZ", &[TokenFacts { ext: None, ..facts(6, "TZ", 0, TemplateId::Kcc20Ref, 0) }], &[])
+            .unwrap_err()
+            .contains("needs its extension commitment"));
+        let e = m.clone().take_ext_from_holdings(&[]).unwrap_err();
+        assert!(e.contains("holds none"), "{e}");
+        let e = m.clone().take_ext_from_holdings(&[[0; 32], [0xee; 32]]).unwrap_err();
+        assert!(e.contains("2 different extension commitments"), "{e}");
+        let i = m.take_ext_from_holdings(&[[0; 32], [0; 32]]).unwrap().unwrap();
+        assert_eq!((m.ext, m.ext_source, i.code), ([0; 32], ExtSource::Holdings, "TOKEN_EXTENSION_FROM_HOLDINGS"));
+        // a commitment a source names is left to the caller's comparison
+        let mut named = resolve(&to_hex(&[5; 32]), &[], &[facts(5, "", 0, TemplateId::Kcc20Ref, 0)]).unwrap();
+        assert_eq!(named.ext_source, ExtSource::Lists);
+        assert_eq!(named.take_ext_from_holdings(&[[0xee; 32]]).unwrap(), None);
+        assert_eq!(named.ext, [0; 32]);
+        // KRON has none to look for
+        let kron = vec![TokenFacts { ext: None, ..facts(7, "", 0, TemplateId::KronToken2433, 0) }];
+        assert_eq!(resolve(&to_hex(&[7; 32]), &[], &kron).unwrap().ext_source, ExtSource::Lists);
     }
 
     /// A registry file passes the validator for the command's network (as the web app's `parseRegistry`), and a registry

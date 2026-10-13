@@ -924,3 +924,73 @@ async fn the_pair_book_shows_resting_liquidity_only_and_is_not_crossed_by_takers
         assert_eq!(pb.bids[0].amount, a_units.to_string(), "one slice, not the whole TWAP order");
     }
 }
+
+/// A pair order records the identity of both its tokens (`token_events`); the KRON token's state carries no extension
+/// commitment, so its identity has none (NULL). An earlier build recorded it as the all-zero commitment, which the token list
+/// then could not tell from the real zero commitment of the standard KCC-20 class (it reported none for every such token);
+/// the migration turns those rows back into the identity without a commitment, and is idempotent.
+#[tokio::test]
+async fn a_pair_order_records_an_unknown_commitment_as_none_and_the_migration_fixes_earlier_rows() {
+    use kob_executor::indexer::db::backfill_unknown_pair_extensions;
+    let p = AB;
+    let c = Ctx::new();
+    place_pair(&c, p, AnyState::KobPair(pair_order(p, MAKER_A, true, RATE, 10)), PV, MAKER_A).await;
+    let ext_of_token = |tok: [u8; 32]| -> Vec<Option<Vec<u8>>> {
+        let g = c.hs.ingest.lock().unwrap();
+        let mut st = g.conn().prepare("SELECT ext_commit FROM token_events WHERE token_cov_id = ?1 ORDER BY id").unwrap();
+        st.query_map([&tok[..]], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(ext_of_token(TOKEN_COV), vec![Some(EXT.to_vec())]);
+    assert_eq!(ext_of_token(TOKEN_COV_KRON), vec![None], "the KRON token's identity has no commitment, not the zero one");
+    // a database of an earlier build: the same row with the zero commitment
+    let migrate = || {
+        let g = c.hs.ingest.lock().unwrap();
+        backfill_unknown_pair_extensions(g.conn()).unwrap()
+    };
+    {
+        let g = c.hs.ingest.lock().unwrap();
+        g.conn()
+            .execute(
+                "UPDATE token_events SET ext_commit = ?1 WHERE token_cov_id = ?2",
+                rusqlite::params![&[0u8; 32][..], &TOKEN_COV_KRON[..]],
+            )
+            .unwrap();
+    }
+    assert_eq!(migrate(), 1);
+    assert_eq!(ext_of_token(TOKEN_COV_KRON), vec![None]);
+    assert_eq!(ext_of_token(TOKEN_COV), vec![Some(EXT.to_vec())]);
+    assert_eq!(migrate(), 0, "idempotent");
+    // a KRON order of its own names the zero commitment (a KRON state carries zeros): a sighting of its own
+    let ask = resting_for(&c, Family::Kron, SIDE_ASK, P200).await;
+    let zero = Some([0u8; 32].to_vec());
+    assert_eq!(ext_of_token(TOKEN_COV_KRON), vec![None, zero.clone()]);
+    // an earlier build: the pair's row was zero, so the ask's identity looked seen and was not recorded
+    {
+        let g = c.hs.ingest.lock().unwrap();
+        g.conn()
+            .execute("DELETE FROM token_events WHERE token_cov_id = ?1 AND ext_commit IS NOT NULL", [&TOKEN_COV_KRON[..]])
+            .unwrap();
+        g.conn()
+            .execute(
+                "UPDATE token_events SET ext_commit = ?1 WHERE token_cov_id = ?2",
+                rusqlite::params![&[0u8; 32][..], &TOKEN_COV_KRON[..]],
+            )
+            .unwrap();
+    }
+    assert_eq!(ext_of_token(TOKEN_COV_KRON), vec![zero.clone()]);
+    assert_eq!(migrate(), 1);
+    // the pair's identity without a commitment, and the ask's zero one at the ask's placement
+    assert_eq!(ext_of_token(TOKEN_COV_KRON), vec![None, zero.clone()]);
+    let txid: Vec<u8> = {
+        let g = c.hs.ingest.lock().unwrap();
+        g.conn()
+            .query_row(
+                "SELECT txid FROM token_events WHERE token_cov_id = ?1 AND ext_commit IS NOT NULL",
+                [&TOKEN_COV_KRON[..]],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(txid, ask.create.tx.id.to_vec());
+    assert_eq!(migrate(), 0, "idempotent");
+}

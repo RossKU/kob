@@ -111,7 +111,91 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     if stops > 0 {
         tracing::info!(stops, "took the unarmed stop entries an earlier build listed as resting liquidity out of the books");
     }
+    let unknown = backfill_unknown_pair_extensions(conn)?;
+    if unknown > 0 {
+        tracing::info!(unknown, "token events: an unknown pair-token commitment an earlier build recorded as zero is now none");
+    }
     Ok(())
+}
+
+/// The token identities the order `(contract, token, program, commitment, genesis state)` placed, as the processor records
+/// them now ([`super::processor::placement_identities`]).
+type Identity = (Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
+fn identities_of_order(
+    contract: &str,
+    token: Option<Vec<u8>>,
+    tpl: Option<Vec<u8>>,
+    ext: Option<Vec<u8>>,
+    genesis_state: Vec<u8>,
+) -> Vec<Identity> {
+    let h = |b: &Option<Vec<u8>>| b.as_deref().and_then(|b| <[u8; 32]>::try_from(b).ok());
+    let plain = || token.clone().map(|t| (t, tpl.clone(), ext.clone())).into_iter().collect();
+    let (Some(state), Some(tok)) = (super::reads::tip_state(contract, Some(genesis_state)), h(&token)) else { return plain() };
+    super::processor::placement_identities(&state, crate::hex::Hash32(tok), h(&tpl).map(crate::hex::Hash32), h(&ext))
+        .into_iter()
+        .map(|(t, p, e)| (t.0.to_vec(), p.map(|p| p.0.to_vec()), e.map(|e| e.to_vec())))
+        .collect()
+}
+
+/// A `seen` row with the zero commitment: (id, token, program, txid).
+type ZeroRow = (i64, Vec<u8>, Option<Vec<u8>>, Vec<u8>);
+/// An order of a token: (genesis txid, genesis block, genesis daa, it names the row's identity).
+type Naming = (Option<Vec<u8>>, i64, i64, bool);
+
+/// An earlier build recorded the token identity of a pair order's token whose commitment its state does not carry (a
+/// family code other than KCC-20) with the all-zero commitment, so the token list could not tell it from the real zero
+/// commitment of the standard fixed-supply class and reported none for every KCC-20 token of that class. Re-derive each
+/// zero `seen` row from the orders: a row no order of its transaction names the zero commitment for becomes the identity
+/// without a commitment (dropped when that one is already recorded), and the first order that does name the zero commitment
+/// gets the zero row the processor skipped (the identity looked seen). Idempotent and a no-op on a database written by this
+/// build; `index replay` records the same identities. Returns the rows changed.
+pub fn backfill_unknown_pair_extensions(conn: &Connection) -> DbResult<usize> {
+    let zero = [0u8; 32];
+    let rows: Vec<ZeroRow> = conn
+        .prepare("SELECT id, token_cov_id, tpl_hash, txid FROM token_events WHERE kind = 'seen' AND ext_commit = ?1 ORDER BY id")?
+        .query_map([&zero[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    // (genesis txid, genesis block, genesis daa, identities) of the orders that name one of these tokens
+    let names = |tok: &[u8], tpl: &Option<Vec<u8>>| -> DbResult<Vec<Naming>> {
+        let mut st = conn.prepare_cached(
+            "SELECT contract, token_cov_id, token_tpl_hash, ext_commit, genesis_state, genesis_txid, genesis_block, genesis_daa \
+             FROM orders WHERE token_cov_id = ?1 OR quote_cov_id = ?1 ORDER BY genesis_block, genesis_daa, rowid",
+        )?;
+        let out = st
+            .query_map([tok], |r| {
+                let ids = identities_of_order(&r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
+                let named = ids.iter().any(|(t, p, e)| t == tok && p == tpl && e.as_deref() == Some(&zero[..]));
+                Ok((r.get(5)?, r.get(6)?, r.get(7)?, named))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(out)
+    };
+    let mut changed = 0;
+    for (id, tok, tpl, txid) in rows {
+        let orders = names(&tok, &tpl)?;
+        if orders.iter().any(|(t, _, _, named)| *named && t.as_deref() == Some(&txid[..])) {
+            continue;
+        }
+        changed += 1;
+        conn.execute("UPDATE token_events SET ext_commit = NULL WHERE id = ?1", [id])?;
+        // the identity without a commitment once: its first sighting stays
+        conn.execute(
+            "DELETE FROM token_events WHERE kind = 'seen' AND token_cov_id = ?1 AND tpl_hash IS ?2 AND ext_commit IS NULL \
+             AND id > (SELECT MIN(id) FROM token_events WHERE kind = 'seen' AND token_cov_id = ?1 AND tpl_hash IS ?2 AND ext_commit IS NULL)",
+            rusqlite::params![tok, tpl],
+        )?;
+        // the zero commitment's first real sighting, which the processor skipped (the identity looked seen)
+        if let Some((Some(t), block, daa, _)) = orders.iter().find(|o| o.3 && o.0.is_some()) {
+            conn.execute(
+                "INSERT INTO token_events (token_cov_id, tpl_hash, ext_commit, kind, txid, block_seq, daa) VALUES (?1,?2,?3,'seen',?4,?5,?6)",
+                rusqlite::params![tok, tpl, &zero[..], t, block, daa],
+            )?;
+        }
+    }
+    Ok(changed)
 }
 
 /// An earlier build listed every if-done entry in its KAS book at its limit, unarmed stop entries too (which nothing fills

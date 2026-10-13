@@ -585,6 +585,23 @@ fn an_unlisted_token_commitment_must_match_the_wallets_holdings() {
         codes.iter().any(|c| c == "TOKEN_EXTENSION_UNCHECKED") && !codes.iter().any(|c| c == "TOKEN_EXTENSION_CHECKED"),
         "{codes:?}"
     );
+    // an indexer that names no commitment (TN10 2026-10-14 B-4): the book needs none, an order takes the one of the wallet's
+    // node-checked holdings, and a wallet without the token has nothing to take it from (refused)
+    w.indexer_state.lock().unwrap().routes.get_mut("/v1/tokens").unwrap()["tokens"][0]["extension_commitment"] = Value::Null;
+    w.indexer_state.lock().unwrap().routes.insert(
+        format!("/v1/books/{}?depth=20", to_hex(&TOKEN)),
+        json!({"token": to_hex(&TOKEN), "aggregated": true, "asks": [], "bids": []}),
+    );
+    assert_eq!(run(crate::trade::views::run_book, w.args(0x11, "TST")), 0);
+    assert_eq!(run(place, w.args(0x11, buy)), 0);
+    assert_eq!(w.submitted(), 3);
+    let codes = w.issue_codes(".place.json");
+    assert!(codes.iter().any(|c| c == "TOKEN_EXTENSION_FROM_HOLDINGS"), "{codes:?}");
+    let s = w.signed(".place.json");
+    let AnyState::KobBid(b) = &recover_orders(&s.tx).unwrap()[0].order else { panic!() };
+    assert_eq!(b.extension_commitment, EXT);
+    assert_eq!(run(place, w.args(0x22, buy)), 1);
+    assert_eq!(w.submitted(), 3);
 }
 
 /// A market sell whose start is only the indexer's best bid does not go on `--yes` alone: it needs `--ack-market-start`
