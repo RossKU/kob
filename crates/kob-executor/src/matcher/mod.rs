@@ -11,6 +11,7 @@
 //! | [`chain`] | chained steps: the book after a transaction (continuations for the next transaction of the tick) |
 //! | [`pair`] | pair orders (token A for token B): netting participants and the two route legs through both KAS books, pair trigger evidence |
 //! | [`engine`] | one matcher tick: batches planned, built, signed and validated in the v2.1.0 engine until nothing crosses |
+//! | [`select`] | weighted work selection among competing executors (§3.6): Kaspa-style sampling of the work units, the share the races set |
 //! | [`node`] | node access over JSON wRPC (submission, DAA score, VSPC v2 acceptance) |
 //! | [`wallet`] | the hot key (environment or permission-checked file, never argv) and funding |
 //! | [`submit`] | submission, mempool-conflict handling, acceptance tracking and rollback |
@@ -29,5 +30,6 @@ pub mod node;
 pub mod pair;
 pub mod planner;
 pub mod run;
+pub mod select;
 pub mod submit;
 pub mod wallet;

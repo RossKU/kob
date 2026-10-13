@@ -93,6 +93,11 @@ pub struct KeeperConfig {
     pub replace_after_daa: u64,
     /// Most replacements of one kill or refund (0: never replace).
     pub max_replacements: u32,
+    /// The weighted selection of this tick (`docs/spec/matcher.md` §3.6, [`crate::matcher::select`]), set by the runner every
+    /// step. None (the default), or a share of one: every due job is built. A share below one: the jobs due for less than
+    /// `max_defer_daa` are sampled, weighted by their tip per byte; the others wait for the next tick (another keeper usually
+    /// takes them meanwhile).
+    pub select: Option<crate::matcher::select::TickSelect>,
 }
 
 impl Default for KeeperConfig {
@@ -114,6 +119,7 @@ impl Default for KeeperConfig {
             subsidy_max_jobs: DEFAULT_SUBSIDY_MAX_JOBS,
             replace_after_daa: 100,
             max_replacements: 0,
+            select: None,
         }
     }
 }
@@ -259,6 +265,12 @@ pub struct KeeperReport {
     /// backoff (`excluded_outpoints`), so unbuildable orders cannot eat the attempt budget of every tick and starve the
     /// buildable kills and refunds queued behind them.
     pub failed: Vec<(CovId, Outpoint)>,
+    /// Weighted selection ([`KeeperConfig::select`]): the due jobs the sample chose from, those it took, those built because
+    /// they were due for `max_defer_daa` (the starvation bound), and the orders whose jobs it left for later.
+    pub sampled: usize,
+    pub taken: usize,
+    pub overdue: usize,
+    pub deferred: Vec<CovId>,
 }
 
 /// What one keeper tick may still hand out as operator subsidy ([`tick_with_subsidy`]).
@@ -611,6 +623,51 @@ fn spends_of(built: &BuiltTx) -> BTreeSet<Outpoint> {
     built.tx.inputs.iter().map(|i| (i.transaction_id, i.index)).collect()
 }
 
+/// The weighted selection of a keeper tick (`docs/spec/matcher.md` §3.6): among the kills, refunds and closes due at most
+/// `max_defer_daa` ago (a job due longer is built by every keeper: the starvation bound), `share` of them in expectation,
+/// drawn without replacement with probability proportional to `(tip per byte)^alpha` (Kaspa's template selection,
+/// [`crate::matcher::select`]). Returns the orders whose jobs wait for the next tick.
+fn select_jobs(orders: &[&ListedOrder], inp: &KeeperInput, cfg: &KeeperConfig, report: &mut KeeperReport) -> BTreeSet<CovId> {
+    use crate::matcher::candidate::{redeem_len, INPUT_BYTES, OUTPUT_BYTES};
+    let Some(sel) = cfg.select.filter(|s| s.samples()) else { return BTreeSet::new() };
+    if !cfg.refund {
+        return BTreeSet::new();
+    }
+    let daa = inp.clock.daa;
+    let mut optional: Vec<(CovId, f64)> = vec![];
+    for o in orders {
+        let id = o.id();
+        if inp.excluded.contains(&id) || inp.excluded_outpoints.contains(&outpoint(&o.order.utxo)) {
+            continue;
+        }
+        let Some((_, due)) = refund_job(o, daa) else { continue };
+        // a job the tick would not build anyway (its tip does not pay, found unprofitable before) takes no place in the
+        // sample
+        let tip = crate::model::terms_of(&o.order.state).refund_tip;
+        if inp.known_unprofitable.contains(&(id, outpoint(&o.order.utxo)))
+            || tip.saturating_sub(refund_fee_floor(o, cfg)) < cfg.min_profit
+        {
+            continue;
+        }
+        if daa >= due.saturating_add(sel.max_defer_daa) {
+            report.overdue += 1;
+            continue;
+        }
+        let bytes = INPUT_BYTES + redeem_len(o.order.state.template_id()) + OUTPUT_BYTES;
+        optional.push((id, crate::matcher::select::rate(tip.saturating_sub(refund_fee_floor(o, cfg)), bytes)));
+    }
+    let mut rng = sel.rng();
+    let k = crate::matcher::select::take_count(sel.share(), optional.len(), &mut rng);
+    let rates: Vec<f64> = optional.iter().map(|x| x.1).collect();
+    let picks: BTreeSet<usize> =
+        crate::matcher::select::sample(&crate::matcher::select::weights(&rates, sel.alpha()), k, &mut rng).into_iter().collect();
+    report.sampled = optional.len();
+    report.taken = picks.len();
+    let out: BTreeSet<CovId> = optional.iter().enumerate().filter(|(i, _)| !picks.contains(i)).map(|(_, (id, _))| *id).collect();
+    report.deferred = out.iter().copied().collect();
+    out
+}
+
 /// Plans, builds, signs and validates every keeper job of a snapshot. Funding is chained through
 /// each job's change output (a P2PK spend never depends on its parent's DAA score). The tick's subsidies are bounded by one
 /// window's budget and the per-step job cap ([`SubsidyAllowance::of`]); the runner uses [`tick_with_subsidy`] with what its
@@ -635,12 +692,13 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
         Some((k, due)) => (0u8, k, due, o.id()),
         None => (1u8, JobKind::Sweep, 0, o.id()),
     });
+    let deferred = select_jobs(&orders, inp, cfg, &mut report);
     for o in orders {
         if report.jobs.len() >= cfg.max_jobs {
             break;
         }
         let id = o.id();
-        if inp.excluded.contains(&id) || inp.excluded_outpoints.contains(&outpoint(&o.order.utxo)) {
+        if inp.excluded.contains(&id) || inp.excluded_outpoints.contains(&outpoint(&o.order.utxo)) || deferred.contains(&id) {
             continue;
         }
         // numbers the builders cannot survive are never built from

@@ -64,6 +64,8 @@ pub struct CommonArgs {
     /// no longer refreshed file). 0: never wait. Default 300 (30 s), as `run`.
     #[arg(long, default_value_t = 300)]
     pub max_book_lag_daa: u64,
+    #[command(flatten)]
+    pub select: super::select::SelectArgs,
 }
 
 /// `kob-executor match`.
@@ -162,6 +164,8 @@ fn run_cfg(c: &CommonArgs, network: String, roles: Roles) -> RunConfig {
         low_funds: c.low_funds_kas * 100_000_000,
         fee_policy: c.fees.policy(c.fee_rate).unwrap_or_else(|_| crate::fee::FeePolicy::fixed(c.fee_rate)),
         max_book_lag: (c.max_book_lag_daa > 0).then_some(c.max_book_lag_daa),
+        // checked by the command before it gets here
+        select: c.select.config().unwrap_or_default(),
         ..RunConfig::default()
     }
 }
@@ -237,6 +241,7 @@ async fn shutdown_signal() {
 /// `kob-executor match`.
 pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     a.common.fees.policy(a.common.fee_rate).map_err(anyhow::Error::msg)?;
+    a.common.select.config().map_err(anyhow::Error::msg)?;
     // the network and the node first (`--offline` needs neither): nothing secret is read for a run that cannot start
     let (network, rpc_url) = if a.common.offline { Default::default() } else { a.common.endpoint()? };
     let signer = load_key(&a.common)?;
@@ -264,6 +269,7 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
 /// `kob-executor keep`.
 pub async fn run_keep(a: KeepArgs) -> anyhow::Result<()> {
     a.common.fees.policy(a.common.fee_rate).map_err(anyhow::Error::msg)?;
+    a.common.select.config().map_err(anyhow::Error::msg)?;
     // `--offline` needs no node (and no network)
     let (network, rpc_url) = if a.common.offline { Default::default() } else { a.common.endpoint()? };
     let signer = load_key(&a.common)?;

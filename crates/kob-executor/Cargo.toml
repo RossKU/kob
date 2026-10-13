@@ -46,6 +46,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# weighted work selection among competing executors (`matcher::select`): the per-executor random source
+rand.workspace = true
 
 # x402 facilitator: its node client is a blocking wRPC socket (tungstenite, as in kob-cli), its HTTP
 # server a hyper connection loop with a header timeout and a connection cap.
@@ -65,6 +67,5 @@ deploy-mainnet = ["kob-protocol/deploy-mainnet"]
 
 [dev-dependencies]
 tempfile = "3"
-rand.workspace = true
 # C6 planner property tests: the value oracle names outputs through `kob_protocol::artifacts::spk_trace` (test-only feature)
 kob-protocol = { path = "../kob-protocol", features = ["adversarial"] }

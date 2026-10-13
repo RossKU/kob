@@ -114,7 +114,17 @@ fn run_needs_a_role_and_a_key_and_index_keeps_its_subcommands() {
         assert!(help.contains(cmd), "{help}");
     }
     let (help, _) = exe(&["run", "--help"]);
-    for flag in ["--key-file", "--max-book-lag-daa", "--no-match", "--no-keep", "--data-dir", "--keeper-min-profit"] {
+    for flag in [
+        "--key-file",
+        "--max-book-lag-daa",
+        "--no-match",
+        "--no-keep",
+        "--data-dir",
+        "--keeper-min-profit",
+        "--no-weighted-select",
+        "--select-alpha",
+        "--select-max-defer-daa",
+    ] {
         assert!(help.contains(flag), "{help}");
     }
     let _ = std::fs::remove_dir_all(&dir);

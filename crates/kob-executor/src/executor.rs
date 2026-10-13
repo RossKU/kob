@@ -220,6 +220,8 @@ pub struct RunArgs {
     pub keeper_min_profit: i64,
     #[command(flatten)]
     pub liveness: crate::keepers::LivenessArgs,
+    #[command(flatten)]
+    pub select: crate::matcher::select::SelectArgs,
     /// Also serve the x402 facilitator (strict JSON configuration, `crates/kob-executor/x402.example.json`).
     /// Its `node` is the indexer's `--rpc-url`; its `network` must be the indexer's.
     #[arg(long, env = "KOB_X402_CONFIG")]
@@ -279,6 +281,8 @@ impl RunArgs {
             },
             // `run` refuses invalid fee options before it gets here
             fee_policy: self.fees.policy(self.fee_rate).unwrap_or_else(|_| crate::fee::FeePolicy::fixed(self.fee_rate)),
+            // `run` refuses invalid selection options before it gets here
+            select: self.select.config().unwrap_or_default(),
             ..RunConfig::default()
         }
     }
@@ -426,6 +430,7 @@ pub async fn run(a: RunArgs) -> Result<()> {
     }
     let fee_policy = a.fees.policy(a.fee_rate).map_err(anyhow::Error::msg)?;
     a.liveness.apply(&mut KeeperConfig::default()).map_err(anyhow::Error::msg)?;
+    a.select.config().map_err(anyhow::Error::msg)?;
     let cfg = build_config(&a.index)?;
     let signer = HotKey::load(a.key_file.as_deref())?;
     let mut run_cfg = a.run_config(&cfg.network);

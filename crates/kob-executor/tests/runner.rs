@@ -398,3 +398,43 @@ async fn an_ioc_fill_pays_the_priority_rate_and_a_static_policy_never_asks() {
     assert_eq!(r.tracker.txs.values().next().unwrap().fee_rate, 100);
     assert_eq!(node.0.lock().unwrap().fee_calls, 0);
 }
+
+/// The weighted selection (`docs/spec/matcher.md` §3.6) in the loop: alone the matcher plans as the reference; a lost race
+/// lowers its share, the crossing it then leaves for others is planned again at the latest once it has been crossable for
+/// `max_defer_daa`, and the metrics show the selection.
+#[tokio::test]
+async fn a_lost_race_lowers_the_share_and_the_bound_still_plans_the_crossing() {
+    use kob_executor::matcher::select::SelectConfig;
+    let node = MockNode::new(NOW + 5);
+    node.0.lock().unwrap().submit_replies.push_back(Err("output ab:0 already spent by transaction cd in the mempool".into()));
+    let cfg = RunConfig {
+        roles: M,
+        select: SelectConfig { enabled: true, seed: Some(9), ..SelectConfig::default() },
+        ..RunConfig::default()
+    };
+    let mut r = Runner::new(node.clone(), ViewSource(crossing_book()), Box::new(signer()), cfg);
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.built.len(), 1, "share 1: the reference planner");
+    assert_eq!(rep.conflicts.len(), 1);
+    assert!(r.selector.share_match < 1.0, "a lost race lowers the share: {}", r.selector.share_match);
+    let m = kob_executor::matcher::run::metrics_text(&r, &rep);
+    for line in ["kob_select_enabled 1", "kob_select_lost_steps_match_total 1", "kob_select_share_keep 1"] {
+        assert!(m.contains(line), "{line}: {m}");
+    }
+    // after the back-off the crossing is a work unit the sample may leave; once crossable for 30 DAA it is mandatory
+    let mut built_at = None;
+    for k in 0..6u64 {
+        let daa = NOW + 30 + 10 * k;
+        node.0.lock().unwrap().daa = daa;
+        let rep = r.step().await.unwrap();
+        if !rep.built.is_empty() {
+            built_at = Some(daa);
+            break;
+        }
+    }
+    let at = built_at.expect("planned again");
+    assert!(at <= NOW + 60, "within the starvation bound of its first sampled tick: {at}");
+    assert!(r.selector.stats.sampled_ticks >= 1);
+    let m = kob_executor::matcher::run::metrics_text(&r, &r.last.clone());
+    assert!(m.contains("kob_select_units_total"), "{m}");
+}

@@ -23,12 +23,13 @@ use kob_protocol::tx::{
 use kob_protocol::verify::{validate_signed, Validation};
 use serde::{Deserialize, Serialize};
 
-use super::batch::{plan_batch, plan_batch_counted, BatchInput, PlanWork};
+use super::batch::{plan_batch, plan_batch_counted, work_units, BatchInput, PlanWork, WorkUnit};
 use super::book::{book_key, books, outpoint, BookKey, Clock, CovId, ListedOrder, Outpoint};
 use super::candidate::Class;
 use super::family::{token_limits, Families, Lowered};
 use super::lower::{accounting, Accounting, LowerCtx};
 use super::planner::{Plan, PlannerConfig};
+use super::select::TickSelect;
 use super::wallet::Signer;
 
 /// Engine settings.
@@ -56,6 +57,17 @@ pub struct EngineConfig {
     /// at the highest rate that keeps it profitable, at least `planner.fee_rate`, the rate it was planned at); every batch
     /// is held to the total cap. The default (the floor everywhere, no cap) builds every batch at `planner.fee_rate`.
     pub fees: crate::fee::FeeRates,
+    /// The weighted selection of this tick (`docs/spec/matcher.md` §3.6, [`super::select`]), set by the runner every step.
+    /// None (the default), or a share of one: the reference planner, every unit of the view in one transaction sequence.
+    /// A share below one: the tick plans the mandatory units and a weighted sample of the others, each unit in transactions
+    /// of its own (a lost race then costs that unit alone).
+    pub select: Option<TickSelect>,
+    /// The DAA score from which each order has been crossable (in a work unit's standalone allocation) by the runner's own
+    /// observation ([`super::select::Selector::history`]): a unit holding an order crossable for `max_defer_daa` is planned
+    /// by every executor. An order the history does not hold became crossable now. None: no history (one tick on its own),
+    /// the unit's crossings count from the listing of their orders ([`WorkUnit::since`]).
+    #[serde(skip)]
+    pub select_since: Option<BTreeMap<CovId, u64>>,
 }
 
 /// How a batch picks the operator's P2PK funding (`docs/ops/executor.md`, funding). Deterministic: the pool is ordered by
@@ -125,6 +137,8 @@ impl Default for EngineConfig {
             book_budget_ms: 5_000,
             funding: FundingConfig::default(),
             fees: crate::fee::FeeRates::default(),
+            select: None,
+            select_since: None,
         }
     }
 }
@@ -195,6 +209,28 @@ pub struct TickReport {
     /// What the tick's batch plans cost ([`PlanWork`]: plans, allocation passes, candidate pairs tried, plans the book budget
     /// cut short), summed over the tick. Machine-independent: the cost bounds of `tests/tick_cost_bound.rs` are stated in it.
     pub work: PlanWork,
+    /// What the weighted selection did ([`EngineConfig::select`]); None when the tick did not sample.
+    pub selection: Option<SelectionReport>,
+}
+
+/// The weighted selection of a tick (`docs/spec/matcher.md` §3.6).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SelectionReport {
+    /// Work units of the view (components with a standalone allocation).
+    pub units: usize,
+    /// Units every executor plans: they hold class 1 or class 2 work, or a crossing visible for `max_defer_daa`.
+    pub mandatory: usize,
+    /// Of those, the units mandatory only because of their age (the starvation bound).
+    pub overdue: usize,
+    /// Units the sample chose from, and those it took.
+    pub optional: usize,
+    pub taken: usize,
+    /// The units planned, in planning order (mandatory first, then the sample in draw order): their tokens.
+    pub planned: Vec<BTreeSet<[u8; 32]>>,
+    /// The orders the units left for later fill on their own (the runner watches whether another transaction takes them).
+    pub deferred: Vec<CovId>,
+    /// Every order the units fill on their own: crossable now (the runner's history, [`EngineConfig::select_since`]).
+    pub crossable: Vec<CovId>,
 }
 
 /// The pre-submission validation of a signed transaction: the script engine ([`validate_signed`]). Tests inject their own.
@@ -348,6 +384,9 @@ struct Tick<'a> {
     /// What the surplus-inventory policy has used in its period, the batches prepared this tick included: each batch is
     /// planned against what the earlier ones left of `maxFee` and `tokens[].maxAmount`, not against the tick's start.
     inventory_used: super::planner::InventoryUse,
+    /// The orders of the work unit being planned (weighted selection, §3.6): every other order sits out its transactions.
+    /// None: the whole view.
+    scope: Option<BTreeSet<CovId>>,
 }
 
 /// What one batch attempt loop produced.
@@ -385,6 +424,12 @@ impl<'a> Tick<'a> {
         let mut ex: BTreeSet<CovId> = self.excluded.union(extra).copied().collect();
         // orders quarantined earlier in the tick (the builder refused them) are never planned again
         ex.extend(report.quarantined.iter().map(|q| q.0));
+        // the unit being planned (weighted selection): the other orders sit out its transactions
+        let scope_out: BTreeSet<CovId> = match &self.scope {
+            Some(scope) => self.by_id.keys().filter(|id| !scope.contains(*id)).copied().collect(),
+            None => BTreeSet::new(),
+        };
+        ex.extend(scope_out.iter().copied());
         // Funding (`select_funding`): the first attempt takes the largest UTXO, a builder's "insufficient funds" names the
         // need; a fragmented pool is consolidated while the batch stays profitable with it.
         let mut need = 0u64;
@@ -654,7 +699,7 @@ impl<'a> Tick<'a> {
         }
         match last {
             Some((k, why)) => {
-                let mut gave_up: Vec<CovId> = ex.difference(&self.excluded).copied().collect();
+                let mut gave_up: Vec<CovId> = ex.difference(&self.excluded).filter(|id| !scope_out.contains(*id)).copied().collect();
                 gave_up.extend(last_plan.iter().copied());
                 Batch::Failed(k, why, gave_up)
             }
@@ -833,18 +878,126 @@ pub fn tick_with(inp: &TickInput, cfg: &EngineConfig, families: &Families, signe
         pool,
         excluded,
         inventory_used: cfg.planner.inventory.used.clone(),
+        scope: None,
     };
     let mut step = 0usize;
     let mut out_of_time = false;
+    match cfg.select.filter(|s| s.samples()).and_then(|sel| select_units(&mut tk, &sel, &mut report)) {
+        // the reference: every unit of the view in one transaction sequence
+        None => out_of_time = run_batches(&mut tk, &mut report, &mut step),
+        // weighted selection: each unit planned (mandatory first, then the sample) in transactions of its own
+        Some(groups) => {
+            for g in groups {
+                tk.scope = Some(g);
+                if run_batches(&mut tk, &mut report, &mut step) {
+                    out_of_time = true;
+                    break;
+                }
+            }
+            tk.scope = None;
+        }
+    }
+    if out_of_time {
+        if let Some(k) = tk.by_id.values().find_map(book_key) {
+            report.skipped.push((k, "tick budget exhausted; the rest is planned next tick".into()));
+        }
+    }
+    report
+}
+
+/// The tokens an order belongs to (a pair order: both of its tokens).
+fn order_tokens(o: &ListedOrder) -> Vec<[u8; 32]> {
+    match o.order.state.pair_tokens() {
+        Some(t) => vec![t.a.cov_id, t.b.cov_id],
+        None => vec![o.order.state.token_cov_id()],
+    }
+}
+
+/// The weighted selection of a tick (`docs/spec/matcher.md` §3.6): the work units of the view, the mandatory ones (class 1
+/// or class 2 work, or a crossing visible for `max_defer_daa`) and a weighted sample of the others, `share` of them in
+/// expectation, drawn without replacement with probability proportional to `(profit per byte)^alpha` ([`super::select`]).
+/// The orders of the units left out sit out the tick. Returns the order sets of the units to plan, in planning order; None
+/// (the reference) when the view has no unit or its planning panicked.
+fn select_units(tk: &mut Tick, sel: &TickSelect, report: &mut TickReport) -> Option<Vec<BTreeSet<CovId>>> {
+    let deadline = tk.plan_deadline();
+    let units: Vec<WorkUnit> = {
+        let none = BTreeSet::new();
+        let bi = BatchInput {
+            by_id: &tk.by_id,
+            lock_time: tk.lock,
+            utc: tk.inp.clock.utc,
+            excluded: &tk.excluded,
+            unaccepted: &none,
+            families: &tk.fams,
+            max_bytes: u64::MAX,
+            only: None,
+            deadline,
+        };
+        let cfg = &tk.cfg.planner;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work_units(&bi, cfg))).ok()?
+    };
+    if units.is_empty() {
+        return None;
+    }
+    let now = tk.inp.clock.daa;
+    // since when the unit's oldest crossable order has waited: the runner's history, else the listing of its crossings
+    let since = |w: &WorkUnit| -> u64 {
+        match &tk.cfg.select_since {
+            Some(h) => w.orders.iter().map(|id| h.get(id).copied().unwrap_or(now).min(now)).min().unwrap_or(now),
+            None => w.since,
+        }
+    };
+    let overdue = |w: &WorkUnit| since(w).saturating_add(sel.max_defer_daa) <= now;
+    let (mandatory, optional): (Vec<&WorkUnit>, Vec<&WorkUnit>) = units.iter().partition(|w| w.urgent || overdue(w));
+    let mut rng = sel.rng();
+    let k = super::select::take_count(sel.share(), optional.len(), &mut rng);
+    let rates: Vec<f64> = optional.iter().map(|w| super::select::rate(w.profit, w.bytes)).collect();
+    let picks = super::select::sample(&super::select::weights(&rates, sel.alpha()), k, &mut rng);
+    let mut planned: Vec<&WorkUnit> = mandatory.clone();
+    planned.extend(picks.iter().map(|&i| optional[i]));
+    let mut rep = SelectionReport {
+        units: units.len(),
+        mandatory: mandatory.len(),
+        overdue: mandatory.iter().filter(|w| !w.urgent).count(),
+        optional: optional.len(),
+        taken: picks.len(),
+        planned: planned.iter().map(|w| w.tokens.clone()).collect(),
+        deferred: vec![],
+        crossable: units.iter().flat_map(|w| w.orders.iter().copied()).collect(),
+    };
+    let members = |w: &WorkUnit| -> BTreeSet<CovId> {
+        tk.by_id
+            .values()
+            .filter(|o| {
+                let t = order_tokens(o);
+                !t.is_empty() && t.iter().all(|x| w.tokens.contains(x))
+            })
+            .map(|o| o.id())
+            .collect()
+    };
+    let groups: Vec<BTreeSet<CovId>> = planned.iter().map(|w| members(w)).collect();
+    for (i, w) in optional.iter().enumerate() {
+        if !picks.contains(&i) {
+            rep.deferred.extend(w.orders.iter().copied());
+            let out = members(w);
+            tk.excluded.extend(out);
+        }
+    }
+    report.selection = Some(rep);
+    Some(groups)
+}
+
+/// Plans, builds and applies the tick's transactions until nothing (more) crosses in the scope; true when the tick's
+/// budget ran out.
+fn run_batches(tk: &mut Tick, report: &mut TickReport, step: &mut usize) -> bool {
     loop {
         if tk.out_of_time() {
-            out_of_time = true;
-            break;
+            return true;
         }
         let marks = (report.suspects.len(), report.cleared.len(), report.anomalies.len(), report.skipped.len(), report.slack_retries);
         let mut last_plan: Vec<CovId> = vec![];
         let none = BTreeSet::new();
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tk.batch(step, &none, &mut report, &mut last_plan)));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tk.batch(*step, &none, report, &mut last_plan)));
         let outcome = match r {
             Ok(b) => b,
             Err(_) => {
@@ -854,7 +1007,7 @@ pub fn tick_with(inp: &TickInput, cfg: &EngineConfig, families: &Families, signe
                 report.anomalies.truncate(marks.2);
                 report.skipped.truncate(marks.3);
                 report.slack_retries = marks.4;
-                match tk.isolate(step, last_plan, &mut report) {
+                match tk.isolate(*step, last_plan, report) {
                     Some(b) => b,
                     // the guilty books are excluded for the tick: plan the rest
                     None => continue,
@@ -865,25 +1018,19 @@ pub fn tick_with(inp: &TickInput, cfg: &EngineConfig, families: &Families, signe
             Batch::Prepared(p) => {
                 tk.apply(&p);
                 report.prepared.push(*p);
-                step += 1;
+                *step += 1;
             }
-            Batch::Nothing => break,
+            Batch::Nothing => return false,
             Batch::Failed(key, why, gave_up) => {
                 // the rest of the view is still planned; what failed waits for the next tick
                 report.skipped.push((key, why));
                 if gave_up.iter().all(|id| tk.excluded.contains(id)) {
-                    break;
+                    return false;
                 }
                 tk.excluded.extend(gave_up);
             }
         }
     }
-    if out_of_time {
-        if let Some(k) = tk.by_id.values().find_map(book_key) {
-            report.skipped.push((k, "tick budget exhausted; the rest is planned next tick".into()));
-        }
-    }
-    report
 }
 
 #[cfg(test)]

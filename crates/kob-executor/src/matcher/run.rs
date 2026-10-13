@@ -24,6 +24,7 @@ use super::book::{outpoint, utc_now, Clock, CovId, ListedOrder, MemoryBook, Orde
 use super::engine::{tick as matcher_tick, EngineConfig, TickInput};
 use super::family::Families;
 use super::node::{NodeApi, RpcError, SubmitOutcome};
+use super::select::{Role, SelectConfig, Selector};
 use super::submit::{Tracked, Tracker, TrackerConfig};
 use super::wallet::{address_of, p2pk_spk_string, Signer};
 use crate::keepers::{tick_with_subsidy as keeper_tick, JobKind, KeeperConfig, KeeperInput, SubsidyAllowance, SubsidyBudget};
@@ -171,6 +172,9 @@ pub struct RunConfig {
     /// sets the tick's rates of the matcher, the keepers and the maintenance jobs. Their configured `fee_rate`s stay the
     /// lowest rate each pays.
     pub fee_policy: crate::fee::FeePolicy,
+    /// Weighted work selection among competing executors (`docs/spec/matcher.md` §3.6, [`super::select`]). Off by default
+    /// in the library (the reference planner); the live commands turn it on.
+    pub select: SelectConfig,
 }
 
 impl Default for RunConfig {
@@ -192,6 +196,7 @@ impl Default for RunConfig {
             max_book_lag: None,
             verify_live_min_lag: 100,
             fee_policy: crate::fee::FeePolicy::default(),
+            select: SelectConfig::default(),
         }
     }
 }
@@ -304,6 +309,11 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     /// Stuck kills and refunds replaced at a higher rate, and replacements the node refused (metrics).
     pub keeper_replaced: u64,
     pub keeper_replace_refused: u64,
+    /// The weighted selection's random source, the share of each role and its counters (`kob_select_*`).
+    pub selector: Selector,
+    /// Orders the selection left for later, with the outpoint they had and the DAA score they were left at: one that another
+    /// transaction takes before this process does counts as ceded (`kob_select_ceded_total`).
+    pub ceded_watch: BTreeMap<CovId, (super::book::Outpoint, u64)>,
 }
 
 /// A source of reserved outpoints ([`Runner::reservations`]).
@@ -423,7 +433,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             _ => super::planner::InventoryUse::default(),
         };
         let plan_base_rate = cfg.engine.planner.fee_rate;
+        let selector = Selector::new(cfg.select.clone());
         Runner {
+            selector,
+            ceded_watch: BTreeMap::new(),
             fee_state: crate::fee::FeeState::default(),
             fee_rates,
             plan_base_rate,
@@ -609,6 +622,38 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 "keeper subsidy budget of the window used up: kills and refunds go at the rate their own tip pays"
             );
         }
+    }
+
+    /// Watches the orders the weighted selection left for later ([`Runner::ceded_watch`]).
+    fn defer(&mut self, orders: &[ListedOrder], deferred: &[CovId], daa: u64) {
+        if deferred.is_empty() {
+            return;
+        }
+        let ids: BTreeSet<&CovId> = deferred.iter().collect();
+        for o in orders.iter().filter(|o| ids.contains(&o.id())) {
+            self.ceded_watch.entry(o.id()).or_insert((outpoint(&o.order.utxo), daa));
+        }
+    }
+
+    /// Counts the watched orders another transaction took (their outpoint is no longer listed and no transaction of this
+    /// process spends it) and forgets those watched for long (taken by nobody, or by this process after all).
+    fn watch_ceded(&mut self, listed: &BTreeSet<super::book::Outpoint>, daa: u64) {
+        if self.ceded_watch.is_empty() {
+            return;
+        }
+        let ours = self.tracker.spent_outpoints();
+        let horizon = self.cfg.select.max_defer_daa.saturating_mul(10).max(100);
+        let mut ceded = 0u64;
+        self.ceded_watch.retain(|_, (op, since)| {
+            if !listed.contains(op) {
+                if !ours.contains(op) {
+                    ceded += 1;
+                }
+                return false;
+            }
+            daa < since.saturating_add(horizon)
+        });
+        self.selector.stats.ceded += ceded;
     }
 
     /// Outpoints no plan may spend: the tracker's pending and unfinalized transactions and the reservations.
@@ -826,10 +871,14 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             return Ok(rep);
         }
         // A pending transaction whose order input the book no longer lists lost its race: its other orders are free again.
-        for txid in self.tracker.drop_lost(&self.node, &listed_outpoints(&book.orders), daa).await {
+        let listed = listed_outpoints(&book.orders);
+        let mut match_lost = 0usize;
+        for txid in self.tracker.drop_lost(&self.node, &listed, daa).await {
             tracing::info!(txid = %kob_protocol::json::to_hex(&txid), "lost a race (an input was spent by another transaction); dropped");
             rep.conflicts.push(txid);
+            match_lost += 1;
         }
+        self.watch_ceded(&listed, daa);
         self.refresh_fees().await;
         let mut spent = self.reserved_or_spent();
         let funding = self.funding(&spent).await?;
@@ -854,8 +903,21 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             let period = self.cfg.engine.planner.inventory.period_daa;
             self.inventory_use.roll(daa, period);
             self.cfg.engine.planner.inventory.used = self.inventory_use.clone();
+            self.cfg.engine.select = self.selector.tick(Role::Match);
+            self.cfg.engine.select_since = self.cfg.engine.select.map(|_| self.selector.history.clone());
             let inp = TickInput { orders: book.orders.clone(), clock, funding: funding.clone(), excluded: excluded.clone() };
             let report = matcher_tick(&inp, &self.cfg.engine, &self.families, self.signer.as_ref());
+            self.selector.record(report.selection.as_ref().map(|s| s.crossable.as_slice()).unwrap_or(&[]), daa);
+            if let Some(s) = &report.selection {
+                let st = &mut self.selector.stats;
+                st.sampled_ticks += 1;
+                st.units += s.units as u64;
+                st.overdue += s.overdue as u64;
+                st.taken += s.taken as u64;
+                st.deferred += s.optional.saturating_sub(s.taken) as u64;
+                self.defer(&book.orders, &s.deferred, daa);
+            }
+            let mut match_sent = 0usize;
             for (id, why) in &report.quarantined {
                 tracing::error!(order = %kob_protocol::json::to_hex(id), %why, "order quarantined: left out of the matcher's book");
                 if why == super::engine::PLANNING_PANICKED || why.starts_with(super::engine::REFUSED_BY_THE_BUILDER) {
@@ -926,7 +988,15 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     fee_rate: p.lowered.built.fee.fee_rate,
                     unconfirmed: false,
                 };
+                let spent_ids = t.orders.clone();
                 self.send(t, daa, &mut rep).await;
+                if rep.conflicts.last() == Some(&p.txid()) {
+                    match_lost += 1;
+                }
+                if rep.submitted.last() == Some(&p.txid()) {
+                    match_sent += 1;
+                    self.ceded_watch.retain(|id, _| !spent_ids.contains(id));
+                }
                 if rep.submitted.last() == Some(&p.txid()) && !p.plan.kept.is_empty() {
                     self.inventory_use.record(&p.plan.kept, p.lowered.built.fee.fee);
                     if let Some(path) = &self.cfg.inventory_state {
@@ -937,6 +1007,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 }
             }
             spent = self.reserved_or_spent();
+            self.selector.observe(Role::Match, match_lost, match_sent);
         }
 
         if self.cfg.roles.keeper {
@@ -979,6 +1050,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 sompi: self.keeper_subsidy.left(&self.cfg.keeper, daa),
                 jobs: self.cfg.keeper.subsidy_max_jobs.saturating_sub(replaced_subsidised),
             };
+            self.cfg.keeper.select = self.selector.tick(Role::Keep);
             let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 keeper_tick(&inp, &self.cfg.keeper, self.signer.as_ref(), allowance)
             })) {
@@ -993,6 +1065,14 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 rep.skipped.push(format!("{}: {why}", kob_protocol::json::to_hex(id)));
             }
             self.keeper_unprofitable.extend(report.unprofitable.iter().copied());
+            if self.cfg.keeper.select.is_some_and(|s| s.samples()) {
+                let st = &mut self.selector.stats;
+                st.keeper_taken += report.taken as u64;
+                st.keeper_deferred += report.deferred.len() as u64;
+                st.keeper_overdue += report.overdue as u64;
+                self.defer(&inp.orders, &report.deferred, daa);
+            }
+            let (mut keep_lost, mut keep_sent) = (0usize, 0usize);
             // bounded retry of jobs that failed to build: a growing backoff per order outpoint (a new outpoint starts over)
             for (_, op) in &report.failed {
                 let e = self.keeper_failed.entry(*op).or_insert((0, 0));
@@ -1030,6 +1110,13 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 let txid = t.txid;
                 self.send(t, daa, &mut rep).await;
                 let sent = rep.submitted.last() == Some(&txid);
+                if rep.conflicts.last() == Some(&txid) {
+                    keep_lost += 1;
+                }
+                if sent {
+                    keep_sent += 1;
+                    self.ceded_watch.remove(&j.order);
+                }
                 // a submit without a verdict may still be accepted: its subsidy counts against the budget too
                 if j.subsidy > 0 && (sent || rep.unknown.last() == Some(&txid)) {
                     self.charge_subsidy(daa, j.subsidy);
@@ -1061,6 +1148,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     self.keeper_inflight.insert(txid, f);
                 }
             }
+            self.selector.observe(Role::Keep, keep_lost, keep_sent);
         }
 
         if self.cfg.roles.matcher && self.cfg.maintenance.enabled {
@@ -1267,6 +1355,50 @@ pub fn metrics_text<N: NodeApi, S: BookSource>(r: &Runner<N, S>, rep: &StepRepor
         "kob_keeper_replace_refused_total",
         "Replacements the node refused (the original stayed pending).",
         r.keeper_replace_refused.to_string(),
+    );
+    let sel = &r.selector;
+    let st = &sel.stats;
+    g(
+        "kob_select_enabled",
+        "1 when the weighted work selection is on (--no-weighted-select: 0).",
+        (sel.cfg.enabled as u8).to_string(),
+    );
+    g(
+        "kob_select_share_match",
+        "Share of the optional work units the matcher takes per tick (1: all, the reference).",
+        sel.share_match.to_string(),
+    );
+    g("kob_select_share_keep", "Share of the optional due jobs the keepers take per tick (1: all).", sel.share_keep.to_string());
+    g(
+        "kob_select_sampled_ticks_total",
+        "Matcher ticks that sampled their work units (a share below 1).",
+        st.sampled_ticks.to_string(),
+    );
+    g("kob_select_units_total", "Work units the sampling ticks judged (mandatory ones included).", st.units.to_string());
+    g("kob_select_taken_total", "Optional work units the matcher's sample took.", st.taken.to_string());
+    g("kob_select_deferred_total", "Optional work units the matcher left for later (for another executor).", st.deferred.to_string());
+    g(
+        "kob_select_overdue_total",
+        "Work units taken by every executor because a crossing waited max-defer-daa (the starvation bound).",
+        st.overdue.to_string(),
+    );
+    g("kob_select_keeper_taken_total", "Due keeper jobs the sample took.", st.keeper_taken.to_string());
+    g("kob_select_keeper_deferred_total", "Due keeper jobs left for later.", st.keeper_deferred.to_string());
+    g("kob_select_keeper_overdue_total", "Keeper jobs built because they were due for max-defer-daa.", st.keeper_overdue.to_string());
+    g(
+        "kob_select_ceded_total",
+        "Orders left for later that another transaction took first: races not run (a proxy of the collisions avoided).",
+        st.ceded.to_string(),
+    );
+    g(
+        "kob_select_lost_steps_match_total",
+        "Matcher steps that lost a race (each halves the matcher's share).",
+        st.lost_steps_match.to_string(),
+    );
+    g(
+        "kob_select_lost_steps_keep_total",
+        "Keeper steps that lost a race (each halves the keepers' share).",
+        st.lost_steps_keep.to_string(),
     );
     s
 }

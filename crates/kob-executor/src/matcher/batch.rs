@@ -80,7 +80,8 @@
 //! transaction has no room for a new leg only the legs already in it are considered. Netting is a two-pointer walk over
 //! each token pair's sorted pair orders. No candidate cap is needed; the wall-clock deadline alone bounds a hostile book.
 //! Every choice is a pure function of the view, `t` and the configuration up to the deadline, so two honest matchers with
-//! the same view build the same batch.
+//! the same view build the same batch. Which components a tick plans when executors compete is the weighted selection's
+//! choice (§3.6, `super::select`, from the standalone allocation of [`work_units`]); it never changes how one is planned.
 
 use std::cell::Cell;
 use std::cmp::Ordering;
@@ -2337,14 +2338,119 @@ pub fn plan_batch_counted(inp: &BatchInput, cfg: &PlannerConfig) -> (Option<Plan
     (plan, work)
 }
 
-fn plan_universe(u: &mut Universe, inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
+/// A work unit of the view (`docs/spec/matcher.md` §3.6): one component (the books of one token, joined by the pair orders
+/// between tokens, §3.1) and what the reference planner does with it on its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkUnit {
+    /// The token covenant ids of the component: every listed order of these tokens (a pair order: of both its tokens)
+    /// belongs to it.
+    pub tokens: BTreeSet<[u8; 32]>,
+    /// The orders its standalone allocation fills or updates.
+    pub orders: BTreeSet<CovId>,
+    /// Its standalone profit: the margin and tips of its fills and the keeper tips of its updates, less the fee of their
+    /// bytes (sompi; the envelope and funding of a transaction not included).
+    pub profit: i64,
+    /// The bytes of its legs and updates.
+    pub bytes: u64,
+    /// It fills class 1 (immediate) or class 2 (triggered) work: always planned (§3.1).
+    pub urgent: bool,
+    /// The DAA score from which its oldest crossing has been visible: the later of the two orders' first listing of its
+    /// earliest chunk (a netting group: of its latest order). Its age bounds the deferral (`max_defer_daa`).
+    pub since: u64,
+}
+
+/// The work units of the view: every component with a standalone allocation, in the reference order (decreasing profit per
+/// byte, then the smallest token id). The allocation is the one that orders the components (§3.1), with no byte budget.
+pub fn work_units(inp: &BatchInput, cfg: &PlannerConfig) -> Vec<WorkUnit> {
+    let mut u = Universe::new(inp, cfg);
     if u.cands.is_empty() {
-        return None;
+        return vec![];
     }
+    let st0 = standalone_bounds(&mut u, cfg);
+    let u = &u;
+    let natural: Vec<usize> = (0..u.comp_key.len()).collect();
+    let s0 = settle(u, st0, u64::MAX, &natural, inp.deadline);
+    let al = allocate(u, &s0.caps, &s0.st.live, &natural, u64::MAX, inp.deadline);
+    let nc = u.comp_key.len();
+    let mut units: Vec<WorkUnit> = (0..nc)
+        .map(|_| WorkUnit { tokens: BTreeSet::new(), orders: BTreeSet::new(), profit: 0, bytes: 0, urgent: false, since: u64::MAX })
+        .collect();
+    for (i, c) in u.cands.iter().enumerate() {
+        units[u.comp[i]].tokens.insert(c.book.token);
+    }
+    let mut margin = vec![0i128; nc];
+    let mut used = vec![false; nc];
+    for &i in &al.seq {
+        let c = &u.cands[i];
+        if al.qty[i] <= 0 && c.role() != Some(PairRole::Surplus) {
+            continue;
+        }
+        let k = u.comp[i];
+        used[k] = true;
+        margin[k] += leg_kas(c, al.qty[i]);
+        if c.role() == Some(PairRole::Surplus) {
+            continue;
+        }
+        units[k].bytes += c.bytes;
+        units[k].orders.insert(c.id);
+        if c.class != Class::Resting || al.ev_of.contains_key(&i) || u.porder_of[i].is_some_and(|p| al.pev_of.contains_key(&p)) {
+            units[k].urgent = true;
+        }
+    }
+    // the inventory a netting group keeps counts at its policy value, less its output's fee (as in the batch's profit)
+    for (t, _, _, v) in al.kept() {
+        if let Some(i) = (0..u.cands.len()).find(|&i| u.tok[i] == t) {
+            margin[u.comp[i]] += v - est_fee(KEPT_OUTPUT_BYTES, cfg.fee_rate) as i128;
+        }
+    }
+    let mut costs = vec![0i128; nc];
+    for x in &al.ups {
+        let k = u.comp[x.ev];
+        let c = &u.ups[x.up];
+        used[k] = true;
+        units[k].orders.insert(c.id);
+        margin[k] += c.tip as i128;
+        costs[k] += x.cost as i128;
+    }
+    // the crossing of a chunk is visible once both of its orders are listed
+    let seen = |i: usize| u.cands[i].seen;
+    for &(b, s, _, _) in &al.chunks {
+        let (rb, rs) = (u.cands[b].role(), u.cands[s].role());
+        let since = match (rb == Some(PairRole::Surplus), rs == Some(PairRole::Surplus)) {
+            (false, false) => seen(b).max(seen(s)),
+            (true, false) => seen(s),
+            (false, true) => seen(b),
+            (true, true) => continue,
+        };
+        let k = u.comp[b];
+        units[k].since = units[k].since.min(since);
+    }
+    // a netting group (no chunks): visible once its latest order is listed
+    for (k, unit) in units.iter_mut().enumerate() {
+        if unit.since == u64::MAX && used[k] {
+            unit.since = al
+                .seq
+                .iter()
+                .filter(|&&i| u.comp[i] == k && u.cands[i].role() != Some(PairRole::Surplus))
+                .map(|&i| seen(i))
+                .max()
+                .unwrap_or(0);
+        }
+    }
+    for k in 0..nc {
+        let fee = est_fee(units[k].bytes, cfg.fee_rate) as i128 + costs[k];
+        units[k].profit = (margin[k] - fee).clamp(i64::MIN as i128, i64::MAX as i128) as i64;
+        units[k].bytes += al.ups.iter().filter(|x| u.comp[x.ev] == k).map(|x| u.ups[x.up].bytes).sum::<u64>();
+    }
+    let order = density_order(u, &al, cfg.fee_rate);
+    order.into_iter().filter(|&k| used[k]).map(|k| units[k].clone()).collect()
+}
+
+/// Step 0 of a plan: every routed pair order at most the largest fill its route could pay on its own; out when no fill can
+/// and it has no netting partner; an order that may net routes at most that bound on top of its netted part.
+fn standalone_bounds(u: &mut Universe, cfg: &PlannerConfig) -> State {
     let n = u.cands.len();
     let mut st0 = State { live: vec![true; n], xcap: (0..u.porders.len()).map(|p| u.info(p).cap).collect() };
-    // 0. every routed pair order at most the largest fill its route could pay on its own; out when no fill can and it has
-    //    no netting partner; an order that may net routes at most that bound on top of its netted part
     let mut rcap = vec![i64::MAX; u.porders.len()];
     for (p, r) in rcap.iter_mut().enumerate() {
         if u.info(p).need.is_some() {
@@ -2363,6 +2469,15 @@ fn plan_universe(u: &mut Universe, inp: &BatchInput, cfg: &PlannerConfig) -> Opt
         }
     }
     u.rcap = rcap;
+    st0
+}
+
+fn plan_universe(u: &mut Universe, inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
+    if u.cands.is_empty() {
+        return None;
+    }
+    // 0. every routed pair order at most the largest fill its route could pay on its own (`standalone_bounds`)
+    let st0 = standalone_bounds(u, cfg);
     let u = &*u;
     let natural: Vec<usize> = (0..u.comp_key.len()).collect();
     // 1. every component on its own (no byte budget): the profit per byte that orders the components (at most half of the
