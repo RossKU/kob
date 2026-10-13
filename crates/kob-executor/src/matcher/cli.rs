@@ -27,7 +27,7 @@ pub struct CommonArgs {
     /// on mainnet, `ws://127.0.0.1:18210` on testnet-10).
     #[arg(long, env = "KOB_NODE_WRPC")]
     pub rpc_url: Option<String>,
-    /// Book snapshot (JSON, `MemoryBook`), re-read when it changes. Written by the indexer export.
+    /// Book snapshot (JSON, `MemoryBook`), re-read when it changes. Written by `kob-executor index export-book --out FILE`.
     #[arg(long, env = "KOB_BOOK_FILE")]
     pub book_file: PathBuf,
     /// File holding the operator's secret key (64 hex, mode 0600). Not the key itself.
@@ -59,6 +59,10 @@ pub struct CommonArgs {
     /// Warn (and set `kob_operator_low_funds`) below this many KAS of funding.
     #[arg(long, default_value_t = 100)]
     pub low_funds_kas: u64,
+    /// Plan nothing while the snapshot is more than this many DAA behind the node (`kob_matcher_book_stale`; a stale or
+    /// no longer refreshed file). 0: never wait. Default 300 (30 s), as `run`.
+    #[arg(long, default_value_t = 300)]
+    pub max_book_lag_daa: u64,
 }
 
 /// `kob-executor match`.
@@ -156,6 +160,7 @@ fn run_cfg(c: &CommonArgs, network: String, roles: Roles) -> RunConfig {
         metrics_file: c.metrics_file.clone(),
         low_funds: c.low_funds_kas * 100_000_000,
         fee_policy: c.fees.policy(c.fee_rate).unwrap_or_else(|_| crate::fee::FeePolicy::fixed(c.fee_rate)),
+        max_book_lag: (c.max_book_lag_daa > 0).then_some(c.max_book_lag_daa),
         ..RunConfig::default()
     }
 }

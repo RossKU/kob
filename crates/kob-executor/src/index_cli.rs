@@ -95,6 +95,13 @@ pub enum IndexSub {
         #[arg(long)]
         live_only: bool,
     },
+    /// Write the matcher's book snapshot (JSON, `MemoryBook`: every listed order with its custody and strays, at the store's
+    /// cursor) for `match` / `keep --book-file`. Read-only next to a running writer; `--out` replaces the file atomically.
+    ExportBook {
+        /// Output file (written to a temporary sibling, then renamed); default: standard output.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Recovery hook: import orders from a maker export or archive dump, verified against the node's UTXO set.
     ImportOrders { file: PathBuf },
     /// After a gap: move the cursor to a fresh start point and reconcile the tracked orders with the node.
@@ -282,6 +289,25 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
             let maker = maker.map(|m| crate::hex::decode(&m)).transpose()?;
             let export = recover::export_orders(&conn, maker.as_deref(), live_only)?;
             println!("{}", serde_json::to_string_pretty(&export)?);
+        }
+        IndexSub::ExportBook { out } => {
+            // read-only, like export-orders (nothing indexed yet: an empty book)
+            let conn = if cfg.db_path().exists() {
+                indexer::db::open_reader(&cfg.db_path(), &cfg.network)?
+            } else {
+                indexer::db::open_memory(&cfg.network)?
+            };
+            let json = serde_json::to_string(&indexer::book::snapshot(&conn, None)?)?;
+            match out {
+                None => println!("{json}"),
+                Some(path) => {
+                    // a matcher re-reading the file never sees half of it
+                    let mut tmp = path.clone().into_os_string();
+                    tmp.push(".tmp");
+                    std::fs::write(&tmp, json).with_context(|| PathBuf::from(&tmp).display().to_string())?;
+                    std::fs::rename(&tmp, &path).with_context(|| path.display().to_string())?;
+                }
+            }
         }
         IndexSub::ImportOrders { file } => {
             let export: MakerExport =

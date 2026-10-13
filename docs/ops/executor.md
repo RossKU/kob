@@ -141,7 +141,7 @@ matcher and keeper options (C, "Running"):
 | `--keeper-subsidy-max-kas`, `--keeper-replace-after-daa`, `--keeper-max-replacements` | 0.05, 100, 3 | keepers' liveness under fee pressure (C, "Fee policy"): the most KAS of its own funding the operator adds to one kill or refund its tip cannot pay at its urgency's rate (0: off); replace a stuck kill or refund of this process after this many DAA, at most this many times (0: never). Also on `keep` and `match --keep` |
 | `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` | 1, 36000, 8 | the operator's total keeper subsidy: at most this many KAS within any rolling window of this many DAA (36,000 = one hour), replacements included, and at most this many subsidised kills and refunds per tick; past either, jobs go at the rate their own tip pays (budget 0 or max jobs 0: no subsidy). Also on `keep` and `match --keep` |
 
-`index` (with `replay`, `export-orders`, `import-orders`, `rebase`), `match` and `keep` stay as
+`index` (with `replay`, `export-orders`, `export-book`, `import-orders`, `rebase`), `match` and `keep` stay as
 standalone modes. The database and the record log are the same files in every mode; never run two
 writers on one data directory.
 
@@ -1043,7 +1043,7 @@ trusted proxy. A proxy or CDN elsewhere: `listen` on the address it reaches and 
 Flags of note: `--reorg-window-hours` (default 12, consensus finality), `--no-record-log` (disables
 the permanent record log: then a lost or outdated database can only be rebuilt from what the node
 still retains; not recommended). Subcommands: `run` (default; the indexer alone), `replay`, `export-orders`,
-`import-orders`, `rebase`.
+`export-book` (the matcher's `--book-file` snapshot), `import-orders`, `rebase`.
 `kob-executor run` (Part A) embeds this indexer together with the matcher and the keepers and takes
 the same options.
 
@@ -2171,7 +2171,11 @@ The matcher plans against an `OrderBookView` (validated orders with their custod
 record data). In `run` it is the indexer's own store
 (`indexer::book::StoreBook`, Part A); standalone it
 reads a JSON snapshot (`--book-file`, the `MemoryBook` format of
-`kob_executor::matcher::book`), re-read whenever the file changes. The snapshot must contain only
+`kob_executor::matcher::book`), re-read whenever the file changes. An indexer writes it with `kob-executor index export-book
+--out FILE` (read-only next to the running writer; the file is replaced atomically): run it periodically, and keep
+`--max-book-lag-daa` (default 300) so that a snapshot no longer refreshed plans nothing (`kob_matcher_book_stale`). The
+snapshot lists the orders the indexer lists; orders it proves but does not list (keeper-only: off-allowlist tokens, below the
+minimum value) are not in it, so `keep --book-file` does not refund those: `run` does. The snapshot must contain only
 orders the indexer validated (§1.1, §1.2) and must report strays per order (an old snapshot's `receipts` key is
 ignored). `--offline` prints one JSON line per planned transaction: its fills (each with
 `evidence`, the leg index of a triggered fill's evidence, else null) and `updates` (`order`, `update` `arm` / `trail`,
@@ -2204,6 +2208,7 @@ kob-executor keep --network testnet-10 --book-file book.json --metrics-file /var
 | `--rpc-url` | the network's local node | the node's JSON wRPC endpoint (also `$KOB_NODE_WRPC`); default `ws://127.0.0.1:18110` on mainnet, `ws://127.0.0.1:18210` on testnet-10 (rusty-kaspa's default JSON wRPC ports) |
 | `--tick-ms` | 1000 | tick period |
 | `--fee-rate` | 100 | the lowest fee rate, sompi per gram (see Fee policy) |
+| `--max-book-lag-daa` | 300 | plan nothing while the snapshot (`--book-file`) is this many DAA behind the node (`kob_matcher_book_stale`); 0: never wait |
 | `--no-fee-estimate` | off | always pay `--fee-rate` (no `getFeeEstimate`) |
 | `--fee-max-rate`, `--fee-max-tx-kas` | 1000, 1 | the highest rate the estimate may set; the most one transaction pays (0: no cap), never below `--fee-rate` |
 | `--fee-refresh-ms`, `--fee-max-age-ms` | 10000, 60000 | how often the estimate is read; how long the last one is used while the node answers none |

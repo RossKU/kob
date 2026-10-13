@@ -98,6 +98,17 @@ fn run_needs_a_role_and_a_key_and_index_keeps_its_subcommands() {
     assert!(v.is_object(), "{out}");
     // a read-only tool: it creates nothing (and takes no writer lock)
     assert!(!dir.exists());
+    // the matcher's book snapshot of an empty store: a MemoryBook `match --book-file` reads, to stdout or atomically to a file
+    let (out, _) = exe(&["index", "export-book", "--data-dir", data, "--network", "testnet-10"]);
+    let b: MemoryBook = serde_json::from_str(out.trim()).unwrap();
+    assert!(b.orders.is_empty(), "{out}");
+    let file = std::env::temp_dir().join(format!("kob-cli-book-{}.json", std::process::id()));
+    exe(&["index", "export-book", "--data-dir", data, "--network", "testnet-10", "--out", file.to_str().unwrap()]);
+    assert_eq!(serde_json::from_str::<MemoryBook>(&std::fs::read_to_string(&file).unwrap()).unwrap(), b);
+    let _ = std::fs::remove_file(&file);
+    assert!(!dir.exists());
+    let (help, _) = exe(&["match", "--help"]);
+    assert!(help.contains("--max-book-lag-daa"), "{help}");
     let (help, _) = exe(&["--help"]);
     for cmd in ["run", "index", "match", "keep"] {
         assert!(help.contains(cmd), "{help}");
