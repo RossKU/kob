@@ -17,7 +17,7 @@ import { daaToUnix } from '../daa';
 import { KRON_MAX_OUTPUT_AMOUNT, extensionOfState, isKeyOwned, isKronState, isPlainState } from '../token-state';
 import { fitsI64 } from '../units';
 import { issue, hasError } from './common-issues';
-import { DEFAULT_CARRIER, str, tokenCarrierFloor } from './common';
+import { DEFAULT_CARRIER, orderCarrierFloor, str } from './common';
 import type { CondSummary } from './cond-common';
 import type { Legs } from './cond-legs';
 import { pairIssue } from './pair-issues';
@@ -337,7 +337,7 @@ function buildPairCreateAt(env: PairPlanEnv, spec: { order: OrderState; value: b
     const t = tokenOf(env, c.token);
     if (!t) return fail(issue('PLAN_MISMATCH', { reason: `custody of an unknown token ${c.token}` }));
     // the custody and the token change are token outputs of their program: the carrier must clear its floor
-    const floor = tokenCarrierFloor(env.kob, t.market.templateHash);
+    const floor = orderCarrierFloor(env.kob, t.market.templateHash);
     if (carrier < floor) return fail(issue('CARRIER_BELOW_FLOOR', { carrier, floor }, 'carrier'));
     let picked: TokenUtxo[];
     try {

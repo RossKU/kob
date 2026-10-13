@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_CARRIER, DUST_OUTPUT_MIN, bidBudgetRate, bidEscrowOf, buildCreate, carrierOf, defaultMinFillFor, failedPlan, finishPlan, heldAmount, makeAsk, makeBid,
-  makeDisclosure, refundTipFor, tokenCarrierFloor, usableTokenUtxos, verifyBuilt,
+  COVENANT_OUTPUT_MIN, DEFAULT_CARRIER, DUST_OUTPUT_MIN, bidBudgetRate, bidEscrowOf, buildCreate, carrierOf, defaultMinFillFor, failedPlan, finishPlan, heldAmount, makeAsk, makeBid,
+  makeDisclosure, orderCarrierFloor, refundTipFor, tokenCarrierFloor, usableTokenUtxos, verifyBuilt,
 } from './common';
 import { ISSUE_CATALOG, customIssue, hasError, issue } from './common-issues';
 import { FIXTURE_CARRIER, KAS, MAKER_PK, TOK, makeEnv, tokenUtxo } from '../../testing/fixtures';
@@ -127,16 +127,23 @@ describe('buildCreate / verifyBuilt', () => {
     expect(verifyBuilt(env, stripped, { ...spec, order })).toMatch(/placement record/);
   });
 
-  it('refuses a carrier below the floor of a token output (program floor, KIP-9 dust bound) before building', () => {
+  it('refuses a carrier below the floor of a token output (program floor, KIP-9 covenant output bound) before building', () => {
     const env = makeEnv();
     const kaspacom = env.kob.templates().find((t) => t.name === 'KCC20KaspaCom_0_2_5')!;
     expect(tokenCarrierFloor(env.kob, kaspacom.hash)).toBe(50_000_000n);
+    expect(orderCarrierFloor(env.kob, kaspacom.hash)).toBe(50_000_000n);
+    expect(COVENANT_OUTPUT_MIN).toBe(4n * DUST_OUTPUT_MIN);
+    // a plain token output (a transfer, a merge) keeps the dust bound; a new order's carrier the covenant output bound
     expect(tokenCarrierFloor(env.kob, env.token.templateHash)).toBe(DUST_OUTPUT_MIN);
-    const { spec } = askSpec(makeEnv({ carrier: DUST_OUTPUT_MIN - 1n }));
-    const r = buildCreate(makeEnv({ carrier: DUST_OUTPUT_MIN - 1n }), spec);
-    expect(r.built).toBeNull();
-    expect(r.issues.map((i) => i.code)).toEqual(['CARRIER_BELOW_FLOOR']);
-    const bid = makeBid(env, { minFill: TOK, price: P, expiryDaa: env.clock.daa + 5_000n, deliveryCarrier: DUST_OUTPUT_MIN - 1n });
+    expect(orderCarrierFloor(env.kob, env.token.templateHash)).toBe(COVENANT_OUTPUT_MIN);
+    // 0.02 KAS (the plain-output bound) and anything below 0.08 KAS is refused on a covenant output
+    for (const carrier of [DUST_OUTPUT_MIN - 1n, DUST_OUTPUT_MIN, COVENANT_OUTPUT_MIN - 1n]) {
+      const { spec } = askSpec(makeEnv({ carrier }));
+      const r = buildCreate(makeEnv({ carrier }), spec);
+      expect(r.built).toBeNull();
+      expect(r.issues.map((i) => i.code)).toEqual(['CARRIER_BELOW_FLOOR']);
+    }
+    const bid = makeBid(env, { minFill: TOK, price: P, expiryDaa: env.clock.daa + 5_000n, deliveryCarrier: COVENANT_OUTPUT_MIN - 1n });
     const rb = buildCreate(env, { order: bid, value: 10n * KAS, tokenAmount: 0n });
     expect(rb.issues.map((i) => [i.code, i.field])).toEqual([['CARRIER_BELOW_FLOOR', 'deliveryCarrier']]);
   });

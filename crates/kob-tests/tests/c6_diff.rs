@@ -1780,7 +1780,8 @@ fn c6_7_builders_refuse_token_outputs_below_the_program_floor() {
     let e = check_new_order(&AnyState::KobBid(low.clone())).unwrap_err().to_string();
     assert!(e.contains("deliveryCarrier") && e.contains("50000000"), "{e}");
     assert!(check_new_order(&AnyState::KobBid(BidState { delivery_carrier: KASPACOM_MIN_CARRIER as i64, ..low.clone() })).is_ok());
-    let dust = BidState { delivery_carrier: kob_protocol::tx::DUST_OUTPUT_MIN as i64 - 1, ..bid(MAKER_B, P245, TemplateId::Kcc20Ref) };
+    let dust =
+        BidState { delivery_carrier: kob_protocol::tx::COVENANT_OUTPUT_MIN as i64 - 1, ..bid(MAKER_B, P245, TemplateId::Kcc20Ref) };
     assert!(check_new_order(&AnyState::KobBid(dust)).unwrap_err().to_string().contains("deliveryCarrier"));
     // a send whose recipient carries less than the KaspaCom floor
     let send = |carrier: u64| {

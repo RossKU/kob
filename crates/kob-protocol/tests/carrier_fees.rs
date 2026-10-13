@@ -133,8 +133,9 @@ fn kaspacom_builds_at_its_floor() {
     }
 }
 
-/// The floors: a KaspaCom KCC20 0.2.5 token output below 0.5 KAS and any order carrier below the KIP-9 dust bound are
-/// refused by the builders; KaspaCom builds at exactly 0.5 KAS.
+/// The floors: a KaspaCom KCC20 0.2.5 token output below 0.5 KAS and a new order's carrier below the KIP-9 bound of a
+/// covenant output (0.08 KAS; the plain-output bound of 0.02 KAS is not enough) are refused by the builders, a fill whose
+/// carriers are dust by `seal`; KaspaCom builds at exactly 0.5 KAS.
 #[test]
 fn carriers_below_the_floors_are_refused() {
     let kc = TemplateId::Kcc20KaspaCom025;
@@ -148,8 +149,16 @@ fn carriers_below_the_floors_are_refused() {
     for name in ["create.ask", "create.bid", "take.bid.partial", "create.ifdBid"] {
         measure(&pick(floor, kc, name)).unwrap_or_else(|e| panic!("KaspaCom {name} at its floor: {e}"));
         assert!(measure(&pick(floor - 1, kc, name)).is_err(), "KaspaCom {name} below its floor");
-        let dust = kob_protocol::tx::DUST_OUTPUT_MIN;
-        assert!(measure(&pick(dust - 1, TemplateId::Kcc20Ref, name)).is_err(), "{name} below the dust bound");
+        // a new order's carriers (check_new_order, the create builder); a fill of an older order meets the transaction's own
+        // KIP-9 check (seal), which a dust carrier fails
+        let low: &[u64] = if name.starts_with("create.") {
+            &[kob_protocol::tx::DUST_OUTPUT_MIN, kob_protocol::tx::COVENANT_OUTPUT_MIN - 1]
+        } else {
+            &[kob_protocol::tx::DUST_OUTPUT_MIN - 1]
+        };
+        for &c in low {
+            assert!(measure(&pick(c, TemplateId::Kcc20Ref, name)).is_err(), "{name} at {c} sompi: below the bound");
+        }
     }
 }
 

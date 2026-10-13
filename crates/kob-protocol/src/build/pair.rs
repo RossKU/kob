@@ -51,7 +51,7 @@ pub(crate) fn check_new_pair(s: &AnyState) -> Result<()> {
     let (a, b) = pair_programs(s)?;
     s.check_numbers().map_err(Error::Invalid)?;
     check_key(&s.maker(), "order maker")?;
-    let floor_of = |program: TemplateId| program.min_token_output().unwrap_or(0).max(crate::tx::DUST_OUTPUT_MIN) as i64;
+    let floor_of = |program: TemplateId| program.min_token_output().unwrap_or(0).max(crate::tx::COVENANT_OUTPUT_MIN) as i64;
     let token_carrier = |what: &str, v: i64, program: TemplateId| -> Result<()> {
         let floor = floor_of(program);
         if v < floor {
@@ -157,8 +157,8 @@ pub(crate) fn check_new_pair(s: &AnyState) -> Result<()> {
                     return invalid("a sell-first entry's exit buys A back (side BID)");
                 }
             }
-            if i.exit_carrier < crate::tx::DUST_OUTPUT_MIN as i64 {
-                return invalid("exitCarrier is dust (the exit UTXO carries it)");
+            if i.exit_carrier < crate::tx::COVENANT_OUTPUT_MIN as i64 {
+                return invalid("exitCarrier is dust (the exit UTXO, a covenant output, carries it)");
             }
             if i.rpt_amount > 0 {
                 // a merge's new custody (of A or B) carries exitCarrier
@@ -256,7 +256,7 @@ fn check_new_cond_pair(c: &CondPairState, a: &Token, b: &Token, exit: bool) -> R
         }
     }
     let t_prog = prog_of(c.t_cov_id);
-    let floor = t_prog.min_token_output().unwrap_or(0).max(crate::tx::DUST_OUTPUT_MIN) as i64;
+    let floor = t_prog.min_token_output().unwrap_or(0).max(crate::tx::COVENANT_OUTPUT_MIN) as i64;
     if c.delivery_carrier < floor {
         return invalid(format!(
             "deliveryCarrier {} is below the {floor} sompi a token output of {} carries",
@@ -267,7 +267,7 @@ fn check_new_cond_pair(c: &CondPairState, a: &Token, b: &Token, exit: bool) -> R
     if exit && !c.is_ask() {
         // a re-arming sell-first exit pays its profit on the custody's token
         let s_prog = prog_of(c.s_cov_id);
-        let floor = s_prog.min_token_output().unwrap_or(0).max(crate::tx::DUST_OUTPUT_MIN) as i64;
+        let floor = s_prog.min_token_output().unwrap_or(0).max(crate::tx::COVENANT_OUTPUT_MIN) as i64;
         if c.delivery_carrier < floor {
             return invalid(format!("deliveryCarrier is below the {floor} sompi a token output of {} carries", s_prog.name()));
         }

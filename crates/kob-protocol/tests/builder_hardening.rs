@@ -393,3 +393,34 @@ fn audit_maker_harming_terms_of_new_orders_are_refused() {
         assert!(check_new_order(&ifda(IfdAskState { min_rest_daa: -1, ..ia })).is_err(), "{}", t.name());
     }
 }
+
+/// Every carrier of a new order becomes an output with a covenant id (a delivery, an exit order UTXO, a custody, the order
+/// UTXO): `check_new_order` and the create builders refuse one below the KIP-9 bound of a covenant output (0.08 KAS,
+/// `COVENANT_OUTPUT_MIN`), the plain-output bound of 0.02 KAS included, and accept exactly 0.08 KAS.
+#[test]
+fn new_order_carriers_clear_the_covenant_output_minimum() {
+    let t = TemplateId::Kcc20Ref;
+    let min = COVENANT_OUTPUT_MIN as i64;
+    assert_eq!(min, 8_000_000);
+    for low in [DUST_OUTPUT_MIN as i64, min - 1] {
+        let b = BidState { delivery_carrier: low, ..bid(MAKER_A, P245, t) };
+        let e = check_new_order(&AnyState::KobBid(b)).unwrap_err().to_string();
+        assert!(e.contains("deliveryCarrier") && e.contains("8000000"), "{e}");
+        let c = CondBidState { delivery_carrier: low, ..cond_bid(MAKER_A, t) };
+        assert!(check_new_order(&AnyState::KobCondBid(c)).is_err());
+        let ib = IfdBidState { exit_carrier: low, ..ifd_bid(MAKER_A, 10, t) };
+        let e = check_new_order(&AnyState::KobIfdBid(ib)).unwrap_err().to_string();
+        assert!(e.contains("exitCarrier"), "{e}");
+        let p = common::pair::pair(MAKER_A, false, t, t, common::pair::RATE);
+        let e = check_new_order(&AnyState::KobPair(PairState { delivery_carrier: low, ..p })).unwrap_err().to_string();
+        assert!(e.contains("deliveryCarrier"), "{e}");
+    }
+    check_new_order(&AnyState::KobBid(BidState { delivery_carrier: min, ..bid(MAKER_A, P245, t) })).unwrap();
+    check_new_order(&AnyState::KobCondBid(CondBidState { delivery_carrier: min, ..cond_bid(MAKER_A, t) })).unwrap();
+    // the create builder refuses an order value or a custody carrier below the bound
+    let Action::CreateOrder(c) = find("create.ask") else { panic!("create.ask") };
+    let e = build(&Action::CreateOrder(CreateOrder { token_carrier: (min - 1) as u64, ..c.clone() })).unwrap_err().to_string();
+    assert!(e.contains("tokenCarrier"), "{e}");
+    let e = build(&Action::CreateOrder(CreateOrder { value: (min - 1) as u64, ..c })).unwrap_err().to_string();
+    assert!(e.contains("order value"), "{e}");
+}

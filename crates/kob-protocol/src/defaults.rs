@@ -44,7 +44,7 @@ pub const MIN_REST_DAA: i64 = 50;
 /// Default order carrier (sompi): 2 KAS, the KAS a wallet puts on every covenant UTXO of a new order (the order UTXO, its
 /// custody, each `deliveryCarrier`, each `exitCarrier`; a pair entry's `exitCarrier` also funds its exit's deliveries,
 /// `IfdPairState::exit_carrier_needed`). Never below a token output's floor (`TemplateId::min_token_output`, KaspaCom
-/// KCC20 0.2.5: 0.5 KAS) nor the KIP-9 dust bound (`tx::DUST_OUTPUT_MIN`).
+/// KCC20 0.2.5: 0.5 KAS) nor the KIP-9 bound of a covenant output (0.08 KAS, `tx::COVENANT_OUTPUT_MIN`).
 ///
 /// Measured (`tests/carrier_fees.rs`: every builder shape of the golden set on the 8 token programs and 7 program pairs,
 /// 1,270 transactions): a token or order output carries a covenant id, so its KIP-9 storage plurality is 2 and its storage
@@ -275,12 +275,12 @@ mod tests {
         assert_eq!(DEFAULT_MIN_FILL_IMMEDIATE, 1);
     }
 
-    /// The default order carrier clears every token program's floor and the dust bound, and still holds what a wallet
+    /// The default order carrier clears every token program's floor and the covenant output bound, and still holds what a wallet
     /// draws from it by default: a trailing sell's 20 keeper tips plus its refund tip (`KobCondAsk`, the largest program
     /// tips), and an if-done exit's trailing reserve at most half its carrier (the web planners' rules).
     #[test]
     fn the_default_order_carrier_clears_the_floors_and_the_keeper_reserve() {
-        const { assert!(DEFAULT_ORDER_CARRIER >= crate::tx::DUST_OUTPUT_MIN) };
+        const { assert!(DEFAULT_ORDER_CARRIER >= crate::tx::COVENANT_OUTPUT_MIN) };
         for id in TemplateId::ALL.into_iter().filter(|t| t.is_token()) {
             assert!(DEFAULT_ORDER_CARRIER >= id.min_token_output().unwrap_or(0), "{}", id.name());
         }

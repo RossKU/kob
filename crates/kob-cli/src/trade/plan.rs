@@ -24,7 +24,7 @@ use kob_protocol::payload::recover_orders;
 use kob_protocol::state::{
     AnyState, AskState, BidState, CondAskState, CondBidState, IfdAskState, IfdBidState, PairState, SIDE_ASK, SIDE_BID,
 };
-use kob_protocol::tx::{BuiltTx, FeeOptions, KeyUtxo, TokenUtxo, DUST_OUTPUT_MIN};
+use kob_protocol::tx::{BuiltTx, FeeOptions, KeyUtxo, TokenUtxo, COVENANT_OUTPUT_MIN, DUST_OUTPUT_MIN};
 use kob_protocol::Family;
 
 use super::market::TokenMarket;
@@ -976,6 +976,12 @@ pub fn token_carrier_floor(m: &TokenMarket) -> i64 {
     m.program.min_token_output().unwrap_or(1).max(DUST_OUTPUT_MIN) as i64
 }
 
+/// The least KAS a carrier of a new order holds when it becomes a token output of `m`'s program (its custody, a delivery):
+/// the token output's floor and the KIP-9 bound of a covenant output (`tx::COVENANT_OUTPUT_MIN`, matcher.md 10.1).
+pub fn order_carrier_floor(m: &TokenMarket) -> i64 {
+    token_carrier_floor(m).max(COVENANT_OUTPUT_MIN as i64)
+}
+
 // ------------------------------------------------------------------------------------------------ building (common.ts)
 
 struct CreateSpec {
@@ -1001,7 +1007,8 @@ fn carrier_issues(env: &Env, order: &AnyState, token_carrier: i64) -> Vec<Issue>
     let m = &env.market;
     let mut out = vec![];
     let mut check = |field: &str, v: i64, token: bool| {
-        let floor = if token { token_carrier_floor(m) } else { DUST_OUTPUT_MIN as i64 };
+        // every carrier of a new order becomes an output with a covenant id (a token output, an exit order UTXO)
+        let floor = if token { order_carrier_floor(m) } else { COVENANT_OUTPUT_MIN as i64 };
         if v < floor {
             out.push(error(
                 "CARRIER_BELOW_FLOOR",
@@ -2503,7 +2510,7 @@ fn place_pair(env: &Env, pair: &PairPart, d: Draft, mut issues: Vec<Issue>) -> P
     let mut changes = vec![];
     for (tok, amount) in order.custodies() {
         let (m, utxos) = if tok == a.cov { (a, &env.token_utxos) } else { (b, &pair.quote_utxos) };
-        let floor = token_carrier_floor(m);
+        let floor = order_carrier_floor(m);
         if dc < floor {
             issues.push(error(
                 "CARRIER_BELOW_FLOOR",

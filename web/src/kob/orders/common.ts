@@ -30,10 +30,15 @@ export const carrierOf = (env: Pick<PlanEnv, 'carrier'>): bigint => env.carrier 
 
 /** Smallest output (sompi, 0.02 KAS) whose KIP-9 storage mass alone fits the block limit (kob-protocol `tx::DUST_OUTPUT_MIN`). */
 export const DUST_OUTPUT_MIN = 2_000_000n;
+/**
+ * Smallest output with a covenant id (sompi, 0.08 KAS: an order UTXO, a custody, a delivery) whose KIP-9 storage mass alone fits the block limit
+ * (kob-protocol `tx::COVENANT_OUTPUT_MIN`, four times the plain bound): the least KAS of every carrier of a new order (matcher.md 10.1).
+ */
+export const COVENANT_OUTPUT_MIN = 8_000_000n;
 
 /**
  * The least KAS a token output of the program `tplHash` can carry: the program's own floor (kob-wasm `templates`, `minTokenOutput`;
- * KaspaCom's KCC20 0.2.5 refuses token outputs below 0.5 KAS) and the dust bound, whichever is larger (kob-protocol check_new_order).
+ * KaspaCom's KCC20 0.2.5 refuses token outputs below 0.5 KAS) and the dust bound, whichever is larger (a transfer, a merge).
  */
 export function tokenCarrierFloor(kob: PlanEnv['kob'], tplHash: string): bigint {
   const t = kob.templates().find((x) => x.hash === tplHash && x.tokenSlots);
@@ -41,14 +46,23 @@ export function tokenCarrierFloor(kob: PlanEnv['kob'], tplHash: string): bigint 
   return program > DUST_OUTPUT_MIN ? program : DUST_OUTPUT_MIN;
 }
 
-/** The carriers of a new order that become token outputs (with their program) or plain KAS outputs, checked against their floors. */
+/**
+ * The least KAS a carrier of a new order can hold when it becomes a token output of the program `tplHash` (its custody, a delivery): the token
+ * output's floor and the KIP-9 covenant output bound, whichever is larger (kob-protocol check_new_order, matcher.md 10.1).
+ */
+export function orderCarrierFloor(kob: PlanEnv['kob'], tplHash: string): bigint {
+  const floor = tokenCarrierFloor(kob, tplHash);
+  return floor > COVENANT_OUTPUT_MIN ? floor : COVENANT_OUTPUT_MIN;
+}
+
+/** The carriers of a new order that become token outputs (with their program) or exit order UTXOs, checked against their floors. */
 function carrierIssues(env: PlanEnv, order: OrderState, tokenCarrier: bigint): PlanIssue[] {
   const out: PlanIssue[] = [];
   const s = order.state as unknown as Record<string, string>;
   const own = s.tokenTplHash;
   const check = (field: string, v: bigint | string | undefined, tplHash: string | null) => {
     if (v === undefined) return;
-    const floor = tplHash === null ? DUST_OUTPUT_MIN : tokenCarrierFloor(env.kob, tplHash);
+    const floor = tplHash === null ? COVENANT_OUTPUT_MIN : orderCarrierFloor(env.kob, tplHash);
     if (BigInt(v) < floor) out.push(issue('CARRIER_BELOW_FLOOR', { carrier: BigInt(v), floor }, field));
   };
   if (tokenCarrier > 0n) check('carrier', tokenCarrier, own);

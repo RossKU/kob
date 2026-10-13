@@ -302,7 +302,8 @@ impl TemplateId {
     /// `c6_diff`, `c6_7_token_output_floors_are_measured`): KaspaCom's KCC20 0.2.5 refuses a token output below 0.5 KAS;
     /// the reference programs, P2 and the KRON programs take any value. Every builder refuses a token output below it, and
     /// [`crate::build::check_new_order`] refuses order terms whose token outputs (delivery and exit carriers) would be.
-    /// The storage-mass bound of a small output is separate ([`crate::tx::DUST_OUTPUT_MIN`]).
+    /// The storage-mass bound of a small output is separate ([`crate::tx::COVENANT_OUTPUT_MIN`] for a token output, which
+    /// carries a covenant id).
     pub fn min_token_output(self) -> Option<u64> {
         self.profile().map(|p| p.carrier_floor)
     }

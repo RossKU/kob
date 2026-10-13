@@ -1147,9 +1147,11 @@ tick. Planning time with pair books is not measured.
    id (a top-up is a cancel-replace); fund asks with exactly `amountLeft` base units, a pair order's custodies with
    exactly the amounts its state names (§14). Every carrier that
    becomes a token output (custody, delivery, a sell-first exit's new custody) carries at least its token
-   program's floor (KaspaCom KCC20 0.2.5 refuses token outputs below 0.5 KAS) and every output at least
-   the KIP-9 dust bound of 0.02 KAS (a smaller output's storage mass alone exceeds the block limit); the
-   builders refuse a transaction that breaks either ("dust payout").
+   program's floor (KaspaCom KCC20 0.2.5 refuses token outputs below 0.5 KAS), and every carrier that becomes an output
+   with a covenant id (the order UTXO, a custody, `deliveryCarrier`, `exitCarrier`, a merge's new custody) at least the
+   KIP-9 bound of a covenant output, 0.08 KAS (`tx::COVENANT_OUTPUT_MIN`, §2.2: a smaller covenant output's storage mass
+   alone exceeds the block limit; a plain output's bound is 0.02 KAS, `tx::DUST_OUTPUT_MIN`). `check_new_order` and the
+   builders refuse new order terms or a transaction that breaks either ("dust payout").
 2. **Market**: an IOC auction: `price` = the touch (best opposite all-in quote, sompi per whole token),
    `priceEnd` = the touch ∓ slippage bound (default 3%), `decayStep = 1`, slope (sompi per whole token per DAA) so that
    the bound is reached after the auction length (default 200 DAA = 20 s), `activeFrom` = current DAA + 30,

@@ -571,3 +571,22 @@ fn pair_limits_equal_the_golden_vectors() {
         assert_eq!(p.request.unwrap().value, gv, "{name}");
     }
 }
+
+/// A new order's carriers become outputs with a covenant id: the planner refuses a carrier below the KIP-9 covenant output
+/// bound (0.08 KAS, `tx::COVENANT_OUTPUT_MIN`), the plain-output bound of 0.02 KAS included, before building (matcher.md
+/// 10.1), on a sell's custody carrier and a buy's delivery carriers alike; KaspaCom's own floor (0.5 KAS) stays above it.
+#[test]
+fn new_order_carriers_clear_the_covenant_output_minimum() {
+    use kob_protocol::tx::{COVENANT_OUTPUT_MIN, DUST_OUTPUT_MIN};
+    let m = market(TemplateId::Kcc20Ref);
+    assert_eq!(order_carrier_floor(&m), COVENANT_OUTPUT_MIN as i64);
+    assert_eq!(token_carrier_floor(&m), DUST_OUTPUT_MIN as i64);
+    assert_eq!(order_carrier_floor(&market(TemplateId::Kcc20KaspaCom025)), 50_000_000);
+    for c in [DUST_OUTPUT_MIN, COVENANT_OUTPUT_MIN - 1] {
+        let e = Env { carrier: Some(c), ..env(&m) };
+        for side in [Side::Sell, Side::Buy] {
+            let p = plan_order(&e, &Intent::Limit(LimitIntent { tip: 100_000, ..limit(side, 10 * TOK, 250_000_000) }));
+            assert!(!p.ok && codes(&p).contains(&"CARRIER_BELOW_FLOOR"), "{c} {side:?}: {:?}", codes(&p));
+        }
+    }
+}

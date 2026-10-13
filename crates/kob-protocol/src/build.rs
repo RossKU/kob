@@ -78,10 +78,10 @@ fn pos(v: i64, what: &str) -> Result<u64> {
     Ok(v as u64)
 }
 
-/// A KAS amount a fill puts on an output with a covenant id (a pair order's continuation, its exit order UTXO, the carrier of
-/// its delivery): KIP-9 dust is refused here, naming the output, because `seal` refuses the whole transaction for it (the
-/// output's storage mass alone exceeds the block limit: two storage units, [`crate::tx::COVENANT_OUTPUT_MIN`]) without
-/// knowing which leg made it.
+/// A KAS amount a fill or a new order puts on an output with a covenant id (a pair order's continuation, its exit order UTXO,
+/// the carrier of its delivery; a new order's value and custody carrier): KIP-9 dust is refused here, naming the output,
+/// because `seal` refuses the whole transaction for it (the output's storage mass alone exceeds the block limit: two storage
+/// units, [`crate::tx::COVENANT_OUTPUT_MIN`]) without knowing which leg made it.
 fn kas_out(v: i64, what: &str) -> Result<u64> {
     if v < crate::tx::COVENANT_OUTPUT_MIN as i64 {
         return invalid(format!(
@@ -248,24 +248,25 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
     // Family and extension-commitment consistency of the order and its token program.
     let program = order_token(s)?.1;
     s.check_numbers().map_err(Error::Invalid)?;
-    // A carrier that becomes a token output of `program` (a delivery, a new custody) must clear the program's floor and the
-    // dust bound; one that becomes a plain KAS output (an exit order UTXO) the dust bound.
+    // Every carrier of a new order becomes an output with a covenant id: a token output of `program` (a delivery, a new
+    // custody) must clear the program's floor and the KIP-9 bound of a covenant output (`tx::COVENANT_OUTPUT_MIN`); an
+    // exit order UTXO the covenant output bound.
     let token_carrier = |what: &str, v: i64, program: TemplateId| -> Result<()> {
-        let floor = program.min_token_output().unwrap_or(0).max(crate::tx::DUST_OUTPUT_MIN);
+        let floor = program.min_token_output().unwrap_or(0).max(crate::tx::COVENANT_OUTPUT_MIN);
         if v < floor as i64 {
             return invalid(format!(
-                "{what} {v} sompi is below {floor} sompi: the least KAS a token output of {} can carry (program floor, and the KIP-9 dust bound of {} sompi)",
+                "{what} {v} sompi is below {floor} sompi: the least KAS a token output of {} can carry (program floor, and the KIP-9 bound of a covenant output, {} sompi)",
                 program.name(),
-                crate::tx::DUST_OUTPUT_MIN
+                crate::tx::COVENANT_OUTPUT_MIN
             ));
         }
         Ok(())
     };
     let kas_carrier = |what: &str, v: i64| -> Result<()> {
-        if v < crate::tx::DUST_OUTPUT_MIN as i64 {
+        if v < crate::tx::COVENANT_OUTPUT_MIN as i64 {
             return invalid(format!(
-                "{what} {v} sompi is dust: below {} sompi an output's KIP-9 storage mass alone exceeds the block limit",
-                crate::tx::DUST_OUTPUT_MIN
+                "{what} {v} sompi is dust: below {} sompi the KIP-9 storage mass of a covenant output alone exceeds the block limit",
+                crate::tx::COVENANT_OUTPUT_MIN
             ));
         }
         Ok(())
@@ -816,6 +817,7 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
     if (r.value as i64) < min {
         return invalid(format!("order value {} is below the {min} sompi this order needs to be fillable", r.value));
     }
+    kas_out(r.value as i64, "the order value")?;
     let mut d = Draft::new(r.lock_time, &r.fee, Some(r.change.unwrap_or(r.funding[0].pubkey)))?;
     let holds = r.order.holds_tokens();
     let mut ext = None;
@@ -857,7 +859,7 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
         if have < amount {
             return invalid(format!("token inputs hold {have} < the {amount} base units of amountLeft"));
         }
-        let carrier = pos(r.token_carrier as i64, "tokenCarrier")?;
+        let carrier = kas_out(r.token_carrier as i64, "tokenCarrier")?;
         let idx = d.add_token_output(token, TokenState::custody(fam, amount, order_id, ext), carrier)?;
         custody = Some(Custody { token_output: idx as u16, extension_commitment: ext });
         if have > amount {
@@ -883,6 +885,7 @@ fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     if (r.value as i64) < min {
         return invalid(format!("order value {} is below the {min} sompi this order needs to be fillable", r.value));
     }
+    kas_out(r.value as i64, "the order value")?;
     let custodies = r.order.custodies();
     if custodies.is_empty() {
         return invalid("a pair order holds tokens in custody");
@@ -916,7 +919,7 @@ fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
         d.add_p2pk(f);
     }
     let (_, order_id) = d.add_genesis(auth, vec![(r.value, r.order.spk())], Some(r.order.template_id()))?;
-    let carrier = pos(r.token_carrier as i64, "tokenCarrier")?;
+    let carrier = kas_out(r.token_carrier as i64, "tokenCarrier")?;
     let mut parts = vec![];
     for (cov, amount) in &custodies {
         let tok = tok_of(*cov);
@@ -1091,6 +1094,7 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
         if (rep.value as i64) < min_order_value(&rep.order) {
             return invalid("replacement value is below what the new order needs to be fillable");
         }
+        kas_out(rep.value as i64, "the replacement value")?;
         let (outs, new_id) = d.add_genesis(oi, vec![(rep.value, rep.order.spk())], Some(rep.order.template_id()))?;
         // a tiny change rides on the replacement (the change rule of the amend builders)
         d.absorber = absorber_for(&rep.order, rep.value, outs[0]);
@@ -1102,8 +1106,10 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
                 return invalid(format!("the replacement needs {amount} base units; custody, strays and top-up hold {}", g.1));
             }
             let e = g.2.ok_or_else(|| Error::Invalid("the replacement needs tokens (custody or top-up)".into()))?;
-            let carrier =
-                pos(rep.token_carrier.unwrap_or(g.3.first().copied().unwrap_or(default_carrier)) as i64, "replacement tokenCarrier")?;
+            let carrier = kas_out(
+                rep.token_carrier.unwrap_or(g.3.first().copied().unwrap_or(default_carrier)) as i64,
+                "replacement tokenCarrier",
+            )?;
             let idx = d.add_token_output(tok, TokenState::custody(tok.1.family(), amount, new_id, e), carrier)?;
             parts.push(Custody { token_output: idx as u16, extension_commitment: e });
             g.1 -= amount;
