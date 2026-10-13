@@ -22,6 +22,8 @@ export default {
   'settings.saved': 'Saved in this browser. Reload to apply the new settings.',
   'settings.saveFailed': 'The browser refused to store the settings (private mode or blocked storage).',
   'settings.reload': 'Reload now',
+  'settings.resetServers': 'Use the site\'s servers',
+  'settings.resetServers.hint': 'Removes the network, node, indexers and registry saved in this browser. Other settings stay.',
 
   'settings.versions.title': 'Versions and connections',
   'settings.versions.app': 'App',

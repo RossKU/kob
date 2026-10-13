@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, mergeConfig, readSettings, saveSettings, type AppConfig } from '../../config';
-import { changedFields, changesServers, clearKobStorage, describeStorageKey, formFromConfig, kobStorageKeys, settingsPatch, validateSettings } from './settings-model';
+import { changedFields, changesServers, clearKobStorage, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings } from './settings-model';
 
 const base = (): AppConfig => mergeConfig({ injected: { network: 'testnet-10', indexerUrl: 'https://idx.example', nodeUrl: 'wss://node.example:18210' } });
 
@@ -56,6 +56,33 @@ describe('changedFields', () => {
     const ch = changedFields(c, { ...f, dynamicFee: false });
     expect(ch).toEqual(['dynamicFee']);
     expect(changesServers(ch)).toBe(false);
+  });
+});
+
+describe('settingsPatch(only) + resetServersPatch', () => {
+  const memory = () => {
+    const m = new Map<string, string>();
+    return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k), m };
+  };
+
+  it('saving only a checkbox stores only that flag: the site servers are not pinned in this browser', () => {
+    const st = memory();
+    const form = { ...formFromConfig(base()), priorityFee: true };
+    const only = changedFields(base(), form);
+    expect(only).toEqual(['priorityFee']);
+    expect(saveSettings(settingsPatch(validateSettings(form).clean, only), st)).toBe(true);
+    expect(readSettings(st)).toEqual({ features: { priorityFee: true } });
+    expect(storedServerFields(readSettings(st))).toEqual([]);
+  });
+
+  it('a changed indexer is stored, and the reset removes the saved servers but keeps the other settings', () => {
+    const st = memory();
+    const form = { ...formFromConfig(base()), indexerUrl: 'https://other.example', kastle: true };
+    expect(saveSettings(settingsPatch(validateSettings(form).clean, changedFields(base(), form)), st)).toBe(true);
+    expect(storedServerFields(readSettings(st))).toEqual(['indexerUrl']);
+    expect(saveSettings(resetServersPatch(), st)).toBe(true);
+    expect(readSettings(st)).toEqual({ features: { kastle: true } });
+    expect(mergeConfig({ injected: { indexerUrl: 'https://idx.example' }, settings: readSettings(st) }).indexerUrl).toBe('https://idx.example');
   });
 });
 

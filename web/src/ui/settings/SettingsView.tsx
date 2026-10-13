@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
-import { saveSettings, type ConfigWarning, type NetworkName } from '../../config';
+import { readSettings, saveSettings, type ConfigWarning, type NetworkName } from '../../config';
 import { t } from '../../i18n';
 import { version as appVersion } from '../../../package.json';
 import {
@@ -9,7 +9,7 @@ import {
 } from '../kit';
 import { NotifySettingsSection } from '../notify/NotifySettings';
 import { IndexerTrust } from '../shell/IndexerTrust';
-import { changedFields, changesServers, clearKobStorage, describeStorageKey, formFromConfig, kobStorageKeys, settingsPatch, validateSettings, type SettingsForm } from './settings-model';
+import { changedFields, changesServers, clearKobStorage, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings, type SettingsForm } from './settings-model';
 
 const reload = () => window.location.reload();
 
@@ -27,10 +27,18 @@ function ConnectionSettings() {
   };
   const err = (code: string | undefined) => (code ? t(`settings.error.${code}`) : null);
 
+  // servers saved in this browser (the banner on every page says so): one click gives the site's own back
+  const [storedServers, setStoredServers] = useState(() => storedServerFields(readSettings()));
   const save = () => {
     if (!v.ok) return;
-    const ok = saveSettings(settingsPatch(v.clean));
+    const ok = saveSettings(settingsPatch(v.clean, changes));
     setSaved(ok ? 'ok' : 'failed');
+    setStoredServers(storedServerFields(readSettings()));
+  };
+  const resetServers = () => {
+    const ok = saveSettings(resetServersPatch());
+    setSaved(ok ? 'ok' : 'failed');
+    setStoredServers(storedServerFields(readSettings()));
   };
 
   return (
@@ -60,6 +68,11 @@ function ConnectionSettings() {
           <Button variant="primary" disabled={!v.ok || changes.length === 0 || (servers && !ack)} onClick={save} data-testid="settings-save">
             {t('common.save')}
           </Button>
+          {storedServers.length ? (
+            <Button onClick={resetServers} title={t('settings.resetServers.hint')} data-testid="settings-reset-servers">
+              {t('settings.resetServers')}
+            </Button>
+          ) : null}
           {saved === 'ok' ? <Button onClick={reload} data-testid="settings-reload">{t('settings.reload')}</Button> : null}
         </div>
         {saved === 'ok' ? <Banner tone="ok" data-testid="settings-saved">{t('settings.saved')}</Banner> : null}

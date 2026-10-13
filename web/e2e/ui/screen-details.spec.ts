@@ -105,3 +105,30 @@ test('the registry template verdicts fit the settings column', async ({ appPage:
   await expect(wrap.locator('tbody tr').first()).toBeVisible();
   expect(await wrap.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
 });
+
+test.describe('settings', () => {
+  test('saving one checkbox does not pin the site servers; a saved indexer can be reset from Settings', async ({ appPage: page, mock }) => {
+    await listExkcc(page);
+    await page.goto('/#/settings');
+    await page.getByTestId('settings-priority-fee').check();
+    await page.getByTestId('settings-save').click();
+    await expect(page.getByTestId('settings-saved')).toBeVisible();
+    expect(JSON.parse((await page.evaluate(() => localStorage.getItem('kob.settings')))!)).toEqual({ features: { priorityFee: true } });
+    await expect(page.getByTestId('settings-reset-servers')).toHaveCount(0);
+
+    // another indexer (the same mock under another host name), saved: every page says so
+    await page.getByTestId('settings-indexer-url').fill(mock.url.replace('127.0.0.1', 'localhost'));
+    await page.getByTestId('settings-servers-ack').check();
+    await page.getByTestId('settings-save').click();
+    await page.reload();
+    await expect(page.getByTestId('banner-stored-indexer')).toBeVisible();
+    // the banner says "reset it": Settings has the button
+    await page.getByTestId('settings-reset-servers').click();
+    await expect(page.getByTestId('settings-saved')).toBeVisible();
+    expect(JSON.parse((await page.evaluate(() => localStorage.getItem('kob.settings')))!)).toEqual({ features: { priorityFee: true } });
+    await page.reload();
+    await expect(page.getByTestId('settings-view')).toBeVisible();
+    await expect(page.getByTestId('banner-stored-indexer')).toHaveCount(0);
+    await expect(page.getByTestId('settings-indexer-url')).toHaveValue(mock.url);
+  });
+});

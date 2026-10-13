@@ -68,10 +68,34 @@ export function changedFields(current: AppConfig, form: SettingsForm): (Settings
 /** A change of any server the app talks to (needs the "wrong data" acknowledgement before saving). */
 export const changesServers = (fields: readonly string[]): boolean => fields.some((f) => f === 'indexerUrl' || f === 'nodeUrl' || f === 'registryUrl');
 
-/** The object handed to `saveSettings` (network + URLs + Kastle, priority-fee and dynamic-fee flags; `features.test` can never be stored). */
-export function settingsPatch(clean: SettingsForm): Record<string, unknown> {
-  return { network: clean.network, indexerUrl: clean.indexerUrl, nodeUrl: clean.nodeUrl, registryUrl: clean.registryUrl, features: { kastle: clean.kastle, priorityFee: clean.priorityFee }, fees: { dynamic: clean.dynamicFee } };
+/**
+ * The object handed to `saveSettings` (network + URLs + Kastle, priority-fee and dynamic-fee flags; `features.test` can never be stored).
+ * `only`: just these fields (`changedFields`): ticking a checkbox must not pin the deployment's servers in this browser, where a later change of the
+ * site's own servers would no longer apply.
+ */
+export function settingsPatch(clean: SettingsForm, only?: readonly string[]): Record<string, unknown> {
+  const all = { network: clean.network, indexerUrl: clean.indexerUrl, nodeUrl: clean.nodeUrl, registryUrl: clean.registryUrl, features: { kastle: clean.kastle, priorityFee: clean.priorityFee }, fees: { dynamic: clean.dynamicFee } };
+  if (!only) return all;
+  const out: Record<string, unknown> = {};
+  for (const f of ['network', 'indexerUrl', 'nodeUrl', 'registryUrl'] as const) if (only.includes(f)) out[f] = all[f];
+  const features: Record<string, boolean> = {};
+  if (only.includes('kastle')) features.kastle = clean.kastle;
+  if (only.includes('priorityFee')) features.priorityFee = clean.priorityFee;
+  if (Object.keys(features).length) out.features = features;
+  if (only.includes('dynamicFee')) out.fees = { dynamic: clean.dynamicFee };
+  return out;
 }
+
+const SERVER_KEYS = ['network', 'indexerUrl', 'nodeUrl', 'registryUrl', 'extraIndexerUrls', 'allowQueryOverrides'] as const;
+
+/** The server fields this browser has saved (they override the site's own for every visit; the global banners name them). */
+export function storedServerFields(stored: unknown): string[] {
+  if (!stored || typeof stored !== 'object') return [];
+  return SERVER_KEYS.filter((f) => (stored as Record<string, unknown>)[f] !== undefined);
+}
+
+/** `saveSettings` patch that drops the saved network and servers: the site's own apply again after a reload. */
+export const resetServersPatch = (): Record<string, null> => Object.fromEntries(SERVER_KEYS.map((k) => [k, null]));
 
 // ------------------------------------------------------------------------------------------------ local data
 
