@@ -826,7 +826,7 @@ Config: `fetch_parallel` (default **4**, 1 turns it off), `prefetch_max_mb` (def
 **Why the bound is hard now.** On 10-02 the soak's two indexers caught up through the tail of the TN10 flood with the
 estimate-based bound: their peaks were **341 MB and 327 MB against the 256 MiB (268 MB) budget**, 27 % over, because the
 estimate for windows in flight was the average size per chain block so far and the flood's chain blocks were 10x the calm
-ones (RSS 955 and 769 MB; `tools/soak/README.md`). The quarter of margin could not cover that. With the allowance as the
+ones (RSS 955 and 769 MB). The quarter of margin could not cover that. With the allowance as the
 request's size limit no answer can exceed its share, and `tests/flow_follower.rs`
 (`prefetch_holds_its_budget_when_windows_come_back_two_to_three_times_larger_than_estimated`) holds the peak within the budget
 when the chain blocks grow 2x and 3x after the estimate was learnt, with the transport's check and without it. The process
@@ -2074,7 +2074,7 @@ bucket of its urgency:
   rate of its own beyond the floor; it submits the payers' transactions as signed.
 * Why: under the TN10 flood of 10-02 the node estimated 140 to 194 sompi per gram for the normal buckets and 115 for the low
   one while every KOB transaction paid 100; orders, fills and IOC / FOK kills were accepted 2 to 4 minutes late
-  (`tools/soak/README.md`).
+  (TN10 soak, 2026-10-02).
 
 **Replacement (RBF).** The matcher never re-sends a transaction at a higher fee: a batch stuck at a low rate is tracked as
 pending until it is accepted or the pending timeout (600 DAA) drops it and its orders back off, and the next plan is priced
