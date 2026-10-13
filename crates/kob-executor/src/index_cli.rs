@@ -2,8 +2,6 @@
 
 use crate::config::NodeConfig;
 use crate::config::{IndexerConfig, StartMode};
-use crate::hex::Hash32;
-use crate::indexer::ingest::Cursor;
 use crate::indexer::{self, Indexer};
 use crate::recover::{self, MakerExport};
 use crate::rpc::multi::{MultiNode, NodeSpec};
@@ -326,24 +324,14 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
         IndexSub::Rebase { to, no_reconcile } => {
             let idx = Indexer::open(cfg.clone())?;
             let client = node_client(&cfg);
-            let info = client.server_info().await?;
-            if info.network_id != cfg.network || !info.is_synced {
-                return Err(anyhow!("node reports network `{}` synced={}", info.network_id, info.is_synced));
-            }
-            let dag = client.dag_info().await?;
-            let hash: Hash32 = match to {
-                StartMode::Sink => dag.sink,
-                StartMode::PruningPoint => dag.pruning_point_hash,
-                StartMode::Hash(h) => h,
-            };
-            let cursor = Cursor { hash, daa: dag.virtual_daa_score };
-            if no_reconcile {
-                let mut g = idx.ingest.lock().unwrap_or_else(|e| e.into_inner());
-                g.apply_ops(vec![], Some(cursor))?;
-                println!("cursor moved to {hash}; tracked orders were NOT reconciled");
-            } else {
-                let rep = recover::reconcile_open_orders(&idx.ingest, client.as_ref(), &cfg.network, cursor).await?;
-                println!("cursor moved to {hash}; closed {} spent outputs, adopted {} continuations", rep.closed, rep.adopted);
+            let rep = recover::rebase(&idx.ingest, client.as_ref(), &cfg.network, &to, !no_reconcile).await?;
+            let (hash, daa) = (rep.cursor.hash, rep.cursor.daa);
+            match rep.reconciled {
+                None => println!("cursor moved to {hash} (DAA {daa}); tracked orders were NOT reconciled"),
+                Some(r) => println!(
+                    "cursor moved to {hash} (DAA {daa}); closed {} spent outputs, adopted {} continuations",
+                    r.closed, r.adopted
+                ),
             }
         }
     }

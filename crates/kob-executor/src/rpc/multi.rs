@@ -462,6 +462,9 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     async fn block_blue_score(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
         self.nodes[0].block_blue_score(hash).await
     }
+    async fn block_daa_score(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
+        self.nodes[0].block_daa_score(hash).await
+    }
     async fn chain_hashes(&self, start: Hash32) -> Result<ChainHashes, RpcError> {
         self.nodes[0].chain_hashes(start).await
     }

@@ -9,7 +9,7 @@ use kob_executor::indexer::db::{open_memory, open_writer};
 use kob_executor::indexer::ingest::Cursor;
 use kob_executor::indexer::recordlog::{self, LogBatch, LogCursor, RecordLog};
 use kob_executor::indexer::{replay_from_log, Indexer};
-use kob_executor::recover::{export_orders, import_orders, reconcile_open_orders};
+use kob_executor::recover::{export_orders, import_orders, rebase, reconcile_open_orders};
 use kob_executor::rpc::types::{AddressUtxo, AddressUtxoEntry, Outpoint};
 use kob_executor::script::{spk_address, spk_bytes};
 use kob_executor::testkit::*;
@@ -688,4 +688,42 @@ async fn a_data_directory_has_one_writer_and_readers_work_next_to_it() {
     drop(idx);
     let idx = Indexer::open(cfg).unwrap();
     assert_eq!(order_status(&idx, &w.cov(&create, 0)), "partial");
+}
+
+/// `index rebase --to`: the cursor carries the DAA score of the block it is set to (its header's), not the node's virtual DAA
+/// score (the store's `cursor_daa` is what the book view, the API's `expired` and the refund keepers read). Both with and
+/// without the reconciliation, to a chain block, the pruning point and the sink; a block the node does not know sets nothing.
+#[tokio::test]
+async fn rebase_sets_the_cursor_daa_of_the_block_it_moves_to() {
+    let hs = Harness::new(open_memory("testnet-10").unwrap(), None);
+    hs.node.push_empty(30);
+    hs.sync().await;
+    hs.node.push_empty(10);
+    let chain = hs.node.chain();
+    let virtual_daa = hs.node.tip_daa();
+    let old = &chain[chain.len() - 20];
+    assert!(old.daa < virtual_daa);
+    let stored = || -> (String, u64) {
+        let hash: String = hs.query("SELECT v FROM meta WHERE k = 'cursor_hash'", []);
+        let daa: String = hs.query("SELECT v FROM meta WHERE k = 'cursor_daa'", []);
+        (hash, daa.parse().unwrap())
+    };
+    for reconcile in [false, true] {
+        let rep = rebase(&hs.ingest, hs.node.as_ref(), "testnet-10", &StartMode::Hash(old.hash), reconcile).await.unwrap();
+        assert_eq!(rep.cursor, Cursor { hash: old.hash, daa: old.daa }, "reconcile {reconcile}");
+        assert_eq!(rep.reconciled.is_some(), reconcile);
+        assert_eq!(stored(), (old.hash.to_hex(), old.daa), "the stored cursor DAA is the block's, not the virtual {virtual_daa}");
+    }
+    let rep = rebase(&hs.ingest, hs.node.as_ref(), "testnet-10", &StartMode::Sink, false).await.unwrap();
+    assert_eq!(rep.cursor, Cursor { hash: hs.node.tip(), daa: virtual_daa });
+    hs.node.set_retention_floor(5);
+    let rep = rebase(&hs.ingest, hs.node.as_ref(), "testnet-10", &StartMode::PruningPoint, false).await.unwrap();
+    assert_eq!(rep.cursor, Cursor { hash: chain[5].hash, daa: chain[5].daa });
+    assert_eq!(stored().1, chain[5].daa);
+    // a block the node does not know: refused, the cursor stays
+    let e = rebase(&hs.ingest, hs.node.as_ref(), "testnet-10", &StartMode::Hash(h("unknown", 1)), false).await.unwrap_err();
+    assert!(e.to_string().contains("does not know block"), "{e}");
+    assert_eq!(stored().1, chain[5].daa);
+    // another network is refused
+    assert!(rebase(&hs.ingest, hs.node.as_ref(), "mainnet", &StartMode::Sink, false).await.is_err());
 }

@@ -104,6 +104,14 @@ pub trait ChainSource: Send + Sync + 'static {
     fn sink_blue_score(&self) -> impl Future<Output = Result<u64, RpcError>> + Send;
     /// Blue score of a block the node knows (`None`: the node does not know it).
     fn block_blue_score(&self, hash: Hash32) -> impl Future<Output = Result<Option<u64>, RpcError>> + Send;
+    /// DAA score of a block the node knows (its header's `daaScore`; `None`: the node does not know it): the DAA of a cursor
+    /// set to that block (`index rebase --to`).
+    fn block_daa_score(&self, hash: Hash32) -> impl Future<Output = Result<Option<u64>, RpcError>> + Send {
+        async move {
+            let _ = hash;
+            Err(RpcError::Node("getBlock (header daaScore) is not supported by this source".into()))
+        }
+    }
     /// The selected chain from `start` as block hashes only (`getVirtualChainFromBlock` without transaction ids): what the
     /// follower plans its parallel windows on.
     fn chain_hashes(&self, start: Hash32) -> impl Future<Output = Result<ChainHashes, RpcError>> + Send;
@@ -514,6 +522,27 @@ impl ChainSource for WrpcClient {
         }
         match self.call::<Resp>("getBlock", serde_json::json!({ "hash": hash.to_hex(), "includeTransactions": false })).await {
             Ok(r) => Ok(Some(r.block.header.blue_score)),
+            Err(RpcError::Node(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn block_daa_score(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Header {
+            daa_score: u64,
+        }
+        #[derive(Deserialize)]
+        struct Block {
+            header: Header,
+        }
+        #[derive(Deserialize)]
+        struct Resp {
+            block: Block,
+        }
+        match self.call::<Resp>("getBlock", serde_json::json!({ "hash": hash.to_hex(), "includeTransactions": false })).await {
+            Ok(r) => Ok(Some(r.block.header.daa_score)),
             Err(RpcError::Node(_)) => Ok(None),
             Err(e) => Err(e),
         }

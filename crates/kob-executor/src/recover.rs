@@ -401,6 +401,48 @@ fn adopted_custody_script(conn: &Connection, cov: &Hash32, spk: &[u8]) -> Result
 /// Bring the tracked order outputs in line with the node's UTXO set and move the cursor to
 /// `new_cursor`. Used by `index rebase` after a gap: outputs the node no longer has are closed with
 /// reason `gap`, and outputs that continued under the same script are adopted.
+/// What `index rebase` did: the cursor it set and, unless it only moved the cursor, the reconciliation of the tracked orders.
+#[derive(Debug, Clone)]
+pub struct RebaseReport {
+    pub cursor: Cursor,
+    pub reconciled: Option<OpReport>,
+}
+
+/// `index rebase`: after a gap, move the cursor to `to` (the node's sink, its pruning point or a chain block) and, with
+/// `reconcile`, reconcile the tracked orders with the node's UTXO set ([`reconcile_open_orders`]). The cursor carries the
+/// DAA score of that block (its header's), not the node's virtual DAA score: the store's DAA (`cursor_daa`, what the book,
+/// the API's `expired` and the refund keepers read) must be the chain block's the store is synced to.
+pub async fn rebase<S: ChainSource>(
+    ingest: &Arc<Mutex<Ingest>>,
+    source: &S,
+    network: &str,
+    to: &crate::config::StartMode,
+    reconcile: bool,
+) -> Result<RebaseReport, RecoverError> {
+    use crate::config::StartMode;
+    let info = source.server_info().await?;
+    if info.network_id != network || !info.is_synced {
+        return Err(RecoverError::Invalid(format!("node reports network `{}` synced={}", info.network_id, info.is_synced)));
+    }
+    let hash = match to {
+        StartMode::Sink => source.dag_info().await?.sink,
+        StartMode::PruningPoint => source.dag_info().await?.pruning_point_hash,
+        StartMode::Hash(h) => *h,
+    };
+    let daa = source
+        .block_daa_score(hash)
+        .await?
+        .ok_or_else(|| RecoverError::Invalid(format!("the node does not know block {hash}: no cursor set")))?;
+    let cursor = Cursor { hash, daa };
+    if !reconcile {
+        let mut g = ingest.lock().unwrap_or_else(|e| e.into_inner());
+        g.apply_ops(vec![], Some(cursor))?;
+        return Ok(RebaseReport { cursor, reconciled: None });
+    }
+    let rep = reconcile_open_orders(ingest, source, network, cursor).await?;
+    Ok(RebaseReport { cursor, reconciled: Some(rep) })
+}
+
 pub async fn reconcile_open_orders<S: ChainSource>(
     ingest: &Arc<Mutex<Ingest>>,
     source: &S,

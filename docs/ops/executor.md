@@ -1539,7 +1539,8 @@ order of preference:
 2. **Second site.** Copy the standby's database (`VACUUM INTO`, section 8) and record log over, start.
 3. **Rebase and import** (data loss limited to what nobody can supply):
    ```
-   kob-executor index rebase --to sink          # moves the cursor to the node's sink and
+   kob-executor index rebase --to sink          # moves the cursor to the node's sink (at that block's
+                                                # own DAA score, from its header: not the virtual one) and
                                                 # reconciles tracked orders with the node's UTXO set:
                                                 # spent outputs are closed with reason "gap", outputs
                                                 # that continued under the same script are adopted
