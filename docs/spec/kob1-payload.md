@@ -346,24 +346,25 @@ Each payload byte adds one byte to the transaction, so 2 grams to the fee mass (
 ## Examples
 
 Hex of the `create.ask` vector (207 bytes), split at the fields (`crates/kob-protocol/tests/payload_doc_example.rs` rebuilds
-the vector with the encoder and compares it with these blocks byte for byte):
+the vector with the encoder and compares it with these blocks byte for byte; the fixture keys, ids and commitments are written
+as two 16-byte groups, the template hash, a build output that `scripts/check-pins.mjs` checks, in one):
 
 ```
 4b4f4231 04                      magic, version 4
 01 c700                          ORDER, length 199 (u16le)
 00 01 01 00                      output 0, family KCC-20, kind KobAsk, flags 0
 00                               zeroMask: no all-zero 32-byte field
-1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f  maker
-7070707070707070707070707070707070707070707070707070707070707070  tokenCovId
+1b84c5567b126440995d3ed5aaba0565 d71e1834604819ff9c17f5e9d5dd078f  maker
+70707070707070707070707070707070 70707070707070707070707070707070  tokenCovId
 173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b  tokenTplHash
 01 f215 e807 e807                tplPrefixLen 1, tplSuffixLen 2802, scale 1000, minFill 1000 (LEB128 from here)
 80e59a77 a08d06                  price 250000000, tip 100000
 00 00 8088debe01 e0cfd501        tif 0, activeFrom 0, expiryDaa 400000000, refundTip 3500000
 00 00 00 00                      interval, maxFill, slope, priceEnd 0
 e807 904e                        decayStep 1000, amountLeft 10000
-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  extensionCommitment (the state's last field)
+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  extensionCommitment (the state's last field)
 01                               custody: token output 1
-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  custody: extension commitment (flag bit 1 clear)
+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  custody: extension commitment (flag bit 1 clear)
 ```
 
 `create.ask.day` (210 bytes) sets flag bit 0, has its own `expiryDaa` (`978651`, 1327895) and appends the LEB128 deadline
@@ -376,14 +377,14 @@ eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  custody: exten
 03 a700                          AMEND, length 167 (u16le)
 00 00 01 01 00                   output 0, input 0, family KCC-20, kind KobAsk, flags 0
 00                               zeroMask
-1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f  maker
-7070707070707070707070707070707070707070707070707070707070707070  tokenCovId
+1b84c5567b126440995d3ed5aaba0565 d71e1834604819ff9c17f5e9d5dd078f  maker
+70707070707070707070707070707070 70707070707070707070707070707070  tokenCovId
 173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b  tokenTplHash
 01 f215 e807 e807                tplPrefixLen, tplSuffixLen, scale, minFill
 80b8b872 a08d06                  the new price 240000000, tip 100000
 00 00 8088debe01 e0cfd501        tif, activeFrom, expiryDaa, refundTip
 00 00 00 00 e807 904e            interval, maxFill, slope, priceEnd, decayStep, amountLeft
-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  extensionCommitment
+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  extensionCommitment
 ```
 
 `x402.only` (version 2: no order record):
@@ -391,6 +392,6 @@ eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  extensionCommi
 ```
 4b4f4231 02                      magic, version 2
 81 2000                          X402, length 32 (u16le)
-abababababababababababababababababababababababababababababababab  the reference
+abababababababababababababababab abababababababababababababababab  the reference
 82 0d00 783430322d636c69656e742f31   NOTE "x402-client/1"
 ```
