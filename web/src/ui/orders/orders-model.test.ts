@@ -182,6 +182,29 @@ describe('status, refund and renewal', () => {
   });
 });
 
+describe('GTC of every kind (expiry = placement + 90 days)', () => {
+  // order-types.md Defaults: GTC = 90 days idle, renew before day 85 (matcher.md §10.10) - for a stop, OCO or if-done entry as for a limit
+  const withExpiry = (name: string, f: (genesis: bigint) => bigint) => {
+    const p = placeGolden(kob, name);
+    const snap = p.snapshots[0];
+    const genesis = BigInt(snap.order.blockDaaScore ?? '0');
+    const st = snap.order.state as unknown as { kind: string; state: Record<string, unknown> };
+    const s2 = { ...snap, order: { ...snap.order, state: { ...st, state: { ...st.state, expiryDaa: f(genesis).toString() } } as unknown as OrderState } };
+    return describeEntry(buildEntries([orderViewOf(kob, s2, { last_daa: 1000 })], [])[0], ctx);
+  };
+
+  for (const name of ['create.condAsk', 'create.condBid', 'create.ifdBid', 'create.ifdAsk', 'create.ask.twap', 'create.bid.dca', 'create.ask.dutch']) {
+    it(`${name}: GTC with a renewal reminder; a shorter date stays GTD`, () => {
+      const gtc = withExpiry(name, (g) => g + MAX_IDLE_DAA);
+      expect(gtc.expiry.kind).toBe('gtc');
+      expect(gtc.renewalUnix).not.toBeNull();
+      const gtd = withExpiry(name, (g) => g + MAX_IDLE_DAA / 2n);
+      expect(gtd.expiry.kind).toBe('gtd');
+      expect(gtd.renewalUnix).toBeNull();
+    });
+  }
+});
+
 describe('merging with placement records', () => {
   const placed = placeGolden(kob, 'create.ask');
   const [rec] = recordsFromBuilt(kob, placed.built, { maker: MAKER.pk, network: 'testnet-10', placedAtUnix: 1_789_990_000n, placedAtDaa: 900n, label: 'limit sell' });

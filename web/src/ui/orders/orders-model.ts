@@ -98,6 +98,14 @@ export interface ClassifyInput {
   nowDaa: bigint | null;
 }
 
+/**
+ * A GTC's on-chain expiry: the no-date sentinel, or placement + 90 days (the wallet's GTC of every kind, `daa.ts`), within the tolerance of the
+ * placement's DAA reading. Any other date is a GTD the user chose.
+ */
+export function isGtcExpiry(expiryDaa: bigint, genesisDaa: bigint | null): boolean {
+  return expiryDaa >= NO_DATE_DAA || (genesisDaa !== null && expiryDaa >= genesisDaa + MAX_IDLE_DAA - GTC_TOLERANCE_DAA && expiryDaa <= genesisDaa + MAX_IDLE_DAA + GTC_TOLERANCE_DAA);
+}
+
 /** Maps an order's state to the type the user chose (order-types.md). Heuristics use only state fields the builders set. */
 export function orderTypeKey(i: ClassifyInput): OrderTypeKey {
   const d = i.desc;
@@ -110,8 +118,7 @@ export function orderTypeKey(i: ClassifyInput): OrderTypeKey {
     if (a && a.slope > 0n) return 'dutch';
     if (i.nowDaa !== null && d.activeFrom > i.nowDaa) return 'timed';
     if (i.deadline !== null) return 'limit-day';
-    const gtc = d.expiryDaa >= NO_DATE_DAA || (i.genesisDaa !== null && d.expiryDaa >= i.genesisDaa + MAX_IDLE_DAA - GTC_TOLERANCE_DAA && d.expiryDaa <= i.genesisDaa + MAX_IDLE_DAA + GTC_TOLERANCE_DAA);
-    return gtc || i.genesisDaa === null ? 'limit' : 'limit-gtd';
+    return isGtcExpiry(d.expiryDaa, i.genesisDaa) || i.genesisDaa === null ? 'limit' : 'limit-gtd';
   }
   if (kind === 'KobCondAsk' || kind === 'KobCondBid' || kind === 'KobCondPair') {
     const t = d.trigger;
@@ -294,7 +301,10 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
   if (expDaa !== null && expDaa > 0n) {
     const noDate = expDaa >= NO_DATE_DAA;
     const approx = !noDate && ctx.clock ? daaToUnix(ctx.clock, expDaa) : null;
-    expiry = { kind: deadline !== null ? 'day' : typeKey === 'limit-gtd' ? 'gtd' : noDate || typeKey === 'limit' ? 'gtc' : 'gtd', daa: noDate ? null : expDaa, approxUnix: approx, deadlineUnix: deadline };
+    // a GTC of ANY kind (stop, OCO, trailing, if-done entry, TWAP / DCA, Dutch, timed limit) is placement + 90 days on chain: GTC (renewal reminder,
+    // renew), not a dated GTD
+    const gtc = noDate || typeKey === 'limit' || (typeKey !== 'limit-gtd' && isGtcExpiry(expDaa, genesisDaa && genesisDaa > 0n ? genesisDaa : null));
+    expiry = { kind: deadline !== null ? 'day' : gtc ? 'gtc' : 'gtd', daa: noDate ? null : expDaa, approxUnix: approx, deadlineUnix: deadline };
   }
 
   // GTC renewal reminder (day 85 of 90), from the ON-CHAIN expiry: the refund is due at min(expiryDaa, utxoDaa + 90 days) and a GTC's expiryDaa is
