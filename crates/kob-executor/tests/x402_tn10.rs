@@ -1308,7 +1308,7 @@ fn x402_on_testnet_10() {
             let asset = p.payload.payload.route.as_ref().map(|r| r.pay_asset.clone()).unwrap_or_else(|| "KAS".into());
             let bound = PayBound { asset, amount: max_pay };
             let (_, facts) =
-                preflight_swap(&vctx, offer, &p.payload, rh, Some(&bound)).unwrap_or_else(|e| panic!("{what}: payer preflight: {e}"));
+                preflight_swap(&vctx, offer, &p.payload, rh, &bound).unwrap_or_else(|e| panic!("{what}: payer preflight: {e}"));
             log!("{what}: payer spends {} units of the pay asset, fee {} sompi", facts.payer_spent, p.fee);
             let req = facilitator_request(p.payload.clone(), offer, rh);
             let v = svc.verify(&req);

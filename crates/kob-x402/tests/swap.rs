@@ -122,6 +122,11 @@ fn put_ask(chain: &MockChain, a: &(OrderUtxo<AskState>, TokenUtxo)) {
     put_tok(chain, &a.1);
 }
 
+/// Swap options bounded generously in the asset `quote` pays with (every swap needs the payer's bound).
+fn bounded(quote: &Quote) -> SwapOptions {
+    SwapOptions { max_pay: Some(PayBound { asset: quote.pay_asset(), amount: u64::MAX }), ..SwapOptions::default() }
+}
+
 fn fx() -> Fx {
     let chain = MockChain::new();
     chain.advance_daa(NOW);
@@ -206,10 +211,10 @@ impl Fx {
         }
     }
     fn pay(&self, offer: &PaymentRequirements, quote: &Quote, funds: &PayerFunds) -> Result<SwapPayment, X402Error> {
-        pay_swap(&self.policy, offer, quote, RH, &keys(), funds, NOW_MS, &SwapOptions::default())
+        pay_swap(&self.policy, offer, quote, RH, &keys(), funds, NOW_MS, &bounded(quote))
     }
     fn prepare(&self, offer: &PaymentRequirements, quote: &Quote, funds: &PayerFunds) -> PreparedSwap {
-        prepare_swap(&self.policy, offer, quote, RH, funds, NOW_MS, &SwapOptions::default()).unwrap()
+        prepare_swap(&self.policy, offer, quote, RH, funds, NOW_MS, &bounded(quote)).unwrap()
     }
     /// Verifies, checks the engine, submits, mines and asserts acceptance of the merchant output.
     fn accept(&self, offer: &PaymentRequirements, p: &PaymentPayload) -> Verified {
@@ -488,19 +493,19 @@ fn preflight_checks_the_payers_bound() {
     let f = fx();
     let offer = f.kas_offer(KAS);
     let p = f.pay(&offer, &f.sw1_quote(&f.bid1), &f.funds(false)).unwrap();
-    let (v, facts) = preflight_swap(&f.ctx(), &offer, &p.payload, RH, Some(&PayBound::token(&TOKEN_COV, 3 * WHOLE as u64))).unwrap();
+    let (v, facts) = preflight_swap(&f.ctx(), &offer, &p.payload, RH, &PayBound::token(&TOKEN_COV, 3 * WHOLE as u64)).unwrap();
     assert_eq!(facts.payer_spent, 3 * WHOLE as u64);
     assert_eq!(facts.pay_asset, hex(&TOKEN_COV));
     assert_eq!(facts.orders, v.order_inputs);
     assert_eq!(facts.legs.len(), 1);
-    let e = err_of(preflight_swap(&f.ctx(), &offer, &p.payload, RH, Some(&PayBound::token(&TOKEN_COV, 3 * WHOLE as u64 - 1))));
+    let e = err_of(preflight_swap(&f.ctx(), &offer, &p.payload, RH, &PayBound::token(&TOKEN_COV, 3 * WHOLE as u64 - 1)));
     assert_eq!(e.diag, Diag::Overpayment);
     // a bound counted in another asset is not a bound on this payment
-    let e = err_of(preflight_swap(&f.ctx(), &offer, &p.payload, RH, Some(&PayBound::kas(u64::MAX))));
+    let e = err_of(preflight_swap(&f.ctx(), &offer, &p.payload, RH, &PayBound::kas(u64::MAX)));
     assert_eq!(e.diag, Diag::PayAssetNotAccepted);
     // a payment that does not verify does not preflight
     f.chain.spend_externally(&op(&f.payer_tok.utxo));
-    assert!(preflight_swap(&f.ctx(), &offer, &p.payload, RH, None).is_err());
+    assert!(preflight_swap(&f.ctx(), &offer, &p.payload, RH, &PayBound::token(&TOKEN_COV, u64::MAX)).is_err());
 }
 
 #[test]
@@ -508,7 +513,7 @@ fn the_kas_a_token_paid_swap_takes_from_the_payers_coins_is_reported_and_bounded
     // token A -> token B: the payer's coins fund the fee and the merchant's carrier
     let f = fx();
     let offer = f.token_offer_ab(2 * WHOLE as u64);
-    let o = SwapOptions::default();
+    let o = bounded(&f.sw3_quote());
     let p = prepare_swap(&f.policy, &offer, &f.sw3_quote(), RH, &f.funds(true), NOW_MS, &o).unwrap();
     assert!(p.kas_spent > 0, "{} {}", p.kas_spent, p.built.fee.fee);
     let tight = SwapOptions { max_kas_sompi: Some(p.kas_spent - 1), ..o.clone() };
@@ -534,26 +539,46 @@ fn client_enforces_max_pay_and_refuses_borrow_enabled_tokens() {
     // G9: a borrow-enabled payer token is refused by the SDK
     let mut funds = f.funds(false);
     funds.tokens[0].state = Kcc20State { borrow_scheme: 1, ..funds.tokens[0].state.as_kcc20().unwrap().clone() }.into();
-    let e = err_of(prepare_swap(&f.policy, &offer, &f.sw1_quote(&f.bid1), RH, &funds, NOW_MS, &SwapOptions::default()));
+    let e = err_of(prepare_swap(&f.policy, &offer, &f.sw1_quote(&f.bid1), RH, &funds, NOW_MS, &bounded(&f.sw1_quote(&f.bid1))));
     assert_eq!(e.diag, Diag::TokenBorrowEnabled);
     // not enough tokens
     let mut funds = f.funds(false);
     funds.tokens[0].state = funds.tokens[0].state.with_amount(WHOLE);
-    let e = err_of(prepare_swap(&f.policy, &offer, &f.sw1_quote(&f.bid1), RH, &funds, NOW_MS, &SwapOptions::default()));
+    let e = err_of(prepare_swap(&f.policy, &offer, &f.sw1_quote(&f.bid1), RH, &funds, NOW_MS, &bounded(&f.sw1_quote(&f.bid1))));
     assert_eq!(e.diag, Diag::TokenConservation);
     // a KAS offer cannot be paid in KAS; a token offer needs asks
-    let e = err_of(prepare_swap(&f.policy, &offer, &f.sw2_quote(), RH, &f.kas_only_funds(), NOW_MS, &SwapOptions::default()));
+    let e = err_of(prepare_swap(&f.policy, &offer, &f.sw2_quote(), RH, &f.kas_only_funds(), NOW_MS, &bounded(&f.sw2_quote())));
     assert!(matches!(e.diag, Diag::PayAssetNotAccepted | Diag::RouteUnsupported), "{e}");
     let toffer = f.token_offer_ab(2 * WHOLE as u64);
-    let e = err_of(prepare_swap(&f.policy, &toffer, &f.sw1_quote(&f.bid1), RH, &f.funds(false), NOW_MS, &SwapOptions::default()));
+    let e =
+        err_of(prepare_swap(&f.policy, &toffer, &f.sw1_quote(&f.bid1), RH, &f.funds(false), NOW_MS, &bounded(&f.sw1_quote(&f.bid1))));
     assert_eq!(e.diag, Diag::RouteUnsupported);
+}
+
+#[test]
+fn a_swap_without_the_payers_bound_is_refused() {
+    // no unbounded swap (the TS SDK refuses the same): nothing is built without max_pay
+    let f = fx();
+    for (offer, quote, funds) in
+        [(f.kas_offer(KAS), f.sw1_quote(&f.bid1), f.funds(false)), (f.token_offer_ab(2 * WHOLE as u64), f.sw3_quote(), f.funds(true))]
+    {
+        let e = err_of(prepare_swap(&f.policy, &offer, &quote, RH, &funds, NOW_MS, &SwapOptions::default()));
+        assert_eq!(e.diag, Diag::InvalidKaspaX402Payload, "{e}");
+        assert!(e.to_string().contains("maxPay"), "{e}");
+        let e = pay_swap(&f.policy, &offer, &quote, RH, &keys(), &funds, NOW_MS, &SwapOptions::default()).unwrap_err();
+        assert_eq!(e.diag, Diag::InvalidKaspaX402Payload, "{e}");
+        // the bound counts the asset the quote pays with
+        prepare_swap(&f.policy, &offer, &quote, RH, &funds, NOW_MS, &bounded(&quote)).unwrap();
+    }
+    assert_eq!(f.sw1_quote(&f.bid1).pay_asset(), hex(&TOKEN_COV));
+    assert_eq!(f.sw2_quote().pay_asset(), "KAS");
 }
 
 #[test]
 fn client_ttl_is_bounded_by_max_timeout() {
     let f = fx();
     let offer = f.kas_offer(KAS);
-    let o = SwapOptions { expires_in_ms: 601_000, ..SwapOptions::default() };
+    let o = SwapOptions { expires_in_ms: 601_000, ..bounded(&f.sw1_quote(&f.bid1)) };
     let e = err_of(prepare_swap(&f.policy, &offer, &f.sw1_quote(&f.bid1), RH, &f.funds(false), NOW_MS, &o));
     assert_eq!(e.diag, Diag::AuthorizationExceedsMaxTimeout);
 }
@@ -567,12 +592,12 @@ fn tiny_kas_change_is_folded_into_the_fee_within_the_bound_or_fails() {
     // leave about 0.5 KAS of change: valid for the builder, below a 1 KAS floor
     let amount = KAS + change - 50_000_000;
     let offer = f.kas_offer(amount);
-    let floor = SwapOptions { min_change_sompi: KAS, ..SwapOptions::default() };
+    let floor = SwapOptions { min_change_sompi: KAS, ..bounded(&f.sw1_quote(&f.bid1)) };
     // default fee bound 0.5 KAS: folding 0.5 KAS would exceed it -> refuse
     let e = err_of(prepare_swap(&f.policy, &offer, &f.sw1_quote(&f.bid1), RH, &f.funds(false), NOW_MS, &floor));
     assert_eq!(e.diag, Diag::InvalidKaspaExactFee);
     // with a wider bound it is folded, with a warning
-    let wide = SwapOptions { min_change_sompi: KAS, max_fee_sompi: Some(KAS), ..SwapOptions::default() };
+    let wide = SwapOptions { min_change_sompi: KAS, max_fee_sompi: Some(KAS), ..bounded(&f.sw1_quote(&f.bid1)) };
     let prep = prepare_swap(&f.policy, &offer, &f.sw1_quote(&f.bid1), RH, &f.funds(false), NOW_MS, &wide).unwrap();
     assert_eq!(prep.warnings.len(), 1);
     assert!(prep.built.fee.change_output.is_none());
@@ -1227,7 +1252,7 @@ fn expired_and_too_far_authorizations() {
     f.clock.set(NOW_MS + 61_000);
     assert_eq!(diag(f.verify(&offer, &p.payload)), Diag::ExpiredAuthorization);
     f.clock.set(NOW_MS);
-    let o = SwapOptions { expires_in_ms: 3_600_000, enforce_ttl: false, ..SwapOptions::default() };
+    let o = SwapOptions { expires_in_ms: 3_600_000, enforce_ttl: false, ..bounded(&f.sw1_quote(&f.bid1)) };
     let long = pay_swap(&f.policy, &offer, &f.sw1_quote(&f.bid1), RH, &keys(), &f.funds(false), NOW_MS, &o).unwrap();
     assert_eq!(diag(f.verify(&offer, &long.payload)), Diag::AuthorizationExceedsMaxTimeout);
 }

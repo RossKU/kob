@@ -421,7 +421,10 @@ intended.
   receives. A client MUST compute what the payer spends (Σ payer inputs minus Σ payer-controlled
   outputs, per asset, plus fee), MUST compare it against the user's or the agent's limit before
   signing, and MUST display it; it MUST NOT present `amount` as the cost. The server and the
-  facilitator never see the payer's limit.
+  facilitator never see the payer's limit. The KOB payer SDKs make the limit mandatory: the TS
+  `KobX402Client` (`maxPay` per pay asset), the Rust `prepare_swap` / `pay_swap` (`SwapOptions::max_pay`,
+  `preflight_swap` takes the bound) and the wasm `x402PaySwap` / `x402PrepareSwap` (`options.maxPay`,
+  `maxPayAsset`) refuse to build a swap without it (`invalid_kaspa_x402_payload`): no unbounded swap.
 - **Spread.** As in section 6: the crossing spread goes to the transaction builder, the payer.
 
 ## 10. Conflict handling

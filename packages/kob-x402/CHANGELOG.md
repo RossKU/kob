@@ -4,6 +4,15 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Swap-and-pay: the payer's bound is required everywhere
+
+- **Breaking (wasm and Rust API):** a swap is never built without the payer's bound on what it costs, as `KobX402Client`
+  already required (`maxPay`). `x402PaySwap` / `x402PrepareSwap` refuse a request without `options.maxPay`
+  (`invalid_kaspa_x402_payload`, "no unbounded swap"); the Rust `prepare_swap` / `pay_swap` refuse
+  `SwapOptions::max_pay: None` and the payer's `preflight_swap` takes `&PayBound` (no `Option`). `x402Preflight` checks
+  `maxPay` when given and otherwise only verifies (a merchant-side check). `Quote::pay_asset()` names the asset the bound
+  must count. The golden vectors carry the bound (`KOB_REGEN=1`); no transaction byte changed.
+
 ### Native payments: the payer cap is required (audit A1-3)
 
 - **Breaking (wasm API):** `x402PayNative` (`kob-wasm`) requires `options.maxAmountSompi`, the most sompi the payer pays for

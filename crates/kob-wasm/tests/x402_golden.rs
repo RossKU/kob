@@ -315,10 +315,17 @@ fn generate() -> Value {
     // SW1: token A sold into a bid, the merchant receives KAS
     let sw1 = json!({
         "offer": swap_kas_offer, "quote": quote1, "requestHash": RH, "tokenUtxos": [token_json(&payer_tok)], "funding": [],
-        "nowMs": NOW_MS.to_string(), "options": { "paymentIdentifier": "pay-swap1-golden-0001" },
+        "nowMs": NOW_MS.to_string(), "options": { "paymentIdentifier": "pay-swap1-golden-0001", "maxPay": (3 * WHOLE).to_string(), "maxPayAsset": to_hex(&TOKEN_COV) },
     });
     let mut sw1_local = sw1.clone();
     sw1_local["secretKeys"] = json!([to_hex(&sk(PAYER))]);
+    // no unbounded swap: without maxPay nothing is built (local keys and the wallet flow alike)
+    let mut unbounded = sw1_local.clone();
+    unbounded["options"].as_object_mut().unwrap().remove("maxPay");
+    assert!(x402::pay_swap(&unbounded.to_string()).unwrap_err().contains("maxPay"));
+    unbounded["payerPublicKey"] = json!(to_hex(&pk(PAYER)));
+    unbounded.as_object_mut().unwrap().remove("secretKeys");
+    assert!(x402::prepare_swap(&unbounded.to_string()).unwrap_err().contains("maxPay"));
     let (rq, sw1_pay) = call(x402::pay_swap, "pay swap sw1", sw1_local);
     push("pay.swap.sw1", "x402PaySwap", rq, sw1_pay.clone(), json!({ "signatureHeader": header_of(&sw1_pay) }));
     let (rq, ok) = call(
@@ -344,6 +351,14 @@ fn generate() -> Value {
     );
     assert_eq!(bare["ok"], false);
     assert_eq!(bare["diagnostic"], "pay_asset_not_accepted");
+    // without a bound the preflight only verifies (a merchant-side check): nothing is spent by it
+    let (_, unbounded) = call(
+        x402::preflight,
+        "preflight sw1 without a bound",
+        json!({ "offer": swap_kas_offer, "payload": sw1_pay["paymentPayload"], "requestHash": RH, "nowMs": NOW_MS.to_string() }),
+    );
+    assert_eq!(unbounded["ok"], true, "{unbounded}");
+    assert_eq!(unbounded["payerSpent"], (3 * WHOLE).to_string());
     let (rq, revoked) =
         call(x402::revoke, "revoke sw1", json!({ "payload": sw1_pay["paymentPayload"], "secretKeys": [to_hex(&sk(PAYER))] }));
     push("revoke.swap.sw1", "x402Revoke", rq, revoked, json!({}));
@@ -361,14 +376,14 @@ fn generate() -> Value {
     // SW3: token A to token B through a bid and an ask, KAS funding for the carriers
     let sw3 = json!({
         "offer": swap_tok_offer, "quote": quote3, "requestHash": RH, "tokenUtxos": [token_json(&payer_tok)], "funding": [payer_utxo(&funding1)],
-        "secretKeys": [to_hex(&sk(PAYER))], "nowMs": NOW_MS.to_string(), "options": { "paymentIdentifier": "pay-swap3-golden-0001" },
+        "secretKeys": [to_hex(&sk(PAYER))], "nowMs": NOW_MS.to_string(), "options": { "paymentIdentifier": "pay-swap3-golden-0001", "maxPay": (3 * WHOLE).to_string(), "maxPayAsset": to_hex(&TOKEN_COV) },
     });
     let (rq, sw3_pay) = call(x402::pay_swap, "pay swap sw3", sw3);
     push("pay.swap.sw3", "x402PaySwap", rq, sw3_pay.clone(), json!({ "signatureHeader": header_of(&sw3_pay) }));
     let (rq, ok) = call(
         x402::preflight,
         "preflight sw3",
-        json!({ "offer": swap_tok_offer, "payload": sw3_pay["paymentPayload"], "requestHash": RH, "nowMs": NOW_MS.to_string() }),
+        json!({ "offer": swap_tok_offer, "payload": sw3_pay["paymentPayload"], "requestHash": RH, "nowMs": NOW_MS.to_string(), "maxPay": (3 * WHOLE).to_string(), "maxPayAsset": to_hex(&TOKEN_COV) }),
     );
     assert_eq!(ok["ok"], true, "{ok}");
     push("preflight.swap.sw3", "x402Preflight", rq, ok, json!({}));
@@ -424,7 +439,7 @@ fn generate() -> Value {
     // SW1-KRON: the merchant receives KAS
     let swk1 = json!({
         "offer": swap_kron_offer, "quote": quote_k1, "requestHash": RH, "tokenUtxos": [token_json(&payer_kron)], "funding": [payer_utxo(&funding1)],
-        "secretKeys": [to_hex(&sk(PAYER))], "nowMs": NOW_MS.to_string(), "options": { "paymentIdentifier": "pay-swapk1-golden-0001" },
+        "secretKeys": [to_hex(&sk(PAYER))], "nowMs": NOW_MS.to_string(), "options": { "paymentIdentifier": "pay-swapk1-golden-0001", "maxPay": (3 * WHOLE).to_string(), "maxPayAsset": to_hex(&KRON_COV) },
     });
     let (rq, swk1_pay) = call(x402::pay_swap, "pay swap KRON -> KAS", swk1);
     push("pay.swap.kron.sw1", "x402PaySwap", rq, swk1_pay.clone(), json!({ "signatureHeader": header_of(&swk1_pay) }));
@@ -443,7 +458,7 @@ fn generate() -> Value {
     // the wallet flow: only the payer KAS input signs (the KRON token needs no signature of its own)
     let swk1_wallet = json!({
         "offer": swap_kron_offer, "quote": quote_k1, "requestHash": RH, "tokenUtxos": [token_json(&payer_kron)], "funding": [payer_utxo(&funding1)],
-        "payerPublicKey": to_hex(&pk(PAYER)), "nowMs": NOW_MS.to_string(), "options": { "paymentIdentifier": "pay-swapk1-golden-0001" },
+        "payerPublicKey": to_hex(&pk(PAYER)), "nowMs": NOW_MS.to_string(), "options": { "paymentIdentifier": "pay-swapk1-golden-0001", "maxPay": (3 * WHOLE).to_string(), "maxPayAsset": to_hex(&KRON_COV) },
     });
     let (rq, prepared) = call(x402::prepare_swap, "prepare swap KRON -> KAS", swk1_wallet);
     assert_eq!(prepared["built"]["sign"].as_array().unwrap().len(), 1);
@@ -455,14 +470,14 @@ fn generate() -> Value {
     // SW3-KRON: KRON sold into a KRON bid, the merchant receives a KCC-20 token bought from a KCC-20 ask: one cross-family transaction
     let swk3 = json!({
         "offer": swap_kron_tok_offer, "quote": quote_k3, "requestHash": RH, "tokenUtxos": [token_json(&payer_kron)], "funding": [payer_utxo(&funding1)],
-        "secretKeys": [to_hex(&sk(PAYER))], "nowMs": NOW_MS.to_string(), "options": { "paymentIdentifier": "pay-swapk3-golden-0001" },
+        "secretKeys": [to_hex(&sk(PAYER))], "nowMs": NOW_MS.to_string(), "options": { "paymentIdentifier": "pay-swapk3-golden-0001", "maxPay": (3 * WHOLE).to_string(), "maxPayAsset": to_hex(&KRON_COV) },
     });
     let (rq, swk3_pay) = call(x402::pay_swap, "pay swap KRON -> KCC-20 token", swk3);
     push("pay.swap.kron.sw3", "x402PaySwap", rq, swk3_pay.clone(), json!({ "signatureHeader": header_of(&swk3_pay) }));
     let (rq, ok) = call(
         x402::preflight,
         "preflight KRON -> KCC-20 token",
-        json!({ "offer": swap_kron_tok_offer, "payload": swk3_pay["paymentPayload"], "requestHash": RH, "nowMs": NOW_MS.to_string(), "allowIssuerControlled": true }),
+        json!({ "offer": swap_kron_tok_offer, "payload": swk3_pay["paymentPayload"], "requestHash": RH, "nowMs": NOW_MS.to_string(), "maxPay": (3 * WHOLE).to_string(), "maxPayAsset": to_hex(&KRON_COV), "allowIssuerControlled": true }),
     );
     assert_eq!(ok["ok"], true, "{ok}");
     push("preflight.swap.kron.sw3", "x402Preflight", rq, ok, json!({}));

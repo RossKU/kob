@@ -909,7 +909,8 @@ pub fn finish_kcc20(built: &str, template: &str, sigs: &str) -> R<String> {
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct SwapOptionsIn {
-    /// The payer's bound on the swap's cost, counted in `maxPayAsset`.
+    /// The payer's bound on the swap's cost, counted in `maxPayAsset`. Required: a swap without it is refused (no
+    /// unbounded swap).
     #[serde(default)]
     max_pay: Option<String>,
     /// `"KAS"` (default: an unqualified bound counts sompi only) or the pay token's covenant id. A route that pays with
@@ -1203,7 +1204,8 @@ struct PreflightIn {
     tokens: Option<Vec<TokenSpec>>,
     #[serde(default)]
     allow_issuer_controlled: bool,
-    /// Swap-and-pay: the payer's bound on what the payment costs, in units of `maxPayAsset`.
+    /// Swap-and-pay and intents: the payer's bound on what the payment costs, in units of `maxPayAsset`, checked when given
+    /// (without it the preflight only verifies; the builders require it for a swap).
     #[serde(default)]
     max_pay: Option<String>,
     /// The asset `maxPay` counts (`"KAS"` by default, or a token covenant id).
@@ -1261,11 +1263,16 @@ pub fn preflight(json: &str) -> R<String> {
             Ok((v, Some(worst)))
         })
     } else if p.payload.payload.route.is_some() || offer.has_route() {
-        let max_pay = match &p.max_pay {
-            Some(m) => Some(pay_bound(p.max_pay_asset.as_deref(), u64s("maxPay", m)?)),
-            None => None,
-        };
-        swap::preflight_swap(&ctx, &offer, &p.payload, &p.request_hash, max_pay.as_ref()).map(|(v, f)| (v, Some(f.payer_spent)))
+        // the payer's preflight checks its bound; without one this only verifies (a merchant-side check, nothing is spent)
+        match &p.max_pay {
+            Some(m) => {
+                let bound = pay_bound(p.max_pay_asset.as_deref(), u64s("maxPay", m)?);
+                swap::preflight_swap(&ctx, &offer, &p.payload, &p.request_hash, &bound).map(|(v, f)| (v, Some(f.payer_spent)))
+            }
+            None => {
+                kob_x402::swap::verify_swap_facts(&ctx, &offer, &p.payload, &p.request_hash).map(|(v, f)| (v, Some(f.payer_spent)))
+            }
+        }
     } else {
         verify_payment(&ctx, &offer, &p.payload, &p.request_hash).map(|v| (v, None))
     };

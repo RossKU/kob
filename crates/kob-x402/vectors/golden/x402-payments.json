@@ -2075,6 +2075,8 @@
           "scheme": "exact"
         },
         "options": {
+          "maxPay": "3000",
+          "maxPayAsset": "7070707070707070707070707070707070707070707070707070707070707070",
           "paymentIdentifier": "pay-swap1-golden-0001"
         },
         "quote": {
@@ -2658,6 +2660,8 @@
           "scheme": "exact"
         },
         "options": {
+          "maxPay": "3000",
+          "maxPayAsset": "7070707070707070707070707070707070707070707070707070707070707070",
           "paymentIdentifier": "pay-swap1-golden-0001"
         },
         "payerPublicKey": "462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0b",
@@ -3166,6 +3170,8 @@
           "scheme": "exact"
         },
         "options": {
+          "maxPay": "3000",
+          "maxPayAsset": "7070707070707070707070707070707070707070707070707070707070707070",
           "paymentIdentifier": "pay-swap3-golden-0001"
         },
         "quote": {
@@ -3297,6 +3303,8 @@
       "function": "x402Preflight",
       "name": "preflight.swap.sw3",
       "request": {
+        "maxPay": "3000",
+        "maxPayAsset": "7070707070707070707070707070707070707070707070707070707070707070",
         "nowMs": "1800000000000",
         "offer": {
           "amount": "2000",
@@ -3834,6 +3842,8 @@
           "scheme": "exact"
         },
         "options": {
+          "maxPay": "3000",
+          "maxPayAsset": "7272727272727272727272727272727272727272727272727272727272727272",
           "paymentIdentifier": "pay-swapk1-golden-0001"
         },
         "quote": {
@@ -4335,6 +4345,8 @@
           "scheme": "exact"
         },
         "options": {
+          "maxPay": "3000",
+          "maxPayAsset": "7272727272727272727272727272727272727272727272727272727272727272",
           "paymentIdentifier": "pay-swapk1-golden-0001"
         },
         "payerPublicKey": "462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0b",
@@ -4869,6 +4881,8 @@
           "scheme": "exact"
         },
         "options": {
+          "maxPay": "3000",
+          "maxPayAsset": "7272727272727272727272727272727272727272727272727272727272727272",
           "paymentIdentifier": "pay-swapk3-golden-0001"
         },
         "quote": {
@@ -4999,6 +5013,8 @@
       "name": "preflight.swap.kron.sw3",
       "request": {
         "allowIssuerControlled": true,
+        "maxPay": "3000",
+        "maxPayAsset": "7272727272727272727272727272727272727272727272727272727272727272",
         "nowMs": "1800000000000",
         "offer": {
           "amount": "2000",

@@ -10,7 +10,7 @@
 //! commits the x402 payload-commitment digest as a `KOB1` `X402` record (the digest needs the merchant
 //! output index, so the transaction is laid out once with a placeholder digest and rebuilt with the real
 //! one; the index is asserted identical), refuses borrow-enabled payer tokens (G9), enforces the payer's
-//! `max_pay` and never leaves a tiny KAS change output behind (G4: folded into the fee within the fee
+//! `max_pay` (required: no unbounded swap) and never leaves a tiny KAS change output behind (G4: folded into the fee within the fee
 //! bound, with a warning, else the payment fails). [`PreparedSwap`] exposes the sign requests for a wallet
 //! or signs locally; [`PreparedSwap::complete`] finalizes (`tighten_budgets`) and assembles the
 //! `PAYMENT-SIGNATURE` object.
@@ -255,6 +255,19 @@ pub struct Quote {
     pub orders: Vec<OrderRef>,
 }
 
+impl Quote {
+    /// The asset a swap over this quote pays with: the token its bids buy (covenant id, 64 hex), or `"KAS"` when it fills
+    /// asks only. The asset [`SwapOptions::max_pay`] must count.
+    pub fn pay_asset(&self) -> String {
+        self.orders
+            .iter()
+            .find(|o| o.kind() == Some(LegKind::Bid))
+            .and_then(OrderRef::token)
+            .map(|id| hex(&id))
+            .unwrap_or_else(|| PAY_ASSET_KAS.to_string())
+    }
+}
+
 /// The payer's assets.
 #[derive(Clone, Debug)]
 pub struct PayerFunds {
@@ -299,7 +312,8 @@ impl PayBound {
 #[derive(Clone, Debug)]
 pub struct SwapOptions {
     /// Payer bound on what the swap costs, in units of the asset it names (token units; sompi incl. the fee
-    /// when paying KAS). A route that pays with another asset is refused. `None` = unbounded (not recommended).
+    /// when paying KAS). A route that pays with another asset is refused. Required: [`prepare_swap`] refuses `None`
+    /// (no unbounded swap; `Option` only so that the other knobs can take their defaults).
     pub max_pay: Option<PayBound>,
     /// Authorization lifetime; clamped to `maxTimeoutSeconds` (an explicit larger value is an error).
     pub expires_in_ms: u64,
@@ -377,6 +391,9 @@ pub struct SwapPayment {
     pub kas_spent: u64,
     pub warnings: Vec<String>,
 }
+
+/// The refusal of a swap without the payer's bound ([`SwapOptions::max_pay`]).
+pub const MAX_PAY_REQUIRED: &str = "a swap needs the payer's maxPay bound on what it costs (no unbounded swap)";
 
 fn err(diag: Diag, msg: impl Into<String>) -> X402Error {
     X402Error::payload(diag, msg)
@@ -521,6 +538,8 @@ pub fn prepare_swap(
     if !policy.swap_enabled {
         return Err(err(Diag::RouteUnsupported, "swap-and-pay is disabled"));
     }
+    // no unbounded swap: the payer's bound on what the route costs is required (the TS SDK refuses the same)
+    let bound = opts.max_pay.as_ref().ok_or_else(|| err(Diag::InvalidKaspaX402Payload, MAX_PAY_REQUIRED))?;
     let (env, merchant) = offer_facts(policy, offer, request_hash)?;
     let pay_offers = parse_route_offer(offer)?;
     let k = quote.orders.len();
@@ -553,10 +572,8 @@ pub fn prepare_swap(
     if !pay_offers.iter().any(|e| e.asset == pay_asset) {
         return Err(err(Diag::PayAssetNotAccepted, "the offer does not accept this pay asset"));
     }
-    if let Some(b) = &opts.max_pay {
-        b.check_asset(&pay_asset)?;
-    }
-    let max_pay = opts.max_pay.as_ref().map(|b| b.amount);
+    bound.check_asset(&pay_asset)?;
+    let max_pay = bound.amount;
     match (&merchant, pay_token) {
         (None, None) => return Err(err(Diag::PayAssetNotAccepted, "a KAS offer cannot be paid in KAS")),
         (Some(m), Some(t)) if m.id == t.covenant_id => {
@@ -597,13 +614,11 @@ pub fn prepare_swap(
                     format!("the payer holds {have} units of the pay token, the swap needs {needed}"),
                 ));
             }
-            if let Some(max) = max_pay {
-                if needed > max as i128 {
-                    return Err(err(
-                        Diag::Overpayment,
-                        format!("the swap costs {needed} units of the pay token, above the payer's bound {max}"),
-                    ));
-                }
+            if needed > max_pay as i128 {
+                return Err(err(
+                    Diag::Overpayment,
+                    format!("the swap costs {needed} units of the pay token, above the payer's bound {max_pay}"),
+                ));
             }
         }
         None => {
@@ -791,10 +806,8 @@ pub fn prepare_swap(
         Some(_) => u64::try_from(needed).map_err(|_| err(Diag::Overpayment, "the swap exceeds the uint64 range"))?,
         None => {
             let spent = kas_spent;
-            if let Some(max) = max_pay {
-                if spent > max {
-                    return Err(err(Diag::Overpayment, format!("the swap costs {spent} sompi, above the payer's bound {max}")));
-                }
+            if spent > max_pay {
+                return Err(err(Diag::Overpayment, format!("the swap costs {spent} sompi, above the payer's bound {max_pay}")));
             }
             spent
         }
@@ -912,13 +925,11 @@ pub fn preflight_swap(
     offer: &PaymentRequirements,
     payload: &PaymentPayload,
     request_hash: &str,
-    max_pay: Option<&PayBound>,
+    max_pay: &PayBound,
 ) -> Result<(Verified, SwapFacts)> {
     let (v, facts) = crate::swap::verify_swap_facts(ctx, offer, payload, request_hash)?;
-    if let Some(b) = max_pay {
-        b.check_asset(&facts.pay_asset)?;
-    }
-    if max_pay.is_some_and(|b| facts.payer_spent > b.amount) {
+    max_pay.check_asset(&facts.pay_asset)?;
+    if facts.payer_spent > max_pay.amount {
         return Err(err(
             Diag::Overpayment,
             format!("the payment costs {} units of the pay asset, above the payer's bound", facts.payer_spent),

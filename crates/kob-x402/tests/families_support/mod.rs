@@ -18,7 +18,8 @@ use kob_protocol::state::{AskState, BidState, OrderState, TokenState};
 use kob_protocol::tx::{KeyUtxo, OrderUtxo, TokenUtxo, Utxo};
 use kob_x402::chain::{ChainUtxo, ChainView, FixedClock, Outpoint, OutputStatus};
 use kob_x402::client::swap::{
-    pay_swap, swap_requirements, MerchantGain, OrderRef, PayAssetSpec, PayerFunds, Quote, SwapOfferParams, SwapOptions, SwapPayment,
+    pay_swap, swap_requirements, MerchantGain, OrderRef, PayAssetSpec, PayBound, PayerFunds, Quote, SwapOfferParams, SwapOptions,
+    SwapPayment,
 };
 use kob_x402::error::X402Error;
 use kob_x402::policy::{AllowedToken, Custody, Policy};
@@ -27,6 +28,11 @@ use kob_x402::verify::{verify_payment, Verified, VerifyCtx};
 use kob_x402::wire::{Finality, Network, PaymentPayload, PaymentRequirements};
 
 use crate::common::{self, keys, pk, CARRIER, DC, KAS, NOW, P245, P250, WHOLE};
+
+/// Swap options bounded generously in the asset `quote` pays with (every swap needs the payer's bound).
+pub fn bounded(quote: &Quote) -> SwapOptions {
+    SwapOptions { max_pay: Some(PayBound { asset: quote.pay_asset(), amount: u64::MAX }), ..SwapOptions::default() }
+}
 
 /// Fails loudly when the test binary and the `kob-x402` library it runs against were compiled from different checkouts.
 ///
@@ -221,7 +227,7 @@ impl World {
     }
 
     pub fn try_pay(&self, offer: &PaymentRequirements, quote: &Quote, funds: &PayerFunds) -> Result<SwapPayment, X402Error> {
-        pay_swap(&self.policy, offer, quote, RH, &keys(), funds, NOW_MS, &SwapOptions::default())
+        pay_swap(&self.policy, offer, quote, RH, &keys(), funds, NOW_MS, &bounded(quote))
     }
 
     pub fn pay(&self, offer: &PaymentRequirements, quote: &Quote, funds: &PayerFunds) -> SwapPayment {

@@ -24,7 +24,7 @@ use kob_x402::canonical::requirements_hash;
 use kob_x402::chain::ChainView;
 use kob_x402::chain::Outpoint;
 use kob_x402::client::swap::{
-    prepare_swap, swap_requirements, MerchantGain, OrderRef, PayAssetSpec, PreparedSwap, SwapOfferParams, SwapOptions, SwapPayment,
+    prepare_swap, swap_requirements, MerchantGain, OrderRef, PayAssetSpec, PreparedSwap, SwapOfferParams, SwapPayment,
 };
 use kob_x402::client::token::kcc20_requirements;
 use kob_x402::common::{iso_from_ms, payload_commit_digest, PayloadCommit};
@@ -160,7 +160,7 @@ fn prepare(
     quote: &kob_x402::client::swap::Quote,
     funds: &kob_x402::client::swap::PayerFunds,
 ) -> PreparedSwap {
-    prepare_swap(&w.policy, offer, quote, RH, funds, NOW_MS, &SwapOptions::default()).unwrap()
+    prepare_swap(&w.policy, offer, quote, RH, funds, NOW_MS, &bounded(quote)).unwrap()
 }
 
 /// The fee of a settled swap is the node's relay floor for its mass (no priority premium).
