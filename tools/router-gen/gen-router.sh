@@ -325,8 +325,8 @@ swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (ask
   echo "        }"
   echo "    }"
   # Stack-lean body: the swaps observe four orders and two token groups under two handles, and `swap2` is the tightest
-  # script (227 live bindings and 234 combined stack items of the 244 allowed on the v2.6 router; the lock pin added
-  # two state fields and two checks, and argentc, which refuses an entry over the limit, still compiles it). So no local
+  # script (214 live bindings and 221 combined stack items of the 244 allowed, measured on 2026-10-10; argentc refuses an
+  # entry over the limit, so every shape compiling is the check). So no local
   # is kept that an expression can stand for: the input index (this.activeInputIndex), the sum of the base units sold
   # into the bids and the take of a resting last ask are written out where they are used.
   local ME=this.activeInputIndex
