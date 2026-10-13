@@ -993,7 +993,7 @@ kob-executor index \
 
 The network is never implied by the reference build: `--network` (or `network` in the file, or `$KOB_NETWORK`) is required
 there, for every command that talks to a node (`index`, `run`, `match`, `keep`, the facilitator's `network`, and `kob order`,
-`kob recover`, `kob token issue` and the trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send`, which
+`kob recover`, `kob token issue`, the trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge` and the views `kob book`, `orders`, `balances`, which
 also refuse mainnet unless `--network mainnet` is given explicitly). A deployment build (`--features deploy-mainnet` or `deploy-tn10`) implies its own network
 and refuses another. `--rpc-url` (`rpc_url`; the facilitator's `node`) defaults to the local node's JSON wRPC port of that
 network, `ws://127.0.0.1:18110` on mainnet and `ws://127.0.0.1:18210` on testnet-10 (rusty-kaspa's defaults), never a

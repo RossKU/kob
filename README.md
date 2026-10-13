@@ -51,7 +51,7 @@ off-chain custody.
 | `crates/kob-wasm` | wasm-bindgen bindings over `kob-protocol` (used by the web UI and the TypeScript SDK) |
 | `crates/kob-executor` | One binary: indexer + read API (REST and WebSocket), matcher, keepers, and the x402 facilitator |
 | `crates/kob-x402` | x402 wire types, verifiers (KAS, KCC-20, swap-and-pay), payer and merchant SDK, in-memory chain test kit |
-| `crates/kob-cli` | Command line ([README](crates/kob-cli/README.md)): trading (`kob place`, `replace`, `cancel`, `refund`, `take`, `send`, planned like the web wallet), `kob token issue`, `kob registry` (validate, verify-genesis, programs, add-program), `kob recover`, `kob order sweep` / `cancel` |
+| `crates/kob-cli` | Command line ([README](crates/kob-cli/README.md)): trading (`kob place` with every order kind of the web ticket, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, planned like the web wallet; `book`, `orders`, `balances`), `kob token issue`, `kob registry` (validate, verify-genesis, programs, add-program), `kob recover`, `kob order sweep` / `cancel` |
 | `crates/kob-tests` | The contracts executed in the rusty-kaspa v2.1.0 script engine: positive and negative harnesses |
 | `web/` | Static, client-side, non-custodial web UI (TypeScript, Preact) over `kob-wasm`; mock indexer and node for offline use |
 | `packages/kob-x402` | TypeScript x402 SDK and an example paid API |

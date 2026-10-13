@@ -10,6 +10,10 @@ The KOB command line. `kob --help` lists every command, `kob <command> --help` i
 | `kob refund <ID>` | the permissionless refund of an order that has ended (the sender keeps the refund tip) |
 | `kob take <ID> --amount A` | fill a resting order as the taker |
 | `kob send <TOKEN\|KAS> <TO> <AMOUNT>` | send a token (within its program's slots) or KAS |
+| `kob merge <TOKEN>` | merge the key's own UTXOs of a token into one (a chain of transfers to itself) |
+| `kob book <TOKEN> [--quote B]` | the order book on KAS or of a pair (the indexer's view) |
+| `kob orders` | the maker's orders, live or (`--all`) every status |
+| `kob balances` | free KAS and tokens, and what the maker's live orders hold (custody, strays, KAS locked) |
 | `kob order sweep\|cancel --view FILE` | the maker's stray sweep in place and cancel from saved indexer views |
 | `kob recover --from FILE` | find the maker's orders from a backup / export / view on a node alone, and cancel them |
 | `kob token issue` | issue a fixed-supply KCC-20 token |
@@ -17,7 +21,7 @@ The KOB command line. `kob --help` lists every command, `kob <command> --help` i
 
 ## The trading commands
 
-`place`, `replace`, `cancel`, `refund`, `take` and `send` read the node (wRPC JSON, `--node` or `$KOB_NODE_WRPC`) and the
+`place`, `replace`, `cancel`, `refund`, `take`, `send` and `merge` read the node (wRPC JSON, `--node` or `$KOB_NODE_WRPC`) and the
 indexer (`--indexer` or `$KOB_INDEXER_URL`, `http://`; `docs/ops/executor.md` Part B), plan the transaction, print it and
 sign only after confirmation.
 
@@ -31,8 +35,9 @@ program's refund and keeper tips. The guards are the wallet's too: tick, value a
 depth check, a limit that crosses the book becomes an auction (`--crossing auction|limit|reject`), price-band warnings,
 a market start checked against the last fill (`--ack-market-start`), self-trade and book checks that need the indexer
 (`--ack-no-guards` when it cannot answer). Every UTXO the indexer names is looked up on the node before it is spent.
-`crates/kob-cli/src/trade/tests_plan.rs` replays the web planner's test cases and the golden vectors those tests compare
-with (`crates/kob-protocol/vectors/golden.json`).
+`crates/kob-cli/src/trade/tests_plan.rs` and `tests_plan_kinds.rs` replay the web planner's test cases (every kind: the plain,
+conditional and if-done kinds, on KAS and on a pair) and the golden vectors those tests compare with
+(`crates/kob-protocol/vectors/golden.json`).
 
 **Prices are all-in.** A price is the order's limit per whole token; the tip comes on top of it: a sell receives
 `price - tip`, a buy pays `price + tip`. The plan shows the all-in price and the all-in total of the whole amount by the
@@ -93,13 +98,31 @@ kob place oco         --token TUSD --side sell --amount 40TUSD --take-profit 0.3
 kob place ifd --token TUSD --side buy  --amount 40TUSD --price 0.25KAS --take-profit 0.30KAS $N
 kob place ifd --token TUSD --side sell --amount 40TUSD --price 0.26KAS --take-profit 0.22KAS $N
 kob place ifo --token TUSD --side buy  --amount 40TUSD --price 0.25KAS --take-profit 0.30KAS --stop 0.22KAS $N
-# a pair limit: TETH for TUSD at 2500 TUSD per TETH
-kob place pair-limit --token TETH --quote TUSD --side sell --amount 0.01TETH --price 2500TUSD $N
+# streaming (from the price you saw, within 0.5 %), close (sell everything held, a market auction)
+kob place streaming --token TUSD --side buy --amount 40TUSD --displayed-price 0.25KAS --tolerance 0.5% $N
+kob place close     --token TUSD $N
+# TWAP / DCA: 5 TUSD every 10 minutes (each slice an auction from 0.26 down to 0.25 over 20 s); a Dutch decay
+kob place twap  --token TUSD --amount 40TUSD --slice 5TUSD --interval 10m --price 0.26KAS --price-end 0.25KAS --slice-auction 20s $N
+kob place dca   --token TUSD --amount 40TUSD --slice 5TUSD --interval 1h --price 0.24KAS $N
+kob place dutch --token TUSD --side sell --amount 40TUSD --price 0.30KAS --price-end 0.25KAS --duration 2h $N
+# a trailing stop 0.03 below the market, moving in steps of 0.005 (with a take-profit: a trailing OCO)
+kob place trailing-stop --token TUSD --side sell --amount 40TUSD --stop 0.22KAS --trail-step 0.005KAS --trail-gap 0.03KAS $N
+# a stop entry, a repeat IFD (re-buys after every take-profit, 5 times)
+kob place ifd        --token TUSD --side buy --amount 40TUSD --price 0.26KAS --entry-stop 0.255KAS --stop 0.22KAS $N
+kob place repeat-ifd --token TUSD --side buy --amount 40TUSD --price 0.25KAS --take-profit 0.30KAS --repeat-count 5 $N
+# pairs: every kind with --quote (prices in B per whole A, the tip in KAS): a limit, a stop, an if-done entry
+kob place pair-limit  --token TETH --quote TUSD --side sell --amount 0.01TETH --price 2500TUSD $N
+kob place stop-market --token TETH --quote TUSD --side sell --amount 0.01TETH --stop 2300TUSD $N
+kob place ifo         --token TETH --quote TUSD --side buy  --amount 0.01TETH --price 2400TUSD --take-profit 2600TUSD --stop 2300TUSD $N
 
 # amend in place (same covenant id) or cancel-replace; renew a GTC for another 90 days
 kob replace <covenant id> --price 0.255KAS $N
 kob replace <covenant id> --amount 20TUSD --renew $N
 kob replace <covenant id of a buy> --add-kas 10KAS $N
+# trailing stops, if-done entries and pair orders are re-planned from their terms with the changes
+kob replace <covenant id of a trailing stop> --stop 0.23KAS --trail-gap 0.02KAS $N
+kob replace <covenant id of an if-done entry> --price 0.245KAS --take-profit 0.31KAS $N
+kob replace <covenant id of a pair order> --price 2450TUSD $N
 # cancel, refund an ended order (any key; it keeps the refund tip less the fee), take a resting order
 kob cancel <covenant id> <covenant id> $N
 kob refund <covenant id> $N
@@ -107,6 +130,13 @@ kob take <covenant id> --amount 4TUSD $N
 # send
 kob send KAS kaspatest:qq... 2.5KAS $N
 kob send TUSD kaspatest:qq... 12.5TUSD $N
+# merge the key's UTXOs of a token (TOKEN_UTXOS_FRAGMENTED), one confirmation for the chain
+kob merge TUSD $N
+# views (no signature; --maker KEY|ADDRESS instead of the key)
+kob book TUSD --network testnet-10
+kob book TETH --quote TUSD --depth 50 --network testnet-10
+kob orders --all $N
+kob balances --maker kaspatest:qq... --network testnet-10
 ```
 
 `--json` prints the plan and the result as JSON (the order states, the `createOrder` request, the decoded
@@ -125,8 +155,15 @@ transaction, the new covenant ids, the transaction id).
 | `oco` | `--take-profit`, `--stop` | `--limit`, `--slippage`, `--min-touch`, as `stop-market` |
 | `ifd` | `--price` and one of `--take-profit`, `--stop` | `--limit` (exit stop-limit), `--exit-tip`, `--prefund` (sell first), `--tip`, `--min-fill`, lifetime |
 | `ifo` | `--price`, `--take-profit`, `--stop` | as `ifd` |
+| `streaming` | `--displayed-price`, `--tolerance BPS` | `--tip`, `--min-fill`, `--all-or-nothing` |
+| `close` | | `--amount` (default: everything held), `--tip`, `--slippage`, `--all-or-nothing` |
+| `twap`, `dca` | `--price`, `--slice AMOUNT`, `--interval DURATION` | `--price-end` and `--slice-auction` (each slice an auction), `--tip`, `--min-fill`, lifetime, `--active-from`; `dca`: `--max-fills` |
+| `dutch` | `--price`, `--price-end`, `--duration` | `--step DURATION`, `--tip`, `--min-fill`, lifetime, `--active-from`, `--max-fills` |
+| `trailing-stop` | `--stop`, `--trail-step`, `--trail-gap` | `--trail-wait`, `--trail-updates`, `--take-profit`, `--slippage`, as `stop-market` |
+| `repeat-ifd`, `repeat-ifo` | as `ifd` (a take-profit) / `ifo` | `--repeat-count K` (default: unlimited within 90 days), as `ifd` |
 | `pair-limit` | `--quote`, `--price` (B per whole A) | as `limit` |
 
-Not here yet: trailing stops, TWAP / DCA, Dutch / rising bids, streaming and close orders, repeat IFD / IFO, stop
-entries, and the pair conditional and if-done kinds (the web wallet places them); taking pair orders and stop legs (the
-matchers fill them).
+Every stop also takes `--band DURATION`, `--keeper-tip KAS` and `--min-rest DURATION`; an if-done entry `--entry-stop`
+(a stop entry), `--exit-min-fill`, `--exit-min-touch`, `--exit-slippage` and a trailing exit stop (`--trail-step`,
+`--trail-gap`). Every kind takes `--quote TOKEN_B` (a pair order: `KobPair`, `KobCondPair`, `KobIfdPair`). Not here:
+taking pair orders and stop legs (the matchers fill them).
