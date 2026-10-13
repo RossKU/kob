@@ -55,7 +55,7 @@ describe('the private-key signer page has its own strict policy and is framed sa
     expect(SIGNER_META_DIRECTIVES['frame-src']).toEqual(["'none'"]);
     expect(SIGNER_META_DIRECTIVES['trusted-types']).toEqual(["'none'"]);
     expect(SIGNER_CSP_META).not.toMatch(/frame-ancestors/);
-    expect(SIGNER_CSP_HEADER).toBe(`${SIGNER_CSP_META}; frame-ancestors 'self'`);
+    expect(SIGNER_CSP_HEADER).toBe(`${SIGNER_CSP_META}; sandbox allow-scripts; frame-ancestors 'self'`);
     const h = readFileSync(web('public/_headers'), 'utf8');
     expect(h).toContain(`/signer.html\n  ! Content-Security-Policy\n  ! X-Frame-Options\n  Content-Security-Policy: ${SIGNER_CSP_HEADER}\n  X-Frame-Options: SAMEORIGIN`);
     expect(h).toMatch(/\/assets\/\*\n  Access-Control-Allow-Origin: \*/); // the sandboxed (opaque-origin) signer loads its modules and wasm with CORS

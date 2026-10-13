@@ -17,7 +17,8 @@
 //   * everything else is denied: no plugins, no base-uri, no form posts, no workers.
 //
 // The signer page (signer.html) has its own, stricter policy (SIGNER_*): no network at all beyond its own bundle and wasm, no inline styles, no
-// frames, and (header only) `frame-ancestors 'self'`: only the app may frame it.
+// frames, and (header only) `sandbox allow-scripts` (an opaque origin even when framed without the sandbox attribute) and `frame-ancestors 'self'`:
+// only the app may frame it.
 export const CONNECT_SRC = ["'self'", 'https:', 'wss:', 'http:', 'ws:'];
 
 /** Directives that also work in a <meta> element (no `frame-ancestors`, `report-uri`, `sandbox`). */
@@ -63,5 +64,8 @@ export const CSP_HEADER = `${CSP_META}; frame-ancestors 'none'`;
 
 /** The signer page's <meta> policy. */
 export const SIGNER_CSP_META = render(SIGNER_META_DIRECTIVES);
-/** The signer page's header policy: only the app's own pages may frame it. */
-export const SIGNER_CSP_HEADER = `${SIGNER_CSP_META}; frame-ancestors 'self'`;
+/**
+ * The signer page's header policy: only the app's own pages may frame it, and it runs sandboxed (opaque origin, scripts only) however it is
+ * loaded: a same-origin page that frames it without the iframe's sandbox attribute still cannot read its DOM (the key field) or its memory.
+ */
+export const SIGNER_CSP_HEADER = `${SIGNER_CSP_META}; sandbox allow-scripts; frame-ancestors 'self'`;
