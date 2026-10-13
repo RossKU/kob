@@ -105,6 +105,17 @@ pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
         };
         d.inputs.push(line);
     }
+    // orders spent by the transaction: an output under one of their covenant ids continues it
+    let spent_orders: BTreeMap<[u8; 32], String> = built
+        .tx
+        .inputs
+        .iter()
+        .zip(&built.plans)
+        .filter_map(|(i, p)| match p {
+            SigPlan::Entry { template, .. } => i.utxo.covenant_id.map(|c| (c, template.name().to_string())),
+            _ => None,
+        })
+        .collect();
     let created: BTreeMap<u32, (&kob_protocol::tx::NewCovenant, Option<String>)> = built
         .covenants
         .iter()
@@ -131,7 +142,10 @@ pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
                     }
                     format!("out #{o}  {} to {who} (carrier {})", tok(units, &c.covenant_id, st.amount() as i128), kas(value))
                 }
-                _ => format!("out #{o}  covenant {} ({})", show_id(&c.covenant_id, ""), kas(value)),
+                _ => match spent_orders.get(&c.covenant_id) {
+                    Some(t) => format!("out #{o}  order {t} {} continues ({} on it)", show_id(&c.covenant_id, ""), kas(value)),
+                    None => format!("out #{o}  covenant {} ({})", show_id(&c.covenant_id, ""), kas(value)),
+                },
             }
         } else {
             format!("out #{o}  {} to script {}", kas(value), short_script(&out.script_public_key))

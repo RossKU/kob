@@ -993,7 +993,8 @@ kob-executor index \
 
 The network is never implied by the reference build: `--network` (or `network` in the file, or `$KOB_NETWORK`) is required
 there, for every command that talks to a node (`index`, `run`, `match`, `keep`, the facilitator's `network`, and `kob order`,
-`kob recover`, `kob token issue`). A deployment build (`--features deploy-mainnet` or `deploy-tn10`) implies its own network
+`kob recover`, `kob token issue` and the trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send`, which
+also refuse mainnet unless `--network mainnet` is given explicitly). A deployment build (`--features deploy-mainnet` or `deploy-tn10`) implies its own network
 and refuses another. `--rpc-url` (`rpc_url`; the facilitator's `node`) defaults to the local node's JSON wRPC port of that
 network, `ws://127.0.0.1:18110` on mainnet and `ws://127.0.0.1:18210` on testnet-10 (rusty-kaspa's defaults), never a
 testnet endpoint on mainnet.
@@ -1003,8 +1004,9 @@ that carries a password (`wss://user:pass@host/...`) or an API key (in its path 
 Every flag that takes one has an alternative: `--rpc-url` of `index`, `run`, `match` and `keep` is also `$KOB_NODE_WRPC`
 (and `rpc_url` in the indexer's `--config` file); the indexer's `--node` is also `$KOB_INDEX_NODES` (comma-separated) or
 `[[nodes]]` in that file; the facilitator's `--node` (`kob-executor x402`) is also `$KOB_NODE_WRPC` or `node` in its
-`--config` file (itself also `$KOB_X402_CONFIG`); `--node` of `kob recover`, `kob order` and `kob token issue` is also
-`$KOB_NODE_WRPC`. A flag wins over its variable, the variable over the file. Keep the file readable by the service user
+`--config` file (itself also `$KOB_X402_CONFIG`); `--node` of `kob recover`, `kob order`, `kob token issue` and the trading
+commands is also `$KOB_NODE_WRPC`, their `--indexer` also `$KOB_INDEXER_URL`, and their signing key comes only from a file
+(`--key-file`) or the environment (`$KOB_KEY`), never from an argument (`crates/kob-cli/README.md`). A flag wins over its variable, the variable over the file. Keep the file readable by the service user
 only and put the variable in a root-owned `EnvironmentFile=` (mode 0600). Logs, error messages, the
 health and metrics routes and `kob recover`'s report show a node as `scheme://host[:port]` only (`/...` marks a removed
 path or query): user name, password, path, query and fragment are never printed.

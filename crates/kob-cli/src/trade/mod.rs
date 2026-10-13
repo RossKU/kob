@@ -16,4 +16,6 @@ pub mod show;
 pub mod units;
 
 #[cfg(test)]
+mod tests_e2e;
+#[cfg(test)]
 mod tests_plan;

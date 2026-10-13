@@ -368,7 +368,7 @@ pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> 
 }
 
 /// The planning environment of `kob place`, read from the node and the indexer.
-pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<(Env, TokenMarket, Option<TokenMarket>), String> {
+pub fn env_for(c: &Common, p: &Parsed, maker: [u8; 32]) -> Result<(Env, TokenMarket, Option<TokenMarket>), String> {
     let node = c.need_node()?.to_string();
     let indexer = c.need_indexer()?.to_string();
     let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(&indexer))?;
@@ -394,7 +394,8 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<(E
         }
         None => None,
     };
-    let needs_a = side == Side::Sell || kind == "ifd" && side == Side::Sell;
+    // a sell (and a sell-first entry) holds tokens of A; a pair buy holds B (below)
+    let needs_a = side == Side::Sell;
     let token_utxos = if needs_a { data::token_utxos(&indexer, &node, &c.network, &a, &maker)? } else { vec![] };
     let (book, own, last_fill, pair) = match &b {
         None => {
@@ -475,6 +476,9 @@ pub fn ready(plan: &Plan, title: String, a: &TokenMarket, b: Option<&TokenMarket
     })
 }
 
+/// What `kob place` signs: the settings, the key, the plan and the markets.
+type Planned = (Common, crate::common::Signer, Plan, TokenMarket, Option<TokenMarket>);
+
 /// Run `kob place`.
 pub fn run(args: &[String]) -> i32 {
     if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
@@ -496,10 +500,10 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("error: unexpected argument `{}`", p.pos[1]);
         return 2;
     }
-    let step = || -> Result<(Common, crate::common::Signer, Plan, TokenMarket, Option<TokenMarket>), (i32, String)> {
+    let step = || -> Result<Planned, (i32, String)> {
         let c = Common::from(&p).map_err(|e| (2, e))?;
         let signer = c.signer(args).map_err(|e| (2, e))?;
-        let (env, a, b) = env_for(&c, &p, &kind, signer.pubkey).map_err(|e| (1, e))?;
+        let (env, a, b) = env_for(&c, &p, signer.pubkey).map_err(|e| (1, e))?;
         let intent = intent_of(&kind, &p, &a, b.as_ref()).map_err(|e| (2, e))?;
         let plan = plan_order(&env, &intent);
         Ok((c, signer, plan, a, b))

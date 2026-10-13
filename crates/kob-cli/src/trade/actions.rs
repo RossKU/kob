@@ -929,7 +929,7 @@ USAGE
   come from your KAS UTXOs, largest first.
 ";
 
-/// A plain KAS payment from P2PK coins of `me` (a version-0 transaction, like an x402 native payment): the payment and
+/// A plain KAS payment from P2PK coins of `me` (a version-1 transaction, the builders' P2PK inputs): the payment and
 /// the change back to `me` (no change when it would be dust); the fee is the relay floor at the requested rate.
 pub fn kas_payment(
     coins: &[KeyUtxo],
@@ -942,6 +942,7 @@ pub fn kas_payment(
     use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutput, UtxoEntry};
     use kob_protocol::tx::{masses, sighash, target_fee, FeeReport, SigPlan, SignRequest, TxJson, DUST_OUTPUT_MIN, MIN_FEE_RATE};
     let rate = fee.fee_rate.unwrap_or(MIN_FEE_RATE);
+    let budget = kob_protocol::budget::lookup("p2pk").map_err(|e| e.to_string())?;
     let total: u64 = coins.iter().map(|k| k.utxo.amount).sum();
     let mine = p2pk_spk(me);
     let entries: Vec<UtxoEntry> =
@@ -952,8 +953,13 @@ pub fn kas_payment(
         v
     };
     let tx_of = |outs: Vec<TransactionOutput>, sig: &[u8]| {
-        let ins = coins.iter().map(|k| TransactionInput::new(k.utxo.outpoint(), sig.to_vec(), u64::MAX, 1)).collect();
-        let tx = Transaction::new(0, ins, outs, 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+        let ins = coins
+            .iter()
+            .map(|k| {
+                TransactionInput::new_with_compute_budget(k.utxo.outpoint(), sig.to_vec(), kob_protocol::tx::SEQUENCE_NONFINAL, budget)
+            })
+            .collect();
+        let tx = Transaction::new(1, ins, outs, 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
         let m = masses(&tx, &entries);
         tx.set_storage_mass(m.storage);
         tx
