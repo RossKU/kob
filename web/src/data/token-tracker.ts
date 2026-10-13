@@ -7,13 +7,17 @@
 // the claimed state (kob-wasm `tokenScriptPublicKey`), the node must list the outpoint there, and the covenant id must match. An indexer or a
 // storage entry can therefore be stale or wrong, never dangerous.
 //
+// Balances read every token the wallet holds, not only the registry's (`heldTokens`): the indexer tracks the holdings of every token of
+// a pinned program (a token received from another DEX, a launchpad or a bridge), and each candidate is verified the same way. The script
+// is derived from the program kob-wasm pins, so a look-alike program or an output whose state the indexer misreports never verifies.
+//
 // The reverse also holds: the local list is the only record of holdings the indexer never saw (issuance outputs, anything from before
 // the indexer's database started), so nothing here may forget a candidate on weak evidence. A candidate the node does not list is only
 // pruned after MISS_CONFIRMATIONS misses on separate checks that span the grace period, an empty node answer counts for nothing, and a
 // store this code cannot read is copied aside before it is overwritten.
 import type { Hex, TokenProgram, TokenState, TokenUtxo, BuiltTx, U64 } from '../kob/types';
 import { TOKEN_PROGRAMS } from '../kob/programs.generated';
-import { familyOfProgram, isKeyOwned, isKronState, keyState } from '../kob/token-state';
+import { familyOfProgram, isKeyOwned, isKronState, isKronUnspendable, keyState } from '../kob/token-state';
 import type { KobWasm } from '../kob/wasm';
 import type { NodeApi } from './node';
 import type { IndexerApi } from './indexer';
@@ -27,6 +31,12 @@ export interface TokenRef {
   program: TokenProgram;
   /** the token's extension commitment (registry): lets an indexer answer without a `state` be rebuilt into a full state */
   extensionCommitment?: Hex;
+}
+
+/** A token UTXO verified on the node, of any token: the program its script was derived under (balances). */
+export interface HeldTokenUtxo extends TokenUtxo {
+  covenantId: Hex;
+  program: TokenProgram;
 }
 
 /** A remembered candidate: the outpoint plus the state its script commits to. */
@@ -71,6 +81,12 @@ const DEC = /^\d+$/;
 const PROGRAMS: readonly string[] = TOKEN_PROGRAMS.map((p) => p.name);
 
 const outpointKey = (txid: string, index: number) => `${txid}:${index}`;
+/** Largest amount first, then by outpoint. */
+const byAmountDesc = (a: TokenUtxo, b: TokenUtxo): number => {
+  const d = BigInt(b.state.amount) - BigInt(a.state.amount);
+  if (d !== 0n) return d > 0n ? 1 : -1;
+  return a.transactionId === b.transactionId ? a.index - b.index : a.transactionId < b.transactionId ? -1 : 1;
+};
 
 class MemoryStorage implements StorageLike {
   private m = new Map<string, string>();
@@ -341,32 +357,81 @@ export class TokenTracker {
     const candidates = [...byOutpoint.values()];
     if (candidates.length === 0) return [];
 
-    const withAddress = candidates.map((c) => {
-      const spk = this.kob.tokenScriptPublicKey(c.program, c.state);
-      return { c, spk: spk.toLowerCase(), address: spkStringToAddress(this.sdk, spk, this.network) };
+    const { verified: result, contradicted, answered } = await this.verifyOnNode(candidates);
+    this.settle(me, covId, { queried: new Set(localForToken.map((t) => outpointKey(t.transactionId, t.index))), verified: new Set(result.keys()), contradicted, answerEmpty: !answered });
+    return [...result.values()].map(({ program: _p, ...u }) => u as TokenUtxo).sort(byAmountDesc);
+  }
+
+  /**
+   * Candidates checked on the node: each one's P2SH address is derived from its claimed state under its program (kob-wasm's pinned bytes), and
+   * the node must list the outpoint there, with the candidate's covenant id. `contradicted`: the node lists the outpoint at that script under
+   * another covenant id. `answered`: the node listed anything at all (an empty answer is no evidence either way). Throws when the node fails,
+   * and when a script cannot be derived unless `skipUnderivable` (a candidate the program cannot encode is then simply not verified).
+   */
+  private async verifyOnNode(candidates: readonly TrackedToken[], skipUnderivable = false): Promise<{ verified: Map<string, HeldTokenUtxo>; contradicted: Set<string>; answered: boolean }> {
+    const withAddress = candidates.flatMap((c) => {
+      try {
+        const spk = this.kob.tokenScriptPublicKey(c.program, c.state);
+        return [{ c, spk: spk.toLowerCase(), address: spkStringToAddress(this.sdk, spk, this.network) }];
+      } catch (e) {
+        if (!skipUnderivable) throw e;
+        return [];
+      }
     });
+    const verified = new Map<string, HeldTokenUtxo>();
+    const contradicted = new Set<string>();
+    if (withAddress.length === 0) return { verified, contradicted, answered: false };
     const live = await this.node.getUtxosByAddresses([...new Set(withAddress.map((w) => w.address))]);
     const liveByOutpoint = new Map(live.map((u) => [outpointKey(u.transactionId, u.index), u]));
-
-    const result = new Map<string, TokenUtxo>();
-    const contradicted = new Set<string>();
     for (const { c, spk } of withAddress) {
       const k = outpointKey(c.transactionId, c.index);
       const u = liveByOutpoint.get(k);
-      if (u && u.scriptPublicKey.toLowerCase() === spk) {
-        if (u.covenantId === covId) {
-          if (!result.has(k)) {
-            result.set(k, { transactionId: u.transactionId, index: u.index, amount: u.amount, blockDaaScore: u.blockDaaScore, covenantId: covId, state: c.state });
-          }
-        } else contradicted.add(k); // the node says this outpoint is not a UTXO of this token: bad data
-      }
+      if (!u || u.scriptPublicKey.toLowerCase() !== spk) continue;
+      if (u.covenantId === c.tokenCovId) {
+        if (!verified.has(k)) verified.set(k, { transactionId: u.transactionId, index: u.index, amount: u.amount, blockDaaScore: u.blockDaaScore, covenantId: c.tokenCovId, state: c.state, program: c.program });
+      } else contradicted.add(k); // the node says this outpoint is not a UTXO of this token: bad data
     }
-    this.settle(me, covId, { queried: new Set(localForToken.map((t) => outpointKey(t.transactionId, t.index))), verified: new Set(result.keys()), contradicted, answerEmpty: live.length === 0 });
-    return [...result.values()].sort((a, b) => {
-      const d = BigInt(b.state.amount) - BigInt(a.state.amount);
-      if (d !== 0n) return d > 0n ? 1 : -1;
-      return a.transactionId === b.transactionId ? a.index - b.index : a.transactionId < b.transactionId ? -1 : 1;
-    });
+    return { verified, contradicted, answered: live.length > 0 };
+  }
+
+  /**
+   * Every token UTXO of `pubkey` that verifies on the node, of ANY token (balances; the registry's tokens and the others): the indexer's
+   * holdings of the owner (`GET /v1/token-utxos?owner=`, every token of a pinned program) and the local candidates of every token. Besides the
+   * key-owned UTXOs the builders spend it keeps KRON pubkey-owned ones (`id_type` 0), for display only: never pass them to a builder.
+   * `skip`: tokens whose key-owned UTXOs the caller reads with `tokenUtxosFor` already. Read-only (the local store is not changed); sorted
+   * by token, then largest amount first.
+   */
+  async heldTokens(pubkey: Hex, o: { skip?: ReadonlySet<Hex> } = {}): Promise<HeldTokenUtxo[]> {
+    const me = pubkey.toLowerCase();
+    const skip = o.skip ?? new Set<Hex>();
+    const wanted = (c: TrackedToken) => (isKeyOwned(c.state) || isKronUnspendable(c.state)) && !(skip.has(c.tokenCovId) && isKeyOwned(c.state));
+    const fromIndexer = (await this.allFromIndexer(me)).filter(wanted);
+    const local = this.load(me).filter(wanted);
+    const byClaim = new Map<string, TrackedToken>();
+    for (const c of [...fromIndexer, ...local]) byClaim.set(`${outpointKey(c.transactionId, c.index)}:${c.state.amount}`, c);
+    if (byClaim.size === 0) return [];
+    const { verified } = await this.verifyOnNode([...byClaim.values()], true);
+    return [...verified.values()].sort((a, b) => (a.covenantId === b.covenantId ? byAmountDesc(a, b) : a.covenantId < b.covenantId ? -1 : 1));
+  }
+
+  /** The indexer's holdings of an owner, any token (views without a state, or of a program this build does not pin, are left out). */
+  private async allFromIndexer(me: Hex): Promise<TrackedToken[]> {
+    if (!this.indexer) return [];
+    let views: TokenUtxoView[] | null;
+    try {
+      views = await this.indexer.tokenUtxos({ owner: me, spent: false });
+    } catch {
+      return [];
+    }
+    const out: TrackedToken[] = [];
+    for (const v of views ?? []) {
+      if (v.spent || !v.state || !v.program || !PROGRAMS.includes(v.program)) continue;
+      const program = v.program as TokenProgram;
+      if (isKronState(v.state) !== (familyOfProgram(program) === 'kron') || v.state.owner.toLowerCase() !== me) continue;
+      const c = sanitizeTracked({ transactionId: v.txid, index: v.index, tokenCovId: v.token.toLowerCase(), program, state: v.state, carrier: v.value, addedAt: this.now() }, this.now());
+      if (c) out.push(c);
+    }
+    return out;
   }
 
   /**

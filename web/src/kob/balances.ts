@@ -2,13 +2,14 @@
 //
 //   escrowedBalances(orders)            per token: custody / strays / KAS escrow / KAS carriers, from live OrderViews and/or OrderSnapshots
 //                                       (a pair order counts its custody of A under A and of B under B, its KAS under its base token A)
-//   withFreeBalances(escrowed, utxos)   adds the free (maker P2PK-owned) token balance -> TokenBalance[]
+//   withFreeBalances(escrowed, utxos)   adds the free (maker P2PK-owned) token balance, and KRON tokens the maker's key holds in a way KOB
+//                                       cannot spend (id_type 0 / 1) -> TokenBalance[]
 // Pure and DOM-free; all amounts bigint (token base units, sompi).
 import type { OrderView } from '../data/indexer-types';
 import type { OrderSnapshot } from './cancel';
 import { asOrderState, big, custodiesOf, describeOrder, tokenCovIdOf } from './order-facts';
 import { pairOfView } from './pair-view';
-import { isKeyOwned } from './token-state';
+import { isKeyOwned, isKronUnspendable } from './token-state';
 import type { Hex, OrderState, TokenUtxo } from './types';
 
 export interface EscrowedBalance {
@@ -30,6 +31,8 @@ export interface EscrowedBalance {
 export interface TokenBalance {
   token: Hex;
   free: bigint;
+  /** KRON tokens of the maker held by pubkey / script hash (`id_type` 0 / 1): theirs, but the builders do not spend them; not in `free` */
+  notSpendable: bigint;
   escrowed: bigint;
   strays: bigint;
   kasLocked: bigint;
@@ -138,21 +141,30 @@ export function escrowedBalances(orders: Input[]): EscrowedBalance[] {
 }
 
 /**
- * Adds the maker's free tokens: the sum of key-owned (KCC-20 owner_scheme 0, KRON address presence; owner == maker) token UTXOs per token covenant id. UTXOs of other
- * owners and covenant-owned ones (custody, strays) are ignored. Tokens present on one side only still appear. Sorted by token id.
+ * Adds the maker's free tokens: the sum of key-owned (KCC-20 owner_scheme 0, KRON address presence; owner == maker) token UTXOs per token covenant id,
+ * and apart from it (`notSpendable`) KRON UTXOs of the maker held by pubkey (`id_type` 0) or script hash (1), which the builders do not spend. UTXOs of
+ * other owners and covenant-owned ones (custody, strays) are ignored. Tokens present on one side only still appear. Sorted by token id.
  */
 export function withFreeBalances(escrowed: EscrowedBalance[], freeUtxos: TokenUtxo[], maker: Hex): TokenBalance[] {
   const free = new Map<Hex, bigint>();
+  const other = new Map<Hex, bigint>();
+  const seen = new Set<string>();
   for (const u of freeUtxos) {
-    if (!isKeyOwned(u.state) || u.state.owner !== maker || !u.covenantId) continue;
-    free.set(u.covenantId, (free.get(u.covenantId) ?? 0n) + big(u.state.amount));
+    if (u.state.owner !== maker || !u.covenantId) continue;
+    // one outpoint counts once (sources may overlap)
+    const k = `${u.transactionId}:${u.index}`;
+    if (seen.has(k)) continue;
+    const into = isKeyOwned(u.state) ? free : isKronUnspendable(u.state) ? other : null;
+    if (!into) continue;
+    seen.add(k);
+    into.set(u.covenantId, (into.get(u.covenantId) ?? 0n) + big(u.state.amount));
   }
-  const tokens = new Set<Hex>([...free.keys(), ...escrowed.map((e) => e.token)]);
+  const tokens = new Set<Hex>([...free.keys(), ...other.keys(), ...escrowed.map((e) => e.token)]);
   const eBy = new Map(escrowed.map((e) => [e.token, e]));
   return [...tokens].sort().map((token) => {
     const e = eBy.get(token);
     return {
-      token, free: free.get(token) ?? 0n, escrowed: e?.custody ?? 0n, strays: e?.strays ?? 0n, kasLocked: e?.kasLocked ?? 0n,
+      token, free: free.get(token) ?? 0n, notSpendable: other.get(token) ?? 0n, escrowed: e?.custody ?? 0n, strays: e?.strays ?? 0n, kasLocked: e?.kasLocked ?? 0n,
       kasEscrow: e?.kasEscrow ?? 0n, kasCarriers: e?.kasCarriers ?? 0n, orderCount: e?.orders ?? 0,
     };
   });

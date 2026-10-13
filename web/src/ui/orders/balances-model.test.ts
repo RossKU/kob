@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { StrayView } from '../../data/indexer-types';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, TOKEN, orderViewOf, placeGolden, strayFor, tokenUtxo, tokenUtxoView } from '../../testing/chain-fixtures';
-import { combineBalances, strayTotals } from './balances-model';
+import { combineBalances, strayTotals, unreviewedProgram } from './balances-model';
 
 const kob = loadKobNode();
 const placed = placeGolden(kob, 'create.ask');
@@ -53,5 +53,26 @@ describe('combineBalances', () => {
   it('tokens of other owners are not free, and snapshots (node-resolved orders) count as escrow', () => {
     const c = combineBalances({ maker: MAKER.pk, freeKas: 0n, freeTokens: [tokenUtxo(999n, 'aa'.repeat(32))], liveOrders: [snap], strays: [] });
     expect(c.tokens[0]).toMatchObject({ free: 0n, escrowed: custody });
+  });
+});
+
+describe('unreviewedProgram', () => {
+  it('marks every program whose profile is not reviewed, and an unknown one', () => {
+    expect(unreviewedProgram('KCC20Ref')).toBe(false);
+    expect(unreviewedProgram('KCC20PublicMint')).toBe(false);
+    expect(unreviewedProgram('KronToken2433')).toBe(false);
+    expect(unreviewedProgram('KCC20Ref_8x8')).toBe(true);
+    expect(unreviewedProgram('KCC20P2')).toBe(true);
+    expect(unreviewedProgram('KCC20KaspaCom_0_2_5')).toBe(true);
+    expect(unreviewedProgram(null)).toBe(true);
+  });
+});
+
+describe('combineBalances: tokens KOB cannot spend', () => {
+  it('a KRON token held only by the key (id_type 0) keeps its row, with nothing free', () => {
+    const kron = '9a'.repeat(32);
+    const u = { transactionId: '81'.repeat(32), index: 0, amount: '1000', covenantId: kron, state: { amount: '12', owner: MAKER.pk, id_type: 0, is_minter: 0 } };
+    const c = combineBalances({ maker: MAKER.pk, freeKas: 0n, freeTokens: [u], liveOrders: [], strays: [] });
+    expect(c.tokens).toMatchObject([{ token: kron, free: 0n, notSpendable: 12n }]);
   });
 });

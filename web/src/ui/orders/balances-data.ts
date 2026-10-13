@@ -5,7 +5,7 @@ import type { Services } from '../../app/services';
 import type { OrderView, StrayView } from '../../data/indexer-types';
 import type { OrderSnapshot } from '../../kob/cancel';
 import type { TokenInfo } from '../../kob/registry';
-import type { Hex, TokenUtxo } from '../../kob/types';
+import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
 import { toError } from '../kit/hooks';
 import { combineBalances, type CombinedBalances } from './balances-model';
 
@@ -16,11 +16,17 @@ export interface FreeBalances {
   /** null when the node could not be read */
   kasFree: bigint | null;
   freeTokens: TokenUtxo[];
+  /** the program of each token outside `tokens` (or without a program there) whose UTXOs were read (`anyToken`): the one its scripts verified under */
+  programs: Map<Hex, TokenProgram>;
   errors: BalanceError[];
 }
 
-/** Spendable KAS (node) and free token UTXOs (tracker, verified on the node) of a key. Only tokens with a known program can be read. */
-export async function loadFreeBalances(s: Services, pubkey: Hex, tokens: readonly TokenInfo[]): Promise<FreeBalances> {
+/**
+ * Spendable KAS (node) and free token UTXOs (tracker, verified on the node) of a key. The registry `tokens` with a known program are read; with
+ * `anyToken` every other token the key holds as well (the indexer's holdings of the key and the local candidates, verified the same way: tokens
+ * from other DEXes, launchpads, bridges), and KRON UTXOs KOB cannot spend (`id_type` 0), which only a balance shows.
+ */
+export async function loadFreeBalances(s: Services, pubkey: Hex, tokens: readonly TokenInfo[], o: { anyToken?: boolean } = {}): Promise<FreeBalances> {
   const errors: BalanceError[] = [];
   const fail = (source: BalanceSource, e: unknown) => errors.push({ source, message: toError(e).message });
   const kasP = s.utxos.fundingFor(pubkey).then(
@@ -36,8 +42,12 @@ export async function loadFreeBalances(s: Services, pubkey: Hex, tokens: readonl
           .catch((e) => (fail('tokens', e), [] as TokenUtxo[])),
       ),
   ).then((lists) => lists.flat());
-  const [kasFree, freeTokens] = await Promise.all([kasP, tokensP]);
-  return { kasFree, freeTokens, errors };
+  const read = new Set(tokens.filter((t) => t.program).map((t) => t.covenantId));
+  const heldP = o.anyToken ? s.tracker.heldTokens(pubkey, { skip: read }).catch((e) => (fail('tokens', e), [])) : Promise.resolve([]);
+  const [kasFree, freeTokens, held] = await Promise.all([kasP, tokensP, heldP]);
+  const programs = new Map<Hex, TokenProgram>();
+  for (const u of held) if (!read.has(u.covenantId)) programs.set(u.covenantId, u.program);
+  return { kasFree, freeTokens: [...freeTokens, ...held.map(({ program: _p, ...u }) => u)], programs, errors };
 }
 
 export interface BalancesData {

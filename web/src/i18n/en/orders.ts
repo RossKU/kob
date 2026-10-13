@@ -352,6 +352,11 @@ export default {
   'orders.balances.empty': 'No tokens and nothing locked in orders.',
   'orders.balances.straysNote': 'Stray tokens were sent to one of your orders. A sweep or cancel returns them; a refund does not.',
   'orders.balances.straysLost': 'Some strays belong to closed orders and cannot be recovered.',
+  'orders.balances.notSpendable': '+{amount} not spendable by KOB',
+  'orders.balances.notSpendableHint': 'KRON tokens held by a public key or script hash (id_type 0 / 1). They are yours, but KOB only spends address-held KRON tokens: move them to your address with a KRON wallet first.',
+  'orders.balances.unreviewed': 'unreviewed program',
+  'orders.balances.unreviewedHint': 'Token program {program}: a prototype, or not reviewed for KOB. The balance is on chain; trade it with care.',
+  'orders.balances.oldHoldings': 'Tokens held since before the indexer started, or straight from an issuance, show here once they move: send them to yourself from the wallet that holds them.',
 
   'orders.strays.title': 'Stray tokens',
   'orders.strays.explain': 'Tokens sent to your orders from outside are not liquidity. Only you can recover them: "Sweep strays" (the order stays open) or a cancel. Strays of another token return once the indexer proves their state. Once an order closes, its strays are lost for good.',

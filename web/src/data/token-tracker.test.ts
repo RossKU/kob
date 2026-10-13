@@ -9,7 +9,7 @@ import {
   CARRIER, MAKER_PK, MAKER_SK, OTHER_PK, TOKEN_COV_ID, TOKEN_EXT, TOKEN_PROGRAM, sendTokensRequest, tokenState, tokenUtxo,
 } from '../testing/token-fixtures';
 import type { StorageLike } from '../config';
-import type { BuiltTx, SignedTx } from '../kob/types';
+import type { BuiltTx, Hex, SignedTx, TokenProgram, TokenState } from '../kob/types';
 import type { TokenUtxoView } from './indexer-types';
 
 const sdk = loadKaspaSdkNode();
@@ -301,6 +301,67 @@ describe('TokenTracker with the indexer as first source', () => {
     expect(st.list(MAKER_PK)[0]!.state).toEqual(kron.state);
     expect(sanitizeTracked({ ...kron, state: tokenState(5n), addedAt: 1 })).toBeNull();
     expect(sanitizeTracked({ ...kron, program: 'KCC20Ref_8x8', addedAt: 1 })).toBeNull();
+  });
+});
+
+describe('TokenTracker.heldTokens (balances: every token the key holds)', () => {
+  const OTHER_COV = '5a'.repeat(32);
+  const KRON_COV = '9a'.repeat(32);
+  const put = (w: World, program: TokenProgram, cov: Hex, state: TokenState, txid: Hex, index = 0) => {
+    const spk = kob.tokenScriptPublicKey(program, state);
+    w.node.addUtxo({ address: spkStringToAddress(sdk, spk, NET), transactionId: txid, index, amount: CARRIER, scriptPublicKey: spk, covenantId: cov });
+  };
+  const hview = (txid: Hex, cov: Hex, program: string, state: TokenState, over: Partial<TokenUtxoView> = {}): TokenUtxoView => ({
+    txid, index: 0, token: cov, owner: state.owner, amount: state.amount, value: CARRIER, role: 'owned', created_daa: 1, spent: false, spent_txid: null,
+    confirmations: 10, settled: true, program, state, ...over,
+  });
+  const rows = (us: { covenantId: Hex; program: TokenProgram; state: TokenState }[]) => us.map((u) => [u.covenantId, u.program, u.state.amount]);
+
+  it('lists tokens outside the registry and KRON pubkey-held ones, verified on the node; claims that do not verify are left out', async () => {
+    const bag: { views: TokenUtxoView[] } = { views: [] };
+    const calls: unknown[] = [];
+    const w = world({ indexer: { tokenUtxos: async (q) => (calls.push(q), bag.views) } });
+    // a KCC-20 token no registry names (received from another DEX), on a prototype program
+    const a = tokenState(500n);
+    put(w, 'KCC20Ref_8x8', OTHER_COV, a, '91'.repeat(32));
+    // KRON held by the key (id_type 0: not spendable by KOB) and by address presence (3)
+    const k0 = { amount: '70', owner: MAKER_PK, id_type: 0, is_minter: 0 };
+    const k3 = { amount: '40', owner: MAKER_PK, id_type: 3, is_minter: 0 };
+    put(w, 'KronToken2433', KRON_COV, k0, '92'.repeat(32));
+    put(w, 'KronToken2433', KRON_COV, k3, '93'.repeat(32));
+    // a look-alike claim: the indexer names the reference program, the output's script is another program's: it never verifies
+    const fake = tokenState(900n);
+    put(w, 'KCC20Ref_8x8', OTHER_COV, fake, '94'.repeat(32));
+    bag.views = [
+      hview('91'.repeat(32), OTHER_COV, 'KCC20Ref_8x8', a),
+      hview('92'.repeat(32), KRON_COV, 'KronToken2433', k0),
+      hview('93'.repeat(32), KRON_COV, 'KronToken2433', k3),
+      hview('94'.repeat(32), OTHER_COV, 'KCC20Ref', fake),
+      hview('95'.repeat(32), OTHER_COV, 'KCC20NotPinned', a), // a program this build does not pin
+      hview('91'.repeat(32), OTHER_COV, 'KCC20Ref_8x8', a, { index: 7, state: undefined }), // no state: nothing to derive
+      hview('96'.repeat(32), OTHER_COV, 'KCC20Ref_8x8', tokenState(3n, OTHER_PK)), // someone else's
+      hview('97'.repeat(32), OTHER_COV, 'KCC20Ref_8x8', tokenState(4n)), // not on the node
+    ];
+    const got = await w.tracker.heldTokens(MAKER_PK);
+    expect(calls[0]).toEqual({ owner: MAKER_PK, spent: false });
+    expect(rows(got)).toEqual([[OTHER_COV, 'KCC20Ref_8x8', '500'], [KRON_COV, 'KronToken2433', '70'], [KRON_COV, 'KronToken2433', '40']]);
+    // `skip`: the key-owned UTXOs of a token the caller reads itself are left out; the KRON one KOB cannot spend stays (only a balance shows it)
+    expect(rows(await w.tracker.heldTokens(MAKER_PK, { skip: new Set([KRON_COV]) }))).toEqual([[OTHER_COV, 'KCC20Ref_8x8', '500'], [KRON_COV, 'KronToken2433', '70']]);
+    // read-only: nothing is stored
+    expect(w.tracker.list(MAKER_PK)).toEqual([]);
+  });
+
+  it('local candidates of any token count too; without an indexer they are the only source', async () => {
+    const w = world();
+    const a = tokenState(25n);
+    put(w, 'KCC20Ref_8x8', OTHER_COV, a, 'a1'.repeat(32));
+    w.tracker.add(MAKER_PK, { transactionId: 'a1'.repeat(32), index: 0, tokenCovId: OTHER_COV, program: 'KCC20Ref_8x8', state: a, carrier: CARRIER });
+    // a local claim the node contradicts (its outpoint is a UTXO of another token)
+    const b = tokenState(26n);
+    put(w, 'KCC20Ref_8x8', OTHER_COV, b, 'a2'.repeat(32));
+    w.tracker.add(MAKER_PK, { transactionId: 'a2'.repeat(32), index: 0, tokenCovId: KRON_COV, program: 'KCC20Ref_8x8', state: b, carrier: CARRIER });
+    expect(rows(await w.tracker.heldTokens(MAKER_PK))).toEqual([[OTHER_COV, 'KCC20Ref_8x8', '25']]);
+    expect(w.tracker.list(MAKER_PK)).toHaveLength(2);
   });
 });
 

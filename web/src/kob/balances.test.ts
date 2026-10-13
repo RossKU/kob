@@ -126,6 +126,18 @@ describe('withFreeBalances', () => {
     expect(withFreeBalances(esc, [...free].reverse(), MAKER.pk)).toEqual(out);
   });
 
+  it('KRON UTXOs of the maker KOB cannot spend (id_type 0 / 1) are counted apart, never as free; an outpoint counts once', () => {
+    const kron = '9a'.repeat(32);
+    const k = (n: number, amount: bigint, id_type: number) => ({
+      transactionId: n.toString(16).padStart(2, '0').repeat(32), index: 0, amount: '1000', covenantId: kron, state: { amount: amount.toString(), owner: MAKER.pk, id_type, is_minter: 0 },
+    });
+    const out = withFreeBalances([], [k(1, 40n, 3), k(2, 25n, 0), k(3, 5n, 1), k(2, 25n, 0), k(4, 9n, 2), { ...k(5, 8n, 0), state: { ...k(5, 8n, 0).state, owner: OTHER.pk } }], MAKER.pk);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ token: kron, free: 40n, notSpendable: 30n, escrowed: 0n, orderCount: 0 });
+    // a token held only that way still has a row
+    expect(withFreeBalances([], [k(2, 25n, 0)], MAKER.pk)).toMatchObject([{ token: kron, free: 0n, notSpendable: 25n }]);
+  });
+
   it('a token with only escrow (no free UTXO) appears with free = 0', () => {
     const a = placeGolden(kob, 'create.ask');
     const [b] = withFreeBalances(escrowedBalances(a.snapshots), [], MAKER.pk);

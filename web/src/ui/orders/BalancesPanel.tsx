@@ -4,9 +4,10 @@ import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { Amount, Banner, Button, ErrorBanner, KeyValueList, Loading, Section, Table, TableMessage, unitsFraction, useAsync } from '../kit';
+import { formatUnits } from '../../kob/units';
 import { tokenLabel } from '../market/token-model';
 import { loadFreeBalances } from './balances-data';
-import { combineBalances } from './balances-model';
+import { combineBalances, unreviewedProgram } from './balances-model';
 import { mergeableCounts } from './merge-model';
 import type { OrdersData } from './orders-data';
 
@@ -28,7 +29,7 @@ export function BalancesPanel(props: {
 }) {
   const services = useServices();
   const { registry } = services;
-  const free = useAsync((_signal) => loadFreeBalances(services, props.pubkey, registry.tokens), [props.pubkey, props.data]);
+  const free = useAsync((_signal) => loadFreeBalances(services, props.pubkey, registry.tokens, { anyToken: true }), [props.pubkey, props.data]);
 
   const combined = useMemo(() => {
     if (!free.data) return null;
@@ -92,10 +93,23 @@ export function BalancesPanel(props: {
                 combined.tokens.map((b) => {
                   const info = registry.byCovenantId.get(b.token);
                   const d = info?.decimals ?? 0;
+                  const program = info?.program ?? free.data!.programs.get(b.token) ?? null;
                   return (
                     <tr key={b.token} data-testid={`balance-row-${b.token}`}>
-                      <td>{info ? tokenLabel(info) : t('orders.unknownToken', { id: longId(b.token) })}</td>
-                      <td class="right"><Amount kind="token" value={b.free} decimals={d} unit={false} fraction={cols.free} group /></td>
+                      <td>
+                        {info ? tokenLabel(info) : t('orders.unknownToken', { id: longId(b.token) })}
+                        {unreviewedProgram(program) ? (
+                          <span class="small muted" title={t('orders.balances.unreviewedHint', { program: program ?? '?' })} data-testid="balance-unreviewed">{' '}({t('orders.balances.unreviewed')})</span>
+                        ) : null}
+                      </td>
+                      <td class="right">
+                        <Amount kind="token" value={b.free} decimals={d} unit={false} fraction={cols.free} group />
+                        {b.notSpendable > 0n ? (
+                          <div class="small muted" title={t('orders.balances.notSpendableHint')} data-testid="balance-not-spendable">
+                            {t('orders.balances.notSpendable', { amount: formatUnits(b.notSpendable, d) })}
+                          </div>
+                        ) : null}
+                      </td>
                       <td class="right" data-testid="balance-escrowed"><Amount kind="token" value={b.escrowed} decimals={d} unit={false} fraction={cols.escrowed} group /></td>
                       <td class="right" data-testid="balance-strays"><Amount kind="token" value={b.strays} decimals={d} unit={false} fraction={cols.strays} group /></td>
                       <td class="right"><Amount kind="kas" value={b.kasLocked} unit={false} fraction={cols.kas} group /></td>
@@ -125,6 +139,7 @@ export function BalancesPanel(props: {
             </tbody>
           </Table>
           {combined.tokens.some((b) => b.strays > 0n) ? <p class="small" data-testid="strays-note">{t('orders.balances.straysNote')}</p> : null}
+          <p class="small muted" data-testid="balances-old-holdings">{t('orders.balances.oldHoldings')}</p>
           {combined.lostStrayTokens > 0n ? <Banner tone="warn" data-testid="strays-lost">{t('orders.balances.straysLost')}</Banner> : null}
         </>
       ) : null}
