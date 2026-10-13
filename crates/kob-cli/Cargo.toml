@@ -1,6 +1,6 @@
 [package]
 name = "kob-cli"
-description = "KOB command line: token issuance, registry check, order recovery, the maker's cancel and stray sweep"
+description = "KOB command line: trading (place, replace, cancel, refund, take, send), token issuance, registry check, order recovery, stray sweep"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

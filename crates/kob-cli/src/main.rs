@@ -2,8 +2,8 @@
 //!
 //! Implemented: `kob token issue` (fixed-supply KCC-20 issuance), `kob registry validate` / `verify-genesis` / `programs` / `add-program`, `kob recover` (find the maker's
 //! orders on the node from a backup, a recovery / export file or an indexer view, and cancel them with `--cancel`), and
-//! `kob order sweep|cancel` (the maker's stray sweep in place and the maker's cancel from an indexer order view). Planned:
-//! place, replace, take, refund, send.
+//! `kob order sweep|cancel` (the maker's stray sweep in place and the maker's cancel from an indexer order view), and the
+//! trading commands `kob place`, `kob replace`, `kob cancel`, `kob refund`, `kob take` and `kob send` ([`trade`]).
 
 mod common;
 mod inputs;
@@ -12,6 +12,7 @@ mod programs;
 mod recover;
 mod registry;
 mod token;
+mod trade;
 mod wrpc;
 
 #[cfg(test)]
@@ -35,6 +36,19 @@ USAGE
                                return an order's strays to the maker, the order continues (`kob order --help`)
   kob order cancel --view <FILE>... --key <KEY> --node ws://HOST:PORT [...]
                                the maker's cancel with custody and strays from an indexer view (older contract versions too)
+  kob place <KIND> --token T --side buy|sell --amount A [...]
+                               place an order (limit, ioc, fok, market, stop-market, stop-limit, take-profit, oco,
+                               ifd, ifo, pair-limit) as the web wallet plans it (`kob place --help`)
+  kob replace <COVENANT_ID> [--price P] [--amount A] [--tip T] [--stop P] [--renew] [...]
+                               amend a live order in place, or cancel-replace it in one transaction
+  kob cancel <COVENANT_ID>...  the maker's cancel by covenant id (indexer view, checked on the node)
+  kob refund <COVENANT_ID>     the permissionless refund of an ended order (the sender keeps the refund tip)
+  kob take <COVENANT_ID> --amount A
+                               fill a resting order as the taker
+  kob send <TOKEN|KAS> <TO> <AMOUNT>
+                               send a token (within its program's slots) or KAS
+                               the trading commands read the key from --key-file or $KOB_KEY (never --key), show the
+                               plan and sign only with --yes or a terminal's confirmation; --dry-run stops before signing
   kob --version
 ";
 
@@ -48,6 +62,12 @@ fn main() {
         ["registry", "add-program", rest @ ..] => programs::run_add_program(rest),
         ["recover", ..] => recover::run(&args[1..]),
         ["order", ..] => order::run(&args[1..]),
+        ["place", ..] => trade::place::run(&args[1..]),
+        ["replace", ..] => trade::actions::run_replace(&args[1..]),
+        ["cancel", ..] => trade::actions::run_cancel(&args[1..]),
+        ["refund", ..] => trade::actions::run_refund(&args[1..]),
+        ["take", ..] => trade::actions::run_take(&args[1..]),
+        ["send", ..] => trade::actions::run_send(&args[1..]),
         ["--version"] | ["-V"] => {
             println!("kob {}", kob_protocol::VERSION);
             0

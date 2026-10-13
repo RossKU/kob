@@ -314,13 +314,15 @@ pub mod mock {
         pub submitted: Vec<Value>,
         /// Every request seen (method, params).
         pub requests: Vec<(String, Value)>,
+        /// The virtual DAA score `getBlockDagInfo` reports.
+        pub daa: u64,
     }
 
     /// Start a mock node; it serves connections until the test process ends.
     pub fn start(utxos: Vec<NodeUtxo>) -> (String, Arc<Mutex<MockState>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
-        let state = Arc::new(Mutex::new(MockState { utxos, ..Default::default() }));
+        let state = Arc::new(Mutex::new(MockState { utxos, daa: 1_000_000, ..Default::default() }));
         let st = state.clone();
         thread::spawn(move || {
             for stream in listener.incoming() {
@@ -354,6 +356,9 @@ pub mod mock {
                                         .map(utxo_entry_json)
                                         .collect();
                                     json!({"id": id, "method": method, "params": {"entries": entries}})
+                                }
+                                "getBlockDagInfo" => {
+                                    json!({"id": id, "method": method, "params": {"virtualDaaScore": s.daa, "networkName": "kaspa-testnet-10"}})
                                 }
                                 "submitTransaction" => {
                                     s.submitted.push(params["transaction"].clone());

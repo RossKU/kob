@@ -156,7 +156,7 @@ struct Stray {
 }
 
 /// A stray (or custody) of a view, with the script its proven state implies under `program`.
-fn stray_script(t: &TokenView, program: TemplateId) -> Result<(TokenState, ScriptPublicKey), String> {
+pub(crate) fn stray_script(t: &TokenView, program: TemplateId) -> Result<(TokenState, ScriptPublicKey), String> {
     let st = t.state.clone().ok_or("no proven state in the view")?;
     let tt = token_template(program);
     if st.family() != tt.family {
@@ -165,7 +165,7 @@ fn stray_script(t: &TokenView, program: TemplateId) -> Result<(TokenState, Scrip
     Ok((st.clone(), st.spk_with(tt)))
 }
 
-fn on_node(at: &BTreeMap<Vec<u8>, Vec<crate::wrpc::NodeUtxo>>, spk: &ScriptPublicKey, t: &TokenView) -> Option<Utxo> {
+pub(crate) fn on_node(at: &BTreeMap<Vec<u8>, Vec<crate::wrpc::NodeUtxo>>, spk: &ScriptPublicKey, t: &TokenView) -> Option<Utxo> {
     at.get(&spk_bytes(spk))
         .and_then(|v| v.iter().find(|u| u.txid == t.txid && u.index == t.index && u.covenant_id == Some(t.token)))
         .map(utxo_of)
@@ -205,9 +205,9 @@ fn describe(list: &[Value]) -> String {
 }
 
 /// The outcome of one order.
-struct Outcome {
-    status: &'static str,
-    json: Value,
+pub(crate) struct Outcome {
+    pub(crate) status: &'static str,
+    pub(crate) json: Value,
 }
 
 fn skip(reason: impl Into<String>) -> Outcome {
@@ -225,15 +225,50 @@ fn process(v: &View, a: &Args, signer: &Signer) -> Outcome {
     }
 }
 
+/// A built (unsigned) sweep or cancel of one order, ready to show and sign.
+pub(crate) struct Prepared {
+    pub built: kob_protocol::tx::BuiltTx,
+    pub name: String,
+    pub info: Value,
+    pub disclosure: String,
+    pub funding: Funding,
+    pub returned: Vec<Value>,
+    pub left: Vec<Value>,
+}
+
 fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
+    let p = match prepare(v, a, signer.pubkey)? {
+        Ok(p) => p,
+        Err(o) => return Ok(o),
+    };
+    let Prepared { built, name, info, disclosure, funding, returned, left } = p;
+    let sent = sign_validate_send(&built, signer, a.out_dir.as_deref(), &name, info, a.dry_run, &a.node)?;
+    Ok(Outcome {
+        status: if sent.submitted.is_some() { "submitted" } else { "signed" },
+        json: json!({
+            "status": if sent.submitted.is_some() { "submitted" } else { "signed" },
+            "txid": sent.txid,
+            "fee": sent.fee.to_string(),
+            "funding": match funding { Funding::Own => json!("order"), Funding::Key(k) => json!(outpoint_str(&k.utxo.transaction_id, k.utxo.index)) },
+            "returned": returned,
+            "left_behind": left,
+            "disclosure": disclosure,
+            "file": sent.file.map(|p| p.display().to_string()),
+            "engine_validated": true,
+        }),
+    })
+}
+
+/// Builds the sweep / cancel of one view (`Err(outcome)`: skipped or refused, nothing built).
+pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<Prepared, Outcome>, String> {
     let cov = v.covenant_id;
-    let Some(state) = &v.state else { return Ok(skip("the view has no proven state (state_known false)")) };
-    if state.maker() != signer.pubkey {
-        return Ok(skip(format!("another maker's order ({})", to_hex(&state.maker()))));
+    let Some(state) = &v.state else { return Ok(Err(skip("the view has no proven state (state_known false)"))) };
+    if state.maker() != maker_key {
+        return Ok(Err(skip(format!("another maker's order ({})", to_hex(&state.maker())))));
     }
-    let Some((cur_txid, cur_index, _)) = v.current else { return Ok(skip("the view names no current UTXO (closed?)")) };
+    let Some((cur_txid, cur_index, _)) = v.current else { return Ok(Err(skip("the view names no current UTXO (closed?)"))) };
     let Some(tpl) = order_template(&v.template_hash) else {
-        return Ok(skip("template is not pinned by this build"));
+        return Ok(Err(skip("template is not pinned by this build")));
     };
     let order_spk = order_spk(tpl, state)?;
     let own_program = state
@@ -272,16 +307,16 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
     let mut custody_views: Vec<(TokenView, TokenState, ScriptPublicKey)> = vec![];
     for (k, (target, target_spk, token)) in targets.into_iter().enumerate() {
         let view = if k == 0 { &v.custody } else { &v.custody_b };
-        let Some(c) = view else { return Ok(refuse("the view names no custody UTXO for this token-holding order")) };
+        let Some(c) = view else { return Ok(Err(refuse("the view names no custody UTXO for this token-holding order"))) };
         if c.token != token {
-            return Ok(refuse("the view's custody is not of the token the order's state holds"));
+            return Ok(Err(refuse("the view's custody is not of the token the order's state holds")));
         }
         let (st, spk) = match (&c.state, program_of(token)) {
             (Some(_), Some(program)) => stray_script(c, program)?,
             _ => (target.clone(), target_spk),
         };
         if st.amount() != target.amount() || st.owner() != cov {
-            return Ok(refuse("the view's custody does not hold the order's amount left (base units)"));
+            return Ok(Err(refuse("the view's custody does not hold the order's amount left (base units)")));
         }
         custody_views.push((c.clone(), st, spk));
     }
@@ -293,17 +328,17 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
         .get(&spk_bytes(&order_spk))
         .and_then(|us| us.iter().find(|u| u.txid == cur_txid && u.index == cur_index && u.covenant_id == Some(cov)));
     let Some(node_order) = node_order else {
-        return Ok(refuse(format!(
+        return Ok(Err(refuse(format!(
             "stale view: the node holds no unspent output at the order's script with its covenant id at {}",
             outpoint_str(&cur_txid, cur_index)
-        )));
+        ))));
     };
     let order_utxo = utxo_of(node_order);
     let mut held: Vec<TokenUtxo> = vec![];
     for (c, st, spk) in &custody_views {
         match on_node(&at, spk, c) {
             Some(u) => held.push(TokenUtxo { utxo: u, state: st.clone() }),
-            None => return Ok(refuse("the view's custody UTXO is not on the node (stale view)")),
+            None => return Ok(Err(refuse("the view's custody UTXO is not on the node (stale view)"))),
         }
     }
     let mut held = held.into_iter();
@@ -369,7 +404,7 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
     if a.op == Op::Sweep && strays.is_empty() && foreign.is_empty() {
         let mut o = skip("nothing to sweep");
         o.json["left_behind"] = json!(left);
-        return Ok(o);
+        return Ok(Err(o));
     }
     let fee = FeeOptions::rate(a.fee_rate);
     let maker = state.maker();
@@ -446,21 +481,7 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
         ),
     };
     let info = json!({"action": if a.op == Op::Sweep { "sweep" } else { "cancel" }, "covenant_id": covh, "kind": state.template_id().name(), "returned": returned});
-    let sent = sign_validate_send(&built, signer, a.out_dir.as_deref(), &name, info, a.dry_run, &a.node)?;
-    Ok(Outcome {
-        status: if sent.submitted.is_some() { "submitted" } else { "signed" },
-        json: json!({
-            "status": if sent.submitted.is_some() { "submitted" } else { "signed" },
-            "txid": sent.txid,
-            "fee": sent.fee.to_string(),
-            "funding": match funding { Funding::Own => json!("order"), Funding::Key(k) => json!(outpoint_str(&k.utxo.transaction_id, k.utxo.index)) },
-            "returned": returned,
-            "left_behind": left,
-            "disclosure": disclosure,
-            "file": sent.file.map(|p| p.display().to_string()),
-            "engine_validated": true,
-        }),
-    })
+    Ok(Ok(Prepared { built, name, info, disclosure, funding, returned, left }))
 }
 
 /// Run the operation over every view; returns the report and whether nothing failed or was refused.
