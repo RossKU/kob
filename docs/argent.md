@@ -7,7 +7,7 @@ are in [argent-feedback.md](argent-feedback.md). Compiler pin and patches: [../a
 
 | Layer | What | Where |
 |---|---|---|
-| Contracts | Hand-written SilverScript: the protocol v2 orders (KobAsk, KobBid, KobCondAsk, KobCondBid, KobIfdAsk, KobIfdBid, and the pair orders KobPair, KobCondPair, KobIfdPair). Per-order values live in the state span, so each kind has one template. | `contracts/v2/*.sil`, `contracts/artifacts/*.json` |
+| Contracts | Hand-written SilverScript: the order covenants (KobAsk, KobBid, KobCondAsk, KobCondBid, KobIfdAsk, KobIfdBid, and the pair orders KobPair, KobCondPair, KobIfdPair). Per-order values live in the state span, so each kind has one template. | `contracts/v2/*.sil`, `contracts/artifacts/*.json` |
 | Argent shell | The same contracts published as the Argent app `KOBOrders` (actor handles, state layouts, entries), the KRON limit orders as `KOBOrdersKron`, plus the 8/8 token prototype as `KOBToken` (KOB issues the standard 3/3 reference, `KCC20Ref`). | `contracts/argent/KOBOrders/`, `contracts/argent/KOBOrdersKron/`, `contracts/argent/KOBToken/` |
 | Composition | KOB's own Argent app: payment intents and swap-and-pay. | `contracts/argent/kob_router.ag`, `contracts/argent/router/` |
 
@@ -127,7 +127,7 @@ genuine and a forged artifact).
 2. Build with an argentc that supports artifact-backed imports: `argent/build-argentc.sh` builds
    the pinned upstream commit plus our patch 0002 (`argent/UPSTREAM.md`). Stock upstream argentc
    reads a `.json` import as Argent source and fails (artifact-backed imports are Argent's own open
-   item "Support artifact-backed app dependencies"; patch 0002 is prepared as an upstream PR).
+   item "Support artifact-backed app dependencies"; patch 0002 is opened upstream as argent-lang/argent#69).
 3. argentc does not compile KOBOrders. It loads and consistency-checks the artifact, checks the
    pinned id, turns its states and exported actors into a declaration-only module (so
    `KOBOrders::KobAsk` and `KobAskState` resolve as for a source import), links the handle as a
@@ -196,8 +196,8 @@ has a `deadline` (see "Deadline" below): from it on anyone may `expire` the inte
 intent's state names every token twice, by covenant id and by program handle (`actor_type<KCC20State> token_type`;
 the swaps `token_a_type`, `token_b_type`; the KRON intents `actor_type<KronTokenState>` for token A). The router
 reads every observed token input and pins every token output under the handle in the state, so one actor serves every
-KCC-20 program of the 112-byte state (the 3/3 reference program KOB issues, the 4/5, 8/8 and 16/16 prototype
-variants) and both KRON programs (2,433 B and 2,732 B: raw bytecode, not Argent apps, so open ICC is the only way to
+KCC-20 program of the 112-byte state (the 3/3 reference program KOB issues, the reference's published public-mint build and
+the prototype variants) and both KRON programs (2,433 B and 2,732 B: raw bytecode, not Argent apps, so open ICC is the only way to
 observe them; `KronTokenState` is declared in the router, `owner id_type amount is_minter`). The payer chooses the handle
 at creation and nothing can change it afterwards; a verifier recomputes it from its allowlist like every other term
 (the x402 facilitator takes the program of the offer's `templateHash`), so a merchant is never delivered tokens of
@@ -324,29 +324,26 @@ arguments in transaction order; the asks' escrows are matched to them by owner.
 | `_swap2` / `_swap2_out` | `swap2(bid1, bid2, ask1, ask2, n_a1, n_a2)` / `swap2_out(..)` | 9,412 B / 9,121 B |
 
 Every actor also has `expire()` (anyone, from the deadline on) and `cancel(sig)` (payer,
-SIGHASH_ALL). The redeem sizes include both. For scale: the 8/8 token program is 6.4 kB, a KobAsk
+SIGHASH_ALL). The redeem sizes include both. For scale: the standard 3/3 token program is 2.9 kB, a KobAsk
 1.7 kB. **The largest scripts are
 `TokenSwap_swap2` and `_swap2_out` (9,856-10,143 B):** they observe four orders and two token groups,
 and every observed order state is 20 or 21 fields read by the script. A payer who wants a sweep of
-one order per leg pays the 6.3-6.6 kB of the single-order swap. `swap2` is the tightest script (227
-live bindings and 234 combined stack items of the 244 allowed, measured on the v2.6 router of
-2026-10-03; protocol v3 only removed arithmetic from it): its body keeps no local an expression can
-stand for (the input index, the sum of the base units sold into the bids and the take of a resting last
-ask are written out where they are used), which makes room for the two token handles. The lock pin (2026-10-06) adds
-two state fields and two checks to every KCC-20 token intent (one field and one check to a KRON one); argentc, which
-refuses an entry over the limit, still compiles every shape, `swap2` included (its peak was not re-measured). The B pin
-(2026-10-07) adds one state field to the intents that buy token B and one check per ask escrow; every shape still
-compiles. The ask's own `extensionCommitment` (2026-10-07, the last field of `KobAskState`: an ask takes only a custody
-of the commitment it names) makes every observed ask state 33 B longer; every shape still compiles, `swap2` included.
+one order per leg pays the 6.3-6.6 kB of the single-order swap. `swap2` is the tightest script (214
+live bindings and 221 combined stack items of the 244 allowed, measured on 2026-10-10 with the lock pin, the B pin and
+the ask's `extensionCommitment`; `docs/argent-feedback.md` item 6): its body keeps no local an expression can stand for
+(the input index, the sum of the base units sold into the bids and the take of a resting last ask are written out where
+they are used), which makes room for the two token handles. argentc refuses an entry over the limit, so every shape
+compiling is the check.
 
 `n` is the number of token base units sold into a bid (any amount; the bid enforces its own minimum
 fill). How much an ask gives follows from `amount` (the last ask
 of a sweep gives `amount` minus what the sold-out asks gave). Hidden witnesses are the handle
 prefix/suffix lengths of the imported templates, ask first, then bid, then the token: 4 for the
 `KasToToken` and `TokenToKas` actors, 8 for `TokenSwap` (KobAsk 1 and 1,407, KobBid 1 and 1,230,
-KobBidKron 1 and 1,090, then the token handles' own: KCC20 8/8 1 and 6,707, 3/3 1 and 2,977, KRON 0 and 2,387 or 2,686);
-the `expire` and the `cancel` of a token intent take the locked token's two. Slot limit: at most 3 escrow inputs and 4 token outputs in one token group (the
-token has 8/8 slots); the largest transaction (`swap2`: 8 inputs, 2 bids, 2 asks) is 38.8 kB and 53.0k
+KobBidKron 1 and 1,090, then the token handles' own: KCC20 3/3 1 and 2,802, the public-mint build 34 and 3,885, the 8/8
+prototype 1 and 6,237, KRON 0 and 2,387 or 2,686); the `expire` and the `cancel` of a token intent take the locked token's
+two. Slot limit: at most 3 escrow inputs and 4 token outputs in one token group, bounded further by the token's program (the
+standard 3/3 program has no room for the three-bid sells); the largest transaction (`swap2`: 8 inputs, 2 bids, 2 asks) is 38.8 kB and 53.0k
 compute mass, under the 100k standard limit.
 
 What the router pins and what it leaves to the orders. The router observes each order's shape (one
@@ -357,14 +354,11 @@ order's continuation is not pinned by the router: the ask's continuation state (
 the bid's byte-identical continuation are the orders' own rules, and the pin on the escrow change
 output (which the ask pins too) ties `n` to the token flow. Pinning the continuation as well
 costs 21 (ask) or 23 (bid) more live stack bindings per resting order in the compiled script (limit
-244 per entry). On the v2.6 router (2026-10-03, argentc `b312ded` with SilverScript v1.0.0) every shape fit
-but the two 2 + 2 swaps: `TokenSwap_swap2` peaked at 248 bindings with the ask pin, 250 with the bid pin and
-271 with both (227 shipped), `TokenSwapKron_swap2` at 249 combined stack items with the ask pin. The protocol v3
-router (no lot arithmetic) compiles with the ask pin in every shape; the bid pin still fails `TokenSwap_swap2`
-(245 combined stack items) and both pins 245 live bindings (2026-10-05; `PIN=1 tools/router-gen/gen-router.sh FILE` writes the pinned
-variant, `PIN=ask` / `PIN=bid` one side only; `docs/argent-feedback.md` item 6). It would also add a
-state copy and a template check to each resting script for a rule the order already enforces, so it
-stays out.
+244 per entry): measured on 2026-10-10 (argentc `b312ded` with SilverScript v1.0.0), `TokenSwap_swap2` peaks at
+236 bindings / 247 combined stack items with the ask pin, 237 / 250 with the bid pin and 259 / 270 with both, so no
+continuation pin fits that shape (`PIN=1 tools/router-gen/gen-router.sh FILE` writes the pinned variant, `PIN=ask` /
+`PIN=bid` one side only; `docs/argent-feedback.md` item 6). It would also add a state copy and a template check to each
+resting script for a rule the order already enforces, so it stays out.
 
 What the router relies on in the orders:
 
@@ -490,10 +484,11 @@ sil2argent drops the absolute paths argentc records.
 ## Not done / open
 
 - **Patch 0002 is ours.** It implements Argent's own open item "Support artifact-backed app
-  dependencies" and is prepared as an upstream PR, rebased onto the module loading rework of
+  dependencies" and is opened upstream as argent-lang/argent#69, rebased onto the module loading rework of
   `b312ded`. Argent is pre-1.0; the pin moves deliberately (`argent/UPSTREAM.md`).
-- **No audit.** The handles are final, but nothing is audited: do not pin the artifact in
-  production before the audit.
+- **No external audit.** The handles are final; the contracts had an internal pre-mainnet audit only
+  (`docs/security/AUDIT-2026-10.md`), and no external audit is planned before launch (`SECURITY.md`). Pin the
+  artifact at your own risk.
 - **Linked handles of an artifact import are not verified by argentc** (see Trust above); the
   pinned artifact id is the defence.
 - **Transaction building.** The harness builds composed transactions by hand
