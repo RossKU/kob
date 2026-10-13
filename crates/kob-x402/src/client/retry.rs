@@ -25,6 +25,10 @@
 //! Bounds ([`RetryPolicy`]): at most `max_attempts` signed attempts (default 3), at most `max_resends` re-sends of each
 //! (default 4), exponential backoff with jitter between steps, and an overall deadline: the shorter of `budget_ms` and the
 //! offer's `maxTimeoutSeconds`.
+//!
+//! **Intent payments** ([`pay_intent_with_retry`], [`ResendTransport`]): the payer signs one creation and the facilitator
+//! re-plans the execution itself, so the creation is only ever re-sent (also within the intent's own deadline), never
+//! rebuilt: a failure that would need a new signature ends the retry ([`GiveUp::NoRebuild`]).
 
 use std::collections::BTreeSet;
 
@@ -206,6 +210,9 @@ pub enum GiveUp {
     Unanchored,
     /// The first attempt spends no payer-owned input: it can be re-sent, never rebuilt.
     NoAnchor,
+    /// An intent creation ([`pay_intent_with_retry`]) failed in a way only a new signature could get past: it is never
+    /// re-signed (a second creation would be a second intent). Cancel the intent or let it expire.
+    NoRebuild,
     /// Building an attempt failed (a limit, a refused approval, no funds, the preflight).
     Build,
 }
@@ -359,6 +366,83 @@ pub fn pay_with_retry<T: RetryTransport>(
                 }
                 signed.push(b);
                 resends = 0;
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------------ intent payments
+
+/// What [`pay_intent_with_retry`] needs: the transport of ONE signed intent creation (it is never rebuilt, so nothing is built
+/// here and no anchor is read).
+pub trait ResendTransport {
+    type Payment: Clone;
+    /// Sends the signed creation (the first time, or again: the identical payment).
+    fn send(&mut self, attempt: &Built<Self::Payment>) -> Sent;
+    fn now_ms(&mut self) -> u64;
+    fn sleep_ms(&mut self, ms: u64);
+    /// A uniform draw in `[0, 1)` for the jitter (default 0.5: no jitter).
+    fn jitter(&mut self) -> f64 {
+        0.5
+    }
+}
+
+/// Pays an intent (`kob-intent-v1`, `docs/spec/x402-retry.md` section 5) with retry: the payer signed ONE creation
+/// (`creation`, e.g. [`crate::client::intent::IntentPayment::attempt`]); re-planning against the book is the facilitator's
+/// job. The creation is re-sent while its outcome is unknown or it may still execute ([`Next::Resend`]: no answer,
+/// `settlement_pending`, `node_unavailable`, `rate_limited`, `intent_not_executable`, ...), at most `max_resends` times,
+/// with backoff, before the shorter of the policy's budget, the offer's `maxTimeoutSeconds` and the intent's own deadline
+/// (`deadline_ms`, unix ms: its authorization's expiry). It is NEVER rebuilt: a failure that would need a new signature
+/// ([`Next::Rebuild`]) ends the retry with [`GiveUp::NoRebuild`], a refusal with [`GiveUp::Stopped`]. When it gives up the
+/// creation may still have been broadcast: cancel the intent ([`crate::client::intent::cancel_intent`]) once it is no longer
+/// executed, or let the facilitator (or anyone, its expiry) end it at its deadline.
+pub fn pay_intent_with_retry<T: ResendTransport>(
+    policy: &RetryPolicy,
+    max_timeout_seconds: u64,
+    deadline_ms: u64,
+    creation: Built<T::Payment>,
+    t: &mut T,
+) -> Result<Receipt<T::Payment>, RetryError<T::Payment>> {
+    use crate::error::Diag;
+    let start = t.now_ms();
+    let deadline = policy.deadline_ms(start, max_timeout_seconds).min(deadline_ms);
+    let signed = vec![creation];
+    let mut resends = 0u32;
+    let give_up = |why: GiveUp, last: X402Error, signed: Vec<Built<T::Payment>>, resends: u32, unknown: bool| {
+        Err(RetryError { why, last, attempts: 1, resends, outcome_unknown: unknown, signed, anchor: None })
+    };
+    loop {
+        let cur = &signed[0];
+        let (next, last, unknown) = match t.send(cur) {
+            Sent::Settled(s) => {
+                return Ok(Receipt {
+                    attempt: signed.into_iter().next().expect("the creation"),
+                    settlement: s,
+                    attempts: 1,
+                    resends,
+                    superseded: vec![],
+                    anchor: None,
+                })
+            }
+            Sent::Failed { diagnostic, retryable, message, next } => {
+                let n = next.unwrap_or_else(|| classify(&diagnostic, retryable));
+                (n, last_of(&diagnostic, retryable, &message), false)
+            }
+            Sent::Unknown(m) => (Next::Resend, state(Diag::NodeUnavailable, m).retryable(), true),
+        };
+        match next {
+            Next::Stop => return give_up(GiveUp::Stopped, last, signed, resends, unknown),
+            Next::Rebuild => return give_up(GiveUp::NoRebuild, last, signed, resends, false),
+            Next::Resend => {
+                if resends >= policy.max_resends {
+                    return give_up(GiveUp::Exhausted, last, signed, resends, unknown);
+                }
+                let wait = policy.delay_ms(resends + 1, t.jitter());
+                if t.now_ms().saturating_add(wait) >= deadline {
+                    return give_up(GiveUp::Deadline, last, signed, resends, unknown);
+                }
+                t.sleep_ms(wait);
+                resends += 1;
             }
         }
     }
@@ -538,6 +622,86 @@ mod tests {
         s.builds.push_back(Err(X402Error::requirements(crate::error::Diag::Overpayment, "above maxPay")));
         let e = pay_with_retry(&RetryPolicy::default(), 60, &mut s).unwrap_err();
         assert_eq!((e.why, s.sent.len()), (GiveUp::Build, 1));
+    }
+
+    /// A scripted transport of one intent creation.
+    struct Resends {
+        answers: VecDeque<Sent>,
+        now: u64,
+        sent: u32,
+    }
+
+    impl ResendTransport for Resends {
+        type Payment = ();
+        fn send(&mut self, a: &Built<()>) -> Sent {
+            assert_eq!(a.payment_id, "creation");
+            self.sent += 1;
+            self.answers.pop_front().expect("scripted answer")
+        }
+        fn now_ms(&mut self) -> u64 {
+            self.now
+        }
+        fn sleep_ms(&mut self, ms: u64) {
+            self.now += ms;
+        }
+    }
+
+    fn creation() -> Built<()> {
+        Built {
+            payment: (),
+            payment_id: "creation".into(),
+            transaction_id: "c0".into(),
+            consumed: vec![op(1)],
+            payer_inputs: vec![op(1)],
+        }
+    }
+
+    fn resends(answers: Vec<Sent>) -> Resends {
+        Resends { answers: answers.into(), now: 0, sent: 0 }
+    }
+
+    #[test]
+    fn an_intent_creation_is_re_sent_while_it_may_execute_never_rebuilt() {
+        // the keeper cannot execute yet, the answer is lost, the execution is pending, then it settles: one creation
+        let mut t = resends(vec![
+            failed("intent_not_executable", true),
+            Sent::Unknown("timeout".into()),
+            failed("settlement_pending", true),
+            ok(),
+        ]);
+        let r = pay_intent_with_retry(&RetryPolicy::default(), 600, u64::MAX, creation(), &mut t).unwrap();
+        assert_eq!((r.attempts, r.resends, t.sent), (1, 3, 4));
+        assert_eq!(r.attempt.payment_id, "creation");
+        assert!(r.superseded.is_empty() && r.anchor.is_none());
+
+        // a failure that would need a new signature ends it: nothing is rebuilt
+        for d in ["order_conflict", "invalid_kaspa_exact_utxo", "expired_authorization"] {
+            let mut t = resends(vec![failed(d, true)]);
+            let e = pay_intent_with_retry(&RetryPolicy::default(), 600, u64::MAX, creation(), &mut t).unwrap_err();
+            assert_eq!((e.why, e.attempts, e.signed.len(), t.sent), (GiveUp::NoRebuild, 1, 1, 1), "{d}");
+            assert!(!e.outcome_unknown);
+        }
+        // a refusal stops
+        let mut t = resends(vec![failed("intent_spent", false)]);
+        let e = pay_intent_with_retry(&RetryPolicy::default(), 600, u64::MAX, creation(), &mut t).unwrap_err();
+        assert_eq!((e.why, t.sent), (GiveUp::Stopped, 1));
+    }
+
+    #[test]
+    fn an_intent_retry_is_bounded_by_its_resends_and_its_deadline() {
+        let mut t = resends(vec![failed("settlement_pending", true); 10]);
+        let e = pay_intent_with_retry(&RetryPolicy::default(), 600, u64::MAX, creation(), &mut t).unwrap_err();
+        assert_eq!((e.why, e.resends, t.sent), (GiveUp::Exhausted, 4, 5));
+        // the intent's own deadline (its authorization's expiry) comes before the offer's and the budget
+        let mut t = resends(vec![Sent::Unknown("down".into()); 10]);
+        let e = pay_intent_with_retry(&RetryPolicy::default(), 600, 1_500, creation(), &mut t).unwrap_err();
+        assert_eq!(e.why, GiveUp::Deadline);
+        assert!(e.outcome_unknown);
+        assert!(t.now < 1_500, "nothing is sent after the intent's deadline: {}", t.now);
+        // no retry at all
+        let mut t = resends(vec![failed("settlement_pending", true)]);
+        let e = pay_intent_with_retry(&RetryPolicy::none(), 600, u64::MAX, creation(), &mut t).unwrap_err();
+        assert_eq!((e.why, t.sent), (GiveUp::Exhausted, 1));
     }
 
     #[test]

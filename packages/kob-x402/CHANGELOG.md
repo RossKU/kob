@@ -4,6 +4,15 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Rust payer: the retry driver pays intents (re-send only)
+
+- `kob_x402::client::retry::pay_intent_with_retry(policy, max_timeout_seconds, deadline_ms, creation, transport)` over a
+  `ResendTransport` (send, clock, sleep, jitter: nothing to build): the one signed creation (`IntentPayment::attempt()`) is
+  re-sent while its outcome is unknown or it may still execute, within `max_resends` and the shorter of the budget, the
+  offer's `maxTimeoutSeconds` and the intent's deadline (`IntentPayment::deadline_ms()`); it is never rebuilt: a `rebuild`
+  diagnostic ends it with the new `GiveUp::NoRebuild` (cancel the intent or let it expire), a refusal with `Stopped`.
+  **Breaking (Rust):** `GiveUp` gains a variant.
+
 ### Payer: invoices are paid under the client's limits and their settlement is verified
 
 - `KobX402Client.payInvoice(fetchedInvoice, invoiceClient, { acceptIndex?, paymentId? })` pays any entry of an invoice

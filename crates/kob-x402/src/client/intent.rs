@@ -176,6 +176,31 @@ pub struct IntentPayment {
     pub lock: Option<TokenUtxo>,
 }
 
+impl IntentPayment {
+    /// The creation as the one attempt of [`crate::client::retry::pay_intent_with_retry`]: its payload, payment id, the
+    /// creation's id and the outpoints it spends (all of them the payer's).
+    pub fn attempt(&self) -> crate::client::retry::Built<PaymentPayload> {
+        let consumed: Vec<crate::chain::Outpoint> = self.tx.inputs.iter().map(crate::common::outpoint_of).collect();
+        crate::client::retry::Built {
+            payment: self.payload.clone(),
+            payment_id: self
+                .payload
+                .extensions
+                .as_ref()
+                .and_then(|e| e.get("payment-identifier")?.get("info")?.get("id")?.as_str().map(str::to_string))
+                .unwrap_or_default(),
+            transaction_id: hex(&self.txid),
+            payer_inputs: consumed.clone(),
+            consumed,
+        }
+    }
+
+    /// The intent's deadline (unix ms): the authorization's expiry, from which anyone may expire the intent.
+    pub fn deadline_ms(&self) -> Option<u64> {
+        crate::common::parse_iso_ms(&self.payload.payload.authorization.expires_at)
+    }
+}
+
 fn kind_of(merchant_token: bool, pay_kas: bool) -> Result<IntentKind> {
     match (merchant_token, pay_kas) {
         (true, true) => Ok(IntentKind::KasToToken),

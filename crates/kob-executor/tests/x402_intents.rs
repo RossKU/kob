@@ -6,7 +6,9 @@
 //! * an expired invoice refuses a payment and reports it as late once it reaches the chain anyway;
 //! * a second payment of a paid invoice is a duplicate, reported when it reaches the chain;
 //! * a payment for another merchant (or another offer) is refused;
-//! * an intent the book cannot execute ends at the invoice's deadline and the payer cancels it.
+//! * an intent the book cannot execute ends at the invoice's deadline and the payer cancels it;
+//! * the Rust payer's intent retry (`pay_intent_with_retry`) re-sends the one creation until it executes and stops,
+//!   without re-signing, when only a new signature could pay.
 #![allow(clippy::too_many_arguments)]
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]
@@ -26,9 +28,10 @@ use kob_protocol::artifacts::TemplateId;
 use kob_protocol::script::p2pk_spk;
 use kob_protocol::state::{AskState, BidState, OrderState, SCHEME_COVID, SCHEME_P2PK};
 use kob_protocol::tx::{finalize, sign_locally, FinalizeOptions, OrderUtxo, TokenUtxo, Utxo};
-use kob_x402::chain::{ChainError, ChainUtxo, ChainView, FixedClock, Outpoint, OutputStatus, SubmitError, Txid};
+use kob_x402::chain::{ChainError, ChainUtxo, ChainView, Clock, FixedClock, Outpoint, OutputStatus, SubmitError, Txid};
 use kob_x402::client::intent::{cancel_intent, intent_requirements, pay_intent, IntentOptions, IntentPayment};
 use kob_x402::client::native::{native_requirements, pay_native, PayOptions};
+use kob_x402::client::retry::{pay_intent_with_retry, Built, GiveUp, ResendTransport, RetryPolicy, Sent};
 use kob_x402::client::swap::{MerchantGain, PayAssetSpec, PayerFunds, SwapOfferParams};
 use kob_x402::intent::{BookView, KeeperParams};
 use kob_x402::invoice::{Invoice, InvoiceState};
@@ -730,4 +733,87 @@ fn an_execution_whose_submit_outcome_is_unknown_is_never_executed_twice() {
         assert!(is_repeat_of(&again, &r), "the identical retry reads the outcome: {again:?}");
         assert_eq!(merchant_outputs(&w), 1);
     }
+}
+
+/// Runs once, at the first backoff of the payer's retry.
+type BeforeResend<'a> = Option<Box<dyn FnOnce(&World) + 'a>>;
+
+/// The Rust payer's intent retry (`pay_intent_with_retry`) with the facilitator's `/settle` as its transport: the signed
+/// creation is sent as it is every time.
+struct SettleTransport<'a> {
+    w: &'a World,
+    offer: PaymentRequirements,
+    sends: u32,
+    before_resend: BeforeResend<'a>,
+}
+
+impl ResendTransport for SettleTransport<'_> {
+    type Payment = PaymentPayload;
+    fn send(&mut self, a: &Built<PaymentPayload>) -> Sent {
+        self.sends += 1;
+        let r = self.w.fac.settle(SHOP, &request(&self.offer, &a.payment));
+        let ext = r.extensions.clone().unwrap_or_default();
+        if r.success {
+            // a success counts only for this very creation
+            assert_eq!(ext["kob"]["intent"]["creation"], a.transaction_id, "the settlement names the signed creation");
+            return Sent::Settled(r);
+        }
+        let k = &ext["kaspa"];
+        Sent::Failed {
+            diagnostic: k["diagnostic"].as_str().unwrap_or("internal").into(),
+            retryable: k["retryable"].as_bool().unwrap_or(false),
+            message: k["message"].as_str().unwrap_or("").into(),
+            next: None,
+        }
+    }
+    fn now_ms(&mut self) -> u64 {
+        self.w.clock.now_ms()
+    }
+    fn sleep_ms(&mut self, _ms: u64) {
+        if let Some(f) = self.before_resend.take() {
+            f(self.w);
+        }
+    }
+}
+
+#[test]
+fn the_rust_payer_re_sends_an_intent_creation_until_it_executes_and_never_signs_another() {
+    let w = world();
+    let offer = w.kas_intent_offer(5 * KAS, MERCHANT);
+    let p = w.pay_t2k(&offer, RH, 3 * WHOLE);
+    // no bid yet: the dry run cannot execute the intent (retryable, nothing broadcast); the bids come back before the re-send
+    let saved = std::mem::take(&mut *w.book.lock().unwrap());
+    let mut t = SettleTransport {
+        w: &w,
+        offer: offer.clone(),
+        sends: 0,
+        before_resend: Some(Box::new(move |w: &World| {
+            assert_eq!(w.chain.submit_count(), 0, "nothing was broadcast while the book could not execute the intent");
+            *w.book.lock().unwrap() = saved;
+        })),
+    };
+    let deadline = p.deadline_ms().unwrap();
+    assert_eq!(deadline, NOW_MS + 300_000, "the authorization's expiry");
+    let receipt = with_miner(&w, || pay_intent_with_retry(&RetryPolicy::default(), 600, deadline, p.attempt(), &mut t)).unwrap();
+    assert_eq!((receipt.attempts, receipt.resends, t.sends), (1, 1, 2));
+    assert_eq!(receipt.attempt.transaction_id, hex(&p.txid));
+    assert!(receipt.attempt.payment_id.len() >= 16, "the payment identifier of the creation");
+    assert!(receipt.settlement.success);
+    assert_ne!(receipt.settlement.transaction, hex(&p.txid), "paid by the execution");
+    assert_eq!(w.ledger.get(&hex(&p.txid)).unwrap().state, State::Accepted);
+    assert_eq!(w.ledger.len(), 1, "one creation, one ledger entry");
+}
+
+#[test]
+fn the_rust_payer_stops_an_intent_that_only_a_new_signature_could_pay() {
+    let w = world();
+    let offer = w.kas_intent_offer(5 * KAS, MERCHANT);
+    let p = w.pay_t2k(&offer, RH, 3 * WHOLE);
+    // one of the creation's inputs is gone: the facilitator fails it with a rebuild diagnostic; the payer never re-signs
+    w.chain.spend_externally(&kob_x402::common::outpoint_of(&p.tx.inputs[0]));
+    let mut t = SettleTransport { w: &w, offer, sends: 0, before_resend: None };
+    let e = pay_intent_with_retry(&RetryPolicy::default(), 600, p.deadline_ms().unwrap(), p.attempt(), &mut t).unwrap_err();
+    assert_eq!((e.why, e.attempts, e.signed.len(), t.sends), (GiveUp::NoRebuild, 1, 1, 1));
+    assert_eq!(e.last.diag.as_str(), "invalid_kaspa_exact_utxo");
+    assert_eq!(w.chain.submit_count(), 0);
 }

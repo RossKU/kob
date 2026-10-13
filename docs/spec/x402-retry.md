@@ -1,7 +1,7 @@
 # Retrying an x402 payment without paying twice
 
 Status: implemented in the TS SDK (`packages/kob-x402`, `KobX402Client` `retry`, `payInvoiceWithIntent` `retry`), the Rust
-payer SDK (`kob_x402::client::retry`) and the facilitator (`kob-executor`, `submitRetries`, `rebroadcasts`, the intent
+payer SDK (`kob_x402::client::retry`: `pay_with_retry`, `pay_intent_with_retry`) and the facilitator (`kob-executor`, `submitRetries`, `rebroadcasts`, the intent
 keeper). It applies the conflict rules of [x402-swap-and-pay.md](x402-swap-and-pay.md) section 10 to every profile.
 
 A payment can fail for reasons that have nothing to do with the payer: an order the swap fills is taken by someone else
@@ -102,13 +102,15 @@ deadline is not taken. The error of a retry that gave up carries every attempt (
 
 ## 5. Intent payments
 
-The payer signs one transaction, the intent's creation; re-planning against the book is the facilitator's job. The SDK
-(TS: `KobX402Client` for an intent offer of a paywall, `payInvoiceWithIntent`; `retry`) re-sends the SAME signed creation
+The payer signs one transaction, the intent's creation; re-planning against the book is the facilitator's job. The SDKs
+(TS: `KobX402Client` for an intent offer of a paywall or an invoice, `payInvoiceWithIntent`; `retry`. Rust:
+`pay_intent_with_retry` over a `ResendTransport`, the creation from `IntentPayment::attempt`) re-send the SAME signed creation
 while the answer is unknown or the creation may still execute (`settlement_pending`, `node_unavailable`, `rate_limited`,
-`intent_not_executable`), within the intent's expiry (the retry deadline is capped by it). It never signs a second
-creation on its own: a failure that would need one (a `rebuild` diagnostic) ends the retry like a refusal (returned or
-thrown as before; the client's error carries the intent handle, `KobX402Error.intent`, also stored as
-`ArtifactRecord.intent`), and the payer cancels the intent or the facilitator expires it on chain.
+`intent_not_executable`), within the intent's expiry (the retry deadline is capped by it: `IntentPayment::deadline_ms`).
+They never sign a second creation on their own: a failure that would need one (a `rebuild` diagnostic) ends the retry like
+a refusal (TS: returned or thrown as before, the client's error carrying the intent handle, `KobX402Error.intent`, also
+stored as `ArtifactRecord.intent`; Rust: `GiveUp::NoRebuild`), and the payer cancels the intent or the facilitator expires
+it on chain.
 
 ## 6. Facilitator
 
@@ -137,7 +139,9 @@ thrown as before; the client's error carries the intent handle, `KobX402Error.in
   `approve` and above the KAS ceiling; a spent anchor and a larger coin; concurrent paid requests and a racing `resume`;
   intent creations re-sent, never re-signed. `test/intent-client.test.ts`: the client's intent payments (one creation,
   re-sent while it may execute, a dead one stops with its handle). `test/retry-wasm.test.ts`: the TS and Rust tables agree.
-- `crates/kob-x402/src/client/retry.rs`: the driver and the table.
+- `crates/kob-x402/src/client/retry.rs`: the drivers (`pay_with_retry`, `pay_intent_with_retry`) and the table.
+- `crates/kob-executor/tests/x402_intents.rs`: the Rust payer's intent retry against the facilitator (the creation re-sent
+  until the keeper can execute it, one ledger entry; stopped with `NoRebuild`, nothing broadcast, when an input is gone).
 - `crates/kob-executor/tests/x402_retry.rs`: the Rust driver against the facilitator over the mock chain, the same failures
   injected, and two retries of one payment racing (one pays, the other is refused or finds the anchor spent).
 - `crates/kob-executor/src/x402/facilitator_tests.rs`: re-submission after an unreachable node, a refused repeat of a
