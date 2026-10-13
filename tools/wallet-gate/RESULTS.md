@@ -1,64 +1,8 @@
 # Wallet gate results (TN10)
 
-Fill one block per wallet. Source of truth for the numbers: the downloaded results JSON (page button) and `out/page-results.jsonl`.
-"Signature valid?" = the node accepted the assembled tx (the page cannot verify a v1 Schnorr signature by itself).
-
-- Date / tester:
-- Node used: a project-run testnet-10 node (kaspad 2.1.0)
-- Kit commit (`git rev-parse HEAD`):
-- Setup tx ids (`state/setup-*.json` -> `genesisTxid`):
-
-## Pass line (fill in / confirm)
-
-| Result | Meaning for the plan |
-|---|---|
-| KasWare T2 and T3 pass | Web app ships with KasWare as primary |
-| Only Kaspire T2 and T3 pass | project decision: ship with Kaspire only (Android/extension), or wait for other wallets |
-| Nothing passes | CLI-only asks + opt-in in-browser signer; wallet PRs |
-
-Decision:
-
-## KasWare
-
-- Extension version: `____`   Browser/OS: `____`   Account address: `kaspatest:q____`   Wallet network reads `testnet-10`: yes / no
-
-| Test | Popup appeared? | What the popup displayed | Signature returned? | Wallet sigscript == ours (n/a for KasWare) | Kept v1 / computeBudget / outputs? | Tx accepted? | txid | Error text |
-|---|---|---|---|---|---|---|---|---|
-| T1 P2PK spend (v1 + computeBudget) | | | | | | | | |
-| T2 BidOrder.cancel(sig) | | | | | | | | |
-| T3 KCC-20 transfer (owner witness) | | | | | | | | |
-
-Notes:
-
-## Kaspire
-
-- Extension version: `____`   Account address: `kaspatest:q____`   mode used: ordered-args / wrap-signature
-
-| Test | Popup appeared? | What the popup displayed (inputs/outputs/covenant/scripts/fee?) | Signature returned? | Wallet sigscript == ours | Kept v1 / computeBudget / outputs? | Tx accepted? | txid | Error text |
-|---|---|---|---|---|---|---|---|---|
-| T1 | | | | | | | | |
-| T2 | | | | | | | | |
-| T3 | | | | | | | | |
-
-Notes:
-
-## Kastle (reference)
-
-- Extension version: `____`   Account address: `kaspatest:q____`
-
-| Test / variant | Popup appeared? | What the popup displayed | Signature returned? | Kept v1 / computeBudget / outputs? | Tx accepted? | txid | Error text |
-|---|---|---|---|---|---|---|---|
-| T1 plain | | | | | | | |
-| T2 plain | | | | | | | |
-| T2 empty-script (`scriptHex:""`) | | | | | | | |
-| T2 redeem-script | | | | | | | |
-| T3 plain | | | | | | | |
-| T3 empty-script | | | | | | | |
-| T3 redeem-script | | | | | | | |
-
-Notes:
-
----
+Wallet signing results on testnet-10 (release gate 1, `docs/ops/release.md`). A manual run of the page (`README.md`, "Run")
+adds a section like the one below from its downloaded results JSON and `out/page-results.jsonl`. "Valid signature" = the node
+accepted the assembled tx (the page cannot verify a v1 Schnorr signature by itself).
 
 ## Automated run (2026-09-29, real released extensions driven by Playwright, project-run testnet-10 node)
 

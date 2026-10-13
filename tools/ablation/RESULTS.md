@@ -164,97 +164,21 @@ tradable on mainnet), besides 8/8; a scenario whose shape exceeds 3 token inputs
   KCC-20 / KCC-20; the mixed-pair `NIX3m` is held by `IF107` and the new `IF107x`, flipped by `IF107c`).
 * The detail tables of these seven suites below are this run's (`pair` keeps its 2026-10-06 table).
 
-## Refund rule (2026-10-06): the refund of an empty sell-first entry
+## Earlier results still in force
 
-`IA-refund-held` in `kcc20-buy` (KobIfdAsk) and `kron-buy` (KobIfdAskKron): the refund (`settle` nb = 0) requires
-`amountLeft > 0`. Debug executables, `--jobs 2`, baselines clean. **2/2 confirmed**: without the check the refund of an
-empty repeating entry with a zero-amount token UTXO as its custody (`SR1b`, and `SR1c` paying the maker) is accepted by every
-input of the KCC-20 suite; on both KRON templates the entry accepts `SR2` while the KRON token program rejects the
-zero-amount custody on its own (`inputOnly`).
+* **`pair`** (KobPair, unchanged since): run of 2026-10-06, release executables, `--jobs 2`: **82/82 confirmed, 2 held**
+  (T5, N2); its detail table below is that run's. Finding NP64 of that run (KobPair had no `scale > 0` check: a maker's own
+  ask with a negative scale of A filled for one base unit of B; self-harm only, the builders refuse such terms) was fixed in
+  `c0b7a3e` (`require(sScale > 0); require(tScale > 0)`), mutations C9s / C9t confirmed.
+* **Engine-level, no mutation.** The overflow scenarios (`V3A05`, `V3B07`, `NV3CB30`, `NV3IA30`, ...: the largest fitting full
+  fill validates, one more base unit fails even when paid the exact value) are refused by the engine's checked arithmetic
+  (`NumberTooBig`), not by a contract check, so they have no catalog entry.
+* **KRON `inputOnly`.** The booking bound and the exit-side 0x08 attack need a custody above 2^53 / 2^55 base units, which a
+  KRON token program never accepts (it refuses token outputs above 10^9 base units), so those flips are `inputOnly` there (the
+  attacked input's own check is still the only one refusing it).
 
-## Pair phase (2026-10-06): KobPair, KobCondPair, KobIfdPair
-
-The pair suites (`crates/kob-tests/tests/kob_pair_tests.rs`, `kob_cond_pair_tests.rs`, `kob_ifd_pair_tests.rs`, harness
-`common/pair_harness.rs`) replace the cross limit suite; the cross limit catalogs are gone with `KobCross`. Release
-executables, `--jobs 2`, one suite per invocation, baselines clean in every run. Contracts: the pair templates after
-`c0b7a3e` (KobPair requires both scales positive).
-
-| Suite | Contract | Entries | Confirmed | Held | Not run |
-|---|---|---|---|---|---|
-| `pair` | KobPair | 84 | 82/82 | 2 (T5, N2) | 0 |
-| `cond-pair` | KobCondPair (all but the repeat-IFD checks) | 122 | 112/112 | 10 | 0 |
-| `ifd-pair` | KobIfdPair | 120 | 63 in earlier runs (IF1..IF22: 21; IF23..IF60, IF62..IF65: 42) | 2 (IF9, IF11) | 78 in their current form (below) |
-| `cond-pair-rpt` | KobCondPair repeat / merge checks | 11 | 2 (CR1, CR2) | 0 | 9 |
-
-* **pair / cond-pair complete**: every `require` of KobPair and KobCondPair has an entry (expect, or hold with the
-  scenarios that reach it plus a combined entry), except the documented unreachable ones in each catalog's comment block
-  (`sb.length == 65` in cancel, the refund's `refundTip >= 0`); the KobCondPair repeat / merge requires are in
-  `cond-pair-rpt`. KobPair's fake-quote checks (custody == amountLeft, the bid's exact quote, the order funding its own
-  delivery carrier and tip) also flip the conditional armed by such a quote in evidence mode 1
-  (`kob_cond_pair_tests::cond_pair_evidence_fake_quotes`, NC40..NC43): the harness recompiles KobCondPair against the
-  mutated KobPair.
-* **ifd-pair / cond-pair-rpt incomplete (pending for the next security session)**: all 131 entries apply (`--dry-run`),
-  and the suite is green, but 87 entries (78 + 9) were never run in their current form: ifd-pair IF4 (new expect), IF8b, IF8c, IF47 (re-split into
-  holds + a combined entry after IF8b failed to confirm: NI23 / NIO10 are also refused by IF47), IF61 (scenario NIU8
-  rebuilt after it read index -1), IF66..IF76, IF77s0..s7, IF85..IF115 (incl. IF104c, IF110, IF110c); cond-pair-rpt CR3,
-  CR4, CR6..CR11, CR9c. Expect `inputOnly` on IF70r, IF75, IF86, IF93, IF109, CR6, CR8 (a token program or the other
-  order refuses too). Unreachable (catalog comments): KobIfdPair fill-branch `n > 0` (entered only with n > 0), cancel
-  `sb.length == 65`, KobCondPair re-arm `n < MERGE_K` (only an attacker-funded look-alike exit of 2^53 units reaches it).
-* **Finding NP64 (fixed)**: KobPair had no `scale > 0` check; a maker's own ask with a negative scale of A filled for one
-  base unit of B. Self-harm only (only the maker sets its terms; builders refuse them). Fixed in `c0b7a3e`
-  (`require(sScale > 0); require(tScale > 0)`), attacks NP64a / NP64b, mutations C9s / C9t confirmed.
-* **c6 fuzzer, first pair long run** (release, one thread, seed 2026100601, 5,400 s): 3,106 seeds (515 pair shapes),
-  3,621,447 mutants, 1,026,910 accepted, 12 findings, all `orderState` mutants of a pair order's own terms: 7 KobPair
-  states with a negative scale of A (NP64, now refused by the contract; the oracle also leaves such makers unvalued,
-  `INVALID_TERMS`) and 5 sell-first KobIfdPair stop entries with a limit of 0 or below (an oracle bug: the covenant's
-  `p > 0` makes the seller's worst quote 1, not "no fill"; fixed). `c6_pair_long_run_regressions` replays all 12: the
-  oracle is clean. A second long run on the final contracts is pending (not run in this session).
-
-Detail tables: [pair](#pair) (this phase), [cond-pair](#cond-pair), [cond-pair-rpt](#cond-pair-rpt) and [ifd-pair](#ifd-pair) (the 2026-10-12 run, which replaces the partial ifd-pair runs of this phase) at the end of this file.
-
-## Protocol v3 KAS kinds (2026-10-05/06)
-
-Protocol v3 ("no lots", contracts `8dd4ebf`, 2026-10-05): the four order suites re-mapped to the v3 contract sources and
-the ported harness suites (amounts in base units, `scale`, `minFill`, `quoteOf` rounding in the maker's favour, repeat
-merge argument `-(k * 2^53 + m)` with the 0x08 first-byte checks, the exit update's parent guard), plus a mutation for
-every new v3 check. **424/424 confirmed, 14/14 defence-in-depth held** (438 mutations in four suites), no
-`NOT-CONFIRMED`, `EDIT-ERROR` or `BASELINE-DIRTY`:
-
-| Suite | Mutations | Confirmed | Held | v2.6 (2026-10-03) |
-|---|---|---|---|---|
-| `kcc20-sell` | 95 | 92/92 | 3 (B1, B2, TT-step) | 74: 71/71 + 3 |
-| `kcc20-buy` | 94 | 90/90 | 4 (D1, D2, TW-step, FXL3e) | 80: 77/77 + 3 |
-| `kron-sell` | 142 | 139/139 | 3 (R1, R2, TT-step) | 123: 120/120 + 3 |
-| `kron-buy` | 107 | 103/103 | 4 (IA17, IA18, IA24a, TW-step) | 97: 93/93 + 4 |
-| `kcc20-cross`, `kron-cross` | removed in the pair phase (KobCross retired; see the pair suites above) | - | - | 48 + 48: 46/46 + 2 each |
-| total | 438 | 424/424 | 14 | 470: 453/453 + 17 |
-
-Runs: debug executables of the final test sources (a private copy per suite, `--exe-dir`), `--jobs 2`, one suite per
-invocation (2026-10-05/06): kcc20-sell 736 s (plus a 94 s re-run of the seven merge-push mutations after V3CA08 was
-added: `V-CA-08` changed from held to confirmed, the rows below are that re-run's), kcc20-buy 1,165 s, kron-sell
-1,430 s (plus a 9 s re-run of `V3-C-rpt` after its `inputOnly` marker was dropped: confirmed on every input),
-kron-buy 2,693 s. Each run did its own baseline first (clean).
-
-* **Cross limit catalogs**: removed in the pair phase with `KobCross` (the pair suites above replace them).
-* **New v3 checks** (each removed alone flips the attack only it refuses; ids per catalog, see the tables):
-  minFill (`V-A-minfill`, `V-B-minfill`, `V-B-minpos` = minFill > 0 in KobBid, `V-CA-minfill`, `V-IB-minfill`,
-  `CB-minfill`, `IA-minfill`, `V3-A-minfill`, `V3-B-minfill`, `V3-B-minfill0`, `V3-C-minfill`, ...), the `quoteOf`
-  ceil / floor choices (`V-A-ceil`, `V-B-floor`, `V-B-ceil`, `V-CA-ceil`, `V-CA-rb`, `V-IB-floor`, `V-IB-mceil`,
-  `CB-spend-floor`, `CB-rearm-proceeds-ceil`, `IA-proceeds-ceil`, `IA-pre-ceil`, `IA-merge-prefund-ceil` and the KRON
-  twins), p >= tip / legPrice >= tip / price >= tip (`V-A-tip`, `V-CA-tip`, `IA-price-tip`, `V3-A-tip`, `V3-C-tip`,
-  `IA-pricetip`), FOK in base units (`V-B-fok`), the 0x08 first-byte merge checks on both sides (`V-CA-08`, `V-IB-08`,
-  `CB-merge-0x08`, `IA-merge-0x08`, `V3-C-push`, `V3-I-push`, `CB-pin08`, `IA-k08`), the exit update's parent guard
-  (`V-CA-parent`, `CB-update-parent`, `V3-C-parent`, `CB-updateparent`), the booking bound n < MERGE_K
-  (`V-IB-mergek`, `IA-booking-mergek`, `V3-I-mergek`), the evidence scale equality and minTouch (touch keys `scale` /
-  `mintouch`, formerly `unit` / `units`).
-* **Defence in depth that is new in v3**: the 0x08 checks also refuse the old update-aliasing attacks (NRP22, NRP28,
-  NRPB32..34), so `A3`, `B3`, `C3` and `FXL3e` hold those scenarios and new combined entries (`V-CA-08x`, `C3b`,
-  `FXL3g`, `C16b`) remove both checks and flip them. On KRON the booking bound and the exit-side 0x08 attack need a
-  custody above 2^53 / 2^55 base units, which a KRON token program never accepts (it refuses token outputs above 10^9
-  base units), so those flips are `inputOnly` there (the attacked input's own check is still the only one refusing it).
-* **Engine-level, no mutation**: the overflow scenarios (`V3A05`, `V3B07`, `NV3CB30`, `NV3IA30`, ...: the largest
-  fitting full fill validates, one more base unit fails even when paid the exact value) are refused by the engine's
-  checked arithmetic (`NumberTooBig`), not by a contract check, so they have no catalog entry.
+The records of the earlier runs (the protocol v3 KAS kinds of 2026-10-05/06, the pair phase and the refund rule of
+2026-10-06) are in the git history of this file.
 
 ## kcc20-sell
 

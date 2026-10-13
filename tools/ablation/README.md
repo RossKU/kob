@@ -1,12 +1,13 @@
-128 |127 |85 |209 |311 |218 |297 |# Contract ablation (mutation) tooling
+# Contract ablation (mutation) tooling
 
 One runner, `ablate.mjs`, for the contract-source ablations of the harness suites: the KAS-quoted order kinds (KCC-20 and
 KRON: sell side, buy side) and the pair orders (`KobPair`, `KobCondPair` with its repeat-IFD checks, `KobIfdPair`). Node 22, no dependencies, no `cargo` unless you do not pass `--exe-dir`. Works on Windows, Linux and macOS (the
 repo root is derived from the script location, `tools/ablation/../..`).
 
-Latest results: [RESULTS.md](RESULTS.md). Audit completion (2026-10-13): every `require` of the KAS-kind templates has an entry (or is documented as
-unwitnessable in its catalog header; `coverage.mjs`: 598 -> 35 require lines without a mutation over all eight catalogs, the 35
-all documented), **562/562 new entries confirmed, 14/14 held**. Pre-mainnet covenant fixes (2026-10-12): every suite of the changed templates in full, **698/698 confirmed, 30/30 held** (kcc20-sell 98 + 3, kcc20-buy 97 + 4, kron-sell 145 + 3, kron-buy 110 + 4, cond-pair 116 + 10, cond-pair-rpt 10 + 2, ifd-pair 122 + 4; the KCC-20 touch entries and the pair suites also on the reference 3/3 program). Earlier: pair phase (2026-10-06): `pair` 82/82 confirmed + 2 held, `cond-pair` 112/112 + 10 held; `ifd-pair` (120 entries) and `cond-pair-rpt` (11) were partly run then (run in full on 2026-10-12). Protocol v3 KAS kinds (2026-10-05/06): 438 mutations, **424/424 confirmed, 14/14 held** (kcc20-sell 92/92 + 3, kcc20-buy 90/90 + 4, kron-sell 139/139 + 3, kron-buy 103/103 + 4).
+Latest results: [RESULTS.md](RESULTS.md). Audit completion (2026-10-13): every `require` of the KAS-kind templates has an
+entry or is documented as unwitnessable in its catalog header (`coverage.mjs`: 598 -> 35 require lines without a mutation over
+all eight catalogs, the 35 all documented), **562/562 new entries confirmed, 14/14 held**. Pre-mainnet covenant fixes
+(2026-10-12): every suite of the changed templates in full, **698/698 confirmed, 30/30 held**.
 
 ## What ablation proves
 
@@ -45,7 +46,7 @@ directory (line endings normalised to LF) and mutates only the copies.
 |---|---|---|---|---|---|
 | `kcc20-sell` | KCC-20, sell side: repeat IFD lifecycle, touch trigger (the `TA` / `TU` / `TI` entries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale) | `kob_v2_tests` | `contracts/v2` | KobAsk, KobBid, KobCondAsk, KobIfdBid | 297 |
 | `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger (the `TB` / `TV` / `TW` / `TK` / `TL` entries of the touch batteries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale, re-arm bound) | `kob_v2_buy_tests` | `contracts/v2` | KobCondBid, KobIfdAsk | 218 |
-| `kron-sell` | KRON adapter, sell side (v3) | `kob_kron_v2_tests` | `contracts/adapters/kron/v2` | KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron | 311 |
+| `kron-sell` | KRON adapter, sell side (v3) | `kob_kron_v2_tests` | `contracts/adapters/kron/v2` | KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron | 312 |
 | `kron-buy` | KRON adapter, buy side (v3) | `kob_kron_v2_buy_tests` | `contracts/adapters/kron/v2` | KobCondBidKron, KobIfdAskKron | 209 |
 | `pair` | pair orders, plain (`KobPair`, both sides, both families of A and B) | `kob_pair_tests` | `contracts/v2` | KobPair | 85 |
 | `cond-pair` | pair conditionals (`KobCondPair`): legs, trigger evidence in both modes, trailing, updates | `kob_cond_pair_tests` | `contracts/v2` | KobCondPair | 127 |
@@ -58,8 +59,7 @@ mutation of KobPair is also seen where a resting KobPair is the trigger evidence
 KobCondPair where an entry creates its exit). The `cond-pair`, `cond-pair-rpt` and `ifd-pair` test functions run their
 KCC-20 mixes on both KCC-20 programs, KCC20Ref_8x8 and the 3 / 3 KCC20Ref (the tradable one on mainnet), so their
 mutations must flip on both; a scenario whose transaction or honest build exceeds the 3 / 3 token slots is skipped there
-(`SKIP-SLOTS` lines: the stray-scan slots beyond the third input, shapes with a 4th token output). The cross limit catalogs (`kcc20-cross`, `kron-cross`) are gone with
-`KobCross` (retired in the pair phase).
+(`SKIP-SLOTS` lines: the stray-scan slots beyond the third input, shapes with a 4th token output).
 
 Each suite is a catalog in `catalogs/<suite>.mjs` exporting `suite` (`name`, `family`, `testBin`, `srcDir`,
 `templateMarker` = regex for the `=== KRON template <file>` marker or `null`, `expectedTemplates` = number of template
@@ -70,7 +70,7 @@ KobPair check whose attack is a conditional armed by a fake pair quote, in `kob_
 Mutation ids are unique per suite only (`A1` exists in `kcc20-sell` and `kron-sell`); `--only` accepts `id` or
 `suite:id`.
 
-### Touch trigger mutations (protocol v2.6)
+### Touch trigger mutations
 
 A stop leg, a trailing ratchet and a stop entry arm only in a transaction that fills a plain resting KobAsk / KobBid of the
 same token (the evidence), read by `touchAsk(ev, tk)`, `touchBid(ev)` or `touch(ev, tk)` (update, either side). The checks
@@ -100,8 +100,8 @@ owner: a look-alike holder under another program / the genuine holder script pus
 ground to read as n > 0, 11 / 11b refund / n = 0, 12..14 ev at the order, a token input, a P2PK input, 15 / 16 tk at a token
 input the evidence ask does not own / another ask's custody (fresh real custody), 17 look-alike template, 18 non-P2SH redeem,
 19 / 19b the price edge, 20 one fill arming two orders, 21 the order's own counterparty, 22 conditional / if-done fills, 23
-update's own-token guard. The receipt mutations of the KRON catalogs are gone (`I2`..`I4`, `IA8b`); `I1`, `I7`, `I14`,
-`CB3`, `IA3`, `IA8`, `IA8c` now remove the touch call, the price rule or the own-token guard.
+update's own-token guard. In the KRON catalogs `I1`, `I7`, `I14`, `CB3`, `IA3`, `IA8` and `IA8c` remove the touch call, the
+price rule or the own-token guard (the ids `I2`..`I4` and `IA8b` are not used).
 
 ## Usage
 
@@ -256,26 +256,22 @@ node tools/ablation/coverage.mjs --suite kcc20-sell,kcc20-buy,pair,cond-pair,con
 
 ## Runtime
 
-Debug-build executables, one machine: an earlier full run (before the cross-limit suites were added; 16 baseline runs plus 155 mutations in 165 test runs) took 22 minutes with `--jobs 6`; the six-suite run of 2026-09-30 (247 mutations) took 2,575 s with `--jobs 2`; the run in `RESULTS.md` (440 mutations, v2.6) took 1,847 s + 1,295 s + 2,985 s in three invocations with `--jobs 3`; the protocol v3 runs (438 mutations, one suite per invocation, `--jobs 2`) took 736 s (kcc20-sell), 1,165 s (kcc20-buy), 1,430 s (kron-sell) and 2,693 s (kron-buy). One test run takes 5 to 120 s (the KRON tests run both
-templates); the `kron-buy` negative, lifecycle, touch and repeat-IFD suites are the slowest. Baseline of
-everything: about 2.5 minutes with 6 jobs. The runs are CPU-bound and independent, so `--jobs` near the physical core
-count is the right setting.
+Debug-build executables, one machine, one suite per invocation with `--jobs 2`: 736 s (kcc20-sell), 1,165 s (kcc20-buy),
+1,430 s (kron-sell) and 2,693 s (kron-buy) for the KAS-kind suites (2026-10-05/06). One test run takes 5 to 120 s (the KRON
+tests run both templates); the `kron-buy` negative, lifecycle, touch and repeat-IFD suites are the slowest. Baseline of
+everything: about 2.5 minutes with 6 jobs. The runs are CPU-bound and independent, so `--jobs` near the physical core count is
+the right setting.
 
 ## Relation to the other ablation work
 
-* **Lifecycle review of protocol v2.3** (the project's own pre-release review, "36 of 36 ablations confirmed"): the `kcc20-sell` and
-  `kcc20-buy` catalogs are those 36 ablations (formerly an in-place perl edit of `contracts/v2` with one `cargo test`
-  per ablation; that script is not in this repo), now run against scratch copies. Scenario ids follow the current test names (`NRP*` / `NRPB*`; the old
-  script said `NR*` / `NRB*`). Two mutation controls of that review are included: `M2` (auction
-  `require(t >= newArmed)` in KobCondAsk, witness `NA3`; and in KobCondBid, witness `NB29`, in `kcc20-buy`) and `M4`
-  (`require(keeperTip >= 0)` in KobCondAsk, witness `NK2`). The harness patching the earlier control script did is unnecessary since
-  `KOB_ABLATION` exists. That script removed the `t >= newArmed` check of both contracts in one go; here it is one entry
-  per contract because the two live in different test binaries.
-* **KRON adapter ablations**: `kron-sell` and `kron-buy` unify two earlier ad-hoc scripts (not in this repo: one with exact-once string
-  edits, one with anchor + regex edits, parallel workers, `special: 'pin'` which is now an `rxDel` on the
-  `validateOutputStateWithInputTemplate(...)` call after the `Pin the only token output` comment). Entries `IA24a` and
-  `IA24b` are the defence-in-depth pair (`hold`); the old scripts guessed their scenario lists, the catalog now holds the
-  measured ones.
+* **The project's own lifecycle review** ("36 of 36 ablations confirmed") is part of the `kcc20-sell` and `kcc20-buy`
+  catalogs, run against scratch copies, with its two mutation controls: `M2` (auction `require(t >= newArmed)` in KobCondAsk,
+  witness `NA3`; and in KobCondBid, witness `NB29`, in `kcc20-buy`: one entry per contract because the two live in different
+  test binaries) and `M4` (`require(keeperTip >= 0)` in KobCondAsk, witness `NK2`). Scenario ids follow the current test names
+  (`NRP*` / `NRPB*`).
+* **KRON adapter ablations**: in `kron-sell` and `kron-buy`, the pin of the only token output is removed by an `rxDel` on the
+  `validateOutputStateWithInputTemplate(...)` call after the `Pin the only token output` comment; `IA24a` and `IA24b` are the
+  defence-in-depth pair (`hold`) with their measured scenario lists.
 * **Argent router** (`crates/kob-tests/tests/argent_router_tests.rs`, `router_ablation_*`): ablates the generated router
   source inside the test itself. Each ablation edits one entry and asserts that every needle occurs exactly once, so it
   cannot silently be a no-op. That in-test variant is kept as is; this tool covers only the contract-source ablations of

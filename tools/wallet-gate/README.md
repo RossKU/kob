@@ -77,9 +77,9 @@ Create/import an account whose address starts with `kaspatest:q` (Schnorr P2PK).
 3. **Connect** the wallet (button in section 1). The page shows the wallet's version, network, address and public key, and loads the
    matching setup file. The network must read `testnet-10`.
 4. Click **T1**, approve the popup. Then **T2**, then **T3**. For each run, before or after approving, fill the "popup appeared / what it
-   displayed" fields (or paste into `RESULTS.md`). Kastle: also try the three "Kastle variant" options for T2/T3 (plain / empty-script / redeem-script);
+   displayed" fields. Kastle: also try the three "Kastle variant" options for T2/T3 (plain / empty-script / redeem-script);
    Kaspire: default is `ordered-args`, also try `wrap-signature` if that fails.
-5. **Download results JSON** (button) and copy the table into `RESULTS.md`. Every run is also appended to `out/page-results.jsonl`.
+5. **Download results JSON** (button) and add a section to `RESULTS.md`. Every run is also appended to `out/page-results.jsonl`.
 
 The log and the result row show: signature returned (yes/no), whether the wallet's own signature script equals ours (Kaspire returns a full
 sigscript; a match independently validates our ABI encoding), `walletKeptFields` (did the wallet keep version 1, computeBudget and outputs?),
