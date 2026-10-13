@@ -887,12 +887,20 @@ pub fn tick_with(inp: &TickInput, cfg: &EngineConfig, families: &Families, signe
         None => out_of_time = run_batches(&mut tk, &mut report, &mut step),
         // weighted selection: each unit planned (mandatory first, then the sample) in transactions of its own
         Some(groups) => {
+            let several = groups.len() > 1;
+            let all: BTreeSet<CovId> = groups.iter().flatten().copied().collect();
             for g in groups {
                 tk.scope = Some(g);
                 if run_batches(&mut tk, &mut report, &mut step) {
                     out_of_time = true;
                     break;
                 }
+            }
+            // what the units' own transactions left (crossings that pay a transaction only together with another unit's,
+            // which the reference planner puts into one): the planned units together, as the reference plans them
+            if several && !out_of_time {
+                tk.scope = Some(all);
+                out_of_time = run_batches(&mut tk, &mut report, &mut step);
             }
             tk.scope = None;
         }

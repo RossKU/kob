@@ -537,3 +537,43 @@ fn explore_selection_parameters() {
         }
     }
 }
+
+/// Crossings on two tokens that pay a transaction only together (each covers the fee of its own legs, not a transaction's
+/// envelope and funding on its own): the reference planner fills both in one transaction. The weighted selection plans each
+/// work unit in transactions of its own; it must not leave such crossings unfilled for as long as it samples.
+#[test]
+fn crossings_that_pay_a_transaction_only_together_are_filled_when_the_selection_samples() {
+    let daa = NOW;
+    let view = |spread: i64, n: u8| -> Vec<ListedOrder> {
+        let mut v = vec![];
+        for k in 0..n {
+            let id = 300 + 10 * k as u32;
+            v.push(at(retoken(l_ask(id, ask(1, P250, 2 * WHOLE, T3)), tok(20 + k)), daa - 40));
+            v.push(at(retoken(l_bid(id + 1, bid(2, P250 + spread, T3), 2 * WHOLE), tok(20 + k)), daa - 40));
+        }
+        v
+    };
+    // the smallest spread at which one crossing pays its own transaction
+    let (mut lo, mut hi) = (0i64, 20_000_000i64);
+    assert!(!fills(&tick_at(view(hi, 1), daa, None)).is_empty());
+    while hi - lo > 1 {
+        let m = lo + (hi - lo) / 2;
+        if fills(&tick_at(view(m, 1), daa, None)).is_empty() {
+            lo = m;
+        } else {
+            hi = m;
+        }
+    }
+    // just below it, two of them pay one transaction together
+    let spread = lo;
+    let both = fills(&tick_at(view(spread, 2), daa, None));
+    assert_eq!(both.len(), 4, "the reference fills both crossings in one transaction (spread {spread}): {both:?}");
+    for seed in 0..6u64 {
+        // overdue (listed 40 DAA ago) or not, at a share below one
+        for share_ppm in [PPM / 4, PPM - 1] {
+            let r = tick_at(view(spread, 2), daa, Some(TickSelect { seed, share_ppm, ..TickSelect::default() }));
+            assert!(r.selection.is_some());
+            assert_eq!(fills(&r), both, "seed {seed}, share {share_ppm} ppm: {:?}", r.selection);
+        }
+    }
+}

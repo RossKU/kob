@@ -587,7 +587,10 @@ The reference executor mirrors it (`crates/kob-executor/src/matcher/select.rs`):
 - **Planning.** Mandatory units first, then the sample in draw order, each unit in transactions of its own (a lost race
   then costs that unit alone); inside a unit everything is the reference planner's: priority classes, price → tip → age,
   FOK / IOC, netting and routing, triggers and updates, the profit step. A unit's fills are exactly the fills the reference
-  planner makes of that unit alone, so no selection skips a better price for a user (`tests/matcher_select.rs`).
+  planner makes of that unit alone, so no selection skips a better price for a user (`tests/matcher_select.rs`). What the
+  units' own transactions leave (crossings that pay a transaction only together with another unit's: each covers its
+  legs' fee, not a transaction's envelope and funding alone) is then planned over the planned units together, as the
+  reference planner combines them; without that pass such crossings would wait for as long as the executor samples.
 - **The share** is the executor's fair share `1 / n̂` of the work, `n̂` the number of executors racing for it, estimated
   from the fraction of its own transactions that lose races (a moving average `L`): with `K` other executors taking a unit
   it takes, `K` about Poisson with mean `λ = (n − 1)·share`, it loses that unit with probability `1 − (1 − e^−λ) / λ`; the
