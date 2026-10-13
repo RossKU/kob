@@ -121,7 +121,7 @@ function RegistrySummary() {
           { label: t('settings.registry.tokens'), value: registry.tokens.length, 'data-testid': 'registry-token-count' },
         ]}
       />
-      <Table dense caption={t('settings.registry.templates')}>
+      <Table dense caption={t('settings.registry.templates')} class="registry-templates">
         <thead>
           <tr>
             <th>{t('market.tpl.id')}</th>

@@ -98,3 +98,10 @@ test.describe('the pair ticket', () => {
     await expect(hint).toContainText('EXUSD per EXKCC');
   });
 });
+
+test('the registry template verdicts fit the settings column', async ({ appPage: page }) => {
+  await page.goto('/#/settings');
+  const wrap = page.getByTestId('settings-registry').locator('.registry-templates');
+  await expect(wrap.locator('tbody tr').first()).toBeVisible();
+  expect(await wrap.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+});

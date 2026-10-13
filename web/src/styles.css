@@ -287,6 +287,7 @@ small, .small { font-size: 0.85em; }
   display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 0.78rem; font-weight: 700; line-height: 1.5;
   background: var(--surface-3); color: var(--text); border: 1px solid transparent; white-space: nowrap; vertical-align: middle;
 }
+.registry-templates .badge { white-space: normal; } /* the long verdict wraps inside the narrow settings column */
 .badge-ok { background: var(--ok-bg); color: var(--ok); }
 .badge-warn { background: var(--warn-bg); color: var(--warn); }
 .badge-bad { background: var(--bad-bg); color: var(--bad); }
