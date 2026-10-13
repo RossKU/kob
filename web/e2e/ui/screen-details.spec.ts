@@ -97,6 +97,11 @@ test.describe('the pair ticket', () => {
     await expect(page.getByTestId('order-ticket')).toBeVisible();
     const hint = page.getByTestId('order-price').locator('xpath=ancestor::div[contains(@class,"field")][1]').locator('.field-hint');
     await expect(hint).toContainText('EXUSD per EXKCC');
+    // the sell-first prefund of a pair if-done is in the quote token too (its box says EXKCC / EXUSD)
+    await pickType(page, 'ifd', 'sell');
+    await page.getByTestId('order-advanced').locator('summary').click();
+    const prefund = page.getByTestId('field-prefund').locator('xpath=ancestor::div[contains(@class,"field")][1]').locator('.field-hint');
+    await expect(prefund).toContainText('EXUSD per token');
   });
 });
 

@@ -245,7 +245,7 @@ export default {
   'ticket.help.exit.minTouch': 'Smallest fill at or beyond the exit stop that arms it. Default: the larger of the exit\'s minimum fill and 25% of the entry amount.',
   'ticket.help.exit.minRestDaa': 'R: seconds that order must have rested at its price. Default 5.',
   'ticket.help.minFill': 'Smallest fill except the last. Default: worth 10 KAS at your price (IOC, FOK, market: one unit). Limits the number of fills.',
-  'ticket.help.prefund': 'Sell first: KAS per token reserved for the buy-back. Default: the minimum needed.',
+  'ticket.help.prefund': 'Sell first: {quote} per token reserved for the buy-back. Default: the minimum needed.',
   'ticket.help.repeat.count': 'Times the amount repeats. Empty: unlimited within 90 days.',
   'ticket.help.exit.tip': 'Exit priority tip; repeats add the merge cost.',
   'ticket.help.exit.lifetime': 'How long each exit lives: GTC is refundable after 90 idle days; a date ends every exit on it.',
