@@ -28,7 +28,7 @@ import { useCovenantSignGate } from './CovenantSignGate';
 import { TicketFields } from './TicketFields';
 import { buildDisclosureModel } from './disclosure-model';
 import {
-  TYPE_GROUPS, amountPriceOf, baseToKas, buildIntent, formatPrice, initialForm, intentSizingPrice, layoutOf, parsePrice, reorientAmounts, setAmountBase,
+  TYPE_GROUPS, amountPriceOf, baseToKas, buildIntent, followQuote, formatPrice, streamingQuoteText, initialForm, intentSizingPrice, layoutOf, parsePrice, reorientAmounts, setAmountBase,
   setSide, setValue, sidesOf, switchType, visibleErrors,
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
@@ -151,6 +151,15 @@ export function OrderTicket(props: OrderTicketProps) {
     }),
     [token.decimals, scale, token.tick, rateMilli, quote?.decimals, bestAsk, bestBid],
   );
+  // a streaming order's "price you saw" is the quote its side meets (buy: the best ask, sell: the best bid): filled in and kept on the quote until
+  // the user types a price of their own
+  const streamQuote = form.type === 'streaming' ? streamingQuoteText(form.side, { ask: bestAsk, bid: bestBid }, ctx) : null;
+  const autoQuote = useRef<string | null>(null);
+  useEffect(() => {
+    const r = followQuote(form, streamQuote, autoQuote.current);
+    autoQuote.current = r.auto;
+    if (r.form !== form) setForm(r.form);
+  }, [form, streamQuote]);
   // a flip of the market recounts the amount boxes in the shown base (KAS or the token) and keeps the order they build exactly
   useEffect(() => {
     setForm((f) => reorientAmounts(f, inverted, ctx));

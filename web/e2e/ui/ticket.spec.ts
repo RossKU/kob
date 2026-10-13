@@ -273,4 +273,36 @@ test.describe('order ticket', () => {
     await expect(page.getByTestId('order-review')).toBeDisabled();
   });
 
+
+  test('a streaming order fills in the quote its side meets and follows it until a price is typed', async ({ appPage: page, mock }) => {
+    await fundAlice(mock);
+    const token = await openTicket(page, mock);
+    const seen = page.getByTestId('field-displayedPrice');
+    const priceText = (sompi: bigint) => (Number(sompi) / 1e8).toString();
+    const best = async () => (await mock.book(token, false)).asks as { covenant_id: string; price: string; amount_left: string }[];
+    const asks = await best();
+    const top = BigInt(asks[0]!.price);
+    await page.getByTestId('order-side-buy').click();
+    await page.getByTestId('order-type').selectOption('streaming');
+    // a buy meets the best ask
+    await expect(seen).toHaveValue(priceText(top));
+    // a sell meets the best bid
+    await page.getByTestId('order-side-sell').click();
+    await expect(seen).toHaveValue(priceText(BigInt((await mock.book(token, false)).bids[0].price)));
+    await page.getByTestId('order-side-buy').click();
+    await expect(seen).toHaveValue(priceText(top));
+    // the best asks are taken: the box follows the new quote
+    for (const o of asks.filter((a) => BigInt(a.price) === top)) await mock.fill(o.covenant_id, o.amount_left);
+    const next = BigInt((await best())[0]!.price);
+    expect(next).toBeGreaterThan(top);
+    await expect(seen).toHaveValue(priceText(next));
+    // a price of the user's own stays
+    await seen.fill('0.03');
+    const asks2 = await best();
+    for (const o of asks2.filter((a) => BigInt(a.price) === next)) await mock.fill(o.covenant_id, o.amount_left);
+    await expect.poll(async () => BigInt((await best())[0]!.price)).toBeGreaterThan(next);
+    await page.getByTestId('order-amount').fill('1');
+    await expect(page.getByTestId('order-ticket')).toHaveAttribute('aria-busy', 'false');
+    await expect(seen).toHaveValue('0.03');
+  });
 });

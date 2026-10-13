@@ -866,6 +866,31 @@ export function formFromIntent(intent: Intent, ctx: TicketCtx): TicketForm {
   return { type: form.type, side, values: v };
 }
 
+// ------------------------------------------------------------------------------------------------ streaming: the price you saw
+
+/**
+ * The quote a streaming order shows its user: the best price its side meets (a buy: the best ask, a sell: the best bid), as the text of the
+ * "price you saw" box; null when that side of the book is empty.
+ */
+export function streamingQuoteText(side: Side, best: { ask: bigint | null; bid: bigint | null }, ctx: Pick<TicketCtx, 'decimals' | 'scale' | 'quoteDecimals'>): string | null {
+  const p = side === 'buy' ? best.ask : best.bid;
+  return p !== null && p > 0n ? formatPrice(p, ctx) : null;
+}
+
+/**
+ * Keeps the streaming "price you saw" on the quote: while the box is empty or still holds the quote filled last (`auto`), it follows `quote`; a
+ * price the user typed is left alone (emptying the box hands it back to the quote). Returns the form (the same object when nothing changes) and the
+ * text auto-filled now (null: the box is the user's).
+ */
+export function followQuote(form: TicketForm, quote: string | null, auto: string | null): { form: TicketForm; auto: string | null } {
+  if (form.type !== 'streaming') return { form, auto: null };
+  const cur = form.values.displayedPrice ?? '';
+  const mine = cur.trim() !== '' && cur !== auto;
+  if (mine) return { form, auto: null };
+  if (quote === null || quote === cur) return { form, auto: cur === '' ? null : cur };
+  return { form: { ...form, values: { ...form.values, displayedPrice: quote } }, auto: quote };
+}
+
 // ------------------------------------------------------------------------------------------------ helpers for the component
 
 /** Per-field summary for display under an input: the exact state price after rounding and whether rounding happened. */

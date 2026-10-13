@@ -6,7 +6,7 @@ import { consensusCheck, kob, makeEnv, market8x8 } from '../../testing/fixtures'
 import { CASES, CTX, TOKEN, WIDE, form, json, ticketEnv } from './ticket-fixtures';
 import {
   FIELDS, FIELD_DEFAULTS, ORDER_TYPES, TYPE_GROUPS, buildIntent, formFromIntent, formatLocalDateTime, initialForm, isIncomplete, layoutOf, maxAmount, parseAmount, parseLocalDateTime,
-  parsePrice, parseTouch, parseWhole, priceInfo, setSide, setValue, sidesOf, switchType, visibleErrors, type OrderTypeId, type Side, type TicketCtx, type TicketForm,
+  followQuote, parsePrice, parseTouch, parseWhole, priceInfo, setSide, setValue, sidesOf, streamingQuoteText, switchType, visibleErrors, type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 
 const K = kob();
@@ -642,5 +642,43 @@ describe('pair sells budget their fills (maxFills)', () => {
     expect(planOrder(env, all).issues.map((i) => i.code)).not.toContain('PAIR_FILLS_LIMITED');
     // on a KAS market a sell never sends maxFills (the planner would refuse it)
     expect(buildIntent(form('limit', 'sell', { amount: '1', price: '2.5', maxFills: '2' }), CTX).intent).not.toHaveProperty('maxFills');
+  });
+});
+
+describe('streaming: the price you saw follows the quote', () => {
+  const best = { ask: 250_000_000n, bid: 245_000_000n };
+
+  it('the quote is the price the side meets: a buy the best ask, a sell the best bid', () => {
+    expect(streamingQuoteText('buy', best, CTX)).toBe('2.5');
+    expect(streamingQuoteText('sell', best, CTX)).toBe('2.45');
+    expect(streamingQuoteText('buy', { ask: null, bid: best.bid }, CTX)).toBeNull();
+  });
+
+  it('fills an empty box, follows a new quote, leaves a typed price alone and takes the quote back when the box is emptied', () => {
+    let f = form('streaming', 'buy', { amount: '2' });
+    let r = followQuote(f, '2.5', null);
+    expect(r.form.values.displayedPrice).toBe('2.5');
+    expect(r.auto).toBe('2.5');
+    expect(buildIntent(r.form, CTX).intent).toMatchObject({ type: 'streaming', displayedPrice: 250_000_000n });
+    // the quote moves: the box moves with it
+    r = followQuote(r.form, '2.52', r.auto);
+    expect(r.form.values.displayedPrice).toBe('2.52');
+    // nothing new: the same form object (no re-render loop)
+    const same = followQuote(r.form, '2.52', r.auto);
+    expect(same.form).toBe(r.form);
+    // the user types a price: it stays whatever the quote does
+    f = setValue(r.form, 'displayedPrice', '2.6');
+    r = followQuote(f, '2.52', r.auto);
+    expect(r.form).toBe(f);
+    expect(r.auto).toBeNull();
+    r = followQuote(r.form, '2.7', r.auto);
+    expect(r.form.values.displayedPrice).toBe('2.6');
+    // emptied: back to the quote
+    r = followQuote(setValue(r.form, 'displayedPrice', ''), '2.7', r.auto);
+    expect(r.form.values.displayedPrice).toBe('2.7');
+    // an empty side keeps what was filled; other order types are never touched
+    expect(followQuote(r.form, null, r.auto).form.values.displayedPrice).toBe('2.7');
+    const lim = form('limit', 'buy', { price: '' });
+    expect(followQuote(lim, '2.5', null).form).toBe(lim);
   });
 });
