@@ -229,6 +229,19 @@ test('a page that clips the frame down to its buttons gets no approval; shown wh
   await expect(page.getByTestId('tx-status')).toHaveAttribute('data-status', 'confirmed', { timeout: 30_000 });
 });
 
+test('a browser without IntersectionObserver v2 (no isVisible on the entry) is not offered the private key', async ({ appPage: page, mock }) => {
+  await page.addInitScript(() => {
+    delete (IntersectionObserverEntry.prototype as { isVisible?: boolean }).isVisible;
+  });
+  await openMarket(page, mock, { connect: false });
+  expect(await page.evaluate(() => 'isVisible' in IntersectionObserverEntry.prototype)).toBe(false);
+  const button = page.getByTestId('wallet-connect-local-key');
+  await expect(button).toBeVisible();
+  await expect(button).toBeDisabled();
+  await expect(button).toHaveAttribute('title', 'Not available in this browser. Use a browser extension wallet.');
+  await expect(page.getByTestId('signer-frame')).toHaveCount(0);
+});
+
 test('signer.html framed by a same-origin script without the sandbox attribute is still an opaque origin (header policy)', async ({ appPage: page, mock }) => {
   await openMarket(page, mock, { connect: false });
   const r = await page.evaluate(async () => {
