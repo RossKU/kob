@@ -37,7 +37,13 @@ export function Modal(props: ModalProps) {
     const opener = document.activeElement as HTMLElement | null;
     document.body.classList.add('modal-open');
     const el = box.current;
-    (el?.querySelector<HTMLElement>('[data-autofocus]') ?? el?.querySelector<HTMLElement>('.modal-body') ?? el)?.focus?.();
+    const auto = el?.querySelector<HTMLElement>('[data-autofocus]');
+    if (auto) auto.focus();
+    else {
+      // focusing the body would scroll a tall dialog past its title and close button: it opens at the top
+      (el?.querySelector<HTMLElement>('.modal-body') ?? el)?.focus?.({ preventScroll: true });
+      if (el?.parentElement) el.parentElement.scrollTop = 0;
+    }
     return () => {
       document.body.classList.remove('modal-open');
       opener?.focus?.();

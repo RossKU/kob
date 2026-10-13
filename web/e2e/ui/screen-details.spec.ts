@@ -19,3 +19,16 @@ test.describe('KasWare that starts on mainnet and switches', () => {
     await expect(page.getByTestId('wallet-address')).toHaveAttribute('data-value', TEST_KEYS.alice.testnetAddress);
   });
 });
+
+test('the confirmation screen opens at its title, not scrolled past it', async ({ appPage: page, mock }) => {
+  await fund(mock);
+  await openMarket(page, mock);
+  await pickType(page, 'ifd', 'buy');
+  await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' });
+  await waitReviewable(page);
+  await page.getByTestId('order-review').click();
+  const screen = page.getByTestId('confirm-screen');
+  await expect(screen).toBeVisible();
+  await expect(screen.locator('.modal-head h2')).toBeInViewport();
+  expect(await page.locator('.modal-backdrop').evaluate((el) => el.scrollTop)).toBe(0);
+});
