@@ -593,6 +593,11 @@ recomputed id; `extensions.kaspa.custody` MUST equal the requirement's class (se
 failure carries `errorReason` (a public reason from `errors.md`) and MAY carry
 `extensions.kaspa = { diagnostic, retryable, message, details? }` with a diagnostic from section 11.
 
+The same response answers the payment of an invoice's `kcc20` entry (`POST /invoices/<id>/pay`, companion
+proposal, section 18.3), and a payer checks it the same way: the KOB TS SDK accepts it only as a success for its
+own transaction with the entry's amount, network and custody class (`KobX402Client.payInvoice`,
+`verifyInvoiceSettlement`).
+
 ## 11. Diagnostics added
 
 Public reasons are the binding's closed set (`errors.md`); the local diagnostic travels in

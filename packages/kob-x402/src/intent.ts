@@ -10,7 +10,7 @@
 // reaches the facilitator could be presented by anyone holding the offer, so the facilitator refuses one).
 
 import { KobX402Error } from './errors.ts';
-import { InvoiceClient, intentLifetimeMs } from './invoice.ts';
+import { InvoiceClient, intentLifetimeMs, verifyInvoiceSettlement } from './invoice.ts';
 import type { FetchedInvoice } from './invoice.ts';
 import type { CancelIntentRequest, ExpireIntentRequest, IntentPayRequest, IntentPayResult, InputSignature, KobWasm, PreparedIntent, SignedTransaction } from './wasm.ts';
 import { BINDING_INTENT } from './types.ts';
@@ -101,7 +101,10 @@ export interface PayInvoiceWithIntentOptions {
 /**
  * Pays a fetched invoice through one of its intent entries: builds and signs the creation (request hash = the invoice id)
  * and submits it to the facilitator. Returns the payment (keep `payment.intent`) and the settlement; a
- * `settlement_pending` answer means the facilitator is still executing: poll the invoice status.
+ * `settlement_pending` answer means the facilitator is still executing: poll the invoice status. A success is verified
+ * (`verifyInvoiceSettlement`: it names this creation, the entry's amount and network): one that does not throws
+ * `invalid_settlement` with `error.payment` set. `KobX402Client.payInvoice` pays an intent entry under the client's limits
+ * (`intentTerms`, `maxPay`, `approve`).
  *
  * The facilitator may broadcast the creation even when the submission then fails (timeout, 5xx, unreadable answer), so
  * the handle must never be lost:
@@ -146,6 +149,15 @@ export async function payInvoiceWithIntent(
             });
       error.payment = payment;
       step = classifyStatus(error.status ?? 0, error.diagnostic, error.retryable);
+    }
+    // a success counts only for this very creation (and this invoice entry): anything else is not this payment's settlement
+    if (settlement?.success === true) {
+      try {
+        verifyInvoiceSettlement(settlement, inv, payment);
+      } catch (e) {
+        (e as KobX402Error).payment = payment;
+        throw e;
+      }
     }
     // only the same signed creation is ever sent again: a rebuild is the payer's own new payment
     const wait = backoffMs(policy, sends, policy.random());

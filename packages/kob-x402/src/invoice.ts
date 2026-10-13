@@ -9,13 +9,17 @@
 //
 // A KAS-only invoice can also be paid by any wallet through the `kaspa:<address>?amount=<KAS>` URI (`kaspaUri`); the
 // facilitator does not see such a payment, so the merchant watches its address instead of the invoice status.
+//
+// `KobX402Client.payInvoice` pays any entry (native, kcc20, swap-and-pay, intent) under the client's limits, retries without
+// paying twice and verifies the settlement; `verifyInvoiceSettlement` is the check for a caller that submits a payment itself.
 
-import { canonicalHashHex } from './canonical.ts';
+import { canonicalHashHex, canonicalJson } from './canonical.ts';
+import { kcc20Custody, verifySettlement } from './client.ts';
 import { KobX402Error } from './errors.ts';
 import type { FetchLike } from './client.ts';
 import type { KobWasm } from './wasm.ts';
 import { assertSecureUrl } from './url-policy.ts';
-import { ASSET_KAS, INVOICE_VERSION, X402_VERSION } from './types.ts';
+import { ASSET_KAS, BINDING_INTENT, INVOICE_VERSION, X402_VERSION } from './types.ts';
 import type { Invoice, InvoiceStatus, NetworkId, PaymentPayload, PaymentRequirements, SettlementResponse } from './types.ts';
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -233,6 +237,23 @@ export function intentLifetimeMs(inv: FetchedInvoice, requirements: { maxTimeout
   const left = inv.expiresAtMs - nowMs;
   if (!(left > 0)) throw new KobX402Error('invalid_payment_required', 'the invoice has expired', { diagnostic: 'invoice_expired' });
   return Math.min(wantedMs ?? 300_000, requirements.maxTimeoutSeconds * 1000, left);
+}
+
+/**
+ * Checks what `InvoiceClient.pay` answered for `payment` (a payment of `inv`): the payment was built for this invoice (request
+ * hash = the invoice id) and for one of its entries, and the settlement is a success for exactly it: its signed transaction
+ * (an intent payment: its creation in `extensions.kob.intent.creation`, the execution in `transaction`), the entry's amount and
+ * network, and a kcc20 entry's custody class. Throws `invalid_settlement` otherwise.
+ */
+export function verifyInvoiceSettlement(s: SettlementResponse, inv: Pick<FetchedInvoice, 'id' | 'invoice'>, payment: { paymentPayload: PaymentPayload; transactionId: string }): void {
+  const p = payment.paymentPayload;
+  if (typeof p?.payload?.requestHash !== 'string' || p.payload.requestHash.toLowerCase() !== inv.id.toLowerCase()) {
+    throw new KobX402Error('invalid_settlement', 'the payment was not built for this invoice (its request hash is not the invoice id)');
+  }
+  const wanted = canonicalJson(p.accepted);
+  const entry = inv.invoice.accepts.find((a) => canonicalJson(a) === wanted);
+  if (!entry) throw new KobX402Error('invalid_settlement', 'the payment does not accept one of the invoice entries');
+  verifySettlement(s, entry.amount, entry.network, payment.transactionId, kcc20Custody(entry), entry.extra?.route?.binding === BINDING_INTENT);
 }
 
 /** True when a hex string is an invoice id. */

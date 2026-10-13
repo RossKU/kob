@@ -4,6 +4,25 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Payer: invoices are paid under the client's limits and their settlement is verified
+
+- `KobX402Client.payInvoice(fetchedInvoice, invoiceClient, { acceptIndex?, paymentId? })` pays any entry of an invoice
+  (native, kcc20, swap-and-pay, intent: the best one the payer can pay, ranked as for a 402) with the invoice id as the
+  request hash, under the same limits as a paid request (`capabilities.maxAmount`, `maxPay`, `approve`, `intentTerms`, the
+  preflight; an intent's lifetime never runs past the invoice's expiry). The payment is stored before it is submitted
+  (`ArtifactRecord.url` is the invoice's pay URL, `method` `POST`), re-sent while its outcome is unknown (`settlement_pending`,
+  `invoice_pending`, `node_unavailable`, `rate_limited`, no answer, a 5xx), rebuilt after a failure that released its inputs
+  (anchored, a fresh payment id; never an intent creation), and the settlement must verify. Returns an
+  `InvoicePaymentReceipt` (`invoiceId`, `acceptIndex`); a refusal (`invoice_paid`, `invoice_expired`, ...) throws
+  `payment_failed`, a payment still pending at the end (an intent being executed) `payment_pending` (follow the invoice
+  status).
+- `verifyInvoiceSettlement(settlement, invoice, payment)`: the payment was built for the invoice (request hash = its id) and
+  one of its entries, and the settlement is a success for exactly it (its transaction, or an intent's creation), with the
+  entry's amount, network and a kcc20 entry's custody class.
+- **Breaking (behaviour):** `payInvoiceWithIntent` verifies a success with `verifyInvoiceSettlement`; one that does not
+  verify (another creation, another amount or network) throws `invalid_settlement` with `error.payment` set instead of being
+  returned.
+
 ### Payer: intent offers (`kob-intent-v1`) are paid by `KobX402Client`
 
 - `KobX402Client` pays an intent offer of a paywall: it signs ONE creation of a router intent on the payer's own terms

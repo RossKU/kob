@@ -34,13 +34,14 @@ function intentOffer(): PaymentRequirements {
 
 const fetched = { invoice: { accepts: [intentOffer()] }, id: ID, expiresAtMs: NOW + 600_000 } as unknown as FetchedInvoice;
 const req = { payAsset: '70'.repeat(32), utxos: [], nowMs: NOW, options: { maxSell: '3000' } };
-const SETTLED = { success: true, transaction: 'cd'.repeat(32) } as unknown as SettlementResponse;
+// the execution paid the merchant; the settlement names this creation (payInvoiceWithIntent verifies it)
+const SETTLED = { success: true, transaction: 'ef'.repeat(32), network: 'kaspa:testnet-10', amount: '500000000', extensions: { kob: { intent: { creation: 'cd'.repeat(32) } } } } as unknown as SettlementResponse;
 
 function fakeWasm(log: string[]) {
   return {
     payIntent(r: any) {
       log.push('sign');
-      return { paymentPayload: { x402Version: 2, accepted: r.requirements }, transactionId: 'cd'.repeat(32), consumed: [], feeSompi: '1', expiresAtMs: NOW + 300_000, payerSpent: '3000', intent: { actor: 'TokenToKas_sell', state: {}, intent: {} } };
+      return { paymentPayload: { x402Version: 2, accepted: r.requirements, payload: { requestHash: r.requestHash } }, transactionId: 'cd'.repeat(32), consumed: [], feeSompi: '1', expiresAtMs: NOW + 300_000, payerSpent: '3000', intent: { actor: 'TokenToKas_sell', state: {}, intent: {} } };
     },
   } as any;
 }

@@ -10,7 +10,9 @@ import { KobX402Client, kcc20Custody } from '../src/client.ts';
 import { MemoryArtifactStore } from '../src/artifact-store.ts';
 import { decodePaymentResponse } from '../src/headers.ts';
 import { KobX402Error } from '../src/errors.ts';
-import type { FacilitatorRequest, OfferSpec } from '../src/types.ts';
+import type { FacilitatorRequest, OfferSpec, PaymentPayload } from '../src/types.ts';
+import { buildOffer } from '../src/offers.ts';
+import { InvoiceClient, invoiceId, newInvoice } from '../src/invoice.ts';
 import type { AddressInfo } from 'node:net';
 import { loadGolden, realWasm, skipUnlessWasm } from './helpers/real-wasm.ts';
 import { failure, startStubFacilitator } from './helpers/stub-facilitator.ts';
@@ -235,4 +237,53 @@ test('swap-and-pay across families: a KRON pay asset buys a KCC-20 merchant toke
   } finally {
     await r.close();
   }
+});
+
+test('invoices: native and kcc20 entries paid by KobX402Client.payInvoice through the Rust SDK, verified with the invoice id', opts, async () => {
+  const wasm = realWasm()!;
+  const cases = loadGolden();
+  const by = (n: string) => cases.find((c) => c.name === n)!;
+  const kas = by('pay.native').request;
+  const payTo: string = by('offer.native').request.payTo;
+  const k = by('offer.kcc20').request;
+  const ctx = { network: 'kaspa:testnet-10' as const, payTo, maxTimeoutSeconds: 600, finality: 'accepted' as const };
+  const native = buildOffer({ kind: 'native', amount: '50000000' }, { wasm, ...ctx });
+  const token = buildOffer(
+    { kind: 'kcc20', asset: k.asset, amount: k.amount, token: { custody: 'unconditional', carrier: k.carrier, templateHash: k.templateHash, extensionCommitment: k.extensionCommitment, ticker: k.ticker, decimals: k.decimals } },
+    { wasm, ...ctx },
+  );
+  const invoice = newInvoice({ network: 'kaspa:testnet-10', reference: 'wasm-order-1', expiresAtMs: NOW_MS + 600_000, accepts: [token, native] });
+  const id = invoiceId(invoice);
+  const inv = { invoice, id, payUrl: `https://pay.example/invoices/${id}/pay`, statusUrl: `https://pay.example/invoices/${id}/status`, kaspaUri: null, expiresAtMs: NOW_MS + 600_000 };
+  const verified: { ok: boolean; diagnostic?: string; transactionId?: string }[] = [];
+  // the facilitator's invoice endpoint: the entry the payment accepts, verified with the invoice id as the request hash
+  const fetch = async (_url: string, init?: RequestInit): Promise<Response> => {
+    const p = JSON.parse(String(init?.body)) as PaymentPayload;
+    const r = wasm.preflight({ requirements: p.accepted, paymentPayload: p, requestHash: id, nowMs: NOW_MS + 500 });
+    verified.push(r);
+    const body = r.ok
+      ? { success: true, transaction: r.transactionId, network: p.accepted.network, amount: p.accepted.amount, extensions: { kaspa: { finality: 'accepted', ...(kcc20Custody(p.accepted) ? { custody: kcc20Custody(p.accepted) } : {}) } } }
+      : failure(r.diagnostic ?? 'internal', r.retryable === true, r.message ?? '');
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const invoices = new InvoiceClient({ url: 'https://pay.example', fetch });
+  const client = new KobX402Client({
+    wasm,
+    network: 'kaspa:testnet-10',
+    payerAddress: 'kaspatest:qpayer',
+    privateKeys: [kas.secretKey],
+    context: { load: async () => ({ utxos: kas.utxos, tokenUtxos: by('pay.kcc20').request.tokenUtxos, virtualDaaScore: '1000000' }) },
+    store: new MemoryArtifactStore(),
+    now: () => NOW_MS,
+    capabilities: { tokens: { [k.asset]: '3000' }, maxAmount: { KAS: '1000000000', [k.asset]: '3000' } },
+  });
+  const paid = await client.payInvoice(inv, invoices);
+  assert.deepEqual([paid.kind, paid.acceptIndex, paid.invoiceId], ['native', 1, id]);
+  assert.deepEqual(verified.map((v) => [v.ok, v.transactionId]), [[true, paid.transactionId]], 'the Rust verifier accepted it under the invoice id');
+  const tok = await client.payInvoice(inv, invoices, { acceptIndex: 0 });
+  assert.equal(tok.kind, 'kcc20');
+  assert.equal(verified[1]!.ok, true, JSON.stringify(verified[1]));
+  // the same payment presented for another invoice does not verify
+  const other = wasm.preflight({ requirements: native, paymentPayload: (await client.store.load(paid.paymentId))!.paymentPayload, requestHash: 'ab'.repeat(32), nowMs: NOW_MS + 500 });
+  assert.equal(other.ok, false);
 });

@@ -453,9 +453,9 @@ test('intent: the signed creation is re-sent while the keeper cannot execute it 
   const fetched = { invoice: { accepts: [intentOffer()] }, id: 'ab'.repeat(32), expiresAtMs: NOW + 600_000 } as unknown as FetchedInvoice;
   let signs = 0;
   const wasm = {
-    payIntent(r: { requirements: PaymentRequirements }) {
+    payIntent(r: { requirements: PaymentRequirements; requestHash: string }) {
       signs++;
-      return { paymentPayload: { x402Version: 2, accepted: r.requirements }, transactionId: 'cd'.repeat(32), consumed: [], feeSompi: '1', expiresAtMs: NOW + 300_000, payerSpent: '3000', intent: { actor: 'TokenToKas_sell', state: {}, intent: {} } };
+      return { paymentPayload: { x402Version: 2, accepted: r.requirements, payload: { requestHash: r.requestHash } }, transactionId: 'cd'.repeat(32), consumed: [], feeSompi: '1', expiresAtMs: NOW + 300_000, payerSpent: '3000', intent: { actor: 'TokenToKas_sell', state: {}, intent: {} } };
     },
   } as never;
   const answers: (() => Promise<SettlementResponse>)[] = [
@@ -464,7 +464,8 @@ test('intent: the signed creation is re-sent while the keeper cannot execute it 
       throw new KobX402Error('facilitator', 'POST /invoices/x/pay: the facilitator is unreachable');
     },
     async () => failure('settlement_pending', true, 'executing'),
-    async () => ({ success: true, transaction: 'ef'.repeat(32) }) as SettlementResponse,
+    // the execution paid the merchant; the settlement names this creation (verified)
+    async () => ({ success: true, transaction: 'ef'.repeat(32), network: 'kaspa:testnet-10', amount: '500000000', extensions: { kob: { intent: { creation: 'cd'.repeat(32) } } } }) as SettlementResponse,
   ];
   const payloads: unknown[] = [];
   const invoices = {

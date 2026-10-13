@@ -43,6 +43,7 @@ import type { PayerCapabilities, SelectedOffer } from './offers.ts';
 import { MemoryArtifactStore } from './artifact-store.ts';
 import { assertSecureUrl } from './url-policy.ts';
 import type { ArtifactRecord, ArtifactStore } from './artifact-store.ts';
+import type { FetchedInvoice, InvoiceClient } from './invoice.ts';
 import type {
   InputSignature,
   IntentHandle,
@@ -298,6 +299,21 @@ export interface PaymentReceipt {
   superseded: string[];
 }
 
+/** The receipt of an invoice payment (`payInvoice`). */
+export interface InvoicePaymentReceipt extends PaymentReceipt {
+  invoiceId: string;
+  /** Index of the paid entry in the invoice's `accepts`. */
+  acceptIndex: number;
+}
+
+/** Options of `payInvoice`. */
+export interface PayInvoiceOptions {
+  /** Pay this entry of the invoice's `accepts` (default: the best one this payer can pay, ranked as for a 402). */
+  acceptIndex?: number;
+  /** `payment-identifier` id of the first attempt (default a fresh random one; a rebuilt attempt takes a fresh one). */
+  paymentId?: string;
+}
+
 export interface PaidFetchResult {
   response: Response;
   /** Present when a payment was made. */
@@ -453,6 +469,51 @@ export class KobX402Client {
     if (!this.#o.intentTerms || payAsset === undefined || bound === undefined) return undefined;
     const t = await this.#o.intentTerms({ offer, payAsset, bound, url, method });
     return t ?? undefined;
+  }
+
+  /**
+   * Pays a fetched invoice (`fetchInvoice`) through its facilitator (`invoices`: `POST /invoices/<id>/pay`). The best entry of
+   * its `accepts` this payer can pay (or `opts.acceptIndex`) is built exactly as for a 402, with the invoice id as the request
+   * hash, and held to the same limits (`capabilities.maxAmount`, `maxPay`, `approve`, `intentTerms`, the preflight); an intent's
+   * lifetime never runs past the invoice's expiry. The signed payment is stored before it is submitted, re-sent while its
+   * outcome is unknown (`settlement_pending`, `invoice_pending`, no answer, a 5xx), rebuilt after a failure that released its
+   * inputs (anchored as for a 402; never an intent creation), and the settlement is verified: success for exactly the signed
+   * transaction (an intent: its creation in `extensions.kob.intent.creation`, the execution in `transaction`), the entry's amount
+   * and network, a kcc20 entry's custody class. A refusal (`invoice_paid`, `invoice_expired`, ...) throws `payment_failed`; a
+   * payment still pending at the end of the retry (an intent the facilitator is still executing) throws `payment_pending`:
+   * follow it with `invoices.status` / `awaitPaid`. Paid invoices of one URL run one at a time in a client, and a new call
+   * refuses to sign while an earlier artifact for the invoice is live (`allowResign` as for a 402).
+   */
+  async payInvoice(invoice: FetchedInvoice, invoices: InvoiceClient, opts: PayInvoiceOptions = {}): Promise<InvoicePaymentReceipt> {
+    if (!HEX64.test(invoice.id)) throw new KobX402Error('bad_request', 'not an invoice id');
+    if (!(invoice.expiresAtMs > this.#now())) throw new KobX402Error('invalid_payment_required', 'the invoice has expired', { diagnostic: 'invoice_expired' });
+    if (invoice.invoice.network !== this.#o.network) throw new KobX402Error('no_acceptable_offer', `the invoice is for ${invoice.invoice.network}, this payer pays on ${this.#o.network}`);
+    const url = invoice.payUrl;
+    const method = 'POST';
+    assertSecureUrl(url, 'the invoice pay URL', this.#o.allowInsecureHttp === true);
+    const pr: PaymentRequired = { x402Version: X402_VERSION, resource: { url }, accepts: invoice.invoice.accepts };
+    const caps: PayerCapabilities = { ...(this.#o.capabilities ?? {}), network: this.#o.network };
+    const ranked = rankOffers(pr, caps).filter((o) => opts.acceptIndex === undefined || o.index === opts.acceptIndex);
+    if (ranked.length === 0) throw new KobX402Error('no_acceptable_offer', 'the invoice has no entry this payer can pay');
+    const candidates = this.#candidates(ranked, caps);
+    return this.#exclusive(`${method} ${url}`, async () => {
+      await this.#guardResign(url, method);
+      const chosen = await this.#choose(candidates, ranked.length - candidates.length, {
+        pr,
+        caps,
+        url,
+        method,
+        ...(opts.paymentId !== undefined ? { idOverride: opts.paymentId } : {}),
+        requestHash: () => invoice.id,
+        intentLifetimeCapMs: invoice.expiresAtMs - this.#now(),
+      });
+      const { offer, paymentId, reqHash, built, anchor } = chosen;
+      // Durable BEFORE disclosure. A failure here aborts the payment: nothing has been sent.
+      const record = this.#record(offer, paymentId, reqHash, built, url, method, { attempt: 1, ...(anchor ? { anchor } : {}) });
+      await this.#store.save(record);
+      const out = await this.#settleWithRetry(record, { offer, reasons: chosen.reasons, pr, caps, url, method }, this.#invoiceSend(invoices, invoice.id));
+      return { ...out.receipt, invoiceId: invoice.id, acceptIndex: offer.index };
+    });
   }
 
   /**
@@ -652,6 +713,57 @@ export class KobX402Client {
       release();
       if (this.#locks.get(key) === tail) this.#locks.delete(key);
     }
+  }
+
+  /**
+   * An invoice's pay endpoint as the retry's transport. No answer, an HTTP error without a settlement and a settlement that
+   * is still pending leave the payment `pending` (re-sent per `classifyStatus` / `classifyFailure`); a refusal is `rejected`;
+   * a success must verify against the stored artifact.
+   */
+  #invoiceSend(invoices: InvoiceClient, id: string): SendOnce {
+    return async (record) => {
+      const { paymentId, transactionId } = record;
+      let settlement: SettlementResponse;
+      try {
+        settlement = await invoices.pay(id, record.paymentPayload);
+      } catch (e) {
+        const err = e instanceof KobX402Error ? e : undefined;
+        const status = err?.status ?? 0;
+        await this.#mark(paymentId, { status: 'pending', note: `the invoice payment got no settlement (${status ? `HTTP ${status}` : 'no answer'}); the facilitator may hold it` });
+        const error = pendingError(paymentId, transactionId, `the invoice payment got no settlement: ${(e as Error)?.message ?? String(e)}`, e, status || undefined);
+        if (err?.diagnostic) error.diagnostic = err.diagnostic;
+        error.retryable = err?.retryable === true;
+        return { ok: false, error, step: classifyStatus(status, err?.diagnostic, err?.retryable === true), outcome: err?.diagnostic ?? (status ? `http_${status}` : 'unknown') };
+      }
+      if (settlement.success !== true) {
+        const k = isRecord(settlement.extensions?.kaspa) ? (settlement.extensions.kaspa as Record<string, unknown>) : {};
+        const diagnostic = typeof k.diagnostic === 'string' ? k.diagnostic : undefined;
+        const retryable = k.retryable === true;
+        const message = typeof k.message === 'string' ? k.message : (settlement.errorReason ?? '');
+        const step = classifyFailure(diagnostic, retryable);
+        // still being settled at the facilitator (an intent executing, the node unreachable): not a failure of this payment
+        const pending = step === 'resend';
+        const failure: NonNullable<ArtifactRecord['failure']> = { retryable, message };
+        if (diagnostic !== undefined) failure.diagnostic = diagnostic;
+        if (k.details !== undefined) failure.details = k.details;
+        await this.#mark(paymentId, { status: pending ? 'pending' : 'rejected', failure });
+        const init: ConstructorParameters<typeof KobX402Error>[2] = { retryable, paymentId, transactionId };
+        if (diagnostic !== undefined) init.diagnostic = diagnostic;
+        if (settlement.errorReason !== undefined) init.reason = settlement.errorReason;
+        if (k.details !== undefined) init.details = k.details;
+        const error = new KobX402Error(pending ? 'payment_pending' : 'payment_failed', `invoice payment ${pending ? 'not settled yet' : 'rejected'}: ${diagnostic ?? 'unknown'}: ${message}`, init);
+        return { ok: false, error, step, outcome: diagnostic ?? 'rejected' };
+      }
+      try {
+        verifyRecordSettlement(settlement, record);
+      } catch (e) {
+        await this.#mark(paymentId, { status: 'pending', note: 'the invoice settlement did not verify' });
+        const error = new KobX402Error('invalid_settlement', `invoice settlement rejected: ${(e as Error).message}`, { cause: e, paymentId, transactionId });
+        return { ok: false, error, step: 'stop', outcome: 'invalid_settlement' };
+      }
+      await this.#mark(paymentId, { status: 'settled' });
+      return { ok: true, receipt: receiptOf(record, settlement) };
+    };
   }
 
   /** The paid HTTP request as the retry's transport. */

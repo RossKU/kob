@@ -834,7 +834,8 @@ ask really demands (`ceil(take × (price(t) − tip) / scale)`); fills are any b
 each order's minimum fill.
 
 
-KOB payer SDK (informative): the TS `KobX402Client` pays an intent offer of a paywall only on terms the payer gives for it (`intentTerms`: `maxSell`, or `maxPay` and `maxExtra`), whose worst case is within its
+KOB payer SDK (informative): the TS `KobX402Client` pays an intent offer of a paywall (and an intent entry of an
+invoice, `payInvoice`) only on terms the payer gives for it (`intentTerms`: `maxSell`, or `maxPay` and `maxExtra`), whose worst case is within its
 `maxPay` bound of the pay asset (checked on the built creation and by the preflight); `approve` is shown the worst case
 (`cost.payerSpent`), not `amount`. It accepts a settlement only when `extensions.kob.intent.creation` is the creation it
 signed (the execution is `transaction`), keeps the intent handle with the signed creation (`ArtifactRecord.intent`) and
@@ -951,10 +952,20 @@ The payer selects one entry of `accepts`, builds a payment for it exactly as for
 **the invoice id as the request hash** (so the authorization commits to the invoice, its reference and its
 expiry), and submits the `PaymentPayload` to `POST <base>/invoices/<id>/pay`, without an API key. The
 facilitator settles it for the invoice's merchant and answers a `SettlementResponse` (an intent entry may
-answer `settlement_pending` while it executes; the status then follows it). This endpoint is the one
+answer `settlement_pending` while it executes; the status then follows it). A payer accepts a success only for its
+own payment: the transaction it signed (for an intent entry the creation, `extensions.kob.intent.creation`, while
+`transaction` names the execution), the entry's `amount` and `network`, and for a `kcc20` entry the entry's custody
+class (`extensions.kaspa.custody`, companion proposal section 10). This endpoint is the one
 unauthenticated path to the facilitator's ledger: it is rate-limited per source like `/verify`, and it
 creates ledger state only for a payment that verifies completely against a registered, unexpired, unpaid
 invoice.
+
+KOB payer SDK (informative): `KobX402Client.payInvoice` pays any entry (native, `kcc20`, payer-signed route, intent)
+under the client's limits (ceilings, `maxPay`, `approve`, `intentTerms`, the preflight; an intent's deadline never past
+the invoice's `expiresAt`), stores the signed payment before it submits it, re-sends it while its outcome is unknown
+(`settlement_pending`, `invoice_pending`, no answer, a 5xx), rebuilds it anchored after a failure that released its inputs
+(x402-retry.md; never an intent creation) and verifies the response as above (`verifyInvoiceSettlement` for a payment
+the caller submits itself, which `payInvoiceWithIntent` applies to its success).
 
 ### 18.4 Once only; duplicates and late payments
 
