@@ -214,3 +214,27 @@ test('without the registry the banner matches what the page does: indexer tokens
   await expect(page.getByTestId('order-ticket')).not.toHaveAttribute('data-state', 'untradable');
   await expect(page.getByTestId('ticket-open-caution')).toBeVisible();
 });
+
+test('a side or type switch keeps the amount and the price; the stop, exit and tip start over', async ({ appPage: page, mock }) => {
+  await fund(mock);
+  await openMarket(page, mock);
+  await pickType(page, 'ifd', 'buy');
+  await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026', tip: '0.0001', 'entry.stop': '0.024' });
+  await waitReviewable(page);
+  // buy -> sell: a buy's entry stop (at or below its price; a sell's is at or above) and tip are not carried to the sell, nothing is left out of sight
+  await page.getByTestId('order-side-sell').click();
+  await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-side', 'sell');
+  await expect(page.getByTestId('order-amount')).toHaveValue('2');
+  await expect(page.getByTestId('order-price')).toHaveValue('0.0245');
+  await expect(page.getByTestId('field-exit.takeProfit')).toHaveValue('');
+  await expect(page.getByTestId('order-tip')).toHaveValue('');
+  await expect(page.getByTestId('field-entry.stop')).toHaveValue('');
+  await fillFields(page, { 'exit.takeProfit': '0.0235' });
+  await waitReviewable(page);
+  // ifd -> stop-limit: the amount stays, the stop and limit are new boxes
+  await fillFields(page, { tip: '0.0002' });
+  await pickType(page, 'stopLimit');
+  await expect(page.getByTestId('order-amount')).toHaveValue('2');
+  await expect(page.getByTestId('order-tip')).toHaveValue('');
+  await expect(page.getByTestId('field-stop')).toHaveValue('');
+});

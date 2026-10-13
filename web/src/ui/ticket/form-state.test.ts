@@ -109,6 +109,79 @@ describe('vocabulary and layout', () => {
     expect(t.side).toBe('sell'); // a buy cannot become a TWAP: the side is fixed
     expect(t.values.price).toBe('1.5');
   });
+
+  // every field typed with a marker: after a switch only the amount and the price (when the new form has one) may still carry it; every
+  // other value is the new form's default
+  const marked = (type: OrderTypeId, side: Side): TicketForm => ({
+    type, side, values: { ...Object.fromEntries(Object.keys(FIELDS).map((id) => [id, `typed-${id}`])), 'amount@base': '123' },
+  });
+  const expectReset = (g: TicketForm, label: string) => {
+    const fresh = initialForm(g.type, g.side);
+    const shown = layoutOf(g);
+    const has = new Set([...shown.main, ...shown.advanced]);
+    for (const [k, v] of Object.entries(g.values)) {
+      if (k === 'amount' || k === 'amount@base') continue;
+      if (k === 'price' && has.has('price')) {
+        expect(v, `${label}: price`).toBe('typed-price');
+        continue;
+      }
+      expect(v, `${label}: ${k} must start from its default`).toBe(fresh.values[k]);
+    }
+    expect(Object.keys(g.values).filter((k) => !['amount', 'amount@base', 'price'].includes(k)).sort(), `${label}: defaults only`).toEqual(
+      Object.keys(fresh.values).filter((k) => k !== 'price').sort(),
+    );
+    expect(g.values.amount, `${label}: amount`).toBe('typed-amount');
+    expect(g.values['amount@base'], `${label}: exact amount`).toBe('123');
+    if (!has.has('price')) expect(g.values.price, `${label}: no price box`).toBeUndefined();
+  };
+
+  it('a type switch keeps only the amount and the price; every other field of every type starts from its default', () => {
+    for (const from of ORDER_TYPES) {
+      for (const side of sidesOf(from)) {
+        for (const to of ORDER_TYPES) {
+          if (to === from) continue;
+          expectReset(switchType(marked(from, side), to), `${from}/${side} -> ${to}`);
+        }
+      }
+    }
+    // picking the same type again changes nothing
+    const same = marked('limit', 'buy');
+    expect(switchType(same, 'limit')).toBe(same);
+  });
+
+  it('a side switch keeps only the amount and the price; every other field of every type starts from its default', () => {
+    for (const type of ORDER_TYPES) {
+      const sides = sidesOf(type);
+      if (sides.length < 2) {
+        const f = marked(type, sides[0]!);
+        expect(setSide(f, sides[0] === 'buy' ? 'sell' : 'buy'), `${type}: one side only`).toBe(f);
+        continue;
+      }
+      for (const side of sides) {
+        const other: Side = side === 'buy' ? 'sell' : 'buy';
+        const g = setSide(marked(type, side), other);
+        expect(g.side).toBe(other);
+        expectReset(g, `${type}: ${side} -> ${other}`);
+        const same = marked(type, side);
+        expect(setSide(same, side)).toBe(same);
+      }
+    }
+  });
+
+  it('a buy IFD\'s entry stop and tip do not follow it to the sell side (the stop would be on the wrong side of the market)', () => {
+    let f = initialForm('ifd', 'buy');
+    for (const [id, v] of Object.entries({ amount: '2', price: '0.0245', 'exit.takeProfit': '0.026', 'entry.stop': '0.025', tip: '0.0001', 'exit.tip': '0.0001' })) f = setValue(f, id, v);
+    const g = setSide(f, 'sell');
+    expect(g.values).toEqual({ ...initialForm('ifd', 'sell').values, amount: '2', price: '0.0245' });
+    // the sell form needs its own exit price before it builds; it carries no stop or tip of the buy
+    expect(buildIntent(g, CTX).intent).toBeNull();
+    expect(buildIntent(setValue(g, 'exit.takeProfit', '0.0235'), CTX).intent).toMatchObject({ type: 'ifd', side: 'sell' });
+    expect(json(buildIntent(setValue(g, 'exit.takeProfit', '0.0235'), CTX).intent)).not.toMatch(/"(stop|tip)"/);
+    // a type switch drops them too (stop-limit buy -> limit buy: no stop, no tip left behind)
+    const s = switchType(setValue(setValue(setValue(initialForm('stopLimit', 'buy'), 'stop', '0.03'), 'limit', '0.031'), 'tip', '0.0002'), 'limit');
+    expect(s.values.stop).toBeUndefined();
+    expect(s.values.tip).toBeUndefined();
+  });
 });
 
 describe('price parsing', () => {

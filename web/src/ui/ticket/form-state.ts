@@ -198,22 +198,38 @@ export function initialForm(type: OrderTypeId = 'limit', side: Side = 'sell', ka
   return { type, side: sides.includes(side) ? side : sides[0]!, values, ...(kas ? { kas: true } : {}) };
 }
 
-/** Switching the type keeps what still applies (amount, prices, tip, lifetime ...), adds the defaults of the new type, fixes an impossible side. */
-export function switchType(form: TicketForm, type: OrderTypeId): TicketForm {
-  const side = sidesOf(type).includes(form.side) ? form.side : sidesOf(type)[0]!;
-  const next = initialForm(type, side, !!form.kas);
+/**
+ * The fields a type or side change keeps: the amount (with an exact base amount kept for its box) and the order's own price when the new form
+ * has one. Everything else (stops, exits, tip, lifetime, ladder, advanced options) starts again from the new form's defaults: a value typed for
+ * one type or side (a buy's entry stop, an exit price, a tip) means something else, or nothing, on another and would be carried out of sight.
+ */
+const CARRIED = ['amount', 'price'];
+
+function carryShared(from: TicketForm, next: TicketForm): TicketForm {
+  const shown = layoutOf(next);
+  const has = new Set([...shown.main, ...shown.advanced]);
   const values = { ...next.values };
-  const applicable = new Set([...layoutOf({ type, side, values: {} }).main, ...layoutOf({ type, side, values: {} }).advanced, ...(type === 'limit' ? LIMIT_LADDER : [])]);
-  for (const [k, v] of Object.entries(form.values)) {
-    // an exact base amount kept for a KAS amount box travels with its box
-    const field = k.endsWith(BASE_SUFFIX) ? k.slice(0, -BASE_SUFFIX.length) : k;
-    if (applicable.has(field) && v !== '') values[k] = v;
+  for (const id of CARRIED) {
+    if (!has.has(id)) continue;
+    for (const k of [id, id + BASE_SUFFIX]) {
+      const v = from.values[k];
+      if (v !== undefined && v !== '') values[k] = v;
+    }
   }
-  return { ...next, type, side, values };
+  return { ...next, values };
 }
 
+/** Switching the type keeps the amount and the price (when the new type has one), starts every other field from its default, fixes an impossible side. */
+export function switchType(form: TicketForm, type: OrderTypeId): TicketForm {
+  if (type === form.type) return form;
+  const side = sidesOf(type).includes(form.side) ? form.side : sidesOf(type)[0]!;
+  return carryShared(form, initialForm(type, side, !!form.kas));
+}
+
+/** Switching the side keeps the amount and the price, and starts every other field from its default (see `CARRIED`). */
 export function setSide(form: TicketForm, side: Side): TicketForm {
-  return sidesOf(form.type).includes(side) ? { ...form, side } : form;
+  if (side === form.side || !sidesOf(form.type).includes(side)) return form;
+  return carryShared(form, initialForm(form.type, side, !!form.kas));
 }
 
 /** What the user typed into a box. An exact base amount kept for that box (`setAmountBase`) is dropped: the typed text is the amount now. */
