@@ -286,6 +286,18 @@ the registry), and carry the chart history to the new covenant ids with `carry-h
 
 ## Latest run
 
+**Redeploy on main cf90250, 2026-10-13 17:16 to 17:20 UTC (2026-10-14 JST).** 121 commits (kob-cli trading commands, the
+web private-key signer, matcher weighted selection, indexer open tokens and holdings, x402 `/supported`); no template or
+token program changed, so no order was cancelled; databases kept (`order_amends.min_fill` migrated in place), chart history
+unchanged. exec-b, then exec-a on `bin/kob-executor-cf90250.exe` (never both down), then bindings, bundle (the new
+scenarios run with their default weights), UI (`UI_OUT` staging; `build-ui.sh` now copies `signer.html` and `serve-ui.mjs`
+sends the signer's headers) and the public 8491 instance; miner and cloudflared untouched. Backups in
+`run/backup-pre-cf90250/`. Live test report: `docs/testing/TN10-TEST-2026-10-14.md`.
+
+**Redeploy on main 8c1606c, 2026-10-13 UTC.** Token-program profiles, the A1-2 / A1-3 fixes and the keeper fee-subsidy
+budget; templates unchanged (no order cancelled, chart history and databases kept); one child at a time. Live test report:
+`docs/testing/TN10-TEST-2026-10.md`.
+
 **Redeploy on main b937ebf, 2026-10-12 16:21:57 to 16:37:20 UTC (2026-10-13 01:21 to 01:37 JST).** The pre-audit covenant fixes
 changed 10 of the 15 order templates (`KobCondAsk`, `KobCondBid`, `KobIfdAsk`, `KobIfdBid`, `KobCondPair`, `KobIfdPair` and the
 four KRON conditional / if-done ones); `KobAsk`, `KobBid`, `KobPair`, their KRON twins and the router did not. The 75 live orders
