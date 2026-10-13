@@ -1210,6 +1210,11 @@ pub fn metrics_text<N: NodeApi, S: BookSource>(r: &Runner<N, S>, rep: &StepRepor
     g("kob_matcher_paused", "1 while the kill-switch file exists.", (rep.paused as u8).to_string());
     g("kob_matcher_book_stale", "1 when the book lagged the node and nothing was planned.", (rep.book_stale as u8).to_string());
     g(
+        "kob_matcher_budget_slack_retries_total",
+        "Builds retried with more compute budget than the table gives (a shape the budget generator misses: report it; 0 expected).",
+        super::lower::budget_slack_retries().to_string(),
+    );
+    g(
         "kob_matcher_book_lag_daa",
         "DAA the book is behind the node at the last step.",
         if rep.book_daa == 0 { 0 } else { rep.daa.saturating_sub(rep.book_daa) }.to_string(),

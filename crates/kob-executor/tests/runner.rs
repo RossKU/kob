@@ -365,6 +365,8 @@ async fn the_tick_is_priced_from_the_node_estimate_and_falls_back_to_the_floor()
     assert!(t.profit > 0);
     let m = kob_executor::matcher::run::metrics_text(&r, &rep);
     assert!(m.contains("kob_fee_rate_normal 194") && m.contains("kob_fee_estimated 1"), "{m}");
+    // the compute-budget safety net is exported (and never used: the table covers every shape)
+    assert!(m.contains("kob_matcher_budget_slack_retries_total 0"), "{m}");
     // the node stops answering: the last estimate is too old (max age 0) and every rate is the floor
     node.0.lock().unwrap().fee = None;
     r.step().await.unwrap();

@@ -2262,6 +2262,7 @@ cannot be read counts as present (paused, with a warning).
 | `kob_matcher_skipped_books` | persistent (unsupported programs, unprofitable books) |
 | `kob_fee_estimated`, `kob_fee_rate_high` / `_normal` / `_low`, `kob_fee_estimate_failures_total` | 0 for minutes on a node that should answer (the floor is paid: slow acceptance under load); a rate at `--fee-max-rate` for long (the network is busier than the cap allows) |
 | `kob_matcher_book_stale`, `kob_matcher_book_lag_daa` | 1 for minutes (the book lags the node: a catching-up, stalled or `gap` indexer, or a stale snapshot file; nothing is planned meanwhile) |
+| `kob_matcher_budget_slack_retries_total` | above 0 (a transaction shape the compute-budget table misses: report it; the build was retried with more budget) |
 
 Logs (`RUST_LOG=info`, default) report every submission, conflict, rejection, acceptance, final
 transaction and reorg rollback with its transaction id. A batch that triggers or arms stops logs `the batch triggers or
@@ -2288,7 +2289,8 @@ shapes of `pair_branch_shapes`), within the builder's limits, which are the plan
 remains: should a shape the generator does not produce still come out short (`ExceededCommittedScriptUnits`), the matcher
 measures the transaction's inputs in the engine and retries once with the budgets they need (an input's units do not depend
 on the budgets around it; `matcher::lower::measured_floors`), the keepers once with one unit of slack; both log a warning and
-count it (`budget_slack_retries`); every test asserts the count stays 0.
+count it (`budget_slack_retries`, the gauge `kob_matcher_budget_slack_retries_total`: alert on any value above 0); every test
+asserts the count stays 0.
 
 ### Testing
 
