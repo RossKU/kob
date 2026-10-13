@@ -968,9 +968,15 @@ pub fn kas_payment(
     // with change: the fee is a fixed point (the change's value does not change the relay floor)
     let mut chosen: Option<(Vec<TransactionOutput>, u64, Option<u32>)> = None;
     let mut f = 0u64;
+    // whether what is left over is too small to be its own output (only then may it go to the fee)
+    let mut change_is_dust = false;
     for _ in 0..16 {
-        let Some(change) = total.checked_sub(amount).and_then(|x| x.checked_sub(f)) else { break };
+        let Some(change) = total.checked_sub(amount).and_then(|x| x.checked_sub(f)) else {
+            change_is_dust = true;
+            break;
+        };
         if change < DUST_OUTPUT_MIN {
+            change_is_dust = true;
             break;
         }
         let outs = vec![pay.clone(), TransactionOutput::new(change, mine.clone())];
@@ -990,6 +996,15 @@ pub fn kas_payment(
         let need = target_fee(&masses(&t, &entries), rate, fee.fee_mode);
         if total < amount.saturating_add(need) {
             return Err(format!("insufficient funds: need {} sompi, have {total} sompi", amount.saturating_add(need)));
+        }
+        // a change that is not dust but did not fit (the transaction with it exceeds a block mass limit, e.g. the KIP-9
+        // storage mass of a payment just above the dust bound plus the change) is never paid to the network as fee
+        let surplus = total - amount - need;
+        if !change_is_dust && surplus >= DUST_OUTPUT_MIN {
+            return Err(format!(
+                "the change of {surplus} sompi does not fit as its own output (the transaction with it exceeds a block mass \
+                 limit) and would otherwise be paid as network fee: send a larger amount"
+            ));
         }
         chosen = Some((outs, total - amount, None));
     }

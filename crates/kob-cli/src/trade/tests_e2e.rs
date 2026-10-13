@@ -405,3 +405,22 @@ fn a_node_of_another_network_is_refused_before_signing() {
     assert_eq!(w.submitted(), 1);
 }
 
+/// A KAS payment never pays a change that is not dust as network fee. A payment just above the dust bound from a 1 KAS
+/// coin: with its change the transaction's KIP-9 storage mass exceeds the block limit; without it, 0.98 KAS would have gone
+/// to the fee. Refused; an ordinary payment from the same coin keeps its change.
+#[test]
+fn a_kas_payment_never_pays_its_change_as_fee() {
+    use kob_protocol::tx::{FeeOptions, KeyUtxo, Utxo, DUST_OUTPUT_MIN};
+    let me = pk(0x11);
+    let coin =
+        KeyUtxo { utxo: Utxo { transaction_id: [1; 32], index: 0, amount: KAS, block_daa_score: 500, covenant_id: None }, pubkey: me };
+    let to = p2pk_spk(&pk(0x22));
+    let e = crate::trade::actions::kas_payment(&[coin.clone()], DUST_OUTPUT_MIN + 100, &to, &me, &FeeOptions::default()).unwrap_err();
+    assert!(e.contains("would otherwise be paid as network fee"), "{e}");
+    let b = crate::trade::actions::kas_payment(&[coin.clone()], KAS / 2, &to, &me, &FeeOptions::default()).unwrap();
+    assert_eq!((b.tx.outputs.len(), b.fee.fee), (2, b.fee.min_fee));
+    // a change below the dust bound still goes to the fee (it could not be an output)
+    let b = crate::trade::actions::kas_payment(&[coin], KAS - DUST_OUTPUT_MIN / 2, &to, &me, &FeeOptions::default()).unwrap();
+    assert_eq!(b.tx.outputs.len(), 1);
+    assert!(b.fee.fee < DUST_OUTPUT_MIN, "{}", b.fee.fee);
+}
