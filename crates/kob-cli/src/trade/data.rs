@@ -112,6 +112,13 @@ pub fn token_utxos(indexer: &str, node: &str, network: &str, m: &TokenMarket, ow
     Ok(out)
 }
 
+/// The standard scale of the listed orders of `cov` (`market::standard_scale` of its per-order book), `None` without orders:
+/// the decimals of a token without a registry entry.
+pub fn order_scale(indexer: &str, cov: &[u8; 32]) -> Result<Option<i64>, String> {
+    let v = http::get_ok(indexer, &format!("/v1/books/{}?depth=100&aggregate=false", to_hex(cov)), INDEXER_TIMEOUT)?;
+    Ok(market::standard_scale(&v))
+}
+
 /// The KAS book of `m` (per-order rows; orders of another scale are not part of it).
 pub fn book(indexer: &str, m: &TokenMarket) -> Result<Book, String> {
     let v = http::get_ok(indexer, &format!("/v1/books/{}?depth=100&aggregate=false", to_hex(&m.cov)), INDEXER_TIMEOUT)?;

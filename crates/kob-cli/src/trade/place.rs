@@ -63,6 +63,9 @@ AMOUNTS (always with a unit; never rounded)
   --min-fill A   smallest fill (default: worth 10 KAS at the limit; IOC / FOK / market 1 base unit; if-done ceil(amount/4))
   --min-touch A  stop trigger threshold (default: max(min fill, 25% of the amount))
   --carrier KAS  KAS on every covenant UTXO of the order (default 2KAS; at least 0.08KAS and the token program's floor)
+  --decimals N   the first order of a token without a registry entry and without orders: its decimals (0..=9; the scale
+                 is 10^N). The chain records no decimals: give the ones the issuer chose. Once the token has orders, their
+                 scale decides (a --decimals that disagrees is refused)
   WHEN           2026-10-20T00:00Z (UTC) or daa:N;   DURATION 30s, 5m or 300daa;   BPS 3% or 300bps
 
 SAFETY
@@ -113,6 +116,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--exit-min-touch",
     "--exit-slippage",
     "--repeat-count",
+    "--decimals",
 ];
 const BOOL_FLAGS: &[&str] = &["--day", "--all-or-nothing", "--ack-no-guards", "--ack-market-start"];
 
@@ -449,6 +453,12 @@ pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> 
         v.push(format!("{} {}", if k == 0 { "order:" } else { "committed exit:" }, s.template_id().name()));
     }
     v.push(format!("side: {} {}", d.side.name(), m.name()));
+    if m.entered_decimals {
+        v.push(format!(
+            "decimals: {} (from --decimals: the first order of this token sets its market's price scale, {} base units per whole token)",
+            m.decimals, m.scale
+        ));
+    }
     v.push(format!("amount: {}", units::tokens(d.amount as i128, &u)));
     if let Some(p) = d.limit_price {
         v.push(format!("limit / worst price: {}", price(p)));
@@ -521,9 +531,15 @@ pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> 
 pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<(Env, TokenMarket, Option<TokenMarket>), String> {
     let indexer = c.need_indexer()?.to_string();
     let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(&indexer))?;
-    let a = market::resolve(p.get("--token").ok_or("--token is required")?, &reg, &idx)?;
+    let entered = p
+        .get("--decimals")
+        .map(|v| v.parse::<u32>().map_err(|_| format!("--decimals must be a whole number from 0 to 9, got `{v}`")))
+        .transpose()?;
+    let order_scale = |cov: &[u8; 32]| data::order_scale(&indexer, cov);
+    let open = |entered| market::OpenToken { network: &c.network, order_scale: &order_scale, entered };
+    let a = market::resolve_with(p.get("--token").ok_or("--token is required")?, &reg, &idx, Some(&open(entered)))?;
     let b = match p.get("--quote") {
-        Some(q) => Some(market::resolve(q, &reg, &idx)?),
+        Some(q) => Some(market::resolve_with(q, &reg, &idx, Some(&open(None)))?),
         None => None,
     };
     let side = side_for(kind, p)?;

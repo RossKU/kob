@@ -266,7 +266,9 @@ pub fn run(args: &[String]) -> i32 {
         let node = c.need_node()?;
         let indexer = c.need_indexer()?;
         let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(indexer))?;
-        let m = market::resolve(key, &reg, &idx)?;
+        let order_scale = |cov: &[u8; 32]| data::order_scale(indexer, cov);
+        let open = market::OpenToken { network: &c.network, order_scale: &order_scale, entered: None };
+        let m = market::resolve_with(key, &reg, &idx, Some(&open))?;
         let utxos = data::token_utxos(indexer, node, &c.network, &m, &signer.pubkey)?;
         let funding = data::funding(node, &c.network, &signer.pubkey)?;
         let fee = FeeOptions { fee_rate: c.fee_rate, ..Default::default() };

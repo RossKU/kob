@@ -185,8 +185,11 @@ pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String>
         };
         let indexer = c.need_indexer()?;
         let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(indexer))?;
-        let a = market::resolve(key, &reg, &idx)?;
-        let b = p.get("--quote").map(|q| market::resolve(q, &reg, &idx)).transpose()?;
+        // a token without a registry entry: its decimals from the scale of its orders (`kob place`'s open token)
+        let order_scale = |cov: &[u8; 32]| data::order_scale(indexer, cov);
+        let open = market::OpenToken { network: &c.network, order_scale: &order_scale, entered: None };
+        let a = market::resolve_with(key, &reg, &idx, Some(&open))?;
+        let b = p.get("--quote").map(|q| market::resolve_with(q, &reg, &idx, Some(&open))).transpose()?;
         let (book, last, quote_name): (Book, Option<i64>, String) = match &b {
             None => {
                 let v = http::get_ok(indexer, &format!("/v1/books/{}?depth={depth}", to_hex(&a.cov)), data::INDEXER_TIMEOUT)?;
@@ -600,10 +603,12 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
         tokens.dedup();
         let mut rows = vec![];
         let mut locked = 0i128;
+        let order_scale = |cov: &[u8; 32]| data::order_scale(indexer, cov);
+        let open = market::OpenToken { network: &c.network, order_scale: &order_scale, entered: None };
         for t in tokens {
             let u = unit_of(&t, &reg, &idx);
             // free tokens: confirmed on the node when the token's market is known, else the indexer's figure
-            let resolved: Option<TokenMarket> = market::resolve(&to_hex(&t), &reg, &idx).ok();
+            let resolved: Option<TokenMarket> = market::resolve_with(&to_hex(&t), &reg, &idx, Some(&open)).ok();
             let (free, verified, utxos) = match &resolved {
                 Some(m) => {
                     let us = data::token_utxos(indexer, node, &c.network, m, &maker)?;

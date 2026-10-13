@@ -92,7 +92,17 @@ fn markets_of(c: &Common, live: &Live) -> Result<Vec<TokenMarket>, String> {
         Some(p) => vec![p.a.cov_id, p.b.cov_id],
         None => vec![live.order.state.token_cov_id()],
     };
-    toks.iter().map(|t| market::resolve(&to_hex(t), &reg, &idx)).collect()
+    // a token without a registry entry: the scale its listed orders use, else this order's own (its base token's)
+    let (own_token, own_scale) = (live.order.state.token_cov_id(), live.order.state.scale());
+    let order_scale = |cov: &[u8; 32]| -> Result<Option<i64>, String> {
+        let listed = match c.indexer.as_deref() {
+            Some(u) => data::order_scale(u, cov)?,
+            None => None,
+        };
+        Ok(listed.or((*cov == own_token).then_some(own_scale)))
+    };
+    let open = market::OpenToken { network: &c.network, order_scale: &order_scale, entered: None };
+    toks.iter().map(|t| market::resolve_with(&to_hex(t), &reg, &idx, Some(&open))).collect()
 }
 
 fn units_of(ms: &[TokenMarket]) -> Units {
@@ -1239,7 +1249,9 @@ pub fn run_send(args: &[String]) -> i32 {
         }
         let indexer = c.need_indexer()?;
         let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(indexer))?;
-        let m = market::resolve(what, &reg, &idx)?;
+        let order_scale = |cov: &[u8; 32]| data::order_scale(indexer, cov);
+        let open = market::OpenToken { network: &c.network, order_scale: &order_scale, entered: None };
+        let m = market::resolve_with(what, &reg, &idx, Some(&open))?;
         let key = key.ok_or("a token goes to a P2PK address or an x-only key (the token state names its owner key)")?;
         let base = parse_token_amount(amount, &m.unit(), "the amount")?;
         let carrier = match p.get("--carrier") {

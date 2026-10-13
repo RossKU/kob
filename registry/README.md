@@ -22,8 +22,11 @@ and is not enforced by the order contracts (an order pins its own covenant id an
   [`docs/spec/token-programs.md`](../docs/spec/token-programs.md). A strict-list entry whose program this build embeds must state
   the profile's family, layout, slots and custody owner (the validator checks it).
 * **`tokens` is the OPEN list.** Every token whose program is on the strict list is tradable and shown by the executor, whether or not it
-  has an entry here (an order pins its own covenant id and template hash; the executor lists it when the hash is on the strict list).
-  An entry adds metadata (ticker, decimals) and standing: `official` (confirmed genuine) or, by default, `unverified`. The
+  has an entry here (an order pins its own covenant id and template hash; the executor lists it when the hash is on the strict list,
+  from the first order placed on it, listed or not). Without an entry nothing states the decimals (the chain records none): clients take
+  them from the scale the token's orders use, and the first order names them (the web app asks for them; `kob place --decimals N`).
+  The web app opens the market of a KCC-20 token no order names yet from the wallet's own node-verified token outputs of it, which show
+  its program and extension commitment. An entry adds metadata (ticker, decimals) and standing: `official` (confirmed genuine) or, by default, `unverified`. The
   standing is registry and API data (`GET /v1/tokens`); the KOB web app shows no verification or officialness. Tokens are identified by covenant id plus template hash: tickers collide (a KRON-launchpad
   "NACHO" is unrelated to the KRC-20 NACHO), so UIs always show the short covenant id next to the ticker.
 * **`capabilities`** on a template label what its authorities can do beyond owner-authorised transfers: `mint-authority`, `public-mint`,

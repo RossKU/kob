@@ -43,6 +43,12 @@ conditional and if-done kinds, on KAS and on a pair) and the golden vectors thos
 `price - tip`, a buy pays `price + tip`. The plan shows the all-in price and the all-in total of the whole amount by the
 covenant's rounding (a sell receives at least the ceiling, a buy pays at most the floor).
 
+**Tokens without a registry entry.** A token of a reviewed program (on mainnet; on a test network any program the build
+embeds) is named by its covenant id once the indexer lists it (an order of it was placed). Its decimals come from the
+scale its orders use; a token without orders has none anywhere (the chain records no decimals), so its first order names
+them: `--decimals N` (0..=9, the scale is 10^N). A covenant id the indexer does not list is refused: the CLI has nothing
+to check its program against (the web app opens such a market from a wallet that holds the token).
+
 **Units.** Every amount carries its unit and nothing is rounded: a value that does not fit is refused with the nearest
 valid ones.
 
