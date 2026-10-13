@@ -113,6 +113,31 @@ pub enum WitnessScheme {
     /// whole covenant group; one witness byte per token input naming its authorising input), then the profile's
     /// `trailing_pushes`, then the redeem script.
     KronColumns,
+    /// KCC-1 entry tags (silverc v1 dispatch): `PushArguments(arguments) || OP_DATA_4 dispatch_tag || redeem`, the redeem
+    /// script moving the tag to the alt stack before its state (`OP_TOALTSTACK`) and selecting the entry after it with
+    /// `OP_FROMALTSTACK (OP_DUP <tag> OP_EQUAL OP_IF OP_DROP <entry> OP_ELSE)... OP_RETURN OP_ENDIF...`. The entries are
+    /// [`Witness::entries`]. Profiling only ([`derive_profile`]): no KOB builder implements it, so no codec family lists it
+    /// and a profile with it is never embedded, listed or traded.
+    Kcc1Tagged,
+}
+
+/// One entry of a [`WitnessScheme::Kcc1Tagged`] program, in dispatch order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaggedEntry {
+    /// The 4-byte dispatch tag, lowercase hex.
+    pub tag: String,
+    /// The KCC-1 `FunctionSignature` whose tag it is (`name(argument dispatch types)`: the witness layout of the entry, its
+    /// arguments pushed in that order before the tag); absent when the tag matches no known signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+}
+
+impl TaggedEntry {
+    /// The entry name (the signature up to its `(`).
+    pub fn name(&self) -> Option<&str> {
+        self.signature.as_deref().and_then(|s| s.split_once('(')).map(|(n, _)| n)
+    }
 }
 
 /// [`WitnessScheme`] plus its parameters.
@@ -124,6 +149,9 @@ pub struct Witness {
     /// an empty push, `OP_0`). A program with several entries reads its entry selector there (KForge: `[""]`, selector 0).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trailing_pushes: Vec<String>,
+    /// `kcc1-tagged` only: the entries, in dispatch order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<TaggedEntry>,
 }
 
 impl Witness {
@@ -427,6 +455,12 @@ impl ProgramProfile {
 
     /// Structural rules that need no bytes: the fields agree with the codec family and with each other.
     pub fn check_shape(&self) -> Result<(), ProfileError> {
+        self.check_shape_with(true)
+    }
+
+    /// [`ProgramProfile::check_shape`]; `builder: false` admits a witness scheme no builder implements (a profile
+    /// [`derive_profile`] reports but that cannot be embedded).
+    fn check_shape_with(&self, builder: bool) -> Result<(), ProfileError> {
         let e = |m: String| Err(perr(&self.name, m));
         let c = self.codec_facts();
         if self.name.is_empty() || !self.name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
@@ -472,8 +506,17 @@ impl ProgramProfile {
         if self.carrier_floor == 0 {
             return e("carrier_floor must be at least 1 sompi".into());
         }
-        if !c.witness.contains(&self.witness.scheme) {
+        if builder && !c.witness.contains(&self.witness.scheme) {
             return e(format!("witness scheme {:?} is not one of the {} builders", self.witness.scheme, self.codec.as_str()));
+        }
+        if (self.witness.scheme == WitnessScheme::Kcc1Tagged) == self.witness.entries.is_empty() {
+            return e("entries are the kcc1-tagged parameter: at least one there, none elsewhere".into());
+        }
+        let mut tags = BTreeSet::new();
+        for en in &self.witness.entries {
+            if en.tag.len() != 8 || !is_hex(&en.tag) || !tags.insert(en.tag.as_str()) {
+                return e(format!("entry tag `{}` must be 8 lowercase hex characters, distinct", en.tag));
+            }
         }
         if self.witness.scheme != WitnessScheme::KronColumns && !self.witness.trailing_pushes.is_empty() {
             return e("trailing_pushes are a kron-columns parameter".into());
@@ -790,6 +833,9 @@ pub struct Derived {
     pub review_tasks: Vec<String>,
     /// An embedded program with the same template hash, if any (nothing to add then).
     pub already_embedded: Option<String>,
+    /// Why the program cannot be added to the table at all (`--write` refuses): its witness scheme has no builder. The profile
+    /// is then a read-only description of the bytes.
+    pub blocked: Option<String>,
 }
 
 /// Derives a profile from a program's bytes: the layout (by detection against the known codec families), the template
@@ -822,19 +868,6 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
                 .into_iter()
                 .find(|f| codec_is_state(*f, &loaded.state))
                 .ok_or_else(|| e(format!("the {}-byte open state is not a state of a known codec family", loaded.state.len())))?;
-            if codec != Family::Kcc20 || !has_draft {
-                return Err(e(format!(
-                    "a {} state with entries {names:?}: KOB builds artifact calls only for the KCC-20 draft transfer / \
-                     transfer_delegator pair; another authorisation scheme is a new witness scheme (code)",
-                    codec.as_str()
-                )));
-            }
-            let extra: Vec<&String> = names.iter().filter(|n| !KCC20_DRAFT_TAGS.iter().any(|(d, _)| d == n)).collect();
-            if !extra.is_empty() {
-                tasks.push(format!(
-                    "entries beyond the transfer pair {extra:?}: review what they let an authority do (registry capabilities)"
-                ));
-            }
             let mut detection = format!(
                 "{} artifact, contract {cname}, open state {} bytes after a {}-byte prefix",
                 match schema {
@@ -844,17 +877,43 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
                 loaded.state.len(),
                 loaded.prefix.len()
             );
+            let witness = if codec == Family::Kcc20 && has_draft {
+                let extra: Vec<&String> = names.iter().filter(|n| !KCC20_DRAFT_TAGS.iter().any(|(d, _)| d == n)).collect();
+                if !extra.is_empty() {
+                    tasks.push(format!(
+                        "entries beyond the transfer pair {extra:?}: review what they let an authority do (registry capabilities)"
+                    ));
+                }
+                Witness { scheme: WitnessScheme::Kcc20Transfer, trailing_pushes: vec![], entries: vec![] }
+            } else {
+                // not the KCC-20 draft pair: the ABI's entries, each tag recomputed from its signature
+                let abi = loaded.artifact.as_ref().expect("artifact");
+                let contract = abi.contracts.values().next().expect("one contract");
+                let mut entries = vec![];
+                for (name, sig, tag, recorded) in
+                    crate::kcc1::contract_dispatch_tags(abi, contract).map_err(|x| e(format!("dispatch tags: {x}")))?
+                {
+                    if tag != recorded {
+                        return Err(e(format!(
+                            "entry {name}: recorded tag {} is not the tag of {sig} ({})",
+                            to_hex(&recorded),
+                            to_hex(&tag)
+                        )));
+                    }
+                    entries.push(TaggedEntry { tag: to_hex(&tag), signature: Some(sig) });
+                }
+                // in the order the dispatcher tests them, when the bytes show it
+                if let Some(order) = tag_dispatch(&loaded.prefix, &loaded.suffix) {
+                    entries.sort_by_key(|en| order.iter().position(|t| to_hex(t) == en.tag).unwrap_or(usize::MAX));
+                }
+                detection.push_str(&format!("; {} state with KCC-1 entry tags {}", codec.as_str(), entry_list(&entries)));
+                tagged_tasks(&entries, &mut tasks);
+                Witness { scheme: WitnessScheme::Kcc1Tagged, trailing_pushes: vec![], entries }
+            };
             if !context.is_empty() {
                 detection.push_str(&format!(", context fields {context:?} moved into the prefix (KCC-1 actor-type handle)"));
             }
-            Cut {
-                kind: SourceKind::SilvercArtifact,
-                codec,
-                loaded,
-                detection,
-                witness: Witness { scheme: WitnessScheme::Kcc20Transfer, trailing_pushes: vec![] },
-                context,
-            }
+            Cut { kind: SourceKind::SilvercArtifact, codec, loaded, detection, witness, context }
         }
         ProgramInput::Redeem(bytes) => {
             let (offset, codec_family) = detect_raw_layout(bytes).ok_or_else(|| {
@@ -867,6 +926,7 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
             let suffix = bytes[offset + state_len..].to_vec();
             let hash = silverscript_abi::template_hash(&prefix, &suffix);
             let mut trailing = vec![];
+            let (mut scheme, mut entries) = (WitnessScheme::KronColumns, vec![]);
             let mut detection =
                 format!("raw redeem script of {} bytes: {} state span at offset {offset}", bytes.len(), codec_family.as_str());
             // `OP_TOALTSTACK` before the state, then `OP_FROMALTSTACK OP_DUP 0 OP_NUMEQUAL OP_IF` after it: the last argument is
@@ -882,6 +942,15 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
                      other branch lets someone do (registry capabilities)"
                         .into(),
                 );
+            } else if let Some(tags) = tag_dispatch(&prefix, &suffix) {
+                scheme = WitnessScheme::Kcc1Tagged;
+                entries = name_tagged_entries(&tags, &bytes[offset..offset + state_len]);
+                detection.push_str(&format!(
+                    "; prefix OP_TOALTSTACK and a KCC-1 entry-tag dispatch on it after the state (silverc v1; an unknown tag ends in \
+                     OP_RETURN): entries {}",
+                    entry_list(&entries)
+                ));
+                tagged_tasks(&entries, &mut tasks);
             } else if !prefix.is_empty() {
                 tasks.push(format!("prefix {}: not a known dispatch pattern; explain it before review", to_hex(&prefix)));
             }
@@ -897,7 +966,7 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
                     artifact: None,
                 },
                 detection,
-                witness: Witness { scheme: WitnessScheme::KronColumns, trailing_pushes: trailing },
+                witness: Witness { scheme, trailing_pushes: trailing, entries },
                 context: vec![],
             }
         }
@@ -955,9 +1024,132 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
         review: Review { status: ProgramReview::PendingReview, basis: "derived by kob registry add-program; not reviewed".into() },
         name,
     };
-    profile.check_shape()?;
+    let blocked = (!c.witness.contains(&profile.witness.scheme)).then(|| {
+        "witness scheme kcc1-tagged has no builder in KOB: the profile describes the bytes only; the program cannot be embedded, \
+         listed or traded (a builder for its entries, the indexer's parser and their review come first)"
+            .to_string()
+    });
+    profile.check_shape_with(blocked.is_none())?;
     let already_embedded = by_hash(&cut.loaded.hash).map(|p| p.name.clone());
-    Ok(Derived { profile, detection: cut.detection, review_tasks: tasks, already_embedded })
+    Ok(Derived { profile, detection: cut.detection, review_tasks: tasks, already_embedded, blocked })
+}
+
+/// The tags of a KCC-1 entry-tag dispatch (silverc v1), in dispatch order: `prefix` is `OP_TOALTSTACK` (the tag, pushed last
+/// before the redeem script, leaves the main stack before the state is pushed) and `suffix` is
+/// `OP_FROMALTSTACK (OP_DUP OP_DATA_4 <tag> OP_EQUAL OP_IF OP_DROP <entry> OP_ELSE)+ OP_RETURN OP_ENDIF+` with nothing after
+/// it (an unknown tag fails). Each entry body is walked opcode by opcode (push data skipped, conditionals nested), so a tag-like
+/// byte run inside a push or a nested branch is never taken for an entry. `None` for any other shape.
+pub fn tag_dispatch(prefix: &[u8], suffix: &[u8]) -> Option<Vec<[u8; 4]>> {
+    const OP_TOALTSTACK: u8 = 0x6b;
+    const OP_FROMALTSTACK: u8 = 0x6c;
+    const OP_DUP: u8 = 0x76;
+    const OP_EQUAL: u8 = 0x87;
+    const OP_IF: u8 = 0x63;
+    const OP_DROP: u8 = 0x75;
+    const OP_ELSE: u8 = 0x67;
+    const OP_ENDIF: u8 = 0x68;
+    const OP_RETURN: u8 = 0x6a;
+    if prefix != [OP_TOALTSTACK] || suffix.first() != Some(&OP_FROMALTSTACK) {
+        return None;
+    }
+    let mut tags = vec![];
+    let mut p = 1;
+    while let Some(head) = suffix.get(p..p + 9) {
+        if head[0] != OP_DUP || head[1] != 0x04 || head[6] != OP_EQUAL || head[7] != OP_IF || head[8] != OP_DROP {
+            break;
+        }
+        tags.push(head[2..6].try_into().expect("4 bytes"));
+        p += 8;
+        // the entry body, to its OP_ELSE at depth 0
+        let mut depth = 0usize;
+        loop {
+            let op = *suffix.get(p)?;
+            p += 1;
+            match op {
+                0x01..=0x4b => p += op as usize,
+                0x4c => p += 1 + *suffix.get(p)? as usize,
+                0x4d => p += 2 + u16::from_le_bytes(suffix.get(p..p + 2)?.try_into().ok()?) as usize,
+                0x4e => p += 4 + u32::from_le_bytes(suffix.get(p..p + 4)?.try_into().ok()?) as usize,
+                0x63..=0x66 => depth += 1,
+                OP_ELSE if depth == 0 => break,
+                OP_ENDIF => depth = depth.checked_sub(1)?,
+                _ => {}
+            }
+        }
+    }
+    let n = tags.len();
+    let tail = suffix.get(p..)?;
+    (n > 0 && tail.len() == 1 + n && tail[0] == OP_RETURN && tail[1..].iter().all(|b| *b == OP_ENDIF)).then_some(tags)
+}
+
+/// Entry signatures `silverc` v1 emits for the published SilverScript KCC20 example (`kcc20.sil`: a
+/// `#[covenant(binding = cov, from, to)] transfer(State[] prevStates, State[] newStates, sig s, byte witness)` and a
+/// `#[covenant.delegate] authorizeDelegate(sig s, byte witness)`); `{S}` is the dispatch type name of the program's state.
+pub const KNOWN_TAGGED_SIGNATURES: [&str; 2] = ["__leader_transfer({S}[],sig,byte)", "__delegate(sig,byte)"];
+
+/// Names the tags of a [`tag_dispatch`] by recomputing the tags of [`KNOWN_TAGGED_SIGNATURES`] over the dispatch type names
+/// the state's pushes allow (`byte[32]` for a 32-byte push, `int` for an 8-byte one, `byte` or `bool` for one byte).
+fn name_tagged_entries(tags: &[[u8; 4]], state: &[u8]) -> Vec<TaggedEntry> {
+    let mut states = vec![String::new()];
+    let mut p = 0;
+    while let Some(&n) = state.get(p) {
+        let n = n as usize;
+        if !(1..=0x4b).contains(&n) {
+            break;
+        }
+        let choices: Vec<String> = match n {
+            1 => vec!["byte".into(), "bool".into()],
+            8 => vec!["int".into()],
+            n => vec![format!("byte[{n}]")],
+        };
+        states = states
+            .iter()
+            .flat_map(|s| choices.iter().map(move |t| if s.is_empty() { t.clone() } else { format!("{s},{t}") }))
+            .collect();
+        p += 1 + n;
+    }
+    let mut known = std::collections::BTreeMap::new();
+    for st in &states {
+        for sig in KNOWN_TAGGED_SIGNATURES {
+            let sig = sig.replace("{S}", &format!("{{{st}}}"));
+            known.insert(crate::kcc1::dispatch_tag(&sig), sig);
+        }
+    }
+    tags.iter().map(|t| TaggedEntry { tag: to_hex(t), signature: known.get(t).cloned() }).collect()
+}
+
+/// `tag name, tag name, ...` (`?` for an unnamed tag).
+fn entry_list(entries: &[TaggedEntry]) -> String {
+    entries.iter().map(|en| format!("{} {}", en.tag, en.name().unwrap_or("?"))).collect::<Vec<_>>().join(", ")
+}
+
+/// Review tasks of a KCC-1 tagged program.
+fn tagged_tasks(entries: &[TaggedEntry], tasks: &mut Vec<String>) {
+    tasks.push(
+        "witness: no KOB builder implements kcc1-tagged (arguments, OP_DATA_4 entry tag, redeem script): the program is profiled \
+         only and stays off the table, the registry and every book until a builder and the indexer's parser exist and are reviewed"
+            .into(),
+    );
+    for en in entries {
+        match &en.signature {
+            Some(sig) => tasks.push(format!(
+                "entry {} (tag {}, {sig}): confirm what it authorises (the owner check of each owner type, amount conservation, \
+                 the minter flag of the outputs) and that its arguments are exactly that layout",
+                en.name().unwrap_or("?"),
+                en.tag
+            )),
+            None => tasks.push(format!(
+                "entry tag {}: no known signature recomputes to it; name it from the program's source or ABI and review what it lets \
+                 its caller do (registry capabilities)",
+                en.tag
+            )),
+        }
+    }
+    tasks.push(
+        "owner types: the state's owner-type byte is the program's own; confirm which values it accepts (an owner type it \
+         refuses, e.g. address presence, rules out the order templates' holder owner)"
+            .into(),
+    );
 }
 
 /// A program cut by [`derive_profile`].

@@ -27,7 +27,7 @@ reads the entry.
 | `owners` | `custody` (owner value of order custody, a covenant id) and `holder` (owner value of wallet holdings and maker deliveries) | must equal the family's order templates (checked) |
 | `slots` | `inputs` / `outputs`: token inputs and outputs one transaction may carry (leader included) | builders, planner (`matcher/family.rs`), keepers, router |
 | `carrier_floor` | Smallest KAS value (sompi) of a token output the program accepts (measured) | builders, order-term checks (`check_new_order`) |
-| `witness` | `scheme` (`kcc20-transfer` or `kron-columns`) and, for `kron-columns`, `trailing_pushes` (constant pushes after the witness column, e.g. an entry selector) | `tx.rs` signature scripts, the indexer's next-state parser |
+| `witness` | `scheme` (`kcc20-transfer` or `kron-columns`) and, for `kron-columns`, `trailing_pushes` (constant pushes after the witness column, e.g. an entry selector); `kcc1-tagged` (with `entries`) only in a derived, non-tradable profile (onboarding, step 1) | `tx.rs` signature scripts, the indexer's next-state parser |
 | `router_intents` | Whether router intents may name the program | `router::intent_program` |
 | `genesis` | `minters` (`genesis-only` or `unknown`) and `companions` (section 3) | `registry::verify_genesis`, `genesis_evidence` (condition C2) |
 | `review` | `status` (`reviewed`, `pending-review`, `test-only`) and its `basis` | equal to the shipped registry's `review_status` (checked) |
@@ -105,8 +105,13 @@ kob registry add-program <ARTIFACT.json | REDEEM.bin | REDEEM.hex | HEX> --name 
 1. **Derive.** `add-program` reads a `silverc` artifact (cut from its state span, leading `gen__*` context fields moved into
    the prefix) or a raw redeem script observed on chain (the state span detected at offsets 0..=8 against the known codec
    families; an `OP_TOALTSTACK` prefix with an `== 0` dispatch after the state is recognised as an entry selector and becomes
-   a trailing `OP_0` push). It prints the profile, the registry strict-list entry (`pending-review`) and the review tasks the
-   bytes cannot settle. What the bytes do not decide gets the safe default: `pending-review`, `router_intents: false`,
+   a trailing `OP_0` push). A program with KCC-1 entry tags (`silverc` v1: the `OP_TOALTSTACK` prefix and, after the state,
+   `OP_FROMALTSTACK (OP_DUP <4-byte tag> OP_EQUAL OP_IF OP_DROP <entry> OP_ELSE)... OP_RETURN OP_ENDIF...`, walked opcode by
+   opcode; from an artifact, its ABI's entries) gets witness `kcc1-tagged` with its entries in dispatch order (tag and, when
+   a known signature recomputes to the tag, the KCC-1 `FunctionSignature`, i.e. its argument layout before the tag). No
+   builder implements `kcc1-tagged`: such a profile describes the bytes only, gets no registry entry, and `--write` refuses
+   it (the table refuses it too), so the program is never tradable. It prints the profile, the registry strict-list entry
+   (`pending-review`) and the review tasks the bytes cannot settle. What the bytes do not decide gets the safe default: `pending-review`, `router_intents: false`,
    `minters: unknown`, `carrier_floor: 1` (to be measured), slots from `--slots` (to be measured).
 2. **Write.** `--write` adds the bytes, appends the profile to `programs.json` (existing entries untouched) and writes the
    conformance stub `crates/kob-tests/tests/program_<name>.rs`: one live test (the embedded bytes match the profile) and one

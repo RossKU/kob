@@ -93,6 +93,7 @@ pub fn run_programs(args: &[&str]) -> i32 {
             kob_protocol::profile::WitnessScheme::Kcc20Transfer => "kcc20-transfer".to_string(),
             kob_protocol::profile::WitnessScheme::KronColumns if p.witness.trailing_pushes.is_empty() => "kron-columns".into(),
             kob_protocol::profile::WitnessScheme::KronColumns => format!("kron-columns+{}", p.witness.trailing_pushes.len()),
+            kob_protocol::profile::WitnessScheme::Kcc1Tagged => format!("kcc1-tagged/{}", p.witness.entries.len()),
         };
         println!(
             "{:<22} {:<24} {:<6} {:<10} {:>6} {:>5} {:>10} {:<14} {}",
@@ -199,12 +200,14 @@ pub fn run_add_program(args: &[&str]) -> i32 {
             return 1;
         }
     };
-    let entry = registry_template(&derived.profile, upstream.as_deref());
+    // a program no builder serves gets no registry entry: it is described, never listed
+    let entry = derived.blocked.is_none().then(|| registry_template(&derived.profile, upstream.as_deref()));
     if json {
         let doc = serde_json::json!({
             "profile": derived.profile,
             "detection": derived.detection,
             "already_embedded": derived.already_embedded,
+            "blocked": derived.blocked,
             "review_tasks": derived.review_tasks,
             "registry_template": entry,
         });
@@ -214,17 +217,33 @@ pub fn run_add_program(args: &[&str]) -> i32 {
         if let Some(n) = &derived.already_embedded {
             println!("already embedded as {n}: nothing to add");
         }
-        println!("\nprofile (crates/kob-protocol/data/programs.json):\n{}", profile_entry_text(&derived.profile));
-        println!(
-            "\nregistry strict-list entry (registry/tokens.json `templates`, after review):\n{}",
-            serde_json::to_string_pretty(&entry).unwrap()
-        );
+        match (&derived.blocked, &entry) {
+            (Some(why), _) => {
+                println!("\nNOT TRADABLE: {why}");
+                println!("\nprofile (a description of the bytes, not a table entry):\n{}", profile_entry_text(&derived.profile));
+            }
+            (None, Some(entry)) => {
+                println!("\nprofile (crates/kob-protocol/data/programs.json):\n{}", profile_entry_text(&derived.profile));
+                println!(
+                    "\nregistry strict-list entry (registry/tokens.json `templates`, after review):\n{}",
+                    serde_json::to_string_pretty(entry).unwrap()
+                );
+            }
+            (None, None) => unreachable!("an unblocked program has a registry entry"),
+        }
         println!("\nreview tasks:");
         for t in &derived.review_tasks {
             println!("  - {t}");
         }
     }
     if derived.already_embedded.is_some() {
+        return 0;
+    }
+    if let Some(why) = &derived.blocked {
+        if write {
+            eprintln!("--write: refused, {why}");
+            return 1;
+        }
         return 0;
     }
     if !write {
@@ -269,6 +288,8 @@ fn profile_entry_text(p: &ProgramProfile) -> String {
 }
 
 fn write_program(root: &Path, p: &ProgramProfile, bytes: &[u8]) -> Result<Vec<String>, String> {
+    // the table refuses it too (`check_shape`); refused here before anything is written
+    p.check_shape().map_err(|e| e.to_string())?;
     let mut written = vec![];
     // 1. the bytes
     let src = root.join(&p.source.path);
@@ -390,5 +411,28 @@ mod tests {
         // a second write of the same program is refused
         assert!(write_program(&root, &d.profile, &bytes).unwrap_err().contains("already"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A program with KCC-1 entry tags (the redeem script of a mainnet token, `kob-protocol/tests/fixtures`) is profiled but
+    /// never written: no builder implements its witness scheme.
+    #[test]
+    fn add_program_profiles_a_tagged_program_but_never_writes_it() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let hex = std::fs::read_to_string(repo.join("crates/kob-protocol/tests/fixtures/kcc20-silverscript-e108d416.in1.redeem.hex"))
+            .unwrap();
+        let (input, bytes) = read_input(hex.trim()).unwrap();
+        let d = derive_profile(&input, &DeriveOptions { name: Some("SilverKcc20".into()), ..Default::default() }).unwrap();
+        assert!(d.blocked.as_deref().is_some_and(|b| b.contains("no builder")), "{:?}", d.blocked);
+        let root = std::env::temp_dir().join(format!("kob-add-program-tagged-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("crates/kob-protocol/data")).unwrap();
+        let table = std::fs::read_to_string(repo.join("crates/kob-protocol/data/programs.json")).unwrap();
+        std::fs::write(root.join("crates/kob-protocol/data/programs.json"), &table).unwrap();
+        assert!(write_program(&root, &d.profile, &bytes).unwrap_err().contains("not one of the kron builders"));
+        assert!(!root.join(&d.profile.source.path).exists(), "nothing written");
+        assert_eq!(std::fs::read_to_string(root.join("crates/kob-protocol/data/programs.json")).unwrap(), table);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(run_add_program(&[hex.trim(), "--write", "--repo", root.to_str().unwrap()]), 1);
+        assert_eq!(run_add_program(&[hex.trim(), "--json"]), 0);
     }
 }
