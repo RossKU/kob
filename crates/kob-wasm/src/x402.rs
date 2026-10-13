@@ -1593,9 +1593,13 @@ fn worst_of(p: &kob_x402::client::intent::PreparedIntent) -> u64 {
     }
 }
 
-fn intent_out(p: kob_x402::client::intent::IntentPayment, worst: u64) -> R<String> {
+/// The signed creation (`paymentPayload`), the payer's worst case in units of the pay asset (`payerSpent`), the most KAS the
+/// creation takes from the payer's coins (`kasSpent`: the intent's KAS and the creation fee, plus a token intent's lock carrier)
+/// and the intent handle (`intent`).
+fn intent_out(p: kob_x402::client::intent::IntentPayment, worst: u64, worst_kas: u64) -> R<String> {
     let handle = IntentHandle { actor: p.actor.clone(), state: p.state.clone(), intent: p.intent.clone(), lock: p.lock.clone() };
-    let base: Value = serde_json::from_str(&pay_out(p.payload, Some(worst), vec![])?).map_err(|e| e.to_string())?;
+    let base: Value =
+        serde_json::from_str(&pay_out_with(p.payload, Some(worst), Some(worst_kas), vec![])?).map_err(|e| e.to_string())?;
     let Value::Object(mut o) = base else { return Err(perr("unexpected pay output")) };
     o.insert("intent".into(), serde_json::to_value(&handle).map_err(|e| e.to_string())?);
     out(&Value::Object(o))
@@ -1624,7 +1628,8 @@ pub fn finish_intent(prepared: &str, sigs: &str) -> R<String> {
     let p: PreparedIntentJson = parse("prepared", prepared)?;
     let prepared = p.into_prepared()?;
     let worst = worst_of(&prepared);
-    intent_out(prepared.complete(&signatures(sigs)?).map_err(xerr)?, worst)
+    let worst_kas = prepared.worst_kas;
+    intent_out(prepared.complete(&signatures(sigs)?).map_err(xerr)?, worst, worst_kas)
 }
 
 /// Builds, signs locally and assembles an intent payment.
@@ -1643,9 +1648,10 @@ pub fn pay_intent(json: &str) -> R<String> {
     )
     .map_err(xerr)?;
     let worst = worst_of(&prepared);
+    let worst_kas = prepared.worst_kas;
     let sigs = prepared.sign_with(&secrets).map_err(xerr)?;
     let _ = c.keys;
-    intent_out(prepared.complete(&sigs).map_err(xerr)?, worst)
+    intent_out(prepared.complete(&sigs).map_err(xerr)?, worst, worst_kas)
 }
 
 #[derive(Deserialize)]

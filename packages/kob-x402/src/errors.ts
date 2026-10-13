@@ -1,7 +1,7 @@
 // Errors of the SDK. `code` is a stable machine-readable label; `diagnostic` / `reason` / `retryable` / `details`
 // carry what a facilitator reported in `extensions.kaspa`.
 
-import type { IntentPayResult } from './wasm.ts';
+import type { IntentHandle, IntentPayResult } from './wasm.ts';
 import type { AttemptSummary } from './retry.ts';
 
 export type ErrorCode =
@@ -35,6 +35,7 @@ export interface ErrorInit {
   status?: number;
   payment?: IntentPayResult;
   attempts?: AttemptSummary[];
+  intent?: IntentHandle;
 }
 
 export class KobX402Error extends Error {
@@ -59,6 +60,12 @@ export class KobX402Error extends Error {
    * payment's anchor with it, so at most one of them can ever be accepted.
    */
   attempts: AttemptSummary[] | undefined;
+  /**
+   * Set by `KobX402Client` when an intent payment did not end in a verified settlement: the intent its signed creation makes
+   * (also stored as `ArtifactRecord.intent`). The facilitator may have broadcast the creation: cancel the intent with it once
+   * its deadline passed (`cancelIntent`), or let the facilitator (or anyone, `expireIntent`) expire it.
+   */
+  intent: IntentHandle | undefined;
 
   constructor(code: ErrorCode, message: string, init: ErrorInit = {}) {
     super(message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -73,5 +80,6 @@ export class KobX402Error extends Error {
     this.status = init.status;
     this.payment = init.payment;
     this.attempts = init.attempts;
+    this.intent = init.intent;
   }
 }

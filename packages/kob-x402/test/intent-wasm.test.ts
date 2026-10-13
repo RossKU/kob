@@ -12,6 +12,12 @@ import { invoiceId, newInvoice } from '../src/invoice.ts';
 import { KobX402Error } from '../src/errors.ts';
 import type { PaymentRequirements } from '../src/types.ts';
 import { loadGolden, realWasm, skipUnlessWasm } from './helpers/real-wasm.ts';
+import type { AddressInfo } from 'node:net';
+import { KobX402Client } from '../src/client.ts';
+import { MemoryArtifactStore } from '../src/artifact-store.ts';
+import { createNodeServer, createPaywall } from '../src/server.ts';
+import type { FacilitatorRequest } from '../src/types.ts';
+import { failure, startStubFacilitator } from './helpers/stub-facilitator.ts';
 
 const NOW_MS = 1_800_000_000_000;
 const opts = { skip: skipUnlessWasm };
@@ -119,4 +125,76 @@ test('the TS invoice id is the Rust invoice id; checkInvoice validates a fetched
   assert.equal(c.kaspaUri, `${kas.payTo}?amount=${Number(kas.amount) / 1e8}`);
   assert.throws(() => wasm.checkInvoice!(inv, 'ab'.repeat(32), NOW_MS));
   assert.throws(() => wasm.checkInvoice!(inv, id, NOW_MS + 600_000), (e: unknown) => e instanceof KobX402Error && e.diagnostic === 'invoice_expired');
+});
+
+test('KobX402Client pays an intent offer of a paywall through the Rust builder; the Rust verifier accepts the creation', opts, async () => {
+  const { wasm, native, payTo, tokenUtxo, tokens } = fixture();
+  const spec = { kind: 'swap' as const, mode: 'intent' as const, receive: 'kas' as const, amount: '200000000', payAssets: [{ asset: TOKEN, templateHash: P8, extensionCommitment: EXT }] };
+  const verified: { ok: boolean; diagnostic?: string }[] = [];
+  const facilitator = await startStubFacilitator({
+    settle: (_n, body: FacilitatorRequest) => {
+      const r = wasm.preflight({ requirements: body.paymentRequirements, paymentPayload: body.paymentPayload, requestHash: body.requestHash, nowMs: NOW_MS + 500, tokens });
+      verified.push(r);
+      if (!r.ok) return { body: failure(r.diagnostic ?? 'internal', r.retryable === true, r.message ?? '') };
+      // the facilitator broadcasts the creation and settles with its execution of the intent
+      const finality = (body.paymentRequirements.extra as { finality?: string }).finality;
+      return {
+        body: {
+          success: true,
+          transaction: 'e1'.repeat(32),
+          network: body.paymentRequirements.network,
+          amount: body.paymentRequirements.amount,
+          extensions: { kaspa: { finality, paymentOutputIndex: 0 }, kob: { intent: { creation: r.transactionId, executions: 1 } } },
+        },
+      };
+    },
+  });
+  const paywall = createPaywall({ wasm, network: 'kaspa:testnet-10', payTo, offers: [spec], facilitator: { url: facilitator.url }, handler: () => new Response('the report') });
+  const server = createNodeServer(paywall);
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const client = new KobX402Client({
+    wasm,
+    network: 'kaspa:testnet-10',
+    payerAddress: 'kaspatest:qpayer',
+    privateKeys: [native.secretKey],
+    context: { load: async () => ({ utxos: native.utxos, tokenUtxos: [tokenUtxo], virtualDaaScore: '1000000' }) },
+    store: new MemoryArtifactStore(),
+    now: () => NOW_MS,
+    tokens,
+    capabilities: { tokens: { [TOKEN]: '9000' }, maxAmount: { KAS: '1000000000000' } },
+    maxPay: { [TOKEN]: '3000', KAS: '1000000000' },
+    intentTerms: () => ({ maxSell: '3000' }),
+  });
+  try {
+    const { response, payment } = await client.paidFetch(`${base}/report`);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(await response.text(), 'the report');
+    assert.deepEqual(verified.map((v) => v.ok), [true], 'the Rust verifier accepted the creation');
+    assert.equal(payment?.kind, 'intent');
+    assert.equal(payment?.settledTransaction, 'e1'.repeat(32));
+    assert.equal(payment?.intent?.actor, 'TokenToKas_sell');
+    // the payer can cancel the intent it created from the stored handle
+    const c = cancelIntent(wasm, { intent: payment!.intent!, privateKeys: [native.secretKey] }) as { transactionId: string };
+    assert.match(c.transactionId, /^[0-9a-f]{64}$/);
+    // the worst case above the bound: refused before anything is stored or sent
+    const tight = new KobX402Client({
+      wasm,
+      network: 'kaspa:testnet-10',
+      payerAddress: 'kaspatest:qpayer',
+      privateKeys: [native.secretKey],
+      context: { load: async () => ({ utxos: native.utxos, tokenUtxos: [tokenUtxo], virtualDaaScore: '1000000' }) },
+      now: () => NOW_MS,
+      tokens,
+      capabilities: { tokens: { [TOKEN]: '9000' }, maxAmount: { KAS: '1000000000000' } },
+      maxPay: { [TOKEN]: '2999', KAS: '1000000000' },
+      intentTerms: () => ({ maxSell: '3000' }),
+    });
+    await assert.rejects(tight.fetch(`${base}/report`), (e: unknown) => e instanceof KobX402Error && e.code === 'preflight_failed');
+    assert.equal(facilitator.settleCalls().length, 1);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+    await facilitator.close();
+  }
 });

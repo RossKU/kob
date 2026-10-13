@@ -274,7 +274,12 @@ export interface IntentHandle {
 }
 
 export interface IntentPayResult extends PayResult {
-  /** The payer's worst case in units of the pay asset (token units sold at most, or the intent's KAS). */
+  /**
+   * The payer's worst case in units of the pay asset (token units sold at most, or the intent's KAS and the creation fee):
+   * the intent program lets the executor keep what the orders release beyond the merchant's amount, so show this as the cost.
+   * `kasSpent` is the most KAS the creation takes from the payer's coins (the intent's KAS, the creation fee and a token
+   * intent's lock carrier); the unused part comes back at execution, cancel or expiry.
+   */
   payerSpent: string;
   intent: IntentHandle;
 }

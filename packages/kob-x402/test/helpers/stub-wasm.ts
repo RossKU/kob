@@ -2,8 +2,8 @@
 // whose transaction id is a deterministic hash, so the SDK's orchestration can be tested without any Rust.
 
 import { sha256Hex } from '../../src/canonical.ts';
-import { BINDING_SWAP, AUTH_VERSION_PAYLOAD, AUTH_VERSION_SIGNED, PAYLOAD_EXACT_TX } from '../../src/types.ts';
-import type { InputSignature, KobWasm, PayRequest, PayResult, PreflightResult } from '../../src/wasm.ts';
+import { BINDING_INTENT, BINDING_SWAP, AUTH_VERSION_PAYLOAD, AUTH_VERSION_SIGNED, PAYLOAD_EXACT_TX } from '../../src/types.ts';
+import type { InputSignature, IntentPayRequest, IntentPayResult, KobWasm, PayRequest, PayResult, PreflightResult } from '../../src/wasm.ts';
 import type { PaymentPayload } from '../../src/types.ts';
 
 type SignReq = { inputIndex: number; pubkey: string; sighashType: number; sighash: string; redeemScript: string | null };
@@ -102,6 +102,22 @@ export function stubWasm(): StubWasm {
     payNative: (req) => run('payNative', 'native', req),
     payKcc20: (req) => run('payKcc20', 'kcc20', req),
     paySwap: (req) => run('paySwap', 'swap', req),
+    payIntent(req) {
+      calls.push({ method: 'payIntent', arg: req });
+      if (wasm.failWith) throw new Error(wasm.failWith);
+      if (!req.privateKeys?.length) throw new Error('payIntent signs with local keys');
+      return intent(req);
+    },
+    prepareIntent(req) {
+      calls.push({ method: 'prepareIntent', arg: req });
+      if (!req.payerPublicKey) throw new Error('wallet flow needs payerPublicKey');
+      return { built: { sign: [{ inputIndex: 0, pubkey: req.payerPublicKey, sighashType: 1, sighash: sha256Hex('intent-sighash' + req.paymentId), redeemScript: null }], _req: req }, actor: 'stub', worstKas: '0', worstTokens: '0' };
+    },
+    finishIntent(prepared, sigs) {
+      calls.push({ method: 'finishIntent', arg: sigs });
+      if (sigs.length !== prepared.built.sign.length) throw new Error('signature count differs from the sign requests');
+      return intent((prepared.built as unknown as { _req: IntentPayRequest })._req);
+    },
     preflight(req) {
       calls.push({ method: 'preflight', arg: req });
       return wasm.preflightResult;
@@ -128,6 +144,19 @@ export function stubWasm(): StubWasm {
       return { transaction: JSON.stringify({ id, inputs: [prepared.spent] }), transactionId: id, spent: prepared.spent };
     },
   };
+
+  /** A canned intent creation: the worst case is the terms' (`maxSell`, or `maxPay` + `maxExtra` + the fee for KAS). */
+  function intent(req: IntentPayRequest): IntentPayResult {
+    const base = canned('swap', { requirements: req.requirements, requestHash: req.requestHash, payerAddress: 'kaspatest:stub', utxos: req.utxos, paymentId: req.paymentId ?? '', nowMs: req.nowMs, payAsset: req.payAsset, ...(req.tokenUtxos ? { tokenUtxos: req.tokenUtxos } : {}) });
+    const expiresAtMs = req.nowMs + (req.options.expiresInMs ?? 300_000);
+    base.expiresAtMs = expiresAtMs;
+    base.paymentPayload.payload.authorization.expiresAt = new Date(expiresAtMs).toISOString();
+    base.paymentPayload.payload.route = { binding: BINDING_INTENT, payAsset: req.payAsset, orders: [], intent: { actor: req.options.actor ?? 'TokenToKas_sell', payer: '22'.repeat(32), ...(req.options.maxSell ? { maxSell: req.options.maxSell, lockOutputIndex: 1 } : { maxPay: req.options.maxPay ?? '0', maxExtra: req.options.maxExtra ?? '0' }) } };
+    const worst = req.payAsset === 'KAS' ? (BigInt(req.options.maxPay ?? '0') + BigInt(req.options.maxExtra ?? '100000000') + BigInt(base.feeSompi)).toString() : (req.options.maxSell ?? '0');
+    const r: IntentPayResult = { ...base, payerSpent: worst, kasSpent: req.payAsset === 'KAS' ? worst : (100_000_000n + BigInt(base.feeSompi)).toString(), intent: { actor: req.options.actor ?? 'TokenToKas_sell', state: { stub: true }, intent: { transactionId: base.transactionId, index: 0 } } };
+    wasm.tamper?.(r);
+    return r;
+  }
 
   function unsigned(method: string, req: PayRequest): { built: { sign: SignReq[]; _req: PayRequest }; template: unknown } {
     calls.push({ method, arg: req });

@@ -7,7 +7,7 @@ import { decodePaymentResponse, encodePaymentSignature } from '../src/headers.ts
 import { httpRequestHash, requirementsHash } from '../src/canonical.ts';
 import { PAYMENT_IDENTIFIER_KEY, PAYLOAD_EXACT_TX, X402_VERSION } from '../src/types.ts';
 import type { FacilitatorRequest, PaymentRequired, SettlementResponse } from '../src/types.ts';
-import { settledRequestTransaction } from '../src/server.ts';
+import { settledRequestTransaction } from '../src/client.ts';
 import { startRig, TOKEN_A } from './helpers/env.ts';
 import { defaultSettlement } from './helpers/stub-facilitator.ts';
 

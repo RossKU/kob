@@ -135,12 +135,15 @@ export function classifyOffer(entry: unknown, index = 0): ClassifiedOffer | null
   let kind: OfferKind = receives === 'kas' ? 'native' : 'kcc20';
   if (extra.route !== undefined) {
     const r = extra.route as Partial<RouteExtra>;
-    if (!isRecord(r) || r.binding !== BINDING_SWAP || !Array.isArray(r.payAssets) || r.payAssets.length === 0) return null;
+    if (!isRecord(r) || !Array.isArray(r.payAssets) || r.payAssets.length === 0) return null;
+    if (r.binding === BINDING_SWAP) kind = 'swap';
+    // intent mode: only for the intent program this SDK recognizes (x402-swap-and-pay.md 17.1), and only as a critical route
+    else if (r.binding === BINDING_INTENT && r.router === ROUTER_ARTIFACT_ID && r.critical === true) kind = 'intent';
+    else return null;
     for (const p of r.payAssets) {
       if (!isRecord(p) || typeof p.asset !== 'string' || !(HEX64.test(p.asset) || p.asset === ASSET_KAS)) return null;
       payAssets.push(p.asset);
     }
-    kind = 'swap';
   }
   const out: ClassifiedOffer = {
     requirements: entry as unknown as PaymentRequirements,
@@ -167,8 +170,13 @@ export interface PayerCapabilities {
   tokens?: Record<string, string | bigint>;
   /** Accept `custody: "issuer-controlled"` tokens as the merchant asset (default false). */
   allowIssuerControlled?: boolean;
-  /** Allow swap-and-pay (default true unless `kasOnly`). */
+  /** Allow swap-and-pay (default true unless `kasOnly`); `false` also excludes its intent mode. */
   allowSwap?: boolean;
+  /**
+   * Allow the intent mode of swap-and-pay (`kob-intent-v1`: the payer signs a router intent once and the facilitator
+   * executes it). Default true; the client still pays an intent only with `intentTerms` and a `maxPay` bound.
+   */
+  allowIntent?: boolean;
   /** Per merchant asset ceiling on the offered amount (`KAS` in sompi, tokens in base units); an offer above it is skipped. */
   maxAmount?: Record<string, string | bigint>;
 }
@@ -190,15 +198,18 @@ function held(caps: PayerCapabilities, asset: string): bigint {
 
 /** The pay assets of a swap entry this payer can pay with, in the entry's order: `KAS`, and the tokens it holds (unless KAS-only). */
 export function payableAssets(o: ClassifiedOffer, caps: PayerCapabilities): string[] {
-  if (o.kind !== 'swap') return [];
+  if (o.kind !== 'swap' && o.kind !== 'intent') return [];
   return o.payAssets.filter((a) => a === ASSET_KAS || (!caps.kasOnly && held(caps, a) > 0n));
 }
 
-/** Preference class: standard-native, then kcc20, then swap routes that pay KAS, then swap routes that pay a token. */
+/**
+ * Preference class: standard-native, then kcc20, then swap routes that pay KAS, then swap routes that pay a token, then
+ * the intent mode (which locks the payer's worst case until it is executed) in the same order.
+ */
 function rank(o: ClassifiedOffer): number {
   if (o.kind === 'native') return 0;
   if (o.kind === 'kcc20') return 1;
-  return o.receives === 'kas' ? 2 : 3;
+  return (o.kind === 'intent' ? 2 : 0) + (o.receives === 'kas' ? 2 : 3);
 }
 
 /** Every entry the payer can pay, best first (stable within a class: the server's order). */
@@ -217,6 +228,7 @@ export function rankOffers(pr: PaymentRequired, caps: PayerCapabilities): Select
       out.push(o);
     } else {
       if (caps.allowSwap === false) return;
+      if (o.kind === 'intent' && caps.allowIntent === false) return;
       // KAS is always payable; a token only when the payer holds it (and is not KAS-only)
       const payAsset = payableAssets(o, caps)[0];
       if (payAsset === undefined) return;

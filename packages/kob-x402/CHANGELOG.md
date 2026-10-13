@@ -4,6 +4,27 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### Payer: intent offers (`kob-intent-v1`) are paid by `KobX402Client`
+
+- `KobX402Client` pays an intent offer of a paywall: it signs ONE creation of a router intent on the payer's own terms
+  (`intentTerms(request)`: `maxSell`, or `maxPay` / `maxExtra`, optionally the actor, `lockAmount`, `keeperValue`,
+  `expiresInMs`; the client's fee rate), locally or through the wallet (`prepareIntent` / `finishIntent`). Without
+  `intentTerms` (or when it answers `undefined`) and without a `maxPay` bound for the pay asset an intent offer is not paid.
+  The worst case (`IntentPayResult.payerSpent`) must be within the bound (`preflight_failed` / `overpayment` otherwise,
+  nothing stored or sent) and is what `approve` is shown (`cost.payerSpent`). Intent offers rank after the payer-signed
+  routes; `capabilities.allowIntent: false` (or `allowSwap: false`) skips them. Only the router the SDK recognizes
+  (`ROUTER_ARTIFACT_ID`, a critical route) is classified (`classifyOffer` kind `intent`; `OfferKind` gains `intent`).
+- The PAYMENT-RESPONSE of an intent payment must name the signed creation in `extensions.kob.intent.creation` (its
+  `transaction` is the execution): `verifySettlement(..., intent)`, `verifyRecordSettlement`. `settledRequestTransaction`
+  moved to `client.ts` (still exported from the package).
+- A creation is re-sent while its outcome is unknown or it may still execute and never re-signed: a `rebuild` diagnostic
+  ends the retry; the retry deadline is also capped by the intent's expiry. The intent handle is stored with the signed
+  creation (`ArtifactRecord.intent`) and set on the error (`KobX402Error.intent`): cancel or expire the intent with it.
+- `PaymentReceipt.settledTransaction` (the transaction that paid the merchant: an intent's execution) and
+  `PaymentReceipt.intent`.
+- `x402PayIntent` / `x402FinishIntent` (kob-wasm) report `kasSpent`: the most KAS the creation takes from the payer's coins
+  (the intent's KAS, the creation fee and a token intent's lock carrier).
+
 ### Swap-and-pay: the payer's bound is required everywhere
 
 - **Breaking (wasm and Rust API):** a swap is never built without the payer's bound on what it costs, as `KobX402Client`

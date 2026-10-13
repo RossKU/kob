@@ -32,7 +32,7 @@ import { KobX402Error } from './errors.ts';
 import { FacilitatorClient } from './facilitator-client.ts';
 import type { Facilitator, FacilitatorOptions } from './facilitator-client.ts';
 import { decodePaymentSignature, encodePaymentRequired, encodePaymentResponse } from './headers.ts';
-import { kcc20Custody } from './client.ts';
+import { kcc20Custody, settledRequestTransaction } from './client.ts';
 import { isIntentOffer } from './intent.ts';
 import { buildOffers, isRecord } from './offers.ts';
 import type { KobWasm } from './wasm.ts';
@@ -450,18 +450,6 @@ function paidContext(
   };
   if (settlement.payer) c.payer = settlement.payer;
   return c;
-}
-
-/**
- * The id of the transaction the request carried, as the settlement reports it: `transaction` for a direct payment, the
- * intent's creation (`extensions.kob.intent.creation`) for an intent payment, whose `transaction` is the execution.
- * Undefined when the settlement does not name it as a 32-byte hex id.
- */
-export function settledRequestTransaction(s: SettlementResponse, intent: boolean): string | undefined {
-  const kob = s.extensions?.kob;
-  const creation = isRecord(kob) && isRecord(kob.intent) ? kob.intent.creation : undefined;
-  const id = intent ? creation : s.transaction;
-  return typeof id === 'string' && HEX64.test(lc(id)) ? lc(id) : undefined;
 }
 
 /** `mempool` < `accepted` < `confirmed`; anything else (missing) ranks lowest. */

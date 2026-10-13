@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { KobX402Error } from './errors.ts';
 import type { OfferKind, Outpoint, PaymentPayload } from './types.ts';
+import type { IntentHandle } from './wasm.ts';
 
 export type ArtifactStatus =
   /** Signed and stored, not yet sent. */
@@ -51,6 +52,11 @@ export interface ArtifactRecord {
   replaces?: string;
   /** `txid:index` of the payment's anchor: an input of the first attempt the payer owns, spent by every attempt. */
   anchor?: string;
+  /**
+   * Intent payments (`kind: 'intent'`): the intent the signed creation makes, the handle `cancelIntent` / `expireIntent` take.
+   * Stored before the creation is disclosed: the facilitator may broadcast it even when no answer comes back.
+   */
+  intent?: IntentHandle;
 }
 
 export interface ArtifactStore {

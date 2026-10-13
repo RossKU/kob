@@ -26,6 +26,13 @@
 //  * the signed artifact is durably recorded BEFORE it is disclosed, so a crash cannot lose a payment the
 //    merchant may already hold; `revoke(paymentId)` invalidates it by spending one of its inputs back to the payer;
 //  * the PAYMENT-RESPONSE must show success, the transaction id the client itself signed, and the accepted amount.
+//
+// Intent offers (`kob-intent-v1`, x402-swap-and-pay.md 17): the payer signs ONE transaction, the creation of a router intent
+// whose terms (`intentTerms`, held to the `maxPay` bound of the pay asset) are its worst case; the facilitator broadcasts it and
+// executes the intent. The settlement names the execution in `transaction` and the creation in `extensions.kob.intent.creation`,
+// which must be the transaction the client signed. A creation is only ever RE-SENT (an unknown outcome, `settlement_pending`,
+// `intent_not_executable`, ...), never re-signed: a dead intent is the payer's to cancel (`cancelIntent` with the stored
+// `ArtifactRecord.intent` handle) or the facilitator's to expire (docs/spec/x402-retry.md section 5).
 
 import { randomBytes } from 'node:crypto';
 import { canonicalJson, httpRequestHash, normalizeBody, normalizeMethod, normalizeUrl, requirementsHash } from './canonical.ts';
@@ -36,11 +43,25 @@ import type { PayerCapabilities, SelectedOffer } from './offers.ts';
 import { MemoryArtifactStore } from './artifact-store.ts';
 import { assertSecureUrl } from './url-policy.ts';
 import type { ArtifactRecord, ArtifactStore } from './artifact-store.ts';
-import type { InputSignature, KobWasm, PayRequest, PayResult, SignRequest, SwapQuote, TokenSpec, TokenUtxoJson } from './wasm.ts';
+import type {
+  InputSignature,
+  IntentHandle,
+  IntentOptions,
+  IntentPayRequest,
+  IntentPayResult,
+  KobWasm,
+  PayRequest,
+  PayResult,
+  SignRequest,
+  SwapQuote,
+  TokenSpec,
+  TokenUtxoJson,
+} from './wasm.ts';
 import { resolveFeeRate, withFeeFloorAsync, type FeeRateSource } from './fee.ts';
 import { backoffMs, classifyFailure, classifyStatus, outpointKey, retryDeadline, retryPolicy } from './retry.ts';
 import type { AttemptSummary, RetryOptions, RetryPolicy, RetryStep } from './retry.ts';
 import {
+  BINDING_INTENT,
   HEADER_PAYMENT_REQUIRED,
   HEADER_PAYMENT_RESPONSE,
   HEADER_PAYMENT_SIGNATURE,
@@ -57,6 +78,7 @@ import type {
   PaymentPayload,
   PaymentRequired,
   PaymentRequirements,
+  Resource,
   SettlementResponse,
 } from './types.ts';
 
@@ -73,7 +95,7 @@ export interface ChainContextQuery {
   asset: string;
   /** Amount the merchant is offered (sompi or token base units). */
   amount: string;
-  /** Swap-and-pay: the asset the payer pays with (a covenant id, or `KAS`). */
+  /** Swap-and-pay and its intent mode: the asset the payer pays with (a covenant id, or `KAS`). */
   payAsset?: string;
 }
 
@@ -159,6 +181,16 @@ export interface KobX402ClientOptions {
    */
   maxCarrierSompi?: string;
   /**
+   * Intent offers (`kob-intent-v1`): the terms of the router intent the payer signs, i.e. its worst case (`maxSell` units of a
+   * token pay asset, or `maxPay` + `maxExtra` sompi of KAS at the asks' quotes), and optionally the actor, `lockAmount`,
+   * `keeperValue` and `expiresInMs` (default 5 min, at most the offer's `maxTimeoutSeconds`, and for an invoice never past its
+   * expiry). The intent program lets the executor keep what the orders release beyond the merchant's amount, so the worst case
+   * is what the payer may really pay: give terms close to the book's price. Without this hook (or when it returns `undefined`)
+   * intent offers are not paid; the worst case must also be within the `maxPay` bound of the pay asset (checked after the
+   * build, and by the preflight), and the fee rate is the client's (`feeRate`).
+   */
+  intentTerms?: (request: IntentTermsRequest) => IntentPayTerms | undefined | Promise<IntentPayTerms | undefined>;
+  /**
    * Spend policy hook (user / agent policy). A payment is authorised without asking only when its merchant asset has
    * an explicit `capabilities.maxAmount` ceiling. Anything else is refused unless this hook returns true; it is asked
    * after the payment is built and preflighted, with what it costs (`cost`), and before anything is stored or sent. A
@@ -192,6 +224,21 @@ export interface KobX402ClientOptions {
   retry?: RetryOptions | false;
 }
 
+/** What `intentTerms` is asked about. */
+export interface IntentTermsRequest {
+  offer: SelectedOffer;
+  /** The asset the intent pays with (`KAS` or a token covenant id). */
+  payAsset: string;
+  /** The payer's `maxPay` bound for `payAsset` (the worst case may not exceed it). */
+  bound: string;
+  /** The paid resource (`METHOD url`), or the invoice's pay URL. */
+  url: string;
+  method: string;
+}
+
+/** The terms of an intent the payer signs (`IntentOptions` without the fee rate, which is the client's). */
+export type IntentPayTerms = Omit<IntentOptions, 'feeRate'>;
+
 export interface PaymentApproval {
   offer: SelectedOffer;
   url: string;
@@ -214,7 +261,10 @@ export interface PaymentCost {
   /** What the merchant receives (`KAS` in sompi, a token in base units). */
   asset: string;
   amount: string;
-  /** Swap-and-pay: the asset the payer pays with and the units of it the payer gives up (sompi including the fee for KAS). */
+  /**
+   * Swap-and-pay: the asset the payer pays with and the units of it the payer gives up (sompi including the fee for KAS). An
+   * intent: its worst case (the units it may sell, or the KAS it locks plus the creation fee), which the executor may take.
+   */
   payAsset?: string;
   payerSpent?: string;
   /** The network fee of the payment transaction, in sompi. */
@@ -230,7 +280,12 @@ export interface PaymentCost {
 
 export interface PaymentReceipt {
   paymentId: string;
+  /** The transaction the client signed (an intent payment: the intent's creation). */
   transactionId: string;
+  /** The transaction that paid the merchant, as the settlement names it (an intent payment: the facilitator's execution). */
+  settledTransaction: string;
+  /** Intent payments: the intent the creation made (`cancelIntent` / `expireIntent` take it). */
+  intent?: IntentHandle;
   amount: string;
   asset: string;
   network: string;
@@ -316,42 +371,88 @@ export class KobX402Client {
 
       // Each candidate is built (and preflighted) first: what it costs is known only then. One that no explicit ceiling
       // covers is paid only when `approve` says yes to that cost; a refused build is discarded (never stored, never sent).
-      let chosen: { offer: SelectedOffer; reasons: PaymentApproval['reasons']; paymentId: string; reqHash: string; built: PayResult; anchor: string | undefined } | undefined;
-      let refused = ranked.length - candidates.length;
-      for (const { offer, reasons } of candidates) {
-        if (reasons.length > 0 && !this.#o.approve) {
-          refused++;
-          continue;
-        }
-        const paymentId = idOverride ?? (this.#o.newPaymentId ?? newId)();
-        if (!/^[A-Za-z0-9_-]{16,128}$/.test(paymentId)) throw new KobX402Error('bad_request', 'payment id must match ^[A-Za-z0-9_-]{16,128}$');
-        const reqHash = hashOverride ? lc(hashOverride) : httpRequestHash(method, expectedHref, normalizeBody(bodyBytes), requirementsHash(offer.requirements));
-        if (!HEX64.test(reqHash)) throw new KobX402Error('bad_request', 'requestHash must be 32-byte hex');
-        const extensions = paymentIdentifierExtensions(pr, paymentId);
-        const { built, payerOwned } = await this.#buildPayment(offer, reqHash, paymentId, extensions, pr);
-        if (!(await this.#authorized(offer, [...reasons], built, caps, expectedHref, method, 1))) {
-          refused++;
-          continue;
-        }
-        // the anchor: the first input the payer owns; every rebuilt attempt of this payment must spend it too
-        const anchor = built.consumed.map(outpointKey).find((k) => payerOwned.has(k));
-        chosen = { offer, reasons, paymentId, reqHash, built, anchor };
-        break;
-      }
-      if (!chosen) {
-        throw new KobX402Error(
-          'spend_not_authorized',
-          `${refused} offer(s) could be paid but none is authorised: set capabilities.maxAmount for the merchant asset and maxPay for the pay asset of a swap, or provide an approve policy`,
-        );
-      }
+      const chosen = await this.#choose(candidates, ranked.length - candidates.length, {
+        pr,
+        caps,
+        url: expectedHref,
+        method,
+        ...(idOverride !== undefined ? { idOverride } : {}),
+        requestHash: (offer) => (hashOverride ? lc(hashOverride) : httpRequestHash(method, expectedHref, normalizeBody(bodyBytes), requirementsHash(offer.requirements))),
+      });
       const { offer, paymentId, reqHash, built, anchor } = chosen;
 
       // Durable BEFORE disclosure. A failure here aborts the payment: nothing has been sent.
       const record = this.#record(offer, paymentId, reqHash, built, expectedHref, method, { attempt: 1, ...(anchor ? { anchor } : {}) });
       await this.#store.save(record);
 
-      return this.#settleWithRetry(record, { offer, reasons: chosen.reasons, pr, caps, baseInit, url: expectedHref, method });
+      const out = await this.#settleWithRetry(record, { offer, reasons: chosen.reasons, pr, caps, url: expectedHref, method }, this.#httpSend(baseInit));
+      return { response: out.response as Response, payment: out.receipt };
     });
+  }
+
+  /**
+   * The first of `candidates` (best first) that can be built and is authorised: built and preflighted, then held to the KAS
+   * ceiling and `approve`. An intent offer needs `intentTerms` first. Nothing is stored or sent here.
+   */
+  async #choose(
+    candidates: { offer: SelectedOffer; reasons: PaymentApproval['reasons'] }[],
+    refusedBefore: number,
+    s: {
+      pr: PaymentRequired;
+      caps: PayerCapabilities;
+      url: string;
+      method: string;
+      idOverride?: string;
+      requestHash: (offer: SelectedOffer) => string;
+      /** Invoices: the intent's lifetime never runs past the invoice's expiry. */
+      intentLifetimeCapMs?: number;
+    },
+  ): Promise<{ offer: SelectedOffer; reasons: PaymentApproval['reasons']; paymentId: string; reqHash: string; built: PayResult; anchor: string | undefined }> {
+    let refused = refusedBefore;
+    for (const { offer, reasons } of candidates) {
+      if (reasons.length > 0 && !this.#o.approve) {
+        refused++;
+        continue;
+      }
+      let terms: IntentPayTerms | undefined;
+      if (offer.kind === 'intent') {
+        terms = await this.#intentTerms(offer, s.url, s.method);
+        if (!terms) {
+          refused++;
+          continue;
+        }
+      }
+      const paymentId = s.idOverride ?? (this.#o.newPaymentId ?? newId)();
+      if (!/^[A-Za-z0-9_-]{16,128}$/.test(paymentId)) throw new KobX402Error('bad_request', 'payment id must match ^[A-Za-z0-9_-]{16,128}$');
+      const reqHash = s.requestHash(offer);
+      if (!HEX64.test(reqHash)) throw new KobX402Error('bad_request', 'requestHash must be 32-byte hex');
+      const extensions = paymentIdentifierExtensions(s.pr, paymentId);
+      const args: BuildArgs = { offer, requestHash: reqHash, paymentId, extensions, resource: s.pr.resource };
+      if (terms) args.terms = terms;
+      if (s.intentLifetimeCapMs !== undefined) args.intentLifetimeCapMs = s.intentLifetimeCapMs;
+      const { built, payerOwned } = await this.#buildPayment(args);
+      if (!(await this.#authorized(offer, [...reasons], built, s.caps, s.url, s.method, 1))) {
+        refused++;
+        continue;
+      }
+      // the anchor: the first input the payer owns; every rebuilt attempt of this payment must spend it too. An intent creation
+      // is only ever re-sent, never rebuilt: it has none.
+      const anchor = offer.kind === 'intent' ? undefined : built.consumed.map(outpointKey).find((k) => payerOwned.has(k));
+      return { offer, reasons, paymentId, reqHash, built, anchor };
+    }
+    throw new KobX402Error(
+      'spend_not_authorized',
+      `${refused} offer(s) could be paid but none is authorised: set capabilities.maxAmount for the merchant asset and maxPay for the pay asset of a swap (and intentTerms for an intent offer), or provide an approve policy`,
+    );
+  }
+
+  /** The payer's terms for an intent offer (`intentTerms`), or `undefined` (not paid). */
+  async #intentTerms(offer: SelectedOffer, url: string, method: string): Promise<IntentPayTerms | undefined> {
+    const payAsset = offer.payAsset;
+    const bound = payAsset === undefined ? undefined : this.#payBound(payAsset);
+    if (!this.#o.intentTerms || payAsset === undefined || bound === undefined) return undefined;
+    const t = await this.#o.intentTerms({ offer, payAsset, bound, url, method });
+    return t ?? undefined;
   }
 
   /**
@@ -373,29 +474,35 @@ export class KobX402Client {
       if (rec.expiresAtMs <= this.#now()) throw new KobX402Error('bad_request', 'the artifact authorization has expired; call fetch again to re-quote and re-sign', { paymentId });
       const hash = httpRequestHash(normalizeMethod(init.method), rec.url, normalizeBody(requestBody(init.body)), requirementsHash(rec.paymentPayload.accepted));
       if (hash !== rec.requestHash) throw new KobX402Error('bad_request', 'this request is not the one the artifact was signed for', { paymentId });
-      return this.#settleWithRetry(rec, { url: rec.url, method: rec.method, baseInit: { ...init, redirect: 'error' } });
+      const out = await this.#settleWithRetry(rec, { url: rec.url, method: rec.method }, this.#httpSend({ ...init, redirect: 'error' }));
+      return { response: out.response as Response, payment: out.receipt };
     });
   }
 
   /**
-   * Discloses `record` and follows the outcome: re-sends it while the outcome is unknown, rebuilds the payment after a
-   * failure that left the payer's funds where they were (when `rebuild` context is given), stops otherwise. Bounded by
-   * the retry policy and the deadline (the shorter of its budget and the offer's `maxTimeoutSeconds`).
+   * Discloses `record` (through `send`: the paid HTTP request, or an invoice's pay endpoint) and follows the outcome: re-sends
+   * it while the outcome is unknown, rebuilds the payment after a failure that left the payer's funds where they were (when the
+   * offer context is given; never an intent creation), stops otherwise. Bounded by the retry policy and the deadline (the
+   * shorter of its budget and the offer's `maxTimeoutSeconds`; an intent's also by its own expiry).
    */
   async #settleWithRetry(
     first: ArtifactRecord,
     s: {
       url: string;
       method: string;
-      baseInit: RequestInit;
       offer?: SelectedOffer;
       reasons?: PaymentApproval['reasons'];
       pr?: PaymentRequired;
       caps?: PayerCapabilities;
+      resource?: Resource;
     },
-  ): Promise<PaidFetchResult> {
+    send: SendOnce,
+  ): Promise<{ receipt: PaymentReceipt; response?: Response }> {
     const policy = this.#retry;
-    const deadline = retryDeadline(policy, this.#now(), first.paymentPayload.accepted.maxTimeoutSeconds);
+    const intent = first.kind === 'intent';
+    let deadline = retryDeadline(policy, this.#now(), first.paymentPayload.accepted.maxTimeoutSeconds);
+    // an intent is executed until its deadline (the authorization's expiry) at most: a re-send after it is pointless
+    if (intent) deadline = Math.min(deadline, first.expiresAtMs);
     const done: AttemptSummary[] = [];
     let record = first;
     let sends = 0;
@@ -403,15 +510,15 @@ export class KobX402Client {
     let totalResends = 0;
     for (;;) {
       sends++;
-      const out = await this.#discloseOnce(record, record.kind, s.baseInit);
+      const out = await send(record);
       if (out.ok) {
         const superseded = done.map((a) => a.paymentId);
         for (const id of superseded) await this.#mark(id, { status: 'superseded', note: `attempt ${record.paymentId} settled and spent the anchor ${record.anchor ?? ''}` });
-        const p = out.result.payment as PaymentReceipt;
+        const p = out.receipt;
         p.attempts = done.length + 1;
         p.resends = totalResends;
         p.superseded = superseded;
-        return out.result;
+        return out;
       }
       const current: AttemptSummary = { paymentId: record.paymentId, transactionId: record.transactionId, outcome: out.outcome, sends };
       const giveUp = (why?: string): KobX402Error => {
@@ -420,6 +527,7 @@ export class KobX402Client {
           e.attempts = [...done, current];
           if (why) e.message = `${e.message} (${why})`;
         }
+        if (intent && record.intent) e.intent = record.intent;
         return e;
       };
       if (out.step === 'stop') throw giveUp();
@@ -432,7 +540,9 @@ export class KobX402Client {
         await policy.sleep(wait);
         continue;
       }
-      // rebuild: a new attempt, anchored to the first one (never without the offer context of a fresh paidFetch)
+      // rebuild: never an intent creation (a second creation would be a second intent: the payer cancels or the facilitator
+      // expires the dead one); else a new attempt, anchored to the first one (never without the offer context of a fresh payment)
+      if (intent) throw giveUp('an intent creation is re-sent, never re-signed: cancel the intent (cancelIntent with its handle) or let it expire');
       if (!s.offer || !s.pr || !s.caps || !s.reasons) throw giveUp();
       const n = done.length + 1;
       if (n >= policy.attempts) throw giveUp(`gave up after ${n} attempt(s)`);
@@ -465,7 +575,9 @@ export class KobX402Client {
     const paymentId = (this.#o.newPaymentId ?? newId)();
     if (!/^[A-Za-z0-9_-]{16,128}$/.test(paymentId)) throw new KobX402Error('bad_request', 'payment id must match ^[A-Za-z0-9_-]{16,128}$');
     const extensions = paymentIdentifierExtensions(s.pr, paymentId);
-    const { built } = await this.#buildPayment(s.offer, prev.requestHash, paymentId, extensions, s.pr, prev.anchor);
+    const args: BuildArgs = { offer: s.offer, requestHash: prev.requestHash, paymentId, extensions, resource: s.pr.resource };
+    if (prev.anchor !== undefined) args.anchor = prev.anchor;
+    const { built } = await this.#buildPayment(args);
     if (!(await this.#authorized(s.offer, [...s.reasons], built, s.caps, s.url, s.method, attempt, prev.paymentId))) {
       throw new KobX402Error('spend_not_authorized', `the retry of ${prev.paymentId} (attempt ${attempt}) is not authorised at its new cost; nothing more was paid`, {
         paymentId: prev.paymentId,
@@ -495,6 +607,7 @@ export class KobX402Client {
       expiresAtMs: built.expiresAtMs,
       consumed: built.consumed,
       paymentPayload: built.paymentPayload,
+      ...(offer.kind === 'intent' && isRecord((built as Partial<IntentPayResult>).intent) ? { intent: (built as IntentPayResult).intent } : {}),
       ...extra,
     };
   }
@@ -541,15 +654,16 @@ export class KobX402Client {
     }
   }
 
+  /** The paid HTTP request as the retry's transport. */
+  #httpSend(baseInit: RequestInit): SendOnce {
+    return (record) => this.#discloseOnce(record, baseInit);
+  }
+
   /**
    * One send of a stored artifact. The outcome is classified for the retry: `resend` (unknown: no answer, a 5xx, a 2xx
    * without a settlement, `settlement_pending`), `rebuild` (the facilitator failed it and released its inputs) or `stop`.
    */
-  async #discloseOnce(
-    record: ArtifactRecord,
-    kind: OfferKind,
-    baseInit: RequestInit,
-  ): Promise<{ ok: true; result: PaidFetchResult } | { ok: false; error: KobX402Error; step: RetryStep; outcome: string }> {
+  async #discloseOnce(record: ArtifactRecord, baseInit: RequestInit): Promise<SendResult> {
     const { paymentId, transactionId, url: expectedHref } = record;
     const headers = new Headers(baseInit.headers);
     headers.set(HEADER_PAYMENT_SIGNATURE, encodePaymentSignature(record.paymentPayload));
@@ -594,7 +708,7 @@ export class KobX402Client {
     let settlement: SettlementResponse;
     try {
       settlement = decodePaymentResponse(header);
-      verifySettlement(settlement, record.amount, record.network, transactionId, kcc20Custody(record.paymentPayload?.accepted));
+      verifyRecordSettlement(settlement, record);
     } catch (e) {
       await this.#mark(paymentId, { status: 'pending', note: 'PAYMENT-RESPONSE did not verify' });
       const error = new KobX402Error('invalid_settlement', `PAYMENT-RESPONSE rejected: ${(e as Error).message}`, {
@@ -606,13 +720,7 @@ export class KobX402Client {
       return { ok: false, error, step: 'stop', outcome: 'invalid_settlement' };
     }
     await this.#mark(paymentId, { status: 'settled' });
-    return {
-      ok: true,
-      result: {
-        response: second,
-        payment: { paymentId, transactionId, amount: record.amount, asset: record.asset, network: record.network, kind, settlement, attempts: 1, resends: 0, superseded: [] },
-      },
-    };
+    return { ok: true, receipt: receiptOf(record, settlement), response: second };
   }
 
   /** `extensions.kaspa` of a JSON error body (409 / 5xx of a paywall), bounded; empty when there is none. */
@@ -700,16 +808,18 @@ export class KobX402Client {
   }
 
   /**
-   * The ranked offers that may be paid, best first, with what keeps each from being paid without asking. A swap needs a
-   * `maxPay` bound for the pay asset it spends (the first of its payable assets that has one) and is left out without
-   * one: `approve` cannot stand in for the bound the builder enforces. An offer whose merchant asset has no
+   * The ranked offers that may be paid, best first, with what keeps each from being paid without asking. A swap (and an
+   * intent) needs a `maxPay` bound for the pay asset it spends (the first of its payable assets that has one) and is left out
+   * without one: `approve` cannot stand in for the bound the builder enforces. An intent also needs `intentTerms`. An offer whose merchant asset has no
    * `capabilities.maxAmount` ceiling needs `approve` (`no_spend_cap`).
    */
   #candidates(ranked: SelectedOffer[], caps: PayerCapabilities): { offer: SelectedOffer; reasons: PaymentApproval['reasons'] }[] {
     const out: { offer: SelectedOffer; reasons: PaymentApproval['reasons'] }[] = [];
     for (const candidate of ranked) {
       let offer = candidate;
-      if (offer.kind === 'swap') {
+      // an intent is paid only on the payer's own terms (`intentTerms`)
+      if (offer.kind === 'intent' && !this.#o.intentTerms) continue;
+      if (offer.kind === 'swap' || offer.kind === 'intent') {
         const bounded = payableAssets(offer, caps).find((a) => this.#payBound(a) !== undefined);
         if (bounded === undefined) continue;
         offer = { ...offer, payAsset: bounded };
@@ -818,20 +928,14 @@ export class KobX402Client {
    * built), and the payment must spend it; when the builder's coin choice leaves it out, the build is repeated once with the
    * payer's outputs that outrank it set aside, and a payment that still does not spend it is refused (never sent).
    */
-  async #buildPayment(
-    offer: SelectedOffer,
-    requestHash: string,
-    paymentId: string,
-    extensions: NonNullable<PaymentPayload['extensions']>,
-    pr: PaymentRequired,
-    anchor?: string,
-  ): Promise<{ built: PayResult; payerOwned: Set<string> }> {
+  async #buildPayment(a: BuildArgs): Promise<{ built: PayResult; payerOwned: Set<string> }> {
     const o = this.#o;
+    const { offer, anchor, paymentId } = a;
     const q: ChainContextQuery = { payerAddress: o.payerAddress, network: o.network, kind: offer.kind, asset: offer.asset, amount: offer.requirements.amount };
     if (offer.payAsset) q.payAsset = offer.payAsset;
     const ctx = await o.context.load(q);
     const payerOwned = new Set([...ctx.utxos.map(outpointKey), ...collectOutpoints(ctx.tokenUtxos).map(outpointKey)]);
-    if (anchor === undefined) return { built: await this.#buildFrom(ctx, offer, requestHash, paymentId, extensions, pr), payerOwned };
+    if (anchor === undefined) return { built: await this.#buildFrom(ctx, a), payerOwned };
     if (!payerOwned.has(anchor)) {
       throw new KobX402Error(
         'payment_pending',
@@ -840,12 +944,12 @@ export class KobX402Client {
       );
     }
     const spends = (b: PayResult): boolean => b.consumed.some((c) => outpointKey(c) === anchor);
-    let built = await this.#buildFrom(ctx, offer, requestHash, paymentId, extensions, pr);
+    let built = await this.#buildFrom(ctx, a);
     if (spends(built)) return { built, payerOwned };
     const narrowed = narrowToAnchor(ctx, anchor);
     if (narrowed) {
       try {
-        built = await this.#buildFrom(narrowed, offer, requestHash, paymentId, extensions, pr);
+        built = await this.#buildFrom(narrowed, a);
       } catch (e) {
         throw new KobX402Error('payment_failed', `the retry cannot be built around the payment's anchor input ${anchor}: ${(e as Error).message}`, {
           cause: e,
@@ -863,17 +967,12 @@ export class KobX402Client {
     });
   }
 
-  async #buildFrom(
-    ctx: ChainContext,
-    offer: SelectedOffer,
-    requestHash: string,
-    paymentId: string,
-    extensions: NonNullable<PaymentPayload['extensions']>,
-    pr: PaymentRequired,
-  ): Promise<PayResult> {
+  async #buildFrom(ctx: ChainContext, a: BuildArgs): Promise<PayResult> {
     const o = this.#o;
+    const { offer, requestHash, paymentId, extensions } = a;
     if (ctx.utxos.length === 0 && !ctx.tokenUtxos?.length) throw new KobX402Error('no_funds', 'the payer has no spendable outputs');
-    const needsTokens = offer.kind === 'kcc20' || (offer.kind === 'swap' && offer.payAsset !== 'KAS');
+    const routed = offer.kind === 'swap' || offer.kind === 'intent';
+    const needsTokens = offer.kind === 'kcc20' || (routed && offer.payAsset !== 'KAS');
     if (needsTokens && !ctx.tokenUtxos?.length) throw new KobX402Error('no_funds', 'the payer has no token UTXOs of the asset this offer is paid with');
     if (offer.kind === 'swap' && !ctx.quote) throw new KobX402Error('no_funds', 'no swap quote: the chain context has no orders to fill');
     const nowMs = this.#now();
@@ -887,18 +986,20 @@ export class KobX402Client {
     };
     if (o.privateKeys?.length) req.privateKeys = o.privateKeys;
     if (ctx.tokenUtxos) req.tokenUtxos = ctx.tokenUtxos;
-    if (ctx.quote) req.quote = ctx.quote;
+    if (ctx.quote && offer.kind !== 'intent') req.quote = ctx.quote;
     if (offer.payAsset) req.payAsset = offer.payAsset;
     if (o.tokens) req.tokens = o.tokens;
     if (o.capabilities?.allowIssuerControlled) req.allowIssuerControlled = true;
     if (o.maxFeeSompi) req.maxFeeSompi = o.maxFeeSompi;
     const feeRate = await resolveFeeRate(o.feeRate);
-    if (offer.kind !== 'swap') {
+    if (!routed) {
       const ttl = o.authorizationTtlSeconds ?? DEFAULT_AUTH_TTL_SECONDS;
       if (!Number.isInteger(ttl) || ttl <= 0) throw new KobX402Error('bad_request', 'authorizationTtlSeconds must be a positive integer');
       req.ttlSeconds = Math.min(ttl, offer.requirements.maxTimeoutSeconds);
     }
-    const bound = offer.kind === 'swap' && offer.payAsset ? this.#payBound(offer.payAsset) : undefined;
+    // a swap and an intent are never built without the payer's bound for the asset they pay with
+    const bound = routed && offer.payAsset ? this.#payBound(offer.payAsset) : undefined;
+    if (routed && bound === undefined) throw new KobX402Error('spend_not_authorized', `no maxPay bound for the pay asset ${offer.payAsset ?? '?'}: nothing is built`, { paymentId });
     if (bound !== undefined) req.maxPayAmount = bound;
     if (offer.kind === 'native') {
       // The builder requires the payer's own cap (audit A1-3): the configured KAS ceiling, else exactly the offered
@@ -913,7 +1014,7 @@ export class KobX402Client {
       result = await withFeeFloorAsync(feeRate, o.feeRateFloor, (rate) => {
         if (rate === undefined) delete req.feeRate;
         else req.feeRate = rate;
-        return this.#sign(offer, req);
+        return offer.kind === 'intent' ? this.#signIntent(req, a) : this.#sign(offer, req);
       });
     } catch (e) {
       if (e instanceof KobX402Error) throw e;
@@ -930,11 +1031,19 @@ export class KobX402Client {
     // Unsigned metadata (the payment-identifier extension echoes the server's advertised schema; the resource) is
     // not covered by any digest: it is set here, once, whatever the builder produced.
     result.paymentPayload.extensions = extensions;
-    if (!result.paymentPayload.resource) result.paymentPayload.resource = pr.resource;
+    if (!result.paymentPayload.resource && a.resource) result.paymentPayload.resource = a.resource;
     this.#checkBuilt(result, offer, requestHash, paymentId, nowMs);
+    // an intent's worst case (what its terms let the executor take; for KAS the creation fee included) within the bound
+    if (offer.kind === 'intent' && bound !== undefined && !(result.payerSpent !== undefined && BigInt(result.payerSpent) <= BigInt(bound))) {
+      throw new KobX402Error('preflight_failed', `the intent's worst case (${result.payerSpent ?? '?'} of ${offer.payAsset ?? '?'}) is above the payer's maxPay bound ${bound}: give tighter intentTerms`, {
+        diagnostic: 'overpayment',
+        paymentId,
+      });
+    }
 
     // Everything the transaction spends must be an output the payer's own chain context reported.
-    const known = new Set([...ctx.utxos, ...collectOutpoints(ctx.tokenUtxos), ...collectOutpoints(ctx.quote)].map((u) => (typeof u === 'string' ? u : `${u.txid}:${u.index}`)));
+    const quoted = offer.kind === 'intent' ? undefined : ctx.quote;
+    const known = new Set([...ctx.utxos, ...collectOutpoints(ctx.tokenUtxos), ...collectOutpoints(quoted)].map((u) => (typeof u === 'string' ? u : `${u.txid}:${u.index}`)));
     for (const c of result.consumed) {
       if (!known.has(`${c.txid}:${c.index}`)) throw new KobX402Error('payment_failed', `built payment spends ${c.txid}:${c.index}, which is not in the payer's chain context`, { paymentId });
     }
@@ -959,6 +1068,43 @@ export class KobX402Client {
       throw new KobX402Error('preflight_failed', 'preflight recomputed a different transaction id', { paymentId });
     }
     return result;
+  }
+
+  /**
+   * An intent offer: the creation of a router intent with the payer's `intentTerms` (local keys, or the wallet flow: the
+   * wallet signs the creation's inputs once). Its lifetime (the intent's deadline) is the terms' `expiresInMs` (default 5 min),
+   * at most the offer's `maxTimeoutSeconds` and, for an invoice, never past its expiry.
+   */
+  async #signIntent(req: PayRequest, a: BuildArgs): Promise<PayResult> {
+    const o = this.#o;
+    const terms = a.terms;
+    if (!terms) throw new KobX402Error('spend_not_authorized', 'an intent offer is paid only with intentTerms', { paymentId: req.paymentId });
+    let lifetime = Math.min(terms.expiresInMs ?? 300_000, req.requirements.maxTimeoutSeconds * 1000);
+    if (a.intentLifetimeCapMs !== undefined) lifetime = Math.min(lifetime, a.intentLifetimeCapMs);
+    if (!(lifetime > 0)) throw new KobX402Error('invalid_payment_required', 'no time is left to execute an intent', { paymentId: req.paymentId });
+    const options: IntentOptions = { ...terms, expiresInMs: lifetime };
+    if (req.feeRate !== undefined) options.feeRate = req.feeRate;
+    const ireq: IntentPayRequest = {
+      requirements: req.requirements,
+      requestHash: req.requestHash,
+      payAsset: req.payAsset ?? '',
+      utxos: req.utxos,
+      nowMs: req.nowMs,
+      options,
+      paymentId: req.paymentId,
+    };
+    if (req.tokenUtxos) ireq.tokenUtxos = req.tokenUtxos;
+    if (req.tokens) ireq.tokens = req.tokens;
+    if (req.allowIssuerControlled) ireq.allowIssuerControlled = true;
+    const w = o.wasm;
+    if (o.privateKeys?.length) {
+      if (!w.payIntent) throw new KobX402Error('unsupported', 'this KobWasm has no payIntent (intent mode)');
+      return w.payIntent({ ...ireq, privateKeys: o.privateKeys });
+    }
+    if (!w.prepareIntent || !w.finishIntent) throw new KobX402Error('unsupported', 'this KobWasm has no prepareIntent / finishIntent (intent mode, wallet flow)');
+    const wallet = o.wallet as WalletSigner;
+    const prepared = w.prepareIntent({ ...ireq, payerPublicKey: wallet.publicKey });
+    return w.finishIntent(prepared, await wallet.signInputs(prepared.built.sign));
   }
 
   /** Local-key builders, or the wallet flow (unsigned -> wallet signs -> finish) for kcc20 and swap-and-pay. */
@@ -994,6 +1140,10 @@ export class KobX402Client {
     if (p.extensions?.[PAYMENT_IDENTIFIER_KEY]?.info?.id !== paymentId) fail('payment identifier not echoed');
     if (!(r.expiresAtMs > nowMs)) fail('authorization already expired');
     if (r.consumed.length === 0) fail('no consumed outpoints');
+    if (offer.kind === 'intent') {
+      if (p.payload.route?.binding !== BINDING_INTENT || p.payload.route.payAsset !== offer.payAsset) fail('not an intent creation for the selected pay asset');
+      if (!isRecord((r as Partial<IntentPayResult>).intent)) fail('no intent handle');
+    }
   }
 }
 
@@ -1016,7 +1166,7 @@ export function paymentCost(offer: SelectedOffer, built: PayResult): PaymentCost
     carrierSompi: carrier.toString(),
     kasSpent: kas.toString(),
   };
-  if (offer.kind === 'swap') {
+  if (offer.kind === 'swap' || offer.kind === 'intent') {
     if (offer.payAsset) cost.payAsset = offer.payAsset;
     if (built.payerSpent !== undefined) cost.payerSpent = built.payerSpent;
   }
@@ -1133,13 +1283,33 @@ export function kcc20Custody(r: PaymentRequirements | undefined): Custody | null
 }
 
 /**
- * The PAYMENT-RESPONSE of a paid retry must show success for exactly the transaction the client signed; a `kcc20` one also the custody class
- * of the accepted offer (`custody`: `kcc20Custody` of it).
+ * The id of the transaction a payment request carried, as its settlement reports it: `transaction` for a direct payment, the
+ * intent's creation (`extensions.kob.intent.creation`) for an intent payment, whose `transaction` is the execution.
+ * Undefined when the settlement does not name it as a 32-byte hex id.
  */
-export function verifySettlement(s: SettlementResponse, amount: string, network: string, transactionId: string, custody: Custody | null = null): void {
+export function settledRequestTransaction(s: SettlementResponse, intent: boolean): string | undefined {
+  const kob = s.extensions?.kob;
+  const creation = isRecord(kob) && isRecord(kob.intent) ? kob.intent.creation : undefined;
+  const id = intent ? creation : s.transaction;
+  return typeof id === 'string' && HEX64.test(lc(id)) ? lc(id) : undefined;
+}
+
+/**
+ * The PAYMENT-RESPONSE of a paid retry (or the answer of an invoice's pay endpoint) must show success for exactly the
+ * transaction the client signed; a `kcc20` one also the custody class of the accepted offer (`custody`: `kcc20Custody` of it).
+ * An intent payment (`intent`): `transaction` is the facilitator's execution (any transaction id) and the creation the client
+ * signed is `extensions.kob.intent.creation`.
+ */
+export function verifySettlement(s: SettlementResponse, amount: string, network: string, transactionId: string, custody: Custody | null = null, intent = false): void {
   if (s === null || typeof s !== 'object' || s.success !== true) throw new KobX402Error('invalid_settlement', 'settlement is not a success');
   if (typeof s.transaction !== 'string' || !HEX64.test(lc(s.transaction))) throw new KobX402Error('invalid_settlement', 'settlement transaction is not a transaction id');
-  if (lc(s.transaction) !== lc(transactionId)) throw new KobX402Error('invalid_settlement', 'settlement transaction id differs from the signed transaction');
+  if (intent) {
+    if (settledRequestTransaction(s, true) !== lc(transactionId)) {
+      throw new KobX402Error('invalid_settlement', 'the settled intent was not created by the signed transaction (extensions.kob.intent.creation)');
+    }
+  } else if (lc(s.transaction) !== lc(transactionId)) {
+    throw new KobX402Error('invalid_settlement', 'settlement transaction id differs from the signed transaction');
+  }
   if (s.amount !== amount) throw new KobX402Error('invalid_settlement', 'settlement amount differs from the accepted amount');
   if (s.network !== network) throw new KobX402Error('invalid_settlement', 'settlement network differs from the accepted network');
   if (custody !== null) {
@@ -1147,3 +1317,48 @@ export function verifySettlement(s: SettlementResponse, amount: string, network:
     if (!k || k.custody !== custody) throw new KobX402Error('invalid_settlement', `settlement custody class differs from the accepted offer's (${custody})`);
   }
 }
+
+/** `verifySettlement` against a stored artifact (its amount, network, signed transaction, custody class, intent mode). */
+export function verifyRecordSettlement(s: SettlementResponse, record: Pick<ArtifactRecord, 'amount' | 'network' | 'transactionId' | 'kind' | 'paymentPayload'>): void {
+  const accepted = record.paymentPayload?.accepted;
+  const intent = record.kind === 'intent' || accepted?.extra?.route?.binding === BINDING_INTENT;
+  verifySettlement(s, record.amount, record.network, record.transactionId, kcc20Custody(accepted), intent);
+}
+
+/** The receipt of a stored artifact that settled with `settlement` (the counts are the retry's to fill in). */
+function receiptOf(record: ArtifactRecord, settlement: SettlementResponse): PaymentReceipt {
+  const r: PaymentReceipt = {
+    paymentId: record.paymentId,
+    transactionId: record.transactionId,
+    settledTransaction: lc(settlement.transaction),
+    amount: record.amount,
+    asset: record.asset,
+    network: record.network,
+    kind: record.kind,
+    settlement,
+    attempts: 1,
+    resends: 0,
+    superseded: [],
+  };
+  if (record.intent) r.intent = record.intent;
+  return r;
+}
+
+/** What one payment is built from. */
+interface BuildArgs {
+  offer: SelectedOffer;
+  requestHash: string;
+  paymentId: string;
+  extensions: NonNullable<PaymentPayload['extensions']>;
+  resource?: Resource;
+  /** A retry: the outpoint every attempt spends. */
+  anchor?: string;
+  /** An intent offer: the payer's terms. */
+  terms?: IntentPayTerms;
+  /** Invoices: the most the intent may live (the time left before the invoice expires). */
+  intentLifetimeCapMs?: number;
+}
+
+/** One send of a stored artifact and how it ended (the retry's transport: a paid HTTP request, an invoice's pay endpoint). */
+type SendResult = { ok: true; receipt: PaymentReceipt; response?: Response } | { ok: false; error: KobX402Error; step: RetryStep; outcome: string };
+type SendOnce = (record: ArtifactRecord) => Promise<SendResult>;

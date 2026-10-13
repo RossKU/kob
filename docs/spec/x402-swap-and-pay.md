@@ -833,6 +833,12 @@ rounding, exact split multiplication), so a decaying ask, a tip or a crossing sp
 ask really demands (`ceil(take × (price(t) − tip) / scale)`); fills are any base-unit amounts that respect
 each order's minimum fill.
 
+
+KOB payer SDK (informative): the TS `KobX402Client` pays an intent offer of a paywall only on terms the payer gives for it (`intentTerms`: `maxSell`, or `maxPay` and `maxExtra`), whose worst case is within its
+`maxPay` bound of the pay asset (checked on the built creation and by the preflight); `approve` is shown the worst case
+(`cost.payerSpent`), not `amount`. It accepts a settlement only when `extensions.kob.intent.creation` is the creation it
+signed (the execution is `transaction`), keeps the intent handle with the signed creation (`ArtifactRecord.intent`) and
+re-sends the creation while it may still execute, never signing a second one (x402-retry.md section 5).
 ### 17.9 Security considerations
 
 - **No redirect.** The intent program checks the merchant's output and the payer's change; the facilitator

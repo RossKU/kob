@@ -103,10 +103,12 @@ deadline is not taken. The error of a retry that gave up carries every attempt (
 ## 5. Intent payments
 
 The payer signs one transaction, the intent's creation; re-planning against the book is the facilitator's job. The SDK
-(`payInvoiceWithIntent`, `retry`) re-sends the SAME signed creation while the answer is unknown or the creation may still
-execute (`settlement_pending`, `node_unavailable`, `rate_limited`, `intent_not_executable`), within the intent's expiry. It
-never signs a second creation on its own: a refused or dead intent is returned (or thrown) as before, and the payer
-cancels it or the facilitator expires it on chain.
+(TS: `KobX402Client` for an intent offer of a paywall, `payInvoiceWithIntent`; `retry`) re-sends the SAME signed creation
+while the answer is unknown or the creation may still execute (`settlement_pending`, `node_unavailable`, `rate_limited`,
+`intent_not_executable`), within the intent's expiry (the retry deadline is capped by it). It never signs a second
+creation on its own: a failure that would need one (a `rebuild` diagnostic) ends the retry like a refusal (returned or
+thrown as before; the client's error carries the intent handle, `KobX402Error.intent`, also stored as
+`ArtifactRecord.intent`), and the payer cancels the intent or the facilitator expires it on chain.
 
 ## 6. Facilitator
 
@@ -133,7 +135,8 @@ cancels it or the facilitator expires it on chain.
   success; payment accepted but the answer lost (re-sent, settled once, served as a replay); every attempt failing (gives
   up after 3, the attempts share the anchor, a new fetch is refused); refusals not retried; a worse re-quote refused by
   `approve` and above the KAS ceiling; a spent anchor and a larger coin; concurrent paid requests and a racing `resume`;
-  intent creations re-sent, never re-signed. `test/retry-wasm.test.ts`: the TS and Rust tables agree.
+  intent creations re-sent, never re-signed. `test/intent-client.test.ts`: the client's intent payments (one creation,
+  re-sent while it may execute, a dead one stops with its handle). `test/retry-wasm.test.ts`: the TS and Rust tables agree.
 - `crates/kob-x402/src/client/retry.rs`: the driver and the table.
 - `crates/kob-executor/tests/x402_retry.rs`: the Rust driver against the facilitator over the mock chain, the same failures
   injected, and two retries of one payment racing (one pays, the other is refused or finds the anchor spent).

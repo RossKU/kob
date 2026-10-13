@@ -350,7 +350,8 @@ export type OfferSpec =
       mode?: 'signed' | 'intent';
     };
 
-export type OfferKind = 'native' | 'kcc20' | 'swap';
+/** `swap`: payer-signed swap-and-pay (`kob-swap-v1`); `intent`: its intent mode (`kob-intent-v1`, the payer signs a router intent). */
+export type OfferKind = 'native' | 'kcc20' | 'swap' | 'intent';
 
 /** A transaction outpoint. */
 export interface Outpoint {
