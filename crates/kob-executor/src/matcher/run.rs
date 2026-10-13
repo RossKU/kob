@@ -55,7 +55,8 @@ pub trait BookSource: Send {
 
     /// Live orders the indexer proved but does not LIST (a token outside the allowlist, an exit of an unlisted entry, a carrier
     /// below the listing minimum, ...): never matched, but the keepers kill, refund and close them when that pays (their
-    /// makers would otherwise wait for nobody; the maker's own cancel works either way). The default: none.
+    /// makers would otherwise wait for nobody; the maker's own cancel works either way). Besides the snapshot's own
+    /// `keeper_only` (the indexer's snapshot and a `--book-file` carry them there). The default: none.
     fn keeper_only_orders(&mut self) -> Vec<ListedOrder> {
         vec![]
     }
@@ -96,7 +97,12 @@ pub struct ViewSource<V: OrderBookView + Send>(pub V);
 
 impl<V: OrderBookView + Send> BookSource for ViewSource<V> {
     fn snapshot(&mut self, operator: &[u8; 32]) -> anyhow::Result<MemoryBook> {
-        Ok(MemoryBook { daa_score: self.0.daa_score(), orders: self.0.orders(), wallet_tokens: self.0.wallet_tokens(operator) })
+        Ok(MemoryBook {
+            daa_score: self.0.daa_score(),
+            orders: self.0.orders(),
+            wallet_tokens: self.0.wallet_tokens(operator),
+            keeper_only: vec![],
+        })
     }
 }
 
@@ -888,7 +894,12 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         // the orders the node no longer holds (the book lags the chain): never planned, by the matcher or the keepers
         // (only while the book lags by `verify_live_min_lag`: the node round trip costs races when the book is current)
         let verify = info.has_utxo_index && daa.saturating_sub(book.daa_score) >= self.cfg.verify_live_min_lag;
-        let gone = if verify { self.gone(&book.orders, daa).await } else { BTreeSet::new() };
+        let gone = if verify {
+            let all: Vec<ListedOrder> = book.orders.iter().chain(&book.keeper_only).cloned().collect();
+            self.gone(&all, daa).await
+        } else {
+            BTreeSet::new()
+        };
         rep.gone = gone.len();
         let mut excluded = self.tracker.backed_off(daa);
         excluded.extend(gone.iter().copied());
@@ -1016,10 +1027,15 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             let replaced_subsidised = self.replace_stuck(daa, &spare, &mut rep).await?;
             spent = self.reserved_or_spent();
             let funding: Vec<KeyUtxo> = funding.iter().filter(|k| !spent.contains(&outpoint(&k.utxo))).cloned().collect();
-            // the listed orders plus the proven unlisted ones (kill / refund / close only: the keepers never match)
+            // the listed orders plus the proven unlisted ones (kill / refund / close only: the keepers never match): the
+            // snapshot's `keeper_only` (an indexer's, or a `--book-file`'s) and the source's
             let mut orders = book.orders.clone();
-            let listed: BTreeSet<CovId> = orders.iter().map(|o| o.id()).collect();
-            orders.extend(self.source.keeper_only_orders().into_iter().filter(|o| !listed.contains(&o.id())));
+            let mut seen: BTreeSet<CovId> = orders.iter().map(|o| o.id()).collect();
+            for o in book.keeper_only.iter().cloned().chain(self.source.keeper_only_orders()) {
+                if seen.insert(o.id()) {
+                    orders.push(o);
+                }
+            }
             let mut excluded = self.tracker.backed_off(daa);
             excluded.extend(gone.iter().copied());
             excluded.extend(busy_orders(&orders, &spent));

@@ -213,7 +213,7 @@ fn random_book(r: &mut StdRng, base: u32) -> (MemoryBook, String) {
         orders.push(l_bid_b(next(), pa, pb, m, px(r, P200), amount(r, 1, 8)));
         orders.push(l_ask_a(next(), pa, m, px(r, 250_000_000), amount(r, 1, 8)));
     }
-    (MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![] }, format!("{} / {}", pa.name(), pb.name()))
+    (MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![], keeper_only: vec![] }, format!("{} / {}", pa.name(), pb.name()))
 }
 
 /// Hostile copy: a few numeric state fields of a few orders overwritten with extremes (what a hostile maker can list).

@@ -100,7 +100,7 @@ fn different_distributions_keep_every_planner_invariant() {
         let n = r.range(6, 40) as u32;
         let mid = 250_000_000 + r.range(0, 4) * 10_000_000;
         let orders: Vec<ListedOrder> = (0..n).map(|i| order(&mut r, 1_000 * (it as u32 + 1) + i, tpl, mid)).collect();
-        let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![] };
+        let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![], keeper_only: vec![] };
         let inp = input(&b);
         let tk = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let rep =

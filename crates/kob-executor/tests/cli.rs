@@ -137,7 +137,7 @@ fn offline_match_from_a_kron_snapshot_file() {
     std::fs::create_dir_all(&dir).unwrap();
     let b = book(vec![l_bid(1, bid(1, P260, T3), 5 * WHOLE), l_ask(2, ask(2, P250, 5 * WHOLE, T3))]);
     let k = to_kron(&input(&b));
-    let kb = MemoryBook { daa_score: b.daa_score, orders: k.orders, wallet_tokens: vec![] };
+    let kb = MemoryBook { daa_score: b.daa_score, orders: k.orders, wallet_tokens: vec![], keeper_only: vec![] };
     let p = snapshot(&dir, &kb);
     let json = std::fs::read_to_string(&p).unwrap();
     assert!(json.contains("KobAskKron") && json.contains("id_type") || json.contains("idType"), "{json}");

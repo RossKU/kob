@@ -136,7 +136,7 @@ fn runner_with(daa: u64, verify_live_min_lag: u64) -> (Runner<Node, ViewSource<M
         s.live = listed.iter().filter(|o| o.id() != cid(SPENT)).flat_map(outpoints).collect();
     }
     let cfg = RunConfig { roles: Roles { matcher: true, keeper: false }, verify_live_min_lag, ..RunConfig::default() };
-    let book = MemoryBook { daa_score: daa, orders: listed, wallet_tokens: vec![] };
+    let book = MemoryBook { daa_score: daa, orders: listed, wallet_tokens: vec![], keeper_only: vec![] };
     (Runner::new(node.clone(), ViewSource(book), Box::new(signer()), cfg), node)
 }
 

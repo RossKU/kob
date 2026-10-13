@@ -75,6 +75,7 @@ fn setup() -> (Runner<Node, ViewSource<MemoryBook>>, Node, ListedOrder) {
         daa_score: NOW + 5,
         orders: vec![first.clone(), l_ask(2, ask(2, P250, 5 * WHOLE, T3)), l_ask(5, ask(5, P250, 5 * WHOLE, T3))],
         wallet_tokens: vec![],
+        keeper_only: vec![],
     };
     let node = Node::default();
     node.0.lock().unwrap().daa = NOW + 5;

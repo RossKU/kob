@@ -171,4 +171,14 @@ async fn an_unlisted_ioc_order_is_offered_to_the_keepers_for_its_kill() {
     assert!(o.custody_ok(), "with its proven custody");
     let due = AnyState::KobAsk(a).refund_due(c.w.utxo(&create, 0).block_daa_score as i64).unwrap() as u64;
     assert_eq!(refund_job(o, due), Some((JobKind::Kill, due)));
+    // the snapshot a `--book-file` keeper reads carries it apart from the book (`keeperOnly`), through its JSON
+    let snap = {
+        let g = c.hs.ingest.lock().unwrap();
+        kob_executor::indexer::book::snapshot(g.conn(), None).unwrap()
+    };
+    let json = serde_json::to_string(&snap).unwrap();
+    let back: kob_executor::matcher::book::MemoryBook = serde_json::from_str(&json).unwrap();
+    assert!(back.orders.is_empty(), "never offered to the matcher");
+    assert_eq!(back.keeper_only.iter().map(|o| o.id()).collect::<Vec<_>>(), vec![cov.0]);
+    assert_eq!(back.keeper_only[0], *o);
 }

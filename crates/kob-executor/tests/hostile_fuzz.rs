@@ -254,7 +254,7 @@ fn hostile_values_never_panic_the_matcher_or_keepers() {
             orders.push(l_pair(960_000 + it as u32, tpl, T3, pask(1, tpl, T3, 4 * WHOLE, 1_200, PTIP), 1_000));
             orders.push(l_pair(965_000 + it as u32, tpl, T3, pbid(2, tpl, T3, 4 * WHOLE, 1_400, PTIP), 1_000));
         }
-        let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![] };
+        let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![], keeper_only: vec![] };
         let mut k = EngineConfig { token_carrier: OP_TOKEN_CARRIER, ..cfg() };
         k.planner.arm = !r.chance(30);
         let inp = input(&b);

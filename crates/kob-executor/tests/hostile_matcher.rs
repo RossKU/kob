@@ -29,7 +29,7 @@ fn a_zero_min_fill_bid_is_quarantined_and_the_rest_of_the_book_still_trades() {
     let hostile = listed(cid(1), AnyState::KobBid(b0), 5 * KAS * 100, 1_000);
     let honest_bid = l_bid(3, bid(3, P260, T3), 5 * WHOLE);
     let sane_ask = l_ask(2, ask(1, P250, 5 * WHOLE, T3));
-    let b = MemoryBook { daa_score: NOW + 5, orders: vec![hostile, honest_bid, sane_ask], wallet_tokens: vec![] };
+    let b = MemoryBook { daa_score: NOW + 5, orders: vec![hostile, honest_bid, sane_ask], wallet_tokens: vec![], keeper_only: vec![] };
     let inp = input(&b);
     let r = run(&inp, &cfg());
     assert!(r.quarantined.iter().any(|(id, why)| *id == cid(1) && why.contains("minFill")), "{:?}", r.quarantined);
@@ -45,6 +45,7 @@ fn a_bid_scale_that_is_not_a_power_of_ten_is_quarantined() {
         daa_score: NOW + 5,
         orders: vec![hostile, l_bid(3, bid(3, P260, T3), 5 * WHOLE), l_ask(2, ask(1, P250, 5 * WHOLE, T3))],
         wallet_tokens: vec![],
+        keeper_only: vec![],
     };
     let r = run(&input(&b), &cfg());
     assert!(r.quarantined.iter().any(|(id, why)| *id == cid(1) && why.contains("scale")), "{:?}", r.quarantined);
@@ -58,7 +59,7 @@ fn a_huge_amount_left_costs_one_tick_no_time() {
         let mut c = cond_bid(1, P250, P245, amount.min(1 << 40), T3);
         c.tip = 0;
         let o = listed(cid(1), AnyState::KobCondBid(c), 10 * KAS, 1_000);
-        let b = MemoryBook { daa_score: NOW + 5, orders: vec![o], wallet_tokens: vec![] };
+        let b = MemoryBook { daa_score: NOW + 5, orders: vec![o], wallet_tokens: vec![], keeper_only: vec![] };
         let inp = input(&b);
         let t0 = Instant::now();
         let _ = tick(&inp, &cfg(), &Families::default(), &signer());
@@ -71,7 +72,7 @@ fn a_huge_amount_left_costs_one_tick_no_time() {
     c.stop_price = 1;
     c.slip_bps = 0;
     let o = listed(cid(1), AnyState::KobCondBid(c), 10 * KAS, 1_000);
-    let b = MemoryBook { daa_score: NOW + 5, orders: vec![o], wallet_tokens: vec![] };
+    let b = MemoryBook { daa_score: NOW + 5, orders: vec![o], wallet_tokens: vec![], keeper_only: vec![] };
     let t0 = Instant::now();
     let _ = tick(&input(&b), &cfg(), &Families::default(), &signer());
     assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
@@ -136,6 +137,7 @@ fn a_panic_inside_planning_costs_a_skipped_book_never_the_process() {
         daa_score: NOW + 5,
         orders: vec![l_bid(1, bid(1, P260, T3), 5 * WHOLE), l_ask(2, ask(2, P250, 5 * WHOLE, T3))],
         wallet_tokens: vec![],
+        keeper_only: vec![],
     };
     let inp = input(&b);
     let boom: kob_executor::matcher::engine::Validator = &|_| panic!("simulated defect");
@@ -157,7 +159,7 @@ fn a_tick_budget_bounds_the_wall_clock() {
         orders.push(l_bid(100 + i, bid(1, P260, T3), 5 * WHOLE));
         orders.push(l_ask(200 + i, ask(2, P250, 5 * WHOLE, T3)));
     }
-    let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![] };
+    let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![], keeper_only: vec![] };
     let mut k = cfg();
     k.book_budget_ms = 1;
     k.tick_budget_ms = 1;
@@ -179,6 +181,7 @@ fn the_order_that_panics_the_book_is_found_and_quarantined_and_the_process_lives
         daa_score: NOW + 5,
         orders: vec![guilty.clone(), l_ask(2, ask(2, P250, 5 * WHOLE, T3)), l_ask(3, ask(3, P255, 5 * WHOLE, T3))],
         wallet_tokens: vec![],
+        keeper_only: vec![],
     };
     let inp = input(&b);
     let boom: kob_executor::matcher::engine::Validator = &move |s| {

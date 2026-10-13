@@ -62,7 +62,7 @@ fn a_thousand_crossing_pairs_at_a_loss_are_planned_within_the_budget() {
         orders.push(l_bid(20_000 + i, b, WHOLE));
         orders.push(l_ask(30_000 + i, a));
     }
-    let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![] };
+    let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![], keeper_only: vec![] };
     let inp = input(&b);
     let t0 = Instant::now();
     let rep = tick(&inp, &budgeted(cfg()), &Families::default(), &signer());
@@ -87,7 +87,7 @@ fn a_big_profitable_book_keeps_every_hard_rule() {
         a.tip = 100_000;
         orders.push(l_ask(30_000 + i, a));
     }
-    let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![] };
+    let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![], keeper_only: vec![] };
     let inp = input(&b);
     let rep = run(&inp, &cfg());
     assert!(!rep.prepared.is_empty(), "the profitable head of the book is matched");
@@ -183,7 +183,7 @@ fn crossing_pair_book(n: u32, kas: u32, tipped: bool) -> Vec<ListedOrder> {
 fn pair_orders_crossing_each_other_are_planned_within_the_budget() {
     use common::pair::*;
     let n = 100u32;
-    let b = MemoryBook { daa_score: NOW + 5, orders: crossing_pair_book(n, 50, true), wallet_tokens: vec![] };
+    let b = MemoryBook { daa_score: NOW + 5, orders: crossing_pair_book(n, 50, true), wallet_tokens: vec![], keeper_only: vec![] };
     let inp = input(&b);
     let cfg = EngineConfig { token_carrier: OP_TOKEN_CARRIER, ..cfg() };
     let t0 = Instant::now();
@@ -212,7 +212,7 @@ fn pair_orders_crossing_each_other_are_planned_within_the_budget() {
 #[test]
 fn a_big_untipped_pair_book_does_not_starve_the_plain_crossings() {
     use common::pair::*;
-    let b = MemoryBook { daa_score: NOW + 5, orders: crossing_pair_book(300, 50, false), wallet_tokens: vec![] };
+    let b = MemoryBook { daa_score: NOW + 5, orders: crossing_pair_book(300, 50, false), wallet_tokens: vec![], keeper_only: vec![] };
     let inp = input(&b);
     let cfg = EngineConfig { token_carrier: OP_TOKEN_CARRIER, ..cfg() };
     let t0 = Instant::now();

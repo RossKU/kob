@@ -96,8 +96,9 @@ pub enum IndexSub {
         #[arg(long)]
         live_only: bool,
     },
-    /// Write the matcher's book snapshot (JSON, `MemoryBook`: every listed order with its custody and strays, at the store's
-    /// cursor) for `match` / `keep --book-file`. Read-only next to a running writer; `--out` replaces the file atomically.
+    /// Write the matcher's book snapshot (JSON, `MemoryBook`: every listed order with its custody and strays, and the
+    /// keeper-only orders, at the store's cursor) for `match` / `keep --book-file`. Read-only next to a running writer;
+    /// `--out` replaces the file atomically.
     ExportBook {
         /// Output file (written to a temporary sibling, then renamed); default: standard output.
         #[arg(long)]

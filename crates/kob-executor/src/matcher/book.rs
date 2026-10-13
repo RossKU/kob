@@ -216,6 +216,12 @@ pub struct MemoryBook {
     /// P2PK token UTXOs by owner (hex key in JSON).
     #[serde(default)]
     pub wallet_tokens: Vec<TokenUtxo>,
+    /// Live orders the indexer proved but does not list (a token outside the allowlist, a carrier below the listing minimum,
+    /// an exit of an unlisted entry, ...; `indexer::book::unlisted_orders`): never matched, but the keepers kill, refund and
+    /// close them, as they do in process (`BookSource::keeper_only_orders`). An indexer's snapshot carries them so a keeper
+    /// fed by a `--book-file` serves them too (JSON `keeperOnly`, absent when empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keeper_only: Vec<ListedOrder>,
 }
 
 impl MemoryBook {

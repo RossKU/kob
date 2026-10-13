@@ -83,13 +83,6 @@ impl BookSource for IndexerSource {
         self.lock().watch_tx(Hash32(txid));
     }
 
-    fn keeper_only_orders(&mut self) -> Vec<crate::matcher::book::ListedOrder> {
-        book::unlisted_orders(self.lock().conn()).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "cannot read the unlisted orders from the store; the keepers serve the listed ones");
-            vec![]
-        })
-    }
-
     fn operator_tokens(&mut self, operator: &[u8; 32]) -> Vec<crate::maintenance::OwnToken> {
         book::operator_tokens(self.lock().conn(), operator).unwrap_or_else(|e| {
             tracing::warn!(error = %e, "cannot read the operator's tokens from the store; no maintenance this tick");

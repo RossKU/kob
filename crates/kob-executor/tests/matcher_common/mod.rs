@@ -466,7 +466,7 @@ fn run_kron_twin(inp: &TickInput, cfg: &EngineConfig) {
 }
 
 pub fn book(orders: Vec<ListedOrder>) -> MemoryBook {
-    MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![] }
+    MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![], keeper_only: vec![] }
 }
 
 /// Invariants of every prepared transaction (matcher.md §8).

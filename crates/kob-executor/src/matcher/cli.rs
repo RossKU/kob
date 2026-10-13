@@ -286,7 +286,8 @@ pub async fn run_keep(a: KeepArgs) -> anyhow::Result<()> {
     if a.common.offline {
         let book = read_snapshot(&a.common.book_file)?;
         let inp = crate::keepers::KeeperInput {
-            orders: book.orders,
+            // the listed orders and the proven unlisted ones the snapshot carries for the keepers
+            orders: book.orders.into_iter().chain(book.keeper_only).collect(),
             clock: super::book::Clock { daa: book.daa_score, utc: super::book::utc_now() },
             funding: vec![],
             excluded: Default::default(),

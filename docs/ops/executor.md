@@ -2218,10 +2218,12 @@ reads a JSON snapshot (`--book-file`, the `MemoryBook` format of
 `kob_executor::matcher::book`), re-read whenever the file changes. An indexer writes it with `kob-executor index export-book
 --out FILE` (read-only next to the running writer; the file is replaced atomically): run it periodically, and keep
 `--max-book-lag-daa` (default 300) so that a snapshot no longer refreshed plans nothing (`kob_matcher_book_stale`). The
-snapshot lists the orders the indexer lists; orders it proves but does not list (keeper-only: off-allowlist tokens, below the
-minimum value) are not in it, so `keep --book-file` does not refund those: `run` does. The snapshot must contain only
-orders the indexer validated (§1.1, §1.2) and must report strays per order (an old snapshot's `receipts` key is
-ignored). `--offline` prints one JSON line per planned transaction: its fills (each with
+snapshot must contain only orders the indexer validated (§1.1, §1.2) and must report strays per order (an old snapshot's
+`receipts` key is ignored). Its `keeperOnly` array holds the live orders the indexer proves but does not list
+(a token outside the allowlist, an order value below the listing minimum, an exit of an unlisted entry, ...): the matcher
+never sees them, the keepers kill, refund and close them exactly as they do under `run`. An indexer's snapshot
+(`indexer::book::snapshot`, what `index export-book` writes) carries them; a file without the key has none, and its
+keepers then serve the listed orders only. `--offline` prints one JSON line per planned transaction: its fills (each with
 `evidence`, the leg index of a triggered fill's evidence, else null) and `updates` (`order`, `update` `arm` / `trail`,
 `steps`, `evidence`, `take`).
 

@@ -62,7 +62,9 @@ pub fn cursor_daa(conn: &Connection) -> DbResult<u64> {
     Ok(super::db::meta_get(conn, "cursor_daa")?.and_then(|d| d.parse().ok()).unwrap_or(0))
 }
 
-/// One consistent read of the whole book (a single read transaction).
+/// One consistent read of the whole book (a single read transaction): the listed orders and, apart, the proven unlisted
+/// ones the keepers serve (`keeper_only`), so a snapshot written to a file (`match` / `keep --book-file`) leaves no
+/// keeper-only order without its kill, refund or close.
 pub fn snapshot(conn: &Connection, _operator: Option<[u8; 32]>) -> DbResult<MemoryBook> {
     let tx = conn.unchecked_transaction()?;
     let book = MemoryBook {
@@ -70,6 +72,7 @@ pub fn snapshot(conn: &Connection, _operator: Option<[u8; 32]>) -> DbResult<Memo
         orders: listed_orders(&tx)?,
         // The operator's P2PK token inventory is not on any order id: the indexer does not track it.
         wallet_tokens: vec![],
+        keeper_only: unlisted_orders(&tx)?,
     };
     tx.commit()?;
     Ok(book)

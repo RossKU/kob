@@ -64,7 +64,7 @@ fn the_sanity_gate_resolves_the_token_program_like_the_builder() {
 fn honest_book(extra: Option<ListedOrder>) -> MemoryBook {
     let mut orders = vec![l_bid(3, bid(3, P255, T3), 5 * WHOLE), l_ask(2, ask(1, P250, 5 * WHOLE, T3))];
     orders.extend(extra);
-    MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![] }
+    MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![], keeper_only: vec![] }
 }
 
 fn matched(r: &TickReport, id: [u8; 32]) -> bool {

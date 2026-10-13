@@ -172,7 +172,7 @@ fn random_books_never_violate_a_covenant_rule() {
                 o.strays.push(custody(r.range(1, 5 * WHOLE), id, 1_500));
             }
         }
-        let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![] };
+        let b = MemoryBook { daa_score: NOW + 5, orders, wallet_tokens: vec![], keeper_only: vec![] };
         let mut k = cfg();
         // stops are triggered and armed inside the batches; sometimes without arming updates
         k.planner.arm = !r.chance(20);

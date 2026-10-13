@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use common::*;
 use kob_executor::matcher::book::MemoryBook;
 use kob_executor::matcher::node::*;
-use kob_executor::matcher::run::{Roles, RunConfig, Runner, ViewSource};
+use kob_executor::matcher::run::{FileSource, Roles, RunConfig, Runner, ViewSource};
 use kob_executor::matcher::wallet::p2pk_spk_string;
 use kob_protocol::state::*;
 use serde_json::Value;
@@ -324,6 +324,36 @@ async fn keeper_role_kills_expired_iocs() {
     assert_eq!(rep.built.len(), 1);
     assert_eq!(rep.built[0].0, "kill");
     assert_eq!(rep.submitted.len(), 1);
+}
+
+/// A keeper fed by a `--book-file` serves the orders the indexer proves but does not list (the snapshot's `keeperOnly`, an
+/// out-of-range token, a carrier below the listing minimum): the expired IOC is killed as the in-process keeper kills it,
+/// and the matcher never plans it. The file is written by hand, so the test reads the format, not a struct.
+#[tokio::test]
+async fn a_book_file_keeper_kills_a_keeper_only_order() {
+    let node = MockNode::new(5_700);
+    let mut ioc = ask(1, P250, 5 * WHOLE, T3);
+    ioc.tif = TIF_IOC;
+    ioc.expiry_daa = NO_EXPIRY;
+    let o = listed(cid(1), AnyState::KobAsk(ioc), CARRIER, 5_000);
+    let mut b = book(vec![]);
+    b.daa_score = 5_700;
+    let mut json = serde_json::to_value(&b).unwrap();
+    json["keeperOnly"] = serde_json::json!([serde_json::to_value(&o).unwrap()]);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("book.json");
+    std::fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
+    let read = kob_executor::matcher::run::read_snapshot(&path).unwrap();
+    assert!(read.orders.is_empty(), "a keeper-only order is never on the book");
+    for (roles, built) in [(M, 0), (Roles { matcher: false, keeper: true }, 1)] {
+        let cfg = RunConfig { roles, ..RunConfig::default() };
+        let mut r = Runner::new(node.clone(), FileSource::new(&path), Box::new(signer()), cfg);
+        let rep = r.step().await.unwrap();
+        assert_eq!(rep.built.len(), built, "{roles:?}: {:?}", rep.built);
+        if built > 0 {
+            assert_eq!(rep.built[0].0, "kill");
+        }
+    }
 }
 
 #[tokio::test]
