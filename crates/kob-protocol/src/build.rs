@@ -1790,10 +1790,10 @@ pub struct SellFirstEntry {
 }
 
 /// An arm or trailing ratchet of a conditional order, or the arm of a stop entry, WITHOUT a fill of that
-/// order (its `update` entry), next to the fill of the plain leg `evidence` of the same batch (touch,
-/// protocol v2.6: the evidence exists only in that transaction, so arming is done by matchers inside
-/// their batches). The batch's change key (the matcher) takes up to the order's `keeperTip`. A booked exit is never
-/// updated in a transaction that also spends its repeat entry (the covenants refuse it).
+/// order (its `update` entry), next to the fill of the plain leg `evidence` of the same batch (touch: the
+/// evidence exists only in that transaction, so arming is done by matchers inside their batches). The batch's
+/// change key (the matcher) takes up to the order's `keeperTip`. A booked exit is never updated in a transaction
+/// that also spends its repeat entry (the covenants refuse it).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchUpdate {

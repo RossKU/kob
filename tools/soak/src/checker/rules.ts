@@ -110,7 +110,7 @@ export function worstBound(contract: string, s: Record<string, string>): WorstBo
 }
 
 /**
- * The terms an order filled under, given its in-place amends (protocol v2.7 / KOB1 v3: a plain ask or bid amended in place keeps its covenant id;
+ * The terms an order filled under, given its in-place amends (KOB1 `AMEND` record: a plain ask or bid amended in place keeps its covenant id;
  * the indexer records an `amend` event whose `detail.previous` holds the terms BEFORE it: price, tif, expiryDaa, activeFrom, tip).
  * The terms at a fill are the `previous` of the first amend after it (event ids only grow), else the order's current state.
  */
@@ -359,7 +359,7 @@ export function checkFokEvents(o: { covenant_id: string; contract: string; tif?:
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ 5. triggers (touch, protocol v2.6)
+// ------------------------------------------------------------------------------------------------ 5. triggers (touch)
 
 /**
  * One fill of the transaction of an `arm` / `trail` event that could be its trigger evidence (the fill of ANOTHER order in the same
@@ -407,7 +407,7 @@ export function stopMayHaveMoved(s: Record<string, string>, live: boolean, index
 }
 
 /**
- * Invariant 5 (touch trigger, v2.6): an `arm` / `trail` event of a conditional order or stop entry must be backed by a fill (n > 0) in
+ * Invariant 5 (touch trigger): an `arm` / `trail` event of a conditional order or stop entry must be backed by a fill (n > 0) in
  * the SAME transaction of a plain resting `KobAsk` / `KobBid` (or Kron) of the same token and scale (`evidence`, contracts/v2 `touch`):
  *   common      amount (base units) >= minTouch; slope == 0; exposedSince + minRestDaa <= the tx's DAA (the event's `daa` is
  *               never below the lock time, so failing it is certain); the tx's DAA >= activeFrom

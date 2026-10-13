@@ -1,5 +1,5 @@
 //! Keepers (`docs/spec/matcher.md` §5, §11): IOC / FOK kill in the first block that allows it, soft-expiry and idle
-//! refunds, repeating entries, stray handling; never an arm or a trail (protocol v2.6: matchers arm stops inside the
+//! refunds, repeating entries, stray handling; never an arm or a trail (matchers arm stops inside the
 //! batches that fill their evidence, `matcher_scenarios.rs`); the pair kinds (`KobPair`, `KobCondPair`, `KobIfdPair`) are refunded,
 //! killed and swept like the KAS kinds, a sell-first entry with both its custodies. Every job is validated through the rusty-kaspa
 //! v2.1.0 engine.
@@ -181,7 +181,7 @@ fn day_orders_refund_at_expiry_not_at_the_deadline() {
 #[test]
 fn keepers_never_arm_or_trail_stops_the_matcher_arms_them_in_its_batches() {
     // Unarmed stops and stop entries, a trailing stop whose UTXO is old enough, and resting plain orders at or through
-    // every trigger: in v2.6 an `update` needs its evidence filled in the same transaction, so a keeper has nothing to
+    // every trigger: an `update` needs its evidence filled in the same transaction, so a keeper has nothing to
     // build (the matcher arms them next to the fills, `matcher_scenarios.rs`).
     let cfg = KeeperConfig::default();
     let mut trailing = cond_ask(1, 300_000_000, 200_000_000, 4 * WHOLE, T3);

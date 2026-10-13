@@ -535,8 +535,8 @@ mod tests {
         }
     }
 
-    /// With `deploy-tn10` / `deploy-mainnet` the build only records its network (protocol v2.6: no template depends on a
-    /// genesis): the indexer identifies exactly the templates the deployment record lists, by redeem script and by hash.
+    /// With `deploy-tn10` / `deploy-mainnet` the build only records its network (no template depends on a genesis): the
+    /// indexer identifies exactly the templates the deployment record lists, by redeem script and by hash.
     #[cfg(any(feature = "deploy-tn10", feature = "deploy-mainnet"))]
     #[test]
     fn deployment_templates_are_the_ones_identified() {

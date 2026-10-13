@@ -1,4 +1,4 @@
-//! The KOB matcher (`docs/spec/matcher.md`, protocol v2.6).
+//! The KOB matcher (`docs/spec/matcher.md`).
 //!
 //! | Module | Contents |
 //! |---|---|

@@ -7,7 +7,7 @@
 //! | close | an empty repeating `KobIfdAsk` (`amountLeft = 0`) | `refundTip` |
 //! | sweep | strays of the operator's own orders (cancel-replace; nobody else may move strays) | — |
 //!
-//! Arming and trailing are not keeper jobs (protocol v2.6): an `update` reads its trigger evidence from a plain resting fill
+//! Arming and trailing are not keeper jobs: an `update` reads its trigger evidence from a plain resting fill
 //! of the same transaction, so the matcher arms and ratchets stops inside the batches that fill their evidence
 //! (`crate::matcher::batch`, §4) and takes their `keeperTip` there.
 //!

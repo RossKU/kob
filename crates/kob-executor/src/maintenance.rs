@@ -1,10 +1,9 @@
 //! Operator maintenance (`docs/ops/executor.md`, maintenance): the operator's own token UTXOs.
 //!
-//! The operator can come to hold token UTXOs of its own key (protocol v2.6 routes kept the remainder of their purchases of B
-//! there; today a route delivers every base unit of B it buys, but tokens may still reach the operator's key, and the
-//! matcher's opt-in surplus-inventory policy, `PlannerConfig::inventory`, accumulates pair surpluses there on purpose),
-//! each with a KAS carrier on it (`EngineConfig::token_carrier`, 10 KAS by default; a kept surplus `InventoryPolicy::keep_carrier`,
-//! 2 KAS by default). Left alone they pile up: in the TN10 soak
+//! The operator can come to hold token UTXOs of its own key (a route delivers every base unit of B it buys, but tokens may
+//! still reach the operator's key, and the matcher's opt-in surplus-inventory policy, `PlannerConfig::inventory`,
+//! accumulates pair surpluses there on purpose), each with a KAS carrier on it (`EngineConfig::token_carrier`, 10 KAS by
+//! default; a kept surplus `InventoryPolicy::keep_carrier`, 2 KAS by default). Left alone they pile up: in the TN10 soak
 //! (2026-10-01) each executor held 22 to 28 of them after 51 minutes, 220 to 280 KAS of carriers locked for a few cents of
 //! tokens, while the bank's top-ups ran into them.
 //!

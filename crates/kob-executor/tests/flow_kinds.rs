@@ -1,5 +1,5 @@
 //! Flow tests on real artifacts: every order kind created, filled, cancelled and refunded with the
-//! `kob-protocol` builders (v2.4 transactions validated by the script engine) and followed by the indexer.
+//! `kob-protocol` builders (transactions validated by the script engine) and followed by the indexer.
 
 mod common;
 

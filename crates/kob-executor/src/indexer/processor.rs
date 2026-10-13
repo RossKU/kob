@@ -2237,7 +2237,7 @@ impl Processor {
 }
 
 // ---------------------------------------------------------------------------------------------
-// trigger evidence (protocol v2.6 and v3)
+// trigger evidence
 
 /// The side and quote of a plain resting `KobAsk` / `KobBid` (either family) whose revealed spend is a fill (`n > 0`): what
 /// that input offers as trigger evidence to the conditional orders and stop entries of the same transaction (side

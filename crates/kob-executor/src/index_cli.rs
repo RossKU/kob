@@ -154,8 +154,8 @@ pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
     if let Some(v) = a.reorg_window_hours {
         cfg.reorg_window_hours = v;
     }
-    // A deployment build (e.g. `--features deploy-tn10`) records the network it was built for (protocol v2.6: the templates
-    // are the reference ones; the build only refuses to index another network). The reference build implies none: the network
+    // A deployment build (e.g. `--features deploy-tn10`) records the network it was built for (the templates are the
+    // reference ones; the build only refuses to index another network). The reference build implies none: the network
     // is given explicitly, never a silent testnet-10.
     cfg.network = crate::config::resolve_network(Some(&cfg.network)).map_err(|e| anyhow!(e))?;
     if cfg.rpc_url.trim().is_empty() {

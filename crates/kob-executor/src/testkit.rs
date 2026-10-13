@@ -436,7 +436,7 @@ pub fn noise_tx(salt: u64, covenant: bool) -> Tx {
 // ---------------------------------------------------------------------------------------------
 // the chain world: builds, signs, validates and tracks real transactions
 
-/// Builds and signs real v2.6 transactions with the protocol builders and tracks the DAA score of
+/// Builds and signs real transactions with the protocol builders and tracks the DAA score of
 /// every output, so follow-up requests carry the UTXO daa the chain reports.
 pub struct World {
     keys: BTreeMap<[u8; 32], [u8; 32]>,

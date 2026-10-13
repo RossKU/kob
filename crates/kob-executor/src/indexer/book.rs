@@ -27,8 +27,8 @@ use kob_protocol::tx::{OrderUtxo, TokenUtxo, Utxo};
 use rusqlite::Connection;
 use std::collections::HashMap;
 
-/// The store as an [`OrderBookView`]. `operator` is the key the matcher signs with (informational: since protocol v2.6
-/// nothing in the view depends on it; the v2.4 operator receipts are gone).
+/// The store as an [`OrderBookView`]. `operator` is the key the matcher signs with (informational: nothing in the view
+/// depends on it).
 pub struct StoreBook<'a> {
     pub conn: &'a Connection,
     pub operator: Option<[u8; 32]>,
