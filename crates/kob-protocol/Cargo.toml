@@ -78,3 +78,7 @@ required-features = ["engine"]
 [[test]]
 name = "quote_rule"
 required-features = ["engine"]
+
+[[test]]
+name = "payload_doc_example"
+required-features = ["engine"]

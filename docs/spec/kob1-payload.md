@@ -329,49 +329,68 @@ vectors `pair.create.*`).
 
 | Transaction | Payload bytes (version 4) |
 |---|---|
-| Create ask / conditional ask / sell-first IFD (KCC-20, a non-zero extension commitment) | 175 / 189 / 509 |
+| Create ask / conditional ask / sell-first IFD (KCC-20, a non-zero extension commitment) | 207 / 221 / 509 |
 | Create bid / conditional bid / buy-first IFD | 192 / 194 / 467 |
 | Same, KRON (ask / conditional ask / sell-first IFD; bid / conditional bid / buy-first IFD) | 143 / 156 / 443; 160 / 161 / 434 |
-| A KCC-20 ask whose token has a zero extension commitment | 32 less than the KCC-20 row |
-| Create a pair order: `KobPair` ask / bid, `KobCondPair` ask / bid, `KobIfdPair` buy-first / sell-first (two custody parts); KCC-20 A and B | 280 / 280, 294 / 294, 756 / 790 |
-| In-place amend of an ask (either family) | 143 |
+| A KCC-20 ask whose token has a zero extension commitment | 64 less than the KCC-20 row (the state's field and the custody's, each elided) |
+| Create a pair order: `KobPair` ask / bid, `KobCondPair` ask / bid, `KobIfdPair` buy-first / sell-first (two custody parts); KCC-20 A and B | 312 / 312, 326 / 326, 756 / 790 |
+| In-place amend of an ask: KCC-20 / KRON | 175 / 143 |
 | In-place amend of a bid: KCC-20 / KRON | 179 / 147 |
 | Day order: + deadline | + 5 (version 2: + 8) |
 | x402 reference only (32 B) + note | 56 (version 2, unchanged) |
 
 Each payload byte adds one byte to the transaction, so 2 grams to the fee mass (transient) and
-1 gram of compute mass: a record costs twice its size in grams of fee mass (the version-4 ask record, 175 payload bytes:
-350 grams, 0.00035 KAS at the relay floor).
+1 gram of compute mass: a record costs twice its size in grams of fee mass (the version-4 ask record, 207 payload bytes:
+414 grams, 0.000414 KAS at the relay floor).
 
 ## Examples
 
-Hex of the `create.ask` vector (175 bytes), split at the fields:
+Hex of the `create.ask` vector (207 bytes), split at the fields (`crates/kob-protocol/tests/payload_doc_example.rs` rebuilds
+the vector with the encoder and compares it with these blocks byte for byte):
 
 ```
 4b4f4231 04                      magic, version 4
-01 a700                          ORDER, length 167 (u16le)
+01 c700                          ORDER, length 199 (u16le)
 00 01 01 00                      output 0, family KCC-20, kind KobAsk, flags 0
 00                               zeroMask: no all-zero 32-byte field
-1b84c556…  70707070…  173ca6a7…  maker, tokenCovId, tokenTplHash (32 bytes each)
-01 f215 e807 e807 …              tplPrefixLen 1, tplSuffixLen 2802, scale 1000, minFill 1000, price, tip, ... (LEB128)
-01 eeee…ee                       custody: token output 1, extension commitment (flag bit 1 clear)
+1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f  maker
+7070707070707070707070707070707070707070707070707070707070707070  tokenCovId
+173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b  tokenTplHash
+01 f215 e807 e807                tplPrefixLen 1, tplSuffixLen 2802, scale 1000, minFill 1000 (LEB128 from here)
+80e59a77 a08d06                  price 250000000, tip 100000
+00 00 8088debe01 e0cfd501        tif 0, activeFrom 0, expiryDaa 400000000, refundTip 3500000
+00 00 00 00                      interval, maxFill, slope, priceEnd 0
+e807 904e                        decayStep 1000, amountLeft 10000
+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  extensionCommitment (the state's last field)
+01                               custody: token output 1
+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  custody: extension commitment (flag bit 1 clear)
 ```
 
-`create.ask.day` sets flag bit 0 and appends the LEB128 deadline `80a2f1d506` (1,790,726,400 = the next 00:00 UTC).
+`create.ask.day` (210 bytes) sets flag bit 0, has its own `expiryDaa` (`978651`, 1327895) and appends the LEB128 deadline
+`80a2f1d506` (1,790,726,400 = the next 00:00 UTC).
 
-`amend.ask`:
+`amend.ask` (175 bytes):
 
 ```
-4b4f4231 04
-03 8700                          AMEND, length 135 (u16le)
+4b4f4231 04                      magic, version 4
+03 a700                          AMEND, length 167 (u16le)
 00 00 01 01 00                   output 0, input 0, family KCC-20, kind KobAsk, flags 0
-00 1b84c556… …                   the amended state, compact (a new price)
+00                               zeroMask
+1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f  maker
+7070707070707070707070707070707070707070707070707070707070707070  tokenCovId
+173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b  tokenTplHash
+01 f215 e807 e807                tplPrefixLen, tplSuffixLen, scale, minFill
+80b8b872 a08d06                  the new price 240000000, tip 100000
+00 00 8088debe01 e0cfd501        tif, activeFrom, expiryDaa, refundTip
+00 00 00 00 e807 904e            interval, maxFill, slope, priceEnd, decayStep, amountLeft
+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  extensionCommitment
 ```
 
 `x402.only` (version 2: no order record):
 
 ```
-4b4f4231 02
-81 2000 abab…ab                  X402, 32-byte reference
+4b4f4231 02                      magic, version 2
+81 2000                          X402, length 32 (u16le)
+abababababababababababababababababababababababababababababababab  the reference
 82 0d00 783430322d636c69656e742f31   NOTE "x402-client/1"
 ```
