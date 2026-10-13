@@ -1031,8 +1031,8 @@ amount a fill takes. The pair rows use the reference token programs of the vecto
 | pair if-done entry fill, buy-first / sell-first (`pair.ifd.bid.cont` / `pair.ifd.ask.cont`) | 25,574 / 28,923 | 0.0511 / 0.0578 KAS |
 | pair repeat: take-profit + merge, buy-first / sell-first into new custodies (`pair.rearm.bid` / `pair.rearm.ask.new`) | 29,146 / 25,908 | 0.0583 / 0.0518 KAS |
 | create / cancel / refund a pair ask (`pair.create.ask` / `pair.cancel.ask` / `pair.refund.ask`); create a sell-first pair entry (`pair.create.ifdAsk`, two custodies) | 4,244 / 6,654 / 6,602; 8,171 | 0.0085 / 0.0133 / 0.0132; 0.0163 KAS |
-| global batch: two 8/8 books (2 bids × 2 asks; an IOC ask into two bids) and a routed pair order 8/8 / 8/8, one transaction | to be measured (pair phase) | to be measured (pair phase) |
-| global batch at the physical limit: fills of 12 books of 8/8 tokens, the first of several transactions over 48 books | to be measured (pair phase) | to be measured (pair phase) |
+| global batch: two 8/8 books (2 bids × 2 asks; an IOC ask into two bids) and a routed pair order 8/8 / 8/8, one transaction, 10 fills | 51,829 | 0.1037 KAS |
+| global batch at the physical limit: the first of 4 transactions over 48 books of 8/8 tokens, 38 fills | 230,267 | 0.4605 KAS |
 
 **Script units of pair inputs.** A pair input reads, besides its own custodies and the template of the token it buys,
 only its trigger evidence (a pair conditional or entry: one or two evidence state spans, and the custody input of an ask
@@ -1055,7 +1055,7 @@ of one token 4.8 ms; 10,000 × 10,000 of one token 60.6 ms (the 8/8 slots bound 
 1,000 × 1,000 each 142.7 ms (36 fills, bounded by size); 10,000 × 10,000 all crossing at a loss 74.6 ms (nothing
 built). A whole tick over the 10,000 × 10,000 book (plan, build, sign and engine-validate every transaction) runs to its
 20 s budget and prepares 270 chained transactions (3,240 fills; the first 76,583 bytes); the rest waits for the next
-tick. With pair books: to be measured (pair phase).
+tick. Planning time with pair books is not measured.
 
 ---
 

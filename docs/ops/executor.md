@@ -645,7 +645,7 @@ order adds about 1 to 2 KB to the log and 2.6 KB to the database; a TN10 day wit
 placed and partly filled would add about 1.5 MB to the log and 2.6 MB to the database. The savings
 compared with keeping the response are three to four orders of magnitude.
 
-**Storage per order** (real v2.4 transactions built with the protocol builders, records versus the
+**Storage per order** (real transactions built with the protocol builders of 2026-09-29, records versus the
 raw wire JSON of the same transactions):
 
 | Lifecycle | txs | record log | raw JSON | of which signature scripts | log / raw |
@@ -671,8 +671,8 @@ s, parse 48 ms and database commit 15 ms. Local processing is therefore not the 
 response time and the link are, so co-locating node and indexer matters [U: measure on loopback]. The
 follower logs `fetch_ms`, `parse_ms` and `commit_ms` for every batch of 100 or more chain blocks.
 
-Still to measure on the TN10 soak and mainnet: RSS at `High` under a flood, record-log growth per day under real KOB
-traffic, and the effective pruning cliff [U].
+Still to measure on mainnet: record-log growth per day under real KOB traffic and the effective pruning cliff [U] (RSS
+under a TN10 flood: *Parallel fetch*, "Why the bound is hard now").
 
 #### Bandwidth: what following the chain costs per transaction, and why the indexer runs next to its node
 
@@ -1294,7 +1294,7 @@ One item (the leading fields are those of the custody / stray token UTXO views, 
 
 ```json
 { "txid": "<hex32>", "index": 1, "token": "<token covenant id hex32>", "family": "kcc20",
-  "program": "KCC20Ref_8x8", "template_hash": "<hex32>",
+  "program": "KCC20Ref", "template_hash": "<hex32>",
   "owner": "<hex32>", "owner_kind": 0,
   "amount": "300", "value": "1000000000", "role": "owned",
   "state": { "amount": "300", "owner": "<hex32>", "owner_scheme": 0, "borrow_scheme": 0,

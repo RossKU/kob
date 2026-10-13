@@ -38,7 +38,7 @@ Every vector file is vendored unmodified (CC0) with a `PROVENANCE.md` and pinned
 | 3.7.4-3.7.5 Views, continuation | 3 + 1 | view cuts, view hashes, `EncodeState`, `R_next`, P2SH | pass |
 | 3.9.1 Virtual element | 1 | `encode_struct_payload` (Packed), `kcc1::hash` | pass |
 | Rejections | 30 | `kcc1::decode_arguments`, `kcc1::decode_state`, `kcc1::validate_argument_type`, `kcc1::check_entrypoints`, the encoders, the compiler | all rejected |
-| Every KOB program | 55 programs, 159 entrypoints (`contracts/artifacts`, the router) | dispatch tags recomputed from the ABI types, every type a KCC-1 type, template hashes recomputed, state spans canonical | pass (one recorded exception, 3c) |
+| Every KOB program | 57 programs, 163 entrypoints (`contracts/artifacts`, the router) | dispatch tags recomputed from the ABI types, every type a KCC-1 type, template hashes recomputed, state spans canonical | pass (one recorded exception, 3c) |
 
 ### KCC-2
 
@@ -195,7 +195,8 @@ KOB issues the reference in its standard configuration, `KCC20Ref` (3 token inpu
 registry `kcc20-ref-3x3`): `kob token issue` and the web app by default; the published public-mint build is the second
 choice. The slot variants (`KCC20Ref_4x5`, `KCC20Ref_8x8`, `KCC20Ref_16x16`), `KCC20P2` / `KCC20Batch` and `KCC20Opt` are
 prototypes: kept, built and tested, not KOB's issuance (the CLI issues the 8/8 only when it is named `--program 8x8-prototype`,
-with a warning; the app does not offer it). `KCC20Ref_8x8` stays a pinned, tradable template.
+with a warning; the app does not offer it). `KCC20Ref_8x8` stays a pinned template (`pending-review`: not tradable on
+mainnet).
 
 The order templates do not change. Their stray scan reads up to `MAX_TOK_IN = 8` token inputs of the order's token and
 refuses more; with a 3 / 3 token a transaction carries at most 3 (the leader takes at most 2 delegates, and after a
