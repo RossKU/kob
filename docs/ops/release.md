@@ -11,9 +11,9 @@ rescue an order. The launch therefore runs with a strict template list (section 
 
 ## 1. No genesis step: the build is reproducible from source
 
-Since protocol v2.6 a stop is armed by a fill in the same transaction (touch trigger). There is no receipt
-covenant, no `R_ID` and no transaction to broadcast before the release: every order template is the
-reference artifact of `contracts/artifacts`, the same on every network. A mainnet deployment is therefore a
+No order template depends on a network or a genesis (a stop is armed by a fill in the same transaction, the touch
+trigger), so there is no transaction to broadcast before the release: every order template is the reference artifact
+of `contracts/artifacts`, the same on every network. A mainnet deployment is therefore a
 **record**, not a rebuild:
 
 | Piece | Source | Reproduced by |
@@ -32,9 +32,9 @@ for testnet-10 and mainnet.
 ## 2. Release gates (all must hold before a mainnet release)
 
 1. Wallet signing gate passed for the wallets the release supports (covenant inputs signed by the wallet).
-2. KCC-20 template bytes pinned against the merged upstream specification and its conformance vectors
-   (`crates/kob-tests/vectors`); until then the KCC-20 programs other than the reference 3/3 stay `pending-review`
-   (not on the strict list). The reference 3/3 (`kcc20-ref-3x3`, KOB's standard program) is `reviewed` by internal
+2. KCC-20 template bytes pinned against the upstream specification (Last Call) and its conformance vectors
+   (`crates/kob-tests/vectors`, `docs/spec/kcc-conformance.md`); the KCC-20 programs other than the two below stay
+   `pending-review` (not on the strict list). The reference 3/3 (`kcc20-ref-3x3`, KOB's standard program) is `reviewed` by internal
    review only (maintainer decision 2026-10-12, canary launch), and so is the reference's published public-mint build
    (`kcc20-ref-public-mint`, maintainer decision 2026-10-13, the same permissionless KCC-20 policy).
 3. Internal review: no open high or critical finding.
@@ -142,20 +142,19 @@ everywhere.
 
 ## 7. Upgrade order: indexers before wallets
 
-Payload version 3 (compact placement records and in-place amends, `docs/spec/kob1-payload.md`) is written by
-the current builders whenever a transaction carries an `ORDER` or `AMEND` record. An indexer built before
-version 3 rejects every version-3 payload (`payload:unsupported KOB1 version 3`): it would list none of the
-orders the new wallets place and would show an in-place amended order as open with an unknown state.
+A release that changes the `KOB1` payload version (version 4 today, `docs/spec/kob1-payload.md`) must reach the indexers
+before the wallets: an indexer refuses a payload version it does not know (`payload:unsupported KOB1 version N`), so it
+would list none of the orders the new wallets place.
 
-1. Operators upgrade their **executors / indexers** first (the database migrates to schema 4 in place, no
-   replay; `docs/ops/executor.md` 7.6). Check `GET /v1/health` and that a version-3 placement made with
-   `kob-cli` is listed.
+1. Operators upgrade their **executors / indexers** first. A database schema change says in the release notes whether
+   the database is brought up to date in place or rebuilt with `kob-executor index replay` (`docs/ops/executor.md` 7.6).
+   Check `GET /v1/health` and that a placement made with `kob-cli` is listed.
 2. Then the **web app** and other wallets (`kob-cli`, bots) are published with the new builders.
 3. Announce the order in the release notes; a host serving the web app should point it only at indexers
    that report the release version.
 
-Older version-2 payloads keep decoding (record logs replay unchanged), so a rollback of the wallets is safe;
-a rollback of an indexer below version 3 is not once version-3 orders exist.
+The record log keeps every payload as it was, so a rebuilt database replays the old ones unchanged; a rollback of the
+wallets is safe, a rollback of an indexer below the payload version in use is not.
 
 ## 8. Operator requirements
 

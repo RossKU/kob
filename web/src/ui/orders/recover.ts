@@ -12,7 +12,7 @@ import { jsonText } from '../kit/download';
 
 export type ImportKind = 'kob-backup' | 'indexer-recovery';
 
-/** The indexer's maker-recovery format (docs/ops/indexer.md 7.5) as JSON text. */
+/** The indexer's maker-recovery format (docs/ops/executor.md, Part B 7.5) as JSON text. */
 export function recoveryFileText(records: readonly PlacementRecord[], network: string): string {
   return jsonText(exportIndexerRecovery([...records], network));
 }

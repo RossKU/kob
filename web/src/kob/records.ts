@@ -5,7 +5,7 @@
 //     `amendedRecords` moves a record to the state an in-place amend continued it with (`recoverAmends`), `sweptRecords` keeps a swept order's
 //     record and moves its last proven state to the continuation (a sweep never drops the record: the order lives on);
 //   * `RecordStore`: Memory and localStorage implementations (localStorage access is always guarded: private mode / quota / corrupt data);
-//   * export / import: the indexer's maker-recovery format (docs/ops/indexer.md 7.5) and a fuller KOB backup that also keeps the placed txs;
+//   * export / import: the indexer's maker-recovery format (docs/ops/executor.md, Part B 7.5) and a fuller KOB backup that also keeps the placed txs;
 //     every import is RE-VALIDATED with kob-wasm, an import never adds a record the maker could not have placed;
 //   * `resolveRecord`: asks a node what became of an order.
 //

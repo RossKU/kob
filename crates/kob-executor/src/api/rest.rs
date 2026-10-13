@@ -280,7 +280,7 @@ fn parse_owner(s: &str) -> Result<Vec<u8>, ApiError> {
     }
 }
 
-/// Token UTXOs of tracked tokens with proven states, by owner and/or token (`docs/ops/indexer.md`).
+/// Token UTXOs of tracked tokens with proven states, by owner and/or token (`docs/ops/executor.md`, Part B 5.1).
 pub async fn token_utxos(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     let owner = q.get("owner").map(|s| parse_owner(s)).transpose()?;
     let token = opt_hash(&q, "token")?;

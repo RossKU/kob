@@ -21,8 +21,8 @@ says "normative", it is normative for this repository's code, not for the Kaspa 
 
 | Document | What it covers |
 |---|---|
-| [ops/executor.md](ops/executor.md) | Running `kob-executor`: one process (`run`), the indexer (node, storage, read API, runbook) and the matcher and keepers (keys, economics, flags) |
-| [ops/indexer.md](ops/indexer.md), [ops/matcher.md](ops/matcher.md) | Pointers into `executor.md` (the roles are one binary) |
+| [ops/executor.md](ops/executor.md) | Running `kob-executor`: one process (`run`), the indexer (Part B: node, storage, read API, runbook) and the matcher and keepers (Part C: keys, economics, flags) |
+| [ops/release.md](ops/release.md) | Cutting a mainnet release: gates, registry, reproducible build, hashes to publish, upgrade order, operator requirements |
 
 ## Security (`docs/security/`)
 

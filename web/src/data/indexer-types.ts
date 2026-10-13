@@ -1,4 +1,4 @@
-// Response shapes of the KOB indexer read API (`/v1`, crates/kob-executor, docs/ops/indexer.md on branch m3/indexer).
+// Response shapes of the KOB indexer read API (`/v1`, crates/kob-executor, docs/ops/executor.md Part B 5).
 //
 // Conventions of the API: JSON, snake_case keys, ids/hashes/keys lower-case hex, every sompi and token amount a DECIMAL STRING, DAA scores /
 // counts / scales plain numbers. Protocol v3 (docs/ops/executor.md 5.0): quantities are token base units, prices and tips sompi per whole token

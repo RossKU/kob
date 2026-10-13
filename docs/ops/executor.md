@@ -4,9 +4,9 @@
 indexes every KOB order into a reorg-safe database, serves a read API (REST +
 WebSocket), and, with the operator's hot key, matches crossing orders (arming and triggering stops inside its batches) and keeps them (refund,
 kill, close). The normative rules are `docs/spec/matcher.md`, `docs/spec/order-types.md` and
-`docs/spec/kob1-payload.md` (protocol v2.6); this guide covers operation.
+`docs/spec/kob1-payload.md`; this guide covers operation.
 
-Both token families of protocol v2.6 are handled end to end: **KCC-20** (112-byte token state, owner scheme `0x04`
+Both token families are handled end to end: **KCC-20** (112-byte token state, owner scheme `0x04`
 custody) and **KRON** (46-byte token state, `id_type` 2 custody, no extension commitment, 4 token inputs / 5
 outputs of at most 1e9 units per transaction). The KRON order kinds (`KobAskKron`, ..., `KobIfdAskKron`) are
 indexed, listed, matched and kept like their KCC-20 twins; a book is one family's token. A pair order (`KobPair`, `KobCondPair`,
@@ -75,7 +75,7 @@ KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kob-executor run \
   public key). A `TokenState` carries either layout, so the book, the strays and the matcher's planner
   handle both. The token allowlist may name a token's `family` (`kcc20`, `kron`): an order whose token
   program is of the other family is unlisted with `token_family_mismatch`.
-* **Trigger evidence** is not stored (protocol v2.6: no receipts). A stop arms, ratchets or fills at its trigger only
+* **Trigger evidence** is not stored separately. A stop arms, ratchets or fills at its trigger only
   in a transaction that also fills a plain resting `KobAsk` / `KobBid`; the matcher plans those next to each other
   (C, "Stops: triggered and armed in the batch"). The indexer records which fill it was on the event
   (`detail.evidence`: input index, the evidence order's covenant id, side 1 ask / 2 bid, its quote) and derives the armed / ratcheted continuation (a
@@ -182,8 +182,8 @@ storage, never under `/run` (tmpfs): a pause must survive a reboot, or `Restart=
 file fails closed: when its state cannot be read (the unit may not look into its directory, an I/O error) the process
 counts as paused and warns once, so check `kob_matcher_paused` after a deployment.
 
-**Deployment build.** Every build embeds the reference templates (protocol v2.6: no receipt covenant, no `R_ID`, no
-genesis step; conditional orders arm in every build). The deployment variant only records its network: it embeds
+**Deployment build.** Every build embeds the reference templates (no template depends on a network or a genesis step;
+conditional orders arm in every build). The deployment variant only records its network: it embeds
 `contracts/deploy/testnet-10/deployment.json` (the template hashes of the reference artifacts, see its `DEPLOYMENT.md`)
 and refuses any network other than `testnet-10`:
 
@@ -1125,27 +1125,25 @@ should default to settled. The mempool tier is not served by the indexer.
 | `GET /v1/depth/{token}?levels=` | cumulative depth snapshot of the listed book, levels merged by price (5.3) |
 | `GET /v1/ws` | WebSocket: subscribe to `health`, `reorg`, `fills`, `fills:<token>`, `book:<token>`, `order:<id>` (a pair order's change is a `book` notice for both its tokens) |
 
-#### 5.0 Protocol v3 field names
+#### 5.0 Units and field names
 
-Protocol v3 has no lots: every quantity is token base units, every price and tip sompi per whole token (`scale` base units of
-the order's token; a pair order's price is token B base units per whole A). The views renamed their fields accordingly (decimal
-strings unless noted):
+Every quantity is token base units and every price and tip sompi per whole token (`scale` base units of the order's token; a
+pair order's price is token B base units per whole A). Amounts are decimal strings unless noted:
 
-| View | Before (protocol v2.6) | Now |
-|---|---|---|
-| `GET /v1/tokens` | `lot_size` | removed; `scale` (number: `10^decimals`, at most `10^9`) added |
-| book level (`aggregate=true`) | `lots` (number), `lots_estimated`, `lot_units`, `unit` | `amount`, `amount_estimated`, removed, `scale` (number) |
-| book order (`aggregate=false`) | `tip_lot`, `lot_units`, `unit`, `remaining_lots` (number), `lots_estimated` | `tip`, `min_fill`, `scale` (number), `amount_left`, `amount_estimated` |
-| order (`/v1/orders`, `/v1/orders/{id}`) | `unit`, `lot_units`, `tip_lot`, `lot_max`, `initial_lots` (number), `filled_lots` (number), `remaining_lots` (number), `lots_estimated` | `scale` (number), `min_fill`, `tip`, `budget_rate`, `initial_amount`, `filled_amount`, `amount_left`, `amount_estimated` |
-| order `repeat` | `rpt_lots` (number), `rearms_left` (number), `rpt_lot` | `rpt_amount`, `rearm_amount`, `rpt_price` |
-| order `cross` | `lot_size`, `b_lot`, `tip_lot`, `net_lot`, `b_lot_end`, `worst_net_lot`, `lots_left` (number) | `scale` (number), `price`, `tip`, removed (`price` is the net rate), `price_end`, `worst_price`, `amount_left`; `min_fill` added |
-| order `auction` (`kind: cross`) | prices from `bLot` to `bLotEnd` | from `price` to `priceEnd` |
-| order `state` | the contract field names of v2.6 | the contract field names of v3 (`scale`, `minFill`, `amountLeft`, `tip`, `maxFill`, `minTouch`, `rptAmount`, `rptPrice`, `prefund`, `price`, `priceEnd`, ...) |
-| event (`/v1/orders/{id}/events`, `/v1/fills`) | `lots` (number) | `amount` |
-| event `detail` | `previous.tipLot` (amend), `b_due` = `n × rate`, `tip_kas` = `n × tipLot` (cross fill) | `previous.tip`, `b_due` = `ceil(n × rate / scale)`, `tip_kas` = `floor(n × tip / scale)` |
-| WebSocket `fills` notice | `lots` (number) | `amount` (number, base units) |
-| trades, candles, stats, depth | `price_basis` = the allowlist lot | `price_basis` = the token's standard scale (sompi per whole token); `decimals` added |
-| `unlisted_reason` | `non_standard_lot`, `lot_value_below_minimum` | `non_standard_scale`, `order_value_below_minimum` |
+| View | Fields |
+|---|---|
+| `GET /v1/tokens` | `scale` (number: `10^decimals`, at most `10^9`) |
+| book level (`aggregate=true`) | `amount`, `amount_estimated`, `scale` (number) |
+| book order (`aggregate=false`) | `tip`, `min_fill`, `scale` (number), `amount_left`, `amount_estimated` |
+| order (`/v1/orders`, `/v1/orders/{id}`) | `scale` (number), `min_fill`, `tip`, `budget_rate`, `initial_amount`, `filled_amount`, `amount_left`, `amount_estimated` |
+| order `repeat` | `rpt_amount`, `rearm_amount`, `rpt_price` |
+| order `state` | the contract's field names (`scale`, `minFill`, `amountLeft`, `tip`, `maxFill`, `minTouch`, `rptAmount`, `rptPrice`, `prefund`, `price`, `priceEnd`, ...) |
+| event (`/v1/orders/{id}/events`, `/v1/fills`) | `amount`; an amend's `detail.previous.tip` |
+| WebSocket `fills` notice | `amount` (number, base units) |
+| trades, candles, stats, depth | `price_basis` = the token's standard scale (sompi per whole token), `decimals` |
+| `unlisted_reason` | `non_standard_scale`, `order_value_below_minimum` (among others) |
+
+An allowlist entry's `lot_size` and `tick` keys (older registry files) are read and ignored.
 
 #### 5.2 Aggregated book levels
 
@@ -1376,8 +1374,8 @@ stall or drain any executor:
   cross it and, once a transaction is full, only extends the legs already in it; the tick budget bounds a hostile book. No candidate
   cap by default (`--max-candidates-per-group` 0; an operator may still set one per book, class and side). A book of 1 000 bids and
   1 000 asks crossing at a loss used to cost 48 s per tick; 10 000 × 10 000 now plans in about 0.13 s (`matcher.md` §9).
-* **Probes.** Removed with the receipts in protocol v2.6: the matcher never buys to source a trigger; a stop arms only
-  next to a crossing the batch fills anyway (C, "Stops: triggered and armed in the batch").
+* **No probes.** The matcher never buys to source a trigger; a stop arms only next to a crossing the batch fills anyway
+  (C, "Stops: triggered and armed in the batch").
 * **Keepers.** A refund whose fixed `refundTip` is below a cheap lower bound of its fee is not built; one found unprofitable
   is remembered per (order, outpoint); at most `max_attempts` (128) jobs are built per tick.
 * **The record log** keeps facts, not the sender's bytes: an undecodable KOB1 payload becomes a five-byte stand-in
@@ -1641,15 +1639,12 @@ format) is kept in the log and skipped; both are counted in the replay's summary
 order whose template this build does not pin cannot be interpreted either: its placement becomes a reject in the rebuilt
 database.
 
-**Schema 3 (protocol v2.6).** Opening a schema-2 database drops its `receipts` table and indexes in place and records
-schema 3; nothing else referred to them, so no replay is needed. An old configuration's `[receipts]` table is ignored.
-
-**Schema 4 (in-place amends, payload version 3).** Opening a schema-3 database adds the `order_amends` table (the terms
-an in-place amend replaced, per block, so a reorg restores them) and records schema 4; no replay is needed (a database
-written before had no amends). An older build refuses a schema-4 database. Roll indexers out before wallets: a build
-before payload version 3 rejects every version-3 payload (`payload:unsupported KOB1 version 3`), so it would list none of
-the orders those wallets place and would show an in-place amended order as open with an unknown state. The record log
-keeps version-2 payloads of older frames as they were; they replay unchanged.
+**Schema.** The database is schema 5 (quantities in base units, prices per whole token). A database written before it
+(its `orders` table has the old `lot_units` column) is refused untouched by every writer and reader: move it aside and
+replay (above). A schema-5 database of an earlier build is brought up to date in place at start-up (idempotent backfills,
+no replay); a newer schema is refused. An old configuration's `[receipts]` table is ignored. Roll indexers out before
+wallets whenever the KOB1 payload version changes: an indexer refuses a payload version it does not know, so it would list
+none of the orders the new wallets place (`docs/ops/release.md`, section 7).
 
 #### 7.7 Wrong network / DB
 
@@ -1750,7 +1745,7 @@ cargo test --release -p kob-executor --test capacity -- --ignored --nocapture fu
 KOB_TN10_WRPC=ws://... cargo test --release -p kob-executor --test tn10_capacity -- --ignored --nocapture  # live catch-up by fetch_parallel
 ```
 
-The flow tests build real v2.6 transactions with the `kob-protocol` builders (real artifacts, real
+The flow tests build real transactions with the `kob-protocol` builders (real artifacts, real
 KCC-20 programs, consensus covenant ids, validated by the rusty-kaspa script engine) and feed them
 through an in-memory node: `flow_kinds` (ask, bid, market / IOC / FOK kills, Dutch and rising
 auctions, day orders), `flow_cond` (arming next to a resting fill, triggered fills, the evidence rules, trailing, stop-band fills, OCO, stop
@@ -1834,7 +1829,7 @@ nothing profitable crosses or the tick budget runs out (`matcher.md` §3, §7).
 
 The keeper refunds at the order's refund time (soft expiry, 90 days idle), kills IOC / FOK orders
 at `max(UTXO DAA, activeFrom) + 600` with that exact lock time (the first block that allows it),
-and closes empty repeating sell-first entries. It never arms or ratchets: since protocol v2.6 an `update` needs its
+and closes empty repeating sell-first entries. It never arms or ratchets: an `update` needs its
 evidence filled in the same transaction, so arming is the matcher's, inside its batches (below). Day orders
 need no special handling: matchers stop at the `deadline`, the refund opens at `expiryDaa`.
 Pair orders are refunded and killed the same way (their custodies back to the maker for the `refundTip`: a sell-first
@@ -2122,12 +2117,11 @@ small ones.
 
 ### Maintenance
 
-Protocol v2.6 cross limit routes bought token B in whole ask units and left the remainder on a token output of the operator's
-key with a `10 KAS` carrier (`EngineConfig.token_carrier`), one per route; today the planner never leaves a token to the
-operator (a pair order's surplus goes to a pair ask's delivery or is sold to KAS bids) unless the opt-in surplus-inventory
-policy keeps it (above), but tokens can still reach the operator's key. Nothing spent them: in the TN10 soak
-(2026-10-01) each executor held 22 to 28 such UTXOs after 51 minutes (220 to 280 KAS of carriers for a few cents of tokens)
-while its spendable funding was about 200 KAS. With the matcher role, the runner now runs the maintenance jobs
+The planner never leaves a token to the operator (a pair order's surplus goes to a pair ask's delivery or is sold to KAS
+bids) unless the opt-in surplus-inventory policy keeps it (above), but tokens can still reach the operator's key, each on
+a token output with its own carrier (`EngineConfig.token_carrier`, 10 KAS). Left alone they lock KAS: in an early TN10 soak
+each executor held 22 to 28 such UTXOs after 51 minutes (220 to 280 KAS of carriers for a few cents of tokens). With the
+matcher role, the runner runs the maintenance jobs
 (`kob_executor::maintenance`) after the tick's matcher and keeper transactions, over the operator's own key-owned token UTXOs
 (the indexer's `token_holdings`, owner = the operator key, live; never an order's custody or stray), per token:
 
@@ -2181,8 +2175,8 @@ record data). In `run` it is the indexer's own store
 (`indexer::book::StoreBook`, Part A); standalone it
 reads a JSON snapshot (`--book-file`, the `MemoryBook` format of
 `kob_executor::matcher::book`), re-read whenever the file changes. The snapshot must contain only
-orders the indexer validated (§1.1, §1.2) and must report strays per order. It has no receipts since v2.6 (an old
-snapshot's `receipts` key is ignored). `--offline` prints one JSON line per planned transaction: its fills (each with
+orders the indexer validated (§1.1, §1.2) and must report strays per order (an old snapshot's `receipts` key is
+ignored). `--offline` prints one JSON line per planned transaction: its fills (each with
 `evidence`, the leg index of a triggered fill's evidence, else null) and `updates` (`order`, `update` `arm` / `trail`,
 `steps`, `evidence`, `take`).
 
@@ -2302,7 +2296,7 @@ cargo test -p kob-executor --test executor_e2e            # matcher + keepers on
 cargo test -p kob-executor --test flow_kron               # the KRON family through the indexer (every kind, merges, strays, reorgs)
 cargo test -p kob-executor --test flow_pair               # pair orders end to end through the indexer: custodies, fills, exits, merges, price rule
 cargo test -p kob-executor --test matcher_pair            # pair orders in the batch: routes of both sides, netting 1x1 / 2x2 / 3x1 + route, surplus, FOK / IOC, evidence modes, if-done cycles, random books
-cargo test -p kob-executor --test matcher_pair_route      # pair routes: slot limits (3/3, 8/8, KRON), FOK / IOC, exact receipts, price priority, auctions
+cargo test -p kob-executor --test matcher_pair_route      # pair routes: slot limits (3/3, 8/8, KRON), FOK / IOC, exact amounts received, price priority, auctions
 cargo test -p kob-executor --test matcher_batch           # the global batch: several books + a route + an IOC in one transaction, determinism, splitting, mixed fuzz
 cargo test -p kob-executor --test matcher_batch -- --ignored --nocapture   # 10 000 orders per side, timed
 KOB_FUZZ_ITERS=5000 cargo test -p kob-executor --test matcher_fuzz -- --nocapture
@@ -2315,8 +2309,7 @@ exceeds 8 token inputs, or breaks the repeat merge rules; every triggered fill a
 against the library's own evidence rules (`kob_protocol::build::touch_of`, `Touch::check`; `matcher_common::check_triggers`).
 `matcher_scenarios` covers a stop filled next to its evidence and one armed by an update (then auctioned the next tick),
 no trigger from a too young, decaying, too small, wrong-side or conditional fill, a thin crossing kept for its updates, a
-trailing ratchet, stop entries and a two-family batch; `matcher_pair` pair stops armed (and filled) next to their evidence in both modes. The v2.4 probe
-regression is gone with the probes. `executor_e2e` runs the same
+trailing ratchet, stop entries and a two-family batch; `matcher_pair` pair stops armed (and filled) next to their evidence in both modes. `executor_e2e` runs the same
 engine-validated planning against a book indexed from synthetic chain data (Part A, A.5). Every scenario of the matcher and keeper
 suites also runs a **KRON twin** of its book (`matcher_common::to_kron`), and the follower property test runs its
 random traffic in both families.

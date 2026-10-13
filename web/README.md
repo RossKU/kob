@@ -3,7 +3,7 @@
 Static, client-side, non-custodial order book UI. TypeScript + Preact on top of `kob-wasm` (our Rust `kob-protocol`: order builders,
 signing split build -> digests -> finalize, fees, budgets, KOB1 codec, state codec) and the official kaspa-wasm v2.1.0 SDK (wRPC, addresses).
 TypeScript is only UI and wallet glue: no protocol logic is re-implemented. Wallets: KasWare, Kaspire, Kastle (behind `features.kastle`).
-Data: the indexer REST/WebSocket API (`crates/kob-executor`, `docs/ops/indexer.md`) and node RPC.
+Data: the indexer REST/WebSocket API (`crates/kob-executor`, `docs/ops/executor.md` Part B) and node RPC.
 
 ## Setup
 
