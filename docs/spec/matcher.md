@@ -772,10 +772,10 @@ apply unchanged.
   ask-side refund pushes the whole token program in its custody input; a pair refund the program of each custody), so
   wallets MUST set `refundTip` per token program (a pair order: by the programs of its custodies), at least the defaults
   derived from measured fees (`kob_protocol::defaults`, wasm `keeperTips`: 2× the largest fee floor of a funded keeper's
-  refund, kill or close, rounded up to 0.001 KAS; `crates/kob-protocol/data/keeper_tips.json`, pair orders
-  `pair_keeper_tips.json`): 0.035 KAS on the standard 3/3 program (the public-mint build 0.040, KRON 0.031 / 0.032), 0.064
-  KAS for a pair order of two 3/3 tokens (0.060 to 0.245 KAS over every program pair). A flat tip does not fit every
-  program: a KaspaCom refund alone costs 0.063 KAS.
+  refund, kill or close, rounded up to 0.001 KAS; `crates/kob-protocol/data/keeper_tips.json` per token program,
+  `pair_keeper_tips.json` per program pair of a pair order): 0.035 KAS on the standard 3/3 program (the public-mint build
+  0.040, KRON 0.031 / 0.032), 0.064 KAS for a pair order of two 3/3 tokens (0.060 to 0.245 KAS over every program pair).
+  A flat tip does not fit every program: a KaspaCom refund alone costs 0.063 KAS.
 
 ---
 
@@ -1085,8 +1085,8 @@ tick. Planning time with pair books is not measured.
    limit (the matcher keeps the difference).
 6. **Stop-market / stop-limit**: `slipBps` default 300 (3%),
    `bandDaa` default 300 (30 s auction), `keeperTip` default: 0.022 KAS on the KCC-20 programs, 0.020 KAS on KRON,
-   0.038 KAS for a pair order (2× the marginal fee of an update inside a batch, rounded up to 0.001 KAS; `kob_protocol::defaults`,
-   `data/keeper_tips.json`). Trigger rules (§4) are
+   0.038 KAS for a pair order (2× the marginal fee of an update inside a batch, rounded up to 0.001 KAS; `kob_protocol::defaults`;
+   `data/keeper_tips.json` per token program, `data/pair_keeper_tips.json` per program pair of a pair stop). Trigger rules (§4) are
    per order; the wallet MUST expose both on every stop, stop-limit, trailing stop, OCO stop leg and stop entry:
    - rest time `minRestDaa`: default 50 DAA (5 s);
    - threshold `minTouch` (base units): chosen by the user; default the larger of the order's own `minFill` and 25% of
@@ -1167,8 +1167,8 @@ tick. Planning time with pair books is not measured.
    maker's favour (an ask UP, a bid DOWN), with `scale` of each token `10^decimals`, capped at `10^9`. Show the price per
    whole A and the guaranteed totals (an ask receives at least `⌈amount·price/scale(A)⌉` of B, a bid pays at most
    `⌊amount·price/scale(A)⌋`). Fund an ask's custody with exactly `amountLeft` of A; a `KobPair` bid's B escrow with
-   `⌈amount·pMax/scale(A)⌉` plus one base unit per possible fill (`PairState::bid_escrow`), a `KobCondPair` bid's with
-   `⌊amount·worst/scale(A)⌋` plus one per possible fill (`CondPairState::bid_escrow`; the escrow left returns with the last
+   `⌊amount·pMax/scale(A)⌋` plus one base unit (`PairState::bid_escrow`), a `KobCondPair` bid's with
+   `⌊amount·worst/scale(A)⌋` plus one (`CondPairState::bid_escrow`; the escrow left returns with the last
    fill); if-done entries as item 8. The order UTXO prefunds `deliveryCarrier` (at least a token output's floor of the
    token it delivers) for each of the `⌈amount / minFill⌉` possible fills and the KAS tip of the whole amount,
    `⌊amount·tip/scale(A)⌋` (an entry also `exitCarrier` per fill; unused KAS returns with the last fill, the refund or the

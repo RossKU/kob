@@ -93,7 +93,7 @@ refuse more): a pair order whose KRON amount or custody exceeds that is refused.
    buy more than the escrow funds. The difference `used(n) − spend(n)` (the rounding and a rising bid's headroom) rides
    on the maker's delivery. A pair bid's escrow is a token custody: each fill releases its floor, and the floors of the
    fills never exceed the floor of the total (subadditivity), so an escrow of `⌊N·pMax / scale(A)⌋` pays every split;
-   the wallet adds one base unit per possible fill so that a partial fill always leaves a positive rest (*Pair orders*).
+   the wallet adds one base unit so that a partial fill always leaves a positive rest (*Pair orders*).
 4. Where one release is split between several maker-owned outputs (a repeat merge: the exit's payout to the maker and
    the budget or prefund returned to the entry), both covenants compute the SAME rounded amounts (the exit releases
    `quoteOf(m, rptPrice)` and `quoteOf(m, rptPre)` rounded up, and the entry requires exactly those values, since
@@ -317,8 +317,9 @@ A fill of n base units of A (`n ≥ minFill` unless `n = amountLeft`, `n ≤ max
 - **BID** (buys A with B): receives exactly n of A at output i and releases EXACTLY `⌊n·p(t) / scale(A)⌋` of B from its
   escrow custody (`custody`, exact). A bid shows only quotes its escrow funds. The builders refuse an escrow below
   `⌊amountLeft·pMax / scale(A)⌋` (`pMax` = `price`, or `priceEnd` of a rising bid); the wallet funds
-  `⌈amountLeft·pMax / scale(A)⌉` plus one base unit per possible fill (`PairState::bid_escrow`), so that a partial fill
-  always leaves a positive rest; the escrow left after the last fill returns to the maker.
+  `⌊amountLeft·pMax / scale(A)⌋` plus one base unit (`PairState::bid_escrow`: the floors of the fills never exceed the floor
+  of the total), so that a partial fill always leaves a positive rest; the escrow left after the last fill returns to the
+  maker.
 - **Decay.** ASK `p(t) = max(priceEnd, price − slope·⌊(t − origin) / decayStep⌋)`, BID `p(t) = min(priceEnd, price +
   slope·⌊…⌋)`; `origin` = `activeFrom`, or for a TWAP / DCA slice `max(activeFrom, UTXO DAA + interval)`; `t` proven by
   CLTV (understating it only moves the price toward the maker).
@@ -348,7 +349,7 @@ The logic of `KobCondAsk` (side ASK) / `KobCondBid` (side BID) with the price in
 - **BID** (buys A; its custody is a B escrow): stop leg ABOVE the market (buy stop), limit leg below it. A fill of n
   delivers exactly n of A at output i and releases at most `⌊n·legPrice / scale(A)⌋` of B. The builders refuse an escrow
   below `⌊amountLeft·worst / scale(A)⌋` (`worst` = the highest leg price, the stop band included); the wallet adds one
-  base unit per possible fill (`CondPairState::bid_escrow`).
+  base unit (`CondPairState::bid_escrow`).
 - **Legs.** Take-profit / limit leg (0): `tpPrice`, at any time. Stop leg (1): only once armed; `legPrice = stop −
   ⌊stop·bps / 10⁴⌋` (ASK) or `stop + ⌊stop·bps / 10⁴⌋` (BID), `bps = slipBps` (`bandDaa` 0) or the auction
   `slipBps·min(t − origin, bandDaa) / bandDaa`; the fill that arms the stop with `bandDaa > 0` trades at the stop itself.
@@ -476,9 +477,9 @@ KAS price series; a netted or inventory pair fill shows as volume only.
 | minimum fill (`minFill`) | the amount worth 10 KAS (`DEFAULT_MIN_FILL_SOMPI`, a notional, not a carrier) at the limit price, at least 1 base unit, at most the amount (a pair order: the amount of A worth 10 KAS on A's KAS book, `default_min_fill_pair`; `⌈amount / 4⌉` without a KAS quote of A); IOC / FOK / market orders 1 base unit; if-done entries `⌈amount / 4⌉` |
 | market auction (token and pair) | 3% bound over 200 DAA (20 s), activation +30 DAA, IOC life 300 DAA |
 | stop band / auction | 3% (`slipBps` 300) over 300 DAA (30 s) |
-| trigger rest / threshold (per order, the wallet exposes both) | 5 s (`minRestDaa` 50) / `minTouch` = the order's own `minFill` (presets: min fill / 25% / 50% / 100% of the order's own amount, or custom); a pair stop in mode 0 also needs `⌈minTouch·stop / scale(A)⌉` of B traded |
-| keeper tip (arm / trail, taken by the arming matcher) | 0.022 KAS (KCC-20 programs), 0.020 KAS (KRON), 0.038 KAS (pair orders) (`data/keeper_tips.json`, `data/pair_keeper_tips.json`, `matcher.md` §10.6) |
-| refund tip | per token program: 0.035 KAS on the standard 3/3 program (public-mint build 0.040, KRON 0.031 / 0.032); a pair order by its two programs, 0.064 KAS for two 3/3 tokens (`data/keeper_tips.json`, `data/pair_keeper_tips.json`, `matcher.md` §5) |
+| trigger rest / threshold (per order, the wallet exposes both) | 5 s (`minRestDaa` 50) / `minTouch` = the larger of the order's own `minFill` and 25% of its amount, at most the amount (`defaults::default_min_touch`, `matcher.md` §4.3; presets: min fill / 25% / 50% / 100% of the order's own amount, or custom); a pair stop in mode 0 also needs `⌈minTouch·stop / scale(A)⌉` of B traded |
+| keeper tip (arm / trail, taken by the arming matcher) | 0.022 KAS (KCC-20 programs), 0.020 KAS (KRON), 0.038 KAS (pair orders): measured per token program (`data/keeper_tips.json`) and per program pair of a pair order (`data/pair_keeper_tips.json`); `matcher.md` §10.6 |
+| refund tip | per token program: 0.035 KAS on the standard 3/3 program (public-mint build 0.040, KRON 0.031 / 0.032; 0.031 to 0.126 KAS over every program, KaspaCom the highest); a pair order by the program pair of its custodies, 0.064 KAS for two 3/3 tokens (0.060 to 0.245 KAS) (`data/keeper_tips.json`, `data/pair_keeper_tips.json`, `matcher.md` §5) |
 | day order | until 00:00 UTC |
 | GTC | 90 days idle (renew before day 85) |
 | carriers | 2 KAS per covenant UTXO (`DEFAULT_ORDER_CARRIER`; a pair entry's `exitCarrier` also funds its exit's deliveries, `IfdPairState::exit_carrier_needed`): the relay fee of no transaction shape rises below 10 KAS (storage mass is not part of it), and at 2 KAS the largest shape commits 35% of the block storage limit (1 KAS: 71%; 0.5 KAS refuses pair fills with evidence or netting); the opt-in storage-inclusive priority fee rises by at most 0.13 KAS (`tests/carrier_fees.rs`). Never below the floor of a token output (KaspaCom KCC20 0.2.5: 0.5 KAS; every other supported program: none) nor the KIP-9 dust bound of 0.02 KAS (`TemplateId::min_token_output`, `tx::DUST_OUTPUT_MIN`): orders and builders refuse less |
