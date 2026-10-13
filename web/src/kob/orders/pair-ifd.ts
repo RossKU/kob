@@ -37,6 +37,8 @@ const MAX_ENTRY_ARM_UPDATES = 10n;
  */
 export const PAIR_MERGE_COST_BUY_FIRST = 2_370_000n;
 export const PAIR_MERGE_COST_SELL_FIRST = 1_690_000n;
+/** B token outputs of a sell-first repeating exit's partial take-profit that re-arms (custody rest, profit, prefund custody, filler's B) */
+export const PAIR_SELL_FIRST_MERGE_B_OUTPUTS = 4;
 
 export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeIntent, tip: bigint, carrier: bigint): PairOrderPlan {
   const a = env.token;
@@ -96,15 +98,26 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
   const exitInput = exitLegInput(exitIn);
   // every exit holds one entry fill: its own default minimum fill is the pair default, at most the entry's minimum fill
   const exitMinDefault = env.kob.defaultMinFillPair(amount, env.pair.kasPerWholeA, a.scale);
-  const exitMinFill = exitIn.minFill ?? (exitMinDefault < minFill ? exitMinDefault : minFill);
+  // the smallest take-profit fill an exit can see (the merge tip and the default trigger threshold scale with it)
+  const exitMinBase = exitIn.minFill ?? (exitMinDefault < minFill ? exitMinDefault : minFill);
+  // Token slots (order-types.md, Pair if-done entries, AUD-33): a sell-first repeating exit's PARTIAL take-profit that re-arms moves four B
+  // outputs in one transaction; a B program with fewer token outputs (the KCC-20 reference 3/3, the public-mint build) cannot carry it, so
+  // while the entry lives such an exit takes profit only by a fill that sells it out: its minimum fill is its whole amount (the entry's
+  // amount bounds every exit's), so no partial take-profit is offered that no transaction can make
+  const wholeExit = !buyFirst && repeat && b.slots.outputs < PAIR_SELL_FIRST_MERGE_B_OUTPUTS;
+  const exitMinFill = exitIn.minFill ?? (wholeExit ? amount : exitMinBase);
+  if (wholeExit) {
+    const partial = exitMinFill < amount;
+    log.add(pairIssue('PAIR_EXIT_WHOLE_FILLS', { ticker: b.ticker, outputs: b.slots.outputs }, 'exit.minFill', partial ? 'warning' : 'info'));
+  }
   log.add(...checkMinFill(exitMinFill, amount, 'exit.minFill'));
   if (log.failed) return fail();
   // a repeat's exit tip (KAS) carries the merge cost, paid even by the smallest take-profit fill
-  const mergeTip = repeat ? mergeTipRate(buyFirst ? PAIR_MERGE_COST_BUY_FIRST : PAIR_MERGE_COST_SELL_FIRST, a.scale, exitMinFill) : 0n;
+  const mergeTip = repeat ? mergeTipRate(buyFirst ? PAIR_MERGE_COST_BUY_FIRST : PAIR_MERGE_COST_SELL_FIRST, a.scale, exitMinBase) : 0n;
   const exitTip = exitTipBase + mergeTip;
   log.add(...checkPairTip(env, amount, exitTip, 'exit.tip'));
   // the exit's trigger threshold scales with what it will sell or buy: at most the entry's amount, known now (its fills are not)
-  const legs = resolveLegs(lenv, log, exitSide, exitInput, 'exit.', exitMinFill, amount);
+  const legs = resolveLegs(lenv, log, exitSide, exitInput, 'exit.', exitMinBase, amount);
   const act = resolveActivation(lenv, log, intent.activeFrom);
   const entryExpiry = act === null ? null : resolveExpiry(lenv, log, intent.expiry, { field: 'expiry', activeFrom: act.activeFrom });
   const exitExpiry = resolveExpiry(lenv, log, exitIn.expiry, { field: 'exit.expiry', exit: true });

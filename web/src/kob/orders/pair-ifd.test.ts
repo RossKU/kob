@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import type { CondPairState, IfdPairState } from '../types';
 import type { TokenMarket } from '../plan-types';
 import { I64_MAX } from '../units';
-import { KAS, ceilDivM, ceilQ, floorQ, kronA, kronB, makePairEnv, tokenA, tokenB } from './pair-fixtures';
+import { B_COV, KAS, ceilDivM, ceilQ, floorQ, kronA, kronB, makePairEnv, tokenA, tokenB } from './pair-fixtures';
+import { market3x3 } from '../../testing/fixtures';
 import { K, codes, errorCodes, pairValid, plan } from './pair-testkit';
 import { PAIR_MERGE_COST_BUY_FIRST, PAIR_MERGE_COST_SELL_FIRST } from './pair-ifd';
 
@@ -145,6 +146,32 @@ describe.each(combos)('KobIfdPair on %s', (_name, mkA, mkB) => {
 });
 
 describe('KobIfdPair economics and refusals', () => {
+  it('AUD-33: a sell-first repeating exit whose B moves 3 token outputs per transaction takes profit only whole (its minimum fill)', () => {
+    const amount = 4_000n;
+    const b3 = (): TokenMarket => market3x3({ covenant_id: B_COV, ticker: 'B3', decimals: 2 });
+    const env3 = () => makePairEnv({ a: tokenA(), b: b3() });
+    expect(b3().slots.outputs).toBe(3);
+    const r = pairValid(env3(), { type: 'repeatIfd', side: 'sell', amount, entry: { price: 1_600n }, exit: { takeProfit: 1_500n }, repeat: { count: 2n } });
+    expect(exitOf(r).minFill).toBe(String(amount));
+    expect(r.issues.find((i) => i.code === 'PAIR_EXIT_WHOLE_FILLS')).toMatchObject({ severity: 'info', params: { ticker: 'B3', outputs: 3 } });
+    // the merge tip still covers the smallest exit (one entry fill)
+    const plainExit = pairValid(makePairEnv(), { type: 'repeatIfd', side: 'sell', amount, entry: { price: 1_600n }, exit: { takeProfit: 1_500n }, repeat: { count: 2n } });
+    expect(r.cond?.repeat?.mergeTip).toBe(plainExit.cond?.repeat?.mergeTip);
+    // an explicit smaller exit minimum fill is kept, with a warning
+    const w = pairValid(env3(), { type: 'repeatIfd', side: 'sell', amount, entry: { price: 1_600n }, exit: { takeProfit: 1_500n, minFill: 1_000n }, repeat: { count: 2n } });
+    expect(exitOf(w).minFill).toBe('1000');
+    expect(w.issues.find((i) => i.code === 'PAIR_EXIT_WHOLE_FILLS')?.severity).toBe('warning');
+    // buy-first, a non-repeating sell-first entry, or a B with 8 outputs: unchanged
+    for (const p of [
+      pairValid(env3(), { type: 'repeatIfd', side: 'buy', amount, entry: { price: 1_400n }, exit: { takeProfit: 1_500n }, repeat: { count: 2n } }),
+      pairValid(env3(), { type: 'ifd', side: 'sell', amount, entry: { price: 1_600n }, exit: { takeProfit: 1_500n } }),
+      plainExit,
+    ]) {
+      expect(codes(p)).not.toContain('PAIR_EXIT_WHOLE_FILLS');
+      expect(BigInt(exitOf(p).minFill)).toBeLessThan(amount);
+    }
+  });
+
   it('the take-profit must beat the entry: a plain IFD warns, a repeat refuses', () => {
     const w = pairValid(makePairEnv(), { type: 'ifd', side: 'buy', amount: 4_000n, entry: { price: 1_400n }, exit: { takeProfit: 1_390n } });
     expect(w.issues.find((i) => i.code === 'PAIR_TP_NOT_PROFITABLE')).toMatchObject({ severity: 'warning', params: { profitPerToken: -10n, ticker: 'BBB' } });

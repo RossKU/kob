@@ -414,7 +414,7 @@ Token slots (audit 2026-10, AUD-33): a sell-first repeating exit's PARTIAL take-
 one transaction (the exit's custody rest, the maker's profit, the entry's prefund custody and the filler's B). A program
 with 3 token outputs per transaction (the KCC-20 reference 3/3 and the public-mint build) cannot carry that shape when it is
 B, so while its entry is live such an exit takes profit (and re-arms) only by a fill that sells it out; a partial
-take-profit is possible only after `rptUntil`, without re-arming. No value is at risk; the wallet should set the exit's `minFill` to its whole amount for such pairs.
+take-profit is possible only after `rptUntil`, without re-arming. No value is at risk; the wallet sets the exit's `minFill` to its whole amount for such pairs (the entry's amount; an explicit smaller one is kept with a warning, `PAIR_EXIT_WHOLE_FILLS`).
 
 ### Pair trigger rule
 

@@ -334,6 +334,7 @@ export default {
   'issues.PAIR_KRON_DELIVERY_TOO_LARGE': 'One minimum fill delivers more {ticker} than a KRON output holds ({max}): lower the minimum fill or the price.',
   'issues.PAIR_TP_CROSSES': 'The take-profit crosses the pair book ({touch} {ticker} per token): it fills at once at your limit.',
   'issues.PAIR_TP_NOT_PROFITABLE': 'The take-profit does not beat the entry: profit per token {profitPerToken} {ticker}.',
+  'issues.PAIR_EXIT_WHOLE_FILLS': 'Each exit takes profit in one fill of its whole amount while the entry lives ({ticker} moves at most {outputs} token outputs per transaction; a partial take-profit that re-arms needs 4).',
   'issues.PAIR_PREFUND_SHORT': 'The prefund does not cover the worst buy-back: needs {needed} {ticker} per token, you gave {given}.',
   'issues.PAIR_FILLS_LIMITED': 'Funds {fills} deliveries: after {partials} partial fills the rest fills only in full. Raise the minimum fill or the fills to fund.',
   'issues.PAIR_KAS_REFERENCE_MISSING': 'The KAS value of {ticker} is unknown: the default minimum fill is 25% of the amount.',

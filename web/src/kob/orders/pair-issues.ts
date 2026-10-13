@@ -28,6 +28,7 @@ export const PAIR_ISSUE_CATALOG = {
   PAIR_KRON_DELIVERY_TOO_LARGE: e('error', 'One minimum fill would deliver more {ticker} than a KRON token output can hold ({max} base units): lower the minimum fill or the price.'),
   PAIR_TP_CROSSES: e('warning', 'The take-profit crosses the pair book ({touch} {ticker} per token): it fills right away at your limit.'),
   PAIR_TP_NOT_PROFITABLE: e('error', 'The take-profit does not beat the entry price: the profit per token would be {profitPerToken} base units of {ticker}.'),
+  PAIR_EXIT_WHOLE_FILLS: e('info', 'A repeating sell-first exit takes profit only in one fill of its whole amount while its entry lives: {ticker} moves at most {outputs} token outputs per transaction, and a partial take-profit that re-arms needs 4. The exits\' minimum fill is set to their whole amount.'),
   PAIR_PREFUND_SHORT: e('error', 'The prefund does not cover the exit\'s worst buy-back: at least {needed} base units of {ticker} per token are needed (you gave {given}).'),
   PAIR_FILLS_LIMITED: e('info', 'The order funds {fills} deliveries: after {partials} partial fills, what is left fills only in full. A larger minimum fill or more fills changes this.'),
   PAIR_KAS_REFERENCE_MISSING: e('info', 'The KAS value of {ticker} is unknown: the default minimum fill is a quarter of the amount.'),
