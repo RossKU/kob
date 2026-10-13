@@ -8,6 +8,9 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+/// Largest indexer response read (64 MiB).
+pub const MAX_RESPONSE_BYTES: u64 = 64 << 20;
+
 /// The indexer endpoint when `--indexer` is not given.
 pub const INDEXER_ENV: &str = "KOB_INDEXER_URL";
 
@@ -77,7 +80,7 @@ fn dechunk(mut body: &[u8]) -> Result<Vec<u8>, String> {
         if size == 0 {
             return Ok(out);
         }
-        if body.len() < size + 2 {
+        if size.checked_add(2).is_none_or(|n| body.len() < n) {
             return Err("truncated chunk".into());
         }
         out.extend_from_slice(&body[..size]);
@@ -106,7 +109,11 @@ pub fn get(indexer: &str, path: &str, timeout: Duration) -> Result<(u16, Value),
     req.push_str("\r\n");
     s.write_all(req.as_bytes()).map_err(|e| format!("indexer {who}: {e}"))?;
     let mut raw = vec![];
-    s.read_to_end(&mut raw).map_err(|e| format!("indexer {who}: {e}"))?;
+    // a response is bounded: an endless one is an error, not memory exhaustion
+    (&mut s).take(MAX_RESPONSE_BYTES + 1).read_to_end(&mut raw).map_err(|e| format!("indexer {who}: {e}"))?;
+    if raw.len() as u64 > MAX_RESPONSE_BYTES {
+        return Err(format!("indexer {who}: response larger than {MAX_RESPONSE_BYTES} bytes"));
+    }
     let end = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| format!("indexer {who}: malformed response"))?;
     let head = String::from_utf8_lossy(&raw[..end]).to_string();
     let mut body = raw[end + 4..].to_vec();
@@ -227,5 +234,7 @@ mod tests {
     fn chunked_bodies() {
         assert_eq!(dechunk(b"3\r\nabc\r\n2;x=1\r\nde\r\n0\r\n\r\n").unwrap(), b"abcde");
         assert!(dechunk(b"5\r\nab").is_err());
+        // a chunk size near usize::MAX from a hostile indexer is an error, not an overflow
+        assert!(dechunk(b"ffffffffffffffff\r\nab").is_err());
     }
 }
