@@ -706,6 +706,15 @@ impl X402Config {
             };
             let custody = Custody::parse(&t.custody)
                 .ok_or_else(|| ConfigError(format!("token {}: custody must be unconditional or issuer-controlled", t.ticker)))?;
+            // the class is the PROGRAM's (x402-kcc20-profile.md 4.1): a program with any registry capability (mint authority,
+            // public mint, burn, freeze, seize, blacklist) is issuer-controlled; a label can only tighten it, as the payer's
+            // and the merchant's builders refuse
+            if custody == Custody::Unconditional && program_has_capabilities(&hash) {
+                return Err(ConfigError(format!(
+                    "token {}: the program has issuer capabilities in the registry (mint, burn, freeze, seize or blacklist); it cannot be labelled unconditional",
+                    t.ticker
+                )));
+            }
             list.insert(AllowedToken {
                 covenant_id: cov,
                 program,
@@ -719,6 +728,11 @@ impl X402Config {
         }
         Ok(list)
     }
+}
+
+/// True when the SHIPPED registry lists a capability of the token program `hash` (any, `TokenAllowlist::from_registry`).
+fn program_has_capabilities(hash: &[u8; 32]) -> bool {
+    Registry::default_registry().templates.iter().any(|t| parse_hex32(&t.template_hash) == Some(*hash) && !t.capabilities.is_empty())
 }
 
 fn check_rate(what: &str, r: RateCfg) -> Result<(), ConfigError> {
@@ -1041,9 +1055,11 @@ mod tests {
         let hex = kob_x402::wire::hex;
         let tok = |cov: &str, prog: TemplateId, extra: &str| {
             format!(
-                r#","tokens":[{{"covenantId":"{}","programTemplateHash":"{}","custody":"unconditional","ticker":"T"{extra}}}]"#,
+                r#","tokens":[{{"covenantId":"{}","programTemplateHash":"{}","custody":"{}","ticker":"T"{extra}}}]"#,
                 cov.repeat(32),
-                hex(&token_template(prog).hash)
+                hex(&token_template(prog).hash),
+                // KRON and KaspaCom programs have registry capabilities (mint authority, public mint, burn)
+                if matches!(prog, TemplateId::Kcc20Ref8x8) { "unconditional" } else { "issuer-controlled" }
             )
         };
         // a KRON token: the family is the program's, no extension commitment, a pay asset only
@@ -1067,5 +1083,29 @@ mod tests {
         let b = X402Config::from_json(&doc(&kc)).unwrap().build().unwrap();
         let t = b.policy.tokens.find(&[0xbb; 32]).unwrap();
         assert_eq!((t.program, t.family, t.is_merchant_capable()), (TemplateId::Kcc20KaspaCom025, Family::Kcc20, true));
+        assert_eq!(t.custody, Custody::IssuerControlled);
+    }
+
+    /// x402-kcc20-profile.md 4.1: the custody class is the program's; an operator label can tighten it, never loosen it.
+    #[test]
+    fn an_issuer_capable_program_cannot_be_labelled_unconditional() {
+        use kob_protocol::artifacts::{token_template, TemplateId};
+        let tok = |prog: TemplateId, custody: &str| {
+            doc(&format!(
+                r#","tokens":[{{"covenantId":"{}","programTemplateHash":"{}","extensionCommitment":"{}","custody":"{custody}","ticker":"T"}}]"#,
+                "aa".repeat(32),
+                kob_x402::wire::hex(&token_template(prog).hash),
+                "cc".repeat(32)
+            ))
+        };
+        for prog in [TemplateId::Kcc20KaspaCom025, TemplateId::Kcc20PublicMint] {
+            let e = X402Config::from_json(&tok(prog, "unconditional")).unwrap().build().unwrap_err();
+            assert!(e.0.contains("cannot be labelled unconditional"), "{prog:?}: {e:?}");
+            assert!(X402Config::from_json(&tok(prog, "issuer-controlled")).unwrap().build().is_ok(), "{prog:?}");
+        }
+        // a program without capabilities takes either label
+        for custody in ["unconditional", "issuer-controlled"] {
+            assert!(X402Config::from_json(&tok(TemplateId::Kcc20Ref, custody)).unwrap().build().is_ok(), "{custody}");
+        }
     }
 }
