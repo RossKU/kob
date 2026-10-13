@@ -824,3 +824,70 @@ fn every_simple_kind_runs_on_a_pair() {
     );
     assert!(codes(&fok).contains(&"FOK_INSUFFICIENT_DEPTH"));
 }
+
+/// `kob replace` re-plans an order from its own state (`replace-intent.ts`): with no change, the intent read back from
+/// a planned order plans the same order again (trailing stops, stop entries with trailing stop-limit exits, pair
+/// conditionals, pair if-done entries, pair TWAP); a change moves only what it names.
+#[test]
+fn replace_intents_round_trip() {
+    use super::replan::{intent_from_order, lifetime_of, Changes};
+    let same = |e: &Env, i: Intent| {
+        let p = valid(e, i);
+        let lt = lifetime_of(p.states[0].expiry().unwrap().0, Some(CLOCK.daa), None, false);
+        assert_eq!(lt, Lifetime::Gtc);
+        let back = intent_from_order(&p.states[0], lt, CLOCK.daa, &Changes::default()).unwrap();
+        let q = valid(e, back);
+        assert_eq!(q.states, p.states);
+        assert_eq!(value(&q), value(&p));
+        p
+    };
+    let m = market(TemplateId::Kcc20Ref);
+    let e = env(&m);
+    let t = same(&e, Intent::Cond(CondIntent { take_profit: Some(300_000_000), ..trailing(Side::Sell, 2 * TOK, 230_000_000, TR) }));
+    same(&e, Intent::Cond(trailing(Side::Buy, 5 * TOK, 260_000_000, Trail { wait: Some(3_000), ..TR })));
+    same(
+        &e,
+        Intent::Ifd(IfdIntent {
+            amount: 4 * TOK,
+            stop_limit: Some(285_000_000),
+            more: IfdMore {
+                entry_stop: Some(262_000_000),
+                exit_trail: Some(Trail { step: 1_000_000, gap: 3_000_000, wait: None, updates: None }),
+                ..Default::default()
+            },
+            ..ifd(Side::Sell, 260_000_000, Some(240_000_000), Some(280_000_000))
+        }),
+    );
+    same(&e, Intent::Ifd(ifd(Side::Buy, 240_000_000, Some(300_000_000), Some(200_000_000))));
+    let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
+    let pe = pair_env(&a, &b);
+    same(&pe, Intent::Cond(CondIntent { stop: Some(1_400), take_profit: Some(1_700), ..cond(CondKind::Oco, Side::Sell, 9_001) }));
+    same(&pe, Intent::Cond(CondIntent { stop: Some(1_400), limit: Some(1_380), ..cond(CondKind::StopLimit, Side::Sell, 9_001) }));
+    same(&pe, Intent::Ifd(IfdIntent { amount: 8_003, ..ifd(Side::Sell, 1_599, Some(1_399), Some(1_700)) }));
+    same(&pe, Intent::Ifd(IfdIntent { amount: 8_003, ..ifd(Side::Buy, 1_401, Some(1_601), None) }));
+    same(
+        &pe,
+        Intent::Schedule(ScheduleIntent {
+            price_end: Some(1_550),
+            slice_auction_daa: Some(100),
+            ..sched(false, 10_000, 2_000, 600, 1_600)
+        }),
+    );
+    same(&pe, Intent::Limit(LimitIntent { min_fill: Some(1_000), ..limit(Side::Buy, 9_000, 1_400) }));
+    // a change: the trailing stop moves, its trail and take-profit stay
+    let ch = Changes { stop: Some(231_000_000), ..Default::default() };
+    let back = intent_from_order(&t.states[0], Lifetime::Gtc, CLOCK.daa, &ch).unwrap();
+    let s = cask(&valid(&e, back).states[0]);
+    assert_eq!((s.stop_price, s.tp_price, s.trail_step, s.trail_gap), (231_000_000, 300_000_000, 1_000_000, 5_000_000));
+    // a Dutch decay replaced later goes on from where it is now
+    let d = valid(&pe, Intent::Dutch(dutch(Side::Sell, 5_000, 1_700, 1_500, 2_000)));
+    let AnyState::KobPair(x) = &d.states[0] else { panic!() };
+    let later = x.active_from + 100;
+    let Intent::Dutch(di) = intent_from_order(&d.states[0], Lifetime::Gtc, later, &Changes::default()).unwrap() else { panic!() };
+    assert_eq!((di.price, di.price_end, x.slope), (1_600, 1_500, 1));
+    let ended = intent_from_order(&d.states[0], Lifetime::Gtc, x.active_from + 5_000, &Changes::default()).unwrap();
+    assert!(matches!(ended, Intent::Limit(LimitIntent { price: 1_500, .. })));
+    // refused: a repeating entry
+    let r = valid(&e, Intent::Ifd(rep(Side::Buy, 240_000_000, 300_000_000, Some(2))));
+    assert!(intent_from_order(&r.states[0], Lifetime::Gtc, CLOCK.daa, &Changes::default()).unwrap_err().contains("repeating"));
+}

@@ -122,14 +122,21 @@ kob replace: amend a live order (in place where the protocol allows it, else can
 
 USAGE
   kob replace <COVENANT_ID> [--price P] [--amount AMOUNT] [--tip T] [--stop P] [--stop-limit P] [--add-kas KAS] [--renew]
+  kob replace <COVENANT_ID> [...] [--take-profit P] [--exit-tip T] [--entry-stop P] [--trail-step P] [--trail-gap P]
+                            [--carrier KAS] [--ack-no-guards]
 
   plain limit orders (KobAsk / KobBid): --price, --tip, --amount (a sell; a buy keeps its KAS budget: --add-kas tops it
   up), --renew (a fresh 90-day expiry). A sell that keeps its amount, or a buy, is amended IN PLACE: same covenant id,
   the custody stays where it is, the order's own KAS pays the fee. Otherwise the order is cancelled and the replacement
   placed in the same transaction (custody, strays and any top-up tokens move to the new order).
   conditional orders (stop / take-profit / OCO): --price (the take-profit), --stop, --stop-limit, --amount, --tip, --renew;
-  always a cancel-replace, an armed stop restarts unarmed. Trailing stops, if-done exits and pair orders: cancel and
-  place again.
+  always a cancel-replace, an armed stop restarts unarmed.
+  trailing stops, if-done entries (IFD / IFO, stop entries) and every pair order (limits, TWAP / DCA, Dutch,
+  conditionals, if-done entries; prices B per whole A): the order is re-planned from its own terms with the changes
+  (--price: the limit / take-profit / entry price; --take-profit, --stop, --stop-limit, --exit-tip: the exit of an
+  if-done entry; --trail-step / --trail-gap: the trail; --entry-stop: a stop entry) exactly as `kob place` plans it, and
+  cancelled + replaced in one transaction. A GTC is re-placed as a fresh GTC, a dated order keeps its date, a day order
+  stays a day order. Repeat entries and the exits they booked are not replaced (cancel the position instead).
 ";
 
 /// What the user changes.
@@ -333,6 +340,7 @@ pub fn build_replace(
     markets: &[TokenMarket],
     maker: &[u8; 32],
     fee: &FeeOptions,
+    token_carrier: Option<u64>,
 ) -> Result<(BuiltTx, bool, Vec<String>), String> {
     let mut notes = vec![];
     if amends_in_place(live, rep) {
@@ -365,9 +373,6 @@ pub fn build_replace(
             "amended in place: the order keeps its id and its tokens stay in custody (no token transfer)".to_string()
         });
         return Ok((built, true, notes));
-    }
-    if live.order.state.is_pair() {
-        return Err("pair orders are not amended here: cancel and place again".into());
     }
     // the tokens the replacement must hold, from the old custody, the strays and (when short) free tokens
     let mut tokens: Vec<TokenUtxo> = vec![];
@@ -405,7 +410,8 @@ pub fn build_replace(
         }
     }
     let first = live.custody.as_ref().or(live.prefund.as_ref());
-    let carrier = first.map(|c| c.utxo.amount).or(tokens.first().map(|t| t.utxo.amount)).unwrap_or(DEFAULT_ORDER_CARRIER);
+    let carrier =
+        token_carrier.or(first.map(|c| c.utxo.amount)).or(tokens.first().map(|t| t.utxo.amount)).unwrap_or(DEFAULT_ORDER_CARRIER);
     let needs = rep.custodies().iter().any(|c| c.1 > 0);
     let mut rep = rep.clone();
     let was_armed = match (&live.order.state, &mut rep) {
@@ -453,13 +459,28 @@ pub fn build_replace(
     Ok((built, false, notes))
 }
 
+/// The value flags of `kob replace`.
+const REPLACE_VALUE_FLAGS: &[&str] = &[
+    "--price",
+    "--amount",
+    "--tip",
+    "--stop",
+    "--stop-limit",
+    "--add-kas",
+    "--take-profit",
+    "--exit-tip",
+    "--trail-step",
+    "--trail-gap",
+    "--entry-stop",
+    "--carrier",
+];
+
 /// Run `kob replace`.
 pub fn run_replace(args: &[String]) -> i32 {
-    let (p, c, signer) =
-        match ctx(args, &["--price", "--amount", "--tip", "--stop", "--stop-limit", "--add-kas"], &["--renew"], REPLACE_USAGE) {
-            Ok(x) => x,
-            Err(code) => return code,
-        };
+    let (p, c, signer) = match ctx(args, REPLACE_VALUE_FLAGS, &["--renew", "--ack-no-guards"], REPLACE_USAGE) {
+        Ok(x) => x,
+        Err(code) => return code,
+    };
     let r = (|| -> Result<(Ready, Units), String> {
         let [id] = p.pos.as_slice() else { return Err("give exactly one covenant id".into()) };
         let cov = cov_arg(id)?;
@@ -470,6 +491,17 @@ pub fn run_replace(args: &[String]) -> i32 {
             return Err("this order belongs to another key: only its maker can amend it".into());
         }
         let ms = markets_of(&c, &live)?;
+        if super::replan::replans(&live.order.state) {
+            return replan_replace(&c, &p, &signer, &live, &ms);
+        }
+        for k in ["--take-profit", "--exit-tip", "--trail-step", "--trail-gap", "--entry-stop", "--carrier"] {
+            if p.get(k).is_some() {
+                return Err(format!(
+                    "{k} does not apply to a {} (it is amended with --price, --stop, --stop-limit, --amount, --tip, --add-kas, --renew)",
+                    live.order.state.template_id().name()
+                ));
+            }
+        }
         let m = &ms[0];
         let u = m.unit();
         let price = |k: &str| p.get(k).map(|v| parse_kas_price(v, &u, live.order.state.scale(), k, false)).transpose();
@@ -494,7 +526,7 @@ pub fn run_replace(args: &[String]) -> i32 {
             vec![]
         };
         let fee = FeeOptions { fee_rate: c.fee_rate, ..Default::default() };
-        let (built, in_place, more) = build_replace(&live, &rep, value, &funding, &token_utxos, &ms, &signer.pubkey, &fee)?;
+        let (built, in_place, more) = build_replace(&live, &rep, value, &funding, &token_utxos, &ms, &signer.pubkey, &fee, None)?;
         notes.extend(more);
         let mut lines = order_lines(&live, &ms);
         lines.push(format!("replacement: {} holding {}", rep.template_id().name(), units::kas(value as i128)));
@@ -522,6 +554,111 @@ pub fn run_replace(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+/// The KAS on every covenant UTXO of an order (its delivery or exit carrier, else its custody's carrier).
+fn order_carrier(live: &Live) -> Option<u64> {
+    let c = match &live.order.state {
+        AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x) => Some(x.delivery_carrier),
+        AnyState::KobIfdBid(x) | AnyState::KobIfdBidKron(x) => Some(x.delivery_carrier),
+        AnyState::KobIfdAsk(x) | AnyState::KobIfdAskKron(x) => Some(x.exit_carrier),
+        AnyState::KobPair(x) => Some(x.delivery_carrier),
+        AnyState::KobCondPair(x) => Some(x.delivery_carrier),
+        AnyState::KobIfdPair(x) => Some(x.delivery_carrier),
+        _ => None,
+    };
+    c.map(|c| c as u64).or(live.custody.as_ref().map(|u| u.utxo.amount)).filter(|c| *c >= super::place::MIN_CARRIER)
+}
+
+/// `kob replace` of a trailing stop, an if-done entry or a pair order: the order as its intent with the changes, re-planned
+/// where the order's own KAS and custody come back, then cancelled and replaced in one transaction.
+fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[TokenMarket]) -> Result<(Ready, Units), String> {
+    use super::replan::{intent_from_order, lifetime_of, replace_env, Changes};
+    let node = c.need_node()?;
+    if p.get("--add-kas").is_some() {
+        return Err("--add-kas applies to a plain buy order; this order is re-planned from its terms".into());
+    }
+    let s = &live.order.state;
+    let a = &ms[0];
+    let b = ms.get(1);
+    let ua = a.unit();
+    let scale = s.scale();
+    let price = |k: &str| -> Result<Option<i64>, String> {
+        p.get(k)
+            .map(|v| match b {
+                Some(bm) => units::parse_pair_price(v, &ua, scale, &bm.unit(), k),
+                None => parse_kas_price(v, &ua, scale, k, false),
+            })
+            .transpose()
+    };
+    let delta = |k: &str| -> Result<Option<i64>, String> {
+        p.get(k)
+            .map(|v| match b {
+                Some(bm) => units::parse_pair_delta(v, &ua, scale, &bm.unit(), k),
+                None => parse_kas_price(v, &ua, scale, k, true),
+            })
+            .transpose()
+    };
+    let tip = |k: &str| p.get(k).map(|v| parse_kas_price(v, &ua, scale, k, true)).transpose();
+    let ch = Changes {
+        price: price("--price")?,
+        take_profit: price("--take-profit")?,
+        stop: price("--stop")?,
+        stop_limit: price("--stop-limit")?,
+        amount: p.get("--amount").map(|v| parse_token_amount(v, &ua, "--amount")).transpose()?,
+        tip: tip("--tip")?,
+        exit_tip: tip("--exit-tip")?,
+        trail_step: delta("--trail-step")?,
+        trail_gap: delta("--trail-gap")?,
+        entry_stop: price("--entry-stop")?,
+        renew: p.has("--renew"),
+    };
+    if ch == Changes::default() && p.get("--carrier").is_none() {
+        return Err("nothing to change: give a new price, stop, amount, tip, trail, --carrier or --renew".into());
+    }
+    let clock = data::clock(node)?;
+    let expiry = s.expiry().map(|e| e.0).unwrap_or(0);
+    let lifetime = lifetime_of(expiry, live.genesis_daa, live.deadline, ch.renew);
+    let intent = intent_from_order(s, lifetime, clock.daa, &ch)?;
+    // what the replacement draws on: the order's own KAS and custody (stand-ins) and the maker's free tokens of A and B
+    let needs = super::place::Needs { a: true, b: b.is_some() };
+    let mut env = super::place::env_of(c, a, b, needs, signer.pubkey)?;
+    env.carrier = super::place::carrier_arg(p)?.or(order_carrier(live));
+    env.guards_acknowledged = p.has("--ack-no-guards");
+    env.market_start_ack = true;
+    let penv = replace_env(&env, &live.cov, s, live.order.utxo.amount);
+    let plan = super::plan::plan_order(&penv, &intent);
+    let Some(req) = plan.request.clone().filter(|_| plan.ok) else {
+        super::flow::print_issues(&plan.issues, c.json);
+        return Err("the replacement could not be planned: nothing signed".into());
+    };
+    let rep = req.order.clone();
+    let value = req.value as i64;
+    let token_carrier = (req.token_carrier > 0).then_some(req.token_carrier);
+    let mut token_utxos = env.token_utxos.clone();
+    if let Some(pp) = &env.pair {
+        token_utxos.extend(pp.quote_utxos.iter().cloned());
+    }
+    let fee = FeeOptions { fee_rate: c.fee_rate, ..Default::default() };
+    let (built, _, more) = build_replace(live, &rep, value, &env.funding, &token_utxos, ms, &signer.pubkey, &fee, token_carrier)?;
+    let mut lines = order_lines(live, ms);
+    lines.push(format!("replacement: {} holding {}", rep.template_id().name(), units::kas(value as i128)));
+    lines.extend(super::place::plan_lines(&plan, a, b).into_iter().map(|l| format!("  {l}")));
+    let mut issues: Vec<Issue> = plan.issues.iter().filter(|i| i.severity != Severity::Error).cloned().collect();
+    issues.extend(more.into_iter().map(|n| issue("REPLACE_NOTE", Severity::Info, n)));
+    let mut states = vec![serde_json::to_value(&rep).unwrap_or_default()];
+    states.extend(plan.states.iter().skip(1).map(|x| serde_json::to_value(x).unwrap_or_default()));
+    Ok((
+        Ready {
+            title: format!("cancel-replace {}", to_hex(&live.cov)),
+            lines,
+            issues,
+            file: format!("{}.replace.json", to_hex(&live.cov)),
+            json: json!({"order": to_hex(&live.cov), "inPlace": false, "replacement": rep, "states": states, "value": value.to_string()}),
+            built,
+        },
+        units_of(ms),
+    ))
 }
 
 // ------------------------------------------------------------------------------------------------ cancel

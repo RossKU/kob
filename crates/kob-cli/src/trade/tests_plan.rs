@@ -652,6 +652,7 @@ fn a_stop_only_sell_with_a_tip_can_be_amended() {
         strays: vec![],
         foreign: 0,
         deadline: None,
+        genesis_daa: None,
     };
     let input = super::actions::AmendInput { stop: Some(220_000_000), ..Default::default() };
     let (rep, _, _) = super::actions::replacement(&live, &input, CLOCK.daa, 1).unwrap();

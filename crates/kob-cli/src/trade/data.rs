@@ -322,6 +322,8 @@ pub struct Live {
     pub foreign: usize,
     /// A day order's deadline (placement record, as the indexer reports it).
     pub deadline: Option<u64>,
+    /// The DAA score of the order's placement (as the indexer reports it): tells a GTC from a dated order.
+    pub genesis_daa: Option<i64>,
 }
 
 /// `GET /v1/orders/{id}`, then the order UTXO, its custodies and its own-token strays on the node.
@@ -404,5 +406,6 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
         strays,
         foreign,
         deadline: v.get("deadline").and_then(Value::as_u64),
+        genesis_daa: v.get("genesis").and_then(|g| i64_of(g.get("daa"))),
     })
 }

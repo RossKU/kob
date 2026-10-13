@@ -126,6 +126,15 @@ pub fn parse_pair_price(raw: &str, a: &TokenUnit, a_scale: i64, b: &TokenUnit, w
     to_state(per_whole_b_base, a.decimals, a_scale, what, raw)
 }
 
+/// A difference of pair prices (a trail step or gap), as [`parse_pair_price`] with zero allowed.
+pub fn parse_pair_delta(raw: &str, a: &TokenUnit, a_scale: i64, b: &TokenUnit, what: &str) -> Result<i64, String> {
+    let (num, unit) = split_unit(raw);
+    if !unit.is_empty() && num.contains('0') && num.chars().all(|c| c == '0' || c == '.') {
+        return Ok(0);
+    }
+    parse_pair_price(raw, a, a_scale, b, what)
+}
+
 /// Basis points: `3%` (two decimals) or `300bps`.
 pub fn parse_bps(raw: &str, what: &str) -> Result<i64, String> {
     let (num, unit) = split_unit(raw);

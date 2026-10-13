@@ -244,7 +244,7 @@ pub fn intent_of(kind: &str, p: &Parsed, m: &TokenMarket, quote: Option<&TokenMa
     let delta_of = |k: &str| -> Result<Option<i64>, String> {
         match (p.get(k), quote) {
             (None, _) => Ok(None),
-            (Some(v), Some(b)) => parse_pair_price(v, &unit, m.scale, &b.unit(), k).map(Some),
+            (Some(v), Some(b)) => units::parse_pair_delta(v, &unit, m.scale, &b.unit(), k).map(Some),
             (Some(v), None) => parse_kas_price(v, &unit, m.scale, k, true).map(Some),
         }
     };
@@ -519,7 +519,6 @@ pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> 
 
 /// The planning environment of `kob place`, read from the node and the indexer.
 pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<(Env, TokenMarket, Option<TokenMarket>), String> {
-    let node = c.need_node()?.to_string();
     let indexer = c.need_indexer()?.to_string();
     let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(&indexer))?;
     let a = market::resolve(p.get("--token").ok_or("--token is required")?, &reg, &idx)?;
@@ -527,12 +526,21 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<(E
         Some(q) => Some(market::resolve(q, &reg, &idx)?),
         None => None,
     };
-    let clock = data::clock(&node)?;
-    let funding = data::funding(&node, &c.network, &maker)?;
     let side = side_for(kind, p)?;
     let if_done = matches!(kind, "ifd" | "ifo" | "repeat-ifd" | "repeat-ifo");
-    let mut guards = vec![];
-    let carrier = match p.get("--carrier") {
+    let carrier = carrier_arg(p)?;
+    // a sell (and a sell-first entry) holds tokens of A; a pair buy holds B, a sell-first pair entry a B prefund
+    let needs = Needs { a: side == Side::Sell, b: b.is_some() && (side == Side::Buy || if_done) };
+    let mut env = env_of(c, &a, b.as_ref(), needs, maker)?;
+    env.carrier = carrier;
+    env.guards_acknowledged = p.has("--ack-no-guards");
+    env.market_start_ack = p.has("--ack-market-start");
+    Ok((env, a, b))
+}
+
+/// `--carrier`, checked against the covenant output minimum.
+pub fn carrier_arg(p: &Parsed) -> Result<Option<u64>, String> {
+    match p.get("--carrier") {
         Some(v) => {
             let k = parse_kas(v, "--carrier", false)?;
             if k < MIN_CARRIER {
@@ -541,22 +549,39 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<(E
                     units::kas(k as i128)
                 ));
             }
-            Some(k)
+            Ok(Some(k))
         }
-        None => None,
-    };
-    // a sell (and a sell-first entry) holds tokens of A; a pair buy holds B (below)
-    let needs_a = side == Side::Sell;
-    let token_utxos = if needs_a { data::token_utxos(&indexer, &node, &c.network, &a, &maker)? } else { vec![] };
+        None => Ok(None),
+    }
+}
+
+/// Which of the maker's token UTXOs a plan needs: of A, of B.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Needs {
+    /// The maker's UTXOs of A.
+    pub a: bool,
+    /// The maker's UTXOs of B (a pair).
+    pub b: bool,
+}
+
+/// The planning environment of an order of A (a pair: A/B) for `maker`, read from the node and the indexer: the clock,
+/// the KAS and token UTXOs, the book, the maker's own orders and the last fill (`web/src/app/env.ts`).
+pub fn env_of(c: &Common, a: &TokenMarket, b: Option<&TokenMarket>, needs: Needs, maker: [u8; 32]) -> Result<Env, String> {
+    let node = c.need_node()?.to_string();
+    let indexer = c.need_indexer()?.to_string();
+    let clock = data::clock(&node)?;
+    let funding = data::funding(&node, &c.network, &maker)?;
+    let mut guards = vec![];
+    let token_utxos = if needs.a { data::token_utxos(&indexer, &node, &c.network, a, &maker)? } else { vec![] };
     // an unlisted KCC-20 token's extension commitment is the indexer's: the wallet's own holdings of the token (their states
     // confirmed on the node) are a reference without the indexer, and one of another commitment blocks (the web app's
     // open-token-extension-mismatch); a buy would otherwise pin a commitment that only a look-alike genesis can fill
-    for m in [Some(&a), b.as_ref()].into_iter().flatten() {
+    for m in [Some(a), b].into_iter().flatten() {
         if m.family != kob_protocol::Family::Kcc20 || m.listing != market::Listing::Unlisted {
             continue;
         }
         let held =
-            if m.cov == a.cov && needs_a { token_utxos.clone() } else { data::token_utxos(&indexer, &node, &c.network, m, &maker)? };
+            if m.cov == a.cov && needs.a { token_utxos.clone() } else { data::token_utxos(&indexer, &node, &c.network, m, &maker)? };
         if let Some(u) = held.iter().find(|u| u.state.extension() != m.ext) {
             return Err(format!(
                 "{}: the indexer names extension commitment {}, but your token UTXO {}:{} (checked on the node) has {}: the token \
@@ -569,24 +594,24 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<(E
             ));
         }
     }
-    let (book, own, last_fill, pair) = match &b {
+    let (book, own, last_fill, pair) = match b {
         None => {
-            let book = data::book(&indexer, &a).unwrap_or_else(|_| {
+            let book = data::book(&indexer, a).unwrap_or_else(|_| {
                 guards.push("book".to_string());
                 Default::default()
             });
-            let own = data::own_orders(&indexer, &a, &maker).unwrap_or_else(|_| {
+            let own = data::own_orders(&indexer, a, &maker).unwrap_or_else(|_| {
                 guards.push("own-orders".to_string());
                 vec![]
             });
-            (book, own, data::last_fill(&indexer, &a).ok().flatten(), None)
+            (book, own, data::last_fill(&indexer, a).ok().flatten(), None)
         }
         Some(bm) => {
-            let book = data::pair_book(&indexer, &a, bm).unwrap_or_else(|_| {
+            let book = data::pair_book(&indexer, a, bm).unwrap_or_else(|_| {
                 guards.push("book".to_string());
                 Default::default()
             });
-            let own = data::own_pair_orders(&indexer, &a, bm, &maker).unwrap_or_else(|_| {
+            let own = data::own_pair_orders(&indexer, a, bm, &maker).unwrap_or_else(|_| {
                 guards.push("own-orders".to_string());
                 vec![]
             });
@@ -596,37 +621,31 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<(E
                     .and_then(|bk| data::firm_reference(&bk, m.scale))
                     .or(data::last_fill(&indexer, m).ok().flatten())
             };
-            // a pair buy holds B; a sell-first pair entry holds a B prefund
-            let quote_utxos =
-                if side == Side::Buy || if_done { data::token_utxos(&indexer, &node, &c.network, bm, &maker)? } else { vec![] };
+            let quote_utxos = if needs.b { data::token_utxos(&indexer, &node, &c.network, bm, &maker)? } else { vec![] };
             (
                 book,
                 own,
                 None,
-                Some(PairPart { quote: bm.clone(), quote_utxos, kas_per_whole_a: kas_of(&a), kas_per_whole_b: kas_of(bm) }),
+                Some(PairPart { quote: bm.clone(), quote_utxos, kas_per_whole_a: kas_of(a), kas_per_whole_b: kas_of(bm) }),
             )
         }
     };
-    Ok((
-        Env {
-            market: a.clone(),
-            maker,
-            clock,
-            book,
-            own,
-            guards_unavailable: guards,
-            guards_acknowledged: p.has("--ack-no-guards"),
-            last_fill,
-            market_start_ack: p.has("--ack-market-start"),
-            funding,
-            token_utxos,
-            fee_rate: c.fee_rate,
-            carrier,
-            pair,
-        },
-        a,
-        b,
-    ))
+    Ok(Env {
+        market: a.clone(),
+        maker,
+        clock,
+        book,
+        own,
+        guards_unavailable: guards,
+        guards_acknowledged: false,
+        last_fill,
+        market_start_ack: false,
+        funding,
+        token_utxos,
+        fee_rate: c.fee_rate,
+        carrier: None,
+        pair,
+    })
 }
 
 /// Units of the plan's tokens.

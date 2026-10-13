@@ -150,6 +150,15 @@ struct World {
 }
 
 fn world(name: &str, orders: &[(AnyState, [u8; 32], u8, u64)]) -> World {
+    world_x(name, orders, |_, _| {})
+}
+
+/// A world with more on the node and the indexer (`extra` adds UTXOs and routes).
+fn world_x(
+    name: &str,
+    orders: &[(AnyState, [u8; 32], u8, u64)],
+    extra: impl FnOnce(&mut Vec<NodeUtxo>, &mut BTreeMap<String, Value>),
+) -> World {
     let (maker, taker) = (pk(0x11), pk(0x22));
     let mut utxos = vec![
         node_utxo(&p2pk_spk(&maker), 0x01, 0, 1000 * KAS, None),
@@ -182,6 +191,7 @@ fn world(name: &str, orders: &[(AnyState, [u8; 32], u8, u64)]) -> World {
         let v = live(st, *cov, *tag, *value, &mut utxos);
         routes.insert(format!("/v1/orders/{}", to_hex(cov)), v);
     }
+    extra(&mut utxos, &mut routes);
     let (node, node_state) = mock::start(utxos);
     let (indexer, indexer_state): (String, Arc<Mutex<MockIndexer>>) = idx::start(routes);
     let dir = std::env::temp_dir().join(format!("kob-cli-trade-{}-{name}", std::process::id()));
@@ -543,4 +553,157 @@ fn an_unlisted_token_commitment_must_match_the_wallets_holdings() {
     set_ext(EXT);
     assert_eq!(run(place, w.args(0x11, buy)), 0);
     assert_eq!(w.submitted(), 1);
+}
+
+const TOKEN_B: [u8; 32] = [0x71; 32];
+const PB: TemplateId = TemplateId::Kcc20Ref8x8;
+
+fn tst() -> crate::trade::market::TokenMarket {
+    crate::trade::market::TokenMarket::new(TOKEN, "TST", 3, P, Some(EXT), None).unwrap()
+}
+fn bbb() -> crate::trade::market::TokenMarket {
+    crate::trade::market::TokenMarket::new(TOKEN_B, "BBB", 2, PB, Some(EXT), None).unwrap()
+}
+
+/// An order of the maker (key 11..11) as the planner places it: its state and its value.
+fn planned(intent: crate::trade::plan::Intent, pair: bool) -> (AnyState, u64) {
+    use crate::trade::plan::*;
+    use kob_protocol::tx::{KeyUtxo, TokenUtxo, Utxo};
+    let (a, b) = (tst(), bbb());
+    let utxo = |n: u8, amount: u64, cov| Utxo { transaction_id: [n; 32], index: 0, amount, block_daa_score: 500, covenant_id: cov };
+    let env = Env {
+        market: a.clone(),
+        maker: pk(0x11),
+        clock: Clock { daa: 1_000_000, unix: 1_790_694_000, rate_milli: 10_000 },
+        book: Book::default(),
+        own: vec![],
+        guards_unavailable: vec![],
+        guards_acknowledged: false,
+        last_fill: None,
+        market_start_ack: true,
+        funding: vec![KeyUtxo { utxo: utxo(1, 1000 * KAS, None), pubkey: pk(0x11) }],
+        token_utxos: vec![TokenUtxo { utxo: utxo(2, 2 * KAS, Some(TOKEN)), state: user_token(pk(0x11), 100 * SCALE) }],
+        fee_rate: None,
+        carrier: None,
+        pair: pair.then(|| PairPart {
+            quote_utxos: vec![TokenUtxo {
+                utxo: utxo(3, 2 * KAS, Some(TOKEN_B)),
+                state: TokenState::user(PB.family(), 1_000_000, pk(0x11), EXT),
+            }],
+            quote: b,
+            kas_per_whole_a: Some(3 * KAS as i64),
+            kas_per_whole_b: Some(KAS as i64 / 5),
+        }),
+    };
+    let p = plan_order(&env, &intent);
+    assert!(p.ok, "{:?}", p.issues);
+    (p.states[0].clone(), p.request.unwrap().value)
+}
+
+/// The token B of a pair world: in the token list, a UTXO of the maker on the node and in the indexer, an empty pair book.
+fn with_b(utxos: &mut Vec<NodeUtxo>, routes: &mut BTreeMap<String, Value>) {
+    let maker = pk(0x11);
+    let st = TokenState::user(PB.family(), 1_000_000, maker, EXT);
+    utxos.push(node_utxo(&st.spk_with(token_template(PB)), 0x05, 0, 10 * KAS, Some(TOKEN_B)));
+    routes.insert(
+        "/v1/tokens".into(),
+        json!({"tokens": [
+            {"ticker": "TST", "covenant_id": to_hex(&TOKEN), "template_hash": to_hex(&token_template(P).hash),
+             "extension_commitment": to_hex(&EXT), "decimals": 3, "open_asks": 0, "open_bids": 0},
+            {"ticker": "BBB", "covenant_id": to_hex(&TOKEN_B), "template_hash": to_hex(&token_template(PB).hash),
+             "extension_commitment": to_hex(&EXT), "decimals": 2, "open_asks": 0, "open_bids": 0}]}),
+    );
+    let mut item = token_item(0x05, &st);
+    item["token"] = json!(to_hex(&TOKEN_B));
+    item["program"] = json!(PB.name());
+    routes.insert(
+        format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(&maker), to_hex(&TOKEN_B)),
+        json!({"items": [item], "next_cursor": null}),
+    );
+    routes.insert(format!("/v1/pairs/{}/{}/book?depth=100", to_hex(&TOKEN), to_hex(&TOKEN_B)), json!({"asks": [], "bids": []}));
+}
+
+#[test]
+fn replace_replans_trailing_if_done_and_pair_orders() {
+    use crate::trade::plan::*;
+    let (t_cov, i_cov, p_cov) = ([0xc1; 32], [0xc2; 32], [0xc3; 32]);
+    let trailing = planned(
+        Intent::Cond(CondIntent {
+            kind: CondKind::Trailing,
+            side: Side::Sell,
+            amount: 5 * SCALE,
+            tip: 0,
+            min_fill: None,
+            stop: Some(200_000_000),
+            limit: None,
+            take_profit: None,
+            slip_bps: None,
+            min_touch: None,
+            lifetime: Lifetime::Gtc,
+            active_from: None,
+            max_fills: None,
+            trail: Some(Trail { step: 1_000_000, gap: 5_000_000, wait: None, updates: None }),
+            knobs: StopKnobs::default(),
+        }),
+        false,
+    );
+    let ifd = planned(
+        Intent::Ifd(IfdIntent {
+            side: Side::Buy,
+            amount: 4 * SCALE,
+            tip: 0,
+            min_fill: None,
+            price: 200_000_000,
+            take_profit: Some(250_000_000),
+            stop: None,
+            stop_limit: None,
+            exit_tip: 0,
+            prefund: None,
+            lifetime: Lifetime::Gtc,
+            active_from: None,
+            more: IfdMore::default(),
+        }),
+        false,
+    );
+    let pair = planned(
+        Intent::Limit(LimitIntent {
+            side: Side::Sell,
+            amount: 5 * SCALE,
+            price: 1_600,
+            tip: 0,
+            min_fill: None,
+            lifetime: Lifetime::Gtc,
+            active_from: None,
+            crossing: Crossing::Auction,
+            max_fills: None,
+        }),
+        true,
+    );
+    let orders = [(trailing.0, t_cov, 0x30, trailing.1), (ifd.0, i_cov, 0x40, ifd.1), (pair.0, p_cov, 0x50, pair.1)];
+    let w = world_x("replan", &orders, with_b);
+    let replace = crate::trade::actions::run_replace;
+    let rec = |s: &SignedTx| recover_orders(&s.tx).unwrap()[0].clone();
+    // a trailing stop: a new stop, the trail kept, a new covenant id, the custody moved
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --stop 2.1KAS --yes", to_hex(&t_cov)))), 0);
+    let s = w.signed(".replace.json");
+    let AnyState::KobCondAsk(c) = rec(&s).order else { panic!() };
+    assert_eq!((c.stop_price, c.trail_step, c.trail_gap, c.amount_left), (210_000_000, 1_000_000, 5_000_000, 5 * SCALE));
+    assert_ne!(s.tx.outputs[0].covenant.as_ref().map(|x| x.covenant_id), Some(t_cov));
+    assert_eq!(rec(&s).custody.unwrap().state.amount(), 5 * SCALE);
+    // an if-done entry: a new entry price and exit take-profit, the exit committed again
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --price 2.1KAS --take-profit 2.6KAS --yes", to_hex(&i_cov)))), 0);
+    let AnyState::KobIfdBid(e) = rec(&w.signed(".replace.json")).order else { panic!() };
+    assert_eq!((e.price, e.amount_left, e.exit().unwrap().tp_price), (210_000_000, 4 * SCALE, 260_000_000));
+    // a pair limit: a new price in B per whole A, the A custody moved to the new order
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --price 15BBB --yes", to_hex(&p_cov)))), 0);
+    let r = rec(&w.signed(".replace.json"));
+    let AnyState::KobPair(x) = &r.order else { panic!() };
+    assert_eq!((x.price, x.amount_left, x.custody, x.t_cov_id), (1_500, 5 * SCALE, 5 * SCALE, TOKEN_B));
+    assert_eq!(r.custody.unwrap().state.amount(), 5 * SCALE);
+    assert_eq!(w.submitted(), 3);
+    // refused: --add-kas on a re-planned order, --trail-step on an order that does not trail, nothing to change
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --add-kas 1KAS --yes", to_hex(&t_cov)))), 1);
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --trail-step 0.01KAS --yes", to_hex(&i_cov)))), 1);
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --yes", to_hex(&p_cov)))), 1);
+    assert_eq!(w.submitted(), 3);
 }

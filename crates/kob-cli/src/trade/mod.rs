@@ -13,6 +13,7 @@ pub mod opts;
 pub mod place;
 pub mod plan;
 pub mod plan_pair;
+pub mod replan;
 pub mod show;
 pub mod units;
 
