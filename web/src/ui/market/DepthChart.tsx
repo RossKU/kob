@@ -78,12 +78,16 @@ export function DepthChart(props: { series: DepthSeries | null; loading: boolean
                 <text class="axis-label" x={width - 2} y={tk.y - 3} text-anchor="end">{fmtAmount(tk.value)}</text>
               </g>
             ))}
-            {g.xTicks.map((tk) => (
-              <g key={`x${tk.value}`}>
-                <line class="grid" x1={tk.x} x2={tk.x} y1="0" y2={plotH} />
-                <text class="axis-label" x={tk.x} y={HEIGHT - 4} text-anchor="middle">{fmtPrice(tk.value, Math.min(props.dp, 8))}</text>
-              </g>
-            ))}
+            {g.xTicks.map((tk) => {
+              // a label near an edge is anchored inside the plot (a centred one would be cut off by the panel)
+              const anchor = tk.x < 36 ? 'start' : tk.x > width - 36 ? 'end' : 'middle';
+              return (
+                <g key={`x${tk.value}`}>
+                  <line class="grid" x1={tk.x} x2={tk.x} y1="0" y2={plotH} />
+                  <text class="axis-label" x={anchor === 'start' ? Math.max(tk.x, 0) : anchor === 'end' ? Math.min(tk.x, width) : tk.x} y={HEIGHT - 4} text-anchor={anchor}>{fmtPrice(tk.value, Math.min(props.dp, 8))}</text>
+                </g>
+              );
+            })}
             <line class="grid" x1="0" x2={width} y1={plotH} y2={plotH} />
             {g.bidArea ? <path class="bid-area" d={g.bidArea} /> : null}
             {g.askArea ? <path class="ask-area" d={g.askArea} /> : null}
@@ -115,8 +119,13 @@ export function DepthChart(props: { series: DepthSeries | null; loading: boolean
         <span><i style="background:var(--buy)" />{t('market.depth.bids')}</span>
         <span><i style="background:var(--sell)" />{t('market.depth.asks')}</span>
         <span class="grow" />
-        <span>{summary}</span>
-        {s?.estimated ? <span class="est" title={t(props.inverted ? 'market.depth.estimatedInv' : 'market.depth.estimated')}>~</span> : null}
+        {summary ? (
+          <span data-testid="depth-summary">
+            {/* the estimate mark belongs to the amounts: kept on their line, never alone on the next one */}
+            {s?.estimated ? <span class="est" title={t(props.inverted ? 'market.depth.estimatedInv' : 'market.depth.estimated')}>{'~ '}</span> : null}
+            {summary}
+          </span>
+        ) : null}
       </figcaption>
     </figure>
   );

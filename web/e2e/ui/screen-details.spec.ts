@@ -57,3 +57,18 @@ test.describe('market panels when the indexer cannot be reached', () => {
     await expect(page.getByTestId('depth-empty')).toHaveText('The book could not be loaded.');
   });
 });
+
+test('the depth legend keeps the estimate mark with its amounts', async ({ appPage: page, mock }) => {
+  await openMarket(page, mock, { connect: false });
+  const summary = page.getByTestId('depth-summary');
+  await expect(summary).toContainText(/^~ In view: /);
+  // the price labels at the edges stay inside the chart
+  const out = await page.getByTestId('depth-chart').locator('svg').evaluate((svg) => {
+    const box = svg.getBoundingClientRect();
+    return [...svg.querySelectorAll('text')].filter((t) => {
+      const r = t.getBoundingClientRect();
+      return r.left < box.left - 0.5 || r.right > box.right + 0.5;
+    }).length;
+  });
+  expect(out).toBe(0);
+});
