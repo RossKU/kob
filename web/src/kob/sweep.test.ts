@@ -112,7 +112,9 @@ describe('planSweep: the order continues under the same script, its strays retur
     expect(en.intro).toBe(
       '3 stray token UTXO(s) (0.012 TST, 42 base units of unknown token (81818181…81818181)) and their 25 KAS return to you. The order continues unchanged; its 90-day idle window restarts.',
     );
-    expect(en.sections.map((x) => x.id)).toEqual(['spend', 'sweep', 'back', 'fee', 'net']);
+    // the net effect first; the wallet's inputs and change folded
+    expect(en.sections.map((x) => x.id)).toEqual(['net', 'spend', 'sweep', 'back', 'fee']);
+    expect(en.sections.filter((x) => x.fold).map((x) => x.id)).toEqual(['spend', 'back']);
     const card = en.sections.find((x) => x.id === 'sweep')!.cards[0]!;
     expect(card.title).toBe('Sweep strays: Sell limit order');
     const rows = Object.fromEntries(card.rows.map((r) => [r.id, r]));

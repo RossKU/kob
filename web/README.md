@@ -58,6 +58,9 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
   bids down; a click on a grouped row prefills the worst price of the group).
 * **Live.** The WebSocket channels `book:<token>` / `fills:<token>` trigger a refetch of every panel (debounced 1 s); 5 s polling while the socket is down.
 * **The book never disappears.** A failed or late book pull keeps the last good book on screen with a subtle `stale since hh:mm:ss` marker (the time of that book); only the next good response replaces it. A crossed book (matchers a moment behind) is the live book like any other: it is drawn as it is, with a negative spread (`Mid 0.043173 · Spread -0.000052 (-0.11%)`), and is not marked stale. A pull in flight is never aborted by the next refresh (a live notice or a poll that arrives meanwhile runs once right after it). The indexer-lag banner and the book's "possibly out of date" badge show only when the indexer is more than 30 s behind the chain.
+* **Confirmation screen.** The net effect on the wallet comes first (KAS, each token, KAS locked in orders or back from closed ones), then the
+  orders, the locked amounts and the fee; the wallet's inputs and change are folded under "Wallet inputs and change". A cancel's custody row
+  counts the custody only (strays have their own row).
 * **Theme.** Dark / light toggle in the header, remembered in localStorage (`kob.theme`), default = the OS preference (dark when unknown).
 * **Try it.** `npm run mock -- --history --fund` (mock indexer + node on :8790 with a seeded 48 h price history), `npm run dev`, then Settings:
   indexer and node URL `http://127.0.0.1:8790`. `KOB_SHOTS=1 npx playwright test e2e/ui/market-data.spec.ts` saves screenshots to `test-results/shots/`.

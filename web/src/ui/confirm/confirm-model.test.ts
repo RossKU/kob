@@ -147,6 +147,31 @@ describe('confirmation model', () => {
     expect(rowOf(section(m, 'close').cards[0]!.rows, 'strays').detail).toMatch(/only its maker can move them/);
   });
 
+  it('a cancel with strays counts them once: the custody row is the custody only, the strays their own row', () => {
+    const summary = decode(build('cancel.ask.sweepStray'));
+    const s = summary.spends[0]!;
+    expect(s.strays).toBeGreaterThan(0n);
+    expect(s.tokensReleased).toBeGreaterThan(s.strays);
+    const ref = summary.net.tokens.find((n) => n.ref.covenantId === s.description!.tokenCovId)!.ref;
+    const rows = section(model('cancel.ask.sweepStray'), 'close').cards[0]!.rows;
+    expect(rowOf(rows, 'tokensReleased').value).toBe(tokenAmountText(ref, s.tokensReleased - s.strays));
+    expect(rowOf(rows, 'strays').value).toBe(tokenAmountText(ref, s.strays));
+  });
+
+  it('the net effect comes first; the wallet inputs and change are folded behind it', () => {
+    const create = model('create.ask');
+    expect(create.sections[0]!.id).toBe('net');
+    expect(rowOf(section(create, 'net').rows, 'net-kas').value).toMatch(/^-/);
+    expect(rowOf(section(create, 'net').rows, 'net-locked').value).toBe(rowOf(section(create, 'locked').rows, 'locked-total').value);
+    expect(create.sections.filter((s) => s.fold).map((s) => s.id)).toEqual(['spend', 'back']);
+    const cancel = model('cancel.ask');
+    expect(cancel.sections[0]!.id).toBe('net');
+    expect(rowOf(section(cancel, 'net').rows, 'net-released').value).toBe(rowOf(section(cancel, 'spend').rows, 'kas-released').value);
+    expect(section(cancel, 'net').rows.some((r) => r.id === 'net-locked')).toBe(false);
+    // every section but the folded flows is shown in order: net, then the orders
+    expect(cancel.sections.filter((s) => !s.fold).map((s) => s.id)).toEqual(['net', 'close', 'fee']);
+  });
+
   it('cancel-replace closes one order and creates another', () => {
     const m = model('cancelReplace.ask');
     expect(m.kind).toBe('cancel-replace');

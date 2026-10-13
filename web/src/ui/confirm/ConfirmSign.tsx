@@ -379,9 +379,18 @@ export function ConfirmSign(props: ConfirmSignProps) {
           </div>
         ) : null}
         <div class="cf-summary" data-testid="confirm-summary">
-          {model.sections.map((s) => (
+          {model.sections.filter((s) => !s.fold).map((s) => (
             <SectionView section={s} key={s.id} />
           ))}
+          {/* the gross flows (the wallet's inputs and change) behind the net effect above */}
+          {model.sections.some((s) => s.fold) ? (
+            <details class="cf-flows" data-testid="confirm-flows">
+              <summary>{t('confirm.flows.title')}</summary>
+              {model.sections.filter((s) => s.fold).map((s) => (
+                <SectionView section={s} key={s.id} />
+              ))}
+            </details>
+          ) : null}
         </div>
 
         <FindingList items={model.warnings} testid="confirm-warnings" class="cf-list-warn" />

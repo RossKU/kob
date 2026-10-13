@@ -238,3 +238,23 @@ test('a side or type switch keeps the amount and the price; the stop, exit and t
   await expect(page.getByTestId('order-tip')).toHaveValue('');
   await expect(page.getByTestId('field-stop')).toHaveValue('');
 });
+
+test('the confirmation screen starts with the net effect; the wallet inputs and change are folded', async ({ appPage: page, mock }) => {
+  await fund(mock);
+  await openMarket(page, mock);
+  await pickType(page, 'ifd', 'buy');
+  await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' });
+  await waitReviewable(page);
+  await page.getByTestId('order-review').click();
+  const summary = page.getByTestId('confirm-summary');
+  await expect(summary.locator(':scope > section').first()).toHaveAttribute('data-testid', 'confirm-section-net');
+  await expect(page.getByTestId('confirm-net-net-kas')).toContainText(/^-/);
+  await expect(page.getByTestId('confirm-net-net-locked')).toContainText('KAS');
+  // "What you spend" (2,000 KAS of inputs) and the change are behind a closed fold, not above the orders
+  const flows = page.getByTestId('confirm-flows');
+  await expect(flows).not.toHaveAttribute('open', '');
+  await expect(page.getByTestId('confirm-section-spend')).toBeHidden();
+  await flows.locator('summary').click();
+  await expect(page.getByTestId('confirm-section-spend')).toBeVisible();
+  await expect(page.getByTestId('confirm-section-back')).toBeVisible();
+});

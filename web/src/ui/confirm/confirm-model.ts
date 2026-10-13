@@ -48,6 +48,11 @@ export interface Section {
   note?: string;
   rows: Row[];
   cards: Card[];
+  /**
+   * the gross wallet flows (`spend`: the wallet's inputs, `back`: its change): the screen shows them folded under "Wallet inputs and change",
+   * after the net effect and the orders
+   */
+  fold?: boolean;
 }
 
 export interface AdvancedInput { index: number; text: string; willSign: boolean }
@@ -532,8 +537,10 @@ function spendCard(s: DecodedSpend, f: Fmt): Card {
   const id = s.covenantId ?? `input-${s.input}`;
   if (!d) return { id, title: f.tr('confirm.spend.unknown'), badge: f.tr(actionKey(s.action)), rows: [], children: [], flagged: true };
   const rows = orderRows(d, { value: null, locked: null, deadline: null }, f);
-  // a sweep releases no custody: every token it moves is a stray
-  if (s.tokensReleased > 0n && !s.sweptTo) rows.push(row('tokensReleased', f.tr('confirm.spend.tokensReleased'), tokenAmountText(f.ref, s.tokensReleased, f.tr), 'good'));
+  // a sweep releases no custody: every token it moves is a stray. A cancel releases the custody AND sweeps the strays: the custody row counts the
+  // custody only (the strays are their own row, never counted twice)
+  const custody = s.tokensReleased > s.strays ? s.tokensReleased - s.strays : 0n;
+  if (custody > 0n && !s.sweptTo) rows.push(row('tokensReleased', f.tr('confirm.spend.tokensReleased'), tokenAmountText(f.ref, custody, f.tr), 'good'));
   if (s.strays > 0n) rows.push(row('strays', f.tr('confirm.spend.strays'), tokenAmountText(f.ref, s.strays, f.tr), 'warn', f.tr('confirm.spend.straysHint')));
   for (const x of s.otherStrays ?? []) rows.push(otherStrayRow(x, f));
   if (s.sweptTo) {
@@ -634,6 +641,7 @@ export function buildConfirmModel(summary: SigningSummary, ctx: ConfirmContext =
   const sections: Section[] = [];
   const identity = openTokenIdentity(summary, registry, tr);
   if (identity.rows.length > 0) sections.push({ id: 'identity', title: tr('confirm.section.identity'), note: tr('confirm.section.identityNote'), rows: identity.rows, cards: [] });
+  const netAt = sections.length;
   // an order swept in place stays where it was: its input and its continuation are not KAS released / newly locked (the difference is the fee)
   const swept = summary.spends.filter((s) => s.sweptTo);
   const sweptIn = swept.reduce((a, s) => a + (summary.inputs[s.input]?.amount ?? 0n), 0n);
@@ -647,7 +655,7 @@ export function buildConfirmModel(summary: SigningSummary, ctx: ConfirmContext =
   if (kasNet.fromWallet > 0n) spend.push(row('kas-spend', tr('confirm.spend.kas'), kas(kasNet.fromWallet)));
   if (released > 0n) spend.push(row('kas-released', tr('confirm.spend.kasReleased'), kas(released), 'good', tr(swept.length ? 'confirm.sweep.kasHint' : 'confirm.spend.kasReleasedHint')));
   spend.push(...tokenRows.spend);
-  sections.push({ id: 'spend', title: tr('confirm.section.spend'), rows: spend, cards: [] });
+  sections.push({ id: 'spend', title: tr('confirm.section.spend'), rows: spend, cards: [], fold: true });
 
   // --- orders created (a swept order is not: it continues)
   const createdOrders = summary.orders.filter((o) => o.sweptFrom === undefined);
@@ -678,7 +686,7 @@ export function buildConfirmModel(summary: SigningSummary, ctx: ConfirmContext =
   const back: Row[] = [];
   if (kasNet.toWallet > 0n) back.push(row('kas-back', tr('confirm.back.kas'), kas(kasNet.toWallet), 'good', tr('confirm.back.kasHint')));
   back.push(...tokenRows.back);
-  if (back.length > 0) sections.push({ id: 'back', title: tr('confirm.section.back'), rows: back, cards: [] });
+  if (back.length > 0) sections.push({ id: 'back', title: tr('confirm.section.back'), rows: back, cards: [], fold: true });
 
   // --- to other keys (blocking unless the user asked for it: the decoder decides)
   const others: Row[] = [];
@@ -690,12 +698,14 @@ export function buildConfirmModel(summary: SigningSummary, ctx: ConfirmContext =
   const feeDisc = ctx.fee ?? null;
   sections.push({ id: 'fee', title: tr('confirm.section.fee'), rows: [row('fee', tr('confirm.fee.network'), kas(summary.fee.sompi), 'normal', tr('confirm.fee.hint')), ...(feeDisc?.rows ?? [])], cards: [] });
 
-  // --- net effect on the wallet
+  // --- net effect on the wallet: FIRST on the screen (after a token's identity), what the wallet gains and loses; KAS into and out of orders
   const net: Row[] = [];
   const kasDelta = kasNet.walletDelta;
   net.push(row('net-kas', tr('confirm.net.kas'), `${kasDelta > 0n ? '+' : kasDelta < 0n ? '-' : ''}${formatKas(kasDelta < 0n ? -kasDelta : kasDelta, GROUP)} KAS`, kasDelta > 0n ? 'good' : 'normal', tr('confirm.net.kasHint')));
   net.push(...tokenRows.net);
-  sections.push({ id: 'net', title: tr('confirm.section.net'), rows: net, cards: [] });
+  if (lockedNow.total > 0n) net.push(row('net-locked', tr('confirm.net.locked'), kas(lockedNow.total), 'warn', tr('confirm.net.lockedHint')));
+  if (released > 0n) net.push(row('net-released', tr('confirm.net.released'), kas(released), 'good', tr('confirm.net.releasedHint')));
+  sections.splice(netAt, 0, { id: 'net', title: tr('confirm.section.net'), rows: net, cards: [] });
 
   const advanced: AdvancedModel = {
     txid: summary.txid,

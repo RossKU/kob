@@ -144,21 +144,23 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     ],
     cards: [],
   });
-  sections.push({ id: 'spend', title: tr('confirm.section.spend'), rows: [row('kas-spend', tr('confirm.spend.kas'), kas(kasIn))], cards: [] });
+  sections.push({ id: 'spend', title: tr('confirm.section.spend'), rows: [row('kas-spend', tr('confirm.spend.kas'), kas(kasIn))], cards: [], fold: true });
   sections.push({
     id: 'locked', title: tr('confirm.section.locked'), note: tr('confirm.issue.lockedNote'),
     rows: [row('locked-total', tr('confirm.locked.total'), kas(carriers), 'warn'), row('locked-carriers', tr('confirm.issue.carriers', { count: token.outputs.length }), kas(BigInt(token.carrier)), 'normal', tr('confirm.locked.carriersHint'))],
     cards: [],
   });
-  if (change > 0n) sections.push({ id: 'back', title: tr('confirm.section.back'), rows: [row('kas-back', tr('confirm.back.kas'), kas(change), 'good')], cards: [] });
+  if (change > 0n) sections.push({ id: 'back', title: tr('confirm.section.back'), rows: [row('kas-back', tr('confirm.back.kas'), kas(change), 'good')], cards: [], fold: true });
   const feeDisc = i.fee ?? null;
   sections.push({ id: 'fee', title: tr('confirm.section.fee'), rows: [row('fee', tr('confirm.fee.network'), kas(fee), 'normal', tr('confirm.fee.hint')), ...(feeDisc?.rows ?? [])], cards: [] });
   const delta = change - kasIn;
-  sections.push({
+  // the net effect first: what the wallet gains and loses
+  sections.unshift({
     id: 'net', title: tr('confirm.section.net'),
     rows: [
       row('net-kas', tr('confirm.net.kas'), `${delta < 0n ? '-' : '+'}${formatKas(delta < 0n ? -delta : delta, GROUP)} KAS`, 'normal', tr('confirm.net.kasHint')),
       row('net-token', tr('confirm.issue.netToken', { ticker: token.ticker }), `+${amountText(toMaker)}`, 'good', tr('confirm.issue.netTokenHint')),
+      ...(carriers > 0n ? [row('net-locked', tr('confirm.issue.netLocked'), kas(carriers), 'warn', tr('confirm.locked.carriersHint'))] : []),
     ],
     cards: [],
   });

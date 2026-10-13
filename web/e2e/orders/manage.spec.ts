@@ -221,6 +221,8 @@ test.describe('refund, strays, balances', () => {
     await page.getByTestId(`order-cancel-${id}`).click();
     const [step] = await runFlow(page, mock, wallet, { steps: 1 });
     expect(step!.confirm.closed[0]!.rows.strays).toContain('2 EXKCC');
+    // the custody row is the order's own 3 tokens: the 2 strays are not counted twice
+    expect(step!.confirm.closed[0]!.rows.tokensReleased).toMatch(/^3 EXKCC/);
     const netTok = Object.entries(step!.confirm.sections.net!.rows).find(([k]) => k.startsWith('tok-net-'));
     expect(netTok?.[1]).toContain('+5 EXKCC'); // 3 escrowed + 2 stray
     expect(await tokens(mock)).toBe(5n * TOKEN);

@@ -24,6 +24,12 @@
 .cf-section-others { border-left: 4px solid var(--bad); }
 .cf-section-back { border-left: 4px solid var(--ok); }
 .cf-section-issue { border-left: 4px solid var(--primary); }
+.cf-section-net { border: 2px solid var(--primary); }
+.cf-flows { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; background: var(--surface); }
+.cf-flows summary { cursor: pointer; font-weight: 600; }
+.cf-flows[open] { display: flex; flex-direction: column; gap: 10px; }
+.cf-flows .cf-section { border-width: 0 0 0 4px; border-color: var(--border); border-radius: 0; padding: 4px 0 4px 10px; }
+.cf-flows .cf-section-back { border-color: var(--ok); }
 
 .cf-rows { margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .cf-row { display: grid; grid-template-columns: minmax(120px, 34%) 1fr; gap: 2px 12px; padding: 3px 0; border-bottom: 1px dashed var(--border); }
