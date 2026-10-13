@@ -196,3 +196,48 @@ test('reload and disconnect forget the key; a key that does not parse is refused
   await page.getByTestId('wallet-connect-local-key').click();
   await expect(signer(page).getByTestId('signer-key')).toHaveValue('');
 });
+
+test('a page that clips the frame down to its buttons gets no approval; shown whole, the request is signable', async ({ appPage: page, mock }) => {
+  await fund(mock);
+  await openMarket(page, mock, { connect: false });
+  await connectKey(page);
+  await expect(page.getByTestId('wallet-address')).toBeVisible();
+  await sellTicket(page);
+  await openReview(page);
+  await page.getByTestId('confirm-ack').check();
+  // before the request appears, a script of the page clips the frame so that only its buttons show (its own summary could sit above them)
+  await page.evaluate(() => {
+    const box = document.querySelector<HTMLElement>('.signer-box')!;
+    const frame = document.querySelector<HTMLIFrameElement>('[data-testid="signer-frame"]')!;
+    box.style.height = '70px';
+    box.style.overflow = 'hidden';
+    frame.style.marginTop = '-450px';
+  });
+  await page.getByTestId('confirm-sign').click();
+  const approve = signer(page).getByTestId('signer-approve');
+  await expect(approve).toBeVisible();
+  await page.waitForTimeout(3000);
+  await expect(approve).toBeDisabled();
+  expect(await mock.submitted(false)).toHaveLength(0);
+  // the whole frame on screen: the summary is seen, then Approve works
+  await page.evaluate(() => {
+    document.querySelector<HTMLElement>('.signer-box')!.removeAttribute('style');
+    document.querySelector<HTMLIFrameElement>('[data-testid="signer-frame"]')!.removeAttribute('style');
+  });
+  await expect(approve).toBeEnabled();
+  await approve.click();
+  await expect(page.getByTestId('tx-status')).toHaveAttribute('data-status', 'confirmed', { timeout: 30_000 });
+});
+
+test('signer.html framed by a same-origin script without the sandbox attribute is still an opaque origin (header policy)', async ({ appPage: page, mock }) => {
+  await openMarket(page, mock, { connect: false });
+  const r = await page.evaluate(async () => {
+    const f = document.createElement('iframe');
+    f.src = 'signer.html';
+    const loaded = new Promise((res) => f.addEventListener('load', res));
+    document.body.append(f);
+    await loaded;
+    return f.contentDocument === null ? 'opaque' : 'readable';
+  });
+  expect(r).toBe('opaque');
+});

@@ -8,6 +8,7 @@ import { loadKob } from '../kob/wasm.browser';
 import { t } from '../i18n';
 import { createSignerCore, SignerKeyError, type PendingRequest, type SignerCore } from './core';
 import { fromParent, parseAppMessage, toApp, type SignerToApp } from './protocol';
+import { SeenTracker } from './seen';
 import type { SummaryOrder } from './summary';
 
 /** the app's origin: the origin of this page's URL (this document's own origin is opaque, "null") */
@@ -64,19 +65,41 @@ function idleView(core: SignerCore): void {
   show(el('p', { class: 'muted', 'data-testid': 'signer-idle' }, t('signer.idle', { key: `${pk.slice(0, 8)}…${pk.slice(-8)}` })));
 }
 
-/** Chromium's IntersectionObserver v2 tells whether the frame is really visible (not covered, not transparent, not transformed). */
-function watchVisibility(target: Element, onChange: (visible: boolean) => void): () => void {
+/** a part counts as fully on screen from this intersection ratio (sub-pixel layout keeps some exact fits just below 1) */
+const FULL = 0.98;
+
+/**
+ * Chromium's IntersectionObserver v2 tells whether an element is really visible (not covered, not transparent, not transformed); its ratio tells
+ * whether it is clipped. `onChange(true)` once every part of the summary has been fully visible for a moment and the buttons are now (seen.ts):
+ * a page that clips the frame down to its buttons gets no approval.
+ */
+function watchRequest(parts: Element[], buttons: Element, onChange: (ready: boolean) => void): () => void {
   if (typeof IntersectionObserver === 'undefined' || !('isVisible' in IntersectionObserverEntry.prototype)) {
     onChange(true); // not supported: the delay and the trusted click remain
     return () => undefined;
   }
-  const io = new IntersectionObserver((entries) => onChange((entries.at(-1) as IntersectionObserverEntry & { isVisible?: boolean }).isVisible === true), {
-    threshold: [0],
-    trackVisibility: true,
-    delay: 100,
-  } as IntersectionObserverInit);
-  io.observe(target);
-  return () => io.disconnect();
+  const ids = new Map<Element, string>(parts.map((p, i) => [p, `part-${i}`]));
+  const tracker = new SeenTracker([...ids.values()]);
+  const now = () => performance.now();
+  const io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        const fully = (e as IntersectionObserverEntry & { isVisible?: boolean }).isVisible === true && e.isIntersecting && e.intersectionRatio >= FULL;
+        if (e.target === buttons) tracker.buttons(fully, now());
+        else tracker.part(ids.get(e.target) ?? '', fully, now());
+      }
+      onChange(tracker.ready(now()));
+    },
+    { threshold: [0, FULL, 1], trackVisibility: true, delay: 100 } as IntersectionObserverInit,
+  );
+  for (const p of parts) io.observe(p);
+  io.observe(buttons);
+  // a part that stays visible sends no further entry: its time is counted here
+  const timer = setInterval(() => onChange(tracker.ready(now())), 100);
+  return () => {
+    io.disconnect();
+    clearInterval(timer);
+  };
 }
 
 let stopVisibility: () => void = () => undefined;
@@ -104,6 +127,9 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   const reject = el('button', { type: 'button', 'data-testid': 'signer-reject' }, t('signer.reject'));
   const approve = el('button', { type: 'button', class: 'primary', disabled: '', 'data-testid': 'signer-approve' }, t('signer.approve'));
   const actions = el('div', { class: 'row end' }, reject, approve);
+  const title = el('h1', { 'data-testid': 'signer-title' }, s.title);
+  const orders = s.orders.map((o, i) => orderView(o, `signer-order-${i}`));
+  const problems = s.problems > 0 ? [el('p', { class: 'error', 'data-testid': 'signer-problems' }, t('signer.problems', { count: s.problems }))] : [];
   let delayOver = false;
   let visible = false;
   const update = () => {
@@ -113,7 +139,9 @@ function requestView(core: SignerCore, req: PendingRequest): void {
     delayOver = true;
     update();
   }, APPROVE_DELAY_MS);
-  stopVisibility = watchVisibility(actions, (v) => {
+  // every part of the summary: the title, each line, each order's title, token and terms, the problems note
+  const parts: Element[] = [title, ...list.children, ...orders.flatMap((o) => [...o.querySelectorAll('h2, p.token, .line')]), ...problems];
+  stopVisibility = watchRequest(parts, actions, (v) => {
     visible = v;
     update();
   });
@@ -129,13 +157,7 @@ function requestView(core: SignerCore, req: PendingRequest): void {
     core.reject(req.id, 'user');
     idleView(core);
   });
-  show(
-    el('h1', { 'data-testid': 'signer-title' }, s.title),
-    list,
-    ...s.orders.map((o, i) => orderView(o, `signer-order-${i}`)),
-    ...(s.problems > 0 ? [el('p', { class: 'error', 'data-testid': 'signer-problems' }, t('signer.problems', { count: s.problems }))] : []),
-    actions,
-  );
+  show(title, list, ...orders, ...problems, actions);
 }
 
 // ------------------------------------------------------------------------------------------------ boot
