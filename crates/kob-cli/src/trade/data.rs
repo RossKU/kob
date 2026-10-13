@@ -102,7 +102,11 @@ pub fn token_utxos(indexer: &str, node: &str, network: &str, m: &TokenMarket, ow
     // the key's own outputs the indexer has not seen yet (its token change of a transaction just sent): candidates like the
     // indexer's, confirmed on the node below
     for (st, txid, index) in crate::recent::candidates(network, owner, &m.cov) {
-        if st.family() == m.family && st.owner() == *owner && !cands.iter().any(|c| c.1 == txid && c.2 == index) {
+        if st.family() == m.family
+            && st.is_holder(m.program)
+            && st.owner() == *owner
+            && !cands.iter().any(|c| c.1 == txid && c.2 == index)
+        {
             cands.push((st, txid, index));
         }
     }

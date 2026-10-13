@@ -92,7 +92,8 @@ fn load_from(path: &std::path::Path) -> Vec<Entry> {
 }
 
 /// The token outputs of `built` that `owner` holds as plain user outputs: the next states of its
-/// token transfers, matched to the outputs by the script each state makes and by covenant id.
+/// token transfers with the holder owner of the token's program (KRON: id_type 3, or 0 for a program whose holders sign,
+/// KForge), matched to the outputs by the script each state makes and by covenant id.
 pub fn own_token_outputs(built: &BuiltTx, owner: &[u8; 32]) -> Vec<([u8; 32], u32, TokenState)> {
     let mut out = vec![];
     for p in &built.plans {
@@ -106,7 +107,7 @@ pub fn own_token_outputs(built: &BuiltTx, owner: &[u8; 32]) -> Vec<([u8; 32], u3
             _ => continue,
         };
         let Some(tt) = kob_protocol::artifacts::try_token_template(program) else { continue };
-        for st in states.into_iter().filter(|s| s.is_user() && s.owner() == *owner) {
+        for st in states.into_iter().filter(|s| s.is_holder(program) && s.owner() == *owner) {
             let spk = spk_to_string(&st.spk_with(tt));
             for (i, o) in built.tx.outputs.iter().enumerate() {
                 if o.script_public_key == spk {
@@ -167,4 +168,45 @@ pub fn candidates(network: &str, owner: &[u8; 32], token: &[u8; 32]) -> Vec<(Tok
         .filter(|e| e.network == network && e.owner == owner && e.token == token && e.state.is_user())
         .filter_map(|e| Some((e.state, kob_protocol::registry::parse_hex32(&e.txid)?, e.index)))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kob_protocol::artifacts::TemplateId;
+    use kob_protocol::build::{build, Action, SendTokens, TokenRecipient, TokenRef};
+    use kob_protocol::state::KronState;
+    use kob_protocol::tx::{FeeOptions, KeyUtxo, TokenUtxo, Utxo};
+
+    fn pk(n: u8) -> [u8; 32] {
+        kob_protocol::tx::pubkey_of(&[n; 32]).unwrap()
+    }
+
+    /// A KForge transfer (holders id_type 0, a token-level signature): the sender's token change is recorded with its
+    /// id_type 0 state (the holder owner of the program), the recipient's output is not the sender's.
+    #[test]
+    fn the_token_change_of_an_id_type_0_program_is_recorded() {
+        const TOKEN: [u8; 32] = [0x38; 32];
+        const KAS: u64 = 100_000_000;
+        let utxo =
+            |tag: u8, amount: u64, cov| Utxo { transaction_id: [tag; 32], index: 0, amount, block_daa_score: 500, covenant_id: cov };
+        let send = Action::SendTokens(SendTokens {
+            token: TokenRef { covenant_id: TOKEN, program: TemplateId::KForgeToken1785 },
+            tokens: vec![TokenUtxo { utxo: utxo(1, KAS, Some(TOKEN)), state: TokenState::Kron(KronState::pubkey(12, pk(1))) }],
+            recipients: vec![TokenRecipient { pubkey: pk(5), amount: 4, carrier: 10 * KAS }],
+            token_change: None,
+            token_change_carrier: 10 * KAS,
+            funding: vec![KeyUtxo { utxo: utxo(2, 100 * KAS, None), pubkey: pk(1) }],
+            change: None,
+            records: vec![],
+            fee: FeeOptions::default(),
+        });
+        let built = build(&send).unwrap();
+        let outs = own_token_outputs(&built, &pk(1));
+        assert_eq!(outs.len(), 1, "{outs:?}");
+        let (cov, index, st) = &outs[0];
+        assert_eq!((*cov, st.clone()), (TOKEN, TokenState::Kron(KronState::pubkey(8, pk(1)))));
+        assert!(built.tx.outputs[*index as usize].covenant.is_some());
+        assert!(own_token_outputs(&built, &pk(9)).is_empty());
+    }
 }

@@ -195,7 +195,8 @@ export async function findHeldToken(
   const stored = tracker.list(pubkey).filter((c) => c.tokenCovId.toLowerCase() === id).map((c) => c.program);
   // a failed holdings read leaves the stored candidates (the node check below still decides)
   const holdings = await tracker.heldTokens(pubkey).catch(() => []);
-  const held = holdings.filter((u) => u.covenantId.toLowerCase() === id && isKeyOwned(u.state)).map((u) => u.program);
+  // key-held under the holding's own program (KRON: its holder owner, id_type 0 for KForge)
+  const held = holdings.filter((u) => u.covenantId.toLowerCase() === id && isKeyOwned(u.state, u.program)).map((u) => u.program);
   // one program per covenant id: candidates naming two programs are refused by heldTokenView, without asking the node
   const programs = [...new Set([...stored, ...held])];
   const utxos = programs.length === 1 ? await tracker.tokenUtxosFor(pubkey, { covenantId: id, program: programs[0]! }) : [];

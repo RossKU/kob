@@ -192,4 +192,17 @@ describe('findHeldToken: the programs of the stored candidates and of the node-c
     const failing = { ...tracker(['KCC20Ref'], []), heldTokens: async () => Promise.reject(new Error('node down')) };
     expect((await findHeldToken(failing, kob, OWNER, ID, 'mainnet')).ok).toBe(true);
   });
+
+  it('a KRON holding counts under the holder owner of its program (KForge: id_type 0, not address presence)', async () => {
+    const kron = (id_type: number) => ({ amount: '5', owner: OWNER, id_type, is_minter: 0 });
+    const src = (id_type: number) => ({
+      list: () => [],
+      heldTokens: async () => [{ covenantId: ID, program: 'KForgeToken1785', state: kron(id_type) } as never],
+      tokenUtxosFor: async () => [{ transactionId: '11'.repeat(32), index: 0, amount: '100000000', covenantId: ID, state: kron(id_type) } as never],
+    });
+    // held: the program is found (and the open-token path, KCC-20 only, names why it stops)
+    expect(await findHeldToken(src(0), kob, OWNER, ID, 'testnet-10')).toEqual({ ok: false, reason: 'not-kcc20' });
+    // an address-presence state under KForge is not a holding of it
+    expect(await findHeldToken(src(3), kob, OWNER, ID, 'testnet-10')).toEqual({ ok: false, reason: 'not-held' });
+  });
 });

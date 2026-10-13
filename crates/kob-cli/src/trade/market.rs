@@ -513,6 +513,14 @@ mod tests {
         let proto = vec![open_facts(3, TemplateId::Kcc20Ref8x8)];
         assert!(resolve_with(&key, &[], &proto, Some(&open(&none, Some(0), "mainnet"))).unwrap_err().contains("not reviewed"));
         assert!(resolve_with(&key, &[], &proto, Some(&open(&none, Some(0), "testnet-10"))).is_ok());
+        // a program on testnet-10 only (KForge, holders id_type 0): refused on mainnet even with a registry entry
+        let forge = vec![open_facts(5, TemplateId::KForgeToken1785)];
+        let fkey = to_hex(&[5; 32]);
+        let m = resolve_with(&fkey, &[], &forge, Some(&open(&none, Some(0), "testnet-10"))).unwrap();
+        assert_eq!((m.program, m.family), (TemplateId::KForgeToken1785, Family::Kron));
+        assert!(resolve_with(&fkey, &[], &forge, Some(&open(&none, Some(0), "mainnet"))).is_err());
+        let listed = vec![facts(5, "FRG", 0, TemplateId::KForgeToken1785, 0xdd)];
+        assert!(resolve_with(&fkey, &listed, &[], Some(&open(&none, None, "mainnet"))).unwrap_err().contains("testnet-10 only"));
         // a covenant id no source names
         assert!(resolve_with(&to_hex(&[4; 32]), &[], &idx, Some(&open(&none, Some(0), "mainnet")))
             .unwrap_err()
