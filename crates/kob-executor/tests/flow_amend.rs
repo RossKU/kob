@@ -109,10 +109,12 @@ async fn a_reorg_restores_the_terms_an_amend_replaced() {
     let c = Ctx::new();
     let (create, cov, a, _) = placed(&c).await;
     let before = c.hs.snapshot();
-    let amended = AskState { price: P240, expiry_daa: a.expiry_daa - 1_000, ..a.clone() };
+    let amended = AskState { price: P240, expiry_daa: a.expiry_daa - 1_000, min_fill: a.min_fill + 1, ..a.clone() };
     let am = c.w.sign(&Action::AmendOrder(amend_req(&c, &create, 0, &a, amended.clone())));
     c.push(&[&am]).await;
     assert_eq!(view(&c, &cov).price.as_deref(), Some("240000000"));
+    // the new minimum fill is the order's (the view and the book read it)
+    assert_eq!(view(&c, &cov).min_fill, Some(amended.min_fill.to_string()));
     assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM order_amends", []), 1);
     // the amend's block is reorged out
     c.hs.node.reorg(1, vec![vec![]]);
@@ -121,6 +123,7 @@ async fn a_reorg_restores_the_terms_an_amend_replaced() {
     assert_eq!(c.hs.event_kinds(&cov), ["create"]);
     let v = view(&c, &cov);
     assert_eq!((v.price.as_deref(), v.expiry_daa), (Some("250000000"), Some(a.expiry_daa)));
+    assert_eq!(v.min_fill, Some(a.min_fill.to_string()));
     assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM order_amends", []), 0);
     // every row is what it was before the amend (block rows aside: a replaced block is another block)
     let rows = |s: &str| s.lines().filter(|l| !l.starts_with("state ")).map(str::to_string).collect::<Vec<_>>();

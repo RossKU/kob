@@ -125,7 +125,9 @@ CREATE TABLE IF NOT EXISTS order_amends (
     unlisted_reason TEXT,
     -- a bid's budget rate and reserve before the amend (NULL for other kinds)
     budget_rate     INTEGER,
-    reserve         INTEGER
+    reserve         INTEGER,
+    -- the minimum fill before the amend (NULL in a row written before the column existed: nothing to restore)
+    min_fill        INTEGER
 );
 CREATE INDEX IF NOT EXISTS order_amends_block ON order_amends (block_seq);
 

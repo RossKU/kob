@@ -1102,7 +1102,7 @@ impl Processor {
         Ok(Some(before.clone()))
     }
 
-    /// Takes an in-place amend's terms into the order row (price, tip, time in force, expiry, activation, deadline) and
+    /// Takes an in-place amend's terms into the order row (price, tip, minimum fill, time in force, expiry, activation, deadline) and
     /// re-runs the listing rules on them (as of the amend's block, with the continuation's carrier). The replaced values
     /// are kept in `order_amends`, stamped with the block, so a reorg restores them exactly ([`revert_block`]).
     fn apply_amend(
@@ -1115,8 +1115,8 @@ impl Processor {
         carrier: u64,
     ) -> DbResult<()> {
         conn.prepare_cached(
-            "INSERT INTO order_amends (covenant_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve) \
-             SELECT covenant_id, ?2, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve FROM orders WHERE covenant_id = ?1",
+            "INSERT INTO order_amends (covenant_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill) \
+             SELECT covenant_id, ?2, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill FROM orders WHERE covenant_id = ?1",
         )?
         .execute(params![&cov.0[..], ctx.seq])?;
         // a bid's budget rate and reserve follow its new terms (its remaining amount is the buying power of its escrow)
@@ -1134,7 +1134,7 @@ impl Processor {
         };
         conn.prepare_cached(
             "UPDATE orders SET price = ?2, tip = ?3, tif = ?4, expiry_daa = ?5, active_from = ?6, deadline = ?7, listed = ?8, \
-             unlisted_reason = ?9 WHERE covenant_id = ?1",
+             unlisted_reason = ?9, min_fill = ?10 WHERE covenant_id = ?1",
         )?
         .execute(params![
             &cov.0[..],
@@ -1145,7 +1145,8 @@ impl Processor {
             t.active_from,
             deadline.map(|d| d as i64),
             listed as i64,
-            reason
+            reason,
+            t.min_fill
         ])?;
         Ok(())
     }
@@ -1924,7 +1925,7 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
     // in-place amends of the block: the orders take back the terms they replaced (newest first)
     {
         let mut st = conn.prepare_cached(
-            "SELECT id, covenant_id, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve \
+            "SELECT id, covenant_id, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill \
              FROM order_amends WHERE block_seq = ?1 ORDER BY id DESC",
         )?;
         type AmendRow = (
@@ -1938,6 +1939,7 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
             Option<i64>,
             i64,
             Option<String>,
+            Option<i64>,
             Option<i64>,
             Option<i64>,
         );
@@ -1956,14 +1958,15 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
                     r.get(9)?,
                     r.get(10)?,
                     r.get(11)?,
+                    r.get(12)?,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
-        for (_, cov, price, tip, tif, expiry, active, deadline, listed, reason, budget_rate, reserve) in rows {
+        for (_, cov, price, tip, tif, expiry, active, deadline, listed, reason, budget_rate, reserve, min_fill) in rows {
             changed += conn.execute(
                 "UPDATE orders SET price = ?2, tip = ?3, tif = ?4, expiry_daa = ?5, active_from = ?6, deadline = ?7, listed = ?8, \
-                 unlisted_reason = ?9, budget_rate = ?10, reserve = ?11 WHERE covenant_id = ?1",
-                params![cov, price, tip, tif, expiry, active, deadline, listed, reason, budget_rate, reserve],
+                 unlisted_reason = ?9, budget_rate = ?10, reserve = ?11, min_fill = COALESCE(?12, min_fill) WHERE covenant_id = ?1",
+                params![cov, price, tip, tif, expiry, active, deadline, listed, reason, budget_rate, reserve, min_fill],
             )?;
         }
         changed += conn.execute("DELETE FROM order_amends WHERE block_seq = ?1", [seq])?;

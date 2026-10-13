@@ -98,6 +98,11 @@ fn migrate(conn: &Connection) -> DbResult<()> {
         conn.execute_batch("ALTER TABLE orders ADD COLUMN quote_cov_id BLOB")?;
     }
     conn.execute_batch("CREATE INDEX IF NOT EXISTS orders_quote ON orders (quote_cov_id)")?;
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('order_amends') WHERE name = 'min_fill'")?.exists([])?;
+    if !has {
+        // the minimum fill an in-place amend replaced (restored on revert); an earlier build kept none
+        conn.execute_batch("ALTER TABLE order_amends ADD COLUMN min_fill INTEGER")?;
+    }
     let (exits, events) = backfill_exit_extensions(conn)?;
     if exits > 0 || events > 0 {
         tracing::info!(exits, events, "backfilled the extension commitment of if-done exits booked by an earlier build");
@@ -353,6 +358,27 @@ mod tests {
         let has: bool = c.prepare("SELECT 1 FROM sqlite_master WHERE name LIKE 'receipts%'").unwrap().exists([]).unwrap();
         assert!(!has, "the receipts table and its indexes are dropped");
         assert_eq!(meta_get(&c, "schema_version").unwrap(), Some(SCHEMA_VERSION.to_string()));
+    }
+
+    /// A database of an earlier build of schema 5 kept no minimum fill of an in-place amend: the writer adds the column.
+    #[test]
+    fn an_order_amends_table_without_min_fill_gets_the_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("x.sqlite3");
+        let col = |c: &Connection| {
+            c.prepare("SELECT 1 FROM pragma_table_info('order_amends') WHERE name = 'min_fill'").unwrap().exists([]).unwrap()
+        };
+        {
+            let c = open_writer(&p, "testnet-10").unwrap();
+            assert!(col(&c));
+            c.execute_batch("ALTER TABLE order_amends DROP COLUMN min_fill").unwrap();
+            assert!(!col(&c));
+        }
+        let c = open_writer(&p, "testnet-10").unwrap();
+        assert!(col(&c));
+        // idempotent
+        drop(c);
+        assert!(col(&open_writer(&p, "testnet-10").unwrap()));
     }
 
     #[tokio::test]
