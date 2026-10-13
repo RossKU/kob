@@ -70,6 +70,10 @@ pub struct Cand {
     /// The smallest fill that ends the order and is therefore exempt from `min_fill`: `amountLeft`, or for a `KobBid` the
     /// smallest fill after which less than one minimum fill of buying power is left (`i64::MAX`: no fill within `cap`).
     pub rest_from: i64,
+    /// Most base units of a fill that does not end the order (below `rest_from`): the KIP-9 bound of the outputs such a fill
+    /// leaves (a continuation, a remaining custody, the maker's payout, [`kip9_limits`]). A fill between it and `rest_from`
+    /// would leave dust and is never planned. `i64::MAX`: no bound below `cap`.
+    pub part_cap: i64,
     /// `amountLeft` (a bid: its buying power, `cap`): a fill below it leaves a remainder.
     pub left: i64,
     /// FOK: the range of base units a complete fill may take (`[min, max]`); None otherwise.
@@ -175,7 +179,8 @@ impl Cand {
         n >= self.rest_from
     }
 
-    /// Whether a fill of `n` base units satisfies the candidate's quantity rules (FOK, the minimum fill).
+    /// Whether a fill of `n` base units satisfies the candidate's quantity rules (FOK, the minimum fill, the KIP-9 bound of a
+    /// partial fill's outputs).
     pub fn quantity_ok(&self, n: i64) -> bool {
         if n <= 0 || n > self.cap {
             return false;
@@ -185,7 +190,7 @@ impl Cand {
                 return false;
             }
         }
-        n >= self.min_fill || self.ends(n)
+        self.ends(n) || (n >= self.min_fill && n <= self.part_cap)
     }
 }
 
@@ -428,6 +433,7 @@ fn base(o: &ListedOrder, idx: usize, kind: TemplateId, side: Side, book: BookKey
         cap: 0,
         min_fill: 1,
         rest_from: i64::MAX,
+        part_cap: i64::MAX,
         left: 0,
         fok: None,
         ioc: false,
@@ -522,8 +528,13 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 c.rest_from = s.amount_left;
                 c.class = if s.tif == TIF_GTC { Class::Resting } else { Class::Immediate };
                 c.ioc = s.tif == TIF_IOC;
+                // the outputs a fill leaves clear their KIP-9 dust bounds (a partial fill's payout, continuation, custody)
+                let cust = o.custody.as_ref().map(|x| x.utxo.amount.min(i64::MAX as u64) as i64).unwrap_or(0);
+                if !c.set_rules(plain_kip9(&state, v, cust, q, c.rules())) {
+                    continue;
+                }
                 if s.tif == TIF_FOK {
-                    if c.cap < s.amount_left {
+                    if c.cap < s.amount_left || !c.ends(s.amount_left) {
                         continue; // a FOK that cannot complete in one fill is never filled
                     }
                     c.fok = Some((s.amount_left, s.amount_left));
@@ -568,12 +579,16 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 c.rest_from = bid_rest_from(s, v, cap);
                 c.class = if s.tif == TIF_GTC { Class::Resting } else { Class::Immediate };
                 c.ioc = s.tif == TIF_IOC;
+                // the outputs a fill leaves clear their KIP-9 dust bounds (the continuation, the delivery)
+                if !c.set_rules(plain_kip9(&state, v, 0, q, c.rules())) {
+                    continue;
+                }
                 if s.tif == TIF_FOK {
                     // Complete: less than one minimum fill of buying power left after the fill (the covenant's rule).
-                    if c.rest_from > cap {
+                    if c.rest_from > c.cap {
                         continue;
                     }
-                    c.fok = Some((c.rest_from, cap));
+                    c.fok = Some((c.rest_from, c.cap));
                 }
                 if s.slope == 0 && !unaccepted {
                     c.touch = Some(TouchSrc {
@@ -591,6 +606,24 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 if t < s.active_from || s.amount_left <= 0 {
                     continue;
                 }
+                // KIP-9: a partial fill keeps the continuation (`v`) and the custody and pays the maker its proceeds (less the
+                // merged entry's budget); the fill of everything left pays the carriers too (to the entry when it merges)
+                let cust = o.custody.as_ref().map(|x| x.utxo.amount.min(i64::MAX as u64) as i64).unwrap_or(0);
+                let kip9 = |c: &mut Cand| -> bool {
+                    let cv = c.clone();
+                    let pay = |n: i64| {
+                        let budget = if cv.merge.is_some() { s.rpt_budget(n)? } else { 0 };
+                        cv.value(n)?.checked_sub(budget)
+                    };
+                    let carriers = if cv.merge.is_some() { 0 } else { v.saturating_add(cust) };
+                    c.set_rules(kip9_limits(
+                        cv.rules(),
+                        v >= COV_OUTPUT_MIN && cust >= COV_OUTPUT_MIN,
+                        |n| pay(n).is_some_and(|p| p >= KAS_OUTPUT_MIN),
+                        |_| true,
+                        |n| pay(n).is_some_and(|p| p.saturating_add(carriers) >= KAS_OUTPUT_MIN),
+                    ))
+                };
                 let mk = |leg: u8| {
                     let mut c = base(o, idx, TemplateId::KobCondAsk, Side::Ask, bk);
                     c.leg = leg;
@@ -630,7 +663,7 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                             _ => ok = false, // the entry is not visible (yet): no take-profit without its merge
                         }
                     }
-                    if ok {
+                    if ok && kip9(&mut c) {
                         out.push(c);
                     }
                 }
@@ -648,7 +681,9 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                         }
                         let Some(q) = s.stop_at(false, t, udaa) else { continue };
                         c.quote = q;
-                        out.push(c);
+                        if kip9(&mut c) {
+                            out.push(c);
+                        }
                     } else if !unaccepted {
                         // triggered by a resting ask filled at or below the stop in the same batch (the planner checks)
                         c.trigger = Some(TouchNeed {
@@ -661,7 +696,9 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                         let Some(q) = s.stop_at(true, t, udaa) else { continue };
                         c.quote = q;
                         c.chain_safe = false;
-                        out.push(c);
+                        if kip9(&mut c) {
+                            out.push(c);
+                        }
                     }
                 }
             }
@@ -669,6 +706,22 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 if t < s.active_from || s.amount_left <= 0 {
                     continue;
                 }
+                // KIP-9: a partial fill delivers on `deliveryCarrier` and keeps the continuation `v - spend - deliveryCarrier`;
+                // the fill of everything left delivers `v - spend` (a merge pays the entry instead: the builder's rules)
+                let kip9 = |c: &mut Cand| -> bool {
+                    if c.merge.is_some() {
+                        return true;
+                    }
+                    let cv = c.clone();
+                    let left = |n: i64| s.spend(n, cv.quote).and_then(|sp| v.checked_sub(sp));
+                    c.set_rules(kip9_limits(
+                        cv.rules(),
+                        s.delivery_carrier >= COV_OUTPUT_MIN,
+                        |_| true,
+                        |n| left(n).is_some_and(|l| l.saturating_sub(s.delivery_carrier) >= COV_OUTPUT_MIN),
+                        |n| left(n).is_some_and(|l| l >= COV_OUTPUT_MIN),
+                    ))
+                };
                 let mk = |leg: u8, quote: i64| {
                     let mut c = base(o, idx, TemplateId::KobCondBid, Side::Bid, bk);
                     c.leg = leg;
@@ -725,7 +778,7 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                             _ => ok = false,
                         }
                     }
-                    if ok && c.cap > 0 {
+                    if ok && c.cap > 0 && kip9(&mut c) {
                         out.push(c);
                     }
                 }
@@ -741,7 +794,7 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                         let Some(q) = s.stop_at(false, t, udaa) else { continue };
                         let mut c = mk(1, q);
                         c.class = Class::Triggered;
-                        if c.cap > 0 {
+                        if c.cap > 0 && kip9(&mut c) {
                             out.push(c);
                         }
                     } else if !unaccepted {
@@ -757,7 +810,7 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                             min_rest: s.min_rest_daa,
                         });
                         c.chain_safe = false;
-                        if c.cap > 0 {
+                        if c.cap > 0 && kip9(&mut c) {
                             out.push(c);
                         }
                     }
@@ -828,6 +881,29 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 let n = largest_fit(limit, fits);
                 c.cap = n;
                 if n <= 0 {
+                    continue;
+                }
+                // KIP-9: the delivery (to the exit) and the exit carrier are covenant outputs, and so is the continuation
+                // `v - spend - deliveryCarrier - exitCarrier` of an entry that continues (a partial fill, or any fill of a
+                // repeating entry); the last fill of a non-repeating entry puts `v - spend - deliveryCarrier` on its exit
+                let (dc, ec, rpt) = (s.delivery_carrier, s.exit_carrier, s.rpt_amount > 0);
+                let left = |n: i64| s.spend(n, quote).and_then(|sp| v.checked_sub(sp)).map(|l| l.saturating_sub(dc));
+                let cont_ok = |n: i64| left(n).is_some_and(|l| l.saturating_sub(ec) >= COV_OUTPUT_MIN);
+                let fixed = dc >= COV_OUTPUT_MIN && ec >= COV_OUTPUT_MIN;
+                let r = kip9_limits(
+                    c.rules(),
+                    fixed,
+                    |_| true,
+                    cont_ok,
+                    |n| {
+                        if rpt {
+                            fixed && cont_ok(n)
+                        } else {
+                            dc >= COV_OUTPUT_MIN && left(n).is_some_and(|l| l >= COV_OUTPUT_MIN)
+                        }
+                    },
+                );
+                if !c.set_rules(r) {
                     continue;
                 }
                 let exit_tpl = template(TemplateId::KobCondAsk.in_family(fam));
@@ -904,6 +980,33 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 if n <= 0 || s.proceeds(1, c.quote).is_none() {
                     continue;
                 }
+                // KIP-9: an entry that continues keeps `v - prefund - exitCarrier` (with its custody's carrier once it has
+                // sold everything) and, after a partial fill, its custody; its exit (a covenant output) holds the proceeds, the
+                // prefund and the exit carrier; the last fill of a non-repeating entry puts everything on its exit
+                let (ec, rpt, quote) = (s.exit_carrier, s.rpt_amount > 0, c.quote);
+                let exit_ok = |n: i64| match (s.proceeds(n, quote), s.prefund_of(n)) {
+                    (Some(p), Some(pre)) => p.saturating_add(pre).saturating_add(ec) >= COV_OUTPUT_MIN,
+                    _ => false,
+                };
+                let keep = |n: i64, extra: i64| {
+                    s.prefund_of(n).is_some_and(|pre| v.saturating_sub(pre).saturating_sub(ec).saturating_add(extra) >= COV_OUTPUT_MIN)
+                };
+                let r = kip9_limits(
+                    c.rules(),
+                    cust >= COV_OUTPUT_MIN,
+                    exit_ok,
+                    |n| keep(n, 0),
+                    |n| {
+                        if rpt {
+                            keep(n, cust) && exit_ok(n)
+                        } else {
+                            s.proceeds(n, quote).is_some_and(|p| p.saturating_add(v).saturating_add(cust) >= COV_OUTPUT_MIN)
+                        }
+                    },
+                );
+                if !c.set_rules(r) {
+                    continue;
+                }
                 let exit_tpl = template(TemplateId::KobCondBid.in_family(fam));
                 c.bytes = INPUT_BYTES
                     + rl(TemplateId::KobIfdAsk)
@@ -950,6 +1053,168 @@ pub fn largest_fit(max: i64, fits: impl Fn(i64) -> bool) -> i64 {
         }
     }
     lo
+}
+
+/// The least KAS a plain output of a fill can hold (a maker's payout, P2PK): below it the output's KIP-9 storage mass alone
+/// exceeds the block limit ([`kob_protocol::tx::DUST_OUTPUT_MIN`]).
+pub const KAS_OUTPUT_MIN: i64 = kob_protocol::tx::DUST_OUTPUT_MIN as i64;
+/// The least KAS an output with a covenant id can hold (an order continuation, a custody, a delivery, an exit): two KIP-9
+/// storage units, four times the plain bound ([`kob_protocol::tx::COVENANT_OUTPUT_MIN`]).
+pub const COV_OUTPUT_MIN: i64 = kob_protocol::tx::COVENANT_OUTPUT_MIN as i64;
+
+/// The quantity rules of an order's fills: the most it takes now, its minimum fill, the smallest fill that ends it and the
+/// largest fill that does not ([`Cand`]'s fields of the same names).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QtyRules {
+    pub cap: i64,
+    pub min_fill: i64,
+    pub rest_from: i64,
+    pub part_cap: i64,
+}
+
+/// What the outputs of an order's fills need to clear their KIP-9 dust bounds (`docs/spec/matcher.md` §2.2): a transaction
+/// with an output below its bound (0.02 KAS plain, 0.08 KAS with a covenant id) is refused by consensus, so the builder
+/// refuses the fill and a planner that ignored it would plan that fill again every tick.
+///
+/// * `part_fixed`: the outputs a partial fill (one that does not end the order) leaves at a value that does not depend on
+///   the fill (the order UTXO's carrier on a continuation, a remaining custody, a delivery carrier) clear their bounds;
+/// * `part_up(n)`: the outputs of a partial fill of `n` that grow with `n` (the maker's payout) clear theirs: false below a
+///   threshold, true above it;
+/// * `part_down(n)`: those that shrink with `n` (a bid's or an entry's continuation) clear theirs: true up to a threshold;
+/// * `end_ok(n)`: the outputs of a fill of `n` that ends the order clear theirs: true up to a threshold.
+///
+/// The partial fills become `[max(minFill, threshold of part_up), threshold of part_down]` (`part_cap`; none: 0), the fills
+/// that end the order `[rest_from, threshold of end_ok]` (none: `rest_from = i64::MAX`, and the cap falls to `part_cap`).
+/// `None` when no fill is left.
+pub fn kip9_limits(
+    r: QtyRules,
+    part_fixed: bool,
+    part_up: impl Fn(i64) -> bool,
+    part_down: impl Fn(i64) -> bool,
+    end_ok: impl Fn(i64) -> bool,
+) -> Option<QtyRules> {
+    let mut r = r;
+    let hi = r.cap.min(r.rest_from.saturating_sub(1)).min(r.part_cap);
+    let mut part_cap = 0;
+    if part_fixed && hi >= 1 {
+        let top = last_true(1, hi, &part_down);
+        if top >= 1 && part_up(top) {
+            let lo = first_true(1, top, &part_up);
+            if r.min_fill.max(lo) <= top {
+                r.min_fill = r.min_fill.max(lo);
+                part_cap = top;
+            }
+        }
+    }
+    r.part_cap = part_cap;
+    if r.rest_from <= r.cap {
+        let e = last_true(r.rest_from, r.cap, &end_ok);
+        if e >= r.rest_from {
+            r.cap = e;
+            return Some(r);
+        }
+        r.rest_from = i64::MAX;
+    }
+    r.cap = r.cap.min(part_cap);
+    (r.cap > 0).then_some(r)
+}
+
+/// The largest `n` in `lo..=hi` with `f(n)`, for an `f` true up to a threshold; `lo − 1` when none.
+fn last_true(lo: i64, hi: i64, f: &impl Fn(i64) -> bool) -> i64 {
+    if hi < lo || !f(lo) {
+        return lo - 1;
+    }
+    if f(hi) {
+        return hi;
+    }
+    let (mut a, mut b) = (lo, hi); // f(a), !f(b)
+    while b - a > 1 {
+        let m = a + (b - a) / 2;
+        if f(m) {
+            a = m;
+        } else {
+            b = m;
+        }
+    }
+    a
+}
+
+/// The smallest `n` in `lo..=hi` with `f(n)`, for an `f` false below a threshold and `f(hi)` true.
+fn first_true(lo: i64, hi: i64, f: &impl Fn(i64) -> bool) -> i64 {
+    if f(lo) {
+        return lo;
+    }
+    let (mut a, mut b) = (lo, hi); // !f(a), f(b)
+    while b - a > 1 {
+        let m = a + (b - a) / 2;
+        if f(m) {
+            b = m;
+        } else {
+            a = m;
+        }
+    }
+    b
+}
+
+/// [`kip9_limits`] of a plain `KobAsk` / `KobBid` (either family) at quote `quote` (sompi per whole token), with the order
+/// UTXO's value `v` and its custody's `cust`, mirroring the builder's outputs (`kob_protocol::build`, `Leg::Ask` /
+/// `Leg::Bid`):
+///
+/// * an ask's partial fill: GTC keeps its continuation (`v`) and its custody (`cust`) and pays the maker its proceeds; an IOC
+///   returns the custody to the maker and pays the proceeds with `v`; the fill of everything left pays all three;
+/// * a bid's fill delivers the tokens on `deliveryCarrier + used(n) − spend(n)` and keeps the continuation
+///   `v − used(n) − deliveryCarrier` while it can continue (GTC); a fill that ends it (or any IOC / FOK fill) delivers
+///   `v − spend(n)`.
+pub fn plain_kip9(s: &AnyState, v: i64, cust: i64, quote: i64, r: QtyRules) -> Option<QtyRules> {
+    match s {
+        AnyState::KobAsk(a) | AnyState::KobAskKron(a) => {
+            let pay = |n: i64| a.proceeds_at(n, quote);
+            let gtc = a.tif == TIF_GTC;
+            kip9_limits(
+                r,
+                cust >= COV_OUTPUT_MIN && (!gtc || v >= COV_OUTPUT_MIN),
+                |n| pay(n).is_some_and(|p| p.saturating_add(if gtc { 0 } else { v }) >= KAS_OUTPUT_MIN),
+                |_| true,
+                |n| pay(n).is_some_and(|p| p.saturating_add(v).saturating_add(cust) >= KAS_OUTPUT_MIN),
+            )
+        }
+        AnyState::KobBid(b) | AnyState::KobBidKron(b) => {
+            let spend = |n: i64| b.spend_at(n, quote);
+            let used = |n: i64| b.used(n);
+            let closing = |n: i64| spend(n).is_some_and(|sp| v.saturating_sub(sp) >= COV_OUTPUT_MIN);
+            if b.tif != TIF_GTC {
+                // an IOC / FOK bid never continues: every fill delivers what its escrow keeps
+                return kip9_limits(r, true, |_| true, closing, closing);
+            }
+            kip9_limits(
+                r,
+                true,
+                |n| match (used(n), spend(n)) {
+                    (Some(u), Some(sp)) => b.delivery_carrier.saturating_add(u - sp) >= COV_OUTPUT_MIN,
+                    _ => false,
+                },
+                |n| used(n).is_some_and(|u| v.saturating_sub(u).saturating_sub(b.delivery_carrier) >= COV_OUTPUT_MIN),
+                closing,
+            )
+        }
+        _ => Some(r),
+    }
+}
+
+impl Cand {
+    fn rules(&self) -> QtyRules {
+        QtyRules { cap: self.cap, min_fill: self.min_fill, rest_from: self.rest_from, part_cap: self.part_cap }
+    }
+    /// Takes the KIP-9 limits ([`kip9_limits`]) into the candidate; false when no fill is left.
+    fn set_rules(&mut self, r: Option<QtyRules>) -> bool {
+        match r {
+            Some(r) => {
+                (self.cap, self.min_fill, self.rest_from, self.part_cap) = (r.cap, r.min_fill, r.rest_from, r.part_cap);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 /// A repeating entry can be merged: listed, not spent by a pending transaction, custody valid.

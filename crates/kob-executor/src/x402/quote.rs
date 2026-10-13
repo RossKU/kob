@@ -16,7 +16,7 @@ use kob_x402::chain::Outpoint;
 use kob_x402::client::swap::{OrderRef, Quote};
 
 use crate::matcher::book::{ListedOrder, MemoryBook};
-use crate::matcher::candidate::{excluded_by_expiry, token_program};
+use crate::matcher::candidate::{excluded_by_expiry, plain_kip9, token_program, QtyRules};
 
 /// Which side of the book a leg takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,21 +44,30 @@ fn outpoint_of(o: &ListedOrder) -> Outpoint {
     Outpoint::new(o.order.utxo.transaction_id, o.order.utxo.index)
 }
 
-/// A takeable level: price per whole token at `scale`, the base units available, the order's minimum fill and the smallest
-/// fill that ends it (exempt from the minimum fill).
+/// A takeable level: price per whole token at `scale`, the base units available, the order's minimum fill, the smallest
+/// fill that ends it (exempt from the minimum fill) and the largest that does not (the KIP-9 bound of the outputs a partial
+/// fill leaves, `crate::matcher::candidate::plain_kip9`: the matcher's rule).
 struct Level<'a> {
     price: i64,
     scale: i64,
     amount: i64,
     min_fill: i64,
     rest_from: i64,
+    part_cap: i64,
     order: &'a ListedOrder,
 }
 
 impl Level<'_> {
     /// Whether the order accepts a fill of `n` base units.
     fn takes(&self, n: i64) -> bool {
-        n > 0 && n <= self.amount && (n >= self.min_fill || n >= self.rest_from)
+        n > 0 && n <= self.amount && (n >= self.rest_from || (n >= self.min_fill && n <= self.part_cap))
+    }
+
+    /// The level with the KIP-9 limits of its order's fills (None: no fill of it can be mined).
+    fn kip9(self, v: i64, cust: i64) -> Option<Self> {
+        let r = QtyRules { cap: self.amount, min_fill: self.min_fill, rest_from: self.rest_from, part_cap: i64::MAX };
+        let r = plain_kip9(&self.order.order.state, v, cust, self.price, r)?;
+        Some(Level { amount: r.cap, min_fill: r.min_fill, rest_from: r.rest_from, part_cap: r.part_cap, ..self })
     }
 }
 
@@ -85,7 +94,16 @@ fn levels<'a>(book: &'a MemoryBook, req: &QuoteRequest, utc: u64) -> Vec<Level<'
                 let amount = if s.max_fill > 0 { power.min(s.max_fill) } else { power };
                 if amount > 0 && req.limit_price.is_none_or(|p| s.price >= p) {
                     let rest_from = crate::matcher::candidate::bid_rest_from(s, v, amount);
-                    out.push(Level { price: s.price, scale: s.scale, amount, min_fill: s.min_fill, rest_from, order: o });
+                    let l = Level {
+                        price: s.price,
+                        scale: s.scale,
+                        amount,
+                        min_fill: s.min_fill,
+                        rest_from,
+                        part_cap: i64::MAX,
+                        order: o,
+                    };
+                    out.extend(l.kip9(v, 0));
                 }
             }
             (AnyState::KobAsk(s) | AnyState::KobAskKron(s), Take::BuyFromAsks) => {
@@ -97,14 +115,18 @@ fn levels<'a>(book: &'a MemoryBook, req: &QuoteRequest, utc: u64) -> Vec<Level<'
                 }
                 let amount = if s.max_fill > 0 { s.amount_left.min(s.max_fill) } else { s.amount_left };
                 if req.limit_price.is_none_or(|p| s.price <= p) {
-                    out.push(Level {
+                    let l = Level {
                         price: s.price,
                         scale: s.scale,
                         amount,
                         min_fill: s.min_fill,
                         rest_from: s.amount_left,
+                        part_cap: i64::MAX,
                         order: o,
-                    });
+                    };
+                    let v = o.order.utxo.amount.min(i64::MAX as u64) as i64;
+                    let cust = o.custody.as_ref().map(|c| c.utxo.amount.min(i64::MAX as u64) as i64).unwrap_or(0);
+                    out.extend(l.kip9(v, cust));
                 }
             }
             _ => {}

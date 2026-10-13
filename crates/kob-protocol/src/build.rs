@@ -78,14 +78,15 @@ fn pos(v: i64, what: &str) -> Result<u64> {
     Ok(v as u64)
 }
 
-/// A plain KAS output a fill creates (a pair order's continuation, its exit order UTXO, the carrier of its delivery): KIP-9
-/// dust is refused here, naming the output, because `seal` refuses the whole transaction for it (the output's storage mass
-/// alone exceeds the block limit) without knowing which leg made it.
+/// A KAS amount a fill puts on an output with a covenant id (a pair order's continuation, its exit order UTXO, the carrier of
+/// its delivery): KIP-9 dust is refused here, naming the output, because `seal` refuses the whole transaction for it (the
+/// output's storage mass alone exceeds the block limit: two storage units, [`crate::tx::COVENANT_OUTPUT_MIN`]) without
+/// knowing which leg made it.
 fn kas_out(v: i64, what: &str) -> Result<u64> {
-    if v < crate::tx::DUST_OUTPUT_MIN as i64 {
+    if v < crate::tx::COVENANT_OUTPUT_MIN as i64 {
         return invalid(format!(
             "{what} of {v} sompi is below {} sompi: its KIP-9 storage mass alone exceeds the block limit",
-            crate::tx::DUST_OUTPUT_MIN
+            crate::tx::COVENANT_OUTPUT_MIN
         ));
     }
     Ok(v as u64)

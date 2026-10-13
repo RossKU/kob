@@ -231,6 +231,10 @@ fn best_bid(inp: &MaintenanceInput, g: &Group, held: i64, t: i64) -> Option<(Lis
         if let Some((_, hi)) = c.fok {
             n = n.min(hi);
         }
+        if n > c.part_cap && !c.ends(n) {
+            // a partial fill that would leave the bid a KIP-9 dust continuation: its largest partial fill instead
+            n = c.part_cap;
+        }
         if n <= 0 || !c.quantity_ok(n) {
             continue;
         }

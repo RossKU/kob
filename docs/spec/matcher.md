@@ -222,6 +222,17 @@ receives at least `⌈n·p/scale(A)⌉` of B, a `KobPair` bid pays exactly `⌊n
   the entry's life). A `KobBid`'s quantity, FOK completeness and GTC end are exact in value terms: it ends with less than
   one minimum fill of buying power left, and that remainder (worth less than one minimum fill plus one sompi) returns to the
   maker;
+- **KIP-9 dust** (consensus, not the covenant): every output a fill leaves must carry at least the value whose storage mass
+  alone fits the block storage limit: 0.02 KAS for a plain output (a maker's payout, `tx::DUST_OUTPUT_MIN`), 0.08 KAS
+  for an output with a covenant id (an order continuation, a custody, a token delivery, an exit order:
+  `tx::COVENANT_OUTPUT_MIN`; the stored UTXO takes two 100-byte storage units, rusty-kaspa `utxo_plurality`). A GTC ask's
+  partial fill pays its proceeds alone, so it needs `⌈n·(p − tip)/scale⌉ ≥ 0.02 KAS`; a bid's partial fill keeps the
+  continuation `escrow − ⌈n·(pMax + tip)/scale⌉ − deliveryCarrier ≥ 0.08 KAS`; an order whose continuation or remaining
+  custody carrier is itself below the bound has no partial fill. The reference planner keeps these bounds per order
+  (`candidate::kip9_limits`: the minimum fill raised to the smallest payout that clears its bound, `part_cap` the largest
+  partial fill whose continuation does, the fills that end the order kept), so it never plans a fill the builders refuse
+  for dust: an order whose partial fills all would leave dust is matched only in full, and a bid whose largest crossing
+  fill would leave a dust continuation fills at its largest partial fill instead (an IOC against it takes that fill);
 - FOK: the fill consumes the whole order (ask: `n = amountLeft`; bid: less than one minimum fill of buying power left);
 - the order's UTXO appears at most once per transaction (one covenant input per id);
 - the transaction carries at most **8 token inputs** of the order's token, KRON 4 (`MAX_TOK_IN` of the family;
@@ -410,10 +421,10 @@ a pair fill may be any mix of:
 
 **Fill sizes.** A partial fill of a pair order leaves a continuation that must fund the next delivery carrier and the tip
 of what is left (`in − deliveryCarrier − tip > 0`); the fill of everything left needs no continuation. Once the delivery
-carriers prefunded on the order UTXO are used up, only the fill of everything left is possible. Every plain KAS output a
-fill leaves (the continuation, an entry's exit order UTXO, the carrier of the maker's delivery) must also clear the KIP-9
-dust bound (0.02 KAS, `tx::DUST_OUTPUT_MIN`): a smaller output's storage mass alone exceeds the block limit, so a
-continuation of 1 sompi .. 0.02 KAS is as impossible as none. The reference planner keeps both bounds per order
+carriers prefunded on the order UTXO are used up, only the fill of everything left is possible. Every KAS amount a fill
+puts on an output (the continuation, an entry's exit order UTXO, the carrier of the maker's delivery) must also clear the
+KIP-9 dust bound of an output with a covenant id (0.08 KAS, `tx::COVENANT_OUTPUT_MIN`, §2.2): a smaller output's storage
+mass alone exceeds the block limit, so a continuation of 1 sompi .. 0.08 KAS is as impossible as none. The reference planner keeps both bounds per order
 (`PairInfo::cap`, the largest fill, and `PairInfo::part_cap`, the largest partial fill) and plans only fills in
 `[minFill, part_cap]` or exactly `cap`: such an order is matched only in full, like a FOK. A builder refusal of the fill
 chosen for one pair leg names that leg (`fill of leg <i>: ...`), and so does a dust refusal of the sealed transaction

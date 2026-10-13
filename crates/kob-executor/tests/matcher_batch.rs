@@ -642,13 +642,14 @@ fn the_book_view_sizes_nothing_but_the_physical_limit() {
     let _ = MemoryBook::default();
 }
 
-/// KNOWN GAP (found by the mixed-batch fuzz at 250 iterations / seed 22 and by the C6 property test at seed 33; no pair order
-/// is involved, reported to the executor agent): an IOC ask walking a decaying auction against a resting bid whose value
-/// leaves a small KAS remainder. The planner plans a fill whose payout the builder refuses ("dust payout: small outputs below
-/// 2000000 sompi; the transaction's storage mass ... exceeds the block limit (KIP-9)"), so the book is skipped as an anomaly
-/// every tick. The planner has no model of that builder rule.
+/// Found by the mixed-batch fuzz at 250 iterations / seed 22 and by the C6 property test at seed 33 (no pair order is
+/// involved): an IOC ask walking a decaying auction against a resting bid whose value leaves a small KAS remainder. The whole
+/// IOC (3,670) would leave the bid a continuation of 7,650,000 sompi: an output with a covenant id takes two KIP-9 storage
+/// units, so its storage mass alone (4 × 10^12 / 7,650,000 = 522,875) exceeds the block limit, consensus refuses the
+/// transaction and the builder refused it ("dust payout: small outputs"), every tick (an anomaly). The planner now models
+/// the bound (`candidate::kip9_limits`): the bid's partial fills stop where its continuation would fall below 0.08 KAS, so
+/// the IOC takes the largest fill the bid can make (3,668) and the rest of it returns to its maker.
 #[test]
-#[ignore = "planner gap: a plain fill that leaves a dust payout is planned and refused by the builder (anomaly)"]
 fn a_plain_fill_that_would_leave_a_dust_payout_is_not_planned() {
     let p2 = TemplateId::Kcc20P2;
     let a = AskState {
@@ -669,4 +670,41 @@ fn a_plain_fill_that_would_leave_a_dust_payout_is_not_planned() {
     let inp = view(vec![ask_o, bid_o]);
     let r = tick(&inp, &EngineConfig { token_carrier: OP_TOKEN_CARRIER, ..cfg() }, &Families::default(), &signer());
     assert!(r.anomalies.is_empty(), "anomalies: {:?}", r.anomalies);
+    assert_eq!(r.prepared.len(), 1, "the crossing is still filled");
+    let p = &r.prepared[0];
+    let filled: BTreeMap<[u8; 32], i64> = p.plan.fills.iter().map(|f| (f.cand.id, f.amount)).collect();
+    assert_eq!(filled.get(&cid(3)), Some(&3_668), "the IOC takes the largest fill the bid's continuation allows");
+    assert_eq!(filled.get(&cid(15)), Some(&3_668));
+    check_batch(p, &inp);
+}
+
+/// The KIP-9 quantity rules of a plain bid (`candidate::plain_kip9`): its partial fills stop where its continuation (an output
+/// with a covenant id) would fall below 0.08 KAS, the fills that end it stay; a fill the walk takes into that gap comes back
+/// at the largest partial fill. An ask whose continuation carrier is itself below the bound is matched only in full.
+#[test]
+fn the_kip9_bound_of_a_continuation_shapes_the_fills() {
+    use kob_executor::matcher::candidate::{plain_kip9, QtyRules, COV_OUTPUT_MIN, KAS_OUTPUT_MIN};
+    let p2 = TemplateId::Kcc20P2;
+    assert_eq!(COV_OUTPUT_MIN, 8_000_000);
+    assert_eq!(KAS_OUTPUT_MIN, 2_000_000);
+    // the bid of the fuzz case: 1,943,500,000 sompi of escrow at 255,000,000 per 1,000 units, a 10 KAS delivery carrier
+    let b = BidState { tip: 0, min_fill: 1, ..bid(2, 255_000_000, p2) };
+    let v = 1_943_500_000;
+    let cap = b.buying_power(v);
+    let rest_from = kob_executor::matcher::candidate::bid_rest_from(&b, v, cap);
+    let r = QtyRules { cap, min_fill: 1, rest_from, part_cap: i64::MAX };
+    let k = plain_kip9(&AnyState::KobBid(b.clone()), v, 0, b.price, r).expect("fillable");
+    assert_eq!(k.part_cap, 3_668, "{k:?}");
+    assert_eq!((k.cap, k.rest_from), (cap, rest_from), "the fills that end the bid stay");
+    let cont = |n: i64| v - b.used(n).unwrap() - b.delivery_carrier;
+    assert!(cont(3_668) >= COV_OUTPUT_MIN && cont(3_669) < COV_OUTPUT_MIN);
+    // an ask whose order UTXO carries less than the bound cannot leave a continuation: only its full fill
+    let a = AskState { min_fill: 1, ..ask(1, 250_000_000, 5_000, p2) };
+    let r = QtyRules { cap: 5_000, min_fill: 1, rest_from: 5_000, part_cap: i64::MAX };
+    let k = plain_kip9(&AnyState::KobAsk(a.clone()), COV_OUTPUT_MIN - 1, CARRIER as i64, a.price, r).expect("whole");
+    assert_eq!((k.part_cap, k.cap, k.rest_from), (0, 5_000, 5_000));
+    // a GTC ask's partial payout (a plain output) must reach 0.02 KAS: 8 units pay 1,999,200 sompi, 9 units 2,249,100
+    let k = plain_kip9(&AnyState::KobAsk(a.clone()), CARRIER as i64, CARRIER as i64, a.price, r).expect("fillable");
+    assert_eq!((k.min_fill, k.part_cap, k.cap), (9, 4_999, 5_000), "{k:?}");
+    assert!(a.proceeds_at(9, a.price).unwrap() >= KAS_OUTPUT_MIN && a.proceeds_at(8, a.price).unwrap() < KAS_OUTPUT_MIN);
 }

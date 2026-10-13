@@ -40,11 +40,11 @@ use super::book::{BookKey, CovId, ListedOrder, Market};
 use super::candidate::*;
 use super::family::token_limits;
 
-/// The least KAS a plain output of a fill can hold (a continuation, an exit order UTXO, a delivery's carrier): below it the
-/// output's KIP-9 storage mass alone exceeds the block limit and the transaction could never be mined
-/// ([`kob_protocol::tx::DUST_OUTPUT_MIN`], the bound the builders and `seal` apply). A fill that would leave less is not
-/// planned: an order whose partial fills all would is matched only in full.
-const DUST: i64 = kob_protocol::tx::DUST_OUTPUT_MIN as i64;
+/// The least KAS an output of a fill can hold (a continuation, an exit order UTXO, a delivery's carrier): each carries a
+/// covenant id, so it takes two KIP-9 storage units, and below 0.08 KAS its storage mass alone exceeds the block limit and the
+/// transaction could never be mined ([`kob_protocol::tx::COVENANT_OUTPUT_MIN`], the bound the builders and `seal` apply). A
+/// fill that would leave less is not planned: an order whose partial fills all would is matched only in full.
+const DUST: i64 = COV_OUTPUT_MIN;
 
 /// How a pair order's fill of n base units of its base token A maps to the token amounts it releases and receives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1064,6 +1064,7 @@ pub fn legs(orders: &[&ListedOrder], direct: &[Cand], cx: &CandCtx) -> Vec<(Cand
                 cap: sell_cap,
                 min_fill: info.sell_qty(info.min_fill.min(info.amount_left)).unwrap_or(1).max(1),
                 rest_from: info.sell_qty(info.amount_left).unwrap_or(i64::MAX),
+                part_cap: i64::MAX,
                 left: info.custody,
                 fok: None,
                 ioc: info.ioc,
@@ -1085,6 +1086,7 @@ pub fn legs(orders: &[&ListedOrder], direct: &[Cand], cx: &CandCtx) -> Vec<(Cand
                 cap: buy_cap,
                 min_fill: 1,
                 rest_from: buy_cap,
+                part_cap: i64::MAX,
                 left: buy_cap,
                 book: book(tm),
                 pair: Some(PairLeg { role: PairRole::Buy, info }),
@@ -1149,6 +1151,7 @@ pub fn surplus_cand(m: Market, marker: CovId) -> Cand {
         cap: 0,
         min_fill: 1,
         rest_from: i64::MAX,
+        part_cap: i64::MAX,
         left: i64::MAX,
         fok: None,
         ioc: false,

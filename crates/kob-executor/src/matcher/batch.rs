@@ -669,8 +669,9 @@ impl Universe {
 
     /// Caps of an allocation: the candidates' own, a pair order's legs at its reconciled fill (the S it releases, the T
     /// it receives), the surplus offers none (each allocation sets them from its netting).
-    fn caps(&self, xcap: &[i64]) -> Vec<i64> {
-        let mut caps: Vec<i64> = self.cands.iter().map(|c| c.cap).collect();
+    fn caps(&self, st: &State) -> Vec<i64> {
+        let xcap = &st.xcap;
+        let mut caps: Vec<i64> = self.cands.iter().zip(&st.dcap).map(|(c, &d)| c.cap.min(d)).collect();
         for (p, &(s, b)) in self.porders.iter().enumerate() {
             let x = self.info(p);
             let n = xcap[p].min(x.cap);
@@ -1873,11 +1874,14 @@ fn allocate<'u>(
     al
 }
 
-/// The allocation state an attempt carries: liveness and the pair orders' reconciled caps.
+/// The allocation state an attempt carries: liveness, the pair orders' reconciled caps and the direct candidates' caps (a
+/// fill the walk took into the KIP-9 gap of an order, between its `part_cap` and the fills that end it, comes back at
+/// `part_cap`).
 #[derive(Clone)]
 struct State {
     live: Vec<bool>,
     xcap: Vec<i64>,
+    dcap: Vec<i64>,
 }
 
 impl State {
@@ -1898,15 +1902,26 @@ struct Settled {
 fn settle(u: &Universe, mut st: State, max_bytes: u64, order: &[usize], deadline: Option<Instant>) -> Settled {
     const ROUNDS: usize = 64;
     for round in 0..=ROUNDS {
-        let caps = u.caps(&st.xcap);
+        let caps = u.caps(&st);
         let al = allocate(u, &caps, &st.live, order, max_bytes, deadline);
-        let bad: Vec<CovId> = al
-            .seq
-            .iter()
-            .filter(|&&i| u.cands[i].pair.is_none() && !u.cands[i].quantity_ok(al.qty[i]))
-            .map(|&i| u.cands[i].id)
-            .collect();
-        let mut changed = !bad.is_empty();
+        // a direct fill in the KIP-9 gap of its order (more than its largest partial fill, less than a fill that ends it)
+        // comes back at that largest partial fill; any other broken quantity rule drops the order
+        let mut bad: Vec<CovId> = vec![];
+        let mut capped = false;
+        for &i in &al.seq {
+            let c = &u.cands[i];
+            let q = al.qty[i];
+            if c.pair.is_some() || c.quantity_ok(q) {
+                continue;
+            }
+            if q > c.part_cap && !c.ends(q) && c.quantity_ok(c.part_cap) && c.part_cap < caps[i] && round < ROUNDS {
+                st.dcap[i] = c.part_cap;
+                capped = true;
+            } else {
+                bad.push(c.id);
+            }
+        }
+        let mut changed = capped || !bad.is_empty();
         let qty = al.qty.clone();
         drop(al);
         for id in bad {
@@ -1953,7 +1968,7 @@ fn settle(u: &Universe, mut st: State, max_bytes: u64, order: &[usize], deadline
             return Settled { caps, st };
         }
     }
-    let caps = u.caps(&st.xcap);
+    let caps = u.caps(&st);
     Settled { caps, st }
 }
 
@@ -2450,7 +2465,7 @@ pub fn work_units(inp: &BatchInput, cfg: &PlannerConfig) -> Vec<WorkUnit> {
 /// and it has no netting partner; an order that may net routes at most that bound on top of its netted part.
 fn standalone_bounds(u: &mut Universe, cfg: &PlannerConfig) -> State {
     let n = u.cands.len();
-    let mut st0 = State { live: vec![true; n], xcap: (0..u.porders.len()).map(|p| u.info(p).cap).collect() };
+    let mut st0 = State { live: vec![true; n], xcap: (0..u.porders.len()).map(|p| u.info(p).cap).collect(), dcap: vec![i64::MAX; n] };
     let mut rcap = vec![i64::MAX; u.porders.len()];
     for (p, r) in rcap.iter_mut().enumerate() {
         if u.info(p).need.is_some() {

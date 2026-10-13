@@ -133,14 +133,15 @@ fn the_operators_tokens_are_sold_into_a_bid_left_after_the_tick() {
 
 #[test]
 fn a_sale_that_does_not_pay_its_fee_is_a_merge() {
-    // a bid of 1 sompi per whole token: the sale would lose to the fee, so the UTXOs are merged
+    // a bid of 1 sompi per whole token: the sale would lose to the fee, so the UTXOs are merged (the escrow holds 0.1 KAS more
+    // than 4 whole tokens need: the continuation of a partial fill, an output with a covenant id, clears the KIP-9 bound)
     let tokens = vec![own(T8, 1_000), own(T8, 1_000)];
     let mut b = bid(2, 1, T8);
     b.token_cov_id = token_a(T8);
     let low = ListedOrder {
         family: kob_protocol::family::Family::Kcc20,
         order: OrderUtxo {
-            utxo: utxo((b.used(4 * WHOLE).unwrap() + b.delivery_carrier + b.reserve) as u64, 1_000, Some(cid(101))),
+            utxo: utxo((b.used(4 * WHOLE).unwrap() + b.delivery_carrier + b.reserve + 10_000_000) as u64, 1_000, Some(cid(101))),
             state: AnyState::KobBid(b),
         },
         custody: None,

@@ -56,6 +56,22 @@ pub const BLOCK_TRANSIENT_LIMIT: u64 = 1_000_000;
 /// it (rarely: only tiny inputs do), so order terms and builders refuse it as dust (the mempool has no separate dust
 /// threshold).
 pub const DUST_OUTPUT_MIN: u64 = 2_000_000;
+/// Smallest value (sompi, 0.08 KAS) of an output that carries a covenant id (an order UTXO and its continuation, a token
+/// output: a 35-byte P2SH script public key) whose KIP-9 storage mass alone fits the block storage limit. The stored UTXO
+/// (63 bytes, the script and the 32-byte covenant id) takes two 100-byte units (rusty-kaspa v2.1.0 `utxo_plurality`), so
+/// its storage mass is `4 × storage_mass_parameter / value`: four times that of a plain output of the same value
+/// ([`DUST_OUTPUT_MIN`]). A fill that would leave such an output smaller is refused by consensus.
+pub const COVENANT_OUTPUT_MIN: u64 = 4 * STORAGE_MASS_PARAMETER / BLOCK_STORAGE_LIMIT;
+
+/// The KIP-9 storage mass an output alone commits (`storage_mass_parameter × plurality² / value`; rusty-kaspa v2.1.0
+/// `calc_storage_mass`, before the inputs are credited), `u64::MAX` for a zero value.
+pub fn output_storage_mass(o: &TransactionOutput) -> u64 {
+    if o.value == 0 {
+        return u64::MAX;
+    }
+    let p = kaspa_consensus_core::mass::utxo_plurality(&o.script_public_key, o.covenant.is_some());
+    STORAGE_MASS_PARAMETER.saturating_mul(p).saturating_mul(p) / o.value
+}
 /// Input sequence that keeps lock time enforced (non-final) with no relative lock.
 pub const SEQUENCE_NONFINAL: u64 = 0;
 
@@ -1470,16 +1486,18 @@ impl Draft {
         tx.set_storage_mass(report.storage);
         let report = masses(&tx, &entries);
         if report.storage > BLOCK_STORAGE_LIMIT {
-            // KIP-9: a small output's storage mass is ~ storage_mass_parameter / value; name the dust payouts
+            // KIP-9: a small output's storage mass is ~ storage_mass_parameter × plurality² / value; name the outputs whose own
+            // storage mass exceeds the limit (a plain output below DUST_OUTPUT_MIN, one with a covenant id below
+            // COVENANT_OUTPUT_MIN)
             let dust: Vec<String> = tx
                 .outputs
                 .iter()
                 .enumerate()
-                .filter(|(_, o)| o.value < DUST_OUTPUT_MIN)
+                .filter(|(_, o)| output_storage_mass(o) > BLOCK_STORAGE_LIMIT)
                 .map(|(k, o)| format!("output {k} ({} sompi)", o.value))
                 .collect();
             return invalid(format!(
-                "dust payout: {} below {DUST_OUTPUT_MIN} sompi; the transaction's storage mass {} exceeds the block limit {BLOCK_STORAGE_LIMIT} (KIP-9), so it could never be mined",
+                "dust payout: {} below {DUST_OUTPUT_MIN} sompi ({COVENANT_OUTPUT_MIN} with a covenant id); the transaction's storage mass {} exceeds the block limit {BLOCK_STORAGE_LIMIT} (KIP-9), so it could never be mined",
                 if dust.is_empty() { "small outputs".to_string() } else { dust.join(", ") },
                 report.storage
             ));
@@ -1547,5 +1565,25 @@ mod tests {
             assert!(d.add_token_output((tok, tpl), TokenState::custody(fam, 5, [0x71; 32], [0; 32]), 1_000).is_ok());
             assert!(d.add_token_output((tok, tpl), TokenState::user(fam, 5, [0x72; 32], [0; 32]), 1_000).is_ok());
         }
+    }
+
+    /// An output with a covenant id (an order continuation, a token output) takes two KIP-9 storage units: the least value
+    /// whose own storage mass fits the block limit is four times the plain dust bound, 0.08 KAS.
+    #[test]
+    fn a_covenant_output_needs_four_times_the_plain_dust_bound() {
+        assert_eq!(COVENANT_OUTPUT_MIN, 8_000_000);
+        assert_eq!(COVENANT_OUTPUT_MIN, 4 * DUST_OUTPUT_MIN);
+        let out = |value: u64, cov: bool| TransactionOutput {
+            value,
+            script_public_key: crate::script::p2sh_spk(&[0x51; 40]),
+            covenant: cov.then(|| CovenantBinding { authorizing_input: 0, covenant_id: Hash::from_bytes([7; 32]) }),
+        };
+        // (consensus rounds each output's mass down: the exact thresholds are a few sompi below the round bounds)
+        assert!(output_storage_mass(&out(COVENANT_OUTPUT_MIN, true)) <= BLOCK_STORAGE_LIMIT);
+        assert!(output_storage_mass(&out(COVENANT_OUTPUT_MIN - 16, true)) > BLOCK_STORAGE_LIMIT);
+        assert!(output_storage_mass(&out(COVENANT_OUTPUT_MIN - 1, false)) <= BLOCK_STORAGE_LIMIT / 3);
+        assert!(output_storage_mass(&out(DUST_OUTPUT_MIN, false)) <= BLOCK_STORAGE_LIMIT);
+        assert!(output_storage_mass(&out(DUST_OUTPUT_MIN - 4, false)) > BLOCK_STORAGE_LIMIT);
+        assert_eq!(output_storage_mass(&out(0, true)), u64::MAX);
     }
 }
