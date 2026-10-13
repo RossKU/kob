@@ -11,7 +11,7 @@ import { readPairReferences, readReferences } from '@/data/indexer-crosscheck';
 import { toTokenMarket } from '@/kob/token-market';
 import type { TokenRef } from '@/data/token-tracker';
 import type { OrderView } from '@/data/indexer-types';
-import { ASSET_SLOTS, TOKEN_SLOTS, type AssetSlot, type Token2Config, type TokenSlot } from './config';
+import { ASSET_SLOTS, TOKEN_SLOTS, type AssetSlot, type ExternalTokenConfig, type ExternalTradeConfig, type Token2Config, type TokenSlot } from './config';
 import { externalRegistryToken, soakTemplates, TEMPLATE_STANDARD } from './registry-templates';
 import { issuedOf, type Env, type IssuedToken } from './env';
 import { feeContext } from './fees';
@@ -120,7 +120,7 @@ export function tokenMarket(env: Env, which?: Which): TokenMarket {
   return m;
 }
 
-/** an external token of the soak registry (`externalTokens`) as a market (the operator's `order` command; the bots trade only the soak's own) */
+/** an external token of the soak registry (`externalTokens`) as a market (the operator's `order` command; the traders trade those with a `trade` block) */
 function externalMarket(env: Env, covenantId: string): TokenMarket | undefined {
   if (!(env.cfg.externalTokens ?? []).some((t) => t.covenantId === covenantId)) return undefined;
   let m = cachedMarkets.get(covenantId);
@@ -144,6 +144,19 @@ export interface AssetMarket {
 /** A soak book beside TUSD as the bots trade it: the asset market and its per-token KAS reference (Binance asset / KASUSDT). */
 export interface AssetBook extends AssetMarket {
   feed: RefSource;
+}
+
+/** An external token the traders trade (`externalTokens[]` with a `trade` block, e.g. a KRON token): its market, config and reference. */
+export interface ExternalBook {
+  cfg: ExternalTokenConfig;
+  trade: ExternalTradeConfig;
+  m: TokenMarket;
+  feed: RefSource;
+}
+
+/** the external tokens with a `trade` block, as markets (their config order) */
+export function tradedExternalMarkets(env: Env): Omit<ExternalBook, 'feed'>[] {
+  return (env.cfg.externalTokens ?? []).flatMap((t) => (t.trade && t.trade.bookShare > 0 ? [{ cfg: t, trade: t.trade, m: tokenMarket(env, t.covenantId) }] : []));
 }
 
 /** the configured and issued asset tokens (TETH, TBTC, ...) in slot order */

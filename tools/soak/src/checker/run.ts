@@ -22,6 +22,10 @@
 //                honours the order's guarantee at its quote: an ask receives >= ceil(n x q / scale(A)) of B, a bid pays <= floor(...);
 //                every pair arm / trail names evidence of one of the two modes (two KAS-book fills, or a resting KobPair filled).
 // 12 supply      per soak token: live token UTXOs (indexer + holdings it never saw, on the node) add up to the supply.
+// 13 scenarios   the bots' scenario records (run/state/scenarios.jsonl, scenario-rules.ts): a limit ladder's rungs are independent orders of
+//                one size (`ladder`), cancelling one rung touches no other; a GTC renewal keeps its terms with a later expiry and a pair
+//                amend keeps pair, side and size (`replace`); a cancel-all ends every order (`cancel-all`); a token merge ends in one
+//                output of the inputs' total (`merge`); x402 retries: at most one accepted attempt per payment, a lost answer replayed (`x402`).
 // Every soak token is checked (TUSD and the asset tokens); fills are read across tokens, so a transaction filling several books and
 // pair orders is counted once with every book it touched.
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from 'node:fs';
@@ -76,6 +80,8 @@ import {
   type TxLine,
 } from './rules.ts';
 import { loadState, saveState, type CheckerState, type LegacyTxSums, type OrderMemo, type TxSums } from './store.ts';
+import { checkCancelAll, checkLadder, checkLadderCancel, checkMerge, checkMergeRecord, checkPlannedReplacement, checkReplacement, checkX402Retries, type RetryPayment, type Verdict } from './scenario-rules.ts';
+import { scenariosPath, type MergeRecord, type ScenarioRecord } from '../scenarios';
 import { INV, type EventLike, type HealthLike, type OrderLike, type Violation } from './types.ts';
 
 const log = logger('checker');
@@ -153,8 +159,12 @@ export async function runChecker(env: Env): Promise<void> {
   const cfg = env.cfg;
   const token = env.state.token?.covenantId;
   if (!token) throw new Error('the soak token is not issued yet (run `soak setup`)');
-  // every issued soak token: TUSD, then the asset tokens (TETH, TBTC)
-  const tokens = [token, ...ASSET_SLOTS.flatMap((s) => (env.state[s] ? [env.state[s]!.covenantId] : []))];
+  // every issued soak token: TUSD, then the asset tokens (TETH, TBTC), then the external tokens the traders trade (a KRON token: no supply check)
+  const tokens = [
+    token,
+    ...ASSET_SLOTS.flatMap((s) => (env.state[s] ? [env.state[s]!.covenantId] : [])),
+    ...(cfg.externalTokens ?? []).flatMap((t) => (t.trade && t.trade.bookShare > 0 ? [t.covenantId] : [])),
+  ];
   const statePath = join(cfg.runPath, 'state', 'checker.json');
   const st = loadState(statePath);
   // run/recheck-triggers (touch it, restart the checker): re-check every arm / trail / triggered fill of the conditional orders memoized
@@ -263,6 +273,7 @@ async function round(x: Ctx): Promise<void> {
   await step('x402', async () => x402Step(x, now));
   await step('fees', async () => feesStep(x));
   if (aOk) await step('supply', () => supplyStep(x, now));
+  await step('scenarios', () => scenariosStep(x, now));
   if (x.B && hB) await step('agree', () => agreeStep(x, hA, hB, scan, now));
 }
 
@@ -978,10 +989,17 @@ function x402Step(x: Ctx, now: number): void {
   const run = x.env.cfg.runPath;
   const lp = ledgerPath(run, x.env.cfg.executors);
   if (!lp) return;
-  const payments = readLines<Payment>(join(run, 'state', 'x402-payments.jsonl'));
+  const payments = readLines<Payment & RetryPayment>(join(run, 'state', 'x402-payments.jsonl'));
   const ledger = existsSync(lp) ? readFileSync(lp, 'utf8') : '';
   const r = checkX402(payments, ledger, now);
   for (const v of r.violations) report(x, v);
+  // the retry scenarios (`/retry/*`): at most one accepted attempt per payment, a resent lost answer served from the merchant's memory
+  const rr = checkX402Retries(payments, ledger);
+  for (const v of rr.violations) report(x, v);
+  x.st.stats.x402RetryPayments = rr.stats.retryPayments;
+  x.st.stats.x402Resent = rr.stats.resent;
+  x.st.stats.x402Rebuilt = rr.stats.rebuilt;
+  x.st.stats.x402RetryNotExercised = rr.stats.notExercised;
   x.st.x402 = r.stats as unknown as Record<string, unknown>;
   x.st.stats.x402Payments = r.stats.payments;
   x.st.stats.x402Settled = r.stats.settled;
@@ -1029,6 +1047,123 @@ function feesStep(x: Ctx): void {
     } else report(x, r);
   }
   x.st.txsOffset += Buffer.byteLength(text.slice(0, end + 1), 'utf8');
+}
+
+// ------------------------------------------------------------------------------------------------ 13. scenarios
+
+/** records checked per round (the rest wait for the next round) and the most kept waiting */
+const SCEN_PER_ROUND = 40;
+const SCEN_QUEUE_MAX = 2000;
+
+/** new lines of run/state/scenarios.jsonl since the last round (cursor `scenOffset`) */
+function newScenarioRecords(x: Ctx): ScenarioRecord[] {
+  const p = scenariosPath(x.env.cfg.runPath);
+  if (!existsSync(p)) return [];
+  const size = statSync(p).size;
+  let off = x.st.scenOffset ?? 0;
+  if (size < off) off = 0;
+  if (size === off) return [];
+  const fd = openSync(p, 'r');
+  let text: string;
+  try {
+    const buf = Buffer.alloc(size - off);
+    readSync(fd, buf, 0, buf.length, off);
+    text = buf.toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+  const end = text.lastIndexOf('\n');
+  if (end < 0) return [];
+  x.st.scenOffset = off + Buffer.byteLength(text.slice(0, end + 1), 'utf8');
+  const out: ScenarioRecord[] = [];
+  for (const l of text.slice(0, end).split('\n')) {
+    if (!l.trim()) continue;
+    try {
+      out.push(JSON.parse(l) as ScenarioRecord);
+    } catch {
+      /* torn */
+    }
+  }
+  return out;
+}
+
+/** the merged output of a merge as the indexer lists it: the owner's live token UTXOs first, its spent ones too once the output may be spent */
+async function mergedOutput(x: Ctx, r: MergeRecord, ageMs: number): Promise<{ amount: string; owner: string } | null> {
+  const find = (items: { txid: string; index: number; amount: string; owner: string }[] | null) => items?.find((u) => u.txid === r.final.txid && u.index === r.final.index) ?? null;
+  const live = find(await x.A.tokenUtxos({ owner: r.maker, token: r.token, spent: false, limit: 200, maxPages: 5 }));
+  if (live || ageMs < 120_000) return live;
+  return find(await x.A.tokenUtxos({ owner: r.maker, token: r.token, spent: true, limit: 500, maxPages: 20 }));
+}
+
+async function scenarioVerdict(x: Ctx, r: ScenarioRecord, ageMs: number): Promise<Verdict> {
+  const view = async (id: string) => {
+    const v = await x.A.order(id).catch(() => null);
+    return v ? like(v) : null;
+  };
+  const events = async (id: string) => (await allEvents(x.A, id).catch(() => null))?.map(evLike) ?? null;
+  switch (r.kind) {
+    case 'renew':
+    case 'pairAmend': {
+      const v = await view(r.id);
+      return checkReplacement(r, v, v ? await events(r.id) : null, ageMs);
+    }
+    case 'ladder':
+      return checkLadder(r, await Promise.all(r.rungs.map((g) => view(g.id))), ageMs);
+    case 'ladderCancel': {
+      const evs = new Map<string, EventLike[] | null>();
+      for (const id of r.rungs) evs.set(id, await events(id));
+      return checkLadderCancel(r, await view(r.cancelled.id), evs, ageMs);
+    }
+    case 'cancelAll': {
+      const vs = new Map<string, OrderLike | null>();
+      for (const o of r.orders) vs.set(o.id, await view(o.id));
+      return checkCancelAll(r, vs, ageMs);
+    }
+    case 'merge':
+      return checkMerge(r, await mergedOutput(x, r, ageMs), ageMs);
+    default:
+      return { done: true, ok: false, violations: [], note: 'unknown kind' };
+  }
+}
+
+/**
+ * Scenario records of the bots (src/scenarios.ts, rules in scenario-rules.ts): the plan-side promises are checked as soon as a record is read (a
+ * renewal keeps its terms and extends the expiry, a pair amend keeps the pair, side and size, a merge's total is its inputs' sum); the chain-side ones
+ * once the indexer shows the transactions (up to SCENARIO_GRACE_MS). Counters `scen:<kind>`, `scen:<kind>:ok`, `scen:<kind>:<note>`.
+ */
+async function scenariosStep(x: Ctx, now: number): Promise<void> {
+  const queue = (x.st.scen ??= []);
+  for (const r of newScenarioRecords(x)) {
+    stat(x, `scen:${r.kind}:recorded`);
+    const plan = r.kind === 'renew' || r.kind === 'pairAmend' ? checkPlannedReplacement(r) : r.kind === 'merge' ? checkMergeRecord(r) : null;
+    if (plan) report(x, plan);
+    queue.push(r);
+  }
+  if (queue.length > SCEN_QUEUE_MAX) {
+    stat(x, 'scen:dropped', queue.length - SCEN_QUEUE_MAX);
+    queue.splice(0, queue.length - SCEN_QUEUE_MAX);
+  }
+  // at most SCEN_PER_ROUND records a round; one still pending goes to the back, so the queue rotates and none starves the others
+  const unseen: ScenarioRecord[] = [];
+  const waiting: ScenarioRecord[] = [];
+  let n = 0;
+  for (const r of queue) {
+    if (n >= SCEN_PER_ROUND) {
+      unseen.push(r);
+      continue;
+    }
+    n++;
+    const v = await scenarioVerdict(x, r, now - r.ts);
+    if (!v.done) {
+      waiting.push(r);
+      continue;
+    }
+    for (const viol of v.violations) report(x, viol);
+    stat(x, `scen:${r.kind}`);
+    if (v.ok) stat(x, `scen:${r.kind}:ok`);
+    if (v.note) stat(x, `scen:${r.kind}:${v.note}`);
+  }
+  x.st.scen = [...unseen, ...waiting];
 }
 
 // ------------------------------------------------------------------------------------------------ 12. supply conservation

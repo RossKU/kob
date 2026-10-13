@@ -2,6 +2,7 @@
 // persistence trackers and the check counters the report shows. Written atomically after every round. No `@/` imports.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import type { ScenarioRecord } from '../scenarios.ts';
 
 export interface OrderMemo {
   /** contract */
@@ -103,6 +104,9 @@ export interface CheckerState {
   persist: Record<string, { since: number; count: number; fired: boolean; sig?: string }>;
   stats: Record<string, number>;
   x402: Record<string, unknown> | null;
+  /** byte cursor in run/state/scenarios.jsonl and the scenario records still waiting for the indexer (scenario-rules.ts) */
+  scenOffset?: number;
+  scen?: ScenarioRecord[];
 }
 
 /** protocol generation of the terms the memo holds (3 = amounts in base units, no lots) */

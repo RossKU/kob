@@ -4,6 +4,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LoadedConfig } from './config';
 import { errText, type Logger, type Stats } from './log';
+import { fixedKasRef } from './bots/scenario-math';
 
 export interface RefPrice {
   kasUsd: number;
@@ -133,6 +134,22 @@ export class DerivedFeed implements RefSource {
     const a = this.asset.get();
     if (!k || !a) return null;
     return { kasUsd: k.kasUsd, perToken: BigInt(Math.round((a.usd / k.kasUsd) * 1e8)), usd: a.usd, ts: Math.min(k.ts, a.ts) };
+  }
+}
+
+/**
+ * A fixed KAS reference of one whole token (an external token's `trade.refKas`, e.g. a KRON token: no Binance price): its USD value follows
+ * KASUSDT; null (the bots pause on this book) while the KAS feed is stale.
+ */
+export class FixedKasFeed implements RefSource {
+  constructor(
+    private readonly kas: RefSource,
+    /** sompi per whole token */
+    private readonly perToken: bigint,
+  ) {}
+
+  get(): RefPrice | null {
+    return fixedKasRef(this.kas.get(), this.perToken);
   }
 }
 

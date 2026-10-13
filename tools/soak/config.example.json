@@ -72,6 +72,13 @@
     "priceUrl": "https://fapi.binance.com/fapi/v1/ticker/price?symbol=ETHUSDT",
     "bookShare": 0.22,
     "pairShare": 0.15,
+    "pairWeights": {
+      "gtd": 2,
+      "day": 1,
+      "timed": 2,
+      "amend": 2,
+      "cancelAll": 1
+    },
     "mm": {
       "minTokens": "0.0004",
       "maxTokens": "0.003",
@@ -110,6 +117,13 @@
     "priceUrl": "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT",
     "bookShare": 0.22,
     "pairShare": 0.15,
+    "pairWeights": {
+      "gtd": 2,
+      "day": 1,
+      "timed": 2,
+      "amend": 2,
+      "cancelAll": 1
+    },
     "mm": {
       "minTokens": "0.000012",
       "maxTokens": "0.000072",
@@ -203,26 +217,56 @@
     {
       "key": "t1",
       "meanIntervalSec": 20,
+      "weights": {
+        "ladder": 3,
+        "ladderCancel": 2,
+        "renew": 2,
+        "mergeTokens": 1
+      },
       "maxUsd": 4
     },
     {
       "key": "t2",
       "meanIntervalSec": 25,
+      "weights": {
+        "ladder": 3,
+        "ladderCancel": 2,
+        "renew": 2,
+        "mergeTokens": 1
+      },
       "maxUsd": 6
     },
     {
       "key": "t3",
       "meanIntervalSec": 30,
+      "weights": {
+        "ladder": 3,
+        "ladderCancel": 2,
+        "renew": 2,
+        "mergeTokens": 2
+      },
       "maxUsd": 3
     },
     {
       "key": "t4",
       "meanIntervalSec": 40,
+      "weights": {
+        "ladder": 3,
+        "ladderCancel": 2,
+        "renew": 2,
+        "mergeTokens": 1
+      },
       "maxUsd": 5
     },
     {
       "key": "t5",
       "meanIntervalSec": 50,
+      "weights": {
+        "ladder": 5,
+        "ladderCancel": 2,
+        "renew": 2,
+        "mergeTokens": 1
+      },
       "maxUsd": 8
     }
   ],
@@ -237,6 +281,15 @@
       "enabled": true,
       "amountKas": 20,
       "maxSellTusd": 2
+    },
+    "weights": {
+      "/native": 3,
+      "/token": 3,
+      "/swap": 3,
+      "invoice": 3,
+      "/retry/drop": 1,
+      "/retry/lost": 1,
+      "/retry/conflict": 1
     }
   },
   "fees": {

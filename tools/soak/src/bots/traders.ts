@@ -6,81 +6,32 @@
 // `pairShare`) are PAIR orders of the asset token (A) against TUSD (B) through the web planner (`planOrder` with a PairPlanEnv): limits on
 // both sides, IOC and market, Dutch, TWAP, stop-market and trailing stops, OCO, IFD buy-first and sell-first, repeat IFD; they rest, cross
 // each other (the matcher nets them), route through the two KAS books and arm the pair stops (both evidence modes).
+// Scenarios of the 2026-10-13 gap review (each through the web code a user runs; checkable ones recorded in run/state/scenarios.jsonl for the
+// checker): limit ladders of 2 to 20 same-size rungs (the ticket's ladder, one order and transaction per rung) and the cancel of one rung, GTC
+// renewal (My orders' renew), token merge (My orders' "Merge tokens", a chain 3 -> 1, then 1 + 2 -> 1), the pair amend (the pair ticket's
+// replace), the pair cancel-all, dated pair limits (GTD, day, timed activation), and the KAS book of external tokens with a `trade` block (KRON).
 import type { Intent } from '@/kob/plan';
 import type { BookView, TokenMarket } from '@/kob/plan-types';
+import type { OrderState } from '@/kob/types';
+import { describeOrder } from '@/kob/order-facts';
+import { amendKind, isGtcExpiry, orderTypeKey } from '@/ui/orders/orders-model';
+import { expandLimitLadder } from '@/ui/ticket/ladder';
 import { pairRateOf, pairReference } from './pair-math';
 import type { OrderView } from '@/data/indexer-types';
 import type { TraderConfig } from '../config';
 import type { Env } from '../env';
 import { errText, type Logger, type Stats } from '../log';
-import { isPair, myOrders, readBook, readClock, tokenMarket, touch, type AssetBook } from '../market';
+import { isPair, myOrders, readBook, readClock, tokenMarket, touch, type AssetBook, type ExternalBook } from '../market';
 import type { RefSource } from '../price';
+import { recordScenario } from '../scenarios';
 import { bps, expDelay, onTick, pick, randInt, randUnits, sleep, usdToUnits, weighted } from '../util';
 import { walletFor, type BotWallet } from '../wallet';
-import { amend, cancel, cancelAll, priceOf, place, placePair, type PlaceResult } from './common';
+import { amend, cancel, cancelAll, cancelAllDetailed, mergeTokens, pairAmend, priceOf, place, placePair, renew, spendsOf, type PlaceResult, type ReplaceOutcome } from './common';
+import { DEFAULT_PAIR_WEIGHTS, DEFAULT_WEIGHTS } from './weights';
+import { datedPairLimit, externalReference, ladderLevels, ladderSetting, mergeTotal, oldestFirst, pairAmendPrice, rungSize } from './scenario-math';
 import { consolidateTokens } from './consolidate';
 import { consolidateConfig } from './consolidate-math';
 import { fanoutTarget } from './fanout';
-
-export const DEFAULT_WEIGHTS: Record<string, number> = {
-  market: 16,
-  limit: 10,
-  limitCross: 8,
-  gtd: 5,
-  day: 3,
-  timed: 3,
-  ioc: 8,
-  fok: 4,
-  streaming: 5,
-  stopMarket: 6,
-  stopLimit: 4,
-  trailingStop: 4,
-  takeProfit: 3,
-  oco: 5,
-  ifd: 4,
-  ifo: 3,
-  ifoStopEntry: 3,
-  repeatIfd: 2,
-  repeatIfo: 1,
-  twap: 2,
-  dca: 2,
-  dutch: 2,
-  close: 1,
-  cancel: 7,
-  amend: 5,
-  cancelAll: 1,
-};
-
-/**
- * The pair actions (an asset token A against TUSD B): every family of pair kinds. `limitSell` / `limitBuy` rest near the reference (and cross
- * each other: netting), `ioc` / `market` take (the route through the two KAS books, or resting pair orders), `stop` / `trailing` / `oco` are
- * KobCondPair orders the matcher arms from pair evidence (two KAS-book fills, or a resting pair order filled), `ifdBuy` / `ifdSell` / `repeatIfd`
- * KobIfdPair entries (buy-first and sell-first) whose fills create exits.
- */
-export const DEFAULT_PAIR_WEIGHTS: Record<string, number> = {
-  limitSell: 6,
-  limitBuy: 6,
-  ioc: 3,
-  market: 3,
-  dutch: 2,
-  twap: 1,
-  stop: 2,
-  trailing: 2,
-  oco: 2,
-  ifdBuy: 2,
-  ifdSell: 2,
-  repeatIfd: 1,
-  // the rest of the KAS ticket's order types, on the pair
-  fok: 1,
-  streaming: 1,
-  close: 1,
-  stopLimit: 1,
-  takeProfit: 1,
-  ifo: 1,
-  ifoStopEntry: 1,
-  repeatIfo: 1,
-  cancel: 3,
-};
 
 const side = (): 'buy' | 'sell' => (Math.random() < 0.5 ? 'buy' : 'sell');
 const frac = (lo: number, hi: number) => lo + Math.random() * (hi - lo);
@@ -98,6 +49,8 @@ export class Trader {
     readonly stats: Stats,
     /** the soak books beside TUSD (TETH, TBTC): their markets, configs and references */
     private readonly assets: AssetBook[] = [],
+    /** the external tokens with a `trade` block (a KRON token): their KAS books, no pair orders */
+    private readonly external: ExternalBook[] = [],
   ) {
     this.w = walletFor(env, cfg.key, stats, log);
     this.weights = { ...DEFAULT_WEIGHTS, ...(cfg.weights ?? {}) };
@@ -156,13 +109,25 @@ export class Trader {
       if (r < share) return this.pair(tokenMarket(env), a);
       r -= share;
     }
-    let asset: AssetBook | null = null;
-    for (const a of this.assets) {
-      if (r < a.cfg.bookShare) {
-        asset = a;
+    // an external token's KAS book (`externalTokens[].trade.bookShare`, a KRON token), then the asset books (`bookShare`), else TUSD
+    let asset: { m: TokenMarket; feed: RefSource } | null = null;
+    let externalBook = false;
+    for (const x of this.external) {
+      if (r < x.trade.bookShare) {
+        asset = x;
+        externalBook = true;
         break;
       }
-      r -= a.cfg.bookShare;
+      r -= x.trade.bookShare;
+    }
+    if (!asset) {
+      for (const a of this.assets) {
+        if (r < a.cfg.bookShare) {
+          asset = a;
+          break;
+        }
+        r -= a.cfg.bookShare;
+      }
     }
     const m = asset ? asset.m : tokenMarket(env);
     const ref = (asset ? asset.feed : this.feed).get();
@@ -171,10 +136,10 @@ export class Trader {
     const action = asset ? `${action0}@${m.ticker}` : action0;
     this.book = { decimals: m.decimals, usd: ref.usd };
     const tick = m.tick;
-    // sompi per whole token: every intent price below is in this unit
-    const R = ref.perToken;
-    const at = (b: number) => onTick(R + bps(R, b), tick);
     const book: BookView = await readBook(env, m);
+    // sompi per whole token: every intent price below is in this unit (an external token: its book's midpoint when near its configured reference)
+    const R = externalBook ? externalReference(touch(book), ref.perToken, 2000) : ref.perToken;
+    const at = (b: number) => onTick(R + bps(R, b), tick);
     // the trader's own orders of this book, less those its pending cancels / amends already spend (the listing lags the chain)
     const mine: OrderView[] = this.w.actionable(await myOrders(env, this.w.pk, m).catch(() => [] as OrderView[]));
     const t = touch(book);
@@ -326,6 +291,14 @@ export class Trader {
         this.stats.inc('cancelAll_orders', n);
         return;
       }
+      case 'ladder':
+        return this.ladder(m, s, R, clock.unixSeconds, action);
+      case 'ladderCancel':
+        return this.ladderCancel(m, action);
+      case 'renew':
+        return this.renewOldest(m, mine, clock.daa, action);
+      case 'mergeTokens':
+        return this.merge(m, action);
       default:
         return;
     }
@@ -335,6 +308,137 @@ export class Trader {
     // a real user pulls their own resting orders the order would trade against first (matcher.md 10.12: self-trade prevention is the
     // wallet's job): exactly the orders the refusal names are cancelled together, then the same intent is planned again
     await this.clearSelfTrade(res, () => place(env, this.w, placed, action, { taker: true }, m), (views) => cancelAll(env, this.w, views, 'selfTradeCancel'));
+  }
+
+  /** the ladders this trader placed (2 rungs or more), for `ladderCancel`: token and rung ids, newest last */
+  private ladders: { token: string; rungs: string[] }[] = [];
+
+  /**
+   * A limit ladder through the ticket's ladder (web/src/ui/ticket/ladder.ts `expandLimitLadder`): 2 to 20 rungs of ONE size, the first a little
+   * behind the reference, the next ones stepping away from it (a percent step or an end price), GTC or GTD 30 to 90 min. Every rung is its own
+   * limit order placed by its own transaction, one after the other (as the ticket signs them); the ladder stops at the first rung refused or
+   * not submitted, the rungs placed before it stay. Counters `ladder_placed`, `ladder_rungs`, `ladder_stopped`; record `ladder`.
+   */
+  private async ladder(m: TokenMarket, side: 'buy' | 'sell', R: bigint, nowUnix: bigint, tag: string): Promise<void> {
+    const env = this.env;
+    const levels = ladderLevels();
+    const off = bps(R, frac(5, 40));
+    const start = onTick(side === 'buy' ? R - off : R + off, m.tick);
+    const set = ladderSetting(side, start, levels);
+    // the ladder's budget is twice the trader's largest order, split evenly: every rung the same size, at least half a dollar
+    const size = rungSize(this.usd(this.cfg.maxUsd * 2), levels, this.usd(0.5));
+    const gtd = Math.random() < 0.5;
+    const base: Intent = { type: 'limit', side, amount: size, price: start, ...(gtd ? { lifetime: { kind: 'gtd' as const, at: nowUnix + BigInt(randInt(30, 90) * 60) } } : {}) };
+    const lad = expandLimitLadder(base, set, m.tick);
+    if (!lad.ok) {
+      this.stats.inc(`plan_refused:${tag}:ladder-${lad.errors[0]?.code ?? 'unknown'}`);
+      return;
+    }
+    const rungs: { id: string; price: string; txid: string }[] = [];
+    let stoppedAt: number | undefined;
+    for (const l of lad.levels) {
+      if (this.stopped) break;
+      // as every trader limit: a rung marketable when planned (a book skewed past the reference) goes as a taker at its own price
+      const res = await place(env, this.w, l.intent, tag, { taker: true }, m);
+      const id = res.created?.[0];
+      if (!res.ok || !res.txid || !id) {
+        stoppedAt = l.level;
+        break;
+      }
+      rungs.push({ id, price: l.entryPrice.toString(), txid: res.txid });
+      // the next rung is planned from fresh coins (the ticket re-reads the chain before each signature): this rung's change is spendable once accepted
+      await sleep(2000);
+    }
+    this.stats.inc('ladder_rungs', rungs.length);
+    if (stoppedAt !== undefined) this.stats.inc('ladder_stopped');
+    if (!rungs.length) return;
+    this.stats.inc('ladder_placed');
+    this.log.info('ladder placed', { tag, side, levels, placed: rungs.length, size, mode: set.mode, first: rungs[0]!.price, last: rungs[rungs.length - 1]!.price });
+    recordScenario(env.cfg.runPath, { kind: 'ladder', ts: Date.now(), bot: this.w.name, token: m.covenantId, side, size: size.toString(), levels, rungs, ...(stoppedAt !== undefined ? { stoppedAt } : {}) });
+    if (rungs.length >= 2) {
+      this.ladders.push({ token: m.covenantId, rungs: rungs.map((x) => x.id) });
+      if (this.ladders.length > 20) this.ladders.shift();
+    }
+  }
+
+  /** Cancels ONE live rung of one of this trader's ladders on `m` (My orders' cancel of that order); record `ladderCancel` (the others stay). */
+  private async ladderCancel(m: TokenMarket, tag: string): Promise<void> {
+    const env = this.env;
+    const own = this.ladders.filter((l) => l.token === m.covenantId);
+    if (!own.length) return;
+    const lad = pick(own);
+    const views = await Promise.all(lad.rungs.map((id) => env.indexer.order(id).catch(() => null)));
+    const live = this.w.actionable(views.filter((v): v is OrderView => !!v && (v.status === 'open' || v.status === 'partial') && !!v.current && v.state_known));
+    if (live.length < 2) {
+      // one rung or none left: nothing to show about the others
+      this.ladders = this.ladders.filter((l) => l !== lad);
+      return;
+    }
+    const v = pick(live);
+    const spends = spendsOf(v);
+    const res = await cancel(env, this.w, v, tag);
+    this.stats.inc(res.ok ? 'ladderCancel_ok' : 'ladderCancel_failed');
+    if (!res.ok || !res.txid) return;
+    recordScenario(env.cfg.runPath, { kind: 'ladderCancel', ts: Date.now(), bot: this.w.name, token: m.covenantId, rungs: lad.rungs, cancelled: { id: v.covenant_id, spends }, txid: res.txid });
+    lad.rungs = lad.rungs.filter((id) => id !== v.covenant_id);
+  }
+
+  /**
+   * GTC renewal (My orders' renew, before day 85 of 90): the OLDEST live GTC order of this book that the web lets the user renew (a plain limit:
+   * kind `limit`; a stop / take-profit / OCO: kind `cond`; never an exit or a pair order), renewed through `renew` (common.ts): same terms, a fresh
+   * 90-day expiry, one atomic cancel-replace. Counters `renew_ok` / `renew_failed`; record `renew`.
+   */
+  private async renewOldest(m: TokenMarket, mine: OrderView[], nowDaa: bigint, tag: string): Promise<void> {
+    const cands: { v: OrderView; kind: 'limit' | 'cond'; genesis: { daa: number } }[] = [];
+    for (const v of mine) {
+      if (!v.current || !v.state_known || !v.state || v.parent || isPair(v)) continue;
+      try {
+        const st = v.state as unknown as OrderState;
+        const desc = describeOrder(st, this.env.kob);
+        const g = BigInt(v.genesis.daa);
+        const genesisDaa = g > 0n ? g : null;
+        const typeKey = orderTypeKey({ kind: st.kind, desc, deadline: v.deadline != null ? BigInt(v.deadline) : null, genesisDaa, nowDaa });
+        const kind = amendKind(st, typeKey);
+        if ((kind === 'limit' || kind === 'cond') && isGtcExpiry(desc.expiryDaa, genesisDaa)) cands.push({ v, kind, genesis: v.genesis });
+      } catch {
+        /* a state the web cannot describe is not renewable from My orders either */
+      }
+    }
+    const c = oldestFirst(cands);
+    if (!c) return;
+    const res = await renew(this.env, this.w, c.v, c.kind, tag);
+    this.stats.inc(res.ok ? 'renew_ok' : 'renew_failed');
+    if (res.ok) this.recordReplace('renew', m, res);
+  }
+
+  /** records a submitted renewal / pair amend for the checker (invariant `replace`) */
+  private recordReplace(kind: 'renew' | 'pairAmend', m: TokenMarket, r: ReplaceOutcome): void {
+    if (!r.ok || !r.txid || !r.old || !r.id || !r.expect) return;
+    recordScenario(this.env.cfg.runPath, {
+      kind, ts: Date.now(), bot: this.w.name, token: m.covenantId, old: { id: r.old.id, spends: r.old.spends }, oldExpiryDaa: r.old.expiryDaa,
+      id: r.id, inPlace: !!r.inPlace, txid: r.txid, before: r.old.state, expect: r.expect,
+    });
+  }
+
+  /**
+   * "Merge tokens" of this book's token (My orders' merge, kob/merge.ts): the wallet's plain UTXOs merged by a chain of transfers into ONE (3 -> 1, then
+   * 1 + 2 -> 1, ...). The fan-out restores the trader's spread every 10 minutes. Counters `mergeTokens_ok`, `mergeTokens_links`, `mergeTokens_inputs`;
+   * record `merge`.
+   */
+  private async merge(m: TokenMarket, tag: string): Promise<void> {
+    const r = await mergeTokens(this.env, this.w, m, tag);
+    if (!r.links.length || !r.final) {
+      if (r.issue) this.stats.inc(`mergeTokens_skipped:${r.issue}`);
+      return;
+    }
+    this.stats.inc('mergeTokens_ok');
+    this.stats.inc('mergeTokens_links', r.links.length);
+    this.stats.inc('mergeTokens_inputs', r.inputs.length);
+    const inputs = r.inputs.map((u) => ({ txid: u.transactionId, index: u.index, amount: String(u.state.amount) }));
+    this.log.info('tokens merged', { tag, token: m.ticker, before: r.before, inputs: inputs.length, links: r.links.length, final: r.final });
+    if (inputs.length >= 2) {
+      recordScenario(this.env.cfg.runPath, { kind: 'merge', ts: Date.now(), bot: this.w.name, token: m.covenantId, ticker: m.ticker, maker: this.w.pk, inputs, total: mergeTotal(inputs).toString(), links: r.links, final: r.final });
+    }
   }
 
   /**
@@ -494,6 +598,34 @@ export class Trader {
         this.stats.inc(res.ok ? 'pair_cancel_ok' : 'pair_cancel_failed');
         return;
       }
+      case 'gtd':
+      case 'day':
+      case 'timed':
+        // a dated pair limit resting 0.2 .. 1 % behind the reference: GTD 30 to 120 min (keeper refund), a day order, or a timed activation
+        intent = datedPairLimit(action as 'gtd' | 'day' | 'timed', s, usd(), at(s === 'sell' ? frac(20, 100) : -frac(20, 100)), clock.unixSeconds) as Intent;
+        break;
+      case 'amend': {
+        // the pair ticket's replace of a resting pair limit (no in-place amend for pair orders): a new price 5 to 25 bps further from the market
+        const limits = this.w
+          .actionable(await myOrders(env, this.w.pk, baseM).catch(() => [] as OrderView[]))
+          .filter((v) => v.contract === 'KobPair' && v.pair?.base === baseM.covenantId && v.pair.quote === quoteM.covenantId && v.tif === 0 && !v.auction && !!v.current && v.state_known);
+        if (!limits.length) return;
+        const res = await pairAmend(env, this.w, pick(limits), baseM, quoteM, (side, price) => pairAmendPrice(side, price), tag);
+        this.stats.inc(res.ok ? 'pair_amend_ok' : 'pair_amend_failed');
+        if (res.ok) this.recordReplace('pairAmend', baseM, res);
+        return;
+      }
+      case 'cancelAll': {
+        // My orders' cancel-all of the pair: every live pair order of this pair (entries and their exits together), several per transaction
+        const live = this.w
+          .actionable(await myOrders(env, this.w.pk, baseM).catch(() => [] as OrderView[]))
+          .filter((v) => isPair(v) && v.pair?.base === baseM.covenantId && v.pair.quote === quoteM.covenantId && !!v.current && v.state_known);
+        if (!live.length) return;
+        const out = await cancelAllDetailed(env, this.w, live, `pairCancelAll@${baseM.ticker}/${quoteM.ticker}`);
+        this.stats.inc('pair_cancelAll_orders', out.orders.length);
+        if (out.orders.length) recordScenario(env.cfg.runPath, { kind: 'cancelAll', ts: Date.now(), bot: this.w.name, scope: `pair:${baseM.ticker}/${quoteM.ticker}`, orders: out.orders, txids: out.txids });
+        return;
+      }
       default:
         return;
     }
@@ -506,7 +638,9 @@ export class Trader {
       for (const v of views) if ((await cancel(env, this.w, v, 'selfTradeCancel')).ok) n++;
       return n;
     };
-    const res = await this.clearSelfTrade(await placePair(env, this.w, placed, tag, baseM, quoteM, { taker: true }), () => placePair(env, this.w, placed, tag, baseM, quoteM, { taker: true }), cancelEach);
+    // a dated pair limit rests (never turned into a taker IOC); the rest take when marketable
+    const taker = action !== 'gtd' && action !== 'day' && action !== 'timed';
+    const res = await this.clearSelfTrade(await placePair(env, this.w, placed, tag, baseM, quoteM, { taker }), () => placePair(env, this.w, placed, tag, baseM, quoteM, { taker }), cancelEach);
     if (res.ok) this.log.info('pair order placed', { tag, kind: res.pair?.kind, amount: (intent as { amount?: bigint }).amount, reference: R, fair, txid: res.txid });
   }
 }

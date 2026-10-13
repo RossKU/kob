@@ -23,7 +23,7 @@ export interface TraderConfig {
   key: string;
   /** mean seconds between actions (exponential inter-arrival) */
   meanIntervalSec: number;
-  /** relative weights per action; missing = the default mix */
+  /** relative weights per action (`DEFAULT_WEIGHTS` of bots/weights.ts); a missing action keeps its default weight, 0 switches it off */
   weights?: Record<string, number>;
   /**
    * the largest order of this trader, in USD (= TUSD; on an asset book its value at the Binance reference). Sizes are drawn continuously in
@@ -59,7 +59,7 @@ export interface Token2Config extends TokenConfig {
   pairShare?: number;
   /** older spelling of `pairShare` (the retired cross limits) */
   crossShare?: number;
-  /** weights of the pair actions (default: `DEFAULT_PAIR_WEIGHTS` of bots/traders.ts) */
+  /** weights of the pair actions (default: `DEFAULT_PAIR_WEIGHTS` of bots/weights.ts; 0 switches one off) */
   pairWeights?: Record<string, number>;
   /** market-maker overrides for this book (default: the `mm` section) */
   mm?: Partial<SoakConfig['mm']>;
@@ -117,7 +117,8 @@ export interface SoakConfig {
   token3?: Token2Config;
   /**
    * tokens issued elsewhere that the soak lists beside its own (2026-10-13: a Kasseal launchpad token, program KCC20PublicMint): written
-   * to the soak registry (the executors' allowlist and the UI's token list) so they can be traded by hand; the bots do not trade them
+   * to the soak registry (the executors' allowlist and the UI's token list) so they can be traded by hand. The traders also trade the KAS book
+   * of those with a `trade` block (a KRON token minted on TN10 by KRON's own tooling: the soak cannot issue KRON); the market maker does not
    */
   externalTokens?: ExternalTokenConfig[];
   price: {
@@ -188,6 +189,12 @@ export interface SoakConfig {
      * The supervisor switches the facilitator's `intents` / `invoices` on when this is enabled (keeper = the executor's own key).
      */
     invoiceIntent?: { enabled: boolean; amountKas?: number; maxSellTusd?: number };
+    /**
+     * weights of the payer's turns (bots/x402-retry.ts `DEFAULT_X402_WEIGHTS`, missing = default): `/native`, `/token`, `/swap`, `invoice` and the
+     * SDK's retry paths `/retry/drop` (the merchant drops the first paid request), `/retry/lost` (it loses the settled answer), `/retry/conflict`
+     * (the quoted bid is amended away by the market maker: order_conflict, rebuild); 0 switches a kind off
+     */
+    weights?: Record<string, number>;
   };
   checker: {
     intervalSec: number;
@@ -210,12 +217,28 @@ export interface ExternalTokenConfig {
   ticker: string;
   name: string;
   covenantId: string;
-  /** its token program: the reference KCC-20 3 / 3 (`KCC20Ref`) or the reference's published public-mint build (`KCC20PublicMint`) */
-  program: 'KCC20Ref' | 'KCC20PublicMint';
+  /**
+   * its token program: the reference KCC-20 3 / 3 (`KCC20Ref`), the reference's published public-mint build (`KCC20PublicMint`), or one of the
+   * two reviewed KRON programs (`KronToken2433`, `KronToken2732`: 46-byte state, no extension commitment, 4 / 5 token slots)
+   */
+  program: 'KCC20Ref' | 'KCC20PublicMint' | 'KronToken2433' | 'KronToken2732';
   decimals: number;
-  /** 64-hex, default all zero */
+  /** 64-hex, default all zero (KCC-20 only; a KRON token has none) */
   extensionCommitment?: string;
   description?: string;
+  /** the traders trade this token's KAS book (bots/traders.ts: the KAS-book actions of their mix, no pair orders) */
+  trade?: ExternalTradeConfig;
+}
+
+/** How the traders trade an external token (`externalTokens[].trade`). */
+export interface ExternalTradeConfig {
+  /** share of the trader actions on this token's KAS book (drawn before the asset books' `bookShare`) */
+  bookShare: number;
+  /**
+   * the KAS reference of one whole token (decimal KAS, e.g. "0.05"): there is no Binance price for it, so the traders price around the book's
+   * touch midpoint when it lies within 20 % of this value, else around this value
+   */
+  refKas: string;
 }
 
 export const ASSET_SLOTS = ['token2', 'token3'] as const;

@@ -3,10 +3,10 @@
 import { genesisOf, type Env, type GenesisOutputs } from '../env';
 import { symbolOfUrl } from '../config';
 import { logger, Stats } from '../log';
-import { assetMarkets, tokenMarket, SOAK_PROGRAM, type AssetBook } from '../market';
+import { assetMarkets, tokenMarket, tradedExternalMarkets, SOAK_PROGRAM, type AssetBook, type ExternalBook } from '../market';
 import { Bank } from '../bank';
 import { DAA_PER_SECOND, DEFAULT_MAX_LAG_SECS, IndexerGate } from '../indexer-gate';
-import { DerivedFeed, PriceFeed, RefRecorder, UsdFeed } from '../price';
+import { DerivedFeed, FixedKasFeed, PriceFeed, RefRecorder, UsdFeed } from '../price';
 import { sleep, unitsOf } from '../util';
 import { walletFor } from '../wallet';
 import type { TokenMarket } from '@/kob/plan-types';
@@ -57,6 +57,8 @@ export async function runBots(env: Env): Promise<void> {
     assets.push({ ...a, feed: new DerivedFeed(feed, usd) });
     seedGenesis(env, stats, a.m, genesisOf(env.state, a.slot));
   }
+  // external tokens the traders trade (a KRON token minted on TN10 by KRON's tooling): a fixed KAS reference, no fan-out, no market maker
+  const external: ExternalBook[] = tradedExternalMarkets(env).map((x) => ({ ...x, feed: new FixedKasFeed(feed, unitsOf(x.trade.refKas, 8)) }));
   RefRecorder.writeSymbols(
     env.cfg.runPath,
     [
@@ -79,7 +81,10 @@ export async function runBots(env: Env): Promise<void> {
     }
     stats.flush();
   }, 15_000);
-  log.info('bots starting', { token: m.ticker, covenantId: m.covenantId, ref: feed.get(), assets: assets.map((a) => ({ ticker: a.m.ticker, covenantId: a.m.covenantId, ref: a.feed.get() })) });
+  log.info('bots starting', {
+    token: m.ticker, covenantId: m.covenantId, ref: feed.get(), assets: assets.map((a) => ({ ticker: a.m.ticker, covenantId: a.m.covenantId, ref: a.feed.get() })),
+    external: external.map((x) => ({ ticker: x.m.ticker, covenantId: x.m.covenantId, program: x.m.program, family: x.m.family, bookShare: x.trade.bookShare, refKas: x.trade.refKas })),
+  });
 
   // token fan-out before trading (and every 10 minutes): several token UTXOs per bot and token (TUSD: 300 per market-maker output, 60 per
   // trader output, 20 per payer output; an asset token: its `fanout` config, whole tokens per output)
@@ -102,7 +107,7 @@ export async function runBots(env: Env): Promise<void> {
   for (const a of assets) void new MarketMaker(env, a.feed, a.m, log.child(`mm@${a.m.ticker}`), stats, a.cfg.mm ?? {}, false).run();
   // the traders start once the market maker has quoted
   await sleep(60_000);
-  for (const t of env.cfg.traders) void new Trader(env, t, feed, log.child(t.key), stats, assets).run();
+  for (const t of env.cfg.traders) void new Trader(env, t, feed, log.child(t.key), stats, assets, external).run();
   if (env.cfg.x402.enabled) void new X402Bots(env, log.child('x402'), stats).run();
   await new Promise(() => {});
 }

@@ -204,7 +204,14 @@ export function incidentSummary(incs: Incident[]): { total: number; errors: numb
 }
 
 const TIF_NAME: Record<string, string> = { '0': 'gtc', '1': 'ioc', '2': 'fok', '-': '' };
-const INVARIANTS = ['custody', 'stray', 'all-in', 'ioc-fok', 'trigger', 'repeat', 'x402', 'fee', 'indexers-agree', 'health', 'pair', 'supply'];
+/** the scenario checks of the checker (`scen:<kind>` done, `scen:<kind>:ok`) and the x402 retry payments, one text line */
+export function scenarioLine(k: Record<string, number>): string {
+  const kinds = ['ladder', 'ladderCancel', 'renew', 'pairAmend', 'cancelAll', 'merge'];
+  const part = (kind: string) => `${kind} ${k[`scen:${kind}:ok`] ?? 0}/${k[`scen:${kind}`] ?? 0}${k[`scen:${kind}:recorded`] ? ` (${k[`scen:${kind}:recorded`]} rec)` : ''}`;
+  return `scenario ${kinds.map(part).join('  ')}  x402 retry ${k.x402RetryPayments ?? 0} (resent ${k.x402Resent ?? 0}, rebuilt ${k.x402Rebuilt ?? 0}, not exercised ${k.x402RetryNotExercised ?? 0})`;
+}
+
+const INVARIANTS = ['custody', 'stray', 'all-in', 'ioc-fok', 'trigger', 'repeat', 'x402', 'fee', 'indexers-agree', 'health', 'pair', 'supply', 'replace', 'ladder', 'cancel-all', 'merge'];
 
 // ------------------------------------------------------------------------------------------------ JSON + text
 
@@ -277,6 +284,7 @@ export function buildReport(d: ReportData): { json: Record<string, unknown>; tex
   L.push(
     `         pair ${k.pairChecked ?? 0}/${k.pairFills ?? 0} (route ${k['pairCounterparty:route'] ?? 0}, netting ${k['pairCounterparty:netting'] ?? 0}, inventory ${k['pairCounterparty:inventory'] ?? 0}; triggers ${k.pairTriggers ?? 0}: mode 0 ${k.pairTriggerMode0 ?? 0}, mode 1 ${k.pairTriggerMode1 ?? 0})  supply ${k.supplyOk ?? 0}/${k.supplyChecks ?? 0}  x402 ${k.x402Settled ?? 0}/${k.x402Payments ?? 0}  fee lines ${k.feeLines ?? 0}  agree orders ${k.agreeOrders ?? 0} windows ${k.agreeWindows ?? 0}${d.checkerTs ? `  (checker ${fmtDur(d.now - d.checkerTs)} ago, ${k.rounds ?? 0} rounds)` : '  (checker not run)'}`,
   );
+  L.push(scenarioLine(k));
   L.push(
     `incidents ${incs.total} (errors ${incs.errors})  ${INVARIANTS.map((i) => `${i} ${(incs.byInvariant[i]?.error ?? 0) + (incs.byInvariant[i]?.warn ?? 0)}`).join('  ')}`,
   );

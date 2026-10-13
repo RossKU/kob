@@ -100,4 +100,9 @@ export const INV = {
   pair: 'pair',
   supply: 'supply',
   health: 'health',
+  /** scenario checks (scenario-rules.ts): GTC renewals and pair amends, limit ladders, cancel-alls, token merges */
+  replace: 'replace',
+  ladder: 'ladder',
+  cancelAll: 'cancel-all',
+  merge: 'merge',
 } as const;
