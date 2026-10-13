@@ -145,6 +145,7 @@ struct World {
     node: String,
     node_state: Arc<Mutex<mock::MockState>>,
     indexer: String,
+    indexer_state: Arc<Mutex<MockIndexer>>,
     dir: PathBuf,
 }
 
@@ -182,14 +183,14 @@ fn world(name: &str, orders: &[(AnyState, [u8; 32], u8, u64)]) -> World {
         routes.insert(format!("/v1/orders/{}", to_hex(cov)), v);
     }
     let (node, node_state) = mock::start(utxos);
-    let (indexer, _): (String, Arc<Mutex<MockIndexer>>) = idx::start(routes);
+    let (indexer, indexer_state): (String, Arc<Mutex<MockIndexer>>) = idx::start(routes);
     let dir = std::env::temp_dir().join(format!("kob-cli-trade-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     for n in [0x11u8, 0x22] {
         std::fs::write(dir.join(format!("key{n:02x}")), to_hex(&[n; 32])).unwrap();
     }
-    World { node, node_state, indexer, dir }
+    World { node, node_state, indexer, indexer_state, dir }
 }
 
 impl World {
@@ -452,5 +453,25 @@ fn a_delisted_registry_token_is_not_traded() {
     v["network"] = "mainnet".into();
     std::fs::write(&reg, v.to_string()).unwrap();
     assert_eq!(run(place, with_reg(0x11, "limit --token TST --side sell --amount 10TST --price 3KAS --yes")), 1);
+    assert_eq!(w.submitted(), 1);
+}
+
+/// An unlisted KCC-20 token whose extension commitment the indexer names differently from the wallet's own node-checked
+/// holdings of it: a buy (which would pin the indexer's commitment) is refused; with the holdings' commitment it is placed.
+#[test]
+fn an_unlisted_token_commitment_must_match_the_wallets_holdings() {
+    let w = world("extmismatch", &[]);
+    let set_ext = |e: [u8; 32]| {
+        let mut s = w.indexer_state.lock().unwrap();
+        let t = s.routes.get_mut("/v1/tokens").unwrap();
+        t["tokens"][0]["extension_commitment"] = json!(to_hex(&e));
+    };
+    set_ext([0xdd; 32]);
+    let place = crate::trade::place::run;
+    let buy = "limit --token TST --side buy --amount 5TST --price 2KAS --yes";
+    assert_eq!(run(place, w.args(0x11, buy)), 1);
+    assert_eq!(w.submitted(), 0);
+    set_ext(EXT);
+    assert_eq!(run(place, w.args(0x11, buy)), 0);
     assert_eq!(w.submitted(), 1);
 }

@@ -403,6 +403,27 @@ pub fn env_for(c: &Common, p: &Parsed, maker: [u8; 32]) -> Result<(Env, TokenMar
     // a sell (and a sell-first entry) holds tokens of A; a pair buy holds B (below)
     let needs_a = side == Side::Sell;
     let token_utxos = if needs_a { data::token_utxos(&indexer, &node, &c.network, &a, &maker)? } else { vec![] };
+    // an unlisted KCC-20 token's extension commitment is the indexer's: the wallet's own holdings of the token (their states
+    // confirmed on the node) are a reference without the indexer, and one of another commitment blocks (the web app's
+    // open-token-extension-mismatch); a buy would otherwise pin a commitment that only a look-alike genesis can fill
+    for m in [Some(&a), b.as_ref()].into_iter().flatten() {
+        if m.family != kob_protocol::Family::Kcc20 || m.listing != market::Listing::Unlisted {
+            continue;
+        }
+        let held =
+            if m.cov == a.cov && needs_a { token_utxos.clone() } else { data::token_utxos(&indexer, &node, &c.network, m, &maker)? };
+        if let Some(u) = held.iter().find(|u| u.state.extension() != m.ext) {
+            return Err(format!(
+                "{}: the indexer names extension commitment {}, but your token UTXO {}:{} (checked on the node) has {}: the token \
+                 has more than one commitment; refused (check the token's genesis)",
+                m.name(),
+                to_hex(&m.ext),
+                to_hex(&u.utxo.transaction_id),
+                u.utxo.index,
+                to_hex(&u.state.extension())
+            ));
+        }
+    }
     let (book, own, last_fill, pair) = match &b {
         None => {
             let book = data::book(&indexer, &a).unwrap_or_else(|_| {
