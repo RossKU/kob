@@ -1406,9 +1406,11 @@ stall or drain any executor:
 * **The record log** keeps facts, not the sender's bytes: an undecodable KOB1 payload becomes a five-byte stand-in
   (`payload:undecodable` in `rejects`); a decodable one keeps only its placement records, at most one per output.
 * **The read API.** A cancelled request keeps its pool permit until its blocking read ends, and a pooled read
-  is interrupted after 20 s. Candles and stats read at most 20 000 fill rows through a `(kind, token, ts)` index (`window_truncated`
-  says when the 24 h window was cut). Scanning routes (candles, stats, depth, trades, books, strays, holdings, pairs) cost
-  `api.rate_limit.heavy_route_cost` (5) bucket tokens; a client that is already limited does not drain the global bucket;
+  is interrupted after 20 s. The 24 h stats read at most 20 000 fill rows through a `(kind, token, ts)` index (`window_truncated`
+  says when the window was cut). Candles (KAS and pair) stream every fill of their window through the same index and hold only
+  the newest `limit` candles, so a chart always reaches back to the first trade of its window (a row cap there cut the charts at
+  the 20 000th newest fill: `tests/market_row_bound.rs`). Scanning routes (candles, stats, depth, trades, books, strays, holdings,
+  pairs) cost `api.rate_limit.heavy_route_cost` (5) bucket tokens; a client that is already limited does not drain the global bucket;
   `api.rate_limit.ipv6_prefix_bits` (64) can be set to 48 against an attacker rotating addresses through a large prefix, and the
   /64s of one IPv6 site (`api.rate_limit.ipv6_site_prefix_bits`, 48; 0 = off) also share a site bucket
   (`per_site_rps` 100, `per_site_burst` 300), so rotating through the /64s of one allocation cannot drain the global bucket; a

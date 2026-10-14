@@ -26,7 +26,7 @@ use crate::indexer::db::DbResult;
 use crate::indexer::reads::{self, BookSide, ReadCtx};
 use rusqlite::{params, Connection};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 /// One fill event joined with its order's scale.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,31 +147,37 @@ pub struct Candle {
 
 /// OHLCV per bucket (`floor(ts / interval) * interval`), ascending; empty buckets are omitted. `trades` must be oldest first.
 pub fn candles_of(trades: &[Trade], interval: i64) -> Vec<Candle> {
-    let mut out: Vec<Candle> = Vec::new();
+    let mut out: VecDeque<Candle> = VecDeque::new();
     for t in trades {
-        let b = t.ts.div_euclid(interval) * interval;
-        match out.last_mut() {
-            Some(c) if c.t == b => {
-                c.h = c.h.max(t.price);
-                c.l = c.l.min(t.price);
-                c.c = t.price;
-                c.volume = c.volume.saturating_add(t.amount);
-                c.quote_volume = c.quote_volume.saturating_add(t.quote);
-                c.trades += 1;
-            }
-            _ => out.push(Candle {
-                t: b,
-                o: t.price,
-                h: t.price,
-                l: t.price,
-                c: t.price,
-                volume: t.amount,
-                quote_volume: t.quote,
-                trades: 1,
-            }),
-        }
+        add_trade(&mut out, t, interval);
     }
-    out
+    out.into()
+}
+
+/// Adds one trade (newer than every trade before it) to the candles: into the last candle when it is the trade's bucket, else
+/// as a new candle.
+fn add_trade(out: &mut VecDeque<Candle>, t: &Trade, interval: i64) {
+    let b = t.ts.div_euclid(interval) * interval;
+    match out.back_mut() {
+        Some(c) if c.t == b => {
+            c.h = c.h.max(t.price);
+            c.l = c.l.min(t.price);
+            c.c = t.price;
+            c.volume = c.volume.saturating_add(t.amount);
+            c.quote_volume = c.quote_volume.saturating_add(t.quote);
+            c.trades += 1;
+        }
+        _ => out.push_back(Candle {
+            t: b,
+            o: t.price,
+            h: t.price,
+            l: t.price,
+            c: t.price,
+            volume: t.amount,
+            quote_volume: t.quote,
+            trades: 1,
+        }),
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ SQL
@@ -222,10 +228,46 @@ fn fills_before(conn: &Connection, token: &Hash32, before: Option<i64>, limit: u
     Ok(v)
 }
 
-/// Most fill rows one market query reads. The caller chooses the time window, so the window alone cannot bound the
-/// work: a token with hundreds of thousands of fills would be read into memory by `from=0`. The newest rows win; a query that
-/// hits the cap reports it and drops the oldest, possibly partial, trade group.
+/// Most fill rows the trade-list reads of a time window keep in memory (the 24 h stats, the last trade before a time). The
+/// newest rows win; a query that hits the cap reports it and drops the oldest, possibly partial, trade group. Candles are NOT
+/// read through it ([`window_candles`]): a cap on rows there cut every chart at the newest 20 000 fills, so a token's chart
+/// silently lost its oldest days as fills accumulated (the TN10 soak, 2026-10-14: about 3.5 days left of 8).
 pub const MAX_FILL_ROWS: usize = 20_000;
+
+/// The candles of `token` over `[from, to)`: every fill of the window is streamed in time order `(ts, id)` (served by the
+/// `(kind, token, ts)` index), folded into its transaction's trade and that trade into its bucket, and only the newest `keep`
+/// candles are held. Memory is bounded by `keep`, not by the fills read; the time spent grows with the fills of the window
+/// (the pooled read's 20 s interrupt and the heavy-route rate limit bound a client). No fill is left out, so the oldest
+/// candle of a window that reaches back to the first trade is the first trade's bucket.
+fn window_candles(conn: &Connection, token: &Hash32, basis: i128, iv: i64, from: i64, to: i64, keep: usize) -> DbResult<Vec<Candle>> {
+    let mut out: VecDeque<Candle> = VecDeque::new();
+    if to <= from || iv <= 0 || keep == 0 {
+        return Ok(vec![]);
+    }
+    let sql = format!("{FILL_SELECT} AND e.ts >= ?2 AND e.ts < ?3 ORDER BY e.ts, e.id");
+    let mut st = conn.prepare(&sql)?;
+    let mut rows = st.query(params![token.0.to_vec(), from, to])?;
+    // the fills of one transaction share its block time and are stored together: they arrive as one run
+    let mut group: Vec<FillRow> = Vec::new();
+    let flush = |group: &mut Vec<FillRow>, out: &mut VecDeque<Candle>| {
+        if let Some(t) = trade_of(group, basis) {
+            add_trade(out, &t, iv);
+            if out.len() > keep {
+                out.pop_front();
+            }
+        }
+        group.clear();
+    };
+    while let Some(r) = rows.next()? {
+        let f = fill_row(r)?;
+        if group.first().is_some_and(|g| g.txid != f.txid) {
+            flush(&mut group, &mut out);
+        }
+        group.push(f);
+    }
+    flush(&mut group, &mut out);
+    Ok(out.into())
+}
 
 /// Fills of `token` with `from <= ts < to`: at most `cap` rows, the NEWEST ones, returned oldest first, and whether older rows
 /// in the window were left out. Served by the `(kind, token_cov_id, ts)` index.
@@ -270,14 +312,18 @@ pub fn newest_trade_ts(conn: &Connection, token: &Hash32) -> DbResult<Option<i64
     newest_fill_ts(conn, token)
 }
 
-/// The KAS candles of `token` over `[start, end)` (prices per `basis` base units; `interval` ms buckets), oldest first. The
-/// pair charts are built from these ([`super::pairs::pair_candles`]).
-pub fn candle_series(conn: &Connection, token: &Hash32, basis: i128, interval: i64, start: i64, end: i64) -> DbResult<Vec<Candle>> {
-    if end <= start || interval <= 0 {
-        return Ok(vec![]);
-    }
-    let (trades, _) = window_trades(conn, token, start, end, basis)?;
-    Ok(candles_of(&trades, interval))
+/// The newest `keep` KAS candles of `token` over `[start, end)` (prices per `basis` base units; `interval` ms buckets), oldest
+/// first. The pair charts are built from these ([`super::pairs::pair_candles`]).
+pub fn candle_series(
+    conn: &Connection,
+    token: &Hash32,
+    basis: i128,
+    interval: i64,
+    start: i64,
+    end: i64,
+    keep: usize,
+) -> DbResult<Vec<Candle>> {
+    window_candles(conn, token, basis, interval, start, end, keep)
 }
 
 /// The price (per `basis`) of the last KAS trade of `token` before `ts` (ms), if any.
@@ -422,16 +468,8 @@ pub fn candles(
         (None, None) => 0,
     };
     let start = from.unwrap_or(end - iv * limit as i64);
-    let items = if end > start {
-        let (trades, _) = window_trades(conn, token, start, end, basis)?;
-        let mut cs = candles_of(&trades, iv);
-        if cs.len() > limit {
-            cs.drain(..cs.len() - limit);
-        }
-        cs
-    } else {
-        vec![]
-    };
+    // every fill of the window counts (no row cap): the newest `limit` candles of it
+    let items = window_candles(conn, token, basis, iv, start, end, limit)?;
     Ok(CandlesView {
         token: token.to_hex(),
         interval: interval.to_string(),

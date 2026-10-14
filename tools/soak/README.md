@@ -203,6 +203,8 @@ resting ask / bid of the same token (touch trigger, checker invariant 5).
 | balances | `node dist/soak.mjs balances --config run/config.json` (JSON: per key the node's KAS total, spendable KAS, and per token the proven holdings: UTXO count, amount, KAS locked in carriers; read-only) |
 | merge every holding | `node dist/soak.mjs consolidate --config run/config.json [<key> ...]` (redeploy helper, bots stopped: each key's plain token UTXOs merged into ONE per token in rounds of up to 8 inputs, fee and change from the freed carriers; the merged output carries 10 KAS, or 1 KAS when the inputs carried less; the outputs are created after the new indexer's start, so it lists them) |
 | carry the history of re-issued tokens | `node dist/soak.mjs carry-history --config run/config.json --db run/<exec>/data/index.sqlite3 --from-registry <old tokens.json> [--to-registry <file>] [--dry-run]` (that executor STOPPED; the new registry defaults to `run/registry/tokens.json`): by ticker, moves the `fill` events (trades, candles, 24 h stats, last price) and the pair fills of each old covenant id to the new id of the same ticker in ONE transaction, so the market pages keep one chart per ticker; orders, token UTXOs and the other events keep the old id. Refuses an old id that still has open / partial orders; records each carry in `meta` (`carried_history:<old id>`), so a re-run is a no-op and a different target is refused. `kob-executor index replay` undoes it (the database is the record log's derived view): run it again after a replay (`src/history-carry.ts`, `test/history-carry.test.ts`) |
+| chart history | `node scripts/chart-history.mjs [--only exec-b] [--json]` (read-only; the executors may run): per executor, every registry token's KAS chart and every pair chart must start, at 1d / 1h / 5m / 1m, at the bucket of the first trade in that executor's database, and no fill may be left under an id carried to a current one (a replay of the record log undoes `carry-history`); exit 1 and one `PROBLEM` line each otherwise. A chart that starts later than its database lost history in the read path, not in the data (2026-10-14: the indexer read only the newest 20 000 fills of a candle window) |
+| import older runs' history | `node scripts/import-history.mjs --db run/<exec>/data/index.sqlite3 --source <label>=<older index.sqlite3> ... [--old-registry <tokens.json> ...] [--dry-run]` (that executor STOPPED: the script refuses a live writer): each run starts its indexers on a fresh database, so the trades of earlier runs live only in their databases. Copies their KAS-book fills (protocol v2 lot layouts converted exactly) by ticker onto the current covenant ids, each source only until the next run started (the run live at the time wins), each (order, transaction) once, in ONE transaction per source, recorded in `meta` (`history_import:<label>`: a re-run is a no-op); the copied orders are unlisted, nobody's (`maker` NULL) and never reverted (block 0). Writes the first trade per ticker to `run/state/chart-floor.json`, which `chart-history.mjs` holds every database to (`--record-floor` rewrites it from one database). A replay or a rebuilt database drops the import: run it again (`src/history-carry.ts`, `test/history-carry.test.ts`) |
 | add a second token | add `token2` to run/config.json (see config.example.json), `scripts/stop.ps1`, `soak.mjs setup` (issues it, rewrites the registry = the executors' allowlist), `scripts/start.ps1`; an interrupted setup whose issuance was broadcast: `setup --recover-issue token2:<txid>` |
 | holdings | `node scripts/holdings.cjs [--seed]` (every key's token UTXOs from the indexer and the trackers, verified on the node; `--seed` writes them into the trackers: a fresh indexer never lists pre-run holdings) |
 | bot fees | `node scripts/fee-compare.mjs --before <ISO> <ISO> --after <ISO> [<ISO>]` (fees, sizes, payloads per action between two windows of `run/state/txs.jsonl`) |
@@ -267,24 +269,39 @@ templates stay. Keys, tokens and databases are kept unless the database schema o
 
 1. Build the new executor, bindings, bundle and UI into a staging directory (`run/stage-<commit>/`). Back up `config.json`,
    `state.json`, the registry, the trackers, the checker state and the databases (`VACUUM INTO` snapshots) into
-   `run/backup-pre-<commit>/`.
+   `run/backup-pre-<commit>/`. Run `scripts/chart-history.mjs` and keep its output (`--json`) with the backup: it must report no
+   problem before the swap, so one after it is the new build's.
 2. Hold the bots and the checker (`hold-child.ps1`; with a supervisor started before 2026-10-11, move `dist/soak.mjs` away and run
    `restart-child.ps1`), pause both matchers (`run/exec-*/pause`), and cancel the live orders on changed templates with the old
    bundle (`node dist/soak-<old>.mjs cancel ...`) until both indexers list none.
 3. Swap `run/wasm-node` and `dist/soak.mjs`, point `executorBin` at the new binary, run `soak.mjs setup` (it rewrites the registry),
    restart exec-b and exec-a one after the other (never both down), resume the matchers, release the bots and the checker, swap
    `run/web-dist` and restart the UI.
-4. Watch `status.ps1`, `scripts/activity.mjs` and the report for half an hour: rejected transactions, indexer rejects, new incidents.
+4. After each executor's restart, `scripts/chart-history.mjs --only <exec>` once it has caught up: every chart still starts at its
+   first trade (a `kob-executor index replay` or a rebuilt database needs `carry-history` again before the executor serves).
+   Watch `status.ps1`, `scripts/activity.mjs` and the report for half an hour: rejected transactions, indexer rejects, new incidents.
 
 **New token program.** A token of a program the build does not pin is not tradable, so a program change issues the soak tokens
 again: wind the old run down with its own bundle (cancel every order, sweep strays, `consolidate`), remove `token*` and
 `genesisOutputs*` from `run/state.json` (keep a backup), run `setup` (it issues every soak token under the new program and rewrites
 the registry), and carry the chart history to the new covenant ids with `carry-history` on each stopped executor's database
-(Operate). `setup` and the registry writer refuse a `state.json` whose tokens carry another program. An executor started at the sink
+(Operate), and import the older runs' history again if the database was rebuilt (`import-history.mjs`). `setup` and the registry writer refuse a `state.json` whose tokens carry another program. An executor started at the sink
 (`--start sink`) never saw the holdings created before it: seed `run/state/tracker-<key>.json` with each key's token UTXOs
 (`scripts/holdings.cjs --seed`).
 
 ## Latest run
+
+**Chart history, 2026-10-14 13:13 to 13:40 UTC.** The founder saw the TUSD chart begin on 10-11. No data was lost: every
+fill since 10-06 was in both databases (carried to the re-issued ids on 10-10), but the indexer read only the newest 20 000 fill
+rows of a candle window (`MAX_FILL_ROWS`, there since the public snapshot), so once a token passed 20 000 fills its 1d / 1h charts
+(and the pair charts derived from them) started at the 20 000th newest fill, about 3.5 days back, sliding forward as fills
+accumulated. Fixed in the indexer (candles stream every fill of the window and hold only the newest `limit` candles;
+`tests/market_row_bound.rs`) and deployed as `bin/kob-executor-cf90250-chart.exe` (cf90250 plus the fix), exec-b then exec-a.
+The history of the earlier runs (m5 from 2026-09-29, m9 in two database generations, same chain and same token ids until the
+10-10 re-issue) was imported into both databases with `scripts/import-history.mjs` (TUSD 40 775, TETH 20 772, TBTC 14 415 fills),
+each executor parked in turn on a stand-in that blocks (`bin/hold-sleeper.exe`: the running supervisor predates `HOLD` files).
+`scripts/chart-history.mjs`: every chart on both indexers starts at its first trade (TUSD 2026-09-29 14:35, TETH 2026-10-01
+00:11, TBTC and TBTC/TUSD 2026-10-03 02:09, TETH/TUSD 2026-10-01 00:11 UTC); the public page shows the same at 1d and 1h.
 
 **Redeploy on main cf90250, 2026-10-13 17:16 to 17:20 UTC (2026-10-14 JST).** 121 commits (kob-cli trading commands, the
 web private-key signer, matcher weighted selection, indexer open tokens and holdings, x402 `/supported`); no template or

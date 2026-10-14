@@ -578,14 +578,27 @@ pub fn pair_candles(
     let start = from.unwrap_or(end - iv * limit as i64);
     let mut items = vec![];
     if end > start {
-        let ca: BTreeMap<i64, Candle> =
-            market::candle_series(conn, base, basis_a, iv, start, end)?.into_iter().map(|c| (c.t, c)).collect();
-        let cb: BTreeMap<i64, Candle> =
-            market::candle_series(conn, quote, basis_b, iv, start, end)?.into_iter().map(|c| (c.t, c)).collect();
-        let vol = pair_volume(conn, base, quote, iv, start, end)?;
-        let mut last_a = market::last_trade_price_before(conn, base, basis_a, start)?;
-        let mut last_b = market::last_trade_price_before(conn, quote, basis_b, start)?;
-        let buckets: BTreeSet<i64> = ca.keys().chain(cb.keys()).copied().collect();
+        // each side's newest `limit` candles hold every bucket of the union's newest `limit` (a bucket of A among them has
+        // fewer than `limit` newer buckets of A); the older ones are dropped and only their last close is carried, read
+        // as the last trade before the first bucket kept
+        let mut ca: BTreeMap<i64, Candle> =
+            market::candle_series(conn, base, basis_a, iv, start, end, limit)?.into_iter().map(|c| (c.t, c)).collect();
+        let mut cb: BTreeMap<i64, Candle> =
+            market::candle_series(conn, quote, basis_b, iv, start, end, limit)?.into_iter().map(|c| (c.t, c)).collect();
+        let mut buckets: BTreeSet<i64> = ca.keys().chain(cb.keys()).copied().collect();
+        // the window's start, or the first bucket kept when older ones were dropped (it is then after the start)
+        let mut first = start;
+        if buckets.len() > limit {
+            while buckets.len() > limit {
+                buckets.pop_first();
+            }
+            first = buckets.first().copied().unwrap_or(start);
+            ca.retain(|t, _| *t >= first);
+            cb.retain(|t, _| *t >= first);
+        }
+        let vol = pair_volume(conn, base, quote, iv, first, end)?;
+        let mut last_a = market::last_trade_price_before(conn, base, basis_a, first)?;
+        let mut last_b = market::last_trade_price_before(conn, quote, basis_b, first)?;
         for t in buckets {
             // (o, h, l, c) of each side: its candle, or its last close carried forward
             let side = |c: Option<&Candle>, last: Option<i128>| c.map(|c| (c.o, c.h, c.l, c.c)).or(last.map(|p| (p, p, p, p)));
