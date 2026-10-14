@@ -47,6 +47,7 @@ import {
   DEFAULT_FEE_BOUNDS,
   type FeeBounds,
   checkFill,
+  isImportedHistory,
   termsAtFill,
   checkFokEvents,
   checkIfdAskExitFunding,
@@ -341,6 +342,7 @@ function memoize(x: Ctx, v: OrderView): OrderMemo {
     active: isActive(v.status),
     watch: v.tif === 2 || WATCHED.has(baseKind(v.contract)),
   };
+  if (isImportedHistory(v) || old?.imported) m.imported = true;
   x.st.orders[v.covenant_id] = m;
   if (fullTerms(m.terms) && x.st.early) delete x.st.early[v.covenant_id];
   return m;
@@ -666,7 +668,8 @@ async function fillsStep(x: Ctx): Promise<void> {
     const memo = await memoFor(x, e.covenant_id);
     const d = detailOf(e);
     const pair = !!memo && isPairContract(memo.c);
-    if (memo?.terms) {
+    if (memo?.imported) stat(x, 'fillsImported');
+    else if (memo?.terms) {
       let r = checkFill({ covenant_id: e.covenant_id, contract: memo.c }, memo.terms, evLike(e));
       if (r.violations.length && /^Kob(Ask|Bid)/.test(memo.c)) {
         // a plain ask or bid amended in place (KOB1 v3) keeps its id with new terms: check the fill against the terms it was filled under

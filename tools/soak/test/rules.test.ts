@@ -5,6 +5,7 @@ import {
   checkFeeLine,
   maxFoldedExcess,
   checkFill,
+  isImportedHistory,
   checkFokEvents,
   checkIfdAskExitFunding,
   checkKill,
@@ -803,4 +804,11 @@ test('amount accounting: filled + left == initial for a live plain ask or KobPai
   assert.equal(checkAmountBalance(o('300000000', '1', '1', 'KobIfdAsk')), null);
   assert.equal(checkAmountBalance(o('300000000', '1', '1', 'KobBid')), null);
   assert.equal(checkAmountBalance({ ...o('1', '1', '1'), initial_amount: null }), null);
+});
+
+test('orders copied from older runs by import-history are recognised (their fills are chart history, not checked)', () => {
+  assert.equal(isImportedHistory({ unlisted_reason: 'history_import:m9-final' }), true);
+  assert.equal(isImportedHistory({ unlisted_reason: 'below_min_value' }), false);
+  assert.equal(isImportedHistory({ unlisted_reason: null }), false);
+  assert.equal(isImportedHistory({}), false);
 });

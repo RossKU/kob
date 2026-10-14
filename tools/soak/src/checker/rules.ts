@@ -125,6 +125,16 @@ export function termsAtFill(memoTerms: Record<string, string>, current: Record<s
   return out;
 }
 
+/**
+ * An order copied from an older run's database by `scripts/import-history.mjs` (`unlisted_reason` `history_import:<label>`, maker NULL,
+ * block 0): its fills are chart history, not transactions of this run, and its terms are what the import could rebuild (protocol v2
+ * lot layouts, without an auction's end price `lot_max`), so the per-fill invariants do not apply (2026-10-14: 4,754 false "fill price beyond
+ * the order's worst bound" errors on imported IOC auction bids whose fills rose above the start price toward `lot_max`).
+ */
+export function isImportedHistory(v: { unlisted_reason?: string | null }): boolean {
+  return typeof v.unlisted_reason === 'string' && v.unlisted_reason.startsWith('history_import:');
+}
+
 export interface FillCheck {
   violations: Violation[];
   boundChecked: boolean;

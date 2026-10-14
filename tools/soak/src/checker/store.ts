@@ -22,6 +22,8 @@ export interface OrderMemo {
   active: boolean;
   /** follow its events (tif 2, conditional, if-done) */
   watch: boolean;
+  /** copied from an older run's database (`isImportedHistory`): its fills are not checked */
+  imported?: boolean;
 }
 
 /** fill sums of one token in one transaction: tokens (base units) and KAS (sompi) of the ask-side (s, ks) and bid-side (b, kb) fills */
