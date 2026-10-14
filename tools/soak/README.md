@@ -291,6 +291,13 @@ the registry), and carry the chart history to the new covenant ids with `carry-h
 
 ## Latest run
 
+**Redeploy on main dadd20e, 2026-10-14 14:08 to 14:20 UTC.** Only new templates (the six `*KronD0` order kinds) and two
+launchpad programs; no order cancelled, databases and chart history kept. exec-b, then exec-a on
+`bin/kob-executor-dadd20e.exe`, then bundle, bindings and UI; config `testPrograms` (`KForgeToken1785`,
+`KaspaRocketToken11458`) lists those programs' templates on the soak registry so the executors list KOB orders of their
+tokens (TN10 test only; KOB's profiles stay pending-review). Fixes of the live test deployed 14:46 and 15:02 UTC. Backups in
+`run/backup-pre-dadd20e/`. Live test report: `docs/testing/TN10-TEST-2026-10-15.md`.
+
 **Chart history, 2026-10-14 13:13 to 13:40 UTC.** The founder saw the TUSD chart begin on 10-11. No data was lost: every
 fill since 10-06 was in both databases (carried to the re-issued ids on 10-10), but the indexer read only the newest 20 000 fill
 rows of a candle window (`MAX_FILL_ROWS`, there since the public snapshot), so once a token passed 20 000 fills its 1d / 1h charts
