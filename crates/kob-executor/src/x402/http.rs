@@ -520,7 +520,7 @@ async fn metrics_h(State(st): State<Arc<AppState>>, req: Request) -> Response {
 }
 
 async fn verify_h(State(st): State<Arc<AppState>>, req: Request) -> Response {
-    let (_merchant, parsed) = match admit(&st, req).await {
+    let (merchant, parsed) = match admit(&st, req).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -537,7 +537,7 @@ async fn verify_h(State(st): State<Arc<AppState>>, req: Request) -> Response {
     let fac = st.fac.clone();
     match tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        fac.verify(&parsed)
+        fac.verify_for(&merchant.id, &parsed)
     })
     .await
     {

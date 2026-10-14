@@ -766,9 +766,10 @@ fn reconcile_marks_a_vanished_accepted_output_ambiguous_and_keeps_the_evidence()
     // healthy: nothing to do
     let rep = f.fac.reconcile();
     assert_eq!((rep.checked, rep.reorged), (1, 0));
-    // a reorg drops the block: the merchant output is gone, the payer's input is unspent again and the transaction is not in the
-    // mempool
+    // a reorg drops the block: the transaction's outputs are gone, the payer's input is unspent again and the transaction is not
+    // in the mempool
     f.chain.spend_externally(&out);
+    f.chain.spend_externally(&Outpoint::new(tx.id().as_bytes(), 1));
     f.chain.insert_utxo(a, funding);
     let rep = f.fac.reconcile();
     assert_eq!(rep.reorged, 1);
@@ -1504,4 +1505,130 @@ fn a_transaction_evicted_while_observed_is_rebroadcast() {
     assert_eq!(s.transaction, txid_hex(&tx));
     assert_eq!(f.fac.metrics.rebroadcasts.load(Ordering::Relaxed), 1);
     assert_eq!(f.chain.submit_count(), 2);
+}
+
+// ------------------------------------------------------------------------ accepted while nobody watched (F5, F6)
+
+/// The standalone facilitator (no acceptance tracker): a settlement left `broadcast` (the settle wait ran out) is accepted
+/// while nobody watches and the merchant spends its output at once. The identical retry finds the exact transaction accepted
+/// by another of its outputs (the payer's change) and answers success, not `invalid_kaspa_exact_utxo` from a re-verification
+/// whose inputs are spent.
+#[test]
+fn a_retry_after_the_merchant_spent_its_output_finds_the_exact_transaction_accepted() {
+    let f = Fixture::new();
+    let a = f.fund(500_000_000);
+    let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
+    assert_eq!(tx.outputs.len(), 2, "the payment returns change to the payer");
+    f.fac.set_settle_wait(Duration::from_millis(60));
+    assert_eq!(diag(&f.fac.settle("shop", &req)), "settlement_pending");
+    f.fac.set_settle_wait(Duration::from_secs(5));
+    f.chain.mine(0);
+    f.chain.spend_externally(&Outpoint::new(tx.id().as_bytes(), 0));
+    let s = f.fac.settle("shop", &req);
+    assert!(s.success, "{s:?}");
+    assert_eq!(s.transaction, txid_hex(&tx));
+    let e = f.ledger.get(&txid_hex(&tx)).unwrap();
+    assert_eq!(e.state, State::Accepted);
+    assert!(f.ledger.is_consumed(&a));
+    assert_eq!(f.chain.submit_count(), 1, "nothing is broadcast again");
+}
+
+/// The same without a retry: the reconcile finalizes the `broadcast` entry from the payer's change output.
+#[test]
+fn reconcile_finalizes_a_broadcast_entry_whose_merchant_output_is_already_spent() {
+    let f = Fixture::new();
+    let a = f.fund(500_000_000);
+    let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
+    f.fac.set_settle_wait(Duration::from_millis(60));
+    assert_eq!(diag(&f.fac.settle("shop", &req)), "settlement_pending");
+    f.chain.mine(0);
+    f.chain.spend_externally(&Outpoint::new(tx.id().as_bytes(), 0));
+    let rep = f.fac.reconcile();
+    assert_eq!(rep.finalized, 1, "{rep:?}");
+    let e = f.ledger.get(&txid_hex(&tx)).unwrap();
+    assert_eq!(e.state, State::Accepted);
+    assert!(e.accepted_daa.is_some());
+    // the payer's retry is answered from the ledger
+    let s = f.fac.settle("shop", &req);
+    assert!(s.success, "{s:?}");
+}
+
+/// A `broadcast` entry the node does not know any more and of which no output is left on chain (accepted and every output
+/// spent, or dropped) does not stay `broadcast` forever: after `ambiguous_grace` it becomes `ambiguous`, and the ambiguous
+/// rules take over (released after another grace when it never was seen accepted).
+#[test]
+fn a_stale_broadcast_entry_becomes_ambiguous_after_the_grace() {
+    let f = Fixture::new();
+    let a = f.fund(500_000_000);
+    let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
+    f.fac.set_settle_wait(Duration::from_millis(60));
+    assert_eq!(diag(&f.fac.settle("shop", &req)), "settlement_pending");
+    f.chain.mine(0);
+    for i in 0..tx.outputs.len() as u32 {
+        f.chain.spend_externally(&Outpoint::new(tx.id().as_bytes(), i));
+    }
+    let rep = f.fac.reconcile();
+    assert_eq!(rep.stale_broadcast, 0);
+    assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Broadcast, "within the grace");
+    f.clock.set(START_MS + 61 * 60_000);
+    let rep = f.fac.reconcile();
+    assert_eq!(rep.stale_broadcast, 1, "{rep:?}");
+    let e = f.ledger.get(&txid_hex(&tx)).unwrap();
+    assert_eq!(e.state, State::Ambiguous);
+    assert!(e.reason.as_deref().unwrap().contains("broadcast"), "{:?}", e.reason);
+    assert!(f.ledger.is_consumed(&a), "the evidence stays consumed while ambiguous");
+    f.clock.set(START_MS + 123 * 60_000);
+    let rep = f.fac.reconcile();
+    assert_eq!(rep.released_ambiguous, 1, "{rep:?}");
+    assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Failed);
+}
+
+/// F5: the merchant (or the payer) broadcasts the payment itself and it is accepted before `/settle`. A transaction this
+/// merchant had `/verify` verify for the same request is settled from what that verification established; anything else is
+/// refused as before (its inputs are spent, and the payload alone proves nothing about them: the embedded UTXOs and the
+/// authorization's key are the presenter's word, and an accepted transaction is public).
+#[test]
+fn a_payment_verified_then_broadcast_by_the_merchant_settles_once_accepted() {
+    let f = Fixture::new();
+    // never verified here: refused, nothing written
+    let a = f.fund(500_000_000);
+    let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
+    f.chain.submit(&tx).unwrap();
+    f.chain.mine(0);
+    let s = f.fac.settle("shop", &req);
+    assert!(!s.success);
+    assert_eq!(diag(&s), "invalid_kaspa_exact_utxo");
+    assert!(f.ledger.get(&txid_hex(&tx)).is_none());
+
+    // verified by /verify, then broadcast by the merchant and accepted before /settle
+    let b = f.fund(500_000_000);
+    let (req2, tx2) = f.payment(&[b], 100_000_000, ID2, 8);
+    assert!(f.fac.verify_for("shop", &req2).is_valid);
+    f.chain.submit(&tx2).unwrap();
+    f.chain.mine(0);
+    // another merchant, or the same transaction for another request: refused
+    assert_eq!(diag(&f.fac.settle("other", &req2)), "invalid_kaspa_exact_utxo");
+    let mut other_request = req2.clone();
+    other_request.request_hash = Some(hex(&[9; 32]));
+    other_request.payment_payload.payload.request_hash = hex(&[9; 32]);
+    assert!(!f.fac.settle("shop", &other_request).success);
+    assert!(f.ledger.get(&txid_hex(&tx2)).is_none());
+    let s = f.fac.settle("shop", &req2);
+    assert!(s.success, "{s:?}");
+    assert_eq!(s.transaction, txid_hex(&tx2));
+    let e = f.ledger.get(&txid_hex(&tx2)).unwrap();
+    assert_eq!(e.state, State::Accepted);
+    assert_eq!(e.payment_id.as_deref(), Some(ID2));
+    assert!(f.ledger.is_consumed(&b));
+    assert_eq!(f.fac.metrics.settle_found_accepted.load(Ordering::Relaxed), 1);
+    assert_eq!(f.chain.submit_count(), 2, "the facilitator broadcast nothing");
+    // the retry is the cached answer, marked as a repeat
+    assert!(is_repeat_of(&f.fac.settle("shop", &req2), &s));
+    // a plain /verify (no merchant) remembers nothing
+    let c = f.fund(500_000_000);
+    let (req3, tx3) = f.payment(&[c], 100_000_000, "payment-id-0000000003", 10);
+    assert!(f.fac.verify(&req3).is_valid);
+    f.chain.submit(&tx3).unwrap();
+    f.chain.mine(0);
+    assert_eq!(diag(&f.fac.settle("shop", &req3)), "invalid_kaspa_exact_utxo");
 }

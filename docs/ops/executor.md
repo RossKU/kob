@@ -259,6 +259,13 @@ holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignor
   `ambiguous`; a transaction that left the mempool unaccepted while a settle observes it is broadcast again up to
   `rebroadcasts` times (default 2). Both 0..=10; metrics `kob_x402_submit_retries`, `kob_x402_rebroadcasts`. The payer's own
   retry (the SDKs' `retry`) re-sends an artifact whose outcome is unknown and rebuilds one the facilitator failed.
+* **A payment broadcast before `/settle`.** When the merchant (or the payer) broadcasts the payment itself and it is accepted
+  before `/settle`, its inputs are spent and it cannot be verified again. `/settle` settles it (success, then the usual
+  finality) only when `/verify` verified that very transaction for the same merchant, request and requirements within its
+  authorization's lifetime (the last 4,096 verifications are remembered, in memory); otherwise it answers
+  `invalid_kaspa_exact_utxo` as before: an accepted transaction is public, and the payload alone (its embedded UTXOs, the
+  authorization's key) proves nothing about inputs that are gone. Metric `kob_x402_settle_found_accepted`. A merchant that
+  broadcasts payments itself calls `/verify` first.
 * **Minimum finality.** A settlement is answered at the stronger of the offer's finality and `minFinality` (default
   `confirmed`: `confirmationsDaa` DAA, 100 by default, about 10 s, past the accepting block). `"minFinality": "accepted"`
   answers at depth 0, a few seconds sooner, while a payer can still race a conflicting spend through another node; raise
@@ -274,7 +281,11 @@ holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignor
   `ambiguous` (evidence stays consumed, never released) only when the tracker, the UTXO set and the mempool all lost
   the transaction and an input of it is unspent again. Without the tracker (the standalone facilitator, or after a restart)
   a merchant output the merchant spent is gone too, but the payment's inputs stay spent: the entry stays `accepted`. The UTXO observation stays the fallback for transactions the follower did not see
-  from before their broadcast (a restart) and while the indexer catches up.
+  from before their broadcast (a restart) and while the indexer catches up. There, a settlement still `broadcast` whose
+  merchant output was spent right after its acceptance is finalized from another output of the same transaction (the
+  payer's change: the outpoint names the transaction), by the reconcile or by the payer's identical retry. One the node
+  no longer knows (not in the mempool, no output of it on chain) is not waited for forever: after an hour
+  (`stale_broadcast` in the reconcile report) it becomes `ambiguous` and the ambiguous rules of A.7 apply.
 * **Watches are per consumer.** The matcher's acceptance bookkeeping drops only its own watches.
 * **Swap-and-pay quotes** are the payer's job (`docs/spec/x402-swap-and-pay.md` §12; the facilitator
   exposes no quote endpoint). `kob_executor::x402::quote` builds a `Quote` from any indexer book

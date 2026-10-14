@@ -12,7 +12,9 @@
 //!    the same transaction under another identifier (or none) is `kaspa_payment_identifier_conflict`.
 //!    Every success answer after the first carries `extensions.kob.replayed = true` (recorded in the
 //!    ledger, so it survives restarts of the facilitator and of the resource server);
-//! 2. otherwise the payment is verified against trusted chain facts (`verify_payment`);
+//! 2. otherwise the payment is verified against trusted chain facts (`verify_payment`). A transaction whose inputs are spent
+//!    because it was itself accepted already (the merchant or the payer broadcast it first) is settled only from what an
+//!    earlier `/verify` of it by the same merchant established ([`Facilitator::verify_for`]), never from the payload alone;
 //! 3. expiry is re-evaluated after that awaited work and before anything is created;
 //! 4. the replay evidence is consumed durably (`Ledger::claim`, state `pending`);
 //! 5. the exact verified transaction is submitted; the entry becomes `broadcast` when the node took it
@@ -225,6 +227,9 @@ metrics! {
     invoice_refused,
     /// Refused invoice payments NOT kept as evidence: the invoice already holds `maxExtraPaymentsPerInvoice` of them.
     invoice_evidence_dropped,
+    /// Settlements of a transaction `/verify` had verified and that was found already accepted (the merchant or the payer
+    /// broadcast it before `/settle`).
+    settle_found_accepted,
 }
 
 impl Metrics {
@@ -301,6 +306,44 @@ impl Drop for KeyGuard<'_> {
     }
 }
 
+/// Most `/verify` results remembered for [`Facilitator::settle`] (the oldest go first).
+const VERIFIED_MAX: usize = 4_096;
+
+/// What a `/verify` established from trusted chain facts while the payment's inputs were unspent: the claim it would make.
+/// `/settle` uses it only for the SAME transaction, merchant, request and requirements, once that transaction is found
+/// accepted (the merchant or the payer broadcast it first): its inputs are spent by then, so it cannot be verified again,
+/// and the payload alone proves nothing about them (the embedded UTXO hints and the authorization's key are the
+/// presenter's word, and an accepted transaction is public).
+struct VerifiedRecord {
+    claim: NewEntry,
+    expires_ms: u64,
+}
+
+/// `/verify` results by (merchant, transaction id), bounded ([`VERIFIED_MAX`]) and dropped at the authorization's expiry.
+#[derive(Default)]
+struct VerifiedMemo {
+    map: HashMap<(String, Txid), VerifiedRecord>,
+    order: std::collections::VecDeque<(String, Txid)>,
+}
+
+impl VerifiedMemo {
+    fn insert(&mut self, key: (String, Txid), rec: VerifiedRecord, now_ms: u64) {
+        if self.map.insert(key.clone(), rec).is_none() {
+            self.order.push_back(key);
+        }
+        while self.map.len() > VERIFIED_MAX
+            || self.order.front().is_some_and(|k| self.map.get(k).is_none_or(|r| r.expires_ms <= now_ms))
+        {
+            let Some(k) = self.order.pop_front() else { break };
+            self.map.remove(&k);
+        }
+    }
+
+    fn get(&self, key: &(String, Txid), now_ms: u64) -> Option<&VerifiedRecord> {
+        self.map.get(key).filter(|r| now_ms < r.expires_ms)
+    }
+}
+
 /// What one pass of [`Facilitator::reconcile`] did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReconcileReport {
@@ -323,6 +366,8 @@ pub struct ReconcileReport {
     pub extra_payments_seen: usize,
     /// Expiries of unexecuted intents driven (built, submitted or observed).
     pub expiries_driven: usize,
+    /// Broadcast entries the node did not know for `ambiguous_grace` and of which no output was on chain: now `ambiguous`.
+    pub stale_broadcast: usize,
     pub errors: usize,
 }
 
@@ -360,6 +405,8 @@ pub struct Facilitator {
     /// The fee rates of the process (`crate::fee`): intent executions go at the high rate, expiries at the normal rate, both
     /// held to the total cap. Inside `kob-executor run` the runner publishes them; elsewhere they stay the floor.
     pub fees: crate::fee::FeeBoard,
+    /// What `/verify` established for each merchant's recent payments ([`VerifiedRecord`]).
+    verified: Mutex<VerifiedMemo>,
 }
 
 fn kind_str(k: PaymentKind) -> &'static str {
@@ -425,6 +472,7 @@ impl Facilitator {
             book_readiness: None,
             node_probe: Mutex::new(None),
             node_probing: Mutex::new(()),
+            verified: Mutex::new(VerifiedMemo::default()),
         }
     }
 
@@ -646,6 +694,17 @@ impl Facilitator {
 
     /// `POST /verify`: full verification, no ledger writes, no broadcast.
     pub fn verify(&self, req: &FacilitatorRequest) -> VerifyResponse {
+        self.verify_as(None, req)
+    }
+
+    /// `POST /verify` for the (already authenticated) `merchant`: [`Facilitator::verify`], and a valid direct payment is
+    /// remembered (in memory, bounded, until its authorization expires) so that its `/settle` still succeeds when the merchant
+    /// or the payer broadcast the same transaction and it was accepted before the `/settle` ([`VerifiedRecord`]).
+    pub fn verify_for(&self, merchant: &str, req: &FacilitatorRequest) -> VerifyResponse {
+        self.verify_as(Some(merchant), req)
+    }
+
+    fn verify_as(&self, merchant: Option<&str>, req: &FacilitatorRequest) -> VerifyResponse {
         Metrics::inc(&self.metrics.verify_requests);
         let r: Result<Verified> = (|| {
             if self.killed() {
@@ -662,7 +721,12 @@ impl Facilitator {
             Ok(v)
         })();
         match r {
-            Ok(v) => VerifyResponse { is_valid: true, invalid_reason: None, payer: v.payer_address, extensions: None },
+            Ok(v) => {
+                if let Some(m) = merchant {
+                    self.remember_verified(m, req, &v);
+                }
+                VerifyResponse { is_valid: true, invalid_reason: None, payer: v.payer_address, extensions: None }
+            }
             Err(e) => {
                 Metrics::inc(&self.metrics.verify_invalid);
                 VerifyResponse {
@@ -820,8 +884,9 @@ impl Facilitator {
                         return self.cached(&e);
                     }
                     // The transaction may not have reached the node (crash before broadcast, unknown submit
-                    // outcome) or may have left it (mempool eviction): reconcile with the chain first.
-                    State::Pending | State::Broadcast | State::Ambiguous => match self.chain_seen(&e) {
+                    // outcome) or may have left it (mempool eviction): reconcile with the chain first. Accepted while
+                    // nobody watched and its merchant output spent since counts as seen (another output of it is on chain).
+                    State::Pending | State::Broadcast | State::Ambiguous => match self.chain_seen(&e, parsed_tx.as_ref()) {
                         Ok(true) => {
                             self.check_known_id(&e, req)?;
                             Metrics::inc(&self.metrics.settle_resumed);
@@ -836,8 +901,18 @@ impl Facilitator {
             }
         }
 
-        // (2) full verification
-        let v = self.run_verifier(req, &rh)?;
+        // (2) full verification. An input that is not unspent any more may have been spent by this very transaction (the
+        // merchant or the payer broadcast it first): settled from an earlier `/verify` of it, never from the payload alone.
+        let v = match self.run_verifier(req, &rh) {
+            Ok(v) => v,
+            Err(err) if err.diag == Diag::InvalidKaspaExactUtxo => {
+                return match parsed_tx.as_ref() {
+                    Some(tx) => self.settle_verified_and_accepted(merchant, req, &rh, &reqs_hash, &accepted_hash, tx, inv, wait, err),
+                    None => Err(err),
+                };
+            }
+            Err(err) => return Err(err),
+        };
         if parsed_id != Some(v.txid) {
             drop(guard.take());
             guard = Some(self.locks.lock(v.txid));
@@ -846,42 +921,7 @@ impl Facilitator {
         self.check_not_expired(&v)?;
 
         // (4) consume the evidence
-        let mut orders = Vec::with_capacity(v.order_inputs.len());
-        for o in &v.order_inputs {
-            let idx = v.tx.inputs.iter().position(|i| common::outpoint_of(i) == *o);
-            let spk = idx.and_then(|i| v.entries.get(i)).map(|e| spk_to_hex(&e.script_public_key));
-            orders.push((
-                *o,
-                spk.ok_or_else(|| {
-                    X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, "an order input has no resolved entry")
-                })?,
-            ));
-        }
-        let claim = self.ledger.claim(NewEntry {
-            txid: v.txid,
-            request_hash: v.request_hash,
-            requirements_hash: v.requirements_hash,
-            payment_id: v.payment_identifier.clone(),
-            profile: v.profile.as_str().to_string(),
-            kind: kind_str(v.kind).to_string(),
-            merchant: merchant.to_string(),
-            network: self.policy.network.as_str().to_string(),
-            payer: v.payer_address.clone(),
-            amount: req.payment_requirements.amount.clone(),
-            finality: v.finality.as_str().to_string(),
-            consumed: v.consumed.clone(),
-            order_inputs: orders,
-            watched: Watched {
-                txid: hex(&v.merchant_output.outpoint.txid),
-                index: v.merchant_output.outpoint.index,
-                spk: spk_to_hex(&v.merchant_output.script_public_key),
-                amount: v.merchant_output.amount,
-            },
-            extension: v.response_extension.clone(),
-            now_ms: self.clock.now_ms(),
-            intent: None,
-            invoice: inv.map(|i| i.id.clone()),
-        })?;
+        let claim = self.ledger.claim(self.claim_of(&v, merchant, &req.payment_requirements.amount, inv)?)?;
         let (entry, is_new) = match claim {
             Claim::New(e) => (e, true),
             Claim::Existing(e) => {
@@ -918,7 +958,7 @@ impl Facilitator {
         }
         // the acceptance tracker (the indexer, in `kob-executor run`) follows it from before the broadcast
         self.chain.track(&v.txid);
-        let entry = match self.submit_retrying(&v.tx, wait, || self.chain_seen(&entry)) {
+        let entry = match self.submit_retrying(&v.tx, wait, || self.chain_seen(&entry, Some(&v.tx))) {
             Ok(_) | Err(SubmitError::AlreadyKnown) => {
                 Metrics::inc(&self.metrics.broadcasts);
                 self.ledger.transition(&entry.txid, State::Broadcast, None, self.clock.now_ms())?
@@ -955,6 +995,124 @@ impl Facilitator {
         let result = self.observe_and_finish(&entry, wait, Some(&v.tx));
         drop(guard);
         result
+    }
+
+    /// The ledger claim of a verified direct payment.
+    fn claim_of(&self, v: &Verified, merchant: &str, amount: &str, inv: Option<&invoice::InvoiceCtx>) -> Result<NewEntry> {
+        let mut orders = Vec::with_capacity(v.order_inputs.len());
+        for o in &v.order_inputs {
+            let idx = v.tx.inputs.iter().position(|i| common::outpoint_of(i) == *o);
+            let spk = idx.and_then(|i| v.entries.get(i)).map(|e| spk_to_hex(&e.script_public_key));
+            orders.push((
+                *o,
+                spk.ok_or_else(|| {
+                    X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, "an order input has no resolved entry")
+                })?,
+            ));
+        }
+        Ok(NewEntry {
+            txid: v.txid,
+            request_hash: v.request_hash,
+            requirements_hash: v.requirements_hash,
+            payment_id: v.payment_identifier.clone(),
+            profile: v.profile.as_str().to_string(),
+            kind: kind_str(v.kind).to_string(),
+            merchant: merchant.to_string(),
+            network: self.policy.network.as_str().to_string(),
+            payer: v.payer_address.clone(),
+            amount: amount.to_string(),
+            finality: v.finality.as_str().to_string(),
+            consumed: v.consumed.clone(),
+            order_inputs: orders,
+            watched: Watched {
+                txid: hex(&v.merchant_output.outpoint.txid),
+                index: v.merchant_output.outpoint.index,
+                spk: spk_to_hex(&v.merchant_output.script_public_key),
+                amount: v.merchant_output.amount,
+            },
+            extension: v.response_extension.clone(),
+            now_ms: self.clock.now_ms(),
+            intent: None,
+            invoice: inv.map(|i| i.id.clone()),
+        })
+    }
+
+    /// Remembers what a `/verify` of a direct payment established ([`VerifiedRecord`]).
+    fn remember_verified(&self, merchant: &str, req: &FacilitatorRequest, v: &Verified) {
+        if intent::is_intent_request(req) || matches!(v.kind, PaymentKind::IntentToKas | PaymentKind::IntentToToken) {
+            return;
+        }
+        let Ok(claim) = self.claim_of(v, merchant, &req.payment_requirements.amount, None) else { return };
+        let rec = VerifiedRecord { claim, expires_ms: v.authorization_expires_at_ms };
+        let now = self.clock.now_ms();
+        self.verified.lock().unwrap_or_else(|p| p.into_inner()).insert((merchant.to_string(), v.txid), rec, now);
+    }
+
+    /// `/settle` of a direct payment whose verification found an input spent (`err`): when it is the very transaction a
+    /// `/verify` of this merchant verified for the same request and requirements, and that transaction is accepted (an output
+    /// of it is in the UTXO set: the merchant or the payer broadcast it first), the payment is settled from the facts that
+    /// `/verify` established, like any other: claimed, then its finality observed. Anything else answers `err`. Never for an
+    /// invoice (its payments are not verified through `/verify`, and their broadcast must precede the invoice's expiry).
+    #[allow(clippy::too_many_arguments)]
+    fn settle_verified_and_accepted(
+        &self,
+        merchant: &str,
+        req: &FacilitatorRequest,
+        rh: &str,
+        reqs_hash: &str,
+        accepted_hash: &str,
+        tx: &Transaction,
+        inv: Option<&invoice::InvoiceCtx>,
+        wait: Duration,
+        err: X402Error,
+    ) -> Result<SettlementResponse> {
+        if inv.is_some() || accepted_hash != reqs_hash {
+            return Err(err);
+        }
+        let txid = tx.id().as_bytes();
+        let now = self.clock.now_ms();
+        let Some(mut claim) = self
+            .verified
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&(merchant.to_string(), txid), now)
+            .filter(|r| hex(&r.claim.request_hash) == rh && hex(&r.claim.requirements_hash) == reqs_hash)
+            .map(|r| r.claim.clone())
+        else {
+            return Err(err);
+        };
+        let watch = parse_hash32(&claim.watched.txid)
+            .zip(spk_from_hex(&claim.watched.spk).ok())
+            .map(|(t, spk)| (Outpoint::new(t, claim.watched.index), spk))
+            .ok_or_else(|| X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, "bad watched output"))?;
+        match self.accepted_now(&watch, Some(tx)) {
+            Ok(Some(_)) => {}
+            Ok(None) => return Err(err),
+            Err(ce) => return Err(unavailable(format!("cannot read the chain: {ce}"))),
+        }
+        // the payment identifier is the one this settle names (it never reaches the chain)
+        claim.payment_id = common::payment_identifier(
+            &VerifyCtx { chain: &*self.chain, clock: &*self.clock, policy: &self.policy },
+            &req.payment_payload,
+        )?;
+        claim.now_ms = now;
+        let e = match self.ledger.claim(claim)? {
+            Claim::New(e) | Claim::Existing(e) => e,
+        };
+        if e.txid != hex(&txid) {
+            return self.respond_other(&e);
+        }
+        if e.state == State::Accepted {
+            return self.cached(&e);
+        }
+        Metrics::inc(&self.metrics.settle_found_accepted);
+        eprintln!(
+            "x402: {} was accepted before its /settle (broadcast by the merchant or the payer); settling it as verified",
+            e.txid
+        );
+        let e = self.ledger.transition(&e.txid, State::Broadcast, None, now)?;
+        self.chain.track(&txid);
+        self.observe_and_finish(&e, wait, Some(tx))
     }
 
     /// Submits `tx`; while the node cannot be reached, submits the SAME transaction again up to `config.submit_retries` times
@@ -1032,8 +1190,9 @@ impl Facilitator {
         })
     }
 
-    /// True if the chain knows the entry's transaction (merchant output accepted, or in the mempool).
-    fn chain_seen(&self, e: &Entry) -> std::result::Result<bool, ChainError> {
+    /// True if the chain knows the entry's transaction (merchant output accepted, or in the mempool; with `tx`, the entry's
+    /// transaction itself, also another of its outputs in the UTXO set: accepted, its merchant output spent since).
+    fn chain_seen(&self, e: &Entry, tx: Option<&Transaction>) -> std::result::Result<bool, ChainError> {
         let (out, spk) = watch_of(e)?;
         self.chain.track(&out.txid);
         if matches!(self.chain.tracked(&out.txid), Tracked::Accepted { .. }) {
@@ -1041,16 +1200,42 @@ impl Facilitator {
         }
         Ok(match self.chain.output_status(&out, &spk)? {
             OutputStatus::Accepted { .. } | OutputStatus::Mempool => true,
-            OutputStatus::Unknown => self.chain.in_mempool(&out.txid)?,
+            OutputStatus::Unknown => self.chain.in_mempool(&out.txid)? || self.exact_accepted(tx, &out.txid)?.is_some(),
         })
+    }
+
+    /// `Some(DAA score of its accepting block)` when an output of `tx` (the exact transaction: the outpoint names its id) is
+    /// in the UTXO set. Read from the UTXO set itself, never from the mempool. `None` without `tx` or when `tx` is not the
+    /// transaction `txid` names.
+    fn exact_accepted(&self, tx: Option<&Transaction>, txid: &Txid) -> std::result::Result<Option<u64>, ChainError> {
+        let Some(tx) = tx.filter(|t| t.id().as_bytes() == *txid) else { return Ok(None) };
+        let wanted: Vec<(Outpoint, ScriptPublicKey)> =
+            tx.outputs.iter().enumerate().map(|(i, o)| (Outpoint::new(*txid, i as u32), o.script_public_key.clone())).collect();
+        Ok(self.chain.utxos(&wanted)?.into_iter().flatten().map(|u| u.block_daa_score).next())
+    }
+
+    /// Whether the transaction of the watched output is accepted now, read from the acceptance tracker and then from the UTXO
+    /// set itself (the watched output, then, with `tx`, any other output of it), never from the mempool.
+    fn accepted_now(&self, w: &(Outpoint, ScriptPublicKey), tx: Option<&Transaction>) -> std::result::Result<Option<u64>, ChainError> {
+        if let Tracked::Accepted { block_daa_score } = self.chain.tracked(&w.0.txid) {
+            return Ok(Some(block_daa_score));
+        }
+        if let Some(u) = self.chain.utxos(std::slice::from_ref(w))?.into_iter().next().flatten() {
+            return Ok(Some(u.block_daa_score));
+        }
+        self.exact_accepted(tx, &w.0.txid)
+    }
+
+    /// True when `daa` (an accepting block's DAA score) satisfies `required`.
+    fn deep_enough(&self, daa: u64, required: Finality) -> std::result::Result<bool, ChainError> {
+        Ok(required < Finality::Confirmed || self.chain.virtual_daa_score()?.saturating_sub(daa) >= self.policy.confirmations_daa)
     }
 
     /// True when an input of the entry's transaction is unspent again (back in the payer's UTXO set): the transaction is not
     /// in the chain any more, which only a reorg does. A merchant output that is gone while every input stays spent was spent by
     /// the merchant (or anyone it paid), not undone. Without a payer address nothing is proven (false).
     fn inputs_back(&self, e: &Entry) -> std::result::Result<bool, ChainError> {
-        let Some(addr) = e.payer.as_deref().and_then(|a| kaspa_addresses::Address::try_from(a).ok()) else { return Ok(false) };
-        let spk = kaspa_txscript::pay_to_address_script(&addr);
+        let Some(spk) = payer_spk(e) else { return Ok(false) };
         let consumed: HashSet<Outpoint> = e.consumed_outpoints().into_iter().collect();
         Ok(self.chain.utxos_of(&spk)?.iter().any(|(o, _)| consumed.contains(o)))
     }
@@ -1065,16 +1250,14 @@ impl Facilitator {
     }
 
     /// One finality check of the watched output: `Some(block DAA)` when the required finality holds.
-    fn check_final(&self, w: &(Outpoint, ScriptPublicKey), required: Finality) -> std::result::Result<Option<u64>, ChainError> {
-        match self.accepted_daa(&w.0, &w.1)? {
-            Some(block_daa_score) => {
-                if required >= Finality::Confirmed {
-                    let vdaa = self.chain.virtual_daa_score()?;
-                    Ok((vdaa.saturating_sub(block_daa_score) >= self.policy.confirmations_daa).then_some(block_daa_score))
-                } else {
-                    Ok(Some(block_daa_score))
-                }
-            }
+    fn check_final(
+        &self,
+        w: &(Outpoint, ScriptPublicKey),
+        required: Finality,
+        tx: Option<&Transaction>,
+    ) -> std::result::Result<Option<u64>, ChainError> {
+        match self.accepted_daa(&w.0, &w.1, tx)? {
+            Some(block_daa_score) => Ok(self.deep_enough(block_daa_score, required)?.then_some(block_daa_score)),
             // the mempool is never sufficient
             None => Ok(None),
         }
@@ -1082,17 +1265,27 @@ impl Facilitator {
 
     /// DAA score of the chain block that accepted the transaction of `out`: from the acceptance tracker
     /// when it saw the acceptance (it survives the merchant spending the output), else from the output
-    /// being in the virtual UTXO set. `None`: not accepted as far as the chain view can tell.
-    fn accepted_daa(&self, out: &Outpoint, spk: &ScriptPublicKey) -> std::result::Result<Option<u64>, ChainError> {
+    /// being in the virtual UTXO set, else (`tx`, the output neither there nor in the mempool: the merchant may have spent it)
+    /// from another output of the exact transaction in the UTXO set. `None`: not accepted as far as the chain view can tell.
+    fn accepted_daa(
+        &self,
+        out: &Outpoint,
+        spk: &ScriptPublicKey,
+        tx: Option<&Transaction>,
+    ) -> std::result::Result<Option<u64>, ChainError> {
         if let Tracked::Accepted { block_daa_score } = self.chain.tracked(&out.txid) {
             return Ok(Some(block_daa_score));
         }
         Ok(match self.chain.output_status(out, spk)? {
             OutputStatus::Accepted { block_daa_score } => Some(block_daa_score),
-            OutputStatus::Mempool | OutputStatus::Unknown => None,
+            OutputStatus::Mempool => None,
+            OutputStatus::Unknown => self.exact_accepted(tx, &out.txid)?,
         })
     }
 
+    /// Polls the entry's finality for up to `wait` (`tx`: the entry's transaction, re-broadcast when it left the mempool and
+    /// read for acceptance when the merchant output is gone). A swap whose order is spent while its transaction is not
+    /// accepted is an order conflict.
     fn observe(&self, e: &Entry, wait: Duration, tx: Option<&Transaction>) -> Observed {
         let Ok(watch) = watch_of(e) else { return Observed::Timeout { node_down: true } };
         let mut rebroadcasts = if tx.is_some() { self.config.rebroadcasts } else { 0 };
@@ -1102,7 +1295,7 @@ impl Facilitator {
         let mut polls = 0u32;
         let mut ok_polls = 0u32;
         loop {
-            match self.check_final(&watch, required) {
+            match self.check_final(&watch, required, tx) {
                 Ok(Some(daa)) => return Observed::Final { accepted_daa: daa },
                 Ok(None) => ok_polls += 1,
                 Err(_) => {}
@@ -1112,13 +1305,13 @@ impl Facilitator {
                 if let Some(spent) = self.spent_orders(&orders).filter(|s| !s.is_empty()) {
                     // an order is gone: only a still-unaccepted transaction is dead (re-check to avoid the race
                     // in which our own acceptance consumed the order)
-                    if let Ok(Some(daa)) = self.check_final(&watch, required) {
+                    if let Ok(Some(daa)) = self.check_final(&watch, required, tx) {
                         return Observed::Final { accepted_daa: daa };
                     }
                     // accepted but not yet `confirmationsDaa` deep (a `confirmed` payment): our own transaction consumed
                     // the order, so keep waiting for the depth; only an unaccepted transaction lost the order (a node that
                     // does not answer proves nothing either way: observe on)
-                    if let Ok(None) = self.accepted_daa(&watch.0, &watch.1) {
+                    if let Ok(None) = self.accepted_daa(&watch.0, &watch.1, tx) {
                         return Observed::OrderConflict(spent);
                     }
                 }
@@ -1260,7 +1453,21 @@ impl Facilitator {
                         rep.errors += 1;
                         continue;
                     };
-                    utxos.iter().find(|(o, _)| *o == out).map(|(_, u)| u.block_daa_score)
+                    let mut found = utxos.iter().find(|(o, _)| *o == out).map(|(_, u)| u.block_daa_score);
+                    // Without the tracker a merchant output spent right after the acceptance is gone; an output of the same
+                    // transaction to the payer (its change) proves the acceptance as well: the outpoint names the transaction.
+                    if found.is_none() && e.state != State::Accepted {
+                        if let Some(payer_spk) = payer_spk(&e) {
+                            match by_spk.entry(spk_to_hex(&payer_spk)).or_insert_with(|| self.chain.utxos_of(&payer_spk)) {
+                                Ok(utxos) => found = utxos.iter().find(|(o, _)| o.txid == txid).map(|(_, u)| u.block_daa_score),
+                                Err(_) => {
+                                    rep.errors += 1;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    found
                 }
             };
             let now = self.clock.now_ms();
@@ -1364,7 +1571,30 @@ impl Facilitator {
                     }
                     Err(_) => rep.errors += 1,
                 },
-                (State::Broadcast, None) => {} // still waiting; an identical retry observes it
+                // Still waiting; an identical retry observes it. One the node has not known for `ambiguous_grace` (not in the
+                // mempool, no output of it on chain: never accepted and dropped, or accepted with every output spent since,
+                // which the standalone facilitator cannot tell apart) is not waited for forever: it becomes `ambiguous`, and
+                // the rules above take over (released after another grace when it was never seen accepted).
+                (State::Broadcast, None) => {
+                    let age = now.saturating_sub(e.updated_ms);
+                    if age >= self.config.ambiguous_grace.as_millis() as u64 {
+                        match self.chain.in_mempool(&txid) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                eprintln!(
+                                    "x402: settlement {} was broadcast and is unknown to the node for {} s (not in the mempool, no output of it on chain); marking it ambiguous",
+                                    e.txid,
+                                    age / 1000
+                                );
+                                let reason = "broadcast, then unknown to the node after the grace period (not in the mempool, no output of it on chain)";
+                                if self.ledger.transition(&e.txid, State::Ambiguous, Some(reason.into()), now).is_ok() {
+                                    rep.stale_broadcast += 1;
+                                }
+                            }
+                            Err(_) => rep.errors += 1,
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1394,6 +1624,12 @@ impl Facilitator {
         }
         s
     }
+}
+
+/// The script of the entry's payer address (where a payment returns its change), if it has one.
+fn payer_spk(e: &Entry) -> Option<ScriptPublicKey> {
+    let addr = kaspa_addresses::Address::try_from(e.payer.as_deref()?).ok()?;
+    Some(kaspa_txscript::pay_to_address_script(&addr))
 }
 
 fn watch_of(e: &Entry) -> std::result::Result<(Outpoint, ScriptPublicKey), ChainError> {

@@ -673,14 +673,14 @@ impl Facilitator {
         // a. every execution of ours: final? (a dead one may have won a race), live ones in flight?
         for (k, x) in rec.executions.iter().enumerate() {
             let Some(w) = Self::exec_out(&rec, x) else { continue };
-            if let Some(daa) = self.check_final(&w, required).map_err(node)? {
+            if let Some(daa) = self.check_final(&w, required, None).map_err(node)? {
                 return self.finish(&e, &rec, k, daa);
             }
         }
         if let Some((k, x)) = rec.executions.iter().enumerate().rev().find(|(_, x)| x.state == ExecState::Live) {
             let w = Self::exec_out(&rec, x)
                 .ok_or_else(|| X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, "bad execution record"))?;
-            if self.accepted_daa(&w.0, &w.1).map_err(node)?.is_some() {
+            if self.accepted_daa(&w.0, &w.1, None).map_err(node)?.is_some() {
                 return Ok(Drive::Waiting("confirmations"));
             }
             let orders: Vec<(Outpoint, ScriptPublicKey)> = x
@@ -694,7 +694,7 @@ impl Facilitator {
                 return Ok(Drive::Waiting("execution in the mempool"));
             }
             // re-check: our own acceptance spends the orders too
-            if self.accepted_daa(&w.0, &w.1).map_err(node)?.is_some() {
+            if self.accepted_daa(&w.0, &w.1, None).map_err(node)?.is_some() {
                 return Ok(Drive::Waiting("confirmations"));
             }
             Metrics::inc(&self.metrics.intent_conflicts);
@@ -749,7 +749,7 @@ impl Facilitator {
             // merged only now, after it was marked dead): the intent being gone is then this payment, not someone else's spend.
             for x in &rec.executions {
                 let Some(w) = Self::exec_out(&rec, x) else { continue };
-                if self.accepted_daa(&w.0, &w.1).map_err(node)?.is_some() {
+                if self.accepted_daa(&w.0, &w.1, None).map_err(node)?.is_some() {
                     return Ok(Drive::Waiting("confirmations"));
                 }
             }
