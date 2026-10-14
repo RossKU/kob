@@ -1215,7 +1215,8 @@ impl Facilitator {
     }
 
     /// Whether the transaction of the watched output is accepted now, read from the acceptance tracker and then from the UTXO
-    /// set itself (the watched output, then, with `tx`, any other output of it), never from the mempool.
+    /// set itself (the watched output, then, with `tx`, any other output of it), never from the mempool: a transaction the
+    /// node accepted can still be listed in its mempool for a moment (see [`Facilitator::observe`]).
     fn accepted_now(&self, w: &(Outpoint, ScriptPublicKey), tx: Option<&Transaction>) -> std::result::Result<Option<u64>, ChainError> {
         if let Tracked::Accepted { block_daa_score } = self.chain.tracked(&w.0.txid) {
             return Ok(Some(block_daa_score));
@@ -1303,16 +1304,22 @@ impl Facilitator {
             let last = Instant::now() >= deadline;
             if !orders.is_empty() && (last || polls % 5 == 4) {
                 if let Some(spent) = self.spent_orders(&orders).filter(|s| !s.is_empty()) {
-                    // an order is gone: only a still-unaccepted transaction is dead (re-check to avoid the race
-                    // in which our own acceptance consumed the order)
-                    if let Ok(Some(daa)) = self.check_final(&watch, required, tx) {
-                        return Observed::Final { accepted_daa: daa };
-                    }
-                    // accepted but not yet `confirmationsDaa` deep (a `confirmed` payment): our own transaction consumed
-                    // the order, so keep waiting for the depth; only an unaccepted transaction lost the order (a node that
-                    // does not answer proves nothing either way: observe on)
-                    if let Ok(None) = self.accepted_daa(&watch.0, &watch.1, tx) {
-                        return Observed::OrderConflict(spent);
+                    // An order is gone: only a still-unaccepted transaction is dead; our own acceptance consumes the order
+                    // too. Acceptance is read from the tracker and the UTXO set themselves, never through the mempool: in
+                    // rusty-kaspa v2.1.0 a node updates its mempool only after the virtual state (`FlowContext::on_new_block`
+                    // awaits the block's virtual-state task, then `handle_new_block_transactions` removes the block's
+                    // transactions), so for a moment an accepted transaction is still listed in the mempool while its outputs
+                    // are in the UTXO set and its inputs are not. `NodeChain::output_status` reads the mempool first and would
+                    // call it unaccepted. Accepted but not yet `confirmationsDaa` deep (a `confirmed` payment): keep waiting for
+                    // the depth. A node that does not answer proves nothing either way: observe on.
+                    match self.accepted_now(&watch, tx) {
+                        Ok(Some(daa)) => {
+                            if let Ok(true) = self.deep_enough(daa, required) {
+                                return Observed::Final { accepted_daa: daa };
+                            }
+                        }
+                        Ok(None) => return Observed::OrderConflict(spent),
+                        Err(_) => {}
                     }
                 }
             }

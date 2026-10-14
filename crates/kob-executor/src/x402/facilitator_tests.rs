@@ -1583,6 +1583,58 @@ fn a_stale_broadcast_entry_becomes_ambiguous_after_the_grace() {
     assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Failed);
 }
 
+/// A view that answers like the node (`NodeChain`): `output_status` reads the mempool first, and the transactions in `linger`
+/// stay in the mempool after their acceptance (rusty-kaspa v2.1.0 updates the mempool after the virtual UTXO set).
+struct LingeringMempool {
+    chain: Arc<MockChain>,
+    linger: std::sync::Mutex<Vec<Txid>>,
+}
+
+impl ChainView for LingeringMempool {
+    fn utxos(&self, w: &[(Outpoint, ScriptPublicKey)]) -> Result<Vec<Option<ChainUtxo>>, ChainError> {
+        self.chain.utxos(w)
+    }
+    fn utxos_of(&self, s: &ScriptPublicKey) -> Result<Vec<(Outpoint, ChainUtxo)>, ChainError> {
+        self.chain.utxos_of(s)
+    }
+    fn virtual_daa_score(&self) -> Result<u64, ChainError> {
+        self.chain.virtual_daa_score()
+    }
+    fn output_status(&self, o: &Outpoint, s: &ScriptPublicKey) -> Result<OutputStatus, ChainError> {
+        if self.in_mempool(&o.txid)? {
+            return Ok(OutputStatus::Mempool);
+        }
+        self.chain.output_status(o, s)
+    }
+    fn in_mempool(&self, t: &Txid) -> Result<bool, ChainError> {
+        Ok(self.linger.lock().unwrap().contains(t) || self.chain.in_mempool(t)?)
+    }
+    fn submit(&self, tx: &Transaction) -> Result<Txid, SubmitError> {
+        self.chain.submit(tx)
+    }
+}
+
+/// F6: a swap whose transaction is accepted (its outputs in the UTXO set, the order it fills spent by it) while the node still
+/// lists it in its mempool is a success, never an `order_conflict` that fails the entry while the merchant is paid.
+#[test]
+fn an_accepted_swap_still_listed_in_the_mempool_is_not_an_order_conflict() {
+    let chain = Arc::new(MockChain::new());
+    let view = Arc::new(LingeringMempool { chain: chain.clone(), linger: Default::default() });
+    let f = Fixture::with_view(Arc::new(Ledger::in_memory()), chain, view.clone(), Arc::new(FixedClock::new(START_MS)));
+    let order = f.fund(300_000_000);
+    let payer_in = f.fund(300_000_000);
+    let (req, tx) = f.payment(&[order, payer_in], 100_000_000, ID1, 7);
+    *f.verifier.orders.lock().unwrap() = vec![order];
+    view.linger.lock().unwrap().push(tx.id().as_bytes());
+    let miner = mine_later(&f.chain, 10, 0);
+    let s = f.fac.settle("shop", &req);
+    miner.join().unwrap();
+    assert!(f.chain.is_accepted(&tx.id().as_bytes()));
+    assert!(s.success, "{s:?}");
+    assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Accepted);
+    assert_eq!(f.fac.metrics.order_conflicts.load(Ordering::Relaxed), 0);
+}
+
 /// F5: the merchant (or the payer) broadcasts the payment itself and it is accepted before `/settle`. A transaction this
 /// merchant had `/verify` verify for the same request is settled from what that verification established; anything else is
 /// refused as before (its inputs are spent, and the payload alone proves nothing about them: the embedded UTXOs and the
