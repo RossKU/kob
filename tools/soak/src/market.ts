@@ -68,7 +68,7 @@ export function soakRegistry(env: Env): unknown {
   }
   const external = env.cfg.externalTokens ?? [];
   for (const t of external) tokens.push(externalRegistryToken(t));
-  return { schema_version: 1, network: 'testnet-10', templates: soakTemplates(external), tokens };
+  return { schema_version: 1, network: 'testnet-10', templates: soakTemplates(external, env.cfg.testPrograms ?? []), tokens };
 }
 
 export function writeRegistry(env: Env): string {

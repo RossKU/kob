@@ -121,6 +121,11 @@ export interface SoakConfig {
    * of those with a `trade` block (a KRON token minted on TN10 by KRON's own tooling: the soak cannot issue KRON); the market maker does not
    */
   externalTokens?: ExternalTokenConfig[];
+  /**
+   * launchpad token programs KOB embeds as pending-review (testnet-10 only) whose templates the soak registry lists as reviewed, so the
+   * executors list KOB orders of any token of them (src/registry-templates.ts `TEST_PROGRAM_TEMPLATES`): a TN10 test, not a review
+   */
+  testPrograms?: ('KForgeToken1785' | 'KaspaRocketToken11458')[];
   price: {
     /** Binance USD-M futures KASUSDT (Binance has no KAS spot market) */
     url: string;
@@ -221,7 +226,7 @@ export interface ExternalTokenConfig {
    * its token program: the reference KCC-20 3 / 3 (`KCC20Ref`), the reference's published public-mint build (`KCC20PublicMint`), or one of the
    * two reviewed KRON programs (`KronToken2433`, `KronToken2732`: 46-byte state, no extension commitment, 4 / 5 token slots)
    */
-  program: 'KCC20Ref' | 'KCC20PublicMint' | 'KronToken2433' | 'KronToken2732';
+  program: 'KCC20Ref' | 'KCC20PublicMint' | 'KronToken2433' | 'KronToken2732' | 'KForgeToken1785' | 'KaspaRocketToken11458';
   decimals: number;
   /** 64-hex, default all zero (KCC-20 only; a KRON token has none) */
   extensionCommitment?: string;
