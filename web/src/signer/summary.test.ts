@@ -76,3 +76,16 @@ describe('signer summary: timing without a clock', () => {
     expect(expiry('create.ask', (s) => (s.expiryDaa = (1n << 62n).toString()))).toContain('when the exit is created');
   });
 });
+
+describe('signer summary: a token without decimals (no hint)', () => {
+  it('states the scale of the price next to the base-unit amount (TN10 2026-10-15 B-13)', () => {
+    const s = summarize(kob, build('create.ask'), MAKER_PK, []);
+    const rows = s.orders[0]!.rows;
+    expect(rows.find((r) => /amount/i.test(r.label))?.value).toMatch(/base units/);
+    const price = rows.find((r) => /limit price/i.test(r.label))?.value ?? '';
+    expect(price).toMatch(/KAS per \d+ base units of the token$/);
+    // with the decimals known the price stays per whole token
+    const known = summarize(kob, build('create.ask'), MAKER_PK, HINTS).orders[0]!.rows.find((r) => /limit price/i.test(r.label))?.value ?? '';
+    expect(known).not.toMatch(/base units/);
+  });
+});

@@ -73,10 +73,13 @@ function hintRegistry(hints: TokenHint[]): TokenRegistry {
 function orderSummary(d: OrderDescription, extra: Parameters<typeof orderRows>[1], hints: TokenHint[], registry: TokenRegistry): SummaryOrder {
   const f: Fmt = { tr: t, ref: refOfHint(d.tokenCovId, hints), clock: null, time: (unix) => formatDateTime(unix), registry };
   const exit = d.entry?.exit ? orderSummary(d.entry.exit, { value: null, locked: null, deadline: null }, hints, registry) : null;
+  const perScale = t('confirm.f.perScale', { scale: d.scale.toString() });
   return {
     title: orderTitle(d, extra.deadline, f),
     token: f.ref.display,
-    rows: orderRows(d, extra, f).map((r) => ({ label: r.label, value: r.value })),
+    // a price of a token whose decimals the frame does not know (no hint: an unlisted token's first order) is per `scale` base units:
+    // the frame keeps that detail, as amounts there are base units too (TN10 2026-10-15 B-13: "1000 base units" at "0.5 KAS")
+    rows: orderRows(d, extra, f).map((r) => ({ label: r.label, value: r.detail === perScale ? `${r.value} ${r.detail}` : r.value })),
     exit: exit ? { ...exit, title: t('confirm.exitOf', { title: exit.title }) } : null,
   };
 }
