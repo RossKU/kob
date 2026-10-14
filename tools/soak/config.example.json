@@ -270,6 +270,18 @@
       "maxUsd": 8
     }
   ],
+  "bands": {
+    "marketBps": 25,
+    "streamingBps": 25,
+    "stopBps": 30,
+    "stopLimitBps": 30,
+    "crossBps": 15,
+    "entryBandBps": 30,
+    "dutchStartBps": [60, 120],
+    "dutchEndBps": [10, 30],
+    "depthFraction": 0.25,
+    "depthBandBps": 30
+  },
   "x402": {
     "enabled": true,
     "payerKey": "payer",

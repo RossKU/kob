@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 // relative (not `@/`): the fee settings are unit-tested by node --test, which has no path alias
 import { DEFAULT_FEES, parseMaxFeeKas, parseMaxRate, type FeeSettings } from '../../../web/src/kob/fee-policy.ts';
+import type { Bands } from './bots/bands';
 import type { ConsolidateConfig } from './bots/consolidate-math';
 
 export interface ExecutorConfig {
@@ -173,6 +174,11 @@ export interface SoakConfig {
    */
   consolidate?: Partial<ConsolidateConfig>;
   traders: TraderConfig[];
+  /**
+   * how far from the reference the traders let a taker or an auction go, in bps (bots/bands.ts `DEFAULT_BANDS`; every field optional): the market and
+   * stop auctions fill at their far bound (the executors follow the chain 1 to 2 minutes late), so the bound is what sets the chart's wicks
+   */
+  bands?: Partial<Bands>;
   /**
    * Lag tolerance in seconds of the "wait until the indexer follows" gates (default 30; 0: strict). The bots' gate (indexer-gate.ts)
    * trades while the indexer lags by at most this much, and the supervisor writes it as `max_lag_secs` into every executor.toml (the

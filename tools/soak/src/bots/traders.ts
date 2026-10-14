@@ -28,6 +28,7 @@ import { bps, expDelay, onTick, pick, randInt, randUnits, sleep, usdToUnits, wei
 import { walletFor, type BotWallet } from '../wallet';
 import { amend, cancel, cancelAll, cancelAllDetailed, mergeTokens, pairAmend, priceOf, place, placePair, renew, spendsOf, type PlaceResult, type ReplaceOutcome } from './common';
 import { DEFAULT_PAIR_WEIGHTS, DEFAULT_WEIGHTS } from './weights';
+import { bandsOf, capToDepth } from './bands';
 import { datedPairLimit, externalReference, ladderLevels, ladderSetting, mergeTotal, oldestFirst, pairAmendPrice, rungSize } from './scenario-math';
 import { consolidateTokens } from './consolidate';
 import { consolidateConfig } from './consolidate-math';
@@ -40,6 +41,8 @@ export class Trader {
   readonly w: BotWallet;
   private stopped = false;
   private readonly weights: Record<string, number>;
+  /** how far from the reference the takers and auctions go (bands.ts) */
+  private readonly bands: ReturnType<typeof bandsOf>;
 
   constructor(
     private readonly env: Env,
@@ -54,6 +57,7 @@ export class Trader {
   ) {
     this.w = walletFor(env, cfg.key, stats, log);
     this.weights = { ...DEFAULT_WEIGHTS, ...(cfg.weights ?? {}) };
+    this.bands = bandsOf(env.cfg.bands);
   }
 
   stop(): void {
@@ -148,11 +152,14 @@ export class Trader {
     const o = { book, mine, taker: true };
     const s = side();
     const amount = this.size();
+    const B = this.bands;
+    // a taker takes at most a share of what rests on the other side near the touch (bands.ts), never less than the smallest order
+    const taking = (a: bigint): bigint => capToDepth(a, s === 'buy' ? book.asks : book.bids, B.depthFraction, B.depthBandBps, this.usd(0.5));
     let intent: Intent | null = null;
 
     switch (action0) {
       case 'market':
-        intent = { type: 'market', side: s, amount: this.size(3) };
+        intent = { type: 'market', side: s, amount: taking(this.size(3)), slippageBps: BigInt(B.marketBps) };
         break;
       case 'limit':
         // passive: a little behind the reference
@@ -160,8 +167,8 @@ export class Trader {
         break;
       case 'limitCross': {
         // aggressive limit through the touch: placed as an IOC taker at that price (the slippage bound), see common.ts `taker`
-        const lim = s === 'buy' ? (t.ask ?? R) + bps(t.ask ?? R, 30) : (t.bid ?? R) - bps(t.bid ?? R, 30);
-        intent = { type: 'limit', side: s, amount: this.size(3), price: onTick(lim, tick) };
+        const lim = s === 'buy' ? (t.ask ?? R) + bps(t.ask ?? R, B.crossBps) : (t.bid ?? R) - bps(t.bid ?? R, B.crossBps);
+        intent = { type: 'limit', side: s, amount: taking(this.size(3)), price: onTick(lim, tick) };
         break;
       }
       case 'gtd':
@@ -184,27 +191,27 @@ export class Trader {
       case 'ioc': {
         const p = s === 'buy' ? t.ask : t.bid;
         if (p == null) return;
-        intent = { type: 'ioc', side: s, amount: this.size(3), price: onTick(s === 'buy' ? p + bps(p, 10) : p - bps(p, 10), tick) };
+        intent = { type: 'ioc', side: s, amount: taking(this.size(3)), price: onTick(s === 'buy' ? p + bps(p, 10) : p - bps(p, 10), tick) };
         break;
       }
       case 'fok': {
         const p = s === 'buy' ? t.ask : t.bid;
         if (p == null) return;
-        intent = { type: 'fok', side: s, amount: this.size(2), price: onTick(s === 'buy' ? p + bps(p, 20) : p - bps(p, 20), tick) };
+        intent = { type: 'fok', side: s, amount: taking(this.size(2)), price: onTick(s === 'buy' ? p + bps(p, B.crossBps) : p - bps(p, B.crossBps), tick) };
         break;
       }
       case 'streaming': {
         const p = s === 'buy' ? t.ask : t.bid;
         if (p == null) return;
-        intent = { type: 'streaming', side: s, amount: this.size(2), displayedPrice: p, toleranceBps: 50n };
+        intent = { type: 'streaming', side: s, amount: taking(this.size(2)), displayedPrice: p, toleranceBps: BigInt(B.streamingBps) };
         break;
       }
       case 'stopMarket':
-        intent = { type: 'stopMarket', side: s, amount: this.size(3), stop: at(s === 'sell' ? -frac(8, 40) : frac(8, 40)), expiry: { kind: 'gtdUnix', atUnixSeconds: clock.unixSeconds + 6n * 3600n } };
+        intent = { type: 'stopMarket', side: s, amount: this.size(3), stop: at(s === 'sell' ? -frac(8, 40) : frac(8, 40)), slipBps: B.stopBps, expiry: { kind: 'gtdUnix', atUnixSeconds: clock.unixSeconds + 6n * 3600n } };
         break;
       case 'stopLimit': {
         const stop = at(s === 'sell' ? -frac(8, 40) : frac(8, 40));
-        const limit = onTick(s === 'sell' ? stop - bps(stop, 100) : stop + bps(stop, 100), tick);
+        const limit = onTick(s === 'sell' ? stop - bps(stop, B.stopLimitBps) : stop + bps(stop, B.stopLimitBps), tick);
         intent = { type: 'stopLimit', side: s, amount: this.size(3), stop, limit, expiry: { kind: 'gtdUnix', atUnixSeconds: clock.unixSeconds + 6n * 3600n } };
         break;
       }
@@ -212,7 +219,7 @@ export class Trader {
         const gap = onTick(bps(R, 30), tick);
         intent = {
           type: 'trailingStop', side: s, amount: this.size(2), stop: s === 'sell' ? onTick(R - gap, tick) : onTick(R + gap, tick),
-          trail: { step: onTick(bps(R, 10), tick), gap, wait: 600n, expectedUpdates: 10 },
+          trail: { step: onTick(bps(R, 10), tick), gap, wait: 600n, expectedUpdates: 10 }, slipBps: B.stopBps,
           expiry: { kind: 'gtdUnix', atUnixSeconds: clock.unixSeconds + 6n * 3600n },
         };
         break;
@@ -225,6 +232,7 @@ export class Trader {
           type: 'oco', side: s, amount: this.size(3),
           takeProfit: at(s === 'sell' ? frac(60, 150) : -frac(60, 150)),
           stop: at(s === 'sell' ? -frac(10, 50) : frac(10, 50)),
+          slipBps: B.stopBps,
         };
         break;
       case 'ifd':
@@ -234,14 +242,18 @@ export class Trader {
         break;
       case 'ifo':
         intent = s === 'buy'
-          ? { type: 'ifo', side: 'buy', amount: this.size(3), entry: { price: at(-frac(5, 40)) }, exit: { takeProfit: at(frac(40, 90)), stop: at(-frac(15, 45)) } }
-          : { type: 'ifo', side: 'sell', amount: this.size(3), entry: { price: at(frac(5, 40)) }, exit: { takeProfit: at(-frac(40, 90)), stop: at(frac(15, 45)) } };
+          ? { type: 'ifo', side: 'buy', amount: this.size(3), entry: { price: at(-frac(5, 40)) }, exit: { takeProfit: at(frac(40, 90)), stop: at(-frac(15, 45)), slipBps: B.stopBps } }
+          : { type: 'ifo', side: 'sell', amount: this.size(3), entry: { price: at(frac(5, 40)) }, exit: { takeProfit: at(-frac(40, 90)), stop: at(frac(15, 45)), slipBps: B.stopBps } };
         break;
       case 'ifoStopEntry':
-        // breakout entry: buy stop above the market (stop <= price), sell stop below (stop >= price)
-        intent = s === 'buy'
-          ? { type: 'ifo', side: 'buy', amount: this.size(2), entry: { stop: at(frac(10, 35)), price: at(frac(70, 110)) }, exit: { takeProfit: at(frac(160, 220)), stop: at(-frac(20, 60)) } }
-          : { type: 'ifo', side: 'sell', amount: this.size(2), entry: { stop: at(-frac(10, 35)), price: at(-frac(70, 110)) }, exit: { takeProfit: at(-frac(160, 220)), stop: at(frac(20, 60)) } };
+        // breakout entry: buy stop above the market (stop <= price), sell stop below (stop >= price); the entry's auction runs from the stop to a
+        // price `entryBandBps` beyond it
+        {
+          const off = frac(10, 35);
+          intent = s === 'buy'
+            ? { type: 'ifo', side: 'buy', amount: this.size(2), entry: { stop: at(off), price: at(off + B.entryBandBps) }, exit: { takeProfit: at(frac(160, 220)), stop: at(-frac(20, 60)), slipBps: B.stopBps } }
+            : { type: 'ifo', side: 'sell', amount: this.size(2), entry: { stop: at(-off), price: at(-off - B.entryBandBps) }, exit: { takeProfit: at(-frac(160, 220)), stop: at(frac(20, 60)), slipBps: B.stopBps } };
+        }
         break;
       case 'repeatIfd':
         intent = s === 'buy'
@@ -250,8 +262,8 @@ export class Trader {
         break;
       case 'repeatIfo':
         intent = s === 'buy'
-          ? { type: 'repeatIfo', side: 'buy', amount: this.size(2), entry: { price: at(-frac(5, 25)) }, exit: { takeProfit: at(frac(20, 45)), stop: at(-frac(120, 200)) }, repeat: { count: 2n } }
-          : { type: 'repeatIfo', side: 'sell', amount: this.size(2), entry: { price: at(frac(5, 25)) }, exit: { takeProfit: at(-frac(20, 45)), stop: at(frac(120, 200)) }, repeat: { count: 2n } };
+          ? { type: 'repeatIfo', side: 'buy', amount: this.size(2), entry: { price: at(-frac(5, 25)) }, exit: { takeProfit: at(frac(20, 45)), stop: at(-frac(120, 200)), slipBps: B.stopBps }, repeat: { count: 2n } }
+          : { type: 'repeatIfo', side: 'sell', amount: this.size(2), entry: { price: at(frac(5, 25)) }, exit: { takeProfit: at(-frac(20, 45)), stop: at(frac(120, 200)), slipBps: B.stopBps }, repeat: { count: 2n } };
         break;
       case 'twap':
         intent = { type: 'twap', side: 'sell', amount: randUnits(this.usd(3), this.usd(6)), sliceAmount: this.usd(1), interval: { seconds: BigInt(randInt(60, 150)) }, price: at(-frac(0, 30)), lifetime: { kind: 'gtd', at: clock.unixSeconds + 2n * 3600n } };
@@ -261,11 +273,11 @@ export class Trader {
         break;
       case 'dutch':
         intent = s === 'sell'
-          ? { type: 'dutch', side: 'sell', amount: this.size(3), price: at(frac(150, 250)), priceEnd: at(-frac(20, 60)), duration: { seconds: BigInt(randInt(300, 900)) } }
-          : { type: 'dutch', side: 'buy', amount: this.size(3), price: at(-frac(150, 250)), priceEnd: at(frac(20, 60)), duration: { seconds: BigInt(randInt(300, 900)) } };
+          ? { type: 'dutch', side: 'sell', amount: this.size(3), price: at(frac(...B.dutchStartBps)), priceEnd: at(-frac(...B.dutchEndBps)), duration: { seconds: BigInt(randInt(300, 900)) } }
+          : { type: 'dutch', side: 'buy', amount: this.size(3), price: at(-frac(...B.dutchStartBps)), priceEnd: at(frac(...B.dutchEndBps)), duration: { seconds: BigInt(randInt(300, 900)) } };
         break;
       case 'close':
-        intent = { type: 'close', amount: this.size(2) };
+        intent = { type: 'close', amount: this.size(2), slippageBps: BigInt(B.marketBps) };
         break;
       case 'cancel': {
         const live = mine.filter((v) => v.current && v.state_known && !v.parent);
@@ -494,27 +506,29 @@ export class Trader {
     const [uLo, uHi] = asset.cfg.pairUsd ?? asset.cfg.crossUsd ?? [3, 20];
     const usd = (lo = uLo, hi = uHi) => usdToUnits(lo + Math.random() * Math.max(0, hi - lo), rA.usd, baseM.decimals);
     const s = side();
+    const B = this.bands;
+    const cross = () => frac(B.crossBps, B.crossBps * 3);
     const clock = await readClock(env);
     const gtd = (min: number, max: number) => ({ kind: 'gtd' as const, at: clock.unixSeconds + BigInt(randInt(min, max) * 60) });
     let intent: Intent | null = null;
     switch (action) {
       case 'limitSell':
         // a resting sell a little above the reference (35 %), or through it by 0.2 .. 1 % (a crossing limit: netting / route)
-        intent = { type: 'limit', side: 'sell', amount: usd(), price: at(Math.random() < 0.35 ? frac(20, 100) : -frac(20, 100)), lifetime: gtd(5, 20) };
+        intent = { type: 'limit', side: 'sell', amount: usd(), price: at(Math.random() < 0.35 ? frac(20, 100) : -cross()), lifetime: gtd(5, 20) };
         break;
       case 'limitBuy':
-        intent = { type: 'limit', side: 'buy', amount: usd(), price: at(Math.random() < 0.35 ? -frac(20, 100) : frac(20, 100)), lifetime: gtd(5, 20) };
+        intent = { type: 'limit', side: 'buy', amount: usd(), price: at(Math.random() < 0.35 ? -frac(20, 100) : cross()), lifetime: gtd(5, 20) };
         break;
       case 'ioc':
-        intent = { type: 'ioc', side: s, amount: usd(3, 10), price: at(s === 'buy' ? frac(30, 100) : -frac(30, 100)) };
+        intent = { type: 'ioc', side: s, amount: usd(3, 10), price: at(s === 'buy' ? cross() : -cross()) };
         break;
       case 'market':
-        intent = { type: 'market', side: s, amount: usd(3, 10) };
+        intent = { type: 'market', side: s, amount: usd(3, 10), slippageBps: BigInt(B.marketBps) };
         break;
       case 'dutch':
         intent = s === 'sell'
-          ? { type: 'dutch', side: 'sell', amount: usd(), price: at(frac(150, 250)), priceEnd: at(-frac(20, 60)), duration: { seconds: BigInt(randInt(300, 900)) } }
-          : { type: 'dutch', side: 'buy', amount: usd(), price: at(-frac(150, 250)), priceEnd: at(frac(20, 60)), duration: { seconds: BigInt(randInt(300, 900)) } };
+          ? { type: 'dutch', side: 'sell', amount: usd(), price: at(frac(...B.dutchStartBps)), priceEnd: at(-frac(...B.dutchEndBps)), duration: { seconds: BigInt(randInt(300, 900)) } }
+          : { type: 'dutch', side: 'buy', amount: usd(), price: at(-frac(...B.dutchStartBps)), priceEnd: at(frac(...B.dutchEndBps)), duration: { seconds: BigInt(randInt(300, 900)) } };
         break;
       case 'twap': {
         const amount = usd(6, 12);
@@ -528,19 +542,19 @@ export class Trader {
       }
       case 'stop':
         // a stop near the market: armed by the rate the KAS books imply (two KAS-book fills) or by a resting pair order filled at or beyond it
-        intent = { type: 'stopMarket', side: s, amount: usd(), stop: at(s === 'sell' ? -frac(8, 40) : frac(8, 40)), expiry: { kind: 'gtdUnix', atUnixSeconds: clock.unixSeconds + 6n * 3600n } };
+        intent = { type: 'stopMarket', side: s, amount: usd(), stop: at(s === 'sell' ? -frac(8, 40) : frac(8, 40)), slipBps: B.stopBps, expiry: { kind: 'gtdUnix', atUnixSeconds: clock.unixSeconds + 6n * 3600n } };
         break;
       case 'trailing': {
         const gap = bps(R, 30) > 0n ? bps(R, 30) : 1n;
         const step = bps(R, 10) > 0n ? bps(R, 10) : 1n;
         intent = {
-          type: 'trailingStop', side: s, amount: usd(), stop: s === 'sell' ? R - gap : R + gap, trail: { step, gap, wait: 600n, expectedUpdates: 10 },
+          type: 'trailingStop', side: s, amount: usd(), stop: s === 'sell' ? R - gap : R + gap, trail: { step, gap, wait: 600n, expectedUpdates: 10 }, slipBps: B.stopBps,
           expiry: { kind: 'gtdUnix', atUnixSeconds: clock.unixSeconds + 6n * 3600n },
         };
         break;
       }
       case 'oco':
-        intent = { type: 'oco', side: s, amount: usd(), takeProfit: at(s === 'sell' ? frac(60, 150) : -frac(60, 150)), stop: at(s === 'sell' ? -frac(10, 50) : frac(10, 50)) };
+        intent = { type: 'oco', side: s, amount: usd(), takeProfit: at(s === 'sell' ? frac(60, 150) : -frac(60, 150)), stop: at(s === 'sell' ? -frac(10, 50) : frac(10, 50)), slipBps: B.stopBps };
         break;
       case 'ifdBuy':
         intent = { type: 'ifd', side: 'buy', amount: usd(), entry: { price: at(-frac(5, 40)) }, exit: { takeProfit: at(frac(30, 80)) } };
@@ -555,19 +569,19 @@ export class Trader {
         break;
       case 'fok':
         // all or nothing through the touch (netting / route / inventory in one transaction)
-        intent = { type: 'fok', side: s, amount: usd(2, 6), price: at(s === 'buy' ? frac(30, 80) : -frac(30, 80)) };
+        intent = { type: 'fok', side: s, amount: usd(2, 6), price: at(s === 'buy' ? cross() : -cross()) };
         break;
       case 'streaming':
         // quote-and-execute from the reference the user saw, 0.5 % tolerance
-        intent = { type: 'streaming', side: s, amount: usd(2, 6), displayedPrice: R, toleranceBps: 50n };
+        intent = { type: 'streaming', side: s, amount: usd(2, 6), displayedPrice: R, toleranceBps: BigInt(B.streamingBps) };
         break;
       case 'close':
         // a market sell of some of the A the wallet holds (refused by the planner when it holds none)
-        intent = { type: 'close', amount: usd(2, 5) };
+        intent = { type: 'close', amount: usd(2, 5), slippageBps: BigInt(B.marketBps) };
         break;
       case 'stopLimit': {
         const stop = at(s === 'sell' ? -frac(8, 40) : frac(8, 40));
-        const limit = s === 'sell' ? stop - bps(stop, 100) : stop + bps(stop, 100);
+        const limit = s === 'sell' ? stop - bps(stop, B.stopLimitBps) : stop + bps(stop, B.stopLimitBps);
         intent = { type: 'stopLimit', side: s, amount: usd(), stop, limit: limit < 1n ? 1n : limit, expiry: { kind: 'gtdUnix', atUnixSeconds: clock.unixSeconds + 6n * 3600n } };
         break;
       }
@@ -576,19 +590,22 @@ export class Trader {
         break;
       case 'ifo':
         intent = s === 'buy'
-          ? { type: 'ifo', side: 'buy', amount: usd(), entry: { price: at(-frac(5, 40)) }, exit: { takeProfit: at(frac(40, 90)), stop: at(-frac(15, 45)) } }
-          : { type: 'ifo', side: 'sell', amount: usd(), entry: { price: at(frac(5, 40)) }, exit: { takeProfit: at(-frac(40, 90)), stop: at(frac(15, 45)) } };
+          ? { type: 'ifo', side: 'buy', amount: usd(), entry: { price: at(-frac(5, 40)) }, exit: { takeProfit: at(frac(40, 90)), stop: at(-frac(15, 45)), slipBps: B.stopBps } }
+          : { type: 'ifo', side: 'sell', amount: usd(), entry: { price: at(frac(5, 40)) }, exit: { takeProfit: at(-frac(40, 90)), stop: at(frac(15, 45)), slipBps: B.stopBps } };
         break;
       case 'ifoStopEntry':
         // breakout entry armed by pair trigger evidence: buy stop above the market, sell stop below
-        intent = s === 'buy'
-          ? { type: 'ifo', side: 'buy', amount: usd(), entry: { stop: at(frac(10, 35)), price: at(frac(70, 110)) }, exit: { takeProfit: at(frac(160, 220)), stop: at(-frac(20, 60)) } }
-          : { type: 'ifo', side: 'sell', amount: usd(), entry: { stop: at(-frac(10, 35)), price: at(-frac(70, 110)) }, exit: { takeProfit: at(-frac(160, 220)), stop: at(frac(20, 60)) } };
+        {
+          const off = frac(10, 35);
+          intent = s === 'buy'
+            ? { type: 'ifo', side: 'buy', amount: usd(), entry: { stop: at(off), price: at(off + B.entryBandBps) }, exit: { takeProfit: at(frac(160, 220)), stop: at(-frac(20, 60)), slipBps: B.stopBps } }
+            : { type: 'ifo', side: 'sell', amount: usd(), entry: { stop: at(-off), price: at(-off - B.entryBandBps) }, exit: { takeProfit: at(-frac(160, 220)), stop: at(frac(20, 60)), slipBps: B.stopBps } };
+        }
         break;
       case 'repeatIfo':
         intent = s === 'buy'
-          ? { type: 'repeatIfo', side: 'buy', amount: usd(3, 8), entry: { price: at(-frac(5, 25)) }, exit: { takeProfit: at(frac(20, 45)), stop: at(-frac(120, 200)) }, repeat: { count: 2n } }
-          : { type: 'repeatIfo', side: 'sell', amount: usd(3, 8), entry: { price: at(frac(5, 25)) }, exit: { takeProfit: at(-frac(20, 45)), stop: at(frac(120, 200)) }, repeat: { count: 2n } };
+          ? { type: 'repeatIfo', side: 'buy', amount: usd(3, 8), entry: { price: at(-frac(5, 25)) }, exit: { takeProfit: at(frac(20, 45)), stop: at(-frac(120, 200)), slipBps: B.stopBps }, repeat: { count: 2n } }
+          : { type: 'repeatIfo', side: 'sell', amount: usd(3, 8), entry: { price: at(frac(5, 25)) }, exit: { takeProfit: at(-frac(20, 45)), stop: at(frac(120, 200)), slipBps: B.stopBps }, repeat: { count: 2n } };
         break;
       case 'cancel': {
         const mine = this.w.actionable(await myOrders(env, this.w.pk, baseM).catch(() => [] as OrderView[])).filter((v) => isPair(v) && v.current && v.state_known && !v.parent);
