@@ -1,6 +1,6 @@
 # Token programs: profiles, onboarding, review
 
-Status: 2026-10-13. Normative for this repository. KOB pairs with every KCC-20 launchpad (the KRON launchpad, Kasseal,
+Status: 2026-10-14. Normative for this repository. KOB pairs with every KCC-20 launchpad (the KRON launchpad, Kasseal,
 KaspaCom, KForge, future ones), and each brings a token program or a build of a shared one. Supporting a new program must be a
 small, well-defined, reviewable step. This document defines the **token-program profile** (everything KOB needs to know about
 one program, declared in one place), the onboarding path (`kob registry add-program`), the generic genesis rule for launchpad
@@ -164,6 +164,7 @@ notes:
 | KaspaCom 0.2.5 | `kcc20-kaspacom-0-2-5` | Data: profile with `carrier_floor` 0.5 KAS (measured), `router_intents: false`, `minters: unknown` (minter lanes behind the extension commitment). Stays `pending-review` (finding K-1) |
 | KRON launchpad | `kron-2433`, `kron-2732` | The KRON codec family (orders and builders, reviewed B2); both programs are data on it |
 | KForge (testnet-10) | `KForgeToken1785` | Code: the delivery id_type 0 builds of the KRON order kinds and id_type 0 holder spends (a token-level signature in the signature column). Data: profile with holder 0, slots 1 / 3, `networks: [testnet-10]`, `pending-review`; see below |
+| KaspaRocket (testnet-10) | `KaspaRocketToken11458` | Data only: the published public-mint `KCC20` actor at 10 / 10 slots (a derived source and its build), profile with slots 10 / 10, `networks: [testnet-10]`, `pending-review`; see below |
 
 ### KForge
 
@@ -195,10 +196,35 @@ observed on testnet-10; `observed-transfer.json`, a real transfer).
   over every program already run on it in the engine, with the shapes that fit 1 / 3 slots); a testnet-10 registry entry
   (`templates`, `delivery_id_type: 0`) for an operator who lists its tokens.
 
+### KaspaRocket
+
+`crates/kob-tests/tests/program_kasparockettoken11458.rs`, fixtures in `contracts/third-party/kasparocket/` (`observed.json`, a real
+launch: genesis, the supply's move into the launch's pool, the pool's genesis, the first buy; `UPSTREAM.md`).
+
+* The launchpad's token UTXOs carry the `KCC20` actor of the published `KCC20PublicMint` app built with 9 delegates and 10
+  token outputs, not the standalone `kcc20.sil` its repository publishes (that source gives other bytes, and the compiler its CI
+  pins cannot parse it). `KCC20.public-mint.10x10.sil` (seven lines apart from the vendored fixture, the seventh being the
+  program's own suffix length that argentc embeds) compiled by `scripts/build-contracts.sh` reproduces the observed 11,458-byte
+  redeem scripts byte for byte. Derived from that artifact (`kob registry add-program ... --slots 10/10 --network testnet-10`):
+  the KCC-1 actor-type handle cut (prefix 34 B with the `gen__kcc20_template` context, state 112 B, suffix 11,312 B), template
+  hash `3d689d6273b7631e69f672d5ca744cb266ae997b04974196439858675cc04fe1`, witness `kcc20-transfer`.
+* KOB's builder (`SigPlan::TokenLeader`) reproduces both observed token inputs byte for byte (a key holder's transfer and the
+  pool's covenant-id custody paying a buyer); the observed transactions rebuild to their ids and every input, the pool's
+  included, runs in the engine; the launch genesis verifies as a fixed supply (one token output, the pool being its own
+  covenant).
+* Measured in the engine: custody (scheme 4) released only with an input of its covenant, holders (scheme 0) only with their
+  key's signature, exact conservation, 10 token inputs and 10 token outputs, a carrier floor of 1 sompi. The KCC-20 order
+  kinds serve it unchanged (an ask placed and cancelled in the engine); a transaction spending KOB orders still carries at most
+  8 token inputs of a token (`MAX_TOK_IN_KCC20`). One token input carries the 11,458-byte script: a 3-in / 3-out transfer
+  is about 3.6 times the size and fee of the same transfer on `KCC20Ref`, a 10 / 10 one about 118 KB.
+* Still open before `reviewed`: the borrow paths (`PATH_BORROW`, as in the reviewed public-mint program) and `minters`
+  (`unknown`: KaspaRocket's genesis has no minter, but the public-mint companions of the app are not declared for this build);
+  the order suites and their ablation with the program; a testnet-10 registry entry for an operator who lists its tokens.
+
 ## 7. Invariants
 
 * Template hashes of the programs are their profiles' `template_hash`; the order kinds stay pinned in `artifacts::PINNED`. A
   profile change that changes a hash is a protocol change.
-* `record_code` values are persisted by every indexer: never reuse or renumber one (1..=9 are taken).
+* `record_code` values are persisted by every indexer: never reuse or renumber one (1..=11 are taken).
 * The `TemplateId` variant order is the order kinds of the KCC-20 family, the KCC-20-codec programs, the KRON order kinds,
   the KRON-codec programs, each in table order: append new programs at the end of their codec group.

@@ -182,6 +182,24 @@ export const TOKEN_PROGRAMS = [
     routerIntents: false,
     review: 'pending-review',
   },
+  {
+    name: 'KaspaRocketToken11458',
+    registryId: 'kasparocket-token-11458',
+    codec: 'kcc20',
+    templateHash: '3d689d6273b7631e69f672d5ca744cb266ae997b04974196439858675cc04fe1',
+    prefixLen: 34,
+    stateLen: 112,
+    suffixLen: 11312,
+    maxTokenInputs: 10,
+    maxTokenOutputs: 10,
+    custodyOwner: 4,
+    holderOwner: 0,
+    carrierFloor: '1',
+    witnessScheme: 'kcc20-transfer',
+    trailingPushes: [],
+    routerIntents: false,
+    review: 'pending-review',
+  },
 ] as const;
 
 type Row = (typeof TOKEN_PROGRAMS)[number];

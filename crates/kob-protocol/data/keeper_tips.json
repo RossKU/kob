@@ -47,6 +47,12 @@
     "updateFee": "955800",
     "keeperTip": "2000000"
   },
+  "KaspaRocketToken11458": {
+    "refundFee": "3442400",
+    "refundTip": "6900000",
+    "updateFee": "1059400",
+    "keeperTip": "2200000"
+  },
   "KronToken2433": {
     "refundFee": "1519600",
     "refundTip": "3100000",

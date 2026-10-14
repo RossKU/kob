@@ -213,6 +213,50 @@
       "networks": [
         "testnet-10"
       ]
+    },
+    {
+      "name": "KaspaRocketToken11458",
+      "variant": "KaspaRocketToken11458",
+      "registry_id": "kasparocket-token-11458",
+      "record_code": 11,
+      "summary": "KaspaRocket launchpad token program (testnet-10): the KCC20 actor of the reference KCC20PublicMint app built with 10 / 10 token slots (9 delegates), 11,458-byte redeem script, 34-byte prefix with the gen__kcc20_template context field.",
+      "source": {
+        "kind": "silverc-artifact",
+        "path": "contracts/artifacts/KaspaRocketToken11458.json",
+        "context_fields": [
+          "gen__kcc20_template"
+        ]
+      },
+      "template_hash": "3d689d6273b7631e69f672d5ca744cb266ae997b04974196439858675cc04fe1",
+      "layout": {
+        "prefix_len": 34,
+        "state_len": 112,
+        "suffix_len": 11312
+      },
+      "codec": "kcc20",
+      "owners": {
+        "custody": 4,
+        "holder": 0
+      },
+      "slots": {
+        "inputs": 10,
+        "outputs": 10
+      },
+      "carrier_floor": 1,
+      "witness": {
+        "scheme": "kcc20-transfer"
+      },
+      "router_intents": false,
+      "genesis": {
+        "minters": "unknown"
+      },
+      "review": {
+        "status": "pending-review",
+        "basis": "derived by kob registry add-program from the build that reproduces the launchpad's on-chain redeem scripts; measured in the engine (crates/kob-tests/tests/program_kasparockettoken11458.rs): the witness reproduced byte for byte, real launch transactions run, custody 4 and holder 0, slots 10 / 10, carrier floor 1 sompi, exact conservation; the borrow paths, minters and the order suites not reviewed"
+      },
+      "networks": [
+        "testnet-10"
+      ]
     }
   ]
 }
