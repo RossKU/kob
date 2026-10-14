@@ -3,7 +3,7 @@ import type { Services } from '../../app/services';
 import type { HeldTokenUtxo } from '../../data/token-tracker';
 import type { TokenInfo } from '../../kob/registry';
 import type { TokenUtxo } from '../../kob/types';
-import { loadFreeBalances } from './balances-data';
+import { combineFreeBalances, loadFreeBalances } from './balances-data';
 
 const ME = '11'.repeat(32);
 const LISTED = '70'.repeat(32);
@@ -54,5 +54,22 @@ describe('loadFreeBalances', () => {
     const r = await loadFreeBalances(services(new Error('indexer down'), []), ME, tokens, { anyToken: true });
     expect(r.freeTokens.map((u) => u.covenantId)).toEqual([LISTED]);
     expect(r.errors).toEqual([{ source: 'tokens', message: 'indexer down' }]);
+  });
+});
+
+describe('combineFreeBalances', () => {
+  it('a KForge holding of the key (id_type 0, a token outside the registry) is free, not "not spendable by KOB" (TN10 2026-10-15 B-15)', async () => {
+    const KF = '38'.repeat(32);
+    const kforge: HeldTokenUtxo = {
+      transactionId: '4e'.repeat(32), index: 0, amount: '90000000', covenantId: KF, program: 'KForgeToken1785',
+      state: { amount: '5000000', owner: ME, id_type: 0, is_minter: 0 },
+    } as unknown as HeldTokenUtxo;
+    const free = await loadFreeBalances(services([kforge], []), ME, [], { anyToken: true });
+    const c = combineFreeBalances(free, { maker: ME, liveOrders: [], strays: [] });
+    const row = c.tokens.find((t) => t.token === KF)!;
+    expect([row.free, row.notSpendable]).toEqual([5_000_000n, 0n]);
+    // without the program the same state reads as another key-held type (the KRON default holder is address presence)
+    const bare = combineFreeBalances({ ...free, programOf: undefined } as never, { maker: ME, liveOrders: [], strays: [] });
+    expect(bare.tokens.find((t) => t.token === KF)!.notSpendable).toBe(5_000_000n);
   });
 });

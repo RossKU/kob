@@ -54,6 +54,22 @@ export async function loadFreeBalances(s: Services, pubkey: Hex, tokens: readonl
   return { kasFree, freeTokens: [...freeTokens, ...held.map(({ program: _p, ...u }) => u)], programs, programOf, errors };
 }
 
+/**
+ * The combined balances of one key from its free balances (`loadFreeBalances`), live orders and strays, with the program of every token read: a
+ * KRON program's holder owner decides which key-held states are spendable (KForge: id_type 0), so without the programs a KForge holding reads
+ * "not spendable by KOB" (TN10 2026-10-15 B-15: My orders' Balances did not pass them).
+ */
+export function combineFreeBalances(free: FreeBalances, o: { maker: Hex; liveOrders: (OrderView | OrderSnapshot)[]; strays: StrayView[] }): CombinedBalances {
+  return combineBalances({
+    maker: o.maker,
+    freeKas: free.kasFree ?? 0n,
+    freeTokens: free.freeTokens,
+    liveOrders: o.liveOrders,
+    strays: o.strays,
+    ...(free.programOf ? { programs: free.programOf } : {}),
+  });
+}
+
 export interface BalancesData {
   combined: CombinedBalances;
   /** the wallet's spendable KAS could be read (false: the node failed, the KAS figure is not real) */
@@ -92,14 +108,7 @@ export async function loadBalances(s: Services, pubkey: Hex, o: BalancesInput): 
   const extra = (o.extraSnapshots ?? []).filter((x) => !known.has(x.covenantId));
   const scoped = o.token ? strays.filter((x) => x.token === o.token) : strays;
   return {
-    combined: combineBalances({
-      maker: pubkey,
-      freeKas: free.kasFree ?? 0n,
-      freeTokens: free.freeTokens,
-      liveOrders: [...liveOrders, ...extra],
-      strays: scoped,
-      ...(free.programOf ? { programs: free.programOf } : {}),
-    }),
+    combined: combineFreeBalances(free, { maker: pubkey, liveOrders: [...liveOrders, ...extra], strays: scoped }),
     kasKnown: free.kasFree !== null,
     ordersKnown: orders !== null,
     errors: [...free.errors, ...errors],

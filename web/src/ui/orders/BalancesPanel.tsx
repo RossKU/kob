@@ -7,8 +7,8 @@ import type { Hex } from '../../kob/types';
 import { Amount, Banner, Button, ErrorBanner, KeyValueList, Loading, Section, Table, TableMessage, unitsFraction, useAsync } from '../kit';
 import { formatUnits } from '../../kob/units';
 import { tokenLabel } from '../market/token-model';
-import { loadFreeBalances } from './balances-data';
-import { balanceColumnFractions, combineBalances, unreviewedProgram } from './balances-model';
+import { combineFreeBalances, loadFreeBalances } from './balances-data';
+import { balanceColumnFractions, unreviewedProgram } from './balances-model';
 import { mergeableCounts } from './merge-model';
 import type { OrdersData } from './orders-data';
 
@@ -35,7 +35,7 @@ export function BalancesPanel(props: {
   const combined = useMemo(() => {
     if (!free.data) return null;
     const live = props.data.views.filter((v) => v.status === 'open' || v.status === 'partial');
-    return combineBalances({ maker: props.pubkey, freeKas: free.data.kasFree ?? 0n, freeTokens: free.data.freeTokens, liveOrders: [...live, ...props.data.snapshots], strays: props.data.strays });
+    return combineFreeBalances(free.data, { maker: props.pubkey, liveOrders: [...live, ...props.data.snapshots], strays: props.data.strays });
   }, [free.data, props.data, props.pubkey]);
 
   // free token UTXOs a merge may take, per token (two or more)
