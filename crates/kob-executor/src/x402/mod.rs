@@ -159,6 +159,8 @@ pub fn prepare_with(
             submit_retries: cfg.submit_retries,
             rebroadcasts: cfg.rebroadcasts,
             reorg_watch_daa: cfg.reorg_watch_daa,
+            failed_retention: Duration::from_secs(cfg.failed_retention_seconds),
+            max_failed_entries: cfg.max_failed_entries,
             kill_switch_file: cfg.kill_switch_file.clone().map(Into::into),
             pause_file: cfg.pause_file.clone(),
             ..Default::default()

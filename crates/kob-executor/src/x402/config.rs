@@ -31,6 +31,8 @@
 //!   "nodeTimeoutMs": 5000,
 //!   "reorgWatchDaa": 36000,
 //!   "reconcileIntervalSeconds": 30,
+//!   "failedRetentionSeconds": 604800,
+//!   "maxFailedEntries": 10000,
 //!   "maxConcurrentSettles": 64,
 //!   "maxConcurrentInvoicePays": 16,
 //!   "maxConnections": 1024,
@@ -277,6 +279,11 @@ pub struct X402Config {
     pub node_timeout_ms: u64,
     pub reorg_watch_daa: u64,
     pub reconcile_interval_seconds: u64,
+    /// Failed ledger entries are forgotten this long after they failed (default 7 days). They protect nothing (their
+    /// outpoints are released) and anonymous invoice payments can create them.
+    pub failed_retention_seconds: u64,
+    /// At most this many failed ledger entries are kept (default 10,000); the oldest are forgotten first.
+    pub max_failed_entries: usize,
     pub max_concurrent_settles: usize,
     /// Most settlements one merchant may have in flight: the global cap alone lets one merchant hold every slot for
     /// `settleWaitMs` each with transactions that conflict with each other. Clamped to `maxConcurrentSettles`.
@@ -349,6 +356,8 @@ impl Default for X402Config {
             node_timeout_ms: 5_000,
             reorg_watch_daa: 36_000,
             reconcile_interval_seconds: 30,
+            failed_retention_seconds: 7 * 24 * 3_600,
+            max_failed_entries: 10_000,
             max_concurrent_settles: 64,
             max_settles_per_merchant: 8,
             max_concurrent_invoice_pays: 16,
@@ -527,6 +536,7 @@ impl X402Config {
             ("pollIntervalMs", self.poll_interval_ms),
             ("nodeTimeoutMs", self.node_timeout_ms),
             ("reconcileIntervalSeconds", self.reconcile_interval_seconds),
+            ("failedRetentionSeconds", self.failed_retention_seconds),
         ] {
             if v == 0 {
                 return err(format!("{name} must be a positive finite value"));
@@ -537,6 +547,9 @@ impl X402Config {
         }
         if self.max_body_bytes == 0 || self.max_body_bytes > 64 * 1024 * 1024 {
             return err("maxBodyBytes must be within 1..=67108864");
+        }
+        if self.max_failed_entries == 0 {
+            return err("maxFailedEntries must be positive");
         }
         if self.max_concurrent_settles == 0 || self.max_connections == 0 {
             return err("maxConcurrentSettles and maxConnections must be positive");
@@ -977,6 +990,8 @@ mod tests {
             r#","ledger":"""#,
             r#","submitRetries":11"#,
             r#","rebroadcasts":11"#,
+            r#","failedRetentionSeconds":0"#,
+            r#","maxFailedEntries":0"#,
         ] {
             let cfg = X402Config::from_json(&doc(bad)).unwrap();
             assert!(cfg.build().is_err(), "{bad}");

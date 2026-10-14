@@ -119,6 +119,10 @@ pub struct FacilitatorConfig {
     pub rebroadcasts: u32,
     /// How long `/supported` trusts its last probe of the node (one probe at a time; `0` probes on every call).
     pub health_cache: Duration,
+    /// Failed ledger entries are forgotten this long after they failed (they protect nothing: their outpoints are released).
+    pub failed_retention: Duration,
+    /// At most this many failed ledger entries are kept; the oldest go first (anonymous invoice payments can create them).
+    pub max_failed_entries: usize,
 }
 
 impl Default for FacilitatorConfig {
@@ -134,6 +138,8 @@ impl Default for FacilitatorConfig {
             submit_retries: 2,
             rebroadcasts: 2,
             health_cache: Duration::from_secs(2),
+            failed_retention: Duration::from_secs(7 * 24 * 3_600),
+            max_failed_entries: 10_000,
         }
     }
 }
@@ -230,6 +236,8 @@ metrics! {
     /// Settlements of a transaction `/verify` had verified and that was found already accepted (the merchant or the payer
     /// broadcast it before `/settle`).
     settle_found_accepted,
+    /// Failed ledger entries forgotten (`failedRetentionSeconds`, `maxFailedEntries`).
+    ledger_failed_pruned,
 }
 
 impl Metrics {
@@ -368,6 +376,8 @@ pub struct ReconcileReport {
     pub expiries_driven: usize,
     /// Broadcast entries the node did not know for `ambiguous_grace` and of which no output was on chain: now `ambiguous`.
     pub stale_broadcast: usize,
+    /// Failed entries forgotten (retention).
+    pub pruned_failed: usize,
     pub errors: usize,
 }
 
@@ -1166,6 +1176,28 @@ impl Facilitator {
         if let Err(e) = self.ledger.transition(txid, State::Failed, Some(reason.to_string()), self.clock.now_ms()) {
             eprintln!("x402: cannot mark {txid} failed: {e}");
         }
+        // the count bound holds at once (anonymous invoice payments fail entries between two reconciles)
+        if self.ledger.failed_count() > self.config.max_failed_entries {
+            self.prune_failed();
+        }
+    }
+
+    /// Forgets failed entries past `failed_retention` or beyond `max_failed_entries` (oldest first); an intent whose expiry
+    /// is still driven is kept. Returns how many were forgotten.
+    fn prune_failed(&self) -> usize {
+        let keep = |e: &Entry| e.intent.as_ref().and_then(|r| r.expiry.as_ref()).is_some_and(|x| x.outcome.is_none());
+        let now = self.clock.now_ms();
+        let max_age = self.config.failed_retention.as_millis().min(u64::MAX as u128) as u64;
+        match self.ledger.prune_failed(now, max_age, self.config.max_failed_entries, keep) {
+            Ok(n) => {
+                self.metrics.ledger_failed_pruned.fetch_add(n as u64, Ordering::Relaxed);
+                n
+            }
+            Err(e) => {
+                eprintln!("x402: cannot prune failed ledger entries: {e}");
+                0
+            }
+        }
     }
 
     fn order_conflict(&self, e: &Entry, spent: Vec<Outpoint>) -> X402Error {
@@ -1620,6 +1652,7 @@ impl Facilitator {
             }
         }
         rep.extra_payments_seen += self.reconcile_invoices();
+        rep.pruned_failed = self.prune_failed();
         rep
     }
 

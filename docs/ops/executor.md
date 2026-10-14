@@ -266,6 +266,13 @@ holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignor
   `invalid_kaspa_exact_utxo` as before: an accepted transaction is public, and the payload alone (its embedded UTXOs, the
   authorization's key) proves nothing about inputs that are gone. Metric `kob_x402_settle_found_accepted`. A merchant that
   broadcasts payments itself calls `/verify` first.
+* **Failed ledger entries** (a rejected or conflicting broadcast, an expiry before the broadcast; anonymous invoice
+  payments can cause them) protect nothing: their outpoints are released. They are forgotten `failedRetentionSeconds`
+  after they failed (default 604800, 7 days) and beyond the newest `maxFailedEntries` (default 10000), except an intent
+  whose expiry is still driven. A forgotten entry leaves the invoice status's `attempts`; an identical retry of its
+  transaction is verified and claimed again as for any failed one. Each is forgotten durably by a `{"forget":{...}}` ledger
+  record (the next compaction drops both; a build before 2026-10-15 does not read such a ledger). Metric
+  `kob_x402_ledger_failed_pruned`; the reconcile report counts `pruned_failed`.
 * **Minimum finality.** A settlement is answered at the stronger of the offer's finality and `minFinality` (default
   `confirmed`: `confirmationsDaa` DAA, 100 by default, about 10 s, past the accepting block). `"minFinality": "accepted"`
   answers at depth 0, a few seconds sooner, while a payer can still race a conflicting spend through another node; raise

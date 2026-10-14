@@ -1684,3 +1684,42 @@ fn a_payment_verified_then_broadcast_by_the_merchant_settles_once_accepted() {
     f.chain.mine(0);
     assert_eq!(diag(&f.fac.settle("shop", &req3)), "invalid_kaspa_exact_utxo");
 }
+
+/// F7: failed entries are bounded in number at once (whatever fails them: anonymous invoice payments too) and forgotten
+/// after the retention by the reconcile; live entries stay.
+#[test]
+fn failed_entries_are_bounded_and_forgotten_after_the_retention() {
+    let fx = Fixture::new();
+    let config = super::facilitator::FacilitatorConfig {
+        failed_retention: Duration::from_secs(3_600),
+        max_failed_entries: 3,
+        ..fx.fac.config.clone()
+    };
+    let fac = Facilitator::new(fx.fac.policy.clone(), fx.chain.clone(), fx.clock.clone(), fx.ledger.clone(), config)
+        .with_verifier(fx.verifier.clone());
+    fx.chain.set_submit_failure(Some(SubmitError::Rejected("fee too low".into())));
+    let mut t = START_MS;
+    for n in 0..5u8 {
+        let a = fx.fund(500_000_000);
+        let (req, _) = fx.payment(&[a], 100_000_000, &format!("payment-id-failed-{n:04}"), 20 + n);
+        assert_eq!(diag(&fac.settle("shop", &req)), "invalid_kaspa_exact_transaction");
+        t += 1_000;
+        fx.clock.set(t);
+        assert!(fx.ledger.failed_count() <= 3);
+    }
+    assert_eq!(fx.ledger.failed_count(), 3);
+    assert_eq!(fac.metrics.ledger_failed_pruned.load(Ordering::Relaxed), 2);
+    fx.chain.set_submit_failure(None);
+    let a = fx.fund(500_000_000);
+    let (req, tx) = fx.payment(&[a], 100_000_000, ID1, 7);
+    fac.set_settle_wait(Duration::from_millis(30));
+    assert_eq!(diag(&fac.settle("shop", &req)), "settlement_pending");
+    t += 30 * 60_000;
+    fx.clock.set(t);
+    assert_eq!(fac.reconcile().pruned_failed, 0, "within the retention");
+    t += 31 * 60_000;
+    fx.clock.set(t);
+    assert_eq!(fac.reconcile().pruned_failed, 3);
+    assert_eq!(fx.ledger.failed_count(), 0);
+    assert_eq!(fx.ledger.get(&txid_hex(&tx)).unwrap().state, State::Broadcast, "live entries stay");
+}

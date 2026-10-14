@@ -28,8 +28,12 @@
 //!   `kaspa_payment_identifier_conflict` while the bound transaction is not failed (the cached outcome of one
 //!   transaction is never the answer for another); after it failed the new transaction is settled on its own;
 //! * `failed` releases the outpoints; `broadcast`, `accepted` and `ambiguous` never do.
+//!
+//! Failed entries are kept for a bounded time and number ([`Ledger::prune_failed`]): anonymous invoice payments can create
+//! them, and they protect nothing (their outpoints are released). A pruned entry is forgotten with a `{"forget":{...}}`
+//! record; the next compaction drops both.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -294,6 +298,7 @@ struct IdBinding {
     txid: String,
 }
 
+#[derive(Default)]
 struct Inner {
     file: Option<File>,
     /// Set when a failed append could not be cut back off the file: nothing more is appended until a restart
@@ -302,6 +307,12 @@ struct Inner {
     entries: HashMap<String, Entry>,
     by_outpoint: HashMap<Outpoint, String>,
     ids: HashMap<String, IdBinding>,
+    /// Invoice id -> the transaction ids of its payments (an invoice's lookup never scans the ledger).
+    by_invoice: HashMap<String, BTreeSet<String>>,
+    /// Failed entries by (last update, transaction id): the retention order of [`Ledger::prune_failed`].
+    failed: BTreeSet<(u64, String)>,
+    /// Records in the log file since it was last written whole (compaction trigger).
+    lines: usize,
 }
 
 /// The replay ledger.
@@ -314,6 +325,17 @@ pub struct Ledger {
 
 impl Inner {
     fn index(&mut self, e: &Entry) {
+        if let Some(prev) = self.entries.get(&e.txid) {
+            if prev.state == State::Failed {
+                self.failed.remove(&(prev.updated_ms, prev.txid.clone()));
+            }
+        }
+        if e.state == State::Failed {
+            self.failed.insert((e.updated_ms, e.txid.clone()));
+        }
+        if let Some(inv) = &e.invoice {
+            self.by_invoice.entry(inv.clone()).or_default().insert(e.txid.clone());
+        }
         // consumed outpoints follow the state: failed releases, everything else reserves
         for o in e.consumed_outpoints() {
             if e.state == State::Failed {
@@ -342,12 +364,36 @@ impl Inner {
         self.entries.insert(e.txid.clone(), e.clone());
     }
 
-    fn append(&mut self, e: &Entry) -> Result<(), LedgerError> {
+    /// Drops an entry from every index (a pruned failed entry).
+    fn forget(&mut self, txid: &str) {
+        let Some(e) = self.entries.remove(txid) else { return };
+        self.failed.remove(&(e.updated_ms, e.txid.clone()));
+        for o in e.consumed_outpoints() {
+            if self.by_outpoint.get(&o).is_some_and(|t| t == txid) {
+                self.by_outpoint.remove(&o);
+            }
+        }
+        if let Some(id) = &e.payment_id {
+            if self.ids.get(id).is_some_and(|b| b.txid == txid) {
+                self.ids.remove(id);
+            }
+        }
+        if let Some(inv) = &e.invoice {
+            if let Some(set) = self.by_invoice.get_mut(inv) {
+                set.remove(txid);
+                if set.is_empty() {
+                    self.by_invoice.remove(inv);
+                }
+            }
+        }
+    }
+
+    fn append_value(&mut self, v: &Value) -> Result<(), LedgerError> {
         if let Some(why) = &self.broken {
             return Err(LedgerError::Io(format!("the ledger is not writable until a restart: {why}")));
         }
         if let Some(f) = self.file.as_mut() {
-            let mut line = serde_json::to_string(&serde_json::json!({ "entry": e })).map_err(|x| LedgerError::Io(x.to_string()))?;
+            let mut line = serde_json::to_string(v).map_err(|x| LedgerError::Io(x.to_string()))?;
             line.push('\n');
             if let Err(fail) = append_record(f, line.as_bytes()) {
                 if !fail.undone {
@@ -355,8 +401,13 @@ impl Inner {
                 }
                 return Err(LedgerError::Io(fail.error.to_string()));
             }
+            self.lines += 1;
         }
         Ok(())
+    }
+
+    fn append(&mut self, e: &Entry) -> Result<(), LedgerError> {
+        self.append_value(&serde_json::json!({ "entry": e }))
     }
 
     fn persist_and_index(&mut self, e: Entry) -> Result<Entry, LedgerError> {
@@ -410,17 +461,7 @@ pub struct NewEntry {
 impl Ledger {
     /// A volatile ledger (tests, `--ledger :memory:`).
     pub fn in_memory() -> Ledger {
-        Ledger {
-            inner: Mutex::new(Inner {
-                file: None,
-                broken: None,
-                entries: HashMap::new(),
-                by_outpoint: HashMap::new(),
-                ids: HashMap::new(),
-            }),
-            path: None,
-            _lock: None,
-        }
+        Ledger { inner: Mutex::new(Inner::default()), path: None, _lock: None }
     }
 
     /// Opens (creating if needed) the log at `path`, replays it and compacts it when it carries much
@@ -436,7 +477,7 @@ impl Ledger {
         if path.exists() {
             File::open(&path)?.read_to_end(&mut raw)?;
         }
-        let mut inner = Inner { file: None, broken: None, entries: HashMap::new(), by_outpoint: HashMap::new(), ids: HashMap::new() };
+        let mut inner = Inner::default();
         let mut good_len = 0usize; // bytes of complete, valid records
         let mut records = 0usize;
         let mut pos = 0usize;
@@ -450,8 +491,11 @@ impl Ledger {
             let line = &raw[pos..end];
             let is_last = end + usize::from(terminated) >= raw.len();
             match parse_line(line) {
-                Ok(Some(e)) => {
-                    inner.index(&e);
+                Ok(Some(rec)) => {
+                    match rec {
+                        Record::Entry(e) => inner.index(&e),
+                        Record::Forget(txid) => inner.forget(&txid),
+                    }
                     records += 1;
                     good_len = end + usize::from(terminated);
                     if !terminated {
@@ -485,6 +529,7 @@ impl Ledger {
         file.sync_all()?;
         let live = inner.entries.len();
         inner.file = Some(file);
+        inner.lines = records;
         let ledger = Ledger { inner: Mutex::new(inner), path: Some(path), _lock: Some(lock) };
         if records > 2 * live + 1_000 {
             ledger.compact()?;
@@ -494,8 +539,12 @@ impl Ledger {
 
     /// Rewrites the log with one line per entry (atomic rename).
     pub fn compact(&self) -> Result<(), LedgerError> {
-        let Some(path) = &self.path else { return Ok(()) };
         let mut g = self.lock();
+        self.compact_locked(&mut g)
+    }
+
+    fn compact_locked(&self, g: &mut Inner) -> Result<(), LedgerError> {
+        let Some(path) = &self.path else { return Ok(()) };
         let tmp = path.with_extension("compact.tmp");
         {
             let mut f = File::create(&tmp)?;
@@ -515,7 +564,49 @@ impl Ledger {
         use std::io::Seek;
         file.seek(std::io::SeekFrom::End(0))?;
         g.file = Some(file);
+        g.lines = g.entries.len();
         Ok(())
+    }
+
+    /// Forgets failed entries updated before `now_ms - max_age_ms`, then the oldest ones beyond `max_count`, except those
+    /// `keep` names (the facilitator still acts on them: an intent whose expiry has not ended). A failed entry protects
+    /// nothing (its outpoints are released; an identical retry of its transaction is verified and claimed again as if it were
+    /// new), so it is only kept for diagnostics and the invoice status. Each pruned entry is forgotten durably (a `forget`
+    /// record); the log is compacted when it holds much superseded history. Returns how many were pruned.
+    pub fn prune_failed(
+        &self,
+        now_ms: u64,
+        max_age_ms: u64,
+        max_count: usize,
+        keep: impl Fn(&Entry) -> bool,
+    ) -> Result<usize, LedgerError> {
+        let mut g = self.lock();
+        let cutoff = now_ms.saturating_sub(max_age_ms);
+        let mut excess = g.failed.len().saturating_sub(max_count);
+        let mut doomed = Vec::new();
+        for (at, txid) in g.failed.iter() {
+            if *at >= cutoff && excess == 0 {
+                break;
+            }
+            if g.entries.get(txid).is_some_and(&keep) {
+                continue;
+            }
+            doomed.push(txid.clone());
+            excess = excess.saturating_sub(1);
+        }
+        for txid in &doomed {
+            g.append_value(&serde_json::json!({ "forget": { "txid": txid, "atMs": now_ms } }))?;
+            g.forget(txid);
+        }
+        if !doomed.is_empty() && g.lines > 2 * g.entries.len() + 1_000 {
+            self.compact_locked(&mut g)?;
+        }
+        Ok(doomed.len())
+    }
+
+    /// Number of failed entries held.
+    pub fn failed_count(&self) -> usize {
+        self.lock().failed.len()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -717,10 +808,11 @@ impl Ledger {
         g.persist_and_index(e)
     }
 
-    /// Entries of an invoice, oldest first.
+    /// Entries of an invoice, oldest first (from the invoice index: no scan of the ledger).
     pub fn entries_of_invoice(&self, invoice: &str) -> Vec<Entry> {
         let g = self.lock();
-        let mut v: Vec<Entry> = g.entries.values().filter(|e| e.invoice.as_deref() == Some(invoice)).cloned().collect();
+        let Some(txids) = g.by_invoice.get(invoice) else { return vec![] };
+        let mut v: Vec<Entry> = txids.iter().filter_map(|t| g.entries.get(t)).cloned().collect();
         v.sort_by(|a, b| (a.created_ms, &a.txid).cmp(&(b.created_ms, &b.txid)));
         v
     }
@@ -747,6 +839,14 @@ impl Ledger {
     }
 }
 
+/// One line of the log.
+enum Record {
+    /// The complete entry of a transaction (the last one of a transaction id wins).
+    Entry(Box<Entry>),
+    /// A pruned failed entry: forgotten.
+    Forget(String),
+}
+
 /// Why a ledger line does not replay.
 enum LineError {
     /// Not a record (torn, zero-filled or corrupt).
@@ -755,9 +855,24 @@ enum LineError {
     Unsupported(String),
 }
 
-fn parse_line(line: &[u8]) -> Result<Option<Entry>, LineError> {
+fn parse_line(line: &[u8]) -> Result<Option<Record>, LineError> {
     if line.iter().all(|b| b.is_ascii_whitespace()) {
         return Ok(None);
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Forget {
+        forget: ForgetBody,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    struct ForgetBody {
+        txid: String,
+        #[allow(dead_code)]
+        at_ms: u64,
+    }
+    if let Ok(f) = serde_json::from_slice::<Forget>(line) {
+        return Ok(Some(Record::Forget(f.forget.txid)));
     }
     #[derive(Deserialize)]
     struct Rec {
@@ -768,7 +883,7 @@ fn parse_line(line: &[u8]) -> Result<Option<Entry>, LineError> {
         Ok(r) if r.entry.kind.starts_with("intent") && r.entry.intent.is_none() => {
             Err(LineError::Unsupported(format!("entry {} of kind {} has no intent record", r.entry.txid, r.entry.kind)))
         }
-        Ok(r) => Ok(Some(r.entry)),
+        Ok(r) => Ok(Some(Record::Entry(Box::new(r.entry)))),
         Err(e) => {
             // a complete record whose intent record does not decode: written for an earlier router template
             let intent_fails = serde_json::from_slice::<Value>(line).ok().is_some_and(|v| {
@@ -1129,5 +1244,75 @@ mod tests {
         let l = Ledger::open(&p).unwrap();
         assert_eq!(l.len(), 2);
         assert!(l.is_consumed(&op(0xa0, 0)));
+    }
+
+    fn failed_at(l: &Ledger, tx: u8, at_ms: u64) {
+        l.claim(new_entry(tx, tx, None, vec![op(tx, 0)])).unwrap();
+        l.transition(&hex(&[tx; 32]), State::Failed, Some("rejected".into()), at_ms).unwrap();
+    }
+
+    /// Failed entries are kept for a bounded time and number: the old ones and the oldest beyond the count are forgotten,
+    /// durably (a restart does not bring them back); live entries and those the caller keeps (an intent whose expiry is
+    /// still driven) never.
+    #[test]
+    fn failed_entries_are_pruned_by_age_and_count_and_stay_pruned_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("ledger.jsonl");
+        let l = Ledger::open(&p).unwrap();
+        for tx in 1..=7u8 {
+            failed_at(&l, tx, 1_000 * tx as u64);
+        }
+        l.claim(new_entry(8, 8, Some(ID1), vec![op(8, 0)])).unwrap();
+        assert_eq!(l.failed_count(), 7);
+        let kept = hex(&[1; 32]);
+        let keep = |e: &Entry| e.txid == kept;
+
+        // by age: failed before 3_500 (2 and 3; 1 is kept by the caller)
+        assert_eq!(l.prune_failed(5_500, 2_000, 100, keep).unwrap(), 2);
+        assert!(l.get(&hex(&[2; 32])).is_none() && l.get(&hex(&[3; 32])).is_none());
+        assert!(l.get(&kept).is_some());
+        // by count: at most 3 failed entries: the oldest that are not kept go (4 and 5)
+        assert_eq!(l.prune_failed(5_500, 1_000_000, 3, keep).unwrap(), 2);
+        assert_eq!(l.failed_count(), 3);
+        for tx in [1u8, 6, 7, 8] {
+            assert!(l.get(&hex(&[tx; 32])).is_some(), "{tx}");
+        }
+        drop(l);
+        let l = Ledger::open(&p).unwrap();
+        assert_eq!(l.len(), 4, "the pruning is durable");
+        assert_eq!(l.failed_count(), 3);
+        assert!(l.get(&hex(&[4; 32])).is_none());
+        assert!(l.is_consumed(&op(8, 0)));
+        assert!(l.payment_id_binding(ID1).is_some());
+        // a pruned transaction can be claimed again (as an identical retry of a failed one could before)
+        assert!(matches!(l.claim(new_entry(4, 4, None, vec![op(4, 0)])).unwrap(), Claim::New(_)));
+        drop(l);
+        let l = Ledger::open(&p).unwrap();
+        assert_eq!(l.get(&hex(&[4; 32])).unwrap().state, State::Pending, "an entry after its forget record replays");
+        // compaction drops the forget records with the entries
+        l.compact().unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(!text.contains("\"forget\""));
+        assert_eq!(text.lines().count(), l.len());
+    }
+
+    /// The invoice index answers an invoice's entries without a scan and follows claims, transitions and pruning.
+    #[test]
+    fn the_invoice_index_follows_the_entries() {
+        let l = Ledger::in_memory();
+        for (tx, inv) in [(1u8, "aa"), (2, "bb"), (3, "aa")] {
+            let mut n = new_entry(tx, tx, None, vec![op(tx, 0)]);
+            n.invoice = Some(inv.into());
+            n.now_ms = tx as u64;
+            l.claim(n).unwrap();
+        }
+        let txids = |inv: &str| l.entries_of_invoice(inv).into_iter().map(|e| e.txid).collect::<Vec<_>>();
+        assert_eq!(txids("aa"), vec![hex(&[1; 32]), hex(&[3; 32])]);
+        assert_eq!(txids("bb"), vec![hex(&[2; 32])]);
+        assert!(txids("cc").is_empty());
+        l.transition(&hex(&[1; 32]), State::Failed, None, 10).unwrap();
+        assert_eq!(l.entries_of_invoice("aa")[0].state, State::Failed);
+        assert_eq!(l.prune_failed(10, 0, 0, |_| false).unwrap(), 1);
+        assert_eq!(txids("aa"), vec![hex(&[3; 32])]);
     }
 }

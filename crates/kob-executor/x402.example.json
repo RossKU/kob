@@ -35,6 +35,8 @@
   "nodeTimeoutMs": 5000,
   "reorgWatchDaa": 36000,
   "reconcileIntervalSeconds": 30,
+  "failedRetentionSeconds": 604800,
+  "maxFailedEntries": 10000,
   "maxConcurrentSettles": 64,
   "maxConcurrentInvoicePays": 16,
   "maxConnections": 1024,
