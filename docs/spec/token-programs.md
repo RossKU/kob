@@ -217,6 +217,10 @@ launch: genesis, the supply's move into the launch's pool, the pool's genesis, t
   kinds serve it unchanged (an ask placed and cancelled in the engine); a transaction spending KOB orders still carries at most
   8 token inputs of a token (`MAX_TOK_IN_KCC20`). One token input carries the 11,458-byte script: a 3-in / 3-out transfer
   is about 3.6 times the size and fee of the same transfer on `KCC20Ref`, a 10 / 10 one about 118 KB.
+* On testnet-10 (`contracts/third-party/kasparocket/UPSTREAM.md`): a token of the program issued with
+  `kob token issue --program kasparocket-testnet` (testnet-10 only, the plan says it is a third-party program), a plain
+  transfer, a `KobAsk` placed, partly taken by another key and cancelled with the CLI; its token inputs carry the launchpad's
+  own prefix and suffix.
 * Still open before `reviewed`: the borrow paths (`PATH_BORROW`, as in the reviewed public-mint program) and `minters`
   (`unknown`: KaspaRocket's genesis has no minter, but the public-mint companions of the app are not declared for this build);
   the order suites and their ablation with the program; a testnet-10 registry entry for an operator who lists its tokens.

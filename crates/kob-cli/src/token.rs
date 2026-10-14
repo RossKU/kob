@@ -45,6 +45,8 @@ SUPPLY
                         slots (registry kcc20-ref-public-mint). Its holders carry the app's context field; the genesis
                         holds only KCC20 holders (no PublicMint, no TokenSeed): a fixed supply. 8x8-prototype: the
                         8 / 8 slot variant, a prototype that is not KOB's issuance (the plan warns).
+                        kasparocket-testnet: KaspaRocket's program (the public-mint actor at 10 / 10 slots,
+                        KaspaRocketToken11458, pending-review), testnet-10 only, to test KOB against that launchpad.
 
 TRANSACTION
   --carrier             sompi on each token output (default 1000000000 = 10 KAS)
@@ -487,6 +489,28 @@ fn issue(args: &[String]) -> Result<(), String> {
     if txid != plan.txid().to_string() {
         eprintln!("warning: the node reported transaction id {txid}, expected {}", plan.txid());
     }
+    // the genesis outputs the funding key holds (scheme 0): recorded so that `kob send`, `kob place` and `kob merge` can
+    // spend them before any transaction reveals their states to the indexer (genesis outputs have no leader)
+    let funder = a.fund[0].owner;
+    let token: [u8; 32] = plan.covenant_id.as_bytes();
+    let own: Vec<([u8; 32], u32, kob_protocol::state::TokenState)> = plan
+        .states
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.owner_scheme == 0 && s.owner == funder)
+        .map(|(i, s)| {
+            let k = kob_protocol::state::Kcc20State {
+                amount: s.amount as i64,
+                owner: s.owner,
+                owner_scheme: s.owner_scheme,
+                borrow_scheme: s.borrow_scheme,
+                borrow_guard: s.borrow_guard,
+                extension_commitment: s.extension_commitment,
+            };
+            (token, i as u32, kob_protocol::state::TokenState::Kcc20(k))
+        })
+        .collect();
+    crate::recent::record_outputs(&a.network, &funder, own, &plan.txid().to_string());
     Ok(())
 }
 

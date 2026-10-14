@@ -208,6 +208,9 @@ fn to_spec(r: &IssueRequest, fee_rate: u64) -> R<IssueSpec> {
     }
     if let Some(p) = &r.program {
         spec.program = IssueProgram::parse(p).map_err(|e| e.to_string())?;
+        if spec.program.is_testnet_third_party() {
+            return Err("KaspaRocket's testnet-10 program is issued from the CLI only (`--program kasparocket-testnet`)".into());
+        }
         if spec.program.is_prototype() {
             return Err("the 8 / 8 program is a prototype and is not issued from the app: use 3x3 (the default) or public-mint".into());
         }

@@ -125,7 +125,12 @@ pub fn own_token_outputs(built: &BuiltTx, owner: &[u8; 32]) -> Vec<([u8; 32], u3
 
 /// Record the key's own token outputs of a submitted transaction. Never fails: a problem is a warning.
 pub fn record(network: &str, owner: &[u8; 32], built: &BuiltTx, txid: &str) {
-    let outs = own_token_outputs(built, owner);
+    record_outputs(network, owner, own_token_outputs(built, owner), txid);
+}
+
+/// Record token outputs `(token, output index, state)` of a submitted transaction that `owner` holds (a genesis's own
+/// holders, whose states no later transaction has revealed yet). Never fails: a problem is a warning.
+pub fn record_outputs(network: &str, owner: &[u8; 32], outs: Vec<([u8; 32], u32, TokenState)>, txid: &str) {
     if outs.is_empty() {
         return;
     }
@@ -208,5 +213,18 @@ mod tests {
         assert_eq!((*cov, st.clone()), (TOKEN, TokenState::Kron(KronState::pubkey(8, pk(1)))));
         assert!(built.tx.outputs[*index as usize].covenant.is_some());
         assert!(own_token_outputs(&built, &pk(9)).is_empty());
+    }
+
+    /// A genesis's own holders (recorded by `kob token issue`, which has no leader whose next states reveal them) are
+    /// candidates of their owner and token on that network only.
+    #[test]
+    fn recorded_genesis_outputs_are_candidates() {
+        use kob_protocol::state::Kcc20State;
+        const TOKEN: [u8; 32] = [0x99; 32];
+        let st = TokenState::Kcc20(Kcc20State::p2pk(1_000, pk(1), [0; 32]));
+        record_outputs("testnet-10", &pk(1), vec![(TOKEN, 0, st.clone())], &to_hex(&[0x42; 32]));
+        assert_eq!(candidates("testnet-10", &pk(1), &TOKEN), vec![(st, [0x42; 32], 0)]);
+        assert!(candidates("mainnet", &pk(1), &TOKEN).is_empty());
+        assert!(candidates("testnet-10", &pk(2), &TOKEN).is_empty());
     }
 }

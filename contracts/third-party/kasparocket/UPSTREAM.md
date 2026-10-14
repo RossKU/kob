@@ -37,3 +37,21 @@ KCC-20 codec program (custody 4, holder 0, witness `kcc20-transfer`): the KCC-20
 transaction spending KOB orders carries at most 8 token inputs of one token (the orders' stray scan,
 `MAX_TOK_IN_KCC20`); the program's own limit is 10. Measured facts and the review items with a test:
 `crates/kob-tests/tests/program_kasparockettoken11458.rs`; what is still open: `docs/spec/token-programs.md` section 6.
+
+## KOB on testnet-10 with this program (2026-10-14)
+
+A token of KOB's own issued with this program and traded with KOB's CLI (`kob-cli` of this branch, node
+`ws://65.108.107.30:18210`, a local indexer from `--start sink`, a local testnet-10 registry that lists the token and,
+for that test only, marks the template `reviewed` so that the trading commands take it; the profile stays `pending-review`).
+The token input of every transaction below carries the same 34-byte prefix (context `ff3ae732...`) and the same 11,312-byte
+suffix as the launchpad's own tokens: template hash `3d689d6273b7631e69f672d5ca744cb266ae997b04974196439858675cc04fe1`.
+Every transaction was accepted.
+
+| Step | Command | Transaction |
+|---|---|---|
+| Genesis of KOBKR (1,000,000.000, 3 decimals, one holder: the issuing key), covenant `9983ad3b4ebdc6be73ca7c44f52e356d6579a53a29f9cc88d7b1fa0a2e99ff93` | `kob token issue --program kasparocket-testnet --network testnet-10` | `cc72831da9adef2c9e7bb5ba0eee9bd2ca143a6f6581f89e722d210cccc3f65c` |
+| 100 KAS to the second key | `kob send KAS` | `41f32f5854d3e683be3a546d07dc4bf23facccf2cc83f293da086c325e6ab8c9` |
+| Plain transfer: 1,000 KOBKR to the second key (the genesis output, a scheme-0 leader with its signature) | `kob send KOBKR` | `69d25b8c8c58e89b454a8fe87b121ddb325fbaebbbce6d79c1dfa48c390cc8ad` |
+| `KobAsk` placed: 1,000 KOBKR at 0.05 KAS, minimum fill 100 (order `131c2c8c7aa45277e59fd7b5893b25c31a52073058a5a787d828f4f62eb9a874`) | `kob place limit --side sell` | `99ba137823dc22ef6486fa36bc90b4510739e1fcadfca4dc1b80597667b647a0` |
+| Partial fill: the second key buys 300 KOBKR (15 KAS to the maker, 700 left in custody) | `kob take --amount 300KOBKR` | `e7b2d9f23e7c2e69055c36ca1602a2e679194f18afc3ba69181829d3a6146ea1` |
+| Cancel: the 700 KOBKR custody back to the maker | `kob cancel` | `3dfbf0936033ae9135f4615dba2be6aa55b647408c1c93e3efa0e0a4011d057f` |

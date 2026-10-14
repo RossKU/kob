@@ -90,6 +90,9 @@ pub const REGISTRY_TEMPLATE_ID: &str = "kcc20-ref-3x3";
 pub const REGISTRY_TEMPLATE_ID_PUBLIC_MINT: &str = "kcc20-ref-public-mint";
 /// Id of the 8 / 8 prototype in `registry/tokens.json` ([`IssueProgram::Ref8x8Prototype`]).
 pub const REGISTRY_TEMPLATE_ID_8X8_PROTOTYPE: &str = "kcc20-ref-8x8";
+/// Template id of KaspaRocket's program in a testnet-10 registry ([`IssueProgram::KaspaRocketTestnet`]; the profile's
+/// `registry_id`).
+pub const REGISTRY_TEMPLATE_ID_KASPAROCKET: &str = "kasparocket-token-11458";
 
 const SIGOP_SCRIPT_UNITS: u64 = 100_000;
 const FREE_UNITS: u64 = 9_999;
@@ -100,6 +103,8 @@ const PROTOTYPE_8X8_JSON: &str = include_str!("../../../contracts/artifacts/KCC2
 const PROTOTYPE_8X8_NAME: &str = "KCC20Ref_8x8";
 const PUBLIC_MINT_JSON: &str = include_str!("../../../contracts/artifacts/KCC20PublicMint.json");
 const PUBLIC_MINT_NAME: &str = "KCC20PublicMint";
+const KASPAROCKET_JSON: &str = include_str!("../../../contracts/artifacts/KaspaRocketToken11458.json");
+const KASPAROCKET_NAME: &str = "KaspaRocketToken11458";
 
 /// The token program an issuance runs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -114,6 +119,10 @@ pub enum IssueProgram {
     /// Prototype, not KOB's issuance: the reference program with 8 / 8 slot limits (`KCC20Ref_8x8`, registry
     /// `kcc20-ref-8x8`). Only the CLI issues it, when it is named `8x8-prototype`, and every plan carries a warning.
     Ref8x8Prototype,
+    /// Third-party, testnet-10 only, not KOB's issuance: the token program of the KaspaRocket launchpad, the public-mint
+    /// `KCC20` actor at 10 / 10 slots (`KaspaRocketToken11458`, `pending-review`; `contracts/third-party/kasparocket`).
+    /// Issued only on testnet-10 and only when named `kasparocket-testnet`, to test KOB against that launchpad's tokens.
+    KaspaRocketTestnet,
 }
 
 impl IssueProgram {
@@ -123,6 +132,7 @@ impl IssueProgram {
             "3x3" | "ref" | "kcc20-ref-3x3" => Ok(IssueProgram::Ref3x3),
             "public-mint" | "kcc20-ref-public-mint" => Ok(IssueProgram::PublicMint),
             "8x8-prototype" => Ok(IssueProgram::Ref8x8Prototype),
+            "kasparocket-testnet" => Ok(IssueProgram::KaspaRocketTestnet),
             "8x8" | "ref-8x8" | "kcc20-ref-8x8" => invalid(
                 "the 8 / 8 program is a prototype, not KOB's issuance: issue 3x3 (the default) or public-mint, or name the \
                  prototype 8x8-prototype",
@@ -136,6 +146,7 @@ impl IssueProgram {
             IssueProgram::Ref3x3 => REGISTRY_TEMPLATE_ID,
             IssueProgram::PublicMint => REGISTRY_TEMPLATE_ID_PUBLIC_MINT,
             IssueProgram::Ref8x8Prototype => REGISTRY_TEMPLATE_ID_8X8_PROTOTYPE,
+            IssueProgram::KaspaRocketTestnet => REGISTRY_TEMPLATE_ID_KASPAROCKET,
         }
     }
     /// Token inputs / outputs per transfer of the program.
@@ -143,6 +154,7 @@ impl IssueProgram {
         match self {
             IssueProgram::Ref3x3 | IssueProgram::PublicMint => (ISSUE_MAX_TOKEN_INPUTS, ISSUE_MAX_TOKEN_OUTPUTS),
             IssueProgram::Ref8x8Prototype => (8, 8),
+            IssueProgram::KaspaRocketTestnet => (10, 10),
         }
     }
     /// The pinned template of the program.
@@ -151,11 +163,16 @@ impl IssueProgram {
             IssueProgram::Ref3x3 => crate::artifacts::TemplateId::Kcc20Ref,
             IssueProgram::PublicMint => crate::artifacts::TemplateId::Kcc20PublicMint,
             IssueProgram::Ref8x8Prototype => crate::artifacts::TemplateId::Kcc20Ref8x8,
+            IssueProgram::KaspaRocketTestnet => crate::artifacts::TemplateId::KaspaRocketToken11458,
         }
     }
     /// True for a prototype program (not KOB's issuance).
     pub fn is_prototype(self) -> bool {
         self == IssueProgram::Ref8x8Prototype
+    }
+    /// True for a third-party program issued only on testnet-10 (KaspaRocket's).
+    pub fn is_testnet_third_party(self) -> bool {
+        self == IssueProgram::KaspaRocketTestnet
     }
 }
 
@@ -322,6 +339,7 @@ impl Program {
             IssueProgram::Ref3x3 => (ARTIFACT_JSON, ARTIFACT_NAME),
             IssueProgram::PublicMint => (PUBLIC_MINT_JSON, PUBLIC_MINT_NAME),
             IssueProgram::Ref8x8Prototype => (PROTOTYPE_8X8_JSON, PROTOTYPE_8X8_NAME),
+            IssueProgram::KaspaRocketTestnet => (KASPAROCKET_JSON, KASPAROCKET_NAME),
         };
         let artifact = parse_artifact(json).map_err(|e| IssueError::Artifact(e.to_string()))?;
         let (contract_name, contract) = artifact
@@ -338,7 +356,7 @@ impl Program {
             return Err(IssueError::Artifact("template hash does not match the artifact".into()));
         }
         // the actor-type handle of the public-mint build: the context push joins the prefix
-        let ctx_len = if which == IssueProgram::PublicMint { 33 } else { 0 };
+        let ctx_len = if matches!(which, IssueProgram::PublicMint | IssueProgram::KaspaRocketTestnet) { 33 } else { 0 };
         let context = [&[0x20u8][..], &sil_hash[..]].concat();
         if ctx_len > 0 && sil_state.get(..ctx_len) != Some(context.as_slice()) {
             return Err(IssueError::Artifact("the context field is not 0x20 followed by the program's Sil template hash".into()));
@@ -530,6 +548,20 @@ impl IssueSpec {
         }
         if self.holders.len() > MAX_GENESIS_OUTPUTS {
             return invalid(format!("at most {MAX_GENESIS_OUTPUTS} genesis outputs (got {})", self.holders.len()));
+        }
+        if self.program.is_testnet_third_party() && self.network != "testnet-10" {
+            return invalid(format!(
+                "{} is a third-party program issued on testnet-10 only (network `{}`)",
+                self.program.template_id().name(),
+                self.network
+            ));
+        }
+        if self.program.is_testnet_third_party() {
+            warnings.push(
+                "KaspaRocketToken11458 is KaspaRocket's testnet-10 program (pending-review), not KOB's issuance: issued to test KOB \
+                 against that launchpad's tokens"
+                    .into(),
+            );
         }
         if self.program.is_prototype() {
             warnings.push(
@@ -1195,7 +1227,8 @@ mod tests {
 
     #[test]
     fn scheme4_selftest_passes_for_every_issuable_program() {
-        for which in [IssueProgram::Ref3x3, IssueProgram::PublicMint, IssueProgram::Ref8x8Prototype] {
+        for which in [IssueProgram::Ref3x3, IssueProgram::PublicMint, IssueProgram::Ref8x8Prototype, IssueProgram::KaspaRocketTestnet]
+        {
             verify_scheme4_enabled(&Program::of(which).unwrap()).unwrap();
         }
     }
@@ -1241,6 +1274,32 @@ mod tests {
         assert_eq!(g, plan.covenant_id);
         assert_eq!(plan.tx.version, 1);
         assert!(plan.tx.inputs[0].compute_commit.compute_budget().unwrap() > 0);
+    }
+
+    /// KaspaRocket's testnet-10 program (the public-mint actor at 10 / 10): named only as `kasparocket-testnet`, refused off
+    /// testnet-10, its genesis holders are instances of the pinned `KaspaRocketToken11458` and every plan says what it is.
+    #[test]
+    fn kasparocket_testnet_genesis_holds_holders_of_its_program() {
+        use crate::artifacts::{token_template, TemplateId};
+        assert_eq!(IssueProgram::parse("kasparocket-testnet").unwrap(), IssueProgram::KaspaRocketTestnet);
+        let p = Program::of(IssueProgram::KaspaRocketTestnet).unwrap();
+        let t = token_template(TemplateId::KaspaRocketToken11458);
+        assert_eq!((p.prefix.as_slice(), p.suffix.as_slice(), p.template_hash), (t.prefix.as_slice(), t.suffix.as_slice(), t.hash));
+        assert_eq!((p.prefix.len(), p.suffix.len(), p.max_token_inputs, p.max_token_outputs), (34, 11_312, 10, 10));
+        assert_eq!(p.registry_template_id, REGISTRY_TEMPLATE_ID_KASPAROCKET);
+        let (sk, pk) = key();
+        let mut s = spec(vec![Holder::new(pk, 0, 1000)], 1000);
+        s.program = IssueProgram::KaspaRocketTestnet;
+        s.network = "mainnet".into();
+        assert!(build_genesis(&s).unwrap_err().to_string().contains("testnet-10 only"));
+        s.network = "testnet-10".into();
+        let mut plan = build_genesis(&s).unwrap();
+        plan.sign(&sk).unwrap();
+        assert!(plan.verify().unwrap().scripts_executed);
+        let redeem = plan.program.redeem(&plan.states[0]);
+        assert_eq!(t.state_of(&redeem), Some(plan.states[0].encode().as_slice()));
+        assert_eq!(plan.registry_entry()["template_id"], "kasparocket-token-11458");
+        assert!(plan.warnings.iter().any(|w| w.contains("KaspaRocket")));
     }
 
     /// The published public-mint build: the program is the actor-type handle (the context push ends the prefix), every
