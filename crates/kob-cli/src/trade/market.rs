@@ -139,14 +139,16 @@ impl TokenMarket {
         let one = match distinct.len() {
             0 => {
                 return Err(format!(
-                    "{}: its extension commitment is unknown: no registry entry, the indexer names none, and this wallet holds none                      of the token to take it from (an order pins it: only tokens of that commitment fill it)",
+                    "{}: its extension commitment is unknown: no registry entry, the indexer names none, and this wallet holds none \
+                     of the token to take it from (an order pins it: only tokens of that commitment fill it)",
                     self.name()
                 ))
             }
             1 => *distinct.first().expect("one"),
             n => {
                 return Err(format!(
-                    "{}: your token UTXOs of it (checked on the node) have {n} different extension commitments and no source names                      the token's: refused (check the token's genesis)",
+                    "{}: your token UTXOs of it (checked on the node) have {n} different extension commitments and no source names \
+                     the token's: refused (check the token's genesis)",
                     self.name()
                 ))
             }
@@ -573,9 +575,9 @@ mod tests {
             .unwrap_err()
             .contains("needs its extension commitment"));
         let e = m.clone().take_ext_from_holdings(&[]).unwrap_err();
-        assert!(e.contains("holds none"), "{e}");
+        assert!(e.contains("holds none of the token to take it from"), "{e}");
         let e = m.clone().take_ext_from_holdings(&[[0; 32], [0xee; 32]]).unwrap_err();
-        assert!(e.contains("2 different extension commitments"), "{e}");
+        assert!(e.contains("2 different extension commitments and no source names the token's: refused"), "{e}");
         let i = m.take_ext_from_holdings(&[[0; 32], [0; 32]]).unwrap().unwrap();
         assert_eq!((m.ext, m.ext_source, i.code), ([0; 32], ExtSource::Holdings, "TOKEN_EXTENSION_FROM_HOLDINGS"));
         // a commitment a source names is left to the caller's comparison
