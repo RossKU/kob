@@ -65,3 +65,25 @@ export function combineBalances(o: {
   const tokens = [...by.values()].filter((b) => b.free > 0n || b.notSpendable > 0n || b.escrowed > 0n || b.strays > 0n || b.kasLocked > 0n || b.orderCount > 0).sort((a, b) => (a.token < b.token ? -1 : a.token > b.token ? 1 : 0));
   return { tokens, kas: kasBalanceSummary(o.freeKas, tokens), lostStrayTokens: lost };
 }
+
+/**
+ * The fixed fraction digits of the balance columns (the finest amount of each column, so the decimal points line up), over the tokens whose
+ * decimals are known (`decimalsOf` returns `undefined` for a token without a registry entry). A token of unknown decimals is shown in base
+ * units with no fraction: padding its base units to another token's fraction (`500,000.00000000`) would read as whole tokens.
+ */
+export function balanceColumnFractions(
+  tokens: readonly TokenBalance[],
+  decimalsOf: (token: Hex) => number | undefined,
+  unitsFraction: (value: bigint, decimals: number) => number,
+): { free: number; escrowed: number; strays: number; kas: number } {
+  const out = { free: 0, escrowed: 0, strays: 0, kas: 0 };
+  for (const b of tokens) {
+    out.kas = Math.max(out.kas, unitsFraction(b.kasLocked, 8));
+    const d = decimalsOf(b.token);
+    if (d === undefined) continue;
+    out.free = Math.max(out.free, unitsFraction(b.free, d));
+    out.escrowed = Math.max(out.escrowed, unitsFraction(b.escrowed, d));
+    out.strays = Math.max(out.strays, unitsFraction(b.strays, d));
+  }
+  return out;
+}

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { StrayView } from '../../data/indexer-types';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, TOKEN, orderViewOf, placeGolden, strayFor, tokenUtxo, tokenUtxoView } from '../../testing/chain-fixtures';
-import { combineBalances, strayTotals, unreviewedProgram } from './balances-model';
+import { balanceColumnFractions, combineBalances, strayTotals, unreviewedProgram } from './balances-model';
+import { unitsFraction } from '../kit';
 
 const kob = loadKobNode();
 const placed = placeGolden(kob, 'create.ask');
@@ -74,5 +75,20 @@ describe('combineBalances: tokens KOB cannot spend', () => {
     const u = { transactionId: '81'.repeat(32), index: 0, amount: '1000', covenantId: kron, state: { amount: '12', owner: MAKER.pk, id_type: 0, is_minter: 0 } };
     const c = combineBalances({ maker: MAKER.pk, freeKas: 0n, freeTokens: [u], liveOrders: [], strays: [] });
     expect(c.tokens).toMatchObject([{ token: kron, free: 0n, notSpendable: 12n }]);
+  });
+});
+
+describe('balanceColumnFractions', () => {
+  const row = (token: string, free: bigint) => ({ token, free, notSpendable: 0n, escrowed: 0n, strays: 0n, kasLocked: 0n, kasEscrow: 0n, kasCarriers: 0n, orderCount: 0 });
+  it('aligns the known tokens and leaves a token of unknown decimals out (TN10 2026-10-15: 500,000 base units shown as 500,000.00000000)', () => {
+    const tusd = 'aa'.repeat(32);
+    const unknown = 'bb'.repeat(32);
+    const tokens = [row(tusd, 100_296_367n), row(unknown, 500_000n)];
+    const decimals = (t: string) => (t === tusd ? 8 : undefined);
+    expect(balanceColumnFractions(tokens, decimals, unitsFraction).free).toBe(8);
+    // only the unknown token: no fraction at all
+    expect(balanceColumnFractions([row(unknown, 500_001n)], decimals, unitsFraction).free).toBe(0);
+    // a registry token with 0 decimals still counts (0)
+    expect(balanceColumnFractions([row(unknown, 5n)], () => 0, unitsFraction).free).toBe(0);
   });
 });

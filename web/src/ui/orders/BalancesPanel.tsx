@@ -8,7 +8,7 @@ import { Amount, Banner, Button, ErrorBanner, KeyValueList, Loading, Section, Ta
 import { formatUnits } from '../../kob/units';
 import { tokenLabel } from '../market/token-model';
 import { loadFreeBalances } from './balances-data';
-import { combineBalances, unreviewedProgram } from './balances-model';
+import { balanceColumnFractions, combineBalances, unreviewedProgram } from './balances-model';
 import { mergeableCounts } from './merge-model';
 import type { OrdersData } from './orders-data';
 
@@ -45,17 +45,11 @@ export function BalancesPanel(props: {
   );
 
   // fixed decimals per column: the finest amount of the column, so every row shows the same number of decimals (decimal points line up)
-  const cols = useMemo(() => {
-    const out = { free: 0, escrowed: 0, strays: 0, kas: 0 };
-    for (const b of combined?.tokens ?? []) {
-      const d = registry.byCovenantId.get(b.token)?.decimals ?? 0;
-      out.free = Math.max(out.free, unitsFraction(b.free, d));
-      out.escrowed = Math.max(out.escrowed, unitsFraction(b.escrowed, d));
-      out.strays = Math.max(out.strays, unitsFraction(b.strays, d));
-      out.kas = Math.max(out.kas, unitsFraction(b.kasLocked, 8));
-    }
-    return out;
-  }, [combined, registry]);
+  // (a token of unknown decimals, no registry entry, shows its base units with no fraction)
+  const cols = useMemo(
+    () => balanceColumnFractions(combined?.tokens ?? [], (tok) => registry.byCovenantId.get(tok)?.decimals, unitsFraction),
+    [combined, registry],
+  );
 
   return (
     <Section title={t('orders.balances.title')} data-testid="balances-panel" actions={<Button small onClick={free.reload} loading={free.loading && !!free.data}>{t('common.refresh')}</Button>}>
@@ -94,6 +88,9 @@ export function BalancesPanel(props: {
                 combined.tokens.map((b) => {
                   const info = registry.byCovenantId.get(b.token);
                   const d = info?.decimals ?? 0;
+                  // unknown decimals: base units, no fraction padding (see balanceColumnFractions)
+                  const fr = (col: number) => (info ? col : 0);
+                  const baseUnits = info ? null : <span class="small muted" data-testid="balance-base-units"> {t('common.baseUnits')}</span>;
                   const program = info?.program ?? free.data!.programs.get(b.token) ?? null;
                   return (
                     <tr key={b.token} data-testid={`balance-row-${b.token}`}>
@@ -106,15 +103,16 @@ export function BalancesPanel(props: {
                         ) : null}
                       </td>
                       <td class="right">
-                        <Amount kind="token" value={b.free} decimals={d} unit={false} fraction={cols.free} group />
+                        <Amount kind="token" value={b.free} decimals={d} unit={false} fraction={fr(cols.free)} group />
+                        {baseUnits}
                         {b.notSpendable > 0n ? (
                           <div class="small muted" title={t('orders.balances.notSpendableHint')} data-testid="balance-not-spendable">
                             {t('orders.balances.notSpendable', { amount: formatUnits(b.notSpendable, d) })}
                           </div>
                         ) : null}
                       </td>
-                      <td class="right" data-testid="balance-escrowed"><Amount kind="token" value={b.escrowed} decimals={d} unit={false} fraction={cols.escrowed} group /></td>
-                      <td class="right" data-testid="balance-strays"><Amount kind="token" value={b.strays} decimals={d} unit={false} fraction={cols.strays} group /></td>
+                      <td class="right" data-testid="balance-escrowed"><Amount kind="token" value={b.escrowed} decimals={d} unit={false} fraction={fr(cols.escrowed)} group /></td>
+                      <td class="right" data-testid="balance-strays"><Amount kind="token" value={b.strays} decimals={d} unit={false} fraction={fr(cols.strays)} group /></td>
                       <td class="right"><Amount kind="kas" value={b.kasLocked} unit={false} fraction={cols.kas} group /></td>
                       <td class="right">
                         {props.onMergeToken && info && mergeable.has(b.token) ? (
