@@ -20,13 +20,49 @@ export interface TicketEnv {
   refresh(): Promise<PlanEnv | null>;
 }
 
-/** Keeps a PlanEnv for (wallet, token). `enabled` false (no wallet, wrong network, untradable token) stops all requests. */
-export function useTicketEnv(token: TokenInfo, enabled: boolean): TicketEnv {
+/**
+ * Serialises a load: one run at a time; every call made during a run shares ONE follow-up run that starts after it ends, so its result
+ * reflects state read after the call. A feed that fires faster than a load takes never starves the result (each run completes and is shown).
+ */
+export class Serialized<T> {
+  private running: Promise<T> | null = null;
+  private next: Promise<T> | null = null;
+  constructor(private readonly load: () => Promise<T>) {}
+
+  run(): Promise<T> {
+    if (!this.running) return this.start();
+    if (!this.next) {
+      const after = this.running.then(
+        () => undefined,
+        () => undefined,
+      );
+      this.next = after.then(() => {
+        this.next = null;
+        return this.start();
+      });
+    }
+    return this.next;
+  }
+
+  private start(): Promise<T> {
+    const p = this.load();
+    this.running = p;
+    const clear = (): void => {
+      if (this.running === p) this.running = null;
+    };
+    p.then(clear, clear);
+    return p;
+  }
+}
+
+type EnvState = { env: PlanEnv | null; error: string | null; loading: boolean };
+
+/** The shared core of the two environment hooks: `build` re-runs on the interval and on `topics` feed events, serialised (`Serialized`). */
+function useEnv(build: (() => Promise<PlanEnv>) | null, deps: unknown[], topics: string[], matches: (e: { token?: string | null }) => boolean): TicketEnv {
   const services = useServices();
-  const wallet = useWallet();
-  const pubkey = wallet.info?.pubkey ?? null;
-  const [state, setState] = useState<{ env: PlanEnv | null; error: string | null; loading: boolean }>({ env: null, error: null, loading: false });
-  const seq = useRef(0);
+  const [state, setState] = useState<EnvState>({ env: null, error: null, loading: false });
+  // a generation per (deps): a result of an earlier generation (another token, wallet gone) is dropped
+  const gen = useRef(0);
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -35,35 +71,46 @@ export function useTicketEnv(token: TokenInfo, enabled: boolean): TicketEnv {
     };
   }, []);
 
-  const refresh = useCallback(async (): Promise<PlanEnv | null> => {
-    if (!enabled || !pubkey) return null;
-    const id = ++seq.current;
-    setState((s) => ({ ...s, loading: true }));
-    try {
-      const env = await buildPlanEnv(services, { pubkey }, token);
-      if (alive.current && id === seq.current) setState({ env, error: null, loading: false });
-      return env;
-    } catch (e) {
-      if (alive.current && id === seq.current) setState((s) => ({ env: s.env, error: e instanceof Error ? e.message : String(e), loading: false }));
-      return null;
-    }
-  }, [services, pubkey, token.covenantId, enabled]);
+  const runner = useMemo(() => {
+    const g = ++gen.current;
+    if (!build) return null;
+    return new Serialized<PlanEnv | null>(async () => {
+      if (alive.current && g === gen.current) setState((s) => ({ ...s, loading: true }));
+      try {
+        const env = await build();
+        if (alive.current && g === gen.current) setState({ env, error: null, loading: false });
+        return env;
+      } catch (e) {
+        if (alive.current && g === gen.current) setState((s) => ({ env: s.env, error: e instanceof Error ? e.message : String(e), loading: false }));
+        return null;
+      }
+    });
+  }, deps);
+
+  const refresh = useCallback(async (): Promise<PlanEnv | null> => (runner ? runner.run() : null), [runner]);
 
   useEffect(() => {
-    if (!enabled || !pubkey) {
-      seq.current++;
+    if (!runner) {
       setState({ env: null, error: null, loading: false });
       return;
     }
     void refresh();
     const id = setInterval(() => void refresh(), ENV_REFRESH_MS);
     return () => clearInterval(id);
-  }, [refresh, enabled, pubkey]);
+  }, [runner, refresh]);
 
-  // a book change or a poll while the socket is down: the book (FOK / self-trade checks, market prices) is part of the environment
-  useLiveRefresh(services, [`book:${token.covenantId}`], (e) => !e.token || e.token === token.covenantId, () => void refresh());
+  useLiveRefresh(services, topics, matches, () => void refresh());
 
   return { env: state.env, error: state.error, loading: state.loading, refresh };
+}
+
+/** Keeps a PlanEnv for (wallet, token). `enabled` false (no wallet, wrong network, untradable token) stops all requests. */
+export function useTicketEnv(token: TokenInfo, enabled: boolean): TicketEnv {
+  const services = useServices();
+  const pubkey = useWallet().info?.pubkey ?? null;
+  const build = enabled && pubkey ? () => buildPlanEnv(services, { pubkey }, token) : null;
+  // a book change or a poll while the socket is down: the book (FOK / self-trade checks, market prices) is part of the environment
+  return useEnv(build, [services, pubkey, token.covenantId, enabled], [`book:${token.covenantId}`], (e) => !e.token || e.token === token.covenantId);
 }
 
 /**
@@ -72,46 +119,14 @@ export function useTicketEnv(token: TokenInfo, enabled: boolean): TicketEnv {
  */
 export function usePairTicketEnv(base: TokenInfo, quote: TokenInfo, enabled: boolean): TicketEnv {
   const services = useServices();
-  const wallet = useWallet();
-  const pubkey = wallet.info?.pubkey ?? null;
-  const [state, setState] = useState<{ env: PlanEnv | null; error: string | null; loading: boolean }>({ env: null, error: null, loading: false });
-  const seq = useRef(0);
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
-
-  const refresh = useCallback(async (): Promise<PlanEnv | null> => {
-    if (!enabled || !pubkey) return null;
-    const id = ++seq.current;
-    setState((s) => ({ ...s, loading: true }));
-    try {
-      const env = await buildPairPlanEnv(services, { pubkey }, base, quote);
-      if (alive.current && id === seq.current) setState({ env, error: null, loading: false });
-      return env;
-    } catch (e) {
-      if (alive.current && id === seq.current) setState((s) => ({ env: s.env, error: e instanceof Error ? e.message : String(e), loading: false }));
-      return null;
-    }
-  }, [services, pubkey, base.covenantId, quote.covenantId, enabled]);
-
-  useEffect(() => {
-    if (!enabled || !pubkey) {
-      seq.current++;
-      setState({ env: null, error: null, loading: false });
-      return;
-    }
-    void refresh();
-    const id = setInterval(() => void refresh(), ENV_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [refresh, enabled, pubkey]);
-
-  useLiveRefresh(services, [`book:${base.covenantId}`, `book:${quote.covenantId}`], (e) => !e.token || e.token === base.covenantId || e.token === quote.covenantId, () => void refresh());
-
-  return { env: state.env, error: state.error, loading: state.loading, refresh };
+  const pubkey = useWallet().info?.pubkey ?? null;
+  const build = enabled && pubkey ? () => buildPairPlanEnv(services, { pubkey }, base, quote) : null;
+  return useEnv(
+    build,
+    [services, pubkey, base.covenantId, quote.covenantId, enabled],
+    [`book:${base.covenantId}`, `book:${quote.covenantId}`],
+    (e) => !e.token || e.token === base.covenantId || e.token === quote.covenantId,
+  );
 }
 
 export interface TicketPlan {
