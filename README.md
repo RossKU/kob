@@ -7,8 +7,9 @@ tokens) on Kaspa layer 1. The orders are covenants written in
 off-chain custody.
 
 * **Everyone posts limit orders.** An order is one covenant UTXO holding the tokens (sell) or the
-  KAS (buy). The covenant enforces price, quantity, custody, time in force and triggers on chain;
-  only the maker can cancel.
+  KAS (buy): an amount of the base token at a price in the quote token per whole base token,
+  rounded in the maker's favour. The covenant enforces price, quantity, custody, time in force and
+  triggers on chain; only the maker can cancel.
 * **Matchers are permissionless.** Anyone can build a batch transaction that fills crossing
   orders, and anyone can refund an expired one. A matcher earns the crossing spread plus any tips
   the orders offer. There is no protocol fee, no operator key and no admin function in the order
@@ -16,8 +17,8 @@ off-chain custody.
 * **Order types.** Limit (GTC / GTD / day / timed), IOC, FOK, market (bounded IOC auction), stop,
   stop-limit, stop-market, trailing stop, take-profit, OCO, IFD / IFO (with repeat), TWAP / DCA /
   Dutch, cancel-replace, partial fills everywhere. Every type also exists on a token/token pair: a pair order
-  is netted against opposite pair orders or settled through the two KAS books in one transaction. See
-  `docs/spec/order-types.md`.
+  is netted against opposite pair orders or settled through the two KAS books in one transaction; prices,
+  charts and triggers come from the KAS books. See `docs/spec/order-types.md`.
 * **Payments.** A [x402](https://github.com/elldeeone/kaspa-x402) profile for KCC-20 payments and
   a swap-and-pay router (pay a merchant in token B from token A or KAS) built as an Argent app.
 
@@ -25,20 +26,13 @@ off-chain custody.
 
 **Pre-audit. Mainnet launches as a canary: use at your own risk, only funds you can afford to lose.**
 
-* There is no external audit, and none is planned before launch. An internal pre-mainnet audit
-  (`docs/security/AUDIT-2026-10.md`) and an extensive test, mutation (`tools/ablation`) and fuzz suite exist; they are not
-  a substitute. The app shows a visible pre-audit notice. See `SECURITY.md`.
-* Mainnet launches as a canary; testnet-10 remains the network for testing.
-* Token programs (`registry/tokens.json`): the two KRON programs are `reviewed` with conditions (a KRON token is listed
-  after its genesis check and a no-live-minter scan; the registry lists the KRON tokens). KCC-20 token issuance is
-  permissionless: tokens of the standard 3 / 3 reference program and of the reference's published public-mint build are
-  tradable without any listing (both `reviewed` by internal review only). The other KCC-20 programs (the 8 / 8 prototype,
-  KaspaCom's) are `pending-review` and not tradable on mainnet.
-* The KCC-20 token standard is in Last Call, not final. KOB's token programs follow its merged reference program, and
-  KOB issues that program in its standard 3 / 3 configuration; the other slot variants are prototypes
-  (`docs/spec/kcc-conformance.md`).
-* The Argent app build needs two patches to `argentc` that are not upstream (`argent/UPSTREAM.md`).
-  Open questions for the Argent team are in `docs/argent-feedback.md`.
+* No external audit is planned before launch. An internal audit (`docs/security/AUDIT-2026-10.md`) and test,
+  mutation (`tools/ablation`) and fuzz suites exist; they are not a substitute. See `SECURITY.md`.
+* Testnet-10 remains the network for testing.
+* Tokens of the KCC-20 3 / 3 reference program and its public-mint build are tradable without listing, KRON tokens
+  after a genesis check; other programs are `pending-review` (`registry/README.md`, `docs/spec/token-programs.md`).
+* KCC-20 is in Last Call, not final (`docs/spec/kcc-conformance.md`).
+* The Argent build needs two `argentc` patches that are not upstream (`argent/UPSTREAM.md`).
 * Interfaces, encodings and artifact ids can still change.
 
 ## Repository map
