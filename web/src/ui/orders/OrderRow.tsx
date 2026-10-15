@@ -212,7 +212,13 @@ export function OrderRow(props: OrderRowProps) {
           },
           { label: t('orders.startPrice'), value: <PriceCell row={row} token={tk} quote={bToken} value={row.auctionStart} />, 'data-testid': 'order-start-price', show: row.auctionStart !== null },
           { label: t('orders.stopPrice'), value: <PriceCell row={row} token={tk} quote={bToken} value={row.stopPrice} />, 'data-testid': 'order-stop', show: row.stopPrice !== null },
-          { label: t('orders.allIn'), value: <PriceCell row={row} token={tk} value={row.allInPrice} />, 'data-testid': 'order-allin', show: row.allInPrice !== null },
+          // the price with the tip: only when there is a tip (else it repeats the price); an auction's is the worst too, never what was paid
+          {
+            label: t(row.auctionStart !== null ? 'orders.worstAllIn' : 'orders.allIn'),
+            value: <PriceCell row={row} token={tk} value={row.allInPrice} />,
+            'data-testid': 'order-allin',
+            show: row.allInPrice !== null && row.tip > 0n,
+          },
           {
             label: t('orders.auctionNow'),
             value: <PriceCell row={row} token={tk} value={row.auction?.currentPrice ?? null} />,

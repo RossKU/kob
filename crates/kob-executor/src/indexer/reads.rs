@@ -640,6 +640,10 @@ pub struct OrderView {
     pub state_known: bool,
     /// The decoded state of the current UTXO (`{"kind", "state"}`, 64-bit fields as strings), when proven.
     pub state: Option<Value>,
+    /// An order without a current state (closed, or not proven): its placement state, decoded like `state`, so that the order's
+    /// type and terms can still be shown. Never the basis of a spend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placed_state: Option<Value>,
     /// DAA score of the block that created the current UTXO.
     pub current_daa: Option<i64>,
     /// Day orders: UTC unix seconds after which conforming matchers do not fill (placement record).
@@ -890,10 +894,11 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
     let tif: Option<i64> = r.get(12)?;
     // pair orders: the pair, the side and the price come from the state (the current one, else the genesis state of a closed
     // order, whose custodies and amount are then not shown)
-    let pair_state = TemplateId::from_name(&contract).filter(|t| t.is_pair()).and_then(|t| {
-        let genesis: Option<Vec<u8>> = r.get(42).ok().flatten();
-        state.clone().map(|s| (s, true)).or_else(|| Some((AnyState::decode(t, &genesis?).ok()?, false)))
-    });
+    let genesis: Option<Vec<u8>> = r.get(42).ok().flatten();
+    let placed = if state.is_none() { tip_state(&contract, genesis) } else { None };
+    let pair_state = TemplateId::from_name(&contract)
+        .filter(|t| t.is_pair())
+        .and_then(|_| state.clone().map(|s| (s, true)).or_else(|| Some((placed.clone()?, false))));
     let (mut refund_due, mut kill) = (None, None);
     let (mut auction, mut quote, mut repeat) = (None, None, None);
     if let (Some(s), Some(d)) = (&state, current_daa) {
@@ -954,6 +959,7 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
         current,
         state_known: r.get::<_, Option<i64>>(33)?.unwrap_or(0) != 0,
         state: state.as_ref().and_then(|s| serde_json::to_value(s).ok()),
+        placed_state: placed.as_ref().and_then(|s| serde_json::to_value(s).ok()),
         current_daa,
         deadline_passed: active && deadline_passed(deadline, ctx),
         deadline,

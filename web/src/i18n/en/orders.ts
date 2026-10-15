@@ -82,6 +82,7 @@ export default {
   'orders.startPrice': 'Expected price (auction start)',
   'orders.stopPrice': 'Trigger price',
   'orders.allIn': 'All-in price',
+  'orders.worstAllIn': 'Worst all-in price',
   'orders.auctionNow': 'Auction price now',
   'orders.amount': 'Amount left',
   'orders.budgetOrder': 'a KAS budget (the amount follows from the price)',

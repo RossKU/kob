@@ -3,6 +3,7 @@ import type { OrderSnapshot } from '../../kob/cancel';
 import { MAX_IDLE_DAA, daaToUnix, gtcRenewalUnix } from '../../kob/daa';
 import type { Clock } from '../../kob/plan-types';
 import { recordsFromBuilt, type ResolvedRecord } from '../../kob/records';
+import type { OrderStatus } from '../../data/indexer-types';
 import type { AnyState, OrderState } from '../../kob/types';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, orderViewOf, placeGolden } from '../../testing/chain-fixtures';
@@ -65,6 +66,34 @@ describe('orderTypeKey via describeEntry (real golden orders)', () => {
     expect(gtd.typeKey).toBe('limit-gtd');
     expect(gtd.expiry.kind).toBe('gtd');
     expect(gtd.expiry.approxUnix).toBe(daaToUnix(CLOCK, BigInt(genesis) + MAX_IDLE_DAA / 2n));
+  });
+});
+
+describe('an ended order without a current state', () => {
+  const ended = (name: string, status: OrderStatus, withPlaced: boolean) => {
+    const p = placeGolden(kob, name);
+    const v = orderViewOf(kob, p.snapshots[0], { status, amount_left: '0' });
+    return describeEntry(buildEntries([{ ...v, state_known: false, state: null, current: null, placed_state: withPlaced ? v.state : undefined }], [])[0], ctx);
+  };
+
+  it('keeps its type, side and price from the placement state the indexer reports (no "state unknown")', () => {
+    const limit = ended('create.ask', 'cancelled', true);
+    expect([limit.typeKey, limit.side, limit.source, limit.price]).toEqual(['limit-gtd', 'sell', 'indexer', 250_000_000n]);
+    expect(limit.live).toBe(false);
+    expect(limit.canCancel).toBe(false);
+    expect(ended('create.bid.market', 'filled', true).typeKey).toBe('market');
+  });
+
+  it('without it (an older indexer) the type stays unknown', () => {
+    const row = ended('create.ask', 'cancelled', false);
+    expect([row.typeKey, row.source]).toEqual(['unknown', 'none']);
+  });
+
+  it('a live order never takes its terms from the placement state', () => {
+    const p = placeGolden(kob, 'create.ask');
+    const v = orderViewOf(kob, p.snapshots[0]);
+    const [e] = buildEntries([{ ...v, state_known: false, state: null, placed_state: v.state }], []);
+    expect(entryState(e, kob)).toBeNull();
   });
 });
 

@@ -62,10 +62,16 @@ export function buildEntries(views: readonly OrderView[], records: readonly Plac
   return out.sort((a, b) => (age(a) === age(b) ? (a.id < b.id ? -1 : 1) : age(a) > age(b) ? -1 : 1));
 }
 
-/** The current state of an order from the best source: proven indexer state, node-resolved state, else the record's ORIGINAL state (may be older). */
+/**
+ * The current state of an order from the best source: proven indexer state, node-resolved state, else the record's ORIGINAL state (may be older).
+ * An ended order has no current state: the indexer's placement state then names its type and terms (never the basis of a cancel or an amend:
+ * the order is not live).
+ */
 export function entryState(e: OrderEntry, kob: KobWasm | null): { state: OrderState; source: 'indexer' | 'node' | 'record' } | null {
   const fromView = e.view && e.view.state_known ? asOrderState(e.view.state) : null;
   if (fromView) return { state: fromView, source: 'indexer' };
+  const placed = e.view && ENDED.has(e.view.status) ? asOrderState(e.view.placed_state) : null;
+  if (placed) return { state: placed, source: 'indexer' };
   if (e.resolved?.status === 'live' && e.resolved.order) return { state: e.resolved.order.state, source: 'node' };
   if (e.record && kob) {
     try {
@@ -77,6 +83,8 @@ export function entryState(e: OrderEntry, kob: KobWasm | null): { state: OrderSt
   }
   return null;
 }
+
+const ENDED = new Set(['filled', 'cancelled', 'refunded', 'killed', 'closed']);
 
 function statusOf(e: OrderEntry): OrderStatusUi {
   if (e.view) {

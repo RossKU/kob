@@ -285,6 +285,8 @@ export interface OrderView {
   state_known: boolean;
   /** decoded state of the CURRENT utxo (`{kind, state}`, 64-bit fields as strings) when proven */
   state?: AnyState | null;
+  /** an order without a current state (closed, or not proven): its placement state, for showing its type and terms only */
+  placed_state?: AnyState | null;
   current_daa?: number | null;
   deadline?: number | null;
   deadline_passed?: boolean;

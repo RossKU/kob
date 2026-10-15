@@ -216,6 +216,11 @@ async fn oco_take_profit_leg_fills_without_arming_and_can_be_cancelled() {
     c.push(&[&cancel]).await;
     assert_eq!(c.hs.status(&cov), "cancelled");
     assert_eq!(c.hs.event_kinds(&cov), ["create", "fill", "cancel"]);
+    // a closed order has no current state; its placement state still tells what it was
+    let v = view(&c, &cov);
+    assert!(v.state.is_none());
+    let placed = v.placed_state.expect("placed_state of a closed order");
+    assert_eq!(placed["kind"], "KobCondAsk");
 }
 
 #[tokio::test]

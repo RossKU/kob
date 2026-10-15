@@ -563,6 +563,7 @@ net it against opposite pair orders of the same pair, or fill it from inventory 
 | maker payout of a sell-side fill | value of the output at the input's index (positional rule) | exact |
 | cost of a buy-side fill | `detail.escrow_before` (the spent order output), `detail.escrow_after` (its continuation; absent when the bid sold out) and `detail.delivery_value` (the maker's delivery output at the input's position: carrier plus a rising bid's surplus); cost = before - after - delivery | exact |
 | current state (`amountLeft`, `armed`, trailing `stopPrice`, `rptAmount`) | proven splice of the mutable windows | exact when proven, else `state_known = false` |
+| `placed_state` (only when there is no current `state`: a closed or unproven order) | the placement record's state | exact at placement; shows the order's type and terms, never the basis of a spend |
 | remaining amount of asks, conditional orders and entries | `amountLeft` of the proven state | exact (`amount_estimated: false`) |
 | remaining amount of a bid | its buying power: the largest `n` whose budget `ceil(n × (pMax + tip) / scale)` leaves `deliveryCarrier + reserve` of the escrow (`BidState::buying_power`), the most ONE fill can buy (every further fill moves one more carrier): an upper bound | estimate (`amount_estimated: true`) |
 | `auction.current_price` | protocol arithmetic at the node's DAA score | exact for that score |

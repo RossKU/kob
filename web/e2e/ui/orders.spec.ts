@@ -29,7 +29,7 @@ test.describe('my orders', () => {
     await expect(row).toHaveAttribute('data-side', 'sell');
     await expect(row).toHaveAttribute('data-status', 'open');
     await expect(row.getByTestId('order-price')).toContainText('0.02505');
-    await expect(row.getByTestId('order-allin')).toContainText('0.02505');
+    await expect(row.getByTestId('order-allin')).toHaveCount(0); // no tip: the all-in price would repeat the price
     await expect(row.getByTestId('order-amount')).toContainText('3 / 3');
     await expect(appPage.getByTestId(TESTID.ordersList)).toBeVisible();
     // tokens inside the sell order are shown (wallets do not show them)

@@ -327,6 +327,8 @@ export function orderView(chain, o, ctx, detailed = false) {
     current: o.current ? { txid: o.current.txid, index: o.current.index, value: o.current.value.toString() } : null,
     state_known: o.stateKnown,
     state: stateKnown ? any : null,
+    // the indexer's placement state of an order without a current one (the mock keeps the last state: same terms)
+    placed_state: stateKnown ? undefined : any,
     current_daa: o.current ? o.currentDaa : null,
     deadline: o.deadline,
     deadline_passed: active(o) && o.deadline !== null && ctx.nowUnix >= o.deadline,
