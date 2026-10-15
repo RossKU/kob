@@ -25,6 +25,8 @@ export default {
   'market.pairs.title': 'Token pairs',
   'market.pairs.noMatch': 'No pair matches your search.',
   'market.list.empty': 'No tokens yet.',
+  'market.list.showNameless': 'Show {n} token(s) without a name',
+  'market.list.hideNameless': 'Hide the tokens without a name',
   'market.list.noMatch': 'No token matches your search.',
   'market.list.indexerError': 'Token activity from the indexer is unavailable',
   'market.list.noIndexer': 'No indexer is configured: only registry tokens are listed and their order counts are unknown.',

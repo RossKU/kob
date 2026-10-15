@@ -12,7 +12,7 @@ import {
   type Cell, type ListedPair, type ListEntry, type Slot, type SortKey, type SortState,
 } from './market-list';
 import { pairVolumeOf, type PairVolume } from './pair-market';
-import { buildTokenRows, filterTokens, parseCovenantId, sharedTickerIds, tradableHere, tradableRows, type TokenRow } from './token-model';
+import { buildTokenRows, filterTokens, isNameless, parseCovenantId, sharedTickerIds, tradableHere, tradableRows, type TokenRow } from './token-model';
 import { usePooledSlots } from './use-market-list';
 
 function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
@@ -171,6 +171,7 @@ export function TokenList(props: { invalidToken?: string }) {
   const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
   const pairs = useAsync((signal) => (indexer ? indexer.pairs(undefined, { signal }) : Promise.resolve(null)), [indexer]);
   const [query, setQuery] = useState('');
+  const [showNameless, setShowNameless] = useState(false);
   const [pasted, setPasted] = useState<IndexerTokenView[]>([]);
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
   const [generation, setGeneration] = useState(0);
@@ -201,9 +202,12 @@ export function TokenList(props: { invalidToken?: string }) {
   const shownRows = useMemo(() => {
     const slotOf = (id: string): Slot<StatsView> => stats.get(id) ?? (indexer ? LOADING : NONE);
     const byId = new Map(rows.map((r) => [r.covenantId, r]));
-    const entries = filterTokens(rows, query).map((r) => tokenEntry(r, slotOf(r.covenantId)));
+    // tokens without metadata only on a search or on request
+    const visible = query.trim() || showNameless ? rows : rows.filter((r) => !isNameless(r));
+    const entries = filterTokens(visible, query).map((r) => tokenEntry(r, slotOf(r.covenantId)));
     return sortEntries(entries, sort).map((e) => ({ entry: e, row: byId.get(e.key)! }));
-  }, [rows, query, sort, stats, indexer]);
+  }, [rows, query, sort, stats, indexer, showNameless]);
+  const namelessCount = useMemo(() => rows.filter(isNameless).length, [rows]);
   const shownPairs = useMemo(() => {
     const slotOf = (id: string): Slot<StatsView> => stats.get(id) ?? (indexer ? LOADING : NONE);
     const byKey = new Map(listed.map((p) => [p.key, p]));
@@ -251,6 +255,13 @@ export function TokenList(props: { invalidToken?: string }) {
             )}
           </tbody>
         </Table>
+        {namelessCount > 0 && !query.trim() ? (
+          <p class="small muted">
+            <Button small onClick={() => setShowNameless((v) => !v)} data-testid="token-list-nameless">
+              {t(showNameless ? 'market.list.hideNameless' : 'market.list.showNameless', { n: namelessCount })}
+            </Button>
+          </p>
+        ) : null}
         {!indexer ? <p class="small muted">{t('market.list.noIndexer')}</p> : null}
         {listed.length > 0 ? (
           <div class="ml-pairs" data-testid="pair-list">

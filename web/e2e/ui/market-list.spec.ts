@@ -169,6 +169,9 @@ test.describe('phone', () => {
   test('375 px: name, price and change only, no sideways scrolling (an open-list token named by 8 + 8 hex too)', async ({ appPage: page, mock }) => {
     await mock.seed({ open_token: true });
     const exkcc = await twoMarkets(page, mock);
+    // a token without metadata (no ticker, no decimals) is out of the default list until asked for
+    await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveCount(0);
+    await page.getByTestId('token-list-nameless').click();
     await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveText('0f0f0f0f…0f0f0f0f');
     const row = page.getByTestId(`token-row-${exkcc}`);
     await expect(row.getByTestId(`token-link-${exkcc}`)).toBeVisible();

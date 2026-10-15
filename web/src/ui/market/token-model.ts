@@ -205,6 +205,12 @@ export function filterTokens(rows: readonly TokenRow[], query: string): TokenRow
   );
 }
 
+/**
+ * A token without metadata: outside the registry, no ticker and no decimals (its prices could only be shown in base units). Issuance is
+ * permissionless, so such tokens are kept out of the default list; a search or the list's toggle shows them, a covenant id opens them.
+ */
+export const isNameless = (r: Pick<TokenRow, 'info' | 'ticker' | 'decimals'>): boolean => r.info === null && r.ticker === '' && r.decimals === null;
+
 /** Pasted text -> a covenant id (64 hex chars, case-insensitive; surrounding whitespace and a `0x` prefix are tolerated), else null. */
 export function parseCovenantId(text: string): string | null {
   const s = text.trim().replace(/^0x/i, '');

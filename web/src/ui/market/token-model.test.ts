@@ -4,7 +4,7 @@ import { normalizeTokenView } from '../../data/indexer';
 import { parseRegistry, displayName, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import { tokenTitle } from './TokenBadges';
-import { buildTokenRows, filterTokens, hasIssuerControl, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenLabel, tradableHere, tradableRows, unknownRow } from './token-model';
+import { buildTokenRows, filterTokens, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenLabel, tradableHere, tradableRows, unknownRow } from './token-model';
 
 const kob = await loadKobNode();
 const tpl = kob.templates().find((t) => t.name === 'KCC20Ref_8x8')!;
@@ -134,6 +134,13 @@ describe('filterTokens / parseCovenantId', () => {
     expect(filterTokens(rows, 'bbbb').map((r) => r.ticker)).toEqual(['GOOD']);
     expect(filterTokens(rows, '   ')).toHaveLength(2);
     expect(filterTokens(rows, 'zzz')).toEqual([]);
+  });
+
+  it('tells a token without metadata (no ticker, no decimals, not in the registry) from the others', () => {
+    const named = unknownRow(reg, view('PEN', ID('9')));
+    const nameless = unknownRow(reg, view('', ID('8'), 0, 0, { decimals: null }));
+    const noDecimals = unknownRow(reg, view('NODEC', ID('7'), 0, 0, { decimals: null }));
+    expect([isNameless(rows[0]), isNameless(named), isNameless(nameless), isNameless(noDecimals)]).toEqual([false, false, true, false]);
   });
 
   it('accepts a pasted covenant id in common spellings only', () => {
