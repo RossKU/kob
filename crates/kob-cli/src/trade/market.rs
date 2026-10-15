@@ -36,6 +36,23 @@ pub enum ExtSource {
     Order,
 }
 
+/// Where a token's decimals (and the scale of its orders) come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecimalsFrom {
+    /// The registry and / or the indexer's token list (they agree).
+    Lists,
+    /// The scale of the token's market: the scale of its first order as the indexer reports it (`market_scale`, open or ended),
+    /// else (an older indexer) the one most of its open orders use.
+    Market,
+    /// `--decimals` for the token's first order: neither the registry, the indexer nor an order of the token tells them.
+    Entered,
+    /// The decimals `--decimals` named for this machine's own first order of the token, which the indexer has not seen yet
+    /// (`crate::recent`).
+    Remembered,
+    /// A view of a token without orders and without decimals: nothing tells them; amounts are base units (scale 1).
+    Unknown,
+}
+
 /// Everything a planner needs of one token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenMarket {
@@ -73,9 +90,8 @@ pub struct TokenMarket {
     pub genesis_verified: bool,
     /// How the registry knows it ([`resolve`] sets it; a market built by [`TokenMarket::new`] alone is unlisted).
     pub listing: Listing,
-    /// The decimals (and the scale) are the ones `--decimals` named for the token's first order: neither the registry, the
-    /// indexer nor an order of the token tells them.
-    pub entered_decimals: bool,
+    /// Where the decimals (and the scale) come from ([`resolve_with`] sets it).
+    pub decimals_from: DecimalsFrom,
 }
 
 impl TokenMarket {
@@ -123,7 +139,7 @@ impl TokenMarket {
             keeper_tip: tip.keeper_tip as i64,
             genesis_verified: false,
             listing: Listing::Unlisted,
-            entered_decimals: false,
+            decimals_from: DecimalsFrom::Lists,
         })
     }
 
@@ -186,10 +202,11 @@ impl TokenMarket {
                      price) {}; check its covenant id {} yourself",
                     self.name(),
                     self.decimals,
-                    if self.entered_decimals {
-                        "are the ones --decimals names for its first order"
-                    } else {
-                        "come from the indexer or the scale of its orders"
+                    match self.decimals_from {
+                        DecimalsFrom::Entered => "are the ones --decimals names for its first order",
+                        DecimalsFrom::Remembered => "are the ones --decimals named for your first order of it (kept on this machine)",
+                        DecimalsFrom::Unknown => "are unknown (no order of it yet)",
+                        DecimalsFrom::Lists | DecimalsFrom::Market => "come from the indexer or the scale of its orders",
                     },
                     to_hex(&self.cov)
                 ),
@@ -238,6 +255,9 @@ pub struct TokenFacts {
     pub genesis_verified: bool,
     /// A registry token that is not tradable there: why (delisted, its token program pending review).
     pub not_tradable: Option<String>,
+    /// The indexer's `market_scale` of a token without decimals: the scale of its earliest order, open or ended (`Some(None)`:
+    /// no order of it was ever seen; `None`: the source does not report it, an older indexer or the registry).
+    pub market_scale: Option<Option<i64>>,
 }
 
 /// The tokens of a registry file (`registry/tokens.json` format) of `network`: the registry must pass every rule of the
@@ -274,6 +294,7 @@ pub fn registry_tokens(json: &str, network: &str) -> Result<Vec<TokenFacts>, Str
             tick: t.tick,
             genesis_verified: t.genesis_verified == Some(true),
             not_tradable,
+            market_scale: None,
         });
     }
     Ok(out)
@@ -295,6 +316,11 @@ pub fn indexer_tokens(v: &serde_json::Value) -> Result<Vec<TokenFacts>, String> 
                 tick: None,
                 genesis_verified: false,
                 not_tradable: None,
+                market_scale: match t.get("market_scale") {
+                    None => None,
+                    Some(serde_json::Value::Null) => Some(None),
+                    Some(v) => Some(Some(v.as_i64().ok_or("indexer /v1/tokens: a `market_scale` that is not an integer")?)),
+                },
             })
         })
         .collect()
@@ -314,15 +340,32 @@ pub const MAX_ENTERED_DECIMALS: u32 = 9;
 /// The standard scale of a token's orders, `None` without orders ([`OpenToken::order_scale`]).
 pub type OrderScale<'a> = &'a dyn Fn(&[u8; 32]) -> Result<Option<i64>, String>;
 
+/// The decimals `--decimals` named for this machine's own first order of a token ([`OpenToken::remembered`]).
+pub type Remembered<'a> = &'a dyn Fn(&[u8; 32]) -> Option<u32>;
+
 /// What resolves a token without a registry entry (the open token list): its network, and its decimals when neither the
 /// registry nor the indexer names them.
 pub struct OpenToken<'a> {
     /// The network: on mainnet a token without a registry entry must be of a `reviewed` program (prototypes are not traded).
     pub network: &'a str,
-    /// The standard scale of the token's orders ([`standard_scale`] of the indexer's book), `None` without orders.
+    /// The standard scale of the token's open orders ([`standard_scale`] of the indexer's book), `None` without orders: read
+    /// when the indexer's token list reports no market scale (an older indexer, or a token without orders).
     pub order_scale: OrderScale<'a>,
     /// `--decimals N` for the token's first order (0..=9): used only when no order of the token tells its scale.
     pub entered: Option<u32>,
+    /// The decimals `--decimals` named for this machine's own first order of the token (`crate::recent`): within the indexer's
+    /// lag they stand in for `--decimals`, and a `--decimals` of another scale is refused.
+    pub remembered: Option<Remembered<'a>>,
+    /// A view (`kob book`): a token whose decimals nothing tells resolves with none ([`DecimalsFrom::Unknown`]: base units)
+    /// instead of being refused.
+    pub view: bool,
+}
+
+impl<'a> OpenToken<'a> {
+    /// The open token of a command on `network`, its orders' scale read with `order_scale`.
+    pub fn new(network: &'a str, order_scale: OrderScale<'a>) -> OpenToken<'a> {
+        OpenToken { network, order_scale, entered: None, remembered: None, view: false }
+    }
 }
 
 /// The scale shared by most of the order rows of a book view (`asks` and `bids`; ties: the smaller), only powers of ten up
@@ -416,31 +459,59 @@ pub fn resolve_with(
     if let Some(e) = entered.filter(|e| *e > MAX_ENTERED_DECIMALS) {
         return Err(format!("--decimals {e}: a first order names 0 to {MAX_ENTERED_DECIMALS} decimals (the scale is at most 10^9)"));
     }
-    let (decimals, from_entry) = match (known, open) {
+    let (decimals, from) = match (known, open) {
         (Some(d), _) => {
             if let Some(e) = entered.filter(|e| default_scale(*e) != default_scale(d)) {
                 return Err(format!("--decimals {e} differs from the decimals of `{key}` ({d})"));
             }
-            (d, false)
+            (d, DecimalsFrom::Lists)
         }
-        (None, Some(o)) => match ((o.order_scale)(&cov)?, entered) {
-            (Some(s), e) => {
-                if let Some(e) = e.filter(|e| default_scale(*e) != s) {
-                    return Err(format!(
-                        "--decimals {e} differs from the scale the orders of `{key}` use ({s} base units per whole token, {} decimals)",
-                        decimals_of_scale(s)
-                    ));
+        (None, Some(o)) => {
+            // the market's scale: its first order's, open or ended, as the indexer reports it (TN10 2026-10-15 O-3: once every
+            // order had ended, a first order with other decimals would have put two scales on one market); an older indexer,
+            // or a token without orders: the scale of its open orders
+            let market = i.and_then(|t| t.market_scale).flatten();
+            if let Some(s) = market.filter(|s| kob_protocol::state::check_scale(*s).is_err()) {
+                return Err(format!("`{key}`: the indexer reports a market scale of {s}, which no order can have"));
+            }
+            let scale = match market {
+                Some(s) => Some(s),
+                None => (o.order_scale)(&cov)?,
+            };
+            let remembered = o.remembered.and_then(|f| f(&cov)).filter(|d| *d <= MAX_ENTERED_DECIMALS);
+            match (scale, entered) {
+                (Some(s), e) => {
+                    if let Some(e) = e.filter(|e| default_scale(*e) != s) {
+                        return Err(format!(
+                            "--decimals {e} differs from the scale of the market of `{key}` ({s} base units per whole token, {} \
+                             decimals: the scale its first order set, which every order of it uses)",
+                            decimals_of_scale(s)
+                        ));
+                    }
+                    (decimals_of_scale(s), DecimalsFrom::Market)
                 }
-                (decimals_of_scale(s), false)
+                (None, Some(e)) => {
+                    if let Some(r) = remembered.filter(|r| default_scale(*r) != default_scale(e)) {
+                        return Err(format!(
+                            "--decimals {e} differs from the decimals your first order of `{key}` named ({r}, kept on this machine \
+                             until the indexer lists the order): its market's scale is {}",
+                            default_scale(r)
+                        ));
+                    }
+                    (e, DecimalsFrom::Entered)
+                }
+                (None, None) => match remembered {
+                    Some(r) => (r, DecimalsFrom::Remembered),
+                    None if o.view => (0, DecimalsFrom::Unknown),
+                    None => {
+                        return Err(format!(
+                            "`{key}`: its decimals are unknown: no registry entry and no order of it yet, and the chain does not \
+                             record decimals. Its first order names the decimals the issuer chose: `kob place ... --decimals N` (0..=9)"
+                        ))
+                    }
+                },
             }
-            (None, Some(e)) => (e, true),
-            (None, None) => {
-                return Err(format!(
-                    "`{key}`: its decimals are unknown: no registry entry and no order of it yet, and the chain does not record \
-                     decimals. Give the decimals the issuer chose with --decimals N (0..=9) for its first order"
-                ))
-            }
-        },
+        }
         (None, None) => return Err(format!("`{key}`: its decimals are unknown")),
     };
     let ticker = r.map(|t| t.ticker.clone()).or_else(|| i.map(|t| t.ticker.clone())).unwrap_or_default();
@@ -457,7 +528,7 @@ pub fn resolve_with(
         Some(t) => t.not_tradable.clone().map_or(Listing::Listed, Listing::NotTradable),
         None => Listing::Unlisted,
     };
-    m.entered_decimals = from_entry;
+    m.decimals_from = from;
     Ok(m)
 }
 
@@ -475,6 +546,7 @@ mod tests {
             tick: None,
             genesis_verified: false,
             not_tradable: None,
+            market_scale: None,
         }
     }
 
@@ -489,7 +561,7 @@ mod tests {
         let none = |_: &[u8; 32]| -> Result<Option<i64>, String> { Ok(None) };
         let thousand = |_: &[u8; 32]| -> Result<Option<i64>, String> { Ok(Some(1000)) };
         fn open<'a>(f: OrderScale<'a>, entered: Option<u32>, network: &'a str) -> OpenToken<'a> {
-            OpenToken { network, order_scale: f, entered }
+            OpenToken { entered, ..OpenToken::new(network, f) }
         }
         // no orders, no --decimals: refused, never assumed
         let e = resolve_with(&key, &[], &idx, Some(&open(&none, None, "testnet-10"))).unwrap_err();
@@ -497,11 +569,11 @@ mod tests {
         assert!(resolve(&key, &[], &idx).unwrap_err().contains("decimals are unknown"));
         // the first order: the entered decimals, marked as such
         let m = resolve_with(&key, &[], &idx, Some(&open(&none, Some(6), "testnet-10"))).unwrap();
-        assert_eq!((m.decimals, m.scale, m.entered_decimals, m.ext), (6, 1_000_000, true, [0xdd; 32]));
+        assert_eq!((m.decimals, m.scale, m.decimals_from, m.ext), (6, 1_000_000, DecimalsFrom::Entered, [0xdd; 32]));
         assert!(resolve_with(&key, &[], &idx, Some(&open(&none, Some(10), "testnet-10"))).unwrap_err().contains("0 to 9"));
         // orders exist: their scale decides; a --decimals that disagrees is refused, one that agrees is fine
         let m = resolve_with(&key, &[], &idx, Some(&open(&thousand, None, "testnet-10"))).unwrap();
-        assert_eq!((m.decimals, m.scale, m.entered_decimals), (3, 1000, false));
+        assert_eq!((m.decimals, m.scale, m.decimals_from), (3, 1000, DecimalsFrom::Market));
         assert!(resolve_with(&key, &[], &idx, Some(&open(&thousand, Some(3), "testnet-10"))).is_ok());
         assert!(resolve_with(&key, &[], &idx, Some(&open(&thousand, Some(8), "testnet-10"))).unwrap_err().contains("differs"));
         // decimals the token list names (an operator's registry entry) win, and --decimals must agree with them
@@ -527,6 +599,79 @@ mod tests {
         assert!(resolve_with(&to_hex(&[4; 32]), &[], &idx, Some(&open(&none, Some(0), "mainnet")))
             .unwrap_err()
             .contains("unknown token"));
+    }
+
+    /// TN10 2026-10-15 O-3: the market of a token without decimals keeps the scale its first order set after every order of
+    /// it has ended: the indexer's `market_scale` decides (the book, empty, tells nothing), a --decimals of another scale is
+    /// refused, and the same one is accepted. An older indexer (no `market_scale`): the scale of the open orders, as before.
+    #[test]
+    fn the_market_scale_of_an_open_token_stays_after_its_orders_ended() {
+        let key = to_hex(&[3; 32]);
+        let ended = vec![TokenFacts { market_scale: Some(Some(1_000_000)), ..open_facts(3, TemplateId::Kcc20Ref) }];
+        let empty_book = |_: &[u8; 32]| -> Result<Option<i64>, String> { Ok(None) };
+        let unread =
+            |_: &[u8; 32]| -> Result<Option<i64>, String> { Err("the book is not read when the market scale is known".into()) };
+        let open = |f, entered| OpenToken { entered, ..OpenToken::new("testnet-10", f) };
+        let m = resolve_with(&key, &[], &ended, Some(&open(&unread, None))).unwrap();
+        assert_eq!((m.decimals, m.scale, m.decimals_from), (6, 1_000_000, DecimalsFrom::Market));
+        let e = resolve_with(&key, &[], &ended, Some(&open(&empty_book, Some(2)))).unwrap_err();
+        assert!(e.contains("--decimals 2 differs from the scale of the market") && e.contains("1000000 base units"), "{e}");
+        assert_eq!(resolve_with(&key, &[], &ended, Some(&open(&empty_book, Some(6)))).unwrap().decimals, 6);
+        // the market's scale wins over the open orders' (orders of another scale placed before it was kept)
+        let other = |_: &[u8; 32]| -> Result<Option<i64>, String> { Ok(Some(100)) };
+        assert_eq!(resolve_with(&key, &[], &ended, Some(&open(&other, None))).unwrap().scale, 1_000_000);
+        // no order ever (`null`), or an older indexer (absent): the open orders, else the first order's --decimals
+        for ms in [Some(None), None] {
+            let idx = vec![TokenFacts { market_scale: ms, ..open_facts(3, TemplateId::Kcc20Ref) }];
+            assert_eq!(resolve_with(&key, &[], &idx, Some(&open(&other, None))).unwrap().scale, 100);
+            assert_eq!(resolve_with(&key, &[], &idx, Some(&open(&empty_book, Some(2)))).unwrap().decimals_from, DecimalsFrom::Entered);
+        }
+        // a scale no order can have is refused, not used
+        let bad = vec![TokenFacts { market_scale: Some(Some(500)), ..open_facts(3, TemplateId::Kcc20Ref) }];
+        assert!(resolve_with(&key, &[], &bad, Some(&open(&empty_book, Some(2)))).unwrap_err().contains("no order can have"));
+        // a registry token's decimals win; its row carries no market scale
+        let reg = vec![facts(3, "TOK", 8, TemplateId::Kcc20Ref, 0xdd)];
+        assert_eq!(resolve_with("TOK", &reg, &ended, Some(&open(&unread, None))).unwrap().decimals, 8);
+        // the indexer's token list reads it: absent, null, a number; anything else is refused
+        // (`Null` here: the field left out)
+        let v = |ms: serde_json::Value| {
+            let mut t = serde_json::json!({"covenant_id": key, "ticker": ""});
+            if !ms.is_null() {
+                t["market_scale"] = ms;
+            }
+            indexer_tokens(&serde_json::json!({ "tokens": [t] }))
+        };
+        assert_eq!(v(serde_json::Value::Null).unwrap()[0].market_scale, None);
+        assert_eq!(v(serde_json::json!(1000)).unwrap()[0].market_scale, Some(Some(1000)));
+        let null = indexer_tokens(&serde_json::json!({"tokens": [{"covenant_id": key, "market_scale": null}]})).unwrap();
+        assert_eq!(null[0].market_scale, Some(None));
+        assert!(v(serde_json::json!("1000")).is_err());
+    }
+
+    /// TN10 2026-10-15 O-1 and O-2: the decimals of this machine's own first order stand in for --decimals while the indexer
+    /// has not seen it (a --decimals of another scale is refused), and a view of a token nothing tells the decimals of
+    /// resolves with none instead of asking for a --decimals it does not take.
+    #[test]
+    fn remembered_first_order_decimals_and_a_view_without_decimals() {
+        let key = to_hex(&[3; 32]);
+        let idx = vec![TokenFacts { market_scale: Some(None), ..open_facts(3, TemplateId::Kcc20Ref) }];
+        let none = |_: &[u8; 32]| -> Result<Option<i64>, String> { Ok(None) };
+        let two = |c: &[u8; 32]| (*c == [3; 32]).then_some(2u32);
+        let open = |entered, view| OpenToken { entered, remembered: Some(&two), view, ..OpenToken::new("testnet-10", &none) };
+        let m = resolve_with(&key, &[], &idx, Some(&open(None, false))).unwrap();
+        assert_eq!((m.decimals, m.scale, m.decimals_from), (2, 100, DecimalsFrom::Remembered));
+        assert!(m.listing_issue(true).unwrap().message.contains("kept on this machine"));
+        assert_eq!(resolve_with(&key, &[], &idx, Some(&open(Some(2), false))).unwrap().decimals_from, DecimalsFrom::Entered);
+        let e = resolve_with(&key, &[], &idx, Some(&open(Some(4), false))).unwrap_err();
+        assert!(e.contains("--decimals 4 differs from the decimals your first order") && e.contains("(2,"), "{e}");
+        // once the indexer reports the market's scale it decides (another order may have come first)
+        let seen = vec![TokenFacts { market_scale: Some(Some(1000)), ..open_facts(3, TemplateId::Kcc20Ref) }];
+        assert_eq!(resolve_with(&key, &[], &seen, Some(&open(None, false))).unwrap().decimals, 3);
+        // nothing tells them: a signing command is told how the first order names them; a view resolves in base units
+        let e = resolve_with(&key, &[], &idx, Some(&OpenToken::new("testnet-10", &none))).unwrap_err();
+        assert!(e.contains("`kob place ... --decimals N`"), "{e}");
+        let m = resolve_with(&key, &[], &idx, Some(&OpenToken { view: true, ..OpenToken::new("testnet-10", &none) })).unwrap();
+        assert_eq!((m.decimals, m.scale, m.decimals_from), (0, 1, DecimalsFrom::Unknown));
     }
 
     #[test]

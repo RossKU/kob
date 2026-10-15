@@ -346,6 +346,12 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
                     : row.reason
                       ? t('market.ticket.untradable', { reason: t(`market.reason.${row.reason}`) })
                       : t('market.ticket.untradableUnknown')}
+                {/* decimals entered for a first order, but the market has a scale now (an order came first): drop them, never trade at both */}
+                {open.reason === 'scale-conflict' ? (
+                  <div>
+                    <Button small variant="ghost" onClick={() => setEntered(null)} data-testid="first-order-clear">{t('market.first.clear')}</Button>
+                  </div>
+                ) : null}
               </Banner>
             </Section>
           )}

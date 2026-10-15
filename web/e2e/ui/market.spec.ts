@@ -200,6 +200,22 @@ test.describe('token page', () => {
     await expect(appPage.getByTestId('live-indicator')).toContainText('5 s', { timeout: 15_000 });
   });
 
+  // TN10 2026-10-15 O-3: every earlier order of the token had ended at scale 10^6 and the page offered a "first order" with entered decimals again
+  test('an open-list token whose every order has ended keeps the scale its first order set: the ticket, no first-order decimals', async ({ appPage, mock }) => {
+    const id = 'e1'.repeat(32);
+    await mock.seed({
+      tokens: [{ ticker: '', covenant_id: id, program: 'KCC20Ref_8x8', template_id: 'KCC20Ref_8x8', extension_commitment: 'ee'.repeat(32), standing: 'unverified', powers: [], decimals: null, order_scale: 1_000_000 }],
+      orders: [{ token: id, side: 'ask', amount: 2_000_000, price: 3_000_000, history: 'cancelled' }],
+    });
+    const row = (await mock.tokens()).find((t) => t.covenant_id === id) as { market_scale?: number | null; open_asks?: number } | undefined;
+    expect(row).toMatchObject({ market_scale: 1_000_000, open_asks: 0 });
+    await appPage.goto(`/#/market/${id}`);
+    await expect(appPage.getByTestId('ticket-container')).toBeVisible();
+    await expect(appPage.getByTestId('first-order')).toHaveCount(0);
+    await expect(appPage.getByTestId('first-order-entered')).toHaveCount(0);
+    await expect(appPage.getByTestId('ticket-open-caution')).toContainText('first order set');
+  });
+
   test('an unknown covenant id is reported, not blank', async ({ appPage }) => {
     await appPage.goto(`/#/market/${'ab'.repeat(32)}`);
     await expect(appPage.getByTestId('token-not-found')).toBeVisible();

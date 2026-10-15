@@ -1,17 +1,17 @@
 // Cross-checking indexers. KOB is open source: anyone can run an indexer, including a dishonest one, so one indexer is never trusted blindly when more
 // than one is configured (config `extraIndexerUrls`). The key facts a UI decision rests on are read from each indexer and compared: the token's standing
-// and powers, and the best ask / bid of the book. A disagreement is surfaced as a warning; nothing is silently averaged or "voted".
+// and powers, the scale of an open-list token's market (`market_scale`: it sets the price scale of new orders), and the best ask / bid of the book. A disagreement is surfaced as a warning; nothing is silently averaged or "voted".
 import type { Hex } from '../kob/types';
 import type { IndexerApi } from './indexer';
 
 export interface IndexerFacts {
-  /** the token as this indexer lists it (null: not listed) */
-  token: { standing: string | null; powers: string[] } | null;
+  /** the token as this indexer lists it (null: not listed); `marketScale` undefined when the indexer does not report it */
+  token: { standing: string | null; powers: string[]; marketScale?: number | null } | null;
   bestAsk: bigint | null;
   bestBid: bigint | null;
 }
 
-export type CrossCheckCode = 'standing-differs' | 'powers-differ' | 'best-ask-differs' | 'best-bid-differs' | 'token-missing' | 'unreachable';
+export type CrossCheckCode = 'standing-differs' | 'powers-differ' | 'market-scale-differs' | 'best-ask-differs' | 'best-bid-differs' | 'token-missing' | 'unreachable';
 
 export interface CrossCheckFinding {
   code: CrossCheckCode;
@@ -38,6 +38,8 @@ export function compareFacts(primary: IndexerFacts, other: IndexerFacts, label: 
   else if (primary.token && other.token) {
     if ((primary.token.standing ?? '') !== (other.token.standing ?? '')) out.push({ code: 'standing-differs', other: label, primary: primary.token.standing ?? '-', otherValue: other.token.standing ?? '-' });
     if (!same(primary.token.powers, other.token.powers)) out.push({ code: 'powers-differ', other: label, primary: primary.token.powers.join(',') || '-', otherValue: other.token.powers.join(',') || '-' });
+    const [ma, mb] = [primary.token.marketScale, other.token.marketScale];
+    if (ma !== undefined && mb !== undefined && ma !== mb) out.push({ code: 'market-scale-differs', other: label, primary: ma === null ? '-' : String(ma), otherValue: mb === null ? '-' : String(mb) });
   }
   const px = (a: bigint | null) => (a === null ? '-' : a.toString());
   for (const [code, a, b] of [['best-ask-differs', primary.bestAsk, other.bestAsk], ['best-bid-differs', primary.bestBid, other.bestBid]] as const) {
@@ -54,7 +56,9 @@ export async function readFacts(api: Pick<IndexerApi, 'tokens' | 'book'>, covena
   const [tokens, book] = await Promise.all([api.tokens(o), api.book(covenantId, { depth: 1, aggregate: true }, o)]);
   const t = tokens.find((x) => x.covenant_id === covenantId);
   return {
-    token: t ? { standing: t.standing ?? null, powers: Array.isArray(t.powers) ? t.powers : [] } : null,
+    token: t
+      ? { standing: t.standing ?? null, powers: Array.isArray(t.powers) ? t.powers : [], ...(t.market_scale !== undefined ? { marketScale: t.market_scale } : {}) }
+      : null,
     bestAsk: priceOf(book.asks[0]),
     bestBid: priceOf(book.bids[0]),
   };

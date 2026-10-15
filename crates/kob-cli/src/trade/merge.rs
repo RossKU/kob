@@ -270,7 +270,8 @@ pub fn run(args: &[String]) -> i32 {
         let indexer = c.need_indexer()?;
         let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(indexer))?;
         let order_scale = |cov: &[u8; 32]| data::order_scale(indexer, cov);
-        let open = market::OpenToken { network: &c.network, order_scale: &order_scale, entered: None };
+        let remembered = |cov: &[u8; 32]| crate::recent::first_order_decimals(&c.network, cov);
+        let open = market::OpenToken { remembered: Some(&remembered), ..market::OpenToken::new(&c.network, &order_scale) };
         let m = market::resolve_with(key, &reg, &idx, Some(&open))?;
         let utxos = data::token_utxos(indexer, node, &c.network, &m, &signer.pubkey)?;
         let funding = data::funding(node, &c.network, &signer.pubkey)?;

@@ -211,7 +211,7 @@ export default {
 
   'market.open.title': 'Token {id}',
   'market.open.fullId': 'Full covenant id:',
-  'market.open.baseUnits': 'Amounts are in base units (the chain carries no decimals). The decimals are inferred from the price scale most open orders use, and the price step is 1 sompi.',
+  'market.open.baseUnits': 'Amounts are in base units (the chain carries no decimals). The decimals are inferred from the price scale of its market, which its first order set, and the price step is 1 sompi.',
   'market.open.enteredScale': 'The chain carries no decimals and no order of this token exists yet: amounts and prices use the {decimals} decimals you entered, and the price step is 1 sompi.',
   'market.open.loading': 'Reading the token from its open orders...',
   'market.open.program-unknown': 'this build does not contain the token program of this token',
@@ -228,11 +228,14 @@ export default {
   'market.first.change': 'Change',
   'market.open.no-extension': 'the extension commitment of this token could not be read from its orders',
   'market.open.scale-invalid': 'the price scale its orders use is not one this build can trade',
+  'market.open.scale-conflict': 'the decimals you entered give another price scale than the one the first order of this token set for its market, which every order of it uses',
+  'market.first.clear': 'Use the market\'s scale',
 
   'market.crosscheck.title': 'Indexers disagree',
   'market.crosscheck.lead': 'The indexers configured for this app give different answers about this token. Do not trust either until you have checked the covenant id, the price and the issuer powers yourself.',
   'market.crosscheck.standing-differs': '{other}: token standing {otherValue} (main indexer: {primary}).',
   'market.crosscheck.powers-differ': '{other}: issuer powers {otherValue} (main indexer: {primary}).',
+  'market.crosscheck.market-scale-differs': '{other}: price scale of the market {otherValue} base units per whole token (main indexer: {primary}).',
   'market.crosscheck.best-ask-differs': '{other}: best ask {otherValue} sompi per whole token (main indexer: {primary}).',
   'market.crosscheck.best-bid-differs': '{other}: best bid {otherValue} sompi per whole token (main indexer: {primary}).',
   'market.crosscheck.token-missing': '{other} does not list this token at all.',

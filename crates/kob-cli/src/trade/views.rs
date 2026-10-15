@@ -185,12 +185,18 @@ pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String>
         };
         let indexer = c.need_indexer()?;
         let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(indexer))?;
-        // a token without a registry entry: its decimals from the scale of its orders (`kob place`'s open token)
+        // a token without a registry entry: its decimals from the scale of its market (`kob place`'s open token); a token
+        // without orders whose decimals nothing tells has an empty book, shown without them (TN10 2026-10-15 O-2: the view
+        // asked for a --decimals it does not take)
         let order_scale = |cov: &[u8; 32]| data::order_scale(indexer, cov);
-        let open = market::OpenToken { network: &c.network, order_scale: &order_scale, entered: None };
+        let remembered = |cov: &[u8; 32]| crate::recent::first_order_decimals(&c.network, cov);
+        let open = market::OpenToken { remembered: Some(&remembered), view: true, ..market::OpenToken::new(&c.network, &order_scale) };
         let a = market::resolve_with(key, &reg, &idx, Some(&open))?;
         let b = p.get("--quote").map(|q| market::resolve_with(q, &reg, &idx, Some(&open))).transpose()?;
+        let unknown: Vec<&TokenMarket> =
+            [Some(&a), b.as_ref()].into_iter().flatten().filter(|m| m.decimals_from == market::DecimalsFrom::Unknown).collect();
         let (book, last, quote_name): (Book, Option<i64>, String) = match &b {
+            _ if !unknown.is_empty() => (Book::default(), None, b.as_ref().map_or("KAS".into(), |bm| bm.name())),
             None => {
                 let v = http::get_ok(indexer, &format!("/v1/books/{}?depth={depth}", to_hex(&a.cov)), data::INDEXER_TIMEOUT)?;
                 (data::book_from_indexer(a.scale, &v), data::last_fill(indexer, &a).ok().flatten(), "KAS".into())
@@ -216,7 +222,7 @@ pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String>
         let out = json!({
             "token": to_hex(&a.cov),
             "quote": b.as_ref().map(|x| to_hex(&x.cov)),
-            "scale": a.scale,
+            "scale": (a.decimals_from != market::DecimalsFrom::Unknown).then_some(a.scale),
             "asks": levels_json(&book.asks, &price),
             "bids": levels_json(&book.bids, &price),
             "best_ask": book.asks.first().map(|l| l.price.to_string()),
@@ -225,6 +231,13 @@ pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String>
         });
         let mut lines = vec![format!("book {} in {quote_name} per whole token (indexer {})", a.name(), http::shown(indexer))];
         lines.extend(book_lines(&book, &price, &amount, last));
+        for m in unknown {
+            lines.push(format!(
+                "  {}: no order of it yet, so no price scale: the chain does not record decimals, and its first order names them \
+                 (`kob place ... --decimals N`)",
+                m.name()
+            ));
+        }
         Ok((out, lines))
     }
 }
@@ -604,7 +617,8 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
         let mut rows = vec![];
         let mut locked = 0i128;
         let order_scale = |cov: &[u8; 32]| data::order_scale(indexer, cov);
-        let open = market::OpenToken { network: &c.network, order_scale: &order_scale, entered: None };
+        let remembered = |cov: &[u8; 32]| crate::recent::first_order_decimals(&c.network, cov);
+        let open = market::OpenToken { remembered: Some(&remembered), ..market::OpenToken::new(&c.network, &order_scale) };
         for t in tokens {
             let u = unit_of(&t, &reg, &idx);
             // free tokens: confirmed on the node when the token's market is known, else the indexer's figure

@@ -29,6 +29,13 @@ describe('compareFacts', () => {
     expect(compareFacts(facts(), facts({ bestAsk: 2_500_000_000n, bestBid: null }), 'b').map((f) => f.code)).toEqual(['best-ask-differs', 'best-bid-differs']);
     expect(compareFacts(facts(), facts({ token: null }), 'b').map((f) => f.code)).toEqual(['token-missing']);
   });
+  it('the scale of the market of an open-list token (it sets the price scale of new orders) differs: a finding; one indexer not reporting it: none', () => {
+    const t = (marketScale?: number | null) => facts({ token: { standing: 'unverified', powers: [], ...(marketScale !== undefined ? { marketScale } : {}) } });
+    expect(compareFacts(t(1_000_000), t(100), 'b')).toEqual([{ code: 'market-scale-differs', other: 'b', primary: '1000000', otherValue: '100' }]);
+    expect(compareFacts(t(1000), t(null), 'b').map((f) => f.code)).toEqual(['market-scale-differs']);
+    expect(compareFacts(t(1000), t(1000), 'b')).toEqual([]);
+    expect(compareFacts(t(1000), t(), 'b')).toEqual([]);
+  });
 });
 
 describe('crossCheckIndexers', () => {

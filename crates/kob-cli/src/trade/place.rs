@@ -66,8 +66,9 @@ AMOUNTS (always with a unit; never rounded)
   --min-touch A  stop trigger threshold (default: max(min fill, 25% of the amount))
   --carrier KAS  KAS on every covenant UTXO of the order (default 2KAS; at least 0.08KAS and the token program's floor)
   --decimals N   the first order of a token without a registry entry and without orders: its decimals (0..=9; the scale
-                 is 10^N). The chain records no decimals: give the ones the issuer chose. Once the token has orders, their
-                 scale decides (a --decimals that disagrees is refused)
+                 is 10^N). The chain records no decimals: give the ones the issuer chose. Once the token had an order,
+                 the scale its first order set decides, also after every order of it ended (a --decimals that disagrees
+                 is refused). This machine keeps them for the next command until the indexer lists the order
   WHEN           2026-10-20T00:00Z (UTC) or daa:N;   DURATION 30s, 5m or 300daa;   BPS 3% or 300bps
 
 SAFETY
@@ -467,11 +468,17 @@ pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> 
         v.push(format!("{} {}", if k == 0 { "order:" } else { "committed exit:" }, s.template_id().name()));
     }
     v.push(format!("side: {} {}", d.side.name(), m.name()));
-    if m.entered_decimals {
-        v.push(format!(
+    match m.decimals_from {
+        market::DecimalsFrom::Entered => v.push(format!(
             "decimals: {} (from --decimals: the first order of this token sets its market's price scale, {} base units per whole token)",
             m.decimals, m.scale
-        ));
+        )),
+        market::DecimalsFrom::Remembered => v.push(format!(
+            "decimals: {} (the ones --decimals named for your first order of this token, which the indexer does not list yet: its \
+             market's price scale, {} base units per whole token)",
+            m.decimals, m.scale
+        )),
+        _ => {}
     }
     v.push(format!("amount: {}", units::tokens(d.amount as i128, &u)));
     if let Some(p) = d.limit_price {
@@ -554,7 +561,9 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<Pl
         .map(|v| v.parse::<u32>().map_err(|_| format!("--decimals must be a whole number from 0 to 9, got `{v}`")))
         .transpose()?;
     let order_scale = |cov: &[u8; 32]| data::order_scale(&indexer, cov);
-    let open = |entered| market::OpenToken { network: &c.network, order_scale: &order_scale, entered };
+    let remembered = |cov: &[u8; 32]| crate::recent::first_order_decimals(&c.network, cov);
+    let open =
+        |entered| market::OpenToken { entered, remembered: Some(&remembered), ..market::OpenToken::new(&c.network, &order_scale) };
     let mut a = market::resolve_with(p.get("--token").ok_or("--token is required")?, &reg, &idx, Some(&open(entered)))?;
     let mut b = match p.get("--quote") {
         Some(q) => Some(market::resolve_with(q, &reg, &idx, Some(&open(None)))?),
@@ -812,7 +821,15 @@ pub fn run(args: &[String]) -> i32 {
     let side = side_for(&kind, &p).map(Side::name).unwrap_or("");
     let title = format!("place {kind} {side} {}{}", a.name(), b.as_ref().map(|b| format!(" for {}", b.name())).unwrap_or_default());
     match ready(&plan, title, &a, b.as_ref()) {
-        Some(r) if plan.ok || plan.built.is_some() => finish(&c, &signer, r, &units_of(&a, b.as_ref()), "this order"),
+        Some(r) if plan.ok || plan.built.is_some() => {
+            let code = finish(&c, &signer, r, &units_of(&a, b.as_ref()), "this order");
+            // a submitted first order of a token without a registry entry: its decimals for the next command of the token while
+            // the indexer has not seen the order (TN10 2026-10-15 O-1)
+            if code == 0 && !c.dry_run && matches!(a.decimals_from, market::DecimalsFrom::Entered | market::DecimalsFrom::Remembered) {
+                crate::recent::record_first_order_decimals(&c.network, &a.cov, a.decimals);
+            }
+            code
+        }
         _ => {
             super::flow::print_issues(&plan.issues, false);
             eprintln!("error: the order could not be planned: nothing signed");

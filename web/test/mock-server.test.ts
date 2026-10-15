@@ -188,6 +188,9 @@ describe('indexer REST', () => {
     await post('/mock/seed', { open_token: true });
     const row = (await get('/v1/tokens')).body.tokens.find((x: any) => x.covenant_id === '0f'.repeat(32));
     expect(row).toMatchObject({ ticker: '', standing: 'unverified', powers: [], template_id: 'KCC20Ref_8x8', scale: null, decimals: null, family: 'kcc20' });
+    // the scale of its market (its earliest order's, open or ended); a registry token's row has none (its `scale` is the market's)
+    expect(row.market_scale).toBe(1000);
+    expect((await get('/v1/tokens')).body.tokens.find((x: any) => x.covenant_id === EXKCC).market_scale).toBeNull();
     expect(row.open_asks).toBe(3);
     const book = (await get(`/v1/books/${row.covenant_id}?aggregate=false&depth=50`)).body;
     expect(book.asks).toHaveLength(3);

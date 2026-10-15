@@ -77,6 +77,11 @@ pub struct TokenView {
     /// The standard scale of the token's orders (`10^decimals`, at most `10^9`): an order is listed only at this scale, so the
     /// listed orders of a token quote the same whole token. `null` without `decimals`.
     pub scale: Option<i64>,
+    /// A token without `decimals` (no registry entry): the scale of its earliest order, open or ended ([`market_scale`]). The
+    /// first order of such a token sets its market's price scale, and it stays the market's after every order of it has ended:
+    /// a client prices new orders at it and refuses decimals that give another scale. `null` for a token with `decimals` (its
+    /// `scale` is the market's) and for one no order of which was ever seen.
+    pub market_scale: Option<i64>,
     /// `official` (confirmed genuine), `unverified` (a token of a strict-list program KOB has not confirmed; tickers collide, identify
     /// it by covenant id plus template hash).
     pub standing: &'static str,
@@ -116,6 +121,24 @@ fn sole_extension(conn: &Connection, cov: &[u8], tpl: &[u8]) -> DbResult<Option<
     })
 }
 
+/// Most of a token's orders (oldest first) [`market_scale`] reads.
+pub const MARKET_SCALE_SCAN_MAX: i64 = 1_000;
+
+/// The price scale of the market of a token without `decimals`: the scale of its earliest listed order, open or ended (the
+/// first order of the token set it), else of its earliest order when none of its oldest [`MARKET_SCALE_SCAN_MAX`] orders was
+/// listed; `None` when no order of the token was ever seen. Imported history (`genesis_block` 0) counts as the oldest. Only
+/// scales an order can have (powers of ten up to 10^9) count. A bounded read of the token's oldest rows (index
+/// `orders_token_genesis`).
+pub fn market_scale(conn: &Connection, cov: &[u8]) -> DbResult<Option<i64>> {
+    let mut st = conn.prepare_cached(
+        "SELECT scale FROM (SELECT scale, listed, genesis_block, covenant_id FROM orders WHERE token_cov_id = ?1 \
+         ORDER BY genesis_block, covenant_id LIMIT ?2) \
+         WHERE scale IN (1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000) \
+         ORDER BY listed DESC, genesis_block, covenant_id LIMIT 1",
+    )?;
+    Ok(st.query_row(rusqlite::params![cov, MARKET_SCALE_SCAN_MAX], |r| r.get(0)).optional()?)
+}
+
 /// Most (token, program) rows the open part of [`token_list`] reads (tokens without a registry entry).
 pub const OPEN_TOKEN_ROWS_MAX: i64 = 5_000;
 
@@ -145,6 +168,7 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 family: t.family.map(|f| f.as_str()),
                 decimals: t.decimals,
                 scale: t.scale(),
+                market_scale: None,
                 standing: tokens.standing_of(t),
                 official_declared: t.official,
                 registry: tokens.info().cloned(),
@@ -204,6 +228,7 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 family: Some(strict.family.as_str()),
                 decimals: None,
                 scale: None,
+                market_scale: market_scale(conn, &cov)?,
                 standing: "unverified",
                 official_declared: false,
                 registry: tokens.info().cloned(),

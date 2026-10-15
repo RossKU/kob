@@ -108,6 +108,18 @@ export function readyView(chain) {
   return { status: ready ? 200 : 503, body: { ready, reason: ready ? 'ok' : 'indexer is not following the chain', state: v.state, lag_seconds: v.lag_seconds } };
 }
 
+/**
+ * A token without decimals: the scale of its earliest order, open or ended, listed orders first (kob-executor reads.rs `market_scale`): the scale
+ * its first order set, which stays the market's. Null with decimals and before any order.
+ */
+function marketScale(chain, t) {
+  if (t.decimals != null) return null;
+  const mine = [...chain.orders.values()].filter((o) => o.token === t.covenant_id);
+  const first = (xs) => xs.sort((a, b) => a.genesis.seq - b.genesis.seq || (a.covenantId < b.covenantId ? -1 : a.covenantId > b.covenantId ? 1 : 0))[0];
+  const o = first(mine.filter((x) => x.listed)) ?? first(mine);
+  return o ? Number(termsOf(o.state).scale) : null;
+}
+
 export function tokensView(chain) {
   const count = (tok, side) =>
     [...chain.orders.values()].filter((o) => o.token === tok && o.side === side && o.listed && o.inBook && active(o) && !o.possiblyFrozen).length;
@@ -119,6 +131,7 @@ export function tokensView(chain) {
       extension_commitment: t.extension_commitment,
       decimals: t.decimals,
       scale: t.scale,
+      market_scale: marketScale(chain, t),
       open_asks: count(t.covenant_id, 1),
       open_bids: count(t.covenant_id, 2),
       standing: t.standing,

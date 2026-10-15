@@ -7,11 +7,14 @@
 //   * extension commitment (KCC-20): the indexer row's, else the one of the token's listed orders; none found: `no-extension` (KRON has none).
 //     The pick and its source are kept on the TokenInfo (`extension`) so the pre-sign screen shows them, cross-checked against the commitments
 //     known without the indexer (`extensionReferences`: a genesis-verified registry entry, the wallet's node-verified holdings; audit A1-2);
-//   * scale: the order scale (a power of ten, the price denominator) shared by most open orders of the token, so the wallet's orders quote the
-//     same whole token as the book; decimals = its exponent (the chain carries no decimals: amounts are shown in that whole token, prices per
-//     it). No orders: the decimals the user entered for the token's first order (0..=9, scale 10^decimals; `openScale: 'entered'`), else
+//   * scale: the scale of the token's market (a power of ten, the price denominator): the scale its first order set, open or ended, as the
+//     indexer reports it (`market_scale`), else (an older indexer) the one shared by most open orders of the token, so the wallet's orders quote
+//     the same whole token as the book; decimals = its exponent (the chain carries no decimals: amounts are shown in that whole token, prices per
+//     it). No order ever: the decimals the user entered for the token's first order (0..=9, scale 10^decimals; `openScale: 'entered'`), else
 //     `no-scale`. Nothing on chain or in the indexer states a token's decimals (an issuance's KCC-23 metadata and supply.json are off-chain
-//     files), so they are never assumed; once an order exists its scale decides again;
+//     files), so they are never assumed; once an order exists its scale decides again, also after every order of the token has ended (a first
+//     order with other decimals then would put two scales on one market: TN10 2026-10-15 O-3), and entered decimals that give another scale
+//     are refused (`scale-conflict`);
 //   * program review: on mainnet only a `reviewed` program (the KCC-20 3/3 reference, its public-mint build, the KRON programs) is traded
 //     here, whatever the indexer lists; prototypes (8x8, ...) are `program-unreviewed`;
 //   * a KCC-20 token the indexer does not list at all (no order of it was ever placed) is known only from the wallet's own token UTXOs of it
@@ -26,7 +29,7 @@ import { extensionOfState, familyOfProgram, isKeyOwned } from './token-state';
 import { TEMPLATE_ID_PROGRAM, toTokenMarket } from './token-market';
 import { CAPABILITIES, longId, type Capability, type ExtensionCheck, type ExtensionReference, type TokenInfo, type TokenRegistry } from './registry';
 
-export type OpenTokenIssue = 'program-unknown' | 'program-unreviewed' | 'no-scale' | 'no-extension' | 'scale-invalid' | 'book-unavailable';
+export type OpenTokenIssue = 'program-unknown' | 'program-unreviewed' | 'no-scale' | 'no-extension' | 'scale-invalid' | 'scale-conflict' | 'book-unavailable';
 export type OpenTokenResult = { ok: true; info: TokenInfo } | { ok: false; reason: OpenTokenIssue };
 
 /** Most decimals a first order can name: the scale is `10^decimals`, at most 10^9 (`MAX_SCALE`, kob-protocol `state.rs`). */
@@ -105,6 +108,17 @@ export interface OpenTokenOptions {
 }
 
 /**
+ * The scale of an open-list token's market: the indexer's `market_scale` (its first order's, open or ended), else the scale most of its open orders
+ * use (an indexer without `market_scale`, or a token whose first order it has not seen yet); null when neither tells one. A `market_scale` that is
+ * not a power of ten up to 10^9 is `invalid`.
+ */
+export function marketScaleOf(view: Pick<IndexerTokenView, 'market_scale'>, orderScales: readonly ScaleSample[]): number | null | 'invalid' {
+  const m = view.market_scale;
+  if (m !== undefined && m !== null) return typeof m === 'number' && exponentOf(m) !== null ? m : 'invalid';
+  return standardScaleOf(orderScales);
+}
+
+/**
  * TokenInfo of an open-list token, or the reason it cannot be traded here. `orderScales` are the scales of the token's open orders (book rows);
  * `extFromOrders` the extension commitment read from one of its listed orders; `references` the commitments known without the indexer
  * (`extensionReferences`), compared with the pick (`info.extension`); `opts.decimals` the decimals entered for a first order.
@@ -127,9 +141,14 @@ export function synthesizeOpenToken(
   if (!programAllowed(program, opts.network)) return { ok: false, reason: 'program-unreviewed' };
   const ext = family === 'kron' ? null : (view.extension_commitment ?? extFromOrders);
   if (family === 'kcc20' && !ext) return { ok: false, reason: 'no-extension' };
-  const fromOrders = standardScaleOf(orderScales);
+  const fromOrders = marketScaleOf(view, orderScales);
+  if (fromOrders === 'invalid') return { ok: false, reason: 'scale-invalid' };
   const d = opts.decimals;
-  const entered = fromOrders === null && typeof d === 'number' && Number.isInteger(d) && d >= 0 && d <= MAX_OPEN_DECIMALS ? d : null;
+  const typed = typeof d === 'number' && Number.isInteger(d) && d >= 0 && d <= MAX_OPEN_DECIMALS ? d : null;
+  // decimals entered for a first order while the market has a scale: the same scale is fine, another is refused (never silently replaced: the
+  // amount and the price typed for them would then mean other quantities)
+  if (fromOrders !== null && typed !== null && 10 ** typed !== fromOrders) return { ok: false, reason: 'scale-conflict' };
+  const entered = fromOrders === null ? typed : null;
   const scale = fromOrders ?? (entered !== null ? 10 ** entered : null);
   if (scale === null) return { ok: false, reason: 'no-scale' };
   const decimals = exponentOf(scale);

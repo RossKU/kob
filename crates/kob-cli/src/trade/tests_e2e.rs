@@ -954,3 +954,55 @@ fn a_second_sell_within_the_indexer_lag_spends_the_first_ones_token_change() {
     assert!(s2.tx.inputs.iter().any(|i| i.transaction_id == txid && i.utxo.covenant_id == Some(TOKEN)), "spends the change");
     assert_eq!(w.submitted(), 2);
 }
+
+/// A token without a registry entry, whose decimals the indexer does not name (TN10 2026-10-15 O-1 to O-3):
+/// - `kob book` of it before any order shows the empty book, without asking for a `--decimals` it does not take (O-2);
+/// - the first order names its decimals with `--decimals`; the next command, while the indexer has not seen that order, takes
+///   them from this machine's record, and refuses a `--decimals` of another scale (O-1);
+/// - once every order of it has ended (the book is empty again), the indexer's `market_scale` (its first order's scale) decides:
+///   no `--decimals` is needed and one of another scale is refused, so no second scale comes onto the market (O-3).
+#[test]
+fn the_first_order_scale_of_an_unlisted_token_sticks() {
+    let w = world("stickyscale", &[]);
+    let set = |k: &str, v: Value| w.indexer_state.lock().unwrap().routes.get_mut("/v1/tokens").unwrap()["tokens"][0][k] = v;
+    set("decimals", Value::Null);
+    let place = crate::trade::place::run;
+    let buy = |d: &str| format!("limit --token TST --side buy --amount 5TST --price 2KAS --yes{d}");
+    let scale_of = |w: &World| {
+        let s = w.signed(".place.json");
+        let AnyState::KobBid(b) = &recover_orders(&s.tx).unwrap()[0].order else { panic!() };
+        b.scale
+    };
+    // O-2: the book of a token without orders
+    let (p, c, _) = view_args(&w, 0x11, "TST", &["--quote", "--depth"], &[]);
+    let (v, lines) = crate::trade::views::book_view(&c, &p).unwrap();
+    assert_eq!((v["scale"].clone(), v["asks"].as_array().map(Vec::len)), (Value::Null, Some(0)));
+    assert!(lines.iter().any(|l| l.contains("no order of it yet") && l.contains("--decimals N")), "{lines:?}");
+    assert_eq!(run(crate::trade::views::run_book, w.args(0x11, "TST")), 0);
+    // nothing tells the decimals: refused, saying how the first order names them
+    assert_eq!(run(place, w.args(0x11, &buy(""))), 1);
+    assert_eq!(w.submitted(), 0);
+    // O-1: the first order names them; within the indexer's lag the next one needs no --decimals, and another value is refused
+    assert_eq!(run(place, w.args(0x11, &buy(" --decimals 3"))), 0);
+    assert_eq!((w.submitted(), scale_of(&w)), (1, SCALE));
+    assert_eq!(crate::recent::first_order_decimals(NET, &TOKEN), Some(3));
+    assert_eq!(run(place, w.args(0x11, &buy(""))), 0);
+    assert_eq!((w.submitted(), scale_of(&w)), (2, SCALE));
+    assert_eq!(run(place, w.args(0x11, &buy(" --decimals 2"))), 1);
+    assert_eq!(w.submitted(), 2);
+    // O-3: the indexer has seen the orders and they have all ended; the record is gone (another machine): the market's scale
+    std::fs::remove_file(crate::recent::decimals_path().unwrap()).unwrap();
+    set("market_scale", json!(SCALE));
+    assert_eq!(run(place, w.args(0x11, &buy(""))), 0);
+    assert_eq!((w.submitted(), scale_of(&w)), (3, SCALE));
+    assert_eq!(run(place, w.args(0x11, &buy(" --decimals 2"))), 1, "a second scale on the market");
+    assert_eq!(run(place, w.args(0x11, &buy(" --decimals 3"))), 0);
+    assert_eq!(w.submitted(), 4);
+    // the book reads at the market's scale
+    w.indexer_state.lock().unwrap().routes.insert(
+        format!("/v1/books/{}?depth=20", to_hex(&TOKEN)),
+        json!({"token": to_hex(&TOKEN), "aggregated": true, "asks": [], "bids": []}),
+    );
+    let (v, _) = crate::trade::views::book_view(&c, &p).unwrap();
+    assert_eq!(v["scale"], SCALE);
+}

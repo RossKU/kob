@@ -236,3 +236,64 @@ async fn the_open_token_list_reports_the_zero_extension_commitment() {
     }
     assert_eq!(list()[0].extension_commitment.as_deref(), Some(Hash32([0; 32]).to_hex().as_str()));
 }
+
+/// The market scale of a token without decimals is sticky (TN10 2026-10-15 O-3): `/v1/tokens` reports the scale of the token's
+/// earliest listed order after every order of it has ended, and a later order of another scale does not move it. A client prices
+/// the next "first order" at it instead of asking for decimals again (another value would put two scales on one market).
+#[tokio::test]
+async fn the_open_token_list_reports_the_scale_of_the_earliest_order_after_it_ended() {
+    use kob_executor::tokens::{StrictTemplate, TokenAllowlist};
+    use kob_protocol::artifacts::{token_template, TemplateId};
+    use kob_protocol::tx::FeeOptions;
+
+    let strict = (
+        Hash32(token_template(TemplateId::Kcc20Ref).hash),
+        StrictTemplate { id: "KCC20Ref".into(), family: TemplateId::Kcc20Ref.family(), powers: vec![] },
+    );
+    let c = Ctx::new();
+    let list = || {
+        let g = c.hs.ingest.lock().unwrap();
+        let rows = reads::token_list(g.conn(), &TokenAllowlist::from_entries([]).with_strict_templates([strict.clone()])).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        rows.into_iter().next().unwrap()
+    };
+    // the first order (scale 1000), then cancelled: no open order is left, the market keeps its scale
+    let b = bid(MAKER_B, P250);
+    let create = c.w.create_tx(AnyState::KobBid(b.clone()), b.escrow(5 * WHOLE, 2).unwrap() as u64, MAKER_B, 0);
+    c.push(&[&create]).await;
+    let first = c.w.cov(&create, 0);
+    assert_eq!((list().open_bids, list().market_scale), (1, Some(SCALE)));
+    let cancel = c.w.sign(&Action::CancelOrder(CancelOrder {
+        prefund: None,
+        order: c.w.order(&create, 0, AnyState::KobBid(b.clone())),
+        custody: None,
+        foreign: vec![],
+        strays: vec![],
+        tokens: vec![],
+        funding: vec![c.w.coin(MAKER_B, 10)],
+        change: None,
+        replace: None,
+        lock_time: 0,
+        records: vec![],
+        fee: FeeOptions::default(),
+    }));
+    c.push(&[&cancel]).await;
+    assert_eq!(c.hs.status(&first), "cancelled");
+    let row = list();
+    assert_eq!((row.open_bids, row.scale, row.market_scale), (0, None, Some(SCALE)));
+    assert_eq!(serde_json::to_value(&row).unwrap()["market_scale"], SCALE);
+    // a later order of another scale does not move it
+    let b2 = BidState { scale: 100, min_fill: 100, ..bid(MAKER_B, P250) };
+    let create2 = c.w.create_tx(AnyState::KobBid(b2.clone()), b2.escrow(500, 2).unwrap() as u64, MAKER_B, 0);
+    c.push(&[&create2]).await;
+    assert_eq!((list().open_bids, list().market_scale), (1, Some(SCALE)));
+    // only listed orders set it while one is among the token's oldest; none listed: the earliest order's
+    let g = || c.hs.ingest.lock().unwrap();
+    g().conn().execute("UPDATE orders SET listed = 0 WHERE covenant_id = ?1", [&first.0[..]]).unwrap();
+    assert_eq!(list().market_scale, Some(100));
+    g().conn().execute("UPDATE orders SET listed = 0", []).unwrap();
+    assert_eq!(list().market_scale, Some(SCALE));
+    // a token without an order (known from its placements' token events) has none
+    g().conn().execute("DELETE FROM orders", []).unwrap();
+    assert_eq!(list().market_scale, None);
+}

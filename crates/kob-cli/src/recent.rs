@@ -9,6 +9,11 @@
 //!
 //! The file is `recent-token-outputs.json` in `$KOB_STATE_DIR`, else the platform's per-user state directory
 //! (`%LOCALAPPDATA%\kob`, `$XDG_STATE_HOME/kob`, `~/.local/state/kob`).
+//!
+//! Next to it, `recent-first-order-decimals.json` keeps the decimals `--decimals` named for a submitted first order of a token
+//! without a registry entry (per network and token, a day, at most [`MAX_ENTRIES`]): until the indexer lists that order and
+//! reports the scale of the token's market, the next command of the token takes them without `--decimals` and refuses a
+//! `--decimals` of another scale (TN10 2026-10-15 O-1). The indexer's market scale, once reported, decides.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -25,6 +30,7 @@ pub const MAX_ENTRIES: usize = 256;
 /// How long an entry is kept (seconds): far beyond any indexer lag.
 pub const KEEP_SECS: u64 = 24 * 3600;
 const FILE: &str = "recent-token-outputs.json";
+const DECIMALS_FILE: &str = "recent-first-order-decimals.json";
 
 /// One token output a transaction of the key created.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,6 +181,58 @@ pub fn candidates(network: &str, owner: &[u8; 32], token: &[u8; 32]) -> Vec<(Tok
         .collect()
 }
 
+/// Where the decimals of this machine's first orders are kept (`None`: no state directory is known).
+pub fn decimals_path() -> Option<PathBuf> {
+    state_dir().map(|d| d.join(DECIMALS_FILE))
+}
+
+/// Record the decimals `--decimals` named for a submitted first order of `token` on `network`. Never fails: a problem is a
+/// warning.
+pub fn record_first_order_decimals(network: &str, token: &[u8; 32], decimals: u32) {
+    let Some(path) = decimals_path() else { return };
+    let t = now();
+    let token = to_hex(token);
+    let read: Value = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let mut all: Vec<Value> = read
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e.get("at").and_then(Value::as_u64).is_some_and(|at| at + KEEP_SECS > t && at <= t + 3600))
+        .filter(|e| {
+            !(e.get("network").and_then(Value::as_str) == Some(network) && e.get("token").and_then(Value::as_str) == Some(&token))
+        })
+        .collect();
+    all.push(json!({"network": network, "token": token, "decimals": decimals, "at": t}));
+    let skip = all.len().saturating_sub(MAX_ENTRIES);
+    let doc = Value::Array(all.split_off(skip));
+    let write = || -> std::io::Result<()> {
+        let dir = path.parent().expect("a file in the state directory");
+        std::fs::create_dir_all(dir)?;
+        let tmp = dir.join(format!("{DECIMALS_FILE}.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, serde_json::to_string_pretty(&doc).unwrap_or_default())?;
+        std::fs::rename(&tmp, &path)
+    };
+    if let Err(e) = write() {
+        eprintln!("warning: cannot keep the decimals of this first order in {}: {e}", path.display());
+    }
+}
+
+/// The decimals recorded for this machine's first order of `token` on `network` within the last day, if any.
+pub fn first_order_decimals(network: &str, token: &[u8; 32]) -> Option<u32> {
+    let path = decimals_path()?;
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let (t, token) = (now(), to_hex(token));
+    v.as_array()?
+        .iter()
+        .rev()
+        .filter(|e| {
+            e.get("network").and_then(Value::as_str) == Some(network) && e.get("token").and_then(Value::as_str) == Some(&token)
+        })
+        .filter(|e| e.get("at").and_then(Value::as_u64).is_some_and(|at| at + KEEP_SECS > t && at <= t + 3600))
+        .find_map(|e| e.get("decimals").and_then(Value::as_u64).and_then(|d| u32::try_from(d).ok()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +271,21 @@ mod tests {
         assert_eq!((*cov, st.clone()), (TOKEN, TokenState::Kron(KronState::pubkey(8, pk(1)))));
         assert!(built.tx.outputs[*index as usize].covenant.is_some());
         assert!(own_token_outputs(&built, &pk(9)).is_empty());
+    }
+
+    /// The decimals of a first order are kept per network and token; a later first order of the token replaces them.
+    #[test]
+    fn first_order_decimals_are_kept_per_network_and_token() {
+        const TOKEN: [u8; 32] = [0x9a; 32];
+        assert_eq!(first_order_decimals("testnet-10", &TOKEN), None);
+        record_first_order_decimals("testnet-10", &TOKEN, 2);
+        assert_eq!(first_order_decimals("testnet-10", &TOKEN), Some(2));
+        assert_eq!(first_order_decimals("mainnet", &TOKEN), None);
+        assert_eq!(first_order_decimals("testnet-10", &[0x9b; 32]), None);
+        record_first_order_decimals("testnet-10", &TOKEN, 6);
+        assert_eq!(first_order_decimals("testnet-10", &TOKEN), Some(6));
+        let kept: Value = serde_json::from_str(&std::fs::read_to_string(decimals_path().unwrap()).unwrap()).unwrap();
+        assert_eq!(kept.as_array().unwrap().len(), 1, "{kept}");
     }
 
     /// A genesis's own holders (recorded by `kob token issue`, which has no leader whose next states reveal them) are

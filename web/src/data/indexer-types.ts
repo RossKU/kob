@@ -38,6 +38,11 @@ export interface IndexerTokenView {
   extension_commitment: Hex | null;
   /** the token's standard scale (`10^decimals`, at most 10^9): an order is listed only when its `scale` equals it; null without decimals */
   scale?: number | null;
+  /**
+   * a token without decimals: the scale of its earliest order, open or ended (the scale its first order set, which stays the market's after every
+   * order of it has ended); null with decimals and before any order; absent on older executors
+   */
+  market_scale?: number | null;
   decimals: number | null;
   open_asks: number;
   open_bids: number;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { IndexerTokenView } from '../data/indexer-types';
 import { displayName } from './registry';
-import { checkExtension, extensionReferences, findHeldToken, heldTokenView, parseOpenDecimals, programAllowed, standardScaleOf, synthesizeOpenToken } from './open-token';
+import { checkExtension, extensionReferences, findHeldToken, heldTokenView, marketScaleOf, parseOpenDecimals, programAllowed, standardScaleOf, synthesizeOpenToken } from './open-token';
 import { toTokenMarket } from './token-market';
 import { loadKobNode } from './wasm.node';
 
@@ -118,9 +118,33 @@ describe('the first order of an open-list token: decimals entered by the user, n
     expect(zero.ok && zero.info.decimals).toBe(0);
   });
 
-  it('once an order exists its scale decides, whatever was entered', () => {
-    const r = synthesizeOpenToken(kob, view(), scales, null, null, [], { decimals: 6 });
+  it('once an order exists its scale decides: entered decimals of the same scale stand, others are refused, never silently replaced', () => {
+    const r = synthesizeOpenToken(kob, view(), scales, null, null, [], { decimals: 3 });
     expect(r.ok && r.info).toMatchObject({ decimals: 3, openScale: 'orders' });
+    expect(synthesizeOpenToken(kob, view(), scales, null, null, [], { decimals: 6 })).toEqual({ ok: false, reason: 'scale-conflict' });
+    expect(synthesizeOpenToken(kob, view(), scales).ok).toBe(true);
+  });
+
+  // TN10 2026-10-15 O-3: every earlier order of the token had ended, the book was empty, and the page offered a "first order" with entered
+  // decimals again; other decimals would have put orders of two price scales on one market
+  it('the market keeps the scale its first order set after every order of it has ended (`market_scale`)', () => {
+    const ended = view({ open_asks: 0, market_scale: 1_000_000 });
+    const r = synthesizeOpenToken(kob, ended, []);
+    expect(r.ok && r.info).toMatchObject({ decimals: 6, openScale: 'orders' });
+    expect(r.ok && toTokenMarket(kob, r.info.json).scale).toBe(1_000_000n);
+    expect(synthesizeOpenToken(kob, ended, [], null, null, [], { decimals: 2 })).toEqual({ ok: false, reason: 'scale-conflict' });
+    expect(synthesizeOpenToken(kob, ended, [], null, null, [], { decimals: 6 }).ok).toBe(true);
+    // it wins over the open orders' scale (orders of another scale placed before the market's scale was kept)
+    expect(synthesizeOpenToken(kob, view({ market_scale: 100 }), scales)).toMatchObject({ ok: true, info: { decimals: 2 } });
+    // no order ever (null), or an older indexer (absent): the open orders, else the entered decimals
+    for (const v of [view({ market_scale: null }), view()]) {
+      expect(synthesizeOpenToken(kob, v, scales)).toMatchObject({ ok: true, info: { decimals: 3 } });
+      expect(synthesizeOpenToken(kob, v, [], null, null, [], { decimals: 2 })).toMatchObject({ ok: true, info: { decimals: 2, openScale: 'entered' } });
+    }
+    // a scale no order can have
+    for (const bad of [500, 10_000_000_000, '1000' as never]) expect(synthesizeOpenToken(kob, view({ market_scale: bad }), [])).toEqual({ ok: false, reason: 'scale-invalid' });
+    expect(marketScaleOf(view({ market_scale: 1000 }), [{ scale: 10 }])).toBe(1000);
+    expect(marketScaleOf(view(), [{ scale: 10 }])).toBe(10);
   });
 
   it('parseOpenDecimals: one digit 0..9, else null', () => {
