@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { OrderSnapshot } from '../../kob/cancel';
-import { MAX_IDLE_DAA, daaToUnix, gtcRenewalUnix } from '../../kob/daa';
+import { MARKET_AUCTION_DAA, MAX_IDLE_DAA, daaToUnix, gtcRenewalUnix } from '../../kob/daa';
+import { decaySlope } from '../../kob/orders/simple';
 import type { Clock } from '../../kob/plan-types';
 import { recordsFromBuilt, type ResolvedRecord } from '../../kob/records';
 import type { OrderStatus } from '../../data/indexer-types';
@@ -44,6 +45,20 @@ describe('orderTypeKey via describeEntry (real golden orders)', () => {
       expect(row.live).toBe(true);
     });
   }
+
+  it('a limit that crossed the book (an auction from the touch to the limit over MARKET_AUCTION_DAA) is a limit, not a Dutch', () => {
+    const p = placeGolden(kob, 'create.ask.dutch');
+    const snap = p.snapshots[0];
+    const st = snap.order.state as Extract<OrderState, { kind: 'KobAsk' | 'KobAskKron' }>;
+    const price = BigInt(st.state.price);
+    const priceEnd = BigInt(st.state.priceEnd);
+    const marketable: OrderSnapshot = {
+      ...snap,
+      order: { ...snap.order, state: { ...st, state: { ...st.state, decayStep: '1', slope: decaySlope(price, priceEnd, MARKET_AUCTION_DAA, 1n).toString() } } },
+    };
+    expect(describeEntry(buildEntries([orderViewOf(kob, marketable)], [])[0], ctx).typeKey).not.toBe('dutch');
+    expect(rowOf('create.ask.dutch').row.typeKey).toBe('dutch');
+  });
 
   it('a stop entry keeps its trigger price and armed flag', () => {
     const { row } = rowOf('create.ifdBid.stopEntry');
