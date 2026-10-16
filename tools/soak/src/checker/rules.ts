@@ -348,6 +348,36 @@ export function keepersCanAct(
   return !(m.kob_matcher_book_stale === 1 || m.kob_matcher_waiting_for_indexer === 1 || m.kob_matcher_paused === 1);
 }
 
+/**
+ * One token's part of the checker's fast sweep (run.ts `sweepTerms`; the reads are injected): `page(cursor)` lists the token's orders newest
+ * first. Reads pages down to one that holds an order the previous sweep listed (`prev`: everything below it was read then), and on, to
+ * `depth` orders at most, while an order of `pending` (read again each sweep) is not read yet. Without `prev` (the first sweep) it reads
+ * `depth` orders. `visit` sees every order read; returns the ids read (the next sweep's `prev`).
+ */
+export async function sweepPages<V extends { covenant_id: string }>(
+  page: (cursor: string | undefined) => Promise<{ items: V[]; next_cursor?: string | null }>,
+  prev: ReadonlySet<string> | undefined,
+  pending: ReadonlySet<string>,
+  depth: number,
+  visit: (v: V) => void,
+): Promise<Set<string>> {
+  const listed = new Set<string>();
+  let cursor: string | undefined;
+  while (listed.size < depth) {
+    const p = await page(cursor);
+    let reached = false;
+    for (const v of p.items) {
+      listed.add(v.covenant_id);
+      if (prev?.has(v.covenant_id)) reached = true;
+      visit(v);
+    }
+    if (!p.next_cursor || !p.items.length) break;
+    if (reached && [...pending].every((id) => listed.has(id))) break;
+    cursor = p.next_cursor;
+  }
+  return listed;
+}
+
 /** the indexer cursor DAA since which the keepers have been able to act without a break, after one more sample (null: they cannot) */
 export function nextFollowingSince(prev: bigint | null, canAct: boolean, cursorDaa: bigint): bigint | null {
   return canAct ? (prev ?? cursorDaa) : null;

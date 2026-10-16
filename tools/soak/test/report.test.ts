@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { IncidentLog, readIncidents } from '../src/checker/incidents.ts';
-import { botActions, buildReport, fmtDur, fmtKas, fmtUnits, ordersSummary, resourcePeaks, type ReportData } from '../src/checker/report-model.ts';
+import { botActions, buildReport, fmtDur, fmtKas, fmtUnits, memoOrderRows, ordersSummary, resourcePeaks, type ReportData } from '../src/checker/report-model.ts';
 
 test('bot counters per action, with the top refusal codes', () => {
   const rows = botActions({
@@ -110,4 +110,24 @@ test('incident log: appended once per (invariant, subject), also across restarts
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('orders of the soak tokens from the checker memo: a pair order counts once, other tokens are left out, legacy memos by the scan scope', () => {
+  const ids = ['tusd', 'teth', 'kron'];
+  const memo = {
+    a: { c: 'KobAsk', tif: 0, status: 'open', side: 1, tk: [0] },
+    b: { c: 'KobBid', tif: 1, status: 'killed', side: 2, tk: [1] },
+    p: { c: 'KobPair', tif: 0, status: 'filled', side: 1, tk: [1, 0] },
+    k: { c: 'KobAsk', tif: 0, status: 'open', side: 1, tk: [2] },
+    old: { c: 'KobBid', tif: 0, status: 'cancelled', side: 2 },
+  };
+  const all = memoOrderRows(memo, ids, ['TUSD', 'teth'], true);
+  assert.equal(all.rows.length, 4);
+  assert.equal(all.complete, true);
+  assert.equal(ordersSummary(all.rows).byContract.KobPair.total, 1);
+  // with an external token traded, a memo without its token cannot be placed: left out, the list says it is incomplete
+  const ext = memoOrderRows(memo, ids, ['tusd', 'teth'], false);
+  assert.equal(ext.rows.length, 3);
+  assert.equal(ext.complete, false);
+  assert.equal(memoOrderRows(memo, ids, ['tusd'], true).rows.length, 3);
 });

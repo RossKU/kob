@@ -1,18 +1,15 @@
 // The soak summary report: run/reports/latest.{json,txt}, plus a timestamped copy per hour (report-YYYYMMDD-HH.{json,txt}). Inputs:
-// both indexers (health, the full order list of the token, open asks / bids), the executors' metrics files, the bots' counters, the
-// checker's state (fills / volume / check counters), the incident log, the supervisor's status and resource samples. The text form is
-// compact (scripts/status.ps1 prints it; it is pasted into status updates).
+// both indexers (health, open asks / bids), the executors' metrics files, the bots' counters, the checker's state (fills / volume / check
+// counters, its order memo: the orders by contract, status and tif), the incident log, the supervisor's status and resource samples. The
+// text form is compact (scripts/status.ps1 prints it; it is pasted into status updates).
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { HttpIndexer } from '@/data/indexer';
 import type { Env } from '../env';
-import { errText, logger } from '../log';
 import { readIncidents } from './incidents.ts';
-import { buildReport, resourcePeaks, type ExecutorRow, type OrderRow, type ReportData, type ResourceSample } from './report-model.ts';
+import { buildReport, memoOrderRows, resourcePeaks, type ExecutorRow, type OrderRow, type ReportData, type ResourceSample } from './report-model.ts';
 import { parseProm } from './rules.ts';
 import type { CheckerState } from './store.ts';
-
-const log = logger('report');
 
 function readJson<T>(p: string): T | null {
   try {
@@ -49,30 +46,19 @@ export async function writeReport(env: Env): Promise<{ text: string }> {
     executors.push({ name: e.name, health, metrics: existsSync(mp) ? parseProm(readFileSync(mp, 'utf8')) : null });
   }
 
-  // orders of every soak token (paged; a pair order is listed under both its tokens: counted once) and the book counts
+  // orders of every soak token from the checker's memo (one entry per order: a pair order listed under both its tokens counts once). Paging
+  // the indexer's whole order history here cost ~250 requests per token every 5 minutes, growing with the history, and stopped at 50,000
+  // orders per token anyway
   const soakTokens = [t, env.state.token2, env.state.token3].filter((x): x is NonNullable<typeof t> => !!x);
-  const orders: OrderRow[] = [];
-  let ordersComplete = true;
+  const chk = readJson<CheckerState>(join(run, 'state', 'checker.json'));
+  const legacyIsSoak = !(cfg.externalTokens ?? []).some((x) => x.trade && x.trade.bookShare > 0);
+  const memo = chk ? memoOrderRows(chk.orders ?? {}, chk.tokenIds ?? [], soakTokens.map((s) => s.covenantId), legacyIsSoak) : { rows: [], complete: false };
+  const orders: OrderRow[] = memo.rows;
+  const ordersComplete = memo.complete;
   let openAsks: number | null = null;
   let openBids: number | null = null;
   const open = new Map<string, { asks: number | null; bids: number | null }>();
   if (token) {
-    try {
-      const maxPages = 250;
-      const seen = new Set<string>();
-      for (const st of soakTokens) {
-        const all = await env.indexer.allOrders({ token: st.covenantId, limit: 200 }, { maxPages });
-        if (all.length >= maxPages * 200) ordersComplete = false;
-        for (const o of all) {
-          if (seen.has(o.covenant_id)) continue;
-          seen.add(o.covenant_id);
-          orders.push({ contract: o.contract, tif: o.tif ?? null, status: o.status, side: o.side });
-        }
-      }
-    } catch (e) {
-      ordersComplete = false;
-      log.warn('order listing failed', { error: errText(e) });
-    }
     try {
       const tks = await env.indexer.tokens();
       for (const st of soakTokens) {
@@ -88,7 +74,6 @@ export async function writeReport(env: Env): Promise<{ text: string }> {
 
   // bots, checker, incidents
   const bots = readJson<{ ts: number; counters: Record<string, number>; gauges: Record<string, unknown> }>(join(run, 'stats', 'bots.json'));
-  const chk = readJson<CheckerState>(join(run, 'state', 'checker.json'));
   const incidents = readIncidents(join(run, 'incidents.jsonl'));
   const paidByPath: Record<string, number> = {};
   const errors: Record<string, number> = {};

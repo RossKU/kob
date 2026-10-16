@@ -31,6 +31,7 @@ import {
   stopFloor,
   stopCeiling,
   stopMayHaveMoved,
+  sweepPages,
   termsAtFill,
   worstBound,
 } from '../src/checker/rules.ts';
@@ -811,4 +812,41 @@ test('orders copied from older runs by import-history are recognised (their fill
   assert.equal(isImportedHistory({ unlisted_reason: 'below_min_value' }), false);
   assert.equal(isImportedHistory({ unlisted_reason: null }), false);
   assert.equal(isImportedHistory({}), false);
+});
+
+test('the fast sweep reads down to the newest order the previous sweep listed, deeper only for a pending order, at most its depth', async () => {
+  // a token listing, newest first, served in pages of 3; `reads` counts the pages
+  const ids = Array.from({ length: 20 }, (_, i) => `o${20 - i}`);
+  let reads = 0;
+  const page = async (cursor: string | undefined) => {
+    reads++;
+    const at = cursor ? Number(cursor) : 0;
+    const items = ids.slice(at, at + 3).map((covenant_id) => ({ covenant_id }));
+    return { items, next_cursor: at + 3 < ids.length ? String(at + 3) : null };
+  };
+  const sweep = async (prev: Set<string> | undefined, pending: Set<string> = new Set(), depth = 12) => {
+    reads = 0;
+    const seen: string[] = [];
+    const listed = await sweepPages(page, prev, pending, depth, (v) => seen.push(v.covenant_id));
+    return { listed, seen, reads };
+  };
+  // the first sweep: its whole depth (a page may run past it)
+  const first = await sweep(undefined);
+  assert.equal(first.reads, 4);
+  assert.deepEqual(first.seen, ids.slice(0, 12));
+  // nothing new: one page (it holds orders the previous sweep listed)
+  assert.equal((await sweep(first.listed)).reads, 1);
+  // five new orders on top: down to the first page holding a listed one
+  const prev = new Set(ids.slice(5, 17));
+  const r = await sweep(prev);
+  assert.equal(r.reads, 2);
+  assert.deepEqual(r.seen, ids.slice(0, 6));
+  // a pending order (listed live without its state) further down: read again, then stop
+  assert.equal((await sweep(first.listed, new Set(['o13']))).reads, 3);
+  // one that sank below the depth is given up
+  const deep = await sweep(first.listed, new Set(['o1']));
+  assert.equal(deep.reads, 4);
+  assert.equal(deep.listed.has('o1'), false);
+  // no overlap with the previous sweep (a reorg replaced it): its whole depth
+  assert.equal((await sweep(new Set(['gone']))).reads, 4);
 });

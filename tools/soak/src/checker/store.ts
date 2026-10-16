@@ -24,6 +24,11 @@ export interface OrderMemo {
   watch: boolean;
   /** copied from an older run's database (`isImportedHistory`): its fills are not checked */
   imported?: boolean;
+  /**
+   * its token(s) as indexes into `CheckerState.tokenIds` (its token; a pair order also its token B): the report counts the orders of the soak
+   * tokens from the memo. Absent in a memo written before the field and not memoized since (an order that ended before)
+   */
+  tk?: number[];
 }
 
 /** fill sums of one token in one transaction: tokens (base units) and KAS (sompi) of the ask-side (s, ks) and bid-side (b, kb) fills */
@@ -86,6 +91,8 @@ export interface CheckerState {
     multi?: { txMultiBook: number; txPair: number; pairFills: number; txMultiPair: number };
   };
   orders: Record<string, OrderMemo>;
+  /** the token covenant ids `OrderMemo.tk` indexes (append-only: an index never changes meaning) */
+  tokenIds?: string[];
   /**
    * full terms of orders seen by the fast sweep (every few seconds, newest orders) before any round memoized them: an order placed and
    * filled between two rounds (a crossing IOC bid that is a stop's trigger evidence) keeps its full state; consumed by `memoize`

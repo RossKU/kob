@@ -8,6 +8,39 @@ export interface OrderRow {
   side: number;
 }
 
+/** the fields of a checker order memo (store.ts `OrderMemo`) the report reads */
+export interface MemoLike {
+  c: string;
+  tif: number | null;
+  status: string;
+  side: number;
+  tk?: number[];
+}
+
+/**
+ * The orders of the soak tokens from the checker's memo (every order its scans saw: the active set and every order created since the last
+ * scan, terminated ones with their final status), instead of paging the indexer's whole order history on every report. `tokenIds` is the
+ * index the memos' `tk` point into; `soak` the soak token ids. A memo without `tk` (written before the field) counts when the checker
+ * scans only soak tokens (`legacyIsSoak`: no external token is traded); otherwise it is left out and the list is incomplete.
+ */
+export function memoOrderRows(orders: Record<string, MemoLike>, tokenIds: readonly string[], soak: readonly string[], legacyIsSoak: boolean): { rows: OrderRow[]; complete: boolean } {
+  const want = new Set(soak.map((t) => t.toLowerCase()));
+  const ix = new Set<number>();
+  tokenIds.forEach((t, i) => {
+    if (want.has(t.toLowerCase())) ix.add(i);
+  });
+  const rows: OrderRow[] = [];
+  let complete = true;
+  for (const m of Object.values(orders)) {
+    if (m.tk ? !m.tk.some((i) => ix.has(i)) : !legacyIsSoak) {
+      if (!m.tk) complete = false;
+      continue;
+    }
+    rows.push({ contract: m.c, tif: m.tif ?? null, status: m.status, side: m.side });
+  }
+  return { rows, complete };
+}
+
 export interface ActionRow {
   action: string;
   tries: number;

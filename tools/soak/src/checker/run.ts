@@ -21,7 +21,7 @@
 // 11 pair        every pair order fill (KobPair, KobCondPair, KobIfdPair) carries NO price (founder rule: pair fills are volume only) and
 //                honours the order's guarantee at its quote: an ask receives >= ceil(n x q / scale(A)) of B, a bid pays <= floor(...);
 //                every pair arm / trail names evidence of one of the two modes (two KAS-book fills, or a resting KobPair filled).
-// 12 supply      per soak token: live token UTXOs (indexer + holdings it never saw, on the node) add up to the supply.
+// 12 supply      per soak token: live token UTXOs (indexer B while it follows, else A, + holdings it never saw, on the node) add up to the supply.
 // 13 scenarios   the bots' scenario records (run/state/scenarios.jsonl, scenario-rules.ts): a limit ladder's rungs are independent orders of
 //                one size (`ladder`), cancelling one rung touches no other; a GTC renewal keeps its terms with a later expiry and a pair
 //                amend keeps pair, side and size (`replace`); a cancel-all ends every order (`cancel-all`); a token merge ends in one
@@ -38,6 +38,7 @@ import { genesisOf, slotOfToken, type Env } from '../env';
 import { ASSET_SLOTS } from '../config';
 import { SOAK_PROGRAM } from '../market';
 import { errText, logger } from '../log';
+import { metricsHealth } from '../indexer-gate';
 import { sleep } from '../util';
 import { IncidentLog } from './incidents.ts';
 import { writeReport } from './report.ts';
@@ -59,6 +60,7 @@ import {
   keepersCanAct,
   nextFollowingSince,
   stopMayHaveMoved,
+  sweepPages,
   checkSupply,
   big,
   quoteOf,
@@ -112,6 +114,17 @@ interface Ctx {
    * the IOC / FOK deadline starts no earlier. Sampled every round and every `GATE_MS` between rounds (a minute sample missed lag episodes)
    */
   followingSince: bigint | null;
+  /** the fast sweep's own state (see `sweepTerms`) */
+  sweep: SweepState;
+}
+
+interface SweepState {
+  /** a sweep is running: the next tick is skipped (requests slower than the tick stacked up) */
+  busy: boolean;
+  /** per token: the ids the previous sweep listed (where this one may stop) */
+  listed: Map<string, Set<string>>;
+  /** per token: live orders the previous sweep listed without their proven state (read again while they are among the newest) */
+  unresolved: Map<string, Set<string>>;
 }
 
 interface TokenUtxo {
@@ -196,12 +209,30 @@ export async function runChecker(env: Env): Promise<void> {
     inc,
     custodyCache: new Map(),
     followingSince: null,
+    sweep: { busy: false, listed: new Map(), unresolved: new Map() },
   };
   log.info('checker starting', { tokens, indexer: cfg.indexerUrl, indexerB: cfg.indexerUrlB, rounds: st.rounds, orders: Object.keys(st.orders).length });
-  // the fast sweep runs between rounds (the round's scan then finds the terms in st.early)
-  setInterval(() => void sweepTerms(x).catch((e) => log.debug('sweep failed', { error: errText(e) })), SWEEP_MS);
-  // the keepers' gate between rounds: a book that lags the node for a minute between two round samples restarts the kill deadline
-  setInterval(() => void health(x.A).then((h) => trackKeepers(x, h)).catch((e) => log.debug('keeper gate sample failed', { error: errText(e) })), GATE_MS);
+  // the fast sweep runs between rounds (the round's scan then finds the terms in st.early); one at a time: a tick while the previous sweep
+  // still waits for the indexer is skipped
+  setInterval(() => {
+    if (x.sweep.busy) return;
+    x.sweep.busy = true;
+    void sweepTerms(x)
+      .catch((e) => log.debug('sweep failed', { error: errText(e) }))
+      .finally(() => (x.sweep.busy = false));
+  }, SWEEP_MS);
+  // the keepers' gate between rounds: a book that lags the node for a minute between two round samples restarts the kill deadline. Sampled
+  // from GET /v1/metrics (the follower's own numbers, no database work; /v1/health counts the whole store on every request), /v1/health
+  // when the metrics cannot be read
+  let gateBusy = false;
+  setInterval(() => {
+    if (gateBusy) return;
+    gateBusy = true;
+    void gateSample(x)
+      .then((h) => trackKeepers(x, h))
+      .catch((e) => log.debug('keeper gate sample failed', { error: errText(e) }))
+      .finally(() => (gateBusy = false));
+  }, GATE_MS);
   let lastReport = 0;
   for (;;) {
     const t0 = Date.now();
@@ -242,6 +273,13 @@ function trackKeepers(x: Ctx, hA: HealthLike | null): void {
 
 const GATE_MS = 5_000;
 
+/** indexer A's lag tolerance and cursor for the keepers' gate: from its metrics, else from its health (null: no answer, the sample is skipped) */
+async function gateSample(x: Ctx): Promise<(HealthLike & { within_lag_tolerance?: boolean }) | null> {
+  const m = await metricsHealth(x.env.cfg.indexerUrl, 10_000).catch(() => null);
+  if (!m) return health(x.A);
+  return { state: m.state ?? 'not within the lag tolerance', cursor_daa: m.cursor_daa, node_daa: null, lag_daa: m.lag_daa, within_lag_tolerance: m.within_lag_tolerance };
+}
+
 async function health(ix: HttpIndexer | null): Promise<(HealthView & HealthLike) | null> {
   if (!ix) return null;
   try {
@@ -273,7 +311,10 @@ async function round(x: Ctx): Promise<void> {
   await step('strays', () => straysStep(x, now));
   await step('x402', async () => x402Step(x, now));
   await step('fees', async () => feesStep(x));
-  if (aOk) await step('supply', () => supplyStep(x, now));
+  // the supply listing (every live token UTXO of every soak token, ~10 pages a round) reads indexer B while it follows (the bots and the web
+  // app read A), A while B does not; the two list the same holdings (invariant 9 compares their orders and fills)
+  const bOk = !!x.B && !!hB && hB.state === 'following' && (hB.lag_daa ?? 0) <= 100;
+  if (bOk || aOk) await step('supply', () => supplyStep(x, now, bOk ? { url: x.env.cfg.indexerUrlB!, name: x.nameB } : { url: x.env.cfg.indexerUrl, name: x.nameA }));
   await step('scenarios', () => scenariosStep(x, now));
   if (x.B && hB) await step('agree', () => agreeStep(x, hA, hB, scan, now));
 }
@@ -343,6 +384,9 @@ function memoize(x: Ctx, v: OrderView): OrderMemo {
     watch: v.tif === 2 || WATCHED.has(baseKind(v.contract)),
   };
   if (isImportedHistory(v) || old?.imported) m.imported = true;
+  const tk = tokenIxs(x.st, v);
+  if (tk.length) m.tk = tk;
+  else if (old?.tk) m.tk = old.tk;
   x.st.orders[v.covenant_id] = m;
   if (fullTerms(m.terms) && x.st.early) delete x.st.early[v.covenant_id];
   return m;
@@ -350,16 +394,49 @@ function memoize(x: Ctx, v: OrderView): OrderMemo {
 
 const fullTerms = (t: Record<string, string> | null | undefined): Record<string, string> | null => (t && t._partial !== '1' ? t : null);
 
-/** the fast sweep: the full terms of the newest orders of the token, kept until a round memoizes the order (see `CheckerState.early`) */
+/** an order's token(s) (its token; a pair order also its token B) as indexes into `st.tokenIds`, which grows by the tokens not in it yet */
+function tokenIxs(st: CheckerState, v: OrderView): number[] {
+  const ids = (st.tokenIds ??= []);
+  const out: number[] = [];
+  for (const t of [v.token, v.pair?.base, v.pair?.quote]) {
+    if (!t) continue;
+    const id = t.toLowerCase();
+    let i = ids.indexOf(id);
+    if (i < 0) i = ids.push(id) - 1;
+    if (!out.includes(i)) out.push(i);
+  }
+  return out;
+}
+
+/** the fast sweep's page size (a few orders per token are placed between two sweeps) and how deep it reads at most (the newest orders) */
+const SWEEP_PAGE = 25;
+const SWEEP_DEPTH = 200;
+
+/**
+ * The fast sweep: the full terms of the newest orders of each token, kept until a round memoizes the order (see `CheckerState.early`).
+ * Incremental: the listing is newest first (the indexer's block sequence), so the orders below the newest one the previous sweep listed were
+ * all looked at before; it reads small pages down to that order, and on (to SWEEP_DEPTH) only while a live order listed without its proven
+ * state is still to be read again. Every order is looked at as it was when one 200-order page per token was read every SWEEP_MS.
+ */
 async function sweepTerms(x: Ctx): Promise<void> {
   const early = (x.st.early ??= {});
-  const items: OrderView[] = [];
-  for (const token of x.tokens) items.push(...(await x.A.orders({ token, limit: 200 })).items);
-  for (const v of items) {
-    const id = v.covenant_id;
-    if (early[id] || fullTerms(x.st.orders[id]?.terms)) continue;
-    const t = trimTerms(v.state);
-    if (t) early[id] = { terms: t, daa: v.genesis?.daa ?? v.last_daa };
+  for (const token of x.tokens) {
+    const unresolved = new Set<string>();
+    const listed = await sweepPages(
+      (cursor) => x.A.orders({ token, limit: SWEEP_PAGE, cursor }),
+      x.sweep.listed.get(token),
+      x.sweep.unresolved.get(token) ?? new Set(),
+      SWEEP_DEPTH,
+      (v) => {
+        const id = v.covenant_id;
+        if (early[id] || fullTerms(x.st.orders[id]?.terms)) return;
+        const t = trimTerms(v.state);
+        if (t) early[id] = { terms: t, daa: v.genesis?.daa ?? v.last_daa };
+        else if (isActive(v.status)) unresolved.add(id);
+      },
+    );
+    x.sweep.listed.set(token, listed);
+    x.sweep.unresolved.set(token, unresolved);
   }
 }
 
@@ -1177,12 +1254,12 @@ interface RawTokenUtxo {
   amount: string;
 }
 
-/** every live token UTXO of `token` the indexer knows (`/v1/token-utxos?token=`, all owners); null when it cannot be listed */
-async function liveTokenUtxos(x: Ctx, token: string): Promise<RawTokenUtxo[] | null> {
+/** every live token UTXO of `token` the indexer at `indexerUrl` knows (`/v1/token-utxos?token=`, all owners); null when it cannot be listed */
+async function liveTokenUtxos(indexerUrl: string, token: string): Promise<RawTokenUtxo[] | null> {
   const out: RawTokenUtxo[] = [];
   let cursor: string | null = null;
   for (let i = 0; i < 200; i++) {
-    const u = new URL('/v1/token-utxos', x.env.cfg.indexerUrl);
+    const u = new URL('/v1/token-utxos', indexerUrl);
     u.searchParams.set('token', token);
     u.searchParams.set('limit', '200');
     if (cursor) u.searchParams.set('cursor', cursor);
@@ -1253,12 +1330,12 @@ function supplyOf(x: Ctx, token: string): { ticker: string; supply: bigint; exac
   return null;
 }
 
-async function supplyStep(x: Ctx, now: number): Promise<void> {
+async function supplyStep(x: Ctx, now: number, ix: { url: string; name: string }): Promise<void> {
   const book = (x.st.supply ??= {});
   for (const token of x.tokens) {
     const sup = supplyOf(x, token);
     if (!sup) continue;
-    const indexed = await liveTokenUtxos(x, token);
+    const indexed = await liveTokenUtxos(ix.url, token);
     if (!indexed) {
       stat(x, 'supplySkipped');
       continue;
@@ -1303,7 +1380,7 @@ async function supplyStep(x: Ctx, now: number): Promise<void> {
         log.info('supply baseline established', { token, ticker: sup.ticker, delta: delta.toString(), note: 'holdings of pre-run keys the trackers do not know' });
       }
     } else {
-      const v = checkSupply(token, sup.ticker, sup.supply, live, BigInt(rec.baseline), { indexed: indexedSum.toString(), indexedUtxos: indexed.length, untrackedOnNode: untracked.toString() });
+      const v = checkSupply(token, sup.ticker, sup.supply, live, BigInt(rec.baseline), { indexer: ix.name, indexed: indexedSum.toString(), indexedUtxos: indexed.length, untrackedOnNode: untracked.toString() });
       const p = x.persist.observe(`supply:${token}`, !!v, now, 3, 120_000, delta.toString());
       if (v && p.fire) report(x, v);
       if (!v) stat(x, 'supplyOk');
