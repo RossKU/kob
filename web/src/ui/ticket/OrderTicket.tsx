@@ -20,7 +20,7 @@ import { readPairReferences, readReferences, type References } from '../../data/
 import type { PlanEnv } from '../../kob/plan-types';
 import { auctionSubmitBy } from '../../wallet/sign';
 import { SendStatusLine, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
-import type { SendJob } from '../confirm/send';
+import type { GateVerdict, SendJob } from '../confirm/send';
 import { oppositeSide } from '../market/orientation';
 import { DisclosurePanel } from './DisclosurePanel';
 import { useCovenantSignGate } from './CovenantSignGate';
@@ -36,7 +36,7 @@ import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadde
 import { maxBuyAmount } from './max-amount';
 import { orderLabel } from './order-label';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan, type EnvWait } from './use-ticket';
-import { CLOCK_TICK_MS, CLOCK_WAIT_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, liveClockAt, recheckVerdict, reviewClock } from './review-check';
+import { CLOCK_TICK_MS, CLOCK_WAIT_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, liveClockAt, reviewClock, sameTransaction, slippageWithin, withinTerms } from './review-check';
 import { rememberPairForm, takePairFlip } from './pair-flip';
 import './ticket.css';
 
@@ -60,10 +60,11 @@ export interface OrderTicketProps {
   inverted?: boolean;
 }
 
-/** A level that could not be planned at the click: the sentence, and the raw builder text behind "Details". */
+/** A level that could not be planned at the click: the sentence, the raw builder text behind "Details", and the code of the status line. */
 interface PlanStop {
   text: string;
   raw?: string;
+  code?: string;
 }
 
 /**
@@ -423,11 +424,34 @@ export function OrderTicket(props: OrderTicketProps) {
   const noRefs = (): References => ({ touches: [], unavailable: verifiers.map((v) => v.label) });
 
   /**
-   * Plans one order of the click (`index` of `levels`: a ladder places each level as its own transaction) at once, from the environment on hand
-   * when it is recent enough, with the node clock read now (an auction starts from it); the signature then waits for the re-check against the state
-   * at the click (review-check.ts: the freshness rule), which runs alongside the send's own checks. A level that cannot be planned stops the click.
+   * The plan made at the click within the terms the ticket showed (`shown`, review-check.ts `withinTerms`): it is the order to sign, whatever its
+   * start price, coins or fee. A market / close order whose auction would end beyond the worst price shown is planned again with the slippage
+   * narrowed to end there; a touch already beyond it, or another order kind past its shown total, stops the order.
    */
-  const prepareLevel = async (intent: Intent, index: number, levels: number): Promise<SendJob | PlanStop> => {
+  const keepTerms = (p: OrderPlan, intent: Intent, plan: (i: Intent) => OrderPlan, shown: OrderPlan | null): { p: OrderPlan; intent: Intent } | PlanStop => {
+    if (!shown || withinTerms(shown, p)) return { p, intent };
+    const d = p.disclosure;
+    const worst = shown.disclosure?.worstPrice ?? null;
+    if ((intent.type === 'market' || intent.type === 'close') && d?.expectedPrice != null && worst !== null) {
+      const bps = slippageWithin(d.side, d.expectedPrice, worst);
+      if (bps !== null) {
+        const narrowed = { ...intent, slippageBps: bps } as Intent;
+        const q = plan(narrowed);
+        if (q.ok && q.built && errors(q).length === 0 && withinTerms(shown, q)) return { p: q, intent: narrowed };
+      }
+    }
+    return { text: t('ticket.beyondTerms'), code: 'terms' };
+  };
+
+  /**
+   * Plans one order of the click (`index` of `levels`: a ladder places each level as its own transaction) at once, from the environment on hand
+   * when it is recent enough, with the node clock read now (an auction starts from it), within the terms the ticket showed (`shown`: the plan of
+   * a single order the button was enabled for); the signature then waits for the re-check against the state at the click (review-check.ts: the
+   * freshness rule), which runs alongside the send's own checks and may put its own plan of the order in place. A level that cannot be planned
+   * stops the click.
+   */
+  const prepareLevel = async (intent0: Intent, index: number, levels: number, shown: OrderPlan | null): Promise<SendJob | PlanStop> => {
+    let intent = intent0;
     const clickAt = Date.now();
     try {
       // the environment: the first level takes the one on hand when its oldest part is at most REVIEW_CACHE_MS old, else a read started at most
@@ -442,27 +466,35 @@ export function OrderTicket(props: OrderTicketProps) {
       // clock on hand projected to now, review-check.ts `projectClock`)
       const clock = liveClockAt(liveClock.current, clickAt)
         ?? (await reviewClock(() => readClock(services), base.clock, cached ? cached.clockAt : (snapshot()?.clockAt ?? clickAt), { waitMs: CLOCK_WAIT_MS })).clock;
-      const planWith = (e: PlanEnv, refs: References): OrderPlan => planOrder(withRefs({ ...e, clock }, refs), intent);
-      let p = planWith(base, touches.data ?? noRefs());
+      let refsNow = touches.data ?? noRefs();
+      const planWith = (e: PlanEnv, refs: References, i: Intent = intent): OrderPlan => planOrder(withRefs({ ...e, clock }, refs), i);
+      let p = planWith(base, refsNow);
       if ((!p.ok || !p.built || errors(p).length > 0) && fromCache) {
         // the parts on hand cannot plan it (the holdings of a sell still being read, the book moved): plan from the state at the click instead
         const fresh = await since(clickAt - REVIEW_REUSE_MS);
         if (!fresh) return { text: t('ticket.reviewNoEnv') };
         base = fresh;
         fromCache = false;
-        p = planWith(base, verifiers.length ? await touchesOf().catch(noRefs) : (touches.data ?? noRefs()));
+        refsNow = verifiers.length ? await touchesOf().catch(noRefs) : (touches.data ?? noRefs());
+        p = planWith(base, refsNow);
       }
       const firstError = errors(p)[0];
       if (!p.ok || !p.built || firstError) return { text: firstError ? issueText(firstError, issueCtx) : t('ticket.reviewChanged') };
+      const env0 = base;
+      const kept = keepTerms(p, intent, (i) => planWith(env0, refsNow, i), shown);
+      if (!('p' in kept)) return kept;
+      p = kept.p;
+      intent = kept.intent;
+      const planned = p;
       // the re-check reads again only the parts that may no longer be the state at the click (review-check.ts rule 2; none when the environment was
       // read after the click); the references of further indexers are always read again
       const toRead = fromCache ? stale(clickAt) : [];
       const settled = toRead.length === 0;
       return {
-        built: p.built, expected: expectedFromPlan(p), label: orderLabel(form.type, form.side, levels > 1 ? { level: index + 1, levels } : undefined, name),
+        built: planned.built!, expected: expectedFromPlan(planned), label: orderLabel(form.type, form.side, levels > 1 ? { level: index + 1, levels } : undefined, name),
         openToken: token.openList ? token : undefined,
-        gate: !settled || verifiers.length > 0 ? recheck(p, intent, clock, base.fees, settled ? base : null, clickAt, toRead) : undefined,
-        submitByDaa: auctionSubmitBy(p.states, clock.daa),
+        gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown) : undefined,
+        submitByDaa: auctionSubmitBy(planned.states, clock.daa),
       };
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
@@ -472,27 +504,34 @@ export function OrderTicket(props: OrderTicketProps) {
 
   /**
    * The re-check of a planned order (review-check.ts rule 2): the same intent planned against the environment at the click (`env`: the one on hand
-   * already is; else `parts` read again from REVIEW_REUSE_MS before the click on) and the references read now, with the clock and the fees of the
-   * plan; the wallet is asked only when it gives the same transaction without an error. Resolves to why the order no longer stands, or null.
+   * already is; else `parts` read again from REVIEW_REUSE_MS before the click on) and the references read now, with the clock and the fees of
+   * `planned`. The same transaction: kept; another one without an error and within the terms the ticket showed (`shown`): it replaces the plan
+   * (a moved book, coins replaced after a submission); an error or a broken term stops the order.
    */
-  const recheck = async (shown: OrderPlan, intent: Intent, clock: Clock, fees: PlanEnv['fees'], env: PlanEnv | null, clickAt: number, parts: EnvWait[]): Promise<string | null> => {
+  const recheck = async (planned: OrderPlan, intent: Intent, clock: Clock, fees: PlanEnv['fees'], env: PlanEnv | null, clickAt: number, parts: EnvWait[], shown: OrderPlan | null): Promise<GateVerdict> => {
+    const stop = (text: string, code = 'changed'): GateVerdict => ({ stop: { code, text } });
     try {
       const [fresh, refs] = await Promise.all([env ? Promise.resolve(env) : since(clickAt - REVIEW_REUSE_MS, parts), touchesOf().catch(noRefs)]);
-      if (!fresh) return t('ticket.reviewNoEnv');
-      const v = recheckVerdict(shown, planOrder(withRefs({ ...fresh, clock, fees }, refs), intent));
-      if (v.ok) return null;
-      return v.issues[0] ? issueText(v.issues[0], issueCtx) : t('ticket.reviewChanged');
+      if (!fresh) return stop(t('ticket.reviewNoEnv'));
+      const plan = (i: Intent): OrderPlan => planOrder(withRefs({ ...fresh, clock, fees }, refs), i);
+      const p = plan(intent);
+      const firstError = errors(p)[0];
+      if (!p.ok || !p.built || firstError) return stop(firstError ? issueText(firstError, issueCtx) : t('ticket.reviewChanged'));
+      if (planned.built && sameTransaction(planned.built, p.built)) return null;
+      const kept = keepTerms(p, intent, plan, shown);
+      if (!('p' in kept)) return stop(kept.text, kept.code);
+      return { replace: { built: kept.p.built!, expected: expectedFromPlan(kept.p), submitByDaa: auctionSubmitBy(kept.p.states, clock.daa) } };
     } catch (e) {
-      return buildErrorText(e instanceof Error ? e.message : String(e));
+      return stop(buildErrorText(e instanceof Error ? e.message : String(e)));
     }
   };
 
   /** One level: planned, checked and sent; an auction whose start passed while the wallet waited is planned again and sent again (CLOCK_RETRIES). */
-  const placeLevel = async (intent: Intent, index: number, levels: number): Promise<SendOutcome | null> => {
+  const placeLevel = async (intent: Intent, index: number, levels: number, shown: OrderPlan | null): Promise<SendOutcome | null> => {
     for (let attempt = 0; ; attempt++) {
-      const job = await prepareLevel(intent, index, levels);
+      const job = await prepareLevel(intent, index, levels, shown);
       if (!('built' in job)) {
-        sender.stop(job.text, job.raw);
+        sender.stop(job.text, job.raw, job.code);
         return null;
       }
       const out = await sender.send(job);
@@ -505,6 +544,8 @@ export function OrderTicket(props: OrderTicketProps) {
     if (!canPlace || !built.intent) return;
     const intents = ladder?.ok ? ladder.levels.map((l) => l.intent) : [built.intent];
     const levels = intents.length;
+    // the terms the user saw: the plan the button was enabled for (a ladder's levels are planned each at its turn, each within the planner's rules)
+    const shown = levels === 1 ? shownPlan : null;
     setPlacing(true);
     setMaxNote(null);
     setLadderNote(null);
@@ -514,7 +555,7 @@ export function OrderTicket(props: OrderTicketProps) {
     try {
       for (let i = 0; i < levels; i++) {
         setLadderLead(levels > 1 ? t('ticket.ladder.reviewing', { level: i + 1, levels }) : null);
-        const out = await placeLevel(intents[i]!, i, levels);
+        const out = await placeLevel(intents[i]!, i, levels, shown);
         if (out?.status !== 'submitted') break;
         placed += 1;
       }

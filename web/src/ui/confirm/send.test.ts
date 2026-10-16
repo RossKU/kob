@@ -15,7 +15,10 @@ import type { WalletAdapter } from '../../wallet/types';
 import { buildIntent } from '../ticket/form-state';
 import { expectedFromPlan } from '../ticket/plan-expected';
 import { CTX, form, ticketEnv } from '../ticket/ticket-fixtures';
-import { checkBeforeSigning } from './send';
+import { checkBeforeSigning, type Blocked, type SendJob } from './send';
+
+/** The finding that stopped the job, or null when it may be signed. */
+const blockedBy = (r: { blocked: Blocked } | { job: SendJob }): Blocked | null => ('blocked' in r ? r.blocked : null);
 
 const NET = 'testnet-10';
 const K = kob();
@@ -40,7 +43,9 @@ describe('checkBeforeSigning', () => {
   it('lets a transaction through that the decoder reads exactly as planned', async () => {
     const plan = planned();
     const built = plan.built!;
-    expect(await checkBeforeSigning(servicesFor(built), wallet(), { built, expected: expectedFromPlan(plan) })).toBeNull();
+    const r = await checkBeforeSigning(servicesFor(built), wallet(), { built, expected: expectedFromPlan(plan) });
+    expect(blockedBy(r)).toBeNull();
+    expect('job' in r && r.job.built).toBe(built);
   });
 
   it('stops a transaction that disagrees with the plan (the decoded transaction is the authority, never the form)', async () => {
@@ -48,13 +53,13 @@ describe('checkBeforeSigning', () => {
     const built = plan.built!;
     const claim = expectedFromPlan(plan);
     // the planner claims one sompi more locked than the transaction locks
-    const locked = await checkBeforeSigning(servicesFor(built), wallet(), { built, expected: { ...claim, kasLocked: claim.kasLocked! + 1n } });
+    const locked = blockedBy(await checkBeforeSigning(servicesFor(built), wallet(), { built, expected: { ...claim, kasLocked: claim.kasLocked! + 1n } }));
     expect(locked?.code).toBe('expected-kas-locked');
     expect(locked?.text).toBeTruthy();
     // the planned order has another price than the order the transaction creates
     const order = claim.orders![0]! as { kind: string; state: { price: string } };
     const repriced = { ...order, state: { ...order.state, price: (BigInt(order.state.price) + 1n).toString() } };
-    const price = await checkBeforeSigning(servicesFor(built), wallet(), { built, expected: { ...claim, orders: [repriced as never] } });
+    const price = blockedBy(await checkBeforeSigning(servicesFor(built), wallet(), { built, expected: { ...claim, orders: [repriced as never] } }));
     expect(price?.code).toBe('expected-orders');
   });
 
@@ -62,20 +67,39 @@ describe('checkBeforeSigning', () => {
     const plan = planned();
     const built = plan.built!;
     const job = { built, expected: expectedFromPlan(plan) };
-    expect((await checkBeforeSigning(servicesFor(built), wallet({ none: true }), job))?.code).toBe('no-wallet');
-    expect((await checkBeforeSigning(servicesFor(built), wallet({ pubkey: `02${'7'.repeat(64)}` }), job))?.code).toBe('account-changed');
-    expect((await checkBeforeSigning(servicesFor(built), wallet({ mismatch: true, network: 'mainnet' }), job))?.code).toBe('network');
+    expect(blockedBy(await checkBeforeSigning(servicesFor(built), wallet({ none: true }), job))?.code).toBe('no-wallet');
+    expect(blockedBy(await checkBeforeSigning(servicesFor(built), wallet({ pubkey: `02${'7'.repeat(64)}` }), job))?.code).toBe('account-changed');
+    expect(blockedBy(await checkBeforeSigning(servicesFor(built), wallet({ mismatch: true, network: 'mainnet' }), job))?.code).toBe('network');
   });
 
   it("stops on the caller's re-check, and when the node cannot confirm the coins", async () => {
     const plan = planned();
     const built = plan.built!;
     const job = { built, expected: expectedFromPlan(plan) };
-    expect(await checkBeforeSigning(servicesFor(built), wallet(), { ...job, gate: Promise.resolve('The book moved.') })).toEqual({ code: 'changed', text: 'The book moved.' });
-    expect(await checkBeforeSigning(servicesFor(built), wallet(), { ...job, gate: Promise.resolve(null) })).toBeNull();
+    const stop = { code: 'terms', text: 'The market moved past your price.' };
+    expect(blockedBy(await checkBeforeSigning(servicesFor(built), wallet(), { ...job, gate: Promise.resolve({ stop }) }))).toEqual(stop);
+    expect(blockedBy(await checkBeforeSigning(servicesFor(built), wallet(), { ...job, gate: Promise.resolve(null) }))).toBeNull();
     const down = { getUtxosByAddresses: () => Promise.reject(new Error('node down')) };
-    expect((await checkBeforeSigning(servicesFor(built, down), wallet(), job))?.code).toBe('inputs-unavailable');
+    expect(blockedBy(await checkBeforeSigning(servicesFor(built, down), wallet(), job))?.code).toBe('inputs-unavailable');
     // a node that does not hold the inputs: the decoder flags them (the KAS of covenant inputs is committed by no signature)
-    expect((await checkBeforeSigning(servicesFor(null), wallet(), job))?.code).toBe('input-unconfirmed');
+    expect(blockedBy(await checkBeforeSigning(servicesFor(null), wallet(), job))?.code).toBe('input-unconfirmed');
+  });
+
+  it("puts the re-check's plan in place and checks it as strictly: its own inputs read on the node, decoded against its own claims", async () => {
+    const first = planned();
+    // the state at the click planned the same order into another transaction (here: another price, so another order state and escrow)
+    const other = planOrder(ticketEnv(), buildIntent(form('limit', 'sell', { amount: '5', price: '2.7' }), CTX).intent!);
+    const node = new MockNode({ network: NET, addressOf: (spk) => spkStringToAddress(sdk, spk, NET) });
+    node.seedFromInputs(first.built!.tx);
+    node.seedFromInputs(other.built!.tx);
+    const services = servicesFor(null, node);
+    const replace = { built: other.built!, expected: expectedFromPlan(other) };
+    const r = await checkBeforeSigning(services, wallet(), { built: first.built!, expected: expectedFromPlan(first), gate: Promise.resolve({ replace }) });
+    expect(blockedBy(r)).toBeNull();
+    expect('job' in r && r.job.built).toBe(other.built);
+    // the replacement's own claims are held to the transaction exactly as the first plan's would be
+    const wrong = { ...replace, expected: { ...replace.expected, kasLocked: replace.expected.kasLocked! + 1n } };
+    const bad = await checkBeforeSigning(services, wallet(), { built: first.built!, expected: expectedFromPlan(first), gate: Promise.resolve({ replace: wrong }) });
+    expect(blockedBy(bad)?.code).toBe('expected-kas-locked');
   });
 });

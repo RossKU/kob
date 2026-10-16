@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { Clock, OrderPlan, PlanIssue } from '../../kob/plan-types';
+import type { Clock, OrderPlan } from '../../kob/plan-types';
 import type { BuiltTx } from '../../kob/types';
 import { MARKET_ACTIVATION_DAA } from '../../kob/daa';
 import { planOrder } from '../../kob/plan';
 import { TOK, makeEnv } from '../../testing/fixtures';
 import { AUCTION_START_MARGIN_DAA, auctionSubmitBy } from '../../wallet/sign';
-import { CLOCK_REUSE_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, liveClockAt, partCurrent, projectClock, recheckVerdict, reviewClock, sameTransaction } from './review-check';
+import { CLOCK_REUSE_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, liveClockAt, partCurrent, projectClock, reviewClock, sameTransaction, slippageWithin, withinTerms } from './review-check';
 
 describe('partCurrent (is a part on hand the state at the click?)', () => {
   const click = 100_000;
@@ -33,8 +33,6 @@ describe('partCurrent (is a part on hand the state at the click?)', () => {
 
 const clock: Clock = { daa: 1_000_000n, unixSeconds: 1_790_000_000n, rateMilli: 10_000 };
 const built = (inputs: string[], fee = 1000n): BuiltTx => ({ tx: { id: 'x', inputs: inputs.map((i) => ({ transactionId: i, index: 0 })), outputs: [], fee } }) as unknown as BuiltTx;
-const plan = (b: BuiltTx | null, issues: PlanIssue[] = []): OrderPlan => ({ ok: true, built: b, issues }) as unknown as OrderPlan;
-const issue = (code: string, severity: PlanIssue['severity']): PlanIssue => ({ code, severity, message: code });
 
 describe('projectClock', () => {
   it('moves both halves of the pair by the whole seconds elapsed at the measured rate; the DAA never ahead', () => {
@@ -63,21 +61,30 @@ describe('reviewClock', () => {
   });
 });
 
-describe('recheckVerdict', () => {
-  it('holds only for the same transaction without an error; a new warning never stops the order', () => {
-    const shown = plan(built(['a', 'b']), [issue('W1', 'warning')]);
-    expect(recheckVerdict(shown, plan(built(['a', 'b']), [issue('W1', 'warning')]))).toEqual({ ok: true });
-    // another coin, another fee: another transaction
-    expect(recheckVerdict(shown, plan(built(['a', 'c'])))).toEqual({ ok: false, issues: [] });
-    expect(recheckVerdict(shown, plan(built(['a', 'b'], 2000n)))).toEqual({ ok: false, issues: [] });
-    // the wallet's own resting order now crosses it (read with the holdings): an error
-    const self = issue('SELF_TRADE', 'error');
-    expect(recheckVerdict(shown, plan(built(['a', 'b']), [self]))).toEqual({ ok: false, issues: [self] });
-    // a warning the ticket did not show is not shown and stops nothing
-    expect(recheckVerdict(shown, plan(built(['a', 'b']), [issue('W2', 'warning')]))).toEqual({ ok: true });
-    expect(recheckVerdict(shown, plan(null))).toEqual({ ok: false, issues: [] });
+describe('the terms the ticket showed', () => {
+  const total = (side: 'buy' | 'sell', allInTotal: bigint | null) => ({ disclosure: { side, allInTotal } }) as unknown as OrderPlan;
+
+  it('a plan at the click keeps them while a buy pays at most and a sell receives at least the total shown, up to a rounding', () => {
+    expect(withinTerms(total('buy', 2_000_000_000n), total('buy', 1_950_000_000n))).toBe(true);
+    expect(withinTerms(total('buy', 2_000_000_000n), total('buy', 2_000_200_001n))).toBe(true); // 1 bps + 1 sompi
+    expect(withinTerms(total('buy', 2_000_000_000n), total('buy', 2_000_200_002n))).toBe(false);
+    expect(withinTerms(total('sell', 2_000_000_000n), total('sell', 2_050_000_000n))).toBe(true);
+    expect(withinTerms(total('sell', 2_000_000_000n), total('sell', 1_990_000_000n))).toBe(false);
+    // nothing shown, or no total to compare: the plan at the click is the order
+    expect(withinTerms(null, total('buy', 9n))).toBe(true);
+    expect(withinTerms(total('buy', null), total('buy', 9n))).toBe(true);
   });
 
+  it('the slippage that ends an auction at the worst price shown, none when the touch is already beyond it', () => {
+    expect(slippageWithin('buy', 250_000_000n, 257_500_000n)).toBe(300n);
+    expect(slippageWithin('buy', 252_000_000n, 257_500_000n)).toBe(218n);
+    expect(slippageWithin('buy', 257_500_000n, 257_500_000n)).toBeNull();
+    expect(slippageWithin('sell', 245_000_000n, 237_650_000n)).toBe(300n);
+    expect(slippageWithin('sell', 237_000_000n, 237_650_000n)).toBeNull();
+  });
+});
+
+describe('sameTransaction', () => {
   it('sameTransaction compares the unsigned transaction byte for byte', () => {
     expect(sameTransaction(built(['a']), built(['a']))).toBe(true);
     expect(sameTransaction(built(['a']), built(['b']))).toBe(false);

@@ -74,21 +74,23 @@ export function useSend(): Sender {
     };
     set(id, { phase: 'checking' });
     const w = session.current;
-    let blocked;
+    let checked;
     try {
-      blocked = await checkBeforeSigning(services, w, job);
+      checked = await checkBeforeSigning(services, w, job);
     } catch (e) {
       return stopped({ phase: 'blocked', code: 'check-failed', text: t('send.checkFailed'), raw: e instanceof Error ? e.message : String(e) });
     }
-    if (blocked) return stopped({ phase: 'blocked', ...blocked });
-    const { built } = job;
+    if ('blocked' in checked) return stopped({ phase: 'blocked', ...checked.blocked });
+    // the job checked (the ticket's re-check may have put the plan of the state at the click in its place) is the one signed
+    const final = checked.job;
+    const { built } = final;
     let txid: string;
     try {
       // no `inputAddress`: `checkBeforeSigning` has just re-read every input on the node (the decoder stops any it does not confirm); a second
       // read would only add a round trip before the wallet's popup
       const res = await signAndSubmit({
         kob: services.kob, node: services.node, adapter: w.adapter!, built, network: services.config.network,
-        ...(job.submitByDaa != null ? { submitByDaa: job.submitByDaa } : {}),
+        ...(final.submitByDaa != null ? { submitByDaa: final.submitByDaa } : {}),
         onStage: (s) => set(id, { phase: s === 'signing' ? 'signing' : 'sending' }),
       });
       txid = res.txid;
@@ -99,7 +101,7 @@ export function useSend(): Sender {
       if (f.kind !== 'known') return stopped({ phase: 'failed', code: f.code, text: f.text, raw: f.raw });
       txid = built.tx.id;
     }
-    const { records } = await recordAccepted(services, w, built, txid, job.label);
+    const { records } = await recordAccepted(services, w, built, txid, final.label);
     set(id, { phase: 'submitted', txid, confirmed: 'waiting' });
     void (async () => {
       let ok = false;

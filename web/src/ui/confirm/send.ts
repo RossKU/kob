@@ -33,10 +33,11 @@ export interface SendJob {
   /** the order trades an open-list token (no registry entry): the transaction is decoded against the registry plus that token */
   openToken?: TokenInfo | undefined;
   /**
-   * a check of the caller that runs alongside the node read (the ticket's re-check of the order against the state at the click): resolves to why
-   * the order no longer stands, or null
+   * a check of the caller that runs alongside the node read (the ticket's re-check of the order against the state at the click): null keeps the
+   * transaction, `replace` puts another plan of the same order in its place (the state at the click planned it differently, within the user's
+   * terms: it is checked and signed instead), `stop` says why the order no longer stands
    */
-  gate?: Promise<string | null> | undefined;
+  gate?: Promise<GateVerdict> | undefined;
   /** the last DAA score at which the signed transaction may still be sent (an auction planned at the click: wallet/sign.ts `auctionSubmitBy`) */
   submitByDaa?: bigint | null | undefined;
 }
@@ -47,39 +48,60 @@ export interface Blocked {
   text: string;
 }
 
+/** The outcome of a `SendJob.gate`. */
+export type GateVerdict = null | { stop: Blocked } | { replace: Pick<SendJob, 'built' | 'expected' | 'submitByDaa'> };
+
+/** The same inputs (outpoints) in the same order: the node facts read for one transaction serve the other. */
+const sameInputs = (a: BuiltTx, b: BuiltTx): boolean =>
+  a.tx.inputs.length === b.tx.inputs.length && a.tx.inputs.every((i, k) => i.transactionId === b.tx.inputs[k]!.transactionId && i.index === b.tx.inputs[k]!.index);
+
 type WalletFacts = Pick<WalletSession, 'info' | 'adapter' | 'networkMismatch'>;
 
 /** script public key -> address of the app's network (the node is asked by address) */
 export const inputAddressOf = (services: Pick<Services, 'sdk' | 'config'>) => (spk: string): string => spkStringToAddress(services.sdk, spk, services.config.network);
 
-/**
- * The checks of a transaction before the wallet is asked to sign it. Null: it may be signed; else the first finding that stops it. Never throws
- * for a finding; a failing node read is a finding (`inputs-unavailable`).
- */
-export async function checkBeforeSigning(services: Services, wallet: WalletFacts, job: SendJob): Promise<Blocked | null> {
-  const { built } = job;
+/** The wallet facts that stop any transaction: no wallet, another key than the plan's, another network. */
+function walletBlock(services: Services, wallet: WalletFacts, built: BuiltTx): Blocked | null {
   if (!wallet.info || !wallet.adapter) return { code: 'no-wallet', text: t('send.noWallet') };
   // the plan spends coins of the key it was built for: after an account switch it must not be signed (the plan is stale)
   const planned = built.sign.find((s) => s.pubkey !== wallet.info!.pubkey);
   if (planned) return { code: 'account-changed', text: t('send.accountChanged', { planned: shortId(planned.pubkey), now: shortId(wallet.info.pubkey) }) };
   if (wallet.networkMismatch) return { code: 'network', text: t('send.networkMismatch', { wallet: wallet.info.network, app: services.config.network }) };
+  return null;
+}
+
+/**
+ * The checks of a transaction before the wallet is asked to sign it: the job to sign (the caller's gate may have replaced its plan), or the first
+ * finding that stops it. Never throws for a finding; a failing node read is a finding (`inputs-unavailable`).
+ */
+export async function checkBeforeSigning(services: Services, wallet: WalletFacts, job: SendJob): Promise<{ blocked: Blocked } | { job: SendJob }> {
+  const early = walletBlock(services, wallet, job.built);
+  if (early) return { blocked: early };
+  const nodeFacts = (b: BuiltTx) => confirmInputsOnNode(services.node, b.tx.inputs, inputAddressOf(services)).then((r) => r.facts, () => null);
 
   // the KAS value of every input re-read from the NODE (the decoder flags any input the node does not confirm), the caller's gate alongside
-  const [facts, gate] = await Promise.all([
-    confirmInputsOnNode(services.node, built.tx.inputs, inputAddressOf(services)).then((r) => r.facts, () => null),
-    job.gate ?? Promise.resolve(null),
-  ]);
-  if (gate !== null) return { code: 'changed', text: gate };
-  if (facts === null) return { code: 'inputs-unavailable', text: t('send.inputsUnavailable') };
+  const [facts0, gate] = await Promise.all([nodeFacts(job.built), job.gate ?? Promise.resolve(null)]);
+  if (gate && 'stop' in gate) return { blocked: gate.stop };
+  let final: SendJob = job;
+  let facts = facts0;
+  if (gate && 'replace' in gate) {
+    // the state at the click planned the order into another transaction: that one is checked as strictly, and signed
+    final = { ...job, ...gate.replace, gate: undefined };
+    const again = walletBlock(services, wallet, final.built);
+    if (again) return { blocked: again };
+    if (!sameInputs(job.built, final.built)) facts = await nodeFacts(final.built);
+  }
+  if (facts === null) return { blocked: { code: 'inputs-unavailable', text: t('send.inputsUnavailable') } };
+  const { built } = final;
 
   const registry = job.openToken ? withExtraToken(services.registry, job.openToken) : services.registry;
   // a dynamic fee is several times the relay floor in a busy market: the decoder's sanity ceiling follows the policy's own per-transaction cap
   const feePolicy = services.fees?.policy;
-  const summary = decodeSigning({ kob: services.kob, built, maker: wallet.info.pubkey, registry, expected: job.expected, nodeInputs: facts, ...(feePolicy ? { feePolicy } : {}) });
+  const summary = decodeSigning({ kob: services.kob, built, maker: wallet.info!.pubkey, registry, expected: final.expected, nodeInputs: facts, ...(feePolicy ? { feePolicy } : {}) });
   const found: Finding | undefined = [...summary.blocking, ...openTokenIdentity(summary, registry).blocking][0];
-  if (found) return { code: found.code, text: found.text ?? issueText(found) };
-  if (!summary.ok) return { code: 'decode', text: t('send.decodeFailed') };
-  return null;
+  if (found) return { blocked: { code: found.code, text: found.text ?? issueText(found) } };
+  if (!summary.ok) return { blocked: { code: 'decode', text: t('send.decodeFailed') } };
+  return { job: final };
 }
 
 /**

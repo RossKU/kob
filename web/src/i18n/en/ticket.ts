@@ -15,6 +15,7 @@ export default {
   'ticket.balanceLoading': 'Reading your balances...',
   'ticket.place': '{side} {type}',
   'ticket.reviewChanged': 'Your coins or the market changed. Nothing was sent; check the new figures and try again.',
+  'ticket.beyondTerms': 'The market moved past the price you set (your limit or slippage) since the ticket showed it. Nothing was sent; check the new figures and try again.',
   'ticket.reviewNoEnv': 'Network state unavailable. Nothing was sent; try again.',
   'ticket.ladder.title': 'Ladder: {levels} levels',
   'ticket.ladder.row': 'Level {level}: entry {entry}, take-profit {exit}',

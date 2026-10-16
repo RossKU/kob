@@ -168,3 +168,59 @@ test.describe('no acknowledgement boxes: what the ticket cannot check stops the 
     await expect(page.getByTestId('order-place')).toBeEnabled();
   });
 });
+
+test.describe('the book moves between the ticket and the click', () => {
+  /** Takes the whole best ask level out of the book (every order at the best price filled by another key); returns the old and the new best. */
+  async function liftBestAsks(mock: import('../fixtures').MockClient): Promise<{ before: bigint; after: bigint }> {
+    const tok = await mock.token();
+    const book = await mock.book(tok.covenant_id, false, 20);
+    const best = BigInt(book.asks[0].price);
+    for (const o of book.asks.filter((a: { price: string }) => BigInt(a.price) === best)) await mock.fill(o.covenant_id, o.amount_left, { taker: 'bob' });
+    const next = await mock.book(tok.covenant_id, false, 1);
+    return { before: best, after: BigInt(next.asks[0].price) };
+  }
+
+  /** The ticket keeps its book while the move is read again: its book reads answer late, so the click plans from the parts on hand */
+  async function slowBooks(page: Page): Promise<void> {
+    await page.route('**/v1/books/**', async (route) => {
+      await new Promise((r) => setTimeout(r, 1_500));
+      await route.continue();
+    });
+  }
+
+  test('within the slippage the plan of the state at the click is the order: it reaches the wallet and is sent at the new price', async ({ appPage: page, mock, wallet }) => {
+    await fund(mock);
+    await openMarket(page, mock);
+    await pickType(page, 'market', 'buy');
+    await fillFields(page, { amount: '1' });
+    await expect(page.getByTestId('order-place')).toBeEnabled({ timeout: 15_000 });
+    await slowBooks(page);
+    const { before, after } = await liftBestAsks(mock);
+    expect(after).toBeGreaterThan(before);
+    await page.waitForTimeout(500); // the book notice reaches the page: the book on hand is no longer the state at the click
+    await clickPlace(page);
+    const txid = await waitSubmitted(page);
+    expect(await wallet!.calls()).toHaveLength(1);
+    const placed = await placedBy(mock, txid);
+    // the auction starts at the moved best ask, and ends no higher than the worst price the ticket showed (3 % above the old best ask)
+    const st = placed.views[0].state.state as { price: string; priceEnd: string };
+    expect(BigInt(st.price)).toBe(after);
+    expect(BigInt(st.priceEnd)).toBeLessThanOrEqual(before + (before * 300n) / 10_000n);
+  });
+
+  test('past the slippage it is blocked with one line and the wallet is never asked', async ({ appPage: page, mock, wallet }) => {
+    await fund(mock);
+    await openMarket(page, mock);
+    await pickType(page, 'market', 'buy');
+    await fillFields(page, { amount: '1', slippageBps: '0.1' });
+    await expect(page.getByTestId('order-place')).toBeEnabled({ timeout: 15_000 });
+    await slowBooks(page);
+    const { before, after } = await liftBestAsks(mock);
+    expect(after * 10_000n).toBeGreaterThan(before * 10_010n); // more than the 0.1 % slippage away
+    await page.waitForTimeout(500);
+    await clickPlace(page);
+    const stopped = await expectStopped(page, 'blocked', { code: 'terms' });
+    expect(stopped.text).toMatch(/moved past the price you set/);
+    expect(await wallet!.calls()).toHaveLength(0);
+  });
+});
