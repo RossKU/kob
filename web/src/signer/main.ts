@@ -12,8 +12,12 @@ import { SeenTracker, visibilityCheckSupported } from './seen';
 
 /** the app's origin: the origin of this page's URL (this document's own origin is opaque, "null") */
 const APP_ORIGIN = new URL(location.href).origin;
-/** an Approve button that appears under the pointer is not clickable at once (a click meant for the app must not land on it) */
-const APPROVE_DELAY_MS = 700;
+/**
+ * an Approve button that appears under the pointer is not clickable at once (a click meant for the app must not land on it). The visibility
+ * check holds it too (every part of the request fully on screen for SEEN_MIN_MS, 400 ms, after the frame is shown), so this is the floor after
+ * the request arrives; it is longer than a double click.
+ */
+const APPROVE_DELAY_MS = 500;
 
 const root = document.getElementById('signer') as HTMLElement;
 

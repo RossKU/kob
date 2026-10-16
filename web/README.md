@@ -59,10 +59,10 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
 * **Live.** The WebSocket channels `book:<token>` / `fills:<token>` trigger a refetch of every panel (debounced 1 s); 5 s polling while the socket is down.
 * **The book never disappears.** A failed or late book pull keeps the last good book on screen with a subtle `stale since hh:mm:ss` marker (the time of that book); only the next good response replaces it. A crossed book (matchers a moment behind) is the live book like any other: it is drawn as it is, with a negative spread (`Mid 0.043173 · Spread -0.000052 (-0.11%)`), and is not marked stale. A pull in flight is never aborted by the next refresh (a live notice or a poll that arrives meanwhile runs once right after it). The indexer-lag banner and the book's "possibly out of date" badge show only when the indexer is more than 30 s behind the chain.
 * **Order button.** The ticket is the one place an order is shown (amount, price, cost, fee). Its button ("Buy Limit", "Sell Market order" ...)
-  plans the order again from the state at the click with the node clock read then, runs the pre-sign checks silently (`src/ui/confirm/send.ts`:
-  wallet account and network, every input re-read on the node, the built transaction decoded and compared with the plan, the re-check against the
-  state at the click) and asks the wallet for its approval at once; one status line under the button follows it (checking, approve in your wallet,
-  sending, the txid with its explorer link, accepted). No confirmation screen and no checkboxes: only a check that makes the order wrong or
+  plans the order again from the state at the click with the node clock (read every 2 s in the background, projected to the click), runs the
+  pre-sign checks silently (`src/ui/confirm/send.ts`: wallet account and network, every input re-read on the node, the built transaction
+  decoded and compared with the plan, the re-check against the state at the click) and asks the wallet for its approval at once; one status
+  line under the button follows it (checking, approve in your wallet, sending, the txid with its explorer link, accepted). No confirmation screen and no checkboxes: only a check that makes the order wrong or
   impossible stops it, with one line, and nothing reaches the wallet; warnings are not shown. An auction (market, marketable limit) starts from
   that clock: a signature that comes back more than `AUCTION_START_MARGIN_DAA` (20 DAA, 2 s) after the start is not sent, the order is planned
   again with the current clock and the wallet asked once more (`src/wallet/sign.ts`). My orders actions (cancel, amend, refund, sweep, merge)

@@ -36,7 +36,7 @@ import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadde
 import { maxBuyAmount } from './max-amount';
 import { orderLabel } from './order-label';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan, type EnvWait } from './use-ticket';
-import { CLOCK_WAIT_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, recheckVerdict, reviewClock } from './review-check';
+import { CLOCK_TICK_MS, CLOCK_WAIT_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, liveClockAt, recheckVerdict, reviewClock } from './review-check';
 import { rememberPairForm, takePairFlip } from './pair-flip';
 import './ticket.css';
 
@@ -112,6 +112,23 @@ export function OrderTicket(props: OrderTicketProps) {
   const kasEnv = useTicketEnv(token, enabled && !quote);
   const pairEnv = usePairTicketEnv(token, quote ?? token, enabled && !!quote);
   const { env: rawEnv, error: envError, loading: envLoading, refresh, since, snapshot, stale, waiting } = quote ? pairEnv : kasEnv;
+  // the node clock, read every CLOCK_TICK_MS while an order can be placed (a visible page): a click plans with it projected to the click, with no
+  // round trip before the wallet is asked (review-check.ts rule 1)
+  const liveClock = useRef<{ clock: Clock; at: number } | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let live = true;
+    const read = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      readClock(services).then((clock) => live && (liveClock.current = { clock, at: Date.now() }), () => undefined);
+    };
+    read();
+    const h = setInterval(read, CLOCK_TICK_MS);
+    return () => {
+      live = false;
+      clearInterval(h);
+    };
+  }, [enabled, services]);
   // a market / close order whose start (the indexer's best price) is this far beyond another indexer's best price cannot be placed
   const startTolerance = BigInt(services.config.marketStartToleranceBps);
   // the best prices further indexers report for this market (none configured: empty): a KAS market's own books, a pair's from the two KAS books
@@ -418,8 +435,10 @@ export function OrderTicket(props: OrderTicketProps) {
       if (!base) return { text: t('ticket.reviewNoEnv') };
       let fromCache = !!cached;
       // the node clock now: DAA times (an auction's start, a timed start, an IOC life, a day order) count from it, never from the clock of the
-      // environment on hand; a node slower than CLOCK_WAIT_MS: the clock on hand projected to now (review-check.ts `projectClock`)
-      const { clock } = await reviewClock(() => readClock(services), base.clock, cached ? cached.clockAt : (snapshot()?.clockAt ?? clickAt), { waitMs: CLOCK_WAIT_MS });
+      // environment on hand: the background clock projected to the click when it is fresh, else a read (a node slower than CLOCK_WAIT_MS: the
+      // clock on hand projected to now, review-check.ts `projectClock`)
+      const clock = liveClockAt(liveClock.current, clickAt)
+        ?? (await reviewClock(() => readClock(services), base.clock, cached ? cached.clockAt : (snapshot()?.clockAt ?? clickAt), { waitMs: CLOCK_WAIT_MS })).clock;
       const planWith = (e: PlanEnv, refs: References): OrderPlan => planOrder(withRefs({ ...e, clock }, refs), intent);
       let p = planWith(base, touches.data ?? noRefs());
       if ((!p.ok || !p.built || errors(p).length > 0) && fromCache) {

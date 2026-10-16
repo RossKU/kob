@@ -8,7 +8,7 @@ import type { PlacementRecord } from '../../kob/records';
 import { expectedOutputs, signAndSubmit, waitForAcceptance } from '../../wallet/sign';
 import { CopyText, RawDetails, Spinner } from '../kit';
 import { classifyFailure } from './confirm-flow';
-import { checkBeforeSigning, inputAddressOf, recordAccepted, type SendJob } from './send';
+import { checkBeforeSigning, recordAccepted, type SendJob } from './send';
 import './send.css';
 
 export type SendPhase = 'checking' | 'signing' | 'sending' | 'submitted' | 'blocked' | 'rejected' | 'failed';
@@ -84,8 +84,10 @@ export function useSend(): Sender {
     const { built } = job;
     let txid: string;
     try {
+      // no `inputAddress`: `checkBeforeSigning` has just re-read every input on the node (the decoder stops any it does not confirm); a second
+      // read would only add a round trip before the wallet's popup
       const res = await signAndSubmit({
-        kob: services.kob, node: services.node, adapter: w.adapter!, built, network: services.config.network, inputAddress: inputAddressOf(services),
+        kob: services.kob, node: services.node, adapter: w.adapter!, built, network: services.config.network,
         ...(job.submitByDaa != null ? { submitByDaa: job.submitByDaa } : {}),
         onStage: (s) => set(id, { phase: s === 'signing' ? 'signing' : 'sending' }),
       });

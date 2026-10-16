@@ -5,7 +5,7 @@ import { MARKET_ACTIVATION_DAA } from '../../kob/daa';
 import { planOrder } from '../../kob/plan';
 import { TOK, makeEnv } from '../../testing/fixtures';
 import { AUCTION_START_MARGIN_DAA, auctionSubmitBy } from '../../wallet/sign';
-import { REVIEW_CACHE_MS, REVIEW_REUSE_MS, partCurrent, projectClock, recheckVerdict, reviewClock, sameTransaction } from './review-check';
+import { CLOCK_REUSE_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, liveClockAt, partCurrent, projectClock, recheckVerdict, reviewClock, sameTransaction } from './review-check';
 
 describe('partCurrent (is a part on hand the state at the click?)', () => {
   const click = 100_000;
@@ -106,5 +106,17 @@ describe('the clock of a click (an auction starts from it)', () => {
     const limit = planOrder(makeEnv(), { type: 'limit', side: 'sell', amount: 5n * TOK, price: 900_000_000n } as never);
     expect(limit.ok).toBe(true);
     expect(auctionSubmitBy(limit.states, clock.daa)).toBeNull();
+  });
+});
+
+describe('the background clock of the ticket', () => {
+  it('is projected to the click while it is at most CLOCK_REUSE_MS old, else the click reads the node', () => {
+    const live = { clock, at: 10_000 };
+    expect(liveClockAt(live, 10_000)).toEqual(clock);
+    expect(liveClockAt(live, 12_500)).toEqual(projectClock(clock, 2_500));
+    expect(liveClockAt(live, 10_000 + CLOCK_REUSE_MS + 1)).toBeNull();
+    expect(liveClockAt(null, 10_000)).toBeNull();
+    // a clock "from the future" (the page's clock went back) is not trusted
+    expect(liveClockAt(live, 9_000)).toBeNull();
   });
 });

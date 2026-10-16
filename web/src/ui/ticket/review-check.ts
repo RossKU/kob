@@ -2,7 +2,10 @@
 //
 // The freshness rule of a click on the order button (OrderTicket `prepareLevel`):
 //  1. The order is planned at once from the environment already on hand (use-ticket.ts) when its oldest part was read at most REVIEW_CACHE_MS ago,
-//     with the node clock read at the click (or, when the node takes longer than CLOCK_WAIT_MS, the cached clock projected to now: `projectClock`).
+//     with the node clock the ticket keeps fresh in the background (read every CLOCK_TICK_MS) projected to the click when it is at most
+//     CLOCK_REUSE_MS old (`liveClockAt`), else the node clock read at the click (or, when the node takes longer than CLOCK_WAIT_MS, the cached
+//     clock projected to now: `projectClock`). An auction that starts from it is still checked against the node clock once signed
+//     (wallet/sign.ts `submitByDaa`).
 //     Inputs of every transaction this page has submitted are left out of it, however old the read (app/pending-spends.ts). An environment older
 //     than that, or a plan from it that has errors (holdings still being read for a sell ...), waits for a read started at most REVIEW_REUSE_MS
 //     before the click instead.
@@ -23,6 +26,16 @@ export const REVIEW_REUSE_MS = 3_000;
 export const REVIEW_CACHE_MS = 30_000;
 /** how long the order button waits for the node clock before it projects the cached one */
 export const CLOCK_WAIT_MS = 500;
+/** the ticket reads the node clock this often while it can place an order (a click then needs no round trip for it) */
+export const CLOCK_TICK_MS = 2_000;
+/** a background clock read at most this long before the click is projected to the click instead of reading the node again */
+export const CLOCK_REUSE_MS = 3_000;
+
+/** The background clock (`live`, read at `at`) projected to `now` when it is at most CLOCK_REUSE_MS old; null when there is none that fresh. */
+export function liveClockAt(live: { clock: Clock; at: number } | null, now: number): Clock | null {
+  if (!live || now < live.at || now - live.at > CLOCK_REUSE_MS) return null;
+  return projectClock(live.clock, now - live.at);
+}
 
 /**
  * `c` advanced by the whole seconds of `elapsedMs` at its measured rate (DAA rounded down). Both halves of the pair move together, so a time

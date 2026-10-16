@@ -56,10 +56,10 @@ export interface SignAndSubmitArgs {
    */
   checkWallet?: boolean;
   /**
-   * script public key -> address of the configured network. When given (the app always gives it), every input of the transaction is re-read
-   * from the NODE right before the wallet is asked to sign, and any input whose amount, script or covenant id the node does not confirm
-   * aborts the flow (the KAS of unsigned covenant inputs is committed by no signature, so the fee shown must be over chain values).
-   * Tests with synthetic chains omit it.
+   * script public key -> address of the configured network. When given, every input of the transaction is re-read from the NODE right before
+   * the wallet is asked to sign, and any input whose amount, script or covenant id the node does not confirm aborts the flow (the KAS of unsigned
+   * covenant inputs is committed by no signature, so the fee shown must be over chain values). The order send (ui/confirm/send.ts) omits it: its
+   * own pre-sign check has just read every input on the node and the decoder stops any it does not confirm. Tests with synthetic chains omit it.
    */
   inputAddress?: (spk: string) => string;
   /**
