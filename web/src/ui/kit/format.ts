@@ -212,7 +212,7 @@ function fixedOrBelow(value: bigint, decimals: number, fraction: number): string
  * every whole digit (a positive amount that would read 0 shows `<0.001`); else, when even the whole digits do not fit, compact K / M / B / T
  * (`56.61M`). A text that is not the exact amount carries the exact amount (`exact`) for the tooltip. Null values show `—`.
  */
-export function fitAmountColumn(values: readonly (bigint | null | undefined)[], decimals: number, o: { fraction?: number; width?: number; unit?: string } = {}): AmountCell[] {
+export function fitAmountColumn(values: readonly (bigint | null | undefined)[], decimals: number, o: { fraction?: number; width?: number; unit?: string; minFraction?: number } = {}): AmountCell[] {
   const width = o.width ?? CELL_CHARS;
   const fraction = o.fraction ?? columnFraction(values, decimals);
   const exactOf = (v: bigint): string => `${formatUnits(v, decimals, { group: ',' })}${o.unit ? ` ${o.unit}` : ''}`;
@@ -225,7 +225,7 @@ export function fitAmountColumn(values: readonly (bigint | null | undefined)[], 
   const longest = (f: (v: bigint) => string): number => present.reduce((m, v) => Math.max(m, f(v).length), 0);
   const full = (v: bigint) => fixedUnits(v, decimals, fraction);
   if (longest(full) <= width) return values.map((v) => cell(v, full));
-  const small = Math.min(fraction, 2);
+  const small = Math.min(fraction, o.minFraction ?? 2);
   const intLen = longest((v) => fixedUnits(v, decimals, 0));
   // `<0.001` takes one character more than `0.001`: a one-digit column keeps room for it
   const f = Math.min(fraction, Math.max(0, width - Math.max(intLen, 2) - 1));
@@ -237,7 +237,8 @@ export function fitAmountColumn(values: readonly (bigint | null | undefined)[], 
 
 /**
  * `fitAmountColumn` for a column already formatted as decimal text with ONE number of decimals (a price column: `25,300,000.00`): the same
- * texts when they fit `width`, else fewer decimals or K / M / B (`25.30M`), `exact` = the original text. Texts that are not plain numbers (`—`)
+ * texts when they fit `width`, else fewer decimals (down to none: `2,165,696` reads better than `2.17M`) or K / M / B when even the whole
+ * digits do not fit (`25.30B`), `exact` = the original text. Texts that are not plain numbers (`—`)
  * pass unchanged.
  */
 export function fitDecimalTexts(texts: readonly string[], o: { width?: number; unit?: string } = {}): AmountCell[] {
@@ -246,6 +247,6 @@ export function fitDecimalTexts(texts: readonly string[], o: { width?: number; u
   const parsed = texts.map((s) => /^(\d[\d,]*)(?:\.(\d+))?$/.exec(s));
   const dp = parsed.reduce((m, p) => Math.max(m, p?.[2]?.length ?? 0), 0);
   const values = parsed.map((p) => (p ? BigInt(p[1]!.replace(/,/g, '') + (p[2] ?? '').padEnd(dp, '0')) : null));
-  const cells = fitAmountColumn(values, dp, { fraction: dp, width });
+  const cells = fitAmountColumn(values, dp, { fraction: dp, width, minFraction: 0 });
   return cells.map((c, i) => (values[i] === null ? { text: texts[i]!, exact: null } : { text: c.text, exact: c.exact === null ? null : `${texts[i]}${o.unit ? ` ${o.unit}` : ''}` }));
 }

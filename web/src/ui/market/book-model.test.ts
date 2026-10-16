@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BookOrderView, LevelView } from '../../data/indexer-types';
-import { buildBookModel, depthChartGeometry, groupLevels, groupPrice, groupSizes, inferTick, levelsFromView } from './book-model';
+import { buildBookModel, depthChartGeometry, groupLevels, groupPrice, groupSizes, groupSizesAt, inferTick, levelsFromView } from './book-model';
 
 const lv = (price: string, amount: number, orders = 1, est = false, scale = 1): LevelView => ({ price, amount: String(amount), orders, amount_estimated: est, scale });
 const ord = (price: string, left: number | null, est = false, scale: number | null = 1): BookOrderView => ({
@@ -203,5 +203,13 @@ describe('price aggregation (tick grouping)', () => {
     expect(inferTick([])).toBe(1n);
     expect(groupSizes(100n)).toEqual([100n, 1000n, 10_000n, 100_000n]);
     expect(groupSizes(0n)).toEqual([1n, 10n, 100n, 1000n]);
+  });
+
+  it('scales the grouping steps to the price: about 1/100,000 .. 1/1,000 of it, multiples of the tick', () => {
+    // 2,165,695.81 KAS per token on a 1-sompi tick: none, 10, 100, 1,000 KAS
+    expect(groupSizesAt(1n, 216_569_581_000_000n)).toEqual([1n, 1_000_000_000n, 10_000_000_000n, 100_000_000_000n]);
+    // a cheap token whose tick is coarser than those steps keeps the tick multiples
+    expect(groupSizesAt(10_000n, 2_500_000n)).toEqual([10_000n, 100_000n, 1_000_000n, 10_000_000n]);
+    expect(groupSizesAt(7n, null)).toEqual(groupSizes(7n));
   });
 });

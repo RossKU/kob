@@ -58,7 +58,7 @@ test.describe('market panels when the indexer cannot be reached', () => {
     await expect(page.getByTestId('trades-section').getByText('No trades yet.')).toHaveCount(0);
     await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'empty');
     await expect(page.getByTestId('depth-empty')).toHaveText('The book could not be loaded.');
-    // no book, no grouping to offer (it showed "1x · 0.00000001")
+    // no book, no grouping to offer (it showed "0.00000001")
     await expect(page.getByTestId('book-group')).toHaveCount(0);
   });
 });

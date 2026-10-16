@@ -22,7 +22,7 @@ export interface HealthAssessment {
  * chain, whatever state it reports (a `catching_up` follower a few seconds behind is not worth a banner). Above STALE it is an error ("stale": the book cannot
  * be trusted).
  */
-export const LAG_WARN_SECONDS = 30;
+export const LAG_WARN_SECONDS = 120;
 export const LAG_STALE_SECONDS = 600;
 
 export interface HealthInput {

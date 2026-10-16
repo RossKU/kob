@@ -27,15 +27,15 @@ describe('assessIndexerHealth', () => {
     expect(assessIndexerHealth({ ...base, health: view({ lag_seconds: null }) }).level).toBe('ok');
   });
 
-  it('announces nothing until the indexer is more than 30 s behind, in every state', () => {
-    expect(LAG_WARN_SECONDS).toBe(30);
-    expect(assessIndexerHealth({ ...base, health: view({ lag_seconds: 30 }) })).toMatchObject({ level: 'ok', fresh: true });
-    expect(assessIndexerHealth({ ...base, health: view({ lag_seconds: 31 }) })).toMatchObject({ level: 'warn', code: 'lagging' });
-    // a follower that says catching_up / starting but is within 30 s is fine (seconds, else the DAA lag at ~10 DAA per second)
+  it('announces nothing until the indexer is more than 2 min behind, in every state', () => {
+    expect(LAG_WARN_SECONDS).toBe(120);
+    expect(assessIndexerHealth({ ...base, health: view({ lag_seconds: 120 }) })).toMatchObject({ level: 'ok', fresh: true });
+    expect(assessIndexerHealth({ ...base, health: view({ lag_seconds: 121 }) })).toMatchObject({ level: 'warn', code: 'lagging' });
+    // a follower that says catching_up / starting but is within 2 min is fine (seconds, else the DAA lag at ~10 DAA per second)
     expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: 5, lag_daa: 52 }) })).toMatchObject({ level: 'ok', code: 'ok' });
-    expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: 30 }) }).level).toBe('ok');
-    expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: null, lag_daa: 299 }) }).level).toBe('ok');
-    expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: null, lag_daa: 301 }) })).toMatchObject({ level: 'warn', code: 'catching-up' });
+    expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: 36 }) }).level).toBe('ok');
+    expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: null, lag_daa: 1199 }) }).level).toBe('ok');
+    expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: null, lag_daa: 1201 }) })).toMatchObject({ level: 'warn', code: 'catching-up' });
     expect(assessIndexerHealth({ ...base, health: view({ state: 'starting', lag_seconds: 12 }) }).level).toBe('ok');
     // a node outage or a gap is not a lag question: always announced
     expect(assessIndexerHealth({ ...base, health: view({ state: 'gap', lag_seconds: 1 }) }).level).toBe('bad');

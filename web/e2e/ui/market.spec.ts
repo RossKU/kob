@@ -281,18 +281,18 @@ test.describe('health banners', () => {
     await expect(appPage.getByTestId(TESTID.bookAsks)).toBeVisible(); // degraded, not blank
   });
 
-  test('the lag warning shows only when the indexer is more than 30 s behind (whatever state it reports)', async ({ appPage, mock }) => {
+  test('the lag warning shows only when the indexer is more than 2 min behind (whatever state it reports)', async ({ appPage, mock }) => {
     const { id } = await seeded(mock);
-    await mock.setHealth('catching_up', 200); // 20 s behind: nothing to announce
+    await mock.setHealth('catching_up', 400); // 40 s behind: nothing to announce
     await appPage.goto(`/#/market/${id}`);
     await expect(appPage.getByTestId('status-indexer')).toHaveAttribute('data-level', 'ok');
     await expect(appPage.getByTestId('banner-indexer')).toHaveCount(0);
     await expect(appPage.getByTestId('book-stale')).toHaveCount(0);
-    await mock.setHealth('following', 290); // 29 s
+    await mock.setHealth('following', 1190); // 119 s
     await appPage.reload();
     await expect(appPage.getByTestId('status-indexer')).toHaveAttribute('data-level', 'ok');
     await expect(appPage.getByTestId('banner-indexer')).toHaveCount(0);
-    await mock.setHealth('following', 400); // 40 s: announced
+    await mock.setHealth('following', 1300); // 130 s: announced
     await appPage.reload();
     await expect(appPage.getByTestId('banner-indexer')).toContainText('behind');
     await expect(appPage.getByTestId('book-stale')).toBeVisible();

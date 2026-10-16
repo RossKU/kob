@@ -6,7 +6,7 @@ import { Badge, Banner, Button, ErrorBanner, Loading, scaleOfDecimals, Section, 
 import { OrderTicket } from '../ticket/OrderTicket';
 import { CrossCheckBanner } from './CrossCheckBanner';
 import { useSystemStatus } from '../shell/StatusProvider';
-import { buildBookModel, groupSizes, inferTick, levelsFromView } from './book-model';
+import { buildBookModel, groupSizesAt, inferTick, levelsFromView } from './book-model';
 import { useCoalescedReload, useStaleSince } from './book-stale';
 import { useOpenToken } from './use-open-token';
 import { useHeldToken } from './use-held-token';
@@ -126,19 +126,20 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const inverted = invertedChoice && canFlip;
   const name = row?.ticker ?? '';
 
-  // price grouping: multiples of the registry tick, or of the step the visible prices sit on
-  const baseTick = useMemo(() => {
-    if (row?.tick && row.tick > 0n) return row.tick;
-    return book.data ? inferTick([...levelsFromView(book.data.asks, bookScale), ...levelsFromView(book.data.bids, bookScale)].map((l) => l.price)) : 1n;
-  }, [row?.tick, book.data]);
-  const groups = useMemo(() => groupSizes(baseTick), [baseTick]);
-  const groupIdx = Math.min(inverted ? groupIdxInv : groupIdxNative, groups.length - 1);
-  const group = groups[groupIdx]!;
   // the book without grouping: the reference price of the page when there is neither a 24 h last price nor a trade
   const refMid = useMemo(() => {
     const m = book.data ? buildBookModel(book.data, { scale: bookScale, depth: 1 }) : null;
     return m ? m.mid : null;
   }, [book.data]);
+  // price grouping: the registry tick, or the step the visible prices sit on, then steps scaled to the price (its decade only, so they stay put)
+  const midDecade = refMid !== null && refMid > 0n ? refMid.toString().length : 0;
+  const baseTick = useMemo(() => {
+    if (row?.tick && row.tick > 0n) return row.tick;
+    return book.data ? inferTick([...levelsFromView(book.data.asks, bookScale), ...levelsFromView(book.data.bids, bookScale)].map((l) => l.price)) : 1n;
+  }, [row?.tick, book.data]);
+  const groups = useMemo(() => groupSizesAt(baseTick, midDecade ? 10n ** BigInt(midDecade - 1) * 2n : null), [baseTick, midDecade]);
+  const groupIdx = Math.min(inverted ? groupIdxInv : groupIdxNative, groups.length - 1);
+  const group = groups[groupIdx]!;
 
   const tape = useMemo(() => {
     const d = trades.data;
@@ -176,8 +177,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const groupOptions = useMemo(
     () =>
       inverted
-        ? INVERTED_GROUP_MULTIPLIERS.map((m, i) => ({ value: String(i), label: `${m}x · ${ratioText({ num: m, den: 10n ** BigInt(dp) }, dp, '').replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')}` }))
-        : groups.map((g, i) => ({ value: String(i), label: `${10 ** i}x · ${priceText(g, decimals, bookScale, 10).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')}` })),
+        ? INVERTED_GROUP_MULTIPLIERS.map((m, i) => ({ value: String(i), label: `${ratioText({ num: m, den: 10n ** BigInt(dp) }, dp, '').replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')}` }))
+        : groups.map((g, i) => ({ value: String(i), label: `${priceText(g, decimals, bookScale, 10).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')}` })),
     [inverted, groups, decimals, bookScale, dp],
   );
 

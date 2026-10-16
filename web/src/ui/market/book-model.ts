@@ -159,6 +159,25 @@ export function inferTick(prices: readonly bigint[]): bigint {
 export const GROUP_MULTIPLIERS = [1n, 10n, 100n, 1000n] as const;
 export const groupSizes = (tick: bigint): bigint[] => GROUP_MULTIPLIERS.map((m) => m * (tick > 0n ? tick : 1n));
 
+/**
+ * Grouping choices that mean something at the market's price: the tick (no grouping), then the powers of ten near 1/100,000, 1/10,000 and
+ * 1/1,000 of `ref` (a reference price, same unit), each a multiple of the tick. A price of 2,165,695.81 KAS per token on a 1-sompi tick offers
+ * 10, 100 and 1,000 KAS, not 0.0000001 .. 0.00001. Without a reference price: `groupSizes`.
+ */
+export function groupSizesAt(tick: bigint, ref: bigint | null): bigint[] {
+  const t = tick > 0n ? tick : 1n;
+  if (ref === null || ref <= 0n) return groupSizes(t);
+  let p = 1n;
+  while (p * 10n <= ref / 100_000n) p *= 10n;
+  const out = [t];
+  for (const step of [p, p * 10n, p * 100n]) {
+    const s = step % t === 0n ? step : ((step + t - 1n) / t) * t;
+    if (s > out[out.length - 1]!) out.push(s);
+  }
+  while (out.length < GROUP_MULTIPLIERS.length) out.push(out[out.length - 1]! * 10n);
+  return out;
+}
+
 export function buildBookModel(view: { asks: readonly (LevelView | BookOrderView)[]; bids: readonly (LevelView | BookOrderView)[] }, o: BookModelOptions = {}): BookModel {
   const scale = o.scale ?? 1n;
   const depth = Math.max(1, o.depth ?? 15);

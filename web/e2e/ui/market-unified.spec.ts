@@ -165,7 +165,7 @@ test.describe('the flip is complete: everything follows the displayed orientatio
       // the option labels are steps of the shown price unit
       const labels = await group.locator('option').allInnerTexts();
       expect(labels).toHaveLength(4);
-      if (flipped) expect(Number(labels[3]!.split('·')[1])).toBeGreaterThanOrEqual(0.1);
+      if (flipped) expect(Number(labels[3]!.replace(/,/g, ''))).toBeGreaterThanOrEqual(0.1);
       await group.selectOption({ index: 0 });
     }
   });

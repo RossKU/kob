@@ -66,7 +66,8 @@ describe('market list cells', () => {
   });
 
   it('never cuts a digit: a large price or volume turns compact with the exact figure in the tooltip, a dust volume reads <0.01', () => {
-    expect(priceCell({ num: 25_300_000_123n, den: 1000n }, 4, 'X / KAS')).toEqual({ text: '25.30M', title: '25,300,000.123 (X / KAS)' });
+    expect(priceCell({ num: 25_300_000_123n, den: 1000n }, 4, 'X / KAS')).toEqual({ text: '25,300,000.1', title: '25,300,000.123 (X / KAS)' });
+    expect(priceCell({ num: 25_300_000_000_123n, den: 1000n }, 4, 'X / KAS')).toEqual({ text: '25.30B', title: '25,300,000,000.123 (X / KAS)' });
     expect(volumeCell(123_456_789_000_000_000n, 8, 'KAS', null)).toEqual({ text: '1.23B', title: '1,234,567,890 KAS' });
     expect(volumeCell(12_345_678_900n, 8, 'KAS', null)).toEqual({ text: '123.46', title: '123.456789 KAS' });
     expect(volumeCell(1n, 8, 'KAS', null)).toEqual({ text: '<0.01', title: '0.00000001 KAS' });
