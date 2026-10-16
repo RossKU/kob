@@ -51,6 +51,9 @@ fn pragmas(conn: &Connection, writer: bool) -> rusqlite::Result<()> {
     }
     conn.pragma_update(None, "temp_store", "MEMORY")?;
     conn.pragma_update(None, "foreign_keys", "OFF")?;
+    // the row counters' triggers count an INSERT OR REPLACE of `order_state` once (schema.sql, `counters`): a REPLACE must
+    // not fire the delete trigger as well
+    conn.pragma_update(None, "recursive_triggers", "OFF")?;
     // Every statement the write path and the reads run is prepared once and kept: about 60 distinct ones per KOB transaction
     // cycle. With rusqlite's default of 16 the cache evicted them in turn and nearly every execution re-prepared its
     // statement (the parse and plan cost more than the statement itself: about 40 % of the per-transaction time on a
@@ -88,8 +91,10 @@ pub fn refuse_pre_v3(conn: &Connection, path: &Path) -> DbResult<()> {
 }
 
 /// Migrations of a database created by an earlier build of schema 5: the retired `receipts` table and its indexes dropped
-/// (schema 3, protocol v2.6; a no-op since), the cross limits' token B column, and the idempotent backfills below. (Schema 4
-/// and older are refused before this runs: [`refuse_pre_v3`].)
+/// (schema 3, protocol v2.6; a no-op since), the cross limits' token B column, the read-path indexes and row counters
+/// (2026-10; `docs/ops/executor.md`, B 5.5) and the idempotent backfills below. (Schema 4 and older are refused before this
+/// runs: [`refuse_pre_v3`].) The new indexes of `schema.sql` are built when it runs, before this: about 4 s on a 1.6 GB
+/// database, once.
 fn migrate(conn: &Connection) -> DbResult<()> {
     conn.execute_batch("DROP INDEX IF EXISTS receipts_created; DROP INDEX IF EXISTS receipts_spent; DROP TABLE IF EXISTS receipts;")?;
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('orders') WHERE name = 'quote_cov_id'")?.exists([])?;
@@ -97,7 +102,15 @@ fn migrate(conn: &Connection) -> DbResult<()> {
         // token B of a cross limit; a database written before cross limits existed has none
         conn.execute_batch("ALTER TABLE orders ADD COLUMN quote_cov_id BLOB")?;
     }
-    conn.execute_batch("CREATE INDEX IF NOT EXISTS orders_quote ON orders (quote_cov_id)")?;
+    // the orders of a quote token newest first (`GET /v1/orders?token=` lists a pair order under its token B too); it
+    // replaces the plain `(quote_cov_id)` index, as `orders_maker_genesis` replaces `(maker)`
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS orders_quote_genesis ON orders (quote_cov_id, genesis_block, covenant_id); \
+         DROP INDEX IF EXISTS orders_quote; DROP INDEX IF EXISTS orders_maker;",
+    )?;
+    if backfill_counters(conn)? {
+        tracing::info!("counted the orders, statuses, fills and rejects once for the health counters (kept by triggers from now on)");
+    }
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('order_amends') WHERE name = 'min_fill'")?.exists([])?;
     if !has {
         // the minimum fill an in-place amend replaced (restored on revert); an earlier build kept none
@@ -116,6 +129,27 @@ fn migrate(conn: &Connection) -> DbResult<()> {
         tracing::info!(unknown, "token events: an unknown pair-token commitment an earlier build recorded as zero is now none");
     }
     Ok(())
+}
+
+/// The row counters (`counters`, schema.sql) of a database that has not had them: counted from the tables once, in one
+/// transaction, after which the triggers keep them. A no-op (false) once done (`meta.counters`); a fresh database counts its
+/// empty tables.
+pub fn backfill_counters(conn: &Connection) -> DbResult<bool> {
+    if meta_get(conn, "counters")?.is_some() {
+        return Ok(false);
+    }
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "DELETE FROM counters; \
+         INSERT INTO counters (name, n) SELECT 'orders', COUNT(*) FROM orders; \
+         INSERT INTO counters (name, n) SELECT 'orders_listed', COUNT(*) FROM orders WHERE listed = 1; \
+         INSERT INTO counters (name, n) SELECT 'rejects', COUNT(*) FROM rejects; \
+         INSERT INTO counters (name, n) SELECT 'fills', COUNT(*) FROM order_events WHERE kind = 'fill'; \
+         INSERT INTO counters (name, n) SELECT 'status:' || status, COUNT(*) FROM order_state GROUP BY status;",
+    )?;
+    meta_set(&tx, "counters", "1")?;
+    tx.commit()?;
+    Ok(true)
 }
 
 /// The token identities the order `(contract, token, program, commitment, genesis state)` placed, as the processor records
@@ -158,14 +192,16 @@ pub fn backfill_unknown_pair_extensions(conn: &Connection) -> DbResult<usize> {
     if rows.is_empty() {
         return Ok(0);
     }
-    // (genesis txid, genesis block, genesis daa, identities) of the orders that name one of these tokens
-    let names = |tok: &[u8], tpl: &Option<Vec<u8>>| -> DbResult<Vec<Naming>> {
+    // (genesis txid, genesis block, genesis daa, identities) of the orders that name one of these tokens (of one transaction:
+    // `txid`)
+    let names = |tok: &[u8], tpl: &Option<Vec<u8>>, txid: Option<&[u8]>| -> DbResult<Vec<Naming>> {
         let mut st = conn.prepare_cached(
             "SELECT contract, token_cov_id, token_tpl_hash, ext_commit, genesis_state, genesis_txid, genesis_block, genesis_daa \
-             FROM orders WHERE token_cov_id = ?1 OR quote_cov_id = ?1 ORDER BY genesis_block, genesis_daa, rowid",
+             FROM orders WHERE (token_cov_id = ?1 OR quote_cov_id = ?1) AND (?2 IS NULL OR genesis_txid = ?2) \
+             ORDER BY genesis_block, genesis_daa, rowid",
         )?;
         let out = st
-            .query_map([tok], |r| {
+            .query_map(rusqlite::params![tok, txid], |r| {
                 let ids = identities_of_order(&r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
                 let named = ids.iter().any(|(t, p, e)| t == tok && p == tpl && e.as_deref() == Some(&zero[..]));
                 Ok((r.get(5)?, r.get(6)?, r.get(7)?, named))
@@ -175,10 +211,12 @@ pub fn backfill_unknown_pair_extensions(conn: &Connection) -> DbResult<usize> {
     };
     let mut changed = 0;
     for (id, tok, tpl, txid) in rows {
-        let orders = names(&tok, &tpl)?;
-        if orders.iter().any(|(t, _, _, named)| *named && t.as_deref() == Some(&txid[..])) {
+        // the orders of the row's own transaction say whether it stands: only their states are decoded (this runs at every
+        // start-up; decoding every order of the token for every row took 12 s on a store of 300,000 orders)
+        if names(&tok, &tpl, Some(&txid))?.iter().any(|(t, _, _, named)| *named && t.as_deref() == Some(&txid[..])) {
             continue;
         }
+        let orders = names(&tok, &tpl, None)?;
         changed += 1;
         conn.execute("UPDATE token_events SET ext_commit = NULL WHERE id = ?1", [id])?;
         // the identity without a commitment once: its first sighting stays
@@ -204,7 +242,7 @@ pub fn backfill_unknown_pair_extensions(conn: &Connection) -> DbResult<usize> {
 pub fn backfill_stop_entry_books(conn: &Connection) -> DbResult<usize> {
     let ids: Vec<Vec<u8>> = conn
         .prepare(
-            "SELECT o.covenant_id FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id              WHERE o.in_book = 1 AND o.contract IN ('KobIfdAsk','KobIfdBid','KobIfdAskKron','KobIfdBidKron')                AND s.status IN ('open','partial')",
+            "SELECT o.covenant_id FROM order_state s CROSS JOIN orders o ON o.covenant_id = s.covenant_id              WHERE o.in_book = 1 AND o.contract IN ('KobIfdAsk','KobIfdBid','KobIfdAskKron','KobIfdBidKron')                AND s.status IN ('open','partial')",
         )?
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;

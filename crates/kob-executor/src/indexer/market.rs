@@ -570,11 +570,13 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         _ => None,
     };
     let (mut open_asks, mut open_bids) = (0i64, 0i64);
-    // the orders the book lists (`reads::BOOK_WHERE`): an ask only with its exact custody, nothing with no amount left
+    // the orders the book lists (`reads::BOOK_WHERE`): an ask only with its exact custody, nothing with no amount left (read
+    // from the live set, `reads::LIVE_FROM`)
     let mut st = conn.prepare(&format!(
-        "SELECT o.side, COUNT(*) FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
+        "SELECT o.side, COUNT(*) {} \
          WHERE o.token_cov_id = ?1 AND o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') AND s.state_known = 1 AND {} \
          AND {} AND {} GROUP BY o.side",
+        reads::LIVE_FROM,
         reads::NOT_FROZEN,
         reads::HAS_AMOUNT,
         reads::CUSTODY_OK

@@ -1274,7 +1274,27 @@ pub fn snapshot(conn: &Connection) -> String {
         "amend",
         &[1],
     );
+    // a status whose last order changed status keeps a zero row (incremental), which a rebuild never writes
+    dump("SELECT name, n FROM counters WHERE n != 0 ORDER BY name", 2, &mut out, "counter", &[]);
+    assert_read_invariants(conn);
     out
+}
+
+/// What the read paths rely on, checked on every [`snapshot`]: the row counters the triggers keep equal the counts of the
+/// tables (`/v1/health`), and an order has a current UTXO exactly when its status is `open` or `partial` (the books, counts
+/// and the matcher's book read the live set through the status, `reads::LIVE_FROM`).
+pub fn assert_read_invariants(conn: &Connection) {
+    let kept = crate::indexer::reads::counters(conn).unwrap();
+    let counted = crate::indexer::reads::counted(conn, kept.last_block_seq, kept.last_block_daa).unwrap();
+    assert_eq!(
+        serde_json::to_value(&kept).unwrap(),
+        serde_json::to_value(&counted).unwrap(),
+        "the kept row counters differ from the counted ones"
+    );
+    let off: i64 = conn
+        .query_row("SELECT COUNT(*) FROM order_state WHERE (cur_txid IS NOT NULL) != (status IN ('open','partial'))", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(off, 0, "an order's current UTXO and its live status disagree");
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS orders (
     quote_cov_id  BLOB                    -- pair orders: the quote token B; token_cov_id is the base token A. NULL for every other kind
 );
 CREATE INDEX IF NOT EXISTS orders_book ON orders (token_cov_id, side, price);
-CREATE INDEX IF NOT EXISTS orders_maker ON orders (maker);
+-- a maker's orders newest first (`GET /v1/orders?maker=`, keyset paged): read in index order, one page per request
+CREATE INDEX IF NOT EXISTS orders_maker_genesis ON orders (maker, genesis_block, covenant_id);
 CREATE INDEX IF NOT EXISTS orders_genesis_block ON orders (genesis_block);
 CREATE INDEX IF NOT EXISTS orders_parent ON orders (parent);
 
@@ -145,6 +146,8 @@ CREATE TABLE IF NOT EXISTS order_state (
     last_block     INTEGER NOT NULL,
     last_daa       INTEGER NOT NULL
 );
+-- The live set: `open` and `partial` are exactly the orders with a current (unspent) UTXO, `cur_txid` set
+-- (`processor::refresh_order_state`). Every book, count and matcher read starts from it here, never from the order history.
 CREATE INDEX IF NOT EXISTS order_state_status ON order_state (status);
 
 -- Token UTXOs owned (scheme 0x04) by an order covenant id. role: custody = created by the
@@ -219,6 +222,10 @@ CREATE INDEX IF NOT EXISTS token_holdings_owner ON token_holdings (owner, token_
 CREATE INDEX IF NOT EXISTS token_holdings_token ON token_holdings (token_cov_id, owner);
 CREATE INDEX IF NOT EXISTS token_holdings_created ON token_holdings (created_block);
 CREATE INDEX IF NOT EXISTS token_holdings_spent ON token_holdings (spent_block);
+-- The unspent holdings of an owner or of a token, oldest first (`GET /v1/token-utxos`, the operator's own tokens): the live
+-- rows only, in the order a page is read, however many spent rows the owner or the token has.
+CREATE INDEX IF NOT EXISTS token_holdings_live_owner ON token_holdings (owner, created_block, txid, idx) WHERE spent_block IS NULL;
+CREATE INDEX IF NOT EXISTS token_holdings_live_token ON token_holdings (token_cov_id, created_block, txid, idx) WHERE spent_block IS NULL;
 
 -- "Possibly frozen" annotations (an operational flag, not chain data: the co-located matcher writes it when the engine
 -- pre-simulation of the order's next fill is rejected by the token program, e.g. a frozen or blacklisted balance). A flag names the
@@ -236,6 +243,9 @@ CREATE TABLE IF NOT EXISTS order_flags (
 CREATE INDEX IF NOT EXISTS order_events_fill_ts ON order_events (kind, token_cov_id, ts);
 CREATE INDEX IF NOT EXISTS order_events_ts ON order_events (ts);
 CREATE INDEX IF NOT EXISTS orders_token_genesis ON orders (token_cov_id, genesis_block, covenant_id);
+-- The distinct (token, program, family) of the listed orders (the open token list): read one index seek per distinct row.
+CREATE INDEX IF NOT EXISTS orders_listed_tokens ON orders (token_cov_id, token_tpl_hash, family)
+    WHERE listed = 1 AND token_cov_id IS NOT NULL AND token_tpl_hash IS NOT NULL;
 
 -- Pair-order fills (KobPair, KobCondPair, KobIfdPair): volume of the pair (A, B), never a KAS price. Prices, trades, candles and
 -- last prices come ONLY from KAS-book order fills (`order_events` fills with a price); a pair fill records its event (price
@@ -265,3 +275,58 @@ CREATE TABLE IF NOT EXISTS pair_fills (
 CREATE INDEX IF NOT EXISTS pair_fills_pair ON pair_fills (base_cov_id, quote_cov_id, id);
 CREATE INDEX IF NOT EXISTS pair_fills_pair_ts ON pair_fills (base_cov_id, quote_cov_id, ts);
 CREATE INDEX IF NOT EXISTS pair_fills_block ON pair_fills (block_seq);
+
+-- Row counts `GET /v1/health` reports (`reads::counters`), kept by the triggers below in the transaction of every write
+-- (a batch, a revert, a replay, an operator import), so a health check reads a few rows instead of counting the history.
+-- name: orders | orders_listed | rejects | fills | status:<order_state.status>. A database without them gets them at
+-- start-up, counted once (`db::backfill_counters`).
+--
+-- `order_state` is written with INSERT OR REPLACE: the replaced row's status leaves its count in the BEFORE INSERT trigger
+-- (REPLACE fires no delete trigger while `recursive_triggers` is off, as every connection sets it, `db::pragmas`).
+CREATE TABLE IF NOT EXISTS counters (
+    name TEXT PRIMARY KEY,
+    n    INTEGER NOT NULL
+) WITHOUT ROWID;
+
+CREATE TRIGGER IF NOT EXISTS counters_orders_insert AFTER INSERT ON orders BEGIN
+    INSERT INTO counters (name, n) VALUES ('orders', 1) ON CONFLICT (name) DO UPDATE SET n = n + 1;
+    INSERT INTO counters (name, n) VALUES ('orders_listed', NEW.listed = 1) ON CONFLICT (name) DO UPDATE SET n = n + excluded.n;
+END;
+CREATE TRIGGER IF NOT EXISTS counters_orders_delete AFTER DELETE ON orders BEGIN
+    UPDATE counters SET n = n - 1 WHERE name = 'orders';
+    UPDATE counters SET n = n - (OLD.listed = 1) WHERE name = 'orders_listed';
+END;
+CREATE TRIGGER IF NOT EXISTS counters_orders_listed AFTER UPDATE OF listed ON orders WHEN (OLD.listed = 1) != (NEW.listed = 1) BEGIN
+    INSERT INTO counters (name, n) VALUES ('orders_listed', (NEW.listed = 1) - (OLD.listed = 1))
+        ON CONFLICT (name) DO UPDATE SET n = n + excluded.n;
+END;
+CREATE TRIGGER IF NOT EXISTS counters_state_replace BEFORE INSERT ON order_state BEGIN
+    UPDATE counters SET n = n - 1
+        WHERE name = 'status:' || (SELECT s.status FROM order_state s WHERE s.covenant_id = NEW.covenant_id);
+END;
+CREATE TRIGGER IF NOT EXISTS counters_state_insert AFTER INSERT ON order_state BEGIN
+    INSERT INTO counters (name, n) VALUES ('status:' || NEW.status, 1) ON CONFLICT (name) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS counters_state_delete AFTER DELETE ON order_state BEGIN
+    UPDATE counters SET n = n - 1 WHERE name = 'status:' || OLD.status;
+END;
+CREATE TRIGGER IF NOT EXISTS counters_state_update AFTER UPDATE OF status ON order_state WHEN OLD.status IS NOT NEW.status BEGIN
+    UPDATE counters SET n = n - 1 WHERE name = 'status:' || OLD.status;
+    INSERT INTO counters (name, n) VALUES ('status:' || NEW.status, 1) ON CONFLICT (name) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS counters_rejects_insert AFTER INSERT ON rejects BEGIN
+    INSERT INTO counters (name, n) VALUES ('rejects', 1) ON CONFLICT (name) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS counters_rejects_delete AFTER DELETE ON rejects BEGIN
+    UPDATE counters SET n = n - 1 WHERE name = 'rejects';
+END;
+CREATE TRIGGER IF NOT EXISTS counters_fills_insert AFTER INSERT ON order_events WHEN NEW.kind = 'fill' BEGIN
+    INSERT INTO counters (name, n) VALUES ('fills', 1) ON CONFLICT (name) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS counters_fills_delete AFTER DELETE ON order_events WHEN OLD.kind = 'fill' BEGIN
+    UPDATE counters SET n = n - 1 WHERE name = 'fills';
+END;
+CREATE TRIGGER IF NOT EXISTS counters_fills_update AFTER UPDATE OF kind ON order_events WHEN (OLD.kind = 'fill') != (NEW.kind = 'fill') BEGIN
+    INSERT INTO counters (name, n) VALUES ('fills', (NEW.kind = 'fill') - (OLD.kind = 'fill'))
+        ON CONFLICT (name) DO UPDATE SET n = n + excluded.n;
+END;

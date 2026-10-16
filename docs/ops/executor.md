@@ -1388,6 +1388,65 @@ indexer could not classify, or closed by gap reconciliation). `expired: true` ma
 past `expiry_daa` whose refund is pending. A repeating entry that sold out stays `partial` with
 `amount_left: "0"` until it is refunded (`close`) or cancelled.
 
+#### 5.5 What a read costs
+
+The store keeps every order ever placed (295,000 after the first weeks of the TN10 soak); a few hundred of them are live.
+Every read the API, the matcher and the keepers repeat is bounded by the live set or by the page asked for, not by the
+history:
+
+| Read | Read through | Grows with |
+|---|---|---|
+| books, depth, the stats' best bid / ask and open counts, the `/v1/tokens` counts, pair books, `/v1/pairs`, the matcher's and keepers' book | `order_state_status` (`open`, `partial`: an order has a current UTXO exactly then), joined to the orders (`reads::LIVE_FROM`: `order_state` first, `CROSS JOIN` keeps that order) | the live orders |
+| `/v1/orders?token=` | `orders_token_genesis` and `orders_quote_genesis` in `(genesis_block, covenant_id)` order, merged (a pair order is listed under both its tokens) | the page |
+| `/v1/orders?maker=` | `orders_maker_genesis` | the page |
+| `/v1/orders` with `status=active`, `open`, `partial` (or any status few orders have: `n² <= (limit + 1) × orders`) | the orders of that status, sorted | the live orders |
+| the open part of `/v1/tokens` | `orders_listed_tokens`, one seek per distinct (token, program, family) of the listed orders | the tokens |
+| `/v1/token-utxos` (`spent=false`) | `token_holdings_live_owner` / `token_holdings_live_token` (indexes of the unspent rows only) | the page |
+| `/v1/health` counters | `counters`, kept by triggers in the transaction of every write (batch, revert, replay, import) | nothing |
+
+Still more than a page: `/v1/candles` reads every fill of its window (500 hourly candles: three weeks of fills); the 24 h
+statistics read the fills of the last day (at most 20,000); `/v1/token-utxos?spent=true` and `/v1/orders?maker=&token=`
+read every row of that owner or maker that the filter does not take (a page is found among them, in order); a status with
+many orders filtered to a maker or token that has none of them reads that maker's or token's orders.
+
+**Measured** on a copy of the TN10 soak indexer (1.6 GB: 295,000 orders, 816,000 events, 270,000 fills, 320 live orders),
+release build, warm cache, best of three; every answer compared byte for byte with the earlier build's:
+
+| Read | Before | After |
+|---|---|---|
+| `/v1/orders?token=` (any page) | 0.6 to 1.0 s | 4 ms |
+| `/v1/orders?token=&status=active` | 851 ms | 17 ms |
+| `/v1/orders?status=cancelled` (first page) | 1.2 s | 7 ms |
+| `/v1/orders?maker=` (first page) | 670 ms | 7 ms |
+| `/v1/orders?maker=&token=&status=active` | 207 ms | 9 ms |
+| `/v1/books/{token}` (levels / orders) | 240 to 350 ms | 8 to 14 ms |
+| `/v1/depth/{token}` | 255 to 316 ms | 8 to 10 ms |
+| `/v1/stats/{token}` | 0.66 to 1.0 s | 62 to 70 ms (the 24 h fills) |
+| `/v1/tokens` | 1.49 s | 54 ms |
+| `/v1/health` counters | 270 to 360 ms | 0.06 ms |
+| `/v1/token-utxos?owner=&token=` (unspent) | 81 ms | 0.4 ms |
+| `/v1/token-utxos?token=` (unspent, every owner) | 917 ms | 2.4 ms |
+| `/v1/pairs/{base}/{quote}/book` | 1.47 s | 28 ms |
+| the matcher's book (`book::snapshot`, every tick) | 3.0 s | 47 ms |
+| the operator's own tokens (maintenance, every tick) | 350 ms | 0.4 ms |
+| `/v1/candles/{token}` (500 hourly or daily candles: 65,000 fills) | 0.55 to 0.8 s | the same |
+
+**Candles** stay a read of the window's fills, deliberately. The web app loads a chart's whole window once and then
+asks only for the bars since its newest one (`from=`, one or two buckets), so the full read is paid once per chart opened.
+The read is the fills (index
+`order_events_fill_ts`) and, per fill, its order's scale and age: a covering index of the fills (measured: 1.5 s to build,
+about 35 MB) saved 10 %, the order lookups being most of the time. Keeping the candles themselves (a table per interval
+maintained on write, or the buckets older than the reorg window kept in memory) would cut a full load of 500 hourly
+candles to the fills of about the last 13 hours, at the price of state that every revert has to keep exact; not done.
+
+**Upgrade.** The first start of this build on an existing database builds the new indexes and counts the counters once
+(`db::migrate`; the database stays schema 5): 7 s on the 1.6 GB soak copy, which grew by 56 MB. Every later start takes
+about 2 s on it (it took 13 s before: a start-up backfill, `backfill_unknown_pair_extensions`, decoded every order of a
+token once per token identity it checks, 25 on the copy; it now decodes the orders of the identity's own transaction first, and the
+whole token only for an identity it corrects). An earlier build still opens the database: it re-creates the two indexes
+this build drops (`orders_maker`, `orders_quote`, about 1 s each), and the triggers keep the counters right under it.
+`index replay` builds the new indexes, the counters and their triggers with the schema, before the first frame.
+
 #### Hostile input: what one order, payload or request can and cannot do
 
 Every operator runs this code and anybody may run an executor, so a single hostile order, payload or request must not crash,
@@ -1689,7 +1748,8 @@ database.
 **Schema.** The database is schema 5 (quantities in base units, prices per whole token). A database written before it
 (its `orders` table has the old `lot_units` column) is refused untouched by every writer and reader: move it aside and
 replay (above). A schema-5 database of an earlier build is brought up to date in place at start-up (idempotent backfills,
-no replay); a newer schema is refused. An old configuration's `[receipts]` table is ignored. Roll indexers out before
+no replay; the read-path indexes and row counters of section 5.5 are built once, seconds on a large database); a newer
+schema is refused. An old configuration's `[receipts]` table is ignored. Roll indexers out before
 wallets whenever the KOB1 payload version changes: an indexer refuses a payload version it does not know, so it would list
 none of the orders the new wallets place (`docs/ops/release.md`, section 7).
 

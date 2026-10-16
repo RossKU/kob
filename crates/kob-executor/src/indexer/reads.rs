@@ -144,9 +144,10 @@ pub const OPEN_TOKEN_ROWS_MAX: i64 = 5_000;
 
 pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<TokenView>> {
     let mut counts: BTreeMap<(Vec<u8>, i64), i64> = BTreeMap::new();
-    // the orders the books list (`BOOK_WHERE`): an ask only with its exact custody, nothing with no amount left
+    // the orders the books list (`BOOK_WHERE`): an ask only with its exact custody, nothing with no amount left (read from
+    // the live set, `order_state` first: [`LIVE_FROM`])
     let mut st = conn.prepare(&format!(
-        "SELECT o.token_cov_id, o.side, COUNT(*) FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
+        "SELECT o.token_cov_id, o.side, COUNT(*) {LIVE_FROM} \
          WHERE o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') AND s.state_known = 1 AND o.token_cov_id IS NOT NULL AND {NOT_FROZEN} \
          AND {HAS_AMOUNT} AND {CUSTODY_OK} GROUP BY o.token_cov_id, o.side",
     ))?;
@@ -187,19 +188,8 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
     // shows the token's program, so the token is in the list and its first listed order can be placed from it. The strict-list
     // and delisting checks below apply to every row; at most `OPEN_TOKEN_ROWS_MAX` rows are read.
     if tokens.is_open() {
-        let mut st = conn.prepare(
-            "SELECT DISTINCT token_cov_id, token_tpl_hash, family FROM orders WHERE listed = 1 AND token_cov_id IS NOT NULL \
-             AND token_tpl_hash IS NOT NULL \
-             UNION SELECT DISTINCT o.quote_cov_id, e.tpl_hash, 0 FROM orders o JOIN token_events e ON e.token_cov_id = o.quote_cov_id \
-             WHERE o.listed = 1 AND o.quote_cov_id IS NOT NULL AND e.tpl_hash IS NOT NULL \
-             UNION SELECT DISTINCT token_cov_id, tpl_hash, 0 FROM token_events WHERE tpl_hash IS NOT NULL \
-             ORDER BY 1, 3 DESC LIMIT ?1",
-        )?;
-        let rows =
-            st.query_map([OPEN_TOKEN_ROWS_MAX], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, i64>(2)?)))?;
         let mut seen: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
-        for r in rows {
-            let (cov, tpl, _fam) = r?;
+        for (cov, tpl, _fam) in open_token_rows(conn, OPEN_TOKEN_ROWS_MAX as usize)? {
             let (Ok(cov32), Ok(tpl32)) = (<[u8; 32]>::try_from(cov.as_slice()), <[u8; 32]>::try_from(tpl.as_slice())) else {
                 continue;
             };
@@ -242,6 +232,47 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
         }
     }
     Ok(out)
+}
+
+/// A (token, program, family) row of the open token list.
+type OpenTokenRow = (Vec<u8>, Vec<u8>, i64);
+
+/// The rows the open token list reads, at most `max`: every distinct (token, program, family) of the listed orders and every
+/// token identity an order placement recorded (`token_events`, family 0; the quote token B of a listed pair order is named
+/// through these identities, so they hold every such row), ordered by token, then family descending (rows of listed orders first), then
+/// program. The listed orders' rows are read one index seek each (`orders_listed_tokens`), never by reading the orders: the
+/// read grows with the tokens, not with the history.
+fn open_token_rows(conn: &Connection, max: usize) -> DbResult<Vec<OpenTokenRow>> {
+    use std::cmp::Reverse;
+    use std::collections::BTreeSet;
+    // in the list's order: (token, family descending, program); a set, so a row named twice is one row
+    let mut rows: BTreeSet<(Vec<u8>, Reverse<i64>, Vec<u8>)> = BTreeSet::new();
+    let mut st = conn.prepare_cached("SELECT DISTINCT token_cov_id, tpl_hash FROM token_events WHERE tpl_hash IS NOT NULL")?;
+    for r in st.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?)))? {
+        let (t, p) = r?;
+        rows.insert((t, Reverse(0), p));
+    }
+    const LISTED: &str = "SELECT token_cov_id, token_tpl_hash, family FROM orders \
+        WHERE listed = 1 AND token_cov_id IS NOT NULL AND token_tpl_hash IS NOT NULL";
+    let row = |r: &Row<'_>| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, i64>(2)?));
+    let mut first = conn.prepare_cached(&format!("{LISTED} ORDER BY token_cov_id, token_tpl_hash, family LIMIT 1"))?;
+    let mut next = conn.prepare_cached(&format!(
+        "{LISTED} AND (token_cov_id, token_tpl_hash, family) > (?1, ?2, ?3) ORDER BY token_cov_id, token_tpl_hash, family LIMIT 1"
+    ))?;
+    let mut cur: Option<OpenTokenRow> = first.query_row([], row).optional()?;
+    let mut last_token: Option<Vec<u8>> = None;
+    while let Some((t, p, f)) = cur {
+        if last_token.as_ref() != Some(&t) {
+            // every row still to come sorts after the `max` rows of the tokens before this one: the list is complete
+            if rows.len() >= max && rows.range(..(t.clone(), Reverse(i64::MAX), Vec::new())).count() >= max {
+                break;
+            }
+            last_token = Some(t.clone());
+        }
+        rows.insert((t.clone(), Reverse(f), p.clone()));
+        cur = next.query_row(rusqlite::params![t, p, f], row).optional()?;
+    }
+    Ok(rows.into_iter().take(max).map(|(t, f, p)| (t, p, f.0)).collect())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -337,6 +368,12 @@ pub(crate) const NOT_FROZEN: &str = not_frozen!();
 /// sold-out repeating if-done entry that lives on for the re-arms of its exits (an unknown amount is kept).
 pub(crate) const HAS_AMOUNT: &str = "COALESCE(s.remaining_amount, 1) > 0";
 
+/// The FROM of every book, count and stats read (aliases `s` = order_state, `o` = orders): the live set first. Their WHERE
+/// keeps `s.status IN ('open','partial')`, so the rows come from `order_state_status` (the few live orders) and are joined to
+/// their orders; `CROSS JOIN` keeps that order (SQLite does not reorder it). Joined the other way the planner read every
+/// order of the token (`orders_book`) or of the whole history to find them: 0.2 to 2 s per read on a store of 300,000 orders.
+pub(crate) const LIVE_FROM: &str = "FROM order_state s CROSS JOIN orders o ON o.covenant_id = s.covenant_id";
+
 const BOOK_WHERE: &str = concat!(
     "o.token_cov_id = ?1 AND o.side = ?2 AND o.listed = 1 AND o.in_book = 1 \
      AND s.status IN ('open','partial') AND s.state_known = 1 AND o.price IS NOT NULL AND COALESCE(s.remaining_amount, 1) > 0 AND ",
@@ -380,7 +417,7 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
     let sql = format!(
         "SELECT o.covenant_id, o.contract, o.maker, o.price, o.tip, o.min_fill, o.scale, o.expiry_daa, o.genesis_daa, \
                 s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, u.state, u.created_daa \
-         FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
+         {LIVE_FROM} \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} \
          ORDER BY {PER_BASE_UNIT} {dir}, o.genesis_block ASC, o.covenant_id ASC LIMIT ?3"
@@ -432,7 +469,7 @@ fn book_side_levels(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
     let live = fillable_now(book_daa(conn, ctx)?, ctx.now_unix);
     let sql = format!(
         "SELECT o.price, COALESCE(o.scale, 1), s.remaining_amount, s.amount_exact \
-         FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
+         {LIVE_FROM} \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live}"
     );
@@ -1247,7 +1284,30 @@ pub fn parse_order_cursor(s: &str) -> Option<(i64, Vec<u8>)> {
     Some((b.parse().ok()?, hex::decode(c).ok()?))
 }
 
+/// [`ORDER_SELECT`] driven from `order_state` (a status filter whose orders are few): the rows of the statuses are read
+/// through `order_state_status` and joined to their orders (`CROSS JOIN` keeps that order), instead of every order of the
+/// token or maker being read for the few of that status.
+const ORDER_SELECT_BY_STATUS: &str = "SELECT o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.maker, o.token_cov_id, \
+    o.token_tpl_hash, o.scale, o.min_fill, o.price, o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, \
+    o.reserve, o.initial_amount, o.genesis_txid, o.genesis_out, o.genesis_block, o.genesis_daa, o.parent, o.listed, \
+    o.unlisted_reason, o.origin, s.status, s.filled_amount, s.remaining_amount, s.cur_txid, s.cur_idx, s.cur_value, \
+    s.state_known, s.last_block, s.last_daa, o.ext_commit, o.deadline, s.amount_exact, u.state, u.created_daa, fl.reason, \
+    o.genesis_state \
+    FROM order_state s CROSS JOIN orders o ON o.covenant_id = s.covenant_id \
+    LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
+    LEFT JOIN order_flags fl ON fl.covenant_id = o.covenant_id AND fl.txid = s.cur_txid AND fl.idx = s.cur_idx";
+
+/// The orders of `statuses` (the row counters the write path keeps; `None` without them).
+fn status_count(conn: &Connection, statuses: &[&str]) -> DbResult<Option<i64>> {
+    Ok(kept_counters(conn)?.map(|k| statuses.iter().map(|s| k.get(&format!("status:{s}")).copied().unwrap_or(0)).sum()))
+}
+
 /// Orders newest first, filtered; keyset-paginated on (genesis block, covenant id).
+///
+/// What a page costs: one index range read in `(genesis_block, covenant_id)` order (`orders_token_genesis` and
+/// `orders_quote_genesis` merged for a token, `orders_maker_genesis` for a maker, `orders_genesis_block` otherwise) that
+/// stops at the page's end; a status filter whose orders are few (`active`, `open`, `partial`: the live set) reads those
+/// orders instead and sorts them. Both give the same rows in the same order.
 pub fn orders(
     conn: &Connection,
     ctx: &ReadCtx,
@@ -1261,17 +1321,30 @@ pub fn orders(
         args.push(SqlValue::Blob(m.clone()));
         conds.push(format!("o.maker = ?{}", args.len()));
     }
-    if let Some(t) = &f.token {
-        // a pair order trades two tokens: it is listed under either (base A, quote B)
-        args.push(SqlValue::Blob(t.0.to_vec()));
-        conds.push(format!("(o.token_cov_id = ?{n} OR o.quote_cov_id = ?{n})", n = args.len()));
-    }
+    let statuses: Option<Vec<&str>> = f.status.as_deref().map(|s| if s == "active" { vec!["open", "partial"] } else { vec![s] });
+    // Read the status rows and sort them when that is the cheaper side: n rows of the statuses against about
+    // (limit x orders / n) rows of the history read in order before a page of them is found (n^2 <= limit x orders).
+    let by_status = match &statuses {
+        None => false,
+        Some(s) => {
+            let n = status_count(conn, s)?;
+            let total = kept_counters(conn)?.and_then(|k| k.get("orders").copied());
+            match (n, total) {
+                (Some(n), Some(total)) => (n as i128) * (n as i128) <= (limit as i128 + 1) * total.max(1) as i128,
+                // no counters (a database a writer of this build has not opened): the live statuses are the few ones
+                _ => s.iter().all(|s| *s == "open" || *s == "partial"),
+            }
+        }
+    };
     if let Some(s) = &f.status {
+        // read in history order, the status is a filter on the rows (`+`): the planner, left to choose, reads every order of
+        // the status through `order_state_status` and sorts them (1.3 s for `cancelled` on the TN10 soak, 3 ms this way)
+        let col = if by_status { "s.status" } else { "+s.status" };
         if s == "active" {
-            conds.push("s.status IN ('open','partial')".to_string());
+            conds.push(format!("{col} IN ('open','partial')"));
         } else {
             args.push(SqlValue::Text(s.clone()));
-            conds.push(format!("s.status = ?{}", args.len()));
+            conds.push(format!("{col} = ?{}", args.len()));
         }
     }
     if let Some((b, c)) = cursor {
@@ -1279,9 +1352,37 @@ pub fn orders(
         args.push(SqlValue::Blob(c));
         conds.push(format!("(o.genesis_block, o.covenant_id) < (?{}, ?{})", args.len() - 1, args.len()));
     }
-    let where_ = if conds.is_empty() { String::new() } else { format!(" WHERE {}", conds.join(" AND ")) };
+    let token = f.token.as_ref().map(|t| {
+        args.push(SqlValue::Blob(t.0.to_vec()));
+        args.len()
+    });
+    let where_ = |extra: &[String]| {
+        let all: Vec<&String> = conds.iter().chain(extra).collect();
+        if all.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", all.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" AND "))
+        }
+    };
     args.push(SqlValue::Integer(limit as i64 + 1));
-    let sql = format!("{ORDER_SELECT}{where_} ORDER BY o.genesis_block DESC, o.covenant_id DESC LIMIT ?{}", args.len());
+    let lim = args.len();
+    let sql = match token {
+        // a pair order trades two tokens: it is listed under either (base A, quote B)
+        Some(n) if by_status => format!(
+            "{ORDER_SELECT_BY_STATUS}{} ORDER BY o.genesis_block DESC, o.covenant_id DESC LIMIT ?{lim}",
+            where_(&[format!("(o.token_cov_id = ?{n} OR o.quote_cov_id = ?{n})")])
+        ),
+        // one index-ordered read per column, merged (a pair order of A / A is read once, from the first)
+        Some(n) => format!(
+            "{ORDER_SELECT}{} UNION ALL {ORDER_SELECT}{} ORDER BY 22 DESC, 1 DESC LIMIT ?{lim}",
+            where_(&[format!("o.token_cov_id = ?{n}")]),
+            where_(&[format!("o.quote_cov_id = ?{n}"), format!("o.token_cov_id IS NOT ?{n}")])
+        ),
+        None if by_status => {
+            format!("{ORDER_SELECT_BY_STATUS}{} ORDER BY o.genesis_block DESC, o.covenant_id DESC LIMIT ?{lim}", where_(&[]))
+        }
+        None => format!("{ORDER_SELECT}{} ORDER BY o.genesis_block DESC, o.covenant_id DESC LIMIT ?{lim}", where_(&[])),
+    };
     let mut st = conn.prepare(&sql)?;
     let mut items = st.query_map(params_from_iter(args.iter()), |r| order_from_row(r, ctx))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let next_cursor = if items.len() > limit {
@@ -1432,17 +1533,52 @@ fn count(conn: &Connection, sql: &str) -> DbResult<i64> {
     conn.query_row(sql, [], |r| r.get::<_, i64>(0)).map_err(DbError::from)
 }
 
+/// The row counters the write path keeps (`counters`, schema.sql), `None` on a database a writer of this build has not
+/// opened yet (no table, or not counted yet: [`super::db::backfill_counters`]).
+fn kept_counters(conn: &Connection) -> DbResult<Option<BTreeMap<String, i64>>> {
+    let kept = conn.prepare_cached("SELECT 1 FROM meta WHERE k = 'counters'")?.exists([])?
+        && conn.prepare_cached("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'counters'")?.exists([])?;
+    if !kept {
+        return Ok(None);
+    }
+    let mut st = conn.prepare_cached("SELECT name, n FROM counters")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    Ok(Some(rows.collect::<rusqlite::Result<_>>()?))
+}
+
+/// The `/v1/health` counters: from the counters the write path keeps (a few rows), else counted (a database not yet opened by
+/// a writer of this build: a scan of every order, event and state).
 pub fn counters(conn: &Connection) -> DbResult<Counters> {
+    let last = conn
+        .query_row("SELECT seq, daa FROM blocks ORDER BY seq DESC LIMIT 1", [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+        .optional()?;
+    let (last_block_seq, last_block_daa) = last.unwrap_or((0, 0));
+    if let Some(kept) = kept_counters(conn)? {
+        let get = |k: &str| kept.get(k).copied().unwrap_or(0);
+        // a status no order has any more is left out, as the count by status leaves it out
+        let by_status =
+            kept.iter().filter_map(|(k, n)| Some((k.strip_prefix("status:")?.to_string(), *n)).filter(|_| *n != 0)).collect();
+        return Ok(Counters {
+            orders_total: get("orders"),
+            orders_listed: get("orders_listed"),
+            orders_by_status: by_status,
+            rejects_total: get("rejects"),
+            fills_total: get("fills"),
+            last_block_seq,
+            last_block_daa,
+        });
+    }
+    counted(conn, last_block_seq, last_block_daa)
+}
+
+/// [`counters`] counted from the tables.
+pub fn counted(conn: &Connection, last_block_seq: i64, last_block_daa: i64) -> DbResult<Counters> {
     let mut by_status = BTreeMap::new();
     let mut st = conn.prepare("SELECT status, COUNT(*) FROM order_state GROUP BY status")?;
     for r in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
         let (s, n) = r?;
         by_status.insert(s, n);
     }
-    let last = conn
-        .query_row("SELECT seq, daa FROM blocks ORDER BY seq DESC LIMIT 1", [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
-        .optional()?;
-    let (last_block_seq, last_block_daa) = last.unwrap_or((0, 0));
     Ok(Counters {
         orders_total: count(conn, "SELECT COUNT(*) FROM orders")?,
         orders_listed: count(conn, "SELECT COUNT(*) FROM orders WHERE listed = 1")?,
@@ -1456,7 +1592,10 @@ pub fn counters(conn: &Connection) -> DbResult<Counters> {
 
 /// Number of KOB1 payloads that did not produce an order.
 pub fn rejects_count(conn: &Connection) -> DbResult<i64> {
-    count(conn, "SELECT COUNT(*) FROM rejects")
+    match kept_counters(conn)? {
+        Some(kept) => Ok(kept.get("rejects").copied().unwrap_or(0)),
+        None => count(conn, "SELECT COUNT(*) FROM rejects"),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1528,7 +1667,11 @@ pub fn holdings(
     }
     if let Some(t) = &f.token {
         args.push(SqlValue::Blob(t.0.to_vec()));
-        conds.push(format!("token_cov_id = ?{}", args.len()));
+        // An owner's unspent holdings are read through `token_holdings_live_owner` (its live rows only, in page order) and the
+        // token is a filter on them (`+`: no index may take it), never through `token_holdings_owner` (owner, token), which
+        // holds every spent row of the pair as well: 22,000 rows read for 10 on the TN10 soak.
+        let col = if f.owner.is_some() && !f.include_spent { "+token_cov_id" } else { "token_cov_id" };
+        conds.push(format!("{col} = ?{}", args.len()));
     }
     if !f.include_spent {
         conds.push("spent_block IS NULL".to_string());
@@ -1590,3 +1733,7 @@ pub fn holdings(
     };
     Ok(Page { items: all.into_iter().map(|(_, v)| v).collect(), next_cursor })
 }
+
+#[cfg(test)]
+#[path = "reads_tests.rs"]
+mod tests;
