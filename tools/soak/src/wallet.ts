@@ -41,6 +41,8 @@ const RESERVE_MS = 600_000;
 const CONFLICT_RESERVE_MS = 60_000;
 /** how old the wallet's view of its own mempool transactions may be when it plans */
 const MEMPOOL_TTL_MS = 10_000;
+/** how long one read of the key's token UTXOs of a token serves the next reads (well below the indexer's own lag behind the chain) */
+const TOKEN_UTXOS_TTL_MS = 5_000;
 
 /**
  * One SDK client per process for the wallets' mempool reads (the web app's node wrapper has none). Under the 10-11 flood a transaction
@@ -80,6 +82,8 @@ export class BotWallet {
   private mempoolAt = 0;
   private mempoolRead: Promise<void> | null = null;
   private lastKasMerge = 0;
+  /** the last read of the key's token UTXOs per token (covenant id), shared for TOKEN_UTXOS_TTL_MS (see `tokenUtxos`) */
+  private readonly tokenReads = new Map<string, { at: number; p: Promise<TokenUtxo[]> }>();
 
   constructor(
     readonly env: Env,
@@ -237,8 +241,24 @@ export class BotWallet {
     return (await this.funding()).reduce((s, u) => s + BigInt(u.amount), 0n);
   }
 
+  /**
+   * spendable token UTXOs of `token` (verified on the node, not reserved), largest first. One read of the indexer (and the node) serves every
+   * call for TOKEN_UTXOS_TTL_MS: a market-maker tick or a trader action reads them several times (merge check, inventory, each plan). A
+   * reused answer is safe: only this key spends its token UTXOs, and its own spends are filtered as reservations at every call.
+   */
   async tokenUtxos(token: TokenRef): Promise<TokenUtxo[]> {
-    const [all] = await Promise.all([this.tracker.tokenUtxosFor(this.pk, token), this.refreshMempool()]);
+    const k = token.covenantId.toLowerCase();
+    let read = this.tokenReads.get(k);
+    if (!read || Date.now() - read.at > TOKEN_UTXOS_TTL_MS) {
+      const r = { at: Date.now(), p: this.tracker.tokenUtxosFor(this.pk, token) };
+      // a failed read is not reused
+      r.p.catch(() => {
+        if (this.tokenReads.get(k) === r) this.tokenReads.delete(k);
+      });
+      this.tokenReads.set(k, r);
+      read = r;
+    }
+    const [all] = await Promise.all([read.p, this.refreshMempool()]);
     return all.filter((u) => !this.isReserved(u.transactionId, u.index));
   }
 

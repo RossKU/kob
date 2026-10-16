@@ -81,12 +81,22 @@ export class Trader {
     }
   }
 
-  /** merges this trader's surplus token UTXOs (own loop: never concurrent with its own action); rate-limited per key and token */
+  /** when this trader last looked at its token UTXOs for a merge */
+  private lastTokenMerge = 0;
+
+  /**
+   * merges this trader's surplus token UTXOs (own loop: never concurrent with its own action); rate-limited per key and token. The token UTXOs
+   * are looked at once per `intervalSec` (the merge rate window), not after every action: each look reads every soak token's UTXOs from the
+   * indexer, and one pass merges whatever a window's actions added (up to the window's cap of merge transactions)
+   */
   private async consolidate(): Promise<void> {
     const cc = consolidateConfig(this.env.cfg.consolidate);
     if (!cc.enabled || !cc.traders) return;
-    const ms = [tokenMarket(this.env), ...this.assets.map((a) => a.m)];
-    for (const m of ms) await consolidateTokens(this.env, this.w, m, fanoutTarget(this.env, 'trader', m), cc);
+    if (Date.now() - this.lastTokenMerge >= cc.intervalSec * 1000) {
+      this.lastTokenMerge = Date.now();
+      const ms = [tokenMarket(this.env), ...this.assets.map((a) => a.m)];
+      for (const m of ms) await consolidateTokens(this.env, this.w, m, fanoutTarget(this.env, 'trader', m), cc);
+    }
     await this.w.mergeKas({ above: cc.kasAbove, maxInputs: cc.kasInputs });
   }
 
