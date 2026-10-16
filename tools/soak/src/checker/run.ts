@@ -1391,14 +1391,22 @@ async function supplyStep(x: Ctx, now: number, ix: { url: string; name: string }
 
 // ------------------------------------------------------------------------------------------------ 9. the two indexers agree
 
+/**
+ * The fills of (fromDaa, toDaa] on one indexer. Fill ids follow insertion order, not chain order: imported fill events (record-log
+ * import, older DAA) sit among newer fills at ids of their own on each indexer, so one row below the window says nothing about the rows
+ * after it. Paging stops only after two whole pages below the window.
+ */
 async function fillKeys(ix: HttpIndexer, fromDaa: number, toDaa: number): Promise<string[]> {
   const out: string[] = [];
   let before: number | undefined;
+  let below = 0;
   for (let i = 0; i < 1000; i++) {
     const p = await ix.fills({ limit: 200, before });
     for (const e of p.items) if (e.daa > fromDaa && e.daa <= toDaa) out.push(`${e.covenant_id}:${e.txid}:${e.amount}`);
     const oldest = p.items[p.items.length - 1];
-    if (!p.next_cursor || !oldest || oldest.daa <= fromDaa - 1000) break;
+    if (!p.next_cursor || !oldest) break;
+    below = p.items.every((e) => e.daa <= fromDaa - 1000) ? below + 1 : 0;
+    if (below >= 2) break;
     before = oldest.id;
   }
   return out;
