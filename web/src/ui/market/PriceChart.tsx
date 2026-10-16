@@ -8,6 +8,7 @@ import type { IndexerApi } from '../../data/indexer';
 import { CANDLE_INTERVALS } from '../../data/indexer';
 import { t } from '../../i18n';
 import { ErrorBanner, useAsync } from '../kit';
+import { loadCandles, MAX_BARS, type ChartSource, type ChartView } from './candle-feed';
 import { useTheme } from '../shell/theme';
 import { basisOf, chartSeries, fillCandleGaps, INTERVAL_MS, parseCandles, priceText, type ChartBar, type VolumeBar } from './market-model';
 import { flippedChartSeries } from './orientation';
@@ -19,7 +20,6 @@ let lwPromise: Promise<Lw> | null = null;
 const loadLw = (): Promise<Lw> => (lwPromise ??= import('lightweight-charts'));
 
 const INTERVAL_KEY = 'kob.chart.interval';
-const MAX_BARS = 1500;
 
 function storedInterval(): CandleInterval {
   try {
@@ -85,8 +85,10 @@ export interface PriceChartProps {
   ticker: string;
   /** price decimals of this market (tabular, same as the stats) */
   dp: number;
-  /** bumps on every live refresh */
+  /** bumps on every live refresh: only the bars since the newest one are read (candle-feed.ts) */
   refreshKey: number;
+  /** bumps on a reorg / resync: the next refresh reads the full series again */
+  resyncKey?: number;
   /** draw the pair price (BASE over QUOTE through the two KAS books) instead of the token's KAS book */
   usd?: UsdChartSpec;
   /** the quote asset's name of a `usd` ratio chart (a token/token pair chart; `USD` for the USD reference token) */
@@ -119,25 +121,23 @@ export function PriceChart(props: PriceChartProps) {
   const { indexer, token, usd } = props;
   const inverted = !!props.inverted;
   const usdKey = usd ? `${usd.base.token}/${usd.quote.token}` : '';
+  // the series on screen and what it was loaded for: a live refresh reads only the bars since its newest one; a change of source, interval
+  // or a reorg / resync (`resyncKey`) reads the full series
+  const cache = useRef<{ key: string; resync: number; view: ChartView | null } | null>(null);
+  const resync = props.resyncKey ?? 0;
   const candles = useAsync(
     async (signal) => {
       if (!indexer) return null;
-      if (usd) {
-        if (usd.pairCandles) {
-          const pc = await indexer.pairCandles(usd.base.token, usd.quote.token, { interval, limit: MAX_BARS }, { signal });
-          if (pc) return { interval, view: { kind: 'pair' as const, pc } };
-        }
-        // both legs on the same interval and window
-        const [q, b] = await Promise.all([
-          indexer.candles(usd.quote.token, { interval, limit: MAX_BARS }, { signal }),
-          indexer.candles(usd.base.token, { interval, limit: MAX_BARS }, { signal }),
-        ]);
-        return { interval, view: q && b ? { kind: 'usd' as const, q, b } : null };
-      }
-      const v = await indexer.candles(token, { interval, limit: MAX_BARS }, { signal });
-      return { interval, view: v ? { kind: 'kas' as const, v } : null };
+      const src: ChartSource = usd ? { base: usd.base.token, quote: usd.quote.token, ...(usd.pairCandles ? { pairCandles: true } : {}) } : { token };
+      const key = `${token}|${usdKey}|${interval}`;
+      const c = cache.current;
+      const prev = c && c.key === key && c.resync === resync ? c.view : null;
+      const view = await loadCandles(indexer, src, interval, prev, signal);
+      cache.current = { key, resync, view };
+      return { interval, view };
     },
-    [indexer, token, usdKey, interval, props.refreshKey],
+    [indexer, token, usdKey, interval],
+    { refreshKey: props.refreshKey },
   );
   // an answer for another interval is not shown while the new one loads
   const current = candles.data && candles.data.interval === interval ? candles.data : undefined;

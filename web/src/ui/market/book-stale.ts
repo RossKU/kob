@@ -2,7 +2,7 @@
 // "stale since hh:mm:ss" marker instead of disappearing, and only the next good response replaces it.
 //
 // Stale = the newest pull FAILED, or it has been LATE (still in flight after LATE_MS). A crossed book is not stale: it is the live book. "Since" is always the time of the last good book on screen, never the time of the failure.
-import { useEffect, useRef } from 'preact/hooks';
+import { useRef } from 'preact/hooks';
 import type { AsyncState } from '../kit';
 import { useNow } from '../kit';
 
@@ -41,29 +41,4 @@ export function useStaleSince(state: AsyncState<unknown>): number | null {
   const now = useNow(1000);
   // the data of a failed newest pull is the last good one; a failure that lands with no good book yet is the banner's business
   return staleSinceOf({ lastGoodAt: lastGood.current.at, failed: state.error !== null && state.data !== undefined, loadingSince: started.current, now });
-}
-
-/**
- * `reload` that never aborts a pull in flight: a request that comes in while one is running (a live notice, the poll) is remembered and runs once, right
- * after it, so a slow indexer still gets its answers through (a reload that aborts the previous request would starve the page of any answer).
- */
-export function useCoalescedReload(state: Pick<AsyncState<unknown>, 'loading' | 'reload'>): () => void {
-  const busy = useRef(state.loading);
-  busy.current = state.loading;
-  const pending = useRef(false);
-  const reload = useRef(state.reload);
-  reload.current = state.reload;
-  useEffect(() => {
-    if (!state.loading && pending.current) {
-      pending.current = false;
-      reload.current();
-    }
-  }, [state.loading]);
-  return () => {
-    if (busy.current) pending.current = true;
-    else {
-      busy.current = true; // until the loading state lands: a second call in the same tick must not abort this one
-      reload.current();
-    }
-  };
 }

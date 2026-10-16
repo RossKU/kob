@@ -14,7 +14,8 @@ export function WalletTokenBalances(props: { token: TokenInfo; refreshKey?: numb
       if (!pubkey) return null;
       return loadBalances(services, pubkey, { tokens: [props.token], token: props.token.covenantId, signal });
     },
-    [pubkey, props.token.covenantId, props.refreshKey],
+    [pubkey, props.token.covenantId],
+    { refreshKey: props.refreshKey },
   );
 
   if (!pubkey) {

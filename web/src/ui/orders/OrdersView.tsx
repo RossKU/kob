@@ -58,7 +58,7 @@ export function OrdersView() {
     async (signal) => (pubkey ? loadOrders(services, pubkey, wallet.records, { signal }) : null),
     [pubkey, wallet.records, services],
   );
-  useLiveRefresh(services, ['fills'], () => true, data.reload, REFRESH_MS);
+  useLiveRefresh(services, ['fills'], () => true, data.refresh, REFRESH_MS);
 
   const [tab, setTab] = useState<ListTab>('active');
   const [flow, setFlow] = useState<Flow | null>(null);

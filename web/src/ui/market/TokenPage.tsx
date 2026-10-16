@@ -7,7 +7,7 @@ import { OrderTicket } from '../ticket/OrderTicket';
 import { CrossCheckBanner } from './CrossCheckBanner';
 import { useSystemStatus } from '../shell/StatusProvider';
 import { buildBookModel, groupSizesAt, inferTick, levelsFromView } from './book-model';
-import { useCoalescedReload, useStaleSince } from './book-stale';
+import { useStaleSince } from './book-stale';
 import { useOpenToken } from './use-open-token';
 import { useHeldToken } from './use-held-token';
 import { FirstOrderDecimals } from './FirstOrderDecimals';
@@ -59,6 +59,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   );
   const [balKey, setBalKey] = useState(0);
   const [liveKey, setLiveKey] = useState(0);
+  // bumps on a reorg / resync (history may have changed, not only grown): the chart reloads in full instead of fetching only its newest bars
+  const [resyncKey, setResyncKey] = useState(0);
   // the chosen price grouping per orientation (steps of KAS per token natively, of tokens per KAS inverted)
   const [groupIdxNative, setGroupIdxNative] = useState(0);
   const [groupIdxInv, setGroupIdxInv] = useState(0);
@@ -101,17 +103,17 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const stats = useAsync((signal) => (indexer ? indexer.stats(id, { signal }) : Promise.resolve(null)), [indexer, id]);
   const depth = useAsync((signal) => (indexer ? indexer.depth(id, { levels: 60 }, { signal }) : Promise.resolve(null)), [indexer, id]);
 
-  // a live notice or a poll never aborts a book pull in flight (a slow indexer would otherwise never get an answer through)
-  const reloadBook = useCoalescedReload(book);
-  const refreshAll = (manual = false) => {
-    if (manual) book.reload();
-    else reloadBook();
-    trades.reload();
-    stats.reload();
-    depth.reload();
+  // a live notice or a poll never aborts a pull in flight: it is folded into one pull right after it (`refresh`), so a slow indexer still gets its
+  // answers through and is never asked twice for the same thing; only the manual button aborts and restarts
+  const refreshAll = (manual = false, full = false) => {
+    for (const r of [book, trades, stats, depth]) {
+      if (manual) r.reload();
+      else r.refresh();
+    }
     setLiveKey((k) => k + 1);
+    if (full) setResyncKey((k) => k + 1);
   };
-  const mode = useLiveRefresh(services, [`book:${id}`, `fills:${id}`], (e) => !e.token || e.token === id, () => refreshAll());
+  const mode = useLiveRefresh(services, [`book:${id}`, `fills:${id}`], (e) => !e.token || e.token === id, (full) => refreshAll(false, full));
   useInterval(() => setBalKey((k) => k + 1), 15_000, !!wallet.info);
 
   // every book row carries its own scale; the market's is the token's standard scale (`10^decimals`, at most 10^9): prices per whole token
@@ -309,7 +311,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       }
       chart={
         <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card">
-          <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} inverted={inverted} />
+          <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} />
         </Section>
       }
       depth={

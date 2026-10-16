@@ -22,7 +22,7 @@ export interface OpenTokenState {
 
 const NONE: OpenTokenState = { info: null, reason: null, loading: false };
 
-/** `refreshKey` changes when the book moved: the scales are read again. `decimals`: entered for a first order (used only without orders). */
+/** `refreshKey` changes when the book moved: the scales are read again (coalesced). `decimals`: entered for a first order (used only without orders). */
 export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: number | null = null): OpenTokenState {
   const { indexer, kob, registry, tracker, config } = useServices();
   const pubkey = useWallet().info?.pubkey ?? null;
@@ -45,7 +45,8 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: num
           : [];
       return { scales, ext, holdings };
     },
-    [indexer, view?.covenant_id, view?.template_hash, refreshKey, pubkey],
+    [indexer, view?.covenant_id, view?.template_hash, pubkey],
+    { refreshKey },
   );
   return useMemo((): OpenTokenState => {
     if (!view) return NONE;

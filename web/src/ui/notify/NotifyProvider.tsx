@@ -107,8 +107,9 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
   useEffect(() => {
     if (active) void poll();
   }, [active, poll]);
-  useInterval(() => void poll(), ORDERS_POLL_MS, active);
-  useLiveRefresh(services, active ? ['fills'] : [], () => active, () => void poll(), 60_000);
+  // notifications are for the moments the page is not looked at: these polls keep running in a background tab
+  useInterval(() => void poll(), ORDERS_POLL_MS, active, { background: true });
+  useLiveRefresh(services, active ? ['fills'] : [], () => active, () => void poll(), 60_000, { background: true });
 
   const pollInv = useCallback(async () => {
     if (store) ingest(await pollInvoices(store, Date.now()));
@@ -116,7 +117,7 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
   useEffect(() => {
     if (active) void pollInv();
   }, [active, pollInv]);
-  useInterval(() => void pollInv(), INVOICE_POLL_MS, active);
+  useInterval(() => void pollInv(), INVOICE_POLL_MS, active, { background: true });
 
   const update = useCallback<NotifyApi['update']>((patch) => {
     setSettings((cur) => {

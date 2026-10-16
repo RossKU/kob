@@ -7,13 +7,14 @@ import { Banner, useAsync } from '../kit';
 /**
  * With two or more indexers configured (`extraIndexerUrls`) the key facts of the token (standing, powers, best ask / bid) are read from each and
  * compared; any disagreement or unreachable verifier is shown. With a single indexer nothing is checked here (the footer says "single indexer,
- * unverified"). `refreshKey` re-runs the check when the book moved.
+ * unverified"). `refreshKey` re-runs the check when the book moved (coalesced: never two checks in flight).
  */
 export function CrossCheckBanner(props: { token: Hex; refreshKey?: number }) {
   const { indexer, verifiers } = useServices();
   const res = useAsync(
     async (signal) => (indexer && verifiers?.length ? crossCheckIndexers(indexer, verifiers, props.token, signal) : null),
-    [indexer, verifiers, props.token, props.refreshKey ?? 0],
+    [indexer, verifiers, props.token],
+    { refreshKey: props.refreshKey ?? 0 },
   );
   const r = res.data;
   if (!r || r.findings.length === 0) return null;

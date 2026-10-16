@@ -1,14 +1,20 @@
 // Live system status for the status bar and the banners: node reachability (+ virtual DAA), indexer health (polled and pushed by the feed),
 // the feed's connection state. Every failure is data (`error`), never an exception: a down node or indexer degrades the UI, it does not blank it.
+//
+// Load: `/v1/health` is read every HEALTH_POLL_MS on a shown page (a background tab pauses, and catches up when shown), on a reconnect of the feed,
+// and, at most once per HEALTH_PUSH_GAP_MS, when the feed reports a reorg, a resync or a new state in its periodic `health` frame. The per-block
+// `cursor` frames never trigger a read (a busy chain pushes one per block: that was one read per second per open tab).
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import type { Services } from '../../app/services';
 import type { FeedStatus } from '../../data/indexer';
-import type { HealthView } from '../../data/indexer-types';
-import { toError, useInterval } from '../kit/hooks';
+import type { HealthTickNotice, HealthView } from '../../data/indexer-types';
+import { Coalescer, pageVisible, toError, useInterval } from '../kit/hooks';
 import { assessIndexerHealth, type HealthAssessment } from './health';
 import { isDeepReorg } from './reorg-notice';
 
-export const HEALTH_POLL_MS = 10_000;
+export const HEALTH_POLL_MS = 15_000;
+/** feed-triggered health reads (reorg, resync, a state change) are at least this far apart */
+export const HEALTH_PUSH_GAP_MS = 10_000;
 
 export interface IndexerStatus {
   health: HealthView | null;
@@ -17,48 +23,116 @@ export interface IndexerStatus {
   refresh(): void;
 }
 
-/** Polls `indexer.health()` and refreshes it on every `health` / `reorg` push of the feed. */
+/** Runs `fn` at most once per `gapMs` (pure apart from the timer): a call inside the gap is deferred to its end, one run however many calls came in. */
+export class Throttle {
+  private last = -Infinity;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  constructor(
+    private readonly fn: () => void,
+    private readonly gapMs: number,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  call(): void {
+    if (this.timer) return;
+    const wait = this.last + this.gapMs - this.now();
+    if (wait <= 0) return this.fire();
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.fire();
+    }, wait);
+  }
+
+  /** `fn` ran by other means (the poll): the gap starts again from now. */
+  ran(): void {
+    this.last = this.now();
+  }
+
+  cancel(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  private fire(): void {
+    this.last = this.now();
+    this.fn();
+  }
+}
+
+/**
+ * Whether a frame of the feed's `health` channel calls for a `/v1/health` read: only the periodic `health` frame whose state differs from the one on
+ * screen (a per-block `cursor` frame never does: the REST poll keeps the lag current).
+ */
+export function healthPushDue(frame: { type: string; data: unknown }, held: HealthView | null): boolean {
+  if (frame.type !== 'health') return false;
+  const d = frame.data as Partial<HealthTickNotice> | null;
+  return !!d && typeof d.state === 'string' && (held === null || d.state !== held.state);
+}
+
+/** Polls `indexer.health()` (coalesced: never two reads in flight) and re-reads it on the feed's pushes that matter (see the head of this file). */
 export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'>): IndexerStatus {
   const [health, setHealth] = useState<HealthView | null>(null);
   const [error, setError] = useState<Error | null>(null);
-  const inflight = useRef<AbortController | null>(null);
+  const alive = useRef(true);
+  const runs = useRef(new Coalescer());
+  const held = useRef<HealthView | null>(null);
+  held.current = health;
 
   const refresh = useCallback(() => {
-    if (!s.indexer) return;
-    inflight.current?.abort();
-    const ctl = new AbortController();
-    inflight.current = ctl;
-    s.indexer.health({ signal: ctl.signal }).then(
-      (h) => {
-        if (ctl.signal.aborted) return;
-        setHealth(h);
-        setError(null);
-      },
-      (e) => {
-        if (!ctl.signal.aborted) setError(toError(e));
-      },
-    );
+    const indexer = s.indexer;
+    if (!indexer || !runs.current.request()) return;
+    const once = (): void => {
+      runs.current.started();
+      indexer.health().then(
+        (h) => {
+          if (!alive.current) return;
+          setHealth(h);
+          setError(null);
+          if (runs.current.settled()) once();
+        },
+        (e) => {
+          if (!alive.current) return;
+          setError(toError(e));
+          if (runs.current.settled()) once();
+        },
+      );
+    };
+    once();
   }, [s.indexer]);
 
   useEffect(() => {
+    alive.current = true;
     refresh();
-    return () => inflight.current?.abort();
+    return () => {
+      alive.current = false;
+    };
   }, [refresh]);
   useInterval(refresh, HEALTH_POLL_MS, !!s.indexer);
 
   useEffect(() => {
     if (!s.feed) return;
-    let last = 0;
-    const throttled = () => {
-      // a busy chain pushes one `cursor` frame per block: refetch at most once per second
-      const now = Date.now();
-      if (now - last > 1000) {
-        last = now;
-        refresh();
-      }
+    const pushed = new Throttle(refresh, HEALTH_PUSH_GAP_MS);
+    pushed.ran(); // the mount just read it
+    const onPush = () => {
+      if (pageVisible()) pushed.call();
     };
-    const offs = [s.feed.on('health', throttled), s.feed.on('reorg', refresh), s.feed.on('resync', refresh)];
-    return () => offs.forEach((off) => off());
+    const offs = [
+      s.feed.on('health', (f) => healthPushDue(f, held.current) && onPush()),
+      s.feed.on('reorg', onPush),
+      // a resync the server sent (the client fell behind); the resync of a reconnect is the `open` below
+      s.feed.on('resync', (e) => e.reason !== 'reconnect' && onPush()),
+      // the socket was down: whatever happened meanwhile, read it now, once
+      s.feed.on('open', (e) => {
+        if (e.reconnect && pageVisible()) {
+          pushed.ran();
+          refresh();
+        }
+      }),
+    ];
+    return () => {
+      offs.forEach((off) => off());
+      pushed.cancel();
+    };
   }, [s.feed, refresh]);
 
   const assessment = assessIndexerHealth({ health, error, configured: !!s.indexer, network: s.config.network });

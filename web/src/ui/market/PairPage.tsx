@@ -9,7 +9,7 @@
 // fills list, which has no price column). Flip = swap of base and quote (another pair): every panel follows. Live: `book:<base>` and `book:<quote>`
 // trigger a debounced refetch (5 s polling without the socket). An indexer without the pair routes (404 / 405 / 501) shows "pair book unavailable"
 // and still lets the user place orders.
-import { useMemo, useState } from 'preact/hooks';
+import { useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { navigate, pairRoute } from '../../app/router';
 import { t } from '../../i18n';
@@ -27,7 +27,8 @@ import { displayedPair } from './market-select';
 import { MarketStats } from './MarketStats';
 import { basisOf, INTERVAL_MS, parseCandles } from './market-model';
 import { PairBook } from './PairBook';
-import { useCoalescedReload, useStaleSince } from './book-stale';
+import { useStaleSince } from './book-stale';
+import { loadCandles, type ChartView } from './candle-feed';
 import { StaleSince } from './OrderBook';
 import { buildPairBook, pickOf, type PairLevelRow } from './pair-model';
 import { pairDepthSeries, pairFillsOf, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
@@ -52,6 +53,8 @@ export function PairPage(props: { base: string; quote: string }) {
   const baseInfo = registry.byCovenantId.get(props.base) ?? null;
   const quoteInfo = registry.byCovenantId.get(props.quote) ?? null;
   const [liveKey, setLiveKey] = useState(0);
+  // bumps on a reorg / resync: the chart reloads in full (TokenPage)
+  const [resyncKey, setResyncKey] = useState(0);
   const [prefill, setPrefill] = useState<{ side: 'buy' | 'sell'; price: bigint } | undefined>(undefined);
   const tokenList = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
   const rows = useMemo(() => buildTokenRows(registry, tokenList.data ?? null, []), [registry, tokenList.data]);
@@ -62,15 +65,15 @@ export function PairPage(props: { base: string; quote: string }) {
   const quoteRow = rows.find((r) => r.covenantId === props.quote);
 
   const book = useAsync((signal) => (indexer ? indexer.pairBook(props.base, props.quote, { depth: DEPTH * 2 }, { signal }) : Promise.resolve(null)), [indexer, props.base, props.quote]);
-  const reloadBook = useCoalescedReload(book);
   const bookStaleSince = useStaleSince(book);
   const mode = useLiveRefresh(
     services,
     [`book:${props.base}`, `book:${props.quote}`],
     (e) => !e.token || e.token === props.base || e.token === props.quote,
-    () => {
-      reloadBook();
+    (full) => {
+      book.refresh();
       setLiveKey((k) => k + 1);
+      if (full) setResyncKey((k) => k + 1);
     },
   );
   const base = useMemo(() => (baseInfo ? pairToken(baseInfo) : null), [baseInfo]);
@@ -87,33 +90,40 @@ export function PairPage(props: { base: string; quote: string }) {
       const ts = Math.max(b?.ts ?? 0, q?.ts ?? 0);
       return { key, ...usdStats({ stats: b, decimals: baseInfo.decimals }, { stats: q, decimals: quoteInfo.decimals }), refMs: ts > 0 ? ts : Date.now() };
     },
-    [indexer, props.base, props.quote, baseInfo?.covenantId, quoteInfo?.covenantId, liveKey],
+    [indexer, props.base, props.quote, baseInfo?.covenantId, quoteInfo?.covenantId],
+    { refreshKey: liveKey },
   );
-  // 24 h high / low: the indexer's pair candles (derived from the two KAS series), else the client-side ratio of the two KAS candle series
+  // 24 h high / low: the indexer's pair candles (derived from the two KAS series), else the client-side ratio of the two KAS candle series; a live
+  // refresh reads only the bars since the newest one (candle-feed.ts), a reorg / resync the full window
+  const pairCandles = useRef<{ key: string; resync: number; view: ChartView | null } | null>(null);
   const candles = useAsync(
     async (signal) => {
       if (!indexer || !base || !quote) return null;
-      const pc = await indexer.pairCandles(props.base, props.quote, { interval: CANDLE_INTERVAL, limit: CANDLE_LIMIT }, { signal });
-      const fromIndexer = pc ? pairRatioCandles(pc, base, quote) : null;
+      const c = pairCandles.current;
+      const prev = c && c.key === key && c.resync === resyncKey ? c.view : null;
+      let view = await loadCandles(indexer, { base: props.base, quote: props.quote, pairCandles: true }, CANDLE_INTERVAL, prev, signal, CANDLE_LIMIT);
+      const fromIndexer = view?.kind === 'pair' ? pairRatioCandles(view.pc, base, quote) : null;
+      // pair candles this build cannot read: the two KAS series
+      if (view?.kind === 'pair' && !fromIndexer) view = await loadCandles(indexer, { base: props.base, quote: props.quote }, CANDLE_INTERVAL, null, signal, CANDLE_LIMIT);
+      pairCandles.current = { key, resync: resyncKey, view };
       if (fromIndexer) return { key, pair: true, candles: fromIndexer };
-      const [b, q] = await Promise.all([
-        indexer.candles(props.base, { interval: CANDLE_INTERVAL, limit: CANDLE_LIMIT }, { signal }),
-        indexer.candles(props.quote, { interval: CANDLE_INTERVAL, limit: CANDLE_LIMIT }, { signal }),
-      ]);
-      const bb = b ? basisOf(b.price_basis) : null;
-      const qb = q ? basisOf(q.price_basis) : null;
-      if (!b || !q || !bb || !qb) return { key, pair: false, candles: [] };
+      const bb = view?.kind === 'usd' ? basisOf(view.b.price_basis) : null;
+      const qb = view?.kind === 'usd' ? basisOf(view.q.price_basis) : null;
+      if (view?.kind !== 'usd' || !bb || !qb) return { key, pair: false, candles: [] };
       const rc = ratioCandles(
-        { candles: parseCandles(b.items), decimals: base.decimals, basis: bb },
-        { candles: parseCandles(q.items), decimals: quote.decimals, basis: qb },
+        { candles: parseCandles(view.b.items), decimals: base.decimals, basis: bb },
+        { candles: parseCandles(view.q.items), decimals: quote.decimals, basis: qb },
         { intervalMs: INTERVAL_MS[CANDLE_INTERVAL], until: Date.now(), maxBars: CANDLE_LIMIT },
       );
       return { key, pair: false, candles: rc };
     },
-    [indexer, props.base, props.quote, base, quote, liveKey],
+    [indexer, props.base, props.quote, base, quote],
+    { refreshKey: liveKey },
   );
   // the pair's fills (volume only: amounts of A and B, counterparty, time) and the indexer's 24 h pair volume
-  const fills = useAsync((signal) => (indexer ? indexer.pairFills(props.base, props.quote, { limit: FILLS }, { signal }) : Promise.resolve(null)), [indexer, props.base, props.quote, liveKey]);
+  const fills = useAsync((signal) => (indexer ? indexer.pairFills(props.base, props.quote, { limit: FILLS }, { signal }) : Promise.resolve(null)), [indexer, props.base, props.quote], {
+    refreshKey: liveKey,
+  });
 
   // a result of the other orientation (right after a flip) is never used
   const cur = stats.data && stats.data.key === key ? stats.data : undefined;
@@ -223,7 +233,7 @@ export function PairPage(props: { base: string; quote: string }) {
       }
       chart={
         <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card">
-          <PriceChart indexer={indexer} token={`${props.base}/${props.quote}`} decimals={baseInfo.decimals} ticker={baseInfo.ticker} quoteTicker={quoteInfo.ticker} dp={dp} refreshKey={liveKey} usd={spec} />
+          <PriceChart indexer={indexer} token={`${props.base}/${props.quote}`} decimals={baseInfo.decimals} ticker={baseInfo.ticker} quoteTicker={quoteInfo.ticker} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} usd={spec} />
           <p class="small muted" style="margin:6px 0 0" data-testid="pair-chart-note">{t('pair.chart.note', { base: baseInfo.ticker, quote: quoteInfo.ticker })}</p>
         </Section>
       }
