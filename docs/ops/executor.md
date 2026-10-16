@@ -1474,7 +1474,10 @@ about 2 s on it (it took 13 s before: a start-up backfill, `backfill_unknown_pai
 token once per token identity it checks, 25 on the copy; it now decodes the orders of the identity's own transaction first, and the
 whole token only for an identity it corrects). An earlier build still opens the database: it re-creates the two indexes
 this build drops (`orders_maker`, `orders_quote`, about 1 s each), and the triggers keep the counters right under it.
-`index replay` builds the new indexes, the counters and their triggers with the schema, before the first frame.
+`index replay` builds the new indexes, the counters and their triggers with the schema, before the first frame. The
+indexes and triggers cost the write path nothing measurable: the KOB-only capacity mix (*Processing capacity*, 10 s of
+chain) ran at 2,778 tx/s at the tip and 3,460 catching up, against 2,773 and 3,135 for the earlier build on the same PC
+under the same load.
 
 #### Hostile input: what one order, payload or request can and cannot do
 
