@@ -62,6 +62,56 @@ export interface SignAndSubmitArgs {
    * Tests with synthetic chains omit it.
    */
   inputAddress?: (spk: string) => string;
+  /**
+   * the last DAA score at which this transaction may still be sent (an auction that starts at the clock it was planned with: `auctionSubmitBy`).
+   * The node clock is read once the wallet has signed; a clock past it aborts the flow before anything is broadcast (`clock-moved`): the price
+   * of the auction has moved on while the wallet was waiting for approval, so the caller plans it again with the current clock.
+   */
+  submitByDaa?: bigint;
+}
+
+/**
+ * How far (DAA, 2 s at 10 per second) past its start an auction planned at the click may still be sent. An auction of a market or marketable
+ * order starts `MARKET_ACTIVATION_DAA` after the clock it was planned with and moves its price from that start on: a wallet that keeps the
+ * request open longer than that lead plus this margin returns a signature for an auction already this far down its price path.
+ */
+export const AUCTION_START_MARGIN_DAA = 20n;
+
+/**
+ * The `submitByDaa` of a transaction that creates `states` (the planner's `{ kind, state }` order states): the earliest start (plus
+ * `AUCTION_START_MARGIN_DAA`) of an auction among them that starts at or after `plannedAtDaa`, the clock it was planned with (an amended order
+ * that keeps an older start is not one). Null: no such auction.
+ */
+export function auctionSubmitBy(states: readonly { state: unknown }[], plannedAtDaa: bigint): bigint | null {
+  let by: bigint | null = null;
+  for (const s of states) {
+    const o = s.state as { activeFrom?: unknown; slope?: unknown };
+    if (typeof o.activeFrom !== 'string' || typeof o.slope !== 'string') continue;
+    let start: bigint;
+    let slope: bigint;
+    try {
+      start = BigInt(o.activeFrom);
+      slope = BigInt(o.slope);
+    } catch {
+      continue;
+    }
+    if (slope <= 0n || start <= 0n || start < plannedAtDaa) continue;
+    const at = start + AUCTION_START_MARGIN_DAA;
+    if (by === null || at < by) by = at;
+  }
+  return by;
+}
+
+/** The node clock must still be at or before `by` (`SignAndSubmitArgs.submitByDaa`); a clock that cannot be read counts as moved. */
+async function assertClockBefore(node: NodeApi, by: bigint): Promise<void> {
+  let daa: bigint;
+  try {
+    daa = (await node.getClock()).daa;
+  } catch (e) {
+    const err = e instanceof NodeError ? e : describeNodeError(e);
+    throw new SignFlowError('validating', err, `The node clock could not be read to check the auction start (${err.message}). Nothing was sent.`, 'clock-moved');
+  }
+  if (daa > by) throw new SignFlowError('validating', null, `The auction would already be ${daa - by + AUCTION_START_MARGIN_DAA} DAA past its start (node clock ${daa}). Nothing was sent.`, 'clock-moved');
 }
 
 export interface SignAndSubmitResult {
@@ -143,6 +193,8 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
       throw new SignFlowError('validating', e, `The transaction failed the script check and was not sent. (${msg(e)})`, 'validation');
     }
   }
+
+  if (a.submitByDaa !== undefined) await assertClockBefore(node, a.submitByDaa);
 
   stage('submitting');
   let txid: string;

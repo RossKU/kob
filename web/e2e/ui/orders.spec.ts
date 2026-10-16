@@ -1,10 +1,11 @@
-// Smoke specs of "My orders": an order seeded for the wallet key shows up with its balances, cancel and amend reach the flow (the confirmation
-// screen itself belongs to the ticket / confirm work: until it lands only the flow panel is asserted), recovery export / import round trip.
+// Smoke specs of "My orders": an order seeded for the wallet key shows up with its balances, cancel and amend start their flow at once (the wallet's own
+// approval is the only confirmation), recovery export / import round trip.
 import { readFileSync } from 'node:fs';
 import { expect, test, TEST_KEYS, type MockClient } from '../fixtures';
 import { TESTID, orderCancel, orderReplace, orderRow } from '../testids';
 import { loadKobNode } from '../../src/kob/wasm.node';
 import { listExkcc } from '../helpers/env';
+import { runFlow } from '../helpers/orders';
 
 /** an ask of `tokens` whole EXKCC at `price` sompi per whole token (2_505_000 = 0.02505 KAS / EXKCC) */
 async function seedAsk(mock: MockClient, price = 2_505_000, tokens = 3) {
@@ -60,22 +61,18 @@ test.describe('my orders', () => {
     await expect(appPage.getByTestId(orderRow(order.covenant_id)).getByTestId('order-token')).toHaveText(listText);
   });
 
-  test('cancel: the confirmation screen decodes the cancellation, nothing is signed before the user acts, then the order is closed', async ({ appPage, mock, wallet }) => {
+  test('cancel: the click starts the flow and asks the wallet at once, the cancellation is accepted and the order is closed', async ({ appPage, mock, wallet }) => {
     const { order } = await seedAsk(mock);
     await appPage.getByTestId(TESTID.walletConnectKasware).click();
     await appPage.goto('/#/orders');
     await appPage.getByTestId(orderCancel(order.covenant_id)).click();
     await expect(appPage.getByTestId('tx-flow')).toBeVisible();
-    await expect(appPage.getByTestId(TESTID.confirmScreen)).toBeVisible();
     await expect(appPage.getByTestId('flow-plan-errors')).toHaveCount(0);
     await expect(appPage.getByTestId('orders-action-error')).toHaveCount(0);
-    expect(await wallet!.calls()).toHaveLength(0);
-    expect(await mock.submitted(false)).toHaveLength(0);
-    await appPage.getByTestId('confirm-ack').check();
-    await appPage.getByTestId(TESTID.confirmSign).click();
-    await expect(appPage.getByTestId(TESTID.txId)).toBeVisible({ timeout: 30_000 });
-    await appPage.getByTestId('confirm-close').click();
-    await expect(appPage.getByTestId('flow-done')).toBeVisible();
+    // no confirmation screen: the first wallet request is made by the click itself
+    const [placed] = await runFlow(appPage, mock, wallet!, { steps: 1 });
+    expect(placed!.submission.closed).toEqual([expect.objectContaining({ covenantId: order.covenant_id, status: 'cancelled' })]);
+    expect(await wallet!.calls()).toHaveLength(1);
     const done = await mock.order(order.covenant_id);
     expect(done.status).toBe('cancelled');
     // the order moves from Active to History
@@ -84,17 +81,20 @@ test.describe('my orders', () => {
     await expect(appPage.getByTestId(orderRow(order.covenant_id))).toHaveAttribute('data-status', 'cancelled');
   });
 
-  test('cancel-all asks for confirmation first', async ({ appPage, mock }) => {
+  test('cancel-all asks for confirmation first; the confirmed flow asks the wallet at once', async ({ appPage, mock, wallet }) => {
     await seedAsk(mock);
     await appPage.getByTestId(TESTID.walletConnectKasware).click();
     await appPage.goto('/#/orders');
     await appPage.getByTestId(TESTID.ordersCancelAll).click();
     await expect(appPage.getByTestId('cancel-all-dialog')).toContainText('1 order');
+    expect(await wallet!.calls()).toHaveLength(0);
     await appPage.getByTestId('cancel-all-confirm').click();
     await expect(appPage.getByTestId('tx-flow')).toBeVisible();
+    const placed = await runFlow(appPage, mock, wallet!);
+    expect(placed.length).toBeGreaterThan(0);
   });
 
-  test('amend: validates the form, previews the new price and builds the atomic replacement', async ({ appPage, mock }) => {
+  test('amend: validates the form, previews the new price and starts the replacement', async ({ appPage, mock, wallet }) => {
     const { order } = await seedAsk(mock);
     await mock.giveKas('alice', 50n * 10n ** 8n); // the replacement needs a fresh carrier: a wallet without KAS gets a clear refusal instead
     await appPage.getByTestId(TESTID.walletConnectKasware).click();
@@ -111,9 +111,10 @@ test.describe('my orders', () => {
     await appPage.getByTestId('amend-review').click();
     await expect(appPage.getByTestId('tx-flow')).toBeVisible();
     await expect(dialog).toHaveCount(0);
+    await runFlow(appPage, mock, wallet!);
   });
 
-  test('amend end to end: the order is amended in place and rests at the new price under the same id', async ({ appPage, mock }) => {
+  test('amend end to end: the order is amended in place and rests at the new price under the same id', async ({ appPage, mock, wallet }) => {
     const { order } = await seedAsk(mock);
     await mock.giveKas('alice', 50n * 10n ** 8n);
     await appPage.getByTestId(TESTID.walletConnectKasware).click();
@@ -121,17 +122,13 @@ test.describe('my orders', () => {
     await appPage.getByTestId(orderReplace(order.covenant_id)).click();
     await appPage.getByTestId('amend-price').fill('0.0251');
     await appPage.getByTestId('amend-review').click();
-    await expect(appPage.getByTestId(TESTID.confirmScreen)).toBeVisible();
-    await appPage.getByTestId('confirm-ack').check();
-    await appPage.getByTestId(TESTID.confirmSign).click();
-    await expect(appPage.getByTestId(TESTID.txId)).toBeVisible({ timeout: 30_000 });
-    await appPage.getByTestId('confirm-close').click();
+    await runFlow(appPage, mock, wallet!, { steps: 1 });
     // an ask keeping its amount is amended IN PLACE (AMEND record): the same order id continues with the new price, its custody never moved
     const active = await mock.until(() => mock.ordersOf('alice'), (o) => o.length === 1 && o[0].price === '2510000');
     expect(active[0].covenant_id).toBe(order.covenant_id); // 0.0251 KAS per token = 2_510_000 sompi per whole token
   });
 
-  test('an in-place amend needs no KAS in the wallet: the order\'s own carrier pays the fee', async ({ appPage, mock }) => {
+  test('an in-place amend needs no KAS in the wallet: the order\'s own carrier pays the fee', async ({ appPage, mock, wallet }) => {
     const { order } = await seedAsk(mock);
     await appPage.getByTestId(TESTID.walletConnectKasware).click();
     await appPage.goto('/#/orders');
@@ -140,6 +137,7 @@ test.describe('my orders', () => {
     await appPage.getByTestId('amend-review').click();
     await expect(appPage.getByTestId('amend-error')).toHaveCount(0);
     await expect(appPage.getByTestId('tx-flow')).toBeVisible();
+    await runFlow(appPage, mock, wallet!, { steps: 1 });
   });
 
   test('the page has no horizontal scroll on a phone', async ({ appPage, mock }) => {

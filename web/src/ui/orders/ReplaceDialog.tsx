@@ -186,11 +186,12 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
           <RawDetails text={crash} />
         </Banner>
       ) : null}
-      {shownPlan && shownPlan.issues.length ? (
+      {/* only what stops the replacement, as on the ticket: the planner's warnings and notes are not shown */}
+      {shownPlan && shownPlan.issues.some((i) => i.severity === 'error') ? (
         <ul class="tk-issues" data-testid="replace-issues">
-          {shownPlan.issues.map((i, n) => (
-            <li key={`${i.code}-${n}`} class={`tk-issue tk-issue-${i.severity}`} data-code={i.code} data-severity={i.severity}>
-              <span class="tk-issue-tag">{t(`ticket.severity.${i.severity}`)}</span> {issueText(i, issueCtx)}
+          {shownPlan.issues.filter((i) => i.severity === 'error').map((i, n) => (
+            <li key={`${i.code}-${n}`} class="tk-issue tk-issue-error" data-code={i.code} data-severity={i.severity}>
+              {issueText(i, issueCtx)}
               <RawDetails text={rawOf(i)} />
             </li>
           ))}

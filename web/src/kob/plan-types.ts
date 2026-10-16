@@ -5,7 +5,7 @@
 //     * maps it to the exact on-chain order state(s) and a kob-wasm `createOrder` request (funding / token UTXOs selected from env);
 //     * runs kob-wasm `build` (unsigned tx + signing plan) so protocol-level rejections and fee/mass are known before the user signs;
 //     * returns the numbers the UI must disclose (all-in prices, tip, carriers, expiry, ...).
-//   The pre-sign confirmation screen (kob/decode.ts) independently re-derives what the tx does from `built` alone.
+//   The pre-sign checks (kob/decode.ts, ui/confirm/send.ts) independently re-derive what the tx does from `built` alone.
 //
 // Amounts: KAS in sompi, token quantities in base units, prices in sompi per whole token (`scale` base units, see TokenMarket), all as `bigint`.
 // 1 KAS = 100_000_000 sompi.
@@ -191,7 +191,7 @@ export interface CarrierLine {
   kept?: boolean;
 }
 
-/** Numbers the order-entry screen and the confirmation screen must show. Everything derives from the planned state, not from form text. */
+/** Numbers the order-entry screen must show. Everything derives from the planned state, not from form text. */
 export interface Disclosure {
   side: 'sell' | 'buy';
   /** token base units traded in total */

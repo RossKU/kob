@@ -3,7 +3,7 @@
 import type { BrowserContext, Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
 import { fund, listExkcc, openMarket } from '../helpers/env';
-import { fillFields, pickType, reviewAndSign } from '../helpers/ticket';
+import { fillFields, pickType, placeOrder } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -38,7 +38,7 @@ async function placeAndPartlyFill(page: Page, mock: MockClient): Promise<string>
   await pickType(page, 'limit', 'buy');
   // a 1 EXKCC minimum fill lets the order fill in part (the default minimum of a small order is its whole amount)
   await fillFields(page, { amount: '2', minFill: '1', price: '0.0245' });
-  const { placed } = await reviewAndSign(page, mock);
+  const placed = await placeOrder(page, mock);
   const id = placed.views[0].covenant_id as string;
   await mock.fill(id);
   return id;

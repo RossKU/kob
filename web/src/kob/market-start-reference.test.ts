@@ -7,7 +7,6 @@ import { errors } from './plan-types';
 import type { PlanIssue } from './plan-types';
 import { TOK, level, makeEnv } from '../testing/fixtures';
 import { makePairEnv } from './orders/pair-fixtures';
-import { newWarnings } from '../ui/ticket/plan-expected';
 import { readPairReferences, readReferences } from '../data/indexer-crosscheck';
 import { resolveConfig } from '../config';
 
@@ -112,13 +111,6 @@ describe('an acknowledged gap is bound to its size', () => {
     expect(errors(fresh).map((i) => i.code)).toEqual(['MARKET_START_VS_LAST_FILL']);
     // a smaller gap stays covered
     expect(planOrder(envAt((REAL * 111n) / 100n, REAL, { marketStartAck: ack }), buy).ok).toBe(true);
-  });
-
-  it('Review shows a warning again when it got worse, not only when its code is new', () => {
-    const w = (percent: string): PlanIssue => ({ code: 'PRICE_AGGRESSIVE_VS_MARKET', severity: 'warning', message: '', params: { percent } }) as unknown as PlanIssue;
-    expect(newWarnings({ issues: [w('12')] }, { issues: [w('90')] }).map((i) => i.params?.percent)).toEqual(['90']);
-    expect(newWarnings({ issues: [w('12')] }, { issues: [w('12')] })).toEqual([]);
-    expect(newWarnings({ issues: [w('12')] }, { issues: [w('5')] })).toEqual([]);
   });
 });
 

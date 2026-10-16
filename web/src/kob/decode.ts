@@ -696,7 +696,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
    * A NEW (or amended in place) KAS-quoted order: kob-wasm's rules for a new order (`check_new_order`: tips, slippage band, trailing terms, trigger
    * threshold and exposure, carriers, and an if-done exit that is the maker's order of the same token at the entry's scale). The builders run the
    * same rules; the decoder re-checks them so that what is shown never rests on the transaction having come from those builders (an exit that pays
-   * another key, for one, is not on the confirmation screen).
+   * another key, for one, is never signed).
    */
   function checkNewKasOrder(j: number, os: OrderState) {
     if (isPairKind(os.kind)) return;

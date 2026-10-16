@@ -6,7 +6,7 @@ import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
 import { TESTID } from '../testids';
 import { connectWallet, fund, listExkcc, openMarket } from '../helpers/env';
-import { acknowledgeAndSign, openReview, placedBy, readConfirm, settlePlan } from '../helpers/ticket';
+import { expectWalletSigned, onChainTerms, placeOrder, settlePlan } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -169,15 +169,16 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
 test.describe('the ticket in an inverted market', () => {
   test('the sides and the price follow the shown pair, and the order that is built and signed is identical', async ({ appPage: page, mock, wallet }) => {
     await fund(mock, 'alice');
-    const id = await openMarket(page, mock);
+    await openMarket(page, mock);
 
     // ---- native: sell 1 EXKCC at 0.04 KAS per EXKCC (far above the book: it rests)
     await page.getByTestId(TESTID.orderSideSell).click();
     await page.getByTestId(TESTID.orderAmount).fill('1');
     await page.getByTestId(TESTID.orderPrice).fill('0.04');
-    const native = await openReview(page);
-    await page.getByTestId(TESTID.confirmCancel).click();
-    await expect(page.getByTestId(TESTID.confirmScreen)).toHaveCount(0);
+    const native = await placeOrder(page, mock);
+    // the sent order clears the amount: the same native form again
+    await page.getByTestId(TESTID.orderAmount).fill('1');
+    await page.getByTestId(TESTID.orderPrice).fill('0.04');
 
     // ---- flip: the form keeps its order; it is now worded in KAS/EXKCC, whose base is KAS
     await page.getByTestId('market-flip').click();
@@ -191,7 +192,7 @@ test.describe('the ticket in an inverted market', () => {
     await expect(page.getByTestId(TESTID.orderSideBuy)).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId(TESTID.orderPrice)).toHaveValue('25');
     await expect(page.getByTestId('order-price-native')).toContainText('0.04 KAS per EXKCC');
-    await expect(page.getByTestId(TESTID.orderReview)).toContainText('Buy');
+    await expect(page.getByTestId(TESTID.orderPlace)).toContainText('Buy');
     // the amount is KAS: 1 EXKCC at 0.04 = 0.04 KAS, the exact token amount below it
     await expect(page.getByTestId(TESTID.orderAmount)).toHaveValue('0.04');
     await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderAmount) }).locator('.tk-unit')).toHaveText('KAS');
@@ -202,25 +203,15 @@ test.describe('the ticket in an inverted market', () => {
     await page.getByTestId(TESTID.orderPrice).fill('');
     await page.getByTestId(TESTID.orderPrice).fill('25');
     await expect(page.getByTestId('order-price-native')).toContainText('0.04 KAS per EXKCC');
-    const flipped = await openReview(page);
-    expect(flipped.heading).toContain('KAS/EXKCC');
-    await expect(page.getByTestId('confirm-shown-as')).toContainText('KAS/EXKCC Buy: you give 1 EXKCC, receive 0.04 KAS (at 25 EXKCC per KAS');
-    await expect(page.getByTestId('confirm-shown-as')).toContainText('a SELL of EXKCC');
-    // the decoded confirmation of the built transaction is the same: same order, same price, same locked funds
-    expect(flipped.created.length).toBe(native.created.length);
-    expect(flipped.created.map((c) => c.rows)).toEqual(native.created.map((c) => c.rows));
-    // everything but the new order's own covenant id (a fresh one per order)
-    const plain = (x: unknown) => JSON.parse(JSON.stringify(x).replace(/"id":"[0-9a-f]{64}"/g, '"id":"-"'));
-    expect(plain(flipped.sections)).toEqual(plain(native.sections));
-    expect(flipped.summaryText).toBe(native.summaryText);
-    const txid = await acknowledgeAndSign(page);
-    const placed = await placedBy(mock, txid);
-    expect(placed.views).toHaveLength(1);
-    // a sell of 1 EXKCC at 0.04 KAS per token = 4_000_000 sompi per whole token, exactly
-    expect(JSON.stringify(placed.views[0])).toContain('4000000');
-    expect(placed.views[0].kind ?? placed.views[0].contract).toBeTruthy();
-    void wallet;
-    void id;
+    const flipped = await placeOrder(page, mock);
+    await expectWalletSigned(wallet!, flipped, { requests: 2, call: 1 });
+    // the order that was signed is the native one: same contract, same price (a sell of 1 EXKCC at 0.04 KAS per token = 4_000_000 sompi per whole
+    // token, exactly), same amount, same funds locked
+    expect(flipped.views).toHaveLength(1);
+    expect(native.views).toHaveLength(1);
+    expect(native.views[0].contract).toBe('KobAsk');
+    expect(native.views[0].state.state).toMatchObject({ price: '4000000', amountLeft: '100000000' });
+    expect(onChainTerms(flipped)).toEqual(onChainTerms(native));
   });
 
   test('a click on a book level prefills the same native order, shown in the inverted units without re-rounding it', async ({ appPage: page, mock }) => {
@@ -350,11 +341,11 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
     await page.getByTestId(TESTID.orderAmount).fill('1');
     await page.getByTestId(TESTID.orderPrice).fill('3');
     await expect(page.getByTestId('order-amount-tokens')).toContainText('= 3 EXUSD');
-    const built = await openReview(page);
-    expect(built.blocking).toEqual([]);
-    expect(built.created.length).toBe(1);
-    await page.getByTestId(TESTID.confirmCancel).click();
-    await expect(page.getByTestId(TESTID.confirmScreen)).toHaveCount(0);
+    const placed = await placeOrder(page, mock);
+    expect(placed.submission.created).toHaveLength(1);
+    // the signed order is the native buy of the EXUSD token: a bid of that token's own book
+    expect(placed.views[0].contract).toBe('KobBid');
+    expect(placed.views[0].token).toBe(QUOTE);
   });
 
   test('old #/usd/<token> links open the pair page TOKEN/EXUSD and can build a pair order', async ({ appPage: page, mock }) => {
@@ -375,13 +366,10 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
     await page.getByTestId('order-side-sell').click();
     await page.getByTestId('order-price').fill('0.0515');
     await page.getByTestId('order-amount').fill('2');
-    await expect(page.getByTestId('order-review')).toBeEnabled({ timeout: 15_000 });
-    await page.getByTestId('order-review').click();
-    const confirm = await readConfirm(page);
-    expect(confirm.blocking).toEqual([]);
-    expect(confirm.created[0]!.rows.pairPair).toContain('sells EXKCC for EXUSD');
-    await page.getByTestId(TESTID.confirmCancel).click();
-    await expect(page.getByTestId(TESTID.confirmScreen)).toHaveCount(0);
+    const placed = await placeOrder(page, mock);
+    // the pair order sells EXKCC for EXUSD
+    expect(placed.views[0].contract).toBe('KobPair');
+    expect(placed.views[0].state.state).toMatchObject({ side: '1', price: '51500', sCovId: exkcc, tCovId: QUOTE });
   });
 
   test('an unknown token or a missing USD token falls back to the market list', async ({ appPage: page, mock }) => {

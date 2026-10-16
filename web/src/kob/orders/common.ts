@@ -375,7 +375,7 @@ export interface DescribeParams {
 }
 
 /**
- * The numbers the entry and confirmation screens show, derived from the planned state and the built tx (never from form text).
+ * The numbers the entry screen shows, derived from the planned state and the built tx (never from form text).
  * Carrier lines (returned on cancel / refund / fill) itemise every KAS the order locks; `kasLocked` sums the lines that are locked
  * (the token-change carrier stays in a UTXO the wallet owns and is marked `kept`).
  */

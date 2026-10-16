@@ -1,15 +1,15 @@
 // Limit ladder and the exact Max of the ticket (mock KasWare wallet, default mock seed, EXKCC listed as tradable), through the real UI to the mock node:
-//   * several limit orders of one size at stepped prices (a percent step, or up to an end price), each its own confirmation, signature and transaction;
+//   * several limit orders of one size at stepped prices (a percent step, or up to an end price), each its own wallet signature and transaction;
 //   * Max of a buy: the largest amount the builder accepts after carriers, fee and a reserve; Max of a sell: the whole token balance.
 // Prices are KAS per EXKCC, amounts EXKCC (1e8 base units); state prices are sompi per whole token (0.0245 KAS = 2_450_000).
 import { test, expect } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
-import { acknowledgeAndSign, fillFields, pickType, placedBy, readConfirm, waitReviewable } from '../helpers/ticket';
+import { expectWalletSigned, fillFields, pickType, placeLadder, waitReviewable } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
 test.describe('limit ladder', () => {
-  test('a buy ladder by a percent step: the levels listed before review, every order on the confirmation, one transaction per order', async ({ appPage: page, mock, wallet }) => {
+  test('a buy ladder by a percent step: the levels listed before placing, one wallet request and one transaction per order', async ({ appPage: page, mock, wallet }) => {
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'limit', 'buy');
@@ -28,40 +28,24 @@ test.describe('limit ladder', () => {
     await expect(page.getByTestId('order-ladder-total')).toContainText('Total: 3 EXKCC in 3 orders');
     await expect(ladder).toContainText('you sign 3 transactions in turn');
 
-    const before = (await mock.submitted(false)).length;
-    await page.getByTestId('order-review').click();
-    const txids: string[] = [];
-    for (let level = 1; level <= 3; level++) {
-      await expect(page.getByTestId('confirm-screen')).toBeVisible({ timeout: 30_000 });
-      const confirm = await readConfirm(page);
-      expect(confirm.blocking).toEqual([]);
-      expect(confirm.heading).toContain(`Level ${level} of 3`);
-      // every order of the ladder is on every confirmation, the one being signed is marked
-      const list = page.getByTestId('confirm-ladder');
-      await expect(list).toContainText('All 3 orders of this ladder');
-      await expect(list.locator('li')).toHaveCount(3);
-      await expect(page.getByTestId(`confirm-ladder-level-${level}`)).toHaveAttribute('aria-current', 'true');
-      await expect(list.locator('[aria-current="true"]')).toHaveCount(1);
-      expect(confirm.created).toHaveLength(1);
-      txids.push(await acknowledgeAndSign(page));
-      await page.getByTestId('confirm-close').click();
-    }
-    await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
+    // one click places every level in turn, each its own wallet request; the status line names the level being sent
+    await wallet!.configure({ delayMs: 400 });
+    const placing = placeLadder(page, mock, 3);
+    await expect(page.getByTestId('order-status')).toContainText('Level 1 of 3');
+    const placed = await placing;
     await expect(page.getByTestId('order-result-ladder')).toContainText('All 3 levels placed');
-
-    const subs = (await mock.submitted()).slice(before);
-    expect(subs.map((s) => s.txid)).toEqual(txids);
-    const orders = [];
-    for (const s of subs) {
-      expect(s.created).toHaveLength(1);
-      orders.push((await placedBy(mock, s.txid)).views[0]);
+    await expect(page.getByTestId('order-ladder-stopped')).toHaveCount(0);
+    expect(await wallet!.calls()).toHaveLength(3);
+    for (let i = 0; i < 3; i++) {
+      expect(placed[i]!.submission.created).toHaveLength(1);
+      await expectWalletSigned(wallet!, placed[i]!, { call: i });
     }
+    const orders = placed.map((p) => p.views[0]);
     // three independent resting buys of the same size, one step apart
     expect(orders.map((v) => v.state.state.price)).toEqual(['2450000', '2401000', '2352980']);
     expect(orders.map((v) => v.min_fill)).toEqual(['100000000', '100000000', '100000000']);
     expect(orders.map((v) => v.side)).toEqual([2, 2, 2]);
     expect(new Set(orders.map((v) => v.covenant_id)).size).toBe(3);
-    expect((await wallet!.calls()).filter((c) => c.status === 'signed')).toHaveLength(3);
   });
 
   test('a sell ladder up to an end price: evenly spaced, same side', async ({ appPage: page, mock }) => {
@@ -80,14 +64,14 @@ test.describe('limit ladder', () => {
     await openMarket(page, mock);
     await pickType(page, 'limit', 'buy');
     await fillFields(page, { amount: '1', price: '0.0245', 'ladder.on': true, 'ladder.levels': '21', 'ladder.pct': '1' });
-    await expect(page.getByTestId('order-review')).toBeDisabled();
+    await expect(page.getByTestId('order-place')).toBeDisabled();
     await fillFields(page, { 'ladder.levels': '20' });
     await waitReviewable(page);
     await expect(page.getByTestId('order-ladder-levels').locator('li')).toHaveCount(20);
     // a step so large that a level would reach zero
     await fillFields(page, { 'ladder.pct': '60' });
     await expect(page.getByTestId('order-ladder-errors')).toBeVisible();
-    await expect(page.getByTestId('order-review')).toBeDisabled();
+    await expect(page.getByTestId('order-place')).toBeDisabled();
   });
 });
 
@@ -105,7 +89,7 @@ test.describe('Max', () => {
     // twenty more tokens (0.49 KAS) do not fit
     await page.getByTestId('order-amount').fill(String(Number(amount) + 20));
     await expect(page.getByTestId('order-issue-INSUFFICIENT_KAS')).toBeVisible();
-    await expect(page.getByTestId('order-review')).toBeDisabled();
+    await expect(page.getByTestId('order-place')).toBeDisabled();
   });
 
   test('a buy ladder: the amount of one order such that the whole ladder fits', async ({ appPage: page, mock }) => {
@@ -116,6 +100,28 @@ test.describe('Max', () => {
     await page.getByTestId('order-amount-max').click();
     await waitReviewable(page);
     await expect(page.getByTestId('order-ladder-funds')).toHaveCount(0);
+    // placed as it stands: every level is accepted, the wallet pays for the whole ladder
+    expect(await placeLadder(page, mock, 4)).toHaveLength(4);
+  });
+
+  test('a buy ladder the wallet cannot pay for as a whole is an error line and the button stays disabled', async ({ appPage: page, mock }) => {
+    await fund(mock, 'alice', { kas: 30n, utxos: 1 });
+    await openMarket(page, mock);
+    await pickType(page, 'limit', 'buy');
+    // one level of 600 EXKCC costs about 14.7 KAS: one fits, three do not
+    await fillFields(page, { amount: '600', price: '0.0245' });
+    await waitReviewable(page);
+    await expect(page.getByTestId('order-ladder-funds')).toHaveCount(0);
+    await fillFields(page, { 'ladder.on': true, 'ladder.levels': '3', 'ladder.pct': '1' });
+    const funds = page.getByTestId('order-ladder-funds');
+    await expect(funds).toBeVisible();
+    await expect(funds).toHaveAttribute('data-code', 'kas');
+    await expect(funds).toContainText('The ladder needs about');
+    await expect(page.getByTestId('order-place')).toBeDisabled();
+    // a smaller order per level fits again
+    await fillFields(page, { amount: '300' });
+    await waitReviewable(page);
+    await expect(funds).toHaveCount(0);
   });
 
   test('a sell: the whole token balance; a price-less buy says when nothing is affordable', async ({ appPage: page, mock }) => {

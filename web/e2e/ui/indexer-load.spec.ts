@@ -1,11 +1,10 @@
 // Indexer load of one open market page: a live fill refreshes every resource coalesced and the chart reads only its newest bars (`from=`), a
-// hidden tab neither refetches nor polls and catches up once shown, and Review reuses an environment read a moment ago instead of reading
-// everything again (an older one opens the confirmation at once and is re-checked before signing; ticket-latency.spec.ts times it).
+// hidden tab neither refetches nor polls and catches up once shown, and a click on the order button reuses an environment read a moment ago
+// instead of reading everything again (one that may be stale is re-checked before the wallet is asked; ticket-latency.spec.ts times it).
 import type { Page, Request } from '@playwright/test';
 import { expect, test } from '../fixtures';
-import { TESTID } from '../testids';
 import { fund, listExkcc, openMarket } from '../helpers/env';
-import { fillFields, settlePlan, waitReviewable } from '../helpers/ticket';
+import { fillFields, settlePlan, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -73,12 +72,14 @@ test.describe('indexer load per viewer', () => {
     expect(reads.length).toBeGreaterThan(0);
   });
 
-  test('Review reuses an environment read a moment ago; an older one opens at once and is re-checked before signing', async ({ appPage: page, mock }) => {
+  test('a click reuses an environment read a moment ago; a stale one is re-checked before the wallet is asked', async ({ appPage: page, mock, wallet }) => {
     await fund(mock, 'alice');
     await openMarket(page, mock);
     await page.getByTestId('order-side-sell').click();
     await fillFields(page, { amount: '3', price: '0.03' });
     await waitReviewable(page);
+    // the wallet holds each request for a moment: what the app read is judged when the request arrives, before the placement's own refresh
+    await wallet!.configure({ delayMs: 1_500 });
 
     // the ticket's own book read (per order, aggregate=false) marks an environment build
     const envReads = record(page, /\/v1\/books\/[0-9a-f]+\?.*aggregate=false/);
@@ -88,45 +89,44 @@ test.describe('indexer load per viewer', () => {
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('aria-busy', 'false');
     envReads.length = 0;
     const t0 = Date.now();
-    await page.getByTestId(TESTID.orderReview).click();
-    await expect(page.getByTestId('confirm-screen')).toBeVisible();
+    await page.getByTestId('order-place').click();
+    await wallet!.waitForCalls(1);
     const reused = Date.now() - t0;
-    expect(envReads, 'Review must not read the environment again').toHaveLength(0);
-    // that environment is the state at the click: no re-check holds the signature
-    await expect(page.getByTestId('confirm-checking-list').locator('[data-code="recheck-running"]')).toHaveCount(0);
-    await page.getByTestId('confirm-cancel').click();
-    await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
+    expect(envReads, 'the click must not read the environment again').toHaveLength(0);
+    await waitSubmitted(page);
 
     // a slow indexer and node (400 ms a request), an environment older than the reuse window
     await mock.latency(400);
     try {
       // the feed was live all along and sent no notice since: it still is the state at the click, nothing is read again
+      await fillFields(page, { amount: '3' });
       await waitReviewable(page);
       await page.waitForTimeout(3_500);
       envReads.length = 0;
-      await page.getByTestId(TESTID.orderReview).click();
-      await expect(page.getByTestId('confirm-screen')).toBeVisible();
-      await expect(page.getByTestId('confirm-checking-list').locator('[data-code="recheck-running"]')).toHaveCount(0);
+      await page.getByTestId('order-place').click();
+      await wallet!.waitForCalls(2);
       expect(envReads).toHaveLength(0);
-      await page.getByTestId('confirm-cancel').click();
-      await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
+      await waitSubmitted(page);
 
-      // the book moved since (a notice, its read still on its way: an indexer at 3 s an answer): the confirmation still opens at once, and the
-      // signature waits for the re-check
+      // the book moved since (a notice, its read still on its way: an indexer at 3 s an answer): the check starts at once and the wallet is not asked
+      // before the re-check has read the state at the click
       const ask = (await mock.ordersOf('maker', 'active')).find((o: { side: number }) => o.side === 1);
+      await fillFields(page, { amount: '3' });
+      await waitReviewable(page);
       await mock.latency(3_000, { scope: 'indexer' });
       envReads.length = 0;
       await mock.fill(ask!.covenant_id, 1000n);
       await page.waitForTimeout(1_200);
       const t1 = Date.now();
-      await page.getByTestId(TESTID.orderReview).click();
-      await expect(page.getByTestId('confirm-screen')).toBeVisible();
-      const opened = Date.now() - t1;
-      await expect(page.getByTestId('confirm-checking-list').locator('[data-code="recheck-running"]')).toBeVisible();
-      await page.getByTestId('confirm-ack').check();
-      await expect(page.getByTestId('confirm-sign')).toBeEnabled({ timeout: 15_000 });
+      await page.getByTestId('order-place').click();
+      await expect(page.getByTestId('order-status')).toHaveAttribute('data-phase', 'checking');
+      await page.waitForTimeout(1_000);
+      expect(await wallet!.calls(), 'the wallet is not asked before the re-check').toHaveLength(2);
+      await wallet!.waitForCalls(3, 30_000);
+      const waited = Date.now() - t1;
       expect(envReads.length).toBeGreaterThan(0);
-      test.info().annotations.push({ type: 'review-latency', description: `reused ${reused} ms; from an older environment at 400 ms/request ${opened} ms` });
+      await waitSubmitted(page);
+      test.info().annotations.push({ type: 'click-latency', description: `reused ${reused} ms; wait for the re-check after a notice at 3 s an answer ${waited} ms` });
     } finally {
       await mock.latency(0);
     }

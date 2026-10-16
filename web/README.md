@@ -31,7 +31,7 @@ is an alias). The title shows the pair as `BASE / QUOTE`, each side a drop-down 
 another asset changes the market in place, the URL follows (browser back works), nothing else moves. Both are tradable. Old `#/usd/kas` and `#/usd/<token>` links are redirected (history entry replaced) to the USD token's market and the pair
 `<token>/<USD token>` (the market list without a USD token). The pair chart converts candles bucket by bucket on one time grid, so each bucket uses the
 time-aligned price of both legs (method in `src/ui/market/usd-model.ts`). `home` picks the landing screen (empty hash): `auto` (default: the USD token's market, shown KAS/<ticker>, else the
-chart of the first tradable token, else the list), `list`, `kas-usd` (the USD token's market), `usd:<covenant id>` (the pair `<id>/<USD token>`), `market:<covenant id>`; the market list is always `#/market` (header "Market"). The list shows each tradable token's KAS market (TOKEN/KAS) with its last price, 24 h change, 24 h KAS volume, spread (best bid / ask in the tooltip) and open orders from `/v1/stats/<token>` (one call per token, four in flight), and below it the token pairs with live pair orders (`/v1/pairs`; price and change implied through the two KAS markets as on the pair page, 24 h pair volume from `/v1/pairs/<base>/<quote>/fills`); every column header sorts (24 h volume first, missing figures last), the search also matches pairs (`BASE/QUOTE` too), a figure the indexer cannot give reads `—`, and a phone shows the name, the price and the change (`src/ui/market/market-list.ts`). Every token market, a USD reference token included, opens as TOKEN/KAS; each market has an icon-only flip button ("Flip pair", just left of the pair title) that inverts the display (price, chart, book, trades, stats and the ticket; a flip never changes the order that is built), remembered per market in localStorage (`kob.flip.v2:<market>`). Book, pair book and tape columns never cut a digit: a column too wide for its cells shows fewer decimals or K / M / B (`56.61M`, `<0.01`) with the exact amount in the tooltip (`fitAmountColumn`). The flip is complete: the book has its own price grouping in the shown unit (steps of the displayed price), its notes, the depth tooltip and the trade-amount column (fixed decimals from the market's tick) follow the orientation, and the ticket follows the shown pair as BASE/QUOTE: in KAS/TOKEN the base is KAS, so Buy / Sell are KAS's, prices are tokens per KAS and every amount box counts KAS, converted into the token at the price of its own leg (the limit; a stop; an exit price; the book's best price for market and close, flagged approximate) and rounded down, with the exact token amount shown under the box; the helps and type names follow the displayed Buy / Sell and the tip is KAS per token traded. The disclosure headline and a line at the top of the confirmation screen state the order in the shown pair's words (what is given and received); the decoded transaction below it stays in native terms (it shows the order exactly as it is built). A pair page flips by opening B/A and carries the order typed there across: the side turns over, amounts and prices are converted at the order's price (`ui/ticket/pair-flip.ts`).
+chart of the first tradable token, else the list), `list`, `kas-usd` (the USD token's market), `usd:<covenant id>` (the pair `<id>/<USD token>`), `market:<covenant id>`; the market list is always `#/market` (header "Market"). The list shows each tradable token's KAS market (TOKEN/KAS) with its last price, 24 h change, 24 h KAS volume, spread (best bid / ask in the tooltip) and open orders from `/v1/stats/<token>` (one call per token, four in flight), and below it the token pairs with live pair orders (`/v1/pairs`; price and change implied through the two KAS markets as on the pair page, 24 h pair volume from `/v1/pairs/<base>/<quote>/fills`); every column header sorts (24 h volume first, missing figures last), the search also matches pairs (`BASE/QUOTE` too), a figure the indexer cannot give reads `—`, and a phone shows the name, the price and the change (`src/ui/market/market-list.ts`). Every token market, a USD reference token included, opens as TOKEN/KAS; each market has an icon-only flip button ("Flip pair", just left of the pair title) that inverts the display (price, chart, book, trades, stats and the ticket; a flip never changes the order that is built), remembered per market in localStorage (`kob.flip.v2:<market>`). Book, pair book and tape columns never cut a digit: a column too wide for its cells shows fewer decimals or K / M / B (`56.61M`, `<0.01`) with the exact amount in the tooltip (`fitAmountColumn`). The flip is complete: the book has its own price grouping in the shown unit (steps of the displayed price), its notes, the depth tooltip and the trade-amount column (fixed decimals from the market's tick) follow the orientation, and the ticket follows the shown pair as BASE/QUOTE: in KAS/TOKEN the base is KAS, so Buy / Sell are KAS's, prices are tokens per KAS and every amount box counts KAS, converted into the token at the price of its own leg (the limit; a stop; an exit price; the book's best price for market and close, flagged approximate) and rounded down, with the exact token amount shown under the box; the helps and type names follow the displayed Buy / Sell and the tip is KAS per token traded. The disclosure headline states the order in the shown pair's words (what is given and received); the transaction built is the native order. A pair page flips by opening B/A and carries the order typed there across: the side turns over, amounts and prices are converted at the order's price (`ui/ticket/pair-flip.ts`).
 
 ## Layout
 
@@ -39,7 +39,7 @@ chart of the first tradable token, else the list), `list`, `kas-usd` (the USD to
 |---|---|
 | `src/kob/` | pure protocol-side logic over kob-wasm: order planners for every order type (`orders/`, `intent-*.ts`, `plan.ts`; pair orders `orders/pair-*.ts`, pair math `pair.ts`), pre-sign decoding (`decode.ts`), token registry (`registry.ts`), placement records and recovery, cancel / cancel-replace / cancel-all, balances, positions, issuance |
 | `src/data/`, `src/wallet/` | node RPC (official SDK) and mock-node client, indexer client + WebSocket feed, UTXO services, token tracker, wallet adapters, sign-and-submit pipeline |
-| `src/app/`, `src/ui/`, `src/i18n/` | composition root, views (market, ticket, confirmation, my orders, issuance, settings), English text |
+| `src/app/`, `src/ui/`, `src/i18n/` | composition root, views (market, ticket and its send flow, my orders, issuance and its confirmation, settings), English text |
 | `mock/`, `e2e/` | mock indexer + node server and fake wallets; Playwright specs for every order type (`e2e/README.md`) |
 | `e2e-real/` | real-wallet run on TN10 with KasWare and Kaspire (`e2e-real/README.md`), skipped offline |
 
@@ -58,9 +58,15 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
   bids down; a click on a grouped row prefills the worst price of the group).
 * **Live.** The WebSocket channels `book:<token>` / `fills:<token>` trigger a refetch of every panel (debounced 1 s); 5 s polling while the socket is down.
 * **The book never disappears.** A failed or late book pull keeps the last good book on screen with a subtle `stale since hh:mm:ss` marker (the time of that book); only the next good response replaces it. A crossed book (matchers a moment behind) is the live book like any other: it is drawn as it is, with a negative spread (`Mid 0.043173 · Spread -0.000052 (-0.11%)`), and is not marked stale. A pull in flight is never aborted by the next refresh (a live notice or a poll that arrives meanwhile runs once right after it). The indexer-lag banner and the book's "possibly out of date" badge show only when the indexer is more than 30 s behind the chain.
-* **Confirmation screen.** The net effect on the wallet comes first (KAS, each token, KAS locked in orders or back from closed ones), then the
-  orders, the locked amounts and the fee; the wallet's inputs and change are folded under "Wallet inputs and change". A cancel's custody row
-  counts the custody only (strays have their own row).
+* **Order button.** The ticket is the one place an order is shown (amount, price, cost, fee). Its button ("Buy Limit", "Sell Market order" ...)
+  plans the order again from the state at the click with the node clock read then, runs the pre-sign checks silently (`src/ui/confirm/send.ts`:
+  wallet account and network, every input re-read on the node, the built transaction decoded and compared with the plan, the re-check against the
+  state at the click) and asks the wallet for its approval at once; one status line under the button follows it (checking, approve in your wallet,
+  sending, the txid with its explorer link, accepted). No confirmation screen and no checkboxes: only a check that makes the order wrong or
+  impossible stops it, with one line, and nothing reaches the wallet; warnings are not shown. An auction (market, marketable limit) starts from
+  that clock: a signature that comes back more than `AUCTION_START_MARGIN_DAA` (20 DAA, 2 s) after the start is not sent, the order is planned
+  again with the current clock and the wallet asked once more (`src/wallet/sign.ts`). My orders actions (cancel, amend, refund, sweep, merge)
+  run the same way. Token issuance keeps its confirmation screen (a token's facts never change).
 * **Theme.** Dark / light toggle in the header, remembered in localStorage (`kob.theme`), default = the OS preference (dark when unknown).
 * **Try it.** `npm run mock -- --history --fund` (mock indexer + node on :8790 with a seeded 48 h price history), `npm run dev`, then Settings:
   indexer and node URL `http://127.0.0.1:8790`. `KOB_SHOTS=1 npx playwright test e2e/ui/market-data.spec.ts` saves screenshots to `test-results/shots/`.
@@ -97,9 +103,8 @@ in the registry) shows the pair book, the panels of a token market and the order
   tips KAS. A sell holds exactly its amount of A; a buy holds a B escrow; the order UTXO prefunds one delivery carrier per
   budgeted fill and the tip. A pair stop arms from evidence of one of two modes: two KAS-book fills of A and B in the same
   transaction, or a resting `KobPair` filled at or beyond the stop.
-* **Confirmation screen.** `decodeSigning` checks both tokens against the registry and a new order's terms against kob-wasm,
-  shows what returns of A and of B (custodies and strays of both tokens) and, for a pair stop armed or trailed by the
-  transaction, its evidence in either mode. Nothing of a pair order is shown as a KAS price.
+* **Pre-sign checks.** `decodeSigning` checks both tokens against the registry and a new order's terms against kob-wasm (what returns of
+  A and of B, custodies and strays of both tokens, and the evidence of a pair stop armed or trailed by the transaction) before the wallet is asked.
 * **My orders** lists a pair order under the type of the KAS kind it mirrors, with the pair (link to the pair view), its prices
   in B, filled / left and status; cancel and refund work as for the KAS kinds, an amend is always a cancel-replace.
 * **Mock.** `npm run mock -- --pair` (or `POST /mock/seed {pair: true}`) adds EXUSD (6 decimals) with a KAS book and resting pair
@@ -130,26 +135,26 @@ in the registry) shows the pair book, the panels of a token market and the order
   flagged; a token outside the registry marked unknown). "Sweep strays" (`planSweep`, kob-wasm `sweepOrder`, KOB1 `SWEEP` record) returns them while
   the order lives on: the maker's cancel continues the order under the SAME script (same price, amount, custody; its 90-day idle window restarts), one
   token output per token (own token within one extension commitment and the program's inputs, a pair order's other token, foreign strays with a proven state);
-  the rest stays for a later sweep. A plain ask's carrier pays the fee, every other kind one wallet coin. The confirmation screen (`decodeSigning`,
-  kind `sweep`) re-checks the record (`src/kob/sweep.ts`, as `verify_sweep`) and blocks another script, a record that does not verify, the swept
+  the rest stays for a later sweep. A plain ask's carrier pays the fee, every other kind one wallet coin. The pre-sign checks (`decodeSigning`,
+  kind `sweep`) re-check the record (`src/kob/sweep.ts`, as `verify_sweep`) and blocks another script, a record that does not verify, the swept
   order's custody being spent or any token to another key. A cancel that would abandon strays (more than one transaction can move) offers "Sweep
   first". Cancels return foreign strays too. The placement record stays and points at the continuation.
 * **Merge tokens.** A token whose free UTXOs exceed what one transaction can spend (`TOKEN_UTXOS_FRAGMENTED`; KOB's standard program takes 3)
   gets "Merge (n)" in My orders > Balances (`src/kob/merge.ts`): a chain of transfers to the wallet itself, the first 3 -> 1, each next the previous
   output + 2 more, each valid on its own, at most 10 per run. Only the wallet's own plain UTXOs of the token (tracker, verified on the node) are
   taken, never an open order's custody or strays. The freed carriers pay the fee (low bucket), a wallet coin only when they cannot (and for KRON).
-  Every confirmation screen states the whole merge (UTXOs before / after, transactions, total fee); a later transaction is built only once the
+  The flow states the whole merge (UTXOs before / after, transactions, total fee); a later transaction is built only once the
   previous one is on the node, from the node's UTXO.
 
 ## Wallet events
 
-After connect the adapters listen for account and network changes (`WalletAdapter.subscribe`: the providers' `accountsChanged` / `networkChanged`, which KasWare, Kaspire and Kastle all emit through `on` / `removeListener`; a visible-tab poll if a provider has no emitter). An event is only a trigger: the app re-reads the wallet silently (`refresh`, no popup) and reacts (`src/app/wallet-events.ts`): a new key moves the session, balances and orders to it and resets state bound to the old one; another network shows the mismatch banner and blocks planning/signing until the wallet is back; a wallet without an account closes the session. The confirmation screen refuses a plan whose signer key is not the wallet's, and `signAndSubmit` re-reads the wallet right before asking it to sign.
+After connect the adapters listen for account and network changes (`WalletAdapter.subscribe`: the providers' `accountsChanged` / `networkChanged`, which KasWare, Kaspire and Kastle all emit through `on` / `removeListener`; a visible-tab poll if a provider has no emitter). An event is only a trigger: the app re-reads the wallet silently (`refresh`, no popup) and reacts (`src/app/wallet-events.ts`): a new key moves the session, balances and orders to it and resets state bound to the old one; another network shows the mismatch banner and blocks planning/signing until the wallet is back; a wallet without an account closes the session. The pre-sign checks refuse a plan whose signer key is not the wallet's, and `signAndSubmit` re-reads the wallet right before asking it to sign.
 
 ## Trust boundaries
 
 * **Node over indexer.** The KAS value of a covenant / token input (custody UTXO, strays) is committed by no signature, so it is never taken from the
   indexer: cancel / amend / cancel-all re-read the order, custody and strays from the NODE (`src/kob/node-verify.ts`, used by `snapshotFor`); an
-  indexer answer the node does not confirm falls back to the node-resolved placement record, else nothing is built. The confirmation screen re-reads
+  indexer answer the node does not confirm falls back to the node-resolved placement record, else nothing is built. The pre-sign checks re-read
   every input of the transaction from the node too and `decodeSigning` blocks any input whose amount / script / covenant id differs
   (`input-unconfirmed`); `signAndSubmit` repeats that check right before the wallet popup and compares the txid the node returns with the signed one.
 * **No curation of tokens.** Token issuance is permissionless, so the UI shows no verified / official / pending-review labels, no "genesis verified" badge and
@@ -168,7 +173,7 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   user acknowledges it. The last fill comes from the same indexer as the book, so it is not independent: when no further indexer answers (none is
   configured by default), an order worth 100 KAS or more at its start is held until acknowledged, a smaller one carries a warning, and a configured
   indexer that does not answer is named in a warning. An acknowledgement covers the gap (or start) it was given for only: a worse start, a change of
-  token, side, type or size, or a reload asks again, and Review shows a warning again when it got worse.
+  token, side, type or size, or a reload asks again.
 * **Stored settings.** A node, indexer or `extraIndexerUrls` list, or `allowQueryOverrides: true`, saved in this browser's settings is named in a banner
   on every page.
 
@@ -220,8 +225,8 @@ into it out of the page's reach. A browser extension wallet is the recommended s
   rebuild at a lower rate when the fee would exceed `fees.maxFeeKas` (default 1 KAS per transaction; 0 = no cap). Urgency: HIGH = IOC / FOK / market / streaming / close, a limit that
   crosses the book now and pair IOC / FOK (priority bucket, sub-second); NORMAL = resting orders, schedules, stops, if-done, cancels, amends, refunds, issuance (first normal bucket,
   sub-minute); LOW = housekeeping (first low bucket). No usable estimate (call failed, method missing, malformed, older than 60 s), `fees.dynamic: false`, or a wallet that cannot afford
-  the picked rate = the floor, never an error. The confirmation screen (and the ticket's disclosure) shows the rate, its bucket and expected time, and a note for every fallback or cap.
-  `fees.dynamic` is also a Settings switch. The mock server answers `GET /node/fee-estimate` with every bucket at the relay floor (100 sompi per gram) after each reset; `POST /mock/fee-estimate {priority, normal, low}` changes it, `{off: true}` makes the route answer 404 (no estimate: the floor, and the confirmation screen says so).
-  Independently, Settings > "Pay the priority fee" (`features.priorityFee`) switches every planner to the storage-inclusive fee MODE (`feeMode: 'priority'`); the confirmation
-  screen's technical details show the mode and both masses. Mode and rate are independent.
+  the picked rate = the floor, never an error. The ticket's disclosure shows the rate, its bucket and expected time.
+  `fees.dynamic` is also a Settings switch. The mock server answers `GET /node/fee-estimate` with every bucket at the relay floor (100 sompi per gram) after each reset; `POST /mock/fee-estimate {priority, normal, low}` changes it, `{off: true}` makes the route answer 404 (no estimate: the floor).
+  Independently, Settings > "Pay the priority fee" (`features.priorityFee`) switches every planner to the storage-inclusive fee MODE (`feeMode: 'priority'`); the issuance
+  confirmation screen's technical details show the mode and both masses. Mode and rate are independent.
 * **Order views** need `state`, `current`, `custody.utxo`, `strays`, the position grouping needs `parent` / `repeat` (indexer available; without it My orders shows node-derived rows).

@@ -307,6 +307,7 @@ export default {
   'issues.signflow.other': 'Signing failed and nothing was sent. Details: {message}',
   'issues.signflow.signature': 'The wallet\'s signature does not match; nothing was sent. Try again or use another wallet.',
   'issues.signflow.validation': 'The script check failed before sending; nothing was sent. Plan the order again.',
+  'issues.signflow.clock-moved': 'The price moved while waiting for your approval in the wallet. Nothing was sent; try again.',
   'issues.node.unavailable': 'Cannot reach the node. If unsure whether the transaction went out, check your orders before sending again.',
   'issues.node.network-mismatch': 'The node is on a different network than this app. Check the network setting.',
   'issues.node.orphan': 'The node does not know an input (spent, unconfirmed or another network). Refresh and plan again.',

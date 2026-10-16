@@ -4,7 +4,7 @@
 import { test, expect } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
 import { runFlow, seedOrders } from '../helpers/orders';
-import { acknowledgeAndSign, expectWalletSigned, fillFields, openReview, pickType, placedBy, reviewAndSign, waitReviewable } from '../helpers/ticket';
+import { clickPlace, expectStopped, expectWalletSigned, fillFields, pickType, placeOrder, placedBy, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -22,8 +22,7 @@ test.describe('Kaspire', () => {
     await openMarket(page, mock, { wallet: 'kaspire' });
     await expect(page.getByTestId('wallet-connected')).toContainText('Kaspire');
     await sellTicket(page);
-    const { confirm, placed } = await reviewAndSign(page, mock);
-    expect(confirm.wallet.join(' ')).toMatch(/Kaspire/);
+    const placed = await placeOrder(page, mock);
     await expectWalletSigned(wallet!, placed);
     const [call] = await wallet!.calls();
     // the token input is a covenant (P2SH) input: Kaspire needs its redeem script and how to assemble the signature script
@@ -41,7 +40,7 @@ test.describe('Kaspire', () => {
     await page.getByTestId('nav-orders').click();
     await page.getByTestId(`order-cancel-${id}`).click();
     const [step] = await runFlow(page, mock, wallet, { steps: 1 });
-    expect(step!.placed.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
+    expect(step!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
     const calls = await wallet!.calls();
     expect(calls).toHaveLength(2);
     const cancelScripts = calls[1]!.scripts!;
@@ -58,9 +57,7 @@ test.describe('Kaspire', () => {
     await openMarket(page, mock, { wallet: 'kaspire' });
     await sellTicket(page);
     await wallet!.configure({ dropScripts: true });
-    await openReview(page);
-    const txid = await acknowledgeAndSign(page);
-    const placed = await placedBy(mock, txid);
+    const placed = await placeOrder(page, mock);
     await expectWalletSigned(wallet!, placed);
     // the wallet was asked with scripts but answered without assembling them: only its signatures were used
     const [call] = await wallet!.calls();
@@ -76,8 +73,7 @@ test.describe('Kastle (behind the feature flag)', () => {
     await openMarket(page, mock, { wallet: 'kastle' });
     await expect(page.getByTestId('wallet-connected')).toContainText('Kastle');
     await sellTicket(page);
-    const { confirm, placed } = await reviewAndSign(page, mock);
-    expect(confirm.wallet.join(' ')).toMatch(/Kastle/);
+    const placed = await placeOrder(page, mock);
     await expectWalletSigned(wallet!, placed);
     const [call] = await wallet!.calls();
     expect(call!.network).toMatch(/testnet/);
@@ -92,27 +88,23 @@ test.describe('Kastle (behind the feature flag)', () => {
     await openMarket(page, mock, { wallet: 'kastle' });
     await pickType(page, 'limit', 'buy');
     await fillFields(page, { amount: '2', price: '0.0245' });
-    const { placed } = await reviewAndSign(page, mock);
+    const placed = await placeOrder(page, mock);
     await expectWalletSigned(wallet!, placed);
     expect(placed.views[0].contract).toBe('KobBid');
   });
 
-  test('a wallet that declines is a neutral outcome: nothing is signed or sent, and the same screen can try again', async ({ appPage: page, mock, wallet }) => {
+  test('a wallet that declines is a neutral outcome: nothing is signed or sent, and the same ticket can try again', async ({ appPage: page, mock, wallet }) => {
     await fund(mock);
     await openMarket(page, mock, { wallet: 'kastle' });
     await sellTicket(page);
     await wallet!.configure({ approve: false, rejectMessage: 'User rejected the request' });
-    await openReview(page);
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    await expect(page.getByTestId('confirm-rejected')).toBeVisible();
-    await expect(page.getByTestId('confirm-error')).toHaveCount(0);
+    await clickPlace(page);
+    await expectStopped(page, 'rejected');
     expect((await wallet!.calls()).at(-1)!.status).toBe('rejected');
     expect(await mock.submitted(false)).toHaveLength(0);
     await wallet!.configure({ approve: true });
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    await expect(page.getByTestId('tx-status')).toHaveAttribute('data-status', 'confirmed', { timeout: 30_000 });
+    await page.getByTestId('order-place').click();
+    await waitSubmitted(page);
     expect(await mock.submitted(false)).toHaveLength(1);
   });
 });
@@ -125,13 +117,13 @@ test.describe('Kastle: the one-time covenant-signing check (C5-10)', () => {
     await openMarket(page, mock, { wallet: 'kastle' });
     await sellTicket(page, false);
     await expect(page.getByTestId('order-covenant-check')).toBeVisible();
-    await expect(page.getByTestId('order-review')).toBeDisabled();
+    await expect(page.getByTestId('order-place')).toBeDisabled();
     await page.getByTestId('order-covenant-check-run').click();
     await expect(page.getByTestId('order-covenant-check')).toHaveCount(0);
     const [probe] = await wallet!.calls();
     expect(probe!.scripts!.length).toBeGreaterThan(0);
     expect(await mock.submitted(false)).toHaveLength(0);
-    await expect(page.getByTestId('order-review')).toBeEnabled();
+    await expect(page.getByTestId('order-place')).toBeEnabled();
     await page.reload();
     await openMarket(page, mock, { wallet: 'kastle' });
     await sellTicket(page);
@@ -145,7 +137,7 @@ test.describe('Kastle: the one-time covenant-signing check (C5-10)', () => {
     await sellTicket(page, false);
     await page.getByTestId('order-covenant-check-run').click();
     await expect(page.getByTestId('order-covenant-unsupported')).toBeVisible();
-    await expect(page.getByTestId('order-review')).toBeDisabled();
+    await expect(page.getByTestId('order-place')).toBeDisabled();
   });
 });
 
@@ -155,72 +147,53 @@ test.describe('KasWare failure modes', () => {
     await openMarket(page, mock);
     await sellTicket(page);
     await wallet!.configure({ wrongSignature: true });
-    await openReview(page);
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    const err = page.getByTestId('confirm-error');
-    await expect(err).toBeVisible();
-    await expect(err).toContainText(/signature/i);
+    await clickPlace(page);
+    const read = await expectStopped(page, 'failed');
+    expect(read.text).toMatch(/signature/i);
     expect((await wallet!.calls()).at(-1)!.status).toBe('signed'); // the wallet did answer: the answer was wrong
-    await expect(page.getByTestId('tx-status')).toHaveCount(0);
     expect(await mock.submitted(false)).toHaveLength(0);
-    // the acknowledgement belongs to one attempt
-    await expect(page.getByTestId('confirm-ack')).not.toBeChecked();
-    await expect(page.getByTestId('confirm-sign')).toBeDisabled();
     // a good wallet answer on the retry goes through
     await wallet!.configure({ wrongSignature: false });
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    await expect(page.getByTestId('tx-status')).toHaveAttribute('data-status', 'confirmed', { timeout: 30_000 });
+    await page.getByTestId('order-place').click();
+    await waitSubmitted(page);
     expect(await mock.submitted(false)).toHaveLength(1);
   });
 
-  test('a node that refuses the transaction shows its reason; the screen stays open and the retry is accepted', async ({ appPage: page, mock }) => {
+  test('a node that refuses the transaction shows its reason; the ticket stays ready and the retry is accepted', async ({ appPage: page, mock }) => {
     await fund(mock);
     await openMarket(page, mock);
     await sellTicket(page);
     await mock.failNextSubmit('mock: injected submit failure');
-    await openReview(page);
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    const err = page.getByTestId('confirm-error');
-    await expect(err).toBeVisible();
-    await expect(err).toContainText('injected submit failure');
-    await expect(page.getByTestId('confirm-screen')).toBeVisible();
+    await clickPlace(page);
+    await expectStopped(page, 'failed');
+    await expect(page.getByTestId('order-status')).toContainText('injected submit failure'); // the node's text sits behind "Details"
     expect(await mock.submitted(false)).toHaveLength(0);
-    await expect(page.getByTestId('confirm-sign')).toHaveText('Try again');
-    await expect(page.getByTestId('confirm-ack')).not.toBeChecked(); // an acknowledgement belongs to one attempt
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    await expect(page.getByTestId('tx-status')).toHaveAttribute('data-status', 'confirmed', { timeout: 30_000 });
+    await expect(page.getByTestId('order-place')).toBeEnabled();
+    await page.getByTestId('order-place').click();
+    await waitSubmitted(page);
     expect(await mock.submitted(false)).toHaveLength(1);
   });
 
-  test('a refusal that says the transaction itself is stale (fee, inputs) must be planned again: the old screen cannot be retried', async ({ appPage: page, mock }) => {
+  test('a refusal that says the transaction itself is stale (fee, inputs): the retry plans a new transaction from fresh data', async ({ appPage: page, mock }) => {
     await fund(mock);
     await openMarket(page, mock);
     await sellTicket(page);
     await mock.failNextSubmit('mock: transaction is spent by another transaction (double spend)');
-    await openReview(page);
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    await expect(page.getByTestId('confirm-error')).toBeVisible();
-    await expect(page.getByTestId('confirm-replan')).toBeVisible();
-    await expect(page.getByTestId('confirm-sign')).toBeDisabled();
-    await page.getByTestId('confirm-replan').click();
-    await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
-    await expect(page.getByTestId('order-review-note')).toBeVisible(); // the ticket asks for a fresh review
+    await clickPlace(page);
+    await expectStopped(page, 'failed', { code: 'double-spend' });
     expect(await mock.submitted(false)).toHaveLength(0);
-    // a fresh review builds a new transaction from fresh data and goes through
-    const { placed } = await reviewAndSign(page, mock);
+    // every click plans again: the stale transaction is never sent a second time
+    await page.getByTestId('order-place').click();
+    const placed = await placedBy(mock, await waitSubmitted(page));
     expect(placed.views[0].contract).toBe('KobAsk');
+    expect(await mock.submitted(false)).toHaveLength(1);
   });
 });
 
 test.describe('network mismatch', () => {
   test.use({ walletOptions: { network: 'mainnet', allowNetworkSwitch: false } });
 
-  test('the ticket says which networks differ and review stays disabled; cancel is disabled in My orders', async ({ appPage: page, mock }) => {
+  test('the ticket says which networks differ and the order button stays disabled; cancel is disabled in My orders', async ({ appPage: page, mock }) => {
     await fund(mock);
     const [id] = await seedOrders(mock, [{ side: 'ask', price: 2_700_000, tokens: 2 }]);
     await openMarket(page, mock);
@@ -231,7 +204,7 @@ test.describe('network mismatch', () => {
     await expect(need).toContainText('testnet-10');
     await pickType(page, 'limit', 'sell');
     await fillFields(page, { amount: '1', price: '0.027' });
-    await expect(page.getByTestId('order-review')).toBeDisabled();
+    await expect(page.getByTestId('order-place')).toBeDisabled();
     await page.getByTestId('nav-orders').click();
     await expect(page.getByTestId('orders-network-blocked')).toBeVisible();
     await expect(page.getByTestId(`order-cancel-${id}`)).toBeDisabled();
@@ -241,23 +214,15 @@ test.describe('network mismatch', () => {
 });
 
 test.describe('blocked signing', () => {
-  test('the wallet disappears while the confirmation screen is open: a blocking finding stops signing and nothing is asked of the wallet', async ({ appPage: page, mock, wallet }) => {
+  test('the wallet disappears while the ticket is ready: the ticket refuses, nothing is asked of the wallet', async ({ appPage: page, mock, wallet }) => {
     await fund(mock);
     await openMarket(page, mock);
     await sellTicket(page);
-    await openReview(page);
-    await page.getByTestId('confirm-ack').check();
-    await expect(page.getByTestId('confirm-sign')).toBeEnabled();
-    // the header sits behind the modal: trigger its disconnect the way a script or a second tab would
-    await page.evaluate(() => (document.querySelector('[data-testid="wallet-disconnect"]') as HTMLElement).click());
-    const blocking = page.getByTestId('confirm-blocking');
-    await expect(blocking).toBeVisible();
-    await expect(page.getByTestId('confirm-blocking-list').locator('li[data-code="no-wallet"]')).toBeVisible();
-    await expect(page.getByTestId('confirm-sign')).toBeDisabled();
-    await expect(page.getByTestId('confirm-ack')).toBeDisabled();
+    await expect(page.getByTestId('order-place')).toBeEnabled();
+    await page.getByTestId('wallet-disconnect').click();
+    await expect(page.getByTestId('order-need-wallet')).toBeVisible();
+    await expect(page.getByTestId('order-place')).toBeDisabled();
     expect(await wallet!.calls()).toHaveLength(0);
     expect(await mock.submitted(false)).toHaveLength(0);
-    await page.getByTestId('confirm-cancel').click();
-    await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
   });
 });

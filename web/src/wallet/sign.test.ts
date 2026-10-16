@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SignFlowError, expectedOutputs, signAndSubmit, waitForAcceptance, type SignStage } from './sign';
+import { AUCTION_START_MARGIN_DAA, SignFlowError, auctionSubmitBy, expectedOutputs, signAndSubmit, waitForAcceptance, type SignStage } from './sign';
 import { createKaswareAdapter } from './kasware';
 import { createKaspireAdapter, dispatchTagFrom } from './kaspire';
 import { createKastleAdapter } from './kastle';
@@ -173,6 +173,35 @@ describe('signAndSubmit: failures stop at the right stage and nothing is broadca
     await signAndSubmit({ kob, node: n, adapter: kasware(), built, network: NET });
     const again = await signAndSubmit({ kob, node: n, adapter: kasware(), built, network: NET }).catch((e) => e);
     expect(again).toMatchObject({ stage: 'submitting', code: 'orphan' });
+  });
+});
+
+describe('signAndSubmit: an auction whose start passed while the wallet waited is not sent', () => {
+  it('reads the node clock after the signature: past `submitByDaa` nothing is broadcast (clock-moved), at it the transaction goes out', async () => {
+    const built = buildSend();
+    const late = seeded(built);
+    const now = (await late.getClock()).daa;
+    const stages: SignStage[] = [];
+    const err = await signAndSubmit({ kob, node: late, adapter: kasware(), built, network: NET, submitByDaa: now - 1n, onStage: (s) => stages.push(s) }).catch((e) => e);
+    expect(err).toBeInstanceOf(SignFlowError);
+    expect(err).toMatchObject({ code: 'clock-moved', stage: 'validating' });
+    // the wallet signed (its approval came too late), the node never saw the transaction
+    expect(stages).toContain('finalizing');
+    expect(stages).not.toContain('submitting');
+    expect(late.attempts).toHaveLength(0);
+    const ok = seeded(built);
+    const res = await signAndSubmit({ kob, node: ok, adapter: kasware(), built, network: NET, submitByDaa: (await ok.getClock()).daa });
+    expect(res.txid).toBe(built.tx.id);
+  });
+
+  it('auctionSubmitBy: the earliest auction started from the planning clock, plus the margin; resting orders and older starts are not auctions of this click', () => {
+    const at = 1_000_000n;
+    const st = (activeFrom: bigint, slope: bigint) => ({ kind: 'KobBid', state: { activeFrom: activeFrom.toString(), slope: slope.toString() } });
+    expect(auctionSubmitBy([st(at + 30n, 415_963n)], at)).toBe(at + 30n + AUCTION_START_MARGIN_DAA);
+    expect(auctionSubmitBy([st(at + 90n, 1n), st(at + 30n, 1n)], at)).toBe(at + 30n + AUCTION_START_MARGIN_DAA);
+    // a plain limit order, an order active at once, a start older than the plan (an amended order keeps it): nothing to guard
+    expect(auctionSubmitBy([st(0n, 0n), st(at + 30n, 0n), st(0n, 5n), st(at - 1n, 5n)], at)).toBeNull();
+    expect(AUCTION_START_MARGIN_DAA).toBe(20n);
   });
 });
 

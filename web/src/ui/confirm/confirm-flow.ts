@@ -35,7 +35,7 @@ export interface Failure {
   raw?: string;
 }
 
-const REPLAN_CODES = new Set(['orphan', 'double-spend', 'fee', 'script', 'invalid', 'validation', 'network-mismatch', 'account-changed', 'inputs-changed', 'inputs-unconfirmed']);
+const REPLAN_CODES = new Set(['orphan', 'double-spend', 'fee', 'script', 'invalid', 'validation', 'network-mismatch', 'account-changed', 'inputs-changed', 'inputs-unconfirmed', 'clock-moved']);
 
 /** Classifies whatever `signAndSubmit` threw. Never throws. */
 export function classifyFailure(e: unknown): Failure {

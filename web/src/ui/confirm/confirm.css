@@ -1,10 +1,8 @@
-/* Pre-sign confirmation screen. Uses the CSS variables of src/styles.css (light + dark). Phone first: single column, no horizontal scroll. */
+/* Confirmation screen (token issuance). Uses the CSS variables of src/styles.css (light + dark). Phone first: single column, no horizontal scroll. */
 .cf { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .cf-intro { margin: 0; font-weight: 600; }
 .cf-note { color: var(--muted); font-size: 0.88rem; margin: 0 0 6px; }
 
-.cf-checking { display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
-.cf-checking .cf-findings { margin: 0; }
 .cf-blocking { border: 2px solid var(--bad); background: var(--bad-bg); border-radius: var(--radius); padding: 12px 14px; }
 .cf-blocking h3 { color: var(--bad); margin-bottom: 4px; }
 .cf-blocking p { margin: 0 0 8px; }
@@ -15,15 +13,9 @@
 .cf-list-bad { color: var(--text); font-weight: 600; }
 
 .cf-summary { display: flex; flex-direction: column; gap: 12px; }
-.cf-shown-as { border: 1px solid var(--info); background: var(--info-bg); border-radius: var(--radius); padding: 8px 12px; margin: 0 0 12px; font-weight: 600; overflow-wrap: anywhere; }
-.cf-ladder { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; margin: 0 0 12px; font-size: 0.9rem; overflow-wrap: anywhere; }
-.cf-ladder-title { margin: 0 0 4px; font-weight: 600; }
-.cf-ladder ul { list-style: none; margin: 0; padding: 0; }
-.cf-ladder-now { font-weight: 600; }
 .cf-section { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--surface); min-width: 0; }
 .cf-section h3 { font-size: 1rem; margin: 0 0 6px; }
 .cf-section-locked { border-left: 4px solid var(--warn); }
-.cf-section-others { border-left: 4px solid var(--bad); }
 .cf-section-back { border-left: 4px solid var(--ok); }
 .cf-section-issue { border-left: 4px solid var(--primary); }
 .cf-section-net { border: 2px solid var(--primary); }
@@ -46,13 +38,7 @@
 .cf-muted .cf-value { font-weight: 500; }
 @media (max-width: 560px) { .cf-row { grid-template-columns: 1fr; } }
 
-.cf-card { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--surface-2); margin-top: 8px; min-width: 0; }
-.cf-card.cf-nested { margin-left: 12px; background: var(--surface); }
-.cf-card.cf-flagged { border-color: var(--bad); background: var(--bad-bg); }
-.cf-card-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: space-between; margin-bottom: 4px; }
-.cf-card-head h4 { margin: 0; font-size: 1rem; }
 .cf-badge { font-size: 0.78rem; padding: 1px 8px; border-radius: 999px; background: var(--ok-bg); color: var(--ok); white-space: nowrap; }
-.cf-badge-bad { background: var(--bad-bg); color: var(--bad); }
 
 .cf-wallet { border: 1px solid var(--info); background: var(--info-bg); border-radius: var(--radius); padding: 10px 14px; }
 .cf-wallet h3 { margin-bottom: 4px; }

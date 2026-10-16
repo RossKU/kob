@@ -7,7 +7,7 @@ import { loadKobNode } from '../../kob/wasm.node';
 import { TOK, makeEnv } from '../../testing/fixtures';
 import { nodeFactsOf, tradableRegistryJson } from '../../testing/chain-fixtures';
 import { t } from '../../i18n';
-import { buildConfirmModel, type Row } from './confirm-model';
+import type { Row } from './confirm-model';
 import { feeDisclosure, feeDisclosureOf, timeText } from './fee-disclosure';
 
 const estimate: FeeEstimate = { priority: 194, normal: 140, low: 115, seconds: { priority: 0.5, normal: 40, low: 1800 } };
@@ -147,26 +147,25 @@ describe('both languages: every text resolves (no leftover key or placeholder)',
   });
 });
 
-describe('the confirmation screen model carries the disclosure (real plan)', () => {
+describe('the disclosure of a real plan', () => {
   const kob = loadKobNode();
   const registry = parseRegistry(tradableRegistryJson(), { kob });
-  it('fee section: Network fee, Fee rate, Expected inclusion; the warning among the warnings', () => {
+  it('rows: Fee rate, Expected inclusion; the floor warning only without an estimate, and it never blocks signing', () => {
     const fees = { policy: policy(), estimate: { priority: 300, normal: 150, low: 110, seconds: { priority: 0.8, normal: 40, low: 1500 } } };
     const plan = planOrder({ ...makeEnv(), fees }, { type: 'market', side: 'buy', amount: 2n * TOK });
     expect(plan.ok).toBe(true);
     const built = plan.built!;
-    const summary = decodeSigning({ kob, built, maker: makeEnv().maker, registry, nodeInputs: nodeFactsOf(built), feePolicy: policy() });
-    const m = buildConfirmModel(summary, { registry, fee: feeDisclosureOf(built, tr()), tr: tr() });
-    const fee = m.sections.find((s) => s.id === 'fee')!;
-    expect(fee.rows.map((r) => r.id)).toEqual(['fee', 'fee-rate', 'fee-speed']);
-    expect(fee.rows[1]!.value).toBe('300 sompi per gram');
-    expect(m.warnings.some((w) => w.code === 'fee-estimate-unavailable')).toBe(false);
+    const d = feeDisclosureOf(built, tr());
+    expect(d.rows.map((r) => r.id)).toEqual(['fee-rate', 'fee-speed']);
+    expect(d.rows[0]!.value).toBe('300 sompi per gram');
+    expect(d.warnings.some((w) => w.code === 'fee-estimate-unavailable')).toBe(false);
 
     const floorPlan = planOrder({ ...makeEnv(), fees: { policy: policy(), estimate: null } }, { type: 'market', side: 'buy', amount: 2n * TOK });
     const fb = floorPlan.built!;
-    const m2 = buildConfirmModel(decodeSigning({ kob, built: fb, maker: makeEnv().maker, registry, nodeInputs: nodeFactsOf(fb) }), { registry, fee: feeDisclosureOf(fb, tr()), tr: tr() });
-    expect(m2.warnings.find((w) => w.code === 'fee-estimate-unavailable')!.text).toMatch(/^Fee estimate unavailable: paying the minimum rate/);
-    expect(m2.canSign).toBe(true); // a disclosure never blocks signing
+    const floor = feeDisclosureOf(fb, tr());
+    expect(floor.warnings.find((w) => w.code === 'fee-estimate-unavailable')!.text).toMatch(/^Fee estimate unavailable: paying the minimum rate/);
+    // a disclosure is a note: the decoder's verdict on the transaction does not depend on it
+    expect(decodeSigning({ kob, built: fb, maker: makeEnv().maker, registry, nodeInputs: nodeFactsOf(fb) }).ok).toBe(true);
   });
 });
 

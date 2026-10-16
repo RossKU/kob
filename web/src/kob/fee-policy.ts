@@ -366,13 +366,13 @@ export function atFloor<E extends FeeEnvFields>(env: E): E | null {
   return { ...env, feeRate: floor, feePick: { urgency: env.feePick.urgency, rate: floor, source: 'floor', reason: 'funds', clamped: false } };
 }
 
-/** Remembers what the built transaction pays for the confirmation screen (no-op when the environment has no policy / pick). */
+/** Remembers what the built transaction pays for the fee disclosure (no-op when the environment has no policy / pick). */
 export function recordFee(env: FeeEnvFields, built: BuiltFeeLike, rate: bigint): void {
   if (!env.fees || !env.feePick) return;
   rememberFeeChoice(built, describeFee(env.fees.policy, env.feePick, rate, BigInt(built.fee.fee)));
 }
 
-// choices of built transactions, for the confirmation screen (a WeakMap: no plan type carries it, a rebuilt object simply has none)
+// choices of built transactions, for the fee disclosure (a WeakMap: no plan type carries it, a rebuilt object simply has none)
 const choices = new WeakMap<object, FeeChoice>();
 export function rememberFeeChoice(built: object, choice: FeeChoice): void {
   choices.set(built, choice);

@@ -270,7 +270,7 @@ export interface EntryTerms {
 }
 
 /**
- * Plain-data description of one order state for confirmation screens. All amounts bigint (base units); prices are sompi per whole token, a pair
+ * Plain-data description of one order state for the pre-sign checks and the signer frame. All amounts bigint (base units); prices are sompi per whole token, a pair
  * order's B base units per whole A (its tip stays KAS, sompi per whole A).
  */
 export interface OrderDescription {

@@ -4,7 +4,7 @@
 // The wallet does it itself so a day order or an IOC rest comes back without waiting for a keeper (and keeps the tip).
 //
 // Safety: only plans that need no signature at all are submitted (a refund whose own value cannot pay the fee needs a funding input, i.e. a
-// signature: that one is left to the Refund button and its confirmation screen); the transaction is finalized and script-validated locally before it
+// signature: that one is left to the Refund button and the wallet's approval); the transaction is finalized and script-validated locally before it
 // is sent, and every output must pay the connected wallet key (the decoder's expectations: nothing leaves the wallet). One attempt per order per session.
 import { useEffect, useRef } from 'preact/hooks';
 import { buildCancelEnv } from '../../app/env';

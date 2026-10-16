@@ -310,10 +310,10 @@ export async function kasBalance(node, address) {
 const CONFIRM_ERR = ['confirm-error', 'confirm-rejected'];
 
 /**
- * The pre-sign screen -> wallet -> node acceptance round trip. Precondition: `confirm-screen` is (about to be) open.
- * Acknowledges what the screen asks for (plan warnings, fresh warnings, the final "I checked" box), refuses BLOCKING findings, signs, waits
- * for the transaction id and the app's acceptance status, closes the screen. Throws with the app's own error text on any failure.
- * `expectKind`: the decoded kind the screen must show (`create`, `cancel`, `cancel-replace`, `send` ...).
+ * The pre-sign screen of a token issuance -> wallet -> node acceptance round trip (orders have no such screen: `signFromTicket`, `runFlow`).
+ * Precondition: `confirm-screen` is (about to be) open.
+ * Ticks the "I checked" box, refuses BLOCKING findings, signs, waits for the transaction id and the app's acceptance status, closes the
+ * screen. Throws with the app's own error text on any failure. `expectKind`: the decoded kind the screen must show (`issue`).
  */
 export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expectKind } = {}) {
   const t0 = Date.now();
@@ -323,19 +323,10 @@ export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expe
   await sleep(300);
   const kind = await h.page.locator('[data-testid="confirm-screen"] .cf').getAttribute('data-kind').catch(() => null);
   const summary = collapse(await tid(h, 'confirm-summary').innerText().catch(() => ''));
-  const shownAs = collapse(await tid(h, 'confirm-shown-as').innerText().catch(() => ''));
   const fullText = await screen.innerText().catch(() => '');
   const screenshots = [await shot(h.page, shotDir, `${label}-confirm`)];
   if (await tid(h, 'confirm-blocking').count()) throw new Error(`the confirmation screen shows BLOCKING findings: ${collapse(await tid(h, 'confirm-blocking').innerText())}`);
   if (expectKind && kind !== expectKind) throw new Error(`the confirmation screen decodes the transaction as "${kind}", expected "${expectKind}": ${summary.slice(0, 300)}`);
-  const acks = [];
-  for (const id of ['confirm-plan-ack', 'confirm-fresh-ack']) {
-    const box = tid(h, id);
-    if (await box.count()) {
-      acks.push({ id, text: collapse(await tid(h, id.replace('-ack', '-warnings')).innerText().catch(() => '')) });
-      await box.check();
-    }
-  }
   await tid(h, 'confirm-ack').check();
   const submitsBefore = h.submits.length;
   const tSign = Date.now();
@@ -365,31 +356,89 @@ export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expe
   const submitted = h.submits.slice(submitsBefore).at(-1)?.tx ?? null;
   await tid(h, 'confirm-close').click();
   await sleep(500);
-  return { txid, kind, appStatus: status, summary, shownAs, acks, confirmText: fullText, popups, screenshots, signMs, totalMs: Date.now() - t0, submitted };
+  return { txid, kind, appStatus: status, summary, shownAs: '', acks: [], confirmText: fullText, popups, screenshots, signMs, totalMs: Date.now() - t0, submitted };
+}
+
+/** The phases of an order action's status line (`order-status` / `flow-status`) that end it without a transaction. */
+const STOPPED = ['blocked', 'rejected', 'failed'];
+
+/** The status line's sentence when it stopped (`send-error`), with its code. */
+async function statusError(h, scope) {
+  const line = tid(h, scope);
+  const err = line.locator('[data-testid="send-error"]');
+  const code = await err.getAttribute('data-code').catch(() => null);
+  return `${scope} ${await line.getAttribute('data-phase').catch(() => '?')} (${code ?? '-'}): ${collapse(await err.innerText().catch(() => ''))}`;
 }
 
 /**
- * Runs every confirmation screen of a My orders transaction flow (cancel, cancel of a position, merge ...) until the flow shows its result.
- * Returns the signed steps in order. Throws when the flow ends with an error or without a submitted transaction. Open My orders fresh before the
- * action (scenarios.mjs `openOrders`): an error banner of an earlier flow on the same page would be taken for this one's.
+ * An order of the ticket: `click()` presses the order button, which checks the order silently and asks the wallet at once (no confirmation
+ * screen). Approves the wallet's popup(s), waits for the transaction id on the ticket's status line (`order-status`) and the app's acceptance
+ * status. Throws with the app's own sentence when it stops (a blocking check, a rejection, a failure).
  */
-export async function runFlow(h, ctx, wallet, label, shotDir, { expectKind, maxSteps = 12 } = {}) {
-  const steps = [];
-  for (let i = 0; i < maxSteps; i++) {
-    const t0 = Date.now();
+export async function signFromTicket(h, ctx, wallet, label, shotDir, click) {
+  const t0 = Date.now();
+  const line = tid(h, 'order-status');
+  const submitsBefore = h.submits.length;
+  const { popups } = await wallet.approve(ctx, async () => {
+    await click();
+    const t1 = Date.now();
     for (;;) {
-      if (await tid(h, 'confirm-screen').count()) break;
-      // (a result banner before the first step is the previous flow's: the new one is still being planned)
-      if (steps.length > 0 && (await tid(h, 'flow-done').count())) return { steps, done: collapse(await tid(h, 'flow-done').innerText()) };
-      for (const e of ['flow-error', 'flow-plan-errors', 'orders-action-error']) {
-        if (await tid(h, e).count()) throw new Error(`${e}: ${collapse(await tid(h, e).innerText()).slice(0, 600)}`);
-      }
-      if (Date.now() - t0 > 90_000) throw new Error(`${label}: neither a confirmation screen nor the flow result after 90 s`);
+      const phase = await line.getAttribute('data-phase').catch(() => null);
+      if (phase === 'submitted') return;
+      if (STOPPED.includes(phase)) throw new Error(await statusError(h, 'order-status'));
+      if (Date.now() - t1 > POPUP_TIMEOUT_MS + 60_000) throw new Error('timed out waiting for the transaction id');
       await sleep(400);
     }
-    steps.push(await signOnConfirmScreen(h, ctx, wallet, `${label}-${i + 1}`, shotDir, { expectKind }));
+  });
+  const txid = await line.locator('[data-testid="tx-id"]').getAttribute('data-value');
+  const signMs = Date.now() - t0;
+  // the app's own acceptance status (node UTXO polling), bounded
+  let status = null;
+  const t2 = Date.now();
+  while (Date.now() - t2 < ACCEPT_TIMEOUT_MS) {
+    status = await line.locator('[data-testid="tx-status"]').getAttribute('data-status').catch(() => null);
+    if (status === 'confirmed') break;
+    await sleep(1000);
   }
-  throw new Error(`${label}: more than ${maxSteps} confirmation screens`);
+  const screenshots = [await shot(h.page, shotDir, `${label}-accepted`)];
+  const submitted = h.submits.slice(submitsBefore).at(-1)?.tx ?? null;
+  return { txid, kind: null, appStatus: status, summary: collapse(await line.innerText().catch(() => '')), shownAs: '', acks: [], popups, screenshots, signMs, totalMs: Date.now() - t0, submitted };
+}
+
+/**
+ * Runs a My orders transaction flow (cancel, cancel of a position, merge ...) that the action's button has just started: every step asks the wallet
+ * at once (no confirmation screen), the next one after each submission. Approves the popups until the flow shows its result and returns one step
+ * per submitted transaction. Throws when the flow stops or ends with an error. Open My orders fresh before the action (scenarios.mjs
+ * `openOrders`): an error banner of an earlier flow on the same page would be taken for this one's.
+ */
+export async function runFlow(h, ctx, wallet, label, shotDir, { maxSteps = 12 } = {}) {
+  const t0 = Date.now();
+  const submitsBefore = h.submits.length;
+  let shownAs = '';
+  let done = '';
+  const { popups } = await wallet.approve(ctx, async () => {
+    for (;;) {
+      if (!shownAs && (await tid(h, 'flow-shown-as').count())) shownAs = collapse(await tid(h, 'flow-shown-as').innerText().catch(() => ''));
+      if (await tid(h, 'flow-done').count()) {
+        done = collapse(await tid(h, 'flow-done').innerText());
+        return;
+      }
+      const phase = await tid(h, 'flow-status').getAttribute('data-phase').catch(() => null);
+      if (STOPPED.includes(phase)) throw new Error(await statusError(h, 'flow-status'));
+      for (const e of ['flow-error', 'flow-stopped', 'flow-plan-errors', 'orders-action-error']) {
+        if (await tid(h, e).count()) throw new Error(`${e}: ${collapse(await tid(h, e).innerText()).slice(0, 600)}`);
+      }
+      if (Date.now() - t0 > 90_000 + maxSteps * POPUP_TIMEOUT_MS) throw new Error(`${label}: the flow did not end`);
+      await sleep(400);
+    }
+  });
+  const screenshots = [await shot(h.page, shotDir, `${label}-done`)];
+  const subs = h.submits.slice(submitsBefore).filter((x) => x.tx);
+  if (subs.length > maxSteps) throw new Error(`${label}: more than ${maxSteps} transactions`);
+  const steps = subs.map((x, i) => ({
+    txid: x.tx.id ?? null, kind: null, appStatus: 'submitted', summary: '', shownAs, acks: [], popups: i === 0 ? popups : [], screenshots, signMs: null, totalMs: Date.now() - t0, submitted: x.tx,
+  }));
+  return { steps, done };
 }
 
 export function writeJson(name, obj) {

@@ -1,6 +1,6 @@
 // Token issuance (`kob token issue` in the browser): a fixed-supply KCC-20 token on the KCC-20 reference program, KOB's standard 3 / 3
 // build `KCC20Ref` by default or the reference's published public-mint build `KCC20PublicMint`. Form -> live validation ->
-// debounced `planIssue` -> summary -> the shared pre-sign screen (ConfirmSign) -> tracker + result panel with the registry entry.
+// debounced `planIssue` -> summary -> the issuance pre-sign screen (ConfirmSign) -> tracker + result panel with the registry entry.
 // All protocol logic is in kob/issue.ts (kob-wasm); this view only collects strings and renders findings.
 import { useMemo, useState } from 'preact/hooks';
 import { readFees } from '../../app/env';

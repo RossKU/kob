@@ -1,12 +1,12 @@
 // Screen details a user sees and clicks, each a regression of a defect found in a hands-on pass over the app (mock stack): the wallet
-// address after a network switch, a confirmation screen that opens at its title, copy buttons, the pair ticket's price unit, panels when the
+// address after a network switch, copy buttons, the pair ticket's price unit, panels when the
 // indexer is down, the settings that pin servers and their reset, the skip link, a token of 18 decimals, the depth legend, the issue summary.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
 import { connectWallet, fund, listExkcc, openMarket } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
-import { fillFields, pickType, reviewAndSign, waitReviewable } from '../helpers/ticket';
+import { fillFields, pickType, placeOrder, readDisclosure, settlePlan, waitReviewable } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -21,19 +21,6 @@ test.describe('KasWare that starts on mainnet and switches', () => {
     await expect(page.getByTestId('wallet-connected')).toHaveAttribute('data-network', 'testnet-10');
     await expect(page.getByTestId('wallet-address')).toHaveAttribute('data-value', TEST_KEYS.alice.testnetAddress);
   });
-});
-
-test('the confirmation screen opens at its title, not scrolled past it', async ({ appPage: page, mock }) => {
-  await fund(mock);
-  await openMarket(page, mock);
-  await pickType(page, 'ifd', 'buy');
-  await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' });
-  await waitReviewable(page);
-  await page.getByTestId('order-review').click();
-  const screen = page.getByTestId('confirm-screen');
-  await expect(screen).toBeVisible();
-  await expect(screen.locator('.modal-head h2')).toBeInViewport();
-  expect(await page.locator('.modal-backdrop').evaluate((el) => el.scrollTop)).toBe(0);
 });
 
 test('copy buttons keep their label on one line (token details)', async ({ appPage: page, mock }) => {
@@ -182,10 +169,13 @@ test.describe('a token of 18 decimals', () => {
     await expect(page.getByTestId('order-ticket')).toBeVisible();
     // the standard scale is 10^9 base units: a billionth of a token, not "one whole token"
     await expect(page.getByTestId('token-scale')).toContainText('per 1000000000 base units (0.000000001 token)');
-    // the book quotes 0.025 KAS per 10^9 base units = 25,000,000 KAS per token; a sell far below it is flagged with the per-token reference
+    // the book quotes 0.025 KAS per 10^9 base units = 25,000,000 KAS per token; a sell far below it crosses the book, and the disclosure names the
+    // market price per whole token (the planner's price warning itself is not shown)
     await pickType(page, 'limit', 'sell');
     await fillFields(page, { amount: '1', price: '1' });
-    await expect(page.getByTestId('order-issue-PRICE_AGGRESSIVE_VS_MARKET')).toContainText(/\(2[45]\d{6} KAS\)/);
+    await settlePlan(page);
+    await expect(page.getByTestId('order-issue-PRICE_AGGRESSIVE_VS_MARKET')).toHaveCount(0);
+    expect((await readDisclosure(page)).rows.expected).toMatch(/^2[45],\d{3},\d{3} EIGHTEEN \/ KAS/);
     await expect(page.getByTestId('balance-free')).toContainText('1.234567890123456789');
     expect(await noPageScroll(page)).toBe(true);
   });
@@ -201,7 +191,7 @@ test('closing a buy-first position that bought nothing yet does not offer to sel
   await openMarket(page, mock);
   await pickType(page, 'ifd', 'buy');
   await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' });
-  const { placed } = await reviewAndSign(page, mock);
+  const placed = await placeOrder(page, mock);
   const entryId = placed.views[0].covenant_id as string;
   await page.getByTestId('nav-orders').click();
   await page.getByTestId(`position-close-${entryId}`).click();
@@ -227,7 +217,7 @@ test('without the registry the banner matches what the page does: indexer tokens
   await expect(page.getByTestId('banner-registry')).toContainText('unlisted tokens named by their covenant id');
   await expect(page.getByTestId('banner-registry')).not.toContainText('not tradable');
   await expect(page.getByTestId('order-ticket')).not.toHaveAttribute('data-state', 'untradable');
-  await expect(page.getByTestId('ticket-open-caution')).toBeVisible();
+  await expect(page.getByTestId('token-open-caution')).toBeVisible();
 });
 
 test('a side or type switch keeps the amount and the price; the stop, exit and tip start over', async ({ appPage: page, mock }) => {
@@ -252,26 +242,6 @@ test('a side or type switch keeps the amount and the price; the stop, exit and t
   await expect(page.getByTestId('order-amount')).toHaveValue('2');
   await expect(page.getByTestId('order-tip')).toHaveValue('');
   await expect(page.getByTestId('field-stop')).toHaveValue('');
-});
-
-test('the confirmation screen starts with the net effect; the wallet inputs and change are folded', async ({ appPage: page, mock }) => {
-  await fund(mock);
-  await openMarket(page, mock);
-  await pickType(page, 'ifd', 'buy');
-  await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' });
-  await waitReviewable(page);
-  await page.getByTestId('order-review').click();
-  const summary = page.getByTestId('confirm-summary');
-  await expect(summary.locator(':scope > section').first()).toHaveAttribute('data-testid', 'confirm-section-net');
-  await expect(page.getByTestId('confirm-net-net-kas')).toContainText(/^-/);
-  await expect(page.getByTestId('confirm-net-net-locked')).toContainText('KAS');
-  // "What you spend" (2,000 KAS of inputs) and the change are behind a closed fold, not above the orders
-  const flows = page.getByTestId('confirm-flows');
-  await expect(flows).not.toHaveAttribute('open', '');
-  await expect(page.getByTestId('confirm-section-spend')).toBeHidden();
-  await flows.locator('summary').click();
-  await expect(page.getByTestId('confirm-section-spend')).toBeVisible();
-  await expect(page.getByTestId('confirm-section-back')).toBeVisible();
 });
 
 test('the header after connecting: one network badge, a compact wallet chip, short on a phone', async ({ appPage: page, mock }) => {

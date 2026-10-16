@@ -1,28 +1,27 @@
-// Review without waiting for the indexer, and the re-check that gates the signature (pure).
+// The order button without waiting for the indexer, and the re-check that gates the signature (pure).
 //
-// The freshness rule of a Review (OrderTicket `prepareLevel`):
-//  1. The confirmation opens from the environment already on hand (use-ticket.ts) when its oldest part was read at most REVIEW_CACHE_MS ago, planned
+// The freshness rule of a click on the order button (OrderTicket `prepareLevel`):
+//  1. The order is planned at once from the environment already on hand (use-ticket.ts) when its oldest part was read at most REVIEW_CACHE_MS ago,
 //     with the node clock read at the click (or, when the node takes longer than CLOCK_WAIT_MS, the cached clock projected to now: `projectClock`).
 //     Inputs of every transaction this page has submitted are left out of it, however old the read (app/pending-spends.ts). An environment older
 //     than that, or a plan from it that has errors (holdings still being read for a sell ...), waits for a read started at most REVIEW_REUSE_MS
 //     before the click instead.
-//  2. Signing stays blocked until the environment AT THE CLICK plans the SAME order into the SAME transaction, with no error and no warning the screen
-//     did not show (`recheckVerdict`): the book, the wallet's own orders (self-trade) and its holdings. A part on hand is the state at the click when
+//  2. The wallet is asked only once the environment AT THE CLICK plans the SAME order into the SAME transaction without an error
+//     (`recheckVerdict`): the book, the wallet's own orders (self-trade) and its holdings. Warnings never stop it. A part on hand is the state at the click when
 //     it is complete, no read of it is running or queued, no notice concerning it arrived since its read started, and either its read started within REVIEW_REUSE_MS of the click, or (`partCurrent`) the
 //     feed has delivered its notices without a gap since before that read (IndexerFeed.liveSince: every change of the book or of the wallet's
 //     orders sends one, and a notice starts a new read), the read is at most REVIEW_CACHE_MS old and this page has submitted nothing since. Only
 //     the parts that are not are read again (from REVIEW_REUSE_MS before the click on); when none needs it, signing waits for nothing but rule 3.
-//  3. As before, the confirmation screen also re-reads every input on the NODE (kob/node-verify.ts) and blocks signing until each one is confirmed
-//     unspent with the amount and script the transaction commits to. The node, not the indexer, is the authority for the coins.
+//  3. The send's own checks (ui/confirm/send.ts) also re-read every input on the NODE (kob/node-verify.ts) and stop the order unless each one is
+//     confirmed unspent with the amount and script the transaction commits to. The node, not the indexer, is the authority for the coins.
 import { errors, type Clock, type OrderPlan, type PlanIssue } from '../../kob/plan-types';
 import type { BuiltTx } from '../../kob/types';
-import { newWarnings } from './plan-expected';
 
 /** a read this recent (and nothing newer on its way) is the state at the click, whatever the feed */
 export const REVIEW_REUSE_MS = 3_000;
-/** the confirmation opens at once from parts read at most this long ago (the background keeps them younger: ENV_REFRESH_MS) */
+/** the order is planned at once from parts read at most this long ago (the background keeps them younger: ENV_REFRESH_MS) */
 export const REVIEW_CACHE_MS = 30_000;
-/** how long Review waits for the node clock before it projects the cached one */
+/** how long the order button waits for the node clock before it projects the cached one */
 export const CLOCK_WAIT_MS = 500;
 
 /**
@@ -35,7 +34,7 @@ export function projectClock(c: Clock, elapsedMs: number): Clock {
   return { ...c, unixSeconds: c.unixSeconds + sec, daa: c.daa + (sec * BigInt(Math.max(0, Math.round(c.rateMilli)))) / 1000n };
 }
 
-/** The clock of a Review: `read()` when it answers within `waitMs`, else (or when it fails) `cached` projected from `cachedAtMs` to now. */
+/** The clock of a click: `read()` when it answers within `waitMs`, else (or when it fails) `cached` projected from `cachedAtMs` to now. */
 export async function reviewClock(
   read: () => Promise<Clock>,
   cached: Clock,
@@ -76,15 +75,13 @@ const txKey = (b: BuiltTx): string => JSON.stringify(b.tx, (_k, v) => (typeof v 
 /** The same transaction, byte for byte (the unsigned JSON: inputs, outputs, scripts, fee). */
 export const sameTransaction = (a: BuiltTx, b: BuiltTx): boolean => txKey(a) === txKey(b);
 
-/** The outcome of the re-check: `issues` are what changed in words (errors, or warnings the screen did not show); none: another transaction. */
+/** The outcome of the re-check: `issues` are what changed in words (errors); none: another transaction. */
 export type RecheckVerdict = { ok: true } | { ok: false; issues: PlanIssue[] };
 
-/** Whether the plan the confirmation shows (`shown`) still stands against the re-read environment (`fresh`, same intent, same clock and fees). */
+/** Whether the plan made at the click (`shown`) still stands against the re-read environment (`fresh`, same intent, same clock and fees). */
 export function recheckVerdict(shown: OrderPlan, fresh: OrderPlan): RecheckVerdict {
   const errs = errors(fresh);
   if (!fresh.ok || !fresh.built || errs.length > 0) return { ok: false, issues: errs };
-  const warn = newWarnings(shown, fresh);
-  if (warn.length > 0) return { ok: false, issues: warn };
   if (!shown.built || !sameTransaction(shown.built, fresh.built)) return { ok: false, issues: [] };
   return { ok: true };
 }

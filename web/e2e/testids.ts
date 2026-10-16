@@ -27,17 +27,24 @@ export const TESTID = {
   orderAmount: 'order-amount',
   orderPrice: 'order-price',
   orderTip: 'order-tip',
-  orderReview: 'order-review',
+  /** the ONE button of the ticket: checks, the wallet's own approval, send (there is no confirmation screen for orders) */
+  orderPlace: 'order-place',
   orderIssues: 'order-issues',
-  // pre-sign confirmation
-  confirmScreen: 'confirm-screen',
-  confirmSummary: 'confirm-summary',
-  confirmBlocking: 'confirm-blocking',
-  confirmSign: 'confirm-sign',
-  confirmCancel: 'confirm-cancel',
-  // transaction result
+  /** the inline status line under the button (`data-phase`: checking | signing | sending | submitted | blocked | rejected | failed) */
+  orderStatus: 'order-status',
+  /** inside a status line: the submitted transaction (`data-status`, `data-value` = full txid) or one error (`data-code`) */
   txStatus: 'tx-status',
   txId: 'tx-id',
+  sendError: 'send-error',
+  // My orders: the flow of an action (the first wallet request is made at once) and its status line
+  txFlow: 'tx-flow',
+  flowStatus: 'flow-status',
+  flowDone: 'flow-done',
+  flowStopped: 'flow-stopped',
+  // issuance only: the token issue page still has its confirmation screen
+  confirmScreen: 'confirm-screen',
+  confirmSign: 'confirm-sign',
+  confirmClose: 'confirm-close',
   // my orders
   ordersList: 'orders-list',
   ordersCancelAll: 'orders-cancel-all',

@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT, collapse, log, shot, sleep } from './common.mjs';
-import { goto, outputsOf, runFlow, signOnConfirmScreen } from './driver.mjs';
+import { goto, outputsOf, runFlow, signFromTicket, signOnConfirmScreen } from './driver.mjs';
 
 const tid = (h, id) => h.page.getByTestId(id);
 const short = (s) => (s ? `${s.slice(0, 10)}...` : '-');
@@ -54,7 +54,7 @@ async function scenario(rc, name, fn) {
       } catch {
         /* ignore */
       }
-      // a failure must not leave a dialog or a confirmation screen over the next scenario
+      // a failure must not leave a dialog (an amend form, the issuance confirmation) over the next scenario
       await closeDialogs(rc.h).catch(() => {});
     }
   }
@@ -290,8 +290,8 @@ async function openTicket(rc, { pair = false } = {}) {
 }
 
 /**
- * Fills the order ticket and opens the confirmation screen. spec: { type, side, fields: {intent path: value}, pair?, expectSummary?: RegExp }.
- * Acknowledges the ticket's own gates when shown (covenant check, unavailable guards, an unverified market start).
+ * Fills the order ticket until its order button is enabled. spec: { type, side, fields: {intent path: value}, pair?, expectSummary?: RegExp }.
+ * Acknowledges the ticket's own gates when shown (covenant check, unavailable guards, an unverified market start). Returns how to press the button.
  */
 async function fillTicket(rc, spec) {
   const { h } = rc;
@@ -303,7 +303,7 @@ async function fillTicket(rc, spec) {
   if ((await ticket.getAttribute('data-side')) !== spec.side) throw new Error(`the ticket did not switch to the ${spec.side} side`);
   await fillFields(h, spec.fields);
   const gate = await passCovenantGate(rc);
-  const review = tid(h, 'order-review');
+  const review = tid(h, 'order-place');
   const acks = [];
   for (let i = 0; i < 90; i++) {
     for (const id of ['order-guards-ack', 'order-market-start-ack']) {
@@ -319,22 +319,24 @@ async function fillTicket(rc, spec) {
   if (!(await review.isEnabled())) {
     const issues = await tid(h, 'order-issues').innerText().catch(() => '');
     const needs = await tid(h, 'order-needs').innerText().catch(() => '');
-    throw new Error(`order review stays disabled. issues: ${collapse(issues)} needs: ${collapse(needs)}`);
+    throw new Error(`the order button stays disabled. issues: ${collapse(issues)} needs: ${collapse(needs)}`);
   }
   const issues = await h.page.evaluate(() => [...document.querySelectorAll('[data-testid="order-issues"] li')].map((li) => ({ code: li.dataset.code, severity: li.dataset.severity })));
-  const disclosure = collapse(await tid(h, 'order-disclosure').innerText().catch(() => ''));
+  // what the ticket says it orders: the side, the type and the figures of its disclosure
+  const typeText = collapse(await tid(h, 'order-type').locator('option:checked').innerText().catch(() => ''));
+  const disclosure = `${spec.side} ${typeText}: ${collapse(await tid(h, 'order-disclosure').innerText().catch(() => ''))}`;
   const balancesBefore = collapse(await tid(h, 'order-balances').innerText().catch(() => ''));
-  await review.click();
-  return { disclosure, balancesBefore, issues, acks, gate };
+  return { disclosure, balancesBefore, issues, acks, gate, click: () => review.click() };
 }
 
 /** Place through the ticket, sign, verify on the node. Returns the step record plus what the cancel needs. */
 async function place(rc, r, label, spec) {
   const before = new Set(Object.keys(await readRecords(rc.h)));
   const t = await fillTicket(rc, spec);
-  const s = await signOnConfirmScreen(rc.h, rc.ctx, rc.drv, label, rc.name, { expectKind: 'create' });
+  const s = await signFromTicket(rc.h, rc.ctx, rc.drv, label, rc.name, t.click);
   if (!s.submitted) throw new Error('the submitted transaction was not captured from the node connection');
-  if (spec.expectSummary && !spec.expectSummary.test(s.summary)) throw new Error(`the confirmation summary does not say what was ordered (${spec.expectSummary}): ${s.summary.slice(0, 400)}`);
+  // what was ordered is said by the ticket's own figures (there is no confirmation screen)
+  if (spec.expectSummary && !spec.expectSummary.test(t.disclosure)) throw new Error(`the ticket does not say what is ordered (${spec.expectSummary}): ${t.disclosure.slice(0, 400)}`);
   const step = { ...stepOf(`place ${label}`, s), disclosure: t.disclosure, ticketIssues: t.issues, ticketAcks: t.acks.length ? t.acks : undefined, covenantGate: t.gate ?? undefined, balancesBefore: t.balancesBefore };
   r.steps.push(step);
   step.verify = await verifyCreated(rc, s.submitted, s.txid, label);
@@ -421,7 +423,7 @@ async function cancelStep(rc, r, label, { placed, covenantIds, position = false,
     if (!(await btn.isEnabled())) throw new Error(`the cancel button of ${short(covenantIds[0])} is disabled: ${await btn.getAttribute('title')}`);
     await btn.click();
   }
-  const { steps } = await runFlow(h, rc.ctx, rc.drv, `${label}-cancel`, rc.name, { expectKind: position ? undefined : 'cancel' });
+  const { steps } = await runFlow(h, rc.ctx, rc.drv, `${label}-cancel`, rc.name);
   const s = steps.at(-1);
   if (!s.submitted) throw new Error('the cancel transaction was not captured from the node connection');
   const step = { ...stepOf(`cancel ${label}`, s), ordersBefore: rows, balancesPanelBeforeCancel: balancesPanel };
@@ -552,7 +554,7 @@ export async function runAmend(rc) {
     const preview = collapse(await tid(h, 'amend-preview').innerText());
     if (!/55/.test(preview)) throw new Error(`the amend preview does not show the new price: ${preview}`);
     await tid(h, 'amend-review').click();
-    const { steps } = await runFlow(h, rc.ctx, rc.drv, 'amend', rc.name, { expectKind: 'cancel-replace' });
+    const { steps } = await runFlow(h, rc.ctx, rc.drv, 'amend', rc.name);
     const s = steps.at(-1);
     if (!s.submitted) throw new Error('the amend transaction was not captured');
     const step = { ...stepOf('amend price 50 -> 55', s), rowBefore: before, preview };
@@ -607,7 +609,7 @@ export async function runPair(rc) {
   return scenario(rc, 'pair', async (r) => {
     if (!rc.tokenB) throw new Error('the pair scenario needs token B (issued with --only including pair)');
     const B = (n) => ({ token: rc.tokenB.tokenId, amount: n });
-    await placeAndCancel(rc, r, 'pair-limit-sell', { pair: true, type: 'limit', side: 'sell', fields: { amount: 2, price: 5 }, expectSummary: new RegExp(`sells ${rc.token.ticker} for ${rc.tokenB.ticker}`) }, { tokensBack: A(rc, 2) });
+    await placeAndCancel(rc, r, 'pair-limit-sell', { pair: true, type: 'limit', side: 'sell', fields: { amount: 2, price: 5 }, expectSummary: new RegExp(`${rc.tokenB.ticker}`) }, { tokensBack: A(rc, 2) });
     // a buy of 1 A at 0.5 B: at least 0.5 B escrowed
     await placeAndCancel(rc, r, 'pair-limit-buy', { pair: true, type: 'limit', side: 'buy', fields: { amount: 1, price: 0.5 }, expectSummary: new RegExp(`buys ${rc.token.ticker} with ${rc.tokenB.ticker}`) }, { tokensBack: B(TOKEN / 2n) });
   });
@@ -671,12 +673,12 @@ export async function runMerge(rc) {
     if (!(n >= 2)) throw new Error(`the merge button does not state the UTXO count: "${before.mergeButton}"`);
     const trackedBefore = (await trackedTokens(h)).filter((x) => x.token === token);
     await tid(h, `orders-merge-token-${token}`).click();
-    const { steps, done } = await runFlow(h, rc.ctx, rc.drv, 'merge', rc.name, { expectKind: 'send' });
+    const { steps, done } = await runFlow(h, rc.ctx, rc.drv, 'merge', rc.name);
     const expectLinks = n <= 3 ? 1 : 1 + Math.ceil((n - 3) / 2);
     const step = { name: `merge ${n} UTXOs`, balancesBefore: before, trackedBefore, links: steps.map((s) => stepOf('merge link', s)), done };
     r.steps.push(step);
     if (steps.length !== expectLinks) throw new Error(`a merge of ${n} UTXOs should take ${expectLinks} transaction(s), the flow had ${steps.length}`);
-    if (!new RegExp(`Merge ${n} ${rc.token.ticker} UTXOs into 1`).test(steps[0].shownAs)) throw new Error(`the confirmation screen does not state the merge: "${steps[0].shownAs}"`);
+    if (!new RegExp(`Merge ${n} ${rc.token.ticker} UTXOs into 1`).test(steps[0].shownAs)) throw new Error(`the merge flow does not state the merge: "${steps[0].shownAs}"`);
     // node: every merged input is spent, the last link's single token output is unspent
     const last = steps.at(-1);
     const outs = outputsOf(rc.node, last.submitted).filter((o) => o.p2sh && o.address);

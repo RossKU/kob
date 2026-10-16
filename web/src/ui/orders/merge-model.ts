@@ -52,11 +52,11 @@ export function mergeableCounts(freeTokens: readonly TokenUtxo[], tokens: Readon
   return out;
 }
 
-/** The whole merge in one line (shown on every confirmation screen of the chain). */
+/** The whole merge in one line (shown while each transaction of the chain runs). */
 export const mergeSummary = (plan: Pick<MergePlan, 'before' | 'after' | 'links' | 'fee'>, ticker: string): string =>
   t('orders.merge.summary', { ticker, before: plan.before, after: plan.after, txs: plan.links.length, fee: formatKas(plan.fee) });
 
-/** A link as a flow plan (TxFlow / ConfirmSign take the built transaction, the claims to check and the plan's notes). */
+/** A link as a flow plan (TxFlow takes the built transaction and the claims to check). */
 export function mergeFlowPlan(link: MergeLink): CancelPlan {
   return { ok: true, issues: link.issues, request: null, built: link.built, cancelIds: [], expected: { cancelIds: [] }, tokensReturned: 0n, kasReleased: 0n, fundingUsed: link.fundingUsed };
 }

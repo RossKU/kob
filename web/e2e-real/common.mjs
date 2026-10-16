@@ -222,7 +222,7 @@ export async function findPopup(ctx, wallet, { handled = new WeakSet(), timeoutM
  * Returns a controller: `stop()` ends the watch and resolves to `[{index, url, result?, error?}]`.
  *
  *   const watch = approvePopups(ctx, kaswareApprover(), { wallet: 'kasware' });
- *   await page.click('#confirm-sign');            // the app asks the wallet to sign
+ *   await page.click('[data-testid="order-place"]'); // the app asks the wallet to sign
  *   const seen = await watch.stop();              // popups that appeared and how they were handled
  */
 export function approvePopups(ctx, handler, { wallet, pollMs = 250 } = {}) {

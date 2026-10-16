@@ -1,28 +1,27 @@
 // The order-entry form for one token: EVERY order type of docs/spec/order-types.md.
 //
 // A thin renderer: the form keeps text (`form-state.ts` turns it into an Intent), the planner (`kob/plan.ts`) validates it against the protocol and
-// wallet rules and builds the transaction, `disclosure-model.ts` explains what the order costs and does, and the confirmation screen
-// (`ui/confirm`) decodes the built transaction once more before anything is signed. Review is enabled only for a built, error-free plan.
+// wallet rules and builds the transaction, `disclosure-model.ts` explains what the order costs and does. The order button is enabled only for a
+// built, error-free plan; a click plans the order again from the state at the click, checks the built transaction silently (`ui/confirm/send.ts`:
+// decoded and compared with the plan) and asks the wallet for its approval at once. Progress and the result are one line under the button.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
-import { explorerTxUrl } from '../../config';
 import { has, t } from '../../i18n';
 import { issueText, keyedText } from '../../i18n/issue-text';
 import { buildErrorText, rawOf } from '../../i18n/build-error';
 import { MARKET_START_UNVERIFIED_MIN_SOMPI, marketStartAckOf, planOrder, type Intent } from '../../kob/plan';
 import { errors, isPairEnv, type Clock, type OrderPlan } from '../../kob/plan-types';
 import type { TokenInfo } from '../../kob/registry';
-import type { ExpectedSigning } from '../../kob/decode';
-import type { BuiltTx } from '../../kob/types';
 import { formatKas, formatUnits, quoteOf } from '../../kob/units';
 import { DEFAULT_CARRIER } from '../../kob/orders/common';
-import { Banner, Button, CopyText, Loading, RawDetails, Segmented, useAsync } from '../kit';
+import { Banner, Button, Loading, RawDetails, Segmented, useAsync } from '../kit';
 import { bookFromIndexer, readClock } from '../../app/env';
 import { readPairReferences, readReferences, type References } from '../../data/indexer-crosscheck';
 import type { MarketStartAck, PlanEnv } from '../../kob/plan-types';
-import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
-import { nativeToInvertedPriceText, oppositeSide, pairLabel } from '../market/orientation';
-import { OpenTokenNote, PowersWarning, SharedTickerNote } from '../market/TokenBadges';
+import { auctionSubmitBy } from '../../wallet/sign';
+import { SendStatusLine, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
+import type { SendJob } from '../confirm/send';
+import { oppositeSide } from '../market/orientation';
 import { DisclosurePanel } from './DisclosurePanel';
 import { useCovenantSignGate } from './CovenantSignGate';
 import { TicketFields } from './TicketFields';
@@ -32,7 +31,7 @@ import {
   setSide, setValue, sidesOf, switchType, visibleErrors,
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
-import { expectedFromPlan, newWarnings } from './plan-expected';
+import { expectedFromPlan } from './plan-expected';
 import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
 import { maxBuyAmount } from './max-amount';
 import { orderLabel } from './order-label';
@@ -53,10 +52,6 @@ export interface OrderTicketProps {
   /** optional prefill from the book (click on a level) */
   /** `price`: the state price (sompi per whole token); `amount`: base units */
   prefill?: { side?: 'buy' | 'sell'; price?: bigint; amount?: bigint; type?: OrderTypeId };
-  /** template capabilities of the token program (indexer `powers`): freeze / seize put escrowed orders at the issuer's discretion */
-  powers?: readonly string[];
-  /** another listed token uses this token's ticker (or the pair's base / quote): a short note names the covenant id as the identity */
-  sharedTicker?: boolean;
   /**
    * the market is shown inverted (KAS/TOKEN): the ticket speaks the shown pair, whose base is KAS. The side buttons name the side of KAS (Buy = buy
    * KAS = sell the token), prices are tokens per KAS and amounts are KAS, converted at the order's price (form-state.ts, KAS amounts). The order
@@ -65,22 +60,17 @@ export interface OrderTicketProps {
   inverted?: boolean;
 }
 
-interface ConfirmState {
-  built: BuiltTx;
-  expected: ExpectedSigning;
-  title: string;
-  label: string;
-  /** an inverted market: the order in the shown pair's words, above the decoded transaction */
-  shownAs?: string | undefined;
-  /** warnings of the plan made at Review from fresh data that the plan the user looked at did not have */
-  freshWarnings?: string[];
-  /** a ladder: every order of it, and the index of the one being signed */
-  ladder?: { lines: string[]; current: number };
-  /** which Review opened it (a re-check that ends after another Review never touches this one) */
-  id: number;
-  /** the re-check against the state at the click (review-check.ts): running, failed with its reasons, or done / not needed (null) */
-  recheck: 'checking' | { reasons: string[] } | null;
+/** A level that could not be planned at the click: the sentence, and the raw builder text behind "Details". */
+interface PlanStop {
+  text: string;
+  raw?: string;
 }
+
+/**
+ * How often an auction whose start passed while the wallet waited for approval (`clock-moved`, wallet/sign.ts) is planned again with the current
+ * clock and the wallet asked again; after that the reason is shown.
+ */
+const CLOCK_RETRIES = 1;
 
 /** Token-holding shortfalls: while the holdings are still being read they mean "not read yet", not "not enough". */
 const TOKEN_SHORT = new Set(['INSUFFICIENT_TOKENS', 'TOKEN_UTXOS_FRAGMENTED']);
@@ -108,13 +98,13 @@ export function OrderTicket(props: OrderTicketProps) {
   useEffect(() => {
     if (quote) rememberPairForm(token.covenantId, quote.covenantId, form);
   }, [form]);
-  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
-  const [reviewing, setReviewing] = useState(false);
-  // a plain note, or a refusal: its sentence with the raw builder text behind "Details"
-  const [reviewNote, setReviewNote] = useState<string | { text: string; raw: string } | null>(null);
-  const [result, setResult] = useState<{ txid: string; label: string; note?: string } | null>(null);
-  // a ladder in progress: the intents of every level, the line the confirmation shows for each, and the txids placed so far (each level is its own transaction, signed in turn)
-  const run = useRef<{ intents: Intent[]; txids: string[]; lines: string[] } | null>(null);
+  // the send flow of the order button: checking, the wallet's approval, sending, the result (one line under the button)
+  const sender = useSend();
+  // from the click until the last transaction of it (a ladder: every level, each its own transaction signed in turn) is sent or stopped
+  const [placing, setPlacing] = useState(false);
+  // a ladder: the level being sent ("Level 2 of 3"), and how the whole ladder ended
+  const [ladderLead, setLadderLead] = useState<string | null>(null);
+  const [ladderNote, setLadderNote] = useState<{ done: boolean; text: string } | null>(null);
   // what Max just did, in a sentence (cleared by the next edit)
   const [maxNote, setMaxNote] = useState<string | null>(null);
 
@@ -122,7 +112,6 @@ export function OrderTicket(props: OrderTicketProps) {
   const kasEnv = useTicketEnv(token, enabled && !quote);
   const pairEnv = usePairTicketEnv(token, quote ?? token, enabled && !!quote);
   const { env: rawEnv, error: envError, loading: envLoading, refresh, since, snapshot, stale, waiting } = quote ? pairEnv : kasEnv;
-  const confirmSeq = useRef(0);
   // guards whose indexer data could not be read block the plan until the user acknowledges
   const [ackGuards, setAckGuards] = useState(false);
   // a market / close order whose start (the indexer's best price) is far beyond an independent reference waits for this acknowledgement
@@ -303,26 +292,22 @@ export function OrderTicket(props: OrderTicketProps) {
     minFill: baseOf('minFill'),
     describe: (b: bigint) => (form.kas ? `${kasTextOf(form, ctx, 'amount', b)} KAS` : `${formatUnits(b, token.decimals, { group: ',' })} ${ticker}`),
     onPick: (b: bigint | null) => {
-      setReviewNote(null);
-      setMaxNote(null);
+      edited();
       setForm((f) => (b === null ? setValue(f, 'amount', '') : setAmountBase(f, 'amount', b, ctx)));
     },
     disabled: !enabled || !env,
   };
 
   const onChange = (id: string, value: string) => {
-    setReviewNote(null);
-    setMaxNote(null);
+    edited();
     setForm((f) => setValue(f, id, value));
   };
   const onType = (type: OrderTypeId) => {
-    setReviewNote(null);
-    setMaxNote(null);
+    edited();
     setForm((f) => switchType(f, type));
   };
   const onSide = (side: Side) => {
-    setReviewNote(null);
-    setMaxNote(null);
+    edited();
     setForm((f) => setSide(f, side));
   };
   // the start acknowledgement is for this order only: a change of token, pair, type, side or size asks again
@@ -352,9 +337,30 @@ export function OrderTicket(props: OrderTicketProps) {
     }
   }, [enabled, env, limitSet, ladder]);
   const ladderTot = useMemo(() => (shownPlan && ladder ? ladderTotals(shownPlan, ladder) : null), [shownPlan, ladder]);
+  // a ladder the wallet cannot pay for as a whole (each level alone may plan): the shortfall is an error and the button stays disabled
+  const ladderFunds: { code: string; text: string }[] = [];
+  if (env && ladder?.ok) {
+    if (ladderTot && form.side === 'buy' && !quote && ladderTot.kasLocked > kasBalance) {
+      ladderFunds.push({ code: 'kas', text: t('ticket.ladder.fundsKas', { kas: `${formatKas(ladderTot.kasLocked, { group: ',' })} KAS`, have: `${formatKas(kasBalance, { group: ',' })} KAS` }) });
+    }
+    if (ladderTot && (!quote || form.side === 'sell') && ladderTot.tokens > tokenBalance) {
+      ladderFunds.push({ code: 'tokens', text: t('ticket.ladder.fundsTokens', { need: formatUnits(ladderTot.tokens, token.decimals, { group: ',' }), have: formatUnits(tokenBalance, token.decimals, { group: ',' }), ticker }) });
+    }
+    if (limitSet && quote && form.side === 'buy' && limitLadderValues(ladder, 'buy', scale).total > quoteBalance) {
+      ladderFunds.push({ code: 'quote', text: t('ticket.ladder.fundsQuote', { need: quoteText(limitLadderValues(ladder, 'buy', scale).total), have: quoteText(quoteBalance) }) });
+    }
+  }
   // C5-10: a wallet not known to sign covenant inputs (every cancel needs one) passes a one-time test signature before its first order
   const gate = useCovenantSignGate(enabled ? env : null);
-  const canReview = enabled && gate.ready && !!shownPlan && shownPlan.ok && planErrors.length === 0 && !!shownPlan.built && !pending && !reviewing && !confirm && !crash && (!ladder || ladder.ok) && lastOrderErrors.length === 0;
+  const canPlace =
+    enabled && gate.ready && !!shownPlan && shownPlan.ok && planErrors.length === 0 && !!shownPlan.built && !pending && !placing && !sendBusy(sender.status) && !crash
+    && (!ladder || ladder.ok) && lastOrderErrors.length === 0 && ladderFunds.length === 0;
+  // an edit makes a reason the last click stopped for stale (a submitted order stays on the line until the next click)
+  const edited = () => {
+    setMaxNote(null);
+    setLadderNote(null);
+    if (!placing && sender.status && sender.status.phase !== 'submitted') sender.clear();
+  };
 
   // an inverted market words the type where the native name / help speaks of buying or selling the token
   const typeKey = (id: OrderTypeId, part: 'name' | 'help'): string => (inverted && has(`ticket.type.${id}.${part}Inv`) ? `ticket.type.${id}.${part}Inv` : `ticket.type.${id}.${part}`);
@@ -362,14 +368,12 @@ export function OrderTicket(props: OrderTicketProps) {
   // the side as the shown pair names it: buying KAS in KAS/TOKEN is selling the token
   const shownSide: Side = inverted ? oppositeSide(form.side) : form.side;
   const sideName = t(shownSide === 'buy' ? 'common.side.buy' : 'common.side.sell');
-  // the confirmation names the pair too: an inverted Buy is a sale of the token (the decoded card below says exactly what the transaction does)
-  const confirmSide = inverted ? `${sideName} ${pairLabel(name, true)}` : sideName;
 
   /**
-   * An inverted market: what an intent gives and receives in the shown pair's words (KAS is the base), for the disclosure summary and the
-   * confirmation. The KAS is the amount's value at the price the order is sized at (exact at a limit; "about" at the book's price).
+   * An inverted market: what an intent gives and receives in the shown pair's words (KAS is the base), for the disclosure summary. The KAS is the
+   * amount's value at the price the order is sized at (exact at a limit; "about" at the book's price).
    */
-  const shownTerms = (intent: Intent | null): { tokens: string; kas: string; about: boolean; priceText: string | null } | null => {
+  const shownTerms = (intent: Intent | null): { tokens: string; kas: string; about: boolean } | null => {
     if (!inverted || !intent || !('amount' in intent) || typeof intent.amount !== 'bigint') return null;
     const own = intentSizingPrice(intent);
     const ref = own === null ? amountPriceOf(form, ctx, 'amount') : null;
@@ -379,16 +383,7 @@ export function OrderTicket(props: OrderTicketProps) {
       tokens: formatUnits(intent.amount, token.decimals, { group: ',' }),
       kas: formatKas(baseToKas(intent.amount, price, scale), { group: ',' }),
       about: own === null,
-      priceText: own === null ? null : nativeToInvertedPriceText(formatPrice(own, ctx)),
     };
-  };
-  const shownAsText = (intent: Intent | null): string | undefined => {
-    const s = shownTerms(intent);
-    if (!s) return undefined;
-    return t(form.side === 'sell' ? 'ticket.shownAs.buyKas' : 'ticket.shownAs.sellKas', {
-      pair: pairLabel(name, true), side: sideName, tokens: s.tokens, ticker, kas: s.kas, about: s.about ? t('ticket.shownAs.about') : '',
-      basis: s.priceText ? t('ticket.shownAs.price', { price: s.priceText, ticker }) : t('ticket.shownAs.book'),
-    });
   };
   const discSummary = (() => {
     const s = shownTerms(built.intent);
@@ -415,115 +410,109 @@ export function OrderTicket(props: OrderTicketProps) {
   const noRefs = (): References => ({ touches: [], unavailable: verifiers.map((v) => v.label) });
 
   /**
-   * Plans level `index` of the run and opens its confirmation at once, from the environment on hand when it is recent enough; the signature then
-   * waits for the re-check against the state at the click (review-check.ts: the freshness rule). A level that cannot be planned ends the run.
+   * Plans one order of the click (`index` of `levels`: a ladder places each level as its own transaction) at once, from the environment on hand
+   * when it is recent enough, with the node clock read now (an auction starts from it); the signature then waits for the re-check against the state
+   * at the click (review-check.ts: the freshness rule), which runs alongside the send's own checks. A level that cannot be planned stops the click.
    */
-  const prepareLevel = async (index: number): Promise<void> => {
-    const r = run.current;
-    if (!r) return;
-    const levels = r.intents.length;
-    const laddered = levels > 1;
-    const intent = r.intents[index]!;
-    const stop = (note: string) => {
-      run.current = null;
-      setReviewNote(laddered && r.txids.length > 0 ? t('ticket.ladder.stoppedAt', { level: index + 1, levels, placed: r.txids.length }) : note);
-    };
+  const prepareLevel = async (intent: Intent, index: number, levels: number): Promise<SendJob | PlanStop> => {
     const clickAt = Date.now();
-    setReviewing(true);
-    setReviewNote(null);
     try {
       // the environment: the first level takes the one on hand when its oldest part is at most REVIEW_CACHE_MS old, else a read started at most
       // REVIEW_REUSE_MS before the click; a later level of a ladder reads everything after the click (the level before has just spent coins)
       const snap = index === 0 ? snapshot() : null;
       const cached = snap && clickAt - snap.at <= REVIEW_CACHE_MS ? snap : null;
       let base = cached ? cached.env : await (index === 0 ? since(clickAt - REVIEW_REUSE_MS) : refresh());
-      if (!base) return stop(t('ticket.reviewNoEnv'));
+      if (!base) return { text: t('ticket.reviewNoEnv') };
       let fromCache = !!cached;
-      // the node clock at the click: DAA times (a timed start, an IOC life, a day order) count from it, as the confirmation counts them back; a
-      // node slower than CLOCK_WAIT_MS: the clock on hand projected to now (review-check.ts `projectClock`)
+      // the node clock now: DAA times (an auction's start, a timed start, an IOC life, a day order) count from it, never from the clock of the
+      // environment on hand; a node slower than CLOCK_WAIT_MS: the clock on hand projected to now (review-check.ts `projectClock`)
       const { clock } = await reviewClock(() => readClock(services), base.clock, cached ? cached.clockAt : (snapshot()?.clockAt ?? clickAt), { waitMs: CLOCK_WAIT_MS });
       const planWith = (e: PlanEnv, refs: References): OrderPlan => planOrder(withRefs({ ...e, clock }, refs), intent);
       let p = planWith(base, touches.data ?? noRefs());
       if ((!p.ok || !p.built || errors(p).length > 0) && fromCache) {
         // the parts on hand cannot plan it (the holdings of a sell still being read, the book moved): plan from the state at the click instead
         const fresh = await since(clickAt - REVIEW_REUSE_MS);
-        if (!fresh) return stop(t('ticket.reviewNoEnv'));
+        if (!fresh) return { text: t('ticket.reviewNoEnv') };
         base = fresh;
         fromCache = false;
         p = planWith(base, verifiers.length ? await touchesOf().catch(noRefs) : (touches.data ?? noRefs()));
       }
-      if (!p.ok || !p.built || errors(p).length > 0) return stop(t('ticket.reviewChanged'));
-      const title = laddered ? t('ticket.ladder.confirmTitle', { level: index + 1, levels, side: confirmSide, type: typeName }) : t('ticket.confirmTitle', { side: confirmSide, type: typeName });
-      const label = orderLabel(form.type, form.side, laddered ? { level: index + 1, levels } : undefined, name);
-      // a warning that only the data of this plan raised (the price moved, the depth shrank, a reference now disagrees) is shown on the confirmation
-      const freshWarnings = newWarnings(shownPlan, p).map((i) => issueText(i, issueCtx));
+      const firstError = errors(p)[0];
+      if (!p.ok || !p.built || firstError) return { text: firstError ? issueText(firstError, issueCtx) : t('ticket.reviewChanged') };
       // the re-check reads again only the parts that may no longer be the state at the click (review-check.ts rule 2; none when the environment was
       // read after the click); the references of further indexers are always read again
       const toRead = fromCache ? stale(clickAt) : [];
       const settled = toRead.length === 0;
-      const id = ++confirmSeq.current;
-      setConfirm({
-        id, recheck: settled && verifiers.length === 0 ? null : 'checking',
-        built: p.built, expected: expectedFromPlan(p), title, label, shownAs: shownAsText(intent), freshWarnings,
-        ...(laddered && r.lines.length === levels ? { ladder: { lines: r.lines, current: index } } : {}),
-      });
-      if (!settled || verifiers.length > 0) void recheck(id, p, intent, clock, base.fees, settled ? base : null, clickAt, toRead);
+      return {
+        built: p.built, expected: expectedFromPlan(p), label: orderLabel(form.type, form.side, levels > 1 ? { level: index + 1, levels } : undefined, name),
+        openToken: token.openList ? token : undefined,
+        gate: !settled || verifiers.length > 0 ? recheck(p, intent, clock, base.fees, settled ? base : null, clickAt, toRead) : undefined,
+        submitByDaa: auctionSubmitBy(p.states, clock.daa),
+      };
     } catch (e) {
-      run.current = null;
       const raw = e instanceof Error ? e.message : String(e);
-      setReviewNote({ text: buildErrorText(raw), raw });
-    } finally {
-      setReviewing(false);
+      return { text: buildErrorText(raw), raw };
     }
   };
 
   /**
-   * The re-check of an open confirmation (review-check.ts rule 2): the same intent planned against the environment at the click (`env`: the one
-   * on hand already is; else `parts` read again from REVIEW_REUSE_MS before the click on) and the references read now, with the clock and the fees
-   * of the plan shown; signing stays blocked until it gives the same transaction with nothing new to say.
+   * The re-check of a planned order (review-check.ts rule 2): the same intent planned against the environment at the click (`env`: the one on hand
+   * already is; else `parts` read again from REVIEW_REUSE_MS before the click on) and the references read now, with the clock and the fees of the
+   * plan; the wallet is asked only when it gives the same transaction without an error. Resolves to why the order no longer stands, or null.
    */
-  const recheck = async (id: number, shown: OrderPlan, intent: Intent, clock: Clock, fees: PlanEnv['fees'], env: PlanEnv | null, clickAt: number, parts: EnvWait[]): Promise<void> => {
-    let verdict: ConfirmState['recheck'];
+  const recheck = async (shown: OrderPlan, intent: Intent, clock: Clock, fees: PlanEnv['fees'], env: PlanEnv | null, clickAt: number, parts: EnvWait[]): Promise<string | null> => {
     try {
       const [fresh, refs] = await Promise.all([env ? Promise.resolve(env) : since(clickAt - REVIEW_REUSE_MS, parts), touchesOf().catch(noRefs)]);
-      if (!fresh) verdict = { reasons: [t('ticket.reviewNoEnv')] };
-      else {
-        const v = recheckVerdict(shown, planOrder(withRefs({ ...fresh, clock, fees }, refs), intent));
-        verdict = v.ok ? null : { reasons: v.issues.map((i) => issueText(i, issueCtx)) };
-      }
+      if (!fresh) return t('ticket.reviewNoEnv');
+      const v = recheckVerdict(shown, planOrder(withRefs({ ...fresh, clock, fees }, refs), intent));
+      if (v.ok) return null;
+      return v.issues[0] ? issueText(v.issues[0], issueCtx) : t('ticket.reviewChanged');
     } catch (e) {
-      verdict = { reasons: [buildErrorText(e instanceof Error ? e.message : String(e))] };
+      return buildErrorText(e instanceof Error ? e.message : String(e));
     }
-    setConfirm((c) => (c && c.id === id ? { ...c, recheck: verdict } : c));
   };
 
-  const review = async () => {
-    if (!canReview || !built.intent) return;
-    run.current = { intents: ladder?.ok ? ladder.levels.map((l) => l.intent) : [built.intent], txids: [], lines: ladder?.ok ? ladder.levels.map(ladderRow) : [] };
-    await prepareLevel(0);
-  };
-
-  const onConfirmClose = (r: ConfirmResult) => {
-    const c = confirm;
-    const lr = run.current;
-    setConfirm(null);
-    if (r.status === 'submitted') {
-      if (lr) lr.txids.push(r.txid);
-      const levels = lr?.intents.length ?? 1;
-      if (lr && lr.txids.length < levels) {
-        // the next level: its own plan, its own confirmation and signature
-        void prepareLevel(lr.txids.length);
-        return;
+  /** One level: planned, checked and sent; an auction whose start passed while the wallet waited is planned again and sent again (CLOCK_RETRIES). */
+  const placeLevel = async (intent: Intent, index: number, levels: number): Promise<SendOutcome | null> => {
+    for (let attempt = 0; ; attempt++) {
+      const job = await prepareLevel(intent, index, levels);
+      if (!('built' in job)) {
+        sender.stop(job.text, job.raw);
+        return null;
       }
-      run.current = null;
-      const label = levels > 1 ? orderLabel(form.type, form.side, { levels }, name) : c?.label ?? '';
-      setResult({ txid: r.txid, label, ...(levels > 1 ? { note: t('ticket.ladder.done', { levels }) } : {}) });
+      const out = await sender.send(job);
+      if (out.status === 'submitted' || out.send.code !== 'clock-moved' || attempt >= CLOCK_RETRIES) return out;
+    }
+  };
+
+  /** The order button: every level of the order in turn, each planned at its turn, checked and approved in the wallet; a level that stops ends it. */
+  const place = async () => {
+    if (!canPlace || !built.intent) return;
+    const intents = ladder?.ok ? ladder.levels.map((l) => l.intent) : [built.intent];
+    const levels = intents.length;
+    setPlacing(true);
+    setMaxNote(null);
+    setLadderNote(null);
+    // the line of an earlier click goes: the button shows the click is running until the first check reports
+    sender.clear();
+    let placed = 0;
+    try {
+      for (let i = 0; i < levels; i++) {
+        setLadderLead(levels > 1 ? t('ticket.ladder.reviewing', { level: i + 1, levels }) : null);
+        const out = await placeLevel(intents[i]!, i, levels);
+        if (out?.status !== 'submitted') break;
+        placed += 1;
+      }
+    } finally {
+      setPlacing(false);
+    }
+    if (placed === levels) {
+      setLadderLead(null);
+      if (levels > 1) setLadderNote({ done: true, text: t('ticket.ladder.done', { levels }) });
       // the order is placed: the next one starts empty (the price, type and side stay: the next click is usually a variation)
       setForm((f) => setValue(f, 'amount', ''));
-    } else {
-      run.current = null;
-      if (lr && lr.txids.length > 0) setReviewNote(t('ticket.ladder.stopped', { placed: lr.txids.length, levels: lr.intents.length }));
-      else if (r.status === 'failed') setReviewNote(t('ticket.replanNote'));
+    } else if (placed > 0) {
+      setLadderNote({ done: false, text: t('ticket.ladder.stopped', { placed, levels }) });
     }
     void refresh();
   };
@@ -544,6 +533,7 @@ export function OrderTicket(props: OrderTicketProps) {
   const START_CODES = ['MARKET_START_VS_LAST_FILL', 'MARKET_START_VS_INDEXER', 'MARKET_START_ACKNOWLEDGED', 'MARKET_START_UNVERIFIED', 'MARKET_START_UNVERIFIED_ACKNOWLEDGED'];
   const startIssue = issues.find((i) => START_CODES.includes(i.code));
   const startUnverified = startIssue?.code === 'MARKET_START_UNVERIFIED' || startIssue?.code === 'MARKET_START_UNVERIFIED_ACKNOWLEDGED';
+  const planIssues = issues.filter((i) => i.severity === 'error');
   const issueCtx = { tokenDecimals: token.decimals, tokenTicker: ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
 
   if (!tradable) {
@@ -563,22 +553,12 @@ export function OrderTicket(props: OrderTicketProps) {
     <section class="tk" data-testid="order-ticket" data-type={form.type} data-side={form.side} data-shown-side={shownSide} data-inverted={inverted ? '1' : '0'} aria-busy={pending || envLoading ? 'true' : 'false'}>
       <div class="row-between">
         <h2>{t('ticket.title')}</h2>
-        {pending || reviewing ? (
+        {pending ? (
           <span class="tk-pending" data-testid="order-pending">
             <Loading text={t('ticket.pending')} />
           </span>
         ) : null}
       </div>
-
-      {result ? (
-        <Banner tone="ok" title={t('ticket.result.title')} onDismiss={() => setResult(null)} data-testid="order-result">
-          <p>{t('ticket.result.text', { label: result.label })}</p>
-          {result.note ? <p data-testid="order-result-ladder">{result.note}</p> : null}
-          <p>
-            <CopyText value={result.txid} short={false} href={explorerTxUrl(services.config, result.txid)} data-testid="order-result-txid" />
-          </p>
-        </Banner>
-      ) : null}
 
       <div class="tk-form">
         <Segmented<Side>
@@ -690,22 +670,19 @@ export function OrderTicket(props: OrderTicketProps) {
         </Banner>
       ) : null}
 
+      {/* only what stops the order: the planner's warnings and notes are not shown (the figures below say what the order does) */}
       <div class="tk-issues" data-testid="order-issues" aria-live="polite">
-        {issues.length > 0 ? (
+        {planIssues.length > 0 ? (
           <ul>
-            {issues.map((i, n) => (
-              <li key={`${i.code}-${n}`} class={`tk-issue tk-issue-${i.severity}`} data-code={i.code} data-severity={i.severity} data-testid={`order-issue-${i.code}`}>
-                <span class="tk-issue-tag">{t(`ticket.severity.${i.severity}`)}</span> {issueText(i, issueCtx)}
+            {planIssues.map((i, n) => (
+              <li key={`${i.code}-${n}`} class="tk-issue tk-issue-error" data-code={i.code} data-severity={i.severity} data-testid={`order-issue-${i.code}`}>
+                {issueText(i, issueCtx)}
                 <RawDetails text={rawOf(i)} />
               </li>
             ))}
           </ul>
         ) : null}
       </div>
-
-      <SharedTickerNote shared={!!props.sharedTicker} block data-testid="ticket-shared-ticker" />
-      <OpenTokenNote token={token} data-testid="ticket-open-caution" />
-      <PowersWarning powers={props.powers} data-testid="ticket-powers-warning" />
 
       {ladder ? (
         <div class="tk-ladder" data-testid="order-ladder">
@@ -731,21 +708,11 @@ export function OrderTicket(props: OrderTicketProps) {
                   {t('ticket.ladder.total', { amount: `${formatUnits(ladderTot.amount, token.decimals, { group: ',' })} ${ticker}`, levels: ladder.levels.length, kas: `${formatKas(ladderTot.kasLocked, { group: ',' })} KAS` })}
                 </p>
               ) : null}
-              {env && ladderTot && form.side === 'buy' && !quote && ladderTot.kasLocked > kasBalance ? (
-                <p class="tk-issue tk-issue-warning" data-testid="order-ladder-funds">
-                  {t('ticket.ladder.fundsKas', { kas: `${formatKas(ladderTot.kasLocked, { group: ',' })} KAS`, have: `${formatKas(kasBalance, { group: ',' })} KAS` })}
+              {ladderFunds.map((f) => (
+                <p key={f.code} class="tk-issue tk-issue-error" data-testid="order-ladder-funds" data-code={f.code}>
+                  {f.text}
                 </p>
-              ) : null}
-              {env && ladderTot && (!quote || form.side === 'sell') && ladderTot.tokens > tokenBalance ? (
-                <p class="tk-issue tk-issue-warning" data-testid="order-ladder-funds">
-                  {t('ticket.ladder.fundsTokens', { need: formatUnits(ladderTot.tokens, token.decimals, { group: ',' }), have: formatUnits(tokenBalance, token.decimals, { group: ',' }), ticker })}
-                </p>
-              ) : null}
-              {env && limitSet && quote && form.side === 'buy' && limitLadderValues(ladder, 'buy', scale).total > quoteBalance ? (
-                <p class="tk-issue tk-issue-warning" data-testid="order-ladder-funds">
-                  {t('ticket.ladder.fundsQuote', { need: quoteText(limitLadderValues(ladder, 'buy', scale).total), have: quoteText(quoteBalance) })}
-                </p>
-              ) : null}
+              ))}
               {lastOrderErrors.length > 0 ? (
                 <ul data-testid="order-ladder-last-errors">
                   {lastOrderErrors.map((i, n) => (
@@ -771,39 +738,15 @@ export function OrderTicket(props: OrderTicketProps) {
 
       {model ? <DisclosurePanel model={model} built={shownPlan?.built ?? null} summary={discSummary} /> : null}
 
-      {reviewNote ? (
-        <Banner tone="warn" data-testid="order-review-note">
-          {typeof reviewNote === 'string' ? reviewNote : (
-            <>
-              {reviewNote.text}
-              <RawDetails text={reviewNote.raw} />
-            </>
-          )}
-        </Banner>
-      ) : null}
-
       {enabled ? gate.element : null}
-      {/* while Review reads the coins and the book the button says so (a build can take seconds on a busy indexer) */}
-      <Button variant="primary" block onClick={review} disabled={!canReview} loading={reviewing} data-testid="order-review" data-state={reviewing ? 'preparing' : undefined}>
-        {reviewing ? t('ticket.preparing') : t('ticket.review', { side: sideName, type: typeName })}
+      <Button variant="primary" block onClick={() => void place()} disabled={!canPlace} loading={placing} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
+        {t('ticket.place', { side: sideName, type: typeName })}
       </Button>
-      <p class="tk-blind">{t('ticket.blindNote')}</p>
-
-      {confirm ? (
-        <ConfirmSign
-          built={confirm.built}
-          expected={confirm.expected}
-          title={confirm.title}
-          label={confirm.label}
-          shownAs={confirm.shownAs}
-          freshWarnings={confirm.freshWarnings}
-          ladder={confirm.ladder}
-          tokenPowers={props.powers}
-          openToken={token.openList ? token : undefined}
-          recheck={confirm.recheck}
-          onSubmitted={() => void refresh()}
-          onClose={onConfirmClose}
-        />
+      <SendStatusLine status={sender.status} lead={ladderLead} data-testid="order-status" />
+      {ladderNote ? (
+        <p class="muted" data-testid={ladderNote.done ? 'order-result-ladder' : 'order-ladder-stopped'}>
+          {ladderNote.text}
+        </p>
       ) : null}
     </section>
   );

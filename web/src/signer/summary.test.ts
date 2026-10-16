@@ -1,5 +1,5 @@
 // The signer frame's own summary must show what the user agrees to beyond the net effect: two requests that differ only in an order's price (or
-// stop) move the same KAS and tokens, so a summary of the net effect alone shows them identically.
+// stop) move the same KAS and tokens, so a summary of the net effect alone shows them identically. The frame shows it as one sentence (`text`).
 import { describe, expect, it } from 'vitest';
 import { summarize } from './summary';
 import { goldenRequest } from '../testing/golden';
@@ -30,6 +30,20 @@ describe('signer summary: order terms', () => {
     const price = (o: (typeof fair.orders)[number]) => o.rows.find((r) => /price/i.test(r.label))?.value;
     expect(price(fair.orders[0]!)).toBeDefined();
     expect(price(cheap.orders[0]!)).not.toBe(price(fair.orders[0]!));
+    // the one sentence the frame shows carries the price too
+    expect(fair.text).toContain(price(fair.orders[0]!)!);
+    expect(cheap.text).toContain(price(cheap.orders[0]!)!);
+    expect(cheap.text).not.toBe(fair.text);
+  });
+
+  it('is one sentence: the order with its amount and price, the net effect for this key (token by its covenant id), the fee', () => {
+    const s = summarize(kob, build('create.ask'), MAKER_PK, HINTS);
+    expect(s.text).toMatch(/^Sell .*: .* at .*. .*; network fee .* KAS.$/);
+    expect(s.text).toContain(`${TOKEN_COV_ID.slice(0, 8)}…${TOKEN_COV_ID.slice(-8)}`);
+    expect(s.text).toContain(s.fee);
+    // a cancel creates no order: the kind of request leads
+    const c = summarize(kob, kob.build(goldenRequest('cancel.ask', MAKER_PK)), MAKER_PK, HINTS);
+    expect(c.text.startsWith('Cancel order. ')).toBe(true);
   });
 
   it('names the order, its side and its token by the covenant id (8 + 8 hex), and nests an if-done exit', () => {
@@ -48,6 +62,8 @@ describe('signer summary: order terms', () => {
     const b = summarize(kob, build('create.condAsk', (s) => (s.stopPrice = (BigInt(s.stopPrice) * 9n / 10n).toString())), MAKER_PK, HINTS);
     expect(b.lines.filter((l) => l.label !== 'KAS')).toEqual(a.lines.filter((l) => l.label !== 'KAS'));
     expect(b.orders).not.toEqual(a.orders);
+    expect(b.text).not.toBe(a.text);
+    expect(a.text).toContain('stop ');
   });
 
   it('every order kind of the golden vectors (KAS and pair, new and amended) is listed with its terms', () => {

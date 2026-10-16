@@ -3,7 +3,7 @@
 import { test, expect, type MockClient } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
-import { fillFields, pickType, reviewAndSign } from '../helpers/ticket';
+import { fillFields, pickType, placeOrder } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -12,7 +12,7 @@ async function placeAndFill(page: import('@playwright/test').Page, mock: MockCli
   await openMarket(page, mock);
   await pickType(page, type, 'buy');
   await fillFields(page, fields);
-  const { placed } = await reviewAndSign(page, mock);
+  const placed = await placeOrder(page, mock);
   const entryId = placed.views[0].covenant_id as string;
   if (fillTokens > 0) {
     await mock.fill(entryId, BigInt(fillTokens) * 100_000_000n);
@@ -83,7 +83,8 @@ test.describe('position cards', () => {
     await expect(card).toHaveAttribute('data-phase', 'entry-waiting');
     await expect(card.getByTestId('position-status')).toHaveText('waiting for entry');
     await card.locator('[data-testid^="position-cancel-"]').click();
-    await runFlow(page, mock, wallet, { steps: 1 });
+    const [cancel] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(cancel!.submission.closed).toEqual([{ covenantId: entryId, entry: 'cancel', status: 'cancelled' }]);
     await expect(page.getByTestId(`position-${entryId}`)).toHaveCount(0, { timeout: 15_000 });
     await page.getByTestId('orders-tab-history').click();
     await expect(page.getByTestId(`position-${entryId}`)).toHaveAttribute('data-phase', 'cancelled');
@@ -95,7 +96,7 @@ test.describe('position cards', () => {
     await openMarket(page, mock);
     await pickType(page, 'ifd', 'sell');
     await fillFields(page, { amount: '2', price: '0.026', 'exit.takeProfit': '0.0245' });
-    const { placed } = await reviewAndSign(page, mock);
+    const placed = await placeOrder(page, mock);
     const entryId = placed.views[0].covenant_id as string;
     await mock.fill(entryId);
     await mock.until(async () => (await mock.order(entryId)).children as string[], (c) => c.length >= 1);
@@ -103,7 +104,9 @@ test.describe('position cards', () => {
     const card = page.getByTestId(`position-${entryId}`);
     await expect(card).toBeVisible();
     await card.getByTestId(`position-close-${entryId}`).click();
-    await runFlow(page, mock, wallet, { steps: 1 });
+    const [closed] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(closed!.submission.closed.map((c) => c.covenantId)).toContain(entryId);
+    expect(closed!.submission.closed.every((c) => c.entry === 'cancel' && c.status === 'cancelled')).toBe(true);
     await expect(page.getByTestId('orders-close-followup-sell')).toBeVisible();
     const buy = page.getByTestId('orders-close-buy');
     await expect(buy).toHaveAttribute('href', /\?ticket=cover&amount=100000000$/);
@@ -118,7 +121,8 @@ test.describe('position cards', () => {
     const entryId = await placeAndFill(page, mock, 'ifd', { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' }, 1);
     await page.getByTestId('nav-orders').click();
     await page.getByTestId(`position-close-${entryId}`).click();
-    await runFlow(page, mock, wallet, { steps: 1 });
+    const [closed] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(closed!.submission.closed.map((c) => c.covenantId)).toContain(entryId);
     const banner = page.getByTestId('orders-close-followup');
     await expect(banner).toContainText('1 EXKCC bought is not sold yet');
     await expect(banner).not.toContainText('free balance');

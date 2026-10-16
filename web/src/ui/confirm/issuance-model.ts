@@ -142,17 +142,15 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
           o.owner === maker && o.ownerScheme === 0 ? tr('confirm.issue.holderYou') : tr('confirm.issue.holderOther', { owner: short(o.owner), scheme: o.ownerScheme })),
       ),
     ],
-    cards: [],
   });
-  sections.push({ id: 'spend', title: tr('confirm.section.spend'), rows: [row('kas-spend', tr('confirm.spend.kas'), kas(kasIn))], cards: [], fold: true });
+  sections.push({ id: 'spend', title: tr('confirm.section.spend'), rows: [row('kas-spend', tr('confirm.spend.kas'), kas(kasIn))], fold: true });
   sections.push({
     id: 'locked', title: tr('confirm.section.locked'), note: tr('confirm.issue.lockedNote'),
     rows: [row('locked-total', tr('confirm.locked.total'), kas(carriers), 'warn'), row('locked-carriers', tr('confirm.issue.carriers', { count: token.outputs.length }), kas(BigInt(token.carrier)), 'normal', tr('confirm.locked.carriersHint'))],
-    cards: [],
   });
-  if (change > 0n) sections.push({ id: 'back', title: tr('confirm.section.back'), rows: [row('kas-back', tr('confirm.back.kas'), kas(change), 'good')], cards: [], fold: true });
+  if (change > 0n) sections.push({ id: 'back', title: tr('confirm.section.back'), rows: [row('kas-back', tr('confirm.back.kas'), kas(change), 'good')], fold: true });
   const feeDisc = i.fee ?? null;
-  sections.push({ id: 'fee', title: tr('confirm.section.fee'), rows: [row('fee', tr('confirm.fee.network'), kas(fee), 'normal', tr('confirm.fee.hint')), ...(feeDisc?.rows ?? [])], cards: [] });
+  sections.push({ id: 'fee', title: tr('confirm.section.fee'), rows: [row('fee', tr('confirm.fee.network'), kas(fee), 'normal', tr('confirm.fee.hint')), ...(feeDisc?.rows ?? [])] });
   const delta = change - kasIn;
   // the net effect first: what the wallet gains and loses
   sections.unshift({
@@ -162,7 +160,6 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
       row('net-token', tr('confirm.issue.netToken', { ticker: token.ticker }), `+${amountText(toMaker)}`, 'good', tr('confirm.issue.netTokenHint')),
       ...(carriers > 0n ? [row('net-locked', tr('confirm.issue.netLocked'), kas(carriers), 'warn', tr('confirm.locked.carriersHint'))] : []),
     ],
-    cards: [],
   });
 
   const advanced: AdvancedModel = {

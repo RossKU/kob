@@ -1,4 +1,4 @@
-// Smoke tests of the order ticket and the pre-sign confirmation flow against the mock stack (mock indexer + node + KasWare-style mock wallet).
+// Smoke tests of the order ticket and its one-button send flow (checks, the wallet's own approval, send) against the mock stack (mock indexer + node + KasWare-style mock wallet).
 // The per-order-type matrix is the next phase's job: here every type is reachable, and the limit-sell flow runs end to end.
 //
 // The example registry of the mock lists EXKCC as pending-review (tradable; the UI no longer shows any verification state). Every test serves a copy in which
@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '../fixtures';
 import type { Page } from '@playwright/test';
+import { clickPlace, expectStopped, expectWalletSigned, placeOrder, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
 const KAS = 100_000_000n;
 const TOKEN = 100_000_000n; // one EXKCC = 1e8 base units
@@ -44,13 +45,13 @@ async function fundAlice(mock: { giveKas(k: string, n: bigint): Promise<unknown>
 }
 
 test.describe('order ticket', () => {
-  test('limit sell end to end: form, disclosure, review, confirmation screen, signing, accepted transaction', async ({ appPage: page, mock, wallet }) => {
+  test('limit sell end to end: form, disclosure, one click, the wallet signature, accepted transaction', async ({ appPage: page, mock, wallet }) => {
     await fundAlice(mock);
     await openTicket(page, mock);
 
     await page.getByTestId('order-side-sell').click();
     await expect(page.getByTestId('order-type')).toHaveValue('limit');
-    await expect(page.getByTestId('order-review')).toBeDisabled();
+    await expect(page.getByTestId('order-place')).toBeDisabled();
     await page.getByTestId('order-amount').fill('3');
     await page.getByTestId('order-price').fill('2.6');
     await page.getByTestId('order-tip').fill('0.01');
@@ -66,44 +67,16 @@ test.describe('order ticket', () => {
     await expect(page.getByTestId('disc-expiry-extra')).toBeVisible(); // day-85 renewal date of a GTC order
     await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
 
-    // review: the confirmation screen decodes what the wallet will sign
-    await expect(page.getByTestId('order-review')).toBeEnabled();
-    await page.getByTestId('order-review').click();
-    const screen = page.getByTestId('confirm-screen');
-    await expect(screen).toBeVisible();
-    await expect(page.getByTestId('confirm-blocking')).toHaveCount(0);
-    const summary = page.getByTestId('confirm-summary');
-    await expect(summary).toContainText('Sell limit order');
-    await expect(summary).toContainText('3 EXKCC');
-    await expect(summary).toContainText('2.6 EXKCC / KAS');
-    await expect(summary).toContainText('2.59 EXKCC / KAS'); // all-in: limit minus tip
-    await expect(page.getByTestId('confirm-locked-locked-total')).toContainText('4 KAS');
-    await expect(page.getByTestId('confirm-wallet-notice')).toBeVisible();
-    // signing needs the explicit acknowledgement
-    await expect(page.getByTestId('confirm-sign')).toBeDisabled();
-    await page.getByTestId('confirm-ack').check();
-    await expect(page.getByTestId('confirm-sign')).toBeEnabled();
-    await page.getByTestId('confirm-sign').click();
-
-    // accepted by the mock node (it runs the covenants): status, tx id, wallet call
-    await expect(page.getByTestId('tx-id')).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId('tx-status')).toHaveAttribute('data-status', 'confirmed', { timeout: 60_000 });
-    const txid = await page.getByTestId('tx-id').getAttribute('data-value');
-    expect(txid).toMatch(/^[0-9a-f]{64}$/);
-    const calls = await wallet!.calls();
-    expect(calls).toHaveLength(1);
-    const submitted = await mock.submitted();
-    const last = submitted[submitted.length - 1]!;
-    expect(last.txid).toBe(txid);
-    expect(last.created).toHaveLength(1);
-    expect(last.created[0]!.kind).toBe('KobAsk');
-
-    await page.getByTestId('confirm-close').click();
-    await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
-    await expect(page.getByTestId('order-result')).toBeVisible();
-    // the order in the ticket's words, not the form's ids ("limit sell")
-    await expect(page.getByTestId('order-result')).toContainText('The node accepted your order (Sell · Limit).');
-    await expect(page.getByTestId('order-result-txid')).toHaveAttribute('data-value', txid!);
+    // one click: the wallet is asked once and signs exactly the transaction the node accepts
+    await expect(page.getByTestId('order-place')).toBeEnabled();
+    const placed = await placeOrder(page, mock);
+    await expectWalletSigned(wallet!, placed);
+    expect(placed.submission.created).toHaveLength(1);
+    expect(placed.submission.created[0]!.kind).toBe('KobAsk');
+    // the order as the node holds it
+    const view = placed.views[0];
+    expect(view.side).toBe(1); // a sell
+    expect(view.state.state).toMatchObject({ amountLeft: '300000000', price: '260000000', tip: '1000000', refundTip: '4900000' }); // 3 EXKCC at 2.6 KAS, tip 0.01 KAS
     // the form starts the next order empty
     await expect(page.getByTestId('order-amount')).toHaveValue('');
 
@@ -121,18 +94,15 @@ test.describe('order ticket', () => {
     await page.getByTestId('order-amount').fill('2');
     await page.getByTestId('order-price').fill('2.7');
     await wallet!.configure({ approve: false, rejectMessage: 'User rejected the request' });
-    await page.getByTestId('order-review').click();
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    await expect(page.getByTestId('confirm-rejected')).toBeVisible();
-    await expect(page.getByTestId('confirm-error')).toHaveCount(0);
+    await clickPlace(page);
+    await expectStopped(page, 'rejected', { code: 'rejected' });
+    expect(await wallet!.calls()).toHaveLength(1);
     expect(await mock.submitted()).toHaveLength(0);
 
-    // approve now: the same screen signs and submits
+    // approve now: the same button asks again, signs and submits
     await wallet!.configure({ approve: true });
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId('order-place').click();
+    await waitSubmitted(page);
     expect(await mock.submitted()).toHaveLength(1);
   });
 
@@ -143,32 +113,33 @@ test.describe('order ticket', () => {
     await page.getByTestId('order-amount').fill('2');
     await page.getByTestId('order-price').fill('2.7');
     await wallet!.configure({ wrongSignature: true });
-    await page.getByTestId('order-review').click();
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    await expect(page.getByTestId('confirm-error')).toBeVisible();
-    await expect(page.getByTestId('tx-status')).toHaveCount(0);
+    await clickPlace(page);
+    const stopped = await expectStopped(page, 'failed');
+    expect(stopped.code).toBe('signature');
+    expect(stopped.text).toMatch(/signature/i);
+    expect((await wallet!.calls()).at(-1)!.status).toBe('signed'); // the wallet did answer: the answer was wrong
     expect(await mock.submitted()).toHaveLength(0);
   });
 
-  test('a node that refuses the transaction shows a readable error; the screen stays open', async ({ appPage: page, mock }) => {
+  test('a node that refuses the transaction shows a readable error; the ticket stays usable', async ({ appPage: page, mock }) => {
     await fundAlice(mock);
     await openTicket(page, mock);
     await page.getByTestId('order-side-sell').click();
     await page.getByTestId('order-amount').fill('2');
     await page.getByTestId('order-price').fill('2.7');
     await mock.failNextSubmit('mock: injected submit failure');
-    await page.getByTestId('order-review').click();
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    await expect(page.getByTestId('confirm-error')).toBeVisible();
-    await expect(page.getByTestId('confirm-screen')).toBeVisible();
+    await clickPlace(page);
+    const stopped = await expectStopped(page, 'failed');
+    expect(stopped.text).toContain('injected submit failure');
     expect(await mock.submitted()).toHaveLength(0);
-    await page.getByTestId('confirm-cancel').click();
-    await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
+    // the ticket stays as it was: the same button tries again and the node accepts
+    await expect(page.getByTestId('order-place')).toBeEnabled();
+    await page.getByTestId('order-place').click();
+    await waitSubmitted(page);
+    expect(await mock.submitted()).toHaveLength(1);
   });
 
-  test('errors of the planner block the review and name the exact shortfall', async ({ appPage: page, mock }) => {
+  test('errors of the planner block the order button and name the exact shortfall', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 1000n * KAS);
     await mock.giveTokens('alice', 5n * TOKEN);
     await openTicket(page, mock);
@@ -178,12 +149,12 @@ test.describe('order ticket', () => {
     const issue = page.getByTestId('order-issue-INSUFFICIENT_TOKENS');
     await expect(issue).toBeVisible();
     await expect(issue).toContainText('3 EXKCC'); // short by 3 of the 8 EXKCC
-    await expect(page.getByTestId('order-review')).toBeDisabled();
+    await expect(page.getByTestId('order-place')).toBeDisabled();
     // "max" fills what the balance allows and clears the error
     await page.getByTestId('order-amount-max').click();
     await expect(page.getByTestId('order-amount')).toHaveValue('5');
     await expect(page.getByTestId('order-issue-INSUFFICIENT_TOKENS')).toHaveCount(0);
-    await expect(page.getByTestId('order-review')).toBeEnabled();
+    await expect(page.getByTestId('order-place')).toBeEnabled();
   });
 
   test('self-trade prevention: a buy that would cross your own resting sell is refused', async ({ appPage: page, mock }) => {
@@ -192,17 +163,13 @@ test.describe('order ticket', () => {
     await page.getByTestId('order-side-sell').click();
     await page.getByTestId('order-amount').fill('2');
     await page.getByTestId('order-price').fill('3.4');
-    await page.getByTestId('order-review').click();
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
-    await page.getByTestId('confirm-close').click();
+    await placeOrder(page, mock);
 
     await page.getByTestId('order-side-buy').click();
     await page.getByTestId('order-amount').fill('1');
     await page.getByTestId('order-price').fill('3.5');
     await expect(page.getByTestId('order-issue-SELF_TRADE')).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId('order-review')).toBeDisabled();
+    await expect(page.getByTestId('order-place')).toBeDisabled();
   });
 
   test('every order type is reachable and shows its own fields', async ({ appPage: page, mock }) => {
@@ -247,7 +214,7 @@ test.describe('order ticket', () => {
     await expect(page.getByTestId('order-side-sell')).toBeDisabled();
   });
 
-  test('a stop-market sell reaches the confirmation screen with its trigger rules', async ({ appPage: page, mock }) => {
+  test('a stop-market sell is ready to place with its trigger rules', async ({ appPage: page, mock }) => {
     await fundAlice(mock);
     await openTicket(page, mock);
     await page.getByTestId('order-side-sell').click();
@@ -256,21 +223,18 @@ test.describe('order ticket', () => {
     await page.getByTestId('field-stop').fill('2.2');
     await expect(page.getByTestId('disc-stopWorst')).toBeVisible();
     await expect(page.getByTestId('disc-notes').locator('[data-note="stopTrigger"]')).toBeVisible();
-    await page.getByTestId('order-review').click();
-    await expect(page.getByTestId('confirm-summary')).toContainText('Sell stop order');
-    await expect(page.getByTestId('confirm-summary')).toContainText('2.2 EXKCC / KAS');
-    await expect(page.getByTestId('confirm-blocking')).toHaveCount(0);
-    await page.getByTestId('confirm-cancel').click();
-    await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
+    await waitReviewable(page);
+    await expect(page.getByTestId('order-place')).toHaveText('Sell Stop (market)');
+    await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
     expect(await mock.submitted()).toHaveLength(0);
   });
 
-  test('without a wallet the form works but review is disabled and says why', async ({ appPage: page, mock }) => {
+  test('without a wallet the form works but the order button is disabled and says why', async ({ appPage: page, mock }) => {
     await openTicket(page, mock, false);
     await page.getByTestId('order-amount').fill('1');
     await page.getByTestId('order-price').fill('2.7');
     await expect(page.getByTestId('order-need-wallet')).toBeVisible();
-    await expect(page.getByTestId('order-review')).toBeDisabled();
+    await expect(page.getByTestId('order-place')).toBeDisabled();
   });
 
 
@@ -352,7 +316,7 @@ test.describe('order ticket', () => {
     await page.getByTestId('order-amount-pct-50').click();
     await expect.poll(base).toBe(max / 2n);
     await expect(slider).toHaveAttribute('data-pct', '50');
-    await expect(page.getByTestId('order-review')).toBeEnabled();
+    await expect(page.getByTestId('order-place')).toBeEnabled();
     // a phone: the slider is one row inside the ticket, nothing scrolls sideways
     await page.setViewportSize({ width: 375, height: 800 });
     const box = (await slider.boundingBox())!;

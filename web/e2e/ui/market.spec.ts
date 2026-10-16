@@ -58,7 +58,7 @@ test.describe('shell and token list', () => {
     await expect(appPage.getByTestId('status-indexer')).toContainText('following');
   });
 
-  test('two listed tokens with one ticker: both rows, the token page and the ticket carry the shared-ticker note; a unique ticker has none', async ({ appPage, mock }) => {
+  test('two listed tokens with one ticker: both rows and the token page header carry the shared-ticker note (the ticket does not repeat it); a unique ticker has none', async ({ appPage, mock }) => {
     const { id } = await seeded(mock);
     const twin = 'bb'.repeat(32);
     const solo = 'dd'.repeat(32);
@@ -80,15 +80,15 @@ test.describe('shell and token list', () => {
     await expect(soloRow.locator('[data-testid^="shared-ticker-"]')).toHaveCount(0);
     // no row says whether a token is verified or official
     for (const r of [regRow, twinRow, soloRow]) await expect(r).not.toContainText(/unverified|verified|official|pending review|NOT that token/i);
-    // the token page header and the ticket of the registry token repeat the note
+    // the token page header of the registry token repeats the note; the ticket under it stays free of it
     await regRow.getByTestId(`token-link-${id}`).click();
     await expect(appPage.getByTestId('token-header').getByTestId('token-shared-ticker')).toHaveText(note);
-    await expect(appPage.getByTestId('ticket-container').getByTestId('ticket-shared-ticker')).toHaveText(note);
-    // the unique ticker's page has neither
+    await expect(appPage.getByTestId('ticket-container')).toBeVisible();
+    await expect(appPage.getByTestId('ticket-container')).not.toContainText(note);
+    // the unique ticker's page has none
     await appPage.goto(`/#/market/${solo}`);
     await expect(appPage.getByTestId('token-header')).toBeVisible();
     await expect(appPage.getByTestId('token-shared-ticker')).toHaveCount(0);
-    await expect(appPage.getByTestId('ticket-shared-ticker')).toHaveCount(0);
   });
 
   test('add an unknown token by covenant id: found through the indexer, listed by its covenant id with no verification wording', async ({ appPage, mock }) => {
@@ -213,7 +213,7 @@ test.describe('token page', () => {
     await expect(appPage.getByTestId('ticket-container')).toBeVisible();
     await expect(appPage.getByTestId('first-order')).toHaveCount(0);
     await expect(appPage.getByTestId('first-order-entered')).toHaveCount(0);
-    await expect(appPage.getByTestId('ticket-open-caution')).toContainText('first order set');
+    await expect(appPage.getByTestId('token-header').getByTestId('token-open-caution')).toContainText('first order set');
   });
 
   test('an unknown covenant id is reported, not blank', async ({ appPage }) => {

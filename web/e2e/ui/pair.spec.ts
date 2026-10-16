@@ -1,20 +1,23 @@
 // Token/token pairs against the mock stack: the pair seed (`POST /mock/seed {pair: true}`: EXKCC/EXUSD with resting KobPair asks and a bid, a
 // buy-first KobIfdPair entry, a KobCondPair sell stop and an EXUSD KAS book), reached from the token page's quote picker. The pair page shows the pair
 // book (direct pair orders, if-done entries at their limit, the route through the two KAS books) and the UNIFIED order ticket with EXUSD as its quote:
-// every order type of the KAS ticket, prices typed in EXUSD per EXKCC, tips in KAS. Pair orders go through the decoded confirmation screen, appear in
-// My orders with their pair, what they hold of each token and (stops) the pair trigger rule, and are cancelled (custodies back to the wallet).
+// every order type of the KAS ticket, prices typed in EXUSD per EXKCC, tips in KAS. Pair orders are sent with the ticket's one button (the accepted
+// transaction carries the pair, the token each side escrows, the price and the trigger rule), appear in My orders with their pair, what they hold
+// of each token and (stops) the pair trigger rule, and are cancelled (custodies back to the wallet).
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
 import { TOKEN, connectWallet, fund } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
-import { acknowledgeAndSign, fillFields, openReview, pickType, placedBy, readConfirm, readDisclosure, waitReviewable } from '../helpers/ticket';
+import { fillFields, pickType, placeOrder, readDisclosure, waitReviewable } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
 const QUOTE = 'e7'.repeat(32);
 /** EXUSD has 6 decimals: base units per whole EXUSD */
 const USD = 1_000_000n;
+/** the 8-byte little-endian integer push of the state codec: 08 <u64 le> */
+const pushInt = (v: bigint): string => '08' + Array.from({ length: 8 }, (_, i) => Number((v >> BigInt(8 * i)) & 0xffn).toString(16).padStart(2, '0')).join('');
 
 /** The example registry with EXKCC listed and a second listed KCC-20, EXUSD (6 decimals), matching the mock pair seed. */
 async function listPair(page: Page): Promise<void> {
@@ -47,8 +50,8 @@ async function openPair(page: Page, mock: MockClient, o: { usd?: bigint } = {}):
 
 const balanceOf = async (mock: MockClient, ticker: string) => BigInt((await mock.balance('alice')).tokens[ticker] ?? '0');
 
-test('pair book (direct, entry, route) and a pair limit sell through the unified ticket, the confirmation screen, My orders and cancel', async ({ appPage: page, mock }) => {
-  await openPair(page, mock);
+test('pair book (direct, entry, route) and a pair limit sell through the unified ticket, the accepted transaction, My orders and cancel', async ({ appPage: page, mock }) => {
+  const base = await openPair(page, mock);
   const book = page.getByTestId('pair-book');
   await expect(book).toBeVisible();
   // resting pair orders (direct), the buy-first if-done entry resting at its limit (entry) and the route through both KAS books ("via KAS")
@@ -80,24 +83,16 @@ test('pair book (direct, entry, route) and a pair limit sell through the unified
   expect(d.notes).toEqual(expect.arrayContaining(['pairPricesFromKasBooks', 'pairTipKas', 'pairRoute', 'pairNetting', 'pairInventory']));
   expect(d.text).toContain('pair fills count only as volume');
 
-  const confirm = await openReview(page);
-  expect(confirm.kind).toBe('create');
-  const card = confirm.created[0]!;
-  expect(card.title).toBe('Sell limit order');
-  expect(card.rows.pairPair).toContain('sells EXKCC for EXUSD');
-  expect(card.rows.pairEscrowA).toContain('2 EXKCC');
-  expect(card.rows.pairTotal).toContain('0.103 EXUSD');
-  expect(card.rows.price).toContain('0.0515 EXKCC / EXUSD');
-  const txid = await acknowledgeAndSign(page);
-  const placed = await placedBy(mock, txid);
+  const placed = await placeOrder(page, mock);
   expect(placed.views).toHaveLength(1);
   const view = placed.views[0];
   expect(view.contract).toBe('KobPair');
-  // the price is EXUSD base units per whole EXKCC: 0.0515 EXUSD = 51_500
-  expect(view.state.state).toMatchObject({ side: '1', price: '51500', amountLeft: String(2n * TOKEN), custody: String(2n * TOKEN), tCovId: QUOTE });
+  // the pair sells EXKCC (side 1) for EXUSD; the price is EXUSD base units per whole EXKCC: 0.0515 EXUSD = 51_500, so the 2 EXKCC are worth 0.103 EXUSD
+  expect(view.state.state).toMatchObject({ side: '1', price: '51500', amountLeft: String(2n * TOKEN), custody: String(2n * TOKEN), sCovId: base, tCovId: QUOTE });
+  expect((BigInt(view.state.state.amountLeft) * BigInt(view.state.state.price)) / TOKEN).toBe(103_000n);
+  // the escrow: the 2 EXKCC sit in the order's one custody output
+  expect(placed.submission.token_outputs.filter((o) => o.role === 'custody').map((o) => o.amount)).toEqual([String(2n * TOKEN)]);
   expect(await balanceOf(mock, 'EXKCC')).toBe(98n * TOKEN);
-  await page.getByTestId('confirm-close').click();
-  await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
   // the new direct ask shows up in the pair book (book:<EXKCC> / book:<EXUSD> trigger the refetch)
   await expect(book.locator('[data-testid="pair-level"][data-source="direct"][data-price="0.0515"]')).toHaveCount(1, { timeout: 15_000 });
 
@@ -114,15 +109,13 @@ test('pair book (direct, entry, route) and a pair limit sell through the unified
   await expect(row.getByTestId('order-allin')).toHaveCount(0);
   await page.getByTestId(`order-cancel-${id}`).click();
   const [step] = await runFlow(page, mock, null, { steps: 1 });
-  expect(step!.confirm.kind).toBe('cancel');
-  expect(step!.confirm.closed[0]!.title).toBe('Cancel: Sell limit order');
-  expect(step!.placed.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
+  expect(step!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
   expect((await mock.order(id)).status).toBe('cancelled');
   expect(await balanceOf(mock, 'EXKCC')).toBe(100n * TOKEN);
 });
 
 test('a click on a pair book level prefills the ticket; a pair limit buy escrows EXUSD and is cancelled back', async ({ appPage: page, mock }) => {
-  await openPair(page, mock, { usd: 10n });
+  const base = await openPair(page, mock, { usd: 10n });
   const book = page.getByTestId('pair-book');
   // the best ask (0.0505 EXUSD per EXKCC): a buy at that price
   await book.locator('[data-testid="pair-level"][data-source="direct"][data-side="ask"]').last().click();
@@ -135,17 +128,14 @@ test('a click on a pair book level prefills the ticket; a pair limit buy escrows
   const d = await readDisclosure(page);
   expect(d.rows.pairEscrowB).toContain('EXUSD');
   expect(d.rows.pairPayMaxB).toContain('0.048 EXUSD');
-  const confirm = await openReview(page);
-  expect(confirm.created[0]!.title).toBe('Buy limit order');
-  expect(confirm.created[0]!.rows.pairPair).toContain('buys EXKCC with EXUSD');
-  expect(confirm.created[0]!.rows.pairTotal).toContain('0.048 EXUSD');
-  const placed = await placedBy(mock, await acknowledgeAndSign(page));
-  await page.getByTestId('confirm-close').click();
+  const placed = await placeOrder(page, mock);
   const view = placed.views[0];
   expect(view.contract).toBe('KobPair');
-  expect(view.state.state).toMatchObject({ side: '2', price: '48000', amountLeft: String(TOKEN), sCovId: QUOTE });
+  // the pair buys EXKCC (side 2) with EXUSD: it escrows EXUSD, and 1 EXKCC at 48_000 EXUSD base units costs 0.048 EXUSD
+  expect(view.state.state).toMatchObject({ side: '2', price: '48000', amountLeft: String(TOKEN), sCovId: QUOTE, tCovId: base });
   const escrow = BigInt(view.state.state.custody);
   expect(escrow).toBeGreaterThanOrEqual(48_000n);
+  expect(placed.submission.token_outputs.filter((o) => o.role === 'custody').map((o) => o.amount)).toEqual([String(escrow)]);
   expect(await balanceOf(mock, 'EXUSD')).toBe(10n * USD - escrow);
 
   await page.getByTestId('pair-my-orders').click();
@@ -155,12 +145,12 @@ test('a click on a pair book level prefills the ticket; a pair limit buy escrows
   await expect(row.getByTestId('order-pair-escrow-b')).toContainText('EXUSD');
   await page.getByTestId(`order-cancel-${id}`).click();
   const [step] = await runFlow(page, mock, null, { steps: 1 });
-  expect(step!.placed.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
+  expect(step!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
   expect(await balanceOf(mock, 'EXUSD')).toBe(10n * USD);
 });
 
-test('a pair stop discloses the trigger rule (two KAS books or a resting pair order) in the ticket, the confirmation screen and My orders', async ({ appPage: page, mock }) => {
-  await openPair(page, mock);
+test('a pair stop discloses the trigger rule (two KAS books or a resting pair order) in the ticket, the accepted transaction and My orders', async ({ appPage: page, mock }) => {
+  const base = await openPair(page, mock);
   await pickType(page, 'stopMarket', 'sell');
   await fillFields(page, { amount: '1', stop: '0.046' });
   await waitReviewable(page);
@@ -168,14 +158,11 @@ test('a pair stop discloses the trigger rule (two KAS books or a resting pair or
   const rule = 'arms on fills implying a rate at or below 0.046 EXKCC / EXUSD: a resting sell of EXKCC and buy of EXUSD filled together (each rested 5 s), or a resting EXKCC pair sell at or below the stop';
   expect(d.rows.pairTrigger).toContain(rule);
   expect(d.notes).toContain('pairTrigger');
-  const confirm = await openReview(page);
-  expect(confirm.created[0]!.title).toBe('Sell stop order');
-  expect(confirm.created[0]!.rows.pairTrigger).toContain(rule);
-  const placed = await placedBy(mock, await acknowledgeAndSign(page));
-  await page.getByTestId('confirm-close').click();
+  const placed = await placeOrder(page, mock);
   const view = placed.views[0];
   expect(view.contract).toBe('KobCondPair');
-  expect(view.state.state).toMatchObject({ side: '1', stopPrice: '46000', armed: '0' });
+  // the trigger rule on chain: a sell of EXKCC for EXUSD that arms at 0.046 EXUSD per EXKCC, once a resting order has rested 5 s (50 DAA)
+  expect(view.state.state).toMatchObject({ side: '1', stopPrice: '46000', armed: '0', minRestDaa: '50', sCovId: base, tCovId: QUOTE });
 
   await page.getByTestId('pair-my-orders').click();
   const id = view.covenant_id as string;
@@ -187,11 +174,11 @@ test('a pair stop discloses the trigger rule (two KAS books or a resting pair or
   await expect(row.getByTestId(`order-replace-${id}`)).toBeVisible();
   await page.getByTestId(`order-cancel-${id}`).click();
   const [step] = await runFlow(page, mock, null, { steps: 1 });
-  expect(step!.placed.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
+  expect(step!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
 });
 
 test('an IFD pair (buy first): the exit custody in the ticket, the entry in My orders, a fill books its exit as one position, the position cancel', async ({ appPage: page, mock }) => {
-  await openPair(page, mock, { usd: 10n });
+  const base = await openPair(page, mock, { usd: 10n });
   await pickType(page, 'ifd', 'buy');
   await fillFields(page, { amount: '2', price: '0.048', 'exit.takeProfit': '0.055' });
   await waitReviewable(page);
@@ -199,13 +186,17 @@ test('an IFD pair (buy first): the exit custody in the ticket, the entry in My o
   expect(d.rows.pairExitCustody).toContain('the EXKCC its entry fill bought');
   expect(d.rows.pairEscrowB).toContain('EXUSD');
   expect(d.notes).toContain('pairExitCustody');
-  const confirm = await openReview(page);
-  expect(confirm.created[0]!.title).toBe('Buy IFD entry');
-  expect(confirm.created[0]!.children[0]!.rows.pairPair).toContain('sells EXKCC for EXUSD');
-  const placed = await placedBy(mock, await acknowledgeAndSign(page));
-  await page.getByTestId('confirm-close').click();
+  const placed = await placeOrder(page, mock);
   const entry = placed.views[0];
   expect(entry.contract).toBe('KobIfdPair');
+  // the entry buys EXKCC (A) with EXUSD (B), which it escrows; the exit it commits to is the maker's take-profit (55_000) over the same two tokens
+  expect(entry.state.state).toMatchObject({ side: '2', price: '48000', amountLeft: String(2n * TOKEN), aCovId: base, bCovId: QUOTE });
+  expect(placed.submission.token_outputs.filter((o) => o.role === 'custody').map((o) => o.amount)).toEqual([entry.state.state.custody]);
+  const exit = entry.state.state.exitState as string;
+  expect(exit.startsWith('20' + entry.maker), 'exit template owner').toBe(true);
+  expect(exit).toContain(base);
+  expect(exit).toContain(QUOTE);
+  expect(exit).toContain(pushInt(55_000n));
   const id = entry.covenant_id as string;
 
   // a fill of 1 EXKCC books the entry's exit (a KobCondPair take-profit holding the bought EXKCC)
@@ -221,8 +212,7 @@ test('an IFD pair (buy first): the exit custody in the ticket, the entry in My o
   await expect(position.locator('[data-testid^="order-row-"][data-type="take-profit"] [data-testid="order-pair-escrow-a"]')).toHaveText('1 EXKCC');
   await position.locator('[data-testid^="position-cancel-"]').click();
   const [step] = await runFlow(page, mock, null, { steps: 1 });
-  expect(step!.confirm.kind).toBe('cancel-position');
-  expect(step!.placed.submission.closed.map((c: { status: string }) => c.status)).toEqual(['cancelled', 'cancelled']);
+  expect(step!.submission.closed.map((c: { status: string }) => c.status)).toEqual(['cancelled', 'cancelled']);
   // the escrow left and the exit's EXKCC are back
   expect(await balanceOf(mock, 'EXKCC')).toBe(101n * TOKEN);
 });
@@ -263,11 +253,15 @@ test('a pair sell budgets its fills like a buy: "Fills to fund" reaches the plan
   // 2 EXKCC with a minimum fill of 0.5: four possible fills, two funded -> after one partial fill the rest fills only in full
   await fillFields(page, { price: '0.0515', amount: '2', minFill: '0.5', maxFills: '2' });
   await waitReviewable(page);
-  await expect(page.getByTestId('order-issue-PAIR_FILLS_LIMITED')).toBeVisible();
-  // one delivery per possible fill: no longer limited
+  const limited = await readDisclosure(page);
+  // the planner's info note is not shown; what "Fills to fund" changes is the KAS the order locks for its deliveries
+  await expect(page.getByTestId('order-issue-PAIR_FILLS_LIMITED')).toHaveCount(0);
+  // one delivery per possible fill: the extra deliveries lock more KAS
   await fillFields(page, { maxFills: '4' });
   await waitReviewable(page);
-  await expect(page.getByTestId('order-issue-PAIR_FILLS_LIMITED')).toHaveCount(0);
+  const full = await readDisclosure(page);
+  const kas = (text: string) => parseFloat(text.replace(/[^\d.]/g, ''));
+  expect(kas(full.kasLocked)).toBeGreaterThan(kas(limited.kasLocked));
   // the KAS ticket of the same token: a sell has no fills to fund
   await page.goto(`/#/market/${base}`);
   await pickType(page, 'limit', 'sell');
@@ -310,7 +304,7 @@ test('without the pair routes the view says "pair book unavailable" and still pl
   // buying EXKCC pays EXUSD: alice holds none, so the planner reports the shortfall in EXUSD (the ticket still works without the pair book)
   await expect(page.getByTestId('order-issue-PAIR_INSUFFICIENT_TOKENS')).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId('order-issue-PAIR_INSUFFICIENT_TOKENS')).toContainText('Not enough EXUSD');
-  await expect(page.getByTestId('order-review')).toBeDisabled();
+  await expect(page.getByTestId('order-place')).toBeDisabled();
 });
 
 test('picking a quote token keeps the layout: the chart stays in the same place and size, the book and the ticket keep their areas', async ({ appPage: page, mock }) => {

@@ -253,7 +253,8 @@ export function buildDisclosureModel(plan: OrderPlan, ctx: DisclosureCtx): Discl
   const boundOnly = d.expectedPrice !== null && d.worstPrice !== null && d.worstPrice === d.limitPrice;
   if (d.limitPrice !== null && !boundOnly) price.push(priceRow('limit', 'ticket.disc.limit', d.limitPrice, ctx));
   if (d.tip > 0n) price.push(kasPriceRow('tip', 'ticket.disc.tip', d.tip, ctx, 'muted'));
-  if (d.allInPrice !== null) price.push(priceRow('allInPrice', buy ? 'ticket.disc.allInPay' : 'ticket.disc.allInReceive', d.allInPrice, ctx, 'primary'));
+  // without a tip the all-in price is the bound shown above (the limit, or the worst price of an auction / a stop): not the same number twice
+  if (d.allInPrice !== null && d.tip > 0n) price.push(priceRow('allInPrice', buy ? 'ticket.disc.allInPay' : 'ticket.disc.allInReceive', d.allInPrice, ctx, 'primary'));
   // the total by the covenant's quote rule: a sell receives at least (rounded up), a buy pays at most (rounded down); on a pair an amount of B
   if (d.allInTotal !== null) {
     price.push({ id: 'allInTotal', labelKey: buy ? 'ticket.disc.totalPay' : 'ticket.disc.totalReceive', tone: 'primary', value: ctx.quote ? quoteTokens(d.allInTotal, ctx.quote) : kasText(d.allInTotal) });

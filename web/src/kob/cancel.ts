@@ -299,7 +299,7 @@ export interface CancelPlan {
   sweep?: SweepSummary;
 }
 
-/** What a sweep moves (per token) and leaves; the confirmation screen states the same from the transaction itself. */
+/** What a sweep moves (per token) and leaves; the pre-sign decoder derives the same from the transaction itself. */
 export interface SweepSummary {
   covenantId: Hex;
   /** stray UTXOs moved */

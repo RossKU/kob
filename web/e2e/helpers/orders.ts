@@ -1,9 +1,9 @@
-// Helpers of the "My orders" flows: seeding orders for the wallet key, opening the orders page, and running the confirmation screens of a
-// (possibly multi-step) transaction flow.
+// Helpers of the "My orders" flows: seeding orders for the wallet key, opening the orders page, and waiting for a (possibly multi-step) transaction flow
+// that starts at once and asks the wallet by itself.
 import type { Page } from '@playwright/test';
 import { expect, type MockClient, type KeyName, type MockWalletHandle } from '../fixtures';
 import { openMarket, type WalletName } from './env';
-import { acknowledgeAndSign, placedBy, readConfirm, expectWalletSigned, type ConfirmRead, type Placed } from './ticket';
+import { expectWalletSigned, placedBy, type Placed } from './ticket';
 
 export interface SeedAsk {
   side: 'ask' | 'bid';
@@ -29,31 +29,28 @@ export async function openOrders(page: Page, mock: MockClient, wallet: WalletNam
   await expect(page.getByTestId('orders-list')).toBeVisible();
 }
 
-export interface FlowStepResult {
-  confirm: ConfirmRead;
-  placed: Placed;
-}
-
 /**
- * Runs every confirmation screen of a transaction flow to its end: read the decoded screen, acknowledge, sign, wait for the accepted tx, close.
- * Stops when the flow shows its result (`flow-done`). Returns the decoded screens and the accepted transactions in order.
+ * Waits for the end of a transaction flow of My orders (`flow-done`, or `flow-stopped` with `stopped: true`): the action's click already made the
+ * first wallet request, each further step asks the wallet by itself. Returns the transactions the flow submitted, in order (decoded by the mock
+ * node), and checks that the wallet signed exactly those and nothing else.
  */
-export async function runFlow(page: Page, mock: MockClient, wallet: MockWalletHandle | null, opts: { steps?: number } = {}): Promise<FlowStepResult[]> {
-  const out: FlowStepResult[] = [];
-  const base = wallet ? (await wallet.calls()).length : 0; // sign requests of earlier steps of the test
-  for (;;) {
-    const screen = page.getByTestId('confirm-screen');
-    const done = page.getByTestId('flow-done');
-    await expect(screen.or(done)).toBeVisible({ timeout: 30_000 });
-    if (await done.isVisible()) break;
-    const confirm = await readConfirm(page);
-    expect(confirm.blocking, 'no blocking finding').toEqual([]);
-    const txid = await acknowledgeAndSign(page);
-    const placed = await placedBy(mock, txid);
-    if (wallet) await expectWalletSigned(wallet, placed, { requests: base + out.length + 1 });
-    out.push({ confirm, placed });
-    await page.getByTestId('confirm-close').click();
-    await expect(screen).toHaveCount(0);
+export async function runFlow(page: Page, mock: MockClient, wallet: MockWalletHandle | null, opts: { steps?: number; stopped?: boolean } = {}): Promise<Placed[]> {
+  await expect(page.getByTestId(opts.stopped ? 'flow-stopped' : 'flow-done')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
+  // the transactions: a multi-step flow lists the first 10 characters of each submitted step, the status line shows the last one in full
+  const prefixes = (await page.locator('[data-testid^="flow-step-"] code').allTextContents()).map((c) => c.trim().replace('…', ''));
+  const status = page.getByTestId('flow-status');
+  await expect(status).toHaveAttribute('data-phase', /^(submitted|blocked|rejected|failed)$/);
+  // a stopped last step shows an error instead of the id
+  const last = (await status.getAttribute('data-phase')) === 'submitted' ? await status.getByTestId('tx-id').getAttribute('data-value') : null;
+  const all = await mock.submitted();
+  const mine = prefixes.length ? prefixes.map((p) => all.find((s) => s.txid.startsWith(p))).filter((s) => !!s) : last ? all.filter((s) => s.txid === last) : [];
+  if (last) await expect(page.getByTestId('flow-status').getByTestId('tx-status')).toHaveAttribute('data-status', 'confirmed', { timeout: 30_000 });
+  const out = await Promise.all(mine.map((s) => placedBy(mock, s!.txid)));
+  if (wallet && !opts.stopped) {
+    const calls = await wallet.calls();
+    expect(calls.length, 'sign requests of the whole test').toBeGreaterThanOrEqual(out.length);
+    for (let i = 0; i < out.length; i++) await expectWalletSigned(wallet, out[i]!, { call: calls.length - out.length + i });
   }
   if (opts.steps !== undefined) expect(out).toHaveLength(opts.steps);
   return out;

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Clock, OrderPlan, PlanIssue } from '../../kob/plan-types';
 import type { BuiltTx } from '../../kob/types';
+import { MARKET_ACTIVATION_DAA } from '../../kob/daa';
+import { planOrder } from '../../kob/plan';
+import { TOK, makeEnv } from '../../testing/fixtures';
+import { AUCTION_START_MARGIN_DAA, auctionSubmitBy } from '../../wallet/sign';
 import { REVIEW_CACHE_MS, REVIEW_REUSE_MS, partCurrent, projectClock, recheckVerdict, reviewClock, sameTransaction } from './review-check';
 
 describe('partCurrent (is a part on hand the state at the click?)', () => {
@@ -60,7 +64,7 @@ describe('reviewClock', () => {
 });
 
 describe('recheckVerdict', () => {
-  it('holds only for the same transaction with no error and no warning the screen did not show', () => {
+  it('holds only for the same transaction without an error; a new warning never stops the order', () => {
     const shown = plan(built(['a', 'b']), [issue('W1', 'warning')]);
     expect(recheckVerdict(shown, plan(built(['a', 'b']), [issue('W1', 'warning')]))).toEqual({ ok: true });
     // another coin, another fee: another transaction
@@ -69,14 +73,38 @@ describe('recheckVerdict', () => {
     // the wallet's own resting order now crosses it (read with the holdings): an error
     const self = issue('SELF_TRADE', 'error');
     expect(recheckVerdict(shown, plan(built(['a', 'b']), [self]))).toEqual({ ok: false, issues: [self] });
-    // a warning the screen did not show
-    const w2 = issue('W2', 'warning');
-    expect(recheckVerdict(shown, plan(built(['a', 'b']), [w2]))).toEqual({ ok: false, issues: [w2] });
+    // a warning the ticket did not show is not shown and stops nothing
+    expect(recheckVerdict(shown, plan(built(['a', 'b']), [issue('W2', 'warning')]))).toEqual({ ok: true });
     expect(recheckVerdict(shown, plan(null))).toEqual({ ok: false, issues: [] });
   });
 
   it('sameTransaction compares the unsigned transaction byte for byte', () => {
     expect(sameTransaction(built(['a']), built(['a']))).toBe(true);
     expect(sameTransaction(built(['a']), built(['b']))).toBe(false);
+  });
+});
+
+describe('the clock of a click (an auction starts from it)', () => {
+  // TN10 2026-10-17: a market order planned at Review and signed 17 s later started its auction 175 DAA in the past and filled near its worst price
+  const market = { type: 'market', side: 'buy', amount: 5n * TOK } as never;
+  const startOf = (p: OrderPlan): bigint => BigInt((p.states[0]!.state as { activeFrom: string }).activeFrom);
+
+  it('a stale clock on hand never ends up in activeFrom: the node clock read at the click does, and the send guard follows it', async () => {
+    const stale = clock;
+    const node: Clock = { ...stale, daa: stale.daa + 175n, unixSeconds: stale.unixSeconds + 17n };
+    const read = await reviewClock(async () => node, stale, 0, { waitMs: 100, now: () => 17_500 });
+    const plan = planOrder(makeEnv({ clock: read.clock }), market);
+    expect(plan.ok).toBe(true);
+    expect(startOf(plan)).toBe(node.daa + MARKET_ACTIVATION_DAA);
+    expect(auctionSubmitBy(plan.states, read.clock.daa)).toBe(node.daa + MARKET_ACTIVATION_DAA + AUCTION_START_MARGIN_DAA);
+    // a node too slow to answer: the clock on hand projected to the click, never the clock on hand itself
+    const slow = await reviewClock(() => new Promise<Clock>(() => undefined), stale, 0, { waitMs: 10, now: () => 17_500 });
+    expect(startOf(planOrder(makeEnv({ clock: slow.clock }), market))).toBe(stale.daa + 170n + MARKET_ACTIVATION_DAA);
+  });
+
+  it('a resting limit order has no auction start to guard', () => {
+    const limit = planOrder(makeEnv(), { type: 'limit', side: 'sell', amount: 5n * TOK, price: 900_000_000n } as never);
+    expect(limit.ok).toBe(true);
+    expect(auctionSubmitBy(limit.states, clock.daa)).toBeNull();
   });
 });

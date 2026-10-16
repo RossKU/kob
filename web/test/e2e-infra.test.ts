@@ -52,7 +52,7 @@ describe('UI test-id contract', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids.every((i) => /^[a-z]+(-[a-z]+)*$/.test(i))).toBe(true);
     const brief =
-      'nav-market nav-orders nav-issue nav-settings wallet-connect-kasware wallet-connect-kaspire wallet-connect-kastle wallet-address wallet-network market-base-select book-asks book-bids trades-list order-type order-side-buy order-side-sell order-amount order-price order-tip order-review order-issues confirm-screen confirm-summary confirm-blocking confirm-sign confirm-cancel tx-status tx-id orders-list orders-cancel-all orders-export orders-import balances-panel issue-name issue-ticker issue-decimals issue-supply issue-review'.split(' ');
+      'nav-market nav-orders nav-issue nav-settings wallet-connect-kasware wallet-connect-kaspire wallet-connect-kastle wallet-address wallet-network market-base-select book-asks book-bids trades-list order-type order-side-buy order-side-sell order-amount order-price order-tip order-place order-issues order-status confirm-screen confirm-sign tx-status tx-id orders-list orders-cancel-all orders-export orders-import balances-panel issue-name issue-ticker issue-decimals issue-supply issue-review'.split(' ');
     for (const id of brief) expect(ids, id).toContain(id);
     expect(testids.orderRow('ab')).toBe('order-row-ab');
     expect(testids.orderCancel('ab')).toBe('order-cancel-ab');

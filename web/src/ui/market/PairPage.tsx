@@ -151,7 +151,6 @@ export function PairPage(props: { base: string; quote: string }) {
     [base, quote, last, change, dp, cc, cur, fills.data],
   );
   const depthSeries = useMemo(() => (book.data && base && quote ? pairDepthSeries(book.data, base, quote) : null), [book.data, base, quote]);
-  const powers = useMemo(() => [...new Set([...(baseRow?.powers ?? []), ...(quoteRow?.powers ?? [])])], [baseRow, quoteRow]);
 
   const blocked = [baseInfo, quoteInfo].find((x) => x && !x.tradable);
   if (blocked) return <NotTradablePage ticker={blocked.ticker} covenantId={blocked.covenantId} reason={blocked.untradableReason ? t(`market.reason.${blocked.untradableReason}`) : null} />;
@@ -258,7 +257,7 @@ export function PairPage(props: { base: string; quote: string }) {
       }
       ticket={
         <div class="stack mkt-area-ticket">
-          <OrderTicket token={baseInfo} quote={quoteInfo} prefill={prefill} powers={powers} sharedTicker={shared.has(props.base) || shared.has(props.quote)} />
+          <OrderTicket token={baseInfo} quote={quoteInfo} prefill={prefill} />
           <p class="small muted">
             <a href="#/orders" data-testid="pair-my-orders">{t('pair.myOrders')}</a>
           </p>

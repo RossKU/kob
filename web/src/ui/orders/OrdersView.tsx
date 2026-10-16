@@ -38,14 +38,13 @@ interface Flow {
   steps: FlowStep[];
   /** a chained flow (token merge): builds step `index` once the previous one was submitted */
   next?: TxFlowProps['next'];
-  note?: string;
 }
 
 const REFRESH_MS = 15_000;
 
 /**
  * `#/orders`: the wallet's orders (indexer + placement records resolved on the node), positions with their exits, balances the wallet does not show,
- * strays, cancel / amend / refund / cancel-all, and recovery. Nothing here signs: every transaction goes through <ConfirmSign>.
+ * strays, cancel / amend / refund / cancel-all, and recovery. Nothing here signs: every transaction goes through <TxFlow> (ui/confirm/send.ts).
  */
 export function OrdersView() {
   const services = useServices();
@@ -102,7 +101,7 @@ export function OrdersView() {
   // a failed stray fetch is passed on as "unknown" (null): a record-path cancel then warns instead of silently abandoning strays
   const strayList = d?.straysError ? null : strays;
 
-  const startFlow = (heading: string, steps: FlowStep[], chain: Pick<Flow, 'next' | 'note'> = {}) => {
+  const startFlow = (heading: string, steps: FlowStep[], chain: Pick<Flow, 'next'> = {}) => {
     setPlanFail(null);
     setFailure(null);
     setFlow({ key: Date.now(), heading, steps, ...chain });
@@ -223,7 +222,6 @@ export function OrdersView() {
         t('orders.merge.heading', { ticker: info.ticker }),
         plan.links.map((l, i) => mergeStep(l, i, total, summary)),
         {
-          note: t('orders.merge.note'),
           next: async (k, r) => {
             const link = await nextMergeLink(services, pubkey, info, plan, k, prev, r.txid);
             prev = link;
@@ -246,7 +244,7 @@ export function OrdersView() {
 
   const onStepSubmitted = async (step: FlowStep, result: { txid: string }) => {
     // the records stay (marked) until the cancel is final: a fill may win the race, a reorg may undo it (C5-06)
-    // (a sweep continues the order: markCancelling leaves its record unmarked, ConfirmSign moved its last state to the continuation)
+    // (a sweep continues the order: markCancelling leaves its record unmarked, the send moved its last state to the continuation)
     if (pubkey) await markCancelling(wallet.records, { cancelIds: step.spends, built: step.plan.built }, result.txid);
     showToast(step.toast ?? (step.plan.sweep ? t('orders.flow.sweepSubmitted', { count: step.plan.sweep.utxos }) : t('orders.flow.submitted', { count: step.spends.length })), 'ok');
   };
@@ -424,7 +422,6 @@ export function OrdersView() {
           onStepSubmitted={onStepSubmitted}
           onDone={onFlowDone}
           {...(flow.next ? { next: flow.next } : {})}
-          {...(flow.note ? { note: flow.note } : {})}
         />
       ) : null}
 

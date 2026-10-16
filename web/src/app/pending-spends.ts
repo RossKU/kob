@@ -38,5 +38,5 @@ export class PendingSpends {
   }
 }
 
-/** The page's one registry: the confirmation screen adds to it, the environment builders read it. */
+/** The page's one registry: a send that the node accepted adds to it (ui/confirm/send.ts), the environment builders read it. */
 export const pendingSpends = new PendingSpends();

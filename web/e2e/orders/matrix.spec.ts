@@ -1,15 +1,16 @@
 // The order-type matrix (mock KasWare wallet, default mock seed, EXKCC listed as tradable): every order type of docs/spec/order-types.md, on
 // each side where it exists, is placed end to end through the UI:
-//   ticket fields -> live disclosure -> review -> decoded confirmation screen (no blocking finding) -> acknowledge -> wallet signs exactly the
-//   inputs of the transaction -> mock node accepts (the covenants run) -> the indexer holds the right contract with the right state fields
+//   ticket fields -> live disclosure -> ONE click on the order button -> the wallet signs exactly the inputs of the transaction (no confirmation
+//   screen) -> mock node accepts (the covenants run) -> the indexer holds the right contract with the right state fields
 //   (and kob-wasm `recoverOrders` on the accepted tx agrees) -> My orders shows it with the right label and status.
 // The expectations live in cases.ts; this file is the generic driver plus the timing rules (GTC 90 days, GTD date, day order until 00:00 UTC
 // against `kob.dayOrder`, timed activation, IOC / auction lifetimes).
 import { test, expect } from '../fixtures';
+import { p2pkSpk } from '../../mock/address.mjs';
 import { loadKobNode } from '../../src/kob/wasm.node';
 import ticketText from '../../src/i18n/en/ticket';
 import { browserTzOffset, fund, mockClock, openMarket } from '../helpers/env';
-import { fillFields, openReview, pickType, readDisclosure, acknowledgeAndSign, placedBy, expectWalletSigned, waitReviewable } from '../helpers/ticket';
+import { fillFields, pickType, placeOrder, readDisclosure, expectWalletSigned, waitReviewable } from '../helpers/ticket';
 import { CASES, type Ctx, type Timing } from './cases';
 
 test.use({ autoOpen: false });
@@ -27,7 +28,7 @@ interface Placement {
 }
 
 /** The timing rules: what the planner computed for the on-chain expiry / activation against the node clock and the wallet defaults. */
-async function checkTiming(t: Timing, p: Placement, ctx: Ctx, extra: { discRows: Record<string, string>; confirmRows: Record<string, string> }): Promise<void> {
+async function checkTiming(t: Timing, p: Placement, ctx: Ctx, extra: { discRows: Record<string, string> }): Promise<void> {
   const expiry = Number(p.state.expiryDaa);
   const activeFrom = Number(p.state.activeFrom);
   const slack = (secs: number) => Math.round(secs * 10 * 0.01) + 600; // 1% (measured DAA rate) + planning lag
@@ -45,7 +46,6 @@ async function checkTiming(t: Timing, p: Placement, ctx: Ctx, extra: { discRows:
       const target = Math.floor((ctx.unix + t.afterSeconds) / 60) * 60;
       expect(Math.abs(activeFrom - (p.daa + (target - p.unix) * 10))).toBeLessThan(slack(t.afterSeconds));
       expect(extra.discRows.activates).toContain(utcText(target));
-      expect(extra.confirmRows.activeFrom).toContain(utcText(target));
       expect(expiry).toBeGreaterThan(activeFrom);
       break;
     }
@@ -61,7 +61,6 @@ async function checkTiming(t: Timing, p: Placement, ctx: Ctx, extra: { discRows:
       expect(expiry).toBeGreaterThanOrEqual(lo - 300);
       expect(expiry).toBeLessThanOrEqual(hi + 300);
       expect(extra.discRows.expiry).toContain('00:00 UTC');
-      expect(extra.confirmRows.deadline).toContain(utcText(p.view.deadline).replace(/ UTC$/, ''));
       break;
     }
     case 'ioc':
@@ -99,6 +98,8 @@ for (const c of CASES) {
       expect(disc.rows[id], `disclosure row ${id}`).toBeDefined();
       expect(disc.rows[id], `disclosure row ${id}`).toContain(want);
     }
+    // the all-in price row only appears with a tip (without one it equals the price already shown)
+    if (!('tip' in fields)) expect(disc.rows.allInPrice, 'disclosure row allInPrice must not exist').toBeUndefined();
     for (const id of c.discAbsent ?? []) expect(disc.rows[id], `disclosure row ${id} must not exist`).toBeUndefined();
     for (const n of c.notes) expect(disc.notes, `disclosure note ${n}`).toContain(n);
     for (const [k, want] of Object.entries(c.carriers)) expect(disc.carriers[k], `carrier ${k}`).toContain(want);
@@ -107,41 +108,24 @@ for (const c of CASES) {
     else expect(disc.tokensEscrowed).toBe(c.escrowed);
     expect(disc.summary).toContain(`${c.side === 'sell' ? 'Sell' : 'Buy'} ${fields.amount} EXKCC`);
 
-    // ---- confirmation screen: decoded from the transaction itself
-    const confirm = await openReview(page);
-    expect(confirm.blocking).toEqual([]);
-    expect(confirm.kind).toBe('create');
-    expect(confirm.created).toHaveLength(1);
-    const card = confirm.created[0]!;
-    expect(card.title).toBe(c.title);
-    expect(card.badge).toMatch(/verified/);
-    for (const [id, want] of Object.entries(c.rows)) {
-      expect(card.rows[id], `confirmation row ${id}`).toBeDefined();
-      expect(card.rows[id], `confirmation row ${id}`).toContain(want);
-    }
-    if (c.exit) {
-      expect(card.children).toHaveLength(1);
-      expect(card.children[0]!.title).toBe(c.exit.title);
-      for (const [id, want] of Object.entries(c.exit.rows)) {
-        expect(card.children[0]!.rows[id], `exit row ${id}`).toBeDefined();
-        expect(card.children[0]!.rows[id], `exit row ${id}`).toContain(want);
-      }
-    } else expect(card.children).toEqual([]);
-    expect(confirm.sections.locked?.rows['locked-total'], 'locked in contracts').toContain(c.locked);
-    if (c.escrowed) {
-      const netTok = Object.entries(confirm.sections.net!.rows).find(([id]) => id.startsWith('tok-net-'));
-      expect(netTok?.[1], 'net token effect').toContain(`-${c.escrowed}`);
-    }
-    expect(confirm.sections.net!.rows['net-kas']).toMatch(/^-\d/); // KAS leaves the wallet (locked + fee)
-    expect(confirm.sections.others, 'nothing goes to other keys').toBeUndefined();
-
-    // ---- sign
-    const txid = await acknowledgeAndSign(page);
-    const placed = await placedBy(mock, txid);
+    // ---- one click: the wallet is asked once and signs exactly the inputs of the transaction
+    const placed = await placeOrder(page, mock);
     await expectWalletSigned(wallet!, placed, { inputs: Array.from({ length: placed.submission.inputs }, (_, i) => i) });
 
-    // ---- what the indexer holds
+    // ---- the transaction itself (what the confirmation screen used to decode): one order created, the value it locks, nothing paid to another key
     expect(placed.submission.created).toHaveLength(1);
+    const tx = placed.submission.tx;
+    const alice = (await mock.balance('alice')).pubkey;
+    const lockedOutputs = new Set([...placed.submission.created.map((o) => o.output), ...placed.submission.token_outputs.filter((o) => o.role === 'custody').map((o) => o.output)]);
+    const locked = [...lockedOutputs].reduce((sum, i) => sum + BigInt(tx.outputs[i].value), 0n);
+    expect(locked, 'KAS locked in contracts').toBe(BigInt(Math.round(Number(c.locked.replace(' KAS', '')) * 1e8)));
+    // everything else goes back to the wallet key: its KAS change, or the token change carrier it owns
+    const ownCarriers = new Set(placed.submission.token_outputs.filter((o) => o.role === 'owned' && o.owner === alice).map((o) => o.output));
+    tx.outputs.forEach((o: any, i: number) => {
+      if (!lockedOutputs.has(i) && !ownCarriers.has(i)) expect(o.scriptPublicKey, `output ${i} is change to the wallet key`).toBe(p2pkSpk(alice));
+    });
+
+    // ---- what the indexer holds
     expect(placed.submission.created[0]!.kind).toBe(c.kind);
     const view = placed.views[0];
     expect(view.contract).toBe(c.kind);
@@ -172,11 +156,9 @@ for (const c of CASES) {
     expect(String(recovered[0]!.value)).toBe(view.current.value);
 
     const at = Math.floor(Date.parse(placed.submission.at) / 1000);
-    await checkTiming(c.timing, { state, view, daa: placed.submission.daa, unix: at }, ctx, { discRows: disc.rows, confirmRows: card.rows });
+    await checkTiming(c.timing, { state, view, daa: placed.submission.daa, unix: at }, ctx, { discRows: disc.rows });
 
     // ---- My orders
-    await page.getByTestId('confirm-close').click();
-    await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
     await page.getByTestId('nav-orders').click();
     const row = page.getByTestId(`order-row-${view.covenant_id}`);
     await expect(row).toBeVisible();

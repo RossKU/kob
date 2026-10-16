@@ -1172,7 +1172,7 @@ tick. Planning time with pair books is not measured.
    - rest time `minRestDaa`: default 50 DAA (5 s);
    - threshold `minTouch` (base units): chosen by the user; default the larger of the order's own `minFill` and 25% of
      its amount (§4.3); the ticket offers min
-     fill / 25% / 50% / 100% of the order's own amount and a custom amount (§4.3), and the confirmation screen shows
+     fill / 25% / 50% / 100% of the order's own amount and a custom amount (§4.3), and its disclosure shows
      the chosen threshold as a token amount.
 
    A stop-limit's limit L is converted to the largest `slipBps` with `stop ∓ ⌊stop·slipBps/10⁴⌋` not beyond L, i.e.
@@ -1274,7 +1274,7 @@ tick. Planning time with pair books is not measured.
    whole token (sompi, or base units of B per whole A for a pair order); refuse an order outside the numeric gate (`scale ≤ 10^9`, a power of ten, `amount·rate/scale < 2^62`
    for every rate it carries). `minFill` default: the amount worth 10 KAS (`DEFAULT_MIN_FILL_SOMPI`, a notional independent of the carrier) at the limit price,
    at least 1 base unit and at most the order's amount; IOC, FOK and market orders 1 base unit; if-done entries item 8.
-   Show the minimum fill on the ticket and the confirmation screen.
+   Show the minimum fill on the ticket.
 
 ---
 

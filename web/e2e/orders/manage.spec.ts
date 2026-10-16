@@ -5,14 +5,16 @@ import { readFileSync } from 'node:fs';
 import { test, expect, type MockClient } from '../fixtures';
 import { KAS, TOKEN, connectWallet, fund, openMarket } from '../helpers/env';
 import { openOrders, runFlow, seedOrders, statusesOf } from '../helpers/orders';
-import { fillFields, pickType, reviewAndSign, waitReviewable } from '../helpers/ticket';
+import { fillFields, pickType, placeOrder, type Placed } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
 const tokens = async (mock: MockClient) => BigInt((await mock.balance('alice')).tokens.EXKCC ?? '0');
+/** Token amount a transaction pays out to `owner` (wallet-owned outputs only, never covenant custody). */
+const tokensTo = (placed: Placed, owner: string): bigint => placed.submission.token_outputs.filter((o) => o.role === 'owned' && o.owner === owner).reduce((a, o) => a + BigInt(o.amount), 0n);
 
 test.describe('cancel', () => {
-  test('cancel: the screen decodes the cancellation, the wallet signs the covenant input, the tokens come back', async ({ appPage: page, mock, wallet }) => {
+  test('cancel: the wallet signs the covenant input, the accepted transaction releases the tokens to the maker, the tokens come back', async ({ appPage: page, mock, wallet }) => {
     const [id] = await seedOrders(mock, [{ side: 'ask', price: 2_700_000, tokens: 3 }]);
     await openOrders(page, mock);
     const row = page.getByTestId(`order-row-${id}`);
@@ -20,18 +22,13 @@ test.describe('cancel', () => {
     expect(await tokens(mock)).toBe(0n); // the 3 tokens are inside the order: wallets do not show them
     await page.getByTestId(`order-cancel-${id}`).click();
 
-    const steps = await runFlow(page, mock, wallet, { steps: 1 });
-    const { confirm, placed } = steps[0]!;
-    expect(confirm.kind).toBe('cancel');
-    expect(confirm.created).toEqual([]);
-    expect(confirm.closed).toHaveLength(1);
-    expect(confirm.closed[0]!.title).toBe('Cancel: Sell limit order');
-    expect(confirm.closed[0]!.badge).toMatch(/your order/i);
-    expect(confirm.closed[0]!.rows.price).toContain('0.027 EXKCC / KAS');
-    const netTok = Object.entries(confirm.sections.net!.rows).find(([k]) => k.startsWith('tok-net-'));
-    expect(netTok?.[1]).toContain('+3 EXKCC');
-    expect(confirm.sections.others, 'nothing goes to other keys').toBeUndefined();
-    expect(placed.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
+    // no confirmation screen: the click asked the wallet at once
+    const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(placed!.submission.created).toEqual([]);
+    expect(placed!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
+    const alice = (await mock.balance('alice')).pubkey;
+    expect(tokensTo(placed!, alice)).toBe(3n * TOKEN);
+    expect(placed!.submission.token_outputs.every((o) => o.owner === alice), 'nothing goes to other keys').toBe(true);
 
     expect((await mock.order(id)).status).toBe('cancelled');
     expect(await tokens(mock)).toBe(3n * TOKEN);
@@ -50,9 +47,8 @@ test.describe('cancel', () => {
     await expect(row).toHaveAttribute('data-status', 'partial');
     await expect(row.getByTestId('order-amount')).toContainText('2 / 3');
     await page.getByTestId(`order-cancel-${id}`).click();
-    const [step] = await runFlow(page, mock, wallet, { steps: 1 });
-    const netTok = Object.entries(step!.confirm.sections.net!.rows).find(([k]) => k.startsWith('tok-net-'));
-    expect(netTok?.[1]).toContain('+2 EXKCC');
+    const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(tokensTo(placed!, (await mock.balance('alice')).pubkey)).toBe(2n * TOKEN);
     expect((await mock.order(id)).status).toBe('cancelled');
     expect(await tokens(mock)).toBe(2n * TOKEN);
   });
@@ -65,17 +61,11 @@ test.describe('cancel', () => {
     await page.getByTestId('amend-price').fill('0.0272');
     await expect(page.getByTestId('amend-preview')).toContainText('0.0272');
     await page.getByTestId('amend-review').click();
-    const [step] = await runFlow(page, mock, wallet, { steps: 1 });
-    const { confirm, placed } = step!;
-    expect(confirm.kind).toBe('cancel-replace');
-    expect(confirm.closed).toHaveLength(1);
-    expect(confirm.closed[0]!.title).toBe('Cancel: Sell limit order');
-    expect(confirm.created).toHaveLength(1);
-    expect(confirm.created[0]!.title).toBe('Sell limit order');
-    expect(confirm.created[0]!.rows.price).toContain('0.0272 EXKCC / KAS');
-    expect(confirm.created[0]!.rows.amount).toBe('3 EXKCC');
-    // in place (AMEND record): nothing is closed, the same covenant id continues with the new price
-    expect(placed.submission.closed).toEqual([]);
+    const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
+    // in place (AMEND record): nothing is closed or created, the same covenant id continues with the new price
+    expect(placed!.submission.records.map((r) => r.type)).toContain('amend');
+    expect(placed!.submission.closed).toEqual([]);
+    expect(placed!.submission.created).toEqual([]);
     // the amended order keeps the old order's scale (1e8 base units, one whole token): 0.0272 KAS per token = 2_720_000 sompi
     const now = await mock.until(() => mock.order(id), (o) => o.state?.state?.price === '2720000');
     expect(now.state.state).toMatchObject({ price: '2720000', scale: '100000000', amountLeft: String(3n * TOKEN) });
@@ -93,9 +83,9 @@ test.describe('cancel', () => {
     await page.getByTestId(`order-replace-${id}`).click();
     await page.getByTestId('amend-price').fill('0.0235');
     await page.getByTestId('amend-review').click();
-    const [step] = await runFlow(page, mock, wallet, { steps: 1 });
-    expect(step!.placed.submission.closed).toEqual([]);
-    expect(step!.placed.submission.created).toEqual([]);
+    const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(placed!.submission.closed).toEqual([]);
+    expect(placed!.submission.created).toEqual([]);
     const now = await mock.until(() => mock.order(id), (o) => o.state?.state?.price === '2350000');
     expect(now.status).toBe('open');
     expect(now.contract).toBe('KobBid');
@@ -108,7 +98,7 @@ test.describe('cancel', () => {
     await openMarket(page, mock);
     await pickType(page, 'twap', 'sell');
     await fillFields(page, { amount: '6', sliceAmount: '2', interval: '1', price: '0.027' });
-    const { placed } = await reviewAndSign(page, mock);
+    const placed = await placeOrder(page, mock);
     const id = placed.views[0].covenant_id as string;
     const before = (await mock.order(id)).state.state;
     await page.getByTestId('nav-orders').click();
@@ -124,13 +114,10 @@ test.describe('cancel', () => {
     await dialog.getByTestId('order-price').fill('0.0272');
     await expect(dialog.getByTestId('replace-review')).toBeEnabled({ timeout: 30_000 });
     await dialog.getByTestId('replace-review').click();
-    const [step] = await runFlow(page, mock, wallet, { steps: 1 });
-    expect(step!.confirm.kind).toBe('cancel-replace');
-    expect(step!.confirm.closed).toHaveLength(1);
-    expect(step!.confirm.created).toHaveLength(1);
-    expect(step!.confirm.created[0]!.rows.price).toContain('0.0272 EXKCC / KAS');
+    const [amended] = await runFlow(page, mock, wallet, { steps: 1 });
     // amended in place: the same covenant id continues as a TWAP with the same slice and interval, at the new price
-    expect(step!.placed.submission.closed).toEqual([]);
+    expect(amended!.submission.records.map((r) => r.type)).toContain('amend');
+    expect(amended!.submission.closed).toEqual([]);
     const after = (await mock.until(() => mock.order(id), (o) => o.state?.state?.price === '2720000')).state.state;
     expect(after).toMatchObject({ interval: before.interval, maxFill: before.maxFill, amountLeft: before.amountLeft, price: '2720000' });
   });
@@ -140,7 +127,7 @@ test.describe('cancel', () => {
     await openMarket(page, mock);
     await pickType(page, 'dca', 'buy');
     await fillFields(page, { amount: '4', sliceAmount: '2', interval: '5', price: '0.0245' });
-    const { placed } = await reviewAndSign(page, mock);
+    const placed = await placeOrder(page, mock);
     const id = placed.views[0].covenant_id as string;
     const before = (await mock.order(id)).state.state;
     // day 86 of 90: the renewal is due
@@ -155,8 +142,8 @@ test.describe('cancel', () => {
     await expect(dialog.getByTestId('field-interval')).toHaveValue('5');
     await expect(dialog.getByTestId('replace-review')).toBeEnabled({ timeout: 30_000 });
     await dialog.getByTestId('replace-review').click();
-    const [step] = await runFlow(page, mock, wallet, { steps: 1 });
-    expect(step!.confirm.kind).toBe('cancel-replace');
+    const [renewed] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(renewed!.submission.records.map((r) => r.type)).toContain('amend');
     // amended in place: the same covenant id, the same schedule, a fresh 90 days
     const after = (await mock.until(() => mock.order(id), (o) => o.state?.state?.expiryDaa !== before.expiryDaa)).state.state;
     expect(after).toMatchObject({ interval: before.interval, maxFill: before.maxFill, price: before.price });
@@ -168,7 +155,7 @@ test.describe('cancel', () => {
     await openMarket(page, mock);
     await pickType(page, 'ifd', 'buy');
     await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' });
-    const { placed: entry } = await reviewAndSign(page, mock);
+    const entry = await placeOrder(page, mock);
     const entryId = entry.views[0].covenant_id;
     // a fill of the entry books its exit order (one whole token: the position now has an entry with 1 EXKCC left and an exit for 1 EXKCC)
     await mock.fill(entryId);
@@ -184,11 +171,9 @@ test.describe('cancel', () => {
     const before = (await mock.submitted(false)).length;
     await card.locator('[data-testid^="position-cancel-"]').click();
 
-    const steps = await runFlow(page, mock, wallet, { steps: 1 });
-    const { confirm, placed } = steps[0]!;
-    expect(confirm.kind).toBe('cancel-position');
-    expect(confirm.closed.map((c) => c.title).sort()).toEqual(['Cancel: Buy IFD entry', 'Cancel: Sell take-profit order'].sort());
-    expect(placed.submission.closed.map((c) => c.covenantId).sort()).toEqual([entryId, exitId].sort());
+    const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(placed!.submission.closed.map((c) => c.covenantId).sort()).toEqual([entryId, exitId].sort());
+    expect(placed!.submission.closed.every((c) => c.entry === 'cancel' && c.status === 'cancelled')).toBe(true);
     expect((await mock.submitted(false)).length).toBe(before + 1);
     const st = await statusesOf(mock, 'alice');
     expect(st[entryId]).toBe('cancelled');
@@ -213,7 +198,9 @@ test.describe('cancel', () => {
     await page.getByTestId('cancel-all-confirm').click();
     const steps = await runFlow(page, mock, wallet);
     expect(steps.length).toBeGreaterThanOrEqual(1);
-    const closed = steps.flatMap((s) => s.placed.submission.closed.map((c) => c.covenantId));
+    // a several-step flow lists every step, all submitted
+    if (steps.length > 1) for (let k = 0; k < steps.length; k++) await expect(page.getByTestId(`flow-step-${k}`)).toHaveAttribute('data-state', 'submitted');
+    const closed = steps.flatMap((s) => s.submission.closed.map((c) => c.covenantId));
     expect(closed.sort()).toEqual([...ids].sort());
     const st = await statusesOf(mock, 'alice');
     for (const id of ids) expect(st[id]).toBe('cancelled');
@@ -237,7 +224,7 @@ test.describe('cancel', () => {
     await page.getByTestId('orders-cancel-all').click();
     await page.getByTestId('cancel-all-confirm').click();
     const steps = await runFlow(page, mock, wallet);
-    expect(steps.flatMap((s) => s.placed.submission.closed.map((c) => c.covenantId)).sort()).toEqual([...ids].sort());
+    expect(steps.flatMap((s) => s.submission.closed.map((c) => c.covenantId)).sort()).toEqual([...ids].sort());
     expect(await mock.ordersOf('alice')).toEqual([]);
   });
 });
@@ -252,12 +239,9 @@ test.describe('refund, strays, balances', () => {
     await expect(row.getByTestId('order-expired')).toBeVisible();
     await expect(row.getByTestId('order-refund-from')).toBeVisible();
     await page.getByTestId(`order-refund-${id}`).click();
-    const steps = await runFlow(page, mock, wallet, { steps: 1 });
-    const { confirm, placed } = steps[0]!;
-    expect(confirm.kind).toBe('refund');
-    expect(confirm.closed).toHaveLength(1);
-    expect(confirm.closed[0]!.title).toMatch(/^Refund: Sell limit order/);
-    expect(placed.submission.closed).toEqual([{ covenantId: id, entry: 'refund', status: 'refunded' }]);
+    const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(placed!.submission.closed).toEqual([{ covenantId: id, entry: 'refund', status: 'refunded' }]);
+    expect(tokensTo(placed!, (await mock.balance('alice')).pubkey)).toBe(2n * TOKEN);
     expect((await mock.order(id)).status).toBe('refunded');
     expect(await tokens(mock)).toBe(2n * TOKEN);
     await page.getByTestId('orders-tab-history').click();
@@ -279,12 +263,10 @@ test.describe('refund, strays, balances', () => {
     await expect(page.getByTestId('strays-note')).toBeVisible();
 
     await page.getByTestId(`order-cancel-${id}`).click();
-    const [step] = await runFlow(page, mock, wallet, { steps: 1 });
-    expect(step!.confirm.closed[0]!.rows.strays).toContain('2 EXKCC');
-    // the custody row is the order's own 3 tokens: the 2 strays are not counted twice
-    expect(step!.confirm.closed[0]!.rows.tokensReleased).toMatch(/^3 EXKCC/);
-    const netTok = Object.entries(step!.confirm.sections.net!.rows).find(([k]) => k.startsWith('tok-net-'));
-    expect(netTok?.[1]).toContain('+5 EXKCC'); // 3 escrowed + 2 stray
+    const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
+    // the order's own 3 tokens plus the 2 strays come back to the maker, each counted once
+    expect(placed!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
+    expect(tokensTo(placed!, (await mock.balance('alice')).pubkey)).toBe(5n * TOKEN);
     expect(await tokens(mock)).toBe(5n * TOKEN);
     await expect(page.getByTestId('orders-strays')).toHaveCount(0, { timeout: 15_000 });
   });
@@ -312,8 +294,7 @@ test.describe('recovery', () => {
     await openMarket(page, mock);
     await pickType(page, 'limit', 'sell');
     await fillFields(page, { amount: '2', price: '0.027' });
-    await waitReviewable(page);
-    const { placed } = await reviewAndSign(page, mock);
+    const placed = await placeOrder(page, mock);
     const id = placed.views[0].covenant_id;
 
     await page.getByTestId('nav-orders').click();
@@ -353,12 +334,12 @@ test.describe('recovery', () => {
     await expect(row.getByTestId('order-amount')).toContainText('2');
   });
 
-  test('with the indexer down, My orders is rebuilt from the placement records and the node, and the order can still be cancelled (unread strays acknowledged)', async ({ appPage: page, mock, wallet }) => {
+  test('with the indexer down, My orders is rebuilt from the placement records and the node, and the order can still be cancelled', async ({ appPage: page, mock, wallet }) => {
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'limit', 'buy');
     await fillFields(page, { amount: '2', price: '0.0245' });
-    const { placed } = await reviewAndSign(page, mock);
+    const placed = await placeOrder(page, mock);
     const id = placed.views[0].covenant_id;
     // the indexer becomes unreachable (REST); the node keeps answering
     await page.route('**/v1/**', (r) => r.abort());
@@ -373,18 +354,10 @@ test.describe('recovery', () => {
     await expect(row.getByTestId('order-source')).toBeVisible();
     await expect(row.getByTestId('order-price')).toContainText('0.0245');
 
+    // the stray tokens owned by the order cannot be read without the indexer: the cancel goes ahead on the records and the node alone
     await page.getByTestId(`order-cancel-${id}`).click();
-    // the stray tokens owned by the order cannot be read without the indexer: the cancel says any that exist are left behind and asks the user to
-    // accept that (C5-09: never abandoned silently); signing stays disabled until both boxes are ticked
-    await expect(page.getByTestId('confirm-screen')).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId('confirm-plan-warnings')).toContainText('Strays could not be read');
-    await page.getByTestId('confirm-ack').check();
-    await expect(page.getByTestId('confirm-sign')).toBeDisabled();
-    await page.getByTestId('confirm-ack').uncheck();
-    await page.getByTestId('confirm-plan-ack').check();
-    const steps = await runFlow(page, mock, wallet, { steps: 1 });
-    expect(steps[0]!.confirm.kind).toBe('cancel');
-    expect(steps[0]!.placed.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
+    const [cancel] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(cancel!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
     expect((await mock.order(id)).status).toBe('cancelled');
   });
 });

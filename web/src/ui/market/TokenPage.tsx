@@ -336,7 +336,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
                 </Banner>
               ) : null}
               {wallet.networkMismatch ? <Banner tone="error" data-testid="ticket-network-blocked">{t('market.ticket.networkBlocked')}</Banner> : null}
-              <OrderTicket token={info} prefill={prefill} powers={row.powers} inverted={inverted} sharedTicker={sharedTicker} />
+              <OrderTicket token={info} prefill={prefill} inverted={inverted} />
             </div>
           ) : open.reason === 'no-scale' ? (
             <FirstOrderDecimals key={id} known={issuedDecimals(services.config.network, id)} onSet={(d) => setEntered({ id, decimals: d })} />

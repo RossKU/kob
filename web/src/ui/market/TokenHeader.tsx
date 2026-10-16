@@ -4,7 +4,7 @@ import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
 import { formatUnits } from '../../kob/units';
 import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
-import { PowersWarning, SharedTickerNote, StatusBadges, powerName, tokenTitle } from './TokenBadges';
+import { OpenTokenNote, PowersWarning, SharedTickerNote, StatusBadges, powerName, tokenTitle } from './TokenBadges';
 import { shortCovenantId, templateDetail, type TokenRow } from './token-model';
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
@@ -54,7 +54,10 @@ function TemplateVerification(props: { row: TokenRow; services: Pick<Services, '
   );
 }
 
-/** The shared-ticker note, indexer warnings and why a token cannot be traded: shown under the title of a token market and in the facts of each token of a pair. */
+/**
+ * The shared-ticker note, indexer warnings, the note of an open-list token (amounts in base units, its full covenant id) and why a token cannot be
+ * traded: shown under the title of a token market and in the facts of each token of a pair.
+ */
 export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) {
   const r = props.row;
   return (
@@ -62,6 +65,7 @@ export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) 
       <SharedTickerNote shared={!!props.sharedTicker} block data-testid="token-shared-ticker" />
       <IndexerProblems codes={r.indexerProblems} />
       <PowersWarning powers={r.powers} />
+      <OpenTokenNote token={r.info} data-testid="token-open-caution" />
       {!r.tradable && r.reason ? (
         <p class="small" style="margin:0" data-testid="token-untradable">
           <strong>{t('market.notTradable')}</strong> {t(`market.reason.${r.reason}`)}

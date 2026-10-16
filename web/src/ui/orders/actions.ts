@@ -1,5 +1,5 @@
 // Planning of the order actions: cancel, cancel-all (position / token / everything), cancel-replace (amend) and refund. Everything here only PLANS
-// (builds an unsigned transaction with kob-wasm through the cancel.ts planners); signing and broadcasting go through <ConfirmSign> only.
+// (builds an unsigned transaction with kob-wasm through the cancel.ts planners); signing and broadcasting go through <TxFlow> only (ui/confirm/send.ts).
 import { buildCancelEnv, readClock } from '../../app/env';
 import type { Services } from '../../app/services';
 import type { StrayView, TokenUtxoView } from '../../data/indexer-types';

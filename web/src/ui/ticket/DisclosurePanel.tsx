@@ -53,7 +53,7 @@ function TimeView(props: { row: TimeRow }) {
 /** `summary`: the headline in the words of the shown pair (an inverted KAS market: KAS is the base), else the native one. */
 export function DisclosurePanel(props: { model: DisclosureModel; built?: BuiltTx | null; summary?: string | undefined }) {
   const m = props.model;
-  // the fee rate, its bucket and the notes (fallback to the minimum, caps) of the planned transaction
+  // the fee rate and its bucket of the planned transaction (its notes on fallbacks and caps are not shown: nothing to act on)
   const feeInfo = props.built ? feeDisclosureOf(props.built) : null;
   return (
     <section class="tk-disclosure" data-testid="order-disclosure" aria-label={t('ticket.disc.title')}>
@@ -127,16 +127,6 @@ export function DisclosurePanel(props: { model: DisclosureModel; built?: BuiltTx
           </div>
         ))}
       </dl>
-
-      {feeInfo && feeInfo.warnings.length + feeInfo.info.length > 0 ? (
-        <ul class="tk-notes" data-testid="disc-fee-notes">
-          {[...feeInfo.warnings, ...feeInfo.info].map((f) => (
-            <li key={f.code} data-note={f.code}>
-              {f.text}
-            </li>
-          ))}
-        </ul>
-      ) : null}
 
       {m.notes.length > 0 ? (
         <ul class="tk-notes" data-testid="disc-notes">

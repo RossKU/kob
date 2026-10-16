@@ -1,10 +1,10 @@
-// View model of the PRE-SIGN confirmation screen: `SigningSummary` (kob/decode.ts, derived from the built transaction ONLY) -> sections and rows of
-// display strings. Nothing here reads planner or form state: the screen shows what the transaction does, and the planner's claims are only
-// compared against it by `decodeSigning` (a mismatch is a blocking finding).
+// Decoded-order vocabulary shared by the issuance screen, the silent pre-sign checks (send.ts) and the signer frame: the rows and title of one
+// decoded order (`orderRows`, `orderTitle`), token labels and amounts, the open-token identity check, and the row / finding shapes they produce.
+// It is not the model of an order confirmation screen: orders are no longer confirmed on a screen of their own.
 //
-// Pure and DOM-free. Text comes through an injected translator (`tr`, default the app's `t`) so the model is unit-tested in both languages and
-// the component stays a thin renderer. All amounts arrive as bigint and are formatted exactly (units.ts).
-import type { SigningKind, SigningSummary, DecodedInput, DecodedOrder, DecodedOutput, DecodedSpend, DecodedTrigger, LockedKas, TokenNet, TokenRef } from '../../kob/decode';
+// Pure and DOM-free. Text comes through an injected translator (`tr`, default the app's `t`) so it is unit-tested and the renderers stay thin.
+// All amounts arrive as bigint and are formatted exactly (units.ts).
+import type { SigningKind, SigningSummary, LockedKas, TokenRef } from '../../kob/decode';
 import type { WalletNotice } from '../../kob/decode';
 import { daaToUnix, formatJst, formatUtc } from '../../kob/daa';
 import { UNLIMITED_REPEAT_COUNT } from '../../kob/orders/cond-common';
@@ -12,10 +12,9 @@ import { stopWorstPrice } from '../../kob/orders/cond-legs';
 import { baseKind, type OrderDescription } from '../../kob/order-facts';
 import type { Clock } from '../../kob/plan-types';
 import { longId, type ExtensionReference, type TokenInfo, type TokenRegistry } from '../../kob/registry';
-import type { Hex, PayloadRecord } from '../../kob/types';
+import type { Hex } from '../../kob/types';
 import { formatKas, formatPricePerToken, formatTokenAmount, quoteOf, statePriceToTokenPrice } from '../../kob/units';
-import { formatDateTime, t, type Params } from '../../i18n';
-import type { FeeDisclosure } from './fee-disclosure';
+import { t, type Params } from '../../i18n';
 
 export type Translate = (key: string, params?: Params) => string;
 export type Tone = 'normal' | 'good' | 'warn' | 'bad' | 'muted';
@@ -28,26 +27,12 @@ export interface Row {
   tone: Tone;
 }
 
-export interface Card {
-  /** covenant id (orders) or `input-<n>` */
-  id: string;
-  title: string;
-  /** short badge: side / verification */
-  badge: string;
-  rows: Row[];
-  /** the exit an if-done entry commits to */
-  children: Card[];
-  /** the output that carries it did not verify */
-  flagged: boolean;
-}
-
 export interface Section {
-  id: 'identity' | 'spend' | 'create' | 'sweep' | 'close' | 'locked' | 'tokens' | 'back' | 'others' | 'fee' | 'net' | 'issue';
+  id: 'issue' | 'spend' | 'locked' | 'back' | 'fee' | 'net';
   title: string;
   /** one explaining sentence under the title */
   note?: string;
   rows: Row[];
-  cards: Card[];
   /**
    * the gross wallet flows (`spend`: the wallet's inputs, `back`: its change): the screen shows them folded under "Wallet inputs and change",
    * after the net effect and the orders
@@ -89,17 +74,6 @@ export interface ConfirmModel {
   canSign: boolean;
   notices: WalletNotice[];
   advanced: AdvancedModel;
-}
-
-export interface ConfirmContext {
-  registry?: TokenRegistry | null;
-  /** node clock read when the screen opened: turns DAA scores into "around <time>" */
-  clock?: Clock | null;
-  tr?: Translate;
-  /** format a unix time for the reader (default: locale date-time + UTC) */
-  time?: (unix: bigint) => string;
-  /** the fee rate and where it came from (`feeDisclosureOf(built)`): rows in the fee section, notes among the warnings / info */
-  fee?: FeeDisclosure | null;
 }
 
 const GROUP = { group: ',' };
@@ -473,270 +447,4 @@ export function orderTitle(d: OrderDescription, deadline: bigint | null, f: Fmt)
   const type = orderTypeCode(d, deadline);
   const kind = f.tr(`confirm.order.${type}`);
   return f.tr('confirm.order.title', { side: f.tr(d.side === 'sell' ? 'common.side.sell' : 'common.side.buy'), type: kind });
-}
-
-function orderCard(id: string, d: OrderDescription, extra: { value: bigint | null; locked: LockedKas | null; deadline: bigint | null; verified: boolean }, f: Fmt): Card {
-  const children: Card[] = [];
-  if (d.entry?.exit) {
-    const x = d.entry.exit;
-    children.push({
-      id: `${id}:exit`, title: f.tr('confirm.exitOf', { title: orderTitle(x, null, f) }), badge: f.tr(x.side === 'sell' ? 'common.side.sell' : 'common.side.buy'),
-      rows: orderRows(x, { value: null, locked: null, deadline: null }, { ...f }), children: [], flagged: false,
-    });
-  }
-  return {
-    id, title: orderTitle(d, extra.deadline, f), badge: extra.verified ? f.tr('confirm.verified') : f.tr('confirm.unverified'),
-    rows: orderRows(d, extra, f), children, flagged: !extra.verified,
-  };
-}
-
-// ------------------------------------------------------------------------------------------------ the model
-
-const KAS_KINDS: Record<string, string> = { carriers: 'confirm.locked.carriers', escrow: 'confirm.locked.escrow', refundTips: 'confirm.locked.refundTips', keeperTips: 'confirm.locked.keeperTips', reserves: 'confirm.locked.reserves' };
-
-/** `a` minus `b`, field by field (never below zero). */
-function subLocked(a: LockedKas, b: LockedKas): LockedKas {
-  const d = (x: bigint, y: bigint): bigint => (x > y ? x - y : 0n);
-  return { total: d(a.total, b.total), carriers: d(a.carriers, b.carriers), escrow: d(a.escrow, b.escrow), refundTips: d(a.refundTips, b.refundTips), keeperTips: d(a.keeperTips, b.keeperTips), reserves: d(a.reserves, b.reserves) };
-}
-
-function lockedRows(l: LockedKas, tr: Translate): Row[] {
-  const rows: Row[] = [];
-  for (const k of ['escrow', 'carriers', 'refundTips', 'keeperTips', 'reserves'] as const) {
-    if (l[k] > 0n) rows.push(row(`locked-${k}`, tr(KAS_KINDS[k]!), kas(l[k]), 'normal', k === 'carriers' ? tr('confirm.locked.carriersHint') : k === 'refundTips' ? tr('confirm.f.refundTipHint') : undefined));
-  }
-  return rows;
-}
-
-function tokenSectionRows(tokens: TokenNet[], f: Fmt, registry: TokenRegistry | null | undefined): { spend: Row[]; locked: Row[]; back: Row[]; others: Row[]; net: Row[] } {
-  const { tr } = f;
-  const out = { spend: [] as Row[], locked: [] as Row[], back: [] as Row[], others: [] as Row[], net: [] as Row[] };
-  for (const n of tokens) {
-    const label = tokenLabel(n.ref, tr, registry);
-    const amt = (v: bigint) => tokenAmountText(n.ref, v, tr);
-    if (n.fromWallet > 0n) out.spend.push(row(`tok-spend-${n.ref.covenantId}`, label, amt(n.fromWallet)));
-    if (n.released > 0n) out.spend.push(row(`tok-released-${n.ref.covenantId}`, tr('confirm.tokens.released', { token: label }), amt(n.released), 'good', tr('confirm.tokens.releasedHint')));
-    if (n.escrowed > 0n) out.locked.push(row(`tok-escrow-${n.ref.covenantId}`, tr('confirm.tokens.escrowed', { token: label }), amt(n.escrowed), 'warn', tr('confirm.tokens.escrowedHint')));
-    if (n.toMaker > 0n) out.back.push(row(`tok-back-${n.ref.covenantId}`, label, amt(n.toMaker), 'good'));
-    if (n.toOthers > 0n) out.others.push(row(`tok-others-${n.ref.covenantId}`, label, amt(n.toOthers), 'bad'));
-    if (n.walletDelta !== 0n) {
-      out.net.push(row(`tok-net-${n.ref.covenantId}`, label, `${n.walletDelta > 0n ? '+' : ''}${tokenAmountText(n.ref, n.walletDelta, tr)}`, n.walletDelta > 0n ? 'good' : 'normal', tr('confirm.net.tokenHint')));
-    }
-  }
-  return out;
-}
-
-const HEADING: Record<SigningKind, string> = {
-  create: 'confirm.kind.create', cancel: 'confirm.kind.cancel', 'cancel-replace': 'confirm.kind.cancelReplace', 'cancel-position': 'confirm.kind.cancelPosition',
-  refund: 'confirm.kind.refund', send: 'confirm.kind.send', sweep: 'confirm.kind.sweep', other: 'confirm.kind.other',
-};
-
-const actionKey = (a: DecodedSpend['action']): string => `confirm.action.${a}`;
-
-/** A stray of another token: its label, and for a token outside the registry the "unknown token" warning (it may be worthless or hostile). */
-function otherStrayRow(x: DecodedSpend['otherStrays'][number], f: Fmt): Row {
-  const label = f.tr(x.foreign ? 'confirm.spend.foreignStraysOf' : 'confirm.spend.straysOf', { token: tokenLabel(x.ref, f.tr, f.registry) });
-  const known = !!f.registry?.byCovenantId.get(x.ref.covenantId);
-  return row(`strays-${x.ref.covenantId}`, label, tokenAmountText(x.ref, x.amount, f.tr), known ? 'warn' : 'bad', f.tr(known ? 'confirm.spend.straysHint' : 'confirm.spend.unknownTokenHint'));
-}
-
-function spendCard(s: DecodedSpend, f: Fmt): Card {
-  const d = s.description;
-  const id = s.covenantId ?? `input-${s.input}`;
-  if (!d) return { id, title: f.tr('confirm.spend.unknown'), badge: f.tr(actionKey(s.action)), rows: [], children: [], flagged: true };
-  const rows = orderRows(d, { value: null, locked: null, deadline: null }, f);
-  // a sweep releases no custody: every token it moves is a stray. A cancel releases the custody AND sweeps the strays: the custody row counts the
-  // custody only (the strays are their own row, never counted twice)
-  const custody = s.tokensReleased > s.strays ? s.tokensReleased - s.strays : 0n;
-  if (custody > 0n && !s.sweptTo) rows.push(row('tokensReleased', f.tr('confirm.spend.tokensReleased'), tokenAmountText(f.ref, custody, f.tr), 'good'));
-  if (s.strays > 0n) rows.push(row('strays', f.tr('confirm.spend.strays'), tokenAmountText(f.ref, s.strays, f.tr), 'warn', f.tr('confirm.spend.straysHint')));
-  for (const x of s.otherStrays ?? []) rows.push(otherStrayRow(x, f));
-  if (s.sweptTo) {
-    rows.push(row('strayKas', f.tr('confirm.sweep.kas'), kas(s.sweptTo.kas), 'good', f.tr('confirm.sweep.kasHint')));
-    rows.push(row('continues', f.tr('confirm.sweep.continues'), f.tr('confirm.sweep.continuesValue', { output: s.sweptTo.output }), 'good', f.tr('confirm.sweep.continuesHint')));
-    rows.push(row('idle', f.tr('confirm.sweep.idle'), f.tr('confirm.sweep.idleValue'), 'muted', f.tr('confirm.sweep.idleHint')));
-  }
-  if (s.trigger) rows.push(...triggerRows(s.trigger, d, f));
-  return {
-    id, title: `${f.tr(actionKey(s.action))}: ${orderTitle(d, null, f)}`, badge: s.makerIsWallet ? f.tr('confirm.spend.yours') : f.tr('confirm.spend.notYours'),
-    rows, children: [], flagged: !s.makerIsWallet && (s.action === 'cancel' || s.action === 'sweep'),
-  };
-}
-
-/**
- * The intro of a sweep, stated from the transaction: N stray token UTXOs (amounts per token) and the KAS they carry return to the maker; the order
- * continues unchanged (same price, amount, custody) and, as a new UTXO, its 90-day idle window restarts.
- */
-function sweepIntro(spends: DecodedSpend[], f: Fmt, refOf: (cov: Hex) => TokenRef): string {
-  const sw = spends.filter((s) => s.sweptTo);
-  const utxos = sw.reduce((a, s) => a + s.sweptTo!.utxos, 0);
-  const kasSum = sw.reduce((a, s) => a + s.sweptTo!.kas, 0n);
-  const parts: string[] = [];
-  for (const s of sw) {
-    if (s.strays > 0n && s.description) parts.push(tokenAmountText(refOf(s.description.tokenCovId), s.strays, f.tr));
-    for (const x of s.otherStrays) {
-      const known = !!f.registry?.byCovenantId.get(x.ref.covenantId);
-      parts.push(known ? tokenAmountText(x.ref, x.amount, f.tr) : f.tr('confirm.sweep.unknownAmount', { amount: x.amount.toString(), token: tokenLabel(x.ref, f.tr, f.registry) }));
-    }
-  }
-  return f.tr('confirm.kind.sweepIntro', { count: utxos, amounts: parts.join(', '), kas: formatKas(kasSum, GROUP) });
-}
-
-/**
- * The trigger evidence of an order this tx arms or trails (touch, protocol v2.6): how it is armed, which input is the evidence (and its custody),
- * its side, quote and size, how long it rested, and whether it satisfies the order's rule. From the decoder's derivation only.
- */
-export function triggerRows(t: DecodedTrigger, d: OrderDescription, f: Fmt): Row[] {
-  const { tr } = f;
-  const e = t.evidence;
-  const rows: Row[] = [];
-  const how = t.effect === 'trail' && t.trail
-    ? tr('confirm.trigger.trailed', { stop: priceText(t.trail.newStop, d, f).value })
-    : tr(t.path === 'fill' ? 'confirm.trigger.armedInFill' : 'confirm.trigger.armedByUpdate');
-  rows.push(row('trigger', tr('confirm.trigger.title'), how, t.ok ? 'warn' : 'bad'));
-  const side = e.side ? tr(e.side === 'ask' ? 'confirm.trigger.sideAsk' : 'confirm.trigger.sideBid') : tr('confirm.trigger.sideUnknown', { kind: e.kind ?? '?' });
-  rows.push(row('triggerEvidence', tr('confirm.trigger.evidence'), tr('confirm.trigger.evidenceValue', { input: e.input, side }), t.checks.plain && t.checks.sameToken && t.checks.filled && t.checks.custody ? 'normal' : 'bad',
-    e.custodyInput !== null ? tr('confirm.trigger.custody', { input: e.custodyInput }) : undefined));
-  if (e.price !== null) {
-    const p = priceText(e.price, d, f);
-    rows.push(row('triggerQuote', tr('confirm.trigger.quote'), p.value, t.checks.side && t.checks.price ? 'normal' : 'bad', tr('confirm.trigger.quoteRule', { stop: priceText(t.rule.stop, d, f).value })));
-  }
-  if (e.amount !== null) {
-    rows.push(row('triggerAmount', tr('confirm.trigger.amount'), tr('confirm.trigger.amountValue', { amount: tokenAmountText(f.ref, e.amount, tr), min: tokenAmountText(f.ref, t.rule.minTouch, tr) }), t.checks.amount ? 'normal' : 'bad'));
-  }
-  if (e.exposedSince !== null) {
-    rows.push(row('triggerRest', tr('confirm.trigger.rest'), tr('confirm.trigger.restValue', { daa: e.exposedSince.toString(), seconds: secondsOf(t.rule.minRestDaa) }), t.checks.rest && t.checks.notDecaying ? 'normal' : 'bad'));
-  }
-  rows.push(row('triggerVerdict', tr('confirm.trigger.verdict'), tr(t.ok ? 'confirm.trigger.ok' : 'confirm.trigger.notOk'), t.ok ? 'good' : 'bad'));
-  return rows;
-}
-
-function inputText(i: DecodedInput, ctx: { tr: Translate; registry?: TokenRegistry | null }): string {
-  const { tr } = ctx;
-  const base = tr('confirm.adv.input', { index: i.index, role: i.role, kas: formatKas(i.amount, GROUP) });
-  if (i.token) return `${base}; ${tokenLabel(i.token.ref, tr, ctx.registry)} ${tokenAmountText(i.token.ref, i.token.amount, tr)}`;
-  if (i.order) return `${base}; ${tr(actionKey(i.order.action))} ${i.order.kind}`;
-  return base;
-}
-
-function outputText(o: DecodedOutput, ctx: { tr: Translate; registry?: TokenRegistry | null }): string {
-  const { tr } = ctx;
-  const base = tr('confirm.adv.output', { index: o.index, kind: tr(`confirm.outkind.${o.kind}`), kas: formatKas(o.value, GROUP) });
-  if (o.token) return `${base}; ${tokenLabel(o.token.ref, tr, ctx.registry)} ${tokenAmountText(o.token.ref, o.token.amount, tr)}`;
-  if (o.recipient) return `${base}; ${tr('confirm.adv.recipient', { key: short(o.recipient) })}`;
-  return base;
-}
-
-function payloadText(r: PayloadRecord, tr: Translate): string {
-  switch (r.type) {
-    case 'order': return tr('confirm.adv.recordOrder', { output: r.output, template: r.template });
-    case 'amend': return tr('confirm.adv.recordAmend', { output: r.output, input: r.input, template: r.template });
-    case 'sweep': return tr('confirm.adv.recordSweep', { output: r.output, input: r.input });
-    case 'x402': return tr('confirm.adv.recordX402', { ref: short(r.reference) });
-    case 'note': return tr('confirm.adv.recordNote', { text: r.text });
-    default: return tr('confirm.adv.recordUnknown', { type: r.recordType });
-  }
-}
-
-/** Builds the whole screen model from the decoded summary. */
-export function buildConfirmModel(summary: SigningSummary, ctx: ConfirmContext = {}, notices: WalletNotice[] = []): ConfirmModel {
-  const tr = ctx.tr ?? t;
-  const registry = ctx.registry ?? null;
-  const clock = ctx.clock ?? null;
-  const time = ctx.time ?? ((unix: bigint) => `${formatDateTime(unix)} (${formatUtc(unix)})`);
-  const mk = (tokenCov: Hex): Fmt => ({ tr, ref: refOf(registry, tokenCov), clock, time, registry });
-  const kasNet = summary.net.kas;
-  const sections: Section[] = [];
-  const identity = openTokenIdentity(summary, registry, tr);
-  if (identity.rows.length > 0) sections.push({ id: 'identity', title: tr('confirm.section.identity'), note: tr('confirm.section.identityNote'), rows: identity.rows, cards: [] });
-  const netAt = sections.length;
-  // an order swept in place stays where it was: its input and its continuation are not KAS released / newly locked (the difference is the fee)
-  const swept = summary.spends.filter((s) => s.sweptTo);
-  const sweptIn = swept.reduce((a, s) => a + (summary.inputs[s.input]?.amount ?? 0n), 0n);
-  const continued = summary.orders.filter((o) => o.sweptFrom !== undefined);
-  const lockedNow = continued.reduce((a, o) => subLocked(a, o.locked), kasNet.locked);
-  const released = kasNet.released - sweptIn;
-
-  // --- what you spend
-  const tokenRows = tokenSectionRows(summary.net.tokens, mk(''), registry);
-  const spend: Row[] = [];
-  if (kasNet.fromWallet > 0n) spend.push(row('kas-spend', tr('confirm.spend.kas'), kas(kasNet.fromWallet)));
-  if (released > 0n) spend.push(row('kas-released', tr('confirm.spend.kasReleased'), kas(released), 'good', tr(swept.length ? 'confirm.sweep.kasHint' : 'confirm.spend.kasReleasedHint')));
-  spend.push(...tokenRows.spend);
-  sections.push({ id: 'spend', title: tr('confirm.section.spend'), rows: spend, cards: [], fold: true });
-
-  // --- orders created (a swept order is not: it continues)
-  const createdOrders = summary.orders.filter((o) => o.sweptFrom === undefined);
-  if (createdOrders.length > 0) {
-    const cards = createdOrders.map((o: DecodedOrder) => orderCard(o.covenantId, o.description, { value: o.value, locked: o.locked, deadline: o.deadline, verified: o.verified }, mk(o.description.tokenCovId)));
-    sections.push({ id: 'create', title: tr('confirm.section.create'), note: tr('confirm.section.createNote'), rows: [], cards });
-  }
-
-  // --- orders swept in place: they continue unchanged, only their strays move
-  if (swept.length > 0) {
-    const cards = swept.map((s) => spendCard(s, mk(s.description?.tokenCovId ?? '')));
-    sections.push({ id: 'sweep', title: tr('confirm.section.sweep'), note: tr('confirm.section.sweepNote'), rows: [], cards });
-  }
-
-  // --- orders closed
-  const closing = summary.spends.filter((s) => !s.sweptTo);
-  if (closing.length > 0) {
-    const cards = closing.map((s) => spendCard(s, mk(s.description?.tokenCovId ?? '')));
-    sections.push({ id: 'close', title: tr('confirm.section.close'), rows: [], cards });
-  }
-
-  // --- locked
-  const lockRows = [...lockedRows(lockedNow, tr), ...tokenRows.locked];
-  if (lockedNow.total > 0n) lockRows.unshift(row('locked-total', tr('confirm.locked.total'), kas(lockedNow.total), 'warn'));
-  if (lockRows.length > 0) sections.push({ id: 'locked', title: tr('confirm.section.locked'), note: tr('confirm.section.lockedNote'), rows: lockRows, cards: [] });
-
-  // --- back to you
-  const back: Row[] = [];
-  if (kasNet.toWallet > 0n) back.push(row('kas-back', tr('confirm.back.kas'), kas(kasNet.toWallet), 'good', tr('confirm.back.kasHint')));
-  back.push(...tokenRows.back);
-  if (back.length > 0) sections.push({ id: 'back', title: tr('confirm.section.back'), rows: back, cards: [], fold: true });
-
-  // --- to other keys (blocking unless the user asked for it: the decoder decides)
-  const others: Row[] = [];
-  if (kasNet.toOthers > 0n) others.push(row('kas-others', tr('confirm.others.kas'), kas(kasNet.toOthers), 'bad'));
-  others.push(...tokenRows.others);
-  if (others.length > 0) sections.push({ id: 'others', title: tr('confirm.section.others'), rows: others, cards: [] });
-
-  // --- fee
-  const feeDisc = ctx.fee ?? null;
-  sections.push({ id: 'fee', title: tr('confirm.section.fee'), rows: [row('fee', tr('confirm.fee.network'), kas(summary.fee.sompi), 'normal', tr('confirm.fee.hint')), ...(feeDisc?.rows ?? [])], cards: [] });
-
-  // --- net effect on the wallet: FIRST on the screen (after a token's identity), what the wallet gains and loses; KAS into and out of orders
-  const net: Row[] = [];
-  const kasDelta = kasNet.walletDelta;
-  net.push(row('net-kas', tr('confirm.net.kas'), `${kasDelta > 0n ? '+' : kasDelta < 0n ? '-' : ''}${formatKas(kasDelta < 0n ? -kasDelta : kasDelta, GROUP)} KAS`, kasDelta > 0n ? 'good' : 'normal', tr('confirm.net.kasHint')));
-  net.push(...tokenRows.net);
-  if (lockedNow.total > 0n) net.push(row('net-locked', tr('confirm.net.locked'), kas(lockedNow.total), 'warn', tr('confirm.net.lockedHint')));
-  if (released > 0n) net.push(row('net-released', tr('confirm.net.released'), kas(released), 'good', tr('confirm.net.releasedHint')));
-  sections.splice(netAt, 0, { id: 'net', title: tr('confirm.section.net'), rows: net, cards: [] });
-
-  const advanced: AdvancedModel = {
-    txid: summary.txid,
-    signatures: summary.signatures,
-    fee: {
-      paid: kas(summary.fee.sompi), declared: kas(summary.fee.declared), minimum: kas(summary.fee.minimum), mode: summary.fee.mode,
-      feeMass: summary.fee.mass.fee, priorityMass: summary.fee.mass.priority, storageMass: summary.fee.mass.storage,
-    },
-    inputs: summary.inputs.map((i) => ({ index: i.index, text: inputText(i, { tr, registry }), willSign: i.willSign })),
-    outputs: summary.outputs.map((o) => ({ index: o.index, text: outputText(o, { tr, registry }), flagged: o.flagged })),
-    payload: summary.payload ? summary.payload.records.map((r) => payloadText(r, tr)) : [],
-  };
-
-  return {
-    kind: summary.kind,
-    heading: tr(HEADING[summary.kind]),
-    intro: summary.kind === 'sweep' ? sweepIntro(summary.spends, mk(''), (cov) => refOf(registry, cov)) : tr(`${HEADING[summary.kind]}Intro`),
-    sections,
-    blocking: [...summary.blocking, ...identity.blocking],
-    warnings: [...summary.warnings, ...(feeDisc?.warnings ?? [])],
-    info: [...summary.info, ...(feeDisc?.info ?? [])],
-    canSign: summary.ok && identity.blocking.length === 0,
-    notices,
-    advanced,
-  };
 }

@@ -1,76 +1,41 @@
-// The PRE-SIGN CONFIRMATION SCREEN and signing flow shared by every transaction the app sends (placement, cancel, cancel-replace, cancel-all,
-// refund, issuance). Wallet popups are blind to token semantics, so this dialog is the user's real check: it decodes the built transaction
-// (`decodeSigning`, or the issuance verifier for a genesis), shows the WHOLE effect in plain words, blocks signing on any blocking finding,
-// asks for an explicit acknowledgement, then runs `signAndSubmit` with a stage stepper and reports the accepted transaction.
+// The PRE-SIGN CONFIRMATION SCREEN of a token issuance (the Issue token page). Order actions have none (ui/confirm/send.ts): a genesis creates a
+// token whose facts can never change, so this dialog decodes the built transaction with the issuance verifier, shows the WHOLE effect in plain
+// words, blocks signing on any blocking finding, asks for an explicit acknowledgement, then runs `signAndSubmit` with a stage stepper and reports
+// the accepted transaction.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
-import { commitAccepted } from '../../app/commit';
 import { readClock } from '../../app/env';
-import { pendingSpends } from '../../app/pending-spends';
 import { formatDateTime, has, t } from '../../i18n';
 import { issueText, walletNoticeText } from '../../i18n/issue-text';
-import { spkStringToAddress } from '../../data/kaspa-sdk';
-import { confirmInputsOnNode, type NodeInputFacts } from '../../kob/node-verify';
-import { decodeSigning, describeInputsForWallet, type ExpectedSigning } from '../../kob/decode';
+import { describeInputsForWallet } from '../../kob/decode';
 import type { IssueToken } from '../../kob/issue';
 import type { Clock } from '../../kob/plan-types';
 import type { PlacementRecord } from '../../kob/records';
-import { withExtraToken, type TokenInfo } from '../../kob/registry';
 import type { BuiltTx } from '../../kob/types';
 import { formatUtc } from '../../kob/daa';
 import { expectedOutputs, signAndSubmit, waitForAcceptance, type SignStage } from '../../wallet/sign';
 import { Banner, Button, CopyText, Modal, RawDetails, Spinner, copyToClipboard } from '../kit';
 import { shortId } from '../kit/format';
-import { OpenTokenNote, PowersWarning } from '../market/TokenBadges';
-import { buildConfirmModel, type Card, type ConfirmModel, type Finding, type Row, type Section } from './confirm-model';
+import type { ConfirmModel, Finding, Row, Section } from './confirm-model';
 import { buildIssuanceModel } from './issuance-model';
 import { feeDisclosureOf } from './fee-disclosure';
 import { classifyFailure, explorerTxUrl, stepStates, type Failure } from './confirm-flow';
+import { recordAccepted } from './send';
 import './confirm.css';
 
 export type ConfirmResult = { status: 'cancelled' } | { status: 'submitted'; txid: string; records: PlacementRecord[] } | { status: 'failed'; message: string };
 
 export interface ConfirmSignProps {
-  /** the unsigned transaction to decode, show, sign and broadcast */
+  /** the unsigned genesis transaction to decode, show, sign and broadcast */
   built: BuiltTx;
-  /** i18n key or literal heading of the action ("Place limit sell", "Cancel order", ...) */
+  /** i18n key or literal heading of the action */
   title: string;
-  /** what the planner claims; a mismatch with the decoded tx blocks signing */
-  expected?: ExpectedSigning;
-  /** plan label stored in the placement records */
+  /** label stored in the records of the transaction */
   label?: string;
-  /** template capabilities of the token program of the order (indexer `powers`): freeze / seize show a warning above the summary */
-  tokenPowers?: readonly string[];
-  /** the order trades an open-list token (no registry entry): a note on base units and the full covenant id is shown, and the token is labelled with its covenant id */
-  openToken?: TokenInfo;
-  /** issuance (genesis) transaction: it has no token inputs, so the order decoder cannot describe it; the token facts the planner claims are verified against the tx instead */
-  issue?: { token: IssueToken };
-  /**
-   * consequences the planner had to accept to build this transaction at all (e.g. stray token UTXOs that do not fit and are abandoned): shown
-   * as a warning above the summary, and signing needs a separate, explicit acknowledgement of them
-   */
-  acknowledge?: readonly string[];
-  /**
-   * warnings the planner raised only when it planned the order again from fresh data right before this screen (the ticket showed the plan before
-   * that): shown above the summary, and signing needs an explicit acknowledgement of them
-   */
-  freshWarnings?: readonly string[];
-  /**
-   * the ticket's re-check of this order against the book and the wallet read at the click (ui/ticket/review-check.ts): `checking` while it runs
-   * (signing waits), the reasons when the order no longer stands (signing is blocked: review again), absent or null when it holds
-   */
-  recheck?: 'checking' | { reasons: readonly string[] } | null;
-  /** fired as soon as the node accepted the transaction (the dialog stays open showing the status until the user closes it) */
-  onSubmitted?(r: { txid: string; records: PlacementRecord[] }): void;
+  /** the token facts the planner claims: a genesis has no token inputs, so they are verified against the transaction */
+  issue: { token: IssueToken };
   /** called once when the flow ends (cancelled, submitted or failed) */
   onClose(result: ConfirmResult): void;
-  /**
-   * the order in the words of the market as it is shown (an inverted KAS market, KAS/TOKEN: what is given and received in KAS and the token),
-   * stated above the decoded transaction, which stays the authority
-   */
-  shownAs?: string | undefined;
-  /** one order of a ladder placed in turns: every order of it in words and the index of the one on this screen */
-  ladder?: { lines: readonly string[]; current: number } | undefined;
 }
 
 type Phase = 'review' | 'busy' | 'submitted';
@@ -95,22 +60,6 @@ function Rows(props: { rows: Row[]; testPrefix: string }) {
   );
 }
 
-function OrderCard(props: { card: Card; prefix: string; nested?: boolean }) {
-  const c = props.card;
-  return (
-    <article class={`cf-card${c.flagged ? ' cf-flagged' : ''}${props.nested ? ' cf-nested' : ''}`} data-testid={`${props.prefix}-${c.id}`}>
-      <header class="cf-card-head">
-        <h4>{c.title}</h4>
-        <span class={`cf-badge${c.flagged ? ' cf-badge-bad' : ''}`}>{c.badge}</span>
-      </header>
-      <Rows rows={c.rows} testPrefix={`${props.prefix}-${c.id}`} />
-      {c.children.map((x) => (
-        <OrderCard card={x} prefix={props.prefix} nested key={x.id} />
-      ))}
-    </article>
-  );
-}
-
 function SectionView(props: { section: Section }) {
   const s = props.section;
   return (
@@ -118,9 +67,6 @@ function SectionView(props: { section: Section }) {
       <h3>{s.title}</h3>
       {s.note ? <p class="cf-note">{s.note}</p> : null}
       <Rows rows={s.rows} testPrefix={`confirm-${s.id}`} />
-      {s.cards.map((c) => (
-        <OrderCard card={c} prefix={`confirm-${s.id}`} key={c.id} />
-      ))}
     </section>
   );
 }
@@ -145,15 +91,9 @@ export function ConfirmSign(props: ConfirmSignProps) {
   const wallet = useWallet();
   const { built } = props;
   const { kob, node, sdk, config } = services;
-  // an open-list token is not in the registry: the screen decodes against the registry plus that token (labelled unverified)
-  const registry = useMemo(() => (props.openToken ? withExtraToken(services.registry, props.openToken) : services.registry), [services.registry, props.openToken]);
 
   const [clock, setClock] = useState<Clock | null>(null);
   const [ack, setAck] = useState(false);
-  const [ackPlan, setAckPlan] = useState(false);
-  const mustAck = props.acknowledge ?? [];
-  const fresh = props.freshWarnings ?? [];
-  const [ackFresh, setAckFresh] = useState(false);
   const [phase, setPhase] = useState<Phase>('review');
   const [stage, setStage] = useState<SignStage | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
@@ -176,33 +116,14 @@ export function ConfirmSign(props: ConfirmSignProps) {
 
   const maker = wallet.info?.pubkey ?? built.sign[0]?.pubkey ?? '';
 
-  // the KAS value of every input is re-read from the NODE: the decoder flags any input the node does not confirm, and signing
-  // stays disabled until the check has run. A genesis (issuance) only spends the maker's own P2PK coins, which the signature commits to.
-  const inputAddress = useCallback((spk: string) => spkStringToAddress(sdk, spk, config.network), [sdk, config.network]);
-  const [nodeInputs, setNodeInputs] = useState<NodeInputFacts | 'pending' | 'error'>('pending');
-  useEffect(() => {
-    if (props.issue) return;
-    let live = true;
-    setNodeInputs('pending');
-    confirmInputsOnNode(node, built.tx.inputs, inputAddress).then(
-      (r) => live && setNodeInputs(r.facts),
-      () => live && setNodeInputs('error'),
-    );
-    return () => {
-      live = false;
-    };
-  }, [built, props.issue, node, inputAddress]);
-
   const model: ConfirmModel = useMemo(() => {
     const notices = describeInputsForWallet(built, wallet.info?.id).notices;
     // the fee rate, its bucket and the notes (fallback to the minimum, caps): what the dynamic fee policy decided for this transaction
     const fee = feeDisclosureOf(built);
-    // a dynamic fee is several times the relay floor in a busy market: the decoder's sanity ceiling follows the policy's own per-transaction cap
+    // a dynamic fee is several times the relay floor in a busy market: the verifier's sanity ceiling follows the policy's own per-transaction cap
     const feePolicy = services.fees?.policy;
-    if (props.issue) return buildIssuanceModel({ kob, built, token: props.issue.token, maker, fee, ...(feePolicy ? { feePolicy } : {}) }, notices);
-    const summary = decodeSigning({ kob, built, maker, registry, expected: props.expected, nodeInputs: typeof nodeInputs === 'string' ? undefined : nodeInputs, ...(feePolicy ? { feePolicy } : {}) });
-    return buildConfirmModel(summary, { registry, clock, fee }, notices);
-  }, [built, props.expected, props.issue, maker, registry, clock, wallet.info?.id, nodeInputs]);
+    return buildIssuanceModel({ kob, built, token: props.issue.token, maker, fee, ...(feePolicy ? { feePolicy } : {}) }, notices);
+  }, [built, props.issue, maker, wallet.info?.id]);
 
   // problems that are not about the transaction itself
   const extraBlocking: Finding[] = [];
@@ -214,18 +135,9 @@ export function ConfirmSign(props: ConfirmSignProps) {
   } else if (wallet.networkMismatch) {
     extraBlocking.push({ code: 'network', severity: 'blocking', message: 'network', text: t('confirm.networkMismatch', { wallet: wallet.info.network, app: config.network }) });
   }
-  // checks still running: shown as progress, not as a problem, and signing waits for them
-  const checking: Finding[] = [];
-  if (!props.issue && nodeInputs === 'pending') checking.push({ code: 'inputs-checking', severity: 'blocking', message: 'checking inputs', text: t('confirm.inputsChecking') });
-  if (props.recheck === 'checking') checking.push({ code: 'recheck-running', severity: 'blocking', message: 're-checking', text: t('confirm.recheckRunning') });
-  if (props.recheck && props.recheck !== 'checking') {
-    extraBlocking.push({ code: 'recheck-changed', severity: 'blocking', message: 'order changed', text: t('confirm.recheckChanged') });
-    for (const r of props.recheck.reasons) extraBlocking.push({ code: 'recheck-reason', severity: 'blocking', message: r, text: r });
-  }
-  if (!props.issue && nodeInputs === 'error') extraBlocking.push({ code: 'inputs-unavailable', severity: 'blocking', message: 'inputs unavailable', text: t('confirm.inputsUnavailable') });
   const blocking = [...extraBlocking, ...model.blocking];
   const busy = phase === 'busy';
-  const canSign = blocking.length === 0 && checking.length === 0 && model.canSign && ack && (mustAck.length === 0 || ackPlan) && (fresh.length === 0 || ackFresh) && phase === 'review';
+  const canSign = blocking.length === 0 && model.canSign && ack && phase === 'review';
 
   const finish = useCallback(
     (r: ConfirmResult) => {
@@ -237,26 +149,13 @@ export function ConfirmSign(props: ConfirmSignProps) {
   );
 
   const afterAccepted = async (id: string): Promise<void> => {
-    // the node keeps listing these inputs until the transaction is in a block: no plan of this page may pick them meanwhile
-    pendingSpends.add(built.tx.inputs);
-    let c = clock;
-    try {
-      c = await readClock(services);
-    } catch {
-      /* the clock is only a label of the placement record */
-    }
-    const at: Clock = c ?? { daa: 0n, unixSeconds: BigInt(Math.floor(Date.now() / 1000)), rateMilli: 10_000 };
-    const records = await commitAccepted({ services, records: wallet.records, built, maker, txid: id, clock: at, label: props.label });
+    // the node keeps listing these inputs until the transaction is in a block (no plan of this page may pick them meanwhile); records saved
+    const { records } = await recordAccepted(services, wallet, built, id, props.label);
     if (!alive.current) return;
     result.current = { txid: id, records };
     setTxid(id);
     setPhase('submitted');
     setConfirmed('waiting');
-    try {
-      props.onSubmitted?.({ txid: id, records });
-    } catch {
-      /* a parent's refresh must not disturb the status */
-    }
     try {
       const outs = expectedOutputs(sdk, config.network, built.tx);
       const res = await waitForAcceptance(node, outs, { timeoutMs: 90_000, signal: abort.current.signal });
@@ -272,7 +171,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
     setFailure(null);
     setStage('signing');
     try {
-      const res = await signAndSubmit({ kob, node, adapter: wallet.adapter, built, network: config.network, inputAddress: props.issue ? undefined : inputAddress, onStage: (s) => alive.current && setStage(s) });
+      const res = await signAndSubmit({ kob, node, adapter: wallet.adapter, built, network: config.network, onStage: (s) => alive.current && setStage(s) });
       await afterAccepted(res.txid);
     } catch (e) {
       if (!alive.current) return;
@@ -287,8 +186,6 @@ export function ConfirmSign(props: ConfirmSignProps) {
       setStage(null);
       // an acknowledgement belongs to one attempt: the user looks again before signing again
       setAck(false);
-      setAckPlan(false);
-      setAckFresh(false);
     }
   };
 
@@ -306,12 +203,6 @@ export function ConfirmSign(props: ConfirmSignProps) {
     <Modal title={title} large dismissable={!busy} hideClose={busy} onClose={close} data-testid="confirm-screen">
       <div class="cf" data-phase={phase} data-kind={model.kind}>
         <p class="cf-intro">{model.intro}</p>
-
-        {checking.length > 0 ? (
-          <div class="cf-checking" data-testid="confirm-checking" role="status">
-            <Spinner /> <FindingList items={checking} testid="confirm-checking-list" class="cf-list-checking" />
-          </div>
-        ) : null}
 
         {blocking.length > 0 ? (
           <div class="cf-blocking" data-testid="confirm-blocking" role="alert">
@@ -334,71 +225,6 @@ export function ConfirmSign(props: ConfirmSignProps) {
           </Banner>
         ) : null}
 
-        <OpenTokenNote token={props.openToken} data-testid="confirm-open-caution" />
-        <PowersWarning powers={props.tokenPowers} data-testid="confirm-powers-warning" />
-
-        {mustAck.length > 0 ? (
-          <Banner tone="warn" title={t('confirm.planAck.title')} data-testid="confirm-plan-warnings">
-            <ul>
-              {mustAck.map((x, i) => (
-                <li key={i}>{x}</li>
-              ))}
-            </ul>
-            {phase !== 'submitted' ? (
-              <label class="cf-ack" data-testid="confirm-plan-ack-label">
-                <input
-                  type="checkbox"
-                  checked={ackPlan}
-                  disabled={busy}
-                  onChange={(e) => setAckPlan((e.currentTarget as HTMLInputElement).checked)}
-                  data-testid="confirm-plan-ack"
-                />
-                <span>{t('confirm.planAck.accept')}</span>
-              </label>
-            ) : null}
-          </Banner>
-        ) : null}
-
-        {fresh.length > 0 ? (
-          <Banner tone="warn" title={t('confirm.freshWarnings.title')} data-testid="confirm-fresh-warnings">
-            <ul>
-              {fresh.map((x, i) => (
-                <li key={i}>{x}</li>
-              ))}
-            </ul>
-            {phase !== 'submitted' ? (
-              <label class="cf-ack" data-testid="confirm-fresh-ack-label">
-                <input
-                  type="checkbox"
-                  checked={ackFresh}
-                  disabled={busy}
-                  onChange={(e) => setAckFresh((e.currentTarget as HTMLInputElement).checked)}
-                  data-testid="confirm-fresh-ack"
-                />
-                <span>{t('confirm.freshWarnings.accept')}</span>
-              </label>
-            ) : null}
-          </Banner>
-        ) : null}
-
-        {props.shownAs ? (
-          <p class="cf-shown-as" data-testid="confirm-shown-as">
-            {props.shownAs}
-          </p>
-        ) : null}
-        {props.ladder ? (
-          <div class="cf-ladder" data-testid="confirm-ladder">
-            <p class="cf-ladder-title">{t('confirm.ladder.title', { levels: props.ladder.lines.length })}</p>
-            <ul>
-              {props.ladder.lines.map((line, i) => (
-                <li key={i} class={i === props.ladder!.current ? 'cf-ladder-now' : ''} data-testid={`confirm-ladder-level-${i + 1}`} aria-current={i === props.ladder!.current ? 'true' : undefined}>
-                  {line}
-                  {i === props.ladder!.current ? <strong> ({t('confirm.ladder.now')})</strong> : null}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
         <div class="cf-summary" data-testid="confirm-summary">
           {model.sections.filter((s) => !s.fold).map((s) => (
             <SectionView section={s} key={s.id} />

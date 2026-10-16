@@ -1,5 +1,5 @@
 // The maker's SWEEP of an order's strays IN PLACE (kob-protocol `SweepOrder`, SWEEP record 0x83): planned by `planSweep`, built by kob-wasm,
-// signed locally and validated in the script engine for every order kind of both families, then decoded on the confirmation model; and the
+// signed locally and validated in the script engine for every order kind of both families, then decoded; and the
 // hostile variants the decoder must block (another script on the continuation, a record that does not verify, a token output to another key,
 // the custody swept along, a plan that claims another sweep). Foreign strays (other tokens owned by the order id) ride on sweeps and cancels.
 import { describe, expect, it } from 'vitest';
@@ -13,7 +13,7 @@ import { custodyState, extensionOfState } from './token-state';
 import type { BuiltTx, ForeignStrays, Hex, Kcc20State, SweepOrderRequest, TokenUtxo } from './types';
 import { loadKobNode } from './wasm.node';
 import { MAKER, OTHER, TOKEN, ZERO32, keyUtxo, nodeFactsOf, orderViewOf, placeGolden, signAndValidate, tokenUtxoView, tradableRegistryJson } from '../testing/chain-fixtures';
-import { buildConfirmModel } from '../ui/confirm/confirm-model';
+import { orderTitle, tokenAmountText, tokenLabel } from '../ui/confirm/confirm-model';
 import { t } from '../i18n';
 
 const kob = loadKobNode();
@@ -100,30 +100,25 @@ describe('planSweep: the order continues under the same script, its strays retur
     if (snap.custody) expect(tx.inputs.some((i) => i.transactionId === snap.custody!.transactionId && i.index === snap.custody!.index)).toBe(false);
   });
 
-  it('the confirmation model states what returns, that the order continues unchanged and that its idle window restarts', () => {
+  it('the decoded sweep states what returns and that the order continues unchanged under its own title', () => {
     const base = snapOf('create.ask');
     const snap = withStrays(base, [foreignGroup(base, ALIEN, [42n], 0xb1)]);
     const plan = planSweep(env(), snap);
     const s = verified(plan, 'ask');
     expect(codes(s.warnings)).toContain('token-unlisted'); // the foreign token outside the registry
-    const en = buildConfirmModel(s, { registry, tr: (k, p) => t(k, p) });
-    expect(en.kind).toBe('sweep');
-    expect(en.heading).toBe('Sweep stray tokens');
-    expect(en.intro).toBe(
-      '3 stray token UTXO(s) (0.012 TST, 42 base units of unknown token (81818181…81818181)) and their 25 KAS return to you. The order continues unchanged; its 90-day idle window restarts.',
-    );
-    // the net effect first; the wallet's inputs and change folded
-    expect(en.sections.map((x) => x.id)).toEqual(['net', 'spend', 'sweep', 'back', 'fee']);
-    expect(en.sections.filter((x) => x.fold).map((x) => x.id)).toEqual(['spend', 'back']);
-    const card = en.sections.find((x) => x.id === 'sweep')!.cards[0]!;
-    expect(card.title).toBe('Sweep strays: Sell limit order');
-    const rows = Object.fromEntries(card.rows.map((r) => [r.id, r]));
-    expect(rows.strays!.value).toBe('0.012 TST');
-    expect(rows[`strays-${ALIEN.covenantId}`]).toMatchObject({ tone: 'bad', label: 'Stray unknown token (81818181…81818181) (another token) swept' });
-    expect(rows.continues!.value).toBe('continues unchanged at output 0');
-    expect(rows.idle!.value).toBe('restarts');
-    // only the strays' carriers are "released": the order's own value stays on it (less the fee its carrier paid)
-    expect(en.sections.find((x) => x.id === 'spend')!.rows.find((r) => r.id === 'kas-released')!.value).toBe('25 KAS');
+    expect(s.kind).toBe('sweep');
+    const sp = s.spends[0]!;
+    const own = s.net.tokens.find((n) => n.ref.covenantId === sp.description!.tokenCovId)!.ref;
+    const tr = (k: string, p?: Record<string, string | number | bigint>) => t(k, p);
+    // the order is the same one (same title), the strays of its own token are told in whole units, the foreign one by its id alone
+    expect(orderTitle(sp.description!, null, { tr, ref: own, clock: null, time: () => '', registry })).toBe('Sell limit order');
+    expect(tokenAmountText(own, sp.strays)).toBe('0.012 TST');
+    expect(sp.otherStrays).toHaveLength(1);
+    expect(sp.otherStrays[0]).toMatchObject({ foreign: true, amount: 42n });
+    expect(tokenLabel(sp.otherStrays[0]!.ref, tr, registry)).toBe('unknown token (81818181…81818181)');
+    expect(sp.otherStrays[0]!.ref.covenantId).toBe(ALIEN.covenantId);
+    // 3 stray UTXOs and their 25 KAS return to the maker; the order continues at output 0
+    expect(sp.sweptTo).toEqual({ output: 0, utxos: 3, kas: 25n * KAS });
   });
 
   it('a bid needs a wallet coin; without one the plan says so', () => {

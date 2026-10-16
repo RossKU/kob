@@ -32,33 +32,24 @@ test.describe('sweep strays in place', () => {
     await expect(panel.getByTestId(`stray-sweep-${id}`)).toBeVisible();
 
     await page.getByTestId(`order-sweep-${id}`).click();
-    const [step] = await runFlow(page, mock, wallet, { steps: 1 });
-    const confirm = step!.confirm;
-    expect(confirm.kind).toBe('sweep');
-    expect(confirm.heading).toBe('Sweep strays');
-    expect(confirm.text).toContain(
-      '3 stray token UTXO(s) (3 EXKCC, 777 base units of unknown token (81818181…81818181)) and their 30 KAS return to you. The order continues unchanged; its 90-day idle window restarts.',
-    );
-    expect(confirm.closed).toEqual([]);
-    expect(confirm.created).toEqual([]);
-    const card = confirm.sections.sweep!.cards[0]!;
-    expect(card.title).toBe('Sweep strays: Sell limit order');
-    expect(card.rows.strays).toContain('3 EXKCC');
-    expect(card.rows[`strays-${FOREIGN}`]).toContain('777');
-    expect(card.rows.continues).toContain('continues unchanged at output 0');
-    expect(confirm.warnings.join(' ')).toContain('8181'); // the foreign token is not in the registry
-    expect(confirm.sections.others, 'nothing goes to other keys').toBeUndefined();
+    const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
+    // the transaction: the 3 strays are spent, the order continues (nothing closed or created), and what the strays held goes to the maker only
+    const alice = (await mock.balance('alice')).pubkey;
+    expect(placed!.submission.records.map((r) => r.type)).toContain('sweep');
+    expect(placed!.submission.closed).toEqual([]);
+    expect(placed!.submission.created).toEqual([]);
+    const own = placed!.submission.token_outputs.filter((o) => o.role === 'owned');
+    expect(own.every((o) => o.owner === alice), 'nothing goes to other keys').toBe(true);
 
     // the mock node: a continuation of the same order (same state, custody untouched), the strays spent, the tokens at the maker
     const after = await mock.order(id!);
     expect(after.status).toBe('open');
     expect(after.amount_left).toBe(String(3n * TOKEN));
-    expect(after.current.txid).toBe(step!.placed.txid);
+    expect(after.current.txid).toBe(placed!.txid);
     expect(after.current.txid).not.toBe(before.current.txid);
     expect(after.state).toEqual(before.state);
     expect(after.custody.ok).toBe(true);
     expect(after.strays).toEqual([]);
-    expect(step!.placed.submission.closed).toEqual([]);
     expect(await balanceOf(mock, 'EXKCC')).toBe(3n * TOKEN);
     expect(await balanceOf(mock, 'FRN')).toBe(777n);
 
@@ -69,10 +60,8 @@ test.describe('sweep strays in place', () => {
     await expect(page.getByTestId(`order-sweep-${id}`)).toHaveCount(0);
     // and it is still the maker's to cancel (from its new outpoint)
     await page.getByTestId(`order-cancel-${id}`).click();
-    // the sweep's finished flow is still shown: wait for the cancel's own confirmation screen
-    await expect(page.getByTestId('confirm-screen')).toBeVisible({ timeout: 30_000 });
     const [cancel] = await runFlow(page, mock, wallet, { steps: 1 });
-    expect(cancel!.confirm.kind).toBe('cancel');
+    expect(cancel!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
     expect((await mock.order(id!)).status).toBe('cancelled');
     expect(await balanceOf(mock, 'EXKCC')).toBe(6n * TOKEN);
   });
@@ -84,17 +73,17 @@ test.describe('sweep strays in place', () => {
     const before = await mock.order(id!);
     await openOrders(page, mock);
     await page.getByTestId(`order-sweep-${id}`).click();
-    const [step] = await runFlow(page, mock, wallet, { steps: 1 });
-    expect(step!.confirm.kind).toBe('sweep');
-    expect(step!.confirm.text).toContain('1 stray token UTXO(s) (4 EXKCC) and their 10 KAS return to you. The order continues unchanged');
-    expect(step!.confirm.sections.sweep!.cards[0]!.title).toBe('Sweep strays: Buy limit order');
+    const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
+    expect(placed!.submission.records.map((r) => r.type)).toContain('sweep');
+    expect(placed!.submission.closed).toEqual([]);
+    expect(placed!.submission.token_outputs.filter((o) => o.role === 'owned').reduce((a, o) => a + BigInt(o.amount), 0n)).toBe(4n * TOKEN);
     // the order input and the wallet coin are signed
-    const tx = step!.placed.submission.tx!;
+    const tx = placed!.submission.tx!;
     expect(tx.inputs).toHaveLength(3);
     const after = await mock.order(id!);
     expect(after.status).toBe('open');
     expect(after.current.value).toBe(before.current.value);
-    expect(after.current.txid).toBe(step!.placed.txid);
+    expect(after.current.txid).toBe(placed!.txid);
     expect(after.strays).toEqual([]);
     expect(await balanceOf(mock, 'EXKCC')).toBe(4n * TOKEN);
   });
@@ -112,19 +101,18 @@ test.describe('sweep strays in place', () => {
     await page.getByTestId('sweep-first-confirm').click();
 
     const [sweep] = await runFlow(page, mock, wallet, { steps: 1 });
-    expect(sweep!.confirm.kind).toBe('sweep');
-    expect(sweep!.confirm.text).toContain('8 stray token UTXO(s) (36 EXKCC) and their 80 KAS return to you');
+    expect(sweep!.submission.records.map((r) => r.type)).toContain('sweep');
     expect((await mock.order(id!)).status).toBe('open');
     expect(await balanceOf(mock, 'EXKCC')).toBe(36n * TOKEN);
 
     const follow = page.getByTestId('orders-sweep-followup');
     await expect(follow).toBeVisible();
     await expect(page.getByTestId('orders-strays')).toHaveCount(0, { timeout: 15_000 });
+    const asked = (await wallet!.calls()).length;
     await page.getByTestId('orders-sweep-followup-cancel').click();
-    await expect(page.getByTestId('confirm-screen')).toBeVisible({ timeout: 30_000 });
+    await wallet!.waitForCalls(asked + 1); // the cancel's own flow has started: the sweep's result is gone
     const [cancel] = await runFlow(page, mock, wallet, { steps: 1 });
-    expect(cancel!.confirm.kind).toBe('cancel');
-    expect(cancel!.confirm.warnings.join(' ')).not.toContain('abandoned');
+    expect(cancel!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
     expect((await mock.order(id!)).status).toBe('cancelled');
     expect(await balanceOf(mock, 'EXKCC')).toBe(37n * TOKEN);
   });

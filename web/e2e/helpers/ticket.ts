@@ -1,5 +1,5 @@
-// Drives the order ticket and the pre-sign confirmation screen through their test ids; reads the disclosure and the decoded confirmation into plain
-// objects so specs assert on values, never on layout. Everything waits on UI state (visible / enabled / call log), never on fixed sleeps.
+// Drives the order ticket (one button -> the wallet's own approval -> sent, with the progress inline) through its test ids; reads the disclosure and the
+// status line into plain objects so specs assert on values, never on layout. Everything waits on UI state (visible / enabled / call log), never on fixed sleeps.
 import type { Page } from '@playwright/test';
 import { expect, type MockClient, type MockWalletHandle, type SubmissionSummary } from '../fixtures';
 
@@ -43,25 +43,25 @@ export async function fillFields(page: Page, values: FieldValues): Promise<void>
   }
 }
 
-/** Waits until the planner settled on the typed form: not pending, and either review is enabled or an error issue is shown. */
+/** Waits until the planner settled on the typed form: not pending, and either the order button is enabled or an error issue is shown. */
 export async function settlePlan(page: Page): Promise<void> {
   await expect(page.getByTestId('order-ticket')).toHaveAttribute('aria-busy', 'false');
   await expect(page.getByTestId('order-pending')).toHaveCount(0);
 }
 
-/** Waits for a plan without errors: the disclosure is shown and review is enabled. */
+/** Waits for a plan without errors: the disclosure is shown and the order button is enabled. */
 export async function waitReviewable(page: Page): Promise<void> {
   await settlePlan(page);
   // a market / close start that nothing independent of the indexer checks (every sell here: the mock stack has no further indexer) holds the
-  // ticket until its box is ticked: review stays disabled until then
+  // ticket until its box is ticked: the order button stays disabled until then
   const startAck = page.getByTestId('order-market-start-ack');
   if ((await startAck.count()) > 0 && !(await startAck.isChecked())) {
-    await expect(page.getByTestId('order-review')).toBeDisabled();
+    await expect(page.getByTestId('order-place')).toBeDisabled();
     await startAck.check();
     await settlePlan(page);
   }
   await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
-  await expect(page.getByTestId('order-review')).toBeEnabled();
+  await expect(page.getByTestId('order-place')).toBeEnabled();
   await expect(page.getByTestId('order-disclosure')).toBeVisible();
 }
 
@@ -107,100 +107,7 @@ export async function readDisclosure(page: Page): Promise<DisclosureRead> {
   });
 }
 
-// ------------------------------------------------------------------------------------------------ confirmation screen
-
-export interface ConfirmCard {
-  id: string;
-  title: string;
-  badge: string;
-  rows: Record<string, string>;
-  children: ConfirmCard[];
-}
-export interface ConfirmSection {
-  id: string;
-  rows: Record<string, string>;
-  cards: ConfirmCard[];
-}
-export interface ConfirmRead {
-  heading: string;
-  kind: string;
-  sections: Record<string, ConfirmSection>;
-  /** the orders the transaction creates */
-  created: ConfirmCard[];
-  /** the orders it closes */
-  closed: ConfirmCard[];
-  blocking: string[];
-  warnings: string[];
-  info: string[];
-  wallet: string[];
-  text: string;
-  summaryText: string;
-}
-
-/** Reads the decoded confirmation screen (the modal must be open). Row keys are the row ids of confirm-model.ts (`amount`, `minFill`, `price`, `allIn`, `tip`, `expiry`, `locked-total`, `net-kas` ...). */
-export async function readConfirm(page: Page): Promise<ConfirmRead> {
-  await expect(page.getByTestId('confirm-screen')).toBeVisible();
-  return page.getByTestId('confirm-screen').evaluate((root) => {
-    const clean = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
-    const rowsOf = (scope: Element, prefix: string): Record<string, string> => {
-      const out: Record<string, string> = {};
-      for (const dd of scope.querySelectorAll<HTMLElement>(':scope > dl > .cf-row > dd[data-testid]')) {
-        const id = dd.dataset.testid!;
-        if (id.startsWith(`${prefix}-`)) out[id.slice(prefix.length + 1)] = [...dd.children].map((c) => clean(c.textContent)).filter(Boolean).join(' | ') || clean(dd.textContent);
-      }
-      return out;
-    };
-    const cardOf = (el: HTMLElement, section: string): any => ({
-      id: el.dataset.testid!.slice(`confirm-${section}-`.length),
-      title: clean(el.querySelector(':scope > .cf-card-head h4')?.textContent),
-      badge: clean(el.querySelector(':scope > .cf-card-head .cf-badge')?.textContent),
-      rows: rowsOf(el, el.dataset.testid!),
-      children: [...el.querySelectorAll<HTMLElement>(':scope > article.cf-card')].map((c) => cardOf(c, section)),
-    });
-    const sections: Record<string, any> = {};
-    for (const s of root.querySelectorAll<HTMLElement>('[data-testid^="confirm-section-"]')) {
-      const id = s.dataset.testid!.slice('confirm-section-'.length);
-      sections[id] = { id, rows: rowsOf(s, `confirm-${id}`), cards: [...s.querySelectorAll<HTMLElement>(':scope > article.cf-card')].map((c) => cardOf(c, id)) };
-    }
-    const list = (tid: string) => [...root.querySelectorAll(`[data-testid="${tid}"] li`)].map((li) => clean(li.textContent));
-    return {
-      heading: clean(root.querySelector('h2')?.textContent),
-      kind: (root.querySelector('.cf') as HTMLElement | null)?.dataset.kind ?? '',
-      sections,
-      created: sections.create?.cards ?? [],
-      closed: sections.close?.cards ?? [],
-      blocking: list('confirm-blocking-list'),
-      warnings: list('confirm-warnings'),
-      info: list('confirm-info'),
-      wallet: list('confirm-wallet-notice'),
-      text: (root as HTMLElement).innerText,
-      summaryText: (root.querySelector('[data-testid="confirm-summary"]') as HTMLElement | null)?.innerText ?? '',
-    };
-  });
-}
-
-/** Clicks review and waits for the confirmation screen; asserts that the decoder found nothing blocking. */
-export async function openReview(page: Page): Promise<ConfirmRead> {
-  await waitReviewable(page);
-  await page.getByTestId('order-review').click();
-  await expect(page.getByTestId('confirm-screen')).toBeVisible();
-  await expect(page.getByTestId('confirm-blocking')).toHaveCount(0);
-  await expect(page.getByTestId('confirm-summary')).toBeVisible();
-  return readConfirm(page);
-}
-
-/** Acknowledges and signs; waits until the mock node accepted the transaction and the app shows it confirmed. Returns the tx id. */
-export async function acknowledgeAndSign(page: Page): Promise<string> {
-  await expect(page.getByTestId('confirm-sign')).toBeDisabled();
-  await page.getByTestId('confirm-ack').check();
-  await expect(page.getByTestId('confirm-sign')).toBeEnabled();
-  await page.getByTestId('confirm-sign').click();
-  await expect(page.getByTestId('tx-id')).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('tx-status')).toHaveAttribute('data-status', 'confirmed', { timeout: 30_000 });
-  const txid = await page.getByTestId('tx-id').getAttribute('data-value');
-  expect(txid).toMatch(/^[0-9a-f]{64}$/);
-  return txid!;
-}
+// ------------------------------------------------------------------------------------------------ placing (one button, the wallet's own approval)
 
 export interface Placed {
   txid: string;
@@ -209,7 +116,7 @@ export interface Placed {
   views: any[];
 }
 
-/** After `acknowledgeAndSign`: the mock node's decoded submission of that tx and the indexer views of what it created. */
+/** After a send: the mock node's decoded submission of that tx and the indexer views of what it created. */
 export async function placedBy(mock: MockClient, txid: string): Promise<Placed> {
   const sub = (await mock.submitted()).find((s) => s.txid === txid);
   expect(sub, `the mock node accepted ${txid}`).toBeTruthy();
@@ -217,14 +124,85 @@ export async function placedBy(mock: MockClient, txid: string): Promise<Placed> 
   return { txid, submission: sub!, views };
 }
 
-/** review -> confirm screen -> sign -> accepted. Closes the confirmation dialog. */
-export async function reviewAndSign(page: Page, mock: MockClient): Promise<{ confirm: ConfirmRead; placed: Placed }> {
-  const confirm = await openReview(page);
-  const txid = await acknowledgeAndSign(page);
-  const placed = await placedBy(mock, txid);
-  await page.getByTestId('confirm-close').click();
+export type SendPhase = 'checking' | 'signing' | 'sending' | 'submitted' | 'blocked' | 'rejected' | 'failed';
+export type StatusId = 'order-status' | 'flow-status';
+
+export interface SendRead {
+  phase: SendPhase;
+  /** blocked / rejected / failed: the finding / failure code of `send-error` and its one sentence */
+  code: string | null;
+  text: string | null;
+  /** submitted: the full txid and the `tx-status` (submitted | confirmed | unconfirmed) */
+  txid: string | null;
+  status: string | null;
+}
+
+/** Reads the inline status line (`order-status` of the ticket, `flow-status` of My orders). */
+export async function readSendStatus(page: Page, testid: StatusId = 'order-status'): Promise<SendRead> {
+  const root = page.getByTestId(testid);
+  await expect(root).toBeVisible();
+  const one = async (id: string, attr: string | null) => {
+    const loc = root.getByTestId(id);
+    if ((await loc.count()) === 0) return null;
+    return attr ? await loc.getAttribute(attr) : ((await loc.textContent()) ?? '').trim();
+  };
+  return {
+    phase: (await root.getAttribute('data-phase')) as SendPhase,
+    code: await one('send-error', 'data-code'),
+    text: await one('send-error', null),
+    txid: await one('tx-id', 'data-value'),
+    status: await one('tx-status', 'data-status'),
+  };
+}
+
+/** Waits until the ticket is ready, then clicks the order button ONCE: the click goes straight to the checks, the wallet's approval and the node (no confirmation screen exists). */
+export async function clickPlace(page: Page): Promise<void> {
+  await waitReviewable(page);
+  await page.getByTestId('order-place').click();
+}
+
+/**
+ * Waits for the status line to stop at `phase` (blocked | rejected | failed): ONE error line with the finding / failure code, nothing submitted,
+ * no confirmation screen. Returns what it shows. Pair it with `wallet.calls()` where the wallet must not have been asked at all.
+ */
+export async function expectStopped(page: Page, phase: 'blocked' | 'rejected' | 'failed', opts: { code?: string | RegExp; testid?: StatusId } = {}): Promise<SendRead> {
+  const testid = opts.testid ?? 'order-status';
+  await expect(page.getByTestId(testid)).toHaveAttribute('data-phase', phase, { timeout: 30_000 });
   await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
-  return { confirm, placed };
+  const read = await readSendStatus(page, testid);
+  if (typeof opts.code === 'string') expect(read.code, 'finding / failure code').toBe(opts.code);
+  else if (opts.code) expect(read.code, 'finding / failure code').toMatch(opts.code);
+  expect(read.txid, 'nothing was submitted').toBeNull();
+  return read;
+}
+
+/** Waits until the status line shows the submitted transaction confirmed in a block; returns its tx id. */
+export async function waitSubmitted(page: Page, testid: StatusId = 'order-status'): Promise<string> {
+  const root = page.getByTestId(testid);
+  await expect(root.getByTestId('tx-id')).toBeVisible({ timeout: 30_000 });
+  await expect(root.getByTestId('tx-status')).toHaveAttribute('data-status', 'confirmed', { timeout: 30_000 });
+  const txid = await root.getByTestId('tx-id').getAttribute('data-value');
+  expect(txid).toMatch(/^[0-9a-f]{64}$/);
+  return txid!;
+}
+
+/** The new flow for one order: ready ticket -> ONE click -> the wallet's approval -> sent -> confirmed. Returns the accepted transaction; the confirmation screen must never appear. */
+export async function placeOrder(page: Page, mock: MockClient): Promise<Placed> {
+  await clickPlace(page);
+  const txid = await waitSubmitted(page);
+  await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
+  return placedBy(mock, txid);
+}
+
+/** A ladder: one click, one transaction per level (each its own wallet request); waits for "All N levels placed" and returns the accepted transactions in order. */
+export async function placeLadder(page: Page, mock: MockClient, levels: number): Promise<Placed[]> {
+  const before = (await mock.submitted(false)).length;
+  await clickPlace(page);
+  await expect(page.getByTestId('order-result-ladder')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
+  const mine = (await mock.submitted()).slice(before);
+  expect(mine, 'one transaction per level').toHaveLength(levels);
+  return Promise.all(mine.map((s) => placedBy(mock, s.txid)));
 }
 
 // ------------------------------------------------------------------------------------------------ wallet call log
@@ -234,10 +212,10 @@ export async function reviewAndSign(page: Page, mock: MockClient): Promise<{ con
  * (`sign[]`, i.e. every input the wallet key controls: P2PK funds and the maker-signed covenant entries), all of them signed, none left unsigned,
  * and the transaction the wallet saw is the one the node accepted (same outputs and payload; only the signature scripts were added).
  */
-export async function expectWalletSigned(wallet: MockWalletHandle, placed: Placed, opts: { requests?: number; inputs?: number[] } = {}): Promise<void> {
+export async function expectWalletSigned(wallet: MockWalletHandle, placed: Placed, opts: { requests?: number; inputs?: number[]; call?: number } = {}): Promise<void> {
   const calls = await wallet.calls();
-  expect(calls, 'sign requests').toHaveLength(opts.requests ?? 1);
-  const call = calls[calls.length - 1]!;
+  if (opts.requests !== undefined || opts.call === undefined) expect(calls, 'sign requests').toHaveLength(opts.requests ?? 1);
+  const call = calls[opts.call ?? calls.length - 1]!; // a flow of several steps: `call` picks the request of that step
   expect(call.status).toBe('signed');
   expect(call.unsignedInputs).toEqual([]);
   expect([...call.signedInputs].sort((a, b) => a - b)).toEqual([...call.inputs].sort((a, b) => a - b));
@@ -250,5 +228,21 @@ export async function expectWalletSigned(wallet: MockWalletHandle, placed: Place
   seen.outputs.forEach((o: any, i: number) => {
     expect(String(o.value)).toBe(String(accepted.outputs[i].value));
     expect(JSON.stringify(o.scriptPublicKey)).toBe(JSON.stringify(accepted.outputs[i].scriptPublicKey));
+  });
+}
+
+/**
+ * What an accepted transaction commits to for each order it created, without the clock-dependent expiry: the contract, its decoded state, the KAS the
+ * order output locks and the token custodies. Two placements of the same economic order (typed in either orientation) must have equal terms.
+ */
+export function onChainTerms(placed: Placed): { contract: string; state: Record<string, string>; locked: string; custody: string[] }[] {
+  return placed.views.map((view, i) => {
+    const { expiryDaa: _expiry, ...state } = view.state.state as Record<string, string>;
+    return {
+      contract: view.contract,
+      state,
+      locked: String(placed.submission.tx.outputs[placed.submission.created[i]!.output].value),
+      custody: placed.submission.token_outputs.filter((o) => o.role === 'custody').map((o) => o.amount),
+    };
   });
 }
