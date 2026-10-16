@@ -58,7 +58,11 @@ KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kob-executor run \
 
 * **The matcher's book is the indexer's store.** `indexer::book::StoreBook` implements the
   matcher's `OrderBookView` over the SQLite tables; each tick reads orders, custody and strays in
-  **one read transaction**, so they are of one cursor. What is listed is what
+  **one read transaction**, so they are of one cursor. The read runs on a read-only connection of its own, on the blocking
+  thread pool (`IndexerSource::with_reader`; the x402 intents' book has its own as well): not on the writer's connection,
+  not under the ingest lock, not on a runtime worker. It sees one committed batch, as the writer's connection did between
+  batches, and the follower commits while it runs (WAL) instead of waiting for it (the read held the lock for 1 to 2.4 s per
+  tick on the TN10 soak before it was bounded by the live set, section B 5.5). What is listed is what
   `GET /v1/orders` calls listed: orders whose placement record was verified, whose current state
   was proven against the output's script public key, and (ask side) with exactly one live custody
   UTXO. An order with several custody outputs is left out (fails closed); a missing or wrongly

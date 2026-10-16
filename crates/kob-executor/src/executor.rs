@@ -43,12 +43,26 @@ pub struct IndexerSource {
     ingest: Arc<Mutex<Ingest>>,
     /// The follower's health: the source is ready only while the store is caught up with the node or within its lag tolerance.
     health: Option<Arc<HealthState>>,
+    /// A read-only connection of the source's own the book is read on ([`IndexerSource::with_reader`]); without one, the
+    /// writer's connection under the ingest lock.
+    reader: Option<Arc<Mutex<rusqlite::Connection>>>,
 }
 
 impl IndexerSource {
     /// A source over the store alone (always ready: the caller keeps the store current).
     pub fn new(ingest: Arc<Mutex<Ingest>>) -> Self {
-        IndexerSource { ingest, health: None }
+        IndexerSource { ingest, health: None, reader: None }
+    }
+
+    /// Read the book on `conn`, a read-only connection to the store's file (`db::open_reader`), on the blocking thread pool
+    /// ([`BookSource::snapshot_read`]), instead of on the writer's connection under the ingest lock. The read is one read
+    /// transaction, so it sees one committed batch, as before: the follower commits each batch in one transaction, nothing
+    /// the book reads is ever left uncommitted between batches, and the matcher's own state the lock guards (the watched
+    /// transactions, `Ingest::watch_tx`) is not part of the book. What changes: the follower commits while the book is read
+    /// (WAL), where it used to wait for the read, and the read no longer stalls a runtime worker.
+    pub fn with_reader(mut self, conn: rusqlite::Connection) -> Self {
+        self.reader = Some(Arc::new(Mutex::new(conn)));
+        self
     }
 
     /// Ready only while the follower reports the store caught up ([`HealthSnapshot::caught_up`]) or within the lag tolerance
@@ -76,7 +90,16 @@ impl BookSource for IndexerSource {
     }
 
     fn snapshot(&mut self, operator: &[u8; 32]) -> Result<MemoryBook> {
-        Ok(book::snapshot(self.lock().conn(), Some(*operator))?)
+        match &self.reader {
+            Some(r) => read_book(r, Some(*operator)),
+            None => Ok(book::snapshot(self.lock().conn(), Some(*operator))?),
+        }
+    }
+
+    fn snapshot_read(&mut self, operator: &[u8; 32]) -> Option<crate::matcher::run::BookRead> {
+        let r = self.reader.clone()?;
+        let op = *operator;
+        Some(Box::new(move || read_book(&r, Some(op))))
     }
 
     fn watch(&mut self, txid: [u8; 32]) {
@@ -128,6 +151,12 @@ impl BookSource for IndexerSource {
     fn metrics(&mut self) -> String {
         self.health.as_ref().map(|h| h.snapshot().metrics_text()).unwrap_or_default()
     }
+}
+
+/// One consistent read of the book ([`book::snapshot`]: one read transaction) on a reader connection.
+fn read_book(reader: &Mutex<rusqlite::Connection>, operator: Option<[u8; 32]>) -> Result<MemoryBook> {
+    let conn = reader.lock().unwrap_or_else(|e| e.into_inner());
+    Ok(book::snapshot(&conn, operator)?)
 }
 
 /// `kob-executor run`.
@@ -349,7 +378,9 @@ where
         None => None,
     };
     let running = indexer.spawn(chain)?;
-    let source = IndexerSource::new(indexer.ingest.clone()).with_health(indexer.health.clone());
+    // the book is read on a connection of its own, off the ingest lock and off the runtime's workers
+    let reader = crate::indexer::db::open_reader(&indexer.cfg.db_path(), &indexer.cfg.network)?;
+    let source = IndexerSource::new(indexer.ingest.clone()).with_health(indexer.health.clone()).with_reader(reader);
     let mut runner = Runner::new(node, source, signer, cfg);
     runner.reservations = reservations;
     runner.fee_board = fee_board;
@@ -399,15 +430,16 @@ pub fn x402_service(
             None => Ok(()),
         }) as crate::x402::facilitator::BookReadiness
     });
-    let book_ingest = ingest.clone();
     let book_ready = ready.clone();
+    // the intents' book is read on a connection of its own as well (one read transaction; never the writer's, never under
+    // the ingest lock)
+    let book_reader = Mutex::new(crate::indexer::db::open_reader(&index.db_path(), &index.network)?);
     let book: crate::x402::BookFn = Arc::new(move || {
         // a lagging store may list orders that are spent by now: no intent is planned against it
         if let Some(r) = &book_ready {
             r()?;
         }
-        let g = book_ingest.lock().unwrap_or_else(|e| e.into_inner());
-        let b = book::snapshot(g.conn(), None).map_err(|e| e.to_string())?;
+        let b = read_book(&book_reader, None).map_err(|e| e.to_string())?;
         Ok(crate::x402::quote::book_view(&b))
     });
     let chain = crate::x402::indexed::IndexedChain::new(node, ingest);

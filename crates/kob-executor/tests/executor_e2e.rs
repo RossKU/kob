@@ -15,7 +15,7 @@ use kob_executor::hex::Hash32;
 use kob_executor::indexer::book::{snapshot, StoreBook};
 use kob_executor::matcher::book::{ListedOrder, OrderBookView};
 use kob_executor::matcher::node::{AddressUtxo, DagInfo, NodeApi, RpcError, ServerInfo};
-use kob_executor::matcher::run::{Roles, RunConfig, Runner, StepReport};
+use kob_executor::matcher::run::{BookSource, Roles, RunConfig, Runner, StepReport};
 use kob_executor::matcher::wallet::{p2pk_spk_string, LocalKeys};
 use kob_executor::testkit::*;
 use kob_protocol::build::*;
@@ -358,6 +358,38 @@ async fn the_matcher_plans_from_the_indexed_book_and_acceptance_comes_from_the_i
         assert!(r.tracker.txs.is_empty());
         assert_eq!((r.tracker.finalized_count, r.tracker.finalized_profit > 0), (1, true));
     }
+}
+
+/// `kob-executor run` reads the book on a read-only connection of its own (`IndexerSource::with_reader`), on the blocking
+/// thread pool: the book the writer's connection reads, read while the follower holds the ingest lock (a commit in
+/// progress), and the same plan from it.
+#[tokio::test]
+async fn the_matcher_reads_its_book_on_its_own_connection_without_the_ingest_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite3");
+    let c = Ctx::with(Harness::new(kob_executor::indexer::db::open_writer(&path, "testnet-10").unwrap(), None));
+    let (create_a, create_b) = crossing_book(&c, Family::Kcc20).await;
+    let reader = kob_executor::indexer::db::open_reader(&path, "testnet-10").unwrap();
+    let mut source = IndexerSource::new(c.hs.ingest.clone()).with_reader(reader);
+    let on_writer = {
+        let g = c.hs.ingest.lock().unwrap();
+        snapshot(g.conn(), Some(pk(MATCHER))).unwrap()
+    };
+    let read = {
+        let _commit = c.hs.ingest.lock().unwrap();
+        let read = source.snapshot_read(&pk(MATCHER)).expect("a source with a reader reads off the runtime");
+        std::thread::spawn(read).join().unwrap().unwrap()
+    };
+    assert_eq!(serde_json::to_value(&read).unwrap(), serde_json::to_value(&on_writer).unwrap());
+    assert_eq!((read.orders.len(), read.daa_score), (2, c.daa()));
+    let node = ExecNode::new(c.hs.node.clone());
+    let cfg = RunConfig { roles: both(), max_book_lag: Some(300), ..RunConfig::default() };
+    let mut r = Runner::new(node, source, Box::new(signer()), cfg);
+    r.capture = Some(vec![]);
+    let rep = step_ok(r.step().await);
+    assert_eq!(rep.built.len(), 1, "{rep:?}");
+    let spent: Vec<[u8; 32]> = drain(&mut r)[0].tx.inputs.iter().map(|i| i.transaction_id).collect();
+    assert!(spent.contains(&create_a.tx.id) && spent.contains(&create_b.tx.id));
 }
 
 #[tokio::test]

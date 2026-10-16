@@ -29,10 +29,19 @@ use super::submit::{Tracked, Tracker, TrackerConfig};
 use super::wallet::{address_of, p2pk_spk_string, Signer};
 use crate::keepers::{tick_with_subsidy as keeper_tick, JobKind, KeeperConfig, KeeperInput, SubsidyAllowance, SubsidyBudget};
 
+/// A read of the book that blocks on a database: the runner runs it on the blocking thread pool, never on a runtime worker.
+pub type BookRead = Box<dyn FnOnce() -> anyhow::Result<MemoryBook> + Send>;
+
 /// Where the book comes from each tick.
 pub trait BookSource: Send {
     /// A consistent snapshot of the listed orders and the operator's tokens.
     fn snapshot(&mut self, operator: &[u8; 32]) -> anyhow::Result<MemoryBook>;
+
+    /// [`BookSource::snapshot`] as a read the runner runs on the blocking thread pool (a source that reads a database:
+    /// the indexer's store). `None`, the default: the runner calls `snapshot` in place (a file, a memory book).
+    fn snapshot_read(&mut self, _operator: &[u8; 32]) -> Option<BookRead> {
+        None
+    }
 
     /// `Err(why)` while the source lags the chain (the indexer after a restart, catching up, or cut off from the node): the
     /// runner plans nothing (matcher, keepers, maintenance) and keeps tracking acceptance. The default: always ready.
@@ -868,7 +877,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             tracing::info!(was = %why, "the indexer caught up; planning");
         }
         let operator = self.signer.pubkey();
-        let book = self.source.snapshot(&operator)?;
+        let book = match self.source.snapshot_read(&operator) {
+            Some(read) => tokio::task::spawn_blocking(read).await.map_err(|e| anyhow::anyhow!("the book read task failed: {e}"))??,
+            None => self.source.snapshot(&operator)?,
+        };
         rep.book_daa = book.daa_score;
         if self.cfg.max_book_lag.is_some_and(|lag| book.daa_score.saturating_add(lag) < daa) {
             tracing::warn!(book_daa = book.daa_score, node_daa = daa, "the book lags the node; planning nothing until it catches up");
