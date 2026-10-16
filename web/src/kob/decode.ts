@@ -155,6 +155,8 @@ export interface DecodedOrder {
   output: number;
   covenantId: Hex;
   description: OrderDescription;
+  /** the decoded state itself (what a covenant helper such as `bidBuyingPower` reads) */
+  state: OrderState;
   /** KAS on the order UTXO */
   value: bigint;
   locked: LockedKas;
@@ -740,7 +742,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       });
       const first = custodies[0];
       orders.push({
-        output: j, covenantId: rec.covenantId, description, value, locked, deadline: rec.deadline != null ? big(rec.deadline) : null, verified,
+        output: j, covenantId: rec.covenantId, description, state: os, value, locked, deadline: rec.deadline != null ? big(rec.deadline) : null, verified,
         custody: first ? { output: first.output, amount: first.amount, carrier: first.carrier, ref: first.ref } : null, custodies,
       });
       return { ...blank, kind: 'order', flagged: !verified, order: { covenantId: rec.covenantId, description, verified, locked, deadline: rec.deadline != null ? big(rec.deadline) : null } };
@@ -761,7 +763,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const description = describeOrder(os, kob);
       const locked = splitOrderValue(description, value);
       const deadline = am.deadline != null ? big(am.deadline) : null;
-      orders.push({ output: j, covenantId: am.covenantId, description, value, locked, deadline, verified, custody: null, custodies: [], amendedFrom: am.input });
+      orders.push({ output: j, covenantId: am.covenantId, description, state: os, value, locked, deadline, verified, custody: null, custodies: [], amendedFrom: am.input });
       return { ...blank, kind: 'order', flagged: !verified, order: { covenantId: am.covenantId, description, verified, locked, deadline } };
     }
     const sw = sweepByOutput.get(j);
@@ -771,7 +773,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       if (os.state.maker !== maker) add('order-not-maker', `output ${j}: the swept order names ${shortId(os.state.maker)} as maker, not the connected wallet key`, { output: j, params: { maker: os.state.maker } });
       const description = describeOrder(os, kob);
       const locked = splitOrderValue(description, value);
-      orders.push({ output: j, covenantId: sw.covenantId, description, value, locked, deadline: null, verified: true, custody: null, custodies: [], sweptFrom: sw.input });
+      orders.push({ output: j, covenantId: sw.covenantId, description, state: os, value, locked, deadline: null, verified: true, custody: null, custodies: [], sweptFrom: sw.input });
       return { ...blank, kind: 'order', order: { covenantId: sw.covenantId, description, verified: true, locked, deadline: null } };
     }
     const tok = tokenOutputs.get(j);

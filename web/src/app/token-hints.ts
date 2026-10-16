@@ -1,12 +1,14 @@
 // The labels the app gives the private-key signer frame for the tokens of a signing request (`signer/protocol.ts` TokenHint): the registry's
-// ticker and decimals of every token the transaction names. They are labels only: the frame decodes the transaction itself and shows each
-// token by its covenant id next to the label.
+// ticker and decimals of every token the transaction names, and whether the app shows the token's KAS market inverted (KAS/TOKEN, the
+// orientation the user chose on its page: the frame words an order the way the ticket did). They are labels only: the frame decodes the
+// transaction itself and shows each token by its covenant id next to the label.
 import { decodeSigning } from '../kob/decode';
 import type { TokenRegistry } from '../kob/registry';
 import type { BuiltTx, Hex } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import type { TokenHint } from '../signer/protocol';
 import { tokensOf } from '../ui/confirm/confirm-model';
+import { marketKey, readInverted } from '../ui/market/orientation';
 
 /**
  * The tokens moved by the transaction (its token inputs and outputs) and the tokens of the orders it creates, amends or spends, decoded for
@@ -26,6 +28,7 @@ export function signerTokenHints(kob: KobWasm, built: BuiltTx, maker: Hex | null
   }
   return [...ids].flatMap((id) => {
     const tk = registry.byCovenantId.get(id);
-    return tk && /^[\x20-\x7e]{1,24}$/.test(tk.ticker) ? [{ covenantId: id, ticker: tk.ticker, decimals: tk.decimals }] : [];
+    if (!tk || !/^[\x20-\x7e]{1,24}$/.test(tk.ticker)) return [];
+    return [{ covenantId: id, ticker: tk.ticker, decimals: tk.decimals, ...(readInverted(marketKey('token', id)) === true ? { inverted: true } : {}) }];
   });
 }

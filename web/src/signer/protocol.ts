@@ -17,6 +17,8 @@ export interface TokenHint {
   covenantId: Hex;
   ticker: string;
   decimals: number;
+  /** the app shows this token's KAS market inverted (KAS/TOKEN): the frame words a plain order of it the same way (a label only, like the ticker) */
+  inverted?: boolean;
 }
 
 export type RejectReason = 'user' | 'invalid' | 'no-key' | 'busy' | 'cancelled';
@@ -78,7 +80,8 @@ export function isBuiltTx(v: unknown): v is BuiltTx {
 }
 
 const isTokenHint = (v: unknown): v is TokenHint =>
-  isObj(v) && hasKeys(v, ['covenantId', 'ticker', 'decimals']) && HEX32.test(String(v.covenantId)) && typeof v.ticker === 'string' && TICKER.test(v.ticker) && isIndex(v.decimals, 19);
+  isObj(v) && hasKeys(v, ['covenantId', 'ticker', 'decimals', 'inverted']) && HEX32.test(String(v.covenantId)) && typeof v.ticker === 'string' && TICKER.test(v.ticker) && isIndex(v.decimals, 19) &&
+  (v.inverted === undefined || typeof v.inverted === 'boolean');
 
 const sized = (v: unknown): boolean => {
   try {

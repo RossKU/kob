@@ -12,6 +12,8 @@ describe('signer protocol: what the signer accepts from the app', () => {
     const m = parseAppMessage(clone({ p: P, type: 'sign', id: 'r1', built, tokens: [{ covenantId: '70'.repeat(32), ticker: 'EXKCC', decimals: 8 }] }));
     expect(m?.type).toBe('sign');
     expect(parseAppMessage({ p: P, type: 'sign', id: 'r2', built: buildCancel(), tokens: [] })?.type).toBe('sign');
+    // the orientation of the token's market is a label too (a boolean or absent)
+    expect(parseAppMessage(clone({ p: P, type: 'sign', id: 'r3', built, tokens: [{ covenantId: '70'.repeat(32), ticker: 'EXKCC', decimals: 8, inverted: true }] }))?.type).toBe('sign');
     expect(parseAppMessage({ p: P, type: 'cancel', id: 'r1' })).toEqual({ p: P, type: 'cancel', id: 'r1' });
     expect(parseAppMessage({ p: P, type: 'forget' })).toEqual({ p: P, type: 'forget' });
   });
@@ -42,6 +44,7 @@ describe('signer protocol: what the signer accepts from the app', () => {
       ['bad tx id', (m) => void (m.built.tx.id = 'zz')],
       ['bad hint', (m) => void m.tokens.push({ covenantId: '70'.repeat(32), ticker: '<script>'.repeat(4), decimals: 8 })],
       ['hint decimals', (m) => void m.tokens.push({ covenantId: '70'.repeat(32), ticker: 'X', decimals: 40 })],
+      ['hint orientation', (m) => void m.tokens.push({ covenantId: '70'.repeat(32), ticker: 'X', decimals: 8, inverted: 'yes' })],
       ['oversized', (m) => void (m.built.tx.payload = '00'.repeat(1_100_000))],
     ];
     expect(parseAppMessage(ok())).not.toBeNull();

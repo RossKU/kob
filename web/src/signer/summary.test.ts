@@ -30,17 +30,22 @@ describe('signer summary: order terms', () => {
     const price = (o: (typeof fair.orders)[number]) => o.rows.find((r) => /price/i.test(r.label))?.value;
     expect(price(fair.orders[0]!)).toBeDefined();
     expect(price(cheap.orders[0]!)).not.toBe(price(fair.orders[0]!));
-    // the one sentence the frame shows carries the price too
-    expect(fair.text).toContain(price(fair.orders[0]!)!);
-    expect(cheap.text).toContain(price(cheap.orders[0]!)!);
+    // the one sentence the frame shows carries the price too (in KAS per whole token, the ticket's words)
+    expect(fair.text).toMatch(/^Sell 10 EXKCC at 2.5 KAS each./);
+    expect(cheap.text).toMatch(/^Sell 10 EXKCC at 0.0025 KAS each./);
     expect(cheap.text).not.toBe(fair.text);
   });
 
-  it('is one sentence: the order with its amount and price, the net effect for this key (token by its covenant id), the fee', () => {
+  it('is one sentence in the words of the ticket: what is sold at what price, what it locks, the fee, the token by its covenant id', () => {
     const s = summarize(kob, build('create.ask'), MAKER_PK, HINTS);
-    expect(s.text).toMatch(/^Sell .*: .* at .*. .*; network fee .* KAS.$/);
+    expect(s.text.startsWith('Sell 10 EXKCC at 2.5 KAS each. Locks 20.00 KAS and 10 EXKCC (unused part returns); fee 0.008 KAS. Token ids: EXKCC ')).toBe(true);
     expect(s.text).toContain(`${TOKEN_COV_ID.slice(0, 8)}…${TOKEN_COV_ID.slice(-8)}`);
-    expect(s.text).toContain(s.fee);
+    // a buy: the amount its escrow buys at its limit (not the KAS budget the chain holds)
+    const bid = summarize(kob, build('create.bid'), MAKER_PK, HINTS).text;
+    expect(bid).toMatch(/^Buy [0-9.,]+ EXKCC at 2[.]45 KAS each[.] Locks [0-9.,]+ KAS [(]unused part returns[)]/);
+    // the market shown inverted (KAS/EXKCC): the same sale is a purchase of KAS at EXKCC per KAS
+    const inv = summarize(kob, build('create.ask'), MAKER_PK, [{ ...HINTS[0]!, inverted: true }]);
+    expect(inv.text.startsWith('Buy 24.99 KAS at 0.4 EXKCC each. Locks 20.00 KAS and 10 EXKCC')).toBe(true); // what the sale receives: the price less the tip
     // a cancel creates no order: the kind of request leads
     const c = summarize(kob, kob.build(goldenRequest('cancel.ask', MAKER_PK)), MAKER_PK, HINTS);
     expect(c.text.startsWith('Cancel order. ')).toBe(true);

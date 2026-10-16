@@ -5,6 +5,7 @@ import { test, expect, TEST_KEYS } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, expectStopped, fillFields, pickType, placedBy, waitReviewable, waitSubmitted } from '../helpers/ticket';
+import { kasWords } from '../../src/signer/words';
 /** the header chip shows the address without its prefix, head and tail (WalletButton.tsx chipAddress) */
 const chipAddress = (a: string): string => {
   const body = a.slice(a.indexOf(':') + 1);
@@ -44,14 +45,14 @@ async function sellTicket(page: Page): Promise<void> {
  * Waits for the signer popup of the request the app just made (the click on the order button or on a My orders action asks the wallet at once),
  * checks that its one sentence names the request and the fee, approves in the frame, and returns the sentence.
  */
-/** the frame says the fee in KAS: it must be the fee of the transaction the node accepted */
-const feeText = (sompi: string): string => `network fee ${Number(BigInt(sompi)) / 1e8} KAS`;
+/** the frame says the fee in KAS (two significant digits, rounded up): it must be the fee of the transaction the node accepted */
+const feeText = (sompi: string): string => `fee ${kasWords(BigInt(sompi), 'up')} KAS`;
 
 async function approveInFrame(page: Page, facts: (string | RegExp)[]): Promise<string> {
   const f = signer(page);
   await expect(page.getByTestId('signer-overlay')).toBeVisible();
   const summary = f.getByTestId('signer-summary');
-  await expect(summary).toContainText(/network fee [0-9.,]+ KAS/);
+  await expect(summary).toContainText(/; fee [0-9.,]+ KAS[.]/);
   for (const fact of facts) await expect(summary).toContainText(fact);
   await expect(f.getByTestId('signer-problems')).toHaveCount(0);
   await expect(f.getByTestId('signer-approve')).toBeEnabled();
@@ -80,10 +81,10 @@ test('connect with a private key in the signer frame, place and cancel an order 
   await expect(page.getByTestId('wallet-connected')).toContainText('Private key');
   await expect(page.getByTestId('signer-overlay')).toBeHidden();
 
-  // place: the sentence names the order (2 tokens at 0.027), the net effect for the key and the fee
+  // place: the sentence says the order as the ticket does (2 tokens at 0.027 KAS each), what it locks and the fee
   await sellTicket(page);
   await clickPlace(page);
-  const sentence = await approveInFrame(page, ['Sell limit order: 2 EXKCC at 0.027', '−2 EXKCC', '4 KAS locked in orders']);
+  const sentence = await approveInFrame(page, ['Sell 2 EXKCC at 0.027 KAS each.', 'Locks 4.00 KAS and 2 EXKCC (unused part returns)']);
   const placed = await placedBy(mock, await waitSubmitted(page));
   expect(sentence).toContain(feeText(placed.submission.fee));
   expect(placed.views[0].contract).toBe('KobAsk');
