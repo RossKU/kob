@@ -2,7 +2,7 @@
 // function. The submit choke point itself (BotWallet.submit) only calls `gateRefusal`, which is tested here with a fake gate.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { advance, gateRefusal, IndexerGate, judgeHealth, type GateState, type HealthLike } from '../src/indexer-gate.ts';
+import { advance, gateHealth, gateRefusal, healthFromMetrics, IndexerGate, judgeHealth, type GateState, type HealthLike } from '../src/indexer-gate.ts';
 
 const following: HealthLike = { state: 'following', caught_up: true, lag_daa: 3, last_error: null };
 
@@ -230,4 +230,49 @@ test('waitOpen sleeps and re-checks until the indexer follows, and gives up when
     },
   );
   assert.equal(done, false);
+});
+
+// ------------------------------------------------------------------------------------------------ the metrics source
+
+const prom = (caught: number, within: number, lag = 7) =>
+  [
+    '# HELP kob_indexer_within_lag_tolerance 1 while ...',
+    '# TYPE kob_indexer_within_lag_tolerance gauge',
+    `kob_indexer_within_lag_tolerance ${within}`,
+    `kob_indexer_caught_up ${caught}`,
+    'kob_indexer_cursor_daa 598220159',
+    `kob_indexer_lag_daa ${lag}`,
+    'kob_indexer_lag_tolerance_daa 1200',
+  ].join('\n');
+
+test('the gate fields from /v1/metrics: caught up is following, within the tolerance is catching_up, otherwise no state', () => {
+  assert.deepEqual(healthFromMetrics(prom(1, 1)), { state: 'following', caught_up: true, within_lag_tolerance: true, cursor_daa: 598220159, lag_daa: 7 });
+  assert.equal(healthFromMetrics(prom(0, 1, 650))?.state, 'catching_up');
+  assert.equal(healthFromMetrics(prom(0, 0, 5000))?.state, null);
+  assert.equal(healthFromMetrics(prom(0, 0, 5000))?.within_lag_tolerance, false);
+  // an executor without the gauges
+  assert.equal(healthFromMetrics('kob_matcher_paused 0\n'), null);
+  assert.equal(healthFromMetrics(prom(1, 1).replace(/kob_indexer_cursor_daa.*\n/, '')), null);
+});
+
+test('the gate reads /v1/health only when the metrics do not say the indexer follows (or cannot be read)', async () => {
+  let healthCalls = 0;
+  const full: HealthLike = { state: 'gap', caught_up: false, lag_daa: null, last_error: 'missing block' };
+  const health = async () => {
+    healthCalls++;
+    return full;
+  };
+  const viaMetrics = await gateHealth(async () => healthFromMetrics(prom(0, 1, 650)), health);
+  assert.equal(healthCalls, 0);
+  assert.deepEqual(viaMetrics, { state: 'catching_up', caught_up: false, lag_daa: 650, last_error: null });
+  assert.equal(judgeHealth(viaMetrics, undefined, 1200).open, true);
+  assert.equal(judgeHealth(viaMetrics, undefined, 300).open, false);
+  assert.equal(judgeHealth(await gateHealth(async () => healthFromMetrics(prom(1, 1)), health)).open, true);
+  assert.equal(healthCalls, 0);
+  // not within the tolerance: the full answer (state and last error for the pause log)
+  assert.deepEqual(await gateHealth(async () => healthFromMetrics(prom(0, 0, 5000)), health), full);
+  // metrics not served / the request failed
+  assert.deepEqual(await gateHealth(async () => null, health), full);
+  assert.deepEqual(await gateHealth(async () => Promise.reject(new Error('refused')), health), full);
+  assert.equal(healthCalls, 3);
 });

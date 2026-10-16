@@ -5,7 +5,7 @@ import { symbolOfUrl } from '../config';
 import { logger, Stats } from '../log';
 import { assetMarkets, tokenMarket, tradedExternalMarkets, SOAK_PROGRAM, type AssetBook, type ExternalBook } from '../market';
 import { Bank } from '../bank';
-import { DAA_PER_SECOND, DEFAULT_MAX_LAG_SECS, IndexerGate } from '../indexer-gate';
+import { DAA_PER_SECOND, DEFAULT_MAX_LAG_SECS, gateHealth, IndexerGate, metricsHealth } from '../indexer-gate';
 import { DerivedFeed, FixedKasFeed, PriceFeed, RefRecorder, UsdFeed } from '../price';
 import { sleep, unitsOf } from '../util';
 import { walletFor } from '../wallet';
@@ -42,7 +42,9 @@ export async function runBots(env: Env): Promise<void> {
   // trading (every BotWallet.submit, the bot loops, the x402 payer) pauses while the indexer is not following; the bank's plain KAS payouts do not
   // (also while it lags by at most `maxLagSecs`, default 30 s: the executors' `max_lag_secs`, written by the supervisor)
   const maxLagDaa = Math.round((env.cfg.maxLagSecs ?? DEFAULT_MAX_LAG_SECS) * DAA_PER_SECOND);
-  env.gate = new IndexerGate({ health: () => env.indexer.health(), log: log.child('gate'), stats, maxLagDaa });
+  // read from the indexer's metrics (no database work) while they say it follows, from its /v1/health otherwise (see gateHealth)
+  const health = () => gateHealth(() => metricsHealth(env.cfg.indexerUrl), () => env.indexer.health());
+  env.gate = new IndexerGate({ health, log: log.child('gate'), stats, maxLagDaa });
   stats.set('gate_max_lag_daa', maxLagDaa);
   await env.gate.check(true);
   const m = tokenMarket(env);

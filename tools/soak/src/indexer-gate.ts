@@ -1,5 +1,6 @@
-// The indexer gate: the bots trade only while the indexer they read (`env.indexer`, GET /v1/health) is following the chain, or is at most
-// `maxLagSecs` (default 30 s, the executor's `max_lag_secs`) behind it.
+// The indexer gate: the bots trade only while the indexer they read (`env.indexer`: GET /v1/metrics, GET /v1/health when the metrics do not
+// say it is caught up or within its tolerance, see `gateHealth`) is following the chain, or is at most `maxLagSecs` (default 30 s, the
+// executor's `max_lag_secs`) behind it.
 //
 // Why: on 2026-10-01 the TN10 indexers fell 3.4 h behind in a transaction flood and the bots kept placing, amending and cancelling
 // against the frozen book (216 transactions on chain that no indexer saw). A book that lags the chain lists orders that may already
@@ -16,6 +17,55 @@
 //     settles and the checker verifies through the indexers, and swap quotes read the book, so a payment made while the indexer
 //     lags cannot be accounted for.
 import { errText, type Logger, type Stats } from './log.ts';
+
+/**
+ * The gate fields of an executor's GET /v1/metrics (Prometheus text): the follower's in-memory numbers, served without database work, where
+ * GET /v1/health also counts the orders and fills of the whole store on every request (about a second on the soak's indexers under load).
+ * `state` is only what the gauges imply: `following` while caught up, `catching_up` while within the executor's lag tolerance but not caught
+ * up (the executor counts only `following` with a known node position as caught up, and only `following` / `catching_up` as within), null
+ * otherwise (starting, catching up beyond the tolerance, node unavailable, gap: /v1/health says which).
+ */
+export interface MetricsHealth {
+  state: 'following' | 'catching_up' | null;
+  caught_up: boolean;
+  within_lag_tolerance: boolean;
+  cursor_daa: number;
+  lag_daa: number;
+}
+
+/** the gate fields of a /v1/metrics answer; null when one of the gauges is missing (an executor without them) */
+export function healthFromMetrics(text: string): MetricsHealth | null {
+  const g: Record<string, number> = {};
+  for (const line of text.split('\n')) {
+    const m = /^(kob_indexer_[a-z_]+)\s+(\S+)$/.exec(line.trim());
+    if (m) g[m[1]] = Number(m[2]);
+  }
+  const caught = g.kob_indexer_caught_up;
+  const within = g.kob_indexer_within_lag_tolerance;
+  const cursor = g.kob_indexer_cursor_daa;
+  const lag = g.kob_indexer_lag_daa;
+  if (![caught, within, cursor, lag].every((v) => v !== undefined && Number.isFinite(v))) return null;
+  const c = caught === 1;
+  const w = c || within === 1;
+  return { state: c ? 'following' : w ? 'catching_up' : null, caught_up: c, within_lag_tolerance: w, cursor_daa: cursor, lag_daa: lag };
+}
+
+/** GET `<baseUrl>/v1/metrics` as gate fields (null: not served, or without the gauges); throws when the request fails */
+export async function metricsHealth(baseUrl: string, timeoutMs = 10_000): Promise<MetricsHealth | null> {
+  const r = await fetch(new URL('/v1/metrics', baseUrl), { signal: AbortSignal.timeout(timeoutMs) });
+  if (!r.ok) return null;
+  return healthFromMetrics(await r.text());
+}
+
+/**
+ * The gate's health answer: the indexer's metrics while they say it is caught up or within its lag tolerance (the common case, at no database
+ * cost), its full GET /v1/health otherwise (the state, lag and last error a pause is judged and logged with) and when the metrics cannot be read.
+ */
+export async function gateHealth(metrics: () => Promise<MetricsHealth | null>, health: () => Promise<HealthLike>): Promise<HealthLike> {
+  const m = await metrics().catch(() => null);
+  if (m?.state) return { state: m.state, caught_up: m.caught_up, lag_daa: m.lag_daa, last_error: null };
+  return health();
+}
 
 /** the fields of the indexer's GET /v1/health the gate reads (the web `HealthView` plus `caught_up`) */
 export interface HealthLike {
