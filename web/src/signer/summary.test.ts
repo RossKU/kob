@@ -7,6 +7,10 @@ import { goldenRequest as chainGoldenRequest } from '../testing/chain-fixtures';
 import { MAKER_PK, TOKEN_COV_ID } from '../testing/token-fixtures';
 import { kob } from '../testing/wallet-fixtures';
 import type { ActionRequest, BuiltTx } from '../kob/types';
+import { planOrder } from '../kob/plan';
+import { MAKER_PK as FIXTURE_MAKER, TOKEN_COV } from '../testing/fixtures';
+import { buildIntent } from '../ui/ticket/form-state';
+import { CTX, form, ticketEnv } from '../ui/ticket/ticket-fixtures';
 
 const HINTS = [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 3 }];
 
@@ -108,5 +112,14 @@ describe('signer summary: a token without decimals (no hint)', () => {
     // with the decimals known the price stays per whole token
     const known = summarize(kob, build('create.ask'), MAKER_PK, HINTS).orders[0]!.rows.find((r) => /limit price/i.test(r.label))?.value ?? '';
     expect(known).not.toMatch(/base units/);
+  });
+});
+
+describe('signer summary: a market buy typed in KAS on the inverted view', () => {
+  it('says the KAS typed as the most it spends, what it buys about and at least (TN10 2026-10-17: "Sell 20.60 KAS" for 20 typed)', () => {
+    const f = { ...form('market', 'buy', { amount: '20' }), kas: true };
+    const plan = planOrder(ticketEnv(), buildIntent(f, { ...CTX, ref: { buy: 250_000_000n, sell: 245_000_000n } }).intent!);
+    const s = summarize(kob, plan.built!, FIXTURE_MAKER, [{ covenantId: TOKEN_COV, ticker: 'EXKCC', decimals: 8, inverted: true }]);
+    expect(s.text).toMatch(/^Sell up to (19[.]\d\d|20[.]00) KAS for about [0-9.]+ EXKCC [(]market, at least [0-9.]+ EXKCC[)][.]/);
   });
 });

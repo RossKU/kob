@@ -21,7 +21,9 @@
 import type { Intent } from '../../kob/plan';
 import type { CondExpiry, EntrySpec, ExitSpec, TrailSpec } from '../../kob/intent-cond';
 import type { Lifetime } from '../../kob/intent-simple';
-import { secondsToDaa } from '../../kob/daa';
+import { SLIPPAGE_BPS, secondsToDaa } from '../../kob/daa';
+import { stopWorstPrice } from '../../kob/orders/cond-legs';
+import { auctionBound } from '../../kob/orders/simple';
 import {
   UnitsError, fitsI64, formatPricePerToken, formatUnits, parseKas, parseUnits, pow10, roundToTick, safeRounding, tokenPriceToStatePrice, type Rounding,
 } from '../../kob/units';
@@ -942,8 +944,11 @@ export const BASE_SUFFIX = '@base';
 /** The amount-like fields: typed in KAS in a `kas` form (a `touch` field only for a custom threshold). */
 export const AMOUNT_FIELD_IDS: readonly string[] = ['amount', 'minFill', 'sliceAmount', 'exit.minFill', 'minTouch', 'entry.minTouch', 'exit.minTouch'];
 
-/** Where the conversion price of an amount comes from: the order's own price, a stop trigger, an exit price, or the book. */
-export type AmountBasis = 'own' | 'stop' | 'exit' | 'book';
+/**
+ * Where the conversion price of an amount comes from: the order's own price, a stop trigger, an exit price, the book; for a buy, which spends
+ * the KAS typed, `allIn` (its own price plus the tip) and `worst` (the most a price that moves can reach, plus the tip).
+ */
+export type AmountBasis = 'own' | 'stop' | 'exit' | 'book' | 'allIn' | 'worst';
 
 /** The price field of an order type that sizes it (its limit, else its trigger); null = no price of its own (market, close: the book's price). */
 export function primaryPriceField(type: OrderTypeId): string | null {
@@ -962,8 +967,75 @@ export function primaryPriceField(type: OrderTypeId): string | null {
 /**
  * The state price (sompi per `scale` base units) a KAS amount of field `id` converts at, with where it comes from; null while that price is
  * missing or malformed (the price box reports its own problem) or, for an order without a price, while the book has none.
+ *
+ * A buy spends the KAS typed: its own amount converts at the MOST it can pay per token, the worst price its auction or stop can reach (a market
+ * or close order: the book's best price moved by the slippage; streaming: the displayed price by the tolerance; a rising Dutch or a DCA: its end
+ * price; a stop: the stop moved by its band; an OCO: the dearer of its take-profit and its stop's band) plus the tip, so the escrow it is built
+ * with never spends more KAS than typed; a fill at a better price spends less and the rest returns. A sell receives KAS: its own price (the book's
+ * for a market) is what it receives about.
  */
 export function amountPriceOf(form: TicketForm, ctx: TicketCtx, id: string): { price: bigint; basis: AmountBasis } | null {
+  const leg = legPriceOf(form, ctx, id);
+  if (!leg || form.side !== 'buy' || !OWN_AMOUNTS.includes(id)) return leg;
+  const v = form.values;
+  const bps = (field: string, dflt: bigint | null): bigint | null => {
+    const raw = (v[field] ?? '').trim();
+    if (raw === '') return dflt;
+    const p = parseScaled(raw, 2);
+    return p.ok ? p.value : null;
+  };
+  const price = (field: string): bigint | null => {
+    const p = parsePrice(v[field] ?? '', 'buy', ctx);
+    return p.ok ? p.value.price : null;
+  };
+  let worst = leg.price;
+  switch (form.type) {
+    case 'market':
+    case 'streaming': {
+      const b = bps(form.type === 'market' ? 'slippageBps' : 'toleranceBps', form.type === 'market' ? SLIPPAGE_BPS : null);
+      if (b === null) return null;
+      worst = auctionBound('buy', leg.price, b, ctx.tick);
+      break;
+    }
+    case 'dutch':
+    case 'dca': {
+      const end = price('priceEnd');
+      if (end !== null && end > worst) worst = end;
+      break;
+    }
+    case 'stopMarket':
+    case 'trailingStop': {
+      const b = bps('slipBps', SLIPPAGE_BPS);
+      if (b === null) return null;
+      worst = stopWorstPrice('buy', leg.price, b);
+      break;
+    }
+    case 'oco': {
+      const stop = price('stop');
+      const b = bps('slipBps', SLIPPAGE_BPS);
+      if (stop !== null && b !== null) {
+        const w = stopWorstPrice('buy', stop, b);
+        if (w > worst) worst = w;
+      }
+      break;
+    }
+    default:
+  }
+  const tipText = (v.tip ?? '').trim();
+  const tip = tipText === '' ? 0n : (() => {
+    const p = parsePrice(tipText, 'buy', ctx, 'exact', true, 'kas');
+    return p.ok ? p.value.price : null;
+  })();
+  if (tip === null) return null;
+  if (worst === leg.price && tip === 0n) return leg;
+  return { price: worst + tip, basis: worst !== leg.price ? 'worst' : 'allIn' };
+}
+
+/** The amounts of the order's own leg (an exit's amounts and the trigger thresholds convert at their own leg's price). */
+const OWN_AMOUNTS: readonly string[] = ['amount', 'minFill', 'sliceAmount'];
+
+/** The price of the leg an amount belongs to (`amountPriceOf` before a buy's worst price and tip). */
+function legPriceOf(form: TicketForm, ctx: TicketCtx, id: string): { price: bigint; basis: AmountBasis } | null {
   const opp: Side = form.side === 'buy' ? 'sell' : 'buy';
   const v = form.values;
   const read = (field: string, side: Side, basis: AmountBasis) => {
@@ -1043,11 +1115,4 @@ export function reorientAmounts(form: TicketForm, kas: boolean, ctx: TicketCtx):
     next = setAmountBase(next, id, base.value, ctx);
   }
   return next;
-}
-
-/** The state price an intent is sized at (the counterpart of `primaryPriceField`); null for an order without a price (market, close). */
-export function intentSizingPrice(intent: Intent): bigint | null {
-  const i = intent as unknown as Record<string, any>;
-  const p = i.entry?.price ?? (intent.type === 'streaming' ? i.displayedPrice : intent.type === 'stopLimit' ? i.limit : intent.type === 'stopMarket' || intent.type === 'trailingStop' ? i.stop : intent.type === 'oco' ? i.takeProfit : i.price);
-  return typeof p === 'bigint' ? p : null;
 }

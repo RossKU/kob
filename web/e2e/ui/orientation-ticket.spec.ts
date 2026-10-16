@@ -83,16 +83,21 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     expect(placed.submission.token_outputs.filter((o) => o.role === 'custody').map((o) => o.amount)).toEqual(['40000000000']);
   });
 
-  test('a market order in KAS converts at the best price in the book and says it is approximate', async ({ appPage: page, mock }) => {
+  test('a market order in KAS spending KAS converts at its worst price: never more KAS than typed', async ({ appPage: page, mock }) => {
     await fund(mock, 'alice');
     await openMarket(page, mock);
     await page.getByTestId('market-flip').click();
     await page.getByTestId('order-type').selectOption('market');
-    // shown Sell KAS = native buy of EXKCC: sized at the best ask, 0.0251 KAS per EXKCC
+    // shown Sell KAS = native buy of EXKCC: sized at the best ask (0.0251 KAS per EXKCC) moved by the 3 % slippage, 0.025853: the most its
+    // auction can pay (TN10 2026-10-17: sized at the ask, 20 KAS typed became 20.60 KAS at the worst price)
     await page.getByTestId(TESTID.orderSideSell).click();
     await page.getByTestId(TESTID.orderAmount).fill('0.251');
-    await expect(page.getByTestId('order-amount-tokens')).toContainText('0.251 KAS = 10 EXKCC at the best book price (approximate');
-    await expect(page.getByTestId('disc-summary')).toHaveText('Sell about 0.251 KAS for 10 EXKCC');
+    await expect(page.getByTestId('order-amount-tokens')).toContainText('0.25099999 KAS = 9.70873786 EXKCC at the worst price plus the tip (a better fill spends less)');
+    await expect(page.getByTestId('disc-summary')).toHaveText('Sell up to 0.25099999 KAS for at least 9.70873786 EXKCC');
+    // and the shown Buy KAS = native sell: what it receives, at the best bid (approximate)
+    await page.getByTestId(TESTID.orderSideBuy).click();
+    await page.getByTestId(TESTID.orderAmount).fill('0.245');
+    await expect(page.getByTestId('order-amount-tokens')).toContainText('at the best book price (approximate');
   });
 });
 

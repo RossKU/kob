@@ -57,7 +57,10 @@ function errorText(e: FieldError): string {
 }
 
 /** The basis of a KAS amount's conversion as words (`ticket.kasAmt.basis.*`). */
-const BASIS_KEY = { own: 'ticket.kasAmt.basis.own', stop: 'ticket.kasAmt.basis.stop', exit: 'ticket.kasAmt.basis.exit', book: 'ticket.kasAmt.basis.book' } as const;
+const BASIS_KEY = {
+  own: 'ticket.kasAmt.basis.own', stop: 'ticket.kasAmt.basis.stop', exit: 'ticket.kasAmt.basis.exit', book: 'ticket.kasAmt.basis.book',
+  allIn: 'ticket.kasAmt.basis.allIn', worst: 'ticket.kasAmt.basis.worst',
+} as const;
 
 /**
  * The line under a KAS amount box (a `kas` form): the exact token amount the order is built with and the exact KAS it is worth at the price the

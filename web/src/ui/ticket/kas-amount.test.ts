@@ -1,11 +1,13 @@
 // The amounts of an inverted KAS market (KAS/TOKEN): the shown base is KAS, so the amount boxes count KAS and the order is the native one sized
-// at its own price; a flip of a filled form never changes the order that is built (form-state.ts, KAS amounts).
+// at its own price (a buy, which spends the KAS: at the most it can pay); a flip of a filled form never changes the order that is built
+// (form-state.ts, KAS amounts).
 import { describe, expect, it } from 'vitest';
 import {
-  BASE_SUFFIX, amountBaseOf, amountPriceOf, baseToKas, buildIntent, initialForm, intentSizingPrice, kasToBase, primaryPriceField, reorientAmounts,
+  BASE_SUFFIX, amountBaseOf, amountPriceOf, baseToKas, buildIntent, initialForm, kasToBase, primaryPriceField, reorientAmounts,
   setAmountBase, setValue, switchType, type TicketCtx, type TicketForm,
 } from './form-state';
-import { CASES, CTX, TOKEN, form, json } from './ticket-fixtures';
+import { planOrder } from '../../kob/plan';
+import { CASES, CTX, TOKEN, form, json, ticketEnv } from './ticket-fixtures';
 
 /** CTX with the default test book's best prices (ask 2.50, bid 2.45 KAS per token): what market and close convert at. */
 const BOOK: TicketCtx = { ...CTX, ref: { buy: 250_000_000n, sell: 245_000_000n } };
@@ -51,10 +53,11 @@ describe('KAS amounts: the conversion', () => {
     expect(primaryPriceField('market')).toBeNull();
   });
 
-  it('an order without a price converts at the book: the best ask for a buy, the best bid for a sell; no book = a visible error', () => {
-    expect(amountPriceOf(kasForm('market', 'buy', { amount: '25' }), BOOK, 'amount')).toEqual({ price: 250_000_000n, basis: 'book' });
+  it('an order without a price converts at the book: the best bid for a sell; a buy at the best ask moved by its slippage; no book = a visible error', () => {
+    // a market buy spends the KAS: 3 % above the best ask is the most its auction pays (TN10 2026-10-17: converted at the ask, 20 KAS became 20.60)
+    expect(amountPriceOf(kasForm('market', 'buy', { amount: '25' }), BOOK, 'amount')).toEqual({ price: 257_500_000n, basis: 'worst' });
     expect(amountPriceOf(kasForm('market', 'sell', { amount: '24.5' }), BOOK, 'amount')).toEqual({ price: 245_000_000n, basis: 'book' });
-    expect((buildIntent(kasForm('market', 'buy', { amount: '25' }), BOOK).intent as { amount: bigint }).amount).toBe(10n * TOKEN);
+    expect((buildIntent(kasForm('market', 'buy', { amount: '25' }), BOOK).intent as { amount: bigint }).amount).toBe(kasToBase(25n * 100_000_000n, 257_500_000n, TOKEN));
     const none = buildIntent(kasForm('market', 'buy', { amount: '25' }), CTX);
     expect(none.intent).toBeNull();
     expect(none.errors).toEqual([{ field: 'amount', code: 'noRef' }]);
@@ -138,12 +141,34 @@ describe('a flip of a filled form builds the very same order, every type, both w
   });
 });
 
-describe('intentSizingPrice', () => {
-  it.each(CASES)('%s: the price the KAS amount converts at', (_name, type, side, values) => {
-    const f = form(type, side, values);
-    const i = buildIntent(f, BOOK).intent!;
-    const p = amountPriceOf({ ...f, kas: true }, BOOK, 'amount');
-    if (primaryPriceField(type) === null) expect(intentSizingPrice(i)).toBeNull();
-    else expect(intentSizingPrice(i)).toBe(p?.price);
+describe('a buy typed in KAS never spends more KAS than typed', () => {
+  // the default test book's best ask; the plan uses the same book
+  const ctx: TicketCtx = { ...CTX, ref: { buy: 250_000_000n, sell: 245_000_000n } };
+  const buys = CASES.filter(([, , side]) => side === 'buy');
+
+  it.each(buys)('%s: the amount converts at the most it can pay per token, tip included, rounded down', (_name, type, side, values) => {
+    const f = kasForm(type, side, { ...values, amount: '25' });
+    const p = amountPriceOf(f, ctx, 'amount');
+    const r = buildIntent(f, ctx);
+    expect(r.errors).toEqual([]);
+    const n = (r.intent as { amount: bigint }).amount;
+    expect(p).not.toBeNull();
+    // at that price the order spends at most 25 KAS, and one base unit more would spend more
+    expect((n * p!.price + TOKEN - 1n) / TOKEN).toBeLessThanOrEqual(25n * 100_000_000n);
+    expect(((n + 1n) * p!.price) / TOKEN).toBeGreaterThanOrEqual(25n * 100_000_000n);
+    if (primaryPriceField(type) === null || type === 'streaming' || type === 'dutch' || type === 'stopMarket' || type === 'trailingStop') expect(p!.basis).toBe('worst');
+  });
+
+  it('the planned market buy pays at most the KAS typed at its worst price', () => {
+    const f = kasForm('market', 'buy', { amount: '20', tip: '0.001' });
+    const intent = buildIntent(f, ctx).intent!;
+    const plan = planOrder(ticketEnv(), intent);
+    expect(plan.ok).toBe(true);
+    expect(plan.disclosure!.allInTotal!).toBeLessThanOrEqual(20n * 100_000_000n);
+    expect(plan.disclosure!.allInTotal!).toBeGreaterThan(19n * 100_000_000n);
+  });
+
+  it('a sell typed in KAS converts at its own price (what it receives about), with no tip or slippage', () => {
+    expect(amountPriceOf(kasForm('limit', 'sell', { amount: '10', price: '0.025', tip: '0.001' }), ctx, 'amount')?.basis).toBe('own');
   });
 });

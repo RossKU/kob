@@ -58,8 +58,11 @@ test.describe('sweep strays in place', () => {
     await expect(row).toHaveAttribute('data-status', 'open');
     await expect(row.getByTestId('order-amount')).toContainText('3 / 3');
     await expect(page.getByTestId(`order-sweep-${id}`)).toHaveCount(0);
-    // and it is still the maker's to cancel (from its new outpoint)
+    // and it is still the maker's to cancel (from its new outpoint); the sweep's result is still on screen until the cancel's flow replaces it:
+    // its wallet request says it has
+    const asked = (await wallet!.calls()).length;
     await page.getByTestId(`order-cancel-${id}`).click();
+    await wallet!.waitForCalls(asked + 1);
     const [cancel] = await runFlow(page, mock, wallet, { steps: 1 });
     expect(cancel!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
     expect((await mock.order(id!)).status).toBe('cancelled');

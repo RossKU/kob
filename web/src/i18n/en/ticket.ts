@@ -199,7 +199,7 @@ export default {
 
   'ticket.help.tip': 'Priority: matchers prefer higher tips (no time priority on chain). A sell receives price minus tip, a buy pays price plus tip. Default 0.',
   'ticket.help.tip.inv': 'Priority: matchers prefer higher tips. KAS per {ticker} traded: a Buy receives the KAS minus the tip, a Sell pays the KAS plus the tip. Default 0.',
-  'ticket.help.amount.inv': 'KAS, converted to {ticker} at the price below and rounded down: never more KAS than you typed.',
+  'ticket.help.amount.inv': 'KAS, converted to {ticker} and rounded down. Selling KAS converts at the most the order can pay (its worst price plus the tip): it never spends more KAS than you typed.',
   'ticket.help.maxFills.inv': 'Each fill pays a delivery carrier from the escrow. Default 3 (DCA: one per slice).',
   'ticket.help.stop.inv': 'Arms only when a matcher fills a trade at or beyond it (Buy stop: at or above; Sell stop: at or below) resting the rest time (default 5 s), of at least your threshold. Quotes and unused trades do not count: it can trigger later than the chart suggests.',
   'ticket.help.ladder.step.inv': 'KAS per {ticker} between levels: higher each level for sell first, lower for buy first. Entry and exit move together.',
@@ -301,9 +301,12 @@ export default {
   'ticket.kasAmt.basis.own': 'your price',
   'ticket.kasAmt.basis.stop': 'the stop price',
   'ticket.kasAmt.basis.exit': 'the exit price',
+  'ticket.kasAmt.basis.allIn': 'your price plus the tip',
+  'ticket.kasAmt.basis.worst': 'the worst price plus the tip (a better fill spends less)',
   'ticket.kasAmt.basis.book': 'the best book price (approximate: a market order fills at the auction price)',
   'ticket.disc.summaryKas': '{side} {kas} KAS for {amount} {ticker}',
   'ticket.disc.summaryKasAbout': '{side} about {kas} KAS for {amount} {ticker}',
+  'ticket.disc.summaryKasUpTo': '{side} up to {kas} KAS for at least {amount} {ticker}',
 
   'ticket.disc.title': 'Cost and terms',
   'ticket.disc.summary': '{side} {amount} {ticker}',

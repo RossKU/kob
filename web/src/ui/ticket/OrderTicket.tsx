@@ -27,7 +27,7 @@ import { useCovenantSignGate } from './CovenantSignGate';
 import { TicketFields } from './TicketFields';
 import { buildDisclosureModel } from './disclosure-model';
 import {
-  BASE_SUFFIX, TYPE_GROUPS, amountBaseOf, amountPriceOf, baseToKas, buildIntent, kasTextOf, followQuote, formatPrice, streamingQuoteText, initialForm, intentSizingPrice, layoutOf, parsePrice, reorientAmounts, setAmountBase,
+  BASE_SUFFIX, TYPE_GROUPS, amountBaseOf, amountPriceOf, baseToKas, buildIntent, kasTextOf, followQuote, formatPrice, streamingQuoteText, initialForm, layoutOf, parsePrice, reorientAmounts, setAmountBase,
   setSide, setValue, sidesOf, switchType, visibleErrors,
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
@@ -381,23 +381,26 @@ export function OrderTicket(props: OrderTicketProps) {
 
   /**
    * An inverted market: what an intent gives and receives in the shown pair's words (KAS is the base), for the disclosure summary. The KAS is the
-   * amount's value at the price the order is sized at (exact at a limit; "about" at the book's price).
+   * amount's value at the price its KAS amount converts at (form-state.ts `amountPriceOf`: a limit's own price; a buy's worst price plus the
+   * tip, the most it spends; "about" at the book's price or a price that moves).
    */
-  const shownTerms = (intent: Intent | null): { tokens: string; kas: string; about: boolean } | null => {
+  const shownTerms = (intent: Intent | null): { tokens: string; kas: string; about: boolean; upTo: boolean } | null => {
     if (!inverted || !intent || !('amount' in intent) || typeof intent.amount !== 'bigint') return null;
-    const own = intentSizingPrice(intent);
-    const ref = own === null ? amountPriceOf(form, ctx, 'amount') : null;
-    const price = own ?? ref?.price ?? null;
+    const at = amountPriceOf(form, ctx, 'amount');
+    const price = at?.price ?? null;
     if (price === null || price <= 0n) return null;
     return {
       tokens: formatUnits(intent.amount, token.decimals, { group: ',' }),
       kas: formatKas(baseToKas(intent.amount, price, scale), { group: ',' }),
-      about: own === null,
+      about: at!.basis === 'book',
+      // a buy sized at the most it can pay: the KAS is the most it spends, the tokens the least it buys
+      upTo: at!.basis === 'worst',
     };
   };
   const discSummary = (() => {
     const s = shownTerms(built.intent);
-    return s ? t(s.about ? 'ticket.disc.summaryKasAbout' : 'ticket.disc.summaryKas', { side: sideName, kas: s.kas, amount: s.tokens, ticker }) : undefined;
+    const key = s?.upTo ? 'ticket.disc.summaryKasUpTo' : s?.about ? 'ticket.disc.summaryKasAbout' : 'ticket.disc.summaryKas';
+    return s ? t(key, { side: sideName, kas: s.kas, amount: s.tokens, ticker }) : undefined;
   })();
 
   /** one order of the ladder in words: the level, its prices (a limit ladder: side, amount, price and value) */
