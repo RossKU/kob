@@ -126,6 +126,8 @@ pub struct Ingest {
     /// Transactions consumers (the matcher) asked to have followed, and where the selected chain
     /// accepted them now. In memory only: updated after each commit, reorgs included.
     watch: HashMap<Hash32, Watch>,
+    /// Bumped after every commit (`super::DataGeneration`).
+    generation: super::DataGeneration,
 }
 
 fn get_cursor(conn: &Connection) -> DbResult<Option<Cursor>> {
@@ -180,7 +182,7 @@ impl Blocks<'_> {
 
 impl Ingest {
     pub fn new(conn: Connection, proc: Processor, log: Option<RecordLog>) -> Self {
-        Ingest { conn, proc, log, cfg: IngestConfig::default(), watch: HashMap::new() }
+        Ingest { conn, proc, log, cfg: IngestConfig::default(), watch: HashMap::new(), generation: Default::default() }
     }
 
     pub fn with_config(mut self, cfg: IngestConfig) -> Self {
@@ -190,6 +192,11 @@ impl Ingest {
 
     pub fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// The store's data generation, bumped after every commit of this write path ([`super::DataGeneration`]).
+    pub fn generation(&self) -> &super::DataGeneration {
+        &self.generation
     }
 
     /// Follow the acceptance of `txid` for the matcher from now on (call before submitting it, so no
@@ -445,6 +452,7 @@ impl Ingest {
             }
             return Err(IngestError::Db(e.into()));
         }
+        self.generation.bump();
         self.track_acceptance(removed, &blocks);
         if unknown_removed > 0 {
             // a reorg deeper than the stored chain: the rows of those blocks (and operator imports stamped block 0) stay

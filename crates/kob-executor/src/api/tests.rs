@@ -62,6 +62,7 @@ fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
     let (events, _) = tokio::sync::broadcast::channel(16);
     let state = ApiState {
         pool,
+        generation: Default::default(),
         health,
         events,
         tokens: Arc::new(tokens),
@@ -231,6 +232,36 @@ async fn tokens_list_counts() {
     assert_eq!((t["decimals"].as_i64(), t["scale"].as_i64()), (Some(3), Some(1000)));
     assert_eq!(t["open_asks"], 3);
     assert_eq!(t["open_bids"], 2);
+}
+
+/// The hot reads are kept for the store's data generation (`api::cache`): within one the answer is the kept one, and a
+/// change the write path commits (a new generation) is read at once. The reads that depend on the clock key on it as well.
+#[tokio::test]
+async fn hot_reads_are_kept_for_one_data_generation() {
+    let e = env(|_| {});
+    seed_all(&e.w);
+    let app = router(e.state.clone());
+    let asks = |v: &Value| v["tokens"][0]["open_asks"].as_i64();
+    let (_, v) = get(&app, "/v1/tokens").await;
+    assert_eq!(asks(&v), Some(3));
+    // what the follower would commit with a new generation: ask 1 filled
+    e.w.execute("UPDATE order_state SET status = 'filled' WHERE covenant_id = ?1", params![cid(1)]).unwrap();
+    let (_, v) = get(&app, "/v1/tokens").await;
+    assert_eq!(asks(&v), Some(3), "the same generation: the kept answer");
+    e.state.generation.bump();
+    let (_, v) = get(&app, "/v1/tokens").await;
+    assert_eq!(asks(&v), Some(2), "a new generation reads the store again");
+    // a book at another node DAA score is another read
+    let book = format!("/v1/books/{}?aggregate=false", h(TOKEN));
+    let (_, v) = get(&app, &book).await;
+    assert_eq!(ids(&v["asks"]), vec![h(2), h(3)]);
+    e.w.execute("UPDATE orders SET active_from = 1001 WHERE covenant_id = ?1", params![cid(3)]).unwrap();
+    e.state.generation.bump();
+    let (_, v) = get(&app, &book).await;
+    assert_eq!(ids(&v["asks"]), vec![h(2)]);
+    e.state.health.update(|h| h.node_daa = Some(1001));
+    let (_, v) = get(&app, &book).await;
+    assert_eq!(ids(&v["asks"]), vec![h(2), h(3)], "active from DAA 1001");
 }
 
 /// A token whose registry entry says `genesis_verified: true`: its order views carry no warning.

@@ -1436,12 +1436,37 @@ release build, warm cache, best of three; every answer compared byte for byte wi
 | `/v1/candles/{token}` (500 hourly or daily candles: 65,000 fills) | 0.55 to 0.8 s | the same |
 
 **Candles** stay a read of the window's fills, deliberately. The web app loads a chart's whole window once and then
-asks only for the bars since its newest one (`from=`, one or two buckets), so the full read is paid once per chart opened.
-The read is the fills (index
+asks only for the bars since its newest one (`from=`, one or two buckets), so the full read is paid once per chart opened,
+and concurrent identical loads share one read (the response cache, below). The read is the fills (index
 `order_events_fill_ts`) and, per fill, its order's scale and age: a covering index of the fills (measured: 1.5 s to build,
 about 35 MB) saved 10 %, the order lookups being most of the time. Keeping the candles themselves (a table per interval
 maintained on write, or the buckets older than the reorg window kept in memory) would cut a full load of 500 hourly
 candles to the fills of about the last 13 hours, at the price of state that every revert has to keep exact; not done.
+
+**Response cache.** `/v1/stats`, `/v1/books`, `/v1/depth`, `/v1/tokens` and `/v1/candles` answers are kept per **data
+generation** of the store (`api::cache`): the generation moves after every committed batch, revert, operator import and
+possibly-frozen flag, so between two commits every client of a market gets the same body without another read. The key is
+the request's parameters and, for the reads that depend on the clock, the node's DAA score and the wall-clock second, so a
+kept body is byte for byte what the request would have read. Concurrent requests of one key wait for one read; a read that
+fails or whose client went away is not kept. Memory: at most 1,024 bodies and 32 MiB per generation, the previous
+generation's dropped. Measured through the API router on the soak copy, sixteen concurrent identical requests: 500 hourly
+candles 0.61 s for all (16 distinct ones: 4.2 s), stats 71 ms, tokens 51 ms, books 4 ms (16 distinct depths: 71 ms).
+
+**Read pool.** `api.read_pool_size` connections (default 4) serve every read; one more, the **light lane**
+(`ReadPool::with_light`), serves the reads bounded by a few index lookups whatever the request (the `/v1/health` counters,
+`/v1/orders/{id}` and its events), so they never queue behind the heavy ones: on the soak copy the health counters waited
+0.9 s behind four 500-candle reads and 3.2 s behind sixteen, 0.3 ms on the light lane. A request whose client goes away
+(the request timeout, a disconnect) stops costing its connection: a read not started yet is not run, a running statement
+is interrupted (`sqlite3_interrupt`) and the connection goes back to the pool at once (before, it ran to its end, or to the
+20 s watchdog).
+
+**WAL size.** A checkpoint can reset the write-ahead log only at a moment no read holds an older snapshot; the history-wide
+reads of earlier builds overlapped without a gap and the TN10 soak's WAL grew to 785 MB. A simulation (one writer, four
+readers): reads of about a second back to back grew the WAL by every commit (21 MB in 20 s), reads of milliseconds held it
+at 4.2 MB (the 1,000-page auto-checkpoint). The WAL file keeps its largest size even after resets resume, so the writer sets
+`journal_size_limit` to 64 MiB: the file is cut back to that at the next reset (simulated: a 15.8 MB WAL cut to 8.4 MB under
+an 8 MiB limit once the long reads stopped). No periodic `wal_checkpoint(TRUNCATE)` is run: it waits for the readers and
+would stall the writer for as long, and the auto-checkpoint keeps up while reads are short.
 
 **Upgrade.** The first start of this build on an existing database builds the new indexes and counts the counters once
 (`db::migrate`; the database stays schema 5): 7 s on the 1.6 GB soak copy, which grew by 56 MB. Every later start takes

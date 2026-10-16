@@ -42,6 +42,7 @@ fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
     let (events, _) = tokio::sync::broadcast::channel(16);
     let state = ApiState {
         pool,
+        generation: Default::default(),
         health: Arc::new(HealthState::new("testnet-10")),
         events,
         tokens: Arc::new(TokenAllowlist::from_entries(std::iter::empty())),

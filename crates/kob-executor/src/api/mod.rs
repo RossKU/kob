@@ -1,7 +1,7 @@
 //! Read API: REST + WebSocket over the indexer database.
 //!
-//! Everything is served from the database through the read pool; the node is never contacted, so
-//! public load cannot reach it. Every route passes one guard middleware that resolves the client
+//! Everything is served from the database through the read pool (the hot market reads through a response cache kept per
+//! data generation of the store, [`cache`]); the node is never contacted, so public load cannot reach it. Every route passes one guard middleware that resolves the client
 //! address (proxy aware), applies the per-client and global rate limits, the concurrency cap and the
 //! request timeout, and adds CORS headers when configured. Below the guard, the transport bounds of
 //! [`conn`] (header-read and write-stall deadlines, total and per-address connection caps) keep
@@ -18,6 +18,7 @@
 //! - `/v1/fills?token=&side=&limit=&before=`
 //! - `/v1/ws` (WebSocket, see [`ws`])
 
+pub mod cache;
 pub mod client_ip;
 pub mod conn;
 pub mod ratelimit;
@@ -47,6 +48,8 @@ use tokio::sync::{watch, Semaphore};
 #[derive(Clone)]
 pub struct ApiState {
     pub pool: ReadPool,
+    /// The store's data generation (the response cache's key, [`cache`]).
+    pub generation: crate::indexer::DataGeneration,
     pub health: Arc<HealthState>,
     /// The follower publishes one event per committed batch here.
     pub events: tokio::sync::broadcast::Sender<Arc<IndexEvent>>,
@@ -73,6 +76,8 @@ pub struct App {
     concurrency: Arc<Semaphore>,
     pub(crate) ws: ws::WsRegistry,
     pub(crate) shutdown: watch::Sender<bool>,
+    /// The hot reads' responses of the current data generation ([`cache`]).
+    pub(crate) cache: cache::ResponseCache,
 }
 
 impl App {
@@ -158,6 +163,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         concurrency: Arc::new(Semaphore::new(state.cfg.max_concurrent_requests.max(1))),
         ws: ws::WsRegistry::default(),
         shutdown,
+        cache: cache::ResponseCache::default(),
         state,
     });
     let router = Router::new()

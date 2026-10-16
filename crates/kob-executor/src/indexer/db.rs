@@ -48,6 +48,10 @@ fn pragmas(conn: &Connection, writer: bool) -> rusqlite::Result<()> {
         conn.pragma_update(None, "synchronous", "FULL")?;
         // the write path re-reads the rows of the orders it touches: 64 MiB of page cache (the default is 2 MiB)
         conn.pragma_update(None, "cache_size", -65_536)?;
+        // The WAL file keeps its largest size: a checkpoint resets it only while no read holds an older snapshot, and reads
+        // that overlap without a gap (the history-wide reads of earlier builds) grew it to 785 MB on the TN10 soak. Once a
+        // reset happens it is cut back to this (docs/ops/executor.md, B 5.5).
+        conn.pragma_update(None, "journal_size_limit", 64 * 1024 * 1024)?;
     }
     conn.pragma_update(None, "temp_store", "MEMORY")?;
     conn.pragma_update(None, "foreign_keys", "OFF")?;
@@ -351,27 +355,70 @@ pub fn meta_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<(
 pub const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// A pool of read-only connections. WAL lets them read while the follower commits.
+///
+/// Two lanes: [`ReadPool::with`] for every read, and [`ReadPool::with_light`], a connection of its own for the reads that
+/// cost a few index lookups (the health counters, one order), so they never queue behind the heavy ones (on the TN10 soak
+/// copy the health counters, 0.06 ms to run, waited about 1 s behind four candle reads and 3 to 4 s behind sixteen).
 #[derive(Clone)]
 pub struct ReadPool {
     inner: Arc<PoolInner>,
 }
 
-struct PoolInner {
+/// One lane: its connections and the permits bounding the reads in flight on them.
+struct Lane {
     conns: Mutex<Vec<Connection>>,
     permits: Arc<Semaphore>,
 }
 
-impl ReadPool {
-    /// Open `size` read-only connections to an existing database file.
-    pub fn open(path: &Path, size: usize) -> DbResult<Self> {
-        let size = size.max(1);
-        let mut conns = Vec::with_capacity(size);
-        for _ in 0..size {
-            let c = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
-            pragmas(&c, false)?;
-            conns.push(c);
+struct PoolInner {
+    heavy: Lane,
+    light: Lane,
+}
+
+/// What a caller that went away (its future dropped: the API guard's timeout, a client disconnect) leaves its read: the
+/// read is not started, or the statement it is running is interrupted (`sqlite3_interrupt`), so it gives its connection back.
+#[derive(Default)]
+struct Cancel {
+    gone: std::sync::atomic::AtomicBool,
+    /// The connection the read runs on, while it does (cleared before the connection goes back to the pool, so a late
+    /// interrupt never reaches the next read).
+    running: Mutex<Option<rusqlite::InterruptHandle>>,
+}
+
+/// Cancels its read when dropped before [`CancelOnDrop::done`].
+struct CancelOnDrop(Arc<Cancel>, bool);
+
+impl CancelOnDrop {
+    fn done(mut self) {
+        self.1 = false;
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if self.1 {
+            self.0.gone.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(h) = self.0.running.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                h.interrupt();
+            }
         }
-        Ok(ReadPool { inner: Arc::new(PoolInner { conns: Mutex::new(conns), permits: Arc::new(Semaphore::new(size)) }) })
+    }
+}
+
+fn open_lane(path: &Path, size: usize) -> DbResult<Lane> {
+    let mut conns = Vec::with_capacity(size);
+    for _ in 0..size {
+        let c = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        pragmas(&c, false)?;
+        conns.push(c);
+    }
+    Ok(Lane { conns: Mutex::new(conns), permits: Arc::new(Semaphore::new(size)) })
+}
+
+impl ReadPool {
+    /// Open `size` read-only connections to an existing database file, and the light lane's one.
+    pub fn open(path: &Path, size: usize) -> DbResult<Self> {
+        Ok(ReadPool { inner: Arc::new(PoolInner { heavy: open_lane(path, size.max(1))?, light: open_lane(path, 1)? }) })
     }
 
     /// Run a read on a pooled connection on the blocking thread pool.
@@ -380,38 +427,69 @@ impl ReadPool {
         T: Send + 'static,
         F: FnOnce(&Connection) -> DbResult<T> + Send + 'static,
     {
+        self.run(false, f).await
+    }
+
+    /// [`ReadPool::with`] on the light lane: only for reads bounded by a few index lookups, whatever the request asks.
+    pub async fn with_light<T, F>(&self, f: F) -> DbResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Connection) -> DbResult<T> + Send + 'static,
+    {
+        self.run(true, f).await
+    }
+
+    async fn run<T, F>(&self, light: bool, f: F) -> DbResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Connection) -> DbResult<T> + Send + 'static,
+    {
+        let permits = if light { &self.inner.light.permits } else { &self.inner.heavy.permits };
         // The permit travels INTO the blocking task and is released only when the task ends: a caller that
         // is cancelled (request timeout, client disconnect) must not hand its permit to the next request while the read
         // still holds its pooled connection, or the pool would run dry and the bound on concurrent reads would not hold.
-        let permit = self.inner.permits.clone().acquire_owned().await.map_err(|_| DbError::Invalid("read pool closed".into()))?;
+        let permit = permits.clone().acquire_owned().await.map_err(|_| DbError::Invalid("read pool closed".into()))?;
         let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
+        let cancel = Arc::new(Cancel::default());
+        let guard = CancelOnDrop(cancel.clone(), true);
+        let r = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let conn = inner.conns.lock().unwrap_or_else(|e| e.into_inner()).pop();
+            let lane = if light { &inner.light } else { &inner.heavy };
+            let conn = lane.conns.lock().unwrap_or_else(|e| e.into_inner()).pop();
             let Some(conn) = conn else { return Err(DbError::Invalid("read pool exhausted".into())) };
-            // A read that outlives `READ_TIMEOUT` is interrupted: the API guard drops the caller's future at its own
-            // timeout but cannot stop a running statement, and a hostile request should not hold a pooled connection for minutes.
-            let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-            let handle = conn.get_interrupt_handle();
-            let watchdog = std::thread::Builder::new().name("kob-read-watchdog".into()).spawn(move || {
-                if done_rx.recv_timeout(READ_TIMEOUT) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
-                    handle.interrupt();
+            *cancel.running.lock().unwrap_or_else(|e| e.into_inner()) = Some(conn.get_interrupt_handle());
+            // the caller went away while the read waited for the blocking pool: it is not run
+            let r = if cancel.gone.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok(Err(DbError::Invalid("read cancelled: the caller went away".into())))
+            } else {
+                // A read that outlives `READ_TIMEOUT` is interrupted: a hostile request should not hold a pooled connection
+                // for minutes.
+                let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+                let handle = conn.get_interrupt_handle();
+                let watchdog = std::thread::Builder::new().name("kob-read-watchdog".into()).spawn(move || {
+                    if done_rx.recv_timeout(READ_TIMEOUT) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                        handle.interrupt();
+                    }
+                });
+                // the connection goes back even if the read panics
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&conn)));
+                drop(done_tx);
+                if let Ok(w) = watchdog {
+                    let _ = w.join();
                 }
-            });
-            // the connection goes back even if the read panics
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&conn)));
-            drop(done_tx);
-            if let Ok(w) = watchdog {
-                let _ = w.join();
-            }
-            inner.conns.lock().unwrap_or_else(|e| e.into_inner()).push(conn);
+                r
+            };
+            *cancel.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            lane.conns.lock().unwrap_or_else(|e| e.into_inner()).push(conn);
             match r {
                 Ok(r) => r,
                 Err(_) => Err(DbError::Invalid("read task panicked".into())),
             }
         })
         .await
-        .map_err(|e| DbError::Invalid(format!("read task failed: {e}")))?
+        .map_err(|e| DbError::Invalid(format!("read task failed: {e}")))?;
+        guard.done();
+        r
     }
 }
 

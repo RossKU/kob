@@ -21,6 +21,28 @@ fn json_ok<T: Serialize>(v: T) -> ApiResult {
     Ok(Json(v).into_response())
 }
 
+/// A hot read through the response cache ([`super::cache`]): the JSON body of `read` kept for the store's data generation
+/// under `key`, the request's parameters (with the node's DAA score and the wall-clock second for the reads that depend on
+/// them). The body is the one `Json` would send.
+async fn cached<T, F>(app: &Arc<App>, key: String, read: F) -> ApiResult
+where
+    T: Serialize + Send + 'static,
+    F: FnOnce(&rusqlite::Connection) -> crate::indexer::db::DbResult<T> + Send + 'static,
+{
+    let generation = app.state.generation.get();
+    let body = app
+        .cache
+        .get_or_compute(generation, key, || async {
+            let v = app.state.pool.with(read).await?;
+            serde_json::to_vec(&v).map(axum::body::Bytes::from).map_err(|e| {
+                tracing::error!("api: cannot serialise a response: {e}");
+                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal error")
+            })
+        })
+        .await?;
+    Ok(([(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"))], body).into_response())
+}
+
 fn parse_hash(what: &str, s: &str) -> Result<Hash32, ApiError> {
     Hash32::parse(s).map_err(|_| ApiError::bad_request(format!("{what} must be 32 bytes of hex")))
 }
@@ -66,8 +88,9 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
         .collect();
     let running = matches!(snap.state, FollowerState::Following | FollowerState::CatchingUp);
     let ok = running && alarms.is_empty();
-    // Counters are informational: a busy database must not turn the health endpoint into an error.
-    let counters = app.state.pool.with(reads::counters).await.ok();
+    // Counters are informational: a busy database must not turn the health endpoint into an error. A few rows (kept by the
+    // write path), read on the light lane: never behind the heavy reads.
+    let counters = app.state.pool.with_light(reads::counters).await.ok();
     let mut v = serde_json::to_value(&snap).unwrap_or(Value::Null);
     if let Some(o) = v.as_object_mut() {
         o.insert("ok".into(), json!(ok));
@@ -109,8 +132,7 @@ pub async fn ready(State(app): State<Arc<App>>) -> ApiResult {
 
 pub async fn tokens(State(app): State<Arc<App>>) -> ApiResult {
     let allow = app.state.tokens.clone();
-    let v = app.state.pool.with(move |c| reads::token_list(c, &allow)).await?;
-    json_ok(json!({ "tokens": v }))
+    cached(&app, "tokens".into(), move |c| Ok(json!({ "tokens": reads::token_list(c, &allow)? }))).await
 }
 
 pub async fn book(State(app): State<Arc<App>>, Path(token): Path<String>, Query(q): Params) -> ApiResult {
@@ -118,8 +140,8 @@ pub async fn book(State(app): State<Arc<App>>, Path(token): Path<String>, Query(
     let depth = limit(&q, "depth", 20, app.state.cfg.max_page_size)?;
     let aggregate = flag(&q, "aggregate")?.unwrap_or(true);
     let ctx = app.ctx();
-    let v = app.state.pool.with(move |c| reads::book(c, &ctx, &token, depth, aggregate)).await?;
-    json_ok(v)
+    let key = format!("book {token} {depth} {aggregate} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    cached(&app, key, move |c| reads::book(c, &ctx, &token, depth, aggregate)).await
 }
 
 /// `GET /v1/pairs?token=`: pairs with listed live pair orders (`indexer::pairs::pairs`), a JSON array.
@@ -186,7 +208,8 @@ pub async fn pair_fills(State(app): State<Arc<App>>, Path((base, quote)): Path<(
 pub async fn order(State(app): State<Arc<App>>, Path(id): Path<String>) -> ApiResult {
     let id = parse_hash("covenant_id", &id)?;
     let ctx = app.ctx();
-    match app.state.pool.with(move |c| reads::order(c, &ctx, &id)).await? {
+    // one order: a few index lookups, on the light lane
+    match app.state.pool.with_light(move |c| reads::order(c, &ctx, &id)).await? {
         // the genesis warning of its token(s) (docs/spec/matcher.md 1.2a: on every order view of that token)
         Some(o) => json_ok(o.with_warnings(|t| app.state.tokens.warnings_for(t))),
         None => Err(ApiError::not_found("unknown covenant id")),
@@ -224,7 +247,7 @@ pub async fn order_events(State(app): State<Arc<App>>, Path(id): Path<String>, Q
     let v = app
         .state
         .pool
-        .with(move |c| {
+        .with_light(move |c| {
             if reads::order(c, &ctx, &id)?.is_none() {
                 return Ok(None);
             }
@@ -333,8 +356,8 @@ pub async fn candles(State(app): State<Arc<App>>, Path(token): Path<String>, Que
     }
     let n = limit(&q, "limit", 500, 1500)?;
     let decimals = decimals_of(&app, &token);
-    let v = app.state.pool.with(move |c| market::candles(c, &token, decimals, &interval, iv, from, to, n)).await?;
-    json_ok(v)
+    let key = format!("candles {token} {interval} {from:?} {to:?} {n}");
+    cached(&app, key, move |c| market::candles(c, &token, decimals, &interval, iv, from, to, n)).await
 }
 
 /// `GET /v1/stats/{token}`: 24 h statistics and the top of the book.
@@ -342,8 +365,8 @@ pub async fn stats(State(app): State<Arc<App>>, Path(token): Path<String>) -> Ap
     let token = parse_hash("token", &token)?;
     let decimals = decimals_of(&app, &token);
     let ctx = app.ctx();
-    let v = app.state.pool.with(move |c| market::stats(c, &ctx, &token, decimals)).await?;
-    json_ok(v)
+    let key = format!("stats {token} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    cached(&app, key, move |c| market::stats(c, &ctx, &token, decimals)).await
 }
 
 /// `GET /v1/depth/{token}?levels=`: cumulative depth of the listed book, levels merged by per-basis price.
@@ -352,6 +375,6 @@ pub async fn depth(State(app): State<Arc<App>>, Path(token): Path<String>, Query
     let n = limit(&q, "levels", 50, app.state.cfg.max_page_size)?;
     let decimals = decimals_of(&app, &token);
     let ctx = app.ctx();
-    let v = app.state.pool.with(move |c| market::depth(c, &ctx, &token, decimals, n)).await?;
-    json_ok(v)
+    let key = format!("depth {token} {n} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    cached(&app, key, move |c| market::depth(c, &ctx, &token, decimals, n)).await
 }

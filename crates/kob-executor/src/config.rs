@@ -132,7 +132,7 @@ pub struct ApiConfig {
     /// Messages a WebSocket client may send per second before it is disconnected.
     pub ws_client_msgs_per_sec: u32,
     pub max_ws_subscriptions: usize,
-    /// Read connections to the database.
+    /// Read connections to the database (plus one of the light lane, `db::ReadPool::with_light`).
     pub read_pool_size: usize,
     /// Maximum rows in list responses.
     pub max_page_size: usize,

@@ -34,6 +34,23 @@ use status::{HealthState, IndexEvent};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, watch};
 
+/// The store's data generation: bumped after every change a read can see (a committed batch, revert or operator import,
+/// `Ingest`; a possibly-frozen flag, `executor::IndexerSource`). Two reads at one generation read the same rows, which is
+/// what the API's response cache keys on (`api::cache`).
+#[derive(Clone, Debug, Default)]
+pub struct DataGeneration(Arc<std::sync::atomic::AtomicU64>);
+
+impl DataGeneration {
+    pub fn get(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// After a change is committed (never before: a read that saw the old generation must not see older rows than it).
+    pub fn bump(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum IndexerError {
     #[error(transparent)]
@@ -161,8 +178,10 @@ impl Indexer {
 
     pub fn api_state(&self) -> Result<ApiState, IndexerError> {
         let pool = db::ReadPool::open(&self.cfg.db_path(), self.cfg.api.read_pool_size)?;
+        let generation = self.ingest.lock().unwrap_or_else(|e| e.into_inner()).generation().clone();
         let st = ApiState {
             pool,
+            generation,
             health: self.health.clone(),
             events: self.events.clone(),
             tokens: self.tokens.clone(),

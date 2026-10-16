@@ -140,6 +140,10 @@ impl BookSource for IndexerSource {
                 tracing::warn!(error = %e, "cannot clear a possibly-frozen flag");
             }
         }
+        if !flagged.is_empty() || !cleared.is_empty() {
+            // the books, counts and order views read the flags: a new data generation for the API's response cache
+            guard.generation().bump();
+        }
     }
 
     fn acceptance(&mut self, tracked: &[[u8; 32]]) -> Option<BTreeMap<[u8; 32], (String, u64)>> {
