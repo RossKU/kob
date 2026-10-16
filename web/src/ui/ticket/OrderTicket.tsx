@@ -17,7 +17,7 @@ import type { BuiltTx } from '../../kob/types';
 import { formatKas, formatUnits, quoteOf } from '../../kob/units';
 import { DEFAULT_CARRIER } from '../../kob/orders/common';
 import { Banner, Button, CopyText, Loading, RawDetails, Segmented, useAsync } from '../kit';
-import { bookFromIndexer } from '../../app/env';
+import { bookFromIndexer, readClock } from '../../app/env';
 import { readPairReferences, readReferences, type References } from '../../data/indexer-crosscheck';
 import type { MarketStartAck, PlanEnv } from '../../kob/plan-types';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
@@ -113,7 +113,7 @@ export function OrderTicket(props: OrderTicketProps) {
   // one of the two environments is live: the token's KAS market, or the pair A/B (both tokens' UTXOs, the pair book, own pair orders)
   const kasEnv = useTicketEnv(token, enabled && !quote);
   const pairEnv = usePairTicketEnv(token, quote ?? token, enabled && !!quote);
-  const { env: rawEnv, error: envError, loading: envLoading, refresh } = quote ? pairEnv : kasEnv;
+  const { env: rawEnv, error: envError, loading: envLoading, refresh, fresh: freshEnv } = quote ? pairEnv : kasEnv;
   // guards whose indexer data could not be read block the plan until the user acknowledges
   const [ackGuards, setAckGuards] = useState(false);
   // a market / close order whose start (the indexer's best price) is far beyond an independent reference waits for this acknowledgement
@@ -416,11 +416,19 @@ export function OrderTicket(props: OrderTicketProps) {
     setReviewing(true);
     setReviewNote(null);
     try {
-      // re-read the chain first: the coins may have moved since the last refresh (a ladder level has just spent some), and the transaction to sign must be built from fresh data
-      const fresh = await refresh();
-      if (!fresh) return stop(t('ticket.reviewNoEnv'));
-      // the references are read again too: the start of a market order is compared with what the other indexers report now
-      const p = planOrder(withRefs(fresh, await touchesOf().catch(() => ({ touches: [], unavailable: verifiers.map((v) => v.label) }))), r.intents[index]!);
+      // the transaction to sign is built from fresh data: the first level takes an environment read in the last few seconds or the build in flight
+      // (use-ticket.ts REVIEW_REUSE_MS; the confirmation re-reads every input on the node), a later level of a ladder re-reads the chain (the level
+      // before has just spent coins). The node clock is always read now (one cheap call): DAA times (a timed start, an IOC life, a day order) are
+      // counted from this moment, as the confirmation counts them back. The references are read again at the same time: the start of a market
+      // order is compared with what the other indexers report now.
+      const [read, clock, refs] = await Promise.all([
+        index === 0 ? freshEnv() : refresh(),
+        readClock(services).catch(() => null),
+        touchesOf().catch(() => ({ touches: [], unavailable: verifiers.map((v) => v.label) })),
+      ]);
+      if (!read) return stop(t('ticket.reviewNoEnv'));
+      const fresh = clock ? { ...read, clock } : read;
+      const p = planOrder(withRefs(fresh, refs), r.intents[index]!);
       if (!p.ok || !p.built || errors(p).length > 0) return stop(t('ticket.reviewChanged'));
       const title = laddered ? t('ticket.ladder.confirmTitle', { level: index + 1, levels, side: confirmSide, type: typeName }) : t('ticket.confirmTitle', { side: confirmSide, type: typeName });
       const label = orderLabel(form.type, form.side, laddered ? { level: index + 1, levels } : undefined, name);
@@ -721,8 +729,9 @@ export function OrderTicket(props: OrderTicketProps) {
       ) : null}
 
       {enabled ? gate.element : null}
-      <Button variant="primary" block onClick={review} disabled={!canReview} loading={reviewing} data-testid="order-review">
-        {t('ticket.review', { side: sideName, type: typeName })}
+      {/* while Review reads the coins and the book the button says so (a build can take seconds on a busy indexer) */}
+      <Button variant="primary" block onClick={review} disabled={!canReview} loading={reviewing} data-testid="order-review" data-state={reviewing ? 'preparing' : undefined}>
+        {reviewing ? t('ticket.preparing') : t('ticket.review', { side: sideName, type: typeName })}
       </Button>
       <p class="tk-blind">{t('ticket.blindNote')}</p>
 

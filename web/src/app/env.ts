@@ -122,10 +122,22 @@ export interface BuildEnvOptions {
   offline?: boolean;
 }
 
-/** Everything `planOrder` needs for one token and the connected wallet. Rejects when the node is unreachable. */
+/**
+ * Everything `planOrder` needs for one token and the connected wallet. Rejects when the node is unreachable. The wallet's coins (node, token
+ * tracker) and the market (indexer book, own orders, last trade) do not depend on each other: they are read at the same time, one round.
+ */
 export async function buildPlanEnv(s: Services, wallet: Pick<WalletInfo, 'pubkey'>, token: TokenInfo, o: BuildEnvOptions = {}): Promise<PlanEnv> {
   if (!token.tradable || !token.program) throw new Error(`token ${token.ticker} is not tradable in this build (${token.untradableReason ?? 'unsupported'})`);
   const market = tokenMarketOf(s, token);
+  // every indexer read settles (a failure is null), so a rejection of the node reads below never leaves it unhandled
+  const indexed =
+    s.indexer && !o.offline
+      ? Promise.all([
+          s.indexer.book(token.covenantId, { depth: 100, aggregate: false }).catch(() => null),
+          s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }).catch(() => null),
+          s.indexer.trades(token.covenantId, { limit: 1 }).catch(() => null),
+        ])
+      : null;
   const [clock, funding, tokenUtxos, fees] = await Promise.all([
     readClock(s),
     s.utxos.fundingFor(wallet.pubkey),
@@ -137,12 +149,8 @@ export async function buildPlanEnv(s: Services, wallet: Pick<WalletInfo, 'pubkey
   let lastFillPrice: bigint | null = null;
   // a guard whose data could not be read is REPORTED (the planner blocks until the user acknowledges), never silently switched off
   const guardsUnavailable: ('own-orders' | 'book')[] = [];
-  if (s.indexer && !o.offline) {
-    const [bv, mine, trades] = await Promise.all([
-      s.indexer.book(token.covenantId, { depth: 100, aggregate: false }).catch(() => null),
-      s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }).catch(() => null),
-      s.indexer.trades(token.covenantId, { limit: 1 }).catch(() => null),
-    ]);
+  if (indexed) {
+    const [bv, mine, trades] = await indexed;
     if (bv) book = bookFromIndexer(market, bv);
     else guardsUnavailable.push('book');
     if (mine) ownOrders = ownOrderRefs(market, mine);
@@ -205,6 +213,19 @@ export async function buildPairPlanEnv(s: Services, wallet: Pick<WalletInfo, 'pu
   if (base.covenantId === quote.covenantId) throw new Error('a pair needs two different tokens');
   const a = tokenMarketOf(s, base);
   const b = tokenMarketOf(s, quote);
+  // read with the wallet's coins, not after them (as in `buildPlanEnv`); every read settles (a failure is null)
+  const indexer = s.indexer;
+  const indexed =
+    indexer && !o.offline
+      ? Promise.all([
+          indexer.pairBook(a.covenantId, b.covenantId, { depth: 100 }).catch(() => null),
+          indexer.allOrders({ maker: wallet.pubkey, token: a.covenantId, status: 'active' }).catch(() => null),
+          kasReferenceOf(indexer, a),
+          kasReferenceOf(indexer, b),
+        ])
+      : null;
+  // a malformed reference rejects the build when it is awaited below; until then a node failure must not leave that rejection unhandled
+  indexed?.catch(() => undefined);
   const [clock, funding, tokenUtxos, quoteTokenUtxos, fees] = await Promise.all([
     readClock(s),
     s.utxos.fundingFor(wallet.pubkey),
@@ -219,13 +240,8 @@ export async function buildPairPlanEnv(s: Services, wallet: Pick<WalletInfo, 'pu
   let kasPerWholeB: bigint | null = null;
   let lastFillPrice: bigint | null = null;
   const guardsUnavailable: ('own-orders' | 'book')[] = [];
-  if (s.indexer && !o.offline) {
-    const [pv, mine, refA, refB] = await Promise.all([
-      s.indexer.pairBook(a.covenantId, b.covenantId, { depth: 100 }).catch(() => null),
-      s.indexer.allOrders({ maker: wallet.pubkey, token: a.covenantId, status: 'active' }).catch(() => null),
-      kasReferenceOf(s.indexer, a),
-      kasReferenceOf(s.indexer, b),
-    ]);
+  if (indexed) {
+    const [pv, mine, refA, refB] = await indexed;
     // an indexer without the pair routes (null) or a failed read: the crossing / FOK / band guards have no book
     if (pv) {
       view = pv;

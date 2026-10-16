@@ -6,7 +6,7 @@ import { tradableRegistryJson } from '../testing/chain-fixtures';
 import { parseRegistry } from '../kob/registry';
 import { planOrder } from '../kob/plan';
 import { isPairEnv } from '../kob/plan-types';
-import { bookFromIndexer, buildPairPlanEnv, kasReferenceOf, ownOrderRefs } from './env';
+import { bookFromIndexer, buildPairPlanEnv, buildPlanEnv, kasReferenceOf, ownOrderRefs } from './env';
 
 const m = market3x3(); // 3 decimals: scale 1000 base units = one whole token
 const row = (price: string, over: Partial<BookOrderView> = {}): BookOrderView => ({
@@ -198,3 +198,54 @@ describe('buildPairPlanEnv', () => {
   });
 });
 
+
+// ------------------------------------------------------------------------------------------------ one round of reads
+
+describe('environment builds read the coins and the market at the same time', () => {
+  const deferred = () => {
+    let resolve!: (v: unknown[]) => void;
+    const promise = new Promise<unknown[]>((r) => (resolve = r));
+    return { promise, resolve };
+  };
+  /** services whose node funding read waits for `gate`; records the order of the reads */
+  const gated = () => {
+    const gate = deferred();
+    const seen: string[] = [];
+    const s = services({
+      book: async () => (seen.push('book'), { asks: [], bids: [] }),
+      allOrders: async () => (seen.push('orders'), []),
+      trades: async () => (seen.push('trades'), null),
+      pairBook: async () => (seen.push('pairBook'), null),
+    }) as unknown as { utxos: { fundingFor: () => Promise<unknown[]> } };
+    s.utxos = { fundingFor: () => (seen.push('funding'), gate.promise) };
+    return { s: s as unknown as Services, gate, seen };
+  };
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it('a KAS market: the indexer reads start before the node funding read has answered (one round, not two)', async () => {
+    const { s, gate, seen } = gated();
+    const built = buildPlanEnv(s, { pubkey: MAKER_PK }, A);
+    await tick();
+    expect(seen).toEqual(expect.arrayContaining(['funding', 'book', 'orders', 'trades']));
+    gate.resolve([]);
+    const env = await built;
+    expect(env.funding).toEqual([]);
+    expect(env.guardsUnavailable).toBeUndefined();
+  });
+
+  it('a pair: the pair book, own orders and both KAS references are read with the coins', async () => {
+    const { s, gate, seen } = gated();
+    const built = buildPairPlanEnv(s, { pubkey: MAKER_PK }, A, B);
+    await tick();
+    expect(seen).toEqual(expect.arrayContaining(['funding', 'pairBook', 'orders', 'book', 'trades']));
+    gate.resolve([]);
+    expect((await built).guardsUnavailable).toEqual(['book']);
+  });
+
+  it('an unreachable node still rejects the build (the indexer reads that ran alongside are dropped, never unhandled)', async () => {
+    const s = services({ trades: async () => { throw new Error('indexer down'); } }) as unknown as { node: { getClock: () => Promise<never> } };
+    s.node = { getClock: async () => { throw new Error('node down'); } };
+    await expect(buildPlanEnv(s as unknown as Services, { pubkey: MAKER_PK }, A)).rejects.toThrow('node down');
+    await expect(buildPairPlanEnv(s as unknown as Services, { pubkey: MAKER_PK }, A, B)).rejects.toThrow('node down');
+  });
+});

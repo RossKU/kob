@@ -22,6 +22,7 @@ export default {
   'ticket.balancePair': 'Available: {tokens}, {quote} and {kas}',
   'ticket.balanceLoading': 'Reading your balances...',
   'ticket.review': 'Review {side} {type}',
+  'ticket.preparing': 'Preparing the order...',
   'ticket.confirmTitle': 'Place {side} order: {type}',
   'ticket.blindNote': 'Wallets cannot read KOB orders: check the confirmation screen before you sign.',
   'ticket.reviewChanged': 'Your coins or the market changed. Check the new figures and review again.',
