@@ -717,6 +717,8 @@ struct MockState {
     vspc_max_in_flight: usize,
     /// `getVirtualChainFromBlock` (hashes only) calls.
     hash_calls: usize,
+    /// Round trip of a `getVirtualChainFromBlock` (hashes) answer.
+    hashes_delay: std::time::Duration,
     /// A reorg to apply before the VSPC request of this number: `(call, depth, new blocks)`.
     pending_reorg: Option<(usize, usize, Vec<Vec<Tx>>)>,
     /// Ignore a request's size limit (`VspcRequest::max_bytes`): answer whatever it holds, as a source without the transport
@@ -763,6 +765,7 @@ impl MockNode {
                 vspc_in_flight: 0,
                 vspc_max_in_flight: 0,
                 hash_calls: 0,
+                hashes_delay: std::time::Duration::ZERO,
                 pending_reorg: None,
                 ignore_size_limit: false,
                 too_large: 0,
@@ -898,6 +901,11 @@ impl MockNode {
     }
 
     /// A link of limited bandwidth per connection: an answer arrives `rtt` plus `per_tx` per transaction after the request.
+    /// The round trip of a hashes-only chain answer (`getVirtualChainFromBlock`): the chain grows while it travels.
+    pub fn set_hashes_delay(&self, d: std::time::Duration) {
+        self.with(|s| s.hashes_delay = d)
+    }
+
     pub fn set_vspc_link(&self, rtt: std::time::Duration, per_tx: std::time::Duration) {
         self.with(|s| {
             s.vspc_delay = rtt;
@@ -1106,7 +1114,12 @@ impl ChainSource for MockNode {
     }
 
     async fn chain_hashes(&self, start: Hash32) -> Result<ChainHashes, RpcError> {
-        self.chain_answer(start)
+        let r = self.chain_answer(start);
+        let delay = self.with(|s| s.hashes_delay);
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        r
     }
 
     async fn chain_with_ids(&self, start: Hash32, min_confirmations: Option<u64>) -> Result<ChainIds, RpcError> {

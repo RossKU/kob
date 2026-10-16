@@ -15,10 +15,12 @@
 //! fetch within its timeout instead of asking for the whole backlog at once. A timed-out batch is split
 //! (the window shrinks), a fast one grows it, and a request is never repeated unchanged after a timeout.
 //!
-//! Parallel fetch (`fetch_parallel` > 1): while the cursor is more than `prefetch_min_lag_blue` behind the sink, the
-//! follower fetches several upcoming windows at once over separate connections and applies them in chain order
-//! ([`super::prefetch`]); near the sink, and whenever the plan stops matching the node's chain, it takes the single
-//! steps above.
+//! Parallel fetch (`fetch_parallel` > 1): while the cursor is more than `prefetch_min_lag_blue` behind the sink (and at
+//! least a first window of chain blocks), the follower fetches several upcoming windows at once over separate connections
+//! and applies them in chain order ([`super::prefetch`]); near the sink, and whenever the plan stops matching the node's
+//! chain, it takes the single steps above. A plan ends at the sink: once an applied window leaves the cursor within the
+//! threshold, or the chain after the plan's tail is shorter than a first window, nothing more is planned, the windows
+//! already fetched are applied and the single steps follow the sink from there.
 
 use super::ingest::{Cursor, Ingest, IngestError};
 use super::prefetch::{Head, Prefetch, PrefetchLimits};
@@ -397,7 +399,8 @@ impl<S: ChainSource> Follower<S> {
                 return self.step_sequential().await;
             }
             match self.source.chain_hashes(cursor.hash).await {
-                Ok(c) if c.removed_chain_block_hashes.is_empty() && !c.added_chain_block_hashes.is_empty() => {
+                // less than a first window to the sink: one request from the cursor does better (`Prefetch::worth_planning`)
+                Ok(c) if c.removed_chain_block_hashes.is_empty() && pf.worth_planning(&c.added_chain_block_hashes) => {
                     pf.start(cursor.hash, c.added_chain_block_hashes);
                 }
                 // a reorg at the cursor, nothing after it, or no answer: the single step handles each
@@ -438,6 +441,12 @@ impl<S: ChainSource> Follower<S> {
                     }
                 };
                 let t_parse = t0.elapsed() - waited;
+                // within `prefetch_min_lag_blue` of the sink after this window: plan nothing more, apply what is fetched or in
+                // flight, then single steps (`Prefetch::finish`)
+                let near_sink = end_blue.is_some_and(|eb| {
+                    sink_blue.saturating_sub(eb).saturating_sub(self.cfg.min_confirmations.unwrap_or(0))
+                        <= self.cfg.prefetch_min_lag_blue
+                });
                 if let Some(eb) = end_blue {
                     self.health.update(|h| h.lag_blue = Some(sink_blue.saturating_sub(eb)));
                 }
@@ -445,6 +454,8 @@ impl<S: ChainSource> Follower<S> {
                 let out = self.commit(batch, committed).await;
                 if !matches!(out, StepOutcome::Applied { .. }) {
                     self.prefetch.lock().await.discard();
+                } else if near_sink {
+                    self.prefetch.lock().await.finish();
                 }
                 out
             }

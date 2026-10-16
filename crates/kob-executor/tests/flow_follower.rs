@@ -1061,3 +1061,66 @@ async fn a_removed_block_the_store_no_longer_holds_is_reported() {
     assert_eq!((a.removed_hashes, a.reverted_rows_blocks, a.unknown_removed), (2, 1, 1));
     assert_eq!(ing.cursor().unwrap().unwrap().hash, h("reorged", 1));
 }
+
+/// At the sink the chain keeps growing while windows are fetched and applied (10 chain blocks a second on TN10). A plan
+/// that kept extending itself there cut windows of the one or two chain blocks that had arrived since its tail and applied
+/// one per step, at most `fetch_parallel` per round trip, slower than the chain: it never got under
+/// `prefetch_min_lag_blue` to hand over to the single step (the TN10 soak's exec-a trailed the sink by 30 to 110 s that way,
+/// 95 windows queued, while exec-b, in single steps, followed within a second). Once the plan reaches the sink it is
+/// finished and drained, and the single step, which reads from the cursor to the sink in one request, follows from there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_that_caught_up_leaves_parallel_fetch_instead_of_trailing_the_sink_in_tiny_windows() {
+    let hs = Harness::with_follower(
+        MockNode::new("testnet-10"),
+        open_memory("testnet-10").unwrap(),
+        None,
+        wide_window(),
+        processor(),
+        |f| {
+            f.batch_target = std::time::Duration::from_secs(10);
+            f.fetch_parallel = 8;
+            f.prefetch_min_lag_blue = 30;
+            f.prefetch_initial_blocks = 64;
+        },
+    );
+    let c = Ctx::with(hs);
+    // a backlog longer than the windows the plan holds at once (4 x 8 of 64 chain blocks)
+    backlog(&c, 3_000, 1);
+    // a round trip of 200 ms per window and a chain growing 66 blocks a second for 10 s (the TN10 soak: 10 a second over
+    // round trips of 1 to 6 s), whatever the timer's resolution
+    c.hs.node.set_vspc_link(std::time::Duration::from_millis(200), std::time::Duration::ZERO);
+    // the chain's hashes take a round trip as well: an extension of the plan always finds a few new chain blocks
+    c.hs.node.set_hashes_delay(std::time::Duration::from_millis(60));
+    let node = c.hs.node.clone();
+    let grow = tokio::spawn(async move {
+        let t0 = std::time::Instant::now();
+        let mut pushed = 0u128;
+        while t0.elapsed() < std::time::Duration::from_secs(10) {
+            while pushed < t0.elapsed().as_millis() / 15 {
+                node.push_empty(1);
+                pushed += 1;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    });
+    let lag = |c: &Ctx| {
+        let chain = c.hs.node.chain_hashes();
+        let cur = c.hs.health.snapshot().cursor_hash.expect("a cursor");
+        chain.len() - 1 - chain.iter().position(|b| *b == cur).expect("on the chain")
+    };
+    let mut lags = vec![];
+    while !grow.is_finished() {
+        let o = c.hs.follower.step().await;
+        assert!(!matches!(o, StepOutcome::Gap(_) | StepOutcome::Halted(_)), "{o:?}");
+        lags.push((lag(&c), c.hs.health.snapshot().prefetch_windows));
+    }
+    let n = lags.len();
+    let late: Vec<_> = lags[n * 2 / 3..].to_vec();
+    assert!(lags[..5].iter().any(|l| l.0 > 30), "it started far behind: {:?}", &lags[..5]);
+    assert!(late.iter().all(|l| l.0 <= 45), "it caught up and follows within a round trip: {late:?}");
+    assert!(late.iter().all(|l| l.1 == 0), "in single steps, no window planned: {late:?}");
+    c.hs.sync_through_retries(100).await;
+    let h = c.hs.health.snapshot();
+    assert!(h.prefetch_bytes_peak > 0, "the backlog was fetched ahead: {h:?}");
+    assert_eq!(c.hs.snapshot(), fresh_snapshot(&c.hs.node.chain()));
+}

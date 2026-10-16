@@ -847,6 +847,20 @@ at about **4 MB/s** together [F]. So while it is far behind, the follower fetche
   single steps. One step is one connection: under a flood that one connection cannot carry (on 10-07 in the soak, about
   1.2 MB/s per connection against 1.5 to 1.8 MB/s of Borsh bodies per second of chain), the lag settles near the threshold
   instead of reaching the tip; `prefetch_min_lag_blue = 30` keeps the windows parallel to within a few seconds of it.
+* **a plan ends at the sink.** A plan starts only when the chain from the cursor holds at least a first window (64 chain
+  blocks) and the cursor is more than `prefetch_min_lag_blue` behind. It extends itself whenever its planned chain runs
+  out; an extension shorter than a first window means its tail has reached the sink, and once an applied window leaves the
+  cursor within `prefetch_min_lag_blue`, the windows not sent yet are dropped. Either way the windows fetched or in flight
+  are applied and the single steps follow the sink from there (one request from the cursor to the sink per poll). Before,
+  a plan kept extending itself at the sink: on a live chain every extension finds a few new chain blocks (10 a second,
+  extended every round trip), so it cut windows of one or two chain blocks, applied one per step and at most
+  `fetch_parallel` per window round trip (1 to 6 s to the soak's remote node, more when a large block was refused and
+  fetched again): slower than the chain, never back within the threshold. The TN10 soak's exec-a trailed the sink by 30 to
+  110 s that way (95 windows queued, `last_batch_blocks` 1 to 2) on the same nodes and build as exec-b, which followed
+  within a second in single steps until it started a plan of its own. `tests/flow_follower.rs`
+  (`a_follower_that_caught_up_leaves_parallel_fetch_instead_of_trailing_the_sink_in_tiny_windows`: a 3,000-block backlog,
+  a chain growing 66 blocks a second, a 200 ms window round trip) trailed by about 140 chain blocks with 31 windows
+  queued before, and follows within one round trip in single steps now.
 
 Config: `fetch_parallel` (default **4**, 1 turns it off), `prefetch_max_mb` (default 128; 256 until the hard bound),
 `prefetch_min_lag_blue` (default 1,200),

@@ -20,6 +20,15 @@
 //! single chain block gets a longer timeout instead, up to 8x), the window size halves after a fetch slower than the
 //! target and doubles after one faster than half of it.
 //!
+//! The plan ends at the sink. An extension of it (the chain after its tail, asked for whenever the planned chain runs out)
+//! that holds fewer chain blocks than a first window (`initial_blocks`) means the tail has reached the sink: those chain
+//! blocks are not planned, the windows queued are applied, and the follower takes single steps from there (one request from
+//! the cursor to the sink), as it does once an applied window leaves it within `prefetch_min_lag_blue` of the sink
+//! ([`Prefetch::finish`]). A plan that kept extending itself at the sink cut windows of the one or two chain blocks that had
+//! arrived since its tail (on a live chain every extension finds some: 10 chain blocks a second, a round trip of 0.1 to 1 s),
+//! applied one per step at most `parallel` per round trip, slower than the chain on a remote link: it never got within the
+//! threshold again (the TN10 soak: 95 windows queued, the follower 30 to 110 s behind the sink).
+//!
 //! Memory is bounded by `prefetch_max_bytes`, hard: windows fetched and not yet applied count with their size on the wire,
 //! windows in flight with the allowance they were sent with, and a window is only sent while the sum stays within the
 //! budget. The allowance is the window's estimate (wire bytes per chain block times its chain blocks, plus a quarter) and is
@@ -161,6 +170,24 @@ impl Prefetch {
     /// The chain block the next window to apply starts after.
     pub fn head_start(&self) -> Option<Hash32> {
         self.slots.front().map(|s| s.start).or(if self.skeleton.is_empty() { None } else { self.tail })
+    }
+
+    /// A plan from the cursor along `chain` (the node's selected chain after it) pays off: it holds at least a first window.
+    /// Shorter, the cursor is at the sink in the plan's terms and one request from it does better.
+    pub fn worth_planning(&self, chain: &[Hash32]) -> bool {
+        chain.len() >= self.lim.initial_blocks.max(1)
+    }
+
+    /// Plan nothing more: the windows not sent yet are dropped (with any window behind them), the ones fetched or in
+    /// flight are applied, and once they are the follower takes single steps (the cursor is near the sink).
+    pub fn finish(&mut self) {
+        if let Some(i) = self.slots.iter().position(|s| matches!(s.state, State::Queued)) {
+            self.truncate(i);
+        } else {
+            self.skeleton.clear();
+            self.exhausted = true;
+        }
+        self.refresh_stats();
     }
 
     /// Plan from `cursor` along `chain` (the node's selected chain after it, as hashes).
@@ -316,7 +343,12 @@ impl Prefetch {
             if self.skeleton.is_empty() {
                 let Some(tail) = self.tail.filter(|_| !self.exhausted && !self.slots.is_empty()) else { break };
                 match src.chain_hashes(tail).await {
-                    Ok(c) if c.removed_chain_block_hashes.is_empty() && !c.added_chain_block_hashes.is_empty() => {
+                    // less than a first window after the tail: the plan has reached the sink (module docs)
+                    Ok(c) if c.removed_chain_block_hashes.is_empty() && !self.worth_planning(&c.added_chain_block_hashes) => {
+                        self.exhausted = true;
+                        break;
+                    }
+                    Ok(c) if c.removed_chain_block_hashes.is_empty() => {
                         self.skeleton = c.added_chain_block_hashes.into();
                     }
                     // `tail` left the selected chain: cut the plan at the fork
