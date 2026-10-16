@@ -116,10 +116,13 @@ describe('signer summary: a token without decimals (no hint)', () => {
 });
 
 describe('signer summary: a market buy typed in KAS on the inverted view', () => {
-  it('says the KAS typed as the most it spends, what it buys about and at least (TN10 2026-10-17: "Sell 20.60 KAS" for 20 typed)', () => {
+  it('says the fixed amount it buys, what it pays about at the start and at most: the KAS typed (TN10 2026-10-17: "Sell 20.60 KAS" for 20 typed)', () => {
     const f = { ...form('market', 'buy', { amount: '20' }), kas: true };
     const plan = planOrder(ticketEnv(), buildIntent(f, { ...CTX, ref: { buy: 250_000_000n, sell: 245_000_000n } }).intent!);
     const s = summarize(kob, plan.built!, FIXTURE_MAKER, [{ covenantId: TOKEN_COV, ticker: 'EXKCC', decimals: 8, inverted: true }]);
-    expect(s.text).toMatch(/^Sell up to (19[.]\d\d|20[.]00) KAS for about [0-9.]+ EXKCC [(]market, at least [0-9.]+ EXKCC[)][.]/);
+    expect(s.text).toMatch(/^Sell about 19[.][0-9]+ KAS [(]up to (19[.][0-9][0-9]|20[.]00)[)] for 7[.][0-9]+ EXKCC [(]market; any unfilled part returns[)][.]/);
+    // the same order on the native view
+    const native = summarize(kob, plan.built!, FIXTURE_MAKER, [{ covenantId: TOKEN_COV, ticker: 'EXKCC', decimals: 8 }]);
+    expect(native.text).toMatch(/^Buy 7[.][0-9]+ EXKCC for about 19[.][0-9]+ KAS, up to (19[.][0-9][0-9]|20[.]00) KAS [(]market; any unfilled part returns[)][.]/);
   });
 });

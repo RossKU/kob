@@ -393,7 +393,7 @@ export function OrderTicket(props: OrderTicketProps) {
       tokens: formatUnits(intent.amount, token.decimals, { group: ',' }),
       kas: formatKas(baseToKas(intent.amount, price, scale), { group: ',' }),
       about: at!.basis === 'book',
-      // a buy sized at the most it can pay: the KAS is the most it spends, the tokens the least it buys
+      // a buy sized at the most it can pay: the KAS is the most it spends for the tokens it buys
       upTo: at!.basis === 'worst',
     };
   };

@@ -93,7 +93,7 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await page.getByTestId(TESTID.orderSideSell).click();
     await page.getByTestId(TESTID.orderAmount).fill('0.251');
     await expect(page.getByTestId('order-amount-tokens')).toContainText('0.25099999 KAS = 9.70873786 EXKCC at the worst price plus the tip (a better fill spends less)');
-    await expect(page.getByTestId('disc-summary')).toHaveText('Sell up to 0.25099999 KAS for at least 9.70873786 EXKCC');
+    await expect(page.getByTestId('disc-summary')).toHaveText('Sell up to 0.25099999 KAS for 9.70873786 EXKCC');
     // and the shown Buy KAS = native sell: what it receives, at the best bid (approximate)
     await page.getByTestId(TESTID.orderSideBuy).click();
     await page.getByTestId(TESTID.orderAmount).fill('0.245');

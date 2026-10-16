@@ -111,9 +111,9 @@ const TYPE_WORD: Record<string, string> = {
 
 /**
  * A plain order of a KAS market (KobAsk / KobBid: limit, IOC / FOK, market, TWAP / DCA, Dutch) in the words of the ticket, null for every other
- * order (a conditional, an if-done, a pair: `orderLine`) and for a token the app gave no ticker for. A sell holds its tokens; a buy holds a KAS
- * budget, which buys at least `bidBuyingPower` at its worst price and about the budget over its start price. An auction (a price that moves) is
- * said as "about" at its start and "at least" at its end.
+ * order (a conditional, an if-done, a pair: `orderLine`) and for a token the app gave no ticker for. A sell holds a fixed amount of tokens: an
+ * auction (a price that moves) receives about their value at its start and at least at its end. A buy is a fixed amount of tokens too (the amount
+ * its escrow was made for): an auction pays about their value at its start, the tip included, and at most its escrow; what is not filled returns.
  */
 function plainLine(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWasm | undefined, deadline: bigint | null): string | null {
   const d = o.description;
@@ -142,19 +142,19 @@ function plainLine(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWasm | 
     }
     return t(inverted ? 'signer.say.buyKasFor' : 'signer.say.sellFor', { amount: tokens(n), kas: kasAt(start, 'nearest'), least: kasAt(worst, 'down'), type: type ?? '' });
   }
-  // a buy: what its escrow buys at least (at its worst price), its trading budget and what that buys about (at its start)
+  // a buy: the amount its escrow was made for (at its worst price), that budget (the most it pays) and what the amount costs at its start
   const st = o.state.state as unknown as { reserve?: string; deliveryCarrier?: string };
   const reserve = BigInt(st.reserve ?? '0');
   const carrier = BigInt(st.deliveryCarrier ?? '0');
   const { amount: least, fills: f } = bidAmountOf(o, kob, scale, worst + d.tip);
   const budget = o.value - (f > 0n ? f - 1n : 0n) - f * carrier - reserve;
-  const about = div(budget * scale, start + d.tip, 'nearest');
+  const about = div(least * (start + d.tip), scale, 'nearest');
   if (!decays) {
     return typed(inverted
       ? t('signer.say.sellKasAt', { kas: kasWords(budget, 'up'), price: tokensPerKasWords(start, scale, dec), ticker: T })
       : t('signer.say.buyAt', { amount: tokens(least, 'down'), price: kasPerTokenWords(start, scale, dec) }));
   }
-  return t(inverted ? 'signer.say.sellKasFor' : 'signer.say.buyFor', { amount: tokens(about), kas: kasWords(budget, 'up'), least: tokens(least, 'down'), type: type ?? '' });
+  return t(inverted ? 'signer.say.sellKasFor' : 'signer.say.buyFor', { amount: tokens(least), about: kasWords(about), kas: kasWords(budget, 'up'), type: type ?? '' });
 }
 
 /**

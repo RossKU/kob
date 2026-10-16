@@ -306,7 +306,7 @@ export default {
   'ticket.kasAmt.basis.book': 'the best book price (approximate: a market order fills at the auction price)',
   'ticket.disc.summaryKas': '{side} {kas} KAS for {amount} {ticker}',
   'ticket.disc.summaryKasAbout': '{side} about {kas} KAS for {amount} {ticker}',
-  'ticket.disc.summaryKasUpTo': '{side} up to {kas} KAS for at least {amount} {ticker}',
+  'ticket.disc.summaryKasUpTo': '{side} up to {kas} KAS for {amount} {ticker}',
 
   'ticket.disc.title': 'Cost and terms',
   'ticket.disc.summary': '{side} {amount} {ticker}',
