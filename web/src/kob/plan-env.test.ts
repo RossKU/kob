@@ -23,9 +23,9 @@ describe('the reference price of market orders', () => {
   it('a book 10x above the last fill (an independent data path) raises MARKET_REFERENCE_DIVERGES', () => {
     const env: PlanEnv = { ...makeEnv({ book: lyingBook, funding: [100_000n * KAS] }), lastFillPrice: 248_000_000n };
     const p = planOrder(env, buy);
-    // the auction would start 10x above the last fill: held until the user acknowledges it (market-start.test.ts)
-    expect(p.ok).toBe(false);
-    expect(codes(p)).toContain('MARKET_START_VS_LAST_FILL');
+    // the last fill comes from the same indexer as the book: no independent reference, the start is not refused (market-start.test.ts); the
+    // divergence is a warning of the plan (not shown in the ticket)
+    expect(p.ok).toBe(true);
     expect(codes(p)).toContain('MARKET_REFERENCE_DIVERGES');
     const d = p.issues.find((i) => i.code === 'MARKET_REFERENCE_DIVERGES')!;
     expect(d.severity).toBe('warning');
@@ -76,7 +76,7 @@ describe('guards that could not run are reported, not silently off', () => {
     expect(env.guardsUnavailable).toBeUndefined();
   });
 
-  it('while guards are unavailable every plan carries a blocking GUARDS_UNAVAILABLE; once acknowledged it is a warning and the plan is ok', () => {
+  it('while guards are unavailable every plan carries a blocking GUARDS_UNAVAILABLE (nothing to acknowledge); with the data back the plan is ok', () => {
     const base = makeEnv({ funding: [100_000n * KAS] });
     const intent = { type: 'limit', side: 'sell', amount: 1n * TOK, price: 400_000_000n } as const;
     const ok = planOrder(base, intent);
@@ -84,9 +84,8 @@ describe('guards that could not run are reported, not silently off', () => {
     const blocked = planOrder({ ...base, guardsUnavailable: ['own-orders'] }, intent);
     expect(blocked.ok).toBe(false);
     expect(blocked.issues.find((i) => i.code === 'GUARDS_UNAVAILABLE')!.severity).toBe('error');
-    const acked = planOrder({ ...base, guardsUnavailable: ['own-orders'], guardsAcknowledged: true }, intent);
-    expect(acked.ok).toBe(true);
-    expect(acked.issues.find((i) => i.code === 'GUARDS_UNAVAILABLE_ACKNOWLEDGED')!.severity).toBe('warning');
+    expect(blocked.issues.find((i) => i.code === 'GUARDS_UNAVAILABLE')!.message).toMatch(/could not read the token's guard data/i);
+    expect(planOrder({ ...base, guardsUnavailable: [] }, intent).ok).toBe(true);
   });
 
   it('the self-trade guard itself still refuses a crossing order when it has the data', () => {

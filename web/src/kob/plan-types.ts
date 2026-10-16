@@ -81,19 +81,6 @@ export interface BookView {
   bidOrders?: BookOrder[];
 }
 
-/**
- * An acknowledgement of a market / close start, bound to what was acknowledged: `gap` = a start `bps` beyond a reference, `unverified` = a start
- * with no independent reference (`start` itself). It covers the same direction and a gap no larger (a start no costlier) only.
- */
-export interface MarketStartAck {
-  kind: 'gap' | 'unverified';
-  direction: 'above' | 'below';
-  /** `gap`: the acknowledged gap in bps of the reference */
-  bps: bigint;
-  /** the acknowledged start price */
-  start: bigint;
-}
-
 /** The best prices of the market as another indexer reports them (`label`: its URL). */
 export interface ReferenceTouch {
   label: string;
@@ -127,10 +114,9 @@ export interface PlanEnv {
   ownOrders: OwnOrderRef[];
   /**
    * Guards whose input could not be read (the indexer failed): `own-orders` = self-trade prevention has nothing to compare with, `book` = FOK
-   * pre-check and price bands run on an empty book. Planning then reports GUARDS_UNAVAILABLE (an error) until `guardsAcknowledged` is set.
+   * pre-check and price bands run on an empty book. Planning then reports GUARDS_UNAVAILABLE (an error: the order waits for the data).
    */
   guardsUnavailable?: readonly ('own-orders' | 'book')[];
-  guardsAcknowledged?: boolean;
   /** price (sompi per whole token) of the newest fill (indexer trades: a data path independent of the book), to cross-check the book reference price */
   lastFillPrice?: bigint | null;
   /**
@@ -141,18 +127,10 @@ export interface PlanEnv {
   /** further indexers configured as references that did not answer (their labels): said in a warning, never dropped silently */
   referencesUnavailable?: readonly string[];
   /**
-   * How far (bps) the start of a market / close auction may be on the costly side of a reference (the last fill, another indexer's best price)
-   * before planning reports MARKET_START_VS_* (an error until acknowledged). Default `MARKET_START_TOLERANCE_BPS`.
+   * How far (bps) the start of a market / close auction may be on the costly side of another indexer's best price before planning reports
+   * MARKET_START_VS_INDEXER (an error). Default `MARKET_START_TOLERANCE_BPS`.
    */
   marketStartToleranceBps?: bigint;
-  /**
-   * With no independent reference (no further indexer answered: the last fill comes from the same indexer as the book), a market / close order
-   * whose value at the start is at least this many sompi is held until acknowledged (MARKET_START_UNVERIFIED). Default
-   * `MARKET_START_UNVERIFIED_MIN_SOMPI`.
-   */
-  marketStartUnverifiedMinSompi?: bigint;
-  /** What the user acknowledged about the start (`marketStartAckOf` of the finding shown): it covers only that gap or a smaller one. */
-  marketStartAck?: MarketStartAck | null;
   /** spendable P2PK KAS UTXOs of the maker (coinbase maturity already applied by the caller) */
   funding: KeyUtxo[];
   /** spendable P2PK-owned token UTXOs of the maker for `token` */

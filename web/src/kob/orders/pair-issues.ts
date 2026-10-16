@@ -3,7 +3,7 @@
 //
 // A pair order reuses the shared codes whose meaning and units are the same (SELF_TRADE, AMOUNT_*, PRICE_NOT_POSITIVE, PRICE_TOO_LARGE,
 // TIP_NEGATIVE, TIP_TOO_LARGE (the tip is KAS), EXPIRY_*, ACTIVE_*, FOK_*, NO_LIQUIDITY, MARKET_DEPTH_INSUFFICIENT, SLIPPAGE_*, INSUFFICIENT_KAS,
-// GUARDS_UNAVAILABLE*, BUILD_REJECTED, PLAN_MISMATCH and the conditional codes COND_* without a KAS price). The codes below exist because their
+// GUARDS_UNAVAILABLE, BUILD_REJECTED, PLAN_MISMATCH and the conditional codes COND_* without a KAS price). The codes below exist because their
 // numbers are B base units per whole A (never KAS) or because the finding only exists on a pair. Prices in params are B base units per whole A
 // (`price` raw integers, the UI formats them with B's decimals: `ticker` names B where a sentence needs it), amounts base units.
 import type { IssueSeverity, PlanIssue } from '../plan-types';

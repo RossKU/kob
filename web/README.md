@@ -165,15 +165,13 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   facts and the order ticket say "Another token uses this ticker — check the covenant id". The covenant id, not the ticker, is the identity.
 * **Several indexers.** `extraIndexerUrls` (config.json / `__KOB_CONFIG__`, at most 4) are cross-checked on the token page: standing, powers and best ask / bid are
   compared and any disagreement is shown. With one indexer the footer and Settings say "single indexer, not cross-checked".
-* **Guards.** If the indexer cannot list the wallet's own orders (self-trade prevention) or the book, the ticket says so and blocks until the user
-  acknowledges. Market orders show their reference price source and are cross-checked with the last fill.
+* **Guards.** If the indexer cannot list the wallet's own orders (self-trade prevention) or the book, the order cannot be placed: one error line
+  ("Could not read the token's guard data; try again in a moment") until the ticket's background refresh reads them, then it clears by itself.
 * **Market start.** A market or close order starts at the best price of the indexer book, which is not checked against the node. Its start is compared
-  with the last fill and with the best price of every `extraIndexerUrls` indexer (a pair market: the rate the further indexer's two KAS books imply);
-  more than `marketStartToleranceBps` (config.json / `__KOB_CONFIG__`, 10 to 5000, default 1000 = 10 %) on the costly side holds the order until the
-  user acknowledges it. The last fill comes from the same indexer as the book, so it is not independent: when no further indexer answers (none is
-  configured by default), an order worth 100 KAS or more at its start is held until acknowledged, a smaller one carries a warning, and a configured
-  indexer that does not answer is named in a warning. An acknowledgement covers the gap (or start) it was given for only: a worse start, a change of
-  token, side, type or size, or a reload asks again.
+  with the best price of every `extraIndexerUrls` indexer (a pair market: the rate the further indexer's two KAS books imply); more than
+  `marketStartToleranceBps` (config.json / `__KOB_CONFIG__`, 10 to 5000, default 1000 = 10 %) on the costly side of one is an error: the order
+  cannot be placed at that start. The last fill comes from the same indexer as the book, so it is no independent reference: without a further
+  indexer (none is configured by default) the start is accepted.
 * **Stored settings.** A node, indexer or `extraIndexerUrls` list, or `allowQueryOverrides: true`, saved in this browser's settings is named in a banner
   on every page.
 

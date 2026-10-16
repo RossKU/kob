@@ -83,7 +83,7 @@ export async function snapshotFor(s: Services, entry: OrderEntry, strays: readon
  * Strays of ONE order for the record path: the indexer's per-owner token UTXOs (`/v1/token-utxos?owner=<covenant id>`, paginated) rather than the
  * maker-wide `/v1/strays` list, which is capped (50 by default, newest first, lost strays of closed orders included) and can hide the live order's
  * strays. Falls back to that list when the route is not served. `unknown`: neither source could be read (`strays === null` is a failed list
- * fetch), so a cancel may leave strays behind: the plan then carries a warning the user acknowledges, never a silent loss.
+ * fetch), so a cancel may leave strays behind: the plan then carries a warning (`cancel.strays-unknown`) for the record.
  */
 async function straysOfOrder(s: Services, id: Hex, strays: readonly StrayView[] | null): Promise<{ views: TokenUtxoView[]; unknown: boolean }> {
   const fromList = (strays ?? []).filter((x) => x.owner === id && !x.spent);
@@ -135,7 +135,7 @@ export const abandonsStrays = (p: CancelPlan): boolean => p.ok && p.issues.some(
 /**
  * Plans the cancel of one order. Anyone can send dust token UTXOs to an order's covenant id; with more of them than one transaction can move,
  * sweeping them all in the cancel is impossible, so instead of leaving the order uncancellable the plan is rebuilt abandoning the SMALLEST strays:
- * it then carries a `cancel.strays-abandoned` warning (count, amount) that the confirm screen makes the user acknowledge before signing. The UI
+ * it then carries a `cancel.strays-abandoned` warning (count, amount). The UI
  * offers "Sweep first" for such a plan (`abandonsStrays`): a sweep in place moves up to the program's inputs per transaction while the order
  * lives on, and the cancel then takes the rest.
  */
@@ -196,7 +196,7 @@ export function liveExitsOfRepeatEntry(entry: OrderEntry, positions: readonly Po
   return pos ? pos.exits.filter((x) => isLiveStatus(x.status)).length : 0;
 }
 
-/** Adds the "entry-only cancel strands the exits' take-profit" warning (acknowledged on the confirm screen) to a plan that cancels only the entry. */
+/** Adds the "entry-only cancel strands the exits' take-profit" warning to a plan that cancels only the entry. */
 export function warnEntryOnly(plan: CancelPlan, liveExits: number): CancelPlan {
   if (!plan.ok || liveExits <= 0) return plan;
   return {
@@ -217,7 +217,7 @@ export async function planCancelMany(s: Services, pubkey: Hex, entries: readonly
   if (!snapshots.length) return { plans: [], snapshots, failed };
   const env = await buildCancelEnv(s, { pubkey });
   // griefing dust strays must not make a position uncancellable: an order with more strays than its transaction can move is re-planned
-  // abandoning its smallest strays (a `cancel.strays-abandoned` warning the confirm screen makes the user acknowledge)
+  // abandoning its smallest strays (a `cancel.strays-abandoned` warning; My orders offers "Sweep first" for it)
   const plans = planCancelAll(env, snapshots);
   return { plans: plans.some(straysExceedSlots) ? planCancelAll(env, snapshots, { allowAbandonStrays: true }) : plans, snapshots, failed };
 }

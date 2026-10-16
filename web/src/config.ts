@@ -57,8 +57,8 @@ export interface AppConfig {
   explorerUrl: string;
   /**
    * How far (basis points) the start of a market / close order (the best price of the indexer book) may be on the costly side of an independent
-   * reference (the last fill, another indexer's best price) before the ticket holds the order until the user acknowledges it. config.json /
-   * `__KOB_CONFIG__` only (a link or a stored setting must not loosen it); 10 to 5000, default 1000 (10 %).
+   * reference (another indexer's best price, `extraIndexerUrls`) before the order cannot be placed. config.json / `__KOB_CONFIG__` only (a link or
+   * a stored setting must not loosen it); 10 to 5000, default 1000 (10 %).
    */
   marketStartToleranceBps: number;
 }

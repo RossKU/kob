@@ -1,116 +1,23 @@
 // The start of a market / close order is the best price of the indexer book. The last fill comes from the same indexer, so only a further
-// indexer is an independent reference: without one a large order waits for an acknowledgement, a configured indexer that does not answer is
-// said, and an acknowledgement covers the gap (or start) it was given for and nothing worse.
+// indexer is an independent reference: a pair market without one is accepted, one that answers checks it; a configured indexer that does not
+// answer is reported, never dropped silently.
 import { describe, expect, it } from 'vitest';
-import { marketStartAckOf, planOrder } from './plan';
-import { errors } from './plan-types';
-import type { PlanIssue } from './plan-types';
-import { TOK, level, makeEnv } from '../testing/fixtures';
+import { planOrder } from './plan';
 import { makePairEnv } from './orders/pair-fixtures';
 import { readPairReferences, readReferences } from '../data/indexer-crosscheck';
 import { resolveConfig } from '../config';
 
-const REAL = 250_000_000n;
-const FAKE = (REAL * 19n) / 10n;
-const buy = { type: 'market', side: 'buy', amount: 2n * TOK } as never;
 const codes = (p: { issues: { code: string }[] }) => p.issues.map((i) => i.code);
-const envAt = (ask: bigint, lastFill: bigint | null, extra: Record<string, unknown> = {}) => {
-  const env = makeEnv({ book: { asks: [level(ask, 1_000n * TOK, 1)], bids: [level(REAL, 1_000n * TOK, 1)] } });
-  env.lastFillPrice = lastFill;
-  // every order counts as large here (the default threshold is 100 KAS)
-  return Object.assign(env, { marketStartUnverifiedMinSompi: 1n }, extra);
-};
-const find = (p: { issues: PlanIssue[] }, code: string) => p.issues.find((i) => i.code === code)!;
-
-describe('a market start with no independent reference', () => {
-  it('the indexer reports its last fill at its own start: a large order is held until acknowledged', () => {
-    const p = planOrder(envAt(FAKE, FAKE), buy);
-    expect(p.ok).toBe(false);
-    expect(errors(p).map((i) => i.code)).toEqual(['MARKET_START_UNVERIFIED']);
-    const acked = planOrder(envAt(FAKE, FAKE, { marketStartAck: marketStartAckOf(find(p, 'MARKET_START_UNVERIFIED')) }), buy);
-    expect(acked.ok).toBe(true);
-    expect(codes(acked)).toContain('MARKET_START_UNVERIFIED_ACKNOWLEDGED');
-  });
-
-  it('the indexer reports no trades: held the same way (not only a warning)', () => {
-    const p = planOrder(envAt(FAKE, null), buy);
-    expect(p.ok).toBe(false);
-    expect(codes(p)).toContain('MARKET_START_UNVERIFIED');
-  });
-
-  it('a small order is told that nothing independent checks the start (a warning)', () => {
-    const p = planOrder(envAt(FAKE, FAKE, { marketStartUnverifiedMinSompi: 10n ** 12n }), buy);
-    expect(p.ok).toBe(true);
-    expect(find(p, 'MARKET_START_NO_INDEPENDENT_REFERENCE').severity).toBe('warning');
-  });
-
-  it('a sell is held whatever its value: its start (the best bid) comes only from the indexer; the acknowledgement covers that start', () => {
-    const sell = { type: 'market', side: 'sell', amount: 2n * TOK } as never;
-    const small = { marketStartUnverifiedMinSompi: 10n ** 12n };
-    // the bid agrees with the last fill and the order is small: still held, an error until acknowledged (the buy is only told)
-    const p = planOrder(envAt(FAKE, REAL, small), sell);
-    expect(p.ok).toBe(false);
-    expect(errors(p).map((i) => i.code)).toEqual(['MARKET_START_UNVERIFIED']);
-    expect(find(p, 'MARKET_START_UNVERIFIED').params).toMatchObject({ direction: 'below', start: REAL });
-    expect(planOrder(envAt(REAL, REAL, small), buy).ok).toBe(true);
-    const close = planOrder(envAt(FAKE, REAL, small), { type: 'close', amount: 2n * TOK } as never);
-    expect(codes(close)).toContain('MARKET_START_UNVERIFIED');
-    const ack = marketStartAckOf(find(p, 'MARKET_START_UNVERIFIED'));
-    const acked = planOrder(envAt(FAKE, REAL, { ...small, marketStartAck: ack }), sell);
-    expect(acked.ok).toBe(true);
-    expect(codes(acked)).toContain('MARKET_START_UNVERIFIED_ACKNOWLEDGED');
-    // a lower bid is a new start: asked again
-    const lower = makeEnv({ book: { asks: [level(FAKE, 1_000n * TOK, 1)], bids: [level(REAL - 1n, 1_000n * TOK, 1)] } });
-    Object.assign(lower, { lastFillPrice: REAL, ...small, marketStartAck: ack });
-    expect(planOrder(lower, sell).ok).toBe(false);
-    // a further indexer that answers and agrees checks the start
-    const checked = planOrder(envAt(FAKE, REAL, { ...small, referenceTouches: [{ label: 'https://idx2.example', bestAsk: FAKE, bestBid: REAL }] }), sell);
-    expect(checked.ok).toBe(true);
-    expect(codes(checked).filter((c) => c.startsWith('MARKET_START'))).toEqual([]);
-  });
-
-  it('the acknowledgement covers that start only: a costlier start, or the other side, is held again', () => {
-    const first = planOrder(envAt(FAKE, null), buy);
-    const ack = marketStartAckOf(find(first, 'MARKET_START_UNVERIFIED'));
-    expect(planOrder(envAt(FAKE + 1n, null, { marketStartAck: ack }), buy).ok).toBe(false);
-    expect(planOrder(envAt(FAKE - 1n, null, { marketStartAck: ack }), buy).ok).toBe(true);
-    const sell = { type: 'market', side: 'sell', amount: 2n * TOK } as never;
-    expect(codes(planOrder(envAt(FAKE, null, { marketStartAck: ack }), sell))).toContain('MARKET_START_UNVERIFIED');
-  });
-
-  it('a further indexer that does not answer is said, and the start counts as unchecked by it', () => {
-    const p = planOrder(envAt(FAKE, FAKE, { referenceTouches: [], referencesUnavailable: ['https://idx2.example'] }), buy);
-    expect(find(p, 'MARKET_REFERENCE_INDEXER_UNAVAILABLE').params).toMatchObject({ others: 'https://idx2.example' });
-    expect(codes(p)).toContain('MARKET_START_UNVERIFIED');
-    // an answering one that agrees: checked
-    const ok = planOrder(envAt(FAKE, FAKE, { referenceTouches: [{ label: 'https://idx3.example', bestAsk: FAKE, bestBid: REAL }] }), buy);
-    expect(ok.ok).toBe(true);
-    expect(codes(ok).filter((c) => c.startsWith('MARKET_START'))).toEqual([]);
-  });
-});
 
 describe('a pair market', () => {
-  it('without a further indexer a large pair market order is held; one from a further indexer checks it', () => {
+  it('without a further indexer a pair market order is accepted as the book says; one from a further indexer checks it', () => {
     const lone = makePairEnv({ independentReference: false });
     const order = { type: 'market', side: 'buy', amount: 50n * lone.token.scale } as never;
-    expect(codes(planOrder(lone, order))).toContain('MARKET_START_UNVERIFIED');
+    const p = planOrder(lone, order);
+    expect(p.ok).toBe(true);
+    expect(codes(p).filter((c) => c.startsWith('MARKET_START'))).toEqual([]);
     const checked = planOrder(makePairEnv(), order);
     expect(codes(checked).filter((c) => c.startsWith('MARKET_START'))).toEqual([]);
-  });
-});
-
-describe('an acknowledged gap is bound to its size', () => {
-  it('an acknowledgement of a 12 % gap does not cover a 90 % gap read again at Review', () => {
-    const shown = planOrder(envAt((REAL * 112n) / 100n, REAL), buy);
-    const ack = marketStartAckOf(find(shown, 'MARKET_START_VS_LAST_FILL'));
-    expect(ack).toMatchObject({ kind: 'gap', direction: 'above', bps: 1_200n });
-    const shownAcked = planOrder(envAt((REAL * 112n) / 100n, REAL, { marketStartAck: ack }), buy);
-    expect(shownAcked.ok).toBe(true);
-    const fresh = planOrder(envAt(FAKE, REAL, { marketStartAck: ack }), buy);
-    expect(fresh.ok).toBe(false);
-    expect(errors(fresh).map((i) => i.code)).toEqual(['MARKET_START_VS_LAST_FILL']);
-    // a smaller gap stays covered
-    expect(planOrder(envAt((REAL * 111n) / 100n, REAL, { marketStartAck: ack }), buy).ok).toBe(true);
   });
 });
 

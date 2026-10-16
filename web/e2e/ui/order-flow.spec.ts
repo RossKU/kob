@@ -108,3 +108,63 @@ test.describe('order flow: one button, the wallet approves', () => {
     });
   });
 });
+
+test.describe('no acknowledgement boxes: what the ticket cannot check stops the order, what it can check is accepted', () => {
+  test('a market sell needs no box: the same indexer is the only reference, the start is accepted', async ({ appPage: page, mock, wallet }) => {
+    await fund(mock);
+    await openMarket(page, mock);
+    await pickType(page, 'market', 'sell');
+    await fillFields(page, { amount: '1' });
+    await expect(page.getByTestId('order-place')).toBeEnabled({ timeout: 15_000 });
+    await expect(page.getByTestId('order-ticket').locator('input[type="checkbox"][data-testid$="-ack"]')).toHaveCount(0);
+    await clickPlace(page);
+    await waitSubmitted(page);
+    expect(await wallet!.calls()).toHaveLength(1);
+  });
+
+  test.describe('a further indexer whose book is far from ours', () => {
+    // the further indexer is the mock itself behind another origin, its asks at half the price: a market buy starts 100 % above it
+    test.use({ appConfig: { extraIndexerUrls: ['http://idx2.invalid'] } });
+
+    test('a market buy is a hard error (button disabled, one red line), nothing reaches the wallet', async ({ appPage: page, mock, wallet }) => {
+      await page.route('http://idx2.invalid/**', async (route) => {
+        const url = route.request().url().replace('http://idx2.invalid', mock.url);
+        const res = await route.fetch({ url });
+        const body = await res.json();
+        if (/\/v1\/books\//.test(url) && Array.isArray(body.asks)) for (const a of body.asks) a.price = String(BigInt(a.price) / 2n);
+        await route.fulfill({ response: res, json: body });
+      });
+      await fund(mock);
+      await openMarket(page, mock);
+      await pickType(page, 'market', 'buy');
+      await fillFields(page, { amount: '1' });
+      const issue = page.getByTestId('order-issue-MARKET_START_VS_INDEXER');
+      await expect(issue).toBeVisible({ timeout: 20_000 });
+      await expect(issue).toHaveAttribute('data-severity', 'error');
+      await expect(issue).toContainText('nothing can be sent');
+      await expect(page.getByTestId('order-place')).toBeDisabled();
+      await expect(page.getByTestId('order-ticket').locator('input[type="checkbox"][data-testid$="-ack"]')).toHaveCount(0);
+      expect(await wallet!.calls()).toHaveLength(0);
+    });
+  });
+
+  test('guard data that cannot be read is a hard error that clears by itself once the data is read again', async ({ appPage: page, mock }) => {
+    test.setTimeout(90_000);
+    await fund(mock);
+    // the wallet's own orders (self-trade prevention) cannot be listed
+    const ownOrders = (u: URL) => u.pathname.endsWith('/v1/orders') && u.searchParams.has('maker');
+    await page.route(ownOrders, (route) => route.fulfill({ status: 503, json: { error: { code: 'unavailable', message: 'down' } } }));
+    await openMarket(page, mock);
+    await pickType(page, 'limit', 'buy');
+    await fillFields(page, { amount: '2', price: '0.0245' });
+    const issue = page.getByTestId('order-issue-GUARDS_UNAVAILABLE');
+    await expect(issue).toBeVisible({ timeout: 20_000 });
+    await expect(issue).toHaveText(/Could not read the token's guard data; try again in a moment\./);
+    await expect(page.getByTestId('order-place')).toBeDisabled();
+    await expect(page.getByTestId('order-ticket').locator('input[type="checkbox"][data-testid$="-ack"]')).toHaveCount(0);
+    // the indexer answers again: the ticket's background refresh reads it and the error goes
+    await page.unroute(ownOrders);
+    await expect(issue).toHaveCount(0, { timeout: 45_000 });
+    await expect(page.getByTestId('order-place')).toBeEnabled();
+  });
+});

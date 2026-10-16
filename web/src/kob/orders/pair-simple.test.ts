@@ -286,10 +286,9 @@ describe('KobPair refusals and guards', () => {
     expect(codes(p)).toContain('PAIR_KAS_REFERENCE_MISSING');
   });
 
-  it('environment findings: guards unavailable (error until acknowledged), the pair book against the rate the KAS trades imply', () => {
+  it('environment findings: guards unavailable (an error, nothing to acknowledge), the pair book against the rate the KAS trades imply', () => {
     const env = { ...makePairEnv(), guardsUnavailable: ['book'] as const };
     expect(errorCodes(plan(env, { type: 'limit', side: 'sell', amount: 5_000n, price: 1_550n }))).toEqual(['GUARDS_UNAVAILABLE']);
-    expect(plan({ ...env, guardsAcknowledged: true }, { type: 'limit', side: 'sell', amount: 5_000n, price: 1_550n }).ok).toBe(true);
     const div = plan(makePairEnv({ lastFillPrice: 3_000n }), { type: 'limit', side: 'sell', amount: 5_000n, price: 1_550n });
     expect(codes(div)).toContain('PAIR_MARKET_REFERENCE_DIVERGES');
     expect(div.issues.find((i) => i.code === 'PAIR_MARKET_REFERENCE_DIVERGES')!.params).toMatchObject({ reference: 1_475n, lastFill: 3_000n, ticker: 'BBB' });

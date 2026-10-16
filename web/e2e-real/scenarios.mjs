@@ -291,7 +291,7 @@ async function openTicket(rc, { pair = false } = {}) {
 
 /**
  * Fills the order ticket until its order button is enabled. spec: { type, side, fields: {intent path: value}, pair?, expectSummary?: RegExp }.
- * Acknowledges the ticket's own gates when shown (covenant check, unavailable guards, an unverified market start). Returns how to press the button.
+ * Passes the covenant check when shown. Returns how to press the button.
  */
 async function fillTicket(rc, spec) {
   const { h } = rc;
@@ -304,15 +304,7 @@ async function fillTicket(rc, spec) {
   await fillFields(h, spec.fields);
   const gate = await passCovenantGate(rc);
   const review = tid(h, 'order-place');
-  const acks = [];
   for (let i = 0; i < 90; i++) {
-    for (const id of ['order-guards-ack', 'order-market-start-ack']) {
-      const box = tid(h, id);
-      if ((await box.count()) && !(await box.isChecked())) {
-        acks.push({ id, text: collapse(await tid(h, id === 'order-guards-ack' ? 'order-guards-unavailable' : 'order-market-start').innerText().catch(() => '')) });
-        await box.check();
-      }
-    }
     if ((await ticket.getAttribute('aria-busy')) === 'false' && (await review.isEnabled())) break;
     await sleep(1000);
   }
@@ -326,7 +318,7 @@ async function fillTicket(rc, spec) {
   const typeText = collapse(await tid(h, 'order-type').locator('option:checked').innerText().catch(() => ''));
   const disclosure = `${spec.side} ${typeText}: ${collapse(await tid(h, 'order-disclosure').innerText().catch(() => ''))}`;
   const balancesBefore = collapse(await tid(h, 'order-balances').innerText().catch(() => ''));
-  return { disclosure, balancesBefore, issues, acks, gate, click: () => review.click() };
+  return { disclosure, balancesBefore, issues, gate, click: () => review.click() };
 }
 
 /** Place through the ticket, sign, verify on the node. Returns the step record plus what the cancel needs. */
@@ -337,7 +329,7 @@ async function place(rc, r, label, spec) {
   if (!s.submitted) throw new Error('the submitted transaction was not captured from the node connection');
   // what was ordered is said by the ticket's own figures (there is no confirmation screen)
   if (spec.expectSummary && !spec.expectSummary.test(t.disclosure)) throw new Error(`the ticket does not say what is ordered (${spec.expectSummary}): ${t.disclosure.slice(0, 400)}`);
-  const step = { ...stepOf(`place ${label}`, s), disclosure: t.disclosure, ticketIssues: t.issues, ticketAcks: t.acks.length ? t.acks : undefined, covenantGate: t.gate ?? undefined, balancesBefore: t.balancesBefore };
+  const step = { ...stepOf(`place ${label}`, s), disclosure: t.disclosure, ticketIssues: t.issues, covenantGate: t.gate ?? undefined, balancesBefore: t.balancesBefore };
   r.steps.push(step);
   step.verify = await verifyCreated(rc, s.submitted, s.txid, label);
   await sleep(1500);

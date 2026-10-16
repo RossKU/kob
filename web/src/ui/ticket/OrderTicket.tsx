@@ -9,7 +9,7 @@ import { useServices, useWallet } from '../../app/context';
 import { has, t } from '../../i18n';
 import { issueText, keyedText } from '../../i18n/issue-text';
 import { buildErrorText, rawOf } from '../../i18n/build-error';
-import { MARKET_START_UNVERIFIED_MIN_SOMPI, marketStartAckOf, planOrder, type Intent } from '../../kob/plan';
+import { planOrder, type Intent } from '../../kob/plan';
 import { errors, isPairEnv, type Clock, type OrderPlan } from '../../kob/plan-types';
 import type { TokenInfo } from '../../kob/registry';
 import { formatKas, formatUnits, quoteOf } from '../../kob/units';
@@ -17,7 +17,7 @@ import { DEFAULT_CARRIER } from '../../kob/orders/common';
 import { Banner, Button, Loading, RawDetails, Segmented, useAsync } from '../kit';
 import { bookFromIndexer, readClock } from '../../app/env';
 import { readPairReferences, readReferences, type References } from '../../data/indexer-crosscheck';
-import type { MarketStartAck, PlanEnv } from '../../kob/plan-types';
+import type { PlanEnv } from '../../kob/plan-types';
 import { auctionSubmitBy } from '../../wallet/sign';
 import { SendStatusLine, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
 import type { SendJob } from '../confirm/send';
@@ -112,11 +112,7 @@ export function OrderTicket(props: OrderTicketProps) {
   const kasEnv = useTicketEnv(token, enabled && !quote);
   const pairEnv = usePairTicketEnv(token, quote ?? token, enabled && !!quote);
   const { env: rawEnv, error: envError, loading: envLoading, refresh, since, snapshot, stale, waiting } = quote ? pairEnv : kasEnv;
-  // guards whose indexer data could not be read block the plan until the user acknowledges
-  const [ackGuards, setAckGuards] = useState(false);
-  // a market / close order whose start (the indexer's best price) is far beyond an independent reference waits for this acknowledgement
-  // bound to the gap (or start) it was given for; never stored, so a reload asks again
-  const [ackStart, setAckStart] = useState<MarketStartAck | null>(null);
+  // a market / close order whose start (the indexer's best price) is this far beyond another indexer's best price cannot be placed
   const startTolerance = BigInt(services.config.marketStartToleranceBps);
   // the best prices further indexers report for this market (none configured: empty): a KAS market's own books, a pair's from the two KAS books
   const verifiers = services.verifiers;
@@ -135,9 +131,9 @@ export function OrderTicket(props: OrderTicketProps) {
   };
   const touches = useAsync((signal) => touchesOf(signal), [marketOf, quoteMarketOf, verifiers, token.covenantId]);
   const withRefs = <E extends PlanEnv>(e: E, refs: References): E => ({
-    ...e, guardsAcknowledged: ackGuards, referenceTouches: refs.touches, referencesUnavailable: refs.unavailable, marketStartToleranceBps: startTolerance, marketStartAck: ackStart,
+    ...e, referenceTouches: refs.touches, referencesUnavailable: refs.unavailable, marketStartToleranceBps: startTolerance,
   });
-  const env = useMemo(() => (rawEnv ? withRefs(rawEnv, touches.data ?? { touches: [], unavailable: [] }) : null), [rawEnv, ackGuards, ackStart, touches.data, startTolerance]);
+  const env = useMemo(() => (rawEnv ? withRefs(rawEnv, touches.data ?? { touches: [], unavailable: [] }) : null), [rawEnv, touches.data, startTolerance]);
   const rateMilli = env?.clock.rateMilli;
   // the book's best prices: what a KAS amount of a market / close order converts at (an inverted market)
   const bestAsk = env?.book.asks[0]?.price ?? null;
@@ -310,9 +306,6 @@ export function OrderTicket(props: OrderTicketProps) {
     edited();
     setForm((f) => setSide(f, side));
   };
-  // the start acknowledgement is for this order only: a change of token, pair, type, side or size asks again
-  const ackScope = `${token.covenantId}|${quote?.covenantId ?? ''}|${form.type}|${form.side}|${JSON.stringify(form.values)}`;
-  useEffect(() => setAckStart(null), [ackScope]);
 
   const shownPlan: OrderPlan | null = enabled && current ? plan : null;
   const planErrors = shownPlan ? errors(shownPlan) : [];
@@ -530,9 +523,6 @@ export function OrderTicket(props: OrderTicketProps) {
   if (stillReading.length) needs.push({ code: 'loading', text: t('ticket.need.loading', { what: stillReading.map((w) => t(`ticket.wait.${w}`)).join(', ') }), tone: 'info' });
 
   const issues = (shownPlan?.issues ?? []).filter((i) => !(holdingsShort && TOKEN_SHORT.has(i.code)));
-  const START_CODES = ['MARKET_START_VS_LAST_FILL', 'MARKET_START_VS_INDEXER', 'MARKET_START_ACKNOWLEDGED', 'MARKET_START_UNVERIFIED', 'MARKET_START_UNVERIFIED_ACKNOWLEDGED'];
-  const startIssue = issues.find((i) => START_CODES.includes(i.code));
-  const startUnverified = startIssue?.code === 'MARKET_START_UNVERIFIED' || startIssue?.code === 'MARKET_START_UNVERIFIED_ACKNOWLEDGED';
   const planIssues = issues.filter((i) => i.severity === 'error');
   const issueCtx = { tokenDecimals: token.decimals, tokenTicker: ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
 
@@ -639,36 +629,6 @@ export function OrderTicket(props: OrderTicketProps) {
           </Banner>
         ))}
       </div>
-
-      {enabled && env?.guardsUnavailable?.length ? (
-        <Banner tone="warn" title={t('ticket.guards.title')} data-testid="order-guards-unavailable">
-          <p>{t('ticket.guards.text', { guards: env.guardsUnavailable.join(', ') })}</p>
-          <label class="row" style="gap:6px">
-            <input type="checkbox" checked={ackGuards} onChange={(e) => setAckGuards((e.currentTarget as HTMLInputElement).checked)} data-testid="order-guards-ack" />
-            <span>{t('ticket.guards.ack')}</span>
-          </label>
-        </Banner>
-      ) : null}
-
-      {enabled && startIssue ? (
-        <Banner tone="warn" title={t('ticket.marketStart.title')} data-testid="order-market-start">
-          <p>
-            {startUnverified
-              ? t('ticket.marketStart.unverified', { kas: formatKas(MARKET_START_UNVERIFIED_MIN_SOMPI) })
-              : t('ticket.marketStart.text', { percent: formatUnits(startTolerance, 2, { maxFraction: 1 }) })}
-          </p>
-          <p class="muted">{t('ticket.marketStart.ackScope')}</p>
-          <label class="row" style="gap:6px">
-            <input
-              type="checkbox"
-              checked={ackStart !== null && (startIssue.code === 'MARKET_START_ACKNOWLEDGED' || startIssue.code === 'MARKET_START_UNVERIFIED_ACKNOWLEDGED')}
-              onChange={(e) => setAckStart((e.currentTarget as HTMLInputElement).checked ? marketStartAckOf(startIssue) : null)}
-              data-testid="order-market-start-ack"
-            />
-            <span>{t('ticket.marketStart.ack')}</span>
-          </label>
-        </Banner>
-      ) : null}
 
       {/* only what stops the order: the planner's warnings and notes are not shown (the figures below say what the order does) */}
       <div class="tk-issues" data-testid="order-issues" aria-live="polite">

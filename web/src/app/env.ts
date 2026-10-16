@@ -191,7 +191,7 @@ export function assemblePlanEnv(
   parts: { market: MarketPart; coins: CoinsPart; holdings: HoldingsPart | null },
   o: BuildEnvOptions = {},
 ): PlanEnv {
-  // a guard whose data could not be read is REPORTED (the planner blocks until the user acknowledges), never silently switched off
+  // a guard whose data could not be read is REPORTED (the planner refuses the order until a read succeeds), never silently switched off
   const guardsUnavailable: ('own-orders' | 'book')[] = [];
   if (parts.market.bookUnavailable) guardsUnavailable.push('book');
   if (parts.holdings && parts.holdings.ownOrders === null) guardsUnavailable.push('own-orders');
