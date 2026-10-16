@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { useServices, useWallet } from '../../app/context';
 import { commitAccepted } from '../../app/commit';
 import { readClock } from '../../app/env';
+import { pendingSpends } from '../../app/pending-spends';
 import { formatDateTime, has, t } from '../../i18n';
 import { issueText, walletNoticeText } from '../../i18n/issue-text';
 import { spkStringToAddress } from '../../data/kaspa-sdk';
@@ -54,6 +55,11 @@ export interface ConfirmSignProps {
    * that): shown above the summary, and signing needs an explicit acknowledgement of them
    */
   freshWarnings?: readonly string[];
+  /**
+   * the ticket's re-check of this order against the book and the wallet read at the click (ui/ticket/review-check.ts): `checking` while it runs
+   * (signing waits), the reasons when the order no longer stands (signing is blocked: review again), absent or null when it holds
+   */
+  recheck?: 'checking' | { reasons: readonly string[] } | null;
   /** fired as soon as the node accepted the transaction (the dialog stays open showing the status until the user closes it) */
   onSubmitted?(r: { txid: string; records: PlacementRecord[] }): void;
   /** called once when the flow ends (cancelled, submitted or failed) */
@@ -208,11 +214,18 @@ export function ConfirmSign(props: ConfirmSignProps) {
   } else if (wallet.networkMismatch) {
     extraBlocking.push({ code: 'network', severity: 'blocking', message: 'network', text: t('confirm.networkMismatch', { wallet: wallet.info.network, app: config.network }) });
   }
-  if (!props.issue && nodeInputs === 'pending') extraBlocking.push({ code: 'inputs-checking', severity: 'blocking', message: 'checking inputs', text: t('confirm.inputsChecking') });
+  // checks still running: shown as progress, not as a problem, and signing waits for them
+  const checking: Finding[] = [];
+  if (!props.issue && nodeInputs === 'pending') checking.push({ code: 'inputs-checking', severity: 'blocking', message: 'checking inputs', text: t('confirm.inputsChecking') });
+  if (props.recheck === 'checking') checking.push({ code: 'recheck-running', severity: 'blocking', message: 're-checking', text: t('confirm.recheckRunning') });
+  if (props.recheck && props.recheck !== 'checking') {
+    extraBlocking.push({ code: 'recheck-changed', severity: 'blocking', message: 'order changed', text: t('confirm.recheckChanged') });
+    for (const r of props.recheck.reasons) extraBlocking.push({ code: 'recheck-reason', severity: 'blocking', message: r, text: r });
+  }
   if (!props.issue && nodeInputs === 'error') extraBlocking.push({ code: 'inputs-unavailable', severity: 'blocking', message: 'inputs unavailable', text: t('confirm.inputsUnavailable') });
   const blocking = [...extraBlocking, ...model.blocking];
   const busy = phase === 'busy';
-  const canSign = blocking.length === 0 && model.canSign && ack && (mustAck.length === 0 || ackPlan) && (fresh.length === 0 || ackFresh) && phase === 'review';
+  const canSign = blocking.length === 0 && checking.length === 0 && model.canSign && ack && (mustAck.length === 0 || ackPlan) && (fresh.length === 0 || ackFresh) && phase === 'review';
 
   const finish = useCallback(
     (r: ConfirmResult) => {
@@ -224,6 +237,8 @@ export function ConfirmSign(props: ConfirmSignProps) {
   );
 
   const afterAccepted = async (id: string): Promise<void> => {
+    // the node keeps listing these inputs until the transaction is in a block: no plan of this page may pick them meanwhile
+    pendingSpends.add(built.tx.inputs);
     let c = clock;
     try {
       c = await readClock(services);
@@ -291,6 +306,12 @@ export function ConfirmSign(props: ConfirmSignProps) {
     <Modal title={title} large dismissable={!busy} hideClose={busy} onClose={close} data-testid="confirm-screen">
       <div class="cf" data-phase={phase} data-kind={model.kind}>
         <p class="cf-intro">{model.intro}</p>
+
+        {checking.length > 0 ? (
+          <div class="cf-checking" data-testid="confirm-checking" role="status">
+            <Spinner /> <FindingList items={checking} testid="confirm-checking-list" class="cf-list-checking" />
+          </div>
+        ) : null}
 
         {blocking.length > 0 ? (
           <div class="cf-blocking" data-testid="confirm-blocking" role="alert">

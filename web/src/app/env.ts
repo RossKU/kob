@@ -3,14 +3,15 @@
 import type { BookOrderView, LevelView, OrderView } from '../data/indexer-types';
 import type { CancelEnv } from '../kob/cancel';
 import { normalizePolicy, readFeeContext, type FeeContext } from '../kob/fee-policy';
-import type { FeeMode } from '../kob/types';
-import type { BookLevel, BookOrder, BookView, Clock, OwnOrderRef, PairPlanEnv, PlanEnv, TokenMarket } from '../kob/plan-types';
+import type { FeeMode, KeyUtxo, TokenUtxo } from '../kob/types';
+import { isPairEnv, type BookLevel, type BookOrder, type BookView, type Clock, type OwnOrderRef, type PairPlanEnv, type PlanEnv, type TokenMarket } from '../kob/plan-types';
 import type { TokenInfo } from '../kob/registry';
 import { impliedPairRate, isPairOrderView, ownPairOrderRefs, pairBookToBookView } from '../kob/pair';
 import { firmReferencePrice } from '../kob/guards';
 import { toTokenMarket } from '../kob/token-market';
 import type { Hex } from '../kob/types';
 import type { WalletInfo } from '../wallet/types';
+import { pendingSpends } from './pending-spends';
 import type { Services } from './services';
 
 const bi = (v: string | number | null | undefined): bigint => (v === null || v === undefined ? 0n : BigInt(v));
@@ -103,7 +104,7 @@ export function ownOrderRefs(market: TokenMarket, orders: OrderView[]): OwnOrder
 }
 
 /** Fee mode of the planners: the node relay floor, or the storage-inclusive priority fee when Settings ask for it. */
-const feeModeOf = (s: Services): { feeMode?: FeeMode } => (s.config?.features?.priorityFee ? { feeMode: 'priority' as const } : {});
+const feeModeOf = (s: Pick<Services, 'config'>): { feeMode?: FeeMode } => (s.config?.features?.priorityFee ? { feeMode: 'priority' as const } : {});
 
 /**
  * The fee policy input of one planning moment: the app's policy and the node's newest usable estimate (a cached read, at most one node call per refresh
@@ -122,44 +123,108 @@ export interface BuildEnvOptions {
   offline?: boolean;
 }
 
+// ------------------------------------------------------------------------------------------------ the parts of a KAS-market environment
+//
+// The order ticket keeps the three parts fresh separately (ui/ticket/use-ticket.ts): the market is the same for every wallet and moves with the book,
+// the coins come from the node alone (fast), the holdings need the indexer (its token-UTXO listing, verified on the node, and the wallet's resting
+// orders). `buildPlanEnv` reads all three at once.
+
+/** The wallet-independent part: the book per order and the newest trade. Never rejects: an unreadable book is reported (`bookUnavailable`). */
+export interface MarketPart {
+  book: BookView;
+  bookUnavailable: boolean;
+  lastFillPrice: bigint | null;
+}
+
+/** The node part: clock, spendable KAS, the fee context. Rejects when the node is unreachable. */
+export interface CoinsPart {
+  clock: Clock;
+  funding: KeyUtxo[];
+  fees: FeeContext;
+}
+
+/** The wallet's indexer-backed part: its token UTXOs (indexer listing verified on the node) and its resting orders (null: they could not be read). */
+export interface HoldingsPart {
+  tokenUtxos: TokenUtxo[];
+  ownOrders: OwnOrderRef[] | null;
+}
+
+export async function readMarketPart(s: Pick<Services, 'indexer'>, market: TokenMarket, o: Pick<BuildEnvOptions, 'offline'> = {}): Promise<MarketPart> {
+  if (!s.indexer || o.offline) return { book: { asks: [], bids: [] }, bookUnavailable: false, lastFillPrice: null };
+  const [bv, trades] = await Promise.all([
+    s.indexer.book(market.covenantId, { depth: 100, aggregate: false }).catch(() => null),
+    s.indexer.trades(market.covenantId, { limit: 1 }).catch(() => null),
+  ]);
+  const last = trades?.items?.[0];
+  // trades are priced per `price_basis` base units (the token's standard scale): convert to the market's scale (per whole token)
+  const lastFillPrice = last && trades.price_basis && BigInt(trades.price_basis) > 0n ? (BigInt(last.price) * market.scale) / BigInt(trades.price_basis) : null;
+  return { book: bv ? bookFromIndexer(market, bv) : { asks: [], bids: [] }, bookUnavailable: !bv, lastFillPrice };
+}
+
+export async function readCoinsPart(s: Pick<Services, 'node' | 'utxos' | 'fees'>, wallet: Pick<WalletInfo, 'pubkey'>): Promise<CoinsPart> {
+  const [clock, funding, fees] = await Promise.all([readClock(s), s.utxos.fundingFor(wallet.pubkey), readFees(s)]);
+  return { clock, funding, fees };
+}
+
+export async function readHoldingsPart(
+  s: Pick<Services, 'indexer' | 'tracker'>,
+  wallet: Pick<WalletInfo, 'pubkey'>,
+  token: TokenInfo,
+  market: TokenMarket,
+  o: Pick<BuildEnvOptions, 'offline'> = {},
+): Promise<HoldingsPart> {
+  if (!token.program) throw new Error(`token ${token.ticker} is not tradable in this build`);
+  const mine = s.indexer && !o.offline ? s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }).catch(() => null) : Promise.resolve([]);
+  const [tokenUtxos, orders] = await Promise.all([s.tracker.tokenUtxosFor(wallet.pubkey, { covenantId: token.covenantId, program: token.program }), mine]);
+  return { tokenUtxos, ownOrders: orders ? ownOrderRefs(market, orders) : null };
+}
+
 /**
- * Everything `planOrder` needs for one token and the connected wallet. Rejects when the node is unreachable. The wallet's coins (node, token
- * tracker) and the market (indexer book, own orders, last trade) do not depend on each other: they are read at the same time, one round.
+ * A PlanEnv of the three parts. `holdings` null (not read yet): no token UTXOs and no own orders, NOT reported as a guard the user must waive (the
+ * ticket says the holdings are still being read, and the confirmation re-checks the plan against them before anything is signed). Inputs this page
+ * has already spent in a submitted transaction are dropped (app/pending-spends.ts), however old the parts are.
+ */
+export function assemblePlanEnv(
+  s: Pick<Services, 'kob' | 'config'>,
+  wallet: Pick<WalletInfo, 'pubkey'>,
+  market: TokenMarket,
+  parts: { market: MarketPart; coins: CoinsPart; holdings: HoldingsPart | null },
+  o: BuildEnvOptions = {},
+): PlanEnv {
+  // a guard whose data could not be read is REPORTED (the planner blocks until the user acknowledges), never silently switched off
+  const guardsUnavailable: ('own-orders' | 'book')[] = [];
+  if (parts.market.bookUnavailable) guardsUnavailable.push('book');
+  if (parts.holdings && parts.holdings.ownOrders === null) guardsUnavailable.push('own-orders');
+  return {
+    kob: s.kob, token: market, maker: wallet.pubkey, clock: parts.coins.clock, book: parts.market.book, ownOrders: parts.holdings?.ownOrders ?? [],
+    ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice: parts.market.lastFillPrice,
+    funding: pendingSpends.without(parts.coins.funding), tokenUtxos: pendingSpends.without(parts.holdings?.tokenUtxos ?? []),
+    ...feeModeOf(s), fees: parts.coins.fees, ...(o.feeRate ? { feeRate: o.feeRate } : {}), ...(o.carrier ? { carrier: o.carrier } : {}),
+  };
+}
+
+/**
+ * Everything `planOrder` needs for one token and the connected wallet. Rejects when the node is unreachable. The three parts do not depend on each
+ * other: they are read at the same time, one round.
  */
 export async function buildPlanEnv(s: Services, wallet: Pick<WalletInfo, 'pubkey'>, token: TokenInfo, o: BuildEnvOptions = {}): Promise<PlanEnv> {
   if (!token.tradable || !token.program) throw new Error(`token ${token.ticker} is not tradable in this build (${token.untradableReason ?? 'unsupported'})`);
   const market = tokenMarketOf(s, token);
-  // every indexer read settles (a failure is null), so a rejection of the node reads below never leaves it unhandled
-  const indexed =
-    s.indexer && !o.offline
-      ? Promise.all([
-          s.indexer.book(token.covenantId, { depth: 100, aggregate: false }).catch(() => null),
-          s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }).catch(() => null),
-          s.indexer.trades(token.covenantId, { limit: 1 }).catch(() => null),
-        ])
-      : null;
-  const [clock, funding, tokenUtxos, fees] = await Promise.all([
-    readClock(s),
-    s.utxos.fundingFor(wallet.pubkey),
-    s.tracker.tokenUtxosFor(wallet.pubkey, { covenantId: token.covenantId, program: token.program }),
-    readFees(s),
-  ]);
-  let book: BookView = { asks: [], bids: [] };
-  let ownOrders: OwnOrderRef[] = [];
-  let lastFillPrice: bigint | null = null;
-  // a guard whose data could not be read is REPORTED (the planner blocks until the user acknowledges), never silently switched off
-  const guardsUnavailable: ('own-orders' | 'book')[] = [];
-  if (indexed) {
-    const [bv, mine, trades] = await indexed;
-    if (bv) book = bookFromIndexer(market, bv);
-    else guardsUnavailable.push('book');
-    if (mine) ownOrders = ownOrderRefs(market, mine);
-    else guardsUnavailable.push('own-orders');
-    const last = trades?.items?.[0];
-    // trades are priced per `price_basis` base units (the token's standard scale): convert to the market's scale (per whole token)
-    if (last && trades.price_basis && BigInt(trades.price_basis) > 0n) lastFillPrice = (BigInt(last.price) * market.scale) / BigInt(trades.price_basis);
-  }
-  return { kob: s.kob, token: market, maker: wallet.pubkey, clock, book, ownOrders, ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice, funding, tokenUtxos, ...feeModeOf(s), fees, ...(o.feeRate ? { feeRate: o.feeRate } : {}), ...(o.carrier ? { carrier: o.carrier } : {}) };
+  // the market read never rejects; a holdings failure is awaited below, so a node failure first never leaves it unhandled
+  const marketPart = readMarketPart(s, market, o);
+  const holdings = readHoldingsPart(s, wallet, token, market, o);
+  holdings.catch(() => undefined);
+  const coins = await readCoinsPart(s, wallet);
+  return assemblePlanEnv(s, wallet, market, { market: await marketPart, coins, holdings: await holdings }, o);
+}
+
+/** `e` without the inputs this page has already spent in a submitted transaction (app/pending-spends.ts): for an environment read before it. */
+export function dropPendingSpends<E extends PlanEnv>(e: E): E {
+  const funding = pendingSpends.without(e.funding);
+  const tokenUtxos = pendingSpends.without(e.tokenUtxos);
+  const pair = isPairEnv(e) ? { ...e.pair, quoteTokenUtxos: pendingSpends.without(e.pair.quoteTokenUtxos) } : null;
+  if (funding === e.funding && tokenUtxos === e.tokenUtxos && (!pair || pair.quoteTokenUtxos === (e as unknown as PairPlanEnv).pair.quoteTokenUtxos)) return e;
+  return { ...e, funding, tokenUtxos, ...(pair ? { pair } : {}) };
 }
 
 /** Environment of the cancel / cancel-replace / refund planners. */
@@ -170,7 +235,10 @@ export async function buildCancelEnv(s: Services, wallet: Pick<WalletInfo, 'pubk
     token && token.program ? s.tracker.tokenUtxosFor(wallet.pubkey, { covenantId: token.covenantId, program: token.program }) : Promise.resolve([]),
     readFees(s),
   ]);
-  return { kob: s.kob, maker: wallet.pubkey, funding, tokenUtxos, clock: { daa: clock.daa, unixSeconds: clock.unixSeconds }, ...feeModeOf(s), fees };
+  return {
+    kob: s.kob, maker: wallet.pubkey, funding: pendingSpends.without(funding), tokenUtxos: pendingSpends.without(tokenUtxos), clock: { daa: clock.daa, unixSeconds: clock.unixSeconds },
+    ...feeModeOf(s), fees,
+  };
 }
 
 // ------------------------------------------------------------------------------------------------ token/token pairs
@@ -254,8 +322,9 @@ export async function buildPairPlanEnv(s: Services, wallet: Pick<WalletInfo, 'pu
     lastFillPrice = impliedPairRate(refA.last, refB.last, b.scale);
   }
   return {
-    kob: s.kob, token: a, maker: wallet.pubkey, clock, book, ownOrders, ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice, funding, tokenUtxos,
+    kob: s.kob, token: a, maker: wallet.pubkey, clock, book, ownOrders, ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice,
+    funding: pendingSpends.without(funding), tokenUtxos: pendingSpends.without(tokenUtxos),
     ...feeModeOf(s), fees, ...(o.feeRate ? { feeRate: o.feeRate } : {}), ...(o.carrier ? { carrier: o.carrier } : {}),
-    pair: { quote: b, quoteTokenUtxos, view, kasPerWholeA, kasPerWholeB },
+    pair: { quote: b, quoteTokenUtxos: pendingSpends.without(quoteTokenUtxos), view, kasPerWholeA, kasPerWholeB },
   };
 }

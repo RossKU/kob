@@ -10,7 +10,7 @@ import { has, t } from '../../i18n';
 import { issueText, keyedText } from '../../i18n/issue-text';
 import { buildErrorText, rawOf } from '../../i18n/build-error';
 import { MARKET_START_UNVERIFIED_MIN_SOMPI, marketStartAckOf, planOrder, type Intent } from '../../kob/plan';
-import { errors, isPairEnv, type OrderPlan } from '../../kob/plan-types';
+import { errors, isPairEnv, type Clock, type OrderPlan } from '../../kob/plan-types';
 import type { TokenInfo } from '../../kob/registry';
 import type { ExpectedSigning } from '../../kob/decode';
 import type { BuiltTx } from '../../kob/types';
@@ -36,7 +36,8 @@ import { expectedFromPlan, newWarnings } from './plan-expected';
 import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
 import { maxBuyAmount } from './max-amount';
 import { orderLabel } from './order-label';
-import { usePairTicketEnv, useTicketEnv, useTicketPlan } from './use-ticket';
+import { usePairTicketEnv, useTicketEnv, useTicketPlan, type EnvWait } from './use-ticket';
+import { CLOCK_WAIT_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, recheckVerdict, reviewClock } from './review-check';
 import { rememberPairForm, takePairFlip } from './pair-flip';
 import './ticket.css';
 
@@ -75,7 +76,14 @@ interface ConfirmState {
   freshWarnings?: string[];
   /** a ladder: every order of it, and the index of the one being signed */
   ladder?: { lines: string[]; current: number };
+  /** which Review opened it (a re-check that ends after another Review never touches this one) */
+  id: number;
+  /** the re-check against the state at the click (review-check.ts): running, failed with its reasons, or done / not needed (null) */
+  recheck: 'checking' | { reasons: string[] } | null;
 }
+
+/** Token-holding shortfalls: while the holdings are still being read they mean "not read yet", not "not enough". */
+const TOKEN_SHORT = new Set(['INSUFFICIENT_TOKENS', 'TOKEN_UTXOS_FRAGMENTED']);
 
 const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
 
@@ -113,7 +121,8 @@ export function OrderTicket(props: OrderTicketProps) {
   // one of the two environments is live: the token's KAS market, or the pair A/B (both tokens' UTXOs, the pair book, own pair orders)
   const kasEnv = useTicketEnv(token, enabled && !quote);
   const pairEnv = usePairTicketEnv(token, quote ?? token, enabled && !!quote);
-  const { env: rawEnv, error: envError, loading: envLoading, refresh, fresh: freshEnv } = quote ? pairEnv : kasEnv;
+  const { env: rawEnv, error: envError, loading: envLoading, refresh, since, snapshot, stale, waiting } = quote ? pairEnv : kasEnv;
+  const confirmSeq = useRef(0);
   // guards whose indexer data could not be read block the plan until the user acknowledges
   const [ackGuards, setAckGuards] = useState(false);
   // a market / close order whose start (the indexer's best price) is far beyond an independent reference waits for this acknowledgement
@@ -403,41 +412,62 @@ export function OrderTicket(props: OrderTicketProps) {
       stop: l.exitStop !== null ? `${formatPrice(l.exitStop, ctx)} ${quoteTicker}` : '-',
     });
 
-  /** Plans level `index` of the run against freshly read coins and opens its confirmation. A level that cannot be planned ends the run. */
+  const noRefs = (): References => ({ touches: [], unavailable: verifiers.map((v) => v.label) });
+
+  /**
+   * Plans level `index` of the run and opens its confirmation at once, from the environment on hand when it is recent enough; the signature then
+   * waits for the re-check against the state at the click (review-check.ts: the freshness rule). A level that cannot be planned ends the run.
+   */
   const prepareLevel = async (index: number): Promise<void> => {
     const r = run.current;
     if (!r) return;
     const levels = r.intents.length;
     const laddered = levels > 1;
+    const intent = r.intents[index]!;
     const stop = (note: string) => {
       run.current = null;
       setReviewNote(laddered && r.txids.length > 0 ? t('ticket.ladder.stoppedAt', { level: index + 1, levels, placed: r.txids.length }) : note);
     };
+    const clickAt = Date.now();
     setReviewing(true);
     setReviewNote(null);
     try {
-      // the transaction to sign is built from fresh data: the first level takes an environment read in the last few seconds or the build in flight
-      // (use-ticket.ts REVIEW_REUSE_MS; the confirmation re-reads every input on the node), a later level of a ladder re-reads the chain (the level
-      // before has just spent coins). The node clock is always read now (one cheap call): DAA times (a timed start, an IOC life, a day order) are
-      // counted from this moment, as the confirmation counts them back. The references are read again at the same time: the start of a market
-      // order is compared with what the other indexers report now.
-      const [read, clock, refs] = await Promise.all([
-        index === 0 ? freshEnv() : refresh(),
-        readClock(services).catch(() => null),
-        touchesOf().catch(() => ({ touches: [], unavailable: verifiers.map((v) => v.label) })),
-      ]);
-      if (!read) return stop(t('ticket.reviewNoEnv'));
-      const fresh = clock ? { ...read, clock } : read;
-      const p = planOrder(withRefs(fresh, refs), r.intents[index]!);
+      // the environment: the first level takes the one on hand when its oldest part is at most REVIEW_CACHE_MS old, else a read started at most
+      // REVIEW_REUSE_MS before the click; a later level of a ladder reads everything after the click (the level before has just spent coins)
+      const snap = index === 0 ? snapshot() : null;
+      const cached = snap && clickAt - snap.at <= REVIEW_CACHE_MS ? snap : null;
+      let base = cached ? cached.env : await (index === 0 ? since(clickAt - REVIEW_REUSE_MS) : refresh());
+      if (!base) return stop(t('ticket.reviewNoEnv'));
+      let fromCache = !!cached;
+      // the node clock at the click: DAA times (a timed start, an IOC life, a day order) count from it, as the confirmation counts them back; a
+      // node slower than CLOCK_WAIT_MS: the clock on hand projected to now (review-check.ts `projectClock`)
+      const { clock } = await reviewClock(() => readClock(services), base.clock, cached ? cached.clockAt : (snapshot()?.clockAt ?? clickAt), { waitMs: CLOCK_WAIT_MS });
+      const planWith = (e: PlanEnv, refs: References): OrderPlan => planOrder(withRefs({ ...e, clock }, refs), intent);
+      let p = planWith(base, touches.data ?? noRefs());
+      if ((!p.ok || !p.built || errors(p).length > 0) && fromCache) {
+        // the parts on hand cannot plan it (the holdings of a sell still being read, the book moved): plan from the state at the click instead
+        const fresh = await since(clickAt - REVIEW_REUSE_MS);
+        if (!fresh) return stop(t('ticket.reviewNoEnv'));
+        base = fresh;
+        fromCache = false;
+        p = planWith(base, verifiers.length ? await touchesOf().catch(noRefs) : (touches.data ?? noRefs()));
+      }
       if (!p.ok || !p.built || errors(p).length > 0) return stop(t('ticket.reviewChanged'));
       const title = laddered ? t('ticket.ladder.confirmTitle', { level: index + 1, levels, side: confirmSide, type: typeName }) : t('ticket.confirmTitle', { side: confirmSide, type: typeName });
       const label = orderLabel(form.type, form.side, laddered ? { level: index + 1, levels } : undefined, name);
-      // a warning that only the fresh data raised (the price moved, the depth shrank, a reference now disagrees) is shown on the confirmation
+      // a warning that only the data of this plan raised (the price moved, the depth shrank, a reference now disagrees) is shown on the confirmation
       const freshWarnings = newWarnings(shownPlan, p).map((i) => issueText(i, issueCtx));
+      // the re-check reads again only the parts that may no longer be the state at the click (review-check.ts rule 2; none when the environment was
+      // read after the click); the references of further indexers are always read again
+      const toRead = fromCache ? stale(clickAt) : [];
+      const settled = toRead.length === 0;
+      const id = ++confirmSeq.current;
       setConfirm({
-        built: p.built, expected: expectedFromPlan(p), title, label, shownAs: shownAsText(r.intents[index]!), freshWarnings,
+        id, recheck: settled && verifiers.length === 0 ? null : 'checking',
+        built: p.built, expected: expectedFromPlan(p), title, label, shownAs: shownAsText(intent), freshWarnings,
         ...(laddered && r.lines.length === levels ? { ladder: { lines: r.lines, current: index } } : {}),
       });
+      if (!settled || verifiers.length > 0) void recheck(id, p, intent, clock, base.fees, settled ? base : null, clickAt, toRead);
     } catch (e) {
       run.current = null;
       const raw = e instanceof Error ? e.message : String(e);
@@ -445,6 +475,26 @@ export function OrderTicket(props: OrderTicketProps) {
     } finally {
       setReviewing(false);
     }
+  };
+
+  /**
+   * The re-check of an open confirmation (review-check.ts rule 2): the same intent planned against the environment at the click (`env`: the one
+   * on hand already is; else `parts` read again from REVIEW_REUSE_MS before the click on) and the references read now, with the clock and the fees
+   * of the plan shown; signing stays blocked until it gives the same transaction with nothing new to say.
+   */
+  const recheck = async (id: number, shown: OrderPlan, intent: Intent, clock: Clock, fees: PlanEnv['fees'], env: PlanEnv | null, clickAt: number, parts: EnvWait[]): Promise<void> => {
+    let verdict: ConfirmState['recheck'];
+    try {
+      const [fresh, refs] = await Promise.all([env ? Promise.resolve(env) : since(clickAt - REVIEW_REUSE_MS, parts), touchesOf().catch(noRefs)]);
+      if (!fresh) verdict = { reasons: [t('ticket.reviewNoEnv')] };
+      else {
+        const v = recheckVerdict(shown, planOrder(withRefs({ ...fresh, clock, fees }, refs), intent));
+        verdict = v.ok ? null : { reasons: v.issues.map((i) => issueText(i, issueCtx)) };
+      }
+    } catch (e) {
+      verdict = { reasons: [buildErrorText(e instanceof Error ? e.message : String(e))] };
+    }
+    setConfirm((c) => (c && c.id === id ? { ...c, recheck: verdict } : c));
   };
 
   const review = async () => {
@@ -485,8 +535,12 @@ export function OrderTicket(props: OrderTicketProps) {
   if (enabled && envError) needs.push({ code: 'env', text: t('ticket.need.env'), tone: 'error', action: 'retry', raw: envError });
   if (crash) needs.push({ code: 'crash', text: t('ticket.need.crash'), tone: 'error', raw: crash });
   if (enabled && !envError && built.intent === null && built.errors.some((e) => e.code === 'required')) needs.push({ code: 'incomplete', text: t('ticket.need.incomplete'), tone: 'info' });
+  // what the ticket is still reading, named (Review cannot be enabled before; it is the moment the answers are in)
+  const holdingsShort = waiting.includes('holdings') && planErrors.some((i) => TOKEN_SHORT.has(i.code));
+  const stillReading: EnvWait[] = enabled && !envError ? (rawEnv ? (holdingsShort ? ['holdings'] : []) : waiting) : [];
+  if (stillReading.length) needs.push({ code: 'loading', text: t('ticket.need.loading', { what: stillReading.map((w) => t(`ticket.wait.${w}`)).join(', ') }), tone: 'info' });
 
-  const issues = shownPlan?.issues ?? [];
+  const issues = (shownPlan?.issues ?? []).filter((i) => !(holdingsShort && TOKEN_SHORT.has(i.code)));
   const START_CODES = ['MARKET_START_VS_LAST_FILL', 'MARKET_START_VS_INDEXER', 'MARKET_START_ACKNOWLEDGED', 'MARKET_START_UNVERIFIED', 'MARKET_START_UNVERIFIED_ACKNOWLEDGED'];
   const startIssue = issues.find((i) => START_CODES.includes(i.code));
   const startUnverified = startIssue?.code === 'MARKET_START_UNVERIFIED' || startIssue?.code === 'MARKET_START_UNVERIFIED_ACKNOWLEDGED';
@@ -746,6 +800,7 @@ export function OrderTicket(props: OrderTicketProps) {
           ladder={confirm.ladder}
           tokenPowers={props.powers}
           openToken={token.openList ? token : undefined}
+          recheck={confirm.recheck}
           onSubmitted={() => void refresh()}
           onClose={onConfirmClose}
         />

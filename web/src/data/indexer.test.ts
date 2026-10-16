@@ -392,6 +392,31 @@ describe('IndexerFeed', () => {
     expect(by('subscribed').length).toBeGreaterThanOrEqual(2);
   });
 
+  it('liveSince: from the confirmation of every channel on the open socket; a server resync restarts it, a close ends it', async () => {
+    const srv = await mkServer();
+    const feed = mkFeed(srv.base);
+    const log = record(feed);
+    const chans = [`book:${H1}`, `fills:${H1}`];
+    expect(feed.liveSince(chans)).toBeNull();
+    feed.subscribe([chans[0]!]);
+    feed.connect();
+    await until(() => log.some((l) => l.ev === 'subscribed'));
+    expect(feed.liveSince([chans[0]!])).not.toBeNull();
+    expect(feed.liveSince(chans)).toBeNull(); // one channel not confirmed yet
+    const before = Date.now();
+    feed.subscribe([chans[1]!]);
+    await until(() => feed.liveSince(chans) !== null);
+    expect(feed.liveSince(chans)!).toBeGreaterThanOrEqual(before);
+    // dropped notices: nothing is known to be complete before now
+    const t = Date.now();
+    srv.sessions[0]!.ws.send(JSON.stringify({ type: 'resync', data: { missed_events: 3 } }));
+    await until(() => log.some((l) => l.ev === 'resync'));
+    expect(feed.liveSince(chans)!).toBeGreaterThanOrEqual(t);
+    srv.sessions[0]!.ws.terminate();
+    await until(() => feed.status !== 'open');
+    expect(feed.liveSince(chans)).toBeNull();
+  });
+
   it('ignores malformed and unknown frames and keeps working; a throwing listener does not break the feed', async () => {
     const srv = await mkServer();
     const feed = mkFeed(srv.base);

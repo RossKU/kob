@@ -1,6 +1,7 @@
 // The chart's candle loads: the full series (MAX_BARS bars) on the first view and on a change of token, interval or orientation source, and after
 // that only the bars since the newest one on screen (`from` = its bucket start, inclusive: that bar may still be growing), merged into the cached
-// series. A live refresh then reads a handful of buckets instead of 1500 (the indexer scans only the window from `from`). Anything that could have
+// series. A live refresh then reads a handful of buckets instead of 1500 (the indexer scans only the window from `from`). Chart reads go at low
+// fetch priority (indexer.ts `RequestOptions.priority`): the order ticket's reads come first. Anything that could have
 // rewritten older bars (a reorg, a resync, a new price basis, an answer as long as the limit) takes the full load again.
 import type { CandleInterval, CandlesView, PairCandlesView } from '../../data/indexer-types';
 import type { IndexerApi } from '../../data/indexer';
@@ -43,32 +44,32 @@ function mergeKas(prev: CandlesView, next: CandlesView | null, from: number, lim
 
 async function loadFull(indexer: IndexerApi, src: ChartSource, interval: CandleInterval, signal: AbortSignal, limit: number): Promise<ChartView | null> {
   if ('token' in src) {
-    const v = await indexer.candles(src.token, { interval, limit }, { signal });
+    const v = await indexer.candles(src.token, { interval, limit }, { signal, priority: 'low' });
     return v ? { kind: 'kas', v } : null;
   }
   if (src.pairCandles) {
-    const pc = await indexer.pairCandles(src.base, src.quote, { interval, limit }, { signal });
+    const pc = await indexer.pairCandles(src.base, src.quote, { interval, limit }, { signal, priority: 'low' });
     if (pc) return { kind: 'pair', pc };
   }
   // both legs on the same interval and window
-  const [q, b] = await Promise.all([indexer.candles(src.quote, { interval, limit }, { signal }), indexer.candles(src.base, { interval, limit }, { signal })]);
+  const [q, b] = await Promise.all([indexer.candles(src.quote, { interval, limit }, { signal, priority: 'low' }), indexer.candles(src.base, { interval, limit }, { signal, priority: 'low' })]);
   return q && b ? { kind: 'usd', q, b } : null;
 }
 
 async function loadNewer(indexer: IndexerApi, src: ChartSource, prev: ChartView, from: number, interval: CandleInterval, signal: AbortSignal, limit: number): Promise<ChartView | null> {
   const q = { interval, from, limit };
   if (prev.kind === 'kas' && 'token' in src) {
-    const v = mergeKas(prev.v, await indexer.candles(src.token, q, { signal }), from, limit);
+    const v = mergeKas(prev.v, await indexer.candles(src.token, q, { signal, priority: 'low' }), from, limit);
     return v ? { kind: 'kas', v } : null;
   }
   if ('token' in src) return null;
   if (prev.kind === 'pair') {
-    const pc = await indexer.pairCandles(src.base, src.quote, q, { signal });
+    const pc = await indexer.pairCandles(src.base, src.quote, q, { signal, priority: 'low' });
     if (!pc || pc.price_basis !== prev.pc.price_basis || pc.quote_price_basis !== prev.pc.quote_price_basis || pc.items.length >= limit) return null;
     return { kind: 'pair', pc: { ...pc, items: mergeBars(prev.pc.items, pc.items, from, limit) } };
   }
   if (prev.kind === 'usd') {
-    const [nq, nb] = await Promise.all([indexer.candles(src.quote, q, { signal }), indexer.candles(src.base, q, { signal })]);
+    const [nq, nb] = await Promise.all([indexer.candles(src.quote, q, { signal, priority: 'low' }), indexer.candles(src.base, q, { signal, priority: 'low' })]);
     const mq = mergeKas(prev.q, nq, from, limit);
     const mb = mergeKas(prev.b, nb, from, limit);
     return mq && mb ? { kind: 'usd', q: mq, b: mb } : null;

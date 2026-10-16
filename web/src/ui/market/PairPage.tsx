@@ -85,7 +85,7 @@ export function PairPage(props: { base: string; quote: string }) {
   const stats = useAsync(
     async (signal) => {
       if (!indexer || !baseInfo || !quoteInfo) return null;
-      const [b, q] = await Promise.all([indexer.stats(props.base, { signal }), indexer.stats(props.quote, { signal })]);
+      const [b, q] = await Promise.all([indexer.stats(props.base, { signal, priority: 'low' }), indexer.stats(props.quote, { signal, priority: 'low' })]);
       // the end of the 24 h window: the newest chain time the indexer reports (the wall clock when it reports none)
       const ts = Math.max(b?.ts ?? 0, q?.ts ?? 0);
       return { key, ...usdStats({ stats: b, decimals: baseInfo.decimals }, { stats: q, decimals: quoteInfo.decimals }), refMs: ts > 0 ? ts : Date.now() };
@@ -121,7 +121,7 @@ export function PairPage(props: { base: string; quote: string }) {
     { refreshKey: liveKey },
   );
   // the pair's fills (volume only: amounts of A and B, counterparty, time) and the indexer's 24 h pair volume
-  const fills = useAsync((signal) => (indexer ? indexer.pairFills(props.base, props.quote, { limit: FILLS }, { signal }) : Promise.resolve(null)), [indexer, props.base, props.quote], {
+  const fills = useAsync((signal) => (indexer ? indexer.pairFills(props.base, props.quote, { limit: FILLS }, { signal, priority: 'low' }) : Promise.resolve(null)), [indexer, props.base, props.quote], {
     refreshKey: liveKey,
   });
 

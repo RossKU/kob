@@ -3,6 +3,8 @@
 .cf-intro { margin: 0; font-weight: 600; }
 .cf-note { color: var(--muted); font-size: 0.88rem; margin: 0 0 6px; }
 
+.cf-checking { display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
+.cf-checking .cf-findings { margin: 0; }
 .cf-blocking { border: 2px solid var(--bad); background: var(--bad-bg); border-radius: var(--radius); padding: 12px 14px; }
 .cf-blocking h3 { color: var(--bad); margin-bottom: 4px; }
 .cf-blocking p { margin: 0 0 8px; }

@@ -131,7 +131,8 @@ export async function startMockServer(opts = {}) {
   const { port = 8790, host = '127.0.0.1', seed = true, fund = false, history = false, pair = false, healthEveryMs = 15_000, log = () => {} } = opts;
   const kob = loadKobMock();
   const chain = new MockChain(kob, { network: opts.network, settleDepthDaa: opts.settleDepthDaa, daaPerSecond: opts.daaPerSecond, startDaa: opts.startDaa });
-  const ctl = { latencyMs: 0 };
+  // artificial latency of every API answer (`/mock/*` never waits): `latencyMs` plus a uniform `jitterMs`, on every route or only the indexer's (`/v1/*`)
+  const ctl = { latencyMs: 0, jitterMs: 0, scope: 'all' };
   // `GET /node/fee-estimate` answers this (null: the route is missing, 404, as on a node without getFeeEstimate)
   let feeEstimate = opts.feeEstimate === undefined ? { ...DEFAULT_FEE_ESTIMATE } : opts.feeEstimate;
   const sessions = new Set();
@@ -187,7 +188,8 @@ export async function startMockServer(opts = {}) {
     const path = url.pathname.replace(/\/+$/, '') || '/';
     const isNode = path.startsWith('/node/');
     try {
-      if (!path.startsWith('/mock/') && ctl.latencyMs > 0) await sleep(ctl.latencyMs);
+      const delayed = !path.startsWith('/mock/') && (ctl.scope === 'all' || path.startsWith('/v1/'));
+      if (delayed && ctl.latencyMs + ctl.jitterMs > 0) await sleep(ctl.latencyMs + Math.floor(Math.random() * ctl.jitterMs));
       const out = await route(req.method ?? 'GET', path, url.searchParams, req);
       reply(out.status ?? 200, out.body);
     } catch (e) {
@@ -282,6 +284,8 @@ export async function startMockServer(opts = {}) {
     if (post && path === '/mock/reset') {
       chain.reset();
       ctl.latencyMs = 0;
+      ctl.jitterMs = 0;
+      ctl.scope = 'all';
       feeEstimate = { ...DEFAULT_FEE_ESTIMATE };
       seedAll(body.seed !== false, body.fund === true, body.history ?? false, body.pair ?? false);
       return ok(summary(chain));
@@ -339,7 +343,9 @@ export async function startMockServer(opts = {}) {
     }
     if (post && path === '/mock/latency') {
       ctl.latencyMs = Math.max(0, Number(body.ms ?? 0));
-      return ok({ ms: ctl.latencyMs });
+      ctl.jitterMs = Math.max(0, Number(body.jitter_ms ?? 0));
+      ctl.scope = body.scope === 'indexer' ? 'indexer' : 'all';
+      return ok({ ms: ctl.latencyMs, jitter_ms: ctl.jitterMs, scope: ctl.scope });
     }
     if (post && path === '/mock/health') {
       chain.health = { state: String(body.state ?? 'following'), lagDaa: Number(body.lag_daa ?? 0) };

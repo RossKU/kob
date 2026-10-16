@@ -1,6 +1,6 @@
 // Indexer load of one open market page: a live fill refreshes every resource coalesced and the chart reads only its newest bars (`from=`), a
 // hidden tab neither refetches nor polls and catches up once shown, and Review reuses an environment read a moment ago instead of reading
-// everything again (with a "preparing" state on the button while it has to read).
+// everything again (an older one opens the confirmation at once and is re-checked before signing; ticket-latency.spec.ts times it).
 import type { Page, Request } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { TESTID } from '../testids';
@@ -73,7 +73,7 @@ test.describe('indexer load per viewer', () => {
     expect(reads.length).toBeGreaterThan(0);
   });
 
-  test('Review reuses an environment read a moment ago; an older one is read again behind a "preparing" button', async ({ appPage: page, mock }) => {
+  test('Review reuses an environment read a moment ago; an older one opens at once and is re-checked before signing', async ({ appPage: page, mock }) => {
     await fund(mock, 'alice');
     await openMarket(page, mock);
     await page.getByTestId('order-side-sell').click();
@@ -92,22 +92,43 @@ test.describe('indexer load per viewer', () => {
     await expect(page.getByTestId('confirm-screen')).toBeVisible();
     const reused = Date.now() - t0;
     expect(envReads, 'Review must not read the environment again').toHaveLength(0);
+    // that environment is the state at the click: no re-check holds the signature
+    await expect(page.getByTestId('confirm-checking-list').locator('[data-code="recheck-running"]')).toHaveCount(0);
     await page.getByTestId('confirm-cancel').click();
     await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
 
-    // a slow indexer and node (400 ms a request), an environment older than the reuse window: Review reads it again and says so meanwhile
+    // a slow indexer and node (400 ms a request), an environment older than the reuse window
     await mock.latency(400);
-    await waitReviewable(page);
-    await page.waitForTimeout(3_500);
-    envReads.length = 0;
-    const t1 = Date.now();
-    await page.getByTestId(TESTID.orderReview).click();
-    await expect(page.getByTestId(TESTID.orderReview)).toHaveAttribute('data-state', 'preparing');
-    await expect(page.getByTestId(TESTID.orderReview)).toContainText('Preparing');
-    await expect(page.getByTestId('confirm-screen')).toBeVisible();
-    const rebuilt = Date.now() - t1;
-    expect(envReads.length).toBeGreaterThan(0);
-    test.info().annotations.push({ type: 'review-latency', description: `reused ${reused} ms; rebuilt at 400 ms/request ${rebuilt} ms` });
-    await mock.latency(0);
+    try {
+      // the feed was live all along and sent no notice since: it still is the state at the click, nothing is read again
+      await waitReviewable(page);
+      await page.waitForTimeout(3_500);
+      envReads.length = 0;
+      await page.getByTestId(TESTID.orderReview).click();
+      await expect(page.getByTestId('confirm-screen')).toBeVisible();
+      await expect(page.getByTestId('confirm-checking-list').locator('[data-code="recheck-running"]')).toHaveCount(0);
+      expect(envReads).toHaveLength(0);
+      await page.getByTestId('confirm-cancel').click();
+      await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
+
+      // the book moved since (a notice, its read still on its way: an indexer at 3 s an answer): the confirmation still opens at once, and the
+      // signature waits for the re-check
+      const ask = (await mock.ordersOf('maker', 'active')).find((o: { side: number }) => o.side === 1);
+      await mock.latency(3_000, { scope: 'indexer' });
+      envReads.length = 0;
+      await mock.fill(ask!.covenant_id, 1000n);
+      await page.waitForTimeout(1_200);
+      const t1 = Date.now();
+      await page.getByTestId(TESTID.orderReview).click();
+      await expect(page.getByTestId('confirm-screen')).toBeVisible();
+      const opened = Date.now() - t1;
+      await expect(page.getByTestId('confirm-checking-list').locator('[data-code="recheck-running"]')).toBeVisible();
+      await page.getByTestId('confirm-ack').check();
+      await expect(page.getByTestId('confirm-sign')).toBeEnabled({ timeout: 15_000 });
+      expect(envReads.length).toBeGreaterThan(0);
+      test.info().annotations.push({ type: 'review-latency', description: `reused ${reused} ms; from an older environment at 400 ms/request ${opened} ms` });
+    } finally {
+      await mock.latency(0);
+    }
   });
 });

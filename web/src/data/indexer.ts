@@ -107,6 +107,11 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** overrides the client's default timeout, ms */
   timeoutMs?: number;
+  /**
+   * the browser's fetch priority: `low` for what only decorates the page (chart, stats, depth, tape), so the reads an order needs get a connection
+   * first when a slow indexer has every one of them busy (a browser opens about six per host over HTTP/1.1)
+   */
+  priority?: 'high' | 'low' | 'auto';
 }
 
 export interface OrdersQuery {
@@ -279,7 +284,7 @@ export class HttpIndexer implements IndexerApi {
       let res: Response;
       let text: string;
       try {
-        res = await this.f(url, { headers: { accept: 'application/json' }, signal: ctl.signal });
+        res = await this.f(url, { headers: { accept: 'application/json' }, signal: ctl.signal, ...(o.priority ? { priority: o.priority } : {}) });
         text = await readCapped(res, this.maxBodyBytes);
       } catch (e) {
         if (e instanceof BodyTooLarge) throw new IndexerError('parse', 0, 'too_large', `The indexer answered more than ${Math.round(this.maxBodyBytes / 1024)} KiB: not read.`);
@@ -588,6 +593,8 @@ export class IndexerFeed {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private readonly handlers = new Map<string, Set<(v: never) => void>>();
+  /** channel -> since when the server has confirmed it on the open socket without a gap (`liveSince`) */
+  private readonly live = new Map<string, number>();
 
   constructor(o: IndexerFeedOptions) {
     this.wsUrl = toFeedUrl(o.url);
@@ -632,6 +639,7 @@ export class IndexerFeed {
 
   private setStatus(s: FeedStatus): void {
     this.state = s;
+    if (s !== 'open') this.live.clear();
     this.emit('status', { status: s, attempt: this.attempt });
   }
 
@@ -730,7 +738,24 @@ export class IndexerFeed {
 
   unsubscribe(channels: string[]): void {
     const had = channels.map((c) => c.toLowerCase()).filter((c) => this.wanted.delete(c));
+    for (const c of had) this.live.delete(c);
     for (let i = 0; i < had.length; i += CHANNELS_PER_MESSAGE) this.send({ op: 'unsubscribe', channels: had.slice(i, i + CHANNELS_PER_MESSAGE) });
+  }
+
+  /**
+   * Since when every one of `channels` has been delivering its notices without a gap: the server confirmed it on the socket that is open now and
+   * has not reported dropped notices since (a resync restarts it). Null while the socket is not open or a channel is not confirmed. A read started
+   * after this moment is current until the next notice of these channels.
+   */
+  liveSince(channels: readonly string[]): number | null {
+    if (this.state !== 'open') return null;
+    let since = 0;
+    for (const c of channels) {
+      const t = this.live.get(c.toLowerCase());
+      if (t === undefined) return null;
+      since = Math.max(since, t);
+    }
+    return since;
   }
 
   /** Resolves once the socket is open (immediately if it already is). */
@@ -763,12 +788,17 @@ export class IndexerFeed {
     const ch = frame.channel ?? '';
     switch (frame.type) {
       case 'resync': {
+        // notices were dropped: nothing is known to be complete before now
+        const now = Date.now();
+        for (const c of this.live.keys()) this.live.set(c, now);
         const missed = (frame.data as { missed_events?: number } | undefined)?.missed_events;
         this.emit('resync', { reason: 'server', missedEvents: typeof missed === 'number' ? missed : undefined });
         return;
       }
       case 'subscribed': {
         const d = (frame.data ?? {}) as { channels?: string[]; errors?: string[] };
+        // the server lists every channel of the session: the first listing on this socket starts its unbroken run of notices
+        for (const c of d.channels ?? []) if (typeof c === 'string' && !this.live.has(c.toLowerCase())) this.live.set(c.toLowerCase(), Date.now());
         this.emit('subscribed', { channels: d.channels ?? [], errors: d.errors ?? [] });
         return;
       }

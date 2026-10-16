@@ -140,8 +140,9 @@ export class MockClient {
   failNextSubmit(message = 'mock: injected submit failure', count = 1) {
     return this.post('/mock/fail-next-submit', { message, count });
   }
-  latency(ms: number) {
-    return this.post('/mock/latency', { ms });
+  /** Every API answer waits `ms` (+ up to `jitterMs` more, uniform); `scope: 'indexer'` delays only the indexer (`/v1/*`), not the node. */
+  latency(ms: number, o: { jitterMs?: number; scope?: 'all' | 'indexer' } = {}) {
+    return this.post('/mock/latency', { ms, jitter_ms: o.jitterMs ?? 0, scope: o.scope ?? 'all' });
   }
   /** `following` | `catching_up` | `node_unavailable` | `gap` ... */
   setHealth(state: string, lagDaa = 0) {

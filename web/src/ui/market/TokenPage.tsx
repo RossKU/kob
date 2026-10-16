@@ -94,14 +94,15 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const trades = useAsync(
     async (signal) => {
       if (!indexer) return null;
-      const v = await indexer.trades(id, { limit: TAPE_LIMIT }, { signal });
+      // the tape, the stats and the depth decorate the page: low fetch priority, the order ticket's reads get a connection first
+      const v = await indexer.trades(id, { limit: TAPE_LIMIT }, { signal, priority: 'low' });
       if (v) return { kind: 'trades' as const, v };
-      return { kind: 'fills' as const, v: await indexer.fills({ token: id, limit: TAPE_LIMIT }, { signal }) };
+      return { kind: 'fills' as const, v: await indexer.fills({ token: id, limit: TAPE_LIMIT }, { signal, priority: 'low' }) };
     },
     [indexer, id],
   );
-  const stats = useAsync((signal) => (indexer ? indexer.stats(id, { signal }) : Promise.resolve(null)), [indexer, id]);
-  const depth = useAsync((signal) => (indexer ? indexer.depth(id, { levels: 60 }, { signal }) : Promise.resolve(null)), [indexer, id]);
+  const stats = useAsync((signal) => (indexer ? indexer.stats(id, { signal, priority: 'low' }) : Promise.resolve(null)), [indexer, id]);
+  const depth = useAsync((signal) => (indexer ? indexer.depth(id, { levels: 60 }, { signal, priority: 'low' }) : Promise.resolve(null)), [indexer, id]);
 
   // a live notice or a poll never aborts a pull in flight: it is folded into one pull right after it (`refresh`), so a slow indexer still gets its
   // answers through and is never asked twice for the same thing; only the manual button aborts and restarts

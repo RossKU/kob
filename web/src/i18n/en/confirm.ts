@@ -11,6 +11,8 @@ export default {
   'confirm.blockingText': 'Problems found: signing is disabled until they are gone.',
   'confirm.noWallet': 'Connect your wallet to sign.',
   'confirm.inputsChecking': 'Checking the inputs with the node...',
+  'confirm.recheckRunning': 'Re-checking this order against the book and your coins at the moment you clicked Review...',
+  'confirm.recheckChanged': 'The book or your coins changed since you clicked Review: this order would not be placed as shown. Close and review again.',
   'confirm.inputsUnavailable': 'The node could not confirm the inputs: the amounts here cannot be trusted. Try again.',
   'confirm.accountChanged': 'The wallet account changed (planned for {planned}, now {now}). Close this and plan the order again.',
   'confirm.networkMismatch': 'Wallet on {wallet}, app on {app}: switch the wallet network and try again.',

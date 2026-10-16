@@ -1,55 +1,44 @@
-// Data hooks of the order ticket: the planning environment (node clock + UTXOs + indexer book + own orders) kept fresh, and the debounced plan.
+// Data hooks of the order ticket: the planning environment kept fresh in the background, and the debounced plan.
+//
+// Responsiveness: typing only re-plans against the environment already on hand (synchronous), it never waits for the network. The environment is
+// read in parts that are kept fresh separately (app/env.ts): the MARKET (book per order, newest trade) as soon as the ticket is shown, with or
+// without a wallet, and on every book notice; the COINS (node clock, spendable KAS, fees: the node only, fast) and the HOLDINGS (token UTXOs, own
+// resting orders: the indexer) once a wallet is connected, every ENV_REFRESH_MS, on a fill of one of the wallet's orders and after every
+// submission. The ticket plans as soon as the market and the coins are there; holdings still being read count as none (a sell waits for them, a buy
+// does not), and Review re-checks against them before anything can be signed (OrderTicket, the freshness rule below).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
-import { buildPairPlanEnv, buildPlanEnv } from '../../app/env';
+import type { Services } from '../../app/services';
+import { assemblePlanEnv, buildPairPlanEnv, dropPendingSpends, readCoinsPart, readHoldingsPart, readMarketPart, tokenMarketOf, type CoinsPart, type HoldingsPart, type MarketPart } from '../../app/env';
 import type { Intent } from '../../kob/plan';
 import { planOrder } from '../../kob/plan';
 import type { OrderPlan, PlanEnv } from '../../kob/plan-types';
 import type { TokenInfo } from '../../kob/registry';
+import { pendingSpends } from '../../app/pending-spends';
 import { useInterval } from '../kit/hooks';
+import { partCurrent, type PartFacts } from './review-check';
 import { useLiveRefresh } from '../market/live';
 
 export const PLAN_DEBOUNCE_MS = 300;
-/** the environment is re-read at least this often (UTXOs and the book move; a feed event or a poll also triggers it); paused on a hidden page */
+/** every part of the environment is re-read at least this often (UTXOs and the book move; feed events also trigger reads); paused on a hidden page */
 export const ENV_REFRESH_MS = 20_000;
-/**
- * Review reuses an environment whose build started at most this long ago (or the build in flight) instead of reading everything again: the
- * transaction is still built from data a few seconds old at most, and the confirmation screen re-reads every input on the NODE before anything is
- * signed (kob/node-verify.ts), so a coin spent meanwhile blocks the signature instead of slipping through. The node clock is read anew at Review
- * (OrderTicket): DAA times are counted from the moment of the click, not from the reused read.
- */
-export const REVIEW_REUSE_MS = 3_000;
-
-export interface TicketEnv {
-  env: PlanEnv | null;
-  /** the environment could not be read (node unreachable ...): the message and a retry */
-  error: string | null;
-  loading: boolean;
-  /** re-reads everything now: the result reflects state read after the call (after a submission: the spent coins are gone) */
-  refresh(): Promise<PlanEnv | null>;
-  /** an environment read at most `maxAgeMs` ago (default REVIEW_REUSE_MS), else the build in flight, else a new build (`Serialized.fresh`) */
-  fresh(maxAgeMs?: number): Promise<PlanEnv | null>;
-}
 
 /**
  * Serialises a load: one run at a time; every call made during a run shares ONE follow-up run that starts after it ends, so its result
  * reflects state read after the call. A feed that fires faster than a load takes never starves the result (each run completes and is shown).
- * `fresh` reuses a recent result or the run in flight instead (Review); `invalidate` makes every run started before it unusable for that.
+ * Runs are timed by their START (when their reads began): `since(t)` waits only as long as needed for a result read at or after `t`.
  */
 export class Serialized<T> {
   private running: { p: Promise<T>; at: number } | null = null;
   private next: Promise<T> | null = null;
-  private last: { value: T; at: number } | null = null;
-  private notBefore = -Infinity;
+  private last: { value: T; at: number; doneAt: number } | null = null;
   private readonly now: () => number;
-  private readonly reusable: (v: T) => boolean;
 
   constructor(
     private readonly load: () => Promise<T>,
-    o: { now?: () => number; reusable?: (v: T) => boolean } = {},
+    o: { now?: () => number } = {},
   ) {
     this.now = o.now ?? Date.now;
-    this.reusable = o.reusable ?? (() => true);
   }
 
   run(): Promise<T> {
@@ -67,22 +56,25 @@ export class Serialized<T> {
     return this.next;
   }
 
-  /** Runs started before now (and their results) no longer count as fresh: the state they read is known to have changed (a submission). */
-  invalidate(): void {
-    this.notBefore = this.now();
+  /**
+   * A result whose run started at or after `t`: the newest one when it qualifies (at once), else the run in flight when it started at or after `t`,
+   * else a new run (or the follow-up already queued). Never a result read before `t`.
+   */
+  since(t: number): Promise<T> {
+    const l = this.last;
+    if (l && l.at >= t) return Promise.resolve(l.value);
+    if (this.running && this.running.at >= t) return this.running.p;
+    return this.run();
   }
 
-  /**
-   * A result at most `maxAgeMs` old (measured from the start of its run, when its reads began): the last one when it is that recent, else the run in
-   * flight (whatever its age: it is reading now, and waiting for it is never slower than queueing a new run behind it), else a new run (or the
-   * follow-up already queued). Nothing started before the last `invalidate` is reused, nor a result `reusable` rejects (a failure).
-   */
-  fresh(maxAgeMs: number): Promise<T> {
-    const now = this.now();
-    const l = this.last;
-    if (l && l.at >= now - maxAgeMs && l.at >= this.notBefore && this.reusable(l.value)) return Promise.resolve(l.value);
-    if (this.running && this.running.at >= this.notBefore) return this.running.p;
-    return this.run();
+  /** The newest successful result, with the start and the end of its run. */
+  latest(): { value: T; at: number; doneAt: number } | null {
+    return this.last;
+  }
+
+  /** A read is running or queued (a change is known to be on its way). */
+  busy(): boolean {
+    return !!this.running || !!this.next;
   }
 
   private start(): Promise<T> {
@@ -94,23 +86,50 @@ export class Serialized<T> {
       if (this.running === run) this.running = null;
     };
     p.then((value) => {
-      if (!this.last || this.last.at <= at) this.last = { value, at };
+      if (!this.last || this.last.at <= at) this.last = { value, at, doneAt: this.now() };
       clear();
     }, clear);
     return p;
   }
 }
 
-type EnvState = { env: PlanEnv | null; error: string | null; loading: boolean };
+/** A part of the environment the ticket is still waiting for (no answer yet): the status line says which. */
+export type EnvWait = 'market' | 'coins' | 'holdings' | 'pair';
 
-/**
- * The shared core of the two environment hooks: `build` re-runs on the interval (paused on a hidden page) and on `topics` feed events, serialised
- * (`Serialized`).
- */
-function useEnv(build: (() => Promise<PlanEnv>) | null, deps: unknown[], topics: string[], matches: (e: { token?: string | null }) => boolean): TicketEnv {
-  const services = useServices();
-  const [state, setState] = useState<EnvState>({ env: null, error: null, loading: false });
-  // a generation per (deps): a result of an earlier generation (another token, wallet gone) is dropped
+/** What the order ticket reads its environment through. */
+export interface TicketEnv {
+  /** the environment of the newest parts (null until the market and the coins are there); holdings not read yet count as none */
+  env: PlanEnv | null;
+  /** parts not read yet */
+  waiting: EnvWait[];
+  /** a part could not be read (node unreachable ...): the message and a retry */
+  error: string | null;
+  loading: boolean;
+  /** every part read again, starting now: the result reflects state read after the call (after a submission, a retry) */
+  refresh(): Promise<PlanEnv | null>;
+  /**
+   * A complete environment (holdings included) whose `parts` (default: all) were read at or after `t` (`Serialized.since`); the other parts as
+   * they are on hand.
+   */
+  since(t: number, parts?: readonly EnvWait[]): Promise<PlanEnv | null>;
+  /**
+   * The environment of the parts on hand, assembled NOW (so the spends of a submission made since are already left out), with the start of its
+   * oldest read (`at`), the end of its node read (`clockAt`: when its clock was read) and whether the holdings are in.
+   */
+  snapshot(): { env: PlanEnv; at: number; clockAt: number; complete: boolean } | null;
+  /** the parts on hand that may no longer be the state at `clickAt` (review-check.ts `partCurrent`): the re-check reads only these */
+  stale(clickAt: number): EnvWait[];
+}
+
+interface PartState<T> {
+  value: T | null;
+  error: string | null;
+  loading: boolean;
+}
+
+/** One part of the environment: a `Serialized` load per `deps` (a result of an earlier generation is dropped), its newest value as state. */
+function usePart<T>(load: (() => Promise<T>) | null, deps: unknown[]): [Serialized<T> | null, PartState<T>] {
+  const [state, setState] = useState<PartState<T>>({ value: null, error: null, loading: false });
   const gen = useRef(0);
   const alive = useRef(true);
   useEffect(() => {
@@ -119,72 +138,172 @@ function useEnv(build: (() => Promise<PlanEnv>) | null, deps: unknown[], topics:
       alive.current = false;
     };
   }, []);
-
   const runner = useMemo(() => {
     const g = ++gen.current;
-    if (!build) return null;
-    return new Serialized<PlanEnv | null>(
-      async () => {
-        if (alive.current && g === gen.current) setState((s) => ({ ...s, loading: true }));
-        try {
-          const env = await build();
-          if (alive.current && g === gen.current) setState({ env, error: null, loading: false });
-          return env;
-        } catch (e) {
-          if (alive.current && g === gen.current) setState((s) => ({ env: s.env, error: e instanceof Error ? e.message : String(e), loading: false }));
-          return null;
-        }
-      },
-      { reusable: (env) => env !== null },
-    );
+    if (!load) return null;
+    const mine = () => alive.current && g === gen.current;
+    return new Serialized<T>(async () => {
+      if (mine()) setState((s) => ({ ...s, loading: true }));
+      try {
+        const value = await load();
+        if (mine()) setState({ value, error: null, loading: false });
+        return value;
+      } catch (e) {
+        if (mine()) setState((s) => ({ value: s.value, error: e instanceof Error ? e.message : String(e), loading: false }));
+        throw e;
+      }
+    });
   }, deps);
-
-  // the background re-reads (interval, feed) only queue a run; an explicit refresh also makes everything read before it stale for `fresh`
-  const update = useCallback((): void => void runner?.run(), [runner]);
-  const refresh = useCallback(async (): Promise<PlanEnv | null> => {
-    if (!runner) return null;
-    runner.invalidate();
-    return runner.run();
-  }, [runner]);
-  const fresh = useCallback(async (maxAgeMs: number = REVIEW_REUSE_MS): Promise<PlanEnv | null> => (runner ? runner.fresh(maxAgeMs) : null), [runner]);
-
   useEffect(() => {
-    if (!runner) {
-      setState({ env: null, error: null, loading: false });
-      return;
-    }
-    update();
-  }, [runner, update]);
-  useInterval(update, ENV_REFRESH_MS, !!runner);
-
-  useLiveRefresh(services, topics, matches, update);
-
-  return { env: state.env, error: state.error, loading: state.loading, refresh, fresh };
+    if (!runner) setState({ value: null, error: null, loading: false });
+    else void runner.run().catch(() => undefined);
+  }, [runner]);
+  return [runner, state];
 }
 
-/** Keeps a PlanEnv for (wallet, token). `enabled` false (no wallet, wrong network, untradable token) stops all requests. */
+const quiet = (r: Serialized<unknown> | null): void => void r?.run().catch(() => undefined);
+const factsOf = (r: Serialized<unknown> | null, noticeAt: number): PartFacts => ({ at: r?.latest()?.at ?? null, busy: !!r?.busy(), noticeAt });
+
+/**
+ * When the newest notice that concerns a part arrived (0: none), recorded the moment it arrives, before the feed's debounce starts its read: a change
+ * known but not read yet makes the part stale (review-check.ts `partCurrent`). A reorg or a resync concerns every part.
+ */
+function useNoticeClock(feed: Services['feed']): { stamp(): void; at(): number } {
+  const at = useRef(0);
+  useEffect(() => {
+    if (!feed) return;
+    const stamp = () => void (at.current = Date.now());
+    const offs = [feed.on('reorg', stamp), feed.on('resync', stamp)];
+    return () => offs.forEach((off) => off());
+  }, [feed]);
+  return useMemo(() => ({ stamp: () => void (at.current = Date.now()), at: () => at.current }), []);
+}
+const maybe = <T,>(r: Serialized<T> | null, f: (r: Serialized<T>) => Promise<T>): Promise<T | null> => (r ? f(r) : Promise.resolve(null));
+
+/**
+ * Keeps the environment of (wallet, token)'s KAS market (see the head of this file). `enabled` false (no wallet, wrong network, untradable token)
+ * keeps only the market part, read once (so a wallet that connects plans at once), and stops every wallet read.
+ */
 export function useTicketEnv(token: TokenInfo, enabled: boolean): TicketEnv {
   const services = useServices();
   const pubkey = useWallet().info?.pubkey ?? null;
-  const build = enabled && pubkey ? () => buildPlanEnv(services, { pubkey }, token) : null;
-  // a book change or a poll while the socket is down: the book (FOK / self-trade checks, market prices) is part of the environment
-  return useEnv(build, [services, pubkey, token.covenantId, enabled], [`book:${token.covenantId}`], (e) => !e.token || e.token === token.covenantId);
+  const tradable = token.tradable && !!token.program;
+  const market = useMemo(() => (tradable ? tokenMarketOf(services, token) : null), [services, token.covenantId, tradable]);
+  const wallet = enabled && pubkey && market ? { pubkey } : null;
+
+  const [marketRun, marketState] = usePart<MarketPart>(market ? () => readMarketPart(services, market) : null, [services, market]);
+  const [coinsRun, coinsState] = usePart<CoinsPart>(wallet ? () => readCoinsPart(services, wallet) : null, [services, wallet?.pubkey]);
+  const [holdRun, holdState] = usePart<HoldingsPart>(wallet && market ? () => readHoldingsPart(services, wallet, token, market) : null, [services, wallet?.pubkey, market]);
+
+  // a wallet that connects (or comes back) reads the market again too: the part read without one may be minutes old
+  useEffect(() => {
+    if (wallet) void marketRun?.since(Date.now() - 5_000).catch(() => undefined);
+  }, [!!wallet]);
+  const walletParts = useCallback(() => {
+    quiet(coinsRun);
+    quiet(holdRun);
+  }, [coinsRun, holdRun]);
+  useInterval(() => {
+    quiet(marketRun);
+    walletParts();
+  }, ENV_REFRESH_MS, !!wallet);
+  // the book moved: the market part; a fill of one of the wallet's orders: its coins and holdings too (a payout, a smaller order)
+  const own = useRef<Set<string>>(new Set());
+  own.current = new Set((holdState.value?.ownOrders ?? []).map((o) => o.covenantId.toLowerCase()));
+  const bookNotice = useNoticeClock(services.feed);
+  const ownNotice = useNoticeClock(services.feed);
+  const noticed = (clock: { stamp(): void }, yes: boolean): boolean => (yes && clock.stamp(), yes);
+  useLiveRefresh(services, wallet ? [`book:${token.covenantId}`] : [], (e) => noticed(bookNotice, !e.token || e.token === token.covenantId), () => quiet(marketRun));
+  useLiveRefresh(services, wallet ? [`fills:${token.covenantId}`] : [], (e) => noticed(ownNotice, !!e.order && own.current.has(e.order.toLowerCase())), walletParts);
+
+  const env = useMemo(
+    () => (wallet && market && marketState.value && coinsState.value ? assemblePlanEnv(services, wallet, market, { market: marketState.value, coins: coinsState.value, holdings: holdState.value }) : null),
+    [wallet?.pubkey, market, marketState.value, coinsState.value, holdState.value],
+  );
+  const waiting: EnvWait[] = wallet
+    ? [...(marketState.value ? [] : (['market'] as const)), ...(coinsState.value ? [] : (['coins'] as const)), ...(holdState.value ? [] : (['holdings'] as const))]
+    : [];
+
+  const assemble = useCallback(
+    (m: MarketPart, c: CoinsPart, h: HoldingsPart | null): PlanEnv | null => (wallet && market ? assemblePlanEnv(services, wallet, market, { market: m, coins: c, holdings: h }) : null),
+    [wallet?.pubkey, market],
+  );
+  const since = useCallback(
+    async (t: number, parts: readonly EnvWait[] = ['market', 'coins', 'holdings']): Promise<PlanEnv | null> => {
+      // never a read older than a change known since \`t\`: one that started after the newest notice concerning the part and this page's newest submission
+      const one = <T,>(r: Serialized<T> | null, part: EnvWait, noticeAt: number): Promise<T | null> =>
+        maybe(r, (x) => {
+          const l = x.latest();
+          return parts.includes(part) || !l ? x.since(Math.max(t, noticeAt + 1, pendingSpends.lastAddedAt)) : Promise.resolve(l.value);
+        });
+      const [m, c, h] = await Promise.all([one(marketRun, 'market', bookNotice.at()), one(coinsRun, 'coins', ownNotice.at()), one(holdRun, 'holdings', ownNotice.at())]);
+      return m && c && h ? assemble(m, c, h) : null;
+    },
+    [marketRun, coinsRun, holdRun, assemble, bookNotice, ownNotice],
+  );
+  const refresh = useCallback(async (): Promise<PlanEnv | null> => {
+    const [m, c, h] = await Promise.all([maybe(marketRun, (r) => r.run()), maybe(coinsRun, (r) => r.run()), maybe(holdRun, (r) => r.run())]);
+    return m && c && h ? assemble(m, c, h) : null;
+  }, [marketRun, coinsRun, holdRun, assemble]);
+  const snapshot = useCallback(() => {
+    const m = marketRun?.latest();
+    const c = coinsRun?.latest();
+    const h = holdRun?.latest() ?? null;
+    const e = m && c ? assemble(m.value, c.value, h?.value ?? null) : null;
+    return e && m && c ? { env: e, at: Math.min(m.at, c.at, h?.at ?? Infinity), clockAt: c.doneAt, complete: !!h } : null;
+  }, [marketRun, coinsRun, holdRun, assemble]);
+  const stale = useCallback(
+    (clickAt: number): EnvWait[] => {
+      // the book's notices and the fills of the wallet's own orders are what would have started a newer read
+      const ctx = { liveSince: services.feed?.liveSince([`book:${token.covenantId}`, `fills:${token.covenantId}`]) ?? null, lastSubmitAt: pendingSpends.lastAddedAt };
+      const parts: [EnvWait, Serialized<unknown> | null, number][] = [['market', marketRun, bookNotice.at()], ['coins', coinsRun, ownNotice.at()], ['holdings', holdRun, ownNotice.at()]];
+      return parts.filter(([, r, n]) => !partCurrent(factsOf(r, n), clickAt, ctx)).map(([k]) => k);
+    },
+    [services, token.covenantId, marketRun, coinsRun, holdRun, bookNotice, ownNotice],
+  );
+
+  const error = wallet ? (coinsState.error ?? holdState.error ?? marketState.error) : null;
+  return { env, waiting, error, loading: marketState.loading || coinsState.loading || holdState.loading, refresh, since, snapshot, stale };
 }
 
 /**
- * Keeps a PairPlanEnv for (wallet, base A, quote B): both tokens' UTXOs, the pair book, own pair orders of the pair (app/env.ts `buildPairPlanEnv`).
- * A change of either token's book (`book:<A>`, `book:<B>`: a pair order notifies both) refreshes it.
+ * Keeps a PairPlanEnv for (wallet, base A, quote B): both tokens' UTXOs, the pair book, own pair orders of the pair (app/env.ts `buildPairPlanEnv`),
+ * read as one part. A change of either token's book (`book:<A>`, `book:<B>`: a pair order notifies both) refreshes it.
  */
 export function usePairTicketEnv(base: TokenInfo, quote: TokenInfo, enabled: boolean): TicketEnv {
   const services = useServices();
   const pubkey = useWallet().info?.pubkey ?? null;
-  const build = enabled && pubkey ? () => buildPairPlanEnv(services, { pubkey }, base, quote) : null;
-  return useEnv(
-    build,
-    [services, pubkey, base.covenantId, quote.covenantId, enabled],
-    [`book:${base.covenantId}`, `book:${quote.covenantId}`],
-    (e) => !e.token || e.token === base.covenantId || e.token === quote.covenantId,
+  const on = enabled && !!pubkey;
+  const [run, state] = usePart<PlanEnv>(on && pubkey ? () => buildPairPlanEnv(services, { pubkey }, base, quote) : null, [services, pubkey, base.covenantId, quote.covenantId, on]);
+  useInterval(() => quiet(run), ENV_REFRESH_MS, !!run);
+  const notice = useNoticeClock(services.feed);
+  useLiveRefresh(
+    services,
+    on ? [`book:${base.covenantId}`, `book:${quote.covenantId}`] : [],
+    (e) => {
+      const yes = !e.token || e.token === base.covenantId || e.token === quote.covenantId;
+      if (yes) notice.stamp();
+      return yes;
+    },
+    () => quiet(run),
   );
+  const since = useCallback(
+    async (t: number) => maybe(run, (r) => r.since(Math.max(t, notice.at() + 1, pendingSpends.lastAddedAt))).then((e) => (e ? dropPendingSpends(e) : null)),
+    [run, notice],
+  );
+  const refresh = useCallback(async () => maybe(run, (r) => r.run()).then((e) => (e ? dropPendingSpends(e) : null)), [run]);
+  const snapshot = useCallback(() => {
+    const l = run?.latest();
+    return l ? { env: dropPendingSpends(l.value), at: l.at, clockAt: l.doneAt, complete: true } : null;
+  }, [run]);
+  const stale = useCallback(
+    (clickAt: number): EnvWait[] => {
+      const ctx = { liveSince: services.feed?.liveSince([`book:${base.covenantId}`, `book:${quote.covenantId}`]) ?? null, lastSubmitAt: pendingSpends.lastAddedAt };
+      return partCurrent(factsOf(run, notice.at()), clickAt, ctx) ? [] : ['pair'];
+    },
+    [services, base.covenantId, quote.covenantId, run, notice],
+  );
+  return { env: on ? state.value : null, waiting: on && !state.value ? ['pair'] : [], error: on ? state.error : null, loading: state.loading, refresh, since, snapshot, stale };
 }
 
 export interface TicketPlan {

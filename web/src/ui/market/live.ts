@@ -51,7 +51,8 @@ export class LiveGate {
 export function useLiveRefresh(
   s: Pick<Services, 'feed' | 'indexer'>,
   channels: readonly string[],
-  relevant: (e: { token?: string | null }) => boolean,
+  /** `order`: the covenant id a fill notice names (fills only) */
+  relevant: (e: { token?: string | null; order?: string }) => boolean,
   refresh: (full: boolean) => void,
   pollMs: number = POLL_MS,
   o: { background?: boolean } = {},
@@ -91,7 +92,7 @@ export function useLiveRefresh(
     const offs = [
       feed.on('status', (e) => setStatus(e.status)),
       feed.on('book', (n) => relevantRef.current({ token: n.token }) && kick(false)),
-      feed.on('fill', (e) => relevantRef.current({ token: e.fill.token }) && kick(false)),
+      feed.on('fill', (e) => relevantRef.current({ token: e.fill.token, order: e.fill.order }) && kick(false)),
       feed.on('resync', () => kick(true)),
       feed.on('reorg', () => kick(true)),
       background

@@ -52,7 +52,7 @@ worker its own in-process server (and enables parallel runs). Ports: `KOB_MOCK_P
 * Control (`POST /mock/...`, JSON): `reset` (default seed; `{seed:false}` empty; `{history:{...}}` adds a history), `seed` (`{tokens, orders, book, fills,
   trades, history, utxos}`), `utxo` (give KAS / tokens),
   `fill` (a REAL transition: new order UTXO + script, shrunk custody, payouts; IFD entries book their exit child), `arm`, `stray` (`{covenant_id, amount, token?, program?, ticker?}`: `token` = a FOREIGN stray of another token, a new covenant id is registered as an unlisted token; stray views carry `program` and `foreign`), `advance-daa`,
-  `fail-next-submit`, `latency`, `health`, `reorg`, `resync`, `ws-close`; `GET /mock/submitted` (decoded summaries + the tx), `/mock/state`, `/mock/balance?key=`.
+  `fail-next-submit`, `latency` (`{ms, jitter_ms, scope: all | indexer}`: every API answer, or only `/v1/*`, waits ms + up to jitter_ms), `health`, `reorg`, `resync`, `ws-close`; `GET /mock/submitted` (decoded summaries + the tx), `/mock/state`, `/mock/balance?key=`.
 * Default seed: fictional token EXKCC (KCC20Ref_8x8, the 8/8 prototype kept as a fixture for the multi-slot paths; the
   issuance spec issues KOB's standard `KCC20Ref`; 8 decimals: order scale 1e8 base units per token; amounts in base units, prices in sompi per whole token), 10 price levels per side (best level holds 2 orders,
   maker = key `maker`), 8 finished orders with fills. Seeded orders are real (cancellable by their maker key). Nothing is funded
