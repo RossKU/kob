@@ -6,6 +6,7 @@
 //! | [`family`] | token families: per-program slot limits, the family adapters that lower plans |
 //! | [`candidate`] | orders normalised at `t`: quotes, eligibility, exclusions, priority classes, trigger evidence, updatable stops |
 //! | [`batch`] | the global batch planner: one transaction over every book and pair order (netting first, FOK / IOC, auctions, merges, stops triggered by the batch's own fills and the updates arming the others) |
+//! | [`auction`] | the auction tick of a fill: every auction leg at the earliest tick at which the batch pays (§3.3) |
 //! | [`planner`] | plan types (fills, updates) and settings, the physical limits, fee and update-cost estimates |
 //! | [`lower`] | plan → `kob_protocol` batch request, budgets, exact accounting |
 //! | [`chain`] | chained steps: the book after a transaction (continuations for the next transaction of the tick) |
@@ -18,6 +19,7 @@
 //! | [`run`] | the `kob-executor match` / `keep` loop, book sources, metrics |
 //! | [`cli`] | command-line arguments and entry points |
 
+pub mod auction;
 pub mod batch;
 pub mod book;
 pub mod candidate;

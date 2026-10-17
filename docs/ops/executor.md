@@ -1967,7 +1967,7 @@ nothing profitable crosses or the tick budget runs out (`matcher.md` §3, §7).
 
 | Step | Rule (matcher.md) |
 |---|---|
-| Quote every order at `t = DAA − 5` | §2.1 (decaying asks, rising bids, stop auctions, stop entries) |
+| Quote every order at `t = DAA − 5` (the lock time); price every auction leg of the built batch at its earliest profitable tick, never below its origin, never at a loss | §2.1 (decaying asks, rising bids, stop auctions, stop entries), §3.3 |
 | Drop expired, killed, 90-day-idle orders and day orders past their UTC `deadline` | §2.3 |
 | Class 1 (IOC, FOK, market, streaming) first, then armed stops, then resting crossings, then stops triggered by the batch's own plain fills | §3.1, §4 |
 | Price → tip → age within a class | §3.1 |

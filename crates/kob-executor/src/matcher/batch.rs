@@ -117,6 +117,9 @@ pub struct BatchInput<'a> {
     pub only: Option<&'a BTreeSet<BookKey>>,
     /// No fill is added after this instant.
     pub deadline: Option<Instant>,
+    /// Pair auctions quoted at an earlier tick than the lock time (§3.3, the engine's earliest-tick search,
+    /// [`super::auction`]): their fills carry that tick. None: every order at the lock time.
+    pub pair_ticks: Option<&'a BTreeMap<CovId, i64>>,
 }
 
 fn cmp_frac(a: (i128, i128), b: (i128, i128)) -> Ordering {
@@ -318,7 +321,14 @@ impl Universe {
         let orders: Vec<&ListedOrder> = inp.by_id.values().filter(|o| !inp.excluded.contains(&o.id())).collect();
         let supported = |m: &Market| inp.families.contains(&m.family) && token_limits(m.family, &m.template).is_some();
         let wanted = |b: &BookKey| supported(&b.market()) && inp.only.is_none_or(|s| s.contains(b));
-        let cx = CandCtx { t, utc: inp.utc, excluded: inp.excluded, by_id: inp.by_id, unaccepted: inp.unaccepted };
+        let cx = CandCtx {
+            t,
+            utc: inp.utc,
+            excluded: inp.excluded,
+            by_id: inp.by_id,
+            unaccepted: inp.unaccepted,
+            pair_ticks: inp.pair_ticks,
+        };
         let direct_orders: Vec<&ListedOrder> = orders.iter().copied().filter(|o| !o.order.state.is_pair()).collect();
         let mut direct: Vec<Cand> = candidates_of(&direct_orders, &cx)
             .into_iter()
@@ -2635,14 +2645,14 @@ fn plan_universe(u: &mut Universe, inp: &BatchInput, cfg: &PlannerConfig) -> Opt
     if al.seq.is_empty() || al.profit(cfg.fee_rate) < cfg.min_profit || !offenders(u, &al).is_empty() {
         return None;
     }
-    let plan = to_plan(u, &al, inp.lock_time, cfg);
+    let plan = to_plan(u, &al, inp.lock_time, inp.pair_ticks, cfg);
     if plan.fills.is_empty() {
         return None;
     }
     Some(plan)
 }
 
-fn to_plan(u: &Universe, al: &Alloc, lock: u64, cfg: &PlannerConfig) -> Plan {
+fn to_plan(u: &Universe, al: &Alloc, lock: u64, ticks: Option<&BTreeMap<CovId, i64>>, cfg: &PlannerConfig) -> Plan {
     // pair order fills lead the transaction (one per order: its primary leg carries the fill n), then the rest in
     // allocation order; surplus offers are no legs (their tokens are the netted orders')
     let mut order: Vec<usize> = vec![];
@@ -2670,7 +2680,10 @@ fn to_plan(u: &Universe, al: &Alloc, lock: u64, cfg: &PlannerConfig) -> Plan {
                 Some(&(e, eb)) => (at.get(&e).copied(), eb.and_then(|x| at.get(&x).copied())),
                 None => (al.ev_of.get(&i).and_then(|e| at.get(e).copied()), None),
             };
-            Fill { cand: u.cands[i].clone(), amount: al.qty[i], evidence, evidence_b }
+            // a pair auction quoted at an earlier tick (the engine's earliest-tick search) is priced there
+            let c = &u.cands[i];
+            let t = ticks.filter(|_| c.pair.is_some()).and_then(|m| m.get(&c.id)).map(|&x| x.clamp(0, lock as i64) as u64);
+            Fill { cand: c.clone(), amount: al.qty[i], evidence, evidence_b, t: t.filter(|&x| x < lock) }
         })
         .collect();
     let updates: Vec<PlanUpdate> = al

@@ -304,6 +304,16 @@ pub struct CandCtx<'a> {
     pub by_id: &'a BTreeMap<CovId, ListedOrder>,
     /// Orders whose UTXO is not accepted yet (a chained step): their DAA is unknown.
     pub unaccepted: &'a BTreeSet<CovId>,
+    /// Pair auctions quoted at an earlier tick than `t` (the engine's earliest-tick search, [`super::auction`]; at most `t`):
+    /// only their quote moves, their eligibility is judged at `t`. None: every order at `t`.
+    pub pair_ticks: Option<&'a BTreeMap<CovId, i64>>,
+}
+
+impl CandCtx<'_> {
+    /// The tick a pair order's auction is quoted at: its entry of [`CandCtx::pair_ticks`], never after `t`.
+    pub fn pair_tick(&self, id: &CovId) -> i64 {
+        self.pair_ticks.and_then(|m| m.get(id)).map_or(self.t, |&x| x.min(self.t))
+    }
 }
 
 /// Full redeem-script length of a template instance.

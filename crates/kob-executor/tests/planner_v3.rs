@@ -127,6 +127,7 @@ fn a_crossing_the_rounding_makes_lose_is_not_planned_and_the_margin_is_the_exact
             max_bytes: PHYSICAL_TX_BYTES,
             only: None,
             deadline: None,
+            pair_ticks: None,
         };
         plan_batch(&bi, &PlannerConfig { fee_rate: 0, ..PlannerConfig::default() }).expect("the main crossing is planned")
     };

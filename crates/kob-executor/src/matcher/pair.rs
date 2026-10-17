@@ -557,6 +557,8 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
     }
     let id = o.id();
     let udaa = o.utxo_daa() as i64;
+    // the tick its auction is quoted at (the engine's earliest-tick search may set an earlier one, §3.3); eligibility at t
+    let ta = cx.pair_tick(&id);
     let v = o.order.utxo.amount.min(i64::MAX as u64) as i64;
     let base = |kind, shape, state: AnyState| PairInfo {
         id,
@@ -593,7 +595,10 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
             if s.interval > 0 && t < udaa.saturating_add(s.interval) {
                 return out; // TWAP / DCA slice: the UTXO must be `interval` DAA old (CSV)
             }
-            let Some(p) = s.price_at(t, udaa) else { return out };
+            if s.slope != 0 && s.origin(udaa).is_none_or(|x| ta < x) {
+                return out; // never quoted before its auction starts (the covenant requires t >= origin)
+            }
+            let Some(p) = s.price_at(ta, udaa) else { return out };
             if p <= 0 {
                 return out;
             }
@@ -627,7 +632,7 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
             if x.fok && x.cap < s.amount_left {
                 return out;
             }
-            x.relaxing = s.slope != 0 && s.tif != TIF_GTC && s.price_at(t.saturating_add(1), udaa).is_some_and(|q| q != p);
+            x.relaxing = s.slope != 0 && s.tif != TIF_GTC && s.price_at(ta.saturating_add(1), udaa).is_some_and(|q| q != p);
             if s.slope == 0 {
                 let cdaa = o.custody.as_ref().map(|c| c.utxo.block_daa_score).unwrap_or(u64::MAX);
                 if cdaa != u64::MAX && cdaa as i64 <= t {
@@ -758,8 +763,8 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
             if s.stop_price > 0 && s.stop_price <= MAX_STOP_PRICE && (0..=10_000).contains(&s.slip_bps) {
                 if s.armed != 0 {
                     let origin = armed_origin(s.armed, udaa).unwrap_or(i64::MAX);
-                    if !(s.band_daa > 0 && t < origin) {
-                        if let Some(lp) = s.stop_at(false, t, udaa) {
+                    if !(s.band_daa > 0 && ta < origin) {
+                        if let Some(lp) = s.stop_at(false, ta, udaa) {
                             if let Some(x) = mk(1, lp, None) {
                                 out.push(x);
                             }
@@ -800,10 +805,10 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                     trigger = true;
                 } else if s.band_daa > 0 {
                     let origin = armed_origin(s.armed, udaa).unwrap_or(i64::MAX);
-                    if t < origin {
+                    if ta < origin {
                         return out;
                     }
-                    t_arg = t;
+                    t_arg = ta;
                 }
             }
             if s.rpt_amount > 0 && t_arg == 0 {

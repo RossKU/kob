@@ -94,6 +94,20 @@ impl Default for FundingConfig {
 /// Serialized bytes of one P2PK funding input with its signature script (outpoint, sequence, budget, 66-byte push).
 const FUNDING_INPUT_BYTES: u64 = 120;
 
+/// How far a built transaction is over its physical limits (the block masses) and the operator's byte cap (`knob`, 0:
+/// none): the largest ratio; above 1 it does not fit.
+fn overrun(l: &Lowered, a: &Accounting, knob: u64) -> f64 {
+    let m = l.built.fee.mass;
+    [
+        m.compute as f64 / BLOCK_COMPUTE_LIMIT as f64,
+        m.transient as f64 / BLOCK_TRANSIENT_LIMIT as f64,
+        m.storage as f64 / BLOCK_STORAGE_LIMIT as f64,
+        if knob > 0 { a.bytes as f64 / knob as f64 } else { 0.0 },
+    ]
+    .into_iter()
+    .fold(0.0, f64::max)
+}
+
 /// The funding of a batch from `pool` (in pool order): UTXOs until their sum reaches `need` (at least one, at most
 /// `max_inputs`); then, when `consolidate` and the pool holds more than `target_utxos` accepted UTXOs, up to
 /// `cfg.consolidate` of the smallest accepted ones not taken yet. Pure and deterministic.
@@ -417,6 +431,98 @@ impl<'a> Tick<'a> {
         report.prepared.iter().rev().map(|p| p.txid()).find(|t| ids.contains(t))
     }
 
+    /// The built batch with its auction legs at the earliest ticks at which it still pays (`docs/spec/matcher.md` §3.3,
+    /// [`super::auction`]): `built` is the batch as planned at the lock time, `build` lowers a plan at the batch's rate and
+    /// funding (None: refused, over the fee cap or over a physical limit). Every candidate is built and kept only when its
+    /// exact profit (with the kept inventory's value) is at least `min_profit`, and at least one sompi; otherwise `built`
+    /// goes as it is.
+    ///
+    /// 1. Pair auctions move token amounts: the books of the batch are planned again with their quotes at the same progress
+    ///    from their earliest ticks, the smallest progress at which the planner still fills each of them, and every
+    ///    immediate or triggered order of the batch, in full and the batch pays (bisection; the planner's fee estimate is
+    ///    corrected by what the built batch paid above it).
+    /// 2. KAS-book auctions keep the allocation: [`super::auction::earliest_ticks`] prices them against the batch's exact
+    ///    surplus; a build short of `min_profit` by a few sompi (a tick's push one byte longer) is retried with less.
+    fn earliest_ticks(
+        &self,
+        built: (Plan, Lowered, Accounting),
+        planned_ex: &BTreeSet<CovId>,
+        max_bytes: u64,
+        planner: &PlannerConfig,
+        build: &dyn Fn(&Plan) -> Option<(Lowered, Accounting)>,
+    ) -> (Plan, Lowered, Accounting) {
+        // an earlier tick never takes the batch to nothing: at least one sompi above the fee
+        let min = self.cfg.planner.min_profit.max(1);
+        let pays = |p: &Plan, a: &Accounting| a.profit.saturating_add(p.kept_value()) >= min;
+        let lock = self.lock as i64;
+        let mut best = built;
+        // 1. pair auctions, planned again
+        let pairs: Vec<(CovId, i64)> = best
+            .0
+            .fills
+            .iter()
+            .filter_map(|f| Some((f.cand.id, super::auction::pair_auction_from(f, self.by_id.get(&f.cand.id)?, lock)?)))
+            .collect();
+        if !pairs.is_empty() {
+            // what the planner's fee estimate fell short of the built fee (the rate the batch goes at included)
+            let short = (best.2.fee.min(i64::MAX as u64) as i64).saturating_sub(best.0.est_fee).max(0);
+            let want = min.saturating_add(short);
+            // the orders that must keep their fills: the pair auctions and every immediate or triggered order of the batch
+            let keep: Vec<(CovId, i64)> = best
+                .0
+                .fills
+                .iter()
+                .filter(|f| f.cand.class != Class::Resting || pairs.iter().any(|p| p.0 == f.cand.id))
+                .map(|f| (f.cand.id, best.0.amount_of(&f.cand.id)))
+                .collect();
+            let books = best.0.books();
+            let span = pairs.iter().map(|p| lock - p.1).max().unwrap_or(0);
+            let mut found: Option<Plan> = None;
+            super::auction::first_paying(span, |e| {
+                if self.out_of_time() {
+                    return false;
+                }
+                let ticks: BTreeMap<CovId, i64> = pairs.iter().map(|p| (p.0, super::auction::tick_at(p.1, e, lock))).collect();
+                let bi = BatchInput {
+                    by_id: &self.by_id,
+                    lock_time: self.lock,
+                    utc: self.inp.clock.utc,
+                    excluded: planned_ex,
+                    unaccepted: &self.unaccepted,
+                    families: &self.fams,
+                    max_bytes,
+                    only: Some(&books),
+                    deadline: self.plan_deadline(),
+                    pair_ticks: Some(&ticks),
+                };
+                match plan_batch(&bi, planner) {
+                    Some(p) if p.profit() >= want && keep.iter().all(|k| p.amount_of(&k.0) >= k.1) => {
+                        found = Some(p);
+                        true
+                    }
+                    _ => false,
+                }
+            });
+            if let Some(p) = found {
+                if let Some((l, a)) = build(&p).filter(|(_, a)| pays(&p, a)) {
+                    best = (p, l, a);
+                }
+            }
+        }
+        // 2. KAS-book auctions, priced against the exact surplus
+        let mut budget = best.2.profit.saturating_add(best.0.kept_value()).saturating_sub(min);
+        for _ in 0..3 {
+            let Some(p) = super::auction::earliest_ticks(&best.0, &self.by_id, self.lock, budget) else { break };
+            let Some((l, a)) = build(&p) else { break };
+            if pays(&p, &a) {
+                return (p, l, a);
+            }
+            let short = min.saturating_sub(a.profit.saturating_add(p.kept_value()));
+            budget = budget.saturating_sub(short.max(1));
+        }
+        best
+    }
+
     /// Plans, builds, signs and validates the next batch of the tick. `extra` orders are left out (isolation); `last_plan`
     /// receives the order ids of the latest plan attempted (isolation of a panic after planning).
     fn batch(&self, step: usize, extra: &BTreeSet<CovId>, report: &mut TickReport, last_plan: &mut Vec<CovId>) -> Batch {
@@ -461,14 +567,15 @@ impl<'a> Tick<'a> {
                 max_bytes,
                 only: None,
                 deadline: self.plan_deadline(),
+                pair_ticks: None,
             };
-            let (plan, work) = if self.inventory_used == cfg.planner.inventory.used {
-                plan_batch_counted(&bi, &cfg.planner)
-            } else {
+            let own = (self.inventory_used != cfg.planner.inventory.used).then(|| {
                 let mut planner = cfg.planner.clone();
                 planner.inventory.used = self.inventory_used.clone();
-                plan_batch_counted(&bi, &planner)
-            };
+                planner
+            });
+            let planner = own.as_ref().unwrap_or(&cfg.planner);
+            let (plan, work) = plan_batch_counted(&bi, planner);
             report.work.add(work);
             let Some(plan) = plan else { break };
             *last_plan = plan.fills.iter().map(|f| f.cand.id).collect();
@@ -586,15 +693,7 @@ impl<'a> Tick<'a> {
             // The physical limits of the built transaction (the plan's byte estimate is only an estimate): scale the budget
             // down by the overrun and plan again.
             let m = lowered.built.fee.mass;
-            let knob = cfg.planner.max_tx_bytes;
-            let over: f64 = [
-                m.compute as f64 / BLOCK_COMPUTE_LIMIT as f64,
-                m.transient as f64 / BLOCK_TRANSIENT_LIMIT as f64,
-                m.storage as f64 / BLOCK_STORAGE_LIMIT as f64,
-                if knob > 0 { acct.bytes as f64 / knob as f64 } else { 0.0 },
-            ]
-            .into_iter()
-            .fold(0.0, f64::max);
+            let over = overrun(&lowered, &acct, cfg.planner.max_tx_bytes);
             if over > 1.0 {
                 let shrunk = ((plan.est_bytes as f64 / over) * 0.97) as u64;
                 if plan.fills.len() > 1 && shrunk < plan.est_bytes && shrunk > 0 {
@@ -628,6 +727,26 @@ impl<'a> Tick<'a> {
                     _ => break,
                 }
             }
+            // §3.3: the auction legs at the earliest ticks at which the batch still pays its fee (at the rate it is built at)
+            // and `min_profit`, not at the lock time: a market order fills at about its start price whatever the matcher's
+            // latency. The batch is built again that way and kept only when it is exactly as profitable as required and
+            // within every limit; otherwise it goes as planned.
+            let build = |p: &Plan| -> Option<(Lowered, Accounting)> {
+                let cx = LowerCtx {
+                    budget_floor: floor.clone(),
+                    by_id: &self.by_id,
+                    funding: funding.clone(),
+                    operator: self.operator,
+                    fee_rate: rate,
+                    token_carrier: cfg.token_carrier,
+                    keep_carrier: cfg.planner.inventory.keep_carrier,
+                };
+                let l = adapter.lower(p, &cx).ok()?;
+                let a = accounting(&l, &funding);
+                (cfg.fees.capped(rate, l.built.fee.fee, cap_floor).is_none() && overrun(&l, &a, cfg.planner.max_tx_bytes) <= 1.0)
+                    .then_some((l, a))
+            };
+            let (plan, lowered, acct) = self.earliest_ticks((plan, lowered, acct), &planned_ex, max_bytes, planner, &build);
             match sign_and_validate(&lowered, self.signer, cfg.validate, self.validator) {
                 Ok((signed, validation)) => {
                     report.cleared.extend(plan.fills.iter().map(|f| f.cand.id));
@@ -781,6 +900,7 @@ impl<'a> Tick<'a> {
                     max_bytes: self.cfg.planner.tx_byte_budget(),
                     only: Some(&only),
                     deadline: self.plan_deadline(),
+                    pair_ticks: None,
                 };
                 if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| plan_batch(&bi, &self.cfg.planner))).is_err() {
                     books_of.insert(k);
@@ -940,6 +1060,7 @@ fn select_units(tk: &mut Tick, sel: &TickSelect, report: &mut TickReport) -> Opt
             max_bytes: u64::MAX,
             only: None,
             deadline,
+            pair_ticks: None,
         };
         let cfg = &tk.cfg.planner;
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work_units(&bi, cfg))).ok()?

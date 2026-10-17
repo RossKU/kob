@@ -177,8 +177,10 @@ and trigger state.
 
 ### 2.1 Quote at time t
 
-`t` is the DAA score the matcher will prove with the transaction's lockTime (CLTV). Every quote is in the order's quote
-token per whole base token (`scale` base units): sompi for the KAS books, base units of B per whole A for a pair order.
+`t` is the auction time a fill proves: an argument of the fill that the covenant checks against the transaction's
+lockTime (CLTV, `tx.daa ≥ t`) and against the auction's origin (`t ≥ origin`). The planner quotes every order at
+`t = lockTime`; the reference matcher then prices each auction leg at its own earliest profitable tick (§3.3). Every quote is
+in the order's quote token per whole base token (`scale` base units): sompi for the KAS books, base units of B per whole A for a pair order.
 The rows apply to the pair kinds alike, in B (a `KobPair` ask decays like an ask, a bid rises like a bid; a
 `KobCondPair` has the legs of the conditional of its side; a `KobIfdPair` stop entry the entry auction).
 
@@ -383,13 +385,40 @@ pure function of the view, `t` and the configuration up to the deadline, so two 
 
 ### 3.3 Auctions (market, pair market, marketable limit, stop, stop entry, TWAP / DCA slices)
 
-For an auction order the matcher MUST pick `t = lockTime = current DAA score − safety margin`
-(default 5 DAA) and fill at the earliest tick at which the cross is profitable. Understating `t`
-only raises an ask's (lowers a bid's) quote and is self-defeating. Competition between matchers
-is what gives the maker the market price instead of the bound. A pair market order (a `KobPair` IOC auction, decaying
-for an ask, rising for a bid) is the same: its quote at `t` (§2.1) prices it, so it enters the batch at the first tick at
-which an opposite pair order or its route through the two KAS books pays (§3.2); an ask receives at least
-`⌈n·p(t)/scale(A)⌉` of B, a bid pays exactly `⌊n·p(t)/scale(A)⌋`.
+Every auction covenant takes its auction time `t` as an argument of the fill and checks `t ≥ origin` (the auction's
+start: `activeFrom`, a TWAP / DCA slice's opening, an armed stop's or stop entry's arming origin) and `tx.daa ≥ t`
+(CLTV, through the transaction's lockTime). Any `t` in `[origin, lockTime]` is a valid fill, each auction leg of one
+transaction carries its own, and a lower `t` only raises an ask's (lowers a bid's) quote, in the maker's favour.
+
+**Reference policy: the earliest profitable tick.** The matcher plans every batch at `lockTime = current DAA score −
+safety margin` (default 5 DAA): the walks cross every order at its quote there (§2.1), so an auction enters a batch at the
+first tick at which it pays at all. It then prices each auction leg of the built batch at the *earliest* tick `t ≥
+origin` at which the batch still pays its network fee (at the rate it is built at), every carrier and mass it needs and
+`min_profit` (at least one sompi), not at the lock time: a rising bid pays the lowest price that covers the batch's
+costs, a decaying ask receives the highest. The reason: the maker of a market order gets the auction's start price plus
+about its share of the fee whenever the start already crosses the book, and the matcher's latency (the time the order
+waits for a block, the tick, the safety margin) no longer costs the maker; under the former lock-time pricing a market buy
+on TN10 paid 0.23–0.85% above a start price that already crossed.
+
+- **KAS-book auctions** (decaying `KobAsk`, rising `KobBid`, TWAP / DCA slices, armed stop legs of `KobCondAsk` /
+  `KobCondBid` and armed stop entries of `KobIfdBid` / `KobIfdAsk` while their band opens) keep the planned allocation,
+  the same fills of the same orders: moving `t` changes only the KAS the leg pays or receives (every output of the maker
+  only grows), so the ticks are priced with the covenants' own amounts against the built batch's exact surplus. An IOC
+  keeps the largest fill the book allows at the lock time; a market buy that takes several asks pays about what they cost
+  plus its fee share, not the quote of the deepest one (a market sell alike).
+- **Pair auctions** (`KobPair` market and Dutch orders, armed `KobCondPair` stop legs, armed `KobIfdPair` stop entries)
+  move token amounts: the books of the batch are planned again with their quotes at earlier ticks, and the earliest at
+  which the planner still fills each of them, and every immediate or triggered order of the batch, in full and
+  profitably is kept. An ask receives at least `⌈n·p(t)/scale(A)⌉` of B, a bid pays exactly `⌊n·p(t)/scale(A)⌋`.
+- **Several auctions of one batch** move together: each at `t = min(lockTime, from + e)` from its earliest tick `from`
+  (its origin, never before `activeFrom`), with the smallest common progress `e` at which the batch pays. Every leg's KAS
+  only grows with its `t`, so the search is a bisection.
+- **Never at a loss.** Every candidate is built again and kept only when its exact profit (the change less the funding,
+  with the kept inventory's value) is at least `min_profit` and at least one sompi, and it fits every physical limit and
+  the fee cap; otherwise the batch goes at the lock time. No `t` is below an auction's origin or its `activeFrom`.
+
+The policy is the reference executor's, not consensus: a competing matcher may prove any `t` the covenant accepts, and
+competition between matchers is what keeps any of them from taking more than the cost of the fill.
 
 ### 3.4 Oversize FOK and IOC
 
@@ -1282,7 +1311,8 @@ tick. Planning time with pair books is not measured.
 
 - FOK never partially included; IOC maximal; oversize FOK rejected by the wallet.
 - IOC / FOK refunded within one block after the kill time.
-- Auctions filled at the first profitable t.
+- Auctions filled at the first tick at which they pay, each leg priced at the earliest profitable tick of its batch
+  (§3.3), never below its origin and never at a loss.
 - Every fill at least the order's `minFill` unless it takes everything left (a `KobBid`: unless it terminates); every
   amount the covenants check recomputed with their rounding (`quoteOf`).
 - Touch trigger (§4): stops, trailing stops and stop entries armed or ratcheted only in a batch that

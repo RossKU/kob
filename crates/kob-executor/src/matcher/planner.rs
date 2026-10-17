@@ -357,6 +357,9 @@ pub struct Fill {
     pub evidence: Option<usize>,
     /// A pair stop armed by two KAS-book fills (mode 0): the fill of B.
     pub evidence_b: Option<usize>,
+    /// The auction time the fill is priced at (§3.3: the earliest tick at which the batch pays, [`super::auction`]); its
+    /// quote is the auction's there. None: the lock time.
+    pub t: Option<u64>,
 }
 
 /// What an update does to its order.

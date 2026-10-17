@@ -217,7 +217,7 @@ fn best_bid(inp: &MaintenanceInput, g: &Group, held: i64, t: i64) -> Option<(Lis
         .collect();
     let by_id: BTreeMap<CovId, ListedOrder> = mine.iter().map(|o| (o.id(), (*o).clone())).collect();
     let none = BTreeSet::new();
-    let cx = CandCtx { t, utc: inp.clock.utc, excluded: &inp.excluded, by_id: &by_id, unaccepted: &none };
+    let cx = CandCtx { t, utc: inp.clock.utc, excluded: &inp.excluded, by_id: &by_id, unaccepted: &none, pair_ticks: None };
     let mut best: Option<(i128, i128, u64, CovId, usize, i64, i64)> = None;
     for c in candidates_of(&mine, &cx) {
         if c.side != Side::Bid || !c.is_plain() || c.trigger.is_some() {
@@ -265,7 +265,7 @@ fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i
         .collect();
     let by_id: BTreeMap<CovId, ListedOrder> = mine.iter().map(|o| (o.id(), (*o).clone())).collect();
     let none = BTreeSet::new();
-    let cx = CandCtx { t, utc: inp.clock.utc, excluded: &inp.excluded, by_id: &by_id, unaccepted: &none };
+    let cx = CandCtx { t, utc: inp.clock.utc, excluded: &inp.excluded, by_id: &by_id, unaccepted: &none, pair_ticks: None };
     let mut asks: Vec<(i128, i128, i64)> = candidates_of(&mine, &cx)
         .into_iter()
         .filter(|c| c.side == Side::Ask && c.is_plain() && c.trigger.is_none() && c.cap > 0)

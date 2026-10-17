@@ -967,3 +967,106 @@ fn live_pair_orders_a_sliver_above_whole_tokens_of_b_fill_alone_and_together() {
     assert_eq!(bought(&r), 46_100, "4 x 5.76 + 4 x 5.765 = 46.1 whole B, exactly");
     assert!(r.prepared[0].accounting.profit > 0);
 }
+
+// ------------------------------------------------------------------ the earliest profitable tick of pair auctions (§3.3)
+
+/// The tick (relative to `from`) at which the pair order X is filled in `r`, its fill's tick inside the batch's lock time.
+fn pair_tick(r: &TickReport, from: i64) -> i64 {
+    let p = r.prepared.iter().find(|p| p.plan.amount_of(&cid(X)) > 0).expect("the pair order is filled");
+    let f = p.plan.fills.iter().find(|f| f.cand.id == cid(X)).expect("its fill");
+    let lock = p.plan.lock_time as i64;
+    let t = f.t.map_or(lock, |x| x as i64);
+    assert!(from <= t && t <= lock, "tick {t} outside [{from}, {lock}]");
+    let b = batch_request(p);
+    let k = p.plan.fills.iter().position(|f| f.cand.id == cid(X)).unwrap();
+    let lt = match &b.legs[k] {
+        kob_protocol::build::Leg::Pair { t, .. }
+        | kob_protocol::build::Leg::CondPair { t, .. }
+        | kob_protocol::build::Leg::IfdPair { t, .. } => *t,
+        _ => panic!("a pair leg"),
+    };
+    assert_eq!(lt, f.t.map(|x| x as i64), "the builder proves the same tick");
+    assert!(p.accounting.profit >= 1, "the batch pays");
+    t - from
+}
+
+/// Every latency in `late` (DAA into the auction when the matcher acts) fills the pair order at the same progress `k` from
+/// its earliest tick, within a tick of the first lock-time progress `e0` at which the planner fills it at all (`scene(e)`:
+/// the book `e` DAA into the auction); returns `(k, the report at the last latency)`.
+fn same_tick_whatever_the_latency(scene: impl Fn(i64) -> Vec<ListedOrder>, late: &[i64]) -> (i64, TickReport) {
+    let (e0, _) = first_fill(&scene).expect("the auction reaches a profitable point");
+    let mut out = None;
+    for &e in late {
+        assert!(e > e0 + 1);
+        let r = run_pair(scene(e), &cfg());
+        let k = pair_tick(&r, NOW as i64 - e);
+        assert!((e0 - 1..=e0 + 1).contains(&k), "progress {k} at a latency of {e}, first profitable {e0}");
+        if let Some((k0, _)) = &out {
+            assert_eq!(k, *k0, "the same tick whatever the latency");
+        }
+        out = Some((k, r));
+    }
+    out.expect("latencies")
+}
+
+#[test]
+fn a_late_pair_market_order_is_priced_at_the_first_profitable_point_of_its_auction() {
+    // the scenes of the first-profitable-point test, the matcher acting 60 or 150 DAA into the auctions: the route buys /
+    // sells exactly 10 x the rate at that point, not at the lock time
+    let ask = |elapsed: i64| {
+        vec![
+            pair_market_ask(1_510, 1_200, 2, elapsed, 10),
+            l_bid_a(100, T8, 2, 300_000_000, 10 * WHOLE),
+            l_ask_b(200, T8, T8, 3, P200, 20 * WHOLE),
+        ]
+    };
+    let (k, r) = same_tick_whatever_the_latency(ask, &[60, 150]);
+    assert_eq!(amount_in(&r, cid(X)), 10 * WHOLE);
+    assert_eq!(amount_in(&r, cid(200)), 10 * (1_510 - 2 * k), "the exact B at the auction's rate there");
+    assert!(pays_at_input(&r.prepared[0], cid(X), T8, 10 * (1_510 - 2 * k), 1));
+    let bid = |elapsed: i64| {
+        vec![
+            pair_market_bid(1_100, 1_500, 2, elapsed, 10),
+            l_bid_b(100, T8, T8, 2, P200, 60 * WHOLE),
+            l_ask_a(200, T8, 3, P250, 20 * WHOLE),
+        ]
+    };
+    let (k, r) = same_tick_whatever_the_latency(bid, &[150, 200]);
+    assert_eq!(amount_in(&r, cid(X)), 10 * WHOLE);
+    assert_eq!(amount_in(&r, cid(100)), 10 * (1_100 + 2 * k), "the exact B it pays at the auction's rate there");
+}
+
+#[test]
+fn armed_pair_stops_and_pair_stop_entries_take_their_earliest_profitable_tick() {
+    // an armed pair sell stop at 1,500 B per A (3% band over 300 DAA from its UTXO's DAA) routed through a bid of A at 3.00 and
+    // an ask of B at 2.00
+    let stop = |elapsed: i64| {
+        let c = CondPairState { armed: 1, ..cond_pair(1, true, T8, T8, 10 * WHOLE, 0, 1_500) };
+        vec![
+            l_cond_pair(X, T8, T8, c, NOW - elapsed as u64),
+            l_bid_a(100, T8, 2, 300_000_000, 10 * WHOLE),
+            l_ask_b(200, T8, T8, 3, P200, 20 * WHOLE),
+        ]
+    };
+    let (k, r) = same_tick_whatever_the_latency(stop, &[100, 250]);
+    let c = CondPairState { armed: 1, ..cond_pair(1, true, T8, T8, 10 * WHOLE, 0, 1_500) };
+    let rate = c.stop_at(false, k, 0).expect("band");
+    assert!(rate < 1_500);
+    assert_eq!(amount_in(&r, cid(200)), 10 * rate);
+    // an armed buy-first stop entry rising from 1,200 to its 1,300 limit over 300 DAA, routed through a bid of B at 2.00 and
+    // an ask of A at 2.50
+    let entry = |elapsed: i64| {
+        let mut s = IfdPairState { entry_stop: 1_200, armed: 1, ..ifd_pair(1, true, T8, T8, 10 * WHOLE, 1_300) };
+        s.custody = s.b_custody_needed().expect("custody");
+        vec![
+            l_ifd_pair(X, T8, T8, s, NOW - elapsed as u64),
+            l_bid_b(100, T8, T8, 2, P200, 60 * WHOLE),
+            l_ask_a(200, T8, 3, P250, 20 * WHOLE),
+        ]
+    };
+    let (k, r) = same_tick_whatever_the_latency(entry, &[230, 280]);
+    let s = IfdPairState { entry_stop: 1_200, armed: 1, ..ifd_pair(1, true, T8, T8, 10 * WHOLE, 1_300) };
+    let rate = s.price_at(false, k, 0).expect("auction");
+    assert!(rate > 1_200 && rate < 1_300);
+    assert_eq!(amount_in(&r, cid(100)), 10 * rate);
+}

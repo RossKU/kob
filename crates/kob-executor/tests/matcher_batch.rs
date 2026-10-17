@@ -333,6 +333,7 @@ fn the_batch_is_a_pure_function_of_the_view_t_and_the_configuration() {
                 max_bytes: PHYSICAL_TX_BYTES,
                 only: None,
                 deadline: None,
+                pair_ticks: None,
             },
             &PlannerConfig::default(),
         )
@@ -432,6 +433,7 @@ fn time_plan(orders: &[ListedOrder]) -> (Duration, usize) {
             max_bytes: PHYSICAL_TX_BYTES,
             only: None,
             deadline: None,
+            pair_ticks: None,
         },
         &PlannerConfig::default(),
     );

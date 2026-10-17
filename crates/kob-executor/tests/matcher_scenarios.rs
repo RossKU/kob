@@ -5,11 +5,12 @@
 mod common;
 
 use common::*;
+use kob_executor::matcher::auction::kas_auction;
 use kob_executor::matcher::book::{ListedOrder, MemoryBook};
-use kob_executor::matcher::candidate::Class;
-use kob_executor::matcher::engine::tick;
+use kob_executor::matcher::candidate::{Cand, Class};
+use kob_executor::matcher::engine::{tick, TickInput, TickReport};
 use kob_executor::matcher::family::{Families, Family};
-use kob_executor::matcher::planner::UpdateKind;
+use kob_executor::matcher::planner::{Fill, UpdateKind};
 use kob_executor::testkit::TOKEN_COV_KRON;
 use kob_protocol::state::*;
 
@@ -1064,4 +1065,231 @@ fn the_total_cap_lowers_the_rate_never_below_the_floor() {
     // a cap below the floor fee: the floor
     let r = run(&input(&b), &priced(100, 1_000, floor_fee / 2));
     assert_eq!(rate_of(&r.prepared[0]), 100);
+}
+
+// ------------------------------------------------------------------ the earliest profitable tick (§3.3)
+
+/// The auction time a builder leg carries (None: the lock time).
+fn leg_t(l: &kob_protocol::build::Leg) -> Option<i64> {
+    use kob_protocol::build::Leg;
+    match l {
+        Leg::Ask { t, .. }
+        | Leg::Bid { t, .. }
+        | Leg::CondAsk { t, .. }
+        | Leg::CondBid { t, .. }
+        | Leg::IfdBid { t, .. }
+        | Leg::IfdAsk { t, .. }
+        | Leg::Pair { t, .. }
+        | Leg::CondPair { t, .. }
+        | Leg::IfdPair { t, .. } => *t,
+    }
+}
+
+/// Order `id`'s auction fill is priced at the earliest tick at which its batch pays: within `[from, lockTime]`, the quote and
+/// the builder's leg at that tick, the batch built and engine-validated with a profit, and one tick earlier (when the
+/// covenant allows it) the leg alone would give up the whole profit. Returns `(tick, from, lock)`.
+fn assert_earliest(r: &TickReport, inp: &TickInput, id: [u8; 32]) -> (i64, i64, i64) {
+    let p = r.prepared.iter().find(|p| p.plan.amount_of(&id) > 0).expect("the auction is filled");
+    let k = p.plan.fills.iter().position(|f| f.cand.id == id).expect("its fill");
+    let f = &p.plan.fills[k];
+    let o = inp.orders.iter().find(|o| o.id() == id).expect("listed");
+    let lock = p.plan.lock_time as i64;
+    let a = kas_auction(k, f, o, lock).expect("an auction leg");
+    let t = f.t.map_or(lock, |x| x as i64);
+    assert!(a.from <= t && t <= lock, "tick {t} outside [{}, {lock}]", a.from);
+    assert_eq!(f.cand.quote, a.quote_at(t).expect("quote"), "the fill is priced at its tick");
+    assert_eq!(leg_t(&batch_request(p).legs[k]), f.t.map(|x| x as i64), "the builder proves the same tick");
+    assert!(p.validation.is_some() && p.accounting.profit >= 1, "the batch pays: {}", p.accounting.profit);
+    if t > a.from {
+        let step = (value_at(f, a.quote_at(t).unwrap()) - value_at(f, a.quote_at(t - 1).unwrap())).abs();
+        assert!(p.accounting.profit - step < 1, "one tick earlier still pays: profit {}, step {step}", p.accounting.profit);
+    }
+    (t, a.from, lock)
+}
+
+/// The exact KAS of a fill at quote `q` (what a bid pays, what an ask receives).
+fn value_at(f: &Fill, q: i64) -> i64 {
+    Cand { quote: q, ..f.cand.clone() }.value(f.amount).expect("value")
+}
+
+#[test]
+fn a_market_buy_that_crosses_at_its_start_pays_the_start_price() {
+    // A market buy of 100 whole tokens 100 DAA into its auction (2.50 rising 3% over 200 DAA: 2.5375 at the lock time) against
+    // a 2.50 ask: the start alone pays the fee, so the buyer pays 2.50, not the 2.5375 the auction has reached.
+    let m = market_bid(1, P250, NOW as i64 - 100, T8);
+    let b = book(vec![fresh(l_bid(1, m.clone(), 100 * WHOLE)), l_ask(2, ask(2, P250, 100 * WHOLE, T8))]);
+    let inp = input(&b);
+    let r = run(&inp, &cfg());
+    assert_eq!(amount_of(&r, cid(1)), 100 * WHOLE);
+    let (t, from, lock) = assert_earliest(&r, &inp, cid(1));
+    assert_eq!((t, from, lock), (NOW as i64 - 100, NOW as i64 - 100, NOW as i64), "the start of the auction");
+    assert_eq!(r.prepared[0].plan.fills[fill_at(&r, cid(1))].cand.quote, P250);
+    // the same market sell: 2.50 decaying, into a 2.50 bid
+    let m = market_ask(1, P250, 100 * WHOLE, NOW as i64 - 100, T8);
+    let b = book(vec![fresh(l_ask(1, m)), l_bid(2, bid(2, P250, T8), 100 * WHOLE)]);
+    let inp = input(&b);
+    let r = run(&inp, &cfg());
+    assert_eq!(amount_of(&r, cid(1)), 100 * WHOLE);
+    let (t, from, _) = assert_earliest(&r, &inp, cid(1));
+    assert_eq!(t, from);
+    assert_eq!(r.prepared[0].plan.fills[fill_at(&r, cid(1))].cand.quote, P250);
+}
+
+#[test]
+fn a_market_order_whose_start_does_not_pay_the_fee_fills_at_the_first_tick_that_does() {
+    // One whole token at the touch: its 0.002 KAS of tips do not pay the fee, the first tick that does decides, whether the
+    // matcher acts 150 or 199 DAA into the auction (its latency no longer costs the maker).
+    let mut ticks = vec![];
+    for elapsed in [150i64, 199] {
+        let m = market_bid(1, P250, NOW as i64 - elapsed, T3);
+        let b = book(vec![fresh(l_bid(1, m.clone(), WHOLE)), l_ask(2, ask(2, P250, 5 * WHOLE, T3))]);
+        let inp = input(&b);
+        let r = run(&inp, &cfg());
+        assert_eq!(amount_of(&r, cid(1)), WHOLE);
+        let (t, from, lock) = assert_earliest(&r, &inp, cid(1));
+        assert!(t > from && t < lock, "{t} in ({from}, {lock})");
+        ticks.push(t - from);
+        let m = market_ask(1, P250, WHOLE, NOW as i64 - elapsed, T3);
+        let b = book(vec![fresh(l_ask(1, m)), l_bid(2, bid(2, P250, T3), 5 * WHOLE)]);
+        let inp = input(&b);
+        let r = run(&inp, &cfg());
+        assert_eq!(amount_of(&r, cid(1)), WHOLE);
+        let (t, from, lock) = assert_earliest(&r, &inp, cid(1));
+        assert!(t > from && t < lock, "{t} in ({from}, {lock})");
+    }
+    assert_eq!(ticks[0], ticks[1], "the same price whatever the latency");
+}
+
+#[test]
+fn a_market_order_first_filled_at_its_lock_time_keeps_that_price_later() {
+    // the first lock time at which the planner fills the market sell into the 2.56 bid at all (the first-profitable-tick
+    // scenario above, the planner's fee estimate): its fill is priced at the earliest tick the built batch pays (the lock time
+    // or a tick or so before it, where the exact fee is below the estimate); 50 DAA later the matcher prices it at that same
+    // tick, not 50 DAA further into the auction
+    let m = market_ask(1, P260, 4 * WHOLE, NOW as i64, T3);
+    let at = |e: u64| {
+        let mut b = book(vec![l_ask(1, m.clone()), l_bid(2, bid(2, 256_000_000, T3), 4 * WHOLE)]);
+        b.daa_score = NOW + 5 + e;
+        input(&b)
+    };
+    let first = (100..=200u64).find(|&e| !run(&at(e), &cfg()).prepared.is_empty()).expect("the auction reaches the bid");
+    let inp = at(first);
+    let r = run(&inp, &cfg());
+    let (t0, _, lock) = assert_earliest(&r, &inp, cid(1));
+    assert!(t0 <= lock && t0 > lock - 5, "{t0} near the first lock time {lock}");
+    let inp = at(first + 50);
+    let r = run(&inp, &cfg());
+    let (t, _, lock) = assert_earliest(&r, &inp, cid(1));
+    assert_eq!((t, lock), (t0, (NOW + first + 50) as i64));
+}
+
+#[test]
+fn dutch_rising_twap_and_dca_auctions_take_their_earliest_profitable_tick() {
+    // a Dutch ask (3.00 down 0.01 every 10,000 DAA to 2.00) and a rising bid (2.00 up to 2.60) far into their auctions
+    let mut du = ask(1, 300_000_000, 4 * WHOLE, T3);
+    (du.slope, du.price_end, du.decay_step) = (1_000_000, 200_000_000, 10_000);
+    let b = book(vec![l_ask(1, du.clone()), l_bid(2, bid(2, 210_000_000, T3), 4 * WHOLE)]);
+    let inp = input(&b);
+    let r = run(&inp, &cfg());
+    assert_eq!(amount_of(&r, cid(1)), 4 * WHOLE);
+    let (t, _, lock) = assert_earliest(&r, &inp, cid(1));
+    assert!(t < lock && du.price_at(t, 1_000).unwrap() > 200_000_000, "above the floor the lock time has reached");
+    let mut rb = bid(3, 200_000_000, T3);
+    (rb.slope, rb.price_end, rb.decay_step) = (1_000_000, P260, 10_000);
+    let b = book(vec![l_bid(3, rb.clone(), 4 * WHOLE), l_ask(4, ask(4, P255, 4 * WHOLE, T3))]);
+    let inp = input(&b);
+    let r = run(&inp, &cfg());
+    assert_eq!(amount_of(&r, cid(3)), 4 * WHOLE);
+    let (t, _, _) = assert_earliest(&r, &inp, cid(3));
+    assert!(rb.price_at(t, 1_000).unwrap() < P260, "below the cap the lock time has reached");
+    // a TWAP slice auction: each slice decays from its own opening (UTXO DAA + interval)
+    let mut tw = ask(5, P260, 10 * WHOLE, T3);
+    (tw.interval, tw.max_fill, tw.slope, tw.price_end, tw.decay_step) = (600, 2 * WHOLE, 50_000, 240_000_000, 1);
+    let mut l = l_ask(5, tw);
+    l.order.utxo.block_daa_score = NOW - 600 - 300;
+    let b = book(vec![l, l_bid(6, bid(6, P250, T3), 10 * WHOLE)]);
+    let inp = input(&b);
+    let r = run(&inp, &cfg());
+    assert_eq!(amount_of(&r, cid(5)), 2 * WHOLE);
+    let (t, from, _) = assert_earliest(&r, &inp, cid(5));
+    assert_eq!(from, NOW as i64 - 300, "the slice's opening");
+    assert!(t > from);
+    // a DCA slice auction rising from its own opening
+    let mut dca = bid(7, 240_000_000, T3);
+    (dca.interval, dca.max_fill, dca.slope, dca.price_end, dca.decay_step) = (600, WHOLE, 50_000, P260, 1);
+    let mut l = l_bid(7, dca, 5 * WHOLE);
+    l.order.utxo.block_daa_score = NOW - 600 - 300;
+    let b = book(vec![l, l_ask(8, ask(8, P250, 5 * WHOLE, T3))]);
+    let inp = input(&b);
+    let r = run(&inp, &cfg());
+    assert_eq!(amount_of(&r, cid(7)), WHOLE);
+    let (t, from, _) = assert_earliest(&r, &inp, cid(7));
+    assert!(t > from);
+}
+
+#[test]
+fn armed_stop_and_stop_entry_auctions_take_their_earliest_profitable_tick() {
+    // armed sell stop 2.40 whose band (3% over 300 DAA) opened 145 DAA ago, into a 2.37 bid
+    let mut c = cond_ask(1, 300_000_000, 240_000_000, 4 * WHOLE, T3);
+    c.armed = 1;
+    let b = book(vec![l_cond_ask(1, c, NOW - 145), l_bid(2, bid(2, 237_000_000, T3), 4 * WHOLE)]);
+    let inp = input(&b);
+    let r = run(&inp, &cfg());
+    assert_eq!(amount_of(&r, cid(1)), 4 * WHOLE);
+    let (t, from, lock) = assert_earliest(&r, &inp, cid(1));
+    assert!(from < t && t < lock);
+    // armed buy stop 2.50 into a 2.52 ask (band open 200 DAA)
+    let mut cb = cond_bid(3, 240_000_000, 250_000_000, 3 * WHOLE, T3);
+    cb.armed = 1;
+    let b = book(vec![l_cond_bid(3, cb, NOW - 200), l_ask(4, ask(4, 252_000_000, 3 * WHOLE, T3))]);
+    let inp = input(&b);
+    let r = run(&inp, &cfg());
+    assert_eq!(amount_of(&r, cid(3)), 3 * WHOLE);
+    let (t, from, lock) = assert_earliest(&r, &inp, cid(3));
+    assert!(from < t && t < lock);
+    // armed buy-stop entry (2.55 toward its 2.60 limit) into a 2.57 ask
+    let e = IfdBidState { entry_stop: P255, armed: 1, ..ifd_bid(5, P260, 10 * WHOLE, T3) };
+    let b = book(vec![l_ifd_bid(5, e, NOW - 200), l_ask(6, ask(6, 257_000_000, 4 * WHOLE, T3))]);
+    let inp = input(&b);
+    let r = run(&inp, &cfg());
+    assert_eq!(amount_of(&r, cid(5)), 4 * WHOLE);
+    let (t, from, lock) = assert_earliest(&r, &inp, cid(5));
+    assert!(from < t && t < lock);
+    // armed sell-stop entry (2.50 toward its 2.45 limit) into a 2.48 bid
+    let s = IfdAskState { entry_stop: P250, armed: 1, ..ifd_ask(7, P245, 4 * WHOLE, T3) };
+    let b = book(vec![l_ifd_ask(7, s, NOW - 200), l_bid(8, bid(8, 248_000_000, T3), 4 * WHOLE)]);
+    let inp = input(&b);
+    let r = run(&inp, &cfg());
+    assert_eq!(amount_of(&r, cid(7)), 4 * WHOLE);
+    let (t, from, lock) = assert_earliest(&r, &inp, cid(7));
+    assert!(from < t && t < lock);
+}
+
+#[test]
+fn two_auctions_of_one_batch_move_together_and_the_batch_still_pays() {
+    // a market buy and a market sell of 2.50 that cross each other (the sell started 40 DAA later, both well into their
+    // auctions): both move to the same progress from their starts, the smallest at which the batch pays
+    let (fb0, fa0) = (NOW as i64 - 120, NOW as i64 - 80);
+    let mb = market_bid(1, P250, fb0, T3);
+    let ma = market_ask(2, P250, 2 * WHOLE, fa0, T3);
+    let b = book(vec![fresh(l_bid(1, mb, 2 * WHOLE)), fresh(l_ask(2, ma))]);
+    let inp = input(&b);
+    let r = run(&inp, &cfg());
+    assert_eq!((amount_of(&r, cid(1)), amount_of(&r, cid(2))), (2 * WHOLE, 2 * WHOLE));
+    let p = &r.prepared[0];
+    let (fb, fa) = (&p.plan.fills[fill_at(&r, cid(1))], &p.plan.fills[fill_at(&r, cid(2))]);
+    let (tb, ta) = (fb.t.expect("moved") as i64, fa.t.expect("moved") as i64);
+    assert_eq!(tb - fb0, ta - fa0, "the same progress");
+    assert!(tb - fb0 < 40, "well before the lock time of either");
+    assert!(p.accounting.profit >= 1);
+    // one tick less of progress for both would lose
+    if tb > fb0 {
+        let o = |id: [u8; 32]| inp.orders.iter().find(|o| o.id() == id).unwrap();
+        let lock = p.plan.lock_time as i64;
+        let a1 = kas_auction(0, fb, o(cid(1)), lock).unwrap();
+        let a2 = kas_auction(0, fa, o(cid(2)), lock).unwrap();
+        let lost = (value_at(fb, a1.quote_at(tb).unwrap()) - value_at(fb, a1.quote_at(tb - 1).unwrap()))
+            + (value_at(fa, a2.quote_at(ta - 1).unwrap()) - value_at(fa, a2.quote_at(ta).unwrap()));
+        assert!(p.accounting.profit - lost < 1, "one tick earlier still pays");
+    }
 }

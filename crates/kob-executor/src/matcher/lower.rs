@@ -50,19 +50,19 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
         let o = get(&f.cand.id)?;
         let amount = f.amount;
         let evidence = f.evidence;
+        // the auction time the fill is priced at (§3.3, `Fill::t`); None: the lock time
+        let t = f.t.and_then(|x| i64::try_from(x).ok());
         let custody = || o.custody.clone().ok_or_else(|| "ask-side order without custody".to_string());
         let leg = match &o.base_state() {
             AnyState::KobAsk(_) => Leg::Ask {
                 order: typed(&o.order, |s| if let AnyState::KobAsk(x) = s { Some(x.clone()) } else { None })?,
                 custody: custody()?,
                 amount,
-                t: None,
+                t,
             },
-            AnyState::KobBid(_) => Leg::Bid {
-                order: typed(&o.order, |s| if let AnyState::KobBid(x) = s { Some(x.clone()) } else { None })?,
-                amount,
-                t: None,
-            },
+            AnyState::KobBid(_) => {
+                Leg::Bid { order: typed(&o.order, |s| if let AnyState::KobBid(x) = s { Some(x.clone()) } else { None })?, amount, t }
+            }
             AnyState::KobCondAsk(_) => {
                 let merge = match f.cand.merge {
                     Some(e) => {
@@ -77,7 +77,7 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
                     amount,
                     leg: f.cand.leg,
                     evidence,
-                    t: None,
+                    t,
                     merge,
                 }
             }
@@ -97,7 +97,7 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
                     amount,
                     leg: f.cand.leg,
                     evidence,
-                    t: None,
+                    t,
                     merge,
                 }
             }
@@ -105,20 +105,20 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
                 order: typed(&o.order, |s| if let AnyState::KobIfdBid(x) = s { Some(x.clone()) } else { None })?,
                 amount,
                 evidence,
-                t: None,
+                t,
             },
             AnyState::KobIfdAsk(_) => Leg::IfdAsk {
                 order: typed(&o.order, |s| if let AnyState::KobIfdAsk(x) = s { Some(x.clone()) } else { None })?,
                 custody: custody()?,
                 amount,
                 evidence,
-                t: None,
+                t,
             },
             AnyState::KobPair(_) => Leg::Pair {
                 order: typed(&o.order, |s| if let AnyState::KobPair(x) = s { Some(x.clone()) } else { None })?,
                 custody: custody()?,
                 amount,
-                t: None,
+                t,
             },
             AnyState::KobCondPair(_) => {
                 let merge = match f.cand.merge {
@@ -140,7 +140,7 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
                     leg: f.cand.leg,
                     evidence,
                     evidence_b: f.evidence_b,
-                    t: None,
+                    t,
                     merge,
                 }
             }
@@ -153,7 +153,7 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
                     amount,
                     evidence,
                     evidence_b: f.evidence_b,
-                    t: None,
+                    t,
                 }
             }
             _ => return Err("not an order kind of either family".into()),
