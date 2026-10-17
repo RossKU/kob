@@ -79,7 +79,7 @@ test('the depth legend keeps the estimate mark with its amounts', async ({ appPa
 test('the order book column titles keep their units (they wrap, no ellipsis)', async ({ appPage: page, mock }) => {
   await openMarket(page, mock, { connect: false });
   const head = page.getByTestId('order-book').locator('.ob-head > span');
-  await expect(head.first()).toHaveText('Price (EXKCC / KAS)');
+  await expect(head.first()).toHaveText('Price (KAS per EXKCC)');
   const cut = await head.evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).length);
   expect(cut).toBe(0);
 });
@@ -179,7 +179,7 @@ test.describe('a token of 18 decimals', () => {
     await expect(page.getByTestId('order-available')).toHaveText('Available 1.234567890123456789 EIGHTEEN');
     const shown = await peekReceipt(page);
     expect(shown.orders[0]!.token).toMatch(/^EIGHTEEN [(]d1d1d1d1…d1d1d1d1[)]$/);
-    expect(shown.orders[0]!.rows['Expected price (auction start)']).toMatch(/^2[45],\d{3},\d{3} EIGHTEEN \/ KAS/);
+    expect(shown.orders[0]!.rows['Expected price (auction start)']).toMatch(/^2[45],\d{3},\d{3} KAS per EIGHTEEN$/);
     expect(await noPageScroll(page)).toBe(true);
   });
 });

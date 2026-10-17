@@ -93,7 +93,7 @@ export function useSend(): Sender {
   useEffect(() => () => answer.current?.(false), []);
   const ask = (id: number, j: SendJob, decoded: SigningSummary, updated: boolean): Promise<boolean> => {
     const hints = signerTokenHints(services.kob, j.built, session.current.info?.pubkey ?? null, services.registry);
-    const table = summaryLines(decoded, hints);
+    const table = summaryLines(decoded, hints, services.kob);
     return new Promise((resolve) => {
       answer.current = resolve;
       set(id, { phase: 'confirming', table, walletLabel: session.current.info?.label ?? '', updated });

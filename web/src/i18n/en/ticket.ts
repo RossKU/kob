@@ -45,7 +45,7 @@ export default {
   'ticket.flip.tipUnit': 'KAS per {name} traded',
   'ticket.flip.tipShare': 'about {pct}% of the KAS traded at {basis}',
   'ticket.flip.executesAs': 'Order price: {price} KAS per {ticker}',
-  'ticket.priceRounded': 'Rounded to the price step: {price} {ticker} / {quote}.',
+  'ticket.priceRounded': 'Rounded to the price step: {price} {quote} per {ticker}.',
 
   'ticket.need.wallet': 'Connect a wallet to place orders.',
   'ticket.need.network': 'Wallet on {wallet}, app on {app}: switch the wallet network.',
@@ -282,6 +282,7 @@ export default {
   'ticket.touch.custom': 'custom',
   'ticket.touch.resolved': '= {amount} (of your {order})',
   'ticket.touch.tradeoff': 'Smaller: triggers sooner, easier to hunt. 100%: a hunter must expose your full size, but it may trigger later in thin markets.',
+  'ticket.unit.per': '{unit} per {per}',
   'ticket.unit.percent': '%',
   'ticket.unit.seconds': 's',
   'ticket.unit.minutes': 'min',

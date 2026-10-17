@@ -218,10 +218,11 @@ export function TicketFields(props: TicketFieldsProps) {
         }
         let inputMode: 'decimal' | 'numeric' = 'decimal';
         if (spec.kind === 'price' || spec.kind === 'delta' || spec.kind === 'tip') {
-          // a price is shown per KAS in the inverted market; a tip or a distance is an amount of KAS per token, which it says in words
+          // a price is shown per KAS in the inverted market; a tip or a distance is an amount of KAS per token, which it says in words; always
+          // "X per Y", never the pair notation "TOKEN / KAS" (it reads as tokens per KAS)
           // a pair prices in its quote token B; a tip is KAS on every market
           const quote = spec.kind === 'tip' ? 'KAS' : props.quoteTicker ?? 'KAS';
-          suffix = <span class="tk-unit">{flipped ? `KAS / ${flipped.name}` : props.flip ? t('ticket.flip.tipUnit', { name: props.flip.name }) : `${ticker} / ${quote}`}</span>;
+          suffix = <span class="tk-unit">{flipped ? t('ticket.unit.per', { unit: flipped.name, per: 'KAS' }) : props.flip ? t('ticket.flip.tipUnit', { name: props.flip.name }) : t('ticket.unit.per', { unit: quote, per: ticker })}</span>;
           if (props.flip && spec.kind === 'tip' && value !== '') {
             const f = props.flip;
             const tip = Number(value);

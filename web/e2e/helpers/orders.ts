@@ -7,7 +7,7 @@ import { confirmUntil, expectWalletSigned, placedBy, type Placed } from './ticke
 
 export interface SeedAsk {
   side: 'ask' | 'bid';
-  /** sompi per whole EXKCC: 2_700_000 = 0.027 KAS / EXKCC */
+  /** sompi per whole EXKCC: 2_700_000 = 0.027 EXKCC per KAS */
   price: number;
   /** whole EXKCC (the order amount is `tokens` x 1e8 base units) */
   tokens: number;

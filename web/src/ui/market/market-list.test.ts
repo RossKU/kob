@@ -29,13 +29,13 @@ function stats(token: string, over: Partial<StatsView> = {}): StatsView {
 const ok = <T,>(value: T): Slot<T> => ({ state: 'ok', value });
 
 describe('market list cells', () => {
-  it('a token row: last price in KAS at the tick decimals with the exact price and TOKEN / KAS unit in the tooltip, change, KAS volume, spread, orders', () => {
+  it('a token row: last price in KAS at the tick decimals with the exact price and KAS per TOKEN unit in the tooltip, change, KAS volume, spread, orders', () => {
     const r = row('EXKCC', ID('a'));
     const e = tokenEntry(r, ok(stats(r.covenantId)));
-    expect(e.cells.last).toEqual({ text: '0.0251', title: '0.0251 (EXKCC / KAS)' });
+    expect(e.cells.last).toEqual({ text: '0.0251', title: '0.0251 (KAS per EXKCC)' });
     expect(e.cells.change).toEqual({ text: '+0.40%', title: null, tone: 'up' });
     expect(e.cells.volume).toEqual({ text: '0.38', title: '0.3765 KAS · 7 trades in 24 h' });
-    expect(e.cells.spread).toEqual({ text: '0.79%', title: 'Best bid 0.0250 · best ask 0.0252 (EXKCC / KAS)' });
+    expect(e.cells.spread).toEqual({ text: '0.79%', title: 'Best bid 0.0250 · best ask 0.0252 (KAS per EXKCC)' });
     expect(e.cells.orders).toEqual({ text: '7', title: '3 asks · 4 bids' });
     expect(e.loading).toBe(false);
     expect(e.unavailable).toBe(false);
@@ -62,12 +62,12 @@ describe('market list cells', () => {
     expect(e.cells.last.text).toBeNull();
     expect(e.cells.change.text).toBeNull();
     expect(e.cells.volume.text).toBe('0.00');
-    expect(e.cells.spread).toEqual({ text: null, title: 'Best bid — · best ask 0.0252 (EXKCC / KAS)' });
+    expect(e.cells.spread).toEqual({ text: null, title: 'Best bid — · best ask 0.0252 (KAS per EXKCC)' });
   });
 
   it('never cuts a digit: a large price or volume turns compact with the exact figure in the tooltip, a dust volume reads <0.01', () => {
-    expect(priceCell({ num: 25_300_000_123n, den: 1000n }, 4, 'X / KAS')).toEqual({ text: '25,300,000.1', title: '25,300,000.123 (X / KAS)' });
-    expect(priceCell({ num: 25_300_000_000_123n, den: 1000n }, 4, 'X / KAS')).toEqual({ text: '25.30B', title: '25,300,000,000.123 (X / KAS)' });
+    expect(priceCell({ num: 25_300_000_123n, den: 1000n }, 4, 'KAS per X')).toEqual({ text: '25,300,000.1', title: '25,300,000.123 (KAS per X)' });
+    expect(priceCell({ num: 25_300_000_000_123n, den: 1000n }, 4, 'KAS per X')).toEqual({ text: '25.30B', title: '25,300,000,000.123 (KAS per X)' });
     expect(volumeCell(123_456_789_000_000_000n, 8, 'KAS', null)).toEqual({ text: '1.23B', title: '1,234,567,890 KAS' });
     expect(volumeCell(12_345_678_900n, 8, 'KAS', null)).toEqual({ text: '123.46', title: '123.456789 KAS' });
     expect(volumeCell(1n, 8, 'KAS', null)).toEqual({ text: '<0.01', title: '0.00000001 KAS' });
@@ -84,7 +84,7 @@ describe('market list cells', () => {
     const r = row('', ID('c'), { info: null, source: 'indexer', tick: null });
     const e = tokenEntry(r, ok(stats(r.covenantId, { last: '123456789' })));
     expect(e.cells.last.text).toBe('1.2346');
-    expect(e.cells.last.title).toBe(`1.23456789 (cccccccc…cccccccc / KAS)`);
+    expect(e.cells.last.title).toBe(`1.23456789 (KAS per cccccccc…cccccccc)`);
     expect(e.name).toBe('cccccccc…cccccccc');
   });
 });
@@ -107,7 +107,7 @@ describe('market list pairs', () => {
     // EXKCC 0.0251 KAS (open 0.0250), EXUSD 0.5 KAS (open 0.5): 0.0502 EXUSD per EXKCC, +0.40 %
     const e = pairEntry(p!, ok(stats(a.covenantId)), ok(stats(u.covenantId, { last: '50000000', open_24h: '50000000', price_basis: '1000000', decimals: 6 })), ok({ a: 300_000_000n, b: 151_500n, fills: 2 }));
     // five significant digits, as the pair page shows it
-    expect(e.cells.last).toEqual({ text: '0.050200', title: '0.0502 (EXKCC / EXUSD)' });
+    expect(e.cells.last).toEqual({ text: '0.050200', title: '0.0502 (EXUSD per EXKCC)' });
     expect(e.cells.change.text).toBe('+0.40%');
     expect(e.cells.volume).toEqual({ text: '0.15', title: '0.1515 EXUSD · 2 pair fills in 24 h' });
     expect(e.cells.spread.text).toBeNull();

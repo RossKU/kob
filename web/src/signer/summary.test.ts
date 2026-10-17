@@ -7,6 +7,10 @@ import { goldenRequest as chainGoldenRequest } from '../testing/chain-fixtures';
 import { MAKER_PK, TOKEN_COV_ID } from '../testing/token-fixtures';
 import { kob } from '../testing/wallet-fixtures';
 import type { ActionRequest, BuiltTx } from '../kob/types';
+import { planOrder } from '../kob/plan';
+import { MAKER_PK as FIXTURE_MAKER, TOKEN_COV } from '../testing/fixtures';
+import { buildIntent } from '../ui/ticket/form-state';
+import { CTX, form, ticketEnv } from '../ui/ticket/ticket-fixtures';
 
 const HINTS = [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 3 }];
 
@@ -87,5 +91,47 @@ describe('signer summary: a token without decimals (no hint)', () => {
     // with the decimals known the price stays per whole token
     const known = summarize(kob, build('create.ask'), MAKER_PK, HINTS).orders[0]!.rows.find((r) => /limit price/i.test(r.label))?.value ?? '';
     expect(known).not.toMatch(/base units/);
+  });
+});
+
+describe('signer summary: prices that cannot be misread, the flipped view in its own words', () => {
+  const plan = (f: ReturnType<typeof form>) => planOrder(ticketEnv(), buildIntent(f, { ...CTX, ref: { buy: 250_000_000n, sell: 245_000_000n } }).intent!).built!;
+  const hint = (inverted: boolean) => [{ covenantId: TOKEN_COV, ticker: 'TUSD', decimals: 8, ...(inverted ? { inverted: true } : {}) }];
+  const rows = (o: { rows: { label: string; value: string }[] }) => Object.fromEntries(o.rows.map((r) => [r.label, r.value]));
+
+  it('a native limit buy: every price is "X KAS per TOKEN", never the pair notation', () => {
+    const s = summarize(kob, plan(form('limit', 'buy', { amount: '5', price: '2.3' })), FIXTURE_MAKER, hint(false));
+    const o = s.orders[0]!;
+    expect(o.title).toBe('Buy limit order');
+    expect(rows(o)['Limit price']).toBe('2.3 KAS per TUSD');
+    expect(o.rows.some((r) => / \/ /.test(r.value))).toBe(false);
+  });
+
+  it('a market sell of KAS on the flipped view (a chain buy of tokens): said as placed, the prices in TUSD per KAS, the chain terms below', () => {
+    const s = summarize(kob, plan({ ...form('market', 'buy', { amount: '20' }), kas: true }), FIXTURE_MAKER, hint(true));
+    const o = s.orders[0]!;
+    expect(o.title).toBe('Sell KAS · market (auction)');
+    expect(o.token).toMatch(/^TUSD \(.+\) · on chain: Buy market order \(auction\)$/);
+    const r = rows(o);
+    expect(r['You sell']).toMatch(/^up to (19[.]\d\d|20[.]00) KAS$/);
+    expect(r['You receive']).toMatch(/^7[.]\d+ TUSD$/);
+    expect(r['Expected price (auction start)']).toBe('0.4 TUSD per KAS');
+    // the worst price (all-in, the tip included) rounded against the user: fewer tokens per KAS
+    expect(r['Worst price (all-in)']).toBe('0.388349 TUSD per KAS');
+    // the chain's own terms stay, its prices are not said twice
+    expect(r['KAS budget']).toMatch(/ KAS$/);
+    expect(o.rows.filter((x) => /per TUSD/.test(x.value))).toEqual([]);
+    expect(o.rows.some((x) => / \/ /.test(x.value))).toBe(false);
+  });
+
+  it('a market buy of KAS on the flipped view (a chain sell of tokens): pays the tokens, receives at least the KAS of the worst price', () => {
+    const s = summarize(kob, plan(form('market', 'sell', { amount: '3' })), FIXTURE_MAKER, hint(true));
+    const o = s.orders[0]!;
+    expect(o.title).toBe('Buy KAS · market (auction)');
+    const r = rows(o);
+    expect(r['You pay']).toBe('3 TUSD');
+    expect(r['You receive']).toMatch(/^at least 7[.]\d\d KAS$/);
+    // a higher price in tokens per KAS is worse for a buyer of KAS: rounded up
+    expect(Number(r['Worst price (all-in)']!.split(' ')[0])).toBeGreaterThan(Number(r['Expected price (auction start)']!.split(' ')[0]));
   });
 });

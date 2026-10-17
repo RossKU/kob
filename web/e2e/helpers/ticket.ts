@@ -65,7 +65,7 @@ export interface ReceiptOrder {
   title: string;
   /** "EXKCC (e5e5e5e5…e5e5e5e5)": the ticker hint and the covenant id the transaction carries */
   token: string;
-  /** row label -> value ("Limit price" -> "0.027 EXKCC / KAS") */
+  /** row label -> value ("Limit price" -> "0.027 KAS per EXKCC") */
   rows: Record<string, string>;
   exit: ReceiptOrder | null;
 }

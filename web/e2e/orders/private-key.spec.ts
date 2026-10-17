@@ -92,7 +92,7 @@ test('connect with a private key in the signer frame, place and cancel an order 
     lines: { 'Locked in orders': '4 KAS' },
     orderTitles: ['Sell limit order'],
   });
-  expect(shown.orders[0]!.rows).toMatchObject({ Amount: '2 EXKCC', 'Limit price': '0.027 EXKCC / KAS' });
+  expect(shown.orders[0]!.rows).toMatchObject({ Amount: '2 EXKCC', 'Limit price': '0.027 KAS per EXKCC' });
   expect(shown.orders[0]!.token).toMatch(/^EXKCC [(][0-9a-f]{8}…[0-9a-f]{8}[)]$/);
   const placed = await placedBy(mock, await waitSubmitted(page));
   expect(shown.fee).toBe(feeText(placed.submission.fee));
@@ -305,7 +305,9 @@ test('a late Approve (9 s in the frame) on a market order: the frame is not show
   const t0 = Date.now();
   const receipt = await readReceipt(page);
   expect(receipt.title).toBe('Place order');
-  expect(receipt.orders.map((o) => o.title)).toEqual(['Buy market order (auction)']);
+  // the flipped view's own words: a sale of KAS (on chain a market buy of the token)
+  expect(receipt.orders.map((o) => o.title)).toEqual(['Sell KAS · market (auction)']);
+  expect(receipt.orders[0]!.token).toMatch(/· on chain: Buy market order [(]auction[)]$/);
   const size = await f.locator('body').evaluate(() => ({ table: document.documentElement.scrollHeight, frame: window.innerHeight }));
   test.info().annotations.push({ type: 'signer-table', description: `table ${size.table}px in a frame of ${size.frame}px (viewport ${JSON.stringify(page.viewportSize())})` });
   // the user reads for 9 s (the mock chain advances 10 DAA a second): the auction in the table began on the clock of the click

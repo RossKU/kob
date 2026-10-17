@@ -121,7 +121,7 @@ const quoteTokens = (amount: bigint, q: NonNullable<DisclosureCtx['quote']>): st
 const quotePrice = (price: bigint, c: DisclosureCtx): string => `${perToken(price, c)} ${quoteOf(c)}`;
 
 function priceValue(price: bigint, c: DisclosureCtx): { value: Txt } {
-  return { value: `${perToken(price, c)} ${c.ticker} / ${quoteOf(c)}` };
+  return { value: `${perToken(price, c)} ${quoteOf(c)} per ${c.ticker}` };
 }
 
 function priceRow(id: string, labelKey: string, price: bigint, c: DisclosureCtx, tone: Tone = 'normal', labelParams?: Record<string, string>): DisclosureRow {
@@ -129,7 +129,7 @@ function priceRow(id: string, labelKey: string, price: bigint, c: DisclosureCtx,
 }
 /** A KAS price per whole token (tips: KAS on every market). */
 function kasPriceRow(id: string, labelKey: string, price: bigint, c: DisclosureCtx, tone: Tone = 'normal'): DisclosureRow {
-  return { id, labelKey, tone, value: `${kasPerToken(price, c)} ${c.ticker} / KAS` };
+  return { id, labelKey, tone, value: `${kasPerToken(price, c)} KAS per ${c.ticker}` };
 }
 
 const timeParts = (unix: bigint) => ({ unix, utc: formatUtc(unix), jst: formatJst(unix) });
@@ -329,7 +329,7 @@ function pairRows(p: PairFacts | null, c: DisclosureCtx): DisclosureRow[] {
   }
   const r = p.trigger;
   if (r) {
-    const stop = `${perToken(BigInt(r.stop), c)} ${c.ticker} / ${q.ticker}`;
+    const stop = `${perToken(BigInt(r.stop), c)} ${q.ticker} per ${c.ticker}`;
     const seconds = String(Number(r.minRestDaa) / 10);
     out.push({
       id: 'pairTrigger', labelKey: 'ticket.disc.pairTrigger', tone: 'normal',

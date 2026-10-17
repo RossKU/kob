@@ -245,8 +245,8 @@ export default {
   'market.book.totalIn': 'Total ({unit})',
   'market.trades.priceIn': 'Price ({unit})',
   'market.trades.amountIn': 'Amount ({unit})',
-  'market.stats.unitOf': '{base} / {quote}',
-  'market.chart.unitOf': '{base} / {quote}',
+  'market.stats.unitOf': '{quote} per {base}',
+  'market.chart.unitOf': '{quote} per {base}',
   'market.token.scaleValue': 'per {scale} base units (one whole token)',
   'market.token.scaleValuePart': 'per {scale} base units ({part} token); prices are shown per whole token',
 } as Record<string, string>;

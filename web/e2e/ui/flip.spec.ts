@@ -64,7 +64,7 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     const chart = page.getByTestId('price-chart');
     await expect(chart).toHaveAttribute('data-state', 'ready');
     await expect(chart).toHaveAttribute('data-inverted', '0');
-    await expect(page.getByTestId('chart-unit')).toHaveText('EXKCC / KAS');
+    await expect(page.getByTestId('chart-unit')).toHaveText('KAS per EXKCC');
     const nativeLegend = await legend(page);
     const nativeAsks = await bookRows(page, 'asks');
     const nativeBids = await bookRows(page, 'bids');
@@ -76,7 +76,7 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     expect(nativeAsks).toHaveLength(10);
     expect(nativeBids).toHaveLength(10);
     expect(nativeSides.length).toBeGreaterThan(5);
-    await expect(page.getByTestId('order-book')).toContainText('Price (EXKCC / KAS)');
+    await expect(page.getByTestId('order-book')).toContainText('Price (KAS per EXKCC)');
 
     // ---- flip
     await flip.click();
@@ -85,8 +85,8 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     await expect(flip).toHaveAttribute('aria-pressed', 'true');
     await expect(chart).toHaveAttribute('data-inverted', '1');
     await expect(chart).toHaveAttribute('data-state', 'ready');
-    await expect(page.getByTestId('chart-unit')).toHaveText('KAS / EXKCC');
-    await expect(page.getByTestId('order-book')).toContainText('Price (KAS / EXKCC)');
+    await expect(page.getByTestId('chart-unit')).toHaveText('EXKCC per KAS');
+    await expect(page.getByTestId('order-book')).toContainText('Price (EXKCC per KAS)');
     await expect(page.getByTestId('order-book')).toContainText('Size (KAS)');
     await expect(page.getByTestId('order-book')).toContainText('Total (EXKCC)');
 
@@ -204,9 +204,11 @@ test.describe('the ticket in an inverted market', () => {
     await expect(page.getByTestId('order-price-native')).toContainText('0.04 KAS per EXKCC');
     const flipped = await placeOrderAndRead(page, mock);
     await expectWalletSigned(wallet!, flipped, { requests: 2, call: 1 });
-    // its confirmation is the native order's table, whichever way the form was typed: a sell of 1 EXKCC at 0.04 KAS
-    expect(flipped.receipt.orders.map((o) => o.title)).toEqual(['Sell limit order']);
-    expect(flipped.receipt.orders[0]!.rows).toMatchObject({ Amount: '1 EXKCC', 'Limit price': '0.04 EXKCC / KAS' });
+    // its confirmation speaks the flipped view (a purchase of KAS for 1 EXKCC at 25 EXKCC per KAS), its chain-side terms below (a sell of
+    // 1 EXKCC at 0.04 KAS)
+    expect(flipped.receipt.orders.map((o) => o.title)).toEqual(['Buy KAS · limit']);
+    expect(flipped.receipt.orders[0]!.token).toMatch(/· on chain: Sell limit order$/);
+    expect(flipped.receipt.orders[0]!.rows).toMatchObject({ 'You pay': '1 EXKCC', 'You receive': 'at least 0.04 KAS', Price: '25 EXKCC per KAS', Amount: '1 EXKCC' });
     expect(flipped.receipt.lines['Locked in orders']).toBe('4 KAS');
     // the order that was signed is the native one: same contract, same price (a sell of 1 EXKCC at 0.04 KAS per token = 4_000_000 sompi per whole
     // token, exactly), same amount, same funds locked
@@ -293,8 +295,8 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
     await expect(page.getByTestId('token-title')).toContainText('EXUSD');
     await expect(page.getByTestId('token-page')).toHaveAttribute('data-token', QUOTE);
     await expect(page.getByTestId('order-book')).toBeVisible();
-    await expect(page.getByTestId('order-book')).toContainText('Price (EXUSD / KAS)');
-    await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD / KAS');
+    await expect(page.getByTestId('order-book')).toContainText('Price (KAS per EXUSD)');
+    await expect(page.getByTestId('chart-unit')).toHaveText('KAS per EXUSD');
     await expect(page.getByTestId('main')).toHaveAttribute('data-route', '#/');
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '0');
     await expect(page.getByTestId('token-usd-chart')).toHaveCount(0);
@@ -302,7 +304,7 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
     // a flip: KAS/EXUSD, remembered
     await page.getByTestId('market-flip').click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');
-    await expect(page.getByTestId('chart-unit')).toHaveText('KAS / EXUSD');
+    await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD per KAS');
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '1');
     await page.reload();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');

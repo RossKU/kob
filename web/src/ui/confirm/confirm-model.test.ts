@@ -78,10 +78,10 @@ describe('decoded order terms', () => {
     expect(rowOf(rows, 'amount').value).toBe('10 TST');
     expect(rowOf(rows, 'minFill').value).toMatch(/ TST$/);
     // golden token TST has 3 decimals (scale 1000 base units): 250_000_000 sompi per whole token = 2.5 KAS per token
-    expect(rowOf(rows, 'price').value).toBe('2.5 TST / KAS');
-    expect(rowOf(rows, 'tip').value).toBe('0.001 TST / KAS');
+    expect(rowOf(rows, 'price').value).toBe('2.5 KAS per TST');
+    expect(rowOf(rows, 'tip').value).toBe('0.001 KAS per TST');
     expect(rowOf(rows, 'allIn').label).toBe('You receive at least per token (all-in)');
-    expect(rowOf(rows, 'allIn').value).toBe('2.499 TST / KAS');
+    expect(rowOf(rows, 'allIn').value).toBe('2.499 KAS per TST');
     const k = s.net.kas;
     expect(k.locked.total).toBe(20n * KAS);
     expect(k.locked.refundTips).toBe(3_500_000n);
@@ -217,7 +217,7 @@ describe('token labels and order types', () => {
     // an unknown token has no decimals: raw base units, never a guessed unit
     const { summary, rows } = created('create.ask', null);
     expect(rowOf(rows, 'amount').value).toContain('10000 base units');
-    expect(rows.some((r) => r.value.includes(' / KAS'))).toBe(false);
+    expect(rows.some((r) => r.value.includes(' / '))).toBe(false);
     expect(codes(summary.warnings)).toContain('token-unlisted');
     expect(tokenAmountText({ ...ref, decimals: null, ticker: null }, 5n, (k, p) => t(k, p))).toBe('5 base units (unknown token)');
   });

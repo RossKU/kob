@@ -240,7 +240,8 @@ function priceText(price: bigint, d: OrderDescription, f: Fmt): { value: string;
   if (f.ref.decimals === null || d.scale <= 0n) return { value: `${formatKas(price, GROUP)} KAS`, detail: f.tr('confirm.f.perScale', { scale: d.scale.toString() }) };
   const whole = 10n ** BigInt(f.ref.decimals);
   return {
-    value: `${formatPricePerToken(price, f.ref.decimals, d.scale, GROUP)} ${f.ref.ticker ?? ''} / KAS`.trim(),
+    // "X KAS per TOKEN", never the pair notation "X TOKEN / KAS" (it reads as tokens per KAS)
+    value: f.tr('confirm.f.perUnit', { price: formatPricePerToken(price, f.ref.decimals, d.scale, GROUP), unit: 'KAS', per: f.ref.ticker ?? longId(f.ref.covenantId) }),
     ...(d.scale !== whole ? { detail: f.tr('confirm.f.perScale', { scale: d.scale.toString() }) } : {}),
   };
 }
@@ -252,16 +253,16 @@ const approxTime = (daa: bigint, f: Fmt): string | null => (f.clock ? f.time(daa
  * it is shown per WHOLE A (`price x 10^decimals(A) / scale`, the ticket's own conversion), in B when B's decimals are known, else raw base units of B.
  * Without A's decimals it stays per `scale` base units of A and the detail says so.
  */
-/** The bare amount of a pair price (the unit follows as `A / B`): whole B when its decimals are known, else raw base units. */
+/** The bare amount of a pair price (the unit follows as "B per A"): whole B when its decimals are known, else raw base units. */
 const pairNumber = (ref: TokenRef, amount: bigint): string => (ref.decimals === null ? amount.toString() : formatTokenAmount(amount, ref.decimals, GROUP));
 const bUnit = (ref: TokenRef, tr: Translate): string => ref.ticker ?? (ref.decimals === null ? tr('common.baseUnits') : '?');
 
 function pairPriceText(price: bigint, d: OrderDescription, f: Fmt): { value: string; detail?: string } {
   const bRef = refOf(f.registry, d.pair!.quote.covId);
   const aName = f.ref.ticker ?? longId(f.ref.covenantId);
-  if (f.ref.decimals === null || d.scale <= 0n) return { value: `${pairNumber(bRef, price)} ${aName} / ${bUnit(bRef, f.tr)}`, detail: f.tr('confirm.f.perScale', { scale: d.scale.toString() }) };
+  if (f.ref.decimals === null || d.scale <= 0n) return { value: f.tr('confirm.f.perUnit', { price: pairNumber(bRef, price), unit: bUnit(bRef, f.tr), per: aName }), detail: f.tr('confirm.f.perScale', { scale: d.scale.toString() }) };
   const perWholeA = statePriceToTokenPrice(price, f.ref.decimals, d.scale, 'nearest');
-  return { value: `${pairNumber(bRef, perWholeA)} ${aName} / ${bUnit(bRef, f.tr)}` };
+  return { value: f.tr('confirm.f.perUnit', { price: pairNumber(bRef, perWholeA), unit: bUnit(bRef, f.tr), per: aName }) };
 }
 
 /**

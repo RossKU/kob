@@ -60,6 +60,7 @@ export default {
   'confirm.flows.title': 'Wallet inputs and change',
 
   'confirm.order.title': '{side} {type}',
+  'confirm.f.perUnit': '{price} {unit} per {per}',
   'confirm.order.limit': 'limit order',
   'confirm.order.limitDay': 'day limit order',
   'confirm.order.market': 'market order (auction)',

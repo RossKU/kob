@@ -243,7 +243,7 @@ export function PairPage(props: { base: string; quote: string }) {
             loading={!!indexer && book.data === undefined && !book.error}
             unavailable={!!book.error && !depthSeries}
             ticker={baseInfo.ticker}
-            priceUnit={`${baseInfo.ticker} / ${quoteInfo.ticker}`}
+            priceUnit={t('market.stats.unitOf', { base: baseInfo.ticker, quote: quoteInfo.ticker })}
             dp={dp}
             amountDp={Math.min(base.decimals, 4)}
             source="book"

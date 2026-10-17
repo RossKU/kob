@@ -7,7 +7,7 @@ import { loadKobNode } from '../../src/kob/wasm.node';
 import { listExkcc } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 
-/** an ask of `tokens` whole EXKCC at `price` sompi per whole token (2_505_000 = 0.02505 KAS / EXKCC) */
+/** an ask of `tokens` whole EXKCC at `price` sompi per whole token (2_505_000 = 0.02505 EXKCC per KAS) */
 async function seedAsk(mock: MockClient, price = 2_505_000, tokens = 3) {
   const tok = await mock.token();
   await mock.seed({ orders: [{ token: tok.covenant_id, side: 'ask', maker: 'alice', price, amount: (BigInt(tokens) * 100_000_000n).toString() }] });

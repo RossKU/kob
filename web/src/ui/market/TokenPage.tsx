@@ -211,8 +211,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       dp,
       tick: baseTick,
       labels: inverted
-        ? { price: t('market.book.priceIn', { unit: `KAS / ${name}` }), size: t('market.book.sizeIn', { unit: 'KAS' }), total: t('market.book.totalIn', { unit: name }) }
-        : { price: t('market.book.priceIn', { unit: `${name} / KAS` }), size: t('market.book.sizeIn', { unit: name || t('common.baseUnits') }), total: t('market.book.totalIn', { unit: 'KAS' }) },
+        ? { price: t('market.book.priceIn', { unit: t('market.stats.unitOf', { base: 'KAS', quote: name }) }), size: t('market.book.sizeIn', { unit: 'KAS' }), total: t('market.book.totalIn', { unit: name }) }
+        : { price: t('market.book.priceIn', { unit: t('market.stats.unitOf', { base: name, quote: 'KAS' }) }), size: t('market.book.sizeIn', { unit: name || t('common.baseUnits') }), total: t('market.book.totalIn', { unit: 'KAS' }) },
     }),
     [name, decimals, bookScale, dp, baseTick, inverted],
   );

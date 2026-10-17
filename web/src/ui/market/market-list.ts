@@ -65,7 +65,7 @@ export const LIST_CELL_CHARS = 12;
 /** Exact-enough text of a rational for a tooltip: up to 18 fraction digits, trailing zeros trimmed, thousands grouped. */
 const exactText = (r: Rational): string => formatRational(r, 18, 'nearest', 0, ',');
 
-/** A price cell: `dp` fraction digits (compact when too wide); the tooltip holds the exact price and its unit (`BASE / QUOTE`). */
+/** A price cell: `dp` fraction digits (compact when too wide); the tooltip holds the exact price and its unit ("QUOTE per BASE"). */
 export function priceCell(r: Rational | null, dp: number, unit: string): Cell {
   if (!r || r.num <= 0n) return EMPTY;
   const fit = fitDecimalTexts([formatRational(r, dp, 'nearest', dp, ',')], { width: LIST_CELL_CHARS })[0]!;

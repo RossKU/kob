@@ -85,7 +85,7 @@ test('pair book (direct, entry, route) and a pair limit sell through the unified
   // the final confirmation: the pair order's table says the pair, what it escrows and the price in EXUSD per EXKCC
   expect(placed.receipt.title).toBe('Place order');
   expect(placed.receipt.orders[0]!.title).toBe('Sell limit order');
-  expect(createdCard(placed)).toMatchObject({ Pair: 'sells EXKCC for EXUSD (prices in EXUSD per EXKCC)', 'Base tokens locked in the order': '2 EXKCC', 'Limit price': '0.0515 EXKCC / EXUSD' });
+  expect(createdCard(placed)).toMatchObject({ Pair: 'sells EXKCC for EXUSD (prices in EXUSD per EXKCC)', 'Base tokens locked in the order': '2 EXKCC', 'Limit price': '0.0515 EXUSD per EXKCC' });
   expect(Object.values(createdCard(placed)), 'the least it receives, 2 x 0.0515').toContain('0.103 EXUSD');
   expect(view.contract).toBe('KobPair');
   // the pair sells EXKCC (side 1) for EXUSD; the price is EXUSD base units per whole EXKCC: 0.0515 EXUSD = 51_500, so the 2 EXKCC are worth 0.103 EXUSD
@@ -128,7 +128,7 @@ test('a click on a pair book level prefills the ticket; a pair limit buy escrows
   await waitReviewable(page);
   const placed = await placeOrderAndRead(page, mock);
   expect(placed.receipt.orders[0]!.title).toBe('Buy limit order');
-  expect(createdCard(placed)).toMatchObject({ Pair: 'buys EXKCC with EXUSD (prices in EXUSD per EXKCC)', 'Quote tokens locked in the order': '0.048001 EXUSD', 'Limit price': '0.048 EXKCC / EXUSD' });
+  expect(createdCard(placed)).toMatchObject({ Pair: 'buys EXKCC with EXUSD (prices in EXUSD per EXKCC)', 'Quote tokens locked in the order': '0.048001 EXUSD', 'Limit price': '0.048 EXUSD per EXKCC' });
   expect(Object.values(createdCard(placed)), 'the most it pays, 1 x 0.048').toContain('0.048 EXUSD');
   const view = placed.views[0];
   expect(view.contract).toBe('KobPair');
@@ -156,7 +156,7 @@ test('a pair stop discloses the trigger rule (two KAS books or a resting pair or
   await fillFields(page, { amount: '1', stop: '0.046' });
   await waitReviewable(page);
   const placed = await placeOrderAndRead(page, mock);
-  const rule = 'arms on fills implying a rate at or below 0.046 EXKCC / EXUSD: a resting sell of EXKCC and buy of EXUSD filled together (each rested 5 s), or a resting EXKCC pair sell at or below the stop';
+  const rule = 'arms on fills implying a rate at or below 0.046 EXUSD per EXKCC: a resting sell of EXKCC and buy of EXUSD filled together (each rested 5 s), or a resting EXKCC pair sell at or below the stop';
   expect(createdCard(placed)['Pair trigger rule']).toContain(rule);
   const view = placed.views[0];
   expect(view.contract).toBe('KobCondPair');
@@ -182,8 +182,8 @@ test('an IFD pair (buy first): the exit it commits to in the final confirmation,
   await fillFields(page, { amount: '2', price: '0.048', 'exit.takeProfit': '0.055' });
   await waitReviewable(page);
   const placed = await placeOrderAndRead(page, mock);
-  expect(createdCard(placed)).toMatchObject({ 'Entry limit price': '0.048 EXKCC / EXUSD', 'Quote tokens locked in the order': '0.096 EXUSD' });
-  expect(placed.receipt.orders[0]!.exit?.rows, 'the exit it commits to is shown').toMatchObject({ 'Take-profit price': '0.055 EXKCC / EXUSD' });
+  expect(createdCard(placed)).toMatchObject({ 'Entry limit price': '0.048 EXUSD per EXKCC', 'Quote tokens locked in the order': '0.096 EXUSD' });
+  expect(placed.receipt.orders[0]!.exit?.rows, 'the exit it commits to is shown').toMatchObject({ 'Take-profit price': '0.055 EXUSD per EXKCC' });
   const entry = placed.views[0];
   expect(entry.contract).toBe('KobIfdPair');
   // the entry buys EXKCC (A) with EXUSD (B), which it escrows; the exit it commits to is the maker's take-profit (55_000) over the same two tokens
@@ -222,8 +222,8 @@ test('the pair ticket offers every order type of the KAS ticket in the same layo
   const labels = async () => (await page.getByTestId('order-ticket').locator('.tk-form > .field > label').allTextContents());
   const pairLabels = await labels();
   // the price is typed in EXUSD per EXKCC, the tip in KAS per EXKCC
-  await expect(page.getByTestId('order-ticket').locator('.tk-form')).toContainText('EXKCC / EXUSD');
-  await expect(page.getByTestId('order-ticket').locator('.tk-form')).toContainText('EXKCC / KAS');
+  await expect(page.getByTestId('order-ticket').locator('.tk-form')).toContainText('EXUSD per EXKCC');
+  await expect(page.getByTestId('order-ticket').locator('.tk-form')).toContainText('KAS per EXKCC');
   // a pair market buy / sell, an OCO and a trailing stop plan on the pair too
   for (const [type, side, values] of [
     ['market', 'buy', { amount: '1' }],
@@ -330,7 +330,7 @@ test('picking a quote token keeps the layout: the chart stays in the same place 
   expect(book.x + book.width).toBeLessThanOrEqual(after.x + 1);
   expect(ticket.x).toBeGreaterThanOrEqual(after.x + after.width - 1);
   // the pair chart is derived from the two KAS markets, in the pair's unit
-  await expect(page.getByTestId('chart-unit')).toHaveText('EXKCC / EXUSD');
+  await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD per EXKCC');
   await expect(page.getByTestId('pair-chart-note')).toContainText('pair fills count only as volume');
   await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', /^(ready|empty)$/);
 });

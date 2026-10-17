@@ -26,7 +26,7 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await expect(amountUnit(page)).toHaveText('EXKCC');
     const native = await placeOrderAndRead(page, mock);
     expect(native.receipt.orders.map((o) => o.title)).toEqual(['Buy limit order']);
-    expect(native.receipt.orders[0]!.rows).toMatchObject({ 'Limit price': '0.024 EXKCC / KAS', 'You pay at most per token (all-in)': '0.024 EXKCC / KAS' });
+    expect(native.receipt.orders[0]!.rows).toMatchObject({ 'Limit price': '0.024 KAS per EXKCC', 'You pay at most per token (all-in)': '0.024 KAS per EXKCC' });
     // the sent order clears the amount: the same native form again
     await page.getByTestId(TESTID.orderAmount).fill('10');
     await page.getByTestId(TESTID.orderPrice).fill('0.024');
@@ -41,7 +41,7 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await expect(page.getByTestId(TESTID.orderAmount)).toHaveValue('0.24');
     await expect(page.getByTestId('order-amount-tokens')).toHaveText('= 10 EXKCC at your price');
     await expect(page.getByTestId(TESTID.orderPrice)).toHaveValue('41.666667');
-    await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderPrice) }).locator('.tk-unit')).toHaveText('KAS / EXKCC');
+    await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderPrice) }).locator('.tk-unit')).toHaveText('EXKCC per KAS');
     await expect(page.getByTestId(TESTID.orderPlace)).toContainText('Sell');
 
     // flip back: the very same native form
@@ -57,9 +57,13 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXKCC');
     const flipped = await placeOrderAndRead(page, mock);
     await expectWalletSigned(wallet!, flipped, { requests: 2, call: 1 });
-    // the confirmation of the flipped form is the same table as the native one (only the DAA times differ)
-    const terms = (r: { orders: { rows: Record<string, string> }[]; lines: Record<string, string> }) => ({ rows: { ...r.orders[0]!.rows, Expires: '' }, lines: r.lines });
-    expect(terms(flipped.receipt)).toEqual(terms(native.receipt));
+    // the confirmation of the flipped form speaks the flipped view (a sale of KAS), above the native order's chain-side terms: the same net
+    // effect and the same chain rows as the native table (only the DAA times differ), its prices said in EXKCC per KAS instead
+    expect(flipped.receipt.orders.map((o) => o.title)).toEqual(['Sell KAS · limit']);
+    expect(flipped.receipt.orders[0]!.rows).toMatchObject({ 'You sell': 'up to 0.24 KAS', 'You receive': '10 EXKCC', Price: '41.6666 EXKCC per KAS' });
+    expect(flipped.receipt.lines).toEqual(native.receipt.lines);
+    const chain = (rows: Record<string, string>, drop: string[]) => Object.fromEntries(Object.entries(rows).filter(([k]) => !drop.includes(k) && k !== 'Expires'));
+    expect(chain(flipped.receipt.orders[0]!.rows, ['You sell', 'You receive', 'Price'])).toEqual(chain(native.receipt.orders[0]!.rows, ['Limit price', 'You pay at most per token (all-in)']));
     expect(native.views[0].contract).toBe('KobBid');
     expect(native.views[0].state.state).toMatchObject({ price: '2400000' });
     expect(onChainTerms(flipped)).toEqual(onChainTerms(native));
@@ -78,9 +82,10 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await expect(page.getByTestId('order-amount-tokens')).toHaveText('= 400 EXKCC at your price');
     await expect(page.getByTestId('order-price-native')).toContainText('0.025 KAS per EXKCC');
     const placed = await placeOrderAndRead(page, mock);
-    // the confirmation is the native order's table: a sell of 400 EXKCC at 0.025 KAS
-    expect(placed.receipt.orders.map((o) => o.title)).toEqual(['Sell limit order']);
-    expect(placed.receipt.orders[0]!.rows).toMatchObject({ Amount: '400 EXKCC', 'Limit price': '0.025 EXKCC / KAS' });
+    // the confirmation says it as typed (a purchase of 10 KAS for 400 EXKCC at 40 EXKCC per KAS), the native sell of 400 EXKCC below
+    expect(placed.receipt.orders.map((o) => o.title)).toEqual(['Buy KAS · limit']);
+    expect(placed.receipt.orders[0]!.token).toMatch(/· on chain: Sell limit order$/);
+    expect(placed.receipt.orders[0]!.rows).toMatchObject({ 'You pay': '400 EXKCC', 'You receive': 'at least 10.00 KAS', Price: '40 EXKCC per KAS', Amount: '400 EXKCC' });
     expect(placed.views).toHaveLength(1);
     // the signed order is a sell of 400 EXKCC = 40,000,000,000 base units, at 2,500,000 sompi per whole EXKCC
     expect(placed.views[0].contract).toBe('KobAsk');
@@ -191,7 +196,7 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
     await expect(amountUnit(page)).toHaveText('EXUSD');
     await expect(page.getByTestId(TESTID.orderAmount)).toHaveValue('0.103');
     await expect(page.getByTestId(TESTID.orderPrice)).toHaveValue('19.417476');
-    await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderPrice) }).locator('.tk-unit')).toHaveText('EXUSD / EXKCC');
+    await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderPrice) }).locator('.tk-unit')).toHaveText('EXKCC per EXUSD');
     await expect(page.getByTestId('ticket-pair-carried')).toHaveCount(0);
 
     // and back: Buy 2 EXKCC (0.103 EXUSD at 19.417476 = 2.0000000 EXKCC, rounded down to EXKCC's 8 decimals)

@@ -56,12 +56,12 @@ test('a token row shows its last price in KAS, the 24 h change, KAS volume, spre
   // the seeded fills of the last minutes: last 0.025 KAS per EXKCC at the decimals of the registry tick; the exact price and the unit in the tooltip
   const last = String(Number(stats.last) / 1e8);
   await expect(row.getByTestId(`token-last-${id}`)).toHaveText(new RegExp(`^${last.replace('.', '\\.')}0*$`));
-  await expect(row.getByTestId(`token-last-${id}`)).toHaveAttribute('title', `${last} (EXKCC / KAS)`);
+  await expect(row.getByTestId(`token-last-${id}`)).toHaveAttribute('title', `${last} (KAS per EXKCC)`);
   await expect(row.getByTestId(`token-change-${id}`)).toHaveText(/^[+-]?\d+\.\d\d%$/);
   await expect(row.getByTestId(`token-volume-${id}`)).toHaveText((Number(stats.quote_volume_24h) / 1e8).toFixed(2));
   await expect(row.getByTestId(`token-volume-${id}`)).toHaveAttribute('title', new RegExp(`KAS · ${stats.trades_24h} trades in 24 h$`));
   await expect(row.getByTestId(`token-spread-${id}`)).toHaveText(/^\d+\.\d\d%$/);
-  await expect(row.getByTestId(`token-spread-${id}`)).toHaveAttribute('title', /^Best bid 0\.0\d+ · best ask 0\.0\d+ \(EXKCC \/ KAS\)$/);
+  await expect(row.getByTestId(`token-spread-${id}`)).toHaveAttribute('title', /^Best bid 0\.0\d+ · best ask 0\.0\d+ \(KAS per EXKCC\)$/);
   await expect(row.getByTestId(`token-orders-${id}`)).toHaveText(String(stats.open_asks + stats.open_bids));
   await expect(row.getByTestId(`token-orders-${id}`)).toHaveAttribute('title', `${stats.open_asks} asks · ${stats.open_bids} bids`);
   // the list opens by 24 h volume, most traded first
@@ -91,13 +91,13 @@ test('sorting: 24 h volume first, every header sorts (click and keyboard), searc
   expect(await rowIds(page)).toEqual([exkcc, QUOTE]);
   await expect(page.getByTestId('sort-volume').first().locator('xpath=..')).toHaveAttribute('aria-sort', 'none');
 
-  // the pair EXKCC/EXUSD: its price implied through both KAS markets (EXKCC's ~0.025 KAS / EXUSD's 0.502 KAS), its live pair orders, no spread
+  // the pair EXKCC/EXUSD: its price implied through both KAS markets (EXKCC's ~0.025 EXUSD per KAS's 0.502 KAS), its live pair orders, no spread
   const pairId = `${exkcc}-${QUOTE}`;
   const pair = page.getByTestId(`pair-row-${pairId}`);
   await expect(pair).toHaveAttribute('data-state', 'ready');
   await expect(page.getByTestId(`pair-link-${pairId}`)).toHaveText(`EXKCC (${exkcc.slice(0, 4)}…${exkcc.slice(-4)}) / EXUSD (e7e7…e7e7)`);
   await expect(page.getByTestId(`pair-link-${pairId}`)).toHaveAttribute('href', `#/market/${exkcc}/${QUOTE}`);
-  await expect(pair.getByTestId(`pair-last-${pairId}`)).toHaveAttribute('title', /^0\.0\d+ \(EXKCC \/ EXUSD\)$/);
+  await expect(pair.getByTestId(`pair-last-${pairId}`)).toHaveAttribute('title', /^0\.0\d+ \(EXUSD per EXKCC\)$/);
   await expect(pair.getByTestId(`pair-orders-${pairId}`)).toHaveText('6');
   await expect(pair.getByTestId(`pair-orders-${pairId}`)).toHaveAttribute('title', '3 asks · 2 bids · 1 conditional');
   await expect(pair.getByTestId(`pair-spread-${pairId}`)).toHaveText('—');
