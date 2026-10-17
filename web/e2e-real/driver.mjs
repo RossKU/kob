@@ -362,6 +362,18 @@ export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expe
 /** The phases of an order action's status line (`order-status` / `flow-status`) that end it without a transaction. */
 const STOPPED = ['blocked', 'rejected', 'failed'];
 
+/**
+ * The app's final confirmation of a transaction for an external wallet (`confirm-order`, the order's details from the decoded transaction):
+ * read and confirmed when it is open, its title, summary lines and fee returned; null when none is open (the private-key signer confirms in its own frame).
+ */
+async function confirmInApp(h) {
+  const popup = tid(h, 'confirm-order');
+  if (!(await popup.count())) return null;
+  const read = { title: collapse(await tid(h, 'confirm-order-title').innerText().catch(() => '')), rows: collapse(await tid(h, 'confirm-order-summary').innerText().catch(() => '')), fee: collapse(await tid(h, 'confirm-order-fee').innerText().catch(() => '')) };
+  await tid(h, 'confirm-order-ok').click();
+  return read;
+}
+
 /** The status line's sentence when it stopped (`send-error`), with its code. */
 async function statusError(h, scope) {
   const line = tid(h, scope);
@@ -371,19 +383,21 @@ async function statusError(h, scope) {
 }
 
 /**
- * An order of the ticket: `click()` presses the order button, which checks the order silently and asks the wallet at once (no confirmation
- * screen). Approves the wallet's popup(s), waits for the transaction id on the ticket's status line (`order-status`) and the app's acceptance
+ * An order of the ticket: `click()` presses the order button, which checks the order silently and shows the final confirmation (the app's
+ * popup for an external wallet, confirmed here; the private-key signer's frame), then asks the wallet. Approves the wallet's popup(s), waits for the transaction id on the ticket's status line (`order-status`) and the app's acceptance
  * status. Throws with the app's own sentence when it stops (a blocking check, a rejection, a failure).
  */
 export async function signFromTicket(h, ctx, wallet, label, shotDir, click) {
   const t0 = Date.now();
   const line = tid(h, 'order-status');
   const submitsBefore = h.submits.length;
+  const receipts = [];
   const { popups } = await wallet.approve(ctx, async () => {
     await click();
     const t1 = Date.now();
     for (;;) {
       const phase = await line.getAttribute('data-phase').catch(() => null);
+      if (phase === 'confirming') receipts.push(await confirmInApp(h));
       if (phase === 'submitted') return;
       if (STOPPED.includes(phase)) throw new Error(await statusError(h, 'order-status'));
       if (Date.now() - t1 > POPUP_TIMEOUT_MS + 60_000) throw new Error('timed out waiting for the transaction id');
@@ -402,12 +416,12 @@ export async function signFromTicket(h, ctx, wallet, label, shotDir, click) {
   }
   const screenshots = [await shot(h.page, shotDir, `${label}-accepted`)];
   const submitted = h.submits.slice(submitsBefore).at(-1)?.tx ?? null;
-  return { txid, kind: null, appStatus: status, summary: collapse(await line.innerText().catch(() => '')), shownAs: '', acks: [], popups, screenshots, signMs, totalMs: Date.now() - t0, submitted };
+  return { txid, kind: null, appStatus: status, summary: collapse(await line.innerText().catch(() => '')), receipts: receipts.filter(Boolean), shownAs: '', acks: [], popups, screenshots, signMs, totalMs: Date.now() - t0, submitted };
 }
 
 /**
- * Runs a My orders transaction flow (cancel, cancel of a position, merge ...) that the action's button has just started: every step asks the wallet
- * at once (no confirmation screen), the next one after each submission. Approves the popups until the flow shows its result and returns one step
+ * Runs a My orders transaction flow (cancel, cancel of a position, merge ...) that the action's button has just started: every step shows its
+ * final confirmation (confirmed here) and asks the wallet, the next one after each submission. Approves the popups until the flow shows its result and returns one step
  * per submitted transaction. Throws when the flow stops or ends with an error. Open My orders fresh before the action (scenarios.mjs
  * `openOrders`): an error banner of an earlier flow on the same page would be taken for this one's.
  */
@@ -424,6 +438,7 @@ export async function runFlow(h, ctx, wallet, label, shotDir, { maxSteps = 12 } 
         return;
       }
       const phase = await tid(h, 'flow-status').getAttribute('data-phase').catch(() => null);
+      if (phase === 'confirming') await confirmInApp(h);
       if (STOPPED.includes(phase)) throw new Error(await statusError(h, 'flow-status'));
       for (const e of ['flow-error', 'flow-stopped', 'flow-plan-errors', 'orders-action-error']) {
         if (await tid(h, e).count()) throw new Error(`${e}: ${collapse(await tid(h, e).innerText()).slice(0, 600)}`);

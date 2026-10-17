@@ -4,7 +4,7 @@ import { test, expect } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
 import { expectNoLeakedKeys, horizontalOverflow } from '../helpers/i18n';
 import { runFlow } from '../helpers/orders';
-import { expectWalletSigned, fillFields, pickType, placedBy, placeOrder, readDisclosure, waitReviewable } from '../helpers/ticket';
+import { clickPlaceOnly, confirmReceipt, expectWalletSigned, fillFields, pickType, placedBy, placeOrder, readReceipt, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -29,7 +29,7 @@ test.describe('English text', () => {
     await expectNoLeakedKeys(page, 'the market page');
   });
 
-  test('a stop order and a limit order end to end: disclosure, inline status, My orders and cancel', async ({ appPage: page, mock, wallet }) => {
+  test('a stop order and a limit order end to end: ticket, final confirmation, inline status, My orders and cancel', async ({ appPage: page, mock, wallet }) => {
     await fund(mock);
     await openMarket(page, mock);
 
@@ -37,27 +37,27 @@ test.describe('English text', () => {
     await pickType(page, 'stopMarket', 'sell');
     await fillFields(page, { amount: '2', stop: '0.023' });
     await waitReviewable(page);
-    const disc = page.getByTestId('order-disclosure');
-    await expect(disc).toContainText(/stop/i);
-    expect((await readDisclosure(page)).summary).toContain('Sell 2 EXKCC');
-    await expectNoLeakedKeys(page, 'the stop-order disclosure');
+    await expectNoLeakedKeys(page, 'the stop-order ticket');
     await expect(page.getByTestId('order-place')).toHaveText('Sell Stop (market)');
 
     // market order
     await pickType(page, 'market', 'buy');
     await fillFields(page, { amount: '1' });
     await waitReviewable(page);
-    expect((await readDisclosure(page)).summary).toContain('Buy 1 EXKCC');
-    await expect(disc).toContainText(/market/i);
-    await expectNoLeakedKeys(page, 'the market-order disclosure');
+    await expectNoLeakedKeys(page, 'the market-order ticket');
+    await expect(page.getByTestId('order-place')).toHaveText('Buy Market');
 
-    // a limit order, placed with one click
+    // a limit order, placed with one click and the final confirmation (its popup is free of leaked keys too)
     await pickType(page, 'limit', 'sell');
     await fillFields(page, { amount: '2', price: '0.027' });
     await waitReviewable(page);
-    await expectNoLeakedKeys(page, 'the limit-order disclosure');
+    await expectNoLeakedKeys(page, 'the limit-order ticket');
     await expect(page.getByTestId('order-place')).toHaveText('Sell Limit');
-    const placed = await placeOrder(page, mock);
+    await clickPlaceOnly(page);
+    expect((await readReceipt(page)).orders.map((o) => o.title)).toEqual(['Sell limit order']);
+    await expectNoLeakedKeys(page, 'the final confirmation');
+    await confirmReceipt(page);
+    const placed = await placedBy(mock, await waitSubmitted(page));
     await expectWalletSigned(wallet!, placed);
     await expect(page.getByTestId('order-status').getByTestId('tx-status')).toContainText('Accepted');
     await expectNoLeakedKeys(page, 'the order status');
@@ -74,7 +74,7 @@ test.describe('English text', () => {
     await expectNoLeakedKeys(page, 'My orders');
 
     // cancel
-    await page.getByTestId(`order-cancel-${id}`).click(); // no confirmation: the flow starts and the wallet is asked at once
+    await page.getByTestId(`order-cancel-${id}`).click(); // the flow starts: its final confirmation popup, then the wallet
     const [step] = await runFlow(page, mock, wallet, { steps: 1 });
     expect(step!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
     await expect(page.getByTestId('flow-done')).toBeVisible();
@@ -105,10 +105,18 @@ test.describe('phone, 390 px wide', () => {
     await pickType(page, 'limit', 'sell');
     await fillFields(page, { amount: '2', price: '0.027', tip: '0.0005' });
     await waitReviewable(page);
-    expect(await horizontalOverflow(page), 'ticket with disclosure').toBe(0);
-    await expect(page.getByTestId('order-disclosure')).toBeVisible();
+    expect(await horizontalOverflow(page), 'ticket').toBe(0);
     await page.getByTestId('order-place').scrollIntoViewIfNeeded();
-    await page.getByTestId('order-place').click();
+    await clickPlaceOnly(page);
+    // the final confirmation popup fits the screen and its buttons are reachable
+    const receipt = await readReceipt(page);
+    expect(receipt.title).toBe('Place order');
+    expect(await horizontalOverflow(page), 'confirmation popup').toBe(0);
+    const popup = (await page.getByTestId('confirm-order').boundingBox())!;
+    expect(popup.x).toBeGreaterThanOrEqual(0);
+    expect(popup.x + popup.width).toBeLessThanOrEqual(390 + 1);
+    await expect(page.getByTestId('confirm-order-ok')).toBeInViewport();
+    await confirmReceipt(page);
     // the confirmed status line under the button stays inside the screen
     const status = page.getByTestId('order-status');
     await expect(status).toBeVisible();
@@ -143,7 +151,7 @@ test.describe('phone, 390 px wide', () => {
       await expect(page.getByTestId('nav-market')).toBeVisible();
       expect(await horizontalOverflow(page), route).toBe(0);
     }
-    // a heavy ticket: the if-done order with all its fields and the disclosure
+    // a heavy ticket: the if-done order with all its fields
     await page.goto(`/#/market/${tokenId}`);
     await expect(page.getByTestId('order-ticket')).toBeVisible();
     await pickType(page, 'repeatIfo', 'buy');

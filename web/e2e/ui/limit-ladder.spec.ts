@@ -76,12 +76,34 @@ test.describe('limit ladder', () => {
 });
 
 test.describe('Max', () => {
+  test('Available at the amount label shows only the asset the order spends, and clicking it is Max', async ({ appPage: page, mock }) => {
+    await fund(mock, 'alice', { kas: 30n, utxos: 1, tokens: 100n });
+    await openMarket(page, mock);
+    const available = page.getByTestId('order-available');
+    // a sell spends the token: its balance only (no KAS line)
+    await pickType(page, 'limit', 'sell');
+    await expect(available).toHaveText('Available 100 EXKCC');
+    await expect(page.getByTestId('order-balances')).toHaveCount(0);
+    await available.click();
+    await expect(page.getByTestId('order-amount')).toHaveValue('100');
+    // a buy spends KAS: the KAS balance (the whole of it; Max keeps carriers, fees and a reserve back from the amount)
+    await page.getByTestId('order-side-buy').click();
+    await expect(available).toHaveText('Available 30 KAS');
+    await fillFields(page, { price: '0.0245' });
+    await available.click();
+    const amount = Number(await page.getByTestId('order-amount').inputValue());
+    expect(amount).toBeGreaterThan(100);
+    expect(amount * 0.0245, 'Max spends less than the balance').toBeLessThan(30);
+    // the market page has no balance card any more
+    await expect(page.getByTestId('wallet-token-balances')).toHaveCount(0);
+  });
+
   test('a buy: the largest amount the builder accepts, placeable as it stands', async ({ appPage: page, mock }) => {
     await fund(mock, 'alice', { kas: 30n, utxos: 1 });
     await openMarket(page, mock);
     await pickType(page, 'limit', 'buy');
     await fillFields(page, { price: '0.0245' });
-    await page.getByTestId('order-amount-max').click();
+    await page.getByTestId('order-available').click();
     const amount = await page.getByTestId('order-amount').inputValue();
     expect(Number(amount)).toBeGreaterThan(100);
     await expect(page.getByTestId('order-max-note')).toContainText('after carriers, network fees and a small reserve');
@@ -97,7 +119,7 @@ test.describe('Max', () => {
     await openMarket(page, mock);
     await pickType(page, 'limit', 'buy');
     await fillFields(page, { price: '0.0245', 'ladder.on': true, 'ladder.levels': '4', 'ladder.pct': '1' });
-    await page.getByTestId('order-amount-max').click();
+    await page.getByTestId('order-available').click();
     await waitReviewable(page);
     await expect(page.getByTestId('order-ladder-funds')).toHaveCount(0);
     // placed as it stands: every level is accepted, the wallet pays for the whole ladder
@@ -128,11 +150,11 @@ test.describe('Max', () => {
     await fund(mock, 'alice', { kas: 1n, utxos: 1, tokens: 100n });
     await openMarket(page, mock);
     await pickType(page, 'limit', 'sell');
-    await page.getByTestId('order-amount-max').click();
+    await page.getByTestId('order-available').click();
     await expect(page.getByTestId('order-amount')).toHaveValue('100');
     await page.getByTestId('order-side-buy').click();
     await fillFields(page, { price: '0.0245' });
-    await page.getByTestId('order-amount-max').click();
+    await page.getByTestId('order-available').click();
     await expect(page.getByTestId('order-max-note')).toContainText('cannot cover any amount');
     await expect(page.getByTestId('order-amount')).toHaveValue('');
   });

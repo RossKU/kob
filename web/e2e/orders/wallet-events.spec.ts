@@ -38,7 +38,7 @@ for (const id of ['kasware', 'kaspire', 'kastle'] as WalletName[]) {
 
       // the ticket is bound to the new account: it plans for bob and signs for bob
       await waitReviewable(page);
-      await page.getByTestId('order-place').click();
+      await clickPlace(page);
       const placed = await placedBy(mock, await waitSubmitted(page));
       await expectWalletSigned(wallet!, placed);
       expect((await mock.ordersOf('bob', 'active')).length).toBe(1);

@@ -67,8 +67,8 @@ interface PlanStop {
 }
 
 /**
- * The extra lead of a re-timed auction's start (DAA, 3 s): the re-timed transaction is checked, signed and its clock read again before it is
- * sent, which over a slow link takes longer than the start's own lead (MARKET_ACTIVATION_DAA) leaves.
+ * The extra lead of a re-timed auction's start (DAA, 3 s more at each re-timing of the same order): the re-timed transaction is checked, signed
+ * and its clock read again before it is sent, which over a slow link takes longer than the start's own lead (MARKET_ACTIVATION_DAA) leaves.
  */
 const RETIME_LEAD_DAA = 30n;
 
@@ -501,17 +501,18 @@ export function OrderTicket(props: OrderTicketProps) {
   /**
    * The re-timing of a planned order (`SendJob.retime`: a long read of the final confirmation, an auction start that passed while the wallet
    * signed): the same intent planned on the same environment, references and fees, so with the same terms, inputs and fee, with the node clock now
-   * (plus RETIME_LEAD_DAA) for its times. Only its times move, later: the signer and the app accept it without asking again (signer/retime.ts).
+   * (plus `lead`, RETIME_LEAD_DAA more at each re-timing) for its times. Only its times move, later: the signer and the app accept it without
+   * asking again (signer/retime.ts).
    */
-  const retimer = (env: PlanEnv, refs: References, intent: Intent, fees: PlanEnv['fees'] | null, label: string, openToken: SendJob['openToken']): SendJob['retime'] =>
+  const retimer = (env: PlanEnv, refs: References, intent: Intent, fees: PlanEnv['fees'] | null, label: string, openToken: SendJob['openToken'], lead = RETIME_LEAD_DAA): SendJob['retime'] =>
     async () => {
       try {
         const now = liveClockAt(liveClock.current, Date.now()) ?? (await readClock(services));
-        const clock = { ...now, daa: now.daa + RETIME_LEAD_DAA, unixSeconds: now.unixSeconds + (RETIME_LEAD_DAA * 1000n) / BigInt(Math.max(1, now.rateMilli)) };
+        const clock = { ...now, daa: now.daa + lead, unixSeconds: now.unixSeconds + (lead * 1000n) / BigInt(Math.max(1, now.rateMilli)) };
         const p = planOrder(withRefs({ ...env, clock, ...(fees ? { fees } : {}) }, refs), intent);
         const firstError = errors(p)[0];
         if (!p.ok || !p.built || firstError) return { stop: { code: 'changed', text: firstError ? issueText(firstError, issueCtx) : t('ticket.reviewChanged') } };
-        return { built: p.built, expected: expectedFromPlan(p), label, openToken, submitByDaa: auctionSubmitBy(p.states, clock.daa), retime: retimer(env, refs, intent, fees, label, openToken) };
+        return { built: p.built, expected: expectedFromPlan(p), label, openToken, submitByDaa: auctionSubmitBy(p.states, clock.daa), retime: retimer(env, refs, intent, fees, label, openToken, lead + RETIME_LEAD_DAA) };
       } catch (e) {
         return { stop: { code: 'plan', text: buildErrorText(e instanceof Error ? e.message : String(e)) } };
       }

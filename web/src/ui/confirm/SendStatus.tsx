@@ -215,7 +215,7 @@ export function useSend(): Sender {
 
 /**
  * How often an auction whose start passed by the time it was signed (`clock-moved`) is re-timed and signed again before the reason is shown:
- * each attempt gives it a later start (the ticket's RETIME_LEAD_DAA), so a slow link gets there within a few.
+ * each attempt gives it a longer lead (the ticket's RETIME_LEAD_DAA, 3 s more each time), so a slow link gets there within a few.
  */
 const CLOCK_RETRIES = 3;
 

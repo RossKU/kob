@@ -5,6 +5,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { TESTID } from '../testids';
 import { connectWallet, fund, listExkcc } from '../helpers/env';
+import { fillFields } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -71,7 +72,9 @@ test.describe('one market page, a pair selector', () => {
     await expect(page.getByTestId('pair-book')).toBeVisible();
     // the same unified order ticket, now with EXUSD as its quote
     await expect(page.getByTestId('order-ticket')).toBeVisible();
-    await expect(page.getByTestId('order-balances')).toContainText('EXUSD');
+    await expect(page.getByTestId('order-available')).toContainText('EXKCC'); // the default Sell spends the base token
+    await page.getByTestId('order-side-buy').click();
+    await expect(page.getByTestId('order-available')).toContainText('EXUSD'); // a buy spends the pair's quote
     // same places: the title, the book left, the chart in the middle, the ticket right
     const chart1 = await box(page, 'chart-section');
     const book1 = await box(page, 'pair-book-section');
@@ -226,14 +229,13 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     await page.getByTestId(TESTID.orderAmount).fill('0.12');
     await page.getByTestId(TESTID.orderPrice).fill('25'); // 25 EXKCC per KAS = 0.04 KAS per EXKCC
     // 0.12 KAS at 0.04 KAS per EXKCC = 3 EXKCC
-    await expect(page.getByTestId('order-amount-tokens')).toContainText('0.12 KAS = 3 EXKCC');
-    await expect(page.getByTestId('order-amount-tokens')).toContainText('your price');
+    await expect(page.getByTestId('order-amount-tokens')).toHaveText('= 3 EXKCC at your price');
     // the tip is an amount of KAS per token traded; its share of the KAS traded is shown
     await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).toContainText('KAS per EXKCC traded');
     await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).not.toContainText('EXKCC / KAS');
-    await page.getByTestId(TESTID.orderTip).fill('0.001');
+    await fillFields(page, { tip: '0.001' }); // the tip sits in Advanced options
     await expect(page.getByTestId('order-tip-share')).toContainText('2.5%');
-    await expect(page.getByTestId('order-balances')).toBeVisible();
+    await expect(page.getByTestId('order-available')).toBeVisible();
     // the helps
     await page.getByTestId('order-type').selectOption('close');
     await expect(help).toContainText('Buys KAS with all your EXKCC');

@@ -1,4 +1,4 @@
-// Smoke tests of the order ticket and its one-button send flow (checks, the wallet's own approval, send) against the mock stack (mock indexer + node + KasWare-style mock wallet).
+// Smoke tests of the order ticket and its one-button send flow (checks, the final confirmation popup, the wallet's own approval, send) against the mock stack (mock indexer + node + KasWare-style mock wallet).
 // The per-order-type matrix is the next phase's job: here every type is reachable, and the limit-sell flow runs end to end.
 //
 // The example registry of the mock lists EXKCC as pending-review (tradable; the UI no longer shows any verification state). Every test serves a copy in which
@@ -6,7 +6,9 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '../fixtures';
 import type { Page } from '@playwright/test';
-import { clickPlace, expectStopped, expectWalletSigned, placeOrder, waitReviewable, waitSubmitted } from '../helpers/ticket';
+import { formatKas } from '../../src/kob/units';
+import { mockClock } from '../helpers/env';
+import { clickPlace, clickPlaceOnly, expectStopped, expectWalletSigned, fillFields, peekReceipt, pickType, placedBy, placeOrder, placeOrderAndRead, readReceipt, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
 const KAS = 100_000_000n;
 const TOKEN = 100_000_000n; // one EXKCC = 1e8 base units
@@ -45,7 +47,7 @@ async function fundAlice(mock: { giveKas(k: string, n: bigint): Promise<unknown>
 }
 
 test.describe('order ticket', () => {
-  test('limit sell end to end: form, disclosure, one click, the wallet signature, accepted transaction', async ({ appPage: page, mock, wallet }) => {
+  test('limit sell end to end: form, one click, the final confirmation, the wallet signature, accepted transaction', async ({ appPage: page, mock, wallet }) => {
     await fundAlice(mock);
     await openTicket(page, mock);
 
@@ -54,22 +56,24 @@ test.describe('order ticket', () => {
     await expect(page.getByTestId('order-place')).toBeDisabled();
     await page.getByTestId('order-amount').fill('3');
     await page.getByTestId('order-price').fill('2.6');
-    await page.getByTestId('order-tip').fill('0.01');
-
-    // disclosure: all-in price, carriers, escrow, expiry
-    const disclosure = page.getByTestId('order-disclosure');
-    await expect(disclosure).toBeVisible();
-    await expect(page.getByTestId('disc-allInPrice')).toContainText('2.59 EXKCC / KAS');
-    await expect(page.getByTestId('disc-allInTotal')).toContainText('7.77 KAS');
-    await expect(page.getByTestId('disc-tokensEscrowed')).toContainText('3 EXKCC');
-    await expect(page.getByTestId('disc-kasLocked')).toContainText('4 KAS');
-    await expect(page.getByTestId('disc-expiry')).toBeVisible();
-    await expect(page.getByTestId('disc-expiry-extra')).toBeVisible(); // day-85 renewal date of a GTC order
+    await fillFields(page, { tip: '0.01' }); // the tip sits in Advanced options
     await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
+    // the ticket itself lists no cost and terms: those are in the final confirmation only
+    await expect(page.getByTestId('order-disclosure')).toHaveCount(0);
 
-    // one click: the wallet is asked once and signs exactly the transaction the node accepts
+    // one click: the final confirmation (what the order costs and does), Continue, then the wallet is asked once and signs exactly the transaction the node accepts
     await expect(page.getByTestId('order-place')).toBeEnabled();
-    const placed = await placeOrder(page, mock);
+    const placed = await placeOrderAndRead(page, mock);
+    const shown = placed.receipt;
+    expect(shown.title).toBe('Place order');
+    expect(shown.lines['Locked in orders']).toBe('4 KAS');
+    expect(Object.values(shown.lines), 'the 3 EXKCC leave the wallet').toContain('−3');
+    expect(shown.fee).toBe(`${formatKas(BigInt(placed.submission.fee))} KAS`);
+    expect(shown.orders).toHaveLength(1);
+    expect(shown.orders[0]!.title).toBe('Sell limit order');
+    // 3 EXKCC at 2.6 KAS with a 0.01 KAS tip: the all-in price is 2.59
+    expect(shown.orders[0]!.rows).toMatchObject({ Amount: '3 EXKCC', 'Limit price': '2.6 EXKCC / KAS', 'You receive at least per token (all-in)': '2.59 EXKCC / KAS', 'KAS on the order output': '2 KAS' });
+    expect(shown.orders[0]!.rows.Expires, 'the expiry is shown').toMatch(/^DAA score [0-9]+$/);
     await expectWalletSigned(wallet!, placed);
     expect(placed.submission.created).toHaveLength(1);
     expect(placed.submission.created[0]!.kind).toBe('KobAsk');
@@ -87,6 +91,75 @@ test.describe('order ticket', () => {
     expect(BigInt(bal.tokens.EXKCC ?? '0')).toBe(97n * TOKEN);
   });
 
+  test('the final confirmation: Cancel sends nothing and the wallet is never asked; Continue asks it exactly once', async ({ appPage: page, mock, wallet }) => {
+    await fundAlice(mock);
+    await openTicket(page, mock);
+    await page.getByTestId('order-side-sell').click();
+    await page.getByTestId('order-amount').fill('2');
+    await page.getByTestId('order-price').fill('2.7');
+
+    // the click opens the popup: its title and the order's terms; the status line says it is waiting for the user, the wallet has not been asked
+    await clickPlaceOnly(page);
+    const shown = await readReceipt(page);
+    expect(shown.from).toBe('app');
+    expect(shown.title).toBe('Place order');
+    expect(shown.orders.map((o) => o.title)).toEqual(['Sell limit order']);
+    expect(shown.orders[0]!.rows).toMatchObject({ Amount: '2 EXKCC', 'Limit price': '2.7 EXKCC / KAS' });
+    expect(shown.lines['Locked in orders']).toBe('4 KAS');
+    expect(shown.fee).toMatch(/^[0-9.]+ KAS$/);
+    await expect(page.getByTestId('order-status')).toHaveAttribute('data-phase', 'confirming');
+    expect(await wallet!.calls(), 'no wallet request before Continue').toHaveLength(0);
+
+    // Cancel: the neutral outcome, nothing was sent, no wallet request
+    await page.getByTestId('confirm-order-cancel').click();
+    await expect(page.getByTestId('confirm-order')).toHaveCount(0);
+    const stopped = await expectStopped(page, 'rejected', { code: 'cancelled' });
+    expect(stopped.text).toBe('Cancelled. Nothing was sent.');
+    expect(await wallet!.calls()).toHaveLength(0);
+    expect(await mock.submitted(false)).toHaveLength(0);
+
+    // the same button opens it again; Continue asks the wallet exactly once and the order goes through
+    await clickPlaceOnly(page);
+    await readReceipt(page);
+    await page.getByTestId('confirm-order-ok').click();
+    await expect(page.getByTestId('confirm-order')).toHaveCount(0);
+    const txid = await waitSubmitted(page);
+    expect(await wallet!.calls(), 'exactly one wallet request').toHaveLength(1);
+    const placed = await placedBy(mock, txid);
+    await expectWalletSigned(wallet!, placed);
+    expect(await mock.submitted(false)).toHaveLength(1);
+  });
+
+  test('a market buy confirmed after reading the popup for 3 s: the clock of the order is the one at Confirm; one wallet request, no second popup', async ({ appPage: page, mock, wallet }) => {
+    await fundAlice(mock);
+    await openTicket(page, mock);
+    await pickType(page, 'market', 'buy');
+    await fillFields(page, { amount: '2' });
+    await clickPlaceOnly(page);
+    const first = await readReceipt(page);
+    expect(first.title).toBe('Place order');
+    expect(first.orders.map((o) => o.title)).toEqual(['Buy market order (auction)']);
+    expect(first.updated).toBe(false);
+    // the user reads for ~3 s (the mock chain advances 10 DAA a second): the auction the popup showed started on the clock of the click
+    await page.waitForTimeout(3_000);
+    expect(await wallet!.calls()).toHaveLength(0);
+    const confirmedAt = await mockClock(mock);
+    await page.getByTestId('confirm-order-ok').click();
+    // nothing got worse: no second popup, the wallet is asked directly (once)
+    const txid = await waitSubmitted(page);
+    await expect(page.getByTestId('confirm-order')).toHaveCount(0);
+    await expect(page.getByTestId('confirm-order-updated')).toHaveCount(0);
+    expect(await wallet!.calls(), 'exactly one wallet request').toHaveLength(1);
+    const placed = await placedBy(mock, txid);
+    await expectWalletSigned(wallet!, placed);
+    expect(await mock.submitted(false)).toHaveLength(1);
+    // the stale clock of the popup did not end up in the order: its auction starts at or after the node clock when Confirm was clicked
+    const state = placed.views[0].state.state;
+    expect(placed.views[0].contract).toBe('KobBid');
+    expect(Number(state.activeFrom), 'activeFrom (the auction start) >= the DAA at Confirm').toBeGreaterThanOrEqual(confirmedAt.daa);
+    expect(Number(state.expiryDaa)).toBeGreaterThan(Number(state.activeFrom));
+  });
+
   test('a wallet that declines is a neutral outcome and nothing is sent; trying again works', async ({ appPage: page, mock, wallet }) => {
     await fundAlice(mock);
     await openTicket(page, mock);
@@ -99,9 +172,9 @@ test.describe('order ticket', () => {
     expect(await wallet!.calls()).toHaveLength(1);
     expect(await mock.submitted()).toHaveLength(0);
 
-    // approve now: the same button asks again, signs and submits
+    // approve now: the same button opens the confirmation again, then asks the wallet, signs and submits
     await wallet!.configure({ approve: true });
-    await page.getByTestId('order-place').click();
+    await clickPlace(page);
     await waitSubmitted(page);
     expect(await mock.submitted()).toHaveLength(1);
   });
@@ -134,7 +207,7 @@ test.describe('order ticket', () => {
     expect(await mock.submitted()).toHaveLength(0);
     // the ticket stays as it was: the same button tries again and the node accepts
     await expect(page.getByTestId('order-place')).toBeEnabled();
-    await page.getByTestId('order-place').click();
+    await clickPlace(page);
     await waitSubmitted(page);
     expect(await mock.submitted()).toHaveLength(1);
   });
@@ -151,7 +224,7 @@ test.describe('order ticket', () => {
     await expect(issue).toContainText('3 EXKCC'); // short by 3 of the 8 EXKCC
     await expect(page.getByTestId('order-place')).toBeDisabled();
     // "max" fills what the balance allows and clears the error
-    await page.getByTestId('order-amount-max').click();
+    await page.getByTestId('order-available').click();
     await expect(page.getByTestId('order-amount')).toHaveValue('5');
     await expect(page.getByTestId('order-issue-INSUFFICIENT_TOKENS')).toHaveCount(0);
     await expect(page.getByTestId('order-place')).toBeEnabled();
@@ -205,7 +278,11 @@ test.describe('order ticket', () => {
       await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-type', type);
       await expect(page.getByTestId('order-amount')).toBeVisible();
       await expect(page.getByTestId('order-type-help')).not.toBeEmpty();
-      for (const id of expectField[type] ?? []) await expect(page.getByTestId(id), `${type}: ${id}`).toBeVisible();
+      for (const id of expectField[type] ?? []) {
+        // the priority tip sits in Advanced options for every type (closed by default); the other fields are on the ticket itself
+        if (id === 'order-tip') await expect(page.getByTestId('order-advanced').getByTestId(id), `${type}: ${id}`).toHaveCount(1);
+        else await expect(page.getByTestId(id), `${type}: ${id}`).toBeVisible();
+      }
     }
     // the side follows the type: TWAP only sells, DCA only buys
     await page.getByTestId('order-type').selectOption('twap');
@@ -221,11 +298,16 @@ test.describe('order ticket', () => {
     await page.getByTestId('order-type').selectOption('stopMarket');
     await page.getByTestId('order-amount').fill('2');
     await page.getByTestId('field-stop').fill('2.2');
-    await expect(page.getByTestId('disc-stopWorst')).toBeVisible();
-    await expect(page.getByTestId('disc-notes').locator('[data-note="stopTrigger"]')).toBeVisible();
     await waitReviewable(page);
     await expect(page.getByTestId('order-place')).toHaveText('Sell Stop (market)');
     await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
+    // the trigger rules are in the final confirmation (read and cancelled: nothing is sent)
+    const shown = await peekReceipt(page);
+    expect(shown.orders.map((o) => o.title)).toEqual(['Sell stop order']);
+    const rows = shown.orders[0]!.rows;
+    expect(rows['Stop trigger']).toBe('2.2 EXKCC / KAS');
+    expect(rows['Worst fill price after the trigger'], 'the worst fill price of the stop').toContain('EXKCC / KAS');
+    expect(rows['Fill band'], 'the trigger band').toBeTruthy();
     expect(await mock.submitted()).toHaveLength(0);
   });
 
@@ -308,7 +390,7 @@ test.describe('order ticket', () => {
     await page.getByTestId('order-price').fill('0.0245');
     // the slider waits for the buy's Max (a planner search) before it takes a pick
     await expect(range).toBeEnabled();
-    await page.getByTestId('order-amount-max').click();
+    await page.getByTestId('order-available').click();
     await expect(amount).not.toHaveValue('');
     const max = await base();
     expect(max).toBeGreaterThan(0n);

@@ -6,7 +6,7 @@ import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
 import { connectWallet, fund, listExkcc, openMarket } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
-import { fillFields, pickType, placeOrder, readDisclosure, settlePlan, waitReviewable } from '../helpers/ticket';
+import { fillFields, peekReceipt, pickType, placeOrder, settlePlan, waitReviewable } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -169,14 +169,17 @@ test.describe('a token of 18 decimals', () => {
     await expect(page.getByTestId('order-ticket')).toBeVisible();
     // the standard scale is 10^9 base units: a billionth of a token, not "one whole token"
     await expect(page.getByTestId('token-scale')).toContainText('per 1000000000 base units (0.000000001 token)');
-    // the book quotes 0.025 KAS per 10^9 base units = 25,000,000 KAS per token; a sell far below it crosses the book, and the disclosure names the
-    // market price per whole token (the planner's price warning itself is not shown)
+    // the book quotes 0.025 KAS per 10^9 base units = 25,000,000 KAS per token; a sell far below it crosses the book (the planner's price warning
+    // itself is not shown), and the final confirmation names the token's amount and the price per whole token
     await pickType(page, 'limit', 'sell');
     await fillFields(page, { amount: '1', price: '1' });
     await settlePlan(page);
     await expect(page.getByTestId('order-issue-PRICE_AGGRESSIVE_VS_MARKET')).toHaveCount(0);
-    expect((await readDisclosure(page)).rows.expected).toMatch(/^2[45],\d{3},\d{3} EIGHTEEN \/ KAS/);
-    await expect(page.getByTestId('balance-free')).toContainText('1.234567890123456789');
+    // the long balance stays whole in the Available line (the market page has no balance card any more)
+    await expect(page.getByTestId('order-available')).toHaveText('Available 1.234567890123456789 EIGHTEEN');
+    const shown = await peekReceipt(page);
+    expect(shown.orders[0]!.token).toMatch(/^EIGHTEEN [(]d1d1d1d1…d1d1d1d1[)]$/);
+    expect(shown.orders[0]!.rows['Expected price (auction start)']).toMatch(/^2[45],\d{3},\d{3} EIGHTEEN \/ KAS/);
     expect(await noPageScroll(page)).toBe(true);
   });
 });

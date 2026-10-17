@@ -1,7 +1,7 @@
 // The order-type matrix (mock KasWare wallet, default mock seed, EXKCC listed as tradable): every order type of docs/spec/order-types.md, on
 // each side where it exists, is placed end to end through the UI:
-//   ticket fields -> live disclosure -> ONE click on the order button -> the wallet signs exactly the inputs of the transaction (no confirmation
-//   screen) -> mock node accepts (the covenants run) -> the indexer holds the right contract with the right state fields
+//   ticket fields -> ONE click on the order button -> the final confirmation (the signer's table: summary, fee and the order's terms, read before it is confirmed) -> its
+//   Confirm -> the wallet signs exactly the inputs of the transaction -> mock node accepts (the covenants run) -> the indexer holds the right contract with the right state fields
 //   (and kob-wasm `recoverOrders` on the accepted tx agrees) -> My orders shows it with the right label and status.
 // The expectations live in cases.ts; this file is the generic driver plus the timing rules (GTC 90 days, GTD date, day order until 00:00 UTC
 // against `kob.dayOrder`, timed activation, IOC / auction lifetimes).
@@ -9,8 +9,9 @@ import { test, expect } from '../fixtures';
 import { p2pkSpk } from '../../mock/address.mjs';
 import { loadKobNode } from '../../src/kob/wasm.node';
 import ticketText from '../../src/i18n/en/ticket';
+import { formatKas } from '../../src/kob/units';
 import { browserTzOffset, fund, mockClock, openMarket } from '../helpers/env';
-import { fillFields, pickType, placeOrder, readDisclosure, expectWalletSigned, waitReviewable } from '../helpers/ticket';
+import { clickPlaceAndRead, expectWalletSigned, fillFields, pickType, placedBy, waitReviewable, waitSubmitted } from '../helpers/ticket';
 import { CASES, type Ctx, type Timing } from './cases';
 
 test.use({ autoOpen: false });
@@ -18,7 +19,6 @@ test.use({ autoOpen: false });
 const GTC_DAA = 77_760_000; // 90 days at 10 DAA/s (docs/spec/order-types.md)
 /** the 8-byte little-endian integer push of the state codec: 08 <u64 le> */
 const pushInt = (v: bigint): string => '08' + Array.from({ length: 8 }, (_, i) => Number((v >> BigInt(8 * i)) & 0xffn).toString(16).padStart(2, '0')).join('');
-const utcText = (unix: number): string => `${new Date(unix * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
 interface Placement {
   state: Record<string, string>;
@@ -28,7 +28,7 @@ interface Placement {
 }
 
 /** The timing rules: what the planner computed for the on-chain expiry / activation against the node clock and the wallet defaults. */
-async function checkTiming(t: Timing, p: Placement, ctx: Ctx, extra: { discRows: Record<string, string> }): Promise<void> {
+async function checkTiming(t: Timing, p: Placement, ctx: Ctx): Promise<void> {
   const expiry = Number(p.state.expiryDaa);
   const activeFrom = Number(p.state.activeFrom);
   const slack = (secs: number) => Math.round(secs * 10 * 0.01) + 600; // 1% (measured DAA rate) + planning lag
@@ -39,13 +39,11 @@ async function checkTiming(t: Timing, p: Placement, ctx: Ctx, extra: { discRows:
     case 'gtd': {
       const target = Math.floor((ctx.unix + t.afterSeconds) / 60) * 60;
       expect(Math.abs(expiry - (p.daa + (target - p.unix) * 10))).toBeLessThan(slack(t.afterSeconds));
-      expect(extra.discRows.expiry).toContain(utcText(target));
       break;
     }
     case 'timed': {
       const target = Math.floor((ctx.unix + t.afterSeconds) / 60) * 60;
       expect(Math.abs(activeFrom - (p.daa + (target - p.unix) * 10))).toBeLessThan(slack(t.afterSeconds));
-      expect(extra.discRows.activates).toContain(utcText(target));
       expect(expiry).toBeGreaterThan(activeFrom);
       break;
     }
@@ -60,7 +58,6 @@ async function checkTiming(t: Timing, p: Placement, ctx: Ctx, extra: { discRows:
       expect(kob.dayOrder(BigInt(p.daa), BigInt(p.unix), 10_000n).deadline.toString()).toBe(String(p.view.deadline));
       expect(expiry).toBeGreaterThanOrEqual(lo - 300);
       expect(expiry).toBeLessThanOrEqual(hi + 300);
-      expect(extra.discRows.expiry).toContain('00:00 UTC');
       break;
     }
     case 'ioc':
@@ -93,26 +90,42 @@ for (const c of CASES) {
     await fillFields(page, fields);
     await waitReviewable(page);
     if (!('tip' in fields)) await expect(page.getByTestId('order-tip')).toHaveValue(''); // the default tip is 0: an empty box
-    const disc = await readDisclosure(page);
-    for (const [id, want] of Object.entries(c.disc)) {
-      expect(disc.rows[id], `disclosure row ${id}`).toBeDefined();
-      expect(disc.rows[id], `disclosure row ${id}`).toContain(want);
-    }
-    // the all-in price row only appears with a tip (without one it equals the price already shown)
-    if (!('tip' in fields)) expect(disc.rows.allInPrice, 'disclosure row allInPrice must not exist').toBeUndefined();
-    for (const id of c.discAbsent ?? []) expect(disc.rows[id], `disclosure row ${id} must not exist`).toBeUndefined();
-    for (const n of c.notes) expect(disc.notes, `disclosure note ${n}`).toContain(n);
-    for (const [k, want] of Object.entries(c.carriers)) expect(disc.carriers[k], `carrier ${k}`).toContain(want);
-    expect(disc.kasLocked).toBe(c.locked);
-    if (c.escrowed === null) expect(disc.tokensEscrowed).toBeNull();
-    else expect(disc.tokensEscrowed).toBe(c.escrowed);
-    expect(disc.summary).toContain(`${c.side === 'sell' ? 'Sell' : 'Buy'} ${fields.amount} EXKCC`);
 
-    // ---- one click: the wallet is asked once and signs exactly the inputs of the transaction
-    const placed = await placeOrder(page, mock);
+    // ---- one click: the final confirmation, read before it is confirmed; then the wallet is asked once and signs exactly the inputs of the transaction
+    const receipt = await clickPlaceAndRead(page);
+    expect(receipt.from).toBe('app');
+    expect(receipt.title).toBe('Place order');
+    expect(receipt.updated).toBe(false);
+    expect(receipt.problems).toBe(false);
+    // the one order the transaction creates, with the terms of the case (and the exit an if-done entry commits to)
+    expect(receipt.orders, 'one order in the table').toHaveLength(1);
+    const order = receipt.orders[0]!;
+    expect(order.title).toBe(c.receipt.orderTitle);
+    expect(order.token, 'the token line names the traded token').toMatch(/^EXKCC [(][0-9a-f]{8}…[0-9a-f]{8}[)]$/);
+    expect(order.rows).toMatchObject(c.receipt.card);
+    if (c.receipt.exitCard) {
+      expect(order.exit?.title).toBe(c.receipt.exitTitle);
+      expect(order.exit?.rows).toMatchObject(c.receipt.exitCard);
+    } else expect(order.exit).toBeNull();
+    // the summary: the token lines of the case, what is locked in orders (the value the accepted transaction locks), and the net KAS = locked + fee
+    for (const [label, value] of Object.entries(c.receipt.lines ?? {})) expect(receipt.lines[label], `summary line ${label}`).toBe(value);
+    expect(receipt.lines['Locked in orders'], 'locked in orders').toBe(c.locked);
+    const kasAmount = (text: string | undefined): bigint => {
+      const m = /^([−-]?)(\d+)(?:[.](\d+))?\sKAS$/.exec(text ?? '');
+      expect(m, `a KAS amount in "${text}"`).toBeTruthy();
+      return (m![1] ? -1n : 1n) * (BigInt(m![2]!) * 100_000_000n + BigInt((m![3] ?? '').padEnd(8, '0')));
+    };
+    expect(kasAmount(receipt.lines.KAS), 'net KAS = -(locked + fee)').toBe(-(kasAmount(c.locked) + kasAmount(receipt.fee)));
+    const placed = await placedBy(mock, await waitSubmitted(page));
+    expect(receipt.fee, 'the fee shown is the fee of the accepted transaction').toBe(`${formatKas(BigInt(placed.submission.fee))} KAS`);
+    // the DAA times the table shows are the ones the accepted order carries
+    const stateOf = placed.views[0].state.state as Record<string, string>;
+    if (c.timing.kind === 'day') expect(order.rows['Day order ends'], 'the day order says its end').toContain('00:00 UTC');
+    else expect(order.rows.Expires, 'expiry').toBe(`DAA score ${stateOf.expiryDaa}`);
+    if (Number(stateOf.activeFrom) > 0 && 'Starts at' in order.rows) expect(order.rows['Starts at'], 'start').toBe(`DAA score ${stateOf.activeFrom}`);
     await expectWalletSigned(wallet!, placed, { inputs: Array.from({ length: placed.submission.inputs }, (_, i) => i) });
 
-    // ---- the transaction itself (what the confirmation screen used to decode): one order created, the value it locks, nothing paid to another key
+    // ---- the transaction itself: one order created, the value it locks, nothing paid to another key
     expect(placed.submission.created).toHaveLength(1);
     const tx = placed.submission.tx;
     const alice = (await mock.balance('alice')).pubkey;
@@ -156,7 +169,7 @@ for (const c of CASES) {
     expect(String(recovered[0]!.value)).toBe(view.current.value);
 
     const at = Math.floor(Date.parse(placed.submission.at) / 1000);
-    await checkTiming(c.timing, { state, view, daa: placed.submission.daa, unix: at }, ctx, { discRows: disc.rows });
+    await checkTiming(c.timing, { state, view, daa: placed.submission.daa, unix: at }, ctx);
 
     // ---- My orders
     await page.getByTestId('nav-orders').click();

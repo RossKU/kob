@@ -103,7 +103,7 @@ test.describe('Kastle (behind the feature flag)', () => {
     expect((await wallet!.calls()).at(-1)!.status).toBe('rejected');
     expect(await mock.submitted(false)).toHaveLength(0);
     await wallet!.configure({ approve: true });
-    await page.getByTestId('order-place').click();
+    await clickPlace(page);
     await waitSubmitted(page);
     expect(await mock.submitted(false)).toHaveLength(1);
   });
@@ -154,7 +154,7 @@ test.describe('KasWare failure modes', () => {
     expect(await mock.submitted(false)).toHaveLength(0);
     // a good wallet answer on the retry goes through
     await wallet!.configure({ wrongSignature: false });
-    await page.getByTestId('order-place').click();
+    await clickPlace(page);
     await waitSubmitted(page);
     expect(await mock.submitted(false)).toHaveLength(1);
   });
@@ -169,7 +169,7 @@ test.describe('KasWare failure modes', () => {
     await expect(page.getByTestId('order-status')).toContainText('injected submit failure'); // the node's text sits behind "Details"
     expect(await mock.submitted(false)).toHaveLength(0);
     await expect(page.getByTestId('order-place')).toBeEnabled();
-    await page.getByTestId('order-place').click();
+    await clickPlace(page);
     await waitSubmitted(page);
     expect(await mock.submitted(false)).toHaveLength(1);
   });
@@ -183,7 +183,7 @@ test.describe('KasWare failure modes', () => {
     await expectStopped(page, 'failed', { code: 'double-spend' });
     expect(await mock.submitted(false)).toHaveLength(0);
     // every click plans again: the stale transaction is never sent a second time
-    await page.getByTestId('order-place').click();
+    await clickPlace(page);
     const placed = await placedBy(mock, await waitSubmitted(page));
     expect(placed.views[0].contract).toBe('KobAsk');
     expect(await mock.submitted(false)).toHaveLength(1);

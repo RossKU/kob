@@ -7,7 +7,7 @@ import type { Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
 import { KAS, TOKEN, connectWallet } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
-import { expectStopped, expectWalletSigned, placedBy } from '../helpers/ticket';
+import { confirmUntil, expectStopped, expectWalletSigned, placedBy } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -116,9 +116,11 @@ test('a merge stopped after the first transaction leaves fewer UTXOs and nothing
   // both requests wait a moment in the wallet (a popup not answered yet): the user rejects the second one while it is open
   await wallet!.configure({ delayMs: 1500 });
   await page.getByTestId(`orders-merge-token-${STD}`).click();
-  await expect(page.getByTestId('flow-step-0')).toHaveAttribute('data-state', 'submitted', { timeout: 30_000 });
+  // each step opens its final confirmation first: the first is confirmed, the wallet signs it
+  await confirmUntil(page, page.locator('[data-testid="flow-step-0"][data-state="submitted"]'));
   await wallet!.configure({ approve: false, rejectMessage: 'User rejected the request' });
-  // the flow ends with its first transaction submitted and the second request rejected
+  // the second step's confirmation is confirmed too, the wallet rejects it: the flow ends with its first transaction submitted
+  await confirmUntil(page, page.getByTestId('flow-done'));
   await expect(page.getByTestId('flow-done')).toContainText('1 transaction(s) submitted', { timeout: 30_000 });
   const [first] = await mock.submitted();
   const shown = await shownAs(page);

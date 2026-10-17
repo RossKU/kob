@@ -147,9 +147,9 @@ test.describe('input validation', () => {
     await fillFields(page, { amount: '1.5' });
     await expect(amountError).toHaveCount(0);
     await waitReviewable(page);
-    // an empty required field is not an error yet: the ticket says what is missing
+    // an empty required field is not an error yet: no error is shown, the order button just stays disabled
     await fillFields(page, { amount: '' });
-    await expect(page.getByTestId('order-need-incomplete')).toBeVisible();
+    await expect(amountError).toHaveCount(0);
     await expect(page.getByTestId('order-place')).toBeDisabled();
   });
 

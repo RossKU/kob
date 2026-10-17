@@ -1,13 +1,13 @@
 // Order lifetime and ladder features of the ticket (mock KasWare wallet, default mock seed, EXKCC listed as tradable), each through the real UI to
 // the mock node:
-//   * exit lifetime of IFD / IFO exits (good till cancelled or until a date): the disclosure row, the exit template the entry commits to and the
-//     exit order a fill creates;
-//   * timed activation (`activeFrom`) of conditional orders and if-done entries: the disclosure and the on-chain state;
-//   * the repeat ladder: several repeat IFD levels from one ticket, one click, each level its own wallet request and transaction.
+//   * exit lifetime of IFD / IFO exits (good till cancelled or until a date): the exit template the entry commits to and the exit order a fill creates;
+//   * timed activation (`activeFrom`) of conditional orders and if-done entries: the on-chain state;
+//   * the repeat ladder: several repeat IFD levels from one ticket, one click, each level its own popup, wallet request and transaction.
+// (The ticket no longer lists an order's terms: lifetimes and starts are asserted on what the accepted transaction commits to.)
 // Prices are KAS per EXKCC, amounts EXKCC (1e8 base units); state prices are sompi per whole token (0.026 KAS = 2_600_000).
 import { test, expect } from '../fixtures';
 import { browserTzOffset, fund, mockClock, openMarket } from '../helpers/env';
-import { expectWalletSigned, fillFields, pickType, placeLadder, placeOrder, readDisclosure, waitReviewable, type FieldValues } from '../helpers/ticket';
+import { expectWalletSigned, fillFields, pickType, placeLadder, placeOrder, waitReviewable, type FieldValues } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -18,11 +18,6 @@ const GTC_EXIT_EXPIRY_DAA = 1n << 62n;
 /** the 8-byte little-endian integer push of the state codec: 08 <u64 le> */
 const pushInt = (v: bigint): string => '08' + Array.from({ length: 8 }, (_, i) => Number((v >> BigInt(8 * i)) & 0xffn).toString(16).padStart(2, '0')).join('');
 const two = (n: number) => String(n).padStart(2, '0');
-const utcText = (unix: number): string => `${new Date(unix * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
-const jstText = (unix: number): string => {
-  const d = new Date((unix + 9 * 3600) * 1000);
-  return `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.getUTCDate())} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} JST`;
-};
 /** `datetime-local` text of a unix time in the browser's wall clock (minute precision, like the input) */
 const localText = (unix: number, tz: number): string => {
   const d = new Date((unix - tz * 60) * 1000);
@@ -48,19 +43,12 @@ test.describe('exit lifetime (R-10)', () => {
       await waitReviewable(page);
       // default: good till cancelled, counted from each exit's creation
       await expect(page.getByTestId('field-exit.lifetime')).toHaveValue('gtc');
-      let disc = await readDisclosure(page);
-      expect(disc.rows.exitLifetime).toContain('Until cancelled (refundable after 90 days idle)');
-      expect(disc.notes).toContain('exitGtc');
 
       // until a date 5 days ahead (the input has minute precision)
       const target = Math.floor((clock.unix + 5 * 86_400) / 60) * 60;
       await fillFields(page, { 'exit.lifetime': 'gtd', 'exit.lifetimeAt': localText(target, tz) });
       await waitReviewable(page);
       await expect(page.getByTestId('field-exit.lifetimeAt')).toBeVisible();
-      disc = await readDisclosure(page);
-      expect(disc.rows.exitLifetime).toContain(`Until ${utcText(target)} (${jstText(target)})`);
-      expect(disc.notes).toContain('exitGtd');
-      expect(disc.notes).not.toContain('exitGtc');
 
       const placed = await placeOrder(page, mock);
       const at = { daa: placed.submission.daa, unix: Math.floor(Date.parse(placed.submission.at) / 1000) };
@@ -87,7 +75,6 @@ test.describe('exit lifetime (R-10)', () => {
     await pickType(page, 'ifd', 'buy');
     await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' });
     await waitReviewable(page);
-    expect((await readDisclosure(page)).rows.exitLifetime).toContain('Until cancelled');
     const placed = await placeOrder(page, mock);
     expect(placed.views[0].state.state.exitState).toContain(pushInt(GTC_EXIT_EXPIRY_DAA));
   });
@@ -109,13 +96,10 @@ test.describe('timed start (R-11)', () => {
       await pickType(page, c.type, c.side);
       await fillFields(page, c.fields);
       await waitReviewable(page);
-      expect((await readDisclosure(page)).rows.activates, 'no start row without a start').toBeUndefined();
 
       const target = Math.floor((clock.unix + 2 * 3600) / 60) * 60;
       await fillFields(page, { activeFrom: localText(target, tz) });
       await waitReviewable(page);
-      const disc = await readDisclosure(page);
-      expect(disc.rows.activates).toContain(utcText(target));
 
       const placed = await placeOrder(page, mock);
       expect(placed.submission.created).toHaveLength(1);

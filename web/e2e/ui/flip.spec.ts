@@ -6,7 +6,7 @@ import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
 import { TESTID } from '../testids';
 import { connectWallet, fund, listExkcc, openMarket } from '../helpers/env';
-import { expectWalletSigned, onChainTerms, placeOrder, settlePlan } from '../helpers/ticket';
+import { expectWalletSigned, onChainTerms, placeOrder, placeOrderAndRead, settlePlan } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -196,15 +196,18 @@ test.describe('the ticket in an inverted market', () => {
     // the amount is KAS: 1 EXKCC at 0.04 = 0.04 KAS, the exact token amount below it
     await expect(page.getByTestId(TESTID.orderAmount)).toHaveValue('0.04');
     await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderAmount) }).locator('.tk-unit')).toHaveText('KAS');
-    await expect(page.getByTestId('order-amount-tokens')).toContainText('0.04 KAS = 1 EXKCC at your price');
-    await expect(page.getByTestId('disc-summary')).toHaveText('Buy 0.04 KAS for 1 EXKCC');
+    await expect(page.getByTestId('order-amount-tokens')).toHaveText('= 1 EXKCC at your price');
 
     // the same order typed in the shown units: 25 EXKCC per KAS
     await page.getByTestId(TESTID.orderPrice).fill('');
     await page.getByTestId(TESTID.orderPrice).fill('25');
     await expect(page.getByTestId('order-price-native')).toContainText('0.04 KAS per EXKCC');
-    const flipped = await placeOrder(page, mock);
+    const flipped = await placeOrderAndRead(page, mock);
     await expectWalletSigned(wallet!, flipped, { requests: 2, call: 1 });
+    // its confirmation is the native order's table, whichever way the form was typed: a sell of 1 EXKCC at 0.04 KAS
+    expect(flipped.receipt.orders.map((o) => o.title)).toEqual(['Sell limit order']);
+    expect(flipped.receipt.orders[0]!.rows).toMatchObject({ Amount: '1 EXKCC', 'Limit price': '0.04 EXKCC / KAS' });
+    expect(flipped.receipt.lines['Locked in orders']).toBe('4 KAS');
     // the order that was signed is the native one: same contract, same price (a sell of 1 EXKCC at 0.04 KAS per token = 4_000_000 sompi per whole
     // token, exactly), same amount, same funds locked
     expect(flipped.views).toHaveLength(1);
@@ -340,7 +343,7 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
     await page.getByTestId(TESTID.orderSideSell).click();
     await page.getByTestId(TESTID.orderAmount).fill('1');
     await page.getByTestId(TESTID.orderPrice).fill('3');
-    await expect(page.getByTestId('order-amount-tokens')).toContainText('= 3 EXUSD');
+    await expect(page.getByTestId('order-amount-tokens')).toHaveText('= 3 EXUSD at your price');
     const placed = await placeOrder(page, mock);
     expect(placed.submission.created).toHaveLength(1);
     // the signed order is the native buy of the EXUSD token: a bid of that token's own book

@@ -1,10 +1,10 @@
 // Indexer load of one open market page: a live fill refreshes every resource coalesced and the chart reads only its newest bars (`from=`), a
 // hidden tab neither refetches nor polls and catches up once shown, and a click on the order button reuses an environment read a moment ago
-// instead of reading everything again (one that may be stale is re-checked before the wallet is asked; ticket-latency.spec.ts times it).
+// instead of reading everything again (one that may be stale is re-checked before the final confirmation opens; ticket-latency.spec.ts times it).
 import type { Page, Request } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { fund, listExkcc, openMarket } from '../helpers/env';
-import { fillFields, settlePlan, waitReviewable, waitSubmitted } from '../helpers/ticket';
+import { confirmAfterClick, fillFields, settlePlan, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -90,6 +90,7 @@ test.describe('indexer load per viewer', () => {
     envReads.length = 0;
     const t0 = Date.now();
     await page.getByTestId('order-place').click();
+    await confirmAfterClick(page); // the final confirmation, then the wallet is asked
     await wallet!.waitForCalls(1);
     const reused = Date.now() - t0;
     expect(envReads, 'the click must not read the environment again').toHaveLength(0);
@@ -104,6 +105,7 @@ test.describe('indexer load per viewer', () => {
       await page.waitForTimeout(3_500);
       envReads.length = 0;
       await page.getByTestId('order-place').click();
+      await confirmAfterClick(page);
       await wallet!.waitForCalls(2);
       expect(envReads).toHaveLength(0);
       await waitSubmitted(page);
@@ -122,6 +124,8 @@ test.describe('indexer load per viewer', () => {
       await expect(page.getByTestId('order-status')).toHaveAttribute('data-phase', 'checking');
       await page.waitForTimeout(1_000);
       expect(await wallet!.calls(), 'the wallet is not asked before the re-check').toHaveLength(2);
+      await expect(page.getByTestId('confirm-order'), 'the confirmation waits for the re-check too').toHaveCount(0);
+      await confirmAfterClick(page);
       await wallet!.waitForCalls(3, 30_000);
       const waited = Date.now() - t1;
       expect(envReads.length).toBeGreaterThan(0);

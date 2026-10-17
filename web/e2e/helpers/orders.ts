@@ -1,9 +1,9 @@
 // Helpers of the "My orders" flows: seeding orders for the wallet key, opening the orders page, and waiting for a (possibly multi-step) transaction flow
-// that starts at once and asks the wallet by itself.
+// that starts at once: each step shows the final confirmation popup (confirmed here) and then asks the wallet.
 import type { Page } from '@playwright/test';
 import { expect, type MockClient, type KeyName, type MockWalletHandle } from '../fixtures';
 import { openMarket, type WalletName } from './env';
-import { expectWalletSigned, placedBy, type Placed } from './ticket';
+import { confirmUntil, expectWalletSigned, placedBy, type Placed } from './ticket';
 
 export interface SeedAsk {
   side: 'ask' | 'bid';
@@ -30,12 +30,15 @@ export async function openOrders(page: Page, mock: MockClient, wallet: WalletNam
 }
 
 /**
- * Waits for the end of a transaction flow of My orders (`flow-done`, or `flow-stopped` with `stopped: true`): the action's click already made the
- * first wallet request, each further step asks the wallet by itself. Returns the transactions the flow submitted, in order (decoded by the mock
+ * Waits for the end of a transaction flow of My orders (`flow-done`, or `flow-stopped` with `stopped: true`): the action's click starts the first
+ * step, and each step shows its final confirmation popup before its wallet request (confirmed here; `confirm: false` leaves the popups to the spec; the
+ * private-key signer's frame is approved by the spec itself and shows no app popup). Returns the transactions the flow submitted, in order (decoded by the mock
  * node), and checks that the wallet signed exactly those and nothing else.
  */
-export async function runFlow(page: Page, mock: MockClient, wallet: MockWalletHandle | null, opts: { steps?: number; stopped?: boolean } = {}): Promise<Placed[]> {
-  await expect(page.getByTestId(opts.stopped ? 'flow-stopped' : 'flow-done')).toBeVisible({ timeout: 60_000 });
+export async function runFlow(page: Page, mock: MockClient, wallet: MockWalletHandle | null, opts: { steps?: number; stopped?: boolean; confirm?: boolean } = {}): Promise<Placed[]> {
+  const end = page.getByTestId(opts.stopped ? 'flow-stopped' : 'flow-done');
+  if (opts.confirm !== false) await confirmUntil(page, end);
+  await expect(end).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
   // the transactions: a multi-step flow lists the first 10 characters of each submitted step, the status line shows the last one in full
   const prefixes = (await page.locator('[data-testid^="flow-step-"] code').allTextContents()).map((c) => c.trim().replace('…', ''));

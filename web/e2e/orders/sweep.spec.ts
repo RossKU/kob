@@ -5,6 +5,7 @@
 import { test, expect, type MockClient } from '../fixtures';
 import { KAS, TOKEN } from '../helpers/env';
 import { openOrders, runFlow, seedOrders } from '../helpers/orders';
+import { confirmAfterClick } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -62,6 +63,7 @@ test.describe('sweep strays in place', () => {
     // its wallet request says it has
     const asked = (await wallet!.calls()).length;
     await page.getByTestId(`order-cancel-${id}`).click();
+    await confirmAfterClick(page, 'flow-status'); // the cancel's final confirmation, then its wallet request
     await wallet!.waitForCalls(asked + 1);
     const [cancel] = await runFlow(page, mock, wallet, { steps: 1 });
     expect(cancel!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);
@@ -113,6 +115,7 @@ test.describe('sweep strays in place', () => {
     await expect(page.getByTestId('orders-strays')).toHaveCount(0, { timeout: 15_000 });
     const asked = (await wallet!.calls()).length;
     await page.getByTestId('orders-sweep-followup-cancel').click();
+    await confirmAfterClick(page, 'flow-status'); // the cancel's final confirmation, then its wallet request
     await wallet!.waitForCalls(asked + 1); // the cancel's own flow has started: the sweep's result is gone
     const [cancel] = await runFlow(page, mock, wallet, { steps: 1 });
     expect(cancel!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);

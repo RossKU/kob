@@ -1,7 +1,8 @@
-// The order flow of the ticket: ONE button, the wallet's own approval, the result inline. There is no confirmation screen for orders: a click
-// plans again, runs the silent checks, asks the wallet once and sends. An auction (market order) is planned with the node clock at the click; a
-// signature that comes back more than 20 DAA (2 s) after the auction start is never sent (wallet/sign.ts `auctionSubmitBy`): the ticket plans
-// again with the current clock and asks the wallet once more, and stops with `clock-moved` when that is too late as well.
+// The order flow of the ticket: ONE button, the final confirmation (an app popup for external wallets), the wallet's own approval, the result inline.
+// There is no issuance-style confirmation screen for orders: a click plans again, runs the silent checks, opens the final confirmation, asks the wallet
+// once and sends. An auction (market order) is planned with the node clock at the click; a signature that comes back more than 20 DAA (2 s) after the
+// auction start is never sent (wallet/sign.ts `auctionSubmitBy`): the send re-times the same order with a later start (the lead grows with each
+// attempt) and asks the wallet again, up to three times, and stops with `clock-moved` when every attempt was too late.
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { fund, mockClock, openMarket } from '../helpers/env';
@@ -11,6 +12,8 @@ test.use({ autoOpen: false });
 
 /** The mock DAA advances 10 per second; the ticket allows 20 DAA between the auction start it planned and the signature. */
 const SLOW_WALLET_MS = 6_000;
+/** a wallet slower than every attempt's budget: each re-timed request is signed too late as well */
+const NEVER_IN_TIME_MS = 15_000;
 /** a start planned at the click is a 30 DAA lead ahead of the node clock (MARKET_ACTIVATION_DAA) */
 const REPLAN_GAP_DAA = 60;
 
@@ -87,21 +90,22 @@ test.describe('order flow: one button, the wallet approves', () => {
       await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
     });
 
-    test('both approvals too slow: nothing is sent and the ticket says the price moved', async ({ appPage: page, mock, wallet }) => {
-      test.setTimeout(90_000);
+    test('every approval too slow: three re-timings, then nothing is sent and the ticket says the price moved', async ({ appPage: page, mock, wallet }) => {
+      test.setTimeout(150_000);
       await fund(mock);
       await openMarket(page, mock);
       await typeMarketBuy(page);
-      await wallet!.configure({ delayMs: SLOW_WALLET_MS });
+      await wallet!.configure({ delayMs: NEVER_IN_TIME_MS }); // slower than the longest budget of an attempt (8 s, 11 s, 14 s)
       const before = (await mock.submitted(false)).length;
 
       await clickPlace(page);
+      await wallet!.waitForCalls(4, 90_000); // the first request and three re-timed ones
       const stopped = await expectStopped(page, 'failed', { code: 'clock-moved' });
       expect(stopped.text).toMatch(/price moved/i);
       expect(stopped.text).toMatch(/nothing was sent/i);
       await expect(page.getByTestId('order-status').getByTestId('send-error')).toHaveAttribute('data-code', 'clock-moved');
 
-      expect(await wallet!.calls(), 'one retry, then it stops').toHaveLength(2);
+      expect(await wallet!.calls(), 'three re-timings, then it stops').toHaveLength(4);
       expect((await mock.submitted(false)).length, 'nothing reached the node').toBe(before);
       // the ticket is usable again
       await expect(page.getByTestId('order-place')).toBeEnabled();
