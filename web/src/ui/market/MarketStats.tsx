@@ -39,7 +39,7 @@ export function MarketStats(props: {
       data-state={props.unsupported ? 'unsupported' : props.loading && !m.last ? 'loading' : 'ready'}>
       <div class="mkt-stat mkt-stat-last" data-testid="stat-last">
         <span class="mkt-stat-label">{t('market.stats.last')}</span>
-        <span class={`mkt-stat-value${lastTone ? ` tone-${lastTone}` : ''}`}>
+        <span class={`mkt-stat-value${lastTone ? ` tone-${lastTone}` : ''}`} translate={false}>
           {m.last ?? (props.loading ? <span class="skeleton skeleton-line" style="display:inline-block;width:120px;height:22px;margin:0" /> : '—')}
           <span class="mkt-stat-unit">{t('market.stats.unitOf', { quote, base })}</span>
         </span>

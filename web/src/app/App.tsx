@@ -117,20 +117,30 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
       </a>
       <NotifyProvider>
         <StatusProvider>
-          <Header route={route} />
-          <StatusBar />
+          {/* the shell has boundaries too: a render error escaping to the root would leave every component queued behind it in that render
+              unable to re-render ever again (Preact drops the rest of its queue), e.g. a button whose click changes nothing */}
+          <ViewBoundary resetKey={routeKey}>
+            <Header route={route} />
+            <StatusBar />
+          </ViewBoundary>
           <main class="container main" id="main" tabIndex={-1} data-testid="main" data-route={routeToHash(route)}>
-            <PreAuditBanner />
-            <GlobalBanners warnings={props.warnings} storedOverrides={props.storedOverrides ?? []} />
-            <ViewBoundary resetKey={routeToHash(route)}>
+            <ViewBoundary resetKey={routeKey}>
+              <PreAuditBanner />
+              <GlobalBanners warnings={props.warnings} storedOverrides={props.storedOverrides ?? []} />
+            </ViewBoundary>
+            <ViewBoundary resetKey={routeKey}>
               <RoutedView route={route} warnings={props.warnings} />
             </ViewBoundary>
           </main>
-          <Footer />
+          <ViewBoundary resetKey={routeKey}>
+            <Footer />
+          </ViewBoundary>
         </StatusProvider>
       </NotifyProvider>
-      <AutoRefundRunner />
-      <ToastHost />
+      <ViewBoundary resetKey={routeKey}>
+        <AutoRefundRunner />
+        <ToastHost />
+      </ViewBoundary>
     </div>
   );
 }

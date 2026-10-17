@@ -20,7 +20,7 @@ function ToastView({ item }: { item: ToastItem }) {
   return (
     <div class={`toast toast-${item.tone}`} role={item.tone === 'error' ? 'alert' : 'status'} data-testid={`toast-${item.tone}`}>
       <div class="grow wrap-anywhere">
-        {item.message}
+        <span>{item.message}</span>
         {item.count > 1 ? <span class="muted"> {`×${item.count}`}</span> : null}
       </div>
       <Button small variant="ghost" onClick={() => toasts.dismiss(item.id)} aria-label={t('common.dismiss')}>

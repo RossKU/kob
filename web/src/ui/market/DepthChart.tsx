@@ -123,7 +123,7 @@ export function DepthChart(props: { series: DepthSeries | null; loading: boolean
           <span data-testid="depth-summary">
             {/* the estimate mark belongs to the amounts: kept on their line, never alone on the next one */}
             {s?.estimated ? <span class="est" title={t(props.inverted ? 'market.depth.estimatedInv' : 'market.depth.estimated')}>{'~ '}</span> : null}
-            {summary}
+            <span>{summary}</span>
           </span>
         ) : null}
       </figcaption>

@@ -36,7 +36,7 @@ export function Amount(props: AmountProps) {
   const defaultUnit = props.kind === 'kas' ? 'KAS' : '';
   const unit = typeof props.unit === 'string' ? props.unit : props.unit === false ? '' : defaultUnit;
   return (
-    <span class={`amount num${props.class ? ` ${props.class}` : ''}`} title={plain || undefined} data-value={plain || undefined} data-testid={props['data-testid']}>
+    <span class={`amount num${props.class ? ` ${props.class}` : ''}`} translate={false} title={plain || undefined} data-value={plain || undefined} data-testid={props['data-testid']}>
       {withSign}
       {unit && !missing ? <span class="amount-unit">{unit}</span> : null}
     </span>

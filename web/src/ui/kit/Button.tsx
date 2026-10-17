@@ -1,4 +1,5 @@
 import type { ComponentChildren, JSX } from 'preact';
+import { textOnly } from '../../app/translation-safe';
 import { Spinner } from './Spinner';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost';
@@ -30,7 +31,8 @@ export function Button(props: ButtonProps) {
       onClick={loading ? undefined : onClick}
     >
       {loading ? <Spinner /> : null}
-      {children}
+      {/* a text label is its own element: it can be re-created while the page is machine-translated (app/translation-safe.ts), the button keeps its focus */}
+      {textOnly(children) !== null ? <span class="btn-label">{children}</span> : children}
     </button>
   );
 }

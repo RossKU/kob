@@ -83,7 +83,7 @@ export function OrderBook(props: OrderBookProps) {
           </strong>
           {' · '}
           {t('market.book.spread')} <strong class="num">{m.spread ? m.spread.text : '—'}</strong>
-          {m.spread?.pct ? ` (${m.spread.pct}%)` : null}
+          {m.spread?.pct ? <span class="num">{` (${m.spread.pct}%)`}</span> : null}
         </span>
       </div>
       <div class="book-side" data-testid="book-bids" role="list" aria-label={t('market.book.bids')}>

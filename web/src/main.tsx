@@ -9,9 +9,12 @@ import { loadConfigWithWarnings, type ConfigWarning, type StoredOverride } from 
 import { BootError, BootScreen } from './ui/shell/Boot';
 import { initTheme } from './ui/shell/theme';
 import { installTrustedTypesPolicy } from './app/trusted-types';
+import { installTranslationSafety } from './app/translation-safe';
 
 // before anything renders: the only Trusted Types policy (csp.mjs), letting just the chart's attribution logo reach a DOM sink
 installTrustedTypesPolicy();
+// a machine-translated page must not keep showing stale texts (app/translation-safe.ts)
+installTranslationSafety();
 
 declare global {
   interface Window {
