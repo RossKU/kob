@@ -677,21 +677,20 @@ impl Facilitator {
 
     /// Read-only replay checks (`/verify` never writes the ledger).
     fn replay_preflight(&self, v: &Verified) -> Result<()> {
-        if let Some(id) = &v.payment_identifier {
-            if let Some((rh, profile)) = self.ledger.payment_id_binding(id) {
-                if rh != hex(&v.request_hash) || profile != v.profile.as_str() {
-                    return Err(X402Error::state(
-                        Diag::KaspaPaymentIdentifierConflict,
-                        "the payment identifier is bound to a different request or profile",
-                    ));
-                }
-            }
-            if self.ledger.payment_id_live_txid(id).is_some_and(|t| t != hex(&v.txid)) {
+        let id = &v.payment_identifier;
+        if let Some((rh, profile)) = self.ledger.payment_id_binding(id) {
+            if rh != hex(&v.request_hash) || profile != v.profile.as_str() {
                 return Err(X402Error::state(
                     Diag::KaspaPaymentIdentifierConflict,
-                    "the payment identifier is bound to another transaction",
+                    "the payment identifier is bound to a different request or profile",
                 ));
             }
+        }
+        if self.ledger.payment_id_live_txid(id).is_some_and(|t| t != hex(&v.txid)) {
+            return Err(X402Error::state(
+                Diag::KaspaPaymentIdentifierConflict,
+                "the payment identifier is bound to another transaction",
+            ));
         }
         let txid = hex(&v.txid);
         for o in &v.consumed {
@@ -812,13 +811,10 @@ impl Facilitator {
     /// are spent, so the identifier is what names the payment. A payment settled without an identifier is answered only by
     /// the settle that settled it.
     fn check_known_id(&self, e: &Entry, req: &FacilitatorRequest) -> Result<()> {
-        let id = common::payment_identifier(
-            &VerifyCtx { chain: &*self.chain, clock: &*self.clock, policy: &self.policy },
-            &req.payment_payload,
-        )?;
-        match (&e.payment_id, &id) {
-            (Some(bound), Some(id)) if bound == id => Ok(()),
-            (None, _) => Err(X402Error::state(
+        let id = common::payment_identifier(&req.payment_payload)?;
+        match &e.payment_id {
+            Some(bound) if *bound == id => Ok(()),
+            None => Err(X402Error::state(
                 Diag::Replay,
                 "this transaction was settled without a payment identifier; its outcome is not answered again",
             )),
@@ -1024,7 +1020,7 @@ impl Facilitator {
             txid: v.txid,
             request_hash: v.request_hash,
             requirements_hash: v.requirements_hash,
-            payment_id: v.payment_identifier.clone(),
+            payment_id: Some(v.payment_identifier.clone()),
             profile: v.profile.as_str().to_string(),
             kind: kind_str(v.kind).to_string(),
             merchant: merchant.to_string(),
@@ -1101,10 +1097,7 @@ impl Facilitator {
             Err(ce) => return Err(unavailable(format!("cannot read the chain: {ce}"))),
         }
         // the payment identifier is the one this settle names (it never reaches the chain)
-        claim.payment_id = common::payment_identifier(
-            &VerifyCtx { chain: &*self.chain, clock: &*self.clock, policy: &self.policy },
-            &req.payment_payload,
-        )?;
+        claim.payment_id = Some(common::payment_identifier(&req.payment_payload)?);
         claim.now_ms = now;
         let e = match self.ledger.claim(claim)? {
             Claim::New(e) | Claim::Existing(e) => e,

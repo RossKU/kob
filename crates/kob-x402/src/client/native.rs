@@ -7,7 +7,7 @@
 //! Payer side: [`pay_native`] validates the offer against the payer's own limits, builds a version-0
 //! transaction (one merchant output, optional change output back to the payer, no payload, fee at the
 //! relay floor computed from the exact masses), signs every P2PK input with SIGHASH_ALL, signs the
-//! request authorization digest with the funding key and returns the `PAYMENT-SIGNATURE` object.
+//! request authorization digest (which binds the payment identifier) with the funding key and returns the `PAYMENT-SIGNATURE` object.
 //! [`preflight_native`] runs the verifier's own checks against a chain view before the payload is
 //! disclosed, and [`revoke_native`] builds the self-spend that makes a disclosed but unsettled payment
 //! unconfirmable (the payer-side kill switch for an ambiguous settlement).
@@ -27,7 +27,7 @@ use thiserror::Error;
 
 use crate::canonical::requirements_hash;
 use crate::chain::Outpoint;
-use crate::common::{address_of, iso_from_ms, signed_auth_digest, SignedAuth};
+use crate::common::{address_of, iso_from_ms, resolve_payment_id, signed_auth_digest, SignedAuth};
 use crate::error::{Result as X402Result, X402Error};
 use crate::exact::{ADDITIVE_EXTRA_KEYS, P2PK_SIGSCRIPT_LEN};
 use crate::safe_tx::{spk_to_hex, SafeTx};
@@ -35,7 +35,7 @@ use crate::verify::{Verified, VerifyCtx};
 use crate::wire::{
     header_decode, header_encode, hex, parse_hash32, parse_u64_canonical, Authorization, ExactPayload, Finality, Network,
     PaymentPayload, PaymentRequired, PaymentRequirements, Profile, Resource, SettlementResponse, ASSET_KAS, AUTH_VERSION_SIGNED,
-    BINDING_EXACT, PAYLOAD_EXACT_TX, SCHEME_EXACT, TX_ENCODING, X402_VERSION,
+    BINDING_EXACT, PAYLOAD_EXACT_TX, PAYMENT_FLOW_UPFRONT, SCHEME_EXACT, TX_ENCODING, X402_VERSION,
 };
 
 /// Extension key of the idempotency identifier.
@@ -103,6 +103,7 @@ pub fn native_requirements(
     let mut extra = Map::new();
     extra.insert("binding".into(), json!(BINDING_EXACT));
     extra.insert("profile".into(), json!(Profile::StandardNative.as_str()));
+    extra.insert("paymentFlow".into(), json!(PAYMENT_FLOW_UPFRONT));
     extra.insert("finality".into(), json!(finality.as_str()));
     extra.insert("transactionEncoding".into(), json!(TX_ENCODING));
     extra.insert("payToScriptPublicKey".into(), json!(spk_to_hex(&pay_to_address_script(&addr))));
@@ -254,6 +255,7 @@ fn check_offer(offer: &PaymentRequirements, max_amount: u64) -> Result<Offer, Na
     if offer.extra_str("transactionEncoding") != Some(TX_ENCODING) {
         return bad("unsupported transactionEncoding");
     }
+    offer.check_payment_flow().map_err(|e| NativeError::Offer(e.message))?;
     if offer.has_route() || ADDITIVE_EXTRA_KEYS.iter().any(|k| offer.extra.contains_key(*k)) {
         return bad("route and additive fields are not part of standard-native");
     }
@@ -442,6 +444,8 @@ pub fn pay_native(
     let expires_at = iso_from_ms(now_ms.saturating_add(ttl.saturating_mul(1000)));
     let req_hash = requirements_hash(offer)?;
     let input_index = 0u32;
+    // the id is chosen first: the authorization digest binds it
+    let id = resolve_payment_id(opts.payment_id.as_deref()).map_err(|e| NativeError::Build(e.message))?;
     let digest = signed_auth_digest(&SignedAuth {
         network: o.network,
         profile: Profile::StandardNative,
@@ -452,16 +456,13 @@ pub fn pay_native(
         pay_to_spk_hex: &spk_to_hex(&o.pay_to_spk),
         requirements_hash: &req_hash,
         request_hash: &request_hash_bytes,
+        payment_identifier: &id,
         challenge_id: None,
         input_index,
         expires_at: &expires_at,
     })?;
     let mut sig = sign_digest(payer_secret, &digest).map_err(|e| NativeError::Build(e.to_string()))?;
     sig.truncate(64);
-    let id = opts.payment_id.clone().unwrap_or_else(random_payment_id);
-    if !(16..=128).contains(&id.len()) || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
-        return Err(NativeError::Build("payment id must match ^[A-Za-z0-9_-]{16,128}$".into()));
-    }
     Ok(PaymentPayload {
         x402_version: X402_VERSION,
         accepted: offer.clone(),
@@ -596,6 +597,7 @@ mod tests {
         let r = native_requirements(Network::Testnet10, 2_000_000, &merchant_address(8), 60, Finality::Accepted).unwrap();
         assert_eq!(r.extra_str("payToScriptPublicKey"), Some(spk_to_hex(&tk_p2pk(&pubkey(8))).as_str()));
         assert_eq!(r.extra_str("profile"), Some("standard-native"));
+        assert_eq!(r.extra_str("paymentFlow"), Some("upfront"));
         assert!(check_offer(&r, u64::MAX).is_ok());
         assert!(native_requirements(Network::Mainnet, 1, &merchant_address(8), 60, Finality::Accepted).is_err());
         assert!(native_requirements(Network::Testnet10, 0, &merchant_address(8), 60, Finality::Accepted).is_err());
@@ -615,6 +617,12 @@ mod tests {
         assert!(check_offer(&bad, u64::MAX).is_err());
         let mut bad = good.clone();
         bad.extra.insert("headId".into(), json!("00"));
+        assert!(check_offer(&bad, u64::MAX).is_err());
+        let mut bad = good.clone();
+        bad.extra.remove("paymentFlow");
+        assert!(check_offer(&bad, u64::MAX).is_err(), "an omitted payment flow is invalid");
+        let mut bad = good.clone();
+        bad.extra.insert("paymentFlow".into(), json!("authorization"));
         assert!(check_offer(&bad, u64::MAX).is_err());
         let mut bad = good.clone();
         bad.amount = "02000000".into();
@@ -732,7 +740,7 @@ mod tests {
 
     #[test]
     fn identifier_schema_matches_the_binding_file() {
-        let file = include_str!("../../vectors/kaspa-x402-rc1/schemas/payment-identifier.schema.json");
+        let file = include_str!("../../vectors/kaspa-x402-v1.0.0/schemas/payment-identifier.schema.json");
         assert_eq!(payment_identifier_schema(), serde_json::from_str::<Value>(file).unwrap());
     }
 }

@@ -392,7 +392,7 @@ pub fn verify_kcc20(ctx: &VerifyCtx, offered: &PaymentRequirements, payload: &Pa
     let offer = parse_offer(offered)?;
     let allowed = check_offer_policy(ctx.policy, &offer)?;
     let tpl = template(allowed.program);
-    let payment_identifier = payment_identifier(ctx, payload)?;
+    let payment_identifier = payment_identifier(payload)?;
 
     // 2. transaction shape (offline)
     let parsed = parse_tx(ctx, payload)?;
@@ -409,7 +409,7 @@ pub fn verify_kcc20(ctx: &VerifyCtx, offered: &PaymentRequirements, payload: &Pa
     }
 
     // 3. authorization: payload commitment (offline)
-    let expires_at_ms = check_authorization(ctx, &env, offered, payload, tx, pay_idx)?;
+    let expires_at_ms = check_authorization(ctx, &env, offered, payload, tx, pay_idx, &payment_identifier)?;
 
     // 4. trusted inputs
     let entries = resolve_entries(ctx, &parsed)?;
@@ -580,10 +580,11 @@ fn check_authorization(
     payload: &PaymentPayload,
     tx: &Transaction,
     pay_idx: usize,
+    payment_identifier: &str,
 ) -> Result<u64> {
     let a = &payload.payload.authorization;
     if a.version != AUTH_VERSION_PAYLOAD {
-        return Err(X402Error::payload(Diag::InvalidAuthorization, "authorization.version must be kob-x402-payload-commitment-v1"));
+        return Err(X402Error::payload(Diag::InvalidAuthorization, "authorization.version must be kob-x402-payload-commitment-v2"));
     }
     if a.signature.is_some() || a.input_index.is_some() {
         return Err(X402Error::payload(Diag::InvalidAuthorization, "a payload commitment carries no signature and no inputIndex"));
@@ -602,6 +603,7 @@ fn check_authorization(
         payment_output_index: pay_idx as u32,
         requirements_hash: &env.requirements_hash,
         request_hash: &env.request_hash,
+        payment_identifier,
         expires_at: &a.expires_at,
     })?;
     if digest != stated {

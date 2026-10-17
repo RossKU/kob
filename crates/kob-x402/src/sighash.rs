@@ -1,10 +1,22 @@
-//! The signature hash type of payer signatures: every payer signature of an x402 payment uses SIGHASH_ALL.
+//! The signature hash type of payer signatures.
 //!
-//! A signature with another hash type (NONE, SINGLE, either with ANYONECANPAY) passes the script engine but
-//! does not commit to every output (or input) of the transaction, so a third party could alter the verified
-//! transaction before it confirms. The engine cannot tell the verifier which hash type was used, so each
-//! verifier that accepts payer-signed inputs reads the hash type byte from the signature script itself, per
-//! owner scheme, BEFORE it runs the engine (`docs/spec/x402-kcc20-profile.md` step 8 and section 5.1,
+//! **Standard-native (the binding).** The elldeeone binding v1.0.0 honors each signature's encoded consensus-supported
+//! hash type ([`CONSENSUS_HASH_TYPES`]: ALL, NONE, SINGLE, each with or without ANYONECANPAY) on standard-native payer
+//! inputs: the signer chooses its scope, while the exact merchant output, the recipient script, the profile and the request
+//! authorization stay mandatory (`crate::exact`). Reference signers, and every KOB signer, default to SIGHASH_ALL.
+//!
+//! **KOB's own profiles** (`kcc20`, swap-and-pay and its intent mode) keep the SIGHASH_ALL rule: every payer signature of
+//! such a payment uses SIGHASH_ALL. Their authorization is the payload commitment, not a separate signature over the
+//! transaction id, so the payer's input signatures are the payer's only consent to the transaction as a whole: the token
+//! change, the KAS change, the order fills, the intent's lock. A weaker scope would let whoever holds the signed payment
+//! (the merchant, the facilitator, which also executes intents, or a relay) re-shape what the signature leaves open, for
+//! example splice an ANYONECANPAY token input into another transaction or redirect an uncommitted change output. No KOB
+//! signer produces another hash type, and the profile texts require SIGHASH_ALL; a later revision of those proposals may
+//! relax it where the covenant guards make a weaker scope safe.
+//!
+//! A signature with another hash type passes the script engine, and the engine cannot tell the verifier which hash type
+//! was used, so each verifier of KOB's profiles reads the hash type byte from the signature script itself, per owner
+//! scheme, BEFORE it runs the engine (`docs/spec/x402-kcc20-profile.md` step 8 and section 5.1,
 //! `docs/spec/x402-swap-and-pay.md` sections 8.1a and 17.5; conformance cases `kcc20-neg-hashtype`, `swap-neg-hashtype` and
 //! `intent-neg-hashtype`).
 //!
@@ -37,6 +49,14 @@ pub const SIGHASH_NONE: u8 = 0x02;
 pub const SIGHASH_SINGLE: u8 = 0x04;
 /// The `ANYONECANPAY` flag, or-ed into one of the three base types.
 pub const SIGHASH_ANYONE_CAN_PAY: u8 = 0x80;
+/// Every transaction signature hash type Kaspa consensus supports: ALL, NONE, SINGLE, and each with ANYONECANPAY. A
+/// standard-native payer signature may use any of them (binding v1.0.0); any other trailing byte is invalid.
+pub const CONSENSUS_HASH_TYPES: [u8; 6] = [0x01, 0x02, 0x04, 0x81, 0x82, 0x84];
+
+/// True for a consensus-supported hash type byte ([`CONSENSUS_HASH_TYPES`]).
+pub fn is_consensus_hash_type(t: u8) -> bool {
+    CONSENSUS_HASH_TYPES.contains(&t)
+}
 
 /// KCC-20 owner schemes (the `owner_scheme` byte of the token state): the canonical KCC-2 scheme bytes.
 pub const OWNER_P2PK_SCHNORR: u8 = kob_protocol::kcc2::P2PK_SCHNORR;
@@ -63,7 +83,7 @@ pub fn hash_type_name(t: u8) -> String {
     }
 }
 
-/// Refuses every hash type but SIGHASH_ALL (`token_owner_scheme`).
+/// Refuses every hash type but SIGHASH_ALL (`token_owner_scheme`): the rule of KOB's own profiles (module docs).
 pub fn require_all(input: usize, hash_type: u8) -> Result<()> {
     if hash_type == SIGHASH_ALL {
         return Ok(());
@@ -151,7 +171,9 @@ pub fn p2pk_hash_type(signature_script: &[u8]) -> Option<u8> {
     }
 }
 
-/// Checks that the Schnorr P2PK input `input` signs with SIGHASH_ALL.
+/// Checks that the Schnorr P2PK input `input` of a KOB-profile payment (a KCC-20, swap or intent funding input, a KRON
+/// owner input) signs with SIGHASH_ALL. Standard-native inputs are not checked here: they may use any consensus-supported
+/// hash type ([`is_consensus_hash_type`]).
 pub fn check_p2pk_input(input: usize, signature_script: &[u8]) -> Result<()> {
     let t =
         p2pk_hash_type(signature_script).ok_or_else(|| malformed(input, "the signature script is not one 65-byte signature push"))?;

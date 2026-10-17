@@ -171,7 +171,7 @@ fn generate() -> Value {
     let auth = json!({
         "network": "kaspa:testnet-10", "profile": "standard-native", "transactionId": "15".repeat(32), "paymentOutputIndex": 0,
         "amount": "50000000", "payTo": address(MERCHANT), "payToScriptPublicKey": p2pk_hex(MERCHANT), "paymentRequirementsHash": req_hash,
-        "requestHash": RH, "inputIndex": 1, "expiresAt": "2099-01-01T00:00:00.000Z",
+        "requestHash": RH, "paymentIdentifier": "pay_golden_digest_0001", "inputIndex": 1, "expiresAt": "2099-01-01T00:00:00.000Z",
     });
     push(
         "digest.signed",
@@ -183,7 +183,7 @@ fn generate() -> Value {
     let commit = json!({
         "network": "kaspa:testnet-10", "profile": "kcc20", "routePayAsset": to_hex(&TOKEN_COV), "asset": to_hex(&TOKEN_B), "amount": "2000",
         "payTo": address(MERCHANT), "payToScriptPublicKey": p2pk_hex(MERCHANT), "paymentOutputIndex": 2, "paymentRequirementsHash": req_hash,
-        "requestHash": RH, "expiresAt": "2099-01-01T00:00:00.000Z",
+        "requestHash": RH, "paymentIdentifier": "pay_golden_digest_0001", "expiresAt": "2099-01-01T00:00:00.000Z",
     });
     push(
         "digest.commit",

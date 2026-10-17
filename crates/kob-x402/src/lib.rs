@@ -1,4 +1,4 @@
-//! KOB x402: the Kaspa x402 `exact` binding (elldeeone/kaspa-x402 v1.0.0-rc.1, `kaspa-exact-v2`) plus
+//! KOB x402: the Kaspa x402 `exact` binding (elldeeone/kaspa-x402 v1.0.0, `kaspa-exact-v2`) plus
 //! the two KOB contributions to it.
 //!
 //! | Module | Contents |
@@ -6,7 +6,7 @@
 //! | [`wire`] | x402 v2 wire types, header codecs, network / profile / finality enums |
 //! | [`canonical`] | canonical JSON (UTF-16 key order) and the requirements / request hashes |
 //! | [`safe_tx`] | `kaspa-sdk-safe-json-v2.0.0` transaction projection (v0 and v1) |
-//! | [`sighash`] | the SIGHASH_ALL rule of payer signatures: hash type extraction per owner scheme, checked before the script engine |
+//! | [`sighash`] | payer signature hash types: the consensus-supported set honored on standard-native inputs, the SIGHASH_ALL rule of KOB's own profiles (hash type extraction per owner scheme, checked before the script engine) |
 //! | [`chain`] | the trusted chain view trait, outpoints, clock |
 //! | [`policy`] | resource bounds, token allowlist and custody classes |
 //! | [`verify`] | `verify_payment` dispatch and the [`verify::Verified`] result |

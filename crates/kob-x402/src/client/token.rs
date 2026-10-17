@@ -50,7 +50,7 @@ use crate::token::{parse_offer, verify_kcc20, TokenOffer, TOKEN_FAMILY};
 use crate::verify::{Verified, VerifyCtx};
 use crate::wire::{
     hex, parse_hash32, Authorization, ExactPayload, Finality, Network, PaymentPayload, PaymentRequirements, Profile,
-    AUTH_VERSION_PAYLOAD, BINDING_EXACT, PAYLOAD_EXACT_TX, SCHEME_EXACT, TX_ENCODING, X402_VERSION,
+    AUTH_VERSION_PAYLOAD, BINDING_EXACT, PAYLOAD_EXACT_TX, PAYMENT_FLOW_UPFRONT, SCHEME_EXACT, TX_ENCODING, X402_VERSION,
 };
 
 // ------------------------------------------------------------------------------------------ merchant
@@ -101,6 +101,7 @@ pub fn kcc20_requirements(
     let mut extra = Map::new();
     extra.insert("binding".into(), json!(BINDING_EXACT));
     extra.insert("profile".into(), json!(Profile::Kcc20.as_str()));
+    extra.insert("paymentFlow".into(), json!(PAYMENT_FLOW_UPFRONT));
     extra.insert("finality".into(), json!(finality.as_str()));
     extra.insert("transactionEncoding".into(), json!(TX_ENCODING));
     extra.insert("payToScriptPublicKey".into(), json!(spk_to_hex(&pay_to_address_script(&addr))));
@@ -272,6 +273,7 @@ fn build_unsigned_with(
     if offer.profile()? != Profile::Kcc20 {
         return Err(X402Error::requirements(Diag::UnsupportedKaspaExactProfile, "not a kcc20 requirement"));
     }
+    offer.check_payment_flow()?;
     let network = offer.network()?;
     let facts = parse_offer(offer)?;
     if facts.carrier > opts.max_carrier_sompi {
@@ -295,7 +297,9 @@ fn build_unsigned_with(
     let (max_in, _) = facts.program.token_slots().expect("token program");
     let tokens = select_tokens(&facts, token_utxos, max_in, have_key)?;
 
-    // the commitment, BEFORE the transaction exists: the merchant output is output 0 (recipients first)
+    // the payment identifier first (the commitment binds it), then the commitment, BEFORE the transaction exists: the
+    // merchant output is output 0 (recipients first)
+    let id = crate::common::resolve_payment_id(opts.payment_id.as_deref())?;
     let ttl = opts.ttl_seconds.unwrap_or(offer.max_timeout_seconds);
     let expires_at = iso_from_ms(now_ms.saturating_add(ttl.saturating_mul(1_000)));
     let pay_idx = 0u32;
@@ -311,6 +315,7 @@ fn build_unsigned_with(
         payment_output_index: pay_idx,
         requirements_hash: &req_hash,
         request_hash: &rh,
+        payment_identifier: &id,
         expires_at: &expires_at,
     })?;
 
@@ -376,10 +381,6 @@ fn build_unsigned_with(
         ));
     }
     let payer_address = facts_owner_address(&tokens, network);
-    let id = opts.payment_id.clone().unwrap_or_else(crate::client::native::random_payment_id);
-    if !(16..=128).contains(&id.len()) || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
-        return Err(X402Error::payload(Diag::InvalidKaspaPaymentIdentifier, "payment id must match ^[A-Za-z0-9_-]{16,128}$"));
-    }
     let extensions = Some(json!({ "payment-identifier": { "info": { "required": true, "id": id } } }));
     let template = PayloadTemplate {
         accepted: offer.clone(),

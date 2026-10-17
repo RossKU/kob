@@ -213,9 +213,6 @@ pub struct Policy {
     pub tokens: TokenAllowlist,
     /// Accept [`Custody::IssuerControlled`] tokens at all (default off).
     pub allow_issuer_controlled: bool,
-    /// The binding requires the `payment-identifier` extension for exact; a deployment that does
-    /// not want it (a test facilitator) can turn the requirement off.
-    pub require_payment_identifier: bool,
     /// Weakest finality this verifier settles on (default `accepted`; the offer may ask for more).
     pub min_finality: crate::wire::Finality,
     /// Serve swap-and-pay (`extra.route`).
@@ -223,7 +220,7 @@ pub struct Policy {
 }
 
 impl Policy {
-    /// Defaults for a network: 100 DAA confirmation depth, no tokens, swap on, payment identifier required.
+    /// Defaults for a network: 100 DAA confirmation depth, no tokens, swap on (the payment identifier is always required).
     pub fn new(network: Network) -> Self {
         Policy {
             network,
@@ -231,7 +228,6 @@ impl Policy {
             confirmations_daa: 100,
             tokens: TokenAllowlist::new(),
             allow_issuer_controlled: false,
-            require_payment_identifier: true,
             min_finality: crate::wire::Finality::Accepted,
             swap_enabled: true,
         }

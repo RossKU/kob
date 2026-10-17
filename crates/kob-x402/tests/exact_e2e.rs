@@ -63,7 +63,12 @@ fn full_flow_offer_pay_verify_submit_accept() {
     assert_eq!(v.consumed, vec![outpoint_of_coin(&coin)]);
     assert_eq!(v.finality, Finality::Accepted);
     assert_eq!(v.payer_address.as_deref(), Some(payload.payload.payer_address.as_deref().unwrap()));
-    assert!(v.payment_identifier.as_deref().unwrap().starts_with("pay_"));
+    assert!(v.payment_identifier.starts_with("pay_"));
+    assert_eq!(
+        Some(v.payment_identifier.as_str()),
+        received.extensions.as_ref().and_then(|e| e["payment-identifier"]["info"]["id"].as_str())
+    );
+    assert_eq!(offer.extra_str("paymentFlow"), Some("upfront"));
     assert_eq!(v.response_extension["binding"], "kaspa-exact-v2");
     assert_eq!(v.response_extension["profile"], "standard-native");
     assert_eq!(v.response_extension["paymentOutputIndex"], 0);
@@ -111,10 +116,19 @@ fn payload_is_deterministic_and_payment_ids_are_fresh() {
     let a = fixture();
     let b = fixture();
     assert_eq!(a.payload.payload.transaction, b.payload.payload.transaction);
-    assert_eq!(a.payload.payload.authorization, b.payload.payload.authorization);
-    // the payment identifier is drawn at random for every build (a retry re-sends the stored payload)
+    // the payment identifier is drawn at random for every build (a retry re-sends the stored payload), and the v2
+    // authorization digest binds it: the authorizations differ in digest and signature only
     let id = |p: &PaymentPayload| p.extensions.as_ref().unwrap()["payment-identifier"]["info"]["id"].as_str().unwrap().to_string();
     assert_ne!(id(&a.payload), id(&b.payload));
+    let (x, y) = (&a.payload.payload.authorization, &b.payload.payload.authorization);
+    assert_eq!((&x.version, x.input_index, &x.expires_at), (&y.version, y.input_index, &y.expires_at));
+    assert_ne!(x.digest, y.digest);
+    // the same explicit id builds the same authorization, byte for byte
+    let mut opts = PayOptions::new(u64::MAX);
+    opts.payment_id = Some(id(&a.payload));
+    let again = kob_x402::client::native::pay_native(&a.offer, &a.request_hash, &secret(PAYER), &a.coins, NOW_MS, &opts).unwrap();
+    assert_eq!(again.payload.authorization, a.payload.payload.authorization);
+    assert_eq!(again.payload.transaction, a.payload.payload.transaction);
 }
 
 #[test]
@@ -527,12 +541,49 @@ fn missing_or_malformed_payment_identifier_is_rejected() {
     let mut p = fx.payload.clone();
     p.extensions = Some(json!({ "payment-identifier": { "info": { "required": true, "id": "has spaces in it 0123456789" } } }));
     expect_err(fx.verify_payload(&p), Reason::InvalidPayload, Diag::InvalidKaspaPaymentIdentifier);
-    // a deployment that does not require the extension accepts its absence
-    let mut fx2 = fixture();
-    fx2.env.policy.require_payment_identifier = false;
-    let mut p = fx2.payload.clone();
-    p.extensions = None;
-    assert_eq!(fx2.verify_payload(&p).unwrap().payment_identifier, None);
+    // the v2 authorization digest binds the id: another well-formed id (the signature left as it was) fails the authorization
+    let mut p = fx.payload.clone();
+    p.extensions = Some(json!({ "payment-identifier": { "info": { "required": true, "id": "pay_another_id_0123456789" } } }));
+    expect_err(fx.verify_payload(&p), Reason::InvalidPayload, Diag::InvalidAuthorization);
+    // ... and so does a v1 authorization (the rc.1 scope, which does not bind the id), even with a matching digest
+    let mut p = fx.payload.clone();
+    p.payload.authorization.version = "kaspa-x402-exact-request-authorization-v1".into();
+    expect_err(fx.verify_payload(&p), Reason::InvalidPayload, Diag::InvalidAuthorization);
+}
+
+#[test]
+fn an_offer_without_the_upfront_payment_flow_is_refused() {
+    let fx = fixture();
+    assert_eq!(fx.offer.extra_str("paymentFlow"), Some("upfront"));
+    for flow in [None, Some(json!("authorization")), Some(json!("escrow"))] {
+        let mut offer = fx.offer.clone();
+        match &flow {
+            None => offer.extra.remove("paymentFlow"),
+            Some(f) => offer.extra.insert("paymentFlow".into(), f.clone()),
+        };
+        // the verifier (with the payload accepting exactly that offer) ...
+        let mut p = fx.payload.clone();
+        p.accepted = offer.clone();
+        let r = kob_x402::verify::verify_payment(&fx.env.ctx(), &offer, &p, &fx.request_hash);
+        expect_err(r, Reason::InvalidPaymentRequirements, Diag::InvalidKaspaX402Payload);
+        // ... and the payer, before anything is signed
+        let e = kob_x402::client::native::pay_native(
+            &offer,
+            &fx.request_hash,
+            &secret(PAYER),
+            &fx.coins,
+            NOW_MS,
+            &PayOptions::new(u64::MAX),
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("paymentFlow"), "{flow:?}: {e}");
+        let pr = payment_required(
+            Resource { url: "https://api.example.test/file".into(), description: None, mime_type: None, other: Map::new() },
+            vec![offer],
+            None,
+        );
+        assert!(select_native_offer(&pr, Network::Testnet10, u64::MAX).is_none(), "{flow:?}");
+    }
 }
 
 #[test]
@@ -557,7 +608,7 @@ fn profile_shape_rules_on_inputs_and_offer() {
         tx.inputs[0] = TransactionInput::new(i.previous_outpoint, i.signature_script, i.sequence, 2);
     });
     expect_err(fx.verify_payload(&p), Reason::InvalidPayload, Diag::InvalidKaspaExactTransaction);
-    // non-SIGHASH_ALL signature (SIGHASH_NONE would let anyone edit the outputs)
+    // a hash type byte the signature was not made under (SIGHASH_NONE over an ALL signature): the engine refuses it
     let (p, _, _) = mutate(&fx, &Repack { reauthorize: false, resign: false, ..Repack::default() }, |tx, _| {
         let n = tx.inputs[0].signature_script.len();
         tx.inputs[0].signature_script[n - 1] = 0x02;
@@ -611,10 +662,13 @@ fn signature_of_another_key_inside_the_transaction_fails_the_engine() {
     let _ = pubkey(PAYER);
 }
 
-// ------------------------------------------------------------------------------------------ SIGHASH_ALL
+// ------------------------------------------------------------------------------------------ hash types
 
+/// Binding v1.0.0: a standard-native verifier honors each signature's encoded consensus-supported hash type (ALL, NONE,
+/// SINGLE, each with ANYONECANPAY); the signer chooses its scope. Any other trailing byte is refused before the engine runs.
+/// (KOB's own profiles keep SIGHASH_ALL only: `kcc20.rs`, `swap.rs`, `intent.rs`.)
 #[test]
-fn every_payer_signature_must_use_sighash_all() {
+fn standard_native_honors_every_consensus_hash_type() {
     use kob_x402::testkit::hashtype::{resigned, signers, tampered_byte, BOGUS, NON_ALL};
     // one funding input, then two (every signature is checked, not only the first)
     for funds in [vec![500_000_000u64], vec![15_000_000, 15_000_000]] {
@@ -625,17 +679,28 @@ fn every_payer_signature_must_use_sighash_all() {
         assert_eq!(ss.len(), funds.len());
         fx.verify().unwrap();
         for s in &ss {
-            // control: SIGHASH_ALL again verifies; every other valid hash type is accepted by the engine and refused here
+            // SIGHASH_ALL, and every other consensus-supported hash type, verifies (the engine accepts each one too)
             fx.verify_payload(&mutate_tx(&fx, &resigned(&tx, &entries, s, 0x01), &entries)).unwrap();
             for t in NON_ALL {
-                let bad = resigned(&tx, &entries, s, t);
-                kob_protocol::verify::validate(&bad, &entries).unwrap_or_else(|e| panic!("the engine must accept {t:#04x}: {e}"));
-                expect_err(
-                    fx.verify_payload(&mutate_tx(&fx, &bad, &entries)),
-                    Reason::InvalidPayload,
-                    Diag::InvalidKaspaExactSignature,
-                );
+                assert!(kob_x402::sighash::is_consensus_hash_type(t));
+                let scoped = resigned(&tx, &entries, s, t);
+                kob_protocol::verify::validate(&scoped, &entries).unwrap_or_else(|e| panic!("the engine must accept {t:#04x}: {e}"));
+                let v = fx.verify_payload(&mutate_tx(&fx, &scoped, &entries)).unwrap_or_else(|e| panic!("{t:#04x}: {e}"));
+                assert_eq!(v.amount, AMOUNT);
             }
+            // every input of a payment may use its own scope
+            if ss.len() > 1 {
+                let mixed = resigned(&resigned(&tx, &entries, &ss[0], 0x82), &entries, &ss[1], 0x84);
+                fx.verify_payload(&mutate_tx(&fx, &mixed, &entries)).unwrap();
+            }
+            // a valid scope does not relax the profile: a NONE-signed transaction whose merchant output was edited
+            // afterwards is another transaction, refused on the merchant output (its authorization names the old id too)
+            let none = ss.iter().fold(tx.clone(), |t, x| resigned(&t, &entries, x, 0x02));
+            let mut edited = none.clone();
+            edited.outputs[0].value -= 1;
+            edited.outputs[1].value += 1;
+            kob_protocol::verify::validate(&edited, &entries).expect("SIGHASH_NONE leaves the outputs open to the engine");
+            expect_err(fx.verify_payload(&mutate_tx(&fx, &edited, &entries)), Reason::InvalidPayload, Diag::Underpayment);
             for t in BOGUS {
                 expect_err(
                     fx.verify_payload(&mutate_tx(&fx, &tampered_byte(&tx, s, t), &entries)),

@@ -166,6 +166,9 @@ pub fn authorize(payload: &mut PaymentPayload, offer: &PaymentRequirements, requ
     let reqh = requirements_hash(offer).unwrap();
     let pay_addr = Address::try_from(offer.pay_to.as_str()).unwrap();
     let pay_spk = kaspa_txscript::pay_to_address_script(&pay_addr);
+    // the payload's own payment identifier (the v2 digest binds it); a payload without one is authorized under ""
+    let id = kob_x402::common::payment_identifier(payload).unwrap_or_default();
+    let a = &mut payload.payload.authorization;
     let digest = signed_auth_digest(&SignedAuth {
         network: Network::Testnet10,
         profile: Profile::StandardNative,
@@ -176,6 +179,7 @@ pub fn authorize(payload: &mut PaymentPayload, offer: &PaymentRequirements, requ
         pay_to_spk_hex: &spk_to_hex(&pay_spk),
         requirements_hash: &reqh,
         request_hash: &rh,
+        payment_identifier: &id,
         challenge_id: None,
         input_index: r.auth_input,
         expires_at: &a.expires_at,

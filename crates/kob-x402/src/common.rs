@@ -83,6 +83,7 @@ pub fn check_envelope(
         return Err(X402Error::requirements(Diag::InvalidKaspaX402Binding, "extra.binding must be kaspa-exact-v2"));
     }
     let profile = offered.profile()?;
+    offered.check_payment_flow()?;
     if payload.payload.profile != profile.as_str() {
         return Err(X402Error::payload(Diag::UnsupportedKaspaExactProfile, "payload.profile differs from the offered profile"));
     }
@@ -370,7 +371,7 @@ pub fn iso_from_ms(ms: u64) -> String {
 
 // -------------------------------------------------------------------------------- authorization digests
 
-/// Inputs of the binding's Schnorr-signed request authorization digest (`kaspa-x402-exact-request-authorization-v1`).
+/// Inputs of the binding's Schnorr-signed request authorization digest (`kaspa-x402-exact-request-authorization-v2`).
 pub struct SignedAuth<'a> {
     pub network: Network,
     pub profile: Profile,
@@ -381,6 +382,8 @@ pub struct SignedAuth<'a> {
     pub pay_to_spk_hex: &'a str,
     pub requirements_hash: &'a [u8; 32],
     pub request_hash: &'a [u8; 32],
+    /// The logical payment identifier, verbatim (`paymentPayload.extensions["payment-identifier"].info.id`).
+    pub payment_identifier: &'a str,
     pub challenge_id: Option<&'a str>,
     pub input_index: u32,
     pub expires_at: &'a str,
@@ -399,6 +402,7 @@ pub fn signed_auth_object(a: &SignedAuth) -> Value {
         "payToScriptPublicKey": a.pay_to_spk_hex.to_ascii_lowercase(),
         "paymentRequirementsHash": hex(a.requirements_hash),
         "requestHash": hex(a.request_hash),
+        "paymentIdentifier": a.payment_identifier,
         "challengeId": a.challenge_id.map(|c| c.to_ascii_lowercase()),
         "inputIndex": a.input_index,
         "expiresAt": a.expires_at,
@@ -410,10 +414,10 @@ pub fn signed_auth_digest(a: &SignedAuth) -> Result<[u8; 32]> {
     canonical_hash(&signed_auth_object(a))
 }
 
-/// Inputs of the KOB payload-commitment digest (`kob-x402-payload-commitment-v1`), used where the
+/// Inputs of the KOB payload-commitment digest (`kob-x402-payload-commitment-v2`), used where the
 /// paying authority is not a single P2PK signer (KCC-20 owner witnesses, swap-and-pay). It commits to
-/// everything the signed digest does except the transaction id and the input index (the digest is
-/// embedded in the transaction payload, so it cannot contain the id), and every input authorizer's
+/// everything the signed digest does (the payment identifier included) except the transaction id and the input index
+/// (the digest is embedded in the transaction payload, so it cannot contain the id), and every input authorizer's
 /// SIGHASH_ALL covers the payload.
 pub struct PayloadCommit<'a> {
     pub network: Network,
@@ -427,6 +431,8 @@ pub struct PayloadCommit<'a> {
     pub payment_output_index: u32,
     pub requirements_hash: &'a [u8; 32],
     pub request_hash: &'a [u8; 32],
+    /// The logical payment identifier, verbatim (as in the binding's v2 authorization digest).
+    pub payment_identifier: &'a str,
     pub expires_at: &'a str,
 }
 
@@ -444,6 +450,7 @@ pub fn payload_commit_object(c: &PayloadCommit) -> Value {
         "paymentOutputIndex": c.payment_output_index,
         "paymentRequirementsHash": hex(c.requirements_hash),
         "requestHash": hex(c.request_hash),
+        "paymentIdentifier": c.payment_identifier,
         "expiresAt": c.expires_at,
     })
 }
@@ -512,24 +519,33 @@ pub fn effective_finality(offered: Finality, policy: &crate::policy::Policy) -> 
     offered.max(policy.min_finality)
 }
 
+/// True for a well-formed `payment-identifier` id (`^[A-Za-z0-9_-]{16,128}$`).
+pub fn is_payment_id(s: &str) -> bool {
+    (16..=128).contains(&s.len()) && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+}
+
+/// The id a payer signs under: `explicit`, else a fresh random one ([`crate::client::native::random_payment_id`]). Fails on a
+/// malformed explicit id. The id is chosen before the authorization digest, which binds it.
+pub fn resolve_payment_id(explicit: Option<&str>) -> Result<String> {
+    let id = explicit.map_or_else(crate::client::native::random_payment_id, str::to_string);
+    if !is_payment_id(&id) {
+        return Err(X402Error::payload(Diag::InvalidKaspaPaymentIdentifier, "payment id must match ^[A-Za-z0-9_-]{16,128}$"));
+    }
+    Ok(id)
+}
+
 /// The `payment-identifier` extension of a payload (`paymentPayload.extensions["payment-identifier"].info`):
-/// `{ "required": bool, "id": "^[A-Za-z0-9_-]{16,128}$" }`. When the policy requires the extension
-/// (the binding requires it for exact) a missing or malformed id fails; otherwise a malformed id is
-/// still an error but a missing one is `None`.
-pub fn payment_identifier(ctx: &VerifyCtx, payload: &PaymentPayload) -> Result<Option<String>> {
+/// `{ "required": bool, "id": "^[A-Za-z0-9_-]{16,128}$" }`. Mandatory for every exact payment (the binding requires it,
+/// and both authorization digests bind the id): a missing or malformed id fails.
+pub fn payment_identifier(payload: &PaymentPayload) -> Result<String> {
     let id =
         payload.extensions.as_ref().and_then(|e| e.get("payment-identifier")).and_then(|e| e.get("info")).and_then(|i| i.get("id"));
     match id {
-        None if ctx.policy.require_payment_identifier => Err(X402Error::payload(
+        None => Err(X402Error::payload(
             Diag::MissingKaspaPaymentIdentifier,
             "the payment-identifier extension with an id is required for exact",
         )),
-        None => Ok(None),
-        Some(Value::String(s))
-            if (16..=128).contains(&s.len()) && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') =>
-        {
-            Ok(Some(s.clone()))
-        }
+        Some(Value::String(s)) if is_payment_id(s) => Ok(s.clone()),
         Some(_) => {
             Err(X402Error::payload(Diag::InvalidKaspaPaymentIdentifier, "payment-identifier id must match ^[A-Za-z0-9_-]{16,128}$"))
         }

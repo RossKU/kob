@@ -10,7 +10,7 @@
 //! * (d) swap-and-pay on chain: SW1 (A -> KAS), SW2 (KAS -> B), SW3 (A -> KAS -> B via `SwapRoute`);
 //! * (e) live `order_conflict`: a third party fills the bid the payer signed against; re-quote, re-sign, settle;
 //! * (f) `confirmed` finality;
-//! * (g) fee-floor probe (interop finding for the rc.1 binding);
+//! * (g) fee-floor probe (interop finding for the binding's standard-native vector, unchanged from rc.1 to 1.0.0);
 //! * (h) intent-based swap-and-pay through an invoice: the merchant registers an invoice (`POST /invoices`), the
 //!   payer fetches it (`GET /invoices/{id}`, the id is checked), signs ONE intent creation and pays it anonymously
 //!   (`POST /invoices/{id}/pay`); the facilitator broadcasts the creation and executes the intent against a live bid
@@ -1697,8 +1697,8 @@ impl OutpointOf for Utxo {
 /// Interop finding for the binding, and the check of our fee rule against the node itself: a rusty-kaspa
 /// v2.1.0 node's relay floor is 100 sompi per gram of max(compute mass, normalized transient mass = 2 x size);
 /// storage mass is not part of it (`mining/src/mempool/check_transaction_standard.rs`). A standard-native
-/// transaction shaped like the rc.1 vector (1 P2PK input, 0.2 KAS to the merchant plus change) is submitted at
-/// the rc.1 fee (200000 sompi) and at the floor minus one sompi, both refused, and at the floor, accepted; then
+/// transaction shaped like the binding's vector (1 P2PK input, 0.2 KAS to the merchant plus change) is submitted at
+/// the vector's fee (200000 sompi) and at the floor minus one sompi, both refused, and at the floor, accepted; then
 /// the payer SDK's default fee for the same shape is exactly that floor and is accepted too.
 fn fee_floor_probe(net: &Net, rep: &mut Report, payer: &Key, merchant: &Key) -> Value {
     let coins = net.kas_utxos(payer);
@@ -1724,7 +1724,7 @@ fn fee_floor_probe(net: &Net, rep: &mut Report, payer: &Key, merchant: &Key) -> 
         assert!(m.storage > m.fee_mass, "the storage mass would dominate a storage-inclusive fee: {m:?}");
         min_fee(&m, MIN_FEE_RATE)
     };
-    assert_eq!(floor, 203_600, "the rc.1 shape's node floor (100 x compute 2036)");
+    assert_eq!(floor, 203_600, "the vector shape's node floor (100 x compute 2036)");
     let mut attempts = vec![];
     for (label, fee, relayed) in
         [("rc1-vector-fee-200000", 200_000, false), ("node-floor-minus-1", floor - 1, false), ("node-floor", floor, true)]

@@ -79,8 +79,8 @@ pub struct Verified {
     pub authorization_expires_at_ms: u64,
     pub request_hash: [u8; 32],
     pub requirements_hash: [u8; 32],
-    /// The `payment-identifier` extension id of the payload (validated; `None` when the policy does not require it and none was sent).
-    pub payment_identifier: Option<String>,
+    /// The `payment-identifier` extension id of the payload (mandatory, validated, bound by the authorization digest).
+    pub payment_identifier: String,
     /// Fields for `SettlementResponse.extensions.kaspa` (binding, profile, paymentOutputIndex,
     /// finality, transactionEncoding, and profile specifics).
     pub response_extension: Map<String, Value>,

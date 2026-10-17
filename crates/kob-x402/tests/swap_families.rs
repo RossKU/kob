@@ -62,6 +62,9 @@ fn token_outputs_in(tx: &Transaction, t: Tok, state: &TokenState) -> usize {
     tx.outputs.iter().filter(|o| o.script_public_key == spk && o.covenant.map(|c| c.covenant_id.as_bytes()) == Some(t.cov)).count()
 }
 
+/// The payment identifier of the hand-built payments ([`digest_for`] binds it).
+const MANUAL_PID: &str = "pay_manual_swap_0001";
+
 /// Commitment digest for a hand-built swap transaction.
 fn digest_for(offer: &PaymentRequirements, pay_asset: &str, idx: u32, expires_at: &str) -> [u8; 32] {
     payload_commit_digest(&PayloadCommit {
@@ -75,6 +78,7 @@ fn digest_for(offer: &PaymentRequirements, pay_asset: &str, idx: u32, expires_at
         payment_output_index: idx,
         requirements_hash: &requirements_hash(offer).unwrap(),
         request_hash: &parse_hash32(RH).unwrap(),
+        payment_identifier: MANUAL_PID,
         expires_at,
     })
     .unwrap()
@@ -100,7 +104,7 @@ fn manual(offer: &PaymentRequirements, pay_asset: &str, mut batch: Batch, k: usi
         kas_spent: 0,
         payer_address: None,
         warnings: vec![],
-        payment_identifier: None,
+        payment_identifier: MANUAL_PID.into(),
     };
     let sigs = sign_locally(&built, &keys()).unwrap();
     let (tx, entries) = assemble(&built, &sigs).unwrap();

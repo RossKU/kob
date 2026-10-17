@@ -157,7 +157,8 @@ pub struct PreparedIntent {
     /// (TokenToKas / TokenSwap: `max_sell`, plus the KAS of the intent and the creation fee).
     pub worst_kas: u64,
     pub worst_tokens: i64,
-    pub payment_identifier: Option<String>,
+    /// The `payment-identifier` id the commitment binds.
+    pub payment_identifier: String,
 }
 
 /// A signed intent creation, ready for `PAYMENT-SIGNATURE`; keep it to cancel the intent later.
@@ -235,6 +236,7 @@ pub fn prepare_intent(
     }
     let network = offer.network()?;
     let profile = offer.profile()?;
+    offer.check_payment_flow()?;
     let amount = offer.amount_u64()?;
     let rh = parse_hash32(request_hash).ok_or_else(|| err(Diag::InvalidKaspaX402Payload, "requestHash is not 32-byte hex"))?;
     let pay_to = kaspa_addresses::Address::try_from(offer.pay_to.as_str())
@@ -385,6 +387,8 @@ pub fn prepare_intent(
     state.check().map_err(|e| err(Diag::InvalidKaspaX402Payload, e.to_string()))?;
     state.check_actor(actor).map_err(|e| err(Diag::RouteUnsupported, e.to_string()))?;
     let expires_at = iso_from_ms(deadline_ms);
+    // the payment identifier is chosen here: the commitment binds it
+    let payment_identifier = crate::common::resolve_payment_id(opts.payment_identifier.as_deref())?;
     let digest = intent_commit_digest(
         &PayloadCommit {
             network,
@@ -397,6 +401,7 @@ pub fn prepare_intent(
             payment_output_index: INTENT_OUTPUT,
             requirements_hash: &env.requirements_hash,
             request_hash: &rh,
+            payment_identifier: &payment_identifier,
             expires_at: &expires_at,
         },
         actor.name,
@@ -493,7 +498,7 @@ pub fn prepare_intent(
         payer_address: address_of(&kob_protocol::script::p2pk_spk(&funds.change), network),
         worst_kas,
         worst_tokens: if kind.locks_tokens() { lock_amount } else { 0 },
-        payment_identifier: opts.payment_identifier.clone(),
+        payment_identifier,
     })
 }
 
@@ -515,7 +520,7 @@ impl PreparedIntent {
         let signed = kob_protocol::tx::finalize(&self.built, signatures, kob_protocol::tx::FinalizeOptions { tighten_budgets: true })?;
         let (tx, entries) = signed.tx.to_tx()?;
         let txid = tx.id().as_bytes();
-        let id = self.payment_identifier.clone().unwrap_or_else(crate::client::native::random_payment_id);
+        let id = &self.payment_identifier;
         let intent_id = self
             .built
             .covenants

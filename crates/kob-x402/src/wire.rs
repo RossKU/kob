@@ -1,7 +1,7 @@
 //! x402 v2 wire types for the Kaspa binding.
 //!
-//! Field names follow the elldeeone/kaspa-x402 v1.0.0-rc.1 schemas (`schemas/*.json`,
-//! `spec/kaspa-exact-v2.md`). Requirements and payloads keep unknown fields (`#[serde(flatten)]`)
+//! Field names follow the elldeeone/kaspa-x402 v1.0.0 schemas (`protocol/schemas/*.json`,
+//! `protocol/spec/kaspa-exact-v2.md`). Requirements and payloads keep unknown fields (`#[serde(flatten)]`)
 //! because the requirements hash covers the *complete* selected object.
 //!
 //! KOB additions, both proposals to the binding (`docs/spec/x402-kcc20-profile.md`,
@@ -30,11 +30,16 @@ pub const TX_ENCODING: &str = "kaspa-sdk-safe-json-v2.0.0";
 pub const ASSET_KAS: &str = "KAS";
 /// Payload `type` of an exact payment.
 pub const PAYLOAD_EXACT_TX: &str = "exact-transaction";
-/// Authorization: Schnorr signature over the request digest by a standard P2PK input (the binding).
-pub const AUTH_VERSION_SIGNED: &str = "kaspa-x402-exact-request-authorization-v1";
+/// Authorization: Schnorr signature over the request digest by a standard P2PK input (the binding). Version 2 of the
+/// digest binds the payment identifier (`paymentPayload.extensions["payment-identifier"].info.id`).
+pub const AUTH_VERSION_SIGNED: &str = "kaspa-x402-exact-request-authorization-v2";
 /// Authorization: the digest is committed in the transaction payload, so every input authorizer's
-/// SIGHASH_ALL covers it (token profile, swap-and-pay).
-pub const AUTH_VERSION_PAYLOAD: &str = "kob-x402-payload-commitment-v1";
+/// SIGHASH_ALL covers it (token profile, swap-and-pay). Version 2 binds the payment identifier, as the binding's v2 digest does.
+pub const AUTH_VERSION_PAYLOAD: &str = "kob-x402-payload-commitment-v2";
+/// `extra.paymentFlow` of every exact offer: the payment settles before the protected work begins. The binding requires
+/// it explicitly (an omitted flow is invalid). KOB's own profiles (`kcc20`, swap-and-pay and its intent mode) carry it too:
+/// their resource is likewise served only after the settlement is accepted.
+pub const PAYMENT_FLOW_UPFRONT: &str = "upfront";
 /// `extra.route.binding` of swap-and-pay.
 pub const BINDING_SWAP: &str = "kob-swap-v1";
 /// `extra.route.binding` of intent-based swap-and-pay: the payer signs a KOB router intent once and the facilitator
@@ -429,6 +434,13 @@ impl PaymentRequirements {
         match Finality::parse(self.extra_str("finality").unwrap_or("")) {
             Some(f) if f >= Finality::Accepted => Ok(f),
             _ => Err(X402Error::requirements(Diag::InvalidKaspaExactFinality, "extra.finality must be accepted or confirmed")),
+        }
+    }
+    /// `extra.paymentFlow` is present and [`PAYMENT_FLOW_UPFRONT`] (an omitted flow, `authorization` or `escrow` is invalid).
+    pub fn check_payment_flow(&self) -> Result<()> {
+        match self.extra_str("paymentFlow") {
+            Some(PAYMENT_FLOW_UPFRONT) => Ok(()),
+            _ => Err(X402Error::requirements(Diag::InvalidKaspaX402Payload, "extra.paymentFlow must be upfront")),
         }
     }
     /// True if the offer carries `extra.route` (swap-and-pay).

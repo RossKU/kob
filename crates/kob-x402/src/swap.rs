@@ -533,7 +533,8 @@ pub fn verify_swap_facts(
     }
 
     // 2. authorization: the digest commits to the claimed payment output index (checked against the
-    // transaction below), the pay asset, the offer and the expiry
+    // transaction below), the pay asset, the offer, the payment identifier and the expiry
+    let payment_identifier = payment_identifier(payload)?;
     let spk_hex = spk_to_hex(&env.pay_to_spk);
     let digest = payload_commit_digest(&PayloadCommit {
         network: env.network,
@@ -546,13 +547,13 @@ pub fn verify_swap_facts(
         payment_output_index: payload.payload.payment_output_index,
         requirements_hash: &env.requirements_hash,
         request_hash: &env.request_hash,
+        payment_identifier: &payment_identifier,
         expires_at: &auth.expires_at,
     })?;
     if parse_hash32(&auth.digest) != Some(digest) {
         return Err(X402Error::payload(Diag::InvalidAuthorization, "authorization.digest differs from the recomputed commitment"));
     }
     let expires_ms = check_expiry(ctx.clock.now_ms(), env.max_timeout_seconds, &auth.expires_at)?;
-    let payment_identifier = payment_identifier(ctx, payload)?;
 
     // 3. transaction shape
     let parsed = parse_tx(ctx, payload)?;

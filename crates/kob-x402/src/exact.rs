@@ -20,6 +20,7 @@ use crate::common::{
 };
 use crate::error::{Diag, Result, X402Error};
 use crate::safe_tx::spk_to_hex;
+use crate::sighash::is_consensus_hash_type;
 use crate::verify::{PaymentKind, Verified, VerifyCtx, WatchedOutput};
 use crate::wire::{
     parse_hash32, PaymentPayload, PaymentRequirements, Profile, ASSET_KAS, AUTH_VERSION_SIGNED, BINDING_EXACT, TX_ENCODING,
@@ -39,10 +40,11 @@ pub const ADDITIVE_EXTRA_KEYS: [&str; 10] = [
     "challengeExpiresAt",
 ];
 
-/// Length of a canonical P2PK signature script: `OP_DATA_65 <64-byte Schnorr signature> <SIGHASH_ALL>`.
+/// Length of a canonical P2PK signature script: `OP_DATA_65 <64-byte Schnorr signature> <hash type>`.
 pub const P2PK_SIGSCRIPT_LEN: usize = 66;
-/// The only signature hash type accepted on payer inputs. Anything else (NONE, SINGLE, ANYONECANPAY)
-/// would let a third party alter the outputs of the verified transaction before it confirms.
+/// `SIGHASH_ALL`: what KOB's own signers always use, and the only hash type KOB's own profiles (`kcc20`, swap-and-pay,
+/// intents) accept (`crate::sighash`). A standard-native payment accepts every consensus-supported hash type
+/// ([`crate::sighash::CONSENSUS_HASH_TYPES`]), as the binding's 1.0.0 verifiers do.
 pub const SIGHASH_ALL: u8 = 0x01;
 
 /// Verifies a `standard-native` payment (see `crate::verify`).
@@ -82,7 +84,7 @@ pub fn verify_native(
             format!("amount {} is below the policy minimum {}", env.amount, ctx.policy.limits.min_amount_sompi),
         ));
     }
-    let payment_id = payment_identifier(ctx, payload)?;
+    let payment_id = payment_identifier(payload)?;
 
     let auth = &payload.payload.authorization;
     if auth.version != AUTH_VERSION_SIGNED {
@@ -129,6 +131,7 @@ pub fn verify_native(
         pay_to_spk_hex: &spk_to_hex(&env.pay_to_spk),
         requirements_hash: &env.requirements_hash,
         request_hash: &env.request_hash,
+        payment_identifier: &payment_id,
         challenge_id: None,
         input_index,
         expires_at: &auth.expires_at,
@@ -160,7 +163,12 @@ pub fn verify_native(
         return Err(X402Error::payload(Diag::InvalidKaspaExactUtxo, "the authorizing input resolved to another script"));
     }
 
-    // Every input is a standard Schnorr P2PK of the payer with a canonical SIGHASH_ALL signature script.
+    // Every input is a standard Schnorr P2PK of the payer with a canonical signature script: one 65-byte push whose
+    // trailing byte is a consensus-supported hash type. The binding (1.0.0) honors each signature's encoded type: the signer
+    // chooses its scope, while the exact merchant output, the recipient script, the profile and the request authorization
+    // stay mandatory below. A weaker scope only risks the payer's own funds: the facilitator settles exactly the verified
+    // transaction (its id commits to every output) and watches its merchant output, so a relayed variant with other outputs
+    // is another transaction that never settles this payment.
     for (i, (inp, e)) in tx.inputs.iter().zip(&entries).enumerate() {
         if !is_p2pk(&e.script_public_key) {
             return Err(X402Error::payload(Diag::InvalidKaspaExactTransaction, format!("input {i} is not a standard Schnorr P2PK")));
@@ -175,10 +183,10 @@ pub fn verify_native(
             ));
         }
         let s = &inp.signature_script;
-        if s.len() != P2PK_SIGSCRIPT_LEN || s[0] != 0x41 || s[P2PK_SIGSCRIPT_LEN - 1] != SIGHASH_ALL {
+        if s.len() != P2PK_SIGSCRIPT_LEN || s[0] != 0x41 || !is_consensus_hash_type(s[P2PK_SIGSCRIPT_LEN - 1]) {
             return Err(X402Error::payload(
                 Diag::InvalidKaspaExactSignature,
-                format!("input {i}: signature script is not a canonical Schnorr SIGHASH_ALL push"),
+                format!("input {i}: signature script is not a canonical Schnorr push with a consensus-supported hash type"),
             ));
         }
     }

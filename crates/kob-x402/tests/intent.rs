@@ -314,6 +314,7 @@ fn an_intent_for_another_merchant_does_not_match_the_offer() {
             payment_output_index: 0,
             requirements_hash: &kob_x402::canonical::requirements_hash(&offer).unwrap(),
             request_hash: &parse_hash32(RH).unwrap(),
+            payment_identifier: &kob_x402::common::payment_identifier(&p.payload).unwrap(),
             expires_at: &expires_at,
         },
         "TokenToKas_sell",

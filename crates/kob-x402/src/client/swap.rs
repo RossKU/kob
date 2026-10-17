@@ -46,7 +46,8 @@ use crate::swap::{merchant_output_index, merchant_token, parse_route_offer, LegK
 use crate::verify::{Verified, VerifyCtx};
 use crate::wire::{
     hex, parse_hash32, Authorization, ExactPayload, Finality, Network, PaymentPayload, PaymentRequirements, Profile, RoutePayload,
-    ASSET_KAS, AUTH_VERSION_PAYLOAD, BINDING_EXACT, BINDING_SWAP, PAYLOAD_EXACT_TX, SCHEME_EXACT, TX_ENCODING, X402_VERSION,
+    ASSET_KAS, AUTH_VERSION_PAYLOAD, BINDING_EXACT, BINDING_SWAP, PAYLOAD_EXACT_TX, PAYMENT_FLOW_UPFRONT, SCHEME_EXACT, TX_ENCODING,
+    X402_VERSION,
 };
 
 // ------------------------------------------------------------------------------------------ merchant
@@ -98,6 +99,7 @@ pub fn swap_requirements(p: &SwapOfferParams) -> Result<PaymentRequirements> {
     let spk = pay_to_address_script(&addr);
     let mut extra = Map::new();
     extra.insert("binding".into(), json!(BINDING_EXACT));
+    extra.insert("paymentFlow".into(), json!(PAYMENT_FLOW_UPFRONT));
     extra.insert("finality".into(), json!(p.finality.as_str()));
     extra.insert("transactionEncoding".into(), json!(TX_ENCODING));
     extra.insert("payToScriptPublicKey".into(), json!(spk_to_hex(&spk)));
@@ -375,7 +377,8 @@ pub struct PreparedSwap {
     pub kas_spent: u64,
     pub payer_address: Option<String>,
     pub warnings: Vec<String>,
-    pub payment_identifier: Option<String>,
+    /// The `payment-identifier` id the commitment binds.
+    pub payment_identifier: String,
 }
 
 /// A signed swap payment ready for `PAYMENT-SIGNATURE`.
@@ -424,6 +427,7 @@ fn offer_facts(
 ) -> Result<(crate::common::Envelope, Option<MerchantToken>)> {
     let network = offer.network()?;
     let profile = offer.profile()?;
+    offer.check_payment_flow()?;
     let amount = offer.amount_u64()?;
     let finality = offer.finality()?;
     let pay_to = Address::try_from(offer.pay_to.as_str())
@@ -743,6 +747,8 @@ pub fn prepare_swap(
     // pass 1 fixes the layout (the merchant output index), pass 2 commits the digest
     let layout = build_with(&[0u8; 32])?;
     let idx = index_of(&layout)?;
+    // the payment identifier is chosen here: the commitment binds it
+    let payment_identifier = crate::common::resolve_payment_id(opts.payment_identifier.as_deref())?;
     let digest = payload_commit_digest(&PayloadCommit {
         network: env.network,
         profile: env.profile,
@@ -754,6 +760,7 @@ pub fn prepare_swap(
         payment_output_index: idx as u32,
         requirements_hash: &env.requirements_hash,
         request_hash: &env.request_hash,
+        payment_identifier: &payment_identifier,
         expires_at: &expires_at,
     })?;
     let mut built = build_with(&digest)?;
@@ -826,7 +833,7 @@ pub fn prepare_swap(
         kas_spent,
         payer_address: address_of(&kob_protocol::script::p2pk_spk(&funds.change), env.network),
         warnings,
-        payment_identifier: opts.payment_identifier.clone(),
+        payment_identifier,
     })
 }
 
@@ -867,7 +874,7 @@ impl PreparedSwap {
     /// Wraps a signed transaction into the `PAYMENT-SIGNATURE` object (offer, authorization, route,
     /// payment identifier). No engine run; [`PreparedSwap::complete`] is the normal entry point.
     pub fn assemble_payload(&self, tx: &Transaction, entries: &[UtxoEntry]) -> Result<PaymentPayload> {
-        let id = self.payment_identifier.clone().unwrap_or_else(crate::client::native::random_payment_id);
+        let id = &self.payment_identifier;
         let payload = PaymentPayload {
             x402_version: X402_VERSION,
             accepted: self.offer.clone(),

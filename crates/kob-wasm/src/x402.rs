@@ -448,6 +448,7 @@ struct SignedAuthIn {
     pay_to_script_public_key: String,
     payment_requirements_hash: String,
     request_hash: String,
+    payment_identifier: String,
     #[serde(default)]
     challenge_id: Option<String>,
     input_index: u32,
@@ -458,7 +459,8 @@ fn profile(s: &str) -> R<Profile> {
     Profile::parse(s).ok_or_else(|| perr(format!("unknown profile {s:?}")))
 }
 
-/// The binding's Schnorr-signed authorization digest (`kaspa-x402-exact-request-authorization-v1`).
+/// The binding's Schnorr-signed authorization digest (`kaspa-x402-exact-request-authorization-v2`, which binds the payment
+/// identifier).
 pub fn signed_auth_digest(json: &str) -> R<String> {
     let a: SignedAuthIn = parse("auth", json)?;
     let (txid, rh, qh) =
@@ -473,6 +475,7 @@ pub fn signed_auth_digest(json: &str) -> R<String> {
         pay_to_spk_hex: &a.pay_to_script_public_key,
         requirements_hash: &qh,
         request_hash: &rh,
+        payment_identifier: &a.payment_identifier,
         challenge_id: a.challenge_id.as_deref(),
         input_index: a.input_index,
         expires_at: &a.expires_at,
@@ -495,10 +498,11 @@ struct CommitIn {
     payment_output_index: u32,
     payment_requirements_hash: String,
     request_hash: String,
+    payment_identifier: String,
     expires_at: String,
 }
 
-/// The KOB payload-commitment digest (`kob-x402-payload-commitment-v1`).
+/// The KOB payload-commitment digest (`kob-x402-payload-commitment-v2`, which binds the payment identifier).
 pub fn payload_commit_digest(json: &str) -> R<String> {
     let a: CommitIn = parse("commit", json)?;
     let (rh, qh) = (h32("requestHash", &a.request_hash)?, h32("hash", &a.payment_requirements_hash)?);
@@ -513,6 +517,7 @@ pub fn payload_commit_digest(json: &str) -> R<String> {
         payment_output_index: a.payment_output_index,
         requirements_hash: &qh,
         request_hash: &rh,
+        payment_identifier: &a.payment_identifier,
         expires_at: &a.expires_at,
     })
     .map_err(xerr)?;
@@ -1033,7 +1038,7 @@ struct PreparedJson {
     kas_spent: Option<String>,
     payer_address: Option<String>,
     warnings: Vec<String>,
-    payment_identifier: Option<String>,
+    payment_identifier: String,
 }
 
 fn outpoint_of_json(o: &OutpointJson) -> R<Outpoint> {
@@ -1544,7 +1549,7 @@ struct PreparedIntentJson {
     payer_address: Option<String>,
     worst_kas: String,
     worst_tokens: String,
-    payment_identifier: Option<String>,
+    payment_identifier: String,
 }
 
 impl PreparedIntentJson {

@@ -424,6 +424,7 @@ pub fn verify_intent(
     let intent_spk = state.spk(actor).map_err(|e| unsupported(e.to_string()))?;
     let pi = payload.payload.payment_output_index;
     let spk_hex = spk_to_hex(&env.pay_to_spk);
+    let payment_identifier = payment_identifier(payload)?;
     let digest = intent_commit_digest(
         &PayloadCommit {
             network: env.network,
@@ -436,6 +437,7 @@ pub fn verify_intent(
             payment_output_index: pi,
             requirements_hash: &env.requirements_hash,
             request_hash: &env.request_hash,
+            payment_identifier: &payment_identifier,
             expires_at: &auth.expires_at,
         },
         actor.name,
@@ -444,7 +446,6 @@ pub fn verify_intent(
         return Err(X402Error::payload(Diag::InvalidAuthorization, "authorization.digest differs from the recomputed commitment"));
     }
     let expires_ms = check_expiry(ctx.clock.now_ms(), env.max_timeout_seconds, &auth.expires_at)?;
-    let payment_identifier = payment_identifier(ctx, payload)?;
 
     // 4. the creation transaction
     let parsed = parse_tx(ctx, payload)?;

@@ -21,7 +21,7 @@ use kob_x402::testkit::{p2pk_spk, pubkey, secret, MockChain};
 use kob_x402::verify::{PaymentKind, Verified, VerifyCtx, WatchedOutput};
 use kob_x402::wire::{
     hex, Authorization, ExactPayload, FacilitatorRequest, Finality, Network, PaymentPayload, PaymentRequirements, Profile, ASSET_KAS,
-    AUTH_VERSION_SIGNED, BINDING_EXACT, PAYLOAD_EXACT_TX, SCHEME_EXACT, TX_ENCODING, X402_VERSION,
+    AUTH_VERSION_SIGNED, BINDING_EXACT, PAYLOAD_EXACT_TX, PAYMENT_FLOW_UPFRONT, SCHEME_EXACT, TX_ENCODING, X402_VERSION,
 };
 use serde_json::{json, Map};
 
@@ -59,6 +59,7 @@ pub fn kas_requirements(amount: u64, finality: Finality, max_timeout_seconds: u6
     let mut extra = Map::new();
     extra.insert("binding".into(), json!(BINDING_EXACT));
     extra.insert("profile".into(), json!(Profile::StandardNative.as_str()));
+    extra.insert("paymentFlow".into(), json!(PAYMENT_FLOW_UPFRONT));
     extra.insert("finality".into(), json!(finality.as_str()));
     extra.insert("transactionEncoding".into(), json!(TX_ENCODING));
     extra.insert("payToScriptPublicKey".into(), json!(spk_to_hex(&p2pk_spk(&pubkey(MERCHANT_KEY)))));
@@ -218,7 +219,7 @@ impl PaymentVerifier for TestVerifier {
         let parsed = common::parse_tx(ctx, payload)?;
         let entries = common::resolve_entries(ctx, &parsed)?;
         let fee = common::check_economics_and_scripts(ctx, &parsed.tx, &entries)?;
-        let pid = common::payment_identifier(ctx, payload)?;
+        let pid = common::payment_identifier(payload)?;
         let outs: Vec<usize> = parsed
             .tx
             .outputs

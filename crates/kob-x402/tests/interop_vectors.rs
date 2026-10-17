@@ -1,6 +1,6 @@
-//! Conformance against the elldeeone/kaspa-x402 v1.0.0-rc.1 interoperability vectors, reproduced from
+//! Conformance against the elldeeone/kaspa-x402 v1.0.0 interoperability vectors, reproduced from
 //! Rust only (no TypeScript). The vectors are vendored unmodified under
-//! `vectors/kaspa-x402-rc1/` (see its `PROVENANCE.md`).
+//! `vectors/kaspa-x402-v1.0.0/` (see its `PROVENANCE.md`).
 //!
 //! Scope. KOB implements the `standard-native` profile (and its own `kcc20` / swap extensions), not the
 //! KIP-10 `additive` profile. The vectors are used where they exercise profile-independent code:
@@ -46,17 +46,17 @@ use kob_x402::wire::{
 use serde_json::{json, Value};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
-const PROVENANCE: &str = include_str!("../vectors/kaspa-x402-rc1/PROVENANCE.md");
-const INTEROP: &str = include_str!("../vectors/kaspa-x402-rc1/exact/interop-v1.json");
-const PROFILES: &str = include_str!("../vectors/kaspa-x402-rc1/exact/consensus-profiles.json");
-const HTTP: &str = include_str!("../vectors/kaspa-x402-rc1/x402-http/exact-transaction.json");
+const PROVENANCE: &str = include_str!("../vectors/kaspa-x402-v1.0.0/PROVENANCE.md");
+const INTEROP: &str = include_str!("../vectors/kaspa-x402-v1.0.0/exact/interop-v1.json");
+const PROFILES: &str = include_str!("../vectors/kaspa-x402-v1.0.0/exact/consensus-profiles.json");
+const HTTP: &str = include_str!("../vectors/kaspa-x402-v1.0.0/x402-http/exact-transaction.json");
 
 fn json_of(text: &str) -> Value {
     serde_json::from_str(text).expect("vector is JSON")
 }
 
 fn negative(name: &str) -> Value {
-    let path = format!("{ROOT}/vectors/kaspa-x402-rc1/negative/{name}.json");
+    let path = format!("{ROOT}/vectors/kaspa-x402-v1.0.0/negative/{name}.json");
     json_of(&std::fs::read_to_string(path).expect("vendored negative vector"))
 }
 
@@ -81,7 +81,7 @@ fn vendored_files_are_unmodified_copies() {
     let mut listed = Vec::new();
     for line in block.lines().filter(|l| !l.trim().is_empty()) {
         let (digest, path) = line.split_once("  ").expect("`hash  path`");
-        let data = std::fs::read(format!("{ROOT}/vectors/kaspa-x402-rc1/{path}")).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let data = std::fs::read(format!("{ROOT}/vectors/kaspa-x402-v1.0.0/{path}")).unwrap_or_else(|e| panic!("{path}: {e}"));
         assert_eq!(hex(&sha256(&data)), digest, "{path} differs from the vendored source");
         listed.push(path.to_string());
     }
@@ -95,7 +95,7 @@ fn vendored_files_are_unmodified_copies() {
             }
         }
     }
-    let base = std::path::PathBuf::from(format!("{ROOT}/vectors/kaspa-x402-rc1"));
+    let base = std::path::PathBuf::from(format!("{ROOT}/vectors/kaspa-x402-v1.0.0"));
     let mut found = Vec::new();
     walk(&base, &base, &mut found);
     found.retain(|f| f != "PROVENANCE.md" && f != ".gitattributes");
@@ -103,7 +103,7 @@ fn vendored_files_are_unmodified_copies() {
     listed.sort();
     assert_eq!(found, listed, "vendored files and PROVENANCE.md list must agree");
     for needle in
-        ["https://github.com/elldeeone/kaspa-x402", "v1.0.0-rc.1", "040b1ec8335abadbb3c69cf1ea720ae45816b0f7", "MIT", "2026-09-29"]
+        ["https://github.com/elldeeone/kaspa-x402", "Tag: v1.0.0", "e5f5b0ed34657dc4e8c67c9153818e0ba07b1828", "MIT", "2026-10-17"]
     {
         assert!(PROVENANCE.contains(needle), "PROVENANCE.md lacks {needle}");
     }
@@ -215,6 +215,7 @@ fn request_authorization_digest_and_signature() {
         pay_to_spk_hex: i["payToScriptPublicKey"].as_str().unwrap(),
         requirements_hash: &reqh,
         request_hash: &rh,
+        payment_identifier: i["paymentIdentifier"].as_str().unwrap(),
         challenge_id: i["challengeId"].as_str(),
         input_index: i["inputIndex"].as_u64().unwrap() as u32,
         expires_at: i["expiresAt"].as_str().unwrap(),
@@ -244,6 +245,7 @@ fn request_authorization_digest_and_signature() {
         Box::new(|s| s.challenge_id = None),
         Box::new(|s| s.profile = Profile::StandardNative),
         Box::new(|s| s.network = Network::Mainnet),
+        Box::new(|s| s.payment_identifier = "exact_http_vector_0002"),
     ];
     for (n, f) in variants.iter().enumerate() {
         let mut s = sa_copy(&sa);
@@ -274,6 +276,7 @@ fn sa_copy<'a>(s: &SignedAuth<'a>) -> SignedAuth<'a> {
         pay_to_spk_hex: s.pay_to_spk_hex,
         requirements_hash: s.requirements_hash,
         request_hash: s.request_hash,
+        payment_identifier: s.payment_identifier,
         challenge_id: s.challenge_id,
         input_index: s.input_index,
         expires_at: s.expires_at,
@@ -350,6 +353,15 @@ fn http_headers_decode_and_reencode_byte_identically() {
     // the payload's transaction is a JSON text (the safe projection), not a nested object
     assert!(pp.payload.transaction.starts_with('{'));
     SafeTx::parse(&pp.payload.transaction, 1 << 20).unwrap().to_consensus().unwrap();
+    // 1.0.0: the offer carries `paymentFlow: upfront`, and the authorization digest is the v2 one, binding the payload's
+    // payment identifier verbatim
+    assert_eq!(pp.accepted.extra_str("paymentFlow"), Some("upfront"));
+    let interop = json_of(INTEROP);
+    let auth = &interop["requestAuthorization"];
+    assert_eq!(payment_identifier(&pp).unwrap(), auth["input"]["paymentIdentifier"].as_str().unwrap());
+    assert_eq!(pp.payload.authorization.version, kob_x402::wire::AUTH_VERSION_SIGNED);
+    assert_eq!(pp.payload.authorization.digest, auth["sha256"].as_str().unwrap());
+    assert_eq!(pp.payload.authorization.signature.as_deref(), auth["signature"].as_str());
 
     let sr: SettlementResponse = header_decode(h["paymentResponse"].as_str().unwrap()).unwrap();
     assert_eq!(serde_json::to_value(&sr).unwrap(), v["settlementResponse"]);
@@ -574,6 +586,44 @@ fn consensus_profile_mutations_standard_native() {
     assert_eq!(diag(fx.verify_payload(&p)), Some((Reason::InvalidPayload, Diag::InvalidKaspaExactTransaction)));
 }
 
+// ------------------------------------------------------------- (f2) signature scopes: sighash/consensus.json
+
+/// `sighash/consensus.json` (1.0.0): the standard-native transaction signed under each of the six consensus-supported hash
+/// types. Each one is reproduced from Rust: the per-input digest of the vector's hash type equals the vector's (the pinned
+/// rusty-kaspa computes what the binding's oracle did), the signature verifies under the payer key, the encoded hash type is
+/// the vector's, and the script engine accepts the transaction. The standard-native verifier honors every one of them
+/// (`exact_e2e.rs`, `standard_native_honors_every_consensus_hash_type`). The batch lifecycle, `single-without-output` and
+/// mixed top-up cases are batch-settlement material, which KOB does not implement.
+#[test]
+fn sighash_scopes_of_the_standard_native_transaction() {
+    let v: Value = json_of(include_str!("../vectors/kaspa-x402-v1.0.0/sighash/consensus.json"));
+    assert_eq!(v["kind"], "kaspa-sighash-consensus-v1");
+    assert_eq!(v["status"], "full-consensus-cross-validated");
+    let mut seen = vec![];
+    for t in v["transactions"].as_array().unwrap().iter().filter(|t| t["kind"] == "standard-native") {
+        let ht = t["hashType"].as_u64().unwrap() as u8;
+        let (tx, entries) = profile_tx(&t["transaction"]);
+        assert_eq!(tx.inputs.len(), 1);
+        let script = &tx.inputs[0].signature_script;
+        assert_eq!((script.len(), script[0], script[65]), (66, 0x41, ht), "a canonical 65-byte push ending in the hash type");
+        assert!(kob_x402::sighash::is_consensus_hash_type(ht), "{ht:#04x}");
+        let digest = kob_protocol::tx::sighash_typed(&tx, &entries, 0, ht).expect("a Kaspa hash type");
+        assert_eq!(hex(&digest), t["digests"][0].as_str().unwrap(), "digest of hash type {ht:#04x}");
+        let key = kob_x402::common::p2pk_key(&entries[0].script_public_key).expect("P2PK payer input");
+        assert!(verify_schnorr_digest(&script[1..65], &digest, &key), "signature of hash type {ht:#04x}");
+        let units = kob_protocol::verify::execute(&tx, &entries, true).unwrap();
+        assert!(units.iter().all(|u| u.is_ok()), "the engine accepts hash type {ht:#04x}");
+        // and the digest of every other type differs (the byte is what the signature commits to)
+        for other in kob_x402::sighash::CONSENSUS_HASH_TYPES.into_iter().filter(|o| *o != ht) {
+            let d = kob_protocol::tx::sighash_typed(&tx, &entries, 0, other).unwrap();
+            assert!(!verify_schnorr_digest(&script[1..65], &d, &key), "{ht:#04x} signature verifies under {other:#04x}");
+        }
+        seen.push(ht);
+    }
+    seen.sort_unstable();
+    assert_eq!(seen, kob_x402::sighash::CONSENSUS_HASH_TYPES.to_vec(), "one standard-native case per supported hash type");
+}
+
 // -------------------------------------------------------------------- (g) semantic and schema negatives
 
 /// A payload for `offered` whose accepted object equals the offer, so the envelope check under test is the
@@ -663,6 +713,22 @@ fn negative_vectors_of_the_exact_envelope() {
         Diag::UnsupportedKaspaExactProfile,
         "exact-additive-missing-challenge",
     );
+    // exact-payment-flow-missing (1.0.0): every exact offer states `extra.paymentFlow: "upfront"`; an omitted flow, and the
+    // other x402 flows (`authorization`, `escrow`), are invalid for these profiles
+    let n = negative("exact-payment-flow-missing");
+    assert_eq!(n["expectedError"], "invalid_kaspa_x402_payload");
+    let (o, ver) = first_offer(&n);
+    assert!(o.extra.get("paymentFlow").is_none());
+    expect(run_offer(&o, ver), Reason::InvalidPaymentRequirements, Diag::InvalidKaspaX402Payload, "exact-payment-flow-missing");
+    let fx = fixture();
+    for flow in [json!("authorization"), json!("escrow"), json!("Upfront"), json!(null), json!(1)] {
+        let mut o = fx.offer.clone();
+        o.extra.insert("paymentFlow".into(), flow.clone());
+        expect(run_offer(&o, 2), Reason::InvalidPaymentRequirements, Diag::InvalidKaspaX402Payload, &format!("paymentFlow {flow}"));
+    }
+    let mut o = fx.offer.clone();
+    o.extra.remove("paymentFlow");
+    expect(run_offer(&o, 2), Reason::InvalidPaymentRequirements, Diag::InvalidKaspaX402Payload, "paymentFlow removed");
 }
 
 #[test]
@@ -687,7 +753,7 @@ fn negative_vectors_accepted_not_offered_and_payment_identifier() {
     assert_eq!(n["paymentRequired"]["extensions"]["payment-identifier"]["info"]["required"], true);
     let pp: PaymentPayload = serde_json::from_value(n["paymentPayload"].clone()).unwrap();
     assert!(pp.extensions.is_none());
-    let e = payment_identifier(&fx.env.ctx(), &pp).unwrap_err();
+    let e = payment_identifier(&pp).unwrap_err();
     assert_eq!((e.reason, e.diag), (Reason::InvalidPayload, Diag::MissingKaspaPaymentIdentifier));
     // ... end to end on a real payment with the extension removed
     let mut p = fx.payload.clone();
@@ -706,7 +772,7 @@ fn negative_vectors_accepted_not_offered_and_payment_identifier() {
     let id = first["extensionInfo"]["id"].as_str().unwrap();
     let mut p = fx.payload.clone();
     p.extensions = Some(json!({ "payment-identifier": { "info": { "required": true, "id": id } } }));
-    assert_eq!(payment_identifier(&fx.env.ctx(), &p).unwrap().as_deref(), Some(id));
+    assert_eq!(payment_identifier(&p).unwrap(), id);
     let a = kob_x402::client::native::random_payment_id();
     let b = kob_x402::client::native::random_payment_id();
     assert_ne!(a, b);
@@ -760,7 +826,7 @@ fn negative_vectors_of_payload_and_outpoint_shape() {
 #[test]
 fn settlement_response_vectors() {
     let read = |name: &str| {
-        let p = format!("{ROOT}/vectors/kaspa-x402-rc1/settlement-response/{name}.json");
+        let p = format!("{ROOT}/vectors/kaspa-x402-v1.0.0/settlement-response/{name}.json");
         json_of(&std::fs::read_to_string(p).unwrap())
     };
     // failure.json: a generic failure response

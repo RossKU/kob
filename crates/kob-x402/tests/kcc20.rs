@@ -208,6 +208,7 @@ fn digest_for(offer: &PaymentRequirements, idx: u32, expires_at: &str) -> [u8; 3
         payment_output_index: idx,
         requirements_hash: &requirements_hash(offer).unwrap(),
         request_hash: &kob_x402::wire::parse_hash32(&request_hash()).unwrap(),
+        payment_identifier: PID,
         expires_at,
     })
     .unwrap()
@@ -382,7 +383,7 @@ fn exact_amount_from_one_input_with_change() {
     assert_eq!(v.custody, Some(Custody::Unconditional));
     assert_eq!(v.payment_output_index, 0);
     assert_eq!(v.finality, Finality::Accepted);
-    assert_eq!(v.payment_identifier.as_deref(), Some(PID));
+    assert_eq!(v.payment_identifier, PID);
     assert_eq!(v.merchant_output.amount, OFFER_CARRIER);
     let facts = kob_x402::token::parse_offer(&offer).unwrap();
     assert_eq!(v.merchant_output.script_public_key, facts.token_spk);
@@ -1412,11 +1413,13 @@ fn payment_identifier_rules() {
     assert_diag(fx.verify(&offer, &q), Diag::MissingKaspaPaymentIdentifier);
     q.extensions = Some(json!({ "payment-identifier": { "info": { "id": "short" } } }));
     assert_diag(fx.verify(&offer, &q), Diag::InvalidKaspaPaymentIdentifier);
-    // a deployment that does not require it
-    let mut lax = fx.policy.clone();
-    lax.require_payment_identifier = false;
-    q.extensions = None;
-    assert_eq!(verify_with(&fx, &lax, &offer, &q).unwrap().payment_identifier, None);
+    // the commitment binds the id: another well-formed id fails the authorization
+    q.extensions = Some(json!({ "payment-identifier": { "info": { "required": true, "id": "pay-another-id-0123456789" } } }));
+    assert_diag(fx.verify(&offer, &q), Diag::InvalidAuthorization);
+    // as does a v1 commitment (rc.1 era, no id bound)
+    let mut q = p.clone();
+    q.payload.authorization.version = "kob-x402-payload-commitment-v1".into();
+    assert_diag(fx.verify(&offer, &q), Diag::InvalidAuthorization);
 }
 
 #[test]
@@ -1581,10 +1584,10 @@ fn preflight_runs_the_verifier_against_the_payers_own_policy() {
     assert_eq!(e.diag, Diag::TokenConservation, "{e}");
     // pay_kcc20 (default options) declares a fresh random payment id, which the default policy accepts
     let p = pay_kcc20(&offer, &request_hash(), &keys(), vec![fx.tok(PAYER, 1_000)], vec![], NOW_MS).unwrap();
-    let id = fx.verify(&offer, &p).unwrap().payment_identifier.expect("a default payment id");
+    let id = fx.verify(&offer, &p).unwrap().payment_identifier;
     assert!(id.starts_with("pay_") && id.len() == 52, "{id}");
     let q = pay_kcc20(&offer, &request_hash(), &keys(), vec![fx.tok(PAYER, 1_000)], vec![], NOW_MS).unwrap();
-    assert_ne!(fx.verify(&offer, &q).unwrap().payment_identifier.as_deref(), Some(id.as_str()));
+    assert_ne!(fx.verify(&offer, &q).unwrap().payment_identifier, id);
     // an explicit id outside ^[A-Za-z0-9_-]{16,128}$ is refused before signing
     let bad = Kcc20Options { payment_id: Some("short".into()), ..opts() };
     let e = pay_kcc20_with(&offer, &request_hash(), &keys(), vec![fx.tok(PAYER, 1_000)], vec![], NOW_MS, &bad).unwrap_err();

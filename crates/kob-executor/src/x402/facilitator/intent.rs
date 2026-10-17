@@ -304,7 +304,7 @@ impl Facilitator {
             txid: v.txid,
             request_hash: v.request_hash,
             requirements_hash: v.requirements_hash,
-            payment_id: v.payment_identifier.clone(),
+            payment_id: Some(v.payment_identifier.clone()),
             profile: v.profile.as_str().to_string(),
             kind: kind_str(v.kind).to_string(),
             merchant: merchant.to_string(),

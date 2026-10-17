@@ -297,6 +297,9 @@ fn attack(prep: &PreparedSwap, mutate: impl FnOnce(&mut Transaction, &mut Vec<Ut
     PreparedSwap { built, ..prep.clone() }.assemble_payload(&tx2, &entries2).unwrap()
 }
 
+/// The payment identifier of the hand-built payments ([`digest_for`] binds it).
+const MANUAL_PID: &str = "pay_manual_swap_0001";
+
 /// Commitment digest for a hand-built swap transaction.
 fn digest_for(offer: &PaymentRequirements, pay_asset: &str, idx: u32, expires_at: &str) -> [u8; 32] {
     payload_commit_digest(&PayloadCommit {
@@ -310,6 +313,7 @@ fn digest_for(offer: &PaymentRequirements, pay_asset: &str, idx: u32, expires_at
         payment_output_index: idx,
         requirements_hash: &requirements_hash(offer).unwrap(),
         request_hash: &parse_hash32(RH).unwrap(),
+        payment_identifier: MANUAL_PID,
         expires_at,
     })
     .unwrap()
@@ -335,7 +339,7 @@ fn manual(offer: &PaymentRequirements, pay_asset: &str, mut batch: Batch, k: usi
         kas_spent: 0,
         payer_address: None,
         warnings: vec![],
-        payment_identifier: None,
+        payment_identifier: MANUAL_PID.into(),
     };
     let sigs = sign_locally(&built, &keys()).unwrap();
     let (tx, entries) = assemble(&built, &sigs).unwrap();
@@ -420,7 +424,7 @@ fn sw1_token_a_sold_into_a_bid_pays_kas() {
     assert_eq!(route["payAsset"], hex(&TOKEN_COV));
     assert_eq!(route["payerSpent"], (3 * WHOLE).to_string());
     assert_eq!(route["orders"][0]["txid"], hex(&f.bid1.utxo.transaction_id));
-    assert!(v.payment_identifier.is_some());
+    assert!(v.payment_identifier.starts_with("pay_"));
     // the merchant output is spendable KAS: exactly one output pays the merchant key
     let paid: Vec<_> = v.tx.outputs.iter().filter(|o| o.script_public_key == p2pk_spk(&pk(MERCHANT))).collect();
     assert_eq!(paid.len(), 1);
