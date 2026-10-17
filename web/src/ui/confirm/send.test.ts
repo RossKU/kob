@@ -15,6 +15,7 @@ import type { WalletAdapter } from '../../wallet/types';
 import { buildIntent } from '../ticket/form-state';
 import { expectedFromPlan } from '../ticket/plan-expected';
 import { CTX, form, ticketEnv } from '../ticket/ticket-fixtures';
+import { pendingSpends } from '../../app/pending-spends';
 import { checkBeforeSigning, type Blocked, type SendJob } from './send';
 
 /** The finding that stopped the job, or null when it may be signed. */
@@ -101,5 +102,20 @@ describe('checkBeforeSigning', () => {
     const wrong = { ...replace, expected: { ...replace.expected, kasLocked: replace.expected.kasLocked! + 1n } };
     const bad = await checkBeforeSigning(services, wallet(), { built: first.built!, expected: expectedFromPlan(first), gate: Promise.resolve({ replace: wrong }) });
     expect(blockedBy(bad)?.code).toBe('expected-kas-locked');
+  });
+
+  it('lets the next order spend the change of a transaction this page submitted, which the node lists only once a block holds it', async () => {
+    const plan = planOrder(ticketEnv(), buildIntent(form('limit', 'buy', { amount: '2', price: '2.3' }), CTX).intent!);
+    const built = plan.built!;
+    const job = { built, expected: expectedFromPlan(plan) };
+    // the node does not list the coins yet
+    expect(blockedBy(await checkBeforeSigning(servicesFor(null), wallet(), job))?.code).toBe('input-unconfirmed');
+    // they are the change of transactions this page submitted: their facts are the ones it built
+    for (const i of built.tx.inputs) {
+      const outputs = Array.from({ length: i.index + 1 }, () => ({ value: '0', scriptPublicKey: '00', covenant: null }));
+      outputs[i.index] = { value: i.utxo.amount, scriptPublicKey: i.utxo.scriptPublicKey, covenant: null };
+      pendingSpends.addChange({ outputs }, i.transactionId, MAKER_PK);
+    }
+    expect(blockedBy(await checkBeforeSigning(servicesFor(null), wallet(), job))).toBeNull();
   });
 });

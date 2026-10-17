@@ -14,7 +14,7 @@ import { spkStringToAddress } from '../../data/kaspa-sdk';
 import { t } from '../../i18n';
 import { issueText } from '../../i18n/issue-text';
 import { decodeSigning, type ExpectedSigning, type SigningSummary } from '../../kob/decode';
-import { confirmInputsOnNode } from '../../kob/node-verify';
+import { confirmInputsOnNode, outpointKey } from '../../kob/node-verify';
 import type { Clock } from '../../kob/plan-types';
 import type { PlacementRecord } from '../../kob/records';
 import { withExtraToken, type TokenInfo } from '../../kob/registry';
@@ -84,7 +84,16 @@ function walletBlock(services: Services, wallet: WalletFacts, built: BuiltTx): B
 export async function checkBeforeSigning(services: Services, wallet: WalletFacts, job: SendJob): Promise<{ blocked: Blocked } | { job: SendJob; decoded: SigningSummary }> {
   const early = walletBlock(services, wallet, job.built);
   if (early) return { blocked: early };
-  const nodeFacts = (b: BuiltTx) => confirmInputsOnNode(services.node, b.tx.inputs, inputAddressOf(services)).then((r) => r.facts, () => null);
+  // the change of a transaction this page submitted is not on the node's list until a block holds it: the page knows its facts (it built it)
+  const nodeFacts = (b: BuiltTx) =>
+    confirmInputsOnNode(services.node, b.tx.inputs, inputAddressOf(services)).then((r) => {
+      for (const i of b.tx.inputs) {
+        const k = outpointKey(i.transactionId, i.index);
+        const own = r.facts.has(k) ? null : pendingSpends.factOf(i.transactionId, i.index);
+        if (own) r.facts.set(k, own);
+      }
+      return r.facts;
+    }, () => null);
 
   // the KAS value of every input re-read from the NODE (the decoder flags any input the node does not confirm), the caller's gate alongside
   const [facts0, gate] = await Promise.all([nodeFacts(job.built), job.gate ?? Promise.resolve(null)]);
@@ -117,6 +126,8 @@ export async function checkBeforeSigning(services: Services, wallet: WalletFacts
  */
 export async function recordAccepted(services: Services, wallet: Pick<WalletSession, 'info' | 'records'>, built: BuiltTx, txid: string, label?: string): Promise<{ records: PlacementRecord[]; clock: Clock }> {
   pendingSpends.add(built.tx.inputs);
+  // its change is the wallet's at once (the balance does not drop until the node lists it; the next order may spend it)
+  if (wallet.info) pendingSpends.addChange(built.tx, txid, wallet.info.pubkey);
   let clock: Clock | null = null;
   try {
     clock = await readClock(services);

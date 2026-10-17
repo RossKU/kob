@@ -198,7 +198,7 @@ export function assemblePlanEnv(
   return {
     kob: s.kob, token: market, maker: wallet.pubkey, clock: parts.coins.clock, book: parts.market.book, ownOrders: parts.holdings?.ownOrders ?? [],
     ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice: parts.market.lastFillPrice,
-    funding: pendingSpends.without(parts.coins.funding), tokenUtxos: pendingSpends.without(parts.holdings?.tokenUtxos ?? []),
+    funding: pendingSpends.funding(parts.coins.funding, wallet.pubkey), tokenUtxos: pendingSpends.without(parts.holdings?.tokenUtxos ?? []),
     ...feeModeOf(s), fees: parts.coins.fees, ...(o.feeRate ? { feeRate: o.feeRate } : {}), ...(o.carrier ? { carrier: o.carrier } : {}),
   };
 }
@@ -218,9 +218,12 @@ export async function buildPlanEnv(s: Services, wallet: Pick<WalletInfo, 'pubkey
   return assemblePlanEnv(s, wallet, market, { market: await marketPart, coins, holdings: await holdings }, o);
 }
 
-/** `e` without the inputs this page has already spent in a submitted transaction (app/pending-spends.ts): for an environment read before it. */
+/**
+ * `e` without the inputs this page has already spent in a submitted transaction, with the KAS change of those the node does not list yet
+ * (app/pending-spends.ts): for an environment read before it.
+ */
 export function dropPendingSpends<E extends PlanEnv>(e: E): E {
-  const funding = pendingSpends.without(e.funding);
+  const funding = pendingSpends.funding(e.funding, e.maker);
   const tokenUtxos = pendingSpends.without(e.tokenUtxos);
   const pair = isPairEnv(e) ? { ...e.pair, quoteTokenUtxos: pendingSpends.without(e.pair.quoteTokenUtxos) } : null;
   if (funding === e.funding && tokenUtxos === e.tokenUtxos && (!pair || pair.quoteTokenUtxos === (e as unknown as PairPlanEnv).pair.quoteTokenUtxos)) return e;
@@ -236,7 +239,7 @@ export async function buildCancelEnv(s: Services, wallet: Pick<WalletInfo, 'pubk
     readFees(s),
   ]);
   return {
-    kob: s.kob, maker: wallet.pubkey, funding: pendingSpends.without(funding), tokenUtxos: pendingSpends.without(tokenUtxos), clock: { daa: clock.daa, unixSeconds: clock.unixSeconds },
+    kob: s.kob, maker: wallet.pubkey, funding: pendingSpends.funding(funding, wallet.pubkey), tokenUtxos: pendingSpends.without(tokenUtxos), clock: { daa: clock.daa, unixSeconds: clock.unixSeconds },
     ...feeModeOf(s), fees,
   };
 }
@@ -323,7 +326,7 @@ export async function buildPairPlanEnv(s: Services, wallet: Pick<WalletInfo, 'pu
   }
   return {
     kob: s.kob, token: a, maker: wallet.pubkey, clock, book, ownOrders, ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice,
-    funding: pendingSpends.without(funding), tokenUtxos: pendingSpends.without(tokenUtxos),
+    funding: pendingSpends.funding(funding, wallet.pubkey), tokenUtxos: pendingSpends.without(tokenUtxos),
     ...feeModeOf(s), fees, ...(o.feeRate ? { feeRate: o.feeRate } : {}), ...(o.carrier ? { carrier: o.carrier } : {}),
     pair: { quote: b, quoteTokenUtxos: pendingSpends.without(quoteTokenUtxos), view, kasPerWholeA, kasPerWholeB },
   };
