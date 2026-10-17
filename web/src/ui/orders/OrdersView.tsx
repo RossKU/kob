@@ -30,7 +30,7 @@ import {
 } from './actions';
 import { amendKind, describeEntries, entryState, countByStatus, type OrderRowModel } from './orders-model';
 import { buildListItems, cancellableIds, filterItems, tabCounts, type ListTab } from './list-model';
-import { loadOrderEvents, loadOrders } from './orders-data';
+import { loadOrderEvents, loadOrders, type OrdersData } from './orders-data';
 
 interface Flow {
   key: number;
@@ -53,8 +53,22 @@ export function OrdersView() {
   const pubkey = wallet.info?.pubkey;
   const canSign = !!wallet.info && !wallet.networkMismatch;
 
+  // the list shows once the indexer answered; the node's verdicts on the wallet's records follow in the background (orders-data.ts), and
+  // replace it for as long as it is the list they were looked up for (a refresh starts a new one)
+  const [late, setLate] = useState<{ base: OrdersData; next: OrdersData } | null>(null);
   const data = useAsync(
-    async (signal) => (pubkey ? loadOrders(services, pubkey, wallet.records, { signal }) : null),
+    async (signal) => {
+      if (!pubkey) return null;
+      let base: OrdersData | null = null;
+      const pendingNext: OrdersData[] = [];
+      base = await loadOrders(services, pubkey, wallet.records, {
+        signal,
+        onUpdate: (next) => (base ? setLate({ base, next }) : pendingNext.push(next)),
+      });
+      const b = base;
+      if (pendingNext.length) setTimeout(() => setLate({ base: b, next: pendingNext.at(-1)! }), 0);
+      return base;
+    },
     [pubkey, wallet.records, services],
   );
   useLiveRefresh(services, ['fills'], () => true, data.refresh, REFRESH_MS);
@@ -72,7 +86,7 @@ export function OrdersView() {
   const [sweepFirst, setSweepFirst] = useState<{ ids: Hex[]; count: number; proceed: () => void; retry: () => void } | null>(null);
   const [sweepFollowUp, setSweepFollowUp] = useState<{ pending: boolean; retry: () => void } | null>(null);
 
-  const d = data.data ?? null;
+  const d = late && late.base === data.data ? late.next : (data.data ?? null);
   // the maker-wide stray list counts every live stray per order (the list views of the indexer carry no strays)
   const rows = useMemo(() => {
     if (!d) return [];
@@ -429,6 +443,7 @@ export function OrdersView() {
       {d ? (
         <BalancesPanel
           data={d}
+          version={data.data ?? null}
           pubkey={wallet.info.pubkey}
           canSign={canSign}
           onCancelToken={(token) => setConfirmAll({ token, ids: cancellableIds(rows, token) })}

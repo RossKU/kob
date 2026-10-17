@@ -188,7 +188,8 @@ export async function startMockServer(opts = {}) {
     const path = url.pathname.replace(/\/+$/, '') || '/';
     const isNode = path.startsWith('/node/');
     try {
-      const delayed = !path.startsWith('/mock/') && (ctl.scope === 'all' || path.startsWith('/v1/'));
+      // `all`: every answer; `indexer`: the indexer's only; `node`: the node's only (a node behind a slow tunnel)
+      const delayed = !path.startsWith('/mock/') && (ctl.scope === 'all' || (ctl.scope === 'indexer' && path.startsWith('/v1/')) || (ctl.scope === 'node' && isNode));
       if (delayed && ctl.latencyMs + ctl.jitterMs > 0) await sleep(ctl.latencyMs + Math.floor(Math.random() * ctl.jitterMs));
       const out = await route(req.method ?? 'GET', path, url.searchParams, req);
       reply(out.status ?? 200, out.body);
@@ -344,7 +345,7 @@ export async function startMockServer(opts = {}) {
     if (post && path === '/mock/latency') {
       ctl.latencyMs = Math.max(0, Number(body.ms ?? 0));
       ctl.jitterMs = Math.max(0, Number(body.jitter_ms ?? 0));
-      ctl.scope = body.scope === 'indexer' ? 'indexer' : 'all';
+      ctl.scope = body.scope === 'indexer' || body.scope === 'node' ? body.scope : 'all';
       return ok({ ms: ctl.latencyMs, jitter_ms: ctl.jitterMs, scope: ctl.scope });
     }
     if (post && path === '/mock/health') {

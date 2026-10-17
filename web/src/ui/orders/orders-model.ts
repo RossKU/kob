@@ -41,12 +41,14 @@ const bi = (v: string | number | bigint | null | undefined): bigint | null => (v
 const big0 = (v: string | number | bigint | null | undefined): bigint => bi(v) ?? 0n;
 
 /**
- * The wallet's records to resolve on the node: those the indexer's list does not contain, and those whose view has no PROVEN current state
- * (`state_known: false`, e.g. a continuation the indexer could not splice): the record path may still find (and cancel) them.
+ * The wallet's records to resolve on the node: those the indexer's list does not contain, and those whose LIVE view has no proven current state
+ * (`state_known: false`, e.g. a continuation the indexer could not splice): the record path may still find (and cancel) them. An ended order
+ * (filled, cancelled, refunded, killed, closed) never has a current state; its placement state describes it: nothing to resolve (TN10
+ * 2026-10-17: every finished order of the browser was looked up on the node before the list showed, ~30 s over a tunnel).
  */
 export function recordsToResolve(views: readonly OrderView[], records: readonly PlacementRecord[]): PlacementRecord[] {
-  const proven = new Set(views.filter((v) => v.state_known).map((v) => v.covenant_id));
-  return records.filter((r) => !proven.has(r.covenantId));
+  const settled = new Set(views.filter((v) => v.state_known || ENDED.has(v.status)).map((v) => v.covenant_id));
+  return records.filter((r) => !settled.has(r.covenantId));
 }
 
 /** Merge by covenant id, newest first (genesis DAA of the view, else the record's placement DAA; ties by id). */

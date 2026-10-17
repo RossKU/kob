@@ -78,6 +78,41 @@ describe('pool', () => {
   });
 });
 
+describe('loadOrders: the node never holds the list back', () => {
+  it('answers from the indexer and the records at once; the node\'s verdicts (and its clock) follow through onUpdate', async () => {
+    const a = place('create.ask', 'limit sell');
+    const store = new MemoryRecordStore();
+    await store.put(a.rec);
+    // a node that does not answer until released
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const s = services({ chain: chainWith(a) });
+    const node = s.node as unknown as { getClock(): Promise<unknown>; getUtxosByAddresses(x: string[]): Promise<unknown> };
+    const [clock, utxos] = [node.getClock.bind(node), node.getUtxosByAddresses.bind(node)];
+    node.getClock = async () => (await gate, clock());
+    node.getUtxosByAddresses = async (x) => (await gate, utxos(x));
+    const updates: Awaited<ReturnType<typeof loadOrders>>[] = [];
+    const t0 = Date.now();
+    const first = await loadOrders(s, MAKER.pk, store, { spkToAddress: testAddress, onUpdate: (d) => updates.push(d) });
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    // the record shows (from its own state) before the node answered
+    expect(first.entries).toHaveLength(1);
+    expect(first.clock).toBeNull();
+    expect(updates).toEqual([]);
+    release();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.clock).not.toBeNull();
+    expect(describeEntry(updates[0]!.entries[0]!, { kob, clock: updates[0]!.clock }).source).toBe('node');
+    // the verdict is kept for the session: a reload within LIVE_CACHE_MS has it at once, nothing to follow
+    const again: unknown[] = [];
+    const second = await loadOrders(s, MAKER.pk, store, { spkToAddress: testAddress, onUpdate: (d) => again.push(d) });
+    expect(describeEntry(second.entries[0]!, { kob, clock: second.clock }).source).toBe('node');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(again).toEqual([]);
+  });
+});
+
 describe('loadOrders', () => {
   it('shows a fresh placement the indexer has not seen yet, resolved live on the node', async () => {
     const a = place('create.ask', 'limit sell');

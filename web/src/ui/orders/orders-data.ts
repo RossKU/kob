@@ -1,5 +1,9 @@
 // Loads "My orders": the indexer's orders + strays for the wallet, the wallet's placement records, and the node's verdict on every record the
 // indexer does not know (`resolveRecord`). A fresh placement or an indexer outage therefore still shows the order. Each source fails on its own.
+//
+// The node never holds the list back: `loadOrders` answers once the indexer and the record store have (the node's clock only if it came within
+// CLOCK_WAIT_MS), with the record verdicts this session already has; the others are looked up after it (each bounded by RESOLVE_TIMEOUT_MS) and
+// the list is handed over again with them (`onUpdate`). A verdict that the order is gone is kept for the session; a live one for LIVE_CACHE_MS.
 import { readClock } from '../../app/env';
 import type { Services } from '../../app/services';
 import type { IndexerApi } from '../../data/indexer';
@@ -50,15 +54,55 @@ export async function pool<T, R>(items: readonly T[], n: number, fn: (x: T) => P
 
 export const spkToAddressFor = (s: Pick<Services, 'sdk' | 'config'>) => (spk: string): string => spkStringToAddress(s.sdk, spk, s.config.network);
 
-/** Resolves records on the node (4 at a time). A failed lookup yields `null` for that record. */
+/** How long one record's node lookup may take before it counts as failed (a slow node only delays the background merge). */
+export const RESOLVE_TIMEOUT_MS = 5_000;
+/** How long the list waits for the node's clock before it shows without it (it follows with the record verdicts). */
+export const CLOCK_WAIT_MS = 800;
+/** How long a verdict that a record's order is live is reused (a gone order's verdict is kept for the session). */
+export const LIVE_CACHE_MS = 15_000;
+
+const within = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    p.then(
+      (v) => (clearTimeout(timer), resolve(v)),
+      () => (clearTimeout(timer), resolve(null)),
+    );
+  });
+
+/** Resolves records on the node (4 at a time, each within RESOLVE_TIMEOUT_MS). A failed or timed-out lookup yields `null` for that record. */
 export async function resolveRecords(s: Pick<Services, 'kob' | 'node' | 'sdk' | 'config'>, records: readonly PlacementRecord[], spkToAddress?: (spk: string) => string): Promise<Map<Hex, ResolvedRecord | null>> {
   const spk = spkToAddress ?? spkToAddressFor(s);
-  const results = await pool(records, 4, (r) => resolveRecord(s.kob, s.node, r, spk).catch(() => null));
+  const results = await pool(records, 4, (r) => within(resolveRecord(s.kob, s.node, r, spk), RESOLVE_TIMEOUT_MS));
   return new Map(records.map((r, i) => [r.covenantId, results[i]]));
 }
 
+/**
+ * The verdicts of this session for one node, by covenant id and the record's state (a record that learns a new state is looked up again): a
+ * gone order's for the session, a live one's for LIVE_CACHE_MS; a failed lookup is not kept.
+ */
+type Verdicts = Map<string, { res: ResolvedRecord; at: number }>;
+const sessions = new WeakMap<object, Verdicts>();
+const verdictsOf = (node: object): Verdicts => {
+  let v = sessions.get(node);
+  if (!v) sessions.set(node, (v = new Map()));
+  return v;
+};
+const verdictKey = (r: PlacementRecord): string => `${r.covenantId}:${r.state}`;
+const cachedVerdict = (verdicts: Verdicts, r: PlacementRecord, now: number): ResolvedRecord | null => {
+  const v = verdicts.get(verdictKey(r));
+  if (!v) return null;
+  if (v.res.status === 'live' && now - v.at > LIVE_CACHE_MS) return null;
+  return v.res;
+};
+
 export interface LoadOrdersOptions {
   signal?: AbortSignal;
+  /**
+   * the list again once the record verdicts the first answer did not have came from the node (and its clock, if it was late); not called when
+   * there was nothing to add. Without it `loadOrders` waits for them (tests, callers that need the node's view).
+   */
+  onUpdate?(data: OrdersData): void;
   /** script public key -> address (tests); default: the SDK's, for the configured network */
   spkToAddress?: (spk: string) => string;
 }
@@ -154,7 +198,7 @@ export async function loadOrders(s: Services, pubkey: Hex, store: RecordStore, o
   let nodeError: Error | null = null;
   let straysError: Error | null = null;
 
-  const clockP = readClock(s).catch((e) => ((nodeError = toError(e)), null));
+  const clockP: Promise<Clock | null> = readClock(s).catch((e) => ((nodeError = toError(e)), null));
   const viewsP: Promise<OrderView[]> = s.indexer
     ? loadMakerOrders(s.indexer, pubkey, sig).catch((e) => ((indexerError = toError(e)), [] as OrderView[]))
     : Promise.resolve([]);
@@ -162,33 +206,70 @@ export async function loadOrders(s: Services, pubkey: Hex, store: RecordStore, o
     ? s.indexer.strays({ maker: pubkey, limit: 500 }, sig).catch((e) => ((straysError = toError(e)), [] as StrayView[]))
     : Promise.resolve([]);
   const recordsP = store.list();
-  const [clock, views, strays, stored] = await Promise.all([clockP, viewsP, straysP, recordsP]);
+  const background = !!o.onUpdate;
+  // the node's clock is not waited for long when the list may follow later
+  const [clock0, views, strays, stored] = await Promise.all([background ? within(clockP, CLOCK_WAIT_MS) : clockP, viewsP, straysP, recordsP]);
 
-  // records the indexer does not list (or lists without a proven state): ask the node what became of them (fresh placements, indexer down)
+  // records the indexer does not list (or lists live without a proven state): ask the node what became of them (fresh placements, indexer down)
   const unknown = recordsToResolve(views, stored);
-  const resolvedMap = unknown.length ? await resolveRecords(s, unknown, o.spkToAddress) : new Map<Hex, ResolvedRecord | null>();
-  const resolved = new Map<Hex, ResolvedRecord>();
-  let resolveFailures = 0;
-  for (const [id, r] of resolvedMap) {
-    if (r) resolved.set(id, r);
-    else resolveFailures++;
+  const at = Date.now();
+  const verdicts = verdictsOf(s.node);
+  const known = new Map<Hex, ResolvedRecord>();
+  const pending: PlacementRecord[] = [];
+  for (const r of unknown) {
+    const v = cachedVerdict(verdicts, r, at);
+    if (v) known.set(r.covenantId, v);
+    else pending.push(r);
   }
-  if (resolveFailures > 0 && unknown.length === resolveFailures && !nodeError) nodeError = new Error('the node could not resolve the placement records');
 
-  const records = await syncRecords(s, pubkey, store, stored, views, resolved, clock ? clock.unixSeconds : null);
-
-  const snapshots: OrderSnapshot[] = [];
-  for (const r of resolved.values()) {
-    if (r.status !== 'live') continue;
-    try {
-      snapshots.push(snapshotFromRecord(r));
-    } catch {
-      /* not spendable after all */
+  const assemble = async (resolved: ReadonlyMap<Hex, ResolvedRecord>, failures: number, clock: Clock | null, base: readonly PlacementRecord[]): Promise<OrdersData> => {
+    const err = failures > 0 && pending.length === failures && !nodeError ? new Error('the node could not resolve the placement records') : nodeError;
+    const records = await syncRecords(s, pubkey, store, base, views, resolved, clock ? clock.unixSeconds : null);
+    const snapshots: OrderSnapshot[] = [];
+    for (const r of resolved.values()) {
+      if (r.status !== 'live') continue;
+      try {
+        snapshots.push(snapshotFromRecord(r));
+      } catch {
+        /* not spendable after all */
+      }
     }
-  }
-  return {
-    entries: buildEntries(views, records, resolved), views, positions: groupPositions(views), strays, straysError, clock, indexerError, nodeError, records, snapshots, resolveFailures,
+    return {
+      entries: buildEntries(views, records, resolved), views, positions: groupPositions(views), strays, straysError, clock, indexerError, nodeError: err, records, snapshots, resolveFailures: failures,
+    };
   };
+  const lookUp = async (): Promise<{ resolved: Map<Hex, ResolvedRecord>; failures: number }> => {
+    const resolved = new Map(known);
+    let failures = 0;
+    const found = pending.length ? await resolveRecords(s, pending, o.spkToAddress) : new Map<Hex, ResolvedRecord | null>();
+    const now = Date.now();
+    for (const r of pending) {
+      const res = found.get(r.covenantId) ?? null;
+      if (!res) {
+        failures++;
+        continue;
+      }
+      resolved.set(r.covenantId, res);
+      verdicts.set(verdictKey(r), { res, at: now });
+    }
+    return { resolved, failures };
+  };
+
+  if (!background) {
+    const { resolved, failures } = await lookUp();
+    return assemble(resolved, failures, clock0, stored);
+  }
+  // the list now, from the indexer, the records and the verdicts on hand; the node's answers follow
+  const first = await assemble(known, 0, clock0, stored);
+  if (pending.length || !clock0) {
+    void (async () => {
+      const [{ resolved, failures }, clock] = await Promise.all([lookUp(), clock0 ? Promise.resolve(clock0) : clockP]);
+      if (signal?.aborted) return;
+      const next = await assemble(resolved, failures, clock, first.records);
+      if (!signal?.aborted) o.onUpdate!(next);
+    })().catch(() => undefined);
+  }
+  return first;
 }
 
 /** Every event of one order (`/v1/orders/{id}/events`, following the cursor; at most 10 pages of 100). An unknown order has none. */

@@ -9,6 +9,7 @@ import type { AnyState, OrderState } from '../../kob/types';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, orderViewOf, placeGolden } from '../../testing/chain-fixtures';
 import { buildEntries, countByStatus, describeEntry, entryState, recordsToResolve, type OrderTypeKey } from './orders-model';
+import { buildListItems, filterItems, tabCounts } from './list-model';
 
 const kob = loadKobNode();
 const CLOCK: Clock = { daa: 1000n, unixSeconds: 1_790_000_000n, rateMilli: 10_000 };
@@ -261,6 +262,27 @@ describe('merging with placement records', () => {
     );
     expect(buildEntries([view], [rec, other])).toHaveLength(2);
     expect(recordsToResolve([view], [rec, other]).map((r) => r.covenantId)).toEqual([other.covenantId]);
+  });
+
+  it('an ended order the indexer lists without a current state is not looked up on the node (its placement state describes it)', () => {
+    // TN10 2026-10-17: every filled order of the browser's records was resolved on the node before the list showed (~30 s over a tunnel)
+    for (const status of ['filled', 'cancelled', 'refunded', 'killed', 'closed'] as const) {
+      const ended = { ...view, status, state_known: false, state: null };
+      expect(recordsToResolve([ended], [rec]), status).toEqual([]);
+    }
+    // a live order without a proven state still is (the record path may find and cancel it)
+    expect(recordsToResolve([{ ...view, state_known: false }], [rec]).map((r) => r.covenantId)).toEqual([rec.covenantId]);
+  });
+
+  it('the tab counts are the items each tab lists, for ended orders known through records and views without a current state', () => {
+    const ended = [1, 2, 3, 4, 5].map((n) => ({ ...view, covenant_id: `${n}`.padStart(64, '0'), status: 'filled' as const, state_known: false, state: null }));
+    const records = ended.map((v) => ({ ...rec, covenantId: v.covenant_id }));
+    const entries = buildEntries(ended, records);
+    const rows = new Map(entries.map((e) => [e.id, describeEntry(e, ctx)]));
+    const items = buildListItems(entries, []);
+    const counts = tabCounts(items, rows);
+    expect(counts).toEqual({ active: filterItems(items, rows, 'active').length, history: filterItems(items, rows, 'history').length, all: filterItems(items, rows, 'all').length });
+    expect(counts).toEqual({ active: 0, history: 5, all: 5 });
   });
 
   it('sorts newest first', () => {

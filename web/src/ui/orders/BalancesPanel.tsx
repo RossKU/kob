@@ -18,6 +18,8 @@ import type { OrdersData } from './orders-data';
  */
 export function BalancesPanel(props: {
   data: OrdersData;
+  /** the free balances are read again when this changes (each load of the list, not each background update of it) */
+  version?: unknown;
   pubkey: Hex;
   canSign: boolean;
   onCancelToken(token: Hex): void;
@@ -30,7 +32,7 @@ export function BalancesPanel(props: {
 }) {
   const services = useServices();
   const { registry } = services;
-  const free = useAsync((_signal) => loadFreeBalances(services, props.pubkey, registry.tokens, { anyToken: true }), [props.pubkey, props.data]);
+  const free = useAsync((_signal) => loadFreeBalances(services, props.pubkey, registry.tokens, { anyToken: true }), [props.pubkey, props.version ?? props.data]);
 
   const combined = useMemo(() => {
     if (!free.data) return null;
