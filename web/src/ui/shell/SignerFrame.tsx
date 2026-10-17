@@ -65,7 +65,7 @@ function SignerPanel(props: SignerFrameProps) {
     <div class="signer-layer" hidden={!visible} data-mode={props.mode} data-testid="signer-overlay">
       <div class="signer-box" role="dialog" aria-modal="true" aria-label={t('signer.frameTitle')}>
         <div class="signer-head">
-          <span class="small muted">{props.mode === 'connect' ? t('signer.recommend') : t('signer.option')}</span>
+          <span class="small muted">{props.mode === 'connect' ? t('signer.recommend') : t('signer.signHead')}</span>
           <Button small variant="ghost" onClick={props.onClose} aria-label={t('signer.close')} title={t('signer.close')} data-testid="signer-close">
             {'×'}
           </Button>

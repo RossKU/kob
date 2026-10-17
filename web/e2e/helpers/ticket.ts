@@ -92,7 +92,7 @@ export interface ReceiptRead {
 /** True when the connected wallet is the private-key signer (its frame shows the confirmation; the app shows no popup of its own). */
 export async function isPrivateKey(page: Page): Promise<boolean> {
   const chip = page.getByTestId('wallet-connected');
-  return (await chip.count()) > 0 && /Private key/.test((await chip.textContent()) ?? '');
+  return (await chip.count()) > 0 && (await chip.getAttribute('data-wallet')) === 'local-key';
 }
 
 const signerFrameOf = (page: Page) => page.frameLocator('[data-testid="signer-frame"]');

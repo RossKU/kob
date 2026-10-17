@@ -2,6 +2,7 @@
 export default {
   'signer.option': 'Private key',
   'signer.recommend': 'A browser extension wallet is recommended.',
+  'signer.signHead': 'Sign with your key',
   'signer.unsupported': 'Not available in this browser. Use a browser extension wallet.',
   'signer.frameTitle': 'Private key signer',
   'signer.close': 'Close',

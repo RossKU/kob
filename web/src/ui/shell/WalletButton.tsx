@@ -4,20 +4,25 @@ import { t } from '../../i18n';
 import { visibilityCheckSupported } from '../../signer/seen';
 import { Badge, Button, CopyText } from '../kit';
 
-/** The address in the chip: without the network prefix (the header names the network), the head and tail of the body; the full one is in its title. */
+/** The address in the chip as a wallet address reads: its network prefix, then the head and tail of the body ("kaspatest:qq776p…wutfav"). */
 export const chipAddress = (address: string): string => {
-  const body = address.slice(address.indexOf(':') + 1);
-  return body.length <= 14 ? body : `${body.slice(0, 6)}…${body.slice(-6)}`;
+  const colon = address.indexOf(':');
+  const prefix = colon >= 0 ? address.slice(0, colon + 1) : '';
+  const body = address.slice(colon + 1);
+  return body.length <= 14 ? address : `${prefix}${body.slice(0, 6)}…${body.slice(-6)}`;
 };
+
+/** How the wallet is connected, for the chip's wallet icon (never a label of the address: "Private key" next to it reads as a key). */
+const connectedWith = (id: string, label: string): string => t('shell.wallet.connectedVia', { wallet: id === 'local-key' ? t('shell.wallet.viaLocalKey') : label });
 
 const KASWARE_URL = 'https://chromewebstore.google.com/detail/kasware-wallet/hklhheigdmpoolooomdihmhlpjjdbklf';
 const KASPIRE_URL = 'https://github.com/KaspaHUB21/Kaspire-Kaspa-Wallet';
 
 /**
  * Wallet area of the header. Not connected: one connect button per DETECTED wallet (extensions inject late, the list updates by itself),
- * or an install hint while none is found. Connected: one compact chip with the wallet's name (wide screens), its address (shortened,
- * copyable), the wallet's network ONLY when it differs from the app's (the header's network badge already names the app's), and a disconnect button
- * (an icon on a phone).
+ * or an install hint while none is found. Connected: one compact chip with the address (shortened, copyable) as its text, a small wallet icon
+ * whose tooltip says how it is connected, the wallet's network ONLY when it differs from the app's (the header's network badge already names the
+ * app's), and a disconnect button (an icon on a phone).
  */
 export function WalletButton() {
   const { config } = useServices();
@@ -25,10 +30,14 @@ export function WalletButton() {
 
   if (w.info && w.adapter) {
     return (
-      <div class="wallet-chip" data-testid="wallet-connected" data-network={w.info.network} title={t('shell.wallet.chip', { wallet: w.info.label, network: w.info.network })}>
-        <span class="small muted wallet-name">{w.info.label}</span>
+      <div class="wallet-chip" data-testid="wallet-connected" data-network={w.info.network} data-wallet={w.info.id}>
         <span class="small">
           <CopyText value={w.info.address} text={chipAddress(w.info.address)} data-testid="wallet-address" label={t('shell.wallet.address')} />
+        </span>
+        <span class="wallet-kind muted" data-testid="wallet-kind" role="img" aria-label={connectedWith(w.info.id, w.info.label)} title={connectedWith(w.info.id, w.info.label)}>
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 7h15a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 7l12-3v3M16 13.5h.01" />
+          </svg>
         </span>
         {w.networkMismatch ? (
           <Badge tone="bad" data-testid="wallet-network" title={t('shell.wallet.networkOk', { network: w.info.network })}>

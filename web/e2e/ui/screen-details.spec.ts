@@ -250,11 +250,12 @@ test('a side or type switch keeps the amount and the price; the stop, exit and t
 test('the header after connecting: one network badge, a compact wallet chip, short on a phone', async ({ appPage: page, mock }) => {
   await openMarket(page, mock);
   const header = page.locator('header.header');
-  // 1280 px: the app's network once (the wallet's only when it differs), the wallet chip with its name and address
+  // 1280 px: the app's network once (the wallet's only when it differs), the wallet chip with the address and a wallet icon (its tooltip says
+  // how it is connected)
   await expect(header.getByText('testnet-10', { exact: true })).toHaveCount(1);
   await expect(page.getByTestId('wallet-network')).toHaveCount(0);
-  await expect(page.getByTestId('wallet-connected')).toContainText('KasWare');
-  await expect(page.getByTestId('wallet-address')).not.toContainText('kaspatest:');
+  await expect(page.getByTestId('wallet-address')).toContainText(/^kaspatest:q\w{5}…\w{6}/);
+  await expect(page.getByTestId('wallet-kind')).toHaveAttribute('title', 'Connected with: KasWare');
   await expect(page.getByTestId('wallet-disconnect')).toHaveAccessibleName('Disconnect');
   const wide = await header.boundingBox();
   expect(wide!.height).toBeLessThan(70);

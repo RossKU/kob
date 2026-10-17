@@ -20,7 +20,7 @@ test.describe('Kaspire', () => {
   test('a placement and its cancel are signed through Kaspire with per-input scripts and accepted', async ({ appPage: page, mock, wallet }) => {
     await fund(mock);
     await openMarket(page, mock, { wallet: 'kaspire' });
-    await expect(page.getByTestId('wallet-connected')).toContainText('Kaspire');
+    await expect(page.getByTestId('wallet-kind')).toHaveAttribute('title', 'Connected with: Kaspire');
     await sellTicket(page);
     const placed = await placeOrder(page, mock);
     await expectWalletSigned(wallet!, placed);
@@ -71,7 +71,7 @@ test.describe('Kastle (behind the feature flag)', () => {
   test('a limit sell is signed with the scripts argument and the network id and accepted', async ({ appPage: page, mock, wallet }) => {
     await fund(mock);
     await openMarket(page, mock, { wallet: 'kastle' });
-    await expect(page.getByTestId('wallet-connected')).toContainText('Kastle');
+    await expect(page.getByTestId('wallet-kind')).toHaveAttribute('title', 'Connected with: Kastle');
     await sellTicket(page);
     const placed = await placeOrder(page, mock);
     await expectWalletSigned(wallet!, placed);

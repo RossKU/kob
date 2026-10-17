@@ -7,10 +7,10 @@ import { fund, mockClock, openMarket } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, readSignerFrame, waitReviewable, waitSubmitted, type ReceiptRead } from '../helpers/ticket';
 import { formatKas } from '../../src/kob/units';
-/** the header chip shows the address without its prefix, head and tail (WalletButton.tsx chipAddress) */
+/** the header chip shows the address with its network prefix, the head and tail of its body (WalletButton.tsx chipAddress) */
 const chipAddress = (a: string): string => {
   const body = a.slice(a.indexOf(':') + 1);
-  return body.length <= 14 ? body : `${body.slice(0, 6)}…${body.slice(-6)}`;
+  return `${a.slice(0, a.indexOf(':') + 1)}${body.slice(0, 6)}…${body.slice(-6)}`;
 };
 
 test.use({ walletId: null, autoOpen: false });
@@ -81,7 +81,10 @@ test('connect with a private key in the signer frame, place and cancel an order 
   await openMarket(page, mock, { connect: false });
   await connectKey(page);
   await expect(page.getByTestId('wallet-address')).toContainText(chipAddress(TEST_KEYS.alice.testnetAddress));
-  await expect(page.getByTestId('wallet-connected')).toContainText('Private key');
+  // the address is the chip's text; how it is connected is the wallet icon's tooltip, never a label next to the address
+  await expect(page.getByTestId('wallet-address')).toHaveText(new RegExp(`^${chipAddress(TEST_KEYS.alice.testnetAddress)}`));
+  await expect(page.getByTestId('wallet-connected')).not.toContainText('Private key');
+  await expect(page.getByTestId('wallet-kind')).toHaveAttribute('title', 'Connected with: private key (this browser)');
   await expect(page.getByTestId('signer-overlay')).toBeHidden();
 
   // place: the frame's table says the order (2 tokens at 0.027 KAS each), what it locks and the fee; no popup of the app
