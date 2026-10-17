@@ -7,7 +7,8 @@ import { ConflictRace, DEFAULT_X402_WEIGHTS, FaultInjector, RETRY_BASE, x402Weig
 import { DEFAULT_PAIR_WEIGHTS, DEFAULT_WEIGHTS } from '../src/bots/weights.ts';
 import { externalRegistryToken, soakTemplates } from '../src/registry-templates.ts';
 import {
-  checkCancelAll, checkLadder, checkLadderCancel, checkMerge, checkMergeRecord, checkPlannedReplacement, checkReplacement, checkX402Retries, SCENARIO_GRACE_MS,
+  amendedAfter, checkCancelAll, checkLadder, checkLadderCancel, checkMerge, checkMergeRecord, checkPlannedReplacement, checkReplacement, checkX402Retries, repricedRungs,
+  SCENARIO_GRACE_MS,
 } from '../src/checker/scenario-rules.ts';
 import type { CancelAllRecord, LadderCancelRecord, LadderRecord, MergeRecord, ReplaceRecord } from '../src/scenarios.ts';
 import type { EventLike, OrderLike } from '../src/checker/types.ts';
@@ -164,6 +165,21 @@ test('a renewal plan keeps every term and only extends the expiry', () => {
   assert.match(String(checkPlannedReplacement(renewRec({ expect: { ...ask, expiryDaa: '1000' } }))?.detail.problem), /does not extend/);
 });
 
+test('a renewal of a partly filled order fits a minimum fill above what is left down to what is left: accepted (TN10 2026-10-16)', () => {
+  // TN10 1dba094b...: a conditional order with minFill 442 and 2 base units left renewed with minFill 2 (the same fills: only the whole rest)
+  const left = { ...ask, minFill: '442', amountLeft: '2' };
+  assert.equal(checkPlannedReplacement(renewRec({ before: left, expect: { ...left, minFill: '2', expiryDaa: '9000' } })), null);
+  // down to anything but what is left, or a minimum fill at or below what is left that changes, is still a changed term
+  for (const [b, e] of [[left, '1'], [left, '3'], [{ ...ask, minFill: '10' }, '9'], [{ ...ask, minFill: '300' }, '299']] as const) {
+    const v = checkPlannedReplacement(renewRec({ before: b, expect: { ...b, minFill: e, expiryDaa: '9000' } }));
+    assert.deepEqual((v?.detail as { changed: string[] } | undefined)?.changed, ['minFill'], `${b.minFill} -> ${e}`);
+  }
+  // a plain bid (no amountLeft: its quantity is its escrow) keeps its minimum fill
+  const { amountLeft: _, ...bid } = ask;
+  const v = checkPlannedReplacement(renewRec({ before: bid, expect: { ...bid, minFill: '1', expiryDaa: '9000' } }));
+  assert.deepEqual((v?.detail as { changed: string[] } | undefined)?.changed, ['minFill']);
+});
+
 test('a pair amend plan keeps pair, side, size, tip and minimum fill', () => {
   const pair = { maker: 'm', side: '1', sCovId: 'a', tCovId: 'b', sScale: '100', tScale: '100', tip: '3', tif: '0', minFill: '5', amountLeft: '50', price: '1000', custody: '50', expiryDaa: '10' };
   const rec = renewRec({ kind: 'pairAmend', inPlace: false, id: NEW, before: pair, expect: { ...pair, price: '1010', expiryDaa: '12' } });
@@ -225,6 +241,27 @@ test('ladder rungs are independent orders of their own transactions, one side, t
   const bad = checkLadder(rec, rec.rungs.map((r, i) => rungView(r, i === 2 ? { parent: 'p', price: '1' } : {})), 1000);
   assert.ok(bad.done && bad.violations[0]?.invariant === 'ladder');
   assert.deepEqual((bad as { violations: { detail: { rungs: { level: number; problems: string[] }[] } }[] }).violations[0]!.detail.rungs[0]!.level, 3);
+});
+
+test('a rung amended after its placement holds the amend\'s price: not a ladder violation (TN10 2026-10-16)', () => {
+  const rec = ladderRec(4);
+  const views = rec.rungs.map((r, i) => rungView(r, i === 2 ? { price: '977' } : {}));
+  const moved = rec.rungs[2]!;
+  assert.deepEqual(repricedRungs(rec, views), [moved.id]);
+  assert.deepEqual(repricedRungs(rec, [views[0]!, null, null, null]), []);
+  // the rung's events: its creation in its own transaction, then an in-place amend (the trader's Amend of that order)
+  const created = [ev(1, 'create', moved.txid, moved.id)];
+  assert.equal(amendedAfter(created, moved.txid), false);
+  assert.equal(amendedAfter([...created, ev(2, 'amend', 'ab'.repeat(32), moved.id)], moved.txid), true);
+  assert.deepEqual(checkLadder(rec, views, 1000, new Set([moved.id])), { done: true, ok: true, violations: [], note: 'amended' });
+  // not amended: the price is the ladder's problem; an amended rung is still held to every other term
+  const v = checkLadder(rec, views, 1000);
+  assert.deepEqual((v as { violations: { detail: { rungs: { problems: string[] }[] } }[] }).violations[0]!.detail.rungs[0]!.problems, [`price 977 != ${moved.price}`]);
+  const parented = checkLadder(rec, rec.rungs.map((r, i) => rungView(r, i === 2 ? { price: '977', parent: 'p' } : {})), 1000, new Set([moved.id]));
+  assert.deepEqual((parented as { violations: { detail: { rungs: { problems: string[] }[] } }[] }).violations[0]!.detail.rungs[0]!.problems, ['has a parent']);
+  // an auctioning rung is held to its end price, from its proven state
+  const auction = rungView(moved, { price: '900', state: { kind: 'KobBid', state: { price: '900', slope: '5', priceEnd: moved.price } } });
+  assert.deepEqual(repricedRungs(rec, [views[0]!, views[1]!, auction, views[3]!]), []);
 });
 
 test('ladder prices step away from the market; sell rungs share the ladder size', () => {

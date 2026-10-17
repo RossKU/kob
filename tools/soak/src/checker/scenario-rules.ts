@@ -2,10 +2,11 @@
 // the x402 payer's retry records promise, checked against the indexer's views and events and the facilitator ledger.
 //
 //   ladder        every rung of a limit ladder is its own order, placed by its own transaction (distinct ids and txids, no parent), on the
-//                 ladder's token and side, at its own price, the asks with the ladder's one size; the prices step away from the market.
+//                 ladder's token and side, at its own price, the asks with the ladder's one size; the prices step away from the market. A rung
+//                 amended after its placement (My orders' Amend of that order, in place: same id) holds the amend's price, not the ladder's.
 //   ladderCancel  cancelling one rung touches no other rung (no other rung has an event in the cancel's transaction).
-//   replace       a GTC renewal keeps every term of the order and only extends its expiry (expect = before but expiryDaa, which grows); a pair
-//                 amend keeps the pair, side, size, tip and minimum fill and takes the new price (one that crosses the market: the crossing
+//   replace       a GTC renewal keeps every term of the order and only extends its expiry (expect = before but expiryDaa, which grows; a
+//                 minimum fill above what partial fills left comes down to what is left, the same fills); a pair amend keeps the pair, side, size, tip and minimum fill and takes the new price (one that crosses the market: the crossing
 //                 auction's slope and end price); on chain the replacement holds exactly the planned terms (fills, arming and custody aside).
 //   cancel-all    every order of a cancel-all ends: cancelled, or spent by a fill that won the race; one still live at the very outpoint
 //                 the cancel spent after the grace period is reported (warn: the cancel neither landed nor lost a race).
@@ -50,6 +51,18 @@ export function becameCrossingAuction(before: Record<string, string>, expect: Re
   return zero(before.slope) && !zero(expect.slope) && !zero(expect.priceEnd);
 }
 
+/**
+ * A renewal of an order with `amountLeft` (an ask, a conditional order) whose minimum fill is above what partial fills left plans the minimum
+ * fill down to what is left (web amend.ts `buildReplacement`, kob-cli `replacement`: the wallet places no order with minFill > amount). The
+ * order's fills stay the same: n >= minFill unless n = amountLeft (order-types.md, matcher.md 2.2), so with less than minFill left both admit
+ * only the whole rest. A plain bid has no `amountLeft` (its quantity is its escrow) and keeps its minimum fill.
+ */
+export function minFillFitted(before: Record<string, string>, expect: Record<string, string>): boolean {
+  if (before.amountLeft === undefined || before.minFill === undefined || expect.minFill === undefined) return false;
+  const left = BigInt(before.amountLeft);
+  return BigInt(before.minFill) > left && BigInt(expect.minFill) === left;
+}
+
 /** fields of `a` and `b` (both present) that differ, `skip` left out */
 export function diffTerms(a: Record<string, string>, b: Record<string, string>, skip: ReadonlySet<string> = new Set()): string[] {
   const out: string[] = [];
@@ -67,7 +80,7 @@ export function diffTerms(a: Record<string, string>, b: Record<string, string>, 
 export function checkPlannedReplacement(rec: ReplaceRecord): Violation | null {
   const before = rec.before;
   if (rec.kind === 'renew') {
-    const diff = diffTerms(before, rec.expect, new Set(['expiryDaa']));
+    const diff = diffTerms(before, rec.expect, new Set(['expiryDaa'])).filter((k) => !(k === 'minFill' && minFillFitted(before, rec.expect)));
     const oldExp = BigInt(before.expiryDaa ?? rec.oldExpiryDaa);
     const newExp = BigInt(rec.expect.expiryDaa ?? '0');
     if (diff.length || newExp <= oldExp) {
@@ -114,8 +127,35 @@ export function checkReplacement(rec: ReplaceRecord, view: OrderLike | null, eve
   return okv('closed');
 }
 
-/** The ladder's rungs as listed (`views[i]` for `rec.rungs[i]`, null while not listed). */
-export function checkLadder(rec: LadderRecord, views: (OrderLike | null)[], ageMs: number): Verdict {
+/**
+ * The price a listed rung holds: a rung that was marketable when planned is placed as a taker at its own price; an auctioning one is bounded by
+ * its end price. Its proven state, else (closed) the view's price; both follow in-place amends.
+ */
+function rungPrice(v: OrderLike): string | null {
+  const st = v.state?.state;
+  const price = st ? (st.slope && st.slope !== '0' ? st.priceEnd : st.price) : (v.price ?? null);
+  return price === null || price === undefined ? null : String(price);
+}
+
+/** ids of the listed rungs whose price is not the planned one (their events tell whether a later amend moved them: `amendedAfter`) */
+export function repricedRungs(rec: LadderRecord, views: (OrderLike | null)[]): string[] {
+  return rec.rungs
+    .filter((r, i) => {
+      const v = views[i];
+      const p = v ? rungPrice(v) : null;
+      return p !== null && p !== r.price;
+    })
+    .map((r) => r.id);
+}
+
+/** an order's events show an amend after its placement in `placedIn` (an in-place amend keeps the id and moves the terms) */
+export const amendedAfter = (events: EventLike[], placedIn: string): boolean => events.some((e) => e.kind === 'amend' && e.txid !== placedIn);
+
+/**
+ * The ladder's rungs as listed (`views[i]` for `rec.rungs[i]`, null while not listed). `amended`: ids of the rungs amended after their placement
+ * (`amendedAfter`, a trader's later Amend of that order): their price is the amend's, it is not compared with the ladder's.
+ */
+export function checkLadder(rec: LadderRecord, views: (OrderLike | null)[], ageMs: number, amended: ReadonlySet<string> = new Set()): Verdict {
   const subject = `${rec.rungs[0]?.id ?? '?'}:ladder`;
   const ids = new Set(rec.rungs.map((r) => r.id));
   const txids = new Set(rec.rungs.map((r) => r.txid));
@@ -142,15 +182,13 @@ export function checkLadder(rec: LadderRecord, views: (OrderLike | null)[], ageM
     if (v.parent) p.push('has a parent');
     if (v.token && v.token !== rec.token) p.push('another token');
     if (v.side !== (rec.side === 'sell' ? 1 : 2)) p.push('another side');
-    // a rung that was marketable when planned is placed as a taker at its own price; an auctioning one is bounded by its end price
-    const st = v.state?.state;
-    const price = st ? (st.slope && st.slope !== '0' ? st.priceEnd : st.price) : (v.price ?? null);
-    if (price !== null && price !== undefined && String(price) !== r.price) p.push(`price ${price} != ${r.price}`);
+    const price = rungPrice(v);
+    if (price !== null && price !== r.price && !amended.has(r.id)) p.push(`price ${price} != ${r.price}`);
     if (rec.side === 'sell' && v.initial_amount != null && v.initial_amount !== rec.size) p.push(`size ${v.initial_amount} != ${rec.size}`);
     if (p.length) problems.push({ level: i + 1, id: r.id, problems: p });
   });
   if (problems.length) return bad(INV.ladder, subject, { token: rec.token, side: rec.side, size: rec.size, rungs: problems, problem: 'a ladder rung is not the independent order the ladder planned' });
-  return okv(views.some((v) => v === null) ? 'partly listed' : undefined);
+  return okv(views.some((v) => v === null) ? 'partly listed' : rec.rungs.some((r) => amended.has(r.id)) ? 'amended' : undefined);
 }
 
 /**

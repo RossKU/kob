@@ -83,7 +83,10 @@ import {
   type TxLine,
 } from './rules.ts';
 import { loadState, saveState, type CheckerState, type LegacyTxSums, type OrderMemo, type TxSums } from './store.ts';
-import { checkCancelAll, checkLadder, checkLadderCancel, checkMerge, checkMergeRecord, checkPlannedReplacement, checkReplacement, checkX402Retries, type RetryPayment, type Verdict } from './scenario-rules.ts';
+import {
+  amendedAfter, checkCancelAll, checkLadder, checkLadderCancel, checkMerge, checkMergeRecord, checkPlannedReplacement, checkReplacement, checkX402Retries, repricedRungs,
+  SCENARIO_GRACE_MS, type RetryPayment, type Verdict,
+} from './scenario-rules.ts';
 import { scenariosPath, type MergeRecord, type ScenarioRecord } from '../scenarios';
 import { INV, type EventLike, type HealthLike, type OrderLike, type Violation } from './types.ts';
 
@@ -1187,8 +1190,17 @@ async function scenarioVerdict(x: Ctx, r: ScenarioRecord, ageMs: number): Promis
       const v = await view(r.id);
       return checkReplacement(r, v, v ? await events(r.id) : null, ageMs);
     }
-    case 'ladder':
-      return checkLadder(r, await Promise.all(r.rungs.map((g) => view(g.id))), ageMs);
+    case 'ladder': {
+      const vs = await Promise.all(r.rungs.map((g) => view(g.id)));
+      // a rung off its planned price may have been amended since (a trader's Amend of that order, in place): only those rungs' events are read
+      const amended = new Set<string>();
+      for (const id of repricedRungs(r, vs)) {
+        const evs = await events(id);
+        if (evs === null && ageMs < SCENARIO_GRACE_MS) return { done: false };
+        if (evs && amendedAfter(evs, r.rungs.find((g) => g.id === id)!.txid)) amended.add(id);
+      }
+      return checkLadder(r, vs, ageMs, amended);
+    }
     case 'ladderCancel': {
       const evs = new Map<string, EventLike[] | null>();
       for (const id of r.rungs) evs.set(id, await events(id));

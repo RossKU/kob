@@ -40,7 +40,7 @@ The checker (`src/checker/run.ts`, formulas in `rules.ts`; incidents in `run/inc
 | 10 | health | follower state, lag and progress of both indexers; node sync, book staleness and step age of both executors |
 | 11 | pair | a pair order fill carries no price (volume only) and honours the order's guarantee at its quote; a pair stop arms only from evidence of one of the two modes |
 | 12 | supply | per token, the live token UTXOs add up to the supply |
-| 13 | scenarios | the bots' scenario records (`run/state/scenarios.jsonl`, `scenario-rules.ts`): a limit ladder's rungs are independent orders of one size and cancelling one rung touches no other (`ladder`); a GTC renewal keeps its terms with a later expiry and a pair amend keeps pair, side and size (`replace`); a cancel-all ends every order (`cancel-all`); a token merge ends in one output of the inputs' total (`merge`); an x402 payment has at most one accepted attempt and a lost answer is replayed (`x402`) |
+| 13 | scenarios | the bots' scenario records (`run/state/scenarios.jsonl`, `scenario-rules.ts`): a limit ladder's rungs are independent orders of one size at their own prices (a rung amended later holds the amend's price) and cancelling one rung touches no other (`ladder`); a GTC renewal keeps its terms with a later expiry (a minimum fill above what partial fills left comes down to what is left: the same fills) and a pair amend keeps pair, side and size (`replace`); a cancel-all ends every order (`cancel-all`); a token merge ends in one output of the inputs' total (`merge`); an x402 payment has at most one accepted attempt and a lost answer is replayed (`x402`) |
 
 A checker state file of another protocol generation (`run/state/checker.json` without `"protocol": 3`) is dropped at start.
 
