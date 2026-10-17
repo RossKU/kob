@@ -45,7 +45,7 @@ export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry
     let price = '';
     try {
       // the order's own price: sompi per whole token of the token's scale (an unknown token: per its scale's base units)
-      if (p.price !== undefined) price = info ? `${pricePerTokenText(BigInt(String(p.price)), info.decimals, scaleOfDecimals(info.decimals))} ${info.ticker}/KAS` : t('notify.reorg.perScale', { price: kasText(BigInt(String(p.price))) });
+      if (p.price !== undefined) price = info ? `${pricePerTokenText(BigInt(String(p.price)), info.decimals, scaleOfDecimals(info.decimals))} KAS per ${info.ticker}` : t('notify.reorg.perScale', { price: kasText(BigInt(String(p.price))) });
     } catch {
       price = '';
     }

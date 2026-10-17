@@ -38,7 +38,8 @@ export function Tabs<Id extends string = string>(props: { tabs: TabItem<Id>[]; a
           data-testid={tab['data-testid']}
           onClick={() => props.onChange(tab.id)}
         >
-          {tab.label}
+          {/* a label with a count changes in place: in an element of its own, keyed by its text (a page translator rewrites text nodes) */}
+          {typeof tab.label === 'string' ? <span key={tab.label}>{tab.label}</span> : tab.label}
         </button>
       ))}
     </div>

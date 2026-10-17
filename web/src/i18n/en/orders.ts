@@ -404,6 +404,7 @@ export default {
   'orders.error.snapshot.old-template': 'Older contract version: use the KOB release it was placed with.',
   'orders.pair.pair': 'Pair',
   'orders.pair.pairValue': '{base}/{quote}',
+  'orders.unit.kasPer': 'KAS per {ticker}',
   'orders.pair.escrowA': 'Base tokens held',
   'orders.pair.escrowB': 'Quote tokens held',
   'orders.pair.prefundB': 'Quote tokens held (buy-back prefund)',

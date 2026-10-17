@@ -6,6 +6,7 @@ export default {
   'notify.connect': 'Connect a wallet to receive notifications for its orders and payments.',
   'notify.disabled': 'Notifications are off. Turn them on to be told about fills, stops, expiries, refunds and payments. Everything is worked out in this browser from the indexer and the node; nothing is sent to any server of ours.',
   'notify.turnOn': 'Turn on',
+  'notify.offLine': 'Notifications are off: nothing new is collected.',
   'notify.markRead': 'Mark all read',
   'notify.clear': 'Clear',
   'notify.settings': 'Notification settings',

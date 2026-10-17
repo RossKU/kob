@@ -53,8 +53,9 @@ function pairPriceText(value: bigint, row: OrderRowModel, a: TokenInfo | undefin
   const aName = a?.ticker ?? (row.token ? shortId(row.token) : '?');
   const perA = a && row.scale > 0n ? statePriceToTokenPrice(value, a.decimals, row.scale, 'nearest') : value;
   const unitA = a && row.scale > 0n ? aName : `${aName} ${t('orders.perScale', { scale: row.scale.toString() })}`;
-  if (!b) return `${perA.toString()} ${unitA}/${shortId(row.pair!.quote)} (${t('common.baseUnits')})`;
-  return `${unitsText(perA, b.decimals, ',')} ${unitA}/${b.ticker}`;
+  // "X B per A", never the pair notation "A/B" (it reads as A per B)
+  if (!b) return `${perA.toString()} ${shortId(row.pair!.quote)} (${t('common.baseUnits')}) per ${unitA}`;
+  return `${unitsText(perA, b.decimals, ',')} ${b.ticker} per ${unitA}`;
 }
 
 /**
@@ -68,7 +69,7 @@ function PriceCell(p: { row: OrderRowModel; token: TokenInfo | undefined; quote?
   return (
     <span data-testid={p.testid}>
       {tk ? (
-        <Amount kind="price" value={p.value} decimals={tk.decimals} scale={p.row.scale} unit={`${tk.ticker}/KAS`} {...fixed(tickPriceFraction(tk.tick, tk.decimals, p.row.scale))} group />
+        <Amount kind="price" value={p.value} decimals={tk.decimals} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: tk.ticker })} {...fixed(tickPriceFraction(tk.tick, tk.decimals, p.row.scale))} group />
       ) : (
         <Amount kind="kas" value={p.value} unit={`KAS ${t('orders.perScale', { scale: p.row.scale.toString() })}`} {...fixed(tickKasFraction(null))} />
       )}

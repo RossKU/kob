@@ -159,7 +159,7 @@ export function AmendDialog(props: AmendDialogProps) {
     }
   };
 
-  const unit = perToken ? `${token!.ticker}/KAS` : `KAS ${t('orders.perScale', { scale: scale.toString() })}`;
+  const unit = perToken ? t('orders.unit.kasPer', { ticker: token!.ticker }) : `KAS ${t('orders.perScale', { scale: scale.toString() })}`;
   const errText = (k: FieldKey, field: string): string | null => {
     if (parsed.errors[k]) return parsed.errors[k]!;
     const i = fieldIssue(field);

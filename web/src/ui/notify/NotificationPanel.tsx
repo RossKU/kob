@@ -1,4 +1,6 @@
 // The notification centre: the bell of the header and the dialog it opens (newest first, mark all read, clear, the x402 invoice watch box, a link to Settings).
+// The dialog always lists what the bell counts (TN10 2026-10-17: a badge "5" opened a dialog that only said the notifications were off); whether
+// new ones are collected is one line above the list, with its switch.
 import { useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { formatDateTime, t } from '../../i18n';
@@ -26,10 +28,10 @@ function Item(props: { e: NotificationEvent; onNavigate: () => void }) {
   return (
     <li class={`notify-item${props.e.read ? '' : ' notify-unread'}`} data-testid={`notify-item-${props.e.kind}`} data-read={props.e.read ? 'true' : 'false'}>
       <div class="notify-item-head">
-        <strong>{d.title}</strong>
+        <strong><span key={d.title}>{d.title}</span></strong>
         <time class="muted" dateTime={new Date(props.e.at).toISOString()}>{formatDateTime(Math.floor(props.e.at / 1000), undefined)}</time>
       </div>
-      <div>{d.body}</div>
+      <div><span key={d.body}>{d.body}</span></div>
       <a href={d.href} onClick={props.onNavigate}>{props.e.kind === 'payment' && props.e.token ? t('notify.viewToken') : props.e.kind === 'invoice' ? t('notify.settings') : t('notify.viewOrders')}</a>
     </li>
   );
@@ -74,13 +76,13 @@ export function NotificationPanel(props: { onClose: () => void }) {
     <Modal title={t('notify.title')} onClose={close} data-testid="notify-panel">
       <div class="stack">
         {!n.settings.enabled ? (
-          <div class="stack-sm" data-testid="notify-disabled">
-            <p>{t('notify.disabled')}</p>
-            <div class="row">
-              <Button variant="primary" onClick={() => n.update({ enabled: true })} data-testid="notify-enable">{t('notify.turnOn')}</Button>
-            </div>
+          // off: nothing new is collected; what was collected before is still listed below
+          <div class="row notify-off" data-testid="notify-disabled">
+            <span class="small muted">{t('notify.offLine')}</span>
+            <Button small variant="primary" onClick={() => n.update({ enabled: true })} data-testid="notify-enable">{t('notify.turnOn')}</Button>
           </div>
-        ) : !n.connected ? (
+        ) : null}
+        {!n.connected ? (
           <p data-testid="notify-connect">{t('notify.connect')}</p>
         ) : (
           <>
@@ -89,13 +91,13 @@ export function NotificationPanel(props: { onClose: () => void }) {
               <Button small variant="ghost" onClick={n.clear} disabled={n.items.length === 0} data-testid="notify-clear">{t('notify.clear')}</Button>
             </div>
             {n.items.length === 0 ? (
-              <p class="muted" data-testid="notify-empty">{t('notify.empty')}</p>
+              <p class="muted" data-testid="notify-empty">{t(n.settings.enabled ? 'notify.empty' : 'notify.disabled')}</p>
             ) : (
-              <ul class="notify-list">
+              <ul class="notify-list" data-testid="notify-list">
                 {n.items.map((e) => <Item key={e.id} e={e} onNavigate={close} />)}
               </ul>
             )}
-            <InvoiceWatch />
+            {n.settings.enabled ? <InvoiceWatch /> : null}
           </>
         )}
         <a href="#/settings" onClick={close} data-testid="notify-settings-link">{t('notify.settings')}</a>

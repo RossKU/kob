@@ -105,7 +105,7 @@ test('pair book (direct, entry, route) and a pair limit sell through the unified
   await expect(row).toHaveAttribute('data-type', 'limit');
   await expect(row).toHaveAttribute('data-side', 'sell');
   await expect(row.getByTestId('order-pair')).toHaveText('EXKCC/EXUSD');
-  await expect(row.getByTestId('order-price')).toContainText('0.0515 EXKCC/EXUSD');
+  await expect(row.getByTestId('order-price')).toContainText('0.0515 EXUSD per EXKCC');
   await expect(row.getByTestId('order-pair-escrow-a')).toHaveText('2 EXKCC');
   await expect(row.getByTestId('order-allin')).toHaveCount(0);
   await page.getByTestId(`order-cancel-${id}`).click();
@@ -167,8 +167,8 @@ test('a pair stop discloses the trigger rule (two KAS books or a resting pair or
   const id = view.covenant_id as string;
   const row = page.getByTestId(`order-row-${id}`);
   await expect(row).toHaveAttribute('data-type', 'stop');
-  await expect(row.getByTestId('order-stop')).toContainText('0.046 EXKCC/EXUSD');
-  await expect(row.getByTestId('order-pair-trigger')).toContainText('arms on fills implying a rate at or below 0.046 EXKCC/EXUSD');
+  await expect(row.getByTestId('order-stop')).toContainText('0.046 EXUSD per EXKCC');
+  await expect(row.getByTestId('order-pair-trigger')).toContainText('arms on fills implying a rate at or below 0.046 EXUSD per EXKCC');
   // pair orders are replaced from the full pair ticket (no in-place amend in the protocol)
   await expect(row.getByTestId(`order-replace-${id}`)).toBeVisible();
   await page.getByTestId(`order-cancel-${id}`).click();
@@ -202,8 +202,8 @@ test('an IFD pair (buy first): the exit it commits to in the final confirmation,
   const position = page.locator(`[data-testid^="position-"][data-kind]`).first();
   await expect(position).toBeVisible({ timeout: 15_000 });
   await expect(position.getByTestId('position-token')).toHaveText('EXKCC/EXUSD');
-  await expect(position.getByTestId('position-entry-price')).toContainText('0.048 EXKCC/EXUSD');
-  await expect(position.getByTestId('position-exit-prices')).toContainText('0.055 EXKCC/EXUSD');
+  await expect(position.getByTestId('position-entry-price')).toContainText('0.048 EXUSD per EXKCC');
+  await expect(position.getByTestId('position-exit-prices')).toContainText('0.055 EXUSD per EXKCC');
   await expect(position.getByTestId(`order-row-${id}`)).toHaveAttribute('data-type', 'ifd');
   // the exit holds the EXKCC the fill bought
   await expect(position.locator('[data-testid^="order-row-"][data-type="take-profit"] [data-testid="order-pair-escrow-a"]')).toHaveText('1 EXKCC');
