@@ -28,6 +28,7 @@ import { expDelay, KAS, sleep, weighted } from '../util';
 import { walletFor, type BotWallet } from '../wallet';
 import { payerMaxAmount, payerMaxPayAmount, soakPrices } from './x402-caps';
 import { ConflictRace, FaultInjector, RETRY_BASE, x402Weights } from './x402-retry';
+import { loggedTurn } from './x402-turn';
 import { amend } from './common';
 import { feeContext } from '../fees';
 import { pickFor, type RatePick } from '@/kob/fee-policy';
@@ -245,16 +246,27 @@ export class X402Bots {
     const weights = x402Weights({ weights: cfg.weights, invoices: !!cfg.invoiceIntent?.enabled });
     const merchantKey = readFileSync(join(this.env.cfg.runPath, 'x402-merchant.key'), 'utf8').trim();
     const invoices = new InvoiceClient({ url: cfg.facilitatorUrl, apiKey: merchantKey, allowInsecureHttp: true, payTimeoutMs: 90_000 });
+    const paidTurn = this.paidTurnOf(client, bal, base, maxFee, m);
     await sleep(30_000);
     while (!this.stopped) {
       // the payer submits through the x402 SDK, not a BotWallet, so it waits on the gate itself (see indexer-gate.ts for why even /native waits)
       if (!(await this.env.gate?.waitOpen(() => this.stopped) ?? true)) break;
       const path = weighted(weights);
-      if (path === 'invoice') {
-        await this.payInvoice(wasm, rpc, invoices, tokens);
-        await sleep(expDelay(cfg.meanIntervalSec, 20));
-        continue;
-      }
+      // every turn is logged when it starts and ends (and while it runs long), so the log shows each pick and how long it took
+      await loggedTurn(this.log, path, () => (path === 'invoice' ? this.payInvoice(wasm, rpc, invoices, tokens) : paidTurn(path))).catch(() => undefined);
+      await sleep(expDelay(cfg.meanIntervalSec, 20));
+    }
+  }
+
+  /** The body of the x402 run loop's paid-resource turns, bound by `run` (closures over the client and the chain context). */
+  private paidTurnOf(
+    client: (caps: ConstructorParameters<typeof KobX402Client>[0]['capabilities'], store?: MemoryArtifactStore) => KobX402Client,
+    bal: () => Promise<Record<string, string>>,
+    base: string,
+    maxFee: bigint,
+    m: ReturnType<typeof tokenMarket>,
+  ): (path: string) => Promise<void> {
+    return async (path) => {
       try {
         const pick = await this.pickPayFee();
         // explicit spend ceilings per merchant asset: the SDK pays nothing without one
@@ -290,8 +302,7 @@ export class X402Bots {
         this.stats.inc(`x402_error:${path}:${code}`);
         this.log.warn('x402 payment failed', { path, code, error: errText(e), retryable: e instanceof KobX402Error ? e.retryable : undefined, attempts: e instanceof KobX402Error ? e.attempts?.map((a) => a.outcome) : undefined });
       }
-      await sleep(expDelay(cfg.meanIntervalSec, 20));
-    }
+    };
   }
 
   /**
