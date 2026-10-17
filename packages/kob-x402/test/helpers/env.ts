@@ -21,9 +21,9 @@ import type { StubWasm } from './stub-wasm.ts';
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '../../../..');
 
-/** Reads a vendored rc.1 vector (crates/kob-x402/vectors/kaspa-x402-rc1). */
+/** Reads a vendored binding vector (crates/kob-x402/vectors/kaspa-x402-v1.0.0). */
 export function loadVector<T = any>(rel: string): T {
-  return JSON.parse(readFileSync(join(repo, 'crates/kob-x402/vectors/kaspa-x402-rc1', rel), 'utf8')) as T;
+  return JSON.parse(readFileSync(join(repo, 'crates/kob-x402/vectors/kaspa-x402-v1.0.0', rel), 'utf8')) as T;
 }
 
 export const NETWORK = 'kaspa:testnet-10' as const;
@@ -65,6 +65,23 @@ export const SWAP_MAX_PAY = '1000000000000';
 export const SWAP_BOUNDS = { KAS: SWAP_MAX_PAY, [TOKEN_A]: SWAP_MAX_PAY, [TOKEN_B]: SWAP_MAX_PAY };
 
 export const NATIVE_OFFER: OfferSpec = { kind: 'native', amount: '50000000' };
+
+/**
+ * A complete funding policy for a client paying `base` (binding 1.0.0: an unattended client needs one, or `approve`): local keys,
+ * that origin, the fixture merchant (or `payTo`), every offer kind.
+ */
+export function completePolicy(
+  base: string | string[],
+  payTo: string | string[] = MERCHANT,
+  fundingSource: 'local-keys' | 'wallet' = 'local-keys',
+): NonNullable<KobX402ClientOptions['policy']> {
+  return {
+    fundingSource,
+    allowedOrigins: (Array.isArray(base) ? base : [base]).map((b) => new URL(b).origin),
+    allowedPayTo: Array.isArray(payTo) ? payTo : [payTo],
+    allowedKinds: ['native', 'kcc20', 'swap', 'intent'],
+  };
+}
 
 export interface Rig {
   wasm: StubWasm;
@@ -120,6 +137,7 @@ export async function startRig(o: RigOptions = {}): Promise<Rig> {
     store,
     capabilities: { maxAmount: SPEND_CAPS, ...(o.capabilities ?? {}) },
     maxPay: SWAP_BOUNDS,
+    policy: completePolicy(base, MERCHANT, o.client?.wallet && !o.client.privateKeys?.length ? 'wallet' : 'local-keys'),
     ...o.client,
   });
   return {

@@ -4,6 +4,38 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### The Kaspa x402 binding v1.0.0 (clean cutover from v1.0.0-rc.1)
+
+Aligned with elldeeone/kaspa-x402 v1.0.0 (tag `v1.0.0`, commit `e5f5b0e`). There is no rc.1 compatibility: payers,
+merchants and facilitators move together (**breaking**, wire, Rust and TypeScript).
+
+- **`extra.paymentFlow: "upfront"`** on every exact offer (the binding requires it; an omitted flow, `authorization` or
+  `escrow` is invalid). Every offer builder emits it (`native_requirements`, `kcc20_requirements`, `swap_requirements`,
+  `intent_requirements`, the wasm builders, `buildOffer`), including KOB's own profiles (kcc20, swap-and-pay, intents: their
+  resource is likewise served only after the settlement is accepted). Verifiers refuse an offer without it
+  (`invalid_payment_requirements` / `invalid_kaspa_x402_payload`), payers skip it (`classifyOffer`, `select_native_offer`).
+  Requirements hashes, request hashes and invoice ids change with it.
+- **Request authorization v2**: the binding's Schnorr-signed digest is `kaspa-x402-exact-request-authorization-v2`, whose
+  preimage adds `paymentIdentifier` (`paymentPayload.extensions["payment-identifier"].info.id`, verbatim). KOB's payload
+  commitment (kcc20, swap-and-pay, intents) is `kob-x402-payload-commitment-v2` and binds the identifier the same way. v1
+  authorizations are refused. The payment identifier is mandatory for every exact payment (`Policy::require_payment_identifier`
+  is gone; `Verified::payment_identifier` is a `String`); payers choose it before signing (`common::resolve_payment_id`;
+  `PreparedSwap::payment_identifier` / `PreparedIntent::payment_identifier` are a `String`). The wasm digest bindings
+  (`x402SignedAuthDigest`, `x402PayloadCommitDigest`) take `paymentIdentifier`.
+- **Signature hash types**: a standard-native payment accepts each payer signature's encoded consensus-supported hash type
+  (ALL, NONE, SINGLE, each with ANYONECANPAY: `sighash::CONSENSUS_HASH_TYPES`), as the binding's 1.0.0 verifiers do; any
+  other byte is refused. KOB's signers keep SIGHASH_ALL, and KOB's own profiles keep accepting SIGHASH_ALL only (module
+  `sighash`).
+- **Payer funding policy** (`KobX402ClientOptions.policy`, `FundingPolicy`): an unattended payment needs a complete policy
+  (`fundingSource`, `allowedOrigins`, `allowedPayTo`, `allowedKinds`) plus a `capabilities.maxAmount` ceiling for the merchant
+  asset; anything less, a ceiling alone included, is paid only when `approve` says yes (new reason `incomplete_policy`).
+  Every pinned list is enforced whether `approve` is set or not: a request to another origin is refused before anything is
+  sent (`policy_violation`), an offer to another recipient or of another kind is skipped. The origin and the resource come
+  from the actual request URL: a 402 whose `resource.url` names another resource is refused (`invalid_payment_required`).
+- Conformance vectors: `crates/kob-x402/vectors/kaspa-x402-v1.0.0/` (byte-identical upstream blobs, now with LF line
+  endings; adds `negative/exact-payment-flow-missing.json` and `sighash/consensus.json`) replaces `kaspa-x402-rc1/`.
+  The golden vectors (`vectors/golden/x402-payments.json`) are regenerated.
+
 ### Facilitator: an execution accepted while the keeper reads the intent is the payment
 
 - kob-executor intents: an execution that left the mempool without being accepted yet (inside a block not merged) was marked

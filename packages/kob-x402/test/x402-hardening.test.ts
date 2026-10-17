@@ -15,7 +15,7 @@ import { declaredTransactionId } from '../src/server.ts';
 import { assertSecureUrl, isLoopbackHost } from '../src/url-policy.ts';
 import type { OfferSpec, PaymentRequired } from '../src/types.ts';
 import { defaultSettlement } from './helpers/stub-facilitator.ts';
-import { MERCHANT, NATIVE_OFFER, NETWORK, PAYER, SPEND_CAPS, kasUtxo, startRaw, startRig, staticContext } from './helpers/env.ts';
+import { MERCHANT, NATIVE_OFFER, NETWORK, PAYER, SPEND_CAPS, completePolicy, kasUtxo, startRaw, startRig, staticContext } from './helpers/env.ts';
 import { stubWasm } from './helpers/stub-wasm.ts';
 import { loadGolden, realWasm, skipUnlessWasm } from './helpers/real-wasm.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -127,6 +127,7 @@ test('a native / kcc20 authorization signs the shorter of the payer default and 
         wasm: w,
         context: { load: async () => ({ utxos: [kasUtxo(0)] }) },
         capabilities: { maxAmount: SPEND_CAPS },
+        policy: completePolicy(srv.base),
         ...(ttl !== undefined ? { authorizationTtlSeconds: ttl } : {}),
       });
       await c.fetch(srv.base + '/x').catch(() => undefined);
@@ -150,6 +151,7 @@ test('a bad authorizationTtlSeconds is refused before signing', async () => {
         wasm: w,
         context: { load: async () => ({ utxos: [kasUtxo(0)] }) },
         capabilities: { maxAmount: SPEND_CAPS },
+        policy: completePolicy(srv.base),
         authorizationTtlSeconds: bad,
       });
       await assert.rejects(c.fetch(srv.base + '/x'), (e: unknown) => e instanceof KobX402Error && e.code === 'bad_request', String(bad));
@@ -278,7 +280,7 @@ test('a native payment always carries the payer cap: the KAS ceiling, else exact
         privateKeys: ['01'.repeat(32)],
         wasm: w,
         context: { load: async () => ({ utxos: [kasUtxo(0)] }) },
-        ...(maxAmount ? { capabilities: { maxAmount } } : { approve: () => true }),
+        ...(maxAmount ? { capabilities: { maxAmount }, policy: completePolicy(srv.base) } : { approve: () => true }),
       });
       await c.fetch(srv.base + '/x').catch(() => undefined);
       const arg = w.calls.find((x) => x.method === 'payNative')!.arg as { maxAmountSompi?: string };

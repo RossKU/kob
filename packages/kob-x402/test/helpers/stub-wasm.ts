@@ -63,7 +63,8 @@ export function stubWasm(): StubWasm {
         ...(kind === 'swap' ? { route: { binding: BINDING_SWAP, payAsset: req.payAsset ?? '', orders: [{ txid: '99'.repeat(32), index: 0 }] } } : {}),
       },
       ...(req.resource ? { resource: req.resource } : {}),
-      ...(req.extensions ? { extensions: req.extensions } : {}),
+      // as the real builders: the payment identifier the authorization digest binds is echoed in the extension
+      extensions: req.extensions ?? { 'payment-identifier': { info: { required: true, id: req.paymentId } } },
     };
     return { paymentPayload, transactionId: txid, consumed: inputs, feeSompi: '2000', expiresAtMs };
   };

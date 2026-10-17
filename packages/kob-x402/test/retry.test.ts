@@ -474,6 +474,7 @@ function intentOffer(): PaymentRequirements {
     extra: {
       binding: BINDING_EXACT,
       profile: 'standard-native',
+      paymentFlow: 'upfront',
       finality: 'accepted',
       transactionEncoding: TX_ENCODING,
       payToScriptPublicKey: '0000',

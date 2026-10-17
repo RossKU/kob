@@ -10,7 +10,7 @@ import type { ArtifactRecord } from '../src/artifact-store.ts';
 import type { OfferSpec, PaymentRequired } from '../src/types.ts';
 import { KobX402Client, kcc20Custody, verifySettlement } from '../src/client.ts';
 import type { KobX402ClientOptions } from '../src/client.ts';
-import { NATIVE_OFFER, NETWORK, PAYER, SPEND_CAPS, TOKEN_A, TOKEN_B, staticContext, startRig } from './helpers/env.ts';
+import { NATIVE_OFFER, NETWORK, PAYER, SPEND_CAPS, TOKEN_A, TOKEN_B, completePolicy, staticContext, startRig } from './helpers/env.ts';
 import { stubWasm } from './helpers/stub-wasm.ts';
 import { defaultSettlement, failure } from './helpers/stub-facilitator.ts';
 
@@ -101,7 +101,7 @@ test('kcc20 and swap-and-pay entries go through the matching KobWasm builders', 
       assert.equal(payment?.kind, i === 0 ? 'kcc20' : 'swap');
       assert.ok(rig.wasm.calls.some((c) => c.method === want[i]));
       const fr = rig.facilitator.settleCalls()[0]!.body as any;
-      assert.equal(fr.paymentPayload.payload.authorization.version, 'kob-x402-payload-commitment-v1');
+      assert.equal(fr.paymentPayload.payload.authorization.version, 'kob-x402-payload-commitment-v2');
       if (i === 1) assert.equal(fr.paymentPayload.payload.route.payAsset, TOKEN_A);
     } finally {
       await rig.close();
@@ -226,6 +226,7 @@ function otherClientOptions(rig: Awaited<ReturnType<typeof startRig>>): KobX402C
     privateKeys: ['01'.repeat(32)],
     context: rig.context,
     capabilities: { maxAmount: SPEND_CAPS },
+    policy: completePolicy(rig.base),
     store: new MemoryArtifactStore(),
   };
 }
@@ -447,7 +448,11 @@ test('an unpaid 200 passes through untouched', async () => {
   try {
     const raw = await fetch(`${rig.base}/report`);
     assert.equal(raw.status, 402);
-    const other = await rig.client.paidFetch(`${rig.facilitator.url}/supported`);
+    // an origin outside the funding policy is refused before anything is sent ...
+    await assert.rejects(rig.client.paidFetch(`${rig.facilitator.url}/supported`), (e: unknown) => e instanceof KobX402Error && e.code === 'policy_violation');
+    // ... and an allowed one that answers 200 passes through untouched
+    const free = new KobX402Client({ ...otherClientOptions(rig), policy: completePolicy([rig.base, rig.facilitator.url]) });
+    const other = await free.paidFetch(`${rig.facilitator.url}/supported`);
     assert.equal(other.response.status, 200);
     assert.equal(other.payment, undefined);
   } finally {

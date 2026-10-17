@@ -14,13 +14,13 @@ import { loadVector } from './helpers/env.ts';
 
 const v = loadVector('x402-http/exact-transaction.json');
 
-test('rc.1 http vector: PAYMENT-REQUIRED / PAYMENT-SIGNATURE / PAYMENT-RESPONSE re-encode byte for byte', () => {
+test('1.0.0 http vector: PAYMENT-REQUIRED / PAYMENT-SIGNATURE / PAYMENT-RESPONSE re-encode byte for byte', () => {
   assert.equal(encodePaymentRequired(v.paymentRequired), v.headers.paymentRequired);
   assert.equal(encodePaymentSignature(v.paymentPayload), v.headers.paymentSignature);
   assert.equal(encodePaymentResponse(v.settlementResponse), v.headers.paymentResponse);
 });
 
-test('rc.1 http vector: headers decode to the vector objects', () => {
+test('1.0.0 http vector: headers decode to the vector objects', () => {
   assert.deepEqual(decodePaymentRequired(v.headers.paymentRequired), v.paymentRequired);
   assert.deepEqual(decodePaymentSignature(v.headers.paymentSignature), v.paymentPayload);
   assert.deepEqual(decodePaymentResponse(v.headers.paymentResponse), v.settlementResponse);

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalJson, httpRequestHash, normalizeBody, normalizeUrl, requirementsHash, sha256Hex } from '../src/canonical.ts';
 import { KobX402Error } from '../src/errors.ts';
+import { AUTH_VERSION_SIGNED } from '../src/types.ts';
 import { loadVector } from './helpers/env.ts';
 
 test('sorted, compact, integers only (same cases as canonical.rs)', () => {
@@ -29,17 +30,18 @@ test('control characters escape like serde_json', () => {
   assert.equal(canonicalJson('a\u0001b\n\u007f '), '"a\\u0001b\\n\u007f "');
 });
 
-test('rc.1 vector: requirements canonical JSON and SHA-256', () => {
+test('1.0.0 vector: requirements canonical JSON and SHA-256', () => {
   const v = loadVector('exact/interop-v1.json').paymentRequirements;
   assert.equal(canonicalJson(v.value), v.canonicalJsonUtf8);
   assert.equal(requirementsHash(v.value), v.sha256);
   assert.equal(sha256Hex(v.canonicalJsonUtf8), v.sha256);
 });
 
-test('rc.1 vector: request authorization canonical JSON and SHA-256', () => {
+test('1.0.0 vector: request authorization canonical JSON and SHA-256', () => {
   const v = loadVector('exact/interop-v1.json').requestAuthorization;
-  // the vector's `input` lacks the domain `scope`, which the digest object adds
-  const obj = { scope: 'kaspa-x402-exact-request-authorization-v1', ...v.input };
+  // the vector's `input` lacks the domain `scope`, which the digest object adds; v2 binds the payment identifier
+  assert.equal(v.input.paymentIdentifier, 'exact_http_vector_0001');
+  const obj = { scope: AUTH_VERSION_SIGNED, ...v.input };
   assert.equal(canonicalJson(obj), v.canonicalJsonUtf8);
   assert.equal(sha256Hex(canonicalJson(obj)), v.sha256);
 });

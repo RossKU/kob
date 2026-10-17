@@ -13,7 +13,7 @@ import { classifyOffer } from '../src/offers.ts';
 import { KobX402Error } from '../src/errors.ts';
 import { HEADER_PAYMENT_REQUIRED, ROUTER_ARTIFACT_ID } from '../src/types.ts';
 import type { FacilitatorRequest, OfferSpec, PaymentRequired, SettlementResponse } from '../src/types.ts';
-import { NETWORK, PAYER, SPEND_CAPS, SWAP_BOUNDS, TOKEN_A, startRaw, startRig, staticContext } from './helpers/env.ts';
+import { NETWORK, PAYER, SPEND_CAPS, SWAP_BOUNDS, TOKEN_A, completePolicy, startRaw, startRig, staticContext } from './helpers/env.ts';
 import { defaultSettlement, failure } from './helpers/stub-facilitator.ts';
 import { stubWasm } from './helpers/stub-wasm.ts';
 
@@ -35,7 +35,7 @@ test('an intent offer is classified only for the router this SDK knows, as a cri
     asset: 'KAS',
     payTo: 'kaspatest:qmerchant',
     maxTimeoutSeconds: 60,
-    extra: { binding: 'kaspa-exact-v2', profile: 'standard-native', finality: 'accepted', transactionEncoding: 'kaspa-sdk-safe-json-v2.0.0', payToScriptPublicKey: '0000', route: { binding: 'kob-intent-v1', critical: true, router: ROUTER_ARTIFACT_ID, payAssets: [{ asset: TOKEN_A }] } },
+    extra: { binding: 'kaspa-exact-v2', profile: 'standard-native', paymentFlow: 'upfront', finality: 'accepted', transactionEncoding: 'kaspa-sdk-safe-json-v2.0.0', payToScriptPublicKey: '0000', route: { binding: 'kob-intent-v1', critical: true, router: ROUTER_ARTIFACT_ID, payAssets: [{ asset: TOKEN_A }] } },
   };
   assert.equal(classifyOffer(offer)?.kind, 'intent');
   assert.equal(classifyOffer({ ...offer, extra: { ...offer.extra, route: { ...offer.extra.route, router: 'ab'.repeat(32) } } }), null, 'another intent program');
@@ -189,7 +189,9 @@ test('a PAYMENT-RESPONSE that does not name the signed creation is refused', asy
   }
   const raw = await startRaw((req, res) => {
     if (!req.headers['payment-signature']) {
-      res.writeHead(402, { 'content-type': 'application/json', [HEADER_PAYMENT_REQUIRED]: Buffer.from(JSON.stringify(challenge)).toString('base64') }).end(JSON.stringify(challenge));
+      // the replayed challenge names this server's resource (a 402 for another resource is refused before anything is signed)
+      const here = { ...challenge!, resource: { ...challenge!.resource, url: `http://${req.headers.host}${req.url}` } };
+      res.writeHead(402, { 'content-type': 'application/json', [HEADER_PAYMENT_REQUIRED]: Buffer.from(JSON.stringify(here)).toString('base64') }).end(JSON.stringify(here));
       return;
     }
     const bogus: SettlementResponse = { success: true, transaction: 'e0'.repeat(32), network: NETWORK, amount: INTENT.amount, extensions: { kob: { intent: { creation: 'c1'.repeat(32) } } } };
@@ -207,6 +209,7 @@ test('a PAYMENT-RESPONSE that does not name the signed creation is refused', asy
     maxPay: SWAP_BOUNDS,
     intentTerms: () => ({ maxSell: '3000' }),
     retry: false,
+    policy: completePolicy(raw.base),
   });
   try {
     await assert.rejects(client.fetch(`${raw.base}/report`), (e: unknown) => e instanceof KobX402Error && e.code === 'invalid_settlement' && /creation/.test(e.message));

@@ -83,12 +83,12 @@ test('TS hashing and headers agree with Rust on the golden inputs', () => {
       assert.equal(httpRequestHash(c.request.method, c.request.url, JSON.parse(c.request.body), c.request.requirementsHash), c.expected, c.name);
     }
     if (c.function === 'x402SignedAuthDigest') {
-      assert.equal(sha256Hex(canonicalJson({ scope: 'kaspa-x402-exact-request-authorization-v1', challengeId: null, ...c.request.request })), c.expected, c.name);
+      assert.equal(sha256Hex(canonicalJson({ scope: 'kaspa-x402-exact-request-authorization-v2', challengeId: null, ...c.request.request })), c.expected, c.name);
     }
     if (c.function === 'x402PayloadCommitDigest') {
       const r = c.request.request;
       const obj = {
-        scope: 'kob-x402-payload-commitment-v1',
+        scope: 'kob-x402-payload-commitment-v2',
         network: r.network,
         profile: r.profile,
         route: r.routePayAsset ? { binding: 'kob-swap-v1', payAsset: r.routePayAsset } : null,
@@ -99,6 +99,7 @@ test('TS hashing and headers agree with Rust on the golden inputs', () => {
         paymentOutputIndex: r.paymentOutputIndex,
         paymentRequirementsHash: r.paymentRequirementsHash,
         requestHash: r.requestHash,
+        paymentIdentifier: r.paymentIdentifier,
         expiresAt: r.expiresAt,
       };
       assert.equal(sha256Hex(canonicalJson(obj)), c.expected, c.name);

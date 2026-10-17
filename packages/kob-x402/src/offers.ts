@@ -14,6 +14,7 @@ import {
   BINDING_INTENT,
   ROUTER_ARTIFACT_ID,
   NETWORKS,
+  PAYMENT_FLOW_UPFRONT,
   SCHEME_EXACT,
   TX_ENCODING,
   X402_VERSION,
@@ -96,7 +97,10 @@ export interface ClassifiedOffer {
   payAssets: string[];
 }
 
-/** Classifies one `accepts` entry; `null` for everything this SDK does not pay (foreign, additive, malformed, unknown critical route). */
+/**
+ * Classifies one `accepts` entry; `null` for everything this SDK does not pay (foreign, additive, malformed, no `upfront` payment
+ * flow, unknown critical route).
+ */
 export function classifyOffer(entry: unknown, index = 0): ClassifiedOffer | null {
   if (!isRecord(entry) || entry.scheme !== SCHEME_EXACT) return null;
   const network = entry.network;
@@ -107,6 +111,8 @@ export function classifyOffer(entry: unknown, index = 0): ClassifiedOffer | null
   if (typeof entry.maxTimeoutSeconds !== 'number' || !Number.isSafeInteger(entry.maxTimeoutSeconds) || entry.maxTimeoutSeconds <= 0) return null;
   const extra = entry.extra;
   if (!isRecord(extra) || extra.binding !== BINDING_EXACT || extra.transactionEncoding !== TX_ENCODING) return null;
+  // binding 1.0.0: every exact offer states the upfront flow explicitly; an omitted flow, `authorization` or `escrow` is not paid
+  if (extra.paymentFlow !== PAYMENT_FLOW_UPFRONT) return null;
   if (typeof extra.payToScriptPublicKey !== 'string' || !HEX.test(extra.payToScriptPublicKey)) return null;
   const finality = extra.finality;
   if (finality !== 'accepted' && finality !== 'confirmed') return null;
@@ -274,6 +280,7 @@ export function buildOffer(spec: OfferSpec, ctx: BuildOfferContext): PaymentRequ
   const extra: ExactExtra = {
     binding: BINDING_EXACT,
     profile: 'standard-native',
+    paymentFlow: PAYMENT_FLOW_UPFRONT,
     finality,
     transactionEncoding: TX_ENCODING,
     payToScriptPublicKey: ctx.wasm.addressToScriptPublicKey(ctx.payTo),

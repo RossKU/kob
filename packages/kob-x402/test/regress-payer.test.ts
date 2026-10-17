@@ -8,7 +8,7 @@ import { KobX402Error } from '../src/errors.ts';
 import { MemoryArtifactStore } from '../src/artifact-store.ts';
 import { buildOffer } from '../src/offers.ts';
 import type { OfferSpec, PaymentRequired } from '../src/types.ts';
-import { MERCHANT, NATIVE_OFFER, NETWORK, PAYER, TOKEN_A, TOKEN_B, kasUtxo, startRaw, staticContext } from './helpers/env.ts';
+import { MERCHANT, NATIVE_OFFER, NETWORK, PAYER, TOKEN_A, TOKEN_B, completePolicy, kasUtxo, startRaw, staticContext } from './helpers/env.ts';
 import { stubWasm } from './helpers/stub-wasm.ts';
 
 const wasm = stubWasm();
@@ -58,7 +58,8 @@ test('the approve hook is the user / agent policy: it sees what the built paymen
       },
     });
     await assert.rejects(deny.fetch(srv.base + '/x'), (e: unknown) => e instanceof KobX402Error && e.code === 'spend_not_authorized');
-    assert.deepEqual(seen, ['no_spend_cap', '50000000', '50000000', '2000'], 'asked with the cost of the built payment');
+    // no ceiling and no complete funding policy (binding 1.0.0): both reasons
+    assert.deepEqual(seen, ['no_spend_cap', 'incomplete_policy', '50000000', '50000000', '2000'], 'asked with the cost of the built payment');
     assert.deepEqual(await store.list(), [], 'the refused payment is not stored');
     assert.equal(paid, 0, 'nor sent');
     const allow = new KobX402Client({ ...base, wasm: w, context: kasOnly, approve: () => true });
@@ -78,7 +79,7 @@ test('a swap-and-pay route needs a bound for its pay asset: a KAS-only payer can
     const c = new KobX402Client({ ...base, wasm: w, context: staticContext(), capabilities: caps });
     await assert.rejects(c.fetch(srv.base + '/x'), (e: unknown) => e instanceof KobX402Error && e.code === 'spend_not_authorized');
     assert.equal(w.calls.filter((x) => x.method === 'paySwap').length, 0);
-    const ok = new KobX402Client({ ...base, wasm: w, context: staticContext(), capabilities: caps, maxPayAmount: '5000000000' });
+    const ok = new KobX402Client({ ...base, wasm: w, context: staticContext(), capabilities: caps, maxPayAmount: '5000000000', policy: completePolicy(srv.base) });
     await ok.fetch(srv.base + '/x').catch(() => undefined);
     const call = w.calls.find((x) => x.method === 'paySwap')!;
     assert.equal((call.arg as { maxPayAmount?: string }).maxPayAmount, '5000000000');
@@ -98,6 +99,7 @@ test('the carrier ceiling reaches the builder and the preflight', async () => {
       context: staticContext(),
       capabilities: { maxAmount: { [TOKEN_A]: '100' }, tokens: { [TOKEN_A]: '100' } },
       maxCarrierSompi: '200000000',
+      policy: completePolicy(srv.base),
     });
     await c.fetch(srv.base + '/x').catch(() => undefined);
     const pay = w.calls.find((x) => x.method === 'payKcc20')!.arg as { maxCarrierSompi?: string };

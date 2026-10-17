@@ -12,6 +12,8 @@
 //   KOB_X402_ARTIFACT_DIR  where signed artifacts are recorded before they are sent (default ./.x402-artifacts)
 //   KOB_X402_MAX_FEE       highest fee in sompi the payer accepts (default 5000000)
 //   KOB_X402_SOURCES       module with the token / order sources (see below); default: KAS only
+//   KOB_X402_PAY_TO        comma-separated merchant addresses this payer pays unattended (the funding policy); without it
+//                          every payment is shown and asked about on the terminal (an explicit approval)
 //
 // KAS is the default. kcc20 and swap-and-pay payments additionally need the payer's token UTXOs and, for a swap, a quote
 // of KOB orders to fill: covenant-owned outputs cannot be found by address, so they come from an injected source (the
@@ -93,6 +95,20 @@ const client = new KobX402Client({
   // rebuilds it from a fresh quote, held to the same limits and spending the first attempt's anchor input (so at most one
   // attempt can ever be accepted). `retry: false` turns it off.
   retry: { attempts: 3 },
+  // The funding policy (binding 1.0.0): unattended payments only from this key, to the requested URL's origin, to the listed
+  // merchants, within the ceilings above. Anything the policy does not fully cover is asked about.
+  policy: {
+    fundingSource: 'local-keys',
+    allowedOrigins: [new URL(url).origin],
+    ...(process.env.KOB_X402_PAY_TO ? { allowedPayTo: process.env.KOB_X402_PAY_TO.split(',').map((a) => a.trim()) } : {}),
+    allowedKinds: ['native', 'kcc20', 'swap'],
+  },
+  approve: async ({ offer, cost, reasons }) => {
+    const rl = (await import('node:readline/promises')).createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await rl.question(`pay ${cost.amount} ${cost.asset} to ${offer.requirements.payTo} (fee ${cost.feeSompi} sompi, ${reasons.join(', ')})? [y/N] `);
+    rl.close();
+    return answer.trim().toLowerCase() === 'y';
+  },
 });
 
 try {

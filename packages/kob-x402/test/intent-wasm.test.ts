@@ -165,6 +165,7 @@ test('KobX402Client pays an intent offer of a paywall through the Rust builder; 
     capabilities: { tokens: { [TOKEN]: '9000' }, maxAmount: { KAS: '1000000000000' } },
     maxPay: { [TOKEN]: '3000', KAS: '1000000000' },
     intentTerms: () => ({ maxSell: '3000' }),
+    policy: { fundingSource: 'local-keys', allowedOrigins: [base], allowedPayTo: [payTo], allowedKinds: ['intent'] },
   });
   try {
     const { response, payment } = await client.paidFetch(`${base}/report`);
@@ -189,6 +190,7 @@ test('KobX402Client pays an intent offer of a paywall through the Rust builder; 
       capabilities: { tokens: { [TOKEN]: '9000' }, maxAmount: { KAS: '1000000000000' } },
       maxPay: { [TOKEN]: '2999', KAS: '1000000000' },
       intentTerms: () => ({ maxSell: '3000' }),
+      policy: { fundingSource: 'local-keys', allowedOrigins: [base], allowedPayTo: [payTo], allowedKinds: ['intent'] },
     });
     await assert.rejects(tight.fetch(`${base}/report`), (e: unknown) => e instanceof KobX402Error && e.code === 'preflight_failed');
     assert.equal(facilitator.settleCalls().length, 1);

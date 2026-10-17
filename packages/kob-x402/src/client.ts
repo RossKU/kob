@@ -19,9 +19,12 @@
 //    independent payment for the same resource while an earlier artifact is still live (the merchant may already hold it):
 //    the caller opts in with `allowResign`, and the client then revokes the earlier artifact first. Paid requests for one
 //    resource run one at a time in a client;
-//  * nothing is paid without a spend authorisation: a per-asset `capabilities.maxAmount` ceiling, or an `approve`
-//    policy hook that says yes to the built payment's cost; a swap is never built without a `maxPay` bound for the
-//    pay asset it spends;
+//  * nothing is paid without a spend authorisation (binding 1.0.0, "Retry and signer policy"): an unattended payment needs a
+//    COMPLETE funding policy (`policy`: the funding source, the HTTP origins, the recipients and the offer kinds, plus a
+//    per-asset `capabilities.maxAmount` ceiling); anything less (a ceiling alone included) is paid only when the `approve`
+//    hook says yes to the built payment's cost; every list the policy pins is enforced either way; a swap is never built
+//    without a `maxPay` bound for the pay asset it spends;
+//  * the origin and the resource are the actual request URL's: a 402 whose `resource.url` names another resource is refused;
 //  * the KAS a payer funds into a merchant token output (the "carrier") is capped (`maxCarrierSompi`, default 2 KAS);
 //  * the signed artifact is durably recorded BEFORE it is disclosed, so a crash cannot lose a payment the
 //    merchant may already hold; `revoke(paymentId)` invalidates it by spending one of its inputs back to the payer;
@@ -192,10 +195,19 @@ export interface KobX402ClientOptions {
    */
   intentTerms?: (request: IntentTermsRequest) => IntentPayTerms | undefined | Promise<IntentPayTerms | undefined>;
   /**
-   * Spend policy hook (user / agent policy). A payment is authorised without asking only when its merchant asset has
-   * an explicit `capabilities.maxAmount` ceiling. Anything else is refused unless this hook returns true; it is asked
-   * after the payment is built and preflighted, with what it costs (`cost`), and before anything is stored or sent. A
-   * swap always needs a `maxPay` bound for its pay asset: without one it is not built, whatever this hook says.
+   * The payer's funding policy (binding 1.0.0): what an unattended client may pay. Each list that is set is enforced on every
+   * payment, `approve` or not: a request to an origin outside `allowedOrigins` is refused before anything is sent, an offer
+   * to another recipient or of another kind is skipped. A payment is authorised without asking only when the policy is
+   * complete (`fundingSource`, `allowedOrigins`, `allowedPayTo` and `allowedKinds` all set) and its merchant asset has a
+   * `capabilities.maxAmount` ceiling; otherwise `approve` decides (`incomplete_policy`).
+   */
+  policy?: FundingPolicy;
+  /**
+   * Spend policy hook (user / agent policy): the explicit authorization callback. A payment is authorised without asking
+   * only when the funding policy is complete (`policy`) and its merchant asset has an explicit `capabilities.maxAmount`
+   * ceiling. Anything else is refused unless this hook returns true; it is asked after the payment is built and
+   * preflighted, with what it costs (`cost`), and before anything is stored or sent. A swap always needs a `maxPay` bound
+   * for its pay asset: without one it is not built, whatever this hook says.
    */
   approve?: (request: PaymentApproval) => boolean | Promise<boolean>;
   /**
@@ -225,6 +237,27 @@ export interface KobX402ClientOptions {
   retry?: RetryOptions | false;
 }
 
+/** Where a client's payments come from: its local keys (`privateKeys`) or a wallet signer (`wallet`). */
+export type FundingSource = 'local-keys' | 'wallet';
+
+/**
+ * The payer's funding policy (`KobX402ClientOptions.policy`). Complete when every field is set: then a payment within a
+ * `capabilities.maxAmount` ceiling is paid unattended. The ceiling itself stays in `capabilities.maxAmount`.
+ */
+export interface FundingPolicy {
+  /** The funding source the client must be configured with (a mismatch refuses the client). */
+  fundingSource?: FundingSource;
+  /**
+   * The HTTP origins (`https://host[:port]`; plain http only where the client allows it) this client pays. The origin is
+   * derived from the actual request URL (for an invoice: its pay URL), never from the 402.
+   */
+  allowedOrigins?: readonly string[];
+  /** The merchant addresses (`payTo`) this client pays. */
+  allowedPayTo?: readonly string[];
+  /** The offer kinds this client pays (`native`, `kcc20`, `swap`, `intent`). */
+  allowedKinds?: readonly OfferKind[];
+}
+
 /** What `intentTerms` is asked about. */
 export interface IntentTermsRequest {
   offer: SelectedOffer;
@@ -244,8 +277,11 @@ export interface PaymentApproval {
   offer: SelectedOffer;
   url: string;
   method: string;
-  /** Why no explicit authorisation covers the offer. */
-  reasons: ('no_spend_cap' | 'no_kas_cap')[];
+  /**
+   * Why no explicit authorisation covers the offer: no `capabilities.maxAmount` ceiling for its asset, none for the KAS it
+   * takes, or a funding `policy` that is not complete.
+   */
+  reasons: ('no_spend_cap' | 'no_kas_cap' | 'incomplete_policy')[];
   /** What the built (not yet stored or sent) payment costs. */
   cost: PaymentCost;
   /**
@@ -336,6 +372,8 @@ export class KobX402Client {
   #retry: RetryPolicy;
   /** Paid requests in flight per `METHOD url` (one at a time per resource). */
   #locks = new Map<string, Promise<void>>();
+  /** `policy.allowedOrigins`, normalized (`undefined`: not pinned). */
+  #origins: Set<string> | undefined;
 
   constructor(options: KobX402ClientOptions) {
     if (!options.privateKeys?.length && !options.wallet) throw new KobX402Error('bad_request', 'privateKeys or a wallet signer is required');
@@ -347,6 +385,7 @@ export class KobX402Client {
     } catch (e) {
       throw new KobX402Error('bad_request', (e as Error).message);
     }
+    this.#origins = checkPolicy(options);
     this.#o = options;
     this.#store = options.store ?? new MemoryArtifactStore();
     this.#now = options.now ?? Date.now;
@@ -368,6 +407,8 @@ export class KobX402Client {
     const { paymentId: idOverride, requestHash: hashOverride, ...rest } = init;
     const expectedHref = normalizeUrl(url);
     assertSecureUrl(expectedHref, 'the resource URL', this.#o.allowInsecureHttp === true);
+    // the origin is the actual request URL's: checked against the policy before anything is sent
+    this.#assertOrigin(expectedHref, 'the resource URL');
     const method = normalizeMethod(rest.method);
     const bodyBytes = requestBody(rest.body);
     const baseInit: RequestInit = { ...rest, redirect: 'error' };
@@ -376,6 +417,7 @@ export class KobX402Client {
     if (first.status !== 402) return { response: first };
 
     const pr = await this.#readPaymentRequired(first);
+    assertResource(pr, expectedHref);
     const caps: PayerCapabilities = { ...(this.#o.capabilities ?? {}), network: this.#o.network };
     const ranked = rankOffers(pr, caps);
     if (ranked.length === 0) throw new KobX402Error('no_acceptable_offer', 'the 402 has no Kaspa exact offer this payer can pay');
@@ -491,6 +533,7 @@ export class KobX402Client {
     const url = invoice.payUrl;
     const method = 'POST';
     assertSecureUrl(url, 'the invoice pay URL', this.#o.allowInsecureHttp === true);
+    this.#assertOrigin(url, 'the invoice pay URL');
     const pr: PaymentRequired = { x402Version: X402_VERSION, resource: { url }, accepts: invoice.invoice.accepts };
     const caps: PayerCapabilities = { ...(this.#o.capabilities ?? {}), network: this.#o.network };
     const ranked = rankOffers(pr, caps).filter((o) => opts.acceptIndex === undefined || o.index === opts.acceptIndex);
@@ -905,6 +948,24 @@ export class KobX402Client {
 
   // ------------------------------------------------------------------------------------------------ internals
 
+  /** The funding source this client is configured with. */
+  #fundingSource(): FundingSource {
+    return this.#o.privateKeys?.length ? 'local-keys' : 'wallet';
+  }
+
+  /** A complete funding policy: the funding source, the origins, the recipients and the kinds are all pinned. */
+  #policyComplete(): boolean {
+    const p = this.#o.policy;
+    return !!p && p.fundingSource === this.#fundingSource() && !!p.allowedOrigins?.length && !!p.allowedPayTo?.length && !!p.allowedKinds?.length;
+  }
+
+  /** Refuses a request to an origin `policy.allowedOrigins` does not list (nothing has been sent yet). */
+  #assertOrigin(href: string, what: string): void {
+    if (!this.#origins) return;
+    const origin = new URL(href).origin;
+    if (!this.#origins.has(origin)) throw new KobX402Error('policy_violation', `${what} is on the origin ${origin}, which the funding policy does not allow`);
+  }
+
   /**
    * The most KAS one payment may take from the payer (amount, carrier, fee together): `maxPay.KAS` (or `maxPayAmount`)
    * when set, else `capabilities.maxAmount.KAS`.
@@ -923,12 +984,18 @@ export class KobX402Client {
    * The ranked offers that may be paid, best first, with what keeps each from being paid without asking. A swap (and an
    * intent) needs a `maxPay` bound for the pay asset it spends (the first of its payable assets that has one) and is left out
    * without one: `approve` cannot stand in for the bound the builder enforces. An intent also needs `intentTerms`. An offer whose merchant asset has no
-   * `capabilities.maxAmount` ceiling needs `approve` (`no_spend_cap`).
+   * `capabilities.maxAmount` ceiling needs `approve` (`no_spend_cap`), and so does every offer while the funding `policy` is not
+   * complete (`incomplete_policy`). An offer to a recipient or of a kind the policy does not list is left out.
    */
   #candidates(ranked: SelectedOffer[], caps: PayerCapabilities): { offer: SelectedOffer; reasons: PaymentApproval['reasons'] }[] {
     const out: { offer: SelectedOffer; reasons: PaymentApproval['reasons'] }[] = [];
+    const policy = this.#o.policy;
+    const complete = this.#policyComplete();
     for (const candidate of ranked) {
       let offer = candidate;
+      // the pinned recipients and kinds hold whatever `approve` would say
+      if (policy?.allowedPayTo && !policy.allowedPayTo.includes(offer.requirements.payTo)) continue;
+      if (policy?.allowedKinds && !policy.allowedKinds.includes(offer.kind)) continue;
       // an intent is paid only on the payer's own terms (`intentTerms`)
       if (offer.kind === 'intent' && !this.#o.intentTerms) continue;
       if (offer.kind === 'swap' || offer.kind === 'intent') {
@@ -938,6 +1005,7 @@ export class KobX402Client {
       }
       const reasons: PaymentApproval['reasons'] = [];
       if (caps.maxAmount?.[offer.asset] === undefined) reasons.push('no_spend_cap');
+      if (!complete) reasons.push('incomplete_policy');
       out.push({ offer, reasons });
     }
     return out;
@@ -1163,8 +1231,12 @@ export class KobX402Client {
         ...(info.details !== undefined ? { details: info.details } : {}),
       });
     }
-    // Unsigned metadata (the payment-identifier extension echoes the server's advertised schema; the resource) is
-    // not covered by any digest: it is set here, once, whatever the builder produced.
+    // The payment identifier is bound by the authorization digest (v2) the builder signed: it must be the one asked for.
+    // The rest of the extension (the server's advertised schema) and the resource are not covered by any digest: they are
+    // set here, once, whatever the builder produced.
+    if (result.paymentPayload.extensions?.[PAYMENT_IDENTIFIER_KEY]?.info?.id !== paymentId) {
+      throw new KobX402Error('payment_failed', 'built payment is inconsistent: the payment identifier it was signed under is not the requested one', { paymentId });
+    }
     result.paymentPayload.extensions = extensions;
     if (!result.paymentPayload.resource && a.resource) result.paymentPayload.resource = a.resource;
     this.#checkBuilt(result, offer, requestHash, paymentId, nowMs);
@@ -1360,6 +1432,48 @@ function paymentIdentifierExtensions(pr: PaymentRequired, id: string): NonNullab
   const ext: PaymentIdentifierExtension = { info: { ...(adv?.info ?? { required: false }), id } };
   if (adv?.schema) ext.schema = adv.schema;
   return { [PAYMENT_IDENTIFIER_KEY]: ext };
+}
+
+/** The normalized `policy.allowedOrigins` of `o`, after checking the policy against the client (`undefined`: no origin pinned). */
+function checkPolicy(o: KobX402ClientOptions): Set<string> | undefined {
+  const p = o.policy;
+  if (!p) return undefined;
+  const source: FundingSource = o.privateKeys?.length ? 'local-keys' : 'wallet';
+  if (p.fundingSource !== undefined && p.fundingSource !== source) {
+    throw new KobX402Error('bad_request', `the funding policy requires the source ${p.fundingSource}, this client funds from ${source}`);
+  }
+  for (const k of p.allowedKinds ?? []) {
+    if (!['native', 'kcc20', 'swap', 'intent'].includes(k)) throw new KobX402Error('bad_request', `unknown offer kind ${String(k)} in the funding policy`);
+  }
+  if (!p.allowedOrigins) return undefined;
+  const out = new Set<string>();
+  for (const origin of p.allowedOrigins) {
+    let u: URL;
+    try {
+      u = new URL(origin);
+    } catch (e) {
+      throw new KobX402Error('bad_request', `allowed origin ${origin} is not an absolute URL`, { cause: e });
+    }
+    if (u.username || u.password || u.search || u.hash || u.pathname !== '/' || origin.replace(/\/$/, '') !== u.origin) {
+      throw new KobX402Error('bad_request', `allowed origin ${origin} must be an origin only (scheme, host and port)`);
+    }
+    assertSecureUrl(u, 'an allowed origin', o.allowInsecureHttp === true);
+    out.add(u.origin);
+  }
+  return out;
+}
+
+/** The 402 must be about the resource the client requested: its `resource.url` is the actual request URL. */
+function assertResource(pr: PaymentRequired, expectedHref: string): void {
+  let advertised: string;
+  try {
+    advertised = normalizeUrl(pr.resource.url);
+  } catch (e) {
+    throw new KobX402Error('invalid_payment_required', `the 402's resource URL is invalid: ${pr.resource.url}`, { cause: e });
+  }
+  if (advertised !== expectedHref) {
+    throw new KobX402Error('invalid_payment_required', `the 402 advertises the resource ${advertised}, not the requested ${expectedHref}`);
+  }
 }
 
 function assertTarget(res: Response, expectedHref: string, stage: string): void {

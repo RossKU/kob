@@ -227,6 +227,14 @@ export class X402Bots {
         capabilities: caps,
         maxFeeSompi: maxFee.toString(),
         maxPay: { [m.covenantId]: payerMaxPayAmount(m) },
+        // binding 1.0.0: an unattended payer needs a complete funding policy (with the ceilings in `caps.maxAmount`): its local
+        // key, the soak merchant's origin and address, the kinds it pays
+        policy: {
+          fundingSource: 'local-keys',
+          allowedOrigins: [`http://${cfg.listen}`],
+          allowedPayTo: [key(this.env, cfg.merchantKey).address],
+          allowedKinds: ['native', 'kcc20', 'swap'],
+        },
         // every payment at the policy's HIGH rate (pickPayFee sets it before each one); one that cannot be built at it is rebuilt at the floor
         feeRate: () => this.payFee.rate,
         feeRateFloor: this.payFee.floor,

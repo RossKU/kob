@@ -276,6 +276,7 @@ test('invoices: native and kcc20 entries paid by KobX402Client.payInvoice throug
     store: new MemoryArtifactStore(),
     now: () => NOW_MS,
     capabilities: { tokens: { [k.asset]: '3000' }, maxAmount: { KAS: '1000000000', [k.asset]: '3000' } },
+    policy: { fundingSource: 'local-keys', allowedOrigins: ['https://pay.example'], allowedPayTo: [...new Set([token.payTo, native.payTo])], allowedKinds: ['native', 'kcc20'] },
   });
   const paid = await client.payInvoice(inv, invoices);
   assert.deepEqual([paid.kind, paid.acceptIndex, paid.invoiceId], ['native', 1, id]);

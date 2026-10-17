@@ -8,7 +8,7 @@ import { KobX402Error } from '../src/errors.ts';
 import { MemoryArtifactStore } from '../src/artifact-store.ts';
 import { buildOffer } from '../src/offers.ts';
 import type { PaymentRequired, SettlementResponse } from '../src/types.ts';
-import { MERCHANT, NATIVE_OFFER, NETWORK, PAYER, SPEND_CAPS, staticContext, startRaw } from './helpers/env.ts';
+import { MERCHANT, NATIVE_OFFER, NETWORK, PAYER, SPEND_CAPS, completePolicy, staticContext, startRaw } from './helpers/env.ts';
 import { stubWasm } from './helpers/stub-wasm.ts';
 
 const wasm = stubWasm();
@@ -18,8 +18,9 @@ function pr(url: string): PaymentRequired {
   return { x402Version: 2, resource: { url }, accepts: [offer] };
 }
 
-function client(store = new MemoryArtifactStore()) {
-  return new KobX402Client({ wasm: stubWasm(), network: NETWORK, payerAddress: PAYER, privateKeys: ['01'.repeat(32)], context: staticContext(), store, capabilities: { maxAmount: SPEND_CAPS } });
+/** A payer whose complete funding policy (binding 1.0.0) allows the merchant on `base`. */
+function client(base: string, store = new MemoryArtifactStore()) {
+  return new KobX402Client({ wasm: stubWasm(), network: NETWORK, payerAddress: PAYER, privateKeys: ['01'.repeat(32)], context: staticContext(), store, capabilities: { maxAmount: SPEND_CAPS }, policy: completePolicy(base) });
 }
 
 /** A merchant that issues a real 402 and answers the paid retry with whatever `paidAnswer` builds from the signed artifact. */
@@ -48,7 +49,7 @@ const ok = (res: import('node:http').ServerResponse, s: SettlementResponse): voi
 test('a correct PAYMENT-RESPONSE is accepted by the same rogue harness (control)', async () => {
   const srv = await rogue((txid, res) => ok(res, good(txid)));
   try {
-    const r = await client().fetch(srv.base + '/r');
+    const r = await client(srv.base).fetch(srv.base + '/r');
     assert.equal(await r.text(), 'resource');
   } finally {
     await srv.close();
@@ -74,7 +75,7 @@ test('a tampered PAYMENT-RESPONSE is rejected: wrong transaction id, wrong amoun
       else res.writeHead(200, { 'payment-response': typeof v === 'string' ? v : encodePaymentResponse(v) }).end('resource');
     });
     try {
-      await assert.rejects(client(store).fetch(srv.base + '/r'), (e: unknown) => e instanceof KobX402Error && (e.code === 'invalid_settlement' || e.code === 'payment_pending'), name);
+      await assert.rejects(client(srv.base, store).fetch(srv.base + '/r'), (e: unknown) => e instanceof KobX402Error && (e.code === 'invalid_settlement' || e.code === 'payment_pending'), name);
       const rec = (await store.list())[0]!;
       assert.equal(rec.status, 'pending', `${name}: the disclosed artifact stays pending, never settled`);
     } finally {
@@ -87,7 +88,7 @@ test('redirect on the challenge request is rejected before anything is signed', 
   const store = new MemoryArtifactStore();
   const other = await startRaw((_req, res) => res.writeHead(402, { 'payment-required': encodePaymentRequired(pr('http://elsewhere/')) }).end('{}'));
   const srv = await startRaw((_req, res) => res.writeHead(302, { location: other.base + '/steal' }).end());
-  const c = client(store);
+  const c = client(srv.base, store);
   try {
     await assert.rejects(c.fetch(srv.base + '/r'), (e: unknown) => e instanceof KobX402Error && e.code === 'redirect');
     assert.equal((await store.list()).length, 0);
@@ -112,7 +113,7 @@ test('redirect on the paid retry is rejected: the signature is never followed to
   });
   base = srv.base;
   try {
-    await assert.rejects(client(store).fetch(srv.base + '/r'), (e: unknown) => e instanceof KobX402Error && e.code === 'payment_pending');
+    await assert.rejects(client(srv.base, store).fetch(srv.base + '/r'), (e: unknown) => e instanceof KobX402Error && e.code === 'payment_pending');
     assert.equal(leaked, false);
     assert.equal((await store.list())[0]!.status, 'pending');
   } finally {
@@ -146,7 +147,7 @@ test('malformed 402 envelopes are errors, not payments', async () => {
   for (const body of ['not json', '{"x402Version":1}', '{"x402Version":2,"resource":{"url":"x"},"accepts":"no"}']) {
     const srv = await startRaw((_req, res) => res.writeHead(402).end(body));
     try {
-      await assert.rejects(client().fetch(srv.base + '/r'), (e: unknown) => e instanceof KobX402Error && e.code === 'invalid_payment_required', body);
+      await assert.rejects(client(srv.base).fetch(srv.base + '/r'), (e: unknown) => e instanceof KobX402Error && e.code === 'invalid_payment_required', body);
     } finally {
       await srv.close();
     }
@@ -155,10 +156,10 @@ test('malformed 402 envelopes are errors, not payments', async () => {
 
 test('a foreign-only 402 selects nothing and signs nothing', async () => {
   const store = new MemoryArtifactStore();
-  const foreign = { x402Version: 2, resource: { url: 'x' }, accepts: [{ scheme: 'exact', network: 'eip155:8453', amount: '1', asset: '0x0', payTo: '0x1', maxTimeoutSeconds: 60, extra: {} }] };
-  const srv = await startRaw((_req, res) => res.writeHead(402, { 'payment-required': encodePaymentRequired(foreign as unknown as PaymentRequired) }).end('{}'));
+  const foreign = (url: string) => ({ x402Version: 2, resource: { url }, accepts: [{ scheme: 'exact', network: 'eip155:8453', amount: '1', asset: '0x0', payTo: '0x1', maxTimeoutSeconds: 60, extra: {} }] });
+  const srv = await startRaw((req, res) => res.writeHead(402, { 'payment-required': encodePaymentRequired(foreign(`http://${req.headers.host}${req.url}`) as unknown as PaymentRequired) }).end('{}'));
   try {
-    await assert.rejects(client(store).fetch(srv.base + '/r'), (e: unknown) => e instanceof KobX402Error && e.code === 'no_acceptable_offer');
+    await assert.rejects(client(srv.base, store).fetch(srv.base + '/r'), (e: unknown) => e instanceof KobX402Error && e.code === 'no_acceptable_offer');
     assert.equal((await store.list()).length, 0);
   } finally {
     await srv.close();
@@ -181,7 +182,7 @@ test('the client never reuses the merchant-supplied requestHash: it derives its 
   });
   base = srv.base;
   try {
-    await assert.rejects(client().fetch(srv.base + '/r'));
+    await assert.rejects(client(srv.base).fetch(srv.base + '/r'));
     assert.match(seen, /^[0-9a-f]{64}$/);
     assert.notEqual(seen, '00'.repeat(32));
   } finally {

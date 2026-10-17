@@ -14,7 +14,7 @@ import { payInvoiceWithIntent } from '../src/intent.ts';
 import { KobX402Error } from '../src/errors.ts';
 import { ASSET_KAS, BINDING_EXACT, BINDING_INTENT, BINDING_SWAP, ROUTER_ARTIFACT_ID, TX_ENCODING } from '../src/types.ts';
 import type { PaymentPayload, PaymentRequirements, SettlementResponse } from '../src/types.ts';
-import { NETWORK, PAYER, SPEND_CAPS, SWAP_BOUNDS, TOKEN_A, TOKEN_B, staticContext } from './helpers/env.ts';
+import { NETWORK, PAYER, SPEND_CAPS, SWAP_BOUNDS, TOKEN_A, TOKEN_B, completePolicy, staticContext } from './helpers/env.ts';
 import { failure } from './helpers/stub-facilitator.ts';
 import { stubWasm } from './helpers/stub-wasm.ts';
 
@@ -29,7 +29,7 @@ function entry(amount: string, extra: Partial<PaymentRequirements['extra']> = {}
     asset,
     payTo: 'kaspatest:qmerchant',
     maxTimeoutSeconds: 600,
-    extra: { binding: BINDING_EXACT, profile: 'standard-native', finality: 'accepted', transactionEncoding: TX_ENCODING, payToScriptPublicKey: '0000', ...extra },
+    extra: { binding: BINDING_EXACT, profile: 'standard-native', paymentFlow: 'upfront', finality: 'accepted', transactionEncoding: TX_ENCODING, payToScriptPublicKey: '0000', ...extra },
   };
 }
 const NATIVE = entry('100000000');
@@ -89,6 +89,7 @@ function client(extra: Partial<KobX402ClientOptions> = {}) {
     capabilities: { maxAmount: SPEND_CAPS, tokens: { [TOKEN_A]: '100000', [TOKEN_B]: '100000' } },
     maxPay: SWAP_BOUNDS,
     retry: FAST,
+    policy: completePolicy(BASE, 'kaspatest:qmerchant'),
     ...extra,
   });
   return { c, wasm, store };

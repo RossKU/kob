@@ -1,4 +1,4 @@
-// Wire types of the Kaspa x402 `exact` binding (elldeeone/kaspa-x402 v1.0.0-rc.1, `kaspa-exact-v2`) plus the two
+// Wire types of the Kaspa x402 `exact` binding (elldeeone/kaspa-x402 v1.0.0, `kaspa-exact-v2`) plus the two
 // KOB contributions: the `kcc20` profile (`extra.token`), swap-and-pay (`extra.route`, binding `kob-swap-v1`), its intent
 // mode (binding `kob-intent-v1`) and invoices (`kob-invoice-v1`).
 // Mirrors `crates/kob-x402/src/wire.rs` field for field. Amounts are canonical decimal uint64 strings, hashes are
@@ -17,10 +17,15 @@ export const INVOICE_VERSION = 'kob-invoice-v1';
 export const TX_ENCODING = 'kaspa-sdk-safe-json-v2.0.0';
 export const ASSET_KAS = 'KAS';
 export const PAYLOAD_EXACT_TX = 'exact-transaction';
-/** Authorization: Schnorr signature over the request digest by a P2PK input (the binding). */
-export const AUTH_VERSION_SIGNED = 'kaspa-x402-exact-request-authorization-v1';
-/** Authorization: the digest is committed in the transaction payload (token profile, swap-and-pay). */
-export const AUTH_VERSION_PAYLOAD = 'kob-x402-payload-commitment-v1';
+/** Authorization: Schnorr signature over the request digest by a P2PK input (the binding). v2 binds the payment identifier. */
+export const AUTH_VERSION_SIGNED = 'kaspa-x402-exact-request-authorization-v2';
+/** Authorization: the digest is committed in the transaction payload (token profile, swap-and-pay). v2 binds the payment identifier. */
+export const AUTH_VERSION_PAYLOAD = 'kob-x402-payload-commitment-v2';
+/**
+ * `extra.paymentFlow` of every exact offer (required by the binding; an omitted flow is invalid): the payment settles before the
+ * resource is served. KOB's own profiles (kcc20, swap-and-pay, intents) carry it too.
+ */
+export const PAYMENT_FLOW_UPFRONT = 'upfront';
 export const PAYMENT_IDENTIFIER_KEY = 'payment-identifier';
 export const KASPA_EXTENSION_KEY = 'kaspa';
 
@@ -89,6 +94,8 @@ export interface RouteExtra {
 export interface ExactExtra {
   binding: string;
   profile: string;
+  /** Always `upfront` (`PAYMENT_FLOW_UPFRONT`). */
+  paymentFlow: string;
   finality: string;
   transactionEncoding: string;
   /** Serialized spk of `payTo` (version u16 BE hex || script hex). */

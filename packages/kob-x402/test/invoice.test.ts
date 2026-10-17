@@ -22,7 +22,7 @@ function kasOffer(amount: string): PaymentRequirements {
     asset: ASSET_KAS,
     payTo: 'kaspatest:qmerchant',
     maxTimeoutSeconds: 600,
-    extra: { binding: BINDING_EXACT, profile: 'standard-native', finality: 'accepted', transactionEncoding: TX_ENCODING, payToScriptPublicKey: '0000' },
+    extra: { binding: BINDING_EXACT, profile: 'standard-native', paymentFlow: 'upfront', finality: 'accepted', transactionEncoding: TX_ENCODING, payToScriptPublicKey: '0000' },
   };
 }
 
