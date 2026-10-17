@@ -331,7 +331,8 @@ small, .small { font-size: 0.85em; }
 .modal-foot { padding: 12px var(--gutter); border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 body.modal-open { overflow: hidden; }
 
-.toast-host { position: fixed; right: 12px; bottom: 12px; z-index: 200; display: flex; flex-direction: column; gap: 8px; max-width: calc(100vw - 24px); width: 360px; }
+/* top right, just below the sticky header (its bottom is measured: Toast.tsx), never over the wallet chip */
+.toast-host { position: fixed; right: 12px; top: 72px; z-index: 200; display: flex; flex-direction: column; gap: 8px; max-width: calc(100vw - 24px); width: 360px; }
 .toast {
   background: var(--surface); border: 1px solid var(--border); border-left-width: 5px; border-radius: var(--radius-sm);
   box-shadow: var(--shadow); padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start;

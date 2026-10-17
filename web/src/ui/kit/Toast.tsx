@@ -30,11 +30,33 @@ function ToastView({ item }: { item: ToastItem }) {
   );
 }
 
-/** Mount ONCE (App does). Show messages with `showToast(text, tone)` from toast-store. */
+/** The bottom of the sticky header (CSS px from the top of the viewport): the toasts sit just below it, never over the wallet chip. */
+function useHeaderBottom(): number {
+  const [bottom, setBottom] = useState(0);
+  useEffect(() => {
+    const header = document.querySelector('header.header');
+    if (!header) return;
+    const measure = () => setBottom(Math.max(0, Math.ceil(header.getBoundingClientRect().bottom)));
+    measure();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    ro?.observe(header);
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, { passive: true });
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure);
+    };
+  }, []);
+  return bottom;
+}
+
+/** Mount ONCE (App does). Show messages with `showToast(text, tone)` from toast-store. Top right, below the header (phones: top, full width). */
 export function ToastHost() {
   const list = useToasts();
+  const top = useHeaderBottom();
   return (
-    <div class="toast-host" aria-live="polite" data-testid="toast-host">
+    <div class="toast-host" aria-live="polite" data-testid="toast-host" style={{ top: `${top + 8}px` }}>
       {list.map((item) => (
         <ToastView key={item.id} item={item} />
       ))}

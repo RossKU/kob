@@ -63,6 +63,8 @@ test.describe('order ticket', () => {
 
     // one click: the final confirmation (what the order costs and does), Continue, then the wallet is asked once and signs exactly the transaction the node accepts
     await expect(page.getByTestId('order-place')).toBeEnabled();
+    // timers on a clock the test can move on (the line of the accepted order goes after a minute: below)
+    await page.clock.install();
     const placed = await placeOrderAndRead(page, mock);
     const shown = placed.receipt;
     expect(shown.title).toBe('Place order');
@@ -83,6 +85,13 @@ test.describe('order ticket', () => {
     expect(view.state.state).toMatchObject({ amountLeft: '300000000', price: '260000000', tip: '1000000', refundTip: '4900000' }); // 3 EXKCC at 2.6 KAS, tip 0.01 KAS
     // the form starts the next order empty
     await expect(page.getByTestId('order-amount')).toHaveValue('');
+
+    // the line of an accepted order goes about a minute after the network took it into a block (an error would stay)
+    await expect(page.getByTestId('order-status')).toHaveAttribute('data-confirmed', 'confirmed', { timeout: 30_000 });
+    await page.clock.fastForward(59_000);
+    await expect(page.getByTestId('order-status')).toBeVisible();
+    await page.clock.fastForward(2_000);
+    await expect(page.getByTestId('order-status')).toHaveCount(0);
 
     // the order is on the book, with its tokens in escrow
     const mine = await mock.ordersOf('alice');

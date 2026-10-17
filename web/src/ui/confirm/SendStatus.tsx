@@ -64,6 +64,8 @@ export type SendOutcome = { status: 'submitted'; txid: string; records: Placemen
 
 /** how long the status waits for the transaction to show up in a block */
 const ACCEPTANCE_TIMEOUT_MS = 90_000;
+/** how long the line of a transaction the network accepted stays */
+export const ACCEPTED_CLEAR_MS = 60_000;
 /** an auction confirmed in the app's popup later than this after the popup opened is planned again with the current clock before the wallet gets it */
 export const RETIME_AFTER_MS = 1_000;
 /** how often the open final confirmation plans the order again (the market and the clock now) */
@@ -331,6 +333,8 @@ export function useSend(): Sender {
         ok = false;
       }
       set(id, { phase: 'submitted', txid, confirmed: ok ? 'confirmed' : 'unconfirmed' });
+      // an accepted transaction's line goes after ACCEPTED_CLEAR_MS (unless a later send replaced it); an unconfirmed one or an error stays
+      if (ok) setTimeout(() => set(id, null), ACCEPTED_CLEAR_MS);
     })();
     return { status: 'submitted', txid, records };
   };
@@ -494,7 +498,7 @@ export function SendStatusLine(props: { sender: Sender; lead?: string | null; 'd
     );
   }
   return (
-    <div class={`send send-${s.phase}`} data-testid={props['data-testid'] ?? 'send-status'} data-phase={s.phase} role={bad ? 'alert' : 'status'} aria-live="polite">
+    <div class={`send send-${s.phase}`} data-testid={props['data-testid'] ?? 'send-status'} data-phase={s.phase} {...(s.confirmed ? { 'data-confirmed': s.confirmed } : {})} role={bad ? 'alert' : 'status'} aria-live="polite">
       {props.lead ? <span class="send-lead">{props.lead}</span> : null}
       {body}
       {s.phase === 'confirming' && s.table ? <ConfirmPopup status={s} onAnswer={props.sender.decide} /> : null}
