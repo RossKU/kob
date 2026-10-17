@@ -13,7 +13,8 @@ merchants and facilitators move together (**breaking**, wire, Rust and TypeScrip
   `escrow` is invalid). Every offer builder emits it (`native_requirements`, `kcc20_requirements`, `swap_requirements`,
   `intent_requirements`, the wasm builders, `buildOffer`), including KOB's own profiles (kcc20, swap-and-pay, intents: their
   resource is likewise served only after the settlement is accepted). Verifiers refuse an offer without it
-  (`invalid_payment_requirements` / `invalid_kaspa_x402_payload`), payers skip it (`classifyOffer`, `select_native_offer`).
+  (`invalid_payment_requirements` / `invalid_kaspa_x402_payload`), payers skip it (`classifyOffer`, `select_native_offer`), and an
+  invoice with such an entry is refused (`Invoice::validate`: at registration and in `x402CheckInvoice`).
   Requirements hashes, request hashes and invoice ids change with it.
 - **Request authorization v2**: the binding's Schnorr-signed digest is `kaspa-x402-exact-request-authorization-v2`, whose
   preimage adds `paymentIdentifier` (`paymentPayload.extensions["payment-identifier"].info.id`, verbatim). KOB's payload

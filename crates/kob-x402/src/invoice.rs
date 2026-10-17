@@ -139,6 +139,8 @@ impl Invoice {
             }
             r.amount_u64().map_err(|e| bad(format!("accepts[{i}]: {}", e.message)))?;
             r.profile().map_err(|e| bad(format!("accepts[{i}]: {}", e.message)))?;
+            // an entry without `paymentFlow: upfront` could never be paid (binding 1.0.0): refused at registration
+            r.check_payment_flow().map_err(|e| bad(format!("accepts[{i}]: {}", e.message)))?;
         }
         for (i, a) in self.accepts.iter().enumerate() {
             for b in &self.accepts[i + 1..] {
@@ -311,8 +313,13 @@ mod tests {
         assert!(inv.validate(Network::Mainnet, now, 86_400_000).is_err());
         assert_eq!(inv.kaspa_uri().unwrap(), format!("{pay_to}?amount=1.5"));
         assert_eq!(inv.find(&r).unwrap(), Some(0));
-        let twice = Invoice { accepts: vec![r.clone(), r], ..inv.clone() };
+        let twice = Invoice { accepts: vec![r.clone(), r.clone()], ..inv.clone() };
         assert!(twice.validate(Network::Testnet10, now, 86_400_000).is_err());
+        // an entry without the upfront payment flow is unpayable: refused
+        let mut no_flow = r.clone();
+        no_flow.extra.remove("paymentFlow");
+        let e = Invoice { accepts: vec![no_flow], ..inv.clone() }.validate(Network::Testnet10, now, 86_400_000).unwrap_err();
+        assert!(e.message.contains("paymentFlow"), "{e}");
         assert_eq!(kas_decimal(100_000_000), "1");
         assert_eq!(kas_decimal(1), "0.00000001");
         assert_eq!(invoice_url("https://f.example/", &id), format!("https://f.example/invoices/{id}"));
