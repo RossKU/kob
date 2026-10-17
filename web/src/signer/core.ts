@@ -25,8 +25,16 @@ interface FullPrivateKey extends SdkPrivateKey {
 
 export interface PendingRequest {
   id: string;
+  /** what Approve signs: the request, or the update of it shown last */
   built: BuiltTx;
   summary: SignerSummary;
+  /**
+   * how the last change came: `new` (the request), `silent` (an update that this frame's decoding finds no worse for the user than what they
+   * were shown: the figures follow in place), `shown` (an update that is worse somewhere: shown as updated, Approve held for a moment)
+   */
+  change: 'new' | 'silent' | 'shown';
+  /** what an update is compared with: the request as first shown, or the last update shown as such */
+  baseline: SignerSummary;
 }
 
 export interface SignerCoreDeps {
@@ -47,7 +55,8 @@ export interface SignerCore {
   /**
    * a validated app message: a `sign` request becomes the pending request to show (returned), anything else is handled here. A request that
    * re-times the one the user confirmed last (`retimeOf`, within RETIME_WINDOW_MS) is signed at once when this frame's own decoding finds that
-   * nothing the user approved got worse (retime.ts `sameOrBetter`); else it is shown like any request.
+   * nothing the user approved got worse (retime.ts `sameOrBetter`); else it is shown like any request. An `update` of the pending request
+   * replaces what it shows and what Approve signs (returned with its `change`); `clock` is the page's (null here).
    */
   receive(m: AppToSigner): PendingRequest | null;
   pending(): PendingRequest | null;
@@ -140,6 +149,20 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         if (pending?.id === m.id) drop('cancelled');
         return null;
       }
+      if (m.type === 'clock') return null;
+      if (m.type === 'update') {
+        // only the request on screen, until it is approved or rejected; an update this frame cannot read, or for another key, is dropped
+        if (!pending || pending.id !== m.id || !pub || m.built.sign.some((s) => s.pubkey !== pub)) return null;
+        let next: SignerSummary;
+        try {
+          next = summarize(kob, m.built, pub, m.tokens as TokenHint[]);
+        } catch {
+          return null;
+        }
+        const silent = next.problems === 0 && sameOrBetter(pending.baseline.decoded, next.decoded);
+        pending = { ...pending, built: m.built, summary: next, change: silent ? 'silent' : 'shown', baseline: silent ? pending.baseline : next };
+        return pending;
+      }
       if (!key || !pub) {
         post(toApp({ type: 'rejected', id: m.id, reason: 'no-key' }));
         return null;
@@ -171,10 +194,10 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
           return null;
         }
         approved = { id: m.id, summary, at: base.at };
-        post(toApp({ type: 'signed', id: m.id, signatures: sigs }));
+        post(toApp({ type: 'signed', id: m.id, txid: m.built.tx.id, signatures: sigs }));
         return null;
       }
-      pending = { id: m.id, built: m.built, summary };
+      pending = { id: m.id, built: m.built, summary, change: 'new', baseline: summary };
       return pending;
     },
     pending: () => pending,
@@ -190,7 +213,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         return false;
       }
       approved = { id, summary: req.summary, at: now() };
-      post(toApp({ type: 'signed', id, signatures: sigs }));
+      post(toApp({ type: 'signed', id, txid: req.built.tx.id, signatures: sigs }));
       return true;
     },
     reject(id, reason = 'user') {

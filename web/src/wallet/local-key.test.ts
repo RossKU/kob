@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createLocalKeyAdapter, SignerHost } from './local-key';
 import { signAndSubmit, SignFlowError } from './sign';
-import { WalletError } from './types';
+import { WalletError, type LiveSigning } from './types';
 import { createSignerCore, type PendingRequest } from '../signer/core';
 import { parseAppMessage } from '../signer/protocol';
 import { loadKaspaSdkNode } from '../data/kaspa-sdk.node';
@@ -81,6 +81,31 @@ describe('private-key adapter (the app side of the signer frame)', () => {
       expect(node.submissions).toHaveLength(1);
       expect(log.filter((l) => l.startsWith('request'))).toEqual(['request true', 'request false']);
     }
+  });
+
+  it('an update of the request shown in the frame is what Approve signs and what is sent (the open confirmation follows the market)', async () => {
+    let shownId = '';
+    const { adapter, connect, core } = pair((req) => ((shownId = req.id), 'ignore'));
+    await connect();
+    await adapter.connect(NET);
+    const first = buildSend();
+    const second = buildCancel();
+    const node = seeded(first);
+    node.seedFromInputs(second.tx);
+    let replace: ((b: BuiltTx) => void) | null = null;
+    const live: LiveSigning = { attach: (to) => void ((replace = to.replace), to.clock(1000n)) };
+    const sending = signAndSubmit({ kob, node, adapter, built: first, network: NET, live: { signing: live, submitByOf: () => undefined } });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(shownId).not.toBe('');
+    replace!(second);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(core.pending()?.built.tx.id).toBe(second.tx.id);
+    core.approve(shownId);
+    const res = await sending;
+    expect(res.built).toBe(second);
+    expect(res.txid).toBe(second.tx.id);
+    expect(node.submissions).toHaveLength(1);
+    expect(live.signed).toBe(second);
   });
 
   it('a rejection in the frame is the neutral "rejected by user" outcome; nothing is submitted', async () => {

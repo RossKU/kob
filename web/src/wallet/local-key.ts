@@ -16,6 +16,8 @@ export interface SignerHostEvents {
   onForgotten?(): void;
   /** a signing request is waiting for the user in the frame (true) or is settled (false): the frame must be shown meanwhile */
   onRequest?(active: boolean): void;
+  /** the frame's content height (CSS px): the frame is sized to it */
+  onHeight?(px: number): void;
 }
 
 interface Waiting {
@@ -23,6 +25,8 @@ interface Waiting {
   resolve(s: InputSignature[]): void;
   reject(e: WalletError): void;
   timer: ReturnType<typeof setTimeout>;
+  /** what the frame was given for this request, by transaction id: the request and every update of it */
+  shown: Map<string, BuiltTx>;
   /** a re-timed request shows the frame only after RETIME_SHOW_MS: the frame signs it at once when nothing got worse (no prompt to show) */
   show?: ReturnType<typeof setTimeout>;
 }
@@ -48,6 +52,8 @@ export class SignerHost {
   private seq = 0;
   /** the id of the request the frame signed last (what a re-timed request names) */
   private lastSigned: string | null = null;
+  /** the transaction the frame signed last (the request, or the update of it it showed last) */
+  private lastSignedTx: BuiltTx | null = null;
 
   constructor(private readonly post: (m: AppToSigner) => void, private readonly events: SignerHostEvents = {}) {}
 
@@ -68,9 +74,19 @@ export class SignerHost {
         this.settle(null, new WalletError('other', 'The private key signer forgot its key.'));
         this.events.onForgotten?.();
         return;
+      case 'height':
+        this.events.onHeight?.(m.px);
+        return;
       case 'signed':
         if (this.waiting?.id === m.id) {
+          // the frame names the transaction it signed: one it was given for this request, else the answer is not for what was asked
+          const tx = m.txid === undefined ? null : (this.waiting.shown.get(m.txid) ?? null);
+          if (m.txid !== undefined && !tx) {
+            this.settle(null, new WalletError('no-signature', 'The private key signer signed a transaction it was not given.'));
+            return;
+          }
           this.lastSigned = m.id;
+          this.lastSignedTx = tx;
           this.settle(m.signatures, null);
         }
         return;
@@ -107,12 +123,30 @@ export class SignerHost {
         this.settle(null, new WalletError('timeout', `Private key signer: no answer after ${Math.round(timeoutMs / 1000)}s.`));
       }, timeoutMs);
       const retimeOf = retime && this.lastSigned ? this.lastSigned : undefined;
-      this.waiting = { id, resolve, reject, timer };
+      this.waiting = { id, resolve, reject, timer, shown: new Map([[built.tx.id, built]]) };
       // a re-timed request is signed without a prompt when nothing got worse: the frame shows only if it is still waiting by then
       if (retimeOf) this.waiting.show = setTimeout(() => this.waiting?.id === id && this.events.onRequest?.(true), RETIME_SHOW_MS);
       else this.events.onRequest?.(true);
       this.post(toSigner({ type: 'sign', id, built, tokens, ...(retimeOf ? { retimeOf } : {}) }));
     });
+  }
+
+  /** The transaction the frame signed last (null: none, or one signed before the frame named it). */
+  signedTx(): BuiltTx | null {
+    return this.lastSignedTx;
+  }
+
+  /** The waiting request planned again: the frame shows it in its place when its own check lets it (signer/core.ts); nothing while none waits. */
+  update(built: BuiltTx, tokens: TokenHint[]): void {
+    const w = this.waiting;
+    if (!w) return;
+    w.shown.set(built.tx.id, built);
+    this.post(toSigner({ type: 'update', id: w.id, built, tokens }));
+  }
+
+  /** The node's DAA score now, for the times the frame says (display only). */
+  clock(daa: bigint): void {
+    this.post(toSigner({ type: 'clock', daa: daa.toString() }));
   }
 
   /** The user closed the frame while a request was open: it is cancelled (a neutral rejection). */
@@ -168,9 +202,15 @@ export function createLocalKeyAdapter(deps: LocalKeyDeps): WalletAdapter {
       const pubkey = pub();
       if (!host) throw new WalletError('other', 'No private key is loaded.');
       if (built.sign.some((s) => s.pubkey !== pubkey)) throw new WalletError('other', 'This transaction asks for a signature of another key.');
-      const sigs = await host.sign(built, deps.tokenHints?.(built) ?? [], opts.timeoutMs, opts.retime === true);
+      const pending = host.sign(built, deps.tokenHints?.(built) ?? [], opts.timeoutMs, opts.retime === true);
+      opts.live?.attach({ replace: (b) => host.update(b, deps.tokenHints?.(b) ?? []), clock: (daa) => host.clock(daa) });
+      const sigs = await pending;
+      // the transaction signed: the request, or the update of it the frame showed last
+      const signed = host.signedTx() ?? built;
+      if (opts.live) opts.live.signed = signed;
+      else if (signed !== built) throw new WalletError('no-signature', 'The private key signer signed another transaction than requested.');
       // one signature per request, in the request's order: anything else is not an answer to this request
-      if (sigs.length !== built.sign.length || sigs.some((s, i) => s.inputIndex !== built.sign[i]!.inputIndex)) {
+      if (sigs.length !== signed.sign.length || sigs.some((s, i) => s.inputIndex !== signed.sign[i]!.inputIndex)) {
         throw new WalletError('no-signature', 'The private key signer answered with other signatures than requested.');
       }
       return sigs;

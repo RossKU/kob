@@ -45,6 +45,11 @@ export interface SendJob {
    * or why it cannot be (SendStatus.tsx)
    */
   retime?: (() => Promise<SendJob | { stop: Blocked }>) | undefined;
+  /**
+   * plans the same order again on the environment now (the market and the clock as the page has them now, within the terms the ticket showed):
+   * what the open final confirmation follows while the user reads it (SendStatus.tsx); the job, or why there is none now
+   */
+  replan?: (() => Promise<SendJob | { stop: Blocked }>) | undefined;
   /** this job re-times the one the user confirmed just before (the private-key signer then signs it without asking again when nothing got worse) */
   retimed?: boolean | undefined;
 }

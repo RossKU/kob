@@ -27,8 +27,11 @@ export interface SummaryOrder {
   title: string;
   /** the token of the order (ticker hint and the covenant id's 8 + 8 hex) */
   token: string;
-  /** `id`: the confirmation row it comes from (confirm-model.ts `orderRows`) */
-  rows: { id?: string; label: string; value: string }[];
+  /**
+   * `id`: the confirmation row it comes from (confirm-model.ts `orderRows`); `daa`: the DAA score of a start or an expiry the row names (said
+   * from the clock as "in 28 s" where one is known)
+   */
+  rows: { id?: string; label: string; value: string; daa?: string }[];
   exit: SummaryOrder | null;
 }
 
@@ -85,12 +88,18 @@ function orderSummary(d: OrderDescription, extra: Parameters<typeof orderRows>[1
     token: f.ref.display,
     // a price of a token whose decimals the frame does not know (no hint: an unlisted token's first order) is per `scale` base units:
     // the frame keeps that detail, as amounts there are base units too (TN10 2026-10-15 B-13: "1000 base units" at "0.5 KAS")
-    rows: orderRows(d, extra, f).map((r) => ({ id: r.id, label: r.label, value: r.detail === perScale && f.ref.decimals === null ? `${r.value} ${r.detail}` : r.value })),
+    rows: orderRows(d, extra, f).map((r) => ({ id: r.id, label: r.label, value: r.detail === perScale && f.ref.decimals === null ? `${r.value} ${r.detail}` : r.value, ...timeOf(r, d) })),
     exit: exit ? { ...exit, title: t('confirm.exitOf', { title: exit.title }) } : null,
   };
 }
 
 const signed = (v: bigint, text: (abs: bigint) => string) => (v < 0n ? `−${text(-v)}` : `+${text(v)}`);
+
+/** The DAA score a start or expiry row says as a DAA score (not an if-done exit's open expiry). */
+function timeOf(r: { id: string; value: string }, d: OrderDescription): { daa?: string } {
+  const daa = r.id === 'activeFrom' ? d.activeFrom : r.id === 'expiry' ? d.expiryDaa : 0n;
+  return daa > 0n && r.value === t('confirm.f.daa', { daa: daa.toString() }) ? { daa: daa.toString() } : {};
+}
 
 /** The chain-side price rows of a plain order, said in the view's terms instead on the flipped view. */
 const CHAIN_PRICE_ROWS = new Set(['price', 'allIn', 'auction']);

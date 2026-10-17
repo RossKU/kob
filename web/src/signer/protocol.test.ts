@@ -57,6 +57,22 @@ describe('signer protocol: what the signer accepts from the app', () => {
   });
 });
 
+describe('signer protocol: updates of the request on screen, the clock, the frame height', () => {
+  it('an update carries the same shapes as a request; the clock is a DAA score; the frame says its height and the transaction it signed', () => {
+    const built = buildSend();
+    expect(parseAppMessage(clone({ p: P, type: 'update', id: 'r1', built, tokens: [] }))?.type).toBe('update');
+    expect(parseAppMessage({ p: P, type: 'update', id: 'r1', built: { ...built, sign: [] }, tokens: [] })).toBeNull();
+    expect(parseAppMessage({ p: P, type: 'update', id: 'r1', built, tokens: [], retimeOf: 'r0' })).toBeNull();
+    expect(parseAppMessage({ p: P, type: 'clock', daa: '1000330' })).toEqual({ p: P, type: 'clock', daa: '1000330' });
+    for (const daa of ['', '-1', '1e9', 12, '1'.repeat(21)]) expect(parseAppMessage({ p: P, type: 'clock', daa })).toBeNull();
+    expect(parseSignerMessage({ p: P, type: 'height', px: 612 })).toEqual({ p: P, type: 'height', px: 612 });
+    for (const px of [-1, 1.5, '600', 1e6]) expect(parseSignerMessage({ p: P, type: 'height', px })).toBeNull();
+    const sig = { inputIndex: 0, signature: 'ab'.repeat(64) };
+    expect(parseSignerMessage({ p: P, type: 'signed', id: 'r1', txid: built.tx.id, signatures: [sig] })).toEqual({ p: P, type: 'signed', id: 'r1', txid: built.tx.id, signatures: [sig] });
+    expect(parseSignerMessage({ p: P, type: 'signed', id: 'r1', txid: 'zz', signatures: [sig] })).toBeNull();
+  });
+});
+
 describe('signer protocol: what the app accepts from the signer', () => {
   const sig = { inputIndex: 2, signature: 'ab'.repeat(64) + '01' };
   it('ready, connected, signed, rejected, forgotten', () => {

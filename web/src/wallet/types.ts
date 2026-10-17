@@ -63,7 +63,20 @@ export interface WalletAdapter {
   subscribe?(onEvent: (e: WalletEvent) => void, opts?: WalletSubscribeOptions): () => void;
 }
 
+/**
+ * A transaction the wallet shows for approval that the app may replace while the user reads it (the private-key signer: the same request
+ * planned again with the clock and the market now; the frame checks each one itself: signer/core.ts).
+ */
+export interface LiveSigning {
+  /** the wallet hands over what replaces the transaction it shows, and what tells it the clock it says its times from; until it signs */
+  attach(to: { replace(built: BuiltTx): void; clock(daa: bigint): void }): void;
+  /** set by the wallet once it signed: the transaction it signed (the one it was given, or a replacement) */
+  signed?: BuiltTx;
+}
+
 export interface SignOptions {
+  /** the transaction may be replaced while the user reads it (only a wallet that shows the app's updates takes it: the private-key signer) */
+  live?: LiveSigning;
   /** network name used by wallets that need it (Kastle) */
   network?: string;
   timeoutMs?: number;

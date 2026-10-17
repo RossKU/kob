@@ -119,7 +119,9 @@ const readTable = (root: Element, ids: TableIds) => {
   for (const el of byId(ids.summary)?.querySelectorAll(ids.line) ?? []) if (!el.classList.contains(ids.feeLine)) lines.push({ label: text(el.querySelector('dt')), value: text(el.querySelector('dd')) });
   const order = (el: Element): { title: string; token: string; rows: Record<string, string>; exit: unknown } => {
     const rows: Record<string, string> = {};
-    for (const l of el.querySelectorAll(':scope > dl > ' + ids.line)) rows[text(l.querySelector('dt'))] = text(l.querySelector('dd'));
+    // a start or an expiry is said from the clock ("in 28 s" over its DAA score): read as the DAA score it carries, as the row says it without a clock
+    const value = (dd: Element | null) => (dd?.getAttribute('data-daa') ? 'DAA score ' + dd.getAttribute('data-daa') : text(dd));
+    for (const l of el.querySelectorAll(':scope > dl > ' + ids.line)) rows[text(l.querySelector('dt'))] = value(l.querySelector('dd'));
     const exit = el.querySelector(':scope > section');
     return { title: text(el.querySelector(':scope > ' + ids.head)), token: text(el.querySelector(':scope > ' + ids.token)), rows, exit: exit ? order(exit) : null };
   };

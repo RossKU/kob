@@ -111,7 +111,7 @@ export function DepthChart(props: { series: DepthSeries | null; loading: boolean
         {hover ? (
           <div class="depth-tip" style={{ left: `${Math.min(Math.max(hover.x + 10, 0), Math.max(0, width - 170))}px`, top: `${Math.max(0, hover.y - 44)}px` }}>
             <div class={hover.side === 'bid' ? 'buy' : 'sell'}>{t(hover.side === 'bid' ? 'market.depth.bids' : 'market.depth.asks')}</div>
-            <div>{t('market.depth.tip', { price: fmtPrice(hover.price, props.dp), priceUnit: props.priceUnit ?? `${props.ticker} / KAS`, amount: fmtFixed(hover.cum, props.amountDp ?? 2), ticker: props.ticker })}</div>
+            <div>{t('market.depth.tip', { price: fmtPrice(hover.price, props.dp), priceUnit: props.priceUnit ?? t('market.stats.unitOf', { base: props.ticker, quote: 'KAS' }), amount: fmtFixed(hover.cum, props.amountDp ?? 2), ticker: props.ticker })}</div>
           </div>
         ) : null}
       </div>

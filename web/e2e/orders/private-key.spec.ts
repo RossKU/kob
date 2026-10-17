@@ -308,13 +308,26 @@ test('a late Approve (9 s in the frame) on a market order: the frame is not show
   // the flipped view's own words: a sale of KAS (on chain a market buy of the token)
   expect(receipt.orders.map((o) => o.title)).toEqual(['Sell KAS · market (auction)']);
   expect(receipt.orders[0]!.token).toMatch(/· on chain: Buy market order [(]auction[)]$/);
-  const size = await f.locator('body').evaluate(() => ({ table: document.documentElement.scrollHeight, frame: window.innerHeight }));
-  test.info().annotations.push({ type: 'signer-table', description: `table ${size.table}px in a frame of ${size.frame}px (viewport ${JSON.stringify(page.viewportSize())})` });
+  // the frame is as tall as its table: no empty space below Reject / Approve, and nothing to scroll
+  await expect
+    .poll(async () => f.locator('body').evaluate(() => ({ content: Math.ceil(document.getElementById('signer')!.getBoundingClientRect().height), frame: window.innerHeight })), { timeout: 5_000 })
+    .toMatchObject({ frame: expect.any(Number) });
+  const size = await f.locator('body').evaluate(() => ({ content: Math.ceil(document.getElementById('signer')!.getBoundingClientRect().height), frame: window.innerHeight }));
+  test.info().annotations.push({ type: 'signer-table', description: `content ${size.content}px in a frame of ${size.frame}px (viewport ${JSON.stringify(page.viewportSize())})` });
+  expect(Math.abs(size.frame - size.content), 'the frame fits its content').toBeLessThanOrEqual(2);
+  // the table follows the market and the clock while it is open: its start is said from the clock and moves on
+  const start = f.getByTestId('signer-order-0').locator('dd[data-daa]').first();
+  await expect(start).toContainText(/^(now|in \d+ s)DAA \d+$/, { timeout: 5_000 });
+  const daa0 = Number(await start.getAttribute('data-daa'));
   // the user reads for 9 s (the mock chain advances 10 DAA a second): the auction in the table began on the clock of the click
   await readSignerFrame(page);
   await page.waitForTimeout(Math.max(0, 9_000 - (Date.now() - t0)));
   await expect(f.getByTestId('signer-approve')).toBeEnabled();
+  expect(Number(await start.getAttribute('data-daa')), 'the start shown moved on with the clock').toBeGreaterThan(daa0);
+  // a plan no worse for the user is taken without a note
+  await expect(f.getByTestId('signer-updated')).toBeHidden();
   const approvedAt = await mockClock(mock);
+  const shownStart = Number(await start.getAttribute('data-daa'));
   await f.getByTestId('signer-approve').click();
   const txid = await waitSubmitted(page);
   const placed = await placedBy(mock, txid);
@@ -328,5 +341,8 @@ test('a late Approve (9 s in the frame) on a market order: the frame is not show
   const state = placed.views[0].state.state;
   expect(placed.views[0].contract).toBe('KobBid');
   expect(Number(state.activeFrom), 'activeFrom >= the DAA at Approve').toBeGreaterThanOrEqual(approvedAt.daa);
+  // what was signed is what the table showed at Approve (re-timed after it only if the clock passed its start meanwhile)
+  expect(Number(state.activeFrom)).toBeGreaterThanOrEqual(shownStart);
+  expect(Number(state.activeFrom) - shownStart).toBeLessThanOrEqual(40);
   expect(Number(state.expiryDaa)).toBeGreaterThan(Number(state.activeFrom));
 });

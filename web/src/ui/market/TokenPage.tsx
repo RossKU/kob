@@ -314,7 +314,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       }
       depth={
         <Section title={t('market.depth.title')} data-testid="depth-section" class="mkt-area-depth mkt-card">
-          <DepthChart series={depthSeries} loading={!!indexer && depth.data === undefined && !depth.error} unavailable={!!depth.error && !!book.error && !depthSeries} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? `KAS / ${name}` : `${name} / KAS`} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
+          <DepthChart series={depthSeries} loading={!!indexer && depth.data === undefined && !depth.error} unavailable={!!depth.error && !!book.error && !depthSeries} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? t('market.stats.unitOf', { base: 'KAS', quote: name }) : t('market.stats.unitOf', { base: name, quote: 'KAS' })} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
         </Section>
       }
       tape={

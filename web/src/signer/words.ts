@@ -74,3 +74,19 @@ export function div(a: bigint, b: bigint, mode: Rounding): bigint {
   if (mode === 'nearest' && r * 2n >= b) return q + 1n;
   return q;
 }
+
+/** DAA scores per second (the network's nominal rate: the frame says times from a clock it does not verify, so the nominal rate is enough). */
+export const DAA_PER_SECOND = 10n;
+
+/**
+ * How far DAA score `target` is from `now`, as a reader says it: "now" when it is reached, else "in 28 s", "in 5 min", "in 3 h", "in 12 d"
+ * (`words`: the sentences of each step, the caller's dictionary).
+ */
+export function untilWords(target: bigint, now: bigint, words: { now: string; s(n: number): string; min(n: number): string; h(n: number): string; d(n: number): string }): string {
+  const sec = Number((target - now) / DAA_PER_SECOND);
+  if (sec <= 0) return words.now;
+  if (sec < 90) return words.s(sec);
+  if (sec < 90 * 60) return words.min(Math.round(sec / 60));
+  if (sec < 36 * 3600) return words.h(Math.round(sec / 3600));
+  return words.d(Math.round(sec / 86400));
+}

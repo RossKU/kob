@@ -7,6 +7,10 @@ import { MAKER_PK, MAKER_SK, OTHER_SK, TOKEN_COV_ID } from '../testing/token-fix
 import { assertConsensusValid, buildCancel, buildSend, kob } from '../testing/wallet-fixtures';
 import { decodeSigning } from '../kob/decode';
 import type { BuiltTx } from '../kob/types';
+import { planOrder } from '../kob/plan';
+import { MAKER_SK as FIXTURE_SK, level } from '../testing/fixtures';
+import { buildIntent } from '../ui/ticket/form-state';
+import { CTX, TOKEN, form, ticketEnv } from '../ui/ticket/ticket-fixtures';
 
 const sdk = loadKaspaSdkNode();
 const P = SIGNER_PROTOCOL;
@@ -211,5 +215,49 @@ describe('signer core: a request re-timed after the user confirmed it', () => {
     core.reject('r4');
     now.t += 121_000;
     expect(send({ ...signReq(buildSend(), 'r5'), retimeOf: 'r2' })).not.toBeNull();
+  });
+});
+
+describe('signer core: the request on screen follows the market and the clock (updates of the app)', () => {
+  // a market buy planned at the click, again 15 s later (only its times move), and on a dearer book (a worse start and worst price)
+  const at = (daa: bigint, o: Parameters<typeof ticketEnv>[0] = {}) => {
+    const env = ticketEnv(o);
+    return { ...env, clock: { ...env.clock, daa: env.clock.daa + daa, unixSeconds: env.clock.unixSeconds + daa / 10n } };
+  };
+  const market = buildIntent(form('market', 'buy', { amount: '2' }), CTX).intent!;
+  const first = planOrder(at(0n), market).built!;
+  const later = planOrder(at(150n), market).built!;
+  const dearer = planOrder(at(300n, { book: { asks: [level(260_000_000n, 100n * TOKEN, 1)], bids: [level(245_000_000n, 10n * TOKEN, 1)] } }), market).built!;
+  const live = () => {
+    const sent: SignerToApp[] = [];
+    const core = createSignerCore({ sdk, kob, post: (m) => sent.push(structuredClone(m)) });
+    const send = (m: Record<string, unknown>) => core.receive(parseAppMessage(structuredClone({ p: P, ...m }))!);
+    core.importKey(FIXTURE_SK);
+    return { core, sent, send };
+  };
+  const update = (built: BuiltTx, id = 'r1') => ({ type: 'update' as const, id, built, tokens: [] });
+
+  it('takes an update no worse for the user silently, one worse as shown (it becomes what the next is compared with), and Approve signs what is shown', () => {
+    const { core, sent, send } = live();
+    expect(send({ type: 'sign', id: 'r1', built: first, tokens: [] })).toMatchObject({ change: 'new' });
+    expect(send(update(later))).toMatchObject({ change: 'silent', built: later });
+    expect(send(update(dearer))).toMatchObject({ change: 'shown', built: dearer });
+    // compared with the dearer one now: the same again is silent
+    expect(send(update(dearer))).toMatchObject({ change: 'silent' });
+    expect(core.approve('r1')).toBe(true);
+    expect(sent.at(-1)).toMatchObject({ type: 'signed', id: 'r1', txid: dearer.tx.id });
+    // after Approve nothing more is taken
+    expect(send(update(later))).toBeNull();
+    expect(core.pending()).toBeNull();
+  });
+
+  it('drops an update of another request, of another key, or of nothing; the clock is the page\'s', () => {
+    const { core, send } = live();
+    expect(send(update(later))).toBeNull();
+    send({ type: 'sign', id: 'r1', built: first, tokens: [] });
+    expect(send(update(later, 'r9'))).toBeNull();
+    expect(send(update(buildSend()))).toBeNull(); // another key's inputs
+    expect(core.pending()!.built.tx.id).toBe(first.tx.id);
+    expect(send({ type: 'clock', daa: '123' })).toBeNull();
   });
 });

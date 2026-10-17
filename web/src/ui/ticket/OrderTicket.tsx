@@ -464,6 +464,11 @@ export function OrderTicket(props: OrderTicketProps) {
         gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown, label, openToken) : undefined,
         submitByDaa: auctionSubmitBy(planned.states, clock.daa),
         retime: retimer(env0, refsNow, intent, null, label, openToken),
+        // the open final confirmation follows the market and the clock: the same order planned again, as at a click now
+        replan: async () => {
+          const again = await prepareLevel(intent0, index, levels, shown);
+          return 'built' in again ? again : { stop: { code: again.code ?? 'plan', text: again.text } };
+        },
       };
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);

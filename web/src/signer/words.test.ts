@@ -1,6 +1,6 @@
 // The signer's numbers at a reader's precision: exact when short, a few significant digits otherwise, and a bound never rounded the kind way.
 import { describe, expect, it } from 'vitest';
-import { decimalText, kasPerTokenWords, kasWords, tokenWords, tokensPerKasWords } from './words';
+import { decimalText, kasPerTokenWords, kasWords, tokenWords, tokensPerKasWords, untilWords } from './words';
 
 describe('decimalText', () => {
   it('keeps short values exact and cuts long ones to significant digits, grouped', () => {
@@ -35,5 +35,17 @@ describe('the words of the sentence', () => {
     expect(tokensPerKasWords(2_000_000n * 100_000_000n, 100_000_000n, 8)).toBe('0.0000005');
     // 27.66 KAS per TUSD: about 0.0361533 TUSD per KAS
     expect(tokensPerKasWords(2_766_000_000n, 100_000_000n, 8)).toBe('0.0361533');
+  });
+});
+
+describe('untilWords', () => {
+  const words = { now: 'now', s: (n: number) => 'in ' + n + ' s', min: (n: number) => 'in ' + n + ' min', h: (n: number) => 'in ' + n + ' h', d: (n: number) => 'in ' + n + ' d' };
+  it('says a DAA score from the clock: now once reached, then seconds, minutes, hours, days (10 DAA a second)', () => {
+    expect(untilWords(1000n, 1000n, words)).toBe('now');
+    expect(untilWords(900n, 1000n, words)).toBe('now');
+    expect(untilWords(1280n, 1000n, words)).toBe('in 28 s');
+    expect(untilWords(1000n + 3000n, 1000n, words)).toBe('in 5 min');
+    expect(untilWords(1000n + 36_000n * 3n, 1000n, words)).toBe('in 3 h');
+    expect(untilWords(1000n + 864_000n * 12n, 1000n, words)).toBe('in 12 d');
   });
 });

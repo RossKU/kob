@@ -140,10 +140,17 @@ test.describe('order ticket', () => {
     expect(first.title).toBe('Place order');
     expect(first.orders.map((o) => o.title)).toEqual(['Buy market order (auction)']);
     expect(first.updated).toBe(false);
-    // the user reads for ~3 s (the mock chain advances 10 DAA a second): the auction the popup showed started on the clock of the click
-    await page.waitForTimeout(3_000);
+    // the popup follows the market and the clock while it is open: its start moves on with the node clock, said as a time from now
+    const start = page.getByTestId('confirm-order-order-0').locator('dd[data-daa]').first();
+    const daa0 = Number(await start.getAttribute('data-daa'));
+    await expect(start).toContainText(/^(now|in \d+ s)DAA \d+$/, { timeout: 5_000 });
+    // the user reads for ~4 s (the mock chain advances 10 DAA a second)
+    await page.waitForTimeout(4_000);
     expect(await wallet!.calls()).toHaveLength(0);
+    const daa1 = Number(await start.getAttribute('data-daa'));
+    expect(daa1, 'the start the popup shows moved on with the clock').toBeGreaterThan(daa0);
     const confirmedAt = await mockClock(mock);
+    const shownStart = Number(await start.getAttribute('data-daa'));
     await page.getByTestId('confirm-order-ok').click();
     // nothing got worse: no second popup, the wallet is asked directly (once)
     const txid = await waitSubmitted(page);
@@ -157,6 +164,9 @@ test.describe('order ticket', () => {
     const state = placed.views[0].state.state;
     expect(placed.views[0].contract).toBe('KobBid');
     expect(Number(state.activeFrom), 'activeFrom (the auction start) >= the DAA at Confirm').toBeGreaterThanOrEqual(confirmedAt.daa);
+    // what was sent is what the popup showed at Continue (a later plan only if the popup's last one was more than two rounds old)
+    expect(Number(state.activeFrom) - shownStart, 'the start sent is the one shown, or a moment later').toBeLessThanOrEqual(40);
+    expect(Number(state.activeFrom)).toBeGreaterThanOrEqual(shownStart);
     expect(Number(state.expiryDaa)).toBeGreaterThan(Number(state.activeFrom));
   });
 

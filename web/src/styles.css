@@ -427,4 +427,5 @@ a.explorer-link:hover { color: var(--primary); border-bottom-color: var(--primar
 .signer-box { width: min(440px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .signer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 4px 4px 12px; border-bottom: 1px solid var(--border); }
 .signer-frame { display: block; width: 100%; border: 0; height: 120px; }
-.signer-frame-sign, .signer-frame-hidden { height: min(720px, calc(100vh - 110px)); }
+/* until the frame reports its content height (SignerFrame.tsx), a request gets the viewport */
+.signer-frame-sign, .signer-frame-hidden { height: calc(100vh - 110px); }

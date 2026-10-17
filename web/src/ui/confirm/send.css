@@ -22,3 +22,11 @@
 .send-token { margin: 0 0 4px; color: var(--muted); overflow-wrap: anywhere; }
 .send-order .send-order { margin-left: 10px; }
 .send-problems { color: var(--bad); font-weight: 600; }
+.send-line dd .send-rel { display: block; }
+.send-line dd .send-daa { display: block; color: var(--muted); font-size: 0.8em; }
+/* a figure the last plan changed flashes (two names, so that the next change restarts the animation) */
+.send-changed-0 dd, .send-changed-1 dd { animation-duration: 1.2s; animation-timing-function: ease-out; }
+.send-changed-0 dd { animation-name: send-flash-0; }
+.send-changed-1 dd { animation-name: send-flash-1; }
+@keyframes send-flash-0 { from { background: var(--warn-bg); } to { background: transparent; } }
+@keyframes send-flash-1 { from { background: var(--warn-bg); } to { background: transparent; } }

@@ -13,7 +13,7 @@ import type { NodeApi, NodeUtxo } from '../data/node';
 import { NodeError, describeNodeError } from '../data/node-error';
 import { confirmInputsOnNode } from '../kob/node-verify';
 import { normalizeNetwork, spkStringToAddress, type KaspaSdk } from '../data/kaspa-sdk';
-import { WalletError, type WalletAdapter } from './types';
+import { WalletError, type WalletAdapter, type LiveSigning } from './types';
 
 export type SignStage = 'signing' | 'finalizing' | 'validating' | 'submitting' | 'submitted';
 export type FailedStage = Exclude<SignStage, 'submitted'>;
@@ -70,6 +70,11 @@ export interface SignAndSubmitArgs {
   submitByDaa?: bigint;
   /** the transaction re-times the one the wallet signed last (`SignOptions.retime`) */
   retime?: boolean;
+  /**
+   * the transaction may be replaced while the user reads it (`SignOptions.live`): `submitByOf` gives the `submitByDaa` of a replacement the
+   * wallet signed, which is then the one finalized, checked and sent
+   */
+  live?: { signing: LiveSigning; submitByOf(built: BuiltTx): bigint | undefined };
 }
 
 /**
@@ -119,6 +124,8 @@ async function assertClockBefore(node: NodeApi, by: bigint): Promise<void> {
 export interface SignAndSubmitResult {
   /** id returned by the node */
   txid: string;
+  /** the transaction sent: `built`, or the replacement of it the wallet signed (`live`) */
+  built: BuiltTx;
   signed: SignedTx;
   /** network fee, sompi */
   fee: bigint;
@@ -159,7 +166,9 @@ async function assertInputsOnNode(node: NodeApi, built: BuiltTx, toAddress: (spk
 }
 
 export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmitResult> {
-  const { kob, node, adapter, built, network } = a;
+  const { kob, node, adapter, network } = a;
+  let built = a.built;
+  let submitByDaa = a.submitByDaa;
   const stage = (s: SignStage, info?: { txid?: string }) => {
     try {
       a.onStage?.(s, info);
@@ -173,10 +182,16 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
   if (a.inputAddress) await assertInputsOnNode(node, built, a.inputAddress);
   let sigs;
   try {
-    sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}) });
+    sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.live ? { live: a.live.signing } : {}) });
   } catch (e) {
     const code = e instanceof WalletError ? e.code : 'other';
     throw new SignFlowError('signing', e, msg(e), code);
+  }
+  // the wallet signed a replacement it was given while the user read: that one is finalized, checked and sent
+  const replaced = a.live?.signing.signed;
+  if (a.live && replaced && replaced !== built) {
+    built = replaced;
+    submitByDaa = a.live.submitByOf(replaced);
   }
 
   stage('finalizing');
@@ -196,7 +211,7 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
     }
   }
 
-  if (a.submitByDaa !== undefined) await assertClockBefore(node, a.submitByDaa);
+  if (submitByDaa !== undefined) await assertClockBefore(node, submitByDaa);
 
   stage('submitting');
   let txid: string;
@@ -211,7 +226,7 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
     throw new SignFlowError('submitting', null, `The node answered with transaction id ${String(txid).slice(0, 16)}... but the signed transaction is ${signed.tx.id.slice(0, 16)}...: its answer cannot be trusted. Check the explorer before retrying.`, 'txid-mismatch');
   }
   stage('submitted', { txid });
-  return { txid, signed, fee: BigInt(signed.fee.fee) };
+  return { txid, built, signed, fee: BigInt(signed.fee.fee) };
 }
 
 // ------------------------------------------------------------------------------------------------ acceptance

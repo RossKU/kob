@@ -9,6 +9,7 @@
   --accent-fg: #ffffff;
   --bad: #b91c1c;
   --ok: #047857;
+  --flash: #fde68a;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -20,6 +21,7 @@
     --accent-fg: #042f2e;
     --bad: #f87171;
     --ok: #34d399;
+    --flash: #713f12;
   }
 }
 * { box-sizing: border-box; }
@@ -47,3 +49,10 @@ button:disabled { color: var(--muted); background: var(--bg); border-color: var(
 .order h2 { font-size: 0.95rem; margin: 0 0 2px; }
 .order .token { margin: 0 0 4px; overflow-wrap: anywhere; }
 .order .order { margin-left: 10px; }
+.line dd .rel { display: block; }
+.line dd .daa { display: block; color: var(--muted); font-size: 0.8em; }
+/* a changed figure: a background flash, never an opacity (the visibility check counts opacity) */
+.changed { animation: flash 1.2s ease-out; }
+@keyframes flash { from { background: var(--flash); } to { background: transparent; } }
+.updated { margin: 0 0 8px; font-weight: 600; color: var(--fg); background: var(--flash); padding: 4px 8px; border-radius: 6px; }
+.updated[hidden] { display: none; }
