@@ -559,7 +559,8 @@ export function OrderTicket(props: OrderTicketProps) {
     } else if (placed > 0) {
       setLadderNote({ done: false, text: t('ticket.ladder.stopped', { placed, levels }) });
     }
-    void refresh();
+    // a failed read is already the environment's error, which the ticket shows: caught, so it is not also an unhandled rejection
+    void refresh().catch(() => null);
   };
 
   // ---- status lines: what is needed and what is missing
@@ -664,7 +665,7 @@ export function OrderTicket(props: OrderTicketProps) {
             key={n.code}
             tone={n.tone}
             data-testid={`order-need-${n.code}`}
-            actions={n.action === 'retry' ? <Button small onClick={() => void refresh()} data-testid="order-retry">{t('common.retry')}</Button> : undefined}
+            actions={n.action === 'retry' ? <Button small onClick={() => void refresh().catch(() => null)} data-testid="order-retry">{t('common.retry')}</Button> : undefined}
           >
             <span key={n.text}>{n.text}</span>
             <RawDetails text={n.raw} />

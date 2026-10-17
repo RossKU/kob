@@ -39,6 +39,7 @@ function Row(props: { row: BookRowView; kind: 'ask' | 'bid'; onPick: OrderBookPr
     <button
       type="button"
       class={`book-row book-${kind}`}
+      translate={false}
       data-testid={`book-${kind}-row`}
       data-price={row.priceValue}
       data-amount={row.amount.toString()}
@@ -90,8 +91,8 @@ export function OrderBook(props: OrderBookProps) {
         {m.bids.length ? m.bids.map((r) => <Row key={r.key} row={r} kind="bid" onPick={props.onPick} inverted={props.inverted} token={props.token} />) : <div class="muted small center">{t('market.book.noBids')}</div>}
       </div>
       <p class="ob-foot">
-        {m.anyEstimated ? <>{`~ ${estimatedNote(props.inverted, props.token)} `}</> : null}
-        {t('market.book.clickHint', { base: props.inverted ? 'KAS' : (props.token ?? '') })}
+        {m.anyEstimated ? <span>{`~ ${estimatedNote(props.inverted, props.token)} `}</span> : null}
+        <span>{t('market.book.clickHint', { base: props.inverted ? 'KAS' : (props.token ?? '') })}</span>
       </p>
     </div>
   );

@@ -18,7 +18,7 @@ function AssetSelect(props: { value: string; choices: AssetChoice[]; label: stri
   const face = (cur ?? options[0]!).short;
   return (
     <span class="asset-select" data-value={props.value}>
-      <span class="asset-select-face" aria-hidden="true">
+      <span class="asset-select-face" aria-hidden="true" translate={false}>
         {face}
         <i class="asset-select-caret">{'▾'}</i>
       </span>
