@@ -1,8 +1,7 @@
-// Sending a transaction the user asked for (an order of the ticket, a cancel / amend / refund of My orders): the machine checks, the wallet's
-// own approval, the node.
+// Sending a transaction the user asked for (an order of the ticket, a cancel / amend / refund of My orders): the machine checks, the final
+// confirmation (SendStatus.tsx: the signer table of signer/summary.ts), the wallet's own approval, the node.
 //
-// There is no confirmation screen in between: the ticket or the order row is where the user sees what they do, and the wallet's popup is the
-// approval. Every check of the pre-sign decoder still runs, silently, before the wallet is asked: the wallet's account and network, every input
+// Every check of the pre-sign decoder runs silently before the user is asked: the wallet's account and network, every input
 // re-read on the NODE, the decoder's reading of the built transaction compared with what the planner claims (`expected`, so a planner, builder
 // or wasm bug can never pass), the identity of an open-list token, and the caller's own re-check (`gate`). Only a finding that makes the
 // transaction wrong stops it, with one sentence; the decoder's warnings and notes are not shown and never stop anything.
@@ -14,7 +13,7 @@ import { pendingSpends } from '../../app/pending-spends';
 import { spkStringToAddress } from '../../data/kaspa-sdk';
 import { t } from '../../i18n';
 import { issueText } from '../../i18n/issue-text';
-import { decodeSigning, type ExpectedSigning } from '../../kob/decode';
+import { decodeSigning, type ExpectedSigning, type SigningSummary } from '../../kob/decode';
 import { confirmInputsOnNode } from '../../kob/node-verify';
 import type { Clock } from '../../kob/plan-types';
 import type { PlacementRecord } from '../../kob/records';
@@ -40,6 +39,14 @@ export interface SendJob {
   gate?: Promise<GateVerdict> | undefined;
   /** the last DAA score at which the signed transaction may still be sent (an auction planned at the click: wallet/sign.ts `auctionSubmitBy`) */
   submitByDaa?: bigint | null | undefined;
+  /**
+   * plans the same order again with the current clock, on the same environment (the ticket's order: an auction whose start must not lie behind a
+   * long reading of the confirmation or a slow signature): the job to send instead, its terms, inputs and fee the same and only its times later,
+   * or why it cannot be (SendStatus.tsx)
+   */
+  retime?: (() => Promise<SendJob | { stop: Blocked }>) | undefined;
+  /** this job re-times the one the user confirmed just before (the private-key signer then signs it without asking again when nothing got worse) */
+  retimed?: boolean | undefined;
 }
 
 /** Why a transaction is not sent: a finding code and its sentence. */
@@ -49,7 +56,7 @@ export interface Blocked {
 }
 
 /** The outcome of a `SendJob.gate`. */
-export type GateVerdict = null | { stop: Blocked } | { replace: Pick<SendJob, 'built' | 'expected' | 'submitByDaa'> };
+export type GateVerdict = null | { stop: Blocked } | { replace: Pick<SendJob, 'built' | 'expected' | 'submitByDaa' | 'retime'> };
 
 /** The same inputs (outpoints) in the same order: the node facts read for one transaction serve the other. */
 const sameInputs = (a: BuiltTx, b: BuiltTx): boolean =>
@@ -74,7 +81,7 @@ function walletBlock(services: Services, wallet: WalletFacts, built: BuiltTx): B
  * The checks of a transaction before the wallet is asked to sign it: the job to sign (the caller's gate may have replaced its plan), or the first
  * finding that stops it. Never throws for a finding; a failing node read is a finding (`inputs-unavailable`).
  */
-export async function checkBeforeSigning(services: Services, wallet: WalletFacts, job: SendJob): Promise<{ blocked: Blocked } | { job: SendJob }> {
+export async function checkBeforeSigning(services: Services, wallet: WalletFacts, job: SendJob): Promise<{ blocked: Blocked } | { job: SendJob; decoded: SigningSummary }> {
   const early = walletBlock(services, wallet, job.built);
   if (early) return { blocked: early };
   const nodeFacts = (b: BuiltTx) => confirmInputsOnNode(services.node, b.tx.inputs, inputAddressOf(services)).then((r) => r.facts, () => null);
@@ -101,7 +108,7 @@ export async function checkBeforeSigning(services: Services, wallet: WalletFacts
   const found: Finding | undefined = [...summary.blocking, ...openTokenIdentity(summary, registry).blocking][0];
   if (found) return { blocked: { code: found.code, text: found.text ?? issueText(found) } };
   if (!summary.ok) return { blocked: { code: 'decode', text: t('send.decodeFailed') } };
-  return { job: final };
+  return { job: final, decoded: summary };
 }
 
 /**

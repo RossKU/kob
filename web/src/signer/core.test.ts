@@ -167,8 +167,7 @@ describe('signer summary: decoded in the frame, net effect, order terms and fee'
     expect(s.title).toBe('Send');
     const token = s.lines.find((l) => l.label.startsWith('EXKCC'))!;
     expect(token.value).toBe('−90'); // 9000 base units at 2 decimals
-    expect(token.phrase).toBe('−90 EXKCC (70707070…70707070)');
-    expect(s.text).toContain('90 EXKCC (70707070…70707070) to other keys');
+    expect(token.dir).toBe('out');
     expect(s.lines.find((l) => l.label === 'EXKCC (70707070…70707070) to other keys')?.value).toBe('90');
     expect(s.fee).toMatch(/ KAS$/);
   });
@@ -183,5 +182,34 @@ describe('signer summary: decoded in the frame, net effect, order terms and fee'
     const s = summarize(kob, buildCancel(), MAKER_PK, []);
     expect(s.title).toBe('Cancel order');
     expect(s.lines[0]!.label).toBe('KAS');
+  });
+});
+
+describe('signer core: a request re-timed after the user confirmed it', () => {
+  const retimeSetup = (now: { t: number }) => {
+    const sent: SignerToApp[] = [];
+    const core = createSignerCore({ sdk, kob, post: (m) => sent.push(structuredClone(m)), now: () => now.t });
+    const send = (m: Record<string, unknown>) => core.receive(parseAppMessage(structuredClone({ p: P, ...m }))!);
+    core.importKey(MAKER_SK);
+    return { core, sent, send };
+  };
+
+  it('is signed at once when it re-times the confirmed one with nothing worse; anything else is shown', () => {
+    const now = { t: 1_000 };
+    const { core, sent, send } = retimeSetup(now);
+    expect(send(signReq(buildSend(), 'r1'))).not.toBeNull();
+    expect(core.approve('r1')).toBe(true);
+    // the same transaction again, naming the confirmed request: no prompt, a signature
+    expect(send({ ...signReq(buildSend(), 'r2'), retimeOf: 'r1' })).toBeNull();
+    expect(sent.at(-1)).toMatchObject({ type: 'signed', id: 'r2' });
+    expect(core.pending()).toBeNull();
+    // another transaction (a cancel instead of the send): shown and waiting for the user
+    expect(send({ ...signReq(buildCancel(), 'r3'), retimeOf: 'r2' })).not.toBeNull();
+    core.reject('r3');
+    // naming a request that was not the confirmed one, or too late: shown
+    expect(send({ ...signReq(buildSend(), 'r4'), retimeOf: 'r9' })).not.toBeNull();
+    core.reject('r4');
+    now.t += 121_000;
+    expect(send({ ...signReq(buildSend(), 'r5'), retimeOf: 'r2' })).not.toBeNull();
   });
 });

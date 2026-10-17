@@ -140,4 +140,21 @@ describe('private-key adapter (the app side of the signer frame)', () => {
     host.receive('signed');
     await expect(pending).rejects.toMatchObject({ code: 'timeout' });
   });
+
+  it('a re-timed request the frame accepts is signed without the frame being shown (no second prompt after a slow approve)', async () => {
+    let prompts = 0;
+    const { host, connect, log } = pair(() => {
+      prompts++;
+      return 'approve';
+    });
+    await connect();
+    const built = buildSend();
+    await host.sign(built, []);
+    expect(prompts).toBe(1);
+    expect(log.filter((l) => l === 'request true')).toHaveLength(1);
+    // the same transaction again as the re-timing of the one just signed: signed in the frame at once, the frame never shown, no prompt
+    expect(await host.sign(built, [], undefined, true)).toHaveLength(built.sign.length);
+    expect(prompts).toBe(1);
+    expect(log.filter((l) => l === 'request true')).toHaveLength(1);
+  });
 });

@@ -53,7 +53,6 @@ export function BalancesPanel(props: {
 
   return (
     <Section title={t('orders.balances.title')} data-testid="balances-panel" actions={<Button small onClick={free.reload} loading={free.loading && !!free.data}>{t('common.refresh')}</Button>}>
-      <p class="small muted">{t('orders.balances.explain')}</p>
       {free.loading && !free.data ? <Loading /> : null}
       <ErrorBanner error={free.error} onRetry={free.reload} />
       {free.data && free.data.errors.length ? (

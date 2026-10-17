@@ -8,6 +8,7 @@ import {
 } from './form-state';
 import { planOrder } from '../../kob/plan';
 import { CASES, CTX, TOKEN, form, json, ticketEnv } from './ticket-fixtures';
+import { kasHintText } from './TicketFields';
 
 /** CTX with the default test book's best prices (ask 2.50, bid 2.45 KAS per token): what market and close convert at. */
 const BOOK: TicketCtx = { ...CTX, ref: { buy: 250_000_000n, sell: 245_000_000n } };
@@ -170,5 +171,36 @@ describe('a buy typed in KAS never spends more KAS than typed', () => {
 
   it('a sell typed in KAS converts at its own price (what it receives about), with no tip or slippage', () => {
     expect(amountPriceOf(kasForm('limit', 'sell', { amount: '10', price: '0.025', tip: '0.001' }), ctx, 'amount')?.basis).toBe('own');
+  });
+});
+
+describe('the one-line hint under a KAS amount box', () => {
+  const ctx: TicketCtx = { ...CTX, ref: { buy: 250_000_000n, sell: 245_000_000n } };
+  const hint = (f: TicketForm) => kasHintText(f, ctx, 'amount', 'TUSD')?.text;
+
+  it('a limit at the typed price says so, with no KAS figure', () => {
+    // 10 KAS at 0.025 KAS per token = 400 tokens exactly
+    expect(hint(kasForm('limit', 'sell', { amount: '10', price: '0.025' }))).toBe('= 400 TUSD at your price');
+  });
+
+  it('a buy converts at the worst price plus the tip: the KAS is the most it spends', () => {
+    const f = kasForm('limit', 'buy', { amount: '25', price: '2.5', tip: '0.001' });
+    const h = kasHintText(f, ctx, 'amount', 'TUSD')!;
+    expect(h.text).toMatch(/^≈ [\d.,]+ TUSD \(spends at most 25(\.00)? KAS\)$/);
+    expect(h.base).toBe((amountBaseOf(f, ctx, 'amount') as { value: bigint }).value);
+  });
+
+  it('a market sell converts at the book: the KAS is about what it receives', () => {
+    expect(hint(kasForm('market', 'sell', { amount: '24.5' }))).toBe('≈ 10 TUSD (receives about 24.50 KAS)');
+  });
+
+  it('shows the token amount to six significant digits and the KAS to two decimals', () => {
+    const h = hint(kasForm('market', 'buy', { amount: '246.82', slippageBps: '0' }));
+    expect(h).toMatch(/^≈ 98\.7\d{0,3} TUSD \(spends (at most|about) 246\.82 KAS\)$/);
+  });
+
+  it('asks for the price while the order has none to convert at, and is silent on an empty box', () => {
+    expect(hint(kasForm('limit', 'sell', { amount: '10' }))).toBe('Enter the price first: KAS converts to TUSD at it.');
+    expect(hint(kasForm('limit', 'sell', {}))).toBeUndefined();
   });
 });

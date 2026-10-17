@@ -23,7 +23,12 @@ interface Waiting {
   resolve(s: InputSignature[]): void;
   reject(e: WalletError): void;
   timer: ReturnType<typeof setTimeout>;
+  /** a re-timed request shows the frame only after RETIME_SHOW_MS: the frame signs it at once when nothing got worse (no prompt to show) */
+  show?: ReturnType<typeof setTimeout>;
 }
+
+/** How long a re-timed request waits before the frame is shown (it is signed in milliseconds, without a prompt, when the frame accepts it). */
+const RETIME_SHOW_MS = 2000;
 
 const REJECT_TEXT: Record<RejectReason, [WalletError['code'], string]> = {
   user: ['rejected', 'You rejected the request in the private key signer.'],
@@ -41,6 +46,8 @@ export class SignerHost {
   private pub: Hex | null = null;
   private waiting: Waiting | null = null;
   private seq = 0;
+  /** the id of the request the frame signed last (what a re-timed request names) */
+  private lastSigned: string | null = null;
 
   constructor(private readonly post: (m: AppToSigner) => void, private readonly events: SignerHostEvents = {}) {}
 
@@ -62,7 +69,10 @@ export class SignerHost {
         this.events.onForgotten?.();
         return;
       case 'signed':
-        if (this.waiting?.id === m.id) this.settle(m.signatures, null);
+        if (this.waiting?.id === m.id) {
+          this.lastSigned = m.id;
+          this.settle(m.signatures, null);
+        }
         return;
       case 'rejected': {
         if (this.waiting?.id !== m.id) return;
@@ -80,13 +90,14 @@ export class SignerHost {
     if (!w) return;
     this.waiting = null;
     clearTimeout(w.timer);
+    if (w.show !== undefined) clearTimeout(w.show);
     this.events.onRequest?.(false);
     if (sigs) w.resolve(sigs);
     else w.reject(err!);
   }
 
-  /** Asks the frame to show `built` and sign it once the user approves there. */
-  sign(built: BuiltTx, tokens: TokenHint[], timeoutMs = SIGN_TIMEOUT_MS): Promise<InputSignature[]> {
+  /** Asks the frame to show `built` and sign it once the user approves there (`retime`: it re-times the request signed last, retime.ts). */
+  sign(built: BuiltTx, tokens: TokenHint[], timeoutMs = SIGN_TIMEOUT_MS, retime = false): Promise<InputSignature[]> {
     if (!this.pub) return Promise.reject(new WalletError('other', 'The private key signer holds no key: connect again.'));
     if (this.waiting) return Promise.reject(new WalletError('other', 'The private key signer is busy with another request.'));
     const id = `r${Date.now().toString(36)}${(++this.seq).toString(36)}`;
@@ -95,9 +106,12 @@ export class SignerHost {
         this.post(toSigner({ type: 'cancel', id }));
         this.settle(null, new WalletError('timeout', `Private key signer: no answer after ${Math.round(timeoutMs / 1000)}s.`));
       }, timeoutMs);
+      const retimeOf = retime && this.lastSigned ? this.lastSigned : undefined;
       this.waiting = { id, resolve, reject, timer };
-      this.events.onRequest?.(true);
-      this.post(toSigner({ type: 'sign', id, built, tokens }));
+      // a re-timed request is signed without a prompt when nothing got worse: the frame shows only if it is still waiting by then
+      if (retimeOf) this.waiting.show = setTimeout(() => this.waiting?.id === id && this.events.onRequest?.(true), RETIME_SHOW_MS);
+      else this.events.onRequest?.(true);
+      this.post(toSigner({ type: 'sign', id, built, tokens, ...(retimeOf ? { retimeOf } : {}) }));
     });
   }
 
@@ -154,7 +168,7 @@ export function createLocalKeyAdapter(deps: LocalKeyDeps): WalletAdapter {
       const pubkey = pub();
       if (!host) throw new WalletError('other', 'No private key is loaded.');
       if (built.sign.some((s) => s.pubkey !== pubkey)) throw new WalletError('other', 'This transaction asks for a signature of another key.');
-      const sigs = await host.sign(built, deps.tokenHints?.(built) ?? [], opts.timeoutMs);
+      const sigs = await host.sign(built, deps.tokenHints?.(built) ?? [], opts.timeoutMs, opts.retime === true);
       // one signature per request, in the request's order: anything else is not an answer to this request
       if (sigs.length !== built.sign.length || sigs.some((s, i) => s.inputIndex !== built.sign[i]!.inputIndex)) {
         throw new WalletError('no-signature', 'The private key signer answered with other signatures than requested.');

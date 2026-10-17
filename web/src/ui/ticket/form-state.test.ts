@@ -37,6 +37,9 @@ describe('vocabulary and layout', () => {
           expect(l.main, `${type} must offer an amount`).toContain('amount');
           // the minimum fill is an advanced option of every type that can fill partially (close sells everything at market)
           if (type !== 'close') expect(l.advanced, `${type} must offer the minimum fill`).toContain('minFill');
+          // the priority tip is an advanced option of every type, never in the main fields
+          expect(l.advanced, `${type} must offer the tip`).toContain('tip');
+          expect(l.main, `${type} keeps the tip out of the main fields`).not.toContain('tip');
           for (const id of all) {
             expect(FIELDS[id], `${type}: undeclared field ${id}`).toBeDefined();
             ids.add(FIELDS[id]!.testid);

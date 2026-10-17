@@ -9,6 +9,8 @@ export interface SelectOption {
 
 export interface FieldShellProps {
   label?: ComponentChildren;
+  /** at the right end of the label row (a balance, a shortcut); kept out of the `<label>` so it is not part of the control's name */
+  labelAside?: ComponentChildren;
   hint?: ComponentChildren;
   /** an error text puts the control into the invalid state (`aria-invalid`) and shows the message under it */
   error?: ComponentChildren | null;
@@ -20,6 +22,12 @@ export interface FieldShellProps {
 }
 
 /** Label + control + hint + error scaffolding for controls the kit does not render itself (checkboxes, custom pickers). */
+/**
+ * A text in an element of its own, keyed by its content: a change renders a new element (a page translator such as Chrome's rewrites text nodes
+ * in place, so a text node updated in place would keep the old translation). Anything but a string passes as it is.
+ */
+const keyed = (c: ComponentChildren): ComponentChildren => (typeof c === 'string' ? <span key={c}>{c}</span> : c);
+
 export function FieldShell(props: FieldShellProps) {
   const auto = useId();
   const id = props.id ?? `f${auto}`;
@@ -28,16 +36,22 @@ export function FieldShell(props: FieldShellProps) {
   const describedBy = [hintId, errId].filter(Boolean).join(' ') || undefined;
   return (
     <div class={`field${props.class ? ` ${props.class}` : ''}`}>
-      {props.label ? <label for={id}>{props.label}</label> : null}
+      {props.label && props.labelAside ? (
+        <div class="field-label-row">
+          <label for={id}>{keyed(props.label)}</label>
+          {props.labelAside}
+        </div>
+      ) : props.label ? <label for={id}>{keyed(props.label)}</label> : null}
       {props.children({ id, describedBy, invalid: !!props.error })}
-      {props.hint ? <div class="field-hint" id={hintId}>{props.hint}</div> : null}
-      {props.error ? <div class="field-error" id={errId} role="alert">{props.error}</div> : null}
+      {props.hint ? <div class="field-hint" id={hintId}>{keyed(props.hint)}</div> : null}
+      {props.error ? <div class="field-error" id={errId} role="alert">{keyed(props.error)}</div> : null}
     </div>
   );
 }
 
 export interface FieldProps {
   label?: ComponentChildren;
+  labelAside?: ComponentChildren;
   hint?: ComponentChildren;
   error?: ComponentChildren | null;
   /** control kind (default `input`) */
@@ -78,9 +92,9 @@ export interface FieldProps {
  * The value is controlled: pass `value` and `onValue` (string) or the raw `onInput`.
  */
 export function Field(props: FieldProps) {
-  const { label, hint, error, as = 'input', options, onValue, onInput, onChange, suffix, class: cls, id, 'data-testid': testId, ...rest } = props;
+  const { label, labelAside, hint, error, as = 'input', options, onValue, onInput, onChange, suffix, class: cls, id, 'data-testid': testId, ...rest } = props;
   return (
-    <FieldShell label={label} hint={hint} error={error} id={id} class={cls}>
+    <FieldShell label={label} labelAside={labelAside} hint={hint} error={error} id={id} class={cls}>
       {({ id: cid, describedBy, invalid }) => {
         const common = {
           id: cid,

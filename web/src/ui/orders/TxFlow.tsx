@@ -144,7 +144,7 @@ export function TxFlow(props: TxFlowProps) {
           <Spinner /> {t('orders.flow.preparing')}
         </p>
       ) : null}
-      <SendStatusLine status={sender.status} data-testid="flow-status" />
+      <SendStatusLine sender={sender} data-testid="flow-status" />
       {!running ? (
         <div class="stack-sm" data-testid="flow-result">
           {message ? <Banner tone="error" data-testid="flow-error">{message}</Banner> : null}

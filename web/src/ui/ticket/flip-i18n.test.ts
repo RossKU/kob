@@ -19,8 +19,8 @@ describe('inverted wording', () => {
   });
   it('the KAS-amount wording (amounts of an inverted market are KAS) renders without holes', () => {
     const p = { kas: '10', tokens: '400', ticker: 'TUSD', basis: 'your price', side: 'Buy', amount: '400', pair: 'KAS/TUSD', about: '', price: '40', from: 'A/B' };
-    const keys = Object.keys(dict).filter((k) => /^ticket\.(kasAmt|pairFlip)\.|^ticket\.disc\.summaryKas/.test(k));
-    expect(keys.length).toBeGreaterThanOrEqual(9);
+    const keys = Object.keys(dict).filter((k) => /^ticket\.(kasAmt|pairFlip)\./.test(k));
+    expect(keys.length).toBeGreaterThanOrEqual(8);
     for (const k of keys) expect(t(k, p), k).not.toMatch(/[{}]/);
     expect(dict['ticket.help.amount.inv']).toMatch(/^KAS, converted to \{ticker\}/);
   });

@@ -3,11 +3,12 @@ import { Fragment, type ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { has, t } from '../../i18n';
 import { formatUnits, safeRounding } from '../../kob/units';
+import { kasWords, tokenWords } from '../../signer/words';
 import { invertedToNativePriceText, nativeToInvertedPriceText } from '../market/orientation';
 import { Checkbox, Field, FieldShell, Segmented } from '../kit';
 import { AmountSlider, type AmountSliderProps } from './AmountSlider';
 import {
-  BASE_SUFFIX, FIELDS, FIELD_DEFAULTS, TOUCH_MIN, TOUCH_PRESETS, amountBaseOf, amountPriceOf, kasTextOf, parseTouch, priceInfo,
+  BASE_SUFFIX, FIELDS, FIELD_DEFAULTS, TOUCH_MIN, TOUCH_PRESETS, amountBaseOf, amountPriceOf, baseToKas, kasTextOf, parseTouch, priceInfo,
   type FieldError, type FieldSpec, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 
@@ -19,11 +20,12 @@ export interface TicketFieldsProps {
   /** parse errors of non-empty fields (the caller filters out "required") */
   errors: FieldError[];
   onChange(id: string, value: string): void;
-  /** "max" button of the amount field */
+  /** Max: fills the amount with the largest the balance allows (the "Available" figure of the amount label row is its button) */
   onMax?: () => void;
+  /** "Available 988.41 KAS": the balance this order spends, at the right end of the amount label row; a tap does `onMax` */
+  available?: string;
   /** the 0..100 % of Max slider under the amount field */
   slider?: AmountSliderProps;
-  maxLabel?: string;
   disabled?: boolean;
   /**
    * the market is shown inverted (KAS/TOKEN, orientation.ts): the PRICE inputs take tokens per KAS (`name` per KAS). The form still keeps native text
@@ -56,31 +58,34 @@ function errorText(e: FieldError): string {
   return t(`ticket.err.${e.code}`, (e.params ?? {}) as Record<string, string | number>);
 }
 
-/** The basis of a KAS amount's conversion as words (`ticket.kasAmt.basis.*`). */
-const BASIS_KEY = {
-  own: 'ticket.kasAmt.basis.own', stop: 'ticket.kasAmt.basis.stop', exit: 'ticket.kasAmt.basis.exit', book: 'ticket.kasAmt.basis.book',
-  allIn: 'ticket.kasAmt.basis.allIn', worst: 'ticket.kasAmt.basis.worst',
-} as const;
+/** A field hint on one line (CSS ellipsis); the full text is the tooltip. */
+function Help(props: { text: string }) {
+  return <span class="tk-help" title={props.text}>{props.text}</span>;
+}
+const helpOf = (text: string | undefined): ComponentChildren => (text ? <Help text={text} /> : undefined);
 
 /**
- * The line under a KAS amount box (a `kas` form): the exact token amount the order is built with and the exact KAS it is worth at the price the
- * amount converts at, or what is still missing to know it.
+ * The ONE short line under a KAS amount box (a `kas` form): the token amount the order is built with and, where it matters, the KAS it stands
+ * for. A price the user typed converts exactly ("= 8.6169 TUSD at your price"); a buy's KAS is the most it spends (the worst price plus the tip),
+ * a sell's what it receives about at the book. Or what is still missing to know it; null when there is nothing to say yet.
  */
-function KasAmountHint(props: { form: TicketForm; ctx: TicketCtx; id: string; ticker: string; testid: string }) {
-  const { form, ctx, id } = props;
+export function kasHintText(form: TicketForm, ctx: TicketCtx, id: string, ticker: string): { text: string; base?: bigint } | null {
   const base = amountBaseOf(form, ctx, id);
-  if (!base.ok || base.value <= 0n) {
-    const p = amountPriceOf(form, ctx, id);
-    return !p && (form.values[id] ?? '') !== '' ? <span class="tk-sub" data-testid={`${props.testid}-tokens`}>{t('ticket.kasAmt.needPrice', { ticker: props.ticker })}</span> : null;
-  }
   const p = amountPriceOf(form, ctx, id);
-  return (
-    <span class="tk-sub" data-testid={`${props.testid}-tokens`} data-base={base.value.toString()}>
-      {p
-        ? t('ticket.kasAmt.is', { kas: kasTextOf(form, ctx, id, base.value), tokens: formatUnits(base.value, ctx.decimals, { group: ',' }), ticker: props.ticker, basis: t(BASIS_KEY[p.basis]) })
-        : t('ticket.kasAmt.kept', { tokens: formatUnits(base.value, ctx.decimals, { group: ',' }), ticker: props.ticker })}
-    </span>
-  );
+  if (!base.ok || base.value <= 0n) return !p && (form.values[id] ?? '') !== '' ? { text: t('ticket.kasAmt.needPrice', { ticker }) } : null;
+  const tokens = tokenWords(base.value, ctx.decimals);
+  if (!p) return { text: t('ticket.kasAmt.kept', { tokens, ticker }), base: base.value };
+  if (p.basis === 'own' || p.basis === 'stop' || p.basis === 'exit') return { text: t(`ticket.kasAmt.at.${p.basis}`, { tokens, ticker }), base: base.value };
+  // a buy spends at most the KAS typed (rounded up, never looks cheaper); a sell at the book receives about it
+  const atMost = p.basis !== 'book';
+  const key = atMost ? 'ticket.kasAmt.spendsAtMost' : form.side === 'buy' ? 'ticket.kasAmt.spendsAbout' : 'ticket.kasAmt.receivesAbout';
+  return { text: t(key, { tokens, ticker, kas: kasWords(baseToKas(base.value, p.price, ctx.scale), atMost ? 'up' : 'nearest') }), base: base.value };
+}
+
+function KasAmountHint(props: { form: TicketForm; ctx: TicketCtx; id: string; ticker: string; testid: string }) {
+  const h = kasHintText(props.form, props.ctx, props.id, props.ticker);
+  if (!h) return null;
+  return <span class="tk-sub" data-testid={`${props.testid}-tokens`} {...(h.base !== undefined ? { 'data-base': h.base.toString() } : {})} title={h.text}><span key={h.text}>{h.text}</span></span>;
 }
 
 export function TicketFields(props: TicketFieldsProps) {
@@ -115,12 +120,12 @@ export function TicketFields(props: TicketFieldsProps) {
 
         if (spec.kind === 'bool') {
           return (
-            <Checkbox key={id} checked={value === 'true'} onChange={(c) => props.onChange(id, c ? 'true' : '')} label={label} hint={help} data-testid={spec.testid} disabled={props.disabled} />
+            <Checkbox key={id} checked={value === 'true'} onChange={(c) => props.onChange(id, c ? 'true' : '')} label={label} hint={helpOf(help)} data-testid={spec.testid} disabled={props.disabled} />
           );
         }
         if (spec.kind === 'select') {
           return (
-            <FieldShell key={id} label={label} hint={help} error={common.error}>
+            <FieldShell key={id} label={label} hint={helpOf(help)} error={common.error}>
               {({ id: cid, describedBy, invalid }) => (
                 <select
                   id={cid}
@@ -156,8 +161,8 @@ export function TicketFields(props: TicketFieldsProps) {
               ) : null}
               {shown === TOUCH_MIN ? <span class="tk-sub" data-testid={`${spec.testid}-min`}>{t('ticket.touch.minHint')}</span> : null}
               {form.kas && preset === '' ? <KasAmountHint form={form} ctx={ctx} id={id} ticker={ticker} testid={spec.testid} /> : null}
-              {help ? <span class="tk-help">{help}</span> : null}
-              <span class="tk-help">{t('ticket.touch.tradeoff')}</span>
+              {helpOf(help)}
+              {helpOf(t('ticket.touch.tradeoff'))}
             </>
           );
           return (
@@ -192,13 +197,13 @@ export function TicketFields(props: TicketFieldsProps) {
           );
         }
         if (spec.kind === 'datetime') {
-          return <Field key={id} {...common} type="datetime-local" value={value} onValue={(v) => props.onChange(id, v)} hint={help} />;
+          return <Field key={id} {...common} type="datetime-local" value={value} onValue={(v) => props.onChange(id, v)} hint={helpOf(help)} />;
         }
 
         const flipped = props.flip && spec.kind === 'price' ? props.flip : null;
         // the help of a price box speaks of KAS per token: an inverted box says what the order is in its own hint instead
         const helpShown = flipped ? undefined : help;
-        let hint: ComponentChildren = helpShown;
+        let hint: ComponentChildren = helpOf(helpShown);
         let suffix: ComponentChildren = undefined;
         let shownValue = value;
         let onValue = (v: string) => props.onChange(id, v);
@@ -227,7 +232,7 @@ export function TicketFields(props: TicketFieldsProps) {
                 hint = (
                   <>
                     <span class="tk-sub" data-testid={`${spec.testid}-share`}>{t('ticket.flip.tipShare', { pct, basis: t(f.ownPrice ? 'ticket.flip.qtyOwn' : 'ticket.flip.qtyBook') })}</span>
-                    {helpShown ? <span class="tk-help">{helpShown}</span> : null}
+                    {helpOf(helpShown)}
                   </>
                 );
               }
@@ -240,7 +245,7 @@ export function TicketFields(props: TicketFieldsProps) {
                 <>
                   {flipped ? <span class="tk-sub" data-testid={`${spec.testid}-native`}>{t('ticket.flip.executesAs', { price: info.perToken, ticker })}</span> : null}
                   {info.rounded ? <span class="tk-rounded" data-testid={`${spec.testid}-rounded`}>{t('ticket.priceRounded', { price: info.perToken, ticker, quote: props.quoteTicker ?? 'KAS' })}</span> : null}
-                  {helpShown ? <span class="tk-help">{helpShown}</span> : null}
+                  {helpOf(helpShown)}
                 </>
               );
             }
@@ -261,25 +266,22 @@ export function TicketFields(props: TicketFieldsProps) {
             hint = (
               <>
                 <KasAmountHint form={form} ctx={ctx} id={id} ticker={ticker} testid={spec.testid} />
-                {helpShown ? <span class="tk-help">{helpShown}</span> : null}
+                {helpOf(helpShown)}
               </>
             );
           }
         }
-        if (id === 'amount' && props.onMax) {
-          suffix = (
-            <>
-              <span class="tk-unit">{amountUnit}</span>
-              <button type="button" class="btn btn-sm" onClick={props.onMax} disabled={props.disabled} data-testid="order-amount-max" aria-label={t('ticket.max.aria')}>
-                {props.maxLabel ?? t('ticket.max')}
-              </button>
-            </>
-          );
-        }
+        // the balance this order spends is the Max button, at the right end of the label row
+        const availableBtn = id === 'amount' && props.onMax && props.available ? (
+          <button type="button" class="tk-available" onClick={props.onMax} disabled={props.disabled} title={t('ticket.max.aria')} data-testid="order-available">
+            <span key={props.available}>{props.available}</span>
+          </button>
+        ) : undefined;
         const field = (
           <Field
             key={id}
             {...common}
+            labelAside={availableBtn}
             value={shownValue}
             onValue={onValue}
             inputMode={inputMode}

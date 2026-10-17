@@ -6,3 +6,19 @@
 .send-blocked, .send-failed { border-left-color: var(--bad); background: var(--bad-bg); font-weight: 600; }
 .send-rejected { color: var(--muted); }
 .send .raw-details { flex-basis: 100%; font-weight: 400; }
+/* the head of the final confirmation (the user's intent, above the confirmation screen's sections): also drawn by the signer frame */
+.send-updated { margin: 0 0 8px; font-weight: 600; color: var(--warn); }
+/* the final confirmation of an external wallet: the private-key signer's table (signer/signer.css), the same rows and look */
+.send-confirm h2 { font-size: 1rem; margin: 0 0 8px; }
+.send-lines { margin: 0; }
+.send-line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.send-line dt { color: var(--muted); }
+.send-line dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+.send-line.out dd { color: var(--bad); }
+.send-line.in dd { color: var(--ok); }
+.send-line.send-fee { border-bottom: 0; }
+.send-order { margin-top: 10px; padding-top: 6px; border-top: 2px solid var(--border); }
+.send-order h3 { font-size: 0.95rem; margin: 0 0 2px; }
+.send-token { margin: 0 0 4px; color: var(--muted); overflow-wrap: anywhere; }
+.send-order .send-order { margin-left: 10px; }
+.send-problems { color: var(--bad); font-weight: 600; }

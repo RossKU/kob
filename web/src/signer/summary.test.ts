@@ -1,5 +1,5 @@
 // The signer frame's own summary must show what the user agrees to beyond the net effect: two requests that differ only in an order's price (or
-// stop) move the same KAS and tokens, so a summary of the net effect alone shows them identically. The frame shows it as one sentence (`text`).
+// stop) move the same KAS and tokens, so a summary of the net effect alone shows them identically.
 import { describe, expect, it } from 'vitest';
 import { summarize } from './summary';
 import { goldenRequest } from '../testing/golden';
@@ -7,10 +7,6 @@ import { goldenRequest as chainGoldenRequest } from '../testing/chain-fixtures';
 import { MAKER_PK, TOKEN_COV_ID } from '../testing/token-fixtures';
 import { kob } from '../testing/wallet-fixtures';
 import type { ActionRequest, BuiltTx } from '../kob/types';
-import { planOrder } from '../kob/plan';
-import { MAKER_PK as FIXTURE_MAKER, TOKEN_COV } from '../testing/fixtures';
-import { buildIntent } from '../ui/ticket/form-state';
-import { CTX, form, ticketEnv } from '../ui/ticket/ticket-fixtures';
 
 const HINTS = [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 3 }];
 
@@ -34,25 +30,6 @@ describe('signer summary: order terms', () => {
     const price = (o: (typeof fair.orders)[number]) => o.rows.find((r) => /price/i.test(r.label))?.value;
     expect(price(fair.orders[0]!)).toBeDefined();
     expect(price(cheap.orders[0]!)).not.toBe(price(fair.orders[0]!));
-    // the one sentence the frame shows carries the price too (in KAS per whole token, the ticket's words)
-    expect(fair.text).toMatch(/^Sell 10 EXKCC at 2.5 KAS each./);
-    expect(cheap.text).toMatch(/^Sell 10 EXKCC at 0.0025 KAS each./);
-    expect(cheap.text).not.toBe(fair.text);
-  });
-
-  it('is one sentence in the words of the ticket: what is sold at what price, what it locks, the fee, the token by its covenant id', () => {
-    const s = summarize(kob, build('create.ask'), MAKER_PK, HINTS);
-    expect(s.text.startsWith('Sell 10 EXKCC at 2.5 KAS each. Locks 20.00 KAS and 10 EXKCC (unused part returns); fee 0.008 KAS. Token ids: EXKCC ')).toBe(true);
-    expect(s.text).toContain(`${TOKEN_COV_ID.slice(0, 8)}…${TOKEN_COV_ID.slice(-8)}`);
-    // a buy: the amount its escrow buys at its limit (not the KAS budget the chain holds)
-    const bid = summarize(kob, build('create.bid'), MAKER_PK, HINTS).text;
-    expect(bid).toMatch(/^Buy [0-9.,]+ EXKCC at 2[.]45 KAS each[.] Locks [0-9.,]+ KAS [(]unused part returns[)]/);
-    // the market shown inverted (KAS/EXKCC): the same sale is a purchase of KAS at EXKCC per KAS
-    const inv = summarize(kob, build('create.ask'), MAKER_PK, [{ ...HINTS[0]!, inverted: true }]);
-    expect(inv.text.startsWith('Buy 24.99 KAS at 0.4 EXKCC each. Locks 20.00 KAS and 10 EXKCC')).toBe(true); // what the sale receives: the price less the tip
-    // a cancel creates no order: the kind of request leads
-    const c = summarize(kob, kob.build(goldenRequest('cancel.ask', MAKER_PK)), MAKER_PK, HINTS);
-    expect(c.text.startsWith('Cancel order. ')).toBe(true);
   });
 
   it('names the order, its side and its token by the covenant id (8 + 8 hex), and nests an if-done exit', () => {
@@ -71,8 +48,6 @@ describe('signer summary: order terms', () => {
     const b = summarize(kob, build('create.condAsk', (s) => (s.stopPrice = (BigInt(s.stopPrice) * 9n / 10n).toString())), MAKER_PK, HINTS);
     expect(b.lines.filter((l) => l.label !== 'KAS')).toEqual(a.lines.filter((l) => l.label !== 'KAS'));
     expect(b.orders).not.toEqual(a.orders);
-    expect(b.text).not.toBe(a.text);
-    expect(a.text).toContain('stop ');
   });
 
   it('every order kind of the golden vectors (KAS and pair, new and amended) is listed with its terms', () => {
@@ -112,17 +87,5 @@ describe('signer summary: a token without decimals (no hint)', () => {
     // with the decimals known the price stays per whole token
     const known = summarize(kob, build('create.ask'), MAKER_PK, HINTS).orders[0]!.rows.find((r) => /limit price/i.test(r.label))?.value ?? '';
     expect(known).not.toMatch(/base units/);
-  });
-});
-
-describe('signer summary: a market buy typed in KAS on the inverted view', () => {
-  it('says the fixed amount it buys, what it pays about at the start and at most: the KAS typed (TN10 2026-10-17: "Sell 20.60 KAS" for 20 typed)', () => {
-    const f = { ...form('market', 'buy', { amount: '20' }), kas: true };
-    const plan = planOrder(ticketEnv(), buildIntent(f, { ...CTX, ref: { buy: 250_000_000n, sell: 245_000_000n } }).intent!);
-    const s = summarize(kob, plan.built!, FIXTURE_MAKER, [{ covenantId: TOKEN_COV, ticker: 'EXKCC', decimals: 8, inverted: true }]);
-    expect(s.text).toMatch(/^Sell about 19[.][0-9]+ KAS [(]up to (19[.][0-9][0-9]|20[.]00)[)] for 7[.][0-9]+ EXKCC [(]market; any unfilled part returns[)][.]/);
-    // the same order on the native view
-    const native = summarize(kob, plan.built!, FIXTURE_MAKER, [{ covenantId: TOKEN_COV, ticker: 'EXKCC', decimals: 8 }]);
-    expect(native.text).toMatch(/^Buy 7[.][0-9]+ EXKCC for about 19[.][0-9]+ KAS, up to (19[.][0-9][0-9]|20[.]00) KAS [(]market; any unfilled part returns[)][.]/);
   });
 });

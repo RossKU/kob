@@ -149,15 +149,10 @@ export default {
   'market.ticket.untradable': 'Not tradable in this build: {reason}. The book and your balances stay visible.',
   'market.ticket.untradableUnknown': 'View only: trading needs a reviewed token program built into this app.',
 
-  'market.balances.title': 'Your {ticker} balance',
-  'market.balances.connect': 'Connect a wallet to see your balances, including tokens held inside your orders.',
   'market.balances.partial': 'Some sources failed ({sources}); the figures may be incomplete.',
   'market.balances.free': 'Free tokens',
-  'market.balances.escrowed': 'In your sell orders',
-  'market.balances.strays': 'Stray tokens (sweep or cancel to recover)',
   'market.balances.kasFree': 'Free KAS',
   'market.balances.kasLocked': 'KAS locked in orders',
-  'market.balances.explain': 'Wallets do not show tokens in your sell orders; they return when the order is cancelled or refunded.',
 
   'market.stats.last': 'Last price',
   'market.stats.change': '24h change',

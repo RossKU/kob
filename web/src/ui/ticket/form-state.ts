@@ -280,30 +280,32 @@ export function layoutOf(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals'
   const exitLife = (): string[] => (v['exit.lifetime'] === 'gtd' ? ['exit.lifetime', 'exit.lifetimeAt'] : ['exit.lifetime']);
   /** ladder: the step is asked once there is more than one level */
   const ladder = (): string[] => (Number((v['ladder.levels'] ?? '').trim()) > 1 ? ['ladder.levels', 'ladder.step'] : ['ladder.levels']);
+  // the priority tip is the first advanced option of every type (its default is fine for most orders)
   // the minimum fill is an advanced option of every type (its default is shown in the disclosure; IOC / FOK / market orders: 1 base unit)
   switch (form.type) {
-    case 'limit': return { main: ['amount', 'price', 'ladder.on', ...(v['ladder.on'] === 'true' ? LIMIT_LADDER : []), 'tip', ...life()], advanced: ['minFill', 'activeFrom', 'crossing', ...fills] };
+    case 'limit': return { main: ['amount', 'price', 'ladder.on', ...(v['ladder.on'] === 'true' ? LIMIT_LADDER : []), ...life()], advanced: ['tip', 'minFill', 'activeFrom', 'crossing', ...fills] };
     case 'ioc':
-    case 'fok': return { main: ['amount', 'price', 'tip'], advanced: ['minFill', 'life', 'activeFrom'] };
-    case 'market': return { main: ['amount', 'slippageBps', 'tip'], advanced: ['minFill', 'auction', 'life', 'allOrNothing'] };
-    case 'streaming': return { main: ['amount', 'displayedPrice', 'toleranceBps', 'tip'], advanced: ['minFill', 'allOrNothing', 'auction', 'life'] };
-    case 'close': return { main: ['amount', 'tip'], advanced: ['slippageBps', 'auction', 'life', 'allOrNothing'] };
+    case 'fok': return { main: ['amount', 'price'], advanced: ['tip', 'minFill', 'life', 'activeFrom'] };
+    case 'market': return { main: ['amount', 'slippageBps'], advanced: ['tip', 'minFill', 'auction', 'life', 'allOrNothing'] };
+    case 'streaming': return { main: ['amount', 'displayedPrice', 'toleranceBps'], advanced: ['tip', 'minFill', 'allOrNothing', 'auction', 'life'] };
+    case 'close': return { main: ['amount'], advanced: ['tip', 'slippageBps', 'auction', 'life', 'allOrNothing'] };
     case 'twap':
-    case 'dca': return { main: ['amount', 'sliceAmount', 'interval', 'price', 'tip'], advanced: ['minFill', 'priceEnd', 'sliceAuction', ...life(), 'activeFrom', ...(form.type === 'dca' ? ['maxFills'] : [])] };
-    case 'dutch': return { main: ['amount', 'price', 'priceEnd', 'duration', 'tip'], advanced: ['minFill', 'stepDaa', ...life(), 'activeFrom', ...fills] };
-    case 'stopMarket': return { main: ['amount', 'stop', 'tip'], advanced: ['minFill', 'slipBps', ...STOP_KNOBS, ...life(), 'activeFrom', 'carrier', ...fills] };
-    case 'stopLimit': return { main: ['amount', 'stop', 'limit', 'tip'], advanced: ['minFill', ...STOP_KNOBS, ...life(), 'activeFrom', 'carrier', ...fills] };
+    case 'dca': return { main: ['amount', 'sliceAmount', 'interval', 'price'], advanced: ['tip', 'minFill', 'priceEnd', 'sliceAuction', ...life(), 'activeFrom', ...(form.type === 'dca' ? ['maxFills'] : [])] };
+    case 'dutch': return { main: ['amount', 'price', 'priceEnd', 'duration'], advanced: ['tip', 'minFill', 'stepDaa', ...life(), 'activeFrom', ...fills] };
+    case 'stopMarket': return { main: ['amount', 'stop'], advanced: ['tip', 'minFill', 'slipBps', ...STOP_KNOBS, ...life(), 'activeFrom', 'carrier', ...fills] };
+    case 'stopLimit': return { main: ['amount', 'stop', 'limit'], advanced: ['tip', 'minFill', ...STOP_KNOBS, ...life(), 'activeFrom', 'carrier', ...fills] };
     case 'trailingStop':
-      return { main: ['amount', 'stop', 'trail.step', 'trail.gap', 'tip'], advanced: ['minFill', 'takeProfit', 'trail.wait', 'trail.expectedUpdates', 'slipBps', ...STOP_KNOBS, ...life(), 'activeFrom', 'carrier', ...fills] };
-    case 'takeProfit': return { main: ['amount', 'price', 'tip', ...life()], advanced: ['minFill', 'activeFrom', 'carrier', ...fills] };
-    case 'oco': return { main: ['amount', 'takeProfit', 'stop', 'tip'], advanced: ['minFill', 'limit', 'slipBps', ...STOP_KNOBS, ...life(), 'activeFrom', 'carrier', ...fills] };
+      return { main: ['amount', 'stop', 'trail.step', 'trail.gap'], advanced: ['tip', 'minFill', 'takeProfit', 'trail.wait', 'trail.expectedUpdates', 'slipBps', ...STOP_KNOBS, ...life(), 'activeFrom', 'carrier', ...fills] };
+    case 'takeProfit': return { main: ['amount', 'price', ...life()], advanced: ['tip', 'minFill', 'activeFrom', 'carrier', ...fills] };
+    case 'oco': return { main: ['amount', 'takeProfit', 'stop'], advanced: ['tip', 'minFill', 'limit', 'slipBps', ...STOP_KNOBS, ...life(), 'activeFrom', 'carrier', ...fills] };
     case 'ifd':
     case 'repeatIfd': {
       const rep = form.type === 'repeatIfd';
       const exitKind = rep ? 'takeProfit' : (v['exit.kind'] ?? 'takeProfit');
-      const main = ['amount', 'price', ...(rep ? [] : ['exit.kind']), exitKind === 'stop' ? 'exit.stop' : 'exit.takeProfit', ...(rep ? ['repeat.count'] : []), 'tip'];
+      const main = ['amount', 'price', ...(rep ? [] : ['exit.kind']), exitKind === 'stop' ? 'exit.stop' : 'exit.takeProfit', ...(rep ? ['repeat.count'] : [])];
       const trailing = exitKind === 'stop' ? ['exit.trail', ...(v['exit.trail'] === 'true' ? ['exit.trail.step', 'exit.trail.gap'] : [])] : [];
       const adv = [
+        'tip',
         'entry.stop', 'entry.bandDaa', ...ENTRY_TRIGGER, ...(exitKind === 'stop' ? ['exit.stopLimit', 'exit.slipBps', ...EXIT_TRIGGER] : []), ...trailing,
         'minFill', 'exit.minFill', ...(buy ? [] : ['prefund']), ...life(), 'activeFrom', ...exitLife(), 'exit.tip', ...(rep ? ladder() : []), 'carrier',
       ];
@@ -313,8 +315,9 @@ export function layoutOf(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals'
     case 'repeatIfo': {
       const rep = form.type === 'repeatIfo';
       return {
-        main: ['amount', 'price', 'exit.takeProfit', 'exit.stop', ...(rep ? ['repeat.count'] : []), 'tip'],
+        main: ['amount', 'price', 'exit.takeProfit', 'exit.stop', ...(rep ? ['repeat.count'] : [])],
         advanced: [
+          'tip',
           'entry.stop', 'entry.bandDaa', ...ENTRY_TRIGGER, 'exit.stopLimit', 'exit.slipBps', ...EXIT_TRIGGER, 'exit.trail', ...(v['exit.trail'] === 'true' ? ['exit.trail.step', 'exit.trail.gap'] : []),
           'minFill', 'exit.minFill', ...(buy ? [] : ['prefund']), ...life(), 'activeFrom', ...exitLife(), 'exit.tip', ...(rep ? ladder() : []), 'carrier',
         ],

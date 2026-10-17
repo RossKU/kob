@@ -344,7 +344,6 @@ export default {
   'orders.replace.noToken': 'Token not in this app\'s registry: cancel the order and place a new one.',
 
   'orders.balances.title': 'Balances the wallet does not show',
-  'orders.balances.explain': 'Wallets do not show tokens or KAS locked in your orders; they return when an order ends.',
   'orders.balances.tokens': 'Tokens',
   'orders.balances.inOrders': 'In your orders',
   'orders.balances.strays': 'Strays',

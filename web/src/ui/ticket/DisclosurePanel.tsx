@@ -1,9 +1,7 @@
-// The DISCLOSURE panel of the ticket: what the planned order costs and does, from `buildDisclosureModel` (derived from the planned state and the
-// built transaction, never from the form). Thin renderer.
+// The DISCLOSURE panel: what a planned order costs and does, from `buildDisclosureModel` (derived from the planned state and the built
+// transaction, never from the form). Thin renderer; the replace dialog of My orders shows it (the order ticket shows it only in the confirmation).
 import type { ComponentChildren } from 'preact';
 import { formatDateTime, t } from '../../i18n';
-import type { BuiltTx } from '../../kob/types';
-import { feeDisclosureOf } from '../confirm/fee-disclosure';
 import type { DisclosureModel, DisclosureRow, TimeRow, Txt } from './disclosure-model';
 
 const text = (v: Txt | undefined): string => (v === undefined ? '' : typeof v === 'string' ? v : t(v.key, v.params));
@@ -50,16 +48,13 @@ function TimeView(props: { row: TimeRow }) {
   );
 }
 
-/** `summary`: the headline in the words of the shown pair (an inverted KAS market: KAS is the base), else the native one. */
-export function DisclosurePanel(props: { model: DisclosureModel; built?: BuiltTx | null; summary?: string | undefined }) {
+export function DisclosurePanel(props: { model: DisclosureModel }) {
   const m = props.model;
-  // the fee rate and its bucket of the planned transaction (its notes on fallbacks and caps are not shown: nothing to act on)
-  const feeInfo = props.built ? feeDisclosureOf(props.built) : null;
   return (
     <section class="tk-disclosure" data-testid="order-disclosure" aria-label={t('ticket.disc.title')}>
       <h3>{t('ticket.disc.title')}</h3>
       <p class="tk-summary" data-testid="disc-summary">
-        {props.summary ?? t('ticket.disc.summary', { side: t(m.side === 'buy' ? 'common.side.buy' : 'common.side.sell'), amount: m.tokenAmount, ticker: m.ticker })}
+        {t('ticket.disc.summary', { side: t(m.side === 'buy' ? 'common.side.buy' : 'common.side.sell'), amount: m.tokenAmount, ticker: m.ticker })}
       </p>
       <dl class="tk-rows">
         <DiscRow testid="disc-minFill" label={t('ticket.disc.minFill')} value={m.minFill} detail={t('ticket.disc.minFillHint')} tone="muted" />
@@ -117,15 +112,6 @@ export function DisclosurePanel(props: { model: DisclosureModel; built?: BuiltTx
             </dd>
           </div>
         ) : null}
-        {feeInfo?.rows.map((r) => (
-          <div class="tk-row" key={r.id} data-testid={`disc-${r.id}`}>
-            <dt>{r.label}</dt>
-            <dd>
-              <span class="tk-value">{r.value}</span>
-              {r.detail ? <span class="tk-detail">{r.detail}</span> : null}
-            </dd>
-          </div>
-        ))}
       </dl>
 
       {m.notes.length > 0 ? (

@@ -243,7 +243,8 @@ small, .small { font-size: 0.85em; }
 /* ------------------------------------------------------------------ forms */
 
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.field > label, .field-label { font-weight: 600; font-size: 0.9rem; }
+.field > label, .field > .field-label-row > label, .field-label { font-weight: 600; font-size: 0.9rem; }
+.field-label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
 .input, .select, .textarea {
   width: 100%; min-height: 36px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--text); font: inherit;
@@ -426,4 +427,4 @@ a.explorer-link:hover { color: var(--primary); border-bottom-color: var(--primar
 .signer-box { width: min(440px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .signer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 4px 4px 12px; border-bottom: 1px solid var(--border); }
 .signer-frame { display: block; width: 100%; border: 0; height: 120px; }
-.signer-frame-sign, .signer-frame-hidden { height: min(560px, calc(100vh - 140px)); }
+.signer-frame-sign, .signer-frame-hidden { height: min(720px, calc(100vh - 110px)); }

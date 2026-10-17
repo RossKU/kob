@@ -1,9 +1,10 @@
 // The order-entry form for one token: EVERY order type of docs/spec/order-types.md.
 //
 // A thin renderer: the form keeps text (`form-state.ts` turns it into an Intent), the planner (`kob/plan.ts`) validates it against the protocol and
-// wallet rules and builds the transaction, `disclosure-model.ts` explains what the order costs and does. The order button is enabled only for a
-// built, error-free plan; a click plans the order again from the state at the click, checks the built transaction silently (`ui/confirm/send.ts`:
-// decoded and compared with the plan) and asks the wallet for its approval at once. Progress and the result are one line under the button.
+// wallet rules and builds the transaction. The ticket is the inputs and one button: the order's details are shown only in the final
+// confirmation (signer/summary.ts `receipt`). The button is enabled only for a built, error-free plan; a click plans the order again from the
+// state at the click, checks the built transaction silently (`ui/confirm/send.ts`: decoded and compared with the plan) and opens the final
+// confirmation, whose Confirm asks the wallet. Progress and the result are one line under the button.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { has, t } from '../../i18n';
@@ -22,12 +23,10 @@ import { auctionSubmitBy } from '../../wallet/sign';
 import { SendStatusLine, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
 import type { GateVerdict, SendJob } from '../confirm/send';
 import { oppositeSide } from '../market/orientation';
-import { DisclosurePanel } from './DisclosurePanel';
 import { useCovenantSignGate } from './CovenantSignGate';
 import { TicketFields } from './TicketFields';
-import { buildDisclosureModel } from './disclosure-model';
 import {
-  BASE_SUFFIX, TYPE_GROUPS, amountBaseOf, amountPriceOf, baseToKas, buildIntent, kasTextOf, followQuote, formatPrice, streamingQuoteText, initialForm, layoutOf, parsePrice, reorientAmounts, setAmountBase,
+  BASE_SUFFIX, TYPE_GROUPS, amountBaseOf, buildIntent, kasTextOf, followQuote, formatPrice, streamingQuoteText, initialForm, layoutOf, parsePrice, reorientAmounts, setAmountBase,
   setSide, setValue, sidesOf, switchType, visibleErrors,
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
@@ -68,10 +67,10 @@ interface PlanStop {
 }
 
 /**
- * How often an auction whose start passed while the wallet waited for approval (`clock-moved`, wallet/sign.ts) is planned again with the current
- * clock and the wallet asked again; after that the reason is shown.
+ * The extra lead of a re-timed auction's start (DAA, 3 s): the re-timed transaction is checked, signed and its clock read again before it is
+ * sent, which over a slow link takes longer than the start's own lead (MARKET_ACTIVATION_DAA) leaves.
  */
-const CLOCK_RETRIES = 1;
+const RETIME_LEAD_DAA = 30n;
 
 /** Token-holding shortfalls: while the holdings are still being read they mean "not read yet", not "not enough". */
 const TOKEN_SHORT = new Set(['INSUFFICIENT_TOKENS', 'TOKEN_UTXOS_FRAGMENTED']);
@@ -327,15 +326,6 @@ export function OrderTicket(props: OrderTicketProps) {
 
   const shownPlan: OrderPlan | null = enabled && current ? plan : null;
   const planErrors = shownPlan ? errors(shownPlan) : [];
-  const model = useMemo(
-    () =>
-      shownPlan?.disclosure && env
-        ? buildDisclosureModel(shownPlan, {
-            ticker, decimals: token.decimals, scale: shownPlan.disclosure.scale, clock: env.clock, ...(quote ? { quote: { ticker: quote.ticker, decimals: quote.decimals } } : {}),
-          })
-        : null,
-    [shownPlan, env, ticker, token.decimals, quote?.ticker, quote?.decimals],
-  );
   /** an amount of the market's quote (KAS, or a pair's token B) in words */
   const quoteText = (v: bigint): string => (quote ? `${formatUnits(v, quote.decimals, { group: ',' })} ${quote.ticker}` : `${formatKas(v, { group: ',' })} KAS`);
   // the LAST order of a limit ladder is the one furthest from the typed price: planned too, so a level that could never be placed is refused before the first is signed
@@ -376,33 +366,10 @@ export function OrderTicket(props: OrderTicketProps) {
   // an inverted market words the type where the native name / help speaks of buying or selling the token
   const typeKey = (id: OrderTypeId, part: 'name' | 'help'): string => (inverted && has(`ticket.type.${id}.${part}Inv`) ? `ticket.type.${id}.${part}Inv` : `ticket.type.${id}.${part}`);
   const typeName = t(typeKey(form.type, 'name'), { name });
+  const typeHelp = t(typeKey(form.type, 'help'), { name });
   // the side as the shown pair names it: buying KAS in KAS/TOKEN is selling the token
   const shownSide: Side = inverted ? oppositeSide(form.side) : form.side;
   const sideName = t(shownSide === 'buy' ? 'common.side.buy' : 'common.side.sell');
-
-  /**
-   * An inverted market: what an intent gives and receives in the shown pair's words (KAS is the base), for the disclosure summary. The KAS is the
-   * amount's value at the price its KAS amount converts at (form-state.ts `amountPriceOf`: a limit's own price; a buy's worst price plus the
-   * tip, the most it spends; "about" at the book's price or a price that moves).
-   */
-  const shownTerms = (intent: Intent | null): { tokens: string; kas: string; about: boolean; upTo: boolean } | null => {
-    if (!inverted || !intent || !('amount' in intent) || typeof intent.amount !== 'bigint') return null;
-    const at = amountPriceOf(form, ctx, 'amount');
-    const price = at?.price ?? null;
-    if (price === null || price <= 0n) return null;
-    return {
-      tokens: formatUnits(intent.amount, token.decimals, { group: ',' }),
-      kas: formatKas(baseToKas(intent.amount, price, scale), { group: ',' }),
-      about: at!.basis === 'book',
-      // a buy sized at the most it can pay: the KAS is the most it spends for the tokens it buys
-      upTo: at!.basis === 'worst',
-    };
-  };
-  const discSummary = (() => {
-    const s = shownTerms(built.intent);
-    const key = s?.upTo ? 'ticket.disc.summaryKasUpTo' : s?.about ? 'ticket.disc.summaryKasAbout' : 'ticket.disc.summaryKas';
-    return s ? t(key, { side: sideName, kas: s.kas, amount: s.tokens, ticker }) : undefined;
-  })();
 
   /** one order of the ladder in words: the level, its prices (a limit ladder: side, amount, price and value) */
   const ladderRow = (l: LadderLevel): string => {
@@ -490,11 +457,13 @@ export function OrderTicket(props: OrderTicketProps) {
       // read after the click); the references of further indexers are always read again
       const toRead = fromCache ? stale(clickAt) : [];
       const settled = toRead.length === 0;
+      const label = orderLabel(form.type, form.side, levels > 1 ? { level: index + 1, levels } : undefined, name);
+      const openToken = token.openList ? token : undefined;
       return {
-        built: planned.built!, expected: expectedFromPlan(planned), label: orderLabel(form.type, form.side, levels > 1 ? { level: index + 1, levels } : undefined, name),
-        openToken: token.openList ? token : undefined,
-        gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown) : undefined,
+        built: planned.built!, expected: expectedFromPlan(planned), label, openToken,
+        gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown, label, openToken) : undefined,
         submitByDaa: auctionSubmitBy(planned.states, clock.daa),
+        retime: retimer(env0, refsNow, intent, null, label, openToken),
       };
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
@@ -508,7 +477,10 @@ export function OrderTicket(props: OrderTicketProps) {
    * `planned`. The same transaction: kept; another one without an error and within the terms the ticket showed (`shown`): it replaces the plan
    * (a moved book, coins replaced after a submission); an error or a broken term stops the order.
    */
-  const recheck = async (planned: OrderPlan, intent: Intent, clock: Clock, fees: PlanEnv['fees'], env: PlanEnv | null, clickAt: number, parts: EnvWait[], shown: OrderPlan | null): Promise<GateVerdict> => {
+  const recheck = async (
+    planned: OrderPlan, intent: Intent, clock: Clock, fees: PlanEnv['fees'], env: PlanEnv | null, clickAt: number, parts: EnvWait[], shown: OrderPlan | null,
+    label: string, openToken: SendJob['openToken'],
+  ): Promise<GateVerdict> => {
     const stop = (text: string, code = 'changed'): GateVerdict => ({ stop: { code, text } });
     try {
       const [fresh, refs] = await Promise.all([env ? Promise.resolve(env) : since(clickAt - REVIEW_REUSE_MS, parts), touchesOf().catch(noRefs)]);
@@ -520,23 +492,39 @@ export function OrderTicket(props: OrderTicketProps) {
       if (planned.built && sameTransaction(planned.built, p.built)) return null;
       const kept = keepTerms(p, intent, plan, shown);
       if (!('p' in kept)) return stop(kept.text, kept.code);
-      return { replace: { built: kept.p.built!, expected: expectedFromPlan(kept.p), submitByDaa: auctionSubmitBy(kept.p.states, clock.daa) } };
+      return { replace: { built: kept.p.built!, expected: expectedFromPlan(kept.p), submitByDaa: auctionSubmitBy(kept.p.states, clock.daa), retime: retimer(fresh, refs, kept.intent, fees, label, openToken) } };
     } catch (e) {
       return stop(buildErrorText(e instanceof Error ? e.message : String(e)));
     }
   };
 
-  /** One level: planned, checked and sent; an auction whose start passed while the wallet waited is planned again and sent again (CLOCK_RETRIES). */
-  const placeLevel = async (intent: Intent, index: number, levels: number, shown: OrderPlan | null): Promise<SendOutcome | null> => {
-    for (let attempt = 0; ; attempt++) {
-      const job = await prepareLevel(intent, index, levels, shown);
-      if (!('built' in job)) {
-        sender.stop(job.text, job.raw, job.code);
-        return null;
+  /**
+   * The re-timing of a planned order (`SendJob.retime`: a long read of the final confirmation, an auction start that passed while the wallet
+   * signed): the same intent planned on the same environment, references and fees, so with the same terms, inputs and fee, with the node clock now
+   * (plus RETIME_LEAD_DAA) for its times. Only its times move, later: the signer and the app accept it without asking again (signer/retime.ts).
+   */
+  const retimer = (env: PlanEnv, refs: References, intent: Intent, fees: PlanEnv['fees'] | null, label: string, openToken: SendJob['openToken']): SendJob['retime'] =>
+    async () => {
+      try {
+        const now = liveClockAt(liveClock.current, Date.now()) ?? (await readClock(services));
+        const clock = { ...now, daa: now.daa + RETIME_LEAD_DAA, unixSeconds: now.unixSeconds + (RETIME_LEAD_DAA * 1000n) / BigInt(Math.max(1, now.rateMilli)) };
+        const p = planOrder(withRefs({ ...env, clock, ...(fees ? { fees } : {}) }, refs), intent);
+        const firstError = errors(p)[0];
+        if (!p.ok || !p.built || firstError) return { stop: { code: 'changed', text: firstError ? issueText(firstError, issueCtx) : t('ticket.reviewChanged') } };
+        return { built: p.built, expected: expectedFromPlan(p), label, openToken, submitByDaa: auctionSubmitBy(p.states, clock.daa), retime: retimer(env, refs, intent, fees, label, openToken) };
+      } catch (e) {
+        return { stop: { code: 'plan', text: buildErrorText(e instanceof Error ? e.message : String(e)) } };
       }
-      const out = await sender.send(job);
-      if (out.status === 'submitted' || out.send.code !== 'clock-moved' || attempt >= CLOCK_RETRIES) return out;
+    };
+
+  /** One level: planned, checked and sent (an auction whose start passed while the wallet signed is re-timed by the send: SendStatus.tsx). */
+  const placeLevel = async (intent: Intent, index: number, levels: number, shown: OrderPlan | null): Promise<SendOutcome | null> => {
+    const job = await prepareLevel(intent, index, levels, shown);
+    if (!('built' in job)) {
+      sender.stop(job.text, job.raw, job.code);
+      return null;
     }
+    return sender.send(job);
   };
 
   /** The order button: every level of the order in turn, each planned at its turn, checked and approved in the wallet; a level that stops ends it. */
@@ -579,7 +567,6 @@ export function OrderTicket(props: OrderTicketProps) {
   else if (wallet.networkMismatch) needs.push({ code: 'network', text: t('ticket.need.network', { wallet: wallet.info.network, app: services.config.network }), tone: 'error' });
   if (enabled && envError) needs.push({ code: 'env', text: t('ticket.need.env'), tone: 'error', action: 'retry', raw: envError });
   if (crash) needs.push({ code: 'crash', text: t('ticket.need.crash'), tone: 'error', raw: crash });
-  if (enabled && !envError && built.intent === null && built.errors.some((e) => e.code === 'required')) needs.push({ code: 'incomplete', text: t('ticket.need.incomplete'), tone: 'info' });
   // what the ticket is still reading, named (Review cannot be enabled before; it is the moment the answers are in)
   const holdingsShort = waiting.includes('holdings') && planErrors.some((i) => TOKEN_SHORT.has(i.code));
   const stillReading: EnvWait[] = enabled && !envError ? (rawEnv ? (holdingsShort ? ['holdings'] : []) : waiting) : [];
@@ -588,6 +575,11 @@ export function OrderTicket(props: OrderTicketProps) {
   const issues = (shownPlan?.issues ?? []).filter((i) => !(holdingsShort && TOKEN_SHORT.has(i.code)));
   const planIssues = issues.filter((i) => i.severity === 'error');
   const issueCtx = { tokenDecimals: token.decimals, tokenTicker: ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
+
+  // the balance this order spends, shown at the right end of the amount label row (it is the Max button): a buy pays in the quote (KAS, or a
+  // pair's token B), a sell gives the token. The form's side is the native one, so an inverted view needs no case of its own.
+  const spendBalance = form.side === 'buy' ? quoteText(quote ? quoteBalance : kasBalance) : `${formatUnits(tokenBalance, token.decimals, { group: ',' })} ${ticker}`;
+  const available = enabled && env ? t('ticket.available', { amount: spendBalance }) : undefined;
 
   if (!tradable) {
     const reason = token.untradableReason;
@@ -641,27 +633,13 @@ export function OrderTicket(props: OrderTicketProps) {
               </optgroup>
             ))}
           </select>
-          <div class="field-hint" data-testid="order-type-help">
-            {t(typeKey(form.type, 'help'), { name })}
+          <div class="field-hint tk-help" title={typeHelp} data-testid="order-type-help">
+            {typeHelp}
           </div>
         </div>
 
-        {enabled ? (
-          <p class="tk-balances" data-testid="order-balances">
-            {env
-              ? quote
-                ? t('ticket.balancePair', {
-                    tokens: `${formatUnits(tokenBalance, token.decimals, { group: ',' })} ${ticker}`,
-                    quote: `${formatUnits(quoteBalance, quote.decimals, { group: ',' })} ${quote.ticker}`,
-                    kas: `${formatKas(kasBalance, { group: ',' })} KAS`,
-                  })
-                : t('ticket.balance', { tokens: `${formatUnits(tokenBalance, token.decimals, { group: ',' })} ${ticker}`, kas: `${formatKas(kasBalance, { group: ',' })} KAS` })
-              : t('ticket.balanceLoading')}
-          </p>
-        ) : null}
-
         <TicketFields
-          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} onMax={enabled && env ? onMax : undefined} slider={slider}
+          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} slider={slider}
           {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker } : {})}
         />
 
@@ -687,7 +665,7 @@ export function OrderTicket(props: OrderTicketProps) {
             data-testid={`order-need-${n.code}`}
             actions={n.action === 'retry' ? <Button small onClick={() => void refresh()} data-testid="order-retry">{t('common.retry')}</Button> : undefined}
           >
-            {n.text}
+            <span key={n.text}>{n.text}</span>
             <RawDetails text={n.raw} />
           </Banner>
         ))}
@@ -699,7 +677,7 @@ export function OrderTicket(props: OrderTicketProps) {
           <ul>
             {planIssues.map((i, n) => (
               <li key={`${i.code}-${n}`} class="tk-issue tk-issue-error" data-code={i.code} data-severity={i.severity} data-testid={`order-issue-${i.code}`}>
-                {issueText(i, issueCtx)}
+                <span key={issueText(i, issueCtx)}>{issueText(i, issueCtx)}</span>
                 <RawDetails text={rawOf(i)} />
               </li>
             ))}
@@ -759,16 +737,14 @@ export function OrderTicket(props: OrderTicketProps) {
         </div>
       ) : null}
 
-      {model ? <DisclosurePanel model={model} built={shownPlan?.built ?? null} summary={discSummary} /> : null}
-
       {enabled ? gate.element : null}
       <Button variant="primary" block onClick={() => void place()} disabled={!canPlace} loading={placing} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
-        {t('ticket.place', { side: sideName, type: typeName })}
+        <span key={`${sideName}|${typeName}`}>{t('ticket.place', { side: sideName, type: typeName })}</span>
       </Button>
-      <SendStatusLine status={sender.status} lead={ladderLead} data-testid="order-status" />
+      <SendStatusLine sender={sender} lead={ladderLead} data-testid="order-status" />
       {ladderNote ? (
         <p class="muted" data-testid={ladderNote.done ? 'order-result-ladder' : 'order-ladder-stopped'}>
-          {ladderNote.text}
+          <span key={ladderNote.text}>{ladderNote.text}</span>
         </p>
       ) : null}
     </section>

@@ -425,6 +425,19 @@ export function OrdersView() {
         />
       ) : null}
 
+      {/* tokens inside the wallet's orders and KAS locked in them: first, before the orders they belong to */}
+      {d ? (
+        <BalancesPanel
+          data={d}
+          pubkey={wallet.info.pubkey}
+          canSign={canSign}
+          onCancelToken={(token) => setConfirmAll({ token, ids: cancellableIds(rows, token) })}
+          reserved={reserved}
+          busy={busy}
+          onMergeToken={mergeToken}
+        />
+      ) : null}
+
       <Section
         title={t('orders.list.title')}
         data-testid="orders-section"
@@ -480,17 +493,6 @@ export function OrdersView() {
         </div>
       </Section>
 
-      {d ? (
-        <BalancesPanel
-          data={d}
-          pubkey={wallet.info.pubkey}
-          canSign={canSign}
-          onCancelToken={(token) => setConfirmAll({ token, ids: cancellableIds(rows, token) })}
-          reserved={reserved}
-          busy={busy}
-          onMergeToken={mergeToken}
-        />
-      ) : null}
       <StraysPanel
         strays={strays}
         orderTokens={sweepable}

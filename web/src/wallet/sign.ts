@@ -68,6 +68,8 @@ export interface SignAndSubmitArgs {
    * of the auction has moved on while the wallet was waiting for approval, so the caller plans it again with the current clock.
    */
   submitByDaa?: bigint;
+  /** the transaction re-times the one the wallet signed last (`SignOptions.retime`) */
+  retime?: boolean;
 }
 
 /**
@@ -171,7 +173,7 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
   if (a.inputAddress) await assertInputsOnNode(node, built, a.inputAddress);
   let sigs;
   try {
-    sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs });
+    sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}) });
   } catch (e) {
     const code = e instanceof WalletError ? e.code : 'other';
     throw new SignFlowError('signing', e, msg(e), code);

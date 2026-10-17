@@ -31,7 +31,8 @@ export type SignerToApp =
   | { p: typeof SIGNER_PROTOCOL; type: 'forgotten' };
 
 export type AppToSigner =
-  | { p: typeof SIGNER_PROTOCOL; type: 'sign'; id: string; built: BuiltTx; tokens: TokenHint[] }
+  /** `retimeOf`: the request the user just confirmed, planned again with a later clock: signed without asking again when nothing they approved got worse (retime.ts) */
+  | { p: typeof SIGNER_PROTOCOL; type: 'sign'; id: string; built: BuiltTx; tokens: TokenHint[]; retimeOf?: string }
   | { p: typeof SIGNER_PROTOCOL; type: 'cancel'; id: string }
   | { p: typeof SIGNER_PROTOCOL; type: 'forget' };
 
@@ -96,10 +97,11 @@ export function parseAppMessage(data: unknown): AppToSigner | null {
   if (!isObj(data) || data.p !== SIGNER_PROTOCOL || typeof data.type !== 'string') return null;
   switch (data.type) {
     case 'sign':
-      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
+      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'retimeOf']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
+      if (data.retimeOf !== undefined && (typeof data.retimeOf !== 'string' || !ID.test(data.retimeOf))) return null;
       if (!Array.isArray(data.tokens) || data.tokens.length > 32 || !data.tokens.every(isTokenHint)) return null;
       if (!sized(data.built) || !isBuiltTx(data.built)) return null;
-      return { p: SIGNER_PROTOCOL, type: 'sign', id: data.id, built: data.built, tokens: data.tokens };
+      return { p: SIGNER_PROTOCOL, type: 'sign', id: data.id, built: data.built, tokens: data.tokens, ...(data.retimeOf !== undefined ? { retimeOf: data.retimeOf as string } : {}) };
     case 'cancel':
       return hasKeys(data, ['p', 'type', 'id']) && typeof data.id === 'string' && ID.test(data.id) ? { p: SIGNER_PROTOCOL, type: 'cancel', id: data.id } : null;
     case 'forget':

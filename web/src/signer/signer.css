@@ -25,6 +25,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
 main { padding: 12px 14px; }
+h1 { font-size: 1rem; margin: 0 0 8px; }
 p { margin: 6px 0; }
 .muted { color: var(--muted); }
 .error { color: var(--bad); font-weight: 600; min-height: 1.2em; }
@@ -35,4 +36,14 @@ button { padding: 7px 14px; border: 1px solid var(--border); border-radius: 6px;
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
 /* no opacity on disabled buttons: the visibility check (IntersectionObserver v2) counts the opacity of what it observes */
 button:disabled { color: var(--muted); background: var(--bg); border-color: var(--border); cursor: default; }
-.summary { margin: 0; font-weight: 600; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.lines { margin: 0; }
+.line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.line dt { color: var(--muted); }
+.line dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+.line.out dd { color: var(--bad); }
+.line.in dd { color: var(--ok); }
+.line.fee { border-bottom: 0; }
+.order { margin-top: 10px; padding-top: 6px; border-top: 2px solid var(--border); }
+.order h2 { font-size: 0.95rem; margin: 0 0 2px; }
+.order .token { margin: 0 0 4px; overflow-wrap: anywhere; }
+.order .order { margin-left: 10px; }

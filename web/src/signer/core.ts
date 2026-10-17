@@ -8,6 +8,7 @@ import type { BuiltTx, Hex, InputSignature } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import { toApp, type AppToSigner, type RejectReason, type SignerToApp, type TokenHint } from './protocol';
 import { summarize, type SignerSummary } from './summary';
+import { RETIME_WINDOW_MS, sameOrBetter } from './retime';
 
 export class SignerKeyError extends Error {
   constructor() {
@@ -32,6 +33,8 @@ export interface SignerCoreDeps {
   sdk: KaspaSdk;
   kob: KobWasm;
   post(m: SignerToApp): void;
+  /** ms clock (tests) */
+  now?: () => number;
 }
 
 export interface SignerCore {
@@ -41,7 +44,11 @@ export interface SignerCore {
   pubkey(): Hex | null;
   /** frees the key and drops a pending request (rejected as cancelled); posts `forgotten` */
   forget(): void;
-  /** a validated app message: a `sign` request becomes the pending request to show (returned), anything else is handled here */
+  /**
+   * a validated app message: a `sign` request becomes the pending request to show (returned), anything else is handled here. A request that
+   * re-times the one the user confirmed last (`retimeOf`, within RETIME_WINDOW_MS) is signed at once when this frame's own decoding finds that
+   * nothing the user approved got worse (retime.ts `sameOrBetter`); else it is shown like any request.
+   */
   receive(m: AppToSigner): PendingRequest | null;
   pending(): PendingRequest | null;
   /** signs the pending request `id` (ONLY from the user's click in the signer page); posts `signed`, or `rejected` when it cannot */
@@ -56,6 +63,9 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
   let key: FullPrivateKey | null = null;
   let pub: Hex | null = null;
   let pending: PendingRequest | null = null;
+  // the request the user confirmed last (its decoding and when): the only one a re-timed request may stand in for
+  let approved: { id: string; summary: SignerSummary; at: number } | null = null;
+  const now = deps.now ?? Date.now;
 
   const drop = (reason: RejectReason) => {
     if (pending) post(toApp({ type: 'rejected', id: pending.id, reason }));
@@ -150,6 +160,20 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
         return null;
       }
+      const base = m.retimeOf !== undefined && approved && approved.id === m.retimeOf && now() - approved.at <= RETIME_WINDOW_MS ? approved : null;
+      if (base && summary.problems === 0 && sameOrBetter(base.summary.decoded, summary.decoded)) {
+        // the transaction the user confirmed, planned again with a later clock: the same terms, so their confirmation covers it
+        let sigs: InputSignature[];
+        try {
+          sigs = sign(m.built);
+        } catch {
+          post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
+          return null;
+        }
+        approved = { id: m.id, summary, at: base.at };
+        post(toApp({ type: 'signed', id: m.id, signatures: sigs }));
+        return null;
+      }
       pending = { id: m.id, built: m.built, summary };
       return pending;
     },
@@ -165,6 +189,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         post(toApp({ type: 'rejected', id, reason: 'invalid' }));
         return false;
       }
+      approved = { id, summary: req.summary, at: now() };
       post(toApp({ type: 'signed', id, signatures: sigs }));
       return true;
     },

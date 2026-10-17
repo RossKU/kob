@@ -5,12 +5,18 @@
 .tk h4 { margin: 12px 0 4px; font-size: 0.95rem; }
 .tk-form { display: flex; flex-direction: column; gap: 12px; }
 .tk-form select.select { width: 100%; }
-.tk-balances { margin: 0; color: var(--muted); font-size: 0.9rem; }
 .tk-suffix { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .tk-touch .input { width: 7rem; }
 .tk-touch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .tk-unit { color: var(--muted); font-size: 0.9rem; }
 .tk-sub, .tk-rounded, .tk-help { display: block; }
+/* a field hint is ONE line; the whole text is its tooltip (title) */
+.tk-sub, .tk-help { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tk-rounded { white-space: normal; }
+/* the balance this order spends, at the right end of the amount label row: it is the Max button */
+.tk-available { padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.85rem; font-variant-numeric: tabular-nums; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.tk-available:hover:not(:disabled) { color: var(--text); }
+.tk-available:disabled { cursor: default; text-decoration: none; }
 .tk-rounded { color: var(--warn); font-weight: 600; }
 .tk-advanced { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; background: var(--surface-2); }
 .tk-advanced summary { cursor: pointer; font-weight: 600; }

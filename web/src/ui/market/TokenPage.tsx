@@ -2,7 +2,7 @@ import { useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import type { TicketPreset } from '../../app/router';
 import { t } from '../../i18n';
-import { Badge, Banner, Button, ErrorBanner, Loading, scaleOfDecimals, Section, tickKasFraction, tickPriceFraction, useAsync, useInterval } from '../kit';
+import { Badge, Banner, Button, ErrorBanner, Loading, scaleOfDecimals, Section, tickKasFraction, tickPriceFraction, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
 import { CrossCheckBanner } from './CrossCheckBanner';
 import { useSystemStatus } from '../shell/StatusProvider';
@@ -32,15 +32,14 @@ import { NotTradablePage } from './NotTradablePage';
 import { buildTokenRows, sharedTickerIds, tradableRows } from './token-model';
 import { TradeTape } from './TradesPanel';
 import { tradeRows } from './trades-model';
-import { WalletTokenBalances } from './WalletTokenBalances';
 import './market.css';
 
 const BOOK_DEPTH = 12;
 const TAPE_LIMIT = 50;
 
 /**
- * `#/market/<covenantId>`: an exchange layout. Title bar + 24 h stats; order book | price chart, depth and trade tape | order ticket and
- * balances; token facts below. Live: the WebSocket feed (`book:` / `fills:`) triggers a debounced refetch, 5 s polling without it.
+ * `#/market/<covenantId>`: an exchange layout. Title bar + 24 h stats; order book | price chart, depth and trade tape | order ticket;
+ * token facts below. Live: the WebSocket feed (`book:` / `fills:`) triggers a debounced refetch, 5 s polling without it.
  */
 export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; amount?: string }) {
   const services = useServices();
@@ -57,7 +56,6 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
         ? { side: props.ticket === 'cover' ? 'buy' : 'sell', type: 'market', ...(props.amount ? { amount: BigInt(props.amount) } : {}) }
         : undefined,
   );
-  const [balKey, setBalKey] = useState(0);
   const [liveKey, setLiveKey] = useState(0);
   // bumps on a reorg / resync (history may have changed, not only grown): the chart reloads in full instead of fetching only its newest bars
   const [resyncKey, setResyncKey] = useState(0);
@@ -115,7 +113,6 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     if (full) setResyncKey((k) => k + 1);
   };
   const mode = useLiveRefresh(services, [`book:${id}`, `fills:${id}`], (e) => !e.token || e.token === id, (full) => refreshAll(false, full));
-  useInterval(() => setBalKey((k) => k + 1), 15_000, !!wallet.info);
 
   // every book row carries its own scale; the market's is the token's standard scale (`10^decimals`, at most 10^9): prices per whole token
   const decimals = row?.decimals ?? 0;
@@ -359,7 +356,6 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
               </Banner>
             </Section>
           )}
-          {info ? <WalletTokenBalances token={info} refreshKey={balKey} /> : null}
         </div>
       }
       details={<TokenDetails row={row} services={services} />}

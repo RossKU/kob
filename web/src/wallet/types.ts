@@ -67,6 +67,11 @@ export interface SignOptions {
   /** network name used by wallets that need it (Kastle) */
   network?: string;
   timeoutMs?: number;
+  /**
+   * the transaction re-times the one the wallet signed last (planned again with a later clock after the user confirmed it): the private-key
+   * signer signs it without asking again when its own decoding finds the same terms; other wallets ask as usual
+   */
+  retime?: boolean;
 }
 
 export class WalletError extends Error {
