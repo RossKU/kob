@@ -317,7 +317,9 @@ test('a late Approve (9 s in the frame) on a market order: the frame is not show
     .toMatchObject({ frame: expect.any(Number) });
   const size = await f.locator('body').evaluate(() => ({ content: Math.ceil(document.getElementById('signer')!.getBoundingClientRect().height), frame: window.innerHeight }));
   test.info().annotations.push({ type: 'signer-table', description: `content ${size.content}px in a frame of ${size.frame}px (viewport ${JSON.stringify(page.viewportSize())})` });
-  expect(Math.abs(size.frame - size.content), 'the frame fits its content').toBeLessThanOrEqual(2);
+  // as tall as its content, or (a table taller than the viewport leaves: other fonts, a phone) as tall as the viewport leaves, then it scrolls
+  const room = await page.getByTestId('signer-frame').evaluate((el) => window.innerHeight - Math.ceil(el.getBoundingClientRect().top) - 14);
+  expect(Math.abs(size.frame - Math.min(size.content, room)), 'the frame fits its content, up to the viewport').toBeLessThanOrEqual(2);
   // the table follows the market and the clock while it is open: its start is said from the clock and moves on
   const start = f.getByTestId('signer-order-0').locator('dd[data-daa]').first();
   await expect(start).toContainText(/^(now|in \d+ s)DAA \d+$/, { timeout: 5_000 });

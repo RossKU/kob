@@ -423,10 +423,11 @@ a.explorer-link:hover { color: var(--primary); border-bottom-color: var(--primar
 
 /* private-key signer frame (ui/shell/SignerFrame.tsx): above dialogs and toasts; no opacity / transform / filter on it or its ancestors (the frame's
    own visibility check, IntersectionObserver v2, treats those as "not visible" and keeps its Approve button disabled) */
-.signer-layer { position: fixed; inset: 0; z-index: 300; background: var(--overlay); display: flex; align-items: flex-start; justify-content: center; padding: 72px 12px 12px; }
+/* a short top padding: the frame gets as much of a laptop's or a phone's height as it can before it has to scroll */
+.signer-layer { position: fixed; inset: 0; z-index: 300; background: var(--overlay); display: flex; align-items: flex-start; justify-content: center; padding: 16px 12px 12px; }
 .signer-layer[hidden] { display: none; }
 .signer-box { width: min(440px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .signer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 4px 4px 12px; border-bottom: 1px solid var(--border); }
 .signer-frame { display: block; width: 100%; border: 0; height: 120px; }
 /* until the frame reports its content height (SignerFrame.tsx), a request gets the viewport */
-.signer-frame-sign, .signer-frame-hidden { height: calc(100vh - 110px); }
+.signer-frame-sign, .signer-frame-hidden { height: calc(100vh - 70px); }

@@ -1,7 +1,8 @@
 // The private-key signer frame (signer.html) in the app: `<iframe sandbox="allow-scripts">` WITHOUT allow-same-origin, so it runs in an opaque
 // origin and this page's scripts can read neither its DOM nor its memory. Mounted while a private-key session exists (removing it forgets the
 // key), shown for the key entry and for each signing request, hidden in between. Messages go through `SignerHost` (wallet/local-key.ts). The
-// frame is as tall as its content (it reports its height), up to the viewport less SIGNER_CHROME_PX; beyond that it scrolls.
+// frame is as tall as its content (it reports its height), up to what the viewport leaves below the frame's top (less SIGNER_BOTTOM_PX); beyond
+// that it scrolls (the frame's Approve then waits until every part was seen: signer/main.ts).
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { fromSigner } from '../../signer/protocol';
@@ -21,8 +22,8 @@ export interface SignerFrameProps {
 
 export const SIGNER_URL = `${import.meta.env.BASE_URL}signer.html`;
 
-/** What the panel around the frame takes of the viewport's height (its top offset, head and margins). */
-const SIGNER_CHROME_PX = 110;
+/** What the panel takes of the viewport below the frame (the layer's bottom padding and the box's border). */
+const SIGNER_BOTTOM_PX = 14;
 
 export function SignerFrame(props: SignerFrameProps) {
   if (props.mode === 'closed') return null;
@@ -34,6 +35,8 @@ function SignerPanel(props: SignerFrameProps) {
   const events = useRef(props.events);
   events.current = props.events;
   const [content, setContent] = useState<number | null>(null);
+  // where the frame starts in the viewport (the layer's top padding and the panel's head; measured, as fonts and widths vary)
+  const frameTop = (): number => Math.ceil(frame.current?.getBoundingClientRect().top ?? 72);
   const [viewport, setViewport] = useState(() => window.innerHeight);
   useEffect(() => {
     const onResize = () => setViewport(window.innerHeight);
@@ -78,7 +81,7 @@ function SignerPanel(props: SignerFrameProps) {
           referrerpolicy="no-referrer"
           title={t('signer.frameTitle')}
           data-testid="signer-frame"
-          {...(content !== null ? { style: { height: `${Math.max(60, Math.min(content, viewport - SIGNER_CHROME_PX))}px` } } : {})}
+          {...(content !== null ? { style: { height: `${Math.max(60, Math.min(content, viewport - frameTop() - SIGNER_BOTTOM_PX))}px` } } : {})}
         />
       </div>
     </div>
