@@ -86,12 +86,14 @@ export function NotificationPanel(props: { onClose: () => void }) {
           <p data-testid="notify-connect">{t('notify.connect')}</p>
         ) : (
           <>
-            <div class="row">
-              <Button small onClick={n.markAllRead} disabled={n.unread === 0} data-testid="notify-mark-read">{t('notify.markRead')}</Button>
-              <Button small variant="ghost" onClick={n.clear} disabled={n.items.length === 0} data-testid="notify-clear">{t('notify.clear')}</Button>
-            </div>
+            {n.items.length ? (
+              <div class="row">
+                <Button small onClick={n.markAllRead} disabled={n.unread === 0} data-testid="notify-mark-read">{t('notify.markRead')}</Button>
+                <Button small variant="ghost" onClick={n.clear} data-testid="notify-clear">{t('notify.clear')}</Button>
+              </div>
+            ) : null}
             {n.items.length === 0 ? (
-              <p class="muted" data-testid="notify-empty">{t(n.settings.enabled ? 'notify.empty' : 'notify.disabled')}</p>
+              <p class="muted" data-testid="notify-empty">{t('notify.empty')}</p>
             ) : (
               <ul class="notify-list" data-testid="notify-list">
                 {n.items.map((e) => <Item key={e.id} e={e} onNavigate={close} />)}

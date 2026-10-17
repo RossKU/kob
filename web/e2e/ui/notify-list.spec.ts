@@ -31,3 +31,19 @@ test('notifications off: the bell still lists what its badge counts, newest firs
   await panel.getByTestId('notify-mark-read').click();
   await expect(page.getByTestId('notify-unread')).toHaveCount(0);
 });
+
+test('notifications off and nothing collected: one line says so with its switch, "No notifications yet.", no list buttons', async ({ appPage: page, mock }) => {
+  await openMarket(page, mock);
+  await expect(page.getByTestId('notify-unread')).toHaveCount(0);
+  await page.getByTestId('notify-bell').click();
+  const panel = page.getByTestId('notify-panel');
+  await expect(panel.getByTestId('notify-disabled')).toHaveText(/^Notifications are off: nothing new is collected\.\s*Turn on$/);
+  expect(((await panel.innerText()).match(/Notifications are off/g) ?? []).length, 'said once').toBe(1);
+  await expect(panel.getByTestId('notify-empty')).toHaveText('No notifications yet.');
+  await expect(panel.getByTestId('notify-mark-read')).toHaveCount(0);
+  await expect(panel.getByTestId('notify-clear')).toHaveCount(0);
+  // turned on: the off line goes, the empty line stays
+  await panel.getByTestId('notify-enable').click();
+  await expect(panel.getByTestId('notify-disabled')).toHaveCount(0);
+  await expect(panel.getByTestId('notify-empty')).toHaveText('No notifications yet.');
+});
