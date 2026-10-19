@@ -11,6 +11,7 @@
 //! | [`artifacts`] | embedded `silverc` artifacts and raw KRON token programs, template-hash pinning, network-constant checks |
 //! | [`state`] | typed state of every order kind (both families) and the token states; the quote rule (`quote_of`) and the per-kind order arithmetic |
 //! | [`kcc1`] / [`kcc2`] | KCC-1 hash notation, push forms, type names, dispatch tags, strict argument and state decoding; KCC-2 authority-scheme registry, authority values, minimum approval checks |
+//! | [`kcc23`] | KCC-23 metadata JSON: the strict codec of a preparation payload, the binding check against a covenant id, KOB's token-metadata convention |
 //! | [`script`] | signature-script encoding (entry args, dispatch tag, redeem push) |
 //! | [`build`] | builders: create / cancel(-replace, stray sweep) / refund / kill / close / send; matcher batches (auctions, triggers, stop entries, repeat merges); keeper updates; two-token routes; pair orders (routed through the KAS books, netted against opposite pair orders, from inventory) |
 //! | [`router`] | the KOB router (Argent): payment intents (KasToToken, TokenToKas, TokenSwap), their pinned actors and states |
@@ -38,6 +39,7 @@ pub mod json;
 pub mod kcc1;
 pub mod kcc2;
 pub mod kcc20;
+pub mod kcc23;
 pub mod payload;
 pub mod profile;
 pub mod public_mint;
