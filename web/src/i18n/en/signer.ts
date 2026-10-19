@@ -40,6 +40,7 @@ export default {
   'signer.fee': 'Network fee',
   'signer.net.tokenAssumed': '{id} (decimals assumed {decimals})',
   'signer.net.tokenIssued': '{ticker} ({id}, unverified)',
+  'signer.net.tokenDeclared': '{ticker} ({id}, declared on chain, unverified)',
   'signer.updated': 'Updated: some figures changed since this request was first shown.',
   'signer.rel.now': 'now',
   'signer.rel.s': 'in {n} s',

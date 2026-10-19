@@ -160,6 +160,11 @@ const isUnsupported = (e: unknown): boolean => e instanceof IndexerError && (e.s
 export interface IndexerApi {
   health(o?: RequestOptions): Promise<HealthView>;
   tokens(o?: RequestOptions): Promise<IndexerTokenView[]>;
+  /**
+   * `GET /v1/tokens/{id}/declaration`: the token's KCC-23 launch proof (`kob-kcc23-proof/1`), or null when the indexer holds none or does not
+   * serve the route. Never trusted as it is: the caller verifies it against the covenant id (data/token-declarations.ts).
+   */
+  declaration?(covenantId: Hex, o?: RequestOptions): Promise<unknown | null>;
   book(token: Hex, q?: { depth?: number; aggregate?: boolean }, o?: RequestOptions): Promise<BookView>;
   /** null when the indexer does not know the covenant id (yet: a fresh placement needs a few seconds) */
   order(id: Hex, o?: RequestOptions): Promise<OrderView | null>;
@@ -339,6 +344,15 @@ export class HttpIndexer implements IndexerApi {
     return Array.isArray(r?.tokens) ? r.tokens.filter((v) => typeof v?.covenant_id === 'string' && /^[0-9a-f]{64}$/.test(v.covenant_id)).map(normalizeTokenView) : [];
   }
 
+  async declaration(covenantId: Hex, o?: RequestOptions) {
+    try {
+      return await this.getOrNull<unknown>(`/v1/tokens/${assertHash('covenant id', covenantId)}/declaration`, {}, o);
+    } catch (e) {
+      if (isUnsupported(e)) return null;
+      throw e;
+    }
+  }
+
   async book(token: Hex, q: { depth?: number; aggregate?: boolean } = {}, o?: RequestOptions) {
     // bids that can no longer fund one base unit come back with amount 0: they are not liquidity and never enter the book (they stay in the maker's orders)
     return dropEmptyRows(await this.get<BookView>(`/v1/books/${assertHash('token', token)}`, { depth: q.depth, aggregate: q.aggregate }, o));
@@ -493,6 +507,7 @@ export function normalizeTokenView(v: IndexerTokenView): IndexerTokenView {
   const out: IndexerTokenView = { ...v };
   if (typeof v.ticker !== 'string') out.ticker = '';
   if (v.standing !== undefined && v.standing !== null) out.standing = STANDINGS.includes(v.standing) ? v.standing : 'unverified';
+  if (v.declaration !== undefined && v.declaration !== true) delete out.declaration;
   if (v.powers !== undefined) out.powers = Array.isArray(v.powers) ? [...new Set(v.powers.filter((p): p is string => typeof p === 'string' && POWER.test(p)))] : [];
   return out;
 }

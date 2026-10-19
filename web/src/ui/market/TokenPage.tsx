@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'preact/hooks';
 import { displayToken } from '../../app/token-display';
+import { useDeclaration } from '../../app/use-declaration';
 import { useServices, useWallet } from '../../app/context';
 import type { TicketPreset } from '../../app/router';
 import { t } from '../../i18n';
@@ -79,10 +80,12 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // the decimals entered for the token's first order (used only while no order tells the scale); per token
   const [entered, setEntered] = useState<{ id: string; decimals: number } | null>(null);
   const enteredDecimals = entered && entered.id === id ? entered.decimals : null;
-  const open = useOpenToken(baseRow, liveKey, enteredDecimals);
+  // the token's KCC-23 declaration (verified against its covenant id): its decimals decide an open-list token's scale, its facts are shown
+  const declared = useDeclaration(id);
+  const open = useOpenToken(baseRow, liveKey, enteredDecimals, declared ?? null);
   // a token the indexer lists without a ticker ("") is named like one without any (app/token-display.ts): the open-list token's name (this
   // browser's issuance ticker, else its covenant id), else the display name; never an empty name in a title, a unit or a hint
-  const shown = useMemo(() => displayToken(registry, services.config.network, id), [registry, services.config.network, id]);
+  const shown = useMemo(() => displayToken(registry, services.config.network, id), [registry, services.config.network, id, declared]);
   const row = useMemo(() => {
     if (!baseRow) return baseRow;
     const named = { ...baseRow, ticker: baseRow.ticker || open.info?.ticker || shown?.ticker || '' };
@@ -281,7 +284,16 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           }
         />
       }
-      notices={<CrossCheckBanner token={id} refreshKey={liveKey} />}
+      notices={
+        <>
+          {shown?.declarationConflicts?.length ? (
+            <Banner tone="warn" title={t('market.declaration.conflictTitle')} data-testid="declaration-conflict">
+              {t('market.declaration.conflict', { fields: shown.declarationConflicts.map((f) => t(`token.note.field.${f}`)).join(', ') })}
+            </Banner>
+          ) : null}
+          <CrossCheckBanner token={id} refreshKey={liveKey} />
+        </>
+      }
       stats={<MarketStats model={statsForView} ticker={name} inverted={inverted} loading={!!indexer && stats.data === undefined && stats.loading} unsupported={stats.data === null && !!indexer} />}
       book={
         <Section

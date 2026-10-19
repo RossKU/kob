@@ -145,6 +145,8 @@ export default {
   'market.trades.unsettled': 'unsettled',
 
   'market.ticket.title': 'Trade',
+  'market.declaration.conflictTitle': 'The registry and the chain disagree about this token',
+  'market.declaration.conflict': 'What this token recorded on chain at its creation (KCC-23) differs from its registry entry (or from the price scale of its market) in: {fields}. The on-chain values are shown. When the decimals differ, orders of this token are not planned until the two agree.',
   'market.ticket.networkBlocked': 'Your wallet is on the wrong network: trading is blocked until you switch it.',
   'market.ticket.untradable': 'Not tradable in this build: {reason}. The book and your balances stay visible.',
   'market.ticket.untradableUnknown': 'View only: trading needs a reviewed token program built into this app.',
@@ -225,7 +227,7 @@ export default {
   'market.first.change': 'Change',
   'market.open.no-extension': 'the extension commitment of this token could not be read from its orders',
   'market.open.scale-invalid': 'the price scale its orders use is not one this build can trade',
-  'market.open.scale-conflict': 'the decimals you entered give another price scale than the one the first order of this token set for its market, which every order of it uses',
+  'market.open.scale-conflict': 'the decimals entered, or the decimals this token recorded on chain, give another price scale than the one the first order of this token set for its market, which every order of it uses',
   'market.first.clear': 'Use the market\'s scale',
 
   'market.crosscheck.title': 'Indexers disagree',

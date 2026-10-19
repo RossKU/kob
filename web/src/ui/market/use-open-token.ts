@@ -4,6 +4,7 @@
 // orders takes the decimals the user entered for its first order (`decimals`); a book that cannot be read never lets them stand in for the
 // scale of orders that may exist.
 import { issuedToken } from '../../data/issued-decimals';
+import type { DeclaredToken } from '../../data/token-declarations';
 import { useMemo } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { extensionReferences, synthesizeOpenToken, type ScaleSample, type OpenTokenIssue } from '../../kob/open-token';
@@ -24,7 +25,7 @@ export interface OpenTokenState {
 const NONE: OpenTokenState = { info: null, reason: null, loading: false };
 
 /** `refreshKey` changes when the book moved: the scales are read again (coalesced). `decimals`: entered for a first order (used only without orders). */
-export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: number | null = null): OpenTokenState {
+export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: number | null = null, declared: DeclaredToken | null = null): OpenTokenState {
   const { indexer, kob, registry, tracker, config } = useServices();
   const pubkey = useWallet().info?.pubkey ?? null;
   const view = row && row.source !== 'registry' && row.index && !row.delisted ? row.index : null;
@@ -55,7 +56,8 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: num
     const refs = extensionReferences(view.covenant_id, registry, facts.data.holdings);
     const r = synthesizeOpenToken(kob, view, facts.data.scales, facts.data.ext, registry, refs, {
       decimals, network: config.network, fromHoldings: row?.source === 'held', issued: issuedToken(config.network, view.covenant_id),
+      declared: declared && declared.covenantId === view.covenant_id ? declared : null,
     });
     return r.ok ? { info: r.info, reason: null, loading: false } : { info: null, reason: r.reason, loading: false };
-  }, [view, facts.data, facts.error, facts.loading, kob, registry, decimals, config.network, row?.source]);
+  }, [view, facts.data, facts.error, facts.loading, kob, registry, decimals, config.network, row?.source, declared]);
 }

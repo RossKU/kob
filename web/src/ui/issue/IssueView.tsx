@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { readFees } from '../../app/env';
 import { rememberIssuedToken } from '../../data/issued-decimals';
+import { adoptDeclaration } from '../../data/token-declarations';
 import { useServices, useWallet } from '../../app/context';
 import { t } from '../../i18n';
 import { issueText } from '../../i18n/issue-text';
@@ -146,6 +147,7 @@ export function IssueView() {
     const plan = { built: { tx: rec.genesis } as BuiltTx, token: rec.token };
     const trackFailed = !trackIssued(services, plan);
     rememberIssuedToken(config.network, rec.token.covenantId, { decimals: rec.token.decimals, ticker: rec.token.ticker, name: rec.token.name });
+    adoptDeclaration(kob, config.network, rec.token.covenantId, rec.docs.launchProof);
     removeCreation(config.network, rec.covenantId);
     setPending((xs) => xs.filter((x) => x.covenantId !== rec.covenantId));
     if (show) setPhase({ kind: 'result', plan: { token: rec.token, docs: rec.docs }, txid, trackFailed });
@@ -199,6 +201,8 @@ export function IssueView() {
       // the issuer's own decimals, ticker and name: they prefill (never set) the decimals of the token's first order in this browser, and name the
       // token, marked unverified, wherever the registry does not (app/token-display.ts)
       rememberIssuedToken(config.network, current.token.covenantId, { decimals: current.token.decimals, ticker: current.token.ticker, name: current.token.name });
+      // the token's facts as it recorded them on chain: shown at once, without waiting for an indexer (verified like any proof)
+      adoptDeclaration(kob, config.network, current.token.covenantId, current.docs.launchProof);
       setNotice(null);
       setPhase({ kind: 'result', plan: current, txid: r.txid, trackFailed });
       return;

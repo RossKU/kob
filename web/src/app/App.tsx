@@ -18,6 +18,8 @@ import { NotifyProvider } from '../ui/notify/NotifyProvider';
 import { ViewBoundary } from '../ui/shell/ViewBoundary';
 import { AutoRefundRunner } from '../ui/orders/AutoRefund';
 import { useServices } from './context';
+import { useDeclarationsVersion } from './use-declaration';
+import { loadDeclaration, restoreDeclarations } from '../data/token-declarations';
 import { routeToHash, useRoute, usdMarketHash, type Route } from './router';
 
 /** The landing screen (empty hash, config `home`): a chart by default; the market list stays at `#/market`. */
@@ -87,6 +89,25 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
     if (document.querySelector('[role="dialog"]')) return;
     document.getElementById('main')?.focus({ preventScroll: true });
   }, [routeKey]);
+
+  // KCC-23 declarations: the ones kept in this browser (re-verified), then those of the tokens the indexer marks as declared; every view re-renders
+  // when one becomes known (the names, tickers and decimals it shows follow: app/token-display.ts)
+  useDeclarationsVersion();
+  useEffect(() => {
+    const { kob, indexer, config } = services;
+    restoreDeclarations(kob);
+    if (!indexer) return;
+    let alive = true;
+    indexer
+      .tokens()
+      .then((rows) => {
+        for (const r of rows) if (alive && r.declaration) void loadDeclaration(kob, indexer, config.network, r.covenant_id);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [services]);
 
   // one socket for the whole app: the shell subscribes to the global channels, views add their own (book:<token>, fills:<token>)
   useEffect(() => {

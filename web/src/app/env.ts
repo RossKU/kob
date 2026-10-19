@@ -1,6 +1,7 @@
 // Builds the planners' environment (PlanEnv / CancelEnv) from live services: node clock + UTXOs, indexer book + own orders, token tracker.
 // Pure with respect to the DOM; every dependency comes through `Services`, so it is unit-testable with fakes.
 import type { BookOrderView, LevelView, OrderView } from '../data/indexer-types';
+import { declaredToken } from '../data/token-declarations';
 import type { CancelEnv } from '../kob/cancel';
 import { normalizePolicy, readFeeContext, type FeeContext } from '../kob/fee-policy';
 import type { FeeMode, KeyUtxo, TokenUtxo } from '../kob/types';
@@ -204,11 +205,25 @@ export function assemblePlanEnv(
 }
 
 /**
+ * A token whose registry entry (or market scale) and KCC-23 declaration name different decimals is not planned: the same base units would mean
+ * other whole-token amounts and prices, and neither side is silently preferred (app/token-display.ts shows the on-chain value, flagged). An
+ * open-list token takes the declared decimals once the declaration is known (kob/open-token.ts); before that it waits too.
+ */
+function assertDeclaredDecimals(s: Services, token: TokenInfo): void {
+  const d = declaredToken(s.config.network, token.covenantId)?.decimals;
+  if (d === undefined || d === null) return;
+  if (d !== token.decimals) {
+    throw new Error(`token ${token.ticker}: its ${token.openList ? 'market' : 'registry entry'} says ${token.decimals} decimals, what it recorded on chain says ${d}; orders wait until they agree`);
+  }
+}
+
+/**
  * Everything `planOrder` needs for one token and the connected wallet. Rejects when the node is unreachable. The three parts do not depend on each
  * other: they are read at the same time, one round.
  */
 export async function buildPlanEnv(s: Services, wallet: Pick<WalletInfo, 'pubkey'>, token: TokenInfo, o: BuildEnvOptions = {}): Promise<PlanEnv> {
   if (!token.tradable || !token.program) throw new Error(`token ${token.ticker} is not tradable in this build (${token.untradableReason ?? 'unsupported'})`);
+  assertDeclaredDecimals(s, token);
   const market = tokenMarketOf(s, token);
   // the market read never rejects; a holdings failure is awaited below, so a node failure first never leaves it unhandled
   const marketPart = readMarketPart(s, market, o);
@@ -280,6 +295,7 @@ export async function kasReferenceOf(indexer: Pick<NonNullable<Services['indexer
 export async function buildPairPlanEnv(s: Services, wallet: Pick<WalletInfo, 'pubkey'>, base: TokenInfo, quote: TokenInfo, o: BuildEnvOptions = {}): Promise<PairPlanEnv> {
   for (const t of [base, quote]) {
     if (!t.tradable || !t.program) throw new Error(`token ${t.ticker} is not tradable in this build (${t.untradableReason ?? 'unsupported'})`);
+    assertDeclaredDecimals(s, t);
   }
   if (base.covenantId === quote.covenantId) throw new Error('a pair needs two different tokens');
   const a = tokenMarketOf(s, base);

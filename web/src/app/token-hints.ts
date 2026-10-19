@@ -37,10 +37,11 @@ export function signerTokenHints(kob: KobWasm, built: BuiltTx, maker: Hex | null
     const tk = registry.byCovenantId.get(id);
     if (tk) return /^[\x20-\x7e]{1,24}$/.test(tk.ticker) ? [{ covenantId: id, ticker: tk.ticker, decimals: tk.decimals, ...inverted }] : [];
     if (!network || !tokens.has(id)) return [];
-    // shown on this browser's issuance of it, else on the assumed decimals (no ticker: the frame names it by its covenant id)
+    // shown on its KCC-23 declaration or this browser's issuance of it, else on the assumed decimals (no ticker: the frame names it by its covenant id)
     const shown = displayToken(registry, network, id)!;
-    return shown.decimalsSource === 'issued' && /^[\x20-\x7e]{1,24}$/.test(shown.ticker)
-      ? [{ covenantId: id, ticker: shown.ticker, decimals: shown.decimals, source: 'issued', ...inverted }]
+    const source = shown.decimalsSource === 'declared' || shown.decimalsSource === 'issued' ? shown.decimalsSource : null;
+    return source && /^[\x20-\x7e]{1,24}$/.test(shown.ticker)
+      ? [{ covenantId: id, ticker: shown.ticker, decimals: shown.decimals, source, ...inverted }]
       : [{ covenantId: id, ticker: '', decimals: shown.decimals, source: 'assumed', ...inverted }];
   });
 }

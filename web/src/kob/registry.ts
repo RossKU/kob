@@ -184,12 +184,18 @@ export interface TokenInfo {
   /** synthesised from the indexer for an open-list token that has no registry entry (kob/open-token.ts): decimals inferred, tick 1 */
   openList?: boolean;
   /**
-   * DISPLAY ONLY (app/token-display.ts): a token the registry does not list, named for showing its amounts: `issued` = decimals and ticker
-   * from this browser's issuance of it, `assumed` = 8 decimals (the Kaspa convention) and its covenant id as the name. Never traded or verified.
+   * DISPLAY ONLY (app/token-display.ts): a token the registry does not list, named for showing its amounts: `declared` = name, ticker and
+   * decimals from its KCC-23 declaration on chain (verified against its covenant id), `issued` = decimals and ticker from this browser's issuance
+   * of it, `assumed` = 8 decimals (the Kaspa convention) and its covenant id as the name. Never traded or verified.
    */
-  decimalsSource?: 'issued' | 'assumed';
-  /** an open-list token: its scale (and decimals) from the token's orders, or `entered` by the user for its first order (no order yet) */
-  openScale?: 'orders' | 'entered';
+  decimalsSource?: 'declared' | 'issued' | 'assumed';
+  /**
+   * DISPLAY ONLY: the facts on which the token's registry entry (or its market's price scale) and its KCC-23 declaration disagree; the on-chain
+   * values are shown, flagged. Absent when they agree or the token declares nothing.
+   */
+  declarationConflicts?: ('decimals' | 'symbol' | 'name')[];
+  /** an open-list token: its scale (and decimals) from the token's orders, its KCC-23 declaration (`declared`, no order yet), or `entered` by the user for its first order */
+  openScale?: 'orders' | 'entered' | 'declared';
   /** an open-list KCC-20 token: where its extension commitment came from and how it compares with commitments known without the indexer */
   extension?: ExtensionCheck;
   /** kob-wasm program (null when this build cannot handle the template) */

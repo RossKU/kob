@@ -73,6 +73,7 @@ const tokenName = (covenantId: Hex, hint: TokenHint | undefined): string => {
   // a token the registry does not list (app/token-display.ts): its issued ticker, else its covenant id; marked
   if (hint.source === 'assumed') return t('signer.net.tokenAssumed', { id: longId(covenantId), decimals: hint.decimals });
   if (hint.source === 'issued') return t('signer.net.tokenIssued', { ticker: hint.ticker, id: longId(covenantId) });
+  if (hint.source === 'declared') return t('signer.net.tokenDeclared', { ticker: hint.ticker, id: longId(covenantId) });
   return `${hint.ticker} (${longId(covenantId)})`;
 };
 

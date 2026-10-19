@@ -54,6 +54,8 @@ export interface IndexerTokenView {
   template_id?: string | null;
   /** `kcc20` | `kron` */
   family?: 'kcc20' | 'kron';
+  /** the indexer holds a KCC-23 declaration of the token (`GET /v1/tokens/{id}/declaration`, verified by the client); absent on older executors */
+  declaration?: true;
 }
 
 /**

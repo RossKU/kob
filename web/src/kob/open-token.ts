@@ -7,14 +7,14 @@
 //   * extension commitment (KCC-20): the indexer row's, else the one of the token's listed orders; none found: `no-extension` (KRON has none).
 //     The pick and its source are kept on the TokenInfo (`extension`) so the pre-sign screen shows them, cross-checked against the commitments
 //     known without the indexer (`extensionReferences`: a genesis-verified registry entry, the wallet's node-verified holdings; audit A1-2);
-//   * scale: the scale of the token's market (a power of ten, the price denominator): the scale its first order set, open or ended, as the
-//     indexer reports it (`market_scale`), else (an older indexer) the one shared by most open orders of the token, so the wallet's orders quote
-//     the same whole token as the book; decimals = its exponent (the chain carries no decimals: amounts are shown in that whole token, prices per
-//     it). No order ever: the decimals the user entered for the token's first order (0..=9, scale 10^decimals; `openScale: 'entered'`), else
-//     `no-scale`. Nothing on chain or in the indexer states a token's decimals (an issuance's KCC-23 metadata and supply.json are off-chain
-//     files), so they are never assumed; once an order exists its scale decides again, also after every order of the token has ended (a first
-//     order with other decimals then would put two scales on one market: TN10 2026-10-15 O-3), and entered decimals that give another scale
-//     are refused (`scale-conflict`);
+//   * scale: a token created under KCC-23 declares its decimals on chain (`opts.declared`, verified against its covenant id): its scale is
+//     10^min(decimals, 9), and a market whose orders use another scale is a `scale-conflict` (`openScale: 'declared'` before any order). A token
+//     without a declaration (created before KCC-23): the scale its first order set, open or ended, as the indexer reports it (`market_scale`), else
+//     (an older indexer) the one shared by most open orders of the token, so the wallet's orders quote the same whole token as the book; decimals =
+//     its exponent (amounts are shown in that whole token, prices per it). No order ever: the decimals the user entered for the token's first
+//     order (0..=9, scale 10^decimals; `openScale: 'entered'`), else `no-scale`: such a token's decimals are never assumed; once an order exists
+//     its scale decides again, also after every order of the token has ended (a first order with other decimals then would put two scales on one
+//     market: TN10 2026-10-15 O-3), and entered decimals that give another scale are refused (`scale-conflict`);
 //   * program review: on mainnet only a `reviewed` program (the KCC-20 3/3 reference, its public-mint build, the KRON programs) is traded
 //     here, whatever the indexer lists; prototypes (8x8, ...) are `program-unreviewed`;
 //   * a KCC-20 token the indexer does not list at all (no order of it was ever placed) is known only from the wallet's own token UTXOs of it
@@ -110,6 +110,12 @@ export interface OpenTokenOptions {
    * (unverified, shown as such); the decimals still come from the market's scale
    */
   issued?: { ticker: string; name: string } | null;
+  /**
+   * the token's KCC-23 declaration, verified against its covenant id (data/token-declarations.ts): its decimals are the chain's, so the market's
+   * scale is `10^min(decimals, 9)` without any entered decimals, and orders of another scale are a `scale-conflict` (never silently re-read);
+   * its ticker and name label the token (declared by its creator, unreviewed)
+   */
+  declared?: { decimals: number | null; symbol: string | null; name: string | null } | null;
 }
 
 /**
@@ -148,23 +154,27 @@ export function synthesizeOpenToken(
   if (family === 'kcc20' && !ext) return { ok: false, reason: 'no-extension' };
   const fromOrders = marketScaleOf(view, orderScales);
   if (fromOrders === 'invalid') return { ok: false, reason: 'scale-invalid' };
+  const declared = opts.declared && opts.declared.decimals !== null && Number.isInteger(opts.declared.decimals) && opts.declared.decimals >= 0 && opts.declared.decimals <= 18 ? opts.declared.decimals : null;
   const d = opts.decimals;
   const typed = typeof d === 'number' && Number.isInteger(d) && d >= 0 && d <= MAX_OPEN_DECIMALS ? d : null;
   // decimals entered for a first order while the market has a scale: the same scale is fine, another is refused (never silently replaced: the
   // amount and the price typed for them would then mean other quantities)
   if (fromOrders !== null && typed !== null && 10 ** typed !== fromOrders) return { ok: false, reason: 'scale-conflict' };
-  const entered = fromOrders === null ? typed : null;
-  const scale = fromOrders ?? (entered !== null ? 10 ** entered : null);
+  // the decimals the token declared on chain decide its scale; a market whose orders use another one disagrees with the chain
+  const declaredScale = declared !== null ? 10 ** Math.min(declared, MAX_OPEN_DECIMALS) : null;
+  if (declaredScale !== null && fromOrders !== null && fromOrders !== declaredScale) return { ok: false, reason: 'scale-conflict' };
+  const entered = fromOrders === null && declaredScale === null ? typed : null;
+  const scale = fromOrders ?? declaredScale ?? (entered !== null ? 10 ** entered : null);
   if (scale === null) return { ok: false, reason: 'no-scale' };
-  const decimals = exponentOf(scale);
+  const decimals = declared ?? exponentOf(scale);
   if (decimals === null) return { ok: false, reason: 'scale-invalid' };
 
   const id = view.covenant_id;
   // its only name: 8 + 8 hex of the covenant id (a 4 + 4 fragment is 32 bits, which a token made to match it can copy); on the issuing browser
   // the ticker it was issued with (a label the issuer chose, unverified)
   const label = longId(id);
-  const shownTicker = opts.issued?.ticker || label;
-  const shownName = opts.issued?.name || shownTicker;
+  const shownTicker = opts.declared?.symbol || opts.issued?.ticker || label;
+  const shownName = opts.declared?.name || opts.issued?.name || shownTicker;
   const json = {
     ticker: label, name: label, family, covenant_id: id, template_id: templateId, extension_commitment: ext, extension_class: 'other' as const,
     decimals, tick: 1, status: 'listed' as const, verified: false,
@@ -175,13 +185,13 @@ export function synthesizeOpenToken(
     return { ok: false, reason: 'scale-invalid' };
   }
   // the shipped registry's capabilities of the program template always apply; the indexer's powers can only add to them
-  const declared = reg?.templates.find((t) => t.id === templateId)?.capabilities ?? [];
-  const capabilities = [...new Set([...declared, ...(view.powers ?? [])])].filter((p): p is Capability => (CAPABILITIES as readonly string[]).includes(p));
+  const templatePowers = reg?.templates.find((t) => t.id === templateId)?.capabilities ?? [];
+  const capabilities = [...new Set([...templatePowers, ...(view.powers ?? [])])].filter((p): p is Capability => (CAPABILITIES as readonly string[]).includes(p));
   return {
     ok: true,
     info: {
       ticker: shownTicker, name: shownName, family, covenantId: id, templateId, templateHash: tpl.hash, extensionCommitment: ext, extensionClass: 'other', decimals,
-      tick: 1n, status: 'listed', capabilities, display: null, openList: true, openScale: entered !== null ? 'entered' : 'orders', program,
+      tick: 1n, status: 'listed', capabilities, display: null, openList: true, openScale: entered !== null ? 'entered' : fromOrders === null && declaredScale !== null ? 'declared' : 'orders', program,
       templateMatchesPinned: true, prefixLen: tpl.prefixLen, suffixLen: tpl.suffixLen, slots: { inputs: tpl.tokenSlots[0], outputs: tpl.tokenSlots[1] },
       tradable: true, untradableReason: null, json,
       ...(family === 'kcc20' && ext ? { extension: checkExtension(ext, opts.fromHoldings ? 'holdings' : view.extension_commitment ? 'indexer' : 'orders', references) } : {}),
