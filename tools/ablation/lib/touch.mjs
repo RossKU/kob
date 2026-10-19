@@ -16,7 +16,8 @@
 // mintouch (n >= minTouch base units),
 // slope (== 0), cltv (tx.daa >= exposed + minRestDaa), interval / active / tokdaa (the three exposure terms),
 // tkcov (the custody carries the token's covenant id), owner (the custody is owned by the evidence ask, scheme
-// covenant id), tktpl / tkp2sh (the custody is a holder UTXO of the token's program: template hash, P2SH; the other kept).
+// covenant id), tktpl / tkp2sh (the custody is a holder UTXO of the token's program: template hash, P2SH; the other kept),
+// ext (the custody is of the order's extension commitment), bidext (an evidence bid names the order's extension commitment).
 import { rep, rx, rxDel } from './edits.mjs';
 
 const TPL_END = '        return rs.slice(pre, pre + stLen);\n    }\n';
@@ -75,6 +76,14 @@ const CHECKS = {
   tkp2sh: {
     note: 'the custody input tk is the P2SH of the holder redeem script read (template hash kept)',
     edits: f => [rep(TPL_END, TPL_END + NO_P2SH), rx(f, /tplState\(tk, /, 'tplStateNoP2sh(tk, ')],
+  },
+  ext: {
+    note: "the evidence ask's custody tk is of the order's extension commitment (units of the covenant id of another commitment are another token)",
+    edits: f => [rx(f, /require\((?:byte\[32\]\()?ts\.slice\(80, 112\)\)? == [^\n]*\);/, 'require(true);')],
+  },
+  bidext: {
+    note: "the evidence bid names the order's extension commitment (KobBid extensionCommitment [118..150))",
+    edits: f => [rx(f, /require\(byte\[32\]\(o\.slice\(118, 150\)\) == extensionCommitment\);/, 'require(true);')],
   },
 };
 

@@ -1,14 +1,18 @@
 //! Pre-mainnet internal security audit (2026-10-12) of the pair templates (`contracts/v2/KobPair.sil`, `KobCondPair.sil`,
-//! `KobIfdPair.sil`): reproducers for the suspicions of that review that were not refuted by reading the code, executed in
-//! the script engine against the templates compiled from source (`common/pair_harness.rs`).
+//! `KobIfdPair.sil`) and of the trigger evidence of the KAS-quoted stops: reproducers for the suspicions of that review that
+//! were not refuted by reading the code, executed in the script engine against the templates compiled from source
+//! (`common/pair_harness.rs`).
 //!
-//! - `AUD-EXT` (characterisation, a finding): the trigger evidence of a pair stop (`KobCondPair.rd` / `evLeg`,
-//!   `KobIfdPair.rd` / `evLeg`) compares the evidence order's token covenant id and scale, never its KCC-20 extension
-//!   commitment (nor that of the evidence custody `tk`). Units of A's covenant id with ANOTHER commitment (another token,
-//!   which only A's issuer can create in its genesis) traded by resting orders arm a stop of the real A. In an UPDATE the
-//!   stopped order spends no token, so the one-commitment-per-transfer rule of the KCC-20 program does not tie the
-//!   evidence to the order's own commitment. The tests assert that the whole transaction is ACCEPTED today; flip them
-//!   when the evidence pins the commitment.
+//! - `AUD-EXT` (a finding, closed by the order template version after the audit): the trigger evidence of a stop compared
+//!   the evidence order's token covenant id and scale, never its KCC-20 extension commitment (nor that of the evidence
+//!   custody `tk`). Units of a covenant id with ANOTHER commitment (another token, which only its issuer can create in the
+//!   genesis) traded by resting orders armed a stop of the real token. In an UPDATE the stopped order spends no token, so
+//!   the one-commitment-per-transfer rule of the KCC-20 program does not tie the evidence to the order's own commitment.
+//!   The reproducers (pair stops: `KobCondPair` / `KobIfdPair` `rd` / `evLeg`, token A and token B, both evidence modes;
+//!   KAS-quoted stops: `KobCondAsk` `touchAsk` / `touch`, `KobCondBid` `touchBid` / `touch`, `KobIfdBid` `touchBid`,
+//!   `KobIfdAsk` `touchAsk`, in an update and in the fill that arms) were accepted by every input then. They are now
+//!   refused by the stopped order, and an update is otherwise valid (every other input accepts it), so the commitment
+//!   check alone refuses it.
 //! - `AUD-RB` (a check without an ablation entry): `KobIfdPair.sil` `require(rptAmount <= 1 || rptAmount - 1 < minFill)`
 //!   (the re-arm bound: while at least one minimum fill of re-arms is left a fill takes at most `rptAmount - 1`, so it is
 //!   booked) had no attack scenario. NIAUD-RB1 / RB2 are its witnesses (buy-first and sell-first), PIAUD-RB1 / RB2 the
@@ -111,23 +115,23 @@ fn reext(e: &mut Ed, tok: [u8; 32], ext: [u8; 32], keep: [u8; 32]) {
     }
 }
 
-/// Runs `e` (the evidence moved to another commitment of A) and returns whether EVERY input accepts; `None` when the
-/// shape does not fit the token program's slots.
+/// Runs `e` and returns whether EVERY input accepts; `None` when the shape does not fit the token program's slots.
 fn accepted(r: &Run, e: &Ed) -> Option<(bool, Vec<Result<u64, String>>)> {
     let (tx, en) = e.finish(r.subs);
     let res = r.run_fitting(e, &tx, &en)?;
     Some((res.iter().all(|x| x.is_ok()), res))
 }
 
-/// The evidence order at cov 0x93 names A of `ext` (the edit reached the evidence, not a no-op).
-fn evidence_ext(e: &Ed) -> [u8; 32] {
-    let vi = e.input_of_cov(cov(0x93));
+/// The commitment of token `tok` that the evidence order of covenant `ev` names (the edit reached the evidence, not a
+/// no-op).
+fn evidence_ext(e: &Ed, ev: [u8; 32], tok: [u8; 32]) -> [u8; 32] {
+    let vi = e.input_of_cov(ev);
     let (t, st) = e.entry_state(vi);
     match AnyState::decode(t, &st).unwrap() {
         AnyState::KobAsk(x) => x.extension_commitment,
         AnyState::KobBid(x) => x.extension_commitment,
         AnyState::KobPair(p) => {
-            if p.s_cov_id == TOKEN_COV {
+            if p.s_cov_id == tok {
                 p.s_ext
             } else {
                 p.t_ext
@@ -137,31 +141,46 @@ fn evidence_ext(e: &Ed) -> [u8; 32] {
     }
 }
 
-fn report_finding(r: &Run, e: &Ed, stop_in: usize) {
-    assert_eq!(evidence_ext(e), OTHER_EXT, "{}: the evidence was not moved to the other commitment", e.name);
-    // control: the same transaction with the evidence order still naming the real commitment is refused by the evidence
-    // order (or the token program), so the edit really trades units of the other commitment
-    {
+/// The attack `e` (the evidence order of covenant `ev` trades token `tok` of another commitment) is refused by the
+/// stopped order at input `stop_in`; when `whole` (an update, every unit of `tok` moved: the transaction is otherwise
+/// valid) every other input accepts it, so the evidence's commitment check alone refuses it. Before the order template
+/// version after the audit 2026-10 every input accepted it (finding AUD-EXT).
+fn assert_refused(r: &Run, e: &Ed, stop_in: usize, ev: [u8; 32], tok: [u8; 32], whole: bool) {
+    assert_eq!(evidence_ext(e, ev, tok), OTHER_EXT, "{}: the evidence was not moved to the other commitment", e.name);
+    if whole && !ph::ablating() {
+        // control: the same transaction with the evidence order still naming the real commitment is refused by the
+        // evidence order (or the token program), so the edit really trades units of the other commitment
         let mut c = e.clone().named(&format!("{} [control: evidence state names EXT]", e.name));
-        let vi = c.input_of_cov(cov(0x93));
+        let vi = c.input_of_cov(ev);
         let (t, st) = c.entry_state(vi);
         let mut any = AnyState::decode(t, &st).unwrap();
-        reext_state(&mut any, TOKEN_COV, EXT);
+        reext_state(&mut any, tok, EXT);
         c.set_entry_state(vi, any.encode());
         if let Some((all, _)) = accepted(r, &c) {
             assert!(!all, "{} {}: control accepted (the edit did not reach the token)", c.name, r.pair);
         }
+        // only the stopped order refuses the attack
+        if let Some((_, res)) = accepted(r, e) {
+            let others: Vec<String> = res
+                .iter()
+                .enumerate()
+                .filter(|(i, x)| *i != stop_in && x.is_err())
+                .map(|(i, x)| format!("in[{i}]: {}", x.as_ref().unwrap_err()))
+                .collect();
+            assert!(others.is_empty(), "{} {}: other inputs refuse the attack too: {}", e.name, r.pair, others.join("; "));
+        }
     }
-    let Some((all, res)) = accepted(r, e) else {
-        println!("SKIP-SLOTS {} {}", e.name, r.pair);
-        return;
-    };
-    assert!(
-        all,
-        "{} {}: expected the evidence of another commitment to be ACCEPTED (finding AUD-EXT characterisation); results {res:?}",
-        e.name, r.pair
-    );
-    println!("FINDING-ACCEPTED {} {}  [the stop at in[{stop_in}] arms on units of another extension commitment]", e.name, r.pair);
+    r.bad(e, stop_in);
+}
+
+/// The tokens whose commitment the evidence edit of a pair stop moves: A, and B when it is a KCC-20 token. (tag, token,
+/// the evidence order naming it in mode 0, in mode 1.)
+fn ext_targets(pb: TemplateId) -> Vec<(&'static str, [u8; 32], [u8; 32], [u8; 32])> {
+    let mut v = vec![("", TOKEN_COV, cov(0x93), cov(0x93))];
+    if pb.family() == kob_protocol::Family::Kcc20 {
+        v.push(("B", TOKEN_B, cov(0x94), cov(0x93)));
+    }
+    v
 }
 
 // ---------------------------------------------------------------- AUD-EXT: KobCondPair arm updates
@@ -208,7 +227,7 @@ fn cond_arm_mode1(ask: bool, pa: TemplateId, pb: TemplateId) -> Batch {
 }
 
 #[test]
-fn aud_ext_cond_pair_arms_on_evidence_of_another_extension_commitment() {
+fn aud_ext_cond_pair_refuses_evidence_of_another_extension_commitment() {
     let subs = Subs::compile();
     for (pa, pb) in a_kcc_mixes() {
         ph::SLOT_GATE.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -223,11 +242,14 @@ fn aud_ext_cond_pair_arms_on_evidence_of_another_extension_commitment() {
                 let honest = Ed::new(&format!("PAUD-EXT-C{mode}{side} honest arm update, mode {mode}"), &bt);
                 r.ok(&honest);
                 let i = honest.order_in(OID);
-                let mut e = honest.clone().named(&format!(
-                    "AUD-EXT-C{mode}{side} KobCondPair arm update on evidence trading A of another extension commitment, mode {mode}"
-                ));
-                reext(&mut e, TOKEN_COV, OTHER_EXT, OID);
-                report_finding(&r, &e, i);
+                for (tag, tok, ev0, ev1) in ext_targets(pb) {
+                    let which = if tag.is_empty() { "A" } else { "B" };
+                    let mut e = honest.clone().named(&format!(
+                        "NAUD-EXT-C{mode}{side}{tag} KobCondPair arm update on evidence trading {which} of another extension commitment, mode {mode}"
+                    ));
+                    reext(&mut e, tok, OTHER_EXT, OID);
+                    assert_refused(&r, &e, i, if mode == 0 { ev0 } else { ev1 }, tok, true);
+                }
             }
         }
     }
@@ -283,7 +305,7 @@ fn ifd_update(s: IfdPairState, pa: TemplateId, pb: TemplateId, mode: u8) -> Acti
 }
 
 #[test]
-fn aud_ext_ifd_pair_arms_on_evidence_of_another_extension_commitment() {
+fn aud_ext_ifd_pair_refuses_evidence_of_another_extension_commitment() {
     let subs = Subs::compile();
     for (pa, pb) in a_kcc_mixes() {
         ph::SLOT_GATE.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -298,12 +320,89 @@ fn aud_ext_ifd_pair_arms_on_evidence_of_another_extension_commitment() {
                 let honest = Ed::new(&format!("PAUD-EXT-I{mode}{side} honest entry arm update, mode {mode}"), &bt);
                 r.ok(&honest);
                 let i = honest.order_in(E_ID);
-                let mut e = honest.clone().named(&format!(
-                    "AUD-EXT-I{mode}{side} KobIfdPair arm update on evidence trading A of another extension commitment, mode {mode}"
-                ));
-                reext(&mut e, TOKEN_COV, OTHER_EXT, E_ID);
-                report_finding(&r, &e, i);
+                for (tag, tok, ev0, ev1) in ext_targets(pb) {
+                    let which = if tag.is_empty() { "A" } else { "B" };
+                    let mut e = honest.clone().named(&format!(
+                        "NAUD-EXT-I{mode}{side}{tag} KobIfdPair arm update on evidence trading {which} of another extension commitment, mode {mode}"
+                    ));
+                    reext(&mut e, tok, OTHER_EXT, E_ID);
+                    assert_refused(&r, &e, i, if mode == 0 { ev0 } else { ev1 }, tok, true);
+                }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- AUD-EXT: the KAS-quoted stops
+
+/// The KAS-quoted stop shapes of the golden scenarios (`fx::scenarios_on`): (id, scenario, update). An update arms or
+/// trails next to the evidence fill and spends no token of its own (every unit of the token moves to the other
+/// commitment); a fill arms the stop in its own fill (only the evidence order and its custody move: the stopped order
+/// holds or receives units of the real commitment).
+const KAS_STOPS: [(&str, &str, bool); 10] = [
+    ("CA1", "cond.ask.update.arm", true),
+    ("CA2", "cond.ask.update.trail", true),
+    ("CA3", "cond.ask.stop.trigger", false),
+    ("CB1", "cond.bid.update.arm", true),
+    ("CB2", "cond.bid.update.trail", true),
+    ("CB3", "cond.bid.stop.trigger", false),
+    ("IB1", "ifd.bid.update.arm", true),
+    ("IB2", "ifd.bid.stopEntry.trigger", false),
+    ("IA1", "ifd.ask.update.arm", true),
+    ("IA2", "ifd.ask.stopEntry.trigger", false),
+];
+
+/// The stopped order of a KAS-quoted stop shape (input, covenant) and its evidence order (input, covenant).
+fn kas_stop_and_evidence(e: &Ed) -> (usize, [u8; 32], usize, [u8; 32]) {
+    use TemplateId::{KobAsk, KobBid, KobCondAsk, KobCondBid, KobIfdAsk, KobIfdBid};
+    let of = |ids: &[TemplateId]| -> Vec<usize> {
+        (0..e.plans.len()).filter(|i| matches!(&e.plans[*i], SigPlan::Entry { template, .. } if ids.contains(template))).collect()
+    };
+    let stops = of(&[KobCondAsk, KobCondBid, KobIfdAsk, KobIfdBid]);
+    let evs = of(&[KobAsk, KobBid]);
+    assert_eq!((stops.len(), evs.len()), (1, 1), "{}: one stopped order and one evidence order", e.name);
+    let c = |i: usize| cov_of(&e.entries[i]).expect("order covenant");
+    (stops[0], c(stops[0]), evs[0], c(evs[0]))
+}
+
+/// Moves the evidence order of covenant `ev` (input `ev_in`: its state and, for an ask, its custody) to the commitment
+/// `ext`.
+fn reext_evidence(e: &mut Ed, ev_in: usize, ev: [u8; 32], ext: [u8; 32]) {
+    let (t, st) = e.entry_state(ev_in);
+    let mut any = AnyState::decode(t, &st).unwrap();
+    assert!(reext_state(&mut any, TOKEN_COV, ext), "{}: the evidence is a KobAsk / KobBid of the token", e.name);
+    e.set_entry_state(ev_in, any.encode());
+    for i in 0..e.plans.len() {
+        if matches!(e.plans[i], SigPlan::TokenLeader { .. } | SigPlan::TokenDelegator { .. }) && e.in_tok(i).owner() == ev {
+            let st = e.in_tok(i);
+            e.set_in_tok(i, map_tok(st, |k| Kcc20State { extension_commitment: ext, ..k }, |k| k));
+        }
+    }
+}
+
+#[test]
+fn aud_ext_kas_stops_refuse_evidence_of_another_extension_commitment() {
+    let subs = Subs::compile_asks();
+    for prog in [Kcc20Ref8x8, Kcc20Ref, Kcc20PublicMint] {
+        ph::SLOT_GATE.store(true, std::sync::atomic::Ordering::Relaxed);
+        let r = Run { subs: &subs, pair: prog.name().to_string() };
+        let all = fx::scenarios_on(prog);
+        for (id, name, update) in KAS_STOPS {
+            let a = all.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("scenario {name} missing")).1.clone();
+            let Some(bt) = try_built(a) else {
+                println!("SKIP-SLOTS AUD-EXT-{id} {} (build)", r.pair);
+                continue;
+            };
+            let honest = Ed::new(&format!("PAUD-EXT-{id} honest {name}"), &bt);
+            r.ok(&honest);
+            let (si, sc, vi, vc) = kas_stop_and_evidence(&honest);
+            let mut e = honest.clone().named(&format!("NAUD-EXT-{id} {name} on evidence trading units of another extension commitment"));
+            if update {
+                reext(&mut e, TOKEN_COV, OTHER_EXT, sc);
+            } else {
+                reext_evidence(&mut e, vi, vc, OTHER_EXT);
+            }
+            assert_refused(&r, &e, si, vc, TOKEN_COV, update);
         }
     }
 }

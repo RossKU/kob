@@ -38,6 +38,9 @@ export const suite = {
 };
 
 const T_RPT = 'v2_buy_repeat_ifd_attacks';
+// AUD-EXT (closed by the template version after the audit): the evidence of another extension commitment, in the
+// audit_pair_sec_tests binary (the KAS-quoted stops on the 8/8, 3/3 and public-mint programs)
+const T_AUD = 'audit_pair_sec_tests::aud_ext_kas_stops_refuse_evidence_of_another_extension_commitment';
 // touch trigger batteries, one test fn per trigger kind
 const T_BS = 'v2_buy_touch_cond_settle';
 const T_BA = 'v2_buy_touch_cond_arm';
@@ -395,6 +398,8 @@ export const mutations = withPublicMint([
       cltv: { [T_BS]: ['NTB01', 'NTB03', 'NTB04'] },
       interval: { [T_BS]: ['NTB04'] },
       active: { [T_BS]: ['NTB03'] },
+      // AUD-EXT: only the evidence bid trades the other commitment (the token program refuses the mix)
+      bidext: { run: { [T_AUD]: ['NAUD-EXT-CB3'] }, inputOnly: ['NAUD-EXT-CB3'] },
     }),
   }),
   {
@@ -426,6 +431,9 @@ export const mutations = withPublicMint([
       owner: { [T_BT]: ['NTW15', 'NTW16'] },
       tktpl: { run: { [T_BT]: ['NTW02c'] }, inputOnly: ['NTW02c'] },
       tkp2sh: { run: { [T_BT]: ['NTW02d'] }, inputOnly: ['NTW02d'] },
+      // AUD-EXT: an update next to fills of units of another commitment (every input accepts it without the check)
+      bidext: { [T_AUD]: ['NAUD-EXT-CB1'] },
+      ext: { [T_AUD]: ['NAUD-EXT-CB2'] },
     }),
   }),
   {
@@ -503,6 +511,8 @@ export const mutations = withPublicMint([
       owner: { [T_AF]: ['NTK15', 'NTK16'], [T_AA]: ['NTL15', 'NTL16'] },
       tktpl: { run: { [T_AF]: ['NTK02c'], [T_AA]: ['NTL02c'] }, inputOnly: ['NTK02c', 'NTL02c'] },
       tkp2sh: { run: { [T_AF]: ['NTK02d'], [T_AA]: ['NTL02d'] }, inputOnly: ['NTK02d', 'NTL02d'] },
+      // AUD-EXT: the update (every input accepts it without the check) and the entry's fill (only the evidence moves)
+      ext: { run: { [T_AUD]: ['NAUD-EXT-IA1', 'NAUD-EXT-IA2'] }, inputOnly: ['NAUD-EXT-IA2'] },
     }),
   }),
   {

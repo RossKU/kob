@@ -4,9 +4,12 @@
 // Ids with a `k` / `r` suffix exist only where the token read is KCC-20 / KRON; NIH4 / NIP1 run on KCC/KCC (two tokens of
 // one program: only the covenant id tells them apart), NIS8 on a 16-input KCC-20 program, NIF12k on KCC/KRON.
 //
-// Coverage: every `require(` of KobIfdPair.sil (111, the eight noStrays slot lines included) has an entry below, except:
+// Coverage: every `require(` of KobIfdPair.sil (115, the eight noStrays slot lines included) has an entry below, except:
 //  - fill branch `require(n > 0)`: unreachable. The branch is entered only when nb is neither 0 (refund / update) nor
 //    negative (merge), so n > 0 always holds there.
+//  - `require(bScale > 0)` (AUD-NP, both scales positive as in KobPair): the scale of B enters only the stop-entry
+//    evidence, and every evidence order (KobAsk, KobBid, KobPair) refuses a non-positive scale of its own, so the
+//    evidence's scale comparison already fails; a hostile field of the maker's own order.
 //  - cancel `require(sb.length == 65)`: not independently load-bearing. A shorter signature fails `sb[64]` (index out of
 //    range), and a longer one is no Schnorr signature for checkSig, so removing it accepts no transaction.
 // Defence in depth (hold entries plus one combined entry each): the exit spk pin / genesis id (IF9 / IF10 / IF9b), the
@@ -50,10 +53,12 @@ const T_EVB = 'ifd_ev_battery';
 const T_MR = 'ifd_merge_rules';
 const T_MRF = 'ifd_merge_refund';
 const T_LIM = 'ifd_limits';
+// AUD-EXT: the evidence of another extension commitment (another kob-tests binary)
+const T_AUDI = 'audit_pair_sec_tests::aud_ext_ifd_pair_refuses_evidence_of_another_extension_commitment';
 // anchors of function-scoped edits
 const A_TPL = '    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {';
-const A_RD = '    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, byte[32] kTpl, int kPre, int kSuf, byte[32] oTok, int oFam, int osc,';
-const A_EVLEG = '    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, int tk, byte[32] tokTpl, int tokPre, int tokSuf, int minN) : int {';
+const A_RD = '    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, byte[32] ext, byte[32] kTpl, int kPre, int kSuf,';
+const A_EVLEG = '    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, byte[32] ext, int tk, byte[32] tokTpl, int tokPre, int tokSuf,';
 
 // the custody tk of the ask / pair evidence: a holder UTXO of the token's program. tplState without the template-hash
 // check (P2SH kept) / without the P2SH check (template hash kept), called for tk only (lib/touch.mjs NO_HASH / NO_P2SH)
@@ -225,6 +230,14 @@ export const mutations = [
   { id: 'IF99', file: F, test: T_EVB, expect: ['NE19b0'], note: 'evLeg: tk is owned by the B ask evidence with the covenant marker', edits: [rx(A_EVLEG, OWNER, '')] },
   { id: 'IF118', file: F, test: T_EVB, expect: ['NE25b0'], inputOnly: ['NE25b0'], note: "evLeg: the B ask evidence's custody tk is a holder of token B's program (template hash; P2SH kept): an old look-alike holder of another program refused", edits: tkNoHash(A_EVLEG) },
   { id: 'IF119', file: F, test: T_EVB, expect: ['NE26b0'], inputOnly: ['NE26b0'], note: "evLeg: tk is the P2SH of the holder redeem it shows (template hash kept): an old non-P2SH input with the genuine redeem refused", edits: tkNoP2sh(A_EVLEG) },
+  // AUD-EXT (closed by the template version after the audit): the evidence trades the entry's commitments (aExt / bExt).
+  // The attacks (audit_pair_sec_tests, NAUD-EXT-I<mode><side>[B]: a = sell stop, b = buy stop) move every unit of A (or
+  // of B) to another commitment next to an arm update: without the check every input accepts them.
+  { id: 'IF120', file: F, test: T_AUDI, expect: ['NAUD-EXT-I0b'], note: "rd: a KCC-20 KAS-book bid of A names A's commitment (its extensionCommitment, read with its scale)", edits: [rx(A_RD, /byte\[\] got = o\.slice\(34, 66\) \+ o\.slice\(118, 126 \+ d\);/, 'byte[] got = o.slice(34, 66) + o.slice(118, 126 + d);\n        if (!ask && fam != FAM_KRON) { got = o.slice(34, 66) + byte[](ext) + o.slice(150, 159); }')] },
+  { id: 'IF121', file: F, test: T_AUDI, expect: ['NAUD-EXT-I0a', 'NAUD-EXT-I1a', 'NAUD-EXT-I1bB'], note: "rd: a KCC-20 custody of the ask / pair evidence is of its token's commitment (mode 0 the A ask; mode 1 the pair order's S)", edits: [rx(A_RD, /if \(cFam != FAM_KRON\) \{ require\(byte\[32\]\(cs\.slice\(80, 112\)\) == cExt\); \}/, '')] },
+  { id: 'IF122', file: F, test: T_AUDI, expect: ['NAUD-EXT-I1aB', 'NAUD-EXT-I1b'], note: "rd: the pair evidence's tExt is the commitment of its T (B of a pair ASK, A of a pair BID)", edits: [rx(A_RD, /\+ byte\[\]\(tI\) \+ byte\[\]\(tE\)\n\s*\+ byte\[\]\(0x08\)/, '+ byte[](tI) + byte[](0x08)'), rx(A_RD, /o\.slice\(238, 279\)/, 'o.slice(270, 279)')] },
+  { id: 'IF123', file: F, test: T_AUDI, expect: ['NAUD-EXT-I0aB'], note: "evLeg: a KCC-20 bid of B names B's commitment", edits: [rx(A_EVLEG, /require\(byte\[32\]\(o\.slice\(118, 150\)\) == ext\);/, 'require(true);')] },
+  { id: 'IF124', file: F, test: T_AUDI, expect: ['NAUD-EXT-I0bB'], note: "evLeg: the custody of a KCC-20 ask of B is of B's commitment", edits: [rx(A_EVLEG, /if \(fam != FAM_KRON\) \{ require\(byte\[32\]\(cs\.slice\(80, 112\)\) == ext\); \}/, '')] },
   // ---- the stop-entry evidence: stopTouch()
   { id: 'IF100', file: F, test: T_EVB, expect: ['NE21a1', 'NE21b1'], note: 'stopTouch: evMode is 0 or 1', edits: [rx(A_STOP, /require\(evMode == 1\);/, '')] },
   { id: 'IF101', file: F, test: T_EVB, expect: ['NE22b0'], note: 'stopTouch: the B quote is positive (an ask of B at price 0 would arm any buy stop: ceil(stop * 0 / scale(B)) = 0)', edits: [rx(A_STOP, /require\(b > 0\);/, '')] },

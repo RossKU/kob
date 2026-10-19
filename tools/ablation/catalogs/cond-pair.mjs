@@ -23,6 +23,10 @@
 //    only raises what the maker must receive (the keeper's take is bounded above by refundTip), never lowers it.
 //  - the side rule of the evidence (the order's own counterparties as evidence, NC26 / NC35): held by the template
 //    authentication and the identity check (EVHASH, EVP2SH, EVTPL hold; EVID flips NC35).
+//  - fill `require(tScale > 0)` (AUD-NP, both scales positive as in KobPair): for an ASK tScale is the scale of B, which a
+//    fill does not read (B's scale enters only the evidence, and every evidence order, KobPair included, refuses a
+//    non-positive scale, so the comparison with it fails anyway); for a BID it is the scale of A, the BID twin of NC114
+//    (a hostile field of the maker's own order; no scenario of its own).
 import { del, rep, rx } from '../lib/edits.mjs';
 
 export const suite = {
@@ -47,12 +51,14 @@ const CUS = 'cond_pair_custody';
 const FIL = 'cond_pair_fills';
 const CAR = 'cond_pair_carriers';
 const MISC = 'cond_pair_evidence_misc';
+// AUD-EXT: the evidence of another extension commitment (another kob-tests binary)
+const AUDC = 'audit_pair_sec_tests::aud_ext_cond_pair_refuses_evidence_of_another_extension_commitment';
 
 const both = id => [`${id}a`, `${id}b`];
 
 // anchors for function-scoped rx edits
-const A_EVLEG = '    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, int tk, byte[32] tokTpl, int tokPre, int tokSuf, int minN) : int {';
-const A_RD = '    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, byte[32] kTpl, int kPre, int kSuf, byte[32] oTok, int oFam, int osc,';
+const A_EVLEG = '    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, byte[32] ext, int tk, byte[32] tokTpl, int tokPre, int tokSuf,';
+const A_RD = '    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, byte[32] ext, byte[32] kTpl, int kPre, int kSuf,';
 
 // the custody tk of the ask / pair evidence: a holder UTXO of the token's program. tplState without the template-hash
 // check (P2SH kept) / without the P2SH check (template hash kept), called for tk only (lib/touch.mjs NO_HASH / NO_P2SH)
@@ -129,6 +135,12 @@ export const mutations = [
   // order's own stray guard and the token program refuse the stand-in at their inputs: inputOnly.
   { id: 'EVTKTPL', file: F, test: EXP, expect: ['NC5Ha', 'NC3Ha', 'NC3Hb'], inputOnly: ['NC5Ha', 'NC3Ha', 'NC3Hb'], note: "rd: the ask / pair evidence's custody is a holder of the token's program (template hash; P2SH kept): an old look-alike holder of another program refused", edits: tkNoHash(A_RD) },
   { id: 'EVTKP2SH', file: F, test: EXP, expect: ['NC5Sa', 'NC3Sa', 'NC3Sb'], inputOnly: ['NC5Sa', 'NC3Sa', 'NC3Sb'], note: "rd: the ask / pair evidence's custody is the P2SH of the holder redeem it shows (template hash kept): an old non-P2SH input with the genuine redeem refused", edits: tkNoP2sh(A_RD) },
+  // AUD-EXT (closed by the template version after the audit): the evidence trades the order's commitments. The attacks
+  // (audit_pair_sec_tests, NAUD-EXT-C<mode><side>[B]) move every unit of A (or of B) to another commitment next to an
+  // arm update: without the check every input accepts them.
+  { id: 'EVEXT', file: F, test: AUDC, expect: ['NAUD-EXT-C0b'], note: "rd: a KCC-20 KAS-book bid of A names A's commitment (its extensionCommitment, read with its scale)", edits: [rx(A_RD, /byte\[\] got = o\.slice\(34, 66\) \+ o\.slice\(118, 126 \+ d\);/, 'byte[] got = o.slice(34, 66) + o.slice(118, 126 + d);\n        if (!ask && fam != FAM_KRON) { got = o.slice(34, 66) + byte[](ext) + o.slice(150, 159); }')] },
+  { id: 'EVCEXT', file: F, test: AUDC, expect: ['NAUD-EXT-C0a', 'NAUD-EXT-C1a', 'NAUD-EXT-C1bB'], note: "rd: a KCC-20 custody of the ask / pair evidence is of its token's commitment (mode 0 the A ask; mode 1 the pair order's S)", edits: [rx(A_RD, /if \(cFam != FAM_KRON\) \{ require\(byte\[32\]\(cs\.slice\(80, 112\)\) == cExt\); \}/, '')] },
+  { id: 'EVTEXT', file: F, test: AUDC, expect: ['NAUD-EXT-C1aB', 'NAUD-EXT-C1b'], note: "rd: the pair evidence's tExt is the commitment of its T (B of a pair ASK, A of a pair BID)", edits: [rx(A_RD, /\+ byte\[\]\(tI\) \+ byte\[\]\(tE\)\n\s*\+ byte\[\]\(0x08\)/, '+ byte[](tI) + byte[](0x08)'), rx(A_RD, /o\.slice\(238, 279\)/, 'o.slice(270, 279)')] },
   // evLeg (the B leg of mode 0)
   { id: 'EVBPUSH', file: F, test: EXP, expect: both('NC5D'), note: 'evLeg: the B evidence sigscript starts with the 8-byte fill push (a cancel ground to read as a fill)', edits: [rx(A_EVLEG, /require\(OpTxInputScriptSigSubstr\(ev, 0, 1\) == byte\[\]\(0x08\)\);/, 'require(true);')] },
   { id: 'EVBN', file: F, test: EV0, expect: both('NC2N'), inputOnly: both('NC2N'), note: 'evLeg: the B evidence is filled (n > 0)', edits: [rx(A_EVLEG, /require\(n > 0\);/, 'require(true);')] },
@@ -144,6 +156,8 @@ export const mutations = [
   { id: 'EVBTKOWN', file: F, test: EXP, expect: ['NC57b'], note: "evLeg: the ask evidence's custody is owned by the evidence ask", edits: [rx(A_EVLEG, OWNER, 'require(true);')] },
   { id: 'EVBTKTPL', file: F, test: EXP, expect: ['NC5Hb'], inputOnly: ['NC5Hb'], note: "evLeg: the B ask evidence's custody is a holder of token B's program (template hash; P2SH kept): an old look-alike holder of another program refused", edits: tkNoHash(A_EVLEG) },
   { id: 'EVBTKP2SH', file: F, test: EXP, expect: ['NC5Sb'], inputOnly: ['NC5Sb'], note: "evLeg: the B ask evidence's custody is the P2SH of the holder redeem it shows (template hash kept): an old non-P2SH input with the genuine redeem refused", edits: tkNoP2sh(A_EVLEG) },
+  { id: 'EVBEXT', file: F, test: AUDC, expect: ['NAUD-EXT-C0aB'], note: "evLeg (AUD-EXT): a KCC-20 bid of B names B's commitment", edits: [rx(A_EVLEG, /require\(byte\[32\]\(o\.slice\(118, 150\)\) == ext\);/, 'require(true);')] },
+  { id: 'EVBTKEXT', file: F, test: AUDC, expect: ['NAUD-EXT-C0bB'], note: "evLeg (AUD-EXT): the custody of a KCC-20 ask of B is of B's commitment", edits: [rx(A_EVLEG, /if \(fam != FAM_KRON\) \{ require\(byte\[32\]\(cs\.slice\(80, 112\)\) == ext\); \}/, '')] },
   // tplState (both readers)
   { id: 'EVHASH', file: F, run: { [EXP]: ['NC58'] }, hold: { [EV0]: both('NC26'), [EXP]: ['NC54', 'NC55', 'NC56'] }, note: 'the evidence template hash (a look-alike P2SH redeem; the wrong side and a wrong input are also refused by the P2SH check or the fill push)', edits: [rx('    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {', /require\(blake3\([\s\S]*?\) == tpl\);/, 'require(true);')] },
   { id: 'EVP2SH', file: F, run: { [EXP]: ['NC5P'] }, hold: { [EV0]: both('NC26'), [EXP]: ['NC54', 'NC55', 'NC56'] }, note: 'the evidence is a P2SH spend of the redeem it shows (a planted UTXO with genuine redeem bytes)', edits: [rx('    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {', /require\(tx\.inputs\[idx\]\.scriptPubKey == byte\[\]\(new ScriptPubKeyP2SHFromRedeemScript\(rs\)\)\);/, 'require(true);')] },
@@ -194,7 +208,7 @@ export const mutations = [
   { id: 'F3', file: F, test: FIL, expect: ['NC111'], note: 'minimum fill', edits: [del('                require(n >= minFill || n == amountLeft);\n')] },
   { id: 'F4', file: F, test: FIL, expect: ['NC112'], note: 'tip >= 0 (hostile field)', edits: [del('                require(tip >= 0);\n')] },
   { id: 'F5', file: F, test: FIL, expect: ['NC113'], note: 'deliveryCarrier >= 0 (hostile field)', edits: [del('                require(deliveryCarrier >= 0);\n')] },
-  { id: 'F6', file: F, test: FIL, expect: ['NC114'], note: 'scale(A) > 0 (a negative scale makes the ceil of the quote negative)', edits: [del('                require(sA > 0);\n')] },
+  { id: 'F6', file: F, test: FIL, expect: ['NC114'], note: 'scale(A) > 0 of an ask (sScale; a negative scale makes the ceil of the quote negative)', edits: [del('                require(sScale > 0);\n')] },
   { id: 'F7', file: F, hold: { [FIL]: ['NC115'] }, note: 'a TP fill needs tpPrice > 0 (defence in depth: a zero TP is also a zero legPrice)', edits: [del('                    require(tpPrice > 0);\n')] },
   { id: 'F7L', file: F, test: FIL, expect: ['NC115'], note: 'tpPrice > 0 and legPrice > 0 both removed: a TP fill of an order without a TP leg', edits: [del('                    require(tpPrice > 0);\n'), del('                require(legPrice > 0);\n')] },
   { id: 'F8', file: F, test: FIL, expect: ['NC116'], note: 'leg is 0 or 1 (leg 2 would fill an unarmed stop without evidence)', edits: [del('                    require(leg == 1);\n')] },

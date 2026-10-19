@@ -37,6 +37,9 @@ export const suite = {
 };
 
 const T_RPT = 'v2_repeat_ifd_attacks';
+// AUD-EXT (closed by the template version after the audit): the evidence of another extension commitment, in the
+// audit_pair_sec_tests binary (the KAS-quoted stops on the 8/8, 3/3 and public-mint programs)
+const T_AUD = 'audit_pair_sec_tests::aud_ext_kas_stops_refuse_evidence_of_another_extension_commitment';
 // touch trigger batteries, one test fn per trigger kind
 const T_SET = 'v2_touch_cond_settle';
 const T_ARM = 'v2_touch_cond_arm';
@@ -328,6 +331,8 @@ export const mutations = withPublicMint([
       // the look-alike holder / non-P2SH input is also refused by the evidence ask's stray guard and the token program
       tktpl: { run: { [T_SET]: ['NTA02c'] }, inputOnly: ['NTA02c'] },
       tkp2sh: { run: { [T_SET]: ['NTA02d'] }, inputOnly: ['NTA02d'] },
+      // AUD-EXT: only the evidence ask and its custody trade the other commitment (the token program refuses the mix)
+      ext: { run: { [T_AUD]: ['NAUD-EXT-CA3'] }, inputOnly: ['NAUD-EXT-CA3'] },
     }),
   }),
   {
@@ -359,6 +364,9 @@ export const mutations = withPublicMint([
       owner: { [T_ARM]: ['NTU15', 'NTU16'] },
       tktpl: { run: { [T_ARM]: ['NTU02c'] }, inputOnly: ['NTU02c'] },
       tkp2sh: { run: { [T_ARM]: ['NTU02d'] }, inputOnly: ['NTU02d'] },
+      // AUD-EXT: an update next to fills of units of another commitment (every input accepts it without the check)
+      ext: { [T_AUD]: ['NAUD-EXT-CA1'] },
+      bidext: { [T_AUD]: ['NAUD-EXT-CA2'] },
     }),
   }),
   {
@@ -432,6 +440,8 @@ export const mutations = withPublicMint([
       cltv: { [T_IF]: ['NTI01', 'NTI03', 'NTI04'], [T_IA]: ['NTJ01', 'NTJ03', 'NTJ04'] },
       interval: { [T_IF]: ['NTI04'], [T_IA]: ['NTJ04'] },
       active: { [T_IF]: ['NTI03'], [T_IA]: ['NTJ03'] },
+      // AUD-EXT: in the entry's fill only the evidence bid moves (the token program refuses the mix)
+      bidext: { run: { [T_AUD]: ['NAUD-EXT-IB1', 'NAUD-EXT-IB2'] }, inputOnly: ['NAUD-EXT-IB2'] },
     }),
   }),
   {

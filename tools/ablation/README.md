@@ -7,7 +7,10 @@ repo root is derived from the script location, `tools/ablation/../..`).
 Latest results: [RESULTS.md](RESULTS.md). Audit completion (2026-10-13): every `require` of the KAS-kind templates has an
 entry or is documented as unwitnessable in its catalog header (`coverage.mjs`: 598 -> 35 require lines without a mutation over
 all eight catalogs, the 35 all documented), **562/562 new entries confirmed, 14/14 held**. Pre-mainnet covenant fixes
-(2026-10-12): every suite of the changed templates in full, **698/698 confirmed, 30/30 held**.
+(2026-10-12): every suite of the changed templates in full, **698/698 confirmed, 30/30 held**. Template version after the
+audit (AUD-EXT: the evidence's extension commitment, `-ext` / `-bidext` touch entries, `EV*EXT`, `IF120`..`IF124`, witnessed by
+the `audit_pair_sec_tests` reproducers; AUD-NP: `F6` re-pointed at `sScale`): **19/19 confirmed**; `coverage.mjs` 37 require
+lines without a mutation, the two new ones (`tScale > 0` / `bScale > 0`) documented in the cond-pair / ifd-pair headers.
 
 ## What ablation proves
 
