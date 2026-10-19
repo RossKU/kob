@@ -220,6 +220,7 @@ export default {
   'issues.holders.too_many': 'At most {max} holders can receive tokens in the issuance.',
   'issues.holders.consolidation': 'With {holders} holders, moving these token outputs together later takes several transfers of at most {maxInputs} inputs each.',
   'issues.holders.sum_mismatch': 'The holders receive {holders} in total, but the supply is {supply}.',
+  'issues.metadata.too_large': 'The token details take {bytes} bytes on chain, at most {max}: shorten the description or the links.',
   'issues.holder.scheme.invalid': 'Holder {holder}: unknown owner scheme.',
   'issues.holder.owner.invalid': 'Holder {holder}: the owner is 64 hexadecimal characters.',
   'issues.holder.owner.not_a_key': 'Holder {holder}: the owner is not a valid public key, so the tokens could never be spent.',

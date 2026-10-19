@@ -1,10 +1,13 @@
 // Token issuance ("kob token issue" in the browser): form model, validation and planning over the kob-wasm `issue` export.
 //
-// The genesis is ONE transaction: the wallet's P2PK funding inputs (input 0 authorises the KIP-20 genesis group) -> 1..N token outputs of the
-// fixed-supply KCC-20 reference program in its standard 3 / 3 configuration, `KCC20Ref` (or, chosen in the form, the published public-mint
-// build `KCC20PublicMint`; covenant id derived as consensus does) + change. All protocol logic lives in Rust
-// (`kob-protocol::issue`); this module only turns a human form into the wasm spec, selects funding and types the result. The result's
-// `built` is an ordinary `BuiltTx`, so the wallet signing pipeline, `kob.finalize` and `kob.validate` handle it unchanged.
+// A creation is TWO transactions under KCC-23 (docs/spec/token-metadata.md): `prep`, the preparation (the wallet's P2PK funding -> output 0,
+// the wallet's own P2PK of exactly the genesis's carriers and fee, + change; its payload declares the token metadata: 0x00 + JSON with name,
+// symbol, decimals and the optional description, logo, website, x, telegram), and `built`, the genesis spending that output 0 (input 0
+// authorises the KIP-20 genesis group, so the covenant id commits to the declaration) -> 1..N token outputs of the fixed-supply KCC-20
+// reference program in its standard 3 / 3 configuration, `KCC20Ref` (or, chosen in the form, the published public-mint build
+// `KCC20PublicMint`), no change. All protocol logic lives in Rust (`kob-protocol::issue`); this module only turns a human form into the wasm
+// spec, selects funding and types the result. Both are ordinary `BuiltTx`, so `kob.finalize` and `kob.validate` handle each unchanged;
+// wallet/create.ts signs both under one confirmation and sends the preparation first.
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { atFloor, capForTotal, describeFee, rememberFeeChoice, withUrgency, type FeeContext, type RatePick } from './fee-policy';
 import type { PlanIssue } from './plan-types';
@@ -28,6 +31,8 @@ export interface IssueLimits {
   ticker: { minLength: number; maxLength: number; pattern: string };
   name: { minLength: number; maxLength: number };
   maxDisplayChars: number;
+  /** the declaration's payload limit in bytes (codec byte included); absent on older bindings */
+  maxMetadataBytes?: number;
   ownerSchemes: number[];
   covenantOwnerScheme: number;
   /** KOB's standard program (the default): the KCC-20 reference with its 3 / 3 slots */
@@ -65,8 +70,13 @@ export interface IssueSpec {
   changeTo?: Hex;
   allowBorrow?: boolean;
   description?: string;
+  /** the logo (declared as `logo`, registry `display.icon`) */
   icon?: string;
   website?: string;
+  /** the token's X account: a handle or its address (declared as `https://x.com/<handle>`) */
+  x?: string;
+  /** the token's Telegram: a handle or its address (declared as `https://t.me/<handle>`) */
+  telegram?: string;
   network?: string;
   /** `3x3` (default, `KCC20Ref`) or `public-mint` (`KCC20PublicMint`, the published build of the reference) */
   program?: '3x3' | 'public-mint';
@@ -117,15 +127,31 @@ export interface RegistryTokenEntry {
 }
 
 export interface IssueDocs {
-  /** `supply.json` (kob-token-supply/1): what was issued and where */
+  /** `supply.json` (kob-token-supply/1): what was issued and where (its `kcc23` names the preparation) */
   supply: Record<string, unknown>;
-  /** off-chain token metadata (KCC-23 style object) */
+  /** the token metadata the preparation declares on chain (KCC-23; KOB's field names) */
   metadata: Record<string, unknown>;
   registryEntry: RegistryTokenEntry;
+  /** the KCC-23 launch proof (`kob-kcc23-proof/1`): both transactions in the fields their ids commit to; anyone can verify it */
+  launchProof: Record<string, unknown>;
+}
+
+/** What the preparation declares. */
+export interface IssueDeclaration {
+  /** the JSON text, exactly as committed */
+  json: string;
+  /** the payload, hex: `00` + the UTF-8 JSON */
+  payload: Hex;
+  /** sompi of the preparation's output 0 (the wallet's own until the genesis spends it): the genesis's carriers and fee */
+  funding: U64;
 }
 
 export interface IssueResult {
+  /** step 1: the preparation, declaring the metadata (KCC-23) */
+  prep: BuiltTx;
+  /** step 2: the genesis, spending `prep`'s output 0 */
   built: BuiltTx;
+  declaration: IssueDeclaration;
   token: IssueToken;
   docs: IssueDocs;
   warnings: string[];
@@ -412,6 +438,14 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
     }
   }
 
+  // the declaration on chain (KCC-23): name, symbol and decimals, then the optional fields, at most `maxMetadataBytes` (the Rust rule, measured
+  // the way it serialises: the same fields in the same order)
+  const maxBytes = limits.maxMetadataBytes;
+  if (maxBytes) {
+    const bytes = metadataBytes(form);
+    if (bytes > maxBytes) err('metadata.too_large', `The token details take ${bytes} bytes on chain, at most ${maxBytes}: shorten the description or the links.`, 'description', { bytes, max: maxBytes });
+  }
+
   // display text (the registry's rules, so the proposed entry is accepted)
   const disp = (v: string, field: 'description' | 'website' | 'icon') => {
     const s = v.trim();
@@ -436,6 +470,17 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
   }
 
   return { issues, parsed: ok && supply !== null ? { supply, holders, carrier } : null };
+}
+
+/** Bytes of the declaration a form makes (codec byte included): KOB's fields in KOB's order, as kob-protocol `TokenMetadata::json` writes them. */
+export function metadataBytes(form: Pick<IssueForm, 'name' | 'ticker' | 'decimals' | 'description' | 'icon' | 'website' | 'x' | 'telegram'>): number {
+  const opt = (k: string, v: string | null | undefined) => (v && v.trim() ? `,"${k}":${JSON.stringify(v.trim())}` : '');
+  const x = form.x ? socialUrl('x', form.x) : null;
+  const telegram = form.telegram ? socialUrl('telegram', form.telegram) : null;
+  const json =
+    `{"name":${JSON.stringify(form.name.trim())},"symbol":${JSON.stringify(form.ticker)},"decimals":${Number.isInteger(form.decimals) ? form.decimals : 0}` +
+    `${opt('description', form.description)}${opt('logo', form.icon)}${opt('website', form.website)}${opt('x', x)}${opt('telegram', telegram)}}`;
+  return 1 + new TextEncoder().encode(json).length;
 }
 
 /** Token inputs / outputs per transfer of the program the form issues. */
@@ -482,12 +527,12 @@ export interface PlanIssueOptions {
 export interface IssuePlan extends IssueResult {
   /** the spec sent to kob-wasm (with the funding actually used) */
   spec: IssueSpec;
-  /** network fee in sompi */
+  /** network fee in sompi: the preparation's and the genesis's together */
   fee: bigint;
 }
 
-/** Rough mass of a genesis with `outputs` token outputs, used only to size the funding selection (the exact fee comes from kob-wasm). */
-const estimateFeeMass = (outputs: number): bigint => 2_000n + 1_500n * BigInt(outputs);
+/** Rough mass of a creation (the preparation with its payload, the genesis with `outputs` token outputs), used only to size the funding selection (the exact fees come from kob-wasm). */
+const estimateFeeMass = (outputs: number): bigint => 5_000n + 1_500n * BigInt(outputs);
 
 /**
  * Validates the form, selects funding (largest UTXOs first: fewest inputs; covering all carriers plus a fee reserve, growing the selection
@@ -565,14 +610,17 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
     ...(form.description.trim() ? { description: form.description.trim() } : {}),
     ...(form.icon.trim() ? { icon: form.icon.trim() } : {}),
     ...(form.website.trim() ? { website: form.website.trim() } : {}),
+    ...(form.x && socialUrl('x', form.x) ? { x: socialUrl('x', form.x)! } : {}),
+    ...(form.telegram && socialUrl('telegram', form.telegram) ? { telegram: socialUrl('telegram', form.telegram)! } : {}),
     network: opts.network,
   };
   for (;;) {
     let spec: IssueSpec = { ...base, funding: candidates.slice(0, count) };
     try {
       let r = issueRaw(kob, spec);
-      // the total fee cap: a fee above it is rebuilt once at a lower rate (fee-policy.ts)
-      const next = opts.fees ? capForTotal(opts.fees.policy, feeRate, BigInt(r.built.fee.fee)) : null;
+      const total = (x: IssueResult) => BigInt(x.prep.fee.fee) + BigInt(x.built.fee.fee);
+      // the total fee cap (both transactions): a fee above it is rebuilt once at a lower rate (fee-policy.ts)
+      const next = opts.fees ? capForTotal(opts.fees.policy, feeRate, total(r)) : null;
       if (next !== null) {
         try {
           const lowered = { ...spec, feeRate: next.toString() };
@@ -582,8 +630,12 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
           /* keep the first build */
         }
       }
-      if (opts.fees && opts.feePick) rememberFeeChoice(r.built, describeFee(opts.fees.policy, opts.feePick, BigInt(spec.feeRate ?? feeRate), BigInt(r.built.fee.fee)));
-      return { ...r, docs: withSocials(r.docs, form), spec, fee: BigInt(r.built.fee.fee) };
+      if (opts.fees && opts.feePick) {
+        const rate = BigInt(spec.feeRate ?? feeRate);
+        rememberFeeChoice(r.prep, describeFee(opts.fees.policy, opts.feePick, rate, BigInt(r.prep.fee.fee)));
+        rememberFeeChoice(r.built, describeFee(opts.fees.policy, opts.feePick, rate, BigInt(r.built.fee.fee)));
+      }
+      return { ...r, spec, fee: total(r) };
     } catch (e) {
       if (e instanceof KobError && /insufficient funds/.test(e.message) && count < candidates.length) {
         count += 1;
@@ -615,18 +667,6 @@ export function socialUrl(kind: 'x' | 'telegram', input: string): string | null 
 }
 
 /**
- * The issuance's documents with the token's social accounts: the registry entry's `display.x` / `display.telegram` and the metadata's
- * `x` / `telegram` (KOB-defined names, like the others of that object). Nothing on chain: the genesis carries no metadata.
- */
-export function withSocials(docs: IssueDocs, form: Pick<IssueForm, 'x' | 'telegram'>): IssueDocs {
-  const x = form.x ? socialUrl('x', form.x) : null;
-  const telegram = form.telegram ? socialUrl('telegram', form.telegram) : null;
-  if (!x && !telegram) return docs;
-  const add = { ...(x ? { x } : {}), ...(telegram ? { telegram } : {}) };
-  return { ...docs, metadata: { ...docs.metadata, ...add }, registryEntry: { ...docs.registryEntry, display: { ...(docs.registryEntry.display ?? {}), ...add } } };
-}
-
-/**
  * The registry entry to submit by pull request (`registry/tokens.json`): status `pending-review`, `verified: false`, program = the
  * pinned template of the issued program (`kcc20-ref-3x3`, or `kcc20-ref-public-mint`). Checks that the docs describe this token before
  * handing them out.
@@ -637,6 +677,13 @@ export function registryEntryFromIssue(token: IssueToken, docs: IssueDocs): Regi
     throw new Error('registry entry does not describe the issued token');
   }
   return { ...e, status: 'pending-review', verified: false };
+}
+
+/** Whether `built` (a genesis) spends exactly output 0 of `prep` (its one input, with that output's amount and script). */
+export function spendsPreparation(prep: BuiltTx, built: BuiltTx): boolean {
+  const i = built.tx.inputs;
+  const o = prep.tx.outputs[0];
+  return i.length === 1 && i[0]!.transactionId === prep.tx.id && i[0]!.index === 0 && !!o && BigInt(i[0]!.utxo.amount) === BigInt(o.value) && i[0]!.utxo.scriptPublicKey === o.scriptPublicKey;
 }
 
 /** The token outputs of the genesis as token UTXOs with decoded state, for the token tracker (outputs `0..n` of `built.tx.id`). */

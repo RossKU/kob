@@ -1,6 +1,6 @@
-// Issuance: form validation, planning over kob-wasm, and the strongest oracle available: the planned genesis, signed locally and
-// finalized with tightened budgets, passes kob-wasm `validate` (the script engine runs the covenants and checks the storage-mass
-// commitment and fee floor).
+// Issuance: form validation, planning over kob-wasm, and the strongest oracle available: the planned creation (the KCC-23 preparation and
+// the genesis spending it), each signed locally and finalized with tightened budgets, passes kob-wasm `validate` (the script engine runs the
+// covenants and checks the storage-mass commitment and fee floor), and its launch proof verifies.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -8,10 +8,11 @@ import { loadKobNode } from './wasm.node';
 import { pubkeyOf, signBuilt } from '../testing/local-signer';
 import {
   emptyIssueForm, formatUnits, IssueFormError, issueLimits, issuedTokenUtxos, normalizeTicker, parseDecimal, planIssue,
-  registryEntryFromIssue, socialUrl, validateIssueForm,
+  metadataBytes, registryEntryFromIssue, socialUrl, spendsPreparation, validateIssueForm,
   type IssueForm, type IssueLimits, type IssuePlan, type PlanIssueOptions,
 } from './issue';
 import type { KeyUtxo } from './types';
+import { decodeDeclaration, verifyLaunchProof } from './kcc23';
 
 const kob = loadKobNode();
 const limits: IssueLimits = issueLimits(kob);
@@ -31,12 +32,19 @@ function opts(over: Partial<PlanIssueOptions> = {}): PlanIssueOptions {
 }
 const codes = (f: IssueForm, tickers?: string[]) => validateIssueForm(f, limits, tickers).map((i) => i.code);
 
-/** plan -> local signatures -> finalize(tightenBudgets) -> validate */
+/** plan -> local signatures of both transactions -> finalize(tightenBudgets) -> validate; returns the signed genesis */
 function signAndValidate(plan: IssuePlan) {
-  const sigs = signBuilt(plan.built, [SK]);
-  const signed = kob.finalize(plan.built, sigs, { tightenBudgets: true });
-  const report = kob.validate(signed) as { fee: string; minFee: string };
-  expect(BigInt(report.fee)).toBeGreaterThanOrEqual(BigInt(report.minFee));
+  const one = (b: IssuePlan['built']) => {
+    const signed = kob.finalize(b, signBuilt(b, [SK]), { tightenBudgets: true });
+    const report = kob.validate(signed) as { fee: string; minFee: string };
+    expect(BigInt(report.fee)).toBeGreaterThanOrEqual(BigInt(report.minFee));
+    return signed;
+  };
+  const prep = one(plan.prep);
+  const signed = one(plan.built);
+  // the genesis spends the preparation as signed (its id does not depend on signatures or budgets)
+  expect(signed.tx.inputs[0]!.transactionId).toBe(prep.tx.id);
+  expect(spendsPreparation(plan.prep, plan.built)).toBe(true);
   return signed;
 }
 
@@ -202,29 +210,43 @@ describe('validateIssueForm', () => {
 describe('planIssue', () => {
   it('plans, signs, finalizes and validates a default issuance (everything to the maker)', () => {
     const plan = planIssue(kob, form({ description: 'A test token', website: 'https://example.org' }), opts());
-    const { built, token } = plan;
+    const { built, token, prep } = plan;
     expect(token).toMatchObject({ program: 'KCC20Ref', ticker: 'TEST', name: 'Test Token', decimals: 8, supply: '100000000000' });
     expect(token.carrier).toBe((10n * KAS).toString());
     expect(token.outputs).toHaveLength(1);
     expect(token.outputs[0]).toMatchObject({ index: 0, amount: '100000000000', owner: maker, ownerScheme: 0, borrowScheme: 0 });
-    // BuiltTx contract: one P2PK plan and one SIGHASH_ALL request per funding input, change after the token output
+    // the preparation: the funding, output 0 to the maker (the genesis's carrier and fee), change; the payload declares the token
+    expect(prep.plans).toEqual([{ kind: 'p2pk', pubkey: maker }]);
+    expect(prep.tx.inputs[0]!.utxo.blockDaaScore).toBe('5000');
+    expect(prep.tx.outputs).toHaveLength(2);
+    expect(prep.tx.outputs[0]!.scriptPublicKey).toBe(`000020${maker}ac`);
+    expect(prep.fee.changeOutput).toBe(1);
+    expect(plan.declaration.json).toBe('{"name":"Test Token","symbol":"TEST","decimals":8,"description":"A test token","website":"https://example.org"}');
+    expect(prep.tx.payload).toBe(plan.declaration.payload);
+    expect(decodeDeclaration(kob, prep.tx.payload).token).toMatchObject({ name: 'Test Token', symbol: 'TEST', decimals: 8, description: 'A test token' });
+    expect(metadataBytes(form({ description: 'A test token', website: 'https://example.org' }))).toBe(prep.tx.payload.length / 2);
+    // the genesis: one P2PK plan and one SIGHASH_ALL request for its one input (the preparation's output 0), no change
     expect(built.plans).toEqual([{ kind: 'p2pk', pubkey: maker }]);
     expect(built.sign).toHaveLength(1);
     expect(built.sign[0]).toMatchObject({ inputIndex: 0, pubkey: maker, sighashType: 1, redeemScript: null });
-    expect(built.tx.outputs).toHaveLength(2);
-    expect(built.fee.changeOutput).toBe(1);
-    expect(plan.fee).toBe(BigInt(built.fee.fee));
+    expect(built.tx.outputs).toHaveLength(1);
+    expect(built.fee.changeOutput).toBeNull();
+    expect(BigInt(prep.tx.outputs[0]!.value)).toBe(10n * KAS + BigInt(built.fee.fee));
+    expect(plan.fee).toBe(BigInt(prep.fee.fee) + BigInt(built.fee.fee));
     // the covenant id of the token is the one of the genesis group and of the output binding
     expect(built.covenants).toHaveLength(1);
     expect(built.covenants[0].covenantId).toBe(token.covenantId);
     expect(built.covenants[0].outputs).toEqual([0]);
     expect(built.tx.outputs[0].covenant).toEqual({ authorizingInput: 0, covenantId: token.covenantId });
-    expect(built.tx.outputs[1].covenant).toBeNull();
-    expect(built.tx.inputs[0].utxo.blockDaaScore).toBe('5000');
+    expect(built.tx.inputs[0].utxo.blockDaaScore).toBe('0');
     // signing pipeline
     const signed = signAndValidate(plan);
     expect(signed.tx.id).toBe(built.tx.id);
     expect(signed.tx.outputs).toEqual(built.tx.outputs);
+    // the launch proof binds the declaration to the token id
+    const v = verifyLaunchProof(kob, plan.docs.launchProof);
+    expect(v).toMatchObject({ covenantId: token.covenantId, preparationTxid: prep.tx.id, genesisTxid: built.tx.id, json: plan.declaration.json });
+    expect(v.token.decimals).toBe(8);
   });
 
   it('token UTXOs decode and re-derive the output script public keys', () => {
@@ -288,7 +310,10 @@ describe('planIssue', () => {
     expect(plan.built.tx.outputs[0].value).toBe((250_000_000n).toString());
     expect(plan.built.fee.feeRate).toBe('200');
     expect(BigInt(plan.built.fee.minFee)).toBe(BigInt(plan.built.fee.mass.feeMass) * 200n);
-    expect(plan.built.tx.outputs[1].scriptPublicKey).toBe(`0000${'20' + otherKey + 'ac'}`);
+    // the change of the funding returns from the preparation; its output 0 stays the maker's (the genesis spends it)
+    expect(plan.prep.tx.outputs[1]!.scriptPublicKey).toBe(`0000${'20' + otherKey + 'ac'}`);
+    expect(plan.prep.tx.outputs[0]!.scriptPublicKey).toBe(`000020${maker}ac`);
+    expect(plan.prep.fee.feeRate).toBe('200');
     expect(plan.token.extensionCommitment).toBe('00'.repeat(32));
     signAndValidate(plan);
   });
@@ -308,12 +333,12 @@ describe('planIssue', () => {
     // one 200 KAS UTXO covers the 10 KAS carrier: the small ones stay untouched
     const funding = [utxo(1, 6n * KAS), utxo(2, 200n * KAS), utxo(3, 30n * KAS), utxo(4, 500n * KAS, otherKey)];
     const plan = planIssue(kob, form(), opts({ funding }));
-    expect(plan.built.tx.inputs.map((i) => i.index)).toEqual([2]);
+    expect(plan.prep.tx.inputs.map((i) => i.index)).toEqual([2]);
     // 4 UTXOs of 6 KAS: two are needed for the 10 KAS carrier plus fee
     const small = [1, 2, 3, 4].map((i) => utxo(i, 6n * KAS));
     const plan2 = planIssue(kob, form(), opts({ funding: small }));
-    expect(plan2.built.tx.inputs).toHaveLength(2);
-    expect(plan2.built.sign.map((s) => s.inputIndex)).toEqual([0, 1]);
+    expect(plan2.prep.tx.inputs).toHaveLength(2);
+    expect(plan2.prep.sign.map((s) => s.inputIndex)).toEqual([0, 1]);
     signAndValidate(plan2);
     // a UTXO carrying a covenant id is not plain P2PK
     const cov = { ...utxo(9, 500n * KAS), covenantId: '11'.repeat(32) };
@@ -323,7 +348,7 @@ describe('planIssue', () => {
   it('uses another UTXO when the first selection is a little short for the fee', () => {
     // exactly the carrier in the largest UTXO: the fee needs the second one
     const plan = planIssue(kob, form(), opts({ funding: [utxo(1, 10n * KAS), utxo(2, KAS)] }));
-    expect(plan.built.tx.inputs).toHaveLength(2);
+    expect(plan.prep.tx.inputs).toHaveLength(2);
     signAndValidate(plan);
   });
 
@@ -410,7 +435,8 @@ describe('registry entry', () => {
       max_token_inputs: 3, max_token_outputs: 3, status: 'pending-review', verified: false,
     });
     expect(entry.display).toMatchObject({ description: 'A test token', website: 'https://example.org', icon: 'ipfs://bafy' });
-    expect(entry.display!.kcc23).toMatchObject({ standard: 'KCC-20', symbol: 'TEST', totalSupply: '100000000000', fixedSupply: true });
+    // the declaration as made on chain (KOB's fields; facts the chain states itself, like the supply, are not declared again)
+    expect(entry.display!.kcc23).toEqual({ name: 'Test Token', symbol: 'TEST', decimals: 8, description: 'A test token', logo: 'ipfs://bafy', website: 'https://example.org' });
     check(entry, schema.$defs.token, 'entry');
     // the template hash is the one the shipped registry pins for kcc20-ref-3x3
     const registry = JSON.parse(readFileSync(fileURLToPath(new URL('../../../registry/tokens.json', import.meta.url)), 'utf8'));
@@ -434,7 +460,7 @@ describe('registry entry', () => {
   });
 });
 
-describe("the token's X and Telegram accounts (registry entry and metadata only; nothing on chain)", () => {
+describe("the token's X and Telegram accounts (declared on chain, and in the registry entry)", () => {
   it("takes a handle or the account's address and keeps the https:// address", () => {
     expect(socialUrl('x', '@kob_token')).toBe('https://x.com/kob_token');
     expect(socialUrl('x', 'https://twitter.com/kob_token/')).toBe('https://x.com/kob_token');
@@ -447,14 +473,22 @@ describe("the token's X and Telegram accounts (registry entry and metadata only;
     expect(codes(form({ x: '@kob', telegram: '@kob_chat' }))).toEqual([]);
   });
 
-  it('puts them in the proposed registry entry and the metadata, the genesis unchanged', () => {
+  it('declares them on chain and puts them in the proposed registry entry; the token id commits to them', () => {
     const plain = planIssue(kob, form(), opts());
     const p = planIssue(kob, form({ x: '@kob', telegram: '@kob_chat' }), opts());
     expect(p.docs.registryEntry.display).toMatchObject({ x: 'https://x.com/kob', telegram: 'https://t.me/kob_chat' });
     expect(p.docs.metadata).toMatchObject({ x: 'https://x.com/kob', telegram: 'https://t.me/kob_chat' });
     expect(registryEntryFromIssue(p.token, p.docs).display).toMatchObject({ x: 'https://x.com/kob' });
-    // the transaction carries none of it: the same genesis with or without the accounts
-    expect(p.built.tx.id).toBe(plain.built.tx.id);
+    expect(p.declaration.json.endsWith(',"x":"https://x.com/kob","telegram":"https://t.me/kob_chat"}')).toBe(true);
+    // the genesis payload stays empty; the declaration is the preparation's, and another declaration is another token
     expect(p.built.tx.payload).toBe('');
+    expect(p.prep.tx.id).not.toBe(plain.prep.tx.id);
+    expect(p.token.covenantId).not.toBe(plain.token.covenantId);
+  });
+
+  it('a declaration over the payload limit is a form error', () => {
+    expect(limits.maxMetadataBytes).toBe(1024);
+    expect(codes(form({ description: 'a'.repeat(400) }))).toEqual([]);
+    expect(codes(form({ description: '\u00e9'.repeat(500) }))).toContain('metadata.too_large');
   });
 });

@@ -1,14 +1,19 @@
 // Token issuance (`kob token issue` in the browser): a fixed-supply KCC-20 token on the KCC-20 reference program, KOB's standard 3 / 3
 // build `KCC20Ref` by default or the reference's published public-mint build `KCC20PublicMint`. Form -> live validation ->
-// debounced `planIssue` -> summary -> the issuance pre-sign screen (ConfirmSign) -> tracker + result panel with the registry entry.
+// debounced `planIssue` -> summary -> the issuance pre-sign screen (ConfirmSign: the KCC-23 preparation and the genesis, one confirmation) ->
+// tracker + result panel with the registry entry. A creation whose genesis did not go out (data/creations.ts) is offered again at the top.
 // All protocol logic is in kob/issue.ts (kob-wasm); this view only collects strings and renders findings.
-import { useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 import { readFees } from '../../app/env';
 import { rememberIssuedToken } from '../../data/issued-decimals';
 import { useServices, useWallet } from '../../app/context';
 import { t } from '../../i18n';
 import { issueText } from '../../i18n/issue-text';
 import { issueLimits, issuedTokenUtxos, validateIssueForm, type IssueLimits, type IssuePlan, type IssueProgramChoice } from '../../kob/issue';
+import { listCreations, removeCreation, type CreationRecord } from '../../data/creations';
+import { resumeCreation } from '../../wallet/create';
+import { expectedOutputs } from '../../wallet/sign';
+import type { BuiltTx } from '../../kob/types';
 import type { PlanIssue } from '../../kob/plan-types';
 import { isKeyOwned } from '../../kob/token-state';
 import type { Services } from '../../app/services';
@@ -22,11 +27,11 @@ import { ResultPanel } from './ResultPanel';
 import { useIssuePlan } from './use-issue-plan';
 import './issue.css';
 
-type Phase = { kind: 'form' } | { kind: 'confirm'; plan: IssuePlan } | { kind: 'result'; plan: IssuePlan; txid: string; trackFailed: boolean };
+type Phase = { kind: 'form' } | { kind: 'confirm'; plan: IssuePlan } | { kind: 'result'; plan: Pick<IssuePlan, 'token' | 'docs'>; txid: string; trackFailed: boolean };
 type Notice = { tone: 'info' | 'error'; text: string } | null;
 
 /** Remembers the token outputs of the genesis in the tracker (a genesis has no token leader, so `trackFromBuilt` does not cover it). */
-function trackIssued(services: Services, plan: IssuePlan): boolean {
+function trackIssued(services: Services, plan: Pick<IssuePlan, 'built' | 'token'>): boolean {
   let ok = true;
   for (const u of issuedTokenUtxos(plan)) {
     // only plain key-owned outputs can be tracked: custody / hash-owned holders are the receiver's business
@@ -133,6 +138,59 @@ export function IssueView() {
   const summary = plan.status === 'ready' ? reviewSummary(plan.plan, pubkey) : null;
   const canReview = plan.status === 'ready' && phase.kind === 'form';
 
+  // ---- creations of this wallet whose genesis did not go out: offered again (a genesis already on chain finishes them silently)
+  const [pending, setPending] = useState<CreationRecord[]>([]);
+  const [resuming, setResuming] = useState<string | null>(null);
+  const [resumeError, setResumeError] = useState<{ id: string; text: string } | null>(null);
+  const finishCreation = (rec: CreationRecord, txid: string, show: boolean) => {
+    const plan = { built: { tx: rec.genesis } as BuiltTx, token: rec.token };
+    const trackFailed = !trackIssued(services, plan);
+    rememberIssuedToken(config.network, rec.token.covenantId, { decimals: rec.token.decimals, ticker: rec.token.ticker, name: rec.token.name });
+    removeCreation(config.network, rec.covenantId);
+    setPending((xs) => xs.filter((x) => x.covenantId !== rec.covenantId));
+    if (show) setPhase({ kind: 'result', plan: { token: rec.token, docs: rec.docs }, txid, trackFailed });
+  };
+  useEffect(() => {
+    if (!usable || !pubkey) {
+      setPending([]);
+      return;
+    }
+    const recs = listCreations(config.network, pubkey);
+    setPending(recs);
+    let alive = true;
+    // a record whose genesis is already on chain (the page died after sending it) is finished, not offered
+    void (async () => {
+      for (const rec of recs) {
+        try {
+          const outs = expectedOutputs(services.sdk, config.network, rec.genesis, [0]);
+          const found = await services.node.getUtxosByAddresses([outs[0]!.address]);
+          if (alive && found.some((u) => u.transactionId === rec.genesisTxid && u.index === 0)) finishCreation(rec, rec.genesisTxid, false);
+        } catch {
+          /* offered as it is */
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [pubkey, usable, config.network, retry]);
+  const resume = async (rec: CreationRecord) => {
+    setResuming(rec.covenantId);
+    setResumeError(null);
+    try {
+      const txid = await resumeCreation(services.node, rec);
+      finishCreation(rec, txid, true);
+    } catch (e) {
+      setResumeError({ id: rec.covenantId, text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setResuming(null);
+    }
+  };
+  const discard = (rec: CreationRecord) => {
+    removeCreation(config.network, rec.covenantId);
+    setPending((xs) => xs.filter((x) => x.covenantId !== rec.covenantId));
+  };
+
   const onClose = (r: ConfirmResult) => {
     const current = phase.kind === 'confirm' ? phase.plan : null;
     if (!current) return;
@@ -146,7 +204,7 @@ export function IssueView() {
       return;
     }
     setPhase({ kind: 'form' });
-    setRetry((n) => n + 1); // the spent UTXOs may have changed: read the funding again
+    setRetry((n) => n + 1); // the spent UTXOs may have changed: read the funding again (and the creations left unfinished)
     setNotice(r.status === 'failed' ? { tone: 'error', text: r.message } : { tone: 'info', text: t('issue.cancelled') });
   };
 
@@ -180,6 +238,26 @@ export function IssueView() {
       {limitsResult.error ? <ErrorBanner error={limitsResult.error} data-testid="issue-limits-error" /> : null}
 
       {renderWalletGate()}
+
+      {phase.kind === 'form' ? pending.map((rec) => (
+        <Banner
+          key={rec.covenantId}
+          tone="warn"
+          title={t('issue.pending.title', { ticker: rec.token.ticker })}
+          data-testid="issue-pending"
+          actions={
+            <div class="row">
+              <Button variant="primary" small loading={resuming === rec.covenantId} disabled={resuming !== null} onClick={() => void resume(rec)} data-testid="issue-pending-send">
+                {t('issue.pending.send')}
+              </Button>
+              <Button small disabled={resuming !== null} onClick={() => discard(rec)} data-testid="issue-pending-discard">{t('issue.pending.discard')}</Button>
+            </div>
+          }
+        >
+          <p>{t('issue.pending.body', { ticker: rec.token.ticker, sent: rec.prepSent ? t('issue.pending.sent') : '' })}</p>
+          {resumeError?.id === rec.covenantId ? <p class="field-error wrap-anywhere" data-testid="issue-pending-error">{t('issue.pending.failed', { reason: resumeError.text })}</p> : null}
+        </Banner>
+      )) : null}
 
       <div class="stack" data-testid="issue-form">
         <Section title={t('issue.section.token')} data-testid="issue-basic">
@@ -342,6 +420,7 @@ export function IssueView() {
           title={t('issue.confirm.title', { ticker: phase.plan.token.ticker })}
           label={t('issue.confirm.label', { ticker: phase.plan.token.ticker })}
           issue={{ token: phase.plan.token }}
+          creation={{ prep: phase.plan.prep, declaration: phase.plan.declaration, docs: phase.plan.docs }}
           onClose={onClose}
         />
       ) : null}

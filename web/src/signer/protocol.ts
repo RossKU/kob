@@ -1,8 +1,12 @@
 // Message protocol between the app (parent page) and the private-key signer (signer.html, loaded in an `<iframe sandbox="allow-scripts">`
 // WITHOUT allow-same-origin: an opaque origin, so the app's scripts can read neither its DOM nor its memory).
 //
-//   signer -> app   ready | connected {pubkey} | signed {id, txid, signatures} | rejected {id, reason} | forgotten | height {px}
-//   app -> signer   sign {id, built, tokens} | update {id, built, tokens} | clock {daa} | cancel {id} | forget
+//   signer -> app   ready | connected {pubkey} | signed {id, txid, signatures, prepSignatures?} | rejected {id, reason} | forgotten | height {px}
+//   app -> signer   sign {id, built, tokens, prep?} | update {id, built, tokens} | clock {daa} | cancel {id} | forget
+//
+// `prep`: a token creation (KCC-23): the preparation `built` (the genesis) spends output 0 of, shown and signed with it under ONE approval
+// (`prepSignatures` are its signatures); `genesis`: the states its token outputs are claimed to hold, which the frame checks against each
+// output's script (a P2SH output does not show its state) before it names the token's supply and holders.
 //
 // Nothing secret ever crosses: the app -> signer direction must use target '*' (the frame's origin is opaque, "null"), so it carries only the
 // unsigned transaction; the signer returns public keys and signatures only. Both sides drop every message that does not parse here, and
@@ -26,13 +30,20 @@ export interface TokenHint {
   source?: 'issued' | 'assumed';
 }
 
+/** A creation's claim of its genesis token outputs: program, extension commitment and each output's state (checked by the frame, never trusted). */
+export interface GenesisClaim {
+  program: string;
+  extensionCommitment: Hex;
+  outputs: { index: number; amount: string; owner: Hex; ownerScheme: number; borrowScheme: number; borrowGuard: Hex }[];
+}
+
 export type RejectReason = 'user' | 'invalid' | 'no-key' | 'busy' | 'cancelled';
 
 export type SignerToApp =
   | { p: typeof SIGNER_PROTOCOL; type: 'ready' }
   | { p: typeof SIGNER_PROTOCOL; type: 'connected'; pubkey: Hex }
-  /** `txid`: the transaction signed (the request's, or the update of it the frame showed last) */
-  | { p: typeof SIGNER_PROTOCOL; type: 'signed'; id: string; txid?: Hex; signatures: InputSignature[] }
+  /** `txid`: the transaction signed (the request's, or the update of it the frame showed last); `prepSignatures`: of the request's `prep` */
+  | { p: typeof SIGNER_PROTOCOL; type: 'signed'; id: string; txid?: Hex; signatures: InputSignature[]; prepSignatures?: InputSignature[] }
   | { p: typeof SIGNER_PROTOCOL; type: 'rejected'; id: string; reason: RejectReason }
   | { p: typeof SIGNER_PROTOCOL; type: 'forgotten' }
   /** the height of the frame's content (CSS px): the app sizes the frame to it, up to the viewport */
@@ -40,7 +51,7 @@ export type SignerToApp =
 
 export type AppToSigner =
   /** `retimeOf`: the request the user just confirmed, planned again with a later clock: signed without asking again when nothing they approved got worse (retime.ts) */
-  | { p: typeof SIGNER_PROTOCOL; type: 'sign'; id: string; built: BuiltTx; tokens: TokenHint[]; retimeOf?: string }
+  | { p: typeof SIGNER_PROTOCOL; type: 'sign'; id: string; built: BuiltTx; tokens: TokenHint[]; retimeOf?: string; prep?: BuiltTx; genesis?: GenesisClaim }
   /** the same request planned again while the user reads it (a later clock, the market now): shown in its place (core.ts `receive`) */
   | { p: typeof SIGNER_PROTOCOL; type: 'update'; id: string; built: BuiltTx; tokens: TokenHint[] }
   /** the node's DAA score now (display only: the times of the table are said from it; nothing is signed from it) */
@@ -98,6 +109,16 @@ const isTokenHint = (v: unknown): v is TokenHint =>
   // a registry or issued ticker; an assumed token has none (the frame names it by its covenant id)
   (v.source === 'assumed' ? v.ticker === '' : TICKER.test(v.ticker));
 
+const isClaim = (v: unknown): v is GenesisClaim =>
+  isObj(v) && hasKeys(v, ['program', 'extensionCommitment', 'outputs']) && typeof v.program === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(v.program) &&
+  HEX32.test(String(v.extensionCommitment)) && Array.isArray(v.outputs) && v.outputs.length > 0 && v.outputs.length <= 64 &&
+  v.outputs.every(
+    (o) =>
+      isObj(o) && hasKeys(o, ['index', 'amount', 'owner', 'ownerScheme', 'borrowScheme', 'borrowGuard']) && isIndex(o.index, MAX_IO) &&
+      typeof o.amount === 'string' && /^(0|[1-9][0-9]{0,18})$/.test(o.amount) && HEX32.test(String(o.owner)) && isIndex(o.ownerScheme, 256) &&
+      isIndex(o.borrowScheme, 256) && HEX32.test(String(o.borrowGuard)),
+  );
+
 const sized = (v: unknown): boolean => {
   try {
     return JSON.stringify(v).length <= MAX_JSON;
@@ -111,11 +132,19 @@ export function parseAppMessage(data: unknown): AppToSigner | null {
   if (!isObj(data) || data.p !== SIGNER_PROTOCOL || typeof data.type !== 'string') return null;
   switch (data.type) {
     case 'sign':
-      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'retimeOf']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
+      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'retimeOf', 'prep', 'genesis']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
       if (data.retimeOf !== undefined && (typeof data.retimeOf !== 'string' || !ID.test(data.retimeOf))) return null;
       if (!Array.isArray(data.tokens) || data.tokens.length > 32 || !data.tokens.every(isTokenHint)) return null;
       if (!sized(data.built) || !isBuiltTx(data.built)) return null;
-      return { p: SIGNER_PROTOCOL, type: 'sign', id: data.id, built: data.built, tokens: data.tokens, ...(data.retimeOf !== undefined ? { retimeOf: data.retimeOf as string } : {}) };
+      // a creation is never a re-timed request
+      if (data.prep !== undefined && (data.retimeOf !== undefined || !sized(data.prep) || !isBuiltTx(data.prep))) return null;
+      // a genesis claim only with its creation
+      if (data.genesis !== undefined && (data.prep === undefined || !isClaim(data.genesis))) return null;
+      return {
+        p: SIGNER_PROTOCOL, type: 'sign', id: data.id, built: data.built, tokens: data.tokens,
+        ...(data.retimeOf !== undefined ? { retimeOf: data.retimeOf as string } : {}), ...(data.prep !== undefined ? { prep: data.prep as BuiltTx } : {}),
+        ...(data.genesis !== undefined ? { genesis: data.genesis as GenesisClaim } : {}),
+      };
     case 'update':
       if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
       if (!Array.isArray(data.tokens) || data.tokens.length > 32 || !data.tokens.every(isTokenHint)) return null;
@@ -142,11 +171,18 @@ export function parseSignerMessage(data: unknown): SignerToApp | null {
     case 'connected':
       return hasKeys(data, ['p', 'type', 'pubkey']) && HEX32.test(String(data.pubkey)) ? { p: SIGNER_PROTOCOL, type: 'connected', pubkey: String(data.pubkey) } : null;
     case 'signed': {
-      if (!hasKeys(data, ['p', 'type', 'id', 'txid', 'signatures']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
+      if (!hasKeys(data, ['p', 'type', 'id', 'txid', 'signatures', 'prepSignatures']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
       if (data.txid !== undefined && !HEX32.test(String(data.txid))) return null;
-      if (!Array.isArray(data.signatures) || data.signatures.length === 0 || data.signatures.length > MAX_IO || !data.signatures.every(isSignature)) return null;
-      const signatures = data.signatures.map((s) => ({ inputIndex: s.inputIndex, signature: s.signature }));
-      return { p: SIGNER_PROTOCOL, type: 'signed', id: data.id, ...(data.txid !== undefined ? { txid: String(data.txid) } : {}), signatures };
+      const sigsOf = (v: unknown): InputSignature[] | null =>
+        Array.isArray(v) && v.length > 0 && v.length <= MAX_IO && v.every(isSignature) ? v.map((s) => ({ inputIndex: s.inputIndex, signature: s.signature })) : null;
+      const signatures = sigsOf(data.signatures);
+      if (!signatures) return null;
+      const prepSignatures = data.prepSignatures === undefined ? undefined : sigsOf(data.prepSignatures);
+      if (prepSignatures === null) return null;
+      return {
+        p: SIGNER_PROTOCOL, type: 'signed', id: data.id, ...(data.txid !== undefined ? { txid: String(data.txid) } : {}), signatures,
+        ...(prepSignatures ? { prepSignatures } : {}),
+      };
     }
     case 'height':
       return hasKeys(data, ['p', 'type', 'px']) && isIndex(data.px, 100_000) ? { p: SIGNER_PROTOCOL, type: 'height', px: data.px } : null;

@@ -9,7 +9,7 @@ import { downloadText } from './download';
 import { resultViewModel } from './issue-model';
 
 export interface ResultPanelProps {
-  plan: IssuePlan;
+  plan: Pick<IssuePlan, 'token' | 'docs'>;
   txid: string;
   walletKey: Hex | null;
   /** the wallet-owned token outputs could not be saved in the token tracker */
@@ -76,6 +76,7 @@ export function ResultPanel(props: ResultPanelProps) {
           <Button onClick={() => downloadText(vm.registryEntryFile, vm.registryEntryJson)} data-testid="issue-registry-download">{t('issue.result.downloadEntry')}</Button>
           <Button onClick={() => downloadText(vm.supplyFile, vm.supplyJson)} data-testid="issue-supply-download">{t('issue.result.supplyDoc')}</Button>
           <Button onClick={() => downloadText(vm.metadataFile, vm.metadataJson)} data-testid="issue-metadata-download">{t('issue.result.metadataDoc')}</Button>
+          {vm.proofJson ? <Button onClick={() => downloadText(vm.proofFile, vm.proofJson!)} data-testid="issue-proof-download">{t('issue.result.proofDoc')}</Button> : null}
         </div>
         {copied === 'failed' ? <p class="field-error" role="alert">{t('issue.result.copyFailed')}</p> : null}
       </Section>

@@ -18,8 +18,11 @@ const plan = (over: Partial<IssueForm> = {}): IssuePlan => planIssue(kob, form(o
 const en = (k: string, p?: Record<string, string | number | bigint>) => t(k, p);
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
 
-const model = (p: IssuePlan, built: BuiltTx = p.built, key = maker) =>
-  buildIssuanceModel({ kob, built, token: p.token, maker: key, tr: (k, q) => t(k, q) });
+/** the confirmation of a creation: the preparation and the genesis (either may be tampered with) */
+const model = (p: IssuePlan, built: BuiltTx = p.built, key = maker, prep: BuiltTx = p.prep, oneApproval = true) =>
+  buildIssuanceModel({ kob, built, prep, oneApproval, token: p.token, maker: key, tr: (k, q) => t(k, q) });
+/** the payload of a declaration JSON text */
+const payloadOf = (json: string) => `00${Buffer.from(json, 'utf8').toString('hex')}`;
 
 describe('issuance confirmation model', () => {
   it('an honest genesis verifies: the token, holders, carriers, fee and net effect are shown', () => {
@@ -43,6 +46,42 @@ describe('issuance confirmation model', () => {
     // the unaudited program and the blind wallet are always disclosed
     expect(m.warnings.map((w) => w.code)).toEqual(['unaudited']);
     expect(m.info.map((w) => w.code)).toContain('walletBlind');
+    // what is recorded on chain with it (KCC-23)
+    const declare = m.sections.find((s) => s.id === 'declare')!;
+    expect(declare.rows.map((r) => [r.id, r.value])).toEqual([['declare-name', 'Test Token'], ['declare-symbol', 'TEST'], ['declare-decimals', '8']]);
+    expect(m.advanced.payload).toEqual(['{"name":"Test Token","symbol":"TEST","decimals":8}']);
+    expect(m.advanced.prepTxid).toBe(p.prep.tx.id);
+    expect(m.advanced.signatures).toBe(2);
+    // the fee is both transactions', the KAS spent is the wallet's coins of the preparation
+    const fee = BigInt(p.prep.fee.fee) + BigInt(p.built.fee.fee);
+    expect(m.sections.find((s) => s.id === 'fee')!.rows[0]!.value).toBe(`${Number(fee) / 1e8} KAS`);
+    expect(m.sections.find((s) => s.id === 'spend')!.rows[0]!.value).toBe('500 KAS');
+    expect(m.info.map((w) => w.code)).not.toContain('walletTwice');
+    expect(model(p, p.built, maker, p.prep, false).info.map((w) => w.code)).toContain('walletTwice');
+  });
+
+  it('the declaration must be what the token is shown as, and the preparation must pay only the wallet', () => {
+    const p = plan({ description: 'Some text', x: '@kob' });
+    const d = model(p).sections.find((s) => s.id === 'declare')!;
+    expect(d.rows.find((r) => r.id === 'declare-description')!.value).toBe('Some text');
+    expect(d.rows.find((r) => r.id === 'declare-x')!.value).toBe('https://x.com/kob');
+    // another declaration than the claimed token (here: 2 decimals)
+    const lying = clone(p.prep);
+    lying.tx.payload = payloadOf('{"name":"Test Token","symbol":"TEST","decimals":2}');
+    expect(model(p, p.built, maker, lying).blocking.map((b) => b.code)).toContain('declaration');
+    const notKcc23 = clone(p.prep);
+    notKcc23.tx.payload = '017b7d';
+    expect(model(p, p.built, maker, notKcc23).blocking.map((b) => b.code)).toContain('declaration');
+    // the preparation's output 0 or change to another key
+    for (const n of [0, 1]) {
+      const away = clone(p.prep);
+      away.tx.outputs[n]!.scriptPublicKey = `000020${other}ac`;
+      expect(model(p, p.built, maker, away).blocking.map((b) => b.code), `output ${n}`).toContain('prepOutput');
+    }
+    // a genesis that does not spend this preparation
+    const unchained = clone(p.built);
+    unchained.tx.inputs[0]!.transactionId = '99'.repeat(32);
+    expect(model(p, unchained).blocking.map((b) => b.code)).toContain('prepSpend');
   });
 
   it('extra holders are listed and disclosed as tokens going to other keys', () => {
@@ -74,9 +113,9 @@ describe('issuance confirmation model', () => {
 
   it('blocks a KAS output to another key and a wrong carrier', () => {
     const p = plan();
+    // a genesis with an extra output to another key
     const built = clone(p.built);
-    const change = built.fee.changeOutput!;
-    built.tx.outputs[change]!.scriptPublicKey = `000020${other}ac`;
+    built.tx.outputs.push({ ...built.tx.outputs[0]!, scriptPublicKey: `000020${other}ac`, covenant: null });
     expect(model(p, built).blocking.map((b) => b.code)).toContain('outputOther');
     const built2 = clone(p.built);
     built2.tx.outputs[p.token.outputs[0]!.index]!.value = (BigInt(built2.tx.outputs[p.token.outputs[0]!.index]!.value) + 1n).toString();
@@ -90,17 +129,22 @@ describe('issuance confirmation model', () => {
 
   it('blocks an unreasonable fee', () => {
     const p = plan();
-    const built = clone(p.built);
-    const change = built.fee.changeOutput!;
+    const prep = clone(p.prep);
+    const change = prep.fee.changeOutput!;
     const take = 2n * KAS;
-    built.tx.outputs[change]!.value = (BigInt(built.tx.outputs[change]!.value) - take).toString();
-    built.fee.fee = (BigInt(built.fee.fee) + take).toString();
-    expect(model(p, built).blocking.map((b) => b.code)).toContain('feeHigh');
+    prep.tx.outputs[change]!.value = (BigInt(prep.tx.outputs[change]!.value) - take).toString();
+    prep.fee.fee = (BigInt(prep.fee.fee) + take).toString();
+    expect(model(p, p.built, maker, prep).blocking.map((b) => b.code)).toContain('feeHigh');
+    // a declared fee that is not inputs minus outputs
+    const off = clone(p.prep);
+    off.fee.fee = (BigInt(off.fee.fee) + 1n).toString();
+    expect(model(p, p.built, maker, off).blocking.map((b) => b.code)).toContain('fee');
   });
 
   it('the fee policy: a declared rate above max(maxRate, floor) blocks, a dynamic cap raises the 1 KAS ceiling', () => {
     const pol = (o: Partial<{ dynamic: boolean; maxRate: bigint; maxFeeSompi: bigint }> = {}) => ({ dynamic: true, floor: 100n, maxRate: 1000n, maxFeeSompi: 100_000_000n, ...o });
-    const m = (p: IssuePlan, feePolicy?: ReturnType<typeof pol>, built: BuiltTx = p.built) => buildIssuanceModel({ kob, built, token: p.token, maker, ...(feePolicy ? { feePolicy } : {}) });
+    const m = (p: IssuePlan, feePolicy?: ReturnType<typeof pol>, built: BuiltTx = p.built, prep: BuiltTx = p.prep) =>
+      buildIssuanceModel({ kob, built, prep, token: p.token, maker, ...(feePolicy ? { feePolicy } : {}) });
     const p = plan();
     expect(m(p, pol()).blocking).toEqual([]);
     const dear = clone(p.built);
@@ -112,23 +156,29 @@ describe('issuance confirmation model', () => {
     at194.fee.feeRate = '194';
     expect(m(p, pol({ dynamic: false }), at194).blocking.map((b) => b.code)).toContain('feeRate');
     expect(m(p, undefined, dear).blocking).toEqual([]);
-    // 1.5 KAS fee: above the fixed 1 KAS ceiling, allowed by a dynamic 2 KAS cap, not by a cap of 1 KAS or by a policy that is off
-    const burnt = clone(p.built);
+    // the preparation's declared rate counts too
+    const dearPrep = clone(p.prep);
+    dearPrep.fee.feeRate = '1500';
+    expect(m(p, pol(), p.built, dearPrep).blocking.map((b) => b.code)).toContain('feeRate');
+    // 1.5 KAS of fees: above the fixed 1 KAS ceiling, allowed by a dynamic 2 KAS cap, not by a cap of 1 KAS or by a policy that is off
+    const burnt = clone(p.prep);
     const change = burnt.fee.changeOutput!;
-    const take = 150_000_000n - BigInt(burnt.fee.fee);
+    const take = 150_000_000n - BigInt(burnt.fee.fee) - BigInt(p.built.fee.fee);
     burnt.tx.outputs[change]!.value = (BigInt(burnt.tx.outputs[change]!.value) - take).toString();
-    burnt.fee.fee = '150000000';
-    expect(m(p, pol({ maxFeeSompi: 200_000_000n }), burnt).blocking.map((b) => b.code)).not.toContain('feeHigh');
-    expect(m(p, pol({ maxFeeSompi: 100_000_000n }), burnt).blocking.map((b) => b.code)).toContain('feeHigh');
-    expect(m(p, pol({ dynamic: false, maxFeeSompi: 200_000_000n }), burnt).blocking.map((b) => b.code)).toContain('feeHigh');
+    burnt.fee.fee = (150_000_000n - BigInt(p.built.fee.fee)).toString();
+    expect(m(p, pol({ maxFeeSompi: 200_000_000n }), p.built, burnt).blocking.map((b) => b.code)).not.toContain('feeHigh');
+    expect(m(p, pol({ maxFeeSompi: 100_000_000n }), p.built, burnt).blocking.map((b) => b.code)).toContain('feeHigh');
+    expect(m(p, pol({ dynamic: false, maxFeeSompi: 200_000_000n }), p.built, burnt).blocking.map((b) => b.code)).toContain('feeHigh');
     expect(en('confirm.issue.finding.feeRate', { rate: '1500', max: '1000' })).toMatch(/1500 sompi per gram.*1000/);
   });
 
   it('every finding and label has a sentence', () => {
     const p = plan({ holders: [{ owner: maker, ownerScheme: 0, amount: '600' }, { owner: other, ownerScheme: 0, amount: '400' }] });
-    const bad = clone(p.built);
+    const bad = clone(p.prep);
     bad.tx.outputs[bad.fee.changeOutput!]!.scriptPublicKey = `000020${other}ac`;
-    for (const m of [model(p), model(p, bad)]) {
+    const lying = clone(p.prep);
+    lying.tx.payload = '007b7d';
+    for (const m of [model(p), model(p, p.built, maker, bad), model(p, p.built, maker, lying, false)]) {
       const all = [m.heading, m.intro, ...m.sections.flatMap((s) => [s.title, s.note ?? '', ...s.rows.flatMap((r) => [r.label, r.value, r.detail ?? ''])]), ...[...m.blocking, ...m.warnings, ...m.info].map((f) => f.text ?? '')];
       for (const s of all) {
         expect(s).not.toMatch(/\bconfirm\.[a-zA-Z]/);

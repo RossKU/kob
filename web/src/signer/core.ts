@@ -7,7 +7,7 @@ import type { KaspaSdk, SdkPrivateKey } from '../data/kaspa-sdk';
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import { toApp, type AppToSigner, type RejectReason, type SignerToApp, type TokenHint } from './protocol';
-import { summarize, type SignerSummary } from './summary';
+import { creationSummary, summarize, type SignerSummary } from './summary';
 import { RETIME_WINDOW_MS, sameOrBetter } from './retime';
 
 export class SignerKeyError extends Error {
@@ -35,6 +35,8 @@ export interface PendingRequest {
   change: 'new' | 'silent' | 'shown';
   /** what an update is compared with: the request as first shown, or the last update shown as such */
   baseline: SignerSummary;
+  /** a token creation: the KCC-23 preparation `built` spends output 0 of, signed with it on the one approval */
+  prep?: BuiltTx;
 }
 
 export interface SignerCoreDeps {
@@ -151,8 +153,9 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       }
       if (m.type === 'clock') return null;
       if (m.type === 'update') {
-        // only the request on screen, until it is approved or rejected; an update this frame cannot read, or for another key, is dropped
-        if (!pending || pending.id !== m.id || !pub || m.built.sign.some((s) => s.pubkey !== pub)) return null;
+        // only the request on screen, until it is approved or rejected; an update this frame cannot read, or for another key, is dropped;
+        // a creation is never updated
+        if (!pending || pending.id !== m.id || !pub || pending.prep || m.built.sign.some((s) => s.pubkey !== pub)) return null;
         let next: SignerSummary;
         try {
           next = summarize(kob, m.built, pub, m.tokens as TokenHint[]);
@@ -172,9 +175,21 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         return null;
       }
       // every requested signature must be this key's: the signer never signs for another key's input
-      if (m.built.sign.some((s) => s.pubkey !== pub)) {
+      if ([...m.built.sign, ...(m.prep?.sign ?? [])].some((s) => s.pubkey !== pub)) {
         post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
         return null;
+      }
+      if (m.prep) {
+        // a token creation: the preparation and the genesis checked and shown together (summary.ts `creationSummary`), one approval
+        let summary: SignerSummary;
+        try {
+          summary = creationSummary(kob, m.prep, m.built, pub, m.tokens as TokenHint[], m.genesis);
+        } catch {
+          post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
+          return null;
+        }
+        pending = { id: m.id, built: m.built, summary, change: 'new', baseline: summary, prep: m.prep };
+        return pending;
       }
       let summary: SignerSummary;
       try {
@@ -206,14 +221,18 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       const req = pending;
       pending = null;
       let sigs: InputSignature[];
+      let prepSigs: InputSignature[] | undefined;
       try {
+        // a creation: the preparation first, then the genesis spending it (each checked by finalize and the script engine)
+        prepSigs = req.prep ? sign(req.prep) : undefined;
         sigs = sign(req.built);
       } catch {
         post(toApp({ type: 'rejected', id, reason: 'invalid' }));
         return false;
       }
-      approved = { id, summary: req.summary, at: now() };
-      post(toApp({ type: 'signed', id, txid: req.built.tx.id, signatures: sigs }));
+      // a creation is never what a re-timed request stands in for
+      approved = req.prep ? null : { id, summary: req.summary, at: now() };
+      post(toApp({ type: 'signed', id, txid: req.built.tx.id, signatures: sigs, ...(prepSigs ? { prepSignatures: prepSigs } : {}) }));
       return true;
     },
     reject(id, reason = 'user') {

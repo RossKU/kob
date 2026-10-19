@@ -1,7 +1,7 @@
 // Token issuance view (ui/issue). Flat dotted keys, {param} placeholders.
 export default {
   'issue.title': "Create a token",
-  'issue.intro': "Create a new fixed-supply token. The whole supply is minted in one transaction and sent to your wallet (or to the holders you choose under Advanced).",
+  'issue.intro': "Create a new fixed-supply token. Its name, ticker, decimals and links are recorded on chain with it (one approval), and the whole supply goes to your wallet (or to the holders you choose under Advanced).",
 
   'issue.fixedLine': 'Fixed supply: no one can mint more, freeze or seize these tokens.',
   'issue.powersLine': 'This program gives an authority these powers over the tokens: {powers}.',
@@ -97,7 +97,7 @@ export default {
   'issue.summary.program': 'Program',
   'issue.summary.carriers': 'KAS locked in token outputs',
   'issue.summary.carriersValue': '{each} KAS x {count} = {total} KAS (returned when the tokens are spent or consolidated)',
-  'issue.summary.fee': 'Network fee',
+  'issue.summary.fee': 'Network fees (2 transactions)',
   'issue.summary.feeValue': '{fee} KAS',
   'issue.summary.fixed': 'Supply fixed forever: no mint, no burn.',
   'issue.confirm.title': "Create token {ticker}",
@@ -108,11 +108,21 @@ export default {
   'issue.failed.title': "The token could not be created",
   'issue.failed.retry': 'Back to the form',
 
+  // a creation whose genesis did not go out (data/creations.ts)
+  'issue.pending.title': 'Creation of {ticker} not finished',
+  'issue.pending.body': "The details of {ticker} were signed{sent} but the token itself was not created. The KAS of that first step is still in your wallet. Send the creation again (no new signature), or keep the KAS and forget it.",
+  'issue.pending.sent': ' and recorded on chain',
+  'issue.pending.send': 'Send the creation',
+  'issue.pending.discard': 'Forget it',
+  'issue.pending.failed': 'The creation could not be sent: {reason}',
+  'issue.pending.checking': 'Checking...',
+
   // result
   'issue.result.title': "Token created",
   'issue.result.body': "{ticker} was created in transaction {txid}. It is on its way to confirmation.",
   'issue.result.tokenId': 'Token id (covenant id)',
   'issue.result.txid': 'Transaction id',
+  'issue.result.prepTxid': 'Details recorded in',
   'issue.result.program': 'Program',
   'issue.result.templateHash': 'Template hash',
   'issue.result.extension': 'Extension commitment',
@@ -120,13 +130,14 @@ export default {
   'issue.result.holder': 'Output {index}: {owner}, {amount}',
   'issue.result.tracked': "The token outputs owned by your wallet key are tracked in this browser. Wallets do not show them.",
   'issue.result.listingTitle': 'Trading it, and giving it a name',
-  'issue.result.listingBody': "The token can be traded without a registry entry: its market opens with its first order, a sell from a wallet that holds it (this browser tracks the outputs your key owns). Open its market below and confirm its decimals there: the chain does not record them, and the first order sets the price scale. In this browser the app names the token with the ticker you gave it (with a small marker); elsewhere it is named by its covenant id until a registry entry names it: open a pull request that adds the entry below to registry/tokens.json.",
+  'issue.result.listingBody': "The token can be traded without a registry entry: its market opens with its first order, a sell from a wallet that holds it (this browser tracks the outputs your key owns). Its name, ticker and decimals are recorded on chain with it, so apps that read that record (KOB does) show them, marked as declared by the creator; the first order's price scale follows its decimals. The registry adds curation (the official badge): to propose the token, open a pull request that adds the entry below to registry/tokens.json.",
   'issue.result.openMarket': 'Open its market',
   'issue.result.registryTitle': 'Registry entry',
   'issue.result.copyEntry': 'Copy entry',
   'issue.result.downloadEntry': 'Download entry',
   'issue.result.supplyDoc': 'Download supply.json',
   'issue.result.metadataDoc': 'Download metadata.json',
+  'issue.result.proofDoc': 'Download launch proof',
   'issue.result.copied': 'Copied',
   'issue.result.copyFailed': 'Copy is not available here: select the text and copy it by hand.',
   'issue.result.another': "Create another token",

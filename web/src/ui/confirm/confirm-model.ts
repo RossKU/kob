@@ -28,7 +28,7 @@ export interface Row {
 }
 
 export interface Section {
-  id: 'issue' | 'spend' | 'locked' | 'back' | 'fee' | 'net';
+  id: 'issue' | 'declare' | 'spend' | 'locked' | 'back' | 'fee' | 'net';
   title: string;
   /** one explaining sentence under the title */
   note?: string;
@@ -44,6 +44,8 @@ export interface AdvancedInput { index: number; text: string; willSign: boolean 
 export interface AdvancedOutput { index: number; text: string; flagged: boolean }
 export interface AdvancedModel {
   txid: string;
+  /** a token creation: the id of its KCC-23 preparation (`txid` is the genesis) */
+  prepTxid?: string;
   signatures: number;
   fee: { paid: string; declared: string; minimum: string; mode: 'relay' | 'priority'; feeMass: number; priorityMass: number; storageMass: number };
   inputs: AdvancedInput[];

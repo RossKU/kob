@@ -1,6 +1,7 @@
 // Wallet adapter contract. Adapters only sign: they never build, never broadcast, and never see anything but the tx the app already
 // showed on the pre-sign confirmation screen. Proven on TN10 in tools/wallet-gate (RESULTS.md).
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
+import type { GenesisClaim } from '../signer/protocol';
 
 /** Browser extension wallets (discovered on `window`). */
 export type ExtensionWalletId = 'kasware' | 'kaspire' | 'kastle';
@@ -52,6 +53,12 @@ export interface WalletAdapter {
    */
   signTx(built: BuiltTx, opts?: SignOptions): Promise<InputSignature[]>;
   /**
+   * Signs the two transactions of a token creation under ONE approval: `txs[1]` (the genesis) spends output 0 of `txs[0]` (its KCC-23
+   * preparation). Offered only by a wallet that shows both together on one confirmation (the private-key signer); every other wallet signs
+   * each with `signTx`, one approval each (their extension APIs sign one transaction per request). Same contract as `signTx`, per transaction.
+   */
+  signChain?(txs: [BuiltTx, BuiltTx], opts?: SignOptions): Promise<[InputSignature[], InputSignature[]]>;
+  /**
    * Re-reads account, key and network of the ALREADY connected wallet without asking the user (no connect popup, no network switch).
    * Rejects with `WalletError` when the wallet no longer exposes an account (locked, disconnected the site).
    */
@@ -85,6 +92,11 @@ export interface SignOptions {
    * signer signs it without asking again when its own decoding finds the same terms; other wallets ask as usual
    */
   retime?: boolean;
+  /**
+   * `signChain` of a token creation: the states its genesis token outputs are claimed to hold (the private-key signer checks each output's
+   * script against them, and names the supply and the holders only then)
+   */
+  genesisClaim?: GenesisClaim;
 }
 
 export class WalletError extends Error {

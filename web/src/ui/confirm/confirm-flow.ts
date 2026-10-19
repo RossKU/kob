@@ -35,7 +35,9 @@ export interface Failure {
   raw?: string;
 }
 
-const REPLAN_CODES = new Set(['orphan', 'double-spend', 'fee', 'script', 'invalid', 'validation', 'network-mismatch', 'account-changed', 'inputs-changed', 'inputs-unconfirmed', 'clock-moved']);
+// `genesis-pending`: a creation whose preparation went out and whose genesis did not: never signed again here, the Create token page sends the saved
+// genesis (wallet/create.ts `resumeCreation`)
+const REPLAN_CODES = new Set(['orphan', 'double-spend', 'fee', 'script', 'invalid', 'validation', 'network-mismatch', 'account-changed', 'inputs-changed', 'inputs-unconfirmed', 'clock-moved', 'genesis-pending']);
 
 /** Classifies whatever `signAndSubmit` threw. Never throws. */
 export function classifyFailure(e: unknown): Failure {

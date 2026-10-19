@@ -4,6 +4,8 @@
 // changed price or stop cannot pass behind an unchanged net effect. A plain order of a KAS market the app shows inverted (KAS/TOKEN) is said
 // first as the user placed it (sell KAS for tokens), its chain-side terms below; every price reads "X per Y", never a pair notation.
 import { decodeSigning, type DecodedOrder, type SigningKind, type SigningSummary, type TokenRef } from '../kob/decode';
+import { spendsPreparation } from '../kob/issue';
+import { decodeDeclaration } from '../kob/kcc23';
 import { baseKind, type OrderDescription } from '../kob/order-facts';
 import { DEFAULT_BID_FILLS } from '../kob/orders/common';
 import { longId, type TokenInfo, type TokenRegistry } from '../kob/registry';
@@ -12,7 +14,7 @@ import { formatKas, formatTokenAmount } from '../kob/units';
 import type { KobWasm } from '../kob/wasm';
 import { ASSUMED_TOKEN_DECIMALS, formatDateTime, t } from '../i18n';
 import { orderRows, orderTitle, orderTypeCode, type Fmt } from '../ui/confirm/confirm-model';
-import type { TokenHint } from './protocol';
+import type { GenesisClaim, TokenHint } from './protocol';
 import { div, kasWords, tokensPerKasWords, tokenWords, type Rounding } from './words';
 
 export interface SummaryLine {
@@ -247,4 +249,67 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
 /** Decodes `built` for `maker` (the signer's own key) and summarises it. Throws when the decoder does. */
 export function summarize(kob: KobWasm, built: BuiltTx, maker: Hex, hints: TokenHint[]): SignerSummary {
   return summaryLines(decodeSigning({ kob, built, maker, registry: null }), hints, kob);
+}
+
+/**
+ * A token creation (KCC-23) as ONE request: the preparation `prep` and the genesis `built` spending its output 0. Checked here, from the
+ * transactions alone: the genesis spends exactly the preparation's output 0; every input of the preparation is a P2PK coin of this key and is
+ * signed; every output pays this key (P2PK, no covenant): the genesis funding and change; its payload is a KCC-23 declaration. With the app's
+ * `claim` of the genesis token outputs, each claimed output must carry exactly the script of its claimed state in the claimed program and be
+ * bound to the one new covenant: the frame then names the supply and what this key receives, and those outputs are no longer "unknown". Summarised
+ * as the genesis (its decoded effect) with the declared name, ticker and decimals first, the KAS line and the fee covering both. Throws when a
+ * check fails (the request is refused, never shown).
+ */
+export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, maker: Hex, hints: TokenHint[], claim?: GenesisClaim): SignerSummary {
+  const own = `000020${maker}ac`;
+  if (prep.tx.version !== 1 || prep.covenants.length > 0 || !spendsPreparation(prep, built)) throw new Error('not a creation');
+  prep.tx.inputs.forEach((inp, i) => {
+    const plan = prep.plans[i];
+    if (!plan || plan.kind !== 'p2pk' || plan.pubkey !== maker || inp.utxo.scriptPublicKey !== own || !prep.sign.some((r) => r.inputIndex === i)) throw new Error('foreign input');
+  });
+  if (prep.tx.outputs.some((o) => o.covenant || o.scriptPublicKey !== own)) throw new Error('pays another key');
+  const decl = decodeDeclaration(kob, prep.tx.payload).token;
+  const prepIn = prep.tx.inputs.reduce((a, i) => a + BigInt(i.utxo.amount), 0n);
+  const prepOut = prep.tx.outputs.reduce((a, o) => a + BigInt(o.value), 0n);
+  const prepFee = prepIn - prepOut;
+  if (prepFee < 0n || prepFee !== BigInt(prep.fee.fee)) throw new Error('fee');
+  const g = summarize(kob, built, maker, hints);
+  // the claimed token outputs, each re-derived from its state: an output that does not match refuses the request
+  const verified = new Set<number>();
+  let supply = 0n;
+  let toMaker = 0n;
+  if (claim) {
+    const cov = built.covenants.length === 1 ? built.covenants[0]! : null;
+    if (!cov || cov.outputs.length !== claim.outputs.length || claim.outputs.some((o) => !cov.outputs.includes(o.index))) throw new Error('claim');
+    for (const o of claim.outputs) {
+      const out = built.tx.outputs[o.index];
+      const state = { amount: o.amount, owner: o.owner, owner_scheme: o.ownerScheme, borrow_scheme: o.borrowScheme, borrow_guard: o.borrowGuard, extension_commitment: claim.extensionCommitment };
+      if (!out || out.covenant?.covenantId !== cov.covenantId || kob.tokenScriptPublicKey(claim.program as never, state as never) !== out.scriptPublicKey) throw new Error('claim');
+      verified.add(o.index);
+      supply += BigInt(o.amount);
+      if (o.owner === maker && o.ownerScheme === 0) toMaker += BigInt(o.amount);
+    }
+  }
+  // the KAS line: the genesis spends this key's preparation output, so its net is the creation's, less the preparation's fee
+  const k = g.decoded.net.kas;
+  const delta = k.walletDelta - prepFee;
+  const kas = (v: bigint) => `${formatKas(v)} KAS`;
+  const lines: SummaryLine[] = [
+    { label: t('signer.declare.name'), value: decl.name ?? '', dir: null },
+    { label: t('signer.declare.symbol'), value: decl.symbol ?? '', dir: null },
+    { label: t('signer.declare.decimals'), value: decl.decimals === null ? '' : String(decl.decimals), dir: null },
+    { label: t('signer.declare.steps'), value: t('signer.declare.stepsValue'), dir: null },
+    ...(claim && decl.decimals !== null
+      ? [
+          { label: t('signer.declare.supply'), value: `${formatTokenAmount(supply, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: null },
+          { label: t('signer.declare.toYou'), value: `+${formatTokenAmount(toMaker, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: 'in' as const },
+          ...(supply > toMaker ? [{ label: t('signer.declare.toOthers'), value: `${formatTokenAmount(supply - toMaker, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: 'out' as const }] : []),
+        ]
+      : []),
+    { label: t('signer.net.kas'), value: signed(delta, kas), dir: delta < 0n ? 'out' : delta > 0n ? 'in' : null },
+    ...g.lines.slice(1),
+  ];
+  // the token outputs checked against the claim are not "unknown scripts": every other finding still counts
+  const problems = g.decoded.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code) && !(b.code === 'output-unknown' && b.output !== undefined && verified.has(b.output))).length;
+  return { ...g, title: t('signer.kind.createToken'), lines, fee: kas(k.fee + prepFee), problems };
 }

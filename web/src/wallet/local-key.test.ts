@@ -11,6 +11,10 @@ import { MAKER_PK, MAKER_SK, OTHER_SK } from '../testing/token-fixtures';
 import { buildCancel, buildSend, kob } from '../testing/wallet-fixtures';
 import { addressOfSpk, p2pkSpk } from '../../mock/address.mjs';
 import type { BuiltTx } from '../kob/types';
+import { emptyIssueForm, planIssue } from '../kob/issue';
+import { formatKas } from '../kob/units';
+import { pubkeyOf } from '../testing/local-signer';
+import { signAndSubmitCreation } from './create';
 
 const sdk = loadKaspaSdkNode();
 const NET = 'testnet-10';
@@ -181,5 +185,58 @@ describe('private-key adapter (the app side of the signer frame)', () => {
     expect(await host.sign(built, [], undefined, true)).toHaveLength(built.sign.length);
     expect(prompts).toBe(1);
     expect(log.filter((l) => l === 'request true')).toHaveLength(1);
+  });
+});
+
+describe('private-key adapter: a token creation (KCC-23) on one confirmation', () => {
+  const creation = () =>
+    planIssue(kob, { ...emptyIssueForm(), name: 'Frame Coin', ticker: 'FRAME', decimals: 3, supply: '5000' }, {
+      funding: [{ transactionId: '0b'.repeat(32), index: 1, amount: (100n * 100_000_000n).toString(), blockDaaScore: '7', pubkey: MAKER_PK }],
+      maker: MAKER_PK,
+      network: NET,
+    });
+
+  it('the frame shows the preparation and the genesis as ONE request, signs both on one approval, and the creation goes through', async () => {
+    const seen: PendingRequest[] = [];
+    const { adapter, connect } = pair((req) => {
+      seen.push(req);
+      return 'approve';
+    });
+    await connect();
+    await adapter.connect(NET);
+    const plan = creation();
+    const n = seeded(plan.prep);
+    const res = await signAndSubmitCreation({
+      kob, node: n, adapter, prep: plan.prep, built: plan.built, network: NET, maker: MAKER_PK, storage: null,
+      record: { token: plan.token, declaration: plan.declaration, docs: plan.docs },
+    });
+    expect(seen).toHaveLength(1);
+    const s = seen[0]!.summary;
+    expect(s.title).toBe('Create token');
+    const line = (label: RegExp) => s.lines.find((l) => label.test(l.label))?.value;
+    expect([line(/^Name/), line(/^Ticker/), line(/^Decimals/)]).toEqual(['Frame Coin', 'FRAME', '3']);
+    // the genesis outputs checked against the claimed states: the supply and what this key receives are named, nothing is unknown
+    expect([line(/^Total supply/), line(/^To you/)]).toEqual(['5000 FRAME', '+5000 FRAME']);
+    expect(s.problems).toBe(0);
+    // the fee and the KAS line cover both transactions
+    expect(s.fee).toBe(`${formatKas(BigInt(plan.prep.fee.fee) + BigInt(plan.built.fee.fee))} KAS`);
+    expect(n.submissions.map((t) => t.id)).toEqual([plan.prep.tx.id, plan.built.tx.id]);
+    expect(res.txid).toBe(plan.built.tx.id);
+  });
+
+  it('the frame refuses a creation whose preparation pays another key, or whose genesis does not spend it', async () => {
+    const { core, adapter, connect } = pair();
+    await connect();
+    await adapter.connect(NET);
+    const plan = creation();
+    const away = JSON.parse(JSON.stringify(plan.prep)) as BuiltTx;
+    away.tx.outputs[1]!.scriptPublicKey = p2pkSpk(pubkeyOf(OTHER_SK));
+    await expect(adapter.signChain!([away, plan.built])).rejects.toMatchObject({ code: 'other' });
+    const unchained = JSON.parse(JSON.stringify(plan.built)) as BuiltTx;
+    unchained.tx.inputs[0]!.transactionId = 'ee'.repeat(32);
+    await expect(adapter.signChain!([plan.prep, unchained])).rejects.toMatchObject({ code: 'other' });
+    expect(core.pending()).toBeNull();
+    // a re-timed creation is not a message the frame takes
+    expect(parseAppMessage({ p: 'kob-signer/1', type: 'sign', id: 'x1', built: plan.built, tokens: [], prep: plan.prep, retimeOf: 'r0' })).toBeNull();
   });
 });

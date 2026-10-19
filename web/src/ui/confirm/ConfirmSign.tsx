@@ -1,19 +1,22 @@
-// The PRE-SIGN CONFIRMATION SCREEN of a token issuance (the Issue token page). Order actions have none (ui/confirm/send.ts): a genesis creates a
-// token whose facts can never change, so this dialog decodes the built transaction with the issuance verifier, shows the WHOLE effect in plain
-// words, blocks signing on any blocking finding, asks for an explicit acknowledgement, then runs `signAndSubmit` with a stage stepper and reports
-// the accepted transaction.
+// The PRE-SIGN CONFIRMATION SCREEN of a token creation (the Create token page). Order actions have none (ui/confirm/send.ts): a genesis creates a
+// token whose facts can never change, so this dialog decodes the built transactions with the issuance verifier (the KCC-23 preparation and
+// the genesis spending it), shows the WHOLE effect in plain words, blocks signing on any blocking finding, asks for an explicit
+// acknowledgement, then runs `signAndSubmitCreation` (both signed, the preparation sent first; wallet/create.ts) with a stage stepper and
+// reports the accepted genesis.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { readClock } from '../../app/env';
 import { formatDateTime, has, t } from '../../i18n';
 import { issueText, walletNoticeText } from '../../i18n/issue-text';
 import { describeInputsForWallet } from '../../kob/decode';
-import type { IssueToken } from '../../kob/issue';
+import type { IssueDeclaration, IssueDocs, IssueToken } from '../../kob/issue';
 import type { Clock } from '../../kob/plan-types';
 import type { PlacementRecord } from '../../kob/records';
 import type { BuiltTx } from '../../kob/types';
 import { formatUtc } from '../../kob/daa';
 import { expectedOutputs, signAndSubmit, waitForAcceptance, type SignStage } from '../../wallet/sign';
+import { signAndSubmitCreation } from '../../wallet/create';
+import { pendingSpends } from '../../app/pending-spends';
 import { Banner, Button, CopyText, Modal, RawDetails, Spinner, copyToClipboard } from '../kit';
 import { shortId } from '../kit/format';
 import type { ConfirmModel, Finding, Row, Section } from './confirm-model';
@@ -34,6 +37,11 @@ export interface ConfirmSignProps {
   label?: string;
   /** the token facts the planner claims: a genesis has no token inputs, so they are verified against the transaction */
   issue: { token: IssueToken };
+  /**
+   * a creation under KCC-23: the preparation the genesis (`built`) spends, with what it declares; signed with the genesis (one approval where
+   * the wallet can give it) and sent first. Absent: a bare genesis (signAndSubmit).
+   */
+  creation?: { prep: BuiltTx; declaration: IssueDeclaration; docs: IssueDocs };
   /** called once when the flow ends (cancelled, submitted or failed) */
   onClose(result: ConfirmResult): void;
 }
@@ -122,15 +130,16 @@ export function ConfirmSign(props: ConfirmSignProps) {
     const fee = feeDisclosureOf(built);
     // a dynamic fee is several times the relay floor in a busy market: the verifier's sanity ceiling follows the policy's own per-transaction cap
     const feePolicy = services.fees?.policy;
-    return buildIssuanceModel({ kob, built, token: props.issue.token, maker, fee, ...(feePolicy ? { feePolicy } : {}) }, notices);
-  }, [built, props.issue, maker, wallet.info?.id]);
+    const creation = props.creation ? { prep: props.creation.prep, oneApproval: !!wallet.adapter?.signChain } : {};
+    return buildIssuanceModel({ kob, built, token: props.issue.token, maker, fee, ...creation, ...(feePolicy ? { feePolicy } : {}) }, notices);
+  }, [built, props.issue, props.creation, maker, wallet.info?.id]);
 
   // problems that are not about the transaction itself
   const extraBlocking: Finding[] = [];
   if (!wallet.info || !wallet.adapter) extraBlocking.push({ code: 'no-wallet', severity: 'blocking', message: 'no wallet', text: t('confirm.noWallet') });
-  else if (phase !== 'submitted' && built.sign.some((s) => s.pubkey !== wallet.info!.pubkey)) {
+  else if (phase !== 'submitted' && [...built.sign, ...(props.creation?.prep.sign ?? [])].some((s) => s.pubkey !== wallet.info!.pubkey)) {
     // the plan spends coins of the key it was built for: after an account switch this screen must not sign it (the plan is stale)
-    const planned = built.sign.find((s) => s.pubkey !== wallet.info!.pubkey)!.pubkey;
+    const planned = [...built.sign, ...(props.creation?.prep.sign ?? [])].find((s) => s.pubkey !== wallet.info!.pubkey)!.pubkey;
     extraBlocking.push({ code: 'account-changed', severity: 'blocking', message: 'account changed', text: t('confirm.accountChanged', { planned: shortId(planned), now: shortId(wallet.info.pubkey) }) });
   } else if (wallet.networkMismatch) {
     extraBlocking.push({ code: 'network', severity: 'blocking', message: 'network', text: t('confirm.networkMismatch', { wallet: wallet.info.network, app: config.network }) });
@@ -148,7 +157,12 @@ export function ConfirmSign(props: ConfirmSignProps) {
     [props.onClose],
   );
 
-  const afterAccepted = async (id: string): Promise<void> => {
+  const afterAccepted = async (id: string, prepTxid?: string): Promise<void> => {
+    // a creation's preparation: its inputs are spent, its change is the wallet's; its output 0 is spent by the genesis (recorded next)
+    if (props.creation && prepTxid && wallet.info) {
+      pendingSpends.add(props.creation.prep.tx.inputs);
+      pendingSpends.addChange(props.creation.prep.tx, prepTxid, wallet.info.pubkey);
+    }
     // the node keeps listing these inputs until the transaction is in a block (no plan of this page may pick them meanwhile); records saved
     const { records } = await recordAccepted(services, wallet, built, id, props.label);
     if (!alive.current) return;
@@ -171,8 +185,18 @@ export function ConfirmSign(props: ConfirmSignProps) {
     setFailure(null);
     setStage('signing');
     try {
-      const res = await signAndSubmit({ kob, node, adapter: wallet.adapter, built, network: config.network, onStage: (s) => alive.current && setStage(s) });
-      await afterAccepted(res.txid);
+      const onStage = (s: SignStage) => alive.current && setStage(s);
+      if (props.creation) {
+        const c = props.creation;
+        const res = await signAndSubmitCreation({
+          kob, node, adapter: wallet.adapter, prep: c.prep, built, network: config.network, maker, onStage,
+          record: { token: props.issue.token, declaration: c.declaration, docs: c.docs },
+        });
+        await afterAccepted(res.txid, res.prepTxid);
+      } else {
+        const res = await signAndSubmit({ kob, node, adapter: wallet.adapter, built, network: config.network, onStage });
+        await afterAccepted(res.txid);
+      }
     } catch (e) {
       if (!alive.current) return;
       const f = classifyFailure(e);

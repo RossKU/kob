@@ -228,6 +228,7 @@ const safeName = (ticker: string): string => ticker.replace(/[^A-Za-z0-9_-]/g, '
 export const registryEntryFileName = (ticker: string): string => `${safeName(ticker)}.registry-entry.json`;
 export const supplyDocFileName = (ticker: string): string => `${safeName(ticker)}.supply.json`;
 export const metadataDocFileName = (ticker: string): string => `${safeName(ticker)}.metadata.json`;
+export const proofDocFileName = (ticker: string): string => `${safeName(ticker)}.launch-proof.json`;
 
 /** Pretty JSON with a trailing newline (files end with one). */
 export const jsonText = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
@@ -297,7 +298,7 @@ export function reviewSummary(plan: Pick<IssuePlan, 'token' | 'fee'>, walletKey:
 
 export interface ResultRow {
   /** i18n key suffix under `issue.result.` and test id suffix (`issue-result-<id>`) */
-  id: 'tokenId' | 'templateHash' | 'extension' | 'txid' | 'program';
+  id: 'tokenId' | 'templateHash' | 'extension' | 'txid' | 'prepTxid' | 'program';
   value: string;
   /** offer a copy button */
   copy: boolean;
@@ -312,6 +313,15 @@ export interface ResultViewModel {
   supplyFile: string;
   metadataJson: string;
   metadataFile: string;
+  /** the KCC-23 launch proof (null: the docs carry none) */
+  proofJson: string | null;
+  proofFile: string;
+}
+
+/** The id of the creation's KCC-23 preparation, from supply.json (`kcc23.preparation_txid`). */
+function prepTxidOf(docs: IssuePlan['docs']): string | null {
+  const k = (docs.supply as { kcc23?: { preparation_txid?: unknown } }).kcc23?.preparation_txid;
+  return typeof k === 'string' && /^[0-9a-f]{64}$/.test(k) ? k : null;
 }
 
 /** Rows and file contents of the result panel. Throws when the docs do not describe the issued token (`registryEntryFromIssue`). */
@@ -321,6 +331,7 @@ export function resultViewModel(plan: Pick<IssuePlan, 'token' | 'docs'>, txid: s
     rows: [
       { id: 'tokenId', value: plan.token.covenantId, copy: true },
       { id: 'txid', value: txid, copy: true },
+      ...(prepTxidOf(plan.docs) ? [{ id: 'prepTxid' as const, value: prepTxidOf(plan.docs)!, copy: true }] : []),
       { id: 'program', value: plan.token.program, copy: false },
       { id: 'templateHash', value: plan.token.templateHash, copy: true },
       { id: 'extension', value: plan.token.extensionCommitment, copy: true },
@@ -332,5 +343,7 @@ export function resultViewModel(plan: Pick<IssuePlan, 'token' | 'docs'>, txid: s
     supplyFile: supplyDocFileName(plan.token.ticker),
     metadataJson: jsonText(plan.docs.metadata),
     metadataFile: metadataDocFileName(plan.token.ticker),
+    proofJson: plan.docs.launchProof ? jsonText(plan.docs.launchProof) : null,
+    proofFile: proofDocFileName(plan.token.ticker),
   };
 }

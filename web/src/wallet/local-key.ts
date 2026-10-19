@@ -3,7 +3,7 @@
 // signatures, through the validated messages of signer/protocol.ts. Reloading the page or removing the frame forgets the key.
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
 import { normalizeNetwork, pubkeyToAddress, type KaspaSdk } from '../data/kaspa-sdk';
-import { toSigner, parseSignerMessage, type AppToSigner, type RejectReason, type TokenHint } from '../signer/protocol';
+import { toSigner, parseSignerMessage, type AppToSigner, type GenesisClaim, type RejectReason, type TokenHint } from '../signer/protocol';
 import { SIGN_TIMEOUT_MS } from './sigs';
 import { WalletError, type SignOptions, type WalletAdapter, type WalletInfo } from './types';
 
@@ -22,13 +22,16 @@ export interface SignerHostEvents {
 
 interface Waiting {
   id: string;
-  resolve(s: InputSignature[]): void;
+  /** `prep`: the signatures of the request's preparation (a creation, `signChain`) */
+  resolve(s: InputSignature[], prep?: InputSignature[]): void;
   reject(e: WalletError): void;
   timer: ReturnType<typeof setTimeout>;
   /** what the frame was given for this request, by transaction id: the request and every update of it */
   shown: Map<string, BuiltTx>;
   /** a re-timed request shows the frame only after RETIME_SHOW_MS: the frame signs it at once when nothing got worse (no prompt to show) */
   show?: ReturnType<typeof setTimeout>;
+  /** a creation: the preparation shown and signed with the request; its signatures must come back too */
+  prep?: BuiltTx;
 }
 
 /** How long a re-timed request waits before the frame is shown (it is signed in milliseconds, without a prompt, when the frame accepts it). */
@@ -85,9 +88,14 @@ export class SignerHost {
             this.settle(null, new WalletError('no-signature', 'The private key signer signed a transaction it was not given.'));
             return;
           }
+          // a creation: the preparation's signatures with the genesis's; none for a plain request
+          if (!!this.waiting.prep !== !!m.prepSignatures) {
+            this.settle(null, new WalletError('no-signature', 'The private key signer answered with other signatures than requested.'));
+            return;
+          }
           this.lastSigned = m.id;
           this.lastSignedTx = tx;
-          this.settle(m.signatures, null);
+          this.settle(m.signatures, null, m.prepSignatures);
         }
         return;
       case 'rejected': {
@@ -101,15 +109,37 @@ export class SignerHost {
     }
   }
 
-  private settle(sigs: InputSignature[] | null, err: WalletError | null): void {
+  private settle(sigs: InputSignature[] | null, err: WalletError | null, prep?: InputSignature[]): void {
     const w = this.waiting;
     if (!w) return;
     this.waiting = null;
     clearTimeout(w.timer);
     if (w.show !== undefined) clearTimeout(w.show);
     this.events.onRequest?.(false);
-    if (sigs) w.resolve(sigs);
+    if (sigs) w.resolve(sigs, prep);
     else w.reject(err!);
+  }
+
+  /**
+   * Asks the frame to show a token creation (the genesis `built` and the preparation `prep` it spends) on ONE confirmation and sign both once
+   * the user approves there. Resolves with the signatures of each.
+   */
+  signChain(prep: BuiltTx, built: BuiltTx, tokens: TokenHint[], timeoutMs = SIGN_TIMEOUT_MS, genesis?: GenesisClaim): Promise<{ prep: InputSignature[]; built: InputSignature[] }> {
+    if (!this.pub) return Promise.reject(new WalletError('other', 'The private key signer holds no key: connect again.'));
+    if (this.waiting) return Promise.reject(new WalletError('other', 'The private key signer is busy with another request.'));
+    const id = `r${Date.now().toString(36)}${(++this.seq).toString(36)}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.post(toSigner({ type: 'cancel', id }));
+        this.settle(null, new WalletError('timeout', `Private key signer: no answer after ${Math.round(timeoutMs / 1000)}s.`));
+      }, timeoutMs);
+      this.waiting = {
+        id, timer, prep, shown: new Map([[built.tx.id, built]]), reject,
+        resolve: (sigs, prepSigs) => (prepSigs ? resolve({ prep: prepSigs, built: sigs }) : reject(new WalletError('no-signature', 'The private key signer did not sign the preparation.'))),
+      };
+      this.events.onRequest?.(true);
+      this.post(toSigner({ type: 'sign', id, built, tokens, prep, ...(genesis ? { genesis } : {}) }));
+    });
   }
 
   /** Asks the frame to show `built` and sign it once the user approves there (`retime`: it re-times the request signed last, retime.ts). */
@@ -196,6 +226,20 @@ export function createLocalKeyAdapter(deps: LocalKeyDeps): WalletAdapter {
     },
     async refresh(): Promise<WalletInfo> {
       return info();
+    },
+    async signChain([prep, built]: [BuiltTx, BuiltTx], opts: SignOptions = {}): Promise<[InputSignature[], InputSignature[]]> {
+      const host = deps.host();
+      const pubkey = pub();
+      if (!host) throw new WalletError('other', 'No private key is loaded.');
+      if ([...prep.sign, ...built.sign].some((s) => s.pubkey !== pubkey)) throw new WalletError('other', 'This transaction asks for a signature of another key.');
+      const sigs = await host.signChain(prep, built, deps.tokenHints?.(built) ?? [], opts.timeoutMs, opts.genesisClaim);
+      // one signature per request, in each request's order: anything else is not an answer to this request
+      for (const [b, got] of [[prep, sigs.prep], [built, sigs.built]] as const) {
+        if (got.length !== b.sign.length || got.some((s, i) => s.inputIndex !== b.sign[i]!.inputIndex)) {
+          throw new WalletError('no-signature', 'The private key signer answered with other signatures than requested.');
+        }
+      }
+      return [sigs.prep, sigs.built];
     },
     async signTx(built: BuiltTx, opts: SignOptions = {}): Promise<InputSignature[]> {
       const host = deps.host();

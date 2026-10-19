@@ -224,9 +224,11 @@ describe('a real issuance from a model-built form', () => {
     expect(plan.built.tx.outputs[0].covenant?.covenantId).toBe(plan.token.covenantId);
     expect(plan.token.supply).toBe('100050');
     expect(plan.token.outputs.map((o) => [o.owner, o.amount])).toEqual([[wallet, '85025'], [other, '10025'], ['ab'.repeat(32), '5000']]);
-    // consensus check: the genesis is valid
-    const signed = k.finalize(plan.built, signBuilt(plan.built, [SK]), { tightenBudgets: true });
-    expect(BigInt((k.validate(signed) as { fee: string; minFee: string }).fee)).toBeGreaterThanOrEqual(0n);
+    // consensus check: the preparation and the genesis are valid
+    for (const b of [plan.prep, plan.built]) {
+      const signed = k.finalize(b, signBuilt(b, [SK]), { tightenBudgets: true });
+      expect(BigInt((k.validate(signed) as { fee: string; minFee: string }).fee)).toBeGreaterThanOrEqual(0n);
+    }
 
     // issuedTokenUtxos match the holders
     const utxos = issuedTokenUtxos(plan);
@@ -237,7 +239,7 @@ describe('a real issuance from a model-built form', () => {
     // review summary
     const sum = reviewSummary(plan, wallet);
     expect(sum).toMatchObject({ name: 'Model Coin', ticker: 'MODL', decimals: 2, supplyBase: 100050n, supplyHuman: '1,000.5', carrierEach: 250_000_000n, carrierTotal: 750_000_000n, outputCount: 3, program: 'KCC20Ref' });
-    expect(sum.fee).toBe(BigInt(plan.built.fee.fee));
+    expect(sum.fee).toBe(BigInt(plan.prep.fee.fee) + BigInt(plan.built.fee.fee));
     expect(sum.holders.map((h) => [h.human, h.isWallet])).toEqual([['850.25', true], ['100.25', false], ['50', false]]);
     expect(holderViews(plan.token, null).some((h) => h.isWallet)).toBe(false);
 
@@ -254,6 +256,9 @@ describe('a real issuance from a model-built form', () => {
     expect(vm.registryEntryFile).toBe('MODL.registry-entry.json');
     expect(JSON.parse(vm.supplyJson)).toEqual(plan.docs.supply);
     expect(JSON.parse(vm.metadataJson)).toEqual(plan.docs.metadata);
+    expect(vm.rows.find((r) => r.id === 'prepTxid')?.value).toBe(plan.prep.tx.id);
+    expect(JSON.parse(vm.proofJson!)).toEqual(plan.docs.launchProof);
+    expect(vm.proofFile).toBe('MODL.launch-proof.json');
   });
 
   it('refuses a result whose docs do not describe the token', () => {

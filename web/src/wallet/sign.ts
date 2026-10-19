@@ -138,7 +138,7 @@ const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * confirmation screen left open) must not be asked to sign it: the popup would show another account, or the signature would be for a key
  * the plan does not spend.
  */
-async function assertWalletMatches(adapter: WalletAdapter, built: BuiltTx, network: string): Promise<void> {
+export async function assertWalletMatches(adapter: WalletAdapter, built: BuiltTx, network: string): Promise<void> {
   let now;
   try {
     now = await adapter.refresh!();

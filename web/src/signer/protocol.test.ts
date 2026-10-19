@@ -113,3 +113,37 @@ describe('sender checks', () => {
     expect(fromSigner({ source: null, origin: 'null' }, null)).toBe(false);
   });
 });
+
+describe('signer protocol: a token creation (KCC-23 preparation + genesis)', () => {
+  const claim = () => ({
+    program: 'KCC20Ref', extensionCommitment: '00'.repeat(32),
+    outputs: [{ index: 0, amount: '1000', owner: MAKER_PK, ownerScheme: 0, borrowScheme: 0, borrowGuard: '00'.repeat(32) }],
+  });
+  it('a sign request carries the preparation and the genesis claim; a signed answer the preparation signatures', () => {
+    const m = parseAppMessage(clone({ p: P, type: 'sign', id: 'c1', built: buildSend(), tokens: [], prep: buildCancel(), genesis: claim() }));
+    expect(m).toMatchObject({ type: 'sign', id: 'c1', prep: { tx: { id: buildCancel().tx.id } }, genesis: claim() });
+    const sig = { inputIndex: 0, signature: 'ab'.repeat(64) };
+    expect(parseSignerMessage({ p: P, type: 'signed', id: 'c1', txid: 'cd'.repeat(32), signatures: [sig], prepSignatures: [sig] })).toMatchObject({ prepSignatures: [sig] });
+  });
+  it('refuses a claim without its preparation, a malformed claim, a re-timed creation, empty or malformed preparation signatures', () => {
+    const base = () => ({ p: P, type: 'sign', id: 'c1', built: clone(buildSend()), tokens: [] as unknown[], prep: clone(buildCancel()), genesis: claim() as unknown });
+    const bad: ((m: ReturnType<typeof base>) => void)[] = [
+      (m) => void delete (m as { prep?: unknown }).prep,
+      (m) => void (m.genesis = { ...claim(), program: 'bad name' }),
+      (m) => void (m.genesis = { ...claim(), outputs: [] }),
+      (m) => void (m.genesis = { ...claim(), outputs: [{ ...claim().outputs[0], amount: '-1' }] }),
+      (m) => void (m.genesis = { ...claim(), extra: 1 }),
+      (m) => void Object.assign(m, { retimeOf: 'r0' }),
+      (m) => void Object.assign(m, { prep: { tx: {} } }),
+    ];
+    for (const f of bad) {
+      const m = base();
+      f(m);
+      expect(parseAppMessage(m)).toBeNull();
+    }
+    const sig = { inputIndex: 0, signature: 'ab'.repeat(64) };
+    for (const prepSignatures of [[], [{ inputIndex: 0, signature: 'zz' }], 'x']) {
+      expect(parseSignerMessage({ p: P, type: 'signed', id: 'c1', signatures: [sig], prepSignatures })).toBeNull();
+    }
+  });
+});
