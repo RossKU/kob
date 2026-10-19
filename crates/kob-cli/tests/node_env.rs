@@ -17,7 +17,11 @@ fn issue(env: Option<&str>, extra: &[&str]) -> (bool, String) {
     let pk = Keypair::from_secret_key(&Secp256k1::new(), &sk).x_only_public_key().0.serialize();
     let pk: String = pk.iter().map(|b| format!("{b:02x}")).collect();
     let fund = format!("{TX}:0:5000000000:{pk}");
+    // a submitting run keeps its signed creation in ./kob-create-<id16>: run where that lands outside the source tree
+    let cwd = std::env::temp_dir().join(format!("kob-node-env-{}", std::process::id()));
+    std::fs::create_dir_all(&cwd).unwrap();
     let mut cmd = Command::new(BIN);
+    cmd.current_dir(&cwd);
     cmd.args(["token", "issue", "--name", "Test", "--ticker", "TEST", "--decimals", "8", "--supply", "5", "--network", "testnet-10"])
         .args(["--fund-utxo", &fund, "--key", SK])
         .args(extra)
