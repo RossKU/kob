@@ -869,9 +869,17 @@ pub mod api {
         let id = TemplateId::from_name(kind).ok_or_else(|| format!("unknown template {kind}"))?;
         out(&state::mutable_windows(id).to_vec())
     }
-    /// Fixed-supply KCC-20 issuance: `{built, token, docs, warnings}` (see `crate::issue`).
+    /// Fixed-supply KCC-20 creation under KCC-23: `{prep, built, declaration, token, docs, warnings}` (see `crate::issue`).
     pub fn issue(spec: &str) -> R<String> {
         crate::issue::issue(spec)
+    }
+    /// Verifies a KCC-23 launch proof and returns the declaration bound to its covenant id (see `crate::issue::kcc23_verify`).
+    pub fn kcc23_verify(proof: &str) -> R<String> {
+        crate::issue::kcc23_verify(proof)
+    }
+    /// Decodes a KCC-23 preparation payload (hex) under KOB's token convention (see `crate::issue::kcc23_decode`).
+    pub fn kcc23_decode(payload_hex: &str) -> R<String> {
+        crate::issue::kcc23_decode(payload_hex)
     }
     /// Constants and rules of the issuance flow.
     pub fn issue_limits() -> R<String> {
@@ -1058,11 +1066,26 @@ pub fn mutable_windows(kind: &str) -> Result<String, JsError> {
 /// configuration; `program: "public-mint"` for the published build).
 /// Takes `{name, ticker, decimals, supply, holders: [{owner, ownerScheme, amount, borrowScheme?, borrowGuard?}],
 /// extensionCommitment?, carrier?, feeRate?, funding: [{transactionId, index, amount, pubkey}], changeTo?, description?,
-/// icon?, website?, network?}` and returns `{built, token, docs: {supply, metadata, registryEntry}, warnings}`.
-/// `built` is a normal `BuiltTx` (P2PK signing plan): sign it and pass it to `finalize` / `validate` unchanged.
+/// icon?, website?, x?, telegram?, network?, program?}` and returns `{prep, built, declaration: {json, payload, funding}, token,
+/// docs: {supply, metadata, registryEntry, launchProof}, warnings}`: a creation under KCC-23, `prep` the preparation (its payload
+/// declares the metadata) and `built` the genesis spending its output 0. Both are normal `BuiltTx` (P2PK signing plans of the
+/// wallet's key): sign each and pass it to `finalize` / `validate` unchanged; send `prep` first.
 #[wasm_bindgen]
 pub fn issue(spec: &str) -> Result<String, JsError> {
     js(api::issue(spec))
+}
+
+/// KCC-23: verifies a launch proof (`kob-kcc23-proof/1` JSON, from an indexer or any other source) and returns the declaration
+/// bound to its covenant id (`{covenantId, preparationTxid, genesisTxid, json, token}`); throws when the proof binds nothing.
+#[wasm_bindgen(js_name = kcc23Verify)]
+pub fn kcc23_verify(proof: &str) -> Result<String, JsError> {
+    js(api::kcc23_verify(proof))
+}
+
+/// KCC-23: decodes a preparation payload (hex): `{json, token}`; throws when it is not a declaration. Binds nothing.
+#[wasm_bindgen(js_name = kcc23Decode)]
+pub fn kcc23_decode(payload_hex: &str) -> Result<String, JsError> {
+    js(api::kcc23_decode(payload_hex))
 }
 
 /// Limits and rules of the issuance flow (maximum supply and genesis outputs, default carrier, ticker / name rules).

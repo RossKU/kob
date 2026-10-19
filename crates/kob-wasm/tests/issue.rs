@@ -1,5 +1,7 @@
-//! Token issuance through the wasm API surface (`api::issue` / `api::issue_limits`): the genesis comes back as a
-//! normal `BuiltTx`, signs with the shared signing split and passes `finalize` and the script-engine `validate`.
+//! Token issuance through the wasm API surface (`api::issue` / `api::issue_limits`): a KCC-23 creation comes back as two
+//! normal `BuiltTx` (`prep`, the preparation declaring the metadata, and `built`, the genesis spending its output 0); each signs
+//! with the shared signing split and passes `finalize` and the script-engine `validate`. Plus the KCC-23 readers
+//! (`api::kcc23_verify`, `api::kcc23_decode`).
 
 use std::collections::BTreeMap;
 
@@ -42,16 +44,20 @@ fn built_of(res: &Value) -> BuiltTx {
     serde_json::from_value(res["built"].clone()).unwrap()
 }
 
+fn prep_of(res: &Value) -> BuiltTx {
+    serde_json::from_value(res["prep"].clone()).unwrap()
+}
+
 fn sign(built: &BuiltTx, sk: [u8; 32]) -> Vec<InputSignature> {
     let keys = BTreeMap::from([(tx::pubkey_of(&sk).unwrap(), sk)]);
     tx::sign_locally(built, &keys).unwrap()
 }
 
-/// sign -> finalize (tightened budgets) -> validate; returns the signed tx JSON.
-fn sign_finalize_validate(res: &Value) -> Value {
-    let built = built_of(res);
+/// sign -> finalize (tightened budgets) -> validate of one `BuiltTx` of the result (`prep` or `built`); returns the signed tx JSON.
+fn sign_finalize_validate_one(res: &Value, which: &str) -> Value {
+    let built: BuiltTx = serde_json::from_value(res[which].clone()).unwrap();
     let sigs = serde_json::to_string(&sign(&built, SK)).unwrap();
-    let signed = api::finalize(&res["built"].to_string(), &sigs, r#"{"tightenBudgets":true}"#).expect("finalize");
+    let signed = api::finalize(&res[which].to_string(), &sigs, r#"{"tightenBudgets":true}"#).expect("finalize");
     let report: Value = serde_json::from_str(&api::validate(&signed).expect("validate")).unwrap();
     let fee: u64 = report["fee"].as_str().unwrap().parse().unwrap();
     let min: u64 = report["minFee"].as_str().unwrap().parse().unwrap();
@@ -59,24 +65,54 @@ fn sign_finalize_validate(res: &Value) -> Value {
     serde_json::from_str(&signed).unwrap()
 }
 
+/// Both transactions of a creation signed, finalized and validated; returns the signed GENESIS. Tightening the compute budgets
+/// leaves the preparation's id unchanged (budgets are not in a version 1 id), so the genesis still spends it.
+fn sign_finalize_validate(res: &Value) -> Value {
+    let prep = sign_finalize_validate_one(res, "prep");
+    let genesis = sign_finalize_validate_one(res, "built");
+    assert_eq!(genesis["tx"]["inputs"][0]["transactionId"], prep["tx"]["id"], "the genesis spends the signed preparation");
+    genesis
+}
+
 #[test]
 fn normal_issuance_signs_finalizes_and_validates() {
     let res = issue(&request()).unwrap();
+    let prep = prep_of(&res);
     let built = built_of(&res);
 
-    // shape of BuiltTx: one P2PK plan and one SIGHASH_ALL request per funding input
+    // the preparation: one P2PK plan and one SIGHASH_ALL request per funding input; output 0 = the wallet's own P2PK of the
+    // genesis's funding, then change; the payload = 0x00 + the declaration
+    assert_eq!(prep.tx.inputs.len(), 1);
+    assert_eq!((prep.plans.len(), prep.roles.clone(), prep.sign.len()), (1, vec!["p2pk".to_string()], 1));
+    assert_eq!(prep.tx.inputs[0].utxo.block_daa_score, 123456, "funding entry keeps its DAA score");
+    assert_eq!(prep.tx.outputs.len(), 2);
+    assert_eq!(prep.tx.outputs[0].script_public_key, format!("000020{}ac", pk()));
+    assert_eq!(prep.fee.change_output, Some(1));
+    assert!(prep.covenants.is_empty(), "the preparation creates no covenant");
+    let json = r#"{"name":"Test Token","symbol":"TEST","decimals":8}"#;
+    assert_eq!(res["declaration"]["json"], json);
+    assert_eq!(to_hex(&prep.tx.payload), format!("00{}", to_hex(json.as_bytes())));
+    assert_eq!(res["declaration"]["payload"], to_hex(&prep.tx.payload));
+    assert_eq!(res["declaration"]["funding"], prep.tx.outputs[0].value.to_string());
+
+    // the genesis: one input, the preparation's output 0 (DAA score unknown until it is accepted: the sighash does not commit
+    // to it), one P2PK plan of the same key, the token output, no change
     assert_eq!(built.tx.inputs.len(), 1);
+    assert_eq!((built.tx.inputs[0].transaction_id, built.tx.inputs[0].index), (prep.tx.id, 0));
+    assert_eq!(built.tx.inputs[0].utxo.amount, prep.tx.outputs[0].value);
+    assert_eq!(built.tx.inputs[0].utxo.script_public_key, prep.tx.outputs[0].script_public_key);
+    assert_eq!(built.tx.inputs[0].utxo.block_daa_score, 0);
     assert_eq!(built.plans.len(), 1);
     assert_eq!(built.roles, ["p2pk"]);
     assert_eq!(built.sign.len(), 1);
     assert_eq!(built.sign[0].sighash_type, 1);
     assert!(built.sign[0].redeem_script.is_none());
     assert_eq!(to_hex(&built.sign[0].pubkey), pk());
-    assert_eq!(built.tx.inputs[0].utxo.block_daa_score, 123456, "funding entry keeps its DAA score");
     assert!(built.tx.inputs[0].signature_script.is_empty());
-    assert_eq!(built.tx.outputs.len(), 2, "one token output and change");
-    assert_eq!(built.fee.change_output, Some(1));
+    assert_eq!(built.tx.outputs.len(), 1, "one token output, no change");
+    assert_eq!(built.fee.change_output, None);
     assert!(built.fee.fee >= built.fee.min_fee);
+    assert_eq!(prep.tx.outputs[0].value, 10 * KAS + built.fee.fee, "the preparation funds the carrier and the genesis fee exactly");
 
     // token facts
     let token = &res["token"];
@@ -94,13 +130,19 @@ fn normal_issuance_signs_finalizes_and_validates() {
     assert_eq!(built.covenants[0].outputs, [0]);
     assert_eq!(built.covenants[0].authorizing_input, 0);
     assert_eq!(to_hex(&built.tx.outputs[0].covenant.as_ref().unwrap().covenant_id), cov);
-    assert!(built.tx.outputs[1].covenant.is_none(), "change is a plain output");
+    assert!(prep.tx.outputs[1].covenant.is_none(), "the preparation's change is a plain output");
 
     // documents
     assert_eq!(res["docs"]["supply"]["total_supply"], "1000");
     assert_eq!(res["docs"]["supply"]["covenant_id"], cov);
     assert_eq!(res["docs"]["supply"]["network"], "testnet-10");
     assert_eq!(res["docs"]["metadata"]["symbol"], "TEST");
+    assert_eq!(res["docs"]["supply"]["kcc23"]["preparation_txid"], to_hex(&prep.tx.id));
+    // the launch proof verifies, as any reader would check it
+    let v: Value = serde_json::from_str(&api::kcc23_verify(&res["docs"]["launchProof"].to_string()).unwrap()).unwrap();
+    assert_eq!((v["covenantId"].as_str(), v["json"].as_str()), (Some(cov), Some(json)));
+    assert_eq!((v["token"]["symbol"].as_str(), v["token"]["decimals"].as_u64()), (Some("TEST"), Some(8)));
+    assert_eq!(v["genesisTxid"], to_hex(&built.tx.id));
     assert_eq!(res["docs"]["registryEntry"]["status"], "pending-review");
     assert_eq!(res["docs"]["registryEntry"]["verified"], false);
     assert_eq!(res["docs"]["registryEntry"]["covenant_id"], cov);
@@ -118,7 +160,9 @@ fn normal_issuance_signs_finalizes_and_validates() {
     // the transaction id does not depend on the signatures
     let signed = sign_finalize_validate(&res);
     assert_eq!(signed["tx"]["id"], to_hex(&built.tx.id));
-    assert_eq!(signed["tx"]["inputs"][0]["utxo"]["blockDaaScore"], "123456");
+    assert_eq!(signed["tx"]["inputs"][0]["utxo"]["blockDaaScore"], "0", "the preparation output has no DAA score before it is accepted");
+    let prep_signed = sign_finalize_validate_one(&res, "prep");
+    assert_eq!(prep_signed["tx"]["inputs"][0]["utxo"]["blockDaaScore"], "123456");
 }
 
 #[test]
@@ -137,7 +181,7 @@ fn multiple_holders_including_a_covenant_held_one() {
     ]);
     let res = issue(&req).unwrap();
     let built = built_of(&res);
-    assert_eq!(built.tx.outputs.len(), 4, "three token outputs and change");
+    assert_eq!(built.tx.outputs.len(), 3, "three token outputs, no change");
     assert_eq!(built.covenants[0].outputs, [0, 1, 2]);
     let outs = res["token"]["outputs"].as_array().unwrap();
     assert_eq!(outs.iter().map(|o| o["amount"].as_str().unwrap().parse::<u64>().unwrap()).sum::<u64>(), 1000);
@@ -186,11 +230,13 @@ fn several_funding_inputs_each_get_a_signature_request() {
     let mut req = request();
     req["funding"] = json!([funding(1, 8 * KAS), funding(2, 8 * KAS), funding(3, 8 * KAS)]);
     let res = issue(&req).unwrap();
+    let prep = prep_of(&res);
+    assert_eq!(prep.tx.inputs.len(), 3);
+    assert_eq!(prep.sign.iter().map(|s| s.input_index).collect::<Vec<_>>(), [0, 1, 2]);
+    assert!(prep.plans.iter().all(|p| matches!(p, tx::SigPlan::P2pk { .. })));
+    // the genesis has the one input that authorises the group
     let built = built_of(&res);
-    assert_eq!(built.tx.inputs.len(), 3);
-    assert_eq!(built.sign.iter().map(|s| s.input_index).collect::<Vec<_>>(), [0, 1, 2]);
-    assert!(built.plans.iter().all(|p| matches!(p, tx::SigPlan::P2pk { .. })));
-    // input 0 authorises the group
+    assert_eq!(built.tx.inputs.len(), 1);
     assert_eq!(built.covenants[0].authorizing_input, 0);
     assert_eq!(built.tx.outputs[0].covenant.as_ref().unwrap().authorizing_input, 0);
     sign_finalize_validate(&res);
@@ -202,18 +248,19 @@ fn change_goes_to_the_requested_key_and_dust_change_joins_the_fee() {
     let other = tx::pubkey_of(&[0x44; 32]).unwrap();
     req["changeTo"] = json!(to_hex(&other));
     let res = issue(&req).unwrap();
-    let built = built_of(&res);
-    let spk = &built.tx.outputs[1].script_public_key;
+    let prep = prep_of(&res);
+    let spk = &prep.tx.outputs[1].script_public_key;
     assert_eq!(spk, &format!("0000{}", format_args!("20{}ac", to_hex(&other))), "P2PK spk of the change key");
+    assert_eq!(prep.tx.outputs[0].script_public_key, format!("000020{}ac", pk()), "output 0 stays the funding key's");
 
-    // funding covers the carrier plus a little: the remainder is below the dust bound and is added to the fee
+    // funding covers the carrier plus a little: the remainder is below the dust bound and is added to the preparation fee
     let mut tight = request();
     tight["funding"] = json!([funding(1, 10 * KAS + KAS / 2)]);
     let res = issue(&tight).unwrap();
-    let built = built_of(&res);
-    assert_eq!(built.tx.outputs.len(), 1, "no change output");
-    assert_eq!(built.fee.change_output, None);
-    assert_eq!(built.fee.fee, KAS / 2);
+    let prep = prep_of(&res);
+    assert_eq!(prep.tx.outputs.len(), 1, "no change output");
+    assert_eq!(prep.fee.change_output, None);
+    assert_eq!(prep.fee.fee + prep.tx.outputs[0].value, 10 * KAS + KAS / 2);
     assert!(res["warnings"][0].as_str().unwrap().contains("below the dust bound"));
     sign_finalize_validate(&res);
 }
@@ -366,7 +413,8 @@ fn funding_rules() {
     let mut req = request();
     req["funding"] = json!([funding(1, 5 * KAS)]);
     let e = err(&req);
-    assert!(e.contains("insufficient funds") && e.contains(&(10 * KAS).to_string()), "{e}");
+    let need: u64 = e.split("need ").nth(1).and_then(|r| r.split(' ').next()).and_then(|n| n.parse().ok()).unwrap_or(0);
+    assert!(e.contains("insufficient funds") && need > 10 * KAS && e.contains("have 500000000"), "{e}");
 
     // enough for the carrier but not the fee
     let mut req = request();
@@ -439,9 +487,9 @@ fn limits_mirror_the_protocol_constants() {
 fn wallets_with_little_more_than_the_carrier_still_get_a_valid_genesis() {
     // storage mass dominates the fee here and grows as the change shrinks: the fee must hold at the final change value
     let mut req = request();
-    req["funding"] = json!([funding(1, 6 * KAS), funding(2, 6 * KAS)]);
+    req["funding"] = json!([funding(1, 6 * KAS), funding(2, 5 * KAS + 30_000_000)]);
     let res = issue(&req).unwrap();
-    assert!(built_of(&res).fee.mass.storage > built_of(&res).fee.mass.compute);
+    assert!(prep_of(&res).fee.mass.storage > prep_of(&res).fee.mass.compute);
     sign_finalize_validate(&res);
 
     // exactly the carrier leaves nothing for the fee: a reason, not a trap
@@ -482,5 +530,51 @@ fn programs_the_app_issues() {
     for refused in ["8x8", "8x8-prototype", "kcc20-ref-8x8"] {
         req["program"] = json!(refused);
         assert!(issue(&req).unwrap_err().contains("prototype"), "{refused}");
+    }
+}
+
+#[test]
+fn the_declaration_carries_the_optional_fields_in_canonical_form() {
+    let mut req = request();
+    req["description"] = json!("A test token");
+    req["icon"] = json!("ipfs://bafytest");
+    req["website"] = json!("https://example.org");
+    req["x"] = json!("@example");
+    req["telegram"] = json!("https://telegram.me/example_chat");
+    let res = issue(&req).unwrap();
+    assert_eq!(
+        res["declaration"]["json"],
+        r#"{"name":"Test Token","symbol":"TEST","decimals":8,"description":"A test token","logo":"ipfs://bafytest","website":"https://example.org","x":"https://x.com/example","telegram":"https://t.me/example_chat"}"#
+    );
+    let d = &res["docs"]["registryEntry"]["display"];
+    assert_eq!((d["x"].as_str(), d["telegram"].as_str(), d["icon"].as_str()), (Some("https://x.com/example"), Some("https://t.me/example_chat"), Some("ipfs://bafytest")));
+    sign_finalize_validate(&res);
+    // a handle that is neither form, and a declaration over the payload limit, are refused with a reason
+    let mut bad = request();
+    bad["x"] = json!("https://evil.example/x");
+    assert!(err(&bad).contains("x"));
+    let mut big = request();
+    big["description"] = json!("\u{e9}".repeat(500));
+    assert!(err(&big).contains("bytes on chain"), "{}", err(&big));
+}
+
+#[test]
+fn kcc23_readers_refuse_what_binds_nothing() {
+    let res = issue(&request()).unwrap();
+    let proof = res["docs"]["launchProof"].clone();
+    api::kcc23_verify(&proof.to_string()).unwrap();
+    // a supplier that changes the declaration, or claims it for another covenant id, is refused
+    let mut forged = proof.clone();
+    forged["preparation"]["payload"] = json!(format!("00{}", to_hex(br#"{"name":"Test Token","symbol":"TEST","decimals":2}"#)));
+    assert!(api::kcc23_verify(&forged.to_string()).is_err());
+    let mut other = proof.clone();
+    other["covenantId"] = json!("11".repeat(32));
+    assert!(api::kcc23_verify(&other.to_string()).is_err());
+    assert!(api::kcc23_verify("{").unwrap_err().starts_with("proof:"));
+    // the decoder: KCC-23 section 6 declarations
+    let d: Value = serde_json::from_str(&api::kcc23_decode("007b226e616d65223a22c3a9227d").unwrap()).unwrap();
+    assert_eq!(d["token"]["name"], "\u{e9}");
+    for bad in ["7b7d", "017b7d", "005b5d", "007b2278223a22ff227d", "", "zz"] {
+        assert!(api::kcc23_decode(bad).is_err(), "{bad}");
     }
 }
