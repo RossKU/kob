@@ -24,7 +24,10 @@ const USAGE: &str = "\
 kob: KOB command line
 
 USAGE
-  kob token issue [OPTIONS]    issue a fixed-supply KCC-20 token (`kob token issue --help`)
+  kob token issue [OPTIONS]    create a fixed-supply KCC-20 token: KCC-23 declaration, then the genesis (`kob token issue --help`)
+  kob token resume <DIR>       send a creation whose genesis did not go out (`kob token resume --help`)
+  kob token verify-declaration <PROOF>
+                               check a KCC-23 launch proof from any source and print the declaration
   kob registry validate <tokens.json> [--network NET]   check a token registry file
   kob registry verify-genesis --network NET [--evidence FILE] [--registry FILE] [--json]
                                re-derive each token's genesis check and live-minter check from chain evidence
@@ -65,6 +68,8 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["token", "issue", rest @ ..] => token::run_issue(&args[2..2 + rest.len()]),
+        ["token", "resume", rest @ ..] => token::run_resume(&args[2..2 + rest.len()]),
+        ["token", "verify-declaration", rest @ ..] => token::run_verify_declaration(&args[2..2 + rest.len()]),
         ["registry", "validate", rest @ ..] => registry::run_validate(rest),
         ["registry", "verify-genesis", rest @ ..] => registry::run_verify_genesis(rest),
         ["registry", "programs", rest @ ..] => programs::run_programs(rest),

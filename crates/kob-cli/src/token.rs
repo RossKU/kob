@@ -1,5 +1,7 @@
 //! `kob token issue`: fixed-supply KCC-20 issuance (the reference program in its standard 3/3 configuration, KOB's
-//! standard, or the published public-mint build, also 3/3; owner scheme 0x04 enabled, borrow disabled).
+//! standard, or the published public-mint build, also 3/3; owner scheme 0x04 enabled, borrow disabled), created under KCC-23:
+//! a preparation transaction declares the metadata, the genesis spends its output (`kob_protocol::issue::build_creation`).
+//! `kob token resume` sends a creation whose genesis did not go out; `kob token verify-declaration` checks a launch proof.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -7,11 +9,12 @@ use std::time::Duration;
 use kaspa_addresses::{Address, Version};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kob_protocol::issue::{
-    build_genesis, hex, hex_array, p2pk_script, FundingUtxo, GenesisPlan, Holder, IssueProgram, IssueSpec, DEFAULT_CARRIER,
-    DEFAULT_FEE_RATE, EXTENSION_FIXED_SUPPLY,
+    build_creation, hex, hex_array, p2pk_script, rpc_transaction_json, CreationPlan, FundingUtxo, Holder, IssueProgram, IssueSpec,
+    DEFAULT_CARRIER, DEFAULT_FEE_RATE, EXTENSION_FIXED_SUPPLY,
 };
+use kob_protocol::kcc23;
 use secp256k1::{Keypair, Secp256k1, SecretKey};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::wrpc;
 
@@ -19,6 +22,13 @@ use crate::wrpc;
 pub const ISSUE_USAGE: &str = "\
 kob token issue: issue a fixed-supply KCC-20 token (the reference program in its standard configuration, 3 token
 inputs / 3 outputs per transfer, or the published public-mint build of the reference, also 3 / 3)
+
+A creation is two transactions (KCC-23): the PREPARATION spends the funding into one output of the funding key (the
+genesis's carriers and fee) and the change, its payload declaring the token metadata (0x00 + JSON: name, symbol,
+decimals, then description, logo, website, x, telegram when given); the GENESIS spends that output, so the token's
+covenant id commits to the declaration. Both are signed at once; the genesis is sent right after the preparation. If it
+does not go out, the preparation output stays an ordinary UTXO of the funding key, and `kob token resume <DIR>` sends
+the saved genesis.
 
 USAGE
   kob token issue --name <NAME> --ticker <TICKER> --decimals <N> --fund-utxo <TXID:INDEX:AMOUNT:OWNER>...
@@ -28,8 +38,8 @@ USAGE
 REQUIRED
   --name, --ticker      display name (1..=64 chars) and ticker (2..=12 of A-Z 0-9)
   --decimals            0..=18 (informational; every amount is in base units)
-  --fund-utxo           funding UTXO, repeatable; OWNER = 64-hex x-only pubkey or a kaspa address (P2PK Schnorr).
-                        Input 0 authorises the genesis group. AMOUNT is in sompi.
+  --fund-utxo           funding UTXO of the preparation, repeatable, all of one key; OWNER = 64-hex x-only pubkey or
+                        a kaspa address (P2PK Schnorr). AMOUNT is in sompi.
 
 SUPPLY
   --holder              initial holder, repeatable, one token output each. OWNER = 64-hex | `self` (the funding
@@ -50,20 +60,23 @@ SUPPLY
 
 TRANSACTION
   --carrier             sompi on each token output (default 1000000000 = 10 KAS)
-  --fee                 explicit fee in sompi (default: fee-rate x mass)
+  --fee                 explicit GENESIS fee in sompi (default: fee-rate x mass); the preparation pays fee-rate x mass
   --fee-rate            sompi per mass unit (default 100)
   --change-to           address or 64-hex pubkey for the change (default: the funding key)
   --key                 signing secret (64 hex). `env:NAME` and `file:PATH` keep it out of shell history.
 
 OUTPUT
-  --out-dir             write genesis_tx.json, submit_request.json, supply.json, metadata.json, metadata.payload.hex,
-                        registry_entry.json here
-  --description --icon --website   recorded in metadata/supply
+  --out-dir             write preparation_tx.json, genesis_tx.json, submit_preparation.json, submit_request.json (the
+                        genesis), supply.json, metadata.json, metadata.payload.hex, launch_proof.json,
+                        registry_entry.json here. A submitting run without it writes them to ./kob-create-<ID16>.
+  --description --logo (or --icon) --website --x --telegram
+                        declared on chain in the preparation payload (at most 1024 bytes with name, symbol and
+                        decimals) and copied to the registry entry; --x and --telegram take a handle or the address
   --network             mainnet or testnet-10, recorded in metadata/supply; required unless the build is a deployment
                         build (deploy-mainnet, deploy-tn10), which implies its own
   --dry-run             build and verify everything offline (signs and executes the funding inputs when --key is
                         given, else the transaction stays unsigned); never submits
-  --node ws://HOST:PORT submit the signed transaction via wRPC JSON (`submitTransaction`; JSON port 18110 mainnet,
+  --node ws://HOST:PORT submit the signed transactions via wRPC JSON (`submitTransaction`; JSON port 18110 mainnet,
                         18210 testnet-10). Required unless --dry-run; default $KOB_NODE_WRPC (a URL with a password or
                         an API key belongs there: arguments are visible in `ps`).
 ";
@@ -134,6 +147,10 @@ pub struct IssueArgs {
     pub extension_commitment: [u8; 32],
     /// Allow borrow.
     pub allow_borrow: bool,
+    /// X account (canonical address).
+    pub x: Option<String>,
+    /// Telegram (canonical address).
+    pub telegram: Option<String>,
     /// Change destination.
     pub change_to: Option<[u8; 32]>,
     /// Description.
@@ -272,6 +289,8 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
         description: None,
         icon: None,
         website: None,
+        x: None,
+        telegram: None,
         network: String::new(),
         dry_run: false,
         node: None,
@@ -309,7 +328,16 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
             "--allow-borrow" => a.allow_borrow = true,
             "--change-to" => a.change_to = Some(parse_pubkey(&val("--change-to")?)?),
             "--description" => a.description = Some(val("--description")?),
-            "--icon" => a.icon = Some(val("--icon")?),
+            "--icon" | "--logo" => a.icon = Some(val("--logo")?),
+            "--x" => {
+                let v = val("--x")?;
+                a.x = Some(kcc23::x_url(&v).ok_or_else(|| format!("--x: `{v}` is not an X handle or https://x.com/ address"))?);
+            }
+            "--telegram" => {
+                let v = val("--telegram")?;
+                a.telegram =
+                    Some(kcc23::telegram_url(&v).ok_or_else(|| format!("--telegram: `{v}` is not a Telegram handle or https://t.me/ address"))?);
+            }
             "--website" => a.website = Some(val("--website")?),
             "--network" => a.network = val("--network")?,
             "--dry-run" => a.dry_run = true,
@@ -380,32 +408,48 @@ pub fn to_spec(a: &IssueArgs) -> Result<IssueSpec, String> {
     spec.description = a.description.clone();
     spec.icon = a.icon.clone();
     spec.website = a.website.clone();
+    spec.x = a.x.clone();
+    spec.telegram = a.telegram.clone();
     spec.network = a.network.clone();
     spec.program = a.program;
     Ok(spec)
 }
 
-fn write_json(dir: &Path, name: &str, v: &Value) -> Result<(), String> {
-    let mut s = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
-    s.push('\n');
-    std::fs::write(dir.join(name), s).map_err(|e| format!("write {name}: {e}"))
+/// Every output document of a creation, as `(file name, content)`.
+pub fn output_documents(plan: &CreationPlan) -> Vec<(&'static str, String)> {
+    let pretty = |v: &Value| format!("{}\n", serde_json::to_string_pretty(v).expect("json"));
+    let prep = rpc_transaction_json(&plan.prep.tx);
+    let genesis = plan.genesis.rpc_transaction_json();
+    vec![
+        ("preparation_tx.json", pretty(&prep)),
+        ("genesis_tx.json", pretty(&genesis)),
+        ("submit_preparation.json", pretty(&wrpc::submit_request(1, &prep, false))),
+        ("submit_request.json", pretty(&wrpc::submit_request(2, &genesis, false))),
+        ("supply.json", pretty(&plan.supply_json())),
+        ("metadata.json", pretty(&plan.genesis.metadata_json())),
+        ("metadata.payload.hex", format!("{}\n", hex(&plan.prep.tx.payload))),
+        ("launch_proof.json", pretty(&serde_json::to_value(plan.launch_proof()).expect("proof json"))),
+        ("registry_entry.json", pretty(&plan.genesis.registry_entry())),
+        (
+            "creation.json",
+            pretty(&json!({
+                "preparation_txid": plan.prep.txid().to_string(),
+                "genesis_txid": plan.genesis.txid().to_string(),
+                "covenant_id": hex(plan.covenant_id().as_bytes().as_slice()),
+                "signed": plan.signed(),
+            })),
+        ),
+    ]
 }
 
-/// Write every output document of a plan into `dir`.
-pub fn write_outputs(dir: &Path, plan: &GenesisPlan) -> Result<Vec<String>, String> {
+/// Write every output document of a creation into `dir`.
+pub fn write_outputs(dir: &Path, plan: &CreationPlan) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    let tx = plan.rpc_transaction_json();
-    write_json(dir, "genesis_tx.json", &tx)?;
-    write_json(dir, "submit_request.json", &wrpc::submit_request(1, &tx, false))?;
-    write_json(dir, "supply.json", &plan.supply_json())?;
-    write_json(dir, "metadata.json", &plan.metadata_json())?;
-    write_json(dir, "registry_entry.json", &plan.registry_entry())?;
-    std::fs::write(dir.join("metadata.payload.hex"), format!("{}\n", hex(&plan.metadata_payload())))
-        .map_err(|e| format!("write metadata.payload.hex: {e}"))?;
-    Ok(["genesis_tx.json", "submit_request.json", "supply.json", "metadata.json", "metadata.payload.hex", "registry_entry.json"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect())
+    let docs = output_documents(plan);
+    for (name, content) in &docs {
+        std::fs::write(dir.join(name), content).map_err(|e| format!("write {name}: {e}"))?;
+    }
+    Ok(docs.iter().map(|(n, _)| n.to_string()).collect())
 }
 
 /// Run `kob token issue`; returns the process exit code.
@@ -426,7 +470,7 @@ pub fn run_issue(args: &[String]) -> i32 {
 fn issue(args: &[String]) -> Result<(), String> {
     let a = parse_issue_args(args)?;
     let spec = to_spec(&a)?;
-    let mut plan = build_genesis(&spec).map_err(|e| e.to_string())?;
+    let mut plan = build_creation(&spec).map_err(|e| e.to_string())?;
     if let Some(src) = &a.key {
         let sk = read_key(src)?;
         let pk = Keypair::from_secret_key(&Secp256k1::new(), &sk).x_only_public_key().0.serialize();
@@ -436,64 +480,76 @@ fn issue(args: &[String]) -> Result<(), String> {
         plan.sign(&sk).map_err(|e| e.to_string())?;
     }
     let report = plan.verify().map_err(|e| e.to_string())?;
+    let g = &plan.genesis;
 
-    println!(
-        "token        {} ({}), {} decimals, fixed supply {} base units",
-        plan.spec.name, plan.spec.ticker, plan.spec.decimals, plan.spec.supply
-    );
-    println!("covenant id  {}", hex(plan.covenant_id.as_bytes().as_slice()));
+    println!("token        {} ({}), {} decimals, fixed supply {} base units", g.spec.name, g.spec.ticker, g.spec.decimals, g.spec.supply);
+    println!("covenant id  {}", hex(g.covenant_id.as_bytes().as_slice()));
     println!(
         "template     {} {}  (prefix {} B, suffix {} B, {}/{} slots)",
-        plan.program.registry_template_id,
-        hex(&plan.program.template_hash),
-        plan.program.prefix.len(),
-        plan.program.suffix.len(),
-        plan.program.max_token_inputs,
-        plan.program.max_token_outputs
+        g.program.registry_template_id,
+        hex(&g.program.template_hash),
+        g.program.prefix.len(),
+        g.program.suffix.len(),
+        g.program.max_token_inputs,
+        g.program.max_token_outputs
+    );
+    println!("declaration  {}", plan.prep.metadata.json());
+    println!(
+        "preparation  {}  (KCC-23 payload {} B, output 0 = {} sompi to the funding key, fee {} sompi, mass compute {} storage {})",
+        plan.prep.txid(),
+        plan.prep.tx.payload.len(),
+        plan.prep.value,
+        plan.prep.fee,
+        plan.prep.compute_mass,
+        plan.prep.storage_mass
     );
     println!(
         "genesis tx   {}  ({} token outputs, fee {} sompi, mass compute {} storage {}, {} B)",
-        plan.txid(),
-        plan.states.len(),
-        plan.fee,
+        g.txid(),
+        g.states.len(),
+        g.fee,
         report.compute_mass,
         report.storage_mass,
         report.size
     );
+    println!("total fee    {} sompi", plan.total_fee());
     println!(
-        "verified     covenant group, exact scripts, supply, mass, owner scheme 0x04 self-test{}",
+        "verified     KCC-23 binding, covenant group, exact scripts, supply, mass, owner scheme 0x04 self-test{}",
         if report.scripts_executed {
-            ", funding inputs executed in the script engine"
+            ", every input executed in the script engine"
         } else {
             " (UNSIGNED: script execution skipped, pass --key)"
         }
     );
-    for w in &plan.warnings {
+    for w in plan.warnings() {
         println!("warning      {w}");
     }
-    if let Some(dir) = &a.out_dir {
+    // a submitting run always keeps the signed transactions: they are what `kob token resume` sends
+    let dir = match (&a.out_dir, a.dry_run) {
+        (Some(d), _) => Some(d.clone()),
+        (None, false) => Some(PathBuf::from(format!("kob-create-{}", &hex(g.covenant_id.as_bytes().as_slice())[..16]))),
+        (None, true) => None,
+    };
+    if let Some(dir) = &dir {
         let files = write_outputs(dir, &plan)?;
         println!("wrote        {} to {}", files.join(", "), dir.display());
-    } else if a.dry_run {
+    } else {
         println!("(no --out-dir: nothing written)");
     }
     if a.dry_run {
         println!("dry run: nothing submitted");
         return Ok(());
     }
+    let dir = dir.expect("a submitting run has a directory");
     let node = a.node.as_deref().expect("checked");
     wrpc::check_node_network(node, &a.network, Duration::from_secs(30))?;
-    let txid =
-        wrpc::submit_transaction(node, &plan.rpc_transaction_json(), false, Duration::from_secs(30)).map_err(|e| e.to_string())?;
-    println!("submitted    {txid}");
-    if txid != plan.txid().to_string() {
-        eprintln!("warning: the node reported transaction id {txid}, expected {}", plan.txid());
-    }
+    let ids = (plan.prep.txid().to_string(), g.txid().to_string());
+    submit_creation(node, (&rpc_transaction_json(&plan.prep.tx), &ids.0), (&g.rpc_transaction_json(), &ids.1), &dir, false)?;
     // the genesis outputs the funding key holds (scheme 0): recorded so that `kob send`, `kob place` and `kob merge` can
     // spend them before any transaction reveals their states to the indexer (genesis outputs have no leader)
     let funder = a.fund[0].owner;
-    let token: [u8; 32] = plan.covenant_id.as_bytes();
-    let own: Vec<([u8; 32], u32, kob_protocol::state::TokenState)> = plan
+    let token: [u8; 32] = g.covenant_id.as_bytes();
+    let own: Vec<([u8; 32], u32, kob_protocol::state::TokenState)> = g
         .states
         .iter()
         .enumerate()
@@ -510,8 +566,159 @@ fn issue(args: &[String]) -> Result<(), String> {
             (token, i as u32, kob_protocol::state::TokenState::Kcc20(k))
         })
         .collect();
-    crate::recent::record_outputs(&a.network, &funder, own, &plan.txid().to_string());
+    crate::recent::record_outputs(&a.network, &funder, own, &g.txid().to_string());
     Ok(())
+}
+
+/// How many times the genesis is offered to the node, and the pause between: the node normally takes it at once (its input is the
+/// preparation it just accepted into its mempool); a node that has not yet seen the preparation gets a few seconds.
+const GENESIS_ATTEMPTS: u32 = 6;
+const GENESIS_RETRY: Duration = Duration::from_secs(2);
+
+/// Sends the preparation, then the genesis (retried a few times). `resuming`: a node error on the preparation is reported and
+/// the genesis is still tried (the preparation may be on chain already). On failure the error says how to resume from `dir`.
+fn submit_creation(node: &str, prep: (&Value, &str), genesis: (&Value, &str), dir: &Path, resuming: bool) -> Result<(), String> {
+    let resume_hint = format!(
+        "the preparation output stays an ordinary UTXO of the funding key; send the saved genesis with `kob token resume {} --node <URL>`",
+        dir.display()
+    );
+    match wrpc::submit_transaction(node, prep.0, false, Duration::from_secs(30)) {
+        Ok(txid) => {
+            println!("submitted    preparation {txid}");
+            if txid != prep.1 {
+                eprintln!("warning: the node reported transaction id {txid}, expected {}", prep.1);
+            }
+        }
+        Err(e) if resuming => println!("preparation  not accepted again ({e}): it may be on chain already; sending the genesis"),
+        Err(e) => return Err(format!("the preparation was not accepted: {e} (nothing was spent)")),
+    }
+    let mut last = String::new();
+    for attempt in 1..=GENESIS_ATTEMPTS {
+        match wrpc::submit_transaction(node, genesis.0, false, Duration::from_secs(30)) {
+            Ok(txid) => {
+                println!("submitted    genesis {txid}");
+                if txid != genesis.1 {
+                    eprintln!("warning: the node reported transaction id {txid}, expected {}", genesis.1);
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                last = e.to_string();
+                if attempt < GENESIS_ATTEMPTS {
+                    std::thread::sleep(GENESIS_RETRY);
+                }
+            }
+        }
+    }
+    Err(format!("the genesis was not accepted ({last}): {resume_hint}"))
+}
+
+/// Usage text of `kob token resume`.
+pub const RESUME_USAGE: &str = "\
+kob token resume: send a creation whose genesis did not go out
+
+USAGE
+  kob token resume <DIR> [--node ws://HOST:PORT]
+
+DIR is the directory `kob token issue` wrote (creation.json, and preparation_tx.json and genesis_tx.json, both signed). The preparation is sent
+again (a node that already has it refuses it: that is fine) and then the genesis. Nothing is signed: the saved transactions
+are sent as they are. If the preparation output was spent elsewhere meanwhile, the genesis cannot be sent; that KAS was
+the funding key's own.
+";
+
+/// Run `kob token resume`; returns the process exit code.
+pub fn run_resume(args: &[String]) -> i32 {
+    if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
+        print!("{RESUME_USAGE}");
+        return i32::from(args.is_empty()) * 2;
+    }
+    let run = || -> Result<(), String> {
+        let mut dir = None;
+        let mut node = None;
+        let mut it = args.iter();
+        while let Some(a) = it.next() {
+            match a.as_str() {
+                "--node" => node = Some(it.next().cloned().ok_or("--node needs a value")?),
+                other if dir.is_none() && !other.starts_with("--") => dir = Some(PathBuf::from(other)),
+                other => return Err(format!("unknown argument `{other}` (see `kob token resume --help`)")),
+            }
+        }
+        let dir = dir.ok_or("give the directory `kob token issue` wrote")?;
+        let node = wrpc::node_arg(node).ok_or_else(|| format!("--node (or ${}) is required", wrpc::NODE_ENV))?;
+        let read = |name: &str| -> Result<Value, String> {
+            let text = std::fs::read_to_string(dir.join(name)).map_err(|e| format!("read {name}: {e}"))?;
+            serde_json::from_str(&text).map_err(|e| format!("{name}: {e}"))
+        };
+        let (prep, genesis, ids) = (read("preparation_tx.json")?, read("genesis_tx.json")?, read("creation.json")?);
+        let (prep_id, genesis_id) = (ids["preparation_txid"].as_str().unwrap_or(""), ids["genesis_txid"].as_str().unwrap_or(""));
+        let signed = |v: &Value| v["inputs"].as_array().is_some_and(|i| !i.is_empty() && i.iter().all(|x| x["signatureScript"].as_str().is_some_and(|s| !s.is_empty())));
+        if !signed(&prep) || !signed(&genesis) {
+            return Err("the saved transactions are not signed (a dry run without --key): issue again".into());
+        }
+        let g = &genesis["inputs"][0]["previousOutpoint"];
+        if genesis["inputs"].as_array().map(Vec::len) != Some(1) || g["transactionId"].as_str() != Some(prep_id) || g["index"] != 0 {
+            return Err("genesis_tx.json does not spend output 0 of preparation_tx.json".into());
+        }
+        submit_creation(&node, (&prep, prep_id), (&genesis, genesis_id), &dir, true)
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+/// Usage text of `kob token verify-declaration`.
+pub const VERIFY_USAGE: &str = "\
+kob token verify-declaration: check a KCC-23 launch proof
+
+USAGE
+  kob token verify-declaration <launch_proof.json>
+
+The proof (kob-kcc23-proof/1: the preparation and the genesis in the fields their ids commit to, and the covenant id) may
+come from anyone: an indexer (GET /v1/tokens/<id>/declaration), a community list, `kob token issue`. Both transaction ids and
+the covenant id are recomputed; the declaration is printed only when it is bound to that covenant id.
+";
+
+/// Run `kob token verify-declaration`; returns the process exit code.
+pub fn run_verify_declaration(args: &[String]) -> i32 {
+    let [path] = args else {
+        print!("{VERIFY_USAGE}");
+        return 2;
+    };
+    if path == "--help" || path == "-h" {
+        print!("{VERIFY_USAGE}");
+        return 0;
+    }
+    let run = || -> Result<(), String> {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
+        let proof: kcc23::LaunchProof = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+        let v = proof.verify()?;
+        println!("covenant id  {}", hex(&v.covenant_id));
+        println!("preparation  {}", hex(&v.preparation_txid));
+        println!("genesis tx   {}", hex(&v.genesis_txid));
+        println!("declaration  {}", v.json);
+        let t = &v.token;
+        println!(
+            "token fields name {:?}, symbol {:?}, decimals {}",
+            t.name.as_deref().unwrap_or("-"),
+            t.symbol.as_deref().unwrap_or("-"),
+            t.decimals.map_or("undeclared".to_string(), |d| d.to_string())
+        );
+        for i in &t.issues {
+            println!("ignored      {i}");
+        }
+        Ok(())
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
 }
 
 #[cfg(test)]
@@ -605,8 +812,21 @@ mod tests {
         let sup: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("supply.json")).unwrap()).unwrap();
         assert_eq!(sup["total_supply"], "1000");
         let tx: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("genesis_tx.json")).unwrap()).unwrap();
-        assert_eq!(tx["outputs"].as_array().unwrap().len(), 3);
+        assert_eq!(tx["outputs"].as_array().unwrap().len(), 2, "two token outputs, no change: the preparation output funds it exactly");
         assert_ne!(tx["inputs"][0]["signatureScript"], "");
+        let prep: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("preparation_tx.json")).unwrap()).unwrap();
+        assert!(prep["payload"].as_str().unwrap().starts_with("007b226e616d65223a2254657374222c2273796d626f6c223a2254455354222c22646563696d616c73223a38"));
+        let ids: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("creation.json")).unwrap()).unwrap();
+        assert_eq!(tx["inputs"][0]["previousOutpoint"]["transactionId"], ids["preparation_txid"]);
+        assert_eq!(tx["inputs"][0]["previousOutpoint"]["index"], 0);
+        assert_eq!(sup["kcc23"]["preparation_txid"], ids["preparation_txid"]);
+        // the launch proof verifies from the file, as anyone would check it
+        assert_eq!(run_verify_declaration(&[dir.join("launch_proof.json").display().to_string()]), 0);
+        let mut proof: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("launch_proof.json")).unwrap()).unwrap();
+        proof["covenantId"] = Value::String("11".repeat(32));
+        let forged = dir.join("forged_proof.json");
+        std::fs::write(&forged, proof.to_string()).unwrap();
+        assert_eq!(run_verify_declaration(&[forged.display().to_string()]), 1);
         let req: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("submit_request.json")).unwrap()).unwrap();
         assert_eq!(req["method"], "submitTransaction");
         // unsigned dry run needs no key
@@ -622,5 +842,53 @@ mod tests {
         let cmd4 = format!("{cmd2} --holder self:0:4");
         assert_eq!(run_issue(&v(&cmd4)), 1);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn x_and_telegram_take_handles() {
+        let a = parse_issue_args(&v(&format!("{} --supply 1 --x @kaspa --telegram https://telegram.me/kaspa_chat --logo ipfs://cid", base()))).unwrap();
+        assert_eq!((a.x.as_deref(), a.telegram.as_deref(), a.icon.as_deref()), (Some("https://x.com/kaspa"), Some("https://t.me/kaspa_chat"), Some("ipfs://cid")));
+        assert!(parse_issue_args(&v(&format!("{} --supply 1 --x https://evil.example/kaspa", base()))).is_err());
+        let s = to_spec(&a).unwrap();
+        assert!(s.token_metadata().json().ends_with(r#""logo":"ipfs://cid","x":"https://x.com/kaspa","telegram":"https://t.me/kaspa_chat"}"#));
+    }
+
+    /// A submitting run sends the preparation, then the genesis spending it; `kob token resume` sends the saved pair again.
+    #[test]
+    fn submit_sends_the_preparation_then_the_genesis_and_resume_resends_them() {
+        let sk = "3333333333333333333333333333333333333333333333333333333333333333";
+        let pk = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&hex_array::<32>(sk).unwrap()).unwrap())
+            .x_only_public_key()
+            .0
+            .serialize();
+        let (url, state) = crate::wrpc::mock::start(vec![]);
+        let dir = std::env::temp_dir().join(format!("kob-create-test-{}", std::process::id()));
+        let cmd = format!(
+            "--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:0:5000000000:{} --supply 1000 --network testnet-10 --key {sk} --node {url} --out-dir {}",
+            hex(&pk),
+            dir.display()
+        );
+        assert_eq!(run_issue(&v(&cmd)), 0);
+        let ids: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("creation.json")).unwrap()).unwrap();
+        let sent = state.lock().unwrap().submitted.clone();
+        assert_eq!(sent.len(), 2, "preparation, then genesis");
+        assert!(sent[0]["payload"].as_str().unwrap().starts_with("007b"));
+        assert_eq!(sent[1]["inputs"][0]["previousOutpoint"]["transactionId"], ids["preparation_txid"]);
+        assert_eq!(sent[1]["payload"], "");
+        assert_eq!(run_resume(&v(&format!("{} --node {url}", dir.display()))), 0);
+        let sent = state.lock().unwrap().submitted.clone();
+        assert_eq!(sent.len(), 4);
+        assert_eq!((&sent[2], &sent[3]), (&sent[0], &sent[1]), "resume sends the saved, signed pair unchanged");
+        // a dry run without a key writes unsigned transactions: resume refuses them
+        let dry = std::env::temp_dir().join(format!("kob-create-dry-{}", std::process::id()));
+        let cmd = format!(
+            "--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:0:5000000000:{} --supply 5 --dry-run --network testnet-10 --out-dir {}",
+            hex(&pk),
+            dry.display()
+        );
+        assert_eq!(run_issue(&v(&cmd)), 0);
+        assert_eq!(run_resume(&v(&format!("{} --node {url}", dry.display()))), 1);
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(dry);
     }
 }
