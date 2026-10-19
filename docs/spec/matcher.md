@@ -663,7 +663,8 @@ resting `KobPair` fill of the same pair (§4.7). §4.1 to §4.6 state the KAS-qu
 ### 4.1 The touch rule
 
 An unarmed stop arms, and a trailing stop ratchets, only in a transaction that FILLS (`n > 0`) a
-plain resting `KobAsk` / `KobBid` of the same token (covenant id) and `scale` that:
+plain resting `KobAsk` / `KobBid` of the same token (covenant id and KCC-20 extension commitment) and
+`scale` that:
 
 1. was exposed at its quote for at least `R = minRestDaa` DAA before the transaction (§4.2);
 2. does not decay (`slope = 0`): the price of a decaying ask or rising bid is not a quote;
@@ -709,11 +710,11 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   custody UTXO DAA (ask), its activeFrom)`. The covenant requires `tx.daa ≥ exposedSince +
   minRestDaa`, `tx.daa` proven by CLTV against the lock time, so the lock time must reach that bound
   (§2.2). Evidence that is itself an unaccepted continuation is not chain-safe (§7).
-- **Book.** The covenant needs the same token covenant id and `scale` (prices are comparable only at the same
-  `scale`); the reference planner takes evidence only from the stop's own book (same token, token program, extension
-  commitment and `scale`), which is the same set for a token whose genesis has one commitment; for pair stops it also
-  takes the commitments of the order's own markets (the covenants do not compare the commitment: `order-types.md`, Evidence
-  identity).
+- **Book.** The covenant needs the same token covenant id, `scale` (prices are comparable only at the same `scale`) and
+  KCC-20 extension commitment (an ask's custody, a bid's `extensionCommitment`: units of the covenant id of another
+  commitment are another token; `order-types.md`, Evidence identity); the reference planner takes evidence only from the
+  stop's own book (same token, token program, extension commitment and `scale`), and for pair stops from the books of the
+  order's own commitments.
 - **Amount.** The evidence fill `n` (base units of the token; evidence of another token or `scale` is refused) must be
   ≥ the stop's `minTouch` (base units).
 - **Sharing.** The evidence is read, never consumed: any number of stops may read one fill of the
@@ -826,7 +827,8 @@ build constants of both pair conditionals), each running its fill entry (8-byte 
 each with `slope = 0`, a scale equal to its token's scale (A: the pair's `scale(A)`; B: `scale(B)`) and exposed for at
 least `minRestDaa` (§4.2, per order: `max(UTXO DAA + interval, activeFrom, custody DAA)`); `tk` is the custody input of
 whichever of the two is an ask (a holder UTXO of that token's program, template hash + P2SH, owner = that ask's covenant
-id with the covenant marker). Thresholds: `n_A ≥ minTouch`
+id with the covenant marker). A KCC-20 leg trades the order's commitment of its token: an ask's custody is of it, a bid's
+`extensionCommitment` is it. Thresholds: `n_A ≥ minTouch`
 (base units of A) and `n_B ≥ ⌈minTouch·X/scale(A)⌉` (base units of B), X the order's current stop (`stopPrice`, or
 `entryStop`). With the quotes `a` of A and `b` of B (sompi per whole token) the implied rate is `r = a·scale(B)/b` B base
 units per whole A; the covenant compares exactly through `quoteOf(x, b, scale(B), c)` (no 128-bit arithmetic):
@@ -841,7 +843,8 @@ units per whole A; the covenant compares exactly through `quoteOf(x, b, scale(B)
 **Mode 1, a resting pair order.** Input `evA` is a resting `KobPair` of THIS pair (its S and T are A and B in the roles of
 its side, with exactly the pair's scales; `evB` unused), of the side named below, authenticated by template hash (`KobPair` is a build constant of both pair conditionals),
 running its fill entry with `n ≥ minTouch` (base units of A), `slope = 0`, exposed for at least `minRestDaa`
-(`max(its UTXO DAA + interval, activeFrom, its custody's DAA)`, `tk` its custody input); its price `rp` is the rate. A sell
+(`max(its UTXO DAA + interval, activeFrom, its custody's DAA)`, `tk` its custody input), its custody of the order's
+commitment of its S and its `tExt` the order's commitment of its T (KCC-20 tokens); its price `rp` is the rate. A sell
 stop arms on a pair ASK with `rp ≤ stop`, a buy stop on a pair BID with `rp ≥ stop`; a trailing sell stop ratchets on a
 pair BID and a trailing buy stop on a pair ASK, by the table above with `a = rp`, `b = scale(B)` (then plain comparisons
 with `rp`, since `quoteOf(x, scale(B), scale(B), c) = x`). A `KobPair` fill is a real trade at its quote (`order-types.md`,
@@ -1154,7 +1157,7 @@ for both tokens `KobPair` 6 to 11, `KobCondPair` 7 to 21 (a stop armed in its fi
 (a sell-first fill that arms its stop entry and books its exit 34); over every program pair at most 72, 91 and 136 (the
 largest token programs, whose custody inputs the scans read).
 
-**Template sizes.** `KobPair` 2,960 B (state 447 B), `KobCondPair` 6,669 B (state 543 B), `KobIfdPair` 9,108 B (state
+**Template sizes.** `KobPair` 2,960 B (state 447 B), `KobCondPair` 6,848 B (state 543 B), `KobIfdPair` 9,252 B (state
 909 B; the committed exit 432 B). The scans of both tokens are unrolled to `MAX_TOK_IN` = 8 slots each (a KRON program
 accepts fewer), so every spend of a pair order pays for them; a larger route or net is split into several fills (§7).
 

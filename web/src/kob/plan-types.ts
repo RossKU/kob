@@ -41,9 +41,9 @@ export interface TokenMarket {
   refundTip: bigint;
   keeperTip: bigint;
   /**
-   * The registry checked every genesis output of the token (`genesis_verified: true`): for a KCC-20 token this proves its covenant id carries ONE
-   * extension commitment. Absent / false (every open-list token): NOT verified, and a stop (stop leg, trailing stop, stop entry) of this token
-   * can be armed by trades of another commitment of the same covenant id (STOP_EVIDENCE_GENESIS_UNVERIFIED).
+   * The registry checked every genesis output of the token (`genesis_verified: true`): for a KCC-20 token this proves no unit of it was minted
+   * outside its program. Absent / false (every open-list token): NOT verified, and a stop (stop leg, trailing stop, stop entry) of this token
+   * can be armed by trades of units minted outside the program (STOP_EVIDENCE_GENESIS_UNVERIFIED).
    */
   genesisVerified?: boolean;
 }

@@ -62,11 +62,12 @@ function hasEvidenceStop(d: OrderDescription | null | undefined): boolean {
 }
 
 /**
- * Finding AUD-EXT (off-chain mitigation): the stop-trigger evidence of the conditional / if-done covenants (KAS and pair) compares the evidence order's
- * token covenant id, template and scale, NOT its KCC-20 extension commitment. A covenant id that carries a second commitment (only its genesis can
- * mint one) is a look-alike token whose trades, at any price its holder chooses, can arm or trail a stop of the real token. The registry's genesis
- * check (`genesis_verified: true`) proves a single commitment; every other KCC-20 token (all open-list tokens) gets this warning on any plan that
- * places a stop leg, a trailing stop or a stop entry (also inside a committed exit). KRON tokens have no extension commitment.
+ * The stop-trigger evidence of the conditional / if-done covenants (KAS and pair) compares the evidence order's token covenant id, template, scale and
+ * KCC-20 extension commitment (since the order template version after the audit 2026-10, finding AUD-EXT), but no covenant can see units of that
+ * commitment minted outside the token's program by a contaminated genesis: they cost their holder nothing, so their trades, at any price the holder
+ * chooses, can arm or trail a stop. The registry's genesis check (`genesis_verified: true`) rules that out; every other KCC-20 token (all open-list
+ * tokens) gets this warning on any plan that places a stop leg, a trailing stop or a stop entry (also inside a committed exit); KCC-20 tokens only,
+ * as before.
  */
 export function stopEvidenceIssues(env: PlanEnv, plan: Pick<OrderPlan, 'states'>): PlanIssue[] {
   if (!plan.states.some((s) => hasEvidenceStop(describeOrder(s, env.kob)))) return [];

@@ -3362,7 +3362,7 @@ pub(crate) fn stop_evidence_issues(env: &Env, plan: &Plan) -> Vec<Issue> {
             warning(
                 "STOP_EVIDENCE_GENESIS_UNVERIFIED",
                 format!(
-                    "the genesis of {} was not verified: trades of a look-alike token under the same covenant id can arm or trail this stop",
+                    "the genesis of {} was not verified: trades of units minted outside its program can arm or trail this stop",
                     m.name()
                 ),
             )

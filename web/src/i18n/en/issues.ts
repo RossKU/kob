@@ -59,7 +59,7 @@ export default {
   'issues.MARKET_REFERENCE_SOURCE': 'Reference: {reference} per token (indexer book); worst fill {worst} per token.',
   'issues.MARKET_START_VS_INDEXER': 'The order book price ({start} per token) is {percent}% {direction} the reference price of another indexer ({reference}, {other}): nothing can be sent at this price.',
   'issues.MARKET_REFERENCE_INDEXER_UNAVAILABLE': 'A further indexer did not answer ({others}): the start is checked without it.',
-  'issues.STOP_EVIDENCE_GENESIS_UNVERIFIED': 'The genesis of {token} is not verified: its covenant id may carry a second extension commitment (a look-alike token under the same id). The covenant does not check the commitment of the trade that triggers a stop, so look-alike trades at any price can arm or trail this stop and make it trade in the real market. Use stops on this token only if you accept that risk.',
+  'issues.STOP_EVIDENCE_GENESIS_UNVERIFIED': 'The genesis of {token} is not verified: units of it may have been minted outside its program. Such units cost their holder nothing, so trades of them at any price can arm or trail this stop and make it trade in the market. Use stops on this token only if you accept that risk.',
   'issues.SELF_TRADE': 'This order would trade against your own order {ownCovenantId}: cancel that first or change the price.',
   'issues.FOK_INSUFFICIENT_DEPTH': 'FOK needs {amount} but only {available} crosses at your price.',
   'issues.FOK_TOO_MANY_COUNTERPARTIES': 'Filling in one transaction needs {count} counterparties; the token allows {max}. Use IOC or a smaller size.',

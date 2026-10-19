@@ -143,7 +143,7 @@ is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fil
   midnight plus a 1 % margin, so it becomes refundable at or shortly after 00:00 UTC (`matcher.md` §10.10).
 - **Cancel** is maker-signed (SIGHASH_ALL) and may lose a race against a fill.
 - **Triggers** (stops, trailing, stop entries) are touches. A KAS-quoted stop arms, or trails, only in a transaction that
-  fills a plain resting order of the same token and `scale` at or beyond the stop (for a trail, far enough beyond it for
+  fills a plain resting order of the same token (covenant id and extension commitment) and `scale` at or beyond the stop (for a trail, far enough beyond it for
   at least one step) that had rested there for at least `minRestDaa` (default 5 s) and trades at least the order's
   threshold `minTouch` (base units, chosen per order). A pair stop reads the same kind of evidence in one of two modes:
   two plain resting KAS-book orders, one of A and one of B, filled together (their implied rate), or a resting `KobPair`
@@ -425,7 +425,7 @@ count, and the order's own counterparties are never its evidence (the side rule)
 
 **Mode 0, two KAS books.** Two plain resting KAS-book orders filled in this transaction (8-byte first push `n > 0`),
 one of A (`evA`) and one of B (`evB`), each authenticated by template hash (`KobAsk` / `KobBid` of that token's family),
-with `slope = 0`, a scale equal to the token's scale, exposed at its quote for at least `minRestDaa` DAA
+with `slope = 0`, a scale equal to the token's scale (a KCC-20 token: of the order's commitment of it), exposed at its quote for at least `minRestDaa` DAA
 (`matcher.md` §4.2: `max(UTXO DAA + interval, activeFrom, custody DAA)` for each), `n_A ≥ minTouch` (base units of A) and
 `n_B ≥ ⌈minTouch·X / scale(A)⌉` (base units of B: the B value of the threshold at the order's current stop X, `stopPrice`
 or `entryStop`). With their quotes `a` (sompi per whole A) and `b` (sompi per whole B), the implied rate is
@@ -444,7 +444,7 @@ A sell stop needs cheap A offered and dear B bid (the rate fell); a buy stop the
 a ratchet; the covenant accepts only the valid and maximal k, at most once per `trailWait` DAA, and only on an unarmed
 stop.
 
-**Mode 1, a resting pair order.** One resting `KobPair` of THIS pair (the same A and B, the same scales) filled in this
+**Mode 1, a resting pair order.** One resting `KobPair` of THIS pair (the same A and B, the same scales and commitments) filled in this
 transaction (`evA`; `evB` unused), with `slope = 0`, exposed for at least `minRestDaa` (`max(its UTXO DAA + interval,
 activeFrom, its custody's DAA)`), `n ≥ minTouch`. Its price `rp` is the rate: a sell stop arms on a pair ASK with
 `rp ≤ stop`, a buy stop on a pair BID with `rp ≥ stop`; a trailing sell stop ratchets on a pair BID, a trailing buy stop
@@ -455,12 +455,17 @@ record (`matcher.md` §3.5).
 The evidence is read, never consumed: one fill (or pair of fills) may arm any number of pair stops. Conditional, if-done
 and pair fills are never evidence of a KAS-quoted order; a KAS-quoted conditional keeps its KAS-book evidence only.
 
-Evidence identity (audit 2026-10, AUD-EXT): every trigger check, KAS-quoted and pair, compares the evidence token's covenant id
-and scale, not its KCC-20 extension commitment. A covenant id carries one commitment unless its genesis minted another;
-the registry's genesis check (`genesis_verified`) proves a single commitment. For any other KCC-20 token, units of a second
-commitment (or units minted through a contaminated genesis) can arm or trail a stop at a price nobody else can take: the
-wallet warns on stops of such tokens (`STOP_EVIDENCE_GENESIS_UNVERIFIED`) and the reference planner reads evidence of the
-order's own commitment only. KRON tokens have no commitment.
+Evidence identity: every trigger check, KAS-quoted and pair, compares the evidence token's covenant id, scale and KCC-20
+extension commitment with the order's own (a KAS-book ask: its custody's commitment; a KAS-book bid: its
+`extensionCommitment`; a `KobPair`: its custody's commitment and its `tExt`; the order's `extensionCommitment`, the
+committed exit's commitment of a `KobIfdAsk`, a pair order's `sExt` / `tExt` or `aExt` / `bExt`). Units of a covenant id
+with another commitment (a second commitment its genesis minted) are another token and never arm or trail a stop. The
+order templates before this check (audit 2026-10, finding AUD-EXT) compared only the covenant id and scale; orders placed
+under them are unknown to this build (`template-retirement.md`). What the covenant cannot see is a contaminated genesis
+that mints more units of the same commitment outside the token's program: such units cost their holder nothing, so their
+quotes can arm or trail a stop at a price nobody else can take. The registry's genesis check (`genesis_verified`) rules
+that out; for any other KCC-20 token the wallet warns on stops (`STOP_EVIDENCE_GENESIS_UNVERIFIED`), and the reference
+planner reads evidence of the order's own commitment only. KRON tokens have no commitment.
 
 ### Pair view
 
