@@ -136,7 +136,7 @@ function limitReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOption
   if (tip < 0n) issues.push(issue('tip-negative', 'error', 'the tip cannot be negative', 'tip'));
   if (sell && tip >= want && want > 0n) issues.push(issue('tip-exceeds-price', 'error', 'a sell must receive something after the tip', 'tip'));
   const amount = sell ? (input.amount ?? big((s as AskState).amountLeft)) : null;
-  if (amount !== null && amount < 1n) issues.push(issue('amount-not-positive', 'error', 'the amount must be at least one base unit', 'amount'));
+  if (amount !== null && amount < 1n) issues.push(issue('amount-not-positive', 'error', 'the amount must be more than zero', 'amount'));
   if (!sell && input.amount !== undefined) issues.push(issue('bid-amount-fixed', 'info', 'a buy order keeps its KAS budget: the amount follows from the price', 'amount'));
   const renewed = renewedExpiry(input, o, issues);
   const add = input.addKas ?? 0n;
@@ -194,7 +194,7 @@ function condReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOptions
   if (tip < 0n) issues.push(issue('tip-negative', 'error', 'the tip cannot be negative', 'tip'));
   const oldAmount = big(s.amountLeft);
   const amount = input.amount ?? oldAmount;
-  if (amount < 1n) issues.push(issue('amount-not-positive', 'error', 'the amount must be at least one base unit', 'amount'));
+  if (amount < 1n) issues.push(issue('amount-not-positive', 'error', 'the amount must be more than zero', 'amount'));
   if (tp !== null && stop !== null && hasTp && hasStop && (sell ? tp <= stop : tp >= stop)) {
     issues.push(issue('legs-order', 'error', sell ? 'the take-profit must be above the stop' : 'the take-profit must be below the stop', 'price', { direction: sell ? 'above' : 'below' }));
   }

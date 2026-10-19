@@ -380,7 +380,7 @@ function tokenRef(reg: TokenRegistry | null | undefined, covenantId: Hex): Token
   return { covenantId, ticker: t.ticker, decimals: t.decimals, display: displayName(t), inRegistry: true, tradable: t.tradable };
 }
 
-const human = (ref: TokenRef, amount: bigint): string => (ref.decimals === null ? `${amount} base units` : `${formatUnits(amount, ref.decimals)} ${ref.ticker}`);
+const human = (ref: TokenRef, amount: bigint): string => (ref.decimals === null ? `on-chain amount ${amount}` : `${formatUnits(amount, ref.decimals)} ${ref.ticker}`);
 
 const zeroLocked = (): LockedKas => ({ total: 0n, carriers: 0n, escrow: 0n, refundTips: 0n, keeperTips: 0n, reserves: 0n });
 const addLocked = (a: LockedKas, b: LockedKas): LockedKas => ({
@@ -1110,7 +1110,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
           ? `its price ${t.evidence.price} is not ${x.want.a === 'ask' ? 'at or below' : 'at or above'} the stop ${t.rule.stop}`
           : `the implied rate of the quotes ${t.evidence.price} (A) and ${x.evidenceB?.price} (B) is not ${x.want.a === 'ask' ? 'at or below' : 'at or above'} the stop ${t.rule.stop}`);
     }
-    if (!t.checks.amount) bad.push(`the evidence fills ${t.evidence.amount} base units of A${x.evidenceB ? ` and ${x.evidenceB.amount} of B` : ''}, below minTouch ${t.rule.minTouch}${x.minTouchB !== null && x.evidenceB ? ` / ${x.minTouchB}` : ''}`);
+    if (!t.checks.amount) bad.push(`the evidence fills on-chain amount ${t.evidence.amount} of A${x.evidenceB ? ` and ${x.evidenceB.amount} of B` : ''}, below minTouch ${t.rule.minTouch}${x.minTouchB !== null && x.evidenceB ? ` / ${x.minTouchB}` : ''}`);
     if (!t.checks.notDecaying) bad.push('an evidence order decays (not a quote)');
     if (!t.checks.rest) bad.push(`an evidence order rested less than minRestDaa ${t.rule.minRestDaa} before the lock time`);
     if (!t.checks.active) bad.push('the order is not active yet');
@@ -1119,7 +1119,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       return;
     }
     const what = x.mode === 'pair'
-      ? `the fill of a resting pair ${t.evidence.side} (input ${t.evidence.input}) at ${t.evidence.price} B per whole A, ${t.evidence.amount} base units of A`
+      ? `the fill of a resting pair ${t.evidence.side} (input ${t.evidence.input}) at ${t.evidence.price} B per whole A, on-chain amount ${t.evidence.amount} of A`
       : `the fills of a resting ${t.evidence.side} of A (input ${t.evidence.input}, ${t.evidence.price} sompi) and a resting ${x.evidenceB?.side} of B (input ${x.evidenceB?.input}, ${x.evidenceB?.price} sompi)`;
     add('trigger-evidence', `${where} is ${t.effect === 'trail' ? `trailed to stop ${t.trail!.newStop}` : 'armed'} by ${what} (needs ${t.rule.minTouch} of A)`, { input, params });
   }
@@ -1152,7 +1152,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     const bad: string[] = [];
     if (!t.checks.side) bad.push(`it is a resting ${t.evidence.side}, but the order needs a resting ${t.rule.sides.join(' or ')} and its arguments name a resting ${t.evidence.custodyInput !== null ? 'ask' : 'bid'}`);
     else if (!t.checks.price) bad.push(t.effect === 'trail' ? `its quote ${t.evidence.price} justifies no trailing step` : `its quote ${t.evidence.price} is not ${t.rule.sides[0] === 'ask' ? 'at or below' : 'at or above'} the stop ${t.rule.stop}`);
-    if (!t.checks.amount) bad.push(`${t.evidence.amount} base units filled, below minTouch ${t.rule.minTouch}`);
+    if (!t.checks.amount) bad.push(`on-chain amount ${t.evidence.amount} filled, below minTouch ${t.rule.minTouch}`);
     if (!t.checks.notDecaying) bad.push('it decays (not a quote)');
     if (!t.checks.rest) bad.push(`it rested since DAA ${t.evidence.exposedSince}, less than minRestDaa ${t.rule.minRestDaa} before the lock time`);
     if (!t.checks.active) bad.push('the order is not active yet');
@@ -1160,7 +1160,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       add('trigger-rule-unmet', `${where}: the fill of input ${t.evidence.input} does not satisfy the order's trigger rule: ${bad.join('; ')}`, { input: d.index, params });
       continue;
     }
-    add('trigger-evidence', `${where} is ${t.effect === 'trail' ? `trailed to stop ${t.trail!.newStop}` : 'armed'} by the fill of input ${t.evidence.input}: a resting ${t.evidence.side} quoting ${t.evidence.price}, ${t.evidence.amount} base units (needs ${t.rule.minTouch})`, {
+    add('trigger-evidence', `${where} is ${t.effect === 'trail' ? `trailed to stop ${t.trail!.newStop}` : 'armed'} by the fill of input ${t.evidence.input}: a resting ${t.evidence.side} quoting ${t.evidence.price}, on-chain amount ${t.evidence.amount} (needs ${t.rule.minTouch})`, {
       input: d.index, params,
     });
   }
@@ -1225,7 +1225,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       };
     });
   for (const s of spends) {
-    if (s.strays > 0n) add('strays-swept', `input ${s.input}: ${s.strays} base units of stray tokens sent to this order are swept back to you`, { input: s.input, params: { amount: s.strays } });
+    if (s.strays > 0n) add('strays-swept', `input ${s.input}: stray tokens sent to this order (on-chain amount ${s.strays}) are swept back to you`, { input: s.input, params: { amount: s.strays } });
     for (const x of s.otherStrays) {
       add('other-strays-swept', `input ${s.input}: ${human(x.ref, x.amount)} of ${x.ref.display} sent to this order are swept back to you`, { input: s.input, params: { amount: human(x.ref, x.amount), token: x.ref.display } });
     }
@@ -1296,7 +1296,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     const outs = outputs.filter((o) => o.token?.ref.covenantId === id);
     const inSum = sum(ins.map((d) => d.token!.amount));
     const outSum = sum(outs.map((o) => o.token!.amount));
-    if (inSum !== outSum) add('token-unbalanced', `${ref.display}: ${inSum} base units go in but ${outSum} come out: tokens would be created or destroyed`, { params: { in: inSum, out: outSum } });
+    if (inSum !== outSum) add('token-unbalanced', `${ref.display}: on-chain amount ${inSum} goes in but ${outSum} comes out: tokens would be created or destroyed`, { params: { in: inSum, out: outSum } });
     if (!ref.tradable && ins.length + outs.length > 0) warnToken(id);
     const fw = sum(ins.filter((d) => d.ownedBy === 'maker').map((d) => d.token!.amount));
     const rel = sum(ins.filter((d) => d.ownedBy === 'covenant').map((d) => d.token!.amount));
@@ -1329,11 +1329,11 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     const roleSum = (role: 'base' | 'quote') => sum(orders.flatMap((o) => o.custodies.filter((c) => c.role === role).map((c) => c.amount)));
     if (expected.tokensEscrowed !== undefined) {
       const escrowed = byRole ? roleSum('base') : sum(tokens.map((t) => t.escrowed));
-      if (escrowed !== expected.tokensEscrowed) add('expected-tokens-escrowed', `the plan says ${expected.tokensEscrowed} token base units are escrowed but the transaction escrows ${escrowed}`, { params: { expected: expected.tokensEscrowed, actual: escrowed } });
+      if (escrowed !== expected.tokensEscrowed) add('expected-tokens-escrowed', `the plan says on-chain amount ${expected.tokensEscrowed} of the token is escrowed but the transaction escrows ${escrowed}`, { params: { expected: expected.tokensEscrowed, actual: escrowed } });
     }
     if (expected.quoteEscrowed !== undefined) {
       const escrowed = roleSum('quote');
-      if (escrowed !== expected.quoteEscrowed) add('expected-quote-escrowed', `the plan says ${expected.quoteEscrowed} base units of the quote token are escrowed but the transaction escrows ${escrowed}`, { params: { expected: expected.quoteEscrowed, actual: escrowed } });
+      if (escrowed !== expected.quoteEscrowed) add('expected-quote-escrowed', `the plan says on-chain amount ${expected.quoteEscrowed} of the quote token is escrowed but the transaction escrows ${escrowed}`, { params: { expected: expected.quoteEscrowed, actual: escrowed } });
     }
     if (expected.cancelIds) {
       const actual = spends.filter((s) => s.action === 'cancel' || s.action === 'refund').map((s) => s.covenantId ?? '');
