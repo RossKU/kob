@@ -1,6 +1,6 @@
 //! x402 v2 wire types for the Kaspa binding.
 //!
-//! Field names follow the elldeeone/kaspa-x402 v1.0.0 schemas (`protocol/schemas/*.json`,
+//! Field names follow the elldeeone/kaspa-x402 v1.0.1 schemas (`protocol/schemas/*.json`,
 //! `protocol/spec/kaspa-exact-v2.md`). Requirements and payloads keep unknown fields (`#[serde(flatten)]`)
 //! because the requirements hash covers the *complete* selected object.
 //!

@@ -222,9 +222,9 @@ fn every_builder_scenario_pays_exactly_the_nodes_floor() {
     assert!(exact > all / 3, "{exact} of {all} scenarios have change");
 }
 
-/// The standard-native vector of elldeeone's binding (`vectors/kaspa-x402-v1.0.0`, unchanged since rc.1) pays 200000 sompi;
-/// the node's floor for it is 203600 (normalized transient 2036 grams): that vector is below the relay
-/// floor of a v2.1.0 node, which the live TN10 probe confirms (see `crates/kob-x402/tests/interop_vectors.rs`).
+/// The standard-native vector of elldeeone's binding: the node's floor for it is 203600 (normalized transient 2036 grams).
+/// v1.0.0 paid 200000, below that floor (the live TN10 probe confirmed a v2.1.0 node refuses it); v1.0.1
+/// (`vectors/kaspa-x402-v1.0.1`) pays 300000 (see `crates/kob-x402/tests/interop_vectors.rs`).
 #[test]
 fn relay_fee_arithmetic_matches_the_node() {
     assert_eq!(relay_fee_for_mass(2_036, MIN_FEE_RATE), 203_600);

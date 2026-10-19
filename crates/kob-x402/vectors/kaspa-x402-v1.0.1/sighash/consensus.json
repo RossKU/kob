@@ -1,0 +1,3128 @@
+{
+  "kind": "kaspa-sighash-consensus-v1",
+  "source": {
+    "commit": "01b532e8b553523216471682649693af92f0fd16",
+    "dirty": false,
+    "package": "kaspa-consensus",
+    "version": "2.1.0"
+  },
+  "mixedTopUps": [
+    {
+      "client": 1,
+      "provider": 1,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 1,
+      "provider": 2,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 1,
+      "provider": 4,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 1,
+      "provider": 129,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 1,
+      "provider": 130,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 1,
+      "provider": 132,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 2,
+      "provider": 1,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 2,
+      "provider": 2,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 2,
+      "provider": 4,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 2,
+      "provider": 129,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 2,
+      "provider": 130,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 2,
+      "provider": 132,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 4,
+      "provider": 1,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 4,
+      "provider": 2,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 4,
+      "provider": 4,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 4,
+      "provider": 129,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 4,
+      "provider": 130,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 4,
+      "provider": 132,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 129,
+      "provider": 1,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 129,
+      "provider": 2,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 129,
+      "provider": 4,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 129,
+      "provider": 129,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 129,
+      "provider": 130,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 129,
+      "provider": 132,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 130,
+      "provider": 1,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 130,
+      "provider": 2,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 130,
+      "provider": 4,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 130,
+      "provider": 129,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 130,
+      "provider": 130,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 130,
+      "provider": 132,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 132,
+      "provider": 1,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 132,
+      "provider": 2,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 132,
+      "provider": 4,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 132,
+      "provider": 129,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 132,
+      "provider": 130,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    },
+    {
+      "client": 132,
+      "provider": 132,
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "status": "consensus-accepted"
+    }
+  ],
+  "status": "full-consensus-cross-validated",
+  "transactions": [
+    {
+      "digests": [
+        "3f470c8970b7f2f06f741fe05c9583b8fc097bede299677e00807e38fabd2f33"
+      ],
+      "hashType": 1,
+      "kind": "genesis",
+      "relayPolicy": {
+        "computeMass": "1671",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 167099 fees which is under the required amount of 167100 for compute mass 1671"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "167100",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "602",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0101010101010101010101010101010101010101010101010101010101010101"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41635be74ad90f9f9561660a9a88c312dfe085dfd7635f3e679500b904b59cbc2e079dcce7114449f8565a7f20c44d31b74cd52c6303fa5986d6c2979bb9cb011601",
+            "utxo": {
+              "amount": "91000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa205dd3302588050e2a0c1f3407db1e639de998d5039ca4fad3d5a3da993eacae7787"
+          }
+        ],
+        "payload": "",
+        "storageMass": "33455",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "9f95406911a9a940efa9ee7bbb05168e9c88a8c15f53ffee914411f25809431b"
+      ],
+      "hashType": 1,
+      "kind": "claim",
+      "relayPolicy": {
+        "computeMass": "4222",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 422199 fees which is under the required amount of 422200 for compute mass 4222"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "422200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2984",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "7f9ec5e0de3b7460bc98fd003c9b925f3bd8fa530b391501527baa85c6ba124a"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41826894df1474d08d30370a4434c4acdd0fcb4808a64a94eb8f409f7c31325b9210fe91e407fa7e6052e41e84708619d65be81b4874dd1fb9cc5145660286e65e01400e6d3c9abaa78de1d2f15a27364e8e0ca1da1ebecbd0a875255cc6b4d2a88689ea70966f066f326a6c139906a031212f7572428f59837ee3e371552534bdf8ad0880c3c901000000000800127a00000000000423959b424d18046b0800000000000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "90000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa205dd3302588050e2a0c1f3407db1e639de998d5039ca4fad3d5a3da993eacae7787"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "7000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "82000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20d43d6c8816633b5a93499e206b480161e1f157eccad3e87a0a0591ed05fc3cfb87"
+          }
+        ],
+        "payload": "",
+        "storageMass": "147193",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "58e600f718e233fa802ba55010fc83b7c2d42887b0fc8a9b4d3c257576555f32"
+      ],
+      "hashType": 1,
+      "kind": "claim",
+      "relayPolicy": {
+        "computeMass": "4222",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 422199 fees which is under the required amount of 422200 for compute mass 4222"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "422200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2984",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "885668df2d118d4cafcc58601b067231e7f48d930628012e96aff8e948afcd05"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41220832140ae8d7828f467594cc9450bfec3d5d731a0f032d72b4559454b5ddfaccad538a5f049d62aabe21e488db4795fec8d049f9f37d07fc94521e01fd03b801400e6d3c9abaa78de1d2f15a27364e8e0ca1da1ebecbd0a875255cc6b4d2a88689ea70966f066f326a6c139906a031212f7572428f59837ee3e371552534bdf8ad0880c3c901000000000840548900000000000423959b424d18046b0800127a00000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "82000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20d43d6c8816633b5a93499e206b480161e1f157eccad3e87a0a0591ed05fc3cfb87"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "8000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "73000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          }
+        ],
+        "payload": "",
+        "storageMass": "131014",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "a8d1e79cd67b6b829456f729a36acfa8030540d358e783dc8d31ddde000962a1",
+        "b7b9e40b31cc191780fe13bdbe719829d6d705d84edd3ca04f00dc91e1ed34e4"
+      ],
+      "hashType": 1,
+      "kind": "top-up",
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "f739d5c5ba82532b471822b53dfe706b54397ad8be035bef1342e52ac3794cdd"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "416caad6d3c135a3a59625c73b9e93f2ca49e53cd87c5ea281fdb0664a631376602635139caa1b6991486adfab193b84b330d3dcb3cf79ad494c0a1ecffd6c3a7201415784d167ac8bb19ddd7a5944422f960883dc8943d37c7963199ac3100e93131b0a8257432c2daf76daf8944796aa33139e3636f81c53e5c3ea4336219fc10e050104ae09679c4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "73000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          },
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0505050505050505050505050505050505050505050505050505050505050505"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41edd8529d35c2975881e0cb819adfdb5d29be17045d0ba707bcdb4b317675776a8b78ff3c874f5f2e278c09f8f2f25d01762bac2f0a2700222633d5cbb1e8495201",
+            "utxo": {
+              "amount": "20000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          },
+          {
+            "amount": "2000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "447670",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "a00590a19ec6cfb5438695e59f4c29c3292092fc8580b2f16134d7b33d87b6cf"
+      ],
+      "hashType": 1,
+      "kind": "refund",
+      "relayPolicy": {
+        "computeMass": "2682",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 268199 fees which is under the required amount of 268200 for compute mass 2682"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "268200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2644",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "51cec5b18364d5c1ccc757e7808b29fff7e723e622ab9e5b3bc0f3683670d558"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "417ee86fa58336e7e9d3442dac836ce64728990faf2ac68e7755c1f0b5bc2136abaf1b717c71cf69efc1b8aa43203895a1e2b432c63c855092808240db5caab1aa010417a2027b4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "90000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          }
+        ],
+        "lockTime": "123456789",
+        "outputs": [
+          {
+            "amount": "89000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "0",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "0db5d317ed1921243d9851f75d8660588f83118de8d10ae448e4aed11b431bbd"
+      ],
+      "hashType": 1,
+      "kind": "standard-native",
+      "relayPolicy": {
+        "computeMass": "2036",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 203599 fees which is under the required amount of 203600 for compute mass 2036"
+        },
+        "feeSompi": "300000",
+        "minimumFeeSompi": "203600",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "632",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": null,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "7070707070707070707070707070707070707070707070707070707070707070"
+            },
+            "sequence": "18446744073709551615",
+            "sigOpCount": 1,
+            "signatureScript": "413897b4d2ebba6840d5f9fdf4ce6421cc82da3ecd5ff43badb07e9c71011d243d559029fb7db9aebbcdc175168d9002d67e4308b84df6db88f73c902b6ae0195b01",
+            "utxo": {
+              "amount": "50000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "20000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "29700000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "63670",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 0
+      }
+    },
+    {
+      "digests": [
+        "38865e25fbc554bcb37af494e7d05dd78617e76dda874f63d2121ae0e520c9d6"
+      ],
+      "hashType": 2,
+      "kind": "genesis",
+      "relayPolicy": {
+        "computeMass": "1671",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 167099 fees which is under the required amount of 167100 for compute mass 1671"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "167100",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "602",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0101010101010101010101010101010101010101010101010101010101010101"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "419d45c37aaf38adb4c5897345612b99307f0e190a6de558e58c2b15db78c2c338ced5823687d8a2c208b73cad7cfa77616c5c3a5799c8de6c93ab8ef6c49e074a02",
+            "utxo": {
+              "amount": "91000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa205dd3302588050e2a0c1f3407db1e639de998d5039ca4fad3d5a3da993eacae7787"
+          }
+        ],
+        "payload": "",
+        "storageMass": "33455",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "29d6249aaf0cca02d4101e7faefedafc0b4f4bae500688eaef6a8a2f5c16f858"
+      ],
+      "hashType": 2,
+      "kind": "claim",
+      "relayPolicy": {
+        "computeMass": "4222",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 422199 fees which is under the required amount of 422200 for compute mass 4222"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "422200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2984",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "7f9ec5e0de3b7460bc98fd003c9b925f3bd8fa530b391501527baa85c6ba124a"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41c24dc4c6c1d6503494293cddd35d535252ad9b7410330396cc28b83336f437b450678ba738a74ab8829b63c69f091c526657c2dd6a0781f7de051738b778a92902400e6d3c9abaa78de1d2f15a27364e8e0ca1da1ebecbd0a875255cc6b4d2a88689ea70966f066f326a6c139906a031212f7572428f59837ee3e371552534bdf8ad0880c3c901000000000800127a00000000000423959b424d18046b0800000000000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "90000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa205dd3302588050e2a0c1f3407db1e639de998d5039ca4fad3d5a3da993eacae7787"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "7000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "82000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20d43d6c8816633b5a93499e206b480161e1f157eccad3e87a0a0591ed05fc3cfb87"
+          }
+        ],
+        "payload": "",
+        "storageMass": "147193",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "2ea0bff8595a454819666f24221ef824839522091a6714b67019e8da1907dbdd"
+      ],
+      "hashType": 2,
+      "kind": "claim",
+      "relayPolicy": {
+        "computeMass": "4222",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 422199 fees which is under the required amount of 422200 for compute mass 4222"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "422200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2984",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "885668df2d118d4cafcc58601b067231e7f48d930628012e96aff8e948afcd05"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "412e27a17490a104d9a5c9c801e65d28d2d67fab83a97b50e9b40dfb25cbc2218d635a7bd5ba461cfc6b8db2e0e5ccc874d2bf06030b14e3dda820f354021bd1e002400e6d3c9abaa78de1d2f15a27364e8e0ca1da1ebecbd0a875255cc6b4d2a88689ea70966f066f326a6c139906a031212f7572428f59837ee3e371552534bdf8ad0880c3c901000000000840548900000000000423959b424d18046b0800127a00000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "82000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20d43d6c8816633b5a93499e206b480161e1f157eccad3e87a0a0591ed05fc3cfb87"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "8000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "73000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          }
+        ],
+        "payload": "",
+        "storageMass": "131014",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "53b3357fa41d44ea9aac6f83c98bf9cf75583ca134e3362958b42a0ff3fd2e90",
+        "1c0f0938356f78281c8ce9906d9ef50a5b870742bf5eba66683df1eb9c703ed0"
+      ],
+      "hashType": 2,
+      "kind": "top-up",
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "f739d5c5ba82532b471822b53dfe706b54397ad8be035bef1342e52ac3794cdd"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41480a60b3741002b32741a29a778fa2e72101a3ad7a3837f3a8f20f0371ace09af69da37f71aa09568989f8a8f6f1f12e1a1e30dd3cc6f3ed39c122304ce443e2024120d55555572c4e97050ce3b5d1005780e13b740522c685226bcf45d25957e29373a23b631eb55f8bdf4d045d4c22415ef436cf1becce336665d00786b56258080204ae09679c4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "73000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          },
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0505050505050505050505050505050505050505050505050505050505050505"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "415319f0c14900d963d6be97b0525089502b88b3493830f3bab570d9a533e3447abec66e1085a1729f746cb74f0f898a8c3f954290da84728fb9cfdb0caa8b1e2902",
+            "utxo": {
+              "amount": "20000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          },
+          {
+            "amount": "2000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "447670",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "0abc2ff969a3109c85fc519f74d7ce54262ddb93efd3814564eb1b5ddb1ed69c"
+      ],
+      "hashType": 2,
+      "kind": "refund",
+      "relayPolicy": {
+        "computeMass": "2682",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 268199 fees which is under the required amount of 268200 for compute mass 2682"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "268200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2644",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "51cec5b18364d5c1ccc757e7808b29fff7e723e622ab9e5b3bc0f3683670d558"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41fa8f986b4c20074ed708855b53573acff6f1ab93ea788de4ec876587e8632481f526ff043403e80df90420563d0c31669fda6f72da5d29c8883a06bb44c448bc020417a2027b4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "90000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          }
+        ],
+        "lockTime": "123456789",
+        "outputs": [
+          {
+            "amount": "89000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "0",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "368b700877473f81d441d530e47b15e02d20dc89a836323f371a2f066806d131"
+      ],
+      "hashType": 2,
+      "kind": "standard-native",
+      "relayPolicy": {
+        "computeMass": "2036",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 203599 fees which is under the required amount of 203600 for compute mass 2036"
+        },
+        "feeSompi": "300000",
+        "minimumFeeSompi": "203600",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "632",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": null,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "7070707070707070707070707070707070707070707070707070707070707070"
+            },
+            "sequence": "18446744073709551615",
+            "sigOpCount": 1,
+            "signatureScript": "413bcb1c79213953f5ba2f13b46e3c51a439a7fd262954a1e39a4a67c8da42ace4d2cfbe986ac4ac2f88c3b2f1d1228482bb1cb3c0b62b5ccd1f3f351017ac244f02",
+            "utxo": {
+              "amount": "50000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "20000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "29700000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "63670",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 0
+      }
+    },
+    {
+      "digests": [
+        "3b6ba29199fac31d909ca34c87503233308fd6d98c5d294fc9b1bcd168a3ce2a"
+      ],
+      "hashType": 4,
+      "kind": "genesis",
+      "relayPolicy": {
+        "computeMass": "1671",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 167099 fees which is under the required amount of 167100 for compute mass 1671"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "167100",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "602",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0101010101010101010101010101010101010101010101010101010101010101"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41c5365a1b3730633e8a5983745e5f401020c5fb8463f0bb456003eb6bab985ed0d7cc9821abf61f8c5d843f7ca3bc7929a3470a5b1e22c49b4cfa0d428200917904",
+            "utxo": {
+              "amount": "91000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa205dd3302588050e2a0c1f3407db1e639de998d5039ca4fad3d5a3da993eacae7787"
+          }
+        ],
+        "payload": "",
+        "storageMass": "33455",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "ea986216d6769768d62d63d2e61d477459a0ca22e7cf27776e3bf4ec93f9e74a"
+      ],
+      "hashType": 4,
+      "kind": "claim",
+      "relayPolicy": {
+        "computeMass": "4222",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 422199 fees which is under the required amount of 422200 for compute mass 4222"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "422200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2984",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "7f9ec5e0de3b7460bc98fd003c9b925f3bd8fa530b391501527baa85c6ba124a"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41986fe406a402e03b7fd0b840a990dfaee0c01cffb6ab33a6225b3338eeb523c23a76bae896f46e92ca76cab87e404c1d6a49405e04f4687fa3d26525ca309da104400e6d3c9abaa78de1d2f15a27364e8e0ca1da1ebecbd0a875255cc6b4d2a88689ea70966f066f326a6c139906a031212f7572428f59837ee3e371552534bdf8ad0880c3c901000000000800127a00000000000423959b424d18046b0800000000000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "90000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa205dd3302588050e2a0c1f3407db1e639de998d5039ca4fad3d5a3da993eacae7787"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "7000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "82000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20d43d6c8816633b5a93499e206b480161e1f157eccad3e87a0a0591ed05fc3cfb87"
+          }
+        ],
+        "payload": "",
+        "storageMass": "147193",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "a3d50d26a88ffc4592e9dcfeaffe24d928a50c6a9671c9b79ff6e4a9e89ffb58"
+      ],
+      "hashType": 4,
+      "kind": "claim",
+      "relayPolicy": {
+        "computeMass": "4222",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 422199 fees which is under the required amount of 422200 for compute mass 4222"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "422200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2984",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "885668df2d118d4cafcc58601b067231e7f48d930628012e96aff8e948afcd05"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "418c4cd8142d081656e1a50b04aa0ba140a88e8bcc6df008d0e117cd69d15574a301e33e6e63117a2b32f026d16e7d61f0d6f23bb42d3cbd7ec22b84b293fff2c704400e6d3c9abaa78de1d2f15a27364e8e0ca1da1ebecbd0a875255cc6b4d2a88689ea70966f066f326a6c139906a031212f7572428f59837ee3e371552534bdf8ad0880c3c901000000000840548900000000000423959b424d18046b0800127a00000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "82000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20d43d6c8816633b5a93499e206b480161e1f157eccad3e87a0a0591ed05fc3cfb87"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "8000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "73000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          }
+        ],
+        "payload": "",
+        "storageMass": "131014",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "cd2e878c16f624e4dc90e78b4bcff547e41eec5dc6ad82183f2f508c11994c3a",
+        "fe31a86bf886162826d1b2ece984cbfa183f86cca57145358766595e59472c56"
+      ],
+      "hashType": 4,
+      "kind": "top-up",
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "f739d5c5ba82532b471822b53dfe706b54397ad8be035bef1342e52ac3794cdd"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41163e5fe95df29000e1bd7ccf0d09333cd4ff3ab9ab6f6442b0471df483ae0bf6d1236ae0564597c1466c7183cb14f3050e2a1e17ce1188bbff11ee8e6c4ced6a04413b217d2a612bd922fb9f47af52d23bc1cb00ba4342af867652e69c5dd0eb15edcb3f289a5a6b74126d206fb7e8126f1bcf45551832aba03834480ea9f68d09750404ae09679c4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "73000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          },
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0505050505050505050505050505050505050505050505050505050505050505"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41cdc4b7846173d0aa70163026f9295b7bcec8e54c1ae21e2d1861e770f536625e14880c02adc181b995b8bbf4da3e66b54183a0580303edee8976a38f356d7fd604",
+            "utxo": {
+              "amount": "20000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          },
+          {
+            "amount": "2000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "447670",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "95bba23d3c34f16f350824629746c10f0edd351a30859f83ff90fdcafa81c08f"
+      ],
+      "hashType": 4,
+      "kind": "refund",
+      "relayPolicy": {
+        "computeMass": "2682",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 268199 fees which is under the required amount of 268200 for compute mass 2682"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "268200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2644",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "51cec5b18364d5c1ccc757e7808b29fff7e723e622ab9e5b3bc0f3683670d558"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "4169548163958c8a0dedbf255c090c03636b069a861be865df3f82cfdbd957c669852492ebdfd8f1b91452f821d9df539416e232d410b70545a486e192de65a330040417a2027b4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "90000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          }
+        ],
+        "lockTime": "123456789",
+        "outputs": [
+          {
+            "amount": "89000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "0",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "2c369ca5cb3fb6099de376a809435573f957eaca626a685a4960913b399045d6"
+      ],
+      "hashType": 4,
+      "kind": "standard-native",
+      "relayPolicy": {
+        "computeMass": "2036",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 203599 fees which is under the required amount of 203600 for compute mass 2036"
+        },
+        "feeSompi": "300000",
+        "minimumFeeSompi": "203600",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "632",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": null,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "7070707070707070707070707070707070707070707070707070707070707070"
+            },
+            "sequence": "18446744073709551615",
+            "sigOpCount": 1,
+            "signatureScript": "4132f7ea444680cabe64d24ecab4ea279d2d84faa57b1fb8a02230868def70b1a4821e585a13f647a30ff2ae5743c2dcc071bd9e030655fba86e864dd22693ff2104",
+            "utxo": {
+              "amount": "50000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "20000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "29700000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "63670",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 0
+      }
+    },
+    {
+      "digests": [
+        "42da76f46bb6737a913f2cfd2a15335ae6ff78e56cda7a984e81560722e428da"
+      ],
+      "hashType": 129,
+      "kind": "genesis",
+      "relayPolicy": {
+        "computeMass": "1671",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 167099 fees which is under the required amount of 167100 for compute mass 1671"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "167100",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "602",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0101010101010101010101010101010101010101010101010101010101010101"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "417f627437f71e7f18801437b8628bfac9f22d7987fc1e43b13dd4bc68c2537d8460414900b1d210fad2cdb8ab8a9c97f93e8bff3c9cdd04735497f53b979bc29b81",
+            "utxo": {
+              "amount": "91000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa205dd3302588050e2a0c1f3407db1e639de998d5039ca4fad3d5a3da993eacae7787"
+          }
+        ],
+        "payload": "",
+        "storageMass": "33455",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "264273b40327971d7ee1f015b81ef2d138b4add89669061715abcd5b37fb0691"
+      ],
+      "hashType": 129,
+      "kind": "claim",
+      "relayPolicy": {
+        "computeMass": "4222",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 422199 fees which is under the required amount of 422200 for compute mass 4222"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "422200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2984",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "7f9ec5e0de3b7460bc98fd003c9b925f3bd8fa530b391501527baa85c6ba124a"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "414cad13a068ce290e6d9dad13282b79436f9dff394e2610c088a58e46a260b2c672a7a8898ce1d5c82e32ec769eb87ee024632178f90a86d90ced07625371977681400e6d3c9abaa78de1d2f15a27364e8e0ca1da1ebecbd0a875255cc6b4d2a88689ea70966f066f326a6c139906a031212f7572428f59837ee3e371552534bdf8ad0880c3c901000000000800127a00000000000423959b424d18046b0800000000000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "90000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa205dd3302588050e2a0c1f3407db1e639de998d5039ca4fad3d5a3da993eacae7787"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "7000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "82000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20d43d6c8816633b5a93499e206b480161e1f157eccad3e87a0a0591ed05fc3cfb87"
+          }
+        ],
+        "payload": "",
+        "storageMass": "147193",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "fb859e3bad34b16897f6e97498e5d12d9583556f8dcbfe8bbb9cbf5a67d93354"
+      ],
+      "hashType": 129,
+      "kind": "claim",
+      "relayPolicy": {
+        "computeMass": "4222",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 422199 fees which is under the required amount of 422200 for compute mass 4222"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "422200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2984",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "885668df2d118d4cafcc58601b067231e7f48d930628012e96aff8e948afcd05"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "412cb1dd18c18e2aaead6d06653f769f08607d80a4b1b26d160c8d70347688d80f67d3a517da0f757699a929562f9ac34abdb6a3da2fa2a9a1d738ea2be096a8f181400e6d3c9abaa78de1d2f15a27364e8e0ca1da1ebecbd0a875255cc6b4d2a88689ea70966f066f326a6c139906a031212f7572428f59837ee3e371552534bdf8ad0880c3c901000000000840548900000000000423959b424d18046b0800127a00000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "82000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20d43d6c8816633b5a93499e206b480161e1f157eccad3e87a0a0591ed05fc3cfb87"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "8000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "73000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          }
+        ],
+        "payload": "",
+        "storageMass": "131014",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "cfb9298e1736ed9c4769fc2c0a9c68f74b1e39a39e5a33363a6fd6dc794ecf5f",
+        "0554a3ec479c855b5f01aad0f1c867ec543b008a5cb9967e315a7cbf752ecfa9"
+      ],
+      "hashType": 129,
+      "kind": "top-up",
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "f739d5c5ba82532b471822b53dfe706b54397ad8be035bef1342e52ac3794cdd"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "418d90f168d02f5ca8e7787f9f9588a22d7e1510fdb65c0db72f763d175f4c797c7077995b6b914ddea9d5323b924787f50dd2abdd6cb316d2b1ee1948d40c71d78141ba02bf955004f25a03485d3a65b529ddee5714f35171de305ba357ea061678631dee619d661d7afe9066b59825e99bca1c7b39cb8ab4fc888f0b1c9476e05d818104ae09679c4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "73000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          },
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0505050505050505050505050505050505050505050505050505050505050505"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "415675fc5f8959249fa510a84cbdd882b698ab91f04cbb0b52968fbdc9ddd6b7d58c463f535265bc2fa538641544f3c421f6155c7c42964d8897ac07445ab613bb81",
+            "utxo": {
+              "amount": "20000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          },
+          {
+            "amount": "2000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "447670",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "dc226b2a084a975a5de5d733da55324c492c91d4a81a26b19ce121443967188f"
+      ],
+      "hashType": 129,
+      "kind": "refund",
+      "relayPolicy": {
+        "computeMass": "2682",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 268199 fees which is under the required amount of 268200 for compute mass 2682"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "268200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2644",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "51cec5b18364d5c1ccc757e7808b29fff7e723e622ab9e5b3bc0f3683670d558"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "4102d2366b91a393cbe27bbc17fd31287fb41101c6a2e00021beaae6dd1848443cadb7ab8a912377c2931f27e62b3acf493cdb506b050abf43d6fae5edb240bd5f810417a2027b4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "90000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          }
+        ],
+        "lockTime": "123456789",
+        "outputs": [
+          {
+            "amount": "89000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "0",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "9299c2291ab36e81ffa0d0ef78b6dfc238af92a6a2ef46e16dfa519ddc969378"
+      ],
+      "hashType": 129,
+      "kind": "standard-native",
+      "relayPolicy": {
+        "computeMass": "2036",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 203599 fees which is under the required amount of 203600 for compute mass 2036"
+        },
+        "feeSompi": "300000",
+        "minimumFeeSompi": "203600",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "632",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": null,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "7070707070707070707070707070707070707070707070707070707070707070"
+            },
+            "sequence": "18446744073709551615",
+            "sigOpCount": 1,
+            "signatureScript": "4126bcf425500938d535ab8dd2b2924b16db7a80696d118d832f7cce896b0c11d72db2ae2bcefd1a384ee1c26aaa6f41c566c737ead4be9cefce932524dd9a2a0781",
+            "utxo": {
+              "amount": "50000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "20000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "29700000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "63670",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 0
+      }
+    },
+    {
+      "digests": [
+        "cc062988fde228610713c07a8201842e3100d68995b1dc091bd27929d38c4565"
+      ],
+      "hashType": 130,
+      "kind": "genesis",
+      "relayPolicy": {
+        "computeMass": "1671",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 167099 fees which is under the required amount of 167100 for compute mass 1671"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "167100",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "602",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0101010101010101010101010101010101010101010101010101010101010101"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41610fd2a933784958529189e746daea70e5a1d8461316b229c16bd94bd7bedb1258cca4c11ed4ea1c0581d60006dadfa19e21c1c1963ff5460bdb52c09f77638f82",
+            "utxo": {
+              "amount": "91000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa205dd3302588050e2a0c1f3407db1e639de998d5039ca4fad3d5a3da993eacae7787"
+          }
+        ],
+        "payload": "",
+        "storageMass": "33455",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "e11849ee3d9923af88e1a318632df85b1d0bf1323c73efaf5519d4ac41c1d8ac"
+      ],
+      "hashType": 130,
+      "kind": "claim",
+      "relayPolicy": {
+        "computeMass": "4222",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 422199 fees which is under the required amount of 422200 for compute mass 4222"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "422200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2984",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "7f9ec5e0de3b7460bc98fd003c9b925f3bd8fa530b391501527baa85c6ba124a"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41a7064bd02d0400de2dd7830f84fd77b7fc1b974cc9a2ae6a0cbaf08004ec115d0bf197d2378f220148917265f781a13f5480227e1d2a3a7ee6dbe15e26050db482400e6d3c9abaa78de1d2f15a27364e8e0ca1da1ebecbd0a875255cc6b4d2a88689ea70966f066f326a6c139906a031212f7572428f59837ee3e371552534bdf8ad0880c3c901000000000800127a00000000000423959b424d18046b0800000000000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "90000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa205dd3302588050e2a0c1f3407db1e639de998d5039ca4fad3d5a3da993eacae7787"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "7000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "82000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20d43d6c8816633b5a93499e206b480161e1f157eccad3e87a0a0591ed05fc3cfb87"
+          }
+        ],
+        "payload": "",
+        "storageMass": "147193",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "8e2cd5b00615eeb004a31cf62f336698d38d328f8d4597b834183bb4678218d0"
+      ],
+      "hashType": 130,
+      "kind": "claim",
+      "relayPolicy": {
+        "computeMass": "4222",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 422199 fees which is under the required amount of 422200 for compute mass 4222"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "422200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2984",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "885668df2d118d4cafcc58601b067231e7f48d930628012e96aff8e948afcd05"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41b857873314035bf9fbb1ac5afe8954797e88e1c39d940a5ab286404b485fdea354de53330d8aa0d12721b69ed4d9bf805953616680ecd251eaee84a01d72d28f82400e6d3c9abaa78de1d2f15a27364e8e0ca1da1ebecbd0a875255cc6b4d2a88689ea70966f066f326a6c139906a031212f7572428f59837ee3e371552534bdf8ad0880c3c901000000000840548900000000000423959b424d18046b0800127a00000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "82000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20d43d6c8816633b5a93499e206b480161e1f157eccad3e87a0a0591ed05fc3cfb87"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "8000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "73000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          }
+        ],
+        "payload": "",
+        "storageMass": "131014",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "bed2fa329cc7de1037a114304f048689f90110dc755990dfa431e5481733b384",
+        "6bb06274099dc6357be41240b1a6f1a94f043762a5c588df350d8d69f8a3cfd6"
+      ],
+      "hashType": 130,
+      "kind": "top-up",
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "f739d5c5ba82532b471822b53dfe706b54397ad8be035bef1342e52ac3794cdd"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41496f14902f4069edfb62eb41e59b9d56b3d53ad1e26d62000d5312459f1dd2afa3443e9bbd60261720c15b7873530a9654be767d93347feda7efe48427d2896f82411abc37f342606dc24a503985e89c47b30182f6e69ca4a4064c8f42be8ba9017011dc3201c7932072fa44ae9041e33f42309fbd15c45bcb7332c255db60cf20a78204ae09679c4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "73000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          },
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0505050505050505050505050505050505050505050505050505050505050505"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41b895fa5b5901fb3d65841669f1d28263a8c3c37a2d9da492a6bff1887b213a77da96f4e27e509d732bbff55909c9cd2d977dff9f724b090846a49ecb03a68ae682",
+            "utxo": {
+              "amount": "20000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          },
+          {
+            "amount": "2000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "447670",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "6028bbd10e2cb9e17ffa2559d9df9c38166e29f90fe894f55f1e04a2177c89e3"
+      ],
+      "hashType": 130,
+      "kind": "refund",
+      "relayPolicy": {
+        "computeMass": "2682",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 268199 fees which is under the required amount of 268200 for compute mass 2682"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "268200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2644",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "51cec5b18364d5c1ccc757e7808b29fff7e723e622ab9e5b3bc0f3683670d558"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "414f04d0455294885435443f94fcd21dbcc2830a3cf89409e3d607fdf398f371c3241567807b12dcfa4fa687a6fa9a75ea7c2b6c634b085831b5d848c30a18f24c820417a2027b4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "90000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          }
+        ],
+        "lockTime": "123456789",
+        "outputs": [
+          {
+            "amount": "89000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "0",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "03c7b33d9142d25a89088b6fbe12605a2925453f99e6820ecb0052718f81964d"
+      ],
+      "hashType": 130,
+      "kind": "standard-native",
+      "relayPolicy": {
+        "computeMass": "2036",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 203599 fees which is under the required amount of 203600 for compute mass 2036"
+        },
+        "feeSompi": "300000",
+        "minimumFeeSompi": "203600",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "632",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": null,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "7070707070707070707070707070707070707070707070707070707070707070"
+            },
+            "sequence": "18446744073709551615",
+            "sigOpCount": 1,
+            "signatureScript": "41860ce9429a3e1b14e1309d43f6b01854710f6533e25c88568cf52f3646967d9a903f3dc1bb8fd8924ad31d50cd128836e870218e2728a6f6fd34da8859313c4982",
+            "utxo": {
+              "amount": "50000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "20000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "29700000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "63670",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 0
+      }
+    },
+    {
+      "digests": [
+        "0d6ba942ec7b4853fefa2ea55a5c96f76b93fa44de8ce4488ff5cffd67f1d3f1"
+      ],
+      "hashType": 132,
+      "kind": "genesis",
+      "relayPolicy": {
+        "computeMass": "1671",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 167099 fees which is under the required amount of 167100 for compute mass 1671"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "167100",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "602",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0101010101010101010101010101010101010101010101010101010101010101"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41dfaf3df44dbdb672afa6995d9d8c96f0b1ea907b1d356ad5568f3a5f8d5ef809f5355a0d27026b67ff86e8542d72673179ce8fd2bfb81892193de45d31b6384b84",
+            "utxo": {
+              "amount": "91000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa205dd3302588050e2a0c1f3407db1e639de998d5039ca4fad3d5a3da993eacae7787"
+          }
+        ],
+        "payload": "",
+        "storageMass": "33455",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "09a738f4611ea3cc5a9a91716bce484ebc9013ecce6ffb76fa395aaa8b70fffe"
+      ],
+      "hashType": 132,
+      "kind": "claim",
+      "relayPolicy": {
+        "computeMass": "4222",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 422199 fees which is under the required amount of 422200 for compute mass 4222"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "422200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2984",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "7f9ec5e0de3b7460bc98fd003c9b925f3bd8fa530b391501527baa85c6ba124a"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "410ed86aad0c4f2508662bd622279b3909cf96d09de43cd8e30128478d1a61f7b7113b70513c789bf680074c056af2193628fc851c399a82789b58ae6fc2283e6884400e6d3c9abaa78de1d2f15a27364e8e0ca1da1ebecbd0a875255cc6b4d2a88689ea70966f066f326a6c139906a031212f7572428f59837ee3e371552534bdf8ad0880c3c901000000000800127a00000000000423959b424d18046b0800000000000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "90000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa205dd3302588050e2a0c1f3407db1e639de998d5039ca4fad3d5a3da993eacae7787"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "7000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "82000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20d43d6c8816633b5a93499e206b480161e1f157eccad3e87a0a0591ed05fc3cfb87"
+          }
+        ],
+        "payload": "",
+        "storageMass": "147193",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "8e07cd22961bdca6f251f4b81aec9ab53cabd87f5b29e74380785dcdaec77700"
+      ],
+      "hashType": 132,
+      "kind": "claim",
+      "relayPolicy": {
+        "computeMass": "4222",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 422199 fees which is under the required amount of 422200 for compute mass 4222"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "422200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2984",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "885668df2d118d4cafcc58601b067231e7f48d930628012e96aff8e948afcd05"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "412f3478288b3c6ec836e48d4df652492aa426a5d34e37a0662267366ab502878b96f8e448ea09fcd097096027ea03a1da99adc06be3917a479641319a6cff4c5684400e6d3c9abaa78de1d2f15a27364e8e0ca1da1ebecbd0a875255cc6b4d2a88689ea70966f066f326a6c139906a031212f7572428f59837ee3e371552534bdf8ad0880c3c901000000000840548900000000000423959b424d18046b0800127a00000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "82000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20d43d6c8816633b5a93499e206b480161e1f157eccad3e87a0a0591ed05fc3cfb87"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "8000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "73000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          }
+        ],
+        "payload": "",
+        "storageMass": "131014",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "48e692aea10bfc8851332216b0889b40a355218ee11afb9aab9b8cc21c458da8",
+        "f06e93cee1bf15de6d7a63f91db868d1b66c134833ed5283181a5f36c4a1873d"
+      ],
+      "hashType": 132,
+      "kind": "top-up",
+      "relayPolicy": {
+        "computeMass": "5325",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 532499 fees which is under the required amount of 532500 for compute mass 5325"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "532500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3190",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "f739d5c5ba82532b471822b53dfe706b54397ad8be035bef1342e52ac3794cdd"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "413a4fff1ab9973e07f499ce613cf728b4972c4b2115ff359edacd03a72dd81688808d1c7aa0517299ab181803a604bd75a8fffc5016fba24b2c4b936b23dd63d9844169363ada560b267a1cf1f8e342b7ce8740a69440837462a6259ffeedf96c4ce57afa0d4d59074b6846e22a34f779da1be4124699f982532c470ab5de6ae361d98404ae09679c4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "73000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          },
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0505050505050505050505050505050505050505050505050505050505050505"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "415545de9d526859323654661df03ba2104d6bc619bbce19bf6f2eca128b0911c73ef71c36ec88f001cf6d513720e251434a36d3ee4ca07a361cfb5dd9f382afff84",
+            "utxo": {
+              "amount": "20000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          },
+          {
+            "amount": "2000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "447670",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "e598d5cdc6aa155957cc1fe38aef27f191bebde844a404990fdaae9a79d2fa43"
+      ],
+      "hashType": 132,
+      "kind": "refund",
+      "relayPolicy": {
+        "computeMass": "2682",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 268199 fees which is under the required amount of 268200 for compute mass 2682"
+        },
+        "feeSompi": "1000000",
+        "minimumFeeSompi": "268200",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "2644",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "51cec5b18364d5c1ccc757e7808b29fff7e723e622ab9e5b3bc0f3683670d558"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41ecb9803a0f015bebfd56a127e7a1d68a6bf13be9a2f57789212a625a76302e1801b1dd3bf0e4c3a182383744b370ff2f5f3d9aee8fba59dcb964e2f6f7e4b456840417a2027b4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "90000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          }
+        ],
+        "lockTime": "123456789",
+        "outputs": [
+          {
+            "amount": "89000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "0",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "52bea3e2fd4931995a233e8444bdc8dd423a05328d656fdf2785d35fb72c8566"
+      ],
+      "hashType": 132,
+      "kind": "standard-native",
+      "relayPolicy": {
+        "computeMass": "2036",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 203599 fees which is under the required amount of 203600 for compute mass 2036"
+        },
+        "feeSompi": "300000",
+        "minimumFeeSompi": "203600",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "632",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": null,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "7070707070707070707070707070707070707070707070707070707070707070"
+            },
+            "sequence": "18446744073709551615",
+            "sigOpCount": 1,
+            "signatureScript": "4180b0dcd00c17c218bf62aa5cfb4fca37e3c06bab5d4c61db88d5b08f89ff3accb78ad5f3d9a6b528f1cbe402cf74a33393f74472241eed2a68e52cdfae7cd3c384",
+            "utxo": {
+              "amount": "50000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "20000000",
+            "covenant": null,
+            "scriptPublicKey": "000020f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661bac"
+          },
+          {
+            "amount": "29700000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "63670",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 0
+      }
+    },
+    {
+      "digests": [
+        "0db469365b86c404c0d1bde7bd01c6e4cd90a8e12d32f7332c042eccc7295ffc",
+        "d80c2b7593a9555984309f47782113032e72d7f36a028f0fda40c3f5bb938a39",
+        "9dac0081c38c4ad24f92c95f5a6b598d8547bc62fcb41432bc3366f977be351f"
+      ],
+      "hashType": 4,
+      "kind": "single-without-output",
+      "relayPolicy": {
+        "computeMass": "6445",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 644499 fees which is under the required amount of 644500 for compute mass 6445"
+        },
+        "feeSompi": "21000000",
+        "minimumFeeSompi": "644500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3430",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "f739d5c5ba82532b471822b53dfe706b54397ad8be035bef1342e52ac3794cdd"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "4174eb65be37d5641ba0fd9e6dcc92b5aa13b9e01675f959c1c099b442f77fd32a1d228ddb2a4420f2ba8c237ecafdd7dfd26c9dd55c7ce49ed3b385a5cb2ec3f9044198002b73e99d07bbea82ce542c9d4dcfcf8e680e6ca36c584d42c331dc6f40a7c1134c412f3e9eee2ae7d25be678425616a7cf780f77bbd56f65ad57a5dbaba60404ae09679c4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "73000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          },
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0505050505050505050505050505050505050505050505050505050505050505"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "41e7adcdbd067f78ef359b0f81d716abd1d3d9e668a67ed8176e34faaac64f4fd9ddf211a6adc6ef44388c2ea491e6b478405afca73fc580bbe220de556c1f566f04",
+            "utxo": {
+              "amount": "20000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          },
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "413cc4f63cea56a0d8da8c718b9f882696e4f259f9efe9556cae1d8000f06cb595842ceb29d111e90bfe637bc24dc25c7eb0498c5734a365f225dd137d5fa6e20e04",
+            "utxo": {
+              "amount": "20000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          },
+          {
+            "amount": "2000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "402852",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    },
+    {
+      "digests": [
+        "48e692aea10bfc8851332216b0889b40a355218ee11afb9aab9b8cc21c458da8",
+        "f06e93cee1bf15de6d7a63f91db868d1b66c134833ed5283181a5f36c4a1873d",
+        "b5983735adf32fce51569ef165e71586c4acf0e7ab61e5b43eda47da8efb9233"
+      ],
+      "hashType": 132,
+      "kind": "single-without-output",
+      "relayPolicy": {
+        "computeMass": "6445",
+        "feeFieldControls": {
+          "exactFloor": "accepted",
+          "floorMinusOne": "transaction has 644499 fees which is under the required amount of 644500 for compute mass 6445"
+        },
+        "feeSompi": "21000000",
+        "minimumFeeSompi": "644500",
+        "minimumRelayFeeSompiPerKg": "100000",
+        "normalizedTransientMass": "3430",
+        "scope": "default-standardness-and-relay-policy-not-full-mempool-admission",
+        "source": "mining/src/mempool/check_transaction_standard.rs",
+        "status": "accepted"
+      },
+      "transaction": {
+        "gas": "0",
+        "inputs": [
+          {
+            "computeBudget": 20,
+            "previousOutpoint": {
+              "index": 1,
+              "txid": "f739d5c5ba82532b471822b53dfe706b54397ad8be035bef1342e52ac3794cdd"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "413a4fff1ab9973e07f499ce613cf728b4972c4b2115ff359edacd03a72dd81688808d1c7aa0517299ab181803a604bd75a8fffc5016fba24b2c4b936b23dd63d9844169363ada560b267a1cf1f8e342b7ce8740a69440837462a6259ffeedf96c4ce57afa0d4d59074b6846e22a34f779da1be4124699f982532c470ab5de6ae361d98404ae09679c4d18046b0840660301000000006c760423959b4287637554798201419d7553798201409d75527982589d757882589d75b9cbb9cf76d27653799c695379765979597959795979b2519c69b5009c69b3519c69b4529c69b9009c69b9bd080000000000000000876953792056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc519c6900d5200000000000000000000000000000000000000000000000000000000000000000876951d578876920cb645ce99ebb74afb1f1e3a73e0462249ee42cd9edfcd55723e7291af0292570203b06c42cd879a4951fe465f255164917ac183fabd3facb8dc33705b7bbd649367e787e53797e547978a820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fd76953795379587900a269785979a0697600a069785979947878a169b9be5279789f6900c200a06900c25379a16900c3a820d6274c844d24ccb71e1dfe20b7ba2d09d185c13d468a4b1838043a0743425b5f876951c2785479949c695a795379935f79519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c3887575757575757575757575757575757575757575757551677604ae09679c87637552798201419d75788201419d75b9cbb9cf76d27653799c6953797657795779b2519c69b5009c69b351a069b400a069b452a169b9009c69b9bd08000000000000000087697820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69762056b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967ac69b9cf76d0519c6976d2519c69b9cb519c69b900cc009c6900d5788769537900a26900c2b9bea069b4529c6351d5200000000000000000000000000000000000000000000000000000000000000000876951c200a06951c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b7009187696853795879519c69b900cc0108527958cd7eb976c902180494765193bc7c7eb976c976020e84937cbc7eaa02000001aa7e01207e7c7e01877e78c388757575757575757575757575755167760417a2027b876375788201419d75b2519c69b3519c69b4519c69b9009c69b9bd08000000000000000087690815cd5b07000000007600050088526a74a569b07820989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac69b9cf76d0519c6976d2009c69b9cb009c6900d5200000000000000000000000000000000000000000000000000000000000000000876900c200a06900c2b9bea16900c3a8203b8cbf34de55566551c5745eebc28aa0c3b036c6704d77f09a8a0e5299b70091876975757551676a686868",
+            "utxo": {
+              "amount": "73000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+            }
+          },
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "0505050505050505050505050505050505050505050505050505050505050505"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "415545de9d526859323654661df03ba2104d6bc619bbce19bf6f2eca128b0911c73ef71c36ec88f001cf6d513720e251434a36d3ee4ca07a361cfb5dd9f382afff84",
+            "utxo": {
+              "amount": "20000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          },
+          {
+            "computeBudget": 10,
+            "previousOutpoint": {
+              "index": 0,
+              "txid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            },
+            "sequence": "0",
+            "sigOpCount": null,
+            "signatureScript": "4176e8a95413f0d57de60aca354636b0109e1067fd5eefa0891a9cd0110c5083dedfdc82b8b5d65175d575f2174aed1e272dad846e694a0142ac196d2a3713815f84",
+            "utxo": {
+              "amount": "20000000",
+              "blockDaaScore": "0",
+              "isCoinbase": false,
+              "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+            }
+          }
+        ],
+        "lockTime": "0",
+        "outputs": [
+          {
+            "amount": "90000000",
+            "covenant": {
+              "authorizingInput": 0,
+              "covenantId": "f0154292aca316533e639eccdca10e2f44ab6e4eab3a48fa9420c1b616da456e"
+            },
+            "scriptPublicKey": "0000aa20b9247d6da281da7b809cc86e187603f72966b6c6143fc31216439c33517f28d987"
+          },
+          {
+            "amount": "2000000",
+            "covenant": null,
+            "scriptPublicKey": "000020989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6fac"
+          }
+        ],
+        "payload": "",
+        "storageMass": "402852",
+        "subnetworkId": "0000000000000000000000000000000000000000",
+        "version": 1
+      }
+    }
+  ]
+}

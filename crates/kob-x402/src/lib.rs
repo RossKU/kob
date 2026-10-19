@@ -1,4 +1,4 @@
-//! KOB x402: the Kaspa x402 `exact` binding (elldeeone/kaspa-x402 v1.0.0, `kaspa-exact-v2`) plus
+//! KOB x402: the Kaspa x402 `exact` binding (elldeeone/kaspa-x402 v1.0.1, `kaspa-exact-v2`) plus
 //! the two KOB contributions to it.
 //!
 //! | Module | Contents |

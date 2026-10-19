@@ -4,6 +4,14 @@ The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased
 
+### The Kaspa x402 binding v1.0.1 (conformance vectors)
+
+- Conformance vectors: `crates/kob-x402/vectors/kaspa-x402-v1.0.1/` (tag `v1.0.1`, commit `5622191`; byte-identical upstream
+  blobs) replaces `kaspa-x402-v1.0.0/`. v1.0.1 raises the standard-native vector's fee from 200000 to 300000 sompi (v1.0.0's
+  was below a v2.1.0 node's relay floor of 203600, as we reported) and regenerates the dependent transaction ids and
+  signatures (`exact/interop-v1.json`, `sighash/consensus.json`, `x402-http/exact-transaction.json`). The vector now passes
+  the verifier's whole engine path as published. No wire or API change.
+
 ### The Kaspa x402 binding v1.0.0 (clean cutover from v1.0.0-rc.1)
 
 Aligned with elldeeone/kaspa-x402 v1.0.0 (tag `v1.0.0`, commit `e5f5b0e`). There is no rc.1 compatibility: payers,

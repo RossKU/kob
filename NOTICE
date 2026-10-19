@@ -37,8 +37,8 @@ Vendored data and token programs
 * KCC-20 conformance vectors (kaspanet/kccs, kcc-0020/vectors/conformance.json) --
   crates/kob-tests/vectors/kcc20/. CC0 1.0 Universal (PROVENANCE.md there).
 
-* Kaspa x402 binding conformance vectors (elldeeone/kaspa-x402, v1.0.0) --
-  crates/kob-x402/vectors/kaspa-x402-v1.0.0/. MIT License, Copyright (c) 2026 Kaspa x402
+* Kaspa x402 binding conformance vectors (elldeeone/kaspa-x402, v1.0.1) --
+  crates/kob-x402/vectors/kaspa-x402-v1.0.1/. MIT License, Copyright (c) 2026 Kaspa x402
   contributors (LICENSE and PROVENANCE.md there).
 
 * KRON token program templates -- contracts/adapters/kron/templates/*.bin.

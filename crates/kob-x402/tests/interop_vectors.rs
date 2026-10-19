@@ -1,6 +1,6 @@
-//! Conformance against the elldeeone/kaspa-x402 v1.0.0 interoperability vectors, reproduced from
+//! Conformance against the elldeeone/kaspa-x402 v1.0.1 interoperability vectors, reproduced from
 //! Rust only (no TypeScript). The vectors are vendored unmodified under
-//! `vectors/kaspa-x402-v1.0.0/` (see its `PROVENANCE.md`).
+//! `vectors/kaspa-x402-v1.0.1/` (see its `PROVENANCE.md`).
 //!
 //! Scope. KOB implements the `standard-native` profile (and its own `kcc20` / swap extensions), not the
 //! KIP-10 `additive` profile. The vectors are used where they exercise profile-independent code:
@@ -19,11 +19,11 @@
 //!   envelope; each is mapped to our public `Reason` plus local `Diag` below. Vectors about batch
 //!   settlement or additive are not applicable and are named where skipped.
 //!
-//! One finding is documented in `consensus_profile_standard_native`: the vector's fee (200000 sompi) is
-//! consensus-valid but below the relay floor of a rusty-kaspa v2.1.0 node, 100 sompi per gram of
-//! `max(compute, normalized transient)` = 203600 sompi (storage mass is not part of the node's floor), so
-//! the mutation cases run on a floor-compliant rebuild of the same geometry (same keys, input, amount and
-//! outputs).
+//! The standard-native vector meets the relay floor of a rusty-kaspa v2.1.0 node since v1.0.1 (300000 sompi
+//! against 100 sompi per gram of `max(compute, normalized transient)` = 203600; v1.0.0 paid 200000, below
+//! it, which we reported): `consensus_profile_standard_native` asserts that, and that the vector passes the
+//! whole engine path of our verifier. The mutation cases are applied to a payment of the same geometry (same
+//! keys, input, amount and outputs) built by our payer, so that each mutation can be re-signed.
 
 mod exact_support;
 
@@ -46,17 +46,17 @@ use kob_x402::wire::{
 use serde_json::{json, Value};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
-const PROVENANCE: &str = include_str!("../vectors/kaspa-x402-v1.0.0/PROVENANCE.md");
-const INTEROP: &str = include_str!("../vectors/kaspa-x402-v1.0.0/exact/interop-v1.json");
-const PROFILES: &str = include_str!("../vectors/kaspa-x402-v1.0.0/exact/consensus-profiles.json");
-const HTTP: &str = include_str!("../vectors/kaspa-x402-v1.0.0/x402-http/exact-transaction.json");
+const PROVENANCE: &str = include_str!("../vectors/kaspa-x402-v1.0.1/PROVENANCE.md");
+const INTEROP: &str = include_str!("../vectors/kaspa-x402-v1.0.1/exact/interop-v1.json");
+const PROFILES: &str = include_str!("../vectors/kaspa-x402-v1.0.1/exact/consensus-profiles.json");
+const HTTP: &str = include_str!("../vectors/kaspa-x402-v1.0.1/x402-http/exact-transaction.json");
 
 fn json_of(text: &str) -> Value {
     serde_json::from_str(text).expect("vector is JSON")
 }
 
 fn negative(name: &str) -> Value {
-    let path = format!("{ROOT}/vectors/kaspa-x402-v1.0.0/negative/{name}.json");
+    let path = format!("{ROOT}/vectors/kaspa-x402-v1.0.1/negative/{name}.json");
     json_of(&std::fs::read_to_string(path).expect("vendored negative vector"))
 }
 
@@ -81,7 +81,7 @@ fn vendored_files_are_unmodified_copies() {
     let mut listed = Vec::new();
     for line in block.lines().filter(|l| !l.trim().is_empty()) {
         let (digest, path) = line.split_once("  ").expect("`hash  path`");
-        let data = std::fs::read(format!("{ROOT}/vectors/kaspa-x402-v1.0.0/{path}")).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let data = std::fs::read(format!("{ROOT}/vectors/kaspa-x402-v1.0.1/{path}")).unwrap_or_else(|e| panic!("{path}: {e}"));
         assert_eq!(hex(&sha256(&data)), digest, "{path} differs from the vendored source");
         listed.push(path.to_string());
     }
@@ -95,7 +95,7 @@ fn vendored_files_are_unmodified_copies() {
             }
         }
     }
-    let base = std::path::PathBuf::from(format!("{ROOT}/vectors/kaspa-x402-v1.0.0"));
+    let base = std::path::PathBuf::from(format!("{ROOT}/vectors/kaspa-x402-v1.0.1"));
     let mut found = Vec::new();
     walk(&base, &base, &mut found);
     found.retain(|f| f != "PROVENANCE.md" && f != ".gitattributes");
@@ -103,7 +103,7 @@ fn vendored_files_are_unmodified_copies() {
     listed.sort();
     assert_eq!(found, listed, "vendored files and PROVENANCE.md list must agree");
     for needle in
-        ["https://github.com/elldeeone/kaspa-x402", "Tag: v1.0.0", "e5f5b0ed34657dc4e8c67c9153818e0ba07b1828", "MIT", "2026-10-17"]
+        ["https://github.com/elldeeone/kaspa-x402", "Tag: v1.0.1", "56221913531bcb8367a900d28ed24c62d50591a1", "MIT", "2026-10-19"]
     {
         assert!(PROVENANCE.contains(needle), "PROVENANCE.md lacks {needle}");
     }
@@ -434,14 +434,14 @@ fn consensus_profile_standard_native() {
     // masses, fee, script units
     let m = kob_protocol::tx::masses(&tx, &entries);
     assert_eq!(m.storage, u64_of(&sn["storageMass"]));
-    assert_eq!(m.storage, 63557);
+    assert_eq!(m.storage, 63670);
     assert_eq!(m.compute, u64_of(&sn["computeMass"]));
     assert_eq!(m.transient, u64_of(&sn["transientMass"]));
     assert_eq!(m.size, sn["estimatedSerializedSize"].as_u64().unwrap());
     let total_in: u64 = entries.iter().map(|e| e.amount).sum();
     let total_out: u64 = tx.outputs.iter().map(|o| o.value).sum();
     assert_eq!(total_in - total_out, u64_of(&sn["fee"]));
-    assert_eq!(total_in - total_out, 200_000);
+    assert_eq!(total_in - total_out, 300_000);
     assert_eq!(tx.inputs.len() as u64, sn["inputs"].as_u64().unwrap());
     assert_eq!(tx.outputs.len() as u64, sn["outputs"].as_u64().unwrap());
     assert_eq!(tx.outputs[0].value, u64_of(&sn["amount"]));
@@ -450,11 +450,10 @@ fn consensus_profile_standard_native() {
     let units: Vec<u64> = outcomes.into_iter().map(|o| o.expect("the payer signature passes the script engine")).collect();
     assert_eq!(units, sn["scriptUnits"].as_array().unwrap().iter().map(|u| u.as_u64().unwrap()).collect::<Vec<_>>());
 
-    // engine validation through our verifier. The vector is consensus-valid, but its fee (200000) is below
-    // the relay floor of a rusty-kaspa v2.1.0 node: 100 sompi per gram of max(compute 2036, 2 x size)
-    // = 203600 (storage mass, 63557 here, is not part of the node's floor). check_economics_and_scripts
-    // accepts exactly what the node relays, so it refuses the vector (the live TN10 probe confirms that
-    // the node does too); the vector stays vendored as published.
+    // engine validation through our verifier. The vector's fee (300000 since v1.0.1; v1.0.0 paid 200000) is at
+    // least the relay floor of a rusty-kaspa v2.1.0 node: 100 sompi per gram of max(compute 2036, 2 x size)
+    // = 203600 (storage mass, 63670 here, is not part of the node's floor). check_economics_and_scripts
+    // accepts exactly what the node relays, so the vector passes it.
     let env = Env::new();
     let op = &tx.inputs[0].previous_outpoint;
     env.chain.insert_utxo(
@@ -470,11 +469,9 @@ fn consensus_profile_standard_native() {
     let floor = kob_protocol::tx::min_fee(&m, kob_protocol::tx::MIN_FEE_RATE);
     assert_eq!((m.compute, m.fee_mass, floor), (2_036, 2_036, 203_600), "the node's relay floor of the vector");
     assert!(m.storage > m.fee_mass, "the storage mass would dominate a storage-inclusive fee");
-    let err = check_economics_and_scripts(&env.ctx(), &tx, &entries).unwrap_err();
-    assert_eq!((err.reason, err.diag), (Reason::InvalidPayload, Diag::InvalidKaspaExactFee), "{err}");
-    // with the floor relaxed to the vector's own economics the transaction passes the whole engine path
-    let fee = kob_protocol::verify::validate(&tx, &entries).err().map(|e| e.to_string());
-    assert!(fee.as_deref().is_some_and(|m| m.contains("below the floor")), "only the fee floor stops it: {fee:?}");
+    assert!(total_in - total_out >= floor, "the vector's fee meets the relay floor (v1.0.1)");
+    check_economics_and_scripts(&env.ctx(), &tx, &entries).expect("the vector passes the whole engine path");
+    kob_protocol::verify::validate(&tx, &entries).expect("the vector is relayable");
     kob_protocol::verify::execute(&tx, &entries, true).unwrap();
 }
 
@@ -496,9 +493,9 @@ fn consensus_profile_mutations_standard_native() {
     // additiveWrongVersion) belong to the KIP-10 additive profile, which KOB does not implement.
 
     // Same geometry as the vector (payer key 7, one 50_000_000 input, 20_000_000 to merchant key 8, change to
-    // the payer), rebuilt at a fee margin above the KOB floor so each mutation is judged on its own rule.
+    // the payer), built by our payer so each mutation can be re-signed and is judged on its own rule.
     let fx = fixture_with(&[50_000_000], 150);
-    let control = fx.verify().expect("floor-compliant control verifies");
+    let control = fx.verify().expect("the control payment verifies");
     assert_eq!(control.tx.outputs.len(), 2);
     assert_eq!(control.tx.outputs[0].value, 20_000_000);
     let (tx0, entries0) = fx.tx();
@@ -596,7 +593,7 @@ fn consensus_profile_mutations_standard_native() {
 /// mixed top-up cases are batch-settlement material, which KOB does not implement.
 #[test]
 fn sighash_scopes_of_the_standard_native_transaction() {
-    let v: Value = json_of(include_str!("../vectors/kaspa-x402-v1.0.0/sighash/consensus.json"));
+    let v: Value = json_of(include_str!("../vectors/kaspa-x402-v1.0.1/sighash/consensus.json"));
     assert_eq!(v["kind"], "kaspa-sighash-consensus-v1");
     assert_eq!(v["status"], "full-consensus-cross-validated");
     let mut seen = vec![];
@@ -826,7 +823,7 @@ fn negative_vectors_of_payload_and_outpoint_shape() {
 #[test]
 fn settlement_response_vectors() {
     let read = |name: &str| {
-        let p = format!("{ROOT}/vectors/kaspa-x402-v1.0.0/settlement-response/{name}.json");
+        let p = format!("{ROOT}/vectors/kaspa-x402-v1.0.1/settlement-response/{name}.json");
         json_of(&std::fs::read_to_string(p).unwrap())
     };
     // failure.json: a generic failure response

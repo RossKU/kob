@@ -1,4 +1,4 @@
-// Wire types of the Kaspa x402 `exact` binding (elldeeone/kaspa-x402 v1.0.0, `kaspa-exact-v2`) plus the two
+// Wire types of the Kaspa x402 `exact` binding (elldeeone/kaspa-x402 v1.0.1, `kaspa-exact-v2`) plus the two
 // KOB contributions: the `kcc20` profile (`extra.token`), swap-and-pay (`extra.route`, binding `kob-swap-v1`), its intent
 // mode (binding `kob-intent-v1`) and invoices (`kob-invoice-v1`).
 // Mirrors `crates/kob-x402/src/wire.rs` field for field. Amounts are canonical decimal uint64 strings, hashes are

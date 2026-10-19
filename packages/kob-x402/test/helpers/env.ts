@@ -21,9 +21,9 @@ import type { StubWasm } from './stub-wasm.ts';
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '../../../..');
 
-/** Reads a vendored binding vector (crates/kob-x402/vectors/kaspa-x402-v1.0.0). */
+/** Reads a vendored binding vector (crates/kob-x402/vectors/kaspa-x402-v1.0.1). */
 export function loadVector<T = any>(rel: string): T {
-  return JSON.parse(readFileSync(join(repo, 'crates/kob-x402/vectors/kaspa-x402-v1.0.0', rel), 'utf8')) as T;
+  return JSON.parse(readFileSync(join(repo, 'crates/kob-x402/vectors/kaspa-x402-v1.0.1', rel), 'utf8')) as T;
 }
 
 export const NETWORK = 'kaspa:testnet-10' as const;

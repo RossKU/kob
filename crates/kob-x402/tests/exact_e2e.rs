@@ -664,7 +664,7 @@ fn signature_of_another_key_inside_the_transaction_fails_the_engine() {
 
 // ------------------------------------------------------------------------------------------ hash types
 
-/// Binding v1.0.0: a standard-native verifier honors each signature's encoded consensus-supported hash type (ALL, NONE,
+/// Binding v1.0.1: a standard-native verifier honors each signature's encoded consensus-supported hash type (ALL, NONE,
 /// SINGLE, each with ANYONECANPAY); the signer chooses its scope. Any other trailing byte is refused before the engine runs.
 /// (KOB's own profiles keep SIGHASH_ALL only: `kcc20.rs`, `swap.rs`, `intent.rs`.)
 #[test]

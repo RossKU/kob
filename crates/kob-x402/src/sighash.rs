@@ -1,6 +1,6 @@
 //! The signature hash type of payer signatures.
 //!
-//! **Standard-native (the binding).** The elldeeone binding v1.0.0 honors each signature's encoded consensus-supported
+//! **Standard-native (the binding).** The elldeeone binding v1.0.1 honors each signature's encoded consensus-supported
 //! hash type ([`CONSENSUS_HASH_TYPES`]: ALL, NONE, SINGLE, each with or without ANYONECANPAY) on standard-native payer
 //! inputs: the signer chooses its scope, while the exact merchant output, the recipient script, the profile and the request
 //! authorization stay mandatory (`crate::exact`). Reference signers, and every KOB signer, default to SIGHASH_ALL.
@@ -50,7 +50,7 @@ pub const SIGHASH_SINGLE: u8 = 0x04;
 /// The `ANYONECANPAY` flag, or-ed into one of the three base types.
 pub const SIGHASH_ANYONE_CAN_PAY: u8 = 0x80;
 /// Every transaction signature hash type Kaspa consensus supports: ALL, NONE, SINGLE, and each with ANYONECANPAY. A
-/// standard-native payer signature may use any of them (binding v1.0.0); any other trailing byte is invalid.
+/// standard-native payer signature may use any of them (binding v1.0.1); any other trailing byte is invalid.
 pub const CONSENSUS_HASH_TYPES: [u8; 6] = [0x01, 0x02, 0x04, 0x81, 0x82, 0x84];
 
 /// True for a consensus-supported hash type byte ([`CONSENSUS_HASH_TYPES`]).

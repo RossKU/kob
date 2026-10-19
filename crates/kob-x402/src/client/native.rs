@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn identifier_schema_matches_the_binding_file() {
-        let file = include_str!("../../vectors/kaspa-x402-v1.0.0/schemas/payment-identifier.schema.json");
+        let file = include_str!("../../vectors/kaspa-x402-v1.0.1/schemas/payment-identifier.schema.json");
         assert_eq!(payment_identifier_schema(), serde_json::from_str::<Value>(file).unwrap());
     }
 }
