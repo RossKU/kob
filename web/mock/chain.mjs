@@ -72,6 +72,10 @@ export class MockChain {
     this.txs = new Set();
     this.submissions = [];
     this.failNext = { remaining: 0, message: 'mock: injected submit failure' };
+    // KCC-23 (the executor's indexer::kcc23): candidate preparations by txid (their id-relevant fields), and the verified launch proof of every
+    // covenant id whose genesis spent one
+    this.kcc23Candidates = new Map();
+    this.declarations = new Map();
     this.health = { state: 'following', lagDaa: 0 };
     /** pair fills (`pair_fills` rows: volume only, never a price) */
     this.pairFills = [];
@@ -333,6 +337,52 @@ export class MockChain {
     return out;
   }
 
+  // ------------------------------------------------------------------------------------------------ KCC-23 declarations
+
+  /**
+   * What the executor's indexer does (indexer::kcc23): a transaction whose payload is a KCC-23 declaration is a candidate preparation; a covenant
+   * output whose authorising input spends a candidate gets a launch proof, kept only when kob-wasm verifies it for that covenant id.
+   */
+  captureDeclarations(tx) {
+    const proofTx = (t) => ({
+      version: t.version,
+      inputs: t.inputs.map((i) => ({ transactionId: i.transactionId, index: i.index, sequence: String(i.sequence ?? '0') })),
+      outputs: t.outputs.map((o) => ({
+        value: String(o.value),
+        scriptPublicKey: { version: parseInt(o.scriptPublicKey.slice(0, 4), 16), script: o.scriptPublicKey.slice(4) },
+        covenant: o.covenant ? { authorizingInput: o.covenant.authorizingInput, covenantId: o.covenant.covenantId } : null,
+      })),
+      lockTime: String(t.lockTime ?? '0'),
+      subnetworkId: t.subnetworkId,
+      gas: String(t.gas ?? '0'),
+      payload: t.payload ?? '',
+    });
+    const raw = this.kob.raw;
+    if (typeof raw.kcc23Verify !== 'function') return;
+    for (const o of tx.outputs) {
+      const cov = o.covenant;
+      if (!cov || this.declarations.has(cov.covenantId)) continue;
+      const input = tx.inputs[cov.authorizingInput];
+      const prep = input ? this.kcc23Candidates.get(input.transactionId) : null;
+      if (!prep) continue;
+      const proof = { format: 'kob-kcc23-proof/1', covenantId: cov.covenantId, preparation: prep, genesis: proofTx(tx) };
+      try {
+        raw.kcc23Verify(JSON.stringify(proof));
+        this.declarations.set(cov.covenantId, proof);
+      } catch {
+        /* not a binding: no declaration */
+      }
+    }
+    if (tx.version === 1 && typeof tx.payload === 'string' && tx.payload.startsWith('00')) {
+      try {
+        raw.kcc23Decode(tx.payload);
+        this.kcc23Candidates.set(tx.id, proofTx(tx));
+      } catch {
+        /* not a declaration */
+      }
+    }
+  }
+
   // ------------------------------------------------------------------------------------------------ submit
 
   /**
@@ -387,6 +437,7 @@ export class MockChain {
     const daa = this.daa();
     const seq = ++this.blockSeq;
     this.txs.add(txid);
+    this.captureDeclarations(tx);
 
     // 1. inputs
     const spentOrders = [];

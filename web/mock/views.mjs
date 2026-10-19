@@ -138,6 +138,7 @@ export function tokensView(chain) {
       powers: t.powers,
       template_id: t.template_id,
       family: t.family,
+      ...(chain.declarations?.has(t.covenant_id) ? { declaration: true } : {}),
     })),
   };
 }

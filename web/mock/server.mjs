@@ -221,6 +221,12 @@ export async function startMockServer(opts = {}) {
     if (get && path === '/v1/health') return ok(V.healthView(chain));
     if (get && path === '/v1/health/ready') return V.readyView(chain);
     if (get && path === '/v1/tokens') return ok(V.tokensView(chain));
+    if (get && (m = /^\/v1\/tokens\/([^/]+)\/declaration$/.exec(path))) {
+      const id = V.parseHash('covenant_id', m[1]);
+      const proof = chain.declarations.get(id);
+      if (!proof) throw notFound('no KCC-23 declaration for this covenant id');
+      return ok(proof);
+    }
     if (get && (m = /^\/v1\/books\/([^/]+)$/.exec(path))) return ok(V.bookView(chain, m[1], q));
     if (get && path === '/v1/orders') return ok(V.ordersPage(chain, q));
     if (get && (m = /^\/v1\/orders\/([^/]+)$/.exec(path))) {
