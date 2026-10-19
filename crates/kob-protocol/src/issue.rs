@@ -12,7 +12,15 @@
 //! issues it only when it is named `8x8-prototype`, the wasm surface and the web app never. Proposal P2 and `KCC20Opt`
 //! are not used.
 //!
-//! The genesis is ONE transaction: a plain P2PK funding input (input 0) authorises a KIP-20 genesis
+//! A creation ([`build_creation`]) is TWO transactions under KCC-23 ([`crate::kcc23`]): the *preparation* spends the creator's
+//! P2PK funding into output 0 (P2PK of the creator, exactly the genesis's carriers and fee) and change, its payload declaring the
+//! token metadata (`0x00` + JSON: name, symbol, decimals, ...); the *genesis* spends that output 0 alone. Because the covenant id
+//! commits to the authorising outpoint, it commits to the declaration. Output 0 is an ordinary UTXO of the creator: a creation
+//! whose genesis is never sent leaves it in their wallet. Both are signed together ([`CreationPlan::sign`]) and the genesis is
+//! sent after the preparation; the txid does not depend on signature scripts, so the genesis is built and signed before the
+//! preparation is on chain.
+//!
+//! The genesis: a plain P2PK funding input (input 0) authorises a KIP-20 genesis
 //! group of 1..N token outputs whose covenant id is derived exactly as consensus does
 //! ([`kaspa_consensus_core::hashing::covenant_id::covenant_id`]: the authorising outpoint plus the
 //! index, value and script public key of every output in the group). Every issued output is one
@@ -48,6 +56,7 @@ use sha2::{Digest, Sha256};
 use silverscript_abi::{encode_contract_entry_sig_script, ArtifactValue, SilAbiArtifact};
 
 use crate::artifacts::parse_artifact;
+use crate::kcc23;
 use crate::kcc20::{ISSUE_MAX_TOKEN_INPUTS, ISSUE_MAX_TOKEN_OUTPUTS};
 
 /// KCC-20 owner scheme ids: the canonical KCC-2 authority-scheme bytes ([`crate::kcc2`]).
@@ -493,10 +502,14 @@ pub struct IssueSpec {
     pub change_spk: Option<ScriptPublicKey>,
     /// Free-form metadata.
     pub description: Option<String>,
-    /// Optional icon URL.
+    /// Optional logo URL (https:// or ipfs://; KOB's KCC-23 field `logo`, registry `display.icon`).
     pub icon: Option<String>,
-    /// Optional website URL.
+    /// Optional website URL (https://).
     pub website: Option<String>,
+    /// Optional X account, canonical `https://x.com/<handle>`.
+    pub x: Option<String>,
+    /// Optional Telegram, canonical `https://t.me/<handle>`.
+    pub telegram: Option<String>,
     /// Network label recorded in supply.json (informational).
     pub network: String,
     /// The token program issued (default: the reference program with its standard 3 / 3 slots).
@@ -522,8 +535,24 @@ impl IssueSpec {
             description: None,
             icon: None,
             website: None,
+            x: None,
+            telegram: None,
             network: "testnet-10".into(),
             program: IssueProgram::default(),
+        }
+    }
+
+    /// The KCC-23 token metadata of this issuance (KOB's convention, `docs/spec/token-metadata.md`).
+    pub fn token_metadata(&self) -> kcc23::TokenMetadata {
+        kcc23::TokenMetadata {
+            name: self.name.clone(),
+            symbol: self.ticker.clone(),
+            decimals: self.decimals,
+            description: self.description.clone(),
+            logo: self.icon.clone(),
+            website: self.website.clone(),
+            x: self.x.clone(),
+            telegram: self.telegram.clone(),
         }
     }
 
@@ -737,94 +766,300 @@ fn masses(tx: &Transaction, entries: &[UtxoEntry]) -> (u64, u64, u64, u64, u64) 
     (m.compute, m.storage, m.size, m.fee_mass, m.compute.max(m.transient).max(m.storage))
 }
 
-/// Plan the genesis transaction (unsigned; call [`GenesisPlan::sign`] to sign the funding inputs).
+/// The parts of a genesis that do not depend on its fee: program, token states, outputs (bound to the covenant id of the funding
+/// outpoint), funding inputs and entries.
+struct GenesisDraft {
+    program: Program,
+    states: Vec<TokenState>,
+    outputs: Vec<TransactionOutput>,
+    inputs: Vec<TransactionInput>,
+    entries: Vec<UtxoEntry>,
+    change_spk: ScriptPublicKey,
+    covenant_id: Hash,
+    budget: u16,
+}
+
+impl GenesisDraft {
+    fn new(spec: &IssueSpec) -> Result<Self> {
+        let program = Program::of(spec.program)?;
+        let states: Vec<TokenState> = spec
+            .holders
+            .iter()
+            .map(|h| TokenState {
+                amount: h.amount,
+                owner: h.owner,
+                owner_scheme: h.owner_scheme,
+                borrow_scheme: h.borrow_scheme,
+                borrow_guard: h.borrow_guard,
+                extension_commitment: spec.extension_commitment,
+            })
+            .collect();
+        let budget = p2pk_compute_budget();
+        let entries = spec.funding.iter().map(|f| UtxoEntry::new(f.amount, p2pk_spk(&f.owner_pubkey), 0, false, None)).collect();
+        let inputs = spec.funding.iter().map(|f| TransactionInput::new_with_compute_budget(f.outpoint, vec![], 0, budget)).collect();
+        let change_spk = spec.change_spk.clone().unwrap_or_else(|| p2pk_spk(&spec.funding[0].owner_pubkey));
+        // token outputs and the genesis id (covers index, value and spk of every output of the group)
+        let mut outputs: Vec<TransactionOutput> =
+            states.iter().map(|s| TransactionOutput { value: spec.carrier, script_public_key: program.spk(s), covenant: None }).collect();
+        let covenant_id = covenant_id(spec.funding[0].outpoint, outputs.iter().enumerate().map(|(i, o)| (i as u32, o)));
+        for o in outputs.iter_mut() {
+            o.covenant = Some(CovenantBinding { authorizing_input: 0, covenant_id });
+        }
+        Ok(GenesisDraft { program, states, outputs, inputs, entries, change_spk, covenant_id, budget })
+    }
+
+    /// The transaction with placeholder signatures (their final size) and the given change.
+    fn assemble(&self, change: Option<u64>) -> Transaction {
+        let placeholder_ss = push_data(&[0u8; 65]);
+        let mut outs = self.outputs.clone();
+        if let Some(v) = change {
+            outs.push(TransactionOutput { value: v, script_public_key: self.change_spk.clone(), covenant: None });
+        }
+        let mut ins = self.inputs.clone();
+        for i in ins.iter_mut() {
+            i.signature_script = placeholder_ss.clone();
+        }
+        Transaction::new(1, ins, outs, 0, Default::default(), 0, vec![])
+    }
+
+    /// The relay floor with or without a change output. It rests on compute and transient mass only, which do not depend on the
+    /// values (fixed-size fields), so any change value measures the same.
+    fn min_fee(&self, with_change: bool, rate: u64) -> u64 {
+        let (_, _, _, fee_mass, _) = masses(&self.assemble(with_change.then_some(1)), &self.entries);
+        crate::tx::relay_fee_for_mass(fee_mass, rate)
+    }
+}
+
+/// How the fee and the change of a plain spend are settled: `slack` = inputs minus the fixed outputs. With an explicit `fee` it is
+/// used as given (at least the floor of the shape it ends in); without one the floor is paid and the rest is change, unless the
+/// change would be below `dust`, in which case it is added to the fee. Returns `(fee, change)` or the funds needed.
+fn settle_fee(slack: u64, explicit: Option<u64>, min_with: u64, min_without: u64, dust: u64) -> std::result::Result<(u64, Option<u64>), SettleError> {
+    match explicit {
+        Some(f) if f < min_without => Err(SettleError::FeeTooLow { fee: f, min: min_without }),
+        Some(f) if f > slack => Err(SettleError::Short { need_over_fixed: f }),
+        Some(f) => {
+            let change = slack - f;
+            if change >= dust {
+                if f < min_with {
+                    return Err(SettleError::FeeTooLow { fee: f, min: min_with });
+                }
+                Ok((f, Some(change)))
+            } else {
+                Ok((slack, None))
+            }
+        }
+        None => {
+            if slack >= min_with && slack - min_with >= dust {
+                Ok((min_with, Some(slack - min_with)))
+            } else if slack >= min_without {
+                Ok((slack, None))
+            } else {
+                Err(SettleError::Short { need_over_fixed: min_without })
+            }
+        }
+    }
+}
+
+enum SettleError {
+    FeeTooLow { fee: u64, min: u64 },
+    Short { need_over_fixed: u64 },
+}
+
+/// Smallest change output KOB keeps: a tenth of the carrier (at most 1 KAS). A smaller change would weigh more in storage mass
+/// than it is worth and is added to the fee.
+fn dust_bound(spec: &IssueSpec) -> u64 {
+    spec.carrier.min(DEFAULT_CARRIER) / 10
+}
+
+/// Plan a genesis transaction alone (unsigned; call [`GenesisPlan::sign`] to sign the funding inputs). It declares no metadata:
+/// KOB creates tokens with [`build_creation`] (KCC-23: a preparation transaction carrying the metadata, then this genesis spending
+/// its output); this builder is the second step of that, and stays for tests and tools that issue without a declaration.
 ///
 /// Token outputs come first (indices `0..holders.len()`), then the change output. All token
 /// outputs form one genesis group authorised by input 0.
 pub fn build_genesis(spec: &IssueSpec) -> Result<GenesisPlan> {
     let mut warnings = spec.validate()?;
-    let program = Program::of(spec.program)?;
-    let states: Vec<TokenState> = spec
-        .holders
-        .iter()
-        .map(|h| TokenState {
-            amount: h.amount,
-            owner: h.owner,
-            owner_scheme: h.owner_scheme,
-            borrow_scheme: h.borrow_scheme,
-            borrow_guard: h.borrow_guard,
-            extension_commitment: spec.extension_commitment,
-        })
-        .collect();
-
+    let draft = GenesisDraft::new(spec)?;
     let total_in: u64 = spec.funding.iter().map(|f| f.amount).sum();
-    let carriers = spec.carrier.checked_mul(states.len() as u64).ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
-    let budget = p2pk_compute_budget();
-    let entries: Vec<UtxoEntry> =
-        spec.funding.iter().map(|f| UtxoEntry::new(f.amount, p2pk_spk(&f.owner_pubkey), 0, false, None)).collect();
-    let inputs: Vec<TransactionInput> =
-        spec.funding.iter().map(|f| TransactionInput::new_with_compute_budget(f.outpoint, vec![], 0, budget)).collect();
-    let change_spk = spec.change_spk.clone().unwrap_or_else(|| p2pk_spk(&spec.funding[0].owner_pubkey));
-
-    // Token outputs and the genesis id (covers index, value and spk of every output of the group).
-    let mut outputs: Vec<TransactionOutput> =
-        states.iter().map(|s| TransactionOutput { value: spec.carrier, script_public_key: program.spk(s), covenant: None }).collect();
-    let id = covenant_id(spec.funding[0].outpoint, outputs.iter().enumerate().map(|(i, o)| (i as u32, o)));
-    for o in outputs.iter_mut() {
-        o.covenant = Some(CovenantBinding { authorizing_input: 0, covenant_id: id });
-    }
-
-    // Fee: iterate once so the change value (fixed-size field) is in the measured transaction.
-    let placeholder_ss = push_data(&[0u8; 65]);
-    let assemble = |change: Option<u64>| -> Transaction {
-        let mut outs = outputs.clone();
-        if let Some(v) = change {
-            outs.push(TransactionOutput { value: v, script_public_key: change_spk.clone(), covenant: None });
-        }
-        let mut ins = inputs.clone();
-        for i in ins.iter_mut() {
-            i.signature_script = placeholder_ss.clone();
-        }
-        Transaction::new(1, ins, outs, 0, Default::default(), 0, vec![])
-    };
+    let carriers =
+        spec.carrier.checked_mul(draft.states.len() as u64).ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
     let need_base = carriers;
     if total_in < need_base {
         return Err(IssueError::InsufficientFunds { need: need_base, have: total_in });
     }
     let slack = total_in - need_base;
-    let min_fee_with = |change: Option<u64>| {
-        let (_, _, _, fee_mass, _) = masses(&assemble(change), &entries);
-        crate::tx::relay_fee_for_mass(fee_mass, spec.fee_rate)
+    let min_with = draft.min_fee(true, spec.fee_rate);
+    let min_without = draft.min_fee(false, spec.fee_rate);
+    let (fee, change_value) = match settle_fee(slack, spec.fee, min_with, min_without, dust_bound(spec)) {
+        Ok(x) => x,
+        Err(SettleError::FeeTooLow { fee, min }) => return Err(IssueError::FeeTooLow { fee, min }),
+        Err(SettleError::Short { need_over_fixed }) => {
+            return Err(IssueError::InsufficientFunds { need: need_base.saturating_add(need_over_fixed), have: total_in })
+        }
     };
-    if slack == 0 {
-        // nothing is left for the fee (and a zero-value change output has no storage mass): report the shortfall
-        return Err(IssueError::InsufficientFunds { need: need_base.saturating_add(min_fee_with(None)), have: total_in });
+    // what the fee took beyond what was asked (the floor, or the explicit fee): a change below the dust bound
+    let asked = spec.fee.unwrap_or(min_without);
+    if change_value.is_none() && fee > asked {
+        warnings.push(format!("change of {} sompi is below the dust bound and is added to the fee", fee - asked));
     }
-    // The relay floor rests on compute and transient mass only, which do not depend on the change value (a fixed-size
-    // field), so one probe at the largest possible change settles the fee (storage mass no longer enters it).
-    let min_fee = min_fee_with(Some(slack));
-    let fee = match spec.fee {
-        Some(f) if f < min_fee => return Err(IssueError::FeeTooLow { fee: f, min: min_fee }),
-        Some(f) => f,
-        None => min_fee,
-    };
-    if total_in < need_base + fee {
-        return Err(IssueError::InsufficientFunds { need: need_base + fee, have: total_in });
-    }
-    let change_value = total_in - need_base - fee;
-    let (change, tx) = if change_value >= spec.carrier.min(DEFAULT_CARRIER) / 10 {
-        (Some((outputs.len(), change_value)), assemble(Some(change_value)))
-    } else {
-        warnings.push(format!("change of {change_value} sompi is below the dust bound and is added to the fee"));
-        (None, assemble(None))
-    };
-    let fee = if change.is_some() { fee } else { total_in - need_base };
-    let mut tx = tx;
+    let mut tx = draft.assemble(change_value);
+    let change = change_value.map(|v| (draft.outputs.len(), v));
     for i in tx.inputs.iter_mut() {
         i.signature_script = vec![];
     }
     // The transaction commits its storage mass (consensus rejects a wrong commitment).
+    tx.set_storage_mass(contextual_storage_mass(&tx, &draft.entries));
+    tx.finalize();
+    let (compute_mass, storage_mass, size, _, limit_mass) = {
+        let mut measured = tx.clone();
+        for i in measured.inputs.iter_mut() {
+            i.signature_script = push_data(&[0u8; 65]);
+        }
+        masses(&measured, &draft.entries)
+    };
+    if limit_mass > MAX_STANDARD_MASS {
+        return Err(IssueError::Verify(format!("transaction mass {limit_mass} exceeds the standard limit {MAX_STANDARD_MASS} (storage mass grows with more or smaller outputs: raise the carrier or issue fewer outputs)")));
+    }
+    Ok(GenesisPlan {
+        tx,
+        entries: draft.entries,
+        covenant_id: draft.covenant_id,
+        states: draft.states,
+        change,
+        fee,
+        compute_mass,
+        storage_mass,
+        size,
+        compute_budget: draft.budget,
+        warnings,
+        signed: false,
+        program: draft.program,
+        spec: spec.clone(),
+    })
+}
+
+// ------------------------------------------------------------------------------------------------ KCC-23 creation
+
+/// The KCC-23 preparation transaction of a creation: the funding inputs pay output 0 (P2PK of the creator, exactly the genesis's
+/// carriers and fee) and the change, and the payload carries the token metadata. Output 0 is an ordinary UTXO of the creator: if
+/// the genesis is never sent it stays in their wallet, spendable like any other.
+#[derive(Debug, Clone)]
+pub struct PrepPlan {
+    /// The transaction (signature scripts empty until [`CreationPlan::sign`]).
+    pub tx: Transaction,
+    /// Funding UTXO entries in input order.
+    pub entries: Vec<UtxoEntry>,
+    /// The declared metadata.
+    pub metadata: kcc23::TokenMetadata,
+    /// Value of output 0 (the genesis's funding): the carriers of every token output plus the genesis fee.
+    pub value: u64,
+    /// Change output index and value, when there is change.
+    pub change: Option<(usize, u64)>,
+    /// Fee in sompi.
+    pub fee: u64,
+    /// Compute mass.
+    pub compute_mass: u64,
+    /// Storage mass.
+    pub storage_mass: u64,
+    /// Estimated serialized size.
+    pub size: u64,
+    /// Compute budget set on each funding input.
+    pub compute_budget: u16,
+    /// Whether the funding inputs are signed.
+    pub signed: bool,
+}
+
+impl PrepPlan {
+    /// Transaction id (independent of the signature scripts and the compute budgets).
+    pub fn txid(&self) -> TransactionId {
+        self.tx.id()
+    }
+
+    /// The outpoint the genesis spends (output 0).
+    pub fn outpoint(&self) -> TransactionOutpoint {
+        TransactionOutpoint { transaction_id: self.txid(), index: 0 }
+    }
+}
+
+/// A token creation under KCC-23: the preparation transaction ([`PrepPlan`]) and the genesis ([`GenesisPlan`]) that spends its
+/// output 0 (authorising the genesis group), so the token's covenant id commits to the declared metadata.
+#[derive(Debug, Clone)]
+pub struct CreationPlan {
+    /// Step 1: the declaration.
+    pub prep: PrepPlan,
+    /// Step 2: the genesis (its one input is the preparation's output 0; no change).
+    pub genesis: GenesisPlan,
+}
+
+/// Plan a token creation: [`PrepPlan`] then [`GenesisPlan`] (both unsigned; [`CreationPlan::sign`] signs both). The creator is the
+/// owner of `spec.funding[0]`; every funding UTXO must be theirs. `spec.fee`, when set, is the genesis fee (at least its floor);
+/// the preparation pays the relay floor at `spec.fee_rate`. The change of the funding returns to `spec.change_spk` (default: the
+/// creator) from the preparation.
+pub fn build_creation(spec: &IssueSpec) -> Result<CreationPlan> {
+    let mut warnings = spec.validate()?;
+    let metadata = spec.token_metadata();
+    let payload = metadata.payload().map_err(IssueError::Invalid)?;
+    let maker = spec.funding[0].owner_pubkey;
+    if spec.funding.iter().any(|f| f.owner_pubkey != maker) {
+        return invalid("every funding UTXO of a creation must belong to the creator (the owner of the first one)");
+    }
+    let carriers = spec.carrier.checked_mul(spec.holders.len() as u64).ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
+
+    // the genesis fee: its floor without a change output (it spends exactly carriers + fee), or the explicit one
+    let probe_outpoint = TransactionOutpoint { transaction_id: TransactionId::from_bytes([0u8; 32]), index: 0 };
+    let probe = IssueSpec {
+        funding: vec![FundingUtxo { outpoint: probe_outpoint, amount: carriers.saturating_add(DEFAULT_CARRIER), owner_pubkey: maker }],
+        change_spk: None,
+        ..spec.clone()
+    };
+    let floor = GenesisDraft::new(&probe)?.min_fee(false, spec.fee_rate);
+    let genesis_fee = match spec.fee {
+        Some(f) if f < floor => return Err(IssueError::FeeTooLow { fee: f, min: floor }),
+        Some(f) => f,
+        None => floor,
+    };
+    let value = carriers.checked_add(genesis_fee).ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
+
+    // the preparation: funding -> [P2PK(creator) = value, change], payload = the declaration
+    let budget = p2pk_compute_budget();
+    let entries: Vec<UtxoEntry> =
+        spec.funding.iter().map(|f| UtxoEntry::new(f.amount, p2pk_spk(&f.owner_pubkey), 0, false, None)).collect();
+    let change_spk = spec.change_spk.clone().unwrap_or_else(|| p2pk_spk(&maker));
+    let total_in: u64 = spec.funding.iter().map(|f| f.amount).sum();
+    let assemble = |change: Option<u64>, ss: &[u8]| -> Transaction {
+        let inputs = spec
+            .funding
+            .iter()
+            .map(|f| TransactionInput::new_with_compute_budget(f.outpoint, ss.to_vec(), 0, budget))
+            .collect();
+        let mut outputs = vec![TransactionOutput { value, script_public_key: p2pk_spk(&maker), covenant: None }];
+        if let Some(v) = change {
+            outputs.push(TransactionOutput { value: v, script_public_key: change_spk.clone(), covenant: None });
+        }
+        Transaction::new(1, inputs, outputs, 0, Default::default(), 0, payload.clone())
+    };
+    let placeholder_ss = push_data(&[0u8; 65]);
+    let prep_floor = |with_change: bool| {
+        let (_, _, _, fee_mass, _) = masses(&assemble(with_change.then_some(1), &placeholder_ss), &entries);
+        crate::tx::relay_fee_for_mass(fee_mass, spec.fee_rate)
+    };
+    if total_in < value {
+        return Err(IssueError::InsufficientFunds { need: value.saturating_add(prep_floor(false)), have: total_in });
+    }
+    let (prep_fee, change_value) =
+        match settle_fee(total_in - value, None, prep_floor(true), prep_floor(false), dust_bound(spec)) {
+            Ok(x) => x,
+            Err(SettleError::Short { need_over_fixed }) => {
+                return Err(IssueError::InsufficientFunds { need: value.saturating_add(need_over_fixed), have: total_in })
+            }
+            Err(SettleError::FeeTooLow { fee, min }) => return Err(IssueError::FeeTooLow { fee, min }),
+        };
+    if change_value.is_none() && prep_fee > prep_floor(false) {
+        warnings.push(format!("change of {} sompi is below the dust bound and is added to the fee", prep_fee - prep_floor(false)));
+    }
+    let tx = assemble(change_value, &[]);
     tx.set_storage_mass(contextual_storage_mass(&tx, &entries));
+    let mut tx = tx;
     tx.finalize();
     let (compute_mass, storage_mass, size, _, limit_mass) = {
         let mut measured = tx.clone();
@@ -834,24 +1069,185 @@ pub fn build_genesis(spec: &IssueSpec) -> Result<GenesisPlan> {
         masses(&measured, &entries)
     };
     if limit_mass > MAX_STANDARD_MASS {
-        return Err(IssueError::Verify(format!("transaction mass {limit_mass} exceeds the standard limit {MAX_STANDARD_MASS} (storage mass grows with more or smaller outputs: raise the carrier or issue fewer outputs)")));
+        return Err(IssueError::Verify(format!(
+            "preparation mass {limit_mass} exceeds the standard limit {MAX_STANDARD_MASS} (too many or too small funding UTXOs)"
+        )));
     }
-    Ok(GenesisPlan {
+    let prep = PrepPlan {
         tx,
         entries,
-        covenant_id: id,
-        states,
-        change,
-        fee,
+        metadata,
+        value,
+        change: change_value.map(|v| (1, v)),
+        fee: prep_fee,
         compute_mass,
         storage_mass,
         size,
         compute_budget: budget,
-        warnings,
         signed: false,
-        program,
-        spec: spec.clone(),
-    })
+    };
+
+    // the genesis: the preparation's output 0 alone funds it, exactly (no change)
+    let gspec = IssueSpec {
+        funding: vec![FundingUtxo { outpoint: prep.outpoint(), amount: value, owner_pubkey: maker }],
+        fee: Some(genesis_fee),
+        change_spk: None,
+        ..spec.clone()
+    };
+    let mut genesis = build_genesis(&gspec)?;
+    if genesis.change.is_some() || genesis.fee != genesis_fee {
+        return Err(IssueError::Verify("internal: the genesis does not spend exactly its carriers and fee".into()));
+    }
+    // the spec's own warnings (consolidation, prototype ...) were raised by the genesis already
+    for w in warnings {
+        if !genesis.warnings.contains(&w) {
+            genesis.warnings.push(w);
+        }
+    }
+    Ok(CreationPlan { prep, genesis })
+}
+
+impl CreationPlan {
+    /// The covenant id of the created token.
+    pub fn covenant_id(&self) -> Hash {
+        self.genesis.covenant_id
+    }
+
+    /// Both fees.
+    pub fn total_fee(&self) -> u64 {
+        self.prep.fee + self.genesis.fee
+    }
+
+    /// Non-fatal findings of the creation.
+    pub fn warnings(&self) -> &[String] {
+        &self.genesis.warnings
+    }
+
+    /// Whether both transactions are signed.
+    pub fn signed(&self) -> bool {
+        self.prep.signed && self.genesis.signed
+    }
+
+    /// Sign every input of both transactions with `secret` (Schnorr, SIGHASH_ALL): the creator's key.
+    pub fn sign(&mut self, secret: &SecretKey) -> Result<()> {
+        let secp = Secp256k1::new();
+        let kp = Keypair::from_secret_key(&secp, secret);
+        let pk = kp.x_only_public_key().0.serialize();
+        for (i, f) in self.genesis.spec.funding.iter().chain(self.prep_funding().iter()).enumerate() {
+            if f.owner_pubkey != pk {
+                return Err(IssueError::Invalid(format!("funding UTXO {i} is not owned by the signing key")));
+            }
+        }
+        let unsigned = self.prep.tx.clone();
+        for i in 0..self.prep.tx.inputs.len() {
+            self.prep.tx.inputs[i].signature_script = schnorr_sig_script(&unsigned, &self.prep.entries, i, &kp);
+        }
+        self.prep.signed = true;
+        self.genesis.sign(secret)
+    }
+
+    fn prep_funding(&self) -> Vec<FundingUtxo> {
+        self.prep
+            .tx
+            .inputs
+            .iter()
+            .zip(&self.prep.entries)
+            .map(|(i, e)| FundingUtxo {
+                outpoint: i.previous_outpoint,
+                amount: e.amount,
+                owner_pubkey: e.script_public_key.script()[1..33].try_into().unwrap_or([0u8; 32]),
+            })
+            .collect()
+    }
+
+    /// Everything [`GenesisPlan::verify`] checks, plus: the preparation is version 1 with exactly the declared payload, its output
+    /// 0 is the creator's P2PK of the genesis's funding value, it commits its storage mass, fits the standard mass and pays at
+    /// least the relay floor; once signed, its inputs run in the script engine; the genesis spends that output and nothing else;
+    /// and the KCC-23 binding of the declaration to the covenant id verifies.
+    pub fn verify(&self) -> Result<VerifyReport> {
+        let fail = |m: String| Err(IssueError::Verify(m));
+        let p = &self.prep;
+        if p.tx.version != 1 {
+            return fail(format!("the preparation is version {}, KCC-23 requires version 1", p.tx.version));
+        }
+        let payload = p.metadata.payload().map_err(IssueError::Invalid)?;
+        if p.tx.payload != payload {
+            return fail("the preparation payload is not the declared metadata".into());
+        }
+        let maker = self.genesis.spec.funding[0].owner_pubkey;
+        let out0 = p.tx.outputs.first().ok_or_else(|| IssueError::Verify("the preparation has no output".into()))?;
+        if out0.value != p.value || out0.script_public_key != p2pk_spk(&maker) || out0.covenant.is_some() {
+            return fail("preparation output 0 is not the creator's P2PK of the genesis funding".into());
+        }
+        if p.tx.storage_mass() != contextual_storage_mass(&p.tx, &p.entries) {
+            return fail("the preparation does not commit its exact storage mass".into());
+        }
+        let mut measured = p.tx.clone();
+        if !p.signed {
+            for i in measured.inputs.iter_mut() {
+                i.signature_script = push_data(&[0u8; 65]);
+            }
+        }
+        let (_, _, _, fee_mass, limit_mass) = masses(&measured, &p.entries);
+        if limit_mass > MAX_STANDARD_MASS {
+            return fail(format!("preparation mass {limit_mass} exceeds the standard limit {MAX_STANDARD_MASS}"));
+        }
+        let total_in: u64 = p.entries.iter().map(|e| e.amount).sum();
+        let total_out: u64 = p.tx.outputs.iter().map(|o| o.value).sum();
+        if total_in.checked_sub(total_out) != Some(p.fee) {
+            return fail("the preparation's inputs minus outputs is not its fee".into());
+        }
+        let min_fee = crate::tx::relay_fee_for_mass(fee_mass, self.genesis.spec.fee_rate);
+        if p.fee < min_fee {
+            return fail(format!("preparation fee {} below minimum {min_fee}", p.fee));
+        }
+        if p.signed {
+            for i in 0..p.tx.inputs.len() {
+                let u = execute_input(&p.tx, &p.entries, i).map_err(|e| IssueError::Verify(format!("preparation {e}")))?;
+                let budget = p.tx.inputs[i].compute_commit.compute_budget().unwrap_or(0);
+                if u > FREE_UNITS + u64::from(budget) * UNITS_PER_BUDGET {
+                    return fail(format!("preparation input {i} uses {u} script units over its budget"));
+                }
+            }
+        }
+        let g = &self.genesis;
+        if g.tx.inputs.len() != 1 || g.tx.inputs[0].previous_outpoint != p.outpoint() {
+            return fail("the genesis does not spend exactly the preparation's output 0".into());
+        }
+        if g.entries[0].amount != out0.value || g.entries[0].script_public_key != out0.script_public_key {
+            return fail("the genesis input's entry is not the preparation's output 0".into());
+        }
+        let report = g.verify()?;
+        let text = kcc23::verify_binding(&p.tx, &g.tx, g.covenant_id).map_err(|e| IssueError::Verify(format!("KCC-23 binding: {e}")))?;
+        if text != p.metadata.json() {
+            return fail("the bound declaration is not the declared metadata".into());
+        }
+        Ok(report)
+    }
+
+    /// The KCC-23 launch proof of the creation (both transactions in the fields their ids commit to).
+    pub fn launch_proof(&self) -> kcc23::LaunchProof {
+        kcc23::LaunchProof::of(&self.prep.tx, &self.genesis.tx, self.genesis.covenant_id)
+    }
+
+    /// `supply.json` of the genesis plus the declaration: the preparation's id, outpoint, payload and fee, and the total fee.
+    pub fn supply_json(&self) -> Value {
+        let mut v = self.genesis.supply_json();
+        let o = v.as_object_mut().expect("supply.json is an object");
+        o.insert(
+            "kcc23".into(),
+            json!({
+                "spec": "KCC-23 (kaspanet/kccs 1516a6c, Draft)",
+                "preparation_txid": self.prep.txid().to_string(),
+                "preparation_outpoint": format!("{}:0", self.prep.txid()),
+                "payload_hex": hex(&self.prep.tx.payload),
+                "metadata": self.prep.metadata.json(),
+                "preparation_fee_sompi": self.prep.fee,
+            }),
+        );
+        o.insert("total_fee_sompi".into(), json!(self.total_fee()));
+        v
+    }
 }
 
 impl GenesisPlan {
@@ -1008,34 +1404,18 @@ impl GenesisPlan {
         })
     }
 
-    /// Off-chain token metadata (KCC-23-style JSON object). The field names are KOB-defined and
-    /// provisional (KCC-23 leaves them to ecosystem convention). When published on chain under KCC-23,
-    /// the payload is `0x00` followed by these UTF-8 bytes; nothing in KOB depends on that.
+    /// The token metadata as a JSON object: KOB's KCC-23 fields (`name`, `symbol`, `decimals`, then the optional `description`,
+    /// `logo`, `website`, `x`, `telegram`; field names are KOB's convention, KCC-23 leaves them open). A creation
+    /// ([`build_creation`]) declares exactly [`GenesisPlan::metadata_payload`] on chain; a genesis built alone declares nothing.
     pub fn metadata_json(&self) -> Value {
-        let mut m = serde_json::Map::new();
-        m.insert("standard".into(), json!("KCC-20"));
-        m.insert("name".into(), json!(self.spec.name));
-        m.insert("symbol".into(), json!(self.spec.ticker));
-        m.insert("decimals".into(), json!(self.spec.decimals));
-        m.insert("totalSupply".into(), json!(self.spec.supply.to_string()));
-        m.insert("fixedSupply".into(), json!(true));
-        if let Some(d) = &self.spec.description {
-            m.insert("description".into(), json!(d));
-        }
-        if let Some(i) = &self.spec.icon {
-            m.insert("icon".into(), json!(i));
-        }
-        if let Some(w) = &self.spec.website {
-            m.insert("website".into(), json!(w));
-        }
-        Value::Object(m)
+        serde_json::from_str(&self.spec.token_metadata().json()).expect("metadata json")
     }
 
-    /// KCC-23 payload bytes for [`GenesisPlan::metadata_json`]: codec prefix `0x00`, then the compact UTF-8 JSON.
+    /// KCC-23 payload bytes of [`GenesisPlan::metadata_json`]: codec byte `0x00`, then the compact UTF-8 JSON in KOB's fixed
+    /// member order (what [`build_creation`] puts in the preparation transaction).
     pub fn metadata_payload(&self) -> Vec<u8> {
-        let mut p = vec![0x00];
-        p.extend(serde_json::to_vec(&self.metadata_json()).expect("json"));
-        p
+        let json = self.spec.token_metadata().json();
+        [&[kcc23::CODEC_JSON][..], json.as_bytes()].concat()
     }
 
     /// Token registry entry in the shape of `registry/tokens.schema.json` (`crate::registry::Token`): status
@@ -1052,6 +1432,12 @@ impl GenesisPlan {
         }
         if let Some(i) = &self.spec.icon {
             display.insert("icon".into(), json!(i));
+        }
+        if let Some(x) = &self.spec.x {
+            display.insert("x".into(), json!(x));
+        }
+        if let Some(t) = &self.spec.telegram {
+            display.insert("telegram".into(), json!(t));
         }
         display.insert("kcc23".into(), self.metadata_json());
         json!({
@@ -1515,5 +1901,176 @@ mod tests {
         assert_eq!(rpc["inputs"][0]["computeBudget"], plan.compute_budget);
         assert_eq!(rpc["storageMass"], plan.storage_mass);
         assert!(rpc["outputs"][0]["scriptPublicKey"].as_str().unwrap().starts_with("0000aa20"), "P2SH spk");
+    }
+
+    // -------------------------------------------------------------------------------------------- KCC-23 creation
+
+    fn creation_spec() -> IssueSpec {
+        let (_, pk) = key();
+        let mut s = spec(vec![Holder::new(pk, 0, 600), Holder::new([0xc4; 32], 4, 400)], 1000);
+        s.description = Some("A test token".into());
+        s.icon = Some("ipfs://bafytest".into());
+        s.website = Some("https://example.org".into());
+        s.x = Some("https://x.com/example".into());
+        s.telegram = Some("https://t.me/example_chat".into());
+        s
+    }
+
+    #[test]
+    fn creation_is_a_preparation_then_a_genesis_spending_it() {
+        let (sk, pk) = key();
+        let s = creation_spec();
+        let mut c = build_creation(&s).unwrap();
+        let (p, g) = (&c.prep, &c.genesis);
+        // the preparation: version 1, payload = 0x00 + KOB's compact metadata, output 0 = the creator's P2PK of the genesis funding
+        assert_eq!(p.tx.version, 1);
+        assert_eq!(p.tx.payload[0], 0x00);
+        let json = std::str::from_utf8(&p.tx.payload[1..]).unwrap().to_string();
+        assert!(
+            json.starts_with(r#"{"name":"Test Token","symbol":"TEST","decimals":8,"description":"A test token","logo":"ipfs://bafytest""#),
+            "{json}"
+        );
+        assert!(json.ends_with(r#""x":"https://x.com/example","telegram":"https://t.me/example_chat"}"#), "{json}");
+        assert_eq!(p.tx.payload, g.metadata_payload());
+        assert_eq!(p.tx.outputs[0].script_public_key, p2pk_spk(&pk));
+        assert_eq!(p.tx.outputs[0].value, 2 * DEFAULT_CARRIER + g.fee);
+        assert_eq!(p.change.unwrap().0, 1);
+        let total_in: u64 = p.entries.iter().map(|e| e.amount).sum();
+        assert_eq!(total_in, p.value + p.change.unwrap().1 + p.fee);
+        // the genesis: one input (preparation output 0), the token outputs, no change
+        assert_eq!(g.tx.inputs.len(), 1);
+        assert_eq!(g.tx.inputs[0].previous_outpoint, p.outpoint());
+        assert_eq!((g.tx.outputs.len(), g.change), (2, None));
+        assert_eq!(g.covenant_id, covenant_id(p.outpoint(), g.tx.outputs.iter().enumerate().map(|(i, o)| (i as u32, o))));
+        // unsigned and signed, both verify, and the declaration is bound to the covenant id
+        c.verify().unwrap();
+        let (prep_id, gen_id) = (c.prep.txid(), c.genesis.txid());
+        c.sign(&sk).unwrap();
+        assert!(c.signed());
+        assert_eq!((c.prep.txid(), c.genesis.txid()), (prep_id, gen_id), "ids do not depend on signatures");
+        let r = c.verify().unwrap();
+        assert!(r.scripts_executed);
+        let v = c.launch_proof().verify().unwrap();
+        assert_eq!(v.json, json);
+        assert_eq!((v.token.symbol.as_deref(), v.token.decimals), (Some("TEST"), Some(8)));
+        assert_eq!(v.covenant_id, c.covenant_id().as_bytes());
+        // the documents
+        let sup = c.supply_json();
+        assert_eq!(sup["kcc23"]["preparation_txid"], prep_id.to_string());
+        assert_eq!(sup["total_fee_sompi"], c.total_fee());
+        assert_eq!(sup["genesis_txid"], gen_id.to_string());
+        let r = c.genesis.registry_entry();
+        assert_eq!((r["display"]["x"].as_str(), r["display"]["telegram"].as_str()), (s.x.as_deref(), s.telegram.as_deref()));
+        assert_eq!(r["display"]["kcc23"]["logo"], "ipfs://bafytest");
+        assert!(r["display"]["kcc23"].get("totalSupply").is_none(), "facts the chain states are not declared again");
+    }
+
+    /// Before KCC-23 a creation was one genesis; now it is a preparation plus a genesis. Prints both (`--nocapture`).
+    #[test]
+    fn creation_fees_before_and_after() {
+        let s = creation_spec();
+        let one = build_genesis(&s).unwrap();
+        let two = build_creation(&s).unwrap();
+        println!(
+            "one genesis: fee {} (compute mass {}); creation: preparation fee {} (compute mass {}, payload {} bytes) + genesis fee {} (compute mass {}) = {}",
+            one.fee,
+            one.compute_mass,
+            two.prep.fee,
+            two.prep.compute_mass,
+            two.prep.tx.payload.len(),
+            two.genesis.fee,
+            two.genesis.compute_mass,
+            two.total_fee()
+        );
+        // the genesis alone is smaller than before (one input, no change); the preparation adds a plain spend with the payload
+        assert!(two.genesis.fee < one.fee);
+        assert!(two.total_fee() > one.fee && two.total_fee() < 3 * one.fee);
+    }
+
+    #[test]
+    fn the_preparation_output_is_an_ordinary_utxo_of_the_creator() {
+        // a creation whose genesis is never sent: the creator spends output 0 back like any P2PK UTXO
+        let (sk, pk) = key();
+        let mut c = build_creation(&creation_spec()).unwrap();
+        c.sign(&sk).unwrap();
+        let entry = vec![UtxoEntry::new(c.prep.value, p2pk_spk(&pk), 0, false, None)];
+        let input = TransactionInput::new_with_compute_budget(c.prep.outpoint(), vec![], 0, p2pk_compute_budget());
+        let out = TransactionOutput { value: c.prep.value - 100_000, script_public_key: p2pk_spk(&pk), covenant: None };
+        let mut back = Transaction::new(1, vec![input], vec![out], 0, Default::default(), 0, vec![]);
+        let kp = Keypair::from_secret_key(&Secp256k1::new(), &sk);
+        back.inputs[0].signature_script = schnorr_sig_script(&back, &entry, 0, &kp);
+        execute_input(&back, &entry, 0).expect("the creator's key spends the preparation output");
+        // another key cannot
+        let other = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[0x55u8; 32]).unwrap());
+        back.inputs[0].signature_script = schnorr_sig_script(&back, &entry, 0, &other);
+        assert!(execute_input(&back, &entry, 0).is_err());
+    }
+
+    #[test]
+    fn creation_rules() {
+        let (_, pk) = key();
+        // metadata too large for the payload limit
+        let mut s = creation_spec();
+        s.description = Some("\u{e9}".repeat(500));
+        assert!(matches!(build_creation(&s).unwrap_err(), IssueError::Invalid(m) if m.contains("bytes on chain")));
+        // a social link that is not the canonical address
+        let mut s = creation_spec();
+        s.x = Some("@example".into());
+        assert!(matches!(build_creation(&s).unwrap_err(), IssueError::Invalid(_)));
+        // funding of another key
+        let mut s = creation_spec();
+        s.funding.push(FundingUtxo {
+            outpoint: TransactionOutpoint { transaction_id: TransactionId::from_bytes([8u8; 32]), index: 0 },
+            amount: 100_000_000,
+            owner_pubkey: [0x99; 32],
+        });
+        assert!(matches!(build_creation(&s).unwrap_err(), IssueError::Invalid(_)));
+        // not enough for the carriers, the genesis fee and the preparation fee
+        let mut s = creation_spec();
+        s.funding[0].amount = 2 * DEFAULT_CARRIER;
+        match build_creation(&s).unwrap_err() {
+            IssueError::InsufficientFunds { need, have } => assert!(need > have && have == 2 * DEFAULT_CARRIER),
+            e => panic!("{e}"),
+        }
+        // an explicit genesis fee: used as given, at least the floor
+        let mut s = creation_spec();
+        s.fee = Some(1);
+        assert!(matches!(build_creation(&s).unwrap_err(), IssueError::FeeTooLow { .. }));
+        let floor = build_creation(&creation_spec()).unwrap().genesis.fee;
+        s.fee = Some(floor + 12_345);
+        let c = build_creation(&s).unwrap();
+        assert_eq!(c.genesis.fee, floor + 12_345);
+        c.verify().unwrap();
+        // funding that leaves a change below the dust bound: added to the preparation fee, the genesis is unchanged
+        let base = build_creation(&creation_spec()).unwrap();
+        let mut s = creation_spec();
+        s.funding = vec![funding(base.prep.value + base.prep.fee + 1_000, pk)];
+        let c = build_creation(&s).unwrap();
+        assert_eq!(c.prep.change, None);
+        assert!(c.prep.fee >= base.prep.fee);
+        assert_eq!(c.genesis.fee, base.genesis.fee);
+        c.verify().unwrap();
+    }
+
+    #[test]
+    fn a_tampered_creation_does_not_verify() {
+        let (sk, _) = key();
+        let base = {
+            let mut c = build_creation(&creation_spec()).unwrap();
+            c.sign(&sk).unwrap();
+            c
+        };
+        // another payload: the preparation id changes, the genesis no longer spends it
+        let mut c = base.clone();
+        c.prep.tx.payload = kcc23::encode(r#"{"name":"Test Token","symbol":"TEST","decimals":2}"#).unwrap();
+        assert!(c.verify().is_err());
+        // a preparation output 0 that is not the genesis funding
+        let mut c = base.clone();
+        c.prep.tx.outputs[0].value -= 1;
+        assert!(c.verify().is_err());
+        // a version 0 preparation
+        let mut c = base;
+        c.prep.tx.version = 0;
+        assert!(c.verify().is_err());
     }
 }
