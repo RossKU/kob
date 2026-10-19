@@ -1,7 +1,7 @@
 import { useServices } from '../../app/context';
+import { displayToken } from '../../app/token-display';
 import type { StrayView } from '../../data/indexer-types';
 import { t } from '../../i18n';
-import { longId } from '../../kob/registry';
 import { Amount, Badge, Button, CopyText, Section, Table, unitsFraction } from '../kit';
 
 /**
@@ -20,12 +20,13 @@ export function StraysPanel(props: {
   busy?: string | null;
   onSweep?: (orderId: string) => void;
 }) {
-  const { registry } = useServices();
+  const { registry, config } = useServices();
   const list = props.strays.filter((s) => !s.spent);
   if (!list.length) return null;
   const sweepOffered = new Set<string>();
   // one fixed number of decimals for the quantity column: the finest amount of its rows (decimal points line up)
-  const qtyFraction = list.reduce((m, s) => Math.max(m, unitsFraction(BigInt(s.state?.amount ?? s.amount), registry.byCovenantId.get(s.token)?.decimals ?? 0)), 0);
+  const shown = (id: string) => displayToken(registry, config.network, id)!;
+  const qtyFraction = list.reduce((m, s) => Math.max(m, unitsFraction(BigInt(s.state?.amount ?? s.amount), shown(s.token).decimals)), 0);
   return (
     <Section title={t('orders.strays.title')} data-testid="orders-strays">
       <p class="small">{t('orders.strays.explain')}</p>
@@ -54,7 +55,7 @@ export function StraysPanel(props: {
             return (
               <tr key={`${s.txid}:${s.index}`} data-testid="stray-row" data-lost={s.lost || unproven ? '1' : '0'} data-foreign={foreign ? '1' : '0'} data-owner={s.owner}>
                 <td>
-                  {info ? info.ticker : longId(s.token)}
+                  {info ? info.ticker : shown(s.token).ticker}
                   {!info ? (
                     <>
                       {' '}
@@ -62,7 +63,7 @@ export function StraysPanel(props: {
                     </>
                   ) : null}
                 </td>
-                <td class="right"><Amount kind="token" value={amount} decimals={info?.decimals ?? 0} unit={false} fraction={qtyFraction} group /></td>
+                <td class="right"><Amount kind="token" value={amount} decimals={shown(s.token).decimals} unit={false} fraction={qtyFraction} group /></td>
                 <td><CopyText value={s.owner} head={8} tail={6} /></td>
                 <td>
                   {s.lost ? (

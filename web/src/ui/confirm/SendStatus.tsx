@@ -137,7 +137,7 @@ export function useSend(): Sender {
   const confirmedLast = useRef<SigningSummary | null>(null);
   useEffect(() => () => answer.current?.(false), []);
   const tableOf = (j: SendJob, decoded: SigningSummary): SignerSummary =>
-    summaryLines(decoded, signerTokenHints(services.kob, j.built, session.current.info?.pubkey ?? null, services.registry), services.kob);
+    summaryLines(decoded, signerTokenHints(services.kob, j.built, session.current.info?.pubkey ?? null, services.registry, services.config.network), services.kob);
 
   /**
    * Plans `job` again every LIVE_MS while `running()`, checks each plan as strictly as the first (`checkBeforeSigning`) and hands each that passes

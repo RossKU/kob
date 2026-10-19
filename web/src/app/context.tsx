@@ -88,7 +88,7 @@ export function WalletProvider(props: { services: Services; children: ComponentC
       createLocalKeyAdapter({
         host: () => hostRef.current,
         sdk,
-        tokenHints: (built: BuiltTx) => signerTokenHints(kob, built, infoRef.current?.pubkey ?? null, registry),
+        tokenHints: (built: BuiltTx) => signerTokenHints(kob, built, infoRef.current?.pubkey ?? null, registry, config.network),
       }),
     [sdk, registry, kob],
   );

@@ -19,6 +19,11 @@ export interface TokenHint {
   decimals: number;
   /** the app shows this token's KAS market inverted (KAS/TOKEN): the frame words a plain order of it the same way (a label only, like the ticker) */
   inverted?: boolean;
+  /**
+   * the registry does not list the token: its decimals and ticker come from this browser's issuance of it (`issued`), or the decimals are the
+   * assumed 8 and the ticker is empty (`assumed`); the frame marks the token so (app/token-display.ts)
+   */
+  source?: 'issued' | 'assumed';
 }
 
 export type RejectReason = 'user' | 'invalid' | 'no-key' | 'busy' | 'cancelled';
@@ -88,8 +93,10 @@ export function isBuiltTx(v: unknown): v is BuiltTx {
 }
 
 const isTokenHint = (v: unknown): v is TokenHint =>
-  isObj(v) && hasKeys(v, ['covenantId', 'ticker', 'decimals', 'inverted']) && HEX32.test(String(v.covenantId)) && typeof v.ticker === 'string' && TICKER.test(v.ticker) && isIndex(v.decimals, 19) &&
-  (v.inverted === undefined || typeof v.inverted === 'boolean');
+  isObj(v) && hasKeys(v, ['covenantId', 'ticker', 'decimals', 'inverted', 'source']) && HEX32.test(String(v.covenantId)) && typeof v.ticker === 'string' && isIndex(v.decimals, 19) &&
+  (v.inverted === undefined || typeof v.inverted === 'boolean') && (v.source === undefined || v.source === 'issued' || v.source === 'assumed') &&
+  // a registry or issued ticker; an assumed token has none (the frame names it by its covenant id)
+  (v.source === 'assumed' ? v.ticker === '' : TICKER.test(v.ticker));
 
 const sized = (v: unknown): boolean => {
   try {

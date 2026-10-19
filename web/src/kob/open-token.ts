@@ -105,6 +105,11 @@ export interface OpenTokenOptions {
   network?: string | null;
   /** the row was built from the wallet's node-verified holdings (`heldTokenView`): the extension commitment's source is `holdings` */
   fromHoldings?: boolean;
+  /**
+   * the ticker and name of this browser's issuance of the token (data/issued-decimals.ts): its label instead of the covenant id. A label only
+   * (unverified, shown as such); the decimals still come from the market's scale
+   */
+  issued?: { ticker: string; name: string } | null;
 }
 
 /**
@@ -155,8 +160,11 @@ export function synthesizeOpenToken(
   if (decimals === null) return { ok: false, reason: 'scale-invalid' };
 
   const id = view.covenant_id;
-  // its only name: 8 + 8 hex of the covenant id (a 4 + 4 fragment is 32 bits, which a token made to match it can copy)
+  // its only name: 8 + 8 hex of the covenant id (a 4 + 4 fragment is 32 bits, which a token made to match it can copy); on the issuing browser
+  // the ticker it was issued with (a label the issuer chose, unverified)
   const label = longId(id);
+  const shownTicker = opts.issued?.ticker || label;
+  const shownName = opts.issued?.name || shownTicker;
   const json = {
     ticker: label, name: label, family, covenant_id: id, template_id: templateId, extension_commitment: ext, extension_class: 'other' as const,
     decimals, tick: 1, status: 'listed' as const, verified: false,
@@ -172,7 +180,7 @@ export function synthesizeOpenToken(
   return {
     ok: true,
     info: {
-      ticker: label, name: label, family, covenantId: id, templateId, templateHash: tpl.hash, extensionCommitment: ext, extensionClass: 'other', decimals,
+      ticker: shownTicker, name: shownName, family, covenantId: id, templateId, templateHash: tpl.hash, extensionCommitment: ext, extensionClass: 'other', decimals,
       tick: 1n, status: 'listed', capabilities, display: null, openList: true, openScale: entered !== null ? 'entered' : 'orders', program,
       templateMatchesPinned: true, prefixLen: tpl.prefixLen, suffixLen: tpl.suffixLen, slots: { inputs: tpl.tokenSlots[0], outputs: tpl.tokenSlots[1] },
       tradable: true, untradableReason: null, json,

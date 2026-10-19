@@ -183,6 +183,11 @@ export interface TokenInfo {
   capabilities: Capability[];
   /** synthesised from the indexer for an open-list token that has no registry entry (kob/open-token.ts): decimals inferred, tick 1 */
   openList?: boolean;
+  /**
+   * DISPLAY ONLY (app/token-display.ts): a token the registry does not list, named for showing its amounts: `issued` = decimals and ticker
+   * from this browser's issuance of it, `assumed` = 8 decimals (the Kaspa convention) and its covenant id as the name. Never traded or verified.
+   */
+  decimalsSource?: 'issued' | 'assumed';
   /** an open-list token: its scale (and decimals) from the token's orders, or `entered` by the user for its first order (no order yet) */
   openScale?: 'orders' | 'entered';
   /** an open-list KCC-20 token: where its extension commitment came from and how it compares with commitments known without the indexer */

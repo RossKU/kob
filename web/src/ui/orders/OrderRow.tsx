@@ -8,6 +8,8 @@ import { formatJst, formatUtc } from '../../kob/daa';
 import { longId, type TokenInfo } from '../../kob/registry';
 import { Amount, Badge, Banner, Button, CopyText, KeyValueList, tickKasFraction, tickPriceFraction, type Tone } from '../kit';
 import { tokenLabel } from '../market/token-model';
+import { TokenNote } from '../market/TokenNote';
+import { displayToken } from '../../app/token-display';
 import type { EventView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import { OrderFills, filledAmountOf } from './OrderFills';
@@ -133,7 +135,8 @@ export function OrderRow(props: OrderRowProps) {
   const { registry, config } = useServices();
   const txUrl = useTxUrl();
   const placementUrl = txUrl(row.placementTx);
-  const bToken = row.pair ? registry.byCovenantId.get(row.pair.quote) : undefined;
+  // a token the registry does not list is shown on this browser's issuance of it, else on 8 assumed decimals (app/token-display.ts)
+  const bToken = row.pair ? displayToken(registry, config.network, row.pair.quote) : undefined;
   const tk = token;
 
   const disabledReason = !canSign ? t('orders.actions.needWallet') : undefined;
@@ -167,7 +170,10 @@ export function OrderRow(props: OrderRowProps) {
           {tk && row.pair ? (
             <a href={routeToHash(pairRoute(row.pair.base, row.pair.quote))} data-testid="order-token">{`${tk.ticker}/${bToken?.ticker ?? shortId(row.pair.quote)}`}</a>
           ) : tk ? (
-            <a href={`#/market/${tk.covenantId}`} data-testid="order-token">{tokenLabel(tk)}</a>
+            <>
+              <a href={`#/market/${tk.covenantId}`} data-testid="order-token">{tokenLabel(tk)}</a>
+              <TokenNote token={tk} />
+            </>
           ) : row.token ? (
             <span>{t('orders.unknownToken', { id: longId(row.token) })}</span>
           ) : null}

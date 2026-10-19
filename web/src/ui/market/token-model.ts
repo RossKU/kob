@@ -43,11 +43,12 @@ export const unregisteredId = longId;
  * `EXKCC (e5e5…e5e5)`: the ticker is NEVER shown without the covenant id fragment.
  * A token outside the registry has an EMPTY ticker (or an indexer ticker): 8 + 8 hex of its covenant id (`e5e5e5e5…e5e5e5e5`).
  */
-export function tokenLabel(t: { ticker: string; covenantId: string; info?: TokenInfo | null; openList?: boolean }): string {
-  // a row of a token outside the registry (`info: null`), an open-list token or one without a ticker: 8 + 8 hex; a registry ticker: 4 + 4
-  const unregistered = t.ticker === '' || t.info === null || t.openList === true || t.info?.openList === true;
+export function tokenLabel(t: { ticker: string; covenantId: string; info?: TokenInfo | null; openList?: boolean; decimalsSource?: TokenInfo['decimalsSource'] }): string {
+  // a row of a token outside the registry (`info: null`), an open-list token, one shown for display only (app/token-display.ts) or one without a
+  // ticker: 8 + 8 hex; a registry ticker: 4 + 4. A name that IS the id is said once.
+  const unregistered = t.ticker === '' || t.info === null || t.openList === true || t.info?.openList === true || !!t.decimalsSource;
   const short = unregistered ? unregisteredId(t.covenantId) : shortCovenantId(t.covenantId);
-  return t.ticker === '' ? short : `${t.ticker} (${short})`;
+  return t.ticker === '' || t.ticker === short ? short : `${t.ticker} (${short})`;
 }
 
 /** Ticker for display: the registry ticker, else the short covenant id. */

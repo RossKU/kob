@@ -30,6 +30,8 @@ export default {
   'signer.net.released': 'Released from orders',
   'signer.net.toOthers': 'KAS to other keys',
   'signer.fee': 'Network fee',
+  'signer.net.tokenAssumed': '{id} (decimals assumed {decimals})',
+  'signer.net.tokenIssued': '{ticker} ({id}, unverified)',
   'signer.updated': 'Updated: some figures changed since this request was first shown.',
   'signer.rel.now': 'now',
   'signer.rel.s': 'in {n} s',

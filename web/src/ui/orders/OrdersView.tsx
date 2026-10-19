@@ -1,6 +1,7 @@
 import { formatUnits } from '../../kob/units';
 import { useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
+import { displayToken } from '../../app/token-display';
 import { routeToHash, tokenRoute } from '../../app/router';
 import { formatDateTime, t } from '../../i18n';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
@@ -105,11 +106,14 @@ export function OrdersView() {
   // live orders of the wallet whose strays a sweep can return (the order lives on)
   const sweepableOrders = useMemo(() => new Set(rows.filter((r) => r.live && r.canCancel).map((r) => r.id)), [rows]);
 
+  // the registry's token: what an action (merge, amend) plans with; `shownToken` is what a row shows (app/token-display.ts: a token the registry
+  // does not list is shown on this browser's issuance of it, else on 8 assumed decimals, marked)
   const tokenOf = (id: string | null) => (id ? services.registry.byCovenantId.get(id) : undefined);
-  // an amount of a token (base units) as its token amount with the ticker; base units when the token is unknown
+  const shownToken = (id: string | null) => displayToken(services.registry, services.config.network, id);
+  // an amount of a token (base units) as its token amount with the ticker
   const coverText = (token: Hex, amount: bigint): string => {
-    const tk = tokenOf(token);
-    return tk ? `${formatUnits(amount, tk.decimals, { group: ',' })} ${tk.ticker}` : amount.toString();
+    const tk = shownToken(token)!;
+    return `${formatUnits(amount, tk.decimals, { group: ',' })} ${tk.ticker}`;
   };
   const strays = d?.strays ?? [];
   // a failed stray fetch is passed on as "unknown" (null): a record-path cancel then warns instead of silently abandoning strays
@@ -302,7 +306,7 @@ export function OrdersView() {
         const part = filledRows.slice(i, i + 4);
         const lists = await Promise.all(part.map((r) => loadEvents(r.id, ctl.signal)));
         part.forEach((r, k) => {
-          const tk = tokenOf(r.token);
+          const tk = shownToken(r.token);
           out.push({ info: { ticker: tk?.ticker ?? r.token ?? '', side: r.side, type: r.typeKey, ...(tk ? { decimals: tk.decimals } : {}) }, history: fillHistory(lists[k]!, r.scale) });
         });
       }
@@ -487,14 +491,14 @@ export function OrdersView() {
           {shown.map((item) =>
             item.type === 'single' ? (
               rowById.get(item.id) ? (
-                <OrderRow key={item.id} row={rowById.get(item.id)!} token={tokenOf(rowById.get(item.id)!.token)} canSign={canSign} actions={actions} busy={busy === item.id} {...(loadEvents ? { loadEvents } : {})} />
+                <OrderRow key={item.id} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token)} canSign={canSign} actions={actions} busy={busy === item.id} {...(loadEvents ? { loadEvents } : {})} />
               ) : null
             ) : (
               <PositionCard
                 key={item.id}
                 position={item.position}
                 rows={rowById}
-                tokenOf={tokenOf}
+                tokenOf={shownToken}
                 canSign={canSign}
                 actions={actions}
                 onCancelPosition={onCancelPosition}

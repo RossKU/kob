@@ -65,12 +65,20 @@ const SHOWN_AS_LINES = new Set<string>(['payment-out', 'transfer-out']);
  * A token's label in the frame: the app's ticker hint (a label only: the app chooses it) next to 8 + 8 hex of the covenant id the transaction
  * itself carries (a 4 + 4 fragment is 32 bits, which a token made to match it can copy).
  */
-const tokenName = (covenantId: Hex, hint: TokenHint | undefined): string => (hint ? `${hint.ticker} (${longId(covenantId)})` : t('signer.net.token', { id: longId(covenantId) }));
+const tokenName = (covenantId: Hex, hint: TokenHint | undefined): string => {
+  if (!hint) return t('signer.net.token', { id: longId(covenantId) });
+  // a token the registry does not list (app/token-display.ts): its issued ticker, else its covenant id; marked
+  if (hint.source === 'assumed') return t('signer.net.tokenAssumed', { id: longId(covenantId), decimals: hint.decimals });
+  if (hint.source === 'issued') return t('signer.net.tokenIssued', { ticker: hint.ticker, id: longId(covenantId) });
+  return `${hint.ticker} (${longId(covenantId)})`;
+};
 
 /** A TokenRef from the app's hint (ticker and decimals are labels; without a hint amounts stay in base units). */
 function refOfHint(covenantId: Hex, hints: TokenHint[]): TokenRef {
   const h = hints.find((x) => x.covenantId === covenantId);
-  return { covenantId, ticker: h?.ticker ?? null, decimals: h?.decimals ?? null, display: tokenName(covenantId, h), inRegistry: false, tradable: false };
+  // an assumed token's amounts carry its covenant id as their unit
+  const ticker = h ? (h.ticker || longId(covenantId)) : null;
+  return { covenantId, ticker, decimals: h?.decimals ?? null, display: tokenName(covenantId, h), inRegistry: false, tradable: false };
 }
 
 /** The hints as the confirmation model's registry lookup (a pair order's quote token B): ticker and decimals only. */
@@ -121,7 +129,7 @@ function flippedSummary(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWa
   const d = o.description;
   const kind = baseKind(d.kind);
   if (!hint?.inverted || d.pair || d.entry || (kind !== 'KobAsk' && kind !== 'KobBid') || d.scale <= 0n || d.price <= 0n) return null;
-  const T = hint.ticker;
+  const T = hint.ticker || longId(d.tokenCovId);
   const dec = hint.decimals;
   const scale = d.scale;
   const decays = !!d.auction && d.auction.slope > 0n && d.auction.priceEnd > 0n;

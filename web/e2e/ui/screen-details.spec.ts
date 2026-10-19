@@ -207,10 +207,13 @@ test('closing a buy-first position that bought nothing yet does not offer to sel
 test('on a phone the auto-refund checkbox keeps its text beside it', async ({ appPage: page, mock }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await openMarket(page, mock, { route: '/orders' });
-  const box = await page.getByTestId('orders-auto-refund').boundingBox();
-  const text = await page.getByTestId('orders-auto-refund-label').locator('span').boundingBox();
-  expect(text!.x).toBeGreaterThan(box!.x + box!.width - 1);
-  expect(Math.abs(text!.y - box!.y)).toBeLessThan(12);
+  // both read in one frame (the list and the balances above it arrive while the page settles and move the line down between two reads)
+  const where = () => page.evaluate(() => {
+    const b = document.querySelector('[data-testid="orders-auto-refund"]')!.getBoundingClientRect();
+    const l = document.querySelector('[data-testid="orders-auto-refund-label"] span')!.getBoundingClientRect();
+    return { beside: l.x > b.x + b.width - 1, sameLine: Math.abs(l.y - b.y) < 12 };
+  });
+  await expect.poll(where).toEqual({ beside: true, sameLine: true });
 });
 
 test('without the registry the banner matches what the page does: indexer tokens trade as unlisted tokens', async ({ appPage: page, mock }) => {

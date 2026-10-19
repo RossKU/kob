@@ -1,8 +1,9 @@
 import { useMemo } from 'preact/hooks';
 import { useServices } from '../../app/context';
+import { displayToken } from '../../app/token-display';
+import { TokenNote } from '../market/TokenNote';
 import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
-import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { Amount, Banner, Button, ErrorBanner, KeyValueList, Loading, Section, Table, TableMessage, unitsFraction, useAsync } from '../kit';
 import { formatUnits } from '../../kob/units';
@@ -49,7 +50,7 @@ export function BalancesPanel(props: {
   // fixed decimals per column: the finest amount of the column, so every row shows the same number of decimals (decimal points line up)
   // (a token of unknown decimals, no registry entry, shows its base units with no fraction)
   const cols = useMemo(
-    () => balanceColumnFractions(combined?.tokens ?? [], (tok) => registry.byCovenantId.get(tok)?.decimals, unitsFraction),
+    () => balanceColumnFractions(combined?.tokens ?? [], (tok) => displayToken(registry, services.config.network, tok)?.decimals, unitsFraction),
     [combined, registry],
   );
 
@@ -88,17 +89,19 @@ export function BalancesPanel(props: {
               ) : (
                 combined.tokens.map((b) => {
                   const info = registry.byCovenantId.get(b.token);
-                  const d = info?.decimals ?? 0;
-                  // unknown decimals: base units, no fraction padding (see balanceColumnFractions)
-                  const fr = (col: number) => (info ? col : 0);
-                  const baseUnits = info ? null : <span class="small muted" data-testid="balance-base-units"> {t('common.baseUnits')}</span>;
+                  // shown in whole tokens also without a registry entry (app/token-display.ts: this browser's issuance, else 8 assumed decimals)
+                  const shown = displayToken(registry, services.config.network, b.token)!;
+                  const d = shown.decimals;
+                  const fr = (col: number) => col;
+                  const baseUnits = null;
                   const program = info?.program ?? free.data!.programs.get(b.token) ?? null;
                   return (
                     <tr key={b.token} data-testid={`balance-row-${b.token}`}>
                       <td>
                         <a href={routeToHash(tokenRoute(b.token))} data-testid="balance-market">
-                          {info ? tokenLabel(info) : t('orders.unknownToken', { id: longId(b.token) })}
+                          {tokenLabel(shown)}
                         </a>
+                        <TokenNote token={shown} />
                         {unreviewedProgram(program) ? (
                           <span class="small muted" title={t('orders.balances.unreviewedHint', { program: program ?? '?' })} data-testid="balance-unreviewed">{' '}({t('orders.balances.unreviewed')})</span>
                         ) : null}

@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
+import { displayToken } from '../../app/token-display';
+import type { TrackedToken } from '../../data/token-tracker';
+import { TokenNote } from '../market/TokenNote';
 import { readSettings, saveSettings, type ConfigWarning, type NetworkName } from '../../config';
 import { t } from '../../i18n';
 import { version as appVersion } from '../../../package.json';
@@ -169,6 +172,18 @@ function RegistrySummary() {
   );
 }
 
+/** A tracked token output's amount in whole tokens with its name (app/token-display.ts: also for a token the registry does not list, marked). */
+function TrackedAmount(props: { utxo: TrackedToken }) {
+  const { registry, config } = useServices();
+  const tk = displayToken(registry, config.network, props.utxo.tokenCovId)!;
+  return (
+    <>
+      <Amount kind="token" value={BigInt(props.utxo.state.amount)} decimals={tk.decimals} unit={tk.ticker} group />
+      <TokenNote token={tk} />
+    </>
+  );
+}
+
 function TrackerSettings() {
   const { tracker, config } = useServices();
   const wallet = useWallet();
@@ -213,7 +228,7 @@ function TrackerSettings() {
             list.map((x) => (
               <tr key={`${x.transactionId}:${x.index}`} data-testid="tracker-row">
                 <td><CopyText value={`${x.transactionId}:${x.index}`} head={8} tail={8} /></td>
-                <td class="right"><Amount kind="token" value={BigInt(x.state.amount)} decimals={0} unit={t('settings.tracker.baseUnits')} /></td>
+                <td class="right"><TrackedAmount utxo={x} /></td>
                 <td class="right">
                   <Button small variant="danger" onClick={() => (tracker.remove(pubkey, x.transactionId, x.index), setRev((n) => n + 1))}>{t('settings.tracker.remove')}</Button>
                 </td>
