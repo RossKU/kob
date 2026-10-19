@@ -194,7 +194,7 @@ test('errors surface as exceptions', () => {
   assert.equal(typeof kob.budgetFor('p2pk'), 'number');
 });
 
-test('token issuance plans a genesis as a BuiltTx and rejects rule violations', () => {
+test('token issuance plans a KCC-23 creation (preparation, then the genesis) as BuiltTxs and rejects rule violations', () => {
   const limits = JSON.parse(kob.issueLimits());
   assert.equal(limits.program, 'KCC20Ref');
   assert.equal(limits.maxTokenOutputs, 3);
@@ -211,7 +211,15 @@ test('token issuance plans a genesis as a BuiltTx and rejects rule violations', 
   assert.equal(res.token.outputs.length, 2);
   assert.equal(res.token.program, 'KCC20Ref');
   assert.throws(() => kob.issue(s({ ...spec, program: '8x8-prototype' })), /prototype/);
-  assert.equal(res.built.tx.outputs.length, 3);
+  // the preparation declares the metadata (codec byte 0x00, then JSON) and pays output 0 (the genesis's carriers and fee) and change
+  assert.equal(res.prep.tx.outputs.length, 2);
+  assert.ok(res.prep.tx.payload.startsWith('007b'));
+  assert.equal(res.prep.sign.length, 1);
+  // the genesis spends that output 0 alone: the two token outputs, no change
+  assert.equal(res.built.tx.inputs.length, 1);
+  assert.equal(res.built.tx.inputs[0].index, 0);
+  assert.equal(res.built.tx.inputs[0].utxo.amount, res.prep.tx.outputs[0].value);
+  assert.equal(res.built.tx.outputs.length, 2);
   assert.equal(res.built.sign.length, 1);
   assert.equal(res.built.covenants[0].covenantId, res.token.covenantId);
   assert.equal(res.docs.registryEntry.status, 'pending-review');

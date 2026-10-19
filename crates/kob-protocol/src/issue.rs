@@ -56,8 +56,8 @@ use sha2::{Digest, Sha256};
 use silverscript_abi::{encode_contract_entry_sig_script, ArtifactValue, SilAbiArtifact};
 
 use crate::artifacts::parse_artifact;
-use crate::kcc23;
 use crate::kcc20::{ISSUE_MAX_TOKEN_INPUTS, ISSUE_MAX_TOKEN_OUTPUTS};
+use crate::kcc23;
 
 /// KCC-20 owner scheme ids: the canonical KCC-2 authority-scheme bytes ([`crate::kcc2`]).
 pub const SCHEME_P2PK_SCHNORR: u8 = crate::kcc2::P2PK_SCHNORR;
@@ -799,8 +799,10 @@ impl GenesisDraft {
         let inputs = spec.funding.iter().map(|f| TransactionInput::new_with_compute_budget(f.outpoint, vec![], 0, budget)).collect();
         let change_spk = spec.change_spk.clone().unwrap_or_else(|| p2pk_spk(&spec.funding[0].owner_pubkey));
         // token outputs and the genesis id (covers index, value and spk of every output of the group)
-        let mut outputs: Vec<TransactionOutput> =
-            states.iter().map(|s| TransactionOutput { value: spec.carrier, script_public_key: program.spk(s), covenant: None }).collect();
+        let mut outputs: Vec<TransactionOutput> = states
+            .iter()
+            .map(|s| TransactionOutput { value: spec.carrier, script_public_key: program.spk(s), covenant: None })
+            .collect();
         let covenant_id = covenant_id(spec.funding[0].outpoint, outputs.iter().enumerate().map(|(i, o)| (i as u32, o)));
         for o in outputs.iter_mut() {
             o.covenant = Some(CovenantBinding { authorizing_input: 0, covenant_id });
@@ -833,7 +835,13 @@ impl GenesisDraft {
 /// How the fee and the change of a plain spend are settled: `slack` = inputs minus the fixed outputs. With an explicit `fee` it is
 /// used as given (at least the floor of the shape it ends in); without one the floor is paid and the rest is change, unless the
 /// change would be below `dust`, in which case it is added to the fee. Returns `(fee, change)` or the funds needed.
-fn settle_fee(slack: u64, explicit: Option<u64>, min_with: u64, min_without: u64, dust: u64) -> std::result::Result<(u64, Option<u64>), SettleError> {
+fn settle_fee(
+    slack: u64,
+    explicit: Option<u64>,
+    min_with: u64,
+    min_without: u64,
+    dust: u64,
+) -> std::result::Result<(u64, Option<u64>), SettleError> {
     match explicit {
         Some(f) if f < min_without => Err(SettleError::FeeTooLow { fee: f, min: min_without }),
         Some(f) if f > slack => Err(SettleError::Short { need_over_fixed: f }),
@@ -1003,7 +1011,8 @@ pub fn build_creation(spec: &IssueSpec) -> Result<CreationPlan> {
     if spec.funding.iter().any(|f| f.owner_pubkey != maker) {
         return invalid("every funding UTXO of a creation must belong to the creator (the owner of the first one)");
     }
-    let carriers = spec.carrier.checked_mul(spec.holders.len() as u64).ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
+    let carriers =
+        spec.carrier.checked_mul(spec.holders.len() as u64).ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
 
     // the genesis fee: its floor without a change output (it spends exactly carriers + fee), or the explicit one
     let probe_outpoint = TransactionOutpoint { transaction_id: TransactionId::from_bytes([0u8; 32]), index: 0 };
@@ -1027,11 +1036,8 @@ pub fn build_creation(spec: &IssueSpec) -> Result<CreationPlan> {
     let change_spk = spec.change_spk.clone().unwrap_or_else(|| p2pk_spk(&maker));
     let total_in: u64 = spec.funding.iter().map(|f| f.amount).sum();
     let assemble = |change: Option<u64>, ss: &[u8]| -> Transaction {
-        let inputs = spec
-            .funding
-            .iter()
-            .map(|f| TransactionInput::new_with_compute_budget(f.outpoint, ss.to_vec(), 0, budget))
-            .collect();
+        let inputs =
+            spec.funding.iter().map(|f| TransactionInput::new_with_compute_budget(f.outpoint, ss.to_vec(), 0, budget)).collect();
         let mut outputs = vec![TransactionOutput { value, script_public_key: p2pk_spk(&maker), covenant: None }];
         if let Some(v) = change {
             outputs.push(TransactionOutput { value: v, script_public_key: change_spk.clone(), covenant: None });
@@ -1046,14 +1052,13 @@ pub fn build_creation(spec: &IssueSpec) -> Result<CreationPlan> {
     if total_in < value {
         return Err(IssueError::InsufficientFunds { need: value.saturating_add(prep_floor(false)), have: total_in });
     }
-    let (prep_fee, change_value) =
-        match settle_fee(total_in - value, None, prep_floor(true), prep_floor(false), dust_bound(spec)) {
-            Ok(x) => x,
-            Err(SettleError::Short { need_over_fixed }) => {
-                return Err(IssueError::InsufficientFunds { need: value.saturating_add(need_over_fixed), have: total_in })
-            }
-            Err(SettleError::FeeTooLow { fee, min }) => return Err(IssueError::FeeTooLow { fee, min }),
-        };
+    let (prep_fee, change_value) = match settle_fee(total_in - value, None, prep_floor(true), prep_floor(false), dust_bound(spec)) {
+        Ok(x) => x,
+        Err(SettleError::Short { need_over_fixed }) => {
+            return Err(IssueError::InsufficientFunds { need: value.saturating_add(need_over_fixed), have: total_in })
+        }
+        Err(SettleError::FeeTooLow { fee, min }) => return Err(IssueError::FeeTooLow { fee, min }),
+    };
     if change_value.is_none() && prep_fee > prep_floor(false) {
         warnings.push(format!("change of {} sompi is below the dust bound and is added to the fee", prep_fee - prep_floor(false)));
     }
@@ -1218,7 +1223,8 @@ impl CreationPlan {
             return fail("the genesis input's entry is not the preparation's output 0".into());
         }
         let report = g.verify()?;
-        let text = kcc23::verify_binding(&p.tx, &g.tx, g.covenant_id).map_err(|e| IssueError::Verify(format!("KCC-23 binding: {e}")))?;
+        let text =
+            kcc23::verify_binding(&p.tx, &g.tx, g.covenant_id).map_err(|e| IssueError::Verify(format!("KCC-23 binding: {e}")))?;
         if text != p.metadata.json() {
             return fail("the bound declaration is not the declared metadata".into());
         }
@@ -1927,7 +1933,9 @@ mod tests {
         assert_eq!(p.tx.payload[0], 0x00);
         let json = std::str::from_utf8(&p.tx.payload[1..]).unwrap().to_string();
         assert!(
-            json.starts_with(r#"{"name":"Test Token","symbol":"TEST","decimals":8,"description":"A test token","logo":"ipfs://bafytest""#),
+            json.starts_with(
+                r#"{"name":"Test Token","symbol":"TEST","decimals":8,"description":"A test token","logo":"ipfs://bafytest""#
+            ),
             "{json}"
         );
         assert!(json.ends_with(r#""x":"https://x.com/example","telegram":"https://t.me/example_chat"}"#), "{json}");

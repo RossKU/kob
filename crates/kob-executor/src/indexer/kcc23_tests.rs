@@ -138,9 +138,7 @@ async fn an_invalid_payload_or_unprovable_fields_make_no_candidate() {
     locked.lock_time = 7;
     let geneses: Vec<Transaction> =
         txs.iter().chain([&v0, &locked]).enumerate().map(|(i, p)| kcc23_genesis(p, 0, 100 + i as u64).0).collect();
-    hs.node.push_block(
-        txs.iter().map(|t| kcc23_wire(t, false)).chain([kcc23_wire(&v0, false), kcc23_wire(&locked, false)]).collect(),
-    );
+    hs.node.push_block(txs.iter().map(|t| kcc23_wire(t, false)).chain([kcc23_wire(&v0, false), kcc23_wire(&locked, false)]).collect());
     hs.sync().await;
     assert_eq!(count(&hs, "kcc23_candidates"), 0);
     push(&hs, geneses.iter().collect(), false).await;
@@ -293,5 +291,3 @@ fn the_declaration_section_in_the_record_log() {
     assert_eq!(decode_tx(&encode_tx(&ptx(&prep))).unwrap(), ptx(&prep));
     assert!(decode_tx(&[encode_tx(&ptx(&prep)), vec![0]].concat()).is_err());
 }
-
-

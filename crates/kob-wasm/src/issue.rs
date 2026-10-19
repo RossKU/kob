@@ -178,7 +178,9 @@ fn check_display(r: &IssueRequest) -> R<()> {
             "invalid parameter: name must be 1..={MAX_NAME_CHARS} printable characters (no control, zero-width or bidi characters)"
         ));
     }
-    for (label, v) in [("description", &r.description), ("website", &r.website), ("icon", &r.icon), ("x", &r.x), ("telegram", &r.telegram)] {
+    for (label, v) in
+        [("description", &r.description), ("website", &r.website), ("icon", &r.icon), ("x", &r.x), ("telegram", &r.telegram)]
+    {
         if let Some(v) = v {
             if v.chars().count() > MAX_DISPLAY_CHARS || has_bad_char(v) {
                 return Err(format!(
@@ -199,7 +201,9 @@ fn check_display(r: &IssueRequest) -> R<()> {
 /// A social account of the request in its canonical address, `None` when absent or blank.
 fn social(v: &Option<String>, label: &str, canonical: fn(&str) -> Option<String>) -> R<Option<String>> {
     match v.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => canonical(s).map(Some).ok_or_else(|| format!("invalid parameter: {label} {s:?} is not a handle or the account's address")),
+        Some(s) => {
+            canonical(s).map(Some).ok_or_else(|| format!("invalid parameter: {label} {s:?} is not a handle or the account's address"))
+        }
         None => Ok(None),
     }
 }

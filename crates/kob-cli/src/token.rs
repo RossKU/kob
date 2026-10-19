@@ -335,8 +335,10 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
             }
             "--telegram" => {
                 let v = val("--telegram")?;
-                a.telegram =
-                    Some(kcc23::telegram_url(&v).ok_or_else(|| format!("--telegram: `{v}` is not a Telegram handle or https://t.me/ address"))?);
+                a.telegram = Some(
+                    kcc23::telegram_url(&v)
+                        .ok_or_else(|| format!("--telegram: `{v}` is not a Telegram handle or https://t.me/ address"))?,
+                );
             }
             "--website" => a.website = Some(val("--website")?),
             "--network" => a.network = val("--network")?,
@@ -482,7 +484,10 @@ fn issue(args: &[String]) -> Result<(), String> {
     let report = plan.verify().map_err(|e| e.to_string())?;
     let g = &plan.genesis;
 
-    println!("token        {} ({}), {} decimals, fixed supply {} base units", g.spec.name, g.spec.ticker, g.spec.decimals, g.spec.supply);
+    println!(
+        "token        {} ({}), {} decimals, fixed supply {} base units",
+        g.spec.name, g.spec.ticker, g.spec.decimals, g.spec.supply
+    );
     println!("covenant id  {}", hex(g.covenant_id.as_bytes().as_slice()));
     println!(
         "template     {} {}  (prefix {} B, suffix {} B, {}/{} slots)",
@@ -651,7 +656,11 @@ pub fn run_resume(args: &[String]) -> i32 {
         };
         let (prep, genesis, ids) = (read("preparation_tx.json")?, read("genesis_tx.json")?, read("creation.json")?);
         let (prep_id, genesis_id) = (ids["preparation_txid"].as_str().unwrap_or(""), ids["genesis_txid"].as_str().unwrap_or(""));
-        let signed = |v: &Value| v["inputs"].as_array().is_some_and(|i| !i.is_empty() && i.iter().all(|x| x["signatureScript"].as_str().is_some_and(|s| !s.is_empty())));
+        let signed = |v: &Value| {
+            v["inputs"]
+                .as_array()
+                .is_some_and(|i| !i.is_empty() && i.iter().all(|x| x["signatureScript"].as_str().is_some_and(|s| !s.is_empty())))
+        };
         if !signed(&prep) || !signed(&genesis) {
             return Err("the saved transactions are not signed (a dry run without --key): issue again".into());
         }
@@ -812,10 +821,17 @@ mod tests {
         let sup: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("supply.json")).unwrap()).unwrap();
         assert_eq!(sup["total_supply"], "1000");
         let tx: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("genesis_tx.json")).unwrap()).unwrap();
-        assert_eq!(tx["outputs"].as_array().unwrap().len(), 2, "two token outputs, no change: the preparation output funds it exactly");
+        assert_eq!(
+            tx["outputs"].as_array().unwrap().len(),
+            2,
+            "two token outputs, no change: the preparation output funds it exactly"
+        );
         assert_ne!(tx["inputs"][0]["signatureScript"], "");
         let prep: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("preparation_tx.json")).unwrap()).unwrap();
-        assert!(prep["payload"].as_str().unwrap().starts_with("007b226e616d65223a2254657374222c2273796d626f6c223a2254455354222c22646563696d616c73223a38"));
+        assert!(prep["payload"]
+            .as_str()
+            .unwrap()
+            .starts_with("007b226e616d65223a2254657374222c2273796d626f6c223a2254455354222c22646563696d616c73223a38"));
         let ids: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("creation.json")).unwrap()).unwrap();
         assert_eq!(tx["inputs"][0]["previousOutpoint"]["transactionId"], ids["preparation_txid"]);
         assert_eq!(tx["inputs"][0]["previousOutpoint"]["index"], 0);
@@ -846,11 +862,21 @@ mod tests {
 
     #[test]
     fn x_and_telegram_take_handles() {
-        let a = parse_issue_args(&v(&format!("{} --supply 1 --x @kaspa --telegram https://telegram.me/kaspa_chat --logo ipfs://cid", base()))).unwrap();
-        assert_eq!((a.x.as_deref(), a.telegram.as_deref(), a.icon.as_deref()), (Some("https://x.com/kaspa"), Some("https://t.me/kaspa_chat"), Some("ipfs://cid")));
+        let a = parse_issue_args(&v(&format!(
+            "{} --supply 1 --x @kaspa --telegram https://telegram.me/kaspa_chat --logo ipfs://cid",
+            base()
+        )))
+        .unwrap();
+        assert_eq!(
+            (a.x.as_deref(), a.telegram.as_deref(), a.icon.as_deref()),
+            (Some("https://x.com/kaspa"), Some("https://t.me/kaspa_chat"), Some("ipfs://cid"))
+        );
         assert!(parse_issue_args(&v(&format!("{} --supply 1 --x https://evil.example/kaspa", base()))).is_err());
         let s = to_spec(&a).unwrap();
-        assert!(s.token_metadata().json().ends_with(r#""logo":"ipfs://cid","x":"https://x.com/kaspa","telegram":"https://t.me/kaspa_chat"}"#));
+        assert!(s
+            .token_metadata()
+            .json()
+            .ends_with(r#""logo":"ipfs://cid","x":"https://x.com/kaspa","telegram":"https://t.me/kaspa_chat"}"#));
     }
 
     /// A submitting run sends the preparation, then the genesis spending it; `kob token resume` sends the saved pair again.

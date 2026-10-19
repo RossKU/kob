@@ -296,19 +296,23 @@ fn text_ok(s: &str, max: usize) -> bool {
 
 /// `https://x.com/<handle>` with a handle of 1..=15 of `A-Z a-z 0-9 _` (the canonical form KOB writes).
 pub fn is_x_url(s: &str) -> bool {
-    s.strip_prefix("https://x.com/").is_some_and(|h| (1..=15).contains(&h.len()) && h.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+    s.strip_prefix("https://x.com/")
+        .is_some_and(|h| (1..=15).contains(&h.len()) && h.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
 }
 
 /// `https://t.me/<handle>` with a handle of 5..=32 of `A-Z a-z 0-9 _` (the canonical form KOB writes).
 pub fn is_telegram_url(s: &str) -> bool {
-    s.strip_prefix("https://t.me/").is_some_and(|h| (5..=32).contains(&h.len()) && h.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+    s.strip_prefix("https://t.me/")
+        .is_some_and(|h| (5..=32).contains(&h.len()) && h.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
 }
 
 fn handle_of<'a>(input: &'a str, hosts: &[&str], len: std::ops::RangeInclusive<usize>) -> Option<&'a str> {
     let s = input.trim();
     let h = hosts
         .iter()
-        .find_map(|host| s.strip_prefix("https://").and_then(|r| r.strip_prefix("www.").or(Some(r))).and_then(|r| r.strip_prefix(host)))
+        .find_map(|host| {
+            s.strip_prefix("https://").and_then(|r| r.strip_prefix("www.").or(Some(r))).and_then(|r| r.strip_prefix(host))
+        })
         .map(|r| r.strip_suffix('/').unwrap_or(r))
         .or_else(|| (!s.contains('/')).then(|| s.strip_prefix('@').unwrap_or(s)))?;
     (len.contains(&h.len()) && h.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')).then_some(h)
@@ -370,7 +374,9 @@ impl TokenMetadata {
         }
         if let Some(d) = &self.description {
             if !text_ok(d, MAX_TEXT_CHARS) {
-                return Err(format!("description must be 1..={MAX_TEXT_CHARS} characters without control, zero-width or bidi characters"));
+                return Err(format!(
+                    "description must be 1..={MAX_TEXT_CHARS} characters without control, zero-width or bidi characters"
+                ));
             }
         }
         if self.logo.as_deref().is_some_and(|l| !link_ok(l, true)) {
@@ -606,8 +612,13 @@ impl ProofTx {
                 .iter()
                 .map(|o| ProofOutput {
                     value: o.value,
-                    script_public_key: ProofSpk { version: o.script_public_key.version(), script: o.script_public_key.script().to_vec() },
-                    covenant: o.covenant.map(|c| ProofCovenant { authorizing_input: c.authorizing_input, covenant_id: c.covenant_id.as_bytes() }),
+                    script_public_key: ProofSpk {
+                        version: o.script_public_key.version(),
+                        script: o.script_public_key.script().to_vec(),
+                    },
+                    covenant: o
+                        .covenant
+                        .map(|c| ProofCovenant { authorizing_input: c.authorizing_input, covenant_id: c.covenant_id.as_bytes() }),
                 })
                 .collect(),
             lock_time: tx.lock_time,
@@ -621,25 +632,44 @@ impl ProofTx {
     pub fn to_tx(&self) -> Result<Transaction, String> {
         use kaspa_consensus_core::subnets::SubnetworkId;
         use kaspa_consensus_core::tx::{CovenantBinding, ScriptPublicKey, TransactionInput, TransactionOutpoint, TransactionOutput};
-        let subnet: [u8; 20] =
-            self.subnetwork_id.as_slice().try_into().map_err(|_| format!("subnetwork id of {} bytes, 20 expected", self.subnetwork_id.len()))?;
+        let subnet: [u8; 20] = self
+            .subnetwork_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| format!("subnetwork id of {} bytes, 20 expected", self.subnetwork_id.len()))?;
         let inputs = self
             .inputs
             .iter()
             .map(|i| {
-                TransactionInput::new_with_compute_budget(TransactionOutpoint::new(Hash::from_bytes(i.transaction_id), i.index), vec![], i.sequence, 0)
+                TransactionInput::new_with_compute_budget(
+                    TransactionOutpoint::new(Hash::from_bytes(i.transaction_id), i.index),
+                    vec![],
+                    i.sequence,
+                    0,
+                )
             })
             .collect();
         let outputs = self
             .outputs
             .iter()
             .map(|o| {
-                let mut out = TransactionOutput::new(o.value, ScriptPublicKey::from_vec(o.script_public_key.version, o.script_public_key.script.clone()));
+                let mut out = TransactionOutput::new(
+                    o.value,
+                    ScriptPublicKey::from_vec(o.script_public_key.version, o.script_public_key.script.clone()),
+                );
                 out.covenant = o.covenant.as_ref().map(|c| CovenantBinding::new(c.authorizing_input, Hash::from_bytes(c.covenant_id)));
                 out
             })
             .collect();
-        Ok(Transaction::new(self.version, inputs, outputs, self.lock_time, SubnetworkId::from_bytes(subnet), self.gas, self.payload.clone()))
+        Ok(Transaction::new(
+            self.version,
+            inputs,
+            outputs,
+            self.lock_time,
+            SubnetworkId::from_bytes(subnet),
+            self.gas,
+            self.payload.clone(),
+        ))
     }
 }
 
@@ -777,7 +807,9 @@ mod tests {
         };
         let p = full.payload().unwrap();
         assert_eq!(p[0], 0);
-        assert!(std::str::from_utf8(&p[1..]).unwrap().starts_with(r#"{"name":"Example Token","symbol":"EXT","decimals":8,"description":"#));
+        assert!(std::str::from_utf8(&p[1..])
+            .unwrap()
+            .starts_with(r#"{"name":"Example Token","symbol":"EXT","decimals":8,"description":"#));
         let d = TokenDeclaration::from_payload(&p).unwrap();
         assert_eq!(
             (d.name.as_deref(), d.symbol.as_deref(), d.decimals, d.description.as_deref()),
@@ -825,14 +857,26 @@ mod tests {
 
     #[test]
     fn a_reader_takes_each_field_on_its_own() {
-        let d = TokenDeclaration::from_payload(br#" {"name":"N","symbol":"S","decimals":8.5,"logo":"javascript:alert(1)","x":"https://x.com/ok","extra":[1]}"#.as_slice())
-            .unwrap_err();
+        let d = TokenDeclaration::from_payload(
+            br#" {"name":"N","symbol":"S","decimals":8.5,"logo":"javascript:alert(1)","x":"https://x.com/ok","extra":[1]}"#.as_slice(),
+        )
+        .unwrap_err();
         assert_eq!(d, Kcc23Error::UnknownCodec(b' '));
         let p = br#"{"name":"N","symbol":"S Y","decimals":8.5,"logo":"javascript:alert(1)","x":"https://x.com/ok","extra":[1]}"#;
         let d = TokenDeclaration::from_payload(&[&[0u8][..], p].concat()).unwrap();
-        assert_eq!((d.name.as_deref(), d.symbol, d.decimals, d.logo, d.x.as_deref()), (Some("N"), None, None, None, Some("https://x.com/ok")));
+        assert_eq!(
+            (d.name.as_deref(), d.symbol, d.decimals, d.logo, d.x.as_deref()),
+            (Some("N"), None, None, None, Some("https://x.com/ok"))
+        );
         assert_eq!(d.issues.len(), 3, "{:?}", d.issues);
-        for (json, dec) in [(r#"{"decimals":0}"#, Some(0)), (r#"{"decimals":18}"#, Some(18)), (r#"{"decimals":19}"#, None), (r#"{"decimals":-1}"#, None), (r#"{"decimals":"8"}"#, None), (r#"{}"#, None)] {
+        for (json, dec) in [
+            (r#"{"decimals":0}"#, Some(0)),
+            (r#"{"decimals":18}"#, Some(18)),
+            (r#"{"decimals":19}"#, None),
+            (r#"{"decimals":-1}"#, None),
+            (r#"{"decimals":"8"}"#, None),
+            (r#"{}"#, None),
+        ] {
             let d = TokenDeclaration::from_payload(&encode(json).unwrap()).unwrap();
             assert_eq!(d.decimals, dec, "{json}");
         }
@@ -849,10 +893,26 @@ mod tests {
     fn binding_vector_and_mutations() {
         let payload = encode(r#"{"name":"Example Token","symbol":"EXT","decimals":8}"#).unwrap();
         let input = |txid: Hash, i: u32| TransactionInput::new_with_compute_budget(TransactionOutpoint::new(txid, i), vec![], 0, 0);
-        let prep = Transaction::new(1, vec![input(Hash::from_bytes([0x11; 32]), 0)], vec![TransactionOutput::new(100_000_000, spk())], 0, SUBNETWORK_ID_NATIVE, 0, payload);
+        let prep = Transaction::new(
+            1,
+            vec![input(Hash::from_bytes([0x11; 32]), 0)],
+            vec![TransactionOutput::new(100_000_000, spk())],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            payload,
+        );
         let prep_id = tx_id(&prep);
         assert_eq!(prep_id.to_string(), "206a0c31dbe45384b86de451a177fd7c8e986d278f2a86724d941937443113ef");
-        let mut genesis = Transaction::new(1, vec![input(prep_id, 0)], vec![TransactionOutput::new(90_000_000, spk())], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+        let mut genesis = Transaction::new(
+            1,
+            vec![input(prep_id, 0)],
+            vec![TransactionOutput::new(90_000_000, spk())],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
         let id = covenant_id(genesis.inputs[0].previous_outpoint, [(0u32, &genesis.outputs[0])].into_iter());
         assert_eq!(id.to_string(), "c86366cec738e9a1578b2d871ee493dcaabfd79156810f13f3b62429859e394e");
         genesis.outputs[0].covenant = Some(CovenantBinding::new(0, id));
@@ -899,6 +959,9 @@ mod tests {
         let mut fmt = back;
         fmt.format = "x".into();
         assert!(fmt.verify().is_err());
-        assert!(serde_json::from_str::<LaunchProof>(&text.replace("\"gas\"", "\"extra\":1,\"gas\"")).is_err(), "unknown fields refused");
+        assert!(
+            serde_json::from_str::<LaunchProof>(&text.replace("\"gas\"", "\"extra\":1,\"gas\"")).is_err(),
+            "unknown fields refused"
+        );
     }
 }

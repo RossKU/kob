@@ -143,7 +143,9 @@ pub async fn token_declaration(State(app): State<Arc<App>>, Path(id): Path<Strin
     let id = parse_hash("covenant_id", &id)?;
     match app.state.pool.with_light(move |c| crate::indexer::kcc23::proof_json(c, &id)).await? {
         // stored as `serde_json::to_string(&proof)`: served as it is
-        Some(json) => Ok(([(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"))], json).into_response()),
+        Some(json) => {
+            Ok(([(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"))], json).into_response())
+        }
         None => Err(ApiError::not_found("no KCC-23 declaration for this covenant id")),
     }
 }

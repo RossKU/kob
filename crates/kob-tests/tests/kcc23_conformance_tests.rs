@@ -14,7 +14,9 @@
 use kaspa_consensus_core::hashing::covenant_id::covenant_id;
 use kaspa_consensus_core::hashing::tx::{id as tx_id, payload_digest, transaction_v1_rest_preimage, v1_rest_digest};
 use kaspa_consensus_core::subnets::SubnetworkId;
-use kaspa_consensus_core::tx::{CovenantBinding, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput};
+use kaspa_consensus_core::tx::{
+    CovenantBinding, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput,
+};
 use kaspa_consensus_core::Hash;
 use kob_protocol::kcc23::{self, BindingError, TokenDeclaration, TokenMetadata};
 use serde_json::Value;
@@ -61,7 +63,10 @@ fn tx(j: &Value) -> Transaction {
         .iter()
         .map(|o| {
             let spk = &o["script_public_key"];
-            let mut out = TransactionOutput::new(num(&o["value"]), ScriptPublicKey::from_vec(num(&spk["version"]) as u16, hx(&spk["script_hex"])));
+            let mut out = TransactionOutput::new(
+                num(&o["value"]),
+                ScriptPublicKey::from_vec(num(&spk["version"]) as u16, hx(&spk["script_hex"])),
+            );
             if let Some(c) = o["covenant"].as_object() {
                 out.covenant = Some(CovenantBinding::new(num(&c["authorizing_input"]) as u16, hash(&c["covenant_id"])));
             }
@@ -85,7 +90,11 @@ fn tx(j: &Value) -> Transaction {
 #[test]
 fn vendored_file_is_the_upstream_blob() {
     let digest = Sha256::digest(VECTORS.as_bytes());
-    assert_eq!(encode_hex(&digest), VECTORS_SHA256, "vendored conformance.json drifted from kaspanet/kccs 1516a6c (see PROVENANCE.md)");
+    assert_eq!(
+        encode_hex(&digest),
+        VECTORS_SHA256,
+        "vendored conformance.json drifted from kaspanet/kccs 1516a6c (see PROVENANCE.md)"
+    );
     let v = v();
     assert_eq!((num(&v["kcc"]), num(&v["format_version"])), (23, 1));
     assert_eq!(v["codec_prefix_hex"], "00");

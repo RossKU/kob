@@ -173,9 +173,12 @@ fn assert_refused(r: &Run, e: &Ed, stop_in: usize, ev: [u8; 32], tok: [u8; 32], 
     r.bad(e, stop_in);
 }
 
-/// The tokens whose commitment the evidence edit of a pair stop moves: A, and B when it is a KCC-20 token. (tag, token,
-/// the evidence order naming it in mode 0, in mode 1.)
-fn ext_targets(pb: TemplateId) -> Vec<(&'static str, [u8; 32], [u8; 32], [u8; 32])> {
+/// A token whose commitment the evidence edit of a pair stop moves: (tag, token, the evidence order naming it in mode 0,
+/// in mode 1).
+type ExtTarget = (&'static str, [u8; 32], [u8; 32], [u8; 32]);
+
+/// The tokens whose commitment the evidence edit of a pair stop moves: A, and B when it is a KCC-20 token.
+fn ext_targets(pb: TemplateId) -> Vec<ExtTarget> {
     let mut v = vec![("", TOKEN_COV, cov(0x93), cov(0x93))];
     if pb.family() == kob_protocol::Family::Kcc20 {
         v.push(("B", TOKEN_B, cov(0x94), cov(0x93)));
@@ -396,7 +399,8 @@ fn aud_ext_kas_stops_refuse_evidence_of_another_extension_commitment() {
             let honest = Ed::new(&format!("PAUD-EXT-{id} honest {name}"), &bt);
             r.ok(&honest);
             let (si, sc, vi, vc) = kas_stop_and_evidence(&honest);
-            let mut e = honest.clone().named(&format!("NAUD-EXT-{id} {name} on evidence trading units of another extension commitment"));
+            let mut e =
+                honest.clone().named(&format!("NAUD-EXT-{id} {name} on evidence trading units of another extension commitment"));
             if update {
                 reext(&mut e, TOKEN_COV, OTHER_EXT, sc);
             } else {

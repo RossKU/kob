@@ -265,9 +265,7 @@ impl TxRecord {
     pub fn encode(&self, w: &mut Writer) {
         w.hash(&self.txid);
         w.var(
-            self.pos as u64
-                | if self.holds.is_empty() { 0 } else { HOLDS_FLAG }
-                | if self.kcc23.is_none() { 0 } else { KCC23_FLAG },
+            self.pos as u64 | if self.holds.is_empty() { 0 } else { HOLDS_FLAG } | if self.kcc23.is_none() { 0 } else { KCC23_FLAG },
         );
         w.bytes(&self.payload);
         w.var(self.inputs.len() as u64);
@@ -386,16 +384,7 @@ impl TxRecord {
     /// The record of a transaction relevant only for its KCC-23 declaration section: nothing of KOB, so no payload, inputs or
     /// outputs (the section carries the transaction's fields).
     pub fn declaration_only(txid: Hash32, pos: u32, d: DeclSection) -> TxRecord {
-        TxRecord {
-            txid,
-            pos,
-            payload: vec![],
-            inputs: vec![],
-            outputs: vec![],
-            tok_outs: vec![],
-            holds: vec![],
-            kcc23: Some(d),
-        }
+        TxRecord { txid, pos, payload: vec![], inputs: vec![], outputs: vec![], tok_outs: vec![], holds: vec![], kcc23: Some(d) }
     }
 
     pub fn encoded_len(&self) -> usize {

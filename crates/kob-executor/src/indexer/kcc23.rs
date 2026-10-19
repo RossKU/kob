@@ -198,7 +198,9 @@ pub fn proof_tx(tx: &Tx) -> Option<ProofTx> {
             let spk = &o.script_public_key.0;
             let version = u16::from_be_bytes([*spk.first()?, *spk.get(1)?]);
             let covenant = match &o.covenant {
-                Some(c) => Some(ProofCovenant { authorizing_input: u16::try_from(c.authorizing_input).ok()?, covenant_id: c.covenant_id.0 }),
+                Some(c) => {
+                    Some(ProofCovenant { authorizing_input: u16::try_from(c.authorizing_input).ok()?, covenant_id: c.covenant_id.0 })
+                }
                 None => None,
             };
             Some(ProofOutput { value: o.value, script_public_key: ProofSpk { version, script: spk[2..].to_vec() }, covenant })
@@ -260,10 +262,8 @@ pub fn bindings(genesis: &ProofTx, genesis_id: &Hash32, preps: &[ProofTx]) -> Ve
 }
 
 fn candidate(conn: &Connection, txid: &Hash32) -> DbResult<Option<ProofTx>> {
-    let b: Option<Vec<u8>> = conn
-        .prepare_cached("SELECT tx FROM kcc23_candidates WHERE txid = ?1")?
-        .query_row([&txid.0[..]], |r| r.get(0))
-        .optional()?;
+    let b: Option<Vec<u8>> =
+        conn.prepare_cached("SELECT tx FROM kcc23_candidates WHERE txid = ?1")?.query_row([&txid.0[..]], |r| r.get(0)).optional()?;
     Ok(b.and_then(|b| decode_tx(&b).ok()))
 }
 

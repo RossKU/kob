@@ -762,7 +762,8 @@ fn aud_rt_router_token_cancel_refuses_a_minter_or_borrow_enabled_lock() {
         let lock_utxo =
             Utxo { transaction_id: [0xc2; 32], index: 1, amount: fx::KAS, block_daa_score: 2_000, covenant_id: Some(fx::TOKEN_COV) };
         let lock = TokenUtxo { utxo: lock_utxo, state: TokenState::custody(fam, units, id, ext) };
-        let req = CancelIntent { actor: actor.into(), state: state.clone(), intent, lock: Some(lock.clone()), to: None, fee: fx::fee() };
+        let req =
+            CancelIntent { actor: actor.into(), state: state.clone(), intent, lock: Some(lock.clone()), to: None, fee: fx::fee() };
         let built = build_cancel_intent(&req, &intent_budgets).unwrap();
         let sigs = sign_locally(&built, &keys).unwrap();
         let (tx, entries) = finalize(&built, &sigs, FinalizeOptions { tighten_budgets: false }).unwrap().tx.to_tx().unwrap();

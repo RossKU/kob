@@ -1556,12 +1556,26 @@ pub fn kcc23_prep(salt: u64, payload: Vec<u8>) -> kaspa_consensus_core::tx::Tran
 
 /// The genesis of a covenant spending output `out` of `prep` (the authorising input 0, one covenant output carrying the
 /// KIP-20 genesis id of that outpoint and group), and the covenant id.
-pub fn kcc23_genesis(prep: &kaspa_consensus_core::tx::Transaction, out: u32, salt: u64) -> (kaspa_consensus_core::tx::Transaction, Hash32) {
+pub fn kcc23_genesis(
+    prep: &kaspa_consensus_core::tx::Transaction,
+    out: u32,
+    salt: u64,
+) -> (kaspa_consensus_core::tx::Transaction, Hash32) {
     use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
-    use kaspa_consensus_core::tx::{CovenantBinding as Binding, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput};
+    use kaspa_consensus_core::tx::{
+        CovenantBinding as Binding, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput,
+    };
     let spent = TransactionOutpoint::new(kaspa_consensus_core::Hash::from_bytes(kcc23_txid(prep).0), out);
     let spk = ScriptPublicKey::from_vec(0, [&[0xaa, 0x20][..], &h("kcc23-covenant", salt).0, &[0x87]].concat());
-    let mut g = Transaction::new(1, vec![TransactionInput::new(spent, vec![], 0, 0)], vec![TransactionOutput::new(90_000_000, spk)], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+    let mut g = Transaction::new(
+        1,
+        vec![TransactionInput::new(spent, vec![], 0, 0)],
+        vec![TransactionOutput::new(90_000_000, spk)],
+        0,
+        SUBNETWORK_ID_NATIVE,
+        0,
+        vec![],
+    );
     let id = kaspa_consensus_core::hashing::covenant_id::covenant_id(spent, [(0u32, &g.outputs[0])].into_iter());
     g.outputs[0].covenant = Some(Binding::new(0, id));
     (g, Hash32(id.as_bytes()))
@@ -1597,9 +1611,10 @@ pub fn kcc23_wire(t: &kaspa_consensus_core::tx::Transaction, full: bool) -> Tx {
             .map(|o| TxOutput {
                 value: o.value,
                 script_public_key: HexBytes([&o.script_public_key.version().to_be_bytes()[..], o.script_public_key.script()].concat()),
-                covenant: o
-                    .covenant
-                    .map(|c| CovenantBinding { authorizing_input: c.authorizing_input as u32, covenant_id: Hash32(c.covenant_id.as_bytes()) }),
+                covenant: o.covenant.map(|c| CovenantBinding {
+                    authorizing_input: c.authorizing_input as u32,
+                    covenant_id: Hash32(c.covenant_id.as_bytes()),
+                }),
             })
             .collect(),
         payload: HexBytes(t.payload.clone()),

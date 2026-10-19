@@ -160,7 +160,10 @@ fn normal_issuance_signs_finalizes_and_validates() {
     // the transaction id does not depend on the signatures
     let signed = sign_finalize_validate(&res);
     assert_eq!(signed["tx"]["id"], to_hex(&built.tx.id));
-    assert_eq!(signed["tx"]["inputs"][0]["utxo"]["blockDaaScore"], "0", "the preparation output has no DAA score before it is accepted");
+    assert_eq!(
+        signed["tx"]["inputs"][0]["utxo"]["blockDaaScore"], "0",
+        "the preparation output has no DAA score before it is accepted"
+    );
     let prep_signed = sign_finalize_validate_one(&res, "prep");
     assert_eq!(prep_signed["tx"]["inputs"][0]["utxo"]["blockDaaScore"], "123456");
 }
@@ -547,7 +550,10 @@ fn the_declaration_carries_the_optional_fields_in_canonical_form() {
         r#"{"name":"Test Token","symbol":"TEST","decimals":8,"description":"A test token","logo":"ipfs://bafytest","website":"https://example.org","x":"https://x.com/example","telegram":"https://t.me/example_chat"}"#
     );
     let d = &res["docs"]["registryEntry"]["display"];
-    assert_eq!((d["x"].as_str(), d["telegram"].as_str(), d["icon"].as_str()), (Some("https://x.com/example"), Some("https://t.me/example_chat"), Some("ipfs://bafytest")));
+    assert_eq!(
+        (d["x"].as_str(), d["telegram"].as_str(), d["icon"].as_str()),
+        (Some("https://x.com/example"), Some("https://t.me/example_chat"), Some("ipfs://bafytest"))
+    );
     sign_finalize_validate(&res);
     // a handle that is neither form, and a declaration over the payload limit, are refused with a reason
     let mut bad = request();
