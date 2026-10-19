@@ -40,10 +40,25 @@ const DISK_LOW = Number(process.env.SOAK_DISK_LOW_GB ?? 3) * GB;
 let lowDisk = false;
 rmSync(STOP_FILE, { force: true });
 
+// A write that fails (a full drive: ENOSPC) is dropped, never fatal: the supervisor and its children keep running and the
+// writes resume once the drive has room (TN10 2026-10-19: one unhandled ENOSPC took the whole soak down).
+let writeFailedAt = 0;
+const bestEffort = (what, fn) => {
+  try {
+    fn();
+  } catch (e) {
+    const now = Date.now();
+    if (now - writeFailedAt > 60_000) {
+      writeFailedAt = now;
+      process.stderr.write(`supervisor: ${what}: write failed: ${e}\n`);
+    }
+  }
+};
+
 const say = (msg, f = {}) => {
   const line = JSON.stringify({ t: new Date().toISOString(), src: 'supervisor', msg, ...f });
   process.stdout.write(line + '\n');
-  appendFileSync(join(LOGS, 'supervisor.log'), line + '\n');
+  bestEffort('supervisor.log', () => appendFileSync(join(LOGS, 'supervisor.log'), line + '\n'));
 };
 
 /** gzips the rotated copies of a log (name.log.N -> name.log.N.gz) */
@@ -69,6 +84,15 @@ class RotatingLog {
   open() {
     this.size = existsSync(this.path) ? statSync(this.path).size : 0;
     this.stream = createWriteStream(this.path, { flags: 'a' });
+    this.broken = false;
+    // an async write error (ENOSPC) breaks this sink only: the child's output is dropped until the sink reopens
+    this.stream.on('error', (e) => {
+      this.broken = true;
+      this.brokenAt = Date.now();
+      bestEffort(this.path, () => {
+        throw e;
+      });
+    });
   }
   write(chunk) {
     if (lowDisk && this.quiet) {
@@ -77,17 +101,25 @@ class RotatingLog {
       if (!keep.length) return;
       chunk = keep.join('\n') + '\n';
     }
+    if (this.broken) {
+      if (Date.now() - this.brokenAt < 30_000) return;
+      this.stream.destroy();
+      bestEffort(this.path, () => this.open());
+      if (this.broken) return;
+    }
     this.stream.write(chunk);
     this.size += chunk.length;
     if (this.size > LOG_MAX) this.rotate();
   }
   rotate() {
     this.stream.end();
-    for (let i = LOG_KEEP - 1; i >= 1; i--) {
-      if (existsSync(`${this.path}.${i}`)) renameSync(`${this.path}.${i}`, `${this.path}.${i + 1}`);
-    }
-    if (existsSync(this.path)) renameSync(this.path, `${this.path}.1`);
-    this.open();
+    bestEffort(this.path, () => {
+      for (let i = LOG_KEEP - 1; i >= 1; i--) {
+        if (existsSync(`${this.path}.${i}`)) renameSync(`${this.path}.${i}`, `${this.path}.${i + 1}`);
+      }
+      if (existsSync(this.path)) renameSync(this.path, `${this.path}.1`);
+    });
+    bestEffort(this.path, () => this.open());
     if (lowDisk) gzipRotated(this.path);
   }
 }
@@ -303,7 +335,7 @@ function writeStatus() {
       lastExits: c.exits.slice(-5),
     })),
   };
-  writeFileSync(join(RUN, 'supervisor.json'), JSON.stringify(s, null, 2));
+  bestEffort('supervisor.json', () => writeFileSync(join(RUN, 'supervisor.json'), JSON.stringify(s, null, 2)));
 }
 
 /** one PowerShell call per minute: working set and CPU seconds of every child */
@@ -331,8 +363,10 @@ function sampleResources() {
       sample.procs[c.spec.name] = { pid: c.pid, wsMb: mb, privMb: Math.round(r.PrivateMemorySize64 / 1e6), cpuSec: Math.round(r.CPU ?? 0) };
     }
     sample.totalWsMb = total;
-    appendFileSync(join(STATS, 'resources.jsonl'), JSON.stringify(sample) + '\n');
-    writeFileSync(join(STATS, 'resources.json'), JSON.stringify(sample, null, 2));
+    bestEffort('resources', () => {
+      appendFileSync(join(STATS, 'resources.jsonl'), JSON.stringify(sample) + '\n');
+      writeFileSync(join(STATS, 'resources.json'), JSON.stringify(sample, null, 2));
+    });
   });
 }
 
@@ -373,7 +407,7 @@ function checkDisk() {
     return;
   }
   const now = Date.now();
-  writeFileSync(join(STATS, 'disk.json'), JSON.stringify({ ts: now, freeGb: +(free / GB).toFixed(2), lowDisk }));
+  bestEffort('disk.json', () => writeFileSync(join(STATS, 'disk.json'), JSON.stringify({ ts: now, freeGb: +(free / GB).toFixed(2), lowDisk })));
   if (free < DISK_WARN && now - diskWarnedAt > 10 * 60_000) {
     diskWarnedAt = now;
     say('disk space low', { freeGb: +(free / GB).toFixed(2), warnBelowGb: DISK_WARN / GB, lowModeBelowGb: DISK_LOW / GB });
