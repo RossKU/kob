@@ -155,7 +155,12 @@ export async function issueToken(env: Env, stats: Stats, slot: TokenSlot = 'toke
     spec.feeRate = env.fees.policy.floor.toString();
     res = issueRaw(env.kob, spec);
   }
-  if (fee.feeRate !== undefined) recordFee(fee, res.built, BigInt(res.built.fee.feeRate));
+  if (fee.feeRate !== undefined) {
+    recordFee(fee, res.prep, BigInt(res.prep.fee.feeRate));
+    recordFee(fee, res.built, BigInt(res.built.fee.feeRate));
+  }
+  // a creation is two transactions (KCC-23): the preparation declaring the token, then the genesis spending its output 0 (docs/spec/token-metadata.md)
+  await submitAndWait(env, bank, res.prep, `issue-declare:${t.ticker}`);
   const txid = await submitAndWait(env, bank, res.built, `issue:${t.ticker}`);
   const issued = {
     covenantId: res.token.covenantId,

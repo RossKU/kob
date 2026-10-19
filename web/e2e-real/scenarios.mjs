@@ -202,6 +202,17 @@ async function issueOne(rc, r, which) {
   const step = { ...stepOf(`issue ${which} (${ticker})`, s), issueSummary: summary, program };
   r.steps.push(step);
   if (!s.submitted) throw new Error('the submitted transaction was not captured from the node connection');
+  // a creation is two transactions (KCC-23): the preparation declaring the token (payload 0x00 + JSON), then the genesis spending its output 0
+  const prep = h.submits.at(-2)?.tx ?? null;
+  const declared = typeof prep?.payload === 'string' && prep.payload.startsWith('00') ? Buffer.from(prep.payload.slice(2), 'hex').toString('utf8') : null;
+  // the spent outpoint as the app's mock node (`transactionId`) or the node's RPC shape (`previousOutpoint.transactionId`) names it; the id of
+  // the preparation where the captured request carries it
+  const spent = s.submitted.inputs?.[0]?.transactionId ?? s.submitted.inputs?.[0]?.previousOutpoint?.transactionId;
+  if (!declared || s.submitted.inputs?.length !== 1 || (prep.id && spent !== prep.id)) {
+    throw new Error(`the genesis does not spend a KCC-23 preparation sent before it (prep payload ${String(prep?.payload).slice(0, 40)})`);
+  }
+  if (!declared.includes(`"symbol":"${ticker}"`)) throw new Error(`the preparation declares ${declared}, not ${ticker}`);
+  step.declaration = declared;
   step.verify = await verifyCreated(rc, s.submitted, s.txid, `genesis ${which}`);
   await tid(h, 'issue-result').waitFor({ timeout: 60_000 });
   const tokenId = await tid(h, 'issue-result-tokenId').getAttribute('data-value');
