@@ -304,6 +304,28 @@ pub fn is_telegram_url(s: &str) -> bool {
     s.strip_prefix("https://t.me/").is_some_and(|h| (5..=32).contains(&h.len()) && h.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
 }
 
+fn handle_of<'a>(input: &'a str, hosts: &[&str], len: std::ops::RangeInclusive<usize>) -> Option<&'a str> {
+    let s = input.trim();
+    let h = hosts
+        .iter()
+        .find_map(|host| s.strip_prefix("https://").and_then(|r| r.strip_prefix("www.").or(Some(r))).and_then(|r| r.strip_prefix(host)))
+        .map(|r| r.strip_suffix('/').unwrap_or(r))
+        .or_else(|| (!s.contains('/')).then(|| s.strip_prefix('@').unwrap_or(s)))?;
+    (len.contains(&h.len()) && h.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')).then_some(h)
+}
+
+/// The canonical X address of `input`: a handle (`@name`, `name`) or an `https://x.com/name` / `https://twitter.com/name` address
+/// becomes `https://x.com/name`; anything else is None.
+pub fn x_url(input: &str) -> Option<String> {
+    handle_of(input, &["x.com/", "twitter.com/"], 1..=15).map(|h| format!("https://x.com/{h}"))
+}
+
+/// The canonical Telegram address of `input`: a handle or an `https://t.me/name` / `https://telegram.me/name` address becomes
+/// `https://t.me/name`; anything else is None.
+pub fn telegram_url(input: &str) -> Option<String> {
+    handle_of(input, &["t.me/", "telegram.me/"], 5..=32).map(|h| format!("https://t.me/{h}"))
+}
+
 /// A link a reader takes: `https://` (or, for `logo`, also `ipfs://`), at most [`MAX_TEXT_CHARS`], no space or bad character.
 fn link_ok(s: &str, ipfs: bool) -> bool {
     (s.starts_with("https://") || (ipfs && s.starts_with("ipfs://")))
@@ -782,6 +804,23 @@ mod tests {
         bad(&|m| m.telegram = Some("https://t.me/abc".into()));
         let e = bad(&|m| m.description = Some("é".repeat(500)));
         assert!(e.contains("bytes on chain"), "{e}");
+    }
+
+    #[test]
+    fn social_handles_become_canonical_addresses() {
+        assert_eq!(x_url("@kaspa_x").as_deref(), Some("https://x.com/kaspa_x"));
+        assert_eq!(x_url("kaspa").as_deref(), Some("https://x.com/kaspa"));
+        assert_eq!(x_url("https://twitter.com/kaspa/").as_deref(), Some("https://x.com/kaspa"));
+        assert_eq!(x_url("https://www.x.com/kaspa").as_deref(), Some("https://x.com/kaspa"));
+        assert_eq!(x_url("https://x.com/a/b"), None);
+        assert_eq!(x_url("http://x.com/kaspa"), None);
+        assert_eq!(x_url("@this_handle_is_too_long"), None);
+        assert_eq!(telegram_url("@kaspa_chat").as_deref(), Some("https://t.me/kaspa_chat"));
+        assert_eq!(telegram_url("https://telegram.me/kaspa_chat").as_deref(), Some("https://t.me/kaspa_chat"));
+        assert_eq!(telegram_url("@abc"), None);
+        for u in [x_url("@k").unwrap(), telegram_url("kaspa_chat").unwrap()] {
+            assert!(is_x_url(&u) || is_telegram_url(&u));
+        }
     }
 
     #[test]
