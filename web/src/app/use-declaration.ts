@@ -12,14 +12,18 @@ export function useDeclarationsVersion(): number {
   return v;
 }
 
-/** The verified declaration of `covenantId` (looked up on first use): null when it has none, undefined while unknown. */
-export function useDeclaration(covenantId: Hex | null | undefined): DeclaredToken | null | undefined {
+/**
+ * The verified declaration of `covenantId`: null when it has none, undefined while unknown. It is asked of the indexer only when `ask` (the
+ * indexer marks the token as declared: `GET /v1/tokens` `declaration`), so a token without one costs no request (and no 404 in the console);
+ * one known otherwise (kept in this browser, this browser's own creation) is returned either way.
+ */
+export function useDeclaration(covenantId: Hex | null | undefined, ask = true): DeclaredToken | null | undefined {
   const { kob, indexer, config } = useServices();
   useDeclarationsVersion();
   useEffect(() => {
     if (!covenantId) return;
     restoreDeclarations(kob);
-    void loadDeclaration(kob, indexer, config.network, covenantId);
-  }, [kob, indexer, config.network, covenantId]);
+    if (ask) void loadDeclaration(kob, indexer, config.network, covenantId);
+  }, [kob, indexer, config.network, covenantId, ask]);
   return declaredToken(config.network, covenantId);
 }

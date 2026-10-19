@@ -35,6 +35,8 @@ export interface CreationArgs {
   /** the creator's key (the record's owner) */
   maker: string;
   onStage?: (stage: SignStage, info?: { txid?: string; step?: 'prep' | 'genesis' }) => void;
+  /** the node took the preparation (its inputs are spent from now on, whatever becomes of the genesis): the caller records that at once */
+  onPrepSent?: (prep: SignedTx) => void;
   timeoutMs?: number;
   /** default true when the adapter can `refresh` */
   checkWallet?: boolean;
@@ -188,6 +190,11 @@ export async function signAndSubmitCreation(a: CreationArgs): Promise<CreationRe
     throw new SignFlowError('submitting', err, err.message, err.code);
   }
   markPrepSent(a.network, record.covenantId, storage);
+  try {
+    a.onPrepSent?.(prepSigned);
+  } catch {
+    /* a UI callback must not abort the flow */
+  }
   stage('submitting', { step: 'genesis', txid: prepSigned.tx.id });
   try {
     await sendGenesis(node, signed.tx, a.genesisAttempts ?? 5, a.genesisRetryMs ?? 1500, sleep);

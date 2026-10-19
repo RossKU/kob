@@ -129,7 +129,8 @@ the optional ones that are not set:
   one it stores the launch proof after verifying it; `GET /v1/tokens` marks declared tokens (`declaration: true`) and
   `GET /v1/tokens/{covenant_id}/declaration` serves the proof. Nodes keep no transaction index and prune, so the declaration is
   captured as the genesis is accepted; candidates no genesis spent within `declaration_window_hours` (72) are dropped.
-* **Web app** (`data/token-declarations.ts`): proofs from the indexer (and the creator's own, at once) are verified in kob-wasm
+* **Web app** (`data/token-declarations.ts`): proofs from the indexer (asked only for tokens `GET /v1/tokens` marks as declared) and
+  the creator's own (at once) are verified in kob-wasm
   against the covenant id asked for, kept in memory and, as proofs, in localStorage (re-verified when read back). The facts a token
   is shown with, in order (`app/token-display.ts`):
   1. its verified declaration (marked "declared on chain" for a token the registry does not list: declared by its creator, not
@@ -148,5 +149,8 @@ the optional ones that are not set:
 * KCC-23 is a Draft. Open upstream questions (the Kas Smiths thread, topic 150): strict JSON edge cases (handled here by the I-JSON
   rules the merged text states), whether every output of a preparation or only the one spent declares (KOB binds the one its
   genesis spends, as the reference verifier does), and the dependency on KIP-24 for the version 1 id.
+* The executor lists a token in `GET /v1/tokens` once an order names it (a genesis output is a P2SH whose program it cannot see), so
+  a declared token without any order is not marked there yet and other browsers show it as before until its first order. The proof
+  is still served by `GET /v1/tokens/{id}/declaration`.
 * Field names are a convention: other ecosystem tools may pick other names for the optional fields (`logo` vs `icon`). A reader
   ignores fields it does not know; KOB names only what it writes.

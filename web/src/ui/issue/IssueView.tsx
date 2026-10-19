@@ -96,7 +96,12 @@ export function IssueView() {
 
   // ---- funding
   const funding = useAsync(async () => (usable && pubkey ? services.utxos.fundingFor(pubkey) : null), [pubkey, usable, retry]);
-  const fundingList = usable && pubkey ? (funding.data ?? null) : null;
+  // the preparation output of a creation left unfinished stays reserved for its genesis (sent again from the banner below), never new funding
+  const reserved = useMemo(() => new Set(pubkey ? listCreations(config.network, pubkey).map((r) => `${r.prepTxid}:0`) : []), [pubkey, config.network, retry, phase.kind]);
+  const fundingList = useMemo(
+    () => (usable && pubkey ? (funding.data?.filter((u) => !reserved.has(`${u.transactionId}:${u.index}`)) ?? null) : null),
+    [usable, pubkey, funding.data, reserved],
+  );
   const spendable = fundingList ? fundingList.reduce((s, u) => s + BigInt(u.amount), 0n) : null;
 
   // ---- form -> findings

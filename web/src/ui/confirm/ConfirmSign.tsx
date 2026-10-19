@@ -157,12 +157,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
     [props.onClose],
   );
 
-  const afterAccepted = async (id: string, prepTxid?: string): Promise<void> => {
-    // a creation's preparation: its inputs are spent, its change is the wallet's; its output 0 is spent by the genesis (recorded next)
-    if (props.creation && prepTxid && wallet.info) {
-      pendingSpends.add(props.creation.prep.tx.inputs);
-      pendingSpends.addChange(props.creation.prep.tx, prepTxid, wallet.info.pubkey);
-    }
+  const afterAccepted = async (id: string): Promise<void> => {
     // the node keeps listing these inputs until the transaction is in a block (no plan of this page may pick them meanwhile); records saved
     const { records } = await recordAccepted(services, wallet, built, id, props.label);
     if (!alive.current) return;
@@ -191,8 +186,13 @@ export function ConfirmSign(props: ConfirmSignProps) {
         const res = await signAndSubmitCreation({
           kob, node, adapter: wallet.adapter, prep: c.prep, built, network: config.network, maker, onStage,
           record: { token: props.issue.token, declaration: c.declaration, docs: c.docs },
+          // the preparation spends the wallet's coins even if the genesis then fails: no plan of this page may pick them meanwhile
+          onPrepSent: (prep) => {
+            pendingSpends.add(prep.tx.inputs);
+            if (wallet.info) pendingSpends.addChange(prep.tx, prep.tx.id, wallet.info.pubkey);
+          },
         });
-        await afterAccepted(res.txid, res.prepTxid);
+        await afterAccepted(res.txid);
       } else {
         const res = await signAndSubmit({ kob, node, adapter: wallet.adapter, built, network: config.network, onStage });
         await afterAccepted(res.txid);

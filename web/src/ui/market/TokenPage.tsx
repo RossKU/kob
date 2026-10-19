@@ -81,7 +81,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const [entered, setEntered] = useState<{ id: string; decimals: number } | null>(null);
   const enteredDecimals = entered && entered.id === id ? entered.decimals : null;
   // the token's KCC-23 declaration (verified against its covenant id): its decimals decide an open-list token's scale, its facts are shown
-  const declared = useDeclaration(id);
+  const declared = useDeclaration(id, listedRow?.index?.declaration === true);
   const open = useOpenToken(baseRow, liveKey, enteredDecimals, declared ?? null);
   // a token the indexer lists without a ticker ("") is named like one without any (app/token-display.ts): the open-list token's name (this
   // browser's issuance ticker, else its covenant id), else the display name; never an empty name in a title, a unit or a hint
