@@ -1968,23 +1968,27 @@ mod tests {
     /// Before KCC-23 a creation was one genesis; now it is a preparation plus a genesis. Prints both (`--nocapture`).
     #[test]
     fn creation_fees_before_and_after() {
-        let s = creation_spec();
-        let one = build_genesis(&s).unwrap();
-        let two = build_creation(&s).unwrap();
-        println!(
-            "one genesis: fee {} (compute mass {}); creation: preparation fee {} (compute mass {}, payload {} bytes) + genesis fee {} (compute mass {}) = {}",
-            one.fee,
-            one.compute_mass,
-            two.prep.fee,
-            two.prep.compute_mass,
-            two.prep.tx.payload.len(),
-            two.genesis.fee,
-            two.genesis.compute_mass,
-            two.total_fee()
-        );
-        // the genesis alone is smaller than before (one input, no change); the preparation adds a plain spend with the payload
-        assert!(two.genesis.fee < one.fee);
-        assert!(two.total_fee() > one.fee && two.total_fee() < 3 * one.fee);
+        let (_, pk) = key();
+        // the web default (one holder, name, symbol and decimals only) and a full one (two holders, every optional field)
+        let minimal = spec(vec![Holder::new(pk, 0, 1000)], 1000);
+        for (label, s) in [("one holder, no optional field", minimal), ("two holders, every optional field", creation_spec())] {
+            let one = build_genesis(&s).unwrap();
+            let two = build_creation(&s).unwrap();
+            println!(
+                "{label}: one genesis fee {} (compute mass {}); creation: preparation fee {} (compute mass {}, payload {} bytes) + genesis fee {} (compute mass {}) = {}",
+                one.fee,
+                one.compute_mass,
+                two.prep.fee,
+                two.prep.compute_mass,
+                two.prep.tx.payload.len(),
+                two.genesis.fee,
+                two.genesis.compute_mass,
+                two.total_fee()
+            );
+            // the genesis alone is smaller than before (one input, no change); the preparation adds a plain spend with the payload
+            assert!(two.genesis.fee < one.fee);
+            assert!(two.total_fee() > one.fee && two.total_fee() < 3 * one.fee);
+        }
     }
 
     #[test]

@@ -15,6 +15,7 @@ upstream.
 | KCC-2 Authority Schemes | `main` `411b41b` (#30: unkeyed P2PKH hash, scheme ranges; Last Call #33) | Last Call | `crates/kob-tests/vectors/kcc2/authority-schemes.json` |
 | KCC-20 Fungible Token | `main` `3fbec52` (#31 merged 2026-10-07) | Last Call | `crates/kob-tests/vectors/kcc20/conformance.json` |
 | KCC-20 reference program | argent-lang/kcc20-reference `master` `c8a0871` (PR #1 merged 2026-10-07; argentc `9a9f4b1`) | merged | `contracts/third-party/kcc20-reference/` (verbatim), built as `contracts/kcc20/KCC20Ref.sil` |
+| KCC-23 MJ: Metadata JSON | `main` `1516a6c` (#26 merged 2026-10-14) | Draft | `crates/kob-tests/vectors/kcc23/conformance.json`; every vector passes (`--test kcc23_conformance_tests`); format and KOB's field convention in [token-metadata.md](token-metadata.md) |
 
 Every vector file is vendored unmodified (CC0) with a `PROVENANCE.md` and pinned by sha256 in the test that runs it.
 

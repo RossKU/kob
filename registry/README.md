@@ -68,7 +68,7 @@ order-contract pair per family; a token of one family can never trade through th
   every genesis output checked and clean, `false` = checked and NOT clean, absent = not checked), optional `genesis` (the record behind it,
   see below), optional `warning` (free text UIs show next to the token, 1-512 characters), `official` (optional, default false: confirmed
   genuine; needs `verified`, `genesis_verified: true`, a `genesis` record with `live_minters: []` and `status: listed`), optional `display` (`description`, `website` https, `icon` https/ipfs, `x` and `telegram` the token's accounts as https addresses (the Create token form writes `https://x.com/<handle>` and `https://t.me/<handle>`),
-  `kcc23` metadata object; all off-chain, KOB depends on none of it)
+  `kcc23` the token's KCC-23 declaration object, a copy for reviewers of what the token recorded on chain at its creation: the app reads the facts from the chain itself and flags an entry whose `ticker`, `name` or `decimals` differ, see docs/spec/token-metadata.md)
 
 ## Rules the validator enforces
 
