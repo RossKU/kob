@@ -38,8 +38,8 @@ pragma silverscript ^0.1.0;
 //  - Strays: the order owns no tokens. settle and update refuse any token input owned by this
 //    covenant id, refund refuses any token input (see KobBid), so tokens sent to this id are inert.
 //  - Touch trigger (as in KobCondAsk, mirrored): the stop leg arms only in a transaction that FILLS a
-//    resting KobBid of this token (evidence, input ev, same scale) quoting >= stopPrice, trading >= minTouch
-//    base units, exposed >= minRestDaa DAA. A resting bid at a high price is exposed to every seller, so a
+//    resting KobBid of this token (evidence, input ev, same scale and extensionCommitment) quoting >=
+//    stopPrice, trading >= minTouch base units, exposed >= minRestDaa DAA. A resting bid at a high price is exposed to every seller, so a
 //    fake high print costs the faker. The evidence is a buyer; the order's own counterparty (a
 //    seller) is never its evidence.
 //  - Trailing (trailStep > 0, unarmed only): the fill of a resting KobAsk quoting rp lowers stopPrice
@@ -198,10 +198,12 @@ contract KobCondBid(
     // n >= minTouch, exposed >= minRestDaa DAA before this transaction (CLTV); read,
     // never consumed. An ask's custody is the token input tk owned by the ask's covenant id, a holder UTXO
     // of this token's program (template hash + P2SH: an input of another program carrying tokenCovId never
-    // stands in for it).
+    // stands in for it). The evidence trades THIS order's token: its covenant id and the extension commitment
+    // extensionCommitment (a bid's extensionCommitment [118..150), an ask's custody state [80..112)); units of
+    // tokenCovId of another commitment are another token, whose quotes cost nothing to fake for whoever holds it.
     // State offsets: KobAsk tokenCovId[34..66) scale[118..126) price[136..144)
     // activeFrom[163..171) interval[190..198) slope[208..216); KobBid tokenCovId[34..66)
-    // scale[151..159) price[169..177) activeFrom[196..204) interval[241..249)
+    // extensionCommitment[118..150) scale[151..159) price[169..177) activeFrom[196..204) interval[241..249)
     // slope[259..267).
     // Bid evidence; returns its quote.
     function touchBid(int ev) : int {
@@ -210,6 +212,7 @@ contract KobCondBid(
         require(n > 0);
         byte[] o = tplState(ev, BID_PRE, BID_STATE_LEN, BID_SUF, BID_TPL);
         require(byte[32](o.slice(34, 66)) == tokenCovId);
+        require(byte[32](o.slice(118, 150)) == extensionCommitment);
         require(int(byte[8](o.slice(151, 159))) == scale);
         require(n >= minTouch);
         require(int(byte[8](o.slice(259, 267))) == 0);
@@ -257,8 +260,11 @@ contract KobCondBid(
             require(OpInputCovenantId(tk) == tokenCovId);
             byte[] ts = tplState(tk, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
             require(ts.slice(10, 44) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
+            require(byte[32](ts.slice(80, 112)) == extensionCommitment);
             int td = OpTxInputDaaScore(tk);
             if (td > exposed) { exposed = td; }
+        } else {
+            require(byte[32](o.slice(118, 150)) == extensionCommitment);
         }
         require(tx.daa >= exposed + minRestDaa);
         return (side, int(byte[8](q.slice(18, 26))));

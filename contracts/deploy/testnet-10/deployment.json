@@ -21,30 +21,30 @@
     {
       "name": "KobCondAsk",
       "artifact": "contracts/artifacts/KobCondAsk.json",
-      "hash": "1e1285bf5a02448fdcfbc1623017a59fa64e61a95a4ea93693a42515a62ff1d1",
+      "hash": "02a346649370ad91eec9775a45cbfe7f113cbbfe3b6d841413e3754a89dd658f",
       "prefix_len": 1,
-      "suffix_len": 3439
+      "suffix_len": 3475
     },
     {
       "name": "KobCondBid",
       "artifact": "contracts/artifacts/KobCondBid.json",
-      "hash": "2dcca63888b1ae85828a8cea5f1a934c8f1a256959982a3d4654a13abed327fa",
+      "hash": "28d702e2aea1f090349644b7a8b7efcb88a87c29bce7aa5fbf5c4c2303c1e8f6",
       "prefix_len": 1,
-      "suffix_len": 3179
+      "suffix_len": 3216
     },
     {
       "name": "KobIfdBid",
       "artifact": "contracts/artifacts/KobIfdBid.json",
-      "hash": "8ba34b33ef4780eb6b1928b37df582cda0daa57f3a76645cc7f6bbcbbaeff55d",
+      "hash": "cc77a57d6e804837ce1ae3d5469a430470b537392b5c27292f623f33f4d29382",
       "prefix_len": 1,
-      "suffix_len": 3214
+      "suffix_len": 3238
     },
     {
       "name": "KobIfdAsk",
       "artifact": "contracts/artifacts/KobIfdAsk.json",
-      "hash": "ce1ccf8e84f61cc2cd42f43e5dec9106e709e258c3110209c052ef344c28333f",
+      "hash": "eb2c6e97e8f4639866f5b15e5f7fba62b623517bdd0f49992cf90f6746f6e589",
       "prefix_len": 1,
-      "suffix_len": 4551
+      "suffix_len": 4585
     },
     {
       "name": "KobPair",
@@ -56,16 +56,16 @@
     {
       "name": "KobCondPair",
       "artifact": "contracts/artifacts/KobCondPair.json",
-      "hash": "98b137f64c552ccbbd11f66e55e2b5ffe18ff8500c924903b900fe1c4a779374",
+      "hash": "3cae3ae30e758bf71475149a7c9d5eea12e8ebcf02382960c873b5b7da525d10",
       "prefix_len": 1,
-      "suffix_len": 6125
+      "suffix_len": 6304
     },
     {
       "name": "KobIfdPair",
       "artifact": "contracts/artifacts/KobIfdPair.json",
-      "hash": "a9c04066e3b332a8108b7caf9b17b59966e5ce62d4eaff57f8a202654ee67c5a",
+      "hash": "670bbecf58c0c2fe97e0ba54982a44a19ea535492dd4bfb261794e53289adf1c",
       "prefix_len": 1,
-      "suffix_len": 8198
+      "suffix_len": 8342
     },
     {
       "name": "KobAskKron",

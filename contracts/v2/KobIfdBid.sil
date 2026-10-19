@@ -27,7 +27,7 @@ pragma silverscript ^0.1.0;
 // Entry price. Limit entry (entryStop == 0): all-in price + tip per whole token (tip >= 0, optional priority tip);
 // a fill of n costs the maker at most floor(n * (price + tip) / scale). Stop entry (entryStop > 0): cannot fill
 // until ARMED by touch evidence, the fill in the same transaction of a resting KobBid of this token quoting
-// >= entryStop (same scale, n >= minTouch base units, exposed at that quote >= minRestDaa DAA; see touchBid). Once
+// >= entryStop (same scale and extensionCommitment, n >= minTouch base units, exposed at that quote >= minRestDaa DAA; see touchBid). Once
 // armed, the price is an ascending auction from entryStop up to `price` (the all-in limit) over bandDaa DAA from
 // the arming time (bandDaa 0: `price` at once); the auction time t is proven by CLTV. Arming happens inside a fill
 // or on its own (update).
@@ -190,8 +190,9 @@ contract KobIfdBid(
     // this transaction (CLTV): exposed = the later of (its UTXO DAA + its TWAP / DCA interval) and its activeFrom.
     // A resting bid is bought at its quote or better, so the quote is a conservative print. The evidence is read,
     // never consumed (any number of orders may read one fill). KobCross, conditional and if-done fills are never
-    // evidence (other templates).
-    // KobBid state offsets: tokenCovId[34..66) scale[151..159) price[169..177)
+    // evidence (other templates). The bid buys THIS entry's token: its covenant id and its extensionCommitment (units of
+    // tokenCovId of another commitment are another token, whose quotes cost nothing to fake for whoever holds it).
+    // KobBid state offsets: tokenCovId[34..66) extensionCommitment[118..150) scale[151..159) price[169..177)
     // activeFrom[196..204) interval[241..249) slope[259..267).
     // Returns the evidence bid's quote.
     function touchBid(int ev) : int {
@@ -200,6 +201,7 @@ contract KobIfdBid(
         require(n > 0);
         byte[] o = tplState(ev, BID_PRE, BID_STATE_LEN, BID_SUF, BID_TPL);
         require(byte[32](o.slice(34, 66)) == tokenCovId);
+        require(byte[32](o.slice(118, 150)) == extensionCommitment);
         require(int(byte[8](o.slice(151, 159))) == scale);
         require(n >= minTouch);
         require(int(byte[8](o.slice(259, 267))) == 0);

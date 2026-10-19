@@ -147,14 +147,14 @@ and the record's family is the family of the pair's base token A.
 |---|---|---|---|---|
 | `0x01` | `KobAsk` | 276 | yes (`extensionCommitment`) | `070bb3b2…63b887c` |
 | `0x02` | `KobBid` | 285 | no | `b995661f…5e54fa3` |
-| `0x03` | `KobCondAsk` | 363 | yes (`extensionCommitment`) | `1e1285bf…62ff1d1` |
-| `0x04` | `KobCondBid` | 381 | no | `2dcca638…ed327fa` |
-| `0x05` | `KobIfdBid` | 585 | no | `8ba34b33…aeff55d` |
-| `0x06` | `KobIfdAsk` | 594 | yes (its exit's `extensionCommitment`) | `ce1ccf8e…c28333f` |
+| `0x03` | `KobCondAsk` | 363 | yes (`extensionCommitment`) | `02a34664…9dd658f` |
+| `0x04` | `KobCondBid` | 381 | no | `28d702e2…3c1e8f6` |
+| `0x05` | `KobIfdBid` | 585 | no | `cc77a57d…4d29382` |
+| `0x06` | `KobIfdAsk` | 594 | yes (its exit's `extensionCommitment`) | `eb2c6e97…6f6e589` |
 | `0x07` | reserved | — | — | never reused: a record of this kind is refused |
 | `0x08` | `KobPair` (pair order, token A KCC-20) | 447 | the custody of S (`sExt`) | `c95c9234…ab4a9c6` |
-| `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 543 | the custody of S (`sExt`) | `98b137f6…a779374` |
-| `0x0a` | `KobIfdPair` (pair if-done entry, token A KCC-20) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `a9c04066…ee67c5a` |
+| `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 543 | the custody of S (`sExt`) | `3cae3ae3…a525d10` |
+| `0x0a` | `KobIfdPair` (pair if-done entry, token A KCC-20) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `670bbecf…89adf1c` |
 
 KRON (family `0x02`), same kind codes:
 
@@ -168,8 +168,8 @@ KRON (family `0x02`), same kind codes:
 | `0x06` | `KobIfdAskKron` | 561 | yes (token output only) | `4797dc30…c034d12` |
 | `0x07` | reserved | — | — | refused |
 | `0x08` | `KobPair` (token A KRON; the same template as in family `0x01`) | 447 | the custody of S (`sExt`) | `c95c9234…ab4a9c6` |
-| `0x09` | `KobCondPair` (token A KRON; the same template) | 543 | the custody of S (`sExt`) | `98b137f6…a779374` |
-| `0x0a` | `KobIfdPair` (token A KRON; the same template) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `a9c04066…ee67c5a` |
+| `0x09` | `KobCondPair` (token A KRON; the same template) | 543 | the custody of S (`sExt`) | `3cae3ae3…a525d10` |
+| `0x0a` | `KobIfdPair` (token A KRON; the same template) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `670bbecf…89adf1c` |
 
 Codes `0x01` to `0x06` of family `0x02` also name the delivery id_type 0 builds of the KRON kinds (`KobAskKronD0` ..
 `KobIfdAskKronD0`, testnet only: the same state layouts, maker deliveries of KRON id_type 0, for a token program whose holders are

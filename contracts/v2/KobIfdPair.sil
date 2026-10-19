@@ -321,11 +321,13 @@ contract KobIfdPair(
     // One KAS-book evidence leg (KobCondPair.evLeg): input ev is a plain resting KobAsk (`ask`) / KobBid of token `tok`
     // (family fam) that this transaction fills (8-byte first push n > 0, n >= minN), scale sc, slope 0, exposed >=
     // minRestDaa (its UTXO DAA + interval, activeFrom, an ask's custody DAA at tk: a holder UTXO of the token's program
-    // tokTpl, template hash + P2SH, with the covenant marker). Returns its quote.
+    // tokTpl, template hash + P2SH, with the covenant marker). Returns its quote. A KCC-20 leg trades the commitment ext:
+    // an ask's custody state [80..112), a bid's extensionCommitment [118..150) (KRON has none).
     // State offsets: KobAsk / KobAskKron tokenCovId [34..66) scale [118..126) price [136..144) activeFrom [163..171)
     // interval [190..198) slope [208..216); KobBid scale / price / activeFrom 33 later, interval / slope 51 later;
     // KobBidKron scale / price / activeFrom as KobAsk, interval / slope 18 later.
-    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, int tk, byte[32] tokTpl, int tokPre, int tokSuf, int minN) : int {
+    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, byte[32] ext, int tk, byte[32] tokTpl, int tokPre, int tokSuf,
+                   int minN) : int {
         require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
         int n = int(byte[8](OpTxInputScriptSigSubstr(ev, 1, 9)));
         require(n > 0);
@@ -363,6 +365,10 @@ contract KobIfdPair(
         byte[] q = o.slice(118 + d, 171 + d);
         byte[] r = o.slice(190 + w, 216 + w);
         require(int(byte[8](q.slice(0, 8))) == sc);
+        if (!ask && fam != FAM_KRON) {
+            // a KCC-20 bid buys the commitment ext
+            require(byte[32](o.slice(118, 150)) == ext);
+        }
         require(int(byte[8](r.slice(18, 26))) == 0);
         int exposed = OpTxInputDaaScore(ev) + int(byte[8](r.slice(0, 8)));
         int act = int(byte[8](q.slice(45, 53)));
@@ -380,6 +386,8 @@ contract KobIfdPair(
             }
             byte[] cs = tplState(tk, tokPre, sl, tokSuf, tokTpl);
             require(cs.slice(ow, ow + 32 + mark.length) == byte[](OpInputCovenantId(ev)) + mark);
+            // a KCC-20 ask sells the commitment ext
+            if (fam != FAM_KRON) { require(byte[32](cs.slice(80, 112)) == ext); }
             int td = OpTxInputDaaScore(tk);
             if (td > exposed) { exposed = td; }
         }
@@ -397,8 +405,11 @@ contract KobIfdPair(
     // oTpl / oPre / oSuf), a holder UTXO of that program (template hash + P2SH) owned by its covenant id with the covenant
     // marker. KobPair state offsets are the KobAsk ones shifted: price [289..297) and
     // activeFrom [316..324) by d = 153, interval [352..360) and slope [370..378) by w = 162. Returns the quote.
-    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, byte[32] kTpl, int kPre, int kSuf, byte[32] oTok, int oFam, int osc,
-                byte[32] oTpl, int oPre, int oSuf, int tk, int minN) : int {
+    // Commitments (ext of tok, oExt of oTok; KRON has none): a KCC-20 KAS-book bid's extensionCommitment [118..150) is
+    // ext, a KCC-20 custody's state [80..112) is the commitment of its token, and a pair order's tExt [238..270) that of
+    // its T (the codec keeps a KRON token's zero). The pair order's sExt is its custody's (its own fill pins it).
+    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, byte[32] ext, byte[32] kTpl, int kPre, int kSuf,
+                byte[32] oTok, int oFam, int osc, byte[32] oExt, byte[32] oTpl, int oPre, int oSuf, int tk, int minN) : int {
         require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
         int n = int(byte[8](OpTxInputScriptSigSubstr(ev, 1, 9)));
         require(n > 0);
@@ -431,11 +442,14 @@ contract KobIfdPair(
             d = 0;
             w = 0;
         }
-        // identity: a KAS-book order's tokenCovId [34..66) and scale [118 + d ..)
+        // identity: a KAS-book order's tokenCovId [34..66) and scale [118 + d ..); a KCC-20 bid (d = 33) also its
+        // extensionCommitment [118..150), read with the scale as one window [118..159) (0x08: the scale's push)
         byte[] want = byte[](tok) + byte[](sc as byte[8]);
+        if (!ask && fam != FAM_KRON) { want = byte[](tok) + byte[](ext) + byte[](0x08) + byte[](sc as byte[8]); }
         bool cust = ask;
         byte[32] cTok = tok;
         int cFam = fam;
+        byte[32] cExt = ext;
         byte[32] cTpl = kTpl;
         int cPre = kPre;
         int cSuf = kSuf;
@@ -451,25 +465,30 @@ contract KobIfdPair(
             byte[32] sI = tok;
             int sS = sc;
             byte[32] tI = oTok;
+            byte[32] tE = oExt;
             int tS = osc;
             if (!ask) {
                 sd = SIDE_BID;
                 sI = oTok;
                 sS = osc;
                 tI = tok;
+                tE = ext;
                 tS = sc;
                 cTok = oTok;
                 cFam = oFam;
+                cExt = oExt;
                 cTpl = oTpl;
                 cPre = oPre;
                 cSuf = oSuf;
             }
-            want = byte[](sd as byte[8]) + byte[](0x20) + byte[](sI) + byte[](sS as byte[8]) + byte[](0x20) + byte[](tI) + byte[](tS as byte[8]);
+            // side || S id [34..75), S scale || T id [136..177), tExt || T scale [238..279) (0x08: the scale's push)
+            want = byte[](sd as byte[8]) + byte[](0x20) + byte[](sI) + byte[](sS as byte[8]) + byte[](0x20) + byte[](tI) + byte[](tE)
+                + byte[](0x08) + byte[](tS as byte[8]);
         }
         byte[] o = tplState(ev, pre, len, suf, tpl);
-        byte[] got = o.slice(34, 66) + o.slice(118 + d, 126 + d);
+        byte[] got = o.slice(34, 66) + o.slice(118, 126 + d);
         if (pair) {
-            got = o.slice(34, 75) + o.slice(136, 177) + o.slice(271, 279);
+            got = o.slice(34, 75) + o.slice(136, 177) + o.slice(238, 279);
         }
         require(got == want);
         require(int(byte[8](o.slice(208 + w, 216 + w))) == 0);
@@ -489,6 +508,8 @@ contract KobIfdPair(
             }
             byte[] cs = tplState(tk, cPre, sl, cSuf, cTpl);
             require(cs.slice(ow, ow + 32 + mark.length) == byte[](OpInputCovenantId(ev)) + mark);
+            // a KCC-20 custody of the commitment of its token
+            if (cFam != FAM_KRON) { require(byte[32](cs.slice(80, 112)) == cExt); }
             int td = OpTxInputDaaScore(tk);
             if (td > exposed) { exposed = td; }
         }
@@ -505,11 +526,11 @@ contract KobIfdPair(
     function stopTouch(int evA, int evB, int tk, int evMode) {
         bool sell = side == SIDE_ASK;
         // read 1: the A leg (mode 0) or the pair order (mode 1); read 2 (mode 0 only): the B leg
-        int a = rd(evA, sell, evMode != 0, aCovId, aFamily, aScale, aTplHash, aPre, aSuf, bCovId, bFamily, bScale, bTplHash, bPre, bSuf, tk,
-                   minTouch);
+        int a = rd(evA, sell, evMode != 0, aCovId, aFamily, aScale, aExt, aTplHash, aPre, aSuf, bCovId, bFamily, bScale, bExt, bTplHash, bPre,
+                   bSuf, tk, minTouch);
         int b = bScale;
         if (evMode == 0) {
-            b = evLeg(evB, !sell, bCovId, bFamily, bScale, tk, bTplHash, bPre, bSuf, quoteOf(minTouch, entryStop, aScale, aScale - 1));
+            b = evLeg(evB, !sell, bCovId, bFamily, bScale, bExt, tk, bTplHash, bPre, bSuf, quoteOf(minTouch, entryStop, aScale, aScale - 1));
         } else {
             require(evMode == 1);
         }
@@ -539,7 +560,9 @@ contract KobIfdPair(
         }
         bool buy = side == SIDE_BID;
         if (!buy) { require(side == SIDE_ASK); }
+        // both scales positive (quoteOf divides by them; a non-positive scale would round against the maker)
         require(aScale > 0);
+        require(bScale > 0);
         // token geometry by family (KCC-20 state 112 B, owner at state 10; KRON 46 B, owner at state 1)
         int aLen = 112;
         int aOff = 10 - 112 - aSuf;

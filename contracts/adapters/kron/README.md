@@ -96,7 +96,7 @@ The lifecycle rules of `contracts/v2/` apply with the KRON codec and limits:
 
 Sizes (bytecode B / state B): KobAskKron 1,487 / 243, KobBidKron 1,343 / 252, KobCondAskKron 3,451 / 330,
 KobCondBidKron 3,253 / 348, KobIfdBidKron 3,478 / 552, KobIfdAskKron 4,628 / 561 (the pair orders for KRON tokens: `KobPair` 2,960 / 447,
-`KobCondPair` 6,669 / 543, `KobIfdPair` 9,108 / 909, one template each for both families).
+`KobCondPair` 6,848 / 543, `KobIfdPair` 9,252 / 909, one template each for both families).
 
 ## Layout notes (hand-coded byte windows)
 

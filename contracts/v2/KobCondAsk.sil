@@ -45,11 +45,13 @@ pragma silverscript ^0.1.0;
 //    KobAsk).
 //  - Minimum fill: n >= minFill unless n takes everything left (see KobAsk).
 //  - Touch trigger: the stop leg arms only in a transaction that FILLS a resting KobAsk of this
-//    token (evidence, input ev, same scale) quoting <= stopPrice, trading >= minTouch base units, exposed at
-//    that quote for >= minRestDaa DAA before this transaction. Nothing persists: arming happens in
+//    token (evidence, input ev, same scale, its custody of the commitment extensionCommitment) quoting <=
+//    stopPrice, trading >= minTouch base units, exposed at that quote for >= minRestDaa DAA before this
+//    transaction. Nothing persists: arming happens in
 //    a fill of this order (settle, leg 1) or next to the evidence fill (update). The order's own
 //    counterparty is never its evidence (it fills against buyers; the evidence is a seller).
-//  - Trailing (trailStep > 0, unarmed only): the fill of a resting KobBid quoting rp (same rules)
+//  - Trailing (trailStep > 0, unarmed only): the fill of a resting KobBid quoting rp (same rules, its
+//    extensionCommitment this order's)
 //    raises stopPrice by k * trailStep, k = floor((rp - trailGap - stopPrice) / trailStep) >= 1,
 //    capped below tpPrice, at most once per trailWait DAA (CSV on this UTXO).
 //  - Repeat IFD (parent != 0; parent = the repeating KobIfdBid entry's covenant id, rptPrice = its
@@ -223,6 +225,9 @@ contract KobCondAsk(
     // holder UTXO of this token's program (template hash + P2SH, like the order's own custody: an input of
     // another program carrying tokenCovId never stands in for it); the ask's fill admits no other token
     // input owned by its id (noStrays), so that input is the custody.
+    // The evidence trades THIS order's token: its covenant id and the extension commitment extensionCommitment (an
+    // ask's custody state [80..112), a bid's extensionCommitment [118..150)). Units of tokenCovId of another
+    // commitment are another token, whose quotes cost nothing to fake for whoever holds it.
     // State offsets (KobAsk): tokenCovId[34..66) scale[118..126) price[136..144)
     // activeFrom[163..171) interval[190..198) slope[208..216); in KobBid scale, price and
     // activeFrom sit 33 bytes later (extensionCommitment), interval and slope 51 bytes later.
@@ -244,6 +249,7 @@ contract KobCondAsk(
         // owner (this ask's covenant id) || owner_scheme push 0x01 0x04
         byte[] ts = tplState(tk, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
         require(ts.slice(10, 44) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
+        require(byte[32](ts.slice(80, 112)) == extensionCommitment);
         int td = OpTxInputDaaScore(tk);
         if (td > exposed) { exposed = td; }
         require(tx.daa >= exposed + minRestDaa);
@@ -287,8 +293,11 @@ contract KobCondAsk(
             require(OpInputCovenantId(tk) == tokenCovId);
             byte[] ts = tplState(tk, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
             require(ts.slice(10, 44) == byte[](OpInputCovenantId(ev)) + byte[](0x0104));
+            require(byte[32](ts.slice(80, 112)) == extensionCommitment);
             int td = OpTxInputDaaScore(tk);
             if (td > exposed) { exposed = td; }
+        } else {
+            require(byte[32](o.slice(118, 150)) == extensionCommitment);
         }
         require(tx.daa >= exposed + minRestDaa);
         return (side, int(byte[8](q.slice(18, 26))));
