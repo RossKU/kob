@@ -238,6 +238,8 @@ export default {
   'issues.icon.invalid': 'The icon address is too long or contains control characters (at most {max} characters).',
   'issues.website.https': 'The website must be an https:// address.',
   'issues.icon.scheme': 'The icon must be an https:// or ipfs:// address.',
+  'issues.x.invalid': 'Enter the X account as @name or https://x.com/name.',
+  'issues.telegram.invalid': 'Enter the Telegram as @name or https://t.me/name.',
   'issues.maker.invalid': 'The wallet key is not a valid 32-byte public key. Reconnect your wallet.',
   'issues.funds.insufficient': 'Not enough KAS: the issuance locks {need} as carriers in the token outputs (returned when the tokens are spent or consolidated) and also needs the network fee. Your wallet has {have} spendable.',
 

@@ -12,7 +12,7 @@ import { useSystemStatus } from './StatusProvider';
 const NAV = [
   { name: 'market', href: '#/market', key: 'shell.nav.market', testid: 'nav-market' },
   { name: 'orders', href: '#/orders', key: 'shell.nav.orders', testid: 'nav-orders' },
-  { name: 'issue', href: '#/issue', key: 'shell.nav.issue', testid: 'nav-issue' },
+  { name: 'create', href: '#/create', key: 'shell.nav.create', testid: 'nav-create' },
   { name: 'settings', href: '#/settings', key: 'shell.nav.settings', testid: 'nav-settings' },
 ] as const;
 

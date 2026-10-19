@@ -353,7 +353,7 @@ export default {
   'orders.balances.notSpendableHint': 'KRON tokens held by a public key or script hash (id_type 0 / 1). They are yours, but KOB only spends address-held KRON tokens: move them to your address with a KRON wallet first.',
   'orders.balances.unreviewed': 'unreviewed program',
   'orders.balances.unreviewedHint': 'Token program {program}: a prototype, or not reviewed for KOB. The balance is on chain; trade it with care.',
-  'orders.balances.oldHoldings': 'Tokens you issued show in the browser that issued them until they first move (a sale, a transfer or a merge); tokens last moved before this indexer started show once they move again.',
+  'orders.balances.oldHoldings': 'Tokens you created show in the browser that created them until they first move (a sale, a transfer or a merge); tokens last moved before this indexer started show once they move again.',
 
   'orders.strays.title': 'Stray tokens',
   'orders.strays.explain': 'Tokens sent to your orders from outside are not liquidity. Only you can recover them: "Sweep strays" (the order stays open) or a cancel. Strays of another token return once the indexer proves their state. Once an order closes, its strays are lost for good.',

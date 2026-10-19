@@ -1,17 +1,21 @@
 // Token issuance view (ui/issue). Flat dotted keys, {param} placeholders.
 export default {
-  'issue.title': 'Issue a token',
-  'issue.intro': 'Create a new fixed-supply token on the KCC-20 reference program. The whole supply is minted in one transaction and sent to the holders you choose.',
+  'issue.title': "Create a token",
+  'issue.intro': "Create a new fixed-supply token. The whole supply is minted in one transaction and sent to your wallet (or to the holders you choose under Advanced).",
+
+  'issue.fixedLine': 'Fixed supply: no one can mint more, freeze or seize these tokens.',
+  'issue.powersLine': 'This program gives an authority these powers over the tokens: {powers}.',
+  'issue.section.advanced': 'Advanced',
 
   // fixed-supply explanation
   'issue.fixed.title': 'What you are creating',
   'issue.fixed.supply': 'The supply is fixed forever: there is no mint function, so nobody (including you) can create more tokens later.',
   'issue.fixed.noBurn': 'There is no burn function either: the program cannot destroy tokens.',
-  'issue.fixed.program': 'Program KCC20Ref: the KCC-20 reference in its standard configuration (up to 3 token inputs and 3 outputs per transfer), the program KOB issues. Moving more than 3 token outputs together takes several transfers. Tokens issued now stay on this program.',
-  'issue.fixed.programPublicMint': 'Program KCC20PublicMint: the KCC20 actor of the reference\'s published public-mint app (up to 3 token inputs and 3 outputs per transfer). Only token holders are created: no public minter and no seed, so the supply stays fixed. Reviewed by an internal KOB review only (no independent audit). Tokens issued now stay on this program.',
-  'issue.fixed.unaudited': 'UNAUDITED: this program has not been audited. Issue only what you can afford to lose and do not present it as safe.',
+  'issue.fixed.program': "Program KCC20Ref: the KCC-20 reference in its standard configuration (up to 3 token inputs and 3 outputs per transfer), the program KOB creates tokens with. Moving more than 3 token outputs together takes several transfers. Tokens created now stay on this program.",
+  'issue.fixed.programPublicMint': "Program KCC20PublicMint: the KCC20 actor of the reference's published public-mint app (up to 3 token inputs and 3 outputs per transfer). Only token holders are created: no public minter and no seed, so the supply stays fixed. Reviewed by an internal KOB review only (no independent audit). Tokens created now stay on this program.",
+  'issue.fixed.unaudited': "UNAUDITED: this program has not been audited. Create only what you can afford to lose and do not present it as safe.",
   'issue.fixed.carrier': 'Every token output locks some KAS (the carrier). It stays in that token UTXO and returns to the holder when the tokens are spent or consolidated.',
-  'issue.fixed.custody': 'Tokens sit in covenant outputs, so ordinary wallets do not show them. Only this app can show tokens issued here, by tracking them in this browser.',
+  'issue.fixed.custody': "Tokens sit in covenant outputs, so ordinary wallets do not show them. Only this app can show tokens created here, by tracking them in this browser.",
 
   // form
   'issue.section.program': 'Token program',
@@ -35,10 +39,14 @@ export default {
   'issue.field.carrier': 'KAS per token output',
   'issue.field.carrier.hint': 'Default {default} KAS. Locked in each token output and returned when the tokens are spent or consolidated.',
   'issue.field.description': 'Description',
-  'issue.field.icon': 'Icon address',
-  'issue.field.icon.hint': 'https:// or ipfs://',
+  'issue.field.icon': 'Logo',
+  'issue.field.icon.hint': 'An image address: https:// or ipfs://',
   'issue.field.website': 'Website',
   'issue.field.website.hint': 'https:// only',
+  'issue.field.x': 'X (Twitter)',
+  'issue.field.x.hint': '@name or https://x.com/name',
+  'issue.field.telegram': 'Telegram',
+  'issue.field.telegram.hint': '@name or https://t.me/name',
 
   // holders
   'issue.holders.intro': 'By default the whole supply goes to your connected wallet. Add holders to split it: your share is the supply minus what the others receive.',
@@ -56,12 +64,12 @@ export default {
 
   // gating
   'issue.connect.title': 'Connect a wallet',
-  'issue.connect.body': 'The issuance is paid and signed by your wallet, and the whole supply goes to it unless you choose other holders.',
+  'issue.connect.body': "The creation is paid and signed by your wallet, and the whole supply goes to it unless you choose other holders.",
   'issue.connect.button': 'Connect {label}',
   'issue.connect.none': 'No supported wallet was detected in this browser. Install KasWare or Kaspire and reload the page.',
   'issue.connect.busy': 'Connecting...',
   'issue.network.title': 'Wrong network',
-  'issue.network.body': 'Your wallet is on {wallet} but this app uses {app}. Switch the network in your wallet, then reconnect. Nothing can be issued until they match.',
+  'issue.network.body': "Your wallet is on {wallet} but this app uses {app}. Switch the network in your wallet, then reconnect. Nothing can be created until they match.",
   'issue.funds.loading': 'Reading your spendable KAS...',
   'issue.funds.error': 'Could not read your KAS balance from the node.',
   'issue.funds.balance': 'Spendable KAS: {kas}',
@@ -71,7 +79,7 @@ export default {
   // planning and review
   'issue.plan.pending': 'Preparing the transaction...',
   'issue.plan.ready': 'The transaction is ready to review.',
-  'issue.plan.errorTitle': 'The issuance could not be prepared',
+  'issue.plan.errorTitle': "The token could not be prepared",
   'issue.plan.retry': 'Try again',
   'issue.review.button': 'Review and sign',
   'issue.review.fix': 'Complete or fix the fields above to continue.',
@@ -92,17 +100,17 @@ export default {
   'issue.summary.fee': 'Network fee',
   'issue.summary.feeValue': '{fee} KAS',
   'issue.summary.fixed': 'Supply fixed forever: no mint, no burn.',
-  'issue.confirm.title': 'Issue token {ticker}',
-  'issue.confirm.label': 'issue {ticker}',
+  'issue.confirm.title': "Create token {ticker}",
+  'issue.confirm.label': "create {ticker}",
 
   // outcomes
   'issue.cancelled': 'Nothing was signed or sent. You can change the form and try again.',
-  'issue.failed.title': 'The issuance failed',
+  'issue.failed.title': "The token could not be created",
   'issue.failed.retry': 'Back to the form',
 
   // result
-  'issue.result.title': 'Token issued',
-  'issue.result.body': '{ticker} was issued in transaction {txid}. It is on its way to confirmation.',
+  'issue.result.title': "Token created",
+  'issue.result.body': "{ticker} was created in transaction {txid}. It is on its way to confirmation.",
   'issue.result.tokenId': 'Token id (covenant id)',
   'issue.result.txid': 'Transaction id',
   'issue.result.program': 'Program',
@@ -110,9 +118,9 @@ export default {
   'issue.result.extension': 'Extension commitment',
   'issue.result.holders': 'Token outputs',
   'issue.result.holder': 'Output {index}: {owner}, {amount}',
-  'issue.result.tracked': 'The token outputs owned by your wallet key are tracked in this browser. Wallets do not show them.',
+  'issue.result.tracked': "The token outputs owned by your wallet key are tracked in this browser. Wallets do not show them.",
   'issue.result.listingTitle': 'Trading it, and giving it a name',
-  'issue.result.listingBody': 'The token can be traded without a registry entry: its market opens with its first order, a sell from a wallet that holds it (this browser tracks the outputs your key owns). Open its market below and confirm its decimals there: the chain does not record them, and the first order sets the price scale. The app shows the token by its covenant id, without a ticker. A ticker and name in this app come only from the registry: open a pull request that adds the entry below to registry/tokens.json.',
+  'issue.result.listingBody': "The token can be traded without a registry entry: its market opens with its first order, a sell from a wallet that holds it (this browser tracks the outputs your key owns). Open its market below and confirm its decimals there: the chain does not record them, and the first order sets the price scale. In this browser the app names the token with the ticker you gave it (with a small marker); elsewhere it is named by its covenant id until a registry entry names it: open a pull request that adds the entry below to registry/tokens.json.",
   'issue.result.openMarket': 'Open its market',
   'issue.result.registryTitle': 'Registry entry',
   'issue.result.copyEntry': 'Copy entry',
@@ -121,6 +129,6 @@ export default {
   'issue.result.metadataDoc': 'Download metadata.json',
   'issue.result.copied': 'Copied',
   'issue.result.copyFailed': 'Copy is not available here: select the text and copy it by hand.',
-  'issue.result.another': 'Issue another token',
+  'issue.result.another': "Create another token",
   'issue.result.trackFailed': 'The token outputs could not be saved in this browser. Copy the token id and the transaction id above.',
 } as Record<string, string>;

@@ -91,6 +91,8 @@
         "description": { "type": "string", "maxLength": 512 },
         "website": { "type": "string", "pattern": "^https://", "maxLength": 512 },
         "icon": { "type": "string", "pattern": "^(https|ipfs)://", "maxLength": 512 },
+        "x": { "type": "string", "pattern": "^https://", "maxLength": 512, "description": "the token's X (Twitter) account, https:// address (the issuance form writes https://x.com/<handle>). Optional" },
+        "telegram": { "type": "string", "pattern": "^https://", "maxLength": 512, "description": "the token's Telegram, https:// address (the issuance form writes https://t.me/<handle>). Optional" },
         "kcc23": { "type": "object" }
       }
     },

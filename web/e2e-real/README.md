@@ -60,7 +60,7 @@ tracker (`kob.tokens.v1.testnet-10.<pubkey>`) as an output of the cancel.
 
 | id | What it does |
 |---|---|
-| issue | Issuance screen (`#/issue`): the standard 3 / 3 program (`issue-program-standard`, KCC20Ref) is the default, 1,000,000 tokens with 8 decimals to the wallet. Result panel token id / txid, the registry entry (`template_id` `kcc20-ref-3x3`, `max_token_inputs` 3), the genesis UTXO tracked with program KCC20Ref. Token B (the pair's quote) is issued the same way when `pair` is selected. The run then serves a test registry with both tokens listed. |
+| issue | Create token screen (`#/create`; the old `#/issue` leads there): the standard 3 / 3 program (`issue-program-standard` under Advanced, KCC20Ref) is the default, 1,000,000 tokens with 8 decimals to the wallet. Result panel token id / txid, the registry entry (`template_id` `kcc20-ref-3x3`, `max_token_inputs` 3), the genesis UTXO tracked with program KCC20Ref. Token B (the pair's quote) is issued the same way when `pair` is selected. The run then serves a test registry with both tokens listed. |
 | limit | Limit GTC sell 3 @ 50 KAS (while it rests, Balances shows 3 in orders), cancelled, 3 tokens back; limit GTC buy 2 @ 0.5 KAS, cancelled. |
 | amend | Limit sell 2 @ 50, My orders `order-replace-<id>` -> amend dialog (`amend-price` 55, `amend-preview`) -> one cancel-replace transaction; the SAME order id lives on at 55 (in-place AMEND record), then cancelled, 2 tokens back. |
 | ioc | IOC buy 2 @ 0.4 with a 60 s life (advanced field `life`), cancelled while alive. |

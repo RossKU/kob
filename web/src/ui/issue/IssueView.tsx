@@ -73,6 +73,17 @@ export function IssueView() {
   }, [kob]);
   const limits = limitsResult.limits;
 
+  // the one plain line on what the program can do, from its registry template's powers (the creation makes no minter: a public-mint program's
+  // mint power has no holder); nothing when the registry does not describe the program
+  const fixedLine = useMemo(() => {
+    if (!limits) return null;
+    const id = state.program === 'public-mint' ? limits.publicMint.registryTemplateId : limits.registryTemplateId;
+    const tpl = services.registry.templates.find((x) => x.id === id);
+    if (!tpl) return null;
+    const powers = (tpl.capabilities ?? []).filter((c) => c !== 'public-mint');
+    return powers.length === 0 ? t('issue.fixedLine') : t('issue.powersLine', { powers: powers.join(', ') });
+  }, [limits, state.program, services.registry]);
+
   const pubkey = wallet.info?.pubkey ?? null;
   const usable = pubkey !== null && !wallet.networkMismatch;
   const registryTickers = useMemo(() => services.registry.tokens.map((x) => x.ticker), [services.registry]);
@@ -164,32 +175,14 @@ export function IssueView() {
         <p class="muted">{t('issue.intro')}</p>
       </div>
 
-      <FixedSupplyNotes program={state.program} />
+      {fixedLine ? <p class="issue-fixed-line" data-testid="issue-fixed-line">{fixedLine}</p> : null}
 
       {limitsResult.error ? <ErrorBanner error={limitsResult.error} data-testid="issue-limits-error" /> : null}
 
       {renderWalletGate()}
 
       <div class="stack" data-testid="issue-form">
-        <Section title={t('issue.section.program')} data-testid="issue-program-section">
-          <div class="stack-sm">
-            <Segmented<IssueProgramChoice>
-              aria-label={t('issue.section.program')}
-              value={state.program}
-              onChange={(v) => set({ program: v })}
-              options={[
-                { value: 'standard', label: t('issue.program.standard'), 'data-testid': 'issue-program-standard' },
-                { value: 'public-mint', label: t('issue.program.publicMint'), 'data-testid': 'issue-program-public-mint' },
-              ]}
-              data-testid="issue-program"
-            />
-            <p class="muted" data-testid="issue-program-hint">
-              {t(state.program === 'public-mint' ? 'issue.program.publicMint.hint' : 'issue.program.standard.hint')}
-            </p>
-          </div>
-        </Section>
-
-        <Section title={t('issue.section.token')}>
+        <Section title={t('issue.section.token')} data-testid="issue-basic">
           <div class="issue-grid">
             <Field
               label={t('issue.field.name')}
@@ -212,6 +205,7 @@ export function IssueView() {
               autoComplete="off"
               class="issue-mono"
             />
+            {renderSupply()}
             <Field
               label={t('issue.field.decimals')}
               hint={limits ? t('issue.field.decimals.hint', { max: limits.maxDecimals }) : undefined}
@@ -222,29 +216,18 @@ export function IssueView() {
               inputMode="numeric"
               data-testid="issue-decimals"
             />
-            {renderSupply()}
           </div>
-        </Section>
-
-        {renderHolders()}
-
-        <Section title={t('issue.section.carrier')}>
-          <Field
-            label={t('issue.field.carrier')}
-            hint={t('issue.field.carrier.hint', { default: limits ? defaultCarrierText(limits) : '10' })}
-            value={state.carrier}
-            placeholder={limits ? defaultCarrierText(limits) : ''}
-            onValue={(v) => set({ carrier: v })}
-            onBlur={() => touch('carrier')}
-            error={errorOf('carrier', state.carrier)}
-            inputMode="decimal"
-            suffix={<span class="muted">KAS</span>}
-            data-testid="issue-carrier"
-          />
-        </Section>
-
-        <Section title={t('issue.section.meta')} collapsible defaultOpen={false}>
-          <div class="issue-grid">
+          <div class="issue-grid issue-details">
+            <Field
+              label={t('issue.field.icon')}
+              hint={t('issue.field.icon.hint')}
+              value={state.icon}
+              onValue={(v) => set({ icon: v })}
+              onBlur={() => touch('icon')}
+              error={errorOf('icon', state.icon)}
+              inputMode="url"
+              data-testid="issue-icon"
+            />
             <Field
               as="textarea"
               label={t('issue.field.description')}
@@ -252,30 +235,77 @@ export function IssueView() {
               onValue={(v) => set({ description: v })}
               onBlur={() => touch('description')}
               error={errorOf('description', state.description)}
-              rows={3}
+              rows={2}
               data-testid="issue-description"
             />
-            <div class="stack-sm">
+            <Field
+              label={t('issue.field.website')}
+              hint={t('issue.field.website.hint')}
+              value={state.website}
+              onValue={(v) => set({ website: v })}
+              onBlur={() => touch('website')}
+              error={errorOf('website', state.website)}
+              inputMode="url"
+              data-testid="issue-website"
+            />
+            <Field
+              label={t('issue.field.x')}
+              hint={t('issue.field.x.hint')}
+              value={state.x}
+              onValue={(v) => set({ x: v.trim() })}
+              onBlur={() => touch('x')}
+              error={errorOf('x', state.x)}
+              autoComplete="off"
+              data-testid="issue-x"
+            />
+            <Field
+              label={t('issue.field.telegram')}
+              hint={t('issue.field.telegram.hint')}
+              value={state.telegram}
+              onValue={(v) => set({ telegram: v.trim() })}
+              onBlur={() => touch('telegram')}
+              error={errorOf('telegram', state.telegram)}
+              autoComplete="off"
+              data-testid="issue-telegram"
+            />
+          </div>
+        </Section>
+
+        <Section title={t('issue.section.advanced')} collapsible defaultOpen={false} data-testid="issue-advanced">
+          <div class="stack">
+            {renderHolders()}
+            <div class="stack-sm" data-testid="issue-carrier-section">
+              <h3>{t('issue.section.carrier')}</h3>
               <Field
-                label={t('issue.field.icon')}
-                hint={t('issue.field.icon.hint')}
-                value={state.icon}
-                onValue={(v) => set({ icon: v })}
-                onBlur={() => touch('icon')}
-                error={errorOf('icon', state.icon)}
-                inputMode="url"
-                data-testid="issue-icon"
+                label={t('issue.field.carrier')}
+                hint={t('issue.field.carrier.hint', { default: limits ? defaultCarrierText(limits) : '10' })}
+                value={state.carrier}
+                placeholder={limits ? defaultCarrierText(limits) : ''}
+                onValue={(v) => set({ carrier: v })}
+                onBlur={() => touch('carrier')}
+                error={errorOf('carrier', state.carrier)}
+                inputMode="decimal"
+                suffix={<span class="muted">KAS</span>}
+                data-testid="issue-carrier"
               />
-              <Field
-                label={t('issue.field.website')}
-                hint={t('issue.field.website.hint')}
-                value={state.website}
-                onValue={(v) => set({ website: v })}
-                onBlur={() => touch('website')}
-                error={errorOf('website', state.website)}
-                inputMode="url"
-                data-testid="issue-website"
+              <p class="muted small">{t('issue.fixed.carrier')} {t('issue.fixed.custody')}</p>
+            </div>
+            <div class="stack-sm" data-testid="issue-program-section">
+              <h3>{t('issue.section.program')}</h3>
+              <Segmented<IssueProgramChoice>
+                aria-label={t('issue.section.program')}
+                value={state.program}
+                onChange={(v) => set({ program: v })}
+                options={[
+                  { value: 'standard', label: t('issue.program.standard'), 'data-testid': 'issue-program-standard' },
+                  { value: 'public-mint', label: t('issue.program.publicMint'), 'data-testid': 'issue-program-public-mint' },
+                ]}
+                data-testid="issue-program"
               />
+              <p class="muted" data-testid="issue-program-hint">
+                {t(state.program === 'public-mint' ? 'issue.program.publicMint.hint' : 'issue.program.standard.hint')}
+              </p>
+              <p class="muted small" data-testid="issue-fixed-program">{t(state.program === 'public-mint' ? 'issue.fixed.programPublicMint' : 'issue.fixed.program')}</p>
             </div>
           </div>
         </Section>
@@ -352,7 +382,8 @@ export function IssueView() {
     const rem = remainingText(state);
     const count = walletRow || state.extras.length === 0 ? state.extras.length + 1 : state.extras.length;
     return (
-      <Section title={t('issue.section.holders')} data-testid="issue-holders">
+      <div class="stack-sm" data-testid="issue-holders">
+        <h3>{t('issue.section.holders')}</h3>
         <p class="muted">{t('issue.holders.intro')}</p>
         <div class="stack-sm">
           <div class="issue-holder issue-holder-you" data-testid="issue-holder-row-0">
@@ -419,7 +450,7 @@ export function IssueView() {
             ))}
           </div>
         ) : null}
-      </Section>
+      </div>
     );
   }
 
@@ -543,19 +574,3 @@ export function IssueView() {
 }
 
 /** The fixed-supply explanation block: what the token can and cannot do, and the reference program's unaudited status. */
-function FixedSupplyNotes({ program }: { program: IssueProgramChoice }) {
-  return (
-    <Section title={t('issue.fixed.title')} data-testid="issue-fixed-supply">
-      <ul class="issue-notes">
-        <li>{t('issue.fixed.supply')}</li>
-        <li>{t('issue.fixed.noBurn')}</li>
-        <li data-testid="issue-fixed-program">{t(program === 'public-mint' ? 'issue.fixed.programPublicMint' : 'issue.fixed.program')}</li>
-        <li>{t('issue.fixed.carrier')}</li>
-        <li>{t('issue.fixed.custody')}</li>
-      </ul>
-      <Banner tone="warn" data-testid="issue-unaudited">
-        {t('issue.fixed.unaudited')}
-      </Banner>
-    </Section>
-  );
-}

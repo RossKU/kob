@@ -78,7 +78,7 @@ describe('finding catalogues are found in the sources', () => {
       'pre-sign findings (SIGNING_ISSUE_CODES)': 35,
       'cancel / refund planners (cancel.ts)': 17,
       'snapshot errors (SnapshotError)': 5,
-      'issuance form (issue.ts)': 33,
+      'issuance form (issue.ts)': 35,
       'registry issues (REGISTRY_ISSUE_CODES)': 20,
       'untradable reasons (UNTRADABLE_REASONS)': 5,
       'registry verification problems': 8,

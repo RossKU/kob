@@ -283,6 +283,12 @@ pub struct Display {
     /// `https://` or `ipfs://` icon URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// `https://` address of the token's X (Twitter) account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<String>,
+    /// `https://` address of the token's Telegram.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram: Option<String>,
     /// KCC-23 metadata JSON object (verbatim, optional; KOB does not depend on it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kcc23: Option<serde_json::Value>,
@@ -894,7 +900,13 @@ impl Registry {
                 e.push(disp_bad("name must be 1..=64 printable characters (no control, zero-width or bidi characters)".into()));
             }
             if let Some(d) = &tok.display {
-                for (label, v) in [("description", &d.description), ("website", &d.website), ("icon", &d.icon)] {
+                for (label, v) in [
+                    ("description", &d.description),
+                    ("website", &d.website),
+                    ("icon", &d.icon),
+                    ("x", &d.x),
+                    ("telegram", &d.telegram),
+                ] {
                     if let Some(v) = v {
                         if v.chars().count() > 512 || has_bad_char(v) {
                             e.push(disp_bad(format!("{label} is too long or has control characters")));
@@ -909,6 +921,11 @@ impl Registry {
                 if let Some(i) = &d.icon {
                     if !(i.starts_with("https://") || i.starts_with("ipfs://")) {
                         e.push(disp_bad("icon must be an https:// or ipfs:// URL".into()));
+                    }
+                }
+                for (label, v) in [("x", &d.x), ("telegram", &d.telegram)] {
+                    if v.as_ref().is_some_and(|v| !v.starts_with("https://")) {
+                        e.push(disp_bad(format!("{label} must be an https:// URL")));
                     }
                 }
                 if let Some(k) = &d.kcc23 {
@@ -1886,6 +1903,16 @@ mod tests {
         assert!(e.iter().any(|x| matches!(x, ValidationError::BadDisplay { .. })));
         let e = errs(check(|v| tok(v, 0)["display"]["kcc23"] = json!([1])));
         assert!(e.iter().any(|x| matches!(x, ValidationError::BadDisplay { .. })));
+        // the token's X and Telegram accounts: https:// addresses
+        for key in ["x", "telegram"] {
+            let e = errs(check(|v| tok(v, 0)["display"][key] = json!("@handle")));
+            assert!(e.iter().any(|x| matches!(x, ValidationError::BadDisplay { .. })), "{key}");
+        }
+        let r = check(|v| {
+            tok(v, 0)["display"]["x"] = json!("https://x.com/example");
+            tok(v, 0)["display"]["telegram"] = json!("https://t.me/example_chat");
+        });
+        assert!(r.is_ok(), "{:?}", r.err());
     }
 
     #[test]
@@ -1955,7 +1982,7 @@ mod tests {
         full_tok["tick"] = json!(1);
         full_tok["max_token_inputs"] = json!(8);
         full_tok["max_token_outputs"] = json!(8);
-        full_tok["display"] = json!({"description": "d", "website": "https://e.x", "icon": "https://e.x/i.png", "kcc23": {}});
+        full_tok["display"] = json!({"description": "d", "website": "https://e.x", "icon": "https://e.x/i.png", "x": "https://x.com/e", "telegram": "https://t.me/example", "kcc23": {}});
         let full_tok_typed: Token = serde_json::from_value(full_tok.clone()).unwrap();
         let full_tok = serde_json::to_value(&full_tok_typed).unwrap();
         assert_eq!(keys(&full_tok), props(&defs["token"]), "token properties");

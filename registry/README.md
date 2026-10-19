@@ -67,7 +67,7 @@ order-contract pair per family; a token of one family can never trade through th
   `verified` (KOB checked covenant id and template hash against chain), optional `genesis_verified` (genesis check, see below: `true` =
   every genesis output checked and clean, `false` = checked and NOT clean, absent = not checked), optional `genesis` (the record behind it,
   see below), optional `warning` (free text UIs show next to the token, 1-512 characters), `official` (optional, default false: confirmed
-  genuine; needs `verified`, `genesis_verified: true`, a `genesis` record with `live_minters: []` and `status: listed`), optional `display` (`description`, `website` https, `icon` https/ipfs,
+  genuine; needs `verified`, `genesis_verified: true`, a `genesis` record with `live_minters: []` and `status: listed`), optional `display` (`description`, `website` https, `icon` https/ipfs, `x` and `telegram` the token's accounts as https addresses (the Create token form writes `https://x.com/<handle>` and `https://t.me/<handle>`),
   `kcc23` metadata object; all off-chain, KOB depends on none of it)
 
 ## Rules the validator enforces

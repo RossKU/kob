@@ -1,4 +1,4 @@
-// Hash router: `#/market`, `#/market/<covenantId>` (the token's KAS market), `#/market/<baseCovenantId>/<quoteCovenantId>` (a token/token pair; the old `#/pair/<base>/<quote>` is an alias), `#/usd/kas` + `#/usd/<covenantId>` (legacy: redirected to the tradable USD pages), `#/orders`, `#/issue`,
+// Hash router: `#/market`, `#/market/<covenantId>` (the token's KAS market), `#/market/<baseCovenantId>/<quoteCovenantId>` (a token/token pair; the old `#/pair/<base>/<quote>` is an alias), `#/usd/kas` + `#/usd/<covenantId>` (legacy: redirected to the tradable USD pages), `#/orders`, `#/create` (the old `#/issue` leads there),
 // `#/settings`. An empty hash is the landing screen (`home`: config `home`, by default a chart); an unknown one is the market list.
 // The parsing / formatting is pure (tested in router.test.ts); only `useRoute` / `navigate` touch `window`.
 import { useEffect, useState } from 'preact/hooks';
@@ -19,7 +19,7 @@ export type Route =
   | { name: 'token'; covenantId: string; ticket?: TicketPreset; amount?: string }
   /** token/token pair BASE/QUOTE (pair orders of every type, prices in QUOTE per BASE): `#/market/<base>/<quote>` (alias `#/pair/<base>/<quote>`) */
   | { name: 'pair'; base: string; quote: string; covenantId?: undefined }
-  | { name: 'orders' | 'issue' | 'settings'; covenantId?: undefined };
+  | { name: 'orders' | 'create' | 'settings'; covenantId?: undefined };
 
 export type RouteName = Route['name'];
 
@@ -31,7 +31,7 @@ const takesAmount = (p: TicketPreset | undefined): boolean => p !== undefined &&
 export type TicketPreset = (typeof TICKET_PRESETS)[number];
 
 const HEX64 = /^[0-9a-f]{64}$/i;
-const PAGES = ['orders', 'issue', 'settings'] as const;
+const PAGES = ['orders', 'create', 'settings'] as const;
 
 /** Parses a `location.hash` value (with or without the leading `#`). Never throws. */
 export function parseHash(hash: string): Route {
@@ -82,6 +82,8 @@ export function parseHash(hash: string): Route {
     return HEX64.test(id) ? { name: 'token', covenantId: id.toLowerCase(), ...(ticket ? { ticket } : {}), ...(amount ? { amount } : {}) } : { name: 'market', invalidToken: id.slice(0, 80) };
   }
   if ((PAGES as readonly string[]).includes(page)) return { name: page as (typeof PAGES)[number] };
+  // the token creation page was `#/issue` before it was named "Create token": the old address still leads there
+  if (page === 'issue') return { name: 'create' };
   return { name: 'market' };
 }
 
@@ -104,7 +106,7 @@ export function routeToHash(route: Route): string {
 }
 
 /** Which top-level nav entry a route belongs to. */
-export const navOf = (route: Route): 'market' | 'orders' | 'issue' | 'settings' =>
+export const navOf = (route: Route): 'market' | 'orders' | 'create' | 'settings' =>
   route.name === 'token' || route.name === 'pair' || route.name === 'usd' || route.name === 'home' ? 'market' : route.name;
 
 export const tokenRoute = (covenantId: string, ticket?: TicketPreset, amount?: number | bigint): Route => ({

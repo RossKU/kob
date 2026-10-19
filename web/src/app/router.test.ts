@@ -34,7 +34,9 @@ describe('router', () => {
 
   it('parses the pages', () => {
     expect(parseHash('#/orders')).toEqual({ name: 'orders' });
-    expect(parseHash('#/issue')).toEqual({ name: 'issue' });
+    expect(parseHash('#/create')).toEqual({ name: 'create' });
+    // the page's old address leads to it
+    expect(parseHash('#/issue')).toEqual({ name: 'create' });
     expect(parseHash('#/settings')).toEqual({ name: 'settings' });
     expect(parseHash('/orders')).toEqual({ name: 'orders' });
     expect(parseHash('#/ORDERS/')).toEqual({ name: 'orders' });
@@ -84,7 +86,7 @@ describe('router', () => {
   });
 
   it('round-trips every route', () => {
-    const routes: Route[] = [{ name: 'market' }, tokenRoute(ID.toUpperCase()), { name: 'orders' }, { name: 'issue' }, { name: 'settings' }];
+    const routes: Route[] = [{ name: 'market' }, tokenRoute(ID.toUpperCase()), { name: 'orders' }, { name: 'create' }, { name: 'settings' }];
     for (const r of routes) expect(parseHash(routeToHash(r))).toEqual(r.name === 'token' ? tokenRoute(ID) : r);
     expect(routeToHash(tokenRoute(ID))).toBe(`#/market/${ID}`);
   });

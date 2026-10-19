@@ -32,3 +32,6 @@
   background: var(--surface-2, #eef0f4); border: 1px solid var(--border, #d5d9e0); border-radius: var(--radius-sm, 5px);
   font-family: var(--mono, ui-monospace, Consolas, monospace); font-size: 0.85rem;
 }
+/* the token's details below its basics; the one plain line on what the program can do */
+.issue-details { margin-top: 14px; }
+.issue-fixed-line { margin: 0; font-weight: 600; }

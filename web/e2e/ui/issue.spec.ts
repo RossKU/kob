@@ -1,4 +1,4 @@
-// Smoke tests of the issuance view (#/issue) against the mock stack: a full issuance with the mock KasWare wallet, and the blocking cases.
+// Smoke tests of the token creation view (#/create; the old #/issue leads there) against the mock stack: a full issuance with the mock KasWare wallet, and the blocking cases.
 import { test, expect, TEST_KEYS } from '../fixtures';
 
 const KAS = 100_000_000n;
@@ -8,12 +8,21 @@ test.use({ autoOpen: false });
 test.describe('token issuance', () => {
   test('issues a fixed-supply token: form, review, confirmation, signing, result panel with the registry entry', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 500n * KAS);
-    await page.goto('/#/issue');
+    await page.goto('/#/create');
     await page.getByTestId('wallet-connect-kasware').click();
     await expect(page.getByTestId('wallet-address')).toBeVisible();
 
     await expect(page.getByTestId('issue-form')).toBeVisible();
     await expect(page.getByTestId('issue-review')).toBeDisabled();
+    // the page is "Create a token": the basics in view, one plain line on what the program can do, the rest folded under Advanced
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Create a token');
+    await expect(page.getByTestId('nav-create')).toHaveText('Create token');
+    await expect(page.getByTestId('issue-fixed-line')).toHaveText('Fixed supply: no one can mint more, freeze or seize these tokens.');
+    for (const id of ['issue-name', 'issue-ticker', 'issue-supply', 'issue-decimals', 'issue-icon', 'issue-description', 'issue-website', 'issue-x', 'issue-telegram']) await expect(page.getByTestId(id), id).toBeVisible();
+    await expect(page.getByTestId('issue-decimals')).toHaveValue('8');
+    await expect(page.getByTestId('issue-holder-add')).toBeHidden();
+    await expect(page.getByTestId('issue-carrier')).toBeHidden();
+    await page.getByTestId('issue-advanced').getByRole('button').first().click();
     // the program: KOB's standard 3 / 3 reference by default, the published public-mint build as the one alternative
     await expect(page.getByTestId('issue-program-standard')).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId('issue-program').getByRole('radio')).toHaveCount(2);
@@ -24,6 +33,9 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('issue-ticker')).toHaveValue('NEWKCC');
     await page.getByTestId('issue-decimals').fill('2');
     await page.getByTestId('issue-supply').fill('1000000');
+    // the token's accounts: a handle each, kept as the account's address in the proposed registry entry
+    await page.getByTestId('issue-x').fill('@newkcc');
+    await page.getByTestId('issue-telegram').fill('@newkcc_chat');
 
     // default holder: the whole supply to the connected wallet, shown explicitly
     await expect(page.getByTestId('issue-holder-0-amount')).toHaveValue('1000000');
@@ -69,6 +81,7 @@ test.describe('token issuance', () => {
     // registry entry (the file a registry pull request carries; the page itself shows no verification state)
     const entry = JSON.parse((await page.getByTestId('issue-registry-entry').textContent()) ?? '');
     expect(entry).toMatchObject({ ticker: 'NEWKCC', name: 'New Example Coin', decimals: 2, covenant_id: tokenId, template_id: 'kcc20-ref-3x3', max_token_inputs: 3, status: 'pending-review', verified: false });
+    expect(entry.display).toMatchObject({ x: 'https://x.com/newkcc', telegram: 'https://t.me/newkcc_chat' });
     for (const gone of ['issue-result-unverified', 'issue-result-pending', 'issue-result-nottradable']) await expect(page.getByTestId(gone)).toHaveCount(0);
     await expect(page.getByTestId('issue-result')).not.toContainText(/unverified|not tradable/i);
     await expect(page.getByTestId('issue-result-listing-note')).toContainText('registry/tokens.json');
@@ -85,7 +98,7 @@ test.describe('token issuance', () => {
 
   test('a ticker that already exists in the registry blocks the review', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 500n * KAS);
-    await page.goto('/#/issue');
+    await page.goto('/#/create');
     await page.getByTestId('wallet-connect-kasware').click();
     await expect(page.getByTestId('wallet-address')).toBeVisible();
 
@@ -104,7 +117,7 @@ test.describe('token issuance', () => {
 
   test('holders that exceed the supply block the review; the wallet share is the remainder', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 500n * KAS);
-    await page.goto('/#/issue');
+    await page.goto('/#/create');
     await page.getByTestId('wallet-connect-kasware').click();
     await expect(page.getByTestId('wallet-address')).toBeVisible();
 
@@ -112,6 +125,8 @@ test.describe('token issuance', () => {
     await page.getByTestId('issue-ticker').fill('SPLIT');
     await page.getByTestId('issue-decimals').fill('0');
     await page.getByTestId('issue-supply').fill('100');
+    // the holders are under Advanced
+    await page.getByTestId('issue-advanced').getByRole('button').first().click();
     await page.getByTestId('issue-holder-add').click();
     await page.getByTestId('issue-holder-1-owner').fill('ab'.repeat(32));
     await page.getByTestId('issue-holder-1-amount').fill('30');
@@ -130,7 +145,7 @@ test.describe('token issuance', () => {
 
   test('a wallet without enough KAS sees the exact shortfall and cannot review', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 4n * KAS);
-    await page.goto('/#/issue');
+    await page.goto('/#/create');
     await page.getByTestId('wallet-connect-kasware').click();
     await expect(page.getByTestId('wallet-address')).toBeVisible();
 
@@ -145,7 +160,7 @@ test.describe('token issuance', () => {
   });
 
   test('without a wallet the view asks for a connection and does not plan', async ({ appPage: page }) => {
-    await page.goto('/#/issue');
+    await page.goto('/#/create');
     await expect(page.getByTestId('issue-connect')).toBeVisible();
     await page.getByTestId('issue-name').fill('No Wallet');
     await page.getByTestId('issue-ticker').fill('NOWAL');

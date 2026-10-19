@@ -8,7 +8,7 @@ import { loadKobNode } from './wasm.node';
 import { pubkeyOf, signBuilt } from '../testing/local-signer';
 import {
   emptyIssueForm, formatUnits, IssueFormError, issueLimits, issuedTokenUtxos, normalizeTicker, parseDecimal, planIssue,
-  registryEntryFromIssue, validateIssueForm,
+  registryEntryFromIssue, socialUrl, validateIssueForm,
   type IssueForm, type IssueLimits, type IssuePlan, type PlanIssueOptions,
 } from './issue';
 import type { KeyUtxo } from './types';
@@ -431,5 +431,30 @@ describe('registry entry', () => {
     const a = planIssue(kob, form(), opts());
     const b = planIssue(kob, form({ ticker: 'OTHR' }), opts());
     expect(() => registryEntryFromIssue(a.token, b.docs)).toThrow(/does not describe/);
+  });
+});
+
+describe("the token's X and Telegram accounts (registry entry and metadata only; nothing on chain)", () => {
+  it("takes a handle or the account's address and keeps the https:// address", () => {
+    expect(socialUrl('x', '@kob_token')).toBe('https://x.com/kob_token');
+    expect(socialUrl('x', 'https://twitter.com/kob_token/')).toBe('https://x.com/kob_token');
+    expect(socialUrl('telegram', 'kobchat')).toBe('https://t.me/kobchat');
+    expect(socialUrl('telegram', 'https://t.me/kob_chat')).toBe('https://t.me/kob_chat');
+    for (const bad of ['http://x.com/a', '@has space', 'https://evil.com/x.com/a', '@' + 'a'.repeat(16)]) expect(socialUrl('x', bad), bad).toBeNull();
+    expect(socialUrl('telegram', '@abc')).toBeNull(); // Telegram names are 5 to 32 characters
+    expect(codes(form({ x: 'not a handle!' }))).toContain('x.invalid');
+    expect(codes(form({ telegram: 'https://t.me/a' }))).toContain('telegram.invalid');
+    expect(codes(form({ x: '@kob', telegram: '@kob_chat' }))).toEqual([]);
+  });
+
+  it('puts them in the proposed registry entry and the metadata, the genesis unchanged', () => {
+    const plain = planIssue(kob, form(), opts());
+    const p = planIssue(kob, form({ x: '@kob', telegram: '@kob_chat' }), opts());
+    expect(p.docs.registryEntry.display).toMatchObject({ x: 'https://x.com/kob', telegram: 'https://t.me/kob_chat' });
+    expect(p.docs.metadata).toMatchObject({ x: 'https://x.com/kob', telegram: 'https://t.me/kob_chat' });
+    expect(registryEntryFromIssue(p.token, p.docs).display).toMatchObject({ x: 'https://x.com/kob' });
+    // the transaction carries none of it: the same genesis with or without the accounts
+    expect(p.built.tx.id).toBe(plain.built.tx.id);
+    expect(p.built.tx.payload).toBe('');
   });
 });

@@ -33,10 +33,13 @@ export interface IssueUiState {
   description: string;
   icon: string;
   website: string;
+  /** X (Twitter) and Telegram accounts: a handle or an address */
+  x: string;
+  telegram: string;
 }
 
 export function emptyUiState(): IssueUiState {
-  return { program: 'standard', name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', website: '' };
+  return { program: 'standard', name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', website: '', x: '', telegram: '' };
 }
 
 // ------------------------------------------------------------------------------------------------ small filters
@@ -131,6 +134,8 @@ export function formToIssueForm(state: IssueUiState, walletKey: Hex | null): Iss
     description: state.description,
     icon: state.icon,
     website: state.website,
+    ...(state.x.trim() ? { x: state.x.trim() } : {}),
+    ...(state.telegram.trim() ? { telegram: state.telegram.trim() } : {}),
   };
 }
 

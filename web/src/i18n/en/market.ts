@@ -218,7 +218,7 @@ export default {
   'market.first.title': 'First order of this token',
   'market.first.body': "No order of this token exists yet, and the chain does not record decimals. Enter the decimals the issuer chose (0 to 9; a token with more decimals trades with 9). The first order sets the price scale of this market (prices per whole token of those decimals), and later orders use it.",
   'market.first.label': 'Decimals',
-  'market.first.known': 'The decimals of the token you issued in this browser.',
+  'market.first.known': "The decimals of the token you created in this browser.",
   'market.first.invalid': 'A whole number from 0 to 9.',
   'market.first.use': 'Use these decimals',
   'market.first.entered': 'Decimals {decimals}, entered by you: this is the first order of this token.',

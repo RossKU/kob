@@ -1,7 +1,7 @@
 // How a token the registry does not list is named and its amounts are said (app/token-display.ts): never "base units".
 export default {
   'token.note.issued': 'unverified',
-  'token.note.issuedTitle': "Not in the token registry: its name and decimals ({decimals}) come from this browser's issuance of it.",
+  'token.note.issuedTitle': "Not in the token registry: its name and decimals ({decimals}) come from this browser's creation of it.",
   'token.note.assumed': 'decimals assumed {decimals}',
   'token.amount.assumed': '{amount} {token} (decimals assumed {decimals})',
   'token.amount.plain': '{amount} tokens (decimals assumed {decimals})',

@@ -180,10 +180,12 @@ async function issueOne(rc, r, which) {
   const { h } = rc;
   const t0 = Date.now();
   const ticker = `R${which}${{ kasware: 'KW', kaspire: 'KP', kastle: 'KS' }[rc.name] ?? 'XX'}${Math.random().toString(36).slice(2, 6).toUpperCase().replace(/[OIL0-9]/g, 'X')}`.slice(0, 8);
-  await goto(h, '#/issue');
+  await goto(h, '#/create');
   if (await tid(h, 'issue-another').count()) await tid(h, 'issue-another').click();
   await tid(h, 'issue-form').waitFor({ timeout: 60_000 });
   // the program: KOB's standard 3 / 3 reference (KCC20Ref) is the default choice
+  // the program is under Advanced (folded)
+  await tid(h, 'issue-advanced').getByRole('button').first().click();
   if ((await tid(h, 'issue-program-standard').getAttribute('aria-checked')) !== 'true') await tid(h, 'issue-program-standard').click();
   const program = collapse(await tid(h, 'issue-fixed-program').innerText().catch(() => ''));
   if (!/KCC20Ref\b/.test(program) || /PublicMint/.test(program)) throw new Error(`the issuance screen does not plan the standard 3 / 3 program: "${program}"`);

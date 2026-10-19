@@ -20,7 +20,7 @@ export default {
   'confirm.status.unconfirmed': 'Submitted but not seen on the network yet; check again in a minute.',
   'confirm.explorer': 'View in block explorer',
 
-  'confirm.kind.issue': 'Issue a new token',
+  'confirm.kind.issue': "Create a new token",
   'confirm.kind.issueIntro': 'Creates a fixed-supply token; the supply can never change.',
 
   'confirm.section.spend': 'What you spend',
@@ -161,7 +161,7 @@ export default {
   'confirm.adv.input': 'Input {index} ({role}): {kas} KAS',
   'confirm.adv.output': 'Output {index}: {kind}, {kas} KAS',
   'confirm.outkind.kas-change': 'KAS change to you',
-  'confirm.outkind.issued': 'issued token output',
+  'confirm.outkind.issued': "created token output",
 
   'confirm.stage.signing': 'Signing in your wallet',
   'confirm.stage.finalizing': 'Checking the signatures',
@@ -202,7 +202,7 @@ export default {
   'confirm.issue.finding.fee': 'The fee ({fee}) does not match the transaction (declared {declared}).',
   'confirm.issue.finding.feeHigh': 'The network fee ({fee}) is unreasonably high.',
   'confirm.issue.finding.feeRate': 'The transaction declares a fee rate of {rate} sompi per gram, above the {max} this wallet allows.',
-  'confirm.issue.finding.unaudited': 'The token program is the KCC-20 reference, which has not been audited. Only issue tokens you can afford to lose.',
+  'confirm.issue.finding.unaudited': "The token program is the KCC-20 reference, which has not been audited. Only create tokens you can afford to lose.",
   'confirm.issue.finding.holdersOther': '{count} output(s) send tokens to other keys, as you asked.',
   'confirm.issue.finding.walletBlind': 'Your wallet cannot show tokens: it will only show KAS amounts. Check the token details on this screen.',
   'confirm.f.pairPair': 'Pair',

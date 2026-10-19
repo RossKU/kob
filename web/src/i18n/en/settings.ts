@@ -37,7 +37,7 @@ export default {
   'settings.registry.none': 'No templates loaded.',
 
   'settings.tracker.title': 'Token tracker',
-  'settings.tracker.explain': 'Wallets cannot list KCC-20 tokens, so this app remembers the token outputs it created for your key (issuance, change) and verifies each on the node before use. You can export the list as a backup or import outputs from another browser.',
+  'settings.tracker.explain': 'Wallets cannot list KCC-20 tokens, so this app remembers the token outputs it created for your key (token creation, change) and verifies each on the node before use. You can export the list as a backup or import outputs from another browser.',
   'settings.tracker.connect': 'Connect a wallet to see and manage the tracked token outputs of your key.',
   'settings.tracker.outpoint': 'Output',
   'settings.tracker.remove': 'Remove',

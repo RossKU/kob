@@ -60,7 +60,7 @@ function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
       return <MarketView pair={{ base: r.base, quote: r.quote }} />;
     case 'orders':
       return <OrdersView />;
-    case 'issue':
+    case 'create':
       return <IssueView />;
     case 'settings':
       return <SettingsView warnings={props.warnings} />;

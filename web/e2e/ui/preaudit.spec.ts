@@ -28,7 +28,7 @@ test.describe('pre-audit notice', () => {
   });
 
   test('the footer line is on the other pages too', async ({ appPage: page }) => {
-    for (const hash of ['#/orders', '#/issue', '#/settings']) {
+    for (const hash of ['#/orders', '#/create', '#/settings']) {
       await page.goto(`/${hash}`);
       await expect(page.getByTestId('footer-preaudit')).toBeVisible();
     }

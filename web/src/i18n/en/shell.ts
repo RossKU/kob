@@ -3,7 +3,7 @@ export default {
   'shell.nav.label': 'Main navigation',
   'shell.nav.market': 'Market',
   'shell.nav.orders': 'My orders',
-  'shell.nav.issue': 'Issue token',
+  'shell.nav.create': 'Create token',
   'shell.nav.settings': 'Settings',
   'shell.theme.toLight': 'Switch to the light theme',
   'shell.theme.toDark': 'Switch to the dark theme',

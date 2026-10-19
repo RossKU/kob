@@ -113,7 +113,7 @@ export interface RegistryTokenEntry {
   max_token_outputs?: number;
   status: 'pending-review';
   verified: false;
-  display?: { description?: string; website?: string; icon?: string; kcc23?: Record<string, unknown> };
+  display?: { description?: string; website?: string; icon?: string; x?: string; telegram?: string; kcc23?: Record<string, unknown> };
 }
 
 export interface IssueDocs {
@@ -244,6 +244,10 @@ export interface IssueForm {
   description: string;
   icon: string;
   website: string;
+  /** the token's X (Twitter) account: a handle (`@name`) or its https:// address; optional (registry entry and metadata only) */
+  x?: string;
+  /** the token's Telegram: a handle or its https://t.me/ address; optional (registry entry and metadata only) */
+  telegram?: string;
   /** permit a non-zero borrow scheme on non-covenant holders (never set by the default form) */
   allowBorrow?: boolean;
 }
@@ -423,6 +427,13 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
   disp(form.description, 'description');
   disp(form.website, 'website');
   disp(form.icon, 'icon');
+  // the token's social accounts: a handle or the account's https:// address (the registry keeps the address)
+  for (const kind of ['x', 'telegram'] as const) {
+    const v = (form[kind] ?? '').trim();
+    if (v !== '' && socialUrl(kind, v) === null) {
+      err(kind === 'x' ? 'x.invalid' : 'telegram.invalid', kind === 'x' ? 'Enter the X account as @name or https://x.com/name.' : 'Enter the Telegram as @name or https://t.me/name.', kind);
+    }
+  }
 
   return { issues, parsed: ok && supply !== null ? { supply, holders, carrier } : null };
 }
@@ -572,7 +583,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
         }
       }
       if (opts.fees && opts.feePick) rememberFeeChoice(r.built, describeFee(opts.fees.policy, opts.feePick, BigInt(spec.feeRate ?? feeRate), BigInt(r.built.fee.fee)));
-      return { ...r, spec, fee: BigInt(r.built.fee.fee) };
+      return { ...r, docs: withSocials(r.docs, form), spec, fee: BigInt(r.built.fee.fee) };
     } catch (e) {
       if (e instanceof KobError && /insufficient funds/.test(e.message) && count < candidates.length) {
         count += 1;
@@ -585,6 +596,35 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
 }
 
 // ------------------------------------------------------------------------------------------------ results
+
+/** Where a social account lives: its handle rule and its canonical https:// address. */
+const SOCIAL = {
+  x: { handle: /^@?([A-Za-z0-9_]{1,15})$/, url: /^https:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/?$/, base: 'https://x.com/' },
+  telegram: { handle: /^@?([A-Za-z0-9_]{5,32})$/, url: /^https:\/\/(?:www\.)?(?:t\.me|telegram\.me)\/([A-Za-z0-9_]{5,32})\/?$/, base: 'https://t.me/' },
+} as const;
+
+/**
+ * A social account as the registry entry keeps it: its canonical https:// address (`https://x.com/name`, `https://t.me/name`), from a handle
+ * (`@name`, `name`) or an address of the account; null when it is neither.
+ */
+export function socialUrl(kind: 'x' | 'telegram', input: string): string | null {
+  const s = input.trim();
+  const rule = SOCIAL[kind];
+  const m = rule.handle.exec(s) ?? rule.url.exec(s);
+  return m ? `${rule.base}${m[1]}` : null;
+}
+
+/**
+ * The issuance's documents with the token's social accounts: the registry entry's `display.x` / `display.telegram` and the metadata's
+ * `x` / `telegram` (KOB-defined names, like the others of that object). Nothing on chain: the genesis carries no metadata.
+ */
+export function withSocials(docs: IssueDocs, form: Pick<IssueForm, 'x' | 'telegram'>): IssueDocs {
+  const x = form.x ? socialUrl('x', form.x) : null;
+  const telegram = form.telegram ? socialUrl('telegram', form.telegram) : null;
+  if (!x && !telegram) return docs;
+  const add = { ...(x ? { x } : {}), ...(telegram ? { telegram } : {}) };
+  return { ...docs, metadata: { ...docs.metadata, ...add }, registryEntry: { ...docs.registryEntry, display: { ...(docs.registryEntry.display ?? {}), ...add } } };
+}
 
 /**
  * The registry entry to submit by pull request (`registry/tokens.json`): status `pending-review`, `verified: false`, program = the

@@ -62,7 +62,7 @@ export interface RegistryTokenJson {
   /** what the genesis check (C1) and the live-mint-authority check (C2) found (`kob registry verify-genesis` re-derives it from registry/evidence/) */
   genesis?: RegistryGenesisJson;
   warning?: string;
-  display?: { description?: string; website?: string; icon?: string; kcc23?: Record<string, unknown> };
+  display?: { description?: string; website?: string; icon?: string; x?: string; telegram?: string; kcc23?: Record<string, unknown> };
 }
 /** A token's genesis record (mirrors `GenesisRecord` of registry.rs). */
 export interface RegistryGenesisJson {
@@ -237,7 +237,7 @@ const SOURCE_KEYS = ['path', 'upstream', 'note'];
 const TOKEN_KEYS = ['ticker', 'name', 'family', 'covenant_id', 'template_id', 'extension_commitment', 'extension_class', 'decimals', 'lot_size', 'tick', 'max_token_inputs', 'max_token_outputs', 'status', 'verified', 'official', 'genesis_verified', 'genesis', 'warning', 'display'];
 const GENESIS_KEYS = ['txid', 'daa_score', 'outputs', 'supply', 'minter_outputs', 'mint_allowance', 'live_minters', 'checked_at_daa', 'source'];
 const OUTPOINT = /^[0-9a-f]{64}:(0|[1-9][0-9]{0,9})$/;
-const DISPLAY_KEYS = ['description', 'website', 'icon', 'kcc23'];
+const DISPLAY_KEYS = ['description', 'website', 'icon', 'x', 'telegram', 'kcc23'];
 const STATE_LEN: Record<Family, number> = { kcc20: 112, kron: 46 };
 
 /** A template whose hash is a known program must agree with that program's profile (mirrors `check_registry_template` of profile.rs); null when it does, or when the hash is unknown. */
@@ -352,12 +352,14 @@ function validate(doc: unknown, expectedNetwork?: string): { json: RegistryJson;
       else {
         noExtra(tok.display, DISPLAY_KEYS, `${p}.display`);
         const d = tok.display;
-        for (const k of ['description', 'website', 'icon'] as const) {
+        for (const k of ['description', 'website', 'icon', 'x', 'telegram'] as const) {
           const v = d[k];
           if (v !== undefined && (typeof v !== 'string' || [...v].length > 512 || hasBadChar(v))) disp(`${k} is too long or has control characters`);
         }
         if (typeof d.website === 'string' && !d.website.startsWith('https://')) disp('website must be an https:// URL');
         if (typeof d.icon === 'string' && !(d.icon.startsWith('https://') || d.icon.startsWith('ipfs://'))) disp('icon must be an https:// or ipfs:// URL');
+        if (typeof d.x === 'string' && !d.x.startsWith('https://')) disp('x must be an https:// URL');
+        if (typeof d.telegram === 'string' && !d.telegram.startsWith('https://')) disp('telegram must be an https:// URL');
         if (d.kcc23 !== undefined && !isObj(d.kcc23)) disp('kcc23 must be a JSON object');
       }
     }
