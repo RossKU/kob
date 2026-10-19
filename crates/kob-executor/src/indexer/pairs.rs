@@ -39,7 +39,7 @@
 
 use super::db::DbResult;
 use super::market::{self, Candle};
-use super::reads::{reduce, tip_state, ReadCtx, CUSTODY_OK, NOT_FROZEN};
+use super::reads::{pinned_template, reduce, tip_state, ReadCtx, CUSTODY_OK, NOT_FROZEN};
 use crate::hex::Hash32;
 use kob_protocol::state::{AnyState, TIF_GTC};
 use rusqlite::{params, Connection};
@@ -197,7 +197,8 @@ fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: 
         "SELECT o.covenant_id, o.contract, u.state, u.created_daa, o.deadline FROM order_state s \
          CROSS JOIN orders o ON o.covenant_id = s.covenant_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE o.listed = 1 AND o.token_cov_id = ?1 AND o.quote_cov_id = ?2 AND s.status IN ('open','partial') AND s.state_known = 1 \
-         AND u.spent_block IS NULL AND {NOT_FROZEN} ORDER BY o.genesis_block, o.covenant_id LIMIT 2000"
+         AND u.spent_block IS NULL AND {NOT_FROZEN} AND {pinned} ORDER BY o.genesis_block, o.covenant_id LIMIT 2000",
+        pinned = pinned_template()
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params![base.0.to_vec(), quote.0.to_vec()], |r| {
@@ -229,7 +230,8 @@ fn kas_orders(conn: &Connection, token: &Hash32, side: i64, limit: usize, now: i
          CROSS JOIN orders o ON o.covenant_id = s.covenant_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE o.token_cov_id = ?1 AND o.side = ?2 AND o.listed = 1 AND o.in_book = 1 AND o.contract IN ({kinds}) \
          AND s.status IN ('open','partial') AND s.state_known = 1 AND u.spent_block IS NULL AND {NOT_FROZEN} AND {CUSTODY_OK} \
-         ORDER BY (o.price * 1.0 / MAX(COALESCE(o.scale, 1), 1)) {dir}, o.genesis_block ASC, o.covenant_id ASC LIMIT ?3"
+         AND {pinned} ORDER BY (o.price * 1.0 / MAX(COALESCE(o.scale, 1), 1)) {dir}, o.genesis_block ASC, o.covenant_id ASC LIMIT ?3",
+        pinned = pinned_template()
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params![token.0.to_vec(), side, limit as i64], |r| {
@@ -433,7 +435,8 @@ pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResu
          CROSS JOIN orders o ON o.covenant_id = s.covenant_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
          WHERE o.listed = 1 AND o.quote_cov_id IS NOT NULL AND s.status IN ('open','partial') AND s.state_known = 1 \
          AND u.spent_block IS NULL AND (?1 IS NULL OR o.token_cov_id = ?1 OR o.quote_cov_id = ?1) AND {NOT_FROZEN} \
-         ORDER BY o.genesis_block, o.covenant_id LIMIT 20000"
+         AND {pinned} ORDER BY o.genesis_block, o.covenant_id LIMIT 20000",
+        pinned = pinned_template()
     );
     let mut st = conn.prepare(&sql)?;
     type Row = (Vec<u8>, String, Option<Vec<u8>>, i64, Option<i64>, Vec<u8>, Vec<u8>);

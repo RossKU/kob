@@ -191,20 +191,28 @@ pub fn unlisted_orders(conn: &Connection) -> DbResult<Vec<ListedOrder>> {
 /// `order_state_status`), never by walking the order history (1 to 2.4 s per tick on a store of 300,000 orders, 12 ms
 /// this way): an order has a current UTXO (`cur_txid`) exactly when its status is `open` or `partial`
 /// (`processor::refresh_order_state` derives both from the same unspent UTXO), so the status filter only says which rows
-/// the join to the current UTXO can match.
-pub(crate) const LIVE_ORDERS_SQL: &str =
-    "SELECT o.covenant_id, o.contract, o.family, o.deadline, o.ext_commit, u.txid, u.idx, u.value, u.state, u.created_daa, \
-     o.template_hash \
-     FROM order_state s \
-     CROSS JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-     CROSS JOIN orders o ON o.covenant_id = s.covenant_id \
-     WHERE s.status IN ('open','partial') AND o.listed = ?1 AND s.state_known = 1 AND u.spent_block IS NULL AND u.state IS NOT NULL \
-     ORDER BY o.genesis_block, o.covenant_id";
+/// the join to the current UTXO can match. Only orders under a template this build pins (`reads::pinned_template`).
+pub(crate) fn live_orders_sql() -> &'static str {
+    static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SQL.get_or_init(|| {
+        format!(
+            "SELECT o.covenant_id, o.contract, o.family, o.deadline, o.ext_commit, u.txid, u.idx, u.value, u.state, u.created_daa, \
+             o.template_hash \
+             FROM order_state s \
+             CROSS JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
+             CROSS JOIN orders o ON o.covenant_id = s.covenant_id \
+             WHERE s.status IN ('open','partial') AND o.listed = ?1 AND s.state_known = 1 AND u.spent_block IS NULL AND u.state IS NOT NULL \
+             AND {} \
+             ORDER BY o.genesis_block, o.covenant_id",
+            super::reads::pinned_template()
+        )
+    })
+}
 
 /// The live orders with their custody and strays ([`owned_tokens`]: the unspent token UTXOs).
 fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
     let mut tokens = owned_tokens(conn)?;
-    let mut st = conn.prepare_cached(LIVE_ORDERS_SQL)?;
+    let mut st = conn.prepare_cached(live_orders_sql())?;
     let rows = st.query_map([listed as i64], |r| {
         Ok((
             r.get::<_, Vec<u8>>(0)?,
@@ -229,7 +237,7 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
         // An order placed under a template this build does not pin (a database carried over a template change: an older
         // template with today's state layout decodes as today's kind) lives at a script nothing this build plans from today's
         // template (a fill, kill, refund or close) hashes to. It is unknown here, like any other template: never offered to
-        // the matcher or the keepers.
+        // the matcher or the keepers. The query leaves it out already; this also holds the hash to the contract's own template.
         if kob_protocol::artifacts::try_template(state.template_id()).is_none_or(|t| t.hash[..] != tpl_hash[..]) {
             continue;
         }

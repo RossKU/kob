@@ -96,7 +96,12 @@ fn seed_order(
         params![
             cid(id),
             if side == 1 { "KobAsk" } else { "KobBid" },
-            cid(0xee),
+            kob_protocol::artifacts::pinned_hash(if side == 1 {
+                kob_protocol::artifacts::TemplateId::KobAsk
+            } else {
+                kob_protocol::artifacts::TemplateId::KobBid
+            })
+            .to_vec(),
             side,
             cid(maker),
             cid(TOKEN),
@@ -1020,7 +1025,7 @@ fn seed_live(c: &Connection, id: u8, state: &kob_protocol::state::AnyState, bloc
         params![
             cid(id),
             t.name(),
-            cid(0xee),
+            kob_protocol::artifacts::pinned_hash(t).to_vec(),
             crate::model::side_of(state) as i64,
             cid(MAKER),
             state.token_cov_id().to_vec(),

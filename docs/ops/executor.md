@@ -458,7 +458,10 @@ node (wRPC JSON)  ->  follower  ->  extract  ->  ingest (one atomic SQLite commi
   never trusted; a missing or wrong record leaves the order invisible (a `rejects` row for wrong
   ones). An order under a template this build does not pin never becomes an order (`docs/spec/template-retirement.md`):
   a payload of version 3 or a version-2 `ORDER` record does not decode (a `payload:` reject), and an output that is not
-  the P2SH of a pinned template is never recovered.
+  the P2SH of a pinned template is never recovered. Orders a database carried over a template change still holds (indexed
+  by an older build) are left out of every read: the books, their counts and the stats, the pair books, `/v1/orders`, and
+  the matcher's and keepers' live orders; `GET /v1/orders/{id}` (and its events) answers 404, so the web wallet resolves
+  such an order from its own placement record and marks it `old-template`.
 * **Lineage.** Every later spend is classified from the input's own signature script (the revealed
   redeem script must hash to the spent output and match a pinned template; the dispatch tag selects
   the entry, the arguments give the amount in base units). The continuation's state is *proven*, not assumed: the

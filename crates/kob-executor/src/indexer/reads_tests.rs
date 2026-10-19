@@ -48,6 +48,10 @@ fn store(seed: u64, n: usize) -> Connection {
         let price = r.pick(&[Some(price), None]);
         let (genesis_out_block, genesis_daa) = (r.below(12) as i64, r.below(1000) as i64);
         let listed = (r.below(4) != 0) as i64;
+        // the template the order was indexed under: the one this build pins for its contract, else (a database an older build
+        // indexed) another one, left out of every read
+        let pinned = TemplateId::from_name(contract).map(kob_protocol::artifacts::pinned_hash).unwrap();
+        let template = if r.below(6) == 0 { vec![9u8; 32] } else { pinned.to_vec() };
         conn.execute(
             "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, token_tpl_hash, scale, price, \
              tif, expiry_daa, active_from, in_book, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa, \
@@ -55,7 +59,7 @@ fn store(seed: u64, n: usize) -> Connection {
             params![
                 cov,
                 contract,
-                vec![9u8; 32],
+                template,
                 r.pick(&[1i64, 2]),
                 side,
                 r.pick(&makers),
@@ -168,7 +172,8 @@ fn ctx() -> ReadCtx {
 
 /// The orders list as it was: one query over the whole history, the token filter an OR of both columns.
 fn old_orders(conn: &Connection, ctx: &ReadCtx, f: &OrderFilter, limit: usize, cursor: Option<(i64, Vec<u8>)>) -> Page<OrderView> {
-    let mut conds: Vec<String> = Vec::new();
+    // never an order under a template this build does not pin (a rule the live reads have too)
+    let mut conds: Vec<String> = vec![pinned_template().to_string()];
     let mut args: Vec<SqlValue> = Vec::new();
     if let Some(m) = &f.maker {
         args.push(SqlValue::Blob(m.clone()));
@@ -251,6 +256,63 @@ fn the_orders_list_pages_exactly_as_the_history_wide_query_did() {
     }
 }
 
+#[test]
+fn an_order_under_a_template_this_build_does_not_pin_is_in_no_read() {
+    let mut would_list = 0;
+    for seed in [1u64, 2, 3] {
+        let conn = store(seed, 400);
+        let ctx = ctx();
+        let all: Vec<(Vec<u8>, Vec<u8>)> = conn
+            .prepare("SELECT covenant_id, template_hash FROM orders")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let unpinned: Vec<String> = all.iter().filter(|(_, t)| t[..] == [9u8; 32]).map(|(c, _)| hex::encode(c)).collect();
+        assert!(!unpinned.is_empty() && unpinned.len() < all.len(), "seed {seed}: both kinds of rows");
+        // the single-order view: not found
+        for (cov, tpl) in &all {
+            let found = order(&conn, &ctx, &Hash32(cov.clone().try_into().unwrap())).unwrap();
+            assert_eq!(found.is_some(), tpl[..] != [9u8; 32], "seed {seed} order {}", hex::encode(cov));
+        }
+        // the orders list, every page of every filter
+        let f = OrderFilter::default();
+        let listed = orders(&conn, &ctx, &f, 10_000, None).unwrap().items;
+        assert_eq!(listed.len(), all.len() - unpinned.len(), "seed {seed}");
+        for status in ["active", "open", "partial", "filled", "cancelled"] {
+            let f = OrderFilter { status: Some(status.into()), ..OrderFilter::default() };
+            for limit in [1usize, 500] {
+                let page = orders(&conn, &ctx, &f, limit, None).unwrap();
+                assert!(page.items.iter().all(|o| !unpinned.contains(&o.covenant_id)), "seed {seed} {status}");
+            }
+        }
+        // the books: an unpinned live order the book would list otherwise is left out
+        let live = fillable_now(1_000, Some(100));
+        for token in [1u8, 2, 3] {
+            let t = Hash32(tok(token).try_into().unwrap());
+            for side in [1i64, 2] {
+                would_list += rows(
+                    &conn,
+                    &format!(
+                        "SELECT o.covenant_id {LIVE_FROM} LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
+                         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND o.template_hash = x'{}'",
+                        hex::encode(&[9u8; 32])
+                    ),
+                    &[SqlValue::Blob(tok(token)), SqlValue::Integer(side)],
+                )
+                .len();
+            }
+            let b = book(&conn, &ctx, &t, 1_000, false).unwrap();
+            for side in [&b.asks, &b.bids] {
+                let BookSide::Orders(v) = side else { unreachable!() };
+                assert!(v.iter().all(|o| !unpinned.contains(&o.covenant_id)), "seed {seed} token {token}");
+            }
+        }
+    }
+    assert!(would_list > 0, "the stores have unpinned orders the book's other conditions admit");
+}
+
 /// Rows of `sql` with every column as a value.
 fn rows(conn: &Connection, sql: &str, args: &[SqlValue]) -> Vec<Vec<SqlValue>> {
     let mut st = conn.prepare(sql).unwrap();
@@ -316,14 +378,17 @@ fn the_books_counts_and_live_orders_read_from_the_live_set_are_the_same_rows() {
         assert_eq!(sorted(rows(&conn, &counts(OLD_FROM), &[])), sorted(rows(&conn, &counts(LIVE_FROM), &[])));
         // the matcher's live orders (listed and not), in the book's order
         for listed in [0i64, 1] {
-            let old = "SELECT o.covenant_id, u.txid, u.idx FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
-                       JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-                       WHERE o.listed = ?1 AND s.state_known = 1 AND u.spent_block IS NULL AND u.state IS NOT NULL \
-                       ORDER BY o.genesis_block, o.covenant_id";
-            let new = super::super::book::LIVE_ORDERS_SQL.replacen("SELECT ", "SELECT o.covenant_id, u.txid, u.idx, ", 1);
+            let old = format!(
+                "SELECT o.covenant_id, u.txid, u.idx FROM orders o JOIN order_state s ON s.covenant_id = o.covenant_id \
+                 JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
+                 WHERE o.listed = ?1 AND s.state_known = 1 AND u.spent_block IS NULL AND u.state IS NOT NULL AND {} \
+                 ORDER BY o.genesis_block, o.covenant_id",
+                pinned_template()
+            );
+            let new = super::super::book::live_orders_sql().replacen("SELECT ", "SELECT o.covenant_id, u.txid, u.idx, ", 1);
             let new: Vec<Vec<SqlValue>> =
                 rows(&conn, &new, &[SqlValue::Integer(listed)]).into_iter().map(|r| r[..3].to_vec()).collect();
-            let old = rows(&conn, old, &[SqlValue::Integer(listed)]);
+            let old = rows(&conn, &old, &[SqlValue::Integer(listed)]);
             assert!(!old.is_empty());
             assert_eq!(format!("{old:?}"), format!("{new:?}"), "seed {seed} listed {listed}");
         }

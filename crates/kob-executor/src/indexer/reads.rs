@@ -148,12 +148,13 @@ pub const OPEN_TOKEN_ROWS_MAX: i64 = 5_000;
 
 pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<TokenView>> {
     let mut counts: BTreeMap<(Vec<u8>, i64), i64> = BTreeMap::new();
-    // the orders the books list (`BOOK_WHERE`): an ask only with its exact custody, nothing with no amount left (read from
-    // the live set, `order_state` first: [`LIVE_FROM`])
+    // the orders the books list (`BOOK_WHERE`, a template this build pins): an ask only with its exact custody, nothing with
+    // no amount left (read from the live set, `order_state` first: [`LIVE_FROM`])
+    let pinned = pinned_template();
     let mut st = conn.prepare(&format!(
         "SELECT o.token_cov_id, o.side, COUNT(*) {LIVE_FROM} \
          WHERE o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') AND s.state_known = 1 AND o.token_cov_id IS NOT NULL AND {NOT_FROZEN} \
-         AND {HAS_AMOUNT} AND {CUSTODY_OK} GROUP BY o.token_cov_id, o.side",
+         AND {HAS_AMOUNT} AND {CUSTODY_OK} AND {pinned} GROUP BY o.token_cov_id, o.side",
     ))?;
     let rows = st.query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))?;
     for r in rows {
@@ -388,6 +389,21 @@ pub(crate) const HAS_AMOUNT: &str = "COALESCE(s.remaining_amount, 1) > 0";
 /// order of the token (`orders_book`) or of the whole history to find them: 0.2 to 2 s per read on a store of 300,000 orders.
 pub(crate) const LIVE_FROM: &str = "FROM order_state s CROSS JOIN orders o ON o.covenant_id = s.covenant_id";
 
+/// SQL predicate (alias `o` = orders): the order's template is one this build pins ([`kob_protocol::artifacts::PINNED`]).
+/// An order under any other template is unknown to this build (`docs/spec/template-retirement.md`): the indexer never lists
+/// it nor offers it to a matcher or a keeper. Indexing admits only pinned templates, so the rows this leaves out are those a
+/// database carried over a template change holds (an older build indexed them). Every read that lists or counts orders
+/// carries it: the books and their counts, the stats, the pair books and routes, `/v1/orders` and `/v1/orders/{id}`, and
+/// the matcher's and the keepers' live orders (`book::live_orders_sql`). No index covers `template_hash`: it filters the
+/// rows the read selects anyway (21 constants).
+pub(crate) fn pinned_template() -> &'static str {
+    static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SQL.get_or_init(|| {
+        let hashes: Vec<String> = kob_protocol::artifacts::PINNED.iter().map(|(_, h)| format!("x'{h}'")).collect();
+        format!("o.template_hash IN ({})", hashes.join(","))
+    })
+}
+
 const BOOK_WHERE: &str = concat!(
     "o.token_cov_id = ?1 AND o.side = ?2 AND o.listed = 1 AND o.in_book = 1 \
      AND s.status IN ('open','partial') AND s.state_known = 1 AND o.price IS NOT NULL AND COALESCE(s.remaining_amount, 1) > 0 AND ",
@@ -428,12 +444,13 @@ pub(crate) fn fillable_now(now: i64, now_unix: Option<u64>) -> String {
 fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64, depth: usize) -> DbResult<Vec<BookOrderView>> {
     let dir = if side == 1 { "ASC" } else { "DESC" };
     let live = fillable_now(book_daa(conn, ctx)?, ctx.now_unix);
+    let pinned = pinned_template();
     let sql = format!(
         "SELECT o.covenant_id, o.contract, o.maker, o.price, o.tip, o.min_fill, o.scale, o.expiry_daa, o.genesis_daa, \
                 s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, u.state, u.created_daa \
          {LIVE_FROM} \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} \
+         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND {pinned} \
          ORDER BY {PER_BASE_UNIT} {dir}, o.genesis_block ASC, o.covenant_id ASC LIMIT ?3"
     );
     let mut st = conn.prepare(&sql)?;
@@ -481,11 +498,12 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
 /// direction). Every live listed order of the side a matcher may fill now ([`fillable_now`]) is read (the book of one token).
 fn book_side_levels(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64, depth: usize) -> DbResult<Vec<LevelView>> {
     let live = fillable_now(book_daa(conn, ctx)?, ctx.now_unix);
+    let pinned = pinned_template();
     let sql = format!(
         "SELECT o.price, COALESCE(o.scale, 1), s.remaining_amount, s.amount_exact \
          {LIVE_FROM} \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx \
-         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live}"
+         WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND {pinned}"
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(rusqlite::params![token.0.to_vec(), side], |r| {
@@ -1171,11 +1189,20 @@ fn live_token_utxos(conn: &Connection, ctx: &ReadCtx, owner: &Hash32, role: &str
 }
 
 /// One order by covenant id, with the covenant ids of any exit orders it created, its custody and strays.
+///
+/// An order under a template this build does not pin is not found (`None`: a 404), as `/v1/orders` never lists it
+/// (`docs/spec/template-retirement.md`: unknown to this build, like any other template). Its view would carry a state
+/// decoded with today's template and a current UTXO whose script nothing this build plans hashes to: a client building its
+/// cancel from that view fails on chain. Not found here, the web wallet resolves the order from its own placement record,
+/// whose template it does not pin either, and marks it `old-template` (ended with the release it was placed with).
 pub fn order(conn: &Connection, ctx: &ReadCtx, covenant_id: &Hash32) -> DbResult<Option<OrderView>> {
-    let sql = format!("{ORDER_SELECT} WHERE o.covenant_id = ?1");
+    let pinned = pinned_template();
+    let sql = format!("{ORDER_SELECT} WHERE o.covenant_id = ?1 AND {pinned}");
     let v = conn.query_row(&sql, [covenant_id.0.to_vec()], |r| order_from_row(r, ctx)).optional()?;
     let Some(mut v) = v else { return Ok(None) };
-    let mut st = conn.prepare("SELECT covenant_id FROM orders WHERE parent = ?1 ORDER BY genesis_block, covenant_id")?;
+    let mut st = conn.prepare(&format!(
+        "SELECT o.covenant_id FROM orders o WHERE o.parent = ?1 AND {pinned} ORDER BY o.genesis_block, o.covenant_id"
+    ))?;
     let kids = st.query_map([covenant_id.0.to_vec()], |r| Ok(hx(r.get(0)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     v.children = Some(kids);
     attach_holdings(conn, ctx, covenant_id, &mut v)?;
@@ -1329,7 +1356,8 @@ pub fn orders(
     limit: usize,
     cursor: Option<(i64, Vec<u8>)>,
 ) -> DbResult<Page<OrderView>> {
-    let mut conds: Vec<String> = Vec::new();
+    // never an order under a template this build does not pin ([`pinned_template`])
+    let mut conds: Vec<String> = vec![pinned_template().to_string()];
     let mut args: Vec<SqlValue> = Vec::new();
     if let Some(m) = &f.maker {
         args.push(SqlValue::Blob(m.clone()));
