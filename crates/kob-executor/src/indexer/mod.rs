@@ -11,6 +11,7 @@ pub mod db;
 pub mod flags;
 pub mod follower;
 pub mod ingest;
+pub mod kcc23;
 pub mod lock;
 pub mod market;
 pub mod pairs;
@@ -112,6 +113,7 @@ fn ingest_config(cfg: &IndexerConfig) -> IngestConfig {
     IngestConfig {
         reorg_window_daa: cfg.reorg_window_hours.saturating_mul(3600).saturating_mul(cfg.daa_per_second),
         checkpoint_daa: cfg.checkpoint_secs.saturating_mul(cfg.daa_per_second),
+        declaration_window_daa: cfg.declaration_window_hours.saturating_mul(3600).saturating_mul(cfg.daa_per_second),
         verify_threads: ingest::verify_threads(cfg.verify_threads),
     }
 }

@@ -2,7 +2,8 @@
 //!
 //! A commit contains, in one SQLite transaction: the reverts for `removed` chain blocks (tip-first),
 //! the applied `added` blocks (in the order the node returned them), the new cursor, the pruning of
-//! chain-block rows older than the reorg window, and the record-log position. The log frame (the
+//! chain-block rows older than the reorg window (and of the KCC-23 candidates older than the declaration window), and the
+//! record-log position. The log frame (the
 //! extracted KOB records of the batch) is appended and fsynced just before the commit; if the commit
 //! fails the frame is cut off again. The cursor never advances on any error.
 
@@ -71,13 +72,20 @@ pub struct IngestConfig {
     /// A batch with nothing to record is still logged when the cursor moved this far since the last
     /// logged cursor, so a rebuild from the log resumes close to the tip.
     pub checkpoint_daa: u64,
+    /// KCC-23 candidate preparations older than this many DAA behind the cursor are pruned (`super::kcc23::prune`).
+    pub declaration_window_daa: u64,
     /// Threads of the pure per-batch work done before the single database pass (`record::precompute`): 1 does it inline.
     pub verify_threads: usize,
 }
 
 impl Default for IngestConfig {
     fn default() -> Self {
-        IngestConfig { reorg_window_daa: 12 * 3600 * 10, checkpoint_daa: 3600 * 10, verify_threads: verify_threads(0) }
+        IngestConfig {
+            reorg_window_daa: 12 * 3600 * 10,
+            checkpoint_daa: 3600 * 10,
+            declaration_window_daa: 72 * 3600 * 10,
+            verify_threads: verify_threads(0),
+        }
     }
 }
 
@@ -415,6 +423,9 @@ impl Ingest {
         set_cursor(&tx, &cursor)?;
         // the reorg window: chain blocks older than it are final and no longer kept
         tx.execute("DELETE FROM blocks WHERE daa < ?1", [cursor.daa.saturating_sub(self.cfg.reorg_window_daa) as i64])?;
+        // KCC-23 candidate preparations no genesis spent within the declaration window (a logged genesis carries the
+        // preparations it binds, so a replay, which prunes at the logged cursors only, never depends on this table for it)
+        super::kcc23::prune(&tx, cursor.daa.saturating_sub(self.cfg.declaration_window_daa))?;
 
         let checkpoint_due = blocks.len() > 0 && cursor.daa >= logged_daa(&tx)?.saturating_add(self.cfg.checkpoint_daa);
         let loggable =

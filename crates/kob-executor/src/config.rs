@@ -285,6 +285,9 @@ pub struct IndexerConfig {
     /// An otherwise empty batch is still written to the record log when the cursor moved this many
     /// seconds since the last logged cursor, so a rebuild resumes close to the tip.
     pub checkpoint_secs: u64,
+    /// A KCC-23 candidate preparation no genesis has spent is kept this many hours (`indexer::kcc23`): a token's genesis must be
+    /// accepted within it of its preparation for the indexer to serve the declaration. 72 by default.
+    pub declaration_window_hours: u64,
     pub daa_per_second: u64,
     /// Lag alarm thresholds in hours (reported by /health and logged).
     pub lag_alarm_hours: Vec<u64>,
@@ -323,6 +326,7 @@ impl Default for IndexerConfig {
             max_walkback_blocks: 100_000,
             reorg_window_hours: 12,
             checkpoint_secs: 3600,
+            declaration_window_hours: 72,
             daa_per_second: 10,
             lag_alarm_hours: vec![1, 6, 12, 24],
             tokens_path: None,

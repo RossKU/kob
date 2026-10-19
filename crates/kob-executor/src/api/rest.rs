@@ -135,6 +135,19 @@ pub async fn tokens(State(app): State<Arc<App>>) -> ApiResult {
     cached(&app, "tokens".into(), move |c| Ok(json!({ "tokens": reads::token_list(c, &allow)? }))).await
 }
 
+/// `GET /v1/tokens/{covenant_id}/declaration`: the KCC-23 launch proof of the covenant id (`kob_protocol::kcc23::LaunchProof`,
+/// format `kob-kcc23-proof/1`: the preparation and genesis transactions in the fields their ids commit to). The indexer kept it
+/// only after `LaunchProof::verify` accepted it, and a client verifies it again itself: an indexer can withhold a declaration,
+/// never forge one. One primary-key lookup, on the light lane; 404 when the indexer holds none.
+pub async fn token_declaration(State(app): State<Arc<App>>, Path(id): Path<String>) -> ApiResult {
+    let id = parse_hash("covenant_id", &id)?;
+    match app.state.pool.with_light(move |c| crate::indexer::kcc23::proof_json(c, &id)).await? {
+        // stored as `serde_json::to_string(&proof)`: served as it is
+        Some(json) => Ok(([(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"))], json).into_response()),
+        None => Err(ApiError::not_found("no KCC-23 declaration for this covenant id")),
+    }
+}
+
 pub async fn book(State(app): State<Arc<App>>, Path(token): Path<String>, Query(q): Params) -> ApiResult {
     let token = parse_hash("token", &token)?;
     let depth = limit(&q, "depth", 20, app.state.cfg.max_page_size)?;

@@ -19,9 +19,12 @@
 //!   creating input reveals (a transfer leader's `next_states`, the columns of a KRON token input, the `recipient_state`
 //!   of a public-mint app's `mint` / `create`) and the output's script public key proves: a *holding* (`HeldOut`),
 //!   whoever owns it; an input that spends a tracked holding is relevant too (it marks the holding spent). Outputs of a
-//!   program this build does not pin, or of a look-alike, prove nothing and are not kept.
+//!   program this build does not pin, or of a look-alike, prove nothing and are not kept,
+//! * the transaction is a KCC-23 candidate preparation or a verified genesis of one (`super::kcc23`): its record carries a
+//!   declaration section (the transaction's id-relevant fields), and nothing else unless it is relevant to KOB too.
 
 use super::db::DbResult;
+use super::kcc23::DeclSection;
 use crate::hex::Hash32;
 use crate::model;
 use crate::rpc::types::{Tx, TxInput};
@@ -123,6 +126,9 @@ pub struct TxRecord {
     /// Proven states of tracked-token outputs (see the module docs). Logs written before this field existed decode
     /// with an empty list: the flag is the top bit of `pos` (a block never holds 2^31 transactions).
     pub holds: Vec<HeldOut>,
+    /// The KCC-23 declaration section (`super::kcc23`): a candidate preparation, or a genesis with the preparations it binds.
+    /// Flagged by bit 30 of the encoded `pos`; a frame holding one is written as record-log format 3 (`recordlog::FORMAT_KCC23`).
+    pub kcc23: Option<DeclSection>,
 }
 
 /// Stand-in stored for a KOB1 payload that did not decode (`KOB1` and a version byte no reader supports): the record keeps the
@@ -131,6 +137,8 @@ pub const UNDECODABLE_PAYLOAD: &[u8] = b"KOB1\xff";
 
 /// Set in the encoded `pos` when the record has a `holds` section.
 const HOLDS_FLAG: u64 = 1 << 31;
+/// Set in the encoded `pos` when the record has a KCC-23 declaration section.
+const KCC23_FLAG: u64 = 1 << 30;
 
 fn code_of(t: TemplateId) -> u8 {
     model::wire_code(t)
@@ -253,10 +261,14 @@ fn read_args(r: &mut Reader<'_>) -> WireResult<Vec<Vec<u8>>> {
 
 impl TxRecord {
     /// Encodes the record in record-log format 2 (length-prefixed states; the frame carries the template tables, see
-    /// [`TxRecord::templates`]).
+    /// [`TxRecord::templates`]); with a KCC-23 declaration section, its frame is format 3 (`recordlog::FORMAT_KCC23`).
     pub fn encode(&self, w: &mut Writer) {
         w.hash(&self.txid);
-        w.var(self.pos as u64 | if self.holds.is_empty() { 0 } else { HOLDS_FLAG });
+        w.var(
+            self.pos as u64
+                | if self.holds.is_empty() { 0 } else { HOLDS_FLAG }
+                | if self.kcc23.is_none() { 0 } else { KCC23_FLAG },
+        );
         w.bytes(&self.payload);
         w.var(self.inputs.len() as u64);
         for i in &self.inputs {
@@ -302,6 +314,9 @@ impl TxRecord {
                 w.bytes(&h.state.encode());
             }
         }
+        if let Some(d) = &self.kcc23 {
+            d.encode(w);
+        }
     }
 
     /// Adds the templates the record refers to (order reveals, holding programs) to a frame's tables.
@@ -323,7 +338,8 @@ impl TxRecord {
         let txid = r.hash()?;
         let raw_pos = r.var()?;
         let has_holds = raw_pos & HOLDS_FLAG != 0;
-        let pos = (raw_pos & !HOLDS_FLAG) as u32;
+        let has_kcc23 = raw_pos & KCC23_FLAG != 0;
+        let pos = (raw_pos & !(HOLDS_FLAG | KCC23_FLAG)) as u32;
         let payload = r.bytes()?.to_vec();
         let n_in = r.count(34)?;
         let mut inputs = Vec::with_capacity(n_in);
@@ -363,7 +379,23 @@ impl TxRecord {
                 }
             }
         }
-        Ok(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds })
+        let kcc23 = if has_kcc23 { Some(DeclSection::decode(r)?) } else { None };
+        Ok(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23 })
+    }
+
+    /// The record of a transaction relevant only for its KCC-23 declaration section: nothing of KOB, so no payload, inputs or
+    /// outputs (the section carries the transaction's fields).
+    pub fn declaration_only(txid: Hash32, pos: u32, d: DeclSection) -> TxRecord {
+        TxRecord {
+            txid,
+            pos,
+            payload: vec![],
+            inputs: vec![],
+            outputs: vec![],
+            tok_outs: vec![],
+            holds: vec![],
+            kcc23: Some(d),
+        }
     }
 
     pub fn encoded_len(&self) -> usize {
@@ -550,6 +582,7 @@ fn raw_record(tx: &Tx) -> TxRecord {
             .collect(),
         tok_outs: vec![],
         holds: vec![],
+        kcc23: None,
     }
 }
 
@@ -662,10 +695,12 @@ impl Extractor<'_> {
         let has_kob1 = tx.payload.0.starts_with(payload::MAGIC);
         let any_cov_in = tx.inputs.iter().any(|i| spent_of(i).is_some_and(|u| u.covenant_id.is_some()));
         let any_cov_out = tx.outputs.iter().any(|o| o.covenant.is_some());
-        if !has_kob1 && !any_cov_in && !any_cov_out {
-            return Ok(None);
-        }
+        // KCC-23: a candidate preparation or a verified genesis, whatever else the transaction is
+        let kcc23 = super::kcc23::extract(self.conn, tx)?;
         let txid = tx.verbose_data.transaction_id;
+        if !has_kob1 && !any_cov_in && !any_cov_out {
+            return Ok(kcc23.map(|d| TxRecord::declaration_only(txid, pos, d)));
+        }
 
         // Placement records: which orders (and tokens) this transaction announces.
         let mut relevant = false;
@@ -794,7 +829,7 @@ impl Extractor<'_> {
             }
         }
         if !relevant {
-            return Ok(None);
+            return Ok(kcc23.map(|d| TxRecord::declaration_only(txid, pos, d)));
         }
         // A fill of a plain KobAsk / KobBid this indexer does not track (no placement record): the covenants accept it as trigger
         // evidence all the same (they check its template, not a record), so its quote is kept for the tracked conditional orders
@@ -811,7 +846,7 @@ impl Extractor<'_> {
         } else {
             payload::encode(&kept).unwrap_or_else(|_| UNDECODABLE_PAYLOAD.to_vec())
         };
-        Ok(Some(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds }))
+        Ok(Some(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23 }))
     }
 }
 
@@ -846,6 +881,7 @@ mod tests {
                 HeldOut { out: 1, program: TemplateId::Kcc20Ref8x8, state: TokenState::Kcc20(Kcc20State::p2pk(7, [3; 32], [4; 32])) },
                 HeldOut { out: 0, program: TemplateId::KronToken2433, state: TokenState::Kron(KronState::addr(9, [5; 32])) },
             ],
+            kcc23: None,
         };
         let mut w = Writer::new();
         rec.encode(&mut w);
@@ -885,6 +921,7 @@ mod tests {
             outputs: vec![],
             tok_outs: vec![],
             holds: vec![],
+            kcc23: None,
         };
         let mut w = Writer::new();
         rec.encode(&mut w);

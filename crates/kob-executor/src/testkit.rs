@@ -1287,6 +1287,14 @@ pub fn snapshot(conn: &Connection) -> String {
         "amend",
         &[1],
     );
+    dump("SELECT txid, tx, created_block, daa FROM kcc23_candidates ORDER BY txid", 4, &mut out, "kcc23_candidate", &[2]);
+    dump(
+        "SELECT covenant_id, proof, preparation_txid, genesis_txid, genesis_block, genesis_daa FROM kcc23_declarations ORDER BY covenant_id",
+        6,
+        &mut out,
+        "kcc23_declaration",
+        &[4],
+    );
     // a status whose last order changed status keeps a zero row (incremental), which a rebuild never writes
     dump("SELECT name, n FROM counters WHERE n != 0 ORDER BY name", 2, &mut out, "counter", &[]);
     assert_read_invariants(conn);
@@ -1524,6 +1532,83 @@ pub fn fresh_snapshot(chain: &[MBlock]) -> String {
         .collect();
     ing.apply_batch(anchor, &VspcBatch { removed: vec![], added, wire_bytes: 0 }).unwrap();
     snapshot(ing.conn())
+}
+
+// ---------------------------------------------------------------------------------------------
+// KCC-23 declarations (`indexer::kcc23`)
+
+/// The KCC-23 example declaration (`kcc-0023.md`).
+pub const KCC23_EXAMPLE: &str = r#"{"name":"Example Token","symbol":"EXT","decimals":8}"#;
+
+/// The id of a consensus transaction (recomputed: a mutated transaction's cached id is stale).
+pub fn kcc23_txid(t: &kaspa_consensus_core::tx::Transaction) -> Hash32 {
+    Hash32(kaspa_consensus_core::hashing::tx::id(t).as_bytes())
+}
+
+/// A version 1 preparation transaction carrying `payload` (one input funded by `h("kcc23-funding", salt)`, one plain output).
+pub fn kcc23_prep(salt: u64, payload: Vec<u8>) -> kaspa_consensus_core::tx::Transaction {
+    use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
+    use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput};
+    let funding = TransactionOutpoint::new(kaspa_consensus_core::Hash::from_bytes(h("kcc23-funding", salt).0), 0);
+    let out = TransactionOutput::new(100_000_000, ScriptPublicKey::from_vec(0, vec![0x20, 0x51, 0xac]));
+    Transaction::new(1, vec![TransactionInput::new(funding, vec![], 0, 0)], vec![out], 0, SUBNETWORK_ID_NATIVE, 0, payload)
+}
+
+/// The genesis of a covenant spending output `out` of `prep` (the authorising input 0, one covenant output carrying the
+/// KIP-20 genesis id of that outpoint and group), and the covenant id.
+pub fn kcc23_genesis(prep: &kaspa_consensus_core::tx::Transaction, out: u32, salt: u64) -> (kaspa_consensus_core::tx::Transaction, Hash32) {
+    use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
+    use kaspa_consensus_core::tx::{CovenantBinding as Binding, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput};
+    let spent = TransactionOutpoint::new(kaspa_consensus_core::Hash::from_bytes(kcc23_txid(prep).0), out);
+    let spk = ScriptPublicKey::from_vec(0, [&[0xaa, 0x20][..], &h("kcc23-covenant", salt).0, &[0x87]].concat());
+    let mut g = Transaction::new(1, vec![TransactionInput::new(spent, vec![], 0, 0)], vec![TransactionOutput::new(90_000_000, spk)], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+    let id = kaspa_consensus_core::hashing::covenant_id::covenant_id(spent, [(0u32, &g.outputs[0])].into_iter());
+    g.outputs[0].covenant = Some(Binding::new(0, id));
+    (g, Hash32(id.as_bytes()))
+}
+
+/// A consensus transaction as VSPC v2 reports it accepted: at `High` verbosity (`full` false) without the version, lock time,
+/// subnetwork and gas.
+pub fn kcc23_wire(t: &kaspa_consensus_core::tx::Transaction, full: bool) -> Tx {
+    Tx {
+        inputs: t
+            .inputs
+            .iter()
+            .map(|i| TxInput {
+                previous_outpoint: Outpoint {
+                    transaction_id: Hash32(i.previous_outpoint.transaction_id.as_bytes()),
+                    index: i.previous_outpoint.index,
+                },
+                signature_script: HexBytes(vec![0x41; 65]),
+                sequence: Some(i.sequence),
+                verbose_data: Some(InputVerbose {
+                    utxo_entry: Some(SpentUtxo {
+                        amount: 100_000_000,
+                        script_public_key: HexBytes(vec![0, 0, 0x20, 0x51, 0xac]),
+                        block_daa_score: None,
+                        covenant_id: None,
+                    }),
+                }),
+            })
+            .collect(),
+        outputs: t
+            .outputs
+            .iter()
+            .map(|o| TxOutput {
+                value: o.value,
+                script_public_key: HexBytes([&o.script_public_key.version().to_be_bytes()[..], o.script_public_key.script()].concat()),
+                covenant: o
+                    .covenant
+                    .map(|c| CovenantBinding { authorizing_input: c.authorizing_input as u32, covenant_id: Hash32(c.covenant_id.as_bytes()) }),
+            })
+            .collect(),
+        payload: HexBytes(t.payload.clone()),
+        verbose_data: TxVerbose { transaction_id: kcc23_txid(t), block_time: 0 },
+        version: full.then_some(t.version),
+        lock_time: full.then_some(t.lock_time),
+        subnetwork_id: full.then(|| HexBytes(AsRef::<[u8]>::as_ref(&t.subnetwork_id).to_vec())),
+        gas: full.then_some(t.gas),
+    }
 }
 
 /// Convenience for tests: a record with a client note (a payload the indexer must ignore).

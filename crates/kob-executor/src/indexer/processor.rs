@@ -630,6 +630,11 @@ impl Processor {
             let closes = !continued.contains(&s.cov);
             self.record_spend_events(conn, ctx, rec, s, closes, &exits, &spent, delta)?;
         }
+
+        // 7. KCC-23: a candidate preparation, or the verified launch proofs of a genesis (`super::kcc23`)
+        if let Some(d) = &rec.kcc23 {
+            super::kcc23::apply(conn, seq, daa, &txid, d)?;
+        }
         Ok(())
     }
 
@@ -2004,6 +2009,7 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
     changed += conn.execute("DELETE FROM token_events WHERE block_seq = ?1", [seq])?;
     changed += conn.execute("DELETE FROM rejects WHERE block_seq = ?1", [seq])?;
     changed += conn.execute("DELETE FROM orders WHERE genesis_block = ?1", [seq])?;
+    changed += super::kcc23::revert(conn, seq)?;
     conn.execute("DELETE FROM blocks WHERE seq = ?1", [seq])?;
     for cov in &affected {
         refresh_order_state(conn, cov)?;

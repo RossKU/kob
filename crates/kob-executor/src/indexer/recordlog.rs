@@ -17,7 +17,8 @@
 //! The body is versioned ([`FORMAT`]). Format 2 (since 2026-10-01) is self-describing: `0x00 0x02`, the write time, a
 //! template table per frame (record-log code -> template hash of every order template and token program the frame refers
 //! to) and length-prefixed states, so a frame decodes whatever the templates are when it is read; a reveal of a template
-//! this build does not pin is dropped and counted, never misread. A frame this build cannot decode (format 1, written
+//! this build does not pin is dropped and counted, never misread. Format 3 ([`FORMAT_KCC23`], since 2026-10-19) is format 2
+//! with KCC-23 declaration sections in its records, written only for the frames that hold one. A frame this build cannot decode (format 1, written
 //! before 2026-10-01 without a marker, or a newer format) is kept and skipped by [`read_all`] with a counted warning
 //! (`open` checks the chain only and never decodes a body).
 //!
@@ -133,6 +134,12 @@ fn code_of(t: TemplateId) -> u8 {
 /// templates. Format 1 (frames written before 2026-10-01, no marker: the body starts with the write time in ms, a varint >
 /// 0) is not read.
 pub const FORMAT: u8 = 2;
+
+/// Format 3 (since 2026-10-19): format 2 whose records may carry a KCC-23 declaration section (`record::TxRecord::kcc23`, flagged by
+/// bit 30 of a record's position). Only a frame that holds such a section is written as format 3; every other frame stays
+/// format 2, byte for byte, so a build before declarations reads it and skips (with a counted "newer format" warning) only the
+/// frames with declarations instead of misreading them.
+pub const FORMAT_KCC23: u8 = 3;
 
 impl LogOp {
     fn encode(&self, w: &mut Writer) {
@@ -327,11 +334,11 @@ impl LogBatch {
         (orders, programs)
     }
 
-    /// Encodes the batch as a format-2 frame body.
+    /// Encodes the batch as a format-2 frame body (format 3 when a record carries a KCC-23 declaration section).
     pub fn encode(&self, now_ms: u64) -> Vec<u8> {
         let mut w = Writer::new();
         w.u8(0);
-        w.u8(FORMAT);
+        w.u8(if self.blocks.iter().flat_map(|b| &b.txs).any(|t| t.kcc23.is_some()) { FORMAT_KCC23 } else { FORMAT });
         w.var(now_ms);
         let (orders, programs) = self.tables();
         write_table(&mut w, &orders);
@@ -361,10 +368,10 @@ impl LogBatch {
         w.buf
     }
 
-    /// Decodes a frame body (format 2).
+    /// Decodes a frame body (format 2 or 3).
     pub fn decode(body: &[u8]) -> Result<DecodedBatch, WireError> {
         match body {
-            [0, FORMAT, rest @ ..] => {
+            [0, FORMAT | FORMAT_KCC23, rest @ ..] => {
                 let mut r = Reader::new(rest);
                 let written_ms = r.var()?;
                 let orders = read_table(&mut r)?;
@@ -874,6 +881,7 @@ mod tests {
                     outputs: vec![],
                     tok_outs: vec![],
                     holds: vec![],
+                    kcc23: None,
                 }],
             }],
             ops: vec![LogOp::CloseGap { txid: Hash32([1; 32]), index: 2, covenant_id: Hash32([3; 32]) }],
@@ -1168,6 +1176,7 @@ mod tests {
             outputs: vec![RecOut { value: 1_000, spk: vec![], cov: None }],
             tok_outs: vec![],
             holds: vec![],
+            kcc23: None,
         }
     }
 

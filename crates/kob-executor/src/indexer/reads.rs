@@ -104,6 +104,10 @@ pub struct TokenView {
     pub open_asks: i64,
     /// Listed, open or partially filled bids (side 2).
     pub open_bids: i64,
+    /// `true` when the indexer holds a verified KCC-23 declaration for the covenant id (`GET /v1/tokens/{covenant_id}/declaration`
+    /// serves its launch proof); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declaration: Option<bool>,
 }
 
 /// The one KCC-20 extension commitment the order placements of a token (and program) named (`token_events`), `None` when
@@ -179,6 +183,7 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 template_id: t.template_id.clone(),
                 open_asks: counts.get(&(id.clone(), 1)).copied().unwrap_or(0),
                 open_bids: counts.get(&(id, 2)).copied().unwrap_or(0),
+                declaration: None,
             }
         })
         .collect();
@@ -228,7 +233,16 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 template_id: Some(strict.id.clone()),
                 open_asks: counts.get(&(cov.clone(), 1)).copied().unwrap_or(0),
                 open_bids: counts.get(&(cov, 2)).copied().unwrap_or(0),
+                declaration: None,
             });
+        }
+    }
+    // the KCC-23 declarations the indexer holds (one primary-key lookup per row)
+    for v in &mut out {
+        if let Ok(id) = crate::hex::Hash32::parse(&v.covenant_id) {
+            if super::kcc23::declared(conn, &id)? {
+                v.declaration = Some(true);
+            }
         }
     }
     Ok(out)

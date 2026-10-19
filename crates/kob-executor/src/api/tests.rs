@@ -1341,3 +1341,43 @@ async fn pair_candles_come_from_the_two_kas_series_and_pair_fills_are_volume_onl
     let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/fills", h(QUOTE), h(BASE))).await;
     assert!(v["items"].as_array().unwrap().is_empty());
 }
+
+/// `GET /v1/tokens/{covenant_id}/declaration`: the KCC-23 launch proof the indexer holds (as the write path stores it), 404 in
+/// the API's error shape when it holds none, 400 for a malformed id; `GET /v1/tokens` flags the tokens that have one.
+#[tokio::test]
+async fn token_declarations_are_served_as_launch_proofs() {
+    use crate::indexer::kcc23::{apply, proof_tx, DeclSection};
+    use crate::testkit::{kcc23_genesis, kcc23_prep, kcc23_txid, kcc23_wire, KCC23_EXAMPLE};
+    let mut e = env(|_| {});
+    seed_all(&e.w);
+    let prep = kcc23_prep(1, kob_protocol::kcc23::encode(KCC23_EXAMPLE).unwrap());
+    let (gen, cov) = kcc23_genesis(&prep, 0, 1);
+    let ptx = |t| proof_tx(&kcc23_wire(t, false)).unwrap();
+    apply(&e.w, 9, 990, &kcc23_txid(&prep), &DeclSection { tx: ptx(&prep), preparation: true, binds: vec![] }).unwrap();
+    let declared = apply(&e.w, 9, 990, &kcc23_txid(&gen), &DeclSection { tx: ptx(&gen), preparation: false, binds: vec![ptx(&prep)] });
+    assert_eq!(declared.unwrap(), vec![cov]);
+    let mut entries = e.state.tokens.list().into_iter().cloned().collect::<Vec<_>>();
+    entries.push(TokenEntry { ticker: "EXT".into(), covenant_id: cov, decimals: Some(8), ..entries[0].clone() });
+    e.state.tokens = Arc::new(TokenAllowlist::from_entries(entries));
+    let app = router(e.state.clone());
+
+    let (s, headers, v) = get_from(&app, &format!("/v1/tokens/{cov}/declaration"), "127.0.0.1", &[]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(headers.get("content-type").unwrap(), "application/json");
+    let proof = kob_protocol::kcc23::LaunchProof::of(&prep, &gen, kaspa_consensus_core::Hash::from_bytes(cov.0));
+    assert_eq!(v, serde_json::to_value(&proof).unwrap());
+    assert_eq!(v["format"], "kob-kcc23-proof/1");
+    // what a client does with it
+    let back: kob_protocol::kcc23::LaunchProof = serde_json::from_value(v).unwrap();
+    assert_eq!(back.verify().unwrap().token.symbol.as_deref(), Some("EXT"));
+
+    let (s, v) = get(&app, &format!("/v1/tokens/{}/declaration", h(TOKEN))).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::NOT_FOUND, Some("not_found")));
+    let (s, v) = get(&app, "/v1/tokens/zz/declaration").await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_request")));
+
+    let (_, v) = get(&app, "/v1/tokens").await;
+    let row = |id: &str| v["tokens"].as_array().unwrap().iter().find(|t| t["covenant_id"] == id).cloned().unwrap();
+    assert_eq!(row(&cov.to_hex())["declaration"], true);
+    assert!(row(&h(TOKEN)).get("declaration").is_none(), "absent without a declaration (older clients see no new key)");
+}

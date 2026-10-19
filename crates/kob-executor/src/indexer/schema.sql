@@ -276,6 +276,32 @@ CREATE INDEX IF NOT EXISTS pair_fills_pair ON pair_fills (base_cov_id, quote_cov
 CREATE INDEX IF NOT EXISTS pair_fills_pair_ts ON pair_fills (base_cov_id, quote_cov_id, ts);
 CREATE INDEX IF NOT EXISTS pair_fills_block ON pair_fills (block_seq);
 
+-- KCC-23 declarations (`kcc23.rs`). A candidate preparation: an accepted version 1 transaction whose payload is a declaration
+-- (`0x00` + one strict I-JSON object, at most 16 KiB), its id-relevant fields in the record-log encoding (`kcc23::encode_tx`,
+-- at most 32 KiB). Stamped with the block that accepted it (reverted with it); pruned once older than the declaration window
+-- unless a declaration of the stored blocks names it.
+CREATE TABLE IF NOT EXISTS kcc23_candidates (
+    txid          BLOB PRIMARY KEY,
+    tx            BLOB NOT NULL,
+    created_block INTEGER NOT NULL,
+    daa           INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS kcc23_candidates_created ON kcc23_candidates (created_block);
+CREATE INDEX IF NOT EXISTS kcc23_candidates_daa ON kcc23_candidates (daa);
+
+-- A verified KCC-23 declaration per covenant id: the launch proof (`kob-kcc23-proof/1` JSON, `GET /v1/tokens/{id}/declaration`)
+-- of the genesis that spent a candidate's output. The first one stays; reverted with the genesis block.
+CREATE TABLE IF NOT EXISTS kcc23_declarations (
+    covenant_id      BLOB PRIMARY KEY,
+    proof            TEXT NOT NULL,
+    preparation_txid BLOB NOT NULL,
+    genesis_txid     BLOB NOT NULL,
+    genesis_block    INTEGER NOT NULL,       -- blocks.seq
+    genesis_daa      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS kcc23_declarations_block ON kcc23_declarations (genesis_block);
+CREATE INDEX IF NOT EXISTS kcc23_declarations_preparation ON kcc23_declarations (preparation_txid);
+
 -- Row counts `GET /v1/health` reports (`reads::counters`), kept by the triggers below in the transaction of every write
 -- (a batch, a revert, a replay, an operator import), so a health check reads a few rows instead of counting the history.
 -- name: orders | orders_listed | rejects | fills | status:<order_state.status>. A database without them gets them at

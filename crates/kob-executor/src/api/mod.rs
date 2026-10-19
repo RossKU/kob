@@ -9,7 +9,8 @@
 //!
 //! Routes (all GET):
 //! - `/v1/health`, `/v1/health/ready`
-//! - `/v1/tokens`
+//! - `/v1/tokens` (a row carries `declaration: true` when the indexer holds a KCC-23 declaration for the token),
+//!   `/v1/tokens/{covenant_id}/declaration` (its KCC-23 launch proof, `kob-kcc23-proof/1`)
 //! - `/v1/books/{token}?depth=&aggregate=` (KAS books; pair orders are in no KAS book)
 //! - `/v1/pairs?token=`, `/v1/pairs/{base}/{quote}/book?depth=` (pair orders and the implied KAS-route quotes),
 //!   `/v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=` (derived from the two KAS series),
@@ -171,6 +172,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         .route("/v1/health/ready", get(rest::ready))
         .route("/v1/metrics", get(rest::metrics))
         .route("/v1/tokens", get(rest::tokens))
+        .route("/v1/tokens/{covenant_id}/declaration", get(rest::token_declaration))
         .route("/v1/books/{token}", get(rest::book))
         .route("/v1/pairs", get(rest::pairs))
         .route("/v1/pairs/{base}/{quote}/book", get(rest::pair_book))
