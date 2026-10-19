@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use kob_protocol::artifacts::token_template;
+use kob_protocol::artifacts::{token_template, TemplateId};
 use kob_protocol::json::to_hex;
 use kob_protocol::state::{AnyState, TokenState};
 use kob_protocol::tx::{KeyUtxo, OrderUtxo, TokenUtxo};
@@ -65,6 +65,74 @@ pub fn token_lists(
         None => vec![],
     };
     Ok((reg, idx))
+}
+
+/// The KCC-23 declaration of `cov` (`docs/spec/token-metadata.md` section 4): the launch proof the indexer serves
+/// (`GET /v1/tokens/{id}/declaration`), verified against the covenant id ([`market::declared_from_proof`]). A 404 is no
+/// declaration (a token created before KCC-23, or an indexer without the route); a proof that does not verify, or names
+/// another covenant id, is refused.
+pub fn declaration(indexer: &str, cov: &[u8; 32]) -> Result<Option<market::Declared>, String> {
+    let path = format!("/v1/tokens/{}/declaration", to_hex(cov));
+    match http::get(indexer, &path, INDEXER_TIMEOUT)? {
+        (200, v) => market::declared_from_proof(cov, &v).map(Some).map_err(|e| format!("indexer {}{path}: {e}", http::shown(indexer))),
+        (404, _) => Ok(None),
+        (status, v) => {
+            let msg = v.pointer("/error/message").and_then(Value::as_str).unwrap_or("");
+            Err(format!("indexer {}{path}: HTTP {status} {msg}", http::shown(indexer)))
+        }
+    }
+}
+
+/// The token program of `cov` that the key's own token UTXOs of it prove, for a token no list names (a declared token without
+/// orders): the candidates the indexer lists (`GET /v1/token-utxos`, under the program it proved) and this machine's record of
+/// the key's own outputs ([`crate::recent`]: a token created here, tried under every program of its family), each confirmed on
+/// the node (the state's script under the program, at that outpoint, carrying the covenant id). `None` when none is confirmed;
+/// refused when the confirmed UTXOs name more than one program.
+pub fn held_program(indexer: &str, node: &str, network: &str, cov: &[u8; 32], owner: &[u8; 32]) -> Result<Option<TemplateId>, String> {
+    let path = format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(owner), to_hex(cov));
+    let v = http::get_ok(indexer, &path, INDEXER_TIMEOUT)?;
+    let mut cands: Vec<(TemplateId, TokenState, [u8; 32], u32)> = vec![];
+    for it in v.get("items").and_then(Value::as_array).cloned().unwrap_or_default() {
+        if it.get("spent").and_then(Value::as_bool).unwrap_or(false) {
+            continue;
+        }
+        let program = it.get("program").and_then(Value::as_str).and_then(TemplateId::from_name).filter(|p| p.is_token());
+        let state = it.get("state").and_then(|s| serde_json::from_value::<TokenState>(s.clone()).ok());
+        let txid = it.get("txid").and_then(Value::as_str).and_then(kob_protocol::registry::parse_hex32);
+        let index = it.get("index").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok());
+        if let (Some(p), Some(st), Some(txid), Some(index)) = (program, state, txid, index) {
+            cands.push((p, st, txid, index));
+        }
+    }
+    for (st, txid, index) in crate::recent::candidates(network, owner, cov) {
+        for p in TemplateId::TOKEN_PROGRAMS.into_iter().filter(|p| p.family() == st.family()) {
+            cands.push((p, st.clone(), txid, index));
+        }
+    }
+    cands.retain(|(p, st, _, _)| st.is_holder(*p) && st.owner() == *owner);
+    if cands.is_empty() {
+        return Ok(None);
+    }
+    let spks: Vec<_> = cands.iter().map(|(p, st, _, _)| st.spk_with(token_template(*p))).collect();
+    let at = lookup(node, network, &spks)?;
+    let mut programs: std::collections::BTreeSet<TemplateId> = std::collections::BTreeSet::new();
+    for ((p, _, txid, index), spk) in cands.iter().zip(&spks) {
+        let found = at
+            .get(&spk_bytes(spk))
+            .is_some_and(|v| v.iter().any(|u| u.txid == *txid && u.index == *index && u.covenant_id == Some(*cov)));
+        if found {
+            programs.insert(*p);
+        }
+    }
+    match programs.len() {
+        0 => Ok(None),
+        1 => Ok(programs.pop_first()),
+        _ => Err(format!(
+            "{}: your token UTXOs of it (checked on the node) are of {} token programs: refused",
+            to_hex(cov),
+            programs.len()
+        )),
+    }
 }
 
 fn i64_of(v: Option<&Value>) -> Option<i64> {

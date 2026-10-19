@@ -562,8 +562,15 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<Pl
         .transpose()?;
     let order_scale = |cov: &[u8; 32]| data::order_scale(&indexer, cov);
     let remembered = |cov: &[u8; 32]| crate::recent::first_order_decimals(&c.network, cov);
-    let open =
-        |entered| market::OpenToken { entered, remembered: Some(&remembered), ..market::OpenToken::new(&c.network, &order_scale) };
+    let declaration = |cov: &[u8; 32]| data::declaration(&indexer, cov);
+    let held_program = |cov: &[u8; 32]| data::held_program(&indexer, c.need_node()?, &c.network, cov, &maker);
+    let open = |entered| market::OpenToken {
+        entered,
+        remembered: Some(&remembered),
+        declaration: Some(&declaration),
+        held_program: Some(&held_program),
+        ..market::OpenToken::new(&c.network, &order_scale)
+    };
     let mut a = market::resolve_with(p.get("--token").ok_or("--token is required")?, &reg, &idx, Some(&open(entered)))?;
     let mut b = match p.get("--quote") {
         Some(q) => Some(market::resolve_with(q, &reg, &idx, Some(&open(None)))?),

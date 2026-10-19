@@ -1006,3 +1006,75 @@ fn the_first_order_scale_of_an_unlisted_token_sticks() {
     let (v, _) = crate::trade::views::book_view(&c, &p).unwrap();
     assert_eq!(v["scale"], SCALE);
 }
+
+/// A token created under KCC-23 that no list names yet (no registry entry, no order: not in the indexer's token list): its
+/// first order takes the decimals (and the scale, `10^min(decimals, 9)`) its declaration records, the indexer's launch proof
+/// verified against the covenant id, and its program from the wallet's node-checked holdings of it. No declaration (a 404) is
+/// today's unknown token; the proof of another covenant id is refused, never used; a token list naming other decimals, a
+/// market of another scale or a `--decimals` of another scale are refused.
+#[test]
+fn a_declared_token_without_orders_takes_its_decimals_from_its_declaration() {
+    let c = crate::trade::market::test_creation(6);
+    let dcl = c.genesis.covenant_id.as_bytes();
+    let proof = serde_json::to_value(c.launch_proof()).unwrap();
+    let maker = pk(0x11);
+    let held = TokenState::user(P.family(), 40_000_000, maker, EXT);
+    let w = world_x("declared", &[], |utxos, routes| {
+        utxos.push(node_utxo(&token_spk(&held), 0x05, 0, 10 * KAS, Some(dcl)));
+        routes.insert(
+            format!("/v1/token-utxos?owner={}&token={}&limit=500", to_hex(&maker), to_hex(&dcl)),
+            json!({"items": [{"txid": to_hex(&[0x05; 32]), "index": 0, "token": to_hex(&dcl), "owner": to_hex(&maker),
+                              "amount": "40000000", "value": (10 * KAS).to_string(), "role": "owned", "created_daa": 990_000,
+                              "spent": false, "state": held, "program": P.name()}], "next_cursor": null}),
+        );
+        routes.insert(
+            format!("/v1/orders?maker={}&token={}&status=active&limit=200", to_hex(&maker), to_hex(&dcl)),
+            json!({"items": [], "next_cursor": null}),
+        );
+        routes.insert(
+            format!("/v1/books/{}?depth=100&aggregate=false", to_hex(&dcl)),
+            json!({"token": to_hex(&dcl), "aggregated": false, "asks": [], "bids": []}),
+        );
+        routes.insert(format!("/v1/trades/{}?limit=1", to_hex(&dcl)), json!({"items": [], "price_basis": "1000000"}));
+    });
+    let place = crate::trade::place::run;
+    let sell = format!("limit --token {} --side sell --amount 5DCL --price 2KAS --yes", to_hex(&dcl));
+    let decl_path = format!("/v1/tokens/{}/declaration", to_hex(&dcl));
+    let route = |path: &str, v: Value| {
+        w.indexer_state.lock().unwrap().routes.insert(path.to_string(), v);
+    };
+    // no declaration (the indexer answers 404): an unknown token, as before
+    assert_eq!(run(place, w.args(0x11, &sell)), 1);
+    assert!(w.indexer_state.lock().unwrap().seen.contains(&decl_path), "the declaration was asked for");
+    // the proof of another token served for this one: refused
+    route(&decl_path, serde_json::to_value(crate::trade::market::test_creation(2).launch_proof()).unwrap());
+    assert_eq!(run(place, w.args(0x11, &sell)), 1);
+    assert_eq!(w.submitted(), 0);
+    // its own: placed at the declared scale (the amount in whole DCL, its declared symbol), the program the holdings prove
+    route(&decl_path, proof);
+    assert_eq!(run(place, w.args(0x11, &sell)), 0);
+    assert_eq!(w.submitted(), 1);
+    let s = w.signed(".place.json");
+    let AnyState::KobAsk(a) = &recover_orders(&s.tx).unwrap()[0].order else { panic!() };
+    assert_eq!((a.token_cov_id, a.scale, a.amount_left), (dcl, 1_000_000, 5_000_000));
+    assert_eq!(a.token_tpl_hash, token_template(P).hash);
+    assert!(w.issue_codes(".place.json").iter().any(|c| c == "TOKEN_UNLISTED"));
+    // a --decimals of another scale is refused, of the same one fine
+    assert_eq!(run(place, w.args(0x11, &format!("{sell} --decimals 3"))), 1);
+    assert_eq!(run(place, w.args(0x11, &format!("{sell} --decimals 6"))), 0);
+    assert_eq!(w.submitted(), 2);
+    // the indexer lists it, marked declared: a list entry naming other decimals is refused, and so is a market of another scale
+    let row = |decimals: Value, market_scale: Value| {
+        json!({"ticker": "", "covenant_id": to_hex(&dcl), "template_hash": to_hex(&token_template(P).hash),
+               "extension_commitment": to_hex(&EXT), "decimals": decimals, "market_scale": market_scale, "declaration": true,
+               "open_asks": 0, "open_bids": 0})
+    };
+    let tst = w.indexer_state.lock().unwrap().routes["/v1/tokens"]["tokens"][0].clone();
+    route("/v1/tokens", json!({"tokens": [tst.clone(), row(json!(8), Value::Null)]}));
+    assert_eq!(run(place, w.args(0x11, &sell)), 1);
+    route("/v1/tokens", json!({"tokens": [tst.clone(), row(Value::Null, json!(1000))]}));
+    assert_eq!(run(place, w.args(0x11, &sell)), 1);
+    route("/v1/tokens", json!({"tokens": [tst, row(Value::Null, json!(1_000_000))]}));
+    assert_eq!(run(place, w.args(0x11, &sell)), 0);
+    assert_eq!(w.submitted(), 3);
+}

@@ -51,6 +51,9 @@ pub enum DecimalsFrom {
     Remembered,
     /// A view of a token without orders and without decimals: nothing tells them; amounts are base units (scale 1).
     Unknown,
+    /// The token's KCC-23 declaration (`docs/spec/token-metadata.md` section 4), verified against its covenant id: the scale of
+    /// its orders is `10^min(decimals, 9)`.
+    Declared,
 }
 
 /// Everything a planner needs of one token.
@@ -198,11 +201,16 @@ impl TokenMarket {
                 code: "TOKEN_UNLISTED",
                 severity: Severity::Warning,
                 message: format!(
-                    "{} is not in the registry: its ticker comes from the indexer and its decimals ({}, which read every amount and \
+                    "{} is not in the registry: its ticker comes from {} and its decimals ({}, which read every amount and \
                      price) {}; check its covenant id {} yourself",
                     self.name(),
+                    if self.decimals_from == DecimalsFrom::Declared { "its KCC-23 declaration" } else { "the indexer" },
                     self.decimals,
                     match self.decimals_from {
+                        DecimalsFrom::Declared => {
+                            "are the ones its KCC-23 declaration records on chain (verified against its covenant id; declared by its \
+                             creator, not reviewed)"
+                        }
                         DecimalsFrom::Entered => "are the ones --decimals names for its first order",
                         DecimalsFrom::Remembered => "are the ones --decimals named for your first order of it (kept on this machine)",
                         DecimalsFrom::Unknown => "are unknown (no order of it yet)",
@@ -258,6 +266,45 @@ pub struct TokenFacts {
     /// The indexer's `market_scale` of a token without decimals: the scale of its earliest order, open or ended (`Some(None)`:
     /// no order of it was ever seen; `None`: the source does not report it, an older indexer or the registry).
     pub market_scale: Option<Option<i64>>,
+    /// The indexer holds a verified KCC-23 declaration of the token (`GET /v1/tokens` row `declaration: true`).
+    pub declared: bool,
+}
+
+/// What a token's KCC-23 declaration names under KOB's convention (`docs/spec/token-metadata.md` section 2), read from a launch
+/// proof verified against the token's covenant id ([`declared_from_proof`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declared {
+    /// `decimals` (0..=18), when declared.
+    pub decimals: Option<u32>,
+    /// `symbol`, when declared.
+    pub symbol: Option<String>,
+    /// `name`, when declared.
+    pub name: Option<String>,
+}
+
+/// The declaration of `cov` from a launch proof (`kob-kcc23-proof/1`) from any source (the indexer's
+/// `GET /v1/tokens/{id}/declaration`): `LaunchProof::verify` recomputes both transaction ids and the covenant id, so a supplier
+/// can withhold a declaration, never forge one. A proof that does not verify, or that is the proof of another covenant id, is
+/// refused (an error), never used.
+pub fn declared_from_proof(cov: &[u8; 32], proof: &serde_json::Value) -> Result<Declared, String> {
+    let id = to_hex(cov);
+    let p: kob_protocol::kcc23::LaunchProof =
+        serde_json::from_value(proof.clone()).map_err(|e| format!("the KCC-23 launch proof of {id} is malformed ({e}): refused"))?;
+    if p.covenant_id != *cov {
+        return Err(format!("the KCC-23 launch proof served for {id} is the proof of {}: refused", to_hex(&p.covenant_id)));
+    }
+    let v = p.verify().map_err(|e| format!("the KCC-23 launch proof of {id} does not verify ({e}): refused"))?;
+    if v.covenant_id != *cov {
+        return Err(format!("the KCC-23 launch proof served for {id} binds {}: refused", to_hex(&v.covenant_id)));
+    }
+    Ok(Declared { decimals: v.token.decimals.map(u32::from), symbol: v.token.symbol, name: v.token.name })
+}
+
+/// A declared symbol as a ticker, when amounts can name it (`12.5SYM`): ASCII letters and digits, a letter first.
+fn ticker_of_symbol(symbol: Option<&str>) -> Option<String> {
+    let s = symbol?;
+    let ok = s.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && s.chars().all(|c| c.is_ascii_alphanumeric());
+    ok.then(|| s.to_string())
 }
 
 /// The tokens of a registry file (`registry/tokens.json` format) of `network`: the registry must pass every rule of the
@@ -295,6 +342,7 @@ pub fn registry_tokens(json: &str, network: &str) -> Result<Vec<TokenFacts>, Str
             genesis_verified: t.genesis_verified == Some(true),
             not_tradable,
             market_scale: None,
+            declared: false,
         });
     }
     Ok(out)
@@ -321,6 +369,7 @@ pub fn indexer_tokens(v: &serde_json::Value) -> Result<Vec<TokenFacts>, String> 
                     Some(serde_json::Value::Null) => Some(None),
                     Some(v) => Some(Some(v.as_i64().ok_or("indexer /v1/tokens: a `market_scale` that is not an integer")?)),
                 },
+                declared: t.get("declaration").and_then(|d| d.as_bool()) == Some(true),
             })
         })
         .collect()
@@ -343,6 +392,12 @@ pub type OrderScale<'a> = &'a dyn Fn(&[u8; 32]) -> Result<Option<i64>, String>;
 /// The decimals `--decimals` named for this machine's own first order of a token ([`OpenToken::remembered`]).
 pub type Remembered<'a> = &'a dyn Fn(&[u8; 32]) -> Option<u32>;
 
+/// A token's KCC-23 declaration, verified against its covenant id ([`OpenToken::declaration`]); `None`: it has none.
+pub type Declaration<'a> = &'a dyn Fn(&[u8; 32]) -> Result<Option<Declared>, String>;
+
+/// The token program the wallet's own token UTXOs of a token prove, each confirmed on the node ([`OpenToken::held_program`]).
+pub type HeldProgram<'a> = &'a dyn Fn(&[u8; 32]) -> Result<Option<TemplateId>, String>;
+
 /// What resolves a token without a registry entry (the open token list): its network, and its decimals when neither the
 /// registry nor the indexer names them.
 pub struct OpenToken<'a> {
@@ -359,12 +414,19 @@ pub struct OpenToken<'a> {
     /// A view (`kob book`): a token whose decimals nothing tells resolves with none ([`DecimalsFrom::Unknown`]: base units)
     /// instead of being refused.
     pub view: bool,
+    /// The token's KCC-23 declaration (the indexer's launch proof, verified against the covenant id): asked for a token the
+    /// indexer's list marks declared or does not list. Its facts come first (`docs/spec/token-metadata.md` section 4): its
+    /// decimals give the scale of its orders, and a registry entry or a market that disagrees is refused.
+    pub declaration: Option<Declaration<'a>>,
+    /// For a declared token no list names (no registry entry, no order yet): its token program, as the wallet's own token
+    /// UTXOs of it prove it on the node. Without it (or without such UTXOs) the token's program is unknown and it is refused.
+    pub held_program: Option<HeldProgram<'a>>,
 }
 
 impl<'a> OpenToken<'a> {
     /// The open token of a command on `network`, its orders' scale read with `order_scale`.
     pub fn new(network: &'a str, order_scale: OrderScale<'a>) -> OpenToken<'a> {
-        OpenToken { network, order_scale, entered: None, remembered: None, view: false }
+        OpenToken { network, order_scale, entered: None, remembered: None, view: false, declaration: None, held_program: None }
     }
 }
 
@@ -395,9 +457,66 @@ pub fn resolve(key: &str, registry: &[TokenFacts], indexer: &[TokenFacts]) -> Re
     resolve_with(key, registry, indexer, None)
 }
 
+/// The decimals `declared` (a token's KCC-23 declaration, verified against its covenant id) gives the token, checked against
+/// every other source (`docs/spec/token-metadata.md` section 4): decimals a list names (`known`: the registry `r`, else the
+/// indexer's list `i`), the scale of its market (a token without a registry entry: its first order's, else its open orders'),
+/// this machine's first order of it, `--decimals` (`entered`). A disagreement is refused, never silently resolved (the same
+/// base units would mean other whole-token amounts and prices). `None`: no declared decimals.
+#[allow(clippy::too_many_arguments)]
+fn declared_decimals(
+    key: &str,
+    declared: Option<&Declared>,
+    known: Option<u32>,
+    r: Option<&TokenFacts>,
+    i: Option<&TokenFacts>,
+    open: Option<&OpenToken>,
+    entered: Option<u32>,
+    cov: &[u8; 32],
+) -> Result<Option<u32>, String> {
+    let Some(d) = declared.and_then(|d| d.decimals) else { return Ok(None) };
+    if let Some(k) = known.filter(|k| *k != d) {
+        let list = if r.and_then(|t| t.decimals).is_some() { "its registry entry" } else { "the indexer's token list" };
+        return Err(format!(
+            "`{key}`: {list} names {k} decimals, its KCC-23 declaration (verified against its covenant id) {d}: no order of it is \
+             planned until the two agree"
+        ));
+    }
+    let scale = default_scale(d);
+    if let Some(e) = entered.filter(|e| default_scale(*e) != scale) {
+        return Err(format!(
+            "--decimals {e} differs from the decimals `{key}` declared on chain ({d}: {scale} base units per whole token)"
+        ));
+    }
+    if let (None, Some(o)) = (r, open) {
+        let market = match i.and_then(|t| t.market_scale).flatten() {
+            Some(s) => Some(s),
+            None => (o.order_scale)(cov)?,
+        };
+        if let Some(s) = market.filter(|s| *s != scale) {
+            return Err(format!(
+                "`{key}`: scale conflict: the orders of its market use {s} base units per whole token, its KCC-23 declaration names \
+                 {d} decimals ({scale} per whole token): no order of it is planned until they agree"
+            ));
+        }
+        if let Some(m) = o.remembered.and_then(|f| f(cov)).filter(|m| default_scale(*m) != scale) {
+            return Err(format!(
+                "`{key}`: scale conflict: your first order of it named {m} decimals (kept on this machine), its KCC-23 declaration \
+                 {d}: no order of it is planned until they agree"
+            ));
+        }
+    }
+    Ok(Some(d))
+}
+
 /// [`resolve`], and for a token without a registry entry (`open`): the network's program review, and its decimals from the
-/// indexer, else from the scale of its orders, else from `--decimals` (its first order). The chain records no decimals, so
-/// they are never assumed: without any of these the token is refused.
+/// indexer, else from the scale of its orders, else from `--decimals` (its first order). Decimals are never assumed: without
+/// any of these the token is refused.
+///
+/// A token's KCC-23 declaration (`open.declaration`, verified against its covenant id) comes first (`docs/spec/token-metadata.md`
+/// section 4): its decimals give the scale of its orders (`10^min(decimals, 9)`), and a registry entry (or the indexer's list)
+/// naming other decimals, a market whose orders use another scale, or a `--decimals` of another scale is refused, never
+/// silently resolved. A declared token no list names (a covenant id without a registry entry and without orders) is known by
+/// its declaration: its program is the one the wallet's own token UTXOs of it prove on the node (`open.held_program`).
 pub fn resolve_with(
     key: &str,
     registry: &[TokenFacts],
@@ -409,19 +528,36 @@ pub fn resolve_with(
     if r.len() > 1 || i.len() > 1 {
         return Err(format!("`{key}` names more than one token: give its covenant id"));
     }
+    let declaration = open.and_then(|o| o.declaration);
+    let unknown = || {
+        format!(
+            "unknown token `{key}` (not in the registry nor in the indexer's token list, and no KCC-23 declaration of it: the \
+             indexer lists a token once an order of it was placed; a token without one opens its market from the web app, with a \
+             wallet that holds it)"
+        )
+    };
     // a ticker found in the registry pins the covenant id; the indexer entry must then be the same token
     let cov = match (r.first(), i.first()) {
         (Some(a), _) => a.cov,
         (None, Some(b)) => b.cov,
-        (None, None) => {
-            return Err(format!(
-                "unknown token `{key}` (not in the registry nor in the indexer's token list: the indexer lists a token once an \
-                 order of it was placed; a token without one opens its market from the web app, with a wallet that holds it)"
-            ))
-        }
+        // a covenant id no list names: known only by a KCC-23 declaration (asked below)
+        (None, None) => match (kob_protocol::registry::parse_hex32(key), declaration) {
+            (Some(c), Some(_)) => c,
+            _ => return Err(unknown()),
+        },
     };
     let i = indexer.iter().find(|t| t.cov == cov);
     let r = r.first().copied();
+    // the declaration is asked for a token the indexer marks declared, or does not list (an indexer lists a declared token
+    // without orders nowhere): one request, a 404 is no declaration
+    let declared: Option<Declared> = match (declaration, i) {
+        (Some(f), None) => f(&cov)?,
+        (Some(f), Some(t)) if t.declared => f(&cov)?,
+        _ => None,
+    };
+    if r.is_none() && i.is_none() && declared.is_none() {
+        return Err(unknown());
+    }
     let pick = |f: &dyn Fn(&TokenFacts) -> Option<String>, what: &str| -> Result<Option<String>, String> {
         let a = r.and_then(f);
         let b = i.and_then(f);
@@ -430,9 +566,26 @@ pub fn resolve_with(
             (a, b) => Ok(a.or(b)),
         }
     };
-    let tpl =
-        pick(&|t| t.tpl_hash.map(|h| to_hex(&h)), "the token program")?.ok_or(format!("`{key}`: the token program is unknown"))?;
-    let tpl = kob_protocol::registry::parse_hex32(&tpl).unwrap_or_default();
+    let tpl = match pick(&|t| t.tpl_hash.map(|h| to_hex(&h)), "the token program")? {
+        Some(t) => kob_protocol::registry::parse_hex32(&t).unwrap_or_default(),
+        // a declared token no list names: a declaration names no program, the wallet's own token UTXOs of it (confirmed on the
+        // node) do
+        None if r.is_none() && i.is_none() => {
+            let held = match open.and_then(|o| o.held_program) {
+                Some(f) => f(&cov)?,
+                None => None,
+            };
+            let p = held.ok_or_else(|| {
+                format!(
+                    "`{key}` is declared on chain (KCC-23), but no list names its token program yet (no registry entry, no order \
+                     of it) and this wallet holds none of it to prove the program on the node: its first order is placed by a \
+                     holder of it"
+                )
+            })?;
+            token_template(p).hash
+        }
+        None => return Err(format!("`{key}`: the token program is unknown")),
+    };
     let program =
         token_template_by_hash(&tpl).map(|t| t.id).ok_or(format!("`{key}`: its token program is not one this build supports"))?;
     if let (None, Some(o)) = (r, open) {
@@ -459,14 +612,16 @@ pub fn resolve_with(
     if let Some(e) = entered.filter(|e| *e > MAX_ENTERED_DECIMALS) {
         return Err(format!("--decimals {e}: a first order names 0 to {MAX_ENTERED_DECIMALS} decimals (the scale is at most 10^9)"));
     }
-    let (decimals, from) = match (known, open) {
-        (Some(d), _) => {
+    // the decimals the token declared on chain come first ([`declared_decimals`])
+    let (decimals, from) = match (declared_decimals(key, declared.as_ref(), known, r, i, open, entered, &cov)?, known, open) {
+        (Some(d), _, _) => (d, DecimalsFrom::Declared),
+        (None, Some(d), _) => {
             if let Some(e) = entered.filter(|e| default_scale(*e) != default_scale(d)) {
                 return Err(format!("--decimals {e} differs from the decimals of `{key}` ({d})"));
             }
             (d, DecimalsFrom::Lists)
         }
-        (None, Some(o)) => {
+        (None, None, Some(o)) => {
             // the market's scale: its first order's, open or ended, as the indexer reports it (TN10 2026-10-15 O-3: once every
             // order had ended, a first order with other decimals would have put two scales on one market); an older indexer,
             // or a token without orders: the scale of its open orders
@@ -505,16 +660,22 @@ pub fn resolve_with(
                     None if o.view => (0, DecimalsFrom::Unknown),
                     None => {
                         return Err(format!(
-                            "`{key}`: its decimals are unknown: no registry entry and no order of it yet, and the chain does not \
-                             record decimals. Its first order names the decimals the issuer chose: `kob place ... --decimals N` (0..=9)"
+                            "`{key}`: its decimals are unknown: no registry entry, no order of it yet, and no KCC-23 declaration of \
+                             them on chain. Its first order names the decimals the issuer chose: `kob place ... --decimals N` (0..=9)"
                         ))
                     }
                 },
             }
         }
-        (None, None) => return Err(format!("`{key}`: its decimals are unknown")),
+        (None, None, None) => return Err(format!("`{key}`: its decimals are unknown")),
     };
-    let ticker = r.map(|t| t.ticker.clone()).or_else(|| i.map(|t| t.ticker.clone())).unwrap_or_default();
+    // a list's ticker, else (a token no registry names) the symbol its declaration records (declared by its creator, unreviewed)
+    let ticker = r
+        .map(|t| t.ticker.clone())
+        .or_else(|| i.map(|t| t.ticker.clone()))
+        .filter(|t| !t.is_empty())
+        .or_else(|| ticker_of_symbol(declared.as_ref().and_then(|d| d.symbol.as_deref())))
+        .unwrap_or_default();
     let ext = if program.family() == Family::Kron { None } else { ext };
     // a token without a registry entry the indexer names no commitment for: a view needs none, and a signing command takes it
     // from what it can check without the indexer (the wallet's node-verified holdings, the order's own state)
@@ -532,9 +693,138 @@ pub fn resolve_with(
     Ok(m)
 }
 
+/// A KCC-23 creation of a test token `DCL` with `decimals` (its launch proof: `c.launch_proof()`, its covenant id:
+/// `c.genesis.covenant_id`).
+#[cfg(test)]
+pub(crate) fn test_creation(decimals: u8) -> kob_protocol::issue::CreationPlan {
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use kob_protocol::issue::{build_creation, FundingUtxo, Holder, IssueSpec};
+    let pk = kob_protocol::tx::pubkey_of(&[0x33; 32]).unwrap();
+    let outpoint = TransactionOutpoint { transaction_id: TransactionId::from_bytes([7; 32]), index: 1 };
+    let funding = FundingUtxo { outpoint, amount: 500 * 100_000_000, owner_pubkey: pk };
+    build_creation(&IssueSpec::new("Declared Token", "DCL", decimals, 1000, vec![Holder::new(pk, 0, 1000)], vec![funding])).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn proof_json(c: &kob_protocol::issue::CreationPlan) -> serde_json::Value {
+        serde_json::to_value(c.launch_proof()).unwrap()
+    }
+
+    #[test]
+    fn a_launch_proof_is_used_only_when_it_verifies_for_the_covenant_id_asked_for() {
+        let c = test_creation(6);
+        let cov = c.genesis.covenant_id.as_bytes();
+        let d = declared_from_proof(&cov, &proof_json(&c)).unwrap();
+        assert_eq!(d, Declared { decimals: Some(6), symbol: Some("DCL".into()), name: Some("Declared Token".into()) });
+        // the proof of another token served for this one
+        let e = declared_from_proof(&[0x44; 32], &proof_json(&c)).unwrap_err();
+        assert!(e.contains("is the proof of") && e.contains("refused"), "{e}");
+        // a proof claiming this covenant id that does not bind it, and a declaration changed after the fact
+        let mut forged = proof_json(&c);
+        forged["covenantId"] = serde_json::Value::String(to_hex(&[0x44; 32]));
+        assert!(declared_from_proof(&[0x44; 32], &forged).unwrap_err().contains("does not verify"));
+        let mut edited = proof_json(&c);
+        let other = kob_protocol::json::to_hex(&test_creation(2).prep.tx.payload);
+        edited["preparation"]["payload"] = serde_json::Value::String(other);
+        assert!(declared_from_proof(&cov, &edited).unwrap_err().contains("does not verify"));
+        // not a proof at all
+        assert!(declared_from_proof(&cov, &serde_json::json!({"format": "x"})).unwrap_err().contains("malformed"));
+    }
+
+    #[test]
+    fn a_declared_token_takes_its_decimals_and_scale_from_the_chain_and_refuses_what_disagrees() {
+        let c = test_creation(6);
+        let cov = c.genesis.covenant_id.as_bytes();
+        let key = to_hex(&cov);
+        let proof = proof_json(&c);
+        let asked = std::cell::Cell::new(0);
+        let declaration = |id: &[u8; 32]| -> Result<Option<Declared>, String> {
+            asked.set(asked.get() + 1);
+            declared_from_proof(id, &proof).map(Some)
+        };
+        let none = |_: &[u8; 32]| -> Result<Option<Declared>, String> { Ok(None) };
+        let failing = |_: &[u8; 32]| -> Result<Option<Declared>, String> { Err("does not verify: refused".into()) };
+        let held = |_: &[u8; 32]| -> Result<Option<TemplateId>, String> { Ok(Some(TemplateId::Kcc20Ref)) };
+        let holds_none = |_: &[u8; 32]| -> Result<Option<TemplateId>, String> { Ok(None) };
+        let no_orders = |_: &[u8; 32]| -> Result<Option<i64>, String> { Ok(None) };
+        let thousand = |_: &[u8; 32]| -> Result<Option<i64>, String> { Ok(Some(1000)) };
+        fn open<'a>(d: Declaration<'a>, h: HeldProgram<'a>, s: OrderScale<'a>) -> OpenToken<'a> {
+            OpenToken { declaration: Some(d), held_program: Some(h), ..OpenToken::new("testnet-10", s) }
+        }
+        let (decl, held_d): (Declaration, HeldProgram) = (&declaration, &held);
+
+        // no registry entry, no order: known by its declaration, its program from the wallet's holdings
+        let m = resolve_with(&key, &[], &[], Some(&open(decl, held_d, &no_orders))).unwrap();
+        assert_eq!((m.decimals, m.scale, m.decimals_from), (6, 1_000_000, DecimalsFrom::Declared));
+        assert_eq!(
+            (m.ticker.as_str(), m.program, m.ext_source, &m.listing),
+            ("DCL", TemplateId::Kcc20Ref, ExtSource::Unknown, &Listing::Unlisted)
+        );
+        let i = m.listing_issue(true).unwrap();
+        assert!(i.message.contains("KCC-23 declaration records on chain"), "{}", i.message);
+        // the wallet holds none of it: its program cannot be checked
+        let e = resolve_with(&key, &[], &[], Some(&open(decl, &holds_none, &no_orders))).unwrap_err();
+        assert!(e.contains("declared on chain") && e.contains("holds none"), "{e}");
+        // no declaration (a 404): unknown, as before
+        let e = resolve_with(&key, &[], &[], Some(&open(&none, held_d, &no_orders))).unwrap_err();
+        assert!(e.contains("unknown token"), "{e}");
+        // a proof that does not verify: refused, never used
+        let e = resolve_with(&key, &[], &[], Some(&open(&failing, held_d, &no_orders))).unwrap_err();
+        assert!(e.contains("refused"), "{e}");
+
+        // a registry entry: agreeing decimals are fine; other decimals are refused, never silently preferred
+        let reg =
+            vec![facts(0, "REG", 6, TemplateId::Kcc20Ref, 0xdd)].into_iter().map(|t| TokenFacts { cov, ..t }).collect::<Vec<_>>();
+        let m = resolve_with(&key, &reg, &[], Some(&open(decl, held_d, &no_orders))).unwrap();
+        assert_eq!((m.ticker.as_str(), m.decimals, m.listing.clone()), ("REG", 6, Listing::Listed));
+        let reg8 = vec![TokenFacts { decimals: Some(8), ..reg[0].clone() }];
+        let e = resolve_with(&key, &reg8, &[], Some(&open(decl, held_d, &no_orders))).unwrap_err();
+        assert!(
+            e.contains("registry entry names 8 decimals") && e.contains("declaration") && e.contains("until the two agree"),
+            "{e}"
+        );
+        // ... also when found by its ticker
+        assert!(resolve_with("REG", &reg8, &[], Some(&open(decl, held_d, &no_orders))).is_err());
+
+        // an open-list token the indexer marks declared: the declaration decides, a market of another scale is a scale conflict
+        let listed = TokenFacts { cov, declared: true, ..open_facts(0, TemplateId::Kcc20Ref) };
+        let m = resolve_with(&key, &[], std::slice::from_ref(&listed), Some(&open(decl, held_d, &no_orders))).unwrap();
+        assert_eq!((m.decimals, m.scale, m.decimals_from, m.ext), (6, 1_000_000, DecimalsFrom::Declared, [0xdd; 32]));
+        let ms = |s: i64| vec![TokenFacts { market_scale: Some(Some(s)), ..listed.clone() }];
+        assert!(resolve_with(&key, &[], &ms(1_000_000), Some(&open(decl, held_d, &no_orders))).is_ok());
+        let e = resolve_with(&key, &[], &ms(1000), Some(&open(decl, held_d, &no_orders))).unwrap_err();
+        assert!(e.contains("scale conflict"), "{e}");
+        let by_book = open(decl, held_d, &thousand);
+        assert!(resolve_with(&key, &[], std::slice::from_ref(&listed), Some(&by_book)).unwrap_err().contains("scale conflict"));
+        // --decimals of another scale is refused, of the same scale fine
+        let entered = |e| OpenToken { entered: Some(e), ..open(decl, held_d, &no_orders) };
+        assert!(resolve_with(&key, &[], std::slice::from_ref(&listed), Some(&entered(3))).unwrap_err().contains("declared on chain"));
+        assert_eq!(resolve_with(&key, &[], std::slice::from_ref(&listed), Some(&entered(6))).unwrap().decimals, 6);
+        // the indexer's list names other decimals (an operator's entry): refused too
+        let named = vec![TokenFacts { decimals: Some(3), ..listed.clone() }];
+        assert!(resolve_with(&key, &[], &named, Some(&open(decl, held_d, &no_orders)))
+            .unwrap_err()
+            .contains("indexer's token list names 3"));
+
+        // a token the indexer lists without a declaration is not asked for one (no request, no 404)
+        let n = asked.get();
+        let plain = TokenFacts { declared: false, ..listed.clone() };
+        let m =
+            resolve_with(&key, &[], &[TokenFacts { market_scale: Some(Some(1000)), ..plain }], Some(&open(decl, held_d, &no_orders)))
+                .unwrap();
+        assert_eq!((asked.get(), m.decimals_from, m.decimals), (n, DecimalsFrom::Market, 3));
+
+        // 18 declared decimals: the scale is 10^9, the decimals stay 18
+        let c18 = test_creation(18);
+        let cov18 = c18.genesis.covenant_id.as_bytes();
+        let p18 = proof_json(&c18);
+        let d18 = |id: &[u8; 32]| -> Result<Option<Declared>, String> { declared_from_proof(id, &p18).map(Some) };
+        let m = resolve_with(&to_hex(&cov18), &[], &[], Some(&open(&d18, held_d, &no_orders))).unwrap();
+        assert_eq!((m.decimals, m.scale), (18, 1_000_000_000));
+    }
 
     fn facts(cov: u8, ticker: &str, decimals: u32, program: TemplateId, ext: u8) -> TokenFacts {
         TokenFacts {
@@ -547,6 +837,7 @@ mod tests {
             genesis_verified: false,
             not_tradable: None,
             market_scale: None,
+            declared: false,
         }
     }
 

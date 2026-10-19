@@ -106,7 +106,15 @@ fn markets_of(c: &Common, live: &Live) -> Result<Vec<TokenMarket>, String> {
         Ok(listed.or((*cov == own_token).then_some(own_scale)))
     };
     let remembered = |cov: &[u8; 32]| crate::recent::first_order_decimals(&c.network, cov);
-    let open = market::OpenToken { remembered: Some(&remembered), ..market::OpenToken::new(&c.network, &order_scale) };
+    let declaration = |cov: &[u8; 32]| match c.indexer.as_deref() {
+        Some(u) => data::declaration(u, cov),
+        None => Ok(None),
+    };
+    let open = market::OpenToken {
+        remembered: Some(&remembered),
+        declaration: Some(&declaration),
+        ..market::OpenToken::new(&c.network, &order_scale)
+    };
     let mut ms: Vec<TokenMarket> =
         toks.iter().map(|t| market::resolve_with(&to_hex(t), &reg, &idx, Some(&open))).collect::<Result<_, _>>()?;
     // a commitment no source names: the one the order's own state (read from the node) carries for the token
@@ -1270,7 +1278,14 @@ pub fn run_send(args: &[String]) -> i32 {
         let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(indexer))?;
         let order_scale = |cov: &[u8; 32]| data::order_scale(indexer, cov);
         let remembered = |cov: &[u8; 32]| crate::recent::first_order_decimals(&c.network, cov);
-        let open = market::OpenToken { remembered: Some(&remembered), ..market::OpenToken::new(&c.network, &order_scale) };
+        let declaration = |cov: &[u8; 32]| data::declaration(indexer, cov);
+        let held_program = |cov: &[u8; 32]| data::held_program(indexer, node, &c.network, cov, &signer.pubkey);
+        let open = market::OpenToken {
+            remembered: Some(&remembered),
+            declaration: Some(&declaration),
+            held_program: Some(&held_program),
+            ..market::OpenToken::new(&c.network, &order_scale)
+        };
         let m = market::resolve_with(what, &reg, &idx, Some(&open))?;
         let key = key.ok_or("a token goes to a P2PK address or an x-only key (the token state names its owner key)")?;
         let base = parse_token_amount(amount, &m.unit(), "the amount")?;

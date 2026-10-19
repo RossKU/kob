@@ -50,9 +50,18 @@ covenant's rounding (a sell receives at least the ceiling, a buy pays at most th
 
 **Tokens without a registry entry.** A token of a reviewed program (on mainnet; on a test network any program the build
 embeds) is named by its covenant id once the indexer lists it (an order of it was placed). Its decimals come from the
-scale its orders use; a token without orders has none anywhere (the chain records no decimals), so its first order names
-them: `--decimals N` (0..=9, the scale is 10^N). A covenant id the indexer does not list is refused: the CLI has nothing
-to check its program against (the web app opens such a market from a wallet that holds the token).
+scale its orders use; a token without orders and without a KCC-23 declaration has none anywhere, so its first order names
+them: `--decimals N` (0..=9, the scale is 10^N).
+
+**Declared tokens (KCC-23).** A token's on-chain declaration comes first (`docs/spec/token-metadata.md` section 4): the
+CLI asks the indexer for its launch proof (`GET /v1/tokens/{id}/declaration`, for a token its list marks declared or does
+not list), verifies it against the covenant id (a proof that does not verify or names another id is refused), and takes
+the declared decimals (the scale is `10^min(decimals, 9)`) and symbol. A registry entry or a token list naming other
+decimals, a market whose orders use another scale, or a `--decimals` of another scale is refused until they agree. A
+declared token the indexer does not list yet (no order of it) is placed, sent or merged by covenant id when the wallet
+holds it: its program is the one the wallet's token UTXOs prove on the node. Any other covenant id the indexer does not
+list is refused: the CLI has nothing to check its program against (the web app opens such a market from a wallet that
+holds the token).
 
 **Units.** Every amount carries its unit and nothing is rounded: a value that does not fit is refused with the nearest
 valid ones.

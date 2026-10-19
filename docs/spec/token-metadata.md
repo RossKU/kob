@@ -137,6 +137,9 @@ the optional ones that are not set:
      reviewed);
   2. without a declaration (a token created before KCC-23: its id cannot commit to one), as before: the registry entry, this
      browser's issuance record, the decimals of its market's price scale, else 8 assumed.
+* **CLI** (`kob place`, `send`, `merge`, the order actions): the indexer's proof, verified against the covenant id, the same read
+  order and the same refusals; a declared token without orders is traded by its covenant id from a wallet holding it
+  (`crates/kob-cli/README.md`).
 * **Registry and chain disagree.** The registry is curation; a fact in it that differs from the declaration is never silently
   preferred: the on-chain values are shown, flagged "facts disagree" with the fields named (and a banner on the token's market),
   and when the **decimals** differ no order of the token is planned until the two agree (the same base units would otherwise mean
