@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
+import { useDeclarationLookup } from '../../app/use-declaration';
 import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
 import type { IndexerTokenView, StatsView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
 import { Banner, Button, CopyText, ErrorBanner, Field, Loading, Section, Table, TableMessage, toError, useAsync } from '../kit';
 import { SharedTickerNote, StatusBadges, tokenTitle } from './TokenBadges';
+import { TokenNote } from './TokenNote';
 import './market.css';
 import {
   ariaSort, DEFAULT_SORT, filterPairs, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, sortEntries, tokenEntry,
@@ -133,7 +135,12 @@ function TokenTableRow({ row, entry, shared }: { row: TokenRow; entry: ListEntry
         <a href={`#/market/${row.covenantId}`} class="token-name" data-testid={`token-link-${row.covenantId}`}>
           {tokenTitle(row)}
         </a>
-        {row.name ? <div class="small muted">{row.name}</div> : null}
+        {row.name || row.declared ? (
+          <div class="small muted" data-testid={`token-name-${row.covenantId}`}>
+            {row.name}
+            {row.declared && row.decimals !== null ? <TokenNote token={{ decimalsSource: 'declared', decimals: row.decimals }} /> : null}
+          </div>
+        ) : null}
         <div class="ml-badges"><StatusBadges row={row} /></div>
         <SharedTickerNote shared={shared} data-testid={`shared-ticker-${row.covenantId}`} />
       </td>
@@ -177,7 +184,9 @@ export function TokenList(props: { invalidToken?: string }) {
   const [generation, setGeneration] = useState(0);
 
   // a token this build cannot trade is not listed (a direct link to it shows a short "not tradable" page)
-  const rows = useMemo(() => tradableRows(buildTokenRows(registry, tokens.data ?? null, pasted), kob.templates()), [registry, tokens.data, pasted, kob]);
+  // a token the registry does not list is named by its verified KCC-23 declaration (its ticker, name and decimals)
+  const declared = useDeclarationLookup();
+  const rows = useMemo(() => tradableRows(buildTokenRows(registry, tokens.data ?? null, pasted, declared), kob.templates()), [registry, tokens.data, pasted, kob, declared]);
   const shared = useMemo(() => sharedTickerIds(rows), [rows]);
   const listed = useMemo(() => listedPairs(pairs.data, rows), [pairs.data, rows]);
 

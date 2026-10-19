@@ -117,6 +117,18 @@ test.describe('token issuance', () => {
     await page.getByTestId('issue-another').click();
     await expect(page.getByTestId('issue-form')).toBeVisible();
     await expect(page.getByTestId('issue-name')).toHaveValue('');
+
+    // its market (no order yet: known from the wallet's holdings) names it by its declaration: the declared name and ticker, marked as declared
+    // on chain like the wallet views, and the banner says the decimals are the declared ones (not a price scale, not "the chain carries none")
+    await page.goto(`/#/market/${tokenId}`);
+    const header = page.getByTestId('token-header');
+    await expect(header.getByTestId('token-name')).toHaveText('New Example Coin');
+    await expect(header.getByTestId('token-title')).toContainText('NEWKCC');
+    await expect(header.getByTestId('token-decimals-note')).toHaveAttribute('data-source', 'declared');
+    await expect(header.getByTestId('token-decimals-note')).toContainText('declared on chain');
+    await expect(header.getByTestId('open-token-decimals')).toHaveAttribute('data-origin', 'declared');
+    await expect(header.getByTestId('open-token-decimals')).toContainText('whole tokens of 2 decimals, as the token declared on chain');
+    await expect(header).not.toContainText('carries no decimals');
   });
 
   test('a ticker that already exists in the registry blocks the review', async ({ appPage: page, mock }) => {

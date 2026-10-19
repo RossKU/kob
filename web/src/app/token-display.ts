@@ -88,6 +88,21 @@ export function decimalsNote(token: Pick<TokenInfo, 'decimalsSource' | 'decimals
     : { text: t('token.note.assumed', { decimals: token.decimals }), title: t('token.note.assumedTitle', { decimals: token.decimals }) };
 }
 
+/** Where the decimals a token is shown and traded with come from (`decimalsOrigin`). */
+export type DecimalsOrigin = 'registry' | 'declared' | 'issued' | 'scale' | 'entered' | 'assumed';
+
+/**
+ * Where a token's decimals come from: its KCC-23 declaration (also for a registry entry that disagrees with it: the on-chain value is shown), the
+ * registry, this browser's issuance record, the price scale of its market (an open-list token's orders), the decimals entered for its first order,
+ * else assumed. The open-list banner of a market says it in words (`market.open.decimals.<origin>`), so it never claims a source the token does not have.
+ */
+export function decimalsOrigin(token: Pick<TokenInfo, 'decimalsSource' | 'declarationConflicts' | 'openList' | 'openScale'>): DecimalsOrigin {
+  if (token.decimalsSource) return token.decimalsSource;
+  if (token.declarationConflicts?.includes('decimals')) return 'declared';
+  if (token.openList) return token.openScale === 'declared' ? 'declared' : token.openScale === 'entered' ? 'entered' : 'scale';
+  return 'registry';
+}
+
 /**
  * Makes every sentence of the app that names an amount of a token (i18n `tokenAmountText`: the findings of the planners and the cancel) say it
  * as this module shows the token: whole tokens with its name, marked when its decimals are assumed. Called once with the app's registry.

@@ -4,6 +4,8 @@ import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
 import { formatUnits } from '../../kob/units';
 import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
+import type { TokenInfo } from '../../kob/registry';
+import { TokenNote } from './TokenNote';
 import { OpenTokenNote, PowersWarning, SharedTickerNote, StatusBadges, powerName, tokenTitle } from './TokenBadges';
 import { shortCovenantId, templateDetail, type TokenRow } from './token-model';
 
@@ -84,6 +86,8 @@ export function TokenHeader(props: {
   tools?: ComponentChildren;
   /** the pair selector (`BTC / KAS`, `KAS / TUSD`; MarketBar.tsx) */
   pair?: ComponentChildren;
+  /** where the token's facts come from its KCC-23 declaration: the marker next to its name (TokenNote.tsx), as on the wallet views */
+  note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null;
 }) {
   const r = props.row;
   return (
@@ -96,7 +100,8 @@ export function TokenHeader(props: {
           </h1>
           <StatusBadges row={r} />
           <span class="small muted" title={r.covenantId} data-testid="token-short-id">{r.info && !r.info.openList ? shortCovenantId(r.covenantId) : longId(r.covenantId)}</span>
-          {r.name ? <span class="mkt-name">{r.name}</span> : null}
+          {r.name ? <span class="mkt-name" data-testid="token-name">{r.name}</span> : null}
+          <TokenNote token={props.note} />
           {props.badges}
         </div>
         {props.tools}

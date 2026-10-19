@@ -3,6 +3,7 @@
 // the shared-ticker note, template-verification detail. Token issuance is permissionless: nothing here says whether a token is verified, official or listed.
 // Pure.
 import type { IndexerTokenView } from '../../data/indexer-types';
+import type { DeclaredToken } from '../../data/token-declarations';
 import {
   longId, normalizeTicker, sanitizeUntrusted, verifyIndexerToken, type TokenInfo, type TokenRegistry, type UntradableReason,
 } from '../../kob/registry';
@@ -71,6 +72,8 @@ export interface TokenRow {
   /** registry ticker, or the SANITIZED ticker the indexer reported */
   ticker: string;
   name: string | null;
+  /** a token the registry does not list, named by its verified KCC-23 declaration (`unknownRow`): marked "declared on chain" where its name is shown */
+  declared?: true;
   source: TokenSource;
   /** null for tokens that are not in the registry */
   info: TokenInfo | null;
@@ -115,31 +118,40 @@ function registryRow(info: TokenInfo, index: IndexerTokenView | null): TokenRow 
   };
 }
 
-/** A token the registry does not know (found through the indexer or pasted): not tradable from here, only through the open-list path (kob/open-token.ts). */
-export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: TokenSource = 'indexer'): TokenRow {
-  const ticker = sanitizeUntrusted(view.ticker ?? '', 16);
+/** The verified KCC-23 declaration of a token as far as known (data/token-declarations.ts `declaredToken`): null/undefined without one. */
+export type DeclarationLookup = (covenantId: string) => DeclaredToken | null | undefined;
+
+/**
+ * A token the registry does not know (found through the indexer or pasted): not tradable from here, only through the open-list path (kob/open-token.ts).
+ * Its verified KCC-23 declaration (`declared`) names it like a registry entry would: its ticker (where the indexer gives none), its name and decimals.
+ */
+export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: TokenSource = 'indexer', declared?: DeclaredToken | null): TokenRow {
+  const decl = declared && declared.covenantId.toLowerCase() === view.covenant_id.toLowerCase() ? declared : null;
+  const ticker = sanitizeUntrusted(view.ticker ?? '', 16) || (decl?.symbol ? sanitizeUntrusted(decl.symbol, 16) : '');
+  const decimals = view.decimals ?? decl?.decimals ?? null;
   const delisted = view.standing === 'delisted';
   // the template's capabilities in the shipped registry (found by template hash / id) always apply; the indexer's powers are added
   const tpl = reg.templates.find((t) => (view.template_hash && t.template_hash === view.template_hash) || (view.template_id && t.id === view.template_id));
   const powers = unionPowers(tpl?.capabilities ?? [], powersOf(view));
   return {
-    covenantId: view.covenant_id, ticker, name: null, source, info: null, index: view, delisted, powers, issuerControl: hasIssuerControl(powers), templateId: view.template_id ?? null,
+    covenantId: view.covenant_id, ticker, name: decl?.name ? sanitizeUntrusted(decl.name, 64) : null, ...(decl ? { declared: true as const } : {}), source, info: null, index: view, delisted, powers, issuerControl: hasIssuerControl(powers), templateId: view.template_id ?? null,
     badges: delisted ? [{ kind: 'delisted', tone: 'bad', reason: null }] : [],
     // this build's own registry does not list the token: it cannot trade it from the list
     tradable: false, reason: delisted ? 'delisted' : 'unregistered',
     indexerProblems: [], openAsks: view.open_asks, openBids: view.open_bids,
-    decimals: view.decimals,
-    scale: view.scale != null ? BigInt(view.scale) : view.decimals != null ? 10n ** BigInt(Math.min(view.decimals, 9)) : null,
+    decimals,
+    scale: view.scale != null ? BigInt(view.scale) : decimals != null ? 10n ** BigInt(Math.min(decimals, 9)) : null,
     tick: null,
   };
 }
 
 /**
  * Registry tokens first (registry order), then indexer-only tokens (those with open orders first, then by ticker). Duplicates by covenant id are
- * merged; an indexer-only token with `template_id: null` (a program off the strict list) is left out.
+ * merged; an indexer-only token with `template_id: null` (a program off the strict list) is left out. `declared`: the verified KCC-23 declarations
+ * that name the indexer-only tokens (`unknownRow`).
  */
 export function buildTokenRows(
-  reg: TokenRegistry, indexerTokens: readonly IndexerTokenView[] | null, pasted: readonly IndexerTokenView[] = [],
+  reg: TokenRegistry, indexerTokens: readonly IndexerTokenView[] | null, pasted: readonly IndexerTokenView[] = [], declared?: DeclarationLookup,
 ): TokenRow[] {
   const byId = new Map((indexerTokens ?? []).map((t) => [t.covenant_id, t]));
   const rows: TokenRow[] = reg.tokens.map((t) => registryRow(t, byId.get(t.covenantId) ?? null));
@@ -151,12 +163,12 @@ export function buildTokenRows(
     // has nothing to trade or show; an older executor that sends no `template_id` at all is unaffected
     if (v.template_id === null) continue;
     seen.add(v.covenant_id);
-    extra.push(unknownRow(reg, v, 'indexer'));
+    extra.push(unknownRow(reg, v, 'indexer', declared?.(v.covenant_id)));
   }
   for (const v of pasted) {
     if (seen.has(v.covenant_id)) continue;
     seen.add(v.covenant_id);
-    extra.push(unknownRow(reg, v, 'pasted'));
+    extra.push(unknownRow(reg, v, 'pasted', declared?.(v.covenant_id)));
   }
   extra.sort((a, b) => (b.openAsks ?? 0) + (b.openBids ?? 0) - ((a.openAsks ?? 0) + (a.openBids ?? 0)) || (a.ticker < b.ticker ? -1 : a.ticker > b.ticker ? 1 : 0));
   return [...rows, ...extra];

@@ -1,4 +1,4 @@
-// The decimals of a token's first order: no order of the token exists, so nothing tells its price scale (the chain carries no decimals). One
+// The decimals of a token's first order: no order of the token exists, so nothing tells its price scale (it declares no decimals on chain). One
 // field, prefilled only with the decimals of a token issued in this browser; the user confirms them. Once an order exists its scale decides.
 import { useState } from 'preact/hooks';
 import { t } from '../../i18n';

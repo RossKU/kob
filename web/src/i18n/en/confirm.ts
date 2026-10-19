@@ -34,7 +34,7 @@ export default {
   'confirm.ext.fromHoldings': 'From your node-verified holdings of this token (the indexer does not list it yet).',
   'confirm.openScale.label': 'Decimals of {token}',
   'confirm.openScale.value': '{decimals} (entered by you)',
-  'confirm.openScale.detail': "No order of this token exists yet, so its price scale comes from the decimals you entered: prices are per whole token of those decimals. The chain does not record decimals; check them with the issuer. Later orders on this market use the same scale.",
+  'confirm.openScale.detail': "No order of this token exists yet, so its price scale comes from the decimals you entered: prices are per whole token of those decimals. This token declares no decimals on chain; check them with the issuer. Later orders on this market use the same scale.",
   'confirm.ext.checkNone': 'Not confirmed by anything but the indexer.',
   'confirm.ext.checkMatch': 'Matches {sources}.',
   'confirm.ext.checkMismatch': 'Differs from a commitment known without the indexer.',

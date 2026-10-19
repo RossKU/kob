@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'preact/hooks';
 import { displayToken } from '../../app/token-display';
-import { useDeclaration } from '../../app/use-declaration';
+import { useDeclaration, useDeclarationLookup } from '../../app/use-declaration';
 import { useServices, useWallet } from '../../app/context';
 import type { TicketPreset } from '../../app/router';
+import { sanitizeUntrusted } from '../../kob/registry';
 import { t } from '../../i18n';
 import { Badge, Banner, Button, ErrorBanner, Loading, scaleOfDecimals, Section, tickKasFraction, tickPriceFraction, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
@@ -66,7 +67,9 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const [groupIdxInv, setGroupIdxInv] = useState(0);
 
   const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
-  const allRows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, []), [registry, tokens.data]);
+  // a token the registry does not list is named by its verified KCC-23 declaration (the selector, the title, the name)
+  const declaredOf = useDeclarationLookup();
+  const allRows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, [], declaredOf), [registry, tokens.data, declaredOf]);
   const listedRow = useMemo(() => allRows.find((r) => r.covenantId === id) ?? null, [allRows, id]);
   // a KCC-20 token in neither list (no order of it yet): its market only from the wallet's node-verified holdings of it (kob/open-token.ts)
   const held = useHeldToken(id, !listedRow && !tokens.loading);
@@ -86,13 +89,17 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // a token the indexer lists without a ticker ("") is named like one without any (app/token-display.ts): the open-list token's name (this
   // browser's issuance ticker, else its covenant id), else the display name; never an empty name in a title, a unit or a hint
   const shown = useMemo(() => displayToken(registry, services.config.network, id), [registry, services.config.network, id, declared]);
+  // where the token's facts are its declaration's (no registry entry, or one that disagrees with the chain): its name as declared, and the marker
+  // the wallet views show ("declared on chain", "facts disagree"); never one of this browser's issuance or of assumed decimals here, where the
+  // decimals are the market's (the banner under the title says where they come from)
+  const onChain = !!shown && (shown.decimalsSource === 'declared' || !!shown.declarationConflicts?.length);
   const row = useMemo(() => {
     if (!baseRow) return baseRow;
-    const named = { ...baseRow, ticker: baseRow.ticker || open.info?.ticker || shown?.ticker || '' };
+    const named = { ...baseRow, ticker: baseRow.ticker || open.info?.ticker || shown?.ticker || '', name: onChain && shown!.name ? sanitizeUntrusted(shown!.name, 64) : baseRow.name };
     return open.info
       ? { ...named, info: open.info, decimals: open.info.decimals, scale: scaleOfDecimals(open.info.decimals), tick: 1n, tradable: true, reason: null }
       : named;
-  }, [baseRow, open.info, shown]);
+  }, [baseRow, open.info, shown, onChain]);
 
   const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: 60, aggregate: true }, { signal }) : Promise.resolve(null)), [indexer, id]);
   // the trade tape: `/v1/trades`, or the fill events of an indexer without it
@@ -275,6 +282,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
         <TokenHeader
           row={row}
           sharedTicker={sharedTicker}
+          note={onChain ? shown : null}
           badges={liveBadge}
           pair={
             <>

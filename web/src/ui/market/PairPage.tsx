@@ -11,6 +11,7 @@
 // and still lets the user place orders.
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
+import { useDeclarationLookup } from '../../app/use-declaration';
 import { navigate, pairRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { PairToken } from '../../kob/pair';
@@ -57,7 +58,8 @@ export function PairPage(props: { base: string; quote: string }) {
   const [resyncKey, setResyncKey] = useState(0);
   const [prefill, setPrefill] = useState<{ side: 'buy' | 'sell'; price: bigint } | undefined>(undefined);
   const tokenList = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer]);
-  const rows = useMemo(() => buildTokenRows(registry, tokenList.data ?? null, []), [registry, tokenList.data]);
+  const declared = useDeclarationLookup();
+  const rows = useMemo(() => buildTokenRows(registry, tokenList.data ?? null, [], declared), [registry, tokenList.data, declared]);
   const choiceRows = useMemo(() => tradableRows(rows, kob.templates()), [rows, kob]);
   // listed tokens that share a ticker with another listed token: a short note at each token's facts and at the ticket
   const shared = useMemo(() => sharedTickerIds(choiceRows), [choiceRows]);

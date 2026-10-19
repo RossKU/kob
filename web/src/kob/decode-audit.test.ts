@@ -131,7 +131,7 @@ describe('A1-2: an open-list KCC-20 token: the commitment is the indexer\'s pick
     expect(rows.map((r) => r.id)).toEqual([`scale-${cov}`, `ext-${cov}`]);
     expect(rows[0]!.value).toBe(`${base.decimals} (entered by you)`);
     expect(rows[0]!.tone).toBe('warn');
-    expect(rows[0]!.detail).toContain('does not record decimals');
+    expect(rows[0]!.detail).toContain('declares no decimals on chain');
     expect(rows[1]!.detail).toContain('node-verified holdings');
     expect(rows[1]!.tone).toBe('good');
     expect(summary.ok && blocking.length === 0).toBe(true);

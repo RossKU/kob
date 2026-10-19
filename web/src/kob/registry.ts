@@ -194,7 +194,7 @@ export interface TokenInfo {
    * values are shown, flagged. Absent when they agree or the token declares nothing.
    */
   declarationConflicts?: ('decimals' | 'symbol' | 'name')[];
-  /** an open-list token: its scale (and decimals) from the token's orders, its KCC-23 declaration (`declared`, no order yet), or `entered` by the user for its first order */
+  /** an open-list token: its decimals (and scale) from its KCC-23 declaration (`declared`; its orders, if any, agree), else from the scale its orders use (`orders`), else `entered` by the user for its first order */
   openScale?: 'orders' | 'entered' | 'declared';
   /** an open-list KCC-20 token: where its extension commitment came from and how it compares with commitments known without the indexer */
   extension?: ExtensionCheck;

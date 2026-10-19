@@ -8,7 +8,7 @@
 //     The pick and its source are kept on the TokenInfo (`extension`) so the pre-sign screen shows them, cross-checked against the commitments
 //     known without the indexer (`extensionReferences`: a genesis-verified registry entry, the wallet's node-verified holdings; audit A1-2);
 //   * scale: a token created under KCC-23 declares its decimals on chain (`opts.declared`, verified against its covenant id): its scale is
-//     10^min(decimals, 9), and a market whose orders use another scale is a `scale-conflict` (`openScale: 'declared'` before any order). A token
+//     10^min(decimals, 9), and a market whose orders use another scale is a `scale-conflict` (`openScale: 'declared'`, with or without orders). A token
 //     without a declaration (created before KCC-23): the scale its first order set, open or ended, as the indexer reports it (`market_scale`), else
 //     (an older indexer) the one shared by most open orders of the token, so the wallet's orders quote the same whole token as the book; decimals =
 //     its exponent (amounts are shown in that whole token, prices per it). No order ever: the decimals the user entered for the token's first
@@ -191,7 +191,7 @@ export function synthesizeOpenToken(
     ok: true,
     info: {
       ticker: shownTicker, name: shownName, family, covenantId: id, templateId, templateHash: tpl.hash, extensionCommitment: ext, extensionClass: 'other', decimals,
-      tick: 1n, status: 'listed', capabilities, display: null, openList: true, openScale: entered !== null ? 'entered' : fromOrders === null && declaredScale !== null ? 'declared' : 'orders', program,
+      tick: 1n, status: 'listed', capabilities, display: null, openList: true, openScale: entered !== null ? 'entered' : declaredScale !== null ? 'declared' : 'orders', program,
       templateMatchesPinned: true, prefixLen: tpl.prefixLen, suffixLen: tpl.suffixLen, slots: { inputs: tpl.tokenSlots[0], outputs: tpl.tokenSlots[1] },
       tradable: true, untradableReason: null, json,
       ...(family === 'kcc20' && ext ? { extension: checkExtension(ext, opts.fromHoldings ? 'holdings' : view.extension_commitment ? 'indexer' : 'orders', references) } : {}),

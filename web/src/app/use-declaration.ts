@@ -1,6 +1,6 @@
 // A token's KCC-23 declaration in a view: looked up once (data/token-declarations.ts: from the indexer, verified against the covenant id), and
 // the view re-renders when any declaration becomes known (the shown name, ticker and decimals follow; app/token-display.ts).
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 import { useServices } from './context';
 import { declaredToken, loadDeclaration, restoreDeclarations, subscribeDeclarations, type DeclaredToken } from '../data/token-declarations';
 import type { Hex } from '../kob/types';
@@ -10,6 +10,14 @@ export function useDeclarationsVersion(): number {
   const [v, setV] = useState(0);
   useEffect(() => subscribeDeclarations(() => setV((n) => n + 1)), []);
   return v;
+}
+
+/** The verified declarations known so far, as a lookup by covenant id; a new function each time one becomes known (memo key). */
+export function useDeclarationLookup(): (covenantId: Hex) => DeclaredToken | null | undefined {
+  const { config } = useServices();
+  const v = useDeclarationsVersion();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => (covenantId: Hex) => declaredToken(config.network, covenantId), [config.network, v]);
 }
 
 /**

@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   adoptDeclaration, declarationConflicts, declaredToken, loadDeclaration, resetDeclarationsForTests, restoreDeclarations, subscribeDeclarations,
 } from './token-declarations';
-import { decimalsNote, displayToken } from '../app/token-display';
+import { decimalsNote, decimalsOrigin, displayToken } from '../app/token-display';
+import { buildTokenRows, unknownRow } from '../ui/market/token-model';
 import { synthesizeOpenToken } from '../kob/open-token';
 import { emptyIssueForm, planIssue, type IssuePlan } from '../kob/issue';
 import { loadKobNode } from '../kob/wasm.node';
@@ -129,9 +130,49 @@ describe('declarations in the display (facts from the chain first, the registry 
     // the market's orders use the declared scale: fine; another: a conflict, whatever was entered
     expect(synthesizeOpenToken(kob, view(), [{ scale: 10_000 }], null, null, [], { network: NET, declared }).ok).toBe(true);
     expect(synthesizeOpenToken(kob, view({ market_scale: 100 }), [], null, null, [], { network: NET, declared, decimals: 2 })).toEqual({ ok: false, reason: 'scale-conflict' });
+    // orders that agree leave the decimals the declared ones: the market banner says so (`decimalsOrigin`), not "the scale its first order set"
+    const agreeing = synthesizeOpenToken(kob, view({ market_scale: 10_000 }), [], null, null, [], { network: NET, declared });
+    expect(agreeing.ok && agreeing.info).toMatchObject({ decimals: 4, openScale: 'declared' });
+    expect(agreeing.ok && decimalsOrigin(agreeing.info)).toBe('declared');
+    // without a declaration: the scale of its orders
+    const undeclared = synthesizeOpenToken(kob, view({ market_scale: 10_000 }), [], null, null, [], { network: NET });
+    expect(undeclared.ok && decimalsOrigin(undeclared.info)).toBe('scale');
     // more than 9 decimals: the scale stops at 10^9 (as for a registry token), the decimals stay the declared ones
     const big = synthesizeOpenToken(kob, view(), [], null, null, [], { network: NET, declared: { ...declared, decimals: 12 } });
     expect(big.ok && big.info.decimals).toBe(12);
     expect(synthesizeOpenToken(kob, view({ market_scale: 1_000_000_000 }), [], null, null, [], { network: NET, declared: { ...declared, decimals: 12 } }).ok).toBe(true);
+  });
+});
+
+describe('a declared token in the market list, the selector and the title', () => {
+  const kcc = () => kob.templates().find((t) => t.name === 'KCC20Ref')!;
+  const view = (id: string, over: Partial<IndexerTokenView> = {}): IndexerTokenView => ({
+    ticker: '', covenant_id: id, template_hash: kcc().hash, extension_commitment: '00'.repeat(32), scale: null, decimals: null, open_asks: 0, open_bids: 0,
+    standing: 'unverified', powers: [], declaration: true, ...over,
+  });
+  const registry = { tokens: [], templates: [], byCovenantId: new Map() } as unknown as Parameters<typeof buildTokenRows>[0];
+
+  it('a row of a token the registry does not list is named by its declaration (ticker, name, decimals), marked as declared', () => {
+    const p = create(3, 'K23T', 'KOB KCC23 Test');
+    const id = p.token.covenantId;
+    // nothing known yet: the row is as before (no name, the indexer's empty ticker)
+    expect(buildTokenRows(registry, [view(id)], [], (c) => declaredToken(NET, c))[0]).toMatchObject({ ticker: '', name: null, decimals: null, scale: null });
+    adoptDeclaration(kob, NET, id, p.docs.launchProof, null, false);
+    const row = buildTokenRows(registry, [view(id)], [], (c) => declaredToken(NET, c))[0]!;
+    expect(row).toMatchObject({ ticker: 'K23T', name: 'KOB KCC23 Test', declared: true, decimals: 3, scale: 1000n, info: null });
+    // the indexer's own figures stay first; a declaration of another token names nothing
+    expect(unknownRow(registry, view(id, { ticker: 'IDX', scale: 100, decimals: 2 }), 'indexer', declaredToken(NET, id))).toMatchObject({ ticker: 'IDX', decimals: 2, scale: 100n });
+    expect(unknownRow(registry, view('ab'.repeat(32)), 'indexer', declaredToken(NET, id))).toMatchObject({ ticker: '', name: null });
+    expect(unknownRow(registry, view('ab'.repeat(32)), 'indexer', declaredToken(NET, id)).declared).toBeUndefined();
+  });
+
+  it('where the decimals come from, for the market banner: registry, declaration, issuance record, market scale, entered, assumed', () => {
+    expect(decimalsOrigin({})).toBe('registry');
+    expect(decimalsOrigin({ declarationConflicts: ['decimals'] })).toBe('declared');
+    expect(decimalsOrigin({ declarationConflicts: ['name'] })).toBe('registry');
+    for (const s of ['declared', 'issued', 'assumed'] as const) expect(decimalsOrigin({ decimalsSource: s })).toBe(s);
+    expect(decimalsOrigin({ openList: true, openScale: 'declared' })).toBe('declared');
+    expect(decimalsOrigin({ openList: true, openScale: 'orders' })).toBe('scale');
+    expect(decimalsOrigin({ openList: true, openScale: 'entered' })).toBe('entered');
   });
 });

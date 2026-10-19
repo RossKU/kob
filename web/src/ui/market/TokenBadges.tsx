@@ -1,4 +1,5 @@
 import { t } from '../../i18n';
+import { decimalsOrigin } from '../../app/token-display';
 import { Badge, Banner } from '../kit';
 import { longId, type TokenInfo } from '../../kob/registry';
 import { hasIssuerControl, KNOWN_POWERS, tokenLabel, type TokenBadge, type TokenRow } from './token-model';
@@ -51,15 +52,16 @@ export function SharedTickerNote(props: { shared: boolean; block?: boolean; 'dat
 }
 
 /**
- * Notes for a token found through the indexer only (open list): its amounts are in base units, and the covenant id is all that identifies it. Shows the
- * full covenant id. Renders nothing for a registry token.
+ * Notes for a token found through the indexer only (open list): the decimals its amounts and prices use and where they come from (its declaration on
+ * chain, the price scale of its orders, the decimals entered for its first order: `decimalsOrigin`), and the covenant id, all that identifies it (shown
+ * in full). Renders nothing for a registry token.
  */
-export function OpenTokenNote(props: { token: (Pick<TokenInfo, 'covenantId' | 'openList'> & Partial<Pick<TokenInfo, 'openScale' | 'decimals'>>) | null | undefined; 'data-testid'?: string }) {
+export function OpenTokenNote(props: { token: (Pick<TokenInfo, 'covenantId' | 'openList'> & Partial<Pick<TokenInfo, 'openScale' | 'decimals' | 'decimalsSource' | 'declarationConflicts'>>) | null | undefined; 'data-testid'?: string }) {
   const tk = props.token;
   if (!tk || tk.openList !== true) return null;
   return (
     <Banner tone="info" title={t('market.open.title', { id: longId(tk.covenantId) })} data-testid={props['data-testid'] ?? 'open-token-caution'}>
-      {tk.openScale === 'entered' ? t('market.open.enteredScale', { decimals: tk.decimals ?? 0 }) : t('market.open.baseUnits', { decimals: tk.decimals ?? 8 })}
+      <span data-testid="open-token-decimals" data-origin={decimalsOrigin(tk)}>{t(`market.open.decimals.${decimalsOrigin(tk)}`, { decimals: tk.decimals ?? 8 })}</span>
       <div class="small wrap-anywhere" data-testid="open-token-full-id">
         {t('market.open.fullId')} <code>{tk.covenantId}</code>
       </div>
