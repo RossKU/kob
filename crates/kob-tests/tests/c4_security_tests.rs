@@ -608,56 +608,7 @@ fn c4_router_token_cancel_checks_the_lock_owner() {
             assert!(at > ablated.rfind("entry cancel(").unwrap(), "{actor}: {line} belongs to the cancel");
             ablated.replace_range(at..at + line.len(), "");
         }
-        let handle = |p: TemplateId| ArtifactValue::Bytes(kob_protocol::artifacts::token_template(p).hash.to_vec());
-        let bytes = |v: &[u8; 32]| ArtifactValue::Bytes(v.to_vec());
-        let args = match &state {
-            IntentState::TokenToKas { payer, merchant, token, program, merchant_kas, max_sell, lock_amount, deadline, .. } => vec![
-                bytes(payer),
-                bytes(merchant),
-                bytes(token),
-                handle(*program),
-                ArtifactValue::Int(*merchant_kas),
-                ArtifactValue::Int(*max_sell),
-                ArtifactValue::Int(*lock_amount),
-                ArtifactValue::Int(*deadline),
-            ],
-            IntentState::TokenSwap {
-                payer,
-                merchant,
-                token_a,
-                program_a,
-                token_b,
-                program_b,
-                max_sell_a,
-                amount_b,
-                lock_amount,
-                deadline,
-                ..
-            } => {
-                vec![
-                    bytes(payer),
-                    bytes(merchant),
-                    bytes(token_a),
-                    handle(*program_a),
-                    bytes(token_b),
-                    handle(*program_b),
-                    ArtifactValue::Int(*max_sell_a),
-                    ArtifactValue::Int(*amount_b),
-                    ArtifactValue::Int(*lock_amount),
-                    ArtifactValue::Int(*deadline),
-                ]
-            }
-            _ => unreachable!(),
-        };
-        // a KCC-20 token A's state pins the lock's extension commitment too (before the deadline)
-        let mut args = args;
-        if fam == Family::Kcc20 {
-            args.insert(args.len() - 1, bytes(&ext));
-        }
-        // a swap pins the extension commitment of token B (the B pin), the last field before the deadline
-        if let IntentState::TokenSwap { b_extension, .. } = &state {
-            args.insert(args.len() - 1, bytes(b_extension));
-        }
+        let args = router_state_args(&state, fam, ext);
         let compile =
             |s: &str| common::compile_contract(s, &args, Default::default()).unwrap_or_else(|e| panic!("compile {actor}: {e:?}"));
         let shipped = compile(&src);
@@ -688,5 +639,195 @@ fn c4_router_token_cancel_checks_the_lock_owner() {
         }
         assert!(failing(&tx2, &entries2).is_empty(), "{actor}: ablated router (no owner check of the lock): the forged cancel passes");
         println!("{actor} on {}: the lock owner check refuses the forged cancel; without it, it passes", prog.name());
+    }
+}
+
+/// The constructor arguments (the state fields) of a token intent actor for `state` (`fam`: the family of the locked token A,
+/// `ext`: its extension commitment), as the generated router source declares them.
+fn router_state_args(state: &IntentState, fam: Family, ext: [u8; 32]) -> Vec<silverscript_abi::ArtifactValue> {
+    use silverscript_abi::ArtifactValue;
+    let handle = |p: TemplateId| ArtifactValue::Bytes(kob_protocol::artifacts::token_template(p).hash.to_vec());
+    let bytes = |v: &[u8; 32]| ArtifactValue::Bytes(v.to_vec());
+    let args = match &state {
+        IntentState::TokenToKas { payer, merchant, token, program, merchant_kas, max_sell, lock_amount, deadline, .. } => vec![
+            bytes(payer),
+            bytes(merchant),
+            bytes(token),
+            handle(*program),
+            ArtifactValue::Int(*merchant_kas),
+            ArtifactValue::Int(*max_sell),
+            ArtifactValue::Int(*lock_amount),
+            ArtifactValue::Int(*deadline),
+        ],
+        IntentState::TokenSwap {
+            payer,
+            merchant,
+            token_a,
+            program_a,
+            token_b,
+            program_b,
+            max_sell_a,
+            amount_b,
+            lock_amount,
+            deadline,
+            ..
+        } => {
+            vec![
+                bytes(payer),
+                bytes(merchant),
+                bytes(token_a),
+                handle(*program_a),
+                bytes(token_b),
+                handle(*program_b),
+                ArtifactValue::Int(*max_sell_a),
+                ArtifactValue::Int(*amount_b),
+                ArtifactValue::Int(*lock_amount),
+                ArtifactValue::Int(*deadline),
+            ]
+        }
+        _ => unreachable!(),
+    };
+    // a KCC-20 token A's state pins the lock's extension commitment too (before the deadline)
+    let mut args = args;
+    if fam == Family::Kcc20 {
+        args.insert(args.len() - 1, bytes(&ext));
+    }
+    // a swap pins the extension commitment of token B (the B pin), the last field before the deadline
+    if let IntentState::TokenSwap { b_extension, .. } = &state {
+        args.insert(args.len() - 1, bytes(b_extension));
+    }
+    args
+}
+
+/// Finding AUD-RT of the audit 2026-10 (closed with the router of the order template version after it). A token intent's
+/// `cancel` read its lock (input j + 1) for the owner, the owner type, the amount and the commitment, but not for the
+/// rest of what every other entry requires of it (`own_tokens` / `own_kron`): the KCC-20 borrow scheme and the KRON
+/// `is_minter` flag. Now a payer-signed cancel whose lock is borrow-enabled (KCC-20) or a minter UTXO (KRON) is refused by
+/// the router at the intent input; the same actor without the new line of its cancel (ablation) accepts it at that input.
+/// Such a lock cannot be built by KOB (the builders refuse non-plain token UTXOs), so the transaction is edited after an
+/// honest build. Run on the 8/8 and 3/3 KCC-20 programs and on both KRON programs.
+#[test]
+fn aud_rt_router_token_cancel_refuses_a_minter_or_borrow_enabled_lock() {
+    use kaspa_txscript::pay_to_script_hash_script;
+    use kob_protocol::build::{build_cancel_intent, CancelIntent};
+    use kob_protocol::state::{Kcc20State, KronState};
+    use kob_protocol::tx::spk_to_string;
+    use silverscript_abi::ArtifactValue;
+    let keys = fx::keys();
+    let payer = fx::pk(11);
+    let id = fx::cov(0xc1);
+    const D: i64 = 1_800_000_000_000;
+    let cases = [
+        ("TokenToKas_sell", TemplateId::Kcc20Ref8x8),
+        ("TokenToKas_sell2", TemplateId::Kcc20Ref),
+        ("TokenToKasKron_sell", TemplateId::KronToken2433),
+        ("TokenSwapKron_swap", TemplateId::KronToken2732),
+        ("TokenSwap_swap", TemplateId::Kcc20Ref8x8),
+    ];
+    for (actor, prog) in cases {
+        let fam = prog.family();
+        let a = Actor::by_name(actor).unwrap();
+        let ext = if fam == Family::Kron { [0; 32] } else { fx::EXT };
+        let units = 3 * fx::WHOLE;
+        let swap = a.shape.kind == kob_protocol::router::IntentKind::TokenSwap;
+        let state = if swap {
+            IntentState::TokenSwap {
+                payer,
+                merchant: fx::pk(fx::MERCHANT),
+                token_a: fx::TOKEN_COV,
+                program_a: prog,
+                token_b: fx::TOKEN_B,
+                program_b: TemplateId::Kcc20Ref8x8,
+                max_sell_a: 2 * fx::WHOLE,
+                amount_b: fx::WHOLE,
+                lock_amount: units,
+                lock_extension: ext,
+                b_extension: fx::EXT,
+                deadline: D,
+            }
+        } else {
+            IntentState::TokenToKas {
+                payer,
+                merchant: fx::pk(fx::MERCHANT),
+                token: fx::TOKEN_COV,
+                program: prog,
+                merchant_kas: 4 * fx::KAS as i64,
+                max_sell: 2 * fx::WHOLE,
+                lock_amount: units,
+                lock_extension: ext,
+                deadline: D,
+            }
+        };
+        let intent = Utxo { transaction_id: [0xc1; 32], index: 0, amount: 2 * fx::KAS, block_daa_score: 2_000, covenant_id: Some(id) };
+        let lock_utxo =
+            Utxo { transaction_id: [0xc2; 32], index: 1, amount: fx::KAS, block_daa_score: 2_000, covenant_id: Some(fx::TOKEN_COV) };
+        let lock = TokenUtxo { utxo: lock_utxo, state: TokenState::custody(fam, units, id, ext) };
+        let req = CancelIntent { actor: actor.into(), state: state.clone(), intent, lock: Some(lock.clone()), to: None, fee: fx::fee() };
+        let built = build_cancel_intent(&req, &intent_budgets).unwrap();
+        let sigs = sign_locally(&built, &keys).unwrap();
+        let (tx, entries) = finalize(&built, &sigs, FinalizeOptions { tighten_budgets: false }).unwrap().tx.to_tx().unwrap();
+        assert!(failing(&tx, &entries).is_empty(), "{actor}: the honest cancel must pass");
+
+        // the lock made borrow-enabled (KCC-20) / a minter UTXO (KRON), its UTXO script following its state
+        let mut b = built.clone();
+        let (bad, what, line) = match &lock.state {
+            TokenState::Kcc20(k) => (
+                TokenState::Kcc20(Kcc20State { borrow_scheme: 1, borrow_guard: [0x5a; 32], ..k.clone() }),
+                "a borrow-enabled lock",
+                "borrow_scheme == BORROW_DISABLED",
+            ),
+            TokenState::Kron(k) => (TokenState::Kron(KronState { is_minter: 1, ..k.clone() }), "a minter lock", "is_minter == 0x00"),
+        };
+        assert!(!bad.is_plain());
+        b.tx.inputs[1].utxo.script_public_key = spk_to_string(&bad.spk_with(kob_protocol::artifacts::token_template(prog)));
+        b.plans[1] = match (b.plans[1].clone(), &bad) {
+            (SigPlan::TokenLeader { template, next_states, witness, .. }, TokenState::Kcc20(k)) => {
+                SigPlan::TokenLeader { template, state: k.clone(), next_states, witness }
+            }
+            (SigPlan::KronToken { template, next_states, witnesses, signer, .. }, TokenState::Kron(k)) => {
+                SigPlan::KronToken { template, state: k.clone(), next_states, witnesses, signer }
+            }
+            (other, _) => panic!("{actor}: input 1 is the lock, not {other:?}"),
+        };
+        let (mut tx, entries) = b.tx.to_tx().unwrap();
+        let sign = |tx: &mut Transaction, entries: &[UtxoEntry]| {
+            for (i, plan) in b.plans.iter().enumerate() {
+                let sig = plan.signer().map(|k| sign_digest(&keys[&k], &sighash(tx, entries, i)).unwrap());
+                tx.inputs[i].signature_script = plan.sigscript(sig.as_deref()).unwrap();
+            }
+        };
+        sign(&mut tx, &entries);
+        assert!(failing(&tx, &entries).contains(&0), "{actor}: the router refuses a payer-signed cancel of {what} (AUD-RT)");
+
+        // Ablation: the actor without the new line of its cancel accepts the same cancel at the intent input.
+        let src = common::contract_source(actor).replace("\r\n", "\n");
+        let grp = if swap { "token_a_group" } else { "token" };
+        let full = format!("        require(gen__{grp}_mine_state.{line});\n");
+        let at = src.rfind(&full).unwrap_or_else(|| panic!("{actor}: generated router changed: {full}"));
+        assert!(at > src.rfind("entry cancel(").unwrap(), "{actor}: {full} belongs to the cancel");
+        let mut ablated = src.clone();
+        ablated.replace_range(at..at + full.len(), "");
+        let args = router_state_args(&state, fam, ext);
+        let compile =
+            |s: &str| common::compile_contract(s, &args, Default::default()).unwrap_or_else(|e| panic!("compile {actor}: {e:?}"));
+        assert_eq!(
+            pay_to_script_hash_script(&common::bytecode(&compile(&src))),
+            entries[0].script_public_key,
+            "the source is the pinned actor"
+        );
+        let abl = compile(&ablated);
+        let mut entries2 = entries.clone();
+        entries2[0].script_public_key = pay_to_script_hash_script(&common::bytecode(&abl));
+        let t = kob_protocol::artifacts::token_template(prog);
+        let mut tx2 = tx.clone();
+        sign(&mut tx2, &entries2);
+        let sig = sign_digest(&keys[&payer], &sighash(&tx2, &entries2, 0)).unwrap();
+        let cancel_args =
+            [ArtifactValue::from(sig), ArtifactValue::Int(t.prefix.len() as i64), ArtifactValue::Int(t.suffix.len() as i64)];
+        let mut ss = common::encode_entry_sig_script(&abl, "cancel", &cancel_args).unwrap();
+        ss.extend(common::push_redeem_script(&common::bytecode(&abl)));
+        tx2.inputs[0].signature_script = ss;
+        assert!(!failing(&tx2, &entries2).contains(&0), "{actor}: ablated router (no {line}): the cancel of {what} passes the intent");
+        println!("{actor} on {}: the router refuses the cancel of {what}; without `{line}` it accepts it", prog.name());
     }
 }

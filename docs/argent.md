@@ -24,7 +24,7 @@ artifact id you reviewed; do not pin a file name or a branch.
 | `KOBOrders` | `dcb34ca9600d7a5b70877d8b10175d1d550ac0a275f050be262c4256dd8c7903` |
 | `KOBOrdersKron` | `867d24a6c06fb8a38a30941a7f5a79d8dda05c4bee4b01f3dab2ba68c394442f` |
 | `KOBToken` | `364f6518d3ae5a31d0fcf768c9a1cc5d6e187cb2d03787dee8d8e9088ffec39f` |
-| `KobRouter` | `32702b63cb88300b80b68dbe94c3fcbbe20c82024bae00ff235a1ced9974584d` |
+| `KobRouter` | `2cb7d513ab28a5f63190000847c4d824696e4776ac094267ac05ac5bc5c02f47` |
 
 Actor-type handles (the template hash of the hand-written program: blake3 over prefix and suffix
 around the state span, the same value silverc reports as `template_hash`):
@@ -255,7 +255,7 @@ deadline):
 | `KasToToken` | the intent's KAS to the payer (P2PK), less at most `EXPIRE_MAX_FEE` (0.1 KAS) | - |
 | `TokenToKas`, `TokenSwap` | the intent's KAS to the payer, less at most `EXPIRE_MAX_FEE` | the locked tokens, whole and with their whole KAS carrier, to the payer's key (borrow disabled, same extension); input j + 1 must be those tokens |
 
-The payer's `cancel` works at any time, before or after the deadline; a token intent's cancel must spend the locked tokens at input j + 1, as the one token input of the locked token, read under the intent's handle like every observed token: owned by the intent's id (KCC-20 owner_scheme 0x04, KRON id_type 2). The cancel ends the intent covenant, and tokens owned by its id could never move afterwards, so the router refuses a cancel that leaves them behind or spends other tokens of that token in their place; where they go (the one token output of that token) is the payer's signed choice. **What the deadline does
+The payer's `cancel` works at any time, before or after the deadline; a token intent's cancel must spend the locked tokens at input j + 1, as the one token input of the locked token, read under the intent's handle like every observed token: owned by the intent's id (KCC-20 owner_scheme 0x04, KRON id_type 2) and, as every other entry reads it, with borrowing disabled (KCC-20) or not a minter UTXO (KRON). The cancel ends the intent covenant, and tokens owned by its id could never move afterwards, so the router refuses a cancel that leaves them behind or spends other tokens of that token in their place; where they go (the one token output of that token) is the payer's signed choice. **What the deadline does
 not do:** refuse a late execution by the clock. A covenant can prove a lower time bound (CLTV) but
 never an upper one (a transaction valid at t stays valid later), so until the intent is spent an
 execution after the deadline still validates. What ends an abandoned intent is the expiry
@@ -436,7 +436,9 @@ executes and validates every actor on every program pair of its family (8/8, 3/3
 KRON 2,433 B with an 8/8 token B, KRON 2,732 B with a 3/3 token B; the 3/3 program refuses the three-bid sells at
 creation), cancels and expires every one of them (redirected payouts, changes and expiries, an expiry 1 ms early, a
 cancel by another key and one without its lock are rejected at the intent input), and measures the cancel and expire
-budgets over all of them. `crates/kob-tests/tests/c4_security_tests.rs` (`c4_router_token_cancel_checks_the_lock_owner`)
+budgets over all of them. `crates/kob-tests/tests/c4_security_tests.rs` (`aud_rt_router_token_cancel_refuses_a_minter_or_borrow_enabled_lock`)
+edits the lock of an honest cancel into a borrow-enabled (KCC-20) or minter (KRON) UTXO: the router refuses it at the intent
+input, and the same actor without that line of its cancel accepts it (AUD-RT). `c4_router_token_cancel_checks_the_lock_owner`
 forges a payer-signed cancel that spends the payer's own tokens in place of the lock, on the 8/8 and 3/3 programs and on
 both KRON programs: the router refuses it, and the same actor with the two owner lines of its cancel removed accepts it
 (ablation). `production_router_matches_the_harness` ties the harness to the KCC-20 actors the builders pin.

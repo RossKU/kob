@@ -795,8 +795,8 @@ chooses its authorization's expiry no later than the invoice's (KOB payer SDK: `
 - **Cancel.** The payer can cancel at any time (I2). Before the deadline a cancel races the
   facilitator's execution and either may win, never both. The KOB router requires a token intent's
   cancel to spend the locked tokens at input `j + 1`, as the one token input of that token, owned by the
-  intent (it reads them under the intent's program handle): tokens owned by the intent's id could never
-  move after the cancel.
+  intent (it reads them under the intent's program handle), with borrowing disabled (KCC-20) or not a minter
+  UTXO (KRON), as every other entry reads the lock: tokens owned by the intent's id could never move after the cancel.
 - **Expiry.** From the deadline on, anyone may expire the intent (I4). The KOB router's `expire`
   entry needs no signature: it requires the transaction's lock time to be at least the deadline
   (CLTV, a time lock; a node accepts it once its past median time reached the deadline), returns the
@@ -872,7 +872,8 @@ Engine-validated cases: `crates/kob-protocol/tests/intent_builders.rs` (every ro
 executed and validated on every program pair of its family: 8/8, 3/3, 3/3 to 8/8, both KRON programs;
 redirected outputs rejected by the router; the payer's cancel; the cancel budget; every shape expired at
 its deadline, rejected 1 ms before it and with its KAS or tokens redirected),
-`crates/kob-tests/tests/c4_security_tests.rs` (the cancel's lock owner check on KCC-20 and KRON, with its ablation),
+`crates/kob-tests/tests/c4_security_tests.rs` (the cancel's lock owner check on KCC-20 and KRON, and its refusal of a
+borrow-enabled or minter lock, each with its ablation),
 `crates/kob-x402/tests/intent.rs` (payer SDK, verifier and keeper over the in-memory chain; `intent-neg-hashtype`
 in `intent_creation_payer_signatures_must_use_sighash_all`) and
 `crates/kob-executor/tests/x402_intents.rs` (the facilitator end to end). The router's own covenant rules

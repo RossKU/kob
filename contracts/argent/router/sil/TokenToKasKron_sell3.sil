@@ -766,6 +766,7 @@ contract TokenToKasKron_sell3(
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(gen__token_mine_state.owner == byte[32](OpInputCovenantId(this.activeInputIndex)));
         require(gen__token_mine_state.id_type == KRON_ID_COVENANT);
+        require(gen__token_mine_state.is_minter == 0x00);
         require(gen__token_mine_state.amount == lock_amount);
     }
 

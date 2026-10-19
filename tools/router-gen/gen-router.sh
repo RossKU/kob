@@ -474,10 +474,13 @@ cancel_entry() {
     echo "        require_cancel_sig(s, payer);"
     echo "        require(OpCovInputIdx($cov, 0) == this.activeInputIndex + 1);"
     echo "        require($M.owner == byte[32](self.cov_id));"
+    # the lock as every other entry reads it (own_kron / own_tokens): never a KRON minter UTXO, no KCC-20 borrow path
     if [ "$2" = kron ]; then
       echo "        require($M.id_type == KRON_ID_COVENANT);"
+      echo "        require($M.is_minter == 0x00);"
     else
       echo "        require($M.owner_scheme == OWNER_COVENANT_ID);"
+      echo "        require($M.borrow_scheme == BORROW_DISABLED);"
     fi
     lock_pin "$2" "$M"
   fi

@@ -888,6 +888,7 @@ actor TokenToKas_sell owns TokenToKasState {
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(token.inputs.mine.owner == byte[32](self.cov_id));
         require(token.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+        require(token.inputs.mine.borrow_scheme == BORROW_DISABLED);
         require(token.inputs.mine.amount == lock_amount);
         require(token.inputs.mine.extension_commitment == lock_extension);
     }
@@ -1002,6 +1003,7 @@ actor TokenToKas_sell_out owns TokenToKasState {
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(token.inputs.mine.owner == byte[32](self.cov_id));
         require(token.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+        require(token.inputs.mine.borrow_scheme == BORROW_DISABLED);
         require(token.inputs.mine.amount == lock_amount);
         require(token.inputs.mine.extension_commitment == lock_extension);
     }
@@ -1136,6 +1138,7 @@ actor TokenToKas_sell2 owns TokenToKasState {
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(token.inputs.mine.owner == byte[32](self.cov_id));
         require(token.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+        require(token.inputs.mine.borrow_scheme == BORROW_DISABLED);
         require(token.inputs.mine.amount == lock_amount);
         require(token.inputs.mine.extension_commitment == lock_extension);
     }
@@ -1268,6 +1271,7 @@ actor TokenToKas_sell2_out owns TokenToKasState {
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(token.inputs.mine.owner == byte[32](self.cov_id));
         require(token.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+        require(token.inputs.mine.borrow_scheme == BORROW_DISABLED);
         require(token.inputs.mine.amount == lock_amount);
         require(token.inputs.mine.extension_commitment == lock_extension);
     }
@@ -1420,6 +1424,7 @@ actor TokenToKas_sell3 owns TokenToKasState {
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(token.inputs.mine.owner == byte[32](self.cov_id));
         require(token.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+        require(token.inputs.mine.borrow_scheme == BORROW_DISABLED);
         require(token.inputs.mine.amount == lock_amount);
         require(token.inputs.mine.extension_commitment == lock_extension);
     }
@@ -1570,6 +1575,7 @@ actor TokenToKas_sell3_out owns TokenToKasState {
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(token.inputs.mine.owner == byte[32](self.cov_id));
         require(token.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+        require(token.inputs.mine.borrow_scheme == BORROW_DISABLED);
         require(token.inputs.mine.amount == lock_amount);
         require(token.inputs.mine.extension_commitment == lock_extension);
     }
@@ -1739,6 +1745,7 @@ actor TokenSwap_swap owns TokenSwapState {
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
         require(token_a_group.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+        require(token_a_group.inputs.mine.borrow_scheme == BORROW_DISABLED);
         require(token_a_group.inputs.mine.amount == lock_amount);
         require(token_a_group.inputs.mine.extension_commitment == lock_extension);
     }
@@ -1895,6 +1902,7 @@ actor TokenSwap_swap_bid_out owns TokenSwapState {
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
         require(token_a_group.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+        require(token_a_group.inputs.mine.borrow_scheme == BORROW_DISABLED);
         require(token_a_group.inputs.mine.amount == lock_amount);
         require(token_a_group.inputs.mine.extension_commitment == lock_extension);
     }
@@ -2041,6 +2049,7 @@ actor TokenSwap_swap_ask_out owns TokenSwapState {
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
         require(token_a_group.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+        require(token_a_group.inputs.mine.borrow_scheme == BORROW_DISABLED);
         require(token_a_group.inputs.mine.amount == lock_amount);
         require(token_a_group.inputs.mine.extension_commitment == lock_extension);
     }
@@ -2185,6 +2194,7 @@ actor TokenSwap_swap_out owns TokenSwapState {
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
         require(token_a_group.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+        require(token_a_group.inputs.mine.borrow_scheme == BORROW_DISABLED);
         require(token_a_group.inputs.mine.amount == lock_amount);
         require(token_a_group.inputs.mine.extension_commitment == lock_extension);
     }
@@ -2373,6 +2383,7 @@ actor TokenSwap_swap2 owns TokenSwapState {
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
         require(token_a_group.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+        require(token_a_group.inputs.mine.borrow_scheme == BORROW_DISABLED);
         require(token_a_group.inputs.mine.amount == lock_amount);
         require(token_a_group.inputs.mine.extension_commitment == lock_extension);
     }
@@ -2547,6 +2558,7 @@ actor TokenSwap_swap2_out owns TokenSwapState {
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
         require(token_a_group.inputs.mine.owner_scheme == OWNER_COVENANT_ID);
+        require(token_a_group.inputs.mine.borrow_scheme == BORROW_DISABLED);
         require(token_a_group.inputs.mine.amount == lock_amount);
         require(token_a_group.inputs.mine.extension_commitment == lock_extension);
     }
@@ -2660,6 +2672,7 @@ actor TokenToKasKron_sell owns TokenToKasKronState {
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(token.inputs.mine.owner == byte[32](self.cov_id));
         require(token.inputs.mine.id_type == KRON_ID_COVENANT);
+        require(token.inputs.mine.is_minter == 0x00);
         require(token.inputs.mine.amount == lock_amount);
     }
 }
@@ -2765,6 +2778,7 @@ actor TokenToKasKron_sell_out owns TokenToKasKronState {
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(token.inputs.mine.owner == byte[32](self.cov_id));
         require(token.inputs.mine.id_type == KRON_ID_COVENANT);
+        require(token.inputs.mine.is_minter == 0x00);
         require(token.inputs.mine.amount == lock_amount);
     }
 }
@@ -2888,6 +2902,7 @@ actor TokenToKasKron_sell2 owns TokenToKasKronState {
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(token.inputs.mine.owner == byte[32](self.cov_id));
         require(token.inputs.mine.id_type == KRON_ID_COVENANT);
+        require(token.inputs.mine.is_minter == 0x00);
         require(token.inputs.mine.amount == lock_amount);
     }
 }
@@ -3009,6 +3024,7 @@ actor TokenToKasKron_sell2_out owns TokenToKasKronState {
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(token.inputs.mine.owner == byte[32](self.cov_id));
         require(token.inputs.mine.id_type == KRON_ID_COVENANT);
+        require(token.inputs.mine.is_minter == 0x00);
         require(token.inputs.mine.amount == lock_amount);
     }
 }
@@ -3148,6 +3164,7 @@ actor TokenToKasKron_sell3 owns TokenToKasKronState {
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(token.inputs.mine.owner == byte[32](self.cov_id));
         require(token.inputs.mine.id_type == KRON_ID_COVENANT);
+        require(token.inputs.mine.is_minter == 0x00);
         require(token.inputs.mine.amount == lock_amount);
     }
 }
@@ -3285,6 +3302,7 @@ actor TokenToKasKron_sell3_out owns TokenToKasKronState {
         require(OpCovInputIdx(token_covid, 0) == this.activeInputIndex + 1);
         require(token.inputs.mine.owner == byte[32](self.cov_id));
         require(token.inputs.mine.id_type == KRON_ID_COVENANT);
+        require(token.inputs.mine.is_minter == 0x00);
         require(token.inputs.mine.amount == lock_amount);
     }
 }
@@ -3438,6 +3456,7 @@ actor TokenSwapKron_swap owns TokenSwapKronState {
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
         require(token_a_group.inputs.mine.id_type == KRON_ID_COVENANT);
+        require(token_a_group.inputs.mine.is_minter == 0x00);
         require(token_a_group.inputs.mine.amount == lock_amount);
     }
 }
@@ -3585,6 +3604,7 @@ actor TokenSwapKron_swap_bid_out owns TokenSwapKronState {
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
         require(token_a_group.inputs.mine.id_type == KRON_ID_COVENANT);
+        require(token_a_group.inputs.mine.is_minter == 0x00);
         require(token_a_group.inputs.mine.amount == lock_amount);
     }
 }
@@ -3722,6 +3742,7 @@ actor TokenSwapKron_swap_ask_out owns TokenSwapKronState {
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
         require(token_a_group.inputs.mine.id_type == KRON_ID_COVENANT);
+        require(token_a_group.inputs.mine.is_minter == 0x00);
         require(token_a_group.inputs.mine.amount == lock_amount);
     }
 }
@@ -3857,6 +3878,7 @@ actor TokenSwapKron_swap_out owns TokenSwapKronState {
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
         require(token_a_group.inputs.mine.id_type == KRON_ID_COVENANT);
+        require(token_a_group.inputs.mine.is_minter == 0x00);
         require(token_a_group.inputs.mine.amount == lock_amount);
     }
 }
@@ -4034,6 +4056,7 @@ actor TokenSwapKron_swap2 owns TokenSwapKronState {
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
         require(token_a_group.inputs.mine.id_type == KRON_ID_COVENANT);
+        require(token_a_group.inputs.mine.is_minter == 0x00);
         require(token_a_group.inputs.mine.amount == lock_amount);
     }
 }
@@ -4197,6 +4220,7 @@ actor TokenSwapKron_swap2_out owns TokenSwapKronState {
         require(OpCovInputIdx(token_a, 0) == this.activeInputIndex + 1);
         require(token_a_group.inputs.mine.owner == byte[32](self.cov_id));
         require(token_a_group.inputs.mine.id_type == KRON_ID_COVENANT);
+        require(token_a_group.inputs.mine.is_minter == 0x00);
         require(token_a_group.inputs.mine.amount == lock_amount);
     }
 }

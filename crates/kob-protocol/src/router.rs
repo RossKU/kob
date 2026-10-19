@@ -39,7 +39,7 @@ use crate::json::to_hex;
 use crate::script::push_data;
 
 /// Id of the committed router artifact (`contracts/argent/router/artifact.json`, field `id`).
-pub const ROUTER_ARTIFACT_ID: &str = "32702b63cb88300b80b68dbe94c3fcbbe20c82024bae00ff235a1ced9974584d";
+pub const ROUTER_ARTIFACT_ID: &str = "2cb7d513ab28a5f63190000847c4d824696e4776ac094267ac05ac5bc5c02f47";
 
 /// Most sompi an `expire` may keep of the intent's KAS (`EXPIRE_MAX_FEE` of `tools/router-gen/router_head.ag`).
 pub const EXPIRE_MAX_FEE: u64 = 10_000_000;
@@ -79,30 +79,30 @@ pub const ROUTER_PINNED: [(&str, &str); 30] = [
     ("KasToToken_buy2_out", "47833c3d191c9f73adf9672a8db31b7e995f50a49808af26e9f715a25352dd7d"),
     ("KasToToken_buy3", "79f299b0f1b4c4cc0669f157630ef8c027761b7b2a55f4f1213a0a16378ac658"),
     ("KasToToken_buy3_out", "9ba226ad8b16f16466bccb25fc37ee3b0fa7c71179fddf1db032ed5f51a4df96"),
-    ("TokenToKas_sell", "3cacab8c512625f4f3962e6e423a7b8827e787d5fb10ef6d90454b7d0ac7b454"),
-    ("TokenToKas_sell_out", "b2e5d06e1dc0ab9f612d9683fe9031920fb6a56afccdc9a82e3fcc2d027e4b7e"),
-    ("TokenToKas_sell2", "06651edb6f2c2ef701553490fc9982ea91680c10fdc632bf8240106c0cc408cb"),
-    ("TokenToKas_sell2_out", "85ea24188c25708cbbc95bef78ea64f169db1bb063d523acdbae9d9814b6c6c0"),
-    ("TokenToKas_sell3", "bc6fa37660fd30e03db95f6e29b891947fa41d8f725764fc19a0ed03e5bd5b0c"),
-    ("TokenToKas_sell3_out", "8ba6a08ce9a6e52ba271327078891668688c879c214d335f5964f673c304ea7d"),
-    ("TokenSwap_swap", "a561d2423b54d961ec5a1fa16fa169b17ebf09c384193ca68306d3a14e48c21e"),
-    ("TokenSwap_swap_bid_out", "6e7b81619106f701ac362e18c5d8f1ba66adee7e9bf0b759825f370a4cd85dab"),
-    ("TokenSwap_swap_ask_out", "1bf1d124e31c1542330e49e2753a686bc46c4ba2068ae38a3b58e164deef5dce"),
-    ("TokenSwap_swap_out", "8036d49b372b976afb58fbd6cdd181b7a45b5d76d95308cf3af80e8519275056"),
-    ("TokenSwap_swap2", "a135f29a217c0555ea9a2756c91b8303f68a6b80616ed53190c724ed3a6726d2"),
-    ("TokenSwap_swap2_out", "e291c252886ca57a51eb4ad998b75b249a0812ff83532d93aaabf28562c3921e"),
-    ("TokenToKasKron_sell", "b2293ed132da43777a9cb0b000cb933f9a77618ac74a61a1980685bf927e7480"),
-    ("TokenToKasKron_sell_out", "4800f848d0b2e5d292acb6b75020fc92dd113a0e8025c3fecd9f2603d4df517d"),
-    ("TokenToKasKron_sell2", "9428e377176d58142dfc993189e6535276676742e6267308807d83a6ef91f4f3"),
-    ("TokenToKasKron_sell2_out", "16067f03ca714841738b09ad373a2600aeb100518a5d7684ca4599781b6d29fa"),
-    ("TokenToKasKron_sell3", "a645dbf1f77f3d8a77929044fc6f7ef08f429b9d7ef32df5551af8669f5dfb7a"),
-    ("TokenToKasKron_sell3_out", "33302702ca16260bcc5e812ebb5196b18274bd396f0ca7104fccf20c95b6e3b3"),
-    ("TokenSwapKron_swap", "7d9bc6d78069b645e6b10aa662c6b5c15dc5557d0c31abc320d8aa95be94e6e6"),
-    ("TokenSwapKron_swap_bid_out", "ea63d25ce83e0e7cc3904dd67799344b6cdf52620c187e84b1b428ffe6d73526"),
-    ("TokenSwapKron_swap_ask_out", "eb3db384b601cf2c72e1aeafe167881017e9d1e761d356605a6d7e165979d042"),
-    ("TokenSwapKron_swap_out", "61aa40ec7624b8362590371866063ee1faff41bac62cecbddbd977d4c5501dbe"),
-    ("TokenSwapKron_swap2", "f7ef0141f6f6c4385c4e7d0914d0075f4892cd1715c0904b759a73592d0940c3"),
-    ("TokenSwapKron_swap2_out", "deedb4863293425893bbe16c83df8d46bc5a8d96bd368781e1abcec62d95cda2"),
+    ("TokenToKas_sell", "d1fabedfb6a01b1ea6ba1356c72c3455ea6dbd3496fc7556ee1fdd8c234b833d"),
+    ("TokenToKas_sell_out", "be26ce013508002f661920daa34b4c1f1b445d0bd93acb092d5bee0af71204fe"),
+    ("TokenToKas_sell2", "21b274f91d9b065c1ab9a1a2b3bc1c5cec7db0d8ea266881277d8a8a5e92c2d8"),
+    ("TokenToKas_sell2_out", "66d8b93f1561e195f99933604d0bd774dca3ab26b298111ba92d4041f5b599cd"),
+    ("TokenToKas_sell3", "f33745a0106132c7a1260af425cbc3c924bc881cdcb7202510cb645a946bc5a6"),
+    ("TokenToKas_sell3_out", "cbeb1e3d52111530721f5314e4bfc9b5052667ae98a861b9679a960d53d60c2a"),
+    ("TokenSwap_swap", "027740303bfd3396e318e2eeb7024fc999e6a5a736c84babaadbf51921822d16"),
+    ("TokenSwap_swap_bid_out", "10e938d41b76017121f01a01eefc663069493127af72290b511b5cbb491e1e9a"),
+    ("TokenSwap_swap_ask_out", "52fee1bd7662825748b9d2da996fcf8d681baebe74dd01821be11f193ebe72d0"),
+    ("TokenSwap_swap_out", "777d52d5d8033986a8472c65588eb206bce4488b640dfe9a0c4b2922f89a4daa"),
+    ("TokenSwap_swap2", "b50c66013782d2819620c407bb1544baa1a0375b42e113e6652e83692e33fcb2"),
+    ("TokenSwap_swap2_out", "9b8c2cc5a69b93c5a34005d77a1c0ab8c99ca3cab39f0c48c86ef18a845a1668"),
+    ("TokenToKasKron_sell", "9fc09e1198115aebb594059c22a2a999cb07aaee49cd70122ada67faa99480be"),
+    ("TokenToKasKron_sell_out", "4b541ccd2e2534179bd9c48931e7721a8bcfa3c0dcd647b161c5449e4a24ee9c"),
+    ("TokenToKasKron_sell2", "b3141da37664d17fe22ce2a7b4d20459781e25a22724215deeba4dbd3b22abf5"),
+    ("TokenToKasKron_sell2_out", "cce87e48bc1f2f27def2325c30eead2f4e97a7a923ef93de874f894076351d56"),
+    ("TokenToKasKron_sell3", "e24bb0978dcd2857599acdc5e303194b5e45259a2a3a412a3e3ac84c93865fb0"),
+    ("TokenToKasKron_sell3_out", "5056f5886ea7b28ad6251e4b46bb22893ee9124fd089391839224008264ea48b"),
+    ("TokenSwapKron_swap", "f84c5d251e12a9400e925217aa502b47e29d9504a3b535500fba8d7f6db423b0"),
+    ("TokenSwapKron_swap_bid_out", "d24c2ee13428dd0b66355f3e77d25ee8acca52cdc480db1ccda47bf59e678389"),
+    ("TokenSwapKron_swap_ask_out", "a468c09c53017294d725dc019ea4313da6f0d119b3f69770ad9cf29e6581fe3b"),
+    ("TokenSwapKron_swap_out", "8752297810470048dfad561587ff62406d2000ed56c21d63abf9d3f16b970068"),
+    ("TokenSwapKron_swap2", "1904c97951a2bf8dde04c156712ca62f249a3863213f457ae4627ef2a33268d0"),
+    ("TokenSwapKron_swap2_out", "8510b95e20de13b4313b8650978ae00b1c847186cc3a0f1d3e15a01ceb03e5b8"),
 ];
 
 const SIL_ABI_JSON: &str = include_str!("../data/router_sil_abi.json");
