@@ -109,7 +109,7 @@ export function OrdersView() {
   // the registry's token: what an action (merge, amend) plans with; `shownToken` is what a row shows (app/token-display.ts: a token the registry
   // does not list is shown on this browser's issuance of it, else on 8 assumed decimals, marked)
   const tokenOf = (id: string | null) => (id ? services.registry.byCovenantId.get(id) : undefined);
-  const shownToken = (id: string | null) => displayToken(services.registry, services.config.network, id);
+  const shownToken = (id: string | null, scale?: bigint | null) => displayToken(services.registry, services.config.network, id, undefined, scale);
   // an amount of a token (base units) as its token amount with the ticker
   const coverText = (token: Hex, amount: bigint): string => {
     const tk = shownToken(token)!;
@@ -491,7 +491,7 @@ export function OrdersView() {
           {shown.map((item) =>
             item.type === 'single' ? (
               rowById.get(item.id) ? (
-                <OrderRow key={item.id} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token)} canSign={canSign} actions={actions} busy={busy === item.id} {...(loadEvents ? { loadEvents } : {})} />
+                <OrderRow key={item.id} row={rowById.get(item.id)!} token={shownToken(rowById.get(item.id)!.token, rowById.get(item.id)!.scale)} canSign={canSign} actions={actions} busy={busy === item.id} {...(loadEvents ? { loadEvents } : {})} />
               ) : null
             ) : (
               <PositionCard
@@ -535,7 +535,7 @@ export function OrdersView() {
           row={amend}
           kind={amendK}
           state={amendState.state}
-          token={amendToken}
+          token={amendToken ?? shownToken(amend.token, amend.scale)}
           pubkey={wallet.info.pubkey}
           strays={strays}
           onClose={() => setAmend(null)}

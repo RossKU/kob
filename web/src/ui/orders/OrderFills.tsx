@@ -2,11 +2,11 @@
 import { useState } from 'preact/hooks';
 import type { EventView } from '../../data/indexer-types';
 import { useTxUrl } from '../../app/explorer';
-import { formatDateTime, has, t } from '../../i18n';
+import { formatDateTime, has, t, ASSUMED_TOKEN_DECIMALS } from '../../i18n';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { formatKas, formatPricePerToken, formatUnits } from '../../kob/units';
-import { Button, CopyText, ErrorBanner, fixedPricePerToken, fixedUnits, Loading, Table, tickPriceFraction, useAsync } from '../kit';
+import { Button, CopyText, ErrorBanner, fixedPricePerToken, Loading, Table, tickPriceFraction, useAsync } from '../kit';
 import { downloadText } from '../kit/download';
 import { fillHistory, fillsCsv, fillsFileName } from './fills-model';
 import type { OrderRowModel } from './orders-model';
@@ -33,11 +33,11 @@ export function OrderFills(props: OrderFillsProps) {
   const data = useAsync(async (signal) => (open ? fillHistory(await props.loadEvents(row.id, signal), row.scale) : null), [open, row.id]);
   // prices are the order's state prices (sompi per whole token of `row.scale` base units)
   const price = (p: bigint) =>
-    token ? `${formatPricePerToken(p, token.decimals, row.scale)} ${t('orders.unit.kasPer', { ticker: token.ticker })}` : `${formatKas(p)} KAS ${t('orders.perScale', { scale: row.scale.toString() })}`;
+    `${formatPricePerToken(p, token?.decimals ?? ASSUMED_TOKEN_DECIMALS, row.scale)} ${t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' })}`;
   // the price column: fixed decimals for every row (from the token's tick, else 8), the unit in the header (decimal points line up)
   const priceFraction = token ? (tickPriceFraction(token.tick, token.decimals, row.scale) ?? 8) : 8;
-  const priceCell = (p: bigint) => (token ? fixedPricePerToken(p, token.decimals, row.scale, priceFraction) : fixedUnits(p, 8, priceFraction));
-  const amountText = (a: bigint) => (token ? formatUnits(a, token.decimals, { group: ',' }) : a.toString());
+  const priceCell = (p: bigint) => fixedPricePerToken(p, token?.decimals ?? ASSUMED_TOKEN_DECIMALS, row.scale, priceFraction);
+  const amountText = (a: bigint) => formatUnits(a, token?.decimals ?? ASSUMED_TOKEN_DECIMALS, { group: ',' });
   // a pair order: its fills are volume only (amounts of A and B, how it was filled), never a price
   const pairOrder = !!row.pair;
   const quote = props.quote;
@@ -69,14 +69,14 @@ export function OrderFills(props: OrderFillsProps) {
                   <thead>
                     <tr>
                       <th>{t('orders.fills.time')}</th>
-                      <th class="right">{t('orders.fills.amountIn', { unit: token?.ticker ?? t('common.baseUnits') })}</th>
+                      <th class="right">{t('orders.fills.amountIn', { unit: token?.ticker ?? '?' })}</th>
                       {pairOrder ? (
                         <>
-                          <th class="right">{t('orders.fills.amountIn', { unit: quote?.ticker ?? t('common.baseUnits') })}</th>
+                          <th class="right">{t('orders.fills.amountIn', { unit: quote?.ticker ?? '?' })}</th>
                           <th>{t('orders.fills.via')}</th>
                         </>
                       ) : (
-                        <th class="right">{t('orders.fills.priceIn', { unit: token ? t('orders.unit.kasPer', { ticker: token.ticker }) : `KAS ${t('orders.perScale', { scale: row.scale.toString() })}` })}</th>
+                        <th class="right">{t('orders.fills.priceIn', { unit: t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' }) })}</th>
                       )}
                       <th>{t('orders.fills.tx')}</th>
                     </tr>

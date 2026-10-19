@@ -3,7 +3,7 @@
 // Dictionary keys are `issues.<code>` (en/issues.ts) with plain `{name}` placeholders. This module turns the raw params of a finding
 // into display strings first (sompi -> "1.5 KAS", token base units -> "12.5 TICK", basis points -> "12.50", direction words -> plain
 // words, 64-hex ids -> "abcd...1234") so the dictionaries stay free of number formatting. DOM-free: it runs in node tests.
-import { has, t, type Params } from './index';
+import { has, t, tokenAmountText, type Params } from './index';
 import { nodeReason } from '../data/node-error';
 import { COND_ISSUE_CATALOG } from '../kob/orders/cond-issues';
 import { ISSUE_CATALOG } from '../kob/orders/common-issues';
@@ -40,7 +40,7 @@ export interface IssueTextContext {
  * with B's ticker); pairPrice: a PAIR_* price (B base units per whole A, number only: the sentence names {ticker}); pairToken: a PAIR_* amount of
  * the token `{ticker}` names (number only).
  */
-type Fmt = 'kas' | 'bps' | 'token' | 'price' | 'pairPrice' | 'pairToken';
+type Fmt = 'kas' | 'bps' | 'token' | 'price' | 'pairPrice' | 'pairToken' | 'quoteToken';
 
 // ------------------------------------------------------------------------------------------------ which params are what
 
@@ -93,6 +93,10 @@ declare('pairPrice', {
   PAIR_TP_NOT_PROFITABLE: ['profitPerToken'],
   PAIR_PREFUND_SHORT: ['needed', 'given'],
 });
+// amounts of the quote token B of a pair order
+declare('quoteToken', {
+  'expected-quote-escrowed': ['expected', 'actual'],
+});
 declare('pairToken', {
   PAIR_INSUFFICIENT_TOKENS: ['needed', 'have', 'shortfall'],
   PAIR_KRON_CUSTODY_TOO_LARGE: ['amount', 'max'],
@@ -115,6 +119,9 @@ declare('kas', {
 
 // token amounts in base units (shown with the token's decimals when the caller knows them)
 declare('token', {
+  'sweep.later-extension': ['amount'],
+  'sweep.later-slots': ['amount'],
+  'sweep.stray-unproven': ['amount'],
   INSUFFICIENT_TOKENS: ['needed', 'have', 'shortfall'],
   MARKET_DEPTH_INSUFFICIENT: ['available', 'amount'],
   FOK_INSUFFICIENT_DEPTH: ['amount', 'available'],
@@ -150,8 +157,8 @@ const HEX64 = /^[0-9a-f]{64}$/i;
 const OUTPOINT = /^([0-9a-f]{64}):(\d+)$/i;
 const shortHex = (s: string): string => `${s.slice(0, 4)}…${s.slice(-4)}`;
 
-function formatToken(b: bigint, ctx: IssueTextContext): string {
-  if (ctx.tokenDecimals === undefined) return t('issues.fmt.baseUnits', { n: b.toString() });
+function formatToken(b: bigint, ctx: IssueTextContext, token: string | null = null): string {
+  if (ctx.tokenDecimals === undefined) return tokenAmountText(token, b);
   const amount = formatTokenAmount(b, ctx.tokenDecimals);
   return ctx.tokenTicker ? `${amount} ${ctx.tokenTicker}` : amount;
 }
@@ -187,7 +194,7 @@ function formatPrice(raw: bigint, ctx: IssueTextContext): string {
 /** An amount of the pair token `ticker` names (A or B), number only; base units when its decimals are unknown. */
 function formatPairToken(b: bigint, ticker: unknown, ctx: IssueTextContext): string {
   const decimals = ticker !== undefined && ticker === ctx.quoteTicker ? ctx.quoteDecimals : ticker !== undefined && ticker === ctx.tokenTicker ? ctx.tokenDecimals : undefined;
-  return decimals === undefined ? t('issues.fmt.baseUnits', { n: b.toString() }) : formatTokenAmount(b, decimals);
+  return decimals === undefined ? tokenAmountText(null, b) : formatTokenAmount(b, decimals);
 }
 
 function formatParam(code: string, name: string, v: string | number | bigint, ctx: IssueTextContext, params: Params = {}): string {
@@ -199,9 +206,10 @@ function formatParam(code: string, name: string, v: string | number | bigint, ct
       if (fmt === 'kas') return `${formatKas(b)} KAS`;
       if (fmt === 'bps') return formatBps(b);
       if (fmt === 'price') return formatPrice(b, ctx);
-      if (fmt === 'pairPrice') return ctx.quoteDecimals === undefined ? t('issues.fmt.baseUnits', { n: b.toString() }) : formatTokenAmount(perWholeToken(b, ctx), ctx.quoteDecimals);
+      if (fmt === 'pairPrice') return ctx.quoteDecimals === undefined ? tokenAmountText(null, perWholeToken(b, ctx)) : formatTokenAmount(perWholeToken(b, ctx), ctx.quoteDecimals);
       if (fmt === 'pairToken') return formatPairToken(b, params.ticker, ctx);
-      return formatToken(b, ctx);
+      if (fmt === 'quoteToken') return ctx.quoteDecimals === undefined ? tokenAmountText(null, b) : `${formatTokenAmount(b, ctx.quoteDecimals)}${ctx.quoteTicker ? ` ${ctx.quoteTicker}` : ''}`;
+      return formatToken(b, ctx, typeof params.token === 'string' ? params.token : null);
     }
   }
   if (typeof v === 'string') {

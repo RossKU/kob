@@ -31,7 +31,7 @@ export default {
   'issue.field.decimals.hint': 'Decimal places of one token, 0 to {max}. Fixed forever.',
   'issue.field.supply': 'Total supply',
   'issue.field.supply.hint': 'Whole tokens, for example 1000000. Fixed forever.',
-  'issue.field.supply.preview': '{human} tokens ({base} base units)',
+  'issue.field.supply.preview': "{human} tokens",
   'issue.field.carrier': 'KAS per token output',
   'issue.field.carrier.hint': 'Default {default} KAS. Locked in each token output and returned when the tokens are spent or consolidated.',
   'issue.field.description': 'Description',

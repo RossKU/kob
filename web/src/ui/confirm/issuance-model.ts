@@ -85,7 +85,10 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     if (BigInt(out.value) !== BigInt(token.carrier)) block('outputCarrier', { output: o.index });
     if (o.owner === maker && o.ownerScheme === 0) toMaker += BigInt(o.amount);
   });
-  if (minted !== BigInt(token.supply)) block('supply', { minted: minted.toString(), supply: token.supply });
+  if (minted !== BigInt(token.supply)) {
+    const words = (v: bigint) => `${formatTokenAmount(v, token.decimals, GROUP)} ${token.ticker}`;
+    block('supply', { minted: words(minted), supply: words(BigInt(token.supply)) });
+  }
   if (!built.covenants.some((c) => c.covenantId === token.covenantId)) block('covenant');
   const tpl = kob.templates().find((x) => x.name === token.program);
   if (!tpl || tpl.hash !== token.templateHash) block('template');

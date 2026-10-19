@@ -159,7 +159,8 @@ export function AmendDialog(props: AmendDialogProps) {
     }
   };
 
-  const unit = perToken ? t('orders.unit.kasPer', { ticker: token!.ticker }) : `KAS ${t('orders.perScale', { scale: scale.toString() })}`;
+  // KAS per whole token (an order of a token nothing names: per the whole token of its price scale, `scale`, which My orders shows it with)
+  const unit = t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' });
   const errText = (k: FieldKey, field: string): string | null => {
     if (parsed.errors[k]) return parsed.errors[k]!;
     const i = fieldIssue(field);
@@ -210,7 +211,7 @@ export function AmendDialog(props: AmendDialogProps) {
         ) : null}
         {'amountLeft' in s ? (
           <Field
-            label={t('orders.amend.amount', { ticker: token?.ticker ?? t('common.baseUnits') })}
+            label={t('orders.amend.amount', { ticker: token?.ticker ?? '?' })}
             value={form.amount}
             onValue={(v) => set('amount', v)}
             inputMode="decimal"

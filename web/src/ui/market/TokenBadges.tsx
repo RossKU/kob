@@ -59,7 +59,7 @@ export function OpenTokenNote(props: { token: (Pick<TokenInfo, 'covenantId' | 'o
   if (!tk || tk.openList !== true) return null;
   return (
     <Banner tone="info" title={t('market.open.title', { id: longId(tk.covenantId) })} data-testid={props['data-testid'] ?? 'open-token-caution'}>
-      {tk.openScale === 'entered' ? t('market.open.enteredScale', { decimals: tk.decimals ?? 0 }) : t('market.open.baseUnits')}
+      {tk.openScale === 'entered' ? t('market.open.enteredScale', { decimals: tk.decimals ?? 0 }) : t('market.open.baseUnits', { decimals: tk.decimals ?? 8 })}
       <div class="small wrap-anywhere" data-testid="open-token-full-id">
         {t('market.open.fullId')} <code>{tk.covenantId}</code>
       </div>

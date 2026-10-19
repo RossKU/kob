@@ -45,3 +45,17 @@ test('the issuing browser\'s record: its ticker and decimals, marked unverified;
   await expect(row.getByTestId('order-price')).toContainText(/^10\s*KAS per XYZ/);
   await expect(page.getByTestId('orders-view')).not.toContainText(/base units/);
 });
+
+test('its market page names it everywhere (title, stats, book, chart, hints) and never says "base units"', async ({ appPage: page, mock }) => {
+  await seedToken(mock);
+  await page.goto(`/#/market/${ID}`);
+  await expect(page.getByTestId('order-book')).toBeVisible();
+  await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', `${SHORT}/KAS`);
+  await expect(page.getByTestId('order-book')).toContainText(`Price (KAS per ${SHORT})`);
+  await expect(page.getByTestId('order-book')).toContainText(`Size (${SHORT})`);
+  await expect(page.getByTestId('chart-unit')).toHaveText(`KAS per ${SHORT}`);
+  await expect(page.getByTestId('token-open-caution')).toContainText('amounts are whole tokens of 8 decimals');
+  const body = (await page.locator('main').textContent()) ?? '';
+  expect(body).not.toMatch(/base units/);
+  expect(body).not.toMatch(/KAS per \)|KAS per $|\(\)| of ,|\/ KAS/);
+});

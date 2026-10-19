@@ -176,10 +176,10 @@ describe('signer summary: decoded in the frame, net effect, order terms and fee'
     expect(s.fee).toMatch(/ KAS$/);
   });
 
-  it('without a hint a token is named by its covenant id and counted in base units', () => {
+  it('without a hint a token is named by its covenant id and counted in whole tokens on the assumed 8 decimals (never "base units")', () => {
     const d = decodeSigning({ kob, built: buildSend(), maker: MAKER_PK, registry: null });
     const s = summaryLines(d, []);
-    expect(s.lines.some((l) => l.label === 'Token 70707070…70707070' && l.value === '−9000 base units')).toBe(true);
+    expect(s.lines.some((l) => l.label === '70707070…70707070 (decimals assumed 8)' && l.value === '−0.00009')).toBe(true);
   });
 
   it('a cancel', () => {

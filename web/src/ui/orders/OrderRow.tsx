@@ -1,12 +1,12 @@
 import { pairRoute, routeToHash } from '../../app/router';
 import { useServices } from '../../app/context';
 import { useTxUrl } from '../../app/explorer';
-import { formatDateTime, formatNumber, t } from '../../i18n';
+import { formatDateTime, formatNumber, t, ASSUMED_TOKEN_DECIMALS } from '../../i18n';
 import { unitsText } from '../../kob/pair';
 import { statePriceToTokenPrice } from '../../kob/units';
 import { formatJst, formatUtc } from '../../kob/daa';
 import { longId, type TokenInfo } from '../../kob/registry';
-import { Amount, Badge, Banner, Button, CopyText, KeyValueList, tickKasFraction, tickPriceFraction, type Tone } from '../kit';
+import { Amount, Badge, Banner, Button, CopyText, KeyValueList, tickPriceFraction, type Tone } from '../kit';
 import { tokenLabel } from '../market/token-model';
 import { TokenNote } from '../market/TokenNote';
 import { displayToken } from '../../app/token-display';
@@ -53,11 +53,11 @@ const shortId = longId;
  */
 function pairPriceText(value: bigint, row: OrderRowModel, a: TokenInfo | undefined, b: TokenInfo | undefined): string {
   const aName = a?.ticker ?? (row.token ? shortId(row.token) : '?');
-  const perA = a && row.scale > 0n ? statePriceToTokenPrice(value, a.decimals, row.scale, 'nearest') : value;
-  const unitA = a && row.scale > 0n ? aName : `${aName} ${t('orders.perScale', { scale: row.scale.toString() })}`;
+  // whole tokens; a token of unknown decimals on the assumed 8 (never "base units")
+  const perA = row.scale > 0n ? statePriceToTokenPrice(value, a?.decimals ?? ASSUMED_TOKEN_DECIMALS, row.scale, 'nearest') : value;
   // "X B per A", never the pair notation "A/B" (it reads as A per B)
-  if (!b) return `${perA.toString()} ${shortId(row.pair!.quote)} (${t('common.baseUnits')}) per ${unitA}`;
-  return `${unitsText(perA, b.decimals, ',')} ${b.ticker} per ${unitA}`;
+  if (!b) return `${unitsText(perA, ASSUMED_TOKEN_DECIMALS, ',')} ${shortId(row.pair!.quote)} per ${aName}`;
+  return `${unitsText(perA, b.decimals, ',')} ${b.ticker} per ${aName}`;
 }
 
 /**
@@ -73,7 +73,7 @@ function PriceCell(p: { row: OrderRowModel; token: TokenInfo | undefined; quote?
       {tk ? (
         <Amount kind="price" value={p.value} decimals={tk.decimals} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: tk.ticker })} {...fixed(tickPriceFraction(tk.tick, tk.decimals, p.row.scale))} group />
       ) : (
-        <Amount kind="kas" value={p.value} unit={`KAS ${t('orders.perScale', { scale: p.row.scale.toString() })}`} {...fixed(tickKasFraction(null))} />
+        <Amount kind="price" value={p.value} decimals={ASSUMED_TOKEN_DECIMALS} scale={p.row.scale} unit={t('orders.unit.kasPer', { ticker: p.row.token ? shortId(p.row.token) : '?' })} group />
       )}
     </span>
   );
@@ -97,8 +97,8 @@ function pairItems(row: OrderRowModel, a: TokenInfo | undefined, b: TokenInfo | 
   const x = row.pair!;
   const aName = a?.ticker ?? (row.token ? shortId(row.token) : '?');
   const bName = b?.ticker ?? shortId(x.quote);
-  const aText = (v: bigint): string => (a ? `${unitsText(v, a.decimals, ',')} ${a.ticker}` : `${v.toString()} ${t('common.baseUnits')}`);
-  const bText = (v: bigint): string => (b ? `${unitsText(v, b.decimals, ',')} ${b.ticker}` : `${v.toString()} ${t('common.baseUnits')}`);
+  const aText = (v: bigint): string => `${unitsText(v, a?.decimals ?? ASSUMED_TOKEN_DECIMALS, ',')} ${aName}`;
+  const bText = (v: bigint): string => `${unitsText(v, b?.decimals ?? ASSUMED_TOKEN_DECIMALS, ',')} ${bName}`;
   const r = x.trigger;
   return [
     {
@@ -238,9 +238,9 @@ export function OrderRow(props: OrderRowProps) {
                 {row.amountLeft !== null ? (
                   <>
                     {row.amountEstimated ? <span class="est" title={t('market.book.estimatedNote')}>~</span> : null}
-                    {tk ? <Amount kind="token" value={row.amountLeft} decimals={tk.decimals} group /> : row.amountLeft.toString()}
-                    {row.amountTotal !== null ? <> / {tk ? <Amount kind="token" value={row.amountTotal} decimals={tk.decimals} group /> : row.amountTotal.toString()}</> : null}{' '}
-                    {tk ? tk.ticker : t('common.baseUnits')}
+                    <Amount kind="token" value={row.amountLeft} decimals={tk?.decimals ?? ASSUMED_TOKEN_DECIMALS} group />
+                    {row.amountTotal !== null ? <> / <Amount kind="token" value={row.amountTotal} decimals={tk?.decimals ?? ASSUMED_TOKEN_DECIMALS} group /></> : null}{' '}
+                    {tk ? tk.ticker : row.token ? shortId(row.token) : ''}
                   </>
                 ) : (
                   <>{t('orders.budgetOrder')}</>

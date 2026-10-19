@@ -2,6 +2,7 @@
 // markup for a token's KAS market and for a token pair, so the page keeps its layout whichever quote is chosen.
 import type { ComponentChildren } from 'preact';
 import { t } from '../../i18n';
+import { unregisteredId } from './token-model';
 import { Button } from '../kit';
 import { KAS, assetChoices, type AssetChoice, type DisplayedPair } from './market-select';
 import { tokenTitle } from './TokenBadges';
@@ -37,7 +38,8 @@ function AssetSelect(props: { value: string; choices: AssetChoice[]; label: stri
 export function PairSelector(props: { pair: DisplayedPair; rows: readonly TokenRow[]; onChange: (next: DisplayedPair) => void }) {
   const rows = props.rows.map(choiceRow);
   const label = (r: (typeof rows)[number]) => tokenTitle(r.row);
-  const tickerOf = (id: string): string => (id === KAS ? 'KAS' : (props.rows.find((r) => r.covenantId.toLowerCase() === id)?.ticker ?? id.slice(0, 8)));
+  // a token without a ticker (the indexer's "") is named by its covenant id, like a token the list does not have
+  const tickerOf = (id: string): string => (id === KAS ? 'KAS' : props.rows.find((r) => r.covenantId.toLowerCase() === id)?.ticker || unregisteredId(id));
   const { left, right } = props.pair;
   return (
     <span class="pair-name pair-select" data-testid="market-pair" data-pair={`${tickerOf(left)}/${tickerOf(right)}`} data-left={left} data-right={right} role="group" aria-label={t('market.pair.label')}>

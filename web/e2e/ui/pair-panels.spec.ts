@@ -113,7 +113,7 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   await expect(facts.nth(1)).toHaveAttribute('data-token', QUOTE);
   await expect(facts.nth(0).getByTestId('token-covenant-id')).toContainText(base);
   await expect(facts.nth(1).getByTestId('token-covenant-id')).toContainText(QUOTE);
-  await expect(facts.nth(1).getByTestId('token-scale')).toContainText('per 1000000 base units');
+  await expect(facts.nth(1).getByTestId('token-scale')).toContainText('per 1 EXUSD (6 decimals)');
   await expect(facts.nth(0).getByTestId('template-verification')).toBeVisible();
   await expect(facts.nth(1).getByTestId('template-verification')).toBeVisible();
   // the same places as a KAS market: depth and trades under the chart, the facts below everything

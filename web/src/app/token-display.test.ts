@@ -52,3 +52,17 @@ describe('displayToken: three sources, in order', () => {
     expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', REG, s)).toMatchObject({ decimals: 4, ticker: 'abababab…abababab' });
   });
 });
+
+describe('displayToken: the price scale of its orders before the assumed 8', () => {
+  it('a token without registry entry or issuance record takes the decimals its orders\' scale names (10^6: 6), marked assumed', () => {
+    const tk = displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem(), 1_000_000n)!;
+    expect(tk).toMatchObject({ decimals: 6, decimalsSource: 'assumed' });
+    expect(decimalsNote(tk)).toMatchObject({ text: 'decimals assumed 6' });
+    // an issuance record comes first; a scale of 1 (unknown) or not a power of ten says nothing
+    const s = mem();
+    rememberIssuedToken('testnet-10', ID, { decimals: 2, ticker: 'XYZ' }, s);
+    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, s, 1_000_000n)!.decimals).toBe(2);
+    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem(), 1n)!.decimals).toBe(8);
+    expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem(), 250n)!.decimals).toBe(8);
+  });
+});

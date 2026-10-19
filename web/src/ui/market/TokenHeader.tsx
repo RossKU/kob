@@ -124,8 +124,8 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
                 r.scale === null
                   ? '-'
                   : r.decimals !== null && r.scale !== 10n ** BigInt(r.decimals)
-                    ? t('market.token.scaleValuePart', { scale: r.scale.toString(), part: formatUnits(r.scale, r.decimals) })
-                    : t('market.token.scaleValue', { scale: r.scale.toString() }),
+                    ? t('market.token.scaleValuePart', { part: formatUnits(r.scale, r.decimals), ticker: r.ticker || longId(r.covenantId) })
+                    : t('market.token.scaleValue', { ticker: r.ticker || longId(r.covenantId), decimals: r.decimals ?? (r.scale.toString().length - 1) }),
               'data-testid': 'token-scale',
             },
             {

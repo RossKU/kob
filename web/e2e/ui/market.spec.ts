@@ -170,7 +170,7 @@ test.describe('token page', () => {
   test('shows the header facts, template verification against the pinned hash, and that a token the example registry marks pending-review is tradable, with no caveat', async ({ appPage, mock }) => {
     const { id } = await seeded(mock);
     await appPage.goto(`/#/market/${id}`);
-    await expect(appPage.getByTestId('token-scale')).toContainText('per 100000000 base units');
+    await expect(appPage.getByTestId('token-scale')).toContainText('per 1 EXKCC (8 decimals)');
     await expect(appPage.getByTestId('token-untradable')).toHaveCount(0);
     await expect(appPage.getByTestId('token-header')).not.toContainText(/unverified|verified|official|pending review/i);
     await expect(appPage.getByTestId('ticket-unavailable')).toHaveCount(0);

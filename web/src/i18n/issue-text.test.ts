@@ -45,11 +45,11 @@ describe('issueText: parameter formatting', () => {
     expect(issueText(issue('MARKETABLE_AUCTION', { touch: 2_490_000n }), { tokenDecimals: 12 })).toContain('(24.9 KAS)');
   });
 
-  it('formats token amounts with the token decimals and ticker when known, else as base units', () => {
+  it('formats token amounts with the token decimals and ticker when known, else in whole tokens on the assumed 8 decimals (never "base units")', () => {
     const i = issue('INSUFFICIENT_TOKENS', { needed: 12_500n, have: 3_000n, shortfall: 9_500n });
     expect(issueText(i, { tokenDecimals: 3, tokenTicker: 'TST3' })).toBe('Not enough tokens: needs 12.5 TST3, you hold 3 TST3 (short 9.5 TST3).');
     expect(issueText(i, { tokenDecimals: 3 })).toContain('needs 12.5, you hold 3 (short 9.5)');
-    expect(issueText(i, {})).toContain('needs 12500 base units, you hold 3000 base units');
+    expect(issueText(i, {})).toContain('needs 0.000125 tokens (decimals assumed 8), you hold 0.00003 tokens (decimals assumed 8)');
   });
 
   it('formats the depth amounts of market and fill-or-kill findings in the token decimals', () => {
@@ -394,7 +394,7 @@ describe('wallet, sign flow and node errors', () => {
 describe('dictionary sanity for the helper keys', () => {
   it('has the helper keys', () => {
     const helpers = allKeys().filter((k) => /^issues\.(fmt|where|term|dur)\./.test(k));
-    expect(helpers.length).toBeGreaterThanOrEqual(15);
+    expect(helpers.length).toBeGreaterThanOrEqual(14);
     for (const k of helpers) expect(rawEntry(k), k).toBeTruthy();
   });
 });

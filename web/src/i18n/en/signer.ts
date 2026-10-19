@@ -24,7 +24,6 @@ export default {
   'signer.kind.other': 'Sign transaction',
   'signer.net.kas': 'KAS',
   'signer.net.token': 'Token {id}',
-  'signer.net.baseUnits': 'base units',
   'signer.net.tokensToOthers': '{token} to other keys',
   'signer.net.locked': 'Locked in orders',
   'signer.net.released': 'Released from orders',

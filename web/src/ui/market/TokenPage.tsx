@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'preact/hooks';
+import { displayToken } from '../../app/token-display';
 import { useServices, useWallet } from '../../app/context';
 import type { TicketPreset } from '../../app/router';
 import { t } from '../../i18n';
@@ -79,13 +80,16 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const [entered, setEntered] = useState<{ id: string; decimals: number } | null>(null);
   const enteredDecimals = entered && entered.id === id ? entered.decimals : null;
   const open = useOpenToken(baseRow, liveKey, enteredDecimals);
-  const row = useMemo(
-    () =>
-      baseRow && open.info
-        ? { ...baseRow, info: open.info, decimals: open.info.decimals, scale: scaleOfDecimals(open.info.decimals), tick: 1n, tradable: true, reason: null }
-        : baseRow,
-    [baseRow, open.info],
-  );
+  // a token the indexer lists without a ticker ("") is named like one without any (app/token-display.ts): the open-list token's name (this
+  // browser's issuance ticker, else its covenant id), else the display name; never an empty name in a title, a unit or a hint
+  const shown = useMemo(() => displayToken(registry, services.config.network, id), [registry, services.config.network, id]);
+  const row = useMemo(() => {
+    if (!baseRow) return baseRow;
+    const named = { ...baseRow, ticker: baseRow.ticker || open.info?.ticker || shown?.ticker || '' };
+    return open.info
+      ? { ...named, info: open.info, decimals: open.info.decimals, scale: scaleOfDecimals(open.info.decimals), tick: 1n, tradable: true, reason: null }
+      : named;
+  }, [baseRow, open.info, shown]);
 
   const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: 60, aggregate: true }, { signal }) : Promise.resolve(null)), [indexer, id]);
   // the trade tape: `/v1/trades`, or the fill events of an indexer without it
@@ -114,8 +118,9 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   };
   const mode = useLiveRefresh(services, [`book:${id}`, `fills:${id}`], (e) => !e.token || e.token === id, (full) => refreshAll(false, full));
 
-  // every book row carries its own scale; the market's is the token's standard scale (`10^decimals`, at most 10^9): prices per whole token
-  const decimals = row?.decimals ?? 0;
+  // every book row carries its own scale; the market's is the token's standard scale (`10^decimals`, at most 10^9): prices per whole token. The
+  // decimals: the registry's, else the scale its orders set, else this browser's issuance of it, else 8 (the same rule as everywhere: never base units)
+  const decimals = row?.decimals ?? shown?.decimals ?? 8;
   const scale = row?.scale ?? null;
   const bookScale = scale ?? 1n;
 
@@ -124,7 +129,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const [invertedChoice, toggleInverted, setInverted] = useInverted(marketKey('token', id), defaultInverted(usdRef));
   const canFlip = scale !== null;
   const inverted = invertedChoice && canFlip;
-  const name = row?.ticker ?? '';
+  const name = row?.ticker || shown?.ticker || '';
 
   // the book without grouping: the reference price of the page when there is neither a 24 h last price nor a trade
   const refMid = useMemo(() => {
@@ -212,7 +217,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       tick: baseTick,
       labels: inverted
         ? { price: t('market.book.priceIn', { unit: t('market.stats.unitOf', { base: 'KAS', quote: name }) }), size: t('market.book.sizeIn', { unit: 'KAS' }), total: t('market.book.totalIn', { unit: name }) }
-        : { price: t('market.book.priceIn', { unit: t('market.stats.unitOf', { base: name, quote: 'KAS' }) }), size: t('market.book.sizeIn', { unit: name || t('common.baseUnits') }), total: t('market.book.totalIn', { unit: 'KAS' }) },
+        : { price: t('market.book.priceIn', { unit: t('market.stats.unitOf', { base: name, quote: 'KAS' }) }), size: t('market.book.sizeIn', { unit: name }), total: t('market.book.totalIn', { unit: 'KAS' }) },
     }),
     [name, decimals, bookScale, dp, baseTick, inverted],
   );
@@ -271,7 +276,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           pair={
             <>
               {canFlip ? <FlipButton pair={pairLabel(name, !inverted)} pressed={inverted} onClick={toggleInverted} /> : null}
-              <PairSelector pair={displayedPair(id, null, inverted)} rows={choiceRows} onChange={onPair} />
+              <PairSelector pair={displayedPair(id, null, inverted)} rows={row ? choiceRows.map((r) => (r.covenantId === id ? { ...r, ticker: row.ticker } : r)) : choiceRows} onChange={onPair} />
             </>
           }
         />

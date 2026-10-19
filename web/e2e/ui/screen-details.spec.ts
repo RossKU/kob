@@ -167,8 +167,8 @@ test.describe('a token of 18 decimals', () => {
     await page.goto(`/#/market/${D18}`);
     await connectWallet(page);
     await expect(page.getByTestId('order-ticket')).toBeVisible();
-    // the standard scale is 10^9 base units: a billionth of a token, not "one whole token"
-    await expect(page.getByTestId('token-scale')).toContainText('per 1000000000 base units (0.000000001 token)');
+    // the standard scale is a billionth of a token (10^9 of its 10^18 units), not "one whole token"
+    await expect(page.getByTestId('token-scale')).toContainText('per 0.000000001 EIGHTEEN; prices are shown per whole token');
     // the book quotes 0.025 KAS per 10^9 base units = 25,000,000 KAS per token; a sell far below it crosses the book (the planner's price warning
     // itself is not shown), and the final confirmation names the token's amount and the price per whole token
     await pickType(page, 'limit', 'sell');

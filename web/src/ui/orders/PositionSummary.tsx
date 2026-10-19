@@ -1,11 +1,11 @@
 import type { ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
-import { formatDateTime, formatNumber, t } from '../../i18n';
+import { formatDateTime, formatNumber, t, ASSUMED_TOKEN_DECIMALS } from '../../i18n';
 import type { EventView } from '../../data/indexer-types';
 import type { Position } from '../../kob/positions';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { Amount, Button, Loading, scaleOfDecimals, tickKasFraction, tickPriceFraction, toError, useAsync } from '../kit';
+import { Amount, Button, Loading, scaleOfDecimals, tickPriceFraction, toError, useAsync } from '../kit';
 import { formatUnits } from '../../kob/units';
 import { ratio, realisedPnl, summarizePositionFills, type PositionFills, type PositionSummary } from './position-model';
 
@@ -29,16 +29,12 @@ function Price(p: { value: bigint | null; token: TokenInfo | undefined; scale: b
   if (p.pair) {
     const q = p.pair.quote;
     const base = tk?.ticker ?? '?';
-    return <span data-unit="pair">{q ? `${formatUnits(p.value, q.decimals, { group: ',' })} ${q.ticker} per ${base}` : `${p.value.toString()} ${t('common.baseUnits')} per ${base}`}</span>;
+    return <span data-unit="pair">{`${formatUnits(p.value, q?.decimals ?? ASSUMED_TOKEN_DECIMALS, { group: ',' })} ${q?.ticker ?? '?'} per ${base}`}</span>;
   }
   // fixed decimals from the market's tick: every price of the card (entry, exits, averages) has the same number of decimals
+  // whole tokens; a token of unknown decimals on the assumed 8 (never "base units")
   const pf = tk ? tickPriceFraction(tk.tick, tk.decimals, p.scale) : null;
-  const lf = tickKasFraction(tk?.tick ?? null);
-  return tk ? (
-    <Amount kind="price" value={p.value} decimals={tk.decimals} scale={p.scale} unit={t('orders.unit.kasPer', { ticker: tk.ticker })} {...(pf === null ? {} : { fraction: pf })} group />
-  ) : (
-    <Amount kind="kas" value={p.value} unit={`KAS ${t('orders.perScale', { scale: p.scale.toString() })}`} fraction={lf} group />
-  );
+  return <Amount kind="price" value={p.value} decimals={tk?.decimals ?? ASSUMED_TOKEN_DECIMALS} scale={p.scale} unit={t('orders.unit.kasPer', { ticker: tk?.ticker ?? '?' })} {...(pf === null ? {} : { fraction: pf })} group />;
 }
 
 function Prices({ values, token, scale, pair }: { values: readonly bigint[]; token: TokenInfo | undefined; scale: bigint; pair?: PositionSummaryProps['pair'] }) {
@@ -104,11 +100,7 @@ function Fills({ fills: f, token, amount }: { fills: PositionFills; token: Token
       {spread !== null ? (
         <div class="pc-fill-row" data-testid="position-fills-spread">
           <span>{t('orders.position.fills.spread')}</span>
-          {token ? (
-            <Amount kind="price" value={spread} decimals={token.decimals} scale={f.scale} signed unit={t('orders.unit.kasPer', { ticker: token.ticker })} class={spread > 0n ? 'pc-pos' : spread < 0n ? 'pc-neg' : ''} />
-          ) : (
-            <Amount kind="kas" value={spread} signed unit={`KAS ${t('orders.perScale', { scale: f.scale.toString() })}`} class={spread > 0n ? 'pc-pos' : spread < 0n ? 'pc-neg' : ''} />
-          )}
+          <Amount kind="price" value={spread} decimals={token?.decimals ?? ASSUMED_TOKEN_DECIMALS} scale={f.scale} signed unit={t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' })} class={spread > 0n ? 'pc-pos' : spread < 0n ? 'pc-neg' : ''} />
         </div>
       ) : null}
     </div>

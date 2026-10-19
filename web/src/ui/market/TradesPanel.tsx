@@ -42,7 +42,7 @@ export function TradeTape(props: {
       <div class="tape" data-testid="trades-list" data-source={tape?.source ?? ''} role="table" aria-label={t('market.trades.title')}>
         <div class="tape-head" role="row">
           <span role="columnheader">{perBasis ? t('market.trades.priceBasis') : t('market.trades.priceIn', { unit: inv ? t('market.stats.unitOf', { base: 'KAS', quote: props.ticker }) : t('market.stats.unitOf', { base: props.ticker, quote: 'KAS' }) })}</span>
-          <span role="columnheader">{perBasis ? t('market.trades.amountIn', { unit: t('common.baseUnits') }) : t('market.trades.amountIn', { unit: inv ? 'KAS' : props.ticker })}</span>
+          <span role="columnheader">{t('market.trades.amountIn', { unit: inv ? 'KAS' : props.ticker })}</span>
           <span role="columnheader">{t('market.trades.time')}</span>
         </div>
         <div class="tape-body" role="rowgroup">

@@ -423,6 +423,8 @@ function buildWithFundingAt(
 // ------------------------------------------------------------------------------------------------ helpers over snapshots
 
 const totalAmount = (xs: TokenUtxo[]): bigint => xs.reduce((s, x) => s + big(x.state.amount), 0n);
+/** The token a list of token UTXOs is of, as a finding param (none when they are of several or none). */
+const tokenOfAll = (xs: readonly { covenantId?: Hex | null }[]): { token?: Hex } => (xs.length && xs[0]!.covenantId && xs.every((x) => x.covenantId === xs[0]!.covenantId) ? { token: xs[0]!.covenantId } : {});
 const custodyUtxos = (s: { custody?: TokenUtxo | null; prefund?: TokenUtxo | null }): TokenUtxo[] => [s.custody ?? null, s.prefund ?? null].filter((x): x is TokenUtxo => !!x);
 const kasOf = (s: OrderSnapshot): bigint =>
   big(s.order.amount) + custodyUtxos(s).reduce((a, x) => a + big(x.amount), 0n) + s.strays.reduce((a, x) => a + big(x.amount), 0n) +
@@ -472,8 +474,8 @@ function returnedOf(item: CancelItem, snap: OrderSnapshot): { base: bigint; quot
  * commitment within the program's inputs; the rest, and every foreign stray without a proven state / program, is reported (left behind).
  */
 function prepareForeign(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, issues: PlanIssue[]): ForeignStrays[] | { error: PlanIssue[] } {
-  const left = (u: { outpoint: string; amount: bigint }) =>
-    issues.push(issue('cancel.stray-other-token', 'warning', 'a stray of another token cannot be swept by this cancel and is left behind', { outpoint: u.outpoint, amount: u.amount }));
+  const left = (u: { outpoint: string; amount: bigint; token?: Hex | null }) =>
+    issues.push(issue('cancel.stray-other-token', 'warning', 'a stray of another token cannot be swept by this cancel and is left behind', { outpoint: u.outpoint, amount: u.amount, ...(u.token ? { token: u.token } : {}) }));
   for (const u of snap.foreignUnproven ?? []) left(u);
   const own = ownTokensOf(snap.order.state);
   const out: ForeignStrays[] = [];
@@ -486,14 +488,14 @@ function prepareForeign(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions
     }
     const p = pickStrays(g.utxos, null, room);
     for (const u of p.otherExt) {
-      issues.push(issue('cancel.stray-other-extension', 'warning', 'a stray token with another extension commitment cannot be swept together with the rest and is left behind', { outpoint: outpointOf(u), amount: big(u.state.amount) }));
+      issues.push(issue('cancel.stray-other-extension', 'warning', 'a stray token with another extension commitment cannot be swept together with the rest and is left behind', { outpoint: outpointOf(u), amount: big(u.state.amount), ...(u.covenantId ? { token: u.covenantId } : {}) }));
     }
     if (p.over.length) {
       if (!opts.allowAbandonStrays) {
         const n = p.take.length + p.over.length;
         return { error: [issue('cancel.strays-exceed-slots', 'error', `the order has ${n} stray token UTXOs but one transaction can move only ${room} of them: sweeping them is impossible, cancelling would abandon the rest`, { strays: n, room })] };
       }
-      issues.push(issue('cancel.strays-abandoned', 'warning', `${p.over.length} stray token UTXO(s) do not fit the transaction and are abandoned (lost when the order closes)`, { count: p.over.length, amount: totalAmount(p.over), order: snap.covenantId }));
+      issues.push(issue('cancel.strays-abandoned', 'warning', `${p.over.length} stray token UTXO(s) do not fit the transaction and are abandoned (lost when the order closes)`, { count: p.over.length, amount: totalAmount(p.over), order: snap.covenantId, ...tokenOfAll(p.over) }));
     }
     if (p.take.length) out.push({ token: g.token, utxos: p.take });
   }
@@ -523,7 +525,7 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   // left behind (reported) instead of making the order uncancellable
   const own = snap.strays.filter((s) => {
     if (ownIds.includes(s.covenantId ?? '')) return true;
-    issues.push(issue('cancel.stray-other-token', 'warning', 'a stray of another token cannot be swept by this cancel and is left behind', { outpoint: outpointOf(s), amount: big(s.state.amount) }));
+    issues.push(issue('cancel.stray-other-token', 'warning', 'a stray of another token cannot be swept by this cancel and is left behind', { outpoint: outpointOf(s), amount: big(s.state.amount), ...(s.covenantId ? { token: s.covenantId } : {}) }));
     return false;
   });
   if (snap.straysUnknown) {
@@ -540,7 +542,7 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
     // strays with another extension commitment cannot share one transfer with the rest (kob-wasm rule); they are reported, not silently moved
     let strays = mine.filter((s) => {
       if (!extensionMatches(s.state, ext)) {
-        issues.push(issue('cancel.stray-other-extension', 'warning', 'a stray token with another extension commitment cannot be swept together with the rest and is left behind', { outpoint: outpointOf(s), amount: big(s.state.amount) }));
+        issues.push(issue('cancel.stray-other-extension', 'warning', 'a stray token with another extension commitment cannot be swept together with the rest and is left behind', { outpoint: outpointOf(s), amount: big(s.state.amount), ...(s.covenantId ? { token: s.covenantId } : {}) }));
         return false;
       }
       return true;
@@ -556,7 +558,7 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
       strays = [...strays].sort((a, b) => (big(b.state.amount) > big(a.state.amount) ? 1 : -1));
       const dropped = strays.slice(Math.max(room, 0));
       strays = strays.slice(0, Math.max(room, 0));
-      issues.push(issue('cancel.strays-abandoned', 'warning', `${dropped.length} stray token UTXO(s) do not fit the transaction and are abandoned (lost when the order closes)`, { count: dropped.length, amount: totalAmount(dropped), order: snap.covenantId }));
+      issues.push(issue('cancel.strays-abandoned', 'warning', `${dropped.length} stray token UTXO(s) do not fit the transaction and are abandoned (lost when the order closes)`, { count: dropped.length, amount: totalAmount(dropped), order: snap.covenantId, ...tokenOfAll(dropped) }));
     }
     kept.push(...strays);
     groups.push({ token: t.covenantId, role: t.role, slots, ext: held.length || strays.length ? ext : null, inputs: held.length + strays.length, program: programOfHash(t.tplHash) });
@@ -873,7 +875,7 @@ export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
   const leaveLater = (xs: TokenUtxo[], why: 'extension' | 'slots') => {
     if (!xs.length) return;
     later += xs.length;
-    const params = { count: xs.length, amount: totalAmount(xs) };
+    const params = { count: xs.length, amount: totalAmount(xs), ...tokenOfAll(xs) };
     issues.push(why === 'extension'
       ? issue('sweep.later-extension', 'info', `${xs.length} stray token UTXO(s) with another extension commitment stay with the order for another sweep`, params)
       : issue('sweep.later-slots', 'info', `${xs.length} stray token UTXO(s) do not fit this transaction and stay with the order for another sweep`, params));
@@ -889,18 +891,18 @@ export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
   leaveLater(picks.flatMap((x) => x.pick.otherExt), 'extension');
   leaveLater(picks.flatMap((x) => x.pick.over), 'slots');
   let unproven = 0;
-  const unprovenIssue = (u: { outpoint: string; amount: bigint }) => {
+  const unprovenIssue = (u: { outpoint: string; amount: bigint; token?: Hex | null }) => {
     unproven++;
-    issues.push(issue('sweep.stray-unproven', 'warning', 'a stray of another token has no proven state: nothing can move it, it stays with the order', { outpoint: u.outpoint, amount: u.amount }));
+    issues.push(issue('sweep.stray-unproven', 'warning', 'a stray of another token has no proven state: nothing can move it, it stays with the order', { outpoint: u.outpoint, amount: u.amount, ...(u.token ? { token: u.token } : {}) }));
   };
   // a stray of another token passed among the order's own (a caller's snapshot): never built as one, reported
-  for (const s of snap.strays.filter((x) => !ownIds.includes(x.covenantId ?? ''))) unprovenIssue({ outpoint: outpointOf(s), amount: big(s.state.amount) });
+  for (const s of snap.strays.filter((x) => !ownIds.includes(x.covenantId ?? ''))) unprovenIssue({ outpoint: outpointOf(s), amount: big(s.state.amount), token: s.covenantId ?? null });
   for (const u of snap.foreignUnproven ?? []) unprovenIssue(u);
   const foreign: ForeignStrays[] = [];
   for (const g of snap.foreign ?? []) {
     const room = programSlots(env.kob, g.token.program);
     if (room === null || ownIds.includes(g.token.covenantId)) {
-      for (const u of g.utxos) unprovenIssue({ outpoint: outpointOf(u), amount: big(u.state.amount) });
+      for (const u of g.utxos) unprovenIssue({ outpoint: outpointOf(u), amount: big(u.state.amount), token: u.covenantId ?? null });
       continue;
     }
     const p = pickStrays(g.utxos, null, room);

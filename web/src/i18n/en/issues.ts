@@ -5,7 +5,6 @@
 // shortened ids) before they reach the sentence. `issues-coverage.test.ts` fails when a code of any catalogue has no key here or in ja.
 export default {
   // ================================================================ formatting helpers (used by issue-text.ts)
-  'issues.fmt.baseUnits': '{n} base units',
   'issues.where.input': 'Input {n}: ',
   'issues.where.output': 'Output {n}: ',
   'issues.term.below': 'below',
@@ -191,11 +190,11 @@ export default {
   'issues.refund.not-yet': 'Refundable at DAA {dueDaa} (now {nowDaa}), in about {wait}.',
   'issues.refund.strays-stay': 'A refund leaves the {count} stray token UTXO(s) behind; cancel instead to recover them.',
   'issues.sweep.in-place': 'Swept in place: only the stray tokens move; the order is unchanged.',
-  'issues.sweep.later-extension': '{count} stray token UTXO(s) ({amount} base units) with another extension commitment stay: sweep again.',
-  'issues.sweep.later-slots': '{count} stray token UTXO(s) ({amount} base units) do not fit this transaction: sweep again.',
+  'issues.sweep.later-extension': "{count} stray token UTXO(s) ({amount}) with another extension commitment stay: sweep again.",
+  'issues.sweep.later-slots': "{count} stray token UTXO(s) ({amount}) do not fit this transaction: sweep again.",
   'issues.sweep.needs-funding': 'A sweep needs a KAS UTXO in your wallet for the network fee. Add KAS and try again.',
   'issues.sweep.nothing': 'This order has no stray tokens this app can sweep.',
-  'issues.sweep.stray-unproven': 'A stray of another token ({amount} base units, {outpoint}) has no proven state and cannot be moved.',
+  'issues.sweep.stray-unproven': "A stray of another token ({amount}, {outpoint}) has no proven state and cannot be moved.",
   'issues.sweep.strays-unknown': 'The stray tokens were not fully read: a later sweep may find more.',
   'issues.snapshot.state-unknown': 'The order state is not proven yet: try again shortly.',
   'issues.snapshot.no-current-utxo': 'The current outpoint is not known yet: try again shortly.',
@@ -315,7 +314,7 @@ export default {
   'issues.CARRIER_BELOW_FLOOR': 'The carrier ({carrier}) is below {floor}, the minimum for this token output.',
   // ---- pair orders (token/token A/B: prices {touch} / {reference} / ... in B per whole A, {ticker} names the token a sentence is about)
   'issues.PAIR_SAME_TOKEN': 'A pair needs two different tokens.',
-  'issues.PAIR_NOTIONAL_TOO_LARGE': 'The order value is too large (it must stay below 2^62 base units of {ticker}): lower the amount or the price.',
+  'issues.PAIR_NOTIONAL_TOO_LARGE': "The order value in {ticker} is too large for the protocol: lower the amount or the price.",
   'issues.PAIR_MARKETABLE_AUCTION': 'Your limit crosses the pair book: it fills immediately as a taker, auctioning from {touch} {ticker} per token to your limit; any rest stays at your limit.',
   'issues.PAIR_MARKETABLE_LIMIT_FILLS_AT_LIMIT': 'Your limit crosses the pair book: it fills immediately as a taker at your limit; the filler keeps the difference to {touch} {ticker} per token.',
   'issues.PAIR_MARKETABLE_REJECTED': 'Your limit crosses the pair book at {touch} {ticker} per token (you chose Refuse).',
@@ -340,7 +339,7 @@ export default {
   'issues.pair-family-mismatch': 'Output {output}: the family of token {token} does not match its program (or a KRON token has an extension commitment): the order could never settle.',
   'issues.order-terms-invalid': 'Output {output}: the order terms break the rules for a new order (tips, slippage band, trailing terms, trigger threshold, carriers, or an if-done exit that is not your order of the same token): it would not trade as shown.',
   'issues.pair-terms-invalid': 'Output {output}: invalid pair order terms (price, scale, minimum fill or its KAS value, or the same token twice): it could not trade as shown.',
-  'issues.expected-quote-escrowed': 'The plan escrows {expected} base units of the quote token, the transaction {actual}.',
+  'issues.expected-quote-escrowed': "The plan escrows {expected} of the quote token, the transaction {actual}.",
   'issues.other-strays-swept': 'Input {input}: {amount} of {token} sent to this order are swept back to you.',
   'issues.MIN_FILL_INVALID': 'The minimum fill must be between one unit and the order amount.',
   'issues.NOTIONAL_TOO_LARGE': 'The order value at this price is too large for the protocol.',

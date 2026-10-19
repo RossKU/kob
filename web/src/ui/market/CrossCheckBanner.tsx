@@ -9,6 +9,9 @@ import { Banner, useAsync } from '../kit';
  * compared; any disagreement or unreachable verifier is shown. With a single indexer nothing is checked here (the footer says "single indexer,
  * unverified"). `refreshKey` re-runs the check when the book moved (coalesced: never two checks in flight).
  */
+/** A finding's value as said: a market's price scale (a power of ten) as its decimals, never as a count of base units. */
+const shown = (code: string, v: string | null | undefined): string => (v == null ? '' : code === 'market-scale-differs' && /^10*$/.test(v) ? String(v.length - 1) : v);
+
 export function CrossCheckBanner(props: { token: Hex; refreshKey?: number }) {
   const { indexer, verifiers } = useServices();
   const res = useAsync(
@@ -24,7 +27,7 @@ export function CrossCheckBanner(props: { token: Hex; refreshKey?: number }) {
       <ul>
         {r.findings.map((f, i) => (
           <li key={i} data-code={f.code}>
-            {t(`market.crosscheck.${f.code}`, { other: f.other, primary: f.primary ?? '', otherValue: f.otherValue ?? '' })}
+            {t(`market.crosscheck.${f.code}`, { other: f.other, primary: shown(f.code, f.primary), otherValue: shown(f.code, f.otherValue) })}
           </li>
         ))}
       </ul>

@@ -5,6 +5,7 @@ import './styles.css';
 import { App } from './app/App';
 import { ServicesContext, WalletProvider } from './app/context';
 import { createServices, type Services } from './app/services';
+import { installTokenAmounts } from './app/token-display';
 import { loadConfigWithWarnings, type ConfigWarning, type StoredOverride } from './config';
 import { BootError, BootScreen } from './ui/shell/Boot';
 import { initTheme } from './ui/shell/theme';
@@ -41,6 +42,8 @@ async function boot(): Promise<void> {
   try {
     const { config, warnings, storedOverrides } = await loadConfigWithWarnings();
     const services = await createServices(config);
+    // amounts of tokens in sentences: whole tokens, as the pages show them (never "base units")
+    installTokenAmounts(services.registry, config.network);
     if (config.features.test) window.__kob = { services };
     render(<Root services={services} warnings={warnings} storedOverrides={storedOverrides} />, root);
   } catch (e) {

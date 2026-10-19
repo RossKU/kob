@@ -214,12 +214,12 @@ describe('token labels and order types', () => {
     const ref = { covenantId: '70'.repeat(32), ticker: 'TST', decimals: 3, display: '', inRegistry: true, tradable: true };
     expect(tokenLabel(ref, (k, p) => t(k, p), registry)).toBe('TST (7070...7070)');
     expect(tokenLabel({ ...ref, covenantId: 'ab'.repeat(32) }, (k, p) => t(k, p), registry)).toBe('unknown token (abababab…abababab)');
-    // an unknown token has no decimals: raw base units, never a guessed unit
+    // an unknown token: whole tokens on the assumed 8 decimals, said so (never "base units")
     const { summary, rows } = created('create.ask', null);
-    expect(rowOf(rows, 'amount').value).toContain('10000 base units');
+    expect(rowOf(rows, 'amount').value).toContain('0.0001 70707070…70707070 (decimals assumed 8)');
     expect(rows.some((r) => r.value.includes(' / '))).toBe(false);
     expect(codes(summary.warnings)).toContain('token-unlisted');
-    expect(tokenAmountText({ ...ref, decimals: null, ticker: null }, 5n, (k, p) => t(k, p))).toBe('5 base units (unknown token)');
+    expect(tokenAmountText({ ...ref, decimals: null, ticker: null }, 500_000_000n, (k, p) => t(k, p))).toBe('5 70707070…70707070 (decimals assumed 8)');
   });
 
   it('classifies order types from the state, not from anything the form claimed', () => {

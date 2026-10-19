@@ -10,7 +10,7 @@ import { longId, type TokenInfo, type TokenRegistry } from '../kob/registry';
 import type { BuiltTx, Hex } from '../kob/types';
 import { formatKas, formatTokenAmount } from '../kob/units';
 import type { KobWasm } from '../kob/wasm';
-import { formatDateTime, t } from '../i18n';
+import { ASSUMED_TOKEN_DECIMALS, formatDateTime, t } from '../i18n';
 import { orderRows, orderTitle, orderTypeCode, type Fmt } from '../ui/confirm/confirm-model';
 import type { TokenHint } from './protocol';
 import { div, kasWords, tokensPerKasWords, tokenWords, type Rounding } from './words';
@@ -66,7 +66,8 @@ const SHOWN_AS_LINES = new Set<string>(['payment-out', 'transfer-out']);
  * itself carries (a 4 + 4 fragment is 32 bits, which a token made to match it can copy).
  */
 const tokenName = (covenantId: Hex, hint: TokenHint | undefined): string => {
-  if (!hint) return t('signer.net.token', { id: longId(covenantId) });
+  // no label from the app: named by its covenant id, its amounts on the assumed 8 decimals (never "base units")
+  if (!hint) return t('signer.net.tokenAssumed', { id: longId(covenantId), decimals: ASSUMED_TOKEN_DECIMALS });
   // a token the registry does not list (app/token-display.ts): its issued ticker, else its covenant id; marked
   if (hint.source === 'assumed') return t('signer.net.tokenAssumed', { id: longId(covenantId), decimals: hint.decimals });
   if (hint.source === 'issued') return t('signer.net.tokenIssued', { ticker: hint.ticker, id: longId(covenantId) });
@@ -90,13 +91,12 @@ function hintRegistry(hints: TokenHint[]): TokenRegistry {
 function orderSummary(d: OrderDescription, extra: Parameters<typeof orderRows>[1], hints: TokenHint[], registry: TokenRegistry): SummaryOrder {
   const f: Fmt = { tr: t, ref: refOfHint(d.tokenCovId, hints), clock: null, time: (unix) => formatDateTime(unix), registry };
   const exit = d.entry?.exit ? orderSummary(d.entry.exit, { value: null, locked: null, deadline: null }, hints, registry) : null;
-  const perScale = t('confirm.f.perScale', { scale: d.scale.toString() });
   return {
     title: orderTitle(d, extra.deadline, f),
     token: f.ref.display,
     // a price of a token whose decimals the frame does not know (no hint: an unlisted token's first order) is per `scale` base units:
     // the frame keeps that detail, as amounts there are base units too (TN10 2026-10-15 B-13: "1000 base units" at "0.5 KAS")
-    rows: orderRows(d, extra, f).map((r) => ({ id: r.id, label: r.label, value: r.detail === perScale && f.ref.decimals === null ? `${r.value} ${r.detail}` : r.value, ...timeOf(r, d) })),
+    rows: orderRows(d, extra, f).map((r) => ({ id: r.id, label: r.label, value: r.detail && f.ref.decimals === null && /^decimals assumed/.test(r.detail) ? `${r.value} (${r.detail})` : r.value, ...timeOf(r, d) })),
     exit: exit ? { ...exit, title: t('confirm.exitOf', { title: exit.title }) } : null,
   };
 }
@@ -229,7 +229,7 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
   for (const tok of s.net.tokens) {
     const hint = hints.find((h) => h.covenantId === tok.ref.covenantId);
     const label = tokenName(tok.ref.covenantId, hint);
-    const amount = (v: bigint) => (hint ? formatTokenAmount(v, hint.decimals) : `${v.toString()} ${t('signer.net.baseUnits')}`);
+    const amount = (v: bigint) => formatTokenAmount(v, hint ? hint.decimals : ASSUMED_TOKEN_DECIMALS);
     if (tok.walletDelta !== 0n) lines.push({ label, value: signed(tok.walletDelta, amount), dir: tok.walletDelta < 0n ? 'out' : 'in' });
     if (tok.toOthers > 0n) lines.push({ label: t('signer.net.tokensToOthers', { token: label }), value: amount(tok.toOthers), dir: 'out' });
   }

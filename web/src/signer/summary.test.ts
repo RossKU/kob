@@ -82,12 +82,13 @@ describe('signer summary: timing without a clock', () => {
 });
 
 describe('signer summary: a token without decimals (no hint)', () => {
-  it('states the scale of the price next to the base-unit amount (TN10 2026-10-15 B-13)', () => {
+  it('says its amounts and prices in whole tokens on the assumed 8 decimals, marked (never "base units"; TN10 2026-10-15 B-13, founder 2026-10-17)', () => {
     const s = summarize(kob, build('create.ask'), MAKER_PK, []);
     const rows = s.orders[0]!.rows;
-    expect(rows.find((r) => /amount/i.test(r.label))?.value).toMatch(/base units/);
+    expect(rows.find((r) => /amount/i.test(r.label))?.value).toMatch(/^0\.0001 [0-9a-f]{8}…[0-9a-f]{8} \(decimals assumed 8\)$/);
     const price = rows.find((r) => /limit price/i.test(r.label))?.value ?? '';
-    expect(price).toMatch(/KAS per \d+ base units of the token$/);
+    expect(price).toMatch(/KAS per [0-9a-f]{8}…[0-9a-f]{8} \(decimals assumed 8\)$/);
+    expect(rows.map((r) => r.value).join(' ')).not.toMatch(/base unit/);
     // with the decimals known the price stays per whole token
     const known = summarize(kob, build('create.ask'), MAKER_PK, HINTS).orders[0]!.rows.find((r) => /limit price/i.test(r.label))?.value ?? '';
     expect(known).not.toMatch(/base units/);

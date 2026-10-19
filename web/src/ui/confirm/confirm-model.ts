@@ -14,7 +14,7 @@ import type { Clock } from '../../kob/plan-types';
 import { longId, type ExtensionReference, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { formatKas, formatPricePerToken, formatTokenAmount, quoteOf, statePriceToTokenPrice } from '../../kob/units';
-import { t, type Params } from '../../i18n';
+import { t, type Params, ASSUMED_TOKEN_DECIMALS } from '../../i18n';
 
 export type Translate = (key: string, params?: Params) => string;
 export type Tone = 'normal' | 'good' | 'warn' | 'bad' | 'muted';
@@ -159,12 +159,15 @@ export function tokenLabel(ref: TokenRef, tr: Translate = t, registry?: TokenReg
   return tr('confirm.token.label', { ticker: info.ticker, id: short(info.covenantId) });
 }
 
-/** A token amount in human units when the decimals are known (registry), else raw base units. */
+/** A token amount in whole tokens: of its decimals when known (registry, a hint), else of the assumed 8, said so (never "base units"). */
 export function tokenAmountText(ref: TokenRef, amount: bigint, tr: Translate = t): string {
   return ref.decimals === null
-    ? tr('confirm.amount.baseUnits', { amount: amount.toString() })
+    ? tr('token.amount.assumed', { amount: formatTokenAmount(amount, ASSUMED_TOKEN_DECIMALS, GROUP), token: ref.ticker ?? longId(ref.covenantId), decimals: ASSUMED_TOKEN_DECIMALS })
     : `${formatTokenAmount(amount, ref.decimals, GROUP)} ${ref.ticker ?? ''}`.trim();
 }
+
+/** The decimals a price or an amount of `ref` is shown with: its own, else the assumed 8 (i18n ASSUMED_TOKEN_DECIMALS). */
+const decimalsOf = (ref: TokenRef): number => ref.decimals ?? ASSUMED_TOKEN_DECIMALS;
 
 function refOf(registry: TokenRegistry | null | undefined, covenantId: Hex): TokenRef {
   const t0 = registry?.byCovenantId.get(covenantId);
@@ -233,16 +236,15 @@ const row = (id: string, label: string, value: string, tone: Tone = 'normal', de
  */
 /** A price DELTA (sompi per `scale` base units) as the bare KAS amount per whole token (the template prints the unit), e.g. a trailing step. */
 function kasPerToken(price: bigint, d: OrderDescription, f: Fmt): string {
-  return f.ref.decimals === null || d.scale <= 0n ? formatKas(price, GROUP) : formatPricePerToken(price, f.ref.decimals, d.scale, GROUP);
+  return d.scale <= 0n ? formatKas(price, GROUP) : formatPricePerToken(price, decimalsOf(f.ref), d.scale, GROUP);
 }
 
 function priceText(price: bigint, d: OrderDescription, f: Fmt): { value: string; detail?: string } {
-  if (f.ref.decimals === null || d.scale <= 0n) return { value: `${formatKas(price, GROUP)} KAS`, detail: f.tr('confirm.f.perScale', { scale: d.scale.toString() }) };
-  const whole = 10n ** BigInt(f.ref.decimals);
+  if (d.scale <= 0n) return { value: `${formatKas(price, GROUP)} KAS` };
   return {
-    // "X KAS per TOKEN", never the pair notation "X TOKEN / KAS" (it reads as tokens per KAS)
-    value: f.tr('confirm.f.perUnit', { price: formatPricePerToken(price, f.ref.decimals, d.scale, GROUP), unit: 'KAS', per: f.ref.ticker ?? longId(f.ref.covenantId) }),
-    ...(d.scale !== whole ? { detail: f.tr('confirm.f.perScale', { scale: d.scale.toString() }) } : {}),
+    // "X KAS per TOKEN" (whole tokens; of the assumed 8 decimals when they are not known, said so), never the pair notation "X TOKEN / KAS"
+    value: f.tr('confirm.f.perUnit', { price: formatPricePerToken(price, decimalsOf(f.ref), d.scale, GROUP), unit: 'KAS', per: f.ref.ticker ?? longId(f.ref.covenantId) }),
+    ...(f.ref.decimals === null ? { detail: f.tr('token.note.assumed', { decimals: ASSUMED_TOKEN_DECIMALS }) } : {}),
   };
 }
 
@@ -253,16 +255,17 @@ const approxTime = (daa: bigint, f: Fmt): string | null => (f.clock ? f.time(daa
  * it is shown per WHOLE A (`price x 10^decimals(A) / scale`, the ticket's own conversion), in B when B's decimals are known, else raw base units of B.
  * Without A's decimals it stays per `scale` base units of A and the detail says so.
  */
-/** The bare amount of a pair price (the unit follows as "B per A"): whole B when its decimals are known, else raw base units. */
-const pairNumber = (ref: TokenRef, amount: bigint): string => (ref.decimals === null ? amount.toString() : formatTokenAmount(amount, ref.decimals, GROUP));
-const bUnit = (ref: TokenRef, tr: Translate): string => ref.ticker ?? (ref.decimals === null ? tr('common.baseUnits') : '?');
+/** The bare amount of a pair price (the unit follows as "B per A"): whole B (of the assumed 8 decimals when B's are not known). */
+const pairNumber = (ref: TokenRef, amount: bigint): string => formatTokenAmount(amount, decimalsOf(ref), GROUP);
+const bUnit = (ref: TokenRef): string => ref.ticker ?? longId(ref.covenantId);
 
 function pairPriceText(price: bigint, d: OrderDescription, f: Fmt): { value: string; detail?: string } {
   const bRef = refOf(f.registry, d.pair!.quote.covId);
   const aName = f.ref.ticker ?? longId(f.ref.covenantId);
-  if (f.ref.decimals === null || d.scale <= 0n) return { value: f.tr('confirm.f.perUnit', { price: pairNumber(bRef, price), unit: bUnit(bRef, f.tr), per: aName }), detail: f.tr('confirm.f.perScale', { scale: d.scale.toString() }) };
-  const perWholeA = statePriceToTokenPrice(price, f.ref.decimals, d.scale, 'nearest');
-  return { value: f.tr('confirm.f.perUnit', { price: pairNumber(bRef, perWholeA), unit: bUnit(bRef, f.tr), per: aName }) };
+  const assumed = f.ref.decimals === null || bRef.decimals === null ? { detail: f.tr('token.note.assumed', { decimals: ASSUMED_TOKEN_DECIMALS }) } : {};
+  if (d.scale <= 0n) return { value: f.tr('confirm.f.perUnit', { price: pairNumber(bRef, price), unit: bUnit(bRef), per: aName }), ...assumed };
+  const perWholeA = statePriceToTokenPrice(price, decimalsOf(f.ref), d.scale, 'nearest');
+  return { value: f.tr('confirm.f.perUnit', { price: pairNumber(bRef, perWholeA), unit: bUnit(bRef), per: aName }), ...assumed };
 }
 
 /**
