@@ -485,6 +485,213 @@ fn issue(k: &str, why: &str) -> String {
     format!("{k}: {why}")
 }
 
+// ------------------------------------------------------------------------------------------------ launch proof
+
+/// Format tag of a [`LaunchProof`].
+pub const PROOF_FORMAT: &str = "kob-kcc23-proof/1";
+
+/// One input of a proof transaction: what the version 1 transaction id commits to (no signature script, no compute budget).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofInput {
+    /// Spent transaction id.
+    #[serde(with = "crate::json::field")]
+    pub transaction_id: [u8; 32],
+    /// Spent output index.
+    pub index: u32,
+    /// Input sequence.
+    #[serde(with = "crate::json::field")]
+    pub sequence: u64,
+}
+
+/// The script public key of a proof output.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofSpk {
+    /// Script version.
+    pub version: u16,
+    /// Script bytes.
+    #[serde(with = "crate::json::field")]
+    pub script: Vec<u8>,
+}
+
+/// A KIP-20 covenant binding of a proof output.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofCovenant {
+    /// Index of the authorising input.
+    pub authorizing_input: u16,
+    /// Covenant id.
+    #[serde(with = "crate::json::field")]
+    pub covenant_id: [u8; 32],
+}
+
+/// One output of a proof transaction.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofOutput {
+    /// Sompi.
+    #[serde(with = "crate::json::field")]
+    pub value: u64,
+    /// Script public key.
+    pub script_public_key: ProofSpk,
+    /// Covenant binding, if any.
+    #[serde(default)]
+    pub covenant: Option<ProofCovenant>,
+}
+
+/// The fields of a transaction its version 1 id commits to (`kaspa_consensus_core::hashing::tx::id`): enough to recompute the id
+/// and the covenant id of a genesis group, nothing to execute.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProofTx {
+    /// Transaction version.
+    pub version: u16,
+    /// Inputs.
+    pub inputs: Vec<ProofInput>,
+    /// Outputs.
+    pub outputs: Vec<ProofOutput>,
+    /// Lock time.
+    #[serde(with = "crate::json::field")]
+    pub lock_time: u64,
+    /// Subnetwork id (20 bytes).
+    #[serde(with = "crate::json::field")]
+    pub subnetwork_id: Vec<u8>,
+    /// Gas.
+    #[serde(with = "crate::json::field")]
+    pub gas: u64,
+    /// Payload.
+    #[serde(with = "crate::json::field")]
+    pub payload: Vec<u8>,
+}
+
+impl ProofTx {
+    /// The id-relevant fields of `tx`.
+    pub fn of(tx: &Transaction) -> Self {
+        ProofTx {
+            version: tx.version,
+            inputs: tx
+                .inputs
+                .iter()
+                .map(|i| ProofInput {
+                    transaction_id: i.previous_outpoint.transaction_id.as_bytes(),
+                    index: i.previous_outpoint.index,
+                    sequence: i.sequence,
+                })
+                .collect(),
+            outputs: tx
+                .outputs
+                .iter()
+                .map(|o| ProofOutput {
+                    value: o.value,
+                    script_public_key: ProofSpk { version: o.script_public_key.version(), script: o.script_public_key.script().to_vec() },
+                    covenant: o.covenant.map(|c| ProofCovenant { authorizing_input: c.authorizing_input, covenant_id: c.covenant_id.as_bytes() }),
+                })
+                .collect(),
+            lock_time: tx.lock_time,
+            subnetwork_id: AsRef::<[u8]>::as_ref(&tx.subnetwork_id).to_vec(),
+            gas: tx.gas,
+            payload: tx.payload.clone(),
+        }
+    }
+
+    /// A transaction with these fields (empty signature scripts, zero compute budgets and storage mass: none of them enters the id).
+    pub fn to_tx(&self) -> Result<Transaction, String> {
+        use kaspa_consensus_core::subnets::SubnetworkId;
+        use kaspa_consensus_core::tx::{CovenantBinding, ScriptPublicKey, TransactionInput, TransactionOutpoint, TransactionOutput};
+        let subnet: [u8; 20] =
+            self.subnetwork_id.as_slice().try_into().map_err(|_| format!("subnetwork id of {} bytes, 20 expected", self.subnetwork_id.len()))?;
+        let inputs = self
+            .inputs
+            .iter()
+            .map(|i| {
+                TransactionInput::new_with_compute_budget(TransactionOutpoint::new(Hash::from_bytes(i.transaction_id), i.index), vec![], i.sequence, 0)
+            })
+            .collect();
+        let outputs = self
+            .outputs
+            .iter()
+            .map(|o| {
+                let mut out = TransactionOutput::new(o.value, ScriptPublicKey::from_vec(o.script_public_key.version, o.script_public_key.script.clone()));
+                out.covenant = o.covenant.as_ref().map(|c| CovenantBinding::new(c.authorizing_input, Hash::from_bytes(c.covenant_id)));
+                out
+            })
+            .collect();
+        Ok(Transaction::new(self.version, inputs, outputs, self.lock_time, SubnetworkId::from_bytes(subnet), self.gas, self.payload.clone()))
+    }
+}
+
+/// A KCC-23 launch proof (section 3.3): the preparation and genesis transactions of a covenant id, in the fields their ids commit
+/// to. Whoever supplies it (an indexer, a file), [`LaunchProof::verify`] recomputes everything and either returns the declaration
+/// bound to `covenant_id` or refuses: a supplier can withhold a declaration, never forge one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LaunchProof {
+    /// [`PROOF_FORMAT`].
+    pub format: String,
+    /// The covenant id the declaration is claimed for.
+    #[serde(with = "crate::json::field")]
+    pub covenant_id: [u8; 32],
+    /// The preparation transaction.
+    pub preparation: ProofTx,
+    /// The genesis transaction.
+    pub genesis: ProofTx,
+}
+
+/// A declaration that [`LaunchProof::verify`] found bound to its covenant id.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifiedDeclaration {
+    /// The covenant id.
+    #[serde(with = "crate::json::field")]
+    pub covenant_id: [u8; 32],
+    /// Recomputed preparation transaction id.
+    #[serde(with = "crate::json::field")]
+    pub preparation_txid: [u8; 32],
+    /// Recomputed genesis transaction id.
+    #[serde(with = "crate::json::field")]
+    pub genesis_txid: [u8; 32],
+    /// The declaration's JSON text, exactly as committed.
+    pub json: String,
+    /// KOB's token fields read from it.
+    pub token: TokenDeclaration,
+}
+
+impl LaunchProof {
+    /// The proof of `covenant_id` from its preparation and genesis transactions.
+    pub fn of(preparation: &Transaction, genesis: &Transaction, covenant_id: Hash) -> Self {
+        LaunchProof {
+            format: PROOF_FORMAT.into(),
+            covenant_id: covenant_id.as_bytes(),
+            preparation: ProofTx::of(preparation),
+            genesis: ProofTx::of(genesis),
+        }
+    }
+
+    /// Recomputes both transaction ids and the covenant id ([`verify_binding`]) and reads the declaration (at most
+    /// [`MAX_READ_PAYLOAD`] bytes).
+    pub fn verify(&self) -> Result<VerifiedDeclaration, String> {
+        if self.format != PROOF_FORMAT {
+            return Err(format!("unknown proof format {:?}", self.format));
+        }
+        if self.preparation.payload.len() > MAX_READ_PAYLOAD {
+            return Err(Kcc23Error::TooLarge { len: self.preparation.payload.len(), max: MAX_READ_PAYLOAD }.to_string());
+        }
+        let prep = self.preparation.to_tx()?;
+        let genesis = self.genesis.to_tx()?;
+        let id = Hash::from_bytes(self.covenant_id);
+        let json = verify_binding(&prep, &genesis, id).map_err(|e| e.to_string())?.to_string();
+        let token = TokenDeclaration::from_object(&parse_object(&json).map_err(|e| e.to_string())?);
+        Ok(VerifiedDeclaration {
+            covenant_id: self.covenant_id,
+            preparation_txid: tx_id(&prep).as_bytes(),
+            genesis_txid: tx_id(&genesis).as_bytes(),
+            json,
+            token,
+        })
+    }
+}
+
 // ------------------------------------------------------------------------------------------------ tests
 
 #[cfg(test)]
@@ -635,5 +842,24 @@ mod tests {
         bad.payload = b"\x01{}".to_vec();
         assert_eq!(verify_binding(&bad, &genesis, id), Err(BindingError::Payload(Kcc23Error::UnknownCodec(1))));
         assert!(verify_binding(&prep, &genesis, Hash::from_bytes([1; 32])).is_err(), "another covenant id");
+
+        // the same pair as a launch proof, through its JSON form
+        let proof = LaunchProof::of(&prep, &genesis, id);
+        let text = serde_json::to_string(&proof).unwrap();
+        assert!(text.contains(r#""value":"100000000""#), "64-bit values as strings: {text}");
+        let back: LaunchProof = serde_json::from_str(&text).unwrap();
+        let v = back.verify().unwrap();
+        assert_eq!((v.preparation_txid, v.token.decimals), (prep_id.as_bytes(), Some(8)));
+        assert_eq!(v.genesis_txid, tx_id(&genesis).as_bytes());
+        let mut forged = back.clone();
+        forged.preparation.payload = encode(r#"{"name":"Example Token","symbol":"EXT","decimals":2}"#).unwrap();
+        assert!(forged.verify().is_err(), "a supplier cannot change the declaration");
+        let mut other = back.clone();
+        other.covenant_id = [7; 32];
+        assert!(other.verify().is_err(), "nor claim it for another covenant id");
+        let mut fmt = back;
+        fmt.format = "x".into();
+        assert!(fmt.verify().is_err());
+        assert!(serde_json::from_str::<LaunchProof>(&text.replace("\"gas\"", "\"extra\":1,\"gas\"")).is_err(), "unknown fields refused");
     }
 }
