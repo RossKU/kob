@@ -2,9 +2,10 @@
 // There is no issuance-style confirmation screen for orders: a click plans again, runs the silent checks, opens the final confirmation, asks the wallet
 // once and sends. An auction (market order) is planned with the node clock at the click; a signature that comes back more than 20 DAA (2 s) after the
 // auction start is never sent (wallet/sign.ts `auctionSubmitBy`): the send re-times the same order with a later start (the lead grows with each
-// attempt) and asks the wallet again, up to three times, and stops with `clock-moved` when every attempt was too late.
+// attempt and leaves at least the signing time the late attempt took) and asks the wallet again, up to three times, and stops with `clock-moved`
+// when every attempt was too late. A wallet's signing time is remembered: its next auction starts late enough for it (ui/confirm/signing-time.ts).
 import type { Page } from '@playwright/test';
-import { expect, test } from '../fixtures';
+import { expect, test, type MockWalletHandle } from '../fixtures';
 import { fund, mockClock, openMarket } from '../helpers/env';
 import { clickPlace, expectStopped, expectWalletSigned, fillFields, pickType, placedBy, readSendStatus, waitSubmitted } from '../helpers/ticket';
 
@@ -12,10 +13,26 @@ test.use({ autoOpen: false });
 
 /** The mock DAA advances 10 per second; the ticket allows 20 DAA between the auction start it planned and the signature. */
 const SLOW_WALLET_MS = 6_000;
-/** a wallet slower than every attempt's budget: each re-timed request is signed too late as well */
-const NEVER_IN_TIME_MS = 15_000;
+/**
+ * A wallet that keeps getting slower: a re-timed attempt leaves the last signing time plus 3 s (RETIME_LEAD_DAA) on top of the 5 s window
+ * (ui/confirm/signing-time.ts `retimeLead`), so a request 12 s slower than the one before is signed too late again.
+ */
+const EVER_SLOWER_MS = [10_000, 22_000, 34_000, 46_000];
+/** a wallet that always takes 15 s: longer than the 5 s window of a first attempt, shorter than what a re-timing then leaves */
+const STEADY_SLOW_MS = 15_000;
 /** a start planned at the click is a 30 DAA lead ahead of the node clock (MARKET_ACTIVATION_DAA) */
 const REPLAN_GAP_DAA = 60;
+
+/** Waits until the wallet has answered its `n`-th request (a slow wallet outlasts the 30 s waits of the ticket helpers). */
+async function walletAnswered(wallet: MockWalletHandle, n: number, timeoutMs = 90_000): Promise<void> {
+  const t0 = Date.now();
+  for (;;) {
+    const calls = await wallet.calls();
+    if (calls.length >= n && calls[n - 1]!.status !== 'pending') return;
+    if (Date.now() - t0 > timeoutMs) throw new Error(`the wallet did not answer request ${n} within ${timeoutMs} ms`);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
 
 /** Remembers whether a confirmation screen was ever in the page (it must never open for an order). */
 async function watchConfirmScreen(page: Page): Promise<() => Promise<boolean>> {
@@ -90,16 +107,45 @@ test.describe('order flow: one button, the wallet approves', () => {
       await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
     });
 
-    test('every approval too slow: three re-timings, then nothing is sent and the ticket says the price moved', async ({ appPage: page, mock, wallet }) => {
+    test('a wallet that always takes 15 s: the re-timing leaves its signing time, the second request is sent, and the next order fits at once', async ({ appPage: page, mock, wallet }) => {
       test.setTimeout(150_000);
       await fund(mock);
       await openMarket(page, mock);
       await typeMarketBuy(page);
-      await wallet!.configure({ delayMs: NEVER_IN_TIME_MS }); // slower than the longest budget of an attempt (8 s, 11 s, 14 s)
+      await wallet!.configure({ delayMs: STEADY_SLOW_MS });
       const before = (await mock.submitted(false)).length;
 
       await clickPlace(page);
+      await walletAnswered(wallet!, 2);
+      const first = await waitSubmitted(page);
+      expect(await wallet!.calls(), 'the first request was too late for the 5 s window, the re-timed one was not').toHaveLength(2);
+
+      // the wallet's signing time is remembered: the next auction is planned with a start that leaves it, and the wallet is asked once
+      await typeMarketBuy(page);
+      await clickPlace(page);
+      await walletAnswered(wallet!, 3);
+      const second = await waitSubmitted(page);
+      expect(second).not.toBe(first);
+      expect(await wallet!.calls(), 'the next order was sent on its first request').toHaveLength(3);
+      expect((await mock.submitted(false)).slice(before).map((s) => s.txid)).toEqual([first, second]);
+    });
+
+    test('every approval too slow: three re-timings, then nothing is sent and the ticket says the price moved', async ({ appPage: page, mock, wallet }) => {
+      test.setTimeout(240_000);
+      await fund(mock);
+      await openMarket(page, mock);
+      await typeMarketBuy(page);
+      await wallet!.configure({ delayMs: EVER_SLOWER_MS[0]! });
+      const before = (await mock.submitted(false)).length;
+
+      await clickPlace(page);
+      // the wallet reads its delay when a request arrives: each next request is made slower than what the re-timing before it left
+      for (let n = 1; n < EVER_SLOWER_MS.length; n++) {
+        await wallet!.waitForCalls(n, 90_000);
+        await wallet!.configure({ delayMs: EVER_SLOWER_MS[n]! });
+      }
       await wallet!.waitForCalls(4, 90_000); // the first request and three re-timed ones
+      await walletAnswered(wallet!, 4);
       const stopped = await expectStopped(page, 'failed', { code: 'clock-moved' });
       expect(stopped.text).toMatch(/price moved/i);
       expect(stopped.text).toMatch(/nothing was sent/i);
