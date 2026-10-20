@@ -1120,7 +1120,8 @@ pub fn pair_branch_shapes(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action
 /// The fills: the plain order (side x rest / return / close x decay x TWAP x tip), the conditional (side x leg x trigger
 /// mode (arm0 / arm1 / armed auction from an origin or from an update's arming / armed whole band; the take-profit
 /// unarmed or armed) x rest / return / close, unbooked or a booked exit filled without its entry, tip or not), the entry
-/// (side x trigger mode x continue / close / booked / waiting, tip or not).
+/// (side x trigger mode x continue / close / booked / waiting, tip or not; a buy-first entry spending its whole escrow
+/// also with a B rest left).
 pub fn pair_fill_grid(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
     let mut v: Vec<(String, Action)> = vec![];
     let n = 4 * WHOLE;
@@ -1250,21 +1251,34 @@ pub fn pair_fill_grid(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
                     s.custody = s.b_custody_needed().unwrap();
                     let trigger = mode == "arm0" || mode == "arm1";
                     let p = s.price_at(trigger, NOW as i64, 1_000).unwrap();
-                    let (ev, ra, ta, rb, tb) = evidence_legs(pa, pb, mode, !buy);
-                    let mut legs = vec![ifd_pair_leg(s.clone(), pa, pb, E_ID, 70, 4)];
-                    legs.extend(ev);
-                    let (a_net, b_net) = if buy {
-                        (ra - ta - n, s.spend(n, p).unwrap() + rb - tb)
-                    } else {
-                        (n + ra - ta, rb - tb - s.proceeds(n, p).unwrap())
-                    };
-                    let mut b = route(settle(legs, pa, pb, a_net, b_net));
-                    if trigger {
-                        b = with_evidence(b, 1, (mode == "arm0").then_some(2));
+                    // A buy-first fill of everything left at its limit spends exactly the escrow of a fresh entry, but an
+                    // entry filled before keeps the floors' remainders (each fill releases floor(n * p / scale)) and a
+                    // merge returns a ceil: the escrow then exceeds the spend and the fill pins its B rest (one more
+                    // token output check, about 24,000 units; same role name), so those fills are also measured holding
+                    // one base unit of B more than they spend.
+                    let rests: &[i64] = if buy && s.custody == s.spend(n, p).unwrap() { &[0, 1] } else { &[0] };
+                    for &rest in rests {
+                        let s = IfdPairState { custody: s.custody + rest, ..s.clone() };
+                        let (ev, ra, ta, rb, tb) = evidence_legs(pa, pb, mode, !buy);
+                        let mut legs = vec![ifd_pair_leg(s.clone(), pa, pb, E_ID, 70, 4)];
+                        legs.extend(ev);
+                        let (a_net, b_net) = if buy {
+                            (ra - ta - n, s.spend(n, p).unwrap() + rb - tb)
+                        } else {
+                            (n + ra - ta, rb - tb - s.proceeds(n, p).unwrap())
+                        };
+                        let mut b = route(settle(legs, pa, pb, a_net, b_net));
+                        if trigger {
+                            b = with_evidence(b, 1, (mode == "arm0").then_some(2));
+                        }
+                        let name = format!(
+                            "pairgrid.ifd.{}.{mode}.{kind}{}{}",
+                            if buy { "bid" } else { "ask" },
+                            if tip > 0 { ".tip" } else { "" },
+                            if rest > 0 { ".brest" } else { "" }
+                        );
+                        v.push((name, Action::Batch(b)));
                     }
-                    let name =
-                        format!("pairgrid.ifd.{}.{mode}.{kind}{}", if buy { "bid" } else { "ask" }, if tip > 0 { ".tip" } else { "" });
-                    v.push((name, Action::Batch(b)));
                 }
             }
         }

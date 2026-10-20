@@ -110334,7 +110334,7 @@
               "index": 70,
               "sequence": "0",
               "sigOpCount": 0,
-              "computeBudget": 14,
+              "computeBudget": 16,
               "signatureScript": "",
               "utxo": {
                 "address": null,
@@ -110704,7 +110704,7 @@
           "feeMode": "relay",
           "mass": {
             "size": 26124,
-            "compute": 32764,
+            "compute": 32964,
             "transient": 104496,
             "transientNormalized": 52248,
             "storage": 35283,
@@ -150806,7 +150806,7 @@
               "index": 70,
               "sequence": "0",
               "sigOpCount": 0,
-              "computeBudget": 13,
+              "computeBudget": 15,
               "signatureScript": "",
               "utxo": {
                 "address": null,
@@ -151170,7 +151170,7 @@
           "feeMode": "relay",
           "mass": {
             "size": 25398,
-            "compute": 31938,
+            "compute": 32138,
             "transient": 101592,
             "transientNormalized": 50796,
             "storage": 35283,
@@ -191258,7 +191258,7 @@
               "index": 70,
               "sequence": "0",
               "sigOpCount": 0,
-              "computeBudget": 13,
+              "computeBudget": 16,
               "signatureScript": "",
               "utxo": {
                 "address": null,
@@ -191620,7 +191620,7 @@
           "feeMode": "relay",
           "mass": {
             "size": 25310,
-            "compute": 31650,
+            "compute": 31950,
             "transient": 101240,
             "transientNormalized": 50620,
             "storage": 35283,
@@ -233386,7 +233386,7 @@
               "index": 70,
               "sequence": "0",
               "sigOpCount": 0,
-              "computeBudget": 13,
+              "computeBudget": 16,
               "signatureScript": "",
               "utxo": {
                 "address": null,
@@ -233742,7 +233742,7 @@
           "feeMode": "relay",
           "mass": {
             "size": 24883,
-            "compute": 31223,
+            "compute": 31523,
             "transient": 99532,
             "transientNormalized": 49766,
             "storage": 35283,

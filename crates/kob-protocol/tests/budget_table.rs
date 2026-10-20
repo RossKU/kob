@@ -8,6 +8,12 @@
 //! (`common::pad_batch`: extra asks of one whole token up to the token slot limit, then extra bids of one whole token up
 //! to the output limit, and bids alone), and each role's budget is the maximum over all of them.
 //!
+//! A role name does not always tell every branch of its covenant apart: a buy-first pair entry's fill of everything left
+//! (`KobIfdPair.fill.bid….wait` / `….close`) pins its B rest only when its escrow exceeds the spend (an entry filled or
+//! merged before), some 24,000 units more under the same name, so the grid builds both (`common::pair::pair_fill_grid`).
+//! Note when reading an executor's report: `ExceededCommittedScriptUnits { used }` is the limit plus the overflow of the
+//! one charge that crossed it (the script stops there), not what the input needs; measure the shape to know that.
+//!
 //! The table is exact: for every role, the shape that needs the most units is rebuilt with that
 //! role's budget lowered by one, and the engine must reject it (`ExceededCommittedScriptUnits` at an
 //! input of that role), while the table budget passes.
@@ -443,6 +449,33 @@ fn every_pair_role_is_present_and_sufficient_on_every_program_pair() {
         }
     }
     println!("{} pair roles limited by the token slots: {slot_limited_roles:?}", slot_limited_roles.len());
+}
+
+/// The fill the TN10 soak's matcher found short (`KobIfdPair.fill.bid.book.wait@KCC20Ref+KCC20Ref` at 23, the engine
+/// stopping at 242,223 units): a repeating buy-first entry filled before, its escrow one base unit above the spend of what
+/// it has left (the floor of its first fill), filled for all of it, pins its B rest. It needs more than 259,999 units (the
+/// grid measured only fresh entries, whose escrow is exactly the spend: 238,900) and the committed table covers it, as it
+/// covers the not-booked waiting fill and the closing fill of such an entry.
+#[test]
+fn a_buy_first_entry_keeping_a_b_rest_fills_everything_left_within_its_budget() {
+    use common::pair::pair_branch_shapes;
+    let p = TemplateId::Kcc20Ref;
+    let keys = common::keys();
+    let grid = pair_branch_shapes(p, p);
+    for kind in ["book.wait", "wait", "close"] {
+        let (name, a) = grid.iter().find(|(n, _)| *n == format!("pairgrid.ifd.bid.limit.{kind}.brest")).expect("the B-rest shape");
+        let role = format!("KobIfdPair.fill.bid.{kind}@KCC20Ref+KCC20Ref");
+        let (_, used) = units(name, a).into_iter().find(|(r, _)| *r == role).unwrap_or_else(|| panic!("{name}: {role}"));
+        if kind == "book.wait" {
+            assert!(used > 259_999, "{role}: {used} units");
+        }
+        let built = build_with(a, &lookup).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let sigs = sign_locally(&built, &keys).unwrap();
+        let (tx, entries) = assemble(&built, &sigs).unwrap();
+        for (i, r) in execute(&tx, &entries, true).unwrap().into_iter().enumerate() {
+            assert!(r.is_ok(), "{name}: input {i} ({}) fails: {r:?}", built.roles[i]);
+        }
+    }
 }
 
 /// The merge the executor found short: a sell-first entry sold out with a prefund rest left (its B custody held, its A
