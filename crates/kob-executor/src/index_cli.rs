@@ -278,6 +278,17 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
                     r.dropped.unknown_imports
                 );
             }
+            // a placement this build cannot interpret (an order or a token program it no longer pins) is a reject in the new
+            // database, not an order: say how many, by reason, so a rebuild that leaves orders out never looks complete
+            let conn = indexer::db::open_reader(&cfg.db_path(), &cfg.network)?;
+            let mut q = conn.prepare("SELECT reason, COUNT(*) FROM rejects GROUP BY reason ORDER BY 2 DESC LIMIT 10")?;
+            let rows = q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+            if !rows.is_empty() {
+                println!("rejected transactions in the rebuilt database, by reason (the 10 most frequent):");
+                for (reason, n) in rows {
+                    println!("  {n:>9}  {reason}");
+                }
+            }
         }
         IndexSub::ExportOrders { maker, live_only } => {
             // read-only: allowed next to a running writer of the same data directory (nothing indexed yet: an empty export)

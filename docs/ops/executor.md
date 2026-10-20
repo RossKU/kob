@@ -1794,7 +1794,12 @@ every revealed state, so it decodes whatever the templates are when it is read. 
 not pin is dropped, and a frame it cannot decode at all (format 1, written before 2026-10-01 without a marker, or a newer
 format) is kept in the log and skipped; both are counted in the replay's summary and logged as warnings, never fatal. An
 order whose template this build does not pin cannot be interpreted either: its placement becomes a reject in the rebuilt
-database. A frame that carries a KCC-23 declaration section (a candidate preparation, or a genesis with the preparations it
+database. So does a token-holding order (an ask, a pair order, a conditional or if-done ask, the pair kinds) on a token program
+the build no longer pins (`placement:payload: unknown token program`); a bid on such a token is kept, but its in-place amends
+become non-closing `cancel` events. The replay prints its rejects by reason. Before a build stops pinning a token program, end
+every order on it with the old build and keep a `VACUUM INTO` snapshot taken before the switch: a replay cannot rebuild that
+history (in the TN10 soak, the 26,348 orders of 2026-10-07 to 10-10 on the retired 8x8 program `40fef59a`, all ended before
+the switch, are such a case: drill of 2026-10-20, `docs/testing/TN10-TEST-2026-10.md`). A frame that carries a KCC-23 declaration section (a candidate preparation, or a genesis with the preparations it
 binds: `indexer::kcc23::DeclSection`, flagged by bit 30 of a record's `pos`) is written as record-log format 3 (marker `0x00
 0x03`); every other frame stays format 2 byte for byte. This build reads both; an older build skips format-3 frames with its
 "newer format" warning (KOB records in such a frame are skipped by it too). Declarations made before this build were never
