@@ -40,6 +40,14 @@ The same in every mode.
 
 There is no commit-reveal and no neutrality rule. The covenants bound what any executor or miner can take:
 
+- **Taking orders wait in public first.** A market order, a limit order that crosses the book, and a Dutch order are
+  placed with `activeFrom` = placement + 30 DAA (~3 s) by default
+  ([`defaults.rs` L35-L36](https://github.com/RossKU/kob/blob/633c06a182241ffcca40b3afff1fd161147e27b3/crates/kob-protocol/src/defaults.rs#L35-L36),
+  [`simple.ts` L286-L297](https://github.com/RossKU/kob/blob/633c06a182241ffcca40b3afff1fd161147e27b3/web/src/kob/orders/simple.ts#L286-L297)),
+  and the covenant refuses any fill before it (`require(tx.daa >= activeFrom)`,
+  [`KobAsk.sil` L237](https://github.com/RossKU/kob/blob/633c06a182241ffcca40b3afff1fd161147e27b3/contracts/v2/KobAsk.sil#L237)):
+  the order sits publicly on chain before anyone can fill it, and its auction starts from there. A resting limit order is
+  fillable at once: filling it early can only give the maker their own price.
 - **Every limit is enforced on chain.** No fill is worse than the user's price.
 - **Market and stop orders are on-chain decay auctions, and time is proven by lock time.** The price is a function of the
   auction time `t`, and the covenant requires `tx.daa >= t` (CLTV) and `t >= origin`
