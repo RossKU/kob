@@ -30,11 +30,12 @@ describe('sameOrBetter', () => {
   });
 
   // the ticket re-times an order with an auction starting now (wallet/sign.ts `auctionSubmitBy`: the only orders re-timed) on the environment it
-  // was planned on (OrderTicket.tsx `retimer`): only the clock moves, by a long read of the confirmation (10 to 60 s) plus the re-timing lead;
+  // was planned on (OrderTicket.tsx `retimer`): only the clock moves, by a long read of the confirmation (10 to 60 s) or a slow wallet (its
+  // signing time, capped at 60 s, plus three re-timing steps: ui/confirm/signing-time.ts, up to 70 s) plus the re-timing lead;
   // whatever the type, the signer then signs it without a second prompt
   const KAS_TYPED = { ...form('market', 'buy', { amount: '20' }), kas: true };
   for (const [name, f] of [...CASES.map(([n, type, side, values]) => [n, form(type, side, values)] as const), ['market buy typed in KAS', KAS_TYPED] as const]) {
-    for (const seconds of [10n, 60n]) {
+    for (const seconds of [10n, 60n, 70n]) {
       it(`${name}: the same plan ${seconds} s later needs no second confirmation`, () => {
         const intent = buildIntent(f, CTX).intent;
         if (!intent) return;

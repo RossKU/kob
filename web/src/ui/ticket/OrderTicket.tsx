@@ -22,6 +22,7 @@ import type { PlanEnv } from '../../kob/plan-types';
 import { auctionSubmitBy } from '../../wallet/sign';
 import { SendStatusLine, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
 import type { GateVerdict, SendJob } from '../confirm/send';
+import { RETIME_LEAD_DAA, firstAttemptLead, laterClock, rememberedSigningMs, retimeLead } from '../confirm/signing-time';
 import { oppositeSide } from '../market/orientation';
 import { useCovenantSignGate } from './CovenantSignGate';
 import { TicketFields } from './TicketFields';
@@ -65,12 +66,6 @@ interface PlanStop {
   raw?: string;
   code?: string;
 }
-
-/**
- * The extra lead of a re-timed auction's start (DAA, 3 s more at each re-timing of the same order): the re-timed transaction is checked, signed
- * and its clock read again before it is sent, which over a slow link takes longer than the start's own lead (MARKET_ACTIVATION_DAA) leaves.
- */
-const RETIME_LEAD_DAA = 30n;
 
 /** Token-holding shortfalls: while the holdings are still being read they mean "not read yet", not "not enough". */
 const TOKEN_SHORT = new Set(['INSUFFICIENT_TOKENS', 'TOKEN_UTXOS_FRAGMENTED']);
@@ -431,7 +426,7 @@ export function OrderTicket(props: OrderTicketProps) {
       // the node clock now: DAA times (an auction's start, a timed start, an IOC life, a day order) count from it, never from the clock of the
       // environment on hand: the background clock projected to the click when it is fresh, else a read (a node slower than CLOCK_WAIT_MS: the
       // clock on hand projected to now, review-check.ts `projectClock`)
-      const clock = liveClockAt(liveClock.current, clickAt)
+      let clock = liveClockAt(liveClock.current, clickAt)
         ?? (await reviewClock(() => readClock(services), base.clock, cached ? cached.clockAt : (snapshot()?.clockAt ?? clickAt), { waitMs: CLOCK_WAIT_MS })).clock;
       let refsNow = touches.data ?? noRefs();
       const planWith = (e: PlanEnv, refs: References, i: Intent = intent): OrderPlan => planOrder(withRefs({ ...e, clock }, refs), i);
@@ -448,6 +443,19 @@ export function OrderTicket(props: OrderTicketProps) {
       const firstError = errors(p)[0];
       if (!p.ok || !p.built || firstError) return { text: firstError ? issueText(firstError, issueCtx) : t('ticket.reviewChanged') };
       const env0 = base;
+      // an auction signed in a wallet whose last auction signature took longer than its window (confirm/signing-time.ts): planned with the clock
+      // later by the shortfall, the move a re-timing makes (only its times later); a plan that cannot be made so keeps the clock of the click
+      let shift = 0n;
+      const extra = wallet.adapter ? firstAttemptLead(rememberedSigningMs(wallet.adapter.id), clock.rateMilli) : 0n;
+      if (extra > 0n && auctionSubmitBy(p.states, clock.daa) !== null) {
+        const later = laterClock(clock, extra);
+        const q = planOrder(withRefs({ ...env0, clock: later }, refsNow), intent);
+        if (q.ok && q.built && errors(q).length === 0) {
+          clock = later;
+          p = q;
+          shift = extra;
+        }
+      }
       const kept = keepTerms(p, intent, (i) => planWith(env0, refsNow, i), shown);
       if (!('p' in kept)) return kept;
       p = kept.p;
@@ -461,9 +469,9 @@ export function OrderTicket(props: OrderTicketProps) {
       const openToken = token.openList ? token : undefined;
       return {
         built: planned.built!, expected: expectedFromPlan(planned), label, openToken,
-        gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown, label, openToken) : undefined,
+        gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown, label, openToken, shift) : undefined,
         submitByDaa: auctionSubmitBy(planned.states, clock.daa),
-        retime: retimer(env0, refsNow, intent, null, label, openToken),
+        retime: retimer(env0, refsNow, intent, null, label, openToken, shift + RETIME_LEAD_DAA),
         // the open final confirmation follows the market and the clock: the same order planned again, as at a click now
         replan: async () => {
           const again = await prepareLevel(intent0, index, levels, shown);
@@ -480,11 +488,12 @@ export function OrderTicket(props: OrderTicketProps) {
    * The re-check of a planned order (review-check.ts rule 2): the same intent planned against the environment at the click (`env`: the one on hand
    * already is; else `parts` read again from REVIEW_REUSE_MS before the click on) and the references read now, with the clock and the fees of
    * `planned`. The same transaction: kept; another one without an error and within the terms the ticket showed (`shown`): it replaces the plan
-   * (a moved book, coins replaced after a submission); an error or a broken term stops the order.
+   * (a moved book, coins replaced after a submission); an error or a broken term stops the order. `shift`: how much later than the click
+   * `clock` is (a slow wallet's auction, prepareLevel), where its re-timings start from.
    */
   const recheck = async (
     planned: OrderPlan, intent: Intent, clock: Clock, fees: PlanEnv['fees'], env: PlanEnv | null, clickAt: number, parts: EnvWait[], shown: OrderPlan | null,
-    label: string, openToken: SendJob['openToken'],
+    label: string, openToken: SendJob['openToken'], shift: bigint,
   ): Promise<GateVerdict> => {
     const stop = (text: string, code = 'changed'): GateVerdict => ({ stop: { code, text } });
     try {
@@ -497,7 +506,7 @@ export function OrderTicket(props: OrderTicketProps) {
       if (planned.built && sameTransaction(planned.built, p.built)) return null;
       const kept = keepTerms(p, intent, plan, shown);
       if (!('p' in kept)) return stop(kept.text, kept.code);
-      return { replace: { built: kept.p.built!, expected: expectedFromPlan(kept.p), submitByDaa: auctionSubmitBy(kept.p.states, clock.daa), retime: retimer(fresh, refs, kept.intent, fees, label, openToken) } };
+      return { replace: { built: kept.p.built!, expected: expectedFromPlan(kept.p), submitByDaa: auctionSubmitBy(kept.p.states, clock.daa), retime: retimer(fresh, refs, kept.intent, fees, label, openToken, shift + RETIME_LEAD_DAA) } };
     } catch (e) {
       return stop(buildErrorText(e instanceof Error ? e.message : String(e)));
     }
@@ -506,18 +515,20 @@ export function OrderTicket(props: OrderTicketProps) {
   /**
    * The re-timing of a planned order (`SendJob.retime`: a long read of the final confirmation, an auction start that passed while the wallet
    * signed): the same intent planned on the same environment, references and fees, so with the same terms, inputs and fee, with the node clock now
-   * (plus `lead`, RETIME_LEAD_DAA more at each re-timing) for its times. Only its times move, later: the signer and the app accept it without
-   * asking again (signer/retime.ts).
+   * (plus `lead`, RETIME_LEAD_DAA more at each re-timing; at least the signing time the failed attempt measured plus RETIME_LEAD_DAA:
+   * confirm/signing-time.ts `retimeLead`) for its times. Only its times move, later: the signer and the app accept it without asking again
+   * (signer/retime.ts). The first `lead` is the shift the plan of the click had (`shift`, a slow wallet's) plus RETIME_LEAD_DAA.
    */
   const retimer = (env: PlanEnv, refs: References, intent: Intent, fees: PlanEnv['fees'] | null, label: string, openToken: SendJob['openToken'], lead = RETIME_LEAD_DAA): SendJob['retime'] =>
-    async () => {
+    async (o) => {
       try {
         const now = liveClockAt(liveClock.current, Date.now()) ?? (await readClock(services));
-        const clock = { ...now, daa: now.daa + lead, unixSeconds: now.unixSeconds + (lead * 1000n) / BigInt(Math.max(1, now.rateMilli)) };
+        const used = retimeLead(lead, o?.signingMs, now.rateMilli);
+        const clock = laterClock(now, used);
         const p = planOrder(withRefs({ ...env, clock, ...(fees ? { fees } : {}) }, refs), intent);
         const firstError = errors(p)[0];
         if (!p.ok || !p.built || firstError) return { stop: { code: 'changed', text: firstError ? issueText(firstError, issueCtx) : t('ticket.reviewChanged') } };
-        return { built: p.built, expected: expectedFromPlan(p), label, openToken, submitByDaa: auctionSubmitBy(p.states, clock.daa), retime: retimer(env, refs, intent, fees, label, openToken, lead + RETIME_LEAD_DAA) };
+        return { built: p.built, expected: expectedFromPlan(p), label, openToken, submitByDaa: auctionSubmitBy(p.states, clock.daa), retime: retimer(env, refs, intent, fees, label, openToken, used + RETIME_LEAD_DAA) };
       } catch (e) {
         return { stop: { code: 'plan', text: buildErrorText(e instanceof Error ? e.message : String(e)) } };
       }

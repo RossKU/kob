@@ -68,7 +68,10 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
   orders, the network fee, then each order with its token and terms). The signer draws it in its own frame and its Approve signs and
   sends; for an external wallet the app shows the same table and its "Continue in wallet" hands the transaction to the wallet, whose own
   popup follows. An auction whose start passed while the user read it is re-timed (the same plan, later times) and signed again without a
-  second prompt when the signer's own decoding finds nothing worse (`src/signer/retime.ts`).
+  second prompt when the signer's own decoding finds nothing worse (`src/signer/retime.ts`). Its new start leaves at least as long as
+  the failed signature took, and a wallet whose last auction signature took longer than the 5 s window (30 DAA activation lead plus
+  20 DAA margin) gets its next auction planned with a start later by the shortfall plus 3 s, at most 60 s
+  (`src/ui/confirm/signing-time.ts`): only times move, later.
   While it is open the confirmation follows the market and the clock: the order is planned again every 1.5 s (`SendJob.replan`), checked
   as strictly as the first and put in its place, so what is approved is what is shown; the signer frame checks each update itself (an
   update worse for the user than what was shown says so and holds Approve for half a second), changed figures flash, and the start and

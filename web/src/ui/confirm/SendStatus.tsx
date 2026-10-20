@@ -6,9 +6,10 @@
 // transaction: the net effect on the wallet, what is locked, the fee, then each order with its token and terms). The signer shows it in its own
 // frame (its Approve signs); for an external wallet the app shows the same table and its "Continue in wallet" hands the transaction to the
 // wallet, whose own popup follows. A user may read it for a while: an auction whose start passed by the time it is signed
-// (`clock-moved`, wallet/sign.ts) is re-timed (`SendJob.retime`: the same terms, later times) and signed again, which the private-key signer
-// does without asking again when nothing the user confirmed got worse (signer/retime.ts); the app re-times an external wallet's auction
-// confirmed later than RETIME_AFTER_MS before it hands it over (an updated popup only if something got worse).
+// (`clock-moved`, wallet/sign.ts) is re-timed (`SendJob.retime`: the same terms, later times, the start at least as much later as the failed
+// signature took; the wallet's last signing time also delays its next auction's first start: signing-time.ts) and signed again, which the
+// private-key signer does without asking again when nothing the user confirmed got worse (signer/retime.ts); the app re-times an external
+// wallet's auction confirmed later than RETIME_AFTER_MS before it hands it over (an updated popup only if something got worse).
 //
 // While the confirmation is open it follows the market and the clock (`SendJob.replan`, every LIVE_MS): each plan is checked as strictly as the
 // first and put in place of the shown one, so what is approved is what is shown. The private-key signer takes it as an update and checks it
@@ -30,6 +31,7 @@ import type { LiveSigning } from '../../wallet/types';
 import { Button, CopyText, Modal, RawDetails, Spinner } from '../kit';
 import { classifyFailure } from './confirm-flow';
 import { checkBeforeSigning, recordAccepted, type SendJob } from './send';
+import { SigningTimer, rememberSigningMs } from './signing-time';
 import './send.css';
 
 export type SendPhase = 'checking' | 'confirming' | 'signing' | 'sending' | 'submitted' | 'blocked' | 'rejected' | 'failed';
@@ -270,18 +272,32 @@ export function useSend(): Sender {
       // the private-key signer follows the market and the clock while the user reads (its own check decides how each update is shown)
       const jobs = new Map<string, SendJob>([[final.built.tx.id, final]]);
       let reading = true;
+      // the signing time of an auction (signing-time.ts): from the hand-over of the transaction signed to the clock check after its signature
+      const timer = new SigningTimer();
+      const walletId = w.adapter!.id;
       const live: LiveSigning | null =
-        w.adapter!.id === 'local-key' && !final.retimed
+        walletId === 'local-key' && !final.retimed
           ? {
               attach: (to) => {
                 follow(final, () => reading, (j) => {
                   jobs.set(j.built.tx.id, j);
+                  timer.handed(j.built.tx.id);
                   to.replace(j.built);
                 });
                 followClock(() => reading, (daa) => to.clock(daa));
               },
             }
           : null;
+      const attempt0 = final;
+      const signedJob = (): SendJob => (live?.signed ? (jobs.get(live.signed.tx.id) ?? attempt0) : attempt0);
+      // how long the auction signed took, kept for this wallet's next first attempt; undefined when it is no auction or was never handed over
+      const signingTime = (): number | undefined => {
+        const j = signedJob();
+        const ms = j.submitByDaa != null ? timer.since(j.built.tx.id) : null;
+        if (ms === null) return undefined;
+        rememberSigningMs(walletId, ms);
+        return ms;
+      };
       try {
         // no `inputAddress`: `checkBeforeSigning` has just re-read every input on the node (the decoder stops any it does not confirm); a second
         // read would only add a round trip before the wallet's popup
@@ -291,6 +307,9 @@ export function useSend(): Sender {
           ...(final.retimed ? { retime: true } : {}),
           ...(live ? { live: { signing: live, submitByOf: (b) => jobs.get(b.tx.id)?.submitByDaa ?? undefined } } : {}),
           onStage: (s) => {
+            if (s === 'signing') timer.handed(attempt0.built.tx.id);
+            // the clock check after the signature has just passed
+            if (s === 'submitting') signingTime();
             if (s !== 'signing') reading = false;
             set(id, { phase: s === 'signing' ? 'signing' : 'sending' });
           },
@@ -311,10 +330,12 @@ export function useSend(): Sender {
           break;
         }
         // the auction's start passed while it was signed: the same order with later times, checked and signed again (the private-key signer
-        // signs it without a prompt: signer/retime.ts); nothing was sent
+        // signs it without a prompt: signer/retime.ts); nothing was sent. Its new start leaves at least the time this signature took
+        // (signing-time.ts `retimeLead`), which the wallet's next order starts from too
+        const signingMs = f.code === 'clock-moved' ? signingTime() : undefined;
         if (f.code !== 'clock-moved' || !final.retime || attempt >= CLOCK_RETRIES) return stopped({ phase: 'failed', code: f.code, text: f.text, raw: f.raw });
         set(id, { phase: 'checking' });
-        const next = await final.retime();
+        const next = await final.retime(signingMs !== undefined ? { signingMs } : undefined);
         if ('stop' in next) return stopped({ phase: 'blocked', ...next.stop });
         const again = await checkBeforeSigning(services, w, { ...next, retimed: true }).catch(() => null);
         if (!again) return stopped({ phase: 'blocked', code: 'check-failed', text: t('send.checkFailed') });
@@ -354,7 +375,8 @@ export function useSend(): Sender {
 
 /**
  * How often an auction whose start passed by the time it was signed (`clock-moved`) is re-timed and signed again before the reason is shown:
- * each attempt gives it a longer lead (the ticket's RETIME_LEAD_DAA, 3 s more each time), so a slow link gets there within a few.
+ * each attempt gives it a longer lead (RETIME_LEAD_DAA, 3 s more each time, and at least the time the failed signature took plus that:
+ * signing-time.ts `retimeLead`), so a slow link or a slow approver in the wallet gets there within a few.
  */
 const CLOCK_RETRIES = 3;
 

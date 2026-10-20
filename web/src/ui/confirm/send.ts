@@ -42,9 +42,10 @@ export interface SendJob {
   /**
    * plans the same order again with the current clock, on the same environment (the ticket's order: an auction whose start must not lie behind a
    * long reading of the confirmation or a slow signature): the job to send instead, its terms, inputs and fee the same and only its times later,
-   * or why it cannot be (SendStatus.tsx)
+   * or why it cannot be (SendStatus.tsx). `signingMs`: how long the attempt it follows took from the wallet's request to the clock check after
+   * the signature (a `clock-moved`): the new start leaves at least that long again (ui/confirm/signing-time.ts `retimeLead`)
    */
-  retime?: (() => Promise<SendJob | { stop: Blocked }>) | undefined;
+  retime?: ((o?: { signingMs?: number }) => Promise<SendJob | { stop: Blocked }>) | undefined;
   /**
    * plans the same order again on the environment now (the market and the clock as the page has them now, within the terms the ticket showed):
    * what the open final confirmation follows while the user reads it (SendStatus.tsx); the job, or why there is none now
