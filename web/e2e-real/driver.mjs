@@ -242,8 +242,17 @@ export async function openApp(ctx, baseUrl, config) {
   page.on('console', (m) => {
     if (m.type() === 'error') h.consoleErrors.push(m.text().slice(0, 400));
   });
+  // a submit request carries no transaction id: the node's answer does (`transactionId`); it goes to the oldest submit still
+  // without one (the app submits one transaction at a time and waits for the answer)
+  const answer = (id) => {
+    const s = h.submits.find((x) => x.tx && !x.txid);
+    if (s && typeof id === 'string') s.txid = id;
+  };
   page.on('response', (r) => {
     if (r.status() >= 400) h.badResponses.push(`${r.status()} ${r.url().replace(baseUrl, '')}`.slice(0, 200));
+    if (r.request().method() === 'POST' && /\/node\/submit$/.test(new URL(r.url()).pathname) && r.ok()) {
+      r.json().then((j) => answer(j.transactionId ?? j.txid)).catch(() => {});
+    }
   });
   page.on('pageerror', (e) => h.pageErrors.push(String(e.message).slice(0, 400)));
   page.on('request', (req) => {
@@ -255,6 +264,19 @@ export async function openApp(ctx, baseUrl, config) {
     }
   });
   page.on('websocket', (ws) => {
+    ws.on('framereceived', (f) => {
+      const p = typeof f.payload === 'string' ? f.payload : '';
+      if (!/"transactionId"/.test(p) || /"outputs"/.test(p)) return;
+      try {
+        // only a submit's answer: `{transactionId}` (a replacement also names the replaced one); a UTXO list names
+        // transaction ids inside its entries, never at the top of its params
+        const j = JSON.parse(p);
+        const r = j.params ?? j;
+        if (r && typeof r.transactionId === 'string' && Object.keys(r).every((k) => k === 'transactionId' || k === 'replacedTransaction')) answer(r.transactionId);
+      } catch {
+        /* not JSON */
+      }
+    });
     ws.on('framesent', (f) => {
       const p = typeof f.payload === 'string' ? f.payload : '';
       if (process.env.KOB_DEBUG_WS) log('ws-sent', typeof f.payload, String(f.payload).length, p.slice(0, 160));
@@ -289,7 +311,13 @@ const tid = (h, id) => h.page.getByTestId(id);
 /** Connects the wallet through the app's header (approves the wallet's connect / network windows) and reads what the header shows. */
 export async function connectWallet(h, ctx, wallet) {
   const btn = tid(h, `wallet-connect-${wallet.name}`);
-  await btn.waitFor({ timeout: 60_000 });
+  try {
+    await btn.waitFor({ timeout: 60_000 });
+  } catch {
+    // say why: what the header shows, whether the page has the wallet's provider at all, and the page's errors (a provider script that threw)
+    const seen = await h.page.evaluate((n) => ({ provider: typeof window[n], hint: document.querySelector('[data-testid="wallet-install-hint"]')?.textContent ?? null }), wallet.name).catch(() => ({}));
+    throw new Error(`the app offers no ${wallet.label} connect button after 60 s: window.${wallet.name} is ${seen.provider}, header "${collapse(seen.hint ?? '')}", page errors ${JSON.stringify(h.pageErrors.slice(0, 3))}`);
+  }
   const { popups } = await wallet.approve(ctx, async () => {
     await btn.click();
     await tid(h, 'wallet-address').waitFor({ timeout: POPUP_TIMEOUT_MS });
@@ -366,13 +394,30 @@ const STOPPED = ['blocked', 'rejected', 'failed'];
  * The app's final confirmation of a transaction for an external wallet (`confirm-order`, the order's details from the decoded transaction):
  * read and confirmed when it is open, its title, summary lines and fee returned; null when none is open (the private-key signer confirms in its own frame).
  */
-async function confirmInApp(h) {
+async function confirmInApp(h, expect = null) {
   const popup = tid(h, 'confirm-order');
   if (!(await popup.count())) return null;
-  const read = { title: collapse(await tid(h, 'confirm-order-title').innerText().catch(() => '')), rows: collapse(await tid(h, 'confirm-order-summary').innerText().catch(() => '')), fee: collapse(await tid(h, 'confirm-order-fee').innerText().catch(() => '')) };
+  // read in one pass (an absent part is '' at once, not a 30 s locator wait); `orders`: each order's title, token and terms
+  const read = await popup.evaluate((el) => {
+    const txt = (n) => (n?.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const q = (id) => el.querySelector(`[data-testid="${id}"]`);
+    return {
+      title: txt(q('confirm-order-title')), rows: txt(q('confirm-order-summary')), fee: txt(q('confirm-order-fee')),
+      orders: [...el.querySelectorAll('[data-testid^="confirm-order-order-"]')].filter((o) => !/-exit$/.test(o.dataset.testid)).map((o) => (o.innerText ?? '').replace(/\s+/g, ' ').trim()),
+    };
+  });
+  read.text = [read.title, read.rows, ...read.orders].join(' | ');
+  // what the confirmation says is not what the scenario orders: cancelled here, nothing reaches the wallet or the chain
+  if (expect && !expect.re.test(read.text)) {
+    await tid(h, 'confirm-order-cancel').click().catch(() => {});
+    throw new Error(`the confirmation does not say what is ordered (${expect.re}${expect.what ? `: ${expect.what}` : ''}): ${read.text.slice(0, 600)}`);
+  }
   await tid(h, 'confirm-order-ok').click();
   return read;
 }
+
+/** The phase of a status line (`order-status` / `flow-status`) now, null when there is none (no locator wait). */
+const phaseOf = (h, id) => h.page.evaluate((id) => document.querySelector(`[data-testid="${id}"]`)?.getAttribute('data-phase') ?? null, id).catch(() => null);
 
 /** The status line's sentence when it stopped (`send-error`), with its code. */
 async function statusError(h, scope) {
@@ -387,7 +432,7 @@ async function statusError(h, scope) {
  * popup for an external wallet, confirmed here; the private-key signer's frame), then asks the wallet. Approves the wallet's popup(s), waits for the transaction id on the ticket's status line (`order-status`) and the app's acceptance
  * status. Throws with the app's own sentence when it stops (a blocking check, a rejection, a failure).
  */
-export async function signFromTicket(h, ctx, wallet, label, shotDir, click) {
+export async function signFromTicket(h, ctx, wallet, label, shotDir, click, { expect = null } = {}) {
   const t0 = Date.now();
   const line = tid(h, 'order-status');
   const submitsBefore = h.submits.length;
@@ -396,8 +441,9 @@ export async function signFromTicket(h, ctx, wallet, label, shotDir, click) {
     await click();
     const t1 = Date.now();
     for (;;) {
-      const phase = await line.getAttribute('data-phase').catch(() => null);
-      if (phase === 'confirming') receipts.push(await confirmInApp(h));
+      const phase = await phaseOf(h, 'order-status');
+      // `expect` is checked on the first confirmation only (a re-timed auction shows the same terms with later times)
+      if (phase === 'confirming') receipts.push(await confirmInApp(h, receipts.some(Boolean) ? null : expect));
       if (phase === 'submitted') return;
       if (STOPPED.includes(phase)) throw new Error(await statusError(h, 'order-status'));
       if (Date.now() - t1 > POPUP_TIMEOUT_MS + 60_000) throw new Error('timed out waiting for the transaction id');
@@ -430,15 +476,23 @@ export async function runFlow(h, ctx, wallet, label, shotDir, { maxSteps = 12 } 
   const submitsBefore = h.submits.length;
   let shownAs = '';
   let done = '';
+  // what the flow says it does (`flow-shown-as`, shown only while a step runs): read whenever it is there, and always before a step is confirmed
+  const readShownAs = async () => {
+    if (shownAs) return;
+    shownAs = await h.page.evaluate(() => (document.querySelector('[data-testid="flow-shown-as"]')?.textContent ?? '').replace(/\s+/g, ' ').trim());
+  };
   const { popups } = await wallet.approve(ctx, async () => {
     for (;;) {
-      if (!shownAs && (await tid(h, 'flow-shown-as').count())) shownAs = collapse(await tid(h, 'flow-shown-as').innerText().catch(() => ''));
+      await readShownAs();
       if (await tid(h, 'flow-done').count()) {
         done = collapse(await tid(h, 'flow-done').innerText());
         return;
       }
-      const phase = await tid(h, 'flow-status').getAttribute('data-phase').catch(() => null);
-      if (phase === 'confirming') await confirmInApp(h);
+      const phase = await phaseOf(h, 'flow-status');
+      if (phase === 'confirming') {
+        await readShownAs();
+        await confirmInApp(h);
+      }
       if (STOPPED.includes(phase)) throw new Error(await statusError(h, 'flow-status'));
       for (const e of ['flow-error', 'flow-stopped', 'flow-plan-errors', 'orders-action-error']) {
         if (await tid(h, e).count()) throw new Error(`${e}: ${collapse(await tid(h, e).innerText()).slice(0, 600)}`);
@@ -451,7 +505,7 @@ export async function runFlow(h, ctx, wallet, label, shotDir, { maxSteps = 12 } 
   const subs = h.submits.slice(submitsBefore).filter((x) => x.tx);
   if (subs.length > maxSteps) throw new Error(`${label}: more than ${maxSteps} transactions`);
   const steps = subs.map((x, i) => ({
-    txid: x.tx.id ?? null, kind: null, appStatus: 'submitted', summary: '', shownAs, acks: [], popups: i === 0 ? popups : [], screenshots, signMs: null, totalMs: Date.now() - t0, submitted: x.tx,
+    txid: x.txid ?? x.tx.id ?? null, kind: null, appStatus: 'submitted', summary: '', shownAs, acks: [], popups: i === 0 ? popups : [], screenshots, signMs: null, totalMs: Date.now() - t0, submitted: x.tx,
   }));
   return { steps, done };
 }

@@ -11,8 +11,8 @@ transaction through kob-wasm) with the in-page mock wallets of `src/testing/mock
 on any machine. It proves nothing about the real extensions, their popups or a real node (see "What still needs a live run").
 
 **Status.** The scenarios are ported to the current UI and protocol (base-unit amounts, the current ticket with its one order button and
-inline status line, the My orders flows without a confirmation screen, the compact header wallet chip) and run offline with `--mock` ("Verified offline" below); the last TN10 run with real
-extensions is the one of 2026-09-29 ("Earlier results").
+inline status line, the My orders flows without a confirmation screen, the compact header wallet chip) and run offline with `--mock` ("Verified offline" below) and on TN10 with the real KasWare and Kaspire ("TN10 run of
+2026-10-20" below: every scenario PASS); Kastle 2.61.0 cannot connect to the app (its provider script throws under the app's Trusted Types).
 
 ## Run
 
@@ -54,21 +54,25 @@ also spends from the DEV key: about 3 KAS for the counterparty bid, returned by 
 Every placement, cancel, amend and merge link goes from the app's button straight to the wallet (the app's own pre-sign checks run silently; a
 check that stops the order shows one line, `order-status` / `flow-status`, and stops the run), the wallet popup approved on TN10, then the node: the covenant outputs of a placement are unspent, the outpoints a cancel / amend spends are gone and
 its own covenant outputs exist (the submitted transaction is read from the page's wRPC frames, or from the HTTP submit body with `--mock`, not
-from app state). After a placement the app's placement record must point at one of those covenant outputs; My orders must list the order as live
-(`order-row-<id>`, `data-live="1"`); after the cancel it must no longer be live, and tokens a cancel releases must be tracked by the app's token
-tracker (`kob.tokens.v1.testnet-10.<pubkey>`) as an output of the cancel.
+from app state). What a placement orders is checked on the app's final confirmation (`confirm-order`: title, net effect, the order's terms)
+BEFORE it goes to the wallet; a confirmation that says something else is cancelled there, so the check leaves no order behind. After a placement
+the app's placement record must point at one of those covenant outputs; My orders (its "All" tab, so an ended order keeps its row and status)
+must list the order as live (`order-row-<id>`, `data-live="1"`; polled: a fresh placement first shows `unknown` until the node's verdict on its
+record arrives); after the cancel it must no longer be live, and tokens a cancel releases must be tracked by the app's token tracker
+(`kob.tokens.v1.testnet-10.<pubkey>`) as an output of the cancel. Rows, balances and status lines are read in one pass from the page (a cell a
+row does not have is empty at once, never a 30 s locator wait). A failed scenario cancels the wallet's live orders before the next one starts.
 
 | id | What it does |
 |---|---|
 | issue | Create token screen (`#/create`; the old `#/issue` leads there): the standard 3 / 3 program (`issue-program-standard` under Advanced, KCC20Ref) is the default, 1,000,000 tokens with 8 decimals to the wallet. Result panel token id / txid, the registry entry (`template_id` `kcc20-ref-3x3`, `max_token_inputs` 3), the genesis UTXO tracked with program KCC20Ref. Token B (the pair's quote) is issued the same way when `pair` is selected. The run then serves a test registry with both tokens listed. |
 | limit | Limit GTC sell 3 @ 50 KAS (while it rests, Balances shows 3 in orders), cancelled, 3 tokens back; limit GTC buy 2 @ 0.5 KAS, cancelled. |
 | amend | Limit sell 2 @ 50, My orders `order-replace-<id>` -> amend dialog (`amend-price` 55, `amend-preview`) -> one cancel-replace transaction; the SAME order id lives on at 55 (in-place AMEND record), then cancelled, 2 tokens back. |
-| ioc | IOC buy 2 @ 0.4 with a 60 s life (advanced field `life`), cancelled while alive. |
+| ioc | IOC buy 2 @ 0.4 with a 60 s life (advanced field `life`, the most an IOC may have; counted from the ticket's clock, so the wallet's approval eats into it), cancelled while alive. An IOC that a keeper on the network killed at its expiry before the cancel could be signed is a SKIP with its status. |
 | stop | Stop-market sell 2, stop 0.2: rests unarmed, cancelled, 2 tokens back. |
 | oco | OCO sell 2, take-profit 60, stop 0.2, cancelled, 2 tokens back. |
 | ifd | IFD buy-first 2 @ 0.5 with exit take-profit 1, cancelled from its row (node only) or its position card (`position-cancel-<id>`, with an indexer). |
 | pair | On the pair page `#/market/<A>/<B>`: limit sell 2 A @ 5 B (escrows A) and limit buy 1 A @ 0.5 B (escrows B), each cancelled, the escrow back. |
-| market | Needs an indexer (SKIP otherwise): the DEV key (`maker` with `--mock`), driven through the same app in its own browser with an in-page signer (`features.test`, injected config only), rests a limit buy of 1 A @ 0.6; the wallet market-sells 1 A into it once the book shows it (the disclosure must start from 0.6). If a matcher fills it, that is recorded; else it is cancelled. The counterparty bid is cancelled when still live. |
+| market | Needs an indexer (SKIP otherwise): the DEV key (`maker` with `--mock`), driven through the same app in its own browser with an in-page signer (`features.test`, injected config only), rests a limit buy of 1 A @ 0.6; the wallet market-sells 1 A into it once the book shows it (the confirmation's auction must start from 0.6; a `clock-moved` stop, nothing sent, is tried again up to 3 times). If a matcher fills it, that is recorded; else it is cancelled. The counterparty bid is cancelled when still live. |
 | merge | My orders > Balances: `orders-merge-token-<A>` ("Merge (n)") -> the chain of transfers to itself (at most 3 token inputs each), one wallet approval per link (`flow-shown-as` states the merge); the last link's single token output is unspent on the node and holds the whole supply; the button disappears. |
 | balances | Balances panel: for A and B free = 1,000,000, nothing in orders, no strays; no order left live. |
 
@@ -114,16 +118,35 @@ running it through kob-wasm (consensus-valid).
 | `--mock --indexer` | all 11 PASS, market included (counterparty bid, market sell, both cancelled) | issue, ifd, pair, market PASS | issue, ifd, pair, market PASS |
 
 Other checks: `node --check` of every module, `test/e2e-infra.test.ts` (12 tests, the shared `common.mjs` helpers), the TN10 preflight without
-`.env` exits 77 with its SKIP message. Timing with the mock: about 31 s per signed step, almost all of it the app's own acceptance wait
-(`tx-status` = `confirmed`); about 20 minutes per wallet for everything.
+`.env` exits 77 with its SKIP message. Timing with the mock (2026-10-20, after the one-pass row reads): about 7 minutes per wallet for everything.
+
+## TN10 run of 2026-10-20 (real extensions, indexer of a live soak on the same TN10)
+
+The indexer was a soak's executor (`--indexer http://127.0.0.1:8091`) while two soak executors filled, killed and refunded orders on the same
+TN10 permissionlessly. Tokens reused with `--skip-issue` (issued by the first run of the day, issue PASS for both wallets).
+
+| Wallet | limit | amend | ioc | stop | oco | ifd | pair | market | merge | balances |
+|---|---|---|---|---|---|---|---|---|---|---|
+| KasWare 0.10.0 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS (separate run, after the approver fix) | PASS | PASS |
+| Kaspire 0.5.1 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Kastle 2.61.0 | no connect button: `window.kastle` is never defined on the app's page | | | | | | | | | |
+
+Harness findings fixed on the way (none of them an app defect): every row / balance cell / status line was read through locators that wait
+Playwright's 30 s default for an absent element (a limit has no stop cell), so a 90 s "no longer live" poll took ONE read, on the first render
+after the cancel (indexer a second behind): "still live" after every cancel, and an IOC read late enough to be killed by a keeper; the ticket no
+longer has a disclosure panel (`order-disclosure`), so "what is ordered" read an empty string (pair, market); KasWare 0.10's Sign window says
+"Reject", not "Cancel", and the approver waited its whole 16 s on every signature (19 s per KasWare signature, longer than any auction lead:
+market always stopped with `clock-moved`; 4.6 s after the fix); a submit request carries no transaction id (taken from the node's answer);
+a scenario that failed after placing left its order live and failed `balances` too (now swept at once).
+
+Kastle: its `injected.js` (2.61.0) sets `innerHTML` (goober, the CSS-in-JS of its toast library) while it loads, before it assigns
+`window.kastle`; the app's CSP `require-trusted-types-for 'script'` (since 6ba73839, 2026-10-13) makes that assignment throw, so the provider
+never exists on the app's pages (it does on a page without the CSP). Kastle 2.60.1 was proven before Trusted Types were enforced.
 
 ## What still needs a live run (TN10, the owner's machine)
 
-* Everything wallet-specific: onboarding and the popups of KasWare 0.10.0, Kaspire 0.5.1 and Kastle 2.61.0 for every transaction kind above
-  (amend, merge links, pair orders, IOC / stop / OCO are new to the TN10 run; Kastle has never been run here), Kastle's covenant-signing check,
-  Kaspire's signature modes on the new inputs (token transfers of a merge, pair custody).
-* The real node: wRPC submission of every new kind, acceptance timing, the app's acceptance status.
-* Market against a real indexer (`--indexer` / `INDEXER_URL`) and whatever matcher runs on TN10 (a fill is recorded, not a failure).
+* Kastle (blocked: see above), its covenant-signing check.
+* A market order a matcher fills (on 2026-10-20 none filled the test token's market sell: it was cancelled; a fill is recorded, not a failure).
 * Command: `cd web && node e2e-real/run.mjs --rebuild` (add `--indexer <url>` for the market scenario). Commit the result table here.
 
 ## Earlier results

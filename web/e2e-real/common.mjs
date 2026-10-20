@@ -275,10 +275,12 @@ export const kaswareApprover =
   async (pop) => {
     await pop.waitForLoadState('domcontentloaded').catch(() => {});
     let text = '';
+    // rendered once its decline button is there: "Cancel" on the connect window, "Reject" on KasWare 0.10's Sign Transaction window (waiting
+    // for "Cancel" alone ran the whole 16 s on every signature, longer than an auction's lead: every market order stopped with clock-moved)
     for (let i = 0; i < 40; i++) {
       await sleep(400);
       text = await pop.innerText('body').catch(() => '');
-      if (/Cancel/.test(text) && text.length > 30 && i > 3) break;
+      if (/\b(Cancel|Reject)\b/.test(text) && text.length > 30 && i > 1) break;
     }
     const info = { text, summary: collapse(text).slice(0, 600), screenshot: await shot(pop, screenshotDir, 'popup'), clicked: null };
     const labels = approve ? KASWARE_APPROVE : ['Cancel', 'Reject'];

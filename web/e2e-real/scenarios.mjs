@@ -56,6 +56,14 @@ async function scenario(rc, name, fn) {
       }
       // a failure must not leave a dialog (an amend form, the issuance confirmation) over the next scenario
       await closeDialogs(rc.h).catch(() => {});
+      // nor an order it placed: a live leftover would fail the later scenarios that read the balances (escrow, KAS locked)
+      if (name !== 'issue') {
+        const swept = await sweepOpenOrders(rc);
+        if (swept.length) {
+          rec.sweptOpenOrders = swept;
+          log(`[${rc.name}] after the failed ${name}: swept ${swept.length} live order(s) ${JSON.stringify(swept).slice(0, 300)}`);
+        }
+      }
     }
   }
   rec.durationMs = Date.now() - rec.startedAt;
@@ -95,7 +103,10 @@ const popupView = (popups) =>
   }));
 
 /** The record of one signed transaction for the result file. */
-const stepOf = (name, s) => ({ name, txid: s.txid, kind: s.kind, summary: s.summary, shownAs: s.shownAs || undefined, acks: s.acks.length ? s.acks : undefined, popups: popupView(s.popups), screenshots: s.screenshots, appStatus: s.appStatus, ms: s.totalMs });
+const stepOf = (name, s) => ({
+  name, txid: s.txid, kind: s.kind, summary: s.summary, shownAs: s.shownAs || undefined, acks: s.acks.length ? s.acks : undefined, receipts: s.receipts?.length ? s.receipts : undefined,
+  popups: popupView(s.popups), screenshots: s.screenshots, appStatus: s.appStatus, signMs: s.signMs ?? undefined, ms: s.totalMs,
+});
 
 /** Node check of one accepted tx: every P2SH output is unspent. */
 async function verifyCreated(rc, tx, txid, label) {
@@ -327,22 +338,21 @@ async function fillTicket(rc, spec) {
     throw new Error(`the order button stays disabled. issues: ${collapse(issues)} needs: ${collapse(needs)}`);
   }
   const issues = await h.page.evaluate(() => [...document.querySelectorAll('[data-testid="order-issues"] li')].map((li) => ({ code: li.dataset.code, severity: li.dataset.severity })));
-  // what the ticket says it orders: the side, the type and the figures of its disclosure
-  const typeText = collapse(await tid(h, 'order-type').locator('option:checked').innerText().catch(() => ''));
-  const disclosure = `${spec.side} ${typeText}: ${collapse(await tid(h, 'order-disclosure').innerText().catch(() => ''))}`;
-  const balancesBefore = collapse(await tid(h, 'order-balances').innerText().catch(() => ''));
-  return { disclosure, balancesBefore, issues, gate, click: () => review.click() };
+  // the ticket itself names only the side and the type (its order button); the figures are on the final confirmation (`confirm-order`)
+  const button = collapse(await review.innerText().catch(() => ''));
+  const balancesBefore = collapse(await tid(h, 'order-available').innerText().catch(() => ''));
+  return { button, balancesBefore, issues, gate, click: () => review.click() };
 }
 
 /** Place through the ticket, sign, verify on the node. Returns the step record plus what the cancel needs. */
 async function place(rc, r, label, spec) {
   const before = new Set(Object.keys(await readRecords(rc.h)));
   const t = await fillTicket(rc, spec);
-  const s = await signFromTicket(rc.h, rc.ctx, rc.drv, label, rc.name, t.click);
+  // what is ordered is said by the app's final confirmation (title, net effect, the order's terms), checked BEFORE it goes to the wallet:
+  // a confirmation that does not say it is cancelled there, so a failed check leaves no order behind
+  const s = await signFromTicket(rc.h, rc.ctx, rc.drv, label, rc.name, t.click, { expect: spec.expectSummary ? { re: spec.expectSummary } : null });
   if (!s.submitted) throw new Error('the submitted transaction was not captured from the node connection');
-  // what was ordered is said by the ticket's own figures (there is no confirmation screen)
-  if (spec.expectSummary && !spec.expectSummary.test(t.disclosure)) throw new Error(`the ticket does not say what is ordered (${spec.expectSummary}): ${t.disclosure.slice(0, 400)}`);
-  const step = { ...stepOf(`place ${label}`, s), disclosure: t.disclosure, ticketIssues: t.issues, covenantGate: t.gate ?? undefined, balancesBefore: t.balancesBefore };
+  const step = { ...stepOf(`place ${label}`, s), button: t.button, ticketIssues: t.issues, covenantGate: t.gate ?? undefined, balancesBefore: t.balancesBefore };
   r.steps.push(step);
   step.verify = await verifyCreated(rc, s.submitted, s.txid, label);
   await sleep(1500);
@@ -365,6 +375,9 @@ async function openOrders(rc, wantIds = [], { timeoutMs = 90_000 } = {}) {
   await goto(h, '#/orders');
   await tid(h, 'orders-view').waitFor({ timeout: 60_000 });
   await tid(h, 'orders-list').waitFor({ timeout: 60_000 });
+  // the "All" tab: an order that ended (cancelled, or killed / filled by someone else) stays listed with its status instead of leaving the
+  // "Active" tab without a trace; a live one is the same row with its actions
+  await tid(h, 'orders-tab-all').click({ timeout: 10_000 }).catch(() => {});
   const t0 = Date.now();
   for (;;) {
     const missing = [];
@@ -377,15 +390,55 @@ async function openOrders(rc, wantIds = [], { timeoutMs = 90_000 } = {}) {
   }
 }
 
-/** What My orders shows of an order row (type, side, status, live, prices, amount). */
+/**
+ * What My orders shows of an order row (type, side, status, live, prices, amount), read in ONE pass from the page: a cell the row does not
+ * have (a limit has no stop, an indexer row no source badge) is '' at once. (Reading each cell through a locator waited Playwright's 30 s
+ * default for every absent one: a row was read over a minute, its `data-live` from the first render, and a 90 s poll became one read.)
+ */
 async function rowView(h, id) {
-  const row = tid(h, `order-row-${id}`);
-  if (!(await row.count())) return { id, listed: false };
-  const txt = async (t) => collapse(await row.getByTestId(t).first().innerText().catch(() => ''));
-  return {
-    id, listed: true, type: await row.getAttribute('data-type'), side: await row.getAttribute('data-side'), status: await row.getAttribute('data-status'), live: (await row.getAttribute('data-live')) === '1',
-    price: await txt('order-price'), stop: await txt('order-stop'), amount: await txt('order-amount'), source: await txt('order-source'),
-  };
+  return h.page.evaluate((id) => {
+    const row = document.querySelector(`[data-testid="order-row-${id}"]`);
+    if (!row) return { id, listed: false };
+    const txt = (t) => (row.querySelector(`[data-testid="${t}"]`)?.textContent ?? '').replace(/\s+/g, ' ').trim();
+    return {
+      id, listed: true, type: row.dataset.type, side: row.dataset.side, status: row.dataset.status, live: row.dataset.live === '1',
+      price: txt('order-price'), stop: txt('order-stop'), amount: txt('order-amount'), source: txt('order-source'),
+    };
+  }, id);
+}
+
+/** Order statuses that end an order (orders-model.ts); `unknown` is a row whose node verdict has not come yet. */
+const ENDED = new Set(['filled', 'cancelled', 'refunded', 'killed', 'closed']);
+
+/** An order that ended (filled, killed, refunded ... by someone else) before this run acted on it: `views` says how. */
+class OrderEnded extends Error {
+  constructor(views) {
+    super(`the order ended before the run could act on it: ${JSON.stringify(views)}`);
+    this.views = views;
+  }
+}
+
+const clickRefresh = async (h) => {
+  const refresh = tid(h, 'orders-refresh');
+  if (await refresh.count()) await refresh.click().catch(() => {});
+};
+
+/**
+ * Waits until every one of `ids` is live in My orders (refreshing): a fresh placement may first show as `unknown` (the list comes before the
+ * node's verdict on the placement record) or not at all (the indexer has not seen it). Throws `OrderEnded` when one of them has ended.
+ */
+async function waitLive(rc, ids, timeoutMs = 60_000) {
+  const { h } = rc;
+  const t0 = Date.now();
+  for (;;) {
+    const views = [];
+    for (const id of ids) views.push(await rowView(h, id));
+    if (views.every((v) => v.live)) return views;
+    if (views.some((v) => v.listed && ENDED.has(v.status))) throw new OrderEnded(views);
+    if (Date.now() - t0 > timeoutMs) throw new Error(`My orders does not list the placed order(s) as live after ${timeoutMs} ms: ${JSON.stringify(views)}`);
+    await sleep(2000);
+    if (Date.now() - t0 > 6000) await clickRefresh(h);
+  }
 }
 
 /** Waits until none of `ids` is live in My orders (refreshing), returns the final row views. */
@@ -396,9 +449,8 @@ async function waitNotLive(rc, ids, timeoutMs = 90_000) {
     const views = [];
     for (const id of ids) views.push(await rowView(h, id));
     if (views.every((v) => !v.listed || !v.live)) return views;
-    if (Date.now() - t0 > timeoutMs) throw new Error(`the app still lists the order(s) as live: ${JSON.stringify(views)}`);
-    const refresh = tid(h, 'orders-refresh');
-    if (await refresh.count()) await refresh.click().catch(() => {});
+    if (Date.now() - t0 > timeoutMs) throw new Error(`the app still lists the order(s) as live after ${timeoutMs} ms: ${JSON.stringify(views)}`);
+    await clickRefresh(h);
     await sleep(3000);
   }
 }
@@ -417,14 +469,13 @@ async function trackedFrom(h, txid, token) {
 async function cancelStep(rc, r, label, { placed, covenantIds, position = false, tokensBack = null }) {
   const { h } = rc;
   await openOrders(rc, covenantIds);
-  const rows = [];
-  for (const id of covenantIds) rows.push(await rowView(h, id));
+  const rows = await waitLive(rc, covenantIds);
   const shot1 = await shot(h.page, rc.name, `${label}-orders-listed`);
-  if (rows.some((x) => !x.live)) throw new Error(`My orders does not list the placed order(s) as live: ${JSON.stringify(rows)}`);
   const balancesPanel = collapse(await tid(h, 'balances-panel').innerText().catch(() => ''));
   if (position && (await h.page.locator('[data-testid^="position-cancel-"]').count())) await h.page.locator('[data-testid^="position-cancel-"]').first().click();
   else {
     const btn = tid(h, `order-cancel-${covenantIds[0]}`);
+    if (!(await btn.count())) throw new Error(`My orders shows no cancel button for ${short(covenantIds[0])}: ${JSON.stringify(await rowView(h, covenantIds[0]))}`);
     if (!(await btn.isEnabled())) throw new Error(`the cancel button of ${short(covenantIds[0])} is disabled: ${await btn.getAttribute('title')}`);
     await btn.click();
   }
@@ -472,14 +523,15 @@ async function balanceRow(rc, token, { timeoutMs = 60_000 } = {}) {
     if (Date.now() - t0 > timeoutMs) throw new Error(`the Balances panel has no row for ${short(token)}: ${collapse(await tid(h, 'balances-panel').innerText().catch(() => '')).slice(0, 500)}`);
     await sleep(1000);
   }
-  const val = async (loc) => (await loc.locator('[data-value]').first().getAttribute('data-value').catch(() => null)) ?? collapse(await loc.innerText().catch(() => ''));
-  return {
-    free: await val(row.locator('td').nth(1)),
-    escrowed: await val(row.getByTestId('balance-escrowed')),
-    strays: await val(row.getByTestId('balance-strays')),
-    kasLocked: await val(row.locator('td').nth(4)),
-    mergeButton: (await tid(h, `orders-merge-token-${token}`).count()) ? collapse(await tid(h, `orders-merge-token-${token}`).innerText()) : null,
-  };
+  // one pass over the row (no locator waits on a cell without an exact `data-value`)
+  return h.page.evaluate((token) => {
+    const row = document.querySelector(`[data-testid="balance-row-${token}"]`);
+    const txt = (n) => (n?.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const val = (cell) => cell?.querySelector('[data-value]')?.getAttribute('data-value') ?? txt(cell);
+    const tds = row ? row.querySelectorAll('td') : [];
+    const merge = document.querySelector(`[data-testid="orders-merge-token-${token}"]`);
+    return { free: val(tds[1]), escrowed: val(row?.querySelector('[data-testid="balance-escrowed"]')), strays: val(row?.querySelector('[data-testid="balance-strays"]')), kasLocked: val(tds[4]), mergeButton: merge ? txt(merge) : null };
+  }, token);
 }
 
 const num = (s) => Number(String(s ?? '').replace(/,/g, ''));
@@ -530,7 +582,7 @@ const A = (rc, n) => ({ token: rc.token.tokenId, amount: BigInt(n) * TOKEN });
 /** Limit GTC sell (rests far above any market; the Balances panel shows the tokens in the order) and limit GTC buy, each placed and cancelled. */
 export async function runLimit(rc) {
   return scenario(rc, 'limit', async (r) => {
-    await placeAndCancel(rc, r, 'limit-sell', { type: 'limit', side: 'sell', fields: { amount: 3, price: 50 }, expectSummary: /sell/i }, {
+    await placeAndCancel(rc, r, 'limit-sell', { type: 'limit', side: 'sell', fields: { amount: 3, price: 50 }, expectSummary: /Sell limit order.*\b50 KAS per\b/ }, {
       tokensBack: A(rc, 3),
       whileOpen: async () => {
         await openOrders(rc);
@@ -538,7 +590,7 @@ export async function runLimit(rc) {
         r.steps.push({ name: 'balances while the sell is open', balances: b });
       },
     });
-    await placeAndCancel(rc, r, 'limit-buy', { type: 'limit', side: 'buy', fields: { amount: 2, price: 0.5 }, expectSummary: /buy/i });
+    await placeAndCancel(rc, r, 'limit-buy', { type: 'limit', side: 'buy', fields: { amount: 2, price: 0.5 }, expectSummary: /Buy limit order.*\b0\.5 KAS per\b/ });
   });
 }
 
@@ -546,7 +598,7 @@ export async function runLimit(rc) {
 export async function runAmend(rc) {
   return scenario(rc, 'amend', async (r) => {
     const { h } = rc;
-    const p = await place(rc, r, 'amend-sell', { type: 'limit', side: 'sell', fields: { amount: 2, price: 50 }, expectSummary: /sell/i });
+    const p = await place(rc, r, 'amend-sell', { type: 'limit', side: 'sell', fields: { amount: 2, price: 50 }, expectSummary: /Sell limit order.*\b50 KAS per\b/ });
     const id = p.covenantIds[0];
     await openOrders(rc, [id]);
     const before = await rowView(h, id);
@@ -581,31 +633,42 @@ export async function runAmend(rc) {
   });
 }
 
-/** IOC buy below any ask (nothing fills): lives for its 60 s life; cancelled at once. */
+/**
+ * IOC buy below any ask (nothing fills): lives for its 60 s life (the most an IOC may have, counted from the ticket's clock, so a slow wallet
+ * approval eats into it); cancelled at once. On a network with keepers (the TN10 soak's executors) an expired IOC is killed within seconds: one
+ * that ended (killed / refunded) before the run could cancel it is reported as SKIP with its status, not as an app failure.
+ */
 export async function runIoc(rc) {
   return scenario(rc, 'ioc', async (r) => {
-    await placeAndCancel(rc, r, 'ioc-buy', { type: 'ioc', side: 'buy', fields: { amount: 2, price: 0.4, life: 60 }, expectSummary: /buy/i });
+    try {
+      await placeAndCancel(rc, r, 'ioc-buy', { type: 'ioc', side: 'buy', fields: { amount: 2, price: 0.4, life: 60 }, expectSummary: /Buy IOC limit order/ });
+    } catch (e) {
+      if (!(e instanceof OrderEnded) || !e.views.every((v) => v.status === 'killed' || v.status === 'refunded')) throw e;
+      const placed = r.steps.at(-1);
+      r.steps.push({ name: 'ioc ended before the cancel', rows: e.views, msSincePlacement: placed?.ms ?? null });
+      throw new Skip(`the IOC was ${e.views.map((v) => v.status).join(', ')} at its expiry (a keeper on the network) before the run could cancel it (placement took ${Math.round((placed?.ms ?? 0) / 1000)} s of its 60 s life)`);
+    }
   });
 }
 
 /** Stop (market) sell far below: waits unarmed; cancelled, the tokens come back. */
 export async function runStop(rc) {
   return scenario(rc, 'stop', async (r) => {
-    await placeAndCancel(rc, r, 'stop-sell', { type: 'stopMarket', side: 'sell', fields: { amount: 2, stop: 0.2 }, expectSummary: /stop/i }, { tokensBack: A(rc, 2) });
+    await placeAndCancel(rc, r, 'stop-sell', { type: 'stopMarket', side: 'sell', fields: { amount: 2, stop: 0.2 }, expectSummary: /Sell stop order/ }, { tokensBack: A(rc, 2) });
   });
 }
 
 /** OCO sell: take-profit far above, stop far below; cancelled, the tokens come back. */
 export async function runOco(rc) {
   return scenario(rc, 'oco', async (r) => {
-    await placeAndCancel(rc, r, 'oco-sell', { type: 'oco', side: 'sell', fields: { amount: 2, takeProfit: 60, stop: 0.2 }, expectSummary: /OCO/i }, { tokensBack: A(rc, 2) });
+    await placeAndCancel(rc, r, 'oco-sell', { type: 'oco', side: 'sell', fields: { amount: 2, takeProfit: 60, stop: 0.2 }, expectSummary: /Sell OCO order/ }, { tokensBack: A(rc, 2) });
   });
 }
 
 /** IFD buy-first (buy 2 at 0.5, exit take-profit 1): one entry, cancelled from its row (node only) or its position card (indexer). */
 export async function runIfd(rc) {
   return scenario(rc, 'ifd', async (r) => {
-    await placeAndCancel(rc, r, 'ifd-buy-first', { type: 'ifd', side: 'buy', fields: { amount: 2, price: 0.5, 'exit.takeProfit': 1 }, expectSummary: /IFD/i }, { position: true });
+    await placeAndCancel(rc, r, 'ifd-buy-first', { type: 'ifd', side: 'buy', fields: { amount: 2, price: 0.5, 'exit.takeProfit': 1 }, expectSummary: /Buy IFD entry/ }, { position: true });
   });
 }
 
@@ -614,9 +677,9 @@ export async function runPair(rc) {
   return scenario(rc, 'pair', async (r) => {
     if (!rc.tokenB) throw new Error('the pair scenario needs token B (issued with --only including pair)');
     const B = (n) => ({ token: rc.tokenB.tokenId, amount: n });
-    await placeAndCancel(rc, r, 'pair-limit-sell', { pair: true, type: 'limit', side: 'sell', fields: { amount: 2, price: 5 }, expectSummary: new RegExp(`${rc.tokenB.ticker}`) }, { tokensBack: A(rc, 2) });
+    await placeAndCancel(rc, r, 'pair-limit-sell', { pair: true, type: 'limit', side: 'sell', fields: { amount: 2, price: 5 }, expectSummary: new RegExp(`Sell limit order.*${rc.tokenB.ticker}`) }, { tokensBack: A(rc, 2) });
     // a buy of 1 A at 0.5 B: at least 0.5 B escrowed
-    await placeAndCancel(rc, r, 'pair-limit-buy', { pair: true, type: 'limit', side: 'buy', fields: { amount: 1, price: 0.5 }, expectSummary: new RegExp(`buys ${rc.token.ticker} with ${rc.tokenB.ticker}`) }, { tokensBack: B(TOKEN / 2n) });
+    await placeAndCancel(rc, r, 'pair-limit-buy', { pair: true, type: 'limit', side: 'buy', fields: { amount: 1, price: 0.5 }, expectSummary: new RegExp(`Buy limit order.*${rc.tokenB.ticker}`) }, { tokensBack: B(TOKEN / 2n) });
   });
 }
 
@@ -634,7 +697,7 @@ export async function runMarket(rc) {
     try {
       // the counterparty's resting bid
       const cpRc = { ...rc, ...cp, name: `${rc.name}-counterparty` };
-      const bid = await place(cpRc, r, 'counterparty-bid', { type: 'limit', side: 'buy', fields: { amount: 1, price: 0.6 }, expectSummary: /buy/i });
+      const bid = await place(cpRc, r, 'counterparty-bid', { type: 'limit', side: 'buy', fields: { amount: 1, price: 0.6 }, expectSummary: /Buy limit order.*\b0\.6 KAS per\b/ });
       // the wallet's market sell, once the indexer's book shows the bid (NO_LIQUIDITY until then)
       const t0 = Date.now();
       for (;;) {
@@ -646,17 +709,33 @@ export async function runMarket(rc) {
         if (!(await tid(rc.h, 'order-issue-NO_LIQUIDITY').count())) break;
         if (Date.now() - t0 > 120_000) throw new Error('the indexer book never showed the counterparty bid (NO_LIQUIDITY after 120 s)');
       }
-      const p = await place(rc, r, 'market-sell', { type: 'market', side: 'sell', fields: { amount: 1, life: 60 }, expectSummary: /market/i });
-      const placedStep = r.steps.at(-1);
-      if (!/0\.6\b/.test(placedStep.disclosure)) throw new Error(`the market disclosure does not start from the counterparty bid 0.6: ${placedStep.disclosure.slice(0, 400)}`);
+      // the confirmation must start the auction from the counterparty's bid (`Expected price (auction start)` 0.6). A wallet slower to approve
+      // than the auction's lead gets `clock-moved` after the app's own re-timings (nothing was sent; the app says "try again"): tried again
+      let p = null;
+      for (let attempt = 1; !p; attempt++) {
+        try {
+          p = await place(rc, r, 'market-sell', { type: 'market', side: 'sell', fields: { amount: 1, life: 60 }, expectSummary: /Sell market order \(auction\).*\b0\.6\b/ });
+        } catch (e) {
+          if (!/\(clock-moved\)/.test(String(e?.message)) || attempt >= 3) throw e;
+          r.steps.push({ name: `market sell attempt ${attempt}: clock-moved, nothing sent`, error: String(e.message).slice(0, 300) });
+          log(`[${rc.name}] market sell attempt ${attempt}: clock-moved (the wallet approved after the auction start), trying again`);
+        }
+      }
       await openOrders(rc, p.covenantIds);
-      const view = await rowView(rc.h, p.covenantIds[0]);
+      let view;
+      try {
+        view = (await waitLive(rc, p.covenantIds, 30_000))[0];
+      } catch (e) {
+        if (!(e instanceof OrderEnded)) throw e;
+        view = e.views[0];
+      }
       r.steps.push({ name: 'market order in My orders', row: view });
       if (view.live) await cancelStep(rc, r, 'market-sell', { placed: new Map([[p.txid, p.tx]]), covenantIds: p.covenantIds, tokensBack: A(rc, 1) });
       else log(`[${rc.name}] market sell ${short(p.covenantIds[0])} is ${view.status} (filled by a matcher?): not cancelled`);
       // the counterparty's bid: cancelled when still live
       await openOrders(cpRc, bid.covenantIds);
-      if ((await rowView(cp.h, bid.covenantIds[0])).live) await cancelStep(cpRc, r, 'counterparty-bid', { placed: new Map([[bid.txid, bid.tx]]), covenantIds: bid.covenantIds });
+      const bidLive = await waitLive(cpRc, bid.covenantIds, 30_000).then(() => true, () => false);
+      if (bidLive) await cancelStep(cpRc, r, 'counterparty-bid', { placed: new Map([[bid.txid, bid.tx]]), covenantIds: bid.covenantIds });
     } finally {
       await cp.close().catch(() => {});
     }
