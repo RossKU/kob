@@ -242,8 +242,12 @@ pub struct StepReport {
     pub accepted: usize,
     pub finalized: usize,
     pub rolled_back: usize,
-    /// The operator's spendable funding read this step (`None`: not read, nothing was planned).
+    /// The operator's spendable funding read this step (`None`: not read, nothing was planned): its P2PK UTXOs that no
+    /// pending transaction or reservation holds.
     pub funding: Option<u64>,
+    /// The operator's whole P2PK balance read this step, the UTXOs pending transactions hold included (they stay the
+    /// operator's until spent, and their change returns): what the low-funds alert judges.
+    pub funding_total: Option<u64>,
     /// Listed orders left out of this step because the node no longer holds their UTXO (spent in a block the book has not
     /// reached yet, [`gone_orders`]; always 0 while the book lags by less than `RunConfig::verify_live_min_lag`).
     pub gone: usize,
@@ -303,6 +307,7 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     pub waiting: Option<String>,
     /// The funding of the last step that read it (the metrics keep it while a step reads none).
     pub last_funding: Option<u64>,
+    pub last_funding_total: Option<u64>,
     /// What the surplus-inventory policy used in its current period (`maxFee`, `tokens[].maxAmount`).
     pub inventory_use: super::planner::InventoryUse,
     /// The node's fee estimate between steps (`crate::fee`).
@@ -473,6 +478,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             reservations: None,
             waiting: None,
             last_funding: None,
+            last_funding_total: None,
             inventory_use,
             keeper_inflight: BTreeMap::new(),
             keeper_subsidised: 0,
@@ -737,14 +743,22 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
     }
 
-    async fn funding(&self, spent: &BTreeSet<super::book::Outpoint>) -> Result<Vec<KeyUtxo>, RpcError> {
+    /// The spendable funding (P2PK UTXOs not in `spent`) and the whole P2PK balance.
+    async fn funding(&self, spent: &BTreeSet<super::book::Outpoint>) -> Result<(Vec<KeyUtxo>, u64), RpcError> {
         let pk = self.signer.pubkey();
         let addr = address_of(&pk, &self.cfg.network).to_string();
         let spk = p2pk_spk_string(&pk);
-        let utxos = self.node.utxos_by_addresses(&[addr]).await?;
-        Ok(utxos
+        let utxos: Vec<_> = self
+            .node
+            .utxos_by_addresses(&[addr])
+            .await?
             .into_iter()
-            .filter(|u| u.covenant_id.is_none() && u.script_public_key == spk && !spent.contains(&(u.transaction_id, u.index)))
+            .filter(|u| u.covenant_id.is_none() && u.script_public_key == spk)
+            .collect();
+        let total = utxos.iter().map(|u| u.amount).sum();
+        let free = utxos
+            .into_iter()
+            .filter(|u| !spent.contains(&(u.transaction_id, u.index)))
             .map(|u| KeyUtxo {
                 utxo: Utxo {
                     transaction_id: u.transaction_id,
@@ -755,7 +769,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 },
                 pubkey: pk,
             })
-            .collect())
+            .collect();
+        Ok((free, total))
     }
 
     /// The fee rates of a step that plans (`crate::fee`): the node's estimate is read at most every `refresh_ms`, the last good
@@ -899,9 +914,11 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         self.watch_ceded(&listed, daa);
         self.refresh_fees().await;
         let mut spent = self.reserved_or_spent();
-        let funding = self.funding(&spent).await?;
+        let (funding, total) = self.funding(&spent).await?;
         rep.funding = Some(funding.iter().map(|k| k.utxo.amount).sum());
+        rep.funding_total = Some(total);
         self.last_funding = rep.funding;
+        self.last_funding_total = rep.funding_total;
         let clock = Clock { daa, utc: utc_now() };
         // the orders the node no longer holds (the book lags the chain): never planned, by the matcher or the keepers
         // (only while the book lags by `verify_live_min_lag`: the node round trip costs races when the book is current)
@@ -1297,9 +1314,11 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                             tracing::info!(why = %why, "skipped");
                         }
                     }
-                    // only a funding actually read is judged (a step that planned nothing read none: not `0`)
-                    if let Some(f) = r.funding.filter(|f| *f < self.cfg.low_funds && !self.cfg.dry_run) {
-                        tracing::warn!(funding = f, "operator funds are low");
+                    // only a funding actually read is judged (a step that planned nothing read none: not `0`), and on the
+                    // whole balance: coins pending transactions hold are still the operator's (a busy operator's free
+                    // coins are often a few KAS while its balance is large)
+                    if let Some(f) = r.funding_total.filter(|f| *f < self.cfg.low_funds && !self.cfg.dry_run) {
+                        tracing::warn!(funding = f, spendable = r.funding.unwrap_or(0), "operator funds are low");
                     }
                 }
                 Err(e) => tracing::warn!(error = %e, "tick failed"),
@@ -1349,11 +1368,21 @@ pub fn metrics_text<N: NodeApi, S: BookSource>(r: &Runner<N, S>, rep: &StepRepor
     g("kob_matcher_tracked_txs", "Pending or accepted but not final.", t.txs.len().to_string());
     // the last funding read (a step that waited read none); unknown before the first read: no alert
     let funding = rep.funding.or(r.last_funding);
-    g("kob_matcher_funding_sompi", "Spendable operator P2PK balance.", funding.unwrap_or(0).to_string());
+    let total = rep.funding_total.or(r.last_funding_total);
+    g(
+        "kob_matcher_funding_sompi",
+        "Spendable operator P2PK balance (not held by pending transactions).",
+        funding.unwrap_or(0).to_string(),
+    );
+    g(
+        "kob_matcher_funding_total_sompi",
+        "Operator P2PK balance, pending transactions' inputs included.",
+        total.unwrap_or(0).to_string(),
+    );
     g(
         "kob_operator_low_funds",
-        "1 when funding is below the alert threshold.",
-        (funding.is_some_and(|f| f < r.cfg.low_funds) as u8).to_string(),
+        "1 when the operator's balance (pending inputs included) is below the alert threshold.",
+        (total.is_some_and(|f| f < r.cfg.low_funds) as u8).to_string(),
     );
     g(
         "kob_matcher_waiting_for_indexer",

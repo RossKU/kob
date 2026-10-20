@@ -291,6 +291,8 @@ async fn kill_switch_and_dry_run() {
     r.step().await.unwrap();
     let text = std::fs::read_to_string(&m).unwrap();
     assert!(text.contains("kob_matcher_funding_sompi 10000000000"));
+    assert!(text.contains("kob_matcher_funding_total_sompi 10000000000"));
+    assert!(text.contains("kob_operator_low_funds 0"));
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

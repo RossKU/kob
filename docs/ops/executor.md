@@ -2286,7 +2286,9 @@ process refuses group- or world-accessible files; on Windows it warns when anoth
 * Fund the key's P2PK address with a few days of operating KAS only; split it into several UTXOs
   (10 KAS or more each) so independent batches and keeper jobs can run in one tick. Change
   outputs chain within a tick.
-* Watch `kob_operator_low_funds` (below `--low-funds-kas`, default 100).
+* Watch `kob_operator_low_funds` (the operator's P2PK balance below `--low-funds-kas`, default 100; the coins pending
+  transactions hold count: they stay the operator's until spent). `kob_matcher_funding_sompi` is what a tick may spend
+  (not held by a pending transaction), `kob_matcher_funding_total_sompi` the whole balance.
 
 **Funding selection.** The tick orders the operator's spendable P2PK UTXOs by amount (largest first, then outpoint; the change
 outputs of the tick's earlier transactions after them). A batch first takes the largest; when the builder refuses it for
@@ -2451,7 +2453,7 @@ cannot be read counts as present (paused, with a warning).
 | `kob_matcher_last_step_seconds` | older than 60 s (process stuck or node unreachable) |
 | `kob_matcher_node_synced` | 0 for more than 5 min |
 | `kob_matcher_paused` | 1 unexpectedly |
-| `kob_operator_low_funds`, `kob_matcher_funding_sompi` | 1 / below N days of fees |
+| `kob_operator_low_funds`, `kob_matcher_funding_total_sompi` | 1 / below N days of fees |
 | `kob_matcher_rejected_total` | increasing (a stale plan or a bug: investigate the logs) |
 | `kob_matcher_conflicts_total` | a sharp rise (a faster competitor; consider the fee rate) |
 | `kob_select_share_match`, `kob_select_share_keep` | the share of the optional work the matcher (the keepers) takes per tick: 1 alone, about `1 / n` against `n − 1` competitors; at `--select-min-share` for long: an executor that takes everything competes for the same books |
