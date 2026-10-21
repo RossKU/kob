@@ -49,6 +49,9 @@ const ownedOf = async (mock: MockClient, pubkey: string) =>
 async function mergeOnce(page: Page, mock: MockClient, wallet: Parameters<typeof runFlow>[2]) {
   const before = (await shownAs(page)).length;
   await page.getByTestId(`orders-merge-token-${STD}`).click();
+  // the click plans before the new flow replaces the last one: until then the last merge's `flow-done` is still shown, and runFlow would take it
+  // for this merge's end and never confirm its popup (it cannot end again before its popup is confirmed)
+  await expect(page.getByTestId('flow-done')).toHaveCount(0, { timeout: 15_000 });
   await expect(page.getByTestId('tx-flow')).toContainText('Merge EXSTD UTXOs');
   // one transaction per click: no multi-step progress list
   await expect(page.getByTestId('flow-progress')).toHaveCount(0);
