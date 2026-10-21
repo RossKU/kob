@@ -20,6 +20,11 @@ ignore = [
   # crates; 0.9.0 is the last 0.9 release. Neither rusty-kaspa v2.1.0 nor KOB calls `hex_decode_unchecked` (KOB itself
   # depends on faster-hex 0.10.1, the first release with the fix). Removed when rusty-kaspa moves to faster-hex >= 0.10.1.
   { id = "RUSTSEC-2026-0306", reason = "transitive via rusty-kaspa v2.1.0; the affected function is not called" },
+  # webpki-roots 0.26.11 (emSign ECC Root CA - G3, distrusted emSign intermediates). Only via tokio-tungstenite 0.28 <-
+  # kob-executor. 0.26.11 is the semver-trick release that re-exports webpki-roots v1 (its only dependency, `parent = "1"`), and
+  # the lockfile resolves that to 1.0.10, the release that removes the root, so the roots the executor trusts are the fixed
+  # ones; the advisory matches 0.26.x by version only. Removed when kob-executor no longer pulls the 0.26 shim (a tokio-tungstenite on webpki-roots 1).
+  { id = "RUSTSEC-2026-0381", reason = "webpki-roots 0.26.11 re-exports webpki-roots 1.0.10 (fixed); via tokio-tungstenite 0.28 <- kob-executor" },
   # cargo-deny matches this advisory and RUSTSEC-2021-0145 by affected function / OS and reports them as not encountered
   # (a warning); cargo audit reports both. They stay listed so the two tools accept the same set.
   # atty 0.2.14: unaligned read on Windows with a custom global allocator; and unmaintained. Via hexplay <-
