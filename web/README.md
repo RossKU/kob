@@ -157,11 +157,13 @@ in the registry) shows the pair book, the panels of a token market and the order
   order's custody being spent or any token to another key. A cancel that would abandon strays (more than one transaction can move) offers "Sweep
   first". Cancels return foreign strays too. The placement record stays and points at the continuation.
 * **Merge tokens.** A token whose free UTXOs exceed what one transaction can spend (`TOKEN_UTXOS_FRAGMENTED`; KOB's standard program takes 3)
-  gets "Merge (n)" in My orders > Balances (`src/kob/merge.ts`): a chain of transfers to the wallet itself, the first 3 -> 1, each next the previous
-  output + 2 more, each valid on its own, at most 10 per run. Only the wallet's own plain UTXOs of the token (tracker, verified on the node) are
-  taken, never an open order's custody or strays. The freed carriers pay the fee (low bucket), a wallet coin only when they cannot (and for KRON).
-  The flow states the whole merge (UTXOs before / after, transactions, total fee); a later transaction is built only once the
-  previous one is on the node, from the node's UTXO.
+  gets "Merge (n)" in My orders > Balances (`src/kob/merge.ts`). One click = ONE transfer to the wallet itself of its smallest UTXOs, up to the
+  program's token inputs (3 -> 1), for a wallet and the private-key signer alike: a merge is manual and costs a fee, so the user decides each
+  transaction and clicks again to merge more; nothing merges automatically (`planMerge` can still build a chain of links, `maxLinks`; the app
+  plans one). Only the wallet's own plain UTXOs of the token (tracker, verified on the node) are taken, never an open order's custody or strays.
+  The freed carriers pay the fee (low bucket), a wallet coin only when they cannot (and for KRON). The confirmation states the UTXOs merged and
+  the count before / after, the KAS the merge frees (the merged UTXOs' carriers less the one the output keeps, less the fee; each token UTXO
+  carries ~2 KAS, so freeing them is the point) and how many mergeable UTXOs remain.
 
 ## Wallet events
 

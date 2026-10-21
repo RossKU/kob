@@ -1,5 +1,6 @@
-// "Merge tokens" in My orders > Balances: which token UTXOs a merge may take, how many per token, the flow steps of a planned merge and the summary
-// the confirmation screens show. Pure; the chain itself is kob/merge.ts.
+// "Merge tokens" in My orders > Balances: which token UTXOs a merge may take, how many per token, the flow step of a planned merge and the summary
+// its confirmation shows. One click = ONE transaction (planMergeFor plans one link: the smallest up-to-3 UTXOs into one): a merge is manual and
+// every transaction costs a fee, so the user decides each one and clicks again to merge more. Pure; the builder is kob/merge.ts.
 import type { OrderView, StrayView } from '../../data/indexer-types';
 import { t } from '../../i18n';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
@@ -52,22 +53,36 @@ export function mergeableCounts(freeTokens: readonly TokenUtxo[], tokens: Readon
   return out;
 }
 
-/** The whole merge in one line (shown while each transaction of the chain runs). */
-export const mergeSummary = (plan: Pick<MergePlan, 'before' | 'after' | 'links' | 'fee'>, ticker: string): string =>
-  t('orders.merge.summary', { ticker, before: plan.before, after: plan.after, txs: plan.links.length, fee: formatKas(plan.fee) });
+/**
+ * The merge in a few sentences (shown on its confirmation): how many UTXOs it merges and the count before / after, the KAS it frees (the merged
+ * UTXOs' carriers, less the one the merged output keeps, less the fee: the reason to merge at all; when the fee exceeds the freed carriers, the
+ * net cost instead) and how many mergeable UTXOs are left for the next click. Written for the app's one-link plan; a chain says its count.
+ */
+export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged' | 'freed' | 'links' | 'fee'>, ticker: string): string {
+  const head =
+    plan.links.length > 1
+      ? t('orders.merge.summaryChain', { ticker, merged: plan.merged, before: plan.before, after: plan.after, txs: plan.links.length })
+      : t('orders.merge.summary', { ticker, merged: plan.merged, before: plan.before, after: plan.after });
+  const kas =
+    plan.freed > 0n
+      ? t('orders.merge.freed', { freed: formatKas(plan.freed), fee: formatKas(plan.fee) })
+      : t('orders.merge.costs', { cost: formatKas(-plan.freed), fee: formatKas(plan.fee) });
+  const rest = plan.after >= 2 ? t('orders.merge.more', { after: plan.after }) : t('orders.merge.last');
+  return `${head} ${kas} ${rest}`;
+}
 
 /** A link as a flow plan (TxFlow takes the built transaction and the claims to check). */
 export function mergeFlowPlan(link: MergeLink): CancelPlan {
   return { ok: true, issues: link.issues, request: null, built: link.built, cancelIds: [], expected: { cancelIds: [] }, tokensReturned: 0n, kasReleased: 0n, fundingUsed: link.fundingUsed };
 }
 
-/** Link `n` (0-based) of `total` as a flow step. */
-export function mergeStep(link: MergeLink, n: number, total: number, summary: string): FlowStep {
+/** The merge's one transaction as a flow step, its confirmation showing `summary`. */
+export function mergeStep(link: MergeLink, summary: string): FlowStep {
   return {
-    title: total > 1 ? t('orders.merge.step', { n: n + 1, total }) : t('orders.merge.title'),
+    title: t('orders.merge.title'),
     plan: mergeFlowPlan(link),
     spends: [],
-    shownAs: total > 1 ? `${summary} ${t('orders.merge.stepOf', { n: n + 1, total })}` : summary,
+    shownAs: summary,
     toast: t('orders.merge.submitted', { count: link.inputs.length }),
   };
 }

@@ -98,6 +98,26 @@ describe('planMerge on the standard program (real kob-wasm builds)', () => {
     });
   });
 
+  it('maxLinks 1 (the app: one transaction per click): the 3 smallest into one, the KAS it frees, the mergeable UTXOs left', () => {
+    const set = utxos(7);
+    const plan = planMerge(env(), STD, [...set].reverse(), new Set(), 1);
+    expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
+    expect(plan.links).toHaveLength(1);
+    expect(plan.groups.map((g) => g.map((u) => u.state.amount))).toEqual([['10', '20', '30']]);
+    expect([plan.before, plan.merged, plan.after]).toEqual([7, 3, 5]);
+    expect(plan.amount).toBe(60n);
+    // three 2 KAS carriers in, the merged output keeps one: 4 KAS less the fee returns as KAS change (no wallet coin needed)
+    const l = plan.links[0]!;
+    expect(l.fundingUsed).toEqual([]);
+    expect(plan.freed).toBe(4n * KAS - plan.fee);
+    const kasBack = l.built.tx.outputs.filter((o) => !o.covenant).reduce((s, o) => s + BigInt(o.value), 0n);
+    expect(kasBack).toBe(plan.freed);
+    signAndValidate(kob, l.built, [MAKER.sk]);
+    // a wallet coin added for the fee comes back as change: it is not counted as freed
+    const funded = planMerge(env(), STD, utxos(3, 2_000_000n), new Set(), 1);
+    expect(funded.freed).toBe(3n * 2_000_000n - funded.links[0]!.output.carrier - funded.fee);
+  });
+
   it('a later link rebuilt over the node-read output equals the planned one', () => {
     const plan = planMerge(env(), STD, utxos(5));
     const carry = mergeCarry(plan.links[0]!, plan.links[0]!.built.tx.id, STD, { amount: (2n * KAS).toString(), blockDaaScore: '900' });

@@ -26,7 +26,7 @@ import { filledAmountOf } from './OrderFills';
 import { downloadText, exportFileName } from '../kit/download';
 import { backupFileText } from './recover';
 import {
-  abandoningOrders, abandonsStrays, describeActionError, liveExitsOfRepeatEntry, markCancelling, nextMergeLink, rawActionError, planCancelFor, planCancelMany, planMergeFor,
+  abandoningOrders, abandonsStrays, describeActionError, liveExitsOfRepeatEntry, markCancelling, rawActionError, planCancelFor, planCancelMany, planMergeFor,
   planRefundFor, planSweepFor, planSweepMany, warnEntryOnly,
 } from './actions';
 import { amendKind, describeEntries, entryState, countByStatus, type OrderRowModel } from './orders-model';
@@ -226,27 +226,17 @@ export function OrdersView() {
   // the open orders' custodies and strays: a merge never spends them
   const reserved = useMemo(() => reservedOutpoints(d), [d]);
 
-  /** Merges the wallet's plain UTXOs of `token` into one: a chain of transfers to itself, each signed on its own confirmation screen. */
+  /**
+   * Merges the wallet's smallest plain UTXOs of `token` (up to the program's token inputs, 3) into one: ONE transfer to itself per click, its
+   * confirmation stating the KAS it frees and how many mergeable UTXOs remain; the user clicks again to merge more.
+   */
   const mergeToken = (token: Hex) =>
     void guarded(`merge-${token}`, async () => {
       const info = tokenOf(token);
       if (!pubkey || !info) return;
       const plan = await planMergeFor(services, pubkey, info, reserved);
       if (!plan.ok) return setPlanFail({ plans: [mergeFailure(plan)], failed: [] });
-      const summary = mergeSummary(plan, info.ticker);
-      const total = plan.links.length;
-      let prev = plan.links[0]!;
-      startFlow(
-        t('orders.merge.heading', { ticker: info.ticker }),
-        plan.links.map((l, i) => mergeStep(l, i, total, summary)),
-        {
-          next: async (k, r) => {
-            const link = await nextMergeLink(services, pubkey, info, plan, k, prev, r.txid);
-            prev = link;
-            return mergeStep(link, k, total, summary);
-          },
-        },
-      );
+      startFlow(t('orders.merge.heading', { ticker: info.ticker }), [mergeStep(plan.links[0]!, mergeSummary(plan, info.ticker))]);
     });
 
   const onCancelPosition = (p: Position) => cancelMany(t('orders.flow.positionHeading'), p.cancelIds, p.id);

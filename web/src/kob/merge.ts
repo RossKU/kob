@@ -5,14 +5,17 @@
 //     reserves; smallest first, ties by outpoint (the soak's `selectMergeChain` rule);
 //   * a CHAIN of `sendTokens` transfers to the wallet key: the first takes up to the program's token inputs (KOB's standard KCC20Ref: 3), every
 //     next one the previous output plus up to inputs - 1 more, so one pass ends with ONE UTXO (3 -> 1, then 1 + 2 -> 1, ...). Each link is a
-//     transfer of at most the program's inputs into one output, valid on its own;
+//     transfer of at most the program's inputs into one output, valid on its own. `planMerge`'s `maxLinks` bounds the chain: the web app plans
+//     exactly ONE link per click (a merge is manual and every link costs a fee, so the user decides each one: one click = one 3 -> 1 transaction
+//     of the smallest UTXOs, click again to merge more); the full chain stays available for callers that want it (tests; the CLI and the soak
+//     run their own merge code);
 //   * the merged output keeps the largest input carrier (at most the default 2 KAS carrier, at least the program's floor); the other carriers
 //     are freed and pay the fee, the rest returns as KAS change. Only when they do not cover it (or a KRON transfer, which needs a P2PK input of
 //     the owner) is a wallet KAS UTXO added;
 //   * fee: the LOW bucket of the fee policy (housekeeping, matcher.md 9; the soak's merges and the executor's maintenance pay the same).
 // A link after the first spends an output that exists only once the previous link is accepted: `planMerge` builds the whole chain against
-// provisional outpoints (the count, fee and result shown before anything is signed); the app rebuilds each later link from the node's UTXO
-// after the previous one is accepted (`mergeCarry` + `buildMergeLink`). Pure (no I/O).
+// provisional outpoints (the count, fee and result shown before anything is signed); a caller running a chain rebuilds each later link from the
+// node's UTXO after the previous one is accepted (`mergeCarry` + `buildMergeLink`). Pure (no I/O).
 import { buildWithCap, recordFee, withUrgency, type FeeContext, type RatePick } from './fee-policy';
 import { MAX_TOKEN_INPUTS } from './guards';
 import { DEFAULT_CARRIER, tokenCarrierFloor } from './orders/common';
@@ -71,9 +74,17 @@ export interface MergePlan {
   groups: TokenUtxo[][];
   /** the chain built against provisional outpoints (link k > 0 spends link k - 1's output under its unsigned id) */
   links: MergeLink[];
-  /** mergeable UTXOs before / after the whole chain */
+  /** mergeable UTXOs before / after the planned links (the merged output counts: it is mergeable again with the rest) */
   before: number;
   after: number;
+  /** the wallet's original UTXOs the planned links merge (the sum of `groups`' lengths) */
+  merged: number;
+  /**
+   * KAS the merge returns to the wallet: the carriers of the merged token UTXOs, less the one the merged output keeps, less the fees. The freed
+   * carriers are the point of a merge (each token UTXO carries a carrier, by default 2 KAS); a wallet KAS input added for the fee comes back as
+   * change, so it is not part of it. Negative when the fees exceed the freed carriers (tiny carriers, KRON).
+   */
+  freed: bigint;
   /** base units merged into the final output */
   amount: bigint;
   /** sum of the links' fees (the signed transactions pay at most this: finalizing only shrinks the compute budgets) */
@@ -214,18 +225,20 @@ export function mergeCarry(link: MergeLink, txid: Hex, token: Pick<MergeToken, '
   };
 }
 
-const failedPlan = (issues: PlanIssue[], before: number): MergePlan => ({ ok: false, issues, groups: [], links: [], before, after: before, amount: 0n, fee: 0n });
+const failedPlan = (issues: PlanIssue[], before: number): MergePlan => ({ ok: false, issues, groups: [], links: [], before, after: before, merged: 0, freed: 0n, amount: 0n, fee: 0n });
 
 /**
- * The whole merge of `token` for the wallet key: the candidates, the chain's groups, and every link built (the later ones against the previous
- * link's provisional outpoint), so the count, the result and the fee are known before anything is signed.
+ * The merge of `token` for the wallet key: the candidates, the chain's groups (at most `maxLinks`), and every link built (the later ones against
+ * the previous link's provisional outpoint), so the count, the result, the fee and the KAS freed are known before anything is signed. With
+ * `maxLinks = 1` (the web app) it is ONE transaction of the smallest up-to-`inputs` candidates into one output; `after` then says how many
+ * mergeable UTXOs are left for the next click.
  */
-export function planMerge(env: MergeEnv, token: MergeToken, utxos: readonly TokenUtxo[], reserved: ReadonlySet<string> = new Set()): MergePlan {
+export function planMerge(env: MergeEnv, token: MergeToken, utxos: readonly TokenUtxo[], reserved: ReadonlySet<string> = new Set(), maxLinks: number = MAX_MERGE_TXS): MergePlan {
   const cands = mergeCandidates(utxos, token, env.maker, reserved);
   const before = cands.length;
   const slots = mergeSlots(token);
   const cap = familyOfProgram(token.program) === 'kron' ? KRON_MAX_OUTPUT_AMOUNT : I64_MAX;
-  const groups = mergeGroups(cands, slots, MAX_MERGE_TXS, cap);
+  const groups = mergeGroups(cands, slots, Math.max(1, Math.min(maxLinks, MAX_MERGE_TXS)), cap);
   if (!groups.length) return failedPlan([issue('merge.nothing', 'error', 'fewer than two token UTXOs of this token can be merged', { count: before })], before);
   const links: MergeLink[] = [];
   const spent = new Set<string>();
@@ -239,6 +252,8 @@ export function planMerge(env: MergeEnv, token: MergeToken, utxos: readonly Toke
   }
   const merged = groups.reduce((n, g) => n + g.length, 0);
   const last = links[links.length - 1]!;
+  const fee = links.reduce((s, l) => s + l.fee, 0n);
+  const carriers = groups.flat().reduce((s, u) => s + big(u.amount), 0n);
   return {
     ok: true,
     issues: links.flatMap((l) => l.issues),
@@ -246,7 +261,9 @@ export function planMerge(env: MergeEnv, token: MergeToken, utxos: readonly Toke
     links,
     before,
     after: before - merged + 1,
+    merged,
+    freed: carriers - last.output.carrier - fee,
     amount: big(last.output.state.amount),
-    fee: links.reduce((s, l) => s + l.fee, 0n),
+    fee,
   };
 }

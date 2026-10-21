@@ -51,7 +51,7 @@ also spends from the DEV key: about 3 KAS for the counterparty bid, returned by 
 
 ## Scenarios (per wallet, in this order)
 
-Every placement, cancel, amend and merge link goes from the app's button straight to the wallet (the app's own pre-sign checks run silently; a
+Every placement, cancel, amend and merge goes from the app's button straight to the wallet (the app's own pre-sign checks run silently; a
 check that stops the order shows one line, `order-status` / `flow-status`, and stops the run), the wallet popup approved on TN10, then the node: the covenant outputs of a placement are unspent, the outpoints a cancel / amend spends are gone and
 its own covenant outputs exist (the submitted transaction is read from the page's wRPC frames, or from the HTTP submit body with `--mock`, not
 from app state). What a placement orders is checked on the app's final confirmation (`confirm-order`: title, net effect, the order's terms)
@@ -73,7 +73,7 @@ row does not have is empty at once, never a 30 s locator wait). A failed scenari
 | ifd | IFD buy-first 2 @ 0.5 with exit take-profit 1, cancelled from its row (node only) or its position card (`position-cancel-<id>`, with an indexer). |
 | pair | On the pair page `#/market/<A>/<B>`: limit sell 2 A @ 5 B (escrows A) and limit buy 1 A @ 0.5 B (escrows B), each cancelled, the escrow back. |
 | market | Needs an indexer (SKIP otherwise): the DEV key (`maker` with `--mock`), driven through the same app in its own browser with an in-page signer (`features.test`, injected config only), rests a limit buy of 1 A @ 0.6; the wallet market-sells 1 A into it once the book shows it (the confirmation's auction must start from 0.6; a `clock-moved` stop, nothing sent, is tried again up to 3 times). If a matcher fills it, that is recorded; else it is cancelled. The counterparty bid is cancelled when still live. |
-| merge | My orders > Balances: `orders-merge-token-<A>` ("Merge (n)") -> the chain of transfers to itself (at most 3 token inputs each), one wallet approval per link (`flow-shown-as` states the merge); the last link's single token output is unspent on the node and holds the whole supply; the button disappears. |
+| merge | My orders > Balances: `orders-merge-token-<A>` ("Merge (n)") -> one transfer to itself of the smallest up-to-3 token UTXOs per click, one wallet approval each (`flow-shown-as` states the UTXOs merged, the count before / after and the KAS freed), clicked until the button disappears; the last merge's single token output is unspent on the node and holds the whole supply. |
 | balances | Balances panel: for A and B free = 1,000,000, nothing in orders, no strays; no order left live. |
 
 Covenant-signing gate: a wallet the app does not know to sign covenant inputs (Kastle) is asked once for a test signature before its first order

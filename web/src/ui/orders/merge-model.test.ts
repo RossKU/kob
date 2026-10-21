@@ -42,19 +42,36 @@ describe('mergeableCounts', () => {
   });
 });
 
-describe('merge flow steps', () => {
-  it('one step per link; every screen says the whole merge and which transaction it is', () => {
-    const set = Array.from({ length: 5 }, (_, i) => tokenUtxo(BigInt(10 * (i + 1)), MAKER.pk, 0x90 + i, 2n * KAS));
-    const plan = planMerge({ kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 10n * KAS)] }, mergeTokenOf(info)!, set);
+describe('merge flow step (one transaction per click)', () => {
+  const set = Array.from({ length: 5 }, (_, i) => tokenUtxo(BigInt(10 * (i + 1)), MAKER.pk, 0x90 + i, 2n * KAS));
+  const one = () => planMerge({ kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 10n * KAS)] }, mergeTokenOf(info)!, set, new Set(), 1);
+
+  it('the app plans one link: its confirmation says what it merges, the KAS it frees and how many mergeable UTXOs remain', () => {
+    const plan = one();
     expect(plan.ok).toBe(true);
+    expect(plan.links).toHaveLength(1);
+    // three 2 KAS carriers in, one kept by the merged output: 4 KAS less the fee come back
+    expect(plan.freed).toBe(4n * KAS - plan.fee);
     const summary = mergeSummary(plan, info.ticker);
-    expect(summary).toMatch(/^Merge 5 TST UTXOs into 1: 2 transaction\(s\), total fee about 0\.\d+ KAS\.$/);
-    const steps = plan.links.map((l, i) => mergeStep(l, i, plan.links.length, summary));
-    expect(steps.map((s) => s.title)).toEqual(['Merge, transaction 1 of 2', 'Merge, transaction 2 of 2']);
-    expect(steps[1]!.shownAs).toBe(`${summary} This is transaction 2 of 2.`);
-    expect(steps[0]!.plan.built).toBe(plan.links[0]!.built);
-    expect(steps[0]!.spends).toEqual([]);
-    expect(steps[0]!.toast).toBe('Submitted: 3 token UTXOs merged into one.');
+    const freed = (Number(plan.freed) / 1e8).toString().replace('.', '\\.');
+    expect(summary).toMatch(
+      new RegExp(
+        `^Merge your 3 smallest TST UTXOs into one in one transaction: 5 UTXOs become 3\\. About ${freed} KAS of their carriers returns to your wallet \\(after the fee of about 0\\.\\d+ KAS\\)\\. 3 mergeable UTXOs remain: click Merge again to merge more\\.$`,
+      ),
+    );
+    const step = mergeStep(plan.links[0]!, summary);
+    expect(step.title).toBe('Merge tokens');
+    expect(step.shownAs).toBe(summary);
+    expect(step.plan.built).toBe(plan.links[0]!.built);
+    expect(step.spends).toEqual([]);
+    expect(step.toast).toBe('Submitted: 3 token UTXOs merged into one.');
     expect(mergeFailure({ issues: [{ code: 'merge.nothing', severity: 'error', message: 'x' }] }).ok).toBe(false);
+  });
+
+  it('the last merge says nothing is left; a fee above the freed carriers is stated as a net cost', () => {
+    const last = mergeSummary({ ...one(), before: 3, after: 1 }, info.ticker);
+    expect(last).toMatch(/ One UTXO remains: nothing more to merge\.$/);
+    const cost = mergeSummary({ ...one(), freed: -1_000_000n, fee: 3_000_000n }, info.ticker);
+    expect(cost).toContain('The fee of about 0.03 KAS exceeds the carriers it frees: your wallet pays about 0.01 KAS net.');
   });
 });
