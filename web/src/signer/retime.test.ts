@@ -29,6 +29,18 @@ describe('sameOrBetter', () => {
     expect(sameOrBetter(later, approved)).toBe(false);
   });
 
+  it('a market buy of several fills (a resting auction) planned 15 s later: only its times moved, no second confirmation', () => {
+    const multi = buildIntent(form('market', 'buy', { amount: '10', maxFills: '3' }), CTX).intent!;
+    const a = planOrder(at(0n), multi);
+    expect(auctionSubmitBy(a.states, at(0n).clock.daa)).not.toBeNull();
+    const approved = decode(a);
+    const later = decode(planOrder(at(150n), multi));
+    expect(approved.orders[0]!.description.tif).toBe('gtc');
+    expect(later.orders[0]!.description.expiryDaa - approved.orders[0]!.description.expiryDaa).toBe(150n);
+    expect(sameOrBetter(approved, later)).toBe(true);
+    expect(sameOrBetter(later, approved)).toBe(false);
+  });
+
   // the ticket re-times an order with an auction starting now (wallet/sign.ts `auctionSubmitBy`: the only orders re-timed) on the environment it
   // was planned on (OrderTicket.tsx `retimer`): only the clock moves, by a long read of the confirmation (10 to 60 s) or a slow wallet (its
   // signing time, capped at 60 s, plus three re-timing steps: ui/confirm/signing-time.ts, up to 70 s) plus the re-timing lead;

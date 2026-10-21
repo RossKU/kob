@@ -34,6 +34,8 @@ export interface TicketFieldsProps {
   flip?: FlipCtx;
   /** a token/token pair: the ticker of the quote token B the prices are typed in (B per whole `ticker`); absent = KAS. Tips stay KAS. */
   quoteTicker?: string;
+  /** a line the ticket says next to a field, by field id (the Fills box: the visible book's estimate, fills-note.ts) */
+  notes?: Record<string, string>;
 }
 
 /** What the fields need to speak the shown (inverted) market: the token's name, its scale and a KAS price per whole token to turn amounts into KAS. */
@@ -110,7 +112,8 @@ export function TicketFields(props: TicketFieldsProps) {
         // the inverted market drops "(per token)": the unit next to the box says what the amount is
         const label = t(props.flip && has(`ticket.label.${id}.inv`) ? `ticket.label.${id}.inv` : labelKey(form.type, id));
         // an inverted market has its own wording where the native help speaks of buying / selling the token
-        const helpKey = props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
+        // a market order's Fills box has its own help on either view (it speaks of transactions, not of a limit's escrow)
+        const helpKey = id === 'maxFills' && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
         const help = has(helpKey) ? t(helpKey, { ticker, quote: props.quoteTicker ?? 'KAS' }) : undefined;
         const phKey = has(`ticket.ph.${id}.${form.type}`) ? `ticket.ph.${id}.${form.type}` : `ticket.ph.${id}`;
         // a token without decimals takes whole numbers: its amount box says "0", not "0.0"
@@ -278,6 +281,15 @@ export function TicketFields(props: TicketFieldsProps) {
             <span key={props.available}>{props.available}</span>
           </button>
         ) : undefined;
+        const note = props.notes?.[id];
+        if (note) {
+          hint = (
+            <>
+              <span class="tk-fills" data-testid={`${spec.testid}-note`} title={note}><span key={note}>{note}</span></span>
+              {hint}
+            </>
+          );
+        }
         const field = (
           <Field
             key={id}

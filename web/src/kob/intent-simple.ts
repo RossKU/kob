@@ -82,10 +82,17 @@ interface AuctionOptions {
   allOrNothing?: boolean;
 }
 
-/** Market: an IOC auction from the touch (best opposite price) to the slippage bound (matcher.md 10.2). Needs a non-empty opposite book. */
+/**
+ * Market: an IOC auction from the touch (best opposite price) to the slippage bound (matcher.md 10.2). Needs a non-empty opposite book.
+ * `maxFills` > 1 (not with `allOrNothing`): the same auction as a short-lived RESTING order (tif 0) that keeps trading within the bound across up
+ * to that many transactions (one transaction takes at most the token's slots of counterparties, 3 asks on KOB's standard program); what is not
+ * filled when it expires shortly after the auction is refunded (orders/simple.ts `planAuction`).
+ */
 export interface MarketIntent extends SimpleBase, AuctionOptions {
   type: 'market';
   side: 'sell' | 'buy';
+  /** fills (transactions) the order may take; default 1 = one IOC transaction. A buy budgets one delivery carrier per fill. */
+  maxFills?: bigint;
 }
 
 /** Streaming / quote-and-execute (10.3): as market, but from the price the user saw, with their tolerance. */

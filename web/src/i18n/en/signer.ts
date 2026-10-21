@@ -64,6 +64,7 @@ export default {
   'signer.flip.type.limitDay': 'day limit',
   'signer.flip.type.market': 'market (auction)',
   'signer.flip.type.marketFok': 'market, all or nothing',
+  'signer.flip.type.marketFills': 'market (auction, several fills)',
   'signer.flip.type.ioc': 'IOC limit',
   'signer.flip.type.fok': 'FOK limit',
   'signer.flip.type.twap': 'TWAP',

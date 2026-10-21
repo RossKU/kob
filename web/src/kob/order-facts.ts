@@ -311,6 +311,21 @@ export interface OrderDescription {
 }
 
 const TIF: Record<string, TifName> = { '0': 'gtc', '1': 'ioc', '2': 'fok' };
+
+/**
+ * The whole life (activeFrom to expiry, DAA) up to which a resting decaying auction of a plain KAS order reads as a MULTI-FILL MARKET order
+ * (orders/simple.ts `planAuction` with fills > 1: the market auction as tif 0, expiring shortly after it reaches its bound; 300 DAA by default):
+ * one hour. A Dutch / rising order or a crossing limit auction rests for days (GTC / GTD / day), so none of them is that short in practice.
+ */
+export const MARKET_FILLS_MAX_LIFE_DAA = 36_000n;
+
+/** A plain KAS order that is a multi-fill market order: resting (tif 0), one decaying auction (no schedule), a life of at most an hour. */
+export function isMultiFillMarket(d: Pick<OrderDescription, 'kind' | 'pair' | 'tif' | 'auction' | 'activeFrom' | 'expiryDaa'>): boolean {
+  const k = baseKind(d.kind);
+  const a = d.auction;
+  if (d.pair || (k !== 'KobAsk' && k !== 'KobBid') || d.tif !== 'gtc' || !a || a.interval > 0n || a.slope <= 0n || d.activeFrom <= 0n) return false;
+  return d.expiryDaa > d.activeFrom && d.expiryDaa - d.activeFrom <= MARKET_FILLS_MAX_LIFE_DAA;
+}
 const ZERO32 = '00'.repeat(32);
 
 /**

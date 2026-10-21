@@ -121,7 +121,11 @@ power is left: the unfilled remainder, worth less than one minimum fill plus one
 Wallet default: the amount worth 10 KAS (`DEFAULT_MIN_FILL_SOMPI`, a notional independent of the carrier) at the order's
 limit price, at least 1 base unit and at most the order's amount (a pair order: the amount of A worth 10 KAS on A's KAS
 book, read at the bid where the bids, best first, are worth 10 KAS together, or at the midpoint with the best ask when
-that ask is at most twice that bid: an ask nobody has to take never sets it, nor does a small bid above the others); IOC, FOK and market orders 1 base unit; if-done entries `⌈amount / 4⌉` (*Defaults*). At the default carrier the
+that ask is at most twice that bid: an ask nobody has to take never sets it, nor does a small bid above the others); IOC, FOK and market orders 1 base unit; if-done entries `⌈amount / 4⌉` (*Defaults*). A market order of
+several fills (tif 0) takes the smaller of the 10 KAS amount at its worst price and the smallest crossing counterparty of
+the visible book: a fill of at least one whole counterparty (at most 3 per transaction on the standard program) is never
+below it, and a filler can at most spend its N budgeted fills on fills of that size (the carriers stay the maker's on the
+delivered token UTXOs; the rest is refunded at the expiry, within a minute). At the default carrier the
 carriers a filler can make the maker lock are at most 20% of the order's notional, and one fill's fee (paid by the filler)
 is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fill (KaspaCom on both sides the highest;
 `DEFAULT_MIN_FILL_SOMPI`).
@@ -202,7 +206,7 @@ Every order type below exists on a pair too (*Pair orders*); the table names the
 | GTD / date | both | any, `expiryDaa` | as limit until expiry | refundable from the date |
 | Day | both | any, `expiryDaa` + placement `deadline` | as limit until 00:00 UTC | ends at 00:00 UTC (09:00 JST) |
 | Timed activation | both | any, `activeFrom` | no fill before `activeFrom` | starts at the chosen time |
-| Market | both | `KobAsk` / `KobBid`, tif 1 (IOC), `slope`, `decayStep` 1, `minFill` 1 | IOC auction from the touch to the slippage bound (default 3% over 20 s) | fills near the market, never beyond the bound; unfilled rest returned |
+| Market | both | `KobAsk` / `KobBid`, tif 1 (IOC), `slope`, `decayStep` 1, `minFill` 1; with **fills** N > 1: tif 0, the same auction, expiry `activeFrom + max(life, auction + 100 DAA)` (300 DAA by default), a buy's escrow `bidEscrow(order, amount, N)` | IOC auction from the touch to the slippage bound (default 3% over 20 s); fills N > 1: the same auction resting for that short life, so it keeps trading within the bound across up to N transactions | fills near the market, never beyond the bound; fills 1: one transaction (at most the token's input slots of asks, 3 on the standard program; a sell at most its output slots of bids, one less while it leaves a rest), the unfilled rest returned at once; fills N: what is left at the expiry is refunded by anyone (refund tip) or cancelled |
 | IOC / FAK | both | tif 1 | fills what crosses now; remainder returned in the same transaction (sell: at the custody input's index) | killed by anyone after 60 s at the latest |
 | FOK | both | tif 2 | all or nothing in one transaction | killed by anyone after 60 s at the latest |
 | Streaming (quote-and-execute) | both | as market, from the displayed price | IOC or FOK auction | fills at the displayed price or better within the tolerance |
@@ -481,6 +485,8 @@ KAS price series; a netted or inventory pair fill shows as volume only.
 | tip | 0 |
 | minimum fill (`minFill`) | the amount worth 10 KAS (`DEFAULT_MIN_FILL_SOMPI`, a notional, not a carrier) at the limit price, at least 1 base unit, at most the amount (a pair order: the amount of A worth 10 KAS on A's KAS book, `default_min_fill_pair`; `⌈amount / 4⌉` without a KAS quote of A); IOC / FOK / market orders 1 base unit; if-done entries `⌈amount / 4⌉` |
 | market auction (token and pair) | 3% bound over 200 DAA (20 s), activation +30 DAA, IOC life 300 DAA |
+| market order fills | 1 (one IOC transaction); N > 1 (at most 64, never above `⌈amount / minFill⌉`): the auction as tif 0, at the bound for at least 100 DAA after it (`MARKET_FILLS_TAIL_DAA`); a buy deposits N delivery carriers; pair market orders stay one transaction |
+| fills of a buy that crosses the book (a limit buy, a rising bid whose end crosses) | the default `min(⌈amount / minFill⌉, 3)` raised to what the visible asks it crosses need (3 per transaction, one more when a rest will rest), at most 10 (`MAX_DEFAULT_CROSSING_FILLS`); the user's own value stands, with a warning when it is short |
 | stop band / auction | 3% (`slipBps` 300) over 300 DAA (30 s) |
 | trigger rest / threshold (per order, the wallet exposes both) | 5 s (`minRestDaa` 50) / `minTouch` = the larger of the order's own `minFill` and 25% of its amount, at most the amount (`defaults::default_min_touch`, `matcher.md` §4.3; presets: min fill / 25% / 50% / 100% of the order's own amount, or custom); a pair stop in mode 0 also needs `⌈minTouch·stop / scale(A)⌉` of B traded |
 | keeper tip (arm / trail, taken by the arming matcher) | 0.022 KAS (KCC-20 programs), 0.020 KAS (KRON), 0.038 KAS (pair orders): measured per token program (`data/keeper_tips.json`) and per program pair of a pair order (`data/pair_keeper_tips.json`); `matcher.md` §10.6 |

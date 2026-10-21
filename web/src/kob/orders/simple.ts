@@ -4,7 +4,7 @@
 // Reference: docs/spec/order-types.md, docs/spec/matcher.md sections 2.1 (quote functions), 10.2-10.5 (market, streaming, FOK / IOC,
 // marketable limit), 10.10 (day orders), contracts/v2/KobAsk.sil and KobBid.sil. User-input problems are `issues` (stable codes,
 // see ISSUE_CATALOG in common-issues.ts); nothing here throws for them.
-import type { Disclosure, OrderPlan, PlanEnv, PlanIssue } from '../plan-types';
+import type { Disclosure, OrderPlan, PlanEnv, PlanFills, PlanIssue } from '../plan-types';
 import type { OrderState } from '../types';
 import type {
   Activation, CloseIntent, DcaIntent, DutchIntent, FokIntent, IocIntent, Lifetime, LimitIntent, MarketIntent, SimpleIntent, StreamingIntent, TwapIntent,
@@ -16,7 +16,7 @@ import {
 } from '../daa';
 import {
   checkAmount, checkCarrierRatio, checkFok, checkMinFill, checkNotional, checkPrice, checkPriceBand, checkSelfTrade, checkTimes, checkTip, crossingTouch, depthWithin,
-  referencePrice, touchPrice,
+  estimateFills, referencePrice, touchPrice,
 } from '../guards';
 import { bpsFloor, ceilDiv, fitsI64, roundToTick } from '../units';
 import {
@@ -235,8 +235,31 @@ function planLimit(env: PlanEnv, i: LimitIntent): OrderPlan {
       // a plain crossing limit fills at its own limit; the better price is the matcher's margin
       pre.push(issue('MARKETABLE_LIMIT_FILLS_AT_LIMIT', { touch: x.touch }, 'price'));
     }
+    // a buy that crosses: its budgeted fills against the asks it crosses now (a sell has no fills to budget)
+    if (policy !== 'reject' && i.side === 'buy') return crossingBuy(env, d, i.amount, i.price, tip, i.minFill, i.maxFills, pre);
   }
   return place(env, d, pre);
+}
+
+/**
+ * A buy that crosses the book now (a limit buy at or through the asks, a rising bid whose end does): what crosses needs about `est.fills` fills
+ * (3 asks per transaction, guards.ts `estimateFills`), plus one for a rest that will rest. Without the user's own Fills value the default
+ * (`restingFills`: DEFAULT_BID_FILLS) is raised to that, at most MAX_DEFAULT_CROSSING_FILLS and never above the fills its minimum fill allows,
+ * so a large crossing buy against many small asks is not left with an unfillable tail; each extra fill deposits one more delivery carrier
+ * (returned unused with a cancel or the refund). The user's value stands, with a warning when it is short.
+ */
+function crossingBuy(env: PlanEnv, d: Draft, amount: bigint, bound: bigint, tip: bigint, minFill: bigint | undefined, wanted: bigint | undefined, pre: PlanIssue[]): OrderPlan {
+  if (wanted === undefined) {
+    const est = estimateFills({ side: 'buy', amount, limit: bound, tip, slots: env.token.slots, book: env.book });
+    const need = BigInt(est.fills + (est.enough ? 0 : 1));
+    const mf = minFill ?? defaultMinFillFor(env, amount, bound);
+    const possible = mf > 0n ? ceilDiv(amount, mf) : 1n;
+    const raised = need < MAX_DEFAULT_CROSSING_FILLS ? need : MAX_DEFAULT_CROSSING_FILLS;
+    const target = raised < possible ? raised : possible;
+    if (target > d.fills) d.fills = target;
+  }
+  const facts = fillsFacts(env, 'buy', amount, bound, tip, d.fills, null, pre, true);
+  return withFills(place(env, d, pre), facts);
 }
 
 // ------------------------------------------------------------------------------------------------ IOC / FOK
@@ -259,8 +282,53 @@ function planImmediate(env: PlanEnv, i: IocIntent | FokIntent): OrderPlan {
   d.fills = 1n;
   d.notes.push(i.type === 'fok' ? 'fokAllOrNothing' : 'iocRemainderReturned');
   pre.push(...checkPriceBand(referencePrice(env.book), i.side, i.price));
-  return place(env, d, pre);
+  // FOK: the pre-check refuses what one transaction cannot fill (checkFok); an IOC fills what one transaction takes and returns the rest
+  if (i.type === 'fok' || future) return place(env, d, pre);
+  const facts = fillsFacts(env, i.side, i.amount, i.price, tip, 1n, 'ioc', pre);
+  return withFills(place(env, d, pre), facts);
 }
+
+// ------------------------------------------------------------------------------------------------ fills against the visible book
+
+/**
+ * Most fills the wallet budgets BY DEFAULT for a buy that crosses the book (a limit buy placed as an auction, a rising bid): enough for the asks
+ * that cross it now (3 per transaction) instead of DEFAULT_BID_FILLS (which leaves the tail of a large crossing buy unfillable: 3 fills x 3 asks),
+ * at most this many. Every budgeted fill deposits one delivery carrier (2 KAS by default) in the escrow: a cancel or the refund returns the unused
+ * ones, a used one rides on the delivered token UTXO (merge or sell to free it). The user's own Fills value always wins.
+ */
+export const MAX_DEFAULT_CROSSING_FILLS = 10n;
+
+/**
+ * How long a multi-fill market order (`fills` > 1) stays fillable at its slippage bound once its auction has reached it, at the least (100 DAA,
+ * 10 s): its expiry is `activeFrom + max(life, auction + MARKET_FILLS_TAIL_DAA)` (the default life, 300 DAA, already leaves 100 after the default
+ * 200-DAA auction). Long enough for the matchers to chain the further transactions (matcher.md 7: the next transaction is planned on the book the
+ * previous one leaves, usually within the same second), short enough that a market order does not linger as a resting bid.
+ */
+export const MARKET_FILLS_TAIL_DAA = 100n;
+
+/** Most fills a market order may take (a buy deposits a carrier per fill; the confirmation reads the count back from the escrow up to 64). */
+export const MAX_MARKET_FILLS = 64n;
+
+/**
+ * The fills of an order that takes liquidity, against the visible book up to its `bound` (guards.ts `estimateFills`), and the warning when its
+ * fills cannot take its amount: ONE transaction (`oneTx`: a market order of one fill, an IOC) takes at most the token's slots of counterparties,
+ * the rest returns; a resting order with too few budgeted fills keeps a tail no fill can take.
+ */
+function fillsFacts(env: PlanEnv, side: 'sell' | 'buy', amount: bigint, bound: bigint, tip: bigint, budgeted: bigint, oneTx: 'market' | 'ioc' | null, pre: PlanIssue[], crossing = false): PlanFills {
+  const est = estimateFills({ side, amount, limit: bound, tip, slots: env.token.slots, book: env.book });
+  const k = budgeted > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(budgeted);
+  const facts: PlanFills = {
+    budgeted, needed: est.fills, perTx: est.perTx, counterparty: side === 'sell' ? 'bids' : 'asks', fillable: est.fillableIn(k), enough: est.enough,
+    carrierDeposit: side === 'buy' ? budgeted * carrierOf(env) : 0n, scope: oneTx === null && crossing ? 'crossing' : 'amount',
+  };
+  if (est.fills > k) {
+    const params = { perTx: est.perTx, counterparty: facts.counterparty, needed: est.fills, fills: budgeted, fillable: facts.fillable, amount };
+    pre.push(issue(oneTx === 'market' ? 'MARKET_ONE_TX_LIMIT' : oneTx === 'ioc' ? 'IOC_ONE_TX_LIMIT' : 'FILLS_BUDGET_SHORT', params, oneTx === 'ioc' ? 'amount' : 'maxFills'));
+  }
+  return facts;
+}
+
+const withFills = (p: OrderPlan, fills: PlanFills): OrderPlan => ({ ...p, fills });
 
 // ------------------------------------------------------------------------------------------------ market / streaming / close
 
@@ -276,26 +344,45 @@ interface AuctionRequest {
   activation?: bigint;
   life?: Duration;
   allOrNothing: boolean;
+  /** market only: fills (transactions) the order may take; > 1 makes it a short-lived resting auction (tif 0) */
+  maxFills?: bigint;
+  /** the ticket has a Fills box for this order (a market order): its one-transaction warning says to raise it */
+  fillsBox?: boolean;
   notes: string[];
 }
 
+/**
+ * A market / streaming / close auction from `reference` to the slippage bound. One fill (the default): an IOC (tif 1), one transaction, the
+ * unfilled rest returned at once; FOK (tif 2) with `allOrNothing`. A market order with `maxFills` N > 1 is the same decaying auction (same
+ * price, bound, slope, step and activation) as a RESTING order (tif 0, the Dutch / rising machinery): a partial fill continues the same auction
+ * origin, so it keeps trading within the bound across up to N transactions, and it expires MARKET_FILLS_TAIL_DAA after the auction reaches its
+ * bound at the least. A buy budgets N delivery carriers (`bidEscrow(order, amount, N)`, capped at `ceil(amount / minFill)`: no more fills can
+ * happen); a sell has no carrier per fill. What is left at the expiry is refunded by anyone (a keeper, for the order's refund tip) or cancelled
+ * by the maker.
+ *
+ * Its minimum fill (unless the user set one) is the smaller of the wallet default (the amount worth 10 KAS at the bound) and the smallest
+ * crossing counterparty of the visible book: a transaction taking at least one whole counterparty (at most 3 per transaction) is then never
+ * below it, so small counterparties never block a fill. The griefing bound: a filler can make the order spend its N budgeted fills on fills of
+ * that minimum each (N carriers delivered with them, which stay the maker's on the token UTXOs; the rest of the KAS is refunded at expiry, a
+ * minute at most), nothing more: the bound price still holds for every fill.
+ */
 function planAuction(env: PlanEnv, r: AuctionRequest, pre: PlanIssue[]): OrderPlan {
   checkBps(r.bps, 'slippageBps', pre);
   const auctionDaa = positiveDuration(env, r.auction, MARKET_AUCTION_DAA, 'auction', pre);
   const life = lifeDaa(env, r.life, pre);
   const delay = r.activation ?? MARKET_ACTIVATION_DAA;
   if (delay < 0n) pre.push(issue('DURATION_INVALID', undefined, 'activation'));
+  if (r.maxFills !== undefined) checkFills(r.maxFills, pre);
+  if (r.maxFills !== undefined && r.maxFills > MAX_MARKET_FILLS) pre.push(issue('MAX_FILLS_TOO_LARGE', { max: Number(MAX_MARKET_FILLS) }, 'maxFills'));
   if (r.reference === null) pre.push(issue('NO_LIQUIDITY', { counterparty: r.side === 'sell' ? 'bids' : 'asks' }));
   if (hasError(pre)) return failedPlan(pre);
   const touch = r.reference as bigint;
+  // FOK stays one transaction: a fills value does not apply to it
+  const multi = !r.allOrNothing && (r.maxFills ?? 1n) > 1n;
 
   const end = auctionBound(r.side, touch, r.bps, env.token.tick);
   const d = blank(r.side, r.amount, touch, r.tip, r.minFill);
-  d.immediate = true;
-  d.tif = r.allOrNothing ? 2 : 1;
-  d.expiryKind = r.allOrNothing ? 'fok' : 'ioc';
   d.activeFrom = env.clock.daa + delay;
-  d.expiryDaa = d.activeFrom + life;
   d.slope = decaySlope(touch, end, auctionDaa, 1n);
   d.priceEnd = d.slope > 0n ? end : 0n;
   d.decayStep = 1n;
@@ -303,21 +390,44 @@ function planAuction(env: PlanEnv, r: AuctionRequest, pre: PlanIssue[]): OrderPl
   d.limitPrice = end;
   d.expectedPrice = touch;
   d.worstPrice = end;
-  d.fills = 1n;
-  d.notes.push('auction', r.allOrNothing ? 'fokAllOrNothing' : 'iocRemainderReturned', ...r.notes);
   pre.push(issue('MARKET_REFERENCE_SOURCE', { reference: touch, worst: end }));
   if (!r.allOrNothing) {
     const depth = depthWithin(env.book, r.side, end, r.tip);
     if (depth < r.amount) pre.push(issue('MARKET_DEPTH_INSUFFICIENT', { available: depth, amount: r.amount }));
   }
-  return place(env, d, pre);
+  if (!multi) {
+    d.immediate = true;
+    d.tif = r.allOrNothing ? 2 : 1;
+    d.expiryKind = r.allOrNothing ? 'fok' : 'ioc';
+    d.expiryDaa = d.activeFrom + life;
+    d.fills = 1n;
+    d.notes.push('auction', r.allOrNothing ? 'fokAllOrNothing' : 'iocRemainderReturned', ...r.notes);
+    if (r.allOrNothing) return place(env, d, pre);
+    // a market order can raise its fills; streaming and close are one transaction (their warning says so without a Fills box)
+    const facts = fillsFacts(env, r.side, r.amount, end, r.tip, 1n, r.fillsBox ? 'market' : 'ioc', pre);
+    return withFills(place(env, d, pre), facts);
+  }
+  const est = estimateFills({ side: r.side, amount: r.amount, limit: end, tip: r.tip, slots: env.token.slots, book: env.book });
+  const wallet = defaultMinFillFor(env, r.amount, end);
+  const minFill = r.minFill ?? (est.smallest !== null && est.smallest < wallet ? (est.smallest > 0n ? est.smallest : 1n) : wallet);
+  const possible = ceilDiv(r.amount, minFill > 0n ? minFill : 1n);
+  const wanted = r.maxFills as bigint;
+  d.minFill = minFill;
+  d.tif = 0;
+  d.expiryKind = 'gtd';
+  d.expiryDaa = d.activeFrom + (life > auctionDaa + MARKET_FILLS_TAIL_DAA ? life : auctionDaa + MARKET_FILLS_TAIL_DAA);
+  const allowed = wanted < possible ? wanted : possible;
+  d.fills = r.side === 'buy' ? allowed : 1n;
+  d.notes.push('auction', 'marketFills', ...r.notes);
+  const facts = fillsFacts(env, r.side, r.amount, end, r.tip, allowed, null, pre);
+  return withFills(place(env, d, pre), facts);
 }
 
 function planMarket(env: PlanEnv, i: MarketIntent): OrderPlan {
   const pre: PlanIssue[] = [];
   return planAuction(env, {
     side: i.side, amount: i.amount, tip: i.tip ?? 0n, minFill: i.minFill, reference: touchPrice(env.book, i.side), bps: i.slippageBps ?? SLIPPAGE_BPS,
-    auction: i.auction, activation: i.activation, life: i.life, allOrNothing: i.allOrNothing ?? false, notes: ['market'],
+    auction: i.auction, activation: i.activation, life: i.life, allOrNothing: i.allOrNothing ?? false, ...(i.maxFills !== undefined ? { maxFills: i.maxFills } : {}), fillsBox: true, notes: ['market'],
   }, pre);
 }
 
@@ -432,6 +542,8 @@ function planDutch(env: PlanEnv, i: DutchIntent): OrderPlan {
   d.fills = i.side === 'buy' ? restingFills(env, i.amount, i.priceEnd, i.minFill, i.maxFills) : 1n;
   d.notes.push('auction', i.side === 'sell' ? 'dutch' : 'rising');
   pre.push(...checkPriceBand(referencePrice(env.book), i.side, i.priceEnd, 'priceEnd'));
+  // a rising bid whose end crosses asks of the visible book: budgeted like a crossing limit buy (the asks within its end, 3 per transaction)
+  if (i.side === 'buy' && !future && crossingTouch(env.book, 'buy', i.priceEnd, tip).crossing) return crossingBuy(env, d, i.amount, i.priceEnd, tip, i.minFill, i.maxFills, pre);
   return place(env, d, pre);
 }
 

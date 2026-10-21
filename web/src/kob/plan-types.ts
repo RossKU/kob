@@ -223,6 +223,29 @@ export interface OrderPlan {
   request: CreateOrderRequest | null;
   built: BuiltTx | null;
   disclosure: Disclosure | null;
+  /** an order that takes liquidity now (market, IOC, a buy that crosses, a rising bid): its fills against the visible book (also on a failed build) */
+  fills?: PlanFills;
+}
+
+/**
+ * The fills of an order that takes liquidity, against the visible book (guards.ts `estimateFills`): what the ticket says next to its Fills box
+ * and warns about. One transaction takes at most `perTx` counterparties (a buy: asks, its token inputs; a sell: bids, its token outputs).
+ */
+export interface PlanFills {
+  /** the fills the order takes: a buy's budgeted delivery carriers, a sell's allowed transactions (1 for IOC / a one-transaction market) */
+  budgeted: bigint;
+  /** transactions the visible book needs for the amount (for a resting buy: its part that crosses now); 0 when nothing crosses */
+  needed: number;
+  perTx: number;
+  counterparty: 'asks' | 'bids';
+  /** base units the budgeted fills can take from the visible book now (the amount when they suffice) */
+  fillable: bigint;
+  /** the visible book holds the whole amount within the order's bound */
+  enough: boolean;
+  /** KAS a buy deposits for its delivery carriers (`budgeted` x its carrier); 0 for a sell (no carrier per fill) */
+  carrierDeposit: bigint;
+  /** 'amount': the counts are for the whole amount (market, IOC); 'crossing': for the part of a resting buy that crosses now */
+  scope: 'amount' | 'crossing';
 }
 
 export const errors = (p: { issues: PlanIssue[] }): PlanIssue[] => p.issues.filter((i) => i.severity === 'error');

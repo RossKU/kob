@@ -3,7 +3,7 @@
 // no DOM, no network; the caller injects the clock, the node-resolved records and kob-wasm.
 import type { OrderView } from '../../data/indexer-types';
 import { GTC_DAYS, MARKET_AUCTION_DAA, MAX_IDLE_DAA, daaToUnix, gtcRenewalUnix, renewalUnixForExpiry } from '../../kob/daa';
-import { asOrderState, baseKind, custodiesOf, custodyAmountOf, describeOrder, holdsTokens, isPairKind, type OrderDescription } from '../../kob/order-facts';
+import { asOrderState, baseKind, custodiesOf, custodyAmountOf, describeOrder, holdsTokens, isMultiFillMarket, isPairKind, type OrderDescription } from '../../kob/order-facts';
 import { pairOfView } from '../../kob/pair-view';
 import type { Clock } from '../../kob/plan-types';
 import { recordCodec, type PlacementRecord, type ResolvedRecord } from '../../kob/records';
@@ -130,6 +130,8 @@ export function orderTypeKey(i: ClassifyInput): OrderTypeKey {
     if (a && a.interval > 0n && a.maxFill > 0n) return d.side === 'sell' ? 'twap' : 'dca';
     if (d.tif === 'fok') return 'fok';
     if (d.tif === 'ioc') return a && a.slope > 0n ? 'market' : 'ioc';
+    // a market order of several fills: the market auction resting for its short life (order-facts.ts isMultiFillMarket)
+    if (isMultiFillMarket(d)) return 'market';
     // a limit that crossed the book is placed as an auction from the touch to the limit over MARKET_AUCTION_DAA, one step per DAA
     // (orders/simple.ts): still the user's limit, not a Dutch schedule (a Dutch of exactly that shape reads as a limit too)
     if (a && a.slope > 0n && !(a.decayStep === 1n && a.slope === decaySlope(d.price, a.priceEnd, MARKET_AUCTION_DAA, 1n))) return 'dutch';

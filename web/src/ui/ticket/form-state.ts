@@ -199,6 +199,13 @@ export const isPairCtx = (ctx: Pick<TicketCtx, 'quoteDecimals'> | undefined): bo
 /** Whether an order of `side` budgets its delivery carriers (`maxFills`): a buy on any market, a sell on a pair (it receives token B). */
 const budgetsFills = (side: Side, ctx: Pick<TicketCtx, 'quoteDecimals'> | undefined): boolean => side === 'buy' || isPairCtx(ctx);
 
+/**
+ * Whether a market order has the Fills box (`maxFills`, default 1 = one IOC transaction; more = a short-lived multi-fill auction, orders/simple.ts
+ * `planAuction`): both sides of a KAS market, not with "all or nothing" (a FOK is one transaction) and not on a token pair (its market orders
+ * stay one transaction for now).
+ */
+const marketFills = (form: Pick<TicketForm, 'values'>, ctx: Pick<TicketCtx, 'quoteDecimals'> | undefined): boolean => !isPairCtx(ctx) && form.values.allOrNothing !== 'true';
+
 export function initialForm(type: OrderTypeId = 'limit', side: Side = 'sell', kas = false): TicketForm {
   const sides = sidesOf(type);
   const values: Record<string, string> = {};
@@ -286,7 +293,7 @@ export function layoutOf(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals'
     case 'limit': return { main: ['amount', 'price', 'ladder.on', ...(v['ladder.on'] === 'true' ? LIMIT_LADDER : []), ...life()], advanced: ['tip', 'minFill', 'activeFrom', 'crossing', ...fills] };
     case 'ioc':
     case 'fok': return { main: ['amount', 'price'], advanced: ['tip', 'minFill', 'life', 'activeFrom'] };
-    case 'market': return { main: ['amount', 'slippageBps'], advanced: ['tip', 'minFill', 'auction', 'life', 'allOrNothing'] };
+    case 'market': return { main: ['amount', 'slippageBps'], advanced: ['tip', 'minFill', ...(marketFills(form, ctx) ? ['maxFills'] : []), 'auction', 'life', 'allOrNothing'] };
     case 'streaming': return { main: ['amount', 'displayedPrice', 'toleranceBps'], advanced: ['tip', 'minFill', 'allOrNothing', 'auction', 'life'] };
     case 'close': return { main: ['amount'], advanced: ['tip', 'slippageBps', 'auction', 'life', 'allOrNothing'] };
     case 'twap':
@@ -668,7 +675,7 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
       intent = { type, side, amount, minFill, price: r.price('price'), tip, life: sec('life'), activeFrom: activeFrom() };
       break;
     case 'market':
-      intent = { type, side, amount, minFill, tip, ...auctionOpts() };
+      intent = { type, side, amount, minFill, tip, ...auctionOpts(), ...(marketFills(form, ctx) ? { maxFills: r.positive('maxFills', false) } : {}) };
       break;
     case 'streaming':
       intent = { type, side, amount, minFill, tip, displayedPrice: r.price('displayedPrice'), toleranceBps: r.bps('toleranceBps') ?? (r.err('toleranceBps', 'required'), undefined), ...auctionOpts(), slippageBps: undefined };
@@ -824,7 +831,7 @@ export function formFromIntent(intent: Intent, ctx: TicketCtx): TicketForm {
     case 'limit': price('price', i.price); life(i.lifetime); from(i.activeFrom); put('crossing', i.crossing); put('maxFills', i.maxFills); break;
     case 'ioc': case 'fok': price('price', i.price); secs('life', i.life); from(i.activeFrom); break;
     case 'market': case 'close':
-      bps('slippageBps', i.slippageBps); secs('auction', i.auction); secs('life', i.life); if (i.allOrNothing) v.allOrNothing = 'true'; break;
+      bps('slippageBps', i.slippageBps); secs('auction', i.auction); secs('life', i.life); if (i.allOrNothing) v.allOrNothing = 'true'; put('maxFills', i.maxFills); break;
     case 'streaming':
       price('displayedPrice', i.displayedPrice); bps('toleranceBps', i.toleranceBps); secs('auction', i.auction); secs('life', i.life); if (i.allOrNothing) v.allOrNothing = 'true'; break;
     case 'twap': case 'dca':

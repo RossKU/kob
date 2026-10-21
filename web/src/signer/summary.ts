@@ -6,7 +6,7 @@
 import { decodeSigning, type DecodedOrder, type SigningKind, type SigningSummary, type TokenRef } from '../kob/decode';
 import { spendsPreparation } from '../kob/issue';
 import { decodeDeclaration } from '../kob/kcc23';
-import { baseKind, type OrderDescription } from '../kob/order-facts';
+import { baseKind, isMultiFillMarket, type OrderDescription } from '../kob/order-facts';
 import { DEFAULT_BID_FILLS } from '../kob/orders/common';
 import { longId, type TokenInfo, type TokenRegistry } from '../kob/registry';
 import type { BuiltTx, Hex } from '../kob/types';
@@ -119,7 +119,7 @@ const CHAIN_PRICE_ROWS = new Set(['price', 'allIn', 'auction']);
 const FLIP_TYPE: Record<string, string> = {
   limit: 'signer.flip.type.limit', limitDay: 'signer.flip.type.limitDay', market: 'signer.flip.type.market', marketFok: 'signer.flip.type.marketFok',
   ioc: 'signer.flip.type.ioc', fok: 'signer.flip.type.fok', twap: 'signer.flip.type.twap', dca: 'signer.flip.type.dca', dutch: 'signer.flip.type.dutch',
-  rising: 'signer.flip.type.rising',
+  rising: 'signer.flip.type.rising', marketFills: 'signer.flip.type.marketFills',
 };
 
 /**
@@ -220,6 +220,19 @@ function bidAmountOf(o: DecodedOrder, kob: KobWasm | undefined, scale: bigint, r
   return { amount: n, fills: planned(n) };
 }
 
+/**
+ * The fills a multi-fill market BUY budgets (its escrow is `bidEscrow(order, amount, fills)`: `bidAmountOf` finds the count that makes it
+ * exact) and the delivery carrier each pays; null for every other order, or without kob-wasm.
+ */
+function marketFillsOf(o: DecodedOrder, kob: KobWasm | undefined): { count: bigint; carrier: bigint } | null {
+  const d = o.description;
+  if (!kob || baseKind(d.kind) !== 'KobBid' || !isMultiFillMarket(d) || d.scale <= 0n) return null;
+  const end = d.auction && d.auction.slope > 0n && d.auction.priceEnd > 0n ? d.auction.priceEnd : d.price;
+  const { fills } = bidAmountOf(o, kob, d.scale, end + d.tip);
+  const carrier = BigInt((o.state.state as unknown as { deliveryCarrier?: string }).deliveryCarrier ?? '0');
+  return { count: fills, carrier };
+}
+
 /** How many delivery counts `bidAmountOf` tries for a bid whose fills the user chose. */
 const MAX_FILLS_SEARCHED = 64n;
 
@@ -241,7 +254,7 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
   if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: kas(k.toOthers), dir: 'out' });
   const registry = hintRegistry(hints);
   const orders = s.orders.filter((o) => o.sweptFrom === undefined).map((o) => {
-    const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline }, hints, registry);
+    const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry);
     return flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain) ?? chain;
   });
   return { title: t(TITLE[s.kind] ?? TITLE.other), lines, orders, fee: kas(k.fee), problems: s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)).length, decoded: s };

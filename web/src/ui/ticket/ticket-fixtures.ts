@@ -48,6 +48,8 @@ export const CASES: [string, OrderTypeId, Side, Record<string, string>][] = [
   ['fok buy', 'fok', 'buy', { amount: '3', price: '2.55' }],
   ['market sell', 'market', 'sell', { amount: '2' }],
   ['market buy', 'market', 'buy', { amount: '2' }],
+  ['market sell, 3 fills', 'market', 'sell', { amount: '6', maxFills: '3' }],
+  ['market buy, 3 fills', 'market', 'buy', { amount: '10', maxFills: '3' }],
   ['streaming sell', 'streaming', 'sell', { amount: '2', displayedPrice: '2.45' }],
   ['streaming buy', 'streaming', 'buy', { amount: '2', displayedPrice: '2.5', allOrNothing: 'true' }],
   ['close all', 'close', 'sell', {}],

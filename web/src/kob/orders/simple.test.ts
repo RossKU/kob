@@ -877,3 +877,110 @@ describe('property sweep: every combination validates in the script engine', () 
     }
   });
 });
+
+describe('fills against the visible book (market, IOC, crossing buys)', () => {
+  // twelve small asks of 2 tokens, one per 0.001 KAS from 2.50 (per-order entries): 24 tokens within any 3% bound, 3 per transaction
+  const asks = Array.from({ length: 12 }, (_, i) => bookOrder(P + BigInt(i) * 100_000n, 2n * TOK));
+  const bids = Array.from({ length: 12 }, (_, i) => bookOrder(245_000_000n - BigInt(i) * 100_000n, 2n * TOK));
+  const book = { asks: asks.map((o) => level(o.price, o.amount)), bids: bids.map((o) => level(o.price, o.amount)), askOrders: asks, bidOrders: bids };
+  const env = () => makeEnv({ book });
+  const market = (o: Partial<SimpleIntent> = {}) => ({ type: 'market', side: 'buy', amount: 20n * TOK, ...o }) as SimpleIntent;
+  const codes = (p: OrderPlan) => p.issues.map((i) => i.code);
+
+  it('fills 1 (the default): one IOC transaction, warned that it takes 3 of the 10 asks the amount needs', () => {
+    const p = planValid(env(), market());
+    expect(bid(p).tif).toBe('1');
+    expect(p.issues.find((i) => i.code === 'MARKET_ONE_TX_LIMIT')).toMatchObject({ severity: 'warning', params: { perTx: 3, counterparty: 'asks', needed: 4, fills: 1n, fillable: 6n * TOK, amount: 20n * TOK } });
+    expect(codes(p)).not.toContain('MARKET_DEPTH_INSUFFICIENT');
+    expect(p.fills).toMatchObject({ budgeted: 1n, needed: 4, perTx: 3, counterparty: 'asks', fillable: 6n * TOK, enough: true, scope: 'amount' });
+    // what one transaction takes: no warning
+    expect(codes(planValid(env(), market({ amount: 6n * TOK })))).not.toContain('MARKET_ONE_TX_LIMIT');
+  });
+
+  it('fills N > 1: the same auction resting (tif 0) for its short life, N delivery carriers, a minimum fill no 3 small asks fall below', () => {
+    const one = planValid(env(), market());
+    const p = planValid(env(), market({ maxFills: 4n }));
+    const s = bid(p);
+    const o = bid(one);
+    // the same decay from the touch to the bound, from the same start
+    for (const k of ['price', 'priceEnd', 'slope', 'decayStep', 'activeFrom', 'tip'] as const) expect(s[k], k).toBe(o[k]);
+    expect(s.tif).toBe('0');
+    expect(BigInt(s.expiryDaa)).toBe(BigInt(s.activeFrom) + 300n);
+    // the wallet default (10 KAS at the bound: 3.884 tokens) is above the smallest ask (2 tokens): 2 tokens
+    expect(BigInt(s.minFill)).toBe(2n * TOK);
+    expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0], 20n * TOK, 4n));
+    expect(p.disclosure!.carriers.find((c) => c.kind === 'deliveryCarrier')).toMatchObject({ count: 4 });
+    expect(p.disclosure!.notes).toContain('marketFills');
+    expect(codes(p)).not.toContain('FILLS_BUDGET_SHORT');
+    expect(p.fills).toMatchObject({ budgeted: 4n, needed: 4, fillable: 20n * TOK, carrierDeposit: 4n * DC });
+    // 3 fills take 9 of the 10 asks: warned with what they take
+    const short = planValid(env(), market({ maxFills: 3n }));
+    expect(short.issues.find((i) => i.code === 'FILLS_BUDGET_SHORT')).toMatchObject({ params: { needed: 4, fills: 3n, fillable: 18n * TOK, amount: 20n * TOK } });
+  });
+
+  it('fills are capped at what the minimum fill allows, at most 64, FOK stays one transaction', () => {
+    const capped = planValid(env(), market({ maxFills: 50n }));
+    expect(bid(capped).tif).toBe('0');
+    // 20 tokens in fills of at least 2: at most 10 fills
+    expect(capped.fills!.budgeted).toBe(10n);
+    expect(BigInt(capped.request!.value)).toBe(K.bidEscrow(capped.states[0], 20n * TOK, 10n));
+    expect(codes(planSimple(env(), market({ maxFills: 65n })))).toContain('MAX_FILLS_TOO_LARGE');
+    expect(codes(planSimple(env(), market({ maxFills: 0n })))).toContain('MAX_FILLS_INVALID');
+    const fok = planSimple(env(), market({ amount: 6n * TOK, maxFills: 3n, allOrNothing: true }));
+    expect(fok.ok).toBe(true);
+    expect(bid(fok).tif).toBe('2');
+  });
+
+  it('a sell of several fills: tif 0, no carrier per fill (the custody carries the order)', () => {
+    const p = planValid(env(), { type: 'market', side: 'sell', amount: 20n * TOK, maxFills: 5n });
+    const s = ask(p);
+    expect(s.tif).toBe('0');
+    expect(BigInt(s.minFill)).toBe(2n * TOK);
+    expect(p.fills).toMatchObject({ budgeted: 5n, counterparty: 'bids', carrierDeposit: 0n, needed: 5 });
+    expect(codes(p)).not.toContain('FILLS_BUDGET_SHORT');
+  });
+
+  it('a re-timed multi-fill market order moves only its times', () => {
+    const a = planValid(env(), market({ maxFills: 4n }));
+    const later = { ...env(), clock: { ...CLOCK, daa: CLOCK.daa + 40n, unixSeconds: CLOCK.unixSeconds + 4n } };
+    const b = planValid(later, market({ maxFills: 4n }));
+    const x = bid(a);
+    const y = bid(b);
+    expect({ ...y, activeFrom: x.activeFrom, expiryDaa: x.expiryDaa }).toEqual(x);
+    expect(BigInt(y.activeFrom) - BigInt(x.activeFrom)).toBe(40n);
+    expect(BigInt(y.expiryDaa) - BigInt(x.expiryDaa)).toBe(40n);
+    expect(b.request!.value).toBe(a.request!.value);
+  });
+
+  it('IOC: one transaction, the same counterparty warning', () => {
+    const p = planValid(env(), { type: 'ioc', side: 'buy', amount: 20n * TOK, price: P + 1_100_000n });
+    expect(p.issues.find((i) => i.code === 'IOC_ONE_TX_LIMIT')).toMatchObject({ params: { perTx: 3, needed: 4, fillable: 6n * TOK } });
+  });
+
+  it('a crossing limit buy budgets the fills what crosses needs (at most 10), a user value short of it is warned', () => {
+    const limit = P + 1_100_000n; // every ask crosses
+    const p = planValid(env(), { type: 'limit', side: 'buy', amount: 20n * TOK, price: limit });
+    // 10 asks, 3 per transaction: 4 fills instead of the default 3
+    expect(p.fills).toMatchObject({ budgeted: 4n, needed: 4, scope: 'crossing', fillable: 20n * TOK });
+    expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0], 20n * TOK, 4n));
+    expect(codes(p)).not.toContain('FILLS_BUDGET_SHORT');
+    // more than the book holds: the crossing part (12 asks: 4 fills) and one for the rest that rests
+    expect(planValid(env(), { type: 'limit', side: 'buy', amount: 30n * TOK, price: limit }).fills!.budgeted).toBe(5n);
+    // the user's own value stands, with the warning
+    const mine = planValid(env(), { type: 'limit', side: 'buy', amount: 20n * TOK, price: limit, maxFills: 2n });
+    expect(mine.fills!.budgeted).toBe(2n);
+    expect(mine.issues.find((i) => i.code === 'FILLS_BUDGET_SHORT')).toMatchObject({ params: { needed: 4, fills: 2n, fillable: 12n * TOK } });
+    // at most 10 by default: 60 small asks of a far larger buy
+    const many = Array.from({ length: 60 }, (_, i) => bookOrder(P + BigInt(i) * 100n, TOK));
+    const deep = makeEnv({ book: { asks: many.map((o) => level(o.price, o.amount)), bids: [], askOrders: many }, funding: [5000n * KAS] });
+    expect(planValid(deep, { type: 'limit', side: 'buy', amount: 60n * TOK, price: P + 6_000n }).fills!.budgeted).toBe(10n);
+    // a limit that does not cross: the resting default, no estimate
+    const resting = planValid(env(), { type: 'limit', side: 'buy', amount: 20n * TOK, price: P - 1_000_000n });
+    expect(resting.fills).toBeUndefined();
+  });
+
+  it('a rising bid whose end crosses is budgeted the same way', () => {
+    const p = planValid(env(), { type: 'dutch', side: 'buy', amount: 20n * TOK, price: P - 1_000_000n, priceEnd: P + 1_100_000n, duration: { daa: 600n } });
+    expect(p.fills).toMatchObject({ budgeted: 4n, needed: 4, scope: 'crossing' });
+  });
+});

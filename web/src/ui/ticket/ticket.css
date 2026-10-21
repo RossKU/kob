@@ -13,6 +13,9 @@
 /* a field hint is ONE line; the whole text is its tooltip (title) */
 .tk-sub, .tk-help { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tk-rounded { white-space: normal; }
+/* the fills of an order that takes liquidity (fills-note.ts): a sentence or two, wrapped; the shortfall line under the main fields warns */
+.tk-fills { display: block; white-space: normal; color: var(--muted); font-size: 0.85rem; }
+.tk-fills-short { color: var(--warn); font-size: 0.9rem; margin: 4px 0 0; }
 /* the balance this order spends, at the right end of the amount label row: it is the Max button */
 .tk-available { padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.85rem; font-variant-numeric: tabular-nums; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
 .tk-available:hover:not(:disabled) { color: var(--text); }

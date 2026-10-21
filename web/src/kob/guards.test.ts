@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BookView, Clock, OwnOrderRef } from './plan-types';
 import {
   QUOTE_LIMIT, assessFok, checkAmount, checkCarrierRatio, checkFok, checkMinFill, checkNotional, checkPrice, checkPriceBand, checkSelfTrade, checkTimes, checkTip,
-  crosses, crossingTouch, depthWithin, firmReferencePrice, referencePrice, touchPrice,
+  crosses, crossingTouch, depthWithin, estimateFills, firmReferencePrice, referencePrice, touchPrice,
 } from './guards';
 import { CLOCK, bookOrder, level, market3x3, market8x8, marketKron } from '../testing/fixtures';
 import { MAX_IDLE_DAA } from './daa';
@@ -354,5 +354,48 @@ describe('field checks', () => {
     expect(checkCarrierRatio(bid, 25_000_000_000n)).toEqual([]);
     expect(checkCarrierRatio(bid, 500_000_000n)).toHaveLength(1);
     expect(checkCarrierRatio(bid, 500_000_000n)[0]!.params).toEqual({ locked: 600_000_000n });
+  });
+});
+
+describe('estimateFills: the transactions an order taking liquidity needs from the visible book', () => {
+  const slots = { inputs: 3, outputs: 3 };
+  const P = 100_000_000n;
+  // ten small asks of 2 base units each, one per price step above P (per-order entries: exact)
+  const asks = Array.from({ length: 10 }, (_, i) => bookOrder(P + BigInt(i) * 1_000n, 2n));
+  const book: BookView = { asks: asks.map((o) => level(o.price, o.amount)), bids: [], askOrders: asks };
+
+  it('a buy takes at most 3 asks per transaction, best price first: 20 base units of 10 asks need 4 fills', () => {
+    const e = estimateFills({ side: 'buy', amount: 20n, limit: P + 9_000n, tip: 0n, slots, book });
+    expect(e).toMatchObject({ available: 20n, enough: true, counterparties: 10, exact: true, perTx: 3, fills: 4, smallest: 2n });
+    expect([e.fillableIn(1), e.fillableIn(2), e.fillableIn(3), e.fillableIn(4)]).toEqual([6n, 12n, 18n, 20n]);
+    // within a lower bound only the first five cross: not enough, 2 fills take all of them
+    const near = estimateFills({ side: 'buy', amount: 20n, limit: P + 4_000n, tip: 0n, slots, book });
+    expect(near).toMatchObject({ available: 10n, enough: false, counterparties: 5, fills: 2 });
+    expect(near.fillableIn(1)).toBe(6n);
+    // one ask holds the amount: one fill
+    expect(estimateFills({ side: 'buy', amount: 2n, limit: P, tip: 0n, slots, book }).fills).toBe(1);
+    // nothing crosses
+    expect(estimateFills({ side: 'buy', amount: 2n, limit: P - 1n, tip: 0n, slots, book })).toMatchObject({ fills: 0, counterparties: 0, smallest: null });
+  });
+
+  it('a sell takes bids into its token outputs; its own rest is an output too while it is not filled up', () => {
+    const bids = Array.from({ length: 7 }, (_, i) => bookOrder(P - BigInt(i) * 1_000n, 2n));
+    const b: BookView = { asks: [], bids: bids.map((o) => level(o.price, o.amount)), bidOrders: bids };
+    // 14 of 7 bids: 3 in the transaction that finishes it, 2 in each before (one output keeps the rest): 1 + ceil(4 / 2) = 3
+    expect(estimateFills({ side: 'sell', amount: 14n, limit: P - 6_000n, tip: 0n, slots, book: b })).toMatchObject({ counterparties: 7, perTx: 3, fills: 3 });
+    // 3 bids finish 6 in one transaction
+    expect(estimateFills({ side: 'sell', amount: 6n, limit: P - 6_000n, tip: 0n, slots, book: b }).fills).toBe(1);
+    // more than the book holds: every transaction leaves a rest, 2 bids each
+    const short = estimateFills({ side: 'sell', amount: 100n, limit: P - 6_000n, tip: 0n, slots, book: b });
+    expect(short).toMatchObject({ enough: false, counterparties: 7, fills: 4 });
+    expect(short.fillableIn(1)).toBe(4n);
+  });
+
+  it('aggregated levels count their orders (route levels as the FOK pre-check counts them); the 8-input cap', () => {
+    const lv: BookView = { asks: [level(P, 9n, 6), level(P + 1n, 9n, 3)], bids: [] };
+    const e = estimateFills({ side: 'buy', amount: 12n, limit: P + 1n, tip: 0n, slots, book: lv });
+    // the first level's 6 orders, then a third of the second level's 3 (rounded up): 7 orders, 3 fills
+    expect(e).toMatchObject({ exact: false, counterparties: 7, fills: 3, smallest: 1n });
+    expect(estimateFills({ side: 'buy', amount: 9n, limit: P, tip: 0n, slots: { inputs: 16, outputs: 16 }, book: lv }).perTx).toBe(8);
   });
 });

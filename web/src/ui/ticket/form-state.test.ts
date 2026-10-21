@@ -74,6 +74,19 @@ describe('vocabulary and layout', () => {
     expect(layoutOf(form('repeatIfd', 'buy', {})).main).not.toContain('exit.kind');
   });
 
+  it('a market order has a Fills box on both sides (not with all-or-nothing, not on a pair); the intent carries it', () => {
+    expect(layoutOf(form('market', 'buy', {})).advanced).toContain('maxFills');
+    expect(layoutOf(form('market', 'sell', {})).advanced).toContain('maxFills');
+    expect(layoutOf(form('market', 'buy', { allOrNothing: 'true' })).advanced).not.toContain('maxFills');
+    expect(layoutOf(form('market', 'buy', {}), { quoteDecimals: 6 }).advanced).not.toContain('maxFills');
+    // FOK / IOC / streaming / close stay one transaction
+    for (const type of ['ioc', 'fok', 'streaming', 'close'] as const) expect(layoutOf(form(type, 'sell', {})).advanced, type).not.toContain('maxFills');
+    const m = buildIntent(form('market', 'buy', { amount: '1', maxFills: '3' }), CTX).intent as { maxFills?: bigint };
+    expect(m.maxFills).toBe(3n);
+    expect((buildIntent(form('market', 'buy', { amount: '1' }), CTX).intent as { maxFills?: bigint }).maxFills).toBeUndefined();
+    expect((buildIntent(form('market', 'buy', { amount: '1', maxFills: '3', allOrNothing: 'true' }), CTX).intent as { maxFills?: bigint }).maxFills).toBeUndefined();
+  });
+
   it('prefills the wallet defaults of matcher.md section 10', () => {
     const m = initialForm('market', 'buy').values;
     expect(m.slippageBps).toBe('3');

@@ -61,6 +61,18 @@ describe('orderTypeKey via describeEntry (real golden orders)', () => {
     expect(rowOf('create.ask.dutch').row.typeKey).toBe('dutch');
   });
 
+  it('a market order of several fills (the market auction resting for its short life) is a market order; the Dutch it is shaped from is not', () => {
+    const p = placeGolden(kob, 'create.ask.dutch');
+    const snap = p.snapshots[0];
+    const st = snap.order.state as Extract<OrderState, { kind: 'KobAsk' | 'KobAskKron' }>;
+    const from = BigInt(st.state.activeFrom) > 0n ? BigInt(st.state.activeFrom) : 2000n;
+    const multi: OrderSnapshot = {
+      ...snap,
+      order: { ...snap.order, state: { ...st, state: { ...st.state, tif: '0', activeFrom: from.toString(), expiryDaa: (from + 300n).toString() } } },
+    };
+    expect(describeEntry(buildEntries([orderViewOf(kob, multi)], [])[0], ctx).typeKey).toBe('market');
+  });
+
   it('a stop entry keeps its trigger price and armed flag', () => {
     const { row } = rowOf('create.ifdBid.stopEntry');
     expect(row.stopPrice).toBe(255_000_000n);

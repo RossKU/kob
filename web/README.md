@@ -84,6 +84,19 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
   signer verifies that from its own decoding of both transactions), else the updated confirmation is shown once more. My orders actions
   (cancel, amend, refund, sweep, merge) run the same way; their balances (tokens in orders, KAS locked) are at the top of My orders. Token
   issuance keeps its confirmation screen (a token's facts never change).
+* **Fills of an order that takes liquidity.** One transaction takes at most the token's input slots of asks (3 on KOB's standard program; a
+  sell at most its output slots of bids, one less while it leaves a rest), so a large market buy against many small asks fills only part in
+  one transaction. A market order has a Fills box (Advanced; both sides of a KAS market, not with all-or-nothing, not on a pair: pair market
+  orders stay one transaction): 1 (default) is the one IOC transaction as before; N > 1 places the same auction (start, bound, slope,
+  activation) as a short-lived RESTING order (tif 0, expiry `activeFrom + max(life, auction + 100 DAA)`, 300 DAA by default) that keeps trading
+  within the bound across up to N transactions (`src/kob/orders/simple.ts` `planAuction`); a buy deposits a delivery carrier per fill
+  (unused ones return with the refund or a cancel, used ones ride on the delivered token UTXOs until merged or sold), a sell none; its
+  minimum fill is the smaller of the wallet default and the smallest crossing counterparty, so no fill of a few small ones is blocked; what is
+  left at the expiry is refunded by anyone (refund tip) or cancelled. A buy that crosses the book (a limit buy, a rising bid) gets as many
+  fills by default as the asks it crosses need (at most 10). Next to the Fills box the ticket shows the visible book's estimate (fills needed,
+  3 per transaction, the carriers deposited; `src/ui/ticket/fills-note.ts`, `src/kob/guards.ts` `estimateFills`), and under the amount a
+  warning when the fills (an IOC's, a one-fill market order's, or a budget the user set) cannot take what the book holds within the bound;
+  the confirmation of a multi-fill market order says it fills in up to N transactions, when the rest returns, and the carriers deposited.
 * **Theme.** Dark / light toggle in the header, remembered in localStorage (`kob.theme`), default = the OS preference (dark when unknown).
 * **Try it.** `npm run mock -- --history --fund` (mock indexer + node on :8790 with a seeded 48 h price history), `npm run dev`, then Settings:
   indexer and node URL `http://127.0.0.1:8790`. `KOB_SHOTS=1 npx playwright test e2e/ui/market-data.spec.ts` saves screenshots to `test-results/shots/`.

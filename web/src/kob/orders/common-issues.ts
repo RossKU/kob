@@ -31,6 +31,7 @@ export const ISSUE_CATALOG = {
   SLIPPAGE_HIGH: e('warning', 'A slippage tolerance of {bps:bps}% lets the order fill far from the market price.'),
   REFERENCE_PRICE_INVALID: e('error', 'The displayed price is not valid.'),
   MAX_FILLS_INVALID: e('error', 'The number of fills must be a positive integer.'),
+  MAX_FILLS_TOO_LARGE: e('error', 'At most {max} fills.'),
   // ---- time
   EXPIRY_TOO_SOON: e('error', 'The expiry must be later than the moment the order becomes active.'),
   EXPIRY_TOO_FAR: e('error', 'An order can live at most 90 days.'),
@@ -45,6 +46,9 @@ export const ISSUE_CATALOG = {
   // ---- market and book
   NO_LIQUIDITY: e('error', 'There is no {counterparty} in the book to price a market order against.'),
   MARKET_DEPTH_INSUFFICIENT: e('warning', 'The visible book within your slippage bound holds only {available} of your {amount}; the rest is returned unfilled.'),
+  MARKET_ONE_TX_LIMIT: e('warning', 'One transaction takes at most {perTx} {counterparty}: your amount needs about {needed} fills in the visible book, so about {fillable} fills now and the rest returns; raise Fills to trade more.'),
+  IOC_ONE_TX_LIMIT: e('warning', 'One transaction takes at most {perTx} {counterparty}: your amount needs about {needed} fills in the visible book, so about {fillable} fills now and the rest returns.'),
+  FILLS_BUDGET_SHORT: e('warning', 'What crosses now needs about {needed} fills ({perTx} {counterparty} per transaction): with {fills} fills only about {fillable} of your {amount} can fill now; raise Fills.'),
   MARKETABLE_AUCTION: e('info', 'Your limit crosses the market: it fills immediately as a taker, placed as an auction from the best price ({touch:kas}) to your limit; any rest stays at your limit.'),
   MARKETABLE_LIMIT_FILLS_AT_LIMIT: e('warning', 'Your limit crosses the market: it fills immediately as a taker at your limit price; a matcher keeps the difference to the better price ({touch:kas}).'),
   MARKETABLE_REJECTED: e('error', 'Your limit crosses the market at {touch:kas}.'),

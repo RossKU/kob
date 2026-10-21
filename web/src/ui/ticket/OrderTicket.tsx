@@ -32,6 +32,7 @@ import {
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 import { expectedFromPlan } from './plan-expected';
+import { fillsNote } from './fills-note';
 import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
 import { maxBuyAmount } from './max-amount';
 import { orderLabel } from './order-label';
@@ -592,6 +593,10 @@ export function OrderTicket(props: OrderTicketProps) {
 
   const issues = (shownPlan?.issues ?? []).filter((i) => !(holdingsShort && TOKEN_SHORT.has(i.code)));
   const planIssues = issues.filter((i) => i.severity === 'error');
+  // an order that takes liquidity now: its fills against the visible book, next to the Fills box, and a warning when they cannot take the amount
+  const fillsBox = layout.main.includes('maxFills') || layout.advanced.includes('maxFills');
+  const amountBase = baseOf('amount');
+  const fills = shownPlan?.fills && amountBase !== null ? fillsNote(shownPlan.fills, { decimals: token.decimals, ticker, box: fillsBox, amount: amountBase }) : null;
   const issueCtx = { tokenDecimals: token.decimals, tokenTicker: ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
 
   // the balance this order spends, shown at the right end of the amount label row (it is the Max button): a buy pays in the quote (KAS, or a
@@ -661,6 +666,12 @@ export function OrderTicket(props: OrderTicketProps) {
           {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker } : {})}
         />
 
+        {fills?.short ? (
+          <p class="tk-fills-short" data-testid="order-fills-short">
+            <span key={fills.short}>{fills.short}</span>
+          </p>
+        ) : null}
+
         {maxNote ? (
           <p class="muted" data-testid="order-max-note">
             {maxNote}
@@ -670,7 +681,7 @@ export function OrderTicket(props: OrderTicketProps) {
         <details class="tk-advanced" data-testid="order-advanced">
           <summary>{t('ticket.advanced')}</summary>
           <div class="tk-advanced-body">
-            <TicketFields form={form} ctx={ctx} ticker={ticker} ids={layout.advanced} errors={errs} onChange={onChange} {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker } : {})} />
+            <TicketFields form={form} ctx={ctx} ticker={ticker} ids={layout.advanced} errors={errs} onChange={onChange} {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker } : {})} {...(fills?.hint ? { notes: { maxFills: fills.hint } } : {})} />
           </div>
         </details>
       </div>

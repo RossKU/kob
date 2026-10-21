@@ -458,7 +458,7 @@ export const PAIR_NOTE_TAGS = ['pairPricesFromKasBooks', 'pairTipKas', 'pairRout
 
 /** Every note tag the planners can emit: the i18n key `ticket.note.<tag>` must exist for each (checked by the coverage test). */
 export const NOTE_TAGS = [
-  'gtc', 'dayOrder', 'gtd', 'auction', 'marketable', 'fokAllOrNothing', 'iocRemainderReturned', 'market', 'streaming', 'close', 'twap', 'dca', 'dutch', 'rising',
+  'gtc', 'dayOrder', 'gtd', 'auction', 'marketable', 'fokAllOrNothing', 'iocRemainderReturned', 'marketFills', 'market', 'streaming', 'close', 'twap', 'dca', 'dutch', 'rising',
   'carrierReturned', 'stopTrigger', 'stopAuction', 'triggerExposure', 'stopLimitMayNotFill', 'trailing', 'takeProfitLeg', 'oco', 'partialFillsKeepLegs', 'keeperReserve',
   'ifd', 'ifo', 'position', 'buyFirst', 'sellFirst', 'minFill', 'exitGtc', 'exitGtd', 'stopEntry', 'stopEntryTrigger', 'stopEntryAuction', 'exitStop', 'repeat', 'repeatUnlimited',
   'repeatCounted', 'repeatReBuys', 'repeatReSells', 'repeatStopLossEnds', 'mergeTip', 'cancelPosition', 'prefund', ...PAIR_NOTE_TAGS,

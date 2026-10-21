@@ -223,6 +223,103 @@ export function checkFok(f: FokInput): PlanIssue[] {
   return m ? [issue('FOK_MIN_FILL_BLOCKS', { left: m.left, minFill: m.minFill, below: m.below, above: m.above }, 'amount')] : [];
 }
 
+// ------------------------------------------------------------------------------------------------ fills an order needs (market, IOC, crossing buys)
+
+/** How many transactions (fills) the visible book needs to fill an order that takes liquidity, and what one or `k` of them can fill. */
+export interface FillsEstimate {
+  /** base units of the counterparties that cross the order's bound (all-in with tips) */
+  available: bigint;
+  /** the book holds the whole amount within the bound */
+  enough: boolean;
+  /** counterparties the amount takes, best price first (all the crossing ones when they do not hold it); an upper bound when `exact` is false */
+  counterparties: number;
+  /** true when counted from per-order entries; false = from the aggregated levels' order counts (route levels as assessFok counts them) */
+  exact: boolean;
+  /** the most counterparties one transaction takes: a buy min(input slots, 8) asks (their custodies are the token inputs); a sell its output slots */
+  perTx: number;
+  /** transactions those counterparties take (0 when nothing crosses) */
+  fills: number;
+  /** the smallest crossing counterparty (base units; per level its average order): what one transaction of whole counterparties fills at least */
+  smallest: bigint | null;
+  /** base units `k` transactions fill at most (the counterparties they can take, best first), never above the amount */
+  fillableIn(k: number): bigint;
+}
+
+/**
+ * The fills an order taking liquidity needs from the visible book (matcher.md 3.2: a matcher walks the opposite side in price priority, at most
+ * the token's slots of counterparties per transaction, 3.4: an oversize IOC gets the largest single-transaction fill). Unlike `assessFok`, which
+ * counts the FEWEST orders (a FOK may be completed by any subset, 3.2 repairs it), the counterparties are taken best price first, as the walk
+ * takes them; the slot arithmetic is the FOK pre-check's (route levels of a pair book count `orders - 1`). A sell's counterparties are bids, each
+ * a token output, and while the sell is not filled up its own rest (the custody's continuation, or an IOC's return) is a token output too: a
+ * transaction that does not finish the order takes `outputs - 1` bids, the one that finishes it `outputs`. A buy takes asks: their custodies are
+ * its token inputs (min(input slots, 8)); its delivery and an ask's rest are at most two outputs.
+ */
+export function estimateFills(f: FokInput): FillsEstimate {
+  const sellSide = f.side === 'sell';
+  const detail = sellSide ? f.book.bidOrders : f.book.askOrders;
+  const levels = sellSide ? f.book.bids : f.book.asks;
+  const perTx = sellSide ? Math.max(1, f.slots.outputs) : Math.max(1, Math.min(f.slots.inputs, MAX_TOKEN_INPUTS));
+  // a transaction that leaves a rest of the order: one output less for a sell
+  const partialPerTx = sellSide ? Math.max(1, perTx - 1) : perTx;
+  const okPrice = (price: bigint, tip: bigint | undefined): boolean => (sellSide ? price + (tip ?? 0n) >= f.limit - f.tip : price - (tip ?? 0n) <= f.limit + f.tip);
+  // the crossing counterparties best first as (count, amount) chunks: one per order, or one per level (its orders counted as assessFok does)
+  const chunks: { count: number; amount: bigint }[] = [];
+  const exact = !!detail;
+  let smallest: bigint | null = null;
+  if (detail) {
+    for (const o of detail) {
+      if (o.amount <= 0n || !okPrice(o.price, o.tip)) continue;
+      chunks.push({ count: 1, amount: o.amount });
+      if (smallest === null || o.amount < smallest) smallest = o.amount;
+    }
+  } else {
+    for (const l of levels) {
+      if (l.amount <= 0n || !okPrice(l.price, l.tip)) continue;
+      const route = Math.min(l.routeOrders ?? 0, l.orders);
+      const rows = Math.min(l.routeRows ?? 0, route);
+      const count = Math.max(1, l.orders - route + (route - rows));
+      chunks.push({ count, amount: l.amount });
+      const avg = l.amount / BigInt(Math.max(1, l.orders));
+      const each = avg > 0n ? avg : 1n;
+      if (smallest === null || each < smallest) smallest = each;
+    }
+  }
+  const available = chunks.reduce((s, c) => s + c.amount, 0n);
+  const enough = available >= f.amount;
+  let need = f.amount;
+  let counterparties = 0;
+  for (const c of chunks) {
+    if (need <= 0n) break;
+    if (exact || need >= c.amount) {
+      counterparties += c.count;
+    } else {
+      // a level only partly needed: its orders in proportion (rounded up)
+      counterparties += Math.max(1, Math.ceil((Number(need) / Number(c.amount)) * c.count));
+    }
+    need -= c.amount;
+  }
+  const fills =
+    counterparties === 0 ? 0 : enough ? (counterparties <= perTx ? 1 : 1 + Math.ceil((counterparties - perTx) / partialPerTx)) : Math.ceil(counterparties / partialPerTx);
+  const fillableIn = (k: number): bigint => {
+    if (k <= 0) return 0n;
+    if (enough && fills <= k) return f.amount;
+    let left = k * partialPerTx;
+    let got = 0n;
+    for (const c of chunks) {
+      if (left <= 0) break;
+      if (c.count <= left) {
+        got += c.amount;
+        left -= c.count;
+      } else {
+        got += (c.amount * BigInt(left)) / BigInt(c.count);
+        left = 0;
+      }
+    }
+    return got < f.amount ? got : f.amount;
+  };
+  return { available, enough, counterparties, exact, perTx, fills, smallest, fillableIn };
+}
+
 // ------------------------------------------------------------------------------------------------ marketable limit (10.5)
 
 /** Whether a limit on `side` at `price` crosses the visible book right now, and the touch it would cross. */

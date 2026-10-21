@@ -9,7 +9,7 @@ import type { WalletNotice } from '../../kob/decode';
 import { daaToUnix, formatJst, formatUtc } from '../../kob/daa';
 import { UNLIMITED_REPEAT_COUNT } from '../../kob/orders/cond-common';
 import { stopWorstPrice } from '../../kob/orders/cond-legs';
-import { baseKind, type OrderDescription } from '../../kob/order-facts';
+import { baseKind, isMultiFillMarket, type OrderDescription } from '../../kob/order-facts';
 import type { Clock } from '../../kob/plan-types';
 import { longId, type ExtensionReference, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
@@ -190,6 +190,8 @@ export function orderTypeCode(d: OrderDescription, dayDeadline: bigint | null = 
     case 'KobPair': {
       if (d.tif === 'fok') return a ? 'marketFok' : 'fok';
       if (d.tif === 'ioc') return a ? 'market' : 'ioc';
+      // a market order of several fills: the market auction resting for its short life (orders/simple.ts planAuction)
+      if (isMultiFillMarket(d)) return 'marketFills';
       if (a && a.interval > 0n) return d.side === 'sell' ? 'twap' : 'dca';
       if (a && a.slope > 0n) return d.side === 'sell' ? 'dutch' : 'rising';
       return dayDeadline !== null ? 'limitDay' : 'limit';
@@ -308,8 +310,14 @@ function pairRows(d: OrderDescription, f: Fmt): Row[] {
   return rows;
 }
 
+/**
+ * What the caller knows of an order beyond its state: its value, the KAS it locks, a day order's deadline, and for a multi-fill market buy the
+ * fills its escrow budgets (signer/summary.ts `bidAmountOf`) with the delivery carrier each one pays.
+ */
+export interface OrderExtra { value: bigint | null; locked: LockedKas | null; deadline: bigint | null; fills?: { count: bigint; carrier: bigint } | null }
+
 /** Rows that describe one order state: quantity, prices (all-in), timing, auction, trigger, entry, repeat. */
-export function orderRows(d: OrderDescription, extra: { value: bigint | null; locked: LockedKas | null; deadline: bigint | null }, f: Fmt): Row[] {
+export function orderRows(d: OrderDescription, extra: OrderExtra, f: Fmt): Row[] {
   const { tr } = f;
   // a pair order: its prices are B per whole A, its tip KAS per whole A (never part of its B price)
   const pair = !!d.pair;
@@ -371,6 +379,7 @@ export function orderRows(d: OrderDescription, extra: { value: bigint | null; lo
   }
   if (d.tif === 'ioc') rows.push(row('tif', tr('confirm.f.tif'), tr('confirm.f.tifIoc')));
   if (d.tif === 'fok') rows.push(row('tif', tr('confirm.f.tif'), tr('confirm.f.tifFok')));
+  if (isMultiFillMarket(d)) rows.push(...marketFillsRows(d, extra, f));
 
   // trigger legs
   const trg = d.trigger;
@@ -418,6 +427,24 @@ export function orderRows(d: OrderDescription, extra: { value: bigint | null; lo
     rows.push(row('booked', tr('confirm.f.booked'), tr('confirm.f.bookedValue', { parent: short(d.booked.parent), price: p(d.booked.rptPrice).value }), 'muted'));
   }
   rows.push(...timingRows(d, extra, f));
+  return rows;
+}
+
+/**
+ * A multi-fill market order: it keeps trading within its worst price across several transactions (a buy: up to the fills its escrow budgets),
+ * and what is not filled returns after its expiry, refunded by anyone for the refund tip (or cancelled by the maker). A buy deposits one delivery
+ * carrier per budgeted fill: an unused one returns with the refund or a cancel, a used one rides on the tokens it delivered (freed by a merge or
+ * a sale). A sell budgets no carrier per fill.
+ */
+function marketFillsRows(d: OrderDescription, extra: OrderExtra, f: Fmt): Row[] {
+  const { tr } = f;
+  const at = approxTime(d.expiryDaa, f) ?? tr('confirm.f.daa', { daa: d.expiryDaa.toString() });
+  const n = extra.fills?.count ?? null;
+  if (d.side === 'sell') return [row('tifFills', tr('confirm.f.tif'), tr('confirm.f.tifFillsSell', { time: at }), 'warn', tr('confirm.f.tifFillsSellHint'))];
+  const rows = [row('tifFills', tr('confirm.f.tif'), n !== null ? tr('confirm.f.tifFillsBuy', { fills: n.toString(), time: at }) : tr('confirm.f.tifFillsBuyAny', { time: at }), 'warn', tr('confirm.f.tifFillsRefund'))];
+  if (n !== null && extra.fills && extra.fills.carrier > 0n) {
+    rows.push(row('fillCarriers', tr('confirm.f.fillCarriers'), kas(n * extra.fills.carrier), 'muted', tr('confirm.f.fillCarriersHint', { fills: n.toString(), each: kas(extra.fills.carrier) })));
+  }
   return rows;
 }
 

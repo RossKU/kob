@@ -125,6 +125,29 @@ describe('signer summary: prices that cannot be misread, the flipped view in its
     expect(o.rows.some((x) => / \/ /.test(x.value))).toBe(false);
   });
 
+  it('a market buy of several fills: named so, the fills its escrow budgets, when the rest returns and the carriers it deposits', () => {
+    const s = summarize(kob, plan(form('market', 'buy', { amount: '10', maxFills: '3' })), FIXTURE_MAKER, hint(false));
+    const o = s.orders[0]!;
+    expect(o.title).toBe('Buy market order (auction, several fills)');
+    const fills = o.rows.find((r) => r.id === 'tifFills')!;
+    expect(fills.label).toBe('Time in force');
+    expect(fills.value).toMatch(/^fills in up to 3 transactions within the worst price; what is not filled returns after /);
+    // 3 delivery carriers of the fixture's 10 KAS
+    expect(o.rows.find((r) => r.id === 'fillCarriers')).toMatchObject({ label: 'Delivery carriers deposited', value: '30 KAS' });
+    // a one-transaction market buy has neither
+    const one = summarize(kob, plan(form('market', 'buy', { amount: '5' })), FIXTURE_MAKER, hint(false)).orders[0]!;
+    expect(one.title).toBe('Buy market order (auction)');
+    expect(one.rows.map((r) => r.id)).not.toContain('tifFills');
+    expect(one.rows.map((r) => r.id)).not.toContain('fillCarriers');
+  });
+
+  it('a market sell of several fills: no carrier per fill, the tokens not sold return after its expiry', () => {
+    const o = summarize(kob, plan(form('market', 'sell', { amount: '3', maxFills: '3' })), FIXTURE_MAKER, hint(false)).orders[0]!;
+    expect(o.title).toBe('Sell market order (auction, several fills)');
+    expect(o.rows.find((r) => r.id === 'tifFills')!.value).toMatch(/^fills in several transactions within the worst price; the tokens not sold return after /);
+    expect(o.rows.map((r) => r.id)).not.toContain('fillCarriers');
+  });
+
   it('a market buy of KAS on the flipped view (a chain sell of tokens): pays the tokens, receives at least the KAS of the worst price', () => {
     const s = summarize(kob, plan(form('market', 'sell', { amount: '3' })), FIXTURE_MAKER, hint(true));
     const o = s.orders[0]!;
