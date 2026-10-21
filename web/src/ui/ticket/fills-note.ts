@@ -16,18 +16,20 @@ export interface FillsNote {
 
 /**
  * The note of `f` (`box`: the form shows a Fills box for the order). A resting buy's estimate (`f.scope` 'crossing') is for the part that
- * crosses now. `amount` is the order's, in base units of the token (`decimals`, `ticker`).
+ * crosses now. `amount` is the order's, in base units of the token (`decimals`, `ticker`). `inverted`: the market is shown as KAS/TOKEN, where
+ * the chain's asks (selling the token for KAS) are the bids for KAS and the other way round, so the counterparties are named as that view shows them.
  */
-export function fillsNote(f: PlanFills, c: { decimals: number; ticker: string; box: boolean; amount: bigint }): FillsNote {
+export function fillsNote(f: PlanFills, c: { decimals: number; ticker: string; box: boolean; amount: bigint; inverted?: boolean }): FillsNote {
+  const counterparty = c.inverted ? (f.counterparty === 'asks' ? 'bids' : 'asks') : f.counterparty;
   const tokens = (n: bigint): string => `${formatTokenAmount(n, c.decimals, { group: ',' })} ${c.ticker}`;
   const parts: string[] = [];
   if (f.needed === 0) parts.push(t('ticket.fills.nothing'));
-  else parts.push(t(f.scope === 'crossing' ? 'ticket.fills.estimateCross' : 'ticket.fills.estimate', { needed: f.needed, perTx: f.perTx, counterparty: f.counterparty }));
-  parts.push(f.carrierDeposit > 0n ? t('ticket.fills.deposit', { fills: f.budgeted.toString(), deposit: formatKas(f.carrierDeposit, { group: ',' }) }) : t('ticket.fills.noCarrier'));
+  else parts.push(t(f.scope === 'crossing' ? 'ticket.fills.estimateCross' : 'ticket.fills.estimate', { needed: f.needed, perTx: f.perTx, counterparty }));
+  parts.push(f.carrierDeposit > 0n ? t('ticket.fills.deposit', { fills: f.budgeted.toString(), deposit: formatKas(f.carrierDeposit, { group: ',' }) }) : t(c.inverted ? 'ticket.fills.noCarrierInv' : 'ticket.fills.noCarrier', { ticker: c.ticker }));
   const lacking = f.needed > 0 && BigInt(f.needed) > f.budgeted && f.fillable < c.amount;
   let short: string | null = null;
   if (lacking) {
-    const params = { perTx: f.perTx, counterparty: f.counterparty, fills: f.budgeted.toString(), fillable: tokens(f.fillable), amount: tokens(c.amount) };
+    const params = { perTx: f.perTx, counterparty, fills: f.budgeted.toString(), fillable: tokens(f.fillable), amount: tokens(c.amount) };
     short = f.budgeted === 1n ? t('ticket.fills.shortOneTx', params) + (c.box ? ` ${t('ticket.fills.raise')}` : '') : t('ticket.fills.short', params);
   }
   return { hint: c.box ? parts.join(' ') : null, short };

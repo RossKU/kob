@@ -596,7 +596,7 @@ export function OrderTicket(props: OrderTicketProps) {
   // an order that takes liquidity now: its fills against the visible book, next to the Fills box, and a warning when they cannot take the amount
   const fillsBox = layout.main.includes('maxFills') || layout.advanced.includes('maxFills');
   const amountBase = baseOf('amount');
-  const fills = shownPlan?.fills && amountBase !== null ? fillsNote(shownPlan.fills, { decimals: token.decimals, ticker, box: fillsBox, amount: amountBase }) : null;
+  const fills = shownPlan?.fills && amountBase !== null ? fillsNote(shownPlan.fills, { decimals: token.decimals, ticker, box: fillsBox, amount: amountBase, inverted }) : null;
   const issueCtx = { tokenDecimals: token.decimals, tokenTicker: ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
 
   // the balance this order spends, shown at the right end of the amount label row (it is the Max button): a buy pays in the quote (KAS, or a

@@ -260,6 +260,7 @@ export default {
   'ticket.fills.nothing': 'Nothing in the visible book is within reach now.',
   'ticket.fills.deposit': '{fills} fill(s) deposit {deposit} KAS in carriers; unused ones come back.',
   'ticket.fills.noCarrier': 'A sell deposits no carrier per fill.',
+  'ticket.fills.noCarrierInv': 'Paying with {ticker} deposits no carrier per fill.',
   'ticket.fills.short': 'With {fills} fill(s) only about {fillable} of {amount} can fill now: raise Fills to trade more.',
   'ticket.fills.shortOneTx': 'One transaction takes at most {perTx} {counterparty}: only about {fillable} of {amount} fills now, the rest returns.',
   'ticket.fills.raise': 'Raise Fills (Advanced) to trade more.',

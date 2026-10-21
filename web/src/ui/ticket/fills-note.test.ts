@@ -28,6 +28,15 @@ describe('fillsNote', () => {
     expect(ioc.short).toBe('One transaction takes at most 3 asks: only about 6 TST of 20 TST fills now, the rest returns.');
   });
 
+  it('the market shown as KAS/TOKEN: the counterparties are named as that view shows them (a chain ask is a bid for KAS)', () => {
+    const inv = { ...c, inverted: true };
+    expect(fillsNote(facts(), inv)).toEqual({
+      hint: 'The visible book needs about 4 fill(s) for this amount (3 bids per transaction). 1 fill(s) deposit 2 KAS in carriers; unused ones come back.',
+      short: 'One transaction takes at most 3 bids: only about 6 TST of 20 TST fills now, the rest returns. Raise Fills (Advanced) to trade more.',
+    });
+    expect(fillsNote(facts({ budgeted: 4n, counterparty: 'bids', carrierDeposit: 0n, fillable: 20n * TOK }), inv).hint).toMatch(/3 asks per transaction\)\. Paying with TST deposits no carrier per fill\.$/);
+  });
+
   it('a resting buy speaks of what crosses now; short of fills it says how much can fill', () => {
     const n = fillsNote(facts({ scope: 'crossing', budgeted: 2n, fillable: 12n * TOK, carrierDeposit: 400_000_000n }), c);
     expect(n.hint).toMatch(/^What crosses now needs about 4 fill\(s\) \(3 asks per transaction\)\./);
