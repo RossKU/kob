@@ -246,7 +246,11 @@ into it out of the page's reach. A browser extension wallet is the recommended s
   `fees.dynamic` is also a Settings switch. The mock server answers `GET /node/fee-estimate` with every bucket at the relay floor (100 sompi per gram) after each reset; `POST /mock/fee-estimate {priority, normal, low}` changes it, `{off: true}` makes the route answer 404 (no estimate: the floor).
   Independently, Settings > "Pay the priority fee" (`features.priorityFee`) switches every planner to the storage-inclusive fee MODE (`feeMode: 'priority'`); the issuance
   confirmation screen's technical details show the mode and both masses. Mode and rate are independent.
-* **Coin selection** (`src/kob/funding.ts`). Token inputs of a placement (sell, pair custodies): the covering set as before (the smallest single UTXO
+* **Coin selection** (`src/kob/funding.ts`). KAS funding of a placement: smallest first until covered, as the Kaspa SDK's Generator spends a
+  UtxoContext kept ascending by amount (at most 50 inputs; when the smallest 50 do not cover it, the largest first with the fewest inputs, and
+  `FUNDING_FRAGMENTED` only when even that needs more). More inputs cost signature mass and fee (and more for an external wallet to show), but every
+  placement sweeps the wallet's dust into its change; the first funding input authorises the order genesis (its outpoint binds the covenant id),
+  any of the wallet's P2PK UTXOs does. Token inputs of a placement (sell, pair custodies): the covering set as before (the smallest single UTXO
   that suffices, else the largest first, within the program's input slots), then the spare slots take the wallet's SMALLEST other UTXOs of the token
   (up to 3 token inputs in all: the 8 / 8 prototype's 8 would pass the standard mass). They join the order's ONE token change, their carriers come
   back as KAS change, so every placement consolidates the wallet (a single extra next to an exact cover is skipped: it would only re-create itself;

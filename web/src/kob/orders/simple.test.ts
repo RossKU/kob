@@ -696,6 +696,18 @@ describe('validation and guards through the planner', () => {
 });
 
 describe('funding and token selection', () => {
+  it('KAS funding is spent smallest first; the first funding input authorises the genesis and the dust ends in the change', () => {
+    const env = makeEnv({ funding: [1000n * KAS, 1n * KAS, 3n * KAS, 40n * KAS] });
+    const p = planValid(env, { type: 'limit', side: 'buy', price: P, amount: 4n * TOK });
+    const built = p.built!;
+    const funding = built.tx.inputs.filter((i) => !i.utxo.covenantId);
+    // the bid's escrow is about 10 KAS + 3 carriers of 10 KAS: 1 + 3 + 40 covers it, the 1000 KAS UTXO stays
+    expect(funding.map((i) => BigInt(i.utxo.amount))).toEqual([1n * KAS, 3n * KAS, 40n * KAS]);
+    const cov = built.covenants.find((c) => c.outputs.includes(0))!;
+    expect(cov.authorizingInput).toBe(built.tx.inputs.indexOf(funding[0]!));
+    expect(built.fee.changeOutput).not.toBeNull();
+  });
+
   it('not enough tokens: clear shortfall in base units', () => {
     const p = planSimple(makeEnv({ tokenAmounts: [5n * TOK] }), { type: 'limit', side: 'sell', price: P, amount: 8n * TOK });
     expect(p.ok).toBe(false);
@@ -787,10 +799,11 @@ describe('funding and token selection', () => {
     expect(planSimple(makeEnv({ funding: [need - 1n] }), { type: 'limit', side: 'buy', price: P, amount: 2n * TOK }).issues.map((i) => i.code)).toEqual(['INSUFFICIENT_KAS']);
   });
 
-  it('funding is largest-first and can span several UTXOs; a wallet of dust UTXOs is reported as fragmented', () => {
+  it('funding is smallest-first and can span several UTXOs; a wallet of dust UTXOs is reported as fragmented', () => {
     const p = planValid(makeEnv({ funding: [3n * KAS, 2n * KAS, 90n * KAS, 30n * KAS] }), { type: 'limit', side: 'buy', price: P, amount: 30n * TOK });
-    // needs 30 x 2.5 + 3 x 10 KAS (+ 2 sompi) = 105 KAS: 90 + 30
-    expect(p.built!.tx.inputs.filter((i) => !i.utxo.covenantId)).toHaveLength(2);
+    // needs 30 x 2.5 + 3 x 10 KAS (+ 2 sompi) = 105 KAS: smallest first 2 + 3 + 30 = 35 is short, so all four (largest-first took 90 + 30)
+    expect(p.built!.tx.inputs.filter((i) => !i.utxo.covenantId).map((i) => BigInt(i.utxo.amount))).toEqual([2n * KAS, 3n * KAS, 30n * KAS, 90n * KAS]);
+    // 100 dust UTXOs of 3 KAS for about 280 KAS: the smallest 50 hold 150, largest first needs 94 inputs, more than one placement carries
     const dust = planSimple(makeEnv({ funding: Array(100).fill(3n * KAS) }), { type: 'limit', side: 'buy', price: P, amount: 100n * TOK });
     expect(dust.issues.map((i) => i.code)).toEqual(['FUNDING_FRAGMENTED']);
   });

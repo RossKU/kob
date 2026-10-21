@@ -53,18 +53,39 @@ const desc = <T extends { amount: string; transactionId: string; index: number }
 };
 
 /**
- * Largest-first selection of plain P2PK KAS UTXOs covering `needSompi + reserve` with the FEWEST inputs (every extra input costs
- * mass). UTXOs that are covenant outputs are never spent as funding. Always returns at least one input (the first one authorises the
- * order genesis). Throws InsufficientFunds (`kas` shortfall, or `fragmented` beyond MAX_FUNDING_INPUTS).
+ * Plain P2PK KAS UTXOs covering `needSompi + reserve`, SMALLEST FIRST until covered (ties by outpoint), as the Kaspa SDK does: its
+ * UtxoContext keeps the mature UTXOs ascending by amount and the Generator consumes them in that order until the target is reached
+ * (rusty-kaspa wallet/core/src/utxo/context.rs:300, 483). When the smallest `maxInputs` do not cover it, the largest-first selection with
+ * the fewest inputs (the former rule), and InsufficientFunds('fragmented') only when even that needs more than `maxInputs`; a balance below
+ * the target is InsufficientFunds('kas').
+ *
+ * The trade-off: smallest-first spends more inputs than largest-first (each a P2PK signature: more compute mass and fee, and more for an
+ * external wallet to show), but every placement consolidates the wallet's dust into its change instead of leaving it to pile up.
+ *
+ * UTXOs that are covenant outputs are never spent as funding. Always at least one input: the builders take the FIRST funding input as the
+ * one that authorises the order genesis (kob-protocol `build_create_order`: `auth` = the first input after the token inputs; the new
+ * covenant id is bound to its outpoint) and its key as the default change owner. Any P2PK input of the wallet key does both (the inputs
+ * are all of that key), so the order of the selection only changes which outpoint the covenant id is derived from: it is deterministic.
  */
 export function selectFunding(utxos: KeyUtxo[], needSompi: bigint, reserve: bigint = DEFAULT_FEE_RESERVE, maxInputs: number = MAX_FUNDING_INPUTS): KeyUtxo[] {
   const target = (needSompi > 0n ? needSompi : 0n) + (reserve > 0n ? reserve : 0n);
-  const sorted = utxos.filter((u) => !u.covenantId && amountOf(u) > 0n).sort(desc);
-  const have = sorted.reduce((s, u) => s + amountOf(u), 0n);
-  if (have < target || sorted.length === 0) throw new InsufficientFunds('kas', target, have);
-  const picked: KeyUtxo[] = [];
+  const usable = utxos.filter((u) => !u.covenantId && amountOf(u) > 0n);
+  const have = usable.reduce((s, u) => s + amountOf(u), 0n);
+  if (have < target || usable.length === 0) throw new InsufficientFunds('kas', target, have);
+  // smallest first, at most `maxInputs`
+  const asc = [...usable].sort((a, b) => (amountOf(a) === amountOf(b) ? outpointCmp(a, b) : amountOf(a) < amountOf(b) ? -1 : 1));
+  const small: KeyUtxo[] = [];
   let sum = 0n;
-  for (const u of sorted) {
+  for (const u of asc) {
+    if (small.length >= maxInputs) break;
+    small.push(u);
+    sum += amountOf(u);
+    if (sum >= target) return small;
+  }
+  // the smallest `maxInputs` do not cover it: the fewest inputs, largest first
+  const picked: KeyUtxo[] = [];
+  sum = 0n;
+  for (const u of [...usable].sort(desc)) {
     picked.push(u);
     sum += amountOf(u);
     if (sum >= target) break;

@@ -5,11 +5,21 @@ import { KAS, keyUtxo, market3x3, market8x8, marketKron, tokenUtxo } from '../te
 const amounts = (u: { amount: string }[]): bigint[] => u.map((x) => BigInt(x.amount));
 
 describe('selectFunding', () => {
-  it('takes the largest UTXOs first: fewest inputs', () => {
+  it('takes the smallest UTXOs first until covered (the Kaspa SDK Generator order)', () => {
     const u = [keyUtxo(5n * KAS), keyUtxo(50n * KAS), keyUtxo(20n * KAS), keyUtxo(1n * KAS)];
-    expect(amounts(selectFunding(u, 10n * KAS, 0n))).toEqual([50n * KAS]);
-    expect(amounts(selectFunding(u, 60n * KAS, 0n))).toEqual([50n * KAS, 20n * KAS]);
-    expect(amounts(selectFunding(u, 75n * KAS, 0n))).toEqual([50n * KAS, 20n * KAS, 5n * KAS]);
+    expect(amounts(selectFunding(u, 1n * KAS, 0n))).toEqual([1n * KAS]);
+    expect(amounts(selectFunding(u, 6n * KAS, 0n))).toEqual([1n * KAS, 5n * KAS]);
+    expect(amounts(selectFunding(u, 10n * KAS, 0n))).toEqual([1n * KAS, 5n * KAS, 20n * KAS]);
+    expect(amounts(selectFunding(u, 75n * KAS, 0n))).toEqual([1n * KAS, 5n * KAS, 20n * KAS, 50n * KAS]);
+  });
+
+  it('when the smallest maxInputs do not cover the need: the former largest-first pick, fewest inputs', () => {
+    const u = [keyUtxo(1n * KAS), keyUtxo(1n * KAS), keyUtxo(1n * KAS), keyUtxo(50n * KAS), keyUtxo(20n * KAS)];
+    // smallest first within 3 inputs: 1 + 1 + 1 = 3 < 10, so the largest one alone
+    expect(amounts(selectFunding(u, 10n * KAS, 0n, 3))).toEqual([50n * KAS]);
+    expect(amounts(selectFunding(u, 60n * KAS, 0n, 3))).toEqual([50n * KAS, 20n * KAS]);
+    // within 4 inputs the smallest cover 1 + 1 + 1 + 20 = 23 >= 10
+    expect(amounts(selectFunding(u, 10n * KAS, 0n, 4))).toEqual([1n * KAS, 1n * KAS, 1n * KAS, 20n * KAS]);
   });
 
   it('adds the fee reserve to the need, exactly at the boundary', () => {
