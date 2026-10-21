@@ -49,7 +49,8 @@ export default defineConfig({
   workers: perWorker ? undefined : 1,
   fullyParallel: perWorker,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list']],
+  // CI: `github` turns each failure (and flaky retry) into a check-run annotation, readable through the public API without the job log
+  reporter: process.env.CI ? [['list'], ['github'], ['html', { open: 'never' }]] : [['list']],
   outputDir: 'test-results',
   use: {
     baseURL,
