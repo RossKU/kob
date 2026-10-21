@@ -349,7 +349,7 @@ export interface MergeOutcome {
 /**
  * "Merge tokens" through the web's merge planner (kob/merge.ts, My orders' merge flow): `planMerge` over the wallet's plain UTXOs of `m` (smallest
  * first; KOB's standard program: 3 -> 1, then 1 + 2 -> 1, ... up to 10 links), link 0 submitted as planned, every next link rebuilt once the previous
- * one's output is accepted (read from the NODE, as `nextMergeLink`), with fresh KAS UTXOs. Only one link holds the wallet lock at a time.
+ * one's output is accepted (read from the NODE, as the app's chained Merge did before it became one transaction per click), with fresh KAS UTXOs. Only one link holds the wallet lock at a time.
  */
 export async function mergeTokens(env: Env, w: BotWallet, m: TokenMarket, tag = 'mergeTokens'): Promise<MergeOutcome> {
   const token: MergeToken = { covenantId: m.covenantId, program: m.program, templateHash: m.templateHash, extensionCommitment: m.family === 'kron' ? null : m.extensionCommitment, slots: { inputs: m.slots.inputs } };

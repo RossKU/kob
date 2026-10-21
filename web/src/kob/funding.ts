@@ -10,7 +10,8 @@ export const MAX_FUNDING_INPUTS = 50;
 /**
  * Most token inputs (of one token) the spare-slot fill of `selectTokens` takes a placement to: KOB's standard program's slots (KCC20Ref 3 / 3).
  * A larger program's slots are not filled up: measured on the 8 / 8 prototype, a sell placement with 8 token inputs weighs 105,546 grams
- * (max(compute, normalized transient), the mempool's standard-mass check, limit 100,000) and would not be relayed, at 3 inputs it stays far
+ * (max(compute, normalized transient)), above the 100,000 standard mass KOB's own tools keep (kob-protocol issue.rs MAX_STANDARD_MASS; matcher.md
+ * §3: rusty-kaspa v2.1.0 itself has no standard-mass cap below the block limits), and every extra input only adds fee; at 3 inputs it stays far
  * below (funding.test.ts measures it, and a pair placement taking 3 of each token). The covering set itself may still use every slot (unchanged).
  */
 export const MAX_SPARE_TOKEN_INPUTS = 3;
