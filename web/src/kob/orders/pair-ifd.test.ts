@@ -9,6 +9,7 @@ import { B_COV, KAS, ceilDivM, ceilQ, floorQ, kronA, kronB, makePairEnv, tokenA,
 import { market3x3 } from '../../testing/fixtures';
 import { K, codes, errorCodes, pairValid, plan } from './pair-testkit';
 import { PAIR_MERGE_COST_BUY_FIRST, PAIR_MERGE_COST_SELL_FIRST } from './pair-ifd';
+import { keyState } from '../token-state';
 
 const DC = 10n * KAS;
 const entryOf = (p: { states: { kind: string; state: unknown }[] }): IfdPairState => {
@@ -232,5 +233,27 @@ describe('KobIfdPair economics and refusals', () => {
 
   it('an entry at or through the pair book warns that it fills at once', () => {
     expect(codes(pairValid(makePairEnv(), { type: 'ifd', side: 'buy', amount: 4_000n, entry: { price: 1_500n }, exit: { takeProfit: 1_600n } }))).toContain('COND_ENTRY_CROSSES');
+  });
+});
+
+describe('pair placement: the spare token slots of each token take its smallest other UTXOs', () => {
+  it('IFO sell-first (A custody and B prefund): 3 token inputs of each token, ONE change per token to the maker, under the standard mass', () => {
+    const a = tokenA();
+    const b = tokenB();
+    const amount = 8_003n;
+    const env = makePairEnv({ a, b, aAmounts: [amount, 1n, 2n, 50n], bAmounts: [1_000_000n * b.scale, 1n * b.scale, 2n * b.scale, 9n * b.scale] });
+    const p = pairValid(env, { type: 'ifo', side: 'sell', amount, entry: { price: 1_599n }, exit: { takeProfit: 1_399n, stop: 1_700n } });
+    const built = p.built!;
+    const ins = (cov: string) => built.tx.inputs.filter((i) => i.utxo.covenantId === cov);
+    // A: the exact cover (8,003), then the 1 and the 2 (not the 50); B: the big UTXO, then the 1 and the 2 (not the 9)
+    expect(ins(a.covenantId)).toHaveLength(3);
+    expect(ins(b.covenantId)).toHaveLength(3);
+    const outs = (cov: string) => built.tx.outputs.filter((o) => o.covenant?.covenantId === cov);
+    // A: the custody and one change of 3; B: the prefund custody and one change
+    expect(outs(a.covenantId)).toHaveLength(2);
+    expect(outs(b.covenantId)).toHaveLength(2);
+    const aChange = K.tokenScriptPublicKey(a.program!, keyState(a.family, 3n, env.maker, a.extensionCommitment, a.program!));
+    expect(outs(a.covenantId).filter((o) => o.scriptPublicKey === aChange)).toHaveLength(1);
+    expect(built.fee.mass.priorityMass).toBeLessThan(100_000);
   });
 });

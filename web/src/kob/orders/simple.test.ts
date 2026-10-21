@@ -15,6 +15,7 @@ import {
   CLOCK, KAS, MAKER_PK, TOK, bookOrder, consensusCheck, kob, level, makeEnv, market3x3, market8x8, marketKron, tokenUtxo,
 } from '../../testing/fixtures';
 import { MAX_IDLE_DAA } from '../daa';
+import { keyState } from '../token-state';
 import { baseKind } from '../order-facts';
 import { ceilDiv, quoteOf } from '../units';
 
@@ -714,11 +715,45 @@ describe('funding and token selection', () => {
     expect(nine.issues.map((i) => i.code)).toEqual(['TOKEN_UTXOS_FRAGMENTED']);
   });
 
-  it('several token UTXOs are combined largest-first and the change returns to the maker', () => {
-    const p = planValid(makeEnv({ market: market3x3(), tokenAmounts: [4n * TOK, 3n * TOK, 2n * TOK] }), { type: 'limit', side: 'sell', price: P, amount: 6n * TOK });
+  it('several token UTXOs are combined largest-first, the spare slot takes the smallest other one, the change returns to the maker', () => {
+    const p = planValid(makeEnv({ market: market3x3(), tokenAmounts: [4n * TOK, 3n * TOK, 2n * TOK, 5n * TOK] }), { type: 'limit', side: 'sell', price: P, amount: 9n * TOK });
     const tokenIns = p.built!.tx.inputs.filter((i) => i.utxo.covenantId);
-    expect(tokenIns).toHaveLength(2); // 4 + 3 = 7 >= 6
+    // the cover 5 + 4 = 9 is exact; ONE spare slot left: a single extra would only come back as the same UTXO, so none is added
+    expect(tokenIns).toHaveLength(2);
+    const q = planValid(makeEnv({ market: market3x3(), tokenAmounts: [4n * TOK, 3n * TOK, 2n * TOK] }), { type: 'limit', side: 'sell', price: P, amount: 6n * TOK });
+    // 4 + 3 = 7 >= 6 covers, the third slot takes the 2: change 3
+    expect(q.built!.tx.inputs.filter((i) => i.utxo.covenantId)).toHaveLength(3);
+    expect(q.disclosure!.carriers.find((c) => c.kind === 'tokenChangeCarrier')).toMatchObject({ kept: true });
+  });
+
+  it('spare token slots consolidate the wallet: need 100 of [1, 1, 1, 200] takes the 200 and two 1s, ONE token change, the freed carrier back as KAS change', () => {
+    const env = makeEnv({ market: market3x3(), tokenAmounts: [1n * TOK, 200n * TOK, 1n * TOK, 1n * TOK] });
+    const p = planValid(env, { type: 'limit', side: 'sell', price: P, amount: 100n * TOK });
+    const built = p.built!;
+    const tokenIns = built.tx.inputs.filter((i) => i.utxo.covenantId === env.token.covenantId);
+    const spent = new Set(tokenIns.map((i) => `${i.transactionId}:${i.index}`));
+    const picked = env.tokenUtxos.filter((u) => spent.has(`${u.transactionId}:${u.index}`)).map((u) => BigInt(u.state.amount) / TOK).sort((a, b) => Number(a - b));
+    expect(picked).toEqual([1n, 1n, 200n]);
+    // token outputs: the custody (100) and ONE change of the maker holding the rest (1 + 1 + 100)
+    const tokenOuts = built.tx.outputs.filter((o) => o.covenant?.covenantId === env.token.covenantId);
+    expect(tokenOuts).toHaveLength(2);
+    const change = env.kob.tokenScriptPublicKey(env.token.program!, keyState(env.token.family, 102n * TOK, env.maker, env.token.extensionCommitment, env.token.program!));
+    expect(tokenOuts.filter((o) => o.scriptPublicKey === change)).toHaveLength(1);
+    // KAS: three token inputs of 10 KAS each, two token outputs of the order's carrier: the third carrier comes back as KAS change
+    const fundingIn = sum(built.tx.inputs.filter((i) => !i.utxo.covenantId).map((i) => BigInt(i.utxo.amount)));
+    const kasChange = BigInt(built.tx.outputs[built.fee.changeOutput!].value);
+    const tokenOutKas = sum(tokenOuts.map((o) => BigInt(o.value)));
+    expect(kasChange).toBe(fundingIn + 30n * KAS - BigInt(built.tx.outputs[0].value) - tokenOutKas - BigInt(built.fee.fee));
     expect(p.disclosure!.carriers.find((c) => c.kind === 'tokenChangeCarrier')).toMatchObject({ kept: true });
+    expect(built.fee.mass.priorityMass).toBeLessThan(100_000);
+  });
+
+  it('the spare fill stops at 3 token inputs on the 8 / 8 program: the placement stays far below the standard mass', () => {
+    const env = makeEnv({ market: market8x8(), tokenAmounts: Array.from({ length: 8 }, (_, i) => BigInt(i + 1) * TOK) });
+    const p = planValid(env, { type: 'limit', side: 'sell', price: P, amount: 8n * TOK });
+    expect(p.built!.tx.inputs.filter((i) => i.utxo.covenantId)).toHaveLength(3);
+    // max(compute, normalized transient, storage): the mempool's standard limit is 100,000 (8 inputs would weigh 105,546)
+    expect(p.built!.fee.mass.priorityMass).toBeLessThan(60_000);
   });
 
   it('other tokens, foreign owners and custody UTXOs are never spent', () => {

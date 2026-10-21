@@ -12,7 +12,7 @@ import { InsufficientFunds, DEFAULT_FEE_RESERVE, selectFunding, selectTokens } f
 import { MAX_TOKEN_INPUTS } from '../guards';
 import { daaToUnix } from '../daa';
 import { isKind, kindFor } from '../order-facts';
-import { extensionOfState, isKeyOwned, isKronState, isPlainState } from '../token-state';
+import { KRON_MAX_OUTPUT_AMOUNT, extensionOfState, isKeyOwned, isKronState, isPlainState } from '../token-state';
 import { issue, hasError } from './common-issues';
 
 export { issue, customIssue, hasError, ISSUE_CATALOG } from './common-issues';
@@ -265,7 +265,9 @@ function buildCreateAt(env: PlanEnv, spec: CreateSpec): CreateResult {
 
   if (spec.tokenAmount > 0n) {
     try {
-      tokens = selectTokens(usableTokenUtxos(env), spec.tokenAmount, Math.min(env.token.slots.inputs, MAX_TOKEN_INPUTS), env.token.program);
+      // the covering set, then the spare slots take the wallet's smallest other UTXOs of the token (funding.ts selectTokens): they ride on the ONE
+      // token change (kob-protocol build_create_order), their carriers recycled below (tokenInputsKas), the surplus back as KAS change
+      tokens = selectTokens(usableTokenUtxos(env), spec.tokenAmount, Math.min(env.token.slots.inputs, MAX_TOKEN_INPUTS), env.token.program, env.token.family === 'kron' ? { changeCap: KRON_MAX_OUTPUT_AMOUNT } : {});
     } catch (e) {
       if (e instanceof InsufficientFunds) {
         return fail(

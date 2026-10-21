@@ -341,7 +341,9 @@ function buildPairCreateAt(env: PairPlanEnv, spec: { order: OrderState; value: b
     if (carrier < floor) return fail(issue('CARRIER_BELOW_FLOOR', { carrier, floor }, 'carrier'));
     let picked: TokenUtxo[];
     try {
-      picked = selectTokens(usableUtxosOf(t.market, env.maker, t.utxos), c.amount, Math.min(t.market.slots.inputs, MAX_TOKEN_INPUTS));
+      // the covering set, then the spare slots take the smallest other UTXOs of that token (funding.ts selectTokens): one token change per token
+      // (kob-protocol build_create_pair), a KRON change kept under its per-output limit
+      picked = selectTokens(usableUtxosOf(t.market, env.maker, t.utxos), c.amount, Math.min(t.market.slots.inputs, MAX_TOKEN_INPUTS), null, t.market.family === 'kron' ? { changeCap: KRON_MAX_OUTPUT_AMOUNT } : {});
     } catch (e) {
       if (e instanceof InsufficientFunds) {
         return fail(

@@ -246,4 +246,10 @@ into it out of the page's reach. A browser extension wallet is the recommended s
   `fees.dynamic` is also a Settings switch. The mock server answers `GET /node/fee-estimate` with every bucket at the relay floor (100 sompi per gram) after each reset; `POST /mock/fee-estimate {priority, normal, low}` changes it, `{off: true}` makes the route answer 404 (no estimate: the floor).
   Independently, Settings > "Pay the priority fee" (`features.priorityFee`) switches every planner to the storage-inclusive fee MODE (`feeMode: 'priority'`); the issuance
   confirmation screen's technical details show the mode and both masses. Mode and rate are independent.
+* **Coin selection** (`src/kob/funding.ts`). Token inputs of a placement (sell, pair custodies): the covering set as before (the smallest single UTXO
+  that suffices, else the largest first, within the program's input slots), then the spare slots take the wallet's SMALLEST other UTXOs of the token
+  (up to 3 token inputs in all: the 8 / 8 prototype's 8 would pass the standard mass). They join the order's ONE token change, their carriers come
+  back as KAS change, so every placement consolidates the wallet (a single extra next to an exact cover is skipped: it would only re-create itself;
+  a KRON change stays under its 10^9 output limit). An amend / cancel-replace top-up (`src/kob/cancel.ts`) keeps the fewest-inputs pick: its
+  slots are shared with the old custody and the strays it sweeps.
 * **Order views** need `state`, `current`, `custody.utxo`, `strays`, the position grouping needs `parent` / `repeat` (indexer available; without it My orders shows node-derived rows).

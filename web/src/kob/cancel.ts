@@ -610,7 +610,13 @@ export interface ReplacementSpec {
   deadline?: bigint | null;
 }
 
-/** Cheapest set of maker P2PK token UTXOs of `token` (fewest inputs, smallest sufficient single first) covering `amount`. */
+/**
+ * Cheapest set of maker P2PK token UTXOs of `token` (fewest inputs, smallest sufficient single first) covering `amount`. Unlike a placement
+ * (funding.ts `selectTokens`) a top-up does NOT fill the spare slots with the wallet's smallest UTXOs: its slots (`maxInputs`) are what the old
+ * custody and the swept strays leave of the program's input slots, and the stray trimming re-runs with the top-up counted (`prepare(..., topUps)`),
+ * so an extra wallet UTXO would push a stray out of the sweep (it would stay behind on the cancelled order's id). A top-up is rare (only a
+ * replacement larger than what the order holds) and a merge consolidates the wallet anyway.
+ */
 function pickTokens(pool: TokenUtxo[], token: Hex, amount: bigint, ext: Hex | null, maker: Hex, maxInputs: number, program: TokenProgram | null = null): TokenUtxo[] | null {
   const usable = pool.filter((t) => (!t.covenantId || t.covenantId === token) && isKeyOwned(t.state, program) && t.state.owner === maker && extensionMatches(t.state, ext));
   const sorted = [...usable].sort((a, b) => (big(b.state.amount) > big(a.state.amount) ? 1 : big(b.state.amount) < big(a.state.amount) ? -1 : 0));

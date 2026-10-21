@@ -1,11 +1,19 @@
 // Coin selection for placement transactions: KAS funding inputs and token inputs. Deterministic (ties broken by outpoint) and pure.
-import { isKeyOwned } from './token-state';
+import { KRON_MAX_OUTPUT_AMOUNT, familyOfProgram, isKeyOwned } from './token-state';
 import type { KeyUtxo, TokenProgram, TokenUtxo } from './types';
 
 /** Default network-fee reserve added to the KAS a placement needs (0.05 KAS; the planner re-selects if the built fee turns out higher). */
 export const DEFAULT_FEE_RESERVE = 5_000_000n;
 /** Most KAS inputs one placement uses: beyond it the transaction mass approaches the standard limit, the wallet must consolidate first. */
 export const MAX_FUNDING_INPUTS = 50;
+
+/**
+ * Most token inputs (of one token) the spare-slot fill of `selectTokens` takes a placement to: KOB's standard program's slots (KCC20Ref 3 / 3).
+ * A larger program's slots are not filled up: measured on the 8 / 8 prototype, a sell placement with 8 token inputs weighs 105,546 grams
+ * (max(compute, normalized transient), the mempool's standard-mass check, limit 100,000) and would not be relayed, at 3 inputs it stays far
+ * below (funding.test.ts measures it, and a pair placement taking 3 of each token). The covering set itself may still use every slot (unchanged).
+ */
+export const MAX_SPARE_TOKEN_INPUTS = 3;
 
 export type InsufficientKind = 'kas' | 'tokens' | 'fragmented';
 
@@ -65,29 +73,71 @@ export function selectFunding(utxos: KeyUtxo[], needSompi: bigint, reserve: bigi
   return picked;
 }
 
+const tokenAmt = (u: TokenUtxo): bigint => BigInt(u.state.amount);
+const tokenAsc = (a: TokenUtxo, b: TokenUtxo): number => (tokenAmt(a) === tokenAmt(b) ? outpointCmp(a, b) : tokenAmt(a) < tokenAmt(b) ? -1 : 1);
+const usableTokens = (utxos: readonly TokenUtxo[], program: TokenProgram | null): TokenUtxo[] => utxos.filter((u) => isKeyOwned(u.state, program) && tokenAmt(u) > 0n);
+const I64_MAX = (1n << 63n) - 1n;
+
 /**
- * Selects token UTXOs covering `amount` base units with the fewest inputs: the smallest single UTXO that suffices (least change), else
- * the largest ones first. Never more than `maxInputs` (the token program's input slots and the 8-input covenant limit): a balance that
- * is large enough but too fragmented throws InsufficientFunds('fragmented'). Only P2PK-owned UTXOs are considered (custody and strays
- * of orders are not spendable this way).
+ * The COVERING set of token UTXOs for `amount` base units, with the fewest inputs: the smallest single UTXO that suffices (least change), else
+ * the largest ones first. Never more than `maxInputs` (the token program's input slots and the 8-input covenant limit): a balance that is large
+ * enough but too fragmented throws InsufficientFunds('fragmented'). Only key-owned UTXOs are considered (custody and strays of orders are not
+ * spendable this way). `selectTokens` starts from this set.
  */
-export function selectTokens(utxos: TokenUtxo[], amount: bigint, maxInputs: number, program: TokenProgram | null = null): TokenUtxo[] {
+export function coverTokens(utxos: TokenUtxo[], amount: bigint, maxInputs: number, program: TokenProgram | null = null): TokenUtxo[] {
   if (amount <= 0n) throw new RangeError('selectTokens: amount must be positive');
-  const usable = utxos.filter((u) => isKeyOwned(u.state, program) && BigInt(u.state.amount) > 0n);
-  const amt = (u: TokenUtxo): bigint => BigInt(u.state.amount);
-  const have = usable.reduce((s, u) => s + amt(u), 0n);
+  const usable = usableTokens(utxos, program);
+  const have = usable.reduce((s, u) => s + tokenAmt(u), 0n);
   if (have < amount) throw new InsufficientFunds('tokens', amount, have);
-  const asc = [...usable].sort((a, b) => (amt(a) === amt(b) ? outpointCmp(a, b) : amt(a) < amt(b) ? -1 : 1));
-  const single = asc.find((u) => amt(u) >= amount);
+  const asc = [...usable].sort(tokenAsc);
+  const single = asc.find((u) => tokenAmt(u) >= amount);
   if (single) return [single];
   const bigFirst = [...asc].reverse();
   const picked: TokenUtxo[] = [];
   let sum = 0n;
   for (const u of bigFirst) {
     picked.push(u);
-    sum += amt(u);
+    sum += tokenAmt(u);
     if (sum >= amount) break;
   }
   if (picked.length > maxInputs) throw new InsufficientFunds('fragmented', amount, have, maxInputs);
   return picked;
+}
+
+/**
+ * Token inputs of a placement: the covering set (`coverTokens`, so whatever placed before still places: need 100 of [1, 1, 1, 200] still takes
+ * the 200), then, while token input slots are spare (`maxInputs`, filled up to MAX_SPARE_TOKEN_INPUTS), the wallet's SMALLEST other usable
+ * UTXOs of the token (ascending, ties by outpoint). The Kaspa SDK's Generator spends its UTXOs smallest-first (wallet/core/src/utxo/context.rs keeps them ascending); a token
+ * placement cannot simply take UTXOs until covered (3 slots), so it covers first and spends the spare slots on the dust instead. The extras ride
+ * on the order's token change: the builder (kob-protocol `build_create_order` / `build_create_pair`) returns everything above the custody as ONE
+ * token output of the maker per token, and the extras' carriers are recycled into the outputs, the surplus coming back as KAS change. So each
+ * placement consolidates the wallet's token UTXOs and frees their carriers' KAS (one more input of the token program each: more mass and fee).
+ *
+ * Not added: an extra that would push the change above `changeCap` (KRON's per-output amount limit; the default for a KRON `program`), and a
+ * SINGLE extra next to an exact covering set: it would come back as a new change UTXO of the same amount, re-creating the UTXO at a fee
+ * (two or more extras, or a covering set with change, do reduce the wallet's UTXO count). `spare: false` returns the covering set alone.
+ */
+export function selectTokens(
+  utxos: TokenUtxo[],
+  amount: bigint,
+  maxInputs: number,
+  program: TokenProgram | null = null,
+  opts: { spare?: boolean; changeCap?: bigint } = {},
+): TokenUtxo[] {
+  const cover = coverTokens(utxos, amount, maxInputs, program);
+  if (opts.spare === false) return cover;
+  const cap = opts.changeCap ?? (program && familyOfProgram(program) === 'kron' ? KRON_MAX_OUTPUT_AMOUNT : I64_MAX);
+  const taken = new Set(cover);
+  const rest = usableTokens(utxos, program).filter((u) => !taken.has(u)).sort(tokenAsc);
+  let change = cover.reduce((s, u) => s + tokenAmt(u), 0n) - amount;
+  const extras: TokenUtxo[] = [];
+  for (const u of rest) {
+    if (cover.length + extras.length >= Math.min(maxInputs, MAX_SPARE_TOKEN_INPUTS)) break;
+    if (change + tokenAmt(u) > cap) break;
+    extras.push(u);
+    change += tokenAmt(u);
+  }
+  const exact = cover.reduce((s, u) => s + tokenAmt(u), 0n) === amount;
+  if (exact && extras.length === 1) return cover;
+  return [...cover, ...extras];
 }
