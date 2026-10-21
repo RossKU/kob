@@ -4,7 +4,8 @@
 import type { OrderView, StrayView } from '../../data/indexer-types';
 import { t } from '../../i18n';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
-import { mergeCandidates, outpointOf, type MergeLink, type MergePlan, type MergeToken } from '../../kob/merge';
+import { mergeCandidates, mergeSlots, outpointOf, type MergeLink, type MergePlan, type MergeToken } from '../../kob/merge';
+import { DEFAULT_CARRIER } from '../../kob/orders/common';
 import { formatKas } from '../../kob/order-facts';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex, TokenUtxo } from '../../kob/types';
@@ -49,6 +50,27 @@ export function mergeableCounts(freeTokens: readonly TokenUtxo[], tokens: Readon
     if (!mt) continue;
     const n = mergeCandidates(freeTokens, mt, maker, reserved).length;
     if (n >= 2) out.set(id, n);
+  }
+  return out;
+}
+
+/**
+ * Per token: about how much KAS the next Merge click frees (before its fee, a few hundredths of a KAS): the KAS on the UTXOs one transaction takes
+ * (the smallest ones, `mergeCandidates` order, up to the program's inputs) less the carrier the merged UTXO keeps (the largest input's, at most the
+ * default carrier: kob/merge.ts `mergedCarrier`). Tokens with fewer than two mergeable UTXOs are left out. The confirmation states the exact amount.
+ */
+export function nextMergeFrees(freeTokens: readonly TokenUtxo[], tokens: ReadonlyMap<Hex, TokenInfo>, maker: Hex, reserved: ReadonlySet<string>): Map<Hex, bigint> {
+  const out = new Map<Hex, bigint>();
+  for (const id of new Set(freeTokens.map((u) => u.covenantId).filter((x): x is Hex => !!x))) {
+    const info = tokens.get(id);
+    const mt = info ? mergeTokenOf(info) : null;
+    if (!mt) continue;
+    const take = mergeCandidates(freeTokens, mt, maker, reserved).slice(0, mergeSlots(mt));
+    if (take.length < 2) continue;
+    const kas = take.map((u) => BigInt(u.amount));
+    const largest = kas.reduce((m, v) => (v > m ? v : m), 0n);
+    const kept = largest < DEFAULT_CARRIER ? largest : DEFAULT_CARRIER;
+    out.set(id, kas.reduce((s, v) => s + v, 0n) - kept);
   }
   return out;
 }

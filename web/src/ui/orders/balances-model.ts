@@ -9,7 +9,11 @@ import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
 export interface CombinedBalances {
   /** one entry per token that has free, escrowed or stray tokens or KAS locked (sorted by token id) */
   tokens: TokenBalance[];
-  kas: { free: bigint; locked: bigint; total: bigint };
+  /**
+   * `onTokens`: KAS on the wallet's own free token UTXOs (each fill delivers a token UTXO with its carrier and, for a buy, the price improvement
+   * over the escrowed worst price): the wallet's, but spendable only by moving those UTXOs (Merge, a sale, a transfer); counted in `total`
+   */
+  kas: { free: bigint; locked: bigint; onTokens: bigint; total: bigint };
   /** strays that can never be recovered because their order is closed (`lost`): informational */
   lostStrayTokens: bigint;
 }
@@ -63,7 +67,9 @@ export function combineBalances(o: {
     by.set(token, { ...cur, strays: t.recoverable });
   }
   const tokens = [...by.values()].filter((b) => b.free > 0n || b.notSpendable > 0n || b.escrowed > 0n || b.strays > 0n || b.kasLocked > 0n || b.orderCount > 0).sort((a, b) => (a.token < b.token ? -1 : a.token > b.token ? 1 : 0));
-  return { tokens, kas: kasBalanceSummary(o.freeKas, tokens), lostStrayTokens: lost };
+  const kas = kasBalanceSummary(o.freeKas, tokens);
+  const onTokens = o.freeTokens.filter((u) => u.state.owner === o.maker).reduce((s, u) => s + big(u.amount), 0n);
+  return { tokens, kas: { ...kas, onTokens, total: kas.total + onTokens }, lostStrayTokens: lost };
 }
 
 /**

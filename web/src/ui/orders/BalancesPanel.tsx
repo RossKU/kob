@@ -6,11 +6,11 @@ import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { Hex } from '../../kob/types';
 import { Amount, Banner, Button, ErrorBanner, KeyValueList, Loading, Section, Table, TableMessage, unitsFraction, useAsync } from '../kit';
-import { formatUnits } from '../../kob/units';
+import { formatKas, formatUnits } from '../../kob/units';
 import { tokenLabel } from '../market/token-model';
 import { combineFreeBalances, loadFreeBalances } from './balances-data';
 import { balanceColumnFractions, unreviewedProgram } from './balances-model';
-import { mergeableCounts } from './merge-model';
+import { mergeableCounts, nextMergeFrees } from './merge-model';
 import type { OrdersData } from './orders-data';
 
 /**
@@ -47,6 +47,12 @@ export function BalancesPanel(props: {
     [free.data, registry, props.pubkey, props.reserved],
   );
 
+  // about how much KAS the next Merge click frees, per token (shown on the button: the reason to press it)
+  const frees = useMemo(
+    () => (free.data ? nextMergeFrees(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set()) : new Map<Hex, bigint>()),
+    [free.data, registry, props.pubkey, props.reserved],
+  );
+
   // fixed decimals per column: the finest amount of the column, so every row shows the same number of decimals (decimal points line up)
   // (a token of unknown decimals, no registry entry, shows its base units with no fraction)
   const cols = useMemo(
@@ -69,6 +75,12 @@ export function BalancesPanel(props: {
             items={[
               { label: t('market.balances.kasFree'), value: free.data.kasFree !== null ? <Amount kind="kas" value={combined.kas.free} group /> : t('common.unavailable'), 'data-testid': 'kas-free' },
               { label: t('market.balances.kasLocked'), value: <Amount kind="kas" value={combined.kas.locked} group />, 'data-testid': 'kas-locked' },
+              {
+                label: <span title={t('orders.balances.kasOnTokensHint')}>{t('orders.balances.kasOnTokens')}</span>,
+                value: <Amount kind="kas" value={combined.kas.onTokens} group />,
+                'data-testid': 'kas-on-tokens',
+                show: combined.kas.onTokens > 0n,
+              },
               { label: t('common.total'), value: <Amount kind="kas" value={combined.kas.total} group />, show: free.data.kasFree !== null },
             ]}
           />
@@ -128,7 +140,9 @@ export function BalancesPanel(props: {
                             onClick={() => props.onMergeToken!(b.token)}
                             data-testid={`orders-merge-token-${b.token}`}
                           >
-                            {t('orders.merge.button', { count: mergeable.get(b.token)! })}
+                            {(frees.get(b.token) ?? 0n) > 0n
+                              ? t('orders.merge.buttonFrees', { count: mergeable.get(b.token)!, kas: formatKas(frees.get(b.token)!) })
+                              : t('orders.merge.button', { count: mergeable.get(b.token)! })}
                           </Button>
                         ) : null}{' '}
                         {b.orderCount > 0 ? (

@@ -233,6 +233,20 @@ function marketFillsOf(o: DecodedOrder, kob: KobWasm | undefined): { count: bigi
   return { count: fills, carrier };
 }
 
+/**
+ * KAS a pure self-transfer of token UTXOs (a Merge: no order created, every token output the wallet's own) moves off the wallet's token UTXOs into
+ * spendable KAS: the KAS on its token inputs less the KAS on its token outputs. The KAS line counts KAS on the wallet's token UTXOs as the wallet's
+ * already, so a merge reads as the fee alone there; this line says what becomes spendable. 0 for anything else: in a placement, part of that KAS
+ * moves into the order's custody instead.
+ */
+export function freedFromTokens(s: Pick<SigningSummary, 'maker' | 'inputs' | 'outputs' | 'orders'>): bigint {
+  const outs = s.outputs.filter((o) => o.token !== null);
+  if (s.orders.length > 0 || outs.length === 0 || !outs.every((o) => o.token!.owner === s.maker && o.token!.escrowOf === null)) return 0n;
+  const kasIn = s.inputs.filter((i) => i.type === 'token' && i.ownedBy === 'maker').reduce((sum, i) => sum + i.amount, 0n);
+  const kasOut = outs.reduce((sum, o) => sum + o.value, 0n);
+  return kasIn > kasOut ? kasIn - kasOut : 0n;
+}
+
 /** How many delivery counts `bidAmountOf` tries for a bid whose fills the user chose. */
 const MAX_FILLS_SEARCHED = 64n;
 
@@ -252,6 +266,8 @@ export function summaryLines(s: SigningSummary, hints: TokenHint[], kob?: KobWas
   if (k.locked.total > 0n) lines.push({ label: t('signer.net.locked'), value: kas(k.locked.total), dir: null });
   if (k.released > 0n) lines.push({ label: t('signer.net.released'), value: kas(k.released), dir: null });
   if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: kas(k.toOthers), dir: 'out' });
+  const fromTokens = freedFromTokens(s);
+  if (fromTokens > 0n) lines.push({ label: t('signer.net.fromTokens'), value: kas(fromTokens), dir: null });
   const registry = hintRegistry(hints);
   const orders = s.orders.filter((o) => o.sweptFrom === undefined).map((o) => {
     const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry);

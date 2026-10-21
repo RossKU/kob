@@ -234,6 +234,7 @@ export default {
   'orders.flow.state.preparing': 'preparing',
   'orders.flow.preparing': 'Waiting for the previous transaction, then building the next one…',
   'orders.merge.button': 'Merge ({count})',
+  'orders.merge.buttonFrees': 'Merge ({count}): about +{kas} KAS',
   'orders.merge.hint': 'Merge your smallest UTXOs of this token ({count} now) into one, at most {max} per transaction: one transaction per click, freeing their carriers\' KAS',
   'orders.merge.heading': 'Merge {ticker} UTXOs',
   'orders.merge.title': 'Merge tokens',
@@ -343,6 +344,10 @@ export default {
   'orders.replace.unsupported.kind': 'This order type has no amend form.',
   'orders.replace.unsupported.state': 'The order\'s terms could not be read back into the ticket. Cancel it and place a new one.',
   'orders.replace.noToken': 'Token not in this app\'s registry: cancel the order and place a new one.',
+
+  'orders.balances.kasOnTokens': 'KAS on your token UTXOs',
+
+  'orders.balances.kasOnTokensHint': 'Each token UTXO carries KAS: its carrier and, after a buy, the price improvement over your worst price. It is yours; Merge, a sale or a transfer frees it.',
 
   'orders.balances.title': 'Balances the wallet does not show',
   'orders.balances.tokens': 'Tokens',

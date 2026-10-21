@@ -176,7 +176,10 @@ in the registry) shows the pair book, the panels of a token market and the order
   plans one). Only the wallet's own plain UTXOs of the token (tracker, verified on the node) are taken, never an open order's custody or strays.
   The freed carriers pay the fee (low bucket), a wallet coin only when they cannot (and for KRON). The confirmation states the UTXOs merged and
   the count before / after, the KAS the merge frees (the merged UTXOs' carriers less the one the output keeps, less the fee; each token UTXO
-  carries ~2 KAS, so freeing them is the point) and how many mergeable UTXOs remain.
+  carries ~2 KAS, so freeing them is the point) and how many mergeable UTXOs remain. The button says about how much the next click frees
+  ("Merge (n): about +x KAS", before the fee), Balances shows the KAS on the wallet's token UTXOs as its own line (counted in the total: a buy's
+  delivery also carries its price improvement over the escrowed worst price, so it can be far more than the carriers), and the private-key
+  signer frame adds "KAS freed from your token UTXOs" (its KAS line counts that KAS as the wallet's already, so a merge alone reads as the fee).
 
 ## Wallet events
 

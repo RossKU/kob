@@ -37,6 +37,7 @@ export default {
   'signer.net.locked': 'Locked in orders',
   'signer.net.released': 'Released from orders',
   'signer.net.toOthers': 'KAS to other keys',
+  'signer.net.fromTokens': 'KAS freed from your token UTXOs (now spendable)',
   'signer.fee': 'Network fee',
   'signer.net.tokenAssumed': '{id} (decimals assumed {decimals})',
   'signer.net.tokenIssued': '{ticker} ({id}, unverified)',

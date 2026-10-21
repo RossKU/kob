@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { StrayView } from '../../data/indexer-types';
 import { loadKobNode } from '../../kob/wasm.node';
-import { MAKER, TOKEN, orderViewOf, placeGolden, strayFor, tokenUtxo, tokenUtxoView } from '../../testing/chain-fixtures';
+import { MAKER, OTHER, TOKEN, orderViewOf, placeGolden, strayFor, tokenUtxo, tokenUtxoView } from '../../testing/chain-fixtures';
 import { balanceColumnFractions, combineBalances, strayTotals, unreviewedProgram } from './balances-model';
 import { unitsFraction } from '../kit';
 
@@ -21,14 +21,18 @@ describe('strayTotals', () => {
 describe('combineBalances', () => {
   const custody = BigInt(placed.recovered[0].custody!.state.amount);
 
-  it('adds free tokens, escrowed custody and KAS locked; KAS total is free + locked', () => {
+  it('adds free tokens, escrowed custody and KAS locked; KAS total is free + locked + the KAS on its own token UTXOs', () => {
     const view = orderViewOf(kob, snap);
     const c = combineBalances({ maker: MAKER.pk, freeKas: 5_000_000_000n, freeTokens: [tokenUtxo(300n, MAKER.pk)], liveOrders: [view], strays: [] });
     expect(c.tokens).toHaveLength(1);
     expect(c.tokens[0]).toMatchObject({ token: TOKEN.covenantId, free: 300n, escrowed: custody, strays: 0n, orderCount: 1 });
     expect(c.tokens[0].kasLocked).toBeGreaterThan(0n);
     expect(c.kas.free).toBe(5_000_000_000n);
-    expect(c.kas.total).toBe(5_000_000_000n + c.tokens[0].kasLocked);
+    // the free token UTXO's 10 KAS carrier is the wallet's, spendable once it moves (Merge, a sale): counted apart and in the total
+    expect(c.kas.onTokens).toBe(1_000_000_000n);
+    expect(c.kas.total).toBe(5_000_000_000n + c.tokens[0].kasLocked + 1_000_000_000n);
+    // another key's token UTXO is not the wallet's KAS
+    expect(combineBalances({ maker: MAKER.pk, freeKas: 0n, freeTokens: [tokenUtxo(300n, OTHER.pk)], liveOrders: [], strays: [] }).kas.onTokens).toBe(0n);
   });
 
   it('the separate stray list replaces strays inside the order view (nothing is counted twice)', () => {

@@ -76,7 +76,9 @@ test('merge seven UTXOs of a 3 / 3 token: one 3 -> 1 transaction per click, the 
   await expect(page.getByTestId('orders-list')).toBeVisible();
 
   const merge = page.getByTestId(`orders-merge-token-${STD}`);
-  await expect(merge).toHaveText('Merge (7)', { timeout: 15_000 });
+  await expect(merge).toHaveText(/^Merge \(7\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
+  // the KAS on the wallet's token UTXOs (the carriers a merge frees) is shown apart from the free KAS
+  await expect(page.getByTestId('kas-on-tokens')).toHaveText(/^[0-9.,]+\s*KAS$/);
   await recordShownAs(page);
 
   // click 1: the three smallest (1 + 2 + 3) into one; two of their three 2 KAS carriers come back, less the fee
@@ -93,7 +95,7 @@ test('merge seven UTXOs of a 3 / 3 token: one 3 -> 1 transaction per click, the 
   expect(first.placed.submission.closed).toEqual([]);
   expect(await ownedOf(mock, alice)).toHaveLength(5);
   // nothing merged by itself: the button now offers the five left
-  await expect(merge).toHaveText('Merge (5)', { timeout: 15_000 });
+  await expect(merge).toHaveText(/^Merge \(5\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
 
   // click 2: the smallest three of 4, 5, 6, 6 (the first merge's output), 7: 4 + 5 + 6
   const second = await mergeOnce(page, mock, wallet);
@@ -101,7 +103,7 @@ test('merge seven UTXOs of a 3 / 3 token: one 3 -> 1 transaction per click, the 
   expect(second.shown).toContain('3 mergeable UTXOs remain');
   expect(tokenIns(second.placed)).toHaveLength(3);
   expect(second.placed.submission.token_outputs[0]!.amount).toBe((15n * TOKEN).toString());
-  await expect(merge).toHaveText('Merge (3)', { timeout: 15_000 });
+  await expect(merge).toHaveText(/^Merge \(3\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
 
   // click 3: the last three (6, 7 and the second merge's output, 15)
   const third = await mergeOnce(page, mock, wallet);
@@ -130,7 +132,7 @@ test('a merge the wallet rejects sends nothing: the UTXOs stay as they were', as
   await registryWithStd(page);
   await page.goto('/#/orders');
   await connectWallet(page, 'kasware');
-  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText('Merge (5)', { timeout: 15_000 });
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge \(5\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
   await recordShownAs(page);
   await wallet!.configure({ approve: false, rejectMessage: 'User rejected the request' });
   await page.getByTestId(`orders-merge-token-${STD}`).click();
@@ -142,5 +144,5 @@ test('a merge the wallet rejects sends nothing: the UTXOs stay as they were', as
   expect(await mock.submitted(false)).toHaveLength(0);
   const owned = await ownedOf(mock, alice);
   expect(owned.map((u) => BigInt(u.amount))).toEqual([TOKEN, TOKEN, TOKEN, TOKEN, TOKEN]);
-  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText('Merge (5)');
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge \(5\): about \+[0-9.,]+ KAS$/);
 });

@@ -7,7 +7,9 @@ import { planMerge } from '../../kob/merge';
 import { parseRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, OTHER, TOKEN, keyUtxo, tokenUtxo, tokenUtxoView, tradableRegistryJson } from '../../testing/chain-fixtures';
-import { mergeFailure, mergeStep, mergeSummary, mergeTokenOf, mergeableCounts, reservedOutpoints } from './merge-model';
+import { mergeFailure, mergeStep, mergeSummary, mergeTokenOf, mergeableCounts, nextMergeFrees, reservedOutpoints } from './merge-model';
+import { summarize } from '../../signer/summary';
+import { formatKas } from '../../kob/units';
 
 const kob = loadKobNode();
 const registry = parseRegistry(tradableRegistryJson(), { kob });
@@ -66,6 +68,16 @@ describe('merge flow step (one transaction per click)', () => {
     expect(step.spends).toEqual([]);
     expect(step.toast).toBe('Submitted: 3 token UTXOs merged into one.');
     expect(mergeFailure({ issues: [{ code: 'merge.nothing', severity: 'error', message: 'x' }] }).ok).toBe(false);
+  });
+
+  it('the signer frame says what the merge makes spendable (the KAS line alone reads as the fee) and the button says it before the click', () => {
+    const plan = one();
+    const signer = summarize(kob, plan.links[0]!.built, MAKER.pk, []);
+    const line = signer.lines.find((l) => l.label === 'KAS freed from your token UTXOs (now spendable)');
+    expect(line?.value).toBe(`${formatKas(4n * KAS)} KAS`);
+    // three 2 KAS carriers, one kept: about 4 KAS before the fee
+    expect([...nextMergeFrees(set, registry.byCovenantId, MAKER.pk, new Set())]).toEqual([[TOKEN.covenantId, 4n * KAS]]);
+    expect(nextMergeFrees(set.slice(0, 1), registry.byCovenantId, MAKER.pk, new Set()).size).toBe(0);
   });
 
   it('the last merge says nothing is left; a fee above the freed carriers is stated as a net cost', () => {
