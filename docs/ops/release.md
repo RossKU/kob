@@ -144,7 +144,10 @@ kob-executor release binary twice, from two checkouts at different paths, and fa
 everywhere.
 
 **Prebuilt binaries for operators** (`.github/workflows/release.yml`; the operators' page is
-`docs/ops/executor-quickstart.md`). Pushing a tag `v<version>` builds `kob-executor` and `kob-cli` with `--release --locked`
+`docs/ops/executor-quickstart.md`). The tag is `v` + the workspace version (`Cargo.toml` `[workspace.package] version`, which
+`kob-executor` and `kob-cli` inherit, so their `--version` is the tag): bump it, with `Cargo.lock`, in the very commit that is
+tagged; the workflow refuses any other tag before it builds (`node scripts/package-release.mjs --check-tag v<version>` checks it
+locally). Pushing the tag `v<version>` builds `kob-executor` and `kob-cli` with `--release --locked`
 for Windows x86_64 (`x86_64-pc-windows-msvc`, static C runtime) and Linux x86_64 (`x86_64-unknown-linux-gnu`, on the
 oldest supported Ubuntu runner for the widest glibc range), each as the `deploy-tn10` and the `deploy-mainnet` build, and
 checks that each binary refuses the other network. `scripts/package-release.mjs` packs each into

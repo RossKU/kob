@@ -4,6 +4,9 @@
 //   node scripts/package-release.mjs --version 1.2.3 --network mainnet --target x86_64-pc-windows-msvc \
 //        --bin-dir target/x86_64-pc-windows-msvc/release [--out dist]
 //   node scripts/package-release.mjs --sums dist          write dist/SHA256SUMS over every archive in dist
+//   node scripts/package-release.mjs --check-tag v1.2.3   fail unless the tag is `v` + the workspace version that kob-executor and
+//                                                         kob-cli carry (Cargo.toml [workspace.package] and Cargo.lock): the
+//                                                         binaries' --version is the tag (docs/ops/release.md 6)
 //
 // The archive `kob-executor-<version>-<network>-<target>.zip` (Windows targets) or `.tar.gz` (every other target) holds one
 // directory of that name with kob-executor and kob-cli, QUICKSTART.md (docs/ops/executor-quickstart.md), LICENSE, NOTICE and a
@@ -170,6 +173,29 @@ function packageOne(o) {
   console.log(`${sha256(fs.readFileSync(file))}  ${path.basename(file)}`);
 }
 
+/** The tag is `v` + the version the binaries report: [workspace.package] version, inherited by kob-executor and kob-cli, and
+ * the version Cargo.lock records for both (a --locked build refuses a stale lock anyway; this says why in one line). */
+function checkTag(tag) {
+  const read = (p) => fs.readFileSync(path.join(root, p), 'utf8').replace(/\r\n/g, '\n');
+  const ws = /^\[workspace\.package\]\n(?:(?!\[)[^\n]*\n)*?version\s*=\s*"([^"]+)"/m.exec(read('Cargo.toml'));
+  if (!ws) throw new Error('Cargo.toml has no [workspace.package] version');
+  const version = ws[1];
+  for (const c of ['kob-executor', 'kob-cli']) {
+    if (!/^version\.workspace\s*=\s*true\s*$/m.test(read(`crates/${c}/Cargo.toml`))) {
+      throw new Error(`crates/${c}/Cargo.toml does not take the workspace version (version.workspace = true)`);
+    }
+    const lock = new RegExp(`\\[\\[package\\]\\]\\nname = "${c}"\\nversion = "([^"]+)"`).exec(read('Cargo.lock'));
+    if (!lock || lock[1] !== version) throw new Error(`Cargo.lock records ${c} ${lock ? lock[1] : '(none)'}, the workspace says ${version}`);
+  }
+  if (tag !== `v${version}`) {
+    throw new Error(
+      `tag ${tag} is not v${version}, the workspace version (Cargo.toml [workspace.package]): bump the version in the commit that is ` +
+        'tagged (with Cargo.lock), then tag that commit',
+    );
+  }
+  console.log(version);
+}
+
 function writeSums(dir) {
   const names = fs
     .readdirSync(dir)
@@ -184,6 +210,7 @@ function writeSums(dir) {
 try {
   const o = args(process.argv.slice(2));
   if (o.sums) writeSums(path.resolve(o.sums));
+  else if (o['check-tag']) checkTag(o['check-tag']);
   else packageOne(o);
 } catch (e) {
   console.error(`package-release: ${e.message}`);

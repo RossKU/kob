@@ -5,6 +5,9 @@ name: release
 # scripts/package-release.mjs into kob-executor-<version>-<network>-<target>.zip / .tar.gz with QUICKSTART.md, LICENSE, NOTICE
 # and a SHA256SUMS of their files.
 #
+# * A pushed tag must be v<version> of the workspace (Cargo.toml [workspace.package], which kob-executor and kob-cli inherit):
+#   the version is bumped in the commit that is tagged, so --version of every binary is the tag. Any other tag fails here,
+#   before anything is built (job version, scripts/package-release.mjs --check-tag).
 # * A pushed tag v* builds every archive and attaches them, with a SHA256SUMS of the archives, to a DRAFT release of the tag:
 #   the maintainer adds the release notes (scripts/release-hashes.sh, docs/ops/release.md 6) and publishes it.
 # * workflow_dispatch is the dry run: the same builds, uploaded as workflow artifacts only (no release, no tag).
@@ -25,7 +28,29 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  version:
+    # the archives' version: the tag, which must equal the workspace version; a dry run is dev-<commit>
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: The tag is v + the workspace version (a dry run is dev-<commit>)
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then v=$(node scripts/package-release.mjs --check-tag "$REF_NAME"); else v="dev-${GITHUB_SHA::7}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -52,14 +77,6 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-      - name: Version (the tag without its v; a dry run is dev-<commit>)
-        id: version
-        env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          if [ "$REF_TYPE" = tag ]; then v="${REF_NAME#v}"; else v="dev-${GITHUB_SHA::7}"; fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
       - name: Build kob-executor and kob-cli (${{ matrix.network }} deployment build, --locked)
         env:
           NETWORK: ${{ matrix.network }}
@@ -86,13 +103,13 @@ jobs:
           echo "$out" | grep -q "this binary is the $NETWORK deployment build"
       - name: Package
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
           NETWORK: ${{ matrix.network }}
           TARGET: ${{ matrix.platform.target }}
         run: node scripts/package-release.mjs --version "$VERSION" --network "$NETWORK" --target "$TARGET" --bin-dir "target/$TARGET/release" --out dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: kob-executor-${{ steps.version.outputs.version }}-${{ matrix.network }}-${{ matrix.platform.target }}
+          name: kob-executor-${{ needs.version.outputs.version }}-${{ matrix.network }}-${{ matrix.platform.target }}
           path: dist/*
           if-no-files-found: error
 
