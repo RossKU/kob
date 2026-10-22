@@ -1424,9 +1424,10 @@ impl GenesisPlan {
         [&[kcc23::CODEC_JSON][..], json.as_bytes()].concat()
     }
 
-    /// Token registry entry in the shape of `registry/tokens.schema.json` (`crate::registry::Token`): status
-    /// `pending-review`, `verified` false, program = the pinned template of the issued program (`kcc20-ref-3x3` or
-    /// `kcc20-ref-public-mint`). Supply and borrow facts
+    /// The token's facts as a registry entry in the shape of `registry/tokens.schema.json` (`crate::registry::Token`):
+    /// `verified` false (nothing was checked against the chain yet), program = the pinned template of the issued program
+    /// (`kcc20-ref-3x3` or `kcc20-ref-public-mint`). For tools and community token lists that read the registry format; it is
+    /// no listing request (KOB lists no token: one of a supported program trades without any entry). Supply and borrow facts
     /// live in `supply.json`.
     pub fn registry_entry(&self) -> Value {
         let mut display = serde_json::Map::new();
@@ -1457,7 +1458,6 @@ impl GenesisPlan {
             "decimals": self.spec.decimals,
             "max_token_inputs": self.program.max_token_inputs,
             "max_token_outputs": self.program.max_token_outputs,
-            "status": "pending-review",
             "verified": false,
             "display": Value::Object(display),
         })
@@ -1890,12 +1890,13 @@ mod tests {
             "decimals",
             "verified",
             "display",
-            "status",
         ] {
             assert!(r.get(k).is_some(), "registry entry misses {k}");
         }
         assert_eq!(r["family"], "kcc20");
-        assert_eq!(r["status"], "pending-review");
+        // facts only: no listing state (KOB lists no token), and the entry parses as a registry token
+        assert!(r.get("status").is_none() && r.get("official").is_none());
+        serde_json::from_value::<crate::registry::Token>(r.clone()).expect("a registry token");
         assert_eq!((r["template_id"].as_str(), r["max_token_inputs"].as_u64()), (Some("kcc20-ref-3x3"), Some(3)));
         let sup = plan.supply_json();
         assert_eq!(sup["total_supply"], "10");

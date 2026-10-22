@@ -148,7 +148,6 @@ async fn a_token_outside_the_allowlist_is_tracked_too() {
         decimals: None,
         family: None,
         enabled: true,
-        official: false,
         template_id: None,
         powers: vec![],
     }]);
@@ -249,7 +248,6 @@ async fn scale_listing_rule_on_real_orders() {
             decimals: Some(decimals),
             family: None,
             enabled: true,
-            official: false,
             template_id: None,
             powers: vec![],
         }]);

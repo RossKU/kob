@@ -55,7 +55,6 @@ fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
         decimals: Some(3),
         family: None,
         enabled: true,
-        official: false,
         template_id: None,
         powers: vec![],
     }]);

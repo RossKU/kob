@@ -16,7 +16,7 @@ use kaspa_consensus_core::tx::{Transaction, UtxoEntry};
 use kob_protocol::artifacts::{token_template, TemplateId};
 use kob_protocol::build::{Batch, Leg, Payment};
 use kob_protocol::payload::Record;
-use kob_protocol::registry::{Capability, Escrow, Family, Registry, ReviewStatus, Source, Status, Template, Token};
+use kob_protocol::registry::{Capability, Escrow, Family, Registry, ReviewStatus, Source, Template, Token};
 use kob_protocol::script::p2pk_spk;
 use kob_protocol::state::{Kcc20State, KronState, TokenState};
 use kob_protocol::tx::{assemble, masses, sighash, sign_locally, spk_to_string, SigPlan, SignRequest, TxJson};
@@ -584,7 +584,7 @@ fn registry_template(id: &str, prog: TemplateId, review: ReviewStatus, capabilit
     }
 }
 
-fn registry_token(ticker: &str, cov: [u8; 32], template_id: &str, prog: TemplateId, status: Status, verified: bool) -> Token {
+fn registry_token(ticker: &str, cov: [u8; 32], template_id: &str, prog: TemplateId, verified: bool) -> Token {
     Token {
         ticker: ticker.into(),
         name: ticker.into(),
@@ -598,7 +598,6 @@ fn registry_token(ticker: &str, cov: [u8; 32], template_id: &str, prog: Template
         tick: None,
         max_token_inputs: None,
         max_token_outputs: None,
-        status,
         verified,
         genesis_verified: verified.then_some(true),
         genesis: verified.then(|| kob_protocol::registry::GenesisRecord {
@@ -612,8 +611,6 @@ fn registry_token(ticker: &str, cov: [u8; 32], template_id: &str, prog: Template
             checked_at_daa: 2,
             source: "test".into(),
         }),
-        warning: None,
-        official: verified && status == Status::Listed,
         display: None,
     }
 }
@@ -638,12 +635,11 @@ fn from_registry_lists_reviewed_tokens_of_both_families_and_labels_custody_from_
             registry_template("kcc20-ref-8x8", TemplateId::Kcc20Ref8x8, ReviewStatus::PendingReview, vec![]),
         ],
         tokens: vec![
-            registry_token("KRN", K.cov, "kron-2433", TemplateId::KronToken2433, Status::Listed, true),
-            registry_token("KCM", KC.cov, "kcc20-kaspacom", TemplateId::Kcc20KaspaCom025, Status::Listed, true),
-            registry_token("FRZ", B3.cov, "kcc20-freezable", TemplateId::Kcc20Ref4x5, Status::Listed, true),
-            registry_token("AAA", A8.cov, "kcc20-ref-8x8", TemplateId::Kcc20Ref8x8, Status::Listed, true), // unreviewed program
-            registry_token("XXX", [0x75; 32], "kcc20-kaspacom", TemplateId::Kcc20KaspaCom025, Status::PendingReview, true), // not listed
-            registry_token("YYY", [0x74; 32], "kcc20-kaspacom", TemplateId::Kcc20KaspaCom025, Status::Listed, false), // not verified
+            registry_token("KRN", K.cov, "kron-2433", TemplateId::KronToken2433, true),
+            registry_token("KCM", KC.cov, "kcc20-kaspacom", TemplateId::Kcc20KaspaCom025, true),
+            registry_token("FRZ", B3.cov, "kcc20-freezable", TemplateId::Kcc20Ref4x5, true),
+            registry_token("AAA", A8.cov, "kcc20-ref-8x8", TemplateId::Kcc20Ref8x8, true), // program pending review: not supported
+            registry_token("YYY", [0x74; 32], "kcc20-kaspacom", TemplateId::Kcc20KaspaCom025, false), // identity not checked against the chain
         ],
     };
     let list = TokenAllowlist::from_registry(&reg);

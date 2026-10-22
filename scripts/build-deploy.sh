@@ -11,7 +11,8 @@
 # nothing is recompiled: the record lists the reference artifacts of contracts/artifacts (scripts/lib/deploy.mjs)
 # and SHA256SUMS pins them, so a change of any order template makes the deployment record stale. When
 # registry/tokens.json is the registry of the network (mainnet), the record pins it too (sha256, strict
-# templates, listed tokens) and SHA256SUMS lists it, so a registry change makes the record stale as well.
+# templates, token entries with their genesis-check fact) and SHA256SUMS lists it, so a registry change makes the record
+# stale as well.
 # Needs node.
 set -euo pipefail
 

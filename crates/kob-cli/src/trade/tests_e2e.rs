@@ -529,16 +529,19 @@ fn a_kas_payment_never_pays_its_change_as_fee() {
 }
 
 /// `--registry FILE` is validated for the command's network, and a registry token that is not tradable there (here the
-/// fixture token, delisted) is refused for trading; a send still goes (with a warning).
+/// fixture token, its program marked pending review: not one this build supports) is refused for trading; a send still goes
+/// (with a warning).
 #[test]
-fn a_delisted_registry_token_is_not_traded() {
-    let w = world("delisted", &[]);
+fn a_registry_token_of_an_unsupported_program_is_not_traded() {
+    let w = world("unsupported", &[]);
     let mut v: Value = serde_json::from_str(include_str!("../../../../registry/tokens.example.json")).unwrap();
     v["tokens"] = json!([{
         "ticker": "TST", "name": "Test token", "family": "kcc20", "covenant_id": to_hex(&TOKEN), "template_id": "kcc20-ref-3x3",
-        "extension_commitment": to_hex(&EXT), "extension_class": "fixed-supply-standard", "decimals": 3, "status": "delisted",
-        "verified": false,
+        "extension_commitment": to_hex(&EXT), "extension_class": "fixed-supply-standard", "decimals": 3, "verified": false,
     }]);
+    for t in v["templates"].as_array_mut().unwrap().iter_mut().filter(|t| t["id"] == "kcc20-ref-3x3") {
+        t["review_status"] = "pending-review".into();
+    }
     let reg = w.dir.join("registry.json");
     std::fs::write(&reg, v.to_string()).unwrap();
     let with_reg = |key: u8, rest: &str| {
@@ -771,18 +774,20 @@ fn replace_replans_trailing_if_done_and_pair_orders() {
     let w = world_x("replan", &orders, with_b);
     let replace = crate::trade::actions::run_replace;
     let rec = |s: &SignedTx| recover_orders(&s.tx).unwrap()[0].clone();
-    // a token the registry delists is not re-planned either (refused like every amendment)
+    // a token whose program the registry marks pending review is not re-planned either (refused like every amendment)
     let mut v: Value = serde_json::from_str(include_str!("../../../../registry/tokens.example.json")).unwrap();
     v["tokens"] = json!([{
         "ticker": "TST", "name": "Test token", "family": "kcc20", "covenant_id": to_hex(&TOKEN), "template_id": "kcc20-ref-3x3",
-        "extension_commitment": to_hex(&EXT), "extension_class": "fixed-supply-standard", "decimals": 3, "status": "delisted",
-        "verified": false,
+        "extension_commitment": to_hex(&EXT), "extension_class": "fixed-supply-standard", "decimals": 3, "verified": false,
     }]);
+    for t in v["templates"].as_array_mut().unwrap().iter_mut().filter(|t| t["id"] == "kcc20-ref-3x3") {
+        t["review_status"] = "pending-review".into();
+    }
     let reg = w.dir.join("registry.json");
     std::fs::write(&reg, v.to_string()).unwrap();
-    let mut delisted = w.args(0x11, &format!("{} --stop 2.1KAS --yes", to_hex(&t_cov)));
-    delisted.extend(["--registry".to_string(), reg.display().to_string()]);
-    assert_eq!(run(replace, delisted), 1);
+    let mut unsupported = w.args(0x11, &format!("{} --stop 2.1KAS --yes", to_hex(&t_cov)));
+    unsupported.extend(["--registry".to_string(), reg.display().to_string()]);
+    assert_eq!(run(replace, unsupported), 1);
     assert_eq!(w.submitted(), 0);
     // a trailing stop: a new stop, the trail kept, a new covenant id, the custody moved
     assert_eq!(run(replace, w.args(0x11, &format!("{} --stop 2.1KAS --yes", to_hex(&t_cov)))), 0);

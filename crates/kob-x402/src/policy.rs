@@ -1,7 +1,7 @@
 //! Verifier policy: resource bounds, finality depth and the token allowlist.
 
 use kob_protocol::artifacts::{token_template, token_template_by_hash, TemplateId};
-use kob_protocol::registry::{Family, Registry, Status};
+use kob_protocol::registry::{Family, Registry};
 
 use crate::wire::{parse_hash32, Network};
 
@@ -138,7 +138,7 @@ impl TokenAllowlist {
         Self::default()
     }
 
-    /// Adds a token; a covenant id can be listed once.
+    /// Adds a token; a covenant id can be on the allowlist once.
     pub fn insert(&mut self, t: AllowedToken) -> Result<(), String> {
         if !t.program.is_token() {
             return Err(format!("{} is not a token program", t.program.name()));
@@ -150,7 +150,7 @@ impl TokenAllowlist {
             return Err("a KRON token has no extension commitment (it must be all zero)".into());
         }
         if self.tokens.iter().any(|x| x.covenant_id == t.covenant_id) {
-            return Err("token already listed".into());
+            return Err("token already on the allowlist".into());
         }
         self.tokens.push(t);
         Ok(())
@@ -164,16 +164,18 @@ impl TokenAllowlist {
         self.tokens.iter()
     }
 
-    /// The default allowlist of a registry: every `listed`, `verified` token (either family) whose
-    /// program is pinned in this build and on the registry's strict list (`reviewed`). The custody class
+    /// The default allowlist of a registry: every token entry (either family) that is `verified` (its covenant id and template
+    /// hash were checked against a chain UTXO: a fact, not an endorsement) and whose program is pinned in this build and on the
+    /// registry's strict list (`reviewed`: a program this build supports). KOB lists no token; a merchant who wants a narrower
+    /// set builds its own allowlist ([`TokenAllowlist::insert`]). The custody class
     /// is the program's: [`Custody::Unconditional`] only when its registry `capabilities` are empty (the profile's
     /// `unconditional` means no admin, freeze, seize, mint or burn path: freeze, seize and blacklist reach balances, mint authority,
     /// public mint and burn dilute or destroy supply), else [`Custody::IssuerControlled`].
     /// KRON tokens (no extension commitment: all zero) are only usable as a swap-and-pay pay asset,
-    /// see [`AllowedToken`]. Tokens on unreviewed programs are not accepted as x402 payment.
+    /// see [`AllowedToken`]. Tokens of a program this build does not support (pending review) are not accepted as x402 payment.
     pub fn from_registry(reg: &Registry) -> Self {
         let mut list = TokenAllowlist::new();
-        for t in reg.tokens.iter().filter(|t| t.status == Status::Listed && t.verified) {
+        for t in reg.tokens.iter().filter(|t| t.verified) {
             let Some(tpl) = reg.template(&t.template_id) else { continue };
             if !tpl.is_strict() || tpl.family != t.family {
                 continue;

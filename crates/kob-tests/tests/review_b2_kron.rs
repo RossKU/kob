@@ -836,7 +836,7 @@ fn r_kr_14k_kcc20_order_genesis_group_with_a_sibling_output_is_refused() {
 
 #[test]
 fn r_kr_15_a_minter_output_needs_a_minter_input() {
-    // C2 (no live minter) for the listed KRON tokens rests on this: an is_minter output of a covenant id can only be created by
+    // C2 (no live minter) for the KRON tokens of the registry rests on this: an is_minter output of a covenant id can only be created by
     // its genesis or by a transaction that spends a minter of it, because EVERY non-minter token input refuses minter outputs
     // (and enforces conservation over all token inputs). So a genesis without a minter output proves the token never has a
     // live minter (`kob_protocol::genesis_evidence`, `kob registry verify-genesis`). r_kr_01 shows the one-input case.

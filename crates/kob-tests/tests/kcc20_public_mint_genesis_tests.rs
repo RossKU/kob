@@ -16,7 +16,8 @@
 //!     refuses it; so are minters without allowance semantics, a second extension commitment, foreign scripts, and the app's
 //!     actors in a genesis of another program;
 //!   - the registry record (`kob registry verify-genesis` over chain evidence): `mint_allowance`, and C2 (live mint
-//!     authority) is undetermined while a minter lives, `[]` for a genesis of holders and seeds only; `official` needs it.
+//!     authority) is undetermined while a minter lives, `[]` for a genesis of holders and seeds only; a recorded live minter gives
+//!     the derived warning `live_mint_authority`.
 //!
 //! Run: cargo test --release -p kob-tests --test kcc20_public_mint_genesis_tests -- --nocapture
 
@@ -458,45 +459,47 @@ fn registry_with(g: &Genesis) -> Registry {
         serde_json::from_value(json!({
             "ticker": "PMT", "name": "Public mint test", "family": "kcc20", "covenant_id": hex(&g.cov.as_bytes()),
             "template_id": "kcc20-ref-public-mint", "extension_commitment": hex(&EXT), "extension_class": "other",
-            "decimals": 0, "status": "pending-review", "verified": false,
+            "decimals": 0, "verified": false,
         }))
         .unwrap(),
     );
     r
 }
 
-/// What `kob registry verify-genesis` records for such a token, and when it can be official: C2 (no live mint authority) is
+/// What `kob registry verify-genesis` records for such a token, and the warning it derives: C2 (no live mint authority) is
 /// undetermined while a genesis minter's lineage is not traced, and holds when the trace finds no minter with allowance
-/// left (minting closed: the supply is final at `supply + mint_allowance`); a genesis without a minter proves it.
+/// left (minting closed: the supply is final at `supply + mint_allowance`); a genesis without a minter proves it. A traced
+/// live minter is a fact the token shows as the warning `live_mint_authority`, never a reason to refuse the entry.
 #[test]
-fn the_registry_record_carries_the_allowance_and_official_waits_for_the_end_of_minting() {
+fn the_registry_record_carries_the_allowance_and_a_live_minter_gives_the_derived_warning() {
     let g = recommended();
     let reg = registry_with(&g);
     let rec = verify_token(&reg, &evidence_of(&g, None), 2_000).result.expect("verified");
     assert_eq!((rec.supply, rec.mint_allowance, rec.minter_outputs.clone()), (0, Some(21_000_000), vec![0]));
     assert_eq!(rec.live_minters, None, "a live minter may mint: C2 undetermined until traced");
 
-    // the record in the registry: official is refused while C2 is undetermined. (Listing needs a reviewed template: the
-    // shipped kcc20-ref-public-mint is reviewed since 2026-10-13; the registry here is marked reviewed explicitly so the rule
-    // under test does not depend on the shipped status.)
+    // the record in the registry: valid with an undetermined C2 (no derived live-minter warning: nothing was traced; the
+    // program's `public-mint` capability says what is possible)
+    use kob_protocol::registry::TokenWarning;
     let mut reg2 = reg.clone();
-    for t in reg2.templates.iter_mut().filter(|t| t.id == "kcc20-ref-public-mint") {
-        t.review_status = kob_protocol::registry::ReviewStatus::Reviewed;
-    }
     let t = reg2.tokens.last_mut().unwrap();
     t.verified = true;
     t.genesis_verified = Some(true);
-    t.status = kob_protocol::registry::Status::Listed;
     t.genesis = Some(rec.clone());
-    reg2.validate().expect("listed with an undetermined C2");
-    reg2.tokens.last_mut().unwrap().official = true;
-    assert!(reg2.validate().is_err(), "official needs live_minters: []");
+    reg2.validate().expect("a record with an undetermined C2");
+    assert!(reg2.tokens.last().unwrap().warnings().is_empty());
+    // a trace that found a live minter with allowance: still a valid entry, and the token carries the derived warning
+    let mut live = reg2.clone();
+    live.tokens.last_mut().unwrap().genesis.as_mut().unwrap().live_minters = Some(vec![format!("{}:0", "ab".repeat(32))]);
+    live.validate().expect("a recorded live minter is a fact, not an error");
+    assert_eq!(live.tokens.last().unwrap().warnings(), vec![TokenWarning::LiveMintAuthority]);
 
-    // the trace found the minters exhausted (no live minter with allowance): C2 holds and the token can be official
+    // the trace found the minters exhausted (no live minter with allowance): C2 holds, the supply is final, no warning
     let traced = verify_token(&reg, &evidence_of(&g, Some(vec![])), 2_000).result.unwrap();
     assert_eq!(traced.live_minters, Some(vec![]));
     reg2.tokens.last_mut().unwrap().genesis = Some(traced);
-    reg2.validate().expect("official once minting is closed");
+    reg2.validate().expect("minting closed");
+    assert!(reg2.tokens.last().unwrap().warnings().is_empty());
     // a negative allowance or one without minters is refused by the validator
     let mut bad = reg2.clone();
     bad.tokens.last_mut().unwrap().genesis.as_mut().unwrap().mint_allowance = Some(-1);
@@ -593,7 +596,7 @@ fn a_kasseal_launch_genesis_verifies_as_a_fixed_supply_public_mint_token() {
         serde_json::from_value(json!({
             "ticker": "SEAL", "name": "KasSeal", "family": "kcc20", "covenant_id": TOKEN,
             "template_id": "kcc20-ref-public-mint", "extension_commitment": "00".repeat(32), "extension_class": "fixed-supply-standard",
-            "decimals": 0, "status": "pending-review", "verified": false,
+            "decimals": 0, "verified": false,
         }))
         .unwrap(),
     );

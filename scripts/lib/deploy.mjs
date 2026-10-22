@@ -10,8 +10,9 @@
 //
 // When registry/tokens.json is the registry OF THIS NETWORK (its `network` field; today: mainnet), the record also
 // pins it: path, sha256 of its bytes (line endings normalised to LF, as SHA256SUMS hashes them), its strict
-// template list and its listed tokens. A deploy-mainnet binary embeds the same file and checks the pin, so a changed
-// registry makes the record stale.
+// template list (the token programs the build supports) and its token entries with their genesis-check fact (the registry
+// is a snapshot of facts: no listing state, no standing). A deploy-mainnet binary embeds the same file and checks the pin,
+// so a changed registry makes the record stale.
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 
@@ -64,9 +65,7 @@ if (fs.existsSync(REGISTRY)) {
       schema_version: doc.schema_version,
       strict_templates: doc.templates.filter((t) => t.review_status === 'reviewed').map((t) => ({ id: t.id, template_hash: t.template_hash })),
       pending_templates: doc.templates.filter((t) => t.review_status !== 'reviewed').map((t) => t.id),
-      listed: doc.tokens
-        .filter((t) => t.status === 'listed')
-        .map((t) => ({ ticker: t.ticker, covenant_id: t.covenant_id, official: t.official === true })),
+      tokens: doc.tokens.map((t) => ({ ticker: t.ticker, covenant_id: t.covenant_id, genesis_verified: t.genesis_verified ?? null })),
     };
   }
 }
@@ -110,7 +109,8 @@ ${registry ? registrySection(registry) : ''}`,
 
 function registrySection(r) {
   const code = (s) => '`' + s + '`';
-  const tokens = r.listed.map((t) => `| ${t.ticker} | ${code(t.covenant_id)} | ${t.official ? 'official' : 'listed, not official'} |`);
+  const check = (g) => (g === true ? 'every genesis output checked' : g === false ? 'checked, not clean' : 'not checked');
+  const tokens = r.tokens.map((t) => `| ${t.ticker} | ${code(t.covenant_id)} | ${check(t.genesis_verified)} |`);
   return `
 ## Token registry (pinned)
 
@@ -118,13 +118,14 @@ function registrySection(r) {
 |---|---|
 | File | ${code(r.path)} (schema ${r.schema_version}) |
 | sha256 (LF) | ${code(r.sha256)} |
-| Strict templates | ${r.strict_templates.map((t) => `${t.id} ${code(t.template_hash)}`).join(', ') || 'none'} |
+| Supported programs (strict templates) | ${r.strict_templates.map((t) => `${t.id} ${code(t.template_hash)}`).join(', ') || 'none'} |
 | Pending review | ${r.pending_templates.join(', ') || 'none'} |
 
 The deploy-${network} build embeds this file as its default registry and checks this hash. An operator may load another
-registry (${code('--tokens')}): its hash is reported by ${code('GET /v1/tokens')}.
+registry (${code('--tokens')}): its hash is reported by ${code('GET /v1/tokens')}. The entries below are facts, not a
+listing: every token of a supported program trades whether or not it has an entry.
 
-| Listed token | Covenant id | Standing |
+| Token entry | Covenant id | Genesis check |
 |---|---|---|
 ${tokens.join('\n')}
 `;

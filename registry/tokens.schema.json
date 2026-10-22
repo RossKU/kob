@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/RossKU/KOB/registry/tokens.schema.json",
   "title": "KOB token registry",
-  "description": "Pinned token programs and the tokens KOB knows about. Structure only: cross-field rules (family/template agreement, extension commitment rules, duplicate identities, confusable tickers, listing prerequisites, slot-limit consistency) are enforced by kob_protocol::registry::Registry::validate.",
+  "description": "A pinned snapshot of facts: the token programs this build supports and facts about tokens that anyone can re-derive from the chain. No per-token judgement (no listing, official status or written warnings: curation belongs to external community lists). Structure only: cross-field rules (family/template agreement, extension commitment rules, duplicate identities, confusable tickers, genesis-record consistency, slot-limit consistency) are enforced by kob_protocol::registry::Registry::validate.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "network", "templates", "tokens"],
@@ -16,9 +16,8 @@
   "$defs": {
     "hex32": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "32 bytes, lowercase hex, no 0x prefix" },
     "family": { "enum": ["kcc20", "kron"] },
-    "status": { "enum": ["pending-review", "listed", "delisted"] },
     "extension_class": { "enum": ["none", "fixed-supply-standard", "other"] },
-    "review_status": { "enum": ["pending-review", "reviewed"], "description": "only reviewed templates are on the strict list: a token on one of them is tradable" },
+    "review_status": { "enum": ["pending-review", "reviewed"], "description": "the program allowlist: only reviewed templates are on the strict list, the programs this build supports for trading (a token on one of them is tradable). A statement about a program, never about a token" },
     "capability": { "enum": ["mint-authority", "public-mint", "burn", "freeze", "seize", "blacklist"] },
     "byte": { "type": "integer", "minimum": 0, "maximum": 255 },
     "escrow": {
@@ -97,8 +96,8 @@
       }
     },
     "warning_code": {
-      "enum": ["genesis_unverified"],
-      "description": "token warning codes of the API data model (kob_protocol::registry::TokenWarning, the executor's /v1/tokens `warnings`). Derived, not stored in this file: genesis_unverified = the entry does not say genesis_verified: true (every open-list token without an entry carries it)"
+      "enum": ["genesis_unverified", "live_mint_authority"],
+      "description": "token warning codes of the API data model (kob_protocol::registry::TokenWarning, the executor's /v1/tokens `warnings`). Derived from the recorded facts by code, not stored in this file: genesis_unverified = the entry does not say genesis_verified: true (every open-list token without an entry carries it); live_mint_authority = the genesis record lists live mint-authority cells (the supply can still grow)"
     },
     "genesis_record": {
       "type": "object",
@@ -112,7 +111,7 @@
         "supply": { "type": "integer", "minimum": 0, "description": "token amount the genesis created" },
         "minter_outputs": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "genesis outputs carrying a mint authority (KRON is_minter != 0; the PublicMint outputs of a kcc20-ref-public-mint token); empty proves the token never has a live minter" },
         "mint_allowance": { "type": "integer", "minimum": 0, "description": "sum of the remaining allowance of the genesis PublicMint outputs (kcc20-ref-public-mint tokens); absent = no public minter. Maximum supply = supply + mint_allowance; needs minter_outputs" },
-        "live_minters": { "type": "array", "items": { "type": "string", "pattern": "^[0-9a-f]{64}:[0-9]+$" }, "description": "live mint-authority cells (txid:index; for kcc20-ref-public-mint the live PublicMint cells with remaining > 0): [] = none (C2 holds), absent = not determined; non-empty needs a warning and forbids official" },
+        "live_minters": { "type": "array", "items": { "type": "string", "pattern": "^[0-9a-f]{64}:[0-9]+$" }, "description": "live mint-authority cells (txid:index; for kcc20-ref-public-mint the live PublicMint cells with remaining > 0): [] = none (C2 holds), absent = not determined; non-empty gives the derived warning live_mint_authority" },
         "checked_at_daa": { "type": "integer", "minimum": 0, "description": "virtual DAA score of the node the check read liveness from" },
         "source": { "type": "string", "minLength": 1, "maxLength": 512, "description": "where the bytes came from (node, explorer, issuer) and how they were checked" }
       }
@@ -129,7 +128,6 @@
         "extension_commitment",
         "extension_class",
         "decimals",
-        "status",
         "verified"
       ],
       "properties": {
@@ -143,15 +141,15 @@
         "decimals": { "type": "integer", "minimum": 0, "maximum": 18 },
         "lot_size": { "type": ["integer", "null"], "description": "legacy (protocol v2 lots): read and ignored; protocol v3 orders have no lot" },
         "tick": { "type": ["integer", "null"], "description": "legacy (protocol v2 price tick): read and ignored" },
+        "status": { "deprecated": true, "description": "legacy (the listing state of older files, a per-token judgement KOB no longer makes): read and ignored, whatever it holds; never written" },
+        "official": { "deprecated": true, "description": "legacy (the official badge of older files): read and ignored, whatever it holds; never written. Curation belongs to external community lists" },
+        "warning": { "deprecated": true, "description": "legacy (a maintainer warning text of older files): read and ignored, whatever it holds; never written. The warnings a token carries are derived from its facts (warning_code)" },
         "max_token_inputs": { "type": "integer", "minimum": 1, "maximum": 64, "description": "optional; must equal the template's" },
         "max_token_outputs": { "type": "integer", "minimum": 1, "maximum": 64, "description": "optional; must equal the template's" },
-        "status": { "$ref": "#/$defs/status" },
-        "verified": { "type": "boolean", "description": "KOB checked covenant id and template hash against chain" },
-        "genesis_verified": { "type": "boolean", "description": "Genesis check: true = EVERY output of the token's genesis group was revealed and is an instance of its program (kob_protocol::registry::verify_genesis); false = checked and NOT clean; absent = not checked. Needs verified; official needs true; without true the API attaches the warning genesis_unverified. Optional" },
+        "verified": { "type": "boolean", "description": "the covenant id and template hash were checked against a chain UTXO of the token (the UTXO is an instance of the template): a fact anyone can re-derive, not an endorsement" },
+        "genesis_verified": { "type": "boolean", "description": "Genesis check: true = EVERY output of the token's genesis group was revealed and is an instance of its program (kob_protocol::registry::verify_genesis); false = checked and NOT clean; absent = not checked. Needs verified; without true the API attaches the warning genesis_unverified. Optional" },
         "genesis": { "$ref": "#/$defs/genesis_record" },
-        "warning": { "type": "string", "minLength": 1, "maxLength": 512, "description": "free-text warning UIs show next to the token (e.g. what the genesis check found). Optional" },
-        "official": { "type": "boolean", "description": "confirmed genuine (shown with an official badge); needs verified, genesis_verified, a genesis record with live_minters [] (no live mint authority) and status listed. Optional, default false (shown as unverified)" },
-        "display": { "$ref": "#/$defs/display" }
+        "display": { "$ref": "#/$defs/display", "description": "a snapshot of what the token declares about itself (KCC-23) or of neutral facts, not an endorsement. Optional" }
       }
     }
   }

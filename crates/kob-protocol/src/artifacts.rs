@@ -1024,7 +1024,7 @@ pub mod deployment {
     pub const MANIFEST: &str = include_str!("../../../contracts/deploy/mainnet/deployment.json");
     /// sha256 (lowercase hex, LF-normalised bytes) of the registry the record pins: the `registry.sha256` of [`MANIFEST`]
     /// and [`crate::registry::default_registry_sha256`] (checked by the tests).
-    pub const REGISTRY_SHA256: &str = "dc3bd15389e548862a956ccded01cb6ecee51946d76241d7da1e028711322d10";
+    pub const REGISTRY_SHA256: &str = "80ea945d9ffe240e6e473f1205411fec244b0698f564507513f43e568bda17b8";
 }
 
 /// The order templates a network's deployment record lists (`scripts/build-deploy.sh`): every embedded order kind; on mainnet
@@ -1156,14 +1156,16 @@ mod tests {
         assert_eq!(d.network, "mainnet");
         let strict: Vec<&str> = reg["strict_templates"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
         assert_eq!(strict, d.strict_templates().map(|t| t.id.as_str()).collect::<Vec<_>>());
-        let tokens: Vec<(&str, bool)> = reg["listed"]
+        // the token entries with their genesis-check fact (no listing state or standing: the registry makes no judgement)
+        assert!(reg.get("listed").is_none());
+        let tokens: Vec<(&str, &str, Option<bool>)> = reg["tokens"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|t| (t["ticker"].as_str().unwrap(), t["official"].as_bool().unwrap()))
+            .map(|t| (t["ticker"].as_str().unwrap(), t["covenant_id"].as_str().unwrap(), t["genesis_verified"].as_bool()))
             .collect();
-        let want: Vec<(&str, bool)> =
-            d.tokens.iter().filter(|t| t.status == crate::registry::Status::Listed).map(|t| (t.ticker.as_str(), t.official)).collect();
+        let want: Vec<(&str, &str, Option<bool>)> =
+            d.tokens.iter().map(|t| (t.ticker.as_str(), t.covenant_id.as_str(), t.genesis_verified)).collect();
         assert_eq!(tokens, want);
         #[cfg(feature = "deploy-mainnet")]
         assert_eq!(deployment::REGISTRY_SHA256, pinned, "update deployment::REGISTRY_SHA256 with the record");

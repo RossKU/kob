@@ -90,7 +90,7 @@ valid ones.
   network named (`getBlockDagInfo`): a signature commits to no network, so a node of another one is refused before
   anything is planned from it, and again before anything is signed.
 * Tokens are read from the registry (`--registry FILE`, validated for the network, else the embedded one of the same
-  network) and the indexer. A registry token that is delisted or on a program pending review is not traded; a token only
+  network) and the indexer. A registry token on a program pending review (one this build does not support) is not traded; a token only
   the indexer knows is flagged `TOKEN_UNLISTED` (its ticker and decimals are the indexer's: check its covenant id).
 * Every signed transaction is validated in the rusty-kaspa script engine before it is submitted (and written to
   `--out-dir` with its `submitRequest`). Node and indexer URLs are shown without credentials, paths or queries.

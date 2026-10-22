@@ -5,10 +5,12 @@
 //! bare array or an object with a `tokens` array and snake_case or camelCase keys (and their aliases); an unknown key
 //! is refused, so a misspelt pin is never dropped silently. Only the covenant id is mandatory.
 //!
-//! **Strict templates, open tokens.** A registry document (`registry/tokens.json`) carries the STRICT template list (the reviewed token
-//! programs) and the token entries. Every order whose token program (template hash and family) is on the strict list is listed,
-//! whether or not its token has an entry (open token list); an entry adds metadata and the standing (`official` badge or
-//! `unverified`). A delisted token is refused. The token is identified by covenant id plus template hash, never by ticker.
+//! **Strict templates, open tokens.** A registry document (`registry/tokens.json`) carries the STRICT template list (the token
+//! programs this build supports) and the token entries. Every order whose token program (template hash and family) is on the
+//! strict list is listed, whether or not its token has an entry (open token list); an entry adds facts only (decimals and so the
+//! standard scale, the program, the extension commitment, the genesis check). Nothing in a registry makes one token tradable and
+//! another not: KOB makes no per-token judgement (no official badge, no delisting). The token is identified by covenant id plus
+//! template hash, never by ticker.
 //!
 //! Listing is a policy of the indexer, not of the chain: an order that fails a rule is still
 //! indexed (status by covenant id keeps working, makers can cancel) but is marked `listed = false`
@@ -41,9 +43,6 @@ pub struct TokenEntry {
     pub family: Option<Family>,
     #[serde(default = "yes")]
     pub enabled: bool,
-    /// Confirmed genuine (registry `official`): the "official" badge. Every other token is "unverified".
-    #[serde(default)]
-    pub official: bool,
     /// Registry id of the token's program (`kron-2433`, ...), when known.
     #[serde(alias = "templateId", default)]
     pub template_id: Option<String>,
@@ -57,15 +56,6 @@ impl TokenEntry {
     /// `10^9`); `None` without `decimals`.
     pub fn scale(&self) -> Option<i64> {
         self.decimals.map(kob_protocol::defaults::default_scale)
-    }
-
-    /// `official` or `unverified` (delisted tokens are not entries).
-    pub fn standing(&self) -> &'static str {
-        if self.official {
-            "official"
-        } else {
-            "unverified"
-        }
     }
 }
 
@@ -83,8 +73,9 @@ fn yes() -> bool {
     true
 }
 
-/// Every key a [`TokenEntry`] of the list format may carry (its fields and their aliases, and the `genesis_verified` flag read
-/// from the raw document). Anything else is refused.
+/// Every key a [`TokenEntry`] of the list format may carry (its fields and their aliases, the `genesis_verified` flag read
+/// from the raw document, and the legacy `official` of older lists, read and ignored: KOB makes no per-token judgement, and an
+/// operator's list of the earlier shape keeps loading). Anything else is refused.
 const TOKEN_ENTRY_KEYS: &[&str] = &[
     "ticker",
     "symbol",
@@ -122,14 +113,15 @@ pub struct TokenAllowlist {
     entries: HashMap<Hash32, TokenEntry>,
     /// The strict template list by template hash (empty: a plain allowlist, only entries are listed).
     templates: HashMap<Hash32, StrictTemplate>,
-    /// Covenant ids of delisted tokens: never listed, even on a strict template.
-    delisted: HashSet<Hash32>,
     /// The registry's `genesis_verified` per token: whether EVERY genesis output of the token was checked to be an
     /// instance of the pinned program. A covenant id only commits to the genesis output hashes, so an unchecked genesis may hide an
     /// output that mints look-alike tokens later.
     genesis: HashMap<Hash32, bool>,
-    /// Where the document came from and its SHA-256: served with every token so a client can check which registry the
-    /// operator's judgements (`official`, `genesis_verified`) come from instead of trusting the operator's word.
+    /// Tokens whose registry genesis record lists live mint-authority cells (`genesis.live_minters` non-empty): the recorded fact
+    /// behind the warning `live_mint_authority`.
+    live_minters: HashSet<Hash32>,
+    /// Where the document came from and its SHA-256: served with every token so a client can check which registry the facts
+    /// it is served (`genesis_verified`, the derived `warnings`) come from instead of trusting the operator's word.
     info: Option<RegistryInfo>,
 }
 
@@ -149,6 +141,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Warning code the API attaches to a token whose genesis has not been verified.
 pub const WARN_GENESIS_UNVERIFIED: &str = "genesis_unverified";
+/// Warning code the API attaches to a token whose registry genesis record lists a live mint authority (its supply can grow).
+pub const WARN_LIVE_MINT_AUTHORITY: &str = "live_mint_authority";
 
 impl TokenAllowlist {
     pub fn from_entries(entries: impl IntoIterator<Item = TokenEntry>) -> Self {
@@ -175,29 +169,24 @@ impl TokenAllowlist {
         self.genesis.get(id).copied()
     }
 
-    /// `official` only when the registry confirms the token AND has not found its genesis contaminated (`genesis_verified: false`
-    /// withdraws the badge); every other standing is `unverified`.
-    pub fn standing_of(&self, e: &TokenEntry) -> &'static str {
-        if e.official && self.genesis_verified(&e.covenant_id) != Some(false) {
-            "official"
-        } else {
-            "unverified"
-        }
-    }
-
-    /// Warnings a client must show for a token: its genesis is not verified (absent flag included: fail closed in the display).
-    pub fn warnings_for(&self, id: &Hash32) -> Vec<&'static str> {
-        if self.genesis_verified(id) == Some(true) {
-            vec![]
-        } else {
-            vec![WARN_GENESIS_UNVERIFIED]
-        }
-    }
-
-    /// Refuses these covenant ids whatever their program.
-    pub fn with_delisted(mut self, ids: impl IntoIterator<Item = Hash32>) -> Self {
-        self.delisted.extend(ids);
+    /// Records the tokens whose registry genesis record lists a live mint authority.
+    pub fn with_live_minters(mut self, ids: impl IntoIterator<Item = Hash32>) -> Self {
+        self.live_minters.extend(ids);
         self
+    }
+
+    /// Warnings a client must show for a token, derived from the registry's recorded facts (as
+    /// `kob_protocol::registry::Token::warnings`): its genesis is not verified (absent flag included: fail closed in the display),
+    /// and its genesis record lists a live mint authority.
+    pub fn warnings_for(&self, id: &Hash32) -> Vec<&'static str> {
+        let mut w = vec![];
+        if self.genesis_verified(id) != Some(true) {
+            w.push(WARN_GENESIS_UNVERIFIED);
+        }
+        if self.live_minters.contains(id) {
+            w.push(WARN_LIVE_MINT_AUTHORITY);
+        }
+        w
     }
 
     /// True when a strict template list is loaded: tokens outside the entries are listed if their program is on it.
@@ -210,12 +199,8 @@ impl TokenAllowlist {
         self.templates.get(hash)
     }
 
-    pub fn is_delisted(&self, covenant_id: &Hash32) -> bool {
-        self.delisted.contains(covenant_id)
-    }
-
     /// Parses an allowlist. A full token registry document (`schema_version` + `templates`, i.e.
-    /// `registry/tokens.json`) is validated by `kob_protocol::registry` and only its `listed` tokens enter the list
+    /// `registry/tokens.json`) is validated by `kob_protocol::registry` and every token entry enters the list
     /// ([`TokenAllowlist::from_registry`]); anything else is the tolerant list format.
     pub fn parse(json: &str) -> Result<Self, serde_json::Error> {
         use serde::de::Error as _;
@@ -255,13 +240,12 @@ impl TokenAllowlist {
         Ok(list.with_genesis(genesis_flags(entries)))
     }
 
-    /// The tokens of a registry (delisted ones aside: they are refused): identity, program template hash, family, decimals (the
-    /// standard scale), standing; plus the registry's strict template list, which opens the list to every token on those
-    /// programs.
+    /// The tokens of a registry, facts only: identity, program template hash, family, decimals (the standard scale), the
+    /// program's capabilities; plus the registry's strict template list (the programs this build supports), which opens the list
+    /// to every token on those programs, and the live mint authorities its genesis records list.
     pub fn from_registry(reg: &kob_protocol::registry::Registry) -> Self {
-        use kob_protocol::registry::Status;
         let parse = |s: &str| kob_protocol::registry::parse_hex32(s).map(Hash32);
-        let entries = reg.tokens.iter().filter(|t| t.status != Status::Delisted).filter_map(|t| {
+        let entries = reg.tokens.iter().filter_map(|t| {
             let tpl = reg.template(&t.template_id)?;
             Some(TokenEntry {
                 ticker: t.ticker.clone(),
@@ -271,7 +255,6 @@ impl TokenAllowlist {
                 decimals: Some(t.decimals as u32),
                 family: Some(t.family),
                 enabled: true,
-                official: t.official && t.status == Status::Listed,
                 template_id: Some(tpl.id.clone()),
                 powers: tpl.capabilities.iter().map(|c| c.as_str().to_string()).collect(),
             })
@@ -286,8 +269,8 @@ impl TokenAllowlist {
                 },
             ))
         });
-        let delisted = reg.tokens.iter().filter(|t| t.status == Status::Delisted).filter_map(|t| parse(&t.covenant_id));
-        Self::from_entries(entries).with_strict_templates(templates).with_delisted(delisted)
+        let live = reg.tokens.iter().filter(|t| t.has_live_minter()).filter_map(|t| parse(&t.covenant_id));
+        Self::from_entries(entries).with_strict_templates(templates).with_live_minters(live)
     }
 
     pub fn load(path: &Path) -> Result<Self, TokenLoadError> {
@@ -410,10 +393,8 @@ impl ListingRules {
         let Some(tok_id) = o.token_cov_id else {
             return Err("no_token".into());
         };
-        if tokens.is_delisted(&tok_id) {
-            return Err("token_delisted".into());
-        }
-        // the strict template list (registry): the order's token program must be on it, for listed and unknown tokens alike
+        // the strict template list (registry): the order's token program must be one this build supports, for tokens with and
+        // without an entry alike (a rule on the program: none of the rules here refuses a token for being that token)
         if tokens.is_open() {
             match (o.token_tpl_hash.as_ref().and_then(|h| tokens.strict_template(h)), o.family) {
                 (Some(t), Some(f)) if t.family == f => {}
@@ -523,7 +504,6 @@ mod tests {
                 decimals: Some(decimals),
                 family: None,
                 enabled: true,
-                official: false,
                 template_id: None,
                 powers: vec![],
             };
@@ -531,40 +511,38 @@ mod tests {
         }
     }
 
-    /// The registry file itself is a valid allowlist: only `listed` tokens, with the template hash, family and decimals (the
+    /// The registry file itself is a valid allowlist: every token entry, with the template hash, family and decimals (the
     /// standard scale), and the listing rules work on it for both families.
     #[test]
     fn a_registry_document_is_an_allowlist_with_decimals_and_standard_scale() {
         let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../registry/tokens.example.json")).unwrap();
-        // the example: two entries, not confirmed genuine (unverified), and the strict template list opens the list
+        // the example: two entries (facts, nothing checked against the chain), and the strict template list opens the list
         let example = TokenAllowlist::parse(&text).unwrap();
         assert_eq!(example.len(), 2);
-        assert!(example.is_open() && example.list().iter().all(|t| t.standing() == "unverified"));
-        // the shipped registry: the eight KRON-family tokens of the census, listed after the listing verification, six official and
-        // the two test tokens (PEPE, DNBT: test tokens per their own names, founder 2026-10-03) unverified
-        // (genesis verified on mainnet data, no live mint authority: `registry/evidence/`, `kob registry verify-genesis`); the two
-        // KRON programs are reviewed with conditions (`crates/kob-tests/tests/review_b2_kron.rs`), which opens the list to every token on them
+        assert!(example.is_open());
+        assert!(example.list().iter().all(|t| example.warnings_for(&t.covenant_id) == [WARN_GENESIS_UNVERIFIED]));
+        // a registry of the earlier shape (listing state, official badge, warning text) loads as the same list: those are ignored
+        let mut old: serde_json::Value = serde_json::from_str(&text).unwrap();
+        old["tokens"][0]["status"] = "delisted".into();
+        old["tokens"][0]["official"] = true.into();
+        old["tokens"][1]["warning"] = "a maintainer note".into();
+        let old = TokenAllowlist::parse(&old.to_string()).unwrap();
+        assert_eq!(old.list(), example.list());
+        // the shipped registry: the eight KRON-family tokens of the census, every genesis output checked on mainnet data and no
+        // live mint authority (`registry/evidence/`, `kob registry verify-genesis`), so none carries a warning; the two KRON
+        // programs are reviewed with conditions (`crates/kob-tests/tests/review_b2_kron.rs`), which opens the list to every token on them
         let shipped = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../registry/tokens.json")).unwrap();
         let shipped = TokenAllowlist::parse(&shipped).unwrap();
         assert_eq!(shipped.len(), 8);
         assert!(shipped.is_open() && shipped.list().iter().all(|t| t.family == Some(Family::Kron)));
-        let mut unverified: Vec<&str> =
-            shipped.list().iter().filter(|t| t.standing() != "official").map(|t| t.ticker.as_str()).collect();
-        unverified.sort_unstable();
-        assert_eq!(unverified, ["DNBT", "PEPE"]);
-        assert!(shipped.list().iter().all(|t| t.standing() == "official" || t.standing() == "unverified"));
+        assert!(shipped.list().iter().all(|t| shipped.warnings_for(&t.covenant_id).is_empty()));
 
         let mut doc: serde_json::Value = serde_json::from_str(&text).unwrap();
         for t in doc["templates"].as_array_mut().unwrap() {
             t["review_status"] = "reviewed".into();
         }
-        for t in doc["tokens"].as_array_mut().unwrap() {
-            t["status"] = "listed".into();
-            t["verified"] = true.into();
-        }
-        // one token stays pending: still an entry (metadata), not official
-        doc["tokens"][1]["status"] = "pending-review".into();
-        doc["tokens"][1]["verified"] = false.into();
+        // an entry checked against the chain and one that is not: both are entries alike (the check is a fact, no listing step)
+        doc["tokens"][0]["verified"] = true.into();
         let listed = TokenAllowlist::parse(&doc.to_string()).unwrap();
         assert_eq!(listed.len(), 2);
         let kcc = listed.list().into_iter().find(|t| t.ticker == "EXKCC").unwrap().clone();
@@ -574,8 +552,7 @@ mod tests {
         );
         assert!(kcc.template_hash.is_some() && kcc.extension_commitment.is_some());
 
-        // both listed: the KRON entry carries its own template, no extension commitment
-        doc["tokens"][1]["status"] = "listed".into();
+        // the KRON entry carries its own template, no extension commitment
         doc["tokens"][1]["verified"] = true.into();
         let both = TokenAllowlist::parse(&doc.to_string()).unwrap();
         assert_eq!(both.len(), 2);
@@ -609,7 +586,7 @@ mod tests {
         let mut o = order(&kron, 100_000_000, Family::Kron);
         o.token_tpl_hash = Some(h(3));
         assert_eq!(rules.evaluate(&both, &o), Err("token_template_not_strict".into()));
-        // a listed token quoting another strict program is a template mismatch
+        // an entry's token quoting another supported program is a template mismatch
         let mut o = order(&kron, 100_000_000, Family::Kron);
         o.token_tpl_hash = kcc.template_hash;
         o.family = Some(Family::Kcc20);
@@ -630,7 +607,6 @@ mod tests {
             decimals: Some(3),
             family: Some(Family::Kcc20),
             enabled: true,
-            official: false,
             template_id: None,
             powers: vec![],
         }]);
@@ -717,13 +693,13 @@ mod tests {
     }
 
     /// The open token list: every token whose program is on the strict template list is listed (unknown covenant ids included),
-    /// a program off the list and a delisted token are not.
+    /// a program off the list is not. There is no token-level refusal.
     #[test]
     fn open_token_list_lists_every_token_of_a_strict_program() {
         let strict = |b: u8, f: Family, powers: &[&str]| {
             (h(b), StrictTemplate { id: format!("t{b}"), family: f, powers: powers.iter().map(|p| p.to_string()).collect() })
         };
-        let entry = |c: u8, tpl: u8, official: bool| TokenEntry {
+        let entry = |c: u8, tpl: u8| TokenEntry {
             ticker: format!("T{c}"),
             covenant_id: h(c),
             template_hash: Some(h(tpl)),
@@ -731,15 +707,12 @@ mod tests {
             decimals: Some(0),
             family: Some(Family::Kron),
             enabled: true,
-            official,
             template_id: Some(format!("t{tpl}")),
             powers: vec![],
         };
-        let toks = TokenAllowlist::from_entries([entry(1, 8, true)])
-            .with_strict_templates([strict(8, Family::Kron, &[]), strict(9, Family::Kcc20, &["freeze"])])
-            .with_delisted([h(7)]);
+        let toks = TokenAllowlist::from_entries([entry(1, 8)])
+            .with_strict_templates([strict(8, Family::Kron, &[]), strict(9, Family::Kcc20, &["freeze"])]);
         assert!(toks.is_open());
-        assert_eq!(toks.get(&h(1)).unwrap().standing(), "official");
         let rules = ListingRules { max_expiry_span_daa: 1 << 40, min_order_value_sompi: 0, ..ListingRules::default() };
         let order = |cov: u8, tpl: u8, fam: Family| ListingInput {
             token_cov_id: Some(h(cov)),
@@ -760,40 +733,34 @@ mod tests {
         assert_eq!(rules.evaluate(&toks, &order(3, 9, Family::Kcc20)), Ok(()));
         assert_eq!(rules.evaluate(&toks, &ListingInput { scale: Some(1), ..order(1, 8, Family::Kron) }), Ok(()));
         assert_eq!(toks.strict_template(&h(9)).unwrap().powers, vec!["freeze".to_string()]);
-        // a program off the strict list, a family that is not the program's, a delisted token
+        // a program off the strict list, a family that is not the program's
         assert_eq!(rules.evaluate(&toks, &order(2, 5, Family::Kron)), Err("token_template_not_strict".into()));
         assert_eq!(rules.evaluate(&toks, &order(2, 8, Family::Kcc20)), Err("token_family_mismatch".into()));
-        assert_eq!(rules.evaluate(&toks, &order(7, 8, Family::Kron)), Err("token_delisted".into()));
-        // without a strict list the plain allowlist decides
-        let plain = TokenAllowlist::from_entries([entry(1, 8, false)]);
+        // without a strict list the plain allowlist (an operator's own list) decides
+        let plain = TokenAllowlist::from_entries([entry(1, 8)]);
         assert!(!plain.is_open());
         assert_eq!(rules.evaluate(&plain, &order(2, 8, Family::Kron)), Err("token_not_allowlisted".into()));
     }
 
     /// A covenant id only commits to the genesis output hashes, so the registry says per token whether every genesis
-    /// output was verified. The flag is read from the raw document (whatever the typed registry schema), withdraws `official`
-    /// when false, drives the `genesis_unverified` warning and the optional `require_genesis_verified` listing rule.
+    /// output was verified. The flag is read from the raw document (whatever the typed registry schema), drives the
+    /// `genesis_unverified` warning and the optional `require_genesis_verified` listing rule. The legacy `official` of an older
+    /// list is read and ignored: it changes nothing.
     #[test]
     fn the_registry_genesis_flag_is_honoured() {
-        let doc = |flag: &str| {
-            format!(
-                r#"[{{"ticker":"A","covenantId":"{}","official":true{flag}}},{{"ticker":"B","covenantId":"{}","official":true}}]"#,
-                h(1),
-                h(2)
-            )
-        };
+        let doc = |flag: &str| format!(r#"[{{"ticker":"A","covenantId":"{}"{flag}}},{{"ticker":"B","covenantId":"{}"}}]"#, h(1), h(2));
         let t = TokenAllowlist::parse(&doc(r#","genesis_verified":true"#)).unwrap();
         assert_eq!(t.genesis_verified(&h(1)), Some(true));
-        assert_eq!(t.standing_of(t.get(&h(1)).unwrap()), "official");
         assert!(t.warnings_for(&h(1)).is_empty());
-        // the registry does not say: still official (unchanged data), but the warning is shown (fail closed in the display)
+        // the registry does not say: the warning is shown (fail closed in the display)
         assert_eq!(t.genesis_verified(&h(2)), None);
-        assert_eq!(t.standing_of(t.get(&h(2)).unwrap()), "official");
         assert_eq!(t.warnings_for(&h(2)), vec![WARN_GENESIS_UNVERIFIED]);
-        // explicitly contaminated: the badge is withdrawn
+        // checked and not clean
         let t = TokenAllowlist::parse(&doc(r#","genesisVerified":false"#)).unwrap();
-        assert_eq!(t.standing_of(t.get(&h(1)).unwrap()), "unverified");
         assert_eq!(t.warnings_for(&h(1)), vec![WARN_GENESIS_UNVERIFIED]);
+        let legacy = TokenAllowlist::parse(&doc(r#","official":true"#)).unwrap();
+        assert_eq!(legacy.list(), TokenAllowlist::parse(&doc("")).unwrap().list());
+        assert_eq!(legacy.warnings_for(&h(1)), vec![WARN_GENESIS_UNVERIFIED]);
         // the listing rule
         let rules = ListingRules {
             require_genesis_verified: true,

@@ -144,11 +144,11 @@ async fn the_open_token_list_lists_a_token_of_a_strict_program_without_an_entry(
         };
         (v, rows, stale)
     };
-    // the fixtures' token program is the reference 3/3: on the strict list -> listed, unverified, powers from the template
+    // the fixtures' token program is the reference 3/3: on the strict list -> listed, powers from the template
     let (v, rows, stale) = run(vec![strict(TemplateId::Kcc20Ref, &["freeze"])]).await;
     assert!(v.listed, "{:?}", v.unlisted_reason);
     assert_eq!(rows.len(), 1);
-    assert_eq!((rows[0].standing, rows[0].ticker.as_str(), rows[0].family), ("unverified", "", Some("kcc20")));
+    assert_eq!((rows[0].ticker.as_str(), rows[0].family), ("", Some("kcc20")));
     assert_eq!(rows[0].powers, vec!["freeze".to_string()]);
     assert_eq!((rows[0].open_asks, rows[0].template_id.as_deref()), (1, Some("KCC20Ref")));
     // the order stays listed in the history, but under a strict list that no longer has its program the token is not in the list
@@ -186,7 +186,7 @@ async fn the_open_token_list_lists_a_token_known_only_from_an_unlisted_order() {
     let rows = list(TemplateId::Kcc20Ref);
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0].covenant_id, Hash32(TOKEN_COV).to_hex());
-    assert_eq!((rows[0].standing, rows[0].family, rows[0].scale), ("unverified", Some("kcc20"), None));
+    assert_eq!((rows[0].family, rows[0].scale), (Some("kcc20"), None));
     assert_eq!((rows[0].open_asks, rows[0].open_bids), (0, 0));
     // the one extension commitment its placements named (a client checks it against what it knows without the indexer)
     assert_eq!(rows[0].extension_commitment.as_deref(), Some(Hash32(EXT).to_hex().as_str()));

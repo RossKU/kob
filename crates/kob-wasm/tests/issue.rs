@@ -143,7 +143,8 @@ fn normal_issuance_signs_finalizes_and_validates() {
     assert_eq!((v["covenantId"].as_str(), v["json"].as_str()), (Some(cov), Some(json)));
     assert_eq!((v["token"]["symbol"].as_str(), v["token"]["decimals"].as_u64()), (Some("TEST"), Some(8)));
     assert_eq!(v["genesisTxid"], to_hex(&built.tx.id));
-    assert_eq!(res["docs"]["registryEntry"]["status"], "pending-review");
+    // the token's facts in the registry format, no listing state
+    assert!(res["docs"]["registryEntry"].get("status").is_none());
     assert_eq!(res["docs"]["registryEntry"]["verified"], false);
     assert_eq!(res["docs"]["registryEntry"]["covenant_id"], cov);
     assert_eq!(res["warnings"], json!([]));

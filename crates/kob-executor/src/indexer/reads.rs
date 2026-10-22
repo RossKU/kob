@@ -82,18 +82,16 @@ pub struct TokenView {
     /// a client prices new orders at it and refuses decimals that give another scale. `null` for a token with `decimals` (its
     /// `scale` is the market's) and for one no order of which was ever seen.
     pub market_scale: Option<i64>,
-    /// `official` (confirmed genuine), `unverified` (a token of a strict-list program KOB has not confirmed; tickers collide, identify
-    /// it by covenant id plus template hash).
-    pub standing: &'static str,
-    /// The registry's own `official` flag as declared, and the registry document `standing` was derived from: `standing` is this
-    /// operator's reading of that registry, not chain data. A client verifies against `registry.sha256` (or ignores it).
-    pub official_declared: bool,
+    /// The registry document the token's facts (`decimals`, `genesis_verified`, the derived `warnings`) come from: this
+    /// operator's copy, not chain data. A client verifies against `registry.sha256` (or ignores it). No standing is served: KOB
+    /// makes no judgement about a token (tickers collide: identify it by covenant id plus template hash).
     pub registry: Option<crate::tokens::RegistryInfo>,
     /// The registry's `genesis_verified`: every genesis output of the token was checked against the pinned program. `null`: the
-    /// registry does not say. `false` withdraws the `official` badge.
+    /// registry does not say.
     pub genesis_verified: Option<bool>,
-    /// Warnings a client must show: `genesis_unverified` (a hidden genesis output could mint look-alike tokens later) unless the
-    /// registry says `genesis_verified: true`.
+    /// Warnings a client must show, derived from the registry's recorded facts: `genesis_unverified` (a hidden genesis output
+    /// could mint look-alike tokens later) unless the registry says `genesis_verified: true`, and `live_mint_authority` when the
+    /// token's genesis record lists a live mint authority (its supply can still grow).
     pub warnings: Vec<&'static str>,
     /// Capabilities of the token's program that reach balances or supply (`freeze`, `seize`, `blacklist`, `mint-authority`, ...): a
     /// UI labels tokens whose program can freeze or seize.
@@ -175,8 +173,6 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 decimals: t.decimals,
                 scale: t.scale(),
                 market_scale: None,
-                standing: tokens.standing_of(t),
-                official_declared: t.official,
                 registry: tokens.info().cloned(),
                 genesis_verified: tokens.genesis_verified(&t.covenant_id),
                 warnings: tokens.warnings_for(&t.covenant_id),
@@ -188,11 +184,11 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
             }
         })
         .collect();
-    // The open token list: tokens of a strict-list program that have listed orders but no registry entry (unverified, no ticker);
+    // The open token list: tokens of a strict-list program that have listed orders but no registry entry (no facts, no ticker);
     // the quote token B of a listed pair order too (its program from the token identities its placement recorded); and every token
     // identity an order placement recorded (`token_events`): an order that was not listed (below the minimum value, say) still
     // shows the token's program, so the token is in the list and its first listed order can be placed from it. The strict-list
-    // and delisting checks below apply to every row; at most `OPEN_TOKEN_ROWS_MAX` rows are read.
+    // check below applies to every row; at most `OPEN_TOKEN_ROWS_MAX` rows are read.
     if tokens.is_open() {
         let mut seen: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
         for (cov, tpl, _fam) in open_token_rows(conn, OPEN_TOKEN_ROWS_MAX as usize)? {
@@ -204,15 +200,12 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 continue;
             }
             // a token whose program is not on the strict list is not listed, whatever listed orders it still has in the history (a retired
-            // program: its orders were listed under an earlier registry), and neither is a delisted token. A row of another program
+            // program: its orders were listed under an earlier registry). A row of another program
             // (an unlisted order naming the covenant id with a program off the list) neither lists the token nor hides it: the
             // token's next row is read. Rows of listed orders come first (`family` > 0).
             let Some(strict) = tokens.strict_template(&crate::hex::Hash32(tpl32)) else {
                 continue;
             };
-            if tokens.is_delisted(&cid) {
-                continue;
-            }
             seen.insert(cov.clone());
             let extension_commitment =
                 if strict.family == kob_protocol::Family::Kcc20 { sole_extension(conn, &cov, &tpl)? } else { None };
@@ -225,8 +218,6 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
                 decimals: None,
                 scale: None,
                 market_scale: market_scale(conn, &cov)?,
-                standing: "unverified",
-                official_declared: false,
                 registry: tokens.info().cloned(),
                 genesis_verified: None,
                 warnings: tokens.warnings_for(&cid),
@@ -759,8 +750,9 @@ pub struct OrderView {
     /// `token` is the base token A, `price` / `quote` are null (no KAS price), `tip` is the KAS tip per whole A.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pair: Option<PairView>,
-    /// Warnings a client must show for the order's token(s) (`docs/spec/matcher.md` 1.2a): `genesis_unverified` unless the
-    /// registry says `genesis_verified: true` of every token the order trades (a pair order: A and B). Filled by the API
+    /// Warnings a client must show for the order's token(s) (`docs/spec/matcher.md` 1.2a), derived from the registry's facts:
+    /// `genesis_unverified` unless the registry says `genesis_verified: true` of every token the order trades (a pair order: A
+    /// and B), `live_mint_authority` when a genesis record of one of them lists a live mint authority. Filled by the API
     /// ([`OrderView::with_warnings`]), which holds the token registry.
     pub warnings: Vec<&'static str>,
 }

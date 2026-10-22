@@ -1,18 +1,22 @@
-//! Token registry: the data behind KOB's token allowlist (`registry/tokens.json`).
+//! Token registry: the pinned snapshot of facts behind a build (`registry/tokens.json`): the token programs it supports and
+//! facts about tokens that anyone can re-derive from the chain.
 //!
 //! A *family* is a token program lineage KOB can escrow (`kcc20`: the draft KCC-20 layout, `kron`: KRON's 46-byte layout).
 //! The registry pins, per family, the exact token programs (`templates`: template hash, sizes, slot limits and the escrow
-//! owner types the order contracts use) and lists the tokens KOB knows about (`tokens`).
+//! owner types the order contracts use) and records facts about known tokens (`tokens`: identity, decimals, the genesis check).
 //! A token's identity is `(family, covenant id, template hash, extension commitment)` (a token is its KIP-20
 //! covenant id plus template hash, and fungibility only holds among equal extension commitments). Display is
-//! `TICKER (abcd…1234) [verified]`; tickers are ASCII uppercase alphanumerics, and two tickers that collide after
+//! `TICKER (abcd…1234)`; tickers are ASCII uppercase alphanumerics, and two tickers that collide after
 //! homoglyph normalisation (`0`/`O`, `1`/`I`/`L`) are refused.
 //!
-//! **Two lists.** `templates` is the STRICT list: only token programs KOB has reviewed (`review_status: reviewed`) can carry a
-//! tradable token, and a template that can freeze, seize or blacklist holders says so in `capabilities`. `tokens` is the OPEN list:
-//! every token whose program is on the strict list is tradable and shown, whether or not it is in `tokens`; a token KOB confirmed
-//! genuine is `official` (badge), any other is `unverified`; an entry that is still `pending-review` stays tradable and is shown as such
-//! (`[unverified, pending review]`), only `delisted` blocks a token. Identity is always the covenant id plus the template hash, never the ticker.
+//! **Two lists.** `templates` is the STRICT list, the program allowlist: only the token programs this build supports for trading
+//! (`review_status: reviewed`: their engineering review is done and the order contracts escrow them) can carry a tradable token,
+//! and a template that can freeze, seize or blacklist holders says so in `capabilities`. `tokens` is the OPEN list: every token
+//! whose program is on the strict list is tradable and shown, whether or not it is in `tokens`. An entry adds facts only (the
+//! decimals the chain does not state, the identity and genesis checks); KOB makes no judgement about a token: no listing, no
+//! delisting, no official badge, no warning text written by people. Curation (official status, anti-impersonation, logos) belongs
+//! to external community lists the user chooses. The warnings a token carries are derived from the recorded facts
+//! ([`TokenWarning`]). Identity is always the covenant id plus the template hash, never the ticker.
 //!
 //! The format is specified by `registry/tokens.schema.json` (structure) and this validator (structure plus the cross-field
 //! rules a schema cannot express). Everything is hand-validated on top of serde with `deny_unknown_fields`.
@@ -38,6 +42,10 @@ pub fn default_registry_sha256() -> String {
 
 /// Format version this module reads and writes.
 pub const SCHEMA_VERSION: u32 = 1;
+/// Token keys of older files that carried a per-token judgement (the listing state, the official badge, a maintainer's warning
+/// text): [`Registry::parse`] reads and ignores them, whatever they hold, and nothing writes them. KOB makes no such judgement;
+/// curation belongs to external community lists.
+pub const LEGACY_TOKEN_KEYS: [&str; 3] = ["status", "official", "warning"];
 /// Networks a registry can describe.
 pub const NETWORKS: [&str; 3] = ["mainnet", "testnet-10", "devnet"];
 /// Largest `decimals` a token may declare.
@@ -78,13 +86,14 @@ impl Family {
     }
 }
 
-/// Review state of a pinned token program (a program must be `reviewed` before any token on it can be `listed`).
+/// Review state of a pinned token program: whether this build supports trading it (the program allowlist). A statement about a
+/// token PROGRAM (its bytes, owner types and limits), never about a token that runs it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewStatus {
-    /// Pinned, semantic review not done.
+    /// Pinned, semantic review not done: this build does not trade it.
     PendingReview,
-    /// Semantic review done (owner types, no admin path, conservation, limits).
+    /// Semantic review done (owner types, no admin path, conservation, limits): this build supports trading it.
     Reviewed,
 }
 impl ReviewStatus {
@@ -128,46 +137,6 @@ impl Capability {
     pub fn restricts_holders(self) -> bool {
         matches!(self, Capability::Freeze | Capability::Seize | Capability::Blacklist)
     }
-}
-
-/// How KOB regards a token: shown next to every token in the UIs and the API.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Standing {
-    /// Confirmed genuine by KOB (covenant id and program checked against the chain and the issuer's own listing).
-    Official,
-    /// On a strict-list program, not confirmed genuine (tickers collide: check the covenant id).
-    Unverified,
-    /// Was listed, no longer: orders are not listed.
-    Delisted,
-}
-impl Standing {
-    /// Schema / API spelling.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Standing::Official => "official",
-            Standing::Unverified => "unverified",
-            Standing::Delisted => "delisted",
-        }
-    }
-}
-
-/// Listing state of a token.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Status {
-    /// Known, not yet confirmed genuine by the registry maintainers. Still tradable, like any token on a reviewed template
-    /// (the token list is open: what gates trading is the template, and only an explicit `delisted` blocks a token); shown as
-    /// `[unverified, pending review]` or `[verified, pending review]`.
-    PendingReview,
-    /// Listed: tradable, and eligible for the `official` badge once its genesis check passes.
-    Listed,
-    /// Was listed, no longer.
-    Delisted,
-}
-impl Status {
-    /// Schema spellings.
-    pub const ALL: [&'static str; 3] = ["pending-review", "listed", "delisted"];
 }
 
 /// Extension-commitment class of a KCC-20 token (KRON has none).
@@ -246,7 +215,7 @@ pub struct Template {
     pub max_token_outputs: u32,
     /// Owner types the order contracts use.
     pub escrow: Escrow,
-    /// Review state (only `reviewed` templates are on the strict list).
+    /// Review state (only `reviewed` templates are on the strict list: the programs this build supports for trading).
     pub review_status: ReviewStatus,
     /// What the program's authorities can do beyond owner-authorised transfers (see [`Capability`]); empty: nothing found.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -260,7 +229,7 @@ pub struct Template {
 }
 
 impl Template {
-    /// True when the template is on the strict list (semantic review done).
+    /// True when the template is on the strict list (semantic review done: this build supports trading the program).
     pub fn is_strict(&self) -> bool {
         self.review_status == ReviewStatus::Reviewed
     }
@@ -327,29 +296,24 @@ pub struct Token {
     /// Redundant slot limits; when present they must equal the template's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_token_outputs: Option<u32>,
-    /// Listing state.
-    pub status: Status,
-    /// KOB checked covenant id and template hash against chain (a UTXO of the token is an instance of the template).
+    /// The covenant id and template hash were checked against a chain UTXO of the token (the UTXO is an instance of the
+    /// template, carrying the covenant id). A fact anyone can re-derive from the chain, not an endorsement of the token; the name
+    /// is the format's since schema version 1.
     pub verified: bool,
     /// Genesis check: `true` = EVERY output of the token's genesis group was revealed and is an instance of its
     /// program ([`verify_genesis`]); `false` = checked and NOT clean (a hidden non-template output); absent = not checked.
     /// The covenant id commits only to the P2SH hashes of the genesis outputs, so an unchecked genesis may hide an output
-    /// that later mints look-alike tokens or feeds a fake balance into a transfer. `official` needs `true` (a listed token without it trades with the warning); any
-    /// token without `true` carries the API warning [`TokenWarning::GenesisUnverified`].
+    /// that later mints look-alike tokens or feeds a fake balance into a transfer. Any token without `true` carries the API
+    /// warning [`TokenWarning::GenesisUnverified`]; trading never depends on it unless an operator opts in
+    /// (`require_genesis_verified` of the executor).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub genesis_verified: Option<bool>,
     /// What the genesis check found on chain (the record behind `genesis_verified` and the live-mint-authority check);
-    /// re-derived from the committed chain evidence by `kob registry verify-genesis`. `official` needs it with no live minter.
+    /// re-derived from the committed chain evidence by `kob registry verify-genesis`. Live mint-authority cells in it give the
+    /// warning [`TokenWarning::LiveMintAuthority`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub genesis: Option<GenesisRecord>,
-    /// A warning UIs show next to the token (free text from the registry maintainer, e.g. what the genesis check found).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub warning: Option<String>,
-    /// Confirmed genuine (the real token of its issuer, not a lookalike): shown with an "official" badge. Needs `verified` and
-    /// `status: listed`. Every other token is shown as "unverified".
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub official: bool,
-    /// Display metadata.
+    /// Display metadata: a snapshot of what the token declares about itself (KCC-23) or of neutral facts, not KOB's word.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<Display>,
 }
@@ -419,7 +383,7 @@ pub struct GenesisRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mint_allowance: Option<i64>,
     /// Live mint-authority cells (`txid:index`) at `checked_at_daa`: empty = none (condition C2 holds), absent = not
-    /// determined. A token with a live minter needs a `warning` and cannot be official.
+    /// determined. A token with a live minter carries the warning [`TokenWarning::LiveMintAuthority`] (its supply can still grow).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_minters: Option<Vec<String>>,
     /// Virtual DAA score of the node the check read liveness from.
@@ -428,7 +392,9 @@ pub struct GenesisRecord {
     pub source: String,
 }
 
-/// A warning a token carries in the registry data and the API (`warnings`, kebab-case strings). UIs show it next to the token.
+/// A warning a token carries in the registry data and the API (`warnings`, snake_case strings). UIs show it next to the token.
+/// Every code is derived from recorded chain facts by code, never written by people: KOB states what the chain shows about a
+/// token, not what it thinks of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenWarning {
@@ -436,14 +402,18 @@ pub enum TokenWarning {
     /// against its program, so the issuer may hold a hidden non-template output able to mint look-alike tokens or feed a fake
     /// balance into a transfer. Every token on the open list without a registry entry carries it.
     GenesisUnverified,
+    /// The token's genesis record lists live mint-authority cells (`genesis.live_minters` non-empty): whoever holds them can
+    /// still mint, so the supply can still grow.
+    LiveMintAuthority,
 }
 impl TokenWarning {
     /// All warning codes (API `warnings`).
-    pub const ALL: [&'static str; 1] = ["genesis_unverified"];
+    pub const ALL: [&'static str; 2] = ["genesis_unverified", "live_mint_authority"];
     /// API spelling (the executor's `/v1/tokens` `warnings`).
     pub fn as_str(self) -> &'static str {
         match self {
             TokenWarning::GenesisUnverified => "genesis_unverified",
+            TokenWarning::LiveMintAuthority => "live_mint_authority",
         }
     }
 }
@@ -452,24 +422,22 @@ impl TokenWarning {
 pub const OPEN_TOKEN_WARNINGS: [TokenWarning; 1] = [TokenWarning::GenesisUnverified];
 
 impl Token {
-    /// Warnings this token carries (API `warnings`): [`TokenWarning::GenesisUnverified`] unless `genesis_verified: true`.
+    /// Warnings this token carries (API `warnings`), derived from its recorded facts: [`TokenWarning::GenesisUnverified`] unless
+    /// `genesis_verified: true`, and [`TokenWarning::LiveMintAuthority`] when its genesis record lists a live minter.
     pub fn warnings(&self) -> Vec<TokenWarning> {
-        if self.genesis_verified == Some(true) {
-            vec![]
-        } else {
-            vec![TokenWarning::GenesisUnverified]
+        let mut w = vec![];
+        if self.genesis_verified != Some(true) {
+            w.push(TokenWarning::GenesisUnverified);
         }
+        if self.has_live_minter() {
+            w.push(TokenWarning::LiveMintAuthority);
+        }
+        w
     }
 
-    /// Official (confirmed genuine), unverified, or delisted.
-    pub fn standing(&self) -> Standing {
-        if self.status == Status::Delisted {
-            Standing::Delisted
-        } else if self.official {
-            Standing::Official
-        } else {
-            Standing::Unverified
-        }
+    /// True when the genesis record lists a live mint-authority cell (`genesis.live_minters` non-empty).
+    pub fn has_live_minter(&self) -> bool {
+        self.genesis.as_ref().and_then(|g| g.live_minters.as_ref()).is_some_and(|l| !l.is_empty())
     }
 }
 
@@ -660,14 +628,6 @@ pub enum ValidationError {
         /// Template max outputs.
         template_out: u32,
     },
-    /// `official` without what it needs.
-    #[error("token {ticker}: cannot be official: {reason}")]
-    NotOfficial {
-        /// Token ticker.
-        ticker: String,
-        /// What is missing.
-        reason: &'static str,
-    },
     /// A template lists a capability twice.
     #[error("template `{id}`: capability `{capability}` listed twice")]
     DuplicateCapability {
@@ -683,20 +643,12 @@ pub enum ValidationError {
         /// Template id.
         id: String,
     },
-    /// `genesis_verified` rules, or a malformed `warning`.
+    /// `genesis_verified` / `genesis` record rules.
     #[error("token {ticker}: {reason}")]
     Genesis {
         /// Token ticker.
         ticker: String,
         /// What is wrong.
-        reason: &'static str,
-    },
-    /// A `listed` token lacks what listing needs.
-    #[error("token {ticker}: cannot be listed: {reason}")]
-    NotListable {
-        /// Token ticker.
-        ticker: String,
-        /// What is missing.
         reason: &'static str,
     },
 }
@@ -775,9 +727,20 @@ impl Registry {
         Ok(r)
     }
 
-    /// Parse only (unknown fields and wrong types are still refused).
+    /// Parse only (unknown fields and wrong types are still refused). The per-token judgements older files carry
+    /// ([`LEGACY_TOKEN_KEYS`]: `status`, `official`, `warning`) are read and ignored, whatever they hold: a registry of the
+    /// earlier shape (an operator's testnet file, say) still loads and trades exactly what it would trade without them, and
+    /// nothing of them is ever honoured or written back.
     pub fn parse_unvalidated(json: &str) -> Result<Registry, RegistryError> {
-        Ok(serde_json::from_str(json)?)
+        let mut doc: serde_json::Value = serde_json::from_str(json)?;
+        if let Some(tokens) = doc.get_mut("tokens").and_then(|t| t.as_array_mut()) {
+            for t in tokens.iter_mut().filter_map(|t| t.as_object_mut()) {
+                for k in LEGACY_TOKEN_KEYS {
+                    t.remove(k);
+                }
+            }
+        }
+        Ok(serde_json::from_value(doc)?)
     }
 
     /// The registry shipped with this build.
@@ -1012,18 +975,10 @@ impl Registry {
                     e.push(ValidationError::DuplicateIdentity { a: prev.to_string(), b: tk.to_string() });
                 }
             }
-            // genesis check: official needs every genesis output checked (a listed token without it carries the warning)
+            // genesis check: a token without `genesis_verified: true` carries the warning (derived, `Token::warnings`)
             let gbad = |reason: &'static str| ValidationError::Genesis { ticker: tk.to_string(), reason };
             if tok.genesis_verified == Some(true) && !tok.verified {
                 e.push(gbad("genesis_verified needs verified (the covenant id and template hash checked first)"));
-            }
-            if tok.official && tok.genesis_verified != Some(true) {
-                e.push(gbad("cannot be official without genesis_verified: true (every genesis output checked)"));
-            }
-            if let Some(w) = &tok.warning {
-                if w.is_empty() || w.chars().count() > 512 || has_bad_char(w) {
-                    e.push(gbad("warning must be 1-512 characters without control, zero-width or bidi characters"));
-                }
             }
             // the genesis record (C1 evidence) and the live-mint-authority check (C2)
             if let Some(g) = &tok.genesis {
@@ -1053,36 +1008,9 @@ impl Registry {
                 if g.source.is_empty() || g.source.chars().count() > 512 || has_bad_char(&g.source) {
                     e.push(gbad("genesis.source must be 1-512 characters without control, zero-width or bidi characters"));
                 }
-                if let Some(live) = &g.live_minters {
-                    if !live.iter().all(|o| is_outpoint(o)) {
-                        e.push(gbad("genesis.live_minters entries must be <txid>:<index>"));
-                    }
-                    if !live.is_empty() && tok.warning.is_none() {
-                        e.push(gbad("a token with a live mint authority needs a warning (active mint authority)"));
-                    }
-                }
-            }
-            if tok.official && tok.genesis.as_ref().and_then(|g| g.live_minters.as_ref()).is_none_or(|l| !l.is_empty()) {
-                e.push(gbad("cannot be official without a genesis record that found no live mint authority (live_minters: [])"));
-            }
-            // official
-            if tok.official {
-                let bad = |reason: &'static str| ValidationError::NotOfficial { ticker: tk.to_string(), reason };
-                if !tok.verified {
-                    e.push(bad("not verified against chain"));
-                }
-                if tok.status != Status::Listed {
-                    e.push(bad("only a listed token can be official"));
-                }
-            }
-            // listing
-            if tok.status == Status::Listed {
-                let bad = |reason: &'static str| ValidationError::NotListable { ticker: tk.to_string(), reason };
-                if !tok.verified {
-                    e.push(bad("not verified against chain"));
-                }
-                if tpl.review_status != ReviewStatus::Reviewed {
-                    e.push(bad("its template is not reviewed"));
+                // a live minter is a recorded fact: the token carries the derived warning `live_mint_authority`
+                if g.live_minters.as_ref().is_some_and(|live| !live.iter().all(|o| is_outpoint(o))) {
+                    e.push(gbad("genesis.live_minters entries must be <txid>:<index>"));
                 }
             }
         }
@@ -1128,13 +1056,14 @@ impl Registry {
         self.tokens.iter().find(|t| self.allowlist_key(t).is_ok_and(|k| &k == key))
     }
 
-    /// Allowlist rows of every `listed` token (call after `validate`).
-    pub fn listed_allowlist(&self) -> Vec<AllowlistEntry> {
+    /// Allowlist rows of every token entry whose program is on the strict list, the programs this build supports (call after
+    /// `validate`). Entries on a program pending review give no row: nothing of such a program is tradable. A row is facts only
+    /// (identity, layout, decimals); a token of a supported program trades whether or not it has a row (the open list).
+    pub fn allowlist(&self) -> Vec<AllowlistEntry> {
         self.tokens
             .iter()
-            .filter(|t| t.status == Status::Listed)
             .filter_map(|t| {
-                let tpl = self.template(&t.template_id)?;
+                let tpl = self.template(&t.template_id).filter(|tpl| tpl.is_strict())?;
                 Some(AllowlistEntry {
                     key: self.allowlist_key(t).ok()?,
                     suffix_len: tpl.suffix_len,
@@ -1163,25 +1092,12 @@ impl Registry {
     }
 }
 
-/// `TICKER (abcd…1234) [verified]`: ticker, short covenant id, state. `[delisted]` overrides `[official]`, which overrides `[verified]`;
-/// a `pending-review` token says so (`[unverified, pending review]`, `[verified, pending review]`). Mirrors `displayName` of the web registry.
+/// `TICKER (abcd…1234)`: ticker and short covenant id, so tokens that share a ticker are told apart. No standing or badge: KOB
+/// makes no judgement about a token. Mirrors `displayName` of the web registry.
 pub fn display_name(token: &Token) -> String {
     let c = &token.covenant_id;
     let short_id = if c.len() >= 8 { format!("{}…{}", &c[..4], &c[c.len() - 4..]) } else { c.clone() };
-    let pending = token.status == Status::PendingReview;
-    let base = if token.official && !pending {
-        "official"
-    } else if token.verified {
-        "verified"
-    } else {
-        "unverified"
-    };
-    let state = match token.status {
-        Status::Delisted => "[delisted]".to_string(),
-        Status::PendingReview => format!("[{base}, pending review]"),
-        Status::Listed => format!("[{base}]"),
-    };
-    format!("{} ({}) {}", token.ticker, short_id, state)
+    format!("{} ({})", token.ticker, short_id)
 }
 
 impl fmt::Display for Token {
@@ -1235,7 +1151,7 @@ pub enum GenesisError {
 }
 
 /// Checks EVERY output of a token's genesis group against its pinned program: the step behind
-/// `genesis_verified: true`, which `official` requires.
+/// `genesis_verified: true` (without it a token carries the warning [`TokenWarning::GenesisUnverified`]).
 ///
 /// A KIP-20 covenant id commits to the genesis outpoint and to the index, value and script public key of every output of the
 /// genesis group, and nothing else: for P2SH outputs only to the hash of the redeem script. A token program reads balances
@@ -1422,7 +1338,7 @@ mod tests {
     fn tok(v: &mut Value, i: usize) -> &mut Value {
         &mut v["tokens"][i]
     }
-    /// A genesis record that found no live mint authority (what official needs besides genesis_verified).
+    /// A genesis record that found no live mint authority (no derived warning besides what genesis_verified decides).
     fn genesis_rec() -> Value {
         json!({"txid": "ab".repeat(32), "daa_score": 10, "outputs": [1, 2], "supply": 1000, "minter_outputs": [],
             "live_minters": [], "checked_at_daa": 20, "source": "test"})
@@ -1432,30 +1348,25 @@ mod tests {
     fn default_and_example_registries_validate() {
         let d = Registry::default_registry();
         assert_eq!(d.network, "mainnet");
-        // the KRON family from the 2026-09-29 census: seven graduated tokens and KDIST, identity verified. Listing verification
-        // (2026-10-03, `registry/evidence/mainnet-genesis.json`, `genesis_evidence`): every genesis verified on mainnet data (C1),
-        // no genesis minter output so no live mint authority (C2): listed. Official except the two test tokens (founder 2026-10-03:
-        // PEPE "The Ultimate test" and DNBT "dont buy this is test" are test tokens per their own names; PEPE also collides with the
-        // well-known PEPE), which keep their genesis records and carry a maintainer warning instead
+        // the KRON family from the 2026-09-29 census: seven graduated tokens and KDIST, facts only: identity checked against a chain
+        // UTXO, and the genesis check (2026-10-03, `registry/evidence/mainnet-genesis.json`, `genesis_evidence`): every genesis output
+        // checked on mainnet data (C1), no genesis minter output so no live mint authority (C2), hence no derived warning. No entry
+        // carries a judgement (no listing state, no official flag, no written warning: the format has none)
         assert_eq!(d.tokens.len(), 8);
         assert!(d.tokens.iter().all(|t| t.family == Family::Kron
             && t.verified
             && t.genesis_verified == Some(true)
             && t.genesis.as_ref().is_some_and(|g| g.minter_outputs.is_empty() && g.live_minters == Some(vec![]))
-            && t.status == Status::Listed
             && t.warnings().is_empty()));
-        for t in &d.tokens {
-            let test_token = matches!(t.ticker.as_str(), "PEPE" | "DNBT");
-            assert_eq!(t.official, !test_token, "{}", t.ticker);
-            assert_eq!(t.standing(), if test_token { Standing::Unverified } else { Standing::Official }, "{}", t.ticker);
-            let warned = t.warning.as_deref().is_some_and(|w| w.starts_with("Not official: a test token per its own name"));
-            assert_eq!(warned, test_token, "{}", t.ticker);
-        }
-        assert!(d.tokens.iter().find(|t| t.ticker == "PEPE").unwrap().warning.as_deref().unwrap().contains("well-known PEPE"));
-        assert_eq!(d.listed_allowlist().len(), 8);
+        assert!(d.tokens.iter().all(|t| t
+            .display
+            .as_ref()
+            .and_then(|x| x.description.as_deref())
+            .is_some_and(|s| !s.contains("listed") && !s.contains("official"))));
+        assert_eq!(d.allowlist().len(), 8);
         assert_eq!(d.templates.len(), 6);
         // internal review of the two KRON programs (2026-09-30, `review_b2_kron.rs`): reviewed with conditions (per-token genesis check and
-        // no live minter before a token is listed or official); the reference KCC-20 3/3 program, KOB's standard one, is reviewed
+        // no live minter, facts each token shows as derived warnings); the reference KCC-20 3/3 program, KOB's standard one, is reviewed
         // (internal review only, maintainer decision 2026-10-12: tradable on mainnet), and so is the reference's published public-mint
         // build (2026-10-13, the same permissionless KCC-20 policy); the 8/8 prototype and KaspaCom's are pending
         let strict: Vec<&str> = d.strict_templates().map(|t| t.id.as_str()).collect();
@@ -1521,11 +1432,12 @@ mod tests {
         assert_eq!(ex.templates, reviewed, "example carries the same pinned templates");
         assert_eq!(ex.strict_templates().count(), 6);
         assert!(ex.validate_for_network("testnet-10").is_ok());
-        assert!(ex.listed_allowlist().is_empty());
+        // both example entries are on reviewed (supported) programs: both give an allowlist row, unchecked as they are
+        assert_eq!(ex.allowlist().len(), 2);
     }
 
     #[test]
-    fn strict_list_capabilities_official_and_standing() {
+    fn strict_list_capabilities_and_warnings() {
         // a template that can freeze is labelled, and only reviewed templates are on the strict list
         let r = check(|v| {
             for t in v["templates"].as_array_mut().unwrap() {
@@ -1549,26 +1461,33 @@ mod tests {
             assert!(e.iter().any(|x| matches!(x, ValidationError::BadRisk { .. })), "{bad}");
         }
         assert!(check(|v| v["templates"][0]["risks"] = json!(["x".repeat(512)])).is_ok());
-        // official needs verified and listed
-        let e = errs(check(|v| tok(v, 0)["official"] = json!(true)));
-        assert_eq!(e.iter().filter(|x| matches!(x, ValidationError::NotOfficial { .. })).count(), 2, "{e:?}");
+        // the warnings are derived from the facts: a checked genesis without a live minter carries none, an entry without the check
+        // carries what an open-list token without an entry carries
         let ok = check(|v| {
-            tok(v, 0)["official"] = json!(true);
             tok(v, 0)["verified"] = json!(true);
             tok(v, 0)["genesis_verified"] = json!(true);
             tok(v, 0)["genesis"] = genesis_rec();
-            tok(v, 0)["status"] = json!("listed");
-            v["templates"][1]["review_status"] = json!("reviewed");
         })
         .unwrap();
         assert!(ok.tokens[0].warnings().is_empty() && ok.tokens[1].warnings() == OPEN_TOKEN_WARNINGS.to_vec());
-        assert_eq!(ok.tokens[0].standing(), Standing::Official);
-        assert_eq!(ok.tokens[1].standing(), Standing::Unverified);
-        assert!(display_name(&ok.tokens[0]).ends_with("[official]"));
-        let mut d = ok.tokens[0].clone();
-        d.status = Status::Delisted;
-        assert_eq!(d.standing(), Standing::Delisted);
-        assert_eq!(Standing::Unverified.as_str(), "unverified");
+        // the judgements older files carry are read and ignored, whatever they hold (an operator's file of the earlier shape still
+        // loads): the result is the registry without them, and nothing of them is written back
+        let plain = Registry::parse(EXAMPLE).unwrap();
+        for (field, value) in [
+            ("official", json!(true)),
+            ("status", json!("delisted")),
+            ("status", json!("no such state")),
+            ("warning", json!("evil\u{202E}")),
+            ("warning", json!(17)),
+        ] {
+            let r = check(|v| tok(v, 0)[field] = value.clone()).unwrap_or_else(|e| panic!("{field}: {e}"));
+            assert_eq!(r, plain, "{field} = {value} is ignored");
+            assert!(serde_json::to_value(&r.tokens[0]).unwrap().get(field).is_none());
+        }
+        // a direct token parse (not a registry document) knows no such field
+        let mut t = example()["tokens"][0].clone();
+        t["official"] = json!(true);
+        assert!(serde_json::from_value::<Token>(t).is_err());
     }
 
     #[test]
@@ -1755,87 +1674,37 @@ mod tests {
     }
 
     #[test]
-    fn listing_rules() {
-        // listed needs verified and a reviewed template (no lot or tick since protocol v3)
-        let e = errs(check(|v| {
-            tok(v, 0)["status"] = json!("listed");
+    fn allowlist_rows() {
+        // a row for every entry on a supported (reviewed) program, checked or not: an entry adds facts, it is no listing step
+        // (no lot or tick since protocol v3)
+        let none = check(|v| {
             for t in v["templates"].as_array_mut().unwrap() {
                 t["review_status"] = json!("pending-review");
             }
-        }));
-        let n = e.iter().filter(|x| matches!(x, ValidationError::NotListable { .. })).count();
-        assert!(n >= 2, "{e:?}");
+        })
+        .unwrap();
+        assert!(none.allowlist().is_empty(), "nothing of a program pending review is tradable");
         let ok = check(|v| {
-            tok(v, 0)["status"] = json!("listed");
-            tok(v, 0)["verified"] = json!(true);
-            tok(v, 0)["genesis_verified"] = json!(true);
             for t in v["templates"].as_array_mut().unwrap() {
                 t["review_status"] = json!("reviewed");
             }
+            assert_eq!(v["templates"][2]["id"], "kron-2433");
+            v["templates"][2]["review_status"] = json!("pending-review");
         })
         .unwrap();
-        assert_eq!(ok.listed_allowlist().len(), 1);
-        let row = ok.listed_allowlist()[0];
+        let rows = ok.allowlist();
+        assert_eq!(rows.len(), 1, "the KRON entry's program is pending review");
+        let row = rows[0];
+        assert_eq!(row.key, ok.allowlist_key(&ok.tokens[0]).unwrap());
         assert_eq!((row.max_token_inputs, row.max_token_outputs), (8, 8));
         assert_eq!(row.suffix_len, ok.template("kcc20-ref-8x8").unwrap().suffix_len);
-        let e = errs(check(|v| {
-            tok(v, 0)["status"] = json!("listed");
-            tok(v, 0)["lot_size"] = Value::Null;
-            v["templates"][1]["review_status"] = json!("reviewed");
-        }));
-        assert!(e.iter().any(|x| matches!(x, ValidationError::NotListable { reason: "not verified against chain", .. })));
+        assert!(!ok.tokens[0].verified, "an unchecked entry gives a row too");
     }
 
     #[test]
-    fn official_needs_the_genesis_check() {
-        // official needs genesis_verified: true, which needs verified; a listed token without it trades with the
-        // genesis_unverified warning (the executor may require it: `require_genesis_verified`)
-        let reviewed = |v: &mut Value| {
-            for t in v["templates"].as_array_mut().unwrap() {
-                t["review_status"] = json!("reviewed");
-            }
-        };
-        let e = errs(check(|v| {
-            reviewed(v);
-            tok(v, 0)["verified"] = json!(true);
-            tok(v, 0)["official"] = json!(true);
-            tok(v, 0)["status"] = json!("listed");
-        }));
-        // no genesis_verified, no genesis record (C1 and C2 both missing)
-        assert_eq!(e.iter().filter(|x| matches!(x, ValidationError::Genesis { .. })).count(), 2, "{e:?}");
-        let official = |f: &dyn Fn(&mut Value)| {
-            check(|v| {
-                reviewed(v);
-                tok(v, 0)["verified"] = json!(true);
-                tok(v, 0)["official"] = json!(true);
-                tok(v, 0)["status"] = json!("listed");
-                tok(v, 0)["genesis_verified"] = json!(true);
-                tok(v, 0)["genesis"] = genesis_rec();
-                f(v);
-            })
-        };
-        assert!(official(&|_| {}).is_ok());
-        // C2: official needs a record that found no live mint authority
-        let no_record = |v: &mut Value| {
-            tok(v, 0).as_object_mut().unwrap().remove("genesis");
-        };
-        let undetermined = |v: &mut Value| {
-            tok(v, 0)["genesis"].as_object_mut().unwrap().remove("live_minters");
-        };
-        let live = |v: &mut Value| {
-            tok(v, 0)["genesis"]["live_minters"] = json!([format!("{}:3", "cd".repeat(32))]);
-            tok(v, 0)["warning"] = json!("active mint authority");
-        };
-        for (name, f) in
-            [("no record", &no_record as &dyn Fn(&mut Value)), ("liveness undetermined", &undetermined), ("live minter", &live)]
-        {
-            let e = errs(official(f));
-            assert!(
-                e.iter().any(|x| matches!(x, ValidationError::Genesis { reason, .. } if reason.contains("live mint authority"))),
-                "{name}: {e:?}"
-            );
-        }
-        // a live minter needs a warning; a record needs genesis_verified; malformed record fields
+    fn genesis_check_rules_and_derived_warnings() {
+        // genesis_verified: true needs verified; a token without it trades with the derived genesis_unverified warning (the
+        // executor may require it: `require_genesis_verified`)
         let base = |f: &dyn Fn(&mut Value)| {
             check(|v| {
                 tok(v, 0)["verified"] = json!(true);
@@ -1845,14 +1714,19 @@ mod tests {
             })
         };
         assert!(base(&|_| {}).is_ok());
+        // C2: a recorded live minter is a fact, not an error: the token carries the derived warning live_mint_authority; a
+        // record without a liveness check (absent live_minters) or no record gives none (the program's `mint-authority`
+        // capability still says what is possible)
         let lm = format!("{}:3", "cd".repeat(32));
-        let e = errs(base(&|v| tok(v, 0)["genesis"]["live_minters"] = json!([lm.clone()])));
-        assert!(e.iter().any(|x| matches!(x, ValidationError::Genesis { reason, .. } if reason.contains("needs a warning"))), "{e:?}");
-        assert!(base(&|v| {
-            tok(v, 0)["genesis"]["live_minters"] = json!([lm.clone()]);
-            tok(v, 0)["warning"] = json!("active mint authority: the issuer can mint without limit");
+        let live = base(&|v| tok(v, 0)["genesis"]["live_minters"] = json!([lm.clone()])).unwrap();
+        assert!(live.tokens[0].has_live_minter());
+        assert_eq!(live.tokens[0].warnings(), vec![TokenWarning::LiveMintAuthority]);
+        let undetermined = base(&|v| {
+            tok(v, 0)["genesis"].as_object_mut().unwrap().remove("live_minters");
         })
-        .is_ok());
+        .unwrap();
+        assert!(undetermined.tokens[0].warnings().is_empty());
+        // a record needs genesis_verified; malformed record fields
         for (name, f) in [
             ("no genesis_verified", &(|v: &mut Value| tok(v, 0)["genesis_verified"] = Value::Null) as &dyn Fn(&mut Value)),
             ("bad txid", &|v: &mut Value| tok(v, 0)["genesis"]["txid"] = json!("AB".repeat(32))),
@@ -1861,10 +1735,7 @@ mod tests {
             ("minter not a genesis output", &|v: &mut Value| tok(v, 0)["genesis"]["minter_outputs"] = json!([5])),
             ("negative supply", &|v: &mut Value| tok(v, 0)["genesis"]["supply"] = json!(-1)),
             ("empty source", &|v: &mut Value| tok(v, 0)["genesis"]["source"] = json!("")),
-            ("bad outpoint", &|v: &mut Value| {
-                tok(v, 0)["genesis"]["live_minters"] = json!(["xyz:1"]);
-                tok(v, 0)["warning"] = json!("w");
-            }),
+            ("bad outpoint", &|v: &mut Value| tok(v, 0)["genesis"]["live_minters"] = json!(["xyz:1"])),
         ] {
             assert!(base(f).is_err(), "{name}");
         }
@@ -1878,19 +1749,19 @@ mod tests {
         .unwrap();
         assert!(ok.tokens[0].warnings().is_empty());
         assert_eq!(ok.tokens[1].warnings(), vec![TokenWarning::GenesisUnverified]);
-        // checked and NOT clean: still a valid entry, it warns, and it can never be official or listed
+        // checked and NOT clean: still a valid entry (a fact), and it warns
         let r = check(|v| {
             tok(v, 0)["verified"] = json!(true);
             tok(v, 0)["genesis_verified"] = json!(false);
-            tok(v, 0)["warning"] = json!("genesis output 2 is not an instance of the token program");
         })
         .unwrap();
         assert_eq!(r.tokens[0].warnings(), vec![TokenWarning::GenesisUnverified]);
-        assert!(r.tokens[0].warning.as_deref().unwrap().contains("genesis output 2"));
-        let e = errs(check(|v| tok(v, 0)["warning"] = json!("evil\u{202E}")));
-        assert!(e.iter().any(|x| matches!(x, ValidationError::Genesis { .. })), "{e:?}");
-        assert_eq!(TokenWarning::GenesisUnverified.as_str(), "genesis_unverified");
-        assert_eq!(serde_json::to_value(TokenWarning::GenesisUnverified).unwrap(), json!("genesis_unverified"));
+        for (w, s) in
+            [(TokenWarning::GenesisUnverified, "genesis_unverified"), (TokenWarning::LiveMintAuthority, "live_mint_authority")]
+        {
+            assert_eq!(w.as_str(), s);
+            assert_eq!(serde_json::to_value(w).unwrap(), json!(s));
+        }
     }
 
     #[test]
@@ -1930,25 +1801,12 @@ mod tests {
         let name = display_name(t);
         assert!(name.starts_with(&format!("{} (", t.ticker)) && !name.ends_with("…"));
         assert!(name.contains(&format!("{}…{}", &t.covenant_id[..4], &t.covenant_id[60..])));
-        // the example entry is pending review: the name says so (it stays tradable, see `Status::PendingReview`)
-        assert_eq!(t.status, Status::PendingReview);
-        assert!(name.ends_with("[unverified, pending review]"));
+        // ticker and short id, nothing else: no standing, whatever the facts say
+        assert_eq!(name, format!("{} ({}…{})", t.ticker, &t.covenant_id[..4], &t.covenant_id[60..]));
         let mut v = t.clone();
         v.verified = true;
-        assert!(display_name(&v).ends_with("[verified, pending review]"));
-        v.status = Status::Listed;
-        assert!(display_name(&v).ends_with("[verified]"));
-        v.verified = false;
-        assert!(display_name(&v).ends_with("[unverified]"));
-        // a pending-review token is never shown as official, even with the flag set
-        v.status = Status::PendingReview;
-        v.official = true;
-        assert!(display_name(&v).ends_with("[unverified, pending review]"));
-        v.status = Status::Listed;
-        v.verified = true;
-        assert!(display_name(&v).ends_with("[official]"));
-        v.status = Status::Delisted;
-        assert!(display_name(&v).ends_with("[delisted]"));
+        v.genesis_verified = Some(true);
+        assert_eq!(display_name(&v), name);
     }
 
     fn hex_of(b: &[u8; 32]) -> String {
@@ -1972,11 +1830,9 @@ mod tests {
         // fully populated instances serialise every property the schema declares
         let ex = Registry::parse(EXAMPLE).unwrap();
         let mut full_tok = serde_json::to_value(&ex.tokens[0]).unwrap();
-        full_tok["official"] = json!(true);
         full_tok["genesis_verified"] = json!(true);
         full_tok["genesis"] = json!({"txid": "11".repeat(32), "daa_score": 1, "outputs": [1, 2], "supply": 3, "minter_outputs": [],
             "mint_allowance": 0, "live_minters": [], "checked_at_daa": 4, "source": "s"});
-        full_tok["warning"] = json!("w");
         // the legacy lot and tick (read and ignored) are declared optional by the schema
         full_tok["lot_size"] = json!(1);
         full_tok["tick"] = json!(1);
@@ -1985,7 +1841,13 @@ mod tests {
         full_tok["display"] = json!({"description": "d", "website": "https://e.x", "icon": "https://e.x/i.png", "x": "https://x.com/e", "telegram": "https://t.me/example", "kcc23": {}});
         let full_tok_typed: Token = serde_json::from_value(full_tok.clone()).unwrap();
         let full_tok = serde_json::to_value(&full_tok_typed).unwrap();
-        assert_eq!(keys(&full_tok), props(&defs["token"]), "token properties");
+        // the schema also declares the legacy judgements of older files, which the parser reads and ignores (never written)
+        let legacy: BTreeSet<String> = LEGACY_TOKEN_KEYS.iter().map(|s| s.to_string()).collect();
+        assert!(keys(&full_tok).is_disjoint(&legacy));
+        assert_eq!(keys(&full_tok).union(&legacy).cloned().collect::<BTreeSet<_>>(), props(&defs["token"]), "token properties");
+        for k in LEGACY_TOKEN_KEYS {
+            assert_eq!(defs["token"]["properties"][k]["deprecated"], true, "{k}");
+        }
         assert_eq!(keys(&full_tok["display"]), props(&defs["display"]), "display properties");
         assert_eq!(keys(&full_tok["genesis"]), props(&defs["genesis_record"]), "genesis record properties");
         let optional_gen: BTreeSet<String> = ["live_minters".to_string(), "mint_allowance".to_string()].into_iter().collect();
@@ -2014,20 +1876,11 @@ mod tests {
         assert_eq!(keys(&root), props(&schema), "root properties");
 
         // required = the non-optional fields
-        let optional_tok: BTreeSet<String> = [
-            "max_token_inputs",
-            "max_token_outputs",
-            "display",
-            "official",
-            "genesis_verified",
-            "genesis",
-            "warning",
-            "lot_size",
-            "tick",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+        let optional_tok: BTreeSet<String> =
+            ["max_token_inputs", "max_token_outputs", "display", "genesis_verified", "genesis", "lot_size", "tick"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
         let expect: BTreeSet<String> = keys(&full_tok).difference(&optional_tok).cloned().collect();
         assert_eq!(req(&defs["token"]), expect, "token required");
         let optional_tpl: BTreeSet<String> = ["capabilities".to_string(), "risks".to_string()].into_iter().collect();
@@ -2039,7 +1892,7 @@ mod tests {
 
         // enums
         assert_eq!(enum_of(&defs["family"]), Family::ALL);
-        assert_eq!(enum_of(&defs["status"]), Status::ALL);
+        assert!(defs.get("status").is_none(), "no listing state: KOB makes no per-token judgement");
         assert_eq!(enum_of(&defs["extension_class"]), ExtensionClass::ALL);
         assert_eq!(enum_of(&defs["review_status"]), ReviewStatus::ALL);
         assert_eq!(enum_of(&defs["capability"]), Capability::ALL);
@@ -2052,9 +1905,6 @@ mod tests {
         for s in Family::ALL {
             let f: Family = serde_json::from_value(json!(s)).unwrap();
             assert_eq!(f.as_str(), s);
-        }
-        for s in Status::ALL {
-            serde_json::from_value::<Status>(json!(s)).unwrap();
         }
         for s in ExtensionClass::ALL {
             serde_json::from_value::<ExtensionClass>(json!(s)).unwrap();

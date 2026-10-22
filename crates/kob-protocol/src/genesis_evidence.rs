@@ -465,9 +465,6 @@ pub fn registry_mismatches(reg: &Registry, verdicts: &[TokenVerdict]) -> Vec<Str
                         }
                     }
                 }
-                if tok.official && !v.no_live_minter() {
-                    out.push(format!("{}: official, but the evidence does not show the absence of a live mint authority", v.ticker));
-                }
             }
             Err(e) => {
                 if tok.genesis_verified == Some(true) {

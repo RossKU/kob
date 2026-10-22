@@ -1491,7 +1491,7 @@ fn founder_point_1_custody_is_an_enforced_field_not_a_label() {
     let mut q = honest_payload_for(&fx, &fx.offer(400));
     q.accepted = offer.clone();
     assert_diag(fx.verify(&offer, &q), Diag::TokenCustodyPolicy);
-    // the registry-derived allowlist classifies custody from the template capabilities alone: the shipped listed tokens are the
+    // the registry-derived allowlist classifies custody from the template capabilities alone: the shipped token entries are the
     // KRON family, whose is_minter path is a declared mint authority, so every one is issuer-controlled (review B2 condition C5)
     let reg = kob_protocol::registry::Registry::default_registry();
     let list = kob_x402::policy::TokenAllowlist::from_registry(&reg);

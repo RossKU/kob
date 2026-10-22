@@ -39,20 +39,21 @@ records" in contracts/README.md.
 | | |
 |---|---|
 | File | `registry/tokens.json` (schema 1) |
-| sha256 (LF) | `dc3bd15389e548862a956ccded01cb6ecee51946d76241d7da1e028711322d10` |
-| Strict templates | kcc20-ref-3x3 `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, kron-2433 `2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2`, kron-2732 `8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e`, kcc20-ref-public-mint `734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498` |
+| sha256 (LF) | `80ea945d9ffe240e6e473f1205411fec244b0698f564507513f43e568bda17b8` |
+| Supported programs (strict templates) | kcc20-ref-3x3 `173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b`, kron-2433 `2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2`, kron-2732 `8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e`, kcc20-ref-public-mint `734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498` |
 | Pending review | kcc20-ref-8x8, kcc20-kaspacom-0-2-5 |
 
 The deploy-mainnet build embeds this file as its default registry and checks this hash. An operator may load another
-registry (`--tokens`): its hash is reported by `GET /v1/tokens`.
+registry (`--tokens`): its hash is reported by `GET /v1/tokens`. The entries below are facts, not a
+listing: every token of a supported program trades whether or not it has an entry.
 
-| Listed token | Covenant id | Standing |
+| Token entry | Covenant id | Genesis check |
 |---|---|---|
-| KRON | `7a98370c0d6b037c28089d7b77cd8229120804cb416ef592ddb99e23820544e4` | official |
-| KASCOV | `c58c826d0aa9cee62f93208718c674883f5c89a8aca4933dc41fb0391539abe2` | official |
-| PEPE | `a73cdef004099b191759d320de970451be0e10423a7eb15b07d5e51d050b47cd` | listed, not official |
-| ANSEM | `3cb4d9625e8ce0c54c928cce7f380cecb9ae7bb957a559be017b78218696f79d` | official |
-| IFWEN | `b4301f4177a3c33b85855c0415dcbe3ccfc4f36a4cd5afc105f1177cda97a8af` | official |
-| PEEPS | `0b7225aafd30575e88a2c213a6d0ef945ed0b0065093e49975ea40e1af9fd0eb` | official |
-| DNBT | `d101341bc8c9ed351cc5f5dd6e6a813a415e2facb80a907be517ccfa0b7d64d8` | listed, not official |
-| KDIST | `bed3c81787e07988c6d5792fb02324bfd11b980a123f87a28eb177eeec6084a0` | official |
+| KRON | `7a98370c0d6b037c28089d7b77cd8229120804cb416ef592ddb99e23820544e4` | every genesis output checked |
+| KASCOV | `c58c826d0aa9cee62f93208718c674883f5c89a8aca4933dc41fb0391539abe2` | every genesis output checked |
+| PEPE | `a73cdef004099b191759d320de970451be0e10423a7eb15b07d5e51d050b47cd` | every genesis output checked |
+| ANSEM | `3cb4d9625e8ce0c54c928cce7f380cecb9ae7bb957a559be017b78218696f79d` | every genesis output checked |
+| IFWEN | `b4301f4177a3c33b85855c0415dcbe3ccfc4f36a4cd5afc105f1177cda97a8af` | every genesis output checked |
+| PEEPS | `0b7225aafd30575e88a2c213a6d0ef945ed0b0065093e49975ea40e1af9fd0eb` | every genesis output checked |
+| DNBT | `d101341bc8c9ed351cc5f5dd6e6a813a415e2facb80a907be517ccfa0b7d64d8` | every genesis output checked |
+| KDIST | `bed3c81787e07988c6d5792fb02324bfd11b980a123f87a28eb177eeec6084a0` | every genesis output checked |

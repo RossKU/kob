@@ -150,7 +150,7 @@
       "witness": { "scheme": "kron-columns" },
       "router_intents": true,
       "genesis": { "minters": "genesis-only" },
-      "review": { "status": "reviewed", "basis": "internal review B2 (2026-09-30) with conditions: a per-token genesis check and no live minter before a token is listed or official" }
+      "review": { "status": "reviewed", "basis": "internal review B2 (2026-09-30) with conditions: a per-token genesis check and no live minter, facts each token shows (the derived warnings genesis_unverified and live_mint_authority)" }
     },
     {
       "name": "KronToken2732",
@@ -168,7 +168,7 @@
       "witness": { "scheme": "kron-columns" },
       "router_intents": true,
       "genesis": { "minters": "genesis-only" },
-      "review": { "status": "reviewed", "basis": "internal review B2 (2026-09-30) with conditions: a per-token genesis check and no live minter before a token is listed or official" }
+      "review": { "status": "reviewed", "basis": "internal review B2 (2026-09-30) with conditions: a per-token genesis check and no live minter, facts each token shows (the derived warnings genesis_unverified and live_mint_authority)" }
     },
     {
       "name": "KForgeToken1785",

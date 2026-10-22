@@ -140,23 +140,15 @@ fn shipped_registry_templates_match_the_pinned_programs() {
         assert_eq!((p.slots.0 as u32, p.slots.1 as u32), (t.max_token_inputs, t.max_token_outputs), "{}: slots", t.id);
         assert_eq!(p.family, t.family, "{}: family", t.id);
     }
-    // the KRON family of the 2026-09-29 census (templates A and B): seven graduated tokens and KDIST, identity verified;
-    // listing verification 2026-10-03: genesis verified on mainnet data (C1), no live mint authority (C2), all eight listed; six
-    // official, the two test tokens (PEPE "The Ultimate test", DNBT "dont buy this is test") not official, with a warning (founder 2026-10-03)
+    // the KRON family of the 2026-09-29 census (templates A and B): seven graduated tokens and KDIST, facts only: identity
+    // checked against a chain UTXO; genesis check 2026-10-03: every genesis output checked on mainnet data (C1), no live mint
+    // authority (C2), so no derived warning. The registry makes no judgement of them (no listing state, no official flag)
     let kron: Vec<_> = r.tokens.iter().filter(|t| t.family == Family::Kron).collect();
     assert_eq!(kron.len(), 8);
     assert!(kron.iter().all(|t| t.verified
-        && t.status == kob_protocol::registry::Status::Listed
         && t.genesis_verified == Some(true)
-        && t.genesis.as_ref().is_some_and(|g| g.live_minters == Some(vec![]))));
-    let not_official: Vec<&str> = kron.iter().filter(|t| !t.official).map(|t| t.ticker.as_str()).collect();
-    assert_eq!(not_official, ["PEPE", "DNBT"]);
-    for t in kron.iter().filter(|t| !t.official) {
-        let w = t.warning.as_deref().unwrap_or_default();
-        assert!(w.starts_with("Not official: a test token per its own name"), "{}: {w}", t.ticker);
-    }
-    assert!(r.tokens.iter().find(|t| t.ticker == "PEPE").unwrap().warning.as_deref().unwrap().contains("well-known PEPE"));
-    assert!(kron.iter().filter(|t| t.official).all(|t| t.warning.is_none()));
+        && t.genesis.as_ref().is_some_and(|g| g.live_minters == Some(vec![]))
+        && t.warnings().is_empty()));
     let a = "2ed46a7edf5b168e67dba56998c58255235bebac436940a85115ca31d5c559f2";
     let b = "8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e";
     assert_eq!(r.template("kron-2433").unwrap().template_hash, a);
