@@ -156,6 +156,59 @@ fn verify_block(hash: Hash32, blk: &RawChainBlock, expected: &[Hash32]) -> Resul
     Ok(())
 }
 
+/// How far the authority's answer `raw` (any verbosity) agrees with another node's acceptance data `ids` from the same start
+/// (`rpc::multi`, a resolver pair: the second node vouches for the authority's data before it is indexed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Agreement {
+    /// Leading chain blocks of `raw` the indexer may apply: all of them when nothing is contradicted (blocks the other node
+    /// does not report yet, being a little behind, contradict nothing), else those before the first contradiction.
+    pub keep: usize,
+    /// The first contradiction: another chain block at the same position of the selected chain, other accepted transactions
+    /// for the same chain block, or a disagreement about whether the start left the selected chain.
+    pub contradiction: Option<String>,
+}
+
+/// The [`Agreement`] of `raw` with `ids`.
+pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds) -> Agreement {
+    let all = raw.added_chain_block_hashes.len().min(raw.chain_block_accepted_transactions.len());
+    if raw.removed_chain_block_hashes != ids.removed_chain_block_hashes {
+        return Agreement {
+            keep: 0,
+            contradiction: Some(format!(
+                "the start left the selected chain for one node ({} removed blocks) and not for the other ({})",
+                raw.removed_chain_block_hashes.len(),
+                ids.removed_chain_block_hashes.len()
+            )),
+        };
+    }
+    let accepted: HashMap<Hash32, &[Hash32]> =
+        ids.accepted_transaction_ids.iter().map(|a| (a.accepting_block_hash, a.accepted_transaction_ids.as_slice())).collect();
+    let n = all.min(ids.added_chain_block_hashes.len());
+    for i in 0..n {
+        let (mine, theirs) = (raw.added_chain_block_hashes[i], ids.added_chain_block_hashes[i]);
+        if mine != theirs {
+            return Agreement {
+                keep: i,
+                contradiction: Some(format!("chain block #{i} from the start is {mine} for one node and {theirs} for the other")),
+            };
+        }
+        let txs: Vec<Hash32> =
+            raw.chain_block_accepted_transactions[i].accepted_transactions.iter().map(|t| t.verbose_data.transaction_id).collect();
+        let expected = accepted.get(&mine).copied().unwrap_or(&[]);
+        if txs.as_slice() != expected {
+            return Agreement {
+                keep: i,
+                contradiction: Some(format!(
+                    "chain block {mine} accepted {} transactions for one node and {} for the other (or other ones)",
+                    txs.len(),
+                    expected.len()
+                )),
+            };
+        }
+    }
+    Agreement { keep: all, contradiction: None }
+}
+
 fn spent_eq(a: Option<&SpentUtxo>, b: Option<&SpentUtxo>) -> bool {
     match (a, b) {
         // the DAA score of the creating block is not used (and reported null) and may differ between verbosity levels

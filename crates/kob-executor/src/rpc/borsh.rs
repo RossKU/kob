@@ -41,12 +41,17 @@ fn h32(h: kaspa_hashes::Hash) -> Hash32 {
 
 /// A request frame: header, then the body.
 fn frame(id: u64, op: RpcApiOps, body: &impl Serializer) -> Vec<u8> {
-    let mut out = Vec::with_capacity(96);
-    BorshSerialize::serialize(&(Some(id), op), &mut out).expect("a Vec never fails to grow");
-    // the body travels as a Borsh byte vector (workflow-serializer `Payload`: u32 length, then the bytes)
     let mut payload = Vec::with_capacity(64);
     Serializer::serialize(body, &mut payload).expect("a Vec never fails to grow");
-    BorshSerialize::serialize(&payload, &mut out).expect("a Vec never fails to grow");
+    frame_bytes(id, op, &payload)
+}
+
+/// A request frame of an already encoded body: `borsh(Option<u64> id, op)`, then the body as a Borsh byte vector
+/// (workflow-serializer `Payload`: u32 length, then the bytes).
+pub(crate) fn frame_bytes(id: u64, op: RpcApiOps, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(16 + payload.len());
+    BorshSerialize::serialize(&(Some(id), op), &mut out).expect("a Vec never fails to grow");
+    BorshSerialize::serialize(payload, &mut out).expect("a Vec never fails to grow");
     out
 }
 
@@ -237,7 +242,7 @@ fn chain_block(b: RpcChainBlockAcceptedTransactions) -> Result<RawChainBlock, St
 }
 
 /// The bytes of a workflow-serializer `Payload` (a Borsh byte vector: u32 length, then the bytes), without copying them.
-fn payload(body: &[u8]) -> Result<&[u8], String> {
+pub(crate) fn payload(body: &[u8]) -> Result<&[u8], String> {
     let (len, rest) = body.split_at_checked(4).ok_or("Borsh answer body shorter than its length")?;
     let len = u32::from_le_bytes(len.try_into().expect("four bytes")) as usize;
     rest.get(..len).ok_or_else(|| format!("Borsh answer body of {} bytes, its length says {len}", rest.len()))

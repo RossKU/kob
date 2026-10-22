@@ -30,13 +30,16 @@ pub struct IndexOpts {
     /// build (`deploy-mainnet`, `deploy-tn10`) implies its own and refuses another.
     #[arg(long, global = true, env = "KOB_NETWORK")]
     pub network: Option<String>,
-    /// Node JSON wRPC endpoint. Default: the local node's port of the network (`ws://127.0.0.1:18110` on mainnet,
-    /// `ws://127.0.0.1:18210` on testnet-10). A URL with a password or an API key belongs in the config file (`rpc_url`) or
-    /// in `KOB_NODE_WRPC`, not on the command line (`ps`).
+    /// Node wRPC endpoint: JSON wRPC (`ws://`, `wss://`), Borsh wRPC (a `.../borsh` path or a default Borsh port `17110` /
+    /// `17210`: every call in Borsh), or `resolver`: a public Kaspa node of the network found through the Kaspa resolvers
+    /// (Borsh over TLS; another one after a failure). Default: the local node's JSON port of the network
+    /// (`ws://127.0.0.1:18110` on mainnet, `ws://127.0.0.1:18210` on testnet-10). A URL with a password or an API key belongs
+    /// in the config file (`rpc_url`) or in `KOB_NODE_WRPC`, not on the command line (`ps`).
     #[arg(long, global = true, env = "KOB_NODE_WRPC")]
     pub rpc_url: Option<String>,
-    /// Another node (`ws://` or `wss://` JSON wRPC; repeatable): windows of transaction bodies are fetched from it too
-    /// (checked against the primary, `--rpc-url`) and transactions submitted to it too. Added to the config's `nodes`.
+    /// Another node (`ws://` or `wss://`, JSON or Borsh wRPC as `--rpc-url`, or `resolver`: another public node, resolved
+    /// independently of the primary's; repeatable): windows of transaction bodies are fetched from it too (checked against
+    /// the primary, `--rpc-url`) and transactions submitted to it too. Added to the config's `nodes`.
     /// Command-line arguments are visible to other local users (`ps`): a URL with a password or an API key belongs in the
     /// config file (`[[nodes]]`) or in `KOB_INDEX_NODES` (comma-separated).
     #[arg(long = "node", global = true, value_name = "URL", env = "KOB_INDEX_NODES", value_delimiter = ',')]
@@ -181,7 +184,29 @@ pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
             anyhow!("no node endpoint for network {}: pass --rpc-url (or `rpc_url` in the configuration)", cfg.network)
         })?;
     }
+    number_resolver_entries(&mut cfg);
+    // the resolver entries resolve public nodes of this network
+    crate::rpc::resolver::set_network(&cfg.network);
     Ok(cfg)
+}
+
+/// Gives every resolver entry of the configuration its own pseudo URL (`rpc::resolver::pseudo`), so each resolves a public
+/// node of its own on another host: the primary's `resolver` stays `resolver`; a primary `resolver` always comes as a pair, the
+/// second entry `resolver:2` (added first, before any other node), which fetches windows, takes every submission and vouches
+/// for the primary's answers (`rpc::multi`, `NodeSpec::cross_check`); every other node `resolver` (`--node resolver`) becomes
+/// the next number.
+pub fn number_resolver_entries(cfg: &mut IndexerConfig) {
+    use crate::config::NodeRole;
+    use crate::rpc::resolver::{pseudo, RESOLVER};
+    let mut n = 2;
+    if cfg.primary_url() == RESOLVER {
+        cfg.nodes.insert(0, NodeConfig { url: pseudo(2), ..NodeConfig::default() });
+        n = 3;
+    }
+    for node in cfg.nodes.iter_mut().filter(|x| x.url == RESOLVER && x.role == NodeRole::Secondary) {
+        node.url = pseudo(n);
+        n += 1;
+    }
 }
 
 fn wrpc(cfg: &IndexerConfig, url: &str, vspc_connections: usize) -> Arc<WrpcClient> {
@@ -193,7 +218,7 @@ fn wrpc(cfg: &IndexerConfig, url: &str, vspc_connections: usize) -> Arc<WrpcClie
     if let Some(b) = &w.borsh_url {
         tracing::info!(node = %redact_url(url), borsh = %redact_url(b), connections = vspc_connections, "windows of transaction bodies over Borsh wRPC");
     }
-    if cfg.borsh && w.borsh_url.is_none() && vspc_connections > 0 {
+    if cfg.borsh && w.borsh_url.is_none() && vspc_connections > 0 && !crate::rpc::all_borsh(url) {
         tracing::warn!(node = %redact_url(url), "no Borsh endpoint known for this node: its windows stay JSON (set borsh_url)");
     }
     Arc::new(WrpcClient::new(w))
@@ -207,11 +232,15 @@ pub fn node_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
     let conns = |n: usize| if parallel > 1 { n } else { 0 };
     let primary_url = cfg.primary_url().to_string();
     let primary = wrpc(cfg, &primary_url, conns(parallel));
-    let primary_spec = NodeSpec { url: primary_url.clone(), fetch: cfg.primary_fetches(), submit: true, connections: parallel };
+    let primary_spec =
+        NodeSpec { url: primary_url.clone(), fetch: cfg.primary_fetches(), submit: true, connections: parallel, cross_check: false };
+    // the second node of a resolver pair vouches for the primary's own answers too (rpc::multi)
+    let pair = crate::rpc::resolver::is_resolver(&primary_url);
     let mut nodes = vec![(primary_spec, primary.clone())];
     for n in cfg.secondaries() {
         let c = n.connections.unwrap_or(parallel).max(1);
-        let spec = NodeSpec { url: n.url.clone(), fetch: n.fetch && parallel > 1, submit: n.submit, connections: c };
+        let cross_check = pair && crate::rpc::resolver::is_resolver(&n.url);
+        let spec = NodeSpec { url: n.url.clone(), fetch: n.fetch && parallel > 1, submit: n.submit, connections: c, cross_check };
         nodes.push((spec, wrpc(cfg, &n.url, conns(c))));
     }
     // the acceptance data and the primary's copies of chain blocks that matter, on connections of their own
@@ -373,4 +402,42 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct T {
+        #[command(flatten)]
+        opts: IndexOpts,
+    }
+
+    fn cfg(args: &[&str]) -> IndexerConfig {
+        // the build's own network (a deployment build refuses another one)
+        let mut v = vec!["kob-executor", "--network", kob_protocol::artifacts::deployment_network().unwrap_or("testnet-10")];
+        v.extend_from_slice(args);
+        build_config(&T::parse_from(v).opts).unwrap()
+    }
+
+    /// `resolver` is always a pair of public nodes; `--node resolver` adds a third; an own node with `--node resolver` is a
+    /// primary and one public node.
+    #[test]
+    fn resolver_entries_come_as_a_pair_and_number_themselves() {
+        // build_config sets the resolver state's network: not while the resolver tests use it
+        let _g = crate::rpc::resolver::tests::serial();
+        let urls = |c: &IndexerConfig| c.nodes.iter().map(|n| n.url.clone()).collect::<Vec<_>>();
+        let c = cfg(&["--rpc-url", "resolver"]);
+        assert_eq!((c.rpc_url.as_str(), urls(&c)), ("resolver", vec!["resolver:2".to_string()]));
+        assert_eq!(c.secondaries().len(), 1);
+        let c = cfg(&["--rpc-url", "resolver", "--node", "resolver"]);
+        assert_eq!(urls(&c), ["resolver:2", "resolver:3"]);
+        let c = cfg(&["--rpc-url", "ws://127.0.0.1:18210", "--node", "resolver"]);
+        assert_eq!(urls(&c), ["resolver:2"]);
+        let c = cfg(&[]);
+        let own = crate::config::default_wrpc_url(&c.network).unwrap();
+        assert!(c.nodes.is_empty() && c.rpc_url == own, "an own node by default on the command line");
+    }
 }

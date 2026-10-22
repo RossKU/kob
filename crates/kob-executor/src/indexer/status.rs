@@ -309,6 +309,26 @@ impl HealthSnapshot {
             None => "node position unknown".to_string(),
         };
         let mut s = format!("indexer {state}, {lag}, {} orders indexed", self.orders_total);
+        // several nodes (a resolver pair: the hosts in use): which is the authority, and how each is doing
+        if !self.nodes.is_empty() {
+            let nodes: Vec<String> = self
+                .nodes
+                .iter()
+                .map(|n| {
+                    let name = n.node.clone().unwrap_or_else(|| n.url.clone());
+                    let role = if n.role == "primary" { "authority" } else { "cross-check" };
+                    let mut x = format!("{name} ({role}, {}", n.state);
+                    if n.replaced > 0 {
+                        x.push_str(&format!(", replaced {}x", n.replaced));
+                    }
+                    if n.disagreements > 0 {
+                        x.push_str(&format!(", {} disagreements", n.disagreements));
+                    }
+                    x + ")"
+                })
+                .collect();
+            s.push_str(&format!(" | nodes: {}", nodes.join(", ")));
+        }
         if matches!(self.state, FollowerState::NodeUnavailable | FollowerState::Gap) {
             if let Some(e) = self.gap_reason.as_ref().or(self.last_error.as_ref()) {
                 s.push_str(&format!(" ({e})"));
@@ -416,6 +436,34 @@ mod tests {
         assert!(
             h.status_line().starts_with("indexer waiting for the node, ")
                 && h.status_line().ends_with("(getServerInfo: transport: refused)")
+        );
+        // a resolver pair: both hosts, their roles and states, replacements and disagreements
+        h.state = FollowerState::Following;
+        h.last_error = None;
+        h.nodes = vec![
+            crate::rpc::multi::NodeStatus {
+                url: "resolver".into(),
+                node: Some("muon-10.kaspa.blue".into()),
+                role: "primary".into(),
+                state: "ok".into(),
+                replaced: 1,
+                ..Default::default()
+            },
+            crate::rpc::multi::NodeStatus {
+                url: "resolver:2".into(),
+                node: Some("vector-10.kaspa.green".into()),
+                role: "secondary".into(),
+                state: "backoff".into(),
+                disagreements: 2,
+                ..Default::default()
+            },
+        ];
+        assert!(
+            h.status_line().ends_with(
+                " | nodes: muon-10.kaspa.blue (authority, ok, replaced 1x), vector-10.kaspa.green (cross-check, backoff, 2 disagreements)"
+            ),
+            "{}",
+            h.status_line()
         );
         assert_eq!(
             [0, 89, 90, 3_599, 5_400, 172_799, 200_000].map(human_secs),

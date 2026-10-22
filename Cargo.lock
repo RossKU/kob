@@ -2634,6 +2634,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.23",
  "tungstenite 0.24.0",
+ "webpki-roots 1.0.10",
  "workflow-serializer",
 ]
 

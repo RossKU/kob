@@ -58,6 +58,8 @@ step-by-step page is `docs/ops/executor-quickstart.md`.
 * **Status line**: `run` and `index` log `status: ...` every `--status-secs` (60; 0 off): the indexer's state and lag,
   the transactions sent and final, the profit of the final ones, the funds, and a `WARNING:` list (node not synced or
   unreachable, paused, waiting for the indexer, funds below `--low-funds-kas`, rejections).
+* **Nodes**: the setup offers public Kaspa nodes (the default, `rpc_url = "resolver"`: a cross-checked pair, Part C,
+  *Node*) or the operator's own node (recommended; required for Miner Mode).
 * `KOB_EXECUTOR_DIR` names another directory than the executable's for both (the `Dockerfile` sets `/data`, its volume).
 * Nothing connects anywhere but to the configured node: no telemetry, no fee, no project server, no auto-update.
 
@@ -2387,14 +2389,47 @@ run without the file). Unlisted tokens (stray dust) are sold under the floor.
 ### Node
 
 Run a rusty-kaspa v2.1.0 node with `--utxoindex` (funding lookup), `--retention-period-days=7`,
-`--disable-upnp`, RPC on loopback only, never `--unsaferpc`. The executor speaks JSON wRPC
-(`--rpc-url ws://127.0.0.1:18210` on testnet-10, `:18110` on mainnet); it checks the network id
+`--disable-upnp`, RPC on loopback only, never `--unsaferpc` (the recommended setup), or use public nodes (*Public nodes*
+below). The executor speaks JSON wRPC by default (`--rpc-url ws://127.0.0.1:18210` on testnet-10, `:18110` on mainnet), or
+Borsh wRPC for every call when the URL is a Borsh endpoint (a path ending in `/borsh`, or a node's default Borsh port
+`17110` / `17210` with no path: `--rpclisten-borsh=default`): `rpc::bridge` carries the same calls (`getServerInfo`,
+`getBlockDagInfo`, `getSinkBlueScore`, `getBlock`, `getVirtualChainFromBlock`, `getVirtualChainFromBlockV2`,
+`getUtxosByAddresses`, `submitTransaction`, `submitTransactionReplacement`, `getFeeEstimate`, `getMempoolEntry`) with the
+node's own request and response types, so every part of the executor (indexer, matcher, keepers, x402 facilitator, setup)
+reads the same answers over either encoding. It checks the network id
 and the sync state every tick and does nothing while the node is not synced. Transactions go
 through `submitTransaction` (the REST API drops per-input compute budgets). Acceptance: accepted, then final after 100 DAA; a
 removed chain block moves its transactions back to pending and they are resent (idempotent). Under
 `run` the indexer's follower supplies acceptance (Part A); with `match` / `keep --book-file` the
 process follows it itself with `getVirtualChainFromBlockV2` at `Low` verbosity (a second follower
 that only knows the ids it submitted).
+
+**Public nodes** (`rpc_url = "resolver"`, `--rpc-url resolver`; the setup's default). The executor asks the Kaspa
+resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.kaspa.red`, `*.kaspa.green`, `*.kaspa.blue`;
+`GET {resolver}/v2/kaspa/{network}/tls/wrpc/borsh`, tried in a random order with a 5 s timeout each; `KOB_RESOLVERS`
+replaces the list) for public nodes, which serve Borsh wRPC over TLS only. It always uses two, on different hosts
+(`rpc::resolver`):
+
+* `resolver` is the chain authority; a second entry `resolver:2` is added by itself. It fetches windows of transaction
+  bodies (checked against the authority as any other node's, Part B 3, *Several nodes*), takes every submission, and vouches
+  for the authority's own answers: each single step and each window the authority serves is compared with its acceptance
+  data from the same start (the same chain block at every position, the same accepted transactions), and only what both
+  report is indexed. A contradiction cuts the answer before it (a race at the tip settles within seconds); one at the very
+  next chain block applies nothing until the two agree, and when it persists (three times in a row) the cross-checking node
+  is given up for another, then (three more) the authority's. Counted per node (`disagreements` in `/v1/health` `nodes`, the
+  status line).
+* A node that cannot be reached or drops its connection is given up at once. When it is the authority, the other node is
+  the authority from the next call on (no resolution, no wait), and a replacement on a host neither in use nor failed lately
+  is resolved in the background; the same for the cross-checking node. A cross-checking node that cannot answer leaves the
+  authority alone meanwhile (no stall; nothing can be contradicted while there is no second node). With no node left, both
+  are resolved again with a backoff (2 s doubling to 60 s). Every change is logged with the host names, and the status line
+  shows both hosts, their state and how often each entry was replaced.
+* A further `--node resolver` adds a third public node (`resolver:3`) that fetches windows and takes submissions.
+
+Public nodes are shared and slower than an own node (and their retention decides how far back a first start can index). A
+bad node cannot steal funds: the executor signs only its own inputs and the covenants enforce every order; it could waste
+fees (a transaction it drops or delays) or hide orders, which the second node guards against. The x402 facilitator of the
+same process uses the authority (`node: "resolver"` in its own configuration works too, also `wss://`).
 
 v2.1.0 relays transactions up to the block limits. Relays running a later release with the
 pre-Toccata standard mass cap refuse transactions above ~25 kB: pass `--max-tx-bytes 24000` there

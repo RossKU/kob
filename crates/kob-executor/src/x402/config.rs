@@ -236,8 +236,9 @@ pub struct X402Config {
     /// `kaspa:mainnet` or `kaspa:testnet-10`. Absent: the build's deployment network ([`X402Config::fill_defaults`]); the
     /// reference build requires it.
     pub network: String,
-    /// The node's JSON wRPC endpoint. Absent: the local node's port of the network (`ws://127.0.0.1:18110` on mainnet,
-    /// `ws://127.0.0.1:18210` on testnet-10).
+    /// The node's wRPC endpoint: JSON (`ws://`, `wss://`), Borsh (a `.../borsh` path or a default Borsh port,
+    /// `crate::rpc::bridge`) or `resolver` (a public node, `crate::rpc::resolver`). Absent: the local node's JSON port of the
+    /// network (`ws://127.0.0.1:18110` on mainnet, `ws://127.0.0.1:18210` on testnet-10).
     pub node: String,
     pub listen: String,
     /// The replay ledger (`:memory:` = volatile). A relative path is relative to the configuration file's directory
@@ -506,8 +507,12 @@ impl X402Config {
             return err("mainnet needs \"allowMainnet\": true (the binding's mainnet enablement requires independently corroborated chain evidence)");
         }
         // absent: the network's local endpoint ([`X402Config::fill_defaults`])
-        if !self.node.is_empty() && !self.node.starts_with("ws://") {
-            return err("node must be a ws:// wRPC JSON url (put a TLS-terminating proxy in front of a remote node)");
+        let node_ok =
+            self.node.starts_with("ws://") || self.node.starts_with("wss://") || crate::rpc::resolver::is_resolver(&self.node);
+        if !self.node.is_empty() && !node_ok {
+            return err(
+                "node must be a ws:// or wss:// wRPC url (JSON, or Borsh: a .../borsh path or a default Borsh port) or \"resolver\"",
+            );
         }
         let listen: SocketAddr = self.listen.parse().map_err(|e| ConfigError(format!("listen {:?}: {e}", self.listen)))?;
         if self.auth == AuthMode::Open && !listen.ip().is_loopback() {
@@ -981,7 +986,8 @@ mod tests {
     fn strict_value_validation() {
         for bad in [
             r#","network":"mainnet""#,
-            r#","node":"wss://x""#,
+            r#","node":"https://x""#,
+            r#","node":"resolver:x""#,
             r#","listen":"nope""#,
             r#","bodyDeadlineMs":0"#,
             r#","maxBodyBytes":0"#,

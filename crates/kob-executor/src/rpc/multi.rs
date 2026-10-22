@@ -16,6 +16,17 @@
 //!   skipped for a while (doubling backoff, at most two minutes) and the window goes to the next node, the primary last;
 //! * a node that contradicts a hash or the primary's acceptance data is dropped until the process restarts (`lies`).
 //!
+//! **A cross-checking node** (`NodeSpec::cross_check`; the second public node of a resolver pair, `rpc::resolver`) also
+//! vouches for the primary's own data: every answer of the primary the follower applies (its single steps near the sink and
+//! its windows) is compared with that node's acceptance data from the same start (`verify::agreement`: the same chain block
+//! at every position, the same accepted transactions in it). Only what both report is applied: at the first contradiction the
+//! answer is cut before it, and when the very next chain block is contradicted nothing is applied until the two agree (a race
+//! at the tip settles within seconds). A contradiction is logged and counted (`disagreements`); one that blocks the cursor
+//! three times in a row gives the cross-checking node up for another (its resolver entry resolves a replacement), and three
+//! more the primary's node (the cross-checking one becomes the authority, `resolver::failed`). A cross-checking node that
+//! cannot answer is skipped (backoff) and the primary goes on alone meanwhile: no stall, and no contradiction is ignored,
+//! only none can be seen while there is no second node.
+//!
 //! `GET /v1/health` reports each node under `nodes`.
 
 use super::types::{AddressUtxo, ChainHashes, ChainIds, DagInfo, RawVspcResponse, ServerInfo, Verbosity, VspcRequest};
@@ -37,12 +48,21 @@ pub struct NodeSpec {
     pub submit: bool,
     /// Windows fetched from it at once.
     pub connections: usize,
+    /// It vouches for the primary's own answers too (see the module documentation): the second node of a resolver pair.
+    pub cross_check: bool,
 }
 
 /// What `/v1/health` reports per node.
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct NodeStatus {
     pub url: String,
+    /// The host a resolver entry uses now (`None`: not a resolver entry, or it is being replaced).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    /// How many times a resolver entry gave its node up (failed, or replaced after disagreeing).
+    pub replaced: u32,
+    /// Answers of the primary it contradicted (a cross-checking node, `NodeSpec::cross_check`).
+    pub disagreements: u64,
     /// `primary` (the chain authority) or `secondary`.
     pub role: String,
     /// `ok`, `backoff` (failed lately: skipped until `backoff_secs`), `dropped` (contradicted the primary) or `idle` (neither
@@ -93,6 +113,8 @@ const REMEASURE: Duration = Duration::from_secs(300);
 /// Per-node state shared by the chain source and the submitter.
 pub struct NodeBoard {
     peers: Vec<Mutex<PeerState>>,
+    /// The configured URL of each node (a resolver entry's pseudo URL: the node it uses is looked up when shown).
+    entries: Vec<String>,
 }
 
 /// How a failure counts against a node.
@@ -127,7 +149,30 @@ impl NodeBoard {
                 })
             })
             .collect();
-        Arc::new(NodeBoard { peers })
+        Arc::new(NodeBoard { peers, entries: specs.iter().map(|s| s.url.clone()).collect() })
+    }
+
+    /// The configured URL of node `i`.
+    pub fn entry(&self, i: usize) -> &str {
+        &self.entries[i]
+    }
+
+    /// The host node `i` uses now, for logs and the status line: a resolver entry's public node, else the redacted URL.
+    pub fn shown(&self, i: usize) -> String {
+        let e = &self.entries[i];
+        if super::resolver::is_resolver(e) {
+            super::resolver::current(e).map(|n| super::resolver::host(&n)).unwrap_or_else(|| format!("{e} (resolving)"))
+        } else {
+            super::redact_url(e)
+        }
+    }
+
+    /// The cross-checking node `i` contradicted the primary.
+    fn disagreed(&self, i: usize, why: &str) {
+        self.with(i, |p| {
+            p.status.disagreements += 1;
+            p.status.last_error = Some(why.to_string());
+        })
     }
 
     fn with<T>(&self, i: usize, f: impl FnOnce(&mut PeerState) -> T) -> T {
@@ -259,6 +304,10 @@ impl NodeBoard {
             .map(|i| {
                 self.with(i, |p| {
                     let mut s = p.status.clone();
+                    if super::resolver::is_resolver(&self.entries[i]) {
+                        s.node = super::resolver::current(&self.entries[i]).map(|n| super::resolver::host(&n));
+                        s.replaced = super::resolver::replacements(&self.entries[i]);
+                    }
                     let wait = p.backoff_until.map(|t| t.saturating_duration_since(now)).unwrap_or_default();
                     s.backoff_secs = wait.as_secs();
                     s.bytes_per_sec = p.ewma_bps.map(|b| b as u64);
@@ -298,7 +347,18 @@ pub struct MultiNode<N: ChainSource> {
     rr: std::sync::atomic::AtomicUsize,
     /// The primary's sink blue score and when it was read (`MultiNode::primary_sink`).
     sink: Mutex<Option<(Instant, u64)>>,
+    /// Contradictions in a row that left nothing to apply (`MultiNode::vouched`).
+    stalls: std::sync::atomic::AtomicU32,
+    /// When a contradiction was last logged (one line per ten seconds; the counters keep every one).
+    last_warn: Mutex<Option<Instant>>,
 }
+
+/// Contradictions in a row that block the cursor before the cross-checking node is given up for another (and twice this
+/// many before the primary's node is: `MultiNode::vouched`).
+pub const STALLS_BEFORE_REPLACING: u32 = 3;
+
+/// How long the cross-checking node may take to vouch for one answer before the primary goes on alone for it.
+const CROSS_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl<N: ChainSource> MultiNode<N> {
     /// `nodes[0]` is the primary; `verifier` a second client of the primary for the acceptance data.
@@ -315,7 +375,87 @@ impl<N: ChainSource> MultiNode<N> {
             board,
             rr: std::sync::atomic::AtomicUsize::new(0),
             sink: Mutex::new(None),
+            stalls: std::sync::atomic::AtomicU32::new(0),
+            last_warn: Mutex::new(None),
         }
+    }
+
+    /// The node that vouches for the primary's answers now: the first cross-checking one that is neither dropped nor
+    /// backing off.
+    fn cross_checker(&self) -> Option<usize> {
+        let now = Instant::now();
+        (1..self.nodes.len()).find(|&i| {
+            self.specs[i].cross_check && !self.board.dropped(i) && !self.board.with(i, |p| p.backoff_until.is_some_and(|t| t > now))
+        })
+    }
+
+    /// The primary's answer `raw` from `start`, as far as the cross-checking node vouches for it (module documentation):
+    /// whole when nothing is contradicted or no such node can answer now, cut before the first contradiction, an error when
+    /// the next chain block itself is contradicted.
+    async fn vouched(
+        &self,
+        mut raw: RawVspcResponse,
+        start: Hash32,
+        min_confirmations: Option<u64>,
+    ) -> Result<RawVspcResponse, RpcError> {
+        let Some(j) = self.cross_checker() else { return Ok(raw) };
+        let ids = match tokio::time::timeout(CROSS_CHECK_TIMEOUT, self.nodes[j].chain_with_ids(start, min_confirmations)).await {
+            Ok(Ok(ids)) => ids,
+            Ok(Err(e)) => {
+                self.board.failed(j, Fault::Failed, &format!("cross-check: {e}"));
+                return Ok(raw);
+            }
+            Err(_) => {
+                self.board.failed(j, Fault::Failed, &format!("timeout: cross-check after {CROSS_CHECK_TIMEOUT:?}"));
+                return Ok(raw);
+            }
+        };
+        let a = super::verify::agreement(&raw, &ids);
+        let Some(why) = a.contradiction else {
+            self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
+            return Ok(raw);
+        };
+        self.board.disagreed(j, &why);
+        let total = raw.added_chain_block_hashes.len();
+        let log = {
+            let mut l = self.last_warn.lock().unwrap_or_else(|e| e.into_inner());
+            let due = l.is_none_or(|t| t.elapsed() >= Duration::from_secs(10));
+            if due {
+                *l = Some(Instant::now());
+            }
+            due
+        };
+        if log {
+            tracing::warn!(
+                authority = %self.board.shown(0),
+                cross_check = %self.board.shown(j),
+                applied = a.keep,
+                of = total,
+                reason = %why,
+                "the two nodes disagree: only the chain blocks both report are indexed"
+            );
+        }
+        if a.keep > 0 {
+            self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
+            cut(&mut raw, a.keep);
+            return Ok(raw);
+        }
+        let n = self.stalls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        // a disagreement that does not settle: replace the cross-checking node, then the primary's (resolver entries only)
+        let give_up = |i: usize| {
+            let e = self.board.entry(i).to_string();
+            if let Some(node) = super::resolver::current(&e) {
+                tracing::warn!(entry = %e, node = %super::resolver::host(&node), stalls = n, "a disagreement that does not settle: replacing this node");
+                super::resolver::failed(&e, &node);
+            }
+        };
+        if n == STALLS_BEFORE_REPLACING {
+            give_up(j);
+        } else if n >= 2 * STALLS_BEFORE_REPLACING {
+            give_up(0);
+            self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+        Err(RpcError::Node(format!("the nodes disagree on the next chain block ({why}): nothing is indexed until they agree")))
     }
 
     pub fn board(&self) -> Arc<NodeBoard> {
@@ -442,7 +582,9 @@ fn cut(raw: &mut RawVspcResponse, n: usize) {
 
 impl<N: ChainSource> ChainSource for MultiNode<N> {
     async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
-        self.nodes[0].vspc_v2(req).await
+        let (start, min_confirmations) = (req.start_hash, req.min_confirmation_count);
+        let raw = self.nodes[0].vspc_v2(req).await?;
+        self.vouched(raw, start, min_confirmations).await
     }
     async fn dag_info(&self) -> Result<DagInfo, RpcError> {
         self.nodes[0].dag_info().await
@@ -480,7 +622,14 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             let permit = self.permits[i].clone().acquire_owned().await.expect("the semaphore is never closed");
             self.board.begin(i);
             let r = if i == 0 {
-                fetch_window_from(&*self.nodes[0], &w, Verbosity::High, Origin::PRIMARY).await.map_err(Attempt::Window)
+                match fetch_window_from(&*self.nodes[0], &w, Verbosity::High, Origin::PRIMARY).await {
+                    Ok(Fetched { raw, sink_blue, end_blue, elapsed, origin }) => {
+                        let min = window_min_confirmations(sink_blue, end_blue, w.min_confirmations);
+                        let vouched = self.vouched(raw, w.start, min).await;
+                        vouched.map(|raw| Fetched { raw, sink_blue, end_blue, elapsed, origin }).map_err(Attempt::Window)
+                    }
+                    Err(e) => Err(Attempt::Window(e)),
+                }
             } else {
                 self.fetch_checked(i, &w).await
             };
@@ -509,7 +658,10 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
 
     async fn fetch_window_primary(&self, w: WindowRequest) -> Result<Fetched, RpcError> {
         // on the verifier's connections: never behind the primary's own windows of the parallel fetch
-        fetch_window_from(&*self.verifier, &w, Verbosity::High, Origin::PRIMARY).await
+        let Fetched { raw, sink_blue, end_blue, elapsed, origin } =
+            fetch_window_from(&*self.verifier, &w, Verbosity::High, Origin::PRIMARY).await?;
+        let min = window_min_confirmations(sink_blue, end_blue, w.min_confirmations);
+        Ok(Fetched { raw: self.vouched(raw, w.start, min).await?, sink_blue, end_blue, elapsed, origin })
     }
 
     fn report_lie(&self, origin: Origin, why: &str) {
@@ -557,8 +709,8 @@ mod tests {
     fn node_credentials_stay_out_of_health_and_metrics() {
         let secret = "wss://user:hunter2@node.example/wrpc/json?apikey=SECRETKEY";
         let board = NodeBoard::new(&[
-            NodeSpec { url: "ws://127.0.0.1:18210".into(), fetch: true, submit: true, connections: 1 },
-            NodeSpec { url: secret.into(), fetch: true, submit: true, connections: 1 },
+            NodeSpec { url: "ws://127.0.0.1:18210".into(), fetch: true, submit: true, connections: 1, cross_check: false },
+            NodeSpec { url: secret.into(), fetch: true, submit: true, connections: 1, cross_check: false },
         ]);
         assert_eq!(board.url(1), "wss://node.example/...");
         let mut h = crate::indexer::status::HealthSnapshot::new("testnet-10");
@@ -568,5 +720,128 @@ mod tests {
             assert!(!text.contains("hunter2") && !text.contains("SECRETKEY") && !text.contains("user:"), "{text}");
             assert!(text.contains("wss://node.example/..."), "{text}");
         }
+    }
+
+    /// A node of a fixed answer: the primary's chain blocks (`added`, no transactions) and the acceptance data it reports.
+    struct Fixed {
+        added: Vec<Hash32>,
+        ids: Mutex<Result<ChainIds, String>>,
+    }
+
+    impl Fixed {
+        fn new(added: &[u8], ids: Result<&[u8], &str>) -> Arc<Fixed> {
+            let h = |b: &u8| Hash32([*b; 32]);
+            let ids = ids
+                .map(|a| ChainIds { added_chain_block_hashes: a.iter().map(h).collect(), ..ChainIds::default() })
+                .map_err(str::to_string);
+            Arc::new(Fixed { added: added.iter().map(h).collect(), ids: Mutex::new(ids) })
+        }
+    }
+
+    impl ChainSource for Fixed {
+        async fn vspc_v2(&self, _req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
+            let blocks = self
+                .added
+                .iter()
+                .map(|h| super::super::types::RawChainBlock {
+                    chain_block_header: super::super::types::ChainBlockHeader { hash: *h, ..Default::default() },
+                    accepted_transactions: vec![],
+                })
+                .collect();
+            Ok(RawVspcResponse {
+                removed_chain_block_hashes: vec![],
+                added_chain_block_hashes: self.added.clone(),
+                chain_block_accepted_transactions: blocks,
+                wire_bytes: 0,
+            })
+        }
+        async fn chain_with_ids(&self, _start: Hash32, _m: Option<u64>) -> Result<ChainIds, RpcError> {
+            self.ids.lock().unwrap().clone().map_err(RpcError::Transport)
+        }
+        async fn dag_info(&self) -> Result<DagInfo, RpcError> {
+            Err(RpcError::Node("unused".into()))
+        }
+        async fn server_info(&self) -> Result<ServerInfo, RpcError> {
+            Err(RpcError::Node("unused".into()))
+        }
+        async fn utxos_by_addresses(&self, _a: &[String]) -> Result<Vec<AddressUtxo>, RpcError> {
+            Err(RpcError::Node("unused".into()))
+        }
+        async fn block_exists(&self, _h: Hash32) -> Result<bool, RpcError> {
+            Err(RpcError::Node("unused".into()))
+        }
+        async fn sink_blue_score(&self) -> Result<u64, RpcError> {
+            Err(RpcError::Node("unused".into()))
+        }
+        async fn block_blue_score(&self, _h: Hash32) -> Result<Option<u64>, RpcError> {
+            Err(RpcError::Node("unused".into()))
+        }
+        async fn chain_hashes(&self, _s: Hash32) -> Result<ChainHashes, RpcError> {
+            Err(RpcError::Node("unused".into()))
+        }
+    }
+
+    fn pair(primary: Arc<Fixed>, second: Arc<Fixed>) -> MultiNode<Fixed> {
+        let spec = |url: &str, cross_check| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check };
+        MultiNode::new(vec![(spec("resolver", false), primary.clone()), (spec("resolver:2", true), second)], primary)
+    }
+
+    fn req() -> VspcRequest {
+        VspcRequest::new(Hash32([0; 32]), Verbosity::High, None)
+    }
+
+    /// The pair's disagreement rules on the primary's single steps: the blocks both report are kept; a contradiction cuts the
+    /// answer before it; one at the very next block applies nothing, and if it does not settle the cross-checking node and
+    /// then the primary's are given up for others (resolver entries); a cross-checking node that cannot answer leaves the
+    /// primary alone (no stall).
+    #[tokio::test]
+    // the guard only serialises the tests that share the process-wide resolver state (a current-thread runtime)
+    #[allow(clippy::await_holding_lock)]
+    async fn the_pair_keeps_only_what_both_nodes_report_and_replaces_a_node_that_keeps_disagreeing() {
+        let _g = super::super::resolver::tests::serial();
+        super::super::resolver::tests::reset(|_, avoid| {
+            let nodes = ["wss://a.example/x/borsh", "wss://b.example/x/borsh", "wss://c.example/x/borsh", "wss://d.example/x/borsh"];
+            let pick = nodes.iter().find(|n| !avoid.contains(&super::super::resolver::host(n))).unwrap_or(&nodes[0]);
+            Ok(super::super::resolver::Resolved { url: pick.to_string(), resolver: "fake".into() })
+        });
+        let (a, b) = (super::super::resolver::endpoint("resolver").unwrap(), super::super::resolver::endpoint("resolver:2").unwrap());
+
+        // the other node is a block behind: nothing contradicted, the whole answer
+        let m = pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], Ok(&[1, 2])));
+        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 3);
+        assert_eq!(m.board.snapshot()[1].disagreements, 0);
+        // another third block: the first two are kept
+        let m = pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], Ok(&[1, 2, 9])));
+        let r = m.vspc_v2(req()).await.unwrap();
+        assert_eq!(r.added_chain_block_hashes, vec![Hash32([1; 32]), Hash32([2; 32])]);
+        assert_eq!(r.chain_block_accepted_transactions.len(), 2);
+        assert_eq!(m.board.snapshot()[1].disagreements, 1);
+        // the cross-checking node does not answer: the primary goes on alone, the node backs off
+        let m = pair(Fixed::new(&[1, 2], Ok(&[])), Fixed::new(&[], Err("connection closed")));
+        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 2);
+        assert_eq!(m.board.snapshot()[1].state, "backoff");
+
+        // the very next block contradicted: nothing applied; the third time the cross-checking node is replaced, the sixth
+        // the primary's (the cross-checking node is the authority then)
+        let m = pair(Fixed::new(&[1, 2], Ok(&[])), Fixed::new(&[], Ok(&[7, 8])));
+        for n in 1..=6u32 {
+            let e = m.vspc_v2(req()).await.unwrap_err();
+            assert!(e.to_string().contains("disagree on the next chain block"), "{e}");
+            match n {
+                1 | 2 => assert_eq!(super::super::resolver::current("resolver:2"), Some(b.clone())),
+                3 => {
+                    assert_eq!(super::super::resolver::current("resolver:2"), None, "the cross-checking node given up");
+                    assert_eq!(super::super::resolver::current("resolver"), Some(a.clone()));
+                    let c = super::super::resolver::endpoint("resolver:2").unwrap();
+                    assert_eq!(super::super::resolver::host(&c), "c.example", "a third host");
+                }
+                6 => {
+                    let now = super::super::resolver::current("resolver").unwrap();
+                    assert_eq!(super::super::resolver::host(&now), "c.example", "the other node is the authority now");
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(m.board.snapshot()[1].disagreements, 6);
     }
 }

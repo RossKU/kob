@@ -5,8 +5,8 @@
 //! per-input compute budgets: the REST API drops them), `getVirtualChainFromBlockV2` at `Low`
 //! verbosity (accepted transaction ids per chain block, and `removed` blocks for reorgs) and
 //! `getUtxosByAddresses` (the operator's funding; needs `--utxoindex`), and `getFeeEstimate` for the fee policy
-//! (`crate::fee`). Only plain `ws://` is
-//! supported: run the node's RPC on loopback (`docs/ops/executor.md`).
+//! (`crate::fee`). JSON wRPC by default; a Borsh URL or a resolver entry (a public node) takes every call in Borsh
+//! (`crate::rpc::bridge`, `crate::rpc::resolver`), with the same JSON in and out of [`WrpcNode::call`].
 
 use std::future::Future;
 use std::time::Duration;
@@ -172,6 +172,8 @@ pub struct WrpcNode {
     cfg: WrpcConfig,
     conn: tokio::sync::Mutex<Option<Ws>>,
     next_id: std::sync::atomic::AtomicU64,
+    /// The node of the current connection (a resolver entry's public node; else the URL): what a failure reports.
+    node: std::sync::Mutex<String>,
     /// Bounds each `chain_from` batch (`crate::rpc::window`): a matcher that fell behind under a flood
     /// pages through the backlog instead of asking for all of it and timing out forever.
     window: std::sync::Mutex<crate::rpc::window::BatchWindow>,
@@ -196,7 +198,8 @@ pub fn parse_frame(text: &str, id: u64) -> Result<Option<Value>, RpcError> {
 impl WrpcNode {
     pub fn new(cfg: WrpcConfig) -> Self {
         let window = std::sync::Mutex::new(crate::rpc::window::BatchWindow::for_timeout(cfg.request_timeout));
-        WrpcNode { cfg, conn: tokio::sync::Mutex::new(None), next_id: std::sync::atomic::AtomicU64::new(1), window }
+        let node = std::sync::Mutex::new(cfg.url.clone());
+        WrpcNode { cfg, conn: tokio::sync::Mutex::new(None), next_id: std::sync::atomic::AtomicU64::new(1), node, window }
     }
 
     fn win(&self) -> std::sync::MutexGuard<'_, crate::rpc::window::BatchWindow> {
@@ -223,10 +226,12 @@ impl WrpcNode {
     }
 
     async fn connect(&self) -> Result<Ws, RpcError> {
+        let url = crate::rpc::endpoint(&self.cfg.url).await.map_err(|e| RpcError::Transport(e.to_string()))?;
+        *self.node.lock().unwrap_or_else(|e| e.into_inner()) = url.clone();
         let ws_cfg = WebSocketConfig::default()
             .max_message_size(Some(self.cfg.max_message_bytes))
             .max_frame_size(Some(self.cfg.max_message_bytes));
-        let fut = tokio_tungstenite::connect_async_with_config(self.cfg.url.as_str(), Some(ws_cfg), false);
+        let fut = tokio_tungstenite::connect_async_with_config(url.as_str(), Some(ws_cfg), false);
         match tokio::time::timeout(self.cfg.connect_timeout, fut).await {
             Err(_) => Err(RpcError::Timeout(self.cfg.connect_timeout)),
             Ok(Err(e)) => Err(RpcError::Transport(e.to_string())),
@@ -241,28 +246,56 @@ impl WrpcNode {
 
     /// [`WrpcNode::call`] with another timeout.
     pub async fn call_within(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, RpcError> {
+        let borsh = crate::rpc::all_borsh(&self.cfg.url);
+        // a call this client cannot carry in Borsh is refused before the wire (nothing was sent)
+        let encoded = if borsh { Some(crate::rpc::bridge::encode(method, &params).map_err(RpcError::Decode)?) } else { None };
         let mut guard = self.conn.lock().await;
+        // a resolver entry's connection to a node the entry gave up (it failed elsewhere, or the authority moved) is replaced
+        if guard.is_some() && crate::rpc::resolver::is_resolver(&self.cfg.url) {
+            let node = self.node.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            if crate::rpc::resolver::current(&self.cfg.url).as_deref() != Some(node.as_str()) {
+                *guard = None;
+            }
+        }
         if guard.is_none() {
-            *guard = Some(self.connect().await?);
+            match self.connect().await {
+                Ok(ws) => *guard = Some(ws),
+                Err(e) => {
+                    self.report();
+                    return Err(e);
+                }
+            }
         }
         let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let req = json!({"id": id, "method": method, "params": params}).to_string();
+        let req = match &encoded {
+            Some(e) => Message::binary(e.frame(id)),
+            None => Message::text(json!({"id": id, "method": method, "params": params}).to_string()),
+        };
         let ws = guard.as_mut().expect("connected");
         let res = tokio::time::timeout(timeout, async {
-            ws.send(Message::text(req)).await.map_err(|e| RpcError::Transport(e.to_string()))?;
+            ws.send(req).await.map_err(|e| RpcError::Transport(e.to_string()))?;
             loop {
                 let msg = match ws.next().await {
                     None => return Err(RpcError::Transport("connection closed".into())),
                     Some(Err(e)) => return Err(RpcError::Transport(e.to_string())),
                     Some(Ok(m)) => m,
                 };
-                let text = match msg {
-                    Message::Text(t) => t,
+                match msg {
+                    Message::Text(text) if !borsh => {
+                        if let Some(p) = parse_frame(text.as_str(), id)? {
+                            return Ok(p);
+                        }
+                    }
+                    Message::Binary(bytes) if borsh => match crate::rpc::borsh::parse_reply(&bytes[..]) {
+                        Ok(crate::rpc::borsh::Reply::Ok { id: Some(i), body }) if i == id => {
+                            return crate::rpc::bridge::decode(method, body).map_err(RpcError::Decode);
+                        }
+                        Ok(crate::rpc::borsh::Reply::Err { id: Some(i), message }) if i == id => return Err(RpcError::Node(message)),
+                        Ok(_) => continue, // a notification or another request's answer
+                        Err(e) => return Err(RpcError::Decode(e)),
+                    },
                     Message::Close(_) => return Err(RpcError::Transport("closed by node".into())),
                     _ => continue,
-                };
-                if let Some(p) = parse_frame(text.as_str(), id)? {
-                    return Ok(p);
                 }
             }
         })
@@ -273,12 +306,24 @@ impl WrpcNode {
                 if !matches!(e, RpcError::Node(_)) {
                     *guard = None;
                 }
+                if matches!(e, RpcError::Transport(_)) {
+                    self.report();
+                }
                 Err(e)
             }
             Err(_) => {
                 *guard = None;
                 Err(RpcError::Timeout(timeout))
             }
+        }
+    }
+
+    /// The connection failed or the node dropped it: a resolver entry moves to another public node
+    /// (`crate::rpc::resolver::failed`).
+    fn report(&self) {
+        if crate::rpc::resolver::is_resolver(&self.cfg.url) {
+            let node = self.node.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            crate::rpc::resolver::failed(&self.cfg.url, &node);
         }
     }
 }
@@ -556,7 +601,13 @@ mod tests {
             |verdict: Result<[u8; 32], RpcError>, ms: u64| Fake { verdict, delay: Duration::from_millis(ms), calls: calls.clone() };
         let board = crate::rpc::multi::NodeBoard::new(
             &(0..3)
-                .map(|i| crate::rpc::multi::NodeSpec { url: format!("n{i}"), fetch: true, submit: true, connections: 1 })
+                .map(|i| crate::rpc::multi::NodeSpec {
+                    url: format!("n{i}"),
+                    fetch: true,
+                    submit: true,
+                    connections: 1,
+                    cross_check: false,
+                })
                 .collect::<Vec<_>>(),
         );
         // a slow primary, a fast taker: the fast one answers at once, the primary still gets it

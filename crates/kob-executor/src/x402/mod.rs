@@ -113,6 +113,8 @@ pub struct Service {
 /// The node view of `cfg`, checked at startup: another network or a node without a UTXO index is
 /// refused; an unreachable node is only a warning (settlements fail closed until it answers).
 pub fn node_chain(cfg: &X402Config, built: &Built) -> Result<NodeChain, String> {
+    // a `resolver` node resolves for the facilitator's network
+    crate::rpc::resolver::set_network(built.network.registry_name());
     let chain = NodeChain::connect(&cfg.node, built.network, Duration::from_millis(cfg.node_timeout_ms));
     match chain.check_network() {
         Ok(()) => {}

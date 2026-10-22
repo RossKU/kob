@@ -45,9 +45,18 @@ the setup writes its configuration, the key file and the database next to the pr
 Click **More info**, check that the file is the one whose hash you verified, then **Run anyway**. Windows asks once per
 file.
 
-## 2. Run a Kaspa node
+## 2. A Kaspa node: public nodes, or your own
 
-The executor needs a rusty-kaspa node (v2.1.0 or later) of the same network on the same machine, with its JSON wRPC
+**Public nodes (the default, nothing to install).** The setup's first choice: the executor finds public Kaspa nodes
+through the Kaspa resolvers (the same ones the Kaspa wallets use) and connects to them over TLS. It always uses **two**, on
+different hosts: one is the chain authority, the other cross-checks it (only the chain blocks and transactions both report
+are indexed), and every transaction goes to both. If one fails, the other carries on at once and a replacement on a third
+host is found in the background. Public nodes are shared and slower than your own, and the first catch-up takes longer. A
+bad node cannot steal funds (the executor signs only its own inputs, and the covenants enforce every order), but it could
+waste fees or hide orders: the cross-check is the guard. Good to start with and for a small operator.
+
+**Your own node (recommended for serious operators, required for Miner Mode).** Faster, not shared, and nobody between
+you and the chain. A rusty-kaspa node (v2.1.0 or later) of the same network on the same machine, with its JSON wRPC
 listener on and a UTXO index (the executor looks up its funds there):
 
 ```
@@ -67,11 +76,12 @@ Start `kob-executor` (on Windows double-click `kob-executor.exe`; on Linux run `
 configuration next to it, it runs the setup, which asks (Enter takes the default):
 
 1. **Network**: fixed by the binary; it says which.
-2. **Role**: *matcher and keepers* (the default, earns, needs a funded key) or *index only* (follows the chain and serves
-   the read API; no key, no funds).
-3. **Node URL**: default `ws://127.0.0.1:18110` (mainnet) or `ws://127.0.0.1:18210` (testnet-10). It connects at once and
-   reports the node's version, network, sync state and UTXO index; on a problem it shows how to start the node and lets you
-   check again, enter another URL, or `skip`.
+2. **Node**: public Kaspa nodes (the default: it finds the two, checks each one's network, sync state and UTXO index and
+   shows their host names) or your own node (section 2).
+3. **Role**: *matcher and keepers* (the default, earns, needs a funded key) or *index only* (follows the chain and serves
+   the read API; no key, no funds). For your own node it then asks its URL: default `ws://127.0.0.1:18110` (mainnet) or
+   `ws://127.0.0.1:18210` (testnet-10), connects at once and reports the node's version, network, sync state and UTXO index;
+   on a problem it shows how to start the node and lets you check again, enter another URL, or `skip`.
 4. **Data directory**: default `kob-data` next to the program (the database and the record log; a few GB).
 5. **Operator key** (matcher and keepers): it generates a new key into `kob-operator.key` with the operating system's
    random generator and makes the file readable by your account only (Windows: an ACL with your account alone; Linux: mode
@@ -105,6 +115,9 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
 1 pending, profit of the final ones 0.42 KAS | funds 182.4 KAS | no warnings
 ```
 
+* With public nodes the line ends with both hosts and their state, e.g. `nodes: muon-10.kaspa.blue (authority, ok),
+  vector-10.kaspa.green (cross-check, ok, replaced 1x)`: `replaced` counts nodes given up (failed, or disagreeing), and
+  `disagreements` answers of the authority the other node contradicted (nothing contradicted is indexed).
 * On the first start the indexer catches up with everything the node retains (`indexer catching up, ... DAA behind the
   node (about ...)`); the matcher and keepers plan nothing until it is close to the tip.
 * `WARNING:` names what needs you: the node not synced or unreachable, funds below 100 KAS (`--low-funds-kas`), the pause

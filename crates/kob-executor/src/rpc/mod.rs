@@ -5,7 +5,10 @@
 //! The schema is checked against a live node by the integration test in `tests/tn10_follow.rs`.
 
 pub mod borsh;
+pub mod bridge;
 pub mod multi;
+pub mod resolver;
+pub mod tls;
 pub mod types;
 pub mod verify;
 pub mod window;
@@ -26,7 +29,6 @@ use types::{AddressUtxo, ChainHashes, ChainIds, DagInfo, RawVspcResponse, Server
 
 /// Node URLs as they may be shown or logged (credentials and API keys left out): [`kob_protocol::redact`].
 pub use kob_protocol::redact::redact_url;
-pub(crate) use kob_protocol::redact::url_host;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RpcError {
@@ -229,6 +231,8 @@ pub fn window_min_confirmations(sink_blue: u64, end_blue: u64, extra: Option<u64
 
 #[derive(Debug, Clone)]
 pub struct WrpcConfig {
+    /// The node: a JSON wRPC URL, a Borsh one (`bridge::is_borsh_url`: every call in Borsh), or a resolver entry
+    /// (`resolver::is_resolver`: a public node, Borsh).
     pub url: String,
     pub request_timeout: Duration,
     pub connect_timeout: Duration,
@@ -254,10 +258,36 @@ impl WrpcConfig {
             borsh_url: None,
         }
     }
+
+    /// Every call travels in Borsh (`url` is a Borsh endpoint or a resolver entry), not only the windows.
+    pub fn all_borsh(&self) -> bool {
+        all_borsh(&self.url)
+    }
+}
+
+/// Whether a configured node URL takes every call in Borsh: a Borsh endpoint (`bridge::is_borsh_url`) or a resolver entry
+/// (public nodes serve Borsh only).
+pub fn all_borsh(url: &str) -> bool {
+    bridge::is_borsh_url(url) || resolver::is_resolver(url)
+}
+
+/// The node a configured URL stands for now ([`resolver::endpoint`]: itself, or a resolver entry's public node, resolved on
+/// the blocking pool).
+pub async fn endpoint(url: &str) -> Result<String, RpcError> {
+    if !resolver::is_resolver(url) {
+        return Ok(url.to_string());
+    }
+    let u = url.to_string();
+    tokio::task::spawn_blocking(move || resolver::endpoint(&u))
+        .await
+        .map_err(|e| RpcError::Transport(format!("resolver: {e}")))?
+        .map_err(RpcError::Transport)
 }
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type Slot = tokio::sync::Mutex<Option<Ws>>;
+/// A connection and the node it goes to (a resolver entry's public node; else the URL).
+type Conn = (Ws, String);
+type Slot = tokio::sync::Mutex<Option<Conn>>;
 
 /// JSON wRPC client: one request in flight per connection, one connection for the small calls plus
 /// `vspc_connections` for VSPC batches. Reconnects lazily after any failure.
@@ -267,6 +297,8 @@ pub struct WrpcClient {
     vspc: Vec<Slot>,
     next_vspc: std::sync::atomic::AtomicUsize,
     next_id: std::sync::atomic::AtomicU64,
+    /// The node the last connection went to (a resolver entry's public node; else the URL): what a failure reports.
+    node: std::sync::Mutex<String>,
 }
 
 #[derive(Deserialize)]
@@ -305,17 +337,19 @@ enum Reply<'a> {
 impl WrpcClient {
     pub fn new(cfg: WrpcConfig) -> Self {
         let vspc = (0..cfg.vspc_connections).map(|_| Slot::new(None)).collect();
+        let node = std::sync::Mutex::new(cfg.url.clone());
         WrpcClient {
             cfg,
             conn: Slot::new(None),
             vspc,
             next_vspc: std::sync::atomic::AtomicUsize::new(0),
             next_id: std::sync::atomic::AtomicU64::new(1),
+            node,
         }
     }
 
     /// A VSPC connection: an idle one if there is one (round robin), else the next in turn.
-    async fn vspc_slot(&self) -> tokio::sync::MutexGuard<'_, Option<Ws>> {
+    async fn vspc_slot(&self) -> tokio::sync::MutexGuard<'_, Option<Conn>> {
         if self.vspc.is_empty() {
             return self.conn.lock().await;
         }
@@ -329,14 +363,22 @@ impl WrpcClient {
     }
 
     /// A connection whose answers may be at most `cap` bytes (a frame or message above it fails as [`RpcError::TooLarge`]).
-    async fn connect(&self, url: &str, cap: usize) -> Result<Ws, RpcError> {
+    async fn connect(&self, url: &str, cap: usize) -> Result<Conn, RpcError> {
+        let url = endpoint(url).await?;
+        *self.node.lock().unwrap_or_else(|e| e.into_inner()) = url.clone();
         let ws_cfg = WebSocketConfig::default().max_message_size(Some(cap)).max_frame_size(Some(cap));
-        let fut = tokio_tungstenite::connect_async_with_config(url, Some(ws_cfg), false);
+        let fut = tokio_tungstenite::connect_async_with_config(url.as_str(), Some(ws_cfg), false);
         match tokio::time::timeout(self.cfg.connect_timeout, fut).await {
             Err(_) => Err(RpcError::Timeout(self.cfg.connect_timeout)),
             Ok(Err(e)) => Err(RpcError::Transport(e.to_string())),
-            Ok(Ok((ws, _))) => Ok(ws),
+            Ok(Ok((ws, _))) => Ok((ws, url)),
         }
+    }
+
+    /// A connection of a resolver entry to a node the entry no longer uses (it failed elsewhere in the process, or the
+    /// authority took the other node over): replaced before the next request.
+    fn stale(&self, node: &str) -> bool {
+        resolver::is_resolver(&self.cfg.url) && resolver::current(&self.cfg.url).as_deref() != Some(node)
     }
 
     /// Send one request and return the raw `params` of the matching response.
@@ -347,6 +389,16 @@ impl WrpcClient {
     /// [`WrpcClient::call_raw`] with another timeout. A timeout drops the connection (a late answer must
     /// never be read as the answer to the next request).
     pub async fn call_raw_within(&self, method: &str, params: serde_json::Value, timeout: Duration) -> Result<String, RpcError> {
+        if self.cfg.all_borsh() {
+            // the same JSON in and out, over Borsh (`bridge`)
+            let enc = bridge::encode(method, &params).map_err(RpcError::Decode)?;
+            let parse = |p: Reply<'_>| match p {
+                Reply::Borsh { body, .. } => bridge::decode(method, body).map(|v| v.to_string()).map_err(RpcError::Decode),
+                Reply::Json(_) => Err(RpcError::Decode("a JSON answer to a Borsh request".into())),
+            };
+            let wire = Wire::Borsh { frame: Box::new(move |id| enc.frame(id)) };
+            return self.call_on(self.conn.lock().await, wire, timeout, self.cfg.max_message_bytes, parse).await;
+        }
         let parse = |p: Reply<'_>| match p {
             Reply::Json(p) => Ok(p.to_string()),
             Reply::Borsh { .. } => Err(RpcError::Decode("a Borsh answer to a JSON request".into())),
@@ -354,9 +406,25 @@ impl WrpcClient {
         self.call_on(self.conn.lock().await, Wire::Json { method, params }, timeout, self.cfg.max_message_bytes, parse).await
     }
 
-    /// The Borsh endpoint the VSPC connections use, if any (`None`: JSON; also when VSPC shares the JSON connection).
+    /// The Borsh endpoint the VSPC connections use, if any (`None`: JSON; also when VSPC shares the JSON connection). A node
+    /// that takes every call in Borsh is its own.
     pub fn borsh_url(&self) -> Option<&str> {
+        if self.cfg.all_borsh() {
+            return Some(self.cfg.url.as_str());
+        }
         self.cfg.borsh_url.as_deref().filter(|_| !self.vspc.is_empty())
+    }
+
+    /// A failed connection, or one the node dropped (a transport error; a request that only took longer than its timeout is
+    /// not the node's failure: the windows adapt to it, `rpc::window`): a resolver entry moves to another public node
+    /// ([`resolver::failed`]).
+    fn report(&self, e: &RpcError, node: Option<&str>) {
+        let connecting = node.is_none();
+        let node_failed = matches!(e, RpcError::Transport(_)) || (connecting && matches!(e, RpcError::Timeout(_)));
+        if node_failed && resolver::is_resolver(&self.cfg.url) {
+            let node = node.map(str::to_string).unwrap_or_else(|| self.node.lock().unwrap_or_else(|e| e.into_inner()).clone());
+            resolver::failed(&self.cfg.url, &node);
+        }
     }
 
     /// One request on the connection behind `guard`; `parse` reads the response's `params` in place (a VSPC batch is
@@ -366,14 +434,14 @@ impl WrpcClient {
     /// opened with another limit is replaced first (a VSPC window of the prefetch asks for its own, `VspcRequest::max_bytes`).
     async fn call_on<T>(
         &self,
-        guard: tokio::sync::MutexGuard<'_, Option<Ws>>,
+        guard: tokio::sync::MutexGuard<'_, Option<Conn>>,
         wire: Wire<'_>,
         timeout: Duration,
         cap: usize,
         parse: impl FnOnce(Reply<'_>) -> Result<T, RpcError>,
     ) -> Result<T, RpcError> {
         struct Pending<'a> {
-            guard: tokio::sync::MutexGuard<'a, Option<Ws>>,
+            guard: tokio::sync::MutexGuard<'a, Option<Conn>>,
             settled: bool,
         }
         impl Drop for Pending<'_> {
@@ -384,16 +452,23 @@ impl WrpcClient {
             }
         }
         let mut p = Pending { guard, settled: false };
-        if p.guard.as_ref().is_some_and(|ws| ws.get_config().max_message_size != Some(cap)) {
+        if p.guard.as_ref().is_some_and(|(ws, node)| ws.get_config().max_message_size != Some(cap) || self.stale(node)) {
             *p.guard = None;
         }
         // a connection is used for one encoding only (the JSON one, or a VSPC connection to the Borsh endpoint)
         let url = match &wire {
             Wire::Json { .. } => self.cfg.url.as_str(),
+            Wire::Borsh { .. } if self.cfg.all_borsh() => self.cfg.url.as_str(),
             Wire::Borsh { .. } => self.cfg.borsh_url.as_deref().unwrap_or(self.cfg.url.as_str()),
         };
         if p.guard.is_none() {
-            *p.guard = Some(self.connect(url, cap).await?);
+            match self.connect(url, cap).await {
+                Ok(ws) => *p.guard = Some(ws),
+                Err(e) => {
+                    self.report(&e, None);
+                    return Err(e);
+                }
+            }
         }
         let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let req = match wire {
@@ -402,7 +477,8 @@ impl WrpcClient {
             }
             Wire::Borsh { frame } => Message::binary(frame(id)),
         };
-        let ws = p.guard.as_mut().expect("connected above");
+        let (ws, node) = p.guard.as_mut().expect("connected above");
+        let node = node.clone();
         let res = tokio::time::timeout(timeout, async {
             ws.send(req).await.map_err(|e| RpcError::Transport(e.to_string()))?;
             loop {
@@ -450,6 +526,7 @@ impl WrpcClient {
             Ok(Err(e)) => {
                 // a node error leaves the connection usable
                 p.settled = matches!(e, RpcError::Node(_));
+                self.report(&e, Some(&node));
                 Err(e)
             }
             Err(_) => Err(RpcError::Timeout(timeout)),

@@ -40,6 +40,9 @@ enum Mode {
     /// Strips the covenant id from the spent outputs of every input (outside every hash: only the comparison with the
     /// primary's copy finds it, where the transaction matters to KOB).
     StripsSpent,
+    /// Hides the last accepted transaction of every chain block from this DAA score on, in every answer (a primary that
+    /// lies; only a cross-checking node can contradict it).
+    HidesTxFrom(u64),
 }
 
 struct Peer {
@@ -64,6 +67,11 @@ impl ChainSource for Peer {
             tokio::time::sleep(d).await;
         }
         let mut r = self.node.vspc_v2(req).await?;
+        if let Mode::HidesTxFrom(daa) = self.mode {
+            for b in r.chain_block_accepted_transactions.iter_mut().filter(|b| b.chain_block_header.daa_score >= daa) {
+                b.accepted_transactions.pop();
+            }
+        }
         if !windowed {
             return Ok(r);
         }
@@ -131,8 +139,14 @@ impl ChainSource for Peer {
     }
 }
 
+/// A node that vouches for the primary's answers (`NodeSpec::cross_check`: the second node of a resolver pair) and serves
+/// no windows of its own.
+fn cross_check(name: &str) -> NodeSpec {
+    NodeSpec { url: name.into(), fetch: false, submit: true, connections: 1, cross_check: true }
+}
+
 fn spec(name: &str, fetch: bool, connections: usize) -> NodeSpec {
-    NodeSpec { url: name.into(), fetch, submit: true, connections }
+    NodeSpec { url: name.into(), fetch, submit: true, connections, cross_check: false }
 }
 
 /// A follower over `nodes` (the first one the primary, also the verifier) on a fresh database.
@@ -332,4 +346,43 @@ async fn a_node_altering_unhashed_data_of_a_kob_transaction_is_caught_by_the_pri
     // its windows before the first cancel were used (nothing there matters to KOB beyond hashed data)
     assert!(l.windows_ok >= 1, "{l:?}");
     println!("dropped after {} windows: {}", l.windows_ok, l.dropped_reason.as_deref().unwrap_or(""));
+}
+
+/// A pair that cross-checks (the resolver default): with two honest nodes the database equals a clean replay and nothing is
+/// contradicted; a primary that hides transactions from one chain block on is contradicted by the other node there, and the
+/// follower applies the chain up to the block before it and nothing after: never data only one node vouches for while the
+/// other contradicts it.
+#[tokio::test]
+async fn a_cross_checked_pair_indexes_only_what_both_nodes_report() {
+    let c = Ctx::new();
+    let covs = chain(&c, 70);
+    let node = c.hs.node.clone();
+    let m = multi(
+        node.anchor(),
+        vec![(spec("primary", true, 2), Peer::new(&node, Mode::Honest)), (cross_check("second"), Peer::new(&node, Mode::Honest))],
+    );
+    m.sync(2_000).await;
+    let h = m.health.snapshot();
+    assert_eq!(h.cursor_hash, Some(node.tip()));
+    assert_eq!(m.snapshot(), fresh_snapshot(&node.chain()), "honest pair: a clean replay");
+    assert_eq!(h.nodes[1].disagreements, 0, "{:?}", h.nodes[1]);
+    assert!(statuses(&m, &covs).iter().any(|s| s == "open"));
+
+    let c = Ctx::new();
+    let _ = chain(&c, 70);
+    let node = c.hs.node.clone();
+    let blocks = node.chain();
+    let k = 41;
+    let liar = Peer::new(&node, Mode::HidesTxFrom(blocks[k].daa));
+    let m = multi(node.anchor(), vec![(spec("primary", true, 2), liar), (cross_check("second"), Peer::new(&node, Mode::Honest))]);
+    for _ in 0..400 {
+        let o = m.follower.step().await;
+        assert!(!matches!(o, StepOutcome::Gap(_)), "gap: {o:?}");
+    }
+    let h = m.health.snapshot();
+    assert_eq!(h.cursor_hash, Some(blocks[k - 1].hash), "applied up to the block before the contradicted one");
+    assert_eq!(m.snapshot(), fresh_snapshot(&blocks[..k]), "only what both nodes report");
+    assert!(h.nodes[1].disagreements > 0, "{:?}", h.nodes[1]);
+    assert!(h.nodes[1].last_error.as_deref().is_some_and(|e| e.contains("accepted")), "{:?}", h.nodes[1]);
+    println!("contradicted {} times; cursor held at block {}", h.nodes[1].disagreements, k - 1);
 }

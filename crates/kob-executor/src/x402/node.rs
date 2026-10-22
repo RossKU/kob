@@ -1,7 +1,9 @@
-//! The trusted chain view over a Kaspa node's wRPC (JSON encoding).
+//! The trusted chain view over a Kaspa node's wRPC.
 //!
-//! [`WrpcClient`] is a synchronous websocket JSON client (one connection behind a mutex, reconnected
-//! on demand, every call under an overall deadline). [`NodeChain`] implements
+//! [`WrpcClient`] is a synchronous websocket client (one connection behind a mutex, reconnected
+//! on demand, every call under an overall deadline): JSON wRPC, or every call in Borsh for a Borsh URL or a resolver entry (a
+//! public node; `crate::rpc::bridge`, `crate::rpc::resolver`), with the same JSON in and out of [`Rpc::call`]; `ws://` or
+//! `wss://` (`crate::rpc::tls`). [`NodeChain`] implements
 //! [`kob_x402::chain::ChainView`] on top of any [`Rpc`]:
 //!
 //! | ChainView | RPC |
@@ -23,7 +25,6 @@
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
-use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -82,13 +83,15 @@ pub fn parse_reply(text: &str, id: u64) -> Result<Reply, RpcError> {
     }
 }
 
-type Ws = WebSocket<TcpStream>;
+type Ws = WebSocket<crate::rpc::tls::Stream>;
 
 /// Connections kept per node.
 const POOL_SIZE: usize = 4;
 
 struct Conn {
     ws: Ws,
+    /// The node this connection goes to (a resolver entry's public node; else the URL).
+    node: String,
     last_used: Instant,
 }
 
@@ -131,40 +134,55 @@ impl WrpcClient {
     }
 
     fn connect(&self) -> Result<Conn, RpcError> {
-        let rest = self.url.strip_prefix("ws://").ok_or_else(|| RpcError::Transport("only ws:// node urls are supported".into()))?;
-        // the host and port only: user information, path, query and fragment can hold credentials, and error texts reach
-        // merchants (a retryable error's message) and logs, so they name the node by its redacted URL
-        let (authority, _) = crate::rpc::url_host(rest);
-        let shown = crate::rpc::redact_url(&self.url);
-        let addr = authority
-            .to_socket_addrs()
-            .map_err(|e| RpcError::Transport(format!("resolve {shown}: {e}")))?
-            .next()
-            .ok_or_else(|| RpcError::Transport(format!("no address for {shown}")))?;
-        let stream = TcpStream::connect_timeout(&addr, self.timeout).map_err(|e| RpcError::Transport(format!("connect: {e}")))?;
-        stream.set_read_timeout(Some(self.timeout)).map_err(|e| RpcError::Transport(e.to_string()))?;
-        stream.set_write_timeout(Some(self.timeout)).map_err(|e| RpcError::Transport(e.to_string()))?;
-        let _ = stream.set_nodelay(true);
-        let (ws, _) = tungstenite::client(self.url.as_str(), stream).map_err(|e| RpcError::Transport(format!("handshake: {e}")))?;
-        Ok(Conn { ws, last_used: Instant::now() })
+        let node = crate::rpc::resolver::endpoint(&self.url).map_err(RpcError::Transport)?;
+        let shown = crate::rpc::redact_url(&node);
+        let target = crate::rpc::tls::target(&node).map_err(RpcError::Transport)?;
+        if !node.starts_with("ws://") && !node.starts_with("wss://") {
+            return Err(RpcError::Transport(format!("{shown}: only ws:// and wss:// node urls are supported")));
+        }
+        let opened = crate::rpc::tls::connect(&target, self.timeout)
+            .map_err(|e| RpcError::Transport(format!("{shown}: {e}")))
+            .and_then(|stream| tungstenite::client(node.as_str(), stream).map_err(|e| RpcError::Transport(format!("handshake: {e}"))));
+        match opened {
+            Ok((ws, _)) => Ok(Conn { ws, node, last_used: Instant::now() }),
+            Err(e) => {
+                // a resolver entry moves to another public node
+                crate::rpc::resolver::failed(&self.url, &node);
+                Err(e)
+            }
+        }
     }
 
     fn exchange(&self, conn: &mut Conn, method: &str, params: &Value) -> Result<Value, RpcError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let deadline = Instant::now() + self.timeout;
-        let req = json!({ "id": id, "method": method, "params": params });
-        conn.ws.send(Message::text(req.to_string())).map_err(|e| RpcError::Transport(format!("send: {e}")))?;
+        let borsh = crate::rpc::all_borsh(&self.url);
+        let req = if borsh {
+            Message::binary(crate::rpc::bridge::encode(method, params).map_err(RpcError::Protocol)?.frame(id))
+        } else {
+            Message::text(json!({ "id": id, "method": method, "params": params }).to_string())
+        };
+        conn.ws.send(req).map_err(|e| RpcError::Transport(format!("send: {e}")))?;
         loop {
             if Instant::now() >= deadline {
                 return Err(RpcError::Transport("timed out waiting for the response".into()));
             }
             match conn.ws.read() {
-                Ok(Message::Text(t)) => match parse_reply(t.as_str(), id)? {
+                Ok(Message::Text(t)) if !borsh => match parse_reply(t.as_str(), id)? {
                     Reply::Other => continue,
                     Reply::Ok(p) => {
                         conn.last_used = Instant::now();
                         return Ok(p);
                     }
+                },
+                Ok(Message::Binary(b)) if borsh => match crate::rpc::borsh::parse_reply(&b[..]) {
+                    Ok(crate::rpc::borsh::Reply::Ok { id: Some(i), body }) if i == id => {
+                        conn.last_used = Instant::now();
+                        return crate::rpc::bridge::decode(method, body).map_err(RpcError::Protocol);
+                    }
+                    Ok(crate::rpc::borsh::Reply::Err { id: Some(i), message }) if i == id => return Err(RpcError::Node(message)),
+                    Ok(_) => continue,
+                    Err(e) => return Err(RpcError::Protocol(e)),
                 },
                 Ok(Message::Close(_)) => return Err(RpcError::Transport("connection closed before the response".into())),
                 Ok(_) => continue,
@@ -180,7 +198,13 @@ impl WrpcClient {
 impl Rpc for WrpcClient {
     fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
         let mut guard = self.checkout();
-        if guard.as_ref().is_some_and(|c| c.last_used.elapsed() > self.max_idle) {
+        // idle too long, or a resolver entry's connection to a node the entry gave up (it failed elsewhere, or the authority moved)
+        let stale = |c: &Conn| {
+            c.last_used.elapsed() > self.max_idle
+                || (crate::rpc::resolver::is_resolver(&self.url)
+                    && crate::rpc::resolver::current(&self.url).as_deref() != Some(c.node.as_str()))
+        };
+        if guard.as_ref().is_some_and(stale) {
             *guard = None;
         }
         // Idempotent reads retry once on a fresh connection; a submit is never resent by the client
@@ -208,7 +232,11 @@ impl Rpc for WrpcClient {
                     *guard = Some(conn);
                     return Err(e);
                 }
-                Err(e) => last = e, // transport failure: drop the connection
+                Err(e) => {
+                    // transport failure: drop the connection (a resolver entry moves to another public node)
+                    crate::rpc::resolver::failed(&self.url, &conn.node);
+                    last = e;
+                }
             }
         }
         Err(last)

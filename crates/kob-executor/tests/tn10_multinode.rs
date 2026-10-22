@@ -94,7 +94,7 @@ async fn a_window_from_another_tn10_node_verifies_against_the_primary() {
     assert!(matches!(verify_window(&bad.raw, &ids), Err(Rejection::Lie(_))));
 
     // through the source: the other node serves, the primary checks
-    let spec = |url: &str, fetch: bool| NodeSpec { url: url.into(), fetch, submit: false, connections: 1 };
+    let spec = |url: &str, fetch: bool| NodeSpec { url: url.into(), fetch, submit: false, connections: 1, cross_check: false };
     let m = MultiNode::new(vec![(spec(&p_url, false), primary.clone()), (spec(&o_url, true), other.clone())], client(&p_url));
     let f = m.fetch_window(w).await.unwrap();
     assert_eq!(f.origin, Origin { node: 1, trusted: false });

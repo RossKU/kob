@@ -237,6 +237,10 @@ pub trait SetupNode {
     fn server_info(&mut self, url: &str) -> Result<ServerInfo, String>;
     /// The plain KAS (no covenant) the node's UTXO index holds for `address`, in sompi.
     fn balance(&mut self, url: &str, address: &str) -> Result<u64, String>;
+    /// The host a resolver entry uses now, for the operator (`None`: not resolved).
+    fn node_name(&mut self, url: &str) -> Option<String> {
+        crate::rpc::resolver::current(url).map(|n| crate::rpc::resolver::host(&n))
+    }
 }
 
 /// The lines of standard input, read on a thread of their own so that [`Console::poll`] can wait with a timeout. One reader
@@ -440,6 +444,19 @@ pub fn run_setup(io: &mut dyn Console, node: &mut dyn SetupNode, opts: &SetupOpt
     }
 
     io.say("");
+    let public = ask_choice(
+        io,
+        "Kaspa node:",
+        &[
+            "Public Kaspa nodes (the default, nothing to install): two independent nodes found through the Kaspa resolvers.",
+            "My own node (faster; recommended for serious operators, and required for Miner Mode).",
+        ],
+    )? == 0;
+    if public {
+        io.say(PUBLIC_NODES);
+    }
+
+    io.say("");
     let role = match ask_choice(
         io,
         "What should this executor do?",
@@ -454,37 +471,48 @@ pub fn run_setup(io: &mut dyn Console, node: &mut dyn SetupNode, opts: &SetupOpt
 
     io.say("");
     let default_url = default_wrpc_url(&network).ok_or_else(|| anyhow!("no default node endpoint for {network}"))?;
-    let mut url = default_url.clone();
+    let mut url = if public { crate::rpc::resolver::RESOLVER.to_string() } else { default_url.clone() };
     let mut node_ok = false;
-    loop {
-        let a = io.ask(&format!("Kaspa node JSON wRPC URL [{url}]: ")).ok_or_else(ended)?;
-        if a.eq_ignore_ascii_case("skip") {
-            io.say("Going on without a working node: the executor will wait for one at that URL.");
-            break;
-        }
-        if !a.is_empty() {
-            url = if a.contains("://") { a } else { format!("ws://{a}") };
-        }
-        io.say(&format!("Checking {} ...", crate::rpc::redact_url(&url)));
-        match node.server_info(&url).map_err(|e| format!("cannot reach the node: {e}")).and_then(|i| judge_node(&i, &network, role)) {
-            Ok(found) => {
-                io.say(&format!("OK: {found}."));
-                if found.contains("not synced") {
-                    io.say("The executor waits until the node is synced before it does anything.");
-                }
-                node_ok = true;
+    if public {
+        crate::rpc::resolver::set_network(&network);
+        node_ok = check_public_pair(io, node, &network, role)?;
+    }
+    if !public {
+        loop {
+            let a = io
+                .ask(&format!("Your node's wRPC URL (JSON; or Borsh: a .../borsh path or port 17110 / 17210) [{url}]: "))
+                .ok_or_else(ended)?;
+            if a.eq_ignore_ascii_case("skip") {
+                io.say("Going on without a working node: the executor will wait for one at that URL.");
                 break;
             }
-            Err(why) => {
-                io.say(&format!("Problem: {why}"));
-                io.say("");
-                io.say(&node_hint(&network));
-                io.say("");
-                io.say("Press Enter to check again, type another URL, or type skip to go on anyway.");
+            if !a.is_empty() {
+                url = if a.contains("://") { a } else { format!("ws://{a}") };
+            }
+            io.say(&format!("Checking {} ...", crate::rpc::redact_url(&url)));
+            match node
+                .server_info(&url)
+                .map_err(|e| format!("cannot reach the node: {e}"))
+                .and_then(|i| judge_node(&i, &network, role))
+            {
+                Ok(found) => {
+                    io.say(&format!("OK: {found}."));
+                    if found.contains("not synced") {
+                        io.say("The executor waits until the node is synced before it does anything.");
+                    }
+                    node_ok = true;
+                    break;
+                }
+                Err(why) => {
+                    io.say(&format!("Problem: {why}"));
+                    io.say("");
+                    io.say(&node_hint(&network));
+                    io.say("");
+                    io.say("Press Enter to check again, type another URL, or type skip to go on anyway.");
+                }
             }
         }
     }
-
     io.say("");
     let data_dir = ask_default(io, "Data directory (the database and the record log; a few GB)", DATA_DIR)?;
 
@@ -571,6 +599,42 @@ pub fn run_setup(io: &mut dyn Console, node: &mut dyn SetupNode, opts: &SetupOpt
         Ok(Some(config_path))
     } else {
         Ok(None)
+    }
+}
+
+/// What public nodes mean for an operator (the setup's note under the choice).
+pub const PUBLIC_NODES: &str = "Public nodes are shared and slower than your own. A bad node cannot steal funds: the executor signs only its own inputs and the covenants enforce every order. It could waste fees or hide orders, so the executor always uses two public nodes on different hosts, indexes only what both report, and sends every transaction to both; if one fails, the other carries on and a replacement is found.";
+
+/// The check of the public pair (`resolver` and `resolver:2`, `rpc::resolver`): both resolved on different hosts, each on the
+/// build's network, synced or syncing, with the UTXO index the role needs. `Ok(true)`: both fine; `Ok(false)`: the operator
+/// goes on anyway (the executor keeps resolving).
+fn check_public_pair(io: &mut dyn Console, node: &mut dyn SetupNode, network: &str, role: LaunchRole) -> Result<bool> {
+    loop {
+        io.say("Finding two public nodes through the Kaspa resolvers ...");
+        let mut problems = vec![];
+        for (entry, what) in [(crate::rpc::resolver::pseudo(1), "chain authority"), (crate::rpc::resolver::pseudo(2), "cross-check")] {
+            let res = node
+                .server_info(&entry)
+                .map_err(|e| format!("cannot reach a public node: {e}"))
+                .and_then(|i| judge_node(&i, network, role));
+            let name = node.node_name(&entry).unwrap_or_else(|| entry.clone());
+            match res {
+                Ok(found) => io.say(&format!("OK: {name} ({what}): {found}.")),
+                Err(why) => problems.push(format!("{name} ({what}): {why}")),
+            }
+        }
+        if problems.is_empty() {
+            return Ok(true);
+        }
+        for p in &problems {
+            io.say(&format!("Problem: {p}"));
+        }
+        io.say("Press Enter to try again (other nodes are tried), or type skip to go on anyway.");
+        let a = io.ask("> ").ok_or_else(ended)?;
+        if a.eq_ignore_ascii_case("skip") {
+            io.say("Going on: the executor keeps looking for public nodes when it starts.");
+            return Ok(false);
+        }
     }
 }
 
@@ -727,6 +791,9 @@ mod tests {
         fn balance(&mut self, _url: &str, _address: &str) -> Result<u64, String> {
             Ok(self.balances.pop_front().unwrap_or(0))
         }
+        fn node_name(&mut self, url: &str) -> Option<String> {
+            crate::rpc::resolver::is_resolver(url).then(|| format!("{}.public.example", url.replace(':', "-")))
+        }
     }
 
     fn opts(dir: &Path, network: &str, pinned: bool) -> SetupOptions {
@@ -837,15 +904,20 @@ mod tests {
         let mut node = FakeNode::new("testnet-10");
         node.refuse = 1;
         node.balances = [0, 0, 150 * 100_000_000].into();
-        // role, URL (refused), URL again, data dir, key choice, two polls while waiting, x402, start
+        // node (public), role, Enter after the refused check, data dir, key choice, two polls while waiting, x402, start
         let mut io = Script::new(&["", "", "", "", "", "<wait>", "<wait>", "", ""]);
         let got = run_setup(&mut io, &mut node, &opts(d.path(), "testnet-10", false)).unwrap();
         let out = io.text();
         assert_eq!(got, Some(d.path().join(CONFIG_FILE)), "{out}");
-        assert_eq!(node.urls, ["ws://127.0.0.1:18210", "ws://127.0.0.1:18210"]);
+        assert_eq!(node.urls, ["resolver", "resolver:2", "resolver", "resolver:2"], "both public nodes, checked again");
         assert!(out.contains("Network: testnet-10"), "{out}");
-        assert!(out.contains("Problem: cannot reach the node") && out.contains("--rpclisten-json=default"), "{out}");
-        assert!(out.contains("OK: rusty-kaspa 2.1.0 on testnet-10, synced, UTXO index on"), "{out}");
+        assert!(out.contains("A bad node cannot steal funds") && out.contains("two public nodes on different hosts"), "{out}");
+        assert!(out.contains("Problem: resolver.public.example (chain authority): cannot reach a public node"), "{out}");
+        assert!(
+            out.contains("OK: resolver.public.example (chain authority): rusty-kaspa 2.1.0 on testnet-10, synced, UTXO index on"),
+            "{out}"
+        );
+        assert!(out.contains("OK: resolver-2.public.example (cross-check)"), "{out}");
         assert!(out.contains("Operator address: kaspatest:") && out.contains("HOT key"), "{out}");
         assert!(out.contains("Balance: 0 KAS") && out.contains("Balance: 150 KAS") && out.contains("Funded."), "{out}");
         // the secret is never shown
@@ -857,7 +929,7 @@ mod tests {
         let l = launch_args(&d.path().join(CONFIG_FILE)).unwrap();
         assert_eq!(l.args, ["run", "--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", "kob-data/pause"]);
         let c = IndexerConfig::load(&d.path().join(CONFIG_FILE)).unwrap();
-        assert_eq!(c.rpc_url, "ws://127.0.0.1:18210");
+        assert_eq!(c.rpc_url, "resolver", "public nodes (index_cli adds the second, resolver:2)");
         assert_eq!(c.tokens_path, Some(PathBuf::from(TOKENS_FILE)));
         assert!(d.path().join(TOKENS_FILE).is_file());
         assert!(out.contains("kob-executor run --config kob-executor.toml --key-file kob-operator.key"), "{out}");
@@ -868,11 +940,12 @@ mod tests {
         assert_eq!(run_setup(&mut io, &mut node, &opts(d.path(), "testnet-10", false)).unwrap(), None);
         assert!(io.text().contains("Nothing changed"));
         // replaced: the existing key is offered (never a new one over it), index only this time
-        let mut io = Script::new(&["y", "2", "", "", "n"]);
+        let mut io = Script::new(&["y", "", "2", "", "n"]);
         assert_eq!(run_setup(&mut io, &mut node, &opts(d.path(), "testnet-10", false)).unwrap(), None);
         assert_eq!(launch_args(&d.path().join(CONFIG_FILE)).unwrap().args, ["index", "--config", CONFIG_FILE]);
         assert_eq!(std::fs::read_to_string(d.path().join(KEY_FILE)).unwrap(), secret, "the key file is untouched");
         let mut io = Script::new(&["y", "", "", "", "", "<enter>", "", "n"]);
+        // (replace, public nodes, role, data dir, use the key, Enter while waiting, x402, start)
         node.balances = [5].into();
         assert_eq!(run_setup(&mut io, &mut node, &opts(d.path(), "testnet-10", false)).unwrap(), None);
         let out = io.text();
@@ -901,7 +974,8 @@ mod tests {
         let made = HotKey::create_file(&kp).unwrap();
         std::fs::write(d.path().join("x402.json"), "{}").unwrap();
         let kps = kp.to_string_lossy().into_owned();
-        let mut io = Script::new(&["", "10.0.0.5:18110", "skip", "data", "2", "missing.key", &kps, "y", "nope.json", "x402.json", ""]);
+        let mut io =
+            Script::new(&["2", "", "10.0.0.5:18110", "skip", "data", "2", "missing.key", &kps, "y", "nope.json", "x402.json", ""]);
         let got = run_setup(&mut io, &mut node, &opts(d.path(), "mainnet", true)).unwrap();
         let out = io.text();
         assert_eq!(got, Some(d.path().join(CONFIG_FILE)), "{out}");
