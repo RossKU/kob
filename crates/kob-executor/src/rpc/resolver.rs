@@ -156,7 +156,8 @@ pub fn resolve_in(
     fallback.ok_or_else(|| format!("no Kaspa resolver named a {network} node ({})", failures.join("; ")))
 }
 
-/// [`resolve_in`] over [`RESOLVERS`] (or `$KOB_RESOLVERS`, comma-separated, for a private resolver) in a random order, with
+/// [`resolve_in`] over [`RESOLVERS`] (or the advanced override `$KOB_RESOLVERS`, comma-separated resolver URLs, for an operator
+/// who runs a private resolver over its own nodes) in a random order, with
 /// real HTTP.
 pub fn resolve(network: &str, avoid_hosts: &[String]) -> Result<Resolved, String> {
     let mut order: Vec<String> = match std::env::var("KOB_RESOLVERS") {

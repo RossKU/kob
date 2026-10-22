@@ -2406,8 +2406,7 @@ that only knows the ids it submitted).
 
 **Public nodes** (`rpc_url = "resolver"`, `--rpc-url resolver`; the setup's default). The executor asks the Kaspa
 resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.kaspa.red`, `*.kaspa.green`, `*.kaspa.blue`;
-`GET {resolver}/v2/kaspa/{network}/tls/wrpc/borsh`, tried in a random order with a 5 s timeout each; `KOB_RESOLVERS`
-replaces the list) for public nodes, which serve Borsh wRPC over TLS only. It always uses two, on different hosts
+`GET {resolver}/v2/kaspa/{network}/tls/wrpc/borsh`, tried in a random order with a 5 s timeout each) for public nodes, which serve Borsh wRPC over TLS only. It always uses two, on different hosts
 (`rpc::resolver`):
 
 * `resolver` is the chain authority; a second entry `resolver:2` is added by itself. It fetches windows of transaction
@@ -2428,6 +2427,9 @@ replaces the list) for public nodes, which serve Borsh wRPC over TLS only. It al
   are resolved again with a backoff (2 s doubling to 60 s). Every change is logged with the host names, and the status line
   shows both hosts, their state and how often each entry was replaced.
 * A further `--node resolver` adds a third public node (`resolver:3`) that fetches windows and takes submissions.
+* Advanced: `KOB_RESOLVERS` (comma-separated resolver URLs, e.g. `https://resolver.example,http://127.0.0.1:8888`) replaces
+  the built-in list, for an operator who runs a private resolver (rusty-kaspa's resolver service) over its own nodes; the
+  API and the pair rules are the same.
 
 Public nodes are shared and slower than an own node (and their retention decides how far back a first start can index). A
 bad node cannot steal funds: the executor signs only its own inputs and the covenants enforce every order; it could waste
