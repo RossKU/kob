@@ -232,8 +232,10 @@ impl WrpcNode {
             .max_message_size(Some(self.cfg.max_message_bytes))
             .max_frame_size(Some(self.cfg.max_message_bytes));
         let fut = tokio_tungstenite::connect_async_with_config(url.as_str(), Some(ws_cfg), false);
-        match tokio::time::timeout(self.cfg.connect_timeout, fut).await {
-            Err(_) => Err(RpcError::Timeout(self.cfg.connect_timeout)),
+        // a dropped public node's one reconnect has a short timeout (`crate::rpc::resolver::failed`)
+        let limit = crate::rpc::resolver::connect_timeout(&self.cfg.url, self.cfg.connect_timeout);
+        match tokio::time::timeout(limit, fut).await {
+            Err(_) => Err(RpcError::Timeout(limit)),
             Ok(Err(e)) => Err(RpcError::Transport(e.to_string())),
             Ok(Ok((ws, _))) => Ok(ws),
         }

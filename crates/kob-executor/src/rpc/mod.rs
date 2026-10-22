@@ -368,8 +368,10 @@ impl WrpcClient {
         *self.node.lock().unwrap_or_else(|e| e.into_inner()) = url.clone();
         let ws_cfg = WebSocketConfig::default().max_message_size(Some(cap)).max_frame_size(Some(cap));
         let fut = tokio_tungstenite::connect_async_with_config(url.as_str(), Some(ws_cfg), false);
-        match tokio::time::timeout(self.cfg.connect_timeout, fut).await {
-            Err(_) => Err(RpcError::Timeout(self.cfg.connect_timeout)),
+        // a dropped public node's one reconnect has a short timeout (`resolver::failed`)
+        let limit = resolver::connect_timeout(&self.cfg.url, self.cfg.connect_timeout);
+        match tokio::time::timeout(limit, fut).await {
+            Err(_) => Err(RpcError::Timeout(limit)),
             Ok(Err(e)) => Err(RpcError::Transport(e.to_string())),
             Ok(Ok((ws, _))) => Ok((ws, url)),
         }

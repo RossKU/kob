@@ -140,7 +140,8 @@ impl WrpcClient {
         if !node.starts_with("ws://") && !node.starts_with("wss://") {
             return Err(RpcError::Transport(format!("{shown}: only ws:// and wss:// node urls are supported")));
         }
-        let opened = crate::rpc::tls::connect(&target, self.timeout)
+        // a dropped public node's one reconnect has a short timeout (`crate::rpc::resolver::failed`)
+        let opened = crate::rpc::tls::connect(&target, crate::rpc::resolver::connect_timeout(&self.url, self.timeout))
             .map_err(|e| RpcError::Transport(format!("{shown}: {e}")))
             .and_then(|stream| tungstenite::client(node.as_str(), stream).map_err(|e| RpcError::Transport(format!("handshake: {e}"))));
         match opened {
@@ -741,7 +742,7 @@ mod tests {
         };
         let refused = |_: &str, _: &Value| Err(RpcError::Node("output x already spent by transaction y in the mempool".into()));
         let down = |_: &str, _: &Value| Err(RpcError::Transport("reset".into()));
-        let peer = |h: Box<dyn Fn(&str, &Value) -> Result<Value, RpcError> + Send + Sync>| {
+        let peer = |h: Handler| {
             let f = Arc::new(Fake { calls: Mutex::new(vec![]), handler: h });
             (Arc::new(f.clone()) as Arc<dyn Rpc>, f)
         };
@@ -758,7 +759,7 @@ mod tests {
         }
         assert_eq!((primary.calls.lock().unwrap().len(), pf.calls.lock().unwrap()[0].0.as_str()), (1, "submitTransaction"));
         // the primary is down or refuses: the peer that takes it answers
-        for h in [Box::new(down) as Box<dyn Fn(&str, &Value) -> Result<Value, RpcError> + Send + Sync>, Box::new(refused)] {
+        for h in [Box::new(down) as Handler, Box::new(refused)] {
             let (chain, _) = fake(h);
             let (p, _) = peer(Box::new(ok.clone()));
             assert_eq!(chain.with_submit_peers(vec![p]).submit(&tx).unwrap(), tx.id().as_bytes());

@@ -2418,9 +2418,12 @@ replaces the list) for public nodes, which serve Borsh wRPC over TLS only. It al
   next chain block applies nothing until the two agree, and when it persists (three times in a row) the cross-checking node
   is given up for another, then (three more) the authority's. Counted per node (`disagreements` in `/v1/health` `nodes`, the
   status line).
-* A node that cannot be reached or drops its connection is given up at once. When it is the authority, the other node is
-  the authority from the next call on (no resolution, no wait), and a replacement on a host neither in use nor failed lately
-  is resolved in the background; the same for the cross-checking node. A cross-checking node that cannot answer leaves the
+* A node that cannot be reached or drops its connection gets one reconnect first (public nodes close connections now and
+  then under load): the same node is tried once more with a 5 s connect timeout (`GRACE_CONNECT_TIMEOUT`). When it is the
+  authority's, the other node is the authority from the next call on (no resolution, no wait) and the dropped node is
+  retried as the cross-checking one. A node that drops again within 2 minutes of its last drop (`DROP_WINDOW`; its retry
+  failing included) is given up at once, and a replacement on a host neither in use nor failed lately is resolved in the
+  background; the same for the cross-checking node. A cross-checking node that cannot answer leaves the
   authority alone meanwhile (no stall; nothing can be contradicted while there is no second node). With no node left, both
   are resolved again with a backoff (2 s doubling to 60 s). Every change is logged with the host names, and the status line
   shows both hosts, their state and how often each entry was replaced.

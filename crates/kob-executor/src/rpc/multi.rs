@@ -23,7 +23,7 @@
 //! answer is cut before it, and when the very next chain block is contradicted nothing is applied until the two agree (a race
 //! at the tip settles within seconds). A contradiction is logged and counted (`disagreements`); one that blocks the cursor
 //! three times in a row gives the cross-checking node up for another (its resolver entry resolves a replacement), and three
-//! more the primary's node (the cross-checking one becomes the authority, `resolver::failed`). A cross-checking node that
+//! more the primary's node (the cross-checking one becomes the authority, `resolver::replace`). A cross-checking node that
 //! cannot answer is skipped (backoff) and the primary goes on alone meanwhile: no stall, and no contradiction is ignored,
 //! only none can be seen while there is no second node.
 //!
@@ -477,7 +477,7 @@ impl<N: ChainSource> MultiNode<N> {
             let e = self.board.entry(i).to_string();
             if let Some(node) = super::resolver::current(&e) {
                 tracing::warn!(entry = %e, node = %super::resolver::host(&node), stalls = n, "a disagreement that does not settle: replacing this node");
-                super::resolver::failed(&e, &node);
+                super::resolver::replace(&e, &node);
             }
         };
         if n == STALLS_BEFORE_REPLACING {

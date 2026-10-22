@@ -15,11 +15,14 @@
 //! matcher's, the x402 facilitator's, the setup's check) asks [`endpoint`] for the node it stands for, so all of them use the
 //! same node per entry, and the entries use different hosts.
 //!
-//! **Failure.** A client that cannot connect to its entry's node, or loses the connection, reports it ([`failed`]): the
-//! entry gives the node up at once. When the authority's node fails and another entry has a node, the authority takes that
-//! node over immediately (no resolution, no wait: the survivor keeps the indexer running) and the other entry resolves a
-//! replacement on a host different from the survivor's and from the failed ones, in the background; any other entry
-//! resolves its replacement in the background the same way. When no node is left, every entry resolves again on its next
+//! **Failure.** A client that cannot connect to its entry's node, or loses the connection, reports it ([`failed`]). Public
+//! nodes close connections now and then under load, so the first drop of a node gets a **grace reconnect**: the same node is
+//! tried once more, with a short connect timeout ([`GRACE_CONNECT_TIMEOUT`]). When it is the authority's node, the other
+//! node is the authority at once meanwhile (no resolution, no wait: the survivor keeps the indexer running) and the dropped
+//! node gets its retry as the cross-checking one. A node that drops again within [`DROP_WINDOW`] of its last drop (the
+//! retry failing included) is given up at once ([`replace`], also what a persistent disagreement does): the authority takes
+//! the other entry's node over, and the entries left without a node resolve a replacement on a host different from the ones
+//! in use and from the failed ones, in the background. When no node is left, every entry resolves again on its next
 //! use, with a backoff (2 s doubling to 60 s) while the resolvers name none. Every change is logged with the hosts.
 
 use std::collections::{HashMap, VecDeque};
@@ -57,6 +60,12 @@ pub const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Rounds over every resolver before a node on a host already in use is accepted (the resolvers spread their answers over
 /// the nodes, so a second round usually names another host).
 pub const ROUNDS: usize = 3;
+
+/// The connect timeout of the one reconnect a dropped public node gets ([`failed`]).
+pub const GRACE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A node that drops again within this long of its last drop is given up at once, without another reconnect.
+pub const DROP_WINDOW: Duration = Duration::from_secs(120);
 
 /// Whether a configured node URL is a resolver entry.
 pub fn is_resolver(url: &str) -> bool {
@@ -184,6 +193,8 @@ struct State {
     resolve: ResolveFn,
     /// replacements are resolved on a thread of their own (off in unit tests, which drive [`endpoint`] themselves)
     background: bool,
+    /// host -> when it last dropped a connection (its grace reconnect, [`failed`])
+    dropped: HashMap<String, Instant>,
 }
 
 fn state() -> &'static Mutex<State> {
@@ -198,6 +209,7 @@ fn state() -> &'static Mutex<State> {
             pending: vec![],
             resolve,
             background: true,
+            dropped: HashMap::new(),
         })
     })
 }
@@ -295,11 +307,61 @@ fn role(url: &str) -> &'static str {
     }
 }
 
-/// A connection to `node` (the node the resolver entry `url` stood for) failed or was lost: the entry gives it up. The
-/// authority's entry takes over the node of another entry at once when there is one, and the entries without a node
-/// resolve replacements in the background (hosts different from the ones in use and from the failed ones). A report about
-/// a node the entry no longer uses is ignored (another client reported it first), so a burst of failures moves the entry once.
+/// A connection to `node` (the node the resolver entry `url` stood for) failed or was lost. Its first drop within
+/// [`DROP_WINDOW`] gets one reconnect to the same node (module documentation: the authority's role moves to the other node
+/// meanwhile, and the dropped node is retried as the cross-checking one); a second drop within the window gives it up
+/// ([`replace`]). A report about a node the entry no longer uses is ignored (another client reported it first).
 pub fn failed(url: &str, node: &str) {
+    if !is_resolver(url) {
+        return;
+    }
+    {
+        let mut s = lock();
+        if s.current.get(url).map(String::as_str) != Some(node) {
+            return;
+        }
+        let h = host(node);
+        let again = s.dropped.get(&h).is_some_and(|t| t.elapsed() < DROP_WINDOW);
+        if !again {
+            s.dropped.insert(h.clone(), Instant::now());
+            let survivor = (url == RESOLVER)
+                .then(|| s.current.iter().find(|(k, v)| k.as_str() != RESOLVER && host(v) != h).map(|(k, v)| (k.clone(), v.clone())))
+                .flatten();
+            match survivor {
+                Some((entry, n)) => {
+                    // the other node is the authority at once; the dropped one gets its retry as the cross-check
+                    s.current.insert(RESOLVER.to_string(), n.clone());
+                    s.current.insert(entry.clone(), node.to_string());
+                    tracing::warn!(dropped = %h, authority = %host(&n), "public node dropped the connection: the other node is the chain authority now; reconnecting once to the dropped one as the cross-check");
+                }
+                None => tracing::warn!(entry = url, dropped = %h, "public node dropped the connection: reconnecting once"),
+            }
+            return;
+        }
+    }
+    replace(url, node);
+}
+
+/// The connect timeout of a client of the resolver entry `url`: [`GRACE_CONNECT_TIMEOUT`] while its node is on its grace
+/// reconnect (it dropped within [`DROP_WINDOW`]), else `default`.
+pub fn connect_timeout(url: &str, default: Duration) -> Duration {
+    if !is_resolver(url) {
+        return default;
+    }
+    let s = lock();
+    let dropped = s.current.get(url).and_then(|n| s.dropped.get(&host(n))).is_some_and(|t| t.elapsed() < DROP_WINDOW);
+    if dropped {
+        default.min(GRACE_CONNECT_TIMEOUT)
+    } else {
+        default
+    }
+}
+
+/// The resolver entry `url` gives `node` up at once (a second drop within [`DROP_WINDOW`], or a disagreement that does not
+/// settle, `rpc::multi`): the authority's entry takes over the node of another entry when there is one, and the entries
+/// without a node resolve replacements in the background (hosts different from the ones in use and from the failed ones). A
+/// report about a node the entry no longer uses is ignored.
+pub fn replace(url: &str, node: &str) {
     if !is_resolver(url) {
         return;
     }
@@ -393,6 +455,7 @@ pub(crate) mod tests {
         s.replaced.clear();
         s.backoff.clear();
         s.pending.clear();
+        s.dropped.clear();
         s.resolve = resolve;
         s.background = false;
     }
@@ -510,17 +573,17 @@ pub(crate) mod tests {
         assert_eq!(endpoint("resolver").unwrap(), a, "one node per entry for every client");
         assert_eq!(endpoint("ws://127.0.0.1:18210").unwrap(), "ws://127.0.0.1:18210");
         // a report about a node the entry no longer uses: ignored
-        failed("resolver", "wss://z.example/x/borsh");
+        replace("resolver", "wss://z.example/x/borsh");
         assert_eq!(current("resolver"), Some(a.clone()));
         // the authority fails: the survivor is the authority immediately, the cross-check entry has no node until replaced
-        failed("resolver", &a);
+        replace("resolver", &a);
         assert_eq!(current("resolver"), Some(b.clone()), "failover to the survivor with no resolution");
         assert_eq!(current("resolver:2"), None);
         let c = endpoint("resolver:2").unwrap();
         assert_eq!(host(&c), "c.example", "the replacement differs from the survivor and from the failed host");
         assert_eq!((replacements("resolver"), replacements("resolver:2")), (1, 0));
         // the cross-check node fails: the authority keeps its node, the replacement avoids every host seen failing or in use
-        failed("resolver:2", &c);
+        replace("resolver:2", &c);
         assert_eq!(current("resolver"), Some(b.clone()));
         assert_eq!(host(&endpoint("resolver:2").unwrap()), "d.example");
         let d = describe();
@@ -548,8 +611,43 @@ pub(crate) mod tests {
         assert_eq!(host(&b), "b.example", "not the host the authority took meanwhile");
         // both entries on one host (an old race, or the resolvers had no other): its failure clears both, nobody is promoted
         lock().current.insert("resolver:2".into(), "wss://a.example/x/borsh".into());
-        failed("resolver", "wss://a.example/x/borsh");
+        replace("resolver", "wss://a.example/x/borsh");
         assert_eq!((current("resolver"), current("resolver:2")), (None, None));
+    }
+
+    /// A dropped connection gets one reconnect to the same node, with a short connect timeout: the authority's role moves to
+    /// the other node at once and the dropped node is retried as the cross-check; a second drop within the window gives it up
+    /// (a node on a third host replaces it); after the window a drop is a first drop again.
+    #[test]
+    fn a_first_drop_reconnects_once_a_second_one_replaces() {
+        let _g = serial();
+        reset(fake_resolve);
+        let a = endpoint("resolver").unwrap();
+        let b = endpoint("resolver:2").unwrap();
+        let long = Duration::from_secs(15);
+        failed("resolver", &a);
+        assert_eq!((current("resolver"), current("resolver:2")), (Some(b.clone()), Some(a.clone())), "roles swapped, no resolution");
+        assert_eq!(replacements("resolver") + replacements("resolver:2"), 0, "nothing replaced yet");
+        assert_eq!(connect_timeout("resolver:2", long), GRACE_CONNECT_TIMEOUT, "the retry has a short connect timeout");
+        assert_eq!(connect_timeout("resolver", long), long);
+        assert_eq!(connect_timeout("ws://127.0.0.1:18210", long), long);
+        // the retry fails (or it drops again within the window): given up, replaced on a third host
+        failed("resolver:2", &a);
+        assert_eq!(current("resolver"), Some(b.clone()));
+        assert_eq!(current("resolver:2"), None);
+        let c = endpoint("resolver:2").unwrap();
+        assert_eq!(host(&c), "c.example");
+        assert_eq!(replacements("resolver:2"), 1);
+        // the cross-checking node's first drop: kept for its retry; its second: replaced
+        failed("resolver:2", &c);
+        assert_eq!(current("resolver:2"), Some(c.clone()));
+        failed("resolver:2", &c);
+        assert_eq!(current("resolver:2"), None);
+        // a drop after the window is a first drop again
+        let d = endpoint("resolver:2").unwrap();
+        lock().dropped.insert(host(&d), Instant::now() - DROP_WINDOW - Duration::from_secs(1));
+        failed("resolver:2", &d);
+        assert_eq!(current("resolver:2"), Some(d.clone()), "a reconnect again, the window has passed");
     }
 
     /// Both nodes gone and the resolvers silent: every entry backs off (no resolution storm), then resolves again.
