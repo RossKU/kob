@@ -42,8 +42,8 @@ pub const RECOMMENDED_FUNDS_KAS: u64 = 200;
 /// `kob-executor setup`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct SetupArgs {
-    /// Directory of the configuration, the key file and the data directory. Default: the executable's own directory, the
-    /// one a start without arguments reads.
+    /// Directory of the configuration, the key file and the data directory. Default: the one a start without arguments
+    /// reads, `$KOB_EXECUTOR_DIR` or else the executable's own directory.
     #[arg(long)]
     pub dir: Option<PathBuf>,
     /// Write the configuration and exit instead of starting the executor.
@@ -76,6 +76,22 @@ pub fn no_args_start(dir: &Path, interactive: bool) -> NoArgs {
             CONFIG_FILE,
             dir.display()
         ))
+    }
+}
+
+/// Environment variable naming the directory a start without arguments and `setup` use instead of the executable's own (a
+/// container's volume, where the executable's directory is part of the read-only image).
+pub const DIR_ENV: &str = "KOB_EXECUTOR_DIR";
+
+/// The directory of the configuration: `$KOB_EXECUTOR_DIR` when set, else the executable's directory.
+pub fn home_dir() -> Result<PathBuf> {
+    home_dir_from(std::env::var_os(DIR_ENV))
+}
+
+fn home_dir_from(env: Option<std::ffi::OsString>) -> Result<PathBuf> {
+    match env.filter(|d| !d.is_empty()) {
+        Some(d) => Ok(PathBuf::from(d)),
+        None => exe_dir(),
     }
 }
 
@@ -730,6 +746,13 @@ mod tests {
         std::fs::write(d.path().join(CONFIG_FILE), "").unwrap();
         assert_eq!(no_args_start(d.path(), true), NoArgs::Launch(d.path().join(CONFIG_FILE)));
         assert_eq!(no_args_start(d.path(), false), NoArgs::Launch(d.path().join(CONFIG_FILE)));
+    }
+
+    #[test]
+    fn the_directory_is_the_environments_or_the_executables() {
+        assert_eq!(home_dir_from(Some("/data".into())).unwrap(), PathBuf::from("/data"));
+        assert_eq!(home_dir_from(Some("".into())).unwrap(), exe_dir().unwrap());
+        assert_eq!(home_dir_from(None).unwrap(), exe_dir().unwrap());
     }
 
     #[test]

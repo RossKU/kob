@@ -153,7 +153,7 @@ checks that each binary refuses the other network. `scripts/package-release.mjs`
 release job attaches the four archives and a `SHA256SUMS` of them to a **draft** release of the tag: add the output of
 `scripts/release-hashes.sh` (above, with the binaries of the archives) to its notes, then publish it. `workflow_dispatch`
 runs the same builds as a dry run that only uploads workflow artifacts. Nothing is code-signed; no container image is
-published.
+published (the repository's `Dockerfile` builds one from the source for operators who want a container, quickstart 6).
 
 ## 7. Upgrade order: indexers before wallets
 

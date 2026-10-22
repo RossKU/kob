@@ -56,6 +56,7 @@ step-by-step page is `docs/ops/executor-quickstart.md`.
 * **Status line**: `run` and `index` log `status: ...` every `--status-secs` (60; 0 off): the indexer's state and lag,
   the transactions sent and final, the profit of the final ones, the funds, and a `WARNING:` list (node not synced or
   unreachable, paused, waiting for the indexer, funds below `--low-funds-kas`, rejections).
+* `KOB_EXECUTOR_DIR` names another directory than the executable's for both (the `Dockerfile` sets `/data`, its volume).
 * Nothing connects anywhere but to the configured node: no telemetry, no fee, no project server, no auto-update.
 
 ---

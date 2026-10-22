@@ -31,7 +31,7 @@ use tracing_subscriber::EnvFilter;
     name = "kob-executor",
     version = kob_protocol::VERSION,
     about = "KOB executor: indexer, matcher, keepers and x402 facilitator",
-    after_help = "Without arguments: runs kob-executor.toml from the executable's directory, or the setup when there is none."
+    after_help = "Without arguments: runs kob-executor.toml from the executable's directory ($KOB_EXECUTOR_DIR when set), or the setup when there is none."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -83,17 +83,17 @@ fn start(argv: Vec<OsString>) -> anyhow::Result<()> {
         if let Cmd::Setup(a) = &cli.cmd {
             let dir = match &a.dir {
                 Some(d) => d.clone(),
-                None => setup::exe_dir()?,
+                None => setup::home_dir()?,
             };
             return setup_then_launch(&rt, program, dir, a.no_start);
         }
         return rt.block_on(dispatch(cli.cmd));
     }
-    let dir = setup::exe_dir()?;
+    let dir = setup::home_dir()?;
     match setup::no_args_start(&dir, std::io::stdin().is_terminal()) {
         NoArgs::Launch(cfg) => launch(&rt, program, &cfg),
         NoArgs::Setup => {
-            println!("No {} next to {}: starting the setup.", setup::CONFIG_FILE, dir.display());
+            println!("No {} in {}: starting the setup.", setup::CONFIG_FILE, dir.display());
             println!();
             setup_then_launch(&rt, program, dir, false)
         }

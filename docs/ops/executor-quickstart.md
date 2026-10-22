@@ -156,6 +156,23 @@ WantedBy=multi-user.target
 (`LoadCredential=` hands the key to the process without making the file readable by the service account; the user `kob`
 owns `/opt/kob/kob-data`.) The hardened unit of the operations guide is `docs/ops/executor.md`, A.3.
 
+**Docker (Linux)**: the repository's `Dockerfile` builds the executor of one network from the source (pinned base images, a
+non-root user, uid 10001). The volume `/data` holds the configuration, the key file and the data directory
+(`KOB_EXECUTOR_DIR=/data` in the image: the directory of the setup and of a start without arguments); the setup runs in the
+container once, then the container runs what it wrote:
+
+```
+docker build --build-arg NETWORK=mainnet -t kob-executor:mainnet .      # or NETWORK=testnet-10
+sudo install -d -o 10001 -g 10001 -m 0700 /srv/kob
+docker run -it --rm --network host -v /srv/kob:/data kob-executor:mainnet setup --no-start
+docker run -d --name kob --restart unless-stopped --network host -v /srv/kob:/data kob-executor:mainnet
+docker logs -f kob                                                       # the status lines
+```
+
+`--network host` lets the container reach the node's loopback RPC and keeps the read API on the host's loopback. Pause with
+`touch /srv/kob/kob-data/pause` (as uid 10001 or root), stop with `docker stop kob`. No image is published: build it from
+the commit you verified.
+
 ## 7. Upgrade
 
 Stop the executor, replace `kob-executor` (and `kob-cli`) with the new release's files, start it again. The configuration,

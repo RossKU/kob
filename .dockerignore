@@ -1,0 +1,16 @@
+# The build context of the Dockerfile: the workspace sources only. Build outputs, node modules and local state stay out, and
+# so does anything that could be a secret (an operator key, a configuration, an environment file).
+.git
+target
+research
+**/node_modules
+web/dist
+tools/soak/run
+crates/kob-wasm/pkg*
+argent/upstream
+**/*.key
+**/*.pem
+**/.env
+**/.env.*
+**/kob-executor.toml
+**/kob-data
