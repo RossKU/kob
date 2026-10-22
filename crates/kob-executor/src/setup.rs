@@ -197,7 +197,8 @@ impl SetupFile {
 /// The token list of a build that pins no registry (testnet-10): the programs of the embedded registry for `network`, with
 /// no token entries (the mainnet entries name mainnet tokens). A registry document with templates makes the allowlist open:
 /// every order of a supported program is listed (docs/ops/executor.md, *Token allowlist*), as the mainnet build lists with
-/// its embedded registry. Without any list nothing would be listed.
+/// its embedded registry. That is KOB's no-curation policy: no token is listed by name and none refused for what it is (a
+/// bare list of chosen tokens would be a listing decision). Without any list nothing would be listed.
 pub fn program_registry(network: &str) -> Result<String> {
     let mut v: serde_json::Value = serde_json::from_str(kob_protocol::registry::DEFAULT_REGISTRY_JSON)?;
     let o = v.as_object_mut().ok_or_else(|| anyhow!("the embedded registry is not an object"))?;

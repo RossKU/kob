@@ -193,7 +193,7 @@ impl Indexer {
             lag_alarm_hours: self.cfg.lag_alarm_hours.clone(),
         };
         st.validate().map_err(IndexerError::Config)?;
-        if let Some(w) = self.cfg.api.loopback_without_trusted_proxy() {
+        if let Some(w) = self.cfg.api.proxy_warning() {
             tracing::warn!("{w}");
         }
         Ok(st)

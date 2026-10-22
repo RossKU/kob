@@ -49,7 +49,9 @@ step-by-step page is `docs/ops/executor-quickstart.md`.
   existing key file is offered again and never replaced; the secret is never printed); it shows the address, waits for at
   least 100 KAS (Enter skips) and asks for the x402 facilitator (off by default). A build without a pinned registry
   (testnet-10) also gets `kob-tokens.json`: the embedded registry's programs for its network and no token entries, so every
-  order of a supported program is listed (B 4, *Token allowlist*).
+  order of a supported program is listed (B 4, *Token allowlist*). This is the no-curation policy, not a convenience: KOB lists
+  no token by name and refuses none for what it is, exactly as the mainnet build lists with its pinned registry; the mainnet
+  token entries are left out because they name mainnet covenant ids (facts that do not exist on testnet-10).
 * **`kob-executor.toml`** is an ordinary `--config` file (B 4) plus the `[launch]` table (`role = "run" | "index"`,
   `key_file`, `pause_file`, `x402_config`, `args`); other commands given it as `--config` ignore `[launch]`. Paths are
   relative to the file.
@@ -1130,9 +1132,11 @@ global_burst = 1000
 **Behind a reverse proxy.** The per-client limits (`rate_limit`, `max_connections_per_ip`, `max_ws_per_ip`) key a client
 by the address it connects from; a proxy's forwarded-client header is believed only from `trusted_proxies`. With a proxy
 on the same host and `listen` on loopback, list the loopback address (`["127.0.0.1"]`, `["::1"]`), or every client arrives
-as 127.0.0.1 and all of them share one client's limits; the indexer warns at start when it listens on loopback with no
-trusted proxy. A proxy or CDN elsewhere: `listen` on the address it reaches and its egress ranges in `trusted_proxies`
-(only those ranges, never a whole private network the proxy is not in).
+as 127.0.0.1 and all of them share one client's limits. A proxy or CDN elsewhere: `listen` on the address it reaches and
+its egress ranges in `trusted_proxies` (only those ranges, never a whole private network the proxy is not in). The indexer
+warns at start when it listens on an address other hosts can reach (not loopback) with no trusted proxy. A loopback
+listener without one is not warned about: it is the default (and what `kob-executor setup` writes), where only this host's
+own programs connect and one shared set of limits is right; with a proxy in front of it, list the proxy as above.
 
 Flags of note: `--reorg-window-hours` (default 12, consensus finality), `--no-record-log` (disables
 the permanent record log: then a lost or outdated database can only be rebuilt from what the node

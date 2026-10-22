@@ -141,17 +141,19 @@ pub struct ApiConfig {
 }
 
 impl ApiConfig {
-    /// A warning for a listener on a loopback address with no trusted proxy: behind a reverse proxy on the same host every
-    /// client then arrives from the loopback address and shares one set of per-client limits (rate, connections,
-    /// WebSockets). `None` otherwise.
-    pub fn loopback_without_trusted_proxy(&self) -> Option<String> {
-        (self.enabled && self.listen.ip().is_loopback() && self.trusted_proxies.is_empty()).then(|| {
+    /// A warning for a listener other hosts can reach with no trusted proxy: a reverse proxy or CDN in front of it makes every
+    /// client arrive from the proxy's address, so all of them share one set of per-client limits (rate, connections,
+    /// WebSockets) until `trusted_proxies` names the proxy. `None` for a loopback listener (the default, and what
+    /// `kob-executor setup` writes): only this host's own programs reach it, a person's browser and tools, for whom one shared
+    /// set of limits is right; an operator who puts a proxy in front of it on the same host lists it as the guide says
+    /// (docs/ops/executor.md, Part B, 4). `None` with the API off or a trusted proxy configured.
+    pub fn proxy_warning(&self) -> Option<String> {
+        (self.enabled && !self.listen.ip().is_loopback() && self.trusted_proxies.is_empty()).then(|| {
             format!(
-                "the read API listens on {} with no trusted_proxies: behind a reverse proxy on this host every client shares the \
-                 per-client limits of {}; set api.trusted_proxies = [\"{}\"] (docs/ops/executor.md, Part B, 4)",
-                self.listen,
-                self.listen.ip(),
-                self.listen.ip()
+                "the read API listens on {}, reachable from other hosts, with no trusted_proxies: behind a reverse proxy or CDN \
+                 every client shares the per-client limits of the proxy's address; list its addresses in api.trusted_proxies \
+                 (docs/ops/executor.md, Part B, 4)",
+                self.listen
             )
         })
     }
@@ -633,20 +635,23 @@ url = \"wss://b\"
     }
 
     #[test]
-    fn a_loopback_listener_without_a_trusted_proxy_is_warned_about() {
+    fn only_a_listener_other_hosts_reach_is_warned_about_without_a_trusted_proxy() {
+        // loopback (the default and the setup's): only this host's programs reach it, no warning
         let mut a = ApiConfig::default();
-        let w = a.loopback_without_trusted_proxy().expect("default: loopback, no proxy");
-        assert!(w.contains("trusted_proxies = [\"127.0.0.1\"]"), "{w}");
-        a.trusted_proxies = vec!["127.0.0.1".into()];
-        assert_eq!(a.loopback_without_trusted_proxy(), None);
-        a.trusted_proxies.clear();
+        assert_eq!(a.proxy_warning(), None);
         a.listen = "[::1]:8090".parse().unwrap();
-        assert!(a.loopback_without_trusted_proxy().unwrap().contains("[\"::1\"]"));
-        a.listen = "0.0.0.0:8090".parse().unwrap();
-        assert_eq!(a.loopback_without_trusted_proxy(), None);
-        a.listen = "127.0.0.1:8090".parse().unwrap();
+        assert_eq!(a.proxy_warning(), None);
+        // reachable from other hosts: warned until a trusted proxy is named
+        for listen in ["0.0.0.0:8090", "[::]:8090", "192.168.1.10:8090", "203.0.113.5:443"] {
+            a.listen = listen.parse().unwrap();
+            let w = a.proxy_warning().unwrap_or_else(|| panic!("{listen}: no warning"));
+            assert!(w.contains(listen) && w.contains("api.trusted_proxies"), "{w}");
+        }
+        a.trusted_proxies = vec!["10.0.0.0/8".into()];
+        assert_eq!(a.proxy_warning(), None);
+        a.trusted_proxies.clear();
         a.enabled = false;
-        assert_eq!(a.loopback_without_trusted_proxy(), None);
+        assert_eq!(a.proxy_warning(), None);
     }
 
     /// The example configuration of docs/ops/executor.md (Part B, 4) parses, and its API sits behind a proxy it trusts.
@@ -660,6 +665,6 @@ url = \"wss://b\"
         let c: IndexerConfig = toml::from_str(&body[open..close]).expect("the example parses");
         assert!(c.api.listen.ip().is_loopback());
         assert_eq!(c.api.trusted_proxies, vec!["127.0.0.1".to_string()]);
-        assert_eq!(c.api.loopback_without_trusted_proxy(), None);
+        assert_eq!(c.api.proxy_warning(), None);
     }
 }

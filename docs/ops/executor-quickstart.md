@@ -86,6 +86,12 @@ It then writes `kob-executor.toml` next to the program (plus `kob-tokens.json`, 
 testnet-10; the mainnet binary carries its pinned registry), prints the command line the file stands for, and starts the
 executor. From then on, a double-click runs that configuration directly.
 
+**Which tokens it lists.** Every order of a token program the binary supports, whatever the token. KOB makes no listing
+decision: the registry is a pinned snapshot of facts and of the supported programs, no token is listed by name and none is
+refused for what it is (curation belongs to the community token lists a user chooses). `kob-tokens.json` is that program
+list for testnet-10 (with no token entries: the registry's entries name mainnet tokens); the mainnet binary lists the same way
+from the registry it embeds. A list of your own (`tokens_path` in `kob-executor.toml`) is your policy, not KOB's.
+
 **The key is a hot key.** The executor signs with it unattended. Keep only working capital on it (a few days of fees and
 carriers), never savings. Back up `kob-operator.key` somewhere only you can read: whoever has the file has the funds, and
 without it they are lost.
