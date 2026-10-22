@@ -103,7 +103,9 @@ and `GET /v1/tokens` reports `registry.source` and `registry.sha256` either way)
 The web bundle carries no network-dependent code (the browser build is the slim kob-wasm variant: no x402
 payer entry point); its defaults are `network: mainnet` and `./registry/tokens.json`, which `npm run build:release`
 ships in `dist/registry/` (the pinned file; a plain `npm run build` leaves the registry to the host). A hosting
-operator may set `config.json` next to the app (`indexerUrl`, `nodeUrl`, ...).
+operator may set `config.json` next to the app (`indexerUrl`, `nodeUrl`, ...). The project's own hosting (Cloudflare Pages from
+`.github/workflows/deploy-pages.yml`, config from repository variables, post-deploy header and hash check, rollback) is
+`docs/ops/web-hosting.md`; its public read server (`kob-executor index` behind Cloudflare Tunnel) is `docs/ops/chart-server.md`.
 
 ## 5. Tests before tagging
 

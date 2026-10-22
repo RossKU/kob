@@ -1640,7 +1640,8 @@ socket address is the proxy, so all users would share one bucket. Set `trusted_p
 proxy/CDN egress ranges; requests from those peers are keyed by `client_ip_header` (for
 `x-forwarded-for` the right-most address that is not itself a trusted proxy, so client-supplied
 left-most entries cannot spoof). Requests from any other peer ignore the header. IPv6 clients are
-keyed by /64. An invalid `trusted_proxies` entry fails startup.
+keyed by /64. An invalid `trusted_proxies` entry fails startup. Behind Cloudflare Tunnel (cloudflared on the same host),
+with CORS for a web app served from another origin: `docs/ops/chart-server.md`.
 
 Put a CDN or reverse proxy (TLS, caching of `GET /v1/books/*` for a second or two) in front, bind the
 indexer to loopback, and never point the API at the node.

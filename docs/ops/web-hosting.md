@@ -1,0 +1,154 @@
+# Hosting the web app on Cloudflare Pages
+
+The web app (`web/`) is static files: HTML, JavaScript, CSS and two wasm modules. This page publishes it on Cloudflare Pages
+(free plan) from this repository with `.github/workflows/deploy-pages.yml`, or by hand from a PC. The data it shows comes from an
+indexer (`kob-executor index`; running one for the public: `docs/ops/chart-server.md`) and from Kaspa nodes.
+
+Why Pages and not GitHub Pages: GitHub Pages may not be used for sites "primarily directed at facilitating commercial
+transactions", and it cannot send the security headers of `web/public/_headers` (Content-Security-Policy with
+`frame-ancestors 'none'`, `X-Frame-Options: DENY`, the signer page's own policy). Pages reads `_headers` from the upload.
+
+## 1. Cloudflare account and Pages project
+
+1. Create a Cloudflare account (free plan) at https://dash.cloudflare.com/sign-up and verify the e-mail address.
+2. Note the **Account ID**: dashboard, *Workers & Pages*, right-hand column (or the URL `dash.cloudflare.com/<account id>/...`).
+3. Create the Pages project as a **Direct Upload** project (not "Connect to Git": Cloudflare's build image cannot build the app,
+   which needs Rust and wasm-bindgen; GitHub Actions builds it and uploads the result). From a PC with Node 22:
+
+   ```
+   npx wrangler login
+   npx wrangler pages project create kob-web --production-branch=main
+   ```
+
+   `kob-web` is an example name (lower-case letters, digits and `-`): the app is then served at `https://kob-web.pages.dev`.
+   In the dashboard instead: *Workers & Pages* > *Create* > *Pages* > *Upload assets*, name the project, upload any small folder
+   (the first real deployment replaces it). Check the production branch under the project's *Settings* (`main` for a project
+   created as above); the workflow must upload to that branch name (variable `KOB_PAGES_BRANCH`, default `main`), otherwise the
+   upload becomes a preview and the workflow fails.
+4. Do **not** enable Web Analytics for the project, and keep the features that rewrite pages off in a custom domain's zone
+   (Rocket Loader, Email Address Obfuscation, Automatic HTTPS Rewrites): the app sends no telemetry, and the post-deploy check
+   fails when a served file differs from the build.
+
+## 2. API token
+
+*My Profile* > *API Tokens* > *Create Token* > *Create Custom Token*:
+
+* Name: `kob-pages-deploy`
+* Permissions: **Account** > **Cloudflare Pages** > **Edit** (nothing else)
+* Account Resources: *Include* > your account
+* Optional: an expiry date, and *Client IP Address Filtering* left empty (GitHub's runners have no fixed addresses)
+
+Copy the token once; Cloudflare does not show it again. It can deploy and delete Pages projects of the account and nothing
+else. Revoke it on the same page if it leaks.
+
+## 3. GitHub secrets and variables
+
+Repository *Settings* > *Secrets and variables* > *Actions*.
+
+**Secrets** (tab *Secrets*):
+
+| Name | Value |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | the token of section 2 |
+| `CLOUDFLARE_ACCOUNT_ID` | the Account ID of section 1 |
+
+**Variables** (tab *Variables*; not secrets: they end up in the public `config.json`):
+
+| Name | Required | Value |
+|---|---|---|
+| `KOB_PAGES_PROJECT` | yes | the Pages project name, e.g. `kob-web` |
+| `KOB_PAGES_INDEXER_URL` | yes | the indexer the app reads, `https://...` (e.g. `https://chart.example.org`, `docs/ops/chart-server.md`) |
+| `KOB_PAGES_NETWORK` | no | `testnet-10` (default) or `mainnet` |
+| `KOB_PAGES_EXTRA_INDEXER_URLS` | no | further indexers to cross-check against, comma-separated `https://` URLs, at most 4 |
+| `KOB_PAGES_NODE_URL` | no | a `wss://` wRPC node; empty (default) = public Kaspa nodes through the SDK resolver |
+| `KOB_PAGES_EXPLORER_URL` | no | block explorer base, `https://...`; empty = kaspa.stream of the network |
+| `KOB_PAGES_BRANCH` | no | the project's production branch, default `main` |
+
+Every URL must be `https://` (a node `wss://`) on a public host, without user name, password, query or fragment: the page is
+served over https, so a browser refuses `http://` and `ws://` from it, and `config.json` is public (never put an API key in a
+URL). `web/scripts/pages-config.mjs` checks this before anything is built and fails the run with every problem listed.
+
+**Until the two secrets and the two required variables are set, the workflow does nothing**: job `config` writes "Cloudflare
+Pages deploy skipped" and what is missing into the run's summary, and job `deploy` is skipped. CI stays green (forks too).
+
+## 4. What the workflow does
+
+On a push to `master` that changes `web/` or an input of the app (kob-wasm, kob-protocol, contracts, registry, the toolchain), and
+on *Actions* > *deploy-pages* > *Run workflow*:
+
+1. builds and tests the app exactly as the `web` job of `ci.yml` (kob-wasm slim bindings, the pinned kaspa-wasm SDK,
+   typecheck, unit tests, `npm run build:release`, `scripts/release-hashes.sh`, the mock e2e suite);
+2. writes `web/dist/config.json` from the variables; on `testnet-10` also `web/dist/registry/tokens.json` as the supported
+   token programs with no token entries (the shipped registry names mainnet tokens; it is the same list `kob-executor setup`
+   writes as `kob-tokens.json`), on `mainnet` the pinned registry of `build:release` stays;
+3. uploads `web/dist` with Cloudflare's wrangler action (pinned by commit, wrangler version pinned) to the production branch;
+4. writes the deployment URL, `config.json`, the sha256 of every deployed file and the output of `scripts/release-hashes.sh`
+   into the run's summary;
+5. checks the live deployment (`web/scripts/check-pages.mjs`): `/` sends the app's Content-Security-Policy (with
+   `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`;
+   `/signer.html` and `/signer` send the signer's own policy and `X-Frame-Options: SAMEORIGIN`, never the app's; `/assets/*`
+   sends `Access-Control-Allow-Origin: *`; every built file is served byte for byte. Any failure fails the run.
+
+One deployment runs at a time; a newer push cancels an older run. The job has read access to the repository only.
+
+The deployment does not set `quoteTokens` (no token is marked as a dollar) and keeps the scheme-only `connect-src` of
+`_headers`: with the public resolver the node is any public Kaspa node, and users may point the app at another indexer in
+Settings, so the hosts cannot be pinned (README, *Deployment headers*).
+
+## 5. Custom domain
+
+Pages project > *Custom domains* > *Set up a custom domain*, e.g. `kob.example.org`. With the domain's DNS on Cloudflare the
+record is created for you; elsewhere add a `CNAME kob.example.org -> kob-web.pages.dev` at your DNS provider. The certificate
+is issued automatically (minutes). `_headers` applies to the custom domain as to `*.pages.dev`. Check it (section 7) with the
+custom domain as the URL.
+
+## 6. Deploying by hand from a PC
+
+The same result without GitHub Actions (Node 22, the Rust toolchain of `rust-toolchain.toml`, Git Bash on Windows):
+
+```
+cd web && npm ci && npm run fetch-sdk && cd ..
+bash scripts/build-wasm.sh --install-bindgen --web --slim
+cd web && npm run build:wasm -- --copy && npm run typecheck && npm test && npm run build:release && cd ..
+bash scripts/release-hashes.sh                       # the record reproduces, the bundle ships the pinned registry
+
+# config.json (PowerShell: $env:KOB_PAGES_INDEXER_URL = 'https://chart.example.org'; ...)
+export KOB_PAGES_NETWORK=testnet-10 KOB_PAGES_INDEXER_URL=https://chart.example.org
+node web/scripts/pages-config.mjs --dist web/dist
+
+npx wrangler pages deploy web/dist --project-name kob-web --branch main
+node web/scripts/check-pages.mjs https://kob-web.pages.dev --dist web/dist
+```
+
+Deploy only from a clean checkout of a pushed commit (`git status` clean), so the files match what anyone can rebuild.
+
+## 7. Checking a deployment
+
+* Headers and files: `node web/scripts/check-pages.mjs <url> --dist web/dist` (the build of the same commit, with the same
+  `config.json`). Without `--dist` it checks the headers only.
+* By hand: `curl -sI https://kob-web.pages.dev/` shows `content-security-policy: ... frame-ancestors 'none'` and
+  `x-frame-options: DENY`; `curl -sIL https://kob-web.pages.dev/signer.html` ends with the signer policy
+  (`sandbox allow-scripts; frame-ancestors 'self'`) and `x-frame-options: SAMEORIGIN`.
+* Hashes: the run's summary lists the sha256 of every deployed file; anyone can rebuild the commit and compare (`ci.yml` job
+  `reproducible` checks that the bundle does not depend on the build directory). `curl -s https://kob-web.pages.dev/config.json`
+  shows the configuration in force.
+
+## 8. Rolling back
+
+Pages keeps every deployment. Pages project > *Deployments* > the older production deployment > *...* > *Rollback to this
+deployment*: it serves at once, with that deployment's files and `config.json`. The next push to `master` deploys again; to
+stay on the old version, revert the commit (or clear `KOB_PAGES_PROJECT`, which makes the workflow skip). The list from a PC:
+`npx wrangler pages deployment list --project-name kob-web`.
+
+## 9. Neutrality rules for whoever hosts the app
+
+* **No fee.** The hosted app adds no fee, tip or surcharge to any order beyond what the user sets in the ticket.
+* **No ranking, no curation.** No token, market, indexer or executor is promoted, hidden, labelled "verified" or ordered by
+  anything but the app's own neutral columns. `quoteTokens` and `home` are not used to favour a token.
+* **No default routing to an executor.** The app talks to an indexer (read only) and to Kaspa nodes; orders are covenants on
+  chain that any executor may fill. The deployment names no executor, matcher or facilitator, and the host runs none.
+* **Several indexers welcome.** `KOB_PAGES_EXTRA_INDEXER_URLS` should list independent third-party indexers when they exist;
+  the app cross-checks them and says "single indexer, not cross-checked" otherwise. Users can choose their own in Settings.
+* **No telemetry.** No analytics, no tracking scripts, no Cloudflare Web Analytics.
+* **Risk disclosure stays.** The app's warnings and disclosures (token powers, unverified genesis, look-alike tickers, the
+  order disclosure before signing) are never removed or softened by a deployment.

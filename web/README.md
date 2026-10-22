@@ -213,6 +213,9 @@ After connect the adapters listen for account and network changes (`WalletAdapte
 
 ## Deployment headers
 
+Hosting the app on Cloudflare Pages (the `deploy-pages` workflow, the `config.json` it writes, the post-deploy header and hash check, rollback, the
+neutrality rules): `docs/ops/web-hosting.md`; a public indexer for it behind Cloudflare Tunnel: `docs/ops/chart-server.md`.
+
 The build embeds a strict Content-Security-Policy as a `<meta>` (`csp.mjs`); `public/_headers` (Netlify / Cloudflare Pages format) sends the same policy as a
 real header plus `frame-ancestors 'none'` (a `<meta>` cannot express it), `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`. Other hosts must set the
 same headers (nginx: `add_header Content-Security-Policy "..." always;`, value = `CSP_HEADER` of `csp.mjs`). The node and indexer are user-configurable, so the
