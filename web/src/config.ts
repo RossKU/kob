@@ -19,7 +19,7 @@ export interface AppConfig {
   /** REST + WebSocket base of the indexer, e.g. `https://kob.example/`; '' = no indexer (orders/book unavailable) */
   indexerUrl: string;
   /**
-   * further indexers the key facts of a token (standing, powers, best prices) are cross-checked against (config.json / `__KOB_CONFIG__`, or a
+   * further indexers the key facts of a token (powers, market price scale, best prices) are cross-checked against (config.json / `__KOB_CONFIG__`, or a
    * stored setting, which every page then names in a banner; a link must not add verifiers). Empty = a single indexer, unverified.
    */
   extraIndexerUrls: string[];

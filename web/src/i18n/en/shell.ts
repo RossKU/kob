@@ -102,7 +102,7 @@ export default {
   'shell.banner.storedSettings': 'Settings',
   'shell.indexers.none': 'No indexer is configured.',
   'shell.indexers.single': 'Single indexer: token, power and price answers are not cross-checked. Add extraIndexerUrls in config.json to compare.',
-  'shell.indexers.multi': '{count} indexers configured: token standing, powers and best prices are cross-checked and a disagreement is shown.',
+  'shell.indexers.multi': '{count} indexers configured: token powers, market price scales and best prices are cross-checked and a disagreement is shown.',
   'shell.indexers.badge.none': 'no indexer',
   'shell.indexers.badge.single': 'single indexer, not cross-checked',
   'shell.indexers.badge.multi': 'cross-checked',

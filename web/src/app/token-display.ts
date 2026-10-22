@@ -1,8 +1,8 @@
 // How a token is SHOWN (never how it is traded or verified): its amounts in whole tokens and its name, also for a token the registry does not list
 // (founder decision 2026-10-17: never "base units" in front of a user). The FACTS (name, ticker, decimals) come from the chain first (founder
 // decision 2026-10-19: KOB holds no authoritative token-metadata database): the token's KCC-23 declaration, verified against its covenant id
-// (data/token-declarations.ts). The registry is curation (the official badge, anti-impersonation) and a pinned snapshot of the facts: where it and
-// the declaration disagree on a fact, the on-chain value is shown and the disagreement is flagged (`declarationConflicts`), never silently resolved
+// (data/token-declarations.ts). The registry is a pinned snapshot of the facts, not curation (KOB makes no per-token judgement; curation belongs to
+// external community lists the user chooses): where it and the declaration disagree on a fact, the on-chain value is shown and the disagreement is flagged (`declarationConflicts`), never silently resolved
 // for the registry; trading such a token waits until they agree when the decimals differ (app/env.ts). Without a declaration (a token created
 // before KCC-23: its id cannot commit to one) the order is as before: the registry; else this browser's issuance of it (data/issued-decimals.ts:
 // decimals, ticker and name the issuer chose); else the exponent of the price scale its orders use (`scale`, 10^decimals: what the market page and
@@ -59,7 +59,7 @@ export function displayToken(registry: Pick<TokenRegistry, 'byCovenantId'>, netw
 function base(id: Hex, ticker: string, name: string, decimals: number): TokenInfo {
   return {
     ticker, name, family: 'kcc20', covenantId: id, templateId: '', templateHash: '', extensionCommitment: null, extensionClass: 'other',
-    decimals, tick: null, status: 'listed', display: null, capabilities: [], program: null, templateMatchesPinned: false, prefixLen: 0, suffixLen: 0,
+    decimals, tick: null, display: null, capabilities: [], program: null, templateMatchesPinned: false, prefixLen: 0, suffixLen: 0,
     slots: { inputs: 0, outputs: 0 }, tradable: false, untradableReason: null, json: {} as TokenInfo['json'],
   };
 }

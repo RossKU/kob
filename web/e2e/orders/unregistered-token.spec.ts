@@ -11,7 +11,7 @@ const SHORT = '83838383…83838383';
 
 async function seedToken(mock: Parameters<typeof openOrders>[1]): Promise<string> {
   await mock.seed({
-    tokens: [{ ticker: '', covenant_id: ID, program: 'KCC20Ref', template_id: 'KCC20Ref', extension_commitment: 'ee'.repeat(32), standing: 'unverified', powers: [], decimals: null, order_scale: 100_000_000 }],
+    tokens: [{ ticker: '', covenant_id: ID, program: 'KCC20Ref', template_id: 'KCC20Ref', extension_commitment: 'ee'.repeat(32), powers: [], decimals: null, order_scale: 100_000_000 }],
     // the founder's sell order: 45,000 tokens (8 decimals) at 10 KAS each
     orders: [{ token: ID, side: 'ask', maker: 'alice', amount: '4500000000000', price: 1_000_000_000 }],
   });

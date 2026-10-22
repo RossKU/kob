@@ -459,7 +459,7 @@ describe('tamper tests: every way of making the wallet sign something else is a 
 });
 
 describe('the token an order pins must be the registered token', () => {
-  it('a token pin that differs from the registry (template, extension commitment) is blocking; unlisted (delisted / unknown) tokens warn', () => {
+  it('a token pin that differs from the registry (template, extension commitment) is blocking; tokens this build cannot trade (unknown, or a program it does not support for trading) warn', () => {
     // golden 8x8 order trades the 7070.. covenant as a KCC20Ref_8x8 token, but the registry lists 7070.. as the 3x3 reference program
     const wrongProgram = decode(buildGolden('create.ask.8x8.x402'));
     expect(blockingCodes(wrongProgram)).toContain('order-token-mismatch');
@@ -471,13 +471,14 @@ describe('the token an order pins must be the registered token', () => {
     const otherExt = reg((d) => { d.tokens[0].extension_commitment = 'dd'.repeat(32); });
     expect(blockingCodes(decode(buildGolden('create.ask'), { registry: otherExt }))).toEqual(['order-token-mismatch']);
     expect(blockingCodes(decode(buildGolden('create.bid'), { registry: otherExt }))).toEqual(['order-token-mismatch']);
-    // a pending-review, unverified entry on a reviewed template is tradable (open token list): no unlisted warning, no more strict than an open-list token
-    const pending = reg((d) => { d.tokens[0].status = 'pending-review'; d.tokens[0].verified = false; });
+    // an unverified entry on a reviewed template is tradable (open token list): no unlisted warning, no more strict than an open-list token
+    const pending = reg((d) => { d.tokens[0].verified = false; });
     const bid = decode(buildGolden('create.bid'), { registry: pending });
     expect(bid.blocking).toEqual([]);
     expect(bid.warnings.map((w) => w.code)).toEqual([]);
-    const delisted = reg((d) => { d.tokens[0].status = 'delisted'; });
-    expect(decode(buildGolden('create.bid'), { registry: delisted }).warnings.map((w) => w.code)).toEqual(['token-unlisted']); // even though no token moves in a bid
+    // only the program decides: a program this build does not support for trading (pending review) is not tradable here
+    const unsupported = reg((d) => { d.templates.find((t: { id: string }) => t.id === 'kcc20-ref-3x3').review_status = 'pending-review'; });
+    expect(decode(buildGolden('create.bid'), { registry: unsupported }).warnings.map((w) => w.code)).toEqual(['token-unlisted']); // even though no token moves in a bid
     const unknown = decode(buildGolden('create.ask'), { registry: reg((d) => { d.tokens = [d.tokens[1]]; }) });
     expect(unknown.warnings.map((w) => w.code)).toEqual(['token-unlisted']); // once, not per output
   });

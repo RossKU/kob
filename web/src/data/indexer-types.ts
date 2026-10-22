@@ -25,8 +25,6 @@ export interface HealthView {
   alarms?: unknown[];
 }
 
-/** The executor's standing of a token (API field). The UI acts only on `delisted` (not traded); `official` / `unverified` are not shown. */
-export type TokenStanding = 'official' | 'unverified' | 'delisted';
 /** Capabilities of a token's program template that can act on holders or supply. `freeze` and `seize` put escrowed orders at the issuer's discretion. */
 export type TokenPower = 'mint-authority' | 'public-mint' | 'burn' | 'freeze' | 'seize' | 'blacklist';
 
@@ -46,8 +44,6 @@ export interface IndexerTokenView {
   decimals: number | null;
   open_asks: number;
   open_bids: number;
-  /** `GET /v1/tokens` of an executor with the registry; absent on older ones (treated as `unverified`) */
-  standing?: TokenStanding;
   /** template capabilities (empty for most tokens); unknown values are dropped by the client */
   powers?: string[];
   /** the audited program template of the token, null when unknown */

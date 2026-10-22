@@ -1,5 +1,5 @@
-// Open-list tokens: every token whose program is on KOB's strict template list is listed by the executor, whether or not the registry has an
-// entry for it (`GET /v1/tokens`: `standing: unverified`, `ticker: ""`, no scale, no decimals). To trade one from the web app a TokenInfo is
+// Open-list tokens: every token whose program is one this build supports for trading (the strict template list) is listed by the executor, whether
+// or not the registry has an entry for it (`GET /v1/tokens`: `ticker: ""`, no scale, no decimals). To trade one from the web app a TokenInfo is
 // synthesised from what the chain and the indexer show, with the conservative conventions below. Nothing here vouches for the token: the
 // caller shows the long covenant id and a note on base units next to every order, and the pre-sign screen re-derives the rest.
 //
@@ -177,7 +177,7 @@ export function synthesizeOpenToken(
   const shownName = opts.declared?.name || opts.issued?.name || shownTicker;
   const json = {
     ticker: label, name: label, family, covenant_id: id, template_id: templateId, extension_commitment: ext, extension_class: 'other' as const,
-    decimals, tick: 1, status: 'listed' as const, verified: false,
+    decimals, tick: 1, verified: false,
   };
   try {
     toTokenMarket(kob, json); // the same checks a registry token passes (keeper tips, embedded program)
@@ -191,7 +191,7 @@ export function synthesizeOpenToken(
     ok: true,
     info: {
       ticker: shownTicker, name: shownName, family, covenantId: id, templateId, templateHash: tpl.hash, extensionCommitment: ext, extensionClass: 'other', decimals,
-      tick: 1n, status: 'listed', capabilities, display: null, openList: true, openScale: entered !== null ? 'entered' : declaredScale !== null ? 'declared' : 'orders', program,
+      tick: 1n, capabilities, display: null, openList: true, openScale: entered !== null ? 'entered' : declaredScale !== null ? 'declared' : 'orders', program,
       templateMatchesPinned: true, prefixLen: tpl.prefixLen, suffixLen: tpl.suffixLen, slots: { inputs: tpl.tokenSlots[0], outputs: tpl.tokenSlots[1] },
       tradable: true, untradableReason: null, json,
       ...(family === 'kcc20' && ext ? { extension: checkExtension(ext, opts.fromHoldings ? 'holdings' : view.extension_commitment ? 'indexer' : 'orders', references) } : {}),
@@ -260,7 +260,7 @@ export function heldTokenView(
     ok: true,
     view: {
       ticker: '', covenant_id: id, template_hash: tpl.hash, extension_commitment: [...exts][0]!, scale: null, decimals: null, open_asks: 0, open_bids: 0,
-      standing: 'unverified', powers: [], template_id: templateId, family: 'kcc20',
+      powers: [], template_id: templateId, family: 'kcc20',
     },
   };
 }

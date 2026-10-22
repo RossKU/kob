@@ -37,7 +37,7 @@ export const DEFAULT_MID = 2_500_000;
 
 /**
  * An OPEN-LIST token as the executor serves it: a program on the strict template list, no registry entry (empty ticker, no decimals, so no
- * standard scale), `standing: unverified`, `template_id` = the program name. Its seeded orders quote at `order_scale` (1000 base units) and are
+ * standard scale), `template_id` = the program name. Its seeded orders quote at `order_scale` (1000 base units) and are
  * the only source of its scale.
  */
 export function openListTokenSpec(over = {}) {
@@ -47,7 +47,6 @@ export function openListTokenSpec(over = {}) {
     program: 'KCC20Ref_8x8',
     template_id: 'KCC20Ref_8x8',
     extension_commitment: 'ee'.repeat(32),
-    standing: 'unverified',
     powers: [],
     decimals: null,
     order_scale: 1000,

@@ -68,7 +68,7 @@ describe('i18n key usage', () => {
     family('shell.health', HEALTH_CODES);
     family('shell.banner', HEALTH_CODES.filter((c) => !['ok', 'loading', 'not-configured', 'unreachable'].includes(c)));
     family('market.reason', UNTRADABLE_REASONS);
-    family('market.badge', ['delisted', 'untradable', 'issuerControl']);
+    family('market.badge', ['untradable', 'issuerControl']);
     family('market.power', KNOWN_POWERS);
     family('market.open', ['program-unknown', 'no-scale', 'no-extension', 'scale-invalid']);
     family('market.live', ['live', 'polling', 'off', 'liveHint', 'pollingHint', 'offHint']);

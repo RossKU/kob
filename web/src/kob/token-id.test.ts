@@ -30,7 +30,7 @@ describe('covenant id forms', () => {
 });
 
 describe('shared tickers', () => {
-  const view = (id: string, ticker: string): IndexerTokenView => ({ covenant_id: id, ticker, standing: 'unverified', open_asks: 1, open_bids: 0 }) as unknown as IndexerTokenView;
+  const view = (id: string, ticker: string): IndexerTokenView => ({ covenant_id: id, ticker, open_asks: 1, open_bids: 0 }) as unknown as IndexerTokenView;
   const a = `abcd${'11'.repeat(28)}ef01`;
   const b = `abcd${'22'.repeat(28)}ef01`;
   const c = 'cd'.repeat(32);

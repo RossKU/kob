@@ -1,6 +1,7 @@
 // Token facts from the chain: KCC-23 declarations (docs/spec/token-metadata.md). A token created under KCC-23 recorded its name, ticker and
 // decimals in its preparation transaction, and its covenant id commits to them. KOB holds no authoritative token-metadata database (founder
-// decision 2026-10-19): the facts come from the chain, curation (the official badge, anti-impersonation) from the registry list. So:
+// decision 2026-10-19): the facts come from the chain, the registry is only a pinned snapshot of them, and curation (anti-impersonation, logos)
+// belongs to external community lists the user chooses, never to KOB. So:
 //
 //   * a declaration arrives as a launch proof from anyone (the indexer's `GET /v1/tokens/{id}/declaration`, this browser's own creation, any
 //     list) and is used only after kob-wasm `verifyLaunchProof` recomputed both transaction ids and the covenant id, and only for the covenant id

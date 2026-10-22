@@ -58,7 +58,7 @@ export default {
   'ticket.wait.pair': 'the pair book and your coins',
   'ticket.untradable.title': '{ticker} cannot be traded in this app',
   'ticket.untradable.generic': 'This token is not tradable in this version.',
-  'ticket.untradable.hint': 'Balances and orders stay visible. Trading needs a reviewed token program built into this app.',
+  'ticket.untradable.hint': 'Balances and orders stay visible. Trading needs a token program this build supports.',
 
   'ticket.type.label': 'Order type',
   'ticket.group.basic': 'Basic',

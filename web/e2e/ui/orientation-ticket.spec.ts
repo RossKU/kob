@@ -121,7 +121,6 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
     const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
     for (const t of reg.templates) t.review_status = 'reviewed';
     const exkcc = reg.tokens.find((t: { ticker: string }) => t.ticker === 'EXKCC');
-    exkcc.status = 'listed';
     exkcc.verified = true;
     reg.tokens.push({ ...exkcc, ticker: 'EXUSD', name: 'Example USD (fictional)', covenant_id: QUOTE, decimals: 6, display: { description: 'Fictional USD reference of the e2e mock.' } });
     await page.route('**/registry/tokens.json', (route) =>
@@ -171,7 +170,6 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
     const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
     for (const t of reg.templates) t.review_status = 'reviewed';
     const exkcc = reg.tokens.find((t: { ticker: string }) => t.ticker === 'EXKCC');
-    exkcc.status = 'listed';
     exkcc.verified = true;
     reg.tokens.push({ ...exkcc, ticker: 'EXUSD', name: 'Example USD (fictional)', covenant_id: QUOTE, decimals: 6, display: { description: 'Fictional USD reference of the e2e mock.' } });
     await page.route('**/registry/tokens.json', (route) =>

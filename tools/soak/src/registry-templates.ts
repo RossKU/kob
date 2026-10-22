@@ -143,7 +143,6 @@ export function externalRegistryToken(t: ExternalTokenConfig): Record<string, un
     decimals: t.decimals,
     max_token_inputs: tpl.max_token_inputs,
     max_token_outputs: tpl.max_token_outputs,
-    status: 'listed',
     verified: true,
     display: { description: t.description ?? `${t.ticker}: a token issued outside the soak (${tpl.id}).` },
   };

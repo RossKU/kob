@@ -426,14 +426,15 @@ describe('registry entry', () => {
     }
   }
 
-  it('is a pending-review, unverified entry of the shape of registry/tokens.schema.json', () => {
+  it('is the token facts in the shape of a registry/tokens.schema.json entry: unverified, no listing status', () => {
     const plan = planIssue(kob, form({ description: 'A test token', website: 'https://example.org', icon: 'ipfs://bafy' }), opts());
     const entry = registryEntryFromIssue(plan.token, plan.docs);
     expect(entry).toMatchObject({
       ticker: 'TEST', name: 'Test Token', family: 'kcc20', covenant_id: plan.token.covenantId, template_id: 'kcc20-ref-3x3',
       extension_commitment: '00'.repeat(32), extension_class: 'fixed-supply-standard', decimals: 8,
-      max_token_inputs: 3, max_token_outputs: 3, status: 'pending-review', verified: false,
+      max_token_inputs: 3, max_token_outputs: 3, verified: false,
     });
+    expect(entry).not.toHaveProperty('status');
     expect(entry.display).toMatchObject({ description: 'A test token', website: 'https://example.org', icon: 'ipfs://bafy' });
     // the declaration as made on chain (KOB's fields; facts the chain states itself, like the supply, are not declared again)
     expect(entry.display!.kcc23).toEqual({ name: 'Test Token', symbol: 'TEST', decimals: 8, description: 'A test token', logo: 'ipfs://bafy', website: 'https://example.org' });

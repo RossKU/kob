@@ -3,7 +3,7 @@ import {
   RegistryError, displayName, hasBadChar, normalizeTicker, parseRegistry, sanitizeUntrusted, tokenById, tokenMarketInput, tradableTokens,
   verifyIndexerToken, verifyTokenUtxo, type ChainTokenUtxo, type RegistryIssueCode, type TokenRegistry,
 } from './registry';
-import { exampleRegistryJson, officialGenesis, placeGolden, shippedRegistryJson, TOKEN, tradableRegistryJson } from '../testing/chain-fixtures';
+import { cleanGenesis, exampleRegistryJson, placeGolden, shippedRegistryJson, TOKEN, tradableRegistryJson } from '../testing/chain-fixtures';
 import { loadKobNode } from './wasm.node';
 import { synthesizeOpenToken } from './open-token';
 import type { IndexerTokenView } from '../data/indexer-types';
@@ -21,25 +21,21 @@ const codes = (doc: unknown, network?: string): RegistryIssueCode[] => {
   return [];
 };
 
-/** A genesis record that found no live mint authority (what official needs besides genesis_verified). */
-const GENESIS = officialGenesis().genesis;
+/** A genesis record that found no live mint authority. */
+const GENESIS = cleanGenesis().genesis;
 
 describe('shipped registries', () => {
-  it('the shipped mainnet registry parses: the census KRON tokens listed after the listing verification, official except the two test tokens, five programs (four pinned and matching this wasm build)', () => {
+  it('the shipped mainnet registry parses: the census KRON tokens with their genesis facts and no per-token judgement, six programs (matching this wasm build)', () => {
     const r = parse(shippedRegistryJson(), 'mainnet');
     expect(r.network).toBe('mainnet');
     expect(r.tokens.length).toBe(8);
-    // listing verification (registry/evidence/mainnet-genesis.json, `kob registry verify-genesis`): genesis verified (C1), no live minter (C2)
-    expect(r.tokens.every((t) => t.family === 'kron' && t.status === 'listed' && t.json.verified && t.json.genesis_verified === true)).toBe(true);
-    // founder 2026-10-03: PEPE ("The Ultimate test") and DNBT ("dont buy this is test") are test tokens per their own names: verified, listed, NOT official,
-    // with a maintainer warning (PEPE: also not the well-known PEPE); the other six are official without a warning
-    expect(r.tokens.filter((t) => !t.json.official).map((t) => t.ticker)).toEqual(['PEPE', 'DNBT']);
-    for (const t of r.tokens) {
-      if (t.json.official) expect(t.json.warning, t.ticker).toBeUndefined();
-      else expect(t.json.warning, t.ticker).toMatch(/^Not official: a test token per its own name/);
-    }
+    // the genesis facts (registry/evidence/mainnet-genesis.json, `kob registry verify-genesis`): genesis verified (C1), no live minter (C2)
+    expect(r.tokens.every((t) => t.family === 'kron' && t.json.verified && t.json.genesis_verified === true)).toBe(true);
+    // founder 2026-10-19: KOB makes no per-token judgement: no entry carries a listing status, an official flag or a maintainer warning
+    const rawTokens = JSON.parse(shippedRegistryJson()).tokens as Record<string, unknown>[];
+    for (const k of ['status', 'official', 'warning']) expect(rawTokens.filter((t) => k in t).map((t) => t.ticker), k).toEqual([]);
+    expect(rawTokens.some((t) => /\b(listed|official)\b/i.test(JSON.stringify(t.display ?? {})))).toBe(false);
     const pepe = r.tokens.find((t) => t.ticker === 'PEPE')!;
-    expect(pepe.json.warning).toContain('well-known PEPE');
     expect(displayName(pepe)).toBe('PEPE (a73c…47cd)');
     const raw = JSON.parse(shippedRegistryJson());
     expect(raw.tokens.every((t: { genesis?: { live_minters?: string[]; minter_outputs: number[] } }) => t.genesis?.live_minters?.length === 0 && t.genesis.minter_outputs.length === 0)).toBe(true);
@@ -65,10 +61,10 @@ describe('shipped registries', () => {
     expect([pm.prefix_len, pm.state_len, pm.suffix_len, pm.max_token_inputs, pm.review_status]).toEqual([34, 112, 3885, 3, 'reviewed']);
   });
 
-  it('the example TN10 registry parses; its pending, unverified tokens are tradable (their templates are reviewed and pinned)', () => {
+  it('the example TN10 registry parses; its unverified tokens are tradable (their templates are reviewed and pinned)', () => {
     const r = parse(exampleRegistryJson(), 'testnet-10');
     expect(r.tokens.map((t) => t.ticker)).toEqual(['EXKCC', 'EXKRON']);
-    expect(r.tokens.every((t) => t.status === 'pending-review' && !t.json.verified)).toBe(true);
+    expect(r.tokens.every((t) => !t.json.verified)).toBe(true);
     expect(r.tokens.map((t) => t.untradableReason)).toEqual([null, null]);
     expect(tradableTokens(r).map((t) => t.ticker)).toEqual(['EXKCC', 'EXKRON']);
   });
@@ -85,8 +81,8 @@ describe('shipped registries', () => {
   });
 });
 
-describe('tradability (listing verified against the pinned templates)', () => {
-  it('a listed, verified token on a reviewed, pinned program is tradable and maps to its kob-wasm program', () => {
+describe('tradability (the program allowlist, verified against the pinned templates)', () => {
+  it('a token on a reviewed, pinned program is tradable and maps to its kob-wasm program', () => {
     const r = parse(tradableRegistryJson(), 'testnet-10');
     const tst = tokenById(r, TOKEN.covenantId)!;
     expect(tst).toMatchObject({ tradable: true, untradableReason: null, program: 'KCC20Ref', tick: null, decimals: 3, slots: { inputs: 3, outputs: 3 } });
@@ -95,56 +91,59 @@ describe('tradability (listing verified against the pinned templates)', () => {
     expect(tokenById(r, '80'.repeat(32))!.slots).toEqual({ inputs: 8, outputs: 8 });
   });
 
-  it('a reviewed-less template makes listed tokens impossible (validation) and its pending-review tokens viewable but not tradable (the template gates, not the token)', () => {
+  it('a template this build does not support for trading (pending review) makes its tokens viewable but not tradable (the program gates, not the token)', () => {
     const doc = tradableRegistryJson();
     doc.templates[0].review_status = 'pending-review';
-    expect(codes(doc)).toContain('not-listable');
-    doc.tokens[0].status = 'pending-review';
-    doc.tokens[0].verified = true;
+    expect(codes(doc)).toEqual([]);
     const r = parse(doc);
     expect(tokenById(r, TOKEN.covenantId)).toMatchObject({ tradable: false, untradableReason: 'template-pending-review' });
   });
 
-  it('a pending-review, unverified entry on a reviewed template is tradable (open token list); only delisted and template problems block', () => {
+  it('an unverified entry on a reviewed template is tradable (open token list); only template problems block', () => {
     const doc = tradableRegistryJson();
-    doc.tokens[0].status = 'pending-review';
     doc.tokens[0].verified = false;
-    doc.tokens[1].status = 'delisted';
     const r = parse(doc);
-    expect(r.tokens.map((t) => t.untradableReason)).toEqual([null, 'delisted']);
-    expect(r.tokens.map((t) => t.tradable)).toEqual([true, false]);
-    expect(tokenById(r, TOKEN.covenantId)).toMatchObject({ status: 'pending-review', program: 'KCC20Ref', tick: null });
-    // listed but unverified (an entry the maintainers have not checked against chain yet) is no stricter
-    const doc2 = tradableRegistryJson();
-    doc2.tokens[0].verified = false;
-    expect(codes(doc2)).toContain('not-listable'); // a LISTED status still requires verification: the schema rule is unchanged
-    doc2.tokens[0].status = 'pending-review';
-    expect(tokenById(parse(doc2), TOKEN.covenantId)!.tradable).toBe(true);
+    expect(r.tokens.map((t) => t.untradableReason)).toEqual([null, null]);
+    expect(r.tokens.map((t) => t.tradable)).toEqual([true, true]);
+    expect(tokenById(r, TOKEN.covenantId)).toMatchObject({ program: 'KCC20Ref', tick: null });
+    // the per-token judgements KOB no longer makes, in a registry of the older shape: read and ignored, never honoured (any value, any type):
+    // a `delisted`, official or warned token is tradable exactly as without them, and nothing of them reaches the token info
+    const plain = parse(tradableRegistryJson());
+    const legacy = (over: Record<string, unknown>) => {
+      const old = tradableRegistryJson();
+      Object.assign(old.tokens[1], over);
+      return old;
+    };
+    for (const over of [{ status: 'delisted' }, { status: 'pending-review', official: true, warning: 'not the real one' }, { status: 7, official: 'yes', warning: '' }]) {
+      expect(codes(legacy(over)), JSON.stringify(over)).toEqual([]);
+      const r2 = parse(legacy(over));
+      const strip = (t: (typeof r2.tokens)[number]) => ({ ...t, json: undefined });
+      expect(r2.tokens.map(strip), JSON.stringify(over)).toEqual(plain.tokens.map(strip));
+      expect(r2.tokens[1]).not.toHaveProperty('status');
+    }
     // the template checks still block
     const doc3 = tradableRegistryJson();
-    doc3.tokens[0].status = 'pending-review';
     doc3.tokens[0].verified = false;
     doc3.templates[0].template_hash = 'ab'.repeat(32);
     expect(tokenById(parse(doc3), TOKEN.covenantId)).toMatchObject({ tradable: false, untradableReason: 'template-mismatch' });
-    // protocol v3 has no lots and no price tick: an entry without the registry's legacy lot size or tick is tradable and LISTABLE (the scale
-    // comes from its decimals); a legacy value is read and ignored (registry.rs), never validated
+    // protocol v3 has no lots and no price tick: an entry without the registry's legacy lot size or tick is tradable (the scale comes from its
+    // decimals); a legacy value is read and ignored (registry.rs), never validated
     const doc4 = tradableRegistryJson();
     doc4.tokens[0].lot_size = null;
     doc4.tokens[0].tick = null;
-    expect(tokenById(parse(doc4), TOKEN.covenantId)).toMatchObject({ status: 'listed', tradable: true, untradableReason: null, tick: null });
+    expect(tokenById(parse(doc4), TOKEN.covenantId)).toMatchObject({ tradable: true, untradableReason: null, tick: null });
     const doc5 = tradableRegistryJson();
     delete doc5.tokens[0].lot_size;
     delete doc5.tokens[0].tick;
-    expect(tokenById(parse(doc5), TOKEN.covenantId)).toMatchObject({ status: 'listed', tradable: true, tick: null });
+    expect(tokenById(parse(doc5), TOKEN.covenantId)).toMatchObject({ tradable: true, tick: null });
     const doc6 = tradableRegistryJson();
     doc6.tokens[0].lot_size = 0;
     doc6.tokens[0].tick = -5;
     expect(tokenById(parse(doc6), TOKEN.covenantId)).toMatchObject({ tradable: true, tick: null });
   });
 
-  it('a pending-review, unverified registry entry is treated exactly like the open-list token of the same program (tradable, unverified, not official)', () => {
+  it('an unverified registry entry is treated exactly like the open-list token of the same program (tradable)', () => {
     const doc = tradableRegistryJson();
-    doc.tokens[0].status = 'pending-review';
     doc.tokens[0].verified = false;
     const entry = tokenById(parse(doc), TOKEN.covenantId)!;
     const open = synthesizeOpenToken(kob, { covenant_id: entry.covenantId, template_hash: entry.templateHash, extension_commitment: entry.extensionCommitment } as any, [{ scale: 1000 }], null, null);
@@ -196,12 +195,12 @@ describe('tradability (listing verified against the pinned templates)', () => {
     expect(codes(doc)).not.toContain('template-invalid');
   });
 
-  it('kron templates are supported: a listed, verified token on a reviewed kron template is tradable', () => {
+  it('kron templates are supported: a verified token on a reviewed kron template is tradable', () => {
     const doc = tradableRegistryJson();
     for (const t of doc.templates) if (t.id === 'kron-2433') t.review_status = 'reviewed';
     doc.tokens.push({
       ticker: 'KRONX', name: 'Kron example', family: 'kron', covenant_id: '90'.repeat(32), template_id: 'kron-2433', extension_commitment: null, extension_class: 'none',
-      decimals: 8, lot_size: 1000000, tick: 100, status: 'listed', verified: true,
+      decimals: 8, lot_size: 1000000, tick: 100, verified: true,
     });
     const r = parse(doc);
     expect(tokenById(r, '90'.repeat(32))).toMatchObject({ tradable: true, untradableReason: null, program: 'KronToken2433', family: 'kron' });
@@ -287,13 +286,10 @@ describe('validation (mirror of the Rust rules)', () => {
       ['kcc20 without extension', (d) => { d.tokens[0].extension_commitment = null; }, 'extension'],
       ['none class with a commitment', (d) => { d.tokens[0].extension_class = 'none'; }, 'extension'],
       ['slot limits differ from the template', (d) => { d.tokens[0].max_token_inputs = 5; }, 'slot-limit-mismatch'],
-      ['listed without verification', (d) => { d.tokens[0].verified = false; }, 'not-listable'],
+      ['genesis_verified without verification', (d) => { d.tokens[0].verified = false; d.tokens[0].genesis_verified = true; }, 'genesis'],
       ['kcc20 escrow scheme', (d) => { d.templates[0].escrow.owner_scheme = 0; }, 'template-invalid'],
       ['unknown capability', (d) => { d.templates[0].capabilities = ['teleport']; }, 'template-invalid'],
       ['duplicate capability', (d) => { d.templates[0].capabilities = ['burn', 'burn']; }, 'template-invalid'],
-      ['official without verification', (d) => { d.tokens[0].official = true; d.tokens[0].verified = false; }, 'not-listable'],
-      ['official but not listed', (d) => { d.tokens[0].official = true; d.tokens[0].status = 'pending-review'; }, 'not-listable'],
-      ['official is a boolean', (d) => { d.tokens[0].official = 'yes'; }, 'wrong-type'],
     ];
     for (const [name, mutate, code] of cases) {
       const doc = clone(base());
@@ -305,7 +301,6 @@ describe('validation (mirror of the Rust rules)', () => {
   it('reads template capabilities: powers reach the token info; the display name carries no state', () => {
     const doc = clone(base());
     doc.templates[0].capabilities = ['freeze', 'seize'];
-    doc.tokens[0].official = true;
     doc.tokens[0].genesis_verified = true;
     doc.tokens[0].genesis = GENESIS;
     const r = parse(doc);
@@ -447,55 +442,50 @@ describe('on-chain verification', () => {
   });
 });
 
-describe('registry genesis record (C1 / C2) and the official rule', () => {
+describe('registry genesis record (C1 / C2)', () => {
   const doc = (over: Record<string, unknown>) => {
     const raw = clone(tradableRegistryJson());
     Object.assign(raw.tokens[0], { genesis_verified: true, genesis: clone(GENESIS) }, over);
     return raw;
   };
-  it('official needs genesis_verified and a genesis record that found no live mint authority', () => {
-    expect(codes(doc({ official: true }))).toEqual([]);
-    expect(codes(doc({ official: true, genesis_verified: undefined, genesis: undefined }))).toEqual(['not-listable', 'not-listable']);
-    expect(codes(doc({ official: true, genesis: { ...GENESIS, live_minters: undefined } }))).toEqual(['not-listable']);
-    const live = { ...GENESIS, live_minters: ['cd'.repeat(32) + ':3'] };
-    expect(codes(doc({ official: true, genesis: live, warning: 'active mint authority' }))).toEqual(['not-listable']);
-    // a live minter needs a warning; listed without official is fine with it
-    expect(codes(doc({ genesis: live }))).toEqual(['wrong-type']);
-    expect(codes(doc({ genesis: live, warning: 'active mint authority: the issuer can mint without limit' }))).toEqual([]);
+  it('a record is a set of facts: with or without live mint authorities, undetermined liveness, or none at all, the entry is valid', () => {
+    expect(codes(doc({}))).toEqual([]);
+    expect(codes(doc({ genesis_verified: undefined, genesis: undefined }))).toEqual([]);
+    expect(codes(doc({ genesis: { ...GENESIS, live_minters: undefined } }))).toEqual([]);
+    // a live minter is a fact the API reports as the warning `live_mint_authority` (derived, never maintainer text)
+    expect(codes(doc({ genesis: { ...GENESIS, live_minters: ['cd'.repeat(32) + ':3'] } }))).toEqual([]);
   });
   it('checks the record shape', () => {
     const bad: [string, Record<string, unknown>, RegistryIssueCode][] = [
       ['record without genesis_verified', { genesis_verified: undefined }, 'wrong-type'],
-      ['genesis_verified without verified', { verified: false, status: 'pending-review' }, 'not-listable'],
+      ['genesis_verified without verified', { verified: false }, 'genesis'],
       ['bad txid', { genesis: { ...GENESIS, txid: 'AB'.repeat(32) } }, 'bad-hex'],
       ['unordered outputs', { genesis: { ...GENESIS, outputs: [2, 1] } }, 'wrong-type'],
       ['no outputs', { genesis: { ...GENESIS, outputs: [] } }, 'wrong-type'],
       ['minter not a genesis output', { genesis: { ...GENESIS, minter_outputs: [7] } }, 'wrong-type'],
       ['negative supply', { genesis: { ...GENESIS, supply: -1 } }, 'wrong-type'],
       ['empty source', { genesis: { ...GENESIS, source: '' } }, 'wrong-type'],
-      ['bad outpoint', { genesis: { ...GENESIS, live_minters: ['xyz:1'] }, warning: 'w' }, 'wrong-type'],
+      ['bad outpoint', { genesis: { ...GENESIS, live_minters: ['xyz:1'] } }, 'wrong-type'],
       ['unknown field', { genesis: { ...GENESIS, extra: 1 } }, 'unknown-field'],
     ];
     for (const [name, over, code] of bad) expect(codes(doc(over)), name).toContain(code);
   });
 });
 
-describe('registry file fields of the contracts review: genesis_verified and warning (optional, validated, not shown by the UI)', () => {
+describe('registry file field of the contracts review: genesis_verified (optional, validated, not shown by the UI)', () => {
   const base = (over: Record<string, unknown>) => {
     const raw = JSON.parse(JSON.stringify(tradableRegistryJson()));
     Object.assign(raw.tokens[0], over);
     return raw;
   };
-  it('are optional: a registry without them parses', () => {
+  it('is optional: a registry without it parses', () => {
     const reg = parseRegistry(tradableRegistryJson(), { kob });
     expect(reg.tokens[0].json.genesis_verified).toBeUndefined();
-    expect(reg.tokens[0].json.warning).toBeUndefined();
   });
-  it('are kept in the entry json when present and type-checked', () => {
-    const reg = parseRegistry(base({ genesis_verified: true, warning: 'genesis checked by hand' }), { kob });
-    expect(reg.tokens[0].json).toMatchObject({ genesis_verified: true, warning: 'genesis checked by hand' });
+  it('is kept in the entry json when present and type-checked; a legacy maintainer warning is read and ignored, whatever it holds', () => {
+    const reg = parseRegistry(base({ genesis_verified: true }), { kob });
+    expect(reg.tokens[0].json).toMatchObject({ genesis_verified: true });
     expect(() => parseRegistry(base({ genesis_verified: 'yes' }), { kob })).toThrow(/genesis_verified must be a boolean/);
-    expect(() => parseRegistry(base({ warning: '' }), { kob })).toThrow(/warning must be/);
-    expect(() => parseRegistry(base({ warning: 'a\u202eb' }), { kob })).toThrow(/warning must be/);
+    for (const warning of ['genesis checked by hand', '', 'a\u202eb']) expect(parseRegistry(base({ warning }), { kob }).tokens[0].tradable).toBe(true);
   });
 });

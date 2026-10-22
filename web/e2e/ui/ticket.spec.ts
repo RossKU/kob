@@ -20,7 +20,6 @@ async function listExkcc(page: Page) {
   for (const t of reg.templates) t.review_status = 'reviewed';
   for (const tk of reg.tokens) {
     if (tk.ticker === 'EXKCC') {
-      tk.status = 'listed';
       tk.verified = true;
     }
   }

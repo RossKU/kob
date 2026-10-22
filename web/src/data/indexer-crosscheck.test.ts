@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { compareFacts, crossCheckIndexers, indexerTrust, type IndexerFacts } from './indexer-crosscheck';
 
-const facts = (over: Partial<IndexerFacts> = {}): IndexerFacts => ({ token: { standing: 'unverified', powers: [] }, bestAsk: 250_000_000n, bestBid: 245_000_000n, ...over });
+const facts = (over: Partial<IndexerFacts> = {}): IndexerFacts => ({ token: { powers: [] }, bestAsk: 250_000_000n, bestBid: 245_000_000n, ...over });
 const ID = 'aa'.repeat(32);
-const api = (o: { standing?: string; powers?: string[]; ask?: string; bid?: string; listed?: boolean; fail?: boolean }) =>
+const api = (o: { powers?: string[]; ask?: string; bid?: string; listed?: boolean; fail?: boolean }) =>
   ({
     tokens: async () => {
       if (o.fail) throw new Error('down');
-      return o.listed === false ? [] : [{ ticker: 'X', covenant_id: ID, standing: o.standing ?? 'unverified', powers: o.powers ?? [], open_asks: 1, open_bids: 1 }];
+      return o.listed === false ? [] : [{ ticker: 'X', covenant_id: ID, powers: o.powers ?? [], open_asks: 1, open_bids: 1 }];
     },
     book: async () => ({
       token: ID,
@@ -23,14 +23,13 @@ describe('compareFacts', () => {
     expect(compareFacts(facts(), facts(), 'b')).toEqual([]);
     expect(compareFacts(facts(), facts({ bestAsk: 251_000_000n }), 'b')).toEqual([]);
   });
-  it('a different standing, powers, best ask / bid or a missing token is a finding', () => {
-    expect(compareFacts(facts(), facts({ token: { standing: 'official', powers: [] } }), 'b').map((f) => f.code)).toEqual(['standing-differs']);
-    expect(compareFacts(facts(), facts({ token: { standing: 'unverified', powers: ['freeze'] } }), 'b').map((f) => f.code)).toEqual(['powers-differ']);
+  it('different powers, best ask / bid or a missing token is a finding', () => {
+    expect(compareFacts(facts(), facts({ token: { powers: ['freeze'] } }), 'b').map((f) => f.code)).toEqual(['powers-differ']);
     expect(compareFacts(facts(), facts({ bestAsk: 2_500_000_000n, bestBid: null }), 'b').map((f) => f.code)).toEqual(['best-ask-differs', 'best-bid-differs']);
     expect(compareFacts(facts(), facts({ token: null }), 'b').map((f) => f.code)).toEqual(['token-missing']);
   });
   it('the scale of the market of an open-list token (it sets the price scale of new orders) differs: a finding; one indexer not reporting it: none', () => {
-    const t = (marketScale?: number | null) => facts({ token: { standing: 'unverified', powers: [], ...(marketScale !== undefined ? { marketScale } : {}) } });
+    const t = (marketScale?: number | null) => facts({ token: { powers: [], ...(marketScale !== undefined ? { marketScale } : {}) } });
     expect(compareFacts(t(1_000_000), t(100), 'b')).toEqual([{ code: 'market-scale-differs', other: 'b', primary: '1000000', otherValue: '100' }]);
     expect(compareFacts(t(1000), t(null), 'b').map((f) => f.code)).toEqual(['market-scale-differs']);
     expect(compareFacts(t(1000), t(1000), 'b')).toEqual([]);
@@ -39,12 +38,12 @@ describe('compareFacts', () => {
 });
 
 describe('crossCheckIndexers', () => {
-  it('a lying primary (official + no powers + 10x price) is caught by an honest second indexer', async () => {
-    const liar = api({ standing: 'official', powers: [], ask: '2500000000', bid: '2450000000' });
-    const honest = { label: 'https://b.example', api: api({ standing: 'unverified', powers: ['freeze'], ask: '250000000', bid: '245000000' }) };
+  it('a lying primary (no powers + 10x price) is caught by an honest second indexer', async () => {
+    const liar = api({ powers: [], ask: '2500000000', bid: '2450000000' });
+    const honest = { label: 'https://b.example', api: api({ powers: ['freeze'], ask: '250000000', bid: '245000000' }) };
     const r = await crossCheckIndexers(liar, [honest], ID);
     expect(r.checked).toBe(1);
-    expect(r.findings.map((f) => f.code).sort()).toEqual(['best-ask-differs', 'best-bid-differs', 'powers-differ', 'standing-differs']);
+    expect(r.findings.map((f) => f.code).sort()).toEqual(['best-ask-differs', 'best-bid-differs', 'powers-differ']);
     expect(r.findings.every((f) => f.other === 'https://b.example')).toBe(true);
   });
   it('agreeing indexers give no finding; an unreachable verifier is reported, never counted as agreement', async () => {

@@ -21,13 +21,13 @@ export class Skip extends Error {}
 // ------------------------------------------------------------------------------------------------ registry
 
 /**
- * A TEST registry: the templates of registry/tokens.example.json (marked reviewed, as the mock e2e does) plus the issued tokens as `listed`.
+ * A TEST registry: the templates of registry/tokens.example.json (marked reviewed, as the mock e2e does) plus the issued tokens, `verified`.
  * The entries are the ones the issuance screen produced (`issue-registry-entry`), so template id, extension commitment and decimals are the app's.
  */
 export function buildTestRegistry(entries) {
   const reg = JSON.parse(readFileSync(join(REPO_ROOT, 'registry', 'tokens.example.json'), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';
-  reg.tokens = entries.filter(Boolean).map((e) => ({ ...e, status: 'listed', verified: true }));
+  reg.tokens = entries.filter(Boolean).map((e) => ({ ...e, verified: true }));
   return reg;
 }
 

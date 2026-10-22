@@ -146,18 +146,19 @@ describe('indexer REST', () => {
     expect(opt.headers.get('access-control-allow-origin')).toBe('*');
   });
 
-  it('serves the registry standing of tokens: standing, powers, template_id, family, and an empty ticker for a token outside the registry', async () => {
+  it('serves the facts of tokens: powers, template_id, family, and an empty ticker for a token outside the registry; no per-token standing', async () => {
     const t0 = (await get('/v1/tokens')).body.tokens[0];
-    expect(t0).toMatchObject({ standing: 'unverified', powers: [], template_id: 'kcc20-ref-8x8', family: 'kcc20' });
+    expect(t0).toMatchObject({ powers: [], template_id: 'kcc20-ref-8x8', family: 'kcc20' });
+    expect(t0).not.toHaveProperty('standing');
     await post('/mock/seed', {
       tokens: [
-        { ticker: 'OFFI', covenant_id: 'ab'.repeat(32), decimals: 2, standing: 'official', template_id: 'kcc20-ref-8x8' },
+        { ticker: 'OFFI', covenant_id: 'ab'.repeat(32), decimals: 2, template_id: 'kcc20-ref-8x8' },
         { ticker: '', covenant_id: 'cd'.repeat(32), decimals: 2, powers: ['freeze', 'seize'], template_id: 'kcc20-ref-8x8' },
       ],
     });
     const list = (await get('/v1/tokens')).body.tokens;
-    expect(list.find((x: any) => x.covenant_id === 'ab'.repeat(32))).toMatchObject({ ticker: 'OFFI', standing: 'official', powers: [], template_id: 'kcc20-ref-8x8' });
-    expect(list.find((x: any) => x.covenant_id === 'cd'.repeat(32))).toMatchObject({ ticker: '', standing: 'unverified', powers: ['freeze', 'seize'] });
+    expect(list.find((x: any) => x.covenant_id === 'ab'.repeat(32))).toMatchObject({ ticker: 'OFFI', powers: [], template_id: 'kcc20-ref-8x8' });
+    expect(list.find((x: any) => x.covenant_id === 'cd'.repeat(32))).toMatchObject({ ticker: '', powers: ['freeze', 'seize'] });
   });
 
   it('a possibly frozen order is flagged on the order, dropped from the book and its counts, and clears again', async () => {
@@ -187,7 +188,7 @@ describe('indexer REST', () => {
   it('serves an open-list token (no registry entry, no decimals): no standard scale, its orders quote at their own scale', async () => {
     await post('/mock/seed', { open_token: true });
     const row = (await get('/v1/tokens')).body.tokens.find((x: any) => x.covenant_id === '0f'.repeat(32));
-    expect(row).toMatchObject({ ticker: '', standing: 'unverified', powers: [], template_id: 'KCC20Ref_8x8', scale: null, decimals: null, family: 'kcc20' });
+    expect(row).toMatchObject({ ticker: '', powers: [], template_id: 'KCC20Ref_8x8', scale: null, decimals: null, family: 'kcc20' });
     // the scale of its market (its earliest order's, open or ended); a registry token's row has none (its `scale` is the market's)
     expect(row.market_scale).toBe(1000);
     expect((await get('/v1/tokens')).body.tokens.find((x: any) => x.covenant_id === EXKCC).market_scale).toBeNull();

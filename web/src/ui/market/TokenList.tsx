@@ -40,7 +40,7 @@ function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
     try {
       const found = (await indexer.tokens()).find((x) => x.covenant_id === id);
       if (!found) setMessage({ tone: 'error', text: t('market.add.notFound'), page: routeToHash(tokenRoute(id)) });
-      else if (!tradableHere({ source: 'indexer', info: null, index: found, delisted: found.standing === 'delisted' }, kob.templates())) setMessage({ tone: 'error', text: t('market.add.untradable') });
+      else if (!tradableHere({ source: 'indexer', info: null, index: found }, kob.templates())) setMessage({ tone: 'error', text: t('market.add.untradable') });
       else {
         props.onFound(found);
         setMessage({ tone: 'info', text: t('market.add.found') });

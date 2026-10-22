@@ -40,7 +40,7 @@ export function marketFor(p: DisplayedPair): { route: Route; inverted: boolean |
 export interface AssetChoice {
   /** `kas` or the covenant id */
   value: AssetId;
-  /** the drop-down entry (tokens: ticker, short id and standing) */
+  /** the drop-down entry (tokens: ticker and short id) */
   label: string;
   /** what the closed selector shows */
   short: string;

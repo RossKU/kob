@@ -87,7 +87,7 @@ describe('declarations: verified before use', () => {
   });
 });
 
-describe('declarations in the display (facts from the chain first, the registry is curation)', () => {
+describe('declarations in the display (facts from the chain first, the registry is a pinned snapshot of them)', () => {
   const reg = (entry: Partial<TokenInfo> & { covenantId: string }) => ({ byCovenantId: new Map([[entry.covenantId, { ticker: 'DECL', name: 'Declared Coin', decimals: 2, ...entry } as TokenInfo]]) });
 
   it('an unlisted token is shown on its declaration, marked as declared on chain', () => {
@@ -121,7 +121,7 @@ describe('declarations in the display (facts from the chain first, the registry 
     const kcc = kob.templates().find((t) => t.name === 'KCC20Ref')!;
     const view = (over: Partial<IndexerTokenView> = {}): IndexerTokenView => ({
       ticker: '', covenant_id: 'ab'.repeat(32), template_hash: kcc.hash, extension_commitment: '00'.repeat(32), scale: null, decimals: null, open_asks: 0, open_bids: 0,
-      standing: 'unverified', powers: [], ...over,
+      powers: [], ...over,
     });
     const declared = { decimals: 4, symbol: 'OPEN', name: 'Open Coin' };
     // no order yet: the declaration sets the scale, no entered decimals needed
@@ -148,7 +148,7 @@ describe('a declared token in the market list, the selector and the title', () =
   const kcc = () => kob.templates().find((t) => t.name === 'KCC20Ref')!;
   const view = (id: string, over: Partial<IndexerTokenView> = {}): IndexerTokenView => ({
     ticker: '', covenant_id: id, template_hash: kcc().hash, extension_commitment: '00'.repeat(32), scale: null, decimals: null, open_asks: 0, open_bids: 0,
-    standing: 'unverified', powers: [], declaration: true, ...over,
+    powers: [], declaration: true, ...over,
   });
   const registry = { tokens: [], templates: [], byCovenantId: new Map() } as unknown as Parameters<typeof buildTokenRows>[0];
 

@@ -80,7 +80,7 @@ describe('finding catalogues are found in the sources', () => {
       'snapshot errors (SnapshotError)': 5,
       'issuance form (issue.ts)': 35,
       'registry issues (REGISTRY_ISSUE_CODES)': 20,
-      'untradable reasons (UNTRADABLE_REASONS)': 5,
+      'untradable reasons (UNTRADABLE_REASONS)': 4,
       'registry verification problems': 8,
       'wallet errors (WalletError.code)': 6,
       'sign flow errors (SignFlowError.code)': 8,

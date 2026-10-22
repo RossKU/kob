@@ -68,7 +68,7 @@ export function ResultPanel(props: ResultPanelProps) {
       </Section>
 
       <Section title={t('issue.result.listingTitle')} data-testid="issue-listing">
-        <Banner tone="warn" data-testid="issue-result-listing-note">{t('issue.result.listingBody')}</Banner>
+        <Banner tone="info" data-testid="issue-result-listing-note">{t('issue.result.listingBody')}</Banner>
         <h3 class="issue-h3">{t('issue.result.registryTitle')}</h3>
         <pre class="issue-json" data-testid="issue-registry-entry" tabIndex={0}>{vm.registryEntryJson}</pre>
         <div class="row">

@@ -179,8 +179,8 @@ export class MockChain {
       // price step of the seeded books, sompi per whole token (mock seeding only)
       tick: t.tick ?? null,
       program,
-      // registry standing (`GET /v1/tokens`): official | unverified | delisted; powers of the program template; the audited template id; the ticker is '' for tokens outside the registry
-      standing: t.standing ?? 'unverified',
+      // `GET /v1/tokens`: powers of the program template; the strict-list template id; the ticker is '' for tokens outside the registry (the executor
+      // serves no per-token standing: KOB makes no listing judgement)
       powers: t.powers ?? [],
       // like the executor: the id of the strict-list template of the program (null only when a test says so: a program off the list)
       template_id: 'template_id' in t ? (t.template_id ?? null) : (TEMPLATE_ID_OF_PROGRAM[program] ?? null),

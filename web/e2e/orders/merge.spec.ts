@@ -20,7 +20,7 @@ async function registryWithStd(page: Page): Promise<void> {
   const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';
   const exkcc = reg.tokens.find((t: { ticker: string }) => t.ticker === 'EXKCC');
-  Object.assign(exkcc, { status: 'listed', verified: true });
+  Object.assign(exkcc, { verified: true });
   reg.tokens.push({ ...exkcc, ticker: 'EXSTD', name: 'Example standard token', covenant_id: STD, template_id: 'kcc20-ref-3x3', extension_commitment: EXT });
   await page.route('**/registry/tokens.json', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(reg) }),
@@ -63,7 +63,7 @@ async function mergeOnce(page: Page, mock: MockClient, wallet: Parameters<typeof
 }
 
 test('merge seven UTXOs of a 3 / 3 token: one 3 -> 1 transaction per click, the KAS freed stated, the open order untouched', async ({ appPage: page, mock, wallet }) => {
-  await mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3', standing: 'official' }] });
+  await mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3' }] });
   const alice = (await mock.balance('alice')).pubkey;
   for (let k = 1; k <= 7; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS });
   await mock.giveKas('alice', 20n * KAS);
@@ -129,7 +129,7 @@ test('merge seven UTXOs of a 3 / 3 token: one 3 -> 1 transaction per click, the 
 });
 
 test('a merge the wallet rejects sends nothing: the UTXOs stay as they were', async ({ appPage: page, mock, wallet }) => {
-  await mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3', standing: 'official' }] });
+  await mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3' }] });
   const alice = (await mock.balance('alice')).pubkey;
   for (let k = 1; k <= 5; k++) await mock.giveTokens('alice', TOKEN, { token: STD, carrier: 2n * KAS });
   await registryWithStd(page);

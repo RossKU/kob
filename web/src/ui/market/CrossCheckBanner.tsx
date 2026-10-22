@@ -5,7 +5,7 @@ import type { Hex } from '../../kob/types';
 import { Banner, useAsync } from '../kit';
 
 /**
- * With two or more indexers configured (`extraIndexerUrls`) the key facts of the token (standing, powers, best ask / bid) are read from each and
+ * With two or more indexers configured (`extraIndexerUrls`) the key facts of the token (powers, market price scale, best ask / bid) are read from each and
  * compared; any disagreement or unreachable verifier is shown. With a single indexer nothing is checked here (the footer says "single indexer,
  * unverified"). `refreshKey` re-runs the check when the book moved (coalesced: never two checks in flight).
  */

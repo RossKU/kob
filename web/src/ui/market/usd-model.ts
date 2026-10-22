@@ -174,7 +174,7 @@ export type HomeTarget = { name: 'pair'; base: string; quote: string } | { name:
  * its book, trades and ticket: the token page, whose default orientation for a USD token is KAS/USD), not a derived route. `usd:<id>` is that token in USD:
  * the tradable pair page `<id>/<USD token>` (needs the USD token); `market:<id>` a registry token: otherwise `auto` applies.
  */
-export function resolveHome(home: string, usdToken: string | null, tokens: readonly { covenantId: string; tradable: boolean; status: string }[]): HomeTarget {
+export function resolveHome(home: string, usdToken: string | null, tokens: readonly { covenantId: string; tradable: boolean }[]): HomeTarget {
   const known = (id: string) => tokens.some((x) => x.covenantId === id);
   if (home === 'list') return { name: 'market' };
   if (home === 'kas-usd' && usdToken) return { name: 'token', covenantId: usdToken };
@@ -184,6 +184,6 @@ export function resolveHome(home: string, usdToken: string | null, tokens: reado
     if (usdToken && m[2] !== usdToken) return { name: 'pair', base: m[2]!, quote: usdToken };
   }
   if (usdToken) return { name: 'token', covenantId: usdToken };
-  const first = tokens.find((x) => x.tradable && x.status === 'listed') ?? tokens.find((x) => x.tradable);
+  const first = tokens.find((x) => x.tradable);
   return first ? { name: 'token', covenantId: first.covenantId } : { name: 'market' };
 }

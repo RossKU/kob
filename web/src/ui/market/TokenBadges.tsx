@@ -4,7 +4,7 @@ import { Badge, Banner } from '../kit';
 import { longId, type TokenInfo } from '../../kob/registry';
 import { hasIssuerControl, KNOWN_POWERS, tokenLabel, type TokenBadge, type TokenRow } from './token-model';
 
-/** One status badge: `delisted`, or `untradable` with the reason in its text and tooltip. */
+/** One status badge: `untradable`, with the reason (about the token's program) in its text and tooltip. */
 export function StatusBadge(props: { badge: TokenBadge; 'data-testid'?: string }) {
   const b = props.badge;
   const reason = b.reason ? t(`market.reason.${b.reason}`) : undefined;

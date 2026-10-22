@@ -19,8 +19,9 @@ export interface CombinedBalances {
 }
 
 /**
- * True when a balance's token program is not one KOB reviewed (a prototype or test-only layout, a third-party program pending review): the
- * balance is real (its script verified on the node under that pinned program) but is marked. `null` (unknown program) counts as unreviewed.
+ * True when a balance's token program is not one this build supports for trading (a prototype or test-only layout, a third-party program whose
+ * engineering review is pending): the balance is real (its script verified on the node under that pinned program) but is marked. `null`
+ * (unknown program) counts as unsupported.
  */
 export function unreviewedProgram(program: TokenProgram | null | undefined): boolean {
   return TOKEN_PROGRAMS.find((p) => p.name === program)?.review !== 'reviewed';

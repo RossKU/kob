@@ -224,7 +224,7 @@ export function defaultCarrierText(limits: Pick<IssueLimits, 'defaultCarrier'>):
 
 const safeName = (ticker: string): string => ticker.replace(/[^A-Za-z0-9_-]/g, '_') || 'token';
 
-/** `<ticker>.registry-entry.json`: the entry to add to `registry/tokens.json` by pull request. */
+/** `<ticker>.registry-entry.json`: the token's facts in the format of a `registry/tokens.json` entry (for tools and community lists; no listing request). */
 export const registryEntryFileName = (ticker: string): string => `${safeName(ticker)}.registry-entry.json`;
 export const supplyDocFileName = (ticker: string): string => `${safeName(ticker)}.supply.json`;
 export const metadataDocFileName = (ticker: string): string => `${safeName(ticker)}.metadata.json`;

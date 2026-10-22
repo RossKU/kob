@@ -220,25 +220,25 @@ const repoFile = (rel: string): string => readFileSync(fileURLToPath(new URL(`..
 export const shippedRegistryJson = (): string => repoFile('registry/tokens.json');
 export const exampleRegistryJson = (): string => repoFile('registry/tokens.example.json');
 
-/** The registry fields an `official` token needs besides `verified` and `listed`: a clean genesis check and a genesis record that found no live mint authority. */
-export const officialGenesis = () => ({
+/** A clean genesis check of a token: `genesis_verified: true` and a genesis record that found no live mint authority (facts, never a judgement). */
+export const cleanGenesis = () => ({
   genesis_verified: true,
   genesis: { txid: 'ab'.repeat(32), daa_score: 10, outputs: [1, 2], supply: 1000, minter_outputs: [], live_minters: [], checked_at_daa: 20, source: 'test' },
 });
 
 /**
- * A registry in which the golden token is TRADABLE: the example's templates with the two KCC-20 programs marked `reviewed`, and two listed,
- * verified tokens (TST on the 3/3 reference program = the golden token, EIGHT on the 8/8 program).
+ * A registry in which the golden token is TRADABLE: the example's templates with the two KCC-20 programs marked `reviewed` (programs this build
+ * supports for trading), and two verified tokens (TST on the 3/3 reference program = the golden token, EIGHT on the 8/8 program).
  */
 export function tradableRegistryJson(): Record<string, any> {
   const doc = JSON.parse(exampleRegistryJson());
   for (const t of doc.templates) if (t.family === 'kcc20') t.review_status = 'reviewed';
-  const listed = {
-    family: 'kcc20', extension_commitment: TOKEN.ext, extension_class: 'fixed-supply-standard', lot_size: 1000, tick: 100, status: 'listed', verified: true,
+  const facts = {
+    family: 'kcc20', extension_commitment: TOKEN.ext, extension_class: 'fixed-supply-standard', lot_size: 1000, tick: 100, verified: true,
   };
   doc.tokens = [
-    { ticker: TOKEN.ticker, name: 'Test token', covenant_id: TOKEN.covenantId, template_id: 'kcc20-ref-3x3', decimals: TOKEN.decimals, ...listed },
-    { ticker: 'EIGHT', name: 'Eight slot token', covenant_id: '80'.repeat(32), template_id: 'kcc20-ref-8x8', decimals: 8, ...listed },
+    { ticker: TOKEN.ticker, name: 'Test token', covenant_id: TOKEN.covenantId, template_id: 'kcc20-ref-3x3', decimals: TOKEN.decimals, ...facts },
+    { ticker: 'EIGHT', name: 'Eight slot token', covenant_id: '80'.repeat(32), template_id: 'kcc20-ref-8x8', decimals: 8, ...facts },
   ];
   return doc;
 }

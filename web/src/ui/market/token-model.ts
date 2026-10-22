@@ -1,6 +1,7 @@
 // View model of the token list and the token header: registry tokens + indexer tokens (tokens the registry does not list are tradable only through the
 // open-list path, kob/open-token.ts), technical badges (program family, untradable reason, issuer powers), the localized `TICKER (abcd...1234)` label,
-// the shared-ticker note, template-verification detail. Token issuance is permissionless: nothing here says whether a token is verified, official or listed.
+// the shared-ticker note, template-verification detail. Token issuance is permissionless and KOB makes no per-token judgement: nothing here says whether
+// a token is verified, genuine or approved, and only technical facts (its program) decide whether this build trades it.
 // Pure.
 import type { IndexerTokenView } from '../../data/indexer-types';
 import type { DeclaredToken } from '../../data/token-declarations';
@@ -9,7 +10,7 @@ import {
 } from '../../kob/registry';
 import type { TemplateInfo } from '../../kob/types';
 
-export type BadgeKind = 'delisted' | 'untradable';
+export type BadgeKind = 'untradable';
 export type BadgeTone = 'ok' | 'warn' | 'bad' | 'info' | 'neutral';
 
 export interface TokenBadge {
@@ -20,16 +21,11 @@ export interface TokenBadge {
 }
 
 /**
- * Badges of a registry token: `delisted` (the registry or the executor delists it) and, when the build cannot trade it for another
- * reason (template not reviewed, unsupported, or different from the pinned one), an `untradable` badge naming the reason. A tradable token has none.
+ * Badges of a registry token: when the build cannot trade it (its program is not one this build supports for trading, is not embedded, or differs
+ * from the pinned one), an `untradable` badge naming the reason. A tradable token has none.
  */
-export function tokenBadges(token: Pick<TokenInfo, 'status' | 'tradable' | 'untradableReason'>, delisted = false): TokenBadge[] {
-  const out: TokenBadge[] = [];
-  if (token.status === 'delisted' || delisted) out.push({ kind: 'delisted', tone: 'bad', reason: null });
-  else if (!token.tradable && token.untradableReason && token.untradableReason !== 'delisted') {
-    out.push({ kind: 'untradable', tone: 'bad', reason: token.untradableReason });
-  }
-  return out;
+export function tokenBadges(token: Pick<TokenInfo, 'tradable' | 'untradableReason'>): TokenBadge[] {
+  return !token.tradable && token.untradableReason ? [{ kind: 'untradable', tone: 'bad', reason: token.untradableReason }] : [];
 }
 
 /**
@@ -78,8 +74,6 @@ export interface TokenRow {
   /** null for tokens that are not in the registry */
   info: TokenInfo | null;
   index: IndexerTokenView | null;
-  /** the executor (indexer) delists the token: this build does not trade it */
-  delisted: boolean;
   /** template capabilities the indexer reported (may be empty) */
   powers: string[];
   /** the token program can freeze or seize balances: escrowed orders are at the issuer's discretion */
@@ -87,7 +81,7 @@ export interface TokenRow {
   templateId: string | null;
   badges: TokenBadge[];
   tradable: boolean;
-  /** registry tokens: the untradable reason; unknown tokens: `delisted` or `unregistered` (tradable only through the open-list path) */
+  /** registry tokens: the untradable reason; unknown tokens: `unregistered` (tradable only through the open-list path) */
   reason: UntradableReason | null;
   /** cross-check of the indexer's view against the registry (registry tokens with an indexer entry) */
   indexerProblems: string[];
@@ -105,14 +99,12 @@ const unionPowers = (...lists: readonly (readonly string[])[]): string[] => [...
 
 function registryRow(info: TokenInfo, index: IndexerTokenView | null): TokenRow {
   const check = index ? verifyIndexerToken(info, index) : null;
-  // the executor can only delist (never upgrade) a registry token
-  const delisted = index?.standing === 'delisted';
   // registry capabilities always apply; whatever the indexer reports for the template is added, never subtracted
   const powers = unionPowers(info.capabilities, powersOf(index));
   return {
-    covenantId: info.covenantId, ticker: info.ticker, name: info.name, source: 'registry', info, index, delisted, powers, issuerControl: hasIssuerControl(powers),
-    templateId: index?.template_id ?? info.templateId, badges: tokenBadges(info, delisted),
-    tradable: info.tradable && !delisted, reason: delisted ? 'delisted' : info.untradableReason,
+    covenantId: info.covenantId, ticker: info.ticker, name: info.name, source: 'registry', info, index, powers, issuerControl: hasIssuerControl(powers),
+    templateId: index?.template_id ?? info.templateId, badges: tokenBadges(info),
+    tradable: info.tradable, reason: info.untradableReason,
     indexerProblems: check ? check.problems.map((p) => p.code) : [],
     openAsks: index ? index.open_asks : null, openBids: index ? index.open_bids : null, decimals: info.decimals, scale: 10n ** BigInt(Math.min(info.decimals, 9)), tick: info.tick,
   };
@@ -129,15 +121,14 @@ export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: T
   const decl = declared && declared.covenantId.toLowerCase() === view.covenant_id.toLowerCase() ? declared : null;
   const ticker = sanitizeUntrusted(view.ticker ?? '', 16) || (decl?.symbol ? sanitizeUntrusted(decl.symbol, 16) : '');
   const decimals = view.decimals ?? decl?.decimals ?? null;
-  const delisted = view.standing === 'delisted';
   // the template's capabilities in the shipped registry (found by template hash / id) always apply; the indexer's powers are added
   const tpl = reg.templates.find((t) => (view.template_hash && t.template_hash === view.template_hash) || (view.template_id && t.id === view.template_id));
   const powers = unionPowers(tpl?.capabilities ?? [], powersOf(view));
   return {
-    covenantId: view.covenant_id, ticker, name: decl?.name ? sanitizeUntrusted(decl.name, 64) : null, ...(decl ? { declared: true as const } : {}), source, info: null, index: view, delisted, powers, issuerControl: hasIssuerControl(powers), templateId: view.template_id ?? null,
-    badges: delisted ? [{ kind: 'delisted', tone: 'bad', reason: null }] : [],
+    covenantId: view.covenant_id, ticker, name: decl?.name ? sanitizeUntrusted(decl.name, 64) : null, ...(decl ? { declared: true as const } : {}), source, info: null, index: view, powers, issuerControl: hasIssuerControl(powers), templateId: view.template_id ?? null,
+    badges: [],
     // this build's own registry does not list the token: it cannot trade it from the list
-    tradable: false, reason: delisted ? 'delisted' : 'unregistered',
+    tradable: false, reason: 'unregistered',
     indexerProblems: [], openAsks: view.open_asks, openBids: view.open_bids,
     decimals,
     scale: view.scale != null ? BigInt(view.scale) : decimals != null ? 10n ** BigInt(Math.min(decimals, 9)) : null,
@@ -175,19 +166,18 @@ export function buildTokenRows(
 }
 
 /**
- * Whether this build can trade the token, as far as a LIST can tell: a registry token by the registry's own verdict (`tradable`: not delisted, template
- * reviewed, supported and equal to the pinned program); a token outside the registry (open list, pasted) is tradable through the open-list path unless the
- * executor delists it or its template hash is one this build does not embed (`pinned`: `kob.templates()`). A token without a template hash is kept.
+ * Whether this build can trade the token, as far as a LIST can tell: a registry token by its program (`tradable`: a program this build supports for
+ * trading, embedded and equal to the pinned one); a token outside the registry (open list, pasted) is tradable through the open-list path unless its
+ * template hash is one this build does not embed (`pinned`: `kob.templates()`). A token without a template hash is kept.
  */
-export function tradableHere(row: Pick<TokenRow, 'source' | 'info' | 'index' | 'delisted'>, pinned: readonly TemplateInfo[]): boolean {
-  if (row.source === 'registry') return row.info !== null && row.info.tradable && !row.delisted;
-  if (row.delisted) return false;
+export function tradableHere(row: Pick<TokenRow, 'source' | 'info' | 'index'>, pinned: readonly TemplateInfo[]): boolean {
+  if (row.source === 'registry') return row.info !== null && row.info.tradable;
   const hash = row.index?.template_hash;
   return !hash || pinned.some((p) => p.tokenSlots && p.hash === hash);
 }
 
 /** The rows a market list, selector or pair choice offers: only tokens this build can trade (see `tradableHere`). */
-export const tradableRows = <R extends Pick<TokenRow, 'source' | 'info' | 'index' | 'delisted'>>(rows: readonly R[], pinned: readonly TemplateInfo[]): R[] => rows.filter((r) => tradableHere(r, pinned));
+export const tradableRows = <R extends Pick<TokenRow, 'source' | 'info' | 'index'>>(rows: readonly R[], pinned: readonly TemplateInfo[]): R[] => rows.filter((r) => tradableHere(r, pinned));
 
 /**
  * Covenant ids of the listed tokens that share their ticker with another listed token (case, look-alike letters and homoglyphs ignored: `KR0N` is `KRON`).

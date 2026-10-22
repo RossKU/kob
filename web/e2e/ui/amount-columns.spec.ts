@@ -14,7 +14,6 @@ async function listTokens(page: Page, extra: { ticker: string; covenant_id: stri
   const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';
   const exkcc = reg.tokens.find((t: { ticker: string }) => t.ticker === 'EXKCC');
-  exkcc.status = 'listed';
   exkcc.verified = true;
   for (const e of extra) reg.tokens.push({ ...exkcc, name: e.ticker, ...e });
   await page.route('**/registry/tokens.json', (route) =>

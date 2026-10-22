@@ -12,7 +12,7 @@ const ID = 'ab'.repeat(32);
 const EXT = 'ee'.repeat(32);
 
 const view = (over: Partial<IndexerTokenView> = {}): IndexerTokenView => ({
-  ticker: '', covenant_id: ID, template_hash: kcc.hash, extension_commitment: EXT, scale: null, decimals: null, open_asks: 1, open_bids: 0, standing: 'unverified', powers: [], ...over,
+  ticker: '', covenant_id: ID, template_hash: kcc.hash, extension_commitment: EXT, scale: null, decimals: null, open_asks: 1, open_bids: 0, powers: [], ...over,
 });
 const scales = [{ scale: 1000 }, { scale: 100 }, { scale: 1000 }];
 
@@ -176,7 +176,7 @@ describe('heldTokenView: a covenant id the indexer does not list, from the walle
     const r = heldTokenView(kob, ID.toUpperCase(), ['KCC20Ref'], [utxo(EXT), utxo(EXT)], 'mainnet');
     expect(r).toEqual({
       ok: true,
-      view: { ticker: '', covenant_id: ID, template_hash: ref.hash, extension_commitment: EXT, scale: null, decimals: null, open_asks: 0, open_bids: 0, standing: 'unverified', powers: [], template_id: 'kcc20-ref-3x3', family: 'kcc20' },
+      view: { ticker: '', covenant_id: ID, template_hash: ref.hash, extension_commitment: EXT, scale: null, decimals: null, open_asks: 0, open_bids: 0, powers: [], template_id: 'kcc20-ref-3x3', family: 'kcc20' },
     });
     if (!r.ok) return;
     expect(synthesizeOpenToken(kob, r.view, [], null, null, [], { network: 'mainnet', fromHoldings: true })).toEqual({ ok: false, reason: 'no-scale' });

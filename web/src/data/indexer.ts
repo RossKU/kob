@@ -5,7 +5,7 @@
 // Conventions of the API: JSON, snake_case, ids/keys lower-case hex, sompi as DECIMAL STRINGS (see `sompi()` for bigint), errors as
 // `{"error":{"code","message"}}`, rate limiting as 429 (+ Retry-After), busy database as 503 (+ Retry-After).
 import type {
-  BookView, EventView, HealthView, IndexerTokenView, TokenStanding, OrderView, Page, StrayView, TokenEventView, TokenUtxoView, WsFrame,
+  BookView, EventView, HealthView, IndexerTokenView, OrderView, Page, StrayView, TokenEventView, TokenUtxoView, WsFrame,
   FillNoticeView, BookNotice, OrderNotice, ReorgNotice, HealthCursorNotice, HealthTickNotice,
   CandleInterval, CandlesView, DepthView, StatsView, TradesView, PairBookView, PairCandlesView, PairFillsView, PairSummaryView,
 } from './indexer-types';
@@ -496,17 +496,16 @@ export class HttpIndexer implements IndexerApi {
 
 export { sanitizePairBook } from './pair-api';
 
-const STANDINGS: readonly TokenStanding[] = ['official', 'unverified', 'delisted'];
 const POWER = /^[a-z0-9-]{1,32}$/;
 
 /**
- * A `/v1/tokens` item made safe to render: an unknown `standing` is `unverified` (never `official`; a missing one stays missing: an executor without the registry), `powers` is a list of short
- * lower-case words (anything else is dropped), `ticker` is a string (empty when the token is not in the registry).
+ * A `/v1/tokens` item made safe to render: `powers` is a list of short lower-case words (anything else is dropped), `ticker` is a string (empty when
+ * the token is not in the registry). An older executor's `standing` (a registry judgement KOB no longer makes) is dropped: nothing acts on it.
  */
 export function normalizeTokenView(v: IndexerTokenView): IndexerTokenView {
   const out: IndexerTokenView = { ...v };
   if (typeof v.ticker !== 'string') out.ticker = '';
-  if (v.standing !== undefined && v.standing !== null) out.standing = STANDINGS.includes(v.standing) ? v.standing : 'unverified';
+  delete (out as { standing?: unknown }).standing;
   if (v.declaration !== undefined && v.declaration !== true) delete out.declaration;
   if (v.powers !== undefined) out.powers = Array.isArray(v.powers) ? [...new Set(v.powers.filter((p): p is string => typeof p === 'string' && POWER.test(p)))] : [];
   return out;

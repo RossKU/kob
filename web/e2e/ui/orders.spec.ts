@@ -44,8 +44,8 @@ test.describe('my orders', () => {
   });
 
   test('the same token reads the same on the market list, the token page and My orders, with no verification wording (registry says verified, the mock indexer says unverified)', async ({ appPage, mock }) => {
-    // EXKCC listed and verified in a registry served by the spec; the mock executor's standing for it is `unverified` (it says that of every token that is not
-    // official). Token issuance is permissionless: the label is `TICKER (abcd…1234)` whatever either side says
+    // EXKCC `verified` in a registry served by the spec; the mock executor serves no verification state at all. Token issuance is permissionless and
+    // KOB makes no per-token judgement: the label is `TICKER (abcd…1234)` whatever either side says
     await listExkcc(appPage);
     const { tok, order } = await seedAsk(mock);
     const short = `${tok.covenant_id.slice(0, 4)}…${tok.covenant_id.slice(-4)}`;

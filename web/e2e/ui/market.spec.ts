@@ -19,7 +19,7 @@ test.describe('shell and token list', () => {
     const row = appPage.getByTestId(`token-row-${id}`);
     await expect(row).toBeVisible();
     await expect(row.getByTestId(`token-link-${id}`)).toHaveText(`EXKCC (${short})`);
-    // token issuance is permissionless: the row never says verified / unverified / official / pending review, even though the example registry lists EXKCC as pending review
+    // token issuance is permissionless and KOB makes no per-token judgement: the row never says verified / unverified / official / pending review
     await expect(row).not.toContainText(/unverified|verified|official|pending review|registry/i);
     await expect(row.getByTestId('badge-family')).toBeVisible();
     for (const badge of ['verified', 'unverified', 'official', 'pending-review', 'custom-registry', 'not-in-registry']) await expect(row.getByTestId(`badge-${badge}`)).toHaveCount(0);
@@ -204,7 +204,7 @@ test.describe('token page', () => {
   test('an open-list token whose every order has ended keeps the scale its first order set: the ticket, no first-order decimals', async ({ appPage, mock }) => {
     const id = 'e1'.repeat(32);
     await mock.seed({
-      tokens: [{ ticker: '', covenant_id: id, program: 'KCC20Ref_8x8', template_id: 'KCC20Ref_8x8', extension_commitment: 'ee'.repeat(32), standing: 'unverified', powers: [], decimals: null, order_scale: 1_000_000 }],
+      tokens: [{ ticker: '', covenant_id: id, program: 'KCC20Ref_8x8', template_id: 'KCC20Ref_8x8', extension_commitment: 'ee'.repeat(32), powers: [], decimals: null, order_scale: 1_000_000 }],
       orders: [{ token: id, side: 'ask', amount: 2_000_000, price: 3_000_000, history: 'cancelled' }],
     });
     const row = (await mock.tokens()).find((t) => t.covenant_id === id) as { market_scale?: number | null; open_asks?: number } | undefined;

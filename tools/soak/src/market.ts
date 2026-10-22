@@ -51,13 +51,12 @@ function registryToken(t: IssuedToken, description: string): Record<string, unkn
     // units, any whole-sompi price per whole token); the web app then prices on a 1-sompi step
     max_token_inputs: TEMPLATE_STANDARD.max_token_inputs,
     max_token_outputs: TEMPLATE_STANDARD.max_token_outputs,
-    status: 'listed',
     verified: true,
     display: { description },
   };
 }
 
-/** The registry JSON of the soak (testnet-10, the listed soak tokens), also the executors' `--tokens` allowlist. */
+/** The registry JSON of the soak (testnet-10, the soak tokens), also the executors' `--tokens` allowlist. */
 export function soakRegistry(env: Env): unknown {
   const t = env.state.token;
   if (!t) throw new Error('the soak token is not issued yet (run `soak setup`)');

@@ -91,7 +91,7 @@ test.describe('the pair ticket', () => {
     const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
     for (const t of reg.templates) t.review_status = 'reviewed';
     const exkcc = reg.tokens.find((t: { ticker: string }) => t.ticker === 'EXKCC');
-    Object.assign(exkcc, { status: 'listed', verified: true });
+    Object.assign(exkcc, { verified: true });
     reg.tokens.push({ ...exkcc, ticker: 'EXUSD', name: 'Example USD (fictional)', covenant_id: QUOTE, decimals: 6 });
     await page.route('**/registry/tokens.json', (route) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(reg) }));
     const base = (await mock.token()).covenant_id;
@@ -162,7 +162,7 @@ test.describe('a token of 18 decimals', () => {
     const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
     for (const t of reg.templates) t.review_status = 'reviewed';
     const exkcc = reg.tokens.find((t: { ticker: string }) => t.ticker === 'EXKCC');
-    reg.tokens.push({ ...exkcc, status: 'listed', verified: true, ticker: 'EIGHTEEN', name: 'Eighteen decimals', covenant_id: D18, decimals: 18 });
+    reg.tokens.push({ ...exkcc, verified: true, ticker: 'EIGHTEEN', name: 'Eighteen decimals', covenant_id: D18, decimals: 18 });
     await page.route('**/registry/tokens.json', (route) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(reg) }));
     await page.goto(`/#/market/${D18}`);
     await connectWallet(page);

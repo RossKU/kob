@@ -101,13 +101,15 @@ test.describe('token issuance', () => {
     expect(tracked[0]).toMatchObject({ transactionId: genesis.txid, index: 0, tokenCovId: tokenId, program: 'KCC20Ref' });
     expect(tracked[0].state.amount).toBe('100000000');
 
-    // registry entry (the file a registry pull request carries; the page itself shows no verification state)
+    // the token's facts in the registry format (for tools and community lists: no listing request; the page itself shows no verification state)
     const entry = JSON.parse((await page.getByTestId('issue-registry-entry').textContent()) ?? '');
-    expect(entry).toMatchObject({ ticker: 'NEWKCC', name: 'New Example Coin', decimals: 2, covenant_id: tokenId, template_id: 'kcc20-ref-3x3', max_token_inputs: 3, status: 'pending-review', verified: false });
+    expect(entry).toMatchObject({ ticker: 'NEWKCC', name: 'New Example Coin', decimals: 2, covenant_id: tokenId, template_id: 'kcc20-ref-3x3', max_token_inputs: 3, verified: false });
+    expect(entry).not.toHaveProperty('status');
     expect(entry.display).toMatchObject({ x: 'https://x.com/newkcc', telegram: 'https://t.me/newkcc_chat' });
     for (const gone of ['issue-result-unverified', 'issue-result-pending', 'issue-result-nottradable']) await expect(page.getByTestId(gone)).toHaveCount(0);
     await expect(page.getByTestId('issue-result')).not.toContainText(/unverified|not tradable/i);
-    await expect(page.getByTestId('issue-result-listing-note')).toContainText('registry/tokens.json');
+    await expect(page.getByTestId('issue-result-listing-note')).toContainText('KOB keeps no list of approved tokens');
+    await expect(page.getByTestId('issue-result-listing-note')).not.toContainText(/pull request|official/i);
 
     // download of the entry
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('issue-registry-download').click()]);

@@ -26,7 +26,7 @@ async function registryWithStd(page: Page): Promise<void> {
   const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';
   const exkcc = reg.tokens.find((t: { ticker: string }) => t.ticker === 'EXKCC');
-  Object.assign(exkcc, { status: 'listed', verified: true });
+  Object.assign(exkcc, { verified: true });
   reg.tokens.push({ ...exkcc, ticker: 'EXSTD', name: 'Example standard token', covenant_id: STD, template_id: 'kcc20-ref-3x3', extension_commitment: EXT });
   await page.route('**/registry/tokens.json', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(reg) }),
@@ -35,7 +35,7 @@ async function registryWithStd(page: Page): Promise<void> {
 
 test('a market buy against many small asks: one transaction takes 3, with Fills 3 it rests briefly and fills in three transactions', async ({ appPage: page, mock, wallet }) => {
   await fund(mock);
-  await mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3', standing: 'official' }] });
+  await mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3' }] });
   await mock.seed({ orders: Array.from({ length: SMALL_ASKS }, () => ({ token: STD, side: 'ask', maker: 'bob', price: SMALL_PRICE, amount: TOKEN.toString() })) });
   await registryWithStd(page);
   await page.goto(`/#/market/${STD}`);

@@ -106,7 +106,11 @@ export interface IssueToken {
   outputs: IssueTokenOutput[];
 }
 
-/** An entry of `registry/tokens.json` (`registry/tokens.schema.json`, `$defs.token`), as the issuance proposes it. */
+/**
+ * The issued token's facts in the format of a `registry/tokens.json` entry (`registry/tokens.schema.json`, `$defs.token`): covenant id, program,
+ * extension commitment, decimals and what it declared, for tools and community token lists that read that format. Not a listing request: KOB keeps
+ * no list of approved tokens, and the token trades without any entry.
+ */
 export interface RegistryTokenEntry {
   ticker: string;
   name: string;
@@ -121,7 +125,7 @@ export interface RegistryTokenEntry {
   tick?: number | null;
   max_token_inputs?: number;
   max_token_outputs?: number;
-  status: 'pending-review';
+  /** not yet checked against a chain UTXO by whoever adopts the entry */
   verified: false;
   display?: { description?: string; website?: string; icon?: string; x?: string; telegram?: string; kcc23?: Record<string, unknown> };
 }
@@ -667,16 +671,15 @@ export function socialUrl(kind: 'x' | 'telegram', input: string): string | null 
 }
 
 /**
- * The registry entry to submit by pull request (`registry/tokens.json`): status `pending-review`, `verified: false`, program = the
- * pinned template of the issued program (`kcc20-ref-3x3`, or `kcc20-ref-public-mint`). Checks that the docs describe this token before
- * handing them out.
+ * The issued token's facts in the registry format (`RegistryTokenEntry`): `verified: false`, program = the pinned template of the issued program
+ * (`kcc20-ref-3x3`, or `kcc20-ref-public-mint`). Checks that the docs describe this token before handing them out.
  */
 export function registryEntryFromIssue(token: IssueToken, docs: IssueDocs): RegistryTokenEntry {
   const e = docs.registryEntry;
   if (e.covenant_id !== token.covenantId || e.ticker !== token.ticker || e.extension_commitment !== token.extensionCommitment) {
     throw new Error('registry entry does not describe the issued token');
   }
-  return { ...e, status: 'pending-review', verified: false };
+  return { ...e, verified: false };
 }
 
 /** Whether `built` (a genesis) spends exactly output 0 of `prep` (its one input, with that output's amount and script). */

@@ -68,8 +68,8 @@ describe('usd-model', () => {
     const A = 'aa'.repeat(32);
     const B = 'bb'.repeat(32);
     const tokens = [
-      { covenantId: A, tradable: true, status: 'listed' },
-      { covenantId: B, tradable: true, status: 'listed' },
+      { covenantId: A, tradable: true },
+      { covenantId: B, tradable: true },
     ];
     expect(usdTokenOf({ [B]: 'USD' }, tokens)?.covenantId).toBe(B);
     expect(usdTokenOf({}, tokens)).toBeNull();

@@ -55,21 +55,20 @@ describe('bids that cannot fund one base unit never enter the book (data layer)'
   });
 });
 
-describe('GET /v1/tokens items (registry standing)', () => {
+describe('GET /v1/tokens items', () => {
   const tok = (over: Record<string, unknown>) => ({ ticker: 'X', covenant_id: T, template_hash: null, extension_commitment: null, scale: null, decimals: null, open_asks: 0, open_bids: 0, ...over });
   const ixOf = (tokens: unknown[]) =>
     new HttpIndexer({ baseUrl: 'https://kob.example/', fetch: (async () => new Response(JSON.stringify({ tokens }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch });
 
-  it('passes standing, powers, template_id and an empty ticker through', async () => {
-    const [a] = await ixOf([tok({ ticker: '', standing: 'official', powers: ['freeze', 'burn'], template_id: 'kcc20-ref-8x8', family: 'kron' })]).tokens();
-    expect(a).toMatchObject({ ticker: '', standing: 'official', powers: ['freeze', 'burn'], template_id: 'kcc20-ref-8x8', family: 'kron' });
+  it('passes powers, template_id and an empty ticker through', async () => {
+    const [a] = await ixOf([tok({ ticker: '', powers: ['freeze', 'burn'], template_id: 'kcc20-ref-8x8', family: 'kron' })]).tokens();
+    expect(a).toMatchObject({ ticker: '', powers: ['freeze', 'burn'], template_id: 'kcc20-ref-8x8', family: 'kron' });
   });
 
-  it('a missing standing stays missing (older executor); an unknown one is unverified, never official', async () => {
-    const [old, odd] = await ixOf([tok({}), tok({ standing: 'gold' })]).tokens();
-    expect(old.standing).toBeUndefined();
+  it("an older executor's `standing` (a per-token judgement KOB no longer makes) is dropped; missing powers stay missing", async () => {
+    const [old, official] = await ixOf([tok({}), tok({ standing: 'official' })]).tokens();
     expect(old.powers).toBeUndefined();
-    expect(odd.standing).toBe('unverified');
+    expect(official).not.toHaveProperty('standing');
   });
 
   it('powers keep only short lower-case words, once each', async () => {

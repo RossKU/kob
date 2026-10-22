@@ -134,7 +134,6 @@ export function tokensView(chain) {
       market_scale: marketScale(chain, t),
       open_asks: count(t.covenant_id, 1),
       open_bids: count(t.covenant_id, 2),
-      standing: t.standing,
       powers: t.powers,
       template_id: t.template_id,
       family: t.family,

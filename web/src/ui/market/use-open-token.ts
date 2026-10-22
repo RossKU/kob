@@ -28,7 +28,7 @@ const NONE: OpenTokenState = { info: null, reason: null, loading: false };
 export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: number | null = null, declared: DeclaredToken | null = null): OpenTokenState {
   const { indexer, kob, registry, tracker, config } = useServices();
   const pubkey = useWallet().info?.pubkey ?? null;
-  const view = row && row.source !== 'registry' && row.index && !row.delisted ? row.index : null;
+  const view = row && row.source !== 'registry' && row.index ? row.index : null;
   const facts = useAsync(
     async (signal): Promise<{ scales: ScaleSample[]; ext: Hex | null; holdings: TokenUtxo[] } | null> => {
       if (!view || !indexer) return null;

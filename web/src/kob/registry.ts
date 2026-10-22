@@ -1,14 +1,17 @@
-// Token registry: validation of `registry/tokens.json`, template-hash-verified listing and on-chain verification helpers.
+// Token registry: validation of `registry/tokens.json`, template-hash-verified program support and on-chain verification helpers.
 //
-// The registry file is data, not authority. The token list is OPEN (founder decision 2026-09-30): what gates trading is the TEMPLATE, not the token.
-// A token is TRADABLE in this build if
-//   * it is not `delisted` (explicit delisting is the only token-level block), and
-//   * its template is `reviewed`, supported (a program compiled into kob-wasm) and equals the wasm's pinned template
-//     (hash, prefix, suffix, slot limits): a registry entry can never make the app trade a program it does not embed, and
+// The registry file is data, not authority: a pinned snapshot of facts anyone can re-derive from the chain (covenant id, program, extension
+// commitment, decimals, the genesis record) and of the token programs this build supports. KOB makes no per-token judgement (founder decision
+// 2026-10-19): there is no listing, delisting or official status (the `status` / `official` / `warning` of older files are read and ignored,
+// never honoured, so a registry of the older shape still loads and trades the same); curation (anti-impersonation, logos, warnings written by
+// people) belongs to external community lists the user chooses. The token list is OPEN (founder decision 2026-09-30): what gates trading is the PROGRAM, not the token.
+// A token is TRADABLE in this build if its template is one this build supports for trading (`review_status: reviewed`: its engineering review is
+// done), is a program compiled into kob-wasm and equals the wasm's pinned template (hash, prefix, suffix, slot limits): a registry entry can never
+// make the app trade a program it does not embed.
 //   (protocol v3 has no lots and no price tick: an order's scale is `10^decimals` of the token and any price in sompi is valid, so the
 //   registry's legacy `lot_size` and `tick` are optional, read from older registry files and ignored, exactly as the Rust validator does.)
-// A registry entry is never treated more strictly than a token with no entry (open-list token, kob/open-token.ts): status `pending-review` and
-// `verified: false` do not block trading. Token issuance is permissionless: the UI shows no verification or officialness of any token.
+// A registry entry is never treated more strictly than a token with no entry (open-list token, kob/open-token.ts): `verified: false` does not
+// block trading. Token issuance is permissionless: the UI shows no verification of any token.
 // Everything else is viewable (balances, positions) but not tradable, with a machine-readable reason.
 //
 // Mirrors crates/kob-protocol/src/registry.rs (validation rules, `normalize_ticker`, `display_name`); keys of the JSON are snake_case.
@@ -23,7 +26,6 @@ export const NETWORKS = ['mainnet', 'testnet-10', 'devnet'] as const;
 export const MAX_DECIMALS = 18;
 export const FAMILIES = ['kcc20', 'kron'] as const;
 export type Family = (typeof FAMILIES)[number];
-export type TokenStatus = 'pending-review' | 'listed' | 'delisted';
 export type ReviewStatus = 'pending-review' | 'reviewed';
 export type ExtensionClass = 'none' | 'fixed-supply-standard' | 'other';
 
@@ -51,17 +53,22 @@ export interface RegistryTokenJson {
   decimals: number;
   /** legacy (protocol v2 lots and price tick): optional, read from older registry files and ignored (registry.rs) */
   lot_size?: number | null; tick?: number | null;
-  max_token_inputs?: number; max_token_outputs?: number; status: TokenStatus; verified: boolean;
-  /** confirmed genuine (needs verified and listed); absent = false (shown as unverified) */
-  official?: boolean;
   /**
-   * the token's genesis (the origin of its covenant id) was verified against chain data by the registry maintainers (contracts review pass);
-   * absent / false = NOT verified. `warning` is an optional maintainer note shown next to the token (e.g. "genesis could not be verified").
+   * removed per-token judgements of older files (listing `status`, `official`, maintainer `warning`): read and ignored, never honoured. Not even
+   * their type is checked; they never reach TokenInfo or tradability (registry.rs strips them the same way), so a registry of the older shape
+   * still loads and trades exactly as without them.
+   */
+  status?: unknown; official?: unknown; warning?: unknown;
+  max_token_inputs?: number; max_token_outputs?: number;
+  /** the covenant id and template hash were checked against a chain UTXO of the token (a re-derivable fact, not an endorsement) */
+  verified: boolean;
+  /**
+   * every output of the token's genesis group (the origin of its covenant id) was checked against its program (`kob registry verify-genesis` over
+   * registry/evidence/); false = checked and NOT clean; absent = not checked
    */
   genesis_verified?: boolean;
   /** what the genesis check (C1) and the live-mint-authority check (C2) found (`kob registry verify-genesis` re-derives it from registry/evidence/) */
   genesis?: RegistryGenesisJson;
-  warning?: string;
   display?: { description?: string; website?: string; icon?: string; x?: string; telegram?: string; kcc23?: Record<string, unknown> };
 }
 /** A token's genesis record (mirrors `GenesisRecord` of registry.rs). */
@@ -69,7 +76,7 @@ export interface RegistryGenesisJson {
   txid: Hex; daa_score: number; outputs: number[]; supply: number; minter_outputs: number[];
   /** allowance of the genesis PublicMint outputs (kcc20-ref-public-mint); absent = no public minter; max supply = supply + mint_allowance */
   mint_allowance?: number;
-  /** live mint-authority cells (`txid:index`): [] = none, absent = not determined; official needs [] */
+  /** live mint-authority cells (`txid:index`): [] = none, absent = not determined; non-empty = the supply can still grow (API warning `live_mint_authority`) */
   live_minters?: string[];
   checked_at_daa: number; source: string;
 }
@@ -89,7 +96,7 @@ export interface TokenMarketInput {
 export const REGISTRY_ISSUE_CODES = [
   'json', 'unknown-field', 'wrong-type', 'schema-version', 'unknown-network', 'wrong-network', 'bad-hex', 'duplicate-template-id', 'duplicate-template-hash',
   'template-invalid', 'unknown-template', 'family-mismatch', 'extension', 'duplicate-identity', 'duplicate-covenant-id', 'bad-ticker', 'confusable-ticker',
-  'bad-display', 'out-of-range', 'decimals', 'slot-limit-mismatch', 'not-listable',
+  'bad-display', 'out-of-range', 'decimals', 'slot-limit-mismatch', 'genesis',
 ] as const;
 export type RegistryIssueCode = (typeof REGISTRY_ISSUE_CODES)[number];
 export interface RegistryIssue { code: RegistryIssueCode; message: string; path: string }
@@ -104,11 +111,12 @@ export class RegistryError extends Error {
 }
 
 /**
- * Why a token cannot be traded in this build (`null` = tradable). `unregistered` is only given to tokens the registry does not know (token-model
- * `unknownRow`: no template at hand); a registry entry is never untradable for being unverified or pending review.
+ * Why a token cannot be traded in this build (`null` = tradable): technical reasons about its program only, never a judgement of the token.
+ * `unregistered` is only given to tokens the registry does not know (token-model `unknownRow`: no template at hand); a registry entry is never
+ * untradable for being unverified.
  */
 export const UNTRADABLE_REASONS = [
-  'delisted', 'unregistered', 'template-pending-review', 'template-unsupported', 'template-mismatch',
+  'unregistered', 'template-pending-review', 'template-unsupported', 'template-mismatch',
 ] as const;
 export type UntradableReason = (typeof UNTRADABLE_REASONS)[number];
 
@@ -178,7 +186,7 @@ export interface TokenInfo {
   extensionCommitment: Hex | null; extensionClass: ExtensionClass; decimals: number;
   /** minimum price increment, sompi per whole token: always null (= 1 sompi). Protocol v3 has no price tick; the registry's legacy `tick` is ignored. */
   tick: bigint | null;
-  status: TokenStatus; display: RegistryTokenJson['display'] | null;
+  display: RegistryTokenJson['display'] | null;
   /** capabilities of the token's program template (registry `capabilities`), possibly empty */
   capabilities: Capability[];
   /** synthesised from the indexer for an open-list token that has no registry entry (kob/open-token.ts): decimals inferred, tick 1 */
@@ -240,7 +248,9 @@ const ROOT_KEYS = ['$schema', 'schema_version', 'network', 'templates', 'tokens'
 const TEMPLATE_KEYS = ['id', 'family', 'template_hash', 'prefix_len', 'suffix_len', 'state_len', 'max_token_inputs', 'max_token_outputs', 'escrow', 'review_status', 'capabilities', 'risks', 'source'];
 const ESCROW_KEYS = ['owner_scheme', 'borrow_scheme', 'id_type', 'is_minter', 'delivery_id_type'];
 const SOURCE_KEYS = ['path', 'upstream', 'note'];
-const TOKEN_KEYS = ['ticker', 'name', 'family', 'covenant_id', 'template_id', 'extension_commitment', 'extension_class', 'decimals', 'lot_size', 'tick', 'max_token_inputs', 'max_token_outputs', 'status', 'verified', 'official', 'genesis_verified', 'genesis', 'warning', 'display'];
+const TOKEN_KEYS = ['ticker', 'name', 'family', 'covenant_id', 'template_id', 'extension_commitment', 'extension_class', 'decimals', 'lot_size', 'tick', 'max_token_inputs', 'max_token_outputs', 'verified', 'genesis_verified', 'genesis', 'display',
+  // removed per-token judgements of older files: read and ignored, never honoured (see RegistryTokenJson)
+  'status', 'official', 'warning'];
 const GENESIS_KEYS = ['txid', 'daa_score', 'outputs', 'supply', 'minter_outputs', 'mint_allowance', 'live_minters', 'checked_at_daa', 'source'];
 const OUTPOINT = /^[0-9a-f]{64}:(0|[1-9][0-9]{0,9})$/;
 const DISPLAY_KEYS = ['description', 'website', 'icon', 'x', 'telegram', 'kcc23'];
@@ -377,14 +387,10 @@ function validate(doc: unknown, expectedNetwork?: string): { json: RegistryJson;
     if (prevCov) add('duplicate-covenant-id', p, `tokens ${prevCov} and ${tk} share covenant id ${short(tok.covenant_id)}`);
     covs.set(tok.covenant_id, tk);
     if (!isInt(tok.decimals) || tok.decimals < 0 || tok.decimals > MAX_DECIMALS) add('decimals', p, `token ${tk}: decimals ${String(tok.decimals)} must be 0..=${MAX_DECIMALS}`);
-    // `lot_size` / `tick` are legacy (protocol v2): read and ignored, never validated (registry.rs)
-    if (!['pending-review', 'listed', 'delisted'].includes(tok.status)) add('wrong-type', `${p}.status`, 'status must be pending-review, listed or delisted');
+    // `lot_size` / `tick` are legacy (protocol v2), `status` / `official` / `warning` removed per-token judgements: read and ignored, never
+    // validated (registry.rs)
     if (typeof tok.verified !== 'boolean') add('wrong-type', `${p}.verified`, 'verified must be a boolean');
-    if (tok.official !== undefined && typeof tok.official !== 'boolean') add('wrong-type', `${p}.official`, 'official must be a boolean');
     if (tok.genesis_verified !== undefined && typeof tok.genesis_verified !== 'boolean') add('wrong-type', `${p}.genesis_verified`, 'genesis_verified must be a boolean');
-    if (tok.warning !== undefined && (typeof tok.warning !== 'string' || !tok.warning.trim() || [...tok.warning].length > 512 || hasBadChar(tok.warning))) {
-      add('bad-display', `${p}.warning`, `token ${tk}: warning must be 1..=512 printable characters`);
-    }
     const g = tok.genesis;
     if (g !== undefined) {
       const gp = `${p}.genesis`;
@@ -406,19 +412,10 @@ function validate(doc: unknown, expectedNetwork?: string): { json: RegistryJson;
         if (typeof g.source !== 'string' || !g.source || [...g.source].length > 512 || hasBadChar(g.source)) gbad('genesis.source must be 1..=512 printable characters');
         if (g.live_minters !== undefined) {
           if (!Array.isArray(g.live_minters) || g.live_minters.some((o) => typeof o !== 'string' || !OUTPOINT.test(o))) gbad('genesis.live_minters entries must be <txid>:<index>');
-          else if (g.live_minters.length > 0 && tok.warning === undefined) gbad('a token with a live mint authority needs a warning (active mint authority)');
         }
       }
     }
-    if (tok.genesis_verified === true && tok.verified !== true) add('not-listable', p, `token ${tk}: genesis_verified needs verified (the covenant id and template hash checked first)`);
-    if (tok.official === true) {
-      if (!tok.verified) add('not-listable', p, `token ${tk}: cannot be official: not verified against chain`);
-      if (tok.status !== 'listed') add('not-listable', p, `token ${tk}: cannot be official: only a listed token can be official`);
-      if (tok.genesis_verified !== true) add('not-listable', p, `token ${tk}: cannot be official without genesis_verified: true (every genesis output checked)`);
-      if (!isObj(g) || !Array.isArray(g.live_minters) || g.live_minters.length !== 0) {
-        add('not-listable', p, `token ${tk}: cannot be official without a genesis record that found no live mint authority (live_minters: [])`);
-      }
-    }
+    if (tok.genesis_verified === true && tok.verified !== true) add('genesis', p, `token ${tk}: genesis_verified needs verified (the covenant id and template hash checked first)`);
     if (!['none', 'fixed-supply-standard', 'other'].includes(tok.extension_class)) add('wrong-type', `${p}.extension_class`, 'unknown extension_class');
     const tpl = byId.get(tok.template_id);
     if (!tpl) return add('unknown-template', p, `token ${tk}: unknown template \`${tok.template_id}\``);
@@ -440,11 +437,6 @@ function validate(doc: unknown, expectedNetwork?: string): { json: RegistryJson;
     const prevKey = identities.get(key);
     if (prevKey) add('duplicate-identity', p, `tokens ${prevKey} and ${tk} have the same identity (family, covenant id, template hash, extension commitment)`);
     identities.set(key, tk);
-    if (tok.status === 'listed') {
-      const nl = (m: string) => add('not-listable', p, `token ${tk}: cannot be listed: ${m}`);
-      if (!tok.verified) nl('not verified against chain');
-      if (tpl.review_status !== 'reviewed') nl('its template is not reviewed');
-    }
   });
   return { json: doc as unknown as RegistryJson, issues };
 }
@@ -471,8 +463,8 @@ export function checkTemplates(kob: KobWasm, templates: RegistryTemplateJson[]):
   });
 }
 
-function assess(tok: RegistryTokenJson, tpl: RegistryTemplateJson, check: TemplateCheck): UntradableReason | null {
-  if (tok.status === 'delisted') return 'delisted';
+/** Why this build cannot trade a token of this template (`null`: it can): the program allowlist and the wasm pin, nothing about the token itself. */
+function assess(tpl: RegistryTemplateJson, check: TemplateCheck): UntradableReason | null {
   if (tpl.review_status !== 'reviewed') return 'template-pending-review';
   if (!check.program) return 'template-unsupported';
   if (!check.matchesPinned) return 'template-mismatch';
@@ -506,11 +498,11 @@ export function parseRegistry(json: string | unknown, opts: ParseOptions): Token
   const tokens = reg.tokens.map((t): TokenInfo => {
     const tpl = tplById.get(t.template_id)!;
     const check = checkById.get(t.template_id)!;
-    const reason = assess(t, tpl, check);
+    const reason = assess(tpl, check);
     return {
       ticker: t.ticker, name: t.name, family: t.family, covenantId: t.covenant_id, templateId: t.template_id, templateHash: tpl.template_hash,
       extensionCommitment: t.extension_commitment, extensionClass: t.extension_class, decimals: t.decimals,
-      tick: null, status: t.status,
+      tick: null,
       capabilities: tpl.capabilities ?? [], display: t.display ?? null, program: check.program, templateMatchesPinned: check.matchesPinned, prefixLen: tpl.prefix_len, suffixLen: tpl.suffix_len,
       slots: { inputs: tpl.max_token_inputs, outputs: tpl.max_token_outputs }, tradable: reason === null, untradableReason: reason, json: t,
     };
