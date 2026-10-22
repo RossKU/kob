@@ -154,8 +154,8 @@ covenant-lineage change invalidates any item above. `unconditional` is the serve
 a fact the chain proves; its value is that it is explicit, pinned and signed over.
 
 The KOB reference derives the class from its token registry (`registry/tokens.json`). Its default
-allowlist holds the tokens that are `listed` and `verified` and whose program is on the registry's
-strict list (`reviewed`). The class is `unconditional` only when the program's registry `capabilities`
+allowlist holds the registry's token entries that are `verified` (covenant id and template hash checked
+against chain: a fact, not a listing) and whose program this build supports (`reviewed`). The class is `unconditional` only when the program's registry `capabilities`
 are empty; any capability (freeze, seize, blacklist, mint authority, public mint, burn) makes it
 `issuer-controlled`, and a merchant then needs `allow_issuer_controlled`. Any other token is served
 only if the operator adds it explicitly. Only KCC-20 tokens are merchant assets of this profile: a KRON
@@ -779,8 +779,8 @@ the expected diagnostic and public reason. Placeholders below are filled at publ
    instead of two?
 5. **Custody taxonomy and registry.** Are two classes enough? Who should maintain the reviewed-program
    list, and should the binding define a registry format so that `custody: unconditional` is
-   comparable across operators? In the shipped KOB registry (`registry/tokens.json`) no KCC-20 program is
-   `reviewed` and no token is `listed`, so the default allowlist is empty.
+   comparable across operators? The shipped KOB registry (`registry/tokens.json`) has no KCC-20 token
+   entry, so the default allowlist holds no KCC-20 merchant asset.
 6. **`confirmed` depth.** The binding leaves the numeric depth to adapters. Would a documented
    default (100 DAA here) be welcome for token profiles?
 7. **Owner schemes.** Should a later revision define the P2SH-authority and hashed-key owner schemes

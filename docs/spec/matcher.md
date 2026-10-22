@@ -130,24 +130,26 @@ swept only by the maker's `cancel`. A token of neither A nor B owned by a pair o
 repeating `KobIfdAsk` with `amountLeft = 0` has no custody at all (it waits for its exits, §6.1); every token UTXO owned
 by its id is then a stray (a repeating `KobIfdPair` likewise holds only the custodies its state counts).
 
-### 1.2a Token listing: genesis check and warnings
+### 1.2a Token facts: genesis check and warnings
 
 A token's covenant id commits only to the P2SH hashes of its genesis outputs, so a genesis may hide a
-non-template output that later mints look-alike tokens or feeds a fake balance into a genuine
+non-template output that later mints look-alike tokens or feeds a fake balance into a real
 transfer; neither the template nor a holder UTXO shows it. The registry records the check of EVERY
 genesis output (`kob_protocol::registry::verify_genesis`) as the token field `genesis_verified`
-(`true` clean, `false` not clean, absent not checked; `registry/README.md`).
+(`true` clean, `false` not clean, absent not checked; `registry/README.md`). These are facts, not a
+listing decision: KOB makes no per-token judgement (no official status, no delisting, no
+maintainer-written warning), and the warnings below are derived from the recorded facts by code.
 
 - The indexer MUST attach the warning code `genesis_unverified` (`warnings` of `GET /v1/tokens`
   and of every order view of that token) to every token whose registry entry does not say
-  `genesis_verified: true`, including every open-list token without an entry.
-- A token without `genesis_verified: true` MUST NOT be shown as `official`; an operator MAY list
-  only tokens with `genesis_verified: true`.
-- Wallets MUST show the warning (and the entry's free-text `warning`) wherever the token is shown.
+  `genesis_verified: true`, including every open-list token without an entry. An operator MAY list
+  only tokens with `genesis_verified: true` (`ListingRules.require_genesis_verified`, its own policy).
+- The indexer MUST attach the warning code `live_mint_authority` to every token whose registry
+  `genesis` record lists live mint-authority cells (`live_minters` non-empty): its supply can still grow.
+- Wallets MUST show the warnings wherever the token is shown.
 - The entry's `genesis` record states what the check found (genesis txid and DAA score, the group's
   outputs and supply, its mint-authority outputs) and whether a live mint authority exists
-  (`live_minters`: `[]` none, absent undetermined). `official` additionally needs `live_minters: []`;
-  a token with a live mint authority MUST carry a `warning`. Anyone can re-derive the records from
+  (`live_minters`: `[]` none, absent undetermined). Anyone can re-derive the records from
   the committed chain evidence (`kob registry verify-genesis --network mainnet`, evidence collected
   read-only by `web/scripts/registry-genesis-evidence.mjs`); every recorded byte is checked against
   a hash (txid, covenant id, P2SH), so the explorer that serves pruned history is not trusted.

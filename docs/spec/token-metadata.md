@@ -2,8 +2,9 @@
 
 Status: adopted 2026-10-19. A token KOB creates declares its name, ticker, decimals and links on chain under KCC-23 "MJ: Metadata
 JSON", and KOB reads a token's facts from that declaration before anything else. KOB holds no authoritative token-metadata
-database: the facts come from the chain, curation (the official badge, anti-impersonation) from the registry list
-(`registry/tokens.json`), which keeps a pinned snapshot of the facts and is checked against the chain.
+database: the facts come from the chain, and the registry (`registry/tokens.json`) only keeps a pinned snapshot of them, checked
+against the chain. Curation (an official status, anti-impersonation, logos) is not KOB's: it belongs to external community token
+lists the user chooses (`registry/README.md`, "Curation is not KOB's").
 
 ## 1. The standard and its pin
 
@@ -51,7 +52,8 @@ the optional ones that are not set:
   `issues`), unknown fields are ignored, and a declaration without a usable `decimals` leaves the token's decimals undeclared.
 * Facts the chain states by itself are not declared again: the supply is the sum of the genesis outputs, the program its template
   hash. (`totalSupply`, `fixedSupply` and `standard` of KOB's older off-chain `metadata.json` are gone; its `icon` is now `logo`.)
-* The registry entry KOB proposes (`registry_entry.json`) keeps `display.icon` / `display.x` / `display.telegram` and carries the
+* The token's facts in the registry format that issuance writes (`registry_entry.json`, for tools and community lists that read that
+  format; not a listing request) keep `display.icon` / `display.x` / `display.telegram` and carry the
   declared object verbatim as `display.kcc23`.
 
 ### Size limits
@@ -140,7 +142,7 @@ the optional ones that are not set:
 * **CLI** (`kob place`, `send`, `merge`, the order actions): the indexer's proof, verified against the covenant id, the same read
   order and the same refusals; a declared token without orders is traded by its covenant id from a wallet holding it
   (`crates/kob-cli/README.md`).
-* **Registry and chain disagree.** The registry is curation; a fact in it that differs from the declaration is never silently
+* **Registry and chain disagree.** The registry is a pinned snapshot; a fact in it that differs from the declaration is never silently
   preferred: the on-chain values are shown, flagged "facts disagree" with the fields named (and a banner on the token's market),
   and when the **decimals** differ no order of the token is planned until the two agree (the same base units would otherwise mean
   other whole-token amounts and prices). The same holds for a market whose orders use another price scale than the declared

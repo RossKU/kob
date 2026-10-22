@@ -532,7 +532,7 @@ net it against opposite pair orders of the same pair, or fill it from inventory 
   rows of their own token. The `orders` row: `token_cov_id` A, `quote_cov_id` B, `side` from the state, `in_book` 0, `price`
   null (no KAS price), `tip` the KAS tip per whole A, `ext_commit` the first custody's extension commitment (an exit: its entry's
   `aExt` / `bExt`). The token registry records both identities.
-* **Listing**: token A passes the rules of an ask (allowlist / registry and strict template list, family, extension commitment,
+* **Listing**: token A passes the rules of an ask (allowlist / registry and its supported programs, family, extension commitment,
   standard scale, 90-day expiry, carrier; no KAS minimum order value); token B the same rules with its own scale, a refusal being
   `unlisted_reason = quote_<reason>`. Exits inherit their entry's decision. The numeric gate applies.
 * **Exact custody**: an output owned by the order id is a custody only when it is exactly one of the custodies the order's state
@@ -1117,17 +1117,18 @@ with `Restart=on-failure`; state is durable across restarts. The template versio
 #### Token allowlist
 
 `--tokens registry/tokens.json` (a `deploy-mainnet` build without `--tokens` uses the registry it embeds and pins, A.3). The file is either the token registry itself (`schema_version` +
-`templates`; it is validated by `kob_protocol::registry` and only its `listed` tokens enter the list, with
-their template hash, family, extension commitment and `decimals`) or a bare array / `{"tokens": [...]}` with
+`templates`; it is validated by `kob_protocol::registry` and every token entry enters the list, with its
+template hash, family, extension commitment and `decimals`: facts, not a listing decision) or a bare array / `{"tokens": [...]}` with
 snake_case or camelCase keys, where only the covenant id is mandatory. Optional `templateHash`,
-`extensionCommitment`, `family` and `decimals` tighten the rule for that token (an unknown or misspelt key is refused at startup, so a pin is never dropped silently).
+`extensionCommitment`, `family` and `decimals` tighten the rule for that token (an unknown or misspelt key is refused at startup, so a pin is never dropped silently). The per-token judgements of older files (a registry token's `status`, `official` and `warning`, a list entry's `official`) are read and ignored, so an operator's file of the earlier shape keeps loading and lists exactly what it would list without them.
 
-**Strict templates, open tokens.** A registry document also carries the STRICT template list (its `reviewed` templates; `registry/README.md`;
-no template is `reviewed` yet in the shipped `registry/tokens.json`, so it lists nothing until one is). With one loaded, the list is OPEN: every order whose token program (template hash and
-family) is on the strict list is listed, whether or not its token has an entry (a lookalike ticker is harmless: identity is the
-covenant id plus template hash); an order on any other program is unlisted with `token_template_not_strict`, a delisted token
-with `token_delisted`. A registry entry adds the ticker, the decimals (the standard scale, enforced only for entries that set
-`decimals`) and the standing: `official` (confirmed genuine) or `unverified`. Every token the executor lists is tracked
+**Supported programs, open tokens.** A registry document also carries the program allowlist (its `reviewed` templates: the
+token programs this build supports for trading; `registry/README.md`). With one loaded, the list is OPEN: every order whose token
+program (template hash and family) is a supported one is listed, whether or not its token has an entry (a lookalike ticker is
+harmless: identity is the covenant id plus template hash); an order on any other program is unlisted with
+`token_template_not_strict`. The registry never refuses a token for what it is: KOB makes no per-token listing decision (an operator's own `ListingRules`, such as `require_genesis_verified`, or a bare list are that operator's policy). A registry entry
+adds facts: the ticker, the decimals (the standard scale, enforced only for entries that set `decimals`), the template hash and
+extension commitment an order of the token must match, and the genesis record. Every token the executor lists is tracked
 (custody, holdings). A bare list without templates keeps the old behaviour (only its entries are listed); without `--tokens`
 nothing is listed. Third-party KCC-20-compatible programs (KaspaCom's KCC20 0.2.5) are accepted by adding their template to the
 registry, never by code.
@@ -1165,7 +1166,7 @@ should default to settled. The mempool tier is not served by the indexer.
 |---|---|
 | `GET /v1/health` | full status: follower state, cursor, node DAA, lag (`lag_daa`, `lag_seconds`), `alarms` for the 1/6/12/24 h thresholds, reorg and applied-block counters, record-log position (`records_next_n`) |
 | `GET /v1/health/ready` | 200 only when following or catching up with lag below the smallest alarm threshold (load balancers) |
-| `GET /v1/tokens` | registry tokens plus, with a strict template list loaded, every token of a strict-list program that an order placement named (listed or not; at most 5000 rows): `ticker` (empty without a registry entry), `covenant_id`, `template_hash`, `template_id`, `extension_commitment` (without an entry: the one commitment the token's order placements named, the all-zero one of the standard class included; null when they named several, or none: a pair placement whose state does not carry a token's commitment names none for it), `family`, `decimals`, `scale` (the standard scale `10^decimals`, at most `10^9`; null without an entry: clients take it from the token's orders, and the first order names it), `market_scale` (without an entry: the scale of the token's earliest order, open or ended: listed orders first among its oldest 1000; the first order set it and it stays the market's, so a client prices new orders at it and refuses decimals of another scale; null with an entry and before any order), `standing` (`official` or `unverified`: this operator's reading of the registry), `official_declared`, `genesis_verified` (registry flag, `null` when it does not say), `warnings` (`genesis_unverified`), `registry` (`source`, `sha256` of the document loaded), `powers` (program capabilities: `freeze`, `seize`, `blacklist`, `mint-authority`, ...), `open_asks`, `open_bids`, `declaration` (`true` when the indexer holds a verified KCC-23 declaration for the covenant id, served by the next endpoint; absent otherwise) |
+| `GET /v1/tokens` | registry tokens plus, with a program allowlist loaded, every token of a supported program that an order placement named (listed or not; at most 5000 rows): `ticker` (empty without a registry entry), `covenant_id`, `template_hash`, `template_id`, `extension_commitment` (without an entry: the one commitment the token's order placements named, the all-zero one of the standard class included; null when they named several, or none: a pair placement whose state does not carry a token's commitment names none for it), `family`, `decimals`, `scale` (the standard scale `10^decimals`, at most `10^9`; null without an entry: clients take it from the token's orders, and the first order names it), `market_scale` (without an entry: the scale of the token's earliest order, open or ended: listed orders first among its oldest 1000; the first order set it and it stays the market's, so a client prices new orders at it and refuses decimals of another scale; null with an entry and before any order), `genesis_verified` (registry fact, `null` when it does not say), `warnings` (derived from facts: `genesis_unverified`, `live_mint_authority`), `registry` (`source`, `sha256` of the document loaded), `powers` (program capabilities: `freeze`, `seize`, `blacklist`, `mint-authority`, ...), `open_asks`, `open_bids`, `declaration` (`true` when the indexer holds a verified KCC-23 declaration for the covenant id, served by the next endpoint; absent otherwise) |
 | `GET /v1/tokens/{covenant_id}/declaration` | the token's KCC-23 metadata declaration as a launch proof (`kob_protocol::kcc23::LaunchProof`): `{"format": "kob-kcc23-proof/1", "covenantId", "preparation", "genesis"}`, each transaction in the fields its version 1 id commits to (`version`, `inputs` [`transactionId`, `index`, `sequence`], `outputs` [`value`, `scriptPublicKey` {`version`, `script`}, `covenant` {`authorizingInput`, `covenantId`} or null], `lockTime`, `subnetworkId`, `gas`, `payload`; bytes as hex, 64-bit numbers as decimal strings). The preparation's payload is `0x00` and the declaration JSON. The indexer keeps a proof only after `LaunchProof::verify` accepted it (both transaction ids and the covenant id recomputed) and a client verifies it again: an indexer can withhold a declaration, never forge one. It captures a preparation accepted with the standard version 1, lock time 0, native subnetwork and gas 0 (the fields a `High` answer leaves out) whose genesis is accepted within `declaration_window_hours` (72) of it. `404 not_found` when it holds none, `400 bad_request` for an id that is not 32 bytes of hex; one primary-key lookup on the light lane, rate cost 1 |
 | `GET /v1/token-utxos?owner=&token=&spent=&limit=&cursor=` | token UTXOs of tracked tokens with proven states, by owner and / or token (section 5.1) |
 | `GET /v1/token-events?token=&limit=` | token identities seen in placement records |
@@ -1174,7 +1175,7 @@ should default to settled. The mempool tier is not served by the indexer.
 | `GET /v1/pairs/{base}/{quote}/book?depth=` | the pair book: `direct` (`KobPair`) and `entry` (`KobIfdPair` at its limit) levels and the implied quotes of the KAS route (section 5.4) |
 | `GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=` | pair candles derived from the KAS series of A and of B (never from pair fills; section 5.4) |
 | `GET /v1/pairs/{base}/{quote}/fills?limit=&before=` | pair-order fills (volume, `counterparty`, `price_source: none`) and the 24 h pair volume (section 5.4) |
-| `GET /v1/orders/{covenant_id}` | order terms, status, current outpoint and decoded `state`, `auction`, `quote`, `kill_daa`, `refund_due_daa`, `deadline`, `repeat`, `custody`, `strays`, parent/children, `warnings` (`genesis_unverified` unless every token it trades is `genesis_verified`, as on `GET /v1/tokens`); pair orders add `pair` (5.4) |
+| `GET /v1/orders/{covenant_id}` | order terms, status, current outpoint and decoded `state`, `auction`, `quote`, `kill_daa`, `refund_due_daa`, `deadline`, `repeat`, `custody`, `strays`, parent/children, `warnings` (`genesis_unverified` unless every token it trades is `genesis_verified`, `live_mint_authority` when a genesis record of one lists a live minter, as on `GET /v1/tokens`); pair orders add `pair` (5.4) |
 | `GET /v1/orders?maker=&token=&status=&limit=&cursor=` | orders of a maker or token (a pair order is listed under both its tokens), keyset paging |
 | `GET /v1/orders/{covenant_id}/events` | lifecycle events: `create`, `fill`, `arm`, `trail`, `rearm`, `cancel`, `refund`, `kill`, `unknown`; `arm`, `trail` and the `fill` of a triggered stop carry `detail.evidence` (`input`, `order`: the evidence order's covenant id, `side` 1 ask / 2 bid, `price`: its quote) |
 | `GET /v1/fills?token=&side=&limit=&before=` | recent fills |
@@ -1585,11 +1586,12 @@ stall or drain any executor:
   stays as a counted safety net.
 * **Other executors are not trusted.** Races, replacements and stolen fills are normal: every submitted transaction is engine-validated
   and its profit is read from the built transaction, never from the plan, so a lost race costs nothing.
-* **Registry facts, not verdicts.** `/v1/tokens` returns the registry's raw flags (`official_declared`, `genesis_verified`) and the
-  registry document the operator loaded (`registry.source`, `registry.sha256`); `standing` and `warnings` are that operator's
-  reading of it. `genesis_verified: false` withdraws `official`; `genesis_unverified` is warned for every token whose genesis the
-  registry does not confirm (a covenant id only commits to the genesis output hashes, so a hidden genesis output could mint
-  look-alike tokens); `ListingRules.require_genesis_verified` (off by default) lists only verified tokens. `possibly_frozen` carries
+* **Registry facts, not verdicts.** `/v1/tokens` returns the registry's facts (`genesis_verified`) and the registry document the
+  operator loaded (`registry.source`, `registry.sha256`), and no standing of any token (there is none: KOB makes no per-token
+  judgement, curation belongs to external community lists). `warnings` are derived from those facts by code:
+  `genesis_unverified` for every token whose genesis the registry does not record as checked (a covenant id only commits to the
+  genesis output hashes, so a hidden genesis output could mint look-alike tokens), `live_mint_authority` for a token whose genesis
+  record lists live mint-authority cells (its supply can still grow); `ListingRules.require_genesis_verified` (off by default) lists only verified tokens. `possibly_frozen` carries
   `possibly_frozen_basis`: it is this operator's own engine pre-simulation, not chain data.
 
 #### Rate limiting and proxies

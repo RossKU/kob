@@ -87,7 +87,7 @@ It lists every order template of both families from `contracts/artifacts` (`scri
 hash, prefix / suffix lengths) in `deployment.json` and `DEPLOYMENT.md`, and its own `SHA256SUMS` pins those artifacts,
 so a change of any order template shows up as a stale deployment record. When `registry/tokens.json` is the
 registry of the network (its `network` field: mainnet), the record also pins it (`registry`: path, sha256 of
-the LF bytes, strict templates, listed tokens) and its `SHA256SUMS` lists it, so a registry change makes the
+the LF bytes, supported and pending templates, the token entries with their genesis-check fact) and its `SHA256SUMS` lists it, so a registry change makes the
 record stale too. Needs node.
 
 Binaries that embed the record (cargo features `deploy-tn10` / `deploy-mainnet`, exclusive, off by default):

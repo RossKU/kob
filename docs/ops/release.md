@@ -6,8 +6,8 @@ mainnet services (node, indexer, matcher, keepers, x402 facilitator) are run by 
 
 Nothing in KOB has been independently audited, and no external audit precedes the launch (maintainer decision
 2026-10-12): mainnet launches as a canary, with a visible pre-audit notice in the web app (`SECURITY.md`). The order
-contracts and the token programs on the strict list were reviewed internally only, and nothing on chain can pause or
-rescue an order. The launch therefore runs with a strict template list (section 3).
+contracts and the token programs this build supports were reviewed internally only, and nothing on chain can pause or
+rescue an order. The launch therefore runs with a strict program allowlist (section 3).
 
 ## 1. No genesis step: the build is reproducible from source
 
@@ -34,7 +34,7 @@ for testnet-10 and mainnet.
 1. Wallet signing gate passed for the wallets the release supports (covenant inputs signed by the wallet).
 2. KCC-20 template bytes pinned against the upstream specification (Last Call) and its conformance vectors
    (`crates/kob-tests/vectors`, `docs/spec/kcc-conformance.md`); the KCC-20 programs other than the two below stay
-   `pending-review` (not on the strict list). The reference 3/3 (`kcc20-ref-3x3`, KOB's standard program) is `reviewed` by internal
+   `pending-review` (not supported for trading). The reference 3/3 (`kcc20-ref-3x3`, KOB's standard program) is `reviewed` by internal
    review only (maintainer decision 2026-10-12, canary launch), and so is the reference's published public-mint build
    (`kcc20-ref-public-mint`, maintainer decision 2026-10-13, the same permissionless KCC-20 policy).
 3. Internal review: no open high or critical finding.
@@ -44,24 +44,27 @@ for testnet-10 and mainnet.
 
 ## 3. Registry for launch
 
-`registry/tokens.json` is the mainnet registry the release pins. At launch (founder decision 2026-10-03):
+`registry/tokens.json` is the mainnet registry the release pins: a snapshot of facts and of the programs this build
+supports, not a list of approved tokens. KOB makes no listing decision; curation (official status, anti-impersonation,
+logos, warnings written by people) belongs to external community token lists (`registry/README.md`, "Curation is not
+KOB's"). At launch:
 
-* **Strict template list:** the two KRON programs (`kron-2433`, `kron-2732`), reviewed with conditions, and the
-  reference KCC-20 3/3 (`kcc20-ref-3x3`, the program `kob token issue` and the web app issue), reviewed internally
-  (maintainer decision 2026-10-12): every token of these programs is tradable, listed or not (issuance is
-  permissionless; there is no listing step for a KCC-20 3/3 token). The reference's published public-mint build
-  (`kcc20-ref-public-mint`, KOB's second issuance option and the program of third-party launchpads such as Kasseal) is
-  reviewed internally too (maintainer decision 2026-10-13) and on the strict list: its tokens are tradable the same way;
-  a token whose genesis carries a `PublicMint` can grow up to `supply + mint_allowance` (recorded by verify-genesis).
-  The 8/8 prototype and KaspaCom's KCC20 0.2.5 (finding K-1) stay `pending-review`: their tokens are not tradable on
-  mainnet.
-* **Tokens:** the eight KRON tokens of the census are listed with their genesis records (genesis verified on
-  mainnet data, no live mint authority). Six are `official`: KRON, KASCOV, ANSEM, IFWEN, PEEPS, KDIST.
-  **PEPE** ("The Ultimate test") and **DNBT** ("dont buy this is test") are listed and verified but **not
-  official**: they are test tokens per their own names, and each carries a maintainer `warning` in the registry
-  file (PEPE's also says it is not the well-known PEPE: the ticker collides). The web app does not show
-  verification, officialness or registry warnings: token issuance is permissionless and the UI does not curate
-  tokens. It shows a short note on every listed token whose ticker another listed token uses too.
+* **Supported programs (the program allowlist):** the two KRON programs (`kron-2433`, `kron-2732`), reviewed with
+  conditions, and the reference KCC-20 3/3 (`kcc20-ref-3x3`, the program `kob token issue` and the web app issue),
+  reviewed internally (maintainer decision 2026-10-12): every token of these programs is tradable, with a registry entry
+  or without one (issuance is permissionless; there is no listing step for any token). The reference's published
+  public-mint build (`kcc20-ref-public-mint`, KOB's second issuance option and the program of third-party launchpads such
+  as Kasseal) is reviewed internally too (maintainer decision 2026-10-13) and supported: its tokens are tradable the same
+  way; a token whose genesis carries a `PublicMint` can grow up to `supply + mint_allowance` (recorded by verify-genesis,
+  and reported as the warning `live_mint_authority` while a minter with allowance lives). The 8/8 prototype and KaspaCom's
+  KCC20 0.2.5 (finding K-1) stay `pending-review`: this build does not trade their tokens on mainnet.
+* **Token entries:** the eight KRON tokens of the census (KRON, KASCOV, PEPE, ANSEM, IFWEN, PEEPS, DNBT, KDIST) have
+  entries with their identity check (`verified`) and genesis records (every genesis output an instance of the program on
+  mainnet data, no live mint authority). An entry states facts only: it does not make a token tradable, and KOB says
+  nothing about whether any token is genuine (PEPE's and DNBT's own names call them tests; that is their creators'
+  statement, not KOB's). The web app shows no verification or officialness of any token: token issuance is
+  permissionless and the UI does not curate tokens. It shows a short note on every token whose ticker another token it
+  shows uses too.
 * Before the release: `cargo run -p kob-cli -- registry verify-genesis --network mainnet` must pass on the
   committed evidence (`registry/README.md`, "Genesis check").
 
@@ -93,7 +96,7 @@ scripts/build-wasm.sh --mainnet --web
 
 `deploy-mainnet` and `deploy-tn10` are exclusive (a compile error names both). The templates are the same in
 every build; the feature only records the network and pins the registry: `kob-executor` refuses a configured
-network other than `mainnet`, and without `--tokens` it lists the tokens of the embedded, pinned registry
+network other than `mainnet`, and without `--tokens` it reads the embedded, pinned registry (its supported programs and token facts)
 (an operator may still pass `--tokens` with an own list; the executor logs that its hash differs from the pin,
 and `GET /v1/tokens` reports `registry.source` and `registry.sha256` either way).
 

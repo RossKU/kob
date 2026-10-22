@@ -4,7 +4,7 @@ Status: 2026-10-14. Normative for this repository. KOB pairs with every KCC-20 l
 KaspaCom, KForge, future ones), and each brings a token program or a build of a shared one. Supporting a new program must be a
 small, well-defined, reviewable step. This document defines the **token-program profile** (everything KOB needs to know about
 one program, declared in one place), the onboarding path (`kob registry add-program`), the generic genesis rule for launchpad
-genesis shapes, and the checklist a reviewer works through before a program's tokens can be listed.
+genesis shapes, and the checklist a reviewer works through before this build supports trading a program's tokens.
 
 ## 1. The profile
 

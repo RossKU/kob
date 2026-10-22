@@ -195,10 +195,11 @@ After connect the adapters listen for account and network changes (`WalletAdapte
 * **No curation of tokens.** Token issuance is permissionless, so the UI shows no verified / official / pending-review labels, no "genesis verified" badge and
   no registry notes about who listed what. What it does show is technical: the token program family, the freeze / seize / blacklist warnings (template
   `capabilities` from the registry, plus the indexer's `powers`, which can only add), the full covenant id with a copy button, and an `untradable` reason.
-  A token this build cannot trade (its program is not one this build embeds, or it is delisted) is not listed, not offered in selectors and has no market
-  page. When two or more listed tokens share a ticker (look-alike letters and homoglyphs count as the same), the list row, the token page header, the pair
+  A token this build cannot trade (its program is not one this build supports and embeds) is not listed, not offered in selectors and has no market
+  page; no token is ever refused for what it is (KOB makes no listing decision, the registry is a pinned snapshot of facts and curation belongs to
+  the community token lists a user chooses). When two or more tokens the app shows share a ticker (look-alike letters and homoglyphs count as the same), the list row, the token page header, the pair
   facts and the order ticket say "Another token uses this ticker — check the covenant id". The covenant id, not the ticker, is the identity.
-* **Several indexers.** `extraIndexerUrls` (config.json / `__KOB_CONFIG__`, at most 4) are cross-checked on the token page: standing, powers and best ask / bid are
+* **Several indexers.** `extraIndexerUrls` (config.json / `__KOB_CONFIG__`, at most 4) are cross-checked on the token page: powers, the market's price scale and best ask / bid are
   compared and any disagreement is shown. With one indexer the footer and Settings say "single indexer, not cross-checked".
 * **Guards.** If the indexer cannot list the wallet's own orders (self-trade prevention) or the book, the order cannot be placed: one error line
   ("Could not read the token's guard data; try again in a moment") until the ticket's background refresh reads them, then it clears by itself.

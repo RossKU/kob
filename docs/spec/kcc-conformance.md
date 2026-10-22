@@ -178,17 +178,19 @@ supply, fixed forever; KOB reports `supply` (minted at genesis), `mint_allowance
 and the amount minted at a later time is that maximum less the `remaining` of the live minters
 (`public_mint::GenesisSupply`). The registry records `mint_allowance` in the token's `genesis` record (`registry/README.md`).
 
-Official. `official` needs a genesis record without a live mint authority (`live_minters: []`). A genesis without a
-`PublicMint` proves that (no minter can appear later), like a KRON genesis without a minter and like every genesis of the
-standalone reference programs. With genesis minters the record stays undetermined until the minters' lineage is traced to
-the live `PublicMint` cells with allowance left; such a token can be official once minting is closed, its supply then final
-at `supply + mint_allowance`. The `kcc20-ref-public-mint` template is `reviewed` (internal review only, 2026-10-13): its tokens
-are tradable without a registry entry, and listed or official only with a genesis record as above.
+Live mint authority. The `genesis` record states whether a live mint authority exists (`live_minters`: `[]` none, absent
+undetermined, non-empty the live cells); a token whose record lists live minters carries the derived warning
+`live_mint_authority` (its supply can still grow). A genesis without a `PublicMint` proves `[]` (no minter can appear later),
+like a KRON genesis without a minter and like every genesis of the standalone reference programs. With genesis minters the
+record stays undetermined until the minters' lineage is traced to the live `PublicMint` cells with allowance left; once
+minting is closed the record says `[]` and the supply is final at `supply + mint_allowance`. The `kcc20-ref-public-mint`
+template is `reviewed` (internal review only, 2026-10-13: this build supports trading it): its tokens are tradable with or
+without a registry entry; an entry only records these facts.
 
 Evidence: `crates/kob-tests/tests/kcc20_public_mint_genesis_tests.rs` (rusty-kaspa v2.1.0 engine: the genesis passes the
 covenant context and `verify_genesis`; the genesis minter mints a holder of the pinned handle, the seed creates a
-zero-amount holder, and the two then transfer as `KCC20` holders; the refusals above; the registry record and the official
-rule over chain evidence, `genesis_evidence::verify_token`).
+zero-amount holder, and the two then transfer as `KCC20` holders; the refusals above; the registry record and its live-mint-authority fact
+over chain evidence, `genesis_evidence::verify_token`).
 
 ### 4.4 Issuance: the standard 3 / 3 program (2026-10-10)
 

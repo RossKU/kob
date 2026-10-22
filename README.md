@@ -29,8 +29,10 @@ off-chain custody.
 * No external audit is planned before launch. An internal audit (`docs/security/AUDIT-2026-10.md`) and test,
   mutation (`tools/ablation`) and fuzz suites exist; they are not a substitute. See `SECURITY.md`.
 * Testnet-10 remains the network for testing.
-* Tokens of the KCC-20 3 / 3 reference program and its public-mint build are tradable without listing, KRON tokens
-  after a genesis check; other programs are `pending-review` (`registry/README.md`, `docs/spec/token-programs.md`).
+* Tokens of the programs this build supports (the KCC-20 3 / 3 reference program, its public-mint build, the two KRON
+  programs) are tradable with no listing step: KOB makes no per-token listing decision, and a token whose genesis the
+  registry does not record as checked carries the `genesis_unverified` warning; other programs are `pending-review`
+  (`registry/README.md`, `docs/spec/token-programs.md`).
 * KCC-20 is in Last Call, not final (`docs/spec/kcc-conformance.md`).
 * The Argent build needs two `argentc` patches that are not upstream (`argent/UPSTREAM.md`).
 * Interfaces, encodings and artifact ids can still change.
@@ -49,7 +51,7 @@ off-chain custody.
 | `crates/kob-tests` | The contracts executed in the rusty-kaspa v2.1.0 script engine: positive and negative harnesses |
 | `web/` | Static, client-side, non-custodial web UI (TypeScript, Preact) over `kob-wasm`; mock indexer and node for offline use |
 | `packages/kob-x402` | TypeScript x402 SDK and an example paid API |
-| `registry/` | Token registry: strict template list and open token list |
+| `registry/` | Token registry: the supported programs and a pinned snapshot of token facts (no curation) |
 | `argent/` | Pinned Argent upstream commit, our two patches, reproducible `argentc` build |
 | `vendor/` | SilverScript v1.0.0 (patched for rusty-kaspa v2.1.0) and the Argent artifact crate |
 | `tools/` | `ablation` (contract mutation runner), `sil2argent` (publishes hand-written contracts as an Argent artifact), `router-gen` (router generator), `soak` (testnet market simulator), `wallet-gate` (browser-wallet covenant-signing checks) |
