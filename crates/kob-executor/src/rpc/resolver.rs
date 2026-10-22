@@ -233,44 +233,58 @@ pub fn endpoint(url: &str) -> Result<String, String> {
     if !is_resolver(url) {
         return Ok(url.to_string());
     }
-    let (network, avoid, resolve_fn) = {
-        let s = lock();
+    // the view of the other entries may change while the resolvers are asked (a failover, another client's resolution):
+    // a node another entry took meanwhile is not taken a second time, the resolution is repeated on the new view
+    for attempt in 1..=3 {
+        let (network, avoid, resolve_fn) = {
+            let s = lock();
+            if let Some(u) = s.current.get(url) {
+                return Ok(u.clone());
+            }
+            if s.network.is_empty() {
+                return Err("a resolver node needs the network (set before connecting)".into());
+            }
+            if let Some(b) = s.backoff.get(url).filter(|b| b.until > Instant::now()) {
+                let wait = b.until.saturating_duration_since(Instant::now()).as_secs() + 1;
+                return Err(format!("no public node yet (the resolvers named none; again in {wait} s)"));
+            }
+            let mut avoid: Vec<String> = s.failed.iter().cloned().collect();
+            avoid.extend(in_use(&s, url));
+            (s.network.clone(), avoid, s.resolve)
+        };
+        let r = resolve_fn(&network, &avoid);
+        let mut s = lock();
+        let r = match r {
+            Ok(r) => r,
+            Err(e) => {
+                let delay = s.backoff.get(url).map_or(Duration::from_secs(2), |b| (b.delay * 2).min(Duration::from_secs(60)));
+                s.backoff.insert(url.to_string(), Backoff { until: Instant::now() + delay, delay });
+                tracing::warn!(entry = url, error = %e, retry_secs = delay.as_secs(), "no public Kaspa node");
+                return Err(e);
+            }
+        };
+        s.backoff.remove(url);
+        // another client of the same entry may have resolved meanwhile: keep one node per entry
         if let Some(u) = s.current.get(url) {
             return Ok(u.clone());
         }
-        if s.network.is_empty() {
-            return Err("a resolver node needs the network (set before connecting)".into());
+        let h = host(&r.url);
+        if in_use(&s, url).contains(&h) && !avoid.contains(&h) && attempt < 3 {
+            continue; // taken by another entry while the resolvers were asked
         }
-        if let Some(b) = s.backoff.get(url).filter(|b| b.until > Instant::now()) {
-            let wait = b.until.saturating_duration_since(Instant::now()).as_secs() + 1;
-            return Err(format!("no public node yet (the resolvers named none; again in {wait} s)"));
+        if avoid.contains(&h) || in_use(&s, url).contains(&h) {
+            tracing::warn!(entry = url, node = %h, "the resolvers name no other public node: this one failed lately or another entry uses it");
         }
-        let mut avoid: Vec<String> = s.failed.iter().cloned().collect();
-        avoid.extend(s.current.iter().filter(|(k, _)| k.as_str() != url).map(|(_, v)| host(v)));
-        (s.network.clone(), avoid, s.resolve)
-    };
-    let r = resolve_fn(&network, &avoid);
-    let mut s = lock();
-    let r = match r {
-        Ok(r) => r,
-        Err(e) => {
-            let delay = s.backoff.get(url).map_or(Duration::from_secs(2), |b| (b.delay * 2).min(Duration::from_secs(60)));
-            s.backoff.insert(url.to_string(), Backoff { until: Instant::now() + delay, delay });
-            tracing::warn!(entry = url, error = %e, retry_secs = delay.as_secs(), "no public Kaspa node");
-            return Err(e);
-        }
-    };
-    s.backoff.remove(url);
-    // another client of the same entry may have resolved meanwhile: keep one node per entry
-    if let Some(u) = s.current.get(url) {
-        return Ok(u.clone());
+        tracing::info!(entry = url, node = %h, resolver = %r.resolver, network = %network, role = role(url), "public Kaspa node (via the Kaspa resolver)");
+        s.current.insert(url.to_string(), r.url.clone());
+        return Ok(r.url);
     }
-    if avoid.contains(&host(&r.url)) {
-        tracing::warn!(entry = url, node = %host(&r.url), "the resolvers name no other public node: this one failed lately or another entry uses it");
-    }
-    tracing::info!(entry = url, node = %host(&r.url), resolver = %r.resolver, network = %network, role = role(url), "public Kaspa node (via the Kaspa resolver)");
-    s.current.insert(url.to_string(), r.url.clone());
-    Ok(r.url)
+    unreachable!("the last attempt returns")
+}
+
+/// The hosts the entries other than `url` use now.
+fn in_use(s: &State, url: &str) -> Vec<String> {
+    s.current.iter().filter(|(k, _)| k.as_str() != url).map(|(_, v)| host(v)).collect()
 }
 
 fn role(url: &str) -> &'static str {
@@ -303,24 +317,33 @@ pub fn failed(url: &str, node: &str) {
                 s.failed.pop_front();
             }
         }
-        // the entry left without a node: this one, or the survivor's once it is promoted
-        let mut need = url.to_string();
+        // another entry on the same host lost its node too
+        let same: Vec<String> = s.current.iter().filter(|(_, v)| host(v) == h).map(|(k, _)| k.clone()).collect();
+        for k in &same {
+            s.current.remove(k);
+        }
+        // the entries left without a node: this one (or the survivor's once it is promoted) and those on the same host
+        let mut need = vec![url.to_string()];
+        need.extend(same);
         if url == RESOLVER {
             // the survivor becomes the chain authority at once; its entry resolves a replacement
-            let survivor = s.current.iter().filter(|(k, _)| k.as_str() != RESOLVER).map(|(k, v)| (k.clone(), v.clone())).min();
+            let survivor =
+                s.current.iter().filter(|(k, v)| k.as_str() != RESOLVER && host(v) != h).map(|(k, v)| (k.clone(), v.clone())).min();
             match survivor {
                 Some((entry, n)) => {
                     s.current.remove(&entry);
                     s.current.insert(RESOLVER.to_string(), n.clone());
                     tracing::warn!(failed = %h, authority = %host(&n), from = %entry, "public node failed: the other node is the chain authority now; resolving a replacement");
-                    need = entry;
+                    need[0] = entry;
                 }
                 None => tracing::warn!(failed = %h, "public node failed and no other is connected: resolving again"),
             }
         } else {
             tracing::warn!(entry = url, failed = %h, "public node failed: resolving a replacement");
         }
-        let missing: Vec<String> = Some(need).filter(|e| !s.pending.contains(e)).into_iter().collect();
+        need.sort();
+        need.dedup();
+        let missing: Vec<String> = need.into_iter().filter(|e| !s.pending.contains(e) && !s.current.contains_key(e)).collect();
         if s.background {
             s.pending.extend(missing.iter().cloned());
             missing
@@ -503,6 +526,30 @@ pub(crate) mod tests {
         let d = describe();
         assert_eq!(d[0], ("resolver".to_string(), Some("b.example".to_string()), 1));
         assert_eq!(d[1], ("resolver:2".to_string(), Some("d.example".to_string()), 1));
+    }
+
+    /// A node another entry took while the resolvers were asked is not taken a second time; a failed host takes every entry
+    /// on it down, and the authority is never handed a node on the failed host.
+    #[test]
+    fn two_entries_never_end_on_one_host() {
+        let _g = serial();
+        // the first answer is a host another entry takes meanwhile (as a failover would)
+        fn racing(_: &str, avoid: &[String]) -> Result<Resolved, String> {
+            let mut s = lock();
+            if !s.current.contains_key("resolver") {
+                s.current.insert("resolver".into(), "wss://a.example/x/borsh".into());
+                return Ok(Resolved { url: "wss://a.example/x/borsh".into(), resolver: "fake".into() });
+            }
+            drop(s);
+            fake_resolve("testnet-10", avoid)
+        }
+        reset(racing);
+        let b = endpoint("resolver:2").unwrap();
+        assert_eq!(host(&b), "b.example", "not the host the authority took meanwhile");
+        // both entries on one host (an old race, or the resolvers had no other): its failure clears both, nobody is promoted
+        lock().current.insert("resolver:2".into(), "wss://a.example/x/borsh".into());
+        failed("resolver", "wss://a.example/x/borsh");
+        assert_eq!((current("resolver"), current("resolver:2")), (None, None));
     }
 
     /// Both nodes gone and the resolvers silent: every entry backs off (no resolution storm), then resolves again.

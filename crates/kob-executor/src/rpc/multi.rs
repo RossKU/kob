@@ -385,31 +385,62 @@ impl<N: ChainSource> MultiNode<N> {
     fn cross_checker(&self) -> Option<usize> {
         let now = Instant::now();
         (1..self.nodes.len()).find(|&i| {
-            self.specs[i].cross_check && !self.board.dropped(i) && !self.board.with(i, |p| p.backoff_until.is_some_and(|t| t > now))
+            let entry = &self.specs[i].url;
+            // a resolver entry being replaced has no node to ask: the primary goes on alone meanwhile, never waits for it
+            let replacing = super::resolver::is_resolver(entry) && super::resolver::current(entry).is_none();
+            self.specs[i].cross_check
+                && !replacing
+                && !self.board.dropped(i)
+                && !self.board.with(i, |p| p.backoff_until.is_some_and(|t| t > now))
         })
+    }
+
+    /// The cross-checking node's acceptance data from `start` (`None`: no such node now, or it could not answer: the primary
+    /// goes on alone and the node backs off). Asked while the primary answers the same request, so it costs no extra round trip.
+    async fn cross_ids(&self, j: Option<usize>, start: Hash32, min_confirmations: Option<u64>) -> Option<(usize, ChainIds)> {
+        let j = j?;
+        match tokio::time::timeout(CROSS_CHECK_TIMEOUT, self.nodes[j].chain_with_ids(start, min_confirmations)).await {
+            Ok(Ok(ids)) => Some((j, ids)),
+            Ok(Err(e)) => {
+                self.board.failed(j, Fault::Failed, &format!("cross-check: {e}"));
+                None
+            }
+            Err(_) => {
+                self.board.failed(j, Fault::Failed, &format!("timeout: cross-check after {CROSS_CHECK_TIMEOUT:?}"));
+                None
+            }
+        }
+    }
+
+    /// A window from the primary (`node`: its own client or the verifier's), vouched for by the cross-checking node, which is
+    /// asked for the same range at the same time (the window's bounds are read from the primary first, as
+    /// `fetch_window_from` would).
+    async fn primary_window(&self, node: &N, w: &WindowRequest) -> Result<Fetched, RpcError> {
+        let Some(j) = self.cross_checker() else { return fetch_window_from(node, w, Verbosity::High, Origin::PRIMARY).await };
+        let end_blue = match w.end_blue {
+            Some(b) => b,
+            None => node
+                .block_blue_score(w.end)
+                .await?
+                .ok_or_else(|| RpcError::Node(format!("prefetch: the node no longer knows the window end {}", w.end)))?,
+        };
+        let sink_blue = match w.sink_blue {
+            Some(b) => b,
+            None => node.sink_blue_score().await?,
+        };
+        let mine = WindowRequest { end_blue: Some(end_blue), sink_blue: Some(sink_blue), ..*w };
+        let min = window_min_confirmations(sink_blue, end_blue, w.min_confirmations);
+        let (f, cross) =
+            tokio::join!(fetch_window_from(node, &mine, Verbosity::High, Origin::PRIMARY), self.cross_ids(Some(j), w.start, min));
+        let Fetched { raw, sink_blue, end_blue, elapsed, origin } = f?;
+        Ok(Fetched { raw: self.vouched(raw, cross)?, sink_blue, end_blue, elapsed, origin })
     }
 
     /// The primary's answer `raw` from `start`, as far as the cross-checking node vouches for it (module documentation):
     /// whole when nothing is contradicted or no such node can answer now, cut before the first contradiction, an error when
     /// the next chain block itself is contradicted.
-    async fn vouched(
-        &self,
-        mut raw: RawVspcResponse,
-        start: Hash32,
-        min_confirmations: Option<u64>,
-    ) -> Result<RawVspcResponse, RpcError> {
-        let Some(j) = self.cross_checker() else { return Ok(raw) };
-        let ids = match tokio::time::timeout(CROSS_CHECK_TIMEOUT, self.nodes[j].chain_with_ids(start, min_confirmations)).await {
-            Ok(Ok(ids)) => ids,
-            Ok(Err(e)) => {
-                self.board.failed(j, Fault::Failed, &format!("cross-check: {e}"));
-                return Ok(raw);
-            }
-            Err(_) => {
-                self.board.failed(j, Fault::Failed, &format!("timeout: cross-check after {CROSS_CHECK_TIMEOUT:?}"));
-                return Ok(raw);
-            }
-        };
+    fn vouched(&self, mut raw: RawVspcResponse, cross: Option<(usize, ChainIds)>) -> Result<RawVspcResponse, RpcError> {
+        let Some((j, ids)) = cross else { return Ok(raw) };
         let a = super::verify::agreement(&raw, &ids);
         let Some(why) = a.contradiction else {
             self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -583,8 +614,9 @@ fn cut(raw: &mut RawVspcResponse, n: usize) {
 impl<N: ChainSource> ChainSource for MultiNode<N> {
     async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
         let (start, min_confirmations) = (req.start_hash, req.min_confirmation_count);
-        let raw = self.nodes[0].vspc_v2(req).await?;
-        self.vouched(raw, start, min_confirmations).await
+        let j = self.cross_checker();
+        let (raw, cross) = tokio::join!(self.nodes[0].vspc_v2(req), self.cross_ids(j, start, min_confirmations));
+        self.vouched(raw?, cross)
     }
     async fn dag_info(&self) -> Result<DagInfo, RpcError> {
         self.nodes[0].dag_info().await
@@ -622,14 +654,7 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             let permit = self.permits[i].clone().acquire_owned().await.expect("the semaphore is never closed");
             self.board.begin(i);
             let r = if i == 0 {
-                match fetch_window_from(&*self.nodes[0], &w, Verbosity::High, Origin::PRIMARY).await {
-                    Ok(Fetched { raw, sink_blue, end_blue, elapsed, origin }) => {
-                        let min = window_min_confirmations(sink_blue, end_blue, w.min_confirmations);
-                        let vouched = self.vouched(raw, w.start, min).await;
-                        vouched.map(|raw| Fetched { raw, sink_blue, end_blue, elapsed, origin }).map_err(Attempt::Window)
-                    }
-                    Err(e) => Err(Attempt::Window(e)),
-                }
+                self.primary_window(&*self.nodes[0], &w).await.map_err(Attempt::Window)
             } else {
                 self.fetch_checked(i, &w).await
             };
@@ -658,10 +683,7 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
 
     async fn fetch_window_primary(&self, w: WindowRequest) -> Result<Fetched, RpcError> {
         // on the verifier's connections: never behind the primary's own windows of the parallel fetch
-        let Fetched { raw, sink_blue, end_blue, elapsed, origin } =
-            fetch_window_from(&*self.verifier, &w, Verbosity::High, Origin::PRIMARY).await?;
-        let min = window_min_confirmations(sink_blue, end_blue, w.min_confirmations);
-        Ok(Fetched { raw: self.vouched(raw, w.start, min).await?, sink_blue, end_blue, elapsed, origin })
+        self.primary_window(&*self.verifier, &w).await
     }
 
     fn report_lie(&self, origin: Origin, why: &str) {
