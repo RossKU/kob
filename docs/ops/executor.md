@@ -2429,7 +2429,9 @@ replaces the list) for public nodes, which serve Borsh wRPC over TLS only. It al
 Public nodes are shared and slower than an own node (and their retention decides how far back a first start can index). A
 bad node cannot steal funds: the executor signs only its own inputs and the covenants enforce every order; it could waste
 fees (a transaction it drops or delays) or hide orders, which the second node guards against. The x402 facilitator of the
-same process uses the authority (`node: "resolver"` in its own configuration works too, also `wss://`).
+same process reads from the authority and submits to every node that takes submissions (both of the pair), as the
+matcher does: the first node that takes a transaction answers (`node: "resolver"` in its own configuration works too, also
+`wss://`).
 
 v2.1.0 relays transactions up to the block limits. Relays running a later release with the
 pre-Toccata standard mass cap refuse transactions above ~25 kB: pass `--max-tx-bytes 24000` there

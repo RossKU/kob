@@ -249,17 +249,69 @@ impl Rpc for WrpcClient {
 pub struct NodeChain {
     rpc: Box<dyn Rpc>,
     network: Network,
+    /// Further nodes every submission goes to as well (`kob-executor run`: the other nodes of the indexer that take
+    /// submissions, the second public node of a resolver pair among them), as the matcher's `MultiSubmit` does.
+    peers: Vec<std::sync::Arc<dyn Rpc>>,
+    /// How long a submission waits for a peer's verdict when the primary gave none.
+    peer_wait: Duration,
 }
 
 impl NodeChain {
     /// A view over the wRPC endpoint `url`.
     pub fn connect(url: &str, network: Network, timeout: Duration) -> NodeChain {
-        NodeChain { rpc: Box::new(WrpcClient::new(url, timeout)), network }
+        NodeChain { rpc: Box::new(WrpcClient::new(url, timeout)), network, peers: vec![], peer_wait: timeout }
     }
 
     /// A view over any [`Rpc`] (tests).
     pub fn with_rpc(rpc: Box<dyn Rpc>, network: Network) -> NodeChain {
-        NodeChain { rpc, network }
+        NodeChain { rpc, network, peers: vec![], peer_wait: Duration::from_secs(10) }
+    }
+
+    /// Every submission (`submit`, `replace`) also goes to these nodes, at the same time as to the primary: the primary's
+    /// verdict answers when it takes the transaction or refuses it; when it gave none (transport, timeout) or refused it, the
+    /// first peer that takes it answers instead. Reads stay on the primary.
+    pub fn with_submit_peers(mut self, peers: Vec<std::sync::Arc<dyn Rpc>>) -> NodeChain {
+        self.peers = peers;
+        self
+    }
+
+    /// The submission URLs of `urls` as peers over wRPC (`with_submit_peers`).
+    pub fn with_submit_urls(self, urls: &[String], timeout: Duration) -> NodeChain {
+        let peers = urls.iter().map(|u| std::sync::Arc::new(WrpcClient::new(u, timeout)) as std::sync::Arc<dyn Rpc>).collect();
+        self.with_submit_peers(peers)
+    }
+
+    /// `method` with `params` to the primary and every peer at once; the verdict as described at [`NodeChain::with_submit_peers`].
+    /// The peers' calls go on in the background after the verdict (propagation through several nodes).
+    fn submit_everywhere(&self, method: &'static str, params: Value) -> Result<Value, RpcError> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        for p in &self.peers {
+            let (p, params, tx) = (p.clone(), params.clone(), tx.clone());
+            std::thread::spawn(move || {
+                let _ = tx.send(p.call(method, params));
+            });
+        }
+        drop(tx);
+        let primary = self.rpc.call(method, params);
+        if primary.is_ok() || self.peers.is_empty() {
+            return primary;
+        }
+        // the primary refused it or gave no verdict: a peer that takes it answers
+        let deadline = std::time::Instant::now() + self.peer_wait;
+        let mut peer_err = None;
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(left) {
+                Ok(Ok(v)) => return Ok(v),
+                Ok(Err(e)) => peer_err = peer_err.or(Some(e)),
+                Err(_) => break,
+            }
+        }
+        match (primary, peer_err) {
+            // no verdict from the primary but one from a peer: the peer's refusal
+            (Err(RpcError::Transport(_)), Some(e @ RpcError::Node(_))) => Err(e),
+            (p, _) => p,
+        }
     }
 
     fn address_of(&self, spk: &ScriptPublicKey) -> Option<String> {
@@ -427,7 +479,7 @@ impl ChainView for NodeChain {
     fn submit(&self, tx: &Transaction) -> Result<Txid, SubmitError> {
         let local = tx.id().as_bytes();
         let params = json!({ "transaction": kob_protocol::issue::rpc_transaction_json(tx), "allowOrphan": false });
-        match self.rpc.call("submitTransaction", params) {
+        match self.submit_everywhere("submitTransaction", params) {
             Ok(r) => match r.get("transactionId").and_then(Value::as_str).and_then(parse_hash32) {
                 Some(id) if id == local => Ok(id),
                 Some(id) => Err(SubmitError::Unavailable(format!("node reports transaction id {} for {}", hex(&id), hex(&local)))),
@@ -443,7 +495,7 @@ impl ChainView for NodeChain {
     fn replace(&self, tx: &Transaction) -> Result<Txid, SubmitError> {
         let local = tx.id().as_bytes();
         let params = json!({ "transaction": kob_protocol::issue::rpc_transaction_json(tx) });
-        match self.rpc.call("submitTransactionReplacement", params) {
+        match self.submit_everywhere("submitTransactionReplacement", params) {
             Ok(r) => match r.get("transactionId").and_then(Value::as_str).and_then(parse_hash32) {
                 Some(id) if id == local => Ok(id),
                 Some(id) => Err(SubmitError::Unavailable(format!("node reports transaction id {} for {}", hex(&id), hex(&local)))),
@@ -674,6 +726,55 @@ mod tests {
         assert!(matches!(chain.submit(&tx), Err(SubmitError::Conflict(_))));
         let (chain, _) = fake(|_, _| Err(RpcError::Node("transaction z is not standard: nope".into())));
         assert!(matches!(chain.submit(&tx), Err(SubmitError::Rejected(_))));
+    }
+
+    /// Inside \`kob-executor run\` the facilitator's submissions go to every node that takes them (the pair's second node):
+    /// the primary's verdict when it gives one that takes the transaction, else the first peer that takes it, else the
+    /// primary's refusal (or a peer's when the primary gave none).
+    #[test]
+    fn submissions_go_to_every_peer_too() {
+        let tx = sample_tx();
+        let expect = hex(&tx.id().as_bytes());
+        let ok = {
+            let e = expect.clone();
+            move |_: &str, _: &Value| Ok(json!({ "transactionId": e }))
+        };
+        let refused = |_: &str, _: &Value| Err(RpcError::Node("output x already spent by transaction y in the mempool".into()));
+        let down = |_: &str, _: &Value| Err(RpcError::Transport("reset".into()));
+        let peer = |h: Box<dyn Fn(&str, &Value) -> Result<Value, RpcError> + Send + Sync>| {
+            let f = Arc::new(Fake { calls: Mutex::new(vec![]), handler: h });
+            (Arc::new(f.clone()) as Arc<dyn Rpc>, f)
+        };
+        // both take it: the primary answers, the peer got it too
+        let (chain, primary) = fake(ok.clone());
+        let (p, pf) = peer(Box::new(ok.clone()));
+        let chain = chain.with_submit_peers(vec![p]);
+        assert_eq!(chain.submit(&tx).unwrap(), tx.id().as_bytes());
+        for _ in 0..100 {
+            if !pf.calls.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!((primary.calls.lock().unwrap().len(), pf.calls.lock().unwrap()[0].0.as_str()), (1, "submitTransaction"));
+        // the primary is down or refuses: the peer that takes it answers
+        for h in [Box::new(down) as Box<dyn Fn(&str, &Value) -> Result<Value, RpcError> + Send + Sync>, Box::new(refused)] {
+            let (chain, _) = fake(h);
+            let (p, _) = peer(Box::new(ok.clone()));
+            assert_eq!(chain.with_submit_peers(vec![p]).submit(&tx).unwrap(), tx.id().as_bytes());
+        }
+        // nobody takes it: the primary's refusal; with the primary down, the peer's
+        let (chain, _) = fake(refused);
+        let (p, _) = peer(Box::new(down));
+        assert!(matches!(chain.with_submit_peers(vec![p]).submit(&tx), Err(SubmitError::Conflict(_))));
+        let (chain, _) = fake(down);
+        let (p, _) = peer(Box::new(refused));
+        assert!(matches!(chain.with_submit_peers(vec![p]).submit(&tx), Err(SubmitError::Conflict(_))));
+        // a replacement goes everywhere too
+        let (chain, _) = fake(down);
+        let (p, pf) = peer(Box::new(ok));
+        assert_eq!(chain.with_submit_peers(vec![p]).replace(&tx).unwrap(), tx.id().as_bytes());
+        assert_eq!(pf.calls.lock().unwrap()[0].0, "submitTransactionReplacement");
     }
 
     #[test]

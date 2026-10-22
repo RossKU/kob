@@ -432,7 +432,11 @@ pub fn x402_service(
     if built.network.registry_name() != index.network {
         bail!("x402: the facilitator is configured for {}, the indexer follows {}", built.network, index.network);
     }
-    let node = crate::x402::node_chain(&xcfg, &built).map_err(anyhow::Error::msg)?;
+    // its submissions go to every node of the indexer that takes them, as the matcher's do (a resolver pair: both nodes)
+    let peers: Vec<String> = index.secondaries().iter().filter(|n| n.submit).map(|n| n.url.clone()).collect();
+    let node = crate::x402::node_chain(&xcfg, &built)
+        .map_err(anyhow::Error::msg)?
+        .with_submit_urls(&peers, std::time::Duration::from_millis(xcfg.node_timeout_ms));
     let ready: Option<crate::x402::facilitator::BookReadiness> = health.map(|h| {
         Arc::new(move || match h.snapshot().not_ready() {
             Some(why) => Err(why),
