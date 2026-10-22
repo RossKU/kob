@@ -1,0 +1,237 @@
+name: deploy-pages
+
+# The public web app on Cloudflare Pages (docs/ops/web-hosting.md). On a push to master that changes the app or its inputs, and on
+# workflow_dispatch: the web app is built and tested exactly as the web job of ci.yml does, config.json is written from the repository
+# variables KOB_PAGES_* (web/scripts/pages-config.mjs; on testnet-10 also the token-program list as registry/tokens.json), web/dist
+# is uploaded to the Pages project KOB_PAGES_PROJECT (a Direct Upload project: the build needs Rust and wasm, so Cloudflare does not
+# build it) and the live deployment is checked: the headers of public/_headers (CSP with frame-ancestors 'none', X-Frame-Options DENY,
+# the signer page's own policy) and every file byte for byte (web/scripts/check-pages.mjs); any difference fails the job. The job
+# summary lists the deployment URL and the sha256 of every deployed file.
+#
+# Without the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID or the variables KOB_PAGES_PROJECT and KOB_PAGES_INDEXER_URL
+# (a fork, or before the setup) nothing is built: the job config says what is missing and the deploy job is skipped. A variable that
+# is set but invalid fails the job config.
+#
+# The variables are not secrets: config.json is public. Never put an API key into a URL variable (the script refuses query strings).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "web/**"
+      - "crates/kob-wasm/**"
+      - "crates/kob-protocol/**"
+      - "vendor/**"
+      - "contracts/**"
+      - "registry/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "scripts/build-wasm.sh"
+      - "scripts/build-deploy.sh"
+      - "scripts/release-hashes.sh"
+      - "scripts/lib/**"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# one deploy at a time; a newer push cancels the older run (the latest commit wins)
+concurrency:
+  group: deploy-pages
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  config:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      ready: ${{ steps.gate.outputs.ready }}
+      project: ${{ steps.gate.outputs.project }}
+      branch: ${{ steps.gate.outputs.branch }}
+    steps:
+      - name: Cloudflare secrets and Pages variables (missing = the deploy is skipped)
+        id: gate
+        env:
+          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+          PROJECT: ${{ vars.KOB_PAGES_PROJECT }}
+          INDEXER: ${{ vars.KOB_PAGES_INDEXER_URL }}
+          BRANCH: ${{ vars.KOB_PAGES_BRANCH }}
+        run: |
+          missing=()
+          [ "$HAS_TOKEN" = true ] || missing+=("secret CLOUDFLARE_API_TOKEN")
+          [ "$HAS_ACCOUNT" = true ] || missing+=("secret CLOUDFLARE_ACCOUNT_ID")
+          [ -n "$PROJECT" ] || missing+=("variable KOB_PAGES_PROJECT")
+          [ -n "$INDEXER" ] || missing+=("variable KOB_PAGES_INDEXER_URL")
+          if [ ${#missing[@]} -gt 0 ]; then
+            {
+              echo "## Cloudflare Pages deploy skipped"
+              echo
+              echo "Not configured in this repository (Settings > Secrets and variables > Actions):"
+              echo
+              for m in "${missing[@]}"; do echo "- $m"; done
+              echo
+              echo "Nothing was built or deployed. Setup: docs/ops/web-hosting.md."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=deploy-pages skipped::not configured: ${missing[*]} (docs/ops/web-hosting.md)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Pages project names: lower-case letters, digits and dashes; branch names: git-safe characters only
+          if ! [[ "$PROJECT" =~ ^[a-z0-9][a-z0-9-]{0,57}$ ]]; then
+            echo "::error::KOB_PAGES_PROJECT \`$PROJECT\` is not a Pages project name (a-z, 0-9 and -, at most 58 characters)"; exit 1
+          fi
+          BRANCH=${BRANCH:-main}
+          if ! [[ "$BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$ ]]; then
+            echo "::error::KOB_PAGES_BRANCH \`$BRANCH\` is not a branch name"; exit 1
+          fi
+          { echo "ready=true"; echo "project=$PROJECT"; echo "branch=$BRANCH"; } >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.ready == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - if: steps.gate.outputs.ready == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: The variables make a valid public config.json (before anything is built)
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          KOB_PAGES_NETWORK: ${{ vars.KOB_PAGES_NETWORK }}
+          KOB_PAGES_INDEXER_URL: ${{ vars.KOB_PAGES_INDEXER_URL }}
+          KOB_PAGES_EXTRA_INDEXER_URLS: ${{ vars.KOB_PAGES_EXTRA_INDEXER_URLS }}
+          KOB_PAGES_NODE_URL: ${{ vars.KOB_PAGES_NODE_URL }}
+          KOB_PAGES_EXPLORER_URL: ${{ vars.KOB_PAGES_EXPLORER_URL }}
+        run: node web/scripts/pages-config.mjs --check
+
+  deploy:
+    needs: config
+    if: needs.config.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash # -eo pipefail: a failing command before a pipe fails the step
+        working-directory: web
+    steps:
+      # build and test: the steps of the web job of ci.yml
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
+        with:
+          toolchain: "1.94.0"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run fetch-sdk
+      - name: kob-wasm bindings (installs wasm-bindgen-cli 0.2.100 under target/tools)
+        working-directory: .
+        run: bash scripts/build-wasm.sh --install-bindgen --web --slim
+      - run: npm run build:wasm -- --copy
+      - run: npm run typecheck
+      - run: npm test
+      # the release bundle (vite build plus dist/registry/tokens.json, docs/ops/release.md 4)
+      - run: npm run build:release
+      - name: Release hashes (the deployment record reproduces, the bundle embeds and ships the registry the mainnet record pins)
+        working-directory: .
+        run: |
+          bash scripts/release-hashes.sh > "$RUNNER_TEMP/release-hashes.md"
+          cat "$RUNNER_TEMP/release-hashes.md"
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-playwright-report
+          path: |
+            web/test-results
+            web/playwright-report
+
+      # the deployment: config.json (after the e2e run, which serves dist/ with the mock stack's own configuration)
+      - name: config.json from the repository variables
+        env:
+          KOB_PAGES_NETWORK: ${{ vars.KOB_PAGES_NETWORK }}
+          KOB_PAGES_INDEXER_URL: ${{ vars.KOB_PAGES_INDEXER_URL }}
+          KOB_PAGES_EXTRA_INDEXER_URLS: ${{ vars.KOB_PAGES_EXTRA_INDEXER_URLS }}
+          KOB_PAGES_NODE_URL: ${{ vars.KOB_PAGES_NODE_URL }}
+          KOB_PAGES_EXPLORER_URL: ${{ vars.KOB_PAGES_EXPLORER_URL }}
+        run: node scripts/pages-config.mjs --dist dist | tee "$RUNNER_TEMP/pages-config.txt"
+      - name: sha256 of every file deployed (the logic of scripts/release-hashes.sh)
+        working-directory: .
+        run: find web/dist -type f | LC_ALL=C sort | xargs sha256sum > "$RUNNER_TEMP/deployed.sha256"
+      - name: Upload web/dist to Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.152.0"
+          packageManager: npm
+          command: pages deploy web/dist --project-name=${{ needs.config.outputs.project }} --branch=${{ needs.config.outputs.branch }} --commit-hash=${{ github.sha }} --commit-dirty=true
+      - name: Summary (deployment URL, config.json, sha256 of every deployed file)
+        working-directory: .
+        env:
+          URL: ${{ steps.deploy.outputs.deployment-url }}
+          ALIAS: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+          PAGES_ENV: ${{ steps.deploy.outputs.pages-environment }}
+          DEPLOYMENT_ID: ${{ steps.deploy.outputs.pages-deployment-id }}
+        run: |
+          {
+            echo "## Cloudflare Pages deployment"
+            echo
+            echo "- deployment: $URL"
+            [ -z "$ALIAS" ] || echo "- alias: $ALIAS"
+            echo "- environment: ${PAGES_ENV:-unknown}, deployment id: ${DEPLOYMENT_ID:-unknown}"
+            echo "- commit: \`$GITHUB_SHA\`"
+            echo
+            echo "### config.json"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/pages-config.txt"
+            echo '```'
+            echo
+            echo "### Deployed files (sha256)"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/deployed.sha256"
+            echo '```'
+            echo
+            echo "<details><summary>scripts/release-hashes.sh (the bundle as built, before config.json)</summary>"
+            echo
+            cat "$RUNNER_TEMP/release-hashes.md"
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: The deployment is the production one (KOB_PAGES_BRANCH = the project's production branch)
+        env:
+          PAGES_ENV: ${{ steps.deploy.outputs.pages-environment }}
+        run: |
+          if [ "$PAGES_ENV" != production ]; then
+            echo "::error::the upload became a ${PAGES_ENV:-unknown} deployment, not production: set KOB_PAGES_BRANCH to the production branch of the Pages project (docs/ops/web-hosting.md)"
+            exit 1
+          fi
+      - name: Post-deploy check (headers of public/_headers, every file byte for byte)
+        env:
+          URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          case "$URL" in https://*) ;; *) echo "::error::no https deployment URL from wrangler: \`$URL\`"; exit 1 ;; esac
+          set +e
+          node scripts/check-pages.mjs "$URL" --dist dist > "$RUNNER_TEMP/check.txt" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/check.txt"
+          { echo; echo "### Post-deploy check"; echo; echo '```'; cat "$RUNNER_TEMP/check.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
