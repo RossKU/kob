@@ -222,7 +222,10 @@ test('token issuance plans a KCC-23 creation (preparation, then the genesis) as 
   assert.equal(res.built.tx.outputs.length, 2);
   assert.equal(res.built.sign.length, 1);
   assert.equal(res.built.covenants[0].covenantId, res.token.covenantId);
-  assert.equal(res.docs.registryEntry.status, 'pending-review');
+  // the token's facts in the registry format, no listing state (KOB lists no token; kob-protocol issue.rs registry_entry)
+  assert.equal(res.docs.registryEntry.status, undefined);
+  assert.equal(res.docs.registryEntry.official, undefined);
+  assert.equal(res.docs.registryEntry.verified, false);
   assert.equal(kob.issue(s(spec)), s(res), 'deterministic');
   assert.throws(() => kob.issue(s({ ...spec, supply: '999' })), /supply mismatch/);
   assert.throws(() => kob.issue(s({ ...spec, ticker: 'node' })), /ticker/);
