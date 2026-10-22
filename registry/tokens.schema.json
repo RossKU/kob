@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/RossKU/KOB/registry/tokens.schema.json",
   "title": "KOB token registry",
-  "description": "A pinned snapshot of facts: the token programs this build supports and facts about tokens that anyone can re-derive from the chain. No per-token judgement (no listing, official status or written warnings: curation belongs to external community lists). Structure only: cross-field rules (family/template agreement, extension commitment rules, duplicate identities, confusable tickers, genesis-record consistency, slot-limit consistency) are enforced by kob_protocol::registry::Registry::validate.",
+  "description": "A pinned snapshot of facts: the token programs this build supports and facts about tokens that anyone can re-derive from the chain. No per-token judgement (no listing, official status or written warnings: curation belongs to external community lists). Structure only: cross-field rules (family/template agreement, extension commitment rules, duplicate identities, genesis-record consistency, slot-limit consistency) are enforced by kob_protocol::registry::Registry::validate.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "network", "templates", "tokens"],

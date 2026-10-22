@@ -210,23 +210,17 @@ describe('tradability (the program allowlist, verified against the pinned templa
 describe('validation (mirror of the Rust rules)', () => {
   const base = () => tradableRegistryJson();
 
-  it('rejects homoglyph-confusable tickers (O->0, I/L->1, S->5, B->8, rn->m)', () => {
+  it('accepts shared and look-alike tickers of two tokens (choosing between them would be curation)', () => {
     const doc = base();
     doc.tokens[1].ticker = 'TST';
     doc.tokens[1].covenant_id = '81'.repeat(32);
-    expect(codes(doc)).toContain('bad-ticker'); // exact duplicate
-    doc.tokens[1].ticker = 'T5T'; // S and 5 are confusable too
-    expect(codes(doc)).toEqual(['confusable-ticker']);
-    doc.tokens[1].ticker = 'TSU';
-    expect(codes(doc)).toEqual([]);
-    const d2 = base();
-    d2.tokens[0].ticker = 'KRON';
-    d2.tokens[1].ticker = 'KR0N';
-    expect(codes(d2)).toEqual(['confusable-ticker']);
-    const d3 = base();
-    d3.tokens[0].ticker = 'LIT';
-    d3.tokens[1].ticker = '1IT';
-    expect(codes(d3)).toEqual(['confusable-ticker']);
+    expect(codes(doc)).toEqual([]); // the same ticker, two covenant ids
+    for (const [a, b] of [['KRON', 'KR0N'], ['LIT', '1IT'], ['TST', 'T5T'], ['BASS', '8A55']]) {
+      const d = base();
+      d.tokens[0].ticker = a;
+      d.tokens[1].ticker = b;
+      expect(codes(d), `${a}/${b}`).toEqual([]);
+    }
   });
 
   it('rejects malformed tickers', () => {

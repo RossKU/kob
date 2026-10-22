@@ -133,22 +133,26 @@ test.describe('token issuance', () => {
     await expect(header).not.toContainText('carries no decimals');
   });
 
-  test('a ticker that already exists in the registry blocks the review', async ({ appPage: page, mock }) => {
+  test('a ticker another registry token uses is a warning, never a block (the covenant id is the identity)', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 500n * KAS);
     await page.goto('/#/create');
     await page.getByTestId('wallet-connect-kasware').click();
     await expect(page.getByTestId('wallet-address')).toBeVisible();
 
-    await page.getByTestId('issue-name').fill('Impostor');
+    await page.getByTestId('issue-name').fill('Second Example');
     await page.getByTestId('issue-ticker').fill('exkcc');
     await page.getByTestId('issue-supply').fill('1000');
-    await expect(page.getByTestId('issue-ticker')).toHaveAttribute('aria-invalid', 'true');
-    await expect(page.getByTestId('issue-review')).toBeDisabled();
-    await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
-
-    // a different ticker clears the block
-    await page.getByTestId('issue-ticker').fill('OKTKN');
+    await expect(page.getByTestId('issue-issue-ticker.exists')).toContainText('the covenant id tells them apart');
     await expect(page.getByTestId('issue-ticker')).not.toHaveAttribute('aria-invalid', 'true');
+    await expect(page.getByTestId('issue-review')).toBeEnabled();
+
+    // a look-alike ticker warns the same way; a different one has no warning
+    await page.getByTestId('issue-ticker').fill('EXKR0N'); // EXKRON with a zero
+    await expect(page.getByTestId('issue-issue-ticker.lookalike')).toBeVisible();
+    await expect(page.getByTestId('issue-review')).toBeEnabled();
+    await page.getByTestId('issue-ticker').fill('OKTKN');
+    await expect(page.getByTestId('issue-issue-ticker.exists')).toHaveCount(0);
+    await expect(page.getByTestId('issue-issue-ticker.lookalike')).toHaveCount(0);
     await expect(page.getByTestId('issue-review')).toBeEnabled();
   });
 

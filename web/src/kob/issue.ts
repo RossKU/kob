@@ -226,7 +226,7 @@ export function formatUnits(value: bigint, decimals: number): string {
   return frac ? `${whole}.${frac}` : whole;
 }
 
-/** Homoglyph normalisation of `registry.rs::normalize_ticker` (the one implementation lives in registry.ts). */
+/** Homoglyph normalisation of tickers (registry.ts), for the look-alike WARNING below: a shared ticker never blocks an issuance. */
 export { normalizeTicker };
 
 /** Zero-width, bidi and control characters the registry refuses in display text (`registry.rs::has_bad_char`). */
@@ -321,14 +321,17 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
   } else if (!new RegExp(limits.ticker.pattern).test(t)) {
     err('ticker.chars', 'The ticker uses only capital letters A-Z and digits 0-9.', 'ticker');
   } else {
+    // a warning, never a refusal: tickers are not unique, the covenant id is the identity, and refusing a ticker because another token
+    // carries it (or one like it) would be KOB choosing between tokens (curation). The issuer sees it before choosing.
     const norm = normalizeTicker(t);
+    const warn = (code: string, message: string, params: PlanIssue['params']) => issues.push(issue(code, message, 'ticker', params, 'warning'));
     for (const existing of registryTickers) {
       if (existing === t) {
-        err('ticker.exists', `The ticker ${t} is already in the registry.`, 'ticker', { ticker: t });
+        warn('ticker.exists', `Another token in the registry already uses the ticker ${t}. Both can be issued and traded; the covenant id tells them apart.`, { ticker: t });
         break;
       }
       if (normalizeTicker(existing) === norm) {
-        err('ticker.lookalike', `The ticker ${t} looks like the existing ticker ${existing} (O and 0, I, L and 1, S and 5, B and 8, rn and m count as the same).`, 'ticker', { ticker: t, existing });
+        warn('ticker.lookalike', `The ticker ${t} looks like the ticker ${existing} of another token in the registry (O and 0, I, L and 1, S and 5, B and 8, rn and m look alike). Both can be issued and traded; the covenant id tells them apart.`, { ticker: t, existing });
         break;
       }
     }
@@ -522,7 +525,7 @@ export interface PlanIssueOptions {
   feePick?: RatePick;
   /** where change returns (default: maker) */
   changeTo?: Hex;
-  /** tickers already in the registry, for the duplicate / lookalike check */
+  /** tickers already in the registry, for the shared / look-alike ticker warning (never a refusal) */
   registryTickers?: Iterable<string>;
   /** default: `issueLimits(kob)` */
   limits?: IssueLimits;

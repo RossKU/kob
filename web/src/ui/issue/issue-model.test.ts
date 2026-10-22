@@ -148,9 +148,10 @@ describe('field mapping', () => {
     expect(g2.get('')).toHaveLength(1);
   });
 
-  it('a lookalike or duplicate ticker blocks with a ticker-level finding', () => {
+  it('a lookalike or duplicate ticker is a ticker-level warning, never a block', () => {
     expect(codes(state({ ticker: 'EXKCC' }), ['EXKCC'])).toEqual(['ticker.exists']);
     expect(codes(state({ ticker: 'K0N1' }), ['KONI'])).toEqual(['ticker.lookalike']);
+    expect(validateIssueForm(formToIssueForm(state({ ticker: 'K0N1' }), wallet), limits, ['KONI']).map((i) => i.severity)).toEqual(['warning']);
   });
 });
 

@@ -108,16 +108,18 @@ order-contract pair per family; a token of one family can never trade through th
 - Unknown fields anywhere are an error; hex is exactly 64 lowercase characters; unknown network / template / family mismatch are errors.
 - `genesis_verified: true` requires `verified`; a `genesis` record requires `genesis_verified`; the record's own fields are checked
   (strictly increasing outputs, minters among them, non-negative supply and allowance, `txid:index` live minters, a printable source).
-- Tickers are ASCII uppercase alphanumerics. Two tickers that are equal after homoglyph normalisation (`O`->`0`, `I`/`L`->`1`) are refused
-  (`KRON` vs `KR0N`). Names may not contain control, zero-width or bidi characters.
+- Tickers are ASCII uppercase alphanumerics of 2 to 12 characters. They are not unique: two entries (two covenant ids) may share a ticker
+  or use look-alike ones (`KRON`, `KR0N`), and neither is refused. Choosing which of two tokens may carry a ticker would be a curation
+  decision, and KOB makes none (curation belongs to the community lists a user chooses); the covenant id is the identity. Names may not
+  contain control, zero-width or bidi characters.
 
 ## Display
 
 `display_name(token)` gives `TICKER (abcd…1234)`: ticker and the first and last four hex digits of the covenant id, for tools and logs
 (the same as the web registry's `displayName`). Neither shows a standing, because there is none. When two tokens the app shows share a
 ticker (look-alike letters and homoglyphs count as the same) the KOB web app says "Another token uses this ticker — check the covenant
-id" (`web/README.md`, "Trust boundaries"). The validator refuses confusable tickers WITHIN the registry, so a second "PEPE" entry
-needs the first one renamed or removed (the token itself stays tradable without an entry either way).
+id" (`web/README.md`, "Trust boundaries"); the issuance form shows the same as a warning when the new ticker matches or resembles one
+in the registry. The validator accepts both entries of a second "PEPE": each is a fact about its own covenant id.
 
 ## Relation to the launch allowlist
 

@@ -292,6 +292,16 @@ export function IssueView() {
               autoComplete="off"
               class="issue-mono"
             />
+            {/* a ticker another registry token uses (or one like it) is a warning, never a block: the covenant id is the identity */}
+            {visible('ticker', state.ticker)
+              ? (byField.get('ticker') ?? [])
+                  .filter((i) => i.severity === 'warning')
+                  .map((i) => (
+                    <Banner key={i.code} tone="warn" data-testid={`issue-issue-${i.code}`}>
+                      {say(i)}
+                    </Banner>
+                  ))
+              : null}
             {renderSupply()}
             <Field
               label={t('issue.field.decimals')}

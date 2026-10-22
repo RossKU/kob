@@ -6,8 +6,9 @@
 //! owner types the order contracts use) and records facts about known tokens (`tokens`: identity, decimals, the genesis check).
 //! A token's identity is `(family, covenant id, template hash, extension commitment)` (a token is its KIP-20
 //! covenant id plus template hash, and fungibility only holds among equal extension commitments). Display is
-//! `TICKER (abcd…1234)`; tickers are ASCII uppercase alphanumerics, and two tickers that collide after
-//! homoglyph normalisation (`0`/`O`, `1`/`I`/`L`) are refused.
+//! `TICKER (abcd…1234)`; tickers are ASCII uppercase alphanumerics. Tickers are not unique: two entries may share a ticker or
+//! use look-alike ones (`KRON`, `KR0N`), and neither is refused, because choosing which of two tokens may carry a ticker is a
+//! curation decision KOB does not make (the covenant id beside the ticker tells them apart).
 //!
 //! **Two lists.** `templates` is the STRICT list, the program allowlist: only the token programs this build supports for trading
 //! (`review_status: reviewed`: their engineering review is done and the order contracts escrow them) can carry a tradable token,
@@ -586,16 +587,6 @@ pub enum ValidationError {
         /// What is wrong.
         reason: &'static str,
     },
-    /// Two tickers are equal after homoglyph normalisation.
-    #[error("tickers {a} and {b} are confusable (both normalise to {normalised})")]
-    ConfusableTicker {
-        /// First ticker.
-        a: String,
-        /// Second ticker.
-        b: String,
-        /// Normalised form.
-        normalised: String,
-    },
     /// A display name or metadata field is malformed.
     #[error("token {ticker}: {reason}")]
     BadDisplay {
@@ -688,28 +679,6 @@ pub fn parse_hex32(s: &str) -> Option<[u8; 32]> {
         *o = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()?;
     }
     Some(out)
-}
-
-/// Homoglyph normalisation used to detect confusable tickers: uppercase, the two-letter lookalikes
-/// `RN`->`M` and `VV`->`W`, then `O`->`0`, `I`/`L`->`1`, `S`->`5`, `B`->`8`. Registry tickers are ASCII (validated), so this is the whole
-/// skeleton for them; the web app's `normalizeTicker` (registry.ts) applies the same ASCII rules after folding Unicode lookalikes
-/// (NFKC, Cyrillic / Greek / full-width letters) to ASCII, for UNTRUSTED tickers.
-pub fn normalize_ticker(ticker: &str) -> String {
-    ticker
-        .chars()
-        .flat_map(|c| c.to_uppercase())
-        .collect::<String>()
-        .replace("RN", "M")
-        .replace("VV", "W")
-        .chars()
-        .map(|c| match c {
-            'O' => '0',
-            'I' | 'L' => '1',
-            'S' => '5',
-            'B' => '8',
-            other => other,
-        })
-        .collect()
 }
 
 fn has_bad_char(s: &str) -> bool {
@@ -840,7 +809,6 @@ impl Registry {
         // ---- tokens
         let mut identities: BTreeMap<AllowlistKey, &str> = BTreeMap::new();
         let mut covs: BTreeMap<&str, &str> = BTreeMap::new();
-        let mut norm: BTreeMap<String, &str> = BTreeMap::new();
         for (i, tok) in self.tokens.iter().enumerate() {
             let tk = tok.ticker.as_str();
             // ticker
@@ -849,14 +817,8 @@ impl Registry {
                 e.push(tick_bad("length must be 2..=12"));
             } else if !tk.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()) {
                 e.push(tick_bad("only ASCII uppercase letters and digits are allowed"));
-            } else {
-                let n = normalize_ticker(tk);
-                match norm.insert(n.clone(), tk) {
-                    Some(prev) if prev == tk => e.push(tick_bad("duplicate ticker")),
-                    Some(prev) => e.push(ValidationError::ConfusableTicker { a: prev.to_string(), b: tk.to_string(), normalised: n }),
-                    None => {}
-                }
             }
+            // no uniqueness: a shared or look-alike ticker is not refused (the module documentation says why)
             // name / display
             let disp_bad = |reason: String| ValidationError::BadDisplay { ticker: short(tk), reason };
             if tok.name.trim().is_empty() || tok.name.chars().count() > 64 || has_bad_char(&tok.name) {
@@ -1599,11 +1561,12 @@ mod tests {
     }
 
     #[test]
-    fn tickers_and_confusables() {
+    fn tickers_are_checked_for_form_never_for_uniqueness() {
         for bad in ["kron", "K", "TOOLONGTICKER1", "KR N", "ΚRON", "KRÖN", "KR-N", ""] {
             let e = errs(check(|v| tok(v, 0)["ticker"] = json!(bad)));
             assert!(e.iter().any(|x| matches!(x, ValidationError::BadTicker { .. })), "{bad}: {e:?}");
         }
+        // two tokens (two covenant ids) may share a ticker or use look-alike ones: choosing which may carry it is curation
         for (a, b) in [
             ("KRON", "KR0N"),
             ("PEPE", "PEPE"),
@@ -1613,22 +1576,12 @@ mod tests {
             ("BASS", "8A55"),
             ("MAIN", "RNAIN"),
         ] {
-            let e = errs(check(|v| {
+            let r = check(|v| {
                 tok(v, 0)["ticker"] = json!(a);
                 tok(v, 1)["ticker"] = json!(b);
-            }));
-            assert!(
-                e.iter().any(|x| matches!(x, ValidationError::ConfusableTicker { .. } | ValidationError::BadTicker { .. })),
-                "{a}/{b}: {e:?}"
-            );
+            });
+            assert!(r.is_ok(), "{a}/{b}: {r:?}");
         }
-        assert_eq!(normalize_ticker("kr0n"), "KR0N");
-        assert_eq!(normalize_ticker("LIO"), normalize_ticker("110"));
-        // 5/S, 8/B, rn/m, vv/w
-        assert_eq!(normalize_ticker("BASS"), normalize_ticker("8A55"));
-        assert_eq!(normalize_ticker("KASPERN"), normalize_ticker("KASPEM"));
-        assert_eq!(normalize_ticker("VVEB"), normalize_ticker("WE8"));
-        assert_ne!(normalize_ticker("KRON"), normalize_ticker("KRAN"));
     }
 
     #[test]

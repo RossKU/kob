@@ -95,7 +95,7 @@ export interface TokenMarketInput {
 
 export const REGISTRY_ISSUE_CODES = [
   'json', 'unknown-field', 'wrong-type', 'schema-version', 'unknown-network', 'wrong-network', 'bad-hex', 'duplicate-template-id', 'duplicate-template-hash',
-  'template-invalid', 'unknown-template', 'family-mismatch', 'extension', 'duplicate-identity', 'duplicate-covenant-id', 'bad-ticker', 'confusable-ticker',
+  'template-invalid', 'unknown-template', 'family-mismatch', 'extension', 'duplicate-identity', 'duplicate-covenant-id', 'bad-ticker',
   'bad-display', 'out-of-range', 'decimals', 'slot-limit-mismatch', 'genesis',
 ] as const;
 export type RegistryIssueCode = (typeof REGISTRY_ISSUE_CODES)[number];
@@ -152,10 +152,11 @@ const CONFUSABLE_LATIN: Readonly<Record<string, string>> = {
 };
 
 /**
- * Homoglyph skeleton of a ticker or name. Steps: NFKC (full-width, ligatures, roman numerals), strip combining marks,
- * uppercase, fold Cyrillic / Greek / Armenian lookalikes to Latin, then the ASCII rules that are IDENTICAL to Rust `normalize_ticker`:
- * RN -> M, VV -> W, O -> 0, I and L -> 1, S -> 5, B -> 8. Registry tickers are ASCII, so only that last step applies to them; untrusted
- * (indexer / pasted) text gets the whole chain.
+ * Homoglyph skeleton of a ticker or name, for what the app SHOWS and FINDS, never for a refusal: the search (`kr0n` finds `KRON`), the
+ * "another token uses this ticker" note (`sharedTickerIds`) and the issuance form's look-alike warning. Tickers are not unique and the
+ * registry refuses no ticker for resembling another (that would be KOB choosing which token may carry it: curation); the covenant id is
+ * the identity. Steps: NFKC (full-width, ligatures, roman numerals), strip combining marks, uppercase, fold Cyrillic / Greek / Armenian
+ * lookalikes to Latin, then RN -> M, VV -> W, O -> 0, I and L -> 1, S -> 5, B -> 8.
  */
 export function normalizeTicker(ticker: string): string {
   const upper = ticker.normalize('NFKC').normalize('NFD').replace(/\p{M}/gu, '').toUpperCase().normalize('NFKC');
@@ -345,7 +346,6 @@ function validate(doc: unknown, expectedNetwork?: string): { json: RegistryJson;
   // ---- tokens
   const identities = new Map<string, string>();
   const covs = new Map<string, string>();
-  const norm = new Map<string, string>();
   (doc.tokens as unknown[]).forEach((raw, idx) => {
     const p = `$.tokens[${idx}]`;
     if (!isObj(raw)) return add('wrong-type', p, 'token must be an object');
@@ -354,13 +354,7 @@ function validate(doc: unknown, expectedNetwork?: string): { json: RegistryJson;
     const tk = String(tok.ticker);
     if (typeof tok.ticker !== 'string' || tk.length < 2 || tk.length > 12) add('bad-ticker', p, `ticker \`${short(tk)}\`: length must be 2..=12`);
     else if (!/^[A-Z0-9]+$/.test(tk)) add('bad-ticker', p, `ticker \`${short(tk)}\`: only ASCII uppercase letters and digits are allowed`);
-    else {
-      const n = normalizeTicker(tk);
-      const prev = norm.get(n);
-      if (prev === tk) add('bad-ticker', p, `ticker \`${tk}\`: duplicate ticker`);
-      else if (prev) add('confusable-ticker', p, `tickers ${prev} and ${tk} are confusable (both normalise to ${n})`);
-      else norm.set(n, tk);
-    }
+    // no uniqueness: a shared or look-alike ticker is not refused (registry.rs: choosing which token may carry it is curation)
     const disp = (m: string) => add('bad-display', p, `token ${short(tk)}: ${m}`);
     if (typeof tok.name !== 'string' || !tok.name.trim() || [...tok.name].length > 64 || hasBadChar(tok.name)) disp('name must be 1..=64 printable characters (no control, zero-width or bidi characters)');
     if (tok.display !== undefined) {

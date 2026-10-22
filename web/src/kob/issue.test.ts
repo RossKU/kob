@@ -105,14 +105,15 @@ describe('validateIssueForm', () => {
     for (const t of ['test', 'TE ST', 'T-ST', 'TÉST']) expect(codes(form({ ticker: t })), t).toEqual(['ticker.chars']);
   });
 
-  it('flags existing and lookalike tickers', () => {
+  it('warns about existing and lookalike tickers, never refuses them', () => {
     expect(codes(form({ ticker: 'TEST' }), ['TEST', 'OTHER'])).toEqual(['ticker.exists']);
     expect(codes(form({ ticker: 'KR0N' }), ['KRON'])).toEqual(['ticker.lookalike']);
     expect(codes(form({ ticker: 'LI0N' }), ['110N'])).toEqual(['ticker.lookalike']);
     expect(codes(form({ ticker: 'TEST' }), ['TEXT', 'ZZZZ'])).toEqual([]);
     const i = validateIssueForm(form({ ticker: 'KR0N' }), limits, ['KRON'])[0];
-    expect(i.severity).toBe('error');
+    expect(i.severity).toBe('warning');
     expect(i.field).toBe('ticker');
+    expect(validateIssueForm(form({ ticker: 'TEST' }), limits, ['TEST'])[0].severity).toBe('warning');
     expect(i.params).toEqual({ ticker: 'KR0N', existing: 'KRON' });
   });
 
@@ -377,7 +378,8 @@ describe('planIssue', () => {
       expect(e).toBeInstanceOf(IssueFormError);
       expect((e as IssueFormError).issues.map((i) => i.code)).toEqual(['ticker.chars', 'supply.zero']);
     }
-    expect(() => planIssue(kob, form({ ticker: 'KR0N' }), opts({ registryTickers: ['KRON'] }))).toThrow(/looks like/);
+    // a shared or look-alike ticker plans like any other (the warning is shown, nothing is refused)
+    expect(planIssue(kob, form({ ticker: 'KR0N' }), opts({ registryTickers: ['KRON'] })).built).toBeDefined();
   });
 
   it('a mismatching signature is refused by finalize', () => {
