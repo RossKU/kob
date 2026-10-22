@@ -85,6 +85,12 @@ pub trait BookSource: Send {
     fn metrics(&mut self) -> String {
         String::new()
     }
+
+    /// The book's part of the console status line ([`status_line`]; the in-process indexer's state and lag). The default:
+    /// none.
+    fn status(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// DAA scores (10 per second) an order whose planning panicked, or that the builder refused on its own, stays out of the
@@ -190,6 +196,8 @@ pub struct RunConfig {
     /// Weighted work selection among competing executors (`docs/spec/matcher.md` §3.6, [`super::select`]). Off by default
     /// in the library (the reference planner); the live commands turn it on.
     pub select: SelectConfig,
+    /// Log a one-line status ([`status_line`]) this often (`--status-secs`); `None`: never.
+    pub status_every: Option<Duration>,
 }
 
 impl Default for RunConfig {
@@ -212,6 +220,7 @@ impl Default for RunConfig {
             verify_live_min_lag: 100,
             fee_policy: crate::fee::FeePolicy::default(),
             select: SelectConfig::default(),
+            status_every: None,
         }
     }
 }
@@ -1295,8 +1304,20 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
     /// Runs until `shutdown` resolves.
     pub async fn run(&mut self, shutdown: impl std::future::Future<Output = ()>) -> anyhow::Result<()> {
         tokio::pin!(shutdown);
+        // the first status line comes after the first tick, then one every `status_every`
+        let mut status_at: Option<std::time::Instant> = None;
         loop {
-            match self.step().await {
+            let res = self.step().await;
+            if let Some(every) = self.cfg.status_every {
+                if status_at.is_none_or(|t| t.elapsed() >= every) {
+                    let rep = res.as_ref().cloned().unwrap_or_else(|_| self.last.clone());
+                    let mut f = self.status_facts(&rep);
+                    f.tick_error = res.as_ref().err().map(|e| e.to_string());
+                    tracing::info!("status: {}", status_line(&f));
+                    status_at = Some(std::time::Instant::now());
+                }
+            }
+            match res {
                 Ok(r) => {
                     if !r.built.is_empty() || !r.skipped.is_empty() {
                         tracing::info!(
@@ -1329,6 +1350,109 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             }
         }
     }
+}
+
+/// What the console status line ([`status_line`]) reports: the book source's own line, the last step's state, the
+/// tracker's totals since the start and the operator's funds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StatusFacts {
+    pub source: Option<String>,
+    pub synced: bool,
+    pub paused: bool,
+    pub not_ready: Option<String>,
+    pub book_stale: bool,
+    pub submitted: u64,
+    pub finalized: u64,
+    pub profit_sompi: i64,
+    pub pending: usize,
+    pub rejected: u64,
+    pub funding_total: Option<u64>,
+    pub low_funds: u64,
+    pub dry_run: bool,
+    /// The last tick failed (the node unreachable, the network wrong): why.
+    pub tick_error: Option<String>,
+}
+
+impl<N: NodeApi, S: BookSource> Runner<N, S> {
+    /// The status line's facts after the step that reported `rep`.
+    pub fn status_facts(&mut self, rep: &StepReport) -> StatusFacts {
+        let t = &self.tracker;
+        StatusFacts {
+            source: self.source.status(),
+            synced: rep.synced,
+            paused: rep.paused,
+            not_ready: rep.not_ready.clone(),
+            book_stale: rep.book_stale,
+            submitted: t.submitted,
+            finalized: t.finalized_count,
+            profit_sompi: t.finalized_profit,
+            pending: t.pending(),
+            rejected: t.rejected,
+            funding_total: rep.funding_total.or(self.last_funding_total),
+            low_funds: self.cfg.low_funds,
+            dry_run: self.cfg.dry_run,
+            tick_error: None,
+        }
+    }
+}
+
+/// KAS of an amount of sompi, without trailing zeros (`182.4`, `-0.0012`).
+pub fn kas_text(sompi: i64) -> String {
+    let sign = if sompi < 0 { "-" } else { "" };
+    let a = sompi.unsigned_abs();
+    let frac = format!("{:08}", a % 100_000_000);
+    let frac = frac.trim_end_matches('0');
+    if frac.is_empty() {
+        format!("{sign}{}", a / 100_000_000)
+    } else {
+        format!("{sign}{}.{frac}", a / 100_000_000)
+    }
+}
+
+/// The one-line status an operator watching the console reads (`kob-executor run --status-secs`, every 60 s by default):
+/// where the book is, what the executor sent and earned since the start, its funds, and what needs attention. The metrics
+/// file (`--metrics-file`) carries the same facts for monitoring.
+pub fn status_line(f: &StatusFacts) -> String {
+    let mut parts = vec![];
+    if let Some(s) = &f.source {
+        parts.push(s.clone());
+    }
+    parts.push(format!(
+        "{} transactions sent, {} final, {} pending, profit of the final ones {} KAS",
+        f.submitted,
+        f.finalized,
+        f.pending,
+        kas_text(f.profit_sompi)
+    ));
+    parts.push(match f.funding_total {
+        Some(t) => format!("funds {} KAS", kas_text(t as i64)),
+        None => "funds not read yet".to_string(),
+    });
+    let mut warn = vec![];
+    if let Some(e) = &f.tick_error {
+        warn.push(format!("the last tick failed ({e})"));
+    } else if !f.synced {
+        warn.push("the node is not synced: nothing is planned".to_string());
+    }
+    if f.paused {
+        warn.push("PAUSED (the pause file exists)".to_string());
+    }
+    if let Some(why) = &f.not_ready {
+        warn.push(format!("waiting for the indexer ({why}): nothing is planned"));
+    } else if f.book_stale {
+        warn.push("the book lags the node: nothing is planned".to_string());
+    }
+    if let Some(t) = f.funding_total.filter(|t| *t < f.low_funds && !f.dry_run) {
+        warn.push(format!("funds low ({} KAS, below {} KAS)", kas_text(t as i64), kas_text(f.low_funds as i64)));
+    }
+    if f.rejected > 0 {
+        warn.push(format!("{} transactions rejected by the node (see the log)", f.rejected));
+    }
+    if f.dry_run {
+        warn.push("dry run: nothing is submitted".to_string());
+    }
+    parts.push(if warn.is_empty() { "no warnings".to_string() } else { format!("WARNING: {}", warn.join("; ")) });
+    parts.join(" | ")
 }
 
 /// Prometheus textfile-collector metrics.
@@ -1465,4 +1589,59 @@ fn write_metrics<N: NodeApi, S: BookSource>(p: &Path, r: &mut Runner<N, S>, rep:
     let extra = r.source.metrics();
     std::fs::write(&tmp, metrics_text(r, rep) + &extra)?;
     std::fs::rename(tmp, p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kas_text_drops_trailing_zeros() {
+        assert_eq!(kas_text(0), "0");
+        assert_eq!(kas_text(18_240_000_000), "182.4");
+        assert_eq!(kas_text(100_000_000), "1");
+        assert_eq!(kas_text(-120_000), "-0.0012");
+        assert_eq!(kas_text(1), "0.00000001");
+    }
+
+    #[test]
+    fn the_status_line_names_what_needs_attention() {
+        let mut f = StatusFacts {
+            source: Some("indexer following, caught up (2 DAA behind the node), 9 orders indexed".into()),
+            synced: true,
+            submitted: 14,
+            finalized: 12,
+            profit_sompi: 42_000_000,
+            pending: 1,
+            funding_total: Some(18_240_000_000),
+            low_funds: 10_000_000_000,
+            ..StatusFacts::default()
+        };
+        assert_eq!(
+            status_line(&f),
+            "indexer following, caught up (2 DAA behind the node), 9 orders indexed | 14 transactions sent, 12 final, 1 pending, \
+             profit of the final ones 0.42 KAS | funds 182.4 KAS | no warnings"
+        );
+        f.source = None;
+        f.funding_total = Some(5_000_000_000);
+        f.paused = true;
+        f.not_ready = Some("indexer catching_up, 900 DAA behind the node".into());
+        f.rejected = 2;
+        let s = status_line(&f);
+        assert!(s.starts_with("14 transactions sent"), "{s}");
+        assert!(
+            s.ends_with(
+                "funds 50 KAS | WARNING: PAUSED (the pause file exists); waiting for the indexer (indexer catching_up, 900 DAA behind \
+                 the node): nothing is planned; funds low (50 KAS, below 100 KAS); 2 transactions rejected by the node (see the log)"
+            ),
+            "{s}"
+        );
+        f.funding_total = None;
+        f.synced = false;
+        let s = status_line(&f);
+        assert!(s.contains("funds not read yet") && s.contains("WARNING: the node is not synced"), "{s}");
+        f.tick_error = Some("transport: refused".into());
+        let s = status_line(&f);
+        assert!(s.contains("WARNING: the last tick failed (transport: refused); PAUSED") && !s.contains("not synced"), "{s}");
+    }
 }

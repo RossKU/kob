@@ -17,6 +17,7 @@ pub mod recover;
 pub mod rpc;
 pub mod sanity;
 pub mod script;
+pub mod setup;
 #[doc(hidden)]
 pub mod testkit;
 pub mod tokens;

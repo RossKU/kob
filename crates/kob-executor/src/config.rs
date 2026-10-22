@@ -296,6 +296,10 @@ pub struct IndexerConfig {
     #[serde(alias = "rawlog")]
     pub records: RecordsConfig,
     pub api: ApiConfig,
+    /// What the binary started without arguments runs with this file (`crate::setup`; `kob-executor setup` writes it into
+    /// `kob-executor.toml` next to the executable). Every command given the file as `--config` ignores the table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch: Option<LaunchConfig>,
     /// The `[receipts]` table of a v2.4 configuration (the trade receipt is retired): accepted and ignored. Every other
     /// unknown key is refused, so a misspelt key is never dropped silently.
     #[serde(skip_serializing)]
@@ -333,9 +337,52 @@ impl Default for IndexerConfig {
             rules: ListingRules::default(),
             records: RecordsConfig::default(),
             api: ApiConfig::default(),
+            launch: None,
             receipts: None,
         }
     }
+}
+
+/// The role a start without arguments runs (`[launch] role`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchRole {
+    /// `kob-executor run`: the indexer, the matcher and the keepers (needs the operator's key).
+    #[default]
+    Run,
+    /// `kob-executor index`: the indexer and its read API alone (no key, no funds).
+    Index,
+}
+
+impl LaunchRole {
+    /// The subcommand of the role.
+    pub fn subcommand(self) -> &'static str {
+        match self {
+            LaunchRole::Run => "run",
+            LaunchRole::Index => "index",
+        }
+    }
+}
+
+/// The `[launch]` table: the command-line options of a start without arguments that are not indexer keys. A start without
+/// arguments runs `kob-executor <role> --config <this file> --key-file ... --pause-file ... --x402-config ... <args>` in the
+/// file's directory, so its relative paths (these and `data_dir`, `tokens_path`) are relative to the file
+/// (`crate::setup::launch_args`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LaunchConfig {
+    pub role: LaunchRole,
+    /// The operator's key file (`--key-file`; `run` only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_file: Option<PathBuf>,
+    /// The kill switch (`--pause-file`; `run` only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pause_file: Option<PathBuf>,
+    /// The x402 facilitator's configuration (`--x402-config`; `run` only, off when absent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x402_config: Option<PathBuf>,
+    /// Further options of the role's subcommand, appended as given (e.g. `["--sweep-own-strays"]`).
+    pub args: Vec<String>,
 }
 
 /// The network a command serves: the one given (`--network`, `network = ...`), else the build's deployment network

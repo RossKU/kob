@@ -292,6 +292,31 @@ impl HealthSnapshot {
         }
     }
 
+    /// One line for an operator watching the console (`--status-secs`): the follower's state and lag, in time as well as
+    /// DAA (10 per second), the orders indexed, and the last error while the node is unavailable or the chain has a gap.
+    pub fn status_line(&self) -> String {
+        let state = match self.state {
+            FollowerState::Starting => "starting",
+            FollowerState::CatchingUp => "catching up",
+            FollowerState::Following => "following",
+            FollowerState::NodeUnavailable => "waiting for the node",
+            FollowerState::Gap => "STOPPED at a gap (docs/ops/executor.md, Part B 7.4)",
+            FollowerState::Stopped => "stopped",
+        };
+        let lag = match self.lag_daa() {
+            Some(l) if self.caught_up() => format!("caught up ({l} DAA behind the node)"),
+            Some(l) => format!("{l} DAA behind the node (about {})", human_secs(l / 10)),
+            None => "node position unknown".to_string(),
+        };
+        let mut s = format!("indexer {state}, {lag}, {} orders indexed", self.orders_total);
+        if matches!(self.state, FollowerState::NodeUnavailable | FollowerState::Gap) {
+            if let Some(e) = self.gap_reason.as_ref().or(self.last_error.as_ref()) {
+                s.push_str(&format!(" ({e})"));
+            }
+        }
+        s
+    }
+
     /// Why the store is not caught up (`None`: it is).
     pub fn not_caught_up(&self) -> Option<String> {
         if self.caught_up() {
@@ -302,6 +327,16 @@ impl HealthSnapshot {
             Some(lag) => format!("indexer {state}, {lag} DAA behind the node"),
             None => format!("indexer {state}, node position unknown"),
         })
+    }
+}
+
+/// A duration for a person: `45 s`, `12 min`, `3 h 20 min`, `2 d 4 h`.
+pub fn human_secs(s: u64) -> String {
+    match s {
+        0..=89 => format!("{s} s"),
+        90..=5_399 => format!("{} min", (s + 30) / 60),
+        5_400..=172_799 => format!("{} h {} min", s / 3600, s % 3600 / 60),
+        _ => format!("{} d {} h", s / 86_400, s % 86_400 / 3600),
     }
 }
 
@@ -363,6 +398,30 @@ impl IndexEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_status_line_says_where_the_indexer_is() {
+        let mut h = HealthSnapshot::new("testnet-10");
+        assert_eq!(h.status_line(), "indexer starting, node position unknown, 0 orders indexed");
+        h.state = FollowerState::CatchingUp;
+        h.cursor_daa = 1_000;
+        h.node_daa = Some(1_000 + 36_000 * 3 + 12_000);
+        h.orders_total = 7;
+        assert_eq!(h.status_line(), "indexer catching up, 120000 DAA behind the node (about 3 h 20 min), 7 orders indexed");
+        h.state = FollowerState::Following;
+        h.node_daa = Some(1_004);
+        assert_eq!(h.status_line(), "indexer following, caught up (4 DAA behind the node), 7 orders indexed");
+        h.state = FollowerState::NodeUnavailable;
+        h.last_error = Some("getServerInfo: transport: refused".into());
+        assert!(
+            h.status_line().starts_with("indexer waiting for the node, ")
+                && h.status_line().ends_with("(getServerInfo: transport: refused)")
+        );
+        assert_eq!(
+            [0, 89, 90, 3_599, 5_400, 172_799, 200_000].map(human_secs),
+            ["0 s", "89 s", "2 min", "60 min", "1 h 30 min", "47 h 59 min", "2 d 7 h"]
+        );
+    }
 
     #[test]
     fn caught_up_only_while_following_at_a_known_node_position() {

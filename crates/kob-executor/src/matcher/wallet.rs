@@ -126,6 +126,43 @@ impl HotKey {
         Err(KeyError::Missing)
     }
 
+    /// A fresh key from the operating system's CSPRNG, written to a NEW key file at `path` that only the current account may
+    /// read (`kob-executor setup`). The file is created empty, restricted (Unix: mode `0600` at creation; Windows: the
+    /// inherited ACL is replaced by one entry for the current account, `icacls /inheritance:r /grant:r`, and the result is
+    /// checked with the same SDDL test [`HotKey::from_file`] applies), and only then is the secret written into it: the
+    /// secret is never in a file another account could read, not even briefly. An existing file is never replaced (a key
+    /// that may hold funds). The file is read back through [`HotKey::from_file`], so a key the executor would refuse is
+    /// never handed out; on any failure the new file is removed (no address was shown yet, so it holds no funds).
+    pub fn create_file(path: &Path) -> Result<HotKey, KeyError> {
+        let err = |e: std::io::Error| KeyError::File(path.to_path_buf(), e.to_string());
+        let mut sk = secp256k1::SecretKey::new(&mut secp256k1::rand::rngs::OsRng);
+        let mut secret = sk.secret_bytes();
+        sk.non_secure_erase();
+        let made = HotKey::from_secret(secret);
+        wipe(&mut secret);
+        let key = made?;
+        create_owner_only(path).map_err(err)?;
+        let written = (|| {
+            restrict_to_owner(path)?;
+            use std::io::Write;
+            let mut text = format!("{}\n", kob_protocol::json::to_hex(&key.secret)).into_bytes();
+            let mut f = std::fs::OpenOptions::new().write(true).truncate(true).open(path).map_err(err)?;
+            let w = f.write_all(&text).and_then(|_| f.sync_all());
+            wipe(&mut text);
+            w.map_err(err)?;
+            let back = HotKey::from_file(path)?;
+            if back.pubkey != key.pubkey {
+                return Err(KeyError::Invalid("the key file does not read back as the key written".into()));
+            }
+            Ok(())
+        })();
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(path);
+            return Err(e);
+        }
+        Ok(key)
+    }
+
     /// Kaspa address of the key on a network (`mainnet`, `testnet-10`, `devnet`, `simnet`).
     pub fn address(&self, network: &str) -> Address {
         address_of(&self.pubkey, network)
@@ -160,6 +197,80 @@ fn check_permissions(path: &Path) -> Result<(), KeyError> {
         return Err(KeyError::Permissions(path.to_path_buf(), mode));
     }
     Ok(())
+}
+
+/// Creates the empty key file, failing when anything exists at `path`; readable and writable by its owner only from the start.
+#[cfg(unix)]
+fn create_owner_only(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path).map(|_| ())
+}
+
+/// Mode `0600` (the umask can only have removed bits), checked as loading checks it.
+#[cfg(unix)]
+fn restrict_to_owner(path: &Path) -> Result<(), KeyError> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| KeyError::File(path.to_path_buf(), e.to_string()))?;
+    check_permissions(path)
+}
+
+/// Creates the empty key file, failing when anything exists at `path` (its ACL is the inherited one until
+/// [`restrict_to_owner`]; nothing is written before that).
+#[cfg(not(unix))]
+fn create_owner_only(path: &Path) -> std::io::Result<()> {
+    std::fs::OpenOptions::new().write(true).create_new(true).open(path).map(|_| ())
+}
+
+/// Replaces the file's ACL by one full-control entry for the current account (no inherited entries), then requires that
+/// no other account group may read it (the strict form of the check [`HotKey::from_file`] applies, whatever
+/// `KOB_KEY_ACL_STRICT` says).
+#[cfg(not(unix))]
+fn restrict_to_owner(path: &Path) -> Result<(), KeyError> {
+    let file_err = |m: String| KeyError::File(path.to_path_buf(), m);
+    let me = current_account().ok_or_else(|| file_err("cannot name the current account (whoami, USERNAME)".into()))?;
+    let out = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(format!("{me}:F"))
+        .output()
+        .map_err(|e| file_err(format!("icacls: {e}")))?;
+    if !out.status.success() {
+        return Err(file_err(format!("icacls could not restrict the file: {}", String::from_utf8_lossy(&out.stdout).trim())));
+    }
+    let sddl = windows_acl_sddl(path).ok_or_else(|| file_err("cannot read the file's ACL back (icacls /save)".into()))?;
+    let others = sddl_readable_by_others(&sddl);
+    if !others.is_empty() {
+        return Err(KeyError::Acl(path.to_path_buf(), others.join(", ")));
+    }
+    Ok(())
+}
+
+/// The current account for `icacls /grant`: `*<SID>` from `whoami /user` (unambiguous, locale-independent), else
+/// `%USERDOMAIN%\%USERNAME%`.
+#[cfg(not(unix))]
+fn current_account() -> Option<String> {
+    let sid = std::process::Command::new("whoami")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| sid_of_whoami_csv(&String::from_utf8_lossy(&o.stdout)));
+    if let Some(sid) = sid {
+        return Some(format!("*{sid}"));
+    }
+    let user = std::env::var("USERNAME").ok().filter(|u| !u.is_empty())?;
+    Some(match std::env::var("USERDOMAIN").ok().filter(|d| !d.is_empty()) {
+        Some(d) => format!("{d}\\{user}"),
+        None => user,
+    })
+}
+
+/// The SID of `whoami /user /fo csv /nh` output (`"host\user","S-1-5-21-..."`).
+pub fn sid_of_whoami_csv(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let sid = line.rsplit(',').next()?.trim().trim_matches('"');
+    (sid.starts_with("S-1-") && sid[4..].chars().all(|c| c.is_ascii_digit() || c == '-')).then(|| sid.to_string())
 }
 
 /// Set to any value other than `0` to make a key file readable by other accounts a hard error on Windows (default: a warning).
@@ -384,6 +495,42 @@ mod tests {
             assert!(HotKey::from_file(&p).is_ok());
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `create_file` writes a fresh key nobody else may read, never replaces a file, and the key loads like any key file.
+    #[test]
+    fn a_created_key_file_is_owner_only_and_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("operator.key");
+        let k = HotKey::create_file(&p).expect("created");
+        assert_eq!(HotKey::from_file(&p).unwrap().pubkey(), k.pubkey());
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(text.trim().len(), 64);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        #[cfg(windows)]
+        {
+            let sddl = windows_acl_sddl(&p).expect("the ACL is readable");
+            assert!(sddl_readable_by_others(&sddl).is_empty(), "{sddl}");
+        }
+        // an existing file (a key that may hold funds) is left exactly as it was
+        assert!(matches!(HotKey::create_file(&p), Err(KeyError::File(..))));
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
+        // two keys are two keys
+        let q = dir.path().join("other.key");
+        assert_ne!(HotKey::create_file(&q).unwrap().pubkey(), k.pubkey());
+    }
+
+    #[test]
+    fn whoami_csv_names_the_sid() {
+        assert_eq!(sid_of_whoami_csv("\"host\\me\",\"S-1-5-21-1-2-3-1001\"\r\n").as_deref(), Some("S-1-5-21-1-2-3-1001"));
+        assert_eq!(sid_of_whoami_csv("\n\"a,b\\c\",\"S-1-5-18\"\n").as_deref(), Some("S-1-5-18"));
+        assert_eq!(sid_of_whoami_csv("ERROR: nothing"), None);
+        assert_eq!(sid_of_whoami_csv(""), None);
+        assert_eq!(sid_of_whoami_csv("\"x\",\"S-1-5-21-1 & del\""), None);
     }
 
     #[test]

@@ -18,6 +18,7 @@ indexed, listed, matched and kept like their KCC-20 twins; a book is one family'
 | `index` | indexer + read API | none | the node |
 | `match`, `keep` | matcher, keepers | operator hot key | a book snapshot file (`--book-file`) |
 | `x402` | x402 facilitator (verify, settle) | none | no book; finality from the node's UTXO set |
+| `setup` | the interactive first run: writes `kob-executor.toml` next to the binary, then starts `run` or `index` | makes or names the hot key | - |
 
 `run --x402-config <file>` adds the x402 facilitator to the one process (A.6).
 
@@ -27,6 +28,35 @@ flags, metrics). Section numbers in B and C are stable (B 7.4 is the gap runbook
 
 Status labels: **[F]** verified (code, test, or measured), **[I]** inference or estimate that must
 be measured during the TN10 soak, **[U]** unknown.
+
+## Quick start (operators)
+
+Download the release archive of your network and platform, check its hash, run a local rusty-kaspa node with
+`--utxoindex --rpclisten-json=default`, then start `kob-executor` without arguments (a double click on Windows). The
+step-by-step page is `docs/ops/executor-quickstart.md`.
+
+* **Without arguments** the binary looks for `kob-executor.toml` in its own directory. With one, it runs the file's
+  `[launch]` role exactly as `kob-executor <role> --config kob-executor.toml [--key-file ...] [--pause-file ...]
+  [--x402-config ...] [args ...]` in that directory, and prints that command line first. Without one, on a terminal, it
+  runs `kob-executor setup`; with no terminal (a service, a pipe) it refuses and says why. When a start without
+  arguments fails on a terminal, the window waits for Enter before it closes.
+* **`kob-executor setup`** (`--dir` another directory, `--no-start` write only) asks, Enter taking the default: the role
+  (matcher and keepers, or index only); the node URL (default the local node of the build's network,
+  `ws://127.0.0.1:18110` mainnet / `ws://127.0.0.1:18210` testnet-10: rusty-kaspa v2.1.0
+  `--rpclisten-json=default`), checked at once (`getServerInfo`: network, sync, UTXO index, with the node command line on
+  a failure); the data directory (`kob-data`); the hot key (a new one from the OS CSPRNG into `kob-operator.key`, owner-only
+  from creation: mode `0600`, on Windows one ACL entry for the current account checked like `KOB_KEY_ACL_STRICT=1`; an
+  existing key file is offered again and never replaced; the secret is never printed); it shows the address, waits for at
+  least 100 KAS (Enter skips) and asks for the x402 facilitator (off by default). A build without a pinned registry
+  (testnet-10) also gets `kob-tokens.json`: the embedded registry's programs for its network and no token entries, so every
+  order of a supported program is listed (B 4, *Token allowlist*).
+* **`kob-executor.toml`** is an ordinary `--config` file (B 4) plus the `[launch]` table (`role = "run" | "index"`,
+  `key_file`, `pause_file`, `x402_config`, `args`); other commands given it as `--config` ignore `[launch]`. Paths are
+  relative to the file.
+* **Status line**: `run` and `index` log `status: ...` every `--status-secs` (60; 0 off): the indexer's state and lag,
+  the transactions sent and final, the profit of the final ones, the funds, and a `WARNING:` list (node not synced or
+  unreachable, paused, waiting for the indexer, funds below `--low-funds-kas`, rejections).
+* Nothing connects anywhere but to the configured node: no telemetry, no fee, no project server, no auto-update.
 
 ---
 
@@ -133,6 +163,7 @@ matcher and keeper options (C, "Running"):
 | Flag | Default | Meaning |
 |---|---|---|
 | `--key-file` | `$KOB_OPERATOR_KEY_FILE` | operator key file (C, "Keys and funds") |
+| `--status-secs` | 60 | log a one-line status (indexer lag, transactions, profit, funds, warnings) this often; 0 = never (also on `index`) |
 | `--no-match`, `--no-keep` | off | switch a role off (not both: that is `index`) |
 | `--max-book-lag-daa` | `max_lag_secs` x 10 (300) | plan nothing while the book is this far behind the node; 0 = never wait |
 | `--tick-ms`, `--fee-rate`, `--dry-run`, `--pause-file`, `--metrics-file`, `--low-funds-kas` | as C | |
@@ -2288,7 +2319,7 @@ The only secret is the operator's hot key (P2PK Schnorr). It is never a command-
 Sources, in order: `--key-file PATH` / `$KOB_OPERATOR_KEY_FILE`, a systemd credential
 `kob-operator-key` (`$CREDENTIALS_DIRECTORY`, tmpfs), `$KOB_OPERATOR_KEY` (hex; removed from the
 environment once read). A key file holds 64 hex characters and must be mode `0600` or `0400` (the
-process refuses group- or world-accessible files; on Windows it warns when another account group can read the file). The secret is wiped from memory on exit.
+process refuses group- or world-accessible files; on Windows it warns when another account group can read the file). The secret is wiped from memory on exit. `kob-executor setup` generates a key with the OS CSPRNG into a new file that is owner-only before the secret is written (Quick start).
 
 * Fund the key's P2PK address with a few days of operating KAS only; split it into several UTXOs
   (10 KAS or more each) so independent batches and keeper jobs can run in one tick. Change

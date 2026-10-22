@@ -72,6 +72,17 @@ pub struct IndexOpts {
     /// Hours of chain blocks kept for reorgs (the finality window; default 12).
     #[arg(long, global = true)]
     pub reorg_window_hours: Option<u64>,
+    /// Log a one-line status (the indexer's lag; with `run` also the transactions sent, the profit, the funds and the
+    /// warnings) every this many seconds; 0: never.
+    #[arg(long, global = true, default_value_t = 60)]
+    pub status_secs: u64,
+}
+
+impl IndexOpts {
+    /// `--status-secs` as a period (`None`: off).
+    pub fn status_every(&self) -> Option<std::time::Duration> {
+        (self.status_secs > 0).then(|| std::time::Duration::from_secs(self.status_secs))
+    }
 }
 
 #[derive(Subcommand)]
@@ -238,7 +249,22 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
         IndexSub::Run => {
             tracing::info!(network = %cfg.network, rpc = %redact_url(cfg.primary_url()), data = %cfg.data_dir.display(), "starting indexer");
             let idx = Indexer::open(cfg)?;
-            idx.run(shutdown_signal()).await?;
+            let status = a.opts.status_every().map(|every| {
+                let health = idx.health.clone();
+                tokio::spawn(async move {
+                    let mut t = tokio::time::interval(every);
+                    t.tick().await;
+                    loop {
+                        t.tick().await;
+                        tracing::info!("status: {}", health.snapshot().status_line());
+                    }
+                })
+            });
+            let r = idx.run(shutdown_signal()).await;
+            if let Some(s) = status {
+                s.abort();
+            }
+            r?;
         }
         IndexSub::Replay { onto_database: true } => {
             let f = indexer::replay_onto_database(&cfg)?;

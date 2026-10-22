@@ -155,6 +155,10 @@ impl BookSource for IndexerSource {
     fn metrics(&mut self) -> String {
         self.health.as_ref().map(|h| h.snapshot().metrics_text()).unwrap_or_default()
     }
+
+    fn status(&mut self) -> Option<String> {
+        self.health.as_ref().map(|h| h.snapshot().status_line())
+    }
 }
 
 /// One consistent read of the book ([`book::snapshot`]: one read transaction) on a reader connection.
@@ -324,6 +328,7 @@ impl RunArgs {
             fee_policy: self.fees.policy(self.fee_rate).unwrap_or_else(|_| crate::fee::FeePolicy::fixed(self.fee_rate)),
             // `run` refuses invalid selection options before it gets here
             select: self.select.config().unwrap_or_default(),
+            status_every: self.index.status_every(),
             ..RunConfig::default()
         }
     }
