@@ -1,0 +1,127 @@
+name: release
+
+# Prebuilt kob-executor and kob-cli for operators (docs/ops/executor-quickstart.md): Windows x86_64 (MSVC, static CRT) and
+# Linux x86_64 (glibc), each as the testnet-10 and the mainnet deployment build (docs/ops/release.md), packaged by
+# scripts/package-release.mjs into kob-executor-<version>-<network>-<target>.zip / .tar.gz with QUICKSTART.md, LICENSE, NOTICE
+# and a SHA256SUMS of their files.
+#
+# * A pushed tag v* builds every archive and attaches them, with a SHA256SUMS of the archives, to a DRAFT release of the tag:
+#   the maintainer adds the release notes (scripts/release-hashes.sh, docs/ops/release.md 6) and publishes it.
+# * workflow_dispatch is the dry run: the same builds, uploaded as workflow artifacts only (no release, no tag).
+#
+# No cache: a release binary is built from the commit alone (the reproducible job of ci.yml builds the executor twice and
+# compares). Nothing is signed: the Windows binary shows SmartScreen's "More info -> Run anyway" (the quickstart says so).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        network: [testnet-10, mainnet]
+        platform:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          # the oldest supported Ubuntu runner: the binary needs the glibc it was linked against or newer (2.35)
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+    runs-on: ${{ matrix.platform.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      # the Windows binary carries the C runtime, so a fresh Windows needs no Visual C++ redistributable for a double click
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
+        with:
+          toolchain: "1.94.0"
+          targets: ${{ matrix.platform.target }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Version (the tag without its v; a dry run is dev-<commit>)
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then v="${REF_NAME#v}"; else v="dev-${GITHUB_SHA::7}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Build kob-executor and kob-cli (${{ matrix.network }} deployment build, --locked)
+        env:
+          NETWORK: ${{ matrix.network }}
+          TARGET: ${{ matrix.platform.target }}
+        run: |
+          case "$NETWORK" in
+            mainnet) f=deploy-mainnet ;;
+            testnet-10) f=deploy-tn10 ;;
+          esac
+          cargo build --release --locked --target "$TARGET" -p kob-executor -p kob-cli \
+            --features "kob-executor/$f,kob-cli/$f"
+      - name: The binary is the build of its network (it refuses the other one before touching a node)
+        env:
+          NETWORK: ${{ matrix.network }}
+          TARGET: ${{ matrix.platform.target }}
+        run: |
+          ext=""; case "$TARGET" in *windows*) ext=.exe ;; esac
+          bin="target/$TARGET/release/kob-executor$ext"
+          "$bin" --version
+          "$bin" setup --help > /dev/null
+          other=mainnet; [ "$NETWORK" = mainnet ] && other=testnet-10
+          out=$("$bin" index --network "$other" --data-dir "$RUNNER_TEMP/refuse" 2>&1 || true)
+          echo "$out"
+          echo "$out" | grep -q "this binary is the $NETWORK deployment build"
+      - name: Package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          NETWORK: ${{ matrix.network }}
+          TARGET: ${{ matrix.platform.target }}
+        run: node scripts/package-release.mjs --version "$VERSION" --network "$NETWORK" --target "$TARGET" --bin-dir "target/$TARGET/release" --out dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kob-executor-${{ steps.version.outputs.version }}-${{ matrix.network }}-${{ matrix.platform.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    # tags only: a dry run (workflow_dispatch) stops at the artifacts above
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: kob-executor-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS of every archive
+        run: node scripts/package-release.mjs --sums dist
+      - name: Draft release of the tag with the archives and SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/kob-executor-* dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "KOB $TAG" \
+            --notes "Prebuilt kob-executor and kob-cli (docs/ops/executor-quickstart.md). Check each archive against SHA256SUMS. Release hashes (scripts/release-hashes.sh): to be added before publishing."

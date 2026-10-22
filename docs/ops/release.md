@@ -143,6 +143,18 @@ built from the commit. CI (job `reproducible`) builds `web/dist` (with the kob-w
 kob-executor release binary twice, from two checkouts at different paths, and fails when any file differs. The source-level artifacts (templates, record, registry) reproduce byte for byte
 everywhere.
 
+**Prebuilt binaries for operators** (`.github/workflows/release.yml`; the operators' page is
+`docs/ops/executor-quickstart.md`). Pushing a tag `v<version>` builds `kob-executor` and `kob-cli` with `--release --locked`
+for Windows x86_64 (`x86_64-pc-windows-msvc`, static C runtime) and Linux x86_64 (`x86_64-unknown-linux-gnu`, on the
+oldest supported Ubuntu runner for the widest glibc range), each as the `deploy-tn10` and the `deploy-mainnet` build, and
+checks that each binary refuses the other network. `scripts/package-release.mjs` packs each into
+`kob-executor-<version>-<network>-<target>.zip` (Windows) or `.tar.gz` with `QUICKSTART.md`, `LICENSE`, `NOTICE` and a
+`SHA256SUMS` of those files; the archive bytes depend only on the files and `SOURCE_DATE_EPOCH` (the commit time). The
+release job attaches the four archives and a `SHA256SUMS` of them to a **draft** release of the tag: add the output of
+`scripts/release-hashes.sh` (above, with the binaries of the archives) to its notes, then publish it. `workflow_dispatch`
+runs the same builds as a dry run that only uploads workflow artifacts. Nothing is code-signed; no container image is
+published.
+
 ## 7. Upgrade order: indexers before wallets
 
 A release that changes the `KOB1` payload version (version 4 today, `docs/spec/kob1-payload.md`) must reach the indexers
