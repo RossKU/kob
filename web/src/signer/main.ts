@@ -327,9 +327,14 @@ function requestView(core: SignerCore, req: PendingRequest): void {
       update();
     },
     (w) => {
+      // once shown, the line keeps its place (only its visibility changes): a frame that shrank the moment Approve opens would move under the
+      // pointer and be reported not visible again, so the click would land on a disabled button
       const show = approve.disabled && performance.now() - shownAt > 3000 && w !== '';
-      waitWhy.hidden = !show;
-      if (show && waitWhy.textContent !== w) waitWhy.textContent = w;
+      if (show) {
+        waitWhy.hidden = false;
+        waitWhy.style.visibility = 'visible';
+        if (waitWhy.textContent !== w) waitWhy.textContent = w;
+      } else if (!waitWhy.hidden) waitWhy.style.visibility = 'hidden';
     },
   );
   approve.addEventListener('click', (e) => {
