@@ -73,5 +73,6 @@ export default {
   'signer.flip.type.dutch': 'Dutch auction',
   'signer.flip.type.rising': 'rising-bid auction',
   'signer.approve': 'Approve',
+  'signer.waitWhy': 'Approve opens once every line has been fully on screen with nothing covering this frame (no overlay, zoom or cut-off). Now: buttons {buttons}, lines seen {lines}, covered parts {covered}.',
   'signer.reject': 'Reject',
 };

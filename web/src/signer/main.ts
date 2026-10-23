@@ -109,18 +109,32 @@ const FULL = 0.98;
  * whether it is clipped. `onChange(true)` once every part of the summary has been fully visible for a moment and the buttons are now (seen.ts):
  * a page that clips the frame down to its buttons gets no approval.
  */
-function watchRequest(parts: Element[], buttons: Element, onChange: (ready: boolean) => void): () => void {
+function watchRequest(parts: Element[], buttons: Element, onChange: (ready: boolean) => void, onWhy?: (why: string) => void): () => void {
   if (!visibilityCheckSupported()) {
     onChange(false); // no visibility check in this browser: never approvable (the app does not offer the private key here)
     return () => undefined;
   }
+  // what the browser last reported per element, only to say why Approve waits (display only: the decision is the tracker's)
+  const last = new Map<Element, { visible: boolean | undefined; ratio: number }>();
+  const why = (): string => {
+    const b = last.get(buttons);
+    const notSeen = parts.filter((p) => { const l = last.get(p); return !l || l.visible !== true || l.ratio < FULL; });
+    const covered = [...last.values()].filter((l) => l.visible === false).length;
+    return t('signer.waitWhy', {
+      buttons: !b ? '-' : b.visible !== true ? 'covered' : b.ratio < FULL ? `cut off (${Math.round(b.ratio * 100)} %)` : 'ok',
+      lines: `${parts.length - notSeen.length}/${parts.length}`,
+      covered: String(covered),
+    });
+  };
   const ids = new Map<Element, string>(parts.map((p, i) => [p, `part-${i}`]));
   const tracker = new SeenTracker([...ids.values()]);
   const now = () => performance.now();
   const io = new IntersectionObserver(
     (entries) => {
       for (const e of entries) {
-        const fully = (e as IntersectionObserverEntry & { isVisible?: boolean }).isVisible === true && e.isIntersecting && e.intersectionRatio >= FULL;
+        const isVisible = (e as IntersectionObserverEntry & { isVisible?: boolean }).isVisible;
+        last.set(e.target, { visible: isVisible, ratio: e.isIntersecting ? e.intersectionRatio : 0 });
+        const fully = isVisible === true && e.isIntersecting && e.intersectionRatio >= FULL;
         if (e.target === buttons) tracker.buttons(fully, now());
         else tracker.part(ids.get(e.target) ?? '', fully, now());
       }
@@ -131,7 +145,11 @@ function watchRequest(parts: Element[], buttons: Element, onChange: (ready: bool
   for (const p of parts) io.observe(p);
   io.observe(buttons);
   // a part that stays visible sends no further entry: its time is counted here
-  const timer = setInterval(() => onChange(tracker.ready(now())), 100);
+  const timer = setInterval(() => {
+    const ready = tracker.ready(now());
+    onChange(ready);
+    onWhy?.(ready ? '' : why());
+  }, 100);
   return () => {
     io.disconnect();
     clearInterval(timer);
@@ -271,6 +289,10 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   const reject = el('button', { type: 'button', 'data-testid': 'signer-reject' }, t('signer.reject'));
   const approve = el('button', { type: 'button', class: 'primary', disabled: '', 'data-testid': 'signer-approve' }, t('signer.approve'));
   const actions = el('div', { class: 'row end' }, reject, approve);
+  // why Approve still waits, once it has waited a while (the visibility check: an overlay, a zoom or a cut-off frame keeps it disabled)
+  const waitWhy = el('p', { class: 'muted small', 'data-testid': 'signer-wait-why' }, '');
+  waitWhy.hidden = true;
+  const shownAt = performance.now();
   const title = el('h1', { 'data-testid': 'signer-title' }, s.title);
   cells.text.set('title', title);
   const orders = s.orders.map((o, i) => orderView(o, `signer-order-${i}`, cells, `o:${i}`));
@@ -297,10 +319,19 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   if (req.change === 'shown') hold();
   // every part of the summary: the title, each line, each order's title, token and terms, the problems note
   const parts: Element[] = [title, ...list.children, ...orders.flatMap((o) => [...o.querySelectorAll('h2, p.token, .line')]), ...problems];
-  stopVisibility = watchRequest(parts, actions, (v) => {
-    visible = v;
-    update();
-  });
+  stopVisibility = watchRequest(
+    parts,
+    actions,
+    (v) => {
+      visible = v;
+      update();
+    },
+    (w) => {
+      const show = approve.disabled && performance.now() - shownAt > 3000 && w !== '';
+      waitWhy.hidden = !show;
+      if (show && waitWhy.textContent !== w) waitWhy.textContent = w;
+    },
+  );
   approve.addEventListener('click', (e) => {
     // only a real user click on this button signs (the app cannot click into this cross-origin frame; synthetic events are not trusted)
     if (!e.isTrusted || approve.disabled) return;
@@ -316,7 +347,7 @@ function requestView(core: SignerCore, req: PendingRequest): void {
     idleView(core);
   });
   onScreen = { id: req.id, shape: shapeOf(s), cells, hold, note };
-  show(note, title, list, ...orders, ...problems, actions);
+  show(note, title, list, ...orders, ...problems, actions, waitWhy);
 }
 
 // ------------------------------------------------------------------------------------------------ boot
