@@ -30,7 +30,7 @@ export default {
   'issue.field.name': 'Name',
   'issue.field.name.hint': 'Shown to users, for example "Example Coin".',
   'issue.field.ticker': 'Ticker',
-  'issue.field.ticker.hint': '{min} to {max} capital letters A-Z or digits 0-9. It must not look like an existing ticker.',
+  'issue.field.ticker.hint': '{min} to {max} capital letters A-Z or digits 0-9. A ticker another token already uses (or one that looks like it) is allowed, with a warning: the covenant id tells tokens apart.',
   'issue.field.decimals': 'Decimals',
   'issue.field.decimals.hint': 'Decimal places of one token, 0 to {max}. Fixed forever.',
   'issue.field.supply': 'Total supply',
