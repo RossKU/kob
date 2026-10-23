@@ -218,3 +218,16 @@ a.tape-row:hover .tape-time { color: var(--text); }
 .ml-subtitle { font-size: 0.95rem; font-weight: 700; margin: 0 0 6px; }
 @media (max-width: 1099px) { .ml-table .ml-lg { display: none; } }
 @media (max-width: 759px) { .ml-table .ml-md { display: none; } }
+
+/* a phone (one column): the ticket is below the book and the chart; a small "Trade" button stays at the bottom edge and jumps to it (MarketShell) */
+.mkt-trade-fab { display: none; }
+@media (max-width: 759px) {
+  .mkt-trade-fab {
+    display: inline-flex; align-items: center; justify-content: center; position: fixed; right: 16px; bottom: 16px; z-index: 30; min-height: 44px; padding: 0 22px;
+    border: 1px solid var(--primary); border-radius: 999px; background: var(--primary); color: var(--primary-contrast); font: inherit; font-weight: 700; cursor: pointer; box-shadow: var(--shadow);
+  }
+  .mkt-area-ticket { scroll-margin-top: 112px; } /* under the sticky header (brand, navigation, wallet chip) */
+  .mkt-trade-fab:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+  /* room under the last panel, so the button never covers it */
+  .market-page { padding-bottom: 56px; }
+}

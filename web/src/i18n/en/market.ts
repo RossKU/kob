@@ -143,6 +143,7 @@ export default {
   'market.trades.unsettled': 'unsettled',
 
   'market.ticket.title': 'Trade',
+  'market.ticket.jump': 'Go to the order ticket (Buy / Sell)',
   'market.declaration.conflictTitle': 'The registry and the chain disagree about this token',
   'market.declaration.conflict': 'What this token recorded on chain at its creation (KCC-23) differs from its registry entry (or from the price scale of its market) in: {fields}. The on-chain values are shown. When the decimals differ, orders of this token are not planned until the two agree.',
   'market.ticket.networkBlocked': 'Your wallet is on the wrong network: trading is blocked until you switch it.',

@@ -1,6 +1,7 @@
 // The common top of every market page: the pair as `BASE / QUOTE` where each side is a drop-down (KAS and the tokens), and the flip control. The same
 // markup for a token's KAS market and for a token pair, so the page keeps its layout whichever quote is chosen.
 import type { ComponentChildren } from 'preact';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { unregisteredId } from './token-model';
 import { Button } from '../kit';
@@ -94,8 +95,26 @@ export function MarketShell(props: {
   ticket: ComponentChildren;
   details?: ComponentChildren;
 }) {
+  const root = useRef<HTMLDivElement>(null);
+  // the "Trade" button of a phone (the ticket is below the book and the chart): shown while the ticket is off screen
+  const [ticketAway, setTicketAway] = useState(true);
+  useEffect(() => {
+    const el = root.current?.querySelector('.mkt-area-ticket');
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver((entries) => setTicketAway(!entries.some((e) => e.isIntersecting)));
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  const jumpToTicket = () => {
+    const area = root.current?.querySelector<HTMLElement>('.mkt-area-ticket');
+    if (!area) return;
+    const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    area.scrollIntoView({ behavior: calm ? 'auto' : 'smooth', block: 'start' });
+    // the amount box takes the cursor (a phone opens its keyboard); no scroll of its own, the one above already runs
+    area.querySelector<HTMLElement>('[data-testid="order-amount"]')?.focus({ preventScroll: true });
+  };
   return (
-    <div class="market-page" data-testid={props['data-testid']} {...props.attrs}>
+    <div class="market-page" data-testid={props['data-testid']} ref={root} {...props.attrs}>
       {props.header}
       {props.notices}
       {props.stats}
@@ -111,6 +130,12 @@ export function MarketShell(props: {
         {props.ticket}
       </div>
       {props.details}
+      {/* phone only (market.css): jumps to the ticket */}
+      {ticketAway ? (
+        <button type="button" class="mkt-trade-fab" onClick={jumpToTicket} aria-label={t('market.ticket.jump')} data-testid="market-trade-jump">
+          {t('market.ticket.title')}
+        </button>
+      ) : null}
     </div>
   );
 }
