@@ -150,12 +150,14 @@ everywhere.
 `kob-executor` and `kob-cli` inherit, so their `--version` is the tag): bump it, with `Cargo.lock`, in the very commit that is
 tagged; the workflow refuses any other tag before it builds (`node scripts/package-release.mjs --check-tag v<version>` checks it
 locally). Pushing the tag `v<version>` builds `kob-executor` and `kob-cli` with `--release --locked`
-for Windows x86_64 (`x86_64-pc-windows-msvc`, static C runtime) and Linux x86_64 (`x86_64-unknown-linux-gnu`, on the
-oldest supported Ubuntu runner for the widest glibc range), each as the `deploy-tn10` and the `deploy-mainnet` build, and
-checks that each binary refuses the other network. `scripts/package-release.mjs` packs each into
+for Windows x86_64 (`x86_64-pc-windows-msvc`, static C runtime), Linux x86_64 (`x86_64-unknown-linux-gnu`, on the
+oldest supported Ubuntu runner for the widest glibc range) and Android arm64 (`aarch64-linux-android`, bionic, for Termux;
+built with the runner image's NDK clang for API 24), each as the `deploy-tn10` and the `deploy-mainnet` build, and
+checks that each binary refuses the other network (not the Android one, which cannot run on the x86_64 runner: it is only
+checked to be an arm64 ELF). `scripts/package-release.mjs` packs each into
 `kob-executor-<version>-<network>-<target>.zip` (Windows) or `.tar.gz` with `QUICKSTART.md`, `LICENSE`, `NOTICE` and a
 `SHA256SUMS` of those files; the archive bytes depend only on the files and `SOURCE_DATE_EPOCH` (the commit time). The
-release job attaches the four archives and a `SHA256SUMS` of them to a **draft** release of the tag: add the output of
+release job attaches the six archives and a `SHA256SUMS` of them to a **draft** release of the tag: add the output of
 `scripts/release-hashes.sh` (above, with the binaries of the archives) to its notes, then publish it. `workflow_dispatch`
 runs the same builds as a dry run that only uploads workflow artifacts. Nothing is code-signed; no container image is
 published (the repository's `Dockerfile` builds one from the source for operators who want a container, quickstart 6).

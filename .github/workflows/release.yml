@@ -1,7 +1,7 @@
 name: release
 
-# Prebuilt kob-executor and kob-cli for operators (docs/ops/executor-quickstart.md): Windows x86_64 (MSVC, static CRT) and
-# Linux x86_64 (glibc), each as the testnet-10 and the mainnet deployment build (docs/ops/release.md), packaged by
+# Prebuilt kob-executor and kob-cli for operators (docs/ops/executor-quickstart.md): Windows x86_64 (MSVC, static CRT),
+# Linux x86_64 (glibc) and Android arm64 (aarch64-linux-android, bionic: for Termux on a phone, no APK), each as the testnet-10 and the mainnet deployment build (docs/ops/release.md), packaged by
 # scripts/package-release.mjs into kob-executor-<version>-<network>-<target>.zip / .tar.gz with QUICKSTART.md, LICENSE, NOTICE
 # and a SHA256SUMS of their files.
 #
@@ -59,6 +59,8 @@ jobs:
           - { os: windows-latest, target: x86_64-pc-windows-msvc }
           # the oldest supported Ubuntu runner: the binary needs the glibc it was linked against or newer (2.35)
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          # bionic, not musl: Android has no /etc/resolv.conf (musl's resolver reads it), and bionic's getaddrinfo is what Termux uses
+          - { os: ubuntu-22.04, target: aarch64-linux-android }
     runs-on: ${{ matrix.platform.os }}
     defaults:
       run:
@@ -77,6 +79,16 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
+      - name: Android NDK toolchain (the NDK preinstalled on the runner image; clang for API 24, Android 7.0 and later)
+        if: matrix.platform.target == 'aarch64-linux-android'
+        run: |
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -x "$bin/aarch64-linux-android24-clang" || { echo "no NDK clang under $bin" >&2; exit 1; }
+          {
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang"
+            echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang"
+            echo "AR_aarch64_linux_android=$bin/llvm-ar"
+          } >> "$GITHUB_ENV"
       - name: Build kob-executor and kob-cli (${{ matrix.network }} deployment build, --locked)
         env:
           NETWORK: ${{ matrix.network }}
@@ -88,7 +100,18 @@ jobs:
           esac
           cargo build --release --locked --target "$TARGET" -p kob-executor -p kob-cli \
             --features "kob-executor/$f,kob-cli/$f"
+      - name: The Android binaries are arm64 ELF (they cannot run on this x86_64 runner, so the next step does not apply to them)
+        if: matrix.platform.target == 'aarch64-linux-android'
+        env:
+          TARGET: ${{ matrix.platform.target }}
+        run: |
+          for b in kob-executor kob-cli; do
+            file "target/$TARGET/release/$b" | tee /dev/stderr | grep -q "ELF 64-bit LSB.*ARM aarch64"
+          done
       - name: The binary is the build of its network (it refuses the other one before touching a node)
+        # not for aarch64-linux-android: an arm64 Android binary cannot be executed on the x86_64 runner (its network is fixed
+        # by the same --features as the other targets, and the check ran for the same source on the Linux and Windows builds)
+        if: matrix.platform.target != 'aarch64-linux-android'
         env:
           NETWORK: ${{ matrix.network }}
           TARGET: ${{ matrix.platform.target }}

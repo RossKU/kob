@@ -17,6 +17,7 @@ platform:
 |---|---|
 | `kob-executor-<version>-mainnet-x86_64-pc-windows-msvc.zip` | mainnet, Windows 10 / 11 (64-bit) |
 | `kob-executor-<version>-mainnet-x86_64-unknown-linux-gnu.tar.gz` | mainnet, Linux x86-64 (glibc) |
+| `kob-executor-<version>-mainnet-aarch64-linux-android.tar.gz` | mainnet, an Android phone through Termux (arm64; section 8) |
 | `kob-executor-<version>-testnet-10-...` | the same for testnet-10 |
 
 A binary serves exactly one network (the deployment build, `docs/ops/release.md`): the mainnet binary refuses a testnet
@@ -197,3 +198,47 @@ the commit you verified.
 Stop the executor, replace `kob-executor` (and `kob-cli`) with the new release's files, start it again. The configuration,
 the key and the database stay. Read the release notes first: an indexer upgrade can ask for a rebuild
 (`docs/ops/release.md`, 7).
+
+## 8. Run on an Android phone (Termux)
+
+An arm64 Android phone (Android 7.0 or later) can run the executor in [Termux](https://termux.dev), a terminal app. There is no
+APK and no app: you use the `...-aarch64-linux-android.tar.gz` archive of section 1, which is built for Android's own C
+library, so name resolution and TLS to the public nodes work as in any Termux program.
+
+1. **Install Termux from F-Droid** (or the Termux GitHub releases), **not from Google Play**: the Play Store build is
+   not maintained like the F-Droid one and its packages do not match. Open it and run `pkg update`.
+2. **Tools**: `pkg install curl tar`.
+3. **Download and check** in the Termux home folder (the data must stay in Termux's private storage, not in `/sdcard`,
+   which has no file modes). Take the archive of your network from the release page:
+
+   ```
+   cd ~
+   curl -LO https://github.com/RossKU/kob/releases/download/v<version>/kob-executor-<version>-mainnet-aarch64-linux-android.tar.gz
+   curl -LO https://github.com/RossKU/kob/releases/download/v<version>/SHA256SUMS
+   sha256sum -c --ignore-missing SHA256SUMS      # must print "...: OK"
+   tar xzf kob-executor-<version>-mainnet-aarch64-linux-android.tar.gz
+   cd kob-executor-<version>-mainnet-aarch64-linux-android
+   chmod +x kob-executor kob-cli
+   ./kob-executor
+   ```
+
+   The setup of section 3 follows. Choose **public nodes** (the default: a phone should not run a node), keep the default
+   data directory `kob-data` and the key file next to the program, i.e. inside the Termux home. The key file gets mode
+   `0600`. Back it up where only you can read it.
+4. **Keep it running.** Android freezes background apps, and a stopped Termux is a stopped executor:
+   * Pull down the Termux notification and tap **Acquire wakelock** (or run `termux-wake-lock` if the Termux:API add-on is
+     installed; the notification button needs nothing extra). Keep the phone on a charger.
+   * Settings, Apps, Termux, Battery: set it to **Unrestricted** (disable battery optimisation). Some makers add their own
+     "app launch" or "sleeping apps" lists (Samsung, Xiaomi, Huawei, OnePlus): exempt Termux there too.
+   * Keep Termux in the recent apps (do not swipe it away) and the screen can be off. After a restart of the phone, start
+     it again by hand: `cd ~/kob-executor-<version>-mainnet-aarch64-linux-android && ./kob-executor`.
+5. **Data and storage.** With public nodes the first catch-up downloads about 4 GB (use Wi-Fi), then the steady flow is far
+   smaller. The database and the record log take several GB of the phone's storage and grow with the chain's KOB activity;
+   check `df -h ~` before you start.
+
+**Warning.** A phone is easy to lose and Android may stop the executor at any time (memory pressure, a battery saver, an
+update, a restart). The key on it is a hot key: put **only a small working capital** on it (a few days of fees and
+carriers, section 3), never savings, and expect to restart it. A stopped executor loses nothing but the spreads it would
+have earned; its database survives and it continues where it stopped (section 5). If you would rather not risk any funds on
+the phone, choose the **index only** role in the setup: it follows the chain and serves the read API on the phone with no
+key and no funds.
