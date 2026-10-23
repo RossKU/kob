@@ -119,11 +119,11 @@ function watchRequest(parts: Element[], buttons: Element, onChange: (ready: bool
   const why = (): string => {
     const b = last.get(buttons);
     const notSeen = parts.filter((p) => { const l = last.get(p); return !l || l.visible !== true || l.ratio < FULL; });
-    const covered = [...last.values()].filter((l) => l.visible === false).length;
+    const covered = parts.map((p, i) => (last.get(p)?.visible === false ? String(i + 1) : '')).filter(Boolean);
     return t('signer.waitWhy', {
       buttons: !b ? '-' : b.visible !== true ? 'covered' : b.ratio < FULL ? `cut off (${Math.round(b.ratio * 100)} %)` : 'ok',
       lines: `${parts.length - notSeen.length}/${parts.length}`,
-      covered: String(covered),
+      covered: covered.length ? `${covered.length} (${covered.join(', ')} of ${parts.length})` : '0',
     });
   };
   const ids = new Map<Element, string>(parts.map((p, i) => [p, `part-${i}`]));
@@ -318,7 +318,11 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   };
   if (req.change === 'shown') hold();
   // every part of the summary: the title, each line, each order's title, token and terms, the problems note
-  const parts: Element[] = [title, ...list.children, ...orders.flatMap((o) => [...o.querySelectorAll('h2, p.token, .line')]), ...problems];
+  // the lines are observed by their label and value, not by the row: a row's box touches its neighbours', and on a phone with a fractional
+  // device pixel ratio the browser reported rows as covered by the next one (Android Chrome 2026-10-23: "lines seen 2/5, covered parts 3"), which
+  // kept Approve disabled; the label and value sit inside the row's padding, so only a real overlay covers them, and every word must still show
+  const cellsOf = (root: Element): Element[] => [...root.querySelectorAll(':scope > .line > dt, :scope > .line > dd')];
+  const parts: Element[] = [title, ...cellsOf(list), ...orders.flatMap((o) => [...o.querySelectorAll('h2, p.token'), ...o.querySelectorAll('.line > dt, .line > dd')]), ...problems];
   stopVisibility = watchRequest(
     parts,
     actions,
