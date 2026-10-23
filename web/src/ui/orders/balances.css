@@ -1,0 +1,25 @@
+/* My orders > balances: a table on a desktop, one compact card per token on a phone. Same markup (every data-testid stays); each figure cell carries
+   its column title in data-label, shown as the label of a label : value line. CSS variables of src/styles.css (light + dark). */
+.balances-cards .bal-name { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+
+@media (max-width: 640px) {
+  .balances-cards .table, .balances-cards tbody { display: block; }
+  /* the column titles are the labels of the lines: kept for screen readers, not drawn */
+  .balances-cards thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .balances-cards tbody tr { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; margin-bottom: 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .balances-cards tbody tr:hover { background: var(--surface-2); }
+  .balances-cards td { display: block; padding: 0; border-bottom: 0; text-align: left; }
+  .balances-cards td.table-empty { padding: 16px 8px; text-align: center; }
+  /* the token: one line, cut with an ellipsis (the full name is the link's tooltip); its notes wrap under it */
+  .balances-cards .bal-token { min-width: 0; margin-bottom: 2px; font-weight: 600; }
+  .balances-cards .bal-token .bal-name { max-width: 100%; }
+  .balances-cards .bal-token .small { font-weight: 400; }
+  /* Free / In your orders / Strays / KAS locked: the title left, the figure right */
+  .balances-cards td[data-label] { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 12px; align-items: baseline; }
+  .balances-cards td[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 0.85rem; font-weight: 400; }
+  .balances-cards td[data-label] > * { grid-column: 2; text-align: right; }
+  .balances-cards td[data-label] > .small { grid-column: 1 / -1; }
+  /* the buttons under the figures */
+  .balances-cards .bal-actions { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 6px; margin-top: 4px; }
+  .balances-cards .bal-actions-none { display: none; }
+}

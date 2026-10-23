@@ -12,6 +12,7 @@ import { combineFreeBalances, loadFreeBalances } from './balances-data';
 import { balanceColumnFractions, unreviewedProgram } from './balances-model';
 import { mergeableCounts, nextMergeFrees } from './merge-model';
 import type { OrdersData } from './orders-data';
+import './balances.css';
 
 /**
  * The balances wallets do not show: tokens inside the wallet's sell orders (0x04 custody), stray tokens, KAS locked in orders, next to the free
@@ -84,7 +85,7 @@ export function BalancesPanel(props: {
               { label: t('common.total'), value: <Amount kind="kas" value={combined.kas.total} group />, show: free.data.kasFree !== null },
             ]}
           />
-          <Table dense data-testid="token-balances-table" caption={t('orders.balances.tokens')}>
+          <Table dense class="balances-cards" data-testid="token-balances-table" caption={t('orders.balances.tokens')}>
             <thead>
               <tr>
                 <th>{t('market.col.token')}</th>
@@ -106,19 +107,21 @@ export function BalancesPanel(props: {
                   const d = shown.decimals;
                   const fr = (col: number) => col;
                   const baseUnits = null;
+                  const label = tokenLabel(shown);
+                  const showMerge = !!(props.onMergeToken && info && mergeable.has(b.token));
                   const program = info?.program ?? free.data!.programs.get(b.token) ?? null;
                   return (
                     <tr key={b.token} data-testid={`balance-row-${b.token}`}>
-                      <td>
-                        <a href={routeToHash(tokenRoute(b.token))} data-testid="balance-market">
-                          {tokenLabel(shown)}
+                      <td class="bal-token">
+                        <a href={routeToHash(tokenRoute(b.token))} class="bal-name" title={label} data-testid="balance-market">
+                          {label}
                         </a>
                         <TokenNote token={shown} />
                         {unreviewedProgram(program) ? (
                           <span class="small muted" title={t('orders.balances.unreviewedHint', { program: program ?? '?' })} data-testid="balance-unreviewed">{' '}({t('orders.balances.unreviewed')})</span>
                         ) : null}
                       </td>
-                      <td class="right">
+                      <td class="right" data-label={t('market.balances.free')}>
                         <Amount kind="token" value={b.free} decimals={d} unit={false} fraction={fr(cols.free)} group />
                         {baseUnits}
                         {b.notSpendable > 0n ? (
@@ -127,11 +130,11 @@ export function BalancesPanel(props: {
                           </div>
                         ) : null}
                       </td>
-                      <td class="right" data-testid="balance-escrowed"><Amount kind="token" value={b.escrowed} decimals={d} unit={false} fraction={fr(cols.escrowed)} group /></td>
-                      <td class="right" data-testid="balance-strays"><Amount kind="token" value={b.strays} decimals={d} unit={false} fraction={fr(cols.strays)} group /></td>
-                      <td class="right"><Amount kind="kas" value={b.kasLocked} unit={false} fraction={cols.kas} group /></td>
-                      <td class="right">
-                        {props.onMergeToken && info && mergeable.has(b.token) ? (
+                      <td class="right" data-label={t('orders.balances.inOrders')} data-testid="balance-escrowed"><Amount kind="token" value={b.escrowed} decimals={d} unit={false} fraction={fr(cols.escrowed)} group /></td>
+                      <td class="right" data-label={t('orders.balances.strays')} data-testid="balance-strays"><Amount kind="token" value={b.strays} decimals={d} unit={false} fraction={fr(cols.strays)} group /></td>
+                      <td class="right" data-label={t('market.balances.kasLocked')}><Amount kind="kas" value={b.kasLocked} unit={false} fraction={cols.kas} group /></td>
+                      <td class={`right bal-actions${showMerge || b.orderCount > 0 ? '' : ' bal-actions-none'}`}>
+                        {showMerge && info ? (
                           <Button
                             small
                             disabled={!props.canSign || !!props.busy}
