@@ -10,8 +10,8 @@
 .tk-touch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .tk-unit { color: var(--muted); font-size: 0.9rem; }
 .tk-sub, .tk-rounded, .tk-help { display: block; }
-/* a field hint is ONE line; the whole text is its tooltip (title) */
-.tk-sub, .tk-help { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* a field hint wraps (a few lines at most) so the whole text can be read on a phone, where there is no hover tooltip; it is also the tooltip (title) */
+.tk-sub, .tk-help { white-space: normal; overflow-wrap: anywhere; }
 .tk-rounded { white-space: normal; }
 /* the fills of an order that takes liquidity (fills-note.ts): a sentence or two, wrapped; the shortfall line under the main fields warns */
 .tk-fills { display: block; white-space: normal; color: var(--muted); font-size: 0.85rem; }
