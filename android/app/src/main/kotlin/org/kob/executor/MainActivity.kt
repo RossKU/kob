@@ -59,6 +59,7 @@ class MainActivity : Activity() {
     private lateinit var runSwitch: Switch
     private lateinit var statusText: TextView
     private lateinit var logText: TextView
+    private lateinit var logScroll: ScrollView
 
     @Volatile private var health: JSONObject? = null
     @Volatile private var healthError: String? = null
@@ -101,8 +102,9 @@ class MainActivity : Activity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    private fun label(s: String, sp: Float = 14f, bold: Boolean = false, mono: Boolean = false) = TextView(this).apply {
+    private fun label(s: String, sp: Float = 14f, bold: Boolean = false, mono: Boolean = false, selectable: Boolean = false) = TextView(this).apply {
         text = s
+        if (selectable) setTextIsSelectable(true) // long-press selects, then copy
         setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
         if (bold) setTypeface(typeface, Typeface.BOLD)
         if (mono) typeface = Typeface.MONOSPACE
@@ -162,10 +164,10 @@ class MainActivity : Activity() {
 
         fundingBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         fundingBox.addView(label("Funding address (send testnet KAS here; at least 100, 200 recommended, small funds only)", 13f))
-        addressText = label("", 13f, mono = true).apply { setTextIsSelectable(true) }
+        addressText = label("", 13f, mono = true, selectable = true)
         fundingBox.addView(addressText)
         fundingBox.addView(button("Copy address") { copyAddress() })
-        balanceText = label("", 14f, bold = true)
+        balanceText = label("", 14f, bold = true, selectable = true)
         fundingBox.addView(balanceText)
         fundingBox.addView(
             label(
@@ -195,11 +197,19 @@ class MainActivity : Activity() {
 
         // (c) status
         add(label("3. Status", 18f, bold = true))
-        statusText = label("", 14f)
+        statusText = label("", 14f, selectable = true)
         add(statusText)
-        add(label("Log (last lines)", 13f, bold = true))
-        logText = label("", 10f, mono = true)
-        add(logText)
+        add(label("Log (scrolls; long-press to select and copy)", 13f, bold = true))
+        logText = label("", 10f, mono = true, selectable = true)
+        logScroll = ScrollView(this).apply {
+            addView(logText)
+            // the log scrolls inside the page: its own touches are not taken over by the page's scrolling
+            setOnTouchListener { v, _ ->
+                v.parent?.requestDisallowInterceptTouchEvent(true)
+                false
+            }
+        }
+        root.addView(logScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(260)))
 
         return ScrollView(this).apply {
             addView(root)
@@ -327,9 +337,9 @@ class MainActivity : Activity() {
         if (running && !healthBusy) fetchHealth()
         val address = prefs.getString("address", "") ?: ""
         fundingBox.visibility = if (ok && !index && address.isNotEmpty()) View.VISIBLE else View.GONE
-        addressText.text = address
+        setLive(addressText, address)
         if (fundingBox.visibility == View.VISIBLE) {
-            balanceText.text = "Balance: $balance"
+            setLive(balanceText, "Balance: $balance")
             // read again every minute, and sooner (every 15 s) while the last read failed
             val every = if (balanceOk) 60_000L else 15_000L
             if (!balanceBusy && System.currentTimeMillis() - balanceAtMs > every) fetchBalance()
@@ -381,8 +391,20 @@ class MainActivity : Activity() {
         val kas = balanceKas
         if (ok && !index && kas != null && kas < Kob.MIN_FUNDS_KAS) warnings += "funds below ${Kob.MIN_FUNDS_KAS.toInt()} KAS: the matcher waits for more"
         s.append(if (warnings.isEmpty()) "Warnings: none" else "Warnings:\n" + warnings.joinToString("\n") { " - $it" })
-        statusText.text = s.toString()
-        logText.text = ExecutorService.lastLines(12).joinToString("\n") { it.take(160) }
+        setLive(statusText, s.toString())
+        val log = ExecutorService.lastLines(200).joinToString("\n") { it.take(300) }
+        if (!logText.hasSelection() && logText.text.toString() != log) {
+            // keep following the end of the log unless the user scrolled up to read it
+            val atEnd = logScroll.getChildAt(0).bottom - (logScroll.height + logScroll.scrollY) < dp(40)
+            logText.text = log
+            if (atEnd) logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+        }
+    }
+
+    /** Sets a selectable text only when it changed and while nothing in it is selected: the periodic refresh must not wipe a selection. */
+    private fun setLive(tv: TextView, text: String) {
+        if (tv.hasSelection() || tv.text.toString() == text) return
+        tv.text = text
     }
 
     /** The executor's last console status line (logged every minute). */
