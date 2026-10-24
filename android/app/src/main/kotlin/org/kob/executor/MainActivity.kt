@@ -39,7 +39,8 @@ import java.util.concurrent.Executors
 /** Three sections on one screen: setup (node, role, key, funding address), the start / stop switch, and the status. */
 class MainActivity : Activity() {
     private val ui = Handler(Looper.getMainLooper())
-    private val work = Executors.newSingleThreadExecutor() // setup and balance (the executor binary)
+    private val work = Executors.newSingleThreadExecutor() // setup (the executor binary)
+    private val funds = Executors.newSingleThreadExecutor() // the balance: it may wait for the node for a minute, setup must not queue behind it
     private val net = Executors.newSingleThreadExecutor() // the read API
     private lateinit var prefs: SharedPreferences
 
@@ -65,6 +66,9 @@ class MainActivity : Activity() {
     @Volatile private var balance: String = "not read yet"
     @Volatile private var balanceKas: Double? = null
     @Volatile private var balanceAtMs = 0L
+    @Volatile private var balanceOkAtMs = 0L // the last successful read
+    @Volatile private var balanceOk = false
+    @Volatile private var balanceLast: String? = null // the last good value as text
     @Volatile private var balanceBusy = false
     private var updatingSwitch = false
 
@@ -326,7 +330,9 @@ class MainActivity : Activity() {
         addressText.text = address
         if (fundingBox.visibility == View.VISIBLE) {
             balanceText.text = "Balance: $balance"
-            if (!balanceBusy && System.currentTimeMillis() - balanceAtMs > 60_000) fetchBalance()
+            // read again every minute, and sooner (every 15 s) while the last read failed
+            val every = if (balanceOk) 60_000L else 15_000L
+            if (!balanceBusy && System.currentTimeMillis() - balanceAtMs > every) fetchBalance()
         }
         runSwitch.isEnabled = ok
 
@@ -413,24 +419,56 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * The funds of the operator address. A running executor logs them every minute (from its own node), so that is used first;
+     * otherwise `address-balance` asks ONE public node (or the configured one) in a background thread, with 60 s allowed for
+     * the connection over a mobile network. A failed read keeps the last good value on screen and is tried again soon.
+     */
     private fun fetchBalance() {
         balanceBusy = true
         balanceAtMs = System.currentTimeMillis()
-        work.execute {
+        val logged = if (ExecutorService.state == "running") statusLine()?.let { FUNDS.find(it)?.groupValues?.get(1) } else null
+        if (logged != null) {
+            balanceKas = logged.toDouble()
+            balanceLast = "$logged KAS"
+            balance = "$logged KAS (from the running executor)"
+            balanceOk = true
+            balanceOkAtMs = balanceAtMs
+            balanceBusy = false
+            return
+        }
+        funds.execute {
             try {
                 val out = Kob.run(this, 60_000, "address-balance", "--dir", Kob.dir(this).path)
                 val j = JSONObject(out.trim().lines().last { it.startsWith("{") })
                 if (j.isNull("balance_sompi")) {
-                    balance = "unavailable (${j.optString("error")})"
+                    failBalance(j.optString("error"))
                 } else {
                     balanceKas = j.getString("balance_kas").toDouble()
-                    balance = "${j.getString("balance_kas")} KAS"
+                    balanceLast = "${j.getString("balance_kas")} KAS"
+                    balance = balanceLast!!
+                    balanceOk = true
+                    balanceOkAtMs = System.currentTimeMillis()
                 }
             } catch (e: Exception) {
-                balance = "unavailable (${e.message})"
+                failBalance(e.message ?: e.javaClass.simpleName)
             } finally {
                 balanceBusy = false
             }
         }
+    }
+
+    private fun failBalance(why: String) {
+        balanceOk = false
+        val last = balanceLast
+        balance = if (last != null) {
+            "$last (read ${human((System.currentTimeMillis() - balanceOkAtMs) / 1000)} ago; now unavailable: $why; trying again)"
+        } else {
+            "unavailable ($why); trying again"
+        }
+    }
+
+    private companion object {
+        val FUNDS = Regex("""funds ([0-9]+(?:\.[0-9]+)?) KAS""")
     }
 }

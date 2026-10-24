@@ -31,28 +31,40 @@ object Kob {
         return pb
     }
 
-    /** Runs a short subcommand and returns its stdout (stderr, the log, is dropped); throws on failure or after [timeoutMs]. */
+    /**
+     * Runs a short subcommand and returns its stdout (stderr, the log, is dropped); throws on failure or after [timeoutMs].
+     * Several may run at once (each has its own stderr file). Never call it on the UI thread.
+     */
     fun run(ctx: Context, timeoutMs: Long, vararg args: String): String {
-        val err = File(ctx.cacheDir, "cmd.err")
-        val p = command(ctx, *args).redirectError(err).start()
-        p.outputStream.close()
-        var out = ""
-        val reader = Thread { out = p.inputStream.bufferedReader().readText() }
-        reader.start()
-        reader.join(timeoutMs)
-        if (reader.isAlive) {
-            p.destroy()
-            throw RuntimeException("timed out after ${timeoutMs / 1000} s")
+        val err = File.createTempFile("cmd", ".err", ctx.cacheDir)
+        try {
+            val p = command(ctx, *args).redirectError(err).start()
+            p.outputStream.close()
+            var out = ""
+            val reader = Thread { out = runCatching { p.inputStream.bufferedReader().readText() }.getOrDefault("") }
+            reader.start()
+            reader.join(timeoutMs)
+            if (reader.isAlive) {
+                p.destroyForcibly()
+                throw RuntimeException("timed out after ${timeoutMs / 1000} s (no answer from the node)")
+            }
+            val code = p.waitFor()
+            if (code != 0) {
+                val why = runCatching { err.readText().trim().lines().lastOrNull { it.isNotBlank() } }.getOrNull()
+                throw RuntimeException(why ?: if (code == 137) "killed (exit code 137)" else "exit code $code")
+            }
+            return out
+        } finally {
+            err.delete()
         }
-        val code = p.waitFor()
-        if (code != 0) {
-            val why = runCatching { err.readText().trim().lines().lastOrNull { it.isNotBlank() } }.getOrNull()
-            throw RuntimeException(why ?: "exit code $code")
-        }
-        return out
     }
 
-    /** Kills executor processes of this app left over from an earlier run of the app (they would hold the database). */
+    /**
+     * Kills executor processes of this app left over from an earlier run of the app (they would hold the database). Only the
+     * long-running ones: the service starts the binary without arguments. A short subcommand (`address-balance`, `setup`)
+     * has arguments and is left alone; it used to be killed here too, which showed as "exit code 137" (SIGKILL) whenever the
+     * service started the executor, or restarted it, while the balance was being read.
+     */
     fun killStale(ctx: Context) {
         val me = android.os.Process.myPid()
         val bin = binary(ctx).path
@@ -60,7 +72,8 @@ object Kob {
             val pid = d.name.toIntOrNull() ?: return@forEach
             if (pid == me) return@forEach
             try {
-                if (File(d, "cmdline").readText().startsWith(bin)) android.os.Process.killProcess(pid)
+                val argv = File(d, "cmdline").readText().split('\u0000').filter { it.isNotEmpty() }
+                if (argv.size == 1 && argv[0] == bin) android.os.Process.killProcess(pid)
             } catch (_: Exception) {
             }
         }
