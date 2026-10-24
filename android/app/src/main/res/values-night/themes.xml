@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Kob" parent="@android:style/Theme.Material">
+        <item name="android:windowBackground">@color/kob_background</item>
+        <item name="android:colorBackground">@color/kob_background</item>
+        <item name="android:textColorPrimary">@color/kob_text</item>
+        <item name="android:textColorSecondary">@color/kob_text_secondary</item>
+        <item name="android:textColor">@color/kob_text</item>
+        <item name="android:textColorHint">@color/kob_hint</item>
+        <item name="android:colorAccent">@color/kob_accent</item>
+        <item name="android:colorControlActivated">@color/kob_accent</item>
+        <item name="android:statusBarColor">@color/kob_background</item>
+        <item name="android:navigationBarColor">@color/kob_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

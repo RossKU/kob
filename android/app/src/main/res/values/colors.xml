@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Light colors; values-night/colors.xml overrides every one of them for the system dark setting. -->
+<resources>
+    <color name="kob_background">#FFFFFFFF</color>
+    <color name="kob_text">#FF1B1B1F</color>
+    <color name="kob_text_secondary">#FF4A4F57</color>
+    <color name="kob_hint">#FF6B7079</color>
+    <color name="kob_accent">#FF00695C</color>
+    <color name="kob_log_background">#FFF1F3F5</color>
+    <color name="kob_log_text">#FF1B1B1F</color>
+</resources>

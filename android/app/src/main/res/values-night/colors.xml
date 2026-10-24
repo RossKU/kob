@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="kob_background">#FF121316</color>
+    <color name="kob_text">#FFE6E7EA</color>
+    <color name="kob_text_secondary">#FFB4B8C0</color>
+    <color name="kob_hint">#FF8E939C</color>
+    <color name="kob_accent">#FF4DB6AC</color>
+    <color name="kob_log_background">#FF1E2025</color>
+    <color name="kob_log_text">#FFD5D8DD</color>
+</resources>

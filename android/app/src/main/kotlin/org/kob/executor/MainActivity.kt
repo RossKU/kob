@@ -200,9 +200,13 @@ class MainActivity : Activity() {
         statusText = label("", 14f, selectable = true)
         add(statusText)
         add(label("Log (scrolls; long-press to select and copy)", 13f, bold = true))
-        logText = label("", 10f, mono = true, selectable = true)
+        logText = label("", 10f, mono = true, selectable = true).apply {
+            setTextColor(getColor(R.color.kob_log_text))
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+        }
         logScroll = ScrollView(this).apply {
             addView(logText)
+            setBackgroundColor(getColor(R.color.kob_log_background))
             // the log scrolls inside the page: its own touches are not taken over by the page's scrolling
             setOnTouchListener { v, _ ->
                 v.parent?.requestDisallowInterceptTouchEvent(true)
