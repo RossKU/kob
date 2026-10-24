@@ -1434,6 +1434,24 @@ impl Harness {
         Harness { node, ingest, follower, health, events }
     }
 
+    /// Lean storage: prune until a batch finds nothing more (a no-op for a store that is not lean). `sync` does it, as the
+    /// follower's loop does between its steps.
+    pub fn lean_prune_all(&self) {
+        for _ in 0..100_000 {
+            match self.ingest.lock().unwrap().lean_prune(None) {
+                Ok(Some(r)) if r.more => continue,
+                _ => return,
+            }
+        }
+    }
+
+    /// A harness whose store is lean with the smallest retention the reorg window allows (`window` DAA): what the matcher and
+    /// the keepers read must not depend on a single row of history. The tests of `tests/` run under it with `KOB_TEST_LEAN=1`.
+    pub fn lean(window: u64) -> Harness {
+        let cfg = IngestConfig { reorg_window_daa: window, lean: Some(crate::indexer::lean::LeanConfig::new(0, 0)), ..wide_window() };
+        Self::with_node(MockNode::new("testnet-10"), crate::indexer::db::open_memory("testnet-10").unwrap(), None, cfg)
+    }
+
     /// Step until the follower reports idle (or stops making progress); returns every outcome.
     pub async fn sync(&self) -> Vec<StepOutcome> {
         let mut out = vec![];
@@ -1442,6 +1460,7 @@ impl Harness {
             let stop = matches!(o, StepOutcome::Idle | StepOutcome::Gap(_) | StepOutcome::Halted(_) | StepOutcome::Retry(_));
             out.push(o);
             if stop {
+                self.lean_prune_all();
                 return out;
             }
         }
@@ -1458,6 +1477,7 @@ impl Harness {
             assert!(!matches!(o, StepOutcome::Gap(_)), "gap: {o:?}");
             out.push(o);
             if done {
+                self.lean_prune_all();
                 return out;
             }
         }

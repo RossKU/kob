@@ -246,6 +246,18 @@ pub struct IndexerConfig {
     /// the key, `--fast-start` switches it on for one start. It does nothing for `index`, with the x402 facilitator, or when
     /// `start` is not the pruning point.
     pub fast_start: bool,
+    /// Lean storage ([`crate::indexer::lean`]): the store keeps the live book (open and partly filled orders and what the
+    /// matcher and keepers read), the reorg window and `lean_retention_days` of closed orders, and drops the rest in small
+    /// periodic batches; the record log is off and the file shrinks (incremental vacuum). The history comes from an archive
+    /// indexer (`lean = false`). Default false (the setup writes true for a matcher).
+    pub lean: bool,
+    /// Lean storage: days a closed order (filled, cancelled, refunded, killed) and its fills and events stay readable after it
+    /// closed (at least the reorg window). Default 30.
+    pub lean_retention_days: u64,
+    /// Lean storage: a size cap in MB on the database. Only while the store is larger, the OLDEST closed orders (with their fills
+    /// and events) are deleted first, retention or not, until it is under the cap; the live book is never pruned. 0: no cap.
+    /// Default 500.
+    pub lean_max_db_mb: u64,
     /// Pause between polls once the cursor is at the node's sink.
     pub poll_interval_ms: u64,
     /// First delay after a failed call; doubles up to `max_backoff_ms`.
@@ -325,6 +337,9 @@ impl Default for IndexerConfig {
             data_dir: PathBuf::from("kob-index"),
             start: StartMode::PruningPoint,
             fast_start: false,
+            lean: false,
+            lean_retention_days: 30,
+            lean_max_db_mb: 500,
             poll_interval_ms: 500,
             backoff_ms: 1_000,
             max_backoff_ms: 30_000,
@@ -450,6 +465,18 @@ impl IndexerConfig {
     /// [`Self::verify_live_orders_min_lag_secs`] in DAA score.
     pub fn verify_live_min_lag_daa(&self) -> u64 {
         self.verify_live_orders_min_lag_secs.saturating_mul(self.daa_per_second)
+    }
+
+    /// Closed orders older than this many DAA stay readable under lean storage: `lean_retention_days`, and never less than the
+    /// reorg window (a closed order inside it can still be reverted).
+    pub fn lean_retention_daa(&self) -> u64 {
+        let retention_secs = self.lean_retention_days.saturating_mul(86_400);
+        retention_secs.max(self.reorg_window_hours.saturating_mul(3600)).saturating_mul(self.daa_per_second)
+    }
+
+    /// [`Self::lean_max_db_mb`] in bytes (0: no cap).
+    pub fn lean_max_db_bytes(&self) -> u64 {
+        self.lean_max_db_mb.saturating_mul(1 << 20)
     }
 
     /// [`Self::max_lag_secs`] in DAA score.

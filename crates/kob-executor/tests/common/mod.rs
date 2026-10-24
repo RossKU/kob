@@ -25,7 +25,9 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn new() -> Ctx {
-        Ctx { w: World::new(), hs: Harness::new(conn(), None) }
+        // `KOB_TEST_LEAN=1`: the same tests over a lean store (closed orders pruned as soon as the reorg window allows)
+        let hs = if std::env::var_os("KOB_TEST_LEAN").is_some() { Harness::lean(8) } else { Harness::new(conn(), None) };
+        Ctx { w: World::new(), hs }
     }
 
     pub fn with(hs: Harness) -> Ctx {

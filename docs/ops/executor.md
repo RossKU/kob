@@ -195,10 +195,52 @@ Not used: with `index` (it has no matcher), with the x402 facilitator in the sam
 are bound to one store), and when `start` is not the pruning point. Not implemented: importing live orders from another
 indexer into the tip store at the start (`fast_start_import`); a verified import (`index import-orders`) is the tool for that.
 
+### A.1.2 Lean storage: the live book, 30 days of closed orders, a size cap, a file that shrinks
+
+`lean = true` (config; `--lean` / `--no-lean` for one start; `lean_retention_days`, default 30, `--lean-retention-days`;
+`lean_max_db_mb`, default 500, `--lean-max-db-mb`, 0 for no cap) is for an executor, whose history comes from an archive
+indexer. Default off; `kob-executor setup` and the Android app write it for the matcher role (not for `index`). What it does:
+
+* **Kept**: every open or partly filled order with all its rows (events, UTXOs, custody, strays, flags, amends; a partly
+  filled order's fill events sum to its filled amount, so they stay), an if-done entry that a live exit names as its parent,
+  everything stamped with a chain block of the reorg window (a revert stays exact), token events and KCC-23 declarations
+  (tiny), the health counters. The matcher, the keepers and the maintenance jobs read nothing else: the book is the live set
+  (`order_state` open / partial, `indexer::book`), the operator's unspent holdings, the possibly-frozen flags; trigger
+  evidence is read from the transaction being planned, not from stored fills.
+* **Deleted**, in a batch at most every 30 s (every 0.5 s while a batch hit its limits), each one write transaction of a few
+  tens of milliseconds in the follower's own loop: closed orders (filled, cancelled, refunded, killed) whose last event is older
+  than the retention (at the node's position) and than the reorg window (at the cursor) and final (in a block out of the
+  window), with their events, amends, UTXOs, custody and strays, flags and pair fills (500 orders per batch); spent order,
+  token and holding rows past the same cut-offs (5,000 per table per batch); pair fills and rejects past them. The batch
+  size is the same during a backfill, so a fast start's full store stays small while it indexes the history.
+* **The size cap** (`lean_max_db_mb`) acts only while the pages in use exceed it: then the OLDEST closed orders (with their
+  fills and events) go first, retention or not, in the same batches, until the store is under the cap. It never touches the
+  live book or the reorg window: a store whose live book alone exceeds the cap stays as it is. Unspent token holdings of key
+  owners are live data and stay (the operator's own are read by the maintenance jobs).
+* **The record log is off** (`records.enabled` is forced to false: the log is an archive's rebuild source), and the file
+  shrinks: a new store is created with `auto_vacuum = INCREMENTAL` (an older one is rewritten once with `VACUUM` at the first
+  lean start, which needs the free space of its own size), and each batch hands up to 2,000 freed pages back.
+* **The read API serves the live book and the retention window**: `GET /v1/orders/{id}` of an order closed longer ago (or
+  deleted by the cap) is 404,
+  candles, statistics and trades cover the window, `GET /v1/health` has `lean: true` (and the metrics
+  `kob_indexer_lean`, `kob_indexer_lean_orders_pruned_total`, `kob_indexer_lean_rows_pruned_total`). Use an archive indexer
+  (`lean = false`, record log on) for history, charts and recovery (`index replay` needs the log).
+
+Measured on testnet-10 (`kob-executor run --dry-run` over the public pair with a fast start, 5 minutes, which indexes about 1.7 h of
+the 30 h history): 28.3 MB database plus a 9.1 MB record log without lean; 26.7 MB database and no record log with lean. Nothing
+is pruned yet at that age: a closed order is final only once it is older than the reorg window at the cursor, so the first 12 h of
+a backfill are kept whole. Over a copy of that non-lean store, `index --lean --lean-retention-days 0 --reorg-window-hours 0` (the
+first lean start rewrites the file once, then the follower prunes): 3,702 orders became 500 (356 open, 16 partly filled, 128
+closed), the database 28.3 MB to 2.8 MB, the WAL 8 MB.
+Tests: `tests/lean.rs` (a lean and a full store follow one synthetic chain, 300 rounds: the book, the live rows and a later fill of an
+old partly filled order are identical, the lean file stays bounded; the size cap deletes the oldest first; a lean indexer prunes by
+itself and keeps no record log) and the matcher / keeper end-to-end tests over a lean store (`KOB_TEST_LEAN=1 cargo test -p
+kob-executor --test executor_e2e`).
+
 ### A.2 Flags
 
 `run` takes the indexer options (`--config`, `--network`, `--rpc-url`, `--data-dir`, `--tokens`,
-`--start`, `--fast-start`, `--listen`, `--no-api`, `--no-record-log`, `--reorg-window-hours`; B 4) and the
+`--start`, `--fast-start`, `--lean`, `--listen`, `--no-api`, `--no-record-log`, `--reorg-window-hours`; B 4) and the
 matcher and keeper options (C, "Running"):
 
 | Flag | Default | Meaning |
@@ -664,6 +706,13 @@ kept:
 | Orders, UTXOs, events, custody, token registry events | forever, derived | `index.sqlite3` | about 2.6 KB per order |
 | Chain-block rows (hash, DAA) | the reorg / finality window only (`reorg_window_hours`, 12) | `blocks` | 98 B per block, about 42 MB in steady state at 10 BPS |
 | Everything else in the node's responses | never | | 0 |
+
+**Lean storage** (`lean = true`, `--lean`; the setup and the Android app write it for a matcher): an executor needs the live
+book, not the history, so the store keeps open and partly filled orders with everything the matcher, the keepers, the
+maintenance jobs and the live book of the read API read, the reorg window, and `lean_retention_days` (30; never less than
+`reorg_window_hours`) of closed orders, and deletes the rest in small periodic batches (A.1.2); a size cap
+(`lean_max_db_mb`, 500) deletes the oldest closed orders first, but only while the store is larger. The record log is off.
+The history is an archive indexer's job (`lean = false`).
 
 The database is a *derived view* of the record log: `kob-executor index replay` rebuilds it from the
 records and the follower re-syncs the tail from the node (section 7.6). Measured numbers are in
@@ -1133,6 +1182,9 @@ rpc_url = "ws://127.0.0.1:18210"
 data_dir = "/var/lib/kob-index"
 start = "pruning_point"          # or "sink", or { hash = "<chain block hash>" }
 fast_start = false               # `kob-executor run`, empty data dir: trade at once on a tip store, index the history meanwhile; A.1.1
+lean = false                     # keep the live book and lean_retention_days of closed orders, no record log, a shrinking file; A.1.2
+lean_retention_days = 30         # lean: days a closed order (and its fills and events) stays readable
+lean_max_db_mb = 500             # lean: above this size the oldest closed orders go first (0: no cap)
 poll_interval_ms = 500
 rpc_timeout_secs = 180
 fetch_parallel = 4               # VSPC windows fetched at once while far behind (1: one at a time); section 3, *Parallel fetch*

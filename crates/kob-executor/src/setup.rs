@@ -196,10 +196,18 @@ pub struct SetupFile {
     /// (`crate::faststart`). Absent for the index role, which has no use for it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fast_start: Option<bool>,
+    /// `lean = true` for the matcher role: the store keeps the live book, not the history (`crate::indexer::lean`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lean: Option<bool>,
     pub launch: LaunchConfig,
 }
 
 impl SetupFile {
+    /// The `lean` key a setup writes for `role`.
+    pub fn lean_for(role: LaunchRole) -> Option<bool> {
+        (role == LaunchRole::Run).then_some(true)
+    }
+
     /// The `fast_start` key a setup writes for `role`.
     pub fn fast_start_for(role: LaunchRole) -> Option<bool> {
         (role == LaunchRole::Run).then_some(true)
@@ -603,7 +611,8 @@ pub fn run_setup(io: &mut dyn Console, node: &mut dyn SetupNode, opts: &SetupOpt
     };
 
     let fast_start = SetupFile::fast_start_for(launch.role);
-    let file = SetupFile { network: network.clone(), rpc_url: url, data_dir, tokens_path, fast_start, launch };
+    let lean = SetupFile::lean_for(launch.role);
+    let file = SetupFile { network: network.clone(), rpc_url: url, data_dir, tokens_path, fast_start, lean, launch };
     let config_path = write_config(&opts.dir, &file)?;
     let l = launch_args(&config_path)?;
     io.say("");
@@ -889,6 +898,7 @@ mod tests {
             data_dir: "kob-data".into(),
             tokens_path: Some(TOKENS_FILE.into()),
             fast_start: SetupFile::fast_start_for(LaunchRole::Run),
+            lean: SetupFile::lean_for(LaunchRole::Run),
             launch: LaunchConfig {
                 role: LaunchRole::Run,
                 key_file: Some(KEY_FILE.into()),
@@ -905,6 +915,7 @@ mod tests {
         assert_eq!(c.tokens_path, Some(PathBuf::from(TOKENS_FILE)));
         // a matcher's configuration trades within seconds of the first start; an index-only one has no use for it
         assert!(c.fast_start && SetupFile::fast_start_for(LaunchRole::Index).is_none());
+        assert!(c.lean && SetupFile::lean_for(LaunchRole::Index).is_none());
         assert_eq!(c.launch.as_ref(), Some(&f.launch));
         let l = launch_args(&p).unwrap();
         assert_eq!(l.dir, d.path());

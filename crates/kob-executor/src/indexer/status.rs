@@ -81,6 +81,11 @@ pub struct HealthSnapshot {
     /// ([`crate::faststart`]): the store follows the chain from the node's sink, and the history is being indexed into a second
     /// store; `backfill` then says how far that one is.
     pub book_complete: bool,
+    /// Lean storage ([`super::lean`]): the store keeps the live book and `lean_retention_days` of closed orders, not the history.
+    pub lean: bool,
+    /// Closed orders and rows deleted by the lean pruning since the start.
+    pub lean_orders_pruned_total: u64,
+    pub lean_rows_pruned_total: u64,
     /// The fast start's backfill: the full store's progress (absent once the book is complete).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backfill: Option<Backfill>,
@@ -197,6 +202,9 @@ impl HealthSnapshot {
             lies_total: 0,
             nodes: vec![],
             book_complete: true,
+            lean: false,
+            lean_orders_pruned_total: 0,
+            lean_rows_pruned_total: 0,
             backfill: None,
         }
     }
@@ -242,6 +250,21 @@ impl HealthSnapshot {
             "0 during a fast start: the store holds only the orders seen since it started, the full book is being indexed.",
             self.book_complete as u64,
         );
+        m("kob_indexer_lean", "gauge", "1 with lean storage: the store keeps the live book, not the history.", self.lean as u64);
+        if self.lean {
+            m(
+                "kob_indexer_lean_orders_pruned_total",
+                "counter",
+                "Closed orders the lean storage deleted since the start.",
+                self.lean_orders_pruned_total,
+            );
+            m(
+                "kob_indexer_lean_rows_pruned_total",
+                "counter",
+                "Rows the lean storage deleted since the start.",
+                self.lean_rows_pruned_total,
+            );
+        }
         if let Some(b) = &self.backfill {
             m(
                 "kob_indexer_backfill_lag_daa",

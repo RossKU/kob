@@ -146,7 +146,13 @@ pub struct Follower<S: ChainSource> {
     cursor_blue: Mutex<Option<(Hash32, u64)>>,
     /// Windows fetched ahead of the cursor (parallel fetch).
     prefetch: tokio::sync::Mutex<Prefetch>,
+    /// Lean storage: when the next pruning batch is due (`None`: the store is not lean).
+    lean_next: Mutex<Option<std::time::Instant>>,
 }
+
+/// Lean storage: pause between batches while one hit its limits (more to delete), and when the last one found nothing more.
+const LEAN_BUSY_EVERY: Duration = Duration::from_millis(500);
+const LEAN_IDLE_EVERY: Duration = Duration::from_secs(30);
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
@@ -162,6 +168,7 @@ impl<S: ChainSource> Follower<S> {
     ) -> Self {
         let window = Mutex::new(cfg.window());
         let prefetch = tokio::sync::Mutex::new(Prefetch::new(cfg.prefetch_limits()));
+        let lean = ingest.lock().unwrap_or_else(|e| e.into_inner()).is_lean();
         Follower {
             source,
             ingest,
@@ -172,7 +179,40 @@ impl<S: ChainSource> Follower<S> {
             window,
             cursor_blue: Mutex::new(None),
             prefetch,
+            lean_next: Mutex::new(lean.then(std::time::Instant::now)),
         }
+    }
+
+    /// Lean storage: one bounded pruning batch when it is due ([`super::lean`]). The follower runs it between its steps, so the
+    /// store has one writer and the batch (a short transaction) never overlaps a commit.
+    async fn lean_tick(&self) {
+        let due = self.lean_next.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t <= std::time::Instant::now());
+        if !due {
+            return;
+        }
+        let node_daa = self.health.snapshot().node_daa;
+        let next = match self.blocking(move |i| i.lean_prune(node_daa)).await {
+            Ok(Some(rep)) => {
+                if rep.rows > 0 || rep.pages > 0 {
+                    tracing::debug!(orders = rep.orders, rows = rep.rows, pages = rep.pages, more = rep.more, "lean storage: pruned");
+                    self.health.update(|h| {
+                        h.lean_orders_pruned_total += rep.orders as u64;
+                        h.lean_rows_pruned_total += rep.rows as u64;
+                    });
+                }
+                if rep.more {
+                    LEAN_BUSY_EVERY
+                } else {
+                    LEAN_IDLE_EVERY
+                }
+            }
+            Ok(None) => LEAN_IDLE_EVERY,
+            Err(e) => {
+                tracing::warn!(error = %e, "lean storage: pruning failed; trying again later");
+                LEAN_IDLE_EVERY
+            }
+        };
+        *self.lean_next.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now() + next);
     }
 
     fn win(&self) -> std::sync::MutexGuard<'_, BatchWindow> {
@@ -759,6 +799,7 @@ impl<S: ChainSource> Follower<S> {
                 break;
             }
             let outcome = self.step().await;
+            self.lean_tick().await;
             let delay = match &outcome {
                 StepOutcome::Applied { more: true, .. } | StepOutcome::Rewound { .. } => {
                     failures = 0;

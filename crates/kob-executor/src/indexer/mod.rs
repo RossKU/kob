@@ -12,6 +12,7 @@ pub mod flags;
 pub mod follower;
 pub mod ingest;
 pub mod kcc23;
+pub mod lean;
 pub mod lock;
 pub mod market;
 pub mod pairs;
@@ -115,6 +116,7 @@ fn ingest_config(cfg: &IndexerConfig) -> IngestConfig {
         checkpoint_daa: cfg.checkpoint_secs.saturating_mul(cfg.daa_per_second),
         declaration_window_daa: cfg.declaration_window_hours.saturating_mul(3600).saturating_mul(cfg.daa_per_second),
         verify_threads: ingest::verify_threads(cfg.verify_threads),
+        lean: cfg.lean.then(|| lean::LeanConfig::new(cfg.lean_retention_daa(), cfg.lean_max_db_bytes())),
     }
 }
 
@@ -124,10 +126,14 @@ fn processor(cfg: &IndexerConfig, tokens: Arc<TokenAllowlist>) -> Processor {
 
 impl Indexer {
     /// Open the database and record log, verify they agree, and build the write path.
-    pub fn open(cfg: IndexerConfig) -> Result<Indexer, IndexerError> {
+    pub fn open(mut cfg: IndexerConfig) -> Result<Indexer, IndexerError> {
+        if cfg.lean {
+            // lean storage keeps no record log
+            cfg.records.enabled = false;
+        }
         let writer = lock::WriterLock::acquire(&cfg)?;
         let tokens = load_tokens(&cfg)?;
-        let conn = db::open_writer(&cfg.db_path(), &cfg.network)?;
+        let conn = db::open_writer_with(&cfg.db_path(), &cfg.network, cfg.lean)?;
         let mut db_next = ingest::records_next_n(&conn)?;
         let log = if cfg.records.enabled {
             let dir = cfg.records_dir();
@@ -159,7 +165,10 @@ impl Indexer {
         let proc = processor(&cfg, tokens.clone());
         let ingest = Ingest::new(conn, proc, log).with_config(ingest_config(&cfg));
         let health = Arc::new(HealthState::new(&cfg.network));
-        health.update(|h| h.lag_tolerance_daa = cfg.lag_tolerance_daa());
+        health.update(|h| {
+            h.lag_tolerance_daa = cfg.lag_tolerance_daa();
+            h.lean = cfg.lean;
+        });
         if let Some(c) = ingest.cursor()? {
             let next = ingest.records_next();
             let orders = ingest.order_count()?;

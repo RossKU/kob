@@ -68,6 +68,12 @@ fn pragmas(conn: &Connection, writer: bool) -> rusqlite::Result<()> {
 
 /// Open (creating if needed) the writer connection and apply the schema.
 pub fn open_writer(path: &Path, network: &str) -> DbResult<Connection> {
+    open_writer_with(path, network, false)
+}
+
+/// [`open_writer`]; with `lean` the store gives freed pages back to the file (`auto_vacuum = INCREMENTAL`, [`super::lean`]):
+/// set before the schema on a new store, and an older store is rewritten once.
+pub fn open_writer_with(path: &Path, network: &str, lean: bool) -> DbResult<Connection> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -75,6 +81,15 @@ pub fn open_writer(path: &Path, network: &str) -> DbResult<Connection> {
     pragmas(&conn, true)?;
     // before anything is created or altered: an older database is refused as it is
     refuse_pre_v3(&conn, path)?;
+    if lean {
+        // the WAL of a lean store is kept small too (the default limit is 64 MiB)
+        conn.pragma_update(None, "journal_size_limit", 8 * 1024 * 1024)?;
+        if super::lean::ensure_incremental(&conn)? {
+            // the rewrite went through the WAL: cut it back
+            conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+            tracing::info!(file = %path.display(), "lean storage: the store was rewritten once so that it can give freed pages back");
+        }
+    }
     conn.execute_batch(SCHEMA_SQL)?;
     migrate(&conn)?;
     init_meta(&conn, network)?;

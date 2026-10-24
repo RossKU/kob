@@ -70,6 +70,19 @@ pub struct IndexOpts {
     /// Turn `fast_start` of the configuration off for this start.
     #[arg(long, global = true)]
     pub no_fast_start: bool,
+    /// Lean storage: keep the live book and 30 days of closed orders (500 MB cap), no record log, a file that shrinks (`lean` in the
+    /// configuration; docs/ops/executor.md, *Lean storage*).
+    #[arg(long, global = true, conflicts_with = "no_lean")]
+    pub lean: bool,
+    /// Turn `lean` of the configuration off for this start.
+    #[arg(long, global = true)]
+    pub no_lean: bool,
+    /// Lean storage: days closed orders stay readable (`lean_retention_days`, default 30).
+    #[arg(long, global = true)]
+    pub lean_retention_days: Option<u64>,
+    /// Lean storage: size cap of the database in MB (`lean_max_db_mb`, default 500; 0: none).
+    #[arg(long, global = true)]
+    pub lean_max_db_mb: Option<u64>,
     /// API listen address, e.g. `127.0.0.1:8090`.
     #[arg(long, global = true)]
     pub listen: Option<std::net::SocketAddr>,
@@ -179,10 +192,27 @@ pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
     if a.no_fast_start {
         cfg.fast_start = false;
     }
+    if a.lean {
+        cfg.lean = true;
+    }
+    if a.no_lean {
+        cfg.lean = false;
+    }
+    if let Some(v) = a.lean_retention_days {
+        cfg.lean_retention_days = v;
+    }
+    if let Some(v) = a.lean_max_db_mb {
+        cfg.lean_max_db_mb = v;
+    }
     if a.no_api {
         cfg.api.enabled = false;
     }
     if a.no_record_log {
+        cfg.records.enabled = false;
+    }
+    // lean storage keeps no record log (it is the rebuild source of an archive; a lean store is rebuilt from the chain's
+    // retention in a day)
+    if cfg.lean {
         cfg.records.enabled = false;
     }
     if let Some(v) = a.reorg_window_hours {

@@ -93,8 +93,16 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
     }
     let tokens_path = if opts.pinned_registry { None } else { Some(ensure_token_list(&opts.dir, &network)?.0) };
     let fast_start = SetupFile::fast_start_for(role);
-    let file =
-        SetupFile { network: network.clone(), rpc_url: url.clone(), data_dir: data_dir.clone(), tokens_path, fast_start, launch };
+    let lean = SetupFile::lean_for(role);
+    let file = SetupFile {
+        network: network.clone(),
+        rpc_url: url.clone(),
+        data_dir: data_dir.clone(),
+        tokens_path,
+        fast_start,
+        lean,
+        launch,
+    };
     let config = write_config(&opts.dir, &file)?;
     Ok(json!({
         "address": address,
@@ -210,6 +218,7 @@ mod tests {
         let c = IndexerConfig::load(&dir.join(CONFIG_FILE)).unwrap();
         assert_eq!((c.network.as_str(), c.rpc_url.as_str()), ("testnet-10", "resolver"));
         assert!(c.fast_start, "the app's first start trades within seconds (docs/ops/executor.md, Fast start)");
+        assert!(c.lean, "the app keeps the live book, not the history (docs/ops/executor.md, Lean storage)");
         assert!(dir.join(crate::setup::TOKENS_FILE).is_file());
         assert!(!dir.join(format!("{CONFIG_FILE}.tmp")).exists());
 
@@ -226,7 +235,7 @@ mod tests {
         assert_eq!((out4["address"].is_null(), out4["key_file"].is_null(), out4["role"].as_str()), (true, true, Some("index")));
         assert_eq!(crate::setup::launch_args(&dir.join(CONFIG_FILE)).unwrap().args, ["index", "--config", CONFIG_FILE]);
         let idx_cfg = IndexerConfig::load(&dir.join(CONFIG_FILE)).unwrap();
-        assert!(!idx_cfg.fast_start, "index only has no use for it");
+        assert!(!idx_cfg.fast_start && !idx_cfg.lean, "index only has no use for either");
         assert_eq!(std::fs::read_to_string(&key_path).unwrap(), secret, "index only leaves the key alone");
     }
 

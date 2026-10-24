@@ -237,8 +237,8 @@ library, so name resolution and TLS to the public nodes work as in any Termux pr
    * Keep Termux in the recent apps (do not swipe it away) and the screen can be off. After a restart of the phone, start
      it again by hand: `cd ~/kob-executor-<version>-mainnet-aarch64-linux-android && ./kob-executor`.
 5. **Data and storage.** With public nodes the history download is about 4 GB (use Wi-Fi; the executor trades meanwhile), then the steady flow is far
-   smaller. The database and the record log take several GB of the phone's storage and grow with the chain's KOB activity;
-   check `df -h ~` before you start.
+   smaller. The setup turns on lean storage (`lean = true`): the database keeps the live book and 30 days of closed orders (and never more than
+   500 MB), with no record log; the history comes from an archive indexer.
 
 **Warning.** A phone is easy to lose and Android may stop the executor at any time (memory pressure, a battery saver, an
 update, a restart). The key on it is a hot key: put **only a small working capital** on it (a few days of fees and

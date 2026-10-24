@@ -76,6 +76,8 @@ pub struct IngestConfig {
     pub declaration_window_daa: u64,
     /// Threads of the pure per-batch work done before the single database pass (`record::precompute`): 1 does it inline.
     pub verify_threads: usize,
+    /// Lean storage ([`super::lean`]): the batches `Ingest::lean_prune` deletes; `None`: the store keeps its history.
+    pub lean: Option<super::lean::LeanConfig>,
 }
 
 impl Default for IngestConfig {
@@ -85,6 +87,7 @@ impl Default for IngestConfig {
             checkpoint_daa: 3600 * 10,
             declaration_window_daa: 72 * 3600 * 10,
             verify_threads: verify_threads(0),
+            lean: None,
         }
     }
 }
@@ -205,6 +208,30 @@ impl Ingest {
     /// The store's data generation, bumped after every commit of this write path ([`super::DataGeneration`]).
     pub fn generation(&self) -> &super::DataGeneration {
         &self.generation
+    }
+
+    /// Lean storage: the store prunes (`lean_prune`).
+    pub fn is_lean(&self) -> bool {
+        self.cfg.lean.is_some()
+    }
+
+    /// Lean storage: changes the size cap in bytes (0: none) of a lean store (tests).
+    pub fn set_lean_cap(&mut self, bytes: u64) {
+        if let Some(l) = self.cfg.lean.as_mut() {
+            l.max_db_bytes = bytes;
+        }
+    }
+
+    /// One bounded batch of the lean pruning ([`super::lean::prune`]) at the node position `node_daa` (the cursor's, when
+    /// unknown); `None` when the store is not lean. A batch that deleted something bumps the data generation.
+    pub fn lean_prune(&mut self, node_daa: Option<u64>) -> Result<Option<super::lean::LeanReport>, IngestError> {
+        let Some(lean) = self.cfg.lean else { return Ok(None) };
+        let Some(cursor) = get_cursor(&self.conn)? else { return Ok(None) };
+        let rep = super::lean::prune(&mut self.conn, &lean, cursor.daa, node_daa, self.cfg.reorg_window_daa)?;
+        if rep.rows > 0 {
+            self.generation.bump();
+        }
+        Ok(Some(rep))
     }
 
     /// Follow the acceptance of `txid` for the matcher from now on (call before submitting it, so no
