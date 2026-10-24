@@ -74,7 +74,7 @@ fn lock_dir(dir: &Path) -> Result<File, LockError> {
         .write(true)
         .open(&path)
         .map_err(|e| LockError::Io(path.display().to_string(), e))?;
-    match file.try_lock() {
+    match try_lock_exclusive(&file) {
         Ok(()) => Ok(file),
         Err(TryLockError::WouldBlock) => {
             let owner = std::fs::read_to_string(dir.join(OWNER_FILE))
@@ -85,5 +85,82 @@ fn lock_dir(dir: &Path) -> Result<File, LockError> {
             Err(LockError::Busy { dir: dir.display().to_string(), owner, lock: path.display().to_string() })
         }
         Err(TryLockError::Error(e)) => Err(LockError::Io(path.display().to_string(), e)),
+    }
+}
+
+/// Takes the exclusive lock of `file` without waiting: `WouldBlock` if another open file description holds it.
+///
+/// On Unix this is `flock(LOCK_EX | LOCK_NB)` called directly: std's `File::try_lock` is unsupported on Android (it returns
+/// `Unsupported` there, which made the executor on the phone exit at once), and `flock` is what std uses on Linux and macOS
+/// anyway, so the semantics are the same on every Unix. Elsewhere (Windows) std's lock is used.
+#[cfg(unix)]
+fn try_lock_exclusive(file: &File) -> Result<(), TryLockError> {
+    use std::os::fd::AsRawFd;
+    loop {
+        // SAFETY: `flock` on a descriptor that `file` keeps open for the whole call; it touches no memory of ours.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(());
+        }
+        let e = std::io::Error::last_os_error();
+        match e.kind() {
+            std::io::ErrorKind::Interrupted => continue,
+            std::io::ErrorKind::WouldBlock => return Err(TryLockError::WouldBlock),
+            _ => return Err(TryLockError::Error(e)),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn try_lock_exclusive(file: &File) -> Result<(), TryLockError> {
+    file.try_lock()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_second_writer_of_a_directory_is_refused_until_the_first_lets_go() {
+        let d = tempfile::tempdir().unwrap();
+        let first = lock_dir(d.path()).unwrap();
+        std::fs::write(
+            d.path().join(OWNER_FILE),
+            "pid 1 (kob-executor run)
+",
+        )
+        .unwrap();
+        let e = lock_dir(d.path()).unwrap_err();
+        assert!(matches!(e, LockError::Busy { .. }), "{e}");
+        let msg = e.to_string();
+        assert!(msg.contains("is in use by another kob-executor writer (pid 1 (kob-executor run))"), "{msg}");
+        assert!(msg.contains(LOCK_FILE), "{msg}");
+        drop(first);
+        lock_dir(d.path()).expect("the OS lock is released with the file");
+    }
+
+    /// The path every Unix target takes (Android included): `flock` through libc, not std's `File::try_lock`.
+    #[cfg(unix)]
+    #[test]
+    fn the_flock_helper_refuses_a_second_descriptor_and_releases_on_close() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join(LOCK_FILE);
+        let open = || OpenOptions::new().create(true).truncate(false).write(true).open(&path).unwrap();
+        let (a, b) = (open(), open());
+        try_lock_exclusive(&a).unwrap();
+        assert!(matches!(try_lock_exclusive(&b), Err(TryLockError::WouldBlock)));
+        drop(a);
+        try_lock_exclusive(&b).unwrap();
+    }
+
+    #[test]
+    fn writer_lock_covers_the_data_and_the_records_directory() {
+        let d = tempfile::tempdir().unwrap();
+        // the record log defaults to <data_dir>/records and has its own lock
+        let cfg = IndexerConfig { data_dir: d.path().join("data"), ..IndexerConfig::default() };
+        let first = WriterLock::acquire(&cfg).unwrap();
+        assert_eq!(first.dirs().len(), 2);
+        assert!(matches!(WriterLock::acquire(&cfg), Err(LockError::Busy { .. })));
+        drop(first);
+        WriterLock::acquire(&cfg).unwrap();
     }
 }

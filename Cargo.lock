@@ -2617,6 +2617,7 @@ dependencies = [
  "kaspa-txscript",
  "kob-protocol",
  "kob-x402",
+ "libc",
  "rand 0.8.8",
  "rusqlite",
  "rustls",

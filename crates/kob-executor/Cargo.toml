@@ -61,6 +61,10 @@ hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 
+# the single-writer lock (`indexer::lock`): flock(2) directly, because std's File::try_lock is unsupported on Android
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 # The testnet-10 deployment templates (kob-protocol/deploy-tn10, see contracts/README.md).
 deploy-tn10 = ["kob-protocol/deploy-tn10"]
