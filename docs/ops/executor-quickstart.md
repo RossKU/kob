@@ -201,8 +201,8 @@ the key and the database stay. Read the release notes first: an indexer upgrade 
 
 ## 8. Run on an Android phone (Termux)
 
-An arm64 Android phone (Android 7.0 or later) can run the executor in [Termux](https://termux.dev), a terminal app. There is no
-APK and no app: you use the `...-aarch64-linux-android.tar.gz` archive of section 1, which is built for Android's own C
+An arm64 Android phone (Android 7.0 or later) can run the executor in [Termux](https://termux.dev), a terminal app. This is the terminal route (a tap-to-use testnet-10 app is section 9).
+You use the `...-aarch64-linux-android.tar.gz` archive of section 1, which is built for Android's own C
 library, so name resolution and TLS to the public nodes work as in any Termux program.
 
 1. **Install Termux from F-Droid** (or the Termux GitHub releases), **not from Google Play**: the Play Store build is
@@ -242,3 +242,34 @@ carriers, section 3), never savings, and expect to restart it. A stopped executo
 have earned; its database survives and it continues where it stopped (section 5). If you would rather not risk any funds on
 the phone, choose the **index only** role in the setup: it follows the chain and serves the read API on the phone with no
 key and no funds.
+
+## 9. Android app (testnet-10, sideloaded)
+
+A tap-to-use app for the same arm64 phones (Android 7.0 or later): the testnet-10 executor in a foreground service, with a
+setup screen, a start / stop switch and a status screen. It runs the `kob-executor` binary of section 8 inside the app
+(`android/`), keeps its configuration, key and database in the app's private storage, and talks to nothing but the Kaspa
+node(s) you choose: no telemetry, no fee, no project server. It is a **testnet-10 build only** for now, and **debug-signed**:
+fine to sideload, not a store or release signature (an APK built by someone else with another key cannot update it).
+
+1. **Download the APK.** On GitHub, Actions, workflow **android**, open the latest run on `master` (or start one with *Run
+   workflow*) and download the artifact **kob-executor-testnet-10.apk** (a zip holding the APK; unzip it on the phone or
+   the computer). The run's log prints the APK's SHA-256.
+2. **Install it.** Open the APK from the phone's file manager or browser and allow **install from this source** when Android
+   asks (Settings, Apps, Special access, Install unknown apps). Android may also warn about an app of unknown origin: this
+   is the debug signature.
+3. **Set up.** Open *KOB Executor*. Keep **Public nodes** (two nodes found through the Kaspa resolvers; the default of
+   section 8) or enter your own node's URL, choose **Matcher and keepers** or **Index only**, and tap *Save and generate
+   key*. For the matcher the app shows its **funding address**: copy it, send it at least 100 testnet KAS (200 recommended;
+   they have no value, mine or ask a faucet), and the balance appears under it. The key is generated on the phone
+   (`kob-operator.key`, readable by the app only) and never leaves it; uninstalling the app or clearing its data deletes
+   the key and the funds on it.
+4. **Allow background running.** Tap *Battery: allow unrestricted background use* and accept (or Settings, Apps, KOB
+   Executor, Battery, **Unrestricted**), and exempt the app from the maker's own "sleeping apps" lists (Samsung, Xiaomi,
+   Huawei, OnePlus). Allow notifications: the executor shows a persistent notification while it runs. The screen can be off.
+5. **Start.** Use **Wi-Fi and a charger** for the first start: with public nodes the catch-up downloads about 4 GB and takes
+   hours; the status screen shows the lag. Then switch **Run the executor** on. If the executor exits, the app starts it
+   again (after 5 s, then longer); switch it off to stop it. The status screen shows whether it is caught up, its lag, the
+   two nodes in use, the transactions it sent and its funds, and warnings (paused, funds low, node trouble).
+
+**Small funds only.** It is a hot key on a phone that Android may stop at any time. Put only a few days of fees and carriers
+on it, never savings; a stopped executor loses nothing but the spreads it would have earned.

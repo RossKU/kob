@@ -1,0 +1,77 @@
+name: android
+
+# The testnet-10 Android app (android/, docs/ops/executor-quickstart.md 9): builds the testnet-10 kob-executor for
+# aarch64-linux-android (bionic, NDK, as release.yml does), copies it into the app as libkobexecutor.so (it is executable
+# from the app's nativeLibraryDir; never committed) and builds kob-executor-testnet-10.apk with Gradle.
+#
+# The APK is signed with the Gradle debug key: enough to sideload on a phone for testnet-10, not a release signature (no
+# update path from a differently signed build, no store). It is uploaded as a workflow artifact only.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "android/**"
+      - "crates/kob-executor/**"
+      - ".github/workflows/android.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  apk:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
+        with:
+          toolchain: "1.94.0"
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: android
+      - name: Android NDK toolchain (the NDK preinstalled on the runner image; clang for API 24, Android 7.0 and later)
+        run: |
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -x "$bin/aarch64-linux-android24-clang" || { echo "no NDK clang under $bin" >&2; exit 1; }
+          {
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang"
+            echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang"
+            echo "AR_aarch64_linux_android=$bin/llvm-ar"
+            # phones with 16 KB memory pages (Android 15+) refuse to load an executable aligned to 4 KB
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-C link-arg=-Wl,-z,max-page-size=16384"
+          } >> "$GITHUB_ENV"
+      - name: Build kob-executor (testnet-10 deployment build, --locked)
+        run: cargo build --release --locked --target aarch64-linux-android -p kob-executor --features kob-executor/deploy-tn10
+      - name: The binary is arm64 ELF, and goes into the app as libkobexecutor.so
+        run: |
+          bin=target/aarch64-linux-android/release/kob-executor
+          file "$bin" | tee /dev/stderr | grep -q "ELF 64-bit LSB.*ARM aarch64"
+          install -D -m 0755 "$bin" android/app/src/main/jniLibs/arm64-v8a/libkobexecutor.so
+      - name: Android SDK platform and build tools (JDK 17 from the runner image)
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+      - name: Build the debug-signed APK
+        working-directory: android
+        run: ./gradlew --no-daemon --console=plain assembleDebug
+      - name: Name it, and check the executor is in it
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/kob-executor-testnet-10.apk
+          unzip -l dist/kob-executor-testnet-10.apk > "$RUNNER_TEMP/apk.list"
+          grep -q "lib/arm64-v8a/libkobexecutor.so" "$RUNNER_TEMP/apk.list"
+          sha256sum dist/kob-executor-testnet-10.apk
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kob-executor-testnet-10.apk
+          path: dist/kob-executor-testnet-10.apk
+          if-no-files-found: error

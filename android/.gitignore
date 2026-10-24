@@ -1,0 +1,7 @@
+# Build outputs and local files. The executor binary is copied in by the build (docs/ops/executor-quickstart.md, 9), never committed.
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+app/src/main/jniLibs/
