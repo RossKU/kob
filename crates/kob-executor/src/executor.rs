@@ -476,6 +476,23 @@ pub fn open_auth_beside_api(auth: crate::x402::config::AuthMode, api: &crate::co
     Ok(())
 }
 
+/// The runner's node: transactions go to every node that takes submissions (the primary's verdict counts), every other call to
+/// the primary.
+fn multi_submit(
+    cfg: &crate::config::IndexerConfig,
+    chain: &crate::rpc::multi::MultiNode<crate::rpc::WrpcClient>,
+) -> MultiSubmit<WrpcNode> {
+    let others = chain
+        .specs()
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(_, s)| s.submit)
+        .map(|(i, s)| (i, WrpcNode::new(WrpcConfig::new(s.url.clone()))))
+        .collect();
+    MultiSubmit::new(WrpcNode::new(WrpcConfig::new(cfg.primary_url().to_string())), others, Some(chain.board()))
+}
+
 /// `kob-executor run`.
 pub async fn run(a: RunArgs) -> Result<()> {
     if a.no_match && a.no_keep {
@@ -520,6 +537,18 @@ pub async fn run(a: RunArgs) -> Result<()> {
         fee_max_tx_sompi = fee_policy.max_tx_fee,
         "starting the executor (indexer, matcher and keepers in one process)"
     );
+    let mut fast = crate::faststart::plan(&cfg);
+    if fast != crate::faststart::Plan::Normal && a.x402_config.is_some() {
+        // the facilitator's acceptance tracking and book are bound to one store
+        tracing::info!("fast start is not used with the x402 facilitator: the first start indexes the history before it plans");
+        fast = crate::faststart::Plan::Normal;
+    }
+    if fast != crate::faststart::Plan::Normal {
+        let full_chain = node_client(&cfg);
+        let tip_chain = node_client(&crate::faststart::tip_config(&cfg));
+        let node = multi_submit(&cfg, &full_chain);
+        return crate::faststart::run_with(cfg, fast, full_chain, tip_chain, node, Box::new(signer), run_cfg, shutdown_signal()).await;
+    }
     let indexer = Indexer::open(cfg.clone()).map_err(|e: IndexerError| anyhow::anyhow!(e))?;
     let x402 = match &a.x402_config {
         Some(p) => {
@@ -533,15 +562,6 @@ pub async fn run(a: RunArgs) -> Result<()> {
         None => None,
     };
     let chain = node_client(&cfg);
-    // transactions go to every node that takes submissions (the primary's verdict counts), every other call to the primary
-    let others = chain
-        .specs()
-        .iter()
-        .enumerate()
-        .skip(1)
-        .filter(|(_, s)| s.submit)
-        .map(|(i, s)| (i, WrpcNode::new(WrpcConfig::new(s.url.clone()))))
-        .collect();
-    let node = MultiSubmit::new(WrpcNode::new(WrpcConfig::new(cfg.primary_url().to_string())), others, Some(chain.board()));
+    let node = multi_submit(&cfg, &chain);
     run_with_x402(indexer, chain, node, Box::new(signer), run_cfg, x402, shutdown_signal()).await
 }

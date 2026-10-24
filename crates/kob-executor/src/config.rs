@@ -239,6 +239,13 @@ pub struct IndexerConfig {
     pub primary_fetch: bool,
     pub data_dir: PathBuf,
     pub start: StartMode,
+    /// `kob-executor run` on an empty data directory trades at once and fills in the history afterwards ([`crate::faststart`]):
+    /// a second store in `<data_dir>/tip` follows the chain from the node's current sink (seconds) and the matcher and
+    /// keepers work on it, while the normal store indexes the history from the pruning point; when that has caught up, the
+    /// executor switches to it and deletes the tip store. Default false (the setup writes true for a matcher). Without
+    /// the key, `--fast-start` switches it on for one start. It does nothing for `index`, with the x402 facilitator, or when
+    /// `start` is not the pruning point.
+    pub fast_start: bool,
     /// Pause between polls once the cursor is at the node's sink.
     pub poll_interval_ms: u64,
     /// First delay after a failed call; doubles up to `max_backoff_ms`.
@@ -317,6 +324,7 @@ impl Default for IndexerConfig {
             primary_fetch: true,
             data_dir: PathBuf::from("kob-index"),
             start: StartMode::PruningPoint,
+            fast_start: false,
             poll_interval_ms: 500,
             backoff_ms: 1_000,
             max_backoff_ms: 30_000,

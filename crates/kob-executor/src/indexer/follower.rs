@@ -255,7 +255,13 @@ impl<S: ChainSource> Follower<S> {
             }
             StartMode::Sink => self.source.dag_info().await.map_err(|e| StepOutcome::Retry(format!("getBlockDagInfo: {e}")))?.sink,
         };
-        let c = Cursor { hash, daa: 0 };
+        // a start at the sink knows its position (the book of a quiet chain is then not taken for a stale one); the other starts
+        // learn it from their first batch
+        let daa = match self.cfg.start {
+            StartMode::Sink => self.source.block_daa_score(hash).await.ok().flatten().unwrap_or(0),
+            _ => 0,
+        };
+        let c = Cursor { hash, daa };
         self.blocking(move |i| i.init_cursor(&c)).await.map_err(|e| StepOutcome::Retry(format!("database: {e}")))?;
         tracing::info!(start = %hash, mode = ?self.cfg.start, "initialised cursor");
         Ok(c)

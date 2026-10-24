@@ -63,6 +63,13 @@ pub struct IndexOpts {
     /// Where a fresh database starts: `pruning-point` (default), `sink`, or a chain block hash.
     #[arg(long, global = true)]
     pub start: Option<StartMode>,
+    /// `run` on an empty data directory: trade at once on a store that follows the chain from the node's sink, and index the
+    /// history into the normal store meanwhile (`fast_start` in the configuration; docs/ops/executor.md, *Fast start*).
+    #[arg(long, global = true, conflicts_with = "no_fast_start")]
+    pub fast_start: bool,
+    /// Turn `fast_start` of the configuration off for this start.
+    #[arg(long, global = true)]
+    pub no_fast_start: bool,
     /// API listen address, e.g. `127.0.0.1:8090`.
     #[arg(long, global = true)]
     pub listen: Option<std::net::SocketAddr>,
@@ -165,6 +172,12 @@ pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
     }
     if let Some(v) = a.listen {
         cfg.api.listen = v;
+    }
+    if a.fast_start {
+        cfg.fast_start = true;
+    }
+    if a.no_fast_start {
+        cfg.fast_start = false;
     }
     if a.no_api {
         cfg.api.enabled = false;

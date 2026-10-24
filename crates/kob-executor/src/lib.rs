@@ -5,6 +5,7 @@ pub mod api;
 pub mod app;
 pub mod config;
 pub mod executor;
+pub mod faststart;
 pub mod fee;
 pub mod hex;
 pub mod index_cli;

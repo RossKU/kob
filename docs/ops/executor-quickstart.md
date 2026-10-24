@@ -119,8 +119,12 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
 * With public nodes the line ends with both hosts and their state, e.g. `nodes: muon-10.kaspa.blue (authority, ok),
   vector-10.kaspa.green (cross-check, ok, replaced 1x)`: `replaced` counts nodes given up (failed, or disagreeing), and
   `disagreements` answers of the authority the other node contradicted (nothing contradicted is indexed).
-* On the first start the indexer catches up with everything the node retains (`indexer catching up, ... DAA behind the
-  node (about ...)`); the matcher and keepers plan nothing until it is close to the tip.
+* The first start trades within seconds: the setup turns on the fast start, so the executor follows the chain from the node's
+  current tip at once (`fast start: trading on orders seen since 14:32 UTC; full book in about 7 h 40 min`) while the
+  history is indexed in the background; it misses the orders created before it started until the full book is there
+  (`/v1/health`: `book_complete: false`), then switches over by itself (`docs/ops/executor.md`, A.1.1). Without it (an older
+  configuration, `fast_start = false`) the indexer first catches up with everything the node retains and the matcher and
+  keepers plan nothing until it is close to the tip.
 * `WARNING:` names what needs you: the node not synced or unreachable, funds below 100 KAS (`--low-funds-kas`), the pause
   file present, transactions the node rejected.
 * The read API answers on `http://127.0.0.1:8090/v1/health` (loopback only).
@@ -232,7 +236,7 @@ library, so name resolution and TLS to the public nodes work as in any Termux pr
      "app launch" or "sleeping apps" lists (Samsung, Xiaomi, Huawei, OnePlus): exempt Termux there too.
    * Keep Termux in the recent apps (do not swipe it away) and the screen can be off. After a restart of the phone, start
      it again by hand: `cd ~/kob-executor-<version>-mainnet-aarch64-linux-android && ./kob-executor`.
-5. **Data and storage.** With public nodes the first catch-up downloads about 4 GB (use Wi-Fi), then the steady flow is far
+5. **Data and storage.** With public nodes the history download is about 4 GB (use Wi-Fi; the executor trades meanwhile), then the steady flow is far
    smaller. The database and the record log take several GB of the phone's storage and grow with the chain's KOB activity;
    check `df -h ~` before you start.
 
@@ -266,8 +270,9 @@ fine to sideload, not a store or release signature (an APK built by someone else
 4. **Allow background running.** Tap *Battery: allow unrestricted background use* and accept (or Settings, Apps, KOB
    Executor, Battery, **Unrestricted**), and exempt the app from the maker's own "sleeping apps" lists (Samsung, Xiaomi,
    Huawei, OnePlus). Allow notifications: the executor shows a persistent notification while it runs. The screen can be off.
-5. **Start.** Use **Wi-Fi and a charger** for the first start: with public nodes the catch-up downloads about 4 GB and takes
-   hours; the status screen shows the lag. Then switch **Run the executor** on. If the executor exits, the app starts it
+5. **Start.** Use **Wi-Fi and a charger** for the first start: with public nodes the history download is about 4 GB and takes
+   hours. The executor trades within a minute on the orders seen since it started (the status screen says "Order book:
+   partial" with the time until the full book is there) and fills in the history meanwhile. Then switch **Run the executor** on. If the executor exits, the app starts it
    again (after 5 s, then longer); switch it off to stop it. The status screen shows whether it is caught up, its lag, the
    two nodes in use, the transactions it sent and its funds, and warnings (paused, funds low, node trouble).
 

@@ -213,23 +213,52 @@ impl Indexer {
     pub fn spawn<S: ChainSource>(&self, source: Arc<S>) -> Result<Running, IndexerError> {
         // validate the API configuration before anything is started
         let api_state = if self.cfg.api.enabled { Some(self.api_state()?) } else { None };
+        let mut running = self.spawn_follower(source);
+        if let Some(state) = api_state {
+            running.api = Some(serve_task(state, running.stop.subscribe()));
+        }
+        Ok(running)
+    }
+
+    /// Start the follower alone (no API server): the fast start runs the API itself ([`crate::faststart`]), over whichever
+    /// of its two stores is current.
+    pub fn spawn_follower<S: ChainSource>(&self, source: Arc<S>) -> Running {
         let follower = Arc::new(self.follower(source));
         let (stop_tx, stop_rx) = watch::channel(false);
         let follow = tokio::spawn(async move { follower.run(stop_rx).await });
-        let api_task = if let Some(state) = api_state {
-            let mut rx = stop_tx.subscribe();
-            Some(tokio::spawn(async move {
-                let sd = async move {
-                    let _ = rx.changed().await;
-                };
-                if let Err(e) = api::serve(state, sd).await {
-                    tracing::error!("API server stopped: {e}");
-                }
-            }))
-        } else {
-            None
+        Running { stop: stop_tx, follow, api: None }
+    }
+
+    /// Start the read API server over this indexer's store (`api_state`), whatever `api.enabled` says.
+    pub fn spawn_api(&self) -> Result<ApiTask, IndexerError> {
+        let state = self.api_state()?;
+        let (stop, rx) = watch::channel(false);
+        Ok(ApiTask { stop, task: serve_task(state, rx) })
+    }
+}
+
+fn serve_task(state: ApiState, mut rx: watch::Receiver<bool>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let sd = async move {
+            let _ = rx.wait_for(|s| *s).await;
         };
-        Ok(Running { stop: stop_tx, follow, api: api_task })
+        if let Err(e) = api::serve(state, sd).await {
+            tracing::error!("API server stopped: {e}");
+        }
+    })
+}
+
+/// A read API server started by [`Indexer::spawn_api`].
+pub struct ApiTask {
+    stop: watch::Sender<bool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl ApiTask {
+    /// Stop the server (open connections are asked to finish and close) and wait for it.
+    pub async fn stop(self) {
+        let _ = self.stop.send(true);
+        let _ = self.task.await;
     }
 }
 

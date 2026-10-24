@@ -373,6 +373,17 @@ class MainActivity : Activity() {
             s.append(if (caught) "caught up" else if (lag != null) "${human(lag)} behind the chain" else "node position unknown")
             if (lag != null && caught) s.append(" (${human(lag)} behind)")
             s.append(", ${h.optLong("orders_total")} orders indexed\n")
+            // fast start: the executor trades on the orders seen since it started while the full book is indexed
+            val backfill = h.optJSONObject("backfill")
+            if (!h.optBoolean("book_complete", true) && backfill != null) {
+                val since = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(backfill.optLong("tip_since_unix") * 1000))
+                s.append("Order book: partial, trading on orders seen since $since\n")
+                val behind = if (backfill.isNull("lag_seconds")) null else backfill.optLong("lag_seconds")
+                val eta = if (backfill.isNull("eta_seconds")) null else backfill.optLong("eta_seconds")
+                s.append("History: ")
+                s.append(if (behind != null) "${human(behind)} to index" else "starting")
+                s.append(if (eta != null) ", full book in about ${human(eta)}\n" else ", full book: estimating\n")
+            }
             val nodes = h.optJSONArray("nodes")
             if (nodes != null) {
                 for (i in 0 until nodes.length()) {
@@ -390,7 +401,7 @@ class MainActivity : Activity() {
         val line = statusLine()
         if (running && line != null) {
             // "indexer ... | nodes ... | N transactions sent, ... | funds X KAS | no warnings"
-            for (part in line.split(" | ")) if (!part.startsWith("indexer ") && !part.startsWith("nodes: ")) s.append(part).append('\n')
+            for (part in line.split(" | ")) if (!part.startsWith("indexer ") && !part.startsWith("nodes: ") && !part.startsWith("fast start: ")) s.append(part).append('\n')
         }
         val kas = balanceKas
         if (ok && !index && kas != null && kas < Kob.MIN_FUNDS_KAS) warnings += "funds below ${Kob.MIN_FUNDS_KAS.toInt()} KAS: the matcher waits for more"

@@ -159,10 +159,46 @@ KOB_OPERATOR_KEY_FILE=/etc/kob/operator.key kob-executor run \
   `max_lag_secs = 0` is the strict gate (only `following`, book-lag bound 300 DAA). The x402 facilitator's own book
   reads are not gated by it.
 
+### A.1.1 Fast start: trade within seconds, index the history meanwhile
+
+A first start on an empty data directory indexes the chain from the node's pruning point (about 30 h on testnet-10; over
+public nodes on a phone about 8 h) and the matcher plans nothing until that is done. With `fast_start = true` (the key
+`kob-executor setup` and the Android app write for a matcher; `--fast-start` for one start; `--no-fast-start` or
+`fast_start = false` turns it off) the first start of `run` runs two standard indexers in the one process, each with its
+own database (two histories are never merged):
+
+* the **tip store**, `<data_dir>/tip/`: its cursor starts at the node's current sink (`start = sink`, no record log, its
+  own node client with one request at a time). It is current within seconds, and the matcher, the keepers and the read API
+  work on it at once. It knows the orders created since it started following (the status line says since when) and misses
+  older ones and the operator's older token holdings. That cannot lose funds: the executor acts only on orders the node
+  confirms and the covenants enforce every order's terms; it just misses older orders for a while.
+* the **full store**, `<data_dir>/`: what a start without fast start builds, from the pruning point, with the record log,
+  and no matcher.
+
+While the full store is behind, `/v1/health` reports `book_complete: false` and `backfill` (the full store's state, cursor,
+`lag_daa` / `lag_seconds`, `rate_daa_per_sec` and `eta_seconds` over the last minute, `tip_since_unix`), and the console status
+line starts with `fast start: trading on orders seen since 14:32 UTC; full book in about 7 h 40 min (29 h 43 min of history
+to index)`. The metrics carry `kob_indexer_book_complete` and `kob_indexer_backfill_lag_daa`.
+
+When the full store passes the gate every store passes (caught up, or within `max_lag_secs`), and has applied the chain
+block that accepted every transaction the runner tracks (so none is submitted twice), the book source switches to it between
+two ticks: the matcher, the keepers and the status move to the full store, the read API restarts over it (open connections
+are closed once; clients reconnect), and `<data_dir>/tip/` is deleted. A later start finds only the full store and uses it
+directly. A start that finds a leftover `tip/` (stopped before the switch) resumes: a tip store more than ten minutes behind
+the node is first moved to the sink (the `index rebase --to sink` step, which also closes the orders the node no longer
+holds); one that cannot be opened or moved is deleted and started afresh.
+
+The backfill does not starve the tip: the tip follower has a node client of its own, so a window of the backfill's parallel
+fetch that takes half a minute never holds a tip request back (it costs a few extra connections to the same public nodes).
+
+Not used: with `index` (it has no matcher), with the x402 facilitator in the same process (its acceptance tracking and book
+are bound to one store), and when `start` is not the pruning point. Not implemented: importing live orders from another
+indexer into the tip store at the start (`fast_start_import`); a verified import (`index import-orders`) is the tool for that.
+
 ### A.2 Flags
 
 `run` takes the indexer options (`--config`, `--network`, `--rpc-url`, `--data-dir`, `--tokens`,
-`--start`, `--listen`, `--no-api`, `--no-record-log`, `--reorg-window-hours`; B 4) and the
+`--start`, `--fast-start`, `--listen`, `--no-api`, `--no-record-log`, `--reorg-window-hours`; B 4) and the
 matcher and keeper options (C, "Running"):
 
 | Flag | Default | Meaning |
@@ -1096,6 +1132,7 @@ network = "testnet-10"
 rpc_url = "ws://127.0.0.1:18210"
 data_dir = "/var/lib/kob-index"
 start = "pruning_point"          # or "sink", or { hash = "<chain block hash>" }
+fast_start = false               # `kob-executor run`, empty data dir: trade at once on a tip store, index the history meanwhile; A.1.1
 poll_interval_ms = 500
 rpc_timeout_secs = 180
 fetch_parallel = 4               # VSPC windows fetched at once while far behind (1: one at a time); section 3, *Parallel fetch*

@@ -77,6 +77,81 @@ pub struct HealthSnapshot {
     /// Per node (empty with a single node).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<crate::rpc::multi::NodeStatus>,
+    /// The store holds every order the node's history still shows. `false` only during a fast start
+    /// ([`crate::faststart`]): the store follows the chain from the node's sink, and the history is being indexed into a second
+    /// store; `backfill` then says how far that one is.
+    pub book_complete: bool,
+    /// The fast start's backfill: the full store's progress (absent once the book is complete).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backfill: Option<Backfill>,
+}
+
+/// The backfill of a fast start: where the full store is on its way from the node's pruning point to the tip.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Backfill {
+    /// The full store's follower state.
+    pub state: FollowerState,
+    /// DAA score of the full store's cursor.
+    pub cursor_daa: u64,
+    /// DAA the full store is behind the node (`None`: the node's position is not known yet).
+    pub lag_daa: Option<u64>,
+    pub lag_seconds: Option<u64>,
+    /// How fast the history is indexed: DAA of chain per second of wall time (the chain itself moves at `daa_per_second`).
+    pub rate_daa_per_sec: Option<f64>,
+    /// Seconds until the full store has caught up at the recent pace (`None`: not known yet, or it is not closing in).
+    pub eta_seconds: Option<u64>,
+    /// Unix time the fast store started following (the orders it knows were seen since).
+    pub tip_since_unix: u64,
+}
+
+impl Backfill {
+    /// The part of the status line about the fast start: what the executor trades on and when the full book is there.
+    pub fn status_text(&self) -> String {
+        let mut s = format!("fast start: trading on orders seen since {}", utc_clock(self.tip_since_unix));
+        match (self.eta_seconds, self.lag_seconds) {
+            (Some(eta), Some(lag)) => {
+                s.push_str(&format!("; full book in about {} ({} of history to index)", human_secs(eta), human_secs(lag)))
+            }
+            (None, Some(lag)) => s.push_str(&format!("; full book: estimating ({} of history to index)", human_secs(lag))),
+            _ => s.push_str("; full book: estimating"),
+        }
+        s
+    }
+}
+
+/// `14:32 UTC` of a unix time.
+pub fn utc_clock(unix: u64) -> String {
+    format!("{:02}:{:02} UTC", unix % 86_400 / 3600, unix % 3600 / 60)
+}
+
+/// Estimates how fast the full store of a fast start closes in on the node from its lag over the last minute.
+#[derive(Debug, Default)]
+pub struct BackfillPace {
+    /// (seconds since the first sample, lag in DAA, cursor DAA), oldest first.
+    samples: std::collections::VecDeque<(f64, u64, u64)>,
+}
+
+impl BackfillPace {
+    /// How long the pace looks back.
+    const SPAN_SECS: f64 = 60.0;
+
+    /// Records a sample taken `at` seconds from some fixed start; returns `(index rate in DAA per second, seconds to catch
+    /// up)` once two samples at least a second apart are known (the second is `None` while the lag does not shrink).
+    pub fn push(&mut self, at: f64, lag_daa: u64, cursor_daa: u64) -> (Option<f64>, Option<u64>) {
+        self.samples.push_back((at, lag_daa, cursor_daa));
+        while self.samples.len() > 2 && self.samples.front().is_some_and(|f| at - f.0 > Self::SPAN_SECS) {
+            self.samples.pop_front();
+        }
+        let Some(&(t0, lag0, cur0)) = self.samples.front() else { return (None, None) };
+        let dt = at - t0;
+        if dt < 1.0 {
+            return (None, None);
+        }
+        let rate = cursor_daa.saturating_sub(cur0) as f64 / dt;
+        let closing = (lag0 as f64 - lag_daa as f64) / dt;
+        let eta = (closing > 0.0).then(|| (lag_daa as f64 / closing).ceil() as u64);
+        (Some(rate), eta)
+    }
 }
 
 impl HealthSnapshot {
@@ -121,6 +196,8 @@ impl HealthSnapshot {
             confirmed_blocks_total: 0,
             lies_total: 0,
             nodes: vec![],
+            book_complete: true,
+            backfill: None,
         }
     }
 
@@ -159,6 +236,20 @@ impl HealthSnapshot {
             "1 while the store is caught up with the node (the matcher plans only then).",
             self.caught_up() as u64,
         );
+        m(
+            "kob_indexer_book_complete",
+            "gauge",
+            "0 during a fast start: the store holds only the orders seen since it started, the full book is being indexed.",
+            self.book_complete as u64,
+        );
+        if let Some(b) = &self.backfill {
+            m(
+                "kob_indexer_backfill_lag_daa",
+                "gauge",
+                "DAA the full store of a fast start is behind the node.",
+                b.lag_daa.unwrap_or(0),
+            );
+        }
         m("kob_indexer_cursor_daa", "gauge", "DAA score of the cursor.", self.cursor_daa);
         m("kob_indexer_lag_daa", "gauge", "DAA the store is behind the node.", self.lag_daa().unwrap_or(0));
         m(
@@ -468,6 +559,57 @@ mod tests {
         assert_eq!(
             [0, 89, 90, 3_599, 5_400, 172_799, 200_000].map(human_secs),
             ["0 s", "89 s", "2 min", "60 min", "1 h 30 min", "47 h 59 min", "2 d 7 h"]
+        );
+    }
+
+    #[test]
+    fn the_backfill_pace_estimates_when_the_full_book_is_there() {
+        let mut p = BackfillPace::default();
+        // one sample: nothing to compare with
+        assert_eq!(p.push(0.0, 360_000, 1_000), (None, None));
+        // the cursor moves 100 DAA per second while the chain moves 10: the lag shrinks by 90 per second
+        let (rate, eta) = p.push(10.0, 360_000 - 900, 2_000);
+        assert_eq!(rate, Some(100.0));
+        assert_eq!(eta, Some(3_990));
+        // a store that does not close in has no estimate
+        let mut q = BackfillPace::default();
+        q.push(0.0, 1_000, 5_000);
+        assert_eq!(q.push(10.0, 1_100, 5_100), (Some(10.0), None));
+        // only the last minute counts
+        let mut r = BackfillPace::default();
+        r.push(0.0, 10_000_000, 0);
+        r.push(100.0, 9_000_000, 10_000_000);
+        let (rate, _) = r.push(130.0, 8_999_000, 10_003_000);
+        assert_eq!(rate, Some(100.0), "the sample 100 s ago is out of the window");
+
+        let b = |eta: Option<u64>, lag: Option<u64>| Backfill {
+            state: FollowerState::CatchingUp,
+            cursor_daa: 1,
+            lag_daa: lag.map(|l| l * 10),
+            lag_seconds: lag,
+            rate_daa_per_sec: None,
+            eta_seconds: eta,
+            tip_since_unix: 1_790_000_000 + 14 * 3600 + 32 * 60,
+        };
+        assert_eq!(utc_clock(14 * 3600 + 32 * 60 + 7), "14:32 UTC");
+        assert_eq!(
+            b(Some(27_600), Some(107_000)).status_text(),
+            format!(
+                "fast start: trading on orders seen since {}; full book in about 7 h 40 min (29 h 43 min of history to index)",
+                utc_clock(1_790_000_000 + 14 * 3600 + 32 * 60)
+            )
+        );
+        assert!(b(None, Some(107_000)).status_text().ends_with("full book: estimating (29 h 43 min of history to index)"));
+        assert!(b(None, None).status_text().ends_with("; full book: estimating"));
+        // the health JSON a client reads
+        let mut h = HealthSnapshot::new("testnet-10");
+        assert!(h.book_complete && serde_json::to_value(&h).unwrap().get("backfill").is_none());
+        h.book_complete = false;
+        h.backfill = Some(b(Some(60), Some(600)));
+        let v = serde_json::to_value(&h).unwrap();
+        assert_eq!((v["book_complete"].clone(), v["backfill"]["eta_seconds"].clone()), (false.into(), 60.into()));
+        assert!(
+            h.metrics_text().contains("kob_indexer_book_complete 0") && h.metrics_text().contains("kob_indexer_backfill_lag_daa 6000")
         );
     }
 
