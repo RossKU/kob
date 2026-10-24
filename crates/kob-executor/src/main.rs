@@ -6,7 +6,8 @@
 //! * `match`, `keep`: the matcher and the keepers alone, planning against a book snapshot file that
 //!   an indexer exports (`--book-file`), for deployments that keep the key away from the public API;
 //! * `x402`: the x402 facilitator alone (keyless; finality from the node's UTXO set);
-//! * `setup`: the interactive first run (`kob_executor::setup`), which writes `kob-executor.toml` next to the binary.
+//! * `setup`: the interactive first run (`kob_executor::setup`), which writes `kob-executor.toml` next to the binary;
+//!   `setup --non-interactive` and `address-balance` are its JSON forms for a wrapper (the Android app, `kob_executor::app`).
 //!
 //! Without arguments (a double click) the binary runs `kob-executor.toml` from its own directory, or the setup when there is
 //! none (docs/ops/executor-quickstart.md).
@@ -18,6 +19,7 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use kob_executor::app::{self, AddressBalanceArgs, AppSetup};
 use kob_executor::config::LaunchRole;
 use kob_executor::executor::{self, RunArgs};
 use kob_executor::index_cli::{run_index, IndexArgs};
@@ -53,6 +55,8 @@ enum Cmd {
     X402(X402Args),
     /// First run: check the node, make the operator key, wait for funds, write kob-executor.toml next to the binary, start.
     Setup(SetupArgs),
+    /// The operator's address and its plain balance from the configured node, as one JSON object (never the secret).
+    AddressBalance(AddressBalanceArgs),
 }
 
 fn main() -> ExitCode {
@@ -75,20 +79,37 @@ fn main() -> ExitCode {
 }
 
 fn start(argv: Vec<OsString>) -> anyhow::Result<()> {
-    tracing_subscriber::fmt().with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))).init();
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let program = argv.first().cloned().unwrap_or_else(|| "kob-executor".into());
     if argv.len() > 1 {
         let cli = Cli::parse_from(argv);
-        if let Cmd::Setup(a) = &cli.cmd {
-            let dir = match &a.dir {
-                Some(d) => d.clone(),
-                None => setup::home_dir()?,
-            };
-            return setup_then_launch(&rt, program, dir, a.no_start);
+        // the JSON commands keep stdout for their one object: the log goes to stderr
+        let json_out = matches!(&cli.cmd, Cmd::AddressBalance(_) | Cmd::Setup(SetupArgs { non_interactive: true, .. }));
+        init_tracing(json_out);
+        match &cli.cmd {
+            Cmd::Setup(a) => {
+                let dir = match &a.dir {
+                    Some(d) => d.clone(),
+                    None => setup::home_dir()?,
+                };
+                if a.non_interactive {
+                    return setup_json(dir, a);
+                }
+                return setup_then_launch(&rt, program, dir, a.no_start);
+            }
+            Cmd::AddressBalance(a) => {
+                let dir = match &a.dir {
+                    Some(d) => d.clone(),
+                    None => setup::home_dir()?,
+                };
+                println!("{}", app::address_balance_live(&dir, &rt)?);
+                return Ok(());
+            }
+            _ => {}
         }
         return rt.block_on(dispatch(cli.cmd));
     }
+    init_tracing(false);
     let dir = setup::home_dir()?;
     match setup::no_args_start(&dir, std::io::stdin().is_terminal()) {
         NoArgs::Launch(cfg) => launch(&rt, program, &cfg),
@@ -99,6 +120,27 @@ fn start(argv: Vec<OsString>) -> anyhow::Result<()> {
         }
         NoArgs::Refuse(why) => anyhow::bail!(why),
     }
+}
+
+fn init_tracing(to_stderr: bool) {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let b = tracing_subscriber::fmt().with_env_filter(filter);
+    if to_stderr {
+        b.with_writer(std::io::stderr).init();
+    } else {
+        b.init();
+    }
+}
+
+/// `setup --non-interactive`: the files, and one JSON object on stdout.
+fn setup_json(dir: std::path::PathBuf, a: &SetupArgs) -> anyhow::Result<()> {
+    let (Some(node), Some(role)) = (a.node.clone(), a.role) else {
+        anyhow::bail!("--non-interactive needs --node and --role");
+    };
+    let opts = SetupOptions::for_build(dir);
+    let ask = AppSetup { node, role, new_key: a.new_key, network: a.network.clone() };
+    println!("{}", app::setup_non_interactive(&opts, &ask)?);
+    Ok(())
 }
 
 /// The interactive setup into `dir`; then, unless declined, the configuration it wrote.
@@ -148,6 +190,6 @@ async fn dispatch(cmd: Cmd) -> anyhow::Result<()> {
         Cmd::Match(a) => run_match(a).await,
         Cmd::Keep(a) => run_keep(a).await,
         Cmd::X402(a) => x402::run(a).await,
-        Cmd::Setup(_) => anyhow::bail!("setup runs before the runtime"),
+        Cmd::Setup(_) | Cmd::AddressBalance(_) => anyhow::bail!("setup runs before the runtime"),
     }
 }

@@ -49,6 +49,23 @@ pub struct SetupArgs {
     /// Write the configuration and exit instead of starting the executor.
     #[arg(long)]
     pub no_start: bool,
+    /// For a wrapper (the Android app) that cannot answer questions: no dialogue, no start. Needs `--node` and `--role`; writes
+    /// the files and prints one JSON object (`address`, `config`, ...; never the secret). Replaces an existing configuration,
+    /// keeps an existing key file.
+    #[arg(long, requires_all = ["node", "role"])]
+    pub non_interactive: bool,
+    /// Non-interactive: `resolver` (two public nodes, the default of the interactive setup) or your node's wRPC URL.
+    #[arg(long, requires = "non_interactive")]
+    pub node: Option<String>,
+    /// Non-interactive: `match` (matcher and keepers; needs a key) or `index` (index only, no key).
+    #[arg(long, value_enum, requires = "non_interactive")]
+    pub role: Option<crate::app::AppRole>,
+    /// Non-interactive: make the operator key when the directory has none (an existing key file is never replaced).
+    #[arg(long, requires = "non_interactive")]
+    pub new_key: bool,
+    /// Non-interactive, development builds only: `mainnet` or `testnet-10` (a deployment build knows its network).
+    #[arg(long, requires = "non_interactive")]
+    pub network: Option<String>,
 }
 
 /// What a start without arguments does.
@@ -561,30 +578,21 @@ pub fn run_setup(io: &mut dyn Console, node: &mut dyn SetupNode, opts: &SetupOpt
     let tokens_path = if opts.pinned_registry {
         None
     } else {
-        let p = opts.dir.join(TOKENS_FILE);
-        if p.exists() {
-            io.say(&format!("Keeping the token list {} (delete it and run the setup again for a fresh one).", p.display()));
-        } else {
-            std::fs::write(&p, program_registry(&network)?).with_context(|| p.display().to_string())?;
+        let (name, wrote) = ensure_token_list(&opts.dir, &network)?;
+        let p = opts.dir.join(&name);
+        if wrote {
             io.say(&format!(
                 "Wrote {}: the token programs this build supports (every token of these programs is listed).",
                 p.display()
             ));
+        } else {
+            io.say(&format!("Keeping the token list {} (delete it and run the setup again for a fresh one).", p.display()));
         }
-        Some(TOKENS_FILE.to_string())
+        Some(name)
     };
 
     let file = SetupFile { network: network.clone(), rpc_url: url, data_dir, tokens_path, launch };
-    let text = file.text()?;
-    // the file must be what a start without arguments reads back
-    let tmp = opts.dir.join(format!("{CONFIG_FILE}.tmp"));
-    std::fs::write(&tmp, &text).with_context(|| tmp.display().to_string())?;
-    let check = launch_args(&tmp);
-    if let Err(e) = check {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e.context("the configuration written does not read back"));
-    }
-    std::fs::rename(&tmp, &config_path).with_context(|| config_path.display().to_string())?;
+    let config_path = write_config(&opts.dir, &file)?;
     let l = launch_args(&config_path)?;
     io.say("");
     io.say(&format!("Wrote {}.", config_path.display()));
@@ -600,6 +608,33 @@ pub fn run_setup(io: &mut dyn Console, node: &mut dyn SetupNode, opts: &SetupOpt
     } else {
         Ok(None)
     }
+}
+
+/// The token list next to the configuration: kept when there, else written ([`program_registry`]). Its file name and whether
+/// it was written now.
+pub(crate) fn ensure_token_list(dir: &Path, network: &str) -> Result<(String, bool)> {
+    let p = dir.join(TOKENS_FILE);
+    if p.exists() {
+        return Ok((TOKENS_FILE.to_string(), false));
+    }
+    std::fs::write(&p, program_registry(network)?).with_context(|| p.display().to_string())?;
+    Ok((TOKENS_FILE.to_string(), true))
+}
+
+/// Writes `file` as `dir`/[`CONFIG_FILE`], after checking that it reads back as a launch configuration; returns its path.
+pub(crate) fn write_config(dir: &Path, file: &SetupFile) -> Result<PathBuf> {
+    let config_path = dir.join(CONFIG_FILE);
+    let text = file.text()?;
+    // the file must be what a start without arguments reads back
+    let tmp = dir.join(format!("{CONFIG_FILE}.tmp"));
+    std::fs::write(&tmp, &text).with_context(|| tmp.display().to_string())?;
+    let check = launch_args(&tmp);
+    if let Err(e) = check {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.context("the configuration written does not read back"));
+    }
+    std::fs::rename(&tmp, &config_path).with_context(|| config_path.display().to_string())?;
+    Ok(config_path)
 }
 
 /// What public nodes mean for an operator (the setup's note under the choice).

@@ -2,6 +2,7 @@
 //! binary, role subcommands; `run` hosts them in one process over one store).
 
 pub mod api;
+pub mod app;
 pub mod config;
 pub mod executor;
 pub mod fee;
