@@ -24,7 +24,7 @@ test('an external public-mint token is listed on the public-mint template, which
   const e = externalRegistryToken(kobks);
   assert.equal(e.template_id, 'kcc20-ref-public-mint');
   assert.equal(e.extension_commitment, '0'.repeat(64));
-  assert.deepEqual([e.max_token_inputs, e.max_token_outputs, e.status, e.decimals], [3, 3, 'listed', 0]);
+  assert.deepEqual([e.max_token_inputs, e.max_token_outputs, e.decimals, 'status' in e], [3, 3, 0, false]);
   assert.deepEqual(soakTemplates([]).map((t) => (t as { id: string }).id), ['kcc20-ref-3x3']);
   assert.deepEqual(soakTemplates([kobks]).map((t) => (t as { id: string }).id), ['kcc20-ref-3x3', 'kcc20-ref-public-mint']);
   assert.throws(() => externalRegistryToken({ ...kobks, covenantId: 'ABC' }), /64 lowercase hex/);
