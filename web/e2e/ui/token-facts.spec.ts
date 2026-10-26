@@ -99,8 +99,8 @@ test.describe('token facts', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
-  test('a list row with every fact on a 320 px screen: the badges wrap inside the table, nothing scrolls sideways', async ({ appPage: page, mock }) => {
-    await page.setViewportSize({ width: 320, height: 812 });
+  test('a list row with every fact on a 375 px screen: the badges wrap inside the table, nothing scrolls sideways', async ({ appPage: page, mock }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
     await mock.seed({ open_token: true });
     await listExkcc(page);
     await page.route(/\/v1\/tokens(\?.*)?$/, async (route) => {

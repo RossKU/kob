@@ -239,6 +239,6 @@ a.tape-row:hover .tape-time { color: var(--text); }
   .market-page { padding-bottom: 56px; }
 }
 /* a list row is narrow on a phone: its badges wrap inside the cell instead of widening the table */
-.ml-table .tf { max-width: 100%; }
+.ml-table .tf { max-width: min(100%, 12rem); }
 .ml-table .tf .badge { white-space: normal; text-align: left; }
 .ml-table .tf-compact > summary { min-width: 0; }
