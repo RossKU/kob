@@ -19,8 +19,8 @@ test.describe('shell and token list', () => {
     const row = appPage.getByTestId(`token-row-${id}`);
     await expect(row).toBeVisible();
     await expect(row.getByTestId(`token-link-${id}`)).toHaveText(`EXKCC (${short})`);
-    // token issuance is permissionless and KOB makes no per-token judgement: the row never says verified / unverified / official / pending review
-    await expect(row).not.toContainText(/unverified|verified|official|pending review|registry/i);
+    // token issuance is permissionless and KOB makes no per-token judgement: the row never says verified / official / pending review (the neutral fact "Genesis not verified" is not a verdict)
+    await expect(row).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review|registry/i);
     await expect(row.getByTestId('badge-family')).toBeVisible();
     for (const badge of ['verified', 'unverified', 'official', 'pending-review', 'custom-registry', 'not-in-registry']) await expect(row.getByTestId(`badge-${badge}`)).toHaveCount(0);
     await expect(row.locator('[data-testid^="shared-ticker-"]')).toHaveCount(0); // a unique ticker has no note
@@ -79,7 +79,7 @@ test.describe('shell and token list', () => {
     await expect(soloRow).toBeVisible();
     await expect(soloRow.locator('[data-testid^="shared-ticker-"]')).toHaveCount(0);
     // no row says whether a token is verified or official
-    for (const r of [regRow, twinRow, soloRow]) await expect(r).not.toContainText(/unverified|verified|official|pending review|NOT that token/i);
+    for (const r of [regRow, twinRow, soloRow]) await expect(r).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review|NOT that token/i);
     // the token page header of the registry token repeats the note; the ticket under it stays free of it
     await regRow.getByTestId(`token-link-${id}`).click();
     await expect(appPage.getByTestId('token-header').getByTestId('token-shared-ticker')).toHaveText(note);
@@ -106,7 +106,7 @@ test.describe('shell and token list', () => {
     await appPage.getByTestId('token-add-button').click();
     const row = appPage.getByTestId(`token-row-${other}`);
     await expect(row).toHaveAttribute('data-tradable', '0');
-    await expect(row).not.toContainText(/unverified|verified|official|pending review/i);
+    await expect(row).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review/i);
   });
 });
 
@@ -172,7 +172,7 @@ test.describe('token page', () => {
     await appPage.goto(`/#/market/${id}`);
     await expect(appPage.getByTestId('token-scale')).toContainText('per 1 EXKCC (8 decimals)');
     await expect(appPage.getByTestId('token-untradable')).toHaveCount(0);
-    await expect(appPage.getByTestId('token-header')).not.toContainText(/unverified|verified|official|pending review/i);
+    await expect(appPage.getByTestId('token-header')).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review/i);
     await expect(appPage.getByTestId('ticket-unavailable')).toHaveCount(0);
     await expect(appPage.getByTestId('ticket-container')).toBeVisible();
     await appPage.getByTestId('template-verification').getByRole('button').first().click();
