@@ -52,7 +52,7 @@ export async function writeReport(env: Env): Promise<{ text: string }> {
   const soakTokens = [t, env.state.token2, env.state.token3].filter((x): x is NonNullable<typeof t> => !!x);
   const chk = readJson<CheckerState>(join(run, 'state', 'checker.json'));
   const legacyIsSoak = !(cfg.externalTokens ?? []).some((x) => x.trade && x.trade.bookShare > 0);
-  const memo = chk ? memoOrderRows(chk.orders ?? {}, chk.tokenIds ?? [], soakTokens.map((s) => s.covenantId), legacyIsSoak) : { rows: [], complete: false };
+  const memo = chk ? memoOrderRows(chk.orders ?? {}, chk.tokenIds ?? [], soakTokens.map((s) => s.covenantId), legacyIsSoak, chk.prunedOrders) : { rows: [], complete: false };
   const orders: OrderRow[] = memo.rows;
   const ordersComplete = memo.complete;
   let openAsks: number | null = null;

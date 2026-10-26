@@ -82,7 +82,7 @@ import {
   type Payment,
   type TxLine,
 } from './rules.ts';
-import { loadState, saveState, type CheckerState, type LegacyTxSums, type OrderMemo, type TxSums } from './store.ts';
+import { loadState, ORDER_MEMO_WINDOW_DAA, pruneOrders, saveState, type CheckerState, type LegacyTxSums, type OrderMemo, type TxSums } from './store.ts';
 import {
   amendedAfter, checkCancelAll, checkLadder, checkLadderCancel, checkMerge, checkMergeRecord, checkPlannedReplacement, checkReplacement, checkX402Retries, repricedRungs,
   SCENARIO_GRACE_MS, type RetryPayment, type Verdict,
@@ -119,6 +119,15 @@ interface Ctx {
   followingSince: bigint | null;
   /** the fast sweep's own state (see `sweepTerms`) */
   sweep: SweepState;
+  /** indexer A's cursor DAA at the last round (0 before the first) */
+  cursor: number;
+  /**
+   * memos of ended orders whose memo was pruned, read again by `memoFor` this round: kept out of `st.orders` (the order is counted in
+   * `st.prunedOrders` already), dropped at the start of the next round
+   */
+  lookups: Map<string, OrderMemo>;
+  /** exits of a repeat entry read as ended and pruned (`repeatStep`): not read again; bounded, cleared when full */
+  endedExits: Set<string>;
 }
 
 interface SweepState {
@@ -213,6 +222,9 @@ export async function runChecker(env: Env): Promise<void> {
     custodyCache: new Map(),
     followingSince: null,
     sweep: { busy: false, listed: new Map(), unresolved: new Map() },
+    cursor: 0,
+    lookups: new Map(),
+    endedExits: new Set(),
   };
   log.info('checker starting', { tokens, indexer: cfg.indexerUrl, indexerB: cfg.indexerUrlB, rounds: st.rounds, orders: Object.keys(st.orders).length });
   // the fast sweep runs between rounds (the round's scan then finds the terms in st.early); one at a time: a tick while the previous sweep
@@ -300,6 +312,8 @@ async function round(x: Ctx): Promise<void> {
   await step('health', async () => checkHealth(x, hA, hB, now));
   trackKeepers(x, hA);
   if (!hA) return;
+  x.cursor = hA.cursor_daa;
+  x.lookups.clear();
   const aOk = hA.state === 'following' && (hA.lag_daa ?? 0) <= 100;
   const scan = await step('orders', () => scanOrders(x, hA));
   if (!scan) return;
@@ -371,7 +385,8 @@ function trimTerms(s: AnyState | null | undefined): Record<string, string> | nul
   return rest;
 }
 
-function memoize(x: Ctx, v: OrderView): OrderMemo {
+/** the memo of an order's view (merged with the memo and the early terms it had), not stored */
+function buildMemo(x: Ctx, v: OrderView): OrderMemo {
   const old = x.st.orders[v.covenant_id];
   const m: OrderMemo = {
     c: v.contract,
@@ -390,6 +405,11 @@ function memoize(x: Ctx, v: OrderView): OrderMemo {
   const tk = tokenIxs(x.st, v);
   if (tk.length) m.tk = tk;
   else if (old?.tk) m.tk = old.tk;
+  return m;
+}
+
+function memoize(x: Ctx, v: OrderView): OrderMemo {
+  const m = buildMemo(x, v);
   x.st.orders[v.covenant_id] = m;
   if (fullTerms(m.terms) && x.st.early) delete x.st.early[v.covenant_id];
   return m;
@@ -448,8 +468,20 @@ async function memoFor(x: Ctx, id: string): Promise<OrderMemo | null> {
   const e = x.st.early?.[id]?.terms;
   if (m && e && !fullTerms(m.terms)) m.terms = e;
   if (m?.terms) return m;
+  if (!m) {
+    const l = x.lookups.get(id);
+    if (l) return l;
+  }
   const v = await x.A.order(id);
-  return v ? memoize(x, v) : (m ?? null);
+  if (!v) return m ?? null;
+  // an order that ended before the memo window and has no memo was pruned: it is counted in `prunedOrders` already, so its memo is not stored
+  // again (it would be counted a second time when it is pruned again); the checks get the same memo a tombstone gave (no event keys, partial terms)
+  if (!m && x.cursor > 0 && !isActive(v.status) && x.cursor - v.last_daa > ORDER_MEMO_WINDOW_DAA) {
+    const l = buildMemo(x, v);
+    x.lookups.set(id, l);
+    return l;
+  }
+  return memoize(x, v);
 }
 
 async function pageOrders(ix: HttpIndexer, token: string, floorDaa: number, maxPages = 500): Promise<OrderView[]> {
@@ -501,13 +533,12 @@ async function scanOrders(x: Ctx, hA: HealthLike): Promise<Scan> {
   st.retry = [];
   st.scanDaa = Math.max(0, hA.cursor_daa - 600);
   st.scanDaaByToken = Object.fromEntries(x.tokens.map((t) => [t, st.scanDaa]));
-  for (const [id, e] of Object.entries(st.early ?? {})) if (hA.cursor_daa - e.daa > 72_000) delete st.early![id];
-  // tombstones: forget the terms and event keys of orders terminated more than ~2 h ago
-  for (const m of Object.values(st.orders)) {
-    if (!m.active && hA.cursor_daa - m.lastDaa > 72_000 && (m.terms || m.ev.length)) {
-      m.terms = null;
-      m.ev = [];
-    }
+  for (const [id, e] of Object.entries(st.early ?? {})) if (hA.cursor_daa - e.daa > ORDER_MEMO_WINDOW_DAA) delete st.early![id];
+  // forget the memos of orders terminated more than ~2 h ago (not those checked this round: they go the next); the report keeps their counts
+  const pruned = pruneOrders(st, hA.cursor_daa, { has: (id) => views.has(id) || refetch.has(id) });
+  if (pruned) {
+    stat(x, 'ordersPruned', pruned);
+    log.info('order memos pruned', { pruned, kept: Object.keys(st.orders).length });
   }
   return { views, changed, cursor: hA.cursor_daa };
 }
@@ -705,8 +736,16 @@ async function repeatStep(x: Ctx, views: Map<string, OrderView>, now: number): P
     for (const c of entry.children ?? []) {
       const memo = x.st.orders[c];
       if (memo && !memo.active) continue;
+      // no memo: a child pruned after it ended (an ended exit counts for nothing in `checkRepeatAmount`; it is read once)
+      if (!memo && x.endedExits.has(c)) continue;
       const cv = await x.A.order(c);
-      if (cv) exits.push(cv);
+      if (!cv) continue;
+      if (!memo && !isActive(cv.status) && x.cursor - cv.last_daa > ORDER_MEMO_WINDOW_DAA) {
+        if (x.endedExits.size >= 10_000) x.endedExits.clear();
+        x.endedExits.add(c);
+        continue;
+      }
+      exits.push(cv);
     }
     stat(x, 'repeatEntries');
     const n = entry.initial_amount ?? x.st.orders[v.covenant_id]?.initialAmount ?? null;
@@ -838,7 +877,7 @@ async function fillsStep(x: Ctx): Promise<void> {
     f.volumeTokens = p0.volumeTokens;
     f.volumeKas = p0.volumeKas;
   }
-  const floor = f.maxDaa - 72_000;
+  const floor = f.maxDaa - ORDER_MEMO_WINDOW_DAA;
   for (const [k, daa] of Object.entries(f.seen)) if (daa < floor) delete f.seen[k];
   for (const [k, t] of Object.entries(f.tx)) if ((typeof t === 'object' ? t.d : Number(t)) < floor) delete f.tx[k];
 }

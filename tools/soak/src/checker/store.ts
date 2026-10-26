@@ -90,7 +90,14 @@ export interface CheckerState {
      */
     multi?: { txMultiBook: number; txPair: number; pairFills: number; txMultiPair: number };
   };
+  /** memos of the live orders and of those ended less than `ORDER_MEMO_WINDOW_DAA` ago (older ended ones are folded into `prunedOrders`) */
   orders: Record<string, OrderMemo>;
+  /**
+   * counts of the ended orders whose memo was pruned, by `prunedKey` (contract, tif, status, side, token indexes): the report's order totals
+   * (memoOrderRows) add them to the memos. Each order is added once, when its memo is dropped; a pruned order is never memoized again
+   * (`memoFor` keeps a lookup of one out of `orders`)
+   */
+  prunedOrders?: Record<string, number>;
   /** the token covenant ids `OrderMemo.tk` indexes (append-only: an index never changes meaning) */
   tokenIds?: string[];
   /**
@@ -116,6 +123,34 @@ export interface CheckerState {
   /** byte cursor in run/state/scenarios.jsonl and the scenario records still waiting for the indexer (scenario-rules.ts) */
   scenOffset?: number;
   scen?: ScenarioRecord[];
+}
+
+/**
+ * How long (DAA, 72,000 = 2 h at 10 BPS) the memo of an ended order is kept after its last update. Every check that reads an ended order's memo
+ * (a fill's terms, a stop's trigger evidence and the evidence orders' contracts, the repeat cycle's entry, the retried events) acts within
+ * minutes of the order's last event; the memos `early`, `fills.seen` and `fills.tx` use the same window.
+ */
+export const ORDER_MEMO_WINDOW_DAA = 72_000;
+
+/** the key of `CheckerState.prunedOrders`: the fields the report groups orders by (`tk` absent: empty) */
+export const prunedKey = (m: Pick<OrderMemo, 'c' | 'tif' | 'status' | 'side' | 'tk'>): string => `${m.c}|${m.tif ?? '-'}|${m.status}|${m.side}|${(m.tk ?? []).join(',')}`;
+
+/**
+ * Drops the memos of orders that are not active and were last updated more than `ORDER_MEMO_WINDOW_DAA` before `refDaa` (the indexer's
+ * cursor), except those in `keep` (the orders of the round being checked, the deferred ones), and counts each in `prunedOrders`.
+ * Returns the number dropped.
+ */
+export function pruneOrders(st: CheckerState, refDaa: number, keep: { has(id: string): boolean }): number {
+  let n = 0;
+  for (const [id, m] of Object.entries(st.orders)) {
+    if (m.active || refDaa - m.lastDaa <= ORDER_MEMO_WINDOW_DAA || keep.has(id)) continue;
+    const k = prunedKey(m);
+    const p = (st.prunedOrders ??= {});
+    p[k] = (p[k] ?? 0) + 1;
+    delete st.orders[id];
+    n++;
+  }
+  return n;
 }
 
 /** protocol generation of the terms the memo holds (3 = amounts in base units, no lots) */
@@ -147,8 +182,13 @@ export function loadState(path: string): CheckerState {
   try {
     const s = JSON.parse(readFileSync(path, 'utf8')) as CheckerState;
     if (s.version !== 1 || s.protocol !== PROTOCOL) return emptyState();
-    if (s.fillsVersion !== 2) return { ...emptyState(), ...s, fillsVersion: 2, fills: emptyState().fills };
-    return { ...emptyState(), ...s, fills: { ...emptyState().fills, ...s.fills } };
+    const out: CheckerState =
+      s.fillsVersion !== 2
+        ? { ...emptyState(), ...s, fillsVersion: 2, fills: emptyState().fills }
+        : { ...emptyState(), ...s, fills: { ...emptyState().fills, ...s.fills } };
+    // a state written before the pruning holds every order ever seen: drop the ended ones now (the cursor of its last scan is the reference)
+    if (out.scanDaa > 0) pruneOrders(out, out.scanDaa + 600, new Set(out.retry));
+    return out;
   } catch {
     return emptyState();
   }

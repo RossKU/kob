@@ -6,6 +6,8 @@ export interface OrderRow {
   tif: number | null;
   status: string;
   side: number;
+  /** how many orders the row stands for (pruned memos grouped by their fields; absent: 1) */
+  n?: number;
 }
 
 /** the fields of a checker order memo (store.ts `OrderMemo`) the report reads */
@@ -22,8 +24,9 @@ export interface MemoLike {
  * scan, terminated ones with their final status), instead of paging the indexer's whole order history on every report. `tokenIds` is the
  * index the memos' `tk` point into; `soak` the soak token ids. A memo without `tk` (written before the field) counts when the checker
  * scans only soak tokens (`legacyIsSoak`: no external token is traded); otherwise it is left out and the list is incomplete.
+ * `pruned` holds the counts of the ended orders whose memo was dropped (store.ts `prunedOrders`, key `contract|tif|status|side|tk indexes`): one row each with `n`.
  */
-export function memoOrderRows(orders: Record<string, MemoLike>, tokenIds: readonly string[], soak: readonly string[], legacyIsSoak: boolean): { rows: OrderRow[]; complete: boolean } {
+export function memoOrderRows(orders: Record<string, MemoLike>, tokenIds: readonly string[], soak: readonly string[], legacyIsSoak: boolean, pruned: Record<string, number> = {}): { rows: OrderRow[]; complete: boolean } {
   const want = new Set(soak.map((t) => t.toLowerCase()));
   const ix = new Set<number>();
   tokenIds.forEach((t, i) => {
@@ -37,6 +40,15 @@ export function memoOrderRows(orders: Record<string, MemoLike>, tokenIds: readon
       continue;
     }
     rows.push({ contract: m.c, tif: m.tif ?? null, status: m.status, side: m.side });
+  }
+  for (const [k, n] of Object.entries(pruned)) {
+    const [contract, tif, status, side, tk] = k.split('|');
+    const ixs = tk ? tk.split(',').map(Number) : null;
+    if (ixs ? !ixs.some((i) => ix.has(i)) : !legacyIsSoak) {
+      if (!ixs) complete = false;
+      continue;
+    }
+    rows.push({ contract, tif: tif === '-' ? null : Number(tif), status, side: Number(side), n });
   }
   return { rows, complete };
 }
@@ -193,15 +205,18 @@ export function botActions(counters: Record<string, number>): ActionRow[] {
 export function ordersSummary(rows: OrderRow[]): { total: number; active: number; byContract: Record<string, { total: number; byStatus: Record<string, number>; byTif: Record<string, number> }> } {
   const byContract: Record<string, { total: number; byStatus: Record<string, number>; byTif: Record<string, number> }> = {};
   let active = 0;
+  let total = 0;
   for (const o of rows) {
+    const n = o.n ?? 1;
+    total += n;
     const c = (byContract[o.contract] ??= { total: 0, byStatus: {}, byTif: {} });
-    c.total++;
-    c.byStatus[o.status] = (c.byStatus[o.status] ?? 0) + 1;
+    c.total += n;
+    c.byStatus[o.status] = (c.byStatus[o.status] ?? 0) + n;
     const tif = o.tif === null || o.tif === undefined ? '-' : String(o.tif);
-    c.byTif[tif] = (c.byTif[tif] ?? 0) + 1;
-    if (o.status === 'open' || o.status === 'partial') active++;
+    c.byTif[tif] = (c.byTif[tif] ?? 0) + n;
+    if (o.status === 'open' || o.status === 'partial') active += n;
   }
-  return { total: rows.length, active, byContract };
+  return { total, active, byContract };
 }
 
 /** peak working set per process (and of the total) over the samples at or after `sinceMs` (resources.jsonl text) */

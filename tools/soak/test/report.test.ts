@@ -131,3 +131,18 @@ test('orders of the soak tokens from the checker memo: a pair order counts once,
   assert.equal(ext.complete, false);
   assert.equal(memoOrderRows(memo, ids, ['tusd'], true).rows.length, 3);
 });
+
+test('pruned order counts join the memo rows: totals, tif, status and token filter unchanged', () => {
+  const ids = ['tusd', 'kron'];
+  const memo = { a: { c: 'KobAsk', tif: 0, status: 'open', side: 1, tk: [0] } };
+  const pruned = { 'KobAsk|0|filled|1|0': 5, 'KobBid|-|cancelled|2|0': 3, 'KobAsk|0|filled|1|1': 7, 'KobBid|1|killed|2|': 2 };
+  const r = memoOrderRows(memo, ids, ['tusd'], true, pruned);
+  assert.equal(r.complete, true);
+  const s = ordersSummary(r.rows);
+  assert.equal(s.total, 1 + 5 + 3 + 2); // the kron-only row is left out, the legacy (no tk) row counts
+  assert.equal(s.active, 1);
+  assert.equal(s.byContract.KobAsk.byStatus.filled, 5);
+  assert.equal(s.byContract.KobBid.byTif['-'], 3);
+  assert.equal(s.byContract.KobBid.byTif['1'], 2);
+  assert.equal(memoOrderRows(memo, ids, ['tusd'], false, pruned).complete, false);
+});
