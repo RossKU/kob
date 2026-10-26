@@ -367,7 +367,7 @@ describe('IndexerFeed', () => {
     expect(srv.sessions[0]!.received[1]).toEqual({ op: 'subscribe', channels: [`order:${H2}`] });
     expect(feed.channels()).toEqual(['fills', `book:${H1}`, `order:${H2}`].sort());
 
-    const fill = { order: H1, token: H2, side: 1, price: 500, amount: 2000, payout: 990, txid: H1, block: H2, daa: 42 };
+    const fill = { order: H1, token: H2, side: 1, price: '500', amount: '2900000000000000001', payout: '990', txid: H1, block: H2, daa: 42 };
     const ws = srv.sessions[0]!.ws;
     const push = (o: unknown) => ws.send(JSON.stringify(o));
     push({ channel: 'fills', type: 'fill', data: fill });

@@ -147,7 +147,8 @@ async fn rest_and_websocket_follow_the_chain() {
         let v: serde_json::Value = serde_json::from_str(m.to_text().unwrap()).unwrap();
         match v["channel"].as_str() {
             Some("fills") => {
-                assert_eq!(v["data"]["amount"], 4 * WHOLE);
+                // decimal strings, like REST
+                assert_eq!(v["data"]["amount"], (4 * WHOLE).to_string());
                 got_fill = true;
             }
             Some(c) if c.starts_with("book:") => got_book = true,

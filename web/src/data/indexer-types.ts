@@ -341,16 +341,16 @@ export interface TokenEventView {
 /** Body of every non-2xx answer: `{"error":{"code":..,"message":..}}`. */
 export interface ApiErrorBody { error: { code: string; message: string } }
 
-/** `fill` frame data of the WebSocket feed (`FillNotice` of the indexer). Amounts are JSON numbers here (i64 on the wire). */
+/** `fill` frame data of the WebSocket feed (`FillNotice` of the indexer). `price`, `amount` and `payout` are decimal strings, as in REST (a 64-bit value above 2^53 is not a safe JSON number). */
 export interface FillNoticeView {
   order: Hex;
   token: Hex | null;
   /** 1: an ask (sell) was filled, 2: a bid (buy) was filled */
   side: number;
-  price: number | null;
+  price: string | null;
   /** base units filled */
-  amount: number;
-  payout: number | null;
+  amount: string;
+  payout: string | null;
   txid: Hex;
   block: Hex;
   daa: number;

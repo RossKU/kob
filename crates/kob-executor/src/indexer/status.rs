@@ -552,7 +552,25 @@ impl HealthState {
     }
 }
 
-/// A committed fill, as pushed to WebSocket subscribers.
+/// A 64-bit quantity as a decimal string, as the REST API spells them: a JSON number loses precision above 2^53 in JavaScript
+/// (a supply can reach 2.9e18 base units).
+mod dec_str {
+    use serde::Serializer;
+
+    pub fn int<S: Serializer>(v: &i64, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(v)
+    }
+
+    pub fn opt<S: Serializer>(v: &Option<i64>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(v) => s.collect_str(v),
+            None => s.serialize_none(),
+        }
+    }
+}
+
+/// A committed fill, as pushed to WebSocket subscribers. `price`, `amount` and `payout` are decimal strings, like every
+/// quantity of the REST API (docs/ops/executor.md, 5.0); `side` and `daa` are numbers.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct FillNotice {
     pub order: Hash32,
@@ -560,9 +578,13 @@ pub struct FillNotice {
     /// 1: an ask (sell) was filled, 2: a bid (buy) was filled.
     pub side: u8,
     /// The order's price, sompi per whole token (`null` for a pair order and the conditional kinds).
+    #[serde(serialize_with = "dec_str::opt")]
     pub price: Option<i64>,
     /// Base units filled.
+    #[serde(serialize_with = "dec_str::int")]
     pub amount: i64,
+    /// What the maker was paid, sompi (`null` when it is not a payment to the maker).
+    #[serde(serialize_with = "dec_str::opt")]
     pub payout: Option<i64>,
     pub txid: Hash32,
     pub block: Hash32,

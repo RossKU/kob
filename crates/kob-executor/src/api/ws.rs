@@ -429,6 +429,29 @@ mod tests {
         }
     }
 
+    /// A fill frame spells `price`, `amount` and `payout` as decimal strings (a JSON number loses precision above 2^53 in
+    /// JavaScript), so a value above 2^53 arrives exactly.
+    #[test]
+    fn a_fill_frame_carries_its_quantities_as_decimal_strings() {
+        let mut ev = event();
+        ev.fills[0].amount = 2_900_000_000_000_000_001;
+        ev.fills[0].price = Some(9_007_199_254_740_993);
+        ev.fills[0].payout = Some(i64::MAX);
+        let subs = BTreeSet::from([Channel::Fills(None)]);
+        let frames = frames_for(&ev, &subs);
+        let d = &frames[0]["data"];
+        assert_eq!(d["amount"], "2900000000000000001");
+        assert_eq!(d["price"], "9007199254740993");
+        assert_eq!(d["payout"], "9223372036854775807");
+        assert!(frames[0].to_string().contains("\"amount\":\"2900000000000000001\""));
+        // no price (a pair order or a conditional kind) and no payout stay null; the rest keeps its type
+        let d = &frames[1]["data"];
+        assert_eq!((d["amount"].as_str(), d["price"].as_str(), d["payout"].is_null()), (Some("1000"), Some("6"), true));
+        assert!(d["side"].is_u64() && d["daa"].is_u64());
+        ev.fills[1].price = None;
+        assert!(frames_for(&ev, &subs)[1]["data"]["price"].is_null());
+    }
+
     #[test]
     fn channel_parse_roundtrip() {
         for c in [
