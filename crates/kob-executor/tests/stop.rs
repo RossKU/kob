@@ -190,7 +190,7 @@ fn ask_to_stop(child: &std::process::Child) -> bool {
 /// request timeout) ends the process cleanly within a few seconds.
 #[test]
 fn the_binary_stops_within_seconds_when_the_node_is_silent() {
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
 
     // a node that takes connections and says nothing
@@ -206,8 +206,8 @@ fn the_binary_stops_within_seconds_when_the_node_is_silent() {
 
     let dir = tempfile::tempdir().unwrap();
     let key = dir.path().join("operator.key");
-    // a throwaway key, never funded
-    std::fs::File::create(&key).unwrap().write_all(b"0102030405060708091011121314151617181920212223242526272829303132").unwrap();
+    // a throwaway key, never funded (readable by its owner only: the executor refuses a key file others can read)
+    kob_executor::matcher::wallet::HotKey::create_file(&key).unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_kob-executor"));
     cmd.args(["run", "--no-fast-start", "--no-api", "--network", "testnet-10", "--rpc-url"])
         .arg(format!("ws://127.0.0.1:{port}"))
