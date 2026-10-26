@@ -195,3 +195,25 @@ describe('check-pages: the deployed headers and files', () => {
     expect(lines[0]).toContain('unreachable');
   });
 });
+
+describe('the deploy workflow gate (the signer page it ships takes private keys)', () => {
+  const wf = readFileSync(fileURLToPath(new URL('../../.github/workflows/deploy-pages.yml', import.meta.url)), 'utf8');
+  const job = (name: string): string => {
+    const start = wf.indexOf(`\n  ${name}:\n`);
+    expect(start, `job ${name}`).toBeGreaterThan(0);
+    const next = wf.slice(start + 1).search(/\n  [a-z][a-z-]*:\n/);
+    return next < 0 ? wf.slice(start) : wf.slice(start, start + 1 + next);
+  };
+
+  it('deploys only from master: a run of another ref fails first, and the deploy job checks the ref too', () => {
+    expect(job('config')).toMatch(/- name: Production deploys only from master\n\s+if: github\.ref != 'refs\/heads\/master'/);
+    expect(job('deploy')).toContain("github.ref == 'refs/heads/master'");
+  });
+
+  it('the deploy job runs in the environment production (a required reviewer approves there); the secret and variable names are unchanged', () => {
+    expect(job('deploy')).toMatch(/\n    environment: production\n/);
+    expect(job('config')).not.toContain('environment:');
+    for (const name of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID']) expect(wf).toContain(`secrets.${name}`);
+    for (const name of ['KOB_PAGES_PROJECT', 'KOB_PAGES_INDEXER_URL', 'KOB_PAGES_BRANCH', 'KOB_PAGES_NETWORK', 'KOB_PAGES_EXTRA_INDEXER_URLS', 'KOB_PAGES_NODE_URL', 'KOB_PAGES_EXPLORER_URL']) expect(wf).toContain(`vars.${name}`);
+  });
+});

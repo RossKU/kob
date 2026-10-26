@@ -20,7 +20,10 @@ issuance is permissionless: tokens issued with KOB's standard 3 / 3 reference pr
 reference's published public-mint build (KOB's second issuance option, also used by third-party
 launchpads such as Kasseal) are tradable on mainnet with no listing or curation step, and being
 tradable says nothing about a token's safety or genuineness (curation belongs to the community token
-lists a user chooses, `registry/README.md`). Both programs (`kcc20-ref-3x3`, 2026-10-12, and
+lists a user chooses, `registry/README.md`). The web app shows the facts instead of a verdict: wherever a token is shown (token header,
+next to the order button, market list) it prints neutral badges for the indexer's `genesis_unverified` and `live_mint_authority` and for the program's
+mint and blacklist powers, and a stop on a token whose genesis is not verified gets a one-line note next to the order button; none of them blocks an
+order or asks for a click (the order flow has no acknowledgement boxes). Both programs (`kcc20-ref-3x3`, 2026-10-12, and
 `kcc20-ref-public-mint`, 2026-10-13) are `reviewed` by internal review only; a public-mint token
 with a live `PublicMint` can still grow up to its genesis allowance. The other KCC-20 programs (the
 8 / 8 prototype, KaspaCom's) are `pending-review` and not tradable on mainnet.

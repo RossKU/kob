@@ -91,6 +91,28 @@ on *Actions* > *deploy-pages* > *Run workflow*:
 
 One deployment runs at a time; a newer push cancels an older run. The job has read access to the repository only.
 
+### 4a. The deploy gate
+
+The signer page of this deployment is where users type private keys, so whoever can change what the workflow deploys can steal them.
+Two guards are in the workflow, one setting is yours:
+
+* **Only `refs/heads/master` deploys.** A run of any other ref (for example *Run workflow* with a branch selected) fails in the first
+  step of job `config`, and job `deploy` also checks it. A push to a branch never deploys; the push trigger is `master` only.
+* **Job `deploy` runs in the environment `production`** (`environment: production`). GitHub creates the environment the first time
+  the workflow runs. Repository *Settings* > *Environments* > *production*: add **Required reviewers** (yourself, and a second
+  person if there is one) so that every deployment waits for an approval in the run (*Review deployments*) before the job, and the
+  Cloudflare upload, starts; under *Deployment branches and tags* choose *Selected branches and tags* and add `master`. With no
+  reviewer the environment changes nothing: deployments run as before (the gate is then only the master check).
+* Keep `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as **repository secrets** (section 3, the names are unchanged). Job `config`
+  reads whether they exist and has no environment, so secrets moved into the environment would look missing and the deploy would
+  be skipped. Also useful, outside this repository: branch protection on `master` (pull request or at least no force push), two-factor
+  authentication with a hardware key on the GitHub and Cloudflare accounts, and a Cloudflare token limited to *Account > Cloudflare
+  Pages > Edit*.
+
+The post-deploy check compares the deployment with the `dist` built in the same job, so it detects a bad upload, not a bad commit: the
+reviewer approving a deployment is the one who vouches for the commit (the run names it, and the summary lists the sha256 of every
+deployed file; `reproducible` in `ci.yml` builds the same `dist` twice).
+
 The deployment does not set `quoteTokens` (no token is marked as a dollar) and keeps the scheme-only `connect-src` of
 `_headers`: with the public resolver the node is any public Kaspa node, and users may point the app at another indexer in
 Settings, so the hosts cannot be pinned (README, *Deployment headers*).

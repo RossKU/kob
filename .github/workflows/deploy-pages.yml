@@ -13,6 +13,11 @@ name: deploy-pages
 # is set but invalid fails the job config.
 #
 # The variables are not secrets: config.json is public. Never put an API key into a URL variable (the script refuses query strings).
+#
+# Gate: the signer page this deploys is where users type private keys, so production is deployed only from refs/heads/master (a run
+# of any other ref, e.g. a workflow_dispatch from a branch, fails in the first step of job config), and job deploy runs in the GitHub
+# environment `production`: Settings > Environments > production can require a reviewer (and limit the deployment branches to master)
+# before the job starts (docs/ops/web-hosting.md, section 4a).
 
 on:
   push:
@@ -57,6 +62,13 @@ jobs:
       project: ${{ steps.gate.outputs.project }}
       branch: ${{ steps.gate.outputs.branch }}
     steps:
+      - name: Production deploys only from master
+        if: github.ref != 'refs/heads/master'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error title=deploy-pages::production is deployed only from refs/heads/master, not from $REF (docs/ops/web-hosting.md, section 4a)"
+          exit 1
       - name: Cloudflare secrets and Pages variables (missing = the deploy is skipped)
         id: gate
         env:
@@ -114,7 +126,9 @@ jobs:
 
   deploy:
     needs: config
-    if: needs.config.outputs.ready == 'true'
+    if: needs.config.outputs.ready == 'true' && github.ref == 'refs/heads/master'
+    # a required reviewer of the environment approves here, before the job (and the Cloudflare secrets) start
+    environment: production
     runs-on: ubuntu-latest
     defaults:
       run:

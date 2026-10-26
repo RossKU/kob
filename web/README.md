@@ -77,7 +77,10 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
   update worse for the user than what was shown says so and holds Approve for half a second), changed figures flash, and the start and
   expiry read "in 28 s" over their DAA score. The signer frame is as tall as its content (it reports its height), up to the viewport.
   One status line under the button follows it all (checking, confirm, approve in your wallet, sending, the
-  txid with its explorer link, accepted). No checkboxes. An auction (market, marketable limit) starts from the clock of its plan: confirmed in
+  txid with its explorer link, accepted). No checkboxes. The planner's warnings that matter to a trader (a price far through the market,
+  a book that disagrees with the last fill, a high slippage, a day order about to end, a limit that crosses the market, the conditional orders'
+  market checks, a stop on a token whose genesis is not verified) are one-line notes next to the button (`src/ui/ticket/ticket-notes.ts`): they
+  never stop the order and need no click; only errors disable the button. An auction (market, marketable limit) starts from the clock of its plan: confirmed in
   the app's popup more than 1 s after it opened, it is planned again with the current clock before the wallet gets it; a signature that comes
   back more than `AUCTION_START_MARGIN_DAA` (20 DAA, 2 s) after the start is not sent, the order is planned again and the wallet asked once
   more (`src/wallet/sign.ts`). Neither asks the user again when nothing they confirmed got worse (`src/signer/retime.ts`: the private-key
@@ -193,8 +196,13 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   every input of the transaction from the node too and `decodeSigning` blocks any input whose amount / script / covenant id differs
   (`input-unconfirmed`); `signAndSubmit` repeats that check right before the wallet popup and compares the txid the node returns with the signed one.
 * **No curation of tokens.** Token issuance is permissionless, so the UI shows no verified / official / pending-review labels, no "genesis verified" badge and
-  no registry notes about who listed what. What it does show is technical: the token program family, the freeze / seize / blacklist warnings (template
+  no registry notes about who listed what. What it does show is technical: the token program family, the freeze / seize warnings (template
   `capabilities` from the registry, plus the indexer's `powers`, which can only add), the full covenant id with a copy button, and an `untradable` reason.
+  It also shows facts (matcher.md 1.2a, "wallets MUST show the warnings wherever the token is shown"), as neutral badges with a plain sentence in the
+  token header, next to the order button and on the list rows: the indexer's `genesis_unverified` and `live_mint_authority` (the same rule applied to
+  the registry entry, so they show without an indexer too) and the program powers mint-authority, public-mint and blacklist
+  (`src/ui/market/TokenBadges.tsx` `TokenFacts`; the sentence is printed or opens on a tap, a touch screen has no tooltip). A name the registry does not
+  list is marked "declared by its creator": the creator's own claim, not checked.
   A token this build cannot trade (its program is not one this build supports and embeds) is not listed, not offered in selectors and has no market
   page; no token is ever refused for what it is (KOB makes no listing decision, the registry is a pinned snapshot of facts and curation belongs to
   the community token lists a user chooses). When two or more tokens the app shows share a ticker (look-alike letters and homoglyphs count as the same), the list row, the token page header, the pair
@@ -236,7 +244,10 @@ frame forgets it. The app and the frame exchange only the validated messages of 
 public key and signatures come out. The frame decodes every request itself with kob-wasm (`decodeSigning`), shows the net effect and the fee, and
 signs only after a trusted click on its own Approve button. What this does NOT protect against: a script already running in the app page (XSS, a
 malicious extension) can draw a fake key field or a fake signer and collect what the user types there; the frame only keeps a key that was typed
-into it out of the page's reach. A browser extension wallet is the recommended setup.
+into it out of the page's reach. A browser extension wallet is the recommended setup. The frame says before the key is pasted what it is (64 hex
+characters, not a seed phrase), that a reload forgets it and to use a dedicated key with a small balance. A browser without IntersectionObserver v2
+(iOS, Firefox) cannot run the frame's visibility check: the option is disabled and the header says why in text, with the way out (an extension wallet
+on a desktop, Chrome on Android), and a phone browser is not told to install an extension.
 
 ## Tests
 
