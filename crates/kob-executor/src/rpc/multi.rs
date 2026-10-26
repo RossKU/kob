@@ -456,7 +456,11 @@ impl<N: ChainSource> MultiNode<N> {
             }
             due
         };
-        if log {
+        if a.at_tip {
+            // the tips differ for a moment (not yet agreed): routine on a public pair; a tip that never settles ends in
+            // replacing a node below, which is warned about
+            tracing::debug!(applied = a.keep, of = total, reason = %why, "the two nodes' tips differ: only the chain blocks both report are indexed");
+        } else if log {
             tracing::warn!(
                 authority = %self.board.shown(0),
                 cross_check = %self.board.shown(j),

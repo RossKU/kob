@@ -166,7 +166,13 @@ pub struct Agreement {
     /// The first contradiction: another chain block at the same position of the selected chain, other accepted transactions
     /// for the same chain block, or a disagreement about whether the start left the selected chain.
     pub contradiction: Option<String>,
+    /// The contradiction is only a different chain block among the newest ones both nodes report (their tips differ for a
+    /// moment: not yet agreed, not a contradiction of agreed history). Always false without a contradiction.
+    pub at_tip: bool,
 }
+
+/// How many of the newest chain blocks both nodes report may differ without it being a contradiction of agreed history.
+pub const TIP_BLOCKS: usize = 10;
 
 /// The [`Agreement`] of `raw` with `ids`.
 pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds) -> Agreement {
@@ -174,6 +180,7 @@ pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds) -> Agreement {
     if raw.removed_chain_block_hashes != ids.removed_chain_block_hashes {
         return Agreement {
             keep: 0,
+            at_tip: false,
             contradiction: Some(format!(
                 "the start left the selected chain for one node ({} removed blocks) and not for the other ({})",
                 raw.removed_chain_block_hashes.len(),
@@ -189,6 +196,7 @@ pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds) -> Agreement {
         if mine != theirs {
             return Agreement {
                 keep: i,
+                at_tip: n - i <= TIP_BLOCKS,
                 contradiction: Some(format!("chain block #{i} from the start is {mine} for one node and {theirs} for the other")),
             };
         }
@@ -198,6 +206,7 @@ pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds) -> Agreement {
         if txs.as_slice() != expected {
             return Agreement {
                 keep: i,
+                at_tip: false,
                 contradiction: Some(format!(
                     "chain block {mine} accepted {} transactions for one node and {} for the other (or other ones)",
                     txs.len(),
@@ -206,7 +215,7 @@ pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds) -> Agreement {
             };
         }
     }
-    Agreement { keep: all, contradiction: None }
+    Agreement { keep: all, contradiction: None, at_tip: false }
 }
 
 fn spent_eq(a: Option<&SpentUtxo>, b: Option<&SpentUtxo>) -> bool {
@@ -325,5 +334,65 @@ mod tests {
             missing.version = None;
             assert_eq!(tx_id(&missing), None, "a High answer cannot be checked");
         }
+    }
+
+    fn h(n: u8) -> Hash32 {
+        Hash32([n; 32])
+    }
+
+    fn raw(hashes: &[u8]) -> RawVspcResponse {
+        RawVspcResponse {
+            removed_chain_block_hashes: vec![],
+            added_chain_block_hashes: hashes.iter().map(|&n| h(n)).collect(),
+            chain_block_accepted_transactions: hashes
+                .iter()
+                .map(|_| RawChainBlock { chain_block_header: ChainBlockHeader::default(), accepted_transactions: vec![] })
+                .collect(),
+            wire_bytes: 0,
+        }
+    }
+
+    fn ids(hashes: &[u8]) -> ChainIds {
+        ChainIds {
+            removed_chain_block_hashes: vec![],
+            added_chain_block_hashes: hashes.iter().map(|&n| h(n)).collect(),
+            accepted_transaction_ids: vec![],
+        }
+    }
+
+    /// A different chain block among the newest ones both report is the tips differing for a moment (`at_tip`); one deep
+    /// inside the answer, a different accepted set or a start left on one side only are contradictions of agreed history.
+    #[test]
+    fn a_disagreement_at_the_newest_blocks_is_told_from_one_in_agreed_history() {
+        // the last of five differs (the live case: applied 4 of 5)
+        let a = agreement(&raw(&[1, 2, 3, 4, 5]), &ids(&[1, 2, 3, 4, 9]));
+        assert_eq!((a.keep, a.at_tip), (4, true));
+        assert!(a.contradiction.is_some());
+        // the very next block differs in a short answer: nothing applied, still the tips
+        let a = agreement(&raw(&[1, 2]), &ids(&[7, 8]));
+        assert_eq!((a.keep, a.at_tip), (0, true));
+        // as deep as TIP_BLOCKS is still the tip, one deeper is history
+        let long: Vec<u8> = (1..=40).collect();
+        let mut other = long.clone();
+        other[40 - TIP_BLOCKS] = 200;
+        assert!(agreement(&raw(&long), &ids(&other)).at_tip);
+        other = long.clone();
+        other[40 - TIP_BLOCKS - 1] = 200;
+        let a = agreement(&raw(&long), &ids(&other));
+        assert_eq!((a.keep, a.at_tip), (40 - TIP_BLOCKS - 1, false));
+        // the other node is behind: nothing contradicted
+        let a = agreement(&raw(&[1, 2, 3]), &ids(&[1, 2]));
+        assert_eq!((a.keep, a.contradiction, a.at_tip), (3, None, false));
+        // the same chain block with other accepted transactions is never a tip effect
+        let mut r = raw(&[1, 2, 3]);
+        r.chain_block_accepted_transactions[2].accepted_transactions.push(Tx::default());
+        let a = agreement(&r, &ids(&[1, 2, 3]));
+        assert_eq!((a.keep, a.at_tip), (2, false));
+        assert!(a.contradiction.is_some());
+        // a start that left the selected chain for one node only
+        let mut r = raw(&[1]);
+        r.removed_chain_block_hashes = vec![h(5)];
+        let a = agreement(&r, &ids(&[1]));
+        assert_eq!((a.keep, a.at_tip), (0, false));
     }
 }
