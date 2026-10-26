@@ -98,4 +98,26 @@ test.describe('token facts', () => {
     await expect(page.getByTestId('token-header').getByTestId('token-fact-blacklist')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
+
+  test('a list row with every fact on a 320 px screen: the badges wrap inside the table, nothing scrolls sideways', async ({ appPage: page, mock }) => {
+    await page.setViewportSize({ width: 320, height: 812 });
+    await mock.seed({ open_token: true });
+    await listExkcc(page);
+    await page.route(/\/v1\/tokens(\?.*)?$/, async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      for (const t of body.tokens) Object.assign(t, { powers: ['public-mint', 'blacklist', 'mint-authority'], warnings: ['genesis_unverified', 'live_mint_authority'] });
+      await route.fulfill({ response: res, json: body });
+    });
+    await page.goto('/#/market');
+    await page.getByTestId('token-list-nameless').click();
+    await expect(page.getByTestId('token-table')).toBeVisible();
+    await expect(page.getByTestId('token-table').getByTestId('token-fact-live_mint_authority').first()).toBeVisible();
+    const overflow = await page.evaluate(() => ({
+      page: document.documentElement.scrollWidth - window.innerWidth,
+      tables: Math.max(...[...document.querySelectorAll('.ml-table')].map((w) => w.scrollWidth - w.clientWidth)),
+    }));
+    expect(overflow.page).toBeLessThanOrEqual(0);
+    expect(overflow.tables).toBeLessThanOrEqual(0);
+  });
 });

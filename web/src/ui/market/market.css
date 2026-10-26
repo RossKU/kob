@@ -238,3 +238,7 @@ a.tape-row:hover .tape-time { color: var(--text); }
   /* room under the last panel, so the button never covers it */
   .market-page { padding-bottom: 56px; }
 }
+/* a list row is narrow on a phone: its badges wrap inside the cell instead of widening the table */
+.ml-table .tf { max-width: 100%; }
+.ml-table .tf .badge { white-space: normal; text-align: left; }
+.ml-table .tf-compact > summary { min-width: 0; }
