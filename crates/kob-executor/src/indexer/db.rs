@@ -127,6 +127,9 @@ fn migrate(conn: &Connection) -> DbResult<()> {
         "CREATE INDEX IF NOT EXISTS orders_quote_genesis ON orders (quote_cov_id, genesis_block, covenant_id); \
          DROP INDEX IF EXISTS orders_quote; DROP INDEX IF EXISTS orders_maker;",
     )?;
+    // the whole orders list newest first: `orders_genesis_page` (schema.sql) replaces the plain `(genesis_block)` index, which
+    // left the order among the orders of one genesis block to a sort of all of them
+    conn.execute_batch("DROP INDEX IF EXISTS orders_genesis_block;")?;
     if backfill_counters(conn)? {
         tracing::info!("counted the orders, statuses, fills and rejects once for the health counters (kept by triggers from now on)");
     }
@@ -573,6 +576,24 @@ mod tests {
         let has: bool = c.prepare("SELECT 1 FROM sqlite_master WHERE name LIKE 'receipts%'").unwrap().exists([]).unwrap();
         assert!(!has, "the receipts table and its indexes are dropped");
         assert_eq!(meta_get(&c, "schema_version").unwrap(), Some(SCHEMA_VERSION.to_string()));
+    }
+
+    /// A database of an earlier build of schema 5 has the plain `(genesis_block)` index: the writer builds
+    /// `orders_genesis_page (genesis_block, covenant_id)` (the whole orders list in index order) and drops the old one.
+    #[test]
+    fn the_plain_genesis_block_index_is_replaced_by_the_paging_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("x.sqlite3");
+        let idx = |c: &Connection, name: &str| {
+            c.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1").unwrap().exists([name]).unwrap()
+        };
+        {
+            let c = open_writer(&p, "testnet-10").unwrap();
+            assert!(idx(&c, "orders_genesis_page") && !idx(&c, "orders_genesis_block"));
+            c.execute_batch("DROP INDEX orders_genesis_page; CREATE INDEX orders_genesis_block ON orders (genesis_block)").unwrap();
+        }
+        let c = open_writer(&p, "testnet-10").unwrap();
+        assert!(idx(&c, "orders_genesis_page") && !idx(&c, "orders_genesis_block"));
     }
 
     /// A database of an earlier build of schema 5 kept no minimum fill of an in-place amend: the writer adds the column.

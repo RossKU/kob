@@ -66,7 +66,9 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS orders_book ON orders (token_cov_id, side, price);
 -- a maker's orders newest first (`GET /v1/orders?maker=`, keyset paged): read in index order, one page per request
 CREATE INDEX IF NOT EXISTS orders_maker_genesis ON orders (maker, genesis_block, covenant_id);
-CREATE INDEX IF NOT EXISTS orders_genesis_block ON orders (genesis_block);
+-- every order newest first (`GET /v1/orders` with no filter, keyset paged): the index is the whole sort order, so a page is read
+-- in order and stops at its end, however many orders share a genesis block (it replaces the plain `(genesis_block)` index)
+CREATE INDEX IF NOT EXISTS orders_genesis_page ON orders (genesis_block, covenant_id);
 CREATE INDEX IF NOT EXISTS orders_parent ON orders (parent);
 
 -- Every unspent-or-spent output of an order covenant the indexer has seen.

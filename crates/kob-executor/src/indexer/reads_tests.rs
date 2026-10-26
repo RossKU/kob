@@ -520,3 +520,58 @@ fn the_kept_counters_follow_inserts_replacements_and_deletes() {
     assert!(kept_counters(&conn).unwrap().is_some());
     check(&conn);
 }
+
+/// `GET /v1/orders` with no filter on a large store whose newest genesis block holds most of the orders (a bulk import, a
+/// rebase, a burst): a page is read in index order and stops at its end, where the plain `(genesis_block)` index made SQLite
+/// fetch and sort every order of that block (10 s and a 504 on a 770,000-order store). The plan has no sort, the page and the
+/// next ones are the newest orders in order, and a page costs milliseconds.
+#[test]
+fn the_unfiltered_orders_list_reads_a_page_in_index_order_whatever_one_block_holds() {
+    let conn = open_memory("testnet-10").unwrap();
+    let pinned = TemplateId::from_name("KobAsk").map(kob_protocol::artifacts::pinned_hash).unwrap().to_vec();
+    conn.execute_batch("BEGIN").unwrap();
+    let mut st = conn
+        .prepare(
+            "INSERT INTO orders (covenant_id, contract, template_hash, family, side, maker, token_cov_id, price, in_book, genesis_state, \
+             genesis_block, genesis_daa, listed, origin) VALUES (?1,'KobAsk',?2,1,1,?3,?4,5,1,x'00',?5,?5,1,'chain')",
+        )
+        .unwrap();
+    let mut s2 = conn
+        .prepare("INSERT INTO order_state (covenant_id, status, filled_amount, state_known, last_block, last_daa) VALUES (?1,'filled',0,1,1,1)")
+        .unwrap();
+    let n = 240_000i64;
+    for i in 0..n {
+        let mut cov = vec![0u8; 32];
+        cov[..8].copy_from_slice(&(i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).to_be_bytes());
+        // 200,000 orders in the newest block (1,000,000), the rest spread over older ones
+        let block = if i < 200_000 { 1_000_000 } else { 1_000 + (i - 200_000) / 3 };
+        st.execute(params![cov, pinned, vec![(i % 50) as u8; 32], vec![(i % 7) as u8; 32], block]).unwrap();
+        s2.execute(params![cov]).unwrap();
+    }
+    drop(st);
+    drop(s2);
+    conn.execute_batch("COMMIT").unwrap();
+
+    let sql = format!("{ORDER_SELECT} WHERE {} ORDER BY o.genesis_block DESC, o.covenant_id DESC LIMIT 51", pinned_template());
+    let mut p = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+    let plan: Vec<String> = p.query_map([], |r| r.get::<_, String>(3)).unwrap().map(|x| x.unwrap()).collect();
+    assert!(plan.iter().any(|l| l.contains("orders_genesis_page")), "{plan:?}");
+    assert!(!plan.iter().any(|l| l.contains("TEMP B-TREE")), "no sort of a block: {plan:?}");
+
+    let f = OrderFilter::default();
+    let t = std::time::Instant::now();
+    let first = orders(&conn, &ctx(), &f, 50, None).unwrap();
+    let took = t.elapsed();
+    assert_eq!(first.items.len(), 50);
+    assert!(took < std::time::Duration::from_secs(2), "a page took {took:?}");
+    println!("unfiltered page of a 240,000-order store with 200,000 orders in one block: {took:?}");
+    // the newest block, covenant ids descending; the cursor continues exactly there
+    let ids: Vec<&str> = first.items.iter().map(|o| o.covenant_id.as_str()).collect();
+    assert!(ids.windows(2).all(|w| w[0] > w[1]), "descending by covenant id inside one block");
+    assert!(first.items.iter().all(|o| o.genesis.block_seq == 1_000_000));
+    let second = orders(&conn, &ctx(), &f, 50, first.next_cursor.as_deref().and_then(parse_order_cursor)).unwrap();
+    assert!(second.items[0].covenant_id.as_str() < ids[49]);
+    // the same rows as the reference query
+    let old = old_orders(&conn, &ctx(), &f, 50, None);
+    assert_eq!(serde_json::to_value(&first).unwrap(), serde_json::to_value(&old).unwrap());
+}

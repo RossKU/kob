@@ -1338,7 +1338,7 @@ fn status_count(conn: &Connection, statuses: &[&str]) -> DbResult<Option<i64>> {
 /// Orders newest first, filtered; keyset-paginated on (genesis block, covenant id).
 ///
 /// What a page costs: one index range read in `(genesis_block, covenant_id)` order (`orders_token_genesis` and
-/// `orders_quote_genesis` merged for a token, `orders_maker_genesis` for a maker, `orders_genesis_block` otherwise) that
+/// `orders_quote_genesis` merged for a token, `orders_maker_genesis` for a maker, `orders_genesis_page` otherwise) that
 /// stops at the page's end; a status filter whose orders are few (`active`, `open`, `partial`: the live set) reads those
 /// orders instead and sorts them. Both give the same rows in the same order.
 pub fn orders(
