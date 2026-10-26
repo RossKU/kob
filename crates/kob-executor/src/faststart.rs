@@ -23,7 +23,8 @@
 //!
 //! A node that prunes its oldest data while the full store is still near its start (the pruning point it began at moves past
 //! its cursor; the node then answers `the queried hash does not have retention root on its chain`) would leave the full store
-//! halted at a gap for good: the coordinator restarts it from the node's new pruning point instead (a few times at most).
+//! halted at a gap for good: its follower moves it to the node's new pruning point instead (a few times at most,
+//! [`crate::indexer::recovery`], as for every store of a normal start).
 //!
 //! The tip follower does not share connections with the backfill. It has a node client of its own (one request at a time,
 //! the small-call connection), so a window of the backfill that takes half a minute never holds a tip request back; the
@@ -33,8 +34,7 @@
 
 use crate::config::{IndexerConfig, StartMode};
 use crate::executor::IndexerSource;
-use crate::indexer::follower::PRUNED_GAP;
-use crate::indexer::status::{Backfill, BackfillPace, FollowerState, HealthSnapshot, HealthState};
+use crate::indexer::status::{Backfill, BackfillPace, HealthState};
 use crate::indexer::{self, ApiTask, Indexer, Running};
 use crate::matcher::book::{ListedOrder, MemoryBook};
 use crate::matcher::node::NodeApi;
@@ -291,18 +291,13 @@ async fn tip_is_current<C: ChainSource>(idx: &Indexer, chain: &C, network: &str)
     }
 }
 
-/// The most times the full store is restarted from a new pruning point, one run (a store that keeps being pruned from under
-/// it is not catching up: it stays at its gap, which the status line shows).
-const MAX_FULL_RESTARTS: u32 = 10;
-
 /// What the coordinator owns while the executor runs.
 struct Stores {
     tip: Indexer,
     tip_run: Running,
     tip_api: Option<ApiTask>,
     full: Indexer,
-    /// `None` only while the full store is being restarted.
-    full_run: Option<Running>,
+    full_run: Running,
     since: u64,
     daa_per_second: u64,
 }
@@ -310,26 +305,14 @@ struct Stores {
 /// Publishes the full store's progress in the tip store's health (what `/v1/health` and the status line report), until the
 /// full store has caught up and the book source switches; then moves the read API and deletes the tip store. Returns the
 /// full store's tasks, which keep running until `stop`.
-async fn coordinate<C: ChainSource>(
-    mut s: Stores,
-    full_chain: Arc<C>,
-    handover: oneshot::Receiver<()>,
-    mut stop: watch::Receiver<bool>,
-) {
+async fn coordinate(s: Stores, handover: oneshot::Receiver<()>, mut stop: watch::Receiver<bool>) {
     let started = std::time::Instant::now();
-    let mut restarts = 0u32;
     let mut pace = BackfillPace::default();
     let mut tick = tokio::time::interval(PROGRESS_EVERY);
     let mut handover = handover;
     let switched = loop {
         tokio::select! {
-            _ = tick.tick() => {
-                publish_progress(&s, &mut pace, started);
-                if restarts < MAX_FULL_RESTARTS && pruned_from_under(&s.full.health.snapshot()) {
-                    restarts += 1;
-                    restart_full(&mut s, &full_chain, restarts).await;
-                }
-            }
+            _ = tick.tick() => publish_progress(&s, &mut pace, started),
             r = &mut handover => break r.is_ok(),
             _ = async { let _ = stop.wait_for(|x| *x).await; } => break false,
         }
@@ -344,9 +327,7 @@ async fn coordinate<C: ChainSource>(
     drop(tip);
     if !switched {
         // stopped by the shutdown before the switch: the tip store stays for the next start to resume
-        if let Some(r) = full_run {
-            r.stop().await;
-        }
+        full_run.stop().await;
         return;
     }
     remove_dir(&tip_dir).await;
@@ -366,41 +347,7 @@ async fn coordinate<C: ChainSource>(
     if let Some(a) = full_api {
         a.stop().await;
     }
-    if let Some(r) = full_run {
-        r.stop().await;
-    }
-}
-
-/// Whether the full store halted because the node pruned the history its cursor stood in.
-fn pruned_from_under(h: &HealthSnapshot) -> bool {
-    h.state == FollowerState::Gap && h.gap_reason.as_deref().is_some_and(|r| r.contains(PRUNED_GAP))
-}
-
-/// The node moved its pruning point past the full store's cursor while the store was still near its start (a start at the
-/// pruning point has nothing older to keep): the blocks in between are gone from the node, so the store follows from the node's
-/// new pruning point instead (the tracked orders reconciled with the node's UTXO set, as for a stale tip store), with a new
-/// follower. The tip store goes on meanwhile.
-async fn restart_full<C: ChainSource>(s: &mut Stores, chain: &Arc<C>, attempt: u32) {
-    tracing::warn!(
-        attempt,
-        "fast start: the node pruned the history the full store was following; restarting it from the node's pruning point"
-    );
-    if let Some(r) = s.full_run.take() {
-        r.stop().await;
-    }
-    match crate::recover::rebase(&s.full.ingest, chain.as_ref(), &s.full.cfg.network, &StartMode::PruningPoint, true).await {
-        Ok(r) => {
-            tracing::info!(cursor = %r.cursor.hash, daa = r.cursor.daa, "fast start: the full store follows from the node's pruning point")
-        }
-        // the new follower finds the gap again if the cursor is still pruned, and the next look retries
-        Err(e) => tracing::warn!(error = %e, "fast start: the full store cannot be moved to the node's pruning point"),
-    }
-    s.full.health.update(|h| {
-        h.state = FollowerState::Starting;
-        h.gap_reason = None;
-        h.last_error = None;
-    });
-    s.full_run = Some(s.full.spawn_follower(chain.clone()));
+    full_run.stop().await;
 }
 
 fn publish_progress(s: &Stores, pace: &mut BackfillPace, started: std::time::Instant) {
@@ -419,6 +366,7 @@ fn publish_progress(s: &Stores, pace: &mut BackfillPace, started: std::time::Ins
         rate_daa_per_sec: rate,
         eta_seconds: eta,
         tip_since_unix: s.since,
+        gaps: h.gaps.clone(),
     };
     s.tip.health.update(|t| {
         t.book_complete = false;
@@ -462,11 +410,12 @@ where
     let (source, handover) = FastSource::new(tip_source, tip.health.clone(), full_source);
 
     let tip_api = if cfg.api.enabled { Some(tip.spawn_api()?) } else { None };
-    let tip_run = tip.spawn_follower(tip_chain);
-    let full_run = full.spawn_follower(full_chain.clone());
+    let tip_run = tip.spawn_recovering(tip_chain);
+    // the full store's follower moves it past a gap the node's pruning causes (a start at the pruning point is hit by it)
+    let full_run = full.spawn_recovering(full_chain);
     let (stop_tx, stop_rx) = watch::channel(false);
-    let stores = Stores { tip, tip_run, tip_api, full, full_run: Some(full_run), since, daa_per_second: cfg.daa_per_second };
-    let coordinator = tokio::spawn(coordinate(stores, full_chain, handover, stop_rx));
+    let stores = Stores { tip, tip_run, tip_api, full, full_run, since, daa_per_second: cfg.daa_per_second };
+    let coordinator = tokio::spawn(coordinate(stores, handover, stop_rx));
 
     let mut runner = Runner::new(node, source, signer, run_cfg);
     let res = runner.run(shutdown).await;

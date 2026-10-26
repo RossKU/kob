@@ -23,9 +23,14 @@
 //! already fetched are applied and the single steps follow the sink from there.
 
 /// What a gap reason says when the node pruned the history the cursor stood in (the start of a store that began at the
-/// node's pruning point, or a downtime): the fast start restarts its full store from the new pruning point on it
-/// ([`crate::faststart`]).
+/// node's pruning point, or a downtime): a recovering follower ([`super::recovery`]) moves the store to the node's pruning
+/// point on it and follows from there with a new follower.
 pub const PRUNED_GAP: &str = "downtime exceeded";
+
+/// Whether a gap reason says the node pruned the history the cursor stood in ([`PRUNED_GAP`]).
+pub fn is_pruned_gap(reason: &str) -> bool {
+    reason.contains(PRUNED_GAP)
+}
 
 use super::ingest::{Cursor, Ingest, IngestError};
 use super::prefetch::{Head, Prefetch, PrefetchLimits};
@@ -795,8 +800,19 @@ impl<S: ChainSource> Follower<S> {
         StepOutcome::Gap(msg)
     }
 
-    /// Run until `shutdown` flips to true.
-    pub async fn run(&self, mut shutdown: watch::Receiver<bool>) {
+    /// Run until `shutdown` flips to true. A gap stops the following for good (state `gap`) until it does.
+    pub async fn run(&self, shutdown: watch::Receiver<bool>) {
+        self.run_loop(shutdown, false).await;
+    }
+
+    /// Like [`Follower::run`], but a gap the node's pruning caused ([`is_pruned_gap`]) ends the run at once instead of
+    /// waiting for the shutdown: the reason is returned (the state stays `gap`) for the caller to move the store past it
+    /// ([`super::recovery`]). `None`: the shutdown, or a halt that needs the operator.
+    pub async fn run_recovering(&self, shutdown: watch::Receiver<bool>) -> Option<String> {
+        self.run_loop(shutdown, true).await
+    }
+
+    async fn run_loop(&self, mut shutdown: watch::Receiver<bool>, recover: bool) -> Option<String> {
         let mut failures = 0u32;
         loop {
             if *shutdown.borrow() {
@@ -822,6 +838,9 @@ impl<S: ChainSource> Follower<S> {
                     d.min(self.cfg.max_backoff)
                 }
                 StepOutcome::Gap(r) => {
+                    if recover && is_pruned_gap(r) {
+                        return Some(r.clone());
+                    }
                     tracing::error!("indexer halted: {r}. See docs/ops/executor.md (Part B, 7.4).");
                     Duration::from_secs(5)
                 }
@@ -850,5 +869,6 @@ impl<S: ChainSource> Follower<S> {
                 h.state = FollowerState::Stopped;
             }
         });
+        None
     }
 }

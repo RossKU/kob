@@ -21,6 +21,7 @@ pub mod processor;
 pub mod reads;
 pub mod record;
 pub mod recordlog;
+pub mod recovery;
 pub mod status;
 pub mod trust;
 
@@ -218,11 +219,12 @@ impl Indexer {
 
     /// Start the follower and (when enabled) the API server on the current runtime. The indexer
     /// stays usable (`ingest`, `health`) while they run: `kob-executor run` reads the book through
-    /// the same `ingest` handle.
+    /// the same `ingest` handle. The follower moves the store past a gap the node's pruning caused instead of halting at it
+    /// ([`recovery`]).
     pub fn spawn<S: ChainSource>(&self, source: Arc<S>) -> Result<Running, IndexerError> {
         // validate the API configuration before anything is started
         let api_state = if self.cfg.api.enabled { Some(self.api_state()?) } else { None };
-        let mut running = self.spawn_follower(source);
+        let mut running = self.spawn_recovering(source);
         if let Some(state) = api_state {
             running.api = Some(serve_task(state, running.stop.subscribe()));
         }
@@ -235,6 +237,22 @@ impl Indexer {
         let follower = Arc::new(self.follower(source));
         let (stop_tx, stop_rx) = watch::channel(false);
         let follow = tokio::spawn(async move { follower.run(stop_rx).await });
+        Running { stop: stop_tx, follow, api: None }
+    }
+
+    /// [`Indexer::spawn_follower`], except that a gap the node's pruning caused does not halt it: the store is moved to the node's
+    /// pruning point (to the sink for a store that starts there) and followed from there by a new follower, a bounded number of
+    /// times ([`recovery`]; the skipped chain is reported in the log and the health).
+    pub fn spawn_recovering<S: ChainSource>(&self, source: Arc<S>) -> Running {
+        let parts = recovery::Parts {
+            source,
+            ingest: self.ingest.clone(),
+            cfg: FollowerConfig::from_indexer(&self.cfg),
+            health: self.health.clone(),
+            events: self.events.clone(),
+        };
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let follow = tokio::spawn(recovery::follow(parts, stop_rx));
         Running { stop: stop_tx, follow, api: None }
     }
 

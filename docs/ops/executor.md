@@ -1745,6 +1745,7 @@ Poll `/v1/health`, or scrape `GET /v1/metrics` (the same numbers as Prometheus t
 | Condition | Meaning |
 |---|---|
 | `state = gap` | halted, operator action (section 7); page immediately |
+| `gaps` non-empty, `kob_indexer_gaps_total` above 0 | the node pruned history the store had not read; the store skipped it and went on (7.4): orders created in that stretch need their makers' imports; page, then check the makers' open orders |
 | `state = node_unavailable` for more than 5 min | node down, unsynced, or in transitional IBD |
 | `lag_seconds` above 1 h / 6 h / 12 h / 24 h | approaching the node's retention; 12 h is consensus finality, 24 h leaves little of the default 30 h pruning window |
 | `last_progress_unix_ms` older than 60 s | the follower is stuck (progress is stamped on every successful poll, including "nothing new") |
@@ -1798,11 +1799,25 @@ the node knows none of them, the state becomes `gap`.
 
 #### 7.4 Gap: downtime longer than the node's retention (`state = gap`)
 
-`the queried hash does not have retention root on its chain`, or no stored block known. The follower
-stops and never guesses. The chain between the cursor and the node's retention root is gone from the
-node; everything the indexer recorded before the cursor is safe in the record log, but orders created
-inside the gap cannot be rediscovered from the node (their placement records are gone). Recovery, in
-order of preference:
+`the queried hash does not have retention root on its chain`, or no stored block known. The chain between
+the cursor and the node's retention root is gone from the node; everything the indexer recorded before the cursor is safe
+in the record log, but orders created inside the gap cannot be rediscovered from the node (their placement records are gone).
+
+**The executor and `index run` carry on by themselves** (every store, also the fast start's): the follower moves the store
+to the node's current pruning point (to its sink for a store configured with `start = sink`, the fast start's tip store),
+with the orders the store holds reconciled with the node's UTXO set exactly as `index rebase` does below (nothing is
+deleted: an output the node no longer has is closed with reason `gap`, a continuation under the same script is adopted),
+and follows from there with a new follower. A store the node prunes from under it again is moved again, at most 10 times
+in one run; after that it stays halted at the gap (`state = gap`, the status line says `STOPPED at a gap`) and a restart
+tries again. The skipped chain is never silent: the log has a `GAP skipped` warning with the DAA scores and what the
+reconciliation did, `/v1/health` lists it as `gaps` (`from_daa`, `to_daa`, `to_hash`, `at_unix`, `orders_closed`,
+`orders_adopted`), the status line carries a WARNING while the process runs, and the metrics have `kob_indexer_gaps_total`
+and `kob_indexer_gap_daa_total`. What was lost is what only the pruned chain could tell: an order created inside the
+skipped stretch and still open stays invisible until its maker imports it (7.5) or cancels it. A move the node cannot serve
+yet (not synced, no `--utxoindex`) is retried with a back-off and shows in `last_error`.
+
+The rest of this section is the manual runbook, for a store halted at the limit above, or when you want to choose the
+restart point yourself. Recovery, in order of preference:
 
 1. **Restore a newer backup** (database + record log from the standby or off-site copy). If the
    backup's cursor is still inside the node's retention the follower continues seamlessly.

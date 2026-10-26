@@ -89,6 +89,34 @@ pub struct HealthSnapshot {
     /// The fast start's backfill: the full store's progress (absent once the book is complete).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backfill: Option<Backfill>,
+    /// Stretches of chain this store skipped on purpose since the start, oldest first ([`SkippedGap`]): the node pruned the
+    /// history the store was following, so it continued from the node's pruning point. Empty (and absent here) when none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<SkippedGap>,
+}
+
+/// A stretch of chain the store skipped on purpose ([`super::recovery`]): the node pruned it before the store had read it.
+/// The orders the store already had were reconciled with the node's UTXO set (closed with reason `gap`, or adopted); an order
+/// created inside the stretch and still open is not in the store until its maker imports it (docs/ops/executor.md, 7.4/7.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SkippedGap {
+    /// DAA score of the cursor the store stood at, and of the node's pruning point it continued from.
+    pub from_daa: u64,
+    pub to_daa: u64,
+    /// The block the store continued from.
+    pub to_hash: Hash32,
+    /// Unix time of the move.
+    pub at_unix: u64,
+    /// What the reconciliation did to the tracked orders: outputs closed with reason `gap`, continuations adopted.
+    pub orders_closed: u64,
+    pub orders_adopted: u64,
+}
+
+impl SkippedGap {
+    /// The skipped chain in DAA.
+    pub fn daa(&self) -> u64 {
+        self.to_daa.saturating_sub(self.from_daa)
+    }
 }
 
 /// The backfill of a fast start: where the full store is on its way from the node's pruning point to the tip.
@@ -107,12 +135,22 @@ pub struct Backfill {
     pub eta_seconds: Option<u64>,
     /// Unix time the fast store started following (the orders it knows were seen since).
     pub tip_since_unix: u64,
+    /// Stretches of chain the full store skipped on purpose ([`SkippedGap`]: the node pruned the history it was following).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<SkippedGap>,
 }
 
 impl Backfill {
     /// The part of the status line about the fast start: what the executor trades on and when the full book is there.
     pub fn status_text(&self) -> String {
         let mut s = format!("fast start: trading on orders seen since {}", utc_clock(self.tip_since_unix));
+        if !self.gaps.is_empty() {
+            let skipped: u64 = self.gaps.iter().map(SkippedGap::daa).sum();
+            s.push_str(&format!(
+                " (the node pruned {} of the history before the full store read it: orders created in it are missing from the full book)",
+                human_secs(skipped / 10)
+            ));
+        }
         match (self.eta_seconds, self.lag_seconds) {
             (Some(eta), Some(lag)) => {
                 s.push_str(&format!("; full book in about {} ({} of history to index)", human_secs(eta), human_secs(lag)))
@@ -206,6 +244,7 @@ impl HealthSnapshot {
             lean_orders_pruned_total: 0,
             lean_rows_pruned_total: 0,
             backfill: None,
+            gaps: vec![],
         }
     }
 
@@ -265,6 +304,18 @@ impl HealthSnapshot {
                 self.lean_rows_pruned_total,
             );
         }
+        m(
+            "kob_indexer_gaps_total",
+            "counter",
+            "Stretches of chain skipped on purpose since the start (the node pruned the history the store was following).",
+            self.gaps.len() as u64,
+        );
+        m(
+            "kob_indexer_gap_daa_total",
+            "counter",
+            "DAA of chain skipped on purpose since the start (orders created in it are not in the store).",
+            self.gaps.iter().map(SkippedGap::daa).sum(),
+        );
         if let Some(b) = &self.backfill {
             m(
                 "kob_indexer_backfill_lag_daa",
@@ -448,6 +499,15 @@ impl HealthSnapshot {
                 s.push_str(&format!(" ({e})"));
             }
         }
+        if !self.gaps.is_empty() {
+            let skipped: u64 = self.gaps.iter().map(SkippedGap::daa).sum();
+            s.push_str(&format!(
+                " | WARNING: {} of chain was skipped ({} time{}): the node had pruned it; orders created in it are not in the store (docs/ops/executor.md, Part B 7.4)",
+                human_secs(skipped / 10),
+                self.gaps.len(),
+                if self.gaps.len() == 1 { "" } else { "s" }
+            ));
+        }
         s
     }
 
@@ -613,6 +673,7 @@ mod tests {
             rate_daa_per_sec: None,
             eta_seconds: eta,
             tip_since_unix: 1_790_000_000 + 14 * 3600 + 32 * 60,
+            gaps: vec![],
         };
         assert_eq!(utc_clock(14 * 3600 + 32 * 60 + 7), "14:32 UTC");
         assert_eq!(
