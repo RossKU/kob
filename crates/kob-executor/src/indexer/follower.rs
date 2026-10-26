@@ -22,6 +22,11 @@
 //! threshold, or the chain after the plan's tail is shorter than a first window, nothing more is planned, the windows
 //! already fetched are applied and the single steps follow the sink from there.
 
+/// What a gap reason says when the node pruned the history the cursor stood in (the start of a store that began at the
+/// node's pruning point, or a downtime): the fast start restarts its full store from the new pruning point on it
+/// ([`crate::faststart`]).
+pub const PRUNED_GAP: &str = "downtime exceeded";
+
 use super::ingest::{Cursor, Ingest, IngestError};
 use super::prefetch::{Head, Prefetch, PrefetchLimits};
 use super::status::{FollowerState, HealthState, IndexEvent};
@@ -716,7 +721,7 @@ impl<S: ChainSource> Follower<S> {
         match e.kind() {
             NodeErrorKind::UnknownHash => self.recover_unknown_cursor().await,
             NodeErrorKind::RetentionRootMissing => {
-                let msg = format!("downtime exceeded the node's retention: {e}");
+                let msg = format!("{PRUNED_GAP} the node's retention: {e}");
                 self.health.update(|h| {
                     h.state = FollowerState::Gap;
                     h.gap_reason = Some(msg.clone());
@@ -781,8 +786,7 @@ impl<S: ChainSource> Follower<S> {
                 Err(e) => StepOutcome::Retry(format!("rewind failed: {e}")),
             };
         }
-        let msg =
-            "the node does not know the cursor or any stored block: downtime exceeded pruning, or the node was reset".to_string();
+        let msg = format!("the node does not know the cursor or any stored block: {PRUNED_GAP} pruning, or the node was reset");
         self.health.update(|h| {
             h.state = FollowerState::Gap;
             h.gap_reason = Some(msg.clone());

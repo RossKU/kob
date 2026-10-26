@@ -379,3 +379,36 @@ fn only_an_enabled_first_start_at_the_pruning_point_is_a_fast_start() {
     cfg.fast_start = false;
     assert_eq!(faststart::plan(&cfg), Plan::Normal);
 }
+
+/// The node moves its pruning point past the full store's cursor before the store has applied anything (a live finding on
+/// testnet-10: a start at the pruning point is hit by the node pruning its oldest data): the full store restarts from the new
+/// pruning point instead of halting at a gap for good, and the fast start still hands over.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_full_store_whose_start_the_node_pruned_restarts_from_the_new_pruning_point() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    let w = World::new();
+    node.push_empty(6);
+    crossing_pair(&w, &node);
+    let cfg = config(dir.path(), &node, None);
+
+    let job = Job::start(&cfg, &node, false);
+    let tip_dir = faststart::tip_dir(&cfg);
+    // the full store has its cursor at the pruning point (the first block); then the node prunes up to the fourth block
+    until("the full store has its start", 30, || {
+        cfg.db_path().exists()
+            && kob_executor::indexer::db::open_reader(&cfg.db_path(), "testnet-10")
+                .ok()
+                .and_then(|c| kob_executor::indexer::db::meta_get(&c, "cursor_hash").ok().flatten())
+                .is_some()
+    })
+    .await;
+    node.set_retention_floor(3);
+    job.open.send(true).unwrap();
+    until("the tip store is deleted", 30, || !tip_dir.exists()).await;
+    until("a fill of the book, planned on the full store", 30, || job.exec.submitted() >= 1).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(job.exec.submitted(), 1, "one fill");
+    job.finish().await;
+    assert_eq!(faststart::plan(&cfg), Plan::Normal);
+}
