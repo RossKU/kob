@@ -32,6 +32,11 @@ async function connectKey(page: Page, key = SECRET): Promise<void> {
   await expect(f.getByTestId('signer-key')).toHaveAttribute('type', 'password');
   await expect(f.getByTestId('signer-key')).toHaveAttribute('autocomplete', 'off');
   await expect(f.getByTestId('signer-key')).toHaveAttribute('spellcheck', 'false');
+  // before anything is pasted: what the key is, what forgets it and which key to use
+  await expect(f.getByTestId('signer-guide')).toContainText('64 hexadecimal characters');
+  await expect(f.getByTestId('signer-guide')).toContainText('seed phrase');
+  await expect(f.getByTestId('signer-guide')).toContainText('Reloading or closing the page forgets it');
+  await expect(f.getByTestId('signer-guide')).toContainText('dedicated key with a small balance');
   await f.getByTestId('signer-key').fill(key);
   await f.getByTestId('signer-connect').click();
 }
@@ -236,6 +241,11 @@ test('a page that clips the frame down to its buttons gets no approval; shown wh
   await expect(approve).toBeVisible();
   await page.waitForTimeout(3000);
   await expect(approve).toBeDisabled();
+  // why it waits: a sentence a person can act on, the counts behind it small
+  const why = signer(page).getByTestId('signer-wait-why');
+  await expect(why).toContainText('Approve is locked until you have seen the whole request');
+  await expect(why).toContainText('Keep this window fully on screen');
+  await expect(signer(page).getByTestId('signer-wait-counts')).toContainText(/^Check: buttons .+, lines seen \d+\/\d+, covered parts/);
   expect(await mock.submitted(false)).toHaveLength(0);
   // the whole frame on screen: the summary is seen, then Approve works
   await page.evaluate(() => {
@@ -258,7 +268,32 @@ test('a browser without IntersectionObserver v2 (no isVisible on the entry) is n
   await expect(button).toBeVisible();
   await expect(button).toBeDisabled();
   await expect(button).toHaveAttribute('title', 'Not available in this browser. Use a browser extension wallet.');
+  // the reason is text on the page, not only a tooltip (there is none on a touch screen)
+  const why = page.getByTestId('wallet-key-unsupported');
+  await expect(why).toBeVisible();
+  await expect(why).toContainText('This browser cannot use the in-page private key signer');
+  await expect(why).toContainText('On a desktop, use an extension wallet (KasWare or Kaspire)');
   await expect(page.getByTestId('signer-frame')).toHaveCount(0);
+});
+
+test.describe('an iPhone (no IntersectionObserver v2, no extension wallets)', () => {
+  test.use({ viewport: { width: 390, height: 844 }, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1', walletId: null });
+  test('says plainly why the private key is off and no longer tells a phone to install an extension in this browser', async ({ appPage: page, mock }) => {
+    await page.addInitScript(() => {
+      delete (IntersectionObserverEntry.prototype as { isVisible?: boolean }).isVisible;
+    });
+    await openMarket(page, mock, { connect: false });
+    const why = page.getByTestId('wallet-key-unsupported');
+    await expect(why).toBeVisible();
+    await expect(why).toContainText('iOS browsers and Firefox lack the feature');
+    await expect(why).toContainText('Chrome on Android, or open this page on a desktop with an extension wallet (KasWare or Kaspire)');
+    await expect(page.getByTestId('wallet-connect-local-key')).toBeDisabled();
+    const hint = page.getByTestId('wallet-install-hint');
+    await expect(hint).toContainText('Extension wallets do not run in phone browsers');
+    await expect(hint).not.toContainText('Install');
+    await expect(hint.locator('a')).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
 });
 
 test('signer.html framed by a same-origin script without the sandbox attribute is still an opaque origin (header policy)', async ({ appPage: page, mock }) => {

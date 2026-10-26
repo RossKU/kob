@@ -3,6 +3,7 @@ import { useServices } from '../../app/context';
 import { t } from '../../i18n';
 import { visibilityCheckSupported } from '../../signer/seen';
 import { Badge, Button, CopyText } from '../kit';
+import { isPhoneBrowser } from './platform';
 
 /** The address in the chip as a wallet address reads: its network prefix, then the head and tail of the body ("kaspatest:qq776p…wutfav"). */
 export const chipAddress = (address: string): string => {
@@ -54,28 +55,45 @@ export function WalletButton() {
     );
   }
 
-  // the private key is typed into the sandboxed signer frame (SignerFrame.tsx), never into this page
+  // the private key is typed into the sandboxed signer frame (SignerFrame.tsx), never into this page. Where the browser cannot run its visibility
+  // check the option is disabled and says why in text (a tooltip does not exist on a touch screen)
+  const supported = visibilityCheckSupported();
+  const phone = isPhoneBrowser();
   const privateKey = (
-    <Button
-      small
-      variant="ghost"
-      data-testid="wallet-connect-local-key"
-      disabled={w.connecting || !visibilityCheckSupported()}
-      onClick={w.openPrivateKey}
-      title={visibilityCheckSupported() ? t('signer.recommend') : t('signer.unsupported')}
-    >
-      {t('signer.option')}
-    </Button>
+    <>
+      <Button
+        small
+        variant="ghost"
+        data-testid="wallet-connect-local-key"
+        disabled={w.connecting || !supported}
+        onClick={w.openPrivateKey}
+        title={supported ? t('signer.recommend') : t('signer.unsupported')}
+      >
+        {t('signer.option')}
+      </Button>
+      {supported ? null : (
+        <p class="small muted wallet-note" data-testid="wallet-key-unsupported">
+          {t(phone ? 'signer.unsupportedWhyPhone' : 'signer.unsupportedWhy')}
+        </p>
+      )}
+    </>
   );
 
   if (w.detected.length === 0) {
     return (
       <div class="row">
-        <div class="small muted" data-testid="wallet-install-hint" title={t('shell.wallet.none')}>
+        {/* a phone browser has no extension to install: the install links and "in this browser" would mislead */}
+        <div class="small muted" data-testid="wallet-install-hint" {...(phone ? {} : { title: t('shell.wallet.none') })}>
           <strong>{t('shell.wallet.noneTitle')}</strong>{' '}
-          <a href={KASWARE_URL} target="_blank" rel="noopener noreferrer">{t('shell.wallet.installKasware')}</a>
-          {' / '}
-          <a href={KASPIRE_URL} target="_blank" rel="noopener noreferrer">{t('shell.wallet.installKaspire')}</a>
+          {phone ? (
+            <span data-testid="wallet-install-phone">{t('shell.wallet.nonePhone')}</span>
+          ) : (
+            <>
+              <a href={KASWARE_URL} target="_blank" rel="noopener noreferrer">{t('shell.wallet.installKasware')}</a>
+              {' / '}
+              <a href={KASPIRE_URL} target="_blank" rel="noopener noreferrer">{t('shell.wallet.installKaspire')}</a>
+            </>
+          )}
         </div>
         {privateKey}
       </div>

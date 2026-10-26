@@ -92,13 +92,21 @@ function connectView(core: SignerCore): void {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') go();
   });
-  show(el('div', { class: 'row' }, input, button), error);
+  // what the key is, what forgets it and which key to use: said before the user pastes anything
+  const guide = el('ul', { class: 'guide muted', 'data-testid': 'signer-guide' }, el('li', {}, t('signer.guide.what')), el('li', {}, t('signer.guide.forget')), el('li', {}, t('signer.guide.small')));
+  show(el('div', { class: 'row' }, input, button), error, guide);
   input.focus();
 }
 
 function idleView(core: SignerCore): void {
   const pk = core.pubkey() ?? '';
   show(el('p', { class: 'muted', 'data-testid': 'signer-idle' }, t('signer.idle', { key: `${pk.slice(0, 8)}…${pk.slice(-8)}` })));
+}
+
+/** why Approve waits: a sentence a person can act on, and (small) the counts behind it for whoever is asked to report the problem */
+interface Why {
+  text: string;
+  counts: string;
 }
 
 /** a part counts as fully on screen from this intersection ratio (sub-pixel layout keeps some exact fits just below 1) */
@@ -109,22 +117,25 @@ const FULL = 0.98;
  * whether it is clipped. `onChange(true)` once every part of the summary has been fully visible for a moment and the buttons are now (seen.ts):
  * a page that clips the frame down to its buttons gets no approval.
  */
-function watchRequest(parts: Element[], buttons: Element, onChange: (ready: boolean) => void, onWhy?: (why: string) => void): () => void {
+function watchRequest(parts: Element[], buttons: Element, onChange: (ready: boolean) => void, onWhy?: (why: Why | null) => void): () => void {
   if (!visibilityCheckSupported()) {
     onChange(false); // no visibility check in this browser: never approvable (the app does not offer the private key here)
     return () => undefined;
   }
   // what the browser last reported per element, only to say why Approve waits (display only: the decision is the tracker's)
   const last = new Map<Element, { visible: boolean | undefined; ratio: number }>();
-  const why = (): string => {
+  const why = (): Why => {
     const b = last.get(buttons);
     const notSeen = parts.filter((p) => { const l = last.get(p); return !l || l.visible !== true || l.ratio < FULL; });
     const covered = parts.map((p, i) => (last.get(p)?.visible === false ? String(i + 1) : '')).filter(Boolean);
-    return t('signer.waitWhy', {
-      buttons: !b ? '-' : b.visible !== true ? 'covered' : b.ratio < FULL ? `cut off (${Math.round(b.ratio * 100)} %)` : 'ok',
-      lines: `${parts.length - notSeen.length}/${parts.length}`,
-      covered: covered.length ? `${covered.length} (${covered.join(', ')} of ${parts.length})` : '0',
-    });
+    return {
+      text: t('signer.waitWhy'),
+      counts: t('signer.waitCounts', {
+        buttons: !b ? '-' : b.visible !== true ? 'covered' : b.ratio < FULL ? `cut off (${Math.round(b.ratio * 100)} %)` : 'ok',
+        lines: `${parts.length - notSeen.length}/${parts.length}`,
+        covered: covered.length ? `${covered.length} (${covered.join(', ')} of ${parts.length})` : '0',
+      }),
+    };
   };
   const ids = new Map<Element, string>(parts.map((p, i) => [p, `part-${i}`]));
   const tracker = new SeenTracker([...ids.values()]);
@@ -148,7 +159,7 @@ function watchRequest(parts: Element[], buttons: Element, onChange: (ready: bool
   const timer = setInterval(() => {
     const ready = tracker.ready(now());
     onChange(ready);
-    onWhy?.(ready ? '' : why());
+    onWhy?.(ready ? null : why());
   }, 100);
   return () => {
     io.disconnect();
@@ -290,7 +301,9 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   const approve = el('button', { type: 'button', class: 'primary', disabled: '', 'data-testid': 'signer-approve' }, t('signer.approve'));
   const actions = el('div', { class: 'row end' }, reject, approve);
   // why Approve still waits, once it has waited a while (the visibility check: an overlay, a zoom or a cut-off frame keeps it disabled)
-  const waitWhy = el('p', { class: 'muted small', 'data-testid': 'signer-wait-why' }, '');
+  const waitText = el('p', { class: 'muted' }, '');
+  const waitCounts = el('p', { class: 'muted small', 'data-testid': 'signer-wait-counts' }, '');
+  const waitWhy = el('div', { 'data-testid': 'signer-wait-why' }, waitText, waitCounts);
   waitWhy.hidden = true;
   const shownAt = performance.now();
   const title = el('h1', { 'data-testid': 'signer-title' }, s.title);
@@ -333,11 +346,12 @@ function requestView(core: SignerCore, req: PendingRequest): void {
     (w) => {
       // once shown, the line keeps its place (only its visibility changes): a frame that shrank the moment Approve opens would move under the
       // pointer and be reported not visible again, so the click would land on a disabled button
-      const show = approve.disabled && performance.now() - shownAt > 3000 && w !== '';
+      const show = approve.disabled && performance.now() - shownAt > 3000 && w !== null;
       if (show) {
         waitWhy.hidden = false;
         waitWhy.style.visibility = 'visible';
-        if (waitWhy.textContent !== w) waitWhy.textContent = w;
+        if (waitText.textContent !== w.text) waitText.textContent = w.text;
+        if (waitCounts.textContent !== w.counts) waitCounts.textContent = w.counts;
       } else if (!waitWhy.hidden) waitWhy.style.visibility = 'hidden';
     },
   );

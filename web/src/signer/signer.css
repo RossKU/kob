@@ -54,5 +54,7 @@ button:disabled { color: var(--muted); background: var(--bg); border-color: var(
 /* a changed figure: a background flash, never an opacity (the visibility check counts opacity) */
 .changed { animation: flash 1.2s ease-out; }
 @keyframes flash { from { background: var(--flash); } to { background: transparent; } }
+.guide { margin: 8px 0 0; padding-left: 18px; font-size: 0.85em; }
+.small { font-size: 0.85em; }
 .updated { margin: 0 0 8px; font-weight: 600; color: var(--fg); background: var(--flash); padding: 4px 8px; border-radius: 6px; }
 .updated[hidden] { display: none; }

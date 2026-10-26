@@ -17,6 +17,7 @@ export default {
   'shell.wallet.connectedWith': 'Connected with {wallet}',
   'shell.wallet.noneTitle': 'No Kaspa wallet detected',
   'shell.wallet.none': 'Install KasWare or Kaspire in this browser. This page notices it by itself (extensions can take a few seconds to appear).',
+  'shell.wallet.nonePhone': 'Extension wallets do not run in phone browsers.',
   'shell.wallet.installKasware': 'Get KasWare',
   'shell.wallet.installKaspire': 'Get Kaspire',
   'shell.wallet.error': 'Wallet connection failed: {message}',
