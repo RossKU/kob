@@ -101,6 +101,7 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
         tokens_path,
         fast_start,
         lean,
+        log_file: None,
         launch,
     };
     let config = write_config(&opts.dir, &file)?;
@@ -113,6 +114,18 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
         "node": crate::rpc::redact_url(&url),
         "data_dir": opts.dir.join(&data_dir).to_string_lossy(),
     }))
+}
+
+/// The operator's address of the configuration at `cfg_path` (the key file is relative to the configuration's directory): what the
+/// start banner shows, so the funding address is never lost after the setup. `None`: an index-only configuration, or a key
+/// that cannot be read (the run itself reports that). Never the secret.
+pub fn operator_address(cfg_path: &Path) -> Option<String> {
+    let cfg = IndexerConfig::load(cfg_path).ok()?;
+    let key_file = cfg.launch.as_ref()?.key_file.clone()?;
+    let network = crate::config::resolve_network(Some(&cfg.network)).ok()?;
+    let dir = cfg_path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let path = if key_file.is_absolute() { key_file } else { dir.join(key_file) };
+    Some(HotKey::from_file(&path).ok()?.address(&network).to_string())
 }
 
 /// `kob-executor address-balance`.
@@ -275,8 +288,11 @@ mod tests {
         assert!(v["balance_sompi"].is_null() && v["error"].as_str().unwrap().contains("refused"), "{v}");
         let secret = std::fs::read_to_string(d.path().join(KEY_FILE)).unwrap();
         assert!(!v.to_string().contains(secret.trim()));
+        // the start banner's address is the same one
+        assert_eq!(operator_address(&d.path().join(CONFIG_FILE)).as_deref(), o["address"].as_str());
         // index only: no address
         setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Index, false)).unwrap();
+        assert_eq!(operator_address(&d.path().join(CONFIG_FILE)), None);
         assert!(address_balance(d.path(), &mut Fake(Ok(0))).unwrap_err().to_string().contains("no operator key"));
         // no configuration: an error, not a panic
         let e = tempfile::tempdir().unwrap();

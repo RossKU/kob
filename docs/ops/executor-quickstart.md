@@ -5,8 +5,8 @@ crossing orders and refunds expired ones, earning the spreads and the makers' ti
 *Economics*). This page takes you from the download to a running executor. The full operations guide is
 `docs/ops/executor.md`.
 
-The executor talks to nothing but the Kaspa node you point it at (your own, on the same machine by default). It sends no
-telemetry, charges no fee, does not update itself and connects to no server of the KOB project.
+The executor talks to nothing but the Kaspa node you point it at (public nodes found through the Kaspa resolvers by default,
+or your own). It sends no telemetry, charges no fee, does not update itself and connects to no server of the KOB project.
 
 ## 1. Download and check
 
@@ -90,7 +90,9 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
    `kob-operator.key` is offered again, never replaced.
 6. **Funding**: it prints the key's address. Send at least 100 KAS (200 recommended, as a few transfers of 10 KAS or more,
    so several transactions can go out in one tick). It shows the balance as it arrives; press Enter to go on without
-   waiting.
+   waiting. The address is not lost if you do: every start prints it (`Funding address ...` under the command line, and
+   `funding_address` in the first log line), the low-funds warning names it, and `kob-executor address-balance` prints it
+   with the balance (section 5).
 7. **x402 facilitator**: off by default (it needs its own configuration, `docs/ops/executor.md`, A.6).
 
 It then writes `kob-executor.toml` next to the program (plus `kob-tokens.json`, the supported token programs, on
@@ -125,8 +127,8 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
   (`/v1/health`: `book_complete: false`), then switches over by itself (`docs/ops/executor.md`, A.1.1). Without it (an older
   configuration, `fast_start = false`) the indexer first catches up with everything the node retains and the matcher and
   keepers plan nothing until it is close to the tip.
-* `WARNING:` names what needs you: the node not synced or unreachable, funds below 100 KAS (`--low-funds-kas`), the pause
-  file present, transactions the node rejected.
+* `WARNING:` names what needs you: the node not synced or unreachable, funds below 100 KAS (`--low-funds-kas`; the warning
+  names the address to send KAS to), the pause file present, transactions the node rejected.
 * The read API answers on `http://127.0.0.1:8090/v1/health` (loopback only).
 * For real monitoring use the metrics file (`--metrics-file`, `docs/ops/executor.md`, Part C *Monitoring*).
 
@@ -138,9 +140,36 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
   time to exit at once. The database survives either way; the next start continues where it stopped. A start after more
   than the node's retention (7 days with the flags above) continues from the node's pruning point on its own and says so
   (`gaps` in `/v1/health`, the log; `docs/ops/executor.md`, Part B 7.4).
-* **Withdraw**: stop the executor, then send the key's KAS elsewhere with `kob-cli` from the same folder:
-  `kob-cli send KAS <your address> <amount> --key-file kob-operator.key --network mainnet --node ws://127.0.0.1:18110`
-  (`kob-cli send --help`).
+* **Address and balance**: `kob-executor address-balance` (in the folder of `kob-executor.toml`, or with `--dir <folder>`)
+  prints one JSON object: the key's address, the network and its plain balance read from the configured node
+  (`balance_sompi`, `balance_kas`; when the node cannot be read, `balance_sompi` is `null` and `error` says why). It never
+  prints the secret and can run while the executor runs. Its sibling for scripts and the Android app is `kob-executor setup
+  --non-interactive --node resolver|<ws-url> --role match|index [--new-key] [--network mainnet|testnet-10] [--dir <folder>]`:
+  no questions, no start; it writes the same files as the dialogue (replacing the configuration, keeping an existing key
+  file), and prints one JSON object with the `address` (`null` for index only) and the paths. `--network` is only for a
+  development build; a deployment build knows its own and refuses another.
+* **Withdraw**: stop the executor first, then, from the same folder (or with `--dir <folder>`, or `--config <file>` for a
+  configuration elsewhere):
+
+  ```
+  kob-executor withdraw --to <address> --amount 25.5        # or --amount all
+  ```
+
+  It uses the executor's own node connection from `kob-executor.toml`, so it works with the default public nodes (wss,
+  through the resolvers) as well as with your own node, and needs no other tool. It lists the key's plain KAS coins at that
+  node and builds one payment from the largest coins first (at most 50 inputs). `--amount all` sends everything those coins
+  hold minus the fee; if more coins are left it says so, and you run it again once the first is accepted. It shows the
+  network, both addresses, the amount and the fee, and asks you to type `yes`; `--yes` skips the question (scripts), and
+  without `--yes` and without a terminal it refuses to send. `--dry-run` shows the payment and sends nothing; `--fee-rate`
+  (default 100, the relay floor) pays more per gram of mass. The address must belong to the binary's network (a mainnet
+  binary refuses a `kaspatest:` address, and the node must report the same network). **A running executor makes it
+  refuse**: the command takes the data directory's writer lock, the one `run` holds ("in use by another kob-executor
+  writer: stop it first"), so no matcher transaction is being built from the coins it spends and two withdrawals cannot
+  overlap. A transaction the executor sent just before it stopped may still be on its way: if the node says a coin is
+  already spent, nothing was lost, wait a minute and run it again. Only plain KAS moves; tokens the key holds stay where
+  they are. Afterwards `kob-executor address-balance` shows what is left, and the next start warns "funds low" until you fund
+  the key again. (`kob-cli send` also works, but only against your own node on `ws://`: it has no resolver or `wss`
+  support.)
 * If the start fails, the window stays open with the error until you press Enter.
 
 ## 6. Move to a service
@@ -158,7 +187,23 @@ of `docs/ops/executor.md`, Part B 4; `[launch] args` takes further options of th
 
 **Windows**: a Task Scheduler task "At startup" (run whether the user is logged on or not, as the account that owns the
 key file) with program `C:\kob\kob-executor.exe`, arguments `run --config kob-executor.toml --key-file kob-operator.key
---pause-file kob-data/pause` and *Start in* `C:\kob`. Set "If the task fails, restart every 1 minute".
+--pause-file kob-data/pause` and *Start in* `C:\kob`. Set "If the task fails, restart every 1 minute". A task has no
+console: its log is the file `kob-executor.log` the setup configured (see *Logs* below); read it with
+`Get-Content C:\kob\kob-executor.log -Tail 50 -Wait`. In a window you opened yourself, do not click inside the console
+while the executor runs: a mouse selection in the classic Windows console (Quick Edit mode) pauses the program's output
+and with it the executor until you press Enter or Esc. That freeze is standard Windows behaviour that we have not been able
+to reproduce on the executor, so treat it as a precaution (console window Properties, Options, untick *QuickEdit Mode*, if
+you keep a window open); a scheduled task has no console to click in.
+
+**Logs.** The log goes to the console. The interactive setup also writes `log_file = "kob-executor.log"` into
+`kob-executor.toml` (a path relative to that file; not for the index-only role, and not for the Android app's
+non-interactive setup), and any start can set one with `--log-file <path>` (or `KOB_LOG_FILE`) or `log_file` in the
+configuration. With a log file the console still shows the log while it is a terminal (a double click) and shows nothing
+when it is not (a task, a service, a redirect): the file is then the log. The file is rotated by size: at `log_max_mb`
+(`--log-max-mb`, default 10) it becomes `<file>.1`, the older ones move up to `.2`, ..., and the one past `log_files`
+(`--log-files`, default 5; 0: start over) is deleted, so the log never takes more than (`log_files` + 1) x `log_max_mb` MB.
+ANSI colour codes are written only to a console that is a terminal (and not when `NO_COLOR` is set); the file never has
+them. `RUST_LOG` (default `info`) sets the detail. Under systemd the journal already keeps the log (`journalctl -u kob -f`).
 
 **Linux (systemd)**: copy the folder to `/opt/kob`, then
 

@@ -313,6 +313,14 @@ pub struct IndexerConfig {
     /// Lag alarm thresholds in hours (reported by /health and logged).
     pub lag_alarm_hours: Vec<u64>,
     pub tokens_path: Option<PathBuf>,
+    /// Write the log to this file (a relative path is taken from the configuration's directory); the console shows the log too
+    /// while it is a terminal. Rotated by size (`log_max_mb`, `log_files`). Absent: the console only (`crate::logging`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_file: Option<PathBuf>,
+    /// The log file is rotated (`<file>.1`, `<file>.2`, ...) when it reaches this many MB. Default 10; 0: never.
+    pub log_max_mb: u64,
+    /// Rotated log files kept (the oldest is deleted). Default 5; 0: the file starts over when it is full.
+    pub log_files: usize,
     pub rules: ListingRules,
     #[serde(alias = "rawlog")]
     pub records: RecordsConfig,
@@ -359,6 +367,9 @@ impl Default for IndexerConfig {
             daa_per_second: 10,
             lag_alarm_hours: vec![1, 6, 12, 24],
             tokens_path: None,
+            log_file: None,
+            log_max_mb: 10,
+            log_files: 5,
             rules: ListingRules::default(),
             records: RecordsConfig::default(),
             api: ApiConfig::default(),

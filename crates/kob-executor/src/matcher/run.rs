@@ -1353,7 +1353,12 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     // whole balance: coins pending transactions hold are still the operator's (a busy operator's free
                     // coins are often a few KAS while its balance is large)
                     if let Some(f) = r.funding_total.filter(|f| *f < self.cfg.low_funds && !self.cfg.dry_run) {
-                        tracing::warn!(funding = f, spendable = r.funding.unwrap_or(0), "operator funds are low");
+                        tracing::warn!(
+                            funding = f,
+                            spendable = r.funding.unwrap_or(0),
+                            address = %crate::matcher::wallet::address_of(&self.signer.pubkey(), &self.cfg.network),
+                            "operator funds are low: send KAS to the address"
+                        );
                     }
                 }
                 Err(e) => tracing::warn!(error = %e, "tick failed"),
@@ -1382,6 +1387,8 @@ pub struct StatusFacts {
     pub rejected: u64,
     pub funding_total: Option<u64>,
     pub low_funds: u64,
+    /// The operator's address, named in the low-funds warning (where to send KAS).
+    pub funding_address: Option<String>,
     pub dry_run: bool,
     /// The last tick failed (the node unreachable, the network wrong): why.
     pub tick_error: Option<String>,
@@ -1404,6 +1411,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             rejected: t.rejected,
             funding_total: rep.funding_total.or(self.last_funding_total),
             low_funds: self.cfg.low_funds,
+            funding_address: Some(crate::matcher::wallet::address_of(&self.signer.pubkey(), &self.cfg.network).to_string()),
             dry_run: self.cfg.dry_run,
             tick_error: None,
         }
@@ -1457,7 +1465,8 @@ pub fn status_line(f: &StatusFacts) -> String {
         warn.push("the book lags the node: nothing is planned".to_string());
     }
     if let Some(t) = f.funding_total.filter(|t| *t < f.low_funds && !f.dry_run) {
-        warn.push(format!("funds low ({} KAS, below {} KAS)", kas_text(t as i64), kas_text(f.low_funds as i64)));
+        let to = f.funding_address.as_ref().map(|a| format!("; send KAS to {a}")).unwrap_or_default();
+        warn.push(format!("funds low ({} KAS, below {} KAS{to})", kas_text(t as i64), kas_text(f.low_funds as i64)));
     }
     if f.rejected > 0 {
         warn.push(format!("{} transactions rejected by the node (see the log)", f.rejected));
@@ -1650,6 +1659,10 @@ mod tests {
             ),
             "{s}"
         );
+        // with the address known, the warning says where to send KAS
+        f.funding_address = Some("kaspa:qqexample".into());
+        assert!(status_line(&f).contains("funds low (50 KAS, below 100 KAS; send KAS to kaspa:qqexample)"));
+        f.funding_address = None;
         f.funding_total = None;
         f.synced = false;
         let s = status_line(&f);

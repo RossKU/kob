@@ -83,8 +83,9 @@ scripts/build-deploy.sh testnet-10 --check
 scripts/build-deploy.sh mainnet --check
 cargo run --locked -p kob-cli -- registry verify-genesis --network mainnet
 
-# binaries: the deployment build records mainnet, refuses any other --network, and embeds the pinned registry
-cargo build --release --locked -p kob-executor -p kob-cli --features deploy-mainnet
+# binaries: the deployment build records mainnet, refuses any other --network, and embeds the pinned registry;
+# KOB_GIT_COMMIT (optional) is the commit /v1/health reports as `commit` (section 7); it is the only thing it changes
+KOB_GIT_COMMIT=$(git rev-parse HEAD) cargo build --release --locked -p kob-executor -p kob-cli --features deploy-mainnet
 
 # web app (static; network-independent bundle whose default network is mainnet; build:release ships the
 # pinned registry/tokens.json as dist/registry/tokens.json, the bundle itself embeds no registry hash)
@@ -171,9 +172,18 @@ would list none of the orders the new wallets place.
 1. Operators upgrade their **executors / indexers** first. A database schema change says in the release notes whether
    the database is brought up to date in place or rebuilt with `kob-executor index replay` (`docs/ops/executor.md` 7.6).
    Check `GET /v1/health` and that a placement made with `kob-cli` is listed.
+   `GET /v1/health` reports the build that answers: `version` (the crate version, the tag without the `v`), `commit` (the git
+   commit of the build, `null` when the build did not say) and `payload_version` (the `KOB1` payload version it reads and
+   writes). Compare them with the release: `curl -s https://<indexer>/v1/health | jq '{version, commit, payload_version}'`.
+   The release workflow (`.github/workflows/release.yml`) and the `Dockerfile` (`--build-arg KOB_GIT_COMMIT=...`) set
+   `KOB_GIT_COMMIT` to the tagged commit; a plain `cargo build` leaves `commit` null. The value is read with `option_env!`
+   at compile time: there is no build script, no `git` call and no timestamp, so the same source, toolchain and
+   `KOB_GIT_COMMIT` give the same binary bytes (a build with another commit differs in that string only; to compare a
+   rebuild with a published binary, set the same value).
 2. Then the **web app** and other wallets (`kob-cli`, bots) are published with the new builders.
 3. Announce the order in the release notes; a host serving the web app should point it only at indexers
-   that report the release version.
+   whose `/v1/health` reports the release `version` (and, for a payload version change, a `payload_version` at least the
+   new one).
 
 The record log keeps every payload as it was, so a rebuilt database replays the old ones unchanged; a rollback of the
 wallets is safe, a rollback of an indexer below the payload version in use is not.

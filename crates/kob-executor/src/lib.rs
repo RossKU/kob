@@ -11,6 +11,7 @@ pub mod hex;
 pub mod index_cli;
 pub mod indexer;
 pub mod keepers;
+pub mod logging;
 pub mod maintenance;
 pub mod matcher;
 pub mod model;
@@ -24,5 +25,7 @@ pub mod shutdown;
 #[doc(hidden)]
 pub mod testkit;
 pub mod tokens;
+pub mod version;
 pub mod wire;
+pub mod withdraw;
 pub mod x402;

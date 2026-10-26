@@ -103,6 +103,11 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
         o.insert("alarms".into(), json!(alarms));
         o.insert("settle_depth_daa".into(), json!(app.state.settle_depth_daa));
         o.insert("counters".into(), json!(counters));
+        // which build answers: the crate version, the commit it was built from (null when the build did not say), and the KOB1
+        // payload version it reads and writes (docs/ops/release.md, 7)
+        if let Some(b) = crate::version::health_fields().as_object() {
+            o.extend(b.clone());
+        }
     }
     json_ok(v)
 }

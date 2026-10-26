@@ -30,6 +30,8 @@ use crate::matcher::wallet::HotKey;
 pub const CONFIG_FILE: &str = "kob-executor.toml";
 /// The operator key file the setup generates, next to the configuration.
 pub const KEY_FILE: &str = "kob-operator.key";
+/// The log file the interactive setup configures, relative to the configuration.
+pub const LOG_FILE: &str = "kob-executor.log";
 /// The default data directory (database and record log), relative to the configuration.
 pub const DATA_DIR: &str = "kob-data";
 /// The token-program list a build without a pinned registry gets (testnet-10, [`program_registry`]).
@@ -199,6 +201,11 @@ pub struct SetupFile {
     /// `lean = true` for the matcher role: the store keeps the live book, not the history (`crate::indexer::lean`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lean: Option<bool>,
+    /// `log_file` for the matcher role: the console shows the log while it is a terminal (a double click), and a scheduled task or
+    /// service, which has no console, finds it in the file (rotated by size, `crate::logging`). Absent for the index role and
+    /// for the wrapper's non-interactive setup (the Android app reads the process's output).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_file: Option<String>,
     pub launch: LaunchConfig,
 }
 
@@ -206,6 +213,11 @@ impl SetupFile {
     /// The `lean` key a setup writes for `role`.
     pub fn lean_for(role: LaunchRole) -> Option<bool> {
         (role == LaunchRole::Run).then_some(true)
+    }
+
+    /// The `log_file` key the interactive setup writes for `role`.
+    pub fn log_file_for(role: LaunchRole) -> Option<String> {
+        (role == LaunchRole::Run).then(|| LOG_FILE.to_string())
     }
 
     /// The `fast_start` key a setup writes for `role`.
@@ -612,7 +624,8 @@ pub fn run_setup(io: &mut dyn Console, node: &mut dyn SetupNode, opts: &SetupOpt
 
     let fast_start = SetupFile::fast_start_for(launch.role);
     let lean = SetupFile::lean_for(launch.role);
-    let file = SetupFile { network: network.clone(), rpc_url: url, data_dir, tokens_path, fast_start, lean, launch };
+    let log_file = SetupFile::log_file_for(launch.role);
+    let file = SetupFile { network: network.clone(), rpc_url: url, data_dir, tokens_path, fast_start, lean, log_file, launch };
     let config_path = write_config(&opts.dir, &file)?;
     let l = launch_args(&config_path)?;
     io.say("");
@@ -899,6 +912,7 @@ mod tests {
             tokens_path: Some(TOKENS_FILE.into()),
             fast_start: SetupFile::fast_start_for(LaunchRole::Run),
             lean: SetupFile::lean_for(LaunchRole::Run),
+            log_file: SetupFile::log_file_for(LaunchRole::Run),
             launch: LaunchConfig {
                 role: LaunchRole::Run,
                 key_file: Some(KEY_FILE.into()),
@@ -916,6 +930,9 @@ mod tests {
         // a matcher's configuration trades within seconds of the first start; an index-only one has no use for it
         assert!(c.fast_start && SetupFile::fast_start_for(LaunchRole::Index).is_none());
         assert!(c.lean && SetupFile::lean_for(LaunchRole::Index).is_none());
+        // a matcher keeps a rotated log file next to the configuration (a scheduled task has no console); index only does not
+        assert_eq!(c.log_file, Some(PathBuf::from(LOG_FILE)));
+        assert!((c.log_max_mb, c.log_files) == (10, 5) && SetupFile::log_file_for(LaunchRole::Index).is_none());
         assert_eq!(c.launch.as_ref(), Some(&f.launch));
         let l = launch_args(&p).unwrap();
         assert_eq!(l.dir, d.path());

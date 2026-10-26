@@ -7,7 +7,8 @@
 //!   an indexer exports (`--book-file`), for deployments that keep the key away from the public API;
 //! * `x402`: the x402 facilitator alone (keyless; finality from the node's UTXO set);
 //! * `setup`: the interactive first run (`kob_executor::setup`), which writes `kob-executor.toml` next to the binary;
-//!   `setup --non-interactive` and `address-balance` are its JSON forms for a wrapper (the Android app, `kob_executor::app`).
+//!   `setup --non-interactive` and `address-balance` are its JSON forms for a wrapper (the Android app, `kob_executor::app`);
+//! * `withdraw`: sends KAS out of the operator key over the configured node, the public resolver pair included (`kob_executor::withdraw`).
 //!
 //! Without arguments (a double click) the binary runs `kob-executor.toml` from its own directory, or the setup when there is
 //! none (docs/ops/executor-quickstart.md).
@@ -23,10 +24,11 @@ use kob_executor::app::{self, AddressBalanceArgs, AppSetup};
 use kob_executor::config::LaunchRole;
 use kob_executor::executor::{self, RunArgs};
 use kob_executor::index_cli::{run_index, IndexArgs};
+use kob_executor::logging::{self, LogOptions};
 use kob_executor::matcher::cli::{run_keep, run_match, KeepArgs, MatchArgs};
 use kob_executor::setup::{self, NoArgs, SetupArgs, SetupOptions, StdConsole, WrpcSetupNode};
+use kob_executor::withdraw::{self, WithdrawArgs};
 use kob_executor::x402::{self, X402Args};
-use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(
@@ -36,6 +38,16 @@ use tracing_subscriber::EnvFilter;
     after_help = "Without arguments: runs kob-executor.toml from the executable's directory ($KOB_EXECUTOR_DIR when set), or the setup when there is none."
 )]
 struct Cli {
+    /// Write the log to this file (rotated by size) instead of only the console; the console also shows it while it is a
+    /// terminal. `log_file` of the configuration does the same.
+    #[arg(long, global = true, env = "KOB_LOG_FILE", value_name = "PATH")]
+    log_file: Option<std::path::PathBuf>,
+    /// Rotate the log file at this many MB (default 10, or `log_max_mb` of the configuration; 0: never).
+    #[arg(long, global = true, value_name = "MB")]
+    log_max_mb: Option<u64>,
+    /// Rotated log files kept (default 5, or `log_files` of the configuration; 0: the file starts over when it is full).
+    #[arg(long, global = true, value_name = "N")]
+    log_files: Option<usize>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -57,6 +69,8 @@ enum Cmd {
     Setup(SetupArgs),
     /// The operator's address and its plain balance from the configured node, as one JSON object (never the secret).
     AddressBalance(AddressBalanceArgs),
+    /// Send KAS out of the operator key over the configured node (the public resolver pair included). Stop the executor first.
+    Withdraw(WithdrawArgs),
 }
 
 fn main() -> ExitCode {
@@ -93,7 +107,10 @@ fn start_on(rt: &tokio::runtime::Runtime, argv: Vec<OsString>) -> anyhow::Result
         let cli = Cli::parse_from(argv);
         // the JSON commands keep stdout for their one object: the log goes to stderr
         let json_out = matches!(&cli.cmd, Cmd::AddressBalance(_) | Cmd::Setup(SetupArgs { non_interactive: true, .. }));
-        init_tracing(json_out);
+        logging::init(json_out);
+        if !json_out {
+            attach_log(&cli)?;
+        }
         match &cli.cmd {
             Cmd::Setup(a) => {
                 let dir = match &a.dir {
@@ -113,11 +130,12 @@ fn start_on(rt: &tokio::runtime::Runtime, argv: Vec<OsString>) -> anyhow::Result
                 println!("{}", app::address_balance_live(&dir, rt)?);
                 return Ok(());
             }
+            Cmd::Withdraw(a) => return withdraw_cmd(rt, a),
             _ => {}
         }
         return rt.block_on(dispatch(cli.cmd));
     }
-    init_tracing(false);
+    logging::init(false);
     let dir = setup::home_dir()?;
     match setup::no_args_start(&dir, std::io::stdin().is_terminal()) {
         NoArgs::Launch(cfg) => launch(rt, program, &cfg),
@@ -130,16 +148,6 @@ fn start_on(rt: &tokio::runtime::Runtime, argv: Vec<OsString>) -> anyhow::Result
     }
 }
 
-fn init_tracing(to_stderr: bool) {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let b = tracing_subscriber::fmt().with_env_filter(filter);
-    if to_stderr {
-        b.with_writer(std::io::stderr).init();
-    } else {
-        b.init();
-    }
-}
-
 /// `setup --non-interactive`: the files, and one JSON object on stdout.
 fn setup_json(dir: std::path::PathBuf, a: &SetupArgs) -> anyhow::Result<()> {
     let (Some(node), Some(role)) = (a.node.clone(), a.role) else {
@@ -148,6 +156,22 @@ fn setup_json(dir: std::path::PathBuf, a: &SetupArgs) -> anyhow::Result<()> {
     let opts = SetupOptions::for_build(dir);
     let ask = AppSetup { node, role, new_key: a.new_key, network: a.network.clone() };
     println!("{}", app::setup_non_interactive(&opts, &ask)?);
+    Ok(())
+}
+
+/// `withdraw`: the withdrawal over the configured node, the confirmation on the terminal.
+fn withdraw_cmd(rt: &tokio::runtime::Runtime, a: &WithdrawArgs) -> anyhow::Result<()> {
+    let (cfg, base) = withdraw::config_location(a)?;
+    let req = withdraw::Request {
+        to: a.to.clone(),
+        amount: withdraw::parse_amount(&a.amount)?,
+        key_file: a.key_file.clone(),
+        fee_rate: a.fee_rate,
+        yes: a.yes,
+        interactive: std::io::stdin().is_terminal(),
+        dry_run: a.dry_run,
+    };
+    withdraw::withdraw(&cfg, &base, &req, &mut withdraw::WrpcWithdrawNode::new(rt), &mut StdConsole)?;
     Ok(())
 }
 
@@ -180,6 +204,9 @@ fn launch(rt: &tokio::runtime::Runtime, program: OsString, cfg: &std::path::Path
         }
         LaunchRole::Index => println!("Index only: the indexer and its read API, no key."),
     }
+    if let Some(a) = app::operator_address(cfg) {
+        println!("Funding address (send KAS here; `{} address-balance` shows it and its balance): {a}", setup::program_path());
+    }
     if let Some(a) = l.api {
         println!("Read API: http://{a}/v1/health");
     }
@@ -188,7 +215,38 @@ fn launch(rt: &tokio::runtime::Runtime, program: OsString, cfg: &std::path::Path
     std::env::set_current_dir(&l.dir).map_err(|e| anyhow::anyhow!("cannot change to {}: {e}", l.dir.display()))?;
     let cli = Cli::try_parse_from(std::iter::once(program).chain(l.args.into_iter().map(OsString::from)))
         .map_err(|e| anyhow::anyhow!("the [launch] table of {} is not a valid command line:\n{e}", cfg.display()))?;
+    attach_log(&cli)?;
     rt.block_on(dispatch(cli.cmd))
+}
+
+/// The configuration file a command reads (`--config`), if it takes one.
+fn config_of(cmd: &Cmd) -> Option<&std::path::Path> {
+    match cmd {
+        Cmd::Run(a) => a.index.config.as_deref(),
+        Cmd::Index(a) => a.opts.config.as_deref(),
+        _ => None,
+    }
+}
+
+/// The log file of the command line (`--log-file`) or of the configuration (`log_file`, relative to the configuration's
+/// directory), attached to the log with the rotation settings; the console says so when it still shows the log.
+fn attach_log(cli: &Cli) -> anyhow::Result<()> {
+    let cfg_path = config_of(&cli.cmd);
+    let cfg = cfg_path.and_then(|p| kob_executor::config::IndexerConfig::load(p).ok());
+    let base = cfg_path.and_then(|p| p.parent()).filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    let file = match (&cli.log_file, cfg.as_ref().and_then(|c| c.log_file.as_ref())) {
+        (Some(f), _) => f.clone(),
+        (None, Some(f)) => logging::resolve(base, f),
+        (None, None) => return Ok(()),
+    };
+    let max_mb = cli.log_max_mb.or(cfg.as_ref().map(|c| c.log_max_mb)).unwrap_or(10);
+    let keep = cli.log_files.or(cfg.as_ref().map(|c| c.log_files)).unwrap_or(5);
+    logging::attach_file(LogOptions::new(file.clone(), max_mb, keep))
+        .map_err(|e| anyhow::anyhow!("cannot open the log file {}: {e}", file.display()))?;
+    if logging::console_shows_log() {
+        println!("Log file: {} (a new file at {max_mb} MB, {keep} old ones kept)", file.display());
+    }
+    Ok(())
 }
 
 async fn dispatch(cmd: Cmd) -> anyhow::Result<()> {
@@ -198,6 +256,6 @@ async fn dispatch(cmd: Cmd) -> anyhow::Result<()> {
         Cmd::Match(a) => run_match(a).await,
         Cmd::Keep(a) => run_keep(a).await,
         Cmd::X402(a) => x402::run(a).await,
-        Cmd::Setup(_) | Cmd::AddressBalance(_) => anyhow::bail!("setup runs before the runtime"),
+        Cmd::Setup(_) | Cmd::AddressBalance(_) | Cmd::Withdraw(_) => anyhow::bail!("this command runs before the runtime"),
     }
 }

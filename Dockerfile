@@ -16,6 +16,8 @@ ARG NETWORK=mainnet
 
 FROM rust:1.94.0-slim-trixie AS build
 ARG NETWORK
+# the commit the image is built from, reported by /v1/health (docs/ops/release.md, 7): --build-arg KOB_GIT_COMMIT=$(git rev-parse HEAD)
+ARG KOB_GIT_COMMIT=
 # the image's toolchain is the one rust-toolchain.toml pins; this keeps rustup from fetching the file's wasm target and
 # components, which the executor does not need
 ENV RUSTUP_TOOLCHAIN=1.94.0 CARGO_INCREMENTAL=0

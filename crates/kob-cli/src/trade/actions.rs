@@ -22,6 +22,7 @@ use super::plan::{
 use super::show::Units;
 use super::units::{self, parse_kas, parse_kas_price, parse_token_amount, TokenUnit};
 use crate::common::Signer;
+pub use kob_protocol::payment::kas_payment;
 
 const ONE_KAS: u64 = 100_000_000;
 /// Headroom added to a reported shortfall when a funding UTXO is picked.
@@ -1103,115 +1104,6 @@ USAGE
   outputs: the recipient and your change), taking the fewest of your token UTXOs; KAS for the carrier and the fee
   come from your KAS UTXOs, largest first.
 ";
-
-/// A plain KAS payment from P2PK coins of `me` (a version-1 transaction, the builders' P2PK inputs): the payment and
-/// the change back to `me` (no change when it would be dust); the fee is the relay floor at the requested rate.
-pub fn kas_payment(
-    coins: &[KeyUtxo],
-    amount: u64,
-    to: &kaspa_consensus_core::tx::ScriptPublicKey,
-    me: &[u8; 32],
-    fee: &FeeOptions,
-) -> Result<BuiltTx, String> {
-    use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
-    use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutput, UtxoEntry};
-    use kob_protocol::tx::{masses, sighash, target_fee, FeeReport, SigPlan, SignRequest, TxJson, DUST_OUTPUT_MIN, MIN_FEE_RATE};
-    let rate = fee.fee_rate.unwrap_or(MIN_FEE_RATE);
-    let budget = kob_protocol::budget::lookup("p2pk").map_err(|e| e.to_string())?;
-    let total: u64 = coins.iter().map(|k| k.utxo.amount).sum();
-    let mine = p2pk_spk(me);
-    let entries: Vec<UtxoEntry> =
-        coins.iter().map(|k| UtxoEntry::new(k.utxo.amount, p2pk_spk(&k.pubkey), k.utxo.block_daa_score, false, None)).collect();
-    let placeholder = {
-        let mut v = vec![0x41u8];
-        v.extend([0u8; 65]);
-        v
-    };
-    let tx_of = |outs: Vec<TransactionOutput>, sig: &[u8]| {
-        let ins = coins
-            .iter()
-            .map(|k| {
-                TransactionInput::new_with_compute_budget(k.utxo.outpoint(), sig.to_vec(), kob_protocol::tx::SEQUENCE_NONFINAL, budget)
-            })
-            .collect();
-        let tx = Transaction::new(1, ins, outs, 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
-        let m = masses(&tx, &entries);
-        tx.set_storage_mass(m.storage);
-        tx
-    };
-    let pay = TransactionOutput::new(amount, to.clone());
-    // with change: the fee is a fixed point (the change's value does not change the relay floor)
-    let mut chosen: Option<(Vec<TransactionOutput>, u64, Option<u32>)> = None;
-    let mut f = 0u64;
-    // whether what is left over is too small to be its own output (only then may it go to the fee)
-    let mut change_is_dust = false;
-    for _ in 0..16 {
-        let Some(change) = total.checked_sub(amount).and_then(|x| x.checked_sub(f)) else {
-            change_is_dust = true;
-            break;
-        };
-        if change < DUST_OUTPUT_MIN {
-            change_is_dust = true;
-            break;
-        }
-        let outs = vec![pay.clone(), TransactionOutput::new(change, mine.clone())];
-        let t = tx_of(outs.clone(), &placeholder);
-        let need = target_fee(&masses(&t, &entries), rate, fee.fee_mode);
-        if need <= f {
-            if masses(&t, &entries).within_block_limits() {
-                chosen = Some((outs, f, Some(1)));
-            }
-            break;
-        }
-        f = need;
-    }
-    if chosen.is_none() {
-        let outs = vec![pay.clone()];
-        let t = tx_of(outs.clone(), &placeholder);
-        let need = target_fee(&masses(&t, &entries), rate, fee.fee_mode);
-        if total < amount.saturating_add(need) {
-            return Err(format!("insufficient funds: need {} sompi, have {total} sompi", amount.saturating_add(need)));
-        }
-        // a change that is not dust but did not fit (the transaction with it exceeds a block mass limit, e.g. the KIP-9
-        // storage mass of a payment just above the dust bound plus the change) is never paid to the network as fee
-        let surplus = total - amount - need;
-        if !change_is_dust && surplus >= DUST_OUTPUT_MIN {
-            return Err(format!(
-                "the change of {surplus} sompi does not fit as its own output (the transaction with it exceeds a block mass \
-                 limit) and would otherwise be paid as network fee: send a larger amount"
-            ));
-        }
-        chosen = Some((outs, total - amount, None));
-    }
-    let (outs, paid, change_output) = chosen.expect("set above");
-    let sized = tx_of(outs.clone(), &placeholder);
-    let report = masses(&sized, &entries);
-    let tx = tx_of(outs, &[]);
-    let sign = (0..coins.len())
-        .map(|i| SignRequest {
-            input_index: i,
-            pubkey: coins[i].pubkey,
-            sighash_type: 1,
-            sighash: sighash(&tx, &entries, i),
-            redeem_script: None,
-        })
-        .collect();
-    Ok(BuiltTx {
-        tx: TxJson::from_tx(&tx, &entries),
-        plans: coins.iter().map(|k| SigPlan::P2pk { pubkey: k.pubkey }).collect(),
-        roles: coins.iter().map(|_| "p2pk".to_string()).collect(),
-        sign,
-        fee: FeeReport {
-            fee: paid,
-            min_fee: target_fee(&report, rate, fee.fee_mode),
-            fee_rate: rate,
-            fee_mode: fee.fee_mode,
-            mass: report,
-            change_output,
-        },
-        covenants: vec![],
-    })
-}
 
 /// A recipient: its script and, for a P2PK one, its x-only key.
 pub fn recipient(to: &str, network: &str) -> Result<(kaspa_consensus_core::tx::ScriptPublicKey, Option<[u8; 32]>), String> {

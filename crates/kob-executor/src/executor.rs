@@ -531,6 +531,7 @@ pub async fn run(a: RunArgs) -> Result<()> {
         rpc = %crate::rpc::redact_url(cfg.primary_url()),
         data = %cfg.data_dir.display(),
         operator = %kob_protocol::json::to_hex(&signer.pubkey()),
+        funding_address = %signer.address(&cfg.network),
         matcher = run_cfg.roles.matcher,
         keeper = run_cfg.roles.keeper,
         dry_run = run_cfg.dry_run,

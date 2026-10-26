@@ -200,6 +200,10 @@ async fn health_and_ready() {
     assert_eq!(v["counters"]["orders_total"], 7);
     assert_eq!(v["counters"]["orders_by_status"]["open"], 5);
     assert_eq!(v["counters"]["last_block_seq"], 9);
+    // the build that answers: the crate version, its commit when the build set one, the KOB1 payload version it handles
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(v["commit"].as_str(), option_env!("KOB_GIT_COMMIT").map(str::trim).filter(|c| !c.is_empty()));
+    assert_eq!(v["payload_version"], kob_protocol::payload::PAYLOAD_VERSION);
     let (s, v) = get(&app, "/v1/health/ready").await;
     assert_eq!((s, &v["ready"]), (StatusCode::OK, &Value::Bool(true)));
 
@@ -662,7 +666,10 @@ async fn websocket_end_to_end() {
         let f = next_json(&mut ws).await;
         seen.push(f["type"].as_str().unwrap().to_string());
         if f["type"] == "fill" {
-            assert_eq!(f["data"]["amount"], 2000);
+            // the quantities of a fill are decimal strings, as in REST
+            assert_eq!(f["data"]["amount"], "2000");
+            assert_eq!(f["data"]["price"], "250000");
+            assert!(f["data"]["payout"].is_null());
             assert_eq!(f["channel"], "fills");
         }
     }

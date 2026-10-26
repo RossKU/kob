@@ -93,6 +93,8 @@ jobs:
         env:
           NETWORK: ${{ matrix.network }}
           TARGET: ${{ matrix.platform.target }}
+          # the commit /v1/health reports (docs/ops/release.md, 7); read at compile time, not a build input otherwise
+          KOB_GIT_COMMIT: ${{ github.sha }}
         run: |
           case "$NETWORK" in
             mainnet) f=deploy-mainnet ;;

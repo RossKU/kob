@@ -247,6 +247,7 @@ matcher and keeper options (C, "Running"):
 |---|---|---|
 | `--key-file` | `$KOB_OPERATOR_KEY_FILE` | operator key file (C, "Keys and funds") |
 | `--status-secs` | 60 | log a one-line status (indexer lag, transactions, profit, funds, warnings) this often; 0 = never (also on `index`) |
+| `--log-file`, `--log-max-mb`, `--log-files` | none (console only), 10, 5 | every command: also write the log to this file (`log_file`, `log_max_mb`, `log_files` of the configuration; `$KOB_LOG_FILE`), rotated by size to `<file>.1`, `.2`, ... keeping that many; the console shows the log only while it is a terminal, and ANSI colour codes only there (never in the file, never with `NO_COLOR`). Quick start, *Logs* |
 | `--no-match`, `--no-keep` | off | switch a role off (not both: that is `index`) |
 | `--max-book-lag-daa` | `max_lag_secs` x 10 (300) | plan nothing while the book is this far behind the node; 0 = never wait |
 | `--tick-ms`, `--fee-rate`, `--dry-run`, `--pause-file`, `--metrics-file`, `--low-funds-kas` | as C | |
@@ -259,6 +260,12 @@ matcher and keeper options (C, "Running"):
 | `--keeper-subsidy-max-kas`, `--keeper-replace-after-daa`, `--keeper-max-replacements` | 0.05, 100, 3 | keepers' liveness under fee pressure (C, "Fee policy"): the most KAS of its own funding the operator adds to one kill or refund its tip cannot pay at its urgency's rate (0: off); replace a stuck kill or refund of this process after this many DAA, at most this many times (0: never). Also on `keep` and `match --keep` |
 | `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` | 1, 36000, 8 | the operator's total keeper subsidy: at most this many KAS within any rolling window of this many DAA (36,000 = one hour), replacements included, and at most this many subsidised kills and refunds per tick; past either, jobs go at the rate their own tip pays (budget 0 or max jobs 0: no subsidy). Also on `keep` and `match --keep` |
 | `--no-weighted-select`, `--select-alpha`, `--select-max-defer-daa`, `--select-min-share`, `--select-seed` | on, 1, 30, 0.1, OS randomness | the weighted selection among competing executors (C, "Competing executors"; `docs/spec/matcher.md` §3.6): off plans deterministically; the weight exponent; the starvation bound in DAA; the lowest share of the optional work per tick; a fixed seed for a reproducible run. Also on `match` and `keep` |
+
+Next to `run`: `kob-executor address-balance [--dir D]` (the key's address and plain balance as one JSON object, from the configured
+node; never the secret), `kob-executor setup --non-interactive --node resolver|URL --role match|index [--new-key]` (the setup's files and one
+JSON object, for scripts and the Android app) and `kob-executor withdraw --to ADDRESS --amount KAS|all [--yes] [--dry-run]` (KAS out of the
+operator key over the configured node, public resolver pair included; it takes the data directory's writer lock, so it refuses while the
+executor runs; Quick start, section 5).
 
 `index` (with `replay`, `export-orders`, `export-book`, `import-orders`, `rebase`), `match` and `keep` stay as
 standalone modes. The database and the record log are the same files in every mode; never run two
@@ -1198,6 +1205,9 @@ reorg_window_hours = 12          # chain-block rows older than this are deleted 
 checkpoint_secs = 3600           # log an otherwise empty batch when the cursor moved this far
 declaration_window_hours = 72    # a KCC-23 preparation no genesis spent is kept this long (docs/spec/token-metadata.md)
 tokens_path = "/etc/kob/tokens.json"
+log_file = "/var/log/kob/executor.log"  # also write the log here (relative: from this file's directory); absent: console only
+log_max_mb = 10                  # rotate the log file at this size (0: never)
+log_files = 5                    # rotated files kept (0: start over when full)
 
 [rules]                          # listing policy
 require_allowlist = true
@@ -1291,7 +1301,7 @@ should default to settled. The mempool tier is not served by the indexer.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /v1/health` | full status: follower state, cursor, node DAA, lag (`lag_daa`, `lag_seconds`), `alarms` for the 1/6/12/24 h thresholds, reorg and applied-block counters, record-log position (`records_next_n`) |
+| `GET /v1/health` | full status: the build (`version`: the crate version; `commit`: the git commit it was built from, `null` when the build did not set `KOB_GIT_COMMIT`; `payload_version`: the `KOB1` payload version it reads and writes; `docs/ops/release.md`, 7), follower state, cursor, node DAA, lag (`lag_daa`, `lag_seconds`), `alarms` for the 1/6/12/24 h thresholds, reorg and applied-block counters, record-log position (`records_next_n`) |
 | `GET /v1/health/ready` | 200 only when following or catching up with lag below the smallest alarm threshold (load balancers) |
 | `GET /v1/tokens` | registry tokens plus, with a program allowlist loaded, every token of a supported program that an order placement named (listed or not; at most 5000 rows): `ticker` (empty without a registry entry), `covenant_id`, `template_hash`, `template_id`, `extension_commitment` (without an entry: the one commitment the token's order placements named, the all-zero one of the standard class included; null when they named several, or none: a pair placement whose state does not carry a token's commitment names none for it), `family`, `decimals`, `scale` (the standard scale `10^decimals`, at most `10^9`; null without an entry: clients take it from the token's orders, and the first order names it), `market_scale` (without an entry: the scale of the token's earliest order, open or ended: listed orders first among its oldest 1000; the first order set it and it stays the market's, so a client prices new orders at it and refuses decimals of another scale; null with an entry and before any order), `genesis_verified` (registry fact, `null` when it does not say), `warnings` (derived from facts: `genesis_unverified`, `live_mint_authority`), `registry` (`source`, `sha256` of the document loaded), `powers` (program capabilities: `freeze`, `seize`, `blacklist`, `mint-authority`, ...), `open_asks`, `open_bids`, `declaration` (`true` when the indexer holds a verified KCC-23 declaration for the covenant id, served by the next endpoint; absent otherwise) |
 | `GET /v1/tokens/{covenant_id}/declaration` | the token's KCC-23 metadata declaration as a launch proof (`kob_protocol::kcc23::LaunchProof`): `{"format": "kob-kcc23-proof/1", "covenantId", "preparation", "genesis"}`, each transaction in the fields its version 1 id commits to (`version`, `inputs` [`transactionId`, `index`, `sequence`], `outputs` [`value`, `scriptPublicKey` {`version`, `script`}, `covenant` {`authorizingInput`, `covenantId`} or null], `lockTime`, `subnetworkId`, `gas`, `payload`; bytes as hex, 64-bit numbers as decimal strings). The preparation's payload is `0x00` and the declaration JSON. The indexer keeps a proof only after `LaunchProof::verify` accepted it (both transaction ids and the covenant id recomputed) and a client verifies it again: an indexer can withhold a declaration, never forge one. It captures a preparation accepted with the standard version 1, lock time 0, native subnetwork and gas 0 (the fields a `High` answer leaves out) whose genesis is accepted within `declaration_window_hours` (72) of it. `404 not_found` when it holds none, `400 bad_request` for an id that is not 32 bytes of hex; one primary-key lookup on the light lane, rate cost 1 |
@@ -1303,7 +1313,7 @@ should default to settled. The mempool tier is not served by the indexer.
 | `GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=` | pair candles derived from the KAS series of A and of B (never from pair fills; section 5.4) |
 | `GET /v1/pairs/{base}/{quote}/fills?limit=&before=` | pair-order fills (volume, `counterparty`, `price_source: none`) and the 24 h pair volume (section 5.4) |
 | `GET /v1/orders/{covenant_id}` | order terms, status, current outpoint and decoded `state`, `auction`, `quote`, `kill_daa`, `refund_due_daa`, `deadline`, `repeat`, `custody`, `strays`, parent/children, `warnings` (`genesis_unverified` unless every token it trades is `genesis_verified`, `live_mint_authority` when a genesis record of one lists a live minter, as on `GET /v1/tokens`); pair orders add `pair` (5.4) |
-| `GET /v1/orders?maker=&token=&status=&limit=&cursor=` | orders of a maker or token (a pair order is listed under both its tokens), keyset paging |
+| `GET /v1/orders?maker=&token=&status=&limit=&cursor=` | orders of a maker or token (a pair order is listed under both its tokens), newest first, keyset paging; every filter is optional (no filter lists all orders, 50 per page by default) |
 | `GET /v1/orders/{covenant_id}/events` | lifecycle events: `create`, `fill`, `arm`, `trail`, `rearm`, `cancel`, `refund`, `kill`, `unknown`; `arm`, `trail` and the `fill` of a triggered stop carry `detail.evidence` (`input`, `order`: the evidence order's covenant id, `side` 1 ask / 2 bid, `price`: its quote) |
 | `GET /v1/fills?token=&side=&limit=&before=` | recent fills |
 | `GET /v1/strays?maker=&limit=` | live stray token UTXOs with the order they are stuck on |
@@ -1327,7 +1337,7 @@ pair order's price is token B base units per whole A). Amounts are decimal strin
 | order `repeat` | `rpt_amount`, `rearm_amount`, `rpt_price` |
 | order `state` | the contract's field names (`scale`, `minFill`, `amountLeft`, `tip`, `maxFill`, `minTouch`, `rptAmount`, `rptPrice`, `prefund`, `price`, `priceEnd`, ...) |
 | event (`/v1/orders/{id}/events`, `/v1/fills`) | `amount`; an amend's `detail.previous.tip` |
-| WebSocket `fills` notice | `amount` (number, base units) |
+| WebSocket `fills` notice | `price`, `amount`, `payout` (decimal strings, like REST; `price` and `payout` are `null` when there is none; `side` and `daa` are numbers). Breaking change on testnet-10: earlier builds sent JSON numbers, which lose precision above 2^53 (supplies reach 2.9e18); a consumer reads strings (`BigInt(x)`) |
 | trades, candles, stats, depth | `price_basis` = the token's standard scale (sompi per whole token), `decimals` |
 | `unlisted_reason` | `non_standard_scale`, `order_value_below_minimum` (among others) |
 
@@ -1550,6 +1560,7 @@ history:
 | books, depth, the stats' best bid / ask and open counts, the `/v1/tokens` counts, pair books, `/v1/pairs`, the matcher's and keepers' book | `order_state_status` (`open`, `partial`: an order has a current UTXO exactly then), joined to the orders (`reads::LIVE_FROM`: `order_state` first, `CROSS JOIN` keeps that order) | the live orders |
 | `/v1/orders?token=` | `orders_token_genesis` and `orders_quote_genesis` in `(genesis_block, covenant_id)` order, merged (a pair order is listed under both its tokens) | the page |
 | `/v1/orders?maker=` | `orders_maker_genesis` | the page |
+| `/v1/orders` with no filter (newest first, the default ordering; `limit` 50, at most `max_page_size`) | `orders_genesis_page` `(genesis_block, covenant_id)`: the index is the whole sort order, so a page is read in order and stops at its end, however many orders share a genesis block (with the plain `(genesis_block)` index of earlier builds SQLite sorted every order of the newest block: 504 after 10 s on a 770,000-order store when most of them shared one block) | the page |
 | `/v1/orders` with `status=active`, `open`, `partial` (or any status few orders have: `n² <= (limit + 1) × orders`) | the orders of that status, sorted | the live orders |
 | the open part of `/v1/tokens` | `orders_listed_tokens`, one seek per distinct (token, program, family) of the listed orders | the tokens |
 | `/v1/token-utxos` (`spent=false`) | `token_holdings_live_owner` / `token_holdings_live_token` (indexes of the unspent rows only) | the page |
