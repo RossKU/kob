@@ -299,20 +299,7 @@ pub fn node_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
     Arc::new(MultiNode::new(nodes, verifier))
 }
 
-pub async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-        if let Ok(mut term) = signal(SignalKind::terminate()) {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = term.recv() => {}
-            }
-            return;
-        }
-    }
-    let _ = tokio::signal::ctrl_c().await;
-}
+pub use crate::shutdown::shutdown_signal;
 
 /// Runs the indexer command.
 pub async fn run_index(a: IndexArgs) -> Result<()> {
@@ -320,6 +307,8 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
     match a.sub.unwrap_or(IndexSub::Run) {
         IndexSub::Run => {
             tracing::info!(network = %cfg.network, rpc = %redact_url(cfg.primary_url()), data = %cfg.data_dir.display(), "starting indexer");
+            // listening before the slow part: a Ctrl+C while the store opens is not lost
+            let shutdown = shutdown_signal();
             let idx = Indexer::open(cfg)?;
             let status = a.opts.status_every().map(|every| {
                 let health = idx.health.clone();
@@ -332,7 +321,7 @@ pub async fn run_index(a: IndexArgs) -> Result<()> {
                     }
                 })
             });
-            let r = idx.run(shutdown_signal()).await;
+            let r = idx.run(shutdown).await;
             if let Some(s) = status {
                 s.abort();
             }

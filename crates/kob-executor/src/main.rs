@@ -80,6 +80,14 @@ fn main() -> ExitCode {
 
 fn start(argv: Vec<OsString>) -> anyhow::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let res = start_on(&rt, argv);
+    // dropping the runtime waits for every blocking call still running (a database read, a lookup at a resolver): a stop does
+    // not wait for them past this
+    rt.shutdown_timeout(std::time::Duration::from_secs(3));
+    res
+}
+
+fn start_on(rt: &tokio::runtime::Runtime, argv: Vec<OsString>) -> anyhow::Result<()> {
     let program = argv.first().cloned().unwrap_or_else(|| "kob-executor".into());
     if argv.len() > 1 {
         let cli = Cli::parse_from(argv);
@@ -95,14 +103,14 @@ fn start(argv: Vec<OsString>) -> anyhow::Result<()> {
                 if a.non_interactive {
                     return setup_json(dir, a);
                 }
-                return setup_then_launch(&rt, program, dir, a.no_start);
+                return setup_then_launch(rt, program, dir, a.no_start);
             }
             Cmd::AddressBalance(a) => {
                 let dir = match &a.dir {
                     Some(d) => d.clone(),
                     None => setup::home_dir()?,
                 };
-                println!("{}", app::address_balance_live(&dir, &rt)?);
+                println!("{}", app::address_balance_live(&dir, rt)?);
                 return Ok(());
             }
             _ => {}
@@ -112,11 +120,11 @@ fn start(argv: Vec<OsString>) -> anyhow::Result<()> {
     init_tracing(false);
     let dir = setup::home_dir()?;
     match setup::no_args_start(&dir, std::io::stdin().is_terminal()) {
-        NoArgs::Launch(cfg) => launch(&rt, program, &cfg),
+        NoArgs::Launch(cfg) => launch(rt, program, &cfg),
         NoArgs::Setup => {
             println!("No {} in {}: starting the setup.", setup::CONFIG_FILE, dir.display());
             println!();
-            setup_then_launch(&rt, program, dir, false)
+            setup_then_launch(rt, program, dir, false)
         }
         NoArgs::Refuse(why) => anyhow::bail!(why),
     }

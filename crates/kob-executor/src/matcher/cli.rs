@@ -15,6 +15,7 @@ use super::node::{WrpcConfig, WrpcNode};
 use super::run::{read_snapshot, FileSource, Roles, RunConfig, Runner};
 use super::wallet::{HotKey, Signer};
 use crate::keepers::KeeperConfig;
+use crate::shutdown::shutdown_signal;
 
 /// Options shared by `match` and `keep`.
 #[derive(Args, Debug, Clone)]
@@ -232,10 +233,6 @@ fn offline(book: &MemoryBook, engine: &EngineConfig, signer: &dyn Signer) -> any
         eprintln!("skipped {}: {why}", kob_protocol::json::to_hex(&k.token));
     }
     Ok(())
-}
-
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
 }
 
 /// `kob-executor match`.

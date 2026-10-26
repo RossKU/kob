@@ -133,9 +133,11 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
 ## 5. Pause and stop
 
 * **Pause trading** without stopping the indexer: create the file `kob-data/pause` (any content); delete it to resume.
-* **Stop**: Ctrl+C in the window (or close it). The database survives; the next start continues where it stopped. A
-  start after more than the node's retention (7 days with the flags above) needs the gap runbook
-  (`docs/ops/executor.md`, Part B 7.4).
+* **Stop**: Ctrl+C in the window (or close it; `SIGTERM` / `docker stop` / `systemctl stop` do the same). The executor
+  stops within a few seconds even when the node does not answer, flushes the database and exits; press Ctrl+C a second
+  time to exit at once. The database survives either way; the next start continues where it stopped. A start after more
+  than the node's retention (7 days with the flags above) continues from the node's pruning point on its own and says so
+  (`gaps` in `/v1/health`, the log; `docs/ops/executor.md`, Part B 7.4).
 * **Withdraw**: stop the executor, then send the key's KAS elsewhere with `kob-cli` from the same folder:
   `kob-cli send KAS <your address> <amount> --key-file kob-operator.key --network mainnet --node ws://127.0.0.1:18110`
   (`kob-cli send --help`).

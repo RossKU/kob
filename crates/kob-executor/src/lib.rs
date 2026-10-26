@@ -20,6 +20,7 @@ pub mod rpc;
 pub mod sanity;
 pub mod script;
 pub mod setup;
+pub mod shutdown;
 #[doc(hidden)]
 pub mod testkit;
 pub mod tokens;

@@ -404,6 +404,7 @@ where
         }
     }
     running.stop().await;
+    indexer.flush().await;
     res
 }
 
@@ -502,6 +503,8 @@ pub async fn run(a: RunArgs) -> Result<()> {
     a.liveness.apply(&mut KeeperConfig::default()).map_err(anyhow::Error::msg)?;
     a.select.config().map_err(anyhow::Error::msg)?;
     let cfg = build_config(&a.index)?;
+    // listening before the slow part (opening the store, the first calls to the node): a Ctrl+C there is not lost
+    let shutdown = shutdown_signal();
     let signer = HotKey::load(a.key_file.as_deref())?;
     let mut run_cfg = a.run_config(&cfg.network);
     if let Some(path) = &a.inventory_policy {
@@ -547,7 +550,7 @@ pub async fn run(a: RunArgs) -> Result<()> {
         let full_chain = node_client(&cfg);
         let tip_chain = node_client(&crate::faststart::tip_config(&cfg));
         let node = multi_submit(&cfg, &full_chain);
-        return crate::faststart::run_with(cfg, fast, full_chain, tip_chain, node, Box::new(signer), run_cfg, shutdown_signal()).await;
+        return crate::faststart::run_with(cfg, fast, full_chain, tip_chain, node, Box::new(signer), run_cfg, shutdown).await;
     }
     let indexer = Indexer::open(cfg.clone()).map_err(|e: IndexerError| anyhow::anyhow!(e))?;
     let x402 = match &a.x402_config {
@@ -563,5 +566,5 @@ pub async fn run(a: RunArgs) -> Result<()> {
     };
     let chain = node_client(&cfg);
     let node = multi_submit(&cfg, &chain);
-    run_with_x402(indexer, chain, node, Box::new(signer), run_cfg, x402, shutdown_signal()).await
+    run_with_x402(indexer, chain, node, Box::new(signer), run_cfg, x402, shutdown).await
 }

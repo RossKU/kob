@@ -818,7 +818,12 @@ impl<S: ChainSource> Follower<S> {
             if *shutdown.borrow() {
                 break;
             }
-            let outcome = self.step().await;
+            // a step waits on the node (a window can take minutes to arrive): the stop does not wait for it. Dropping a step
+            // loses nothing: its commit is one blocking task that runs to its end, and the next start resumes at the cursor
+            let outcome = tokio::select! {
+                o = self.step() => o,
+                _ = async { let _ = shutdown.wait_for(|s| *s).await; } => break,
+            };
             self.lean_tick().await;
             let delay = match &outcome {
                 StepOutcome::Applied { more: true, .. } | StepOutcome::Rewound { .. } => {

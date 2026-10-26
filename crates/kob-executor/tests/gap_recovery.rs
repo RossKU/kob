@@ -99,6 +99,7 @@ async fn a_store_whose_cursor_the_node_pruned_follows_from_the_new_pruning_point
         })
         .await;
         running.stop().await;
+        idx.flush().await;
         idx.health.snapshot().cursor_daa
     };
     assert_eq!(status(&cfg, &cov1).as_deref(), Some("open"));

@@ -93,6 +93,9 @@ pub trait BookSource: Send {
     }
 }
 
+/// How long the step in flight may go on once the runner was asked to stop ([`Runner::run`]).
+pub const STEP_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// DAA scores (10 per second) an order whose planning panicked, or that the builder refused on its own, stays out of the
 /// book: one hour.
 pub const QUARANTINE_DAA: u64 = 36_000;
@@ -1301,13 +1304,24 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
     }
 
-    /// Runs until `shutdown` resolves.
+    /// Runs until `shutdown` resolves. A step in flight when it does (a request to a node that does not answer can take its
+    /// whole timeout) gets [`STEP_GRACE`] to end, for a transaction being submitted, and is dropped after that.
     pub async fn run(&mut self, shutdown: impl std::future::Future<Output = ()>) -> anyhow::Result<()> {
         tokio::pin!(shutdown);
         // the first status line comes after the first tick, then one every `status_every`
         let mut status_at: Option<std::time::Instant> = None;
         loop {
-            let res = self.step().await;
+            let res = {
+                let step = self.step();
+                tokio::pin!(step);
+                tokio::select! {
+                    r = &mut step => r,
+                    _ = &mut shutdown => {
+                        let _ = tokio::time::timeout(STEP_GRACE, &mut step).await;
+                        return Ok(());
+                    }
+                }
+            };
             if let Some(every) = self.cfg.status_every {
                 if status_at.is_none_or(|t| t.elapsed() >= every) {
                     let rep = res.as_ref().cloned().unwrap_or_else(|_| self.last.clone());

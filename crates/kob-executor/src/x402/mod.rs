@@ -263,11 +263,12 @@ pub async fn serve_service(svc: Service, listener: tokio::net::TcpListener, shut
 pub async fn run(a: X402Args) -> anyhow::Result<()> {
     let go = async {
         let cfg = a.config()?;
+        let shutdown = crate::index_cli::shutdown_signal();
         let built = cfg.build().map_err(|e| e.to_string())?;
         let chain = tokio::task::block_in_place(|| node_chain(&cfg, &built))?;
         let svc = tokio::task::block_in_place(|| prepare(built, Arc::new(chain)))?;
         let listener = svc.bind().await?;
-        serve_service(svc, listener, crate::index_cli::shutdown_signal()).await
+        serve_service(svc, listener, shutdown).await
     };
     go.await.map_err(|e: String| anyhow::anyhow!("x402: {e}"))
 }

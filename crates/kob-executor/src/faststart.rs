@@ -324,10 +324,15 @@ async fn coordinate(s: Stores, handover: oneshot::Receiver<()>, mut stop: watch:
     }
     tip_run.stop().await;
     let tip_dir = tip.cfg.data_dir.clone();
+    if !switched {
+        // it stays for the next start
+        tip.flush().await;
+    }
     drop(tip);
     if !switched {
         // stopped by the shutdown before the switch: the tip store stays for the next start to resume
         full_run.stop().await;
+        full.flush().await;
         return;
     }
     remove_dir(&tip_dir).await;
@@ -348,6 +353,7 @@ async fn coordinate(s: Stores, handover: oneshot::Receiver<()>, mut stop: watch:
         a.stop().await;
     }
     full_run.stop().await;
+    full.flush().await;
 }
 
 fn publish_progress(s: &Stores, pace: &mut BackfillPace, started: std::time::Instant) {

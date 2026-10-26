@@ -214,7 +214,26 @@ impl Indexer {
         shutdown.await;
         tracing::info!("shutting down");
         running.stop().await;
+        self.flush().await;
         Ok(())
+    }
+
+    /// At a clean stop, after the follower and the API are stopped: write the write-ahead log into the database file and cut
+    /// it back, so that the file alone is the whole store (a kill leaves the log for the next open to replay, which is safe
+    /// too). Bounded: a reader that holds the log open must not hold the stop.
+    pub async fn flush(&self) {
+        let ingest = self.ingest.clone();
+        let task = tokio::task::spawn_blocking(move || {
+            let g = ingest.lock().unwrap_or_else(|e| e.into_inner());
+            g.conn().query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        });
+        match tokio::time::timeout(std::time::Duration::from_secs(3), task).await {
+            Ok(Ok(Ok(()))) => tracing::info!(file = %self.cfg.db_path().display(), "database flushed"),
+            Ok(Ok(Err(e))) => {
+                tracing::warn!(error = %e, "the database could not be flushed at the stop (the next start replays its log)")
+            }
+            _ => tracing::warn!("the database was not flushed within 3 s of the stop (the next start replays its log)"),
+        }
     }
 
     /// Start the follower and (when enabled) the API server on the current runtime. The indexer
