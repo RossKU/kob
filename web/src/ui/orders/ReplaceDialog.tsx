@@ -55,7 +55,7 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
   // a pair order re-plans against the pair environment (both tokens, the pair book); a KAS order against its token's market
   const kasEnv = useTicketEnv(token, !quote);
   const pairEnv = usePairTicketEnv(token, quote ?? token, !!quote);
-  const { env: rawEnv, error: envError, refresh } = quote ? pairEnv : kasEnv;
+  const { env: rawEnv, error: envError, errorSource: envSource, refresh } = quote ? pairEnv : kasEnv;
   const rateMilli = rawEnv?.clock.rateMilli;
   // the replaced order quotes per its own scale (base units per whole token; a pair order: per whole A): the form reads and writes its prices in it
   const scale = scaleOf(state);
@@ -175,7 +175,7 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
       )}
       {envError ? (
         <Banner tone="error" data-testid="replace-env-error">
-          {t('ticket.need.env')}
+          {t(`ticket.need.env.${envSource ?? 'other'}`)}
           <RawDetails text={envError} />
         </Banner>
       ) : null}

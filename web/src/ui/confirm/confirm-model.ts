@@ -6,7 +6,7 @@
 // All amounts arrive as bigint and are formatted exactly (units.ts).
 import type { SigningKind, SigningSummary, LockedKas, TokenRef } from '../../kob/decode';
 import type { WalletNotice } from '../../kob/decode';
-import { daaToUnix, formatJst, formatUtc } from '../../kob/daa';
+import { daaToUnix, formatLocal, formatUtc } from '../../kob/daa';
 import { UNLIMITED_REPEAT_COUNT } from '../../kob/orders/cond-common';
 import { stopWorstPrice } from '../../kob/orders/cond-legs';
 import { baseKind, isMultiFillMarket, type OrderDescription } from '../../kob/order-facts';
@@ -458,7 +458,7 @@ function timingRows(d: OrderDescription, extra: { value: bigint | null; deadline
   }
   if (extra.deadline !== null) {
     const at = extra.deadline;
-    rows.push(row('deadline', tr('confirm.f.dayDeadline'), `${formatUtc(at)} / ${formatJst(at)}`, 'warn'));
+    rows.push(row('deadline', tr('confirm.f.dayDeadline'), `${formatUtc(at)} / ${formatLocal(at)}`, 'warn'));
   } else if (d.expiryDaa > 0n) {
     // an if-done exit's GTC expiry (`GTC_EXIT_EXPIRY_DAA`, 2^62: 90 days idle from the exit's creation) or one years ahead of the clock. Without
     // a clock (the signer frame, the app before its clock loads) only the sentinel range is told apart: today's DAA scores are above

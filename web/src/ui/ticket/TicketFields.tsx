@@ -3,6 +3,7 @@ import { Fragment, type ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { has, t } from '../../i18n';
 import { formatUnits, safeRounding } from '../../kob/units';
+import { formatLocalTime, nextUtcMidnight } from '../../kob/daa';
 import { kasWords, tokenWords } from '../../signer/words';
 import { invertedToNativePriceText, nativeToInvertedPriceText } from '../market/orientation';
 import { Checkbox, Field, FieldShell, Segmented } from '../kit';
@@ -114,7 +115,7 @@ export function TicketFields(props: TicketFieldsProps) {
         // an inverted market has its own wording where the native help speaks of buying / selling the token
         // a market order's Fills box has its own help on either view (it speaks of transactions, not of a limit's escrow)
         const helpKey = id === 'maxFills' && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
-        const help = has(helpKey) ? t(helpKey, { ticker, quote: props.quoteTicker ?? 'KAS' }) : undefined;
+        const help = has(helpKey) ? t(helpKey, { ticker, quote: props.quoteTicker ?? 'KAS', local: formatLocalTime(nextUtcMidnight(Date.now())) }) : undefined;
         const phKey = has(`ticket.ph.${id}.${form.type}`) ? `ticket.ph.${id}.${form.type}` : `ticket.ph.${id}`;
         // a token without decimals takes whole numbers: its amount box says "0", not "0.0"
         const wholeAmount = spec.kind === 'amount' && !form.kas && ctx.decimals === 0 && phKey === 'ticket.ph.amount';

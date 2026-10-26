@@ -60,7 +60,7 @@ export const ISSUE_CATALOG = {
   MARKET_REFERENCE_SOURCE: e('info', 'Market reference: {reference:kas} per token from the indexer order book. The order can fill at {worst:kas} per token at worst.'),
   MARKET_START_VS_INDEXER: e('error', 'The order book price ({start:kas} per token) is {percent}% {direction} the best price another indexer reports ({reference:kas}, {other}): the book is not checked against the node, so nothing can be sent at this start.'),
   MARKET_REFERENCE_INDEXER_UNAVAILABLE: e('warning', 'A further indexer configured to check prices did not answer ({others}): the auction start is checked without it.'),
-  STOP_EVIDENCE_GENESIS_UNVERIFIED: e('warning', 'The genesis of {token} was not verified, so units of it may have been minted outside its program. Such units cost their holder nothing: trades of them, at any price the holder chooses, can arm or trail this stop and make it sell or buy in the market. Use stops on this token only if you accept that risk.'),
+  STOP_EVIDENCE_GENESIS_UNVERIFIED: e('warning', 'The genesis of {token} was not verified: units minted outside its program may exist, and trades of them could arm or trail this stop.'),
   SELF_TRADE: e('error', 'This order would trade against your own resting order {ownCovenantId}. Cancel it first or change the price.'),
   FOK_INSUFFICIENT_DEPTH: e('error', 'Fill-or-kill needs {amount} but only {available} cross at your price: it could not fill.'),
   FOK_TOO_MANY_COUNTERPARTIES: e('error', 'Filling in one transaction would need {count} counterparties, more than the token allows ({max}): use IOC or a smaller size.'),
@@ -71,7 +71,7 @@ export const ISSUE_CATALOG = {
   INSUFFICIENT_KAS: e('error', 'Not enough KAS: this order needs {needed:kas}, your spendable balance is {have:kas} (short by {shortfall:kas}).'),
   INSUFFICIENT_TOKENS: e('error', 'Not enough tokens: this order needs {needed}, you hold {have} (short by {shortfall}).'),
   TOKEN_UTXOS_FRAGMENTED: e('error', 'Your tokens are spread over too many UTXOs: one transaction can spend at most {max}. Merge them first (My orders, Balances: Merge).'),
-  FUNDING_FRAGMENTED: e('error', 'Your KAS is spread over too many UTXOs: one transaction can spend at most {max}. Consolidate them first.'),
+  FUNDING_FRAGMENTED: e('error', 'Your KAS is spread over too many UTXOs: one transaction can spend at most {max}. KOB cannot merge KAS: send your KAS to your own address from your wallet to merge it, or place a smaller order.'),
   CLOSE_NOTHING_TO_SELL: e('error', 'You hold none of this token: there is nothing to close.'),
   CARRIER_BELOW_FLOOR: e('error', 'The KAS carrier ({carrier:kas}) is below {floor:kas}, the least this token output can carry (the floor of the token program or the dust bound of the network).'),
   // ---- building

@@ -29,6 +29,9 @@
 .tk-issues ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .tk-issue { padding: 6px 10px; border-radius: var(--radius-sm); border-left: 4px solid var(--info); background: var(--info-bg); }
 .tk-issue-error { border-left-color: var(--bad); background: var(--bad-bg); font-weight: 600; }
+/* the planner's warnings, one line each next to the button: they never stop the order */
+.tk-cautions { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.tk-caution { padding: 4px 10px; border-radius: var(--radius-sm); border-left: 4px solid var(--warn); background: var(--surface-2); font-size: 0.9rem; overflow-wrap: anywhere; }
 
 .tk-disclosure { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--surface-2); }
 .tk-summary { font-weight: 700; margin: 0 0 6px; }

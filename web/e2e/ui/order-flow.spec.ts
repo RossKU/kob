@@ -7,7 +7,7 @@
 import type { Page } from '@playwright/test';
 import { expect, test, type MockWalletHandle } from '../fixtures';
 import { fund, mockClock, openMarket } from '../helpers/env';
-import { clickPlace, expectStopped, expectWalletSigned, fillFields, pickType, placedBy, readSendStatus, waitSubmitted } from '../helpers/ticket';
+import { clickPlace, expectStopped, expectWalletSigned, fillFields, pickType, placedBy, readSendStatus, settlePlan, waitSubmitted } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -272,5 +272,65 @@ test.describe('the book moves between the ticket and the click', () => {
     const stopped = await expectStopped(page, 'blocked', { code: 'terms' });
     expect(stopped.text).toMatch(/moved past the price you set/);
     expect(await wallet!.calls()).toHaveLength(0);
+  });
+});
+
+test.describe('the planner\'s warnings are one-line notes next to the button: they never stop the order', () => {
+  test('a price far through the market: a note shows, the button stays enabled, and the order goes through with one click', async ({ appPage: page, mock, wallet }) => {
+    await fund(mock);
+    await openMarket(page, mock);
+    // twice the market (0.025): a typing error, but the user's order
+    await pickType(page, 'limit', 'buy');
+    await fillFields(page, { amount: '1', price: '0.05' });
+    await settlePlan(page);
+    const note = page.getByTestId('order-note-PRICE_AGGRESSIVE_VS_MARKET');
+    await expect(note).toBeVisible();
+    await expect(note).toContainText('through the market');
+    await expect(note).toContainText('typing error');
+    // a note is not an error: no red line, the button is enabled, and nothing asks for a click first
+    await expect(page.getByTestId('order-issue-PRICE_AGGRESSIVE_VS_MARKET')).toHaveCount(0);
+    await expect(page.getByTestId('order-place')).toBeEnabled();
+    await clickPlace(page);
+    await wallet!.waitForCalls(1);
+    const txid = await waitSubmitted(page);
+    expect((await placedBy(mock, txid)).views).toHaveLength(1);
+    expect(await wallet!.calls()).toHaveLength(1);
+  });
+
+  test('a price in line with the market has no note', async ({ appPage: page, mock }) => {
+    await fund(mock);
+    await openMarket(page, mock);
+    await pickType(page, 'limit', 'buy');
+    await fillFields(page, { amount: '1', price: '0.0245' });
+    await settlePlan(page);
+    await expect(page.getByTestId('order-notes')).toHaveCount(0);
+  });
+
+  test('a stop the market has already reached, on a token whose genesis is not verified, shows both notes and still places', async ({ appPage: page, mock, wallet }) => {
+    await fund(mock);
+    await openMarket(page, mock);
+    await pickType(page, 'stopMarket', 'sell');
+    // a sell stop above the market (0.025): it arms at the next qualifying trade
+    await fillFields(page, { amount: '2', stop: '0.03' });
+    await settlePlan(page);
+    await expect(page.getByTestId('order-note-COND_STOP_ALREADY_REACHED')).toBeVisible();
+    await expect(page.getByTestId('order-note-STOP_EVIDENCE_GENESIS_UNVERIFIED')).toContainText('genesis');
+    await expect(page.getByTestId('order-place')).toBeEnabled();
+    await clickPlace(page);
+    await wallet!.waitForCalls(1);
+    await waitSubmitted(page);
+  });
+
+  test('on a phone the notes wrap and the page does not scroll sideways', async ({ appPage: page, mock }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await fund(mock);
+    await openMarket(page, mock);
+    await pickType(page, 'limit', 'buy');
+    await fillFields(page, { amount: '1', price: '0.05' });
+    await settlePlan(page);
+    const note = page.getByTestId('order-note-PRICE_AGGRESSIVE_VS_MARKET');
+    await note.scrollIntoViewIfNeeded();
+    await expect(note).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 });

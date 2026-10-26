@@ -87,7 +87,7 @@ export default {
   'orders.budgetOrder': 'a KAS budget (the amount follows from the price)',
   'orders.expires': 'Ends',
   'orders.expiry.gtc': 'GTC ({days} days from placement; renew to extend)',
-  'orders.expiry.day': 'Day order: ends {utc} ({jst})',
+  'orders.expiry.day': 'Day order: ends {utc} ({local})',
   'orders.expiry.around': 'expires around {date}',
   'orders.expiry.daa': 'at DAA {daa}',
   'orders.renew': 'GTC renewal',

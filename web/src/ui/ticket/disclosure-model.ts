@@ -6,7 +6,7 @@
 // A token/token pair A/B (`DisclosureCtx.quote`): prices are B per whole A, the all-in total is an amount of B (a sell receives at least, a buy
 // pays at most: the covenant's rounding), tips, carriers, reserves and fees stay KAS, and the pair rows (`pair`) add the B escrow and the
 // pair trigger rule (two KAS books or a resting pair order). Prices are never derived from pair fills.
-import { gtcRenewalUnix, formatJst, formatUtc } from '../../kob/daa';
+import { gtcRenewalUnix, formatLocal, formatUtc } from '../../kob/daa';
 import type { CondSummary } from '../../kob/orders/cond-common';
 import type { CarrierLine, Clock, Disclosure, OrderPlan, PairDisclosure } from '../../kob/plan-types';
 import { formatKas, formatPricePerToken, formatTokenAmount, formatUnits, pow10 } from '../../kob/units';
@@ -59,9 +59,9 @@ export interface TimeRow {
   labelKey: string;
   unix: bigint;
   utc: string;
-  jst: string;
+  local: string;
   /** an extra sentence key with the renewal date etc. */
-  extra?: { labelKey: string; unix: bigint; utc: string; jst: string };
+  extra?: { labelKey: string; unix: bigint; utc: string; local: string };
 }
 
 export interface NoteRow {
@@ -132,7 +132,7 @@ function kasPriceRow(id: string, labelKey: string, price: bigint, c: DisclosureC
   return { id, labelKey, tone, value: `${kasPerToken(price, c)} KAS per ${c.ticker}` };
 }
 
-const timeParts = (unix: bigint) => ({ unix, utc: formatUtc(unix), jst: formatJst(unix) });
+const timeParts = (unix: bigint) => ({ unix, utc: formatUtc(unix), local: formatLocal(unix) });
 
 function timesOf(d: Disclosure, c: DisclosureCtx): TimeRow[] {
   const rows: TimeRow[] = [];
@@ -176,7 +176,7 @@ const carrierRow = (l: CarrierLine): CarrierRow => ({
 /** how long the exits live: until cancelled (90 days idle from each exit's creation) or until the chosen date */
 function exitLifetimeRow(x: NonNullable<CondSummary['exit']>): DisclosureRow {
   if (x.expiry === 'gtd' && x.expiryUnixSeconds !== null) {
-    return { id: 'exitLifetime', labelKey: 'ticket.disc.exitLifetime', tone: 'normal', value: tx('ticket.val.exitGtd', { utc: formatUtc(x.expiryUnixSeconds), jst: formatJst(x.expiryUnixSeconds) }) };
+    return { id: 'exitLifetime', labelKey: 'ticket.disc.exitLifetime', tone: 'normal', value: tx('ticket.val.exitGtd', { utc: formatUtc(x.expiryUnixSeconds), local: formatLocal(x.expiryUnixSeconds) }) };
   }
   return { id: 'exitLifetime', labelKey: 'ticket.disc.exitLifetime', tone: 'normal', value: tx('ticket.val.exitGtc') };
 }

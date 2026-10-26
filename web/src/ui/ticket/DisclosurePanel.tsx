@@ -1,7 +1,7 @@
 // The DISCLOSURE panel: what a planned order costs and does, from `buildDisclosureModel` (derived from the planned state and the built
 // transaction, never from the form). Thin renderer; the replace dialog of My orders shows it (the order ticket shows it only in the confirmation).
 import type { ComponentChildren } from 'preact';
-import { formatDateTime, t } from '../../i18n';
+import { t } from '../../i18n';
 import type { DisclosureModel, DisclosureRow, TimeRow, Txt } from './disclosure-model';
 
 const text = (v: Txt | undefined): string => (v === undefined ? '' : typeof v === 'string' ? v : t(v.key, v.params));
@@ -24,7 +24,7 @@ function RowView(props: { row: DisclosureRow }) {
   return <DiscRow testid={`disc-${r.id}`} label={t(r.labelKey, r.labelParams)} value={text(r.value)} detail={r.detail ? text(r.detail) : undefined} tone={r.tone} />;
 }
 
-const when = (r: { unix: bigint; utc: string; jst: string }): string => `${formatDateTime(r.unix)} (${r.utc}, ${r.jst})`;
+const when = (r: { unix: bigint; utc: string; local: string }): string => `${r.local} (${r.utc})`;
 
 function TimeView(props: { row: TimeRow }) {
   const r = props.row;

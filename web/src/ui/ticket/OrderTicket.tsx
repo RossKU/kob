@@ -5,6 +5,7 @@
 // confirmation (signer/summary.ts `receipt`). The button is enabled only for a built, error-free plan; a click plans the order again from the
 // state at the click, checks the built transaction silently (`ui/confirm/send.ts`: decoded and compared with the plan) and opens the final
 // confirmation, whose Confirm asks the wallet. Progress and the result are one line under the button.
+import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { has, t } from '../../i18n';
@@ -36,6 +37,7 @@ import { fillsNote } from './fills-note';
 import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
 import { maxBuyAmount } from './max-amount';
 import { orderLabel } from './order-label';
+import { ticketNotes } from './ticket-notes';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan, type EnvWait } from './use-ticket';
 import { CLOCK_TICK_MS, CLOCK_WAIT_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, liveClockAt, reviewClock, sameTransaction, slippageWithin, withinTerms } from './review-check';
 import { rememberPairForm, takePairFlip } from './pair-flip';
@@ -59,6 +61,8 @@ export interface OrderTicketProps {
    * built is the native one; a flip of a filled form keeps it exactly (orientation.ts).
    */
   inverted?: boolean;
+  /** facts about the token(s) traded (the indexer's warnings, the program's powers: market/TokenBadges.tsx `TokenFacts`), shown above the notes next to the button */
+  facts?: ComponentChildren;
 }
 
 /** A level that could not be planned at the click: the sentence, the raw builder text behind "Details", and the code of the status line. */
@@ -107,7 +111,7 @@ export function OrderTicket(props: OrderTicketProps) {
   // one of the two environments is live: the token's KAS market, or the pair A/B (both tokens' UTXOs, the pair book, own pair orders)
   const kasEnv = useTicketEnv(token, enabled && !quote);
   const pairEnv = usePairTicketEnv(token, quote ?? token, enabled && !!quote);
-  const { env: rawEnv, error: envError, loading: envLoading, refresh, since, snapshot, stale, waiting } = quote ? pairEnv : kasEnv;
+  const { env: rawEnv, error: envError, errorSource: envSource, loading: envLoading, refresh, since, snapshot, stale, waiting } = quote ? pairEnv : kasEnv;
   // the node clock, read every CLOCK_TICK_MS while an order can be placed (a visible page): a click plans with it projected to the click, with no
   // round trip before the wallet is asked (review-check.ts rule 1)
   const liveClock = useRef<{ clock: Clock; at: number } | null>(null);
@@ -584,7 +588,7 @@ export function OrderTicket(props: OrderTicketProps) {
   const needs: { code: string; text: string; tone: 'info' | 'warn' | 'error'; action?: 'retry'; raw?: string }[] = [];
   if (!wallet.info) needs.push({ code: 'wallet', text: t('ticket.need.wallet'), tone: 'info' });
   else if (wallet.networkMismatch) needs.push({ code: 'network', text: t('ticket.need.network', { wallet: wallet.info.network, app: services.config.network }), tone: 'error' });
-  if (enabled && envError) needs.push({ code: 'env', text: t('ticket.need.env'), tone: 'error', action: 'retry', raw: envError });
+  if (enabled && envError) needs.push({ code: 'env', text: t(`ticket.need.env.${envSource ?? 'other'}`), tone: 'error', action: 'retry', raw: envError });
   if (crash) needs.push({ code: 'crash', text: t('ticket.need.crash'), tone: 'error', raw: crash });
   // what the ticket is still reading, named (Review cannot be enabled before; it is the moment the answers are in)
   const holdingsShort = waiting.includes('holdings') && planErrors.some((i) => TOKEN_SHORT.has(i.code));
@@ -593,6 +597,8 @@ export function OrderTicket(props: OrderTicketProps) {
 
   const issues = (shownPlan?.issues ?? []).filter((i) => !(holdingsShort && TOKEN_SHORT.has(i.code)));
   const planIssues = issues.filter((i) => i.severity === 'error');
+  // warnings the ticket notes (ticket-notes.ts): one line each next to the button, never a reason to stop or to click
+  const planNotes = ticketNotes(issues);
   // an order that takes liquidity now: its fills against the visible book, next to the Fills box, and a warning when they cannot take the amount
   const fillsBox = layout.main.includes('maxFills') || layout.advanced.includes('maxFills');
   const amountBase = baseOf('amount');
@@ -700,7 +706,7 @@ export function OrderTicket(props: OrderTicketProps) {
         ))}
       </div>
 
-      {/* only what stops the order: the planner's warnings and notes are not shown (the figures below say what the order does) */}
+      {/* only what stops the order: the red lines (the warnings are the one-line notes next to the button) */}
       <div class="tk-issues" data-testid="order-issues" aria-live="polite">
         {planIssues.length > 0 ? (
           <ul>
@@ -764,6 +770,17 @@ export function OrderTicket(props: OrderTicketProps) {
             </ul>
           )}
         </div>
+      ) : null}
+
+      {props.facts}
+      {planNotes.length > 0 ? (
+        <ul class="tk-cautions" data-testid="order-notes" aria-live="polite">
+          {planNotes.map((i, n) => (
+            <li key={`${i.code}-${n}`} class="tk-caution" data-code={i.code} data-testid={`order-note-${i.code}`}>
+              <span key={issueText(i, issueCtx)}>{issueText(i, issueCtx)}</span>
+            </li>
+          ))}
+        </ul>
       ) : null}
 
       {enabled ? gate.element : null}

@@ -170,8 +170,24 @@ export function formatUtc(unix: bigint): string {
   return `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.getUTCDate())} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC`;
 }
 
-/** `2026-09-30 09:00 JST`: the same instant in Japan Standard Time (UTC+9, no DST), for the day-order hint. */
-export function formatJst(unix: bigint): string {
-  const d = new Date((Number(unix) + 9 * 3600) * 1000);
-  return `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.getUTCDate())} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} JST`;
+function localParts(unix: bigint, timeZone?: string): Record<string, string> {
+  const f = new Intl.DateTimeFormat('en-GB', {
+    ...(timeZone ? { timeZone } : {}), year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
+  });
+  return Object.fromEntries(f.formatToParts(new Date(Number(unix) * 1000)).map((p) => [p.type, p.value]));
 }
+
+/** `2026-09-30 09:00 GMT+9`: the same instant in the reader's own time zone (`timeZone`: an IANA name, for tests; default the browser's). */
+export function formatLocal(unix: bigint, timeZone?: string): string {
+  const p = localParts(unix, timeZone);
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} ${p.timeZoneName}`;
+}
+
+/** `09:00 GMT+9`: the clock time of an instant in the reader's own time zone. */
+export function formatLocalTime(unix: bigint, timeZone?: string): string {
+  const p = localParts(unix, timeZone);
+  return `${p.hour}:${p.minute} ${p.timeZoneName}`;
+}
+
+/** The next 00:00 UTC after `nowMs` (unix seconds): when a day order placed now ends. */
+export const nextUtcMidnight = (nowMs: number): bigint => BigInt(Math.floor(nowMs / 86_400_000) + 1) * 86_400n;

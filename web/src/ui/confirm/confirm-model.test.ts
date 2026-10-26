@@ -107,10 +107,10 @@ describe('decoded order terms', () => {
     expect(summary.net.kas.locked.escrow).toBeGreaterThan(0n);
   });
 
-  it('day orders show the 00:00 UTC deadline in UTC and JST', () => {
+  it('day orders show the 00:00 UTC deadline in UTC and in local time', () => {
     const { rows, title } = created('create.ask.day');
     expect(title).toBe('Sell day limit order');
-    expect(rowOf(rows, 'deadline').value).toBe('2026-09-30 00:00 UTC / 2026-09-30 09:00 JST');
+    expect(rowOf(rows, 'deadline').value).toMatch(/^2026-09-30 00:00 UTC \/ 2026-09-(29|30) \d\d:\d\d \S+$/);
   });
 
   it('an if-done entry shows its exit, and repeat entries say how often they re-arm', () => {

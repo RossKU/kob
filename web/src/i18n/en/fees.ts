@@ -19,5 +19,5 @@ export default {
   'fees.note.cap': 'Fee capped at {max} KAS: rate lowered from {from} to {rate} sompi per gram; may confirm slower.',
   'fees.note.overCap': 'The fee of {fee} KAS is above your {max} KAS limit even at the minimum rate ({rate} sompi per gram); it is sent anyway, since the limit never goes below the minimum rate.',
   'settings.dynamicFee': 'Dynamic network fee',
-  'settings.dynamicFee.hint': 'Pay the rate the node currently estimates (fast for orders that act now, standard for resting orders, cancels and amends, economy for housekeeping) instead of the relay minimum, so transactions confirm in time when the network is busy. The rate and the fee are shown on the review screen before you sign, and both are capped (config keys fees.maxRate and fees.maxFeeKas). Off: always the relay minimum.',
+  'settings.dynamicFee.hint': 'Pay the rate the node currently estimates (fast for orders that act now, standard for resting orders, cancels and amends, economy for housekeeping) instead of the relay minimum, so transactions confirm in time when the network is busy. The fee is shown where you approve (the in-page signer lists it as the network fee; an extension wallet shows its own); the rate itself is not shown. Both are capped (config keys fees.maxRate and fees.maxFeeKas). Off: always the relay minimum.',
 } as const;

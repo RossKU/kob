@@ -4,7 +4,7 @@ import { useTxUrl } from '../../app/explorer';
 import { formatDateTime, formatNumber, t, ASSUMED_TOKEN_DECIMALS } from '../../i18n';
 import { unitsText } from '../../kob/pair';
 import { statePriceToTokenPrice } from '../../kob/units';
-import { formatJst, formatUtc } from '../../kob/daa';
+import { formatLocal, formatUtc } from '../../kob/daa';
 import { longId, type TokenInfo } from '../../kob/registry';
 import { Amount, Badge, Banner, Button, CopyText, KeyValueList, tickPriceFraction, type Tone } from '../kit';
 import { tokenLabel } from '../market/token-model';
@@ -82,7 +82,7 @@ function PriceCell(p: { row: OrderRowModel; token: TokenInfo | undefined; quote?
 function ExpiryText({ row }: { row: OrderRowModel }) {
   const e = row.expiry;
   if (e.kind === 'day' && e.deadlineUnix !== null) {
-    return <span data-testid="order-expiry">{t('orders.expiry.day', { utc: formatUtc(e.deadlineUnix), jst: formatJst(e.deadlineUnix) })}</span>;
+    return <span data-testid="order-expiry">{t('orders.expiry.day', { utc: formatUtc(e.deadlineUnix), local: formatLocal(e.deadlineUnix) })}</span>;
   }
   if (e.kind === 'gtc') {
     return <span data-testid="order-expiry">{t('orders.expiry.gtc', { days: GTC_RULE.days })}</span>;

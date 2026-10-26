@@ -60,12 +60,12 @@ describe('disclosure model', () => {
     expect(m.notes.map((n) => n.tag)).toEqual(expect.arrayContaining(['auction', 'iocRemainderReturned', 'market']));
   });
 
-  it('day order: shows the 00:00 UTC deadline and its JST time; GTC shows the day-85 renewal', () => {
+  it('day order: shows the 00:00 UTC deadline and its local time; GTC shows the day-85 renewal', () => {
     const day = modelOf('limit', 'sell', { amount: '1', price: '2.6', lifetime: 'day' });
     const t = day.times.find((x) => x.id === 'expiry')!;
     expect(t.labelKey).toBe('ticket.time.day');
     expect(t.utc).toBe('2026-09-30 00:00 UTC');
-    expect(t.jst).toBe('2026-09-30 09:00 JST');
+    expect(t.local).toMatch(/^2026-09-(29|30) \d\d:\d\d \S+$/);
     const gtc = modelOf('limit', 'sell', { amount: '1', price: '2.6' });
     const g = gtc.times.find((x) => x.id === 'expiry')!;
     expect(g.labelKey).toBe('ticket.time.gtc');

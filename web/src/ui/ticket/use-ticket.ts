@@ -18,6 +18,7 @@ import { pendingSpends } from '../../app/pending-spends';
 import { useInterval } from '../kit/hooks';
 import { partCurrent, type PartFacts } from './review-check';
 import { useLiveRefresh } from '../market/live';
+import { envErrorSource, type EnvErrorSource } from './env-error';
 
 export const PLAN_DEBOUNCE_MS = 300;
 /** every part of the environment is re-read at least this often (UTXOs and the book move; feed events also trigger reads); paused on a hidden page */
@@ -104,6 +105,8 @@ export interface TicketEnv {
   waiting: EnvWait[];
   /** a part could not be read (node unreachable ...): the message and a retry */
   error: string | null;
+  /** where `error` came from: the node, the indexer or neither (a token whose decimals disagree ...) */
+  errorSource: EnvErrorSource | null;
   loading: boolean;
   /** every part read again, starting now: the result reflects state read after the call (after a submission, a retry) */
   refresh(): Promise<PlanEnv | null>;
@@ -124,12 +127,13 @@ export interface TicketEnv {
 interface PartState<T> {
   value: T | null;
   error: string | null;
+  source: EnvErrorSource | null;
   loading: boolean;
 }
 
 /** One part of the environment: a `Serialized` load per `deps` (a result of an earlier generation is dropped), its newest value as state. */
 function usePart<T>(load: (() => Promise<T>) | null, deps: unknown[]): [Serialized<T> | null, PartState<T>] {
-  const [state, setState] = useState<PartState<T>>({ value: null, error: null, loading: false });
+  const [state, setState] = useState<PartState<T>>({ value: null, error: null, source: null, loading: false });
   const gen = useRef(0);
   const alive = useRef(true);
   useEffect(() => {
@@ -146,16 +150,16 @@ function usePart<T>(load: (() => Promise<T>) | null, deps: unknown[]): [Serializ
       if (mine()) setState((s) => ({ ...s, loading: true }));
       try {
         const value = await load();
-        if (mine()) setState({ value, error: null, loading: false });
+        if (mine()) setState({ value, error: null, source: null, loading: false });
         return value;
       } catch (e) {
-        if (mine()) setState((s) => ({ value: s.value, error: e instanceof Error ? e.message : String(e), loading: false }));
+        if (mine()) setState((s) => ({ value: s.value, error: e instanceof Error ? e.message : String(e), source: envErrorSource(e), loading: false }));
         throw e;
       }
     });
   }, deps);
   useEffect(() => {
-    if (!runner) setState({ value: null, error: null, loading: false });
+    if (!runner) setState({ value: null, error: null, source: null, loading: false });
     else void runner.run().catch(() => undefined);
   }, [runner]);
   return [runner, state];
@@ -262,8 +266,9 @@ export function useTicketEnv(token: TokenInfo, enabled: boolean): TicketEnv {
     [services, token.covenantId, marketRun, coinsRun, holdRun, bookNotice, ownNotice],
   );
 
-  const error = wallet ? (coinsState.error ?? holdState.error ?? marketState.error) : null;
-  return { env, waiting, error, loading: marketState.loading || coinsState.loading || holdState.loading, refresh, since, snapshot, stale };
+  const failed = wallet ? [coinsState, holdState, marketState].find((s) => s.error !== null) : undefined;
+  const error = failed?.error ?? null;
+  return { env, waiting, error, errorSource: failed?.source ?? null, loading: marketState.loading || coinsState.loading || holdState.loading, refresh, since, snapshot, stale };
 }
 
 /**
@@ -303,7 +308,7 @@ export function usePairTicketEnv(base: TokenInfo, quote: TokenInfo, enabled: boo
     },
     [services, base.covenantId, quote.covenantId, run, notice],
   );
-  return { env: on ? state.value : null, waiting: on && !state.value ? ['pair'] : [], error: on ? state.error : null, loading: state.loading, refresh, since, snapshot, stale };
+  return { env: on ? state.value : null, waiting: on && !state.value ? ['pair'] : [], error: on ? state.error : null, errorSource: on ? state.source : null, loading: state.loading, refresh, since, snapshot, stale };
 }
 
 export interface TicketPlan {

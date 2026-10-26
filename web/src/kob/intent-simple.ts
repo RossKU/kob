@@ -11,7 +11,7 @@ export type Lifetime =
   | { kind: 'gtc' }
   /** good till date: refundable from `at` (UTC unix seconds, at most 90 days ahead) */
   | { kind: 'gtd'; at: bigint }
-  /** day order: until the next 00:00 UTC (09:00 JST) */
+  /** day order: until the next 00:00 UTC */
   | { kind: 'day' };
 
 /** Timed activation: no fill before this moment. */

@@ -72,6 +72,19 @@ describe('issueText: parameter formatting', () => {
   });
 });
 
+describe('issueText: wording that sends the user somewhere', () => {
+  it('fragmented KAS names what the user can do: KOB has no KAS consolidation', () => {
+    const text = issueText(issue('FUNDING_FRAGMENTED', { max: 50 }), {});
+    expect(text).toContain('at most 50');
+    expect(text).toContain('Send your KAS to your own address from your wallet');
+    expect(text).not.toMatch(/consolidate first/i);
+  });
+  it('the stop-evidence note is one short sentence that names the token', () => {
+    const text = issueText(issue('STOP_EVIDENCE_GENESIS_UNVERIFIED', { token: 'ABCD (abcd…1234)' }), {});
+    expect(text).toBe('The genesis of ABCD (abcd…1234) is not verified: units minted outside its program may exist, and trades of them could arm or trail this stop.');
+  });
+});
+
 describe('issueText: context merged into the params', () => {
   it('merges issue.input and issue.output as {input} / {output}', () => {
     expect(issueText(issue('input-script-mismatch', undefined, { input: 2 }), {})).toBe('Input 2: the spent script differs from the plan.');

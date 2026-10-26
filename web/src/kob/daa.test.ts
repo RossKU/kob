@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadKobNode } from './wasm.node';
 import type { Clock } from './plan-types';
 import {
-  DAY_SECONDS, MAX_IDLE_DAA, clampRate, daaToSeconds, daaToUnix, dayOrderFor, durationToDaa, expiryFor, formatJst, formatUtc, gtcRenewalUnix,
+  DAY_SECONDS, MAX_IDLE_DAA, clampRate, daaToSeconds, daaToUnix, dayOrderFor, durationToDaa, expiryFor, formatLocal, formatLocalTime, formatUtc, nextUtcMidnight, gtcRenewalUnix,
   renewalUnixForExpiry, secondsToDaa, secondsToNextMidnight, unixToDaa,
 } from './daa';
 
@@ -82,9 +82,13 @@ describe('lifetimes', () => {
     expect(secondsToNextMidnight(1_790_726_399n)).toBe(1n);
   });
 
-  it('formats UTC and JST without a locale', () => {
+  it('formats UTC without a locale and the same instant in a given time zone', () => {
     expect(formatUtc(1_790_726_400n)).toBe('2026-09-30 00:00 UTC');
-    expect(formatJst(1_790_726_400n)).toBe('2026-09-30 09:00 JST');
+    expect(formatLocal(1_790_726_400n, 'Asia/Tokyo')).toBe('2026-09-30 09:00 GMT+9');
+    expect(formatLocal(1_790_726_400n, 'UTC')).toBe('2026-09-30 00:00 UTC');
+    expect(formatLocalTime(1_790_726_400n, 'America/New_York')).toBe('20:00 GMT-4');
+    expect(nextUtcMidnight(1_790_726_399_000)).toBe(1_790_726_400n);
+    expect(nextUtcMidnight(1_790_726_400_000)).toBe(1_790_812_800n);
     expect(formatUtc(0n)).toBe('1970-01-01 00:00 UTC');
   });
 });
