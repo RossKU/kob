@@ -13,7 +13,7 @@ const ID = (c: string) => c.repeat(64);
 function row(ticker: string, id: string, over: Partial<TokenRow> = {}): TokenRow {
   return {
     covenantId: id, ticker, name: `${ticker} coin`, source: 'registry', info: { covenantId: id, ticker } as unknown as TokenInfo, index: null, powers: [],
-    issuerControl: false, templateId: 'kcc20-ref-8x8', badges: [], tradable: true, reason: null, indexerProblems: [], openAsks: 3, openBids: 4, decimals: 8,
+    issuerControl: false, facts: [], templateId: 'kcc20-ref-8x8', badges: [], tradable: true, reason: null, indexerProblems: [], openAsks: 3, openBids: 4, decimals: 8,
     scale: 100_000_000n, tick: 10_000n, ...over,
   };
 }

@@ -60,6 +60,30 @@ export const KNOWN_POWERS = ['mint-authority', 'public-mint', 'burn', 'freeze', 
 export const hasIssuerControl = (powers: readonly string[] | null | undefined): boolean =>
   !!powers && powers.some((p) => (ISSUER_CONTROL_POWERS as readonly string[]).includes(p));
 
+/**
+ * Facts about a token that a trader needs wherever it is shown (matcher.md 1.2a, "Wallets MUST show the warnings wherever the token is shown"): the
+ * two warnings the indexer derives from the registry's genesis record, and the program powers that let someone create more of it or block
+ * addresses (freeze and seize have their own warning above). Facts, not a rating: nothing here says a token is safe or unsafe.
+ */
+export const TOKEN_FACT_IDS = ['genesis_unverified', 'live_mint_authority', 'mint-authority', 'public-mint', 'blacklist'] as const;
+export type TokenFactId = (typeof TOKEN_FACT_IDS)[number];
+
+/** The facts out of a token's warnings and powers, in the order of `TOKEN_FACT_IDS`; anything else in them is not a fact the UI has a sentence for. */
+export const tokenFactIds = (warnings: readonly string[], powers: readonly string[]): TokenFactId[] => {
+  const have = new Set([...warnings, ...powers]);
+  return TOKEN_FACT_IDS.filter((id) => have.has(id));
+};
+
+/**
+ * The warnings a registry entry implies (the same rule the indexer applies): `genesis_unverified` unless the entry says `genesis_verified: true`,
+ * `live_mint_authority` when its genesis record lists a live mint authority. The indexer can only ADD to them; a token without an entry is unverified.
+ */
+function registryWarnings(info: TokenInfo | null): string[] {
+  if (!info || info.openList) return ['genesis_unverified'];
+  return [...(info.json.genesis_verified === true ? [] : ['genesis_unverified']), ...((info.json.genesis?.live_minters?.length ?? 0) > 0 ? ['live_mint_authority'] : [])];
+}
+const warningsOf = (v: IndexerTokenView | null): string[] => (v && Array.isArray(v.warnings) ? v.warnings : []);
+
 /** `held`: a token the indexer does not list, known from the wallet's node-verified holdings of it (`kob/open-token.ts` `heldTokenView`) */
 export type TokenSource = 'registry' | 'indexer' | 'pasted' | 'held';
 
@@ -68,7 +92,7 @@ export interface TokenRow {
   /** registry ticker, or the SANITIZED ticker the indexer reported */
   ticker: string;
   name: string | null;
-  /** a token the registry does not list, named by its verified KCC-23 declaration (`unknownRow`): marked "declared on chain" where its name is shown */
+  /** a token the registry does not list, named by its verified KCC-23 declaration (`unknownRow`): marked "declared by its creator" where its name is shown */
   declared?: true;
   source: TokenSource;
   /** null for tokens that are not in the registry */
@@ -78,6 +102,8 @@ export interface TokenRow {
   powers: string[];
   /** the token program can freeze or seize balances: escrowed orders are at the issuer's discretion */
   issuerControl: boolean;
+  /** the facts to show next to the token (`tokenFactIds` of its warnings and powers) */
+  facts: TokenFactId[];
   templateId: string | null;
   badges: TokenBadge[];
   tradable: boolean;
@@ -103,6 +129,7 @@ function registryRow(info: TokenInfo, index: IndexerTokenView | null): TokenRow 
   const powers = unionPowers(info.capabilities, powersOf(index));
   return {
     covenantId: info.covenantId, ticker: info.ticker, name: info.name, source: 'registry', info, index, powers, issuerControl: hasIssuerControl(powers),
+    facts: tokenFactIds(unionPowers(registryWarnings(info), warningsOf(index)), powers),
     templateId: index?.template_id ?? info.templateId, badges: tokenBadges(info),
     tradable: info.tradable, reason: info.untradableReason,
     indexerProblems: check ? check.problems.map((p) => p.code) : [],
@@ -125,7 +152,8 @@ export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: T
   const tpl = reg.templates.find((t) => (view.template_hash && t.template_hash === view.template_hash) || (view.template_id && t.id === view.template_id));
   const powers = unionPowers(tpl?.capabilities ?? [], powersOf(view));
   return {
-    covenantId: view.covenant_id, ticker, name: decl?.name ? sanitizeUntrusted(decl.name, 64) : null, ...(decl ? { declared: true as const } : {}), source, info: null, index: view, powers, issuerControl: hasIssuerControl(powers), templateId: view.template_id ?? null,
+    covenantId: view.covenant_id, ticker, name: decl?.name ? sanitizeUntrusted(decl.name, 64) : null, ...(decl ? { declared: true as const } : {}), source, info: null, index: view, powers, issuerControl: hasIssuerControl(powers),
+    facts: tokenFactIds(unionPowers(registryWarnings(null), warningsOf(view)), powers), templateId: view.template_id ?? null,
     badges: [],
     // this build's own registry does not list the token: it cannot trade it from the list
     tradable: false, reason: 'unregistered',

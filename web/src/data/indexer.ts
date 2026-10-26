@@ -497,6 +497,7 @@ export class HttpIndexer implements IndexerApi {
 export { sanitizePairBook } from './pair-api';
 
 const POWER = /^[a-z0-9-]{1,32}$/;
+const WARNING = /^[a-z0-9_-]{1,32}$/;
 
 /**
  * A `/v1/tokens` item made safe to render: `powers` is a list of short lower-case words (anything else is dropped), `ticker` is a string (empty when
@@ -508,6 +509,8 @@ export function normalizeTokenView(v: IndexerTokenView): IndexerTokenView {
   delete (out as { standing?: unknown }).standing;
   if (v.declaration !== undefined && v.declaration !== true) delete out.declaration;
   if (v.powers !== undefined) out.powers = Array.isArray(v.powers) ? [...new Set(v.powers.filter((p): p is string => typeof p === 'string' && POWER.test(p)))] : [];
+  // warnings are short lower-case words too (the UI renders the ones it knows)
+  if (v.warnings !== undefined) out.warnings = Array.isArray(v.warnings) ? [...new Set(v.warnings.filter((p): p is string => typeof p === 'string' && WARNING.test(p)))] : [];
   return out;
 }
 

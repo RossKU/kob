@@ -90,12 +90,12 @@ describe('declarations: verified before use', () => {
 describe('declarations in the display (facts from the chain first, the registry is a pinned snapshot of them)', () => {
   const reg = (entry: Partial<TokenInfo> & { covenantId: string }) => ({ byCovenantId: new Map([[entry.covenantId, { ticker: 'DECL', name: 'Declared Coin', decimals: 2, ...entry } as TokenInfo]]) });
 
-  it('an unlisted token is shown on its declaration, marked as declared on chain', () => {
+  it('an unlisted token is shown on its declaration, marked as declared by its creator', () => {
     const p = create(5, 'ONCH', 'On Chain');
     adoptDeclaration(kob, NET, p.token.covenantId, p.docs.launchProof, null, false);
     const tk = displayToken({ byCovenantId: new Map() }, NET, p.token.covenantId, mem())!;
     expect(tk).toMatchObject({ ticker: 'ONCH', name: 'On Chain', decimals: 5, decimalsSource: 'declared', tradable: false });
-    expect(decimalsNote(tk)).toMatchObject({ text: 'declared on chain' });
+    expect(decimalsNote(tk)).toMatchObject({ text: 'declared by its creator' });
     // a market whose price scale is not the declared decimals: flagged
     const off = displayToken({ byCovenantId: new Map() }, NET, p.token.covenantId, mem(), 1000n)!;
     expect(off.declarationConflicts).toEqual(['decimals']);

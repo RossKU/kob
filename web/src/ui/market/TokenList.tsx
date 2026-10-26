@@ -6,7 +6,7 @@ import type { IndexerTokenView, StatsView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
 import { Banner, Button, CopyText, ErrorBanner, Field, Loading, Section, Table, TableMessage, toError, useAsync } from '../kit';
-import { SharedTickerNote, StatusBadges, tokenTitle } from './TokenBadges';
+import { SharedTickerNote, StatusBadges, TokenFacts, tokenTitle } from './TokenBadges';
 import { TokenNote } from './TokenNote';
 import './market.css';
 import {
@@ -142,6 +142,7 @@ function TokenTableRow({ row, entry, shared }: { row: TokenRow; entry: ListEntry
           </div>
         ) : null}
         <div class="ml-badges"><StatusBadges row={row} /></div>
+        <TokenFacts rows={[row]} compact data-testid={`token-facts-${row.covenantId}`} />
         <SharedTickerNote shared={shared} data-testid={`shared-ticker-${row.covenantId}`} />
       </td>
       {FIGURES.map((f) => <Figure key={f.key} cell={entry.cells[f.key]} entry={entry} testid={`token-${f.key}-${row.covenantId}`} cls={f.cls} />)}

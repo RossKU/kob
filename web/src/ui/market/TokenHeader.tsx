@@ -6,7 +6,7 @@ import { formatUnits } from '../../kob/units';
 import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
 import type { TokenInfo } from '../../kob/registry';
 import { TokenNote } from './TokenNote';
-import { OpenTokenNote, PowersWarning, SharedTickerNote, StatusBadges, powerName, tokenTitle } from './TokenBadges';
+import { OpenTokenNote, PowersWarning, SharedTickerNote, StatusBadges, TokenFacts, powerName, tokenTitle } from './TokenBadges';
 import { shortCovenantId, templateDetail, type TokenRow } from './token-model';
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
@@ -67,6 +67,7 @@ export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) 
       <SharedTickerNote shared={!!props.sharedTicker} block data-testid="token-shared-ticker" />
       <IndexerProblems codes={r.indexerProblems} />
       <PowersWarning powers={r.powers} />
+      <TokenFacts rows={[r]} data-testid="token-facts" />
       <OpenTokenNote token={r.info} data-testid="token-open-caution" />
       {!r.tradable && r.reason ? (
         <p class="small" style="margin:0" data-testid="token-untradable">

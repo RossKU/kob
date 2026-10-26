@@ -30,6 +30,7 @@ import { FlipButton, MarketShell, PairSelector } from './MarketBar';
 import { openPair } from './market-nav';
 import { displayedPair, marketFor, type DisplayedPair } from './market-select';
 import { PriceChart } from './PriceChart';
+import { TokenFacts } from './TokenBadges';
 import { TokenDetails, TokenHeader } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
 import { buildTokenRows, sharedTickerIds, tradableRows } from './token-model';
@@ -90,7 +91,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // browser's issuance ticker, else its covenant id), else the display name; never an empty name in a title, a unit or a hint
   const shown = useMemo(() => displayToken(registry, services.config.network, id), [registry, services.config.network, id, declared]);
   // where the token's facts are its declaration's (no registry entry, or one that disagrees with the chain): its name as declared, and the marker
-  // the wallet views show ("declared on chain", "facts disagree"); never one of this browser's issuance or of assumed decimals here, where the
+  // the wallet views show ("declared by its creator", "facts disagree"); never one of this browser's issuance or of assumed decimals here, where the
   // decimals are the market's (the banner under the title says where they come from)
   const onChain = !!shown && (shown.decimalsSource === 'declared' || !!shown.declarationConflicts?.length);
   const row = useMemo(() => {
@@ -358,7 +359,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
                 </Banner>
               ) : null}
               {wallet.networkMismatch ? <Banner tone="error" data-testid="ticket-network-blocked">{t('market.ticket.networkBlocked')}</Banner> : null}
-              <OrderTicket token={info} prefill={prefill} inverted={inverted} />
+              <OrderTicket token={info} prefill={prefill} inverted={inverted} facts={<TokenFacts rows={[row]} compact data-testid="ticket-token-facts" />} />
             </div>
           ) : open.reason === 'no-scale' ? (
             <FirstOrderDecimals key={id} known={issuedDecimals(services.config.network, id)} onSet={(d) => setEntered({ id, decimals: d })} />

@@ -4,7 +4,7 @@ import { normalizeTokenView } from '../../data/indexer';
 import { parseRegistry, displayName, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import { tokenTitle } from './TokenBadges';
-import { buildTokenRows, filterTokens, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenLabel, tradableHere, tradableRows, unknownRow } from './token-model';
+import { buildTokenRows, filterTokens, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow } from './token-model';
 
 const kob = await loadKobNode();
 const tpl = kob.templates().find((t) => t.name === 'KCC20Ref_8x8')!;
@@ -262,6 +262,38 @@ describe('powers and empty tickers (GET /v1/tokens)', () => {
     expect(buildTokenRows(reg, [view('GOOD', ID('a'))])[0]).toMatchObject({ powers: [], issuerControl: false });
   });
 
+});
+
+describe('token facts (genesis warnings and program powers)', () => {
+  const reg = registry('reviewed', [tokJson('GOOD', ID('a'))]);
+  const withJson = (extra: Record<string, unknown>): TokenRegistry => registry('reviewed', [{ ...tokJson('GOOD', ID('a')), ...extra }]);
+  const GENESIS = { txid: 'ab'.repeat(32), daa_score: 10, outputs: [1, 2], supply: 1000, minter_outputs: [], checked_at_daa: 20, source: 'test' };
+
+  it('the facts are the genesis warnings and the powers that let someone create more or block addresses, in a fixed order', () => {
+    expect(tokenFactIds(['live_mint_authority', 'genesis_unverified', 'other'], ['blacklist', 'burn', 'public-mint', 'freeze'])).toEqual(['genesis_unverified', 'live_mint_authority', 'public-mint', 'blacklist']);
+    expect(tokenFactIds([], [])).toEqual([]);
+  });
+
+  it('a registry token without a verified genesis is unverified, whatever the indexer says; a verified one has no fact unless the indexer adds one', () => {
+    expect(buildTokenRows(reg, null)[0]!.facts).toEqual(['genesis_unverified']);
+    const verified = withJson({ genesis_verified: true, genesis: { ...GENESIS, live_minters: [] } });
+    expect(buildTokenRows(verified, null)[0]!.facts).toEqual([]);
+    expect(buildTokenRows(verified, [normalizeTokenView(view('GOOD', ID('a'), 0, 0, { warnings: ['live_mint_authority'] }))])[0]!.facts).toEqual(['live_mint_authority']);
+    const live = withJson({ genesis_verified: true, genesis: { ...GENESIS, live_minters: [`${'cd'.repeat(32)}:3`] } });
+    expect(buildTokenRows(live, null)[0]!.facts).toEqual(['live_mint_authority']);
+  });
+
+  it('a token outside the registry is unverified; its indexer warnings and powers join, unknown words are not facts', () => {
+    const row = buildTokenRows(reg, [normalizeTokenView(view('NEW', ID('7'), 0, 0, { warnings: ['genesis_unverified', 'live_mint_authority', 'official'], powers: ['mint-authority', 'burn'] }))])[1]!;
+    expect(row.facts).toEqual(['genesis_unverified', 'live_mint_authority', 'mint-authority']);
+    expect(unknownRow(reg, view('NEW', ID('7')), 'pasted').facts).toEqual(['genesis_unverified']);
+  });
+
+  it('the client drops warnings that are not short words', () => {
+    const v = normalizeTokenView(view('X', ID('7'), 0, 0, { warnings: ['genesis_unverified', 'Bad Word', 5 as unknown as string, '<script>'] }));
+    expect(v.warnings).toEqual(['genesis_unverified']);
+    expect(normalizeTokenView(view('X', ID('7'), 0, 0, { warnings: 'x' as unknown as string[] })).warnings).toEqual([]);
+  });
 });
 
 describe('the registry always wins over the indexer for issuer powers', () => {

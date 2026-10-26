@@ -213,6 +213,13 @@ a.tape-row:hover .tape-time { color: var(--text); }
 .ml-table th .th-sort.active .th-sort-mark { opacity: 1; }
 .ml-table .ml-skel { display: inline-block; width: 52px; margin: 0; vertical-align: middle; }
 .ml-badges:empty { display: none; }
+/* facts about a token (TokenFacts): neutral badges, and the sentences printed or behind a tap (no tooltip on a touch screen) */
+.tf { font-size: 0.85rem; min-width: 0; }
+.tf-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.tf-list { margin: 4px 0 0; padding-left: 18px; color: var(--muted); }
+.tf-compact > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; list-style: none; }
+.tf-compact > summary::-webkit-details-marker { display: none; }
+.tf-more { text-decoration: underline dotted; text-underline-offset: 2px; }
 .ml-badges { margin-top: 2px; }
 .ml-pairs { margin-top: 16px; }
 .ml-subtitle { font-size: 0.95rem; font-weight: 700; margin: 0 0 6px; }

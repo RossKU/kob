@@ -34,7 +34,7 @@ import { StaleSince } from './OrderBook';
 import { buildPairBook, pickOf, type PairLevelRow } from './pair-model';
 import { pairDepthSeries, pairFillsOf, pairRatioCandles, pairStatsModel, pairVolumeOf } from './pair-market';
 import { PairTrades } from './PairTrades';
-import { tokenTitle } from './TokenBadges';
+import { TokenFacts, tokenTitle } from './TokenBadges';
 import { PairDetails } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
 import { buildTokenRows, sharedTickerIds, tradableRows } from './token-model';
@@ -259,7 +259,7 @@ export function PairPage(props: { base: string; quote: string }) {
       }
       ticket={
         <div class="stack mkt-area-ticket">
-          <OrderTicket token={baseInfo} quote={quoteInfo} prefill={prefill} />
+          <OrderTicket token={baseInfo} quote={quoteInfo} prefill={prefill} facts={<TokenFacts rows={[baseRow, quoteRow].filter((r): r is NonNullable<typeof r> => !!r)} compact data-testid="ticket-token-facts" />} />
           <p class="small muted">
             <a href="#/orders" data-testid="pair-my-orders">{t('pair.myOrders')}</a>
           </p>

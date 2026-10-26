@@ -2,7 +2,7 @@ import { t } from '../../i18n';
 import { decimalsOrigin } from '../../app/token-display';
 import { Badge, Banner } from '../kit';
 import { longId, type TokenInfo } from '../../kob/registry';
-import { hasIssuerControl, KNOWN_POWERS, tokenLabel, type TokenBadge, type TokenRow } from './token-model';
+import { hasIssuerControl, KNOWN_POWERS, tokenLabel, type TokenBadge, type TokenFactId, type TokenRow } from './token-model';
 
 /** One status badge: `untradable`, with the reason (about the token's program) in its text and tooltip. */
 export function StatusBadge(props: { badge: TokenBadge; 'data-testid'?: string }) {
@@ -66,6 +66,53 @@ export function OpenTokenNote(props: { token: (Pick<TokenInfo, 'covenantId' | 'o
         {t('market.open.fullId')} <code>{tk.covenantId}</code>
       </div>
     </Banner>
+  );
+}
+
+/**
+ * The facts about a token (token-model.ts `tokenFactIds`): neutral badges that say what the token's creation record and program allow (genesis not
+ * verified, a live mint authority, who can mint, who can blacklist), each with a plain sentence. No tone: it is not a rating. `block` prints the
+ * sentences (token header, pair facts); `compact` shows the badges and opens the sentences on a tap (list rows, the ticket), because a tooltip does
+ * not exist on a touch screen. Several tokens (a pair) name each token before its facts. Renders nothing without facts.
+ */
+export function TokenFacts(props: { rows: readonly Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'>[]; compact?: boolean; 'data-testid'?: string }) {
+  const rows = props.rows.filter((r) => r.facts.length > 0);
+  if (rows.length === 0) return null;
+  const named = props.rows.length > 1;
+  const sentences = (
+    <ul class="tf-list">
+      {rows.map((r) =>
+        r.facts.map((id: TokenFactId) => (
+          <li key={`${r.covenantId}-${id}`} data-fact={id} data-testid={`token-fact-text-${id}`}>
+            {named ? <strong>{tokenLabel(r)}: </strong> : null}
+            {t(`market.fact.${id}.text`)}
+          </li>
+        )),
+      )}
+    </ul>
+  );
+  const badges = rows.map((r) =>
+    r.facts.map((id: TokenFactId) => (
+      <Badge key={`${r.covenantId}-${id}`} tone="neutral" data-testid={`token-fact-${id}`}>
+        {named ? `${r.ticker || tokenLabel(r)}: ` : ''}
+        {t(`market.fact.${id}.label`)}
+      </Badge>
+    )),
+  );
+  const testid = props['data-testid'] ?? 'token-facts';
+  return props.compact ? (
+    <details class="tf tf-compact" data-testid={testid}>
+      <summary>
+        <span class="tf-badges">{badges}</span>
+        <span class="tf-more small muted">{t('market.fact.more')}</span>
+      </summary>
+      {sentences}
+    </details>
+  ) : (
+    <div class="tf" role="note" data-testid={testid}>
+      <div class="tf-badges">{badges}</div>
+      {sentences}
+    </div>
   );
 }
 

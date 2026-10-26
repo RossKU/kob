@@ -46,6 +46,8 @@ export interface IndexerTokenView {
   open_bids: number;
   /** template capabilities (empty for most tokens); unknown values are dropped by the client */
   powers?: string[];
+  /** facts the indexer derives from the registry's genesis record (matcher.md 1.2a): `genesis_unverified`, `live_mint_authority`; absent on older executors */
+  warnings?: string[];
   /** the audited program template of the token, null when unknown */
   template_id?: string | null;
   /** `kcc20` | `kron` */

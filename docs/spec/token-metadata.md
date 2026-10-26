@@ -135,7 +135,7 @@ the optional ones that are not set:
   the creator's own (at once) are verified in kob-wasm
   against the covenant id asked for, kept in memory and, as proofs, in localStorage (re-verified when read back). The facts a token
   is shown with, in order (`app/token-display.ts`):
-  1. its verified declaration (marked "declared on chain" for a token the registry does not list: declared by its creator, not
+  1. its verified declaration (marked "declared by its creator" for a token the registry does not list: the creator's own claim, not
      reviewed);
   2. without a declaration (a token created before KCC-23: its id cannot commit to one), as before: the registry entry, this
      browser's issuance record, the decimals of its market's price scale, else 8 assumed.

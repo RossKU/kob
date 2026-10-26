@@ -127,9 +127,9 @@ test.describe('token issuance', () => {
     await expect(header.getByTestId('token-name')).toHaveText('New Example Coin');
     await expect(header.getByTestId('token-title')).toContainText('NEWKCC');
     await expect(header.getByTestId('token-decimals-note')).toHaveAttribute('data-source', 'declared');
-    await expect(header.getByTestId('token-decimals-note')).toContainText('declared on chain');
+    await expect(header.getByTestId('token-decimals-note')).toContainText('declared by its creator');
     await expect(header.getByTestId('open-token-decimals')).toHaveAttribute('data-origin', 'declared');
-    await expect(header.getByTestId('open-token-decimals')).toContainText('whole tokens of 2 decimals, as the token declared on chain');
+    await expect(header.getByTestId('open-token-decimals')).toContainText('whole tokens of 2 decimals, as its creator declared at creation');
     await expect(header).not.toContainText('carries no decimals');
   });
 
