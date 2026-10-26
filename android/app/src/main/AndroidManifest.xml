@@ -10,7 +10,7 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <!-- allowBackup=false: the operator key must never leave the phone in a cloud or device backup -->
+    <!-- allowBackup=false: the operator key must never leave the phone in a cloud or device backup (the user can export it by hand) -->
     <application
         android:allowBackup="false"
         android:label="KOB Executor"
@@ -26,6 +26,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- show the operator key to be backed up (behind a warning and a confirmation), and send the funds out; both are
+             opened from the main screen only. configChanges: a rotation must not recreate the screen in the middle of a withdrawal. -->
+        <activity
+            android:name=".ExportKeyActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity
+            android:name=".WithdrawActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize" />
 
         <!-- dataSync up to Android 14; from Android 15 dataSync services are stopped after 6 hours a day, so it runs as specialUse -->
         <service

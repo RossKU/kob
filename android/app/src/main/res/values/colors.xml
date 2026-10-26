@@ -8,4 +8,5 @@
     <color name="kob_accent">#FF00695C</color>
     <color name="kob_log_background">#FFF1F3F5</color>
     <color name="kob_log_text">#FF1B1B1F</color>
+    <color name="kob_warning">#FFB3261E</color>
 </resources>

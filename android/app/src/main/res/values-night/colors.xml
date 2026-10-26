@@ -7,4 +7,5 @@
     <color name="kob_accent">#FF4DB6AC</color>
     <color name="kob_log_background">#FF1E2025</color>
     <color name="kob_log_text">#FFD5D8DD</color>
+    <color name="kob_warning">#FFF2B8B5</color>
 </resources>

@@ -18,3 +18,9 @@ crates/kob-wasm/pkg-node-slim/
 .DS_Store
 Thumbs.db
 *.pem
+
+# signing keystores (the Android release key is made by scripts/make-android-keystore.mjs outside the repo; never commit it)
+*.jks
+*.keystore
+*.p12
+*.pfx

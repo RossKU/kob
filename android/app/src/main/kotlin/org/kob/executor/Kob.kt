@@ -11,6 +11,9 @@ object Kob {
     /** The matcher's low-funds threshold (kob-executor `MIN_FUNDS_KAS`). */
     const val MIN_FUNDS_KAS = 100.0
 
+    /** The operator key file in [dir] (64 hex characters; `kob-executor setup` writes it). Its contents never leave the app except by the user's own export. */
+    const val KEY_FILE = "kob-operator.key"
+
     /** Configuration, key file and database: the app's private storage (no other app can read it). */
     fun dir(ctx: Context): File = File(ctx.filesDir, "kob").also { it.mkdirs() }
 
@@ -31,11 +34,14 @@ object Kob {
         return pb
     }
 
+    /** What a finished subcommand left: its exit code, stdout, and stderr (the executor's log and, on failure, its error). */
+    class Output(val code: Int, val out: String, val err: String)
+
     /**
-     * Runs a short subcommand and returns its stdout (stderr, the log, is dropped); throws on failure or after [timeoutMs].
-     * Several may run at once (each has its own stderr file). Never call it on the UI thread.
+     * Runs a short subcommand to its end and returns the exit code and both streams; throws only after [timeoutMs] (the process
+     * is killed). Several may run at once (each has its own stderr file). Never call it on the UI thread.
      */
-    fun run(ctx: Context, timeoutMs: Long, vararg args: String): String {
+    fun exec(ctx: Context, timeoutMs: Long, vararg args: String): Output {
         val err = File.createTempFile("cmd", ".err", ctx.cacheDir)
         try {
             val p = command(ctx, *args).redirectError(err).start()
@@ -49,14 +55,23 @@ object Kob {
                 throw RuntimeException("timed out after ${timeoutMs / 1000} s (no answer from the node)")
             }
             val code = p.waitFor()
-            if (code != 0) {
-                val why = runCatching { err.readText().trim().lines().lastOrNull { it.isNotBlank() } }.getOrNull()
-                throw RuntimeException(why ?: if (code == 137) "killed (exit code 137)" else "exit code $code")
-            }
-            return out
+            return Output(code, out, runCatching { err.readText() }.getOrDefault(""))
         } finally {
             err.delete()
         }
+    }
+
+    /**
+     * Runs a short subcommand and returns its stdout (stderr, the log, is dropped); throws on failure or after [timeoutMs]
+     * with the last line of stderr. Never call it on the UI thread.
+     */
+    fun run(ctx: Context, timeoutMs: Long, vararg args: String): String {
+        val o = exec(ctx, timeoutMs, *args)
+        if (o.code != 0) {
+            val why = o.err.trim().lines().lastOrNull { it.isNotBlank() }
+            throw RuntimeException(why ?: if (o.code == 137) "killed (exit code 137)" else "exit code ${o.code}")
+        }
+        return o.out
     }
 
     /**
@@ -66,16 +81,25 @@ object Kob {
      * service started the executor, or restarted it, while the balance was being read.
      */
     fun killStale(ctx: Context) {
+        for (pid in longRunning(ctx)) android.os.Process.killProcess(pid)
+    }
+
+    /** True while a long-running executor process of this app exists (a withdrawal needs the database's writer lock). */
+    fun running(ctx: Context): Boolean = longRunning(ctx).isNotEmpty()
+
+    private fun longRunning(ctx: Context): List<Int> {
         val me = android.os.Process.myPid()
         val bin = binary(ctx).path
+        val found = mutableListOf<Int>()
         File("/proc").listFiles()?.forEach { d ->
             val pid = d.name.toIntOrNull() ?: return@forEach
             if (pid == me) return@forEach
             try {
                 val argv = File(d, "cmdline").readText().split('\u0000').filter { it.isNotEmpty() }
-                if (argv.size == 1 && argv[0] == bin) android.os.Process.killProcess(pid)
+                if (argv.size == 1 && argv[0] == bin) found += pid
             } catch (_: Exception) {
             }
         }
+        return found
     }
 }

@@ -3,7 +3,7 @@
 //
 //   node scripts/package-release.mjs --version 1.2.3 --network mainnet --target x86_64-pc-windows-msvc \
 //        --bin-dir target/x86_64-pc-windows-msvc/release [--out dist]
-//   node scripts/package-release.mjs --sums dist          write dist/SHA256SUMS over every archive in dist
+//   node scripts/package-release.mjs --sums dist          write dist/SHA256SUMS over every archive and APK in dist
 //   node scripts/package-release.mjs --check-tag v1.2.3   fail unless the tag is `v` + the workspace version that kob-executor and
 //                                                         kob-cli carry (Cargo.toml [workspace.package] and Cargo.lock): the
 //                                                         binaries' --version is the tag (docs/ops/release.md 6)
@@ -199,7 +199,7 @@ function checkTag(tag) {
 function writeSums(dir) {
   const names = fs
     .readdirSync(dir)
-    .filter((n) => n.startsWith('kob-executor-') && (n.endsWith('.zip') || n.endsWith('.tar.gz')))
+    .filter((n) => n.startsWith('kob-executor-') && (n.endsWith('.zip') || n.endsWith('.tar.gz') || n.endsWith('.apk')))
     .sort();
   if (!names.length) throw new Error(`no release archives in ${dir}`);
   const text = sumsText(names.map((n) => [n, fs.readFileSync(path.join(dir, n))]));

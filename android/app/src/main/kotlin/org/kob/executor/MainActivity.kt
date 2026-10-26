@@ -3,13 +3,10 @@ package org.kob.executor
 import android.Manifest
 import android.app.Activity
 import android.content.ActivityNotFoundException
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -20,7 +17,6 @@ import android.provider.Settings
 import android.text.InputType
 import android.util.TypedValue
 import android.view.View
-import android.view.WindowInsets
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -29,7 +25,6 @@ import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
-import android.widget.Toast
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -100,33 +95,12 @@ class MainActivity : Activity() {
 
     // ---- UI ----
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-
-    private fun label(s: String, sp: Float = 14f, bold: Boolean = false, mono: Boolean = false, selectable: Boolean = false) = TextView(this).apply {
-        text = s
-        if (selectable) setTextIsSelectable(true) // long-press selects, then copy
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
-        if (bold) setTypeface(typeface, Typeface.BOLD)
-        if (mono) typeface = Typeface.MONOSPACE
-        setPadding(0, dp(4), 0, dp(4))
-    }
-
-    private fun button(s: String, onClick: () -> Unit) = Button(this).apply {
-        text = s
-        isAllCaps = false
-        setOnClickListener { onClick() }
-    }
-
     private fun radio(s: String) = RadioButton(this).apply {
         text = s
         id = View.generateViewId()
     }
 
-    private fun buildUi(): View {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(24))
-        }
+    private fun buildUi(): View = page { root ->
         fun add(v: View) = root.addView(v)
 
         add(label("KOB executor (testnet-10)", 22f, bold = true))
@@ -169,10 +143,12 @@ class MainActivity : Activity() {
         fundingBox.addView(button("Copy address") { copyAddress() })
         balanceText = label("", 14f, bold = true, selectable = true)
         fundingBox.addView(balanceText)
+        fundingBox.addView(button("Withdraw funds ...") { startActivity(Intent(this, WithdrawActivity::class.java)) })
+        fundingBox.addView(button("Export the key (backup) ...") { startActivity(Intent(this, ExportKeyActivity::class.java)) })
         fundingBox.addView(
             label(
                 "The key is stored only in this app's private storage. Uninstalling the app or clearing its data deletes it, " +
-                    "and the funds with it.",
+                    "and the funds with it: export the key first if you may need it (an update signed with the same key keeps it).",
                 12f
             )
         )
@@ -214,18 +190,6 @@ class MainActivity : Activity() {
             }
         }
         root.addView(logScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(260)))
-
-        return ScrollView(this).apply {
-            addView(root)
-            // edge-to-edge (Android 15+): keep the content clear of the system bars
-            setOnApplyWindowInsetsListener { v, insets ->
-                if (Build.VERSION.SDK_INT >= 30) {
-                    val b = insets.getInsets(WindowInsets.Type.systemBars())
-                    v.setPadding(b.left, b.top, b.right, b.bottom)
-                }
-                insets
-            }
-        }
     }
 
     // ---- settings and setup ----
@@ -281,7 +245,7 @@ class MainActivity : Activity() {
     private fun copyAddress() {
         val a = prefs.getString("address", "") ?: ""
         if (a.isEmpty()) return
-        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("KOB funding address", a))
+        copyText("KOB funding address", a)
         toast("Address copied")
     }
 
@@ -297,8 +261,6 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }
     }
-
-    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
     // ---- start / stop ----
 
@@ -340,8 +302,9 @@ class MainActivity : Activity() {
         for (v in listOf<View>(publicRadio, ownRadio, urlEdit, matchRadio, indexRadio, saveButton)) v.isEnabled = !running
         if (running && !healthBusy) fetchHealth()
         val address = prefs.getString("address", "") ?: ""
-        fundingBox.visibility = if (ok && !index && address.isNotEmpty()) View.VISIBLE else View.GONE
-        setLive(addressText, address)
+        // the address of a matcher is always on screen once the app is set up (it is read from the key if the app lost track of it)
+        fundingBox.visibility = if (ok && !index) View.VISIBLE else View.GONE
+        setLive(addressText, address.ifEmpty { "(reading it from the key ...)" })
         if (fundingBox.visibility == View.VISIBLE) {
             setLive(balanceText, "Balance: $balance")
             // read again every minute, and sooner (every 15 s) while the last read failed
@@ -486,6 +449,10 @@ class MainActivity : Activity() {
                     balance = balanceLast!!
                     balanceOk = true
                     balanceOkAtMs = System.currentTimeMillis()
+                }
+                // the funding address, if this install never stored it (it is shown from the stored value)
+                if (prefs.getString("address", "").isNullOrEmpty() && !j.isNull("address")) {
+                    prefs.edit().putString("address", j.getString("address")).apply()
                 }
             } catch (e: Exception) {
                 failBalance(e.message ?: e.javaClass.simpleName)

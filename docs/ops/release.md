@@ -158,10 +158,24 @@ checks that each binary refuses the other network (not the Android one, which ca
 checked to be an arm64 ELF). `scripts/package-release.mjs` packs each into
 `kob-executor-<version>-<network>-<target>.zip` (Windows) or `.tar.gz` with `QUICKSTART.md`, `LICENSE`, `NOTICE` and a
 `SHA256SUMS` of those files; the archive bytes depend only on the files and `SOURCE_DATE_EPOCH` (the commit time). The
-release job attaches the six archives and a `SHA256SUMS` of them to a **draft** release of the tag: add the output of
+release job attaches the six archives, the Android app and a `SHA256SUMS` of them all to a **draft** release of the tag: add the output of
 `scripts/release-hashes.sh` (above, with the binaries of the archives) to its notes, then publish it. `workflow_dispatch`
-runs the same builds as a dry run that only uploads workflow artifacts. Nothing is code-signed; no container image is
+runs the same builds as a dry run that only uploads workflow artifacts. The binaries and archives are not code-signed (the
+Windows binary shows SmartScreen); the Android app is signed with the **release key** (below). No container image is
 published (the repository's `Dockerfile` builds one from the source for operators who want a container, quickstart 6).
+
+**The Android app in the release** (`android/`, built by `.github/workflows/android.yml`, which `release.yml` calls as the job
+`android`): `kob-executor-<version>-testnet-10-android.apk`, built with the testnet-10 deployment build of the executor and
+listed in the release's `SHA256SUMS` like the archives. `versionName` is the workspace version (the tag without the `v`);
+`versionCode` is the commit time in minutes, so every later commit, and so every later release, is an update of the earlier
+ones. It is signed with the Android release key when the repository secrets `ANDROID_KEYSTORE_B64`,
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` exist (made once with
+`node scripts/make-android-keystore.mjs`, stored as secrets, backed up; quickstart 9, "Release signing"): a new APK then
+installs over the old one and keeps the app's data, the operator key included. **Check before publishing the draft** that the
+APK file name has no `-debug-signed` (the run warns and the draft's notes say so when the secrets were missing: such an APK
+cannot be updated in place, and the fix is to set the secrets, delete the draft and re-run the tag's `release` workflow, not to publish it).
+The workflow verifies the signature with `apksigner`, that the APK is not debuggable, and its `versionName` / `versionCode`,
+and prints the signer certificate's SHA-256 in the run summary: it must be the same on every release.
 
 ## 7. Upgrade order: indexers before wallets
 

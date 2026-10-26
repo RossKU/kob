@@ -19,12 +19,13 @@ platform:
 | `kob-executor-<version>-mainnet-x86_64-unknown-linux-gnu.tar.gz` | mainnet, Linux x86-64 (glibc) |
 | `kob-executor-<version>-mainnet-aarch64-linux-android.tar.gz` | mainnet, an Android phone through Termux (arm64; section 8) |
 | `kob-executor-<version>-testnet-10-...` | the same for testnet-10 |
+| `kob-executor-<version>-testnet-10-android.apk` | the testnet-10 Android app, a tap-to-use install on an arm64 phone (section 9) |
 
 A binary serves exactly one network (the deployment build, `docs/ops/release.md`): the mainnet binary refuses a testnet
 node and the other way round. Start on testnet-10 if you have never run one.
 
 Each archive holds `kob-executor` (the executor), `kob-cli` (the command-line client), this page, `LICENSE` and a
-`SHA256SUMS` of its files; the release also lists a `SHA256SUMS` of every archive. Check the archive you downloaded against
+`SHA256SUMS` of its files; the release also lists a `SHA256SUMS` of every archive and of the APK. Check the archive you downloaded against
 it before you run anything:
 
 ```
@@ -297,23 +298,26 @@ key and no funds.
 ## 9. Android app (testnet-10, sideloaded)
 
 A tap-to-use app for the same arm64 phones (Android 7.0 or later): the testnet-10 executor in a foreground service, with a
-setup screen, a start / stop switch and a status screen. It runs the `kob-executor` binary of section 8 inside the app
-(`android/`), keeps its configuration, key and database in the app's private storage, and talks to nothing but the Kaspa
-node(s) you choose: no telemetry, no fee, no project server. It is a **testnet-10 build only** for now, and **debug-signed**:
-fine to sideload, not a store or release signature (an APK built by someone else with another key cannot update it).
+setup screen, a start / stop switch, a status screen, **Withdraw funds** and **Export the key**. It runs the `kob-executor`
+binary of section 8 inside the app (`android/`), keeps its configuration, key and database in the app's private storage, and
+talks to nothing but the Kaspa node(s) you choose: no telemetry, no fee, no project server. It is a **testnet-10 build only**
+for now. It is sideloaded (no store).
 
-1. **Download the APK.** On GitHub, Actions, workflow **android**, open the latest run on `master` (or start one with *Run
-   workflow*) and download the artifact **kob-executor-testnet-10.apk** (a zip holding the APK; unzip it on the phone or
-   the computer). The run's log prints the APK's SHA-256.
+1. **Download the APK.** On the [GitHub release](https://github.com/RossKU/kob/releases) of the version, download
+   `kob-executor-<version>-testnet-10-android.apk` (on the phone, or on a computer and copy it over) and check its SHA-256
+   against the release's `SHA256SUMS`. Builds of the latest `master` are also the artifact of the GitHub Actions workflow
+   **android** (a zip holding the APK; needs a GitHub login, kept for a limited time; the run's summary prints the SHA-256).
+   A file name ending in `-debug-signed.apk` is signed with a throwaway key: read **Updates** below before you put funds on it.
 2. **Install it.** Open the APK from the phone's file manager or browser and allow **install from this source** when Android
-   asks (Settings, Apps, Special access, Install unknown apps). Android may also warn about an app of unknown origin: this
-   is the debug signature.
+   asks (Settings, Apps, Special access, Install unknown apps). Android may warn about an app from an unknown source: it is
+   not from a store.
 3. **Set up.** Open *KOB Executor*. Keep **Public nodes** (two nodes found through the Kaspa resolvers; the default of
    section 8) or enter your own node's URL, choose **Matcher and keepers** or **Index only**, and tap *Save and generate
-   key*. For the matcher the app shows its **funding address**: copy it, send it at least 100 testnet KAS (200 recommended;
-   they have no value, mine or ask a faucet), and the balance appears under it. The key is generated on the phone
-   (`kob-operator.key`, readable by the app only) and never leaves it; uninstalling the app or clearing its data deletes
-   the key and the funds on it.
+   key*. For the matcher the app shows its **funding address** (always on the main screen, with a *Copy address* button):
+   send it at least 100 testnet KAS (200 recommended; they have no value, mine or ask a faucet), and the balance appears
+   under it. The key is generated on the phone (`kob-operator.key`, readable by the app only) and never leaves it unless you
+   export it. **Uninstalling the app or clearing its data (Settings, Apps, KOB Executor, Storage, Clear data) deletes the key,
+   and the funds on it with it.**
 4. **Allow background running.** Tap *Battery: allow unrestricted background use* and accept (or Settings, Apps, KOB
    Executor, Battery, **Unrestricted**), and exempt the app from the maker's own "sleeping apps" lists (Samsung, Xiaomi,
    Huawei, OnePlus). Allow notifications: the executor shows a persistent notification while it runs. The screen can be off.
@@ -323,5 +327,65 @@ fine to sideload, not a store or release signature (an APK built by someone else
    again (after 5 s, then longer); switch it off to stop it. The status screen shows whether it is caught up, its lag, the
    two nodes in use, the transactions it sent and its funds, and warnings (paused, funds low, node trouble).
 
+**Withdraw funds.** The button under the funding address opens a screen with the address to send to, an amount in KAS or
+`all`, and a confirmation. It **stops the executor first** (the executor uses the funds, and the database allows one writer),
+runs `kob-executor withdraw --to <address> --amount <KAS|all> --yes` (section 5) over the node of your setup, shows the
+transaction id or the error, and offers to **start the executor again**. A sent transaction cannot be taken back: check the
+address.
+
+**Export the key** (backup). The button opens a screen that warns first, asks for a confirmation, and then shows the key (64
+hex characters, selectable) with *Copy the key* and *Save the key to a file* (you choose where, with the phone's file picker).
+Anyone who has the key can take the funds: keep a copy where only you can read it, never in a photo or a message. The screen
+hides the key again when you leave it, and Android cannot screenshot it. Export the key before you uninstall the app or clear
+its data. The key is a plain private key; the app itself has no import.
+
+**Updates.** Android installs an APK over an installed one only when **both are signed with the same key**; then the app's data
+(the key, the configuration, the database) stays. APKs signed with the release key (the file name has no `-debug-signed`; the
+signer certificate's SHA-256 is in the workflow run's summary) update each other in place, and `versionCode` grows with every
+build, so any newer release installs over an older one. **A `-debug-signed` APK cannot be updated**: every build has another
+throwaway key, Android answers "App not installed", and the only way to a newer build is uninstalling the old one, which deletes
+its key and funds. With such an APK, put only test coins on it, and use *Withdraw funds* before you replace it. Android refuses
+a downgrade; `versionName` is the workspace version of the release.
+
 **Small funds only.** It is a hot key on a phone that Android may stop at any time. Put only a few days of fees and carriers
 on it, never savings; a stopped executor loses nothing but the spreads it would have earned.
+
+**Release signing (for the maintainer).** The release key is created once, outside the repository, and stored as four GitHub
+repository secrets that `.github/workflows/android.yml` (the push builds and, through `release.yml`, the release build) signs
+with:
+
+1. Run `node scripts/make-android-keystore.mjs` (needs a JDK's `keytool`). The default folder is `~/.kob/android-signing`
+   (`C:\Users\<you>\.kob\android-signing` on Windows); `--out <folder>` changes it, and a folder inside the repository is refused.
+   It writes the keystore, a random password file and the keystore as base64, **prints no password**, prints the signer
+   certificate's SHA-256, and prints the exact steps of the next point.
+2. Store the four secrets, with the GitHub CLI:
+
+   ```
+   # bash
+   gh secret set ANDROID_KEYSTORE_B64      --repo RossKU/kob < ~/.kob/android-signing/kob-release.jks.b64.txt
+   gh secret set ANDROID_KEYSTORE_PASSWORD --repo RossKU/kob < ~/.kob/android-signing/kob-release.password.txt
+   gh secret set ANDROID_KEY_PASSWORD      --repo RossKU/kob < ~/.kob/android-signing/kob-release.password.txt
+   gh secret set ANDROID_KEY_ALIAS         --repo RossKU/kob --body kob-release
+   # PowerShell
+   Get-Content -Raw $HOME\.kob\android-signing\kob-release.jks.b64.txt  | gh secret set ANDROID_KEYSTORE_B64      --repo RossKU/kob
+   Get-Content -Raw $HOME\.kob\android-signing\kob-release.password.txt | gh secret set ANDROID_KEYSTORE_PASSWORD --repo RossKU/kob
+   Get-Content -Raw $HOME\.kob\android-signing\kob-release.password.txt | gh secret set ANDROID_KEY_PASSWORD      --repo RossKU/kob
+   gh secret set ANDROID_KEY_ALIAS --repo RossKU/kob --body kob-release
+   ```
+
+   or in the browser: the repository, Settings, Secrets and variables, Actions, *New repository secret*, once for each of
+   `ANDROID_KEYSTORE_B64` (the content of `kob-release.jks.b64.txt`), `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_PASSWORD`
+   (both the content of `kob-release.password.txt`) and `ANDROID_KEY_ALIAS` (`kob-release`). `node scripts/make-android-keystore.mjs --steps`
+   prints the steps again for the files that exist.
+3. Run the **android** workflow (Actions, android, *Run workflow*): it must not warn "Android APK is debug-signed", and the
+   signer certificate SHA-256 in its summary must be the one the script printed.
+4. **Back up the folder** (a password manager, an offline copy). If the keystore is lost, installed apps can never be updated
+   in place again. Never commit it (`*.jks`, `*.keystore`, `*.p12` are git-ignored) and never paste the password in a chat or issue.
+
+Without the four secrets the workflows still build: they sign with the debug key, name the file `...-debug-signed.apk`, put a
+warning on the run and, for a release, in the draft release's notes. Either way the APK is built `debuggable=false`, so
+`adb run-as` cannot read the key off a phone.
+
+`versionCode` is the commit time in minutes (`git log -1 --format=%ct` divided by 60, set by the workflows), so it is
+deterministic for a commit and grows along `master`; a tag's release is an update of every earlier build. A local Gradle build
+without it gets `versionCode` 1 (set `KOB_VERSION_CODE` to build an update).

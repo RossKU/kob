@@ -2,13 +2,47 @@ name: android
 
 # The testnet-10 Android app (android/, docs/ops/executor-quickstart.md 9): builds the testnet-10 kob-executor for
 # aarch64-linux-android (bionic, NDK, as release.yml does), copies it into the app as libkobexecutor.so (it is executable
-# from the app's nativeLibraryDir; never committed) and builds kob-executor-testnet-10.apk with Gradle.
+# from the app's nativeLibraryDir; never committed) and builds the release APK with Gradle (not debuggable).
 #
-# The APK is signed with the Gradle debug key: enough to sideload on a phone for testnet-10, not a release signature (no
-# update path from a differently signed build, no store). It is uploaded as a workflow artifact only.
+# Signing (docs/ops/executor-quickstart.md 9, "Release signing"):
+# * With the repository secrets ANDROID_KEYSTORE_B64 (the keystore file, base64), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and
+#   ANDROID_KEY_PASSWORD the APK is signed with that release key: every build carries the same signature, so a newer APK installs
+#   over an older one and keeps the app's data, the operator key included. scripts/make-android-keystore.mjs makes the keystore and
+#   prints the steps that store the secrets.
+# * Without them the APK is signed with the runner's throwaway debug key and named ...-debug-signed.apk: it works on a fresh
+#   install, but it can NOT be updated in place by any other build (Android refuses it; uninstalling deletes the key and the funds
+#   on it). The run says so as a warning.
+#
+# versionName is the workspace version; versionCode is the commit time in minutes (android/app/build.gradle.kts), so it grows with
+# every commit and a release is always an update of an earlier build.
+#
+# Triggers: a push to master (the APK is a workflow artifact), a manual run, and release.yml (workflow_call: the same APK goes into
+# the draft release of a tag, with its SHA256 in SHA256SUMS; `fresh` skips the build cache there, as for the other binaries).
 
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      fresh:
+        description: "Build without the cargo cache (a release)"
+        type: boolean
+        default: false
+    secrets:
+      ANDROID_KEYSTORE_B64:
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+      ANDROID_KEY_ALIAS:
+        required: false
+      ANDROID_KEY_PASSWORD:
+        required: false
+    outputs:
+      signed:
+        description: "true when the APK is signed with the release key, false when with the debug key"
+        value: ${{ jobs.apk.outputs.signed }}
+      apk:
+        description: "File name of the APK artifact"
+        value: ${{ jobs.apk.outputs.apk }}
   push:
     branches: [master]
     paths:
@@ -26,15 +60,29 @@ env:
 jobs:
   apk:
     runs-on: ubuntu-22.04
+    outputs:
+      signed: ${{ steps.signing.outputs.signed }}
+      apk: ${{ steps.name.outputs.apk }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - name: Version (the workspace version) and versionCode (the commit time in minutes)
+        id: version
+        run: |
+          name=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p}' Cargo.toml | head -n 1)
+          test -n "$name" || { echo "no [workspace.package] version in Cargo.toml" >&2; exit 1; }
+          code=$(( $(git log -1 --format=%ct) / 60 ))
+          test "$code" -gt 0 || { echo "no commit time" >&2; exit 1; }
+          echo "versionName $name, versionCode $code"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
         with:
           toolchain: "1.94.0"
           targets: aarch64-linux-android
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: ${{ inputs.fresh != true }}
         with:
           key: android
       - name: Android NDK toolchain (the NDK preinstalled on the runner image; clang for API 24, Android 7.0 and later)
@@ -49,6 +97,9 @@ jobs:
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-C link-arg=-Wl,-z,max-page-size=16384"
           } >> "$GITHUB_ENV"
       - name: Build kob-executor (testnet-10 deployment build, --locked)
+        env:
+          # the commit /v1/health reports (docs/ops/release.md, 7)
+          KOB_GIT_COMMIT: ${{ github.sha }}
         run: cargo build --release --locked --target aarch64-linux-android -p kob-executor --features kob-executor/deploy-tn10
       - name: The binary is arm64 ELF, and goes into the app as libkobexecutor.so
         run: |
@@ -60,18 +111,81 @@ jobs:
           echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
-      - name: Build the debug-signed APK
-        working-directory: android
-        run: ./gradlew --no-daemon --console=plain assembleDebug
-      - name: Name it, and check the executor is in it
+      - name: Release signing key (the four ANDROID_* repository secrets), or the debug-key fallback
+        id: signing
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          missing=""
+          [ -n "$KS_B64" ] || missing="$missing ANDROID_KEYSTORE_B64"
+          [ -n "$KS_PASS" ] || missing="$missing ANDROID_KEYSTORE_PASSWORD"
+          [ -n "$KEY_ALIAS" ] || missing="$missing ANDROID_KEY_ALIAS"
+          [ -n "$KEY_PASS" ] || missing="$missing ANDROID_KEY_PASSWORD"
+          if [ -z "$missing" ]; then
+            ks="$RUNNER_TEMP/kob-release.jks"
+            printf '%s' "$KS_B64" | tr -d ' \r\n' | base64 -d > "$ks"
+            test -s "$ks" || { echo "::error::ANDROID_KEYSTORE_B64 does not decode to a keystore" >&2; exit 1; }
+            echo "KOB_KEYSTORE_FILE=$ks" >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Signing with the release key."
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Android APK is debug-signed::Repository secrets missing:$missing. The APK is signed with a throwaway debug key and CANNOT be updated in place (a later build is refused by Android; uninstalling deletes the operator key and its funds). Create the keystore with scripts/make-android-keystore.mjs and store the secrets (docs/ops/executor-quickstart.md 9)."
+          fi
+      - name: Build the release APK (not debuggable)
+        working-directory: android
+        env:
+          KOB_VERSION_CODE: ${{ steps.version.outputs.code }}
+          KOB_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KOB_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KOB_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon --console=plain assembleRelease
+      - name: Name it, and check it
+        id: name
+        env:
+          VERSION: ${{ steps.version.outputs.name }}
+          CODE: ${{ steps.version.outputs.code }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        run: |
+          bt="$ANDROID_HOME/build-tools/36.0.0"
+          src=android/app/build/outputs/apk/release/app-release.apk
+          test -f "$src" || { echo "no $src (an unsigned release APK would not install)" >&2; ls android/app/build/outputs/apk/release >&2; exit 1; }
+          apk="kob-executor-$VERSION-testnet-10-android.apk"
+          [ "$SIGNED" = true ] || apk="kob-executor-$VERSION-testnet-10-android-debug-signed.apk"
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/kob-executor-testnet-10.apk
-          unzip -l dist/kob-executor-testnet-10.apk > "$RUNNER_TEMP/apk.list"
+          cp "$src" "dist/$apk"
+          # the executor is in it
+          unzip -l "dist/$apk" > "$RUNNER_TEMP/apk.list"
           grep -q "lib/arm64-v8a/libkobexecutor.so" "$RUNNER_TEMP/apk.list"
-          sha256sum dist/kob-executor-testnet-10.apk
+          # the signature verifies; the certificate digest is public (it is the same on every release-signed build)
+          "$bt/apksigner" verify --verbose --print-certs "dist/$apk" > "$RUNNER_TEMP/sig.txt"
+          cat "$RUNNER_TEMP/sig.txt"
+          # versionName, versionCode, and not debuggable
+          "$bt/aapt2" dump badging "dist/$apk" > "$RUNNER_TEMP/badging.txt"
+          head -n 1 "$RUNNER_TEMP/badging.txt"
+          grep -q "versionName='$VERSION'" "$RUNNER_TEMP/badging.txt"
+          grep -q "versionCode='$CODE'" "$RUNNER_TEMP/badging.txt"
+          if grep -q "application-debuggable" "$RUNNER_TEMP/badging.txt"; then echo "::error::the APK is debuggable" >&2; exit 1; fi
+          sha256sum "dist/$apk"
+          echo "apk=$apk" >> "$GITHUB_OUTPUT"
+          {
+            echo "### $apk"
+            echo ""
+            if [ "$SIGNED" = true ]; then echo "Signed with the release key: it installs over an older build signed with the same key and keeps the app data."
+            else echo "**Debug-signed: cannot be updated in place** (create the release keystore: scripts/make-android-keystore.mjs)."; fi
+            echo ""
+            echo "versionName $VERSION, versionCode $CODE"
+            echo ""
+            echo '```'
+            grep -E "^Signer #1 certificate SHA-256" "$RUNNER_TEMP/sig.txt" || true
+            sha256sum "dist/$apk"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: kob-executor-testnet-10.apk
-          path: dist/kob-executor-testnet-10.apk
+          name: ${{ steps.name.outputs.apk }}
+          path: dist/${{ steps.name.outputs.apk }}
           if-no-files-found: error

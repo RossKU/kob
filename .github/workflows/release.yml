@@ -1,9 +1,13 @@
 name: release
 
 # Prebuilt kob-executor and kob-cli for operators (docs/ops/executor-quickstart.md): Windows x86_64 (MSVC, static CRT),
-# Linux x86_64 (glibc) and Android arm64 (aarch64-linux-android, bionic: for Termux on a phone, no APK), each as the testnet-10 and the mainnet deployment build (docs/ops/release.md), packaged by
-# scripts/package-release.mjs into kob-executor-<version>-<network>-<target>.zip / .tar.gz with QUICKSTART.md, LICENSE, NOTICE
-# and a SHA256SUMS of their files.
+# Linux x86_64 (glibc) and Android arm64 (aarch64-linux-android, bionic: for Termux on a phone), each as the testnet-10 and the mainnet
+# deployment build (docs/ops/release.md), packaged by scripts/package-release.mjs into
+# kob-executor-<version>-<network>-<target>.zip / .tar.gz with QUICKSTART.md, LICENSE, NOTICE and a SHA256SUMS of their files.
+# The Android app for tap-to-use phones (testnet-10 only; android.yml, called by the job `android` below) goes into the release as
+# kob-executor-<version>-testnet-10-android.apk, with its SHA256 in the release's SHA256SUMS like the archives. It is signed with the
+# release key when the ANDROID_* repository secrets exist (a new APK then updates the old one in place and keeps the key);
+# without them it is debug-signed, named ...-android-debug-signed.apk, and the release notes say it cannot be updated.
 #
 # * A pushed tag must be v<version> of the workspace (Cargo.toml [workspace.package], which kob-executor and kob-cli inherit):
 #   the version is bumped in the commit that is tagged, so --version of every binary is the tag. Any other tag fails here,
@@ -138,10 +142,18 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  android:
+    # the app: the same workflow the push to master runs, without the cargo cache, with the repository's signing secrets
+    needs: version
+    uses: ./.github/workflows/android.yml
+    with:
+      fresh: true
+    secrets: inherit
+
   release:
     # tags only: a dry run (workflow_dispatch) stops at the artifacts above
     if: github.ref_type == 'tag'
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -157,13 +169,19 @@ jobs:
           pattern: kob-executor-*
           path: dist
           merge-multiple: true
-      - name: SHA256SUMS of every archive
+      - name: SHA256SUMS of every archive and the APK
         run: node scripts/package-release.mjs --sums dist
-      - name: Draft release of the tag with the archives and SHA256SUMS
+      - name: Draft release of the tag with the archives, the APK and SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          APK_SIGNED: ${{ needs.android.outputs.signed }}
         run: |
+          notes="Prebuilt kob-executor and kob-cli (docs/ops/executor-quickstart.md) and the testnet-10 Android app (the .apk; quickstart 9). Check each file against SHA256SUMS. Release hashes (scripts/release-hashes.sh): to be added before publishing."
+          if [ "$APK_SIGNED" = true ]; then
+            notes="$notes The APK is signed with the release key: it installs over an earlier release and keeps the app's data."
+          else
+            notes="$notes WARNING: the APK is debug-signed (the release signing secrets were not set when it was built): no other build can update it in place, and uninstalling it deletes the operator key and its funds. Set the secrets (scripts/make-android-keystore.mjs, quickstart 9) and build again before publishing it as the app."
+          fi
           gh release create "$TAG" dist/kob-executor-* dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
-            --title "KOB $TAG" \
-            --notes "Prebuilt kob-executor and kob-cli (docs/ops/executor-quickstart.md). Check each archive against SHA256SUMS. Release hashes (scripts/release-hashes.sh): to be added before publishing."
+            --title "KOB $TAG" --notes "$notes"
