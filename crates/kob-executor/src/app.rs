@@ -264,7 +264,8 @@ mod tests {
     #[test]
     fn the_balance_is_read_for_the_configured_key_and_failures_keep_the_address() {
         let d = tempfile::tempdir().unwrap();
-        let tn = Some("testnet-10");
+        // the balance read resolves the network like every command: a deployment build (CI builds deploy-mainnet) refuses another
+        let tn = Some(kob_protocol::artifacts::deployment_network().unwrap_or("testnet-10"));
         let o = setup_non_interactive(&opts(d.path(), tn, false), &ask("resolver", AppRole::Match, true)).unwrap();
         let v = address_balance(d.path(), &mut Fake(Ok(1_234_500_000))).unwrap();
         assert_eq!(v["address"], o["address"]);
