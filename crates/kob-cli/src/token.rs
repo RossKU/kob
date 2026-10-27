@@ -910,7 +910,8 @@ mod tests {
         assert_eq!(sent.len(), 2, "preparation, then genesis");
         assert!(sent[0]["payload"].as_str().unwrap().starts_with("007b"));
         assert_eq!(sent[1]["inputs"][0]["previousOutpoint"]["transactionId"], ids["preparation_txid"]);
-        assert_eq!(sent[1]["payload"], "");
+        // the genesis names the state of its one token output (KOBG | 1 | 1 | 112 | the state span)
+        assert!(sent[1]["payload"].as_str().unwrap().starts_with("4b4f4247010170"), "{}", sent[1]["payload"]);
         assert_eq!(run_resume(&v(&format!("{} --node {url}", dir.display()))), 0);
         let sent = state.lock().unwrap().submitted.clone();
         assert_eq!(sent.len(), 4);
