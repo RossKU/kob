@@ -22,6 +22,7 @@ import { readPairReferences, readReferences, type References } from '../../data/
 import type { PlanEnv } from '../../kob/plan-types';
 import { auctionSubmitBy } from '../../wallet/sign';
 import { useFailoverState } from '../shell/failover';
+import { useSystemStatus } from '../shell/StatusProvider';
 import { SendStatusLine, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
 import type { GateVerdict, SendJob } from '../confirm/send';
 import { RETIME_LEAD_DAA, firstAttemptLead, laterClock, rememberedSigningMs, retimeLead } from '../confirm/signing-time';
@@ -38,7 +39,7 @@ import { fillsNote } from './fills-note';
 import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
 import { maxBuyAmount } from './max-amount';
 import { orderLabel } from './order-label';
-import { ticketNotes } from './ticket-notes';
+import { minOrderValueOf, minValueNote, ticketNotes } from './ticket-notes';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan, type EnvWait } from './use-ticket';
 import { CLOCK_TICK_MS, CLOCK_WAIT_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, liveClockAt, reviewClock, sameTransaction, slippageWithin, withinTerms } from './review-check';
 import { rememberPairForm, takePairFlip } from './pair-flip';
@@ -86,6 +87,7 @@ export function OrderTicket(props: OrderTicketProps) {
   /** the ticker the prices are in: KAS, or the pair's quote token B */
   const quoteTicker = quote ? quote.ticker : 'KAS';
   const services = useServices();
+  const { indexer: indexerStatus } = useSystemStatus();
   const wallet = useWallet();
   const tradable = token.tradable && token.program !== null && (!quote || (quote.tradable && quote.program !== null));
   // the order scale of this token (10^decimals, at most 10^9; kob-wasm defaultScale): every price is per that many base units
@@ -601,6 +603,10 @@ export function OrderTicket(props: OrderTicketProps) {
   const planIssues = issues.filter((i) => i.severity === 'error');
   // warnings the ticket notes (ticket-notes.ts): one line each next to the button, never a reason to stop or to click
   const planNotes = ticketNotes(issues);
+  // an order worth less than the executor's minimum order value is indexed but never listed, so it never fills: said before signing, never a stop.
+  // Plain orders only (a ladder is several orders planned one by one; a pair has no KAS value)
+  const minValue = minOrderValueOf(indexerStatus.health);
+  const lowValue = shownPlan && !quote && !ladder ? minValueNote(shownPlan, minValue.sompi) : null;
   // an order that takes liquidity now: its fills against the visible book, next to the Fills box, and a warning when they cannot take the amount
   const fillsBox = layout.main.includes('maxFills') || layout.advanced.includes('maxFills');
   const amountBase = baseOf('amount');
@@ -781,13 +787,18 @@ export function OrderTicket(props: OrderTicketProps) {
       ) : null}
 
       {props.facts}
-      {planNotes.length > 0 ? (
+      {planNotes.length > 0 || lowValue ? (
         <ul class="tk-cautions" data-testid="order-notes" aria-live="polite">
           {planNotes.map((i, n) => (
             <li key={`${i.code}-${n}`} class="tk-caution" data-code={i.code} data-testid={`order-note-${i.code}`}>
               <span key={issueText(i, issueCtx)}>{issueText(i, issueCtx)}</span>
             </li>
           ))}
+          {lowValue ? (
+            <li class="tk-caution" data-code="ORDER_VALUE_BELOW_MINIMUM" data-testid="order-note-min-value">
+              {t(`ticket.minValue.${minValue.source}`, { value: formatKas(lowValue.value, { group: ',' }), min: formatKas(lowValue.min, { group: ',' }) })}
+            </li>
+          ) : null}
         </ul>
       ) : null}
 

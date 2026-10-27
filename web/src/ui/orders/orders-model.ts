@@ -244,6 +244,12 @@ export interface OrderRowModel {
   /** the executor's pre-simulation of the order's next fill failed: the token program may have frozen / blacklisted it (not in the book depth) */
   possiblyFrozen: boolean;
   /**
+   * a live order the indexer does not list (`listed: false`): indexed (status, cancel) but in no book, so it never fills. `reason` is the indexer's
+   * `unlisted_reason` code (ui/orders/unlisted.ts words it; null when an older executor names none); null for a listed order, an ended order (nothing
+   * left to list) or an order the indexer does not know
+   */
+  unlisted: { reason: string | null } | null;
+  /**
    * a pair order (KobPair, KobCondPair, KobIfdPair): base A (`token`) and quote B, its prices in B BASE UNITS PER WHOLE A (`scale` = scale(A)
    * base units; `price`, `stopPrice`, `auctionStart` of the row are then B prices too, `allInPrice` is null: the tip is KAS), what it holds
    * of each token (an ask's A, a bid's B escrow, a sell-first entry's A and B prefund), the indexer's current quote of an auction, the trigger rule
@@ -403,6 +409,7 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
     // a sold-out repeat ENTRY waiting for its exits to re-arm it also has amount 0 left: that is a healthy position, not an unfundable bid
     unfundable: live && side === 'buy' && v !== null && bi(v.amount_left) === 0n && v.repeat?.role !== 'entry',
     possiblyFrozen: live && v?.possibly_frozen === true,
+    unlisted: live && v?.listed === false ? { reason: v.unlisted_reason ?? null } : null,
     pair,
   };
 }

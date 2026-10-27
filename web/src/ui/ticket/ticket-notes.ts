@@ -1,6 +1,9 @@
 // The planner's warnings the ticket shows as one-line notes next to the order button. They never stop the order and need no click (the order
 // goes from the button straight to the wallet, 4c318276); only errors disable the button. Pure and DOM-free.
-import type { PlanIssue } from '../../kob/plan-types';
+import { isKind } from '../../kob/order-facts';
+import type { OrderPlan, PlanIssue } from '../../kob/plan-types';
+import type { OrderState } from '../../kob/types';
+import { quoteOf } from '../../kob/units';
 
 /**
  * What the ticket notes: a price far through the market (a typing error), a market reference that disagrees with the last fill, a high slippage, a
@@ -29,4 +32,67 @@ export function ticketNotes(issues: readonly PlanIssue[]): PlanIssue[] {
     out.push(i);
   }
   return out;
+}
+
+// ------------------------------------------------------------------------------------------------ minimum order value
+
+/**
+ * The executor's default minimum order value, in sompi (1 KAS): `ListingRules::min_order_value_sompi` in crates/kob-executor/src/tokens.rs. An order
+ * worth less is indexed (status, cancel) but never listed (`unlisted_reason: "order_value_below_minimum"`), so it is in no book and never fills.
+ * Each operator can set another value under `[rules]` of the executor config, and the indexer API (docs/api.md section 3.1, `/v1/health`) does not
+ * report it, so the web app assumes this default (see {@link minOrderValueOf}).
+ */
+export const DEFAULT_MIN_ORDER_VALUE_SOMPI = 100_000_000n;
+
+/**
+ * The minimum order value to warn at: the indexer's, when `/v1/health` reports it, else the executor default. No server sends such a field today
+ * (`min_order_value_sompi`, sompi as a decimal string or a safe integer): this optional reader only makes the warning follow an executor that starts
+ * to report it. `source` says which one it is, so the note can say that the number is only the default.
+ */
+export function minOrderValueOf(health: unknown): { sompi: bigint; source: 'indexer' | 'default' } {
+  const v = health && typeof health === 'object' ? (health as { min_order_value_sompi?: unknown }).min_order_value_sompi : undefined;
+  if (typeof v === 'string' && /^\d+$/.test(v)) return { sompi: BigInt(v), source: 'indexer' };
+  if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) return { sompi: BigInt(v), source: 'indexer' };
+  return { sompi: DEFAULT_MIN_ORDER_VALUE_SOMPI, source: 'default' };
+}
+
+const bigOrNull = (v: unknown): bigint | null => {
+  try {
+    return typeof v === 'string' || typeof v === 'number' || typeof v === 'bigint' ? BigInt(v) : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The value the executor's listing rule measures for a plain KAS order (kob-executor `ListingRules::evaluate`): a sell's amount at its quote,
+ * `quoteOf(amountLeft, price, scale)` rounded down (kob-protocol `quote_exact`); a bid's KAS escrow (`carrier`: the whole value of its order UTXO).
+ * `null` when the rule does not measure it here (a conditional, stop, if-done or pair order) or the state is not readable.
+ */
+export function listingValueOf(state: OrderState, carrier: bigint): bigint | null {
+  if (isKind(state, 'KobBid')) return carrier >= 0n ? carrier : null;
+  if (!isKind(state, 'KobAsk')) return null;
+  const s = state.state;
+  const [amount, price, scale] = [bigOrNull(s.amountLeft), bigOrNull(s.price), bigOrNull(s.scale)];
+  if (amount === null || price === null || scale === null || amount < 0n || price < 0n || scale <= 0n) return null;
+  return quoteOf(amount, price, scale, 'down');
+}
+
+/** The order's value and the minimum it falls short of. */
+export interface MinValueNote {
+  value: bigint;
+  min: bigint;
+}
+
+/**
+ * The note for an order worth less than the minimum (`value < min`: a value equal to it is listed), from a plan of ONE plain order; `null` when the
+ * order is worth the minimum or more, or its value is not known (no plan, a conditional / stop / pair order, several orders). Never an error: the
+ * order can still be placed, and cancelled from My orders.
+ */
+export function minValueNote(plan: Pick<OrderPlan, 'states' | 'request'> | null, min: bigint): MinValueNote | null {
+  if (!plan || plan.states.length !== 1 || !plan.request) return null;
+  const carrier = bigOrNull(plan.request.value);
+  if (carrier === null) return null;
+  const value = listingValueOf(plan.states[0]!, carrier);
+  return value !== null && value < min ? { value, min } : null;
 }

@@ -257,6 +257,8 @@ export default {
   'ticket.ph.tip': '0',
   'ticket.ph.maxFills': 'default',
   'ticket.ph.maxFills.market': '1',
+  'ticket.minValue.default': 'This order is worth {value} KAS, below the minimum order value of {min} KAS that executors use by default (an operator can set another). The indexer will not list it, so it will not fill. You can still place it; cancel it from My orders to get your funds back.',
+  'ticket.minValue.indexer': 'This order is worth {value} KAS, below the indexer minimum order value of {min} KAS. The indexer will not list it, so it will not fill. You can still place it; cancel it from My orders to get your funds back.',
   'ticket.fills.estimate': 'The visible book needs about {needed} fill(s) for this amount ({perTx} {counterparty} per transaction).',
   'ticket.fills.estimateCross': 'What crosses now needs about {needed} fill(s) ({perTx} {counterparty} per transaction).',
   'ticket.fills.clamped': 'Fills limited to {fills} (you asked for {requested}): with a minimum fill of {minFill}, {amount} cannot be split into more.',

@@ -129,8 +129,8 @@ export interface FillsQuery {
   before?: number | string;
 }
 export interface TokenUtxosQuery {
-  /** x-only public key of the owner (or an order covenant id: custody and strays) */
-  owner: Hex;
+  /** x-only public key of the owner (or an order covenant id: custody and strays); absent: every holder of `token` (the indexer needs one of the two) */
+  owner?: Hex;
   token?: Hex;
   spent?: boolean;
   limit?: number;
@@ -418,7 +418,7 @@ export class HttpIndexer implements IndexerApi {
       for (let page = 0; page < (q.maxPages ?? 10); page++) {
         const r = await this.get<{ items?: TokenUtxoView[]; next_cursor?: string | null } | TokenUtxoView[]>(
           '/v1/token-utxos',
-          { owner: assertHex('owner', q.owner), token: q.token && assertHash('token', q.token), spent: q.spent ?? false, limit: q.limit, cursor },
+          { owner: q.owner ? assertHex('owner', q.owner) : undefined, token: q.token && assertHash('token', q.token), spent: q.spent ?? false, limit: q.limit, cursor },
           o,
         );
         if (Array.isArray(r)) return [...out, ...r];

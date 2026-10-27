@@ -72,6 +72,9 @@ export class MockChain {
     this.txs = new Set();
     this.submissions = [];
     this.failNext = { remaining: 0, message: 'mock: injected submit failure' };
+    // the executor's `min_order_value_sompi` (crates/kob-executor/src/tokens.rs ListingRules; the real default is 1 KAS = 100000000). OFF (0) by default so the
+    // seeded books and the specs' small orders stay listed; `POST /mock/min-order-value` turns the rule on
+    this.minOrderValue = 0n;
     // KCC-23 (the executor's indexer::kcc23): candidate preparations by txid (their id-relevant fields), and the verified launch proof of every
     // covenant id whose genesis spent one
     this.kcc23Candidates = new Map();
@@ -772,6 +775,13 @@ export class MockChain {
     if (!reason && pt) {
       const q = listing(this.tokens.get(pt.b.covId) ?? null, pt.b.tplHash, pt.b.scale);
       if (q) reason = `quote_${q}`;
+    }
+    // the order's value (ListingRules::evaluate): a plain ask / bid's amount at its quote rounded down, a bid's escrow (the KAS of its output); the
+    // other kinds (conditional, if-done, pair) are not measured here
+    if (!reason && this.minOrderValue > 0n && !pt) {
+      const base = baseKind(any.kind);
+      const val = base === 'KobAsk' ? quoteOf(t.amountLeft, t.price, t.scale, 'down') : base === 'KobBid' ? BigInt(value) : null;
+      if (val !== null && val < this.minOrderValue) reason = 'order_value_below_minimum';
     }
     const listed = reason === null;
     const ext = s.extensionCommitment ?? custodyState?.extension_commitment ?? (pt ? (pt.side === 1 ? null : pt.b.ext) : null) ?? tok?.extension_commitment ?? null;

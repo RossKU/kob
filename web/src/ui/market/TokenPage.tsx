@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'preact/hooks';
 import { displayToken } from '../../app/token-display';
+import { pageTitle, useDocumentTitle } from '../../app/page-title';
 import { useDeclaration, useDeclarationLookup } from '../../app/use-declaration';
 import { useServices, useWallet } from '../../app/context';
 import type { TicketPreset } from '../../app/router';
@@ -13,6 +14,7 @@ import { buildBookModel, groupSizesAt, inferTick, levelsFromView } from './book-
 import { useStaleSince } from './book-stale';
 import { useOpenToken } from './use-open-token';
 import { useHeldToken } from './use-held-token';
+import { usePublicToken } from './use-public-token';
 import { FirstOrderDecimals } from './FirstOrderDecimals';
 import { issuedDecimals } from '../../data/issued-decimals';
 import { DepthChart } from './DepthChart';
@@ -33,7 +35,7 @@ import { PriceChart } from './PriceChart';
 import { TokenFacts } from './TokenBadges';
 import { TokenDetails, TokenHeader } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
-import { applyKascov } from './kascov-merge';
+import { applyKascov, kascovRowOf } from './kascov-merge';
 import { useKascov } from './use-kascov';
 import { buildTokenRows, sharedTickerIds, tradableRows } from './token-model';
 import { TradeTape } from './TradesPanel';
@@ -74,9 +76,20 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const declaredOf = useDeclarationLookup();
   const allRows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, [], declaredOf), [registry, tokens.data, declaredOf]);
   const listedRow = useMemo(() => allRows.find((r) => r.covenantId === id) ?? null, [allRows, id]);
-  // a KCC-20 token in neither list (no order of it yet): its market only from the wallet's node-verified holdings of it (kob/open-token.ts)
-  const held = useHeldToken(id, !listedRow && !tokens.loading);
-  const baseRow = listedRow ?? held.row;
+  // the creator's name, ticker and icon from kascov.io, where KOB has none of its own (kascov-merge.ts; the facts stay KOB's)
+  const kascov = useKascov();
+  // a token in neither list (no order of it yet) that kascov.io names and whose program this build pins: the same row the market list shows for it
+  const kascovRow = useMemo(
+    () => (!listedRow && kascov.status === 'ok' ? kascovRowOf(id, kascov.tokens, { network: services.config.network, templates: kob.templates(), registry, declared: declaredOf }) : null),
+    [listedRow, kascov, id, services.config.network, kob, registry, declaredOf],
+  );
+  // a KCC-20 token in neither list (no order of it yet): its market opens from the wallet's node-verified holdings of it, else from token outputs of it
+  // the indexer names and the node confirms, whoever holds them (kob/open-token.ts); the kascov.io row is only what the page shows while it checks, or
+  // when nothing verifies (no ticket then: the page says which fact is missing)
+  const notListed = !listedRow && !tokens.loading;
+  const held = useHeldToken(id, notListed);
+  const pub = usePublicToken(id, notListed && !held.row && !held.loading);
+  const baseRow = listedRow ?? held.row ?? pub.row ?? kascovRow;
   // the pair selector offers only tokens this build can trade
   const choiceRows = useMemo(() => tradableRows(allRows, kob.templates()), [allRows, kob]);
   // another listed token uses this ticker: a short note at the title and the ticket
@@ -89,7 +102,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // the token's KCC-23 declaration (verified against its covenant id): its decimals decide an open-list token's scale, its facts are shown
   // a token only the wallet's holdings show (the indexer lists it to its owner, not in its token list: no order names it yet) is asked for its declaration
   // too, so a fresh browser of the issuing key names it and knows its decimals instead of asking for them
-  const declared = useDeclaration(id, listedRow?.index?.declaration === true || !!held.row);
+  const declared = useDeclaration(id, listedRow?.index?.declaration === true || !!held.row || !!pub.row);
   const open = useOpenToken(baseRow, liveKey, enteredDecimals, declared ?? null);
   // a token the indexer lists without a ticker ("") is named like one without any (app/token-display.ts): the open-list token's name (this
   // browser's issuance ticker, else its covenant id), else the display name; never an empty name in a title, a unit or a hint
@@ -106,9 +119,20 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       : named;
   }, [baseRow, open.info, shown, onChain]);
 
-  // the creator's name, ticker and icon from kascov.io for the title bar, where KOB has none of its own (kascov-merge.ts; the facts below stay KOB's)
-  const kascov = useKascov();
+  // the title bar's row: the creator's name, ticker and icon from kascov.io where KOB has none of its own (the facts below stay KOB's)
   const headerRow = useMemo(() => (row && kascov.status === 'ok' ? applyKascov(row, kascov.tokens, longId(row.covenantId)) : row), [row, kascov]);
+
+  // the ticket names the token as the page does: the creator's ticker (kascov.io) where KOB has no name of its own; a label, the id stays the identity
+  // the pair selector's rows: the tradable tokens, this token named as the page names it (a token no list names has no row of its own: it is added)
+  const selectorRows = useMemo(() => {
+    const shown = headerRow ?? row;
+    if (!shown) return choiceRows;
+    return choiceRows.some((r) => r.covenantId === id) ? choiceRows.map((r) => (r.covenantId === id ? { ...r, ticker: shown.ticker } : r)) : [...choiceRows, shown];
+  }, [choiceRows, headerRow, row, id]);
+  const ticketInfo = useMemo(() => {
+    const i = row?.info;
+    return i && i.openList && headerRow && headerRow.ticker && headerRow.ticker !== i.ticker && headerRow.kascov?.usedTicker ? { ...i, ticker: headerRow.ticker } : i;
+  }, [row?.info, headerRow]);
 
   const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: 60, aggregate: true }, { signal }) : Promise.resolve(null)), [indexer, id]);
   // the trade tape: `/v1/trades`, or the fill events of an indexer without it
@@ -148,7 +172,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const [invertedChoice, toggleInverted, setInverted] = useInverted(marketKey('token', id), defaultInverted(usdRef));
   const canFlip = scale !== null;
   const inverted = invertedChoice && canFlip;
-  const name = row?.ticker || shown?.ticker || '';
+  // the unit of every price and amount on the page: KOB's name of the token, else the creator's ticker (the same label rule as the list), else its covenant id
+  const name = headerRow?.ticker || shown?.ticker || '';
+  // the tab: the token's name (a token still being looked up is named by its short id), `Token not found` when nothing names it
+  useDocumentTitle(pageTitle(row ? name || longId(id) : tokens.loading || held.loading || pub.loading ? longId(id) : t('market.token.notFound')));
 
   // the book without grouping: the reference price of the page when there is neither a 24 h last price nor a trade
   const refMid = useMemo(() => {
@@ -246,11 +273,12 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   );
 
   if (!row) {
-    if (tokens.loading || held.loading) return <Loading />;
+    if (tokens.loading || held.loading || pub.loading) return <Loading />;
     return (
       <div class="stack" data-testid="token-not-found">
         <Banner tone="warn" title={t('market.token.notFound')}>
           {t('market.token.notFoundBody', { id })}
+          {pub.reason ? <div data-testid="token-public-reason">{t(`market.public.${pub.reason}`)}</div> : null}
           {held.reason && held.reason !== 'not-held' ? <div data-testid="token-held-reason">{t(`market.held.${held.reason}`)}</div> : null}
           {!wallet.info ? <div data-testid="token-held-connect">{t('market.held.connect')}</div> : null}
         </Banner>
@@ -296,7 +324,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           pair={
             <>
               {canFlip ? <FlipButton pair={pairLabel(name, !inverted)} pressed={inverted} onClick={toggleInverted} /> : null}
-              <PairSelector pair={displayedPair(id, null, inverted)} rows={row ? choiceRows.map((r) => (r.covenantId === id ? { ...r, ticker: row.ticker } : r)) : choiceRows} onChange={onPair} />
+              <PairSelector pair={displayedPair(id, null, inverted)} rows={selectorRows} onChange={onPair} />
             </>
           }
         />
@@ -367,14 +395,18 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
                 </Banner>
               ) : null}
               {wallet.networkMismatch ? <Banner tone="error" data-testid="ticket-network-blocked">{t('market.ticket.networkBlocked')}</Banner> : null}
-              <OrderTicket token={info} prefill={prefill} inverted={inverted} facts={<TokenFacts rows={[row]} compact data-testid="ticket-token-facts" />} />
+              <OrderTicket token={ticketInfo ?? info} prefill={prefill} inverted={inverted} facts={<TokenFacts rows={[row]} compact data-testid="ticket-token-facts" />} />
             </div>
           ) : open.reason === 'no-scale' ? (
-            <FirstOrderDecimals key={id} known={issuedDecimals(services.config.network, id)} onSet={(d) => setEntered({ id, decimals: d })} />
+            <FirstOrderDecimals key={id} known={issuedDecimals(services.config.network, id)} claim={headerRow?.kascov?.decimals ?? null} onSet={(d) => setEntered({ id, decimals: d })} />
           ) : (
             <Section title={t('market.ticket.title')} data-testid="ticket-unavailable" class="mkt-card">
               <Banner tone="warn" data-testid="ticket-untradable">
-                {open.reason === 'book-unavailable'
+                {row.source === 'kascov'
+                  ? pub.loading || pub.reason === null
+                    ? t('market.public.loading')
+                    : t('market.public.unverified', { reason: t(`market.public.${pub.reason}`) })
+                  : open.reason === 'book-unavailable'
                   ? t('market.ticket.untradableBook', { reason: t(`market.open.${open.reason}`) })
                   : open.reason
                   ? t('market.ticket.untradable', { reason: t(`market.open.${open.reason}`) })

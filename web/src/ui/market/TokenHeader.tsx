@@ -6,6 +6,7 @@ import { formatUnits } from '../../kob/units';
 import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
 import type { TokenInfo } from '../../kob/registry';
 import { KascovNote } from './KascovNote';
+import { KascovLink, ProgramNote } from './ProgramNote';
 import { TokenIcon } from './TokenIcon';
 import { TokenNote } from './TokenNote';
 import { OpenTokenNote, PowersWarning, SharedTickerNote, StatusBadges, TokenFacts, powerName, tokenTitle } from './TokenBadges';
@@ -71,7 +72,7 @@ export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) 
       <PowersWarning powers={r.powers} />
       <TokenFacts rows={[r]} data-testid="token-facts" />
       <OpenTokenNote token={r.info} data-testid="token-open-caution" />
-      {!r.tradable && r.reason ? (
+      {!r.tradable && r.reason && r.source !== 'kascov' ? (
         <p class="small" style="margin:0" data-testid="token-untradable">
           <strong>{t('market.notTradable')}</strong> {t(`market.reason.${r.reason}`)}
         </p>
@@ -107,10 +108,12 @@ export function TokenHeader(props: {
           {r.name ? <span class="mkt-name" data-testid="token-name">{r.name}</span> : null}
           <TokenNote token={props.note} />
           <KascovNote row={r} />
+          <KascovLink row={r} />
           {props.badges}
         </div>
         {props.tools}
       </div>
+      <ProgramNote row={r} />
       <TokenWarnings row={r} sharedTicker={props.sharedTicker} />
     </div>
   );

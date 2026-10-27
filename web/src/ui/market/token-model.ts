@@ -87,9 +87,10 @@ const warningsOf = (v: IndexerTokenView | null): string[] => (v && Array.isArray
 
 /**
  * `held`: a token the indexer does not list, known from the wallet's node-verified holdings of it (`kob/open-token.ts` `heldTokenView`).
+ * `public`: a token the indexer does not list either, known from token outputs of it that the indexer names and the node confirmed, whoever holds them (`kob/open-token.ts` `findPublicToken`).
  * `kascov`: a token only the third-party list kascov.io names (data/kascov.ts; no order of it is known to the KOB indexer).
  */
-export type TokenSource = 'registry' | 'indexer' | 'pasted' | 'held' | 'kascov';
+export type TokenSource = 'registry' | 'indexer' | 'pasted' | 'held' | 'public' | 'kascov';
 
 /**
  * What kascov.io contributed to a row (ui/market/kascov-merge.ts). A DISPLAY layer: the creator's claims, never facts. `ticker` / `name` are shown only
@@ -185,7 +186,7 @@ export function unknownRow(reg: TokenRegistry, view: IndexerTokenView, source: T
     // this build's own registry does not list the token: it cannot trade it from the list
     tradable: false, reason: 'unregistered',
     // a token known only from the wallet's holdings (`held`) has a made-up view: its order counts are not known, never 0
-    indexerProblems: [], openAsks: source === 'held' ? null : view.open_asks, openBids: source === 'held' ? null : view.open_bids,
+    indexerProblems: [], openAsks: source === 'held' || source === 'public' ? null : view.open_asks, openBids: source === 'held' || source === 'public' ? null : view.open_bids,
     decimals,
     scale: view.scale != null ? BigInt(view.scale) : decimals != null ? 10n ** BigInt(Math.min(decimals, 9)) : null,
     tick: null,

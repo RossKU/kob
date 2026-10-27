@@ -199,6 +199,14 @@ describe('HttpIndexer.tokenUtxos', () => {
     }
   });
 
+  it('asks by token alone (every holder): no owner parameter is sent', async () => {
+    const { f, calls } = stub(() => json({ items: [], next_cursor: null }));
+    const ix = new HttpIndexer({ baseUrl: 'http://x', fetch: f });
+    expect(await ix.tokenUtxos({ token: H2, spent: false, limit: 25, maxPages: 2 })).toEqual([]);
+    expect(calls.map((u) => u.pathname + u.search)).toEqual([`/v1/token-utxos?token=${H2}&spent=false&limit=25`]);
+    expect(calls[0]!.searchParams.has('owner')).toBe(false);
+  });
+
   it('follows next_cursor across pages and stops at maxPages', async () => {
     const mk = (n: number) => ({ txid: H1, index: n, token: H2, owner: H1, amount: '5', value: '10', role: 'owned', spent: false });
     const { f, calls } = stub((u) => {

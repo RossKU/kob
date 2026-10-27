@@ -308,7 +308,7 @@ small, .small { font-size: 0.85em; }
 .badge-neutral { background: var(--surface-3); color: var(--muted); }
 
 .banner { border: 1px solid var(--border); border-left-width: 5px; border-radius: var(--radius-sm); padding: 10px 12px; background: var(--surface-2); display: flex; gap: 12px; align-items: flex-start; }
-.banner-body { flex: 1 1 auto; min-width: 0; }
+.banner-body { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .banner-title { font-weight: 700; margin-bottom: 2px; }
 .banner-body > :last-child { margin-bottom: 0; }
 .banner-info { border-color: var(--info); background: var(--info-bg); }

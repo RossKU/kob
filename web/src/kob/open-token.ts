@@ -21,7 +21,9 @@
 //     here, whatever the indexer lists; prototypes (8x8, ...) are `program-unreviewed`;
 //   * a KCC-20 token the indexer does not list at all (no order of it was ever placed) is known only from the wallet's own token UTXOs of it
 //     that the node confirmed (`heldTokenView`): their addresses commit to the program and the state, so they show the program and the
-//     extension commitment. Without such holdings there is nothing to check the covenant id against, and the token is not offered;
+//     extension commitment. Without such holdings the same is read from ANY holder's token outputs of the covenant id: the indexer names them
+//     (`GET /v1/token-utxos?token=`) and the node confirms each one (`findPublicToken`, `TokenTracker.publicTokenUtxos`), so no wallet is needed. A token
+//     with neither has nothing to check the covenant id against, and its market is not offered (the page says which fact is missing);
 //   * tick: 1 sompi.
 import type { IndexerTokenView } from '../data/indexer-types';
 import type { Hex, TokenProgram, TokenState, TokenUtxo } from './types';
@@ -109,6 +111,8 @@ export interface OpenTokenOptions {
   network?: string | null;
   /** the row was built from the wallet's node-verified holdings (`heldTokenView`): the extension commitment's source is `holdings` */
   fromHoldings?: boolean;
+  /** the row was built from token outputs the node confirmed whoever holds them (`findPublicToken`): the extension commitment's source is `chain` */
+  fromChain?: boolean;
   /**
    * the ticker and name of this browser's issuance of the token (data/issued-decimals.ts): its label instead of the covenant id. A label only
    * (unverified, shown as such); the decimals still come from the market's scale
@@ -202,7 +206,7 @@ export function synthesizeOpenToken(
       ...(convention ? { decimalsConvention: convention.source } : {}),
       templateMatchesPinned: true, prefixLen: tpl.prefixLen, suffixLen: tpl.suffixLen, slots: { inputs: tpl.tokenSlots[0], outputs: tpl.tokenSlots[1] },
       tradable: true, untradableReason: null, json,
-      ...(family === 'kcc20' && ext ? { extension: checkExtension(ext, opts.fromHoldings ? 'holdings' : view.extension_commitment ? 'indexer' : 'orders', references) } : {}),
+      ...(family === 'kcc20' && ext ? { extension: checkExtension(ext, opts.fromHoldings ? 'holdings' : opts.fromChain ? 'chain' : view.extension_commitment ? 'indexer' : 'orders', references) } : {}),
     },
   };
 }
@@ -271,4 +275,29 @@ export function heldTokenView(
       powers: [], template_id: templateId, family: 'kcc20',
     },
   };
+}
+
+export type PublicTokenIssue = Exclude<HeldTokenIssue, 'not-held'> | 'indexer-unavailable' | 'not-indexed' | 'not-confirmed' | 'node-unavailable';
+export type PublicTokenResult = { ok: true; view: IndexerTokenView } | { ok: false; reason: PublicTokenIssue };
+
+/** What [`findPublicToken`] reads (`data/token-tracker.ts` `TokenTracker.publicTokenUtxos`): the node-confirmed token outputs of one token, any holder. */
+export interface PublicTokenSource {
+  publicTokenUtxos(covenantId: Hex): Promise<{ indexer: 'ok' | 'unavailable'; claimed: number; nodeFailed: boolean; utxos: readonly (TokenUtxo & { program: TokenProgram })[] }>;
+}
+
+/**
+ * The token row of a KCC-20 covenant id no registry or indexer token list names, from token outputs of it that the indexer lists (`GET
+ * /v1/token-utxos?token=`) and the node confirmed, whoever holds them: each confirmed output's address commits to the token program and the whole
+ * state, at an outpoint the node lists under the covenant id. The result is [`heldTokenView`] of them, with its checks (one pinned program that
+ * this network allows, one extension commitment). Nothing here reads a name, a ticker or a decimals: those are labels and rules elsewhere. The
+ * reasons say which fact is missing: the indexer does not answer (`indexer-unavailable`), knows no output of the token (`not-indexed`), names some
+ * the node does not list (`not-confirmed`) or the node could not be asked (`node-unavailable`).
+ */
+export async function findPublicToken(src: PublicTokenSource, kob: KobWasm, covenantId: Hex, network: string | null | undefined): Promise<PublicTokenResult> {
+  const id = covenantId.toLowerCase();
+  const r = await src.publicTokenUtxos(id);
+  if (r.indexer === 'unavailable') return { ok: false, reason: 'indexer-unavailable' };
+  if (r.utxos.length === 0) return { ok: false, reason: r.nodeFailed ? 'node-unavailable' : r.claimed === 0 ? 'not-indexed' : 'not-confirmed' };
+  const held = heldTokenView(kob, id, [...new Set(r.utxos.map((u) => u.program))], r.utxos, network);
+  return held.ok ? held : { ok: false, reason: held.reason === 'not-held' ? 'not-confirmed' : held.reason };
 }

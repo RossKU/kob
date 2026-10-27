@@ -12,10 +12,11 @@
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { useDeclarationLookup } from '../../app/use-declaration';
+import { pageTitle, useDocumentTitle } from '../../app/page-title';
 import { navigate, pairRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { PairToken } from '../../kob/pair';
-import type { TokenInfo } from '../../kob/registry';
+import { longId, type TokenInfo } from '../../kob/registry';
 import { Badge, Banner, Button, ErrorBanner, scaleOfDecimals, Section, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
 import { requestPairFlip } from '../ticket/pair-flip';
@@ -65,6 +66,8 @@ export function PairPage(props: { base: string; quote: string }) {
   const shared = useMemo(() => sharedTickerIds(choiceRows), [choiceRows]);
   const baseRow = rows.find((r) => r.covenantId === props.base);
   const quoteRow = rows.find((r) => r.covenantId === props.quote);
+  // the tab: `BASE / QUOTE` by the tickers the page shows (a token without one: its short id)
+  useDocumentTitle(pageTitle(`${baseRow?.ticker || longId(props.base)} / ${quoteRow?.ticker || longId(props.quote)}`));
 
   const book = useAsync((signal) => (indexer ? indexer.pairBook(props.base, props.quote, { depth: DEPTH * 2 }, { signal }) : Promise.resolve(null)), [indexer, props.base, props.quote]);
   const bookStaleSince = useStaleSince(book);

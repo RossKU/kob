@@ -6,7 +6,7 @@ import { unitsText } from '../../kob/pair';
 import { statePriceToTokenPrice } from '../../kob/units';
 import { formatLocal, formatUtc } from '../../kob/daa';
 import { longId, type TokenInfo } from '../../kob/registry';
-import { Amount, Badge, Banner, Button, CopyText, KeyValueList, tickPriceFraction, type Tone } from '../kit';
+import { Amount, Badge, Banner, Button, CopyText, KeyValueList, RawDetails, tickPriceFraction, type Tone } from '../kit';
 import { tokenLabel } from '../market/token-model';
 import { TokenNote } from '../market/TokenNote';
 import { displayToken } from '../../app/token-display';
@@ -14,6 +14,7 @@ import type { EventView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import { OrderFills, filledAmountOf } from './OrderFills';
 import { GTC_RULE, type OrderRowModel, type OrderStatusUi } from './orders-model';
+import { unlistedHint, unlistedText } from './unlisted';
 
 const STATUS_TONE: Record<OrderStatusUi, Tone> = { open: 'ok', partial: 'info', filled: 'neutral', cancelled: 'neutral', refunded: 'neutral', killed: 'neutral', closed: 'neutral', unknown: 'warn' };
 
@@ -203,6 +204,13 @@ export function OrderRow(props: OrderRowProps) {
       {row.possiblyFrozen ? (
         <Banner tone="warn" title={t('orders.frozen.title')} data-testid="order-frozen">
           {t('orders.frozen.body')}
+        </Banner>
+      ) : null}
+      {row.unlisted ? (
+        <Banner tone="warn" data-testid="order-unlisted">
+          <p data-testid="order-unlisted-reason">{unlistedText(row.unlisted.reason)}</p>
+          <p class="small" data-testid="order-unlisted-hint">{unlistedHint(row.unlisted.reason)}</p>
+          <RawDetails text={row.unlisted.reason} data-testid="order-unlisted-code" />
         </Banner>
       ) : null}
 

@@ -111,6 +111,14 @@ describe('A1-2: an open-list KCC-20 token: the commitment is the indexer\'s pick
     const good = shown(withExt([{ commitment: lookalike, source: 'holdings' }]));
     expect(good.blocking).toEqual([]);
     expect(good.rows[0]!.tone).toBe('good');
+    // a commitment read from token outputs the node confirmed (the market of a token no order names yet) says so, and is good, not a warning
+    const chainInfo: TokenInfo = { ...open, extension: { commitment: lookalike, source: 'chain', references: [], mismatch: [] } };
+    const chainReg = withExtraToken({ ...registry, tokens: registry.tokens.filter((t) => t.covenantId !== cov), byCovenantId: new Map([...registry.byCovenantId].filter(([k]) => k !== cov)) }, chainInfo);
+    const chain = openTokenIdentity(decode(forged.built, chainReg, forged.kob), chainReg);
+    expect(chain.rows[0]!.tone).toBe('good');
+    expect(chain.rows[0]!.detail).toContain('your node confirmed');
+    expect(chain.rows[0]!.detail).toContain('Confirmed on the node');
+    expect(chain.blocking).toEqual([]);
     // a registry token is not an open-list token: no identity rows
     expect(openTokenIdentity(decode(placed.built), registry).rows).toEqual([]);
   });

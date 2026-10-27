@@ -74,6 +74,8 @@ export interface TokenTrackerDeps {
 }
 
 const STORE_VERSION = 1;
+/** candidates asked of the indexer per page for a token's public lookup (`publicTokenUtxos`): two pages at most */
+const PUBLIC_PAGE = 25;
 /** a candidate the node does not list is pruned only after this many misses (and once they span the grace period) */
 const MISS_CONFIRMATIONS = 3;
 const HEX32 = /^[0-9a-f]{64}$/;
@@ -456,6 +458,42 @@ export class TokenTracker {
     if (byClaim.size === 0) return [];
     const { verified } = await this.verifyOnNode([...byClaim.values()], true);
     return [...verified.values()].sort((a, b) => (a.covenantId === b.covenantId ? byAmountDesc(a, b) : a.covenantId < b.covenantId ? -1 : 1));
+  }
+
+  /**
+   * The token UTXOs of ONE token, whoever holds them, that the node confirms: what a market page needs to know about a token no order of which
+   * the indexer lists (its program and its extension commitment). The indexer's `GET /v1/token-utxos?token=` names candidates with a state, exactly
+   * as it does for a wallet's holdings (`allFromIndexer`), and each one is verified like any other: the P2SH address derived from the claimed
+   * state under a program this build pins must hold the outpoint on the node, under this covenant id. An indexer that lies, is stale or
+   * knows nothing yields fewer or no confirmed UTXOs, never a wrong one. Read-only (the local store is not touched). `indexer`: whether the indexer
+   * answered at all (`unavailable`: none configured, the route is not served, or the request failed); `claimed`: how many candidates it named;
+   * `nodeFailed`: the node could not be asked (the candidates stay unconfirmed). Largest amount first.
+   */
+  async publicTokenUtxos(covenantId: Hex): Promise<{ indexer: 'ok' | 'unavailable'; claimed: number; nodeFailed: boolean; utxos: HeldTokenUtxo[] }> {
+    const id = covenantId.toLowerCase();
+    if (!this.indexer) return { indexer: 'unavailable', claimed: 0, nodeFailed: false, utxos: [] };
+    let views: TokenUtxoView[] | null;
+    try {
+      views = await this.indexer.tokenUtxos({ token: id, spent: false, limit: PUBLIC_PAGE, maxPages: 2 });
+    } catch {
+      return { indexer: 'unavailable', claimed: 0, nodeFailed: false, utxos: [] };
+    }
+    if (!views) return { indexer: 'unavailable', claimed: 0, nodeFailed: false, utxos: [] };
+    const candidates: TrackedToken[] = [];
+    for (const v of views) {
+      if (v.spent || !v.state || !v.program || !PROGRAMS.includes(v.program) || v.token.toLowerCase() !== id) continue;
+      const program = v.program as TokenProgram;
+      if (isKronState(v.state) !== (familyOfProgram(program) === 'kron')) continue;
+      const c = sanitizeTracked({ transactionId: v.txid, index: v.index, tokenCovId: id, program, state: v.state, carrier: v.value, addedAt: this.now() }, this.now());
+      if (c) candidates.push(c);
+    }
+    if (candidates.length === 0) return { indexer: 'ok', claimed: views.length, nodeFailed: false, utxos: [] };
+    try {
+      const { verified } = await this.verifyOnNode(candidates, true);
+      return { indexer: 'ok', claimed: views.length, nodeFailed: false, utxos: [...verified.values()].sort(byAmountDesc) };
+    } catch {
+      return { indexer: 'ok', claimed: views.length, nodeFailed: true, utxos: [] };
+    }
   }
 
   /** The indexer's holdings of an owner, any token (views without a state, or of a program this build does not pin, are left out). */

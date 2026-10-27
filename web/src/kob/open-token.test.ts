@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { IndexerTokenView } from '../data/indexer-types';
 import { displayName } from './registry';
-import { checkExtension, extensionReferences, findHeldToken, heldTokenView, marketScaleOf, parseOpenDecimals, programAllowed, standardScaleOf, synthesizeOpenToken } from './open-token';
+import { checkExtension, extensionReferences, findHeldToken, findPublicToken, heldTokenView, marketScaleOf, parseOpenDecimals, programAllowed, standardScaleOf, synthesizeOpenToken } from './open-token';
 import { toTokenMarket } from './token-market';
 import { loadKobNode } from './wasm.node';
 
@@ -264,5 +264,55 @@ describe('a token of a program with default decimals (KaspaRocket: 3, its conven
     const r = synthesizeOpenToken(kob, rocket(), [], null, null, [], { network: 'mainnet', declared });
     expect(r).toMatchObject({ ok: true, info: { decimals: 6, openScale: 'declared', ticker: 'RKT' } });
     expect(r.ok && r.info.decimalsConvention).toBeFalsy();
+  });
+});
+
+describe('findPublicToken: a covenant id no list names, from token outputs the indexer names and the node confirmed, whoever holds them', () => {
+  const state = (ext = EXT) => ({ amount: '5', owner: '22'.repeat(32), owner_scheme: 4, borrow_scheme: 0, borrow_guard: '00'.repeat(32), extension_commitment: ext });
+  const out = (program: string, ext = EXT, cov = ID) => ({ transactionId: '11'.repeat(32), index: 0, amount: '100000000', covenantId: cov, program, state: state(ext) }) as never;
+  const src = (r: { indexer?: 'ok' | 'unavailable'; claimed?: number; nodeFailed?: boolean; utxos?: unknown[] }) => ({
+    publicTokenUtxos: async () => ({ indexer: 'ok' as const, claimed: (r.utxos ?? []).length, nodeFailed: false, utxos: [], ...r }) as never,
+  });
+
+  it('confirmed outputs of one pinned program and one commitment: a row with the program and the commitment, no scale, no wallet needed', async () => {
+    const r = await findPublicToken(src({ utxos: [out('KCC20Ref'), out('KCC20Ref')] }), kob, ID.toUpperCase(), 'mainnet');
+    expect(r).toMatchObject({ ok: true, view: { covenant_id: ID, extension_commitment: EXT, family: 'kcc20', template_id: 'kcc20-ref-3x3', open_asks: 0, open_bids: 0 } });
+    if (!r.ok) return;
+    // the extension commitment's source is the chain (the node-confirmed outputs); without decimals it still needs the first order's
+    expect(synthesizeOpenToken(kob, r.view, [], null, null, [], { network: 'mainnet', fromChain: true })).toEqual({ ok: false, reason: 'no-scale' });
+    const s = synthesizeOpenToken(kob, r.view, [], null, null, [], { network: 'mainnet', fromChain: true, decimals: 8 });
+    expect(s.ok && s.info).toMatchObject({ program: 'KCC20Ref', decimals: 8, openScale: 'entered', extension: { commitment: EXT, source: 'chain', mismatch: [] } });
+  });
+
+  it("a KaspaRocket token trades at once with its program's 3 decimals", async () => {
+    const r = await findPublicToken(src({ utxos: [out('KaspaRocketToken11458')] }), kob, ID, 'mainnet');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(synthesizeOpenToken(kob, r.view, [], null, null, [], { network: 'mainnet', fromChain: true })).toMatchObject({ ok: true, info: { decimals: 3, openScale: 'program', extension: { source: 'chain' } } });
+  });
+
+  it('says which fact is missing', async () => {
+    expect(await findPublicToken(src({ indexer: 'unavailable' }), kob, ID, 'mainnet')).toEqual({ ok: false, reason: 'indexer-unavailable' });
+    expect(await findPublicToken(src({ claimed: 0 }), kob, ID, 'mainnet')).toEqual({ ok: false, reason: 'not-indexed' });
+    expect(await findPublicToken(src({ claimed: 3 }), kob, ID, 'mainnet')).toEqual({ ok: false, reason: 'not-confirmed' });
+    expect(await findPublicToken(src({ claimed: 3, nodeFailed: true }), kob, ID, 'mainnet')).toEqual({ ok: false, reason: 'node-unavailable' });
+  });
+
+  it('the same refusals as the wallet path: two programs, a prototype on mainnet, a KRON program, two commitments', async () => {
+    expect(await findPublicToken(src({ utxos: [out('KCC20Ref'), out('KCC20PublicMint')] }), kob, ID, 'mainnet')).toEqual({ ok: false, reason: 'program-ambiguous' });
+    expect(await findPublicToken(src({ utxos: [out('KCC20Ref_8x8')] }), kob, ID, 'mainnet')).toEqual({ ok: false, reason: 'program-unreviewed' });
+    expect((await findPublicToken(src({ utxos: [out('KCC20Ref_8x8')] }), kob, ID, 'testnet-10')).ok).toBe(true);
+    expect(await findPublicToken(src({ utxos: [out('KronToken2433')] }), kob, ID, 'mainnet')).toEqual({ ok: false, reason: 'not-kcc20' });
+    expect(await findPublicToken(src({ utxos: [out('KCC20Ref'), out('KCC20Ref', 'cd'.repeat(32))] }), kob, ID, 'mainnet')).toEqual({ ok: false, reason: 'extension-ambiguous' });
+    // outputs of another covenant id are no evidence for this one
+    expect(await findPublicToken(src({ claimed: 1, utxos: [out('KCC20Ref', EXT, 'ff'.repeat(32))] }), kob, ID, 'mainnet')).toEqual({ ok: false, reason: 'not-confirmed' });
+  });
+
+  it("the commitment a wallet holding of the token names must agree with the chain's: a different one is a mismatch (blocking at signing)", async () => {
+    const r = await findPublicToken(src({ utxos: [out('KCC20Ref')] }), kob, ID, 'mainnet');
+    if (!r.ok) throw new Error('expected a row');
+    const held = [{ transactionId: '33'.repeat(32), index: 0, amount: '1', covenantId: ID, state: state('cd'.repeat(32)) }] as never;
+    const s = synthesizeOpenToken(kob, r.view, [], null, null, extensionReferences(ID, null, held), { network: 'mainnet', fromChain: true, decimals: 8 });
+    expect(s.ok && s.info.extension?.mismatch).toEqual([{ commitment: 'cd'.repeat(32), source: 'holdings' }]);
   });
 });

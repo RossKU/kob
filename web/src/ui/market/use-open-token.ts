@@ -56,7 +56,7 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: num
     if (!facts.data) return { info: null, reason: facts.error ? 'book-unavailable' : null, loading: facts.loading };
     const refs = extensionReferences(view.covenant_id, registry, facts.data.holdings);
     const r = synthesizeOpenToken(kob, view, facts.data.scales, facts.data.ext, registry, refs, {
-      decimals, network: config.network, fromHoldings: row?.source === 'held', issued: issuedToken(config.network, view.covenant_id),
+      decimals, network: config.network, fromHoldings: row?.source === 'held', fromChain: row?.source === 'public', issued: issuedToken(config.network, view.covenant_id),
       declared: declared && declared.covenantId === view.covenant_id ? declared : null,
     });
     return r.ok ? { info: r.info, reason: null, loading: false } : { info: null, reason: r.reason, loading: false };

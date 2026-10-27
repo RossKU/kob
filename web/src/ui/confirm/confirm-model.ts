@@ -127,14 +127,16 @@ export function openTokenIdentity(summary: SigningSummary, registry: TokenRegist
     const x = info.extension;
     const token = longId(info.covenantId);
     const refName = (src: ExtensionReference['source']): string => tr(src === 'holdings' ? 'confirm.ext.ref.holdings' : 'confirm.ext.ref.registryGenesis');
-    const source = tr(x.source === 'indexer' ? 'confirm.ext.fromIndexer' : x.source === 'holdings' ? 'confirm.ext.fromHoldings' : 'confirm.ext.fromOrders');
+    const source = tr(x.source === 'indexer' ? 'confirm.ext.fromIndexer' : x.source === 'holdings' ? 'confirm.ext.fromHoldings' : x.source === 'chain' ? 'confirm.ext.fromChain' : 'confirm.ext.fromOrders');
     const check =
       x.mismatch.length > 0
         ? tr('confirm.ext.checkMismatch')
         : x.references.length > 0
           ? tr('confirm.ext.checkMatch', { sources: [...new Set(x.references.map((r) => refName(r.source)))].join(', ') })
-          : tr('confirm.ext.checkNone');
-    const tone: Tone = x.mismatch.length ? 'bad' : x.references.length ? 'good' : 'warn';
+          : x.source === 'chain'
+            ? tr('confirm.ext.checkChain')
+            : tr('confirm.ext.checkNone');
+    const tone: Tone = x.mismatch.length ? 'bad' : x.references.length || x.source === 'chain' ? 'good' : 'warn';
     rows.push(row('ext-' + info.covenantId, tr('confirm.ext.label', { token }), x.commitment, tone, source + ' ' + check));
     for (const m of x.mismatch) {
       const params = { token, shown: x.commitment, known: m.commitment, source: refName(m.source) };

@@ -687,3 +687,70 @@ describe('TokenTracker.recoverIssued (an issuance output nobody but its issuer e
     expect(w.tracker.list(MAKER_PK)).toEqual([]);
   });
 });
+
+describe('TokenTracker.publicTokenUtxos (a token\'s outputs, any holder, confirmed on the node)', () => {
+  const COV = '5b'.repeat(32);
+  const put = (w: World, program: TokenProgram, cov: Hex, state: TokenState, txid: Hex, index = 0) => {
+    const spk = kob.tokenScriptPublicKey(program, state);
+    w.node.addUtxo({ address: spkStringToAddress(sdk, spk, NET), transactionId: txid, index, amount: CARRIER, scriptPublicKey: spk, covenantId: cov });
+  };
+  const v = (txid: Hex, program: string, state: TokenState, over: Partial<TokenUtxoView> = {}): TokenUtxoView => ({
+    txid, index: 0, token: COV, owner: state.owner, amount: state.amount, value: CARRIER, role: 'owned', created_daa: 1, spent: false, spent_txid: null,
+    confirmations: 10, settled: true, program, state, ...over,
+  });
+
+  it('asks the indexer by token alone (no owner), and returns only the outputs the node lists under the covenant id', async () => {
+    const calls: unknown[] = [];
+    const bag: { views: TokenUtxoView[] | null } = { views: [] };
+    const w = world({ indexer: { tokenUtxos: async (q) => (calls.push(q), bag.views) } });
+    const a = tokenState(500n, OTHER_PK); // a holder that is not the caller
+    const b = tokenState(900n, MAKER_PK);
+    put(w, 'KCC20Ref', COV, a, '81'.repeat(32));
+    put(w, 'KCC20Ref', COV, b, '82'.repeat(32));
+    bag.views = [
+      v('81'.repeat(32), 'KCC20Ref', a),
+      v('82'.repeat(32), 'KCC20Ref', b),
+      v('83'.repeat(32), 'KCC20Ref', tokenState(7n)), // not on the node
+      v('84'.repeat(32), 'KCC20NotPinned', a), // a program this build does not pin
+      v('85'.repeat(32), 'KCC20Ref', a, { token: '5c'.repeat(32) }), // another token
+      v('86'.repeat(32), 'KCC20Ref', a, { spent: true }),
+      v('87'.repeat(32), 'KCC20Ref', a, { state: undefined }), // nothing to derive a script from
+    ];
+    const r = await w.tracker.publicTokenUtxos(COV);
+    expect(calls[0]).toMatchObject({ token: COV, spent: false });
+    expect(calls[0]).not.toHaveProperty('owner');
+    expect(r).toMatchObject({ indexer: 'ok', claimed: 7, nodeFailed: false });
+    expect(r.utxos.map((u) => [u.covenantId, u.program, u.state.amount])).toEqual([[COV, 'KCC20Ref', '900'], [COV, 'KCC20Ref', '500']]);
+    // read-only
+    expect(w.tracker.list(MAKER_PK)).toEqual([]);
+  });
+
+  it('a look-alike output (the node lists the outpoint under another covenant id, or at another script) never verifies', async () => {
+    const w = world();
+    const s = tokenState(5n);
+    put(w, 'KCC20Ref', '5d'.repeat(32), s, '88'.repeat(32)); // the outpoint is another token's
+    const t = new TokenTracker({ kob, node: w.node, sdk, network: NET, storage: w.storage, indexer: { tokenUtxos: async () => [v('88'.repeat(32), 'KCC20Ref', s)] } });
+    expect(await t.publicTokenUtxos(COV)).toMatchObject({ indexer: 'ok', claimed: 1, utxos: [] });
+  });
+
+  it('says whether the indexer answered at all: none configured, unsupported (null) or failing', async () => {
+    expect(await world().tracker.publicTokenUtxos(COV)).toEqual({ indexer: 'unavailable', claimed: 0, nodeFailed: false, utxos: [] });
+    for (const impl of [async () => null, async () => { throw new Error('indexer down'); }]) {
+      const w = world({ indexer: { tokenUtxos: impl as never } });
+      expect(await w.tracker.publicTokenUtxos(COV)).toEqual({ indexer: 'unavailable', claimed: 0, nodeFailed: false, utxos: [] });
+    }
+  });
+
+  it('an indexer that knows no output of the token is an answer, not a failure', async () => {
+    const w = world({ indexer: { tokenUtxos: async () => [] } });
+    expect(await w.tracker.publicTokenUtxos(COV)).toEqual({ indexer: 'ok', claimed: 0, nodeFailed: false, utxos: [] });
+  });
+
+  it('a node that cannot be asked leaves the claims unconfirmed and says so', async () => {
+    const w = world();
+    const s = tokenState(5n);
+    const broken = { ...w.node, getUtxosByAddresses: async () => { throw new Error('node down'); } } as unknown as MockNode;
+    const t = new TokenTracker({ kob, node: broken, sdk, network: NET, storage: w.storage, indexer: { tokenUtxos: async () => [v('89'.repeat(32), 'KCC20Ref', s)] } });
+    expect(await t.publicTokenUtxos(COV)).toEqual({ indexer: 'ok', claimed: 1, nodeFailed: true, utxos: [] });
+  });
+});

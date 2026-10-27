@@ -691,6 +691,42 @@ describe('order lifecycle through the mock node', () => {
     expect((await get(`/v1/books/${GLD}`)).body.asks).toHaveLength(0);
   });
 
+  it('applies the executor minimum order value when it is on: an order worth less is indexed but unlisted (order_value_below_minimum)', async () => {
+    const min = (await post('/mock/min-order-value', { sompi: '100000000' })).body;
+    expect(min).toEqual({ min_order_value_sompi: '100000000' });
+    const scale = 100_000_000n; // EXKCC: 8 decimals
+    // an ask is its amount at its quote rounded down: one whole token at 0.99999999 KAS is just below 1 KAS, at exactly 1 KAS it is listed
+    await post('/mock/seed', {
+      orders: [
+        { token: EXKCC, side: 'ask', maker: 'alice', price: 99_999_999, amount: scale.toString() },
+        { token: EXKCC, side: 'ask', maker: 'alice', price: 100_000_000, amount: scale.toString() },
+        { token: EXKCC, side: 'ask', maker: 'alice', price: 250_000_000, amount: '39999999' },
+        { token: EXKCC, side: 'ask', maker: 'alice', price: 250_000_000, amount: '40000000' },
+        // a bid is its escrow (the KAS of its order output), whatever its price
+        { token: EXKCC, side: 'bid', maker: 'alice', price: 100_000_000, amount: scale.toString(), value: '99999999' },
+        { token: EXKCC, side: 'bid', maker: 'alice', price: 100_000_000, amount: scale.toString(), value: '100000000' },
+      ],
+    });
+    const items = (await get(`/v1/orders?maker=${ALICE.pub}&limit=50`)).body.items;
+    const row = (side: number, price: string, amount?: string) => items.find((o: any) => o.side === side && o.price === price && (amount === undefined || o.initial_amount === amount));
+    expect(row(1, '99999999')).toMatchObject({ listed: false, unlisted_reason: 'order_value_below_minimum', status: 'open' });
+    expect(row(1, '100000000')).toMatchObject({ listed: true, unlisted_reason: null });
+    expect(row(1, '250000000', '39999999')).toMatchObject({ listed: false, unlisted_reason: 'order_value_below_minimum' });
+    expect(row(1, '250000000', '40000000')).toMatchObject({ listed: true, unlisted_reason: null });
+    const bids = items.filter((o: any) => o.side === 2);
+    expect(bids).toHaveLength(2);
+    expect(bids.filter((o: any) => o.listed).length).toBe(1);
+    expect(bids.find((o: any) => !o.listed)).toMatchObject({ unlisted_reason: 'order_value_below_minimum' });
+    // unlisted orders are in no book
+    const askPrices = (await get(`/v1/books/${EXKCC}`)).body.asks.map((l: any) => l.price);
+    expect(askPrices).toContain('100000000');
+    expect(askPrices).not.toContain('99999999');
+    // off again after a reset: the default seed and small orders stay listed
+    await post('/mock/reset', {});
+    expect((await post('/mock/min-order-value', {})).body).toEqual({ min_order_value_sompi: '0' });
+    expect((await post('/mock/min-order-value', { sompi: 'x' })).status).toBe(400);
+  });
+
   it('reports stray tokens sent to an order and lets the maker sweep them with the cancel', async () => {
     await post('/mock/seed', { orders: [{ token: EXKCC, side: 'ask', maker: 'alice', price: 2_505_000, amount: 200_000_000 }] });
     const cov = (await get(`/v1/orders?maker=${ALICE.pub}`)).body.items[0].covenant_id;

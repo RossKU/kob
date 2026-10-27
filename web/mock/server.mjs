@@ -297,6 +297,20 @@ export async function startMockServer(opts = {}) {
       seedAll(body.seed !== false, body.fund === true, body.history ?? false, body.pair ?? false);
       return ok(summary(chain));
     }
+    // the executor's minimum order value (sompi, 0 = off): orders registered from now on that are worth less are indexed with
+    // `listed: false, unlisted_reason: "order_value_below_minimum"`, as the real executor does with its `min_order_value_sompi` (default 1 KAS);
+    // `/mock/reset` turns it off again
+    if (post && path === '/mock/min-order-value') {
+      let n;
+      try {
+        n = body.sompi === undefined || body.sompi === null ? 0n : BigInt(body.sompi);
+      } catch {
+        throw badRequest('sompi must be an integer');
+      }
+      if (n < 0n) throw badRequest('sompi must be non-negative');
+      chain.minOrderValue = n;
+      return ok({ min_order_value_sompi: n.toString() });
+    }
     if (post && path === '/mock/fee-estimate') {
       feeEstimate = body.off ? null : { priority: Number(body.priority ?? 100), normal: Number(body.normal ?? 100), low: Number(body.low ?? 100) };
       return ok({ feeEstimate });

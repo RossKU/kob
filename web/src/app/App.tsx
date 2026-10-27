@@ -21,6 +21,7 @@ import { useServices } from './context';
 import { useDeclarationsVersion } from './use-declaration';
 import { loadDeclaration, noteTokenProgram, restoreDeclarations } from '../data/token-declarations';
 import { routeToHash, useRoute, usdMarketHash, type Route } from './router';
+import { appTitle, Titled, useDocumentTitle } from './page-title';
 
 /** The landing screen (empty hash, config `home`): a chart by default; the market list stays at `#/market`. */
 function HomeView() {
@@ -29,7 +30,11 @@ function HomeView() {
   const target = resolveHome(config.home, usd?.covenantId ?? null, registry.tokens);
   if (target.name === 'pair') return <MarketView pair={{ base: target.base, quote: target.quote }} />;
   if (target.name === 'token') return <MarketView covenantId={target.covenantId} />;
-  return <MarketView />;
+  return (
+    <Titled page="market">
+      <MarketView />
+    </Titled>
+  );
 }
 
 /**
@@ -55,17 +60,33 @@ function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
     case 'usd':
       return <LegacyUsdLink asset={r.asset} />;
     case 'market':
-      return <MarketView invalidToken={r.invalidToken} />;
+      return (
+        <Titled page="market">
+          <MarketView invalidToken={r.invalidToken} />
+        </Titled>
+      );
     case 'token':
       return <MarketView covenantId={r.covenantId} {...(r.ticket ? { ticket: r.ticket } : {})} {...(r.amount ? { amount: r.amount } : {})} />;
     case 'pair':
       return <MarketView pair={{ base: r.base, quote: r.quote }} />;
     case 'orders':
-      return <OrdersView />;
+      return (
+        <Titled page="orders">
+          <OrdersView />
+        </Titled>
+      );
     case 'create':
-      return <IssueView />;
+      return (
+        <Titled page="create">
+          <IssueView />
+        </Titled>
+      );
     case 'settings':
-      return <SettingsView warnings={props.warnings} />;
+      return (
+        <Titled page="settings">
+          <SettingsView warnings={props.warnings} />
+        </Titled>
+      );
   }
 }
 
@@ -73,10 +94,8 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
   const services = useServices();
   const route = useRoute();
 
-  // the title names the app in the tab bar
-  useEffect(() => {
-    document.title = `${t('common.appName')} - ${t('common.tagline')}`;
-  }, []);
+  // the tab's title names the page: each view sets its own (app/page-title.ts); only the legacy redirect, which shows no view, is left to the shell
+  useDocumentTitle(route.name === 'usd' ? appTitle() : null);
 
   // a new page moves the focus to its content (screen readers announce it, Tab continues from there), not on the first load and not from an open dialog
   const routeKey = routeToHash(route);

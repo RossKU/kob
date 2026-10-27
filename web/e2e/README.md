@@ -39,6 +39,9 @@ worker its own in-process server (and enables parallel runs). Ports: `KOB_MOCK_P
   `POST /mock/reset {pair: true}` (EXUSD, 6 decimals, a KAS book, three KobPair asks, a KobPair bid, a buy-first IFD entry and a sell stop).
   Pair fills, arms and trails (`/mock/fill`, `/mock/arm`, `/mock/trail`, `mock/pair-fill.mjs`) are REAL kob-wasm batches signed by the mock's filler
   key: counterparty `via` inventory / netting / route, trigger evidence `mode` 0 (two KAS-book fills) or 1 (a resting KobPair).
+* Minimum order value: `POST /mock/min-order-value {sompi}` (`mock.minOrderValue(sompi)`; OFF after a reset) makes orders registered from then on that are worth less
+  (a plain ask: amount at its quote, rounded down; a bid: its escrow) indexed with `listed: false, unlisted_reason: "order_value_below_minimum"`, as the real
+  executor does with `min_order_value_sompi` (default 1 KAS = 100000000).
 * WebSocket `/v1/ws`: `subscribe` / `unsubscribe` / `ping`, channels `health`, `reorg`, `fills[:token]`, `book:<token>`, `order:<id>`, frames
   `{channel,type,data}`, `resync`.
 * Mock node: `GET /node/info`, `GET /node/fee-estimate` (every bucket at the relay floor after a reset; `POST /mock/fee-estimate {priority, normal, low}`

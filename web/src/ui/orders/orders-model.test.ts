@@ -188,6 +188,36 @@ describe('bids that can no longer fund one base unit, and orders the token progr
   });
 });
 
+describe('unlisted orders (listed: false)', () => {
+  it('carries the indexer reason through on a live order', () => {
+    const r = rowOf('create.ask', { listed: false, unlisted_reason: 'order_value_below_minimum' }).row;
+    expect(r.unlisted).toEqual({ reason: 'order_value_below_minimum' });
+    expect(r).toMatchObject({ live: true, canCancel: true });
+    expect(rowOf('create.bid', { listed: false, unlisted_reason: 'bad_state:scale:not positive', status: 'partial' }).row.unlisted).toEqual({ reason: 'bad_state:scale:not positive' });
+  });
+
+  it('an unlisted order without a reason (an older executor) is still unlisted', () => {
+    expect(rowOf('create.ask', { listed: false, unlisted_reason: null }).row.unlisted).toEqual({ reason: null });
+  });
+
+  it('a listed order, and an order of an executor that does not say, is not marked', () => {
+    expect(rowOf('create.ask').row.unlisted).toBeNull();
+    expect(rowOf('create.ask', { listed: true, unlisted_reason: null }).row.unlisted).toBeNull();
+    expect(rowOf('create.ask', { listed: undefined }).row.unlisted).toBeNull();
+  });
+
+  it('an ended order is never marked, whatever the indexer says', () => {
+    for (const status of ['filled', 'cancelled', 'refunded', 'killed', 'closed'] as const) {
+      expect(rowOf('create.ask', { listed: false, unlisted_reason: 'order_value_below_minimum', status }).row.unlisted, status).toBeNull();
+    }
+  });
+
+  it('an order the indexer does not know (a record only) is not marked', () => {
+    const row = describeEntry({ id: '11'.repeat(32), view: null, record: null, resolved: null }, ctx);
+    expect(row.unlisted).toBeNull();
+  });
+});
+
 describe('status, refund and renewal', () => {
   it('finished orders are not live and cannot be cancelled', () => {
     for (const status of ['filled', 'cancelled', 'refunded', 'closed'] as const) {

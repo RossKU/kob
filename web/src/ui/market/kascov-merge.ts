@@ -84,6 +84,16 @@ function kascovOnlyRow(k: KascovToken, ctx: KascovMergeContext): TokenRow {
 }
 
 /**
+ * The row of one token only kascov names (`source: 'kascov'`), for the token's own page: the same row the list shows, built only when kascov names the
+ * token and the program hash it names is one this build pins and trades on `network` (`kascovTradable`). Null otherwise (kascov does not know the token,
+ * names no program, or a program this build does not trade). Its facts are KOB's: the page re-derives them from the indexer and the node.
+ */
+export function kascovRowOf(covenantId: string, tokens: readonly KascovToken[] | null | undefined, ctx: KascovMergeContext): TokenRow | null {
+  const k = tokens?.find((x) => x.covenantId === covenantId.toLowerCase());
+  return k && kascovTradable(k.templateHash, ctx.network, ctx.templates) ? kascovOnlyRow(k, ctx) : null;
+}
+
+/**
  * The rows KOB has, named and pictured from kascov where it has them, plus the kascov-only tokens this build can trade (appended, by name). `tokens`
  * null/empty (kascov down, not loaded yet, a network it does not serve) returns `rows` unchanged. Nothing is removed.
  */

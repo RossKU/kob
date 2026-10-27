@@ -88,6 +88,13 @@ export class MockClient {
   seedDefaults() {
     return this.reset({ seed: true });
   }
+  /**
+   * The executor's minimum order value (`min_order_value_sompi`, its default is 1 KAS = 100000000): orders placed from now on that are worth less are
+   * indexed with `listed: false, unlisted_reason: "order_value_below_minimum"`. Off (0) after a reset, so other specs' small orders stay listed.
+   */
+  minOrderValue(sompi: bigint | string | number) {
+    return this.post('/mock/min-order-value', { sompi });
+  }
   /** The node's fee estimate (sompi per gram per bucket; the default after a reset: every bucket at the relay floor); `'off'`: the route answers 404. */
   feeEstimate(v: { priority?: number; normal?: number; low?: number } | 'off') {
     return this.post('/mock/fee-estimate', v === 'off' ? { off: true } : v);

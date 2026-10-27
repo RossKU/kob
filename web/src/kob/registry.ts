@@ -234,7 +234,7 @@ export interface TokenInfo {
 export interface ExtensionCheck {
   commitment: Hex;
   /** `holdings`: a token the indexer does not list, read from the wallet's node-verified token UTXOs of it (`heldTokenView`) */
-  source: 'indexer' | 'orders' | 'holdings';
+  source: 'indexer' | 'orders' | 'holdings' | 'chain';
   references: ExtensionReference[];
   mismatch: ExtensionReference[];
 }

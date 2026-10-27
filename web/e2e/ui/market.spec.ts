@@ -99,7 +99,7 @@ test.describe('shell and token list', () => {
     await appPage.getByTestId('add-token').getByRole('button').first().click();
     await appPage.getByTestId('token-add-input').fill('ee'.repeat(32));
     await appPage.getByTestId('token-add-button').click();
-    await expect(appPage.getByTestId('token-add-result')).toContainText('does not know');
+    await expect(appPage.getByTestId('token-add-result')).toContainText('lists no token with this covenant id');
     await appPage.getByTestId('token-add-input').fill('nothex');
     await expect(appPage.getByTestId('token-add-button')).toBeDisabled();
     await appPage.getByTestId('token-add-input').fill(other);

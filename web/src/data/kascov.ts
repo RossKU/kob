@@ -27,7 +27,7 @@
 //   * the verified bytes are shown from a `blob:` URL the app makes itself (CSP `img-src 'self' data: blob:`, web/csp.mjs), so a hash mismatch, a host that
 //     swapped the file, or a refused fetch all end the same way: no icon (a letter avatar).
 // Only https URLs are used. Raster formats only (PNG, JPEG, WebP, GIF, by their magic bytes, never by the server's Content-Type): no SVG, no HTML.
-import { DEFAULT_TOKEN_NAMES_URL } from '../config';
+import { DEFAULT_TOKEN_NAMES_URL, defaultStorage, type StorageLike } from '../config';
 import { sanitizeUntrusted } from '../kob/registry';
 
 /** The data set's base (`AppConfig.tokenNamesUrl`, default https://kascov.io/data). '' = the feature is off. */
@@ -40,6 +40,18 @@ const TRAILING_SLASHES = /\/+$/;
 export const kascovTokensUrl = (n: KascovNetwork, base = DEFAULT_BASE): string => `${base.replace(TRAILING_SLASHES, '')}/${n}/tokens.json`;
 /** Where the saved copies of the images are: `img` beside the data set's last path segment (https://kascov.io/data -> https://kascov.io/img). */
 export const kascovImagesBase = (base = DEFAULT_BASE): string => new URL('../img', `${base.replace(TRAILING_SLASHES, '')}/`).href.replace(TRAILING_SLASHES, '');
+/**
+ * The token's own page on the explorer (a link for the viewer to follow, never fetched by the app): `https://kascov.io/#/<network>/c/<covenant id>`, on the origin of
+ * the data set (`https://kascov.io/data` -> `https://kascov.io`). Null when the data set is off or its base is not an https URL.
+ */
+export function kascovTokenUrl(n: KascovNetwork, covenantId: string, base = DEFAULT_BASE): string | null {
+  try {
+    const u = new URL(base.replace(TRAILING_SLASHES, ''));
+    return u.protocol === 'https:' && u.username === '' && u.password === '' && /^[0-9a-f]{64}$/.test(covenantId) ? `${u.origin}/#/${n}/c/${covenantId}` : null;
+  } catch {
+    return null;
+  }
+}
 /** kascov's saved copy of a token's hash-committed image. */
 export const kascovImageUrl = (n: KascovNetwork, covenantId: string, base = DEFAULT_BASE): string => `${kascovImagesBase(base)}/${n}/${covenantId}`;
 
@@ -316,6 +328,8 @@ export interface IconFetchOptions {
   /** the largest image read (default 1.5 MB; the largest saved copy seen is 0.5 MB) */
   maxBytes?: number;
   sha256?: (b: Uint8Array) => Promise<string | null>;
+  /** called with the URL of a source that answered 404 (it holds no copy) */
+  onMissing?: (url: string) => void;
 }
 
 export interface VerifiedImage { bytes: Uint8Array; mime: ImageMime; url: string }
@@ -339,7 +353,10 @@ export async function fetchVerifiedImage(urls: readonly string[], hash: string, 
     o.signal?.addEventListener('abort', onAbort, { once: true });
     try {
       const res = await fetchFn(url, { signal: ctl.signal, credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'follow' });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        if (res.status === 404) o.onMissing?.(url);
+        continue;
+      }
       const bytes = await readCapped(res, o.maxBytes ?? 1_500_000);
       if (!bytes || bytes.length === 0) continue;
       const mime = sniffImage(bytes);
@@ -370,6 +387,8 @@ export interface IconLoaderOptions extends IconFetchOptions {
   now?: () => number;
   /** how long a failed icon is not tried again in this session (default 5 min) */
   failTtlMs?: number;
+  /** where kascov.io's 404s for saved copies are remembered (default: this browser's storage for a day; `null`: not at all) */
+  missing?: MissingCopies | null;
 }
 
 export interface IconLoader {
@@ -378,10 +397,58 @@ export interface IconLoader {
   clear(): void;
 }
 
+/**
+ * Saved copies kascov.io answered 404 for (it keeps one for most tokens that commit to an image, not all). A browser prints every 404 in its console and
+ * nothing can stop that but not asking again, so a token whose copy is missing is not asked for it for a day: the icon falls back to its letter quietly
+ * (or to the creator's own host, where that allows it). Kept per network and covenant id.
+ */
+export interface MissingCopies {
+  has(network: string, covenantId: string): boolean;
+  add(network: string, covenantId: string): void;
+}
+
+export const MISSING_COPY_KEY = 'kob.icons.missing.v1';
+export const MISSING_COPY_TTL_MS = 24 * 3_600_000;
+const MISSING_COPY_MAX = 1000;
+
+/** The remembered 404s in `storage` (a failing or absent storage: in memory only, for the session). */
+export function createMissingCopies(storage: StorageLike | null = defaultStorage(), now: () => number = Date.now, ttlMs = MISSING_COPY_TTL_MS): MissingCopies {
+  const memory = new Map<string, number>();
+  const load = (): Map<string, number> => {
+    const m = new Map(memory);
+    try {
+      const raw = storage?.getItem(MISSING_COPY_KEY);
+      const doc: unknown = raw ? JSON.parse(raw) : null;
+      if (doc && typeof doc === 'object' && !Array.isArray(doc)) {
+        for (const [k, v] of Object.entries(doc)) if (typeof v === 'number' && Number.isFinite(v)) m.set(k, Math.max(m.get(k) ?? 0, v));
+      }
+    } catch {
+      /* an unreadable store is an empty one */
+    }
+    return m;
+  };
+  return {
+    has(network, covenantId) {
+      const at = load().get(`${network}:${covenantId}`);
+      return at !== undefined && now() - at < ttlMs;
+    },
+    add(network, covenantId) {
+      memory.set(`${network}:${covenantId}`, now());
+      const live = [...load()].filter(([, at]) => now() - at < ttlMs).sort((a, b) => b[1] - a[1]).slice(0, MISSING_COPY_MAX);
+      try {
+        storage?.setItem(MISSING_COPY_KEY, JSON.stringify(Object.fromEntries(live)));
+      } catch {
+        /* storage full or blocked: the session's memory still holds it */
+      }
+    },
+  };
+}
+
 export function createIconLoader(o: IconLoaderOptions = {}): IconLoader {
   const limit = Math.max(1, o.limit ?? 4);
   const now = o.now ?? Date.now;
   const failTtlMs = o.failTtlMs ?? 300_000;
+  const missing = o.missing === undefined ? createMissingCopies() : o.missing;
   const makeUrl = o.makeUrl ?? ((bytes, mime) => URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mime })));
   // Verified images by their hash: bytes that hash to H ARE the image H, whichever token committed to it, so a hash proven once serves every token that
   // names it. Nothing else is shared between tokens: a request in flight and a miss belong to ONE token (its own sources), so a token whose sources
@@ -412,9 +479,12 @@ export function createIconLoader(o: IconLoaderOptions = {}): IconLoader {
       if (running) return running;
       const failedAt = failed.get(key);
       if (failedAt !== undefined && now() - failedAt < failTtlMs) return null;
-      const sources = iconSources(n, t, opts.base ?? DEFAULT_BASE);
+      const base = opts.base ?? DEFAULT_BASE;
+      const copy = kascovImageUrl(n, t.covenantId, base);
+      // the saved copy kascov.io answered 404 for is not asked for again (a 404 is a line in the console each time)
+      const sources = iconSources(n, t, base).filter((u) => !(u === copy && missing?.has(n, t.covenantId)));
       // the fetch is not tied to the caller's signal: a row scrolled away or a view left must not cancel what the next visit will use
-      const p = slot(() => fetchVerifiedImage(sources, hash, { ...o, signal: undefined }))
+      const p = slot(() => fetchVerifiedImage(sources, hash, { ...o, signal: undefined, onMissing: (u) => { if (u === copy) missing?.add(n, t.covenantId); } }))
         .then((img) => {
           if (!img) {
             failed.set(key, now());
