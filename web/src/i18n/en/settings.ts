@@ -8,7 +8,7 @@ export default {
   'settings.indexerUrl': 'Indexer URL',
   'settings.indexerUrl.hint': 'REST and WebSocket base, for example https://kob.example. Empty: no order book or order history.',
   'settings.nodeUrl': 'Node URL',
-  'settings.nodeUrl.hint': 'A Kaspa wRPC node (ws:// or wss://). Empty: the SDK\'s public node resolver.',
+  'settings.nodeUrl.hint': 'A Kaspa wRPC node (ws:// or wss://) with its path, in JSON encoding, e.g. wss://<host>/kaspa/testnet-10/wrpc/json. Empty: a public node named by the Kaspa SDK resolver.',
   'settings.nodeUrl.resolver': 'public resolver',
   'settings.registryUrl': 'Token registry URL',
   'settings.registryUrl.hint': 'A relative path (the registry bundled with this app) or an http(s) URL.',

@@ -98,7 +98,15 @@ export function GlobalBanners(props: { warnings: ConfigWarning[]; storedOverride
     );
   }
   if (node.reachable === false) {
-    banners.push(<Banner key="node" tone="error" data-testid="banner-node">{t('shell.banner.nodeDown')}</Banner>);
+    // no node URL: the SDK's public resolver is asked for one (it does not work in a browser on testnet-10); a URL: that node did not answer
+    const reason = node.error?.message || t('shell.banner.nodeNoAnswer');
+    banners.push(
+      <Banner key="node" tone="error" title={t('shell.banner.nodeTitle')} data-testid="banner-node">
+        {config.nodeUrl
+          ? t('shell.banner.nodeDown', { url: config.nodeUrl, reason, network: config.network })
+          : t('shell.banner.nodeDownResolver', { reason, network: config.network })}
+      </Banner>,
+    );
   }
   if (a.code === 'not-configured') {
     banners.push(<Banner key="noidx" tone="info" data-testid="banner-no-indexer">{t('shell.banner.noIndexer')}</Banner>);

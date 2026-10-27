@@ -27,6 +27,16 @@ describe('pages-config: config.json from the repository variables', () => {
     expect(patch).toMatchObject({ network: 'testnet-10', indexerUrl: IDX, nodeUrl: '', extraIndexerUrls: config!.extraIndexerUrls });
   });
 
+  it('a node URL without its wRPC path gets a note (a bare public host answers 404 at the handshake); with the path none', () => {
+    const note = (nodeUrl: string) => pagesConfig({ KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_NODE_URL: nodeUrl }).notes.filter((n) => n.startsWith('KOB_PAGES_NODE_URL'));
+    expect(note('wss://node.example.org')).toEqual([expect.stringContaining('has no /wrpc/ path; a public node needs the whole endpoint, e.g. wss://<host>/kaspa/testnet-10/wrpc/json')]);
+    expect(note('wss://node.example.org/kaspa/testnet-10/wrpc/json')).toEqual([]);
+    // an empty value: the resolver note, no error
+    const empty = pagesConfig({ KOB_PAGES_INDEXER_URL: IDX });
+    expect(empty.errors).toEqual([]);
+    expect(empty.notes.join(' ')).toContain('SDK resolver names');
+  });
+
   it('takes mainnet, a wss node and an explorer', () => {
     const { config, errors } = pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_NODE_URL: 'wss://node.example.org/kaspa', KOB_PAGES_EXPLORER_URL: 'https://explorer.example.org/' });
     expect(errors).toEqual([]);

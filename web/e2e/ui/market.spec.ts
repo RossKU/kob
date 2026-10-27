@@ -301,6 +301,18 @@ test.describe('health banners', () => {
     await expect(appPage.getByTestId('book-stale')).toBeVisible();
   });
 
+  test('an unreachable node says so with what to do, never "checking..." for ever', async ({ appPage }) => {
+    await appPage.route('**/node/**', (route) => route.abort());
+    await appPage.goto('/#/market');
+    await expect(appPage.getByTestId('status-node')).toHaveAttribute('data-level', 'bad');
+    await expect(appPage.getByTestId('status-node')).toContainText('unreachable');
+    // a node URL is set (the mock): the banner names it and sends the user to Settings
+    const banner = appPage.getByTestId('banner-node');
+    await expect(banner).toContainText('cannot be reached');
+    await expect(banner).toContainText('Check the node URL in Settings');
+    await expect(appPage.getByTestId('token-list-view')).toBeVisible();
+  });
+
   test('an unreachable indexer degrades the page instead of blanking it', async ({ appPage }) => {
     await appPage.route('**/v1/**', (route) => route.abort());
     await appPage.goto('/#/market');

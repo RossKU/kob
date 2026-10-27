@@ -11,7 +11,8 @@
 //   KOB_PAGES_NETWORK             testnet-10 (default) or mainnet
 //   KOB_PAGES_INDEXER_URL         required: the indexer the app reads (https, a public host)
 //   KOB_PAGES_EXTRA_INDEXER_URLS  optional: further indexers the app cross-checks against (comma-separated, https, at most 4)
-//   KOB_PAGES_NODE_URL            optional: a wRPC node (wss); empty = the Kaspa SDK's public resolver
+//   KOB_PAGES_NODE_URL            optional: a wRPC node (wss) WITH its path, e.g. wss://<host>/kaspa/testnet-10/wrpc/json (a bare host answers 404 at the
+//                                 handshake; a note says so); empty = a public node the Kaspa SDK's resolver names (reached over Borsh)
 //   KOB_PAGES_EXPLORER_URL        optional: block explorer base (https); empty = kaspa.stream of the network
 //
 // A public page is served over https, so every URL must be https / wss (a browser blocks http / ws from it anyway), name a public
@@ -99,8 +100,12 @@ export function pagesConfig(env) {
   if ((env.KOB_PAGES_NODE_URL ?? '').trim()) {
     const r = publicUrl('KOB_PAGES_NODE_URL', env.KOB_PAGES_NODE_URL, ['wss:']);
     if (r.error) errors.push(r.error);
-    else nodeUrl = r.url;
-  } else notes.push('no KOB_PAGES_NODE_URL: the app connects to public Kaspa nodes through the SDK resolver');
+    else {
+      nodeUrl = r.url;
+      // the public nodes answer 404 at the WebSocket handshake of a bare host: the endpoint includes its wRPC path
+      if (!new URL(nodeUrl).pathname.includes('/wrpc/')) notes.push(`KOB_PAGES_NODE_URL: \`${nodeUrl}\` has no /wrpc/ path; a public node needs the whole endpoint, e.g. wss://<host>/kaspa/${network}/wrpc/json (a bare wss://<host> answers 404 and the page shows "Node: unreachable")`);
+    }
+  } else notes.push('no KOB_PAGES_NODE_URL: the app connects to a public Kaspa node the SDK resolver names');
 
   let explorerUrl = '';
   if ((env.KOB_PAGES_EXPLORER_URL ?? '').trim()) {

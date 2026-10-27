@@ -60,9 +60,28 @@ Repository *Settings* > *Secrets and variables* > *Actions*.
 | `KOB_PAGES_INDEXER_URL` | yes | the indexer the app reads, `https://...` (e.g. `https://chart.example.org`, `docs/ops/chart-server.md`) |
 | `KOB_PAGES_NETWORK` | no | `testnet-10` (default) or `mainnet` |
 | `KOB_PAGES_EXTRA_INDEXER_URLS` | no | further indexers to cross-check against, comma-separated `https://` URLs, at most 4 |
-| `KOB_PAGES_NODE_URL` | no | a `wss://` wRPC node; empty (default) = public Kaspa nodes through the SDK resolver |
+| `KOB_PAGES_NODE_URL` | no | a `wss://` wRPC node **with its path** (see "The node and the SDK resolver"); empty (default) = a public node the Kaspa SDK resolver names, reached over Borsh |
 | `KOB_PAGES_EXPLORER_URL` | no | block explorer base, `https://...`; empty = kaspa.stream of the network |
 | `KOB_PAGES_BRANCH` | no | the project's production branch, default `main` |
+
+### The node and the SDK resolver
+
+With `nodeUrl` empty the page asks the official Kaspa SDK for a node: `new Resolver()` with the network name (`web/src/data/node-rpc.ts`,
+`doConnect`). It is the SDK's own and KOB does not change it: a built-in list of community resolver hosts (`*.kaspa.stream`, `*.kaspa.red`,
+`*.kaspa-ng.org`, compiled into the SDK's wasm) is asked over HTTPS from the visitor's browser for a public wRPC node of that network, and the SDK
+connects to the node it names. The code is the same on both networks (only `networkId` is `testnet-10` or `mainnet`); there is no
+mainnet-specific path and no other fallback. Two things to know:
+
+* The resolvers answer 404 for the JSON encoding and serve **Borsh** only, so the page asks for Borsh when the node comes from the resolver
+  (since commit 3195209b; before it an empty `nodeUrl` left the page at "Node: unreachable" in a browser). That was verified live on testnet-10
+  (2026-10-27); nothing in this repository's tests reaches a real resolver, and mainnet through the resolver has not been run. A public node
+  is someone else's server: for a deployment others rely on, run a node of your own behind TLS and set `KOB_PAGES_NODE_URL`.
+* A `wss://` node URL you set is the whole wRPC endpoint **including its path**, in JSON encoding. For a public node of the resolver family on
+  testnet-10 that is `wss://<host>/kaspa/testnet-10/wrpc/json`; a bare `wss://<host>` answers 404 at the WebSocket handshake, and the page
+  shows "Node: unreachable". `web/scripts/pages-config.mjs` prints a note when the URL has no `/wrpc/` path.
+
+A node that does not answer is never "checking..." for ever: after about 25 seconds the status bar says "unreachable" and a red banner says
+whether no node URL is set (use Settings > Node URL, or ask whoever hosts the page) or the URL set did not answer.
 
 Every URL must be `https://` (a node `wss://`) on a public host, without user name, password, query or fragment: the page is
 served over https, so a browser refuses `http://` and `ws://` from it, and `config.json` is public (never put an API key in a
@@ -80,7 +99,10 @@ on *Actions* > *deploy-pages* > *Run workflow*:
    typecheck, unit tests, `npm run build:release`, `scripts/release-hashes.sh`, the mock e2e suite);
 2. writes `web/dist/config.json` from the variables; on `testnet-10` also `web/dist/registry/tokens.json` as the supported
    token programs with no token entries (the shipped registry names mainnet tokens; it is the same list `kob-executor setup`
-   writes as `kob-tokens.json`), on `mainnet` the pinned registry of `build:release` stays;
+   writes as `kob-tokens.json`), on `mainnet` the pinned registry of `build:release` stays. With no token entries the app names no
+   token: it opens on the tokens that have a ticker or declared decimals, and lists the others (no ticker, no declaration) only
+   behind "Show N token(s) without a name" on the market page (a search or a covenant id finds them anyway); a testnet-10 page can
+   therefore open on "No tokens yet." while the indexer holds tokens;
 3. uploads `web/dist` with Cloudflare's wrangler action (pinned by commit, wrangler version pinned) to the production branch;
 4. writes the deployment URL, `config.json`, the sha256 of every deployed file and the output of `scripts/release-hashes.sh`
    into the run's summary;
@@ -114,7 +136,7 @@ reviewer approving a deployment is the one who vouches for the commit (the run n
 deployed file; `reproducible` in `ci.yml` builds the same `dist` twice).
 
 The deployment does not set `quoteTokens` (no token is marked as a dollar) and keeps the scheme-only `connect-src` of
-`_headers`: with the public resolver the node is any public Kaspa node, and users may point the app at another indexer in
+`_headers`: with the public resolver the node is any public Kaspa node the resolver names, and users may point the app at another indexer in
 Settings, so the hosts cannot be pinned (README, *Deployment headers*).
 
 ## 5. Custom domain

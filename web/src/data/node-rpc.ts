@@ -145,6 +145,8 @@ function timed<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   return Promise.race([p, limit]).finally(() => clearTimeout(t));
 }
 
+const DISCONNECT_WAIT_MS = 3_000;
+
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export class KaspaRpcNode implements NodeApi {
@@ -290,7 +292,8 @@ export class KaspaRpcNode implements NodeApi {
       /* ignore */
     }
     try {
-      await rpc.disconnect();
+      // bounded: a client whose connect hung (a dead resolver) must not keep the next attempt, or the failure report, waiting for its disconnect
+      await timed(rpc.disconnect(), DISCONNECT_WAIT_MS, 'disconnect');
     } catch {
       /* already down */
     }

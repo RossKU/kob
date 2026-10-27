@@ -146,14 +146,41 @@ export interface NodeStatus {
   error: Error | null;
 }
 
+/**
+ * The longest the status waits for the node's answer. The node client has its own timeouts (about 20 s to connect), but a hung connect or
+ * resolver lookup (the SDK's public resolver answers a browser with 404 / no CORS headers on testnet-10) must still end as "unreachable" with a
+ * reason, never as "checking..." for ever.
+ */
+export const NODE_WAIT_MS = 25_000;
+
+/** One read of the node clock, ended by `waitMs` at the latest: the status it makes (`error` says what, a timeout included). */
+export async function readNodeStatus(node: Pick<Services['node'], 'getClock'>, waitMs: number, prev: NodeStatus | null = null): Promise<NodeStatus> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`The node did not answer within ${Math.round(waitMs / 1000)} s`)), waitMs);
+  });
+  try {
+    const c = await Promise.race([node.getClock(), limit]);
+    return { reachable: true, daa: c.daa, error: null };
+  } catch (e) {
+    return { reachable: false, daa: prev?.daa ?? null, error: toError(e) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Polls the node clock (virtual DAA). */
 export function useNodeStatus(s: Pick<Services, 'node'>): NodeStatus {
   const [st, setSt] = useState<NodeStatus>({ reachable: undefined, daa: null, error: null });
+  const busy = useRef(false);
   const poll = useCallback(() => {
-    s.node.getClock().then(
-      (c) => setSt({ reachable: true, daa: c.daa, error: null }),
-      (e) => setSt((prev) => ({ reachable: false, daa: prev.daa, error: toError(e) })),
-    );
+    // one read at a time: a node that hangs must not pile up a new request every poll
+    if (busy.current) return;
+    busy.current = true;
+    void readNodeStatus(s.node, NODE_WAIT_MS).then((next) => {
+      busy.current = false;
+      setSt((prev) => (next.reachable ? next : { ...next, daa: prev.daa }));
+    });
   }, [s.node]);
   useEffect(poll, [poll]);
   useInterval(poll, HEALTH_POLL_MS);
