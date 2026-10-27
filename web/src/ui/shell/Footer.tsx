@@ -2,6 +2,7 @@ import { useServices } from '../../app/context';
 import { t } from '../../i18n';
 import { version as appVersion } from '../../../package.json';
 import { indexerTrust } from '../../data/indexer-crosscheck';
+import { useFailoverState } from './failover';
 import { SECURITY_POLICY_URL } from './preaudit';
 
 /** A version worth showing: a real release number, not the 0.0.0 placeholder of an unreleased build (nor an unknown one). */
@@ -9,7 +10,10 @@ export const releasedVersion = (v: string): boolean => /^\d+\.\d+\.\d+/.test(v) 
 
 /** Non-custodial statement, versions, links. */
 export function Footer() {
-  const { kob, indexer, verifiers } = useServices();
+  const services = useServices();
+  const { kob, indexer } = services;
+  useFailoverState(services.failover); // re-render on a switch: the verifiers are those of the indexer in use
+  const verifiers = services.verifiers;
   const trust = indexerTrust(!!indexer, verifiers?.length ?? 0);
   let kobVersion = '?';
   try {

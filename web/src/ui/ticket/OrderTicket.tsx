@@ -21,6 +21,7 @@ import { bookFromIndexer, readClock } from '../../app/env';
 import { readPairReferences, readReferences, type References } from '../../data/indexer-crosscheck';
 import type { PlanEnv } from '../../kob/plan-types';
 import { auctionSubmitBy } from '../../wallet/sign';
+import { useFailoverState } from '../shell/failover';
 import { SendStatusLine, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
 import type { GateVerdict, SendJob } from '../confirm/send';
 import { RETIME_LEAD_DAA, firstAttemptLead, laterClock, rememberedSigningMs, retimeLead } from '../confirm/signing-time';
@@ -132,6 +133,7 @@ export function OrderTicket(props: OrderTicketProps) {
   // a market / close order whose start (the indexer's best price) is this far beyond another indexer's best price cannot be placed
   const startTolerance = BigInt(services.config.marketStartToleranceBps);
   // the best prices further indexers report for this market (none configured: empty): a KAS market's own books, a pair's from the two KAS books
+  useFailoverState(services.failover); // on a backup indexer the references are the other indexers: this ticket re-reads them after a switch
   const verifiers = services.verifiers;
   const marketOf = rawEnv ? rawEnv.token : null;
   const quoteMarketOf = rawEnv && isPairEnv(rawEnv) ? rawEnv.pair.quote : null;

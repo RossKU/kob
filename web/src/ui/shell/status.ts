@@ -6,6 +6,7 @@
 // `cursor` frames never trigger a read (a busy chain pushes one per block: that was one read per second per open tab).
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import type { Services } from '../../app/services';
+import type { IndexerFailover } from '../../data/indexer-failover';
 import type { FeedStatus } from '../../data/indexer';
 import type { HealthTickNotice, HealthView } from '../../data/indexer-types';
 import { Coalescer, pageVisible, toError, useInterval } from '../kit/hooks';
@@ -70,35 +71,58 @@ export function healthPushDue(frame: { type: string; data: unknown }, held: Heal
 }
 
 /** Polls `indexer.health()` (coalesced: never two reads in flight) and re-reads it on the feed's pushes that matter (see the head of this file). */
-export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'>): IndexerStatus {
+export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'> & { failover?: IndexerFailover | null }): IndexerStatus {
   const [health, setHealth] = useState<HealthView | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const alive = useRef(true);
   const runs = useRef(new Coalescer());
   const held = useRef<HealthView | null>(null);
   held.current = health;
+  const seenEpoch = useRef(s.failover ? s.failover.epoch : 0);
 
   const refresh = useCallback(() => {
     const indexer = s.indexer;
     if (!indexer || !runs.current.request()) return;
+    const failover = s.failover ?? null;
     const once = (): void => {
       runs.current.started();
+      // the answer belongs to the indexer that was active when the read was made: after a switch it is dropped
+      const epoch = failover ? failover.epoch : 0;
+      const current = (): boolean => !failover || failover.epoch === epoch;
       indexer.health().then(
         (h) => {
           if (!alive.current) return;
-          setHealth(h);
-          setError(null);
-          if (runs.current.settled()) once();
+          if (current()) {
+            setHealth(h);
+            setError(null);
+            failover?.report(epoch, { health: h, error: null });
+          }
+          if (runs.current.settled() || !current()) once();
         },
         (e) => {
           if (!alive.current) return;
-          setError(toError(e));
-          if (runs.current.settled()) once();
+          if (current()) {
+            setError(toError(e));
+            failover?.report(epoch, { health: null, error: toError(e) });
+          }
+          if (runs.current.settled() || !current()) once();
         },
       );
     };
     once();
-  }, [s.indexer]);
+  }, [s.indexer, s.failover]);
+
+  // another indexer is in use now: the answer of the old one says nothing about it
+  useEffect(() => {
+    if (!s.failover) return;
+    return s.failover.subscribe((st) => {
+      if (st.epoch === seenEpoch.current) return;
+      seenEpoch.current = st.epoch;
+      setHealth(null);
+      setError(null);
+      refresh();
+    });
+  }, [s.failover, refresh]);
 
   useEffect(() => {
     alive.current = true;

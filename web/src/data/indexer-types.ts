@@ -23,6 +23,12 @@ export interface HealthView {
   settle_depth_daa: number;
   last_error?: string | null;
   alarms?: unknown[];
+  /** the store holds every order the node's history still shows (false: a fast start in progress, or a store that began late); absent on older executors */
+  book_complete?: boolean;
+  /** where this store's history begins when it does not begin at the node's pruning point; absent for a store that read the whole retained history */
+  history_from_daa?: number;
+  /** the KOB1 payload version the executor reads and writes (docs/api.md section 3.1); absent on older executors */
+  payload_version?: number;
 }
 
 /** Capabilities of a token's program template that can act on holders or supply. `freeze` and `seize` put escrowed orders at the issuer's discretion. */

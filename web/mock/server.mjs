@@ -355,7 +355,14 @@ export async function startMockServer(opts = {}) {
       return ok({ ms: ctl.latencyMs, jitter_ms: ctl.jitterMs, scope: ctl.scope });
     }
     if (post && path === '/mock/health') {
-      chain.health = { state: String(body.state ?? 'following'), lagDaa: Number(body.lag_daa ?? 0) };
+      chain.health = {
+        state: String(body.state ?? 'following'),
+        lagDaa: Number(body.lag_daa ?? 0),
+        // optional: a store that began late (book_complete false, history_from_daa) and a build with another payload version
+        ...(body.book_complete === undefined ? {} : { bookComplete: !!body.book_complete }),
+        ...(body.history_from_daa === undefined ? {} : { historyFromDaa: Number(body.history_from_daa) }),
+        ...(body.payload_version === undefined ? {} : { payloadVersion: Number(body.payload_version) }),
+      };
       chain.emit({ orders: [], tokens: [], fills: [], added: 0, reverted: 0 });
       return ok(V.healthView(chain));
     }

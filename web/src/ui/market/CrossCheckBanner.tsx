@@ -3,6 +3,7 @@ import { crossCheckIndexers } from '../../data/indexer-crosscheck';
 import { t } from '../../i18n';
 import type { Hex } from '../../kob/types';
 import { Banner, useAsync } from '../kit';
+import { useFailoverState } from '../shell/failover';
 
 /**
  * With two or more indexers configured (`extraIndexerUrls`) the key facts of the token (powers, market price scale, best ask / bid) are read from each and
@@ -13,10 +14,14 @@ import { Banner, useAsync } from '../kit';
 const shown = (code: string, v: string | null | undefined): string => (v == null ? '' : code === 'market-scale-differs' && /^10*$/.test(v) ? String(v.length - 1) : v);
 
 export function CrossCheckBanner(props: { token: Hex; refreshKey?: number }) {
-  const { indexer, verifiers } = useServices();
+  const services = useServices();
+  const { indexer } = services;
+  // on a backup indexer the primary (while it answers) and the other further indexers are the references: the set changes with the failover state
+  const fo = useFailoverState(services.failover);
+  const verifiers = services.verifiers;
   const res = useAsync(
     async (signal) => (indexer && verifiers?.length ? crossCheckIndexers(indexer, verifiers, props.token, signal) : null),
-    [indexer, verifiers, props.token],
+    [indexer, verifiers, fo?.epoch, props.token],
     { refreshKey: props.refreshKey ?? 0 },
   );
   const r = res.data;

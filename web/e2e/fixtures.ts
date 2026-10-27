@@ -144,9 +144,12 @@ export class MockClient {
   latency(ms: number, o: { jitterMs?: number; scope?: 'all' | 'indexer' | 'node' } = {}) {
     return this.post('/mock/latency', { ms, jitter_ms: o.jitterMs ?? 0, scope: o.scope ?? 'all' });
   }
-  /** `following` | `catching_up` | `node_unavailable` | `gap` ... */
-  setHealth(state: string, lagDaa = 0) {
-    return this.post('/mock/health', { state, lag_daa: lagDaa });
+  /**
+   * `following` | `catching_up` | `node_unavailable` | `gap` ...; `extra`: `book_complete` / `history_from_daa` (a store that began late) and
+   * `payload_version` (a build of another KOB1 payload version) as `/v1/health` reports them
+   */
+  setHealth(state: string, lagDaa = 0, extra: { book_complete?: boolean; history_from_daa?: number; payload_version?: number } = {}) {
+    return this.post('/mock/health', { state, lag_daa: lagDaa, ...extra });
   }
   /** A chain re-org of `blocks` blocks (1 = routine; more than 30 is "deep"); changes nothing in the order data. */
   reorg(blocks = 1) {

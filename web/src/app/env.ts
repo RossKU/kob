@@ -218,10 +218,21 @@ function assertDeclaredDecimals(s: Services, token: TokenInfo): void {
 }
 
 /**
+ * `s` with its indexer fixed to the one in use now: with failover (data/indexer-failover.ts) `s.indexer` follows the active indexer from call to call, but
+ * the book and the wallet's orders of one environment must come from the same one. Services without failover are returned as they are.
+ */
+export function pinIndexer(s: Services): Services {
+  const pinned = typeof s.pinnedIndexer === 'function' ? s.pinnedIndexer() : s.indexer;
+  if (!s.failover || pinned === s.indexer) return s;
+  return Object.create(s, { indexer: { value: pinned, enumerable: true } }) as Services;
+}
+
+/**
  * Everything `planOrder` needs for one token and the connected wallet. Rejects when the node is unreachable. The three parts do not depend on each
  * other: they are read at the same time, one round.
  */
-export async function buildPlanEnv(s: Services, wallet: Pick<WalletInfo, 'pubkey'>, token: TokenInfo, o: BuildEnvOptions = {}): Promise<PlanEnv> {
+export async function buildPlanEnv(services: Services, wallet: Pick<WalletInfo, 'pubkey'>, token: TokenInfo, o: BuildEnvOptions = {}): Promise<PlanEnv> {
+  const s = pinIndexer(services);
   if (!token.tradable || !token.program) throw new Error(`token ${token.ticker} is not tradable in this build (${token.untradableReason ?? 'unsupported'})`);
   assertDeclaredDecimals(s, token);
   const market = tokenMarketOf(s, token);
@@ -292,7 +303,8 @@ export async function kasReferenceOf(indexer: Pick<NonNullable<Services['indexer
  * A guard whose data could not be read is reported (`guardsUnavailable`), as in `buildPlanEnv`. Rejects when the node is unreachable or the two
  * tokens are not two different tradable tokens.
  */
-export async function buildPairPlanEnv(s: Services, wallet: Pick<WalletInfo, 'pubkey'>, base: TokenInfo, quote: TokenInfo, o: BuildEnvOptions = {}): Promise<PairPlanEnv> {
+export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletInfo, 'pubkey'>, base: TokenInfo, quote: TokenInfo, o: BuildEnvOptions = {}): Promise<PairPlanEnv> {
+  const s = pinIndexer(services);
   for (const t of [base, quote]) {
     if (!t.tradable || !t.program) throw new Error(`token ${t.ticker} is not tradable in this build (${t.untradableReason ?? 'unsupported'})`);
     assertDeclaredDecimals(s, t);

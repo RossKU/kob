@@ -99,6 +99,12 @@ export function healthView(chain) {
     alarms: [],
     settle_depth_daa: chain.settleDepthDaa,
     counters: counters(chain),
+    // the build and the history flags of docs/api.md section 3.1 (a store that began late: book_complete false + history_from_daa)
+    version: '0.0.0',
+    commit: null,
+    payload_version: chain.health.payloadVersion ?? 4,
+    book_complete: chain.health.bookComplete !== false,
+    ...(chain.health.historyFromDaa === undefined ? {} : { history_from_daa: chain.health.historyFromDaa }),
   };
 }
 

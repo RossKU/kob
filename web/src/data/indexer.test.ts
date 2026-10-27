@@ -481,6 +481,48 @@ describe('IndexerFeed', () => {
     expect(feed.status).toBe('closed');
   });
 
+  it('retarget() moves the feed to another indexer: old socket dropped, channels re-subscribed there, the open is a reconnect with a resync', async () => {
+    const a = await mkServer();
+    const b = await mkServer();
+    const feed = mkFeed(a.base);
+    const log = record(feed);
+    feed.subscribe(['health', `book:${H1}`]);
+    feed.connect();
+    await feed.whenOpen();
+    await until(() => a.sessions[0]!.received.length === 1);
+    feed.retarget(b.base);
+    expect(feed.url).toBe(toFeedUrl(b.base));
+    await until(() => b.sessions.length === 1 && b.sessions[0]!.received.length === 1);
+    expect(b.sessions[0]!.received[0]).toEqual({ op: 'subscribe', channels: ['health', `book:${H1}`] });
+    await until(() => log.some((l) => l.ev === 'resync'));
+    expect(log.filter((l) => l.ev === 'resync').map((l) => l.v)).toEqual([{ reason: 'reconnect' }]);
+    // the old indexer is not reconnected to
+    await new Promise((r) => setTimeout(r, 120));
+    expect(a.sessions).toHaveLength(1);
+    expect(feed.status).toBe('open');
+    // the same address again changes nothing
+    feed.retarget(b.base);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(b.sessions).toHaveLength(1);
+  });
+
+  it('retarget() before connect() only changes the address; after close() it stays closed', async () => {
+    const a = await mkServer();
+    const b = await mkServer();
+    const feed = mkFeed(a.base);
+    feed.retarget(b.base);
+    expect(feed.status).toBe('idle');
+    feed.connect();
+    await feed.whenOpen();
+    expect(a.sessions).toHaveLength(0);
+    expect(b.sessions).toHaveLength(1);
+    feed.close();
+    feed.retarget(a.base);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(feed.status).toBe('closed');
+    expect(a.sessions).toHaveLength(0);
+  });
+
   it('close() stops reconnecting for good; connect() can restart it', async () => {
     const srv = await mkServer();
     const feed = mkFeed(srv.base);

@@ -11,8 +11,15 @@ programs before it builds a transaction; `web/README.md`). Executors that match 
 
 **It is one indexer among others.** The app must work against any operator's indexer. List independent third-party indexers in
 the deployment's `KOB_PAGES_EXTRA_INDEXER_URLS` when they exist: the app cross-checks the key facts of a token (powers, price
-scale, best prices) against them and refuses a market order whose start disagrees (`web/README.md`, *Several indexers*). Users
-can switch the indexer in Settings. This server is a convenience, not an authority.
+scale, best prices) against them and refuses a market order whose start disagrees (`web/README.md`, *Several indexers*), and when this
+server is down, not caught up or on another network it reads the book, charts and orders from a healthy one of them (banner "Using
+backup indexer ...", back to this server once it has recovered; `web-hosting.md`, *Further indexers: cross-check and failover*).
+Users can switch the indexer in Settings. This server is a convenience, not an authority.
+
+**When it is a backup.** An indexer that another host lists as a backup of this one needs nothing special: `/v1/health` is its only
+signal. It is used when it is following within 2 minutes of the chain, on the app's network, and its `payload_version` equals the
+web build's. A store that began late (`book_complete: false`, `history_from_daa`) is used last and flagged "History may be
+incomplete". It then serves every page's reads, so size it like the primary.
 
 **Start here: the order of the first setup.** The web app's deployment needs this server's public address, and this server's
 address needs a domain, so do it in this order:

@@ -63,10 +63,45 @@ Repository *Settings* > *Secrets and variables* > *Actions*.
 | `KOB_PAGES_PROJECT` | yes | the Pages project name, e.g. `kob-web` |
 | `KOB_PAGES_INDEXER_URL` | yes | the indexer the app reads, `https://...` (e.g. `https://chart.example.org`, `docs/ops/chart-server.md`) |
 | `KOB_PAGES_NETWORK` | no | `testnet-10` (default) or `mainnet` |
-| `KOB_PAGES_EXTRA_INDEXER_URLS` | no | further indexers to cross-check against, comma-separated `https://` URLs, at most 4 |
+| `KOB_PAGES_EXTRA_INDEXER_URLS` | no | further indexers, comma-separated `https://` URLs, at most 4: they cross-check the primary and take over its reads when it is down (see "Further indexers: cross-check and failover") |
 | `KOB_PAGES_NODE_URL` | no | a `wss://` wRPC node **with its path** (see "The node and the SDK resolver"); empty (default) = a public node the Kaspa SDK resolver names, reached over Borsh |
 | `KOB_PAGES_EXPLORER_URL` | no | block explorer base, `https://...`; empty = kaspa.stream of the network |
 | `KOB_PAGES_BRANCH` | no | the project's production branch, default `main` |
+
+### Further indexers: cross-check and failover
+
+The URLs in `KOB_PAGES_EXTRA_INDEXER_URLS` (`extraIndexerUrls` in `config.json`) do two jobs. List only indexers you trust to read the same
+network; each is a `kob-executor` read API (`docs/api.md`).
+
+1. **Cross-check** (always): the key facts a decision rests on (a token's powers, an open-list market's price scale, the best ask and bid, the
+   start of a market order) are compared with the indexer in use; a disagreement is shown and a market order whose start is too far from another
+   indexer's is refused.
+2. **Failover for reads**: when the primary (`KOB_PAGES_INDEXER_URL`) is unreachable, failing or not ready, the app reads the book, charts, tokens and
+   orders from a healthy further indexer, shows the banner "Using backup indexer <host>", and goes back to the primary, dropping the banner, once the
+   primary has answered well twice in a row. Nothing is built from the node: a node alone would give a partial book, so with no healthy backup the
+   app shows the primary's own "indexer cannot be reached" / "behind the chain" banners as before.
+
+How a backup is chosen (`web/src/data/indexer-failover.ts`):
+
+* **Healthy** is what the status bar already means for the primary: `/v1/health` answers, `network` is the app's, and the state is `following` (or
+  `catching_up` within the lag tolerance), at most 2 minutes behind. A backup must also report `payload_version` equal to the one this app build
+  writes (4); an older executor without the field is not used. A backup on another network, of another payload version, lagging, catching up or
+  starting is never used.
+* **Preference**: a backup whose health says `book_complete: true` comes first, then one that does not report it, then one whose store started late
+  (`book_complete: false`, `history_from_daa`). A late store can serve the live book, but charts, trades and older orders may be partial: the banner
+  adds "History may be incomplete". Within a rank the list order decides, and the backup in use is kept (two equal backups do not take turns).
+* **Retries are bounded**: a failing primary is re-read after 2 s and 4 s before it is given up (not when it has not answered well since the page
+  opened: the page has nothing to show meanwhile); then every indexer is probed once. With nothing healthy it looks again after 5 s, 10 s, 20 s and so
+  on, at most once a minute. On a backup the primary is probed every 15 s, backing off to a minute while it stays down, and not at all while the page is
+  hidden. The status poll (`/v1/health` of the indexer in use, every 15 s) is the only steady load.
+* **Cross-checking continues on a backup**: the primary (while it answers well) and the other further indexers are the references. One that is down,
+  behind or on another network is left out until a probe shows it fit again, and the footer says "single indexer, not cross-checked" when none is left.
+* **One indexer at a time**: a read goes to one indexer; the order environment (book, own orders, trades) of one ticket is read from the same one; when
+  the indexer changes, the live feed reconnects to the new one and every open view reads again.
+* **Which URLs**: only the primary and `extraIndexerUrls` of the merged configuration: the deployment's, or what the user saved in Settings (a banner
+  names a saved list on every page; a link can never add one). A backup is never taken from a link or from an indexer's own answer.
+
+Each backup serves the whole read load while the primary is down: give it the capacity of the primary (`docs/ops/chart-server.md`).
 
 ### The node and the SDK resolver
 
@@ -211,7 +246,8 @@ stay on the old version, revert the commit (or clear `KOB_PAGES_PROJECT`, which 
 * **No default routing to an executor.** The app talks to an indexer (read only) and to Kaspa nodes; orders are covenants on
   chain that any executor may fill. The deployment names no executor, matcher or facilitator, and the host runs none.
 * **Several indexers welcome.** `KOB_PAGES_EXTRA_INDEXER_URLS` should list independent third-party indexers when they exist;
-  the app cross-checks them and says "single indexer, not cross-checked" otherwise. Users can choose their own in Settings.
+  the app cross-checks them, reads from one of them when the primary is down ("Using backup indexer ..."), and says "single indexer, not
+  cross-checked" otherwise. Users can choose their own in Settings.
 * **No telemetry.** No analytics, no tracking scripts, no Cloudflare Web Analytics.
 * **Risk disclosure stays.** The app's warnings and disclosures (token powers, unverified genesis, look-alike tickers, the
   order disclosure before signing) are never removed or softened by a deployment.

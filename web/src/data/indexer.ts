@@ -596,7 +596,7 @@ const WS_OPEN = 1;
 const CHANNELS_PER_MESSAGE = 24; // the server caps one message at 4 KiB; a channel name is at most 71 chars
 
 export class IndexerFeed {
-  private readonly wsUrl: string;
+  private wsUrl: string;
   private readonly Ctor: WebSocketCtor;
   private readonly baseMs: number;
   private readonly maxMs: number;
@@ -841,6 +841,36 @@ export class IndexerFeed {
       default:
         return; // pong, unsubscribed, unknown: nothing to do
     }
+  }
+
+  /**
+   * Points the feed at another indexer (failover, data/indexer-failover.ts): the socket to the old one is dropped without a reconnect attempt to it, the
+   * wanted channels are subscribed on the new one, and the first open there reports a reconnect with a resync (what the app shows came from another
+   * indexer: every live view reads again). Before `connect()` only the address changes.
+   */
+  retarget(url: string): void {
+    const next = toFeedUrl(url);
+    if (next === this.wsUrl) return;
+    this.wsUrl = next;
+    this.live.clear();
+    const started = this.ws !== null || this.retryTimer !== null || this.state === 'connecting' || this.state === 'open' || this.state === 'reconnecting';
+    if (!started) return;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.stopPing();
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) {
+      ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+      try {
+        ws.close(1000, 'indexer changed');
+      } catch {
+        /* already closed */
+      }
+    }
+    this.attempt = 0;
+    this.everOpened = true; // the open on the new indexer is a reconnect: the views read again
+    this.open();
   }
 
   /** Stops reconnecting and closes the socket. The instance can be `connect()`ed again. */

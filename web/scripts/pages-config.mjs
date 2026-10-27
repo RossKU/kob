@@ -10,7 +10,7 @@
 // Variables (environment):
 //   KOB_PAGES_NETWORK             testnet-10 (default) or mainnet
 //   KOB_PAGES_INDEXER_URL         required: the indexer the app reads (https, a public host)
-//   KOB_PAGES_EXTRA_INDEXER_URLS  optional: further indexers the app cross-checks against (comma-separated, https, at most 4)
+//   KOB_PAGES_EXTRA_INDEXER_URLS  optional: further indexers: the app cross-checks against them and reads from one when the primary is down (comma-separated, https, at most 4)
 //   KOB_PAGES_NODE_URL            optional: a wRPC node (wss) WITH its path, e.g. wss://<host>/kaspa/testnet-10/wrpc/json (a bare host answers 404 at the
 //                                 handshake; a note says so); empty = a public node the Kaspa SDK's resolver names (reached over Borsh)
 //   KOB_PAGES_EXPLORER_URL        optional: block explorer base (https); empty = kaspa.stream of the network

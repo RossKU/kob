@@ -3,6 +3,7 @@ import type { ConfigWarning, StoredOverride } from '../../config';
 import { t } from '../../i18n';
 import { Banner } from '../kit';
 import { shortAddress } from '../kit/format';
+import { useFailoverState } from './failover';
 import { formatLag } from './health';
 import { useSystemStatus } from './StatusProvider';
 
@@ -13,7 +14,8 @@ import { useSystemStatus } from './StatusProvider';
  * Each has a `data-testid` starting with `banner-`.
  */
 export function GlobalBanners(props: { warnings: ConfigWarning[]; storedOverrides?: StoredOverride[] }) {
-  const { config, registryError } = useServices();
+  const { config, registryError, failover } = useServices();
+  const backup = useFailoverState(failover);
   const wallet = useWallet();
   const { node, indexer } = useSystemStatus();
   const a = indexer.assessment;
@@ -105,6 +107,21 @@ export function GlobalBanners(props: { warnings: ConfigWarning[]; storedOverride
         {config.nodeUrl
           ? t('shell.banner.nodeDown', { url: config.nodeUrl, reason, network: config.network })
           : t('shell.banner.nodeDownResolver', { reason, network: config.network })}
+      </Banner>,
+    );
+  }
+  // the book, charts and orders come from a backup indexer of the host's list while the main one is down, not ready or on another network
+  if (backup?.onBackup) {
+    banners.push(
+      <Banner
+        key="backup"
+        tone={backup.historyPartial ? 'warn' : 'info'}
+        title={t('shell.banner.backupTitle', { host: backup.host })}
+        class="wrap-anywhere"
+        data-testid="banner-backup-indexer"
+      >
+        {t('shell.banner.backupBody')}
+        {backup.historyPartial ? <> {t('shell.banner.backupPartial')}</> : null}
       </Banner>,
     );
   }
