@@ -300,6 +300,49 @@ export class TokenTracker {
     return found;
   }
 
+  // ---------------------------------------------------------------------------------------------- recovering an issuance
+
+  /**
+   * Finds the issuance outputs of a token created BEFORE the genesis named its states in its payload (docs/spec/token-metadata.md, 3). Such an
+   * output is a P2SH output of a state nobody but its issuer ever saw, so it is found the one way left: the issuer says what the state is. Its
+   * owner is `pubkey`, its amount one of `amounts` (what the issuer gave the key at creation, base units), the rest is the standard issuance
+   * (extension commitment `token.extensionCommitment`, else zero; no borrowing). For each candidate the node is asked for the UTXOs at the
+   * script it derives; whatever it lists there under the token's covenant id is the output (the script commits to the whole state, so it cannot
+   * be another one) and is remembered like any tracked output. `program` unknown (`token.program` absent): every KCC-20 program is tried.
+   * Returns the outputs found, remembered now or before; a failed node call rejects and changes nothing.
+   */
+  async recoverIssued(pubkey: Hex, token: { covenantId: Hex; program?: TokenProgram | null; extensionCommitment?: Hex | null }, amounts: readonly (bigint | string)[]): Promise<TrackedToken[]> {
+    const me = pubkey.toLowerCase();
+    const covId = token.covenantId.toLowerCase();
+    const programs = token.program ? [token.program] : PROGRAMS.filter((p) => familyOfProgram(p as TokenProgram) === 'kcc20').map((p) => p as TokenProgram);
+    const wanted = [...new Set(amounts.map((a) => BigInt(a)).filter((a) => a > 0n).map(String))];
+    const claims: { program: TokenProgram; state: TokenState; spk: string; address: string }[] = [];
+    for (const program of programs) {
+      for (const amount of wanted) {
+        const state = keyState(familyOfProgram(program), amount, me, token.extensionCommitment ?? null, program);
+        try {
+          const spk = this.kob.tokenScriptPublicKey(program, state).toLowerCase();
+          claims.push({ program, state, spk, address: spkStringToAddress(this.sdk, spk, this.network) });
+        } catch {
+          /* a program that cannot encode the state has no such output */
+        }
+      }
+    }
+    if (claims.length === 0) return [];
+    const live = await this.node.getUtxosByAddresses([...new Set(claims.map((c) => c.address))]);
+    const found: TrackedToken[] = [];
+    for (const u of live) {
+      if (u.covenantId !== covId) continue;
+      const claim = claims.find((c) => c.spk === u.scriptPublicKey.toLowerCase());
+      if (!claim) continue;
+      const c = sanitizeTracked({ transactionId: u.transactionId, index: u.index, tokenCovId: covId, program: claim.program, state: claim.state, carrier: u.amount, addedAt: this.now() }, this.now());
+      if (!c) continue;
+      this.add(me, c);
+      found.push(this.load(me).find((i) => i.transactionId === c.transactionId && i.index === c.index) ?? c);
+    }
+    return found;
+  }
+
   // ---------------------------------------------------------------------------------------------- resolving
 
   private stateFromView(v: TokenUtxoView, token: TokenRef): TokenState | null {

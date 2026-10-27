@@ -76,3 +76,37 @@ export function leaderNextStates(scriptHex, transferTagHex) {
   }
   return states;
 }
+
+/** The tag of a token genesis's payload (`kob_protocol::genesis_states`): `KOBG`. */
+export const GENESIS_STATES_TAG = '4b4f4247';
+
+/**
+ * The KCC-20 states a token genesis names in its payload (`KOBG` | version 1 | count | count x (length | 112-byte state span)): the way a chain
+ * observer learns the issued outputs, which have no transfer leader. Nothing is believed here: the caller keeps a state only where its P2SH is the
+ * output's script. Returns null for any other payload (or a malformed one).
+ * @returns {import('../src/kob/types').Kcc20State[] | null}
+ */
+export function genesisStates(payloadHex) {
+  if (typeof payloadHex !== 'string' || !payloadHex.startsWith(GENESIS_STATES_TAG)) return null;
+  const b = Buffer.from(payloadHex, 'hex');
+  if (b.length < 6 || b[4] !== 1 || b[5] === 0) return null;
+  const states = [];
+  let i = 6;
+  for (let k = 0; k < b[5]; k++) {
+    const len = b[i++];
+    if (len !== 112 || i + len > b.length) return null;
+    const s = b.subarray(i, i + len);
+    i += len;
+    // 0x08 amount | 0x20 owner | 0x01 owner_scheme | 0x01 borrow_scheme | 0x20 borrow_guard | 0x20 extension_commitment
+    if (s[0] !== 0x08 || s[9] !== 0x20 || s[42] !== 0x01 || s[44] !== 0x01 || s[46] !== 0x20 || s[79] !== 0x20) return null;
+    states.push({
+      amount: s.readBigInt64LE(1).toString(),
+      owner: s.subarray(10, 42).toString('hex'),
+      owner_scheme: s[43],
+      borrow_scheme: s[45],
+      borrow_guard: s.subarray(47, 79).toString('hex'),
+      extension_commitment: s.subarray(80, 112).toString('hex'),
+    });
+  }
+  return i === b.length ? states : null;
+}

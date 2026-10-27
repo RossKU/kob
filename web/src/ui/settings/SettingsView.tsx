@@ -3,6 +3,7 @@ import { useServices, useWallet } from '../../app/context';
 import { displayToken } from '../../app/token-display';
 import type { TrackedToken } from '../../data/token-tracker';
 import { TokenNote } from '../market/TokenNote';
+import { recoverIssuedToken } from './recover-issued';
 import { readSettings, saveSettings, type ConfigWarning, type NetworkName } from '../../config';
 import { t } from '../../i18n';
 import { version as appVersion } from '../../../package.json';
@@ -185,12 +186,19 @@ function TrackedAmount(props: { utxo: TrackedToken }) {
 }
 
 function TrackerSettings() {
-  const { tracker, config } = useServices();
+  const { tracker, config, kob, indexer } = useServices();
   const wallet = useWallet();
   const pubkey = wallet.info?.pubkey;
   const [rev, setRev] = useState(0);
   const [text, setText] = useState('');
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
+  // "Find a token you created earlier"
+  const [findId, setFindId] = useState('');
+  const [findAmount, setFindAmount] = useState('');
+  const [findDecimals, setFindDecimals] = useState('');
+  const [needDecimals, setNeedDecimals] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const [findMessage, setFindMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const list = useMemo(() => (pubkey ? tracker.list(pubkey) : []), [tracker, pubkey, rev]);
 
   if (!pubkey) {
@@ -210,9 +218,28 @@ function TrackerSettings() {
       setMessage({ tone: 'error', text: toError(e).message });
     }
   };
+  const doFind = async () => {
+    setFinding(true);
+    try {
+      const r = await recoverIssuedToken({ kob, tracker, declarations: indexer, network: config.network }, pubkey, findId, findAmount, findDecimals);
+      if (r.kind === 'found') {
+        setFindMessage({ tone: 'ok', text: t('settings.recover.found', { count: r.found.length }) });
+        setRev((x) => x + 1);
+      } else {
+        if (r.code === 'decimals') setNeedDecimals(true);
+        const key = { id: 'settings.recover.errorId', amount: 'settings.recover.errorAmount', decimals: 'settings.recover.errorDecimals', none: 'settings.recover.errorNone' } as const;
+        setFindMessage({ tone: 'error', text: t(key[r.code]) });
+      }
+    } catch (e) {
+      setFindMessage({ tone: 'error', text: toError(e).message });
+    } finally {
+      setFinding(false);
+    }
+  };
   return (
     <Section title={t('settings.tracker.title')} data-testid="settings-tracker">
       <p class="small muted">{t('settings.tracker.explain')}</p>
+      <p class="small muted">{t('settings.tracker.backup')}</p>
       <Table dense data-testid="tracker-list">
         <thead>
           <tr>
@@ -251,6 +278,17 @@ function TrackerSettings() {
         <Button disabled={!text.trim()} onClick={doImport} data-testid="tracker-import">{t('common.import')}</Button>
       </div>
       {message ? <Banner tone={message.tone} data-testid="tracker-message">{message.text}</Banner> : null}
+      <h3 style="margin-top:16px">{t('settings.recover.title')}</h3>
+      <p class="small muted">{t('settings.recover.explain')}</p>
+      <Field label={t('settings.recover.id')} value={findId} onValue={setFindId} data-testid="recover-id" />
+      <Field label={t('settings.recover.amount')} value={findAmount} onValue={setFindAmount} hint={t('settings.recover.amountHint')} data-testid="recover-amount" />
+      {needDecimals ? (
+        <Field label={t('settings.recover.decimals')} value={findDecimals} onValue={setFindDecimals} hint={t('settings.recover.decimalsHint')} data-testid="recover-decimals" />
+      ) : null}
+      <div class="row" style="margin-top:8px">
+        <Button disabled={finding || !findId.trim() || !findAmount.trim()} onClick={() => void doFind()} data-testid="recover-find">{t('settings.recover.find')}</Button>
+      </div>
+      {findMessage ? <Banner tone={findMessage.tone} data-testid="recover-message">{findMessage.text}</Banner> : null}
     </Section>
   );
 }

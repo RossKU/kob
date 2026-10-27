@@ -110,6 +110,9 @@ fn normal_issuance_signs_finalizes_and_validates() {
     assert_eq!(to_hex(&built.sign[0].pubkey), pk());
     assert!(built.tx.inputs[0].signature_script.is_empty());
     assert_eq!(built.tx.outputs.len(), 1, "one token output, no change");
+    // the genesis names the state of its token output (KOBG | 1 | 1 | 112 | the state span), so anyone who sees it can read the issued output
+    assert!(to_hex(&built.tx.payload).starts_with("4b4f4247010170"), "{}", to_hex(&built.tx.payload));
+    assert_eq!(built.tx.payload.len(), 6 + 1 + 112);
     assert_eq!(built.fee.change_output, None);
     assert!(built.fee.fee >= built.fee.min_fee);
     assert_eq!(prep.tx.outputs[0].value, 10 * KAS + built.fee.fee, "the preparation funds the carrier and the genesis fee exactly");

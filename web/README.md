@@ -258,9 +258,12 @@ on a desktop, Chrome on Android), and a phone browser is not told to install an 
 ## Indexer, token families, fees
 
 * **Token holdings.** `GET /v1/token-utxos?owner=&token=&spent=` (`docs/ops/executor.md` 5.1: proven states of KCC-20 and KRON holdings, paged) is the first source of the
-  wallet's token UTXOs (`src/data/token-tracker.ts`). Every UTXO is still verified on the node (its P2SH is derived from the claimed state) before it is spent. The
-  indexer cannot list issuance (genesis) outputs and may lag a block, so the local tracker (outputs of the app's own transactions, manual import) stays as the
-  complement; an outpoint the indexer lists is dropped from the local list. An indexer without the endpoint (404 / 501) degrades to the local tracker.
+  wallet's token UTXOs (`src/data/token-tracker.ts`). Every UTXO is still verified on the node (its P2SH is derived from the claimed state) before it is spent. A
+  genesis built by KOB names the states of its token outputs in its payload (`docs/spec/token-metadata.md` 3), so the indexer lists the issuer's outputs from the
+  block of the genesis and the same key finds them in any browser (and `kob place` on any machine). The indexer cannot list the genesis outputs of an older creation
+  and may lag a block, so the local tracker (outputs of the app's own transactions, manual import) stays as the complement: Settings keeps its export (the backup of an
+  older creation) and **Find a token you created earlier** looks the output up on the node from the token and the amount the creation gave the key. An outpoint the indexer
+  lists is kept in the local list too (after an indexer reset it is the only record). An indexer without the endpoint (404 / 501) degrades to the local tracker.
 * **Units.** Amounts are token base units and prices sompi per whole token: every order carries its `scale` (`10^decimals` of its
   token, at most `10^9`), and `GET /v1/tokens` returns each token's `scale` (`src/kob/units.ts`). There are no lots and the protocol
   has no price tick: the book's grouping step and column decimals use a display tick, the finest step the visible prices sit on

@@ -79,7 +79,26 @@ the optional ones that are not set:
 | Transaction | Inputs | Outputs | Payload |
 |---|---|---|---|
 | 1. preparation (version 1) | the creator's P2PK funding | 0: P2PK of the creator, exactly the genesis's carriers plus its fee; 1: change (dropped into the fee below the dust bound) | `0x00` + the declaration |
-| 2. genesis (version 1) | the preparation's output 0, alone (input 0 authorises the KIP-20 genesis group) | the token outputs, no change | empty |
+| 2. genesis (version 1) | the preparation's output 0, alone (input 0 authorises the KIP-20 genesis group) | the token outputs, no change | the states of the token outputs (`KOBG`, below) |
+
+**The genesis payload: why the issued outputs name their states.** A token output is a P2SH output: its script hash commits to the
+whole state (amount, owner, ...), so the state cannot be read from the chain. A transfer reveals the states it creates (the leader's
+`next_states`), but a genesis has no such leader, so until the first spend of an issued output nothing but the issuing wallet's own
+storage knew its state: a token created in one browser could not be listed or sold from another browser, or by the CLI, of the same
+key. The genesis therefore carries, in its payload, the states of its token outputs (`kob_protocol::genesis_states`):
+
+```text
+"KOBG" | version 1 | count (1..=255) | count x ( length (1..=255) | state span )
+```
+
+* The spans are the exact bytes the token program commits to (the 112-byte KCC-20 state), in output order. A reader keeps a span only
+  when the P2SH it produces under a pinned token program equals the output's script public key, exactly as for a transfer's states:
+  the payload proves nothing by itself, a wrong or hostile one can only fail to be believed, and it cannot change the token (the
+  covenant id commits to the authorising outpoint and the output group, not to the payload).
+* The executor's indexer lists each proven output as a holding of its owner (`GET /v1/token-utxos?owner=`, role `owned`) from the block
+  of the genesis; the web app and `kob` take their token UTXOs from that endpoint and confirm each on the node before spending it. A
+  KCC-23 reader ignores the payload (it reads the preparation's).
+* A genesis built before this payload existed, or by another tool, carries none; see *What the issuer must keep*.
 
 * Both are planned and signed before anything is sent: a version 1 transaction id does not depend on signature scripts or compute
   budgets, so the genesis can spend an output of a preparation that is not on chain yet. The preparation is sent first, then the
@@ -87,11 +106,12 @@ the optional ones that are not set:
 * Lock time 0, the native subnetwork and gas 0 on both (what the executor's indexer can hash from a `High` VSPC answer).
 * Fees at the relay floor (100 sompi per gram), from `issue::tests::creation_fees_before_and_after`:
 
-  | Creation | Before (one genesis) | After (preparation + genesis) |
-  |---|---|---|
-  | one holder, name / symbol / decimals only (the app's default; 51-byte payload) | 208,300 sompi | 208,900 + 167,100 = 376,000 sompi |
-  | two holders, every optional field (204-byte payload) | 254,000 sompi | 224,200 + 212,800 = 437,000 sompi |
+  | Creation | Before (one genesis, no payload) | KCC-23 (preparation + genesis, empty genesis payload) | With the genesis payload (this build) |
+  |---|---|---|---|
+  | one holder, name / symbol / decimals only (the app's default; 51-byte declaration) | 208,300 sompi | 208,900 + 167,100 = 376,000 sompi | 208,900 + 179,000 = 387,900 sompi |
+  | two holders, every optional field (204-byte declaration) | 254,000 sompi | 224,200 + 212,800 = 437,000 sompi | 224,200 + 236,000 = 460,200 sompi |
 
+  The genesis payload (113 bytes per token output) adds about 0.0001 KAS per output at this fee rate.
   The KAS locked in the token outputs (10 KAS each by default) is unchanged.
 
 ### Signing
@@ -118,6 +138,29 @@ the optional ones that are not set:
   new signature; "Forget it" keeps the KAS. A genesis already on chain finishes its record silently.
 * The CLI keeps the same in the output directory (`./kob-create-<id16>` when no `--out-dir` is given on a submitting run);
   `kob token resume <DIR>` sends the saved pair.
+
+### What the issuer must keep
+
+Whether the issued tokens can be found again depends on whether the genesis named their states (*The genesis payload* above).
+
+* **A creation of this build or later** (the web app's Create token page, `kob token issue`): nothing. The genesis names the states
+  of its outputs and an upgraded indexer lists them to the owner, so the same key, in any browser or on any machine, sees the
+  tokens (the web app's balances and ticket, `kob place`, `kob send`, `kob merge`) from the block of the genesis. An indexer that was
+  not running then needs a rebuild from an earlier start (`docs/ops/executor.md`, Part B 5.1). Keep the key; keep `supply.json`
+  (the Create token result panel offers it; the CLI writes it to the output directory) as the record of what was issued where.
+* **A creation of an earlier build, or a genesis made by another tool, whose payload is empty.** The state of each issued output was
+  known to the issuing browser only (its token tracker, in local storage; the CLI's record keeps a day) until the output is first
+  spent. The existing backups do **not** cover it unless made for this purpose: the placement-records backup (*Orders, Recover*) holds
+  orders, not token outputs, and the tracker's export (*Settings, Token tracker, Export*) holds the outputs that browser tracked
+  when it was made. The issuer keeps one of:
+  1. the tracker export of the browser that created the token (import it in *Settings, Token tracker*; each entry is checked on the
+     node before use); or
+  2. the token's covenant id and the amount the creation gave the key (what `supply.json` lists as the allocation of the output, or
+     what was typed in the form): *Settings, Token tracker, Find a token you created earlier* derives the state (the key, that amount,
+     the standard fixed-supply program with no borrowing and extension commitment zero), asks the node for the output at its script and
+     remembers it. It finds the output only for a state of that exact shape; an allocation to a custody owner, a borrow scheme, an
+     extension commitment other than zero or an amount the issuer no longer knows has no such path. Once found, spending the
+     output (a send to oneself will do) makes it known to every indexer, because a transfer names the states it creates.
 
 ## 4. Reading a token's facts
 

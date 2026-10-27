@@ -318,3 +318,71 @@ async fn the_operators_own_kcc20_tokens_are_read_for_maintenance() {
 async fn the_operators_own_kron_tokens_are_read_for_maintenance() {
     own_tokens_for_maintenance(Family::Kron).await;
 }
+
+/// A token genesis has no transfer leader, so the issuer's outputs used to be known to the issuing browser only: from another
+/// browser (or the CLI) the issuer could neither list nor sell them. The genesis names its states in its payload
+/// (`kob_protocol::genesis_states`): the indexer lists each output whose P2SH proves its state, to the owner and by token, from the
+/// block the genesis is in, and the first spend (a send of the very state the indexer served) is followed like any holding.
+#[tokio::test]
+async fn the_outputs_of_a_token_genesis_are_the_owners_holdings_from_the_first_block() {
+    use kob_protocol::issue::{build_creation, FundingUtxo, Holder, IssueSpec};
+    let c = Ctx::new();
+    let (issuer, a, b) = (TAKER, MAKER_A, MAKER_B);
+    // the issuer funds a creation with two holders: MAKER_A (a key) and MAKER_B (a key)
+    let funding = FundingUtxo {
+        outpoint: kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::Hash::from_bytes([0x5a; 32]), 0),
+        amount: 1_000 * KAS,
+        owner_pubkey: pk(issuer),
+    };
+    let spec =
+        IssueSpec::new("Flow Token", "FLOW", 8, 1_000, vec![Holder::new(pk(a), 0, 700), Holder::new(pk(b), 0, 300)], vec![funding]);
+    let mut plan = build_creation(&spec).unwrap();
+    plan.sign(&secp256k1::SecretKey::from_slice(&sk(issuer)).unwrap()).unwrap();
+    let cov = Hash32(plan.covenant_id().as_bytes());
+    let genesis_id = plan.genesis.txid().as_bytes();
+
+    // the preparation and the genesis in one block; nothing was spent from the genesis outputs yet
+    c.hs.node.push_block(vec![kcc23_wire(&plan.prep.tx, true), kcc23_wire(&plan.genesis.tx, true)]);
+    c.hs.sync().await;
+
+    let mine = list(&c, &by_owner(a, false));
+    assert_eq!(mine.len(), 1, "{mine:?}");
+    let v = &mine[0];
+    assert_eq!((v.amount.as_str(), v.role.as_str(), v.program.as_str(), v.family), ("700", "owned", "KCC20Ref", "kcc20"));
+    assert_eq!((v.token.as_str(), v.txid.as_str(), v.index), (hex_of(&cov.0).as_str(), hex_of(&genesis_id).as_str(), 0));
+    assert_eq!(v.value, spec.carrier.to_string());
+    assert_eq!(list(&c, &by_owner(b, false))[0].amount, "300");
+    // by token both are listed; the issuer holds none (the carriers and the supply went to the named holders)
+    let all = list(&c, &HoldingFilter { owner: None, token: Some(cov), include_spent: false });
+    assert_eq!(all.iter().map(|h| h.amount.as_str()).collect::<Vec<_>>(), ["700", "300"]);
+    assert!(list(&c, &by_owner(issuer, false)).is_empty());
+    // the state served is exactly what a builder takes back: the holder sends 100 on, and the genesis output is spent
+    let state: TokenState = serde_json::from_value(v.state.clone()).unwrap();
+    assert_eq!(hex_of(&state.encode()), v.state_hex);
+    let input = TokenUtxo {
+        utxo: Utxo { transaction_id: genesis_id, index: 0, amount: spec.carrier, block_daa_score: c.daa(), covenant_id: Some(cov.0) },
+        state,
+    };
+    let req = SendTokens {
+        token: TokenRef { covenant_id: cov.0, program: T3 },
+        tokens: vec![input],
+        recipients: vec![TokenRecipient { pubkey: pk(MAKER_B), amount: 100, carrier: CARRIER }],
+        token_change: Some(pk(a)),
+        token_change_carrier: CARRIER,
+        funding: vec![c.w.coin(a, 100)],
+        records: vec![],
+        change: None,
+        fee: FeeOptions::default(),
+    };
+    let tx = c.w.sign(&Action::SendTokens(req));
+    c.push(&[&tx]).await;
+    let a_all = list(&c, &by_owner(a, true));
+    assert_eq!(a_all.iter().map(|h| (h.amount.as_str(), h.spent)).collect::<Vec<_>>(), [("700", true), ("600", false)]);
+    assert_eq!(a_all[0].spent_txid, Some(hex_of(&tx.tx.id)));
+    assert_eq!(list(&c, &by_owner(b, false)).iter().map(|h| h.amount.clone()).collect::<Vec<_>>(), ["300", "100"]);
+
+    // a reorg of the block of the genesis takes the holdings back out
+    c.hs.node.reorg(2, vec![vec![]]);
+    c.hs.sync().await;
+    assert!(list(&c, &HoldingFilter { owner: None, token: Some(cov), include_spent: true }).is_empty());
+}

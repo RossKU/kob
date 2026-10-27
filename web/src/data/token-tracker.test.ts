@@ -627,3 +627,63 @@ describe('TokenTracker storage', () => {
     for (const b of bads) expect(sanitizeTracked(b), JSON.stringify(b)?.slice(0, 60)).toBeNull();
   });
 });
+
+describe('TokenTracker.recoverIssued (an issuance output nobody but its issuer ever saw)', () => {
+  const COV = '77'.repeat(32);
+  const GENESIS = 'd1'.repeat(32);
+  const put = (w: World, program: TokenProgram, state: TokenState, index: number, cov: Hex = COV, txid: Hex = GENESIS) => {
+    const spk = kob.tokenScriptPublicKey(program, state);
+    w.node.addUtxo({ address: spkStringToAddress(sdk, spk, NET), transactionId: txid, index, amount: CARRIER, scriptPublicKey: spk, covenantId: cov });
+  };
+  const ZERO = '00'.repeat(32);
+  const issued = (amount: bigint): TokenState => tokenState(amount, MAKER_PK, ZERO);
+
+  it('finds the output from the amount alone, on whichever KCC-20 program, and remembers it so a fresh store lists it', async () => {
+    const w = world();
+    put(w, 'KCC20Ref', issued(100_000_000_000n), 0);
+    expect(w.tracker.list(MAKER_PK)).toEqual([]);
+    const found = await w.tracker.recoverIssued(MAKER_PK, { covenantId: COV }, [100_000_000_000n]);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ transactionId: GENESIS, index: 0, tokenCovId: COV, program: 'KCC20Ref', carrier: CARRIER });
+    expect(found[0]!.state).toEqual(issued(100_000_000_000n));
+    // remembered, and now an ordinary spendable candidate verified on the node
+    expect(w.tracker.list(MAKER_PK)).toHaveLength(1);
+    const utxos = await w.tracker.tokenUtxosFor(MAKER_PK, { covenantId: COV, program: 'KCC20Ref' });
+    expect(utxos.map((u) => [u.transactionId, u.state.amount])).toEqual([[GENESIS, '100000000000']]);
+    // a second look adds nothing
+    await w.tracker.recoverIssued(MAKER_PK, { covenantId: COV }, ['100000000000']);
+    expect(w.tracker.list(MAKER_PK)).toHaveLength(1);
+  });
+
+  it('several outputs of several amounts, one node call; an amount that was not issued, another key, another token and a spent output find nothing', async () => {
+    const w = world();
+    put(w, 'KCC20Ref', issued(700n), 0);
+    put(w, 'KCC20Ref', issued(300n), 1);
+    put(w, 'KCC20Ref', tokenState(500n, OTHER_PK, ZERO), 2); // somebody else's
+    put(w, 'KCC20Ref', issued(900n), 3, '55'.repeat(32)); // another token with the same state
+    const before = w.node.utxoQueries.length;
+    const found = await w.tracker.recoverIssued(MAKER_PK, { covenantId: COV, program: 'KCC20Ref' }, [700n, 300n, 12345n, 900n]);
+    expect(found.map((f) => f.state.amount).sort()).toEqual(['300', '700']);
+    expect(w.node.utxoQueries.length - before).toBe(1);
+    expect(await w.tracker.recoverIssued(OTHER_PK, { covenantId: COV }, [700n])).toEqual([]);
+    expect(await w.tracker.recoverIssued(MAKER_PK, { covenantId: COV }, [701n, 0n])).toEqual([]);
+    w.node.removeUtxo(GENESIS, 0);
+    expect((await w.tracker.recoverIssued(MAKER_PK, { covenantId: COV }, [700n])).map((f) => f.state.amount)).toEqual([]);
+  });
+
+  it('takes the extension commitment the token names, and the claim must match the on-chain script', async () => {
+    const w = world();
+    put(w, 'KCC20Ref', tokenState(10n, MAKER_PK, TOKEN_EXT), 0);
+    expect(await w.tracker.recoverIssued(MAKER_PK, { covenantId: COV }, [10n])).toEqual([]);
+    const found = await w.tracker.recoverIssued(MAKER_PK, { covenantId: COV, extensionCommitment: TOKEN_EXT }, [10n]);
+    expect(found).toHaveLength(1);
+  });
+
+  it('a failed node call rejects and stores nothing', async () => {
+    const w = world();
+    put(w, 'KCC20Ref', issued(5n), 0);
+    w.node.getUtxosByAddresses = async () => { throw new Error('node down'); };
+    await expect(w.tracker.recoverIssued(MAKER_PK, { covenantId: COV }, [5n])).rejects.toThrow('node down');
+    expect(w.tracker.list(MAKER_PK)).toEqual([]);
+  });
+});

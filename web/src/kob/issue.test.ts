@@ -250,6 +250,33 @@ describe('planIssue', () => {
     expect(v.token.decimals).toBe(8);
   });
 
+  it('the genesis payload names the states of its outputs, so any wallet of the key and an indexer find the issued tokens (KOBG)', () => {
+    const plan = planIssue(kob, form({ supply: '1000' }), opts());
+    const bytes = Buffer.from(plan.built.tx.payload, 'hex');
+    // KOBG | version 1 | count | count x (length | 112-byte state span)
+    expect(bytes.subarray(0, 4).toString()).toBe('KOBG');
+    expect([bytes[4], bytes[5]]).toEqual([1, plan.token.outputs.length]);
+    let i = 6;
+    const spans: Buffer[] = [];
+    for (let k = 0; k < bytes[5]!; k++) {
+      const len = bytes[i++]!;
+      spans.push(bytes.subarray(i, i + len));
+      i += len;
+    }
+    expect(i).toBe(bytes.length);
+    // each span is the encoded state of the output it names, and the output's script is the one that state commits to
+    const claimed = issuedTokenUtxos(plan);
+    expect(spans).toHaveLength(claimed.length);
+    claimed.forEach((u, k) => {
+      expect(spans[k]!.toString('hex')).toBe(kob.encodeTokenState(u.state));
+      expect(kob.tokenScriptPublicKey(plan.token.program, u.state)).toBe(plan.built.tx.outputs[u.index]!.scriptPublicKey);
+    });
+    // it is part of what the genesis signs, not of the token's identity: the same states under another declaration name the same payload
+    const other = planIssue(kob, form({ supply: '1000', description: 'other' }), opts());
+    expect(other.built.tx.payload).toBe(plan.built.tx.payload);
+    expect(other.token.covenantId).not.toBe(plan.token.covenantId);
+  });
+
   it('token UTXOs decode and re-derive the output script public keys', () => {
     const plan = planIssue(kob, form(), opts());
     const utxos = issuedTokenUtxos(plan);
@@ -483,8 +510,10 @@ describe("the token's X and Telegram accounts (declared on chain, and in the reg
     expect(p.docs.metadata).toMatchObject({ x: 'https://x.com/kob', telegram: 'https://t.me/kob_chat' });
     expect(registryEntryFromIssue(p.token, p.docs).display).toMatchObject({ x: 'https://x.com/kob' });
     expect(p.declaration.json.endsWith(',"x":"https://x.com/kob","telegram":"https://t.me/kob_chat"}')).toBe(true);
-    // the genesis payload stays empty; the declaration is the preparation's, and another declaration is another token
-    expect(p.built.tx.payload).toBe('');
+    // the genesis payload names the states of its token outputs (KOBG, docs/spec/token-metadata.md 3), not the declaration: that is the preparation's,
+    // and another declaration is another token
+    expect(p.built.tx.payload).toMatch(/^4b4f4247010170[0-9a-f]{224}$/);
+    expect(plain.built.tx.payload).toBe(p.built.tx.payload);
     expect(p.prep.tx.id).not.toBe(plain.prep.tx.id);
     expect(p.token.covenantId).not.toBe(plain.token.covenantId);
   });

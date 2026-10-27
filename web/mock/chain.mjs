@@ -7,7 +7,7 @@
 import { addressOfSpk, addressPrefix, p2pkSpk, spkOfAddress } from './address.mjs';
 import { KINDS, auctionOf, baseKind, bidBuyingPower, custodiesOf, custodyAmount, isPairKind, pairTokensOf, quoteOf, sideOf, termsOf } from './model.mjs';
 import { simulatePairArm, simulatePairFill } from './pair-fill.mjs';
-import { leaderNextStates, revealOf } from './script.mjs';
+import { genesisStates, leaderNextStates, revealOf } from './script.mjs';
 import { ApiError, HEX64, Rejection, badRequest, notFound, syntheticId } from './util.mjs';
 
 const TEMPLATE_ID_OF_PROGRAM = { KCC20Ref: 'kcc20-ref-3x3', KCC20Ref_8x8: 'kcc20-ref-8x8', KCC20KaspaCom_0_2_5: 'kcc20-kaspacom-0-2-5', KCC20PublicMint: 'kcc20-ref-public-mint' };
@@ -458,16 +458,20 @@ export class MockChain {
     const tokenMatches = new Map(); // output index -> Kcc20State
     const leaders = new Map();
     const used = new Set();
+    // A token genesis has no leader: it names the states of its outputs in its payload (`KOBG`), believed only where their P2SH is the output's
+    // script (the indexer does the same: record.rs `genesis_leaders`), and the token is tracked from then on, listed or not.
+    const genesis = genesisStates(tx.payload);
     tx.outputs.forEach((o, j) => {
-      const tok = o.covenant ? this.tokens.get(o.covenant.covenantId) : null;
-      if (!tok) return;
+      if (!o.covenant) return;
+      let tok = this.tokens.get(o.covenant.covenantId);
+      if (!tok && !genesis) return;
       const auth = o.covenant.authorizingInput;
       if (!leaders.has(auth)) leaders.set(auth, leaderNextStates(tx.inputs[auth]?.signatureScript ?? '', this.transferTag));
-      const states = leaders.get(auth);
+      const states = leaders.get(auth) ?? genesis;
       if (!states) return;
       states.forEach((st, k) => {
         if (tokenMatches.has(j) || used.has(`${auth}:${k}`)) return;
-        const programs = [tok.program, ...this.tokenPrograms.filter((p) => p !== tok.program)];
+        const programs = tok ? [tok.program, ...this.tokenPrograms.filter((p) => p !== tok.program)] : this.tokenPrograms;
         for (const p of programs) {
           let spk;
           try {
@@ -478,6 +482,8 @@ export class MockChain {
           if (spk === o.scriptPublicKey) {
             used.add(`${auth}:${k}`);
             tokenMatches.set(j, st);
+            // a token only its holdings show: tracked, not listed (`/v1/tokens` names the tokens an order placement named)
+            tok ??= this.addToken({ covenant_id: o.covenant.covenantId, ticker: '', program: p, extension_commitment: st.extension_commitment, hidden: true });
             break;
           }
         }

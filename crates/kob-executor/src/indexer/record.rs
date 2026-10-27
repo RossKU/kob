@@ -491,6 +491,24 @@ pub fn leader_of(sigscript: &[u8]) -> Option<Leader> {
     ))
 }
 
+/// The candidate states a token genesis names in its payload ([`kob_protocol::genesis_states`]), one [`Leader`] per pinned token
+/// program that can read every span as its own state, each with the script public key it produces. Nothing is believed here: the
+/// caller keeps a state only where that script is the output's. Empty for any other payload.
+pub fn genesis_leaders(payload: &[u8]) -> Vec<Leader> {
+    let Some(spans) = kob_protocol::genesis_states::decode(payload) else { return vec![] };
+    TemplateId::TOKEN_PROGRAMS
+        .into_iter()
+        .filter_map(|tid| {
+            let tpl = token_template(tid);
+            let states = spans
+                .iter()
+                .map(|b| TokenState::decode_with(tpl, b).ok().map(|s| (s.clone(), s.spk_with(tpl))))
+                .collect::<Option<Vec<_>>>()?;
+            Some((tid, states))
+        })
+        .collect()
+}
+
 /// The database-free work of one transaction (signature-script parsing, script hashing, placement verification), done
 /// before the single-threaded database pass, in parallel over a batch ([`precompute`]). Every entry is a pure function of
 /// the transaction, so a cache hit gives exactly what the database pass would have computed itself.
@@ -775,6 +793,7 @@ impl Extractor<'_> {
         let mut holds = Vec::new();
         let fresh: HashSet<Hash32> = tx.outputs.iter().filter_map(|o| o.covenant.map(|c| c.covenant_id)).collect();
         let mut leaders: HashMap<u32, Option<Leader>> = HashMap::new();
+        let mut genesis: Option<Vec<Leader>> = None;
         let mut used: HashSet<(u32, usize)> = HashSet::new();
         for (j, o) in tx.outputs.iter().enumerate() {
             let Some(c) = &o.covenant else { continue };
@@ -792,29 +811,35 @@ impl Extractor<'_> {
                     Some(l) => l.clone(),
                     None => tx.inputs.get(c.authorizing_input as usize).and_then(|i| leader_of(&i.signature_script.0)),
                 });
-            let Some((tid, states)) = leader else { continue };
+            // No leader: a token genesis names the states of its outputs in its payload instead (`genesis_states`), one list of
+            // candidate states per pinned token program, each believed only if its P2SH is the output's script public key
+            let genesis_cands: &[Leader] =
+                if leader.is_none() { genesis.get_or_insert_with(|| genesis_leaders(&tx.payload.0)).as_slice() } else { &[] };
             let want = parse_spk(&o.script_public_key.0);
-            for (k, (s, spk)) in states.iter().enumerate() {
-                if used.contains(&(c.authorizing_input, k)) || want.as_ref() != Some(spk) {
-                    continue;
+            'found: for (li, (tid, states)) in leader.iter().chain(genesis_cands.iter()).enumerate() {
+                for (i, (s, spk)) in states.iter().enumerate() {
+                    let k = (li << 16) | i;
+                    if used.contains(&(c.authorizing_input, k)) || want.as_ref() != Some(spk) {
+                        continue;
+                    }
+                    // the state is proven: the P2SH it produces is this output's script public key
+                    used.insert((c.authorizing_input, k));
+                    let owner = Hash32(s.owner());
+                    let order_owned = s.is_covenant_owned()
+                        && if order_gate {
+                            fresh.contains(&owner) || order_known(self.conn, &owner)?
+                        } else {
+                            // a token no order trades: a foreign stray of an order the indexer already knows
+                            order_known(self.conn, &owner)?
+                        };
+                    if order_owned {
+                        tok_outs.push(TokOut { out: j as u32, amount: s.amount(), owner });
+                    }
+                    // every proven output is a holding, whoever owns it
+                    holds.push(HeldOut { out: j as u32, program: *tid, state: s.clone() });
+                    relevant = true;
+                    break 'found;
                 }
-                // the state is proven: the P2SH it produces is this output's script public key
-                used.insert((c.authorizing_input, k));
-                let owner = Hash32(s.owner());
-                let order_owned = s.is_covenant_owned()
-                    && if order_gate {
-                        fresh.contains(&owner) || order_known(self.conn, &owner)?
-                    } else {
-                        // a token no order trades: a foreign stray of an order the indexer already knows
-                        order_known(self.conn, &owner)?
-                    };
-                if order_owned {
-                    tok_outs.push(TokOut { out: j as u32, amount: s.amount(), owner });
-                }
-                // every proven output is a holding, whoever owns it
-                holds.push(HeldOut { out: j as u32, program: *tid, state: s.clone() });
-                relevant = true;
-                break;
             }
         }
         if !relevant {
@@ -966,6 +991,80 @@ mod tests {
         assert!(ex.extract(&tx(crate::script::spk_bytes(&other)), 0).unwrap().is_none());
         let look_alike = TokenState::Kcc20(holder.clone()).spk_with(token_template(TemplateId::Kcc20Ref));
         assert!(ex.extract(&tx(crate::script::spk_bytes(&look_alike)), 0).unwrap().is_none());
+    }
+
+    /// A token genesis has no transfer leader: it names the states of its outputs in its payload (`genesis_states`). Each is a holding
+    /// when the P2SH of its state under a pinned program is the output's script (whatever the order of the names), and nothing is
+    /// believed otherwise: another amount, a payload that is not the exact encoding or no payload leave the transaction unrelated.
+    #[test]
+    fn a_genesis_names_its_outputs_and_an_unproven_claim_is_not_believed() {
+        use crate::rpc::types::*;
+        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+        let ex = Extractor { conn: &conn };
+        let cov = Hash32([0x42; 32]);
+        let tpl = token_template(TemplateId::Kcc20Ref);
+        let (mine, theirs) = (Kcc20State::p2pk(700, [3; 32], [0xee; 32]), Kcc20State::p2pk(300, [4; 32], [0xee; 32]));
+        let spk_of = |s: &Kcc20State| crate::script::spk_bytes(&TokenState::Kcc20(s.clone()).spk_with(tpl));
+        let tx = |outs: Vec<Vec<u8>>, payload: Vec<u8>| Tx {
+            inputs: vec![TxInput {
+                previous_outpoint: Outpoint { transaction_id: Hash32([1; 32]), index: 0 },
+                // a plain P2PK spend: no leader, no token program in the signature script
+                signature_script: crate::hex::HexBytes(vec![0x41; 65]),
+                sequence: Some(0),
+                verbose_data: Some(InputVerbose {
+                    utxo_entry: Some(SpentUtxo {
+                        amount: 5_000,
+                        script_public_key: crate::hex::HexBytes(vec![0, 0, 0x20, 1, 0xac]),
+                        block_daa_score: None,
+                        covenant_id: None,
+                    }),
+                }),
+            }],
+            outputs: outs
+                .into_iter()
+                .map(|spk| TxOutput {
+                    value: 1_000,
+                    script_public_key: crate::hex::HexBytes(spk),
+                    covenant: Some(CovenantBinding { authorizing_input: 0, covenant_id: cov }),
+                })
+                .collect(),
+            payload: crate::hex::HexBytes(payload),
+            verbose_data: TxVerbose { transaction_id: Hash32([2; 32]), block_time: 0 },
+            version: Some(1),
+            lock_time: Some(0),
+            subnetwork_id: None,
+            gas: None,
+        };
+        let names = |states: &[&Kcc20State]| {
+            kob_protocol::genesis_states::encode(&states.iter().map(|s| TokenState::Kcc20((*s).clone()).encode()).collect::<Vec<_>>())
+                .unwrap()
+        };
+        let want = vec![
+            HeldOut { out: 0, program: TemplateId::Kcc20Ref, state: TokenState::Kcc20(mine.clone()) },
+            HeldOut { out: 1, program: TemplateId::Kcc20Ref, state: TokenState::Kcc20(theirs.clone()) },
+        ];
+        let outs = vec![spk_of(&mine), spk_of(&theirs)];
+        for named in [names(&[&mine, &theirs]), names(&[&theirs, &mine])] {
+            let rec = ex.extract(&tx(outs.clone(), named), 0).unwrap().expect("a genesis that names its outputs is relevant");
+            assert_eq!(rec.holds, want);
+        }
+        // a name that is not the output's state proves nothing (the second output stays unnamed)
+        let wrong = Kcc20State::p2pk(301, [4; 32], [0xee; 32]);
+        let rec = ex.extract(&tx(outs.clone(), names(&[&mine, &wrong])), 0).unwrap().expect("one output is proven");
+        assert_eq!(rec.holds, want[..1].to_vec());
+        assert!(ex.extract(&tx(vec![outs[1].clone()], names(&[&mine, &wrong])), 0).unwrap().is_none());
+        // the same state under another pinned program is another script: it is proven under THAT program only
+        let look_alike =
+            crate::script::spk_bytes(&TokenState::Kcc20(mine.clone()).spk_with(token_template(TemplateId::Kcc20PublicMint)));
+        let rec =
+            ex.extract(&tx(vec![look_alike], names(&[&mine])), 0).unwrap().expect("a public-mint holder is a holding of that program");
+        assert_eq!(rec.holds[0].program, TemplateId::Kcc20PublicMint);
+        // no payload, a payload that is not the encoding, or one with trailing bytes: unrelated
+        assert!(ex.extract(&tx(outs.clone(), vec![]), 0).unwrap().is_none());
+        let mut trailing = names(&[&mine, &theirs]);
+        trailing.push(0);
+        assert!(ex.extract(&tx(outs.clone(), trailing), 0).unwrap().is_none());
+        assert!(ex.extract(&tx(outs, b"KOBG\x02garbage".to_vec()), 0).unwrap().is_none());
     }
 
     #[test]

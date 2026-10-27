@@ -2,7 +2,7 @@
 // preparation declaring the token details, then the genesis spending it) with the mock KasWare wallet and with the private key (one approval in
 // the signer frame), and the blocking cases.
 import { test, expect, TEST_KEYS } from '../fixtures';
-import { readReceipt, confirmReceipt } from '../helpers/ticket';
+import { readReceipt, confirmReceipt, fillFields, pickType, placeOrder, waitReviewable } from '../helpers/ticket';
 
 const KAS = 100_000_000n;
 
@@ -83,7 +83,9 @@ test.describe('token issuance', () => {
     expect(genesis.txid).toBe(await page.getByTestId('issue-result-txid').getAttribute('data-value'));
     expect(prep.txid).toBe(await page.getByTestId('issue-result-prepTxid').getAttribute('data-value'));
     expect(genesis.tx.inputs.map((i: any) => [i.transactionId, i.index])).toEqual([[prep.txid, 0]]);
-    expect(genesis.tx.payload).toBe('');
+    // the genesis names the states of its token outputs (KOBG | version 1 | count | length-prefixed 112-byte state spans): how an indexer, the
+    // issuing key in another browser and the CLI find the issued output, which has no transfer leader to reveal it
+    expect(genesis.tx.payload).toMatch(/^4b4f4247010170[0-9a-f]{224}$/);
     const declared = '{"name":"New Example Coin","symbol":"NEWKCC","decimals":2,"x":"https://x.com/newkcc","telegram":"https://t.me/newkcc_chat"}';
     expect(prep.tx.payload).toBe(`00${Buffer.from(declared, 'utf8').toString('hex')}`);
     const covenantIds = (genesis.tx?.outputs ?? []).map((o: any) => o?.covenant?.covenantId ?? o?.covenant?.covenant_id).filter(Boolean);
@@ -131,6 +133,99 @@ test.describe('token issuance', () => {
     await expect(header.getByTestId('open-token-decimals')).toHaveAttribute('data-origin', 'declared');
     await expect(header.getByTestId('open-token-decimals')).toContainText('whole tokens of 2 decimals, as its creator declared at creation');
     await expect(header).not.toContainText('carries no decimals');
+  });
+
+  test('a token created in one browser is found, listed and sold from a fresh profile of the same key', async ({ appPage: page, mock }) => {
+    await mock.giveKas('alice', 500n * KAS);
+    await page.goto('/#/create');
+    await page.getByTestId('wallet-connect-kasware').click();
+    await expect(page.getByTestId('wallet-address')).toBeVisible();
+    await page.getByTestId('issue-name').fill('Fresh Profile Coin');
+    await page.getByTestId('issue-ticker').fill('FRESH');
+    await page.getByTestId('issue-supply').fill('1000');
+    await expect(page.getByTestId('issue-holder-0-amount')).toHaveValue('1000');
+    await page.getByTestId('issue-review').click();
+    await page.getByTestId('confirm-ack').check();
+    await page.getByTestId('confirm-sign').click();
+    await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId('confirm-close').click();
+    await expect(page.getByTestId('issue-result')).toBeVisible({ timeout: 30_000 });
+    const tokenId = (await page.getByTestId('issue-result-tokenId').getAttribute('data-value'))!;
+    const genesisTxid = (await page.getByTestId('issue-result-txid').getAttribute('data-value'))!;
+
+    // the issuing browser tracks the output; the INDEXER lists it too, to the owner, before any transfer or order (the genesis named it)
+    const alice = TEST_KEYS.alice.pubkey;
+    expect(await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk).length, alice)).toBe(1);
+    const held = await mock.get(`/v1/token-utxos?owner=${alice}&token=${tokenId}`);
+    expect(held.items).toHaveLength(1);
+    expect(held.items[0]).toMatchObject({ txid: genesisTxid, index: 0, token: tokenId, owner: alice, amount: '100000000000', role: 'owned', program: 'KCC20Ref', spent: false });
+    // a key that did not receive it is listed nothing
+    expect((await mock.get(`/v1/token-utxos?owner=${TEST_KEYS.bob.pubkey}&token=${tokenId}`)).items).toEqual([]);
+
+    // a fresh profile: this browser forgets everything it knew (the tracker, the creation records, the settings)
+    await page.goto('about:blank');
+    await page.evaluate(() => undefined);
+    await page.goto('/#/create');
+    await page.evaluate(() => {
+      localStorage.clear();
+      sessionStorage.clear();
+    });
+    await page.goto(`/#/market/${tokenId}`);
+    await page.reload();
+    await page.getByTestId('wallet-connect-kasware').click();
+    await expect(page.getByTestId('wallet-address')).toBeVisible();
+    expect(await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk).length, alice)).toBe(0);
+
+    // the wallet holds the tokens (found through the indexer and confirmed on the node) and can list them for sale
+    await expect(page.getByTestId('order-ticket')).toBeVisible({ timeout: 30_000 });
+    await pickType(page, 'limit', 'sell');
+    await fillFields(page, { amount: '100', price: '0.05' });
+    await waitReviewable(page);
+    const placed = await placeOrder(page, mock);
+    expect(placed.submission.created).toHaveLength(1);
+    const asks = await mock.ordersOf('alice');
+    expect(asks).toHaveLength(1);
+    expect(asks[0]).toMatchObject({ token: tokenId, side: 1, status: 'open' }); // side 1: an ask (a sell)
+    // and the order took the very output the genesis made
+    expect(placed.submission.spent?.map((s) => s.outpoint)).toContain(`${genesisTxid}:0`);
+  });
+
+  test('Settings: "Find a token you created earlier" recovers an issuance output of an older creation this browser never saw', async ({ appPage: page, mock }) => {
+    // a token created before genesis payloads named their states: its output is held by the key, the app knows nothing of it (no tracker entry,
+    // no declaration, decimals unknown). The issuer says what the creation gave the key; the node confirms the output.
+    const id = '9c'.repeat(32);
+    await mock.seed({ tokens: [{ ticker: '', covenant_id: id, program: 'KCC20Ref', extension_commitment: null, decimals: null, hidden: true }] });
+    await mock.giveTokens('alice', 500_000n, { token: id });
+    await page.goto('/#/settings');
+    await page.getByTestId('wallet-connect-kasware').click();
+    await expect(page.getByTestId('wallet-address')).toBeVisible();
+    await expect(page.getByTestId('tracker-empty')).toBeVisible();
+    // the backup is named where it is made
+    await expect(page.getByTestId('settings-tracker')).toContainText('Keep this list');
+
+    await page.getByTestId('recover-id').fill('not an id');
+    await page.getByTestId('recover-amount').fill('5000');
+    await page.getByTestId('recover-find').click();
+    await expect(page.getByTestId('recover-message')).toContainText('64-character covenant id');
+    await page.getByTestId('recover-id').fill(id);
+    await page.getByTestId('recover-find').click();
+    // the token declares no decimals on chain: they are asked for
+    await expect(page.getByTestId('recover-message')).toContainText('declares no decimals');
+    await page.getByTestId('recover-decimals').fill('2');
+    // an amount the creation did not give the key finds nothing, and nothing is stored
+    await page.getByTestId('recover-amount').fill('4999');
+    await page.getByTestId('recover-find').click();
+    await expect(page.getByTestId('recover-message')).toContainText('holds no output of this token for your key with that amount');
+    await expect(page.getByTestId('tracker-empty')).toBeVisible();
+    // the exact amount: found, confirmed on the node, remembered
+    await page.getByTestId('recover-amount').fill('5000');
+    await page.getByTestId('recover-find').click();
+    await expect(page.getByTestId('recover-message')).toContainText('Found 1 output(s) of this token for your key.');
+    await expect(page.getByTestId('tracker-row')).toHaveCount(1);
+    const tracked = await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk), TEST_KEYS.alice.pubkey);
+    expect(tracked).toHaveLength(1);
+    expect(tracked[0]).toMatchObject({ tokenCovId: id, program: 'KCC20Ref' });
+    expect(tracked[0].state.amount).toBe('500000');
   });
 
   test('a ticker another registry token uses is a warning, never a block (the covenant id is the identity)', async ({ appPage: page, mock }) => {
@@ -213,7 +308,7 @@ test.describe('token issuance', () => {
     let submits = 0;
     await page.route('**/*', async (route) => {
       const r = route.request();
-      if (r.method() === 'POST' && (r.postData() ?? '').includes('"payload":""') && /submit/i.test(r.url() + (r.postData() ?? '')) && ++submits === 1) {
+      if (r.method() === 'POST' && (r.postData() ?? '').includes('"payload":"4b4f4247') && /submit/i.test(r.url() + (r.postData() ?? '')) && ++submits === 1) {
         return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'Rejected transaction x: the node is not taking it now (invalid)' }) });
       }
       return route.continue();

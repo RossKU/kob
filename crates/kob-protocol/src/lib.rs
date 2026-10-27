@@ -12,6 +12,7 @@
 //! | [`state`] | typed state of every order kind (both families) and the token states; the quote rule (`quote_of`) and the per-kind order arithmetic |
 //! | [`kcc1`] / [`kcc2`] | KCC-1 hash notation, push forms, type names, dispatch tags, strict argument and state decoding; KCC-2 authority-scheme registry, authority values, minimum approval checks |
 //! | [`kcc23`] | KCC-23 metadata JSON: the strict codec of a preparation payload, the binding check against a covenant id, KOB's token-metadata convention |
+//! | [`genesis_states`] | the payload of a token genesis: the states of its token outputs, so a wallet of the issuing key can find them anywhere |
 //! | [`script`] | signature-script encoding (entry args, dispatch tag, redeem push) |
 //! | [`build`] | builders: create / cancel(-replace, stray sweep) / refund / kill / close / send; matcher batches (auctions, triggers, stop entries, repeat merges); keeper updates; two-token routes; pair orders (routed through the KAS books, netted against opposite pair orders, from inventory) |
 //! | [`router`] | the KOB router (Argent): payment intents (KasToToken, TokenToKas, TokenSwap), their pinned actors and states |
@@ -35,6 +36,7 @@ pub mod defaults;
 pub mod error;
 pub mod family;
 pub mod genesis_evidence;
+pub mod genesis_states;
 pub mod issue;
 pub mod json;
 pub mod kcc1;

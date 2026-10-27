@@ -700,6 +700,14 @@ fn p2pk_spk(pk: &[u8; 32]) -> ScriptPublicKey {
     ScriptPublicKey::new(0, s.into())
 }
 
+/// The payload of a genesis transaction: the encoded states of its token outputs, in output order ([`crate::genesis_states`]). It lets
+/// anyone who sees the genesis (an indexer, the issuer's wallet in another browser, the CLI) read the states of the issued outputs, which
+/// are otherwise known only to the issuer until the first spend; each is believed only when the P2SH of its state equals the output.
+pub fn genesis_payload(states: &[TokenState]) -> Vec<u8> {
+    let spans: Vec<Vec<u8>> = states.iter().map(TokenState::encode).collect();
+    crate::genesis_states::encode(&spans).unwrap_or_default()
+}
+
 /// P2PK (Schnorr) script public key of an x-only public key.
 pub fn p2pk_script(pk: &[u8; 32]) -> ScriptPublicKey {
     p2pk_spk(pk)
@@ -821,7 +829,12 @@ impl GenesisDraft {
         for i in ins.iter_mut() {
             i.signature_script = placeholder_ss.clone();
         }
-        Transaction::new(1, ins, outs, 0, Default::default(), 0, vec![])
+        Transaction::new(1, ins, outs, 0, Default::default(), 0, self.payload())
+    }
+
+    /// The payload of the genesis: the states of its token outputs ([`crate::genesis_states`]).
+    fn payload(&self) -> Vec<u8> {
+        genesis_payload(&self.states)
     }
 
     /// The relay floor with or without a change output. It rests on compute and transient mass only, which do not depend on the
@@ -1309,6 +1322,9 @@ impl GenesisPlan {
         }
         if supply != self.spec.supply as u128 {
             return Err(IssueError::SupplyMismatch { sum: supply, declared: self.spec.supply });
+        }
+        if self.tx.payload != genesis_payload(&self.states) {
+            return fail("the genesis payload is not the states of its token outputs".into());
         }
         let group = self.tx.outputs[..self.states.len()].iter().enumerate().map(|(i, o)| (i as u32, o));
         let recomputed = covenant_id(self.tx.inputs[0].previous_outpoint, group);
@@ -1921,6 +1937,40 @@ mod tests {
         s.x = Some("https://x.com/example".into());
         s.telegram = Some("https://t.me/example_chat".into());
         s
+    }
+
+    /// The genesis names the states of its token outputs in its payload, so anyone who sees it (an indexer, the issuer's wallet in
+    /// another browser, the CLI) can read the issued outputs; the covenant id does not commit to the payload; a payload that is not
+    /// those states fails the verification.
+    #[test]
+    fn the_genesis_payload_names_the_states_of_its_outputs() {
+        let (sk, _) = key();
+        let mut c = build_creation(&creation_spec()).unwrap();
+        let g = &c.genesis;
+        assert!(crate::genesis_states::is_genesis_states(&g.tx.payload));
+        let spans = crate::genesis_states::decode(&g.tx.payload).expect("the encoding");
+        assert_eq!(spans, g.states.iter().map(TokenState::encode).collect::<Vec<_>>());
+        assert_eq!(g.tx.payload, genesis_payload(&g.states));
+        // each named state is the one its output's script commits to, in output order
+        for (i, span) in spans.iter().enumerate() {
+            assert_eq!(span.len(), 112);
+            let mut s = g.states[i].clone();
+            assert_eq!(g.tx.outputs[i].script_public_key, g.program.spk(&s));
+            s.amount += 1;
+            assert_ne!(g.tx.outputs[i].script_public_key, g.program.spk(&s));
+        }
+        // the covenant id is the consensus one over the outpoint and the group: the payload is not part of it
+        let group = g.tx.outputs[..g.states.len()].iter().enumerate().map(|(i, o)| (i as u32, o));
+        assert_eq!(covenant_id(g.tx.inputs[0].previous_outpoint, group), g.covenant_id);
+        // a genesis alone (no preparation) carries the same payload
+        let alone = build_genesis(&creation_spec()).unwrap();
+        assert_eq!(alone.tx.payload, genesis_payload(&alone.states));
+        // the verification refuses another payload
+        c.sign(&sk).unwrap();
+        c.verify().expect("the built creation verifies");
+        c.genesis.tx.payload = vec![];
+        c.genesis.tx.finalize();
+        assert!(c.genesis.verify().unwrap_err().to_string().contains("payload"));
     }
 
     #[test]

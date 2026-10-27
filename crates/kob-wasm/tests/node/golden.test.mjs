@@ -220,6 +220,9 @@ test('token issuance plans a KCC-23 creation (preparation, then the genesis) as 
   assert.equal(res.built.tx.inputs[0].index, 0);
   assert.equal(res.built.tx.inputs[0].utxo.amount, res.prep.tx.outputs[0].value);
   assert.equal(res.built.tx.outputs.length, 2);
+  // and names the states of its two token outputs in its payload (KOBG | 1 | 2 | 112 | state | 112 | state)
+  assert.ok(res.built.tx.payload.startsWith('4b4f4247010270'));
+  assert.equal(res.built.tx.payload.length, 2 * (6 + 2 * 113));
   assert.equal(res.built.sign.length, 1);
   assert.equal(res.built.covenants[0].covenantId, res.token.covenantId);
   // the token's facts in the registry format, no listing state (KOB lists no token; kob-protocol issue.rs registry_entry)

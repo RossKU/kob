@@ -551,7 +551,9 @@ fn issue(args: &[String]) -> Result<(), String> {
     let ids = (plan.prep.txid().to_string(), g.txid().to_string());
     submit_creation(node, (&rpc_transaction_json(&plan.prep.tx), &ids.0), (&g.rpc_transaction_json(), &ids.1), &dir, false)?;
     // the genesis outputs the funding key holds (scheme 0): recorded so that `kob send`, `kob place` and `kob merge` can
-    // spend them before any transaction reveals their states to the indexer (genesis outputs have no leader)
+    // spend them before the indexer has the genesis. The genesis names the states of its outputs in its payload, so an indexer of
+    // this build lists them to the owner on any machine (`GET /v1/token-utxos`); this record only bridges the indexer's lag
+    // and an indexer that has not been upgraded.
     let funder = a.fund[0].owner;
     let token: [u8; 32] = g.covenant_id.as_bytes();
     let own: Vec<([u8; 32], u32, kob_protocol::state::TokenState)> = g
@@ -827,6 +829,14 @@ mod tests {
             "two token outputs, no change: the preparation output funds it exactly"
         );
         assert_ne!(tx["inputs"][0]["signatureScript"], "");
+        // the genesis names the states of its two outputs (KOBG), so the issuer's key finds them from any machine through an indexer
+        let named = kob_protocol::genesis_states::decode(&kob_protocol::json::from_hex(tx["payload"].as_str().unwrap()).unwrap())
+            .expect("a genesis-states payload");
+        assert_eq!(named.len(), 2);
+        assert!(named.iter().all(|span| span.len() == 112));
+        assert_eq!(hex(&named[0][10..42]), hex(&pk), "the first output's owner is the key (self)");
+        assert_eq!(&named[0][1..9], &900i64.to_le_bytes(), "and its amount");
+        assert_eq!(&named[1][1..9], &100i64.to_le_bytes());
         let prep: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("preparation_tx.json")).unwrap()).unwrap();
         assert!(prep["payload"]
             .as_str()
