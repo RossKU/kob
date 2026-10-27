@@ -799,6 +799,11 @@ kaspad --utxoindex --retention-period-days=7 --disable-upnp \
 | Derived SQLite database | about **2.6 KB per order** (300 orders, 450 transactions: 786 KB), plus the block rows above | [F] `storage` test |
 | Traffic from the node | **about 1.35 KB of JSON per accepted transaction** at `High` (1.35 MB/s at 1,000 tx/s), none of it stored; quiet TN10 was about 180 KB/s (15.7 GB/day). Run the node and the indexer on the same host (loopback) or LAN: see *Bandwidth* below | [F] TN10 measurements below |
 
+**Per order under load: size a disk with the soak numbers, not the table above.** The 2.6 KB and 1 KB are the synthetic lifecycles
+of the `storage` test. The TN10 soak, whose orders carry many events and fills, measured 1.6 GB of database for 295,000 orders
+(5.4 KB each), 2.85 GB for 501,000 (5.7 KB) and a 1.2 GB record log for 306,000 orders (3.9 KB): about 10 KB per order in the full
+index (database plus log), plus the constant 42 MB block window. A lean store (A.1.2) is capped by `lean_max_db_mb` and keeps no log.
+
 **Storage per day on TN10** (2026-09-29). The provisional design retained the raw responses (15.7 GB/day
 at `High`); the storage policy below removed that. Now: TN10 carries no
 KOB1 payloads and no KOB orders yet (a live sample of 941 chain blocks, 8,611 transactions, 83
@@ -1176,8 +1181,8 @@ Every flag that takes one has an alternative: `--rpc-url` of `index`, `run`, `ma
 (and `rpc_url` in the indexer's `--config` file); the indexer's `--node` is also `$KOB_INDEX_NODES` (comma-separated) or
 `[[nodes]]` in that file; the facilitator's `--node` (`kob-executor x402`) is also `$KOB_NODE_WRPC` or `node` in its
 `--config` file (itself also `$KOB_X402_CONFIG`); `--node` of `kob recover`, `kob order`, `kob token issue` and the trading
-commands is also `$KOB_NODE_WRPC`, their `--indexer` also `$KOB_INDEXER_URL`, and their signing key comes only from a file
-(`--key-file`) or the environment (`$KOB_KEY`), never from an argument (`crates/kob-cli/README.md`). A flag wins over its variable, the variable over the file. Keep the file readable by the service user
+commands is also `$KOB_NODE_WRPC`, their `--indexer` also `$KOB_INDEXER_URL`, and the trading commands (`kob place`, `cancel`, `take`, ...) take their signing key only from a file
+(`--key-file`) or the environment (`$KOB_KEY`) and refuse `--key`; `kob recover`, `kob order` and `kob token issue` also accept `--key HEX|env:NAME|file:PATH`, so a raw hex key given on their command line is visible in the process list and the shell history: use the file or the variable (`crates/kob-cli/README.md`). A flag wins over its variable, the variable over the file. Keep the file readable by the service user
 only and put the variable in a root-owned `EnvironmentFile=` (mode 0600). Logs, error messages, the
 health and metrics routes and `kob recover`'s report show a node as `scheme://host[:port]` only (`/...` marks a removed
 path or query): user name, password, path, query and fragment are never printed.
@@ -1315,7 +1320,8 @@ returned by the API.
 
 ### 5. Read API
 
-Everything under `/v1`, JSON, read only. Sompi-denominated fields and token base-unit quantities (`amount`, `amount_left`,
+The reference for developers (every route and parameter, the response fields, the WebSocket messages, errors and limits) is
+`docs/api.md`; this section is the operator's view. Everything under `/v1`, JSON, read only. Sompi-denominated fields and token base-unit quantities (`amount`, `amount_left`,
 `filled_amount`, `initial_amount`, `min_fill`) are decimal strings (JS-safe); scales, DAA scores and counts are numbers. Prices
 and tips are sompi per whole token (`scale` base units of the order's token). Every order, event and fill carries `confirmations`
 (node DAA minus event DAA) and `settled` (>= `settle_depth_daa`), so consumers pick a tier:
@@ -1325,7 +1331,7 @@ should default to settled. The mempool tier is not served by the indexer.
 | Endpoint | Purpose |
 |---|---|
 | `GET /v1/health` | full status: the build (`version`: the crate version, `0.0.0` until the release bump; `commit`: the git commit it was built from, `null` when the build did not set `KOB_GIT_COMMIT`; `payload_version`: the `KOB1` payload version it reads and writes; `docs/ops/release.md`, 7), follower state, cursor, node DAA, lag (`lag_daa`, `lag_seconds`), `alarms` for the 1/6/12/24 h thresholds, reorg and applied-block counters, record-log position (`records_next_n`) |
-| `GET /v1/health/ready` | 200 only when following or catching up with lag below the smallest alarm threshold (1 h; load balancers). It is also 200 while catching up as long as the lag is under that threshold, so it is not "caught up" (that is `state = following`) |
+| `GET /v1/health/ready` | 200 only when following or catching up with lag below the smallest alarm threshold (1 h; load balancers); 503 also when the node position is unknown. It is also 200 while catching up as long as the lag is under that threshold, so it is not "caught up" (that is `state = following`) |
 | `GET /v1/tokens` | registry tokens plus, with a program allowlist loaded, every token of a supported program that an order placement named (listed or not; at most 5000 rows): `ticker` (empty without a registry entry), `covenant_id`, `template_hash`, `template_id`, `extension_commitment` (without an entry: the one commitment the token's order placements named, the all-zero one of the standard class included; null when they named several, or none: a pair placement whose state does not carry a token's commitment names none for it), `family`, `decimals`, `scale` (the standard scale `10^decimals`, at most `10^9`; null without an entry: clients take it from the token's orders, and the first order names it), `market_scale` (without an entry: the scale of the token's earliest order, open or ended: listed orders first among its oldest 1000; the first order set it and it stays the market's, so a client prices new orders at it and refuses decimals of another scale; null with an entry and before any order), `genesis_verified` (registry fact, `null` when it does not say), `warnings` (derived from facts: `genesis_unverified`, `live_mint_authority`), `registry` (`source`, `sha256` of the document loaded), `powers` (program capabilities: `freeze`, `seize`, `blacklist`, `mint-authority`, ...), `open_asks`, `open_bids`, `declaration` (`true` when the indexer holds a verified KCC-23 declaration for the covenant id, served by the next endpoint; absent otherwise) |
 | `GET /v1/tokens/{covenant_id}/declaration` | the token's KCC-23 metadata declaration as a launch proof (`kob_protocol::kcc23::LaunchProof`): `{"format": "kob-kcc23-proof/1", "covenantId", "preparation", "genesis"}`, each transaction in the fields its version 1 id commits to (`version`, `inputs` [`transactionId`, `index`, `sequence`], `outputs` [`value`, `scriptPublicKey` {`version`, `script`}, `covenant` {`authorizingInput`, `covenantId`} or null], `lockTime`, `subnetworkId`, `gas`, `payload`; bytes as hex, 64-bit numbers as decimal strings). The preparation's payload is `0x00` and the declaration JSON. The indexer keeps a proof only after `LaunchProof::verify` accepted it (both transaction ids and the covenant id recomputed) and a client verifies it again: an indexer can withhold a declaration, never forge one. It captures a preparation accepted with the standard version 1, lock time 0, native subnetwork and gas 0 (the fields a `High` answer leaves out) whose genesis is accepted within `declaration_window_hours` (72) of it. `404 not_found` when it holds none, `400 bad_request` for an id that is not 32 bytes of hex; one primary-key lookup on the light lane, rate cost 1 |
 | `GET /v1/token-utxos?owner=&token=&spent=&limit=&cursor=` | token UTXOs of tracked tokens with proven states, by owner and / or token (section 5.1) |
@@ -1337,7 +1343,7 @@ should default to settled. The mempool tier is not served by the indexer.
 | `GET /v1/pairs/{base}/{quote}/fills?limit=&before=` | pair-order fills (volume, `counterparty`, `price_source: none`) and the 24 h pair volume (section 5.4) |
 | `GET /v1/orders/{covenant_id}` | order terms, status, current outpoint and decoded `state`, `auction`, `quote`, `kill_daa`, `refund_due_daa`, `deadline`, `repeat`, `custody`, `strays`, parent/children, `warnings` (`genesis_unverified` unless every token it trades is `genesis_verified`, `live_mint_authority` when a genesis record of one lists a live minter, as on `GET /v1/tokens`); pair orders add `pair` (5.4) |
 | `GET /v1/orders?maker=&token=&status=&limit=&cursor=` | orders of a maker or token (a pair order is listed under both its tokens), newest first, keyset paging; every filter is optional (no filter lists all orders, 50 per page by default) |
-| `GET /v1/orders/{covenant_id}/events` | lifecycle events: `create`, `fill`, `arm`, `trail`, `rearm`, `cancel`, `refund`, `kill`, `unknown`; `arm`, `trail` and the `fill` of a triggered stop carry `detail.evidence` (`input`, `order`: the evidence order's covenant id, `side` 1 ask / 2 bid, `price`: its quote) |
+| `GET /v1/orders/{covenant_id}/events` | lifecycle events (`?limit=&after=`): `create`, `fill`, `arm`, `trail`, `rearm`, `amend`, `sweep`, `update`, `cancel`, `refund`, `kill`, `unknown`; `arm`, `trail` and the `fill` of a triggered stop carry `detail.evidence` (`input`, `order`: the evidence order's covenant id, `side` 1 ask / 2 bid, `price`: its quote) |
 | `GET /v1/fills?token=&side=&limit=&before=` | recent fills |
 | `GET /v1/strays?maker=&limit=` | live stray token UTXOs with the order they are stuck on |
 | `GET /v1/trades/{token}?limit=&before=` | trades (the fills of one transaction on one token), newest first (section 5.3) |
@@ -2044,6 +2050,16 @@ systemctl start kob-index                                                 # re-s
 Each frame is applied in one transaction together with the database position after it, so a run that stops part way
 (Ctrl-C, a full disk, a frame that fails) is simply run again and continues from the first frame it did not commit. The
 first frame applied must continue the database's cursor; a log of another history is refused and nothing is applied.
+
+**How long it takes** (TN10 drill of 2026-10-20, `docs/testing/TN10-TEST-2026-10.md` section 14): `VACUUM INTO` of the running
+2.85 GB database 84 seconds; `replay --onto-database` of the frames since the copy a few minutes in all; a full `replay` of a
+1.2 GB log (367,916 frames, 306,552 orders) 2,634 seconds (about 44 minutes), offline, with no output until it prints its summary.
+To keep a public read server up during a rebuild, build the new store beside the running one and switch the tunnel
+(`docs/ops/chart-server.md`, section 6).
+
+**Backups on Windows.** `sqlite3` is not part of Windows: use SQLite's command-line tools from sqlite.org for `VACUUM INTO`, or
+back up the record log only (it is the asset; `robocopy <kob-data>ecords <backup>ecords /E`) and rebuild the database from it.
+A plain copy of `index.sqlite3` is consistent only while the indexer is stopped.
 
 Or move the database aside and rebuild it from the whole log with a plain `replay` (7.6). `replay --onto-database`
 evaluates only the frames it applies under the current allowlist and rules; after a change of either, prefer the full

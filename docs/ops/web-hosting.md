@@ -4,6 +4,10 @@ The web app (`web/`) is static files: HTML, JavaScript, CSS and two wasm modules
 (free plan) from this repository with `.github/workflows/deploy-pages.yml`, or by hand from a PC. The data it shows comes from an
 indexer (`kob-executor index`; running one for the public: `docs/ops/chart-server.md`) and from Kaspa nodes.
 
+**First setup, in order.** The workflow needs the public address of an indexer, and that address needs a domain: the order of the
+whole first setup (domain, indexer, tunnel, then this page) is in `docs/ops/chart-server.md`, "Start here". Sections 1 to 3 below are
+the Pages half of it.
+
 Why Pages and not GitHub Pages: GitHub Pages may not be used for sites "primarily directed at facilitating commercial
 transactions", and it cannot send the security headers of `web/public/_headers` (Content-Security-Policy with
 `frame-ancestors 'none'`, `X-Frame-Options: DENY`, the signer page's own policy). Pages reads `_headers` from the upload.
@@ -87,6 +91,11 @@ Every URL must be `https://` (a node `wss://`) on a public host, without user na
 served over https, so a browser refuses `http://` and `ws://` from it, and `config.json` is public (never put an API key in a
 URL). `web/scripts/pages-config.mjs` checks this before anything is built and fails the run with every problem listed.
 
+**Changing a variable does not deploy.** The workflow runs on a push to `master` that touches the app (section 4) and on *Run workflow*;
+editing a repository variable (`KOB_PAGES_NETWORK=mainnet`, a new `KOB_PAGES_INDEXER_URL`, ...) changes nothing until the next run.
+After a change, open *Actions* > *deploy-pages* > *Run workflow* (branch `master`), approve the `production` deployment if reviewers are set
+(section 4a) and check the result (section 7).
+
 **Until the two secrets and the two required variables are set, the workflow does nothing**: job `config` writes "Cloudflare
 Pages deploy skipped" and what is missing into the run's summary, and job `deploy` is skipped. CI stays green (forks too).
 
@@ -166,6 +175,11 @@ node web/scripts/check-pages.mjs https://kob-web.pages.dev --dist web/dist
 
 Deploy only from a clean checkout of a pushed commit (`git status` clean), so the files match what anyone can rebuild.
 
+**Both networks.** One workflow run serves one network (one `KOB_PAGES_PROJECT`, one set of variables). To publish the testnet-10 and the
+mainnet app side by side, deploy the second network by hand to a second Pages project (`wrangler pages project create` with another
+name, then the commands above with its `KOB_PAGES_NETWORK`, `KOB_PAGES_INDEXER_URL` and `--project-name`) or fork the workflow; each needs its
+own indexer (`docs/ops/chart-server.md`, section 7). Users who saved a network or indexer in Settings keep it; the app shows a banner for it.
+
 ## 7. Checking a deployment
 
 * Headers and files: `node web/scripts/check-pages.mjs <url> --dist web/dist` (the build of the same commit, with the same
@@ -173,6 +187,11 @@ Deploy only from a clean checkout of a pushed commit (`git status` clean), so th
 * By hand: `curl -sI https://kob-web.pages.dev/` shows `content-security-policy: ... frame-ancestors 'none'` and
   `x-frame-options: DENY`; `curl -sIL https://kob-web.pages.dev/signer.html` ends with the signer policy
   (`sandbox allow-scripts; frame-ancestors 'self'`) and `x-frame-options: SAMEORIGIN`.
+* The indexer, which `check-pages.mjs` never contacts (it checks headers and files only, and `pages-config.mjs` only the syntax of the
+  URLs): after every deploy, and after every change of `KOB_PAGES_INDEXER_URL`, open the app and look at the status strip (it must say
+  "following"), or by hand `curl -si -H "Origin: https://kob-web.pages.dev" https://chart.example.org/v1/health` must answer `200`, carry
+  `access-control-allow-origin`, and show `"network"` equal to `KOB_PAGES_NETWORK`. A wrong host, a server without CORS or a down tunnel
+  deploys green; the app then shows its "no indexer" or wrong-network banner.
 * Hashes: the run's summary lists the sha256 of every deployed file; anyone can rebuild the commit and compare (`ci.yml` job
   `reproducible` checks that the bundle does not depend on the build directory). `curl -s https://kob-web.pages.dev/config.json`
   shows the configuration in force.

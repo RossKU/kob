@@ -14,6 +14,19 @@ the deployment's `KOB_PAGES_EXTRA_INDEXER_URLS` when they exist: the app cross-c
 scale, best prices) against them and refuses a market order whose start disagrees (`web/README.md`, *Several indexers*). Users
 can switch the indexer in Settings. This server is a convenience, not an authority.
 
+**Start here: the order of the first setup.** The web app's deployment needs this server's public address, and this server's
+address needs a domain, so do it in this order:
+
+1. Get a **domain whose DNS is on Cloudflare** (a domain you buy, or one you already own and move to Cloudflare; free plan). A
+   tunnel hostname cannot be a `pages.dev` name. Decide the hostname now, for example `chart.example.org`; it need not resolve
+   yet, so the name can already go into the Pages variable before the tunnel is live.
+2. Section 1: the indexer on this machine (stop it before you edit its `[api]`).
+3. Section 2: the tunnel and the DNS record; check `https://chart.example.org/v1/health` from another network.
+4. `docs/ops/web-hosting.md`: the Pages project, the API token and the repository secrets and variables, with
+   `KOB_PAGES_INDEXER_URL=https://chart.example.org`. The workflow does nothing until that variable is set. After you change a
+   repository variable later, run *Actions* > *deploy-pages* > *Run workflow* on `master`: a changed variable alone deploys nothing.
+5. Section 5: set up an alert before you rely on it.
+
 ## 1. The indexer
 
 Download and check the binary of the network (testnet-10 for now): `docs/ops/executor-quickstart.md`, section 1.
@@ -168,13 +181,54 @@ a shorter TTL would need the API to send `Cache-Control` on those answers, which
 change makes a short TTL possible: cache only those two paths, keep the query string in the cache key (`interval`, `from`,
 `limit`), and a TTL of a few seconds.
 
-## 4. Data directory and backups
+**Abuse, in the API and at Cloudflare.** The API limits each client on its own: 20 requests per second with a burst of 60 per
+client address (an IPv6 visitor by its /64, and all the /64s of one /48 together at 100 per second), a heavy read (candles, stats,
+depth, trades, books, holdings, strays, pairs) costs 5 of those tokens, and the whole server answers 500 requests per second (burst
+1,000). WebSockets are capped per client address and in all (`docs/api.md`). Past a limit the answer is 429 with `Retry-After`. Two
+consequences: visitors behind one carrier-grade NAT address share one bucket (a market list reads one `/v1/stats` per token), and a
+flood spread over many addresses can drain the global bucket so that everyone gets 429. If that happens, add rules at Cloudflare in
+front of the tunnel instead of raising the limits: a rate-limiting rule for the heavy paths (`/v1/candles/`, `/v1/stats/`,
+`/v1/depth/`, `/v1/trades/`, `/v1/books/`, `/v1/pairs`) and Bot Fight Mode. What the free plan allows changes; check the dashboard.
+
+## 4. Data directory, size and backups
 
 `kob-data` holds the SQLite database (`index.sqlite3`) and the record log (`records/`). The record log is the asset to back
 up: it is append-only, all but the newest segment never change, and it is the only source of the history once the node has
 pruned it. The database can always be rebuilt from it (`kob-executor index replay`). Details, a consistent database copy while
-the indexer runs, and restoring: `docs/ops/executor.md`, Part B, section 8. A home PC that is off for longer than the node's
-retention needs the gap runbook (Part B, 7.4) before it serves again.
+the indexer runs, and restoring: `docs/ops/executor.md`, Part B, section 8.
+
+**Size.** The design estimate was 2.6 KB of database and 1 KB of log per order. The testnet-10 soak measured more, because an order
+also carries its events and fills: 1.6 GB of database for 295,000 orders and 2.85 GB for 501,000 (5.4 to 5.7 KB per order), and a
+record log of 1.2 GB for 306,000 orders (3.9 KB per order). Plan on **about 10 KB per order in all**, plus a constant 42 MB window
+of chain blocks, and keep the drive at least half empty (the disk alarm of `executor.md` Part B 6 fires above 70 %). How many
+orders a day mainnet will bring is not known yet: read the growth of `kob-data` after a week and extrapolate.
+
+**Time to restore** (testnet-10 drill of 2026-10-20, `docs/testing/TN10-TEST-2026-10.md` section 14): `VACUUM INTO` of the running
+2.85 GB database took 84 seconds; restoring that copy next to the record log and bringing it forward (`replay --onto-database`)
+took minutes; a full `index replay` of a 1.2 GB log (367,916 frames, 306,552 orders) took 2,634 seconds (about 44 minutes) and
+prints nothing until it is done. The chart is dark that long if you rebuild in place; section 6 shows how to avoid that.
+
+**Backups on a Windows home PC.** The recipe of `executor.md` 8 uses the `sqlite3` command line for `VACUUM INTO`, which Windows
+does not ship. Either download SQLite's command-line tools from sqlite.org, or skip the database: it is rebuildable from the log, so
+the log is the backup that matters. Copy it with a scheduled task (a segment never changes once the next one has started):
+
+```
+robocopy C:\kob\kob-data\records D:\kob-backup\records /E /R:1 /W:1
+sqlite3 C:\kob\kob-data\index.sqlite3 "VACUUM INTO 'D:\kob-backup\index-2026-11-01.sqlite3'"      # optional; the target must not exist
+```
+
+(Without `sqlite3`: stop the indexer and copy `index.sqlite3`; a plain file copy while it runs is not consistent.) Keep the copy on
+another drive or machine, and encrypt anything that leaves the house. Also back up the tunnel's `~/.cloudflared/<id>.json` (the
+credentials), its `config.yml` and the `cert.pem` that `cloudflared tunnel login` wrote. Losing them loses no data: a new tunnel
+and a new `route dns` bring the hostname back, but until then the app has no indexer.
+
+**Sleep, updates, reboots.** A PC that sleeps or hibernates serves nothing: set the power plan to never sleep. Windows Update may
+reboot it: set active hours, and run both the indexer and `cloudflared` as start-at-boot tasks (section 2, step 5;
+`docs/ops/executor-quickstart.md`, section 6) so they come back by themselves. An outage longer than the node's retention (7 days
+with the flags of the quickstart, about 30 hours by default; public nodes do not state theirs) no longer halts the follower: it moves
+the store to the node's pruning point on its own and reports it as `gaps` in `/v1/health`, but orders created inside the skipped
+stretch stay invisible (Part B, 7.4). To keep the history whole after a long outage, restore a backup or a second site (7.4, options
+1 and 2).
 
 ## 5. What to watch
 
@@ -187,9 +241,61 @@ retention needs the gap runbook (Part B, 7.4) before it serves again.
   `https://chart.example.org/v1/health/ready` therefore stays green for a store that is up to an hour behind. For "caught up" read
   `state = following` of `/v1/health`.
 * Page yourself on `state = gap` (the indexer halted: Part B, 7.4) and on `node_unavailable` for more than a few minutes; the
-  full alarm table is Part B, section 6.
+  full alarm table is Part B, section 6. Nothing in KOB sends alerts, so set up one of these (free):
+  * **Cloudflare Notifications** (dashboard, *Notifications* > *Add*): choose the alert for a Cloudflare Tunnel that is down or
+    unhealthy (the exact name in the list varies; look for *Tunnel*), delivered by e-mail. It tells you the PC or `cloudflared` is off.
+  * **An external uptime monitor** (any service that fetches a URL every few minutes and matches a keyword) on
+    `https://chart.example.org/v1/health` with the keyword `"state":"following"`. It catches the tunnel, the PC and a stuck
+    indexer at once. A second check on `/v1/health/ready` gives you the status code (200 or 503, see above).
+  * **A local check**, a scheduled task on another machine of yours: `curl -sf https://chart.example.org/v1/health/ready`, and send
+    yourself a message when it fails.
 * `cloudflared` logs its connections; the dashboard (*Zero Trust* > *Networks* > *Tunnels*) shows the tunnel healthy or down.
 * The disk of `kob-data` (a few GB) and of the node.
 
-When this server is down the hosted app cannot show books or charts from it. Users keep their funds (everything is on chain)
-and can switch to another indexer in Settings; listing third-party indexers in the deployment helps them.
+When this server is down, the hosted app still loads and users' funds are safe (everything is on chain). Cancelling an order still
+works, from the node and the records kept in the browser. The app cannot show the order book, charts, trades or order status from
+it, and it refuses to place a new order until an indexer answers. Users can switch to another indexer in Settings; listing
+third-party indexers in the deployment helps them.
+
+## 6. Upgrading, and rebuilding without chart downtime
+
+**A new release of the program.** Read the release notes (`docs/ops/release.md`, 7) for the payload version and for whether the
+database is brought up to date in place or rebuilt. Then:
+
+1. `kob-executor --version` and `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`) say what runs now.
+2. Download the new archive, check its hash (`executor-quickstart.md`, 1) and unzip it into a new folder next to the old one.
+3. **In place, with a short outage.** Stop the indexer gracefully (Ctrl+C, `systemctl stop`, the scheduled task's window; it flushes
+   the database and exits within seconds), put the new `kob-executor` where the old one was (keep the old as `kob-executor.old`) and
+   start it. The chart is dark for the stop and the start only: in the soak test the API answered 3 seconds after a start and the
+   store was following again 35 seconds after a 6-minute outage. A database the release brings up to date in place does it at
+   that start (7 seconds on a 1.6 GB copy). Check `/v1/health` again: `version`, `commit`, `payload_version`, `state = following`.
+4. **Rebuild beside the running one, then switch.** When the release needs a rebuild (`index replay`: 44 minutes per 1.2 GB of log
+   here, offline, no API), or you want to see the new version work before the public does:
+   1. Make a second folder `B` (for example `C:\kob-b`) from the new archive. Copy the running folder's `kob-executor.toml` into it and
+      change only the port: `listen = "127.0.0.1:8091"`. `data_dir = "kob-data"` is relative to the file, so `B` has its own data.
+   2. Copy the record log: the whole `kob-data/records/` folder of the running indexer into `B/kob-data/records/` (a half-written last
+      frame in the copy is dropped when the log is opened). Then run `kob-executor index replay --config kob-executor.toml` in `B`: it
+      builds a new database from the log under the new program's rules and prints a summary at the end (rejected placements by
+      reason). Faster, when the release does not change how the database is derived: put a `VACUUM INTO` copy of the running
+      database (section 4) in as `B/kob-data/index.sqlite3` and run `index replay --onto-database` instead (`executor.md`, 8).
+   3. Start `B` (`kob-executor index --config kob-executor.toml`). It catches up the time since the last logged frame from the node.
+      Wait until `curl -s http://127.0.0.1:8091/v1/health` shows the new `version` and `commit`, `state = following` and
+      `book_complete = true`, and compare a few answers with the running one (`/v1/tokens`, `/v1/orders?...`).
+   4. **Switch.** Point the tunnel's service at `http://127.0.0.1:8091`: for a dashboard-managed tunnel edit the public hostname; with
+      a `config.yml` edit it and restart `cloudflared` (a few seconds). Open WebSockets reconnect by themselves, and the app polls
+      every 5 seconds while its socket is down. Check `https://chart.example.org/v1/health`.
+   5. Stop the first indexer. Keep its folder for a day as a way back, then delete it. `B` can stay on port 8091 for good; make `B`
+      the folder your start-at-boot task runs.
+
+   Both indexers read the same node meanwhile, which a node allows. Never point two indexers at the same data directory: the
+   second is refused with a message naming the first.
+
+## 7. A testnet-10 server and a mainnet server side by side
+
+One binary serves one network (`executor-quickstart.md`, 1), and the web app's deployment is one network too. To serve both from one
+machine you need a second of everything: a second folder with the other network's archive and its own `kob-data`; its own API port
+(`8090` for one, `8091` for the other); its own hostname (`chart.example.org` and `chart-main.example.org`, each with its own
+`hostname:` / `path: ^/v1/` rule before the 404 rule of section 2); and its own node. The public resolver pair works for both; an own
+mainnet node (`ws://127.0.0.1:18110`) needs the hardware of `release.md`, 8 (8 cores, 16 GB RAM, a 640 GB SSD). Each server needs its
+own start-at-boot task and its own backups. On the app side the deploy workflow has one set of variables, so a second Pages
+project (another `KOB_PAGES_PROJECT`, `KOB_PAGES_NETWORK=mainnet` and its indexer URL) is a hand deploy (`web-hosting.md`, 6).

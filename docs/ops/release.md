@@ -117,7 +117,13 @@ KOB_SKIP_NETWORK_TESTS=1 cargo test --workspace --locked --no-fail-fast
 cargo test --locked -p kob-protocol -p kob-executor --lib --features deploy-mainnet
 scripts/build-wasm.sh --test
 cd web && npm test && npm run e2e
+node scripts/check-pins.mjs                                     # every 64-hex constant in the pinned docs and sources matches a generated artifact
+scripts/build-deploy.sh testnet-10 --check && scripts/build-deploy.sh mainnet --check
+cargo deny --locked check                                       # advisories, bans, licenses, sources (cargo-deny 0.20.2)
 ```
+
+`node scripts/check-pins.mjs` fails when a 64-hex constant in a pinned file (the docs among them) is not a hash the generated
+artifacts carry: do not paste a real covenant id, transaction id or hash into a document; write a placeholder such as `<64 hex>`.
 
 CI runs all of these on every push (`.github/workflows/ci.yml`: the `deploy-mainnet` lib tests in job `test`), and
 `scripts/release-hashes.sh` over the release bundle (`npm run build:release`) in job `web`.
@@ -221,11 +227,11 @@ wallets is safe, a rollback of an indexer below the payload version in use is no
 | | Requirement | Basis (`docs/ops/executor.md`) |
 |---|---|---|
 | Node | rusty-kaspa v2.1.0, `--utxoindex --retention-period-days=7 --disable-upnp`, JSON wRPC on loopback (`:18110` mainnet), never `--unsaferpc`; official minimum hardware 8 cores, 16 GB RAM, 640 GB SSD (up to ~1.6 TB worst case at 7-day retention) | Part B 2, Part C "Node" |
-| Placement | **the indexer runs on the node's host (loopback) or LAN**: a remote node is for development only | B 3 "Bandwidth" |
+| Placement | **the indexer runs on the node's host (loopback) or LAN** for a serious operator or a public read server (the chain traffic is large and latency slows catching up). A small operator may use the public Kaspa nodes through the resolvers, a cross-checked pair (`executor-quickstart.md`, 2): slower, with a longer first catch-up, and not recommended for a server others rely on | B 3 "Bandwidth", Part C "Node" |
 | Bandwidth | about **1.4 KB/s per tx/s** of chain load at `High` verbosity (1.35 MB/s at 1,000 tx/s, 4.2 MB/s = 34 Mbit/s at 3,000 tx/s); give the link 3x the peak to catch up after an outage | B 3 |
 | CPU | 3 to 10 us of one core per accepted transaction of a realistic mix, plus 0.25 to 0.3 ms per KOB transaction (single-threaded database pass: about 3,500 KOB tx/s per core at the tip); 3 to 4 % of one core at 3,000 tx/s with the default mix | B 3 "Processing capacity" |
 | Memory | 0.3 to 1 GB typical, budget up to 4 GB for full-size batches while catching up | B 3 |
-| Disk (indexer) | about 1 KB of record log plus 2.6 KB of database per KOB transaction / order, 42 MB constant block window; the record log is the asset to back up off site | B 3, B 8 |
+| Disk (indexer) | plan on about 10 KB per order in the full index (soak: 5.4 to 5.7 KB of database and 3.9 KB of record log per order; the synthetic 2.6 KB + 1 KB is the lower bound), plus a 42 MB constant block window; a lean matcher store is capped at 500 MB and keeps no log; the record log is the asset to back up off site | B 3, B 8, A.1.2 |
 | Keys and funds | an operator hot key for `run` (matcher, keepers, facilitator) with a small working balance; `index` alone is keyless | Part C "Keys and funds" |
 | Monitoring | `/v1/health`, textfile metrics, alerts on `gap`, lag and node version | B 6, A.4 |
 

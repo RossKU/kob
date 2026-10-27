@@ -8,6 +8,13 @@ crossing orders and refunds expired ones, earning the spreads and the makers' ti
 The executor talks to nothing but the Kaspa node you point it at (public nodes found through the Kaspa resolvers by default,
 or your own). It sends no telemetry, charges no fee, does not update itself and connects to no server of the KOB project.
 
+**Risk.** KOB is pre-audit software: its contracts have had no external security review and mainnet launches as a canary
+(`SECURITY.md`, `docs/security/AUDIT-2026-10.md`). The executor signs unattended with a **hot key**, so it holds working
+capital only (section 3). What one of its transactions can pay in fees is capped by `--fee-max-tx-kas` (default 1 KAS) and
+`--fee-max-rate` (default 1,000 sompi per gram, the relay floor being 100; `docs/ops/executor.md`, Part C, *Fee policy*). The
+executor signs only inputs of its own key and the covenants enforce every order, but a bad node can still stall it or make it
+waste fees, which is why public nodes are used as a cross-checked pair (section 2).
+
 ## 1. Download and check
 
 Prebuilt binaries are attached to each [GitHub release](https://github.com/RossKU/kob/releases), one archive per network and
@@ -38,10 +45,15 @@ sha256sum -c --ignore-missing SHA256SUMS
 The hash must equal the line of the release's `SHA256SUMS` for that file. The release notes also carry the hashes of
 `scripts/release-hashes.sh` (`docs/ops/release.md`, 6): the order templates, the token registry and the binaries built
 from the tagged commit. Anyone can rebuild the binary from that commit with the pinned toolchain
-(`cargo build --release --locked -p kob-executor --features deploy-mainnet`) and compare.
+(`cargo build --release --locked -p kob-executor --features deploy-mainnet`) and compare. The archives are neither signed nor
+attested, and the `SHA256SUMS` sits on the same release page as the archives, so a matching hash proves that the download is intact, not
+that the release is genuine: compare the hashes with the copy in the release announcement, and, for an executor that will hold
+funds, rebuild it from the tagged commit.
 
 Unzip it into a folder of its own that your account can write to (for example `C:\kob` or `~/kob`; not `Program Files`):
-the setup writes its configuration, the key file and the database next to the program.
+the setup writes its configuration, the key file and the database next to the program. **Extract the archive first**: do not
+double-click the program inside the zip viewer (Windows then runs it from a temporary folder and the key and the database
+would be written there), and avoid a folder that a cloud service syncs (OneDrive, Dropbox, ...), which would upload the key file.
 
 **Windows SmartScreen.** The Windows binary is not code-signed, so the first start shows "Windows protected your PC".
 Click **More info**, check that the file is the one whose hash you verified, then **Run anyway**. Windows asks once per
@@ -84,7 +96,9 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
    the read API; no key, no funds). For your own node it then asks its URL: default `ws://127.0.0.1:18110` (mainnet) or
    `ws://127.0.0.1:18210` (testnet-10), connects at once and reports the node's version, network, sync state and UTXO index;
    on a problem it shows how to start the node and lets you check again, enter another URL, or `skip`.
-4. **Data directory**: default `kob-data` next to the program (the database and the record log; a few GB).
+4. **Data directory**: default `kob-data` next to the program. The prompt reads "the database and the record log; a few GB",
+   which fits the index-only role. For *matcher and keepers* the setup also turns on the fast start and **lean storage**: no
+   record log and a database capped at 500 MB (section 8, point 5; `docs/ops/executor.md`, A.1.2).
 5. **Operator key** (matcher and keepers): it generates a new key into `kob-operator.key` with the operating system's
    random generator and makes the file readable by your account only (Windows: an ACL with your account alone; Linux: mode
    `0600`), or uses a key file you name (64 hex characters). The secret is never printed. An existing
@@ -138,6 +152,25 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
   threshold), the pause file present, transactions the node rejected.
 * The read API answers on `http://127.0.0.1:8090/v1/health` (loopback only).
 * For real monitoring use the metrics file (`--metrics-file`, `docs/ops/executor.md`, Part C *Monitoring*).
+* **Keep the computer's clock right** (automatic time sync on). The matcher compares a day order's UTC deadline with the system
+  clock (a fast clock skips orders that are still valid, a slow one can fill past a deadline), and TLS to public nodes fails
+  with a wrong clock. The executor does not check the clock.
+* **Port 8090 busy.** The read API listens on `127.0.0.1:8090` by default. If another program (or a second KOB executor for
+  another network) holds the port, the executor still runs but logs `API server stopped: ...` and serves no API, although the
+  start banner printed the address. Change `[api] listen` in `kob-executor.toml` (or `--listen`) and restart.
+
+**What it costs to run.** Measured and estimated figures for sizing a machine or a metered line (`docs/ops/executor.md`, Part B 3 and A.1.2):
+
+| | Matcher and keepers (lean, fast start) | Index only (full history, record log) |
+|---|---|---|
+| Disk | database capped at 500 MB (`lean_max_db_mb`), no record log, plus a constant 42 MB window of chain blocks | grows with the orders: plan on about 10 KB per order in all (soak measurements: 1.6 GB of database for 295,000 orders and 2.85 GB for 501,000, i.e. 5.4 to 5.7 KB each, plus a record log of about 3.9 KB per order, 1.2 GB for 306,000); a quiet testnet-10 is a few GB |
+| Memory | 0.3 to 1 GB typical, up to 4 GB while catching up on mainnet-sized batches | the same |
+| CPU | one core at most; 2 to 4 % of a core at 3,000 transactions per second of chain load | the same |
+| Network | about 1.4 KB per chain transaction from the node (1.35 MB/s at 1,000 transactions per second); the first catch-up over public nodes is a few GB (about 4 GB on a phone), then the steady flow; quiet testnet-10 measured 15.7 GB per day on 2026-09-29 | the same |
+
+Mainnet record-log growth under real traffic is not measured yet. The status line's profit counts the final transactions since this
+run started; it is kept in memory only and starts again at zero after a restart, so the executor keeps no earnings history; to
+keep one, record the metric `kob_matcher_finalized_profit_sompi` (`--metrics-file`) with your monitoring.
 
 ## 5. Pause and stop
 
@@ -176,8 +209,22 @@ status: indexer following, caught up (3 DAA behind the node), 120 orders indexed
   already spent, nothing was lost, wait a minute and run it again. Only plain KAS moves; tokens the key holds stay where
   they are. Afterwards `kob-executor address-balance` shows what is left, and the next start warns "funds low" until you fund
   the key again. (`kob-cli send` also works, but only against your own node on `ws://`: it has no resolver or `wss`
-  support.)
+  support, and its amount needs a unit such as `2.5KAS`; see `crates/kob-cli/README.md`.)
 * If the start fails, the window stays open with the error until you press Enter.
+
+**Back up, and move to another computer.** The only thing you cannot rebuild is the key: back up `kob-operator.key` (a plain
+64-hex-character private key; there is no seed phrase) where only you can read it. The configuration is a text file
+(`kob-executor.toml`) that setup writes again in a minute. The database is not precious: a matcher on lean storage rebuilds it
+from the node within seconds on a start with an empty data directory (fast start). To move an executor:
+
+1. **Stop the old one first** (section 7 shows how). Two executors on one key spend each other's coins and waste fees; the writer
+   lock protects one data directory, not a key.
+2. Copy the program folder without `kob-data` (or run the setup on the new machine and name the copied key file when it asks).
+   The paths in `kob-executor.toml` are relative to the file; check `rpc_url` (an own node's address differs per machine).
+3. On Linux the key file must be readable by its owner only (`chmod 600 kob-operator.key`): the executor refuses a key file that
+   group or others can read. On Windows a copy takes the permissions of the folder it lands in: check that only your account can read the
+   key (the setup made it so).
+4. Start the new one and look at `kob-executor address-balance` and the status line before you delete the old folder.
 
 ## 6. Move to a service
 
@@ -218,6 +265,7 @@ them. `RUST_LOG` (default `info`) sets the detail. Under systemd the journal alr
 [Unit]
 Description=KOB executor
 After=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 WorkingDirectory=/opt/kob
@@ -225,6 +273,7 @@ ExecStart=/opt/kob/kob-executor run --config kob-executor.toml --pause-file kob-
 LoadCredential=kob-operator-key:/opt/kob/kob-operator.key
 User=kob
 Restart=always
+RestartSec=10
 NoNewPrivileges=yes
 
 [Install]
@@ -232,7 +281,8 @@ WantedBy=multi-user.target
 ```
 
 (`LoadCredential=` hands the key to the process without making the file readable by the service account; the user `kob`
-owns `/opt/kob/kob-data`.) The hardened unit of the operations guide is `docs/ops/executor.md`, A.3.
+owns `/opt/kob/kob-data`. `RestartSec=10` and `StartLimitIntervalSec=0` make systemd keep retrying: without them it gives up after
+five starts in ten seconds, for example while the network is still coming up after a boot.) The hardened unit of the operations guide is `docs/ops/executor.md`, A.3.
 
 **Docker (Linux)**: the repository's `Dockerfile` builds the executor of one network from the source (pinned base images, a
 non-root user, uid 10001). The volume `/data` holds the configuration, the key file and the data directory
@@ -251,11 +301,52 @@ docker logs -f kob                                                       # the s
 `touch /srv/kob/kob-data/pause` (as uid 10001 or root), stop with `docker stop kob`. No image is published: build it from
 the commit you verified.
 
-## 7. Upgrade
+## 7. Upgrade, stop and withdraw
 
-Stop the executor, replace `kob-executor` (and `kob-cli`) with the new release's files, start it again. The configuration,
-the key and the database stay. Read the release notes first: an indexer upgrade can ask for a rebuild
-(`docs/ops/release.md`, 7).
+**Upgrade an executor** (matcher and keepers, or index only). The configuration, the key and the data directory stay; only the
+program changes. The program is not replaced while it runs, and it does not update itself.
+
+1. **Read the release notes.** They say whether the release changes the `KOB1` payload version (indexers must go first,
+   `docs/ops/release.md`, 7) or the database (brought up to date in place, or rebuilt: step 6).
+2. **Note what runs now:** `kob-executor --version` (the crate version, the release tag without the `v`) and
+   `curl -s http://127.0.0.1:8090/v1/health` (`version`, `commit`, `payload_version`; the API is loopback only unless you
+   changed it). A build made from `master` before the release bump says `0.0.0`; tell such builds apart by `commit`.
+3. **Download and check** the new archive (section 1). Unzip it into a new folder; the archive holds the programs and this page,
+   never your configuration.
+4. **Stop gracefully** and swap:
+   * a window: Ctrl+C (or close the window); Linux service: `systemctl stop kob`; Docker: `docker stop kob`; Windows Task
+     Scheduler: Ctrl+C in a window you opened yourself is the clean way; *End* on a task kills the process, which the database
+     survives (below). The executor stops within seconds, flushes the database and exits; a second Ctrl+C exits at
+     once, and a stop that has not finished in ten seconds exits by itself (exit code 2, logged). The database survives either
+     way (SQLite WAL, one transaction per batch), so a forced kill costs a short recovery, not data.
+   * keep the old program (`kob-executor.old`) and put the new `kob-executor` (and `kob-cli`) in its place; on Windows the old file
+     is locked until the process has ended.
+   * if you may want to roll back across a database change, copy `kob-data` aside now while the executor is stopped (a newer
+     database schema is refused by an older program).
+5. **Start** it (double-click, `systemctl start kob`, `docker run` with the same volume and the rebuilt image). It continues from
+   the stored cursor. Check `kob-executor --version`, then `/v1/health`: `version`, `commit` and `payload_version` must be the
+   release's, `state` becomes `following`, and the status line shows no `WARNING:`.
+6. **When the release notes ask for a rebuild** (the database is refused as old): a matcher on lean storage has no record log to
+   replay (`docs/ops/executor.md`, 7.6), but it does not need one: stop it, move `kob-data` aside (or delete it) and start;
+   the fast start rebuilds the live book within seconds. Make sure the key file is not inside `kob-data` (setup puts it next
+   to the program), and create `kob-data/pause` again if you use it. An index-only archive rebuilds with `kob-executor index
+   replay` while offline; the public read server has a way without downtime (`docs/ops/chart-server.md`, section 6).
+7. **Rollback**: stop, put `kob-executor.old` back, restore the `kob-data` copy of step 4 if the database changed. An indexer must
+   not go below the payload version in use (`docs/ops/release.md`, 7).
+
+The Android app updates by installing the newer APK over the old one when both have the same signature (section 9, *Updates*); a
+Termux executor follows the steps above in its folder; for Docker rebuild the image from the commit you verified.
+
+**Version check on someone else's indexer:** `curl -s https://<indexer>/v1/health` shows `version`, `commit` and
+`payload_version` (also `GET /v1/health` in `docs/api.md`).
+
+**Stop for good, or empty the key.** Stop the executor (above), then withdraw (section 5, *Withdraw*:
+`kob-executor withdraw --to <address> --amount all`). It refuses while an executor runs from the same data directory, and moves
+only plain KAS: tokens the key holds stay where they are. Check with `kob-executor address-balance`.
+
+**Logs and rotation.** The flags are `--log-file <path>` (or `KOB_LOG_FILE`), `--log-max-mb` (default 10; 0: never rotate) and
+`--log-files` (rotated files kept, default 5; 0: the file starts over when full), or the keys `log_file`, `log_max_mb`,
+`log_files` in `kob-executor.toml` (section 6, *Logs*). They are global: they work on every subcommand.
 
 ## 8. Run on an Android phone (Termux)
 
