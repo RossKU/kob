@@ -153,6 +153,11 @@ fn set_cursor(conn: &Connection, c: &Cursor) -> DbResult<()> {
     Ok(())
 }
 
+/// The stored `history_from_daa` marker (see [`Ingest::history_from_daa`]).
+pub fn history_from_daa(conn: &Connection) -> DbResult<Option<u64>> {
+    Ok(meta_get(conn, "history_from_daa")?.and_then(|d| d.parse().ok()))
+}
+
 /// Position of the record log the database has committed (frames `0..n`).
 pub fn records_next_n(conn: &Connection) -> DbResult<u64> {
     Ok(meta_get(conn, "records_next_n")?.and_then(|d| d.parse().ok()).unwrap_or(0))
@@ -309,6 +314,20 @@ impl Ingest {
     /// Set the cursor of a fresh database (start mode) without touching any rows.
     pub fn init_cursor(&self, c: &Cursor) -> DbResult<()> {
         set_cursor(&self.conn, c)
+    }
+
+    /// Where the history of this store begins when it does not begin at the node's pruning point (`HealthSnapshot::history_from_daa`);
+    /// `None`: it read everything the node retained.
+    pub fn history_from_daa(&self) -> DbResult<Option<u64>> {
+        history_from_daa(&self.conn)
+    }
+
+    /// Records that orders created before `daa` may be missing from this store (a start at the sink or at a block, a rebase past
+    /// unread chain). Only ever moves forward. Returns the value now stored.
+    pub fn mark_history_from(&self, daa: u64) -> DbResult<u64> {
+        let now = history_from_daa(&self.conn)?.map_or(daa, |d| d.max(daa));
+        meta_set(&self.conn, "history_from_daa", &now.to_string())?;
+        Ok(now)
     }
 
     pub fn records_next(&self) -> Option<u64> {

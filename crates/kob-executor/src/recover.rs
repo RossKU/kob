@@ -434,6 +434,14 @@ pub async fn rebase<S: ChainSource>(
         .await?
         .ok_or_else(|| RecoverError::Invalid(format!("the node does not know block {hash}: no cursor set")))?;
     let cursor = Cursor { hash, daa };
+    // the chain between the old cursor and the new one is not read: orders created in it are not in this store (book_complete)
+    {
+        let g = lock(ingest);
+        let old = g.cursor()?.map_or(0, |c| c.daa);
+        if cursor.daa > old {
+            g.mark_history_from(cursor.daa)?;
+        }
+    }
     if !reconcile {
         let mut g = ingest.lock().unwrap_or_else(|e| e.into_inner());
         g.apply_ops(vec![], Some(cursor))?;

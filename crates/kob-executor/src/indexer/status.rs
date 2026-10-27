@@ -77,10 +77,20 @@ pub struct HealthSnapshot {
     /// Per node (empty with a single node).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<crate::rpc::multi::NodeStatus>,
-    /// The store holds every order the node's history still shows. `false` only during a fast start
-    /// ([`crate::faststart`]): the store follows the chain from the node's sink, and the history is being indexed into a second
-    /// store; `backfill` then says how far that one is.
+    /// The store holds every order the node's history still shows. `false` during a fast start ([`crate::faststart`]: the store
+    /// follows the chain from the node's sink, and the history is being indexed into a second store; `backfill` then says how far
+    /// that one is), and for good in a store that began after the oldest history (`start = "sink"` or a block hash, or a rebase past
+    /// unread chain: `history_from_daa` says where its history begins).
     pub book_complete: bool,
+    /// Where the history of this store begins, in DAA, when it does not begin at the node's pruning point (a start at the sink or
+    /// at a block, or a rebase past unread chain); 0: the start block's score was not known yet. Orders created before it are not
+    /// in this store. Absent for a store that read the node's whole retained history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_from_daa: Option<u64>,
+    /// While `catching_up`: how fast the store closes in on the node and when it will have (absent once it follows, and until two
+    /// samples a second apart are known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catch_up: Option<CatchUp>,
     /// Lean storage ([`super::lean`]): the store keeps the live book and `lean_retention_days` of closed orders, not the history.
     pub lean: bool,
     /// Closed orders and rows deleted by the lean pruning since the start.
@@ -93,6 +103,15 @@ pub struct HealthSnapshot {
     /// history the store was following, so it continued from the node's pruning point. Empty (and absent here) when none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub gaps: Vec<SkippedGap>,
+}
+
+/// The catch-up of a store that is behind the node (`HealthSnapshot::catch_up`), measured over the last minute.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct CatchUp {
+    /// How fast the history is indexed: DAA of chain per second of wall time (the chain itself moves at about 10).
+    pub rate_daa_per_sec: f64,
+    /// Seconds until the store has caught up at that pace (absent while the lag does not shrink).
+    pub eta_seconds: Option<u64>,
 }
 
 /// A stretch of chain the store skipped on purpose ([`super::recovery`]): the node pruned it before the store had read it.
@@ -240,6 +259,8 @@ impl HealthSnapshot {
             lies_total: 0,
             nodes: vec![],
             book_complete: true,
+            history_from_daa: None,
+            catch_up: None,
             lean: false,
             lean_orders_pruned_total: 0,
             lean_rows_pruned_total: 0,
@@ -286,7 +307,7 @@ impl HealthSnapshot {
         m(
             "kob_indexer_book_complete",
             "gauge",
-            "0 during a fast start: the store holds only the orders seen since it started, the full book is being indexed.",
+            "0 while the store lacks part of the history: a fast start (the full book is being indexed) or a start at the sink / a block.",
             self.book_complete as u64,
         );
         m("kob_indexer_lean", "gauge", "1 with lean storage: the store keeps the live book, not the history.", self.lean as u64);
@@ -473,6 +494,20 @@ impl HealthSnapshot {
             Some(l) => format!("{l} DAA behind the node (about {})", human_secs(l / 10)),
             None => "node position unknown".to_string(),
         };
+        // catching up: the pace and the time to go (measured over the last minute), so a long first sync is not a guess
+        let lag = match (&self.catch_up, self.state) {
+            (Some(c), FollowerState::CatchingUp) => {
+                // the chain itself moves at 10 DAA per second
+                let x = c.rate_daa_per_sec / 10.0;
+                let x = if x >= 10.0 { format!("{x:.0}") } else { format!("{x:.1}") };
+                match c.eta_seconds {
+                    Some(eta) => format!("{lag}, indexing {x}x chain speed, caught up in about {}", human_secs(eta)),
+                    None => format!("{lag}, indexing {x}x chain speed (not closing in)"),
+                }
+            }
+            (None, FollowerState::CatchingUp) => format!("{lag}, catch-up time: estimating"),
+            _ => lag,
+        };
         let mut s = format!("indexer {state}, {lag}, {} orders indexed", self.orders_total);
         // several nodes (a resolver pair: the hosts in use): which is the authority, and how each is doing
         if !self.nodes.is_empty() {
@@ -498,6 +533,13 @@ impl HealthSnapshot {
             if let Some(e) = self.gap_reason.as_ref().or(self.last_error.as_ref()) {
                 s.push_str(&format!(" ({e})"));
             }
+        }
+        if let Some(from) = self.history_from_daa {
+            let ago = self.node_daa.filter(|_| from > 0).map(|n| format!("about {} ago", human_secs(n.saturating_sub(from) / 10)));
+            s.push_str(&format!(
+                " | history begins {}: older orders are not in this store (book_complete false; a start at the node's pruning point reads all it retains)",
+                ago.unwrap_or_else(|| "at the start point".to_string())
+            ));
         }
         if !self.gaps.is_empty() {
             let skipped: u64 = self.gaps.iter().map(SkippedGap::daa).sum();
@@ -623,7 +665,19 @@ mod tests {
         h.cursor_daa = 1_000;
         h.node_daa = Some(1_000 + 36_000 * 3 + 12_000);
         h.orders_total = 7;
-        assert_eq!(h.status_line(), "indexer catching up, 120000 DAA behind the node (about 3 h 20 min), 7 orders indexed");
+        assert_eq!(
+            h.status_line(),
+            "indexer catching up, 120000 DAA behind the node (about 3 h 20 min), catch-up time: estimating, 7 orders indexed"
+        );
+        // the pace of the last minute: how fast the store closes in on the node, and when it will have
+        h.catch_up = Some(CatchUp { rate_daa_per_sec: 150.0, eta_seconds: Some(8_640) });
+        assert_eq!(
+            h.status_line(),
+            "indexer catching up, 120000 DAA behind the node (about 3 h 20 min), indexing 15x chain speed, caught up in about 2 h 24 min, 7 orders indexed"
+        );
+        h.catch_up = Some(CatchUp { rate_daa_per_sec: 5.0, eta_seconds: None });
+        assert!(h.status_line().contains("indexing 0.5x chain speed (not closing in)"), "{}", h.status_line());
+        h.catch_up = None;
         h.state = FollowerState::Following;
         h.node_daa = Some(1_004);
         assert_eq!(h.status_line(), "indexer following, caught up (4 DAA behind the node), 7 orders indexed");
@@ -665,6 +719,27 @@ mod tests {
             [0, 89, 90, 3_599, 5_400, 172_799, 200_000].map(human_secs),
             ["0 s", "89 s", "2 min", "60 min", "1 h 30 min", "47 h 59 min", "2 d 7 h"]
         );
+    }
+
+    /// A store that began after the oldest history is not a complete book, for good: the health says where its history begins and the
+    /// status line says that older orders are not in it.
+    #[test]
+    fn a_store_that_began_late_says_so() {
+        let mut h = HealthSnapshot::new("testnet-10");
+        assert!(h.book_complete && h.history_from_daa.is_none());
+        let v = serde_json::to_value(&h).unwrap();
+        assert!(v.get("history_from_daa").is_none() && v.get("catch_up").is_none());
+        h.state = FollowerState::Following;
+        h.cursor_daa = 100_000;
+        h.node_daa = Some(100_004);
+        h.book_complete = false;
+        h.history_from_daa = Some(64_000);
+        assert!(h.status_line().contains("history begins about 60 min ago"), "{}", h.status_line());
+        assert!(h.status_line().contains("older orders are not in this store"), "{}", h.status_line());
+        // the start block's score was not known: the line still says it
+        h.history_from_daa = Some(0);
+        assert!(h.status_line().contains("history begins at the start point"), "{}", h.status_line());
+        assert_eq!(serde_json::to_value(&h).unwrap()["history_from_daa"], 0);
     }
 
     #[test]

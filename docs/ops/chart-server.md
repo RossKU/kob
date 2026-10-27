@@ -26,7 +26,9 @@ you and the chain; `docs/ops/executor-quickstart.md`, section 2), or the public 
 index only**, the data directory (`kob-data`). There is no key question for this role. It writes `kob-executor.toml` (and on
 testnet-10 `kob-tokens.json`, the supported token programs with no token entries: every token of a supported program is indexed
 and listed by the API, and none is named; the web app's market list shows the tokens that have a ticker or declared decimals and keeps the
-others behind "Show N token(s) without a name"). Then add the read API settings for the tunnel at the end of `kob-executor.toml`:
+others behind "Show N token(s) without a name"). **The setup starts the executor when it finishes, with the default `[api]`** (loopback
+`127.0.0.1:8090`, no trusted proxy, no CORS): stop it (close its window, or Ctrl+C) before you edit the file, and start it again afterwards,
+or the settings below are not read. Then add the read API settings for the tunnel at the end of `kob-executor.toml`:
 
 ```toml
 [api]
@@ -34,6 +36,7 @@ listen = "127.0.0.1:8090"                  # loopback only: the tunnel is the on
 trusted_proxies = ["127.0.0.1", "::1"]     # cloudflared connects from this machine
 client_ip_header = "cf-connecting-ip"      # the visitor's address, set by Cloudflare's edge
 cors_allow_origin = "*"                    # the app is served from another origin (see section 3)
+metrics = false                            # do not publish GET /v1/metrics through the tunnel (see section 2)
 ```
 
 A complete file looks like this (`network`, `rpc_url`, `data_dir`, `tokens_path` and `[launch]` as the setup wrote them):
@@ -52,14 +55,27 @@ listen = "127.0.0.1:8090"
 trusted_proxies = ["127.0.0.1", "::1"]
 client_ip_header = "cf-connecting-ip"
 cors_allow_origin = "*"
+metrics = false
 ```
 
 Start it with a double-click on `kob-executor` (or `kob-executor index --config kob-executor.toml`). Running the setup again
 replaces the file: add the `[api]` table again afterwards. Run it as a service as `docs/ops/executor-quickstart.md`,
 section 6 shows (the index role has no key file and no pause file: arguments `index --config kob-executor.toml`).
 
-The first start catches up with everything the node retains; the API answers from the start and the app shows the indexer as
-catching up until it is close to the tip.
+**First start: the history and the fast route.** The first start reads everything the node retains, from its pruning point. The API
+answers from the start and the app shows the indexer as catching up until it is close to the tip. Over the public nodes of the
+resolver that took about 2.4 hours for 36 hours of history (about 14.6 s of chain per second), and the store grows by about
+54 MB per 1.4 hours of history (about 1.4 GB in all). The status line and `/v1/health` say how far it is:
+"`indexer catching up, ... behind the node (about 35 h), indexing 15x chain speed, caught up in about 2 h 24 min`" (`catch_up` in
+`/v1/health`: `rate_daa_per_sec`, `eta_seconds`).
+
+`fast_start` is for the matcher (`kob-executor run`, which trades on a second store while it indexes the history); the `index` role
+refuses it (`fast_start = true` or `--fast-start` stop the start with a message). The fast route of a read server is
+`start = "sink"` (top level of `kob-executor.toml`, or `--start sink`; on a data directory that is still empty): it follows the chain
+within a second of the start and lists the orders created since. The orders older than the start are **not** in that store, for
+good: `/v1/health` reports `book_complete: false` and `history_from_daa` (where its history begins) and the status line says so, so
+a chart server that starts at the sink has only the books and trades from its start on. A public server that should show the whole
+history lets the first start catch up (or restores a backup of a full store, section 4) and does not use `start = "sink"`.
 
 ## 2. Cloudflare Tunnel
 
@@ -100,6 +116,20 @@ port and no fixed address. It needs a domain whose DNS is on Cloudflare (free pl
    `tunnel --config C:\kob\cloudflared.yml run kob-chart`, restarted on failure, like the executor's task.
 6. Check from another network: `curl -s https://chart.example.org/v1/health` answers the indexer's status, and
    `curl -sI https://chart.example.org/` answers 404 (nothing but `/v1/` is reachable).
+
+`/v1/metrics` is under `/v1/` and so is public through this rule, as are the node host names in `/v1/health` (`nodes[].node`).
+The metrics are the follower's counters in the Prometheus text format; nothing in the app reads them. Do not publish them:
+set `metrics = false` in `[api]` (section 1: the route is then not served, 404), and/or block the path in front of the API, in the
+tunnel's ingress before the `^/v1/` rule (the first rule that matches wins):
+
+```yaml
+     - hostname: chart.example.org
+       path: ^/v1/metrics$
+       service: http_status:404
+```
+
+(or a Cloudflare WAF custom rule that blocks the URI path `/v1/metrics`). An operator who scrapes them uses `--metrics-file`
+(`docs/ops/executor.md`, Part C, *Monitoring*) or the loopback listener, not the tunnel.
 
 Set `KOB_PAGES_INDEXER_URL` to `https://chart.example.org` (`docs/ops/web-hosting.md`, section 3).
 
@@ -151,8 +181,11 @@ retention needs the gap runbook (Part B, 7.4) before it serves again.
 * The status line in the log every minute: `status: indexer following, caught up (N DAA behind the node), ...`; with public
   nodes it ends with both hosts and their state. `WARNING:` names what needs you.
 * `GET /v1/health` (locally `http://127.0.0.1:8090/v1/health`, publicly through the tunnel): `state` (`following`,
-  `catching_up`, `node_unavailable`, `gap`), `lag_seconds`, `alarms`. `GET /v1/health/ready` answers 200 only when caught up:
-  point an uptime monitor of your choice at `https://chart.example.org/v1/health/ready`.
+  `catching_up`, `node_unavailable`, `gap`), `lag_seconds`, `alarms`, `book_complete`, and while catching up `catch_up` (pace and ETA).
+  `GET /v1/health/ready` answers 200 when the store is following **or catching up with a lag below the first alarm threshold (1 hour by default)**,
+  and 503 otherwise (a first sync with a day of lag, a node that is unavailable, a gap): a monitor pointed at
+  `https://chart.example.org/v1/health/ready` therefore stays green for a store that is up to an hour behind. For "caught up" read
+  `state = following` of `/v1/health`.
 * Page yourself on `state = gap` (the indexer halted: Part B, 7.4) and on `node_unavailable` for more than a few minutes; the
   full alarm table is Part B, section 6.
 * `cloudflared` logs its connections; the dashboard (*Zero Trust* > *Networks* > *Tunnels*) shows the tunnel healthy or down.

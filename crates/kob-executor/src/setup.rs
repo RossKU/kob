@@ -159,7 +159,7 @@ pub fn launch_args(path: &Path) -> Result<Launch> {
             }
         }
         LaunchRole::Index => {
-            if let Some((k, _)) = run_only.iter().find(|(_, v)| v.is_some()) {
+            if let Some(k) = launch.run_only_key() {
                 bail!("{}: [launch] {k} is an option of role \"run\", not of role \"index\"", path.display());
             }
         }

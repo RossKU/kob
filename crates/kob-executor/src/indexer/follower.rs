@@ -34,7 +34,7 @@ pub fn is_pruned_gap(reason: &str) -> bool {
 
 use super::ingest::{Cursor, Ingest, IngestError};
 use super::prefetch::{Head, Prefetch, PrefetchLimits};
-use super::status::{FollowerState, HealthState, IndexEvent};
+use super::status::{BackfillPace, CatchUp, FollowerState, HealthState, IndexEvent};
 use crate::config::StartMode;
 use crate::hex::Hash32;
 use crate::rpc::types::{RawVspcResponse, Verbosity, VspcBatch, VspcRequest};
@@ -158,6 +158,8 @@ pub struct Follower<S: ChainSource> {
     prefetch: tokio::sync::Mutex<Prefetch>,
     /// Lean storage: when the next pruning batch is due (`None`: the store is not lean).
     lean_next: Mutex<Option<std::time::Instant>>,
+    /// The catch-up pace (the lag over the last minute) and the instant its seconds are counted from.
+    pace: Mutex<(BackfillPace, std::time::Instant)>,
 }
 
 /// Lean storage: pause between batches while one hit its limits (more to delete), and when the last one found nothing more.
@@ -196,6 +198,26 @@ impl<S: ChainSource> Follower<S> {
             cursor_blue: Mutex::new(None),
             prefetch,
             lean_next: Mutex::new(lean.then(std::time::Instant::now)),
+            pace: Mutex::new((BackfillPace::default(), std::time::Instant::now())),
+        }
+    }
+
+    /// While the store is catching up: how fast it closes in on the node and when it will have, from its lag over the last minute
+    /// (`catch_up` of the health and the status line). Cleared once it follows.
+    fn note_catch_up(&self) {
+        let h = self.health.snapshot();
+        let lag = h.lag_daa().filter(|_| h.state == FollowerState::CatchingUp && h.cursor_daa > 0);
+        let catch_up = lag.and_then(|l| {
+            let mut g = self.pace.lock().unwrap_or_else(|e| e.into_inner());
+            let at = g.1.elapsed().as_secs_f64();
+            let (rate, eta) = g.0.push(at, l, h.cursor_daa);
+            rate.map(|rate_daa_per_sec| CatchUp { rate_daa_per_sec, eta_seconds: eta })
+        });
+        if lag.is_none() {
+            self.pace.lock().unwrap_or_else(|e| e.into_inner()).0 = BackfillPace::default();
+        }
+        if catch_up != h.catch_up {
+            self.health.update(|h| h.catch_up = catch_up);
         }
     }
 
@@ -318,7 +340,23 @@ impl<S: ChainSource> Follower<S> {
             _ => 0,
         };
         let c = Cursor { hash, daa };
-        self.blocking(move |i| i.init_cursor(&c)).await.map_err(|e| StepOutcome::Retry(format!("database: {e}")))?;
+        // a start anywhere but the pruning point leaves the older history out: the book is not complete, for good
+        let partial = !matches!(self.cfg.start, StartMode::PruningPoint);
+        self.blocking(move |i| {
+            i.init_cursor(&c)?;
+            if partial {
+                i.mark_history_from(c.daa)?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e: super::db::DbError| StepOutcome::Retry(format!("database: {e}")))?;
+        if partial {
+            self.health.update(|h| {
+                h.book_complete = false;
+                h.history_from_daa = Some(c.daa);
+            });
+        }
         tracing::info!(start = %hash, mode = ?self.cfg.start, "initialised cursor");
         Ok(c)
     }
@@ -696,6 +734,7 @@ impl<S: ChainSource> Follower<S> {
                         h.records_next_n = n;
                     }
                 });
+                self.note_catch_up();
                 if !a.event.is_empty() {
                     let _ = self.events.send(Arc::new(a.event));
                 }

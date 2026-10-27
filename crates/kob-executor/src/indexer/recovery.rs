@@ -111,6 +111,8 @@ async fn move_past_gap<S: ChainSource>(p: &Parts<S>, reason: &str, attempt: u32)
     );
     p.health.update(|h| {
         h.gaps.push(gap);
+        h.book_complete = false;
+        h.history_from_daa = Some(h.history_from_daa.map_or(r.cursor.daa, |d| d.max(r.cursor.daa)));
         h.state = FollowerState::Starting;
         h.gap_reason = None;
         h.last_error = None;

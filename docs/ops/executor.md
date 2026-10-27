@@ -192,8 +192,10 @@ holds); one that cannot be opened or moved is deleted and started afresh.
 The backfill does not starve the tip: the tip follower has a node client of its own, so a window of the backfill's parallel
 fetch that takes half a minute never holds a tip request back (it costs a few extra connections to the same public nodes).
 
-Not used: with `index` (it has no matcher), with the x402 facilitator in the same process (its acceptance tracking and book
-are bound to one store), and when `start` is not the pruning point. Not implemented: importing live orders from another
+Not used: with `index` (it has no matcher: `kob-executor index` refuses `fast_start = true` and `--fast-start` with a message
+instead of ignoring them; an index-only host that must follow at once sets `start = "sink"`, see *Fresh database* in Part B 4, and
+the one that catches up reads the time to go from its status line and `/v1/health`'s `catch_up`), with the x402 facilitator in
+the same process (its acceptance tracking and book are bound to one store), and when `start` is not the pruning point. Not implemented: importing live orders from another
 indexer into the tip store at the start (`fast_start_import`); a verified import (`index import-orders`) is the tool for that.
 
 ### A.1.2 Lean storage: the live book, 30 days of closed orders, a size cap, a file that shrinks
@@ -1224,12 +1226,20 @@ segment_bytes = 268435456
 listen = "127.0.0.1:8090"               # behind a reverse proxy on this host (A.3)
 trusted_proxies = ["127.0.0.1"]         # that proxy: the address it connects from
 client_ip_header = "x-forwarded-for"    # or "cf-connecting-ip", "x-real-ip"
+metrics = true                          # serve GET /v1/metrics; false: the route answers 404 (below)
 [api.rate_limit]
 per_ip_rps = 20.0
 per_ip_burst = 60
 global_rps = 500.0
 global_burst = 1000
 ```
+
+**Metrics on a public listener.** `GET /v1/metrics` (the follower's state in the Prometheus text format) is part of `/v1/`: a proxy
+or tunnel that passes `/v1/` publishes it, with the node hosts the indexer uses (`kob_indexer_node_*{node="..."}`), as `/v1/health`
+publishes them in `nodes[].node`. Nothing in the app reads it. A host the public reaches whose operator scrapes nothing sets
+`metrics = false` in `[api]` (the route is then not served: 404), or blocks `/v1/metrics` at the proxy (Cloudflare: a WAF custom
+rule or a tunnel ingress rule, `docs/ops/chart-server.md` section 2). Metrics for a local Prometheus come from `--metrics-file` (C,
+*Monitoring*) or from the loopback listener.
 
 **Behind a reverse proxy.** The per-client limits (`rate_limit`, `max_connections_per_ip`, `max_ws_per_ip`) key a client
 by the address it connects from; a proxy's forwarded-client header is believed only from `trusted_proxies`. With a proxy
@@ -1248,7 +1258,19 @@ still retains; not recommended). Subcommands: `run` (default; the indexer alone)
 the same options.
 
 Fresh database: it starts at `start` (default: the node's pruning point, i.e. everything the node
-still retains). `--start sink` skips history (only new orders, plus imports). Run it under systemd
+still retains). `--start sink` skips history (only new orders, plus imports): this is the **fast route** of an index-only host, which
+follows the chain within a second of the start (`kob-executor index` has no `fast_start`; A.1.1). Such a store (and one moved
+past unread chain by a gap or a rebase) is not complete for good: `/v1/health` reports `book_complete: false` and
+`history_from_daa` (where its history begins, in DAA; 0 until the start block's score is known), the status line says "history begins
+about N ago: older orders are not in this store", and `kob_indexer_book_complete` is 0; a store rebuilt by `index replay` from
+the record log does not carry the marker (the log holds what the store read). **Catching up**: while the state is
+`catching_up`, `/v1/health` carries `catch_up` (`rate_daa_per_sec`, the DAA of chain indexed per second of wall time over the
+last minute, the chain itself moves at 10; `eta_seconds`, absent while the lag does not shrink) and the status line adds
+"indexing 15x chain speed, caught up in about 2 h 24 min" (or "catch-up time: estimating" for the first seconds). Measured on
+testnet-10 over the Kaspa resolver nodes: 36 h of lag at the start, about 14.6 s of chain per second, about 2.4 h to follow, about
+54 MB of store per 1.4 h of history (about 1.4 GB for the 36 h). `kob-executor index` (follow and serve) also refuses, with a
+message, a configuration whose `[launch]` table sets `key_file`, `pause_file` or `x402_config` (options of role `run`), as the
+launcher does. Run it under systemd
 with `Restart=on-failure`; state is durable across restarts. The template versions are the ones
 `kob-protocol` pins (there is no template directory any more).
 
@@ -1302,8 +1324,8 @@ should default to settled. The mempool tier is not served by the indexer.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /v1/health` | full status: the build (`version`: the crate version; `commit`: the git commit it was built from, `null` when the build did not set `KOB_GIT_COMMIT`; `payload_version`: the `KOB1` payload version it reads and writes; `docs/ops/release.md`, 7), follower state, cursor, node DAA, lag (`lag_daa`, `lag_seconds`), `alarms` for the 1/6/12/24 h thresholds, reorg and applied-block counters, record-log position (`records_next_n`) |
-| `GET /v1/health/ready` | 200 only when following or catching up with lag below the smallest alarm threshold (load balancers) |
+| `GET /v1/health` | full status: the build (`version`: the crate version, `0.0.0` until the release bump; `commit`: the git commit it was built from, `null` when the build did not set `KOB_GIT_COMMIT`; `payload_version`: the `KOB1` payload version it reads and writes; `docs/ops/release.md`, 7), follower state, cursor, node DAA, lag (`lag_daa`, `lag_seconds`), `alarms` for the 1/6/12/24 h thresholds, reorg and applied-block counters, record-log position (`records_next_n`) |
+| `GET /v1/health/ready` | 200 only when following or catching up with lag below the smallest alarm threshold (1 h; load balancers). It is also 200 while catching up as long as the lag is under that threshold, so it is not "caught up" (that is `state = following`) |
 | `GET /v1/tokens` | registry tokens plus, with a program allowlist loaded, every token of a supported program that an order placement named (listed or not; at most 5000 rows): `ticker` (empty without a registry entry), `covenant_id`, `template_hash`, `template_id`, `extension_commitment` (without an entry: the one commitment the token's order placements named, the all-zero one of the standard class included; null when they named several, or none: a pair placement whose state does not carry a token's commitment names none for it), `family`, `decimals`, `scale` (the standard scale `10^decimals`, at most `10^9`; null without an entry: clients take it from the token's orders, and the first order names it), `market_scale` (without an entry: the scale of the token's earliest order, open or ended: listed orders first among its oldest 1000; the first order set it and it stays the market's, so a client prices new orders at it and refuses decimals of another scale; null with an entry and before any order), `genesis_verified` (registry fact, `null` when it does not say), `warnings` (derived from facts: `genesis_unverified`, `live_mint_authority`), `registry` (`source`, `sha256` of the document loaded), `powers` (program capabilities: `freeze`, `seize`, `blacklist`, `mint-authority`, ...), `open_asks`, `open_bids`, `declaration` (`true` when the indexer holds a verified KCC-23 declaration for the covenant id, served by the next endpoint; absent otherwise) |
 | `GET /v1/tokens/{covenant_id}/declaration` | the token's KCC-23 metadata declaration as a launch proof (`kob_protocol::kcc23::LaunchProof`): `{"format": "kob-kcc23-proof/1", "covenantId", "preparation", "genesis"}`, each transaction in the fields its version 1 id commits to (`version`, `inputs` [`transactionId`, `index`, `sequence`], `outputs` [`value`, `scriptPublicKey` {`version`, `script`}, `covenant` {`authorizingInput`, `covenantId`} or null], `lockTime`, `subnetworkId`, `gas`, `payload`; bytes as hex, 64-bit numbers as decimal strings). The preparation's payload is `0x00` and the declaration JSON. The indexer keeps a proof only after `LaunchProof::verify` accepted it (both transaction ids and the covenant id recomputed) and a client verifies it again: an indexer can withhold a declaration, never forge one. It captures a preparation accepted with the standard version 1, lock time 0, native subnetwork and gas 0 (the fields a `High` answer leaves out) whose genesis is accepted within `declaration_window_hours` (72) of it. `404 not_found` when it holds none, `400 bad_request` for an id that is not 32 bytes of hex; one primary-key lookup on the light lane, rate cost 1 |
 | `GET /v1/token-utxos?owner=&token=&spent=&limit=&cursor=` | token UTXOs of tracked tokens with proven states, by owner and / or token (section 5.1) |
@@ -1527,10 +1549,18 @@ other row (created rows deleted, spent rows live again).
 
 **Limits (answers are never guessed):**
 
-* **Genesis outputs are not listed.** The outputs of an issuance transaction have no leader: no transaction reveals their state
-  until they are spent, and the spend is the moment they stop being unspent. The same holds for any output whose creating
-  transaction did not reveal it (a token program the indexer does not pin, an unrecognised leader). The web app keeps its local
-  tracker for the issuer's own genesis outputs; the indexer lists everything from the first transfer on.
+* **Genesis outputs of a KOB creation are listed; those of an older one and of other issuers are not.** The outputs of an issuance
+  transaction have no leader (no transfer's `next_states`): no transaction reveals their state until they are spent, and the spend
+  is the moment they stop being unspent. A genesis built by KOB (the web app's Create token page, `kob token issue`) therefore names
+  the states of its outputs in its own payload (`KOBG` | version 1 | count | length-prefixed state spans, `docs/spec/token-metadata.md`
+  section 3, `kob_protocol::genesis_states`): the indexer keeps each state whose P2SH under a pinned program is the output's script
+  public key (the same proof as every other holding), so the issuer's wallet in any browser, and the CLI, find the issued outputs from
+  the block of the genesis (the covenant id does not commit to the payload; an indexer started after the genesis needs a rebuild from
+  an earlier `--start` to see it). The same holds, still unlisted, for any output whose creating transaction did not reveal its state
+  (a genesis made before this payload existed, another issuer's genesis, a token program the indexer does not pin, an unrecognised
+  leader). For an older KOB creation the web app keeps its local tracker for the issuer's own genesis outputs, and **Settings, Token
+  tracker, Find a token you created earlier** finds them again from the token and the amount the creation gave the key (the node
+  confirms the output); the tracker's export is the backup, see `docs/spec/token-metadata.md` section 3, *What the issuer must keep*.
 * Tokens sent before the indexer started (`--start sink`, or blocks older than its start) are unknown until they move; so
   are holdings created while an older build tracked only allowlisted / traded tokens (they are not in the record log, so
   `index replay` cannot add them; a fresh sync from an earlier `--start` on a node that still has those blocks can). The
@@ -2105,7 +2135,7 @@ transaction ids (v0 and v1) verify, a tampered copy does not.
 * A bid's remaining amount is an upper bound derived from its escrow (its buying power; its quantity is a budget).
 * After a gap adoption the order's custody is unknown until its next spend, so the order is not
   listed until then.
-* `GET /v1/token-utxos` lists holdings whose state a transaction revealed; genesis outputs of an issuance are not listed (5.1).
+* `GET /v1/token-utxos` lists holdings whose state a transaction revealed; genesis outputs of an issuance are listed only when the genesis named them in its payload (KOB creations from this build on; 5.1).
 * KRON tokens held by `id_type` 0 (pubkey) or 1 (script hash) are outside KOB (the builders refuse them); only
   custody (`id_type` 2) and address-presence (`id_type` 3) tokens are handled.
 * Covenant ids of if-done exits are taken from the node (consensus-derived); placement-record

@@ -170,6 +170,13 @@ impl Indexer {
             h.lag_tolerance_daa = cfg.lag_tolerance_daa();
             h.lean = cfg.lean;
         });
+        // a store that began after the oldest history says so, for good (not only until the next restart)
+        if let Some(from) = ingest.history_from_daa()? {
+            health.update(|h| {
+                h.book_complete = false;
+                h.history_from_daa = Some(from);
+            });
+        }
         if let Some(c) = ingest.cursor()? {
             let next = ingest.records_next();
             let orders = ingest.order_count()?;

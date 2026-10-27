@@ -727,3 +727,52 @@ async fn rebase_sets_the_cursor_daa_of_the_block_it_moves_to() {
     // another network is refused
     assert!(rebase(&hs.ingest, hs.node.as_ref(), "mainnet", &StartMode::Sink, false).await.is_err());
 }
+
+/// A store that began after the oldest history (`start = sink` or a block), or that was moved past chain it had not read (a
+/// rebase), is not a complete book: `book_complete` is false and `history_from_daa` says where its history begins, and that
+/// survives a restart. A store that started at the node's pruning point is complete.
+#[tokio::test]
+async fn a_store_that_began_late_or_skipped_chain_is_not_a_complete_book_for_good() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    node.push_empty(20);
+    let mut cfg = test_config(dir.path(), &node);
+    cfg.start = StartMode::Sink;
+    let began = node.tip_daa();
+    {
+        let idx = Indexer::open(cfg.clone()).unwrap();
+        assert!(idx.health.snapshot().book_complete, "nothing is known before the first start");
+        let f = idx.follower(node.clone());
+        sync(&f).await;
+        let h = idx.health.snapshot();
+        assert_eq!((h.book_complete, h.history_from_daa), (false, Some(began)));
+        node.push_empty(5);
+        sync(&f).await;
+        assert_eq!(idx.health.snapshot().history_from_daa, Some(began), "the history begins where the store began");
+    }
+    // a restart: the marker is read from the database
+    let idx = Indexer::open(cfg.clone()).unwrap();
+    let h = idx.health.snapshot();
+    assert_eq!((h.book_complete, h.history_from_daa), (false, Some(began)));
+    // a rebase past unread chain moves the beginning forward; one back to an older block does not move it back
+    node.push_empty(10);
+    let tip = node.tip_daa();
+    let rep = rebase(&idx.ingest, node.as_ref(), "testnet-10", &StartMode::Sink, false).await.unwrap();
+    assert_eq!(rep.cursor.daa, tip);
+    assert_eq!(idx.ingest.lock().unwrap().history_from_daa().unwrap(), Some(tip));
+    let old = node.chain()[3].hash;
+    rebase(&idx.ingest, node.as_ref(), "testnet-10", &StartMode::Hash(old), false).await.unwrap();
+    assert_eq!(idx.ingest.lock().unwrap().history_from_daa().unwrap(), Some(tip));
+
+    // a start at the node's pruning point reads everything it retains: complete, and it stays so
+    let dir2 = tempfile::tempdir().unwrap();
+    let mut full = test_config(dir2.path(), &node);
+    full.start = StartMode::PruningPoint;
+    let idx = Indexer::open(full.clone()).unwrap();
+    sync(&idx.follower(node.clone())).await;
+    let h = idx.health.snapshot();
+    assert_eq!((h.book_complete, h.history_from_daa), (true, None));
+    drop(idx);
+    let h = Indexer::open(full).unwrap().health.snapshot();
+    assert_eq!((h.book_complete, h.history_from_daa), (true, None));
+}

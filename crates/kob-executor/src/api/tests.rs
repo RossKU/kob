@@ -1392,3 +1392,50 @@ async fn token_declarations_are_served_as_launch_proofs() {
     assert_eq!(row(&cov.to_hex())["declaration"], true);
     assert!(row(&h(TOKEN)).get("declaration").is_none(), "absent without a declaration (older clients see no new key)");
 }
+
+/// While the store catches up with a lag below the first alarm threshold the probe answers 200 (it is not "caught up": that is
+/// `state = following`); the health reports the pace and ETA of the catch-up, and a store that began after the oldest history says so.
+#[tokio::test]
+async fn ready_while_catching_up_and_the_health_names_the_catch_up_and_a_partial_history() {
+    let e = env(|_| {});
+    let app = router(e.state.clone());
+    e.state.health.update(|h| {
+        h.state = FollowerState::CatchingUp;
+        h.node_daa = Some(990 + 5_000);
+        h.catch_up = Some(crate::indexer::status::CatchUp { rate_daa_per_sec: 150.0, eta_seconds: Some(36) });
+        h.book_complete = false;
+        h.history_from_daa = Some(990);
+    });
+    let (s, v) = get(&app, "/v1/health/ready").await;
+    assert_eq!((s, &v["ready"], &v["state"]), (StatusCode::OK, &Value::Bool(true), &Value::String("catching_up".into())));
+    let (s, v) = get(&app, "/v1/health").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!((v["state"].as_str(), v["caught_up"].clone()), (Some("catching_up"), Value::Bool(false)));
+    assert_eq!((v["catch_up"]["rate_daa_per_sec"].as_f64(), v["catch_up"]["eta_seconds"].as_u64()), (Some(150.0), Some(36)));
+    assert_eq!((v["book_complete"].clone(), v["history_from_daa"].as_u64()), (Value::Bool(false), Some(990)));
+    // a complete store that follows has neither field
+    e.state.health.update(|h| {
+        h.state = FollowerState::Following;
+        h.node_daa = Some(1000);
+        h.catch_up = None;
+        h.book_complete = true;
+        h.history_from_daa = None;
+    });
+    let (_, v) = get(&app, "/v1/health").await;
+    assert!(v.get("catch_up").is_none() && v.get("history_from_daa").is_none());
+    assert_eq!(v["book_complete"], true);
+}
+
+/// `GET /v1/metrics` is public like the rest of `/v1/`; `[api] metrics = false` removes the route.
+#[tokio::test]
+async fn the_metrics_route_follows_the_config() {
+    let on = env(|_| {});
+    let (s, _, _) = get_from(&router(on.state.clone()), "/v1/metrics", "127.0.0.1", &[]).await;
+    assert_eq!(s, StatusCode::OK);
+    let off = env(|c| c.metrics = false);
+    let app = router(off.state.clone());
+    let (s, v) = get(&app, "/v1/metrics").await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "{v}");
+    // everything else is still served
+    assert_eq!(get(&app, "/v1/health").await.0, StatusCode::OK);
+}

@@ -194,10 +194,24 @@ would list none of the orders the new wallets place.
    at compile time: there is no build script, no `git` call and no timestamp, so the same source, toolchain and
    `KOB_GIT_COMMIT` give the same binary bytes (a build with another commit differs in that string only; to compare a
    rebuild with a published binary, set the same value).
+
+   **`version` is `0.0.0` until the release bump.** It is the workspace version (`[workspace.package] version` in the root
+   `Cargo.toml`, which every crate inherits), and that stays `0.0.0` on `master` until the release manager sets the release
+   version, in the commit that is tagged (the release commit; the bump is the release manager's decision and is not made on a
+   feature branch). A binary built from `master` before the bump therefore reports `"version": "0.0.0"`, which is not a defect of
+   the build: tell such builds apart by `commit` (it is the git commit the build was made from) and compare that with the commit
+   you mean. Once the release is tagged, `version` is the tag without the `v` and step 3 below can compare it; before that,
+   "`version` equals the release" cannot be checked, only `commit` and `payload_version`. `kob --version` reports the same
+   workspace version (the web app shows its own package version, `web/package.json`).
 2. Then the **web app** and other wallets (`kob-cli`, bots) are published with the new builders.
 3. Announce the order in the release notes; a host serving the web app should point it only at indexers
-   whose `/v1/health` reports the release `version` (and, for a payload version change, a `payload_version` at least the
-   new one).
+   whose `/v1/health` reports the release `version` (after the bump; before it, the release `commit`) (and, for a payload version
+   change, a `payload_version` at least the new one).
+
+A release that changes what a wallet writes on chain for an indexer to read follows the same order: the genesis payload of a token
+creation (`KOBG`, `docs/spec/token-metadata.md` section 3) is read by an indexer of this build or later, which lists the issued
+outputs to the issuer's key in any browser; an older indexer ignores the payload (the token is created all the same), so the issuer's
+outputs are listed only by indexers already upgraded.
 
 The record log keeps every payload as it was, so a rebuilt database replays the old ones unchanged; a rollback of the
 wallets is safe, a rollback of an indexer below the payload version in use is not.

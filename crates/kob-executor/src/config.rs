@@ -138,6 +138,10 @@ pub struct ApiConfig {
     pub max_page_size: usize,
     /// `Access-Control-Allow-Origin` value; unset = no CORS headers (the CDN can add them).
     pub cors_allow_origin: Option<String>,
+    /// Serve `GET /v1/metrics` (the follower's state in the Prometheus text format; it names the node hosts the indexer uses).
+    /// The route is public like the rest of `/v1/`: `false` removes it (404) for a listener the public reaches, when nothing
+    /// scrapes it. Default `true`.
+    pub metrics: bool,
 }
 
 impl ApiConfig {
@@ -183,6 +187,7 @@ impl Default for ApiConfig {
             read_pool_size: 4,
             max_page_size: 200,
             cors_allow_origin: None,
+            metrics: true,
         }
     }
 }
@@ -419,6 +424,16 @@ pub struct LaunchConfig {
     pub x402_config: Option<PathBuf>,
     /// Further options of the role's subcommand, appended as given (e.g. `["--sweep-own-strays"]`).
     pub args: Vec<String>,
+}
+
+impl LaunchConfig {
+    /// The first key that is an option of role `run` only (`key_file`, `pause_file`, `x402_config`) and is set; the index role
+    /// has no key, no kill switch and no facilitator, so a configuration of it that sets one is a mistake, refused rather than ignored.
+    pub fn run_only_key(&self) -> Option<&'static str> {
+        [("key_file", self.key_file.is_some()), ("pause_file", self.pause_file.is_some()), ("x402_config", self.x402_config.is_some())]
+            .into_iter()
+            .find_map(|(k, set)| set.then_some(k))
+    }
 }
 
 /// The network a command serves: the one given (`--network`, `network = ...`), else the build's deployment network

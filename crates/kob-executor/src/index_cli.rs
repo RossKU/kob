@@ -301,10 +301,36 @@ pub fn node_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
 
 pub use crate::shutdown::shutdown_signal;
 
+/// What `kob-executor index` (follow and serve) refuses instead of ignoring: the options of role `run` that its configuration sets.
+/// The launcher refuses the same `[launch]` keys (`setup::launch_args`); `fast_start` needs the matcher the index role does not have.
+/// `file`: the configuration file, for the message.
+pub fn refuse_run_only_options(cfg: &IndexerConfig, file: Option<&std::path::Path>) -> Result<()> {
+    let at = file.map(|p| format!("{}: ", p.display())).unwrap_or_default();
+    if let Some(k) = cfg.launch.as_ref().and_then(|l| l.run_only_key()) {
+        anyhow::bail!(
+            "{at}[launch] {k} is an option of role \"run\", not of `kob-executor index` (the index role has no key, no kill switch and no x402 \
+             facilitator): remove it, or start `kob-executor run`"
+        );
+    }
+    if cfg.fast_start {
+        anyhow::bail!(
+            "{at}fast_start is an option of `kob-executor run` (it lets the matcher trade at once on a store that follows the chain from the \
+             node's sink while the history is indexed); `kob-executor index` has no matcher. To follow at once, set `start = \"sink\"` (--start sink): \
+             orders older than the start are then not in the store and /v1/health reports book_complete false. Otherwise let it catch up: \
+             the status line and /v1/health show the time to go"
+        );
+    }
+    Ok(())
+}
+
 /// Runs the indexer command.
 pub async fn run_index(a: IndexArgs) -> Result<()> {
     let cfg = build_config(&a.opts)?;
-    match a.sub.unwrap_or(IndexSub::Run) {
+    let sub = a.sub.unwrap_or(IndexSub::Run);
+    if matches!(sub, IndexSub::Run) {
+        refuse_run_only_options(&cfg, a.opts.config.as_deref())?;
+    }
+    match sub {
         IndexSub::Run => {
             tracing::info!(network = %cfg.network, rpc = %redact_url(cfg.primary_url()), data = %cfg.data_dir.display(), "starting indexer");
             // listening before the slow part: a Ctrl+C while the store opens is not lost
@@ -471,5 +497,40 @@ mod tests {
         let c = cfg(&[]);
         let own = crate::config::default_wrpc_url(&c.network).unwrap();
         assert!(c.nodes.is_empty() && c.rpc_url == own, "an own node by default on the command line");
+    }
+
+    /// `kob-executor index` (follow and serve) refuses what it would otherwise ignore: the options of role `run` its configuration
+    /// sets (the launcher refuses the same `[launch]` keys), and `fast_start`, which needs the matcher the index role does not have.
+    #[test]
+    fn index_refuses_the_options_of_role_run_instead_of_ignoring_them() {
+        // build_config sets the resolver state's network: not while the resolver tests use it
+        let _g = crate::rpc::resolver::tests::serial();
+        let parse = |toml: &str| toml::from_str::<IndexerConfig>(toml).unwrap();
+        let file = std::path::Path::new("kob-executor.toml");
+        // a keyless index configuration is fine, with or without a [launch] table
+        assert!(refuse_run_only_options(&parse(""), Some(file)).is_ok());
+        let keyless = "[launch]\nrole = \"index\"\nargs = [\"--status-secs\", \"30\"]";
+        assert!(refuse_run_only_options(&parse(keyless), Some(file)).is_ok());
+        assert!(refuse_run_only_options(&parse("start = \"sink\"\nfast_start = false"), None).is_ok());
+        for key in ["key_file", "pause_file", "x402_config"] {
+            let c = parse(&format!("[launch]\nrole = \"index\"\n{key} = \"some-file\""));
+            let e = refuse_run_only_options(&c, Some(file)).unwrap_err().to_string();
+            assert!(
+                e.starts_with("kob-executor.toml: ") && e.contains(&format!("[launch] {key} is an option of role \"run\"")),
+                "{e}"
+            );
+        }
+        // fast start: refused with the way out (the sink start) named
+        let e = refuse_run_only_options(&parse("fast_start = true"), Some(file)).unwrap_err().to_string();
+        assert!(
+            e.contains("fast_start is an option of `kob-executor run`")
+                && e.contains("start = \"sink\"")
+                && e.contains("book_complete"),
+            "{e}"
+        );
+        // and the flag does the same: --fast-start switches it on for one start
+        let c = cfg(&["--fast-start"]);
+        assert!(c.fast_start && refuse_run_only_options(&c, None).is_err());
+        assert!(refuse_run_only_options(&cfg(&["--start", "sink"]), None).is_ok());
     }
 }
